@@ -8,7 +8,7 @@ from sqlmodel import Session
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.core.pagination import Page
-from app.modules.providers.schemas import ResolvedLink
+from app.modules.providers.schemas import LinkResultStatus, ResolvedLink
 
 
 def clean_lines(lines: list[str]) -> list[tuple[int, str]]:
@@ -59,6 +59,8 @@ def get_link_results(
     task_id: UUID,
     cursor: str | None = None,
     page_size: int = 100,
+    status: LinkResultStatus | None = None,
+    exceptions_only: bool = False,
 ) -> Page[ResolvedLink]:
     from app.modules.providers.repository import read_preparation_results
 
@@ -68,6 +70,8 @@ def get_link_results(
         task_id=task_id,
         cursor=cursor,
         page_size=page_size,
+        status=status,
+        exceptions_only=exceptions_only,
     )
 
 

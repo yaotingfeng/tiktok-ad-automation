@@ -1,7 +1,7 @@
 """Tenant provider API. Validation failures never reflect submitted credentials."""
 
 from collections.abc import Callable, Coroutine
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Query, Request, Response
@@ -13,17 +13,27 @@ from sqlmodel import col, select
 from app.api.deps import CurrentUser, SessionDep
 from app.core.errors import ERROR_HTTP_STATUS, DomainError
 from app.core.pagination import Page
+from app.modules.providers.catalog import (
+    LinkStatus,
+    get_link,
+    list_links,
+    preparation_summary,
+)
 from app.modules.providers.connections import save_connection, verify_connection
 from app.modules.providers.models import ProviderApplication, ProviderConnection
 from app.modules.providers.repository import _after_id, _cursor, get_connection
 from app.modules.providers.schemas import (
     CandidateSelection,
     LinkPreparationRequest,
+    LinkResultStatus,
     PreparationAccepted,
+    PreparationSummary,
     ProviderApplicationPublic,
     ProviderConnectionCreate,
     ProviderConnectionPublic,
     ProviderConnectionUpdate,
+    ProviderKind,
+    ProviderLinkPublic,
     ResolvedLink,
 )
 from app.modules.providers.service import (
@@ -94,13 +104,68 @@ def get_preparation(
     user: CurrentUser,
     cursor: Cursor = None,
     page_size: int = 100,
+    status: LinkResultStatus | None = None,
+    exceptions_only: bool = False,
 ) -> Page[ResolvedLink]:
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="read"
     )
     return get_link_results(
-        session, context=context, task_id=task_id, cursor=cursor, page_size=page_size
+        session,
+        context=context,
+        task_id=task_id,
+        cursor=cursor,
+        page_size=page_size,
+        status=status,
+        exceptions_only=exceptions_only,
     )
+
+
+@router.get("/link-preparations/{task_id}/summary", response_model=PreparationSummary)
+def get_preparation_summary(
+    tenant_id: UUID, task_id: UUID, session: SessionDep, user: CurrentUser
+) -> PreparationSummary:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    return preparation_summary(session, context=context, task_id=task_id)
+
+
+@router.get("/links", response_model=Page[ProviderLinkPublic])
+def get_links(
+    tenant_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    connection_id: UUID | None = None,
+    application_id: Annotated[str | None, Query(max_length=255)] = None,
+    query: Annotated[str, Query(max_length=1000)] = "",
+    status: LinkStatus | None = None,
+    cursor: Cursor = None,
+    limit: Limit = 50,
+) -> Page[ProviderLinkPublic]:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    return list_links(
+        session,
+        context=context,
+        connection_id=connection_id,
+        application_id=application_id,
+        query=query,
+        status=status,
+        cursor=cursor,
+        limit=limit,
+    )
+
+
+@router.get("/links/{link_id}", response_model=ProviderLinkPublic)
+def link_details(
+    tenant_id: UUID, link_id: UUID, session: SessionDep, user: CurrentUser
+) -> ProviderLinkPublic:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    return get_link(session, context=context, link_id=link_id)
 
 
 @router.post(
@@ -133,13 +198,35 @@ def list_connections(
     user: CurrentUser,
     cursor: Cursor = None,
     limit: Limit = 50,
+    query: Annotated[str, Query(max_length=255)] = "",
+    kind: ProviderKind | None = None,
+    status: Literal[
+        "pending", "verifying", "active", "reauth_required", "error", "disabled"
+    ]
+    | None = None,
 ) -> Page[ProviderConnectionPublic]:
     require_tenant(session, actor_id=user.id, tenant_id=tenant_id, action="read")
     scope = {"tenant_id": str(tenant_id), "kind": "provider-connections"}
+    if query:
+        scope["query"] = query
+    if kind:
+        scope["provider_kind"] = kind
+    if status:
+        scope["status"] = status
     last_id = _after_id(cursor, scope)
     statement = select(ProviderConnection).where(
         ProviderConnection.tenant_id == tenant_id
     )
+    if query.strip():
+        statement = statement.where(
+            col(ProviderConnection.display_name).icontains(
+                query.strip(), autoescape=True
+            )
+        )
+    if kind:
+        statement = statement.where(ProviderConnection.kind == kind)
+    if status:
+        statement = statement.where(ProviderConnection.status == status)
     if last_id is not None:
         statement = statement.where(col(ProviderConnection.id) > last_id)
     rows = session.exec(

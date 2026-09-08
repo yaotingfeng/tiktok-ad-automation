@@ -55,6 +55,8 @@ class ResolvedLink(BaseModel):
     candidates: list[DramaCandidate] = Field(default_factory=list)
     error_code: str | None = None
     error_message: str | None = None
+    existing_config: dict[str, str | int | bool | None] | None = None
+    requested_config: dict[str, str | int | bool | None] | None = None
 
     @model_validator(mode="after")
     def require_ready_fields(self) -> Self:
@@ -154,6 +156,62 @@ class ProviderApplicationPublic(BaseModel):
     name: str
     tiktok_minis_id: str | None = None
     available: bool
+
+
+class ProviderLinkPublic(BaseModel):
+    link_id: UUID
+    drama_id: UUID
+    external_drama_id: str
+    title: str
+    language: str | None
+    provider_kind: str
+    connection_id: UUID
+    connection_name: str
+    connection_status: str
+    application_id: str
+    application_name: str
+    tiktok_minis_id: str | None
+    status: str
+    version: int
+    url: str | None
+    protected_base: str | None
+    verified_at: datetime | None
+    config: dict[str, str | int | bool | None]
+    config_display_incomplete: bool
+
+
+class PreparationSummary(BaseModel):
+    task_id: UUID
+    connection_id: UUID
+    connection_name: str
+    provider_kind: str
+    application_id: str
+    application_name: str
+    status: str
+    config: dict[str, str | int | bool | None]
+    config_display_incomplete: bool
+    total_count: int
+    ready_count: int
+    pending_count: int
+    exception_count: int
+    counts: dict[str, int]
+
+
+def display_config(value: object) -> dict[str, str | int | bool | None]:
+    """Only known scalar business settings; never expose raw provider config."""
+    if not isinstance(value, dict):
+        return {}
+    result = {}
+    for key, raw in value.items():
+        key = "episode" if key == "drama_num" else key
+        if key in {"episode", "charge_level", "channel_prefix", "chapter_index"} and (
+            raw is None
+            or type(raw) in {int, bool}
+            or isinstance(raw, str)
+            and len(raw) <= 1000
+        ):
+            result[key] = raw
+    return result
 
 
 class LinkPreparationRequest(BaseModel):

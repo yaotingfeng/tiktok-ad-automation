@@ -382,13 +382,16 @@ def read_preparation_results(
     task_id: UUID,
     cursor: str | None = None,
     page_size: int = 100,
+    status: str | None = None,
+    exceptions_only: bool = False,
 ) -> Page[ResolvedLink]:
     from sqlalchemy import and_, or_
 
+    from app.modules.providers.catalog import PENDING_STATUSES
     from app.modules.providers.models import LinkPreparationItem
-    from app.modules.providers.schemas import ResolvedLink
+    from app.modules.providers.schemas import ResolvedLink, display_config
 
-    _preparation(session, context, task_id)
+    prep = _preparation(session, context, task_id)
     if type(page_size) is not int or page_size not in {50, 100}:
         raise DomainError("invalid_page_size", "每页仅支持 50 或 100 行")
     scope = {
@@ -396,10 +399,24 @@ def read_preparation_results(
         "task_id": str(task_id),
         "kind": "results",
     }
+    if status is not None:
+        scope["status"] = status
+    if exceptions_only:
+        scope["exceptions_only"] = "true"
     statement = select(LinkPreparationItem).where(
         LinkPreparationItem.tenant_id == context.tenant_id,
         LinkPreparationItem.preparation_id == task_id,
     )
+    if status is not None:
+        statement = statement.where(
+            col(LinkPreparationItem.status).in_(PENDING_STATUSES)
+            if status == "pending"
+            else LinkPreparationItem.status == status
+        )
+    if exceptions_only:
+        statement = statement.where(
+            col(LinkPreparationItem.status).not_in(PENDING_STATUSES | {"ready"})
+        )
     if cursor is not None:
         try:
             if len(cursor) > 4096:
@@ -447,15 +464,20 @@ def read_preparation_results(
                 sort_keys=True,
             ).encode()
         ).decode()
-    return Page[ResolvedLink](
-        items=[
-            ResolvedLink.model_validate(
-                {key: value for key, value in row.resolved.items() if key != "_work"}
+    results = []
+    for row in rows[:page_size]:
+        result = ResolvedLink.model_validate(
+            {key: value for key, value in row.resolved.items() if key != "_work"}
+        )
+        if row.status == "config_conflict":
+            work = row.resolved.get("_work", {})
+            existing = work.get("existing_config") if isinstance(work, dict) else None
+            result.existing_config = (
+                display_config(existing) if isinstance(existing, dict) else None
             )
-            for row in rows[:page_size]
-        ],
-        next_cursor=next_cursor,
-    )
+            result.requested_config = display_config(prep.config)
+        results.append(result)
+    return Page[ResolvedLink](items=results, next_cursor=next_cursor)
 
 
 def select_preparation_candidate(

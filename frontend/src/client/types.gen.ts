@@ -5,6 +5,56 @@ export type ClientOptions = {
 };
 
 /**
+ * AccountAsset
+ */
+export type AccountAsset = {
+    /**
+     * Asset Id
+     */
+    asset_id: string;
+    /**
+     * Material Id
+     */
+    material_id: string;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Advertiser Id
+     */
+    advertiser_id: string;
+    /**
+     * Connection Id
+     */
+    connection_id: string;
+    /**
+     * Video Id
+     */
+    video_id: string;
+    /**
+     * Mid
+     */
+    mid?: string | null;
+    /**
+     * Image Id
+     */
+    image_id?: string | null;
+    /**
+     * Cover Url
+     */
+    cover_url?: string | null;
+    /**
+     * Status
+     */
+    status: 'available' | 'unavailable' | 'result_unknown';
+    /**
+     * Verified At
+     */
+    verified_at?: string | null;
+};
+
+/**
  * AccountPublic
  */
 export type AccountPublic = {
@@ -171,6 +221,16 @@ export type CandidateSelection = {
      * External Drama Id
      */
     external_drama_id: string;
+};
+
+/**
+ * CompleteUploadRequest
+ */
+export type CompleteUploadRequest = {
+    /**
+     * Parts
+     */
+    parts: Array<UploadedPart>;
 };
 
 /**
@@ -341,6 +401,64 @@ export type LinkPreparationRequest = {
 };
 
 /**
+ * MaterialPublic
+ */
+export type MaterialPublic = {
+    /**
+     * Material Id
+     */
+    material_id: string;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * File Name
+     */
+    file_name: string;
+    /**
+     * Byte Size
+     */
+    byte_size: number;
+    /**
+     * Mime Type
+     */
+    mime_type: string;
+    /**
+     * Duration
+     */
+    duration?: number | null;
+    /**
+     * Width
+     */
+    width?: number | null;
+    /**
+     * Height
+     */
+    height?: number | null;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Original Available
+     */
+    original_available: boolean;
+    /**
+     * Status
+     */
+    status: 'receiving' | 'stored' | 'uploading' | 'verifying' | 'available' | 'blocked' | 'result_unknown';
+    /**
+     * Available Account Count
+     */
+    available_account_count: number;
+    /**
+     * Latest Advertiser Id
+     */
+    latest_advertiser_id?: string | null;
+};
+
+/**
  * MemberPublic
  */
 export type MemberPublic = {
@@ -417,6 +535,20 @@ export type NewPassword = {
 };
 
 /**
+ * Page[AccountAsset]
+ */
+export type Page_AccountAsset_ = {
+    /**
+     * Items
+     */
+    items: Array<AccountAsset>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
  * Page[AccountPublic]
  */
 export type Page_AccountPublic_ = {
@@ -452,6 +584,20 @@ export type Page_ConnectionPublic_ = {
      * Items
      */
     items: Array<ConnectionPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
+ * Page[MaterialPublic]
+ */
+export type Page_MaterialPublic_ = {
+    /**
+     * Items
+     */
+    items: Array<MaterialPublic>;
     /**
      * Next Cursor
      */
@@ -501,6 +647,20 @@ export type Page_ProviderConnectionPublic_ = {
 };
 
 /**
+ * Page[ProviderLinkPublic]
+ */
+export type Page_ProviderLinkPublic_ = {
+    /**
+     * Items
+     */
+    items: Array<ProviderLinkPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
  * Page[ResolvedLink]
  */
 export type Page_ResolvedLink_ = {
@@ -543,6 +703,20 @@ export type Page_TenantSummary_ = {
 };
 
 /**
+ * Page[UploadAttemptPublic]
+ */
+export type Page_UploadAttemptPublic_ = {
+    /**
+     * Items
+     */
+    items: Array<UploadAttemptPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
  * Page[UserCandidate]
  */
 export type Page_UserCandidate_ = {
@@ -578,6 +752,72 @@ export type PreparationAccepted = {
      * Task Id
      */
     task_id: string;
+};
+
+/**
+ * PreparationSummary
+ */
+export type PreparationSummary = {
+    /**
+     * Task Id
+     */
+    task_id: string;
+    /**
+     * Connection Id
+     */
+    connection_id: string;
+    /**
+     * Connection Name
+     */
+    connection_name: string;
+    /**
+     * Provider Kind
+     */
+    provider_kind: string;
+    /**
+     * Application Id
+     */
+    application_id: string;
+    /**
+     * Application Name
+     */
+    application_name: string;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Config
+     */
+    config: {
+        [key: string]: string | number | boolean | null;
+    };
+    /**
+     * Config Display Incomplete
+     */
+    config_display_incomplete: boolean;
+    /**
+     * Total Count
+     */
+    total_count: number;
+    /**
+     * Ready Count
+     */
+    ready_count: number;
+    /**
+     * Pending Count
+     */
+    pending_count: number;
+    /**
+     * Exception Count
+     */
+    exception_count: number;
+    /**
+     * Counts
+     */
+    counts: {
+        [key: string]: number;
+    };
 };
 
 /**
@@ -670,6 +910,90 @@ export type ProviderConnectionUpdate = {
      * Status
      */
     status?: 'disabled' | null;
+};
+
+/**
+ * ProviderLinkPublic
+ */
+export type ProviderLinkPublic = {
+    /**
+     * Link Id
+     */
+    link_id: string;
+    /**
+     * Drama Id
+     */
+    drama_id: string;
+    /**
+     * External Drama Id
+     */
+    external_drama_id: string;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Language
+     */
+    language: string | null;
+    /**
+     * Provider Kind
+     */
+    provider_kind: string;
+    /**
+     * Connection Id
+     */
+    connection_id: string;
+    /**
+     * Connection Name
+     */
+    connection_name: string;
+    /**
+     * Connection Status
+     */
+    connection_status: string;
+    /**
+     * Application Id
+     */
+    application_id: string;
+    /**
+     * Application Name
+     */
+    application_name: string;
+    /**
+     * Tiktok Minis Id
+     */
+    tiktok_minis_id: string | null;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Version
+     */
+    version: number;
+    /**
+     * Url
+     */
+    url: string | null;
+    /**
+     * Protected Base
+     */
+    protected_base: string | null;
+    /**
+     * Verified At
+     */
+    verified_at: string | null;
+    /**
+     * Config
+     */
+    config: {
+        [key: string]: string | number | boolean | null;
+    };
+    /**
+     * Config Display Incomplete
+     */
+    config_display_incomplete: boolean;
 };
 
 /**
@@ -796,6 +1120,32 @@ export type ResolvedLink = {
      * Error Message
      */
     error_message?: string | null;
+    /**
+     * Existing Config
+     */
+    existing_config?: {
+        [key: string]: string | number | boolean | null;
+    } | null;
+    /**
+     * Requested Config
+     */
+    requested_config?: {
+        [key: string]: string | number | boolean | null;
+    } | null;
+};
+
+/**
+ * SignedPart
+ */
+export type SignedPart = {
+    /**
+     * Url
+     */
+    url: string;
+    /**
+     * Expires In
+     */
+    expires_in?: number;
 };
 
 /**
@@ -1013,6 +1363,176 @@ export type UpdatePassword = {
      * New Password
      */
     new_password: string;
+};
+
+/**
+ * UploadAttemptPublic
+ */
+export type UploadAttemptPublic = {
+    /**
+     * Attempt Id
+     */
+    attempt_id: string;
+    /**
+     * Material Id
+     */
+    material_id: string;
+    /**
+     * Advertiser Id
+     */
+    advertiser_id: string;
+    /**
+     * Connection Id
+     */
+    connection_id: string;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Error Code
+     */
+    error_code?: string | null;
+};
+
+/**
+ * UploadBatchRequest
+ */
+export type UploadBatchRequest = {
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Files
+     */
+    files: Array<UploadFileRequest>;
+};
+
+/**
+ * UploadBatchResult
+ */
+export type UploadBatchResult = {
+    /**
+     * Batch Id
+     */
+    batch_id: string;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Status
+     */
+    status: 'receiving' | 'stored' | 'uploading' | 'verifying' | 'available' | 'blocked' | 'result_unknown';
+    /**
+     * Files
+     */
+    files: Array<UploadFileResult>;
+};
+
+/**
+ * UploadCompleted
+ */
+export type UploadCompleted = {
+    /**
+     * Task Id
+     */
+    task_id: string;
+};
+
+/**
+ * UploadFileRequest
+ */
+export type UploadFileRequest = {
+    /**
+     * File Name
+     */
+    file_name: string;
+    /**
+     * Size
+     */
+    size: number;
+    /**
+     * Mime Type
+     */
+    mime_type: string;
+};
+
+/**
+ * UploadFileResult
+ */
+export type UploadFileResult = {
+    /**
+     * Material Id
+     */
+    material_id: string;
+    /**
+     * Upload Id
+     */
+    upload_id: string;
+    /**
+     * File Name
+     */
+    file_name: string;
+    /**
+     * Byte Size
+     */
+    byte_size: number;
+    /**
+     * Part Size
+     */
+    part_size: number;
+    /**
+     * Part Count
+     */
+    part_count: number;
+    /**
+     * Status
+     */
+    status: 'receiving' | 'stored' | 'uploading' | 'verifying' | 'available' | 'blocked' | 'result_unknown';
+    /**
+     * Received Bytes
+     */
+    received_bytes?: number | null;
+    /**
+     * Task Id
+     */
+    task_id?: string | null;
+    /**
+     * Latest Advertiser Id
+     */
+    latest_advertiser_id?: string | null;
+    /**
+     * Can Retry
+     */
+    can_retry?: boolean;
+    /**
+     * Error Code
+     */
+    error_code?: string | null;
+};
+
+/**
+ * UploadedPart
+ */
+export type UploadedPart = {
+    /**
+     * Part Number
+     */
+    part_number: number;
+    /**
+     * Etag
+     */
+    etag: string;
 };
 
 /**
@@ -2225,6 +2745,368 @@ export type accountsPatchConnectionResponses = {
 
 export type accountsPatchConnectionResponse = accountsPatchConnectionResponses[keyof accountsPatchConnectionResponses];
 
+export type materialsPostUploadBatchData = {
+    body: UploadBatchRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/materials/upload-batches';
+};
+
+export type materialsPostUploadBatchErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialsPostUploadBatchError = materialsPostUploadBatchErrors[keyof materialsPostUploadBatchErrors];
+
+export type materialsPostUploadBatchResponses = {
+    /**
+     * Successful Response
+     */
+    201: UploadBatchResult;
+};
+
+export type materialsPostUploadBatchResponse = materialsPostUploadBatchResponses[keyof materialsPostUploadBatchResponses];
+
+export type materialsReadUploadBatchData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Batch Id
+         */
+        batch_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/materials/upload-batches/{batch_id}';
+};
+
+export type materialsReadUploadBatchErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialsReadUploadBatchError = materialsReadUploadBatchErrors[keyof materialsReadUploadBatchErrors];
+
+export type materialsReadUploadBatchResponses = {
+    /**
+     * Successful Response
+     */
+    200: UploadBatchResult;
+};
+
+export type materialsReadUploadBatchResponse = materialsReadUploadBatchResponses[keyof materialsReadUploadBatchResponses];
+
+export type materialsPostPartSignatureData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Material Id
+         */
+        material_id: string;
+        /**
+         * Part Number
+         */
+        part_number: number;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/materials/{material_id}/upload-parts/{part_number}/sign';
+};
+
+export type materialsPostPartSignatureErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialsPostPartSignatureError = materialsPostPartSignatureErrors[keyof materialsPostPartSignatureErrors];
+
+export type materialsPostPartSignatureResponses = {
+    /**
+     * Successful Response
+     */
+    200: SignedPart;
+};
+
+export type materialsPostPartSignatureResponse = materialsPostPartSignatureResponses[keyof materialsPostPartSignatureResponses];
+
+export type materialsPostCompleteData = {
+    body: CompleteUploadRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Material Id
+         */
+        material_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/materials/{material_id}/complete';
+};
+
+export type materialsPostCompleteErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialsPostCompleteError = materialsPostCompleteErrors[keyof materialsPostCompleteErrors];
+
+export type materialsPostCompleteResponses = {
+    /**
+     * Successful Response
+     */
+    200: UploadCompleted;
+};
+
+export type materialsPostCompleteResponse = materialsPostCompleteResponses[keyof materialsPostCompleteResponses];
+
+export type materialsGetMaterialsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+        /**
+         * Query
+         */
+        query?: string;
+        /**
+         * Status
+         */
+        status?: string | null;
+        /**
+         * Created From
+         */
+        created_from?: string | null;
+        /**
+         * Created To
+         */
+        created_to?: string | null;
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/materials';
+};
+
+export type materialsGetMaterialsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialsGetMaterialsError = materialsGetMaterialsErrors[keyof materialsGetMaterialsErrors];
+
+export type materialsGetMaterialsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_MaterialPublic_;
+};
+
+export type materialsGetMaterialsResponse = materialsGetMaterialsResponses[keyof materialsGetMaterialsResponses];
+
+export type materialsGetMaterialData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Material Id
+         */
+        material_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/materials/{material_id}';
+};
+
+export type materialsGetMaterialErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialsGetMaterialError = materialsGetMaterialErrors[keyof materialsGetMaterialErrors];
+
+export type materialsGetMaterialResponses = {
+    /**
+     * Successful Response
+     */
+    200: MaterialPublic;
+};
+
+export type materialsGetMaterialResponse = materialsGetMaterialResponses[keyof materialsGetMaterialResponses];
+
+export type materialsGetAssetsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Material Id
+         */
+        material_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/materials/{material_id}/assets';
+};
+
+export type materialsGetAssetsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialsGetAssetsError = materialsGetAssetsErrors[keyof materialsGetAssetsErrors];
+
+export type materialsGetAssetsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_AccountAsset_;
+};
+
+export type materialsGetAssetsResponse = materialsGetAssetsResponses[keyof materialsGetAssetsResponses];
+
+export type materialsGetAttemptsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Material Id
+         */
+        material_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/materials/{material_id}/attempts';
+};
+
+export type materialsGetAttemptsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialsGetAttemptsError = materialsGetAttemptsErrors[keyof materialsGetAttemptsErrors];
+
+export type materialsGetAttemptsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_UploadAttemptPublic_;
+};
+
+export type materialsGetAttemptsResponse = materialsGetAttemptsResponses[keyof materialsGetAttemptsResponses];
+
+export type materialsPostObjectRetryData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Material Id
+         */
+        material_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/materials/{material_id}/retry';
+};
+
+export type materialsPostObjectRetryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialsPostObjectRetryError = materialsPostObjectRetryErrors[keyof materialsPostObjectRetryErrors];
+
+export type materialsPostObjectRetryResponses = {
+    /**
+     * Successful Response
+     */
+    200: UploadFileResult;
+};
+
+export type materialsPostObjectRetryResponse = materialsPostObjectRetryResponses[keyof materialsPostObjectRetryResponses];
+
 export type providersPostPreparationData = {
     body: LinkPreparationRequest;
     path: {
@@ -2276,6 +3158,14 @@ export type providersGetPreparationData = {
          * Page Size
          */
         page_size?: number;
+        /**
+         * Status
+         */
+        status?: 'pending' | 'needs_resolution' | 'blocked_auth' | 'config_conflict' | 'retryable_error' | 'result_unknown' | 'failed' | 'ready' | null;
+        /**
+         * Exceptions Only
+         */
+        exceptions_only?: boolean;
     };
     url: '/api/tenants/{tenant_id}/providers/link-preparations/{task_id}';
 };
@@ -2297,6 +3187,129 @@ export type providersGetPreparationResponses = {
 };
 
 export type providersGetPreparationResponse = providersGetPreparationResponses[keyof providersGetPreparationResponses];
+
+export type providersGetPreparationSummaryData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Task Id
+         */
+        task_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/providers/link-preparations/{task_id}/summary';
+};
+
+export type providersGetPreparationSummaryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type providersGetPreparationSummaryError = providersGetPreparationSummaryErrors[keyof providersGetPreparationSummaryErrors];
+
+export type providersGetPreparationSummaryResponses = {
+    /**
+     * Successful Response
+     */
+    200: PreparationSummary;
+};
+
+export type providersGetPreparationSummaryResponse = providersGetPreparationSummaryResponses[keyof providersGetPreparationSummaryResponses];
+
+export type providersGetLinksData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: {
+        /**
+         * Connection Id
+         */
+        connection_id?: string | null;
+        /**
+         * Application Id
+         */
+        application_id?: string | null;
+        /**
+         * Query
+         */
+        query?: string;
+        /**
+         * Status
+         */
+        status?: 'pending' | 'ready' | 'superseded' | 'invalid' | 'result_unknown' | 'failed' | null;
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/providers/links';
+};
+
+export type providersGetLinksErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type providersGetLinksError = providersGetLinksErrors[keyof providersGetLinksErrors];
+
+export type providersGetLinksResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_ProviderLinkPublic_;
+};
+
+export type providersGetLinksResponse = providersGetLinksResponses[keyof providersGetLinksResponses];
+
+export type providersLinkDetailsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Link Id
+         */
+        link_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/providers/links/{link_id}';
+};
+
+export type providersLinkDetailsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type providersLinkDetailsError = providersLinkDetailsErrors[keyof providersLinkDetailsErrors];
+
+export type providersLinkDetailsResponses = {
+    /**
+     * Successful Response
+     */
+    200: ProviderLinkPublic;
+};
+
+export type providersLinkDetailsResponse = providersLinkDetailsResponses[keyof providersLinkDetailsResponses];
 
 export type providersPostCandidateData = {
     body: CandidateSelection;
@@ -2349,6 +3362,18 @@ export type providersListConnectionsData = {
          * Limit
          */
         limit?: number;
+        /**
+         * Query
+         */
+        query?: string;
+        /**
+         * Kind
+         */
+        kind?: 'wangyan' | 'jiashu' | null;
+        /**
+         * Status
+         */
+        status?: 'pending' | 'verifying' | 'active' | 'reauth_required' | 'error' | 'disabled' | null;
     };
     url: '/api/tenants/{tenant_id}/providers/connections';
 };

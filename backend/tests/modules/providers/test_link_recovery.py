@@ -387,9 +387,19 @@ def test_existing_incompatible_episode_does_not_overwrite(workflow):
         "drama_num": 2,
         "jump_url": "https://www.tiktok.com/t/fixture?channel=test_101&vid=101&dramaNum=2&charge_level=0",
     }
-    result = drive(workflow, add_item(workflow), stop="config_conflict")
+    item_id = add_item(workflow)
+    result = drive(workflow, item_id, stop="config_conflict")
     assert result["error_code"] == "config_conflict"
     assert "create" not in workflow[2].calls and "saveGuideUrl" not in workflow[2].calls
+    from app.modules.providers.service import get_link_results
+
+    with Session(engine) as session:
+        item = session.get(LinkPreparationItem, item_id)
+        public = get_link_results(
+            session, context=workflow[0], task_id=item.preparation_id
+        ).items[0]
+        assert public.existing_config == {"episode": 2}
+        assert public.requested_config == {"episode": 1}
 
 
 def test_incomplete_history_cannot_authorize_create(workflow):

@@ -891,6 +891,9 @@ def run_link_item(
                     "recover_save",
                 }:
                     data = _read_effect(session, context, item_id, token, work, client)
+                    # Preserve parsed business settings for conflict diagnosis;
+                    # public projection exposes only allowlisted scalar fields.
+                    work["existing_config"] = data.get("config", {})
                     _verified(data, work, config)
                     if data.get("url"):
                         if stage.startswith("recover_"):
