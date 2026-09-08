@@ -1,0 +1,9 @@
+{
+  "evidence_level": "offline_fixture_from_cli_protocol",
+  "source": "jiashu-link-cli.js searchDrama/loginAccount/discoverAccount/getGuideUrl",
+  "login": {"code": "0000", "data": {"session": "synthetic-session-not-real"}},
+  "applications": {"code": "0000", "data": [{"appid": "synthetic-app", "name": "Fixture App"}]},
+  "options": {"code": "0000", "data": {"channel_prefix": "synthetic_"}},
+  "search": {"code": "0000", "data": {"data": [{"video_id": "123", "name": "Fixture Moon", "language": "en"}], "count": 1}},
+  "saved_link": {"code": "0000", "data": {"config": {"vid": "123", "drama_num": 1, "jump_url": "https://www.tiktok.com/minis/fixture?channel=synthetic_123&vid=123&dramaNum=1&charge_level=medium", "minis_path": "fixture/path"}}}
+}

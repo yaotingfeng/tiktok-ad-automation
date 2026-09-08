@@ -5,6 +5,20 @@ from fastapi.responses import JSONResponse
 ERROR_HTTP_STATUS: dict[str, int] = {
     "empty_title": 422,
     "invalid_title": 422,
+    "provider_request_invalid": 422,
+    "provider_schema_unsupported": 409,
+    "provider_session_expired": 409,
+    "provider_application_forbidden": 403,
+    "provider_rejected": 409,
+    "provider_unavailable": 503,
+    "provider_result_unknown": 409,
+    "provider_application_discovery_unverified": 409,
+    "provider_channel_prefix_missing": 409,
+    "provider_verification_in_progress": 409,
+    "lookup_incomplete": 409,
+    "attribution_contract_unverified": 409,
+    "config_unverifiable": 409,
+    "config_conflict": 409,
     "invalid_account_action": 422,
     "invalid_cursor": 422,
     "invalid_resolve_request": 422,
@@ -57,6 +71,16 @@ ERROR_HTTP_STATUS: dict[str, int] = {
 # Public messages are application-owned. DomainError.message may contain raw
 # integration details, so it must never become an HTTP response or log field.
 ERROR_PUBLIC_MESSAGES: dict[str, str] = {
+    "provider_session_expired": "版权方登录已失效，请重新验证当前连接",
+    "provider_application_forbidden": "当前版权方连接没有该应用权限",
+    "provider_result_unknown": "版权方写入结果未知，需要回查后继续",
+    "provider_channel_prefix_missing": "未发现当前应用的渠道前缀",
+    "provider_verification_in_progress": "当前版权方连接正在验证",
+    "lookup_incomplete": "尚未核实完整链接历史，不能确认链接不存在",
+    "attribution_contract_unverified": "版权方归因契约尚未核实",
+    "config_unverifiable": "已有链接配置尚不能核实",
+    "config_conflict": "已有链接配置与本次请求冲突，不能覆盖",
+
     "last_tenant_admin": "请先设置其他租户管理员",
     "invalid_tenant": "租户名称与初始管理员必须有效",
     "invalid_member": "成员和租户角色必须有效",

@@ -1,0 +1,11 @@
+{
+  "evidence_level": "offline_fixture_from_cli_and_public_static_source",
+  "public_source_url": "https://partners.shortswave.com/assets/20260724/business-A-IRbkW0.js",
+  "public_source_sha256": "7a9b1de1f4f10cde11e58839270c89d8c40435454c681d1fda07685a7c90344f",
+  "applications": {"code": 0, "data": [{"package_name": "synthetic.application", "name": "Fixture App", "is_tt": 1}]},
+  "search": {"code": 0, "data": [{"id": "opaque-drama-id", "int_id": 123, "title": "Fixture Moon", "lang": "en", "chapters": 12}]},
+  "attribution_input": {"drama_int_id": 123, "id": 456, "chapter_index": 1},
+  "expected_protected_base": "{b123/s456/c1}-Fixture Moon",
+  "full_history_verified": false,
+  "business_api_live_verified": false
+}
