@@ -45,6 +45,58 @@ export type HTTPValidationError = {
 };
 
 /**
+ * MemberPublic
+ */
+export type MemberPublic = {
+    /**
+     * Tenant Id
+     */
+    tenant_id: string;
+    /**
+     * User Id
+     */
+    user_id: string;
+    /**
+     * Role
+     */
+    role: 'tenant_admin' | 'operator' | 'viewer';
+    /**
+     * Active
+     */
+    active: boolean;
+    /**
+     * Email
+     */
+    email: string;
+    /**
+     * Full Name
+     */
+    full_name: string | null;
+    /**
+     * User Active
+     */
+    user_active: boolean;
+};
+
+/**
+ * MemberSet
+ */
+export type MemberSet = {
+    /**
+     * User Id
+     */
+    user_id: string;
+    /**
+     * Role
+     */
+    role: 'tenant_admin' | 'operator' | 'viewer';
+    /**
+     * Active
+     */
+    active: boolean;
+};
+
+/**
  * Message
  */
 export type Message = {
@@ -66,6 +118,102 @@ export type NewPassword = {
      * New Password
      */
     new_password: string;
+};
+
+/**
+ * Page[MemberPublic]
+ */
+export type Page_MemberPublic_ = {
+    /**
+     * Items
+     */
+    items: Array<MemberPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
+ * Page[TenantSummary]
+ */
+export type Page_TenantSummary_ = {
+    /**
+     * Items
+     */
+    items: Array<TenantSummary>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
+ * Tenant
+ */
+export type Tenant = {
+    /**
+     * Id
+     */
+    id?: string;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Active
+     */
+    active?: boolean;
+};
+
+/**
+ * TenantCreate
+ */
+export type TenantCreate = {
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Administrator Id
+     */
+    administrator_id: string;
+};
+
+/**
+ * TenantSummary
+ */
+export type TenantSummary = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Active
+     */
+    active: boolean;
+    /**
+     * Role
+     */
+    role: 'platform_admin' | 'tenant_admin' | 'operator' | 'viewer';
+};
+
+/**
+ * TenantUpdate
+ */
+export type TenantUpdate = {
+    /**
+     * Name
+     */
+    name?: string | null;
+    /**
+     * Active
+     */
+    active?: boolean | null;
 };
 
 /**
@@ -652,3 +800,223 @@ export type integrationsTiktokCallbackResponses = {
      */
     200: unknown;
 };
+
+export type tenantsGetMyTenantsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * After Id
+         */
+        after_id?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+        /**
+         * Search
+         */
+        search?: string;
+        /**
+         * Active
+         */
+        active?: boolean | null;
+    };
+    url: '/api/me/tenants';
+};
+
+export type tenantsGetMyTenantsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type tenantsGetMyTenantsError = tenantsGetMyTenantsErrors[keyof tenantsGetMyTenantsErrors];
+
+export type tenantsGetMyTenantsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_TenantSummary_;
+};
+
+export type tenantsGetMyTenantsResponse = tenantsGetMyTenantsResponses[keyof tenantsGetMyTenantsResponses];
+
+export type tenantsGetPlatformTenantsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * After Id
+         */
+        after_id?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+        /**
+         * Search
+         */
+        search?: string;
+        /**
+         * Active
+         */
+        active?: boolean | null;
+    };
+    url: '/api/platform/tenants';
+};
+
+export type tenantsGetPlatformTenantsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type tenantsGetPlatformTenantsError = tenantsGetPlatformTenantsErrors[keyof tenantsGetPlatformTenantsErrors];
+
+export type tenantsGetPlatformTenantsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_TenantSummary_;
+};
+
+export type tenantsGetPlatformTenantsResponse = tenantsGetPlatformTenantsResponses[keyof tenantsGetPlatformTenantsResponses];
+
+export type tenantsPostTenantData = {
+    body: TenantCreate;
+    path?: never;
+    query?: never;
+    url: '/api/platform/tenants';
+};
+
+export type tenantsPostTenantErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type tenantsPostTenantError = tenantsPostTenantErrors[keyof tenantsPostTenantErrors];
+
+export type tenantsPostTenantResponses = {
+    /**
+     * Successful Response
+     */
+    201: Tenant;
+};
+
+export type tenantsPostTenantResponse = tenantsPostTenantResponses[keyof tenantsPostTenantResponses];
+
+export type tenantsPatchTenantData = {
+    body: TenantUpdate;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/platform/tenants/{tenant_id}';
+};
+
+export type tenantsPatchTenantErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type tenantsPatchTenantError = tenantsPatchTenantErrors[keyof tenantsPatchTenantErrors];
+
+export type tenantsPatchTenantResponses = {
+    /**
+     * Successful Response
+     */
+    200: Tenant;
+};
+
+export type tenantsPatchTenantResponse = tenantsPatchTenantResponses[keyof tenantsPatchTenantResponses];
+
+export type tenantsGetMembersData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: {
+        /**
+         * After Id
+         */
+        after_id?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+        /**
+         * Search
+         */
+        search?: string;
+        /**
+         * Role
+         */
+        role?: 'tenant_admin' | 'operator' | 'viewer' | null;
+        /**
+         * Active
+         */
+        active?: boolean | null;
+    };
+    url: '/api/tenants/{tenant_id}/members';
+};
+
+export type tenantsGetMembersErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type tenantsGetMembersError = tenantsGetMembersErrors[keyof tenantsGetMembersErrors];
+
+export type tenantsGetMembersResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_MemberPublic_;
+};
+
+export type tenantsGetMembersResponse = tenantsGetMembersResponses[keyof tenantsGetMembersResponses];
+
+export type tenantsPutMemberData = {
+    body: MemberSet;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/members';
+};
+
+export type tenantsPutMemberErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type tenantsPutMemberError = tenantsPutMemberErrors[keyof tenantsPutMemberErrors];
+
+export type tenantsPutMemberResponses = {
+    /**
+     * Successful Response
+     */
+    200: MemberPublic;
+};
+
+export type tenantsPutMemberResponse = tenantsPutMemberResponses[keyof tenantsPutMemberResponses];
