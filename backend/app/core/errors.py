@@ -4,6 +4,8 @@ from fastapi.responses import JSONResponse
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
     "tenant_forbidden": 403,
+    "action_forbidden": 403,
+    "unknown_action": 422,
     "permission_denied": 403,
     "public_signup_disabled": 403,
     "resource_not_found": 404,
