@@ -119,7 +119,7 @@ decrypt_credentials(*, tenant_id: UUID, ciphertext: str) -> dict[str, str]
 - Produces: `Tenant`、`TenantMembership`、`AuditEvent`；公共 `Action/Role/require_tenant`。
 - Produces test fixtures: `context: TenantContext`、`other_context: TenantContext`；插入真实租户、用户与 operator 成员；复用基础计划 session，不重新定义 session。
 
-- [ ] **Step 1: 写角色撤销、跨租户和平台代投回归。** 将下面的测试及 fixture 加入指定文件。
+- [x] **Step 1: 写角色撤销、跨租户和平台代投回归。** 将下面的测试及 fixture 加入指定文件。
 
 ```python
 # tests/modules/conftest.py
@@ -182,7 +182,7 @@ def test_viewer_cannot_write(session, action):
     assert error.value.code == "action_forbidden"
 ```
 
-- [ ] **Step 2: 在专用测试库迁移后运行失败测试。**
+- [x] **Step 2: 在专用测试库迁移后运行失败测试。**
 
 ```bash
 cd backend
@@ -191,7 +191,7 @@ uv run pytest tests/modules/tenants/test_permissions.py -q
 
 预期：首次因新模块未存在而失败；不能连接生产数据库，不能调用 TikTok。
 
-- [ ] **Step 3: 实现模型与权限表，生成并检查迁移。**
+- [x] **Step 3: 实现模型与权限表，生成并检查迁移。**
 
 ```python
 # modules/tenants/models.py
@@ -266,7 +266,7 @@ def require_tenant(session: Session, *, actor_id: UUID, tenant_id: UUID, action:
 
 迁移包含上述三个表、组合主键和角色 CHECK；引用模板 `user` 表。连接和账户表在 Task 3/4 添加，不把所有模型挤入一个文件。
 
-- [ ] **Step 4: 运行迁移、上述回归并加一条平台管理员不需要成员记录的测试。** 测试将 User 的 `is_superuser=True`，断言返回 context.actor_id 仍为该真实管理员；再将 user.is_active=False，断言拒绝。
+- [x] **Step 4: 运行迁移、上述回归并加一条平台管理员不需要成员记录的测试。** 测试将 User 的 `is_superuser=True`，断言返回 context.actor_id 仍为该真实管理员；再将 user.is_active=False，断言拒绝。
 
 ```bash
 uv run alembic upgrade head
@@ -275,7 +275,7 @@ uv run pytest tests/modules/tenants/test_permissions.py -q
 
 预期：所有角色测试通过；迁移只有新增表，无删除模板用户数据。
 
-- [ ] **Step 5: 提交独立交付。** `git add backend/app/modules/tenants backend/app/alembic backend/tests/modules`，`git commit -m "tenants: enforce tenant roles and live permission checks"`。命令从 APP_ROOT 执行，仅在基础计划已建立的新应用仓库提交。
+- [x] **Step 5: 提交独立交付。** `git add backend/app/modules/tenants backend/app/alembic backend/tests/modules`，`git commit -m "tenants: enforce tenant roles and live permission checks"`。命令从 APP_ROOT 执行，仅在基础计划已建立的新应用仓库提交。
 
 ### Task 2: 完成租户、成员管理和审计接口
 
@@ -291,7 +291,7 @@ uv run pytest tests/modules/tenants/test_permissions.py -q
 - Produces: `set_member(session, *, context: TenantContext, user_id: UUID, role: Role, active: bool) -> TenantMembership`。
 - Produces HTTP: `GET /api/me/tenants`、`POST /api/platform/tenants`、`PATCH /api/platform/tenants/{tenant_id}`、`GET/PUT /api/tenants/{tenant_id}/members`；返回模型排除密码与凭据。
 
-- [ ] **Step 1: 写平台开通和真实操作人审计测试。**
+- [x] **Step 1: 写平台开通和真实操作人审计测试。**
 
 ```python
 from uuid import uuid4
@@ -317,9 +317,9 @@ def test_platform_creates_tenant_and_keeps_actor(session):
     assert error.value.code == "last_tenant_admin"
 ```
 
-- [ ] **Step 2: 执行 `uv run pytest tests/modules/tenants/test_management.py -q`。** 预期 service 不存在导致失败。
+- [x] **Step 2: 执行 `uv run pytest tests/modules/tenants/test_management.py -q`。** 预期 service 不存在导致失败。
 
-- [ ] **Step 3: 实现事务内管理与最后管理员约束。** 核心服务如下；调用者提交事务，函数本身只 flush。
+- [x] **Step 3: 实现事务内管理与最后管理员约束。** 核心服务如下；调用者提交事务，函数本身只 flush。
 
 ```python
 # modules/tenants/service.py
@@ -365,7 +365,7 @@ def set_member(session: Session, *, context: TenantContext, user_id: UUID, role:
     return member
 ```
 
-- [ ] **Step 4: 接入薄路由和列表分页。** 路由在 `/api` router 下挂载相对路径；以下是一条真实路由实现模式，不把前端 tenant_id 当成授权。
+- [x] **Step 4: 接入薄路由和列表分页。** 路由在 `/api` router 下挂载相对路径；以下是一条真实路由实现模式，不把前端 tenant_id 当成授权。
 
 ```python
 from uuid import UUID
@@ -390,7 +390,7 @@ def post_tenant(body: TenantCreate, session: SessionDep, user: CurrentUser):
 
 其余三条管理路由按 Interfaces 明确实现：租户改名/停用仅平台管理员；成员列表/修改仅当前租户 `manage`；`/me/tenants` 只列有效成员关系，平台管理员列所有租户。列表都接受 `after_id: UUID | None, limit: int=50`，服务端限制 1～200，按 UUID 升序 seek，返回 `Page`。停用不调用任何 TikTok 接口。
 
-- [ ] **Step 5: 运行管理回归及 OpenAPI 检查后提交。** 增加 API 测试：普通成员创建租户返回 403，平台成功为 201；请求及响应中不存在 `hashed_password`；成员修改产生同租户 AuditEvent。运行 `uv run pytest tests/modules/tenants -q`，预期全部通过。提交主题 `tenants: add platform and member administration`。
+- [x] **Step 5: 运行管理回归及 OpenAPI 检查后提交。** 增加 API 测试：普通成员创建租户返回 403，平台成功为 201；请求及响应中不存在 `hashed_password`；成员修改产生同租户 AuditEvent。运行 `uv run pytest tests/modules/tenants -q`，预期全部通过。提交主题 `tenants: add platform and member administration`。
 
 ### Task 3: 完成租户绑定的 OAuth、凭据存储与 SDK 请求域
 
@@ -413,7 +413,7 @@ def post_tenant(body: TenantCreate, session: SessionDep, user: CurrentUser):
 
 **新增模型：** `TikTokConnection(id UUID, tenant_id UUID, status str, credential_ciphertext str|null, credential_version int=0)`；`AuthorizationAttempt(id UUID, tenant_id UUID, actor_id UUID, connection_id UUID, state_hash str UNIQUE, expires_at timestamptz, claimed_at timestamptz|null, status str, candidate_ciphertext str|null)`。连接设置 `(tenant_id,id)` 唯一约束，Attempt 使用 `(tenant_id,connection_id)` 组合外键；重新授权保留原连接版本。连接列表响应绝不暴露两个 ciphertext 字段。
 
-- [ ] **Step 1: 写跨租户密文与重复回调回归。**
+- [x] **Step 1: 写跨租户密文与重复回调回归。**
 
 ```python
 from datetime import datetime, timedelta, timezone
@@ -461,9 +461,9 @@ def auth_attempt(session, context):
     return attempt
 ```
 
-- [ ] **Step 2: 运行 `uv run pytest tests/modules/accounts/test_credentials.py tests/modules/accounts/test_oauth.py -q`。** 预期缺少新模块而失败。Fernet 与 SDK 已由基础计划安装并锁定，不重复替换依赖。
+- [x] **Step 2: 运行 `uv run pytest tests/modules/accounts/test_credentials.py tests/modules/accounts/test_oauth.py -q`。** 预期缺少新模块而失败。Fernet 与 SDK 已由基础计划安装并锁定，不重复替换依赖。
 
-- [ ] **Step 3: 实现租户密文与独立 SDK 客户端。**
+- [x] **Step 3: 实现租户密文与独立 SDK 客户端。**
 
 ```python
 # core/credentials.py
@@ -570,7 +570,7 @@ def admitted_account_call(redis_client, *, context: TenantContext, endpoint: str
 
 `admit_call` 抛出 Redis 不可用错误时不会执行到 yield；不能捕获后直接调用 SDK。释放失败不能覆盖已经收到的远端结果，记录脱敏事件并依赖 P01 的租约到期回收；release 仅释放并发槽，不返还速率额度。调用的最大执行时间及处理余量必须小于 policy.lease_ms，按已验证 SDK 重试设置和任务硬截止配置，不能把一个 connect/read 超时参数当成整次请求的时限。
 
-- [ ] **Step 4: 实现 state 消耗和官方授权交换。** 沿用 config 的 `TIKTOK_APP_ID/TIKTOK_APP_SECRET/TIKTOK_REDIRECT_URI`，新增 `TIKTOK_AUTHORIZATION_URL`，缺配置时返回 `app_not_configured`。授权 URL 从开发者后台提供的官方 Advertiser Authorization URL 配置读取，校验 HTTPS 与 TikTok 官方 host；只替换其 state 和已注册 redirect_uri，不使用 TikTok Login Kit 地址。
+- [x] **Step 4: 实现 state 消耗和官方授权交换。** 沿用 config 的 `TIKTOK_APP_ID/TIKTOK_APP_SECRET/TIKTOK_REDIRECT_URI`，新增 `TIKTOK_AUTHORIZATION_URL`，缺配置时返回 `app_not_configured`。授权 URL 从开发者后台提供的官方 Advertiser Authorization URL 配置读取，校验 HTTPS 与 TikTok 官方 host；只替换其 state 和已注册 redirect_uri，不使用 TikTok Login Kit 地址。
 
 ```python
 # integrations/tiktok/auth.py 的原子核心
@@ -662,7 +662,7 @@ finally:
 
 兑换成功后再重查发起人权限，在新的事务将候选令牌加密写入 Attempt，设 `CANDIDATE_READY`，并通过 outbox 发布 `accounts.discover`，payload 只有 attempt_id；context 从记录恢复。未有旧凭据的新连接设 DISCOVERING；已有 ACTIVE 连接不改凭据。Task 4 完整资产发现成功后再原子提升候选版本。超时设 Attempt `RESULT_UNKNOWN`，明确提示重新发起授权，不自动重放授权码；取消为 `CANCELLED`，均不破坏旧 ACTIVE 连接。
 
-- [ ] **Step 5: 增加 SDK fake 回归并运行。** 用 `monkeypatch` 替换 `AuthenticationApi.oauth2_access_token` 返回 `business_api_client.InlineResponse200(code=0, data={"access_token":"fake-only"})`；断言同 state 第二次调用的 SDK 次数仍为 1，候选密文不出现在 API JSON，outbox 与候选同事务落库，兑换失败保留旧凭据版本。运行 `uv run pytest tests/modules/accounts/test_oauth.py tests/modules/accounts/test_credentials.py -q`，预期全部通过。
+- [x] **Step 5: 增加 SDK fake 回归并运行。** 用 `monkeypatch` 替换 `AuthenticationApi.oauth2_access_token` 返回 `business_api_client.InlineResponse200(code=0, data={"access_token":"fake-only"})`；断言同 state 第二次调用的 SDK 次数仍为 1，候选密文不出现在 API JSON，outbox 与候选同事务落库，兑换失败保留旧凭据版本。运行 `uv run pytest tests/modules/accounts/test_oauth.py tests/modules/accounts/test_credentials.py -q`，预期全部通过。
 
 共享准入增加以下测试；测试内策略数字只用于构造小规模 fixture，不是平台配额。
 
@@ -702,7 +702,7 @@ def test_redis_unavailable_does_not_enter_sdk(context, monkeypatch):
 
 另断言授权准入拒绝后 Attempt.claimed_at 仍为空；放行后正确释放相同 app_scope/endpoint/tenant/advertiser/lease_id；释放 Redis 失败不掩盖已收到的 SDK 结果。运行 `uv run pytest tests/modules/accounts/test_admission.py tests/modules/accounts/test_oauth.py -q`，预期全部通过。
 
-- [ ] **Step 6: 提交。** 提交主题 `accounts: bind OAuth callbacks and credentials to tenants`；真实 HTTPS 回调验证归基础交付与联调计划，不在此任务发送真实授权请求。
+- [x] **Step 6: 提交。** 提交主题 `accounts: bind OAuth callbacks and credentials to tenants`；真实 HTTPS 回调验证归基础交付与联调计划，不在此任务发送真实授权请求。
 
 ### Task 4: 建立全量账户目录、外部资产归属与可恢复发现
 
@@ -734,7 +734,7 @@ def test_redis_unavailable_does_not_enter_sdk(context, monkeypatch):
 
 外键使用 tenant_id 与资源 ID 的组合；`BCAccountAccess` 分别引用账户、BC、连接的同租户组合键。建 `(tenant_id,name,advertiser_id)`、`(tenant_id,bc_id,active,advertiser_id)` 索引；单个租户连接只允许运行一个 discovery generation，重试使用同一 run_id。
 
-- [ ] **Step 1: 写中断不误撤权和跨租户冲突测试。**
+- [x] **Step 1: 写中断不误撤权和跨租户冲突测试。**
 
 ```python
 from app.modules.accounts.discovery import save_directory_page, finalize_directory
@@ -775,9 +775,9 @@ def discovery_run(session, context):
     return run, old
 ```
 
-- [ ] **Step 2: 运行 `uv run pytest tests/modules/accounts/test_discovery.py -q`。** 预期新模型/服务缺失而失败。
+- [x] **Step 2: 运行 `uv run pytest tests/modules/accounts/test_discovery.py -q`。** 预期新模型/服务缺失而失败。
 
-- [ ] **Step 3: 接通官方读取调用，保持完整响应与业务事实分离。** 方法签名来自固定 SDK 源码；响应 `data` 为通用 object，不能根据 SDK 存在就假定所有字段可用。
+- [x] **Step 3: 接通官方读取调用，保持完整响应与业务事实分离。** 方法签名来自固定 SDK 源码；响应 `data` 为通用 object，不能根据 SDK 存在就假定所有字段可用。
 
 ```python
 # integrations/tiktok/accounts.py
@@ -827,7 +827,7 @@ with admitted_account_call(redis_client, context=context,
 
 分页归一化只接受经过固定版本样例验证的 `list/page_info` 结构，缺 list 或分页结束证据则 `unsupported_account_schema`，不能当成空目录完成扫描。原始 advertiser_id 保持字符串；账户明细缺币种/时区时目录标记 METADATA_INCOMPLETE，不能进入业务可用池。测试 fake 提供本任务定义的规范化 rows；不将 fake 的 role 字段宣称为官方事实。SDK 响应中未能核实上传/搭建能力时 `permission_state=UNKNOWN`、can_upload/can_build=False；真实能力映射的证据与签收由 07 联调计划提供，不通过真实上传来试探权限。
 
-- [ ] **Step 4: 实现逐页保存、并发归属抢占和完整扫描提升。** 目录页面与 DiscoverySeen 同事务写入；重试看到同一 run/bc/page 已成功时不重复变更。归属认领的 SQL 核心如下：
+- [x] **Step 4: 实现逐页保存、并发归属抢占和完整扫描提升。** 目录页面与 DiscoverySeen 同事务写入；重试看到同一 run/bc/page 已成功时不重复变更。归属认领的 SQL 核心如下：
 
 ```python
 from sqlalchemy.dialects.postgresql import insert
@@ -848,7 +848,7 @@ def claim_external_asset(session, *, kind: str, external_id: str, tenant_id):
 
 任务注册名固定 `accounts.discover`，只从 payload 的 attempt_id/run_id 查询租户和真实操作人，再调用 `require_tenant(...,action="manage")`；禁止信任序列化 role。下一页只通过 outbox 排队，单页事务不持有跨网络调用数据库锁。
 
-- [ ] **Step 5: 扩充并运行回归。** 添加第 2 页失败、重复第 1 页、末页后回收旧关系、较旧 run 无法覆盖新版本、两个租户并发认领同 ID 的 PostgreSQL 测试。为四个读取方法分别注入准入拒绝，断言 SDK 调用次数为零；到期放行后仍恢复同 run/bc/page，首次成功后只保存一份 DiscoverySeen。`uv run pytest tests/modules/accounts/test_discovery.py tests/modules/accounts/test_admission.py -q` 预期全部通过；`uv run alembic upgrade head` 应建立组合键和索引。提交主题 `accounts: persist resumable full account discovery`。
+- [x] **Step 5: 扩充并运行回归。** 添加第 2 页失败、重复第 1 页、末页后回收旧关系、较旧 run 无法覆盖新版本、两个租户并发认领同 ID 的 PostgreSQL 测试。为四个读取方法分别注入准入拒绝，断言 SDK 调用次数为零；到期放行后仍恢复同 run/bc/page，首次成功后只保存一份 DiscoverySeen。`uv run pytest tests/modules/accounts/test_discovery.py tests/modules/accounts/test_admission.py -q` 预期全部通过；`uv run alembic upgrade head` 应建立组合键和索引。提交主题 `accounts: persist resumable full account discovery`。
 
 ### Task 5: 实现账户访问交集和自动上传账户分配
 
@@ -862,7 +862,7 @@ def claim_external_asset(session, *, kind: str, external_id: str, tenant_id):
 - Produces: 公共 `AccountAccess/resolve_account_access/assign_upload_account`，按文首精确签名。
 - Action 边界：`read` 需要目录访问；`build` 要 can_build，`upload` 要 can_upload；其他动作不接受为账户级动作。
 
-- [ ] **Step 1: 写只满足一个集合时拒绝以及平台不能绕过外部权限的回归。**
+- [x] **Step 1: 写只满足一个集合时拒绝以及平台不能绕过外部权限的回归。**
 
 ```python
 import pytest
@@ -909,9 +909,9 @@ def account_access_case(session, context):
     return context, grant
 ```
 
-- [ ] **Step 2: 运行 `uv run pytest tests/modules/accounts/test_access.py -q`。** 预期公共接口缺失而失败。
+- [x] **Step 2: 运行 `uv run pytest tests/modules/accounts/test_access.py -q`。** 预期公共接口缺失而失败。
 
-- [ ] **Step 3: 实现带租户条件的 JOIN 与权限检查。**
+- [x] **Step 3: 实现带租户条件的 JOIN 与权限检查。**
 
 ```python
 # modules/accounts/access.py
@@ -976,7 +976,7 @@ def assign_upload_account(session: Session, *, context: TenantContext, bc_id: st
 
 `AccountAccess` 按文首定义实现为 Pydantic model。查询必须同时核对远端账户可操作状态：发现层把已明确停用/关闭的账户访问关系 active=False；未知远端状态保持 permission_state=UNKNOWN。系统选择不永久绑定账户，素材上传任务保存返回结果的 advertiser_id、connection_id；后续新上传可以分配其他账户。
 
-- [ ] **Step 4: 增加多连接及重查测试后提交。** 测试某连接失效而另一个同租户同 BC 已授权连接有效时只选择有效连接；平台 context 也不能访问冲突账户；修改成员角色后重复调用立即拒绝。运行 `uv run pytest tests/modules/accounts/test_access.py -q`，预期全部通过。提交主题 `accounts: resolve authorized access and choose upload accounts`。
+- [x] **Step 4: 增加多连接及重查测试后提交。** 测试某连接失效而另一个同租户同 BC 已授权连接有效时只选择有效连接；平台 context 也不能访问冲突账户；修改成员角色后重复调用立即拒绝。运行 `uv run pytest tests/modules/accounts/test_access.py -q`，预期全部通过。提交主题 `accounts: resolve authorized access and choose upload accounts`。
 
 ### Task 6: 完成批量粘贴解析、分页目录和连接 API
 
@@ -992,7 +992,7 @@ def assign_upload_account(session: Session, *, context: TenantContext, bc_id: st
 - Produces: `resolve_lines(session, *, context:TenantContext, bc_id:str, lines:list[InputLine]) -> list[ResolvedLine]`。
 - Produces: `GET /api/tenants/{tenant_id}/accounts?bc_id=&query=&cursor=&limit=`、`POST .../accounts/resolve`；`GET .../bcs`、`GET .../tiktok/connections`、`POST .../tiktok/authorizations`、`PATCH .../tiktok/connections/{id}`；固定回调 GET。
 
-- [ ] **Step 1: 写纯解析用例，不把重复名当成成功。**
+- [x] **Step 1: 写纯解析用例，不把重复名当成成功。**
 
 ```python
 from app.modules.accounts.resolver import parse_matching_rows
@@ -1012,9 +1012,9 @@ def test_ids_names_ambiguity_and_original_lines():
     assert result[3].raw == "不存在"
 ```
 
-- [ ] **Step 2: 运行 `uv run pytest tests/modules/accounts/test_resolver.py -q`，确认因解析器缺失而失败。**
+- [x] **Step 2: 运行 `uv run pytest tests/modules/accounts/test_resolver.py -q`，确认因解析器缺失而失败。**
 
-- [ ] **Step 3: 实现具体纯解析器与分块数据库查询。**
+- [x] **Step 3: 实现具体纯解析器与分块数据库查询。**
 
 ```python
 # modules/accounts/resolver.py
@@ -1050,7 +1050,7 @@ def parse_matching_rows(lines: list[InputLine], rows: list[dict]) -> list[Resolv
 
 目录查询以 advertiser_id 字符串为稳定 seek 值，使用 `limit+1` 判断 next_cursor；BC 条件走 EXISTS 访问关系避免多连接产生重复行。cursor 使用 base64 编码 `{tenant_id,bc_id,query,last_id}`，解析后必须逐项匹配当前查询作用域；格式不符返回 422。限制 `limit=1..200`，每次 resolve 最多 500 行是请求分块上限，不是租户账户或整批搭建的总上限；搭建模块负责保持全批去重与原始行号。
 
-- [ ] **Step 4: 装配连接和账户路由，完成 callback 结果跳转。** 账户列表可供 viewer 读取，resolve 中的写权限结果只报告 BLOCKED 不执行写入。连接新增/重新授权/停用为 manage；callback 用 state 恢复上下文，不依赖浏览器此刻租户。停用只修改连接状态及审计，不调用 TikTok revoke 或广告停用接口。GET connections 返回 `id/status/last_discovery/error_code` 等允许字段，没有凭据。
+- [x] **Step 4: 装配连接和账户路由，完成 callback 结果跳转。** 账户列表可供 viewer 读取，resolve 中的写权限结果只报告 BLOCKED 不执行写入。连接新增/重新授权/停用为 manage；callback 用 state 恢复上下文，不依赖浏览器此刻租户。停用只修改连接状态及审计，不调用 TikTok revoke 或广告停用接口。GET connections 返回 `id/status/last_discovery/error_code` 等允许字段，没有凭据。
 
 ```python
 @router.post("/tenants/{tenant_id}/accounts/resolve", response_model=list[ResolvedLine])
@@ -1062,7 +1062,7 @@ def post_resolve(tenant_id: UUID, body: ResolveRequest, session: SessionDep, use
 `ResolveRequest` 为 Pydantic model，字段 `bc_id:str` 与 `lines:list[InputLine]`（1～500），line_no 正整数且本请求唯一。router 文件导入本任务定义类型、Task 1 权限和模板 CurrentUser/SessionDep。callback 的错误跳转只带稳定业务错误码；日志中禁止保留 auth_code/state/token 查询串。
 回调替换基础计划 `api/routes/integrations.py` 中同一路径的未配置响应处理，不重复注册第二条 GET 路由；缺 App 配置时继续保留原来的确定提示。
 
-- [ ] **Step 5: 运行回归、边界规模测试并提交。** `test_router.py` 对 501 行返回 422，两个 500 行分块保留行号；10,001 条本地目录 fixture 分页全取恰好一次、同名歧义、游标租户不符、重复连接 JOIN 去重均有断言。运行 `uv run pytest tests/modules/accounts/test_resolver.py tests/modules/accounts/test_router.py -q`，预期全部通过。提交主题 `accounts: support bulk pasted IDs and names with paginated directory`。
+- [x] **Step 5: 运行回归、边界规模测试并提交。** `test_router.py` 对 501 行返回 422，两个 500 行分块保留行号；10,001 条本地目录 fixture 分页全取恰好一次、同名歧义、游标租户不符、重复连接 JOIN 去重均有断言。运行 `uv run pytest tests/modules/accounts/test_resolver.py tests/modules/accounts/test_router.py -q`，预期全部通过。提交主题 `accounts: support bulk pasted IDs and names with paginated directory`。
 
 ### Task 7: 交付 shadcn 租户工作台、连接管理和账户页面
 
