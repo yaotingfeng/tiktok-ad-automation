@@ -42,3 +42,9 @@ class MemberPublic(BaseModel):
     email: EmailStr
     full_name: str | None
     user_active: bool
+
+
+class UserCandidate(BaseModel):
+    id: UUID
+    email: EmailStr
+    full_name: str | None

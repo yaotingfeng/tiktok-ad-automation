@@ -16,11 +16,47 @@ from app.modules.tenants.schemas import (
     TenantCreate,
     TenantSummary,
     TenantUpdate,
+    UserCandidate,
 )
 
 router = APIRouter(tags=["tenants"])
 PageLimit = Annotated[int, Query(ge=1, le=200)]
 Search = Annotated[str, Query(max_length=255)]
+CandidateQuery = Annotated[str, Query(min_length=1, max_length=255)]
+
+
+@router.get("/platform/user-candidates", response_model=Page[UserCandidate])
+def get_platform_user_candidates(
+    query: CandidateQuery,
+    session: SessionDep,
+    user: CurrentUser,
+    after_id: UUID | None = None,
+    limit: PageLimit = 50,
+) -> Page[UserCandidate]:
+    return service.search_user_candidates(
+        session, actor_id=user.id, query=query, after_id=after_id, limit=limit
+    )
+
+
+@router.get(
+    "/tenants/{tenant_id}/member-candidates", response_model=Page[UserCandidate]
+)
+def get_member_candidates(
+    tenant_id: UUID,
+    query: CandidateQuery,
+    session: SessionDep,
+    user: CurrentUser,
+    after_id: UUID | None = None,
+    limit: PageLimit = 50,
+) -> Page[UserCandidate]:
+    return service.search_user_candidates(
+        session,
+        actor_id=user.id,
+        tenant_id=tenant_id,
+        query=query,
+        after_id=after_id,
+        limit=limit,
+    )
 
 
 @router.get("/me/tenants", response_model=Page[TenantSummary])

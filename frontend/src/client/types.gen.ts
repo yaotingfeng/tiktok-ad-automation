@@ -149,6 +149,20 @@ export type Page_TenantSummary_ = {
 };
 
 /**
+ * Page[UserCandidate]
+ */
+export type Page_UserCandidate_ = {
+    /**
+     * Items
+     */
+    items: Array<UserCandidate>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
  * Tenant
  */
 export type Tenant = {
@@ -242,6 +256,24 @@ export type UpdatePassword = {
      * New Password
      */
     new_password: string;
+};
+
+/**
+ * UserCandidate
+ */
+export type UserCandidate = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Email
+     */
+    email: string;
+    /**
+     * Full Name
+     */
+    full_name: string | null;
 };
 
 /**
@@ -800,6 +832,87 @@ export type integrationsTiktokCallbackResponses = {
      */
     200: unknown;
 };
+
+export type tenantsGetPlatformUserCandidatesData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * Query
+         */
+        query: string;
+        /**
+         * After Id
+         */
+        after_id?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/platform/user-candidates';
+};
+
+export type tenantsGetPlatformUserCandidatesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type tenantsGetPlatformUserCandidatesError = tenantsGetPlatformUserCandidatesErrors[keyof tenantsGetPlatformUserCandidatesErrors];
+
+export type tenantsGetPlatformUserCandidatesResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_UserCandidate_;
+};
+
+export type tenantsGetPlatformUserCandidatesResponse = tenantsGetPlatformUserCandidatesResponses[keyof tenantsGetPlatformUserCandidatesResponses];
+
+export type tenantsGetMemberCandidatesData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query: {
+        /**
+         * Query
+         */
+        query: string;
+        /**
+         * After Id
+         */
+        after_id?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/member-candidates';
+};
+
+export type tenantsGetMemberCandidatesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type tenantsGetMemberCandidatesError = tenantsGetMemberCandidatesErrors[keyof tenantsGetMemberCandidatesErrors];
+
+export type tenantsGetMemberCandidatesResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_UserCandidate_;
+};
+
+export type tenantsGetMemberCandidatesResponse = tenantsGetMemberCandidatesResponses[keyof tenantsGetMemberCandidatesResponses];
 
 export type tenantsGetMyTenantsData = {
     body?: never;

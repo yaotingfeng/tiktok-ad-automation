@@ -11,7 +11,12 @@ from app.core.pagination import Page
 from app.models import User
 from app.modules.tenants.models import AuditEvent, Tenant, TenantMembership
 from app.modules.tenants.permissions import Role, require_tenant
-from app.modules.tenants.schemas import MemberPublic, MemberRole, TenantSummary
+from app.modules.tenants.schemas import (
+    MemberPublic,
+    MemberRole,
+    TenantSummary,
+    UserCandidate,
+)
 
 
 def require_platform(session: Session, *, actor_id: UUID) -> User:
@@ -284,4 +289,40 @@ def list_members(
     items = [member_public(member, user) for member, user in rows[:limit]]
     return Page(
         items=items, next_cursor=str(items[-1].user_id) if len(rows) > limit else None
+    )
+
+
+def search_user_candidates(
+    session: Session,
+    *,
+    actor_id: UUID,
+    query: str,
+    tenant_id: UUID | None = None,
+    after_id: UUID | None = None,
+    limit: int = 50,
+) -> Page[UserCandidate]:
+    if tenant_id is None:
+        require_platform(session, actor_id=actor_id)
+    else:
+        require_tenant(session, actor_id=actor_id, tenant_id=tenant_id, action="manage")
+    _page_limit(limit)
+    term = query.strip()
+    if not term or len(term) > 255:
+        raise DomainError("invalid_member", "请输入用户姓名或邮箱")
+    statement = select(User).where(
+        col(User.is_active).is_(True),
+        or_(
+            col(User.email).icontains(term, autoescape=True),
+            col(User.full_name).icontains(term, autoescape=True),
+        ),
+    )
+    if after_id is not None:
+        statement = statement.where(User.id > after_id)
+    rows = session.exec(statement.order_by(col(User.id)).limit(limit + 1)).all()
+    items = [
+        UserCandidate(id=user.id, email=user.email, full_name=user.full_name)
+        for user in rows[:limit]
+    ]
+    return Page(
+        items=items, next_cursor=str(items[-1].id) if len(rows) > limit else None
     )
