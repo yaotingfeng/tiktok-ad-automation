@@ -12,7 +12,7 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_ignore_result=True,
     result_backend=None,
-    imports=("app.jobs.tasks",),
+    imports=("app.jobs.tasks", "app.modules.accounts.tasks"),
     task_queues=(Queue("resources"), Queue("builds"), Queue("control")),
     task_default_queue="control",
     task_create_missing_queues=False,
