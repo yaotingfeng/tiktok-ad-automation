@@ -28,6 +28,7 @@ from app.modules.providers import models as provider_models  # noqa: F401
 from app.modules.strategies import models as strategy_models  # noqa: F401
 from app.modules.builds import models as builds_models  # noqa: F401
 from app.modules.builds import scene_models  # noqa: F401
+from app.modules.builds import preview_models  # noqa: F401
 from app.core.config import settings # noqa
 
 target_metadata = SQLModel.metadata

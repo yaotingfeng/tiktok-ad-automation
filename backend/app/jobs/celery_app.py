@@ -18,12 +18,18 @@ celery_app.conf.update(
         "app.modules.providers.tasks",
         "app.modules.materials.tasks",
         "app.modules.builds.draft_tasks",
+        "app.modules.builds.preview_tasks",
     ),
     task_queues=(Queue("resources"), Queue("builds"), Queue("control")),
     task_default_queue="control",
     task_create_missing_queues=False,
     task_routes={"jobs.flush_dispatch": {"queue": "control"}},
     beat_schedule={
+        "repair-build-previews": {
+            "task": "builds.repair_previews",
+            "schedule": 60.0,
+            "options": {"queue": "control"},
+        },
         "repair-material-dispatches": {
             "task": "materials.repair_dispatches",
             "schedule": 60.0,

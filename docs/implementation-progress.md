@@ -77,3 +77,11 @@
 - Added tenant/BC upload-request recovery, lightweight upload batch pagination and on-demand 300-second private original preview URLs. GET routes do not enqueue work; viewers can read, and missing original/configuration/scope are explicit errors.
 - Batch file counts use bounded parent-page SQL aggregation; original preview uses local SigV4 GET signing with inline allowlisted video MIME and no-store. No bucket permission change or external SDK write.
 - Verification: 9 new regressions plus affected upload/progress/retry tests total 58 passed; Ruff, strict mypy and ty passed. See [material read API contract](validation/p04-material-read-apis.md). Root generates the client and independently reviews integration; no frontend files changed here.
+
+## 2026-09-09：冻结预览与素材工作区集成
+
+- 素材只读补充接口独立审查 PASS（64 项）；素材 UI 已合并，工作区 157 项浏览器测试通过，最后补充权限场景后素材完整 31 项通过。
+- Scene/OAuth 独立审查 PASS（118 项）；发现的单页/跨页重复 ID 完整性问题已关闭。官方 SDK 创建编译器 26 条离线契约验证通过。
+- P05 草稿独立复核 PASS（25 项）；冻结预览实现与 HTTP 接口已就绪，builds 模块合计 124 项通过。冻结预览独立审查、全工作区 UI 独立审查进行中。
+- BC 账户权限引导任务正在开发，用完整只读能力检查把 UNKNOWN 授权事实转为可验证的创建/上传权限，避免依赖广告链接或逐剧重复扫描 BC。
+- 后续继续搭建工作区 UI、提交执行、结果核查/恢复及 P07 验证。未进行真实广告创建或真实外部业务联调。

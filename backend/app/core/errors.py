@@ -3,6 +3,13 @@ from fastapi.responses import JSONResponse
 
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
+    "preview_not_found": 404,
+    "preview_not_frozen": 409,
+    "preview_group_too_large": 409,
+    "scene_worker_unbounded": 503,
+    "scene_request_invalid": 422,
+    "scene_link_unavailable": 409,
+    "scene_refresh_stale": 409,
     "draft_not_found": 404,
     "draft_input_invalid": 422,
     "draft_inputs_empty": 422,
@@ -104,6 +111,11 @@ ERROR_HTTP_STATUS: dict[str, int] = {
 # Public messages are application-owned. DomainError.message may contain raw
 # integration details, so it must never become an HTTP response or log field.
 ERROR_PUBLIC_MESSAGES: dict[str, str] = {
+    "preview_not_frozen": "预览尚未完成，请稍后刷新",
+    "preview_group_too_large": "分组超过可用上限，请先调整素材分组",
+    "scene_link_unavailable": "推广链接尚未就绪",
+    "scene_refresh_stale": "授权或场景已经变化，请重新准备",
+    "scene_worker_unbounded": "场景检查服务尚未就绪",
     "draft_revision_conflict": "草稿已更新，请保留当前编辑并读取最新版本",
     "draft_not_ready": "等待当前草稿准备完成后再调整素材",
     "draft_inputs_empty": "至少输入一部剧目后再解析准备",
@@ -127,7 +139,6 @@ ERROR_PUBLIC_MESSAGES: dict[str, str] = {
     "attribution_contract_unverified": "版权方归因契约尚未核实",
     "config_unverifiable": "已有链接配置尚不能核实",
     "config_conflict": "已有链接配置与本次请求冲突，不能覆盖",
-
     "last_tenant_admin": "请先设置其他租户管理员",
     "invalid_tenant": "租户名称与初始管理员必须有效",
     "invalid_member": "成员和租户角色必须有效",
