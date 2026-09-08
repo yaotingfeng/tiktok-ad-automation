@@ -323,3 +323,57 @@ test("the removed Items example has no public route", async ({ page }) => {
   await expect(page.getByTestId("not-found")).toBeVisible()
   await expect(page.getByRole("button", { name: "Add Item" })).toHaveCount(0)
 })
+
+for (const width of [900, 1023, 1024]) {
+  test(`sidebar switches between Sheet and desktop navigation at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 })
+    await apiBoundary(page)
+    await page.goto("/")
+    await expect(page.getByText("尚未接入租户", { exact: true })).toBeVisible()
+    const trigger = page.getByRole("button", { name: "切换导航" })
+    const desktopSidebar = page.locator('[data-slot="sidebar-container"]')
+    const dialog = page.getByRole("dialog", { name: "工作台导航" })
+
+    if (width < 1024) {
+      await expect(desktopSidebar).toHaveCount(0)
+      await expect(
+        page.getByRole("navigation", { name: "投放工作" }),
+      ).toHaveCount(0)
+      await trigger.focus()
+      await page.keyboard.press("Enter")
+      await expect(dialog).toBeVisible()
+      await page.keyboard.press("Escape")
+      await expect(dialog).not.toBeVisible()
+      await expect(trigger).toBeFocused()
+      await page.keyboard.press("Enter")
+      await expect(dialog).toBeVisible()
+      await dialog.getByRole("link", { name: "账户与授权" }).focus()
+      await page.keyboard.press("Enter")
+      await expect(dialog).not.toBeVisible()
+      await expect(desktopSidebar).toHaveCount(0)
+    } else {
+      await expect(desktopSidebar).toBeVisible()
+      await expect(
+        page.getByRole("navigation", { name: "投放工作" }),
+      ).toBeVisible()
+      await trigger.focus()
+      await page.keyboard.press("Enter")
+      await expect(
+        page.locator('[data-slot="sidebar"][data-state="collapsed"]'),
+      ).toBeVisible()
+      await expect(dialog).toHaveCount(0)
+      await page.keyboard.press("Enter")
+      await expect(
+        page.locator('[data-slot="sidebar"][data-state="expanded"]'),
+      ).toBeVisible()
+      await desktopSidebar.getByRole("link", { name: "账户与授权" }).focus()
+      await page.keyboard.press("Enter")
+      await expect(desktopSidebar).toBeVisible()
+    }
+    await expect(
+      page.getByRole("heading", { name: "账户与授权" }),
+    ).toBeVisible()
+  })
+}
