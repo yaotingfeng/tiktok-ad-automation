@@ -192,3 +192,83 @@ def test_incomplete_scene_constraints_block_real_unit_counts(
             session, context=context, preview_id=identity
         ).items
     )
+
+
+def test_frozen_read_services_issue_only_selects_and_never_advance_tasks(
+    session, context, prepared, monkeypatch
+):
+    from app.modules.materials import service
+
+    identity = previews.generate_preview(
+        session, context=context, draft_id=prepared, expected_revision=1
+    )
+    drain(session, context, identity)
+    session.expire_all()
+    statements = []
+
+    def query(_c, _cur, statement, _params, _ctx, _many):
+        statements.append(statement)
+        assert statement.lstrip().upper().startswith("SELECT")
+        assert "FOR UPDATE" not in statement.upper()
+
+    def forbidden(*_a, **_kw):
+        pytest.fail(
+            "Frozen preview read advanced preparation or called remote services"
+        )
+
+    monkeypatch.setattr(service, "ensure_target_asset", forbidden)
+    monkeypatch.setattr(previews, "get_material_readiness", forbidden)
+    monkeypatch.setattr(previews, "read_scene_context", forbidden)
+    event.listen(session.connection(), "before_cursor_execute", query)
+    try:
+        previews.get_preview_summary(session, context=context, preview_id=identity)
+        page = previews.get_preview_units(session, context=context, preview_id=identity)
+        previews.get_preview_inputs(
+            session, context=context, preview_id=identity, kind="drama"
+        )
+        for unit in page.items:
+            previews.load_frozen_unit(session, context=context, unit_id=unit.unit_id)
+            previews.get_frozen_groups(session, context=context, unit_id=unit.unit_id)
+        assert statements and not session.new and not session.dirty
+    finally:
+        event.remove(session.connection(), "before_cursor_execute", query)
+
+
+def test_building_snapshot_rejects_cross_tenant_material_foreign_key(
+    session, context, other_context, prepared
+):
+    from app.modules.builds.preview_models import (
+        PreviewDramaGroup,
+        PreviewGroupMaterial,
+    )
+    from tests.modules.materials.test_tenant_materials import material
+
+    identity = previews.generate_preview(
+        session, context=context, draft_id=prepared, expected_revision=1
+    )
+    group = None
+    for _ in range(20):
+        previews.continue_preview(
+            session, context=context, preview_id=identity, step_limit=1
+        )
+        group = session.exec(
+            select(PreviewDramaGroup).where(PreviewDramaGroup.preview_id == identity)
+        ).first()
+        if group:
+            break
+    assert group and session.get(BuildPreview, identity).status == "BUILDING"
+    foreign = material(session, other_context, "foreign.mp4", bc="bc-draft")
+    with pytest.raises(DBAPIError) as error, session.begin_nested():
+        session.add(
+            PreviewGroupMaterial(
+                tenant_id=context.tenant_id,
+                preview_id=identity,
+                bc_id="bc-draft",
+                drama_id=group.drama_id,
+                group_no=group.group_no,
+                position=999,
+                material_id=foreign.id,
+            )
+        )
+        session.flush()
+    assert error.value.orig.sqlstate == "23503"
