@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useSearch } from "@tanstack/react-router"
 import type { ColumnDef } from "@tanstack/react-table"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { AccountsService, type BCPublic, type ConnectionPublic } from "@/client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -21,6 +21,7 @@ import {
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import {
   connectionLabels,
+  discoveryLabels,
   displayTime,
   FilterSelect,
   Identifier,
@@ -59,10 +60,44 @@ export function ConnectionsPage() {
         })
       ).data,
     refetchInterval: (state) =>
-      state.state.data?.items.some((item) => item.status === "DISCOVERING")
+      state.state.data?.items.some(
+        (item) =>
+          item.status !== "DISABLED" &&
+          (item.discovery_status
+            ? ["QUEUED", "RUNNING", "ADMISSION_WAIT"].includes(
+                item.discovery_status,
+              )
+            : item.status === "DISCOVERING"),
+      )
         ? 5000
         : false,
   })
+  const observedDiscovery = useRef(new Map<string, ConnectionPublic>())
+  useEffect(() => {
+    let changed = false
+    for (const connection of query.data?.items ?? []) {
+      const previous = observedDiscovery.current.get(connection.id)
+      if (
+        (connection.discovery_status === "COMPLETE" &&
+          previous?.discovery_status !== "COMPLETE") ||
+        (previous &&
+          connection.status === "ACTIVE" &&
+          (previous.status === "DISCOVERING" ||
+            previous.last_discovery !== connection.last_discovery ||
+            previous.last_authorized_at !== connection.last_authorized_at))
+      )
+        changed = true
+      observedDiscovery.current.set(connection.id, connection)
+    }
+    if (!changed) return
+    // Discovery commits alter all local directory projections, not only the
+    // connection row. Invalidate this tenant only, including inactive pages.
+    for (const resource of ["bcs", "accounts", "connection-bcs"]) {
+      void queryClient.invalidateQueries({
+        queryKey: ["tenant", tenantId, resource],
+      })
+    }
+  }, [query.data, queryClient, tenantId])
   const configuration = useQuery({
     queryKey: ["tenant", tenantId, "tiktok-configuration"],
     queryFn: async ({ signal }) =>
@@ -93,9 +128,16 @@ export function ConnectionsPage() {
       {
         header: "授权状态",
         cell: ({ row }) => (
-          <Badge variant="outline">
-            {connectionLabels[row.original.status]}
-          </Badge>
+          <div className="flex flex-col gap-1">
+            <Badge variant="outline">
+              {connectionLabels[row.original.status]}
+            </Badge>
+            {row.original.discovery_status && (
+              <span className="text-xs text-muted-foreground">
+                发现进度：{discoveryLabels[row.original.discovery_status]}
+              </span>
+            )}
+          </div>
         ),
       },
       {
@@ -262,7 +304,14 @@ export function ConnectionsPage() {
         </CardContent>
       </Card>
       {detail && (
-        <ConnectionDetails detail={detail} onClose={() => setDetail(null)} />
+        <ConnectionDetails
+          detail={
+            query.data?.items.find(
+              (connection) => connection.id === detail.id,
+            ) ?? detail
+          }
+          onClose={() => setDetail(null)}
+        />
       )}
       {action && (
         <ConnectionAction
@@ -434,6 +483,12 @@ function ConnectionDetails({
           </dd>
           <dt>授权状态</dt>
           <dd>{connectionLabels[detail.status]}</dd>
+          <dt>发现进度</dt>
+          <dd>
+            {detail.discovery_status
+              ? discoveryLabels[detail.discovery_status]
+              : "尚无发现记录"}
+          </dd>
           <dt>最近授权生效</dt>
           <dd>{displayTime(detail.last_authorized_at)}</dd>
           <dt>最近发现</dt>

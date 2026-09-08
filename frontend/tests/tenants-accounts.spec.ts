@@ -1422,3 +1422,284 @@ for (const width of [1440, 390])
       page.getByRole("button", { name: "查看详情" }).first(),
     ).toBeFocused()
   })
+
+for (const arrival of ["initial", "refetch"] as const)
+  test(`a ${arrival} default BC waits for the unsaved member form navigation guard`, async ({
+    page,
+  }) => {
+    const { requests, tenantRequests } = await accountBoundary(page)
+    let release!: () => void
+    const delayed = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let reads = 0
+    await page.route("**/api/tenants/*/bcs*", async (route) => {
+      reads++
+      if (arrival === "refetch" && reads === 1)
+        return route.fulfill({ json: { items: [], next_cursor: null } })
+      await delayed
+      return route.fulfill({
+        json: {
+          items: [
+            { bc_id: BC1, name: "稍后发现的 BC", ownership_conflict: false },
+          ],
+          next_cursor: null,
+        },
+      })
+    })
+    await page.goto(`/tenants/${A}/members`)
+    await page.getByRole("button", { name: "编辑成员", exact: true }).click()
+    const sheet = page.getByRole("dialog", { name: "编辑成员", exact: true })
+    await sheet.getByLabel("租户角色").click()
+    await page.getByRole("option", { name: "只读成员", exact: true }).click()
+    if (arrival === "refetch") {
+      // Drive the browser lifecycle boundary used by Query's default refetch.
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "hidden",
+        })
+        window.dispatchEvent(new Event("visibilitychange"))
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        })
+        window.dispatchEvent(new Event("visibilitychange"))
+      })
+      await expect.poll(() => reads).toBeGreaterThan(1)
+    }
+    release()
+    const guard = page.getByRole("dialog", { name: "有未保存的修改" })
+    await expect(guard).toBeVisible()
+    await expect(page).toHaveURL(new RegExp(`/tenants/${A}/members$`))
+    await guard.getByRole("button", { name: "留在当前页" }).click()
+    await expect(sheet.getByLabel("租户角色")).toContainText("只读成员")
+    await expect(page).toHaveURL(new RegExp(`/tenants/${A}/members$`))
+    expect(
+      [...requests, ...tenantRequests].filter((req) => req.method !== "GET"),
+    ).toHaveLength(0)
+    await page.keyboard.press("Escape")
+    await page.getByRole("button", { name: "丢弃未保存修改" }).click()
+    await expect(sheet).not.toBeVisible()
+    await page.getByRole("combobox", { name: "当前 BC" }).click()
+    await page.getByRole("option", { name: /稍后发现的 BC/ }).click()
+    await expect(page).toHaveURL(new RegExp(`bc_id=${BC1}`))
+    expect(
+      [...requests, ...tenantRequests].filter((req) => req.method !== "GET"),
+    ).toHaveLength(0)
+  })
+
+test("completed first discovery refreshes the empty BC directory without reloading the browser", async ({
+  page,
+}) => {
+  await accountBoundary(page)
+  let completed = false
+  let bcReads = 0
+  await page.route("**/api/tenants/*/bcs*", (route) => {
+    bcReads++
+    return route.fulfill({
+      json: {
+        items: completed
+          ? [{ bc_id: BC1, name: "新发现 BC", ownership_conflict: false }]
+          : [],
+        next_cursor: null,
+      },
+    })
+  })
+  await page.route("**/api/tenants/*/tiktok/connections*", (route) =>
+    route.fulfill({
+      json: {
+        items: [
+          {
+            id: CONN,
+            tenant_id: A,
+            status: completed ? "ACTIVE" : "DISCOVERING",
+            discovery_status: completed ? "COMPLETE" : "RUNNING",
+            last_discovery: completed ? "2026-09-09T10:00:00Z" : null,
+            last_authorized_at: completed ? "2026-09-09T10:00:00Z" : null,
+            error_code: null,
+          },
+        ],
+        next_cursor: null,
+      },
+    }),
+  )
+  await page.goto(`/tenants/${A}/accounts?tab=connections`)
+  await expect(page.getByRole("row", { name: new RegExp(CONN) })).toContainText(
+    "正在发现账户",
+  )
+  await expect(page.getByText("BC 未连接", { exact: true })).toBeVisible()
+  completed = true
+  await expect.poll(() => bcReads, { timeout: 12000 }).toBeGreaterThan(1)
+  await expect(page).toHaveURL(new RegExp(`bc_id=${BC1}`))
+  await page.getByRole("tab", { name: "账户", exact: true }).click()
+  await expect(page.getByRole("row", { name: /第一BC账户 1 / })).toBeVisible()
+})
+
+for (const phase of ["QUEUED", "RUNNING", "ADMISSION_WAIT"] as const)
+  test(`an ACTIVE connection with ${phase} discovery refreshes exact BC and open details on completion`, async ({
+    page,
+  }) => {
+    await accountBoundary(page)
+    let completed = false
+    let exactReads = 0
+    let detailReads = 0
+    await page.route("**/api/tenants/*/bcs*", (route) => {
+      const query = new URL(route.request().url()).searchParams
+      if (query.has("connection_id")) {
+        detailReads++
+        return route.fulfill({
+          json: {
+            items: [
+              {
+                bc_id: BC3,
+                name: completed ? "新关联范围" : "旧关联范围",
+                ownership_conflict: false,
+              },
+            ],
+            next_cursor: null,
+          },
+        })
+      }
+      if (query.get("query") === BC3) {
+        exactReads++
+        return route.fulfill({
+          json: {
+            items: [
+              {
+                bc_id: BC3,
+                name: completed ? "核验后 BC" : "原有 BC",
+                ownership_conflict: false,
+              },
+            ],
+            next_cursor: null,
+          },
+        })
+      }
+      return route.fulfill({
+        json: {
+          items: [{ bc_id: BC1, name: "首页 BC", ownership_conflict: false }],
+          next_cursor: "more",
+        },
+      })
+    })
+    await page.route("**/api/tenants/*/tiktok/connections*", (route) =>
+      route.fulfill({
+        json: {
+          items: [
+            {
+              id: CONN,
+              tenant_id: A,
+              status: "ACTIVE",
+              discovery_status: completed ? "COMPLETE" : phase,
+              last_discovery: completed
+                ? "2026-09-09T10:00:00Z"
+                : "2026-09-08T10:00:00Z",
+              last_authorized_at: completed
+                ? "2026-09-09T10:00:00Z"
+                : "2026-09-08T10:00:00Z",
+              error_code: null,
+            },
+          ],
+          next_cursor: null,
+        },
+      }),
+    )
+    await page.goto(`/tenants/${A}/accounts?tab=connections&bc_id=${BC3}`)
+    await expect(page.getByRole("combobox", { name: "当前 BC" })).toContainText(
+      "原有 BC",
+    )
+    const row = page.getByRole("row", { name: new RegExp(CONN) })
+    await expect(row).toContainText("可用")
+    await row.getByRole("button", { name: "查看详情" }).click()
+    const sheet = page.getByRole("dialog", { name: "连接详情", exact: true })
+    await expect(sheet).toContainText("旧关联范围")
+    completed = true
+    await expect.poll(() => exactReads, { timeout: 12000 }).toBeGreaterThan(1)
+    await expect.poll(() => detailReads).toBeGreaterThan(1)
+    await expect(sheet).toContainText("新关联范围")
+    await expect(sheet).not.toContainText("旧关联范围")
+    await page.keyboard.press("Escape")
+    await expect(page.getByRole("combobox", { name: "当前 BC" })).toContainText(
+      "核验后 BC",
+    )
+  })
+
+for (const phase of ["ERROR", "CANCELLED", "COMPLETE", "DISABLED"] as const)
+  test(`discovery ${phase} stops polling and preserves the actual connection status`, async ({
+    page,
+  }) => {
+    await page.clock.install()
+    await accountBoundary(page, { noBC: true })
+    let reads = 0
+    await page.route("**/api/tenants/*/tiktok/connections*", (route) => {
+      reads++
+      return route.fulfill({
+        json: {
+          items: [
+            {
+              id: CONN,
+              tenant_id: A,
+              status: phase === "DISABLED" ? "DISABLED" : "ACTIVE",
+              discovery_status: phase === "DISABLED" ? "RUNNING" : phase,
+              last_discovery: "2026-09-08T10:00:00Z",
+              last_authorized_at: "2026-09-08T10:00:00Z",
+              error_code: phase === "ERROR" ? "discovery_failed" : null,
+            },
+          ],
+          next_cursor: null,
+        },
+      })
+    })
+    await page.goto(`/tenants/${A}/accounts?tab=connections`)
+    const row = page.getByRole("row", { name: new RegExp(CONN) })
+    await expect(row).toContainText(phase === "DISABLED" ? "已停用" : "可用")
+    if (phase === "ERROR") await expect(row).toContainText("发现失败")
+    if (phase === "CANCELLED") await expect(row).toContainText("已取消")
+    const initialReads = reads
+    // Advance past two 5-second intervals to assert no terminal-state polling.
+    await page.clock.fastForward(11000)
+    expect(reads).toBe(initialReads)
+    await expect(row).toContainText(phase === "DISABLED" ? "已停用" : "可用")
+  })
+
+test("failed candidate discovery retains the accepted BC and accounts without repeating authorization", async ({
+  page,
+}) => {
+  const { requests } = await accountBoundary(page, { singleBC: true })
+  let failed = false
+  await page.route("**/api/tenants/*/tiktok/connections*", (route) =>
+    route.fulfill({
+      json: {
+        items: [
+          {
+            id: CONN,
+            tenant_id: A,
+            status: "ACTIVE",
+            discovery_status: failed ? "ERROR" : "RUNNING",
+            last_discovery: "2026-09-08T10:00:00Z",
+            last_authorized_at: "2026-09-08T10:00:00Z",
+            error_code: failed ? "discovery_failed" : null,
+          },
+        ],
+        next_cursor: null,
+      },
+    }),
+  )
+  await page.goto(`/tenants/${A}/accounts?bc_id=${BC1}`)
+  await expect(page.getByRole("row", { name: /第一BC账户 2 / })).toContainText(
+    "可搭建",
+  )
+  await page.getByRole("tab", { name: "授权连接" }).click()
+  const row = page.getByRole("row", { name: new RegExp(CONN) })
+  await expect(row).toContainText("正在发现账户")
+  failed = true
+  await expect(row).toContainText("发现失败", { timeout: 12000 })
+  await expect(row).toContainText("可用")
+  await expect(page).toHaveURL(new RegExp(`bc_id=${BC1}`))
+  await page.getByRole("tab", { name: "账户", exact: true }).click()
+  await expect(page.getByRole("row", { name: /第一BC账户 2 / })).toContainText(
+    "可搭建",
+  )
+  expect(requests.filter((request) => request.method !== "GET")).toHaveLength(0)
+})

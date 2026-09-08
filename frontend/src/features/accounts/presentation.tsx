@@ -80,3 +80,15 @@ export function FilterSelect({
     </Select>
   )
 }
+
+export const discoveryLabels: Record<
+  NonNullable<ConnectionPublic["discovery_status"]>,
+  string
+> = {
+  QUEUED: "等待发现",
+  RUNNING: "正在发现账户",
+  ADMISSION_WAIT: "等待可用配额",
+  COMPLETE: "已完成",
+  ERROR: "发现失败",
+  CANCELLED: "已取消",
+}
