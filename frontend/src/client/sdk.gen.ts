@@ -2,7 +2,7 @@
 
 import { type Client, type Options as Options2, type TDataShape, urlSearchParamsBodySerializer } from './client';
 import { client } from './client.gen';
-import type { integrationsTiktokCallbackData, integrationsTiktokCallbackResponses, loginLoginAccessTokenData, loginLoginAccessTokenErrors, loginLoginAccessTokenResponses, loginRecoverPasswordData, loginRecoverPasswordErrors, loginRecoverPasswordHtmlContentData, loginRecoverPasswordHtmlContentErrors, loginRecoverPasswordHtmlContentResponses, loginRecoverPasswordResponses, loginResetPasswordData, loginResetPasswordErrors, loginResetPasswordResponses, loginTestTokenData, loginTestTokenResponses, tenantsGetMemberCandidatesData, tenantsGetMemberCandidatesErrors, tenantsGetMemberCandidatesResponses, tenantsGetMembersData, tenantsGetMembersErrors, tenantsGetMembersResponses, tenantsGetMyTenantsData, tenantsGetMyTenantsErrors, tenantsGetMyTenantsResponses, tenantsGetPlatformTenantsData, tenantsGetPlatformTenantsErrors, tenantsGetPlatformTenantsResponses, tenantsGetPlatformUserCandidatesData, tenantsGetPlatformUserCandidatesErrors, tenantsGetPlatformUserCandidatesResponses, tenantsPatchTenantData, tenantsPatchTenantErrors, tenantsPatchTenantResponses, tenantsPostTenantData, tenantsPostTenantErrors, tenantsPostTenantResponses, tenantsPutMemberData, tenantsPutMemberErrors, tenantsPutMemberResponses, usersCreateUserData, usersCreateUserErrors, usersCreateUserResponses, usersDeleteUserData, usersDeleteUserErrors, usersDeleteUserMeData, usersDeleteUserMeResponses, usersDeleteUserResponses, usersReadUserByIdData, usersReadUserByIdErrors, usersReadUserByIdResponses, usersReadUserMeData, usersReadUserMeResponses, usersReadUsersData, usersReadUsersErrors, usersReadUsersResponses, usersUpdatePasswordMeData, usersUpdatePasswordMeErrors, usersUpdatePasswordMeResponses, usersUpdateUserData, usersUpdateUserErrors, usersUpdateUserMeData, usersUpdateUserMeErrors, usersUpdateUserMeResponses, usersUpdateUserResponses, utilsHealthCheckData, utilsHealthCheckResponses, utilsTestEmailData, utilsTestEmailErrors, utilsTestEmailResponses } from './types.gen';
+import type { accountsGetAccountsData, accountsGetAccountsErrors, accountsGetAccountsResponses, accountsGetBcsData, accountsGetBcsErrors, accountsGetBcsResponses, accountsGetConfigurationData, accountsGetConfigurationErrors, accountsGetConfigurationResponses, accountsGetConnectionsData, accountsGetConnectionsErrors, accountsGetConnectionsResponses, accountsPatchConnectionData, accountsPatchConnectionErrors, accountsPatchConnectionResponses, accountsPostAuthorizationData, accountsPostAuthorizationErrors, accountsPostAuthorizationResponses, accountsPostResolveData, accountsPostResolveErrors, accountsPostResolveResponses, integrationsTiktokCallbackData, integrationsTiktokCallbackResponses, loginLoginAccessTokenData, loginLoginAccessTokenErrors, loginLoginAccessTokenResponses, loginRecoverPasswordData, loginRecoverPasswordErrors, loginRecoverPasswordHtmlContentData, loginRecoverPasswordHtmlContentErrors, loginRecoverPasswordHtmlContentResponses, loginRecoverPasswordResponses, loginResetPasswordData, loginResetPasswordErrors, loginResetPasswordResponses, loginTestTokenData, loginTestTokenResponses, tenantsGetMemberCandidatesData, tenantsGetMemberCandidatesErrors, tenantsGetMemberCandidatesResponses, tenantsGetMembersData, tenantsGetMembersErrors, tenantsGetMembersResponses, tenantsGetMyTenantsData, tenantsGetMyTenantsErrors, tenantsGetMyTenantsResponses, tenantsGetPlatformTenantsData, tenantsGetPlatformTenantsErrors, tenantsGetPlatformTenantsResponses, tenantsGetPlatformUserCandidatesData, tenantsGetPlatformUserCandidatesErrors, tenantsGetPlatformUserCandidatesResponses, tenantsPatchTenantData, tenantsPatchTenantErrors, tenantsPatchTenantResponses, tenantsPostTenantData, tenantsPostTenantErrors, tenantsPostTenantResponses, tenantsPutMemberData, tenantsPutMemberErrors, tenantsPutMemberResponses, usersCreateUserData, usersCreateUserErrors, usersCreateUserResponses, usersDeleteUserData, usersDeleteUserErrors, usersDeleteUserMeData, usersDeleteUserMeResponses, usersDeleteUserResponses, usersReadUserByIdData, usersReadUserByIdErrors, usersReadUserByIdResponses, usersReadUserMeData, usersReadUserMeResponses, usersReadUsersData, usersReadUsersErrors, usersReadUsersResponses, usersUpdatePasswordMeData, usersUpdatePasswordMeErrors, usersUpdatePasswordMeResponses, usersUpdateUserData, usersUpdateUserErrors, usersUpdateUserMeData, usersUpdateUserMeErrors, usersUpdateUserMeResponses, usersUpdateUserResponses, utilsHealthCheckData, utilsHealthCheckResponses, utilsTestEmailData, utilsTestEmailErrors, utilsTestEmailResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -387,6 +387,104 @@ export class TenantsService {
             responseType: 'json',
             security: [{ scheme: 'bearer', type: 'http' }],
             url: '/api/tenants/{tenant_id}/members',
+            ...options,
+            headers: {
+                'Content-Type': 'application/json',
+                ...options.headers
+            }
+        });
+    }
+}
+
+export class AccountsService {
+    /**
+     * Get Accounts
+     */
+    public static getAccounts<ThrowOnError extends boolean = true>(options: Options<accountsGetAccountsData, ThrowOnError>) {
+        return (options.client ?? client).get<accountsGetAccountsResponses, accountsGetAccountsErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/accounts',
+            ...options
+        });
+    }
+
+    /**
+     * Post Resolve
+     */
+    public static postResolve<ThrowOnError extends boolean = true>(options: Options<accountsPostResolveData, ThrowOnError>) {
+        return (options.client ?? client).post<accountsPostResolveResponses, accountsPostResolveErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/accounts/resolve',
+            ...options,
+            headers: {
+                'Content-Type': 'application/json',
+                ...options.headers
+            }
+        });
+    }
+
+    /**
+     * Get Bcs
+     */
+    public static getBcs<ThrowOnError extends boolean = true>(options: Options<accountsGetBcsData, ThrowOnError>) {
+        return (options.client ?? client).get<accountsGetBcsResponses, accountsGetBcsErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/bcs',
+            ...options
+        });
+    }
+
+    /**
+     * Get Connections
+     */
+    public static getConnections<ThrowOnError extends boolean = true>(options: Options<accountsGetConnectionsData, ThrowOnError>) {
+        return (options.client ?? client).get<accountsGetConnectionsResponses, accountsGetConnectionsErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/tiktok/connections',
+            ...options
+        });
+    }
+
+    /**
+     * Get Configuration
+     */
+    public static getConfiguration<ThrowOnError extends boolean = true>(options: Options<accountsGetConfigurationData, ThrowOnError>) {
+        return (options.client ?? client).get<accountsGetConfigurationResponses, accountsGetConfigurationErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/tiktok/configuration',
+            ...options
+        });
+    }
+
+    /**
+     * Post Authorization
+     */
+    public static postAuthorization<ThrowOnError extends boolean = true>(options: Options<accountsPostAuthorizationData, ThrowOnError>) {
+        return (options.client ?? client).post<accountsPostAuthorizationResponses, accountsPostAuthorizationErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/tiktok/authorizations',
+            ...options,
+            headers: {
+                'Content-Type': 'application/json',
+                ...options.headers
+            }
+        });
+    }
+
+    /**
+     * Patch Connection
+     */
+    public static patchConnection<ThrowOnError extends boolean = true>(options: Options<accountsPatchConnectionData, ThrowOnError>) {
+        return (options.client ?? client).patch<accountsPatchConnectionResponses, accountsPatchConnectionErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/tiktok/connections/{connection_id}',
             ...options,
             headers: {
                 'Content-Type': 'application/json',

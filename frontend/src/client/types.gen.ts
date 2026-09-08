@@ -5,6 +5,120 @@ export type ClientOptions = {
 };
 
 /**
+ * AccountPublic
+ */
+export type AccountPublic = {
+    /**
+     * Advertiser Id
+     */
+    advertiser_id: string;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Currency
+     */
+    currency: string;
+    /**
+     * Timezone
+     */
+    timezone: string;
+    /**
+     * Remote Status
+     */
+    remote_status: string;
+    /**
+     * Ownership Conflict
+     */
+    ownership_conflict: boolean;
+    /**
+     * Can Build
+     */
+    can_build: boolean;
+    /**
+     * Can Upload
+     */
+    can_upload: boolean;
+    /**
+     * Permission State
+     */
+    permission_state: string;
+    /**
+     * Availability
+     */
+    availability: 'AVAILABLE' | 'PERMISSION_UNKNOWN' | 'NO_ACCESS' | 'OWNERSHIP_CONFLICT' | 'METADATA_INCOMPLETE';
+    /**
+     * Checked At
+     */
+    checked_at: string | null;
+};
+
+/**
+ * AppConfiguration
+ */
+export type AppConfiguration = {
+    /**
+     * Code
+     */
+    code?: string | null;
+    /**
+     * Configured
+     */
+    configured: boolean;
+    /**
+     * Status
+     */
+    status: 'READY' | 'NOT_CONFIGURED' | 'INCOMPLETE';
+    /**
+     * Missing Fields
+     */
+    missing_fields: Array<string>;
+};
+
+/**
+ * AuthorizationRequest
+ */
+export type AuthorizationRequest = {
+    /**
+     * Connection Id
+     */
+    connection_id?: string | null;
+};
+
+/**
+ * AuthorizationURL
+ */
+export type AuthorizationURL = {
+    /**
+     * Url
+     */
+    url: string;
+};
+
+/**
+ * BCPublic
+ */
+export type BCPublic = {
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Ownership Conflict
+     */
+    ownership_conflict: boolean;
+};
+
+/**
  * Body_login-login_access_token
  */
 export type Body_login_login_access_token = {
@@ -35,6 +149,44 @@ export type Body_login_login_access_token = {
 };
 
 /**
+ * ConnectionPublic
+ *
+ * Explicit allowlist: never serialize ORM credential fields to HTTP.
+ */
+export type ConnectionPublic = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Tenant Id
+     */
+    tenant_id: string;
+    /**
+     * Status
+     */
+    status: 'PENDING_AUTH' | 'DISCOVERING' | 'ACTIVE' | 'REAUTH_REQUIRED' | 'ERROR' | 'DISABLED';
+    /**
+     * Last Discovery
+     */
+    last_discovery?: string | null;
+    /**
+     * Error Code
+     */
+    error_code?: string | null;
+};
+
+/**
+ * ConnectionUpdate
+ */
+export type ConnectionUpdate = {
+    /**
+     * Status
+     */
+    status: 'DISABLED';
+};
+
+/**
  * HTTPValidationError
  */
 export type HTTPValidationError = {
@@ -42,6 +194,20 @@ export type HTTPValidationError = {
      * Detail
      */
     detail?: Array<ValidationError>;
+};
+
+/**
+ * InputLine
+ */
+export type InputLine = {
+    /**
+     * Line No
+     */
+    line_no: number;
+    /**
+     * Raw
+     */
+    raw: string;
 };
 
 /**
@@ -121,6 +287,48 @@ export type NewPassword = {
 };
 
 /**
+ * Page[AccountPublic]
+ */
+export type Page_AccountPublic_ = {
+    /**
+     * Items
+     */
+    items: Array<AccountPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
+ * Page[BCPublic]
+ */
+export type Page_BCPublic_ = {
+    /**
+     * Items
+     */
+    items: Array<BCPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
+ * Page[ConnectionPublic]
+ */
+export type Page_ConnectionPublic_ = {
+    /**
+     * Items
+     */
+    items: Array<ConnectionPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
  * Page[MemberPublic]
  */
 export type Page_MemberPublic_ = {
@@ -160,6 +368,54 @@ export type Page_UserCandidate_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+};
+
+/**
+ * ResolveRequest
+ */
+export type ResolveRequest = {
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Lines
+     */
+    lines: Array<InputLine>;
+};
+
+/**
+ * ResolvedLine
+ */
+export type ResolvedLine = {
+    /**
+     * Line No
+     */
+    line_no: number;
+    /**
+     * Raw
+     */
+    raw: string;
+    /**
+     * Status
+     */
+    status: 'MATCHED' | 'DUPLICATE' | 'AMBIGUOUS' | 'NOT_FOUND' | 'EMPTY' | 'BLOCKED';
+    /**
+     * Advertiser Id
+     */
+    advertiser_id?: string | null;
+    /**
+     * Candidates
+     */
+    candidates?: Array<string>;
+    /**
+     * Duplicate Of
+     */
+    duplicate_of?: number | null;
+    /**
+     * Reason
+     */
+    reason?: string | null;
 };
 
 /**
@@ -1133,3 +1389,270 @@ export type tenantsPutMemberResponses = {
 };
 
 export type tenantsPutMemberResponse = tenantsPutMemberResponses[keyof tenantsPutMemberResponses];
+
+export type accountsGetAccountsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+        /**
+         * Query
+         */
+        query?: string;
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+        /**
+         * Remote Status
+         */
+        remote_status?: string | null;
+        /**
+         * Availability
+         */
+        availability?: 'AVAILABLE' | 'PERMISSION_UNKNOWN' | 'NO_ACCESS' | 'OWNERSHIP_CONFLICT' | 'METADATA_INCOMPLETE' | null;
+    };
+    url: '/api/tenants/{tenant_id}/accounts';
+};
+
+export type accountsGetAccountsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type accountsGetAccountsError = accountsGetAccountsErrors[keyof accountsGetAccountsErrors];
+
+export type accountsGetAccountsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_AccountPublic_;
+};
+
+export type accountsGetAccountsResponse = accountsGetAccountsResponses[keyof accountsGetAccountsResponses];
+
+export type accountsPostResolveData = {
+    body: ResolveRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/accounts/resolve';
+};
+
+export type accountsPostResolveErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type accountsPostResolveError = accountsPostResolveErrors[keyof accountsPostResolveErrors];
+
+export type accountsPostResolveResponses = {
+    /**
+     * Response Accounts-Post Resolve
+     *
+     * Successful Response
+     */
+    200: Array<ResolvedLine>;
+};
+
+export type accountsPostResolveResponse = accountsPostResolveResponses[keyof accountsPostResolveResponses];
+
+export type accountsGetBcsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: {
+        /**
+         * Query
+         */
+        query?: string;
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/bcs';
+};
+
+export type accountsGetBcsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type accountsGetBcsError = accountsGetBcsErrors[keyof accountsGetBcsErrors];
+
+export type accountsGetBcsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_BCPublic_;
+};
+
+export type accountsGetBcsResponse = accountsGetBcsResponses[keyof accountsGetBcsResponses];
+
+export type accountsGetConnectionsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: {
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+        /**
+         * Status
+         */
+        status?: string | null;
+    };
+    url: '/api/tenants/{tenant_id}/tiktok/connections';
+};
+
+export type accountsGetConnectionsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type accountsGetConnectionsError = accountsGetConnectionsErrors[keyof accountsGetConnectionsErrors];
+
+export type accountsGetConnectionsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_ConnectionPublic_;
+};
+
+export type accountsGetConnectionsResponse = accountsGetConnectionsResponses[keyof accountsGetConnectionsResponses];
+
+export type accountsGetConfigurationData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/tiktok/configuration';
+};
+
+export type accountsGetConfigurationErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type accountsGetConfigurationError = accountsGetConfigurationErrors[keyof accountsGetConfigurationErrors];
+
+export type accountsGetConfigurationResponses = {
+    /**
+     * Successful Response
+     */
+    200: AppConfiguration;
+};
+
+export type accountsGetConfigurationResponse = accountsGetConfigurationResponses[keyof accountsGetConfigurationResponses];
+
+export type accountsPostAuthorizationData = {
+    body: AuthorizationRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/tiktok/authorizations';
+};
+
+export type accountsPostAuthorizationErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type accountsPostAuthorizationError = accountsPostAuthorizationErrors[keyof accountsPostAuthorizationErrors];
+
+export type accountsPostAuthorizationResponses = {
+    /**
+     * Successful Response
+     */
+    200: AuthorizationURL;
+};
+
+export type accountsPostAuthorizationResponse = accountsPostAuthorizationResponses[keyof accountsPostAuthorizationResponses];
+
+export type accountsPatchConnectionData = {
+    body: ConnectionUpdate;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Connection Id
+         */
+        connection_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/tiktok/connections/{connection_id}';
+};
+
+export type accountsPatchConnectionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type accountsPatchConnectionError = accountsPatchConnectionErrors[keyof accountsPatchConnectionErrors];
+
+export type accountsPatchConnectionResponses = {
+    /**
+     * Successful Response
+     */
+    200: ConnectionPublic;
+};
+
+export type accountsPatchConnectionResponse = accountsPatchConnectionResponses[keyof accountsPatchConnectionResponses];
