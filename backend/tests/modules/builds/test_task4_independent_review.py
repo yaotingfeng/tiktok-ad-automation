@@ -251,3 +251,67 @@ def test_large_account_input_advances_one_page_without_combination_expansion(
         )
     ).one()
     assert untouched.advertiser_id is None
+
+
+def test_refresh_preserves_manual_groups_rebuilds_auto_and_new_provider_config_gets_new_task(
+    session, context, intent
+):
+    from app.modules.builds.models import BuildDraft, DraftGroupMaterial
+
+    keep = material(session, context, "Moon keep.mp4", bc="bc-draft")
+    material(session, context, "Short Drama old.mp4", bc="bc-draft")
+    draft_id = create_draft(session, context=context, **intent)
+    first = prepare_draft(
+        session, context=context, draft_id=draft_id, request_id=uuid4()
+    )
+    ready_links(session, context, first, intent)
+    finish(session, context, first)
+    rows = session.exec(select(DraftDrama).where(DraftDrama.draft_id == draft_id)).all()
+    moon = next(row for row in rows if row.title == "Moon")
+    short = next(row for row in rows if row.title == "Short Drama")
+    edit_material_groups(
+        session,
+        context=context,
+        draft_id=draft_id,
+        drama_id=moon.drama_id,
+        expected_revision=1,
+        groups=[[keep.id]],
+    )
+    material(session, context, "Moon newly added.mp4", bc="bc-draft")
+    material(session, context, "Short Drama newly added.mp4", bc="bc-draft")
+    refreshed = prepare_draft(
+        session, context=context, draft_id=draft_id, request_id=uuid4()
+    )
+    assert session.get(BuildDraft, draft_id).revision == 3
+    assert (
+        session.get(DraftPreparation, refreshed).provider_task_id
+        == session.get(DraftPreparation, first).provider_task_id
+    )
+    finish(session, context, refreshed)
+    selected = session.exec(
+        select(DraftGroupMaterial).where(DraftGroupMaterial.draft_id == draft_id)
+    ).all()
+    assert [row.material_id for row in selected if row.drama_id == moon.drama_id] == [
+        keep.id
+    ]
+    assert sum(row.drama_id == short.drama_id for row in selected) == 2
+    assert (
+        session.get(
+            DraftDrama, (context.tenant_id, draft_id, moon.drama_id)
+        ).material_state
+        == "manual"
+    )
+    update_draft(
+        session,
+        context=context,
+        draft_id=draft_id,
+        expected_revision=3,
+        link_config={**intent["link_config"], "episode": 2},
+    )
+    changed = prepare_draft(
+        session, context=context, draft_id=draft_id, request_id=uuid4()
+    )
+    assert (
+        session.get(DraftPreparation, changed).provider_task_id
+        != session.get(DraftPreparation, first).provider_task_id
+    )
