@@ -13,3 +13,7 @@
 验证：`tests/modules/builds` 共 124 项通过，其中新增预览 15 项；覆盖 2 剧×3 户×3 组×2 SP=6/18/36、600 每日预算、局部阻断、文案跨户一致、分页/跨租户/viewer、冻结不可变、新素材不扩展、重复投递恢复与真实 PostgreSQL 并发生成/推进/编辑。Ruff、mypy、新增模块 Ty 通过，Alembic upgrade/check 无差异。
 
 这是离线代码与数据库验证；真实 TikTok/S3/版权方未调用。Scene/OAuth 已独立审查通过；冻结预览独立审查待执行。
+
+独立复核已 PASS（截至 `9f7d1b9`），真实 503 账户×2 剧验证 1006/3018/6036 与每日预算 100600；独立 builds 139 项通过。账户失效仅阻断对应组合；新授权连接或账户元信息与原草稿不符时要求重新准备，避免新证据配旧连接。当前操作者整体失权仍终止准备。
+
+UI 补充契约：`GET /build-previews/{id}/dramas` 先分页取剧目，再由 SQL 汇总完整账户范围；`units` 可按 `drama_id` 过滤，`inputs` 支持 `issues_only/status`，游标绑定筛选。剧目素材数量和分组数量与可提交的广告数量分字段返回。PATCH 草稿与素材组可携带 `request_id`（新客户端必须携带），原结果通过 `/build-mutation-requests/{request_id}` 回查，哪怕随后产生更高 revision 仍返回原次结果。同键更换内容返回冲突，租户隔离、PostgreSQL 历史不可变与并发单次应用有回归。补充后 builds 151 项通过（包含公平调度辅助 6 项，尚待执行器接入）。

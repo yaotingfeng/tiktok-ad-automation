@@ -338,7 +338,7 @@ def validate_strategy(config, pool):
 - Consumes: `prepare_links/get_link_results/match_materials/resolve_account_access`。
 - Produces: `create_draft(session, *, context, bc_id: str, strategy_version_id: UUID, provider_connection_id: UUID, application_id: str, drama_lines: list[str], account_lines: list[str], link_config: dict) -> UUID`；`prepare_draft(session, *, context, draft_id: UUID, request_id: UUID) -> UUID`；`edit_material_groups(session, *, context, draft_id: UUID, drama_id: UUID, expected_revision: int, groups: list[list[UUID]]) -> int`。
 
-- [ ] **Step 1: 添加多页素材与多剧命中失败测试。** `test_drafts.py` 的 mock 只替换资源服务，不替换搭建逻辑。
+- [x] **Step 1: 添加多页素材与多剧命中失败测试。** `test_drafts.py` 的 mock 只替换资源服务，不替换搭建逻辑。
 
 ```python
 from types import SimpleNamespace
@@ -355,8 +355,8 @@ def test_all_pages_and_shared_material_are_preserved():
     assert list(collect_pages(lambda cursor: pages[cursor]))[0].material_id == first.material_id
 ```
 
-- [ ] **Step 2: 红测。** `uv run pytest tests/modules/builds/test_drafts.py -q`，预期缺少草稿函数。
-- [ ] **Step 3: 添加完整分页读取器及行实体。** 每页处理后入库，不把账号×剧目在此展开。循环游标异常明确报错，避免无限请求。
+- [x] **Step 2: 红测。** `uv run pytest tests/modules/builds/test_drafts.py -q`，预期缺少草稿函数。
+- [x] **Step 3: 添加完整分页读取器及行实体。** 每页处理后入库，不把账号×剧目在此展开。循环游标异常明确报错，避免无限请求。
 
 ```python
 from app.core.errors import DomainError
@@ -376,7 +376,7 @@ def collect_pages(fetch):
 ```
 
 表为 `BuildDraft(id,tenant_id,bc_id,revision,strategy_version_id,provider_connection_id,application_id,link_config)`、`DraftInput(id,draft_id,tenant_id,kind,line_no,raw_text,status,reason)`、`DraftDrama(draft_id,tenant_id,drama_id,link_id,title)`、`DraftAccount(draft_id,tenant_id,advertiser_id,currency,connection_id)`、`DraftGroupMaterial(draft_id,tenant_id,drama_id,group_no,position,material_id)`。所有关系使用租户复合外键；材料 FK 指向计划 04 内部 ID。
-- [ ] **Step 4: 实现 prepare/edit 的具体事务规则。** `prepare_draft` 按 `request_id` 幂等调用版权方准备，保存任务 ID，再分页消费结果；账户输入交给计划 02 精确 ID/全名解析，输入行全部保留反馈，实际账户按 ID 去重。剧目按连接、应用、外部剧 ID、链接配置去重；素材对每剧独立分页匹配，多剧命中只存提示。手动补选也验证租户/BC可见性。编辑用乐观锁：
+- [x] **Step 4: 实现 prepare/edit 的具体事务规则。** `prepare_draft` 按 `request_id` 幂等调用版权方准备，保存任务 ID，再分页消费结果；账户输入交给计划 02 精确 ID/全名解析，输入行全部保留反馈，实际账户按 ID 去重。剧目按连接、应用、外部剧 ID、链接配置去重；素材对每剧独立分页匹配，多剧命中只存提示。手动补选也验证租户/BC可见性。编辑用乐观锁：
 
 ```python
 from sqlalchemy import update
@@ -394,7 +394,7 @@ def bump_revision(session, *, context, draft_id, expected_revision):
 ```
 
 每次修改材料、顺序、策略、账户、剧目或重抽文案都调用此函数；同一事务替换该草稿的分组关系并将旧预览标为过期，不修改素材主记录。增补事务测试：两编辑并发只有一个成功、自动匹配不需要勾选、多剧共用合法、不完整标题不做别名翻译、版权方 result_unknown 保留原行不变为无匹配。
-- [ ] **Step 5: 绿测并提交。** `uv run pytest tests/modules/builds/test_drafts.py -q`；预期分页完整、并发冲突可解释。`git add backend/app/modules/builds backend/tests/modules/builds backend/app/alembic/versions/0005_strategies_build_previews.py`；`git commit -m "builds: prepare editable drafts from pasted inputs"`。
+- [x] **Step 5: 绿测并提交。** `uv run pytest tests/modules/builds/test_drafts.py -q`；预期分页完整、并发冲突可解释。`git add backend/app/modules/builds backend/tests/modules/builds backend/app/alembic/versions/0005_strategies_build_previews.py`；`git commit -m "builds: prepare editable drafts from pasted inputs"`。
 
 ### Task 5: 分批全笛卡尔积、只读就绪判断与冻结预览
 
@@ -410,7 +410,7 @@ def bump_revision(session, *, context, draft_id, expected_revision):
 - `FrozenGroup(group_id: UUID, group_no: int, name: str, material_ids: tuple[UUID,...], ads: tuple[FrozenAd,...])`；`FrozenAd(ad_id: UUID, creative_no: int, name: str, copy_id: UUID, text: str, cta_option_ids: tuple[str,...])`。一页只读取有限组，单组素材与 N 受场景校验。
 - `PreviewUnit` 是分页展示DTO：`unit_id/drama_id: UUID, title/advertiser_id/campaign_name: str, readiness: Literal[READY,PREPARING,BLOCKED], reason_codes: list[str], group_count/ad_count: int`；详情通过冻结组分页接口加载，不把所有创意嵌入列表页。
 
-- [ ] **Step 1: 写失败测试，覆盖展开规模与预算。**
+- [x] **Step 1: 写失败测试，覆盖展开规模与预算。**
 
 ```python
 from decimal import Decimal
@@ -438,8 +438,8 @@ def test_budget_is_derived_from_actual_campaigns(session, context, prepared_draf
 
 本测试的prepared_draft fixture在builds/conftest.py调用Task 4真实草稿服务建立2剧×3个USD账户，每剧23份素材，策略group_size=10/creative_count=2/budget=100；资源服务使用计划03/04的脱敏fixture，场景读服务返回计划06Task2已定义的有效SceneContext。少于200单元，一次continue_preview足够完成；不以手填summary代替系统结果。
 
-- [ ] **Step 2: 红测。** `uv run pytest tests/modules/builds/test_previews.py -q`，预期缺少展开与冻结逻辑。
-- [ ] **Step 3: 实现纯展开及就绪函数。**
+- [x] **Step 2: 红测。** `uv run pytest tests/modules/builds/test_previews.py -q`，预期缺少展开与冻结逻辑。
+- [x] **Step 3: 实现纯展开及就绪函数。**
 
 ```python
 def iter_pairs(drama_ids, account_iterator_factory):
@@ -455,7 +455,7 @@ def unit_readiness(strategy_currency, account_currency, material_states, reasons
     return "PREPARING" if "preparable" in material_states else "READY"
 ```
 
-- [ ] **Step 4: 按以下完整步骤实现冻结事务。** 新增 `BuildPreview(id,tenant_id,bc_id,draft_id,draft_revision,batch_short_id,local_date,status,counts,content_digest)`、`BuildUnit`、`PreviewDramaGroup`、`PreviewGroupMaterial`、`PlannedGroup`、`PlannedAd`。每条外键含租户，`(preview_id,advertiser_id,drama_id)` 唯一，批次短码唯一，`(draft_id,draft_revision)` 对有效预览唯一。头先 BUILDING；每剧仅抽样一次写 `PreviewDramaGroup`，再按账户键集分页展开；每 200 单元提交一次本地进度，这个 200 是内部工程批量值而非平台限额。
+- [x] **Step 4: 按以下完整步骤实现冻结事务。** 新增 `BuildPreview(id,tenant_id,bc_id,draft_id,draft_revision,batch_short_id,local_date,status,counts,content_digest)`、`BuildUnit`、`PreviewDramaGroup`、`PreviewGroupMaterial`、`PlannedGroup`、`PlannedAd`。每条外键含租户，`(preview_id,advertiser_id,drama_id)` 唯一，批次短码唯一，`(draft_id,draft_revision)` 对有效预览唯一。头先 BUILDING；每剧仅抽样一次写 `PreviewDramaGroup`，再按账户键集分页展开；每 200 单元提交一次本地进度，这个 200 是内部工程批量值而非平台限额。
 
 ```python
 from itertools import islice
@@ -471,7 +471,7 @@ def batched_units(iterator, size=200):
 每批校验只读场景、预算币种及每份素材的准备路径；源权限失效但原文件有效可 PREPARING，不能调用上传。按实际受保护前缀生成三级名字，检测同账户计划内重名；从实际提交单元计算数量和预算。保存全部排除行及原因，不自动删行。每批只持久化 bounded rows，正文、组、源映射记录不可依赖动态默认值。完成时锁定草稿、验证 revision 未变，再以稳定单元次序计算摘要并将预览置 FROZEN；变更则 OBSOLETE。进程重启复用已持久化抽样与同批次号，从唯一键缺口续写。
 
 补充真实 PostgreSQL 测试：同一 revision 重复生成返回同预览；生成期间修改草稿得到 OBSOLETE；2剧×3户×3组×2SP=6/18/36；币种不匹配与单户 Minis 错误只排除对应组合；同组跨账户正文完全一致；预览后新增素材不进快照；Spy 断言从未调用 ensure_target_asset 或任何 TikTok create。
-- [ ] **Step 5: 绿测并提交。** `uv run alembic upgrade head`；`uv run pytest tests/modules/builds/test_previews.py -q`，预期全部通过且无外部写操作。`git add backend/app/modules/builds backend/tests/modules/builds backend/app/alembic/versions/0005_strategies_build_previews.py`；`git commit -m "builds: freeze paginated full-account previews"`。
+- [x] **Step 5: 绿测并提交。** `uv run alembic upgrade head`；`uv run pytest tests/modules/builds/test_previews.py -q`，预期全部通过且无外部写操作。`git add backend/app/modules/builds backend/tests/modules/builds backend/app/alembic/versions/0005_strategies_build_previews.py`；`git commit -m "builds: freeze paginated full-account previews"`。
 
 ### Task 6: shadcn 策略编辑、粘贴输入与预览交互
 

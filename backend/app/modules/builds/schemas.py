@@ -21,6 +21,7 @@ class CreateDraftRequest(BaseModel):
 
 class PatchDraftRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    request_id: UUID | None = None
     expected_revision: int = Field(gt=0, strict=True)
     strategy_version_id: UUID | None = None
     provider_connection_id: UUID | None = None
@@ -47,6 +48,7 @@ class DraftPrepareAccepted(BaseModel):
 
 class DraftGroupEditRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    request_id: UUID | None = None
     expected_revision: int = Field(gt=0, strict=True)
     groups: list[list[UUID]] = Field(max_length=100_000)
 

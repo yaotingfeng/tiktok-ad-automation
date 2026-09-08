@@ -98,3 +98,18 @@ class PreviewInputPublic(BaseModel):
     status: str
     reason_code: str | None
     duplicate_of: int | None
+
+
+class PreviewDramaPublic(BaseModel):
+    drama_id: UUID
+    title: str
+    account_count: int
+    ready_count: int
+    preparing_count: int
+    blocked_count: int
+    material_count: int
+    material_group_count: int
+    eligible_campaign_count: int
+    eligible_adgroup_count: int
+    eligible_ad_count: int
+    daily_budget_sum: Decimal

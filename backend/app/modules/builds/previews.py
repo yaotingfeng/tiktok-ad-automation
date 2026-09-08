@@ -768,10 +768,17 @@ def get_preview_units(
     cursor: str | None = None,
     limit: int = 50,
     readiness: str | None = None,
+    drama_id: UUID | None = None,
 ) -> Page[PreviewUnit]:
     _preview(session, context, preview_id)
     scope, after = _page_scope(
-        context, preview_id, "preview_units", limit, cursor, readiness=readiness
+        context,
+        preview_id,
+        "preview_units",
+        limit,
+        cursor,
+        readiness=readiness,
+        drama_id=str(drama_id) if drama_id else None,
     )
     query = (
         select(BuildUnit, PreviewDrama)
@@ -791,6 +798,8 @@ def get_preview_units(
     )  # noqa: E712
     if readiness:
         query = query.where(BuildUnit.readiness == readiness)
+    if drama_id:
+        query = query.where(BuildUnit.drama_id == drama_id)
     if after:
         query = query.where(BuildUnit.id > UUID(after))
     rows = session.exec(query.order_by(col(BuildUnit.id)).limit(limit + 1)).all()
@@ -941,18 +950,31 @@ def get_preview_inputs(
     kind: str,
     cursor: str | None = None,
     limit: int = 50,
+    issues_only: bool = False,
+    status: str | None = None,
 ) -> Page[PreviewInputPublic]:
     _preview(session, context, preview_id)
     if kind not in {"drama", "account"}:
         raise DomainError("draft_input_invalid", "输入类别无效")
     scope, after = _page_scope(
-        context, preview_id, "preview_inputs", limit, cursor, input_kind=kind
+        context,
+        preview_id,
+        "preview_inputs",
+        limit,
+        cursor,
+        input_kind=kind,
+        issues_only=str(issues_only),
+        status=status,
     )
     query = select(PreviewInput).where(
         PreviewInput.tenant_id == context.tenant_id,
         PreviewInput.preview_id == preview_id,
         PreviewInput.kind == kind,
     )
+    if issues_only:
+        query = query.where(col(PreviewInput.status).not_in(["matched", "ready"]))
+    if status:
+        query = query.where(PreviewInput.status == status)
     if after:
         query = query.where(PreviewInput.line_no > int(after))
     rows = session.exec(

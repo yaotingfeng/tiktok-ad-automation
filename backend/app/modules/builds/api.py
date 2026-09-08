@@ -7,7 +7,7 @@ from sqlmodel import select
 from app.api.deps import CurrentUser, SessionDep
 from app.core.errors import DomainError
 from app.core.pagination import Page
-from app.modules.builds import catalog, drafts, previews
+from app.modules.builds import catalog, drafts, mutations, previews
 from app.modules.builds.models import (
     BuildDraft,
     DraftPreparation,
@@ -17,6 +17,7 @@ from app.modules.builds.preview_schemas import (
     FrozenGroup,
     FrozenUnit,
     PreviewAccepted,
+    PreviewDramaPublic,
     PreviewInputPublic,
     PreviewRequest,
     PreviewSummary,
@@ -106,7 +107,7 @@ def update(
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="build"
     )
-    revision = drafts.update_draft(
+    revision = mutations.update_draft(
         session,
         context=context,
         draft_id=draft_id,
@@ -223,12 +224,13 @@ def edit_groups(
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="build"
     )
-    revision = drafts.edit_material_groups(
+    revision = mutations.edit_material_groups(
         session,
         context=context,
         draft_id=draft_id,
         drama_id=drama_id,
         expected_revision=body.expected_revision,
+        request_id=body.request_id,
         groups=body.groups,
     )
     session.commit()
@@ -302,6 +304,7 @@ def preview_units(
     cursor: Cursor = None,
     limit: Limit = 50,
     readiness: Literal["READY", "PREPARING", "BLOCKED"] | None = None,
+    drama_id: UUID | None = None,
 ) -> Page[PreviewUnit]:
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="read"
@@ -313,6 +316,7 @@ def preview_units(
         cursor=cursor,
         limit=limit,
         readiness=readiness,
+        drama_id=drama_id,
     )
 
 
@@ -327,6 +331,8 @@ def preview_inputs(
     user: CurrentUser,
     cursor: Cursor = None,
     limit: Limit = 50,
+    issues_only: bool = False,
+    status: Annotated[str | None, Query(max_length=32)] = None,
 ) -> Page[PreviewInputPublic]:
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="read"
@@ -338,6 +344,8 @@ def preview_inputs(
         kind=kind,
         cursor=cursor,
         limit=limit,
+        issues_only=issues_only,
+        status=status,
     )
 
 
@@ -365,4 +373,35 @@ def frozen_groups(
     )
     return previews.get_frozen_groups(
         session, context=context, unit_id=unit_id, cursor=cursor, limit=limit
+    )
+
+
+@router.get("/build-mutation-requests/{request_id}", response_model=DraftSaved)
+def saved_mutation(
+    tenant_id: UUID, request_id: UUID, session: SessionDep, user: CurrentUser
+) -> DraftSaved:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    return mutations.saved_mutation(session, context=context, request_id=request_id)
+
+
+@router.get(
+    "/build-previews/{preview_id}/dramas", response_model=Page[PreviewDramaPublic]
+)
+def preview_dramas(
+    tenant_id: UUID,
+    preview_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    cursor: Cursor = None,
+    limit: Limit = 50,
+) -> Page[PreviewDramaPublic]:
+    from app.modules.builds.preview_catalog import get_preview_dramas
+
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    return get_preview_dramas(
+        session, context=context, preview_id=preview_id, cursor=cursor, limit=limit
     )
