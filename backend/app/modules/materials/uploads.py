@@ -25,6 +25,7 @@ from app.core.errors import DomainError
 from app.jobs.outbox import enqueue_after_commit
 from app.modules.accounts.models import TenantBC
 from app.modules.materials.models import (
+    MaterialAssetOperation,
     MaterialFile,
     MaterialUploadAttempt,
     ObjectUpload,
@@ -142,7 +143,10 @@ def public_error(code: object) -> str | None:
 
 
 def _result(
-    row: ObjectUpload, file: MaterialFile, attempt: MaterialUploadAttempt | None = None
+    row: ObjectUpload,
+    file: MaterialFile,
+    attempt: MaterialUploadAttempt | None = None,
+    operation: MaterialAssetOperation | None = None,
 ) -> UploadFileResult:
     stage: UploadStage = "receiving"
     error_code = public_error(row.error_code)
@@ -174,10 +178,32 @@ def _result(
         status=stage,
         received_bytes=file.byte_size if file.storage_state == "stored" else None,
         task_id=row.task_id,
-        can_retry=file.storage_state != "stored"
-        and (
-            row.status == "failed"
-            or (row.status == "receiving" and row.error_code == "invalid_part")
+        can_retry=(
+            file.storage_state != "stored"
+            and (
+                row.status == "failed"
+                or (row.status == "receiving" and row.error_code == "invalid_part")
+            )
+        )
+        or (
+            file.storage_state == "stored"
+            and file.byte_size <= settings.MATERIAL_SDK_MAX_UPLOAD_BYTES
+            and (
+                (
+                    attempt is None
+                    and row.status == "blocked"
+                    and row.error_code == "no_upload_account"
+                )
+                or (
+                    attempt is not None
+                    and attempt.status in {"failed", "blocked"}
+                    and operation is not None
+                    and operation.status == "failed"
+                    and not operation.attempt_token
+                    and not operation.remote_response.get("video_id")
+                    and not operation.remote_response.get("mid")
+                )
+            )
         ),
         error_code=error_code,
         latest_advertiser_id=attempt.advertiser_id if attempt else None,
@@ -222,13 +248,32 @@ def _batch_files(
         .subquery()
     )
     attempts = session.exec(
-        select(MaterialUploadAttempt)
+        select(MaterialUploadAttempt, MaterialAssetOperation)
         .join(ranked, col(MaterialUploadAttempt.id) == ranked.c.id)
+        .join(
+            MaterialAssetOperation,
+            (col(MaterialAssetOperation.id) == MaterialUploadAttempt.operation_id)
+            & (
+                col(MaterialAssetOperation.tenant_id) == MaterialUploadAttempt.tenant_id
+            ),
+        )
         .where(ranked.c.position == 1)
         .execution_options(populate_existing=True)
     ).all()
-    latest = {attempt.material_id: attempt for attempt in attempts}
-    return [_result(row, file, latest.get(file.id)) for row, file in rows]
+    latest = {
+        attempt.material_id: (attempt, operation) for attempt, operation in attempts
+    }
+    return [
+        _result(row, file, *latest.get(file.id, (None, None))) for row, file in rows
+    ]
+
+
+def get_upload_file_result(
+    session: Session, *, context: TenantContext, material_id: UUID
+) -> UploadFileResult:
+    row = _upload(session, context, material_id, action="read")
+    batch = get_upload_batch(session, context=context, batch_id=row.batch_id)
+    return next(file for file in batch.files if file.material_id == material_id)
 
 
 def _aggregate(files: list[UploadFileResult]) -> UploadStage:

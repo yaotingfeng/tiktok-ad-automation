@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     # Engineering limits: the pinned official SDK buffers multipart files.
     MATERIAL_SDK_MAX_UPLOAD_BYTES: int = Field(default=256 * 1024 * 1024, gt=0)
     MATERIAL_SDK_UPLOAD_MAX_INFLIGHT: int = Field(default=1, gt=0)
+    MATERIAL_ASSET_MAX_AGE_SECONDS: int = Field(default=900, gt=0)
 
     @property
     def tiktok_app_missing_fields(self) -> list[str]:

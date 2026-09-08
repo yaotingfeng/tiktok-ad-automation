@@ -3,6 +3,8 @@ from fastapi.responses import JSONResponse
 
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
+    "material_retry_not_allowed": 409,
+    "sdk_upload_capacity_exceeded": 409,
     "invalid_file": 422,
     "invalid_part": 422,
     "material_not_found": 404,
@@ -94,6 +96,8 @@ ERROR_HTTP_STATUS: dict[str, int] = {
 # Public messages are application-owned. DomainError.message may contain raw
 # integration details, so it must never become an HTTP response or log field.
 ERROR_PUBLIC_MESSAGES: dict[str, str] = {
+    "material_retry_not_allowed": "当前平台上传步骤不能直接重试，请查看核实进度",
+    "sdk_upload_capacity_exceeded": "原文件超过当前服务的上传容量配置，请联系管理员",
     "incomplete_object": "已接收文件大小与声明不一致",
     "object_result_unknown": "对象存储操作结果待核实，请查看当前进度",
     "object_identity_unverified": "尚未确认原文件身份",

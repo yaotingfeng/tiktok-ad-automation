@@ -636,7 +636,8 @@ def test_platform_block_preserves_completed_task_and_safe_batch_state(upload_own
             result.status == "blocked"
             and result.files[0].error_code == "no_upload_account"
         )
-        assert result.files[0].received_bytes == 100 and not result.files[0].can_retry
+        # The original stays complete; retry resumes upload to an authorized account.
+        assert result.files[0].received_bytes == 100 and result.files[0].can_retry
     with Session(engine) as session, session.begin():
         row = session.exec(
             select(ObjectUpload).where(ObjectUpload.material_id == material_id)

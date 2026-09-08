@@ -33,10 +33,12 @@ from app.modules.materials.schemas import (
     UploadCompleted,
     UploadFileResult,
 )
+from app.modules.materials.source_uploads import request_source_retry
 from app.modules.materials.storage import storage_error
 from app.modules.materials.uploads import (
     complete_object_upload,
     get_upload_batch,
+    get_upload_file_result,
     public_error,
     require_bc,
     retry_object_upload,
@@ -430,6 +432,36 @@ def post_object_retry(
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="upload"
     )
+    file = session.exec(
+        select(MaterialFile)
+        .where(MaterialFile.tenant_id == tenant_id, MaterialFile.id == material_id)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if file is None:
+        raise storage_error("material_not_found")
+    if file.storage_state == "stored":
+        before = get_upload_file_result(
+            session, context=context, material_id=material_id
+        )
+        if not before.can_retry:
+            raise storage_error("upload_not_retryable")
+        task_id = request_source_retry(
+            session, context=context, material_id=material_id
+        )
+        upload = session.exec(
+            select(ObjectUpload).where(
+                ObjectUpload.tenant_id == tenant_id,
+                ObjectUpload.material_id == material_id,
+            )
+        ).one()
+        upload.task_id = task_id
+        session.add(upload)
+        session.flush()
+        result = get_upload_file_result(
+            session, context=context, material_id=material_id
+        )
+        session.commit()
+        return result
     session.commit()
     return retry_object_upload(
         database_engine=engine, context=context, material_id=material_id

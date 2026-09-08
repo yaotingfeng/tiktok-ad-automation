@@ -16,6 +16,7 @@ celery_app.conf.update(
         "app.jobs.tasks",
         "app.modules.accounts.tasks",
         "app.modules.providers.tasks",
+        "app.modules.materials.tasks",
     ),
     task_queues=(Queue("resources"), Queue("builds"), Queue("control")),
     task_default_queue="control",
