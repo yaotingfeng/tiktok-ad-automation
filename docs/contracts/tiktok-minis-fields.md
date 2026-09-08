@@ -112,3 +112,53 @@ both connection and scene rows NOWAIT during the SDK request, proving no DB row
 lock is held over that request. Redis assertions verify the actual App/advertiser
 leases exist during I/O and are released afterwards. OAuth scope/process tests
 exercise the official serializer and private receipt path.
+
+## Frozen request compiler and official create calls
+
+`builds.sdk_requests.compile_request(kind, *, fixed, resolved) -> dict` accepts
+only campaign/adgroup/ad kinds and JSON-compatible server-owned facts. It copies
+its inputs; resolved facts cannot contain advertiser/parent IDs, any layer name,
+budget, CBO, ROAS, or operation status. All three layers compile ENABLE; campaign
+CBO is true and ad-group budget is rejected. Verified unmodeled fields such as
+`minis_id` remain in native dictionaries. No typed SDK model filters them away.
+This is not a public arbitrary-JSON API and does not replace preview validation.
+
+`invoke_create(client, *, kind, body) -> RemoteCreated(remote_id, request_id,
+operation_status)` calls the generated `CampaignCreationApi`, `AdgroupApi`, or
+`AdApi` Smart+ create method. Corresponding response ID keys are `campaign_id`,
+`adgroup_id`, and **`smart_plus_ad_id`**. `ad_id` is not accepted as a substitute.
+No create route, task, submission, advertising activation, or rollback operation
+is registered by this module.
+
+The pinned official `ApiClient.call_api` synchronous convenience branch returns
+a dictionary on success and turns nonzero responses into `TiktokSDKError`. That
+exception does not retain structured code/request ID attributes; it concatenates
+remote text. We use the official generated method's `async_req=True` option and
+wait on its returned `.get()`, which preserves `InlineResponse200`. There is no
+custom HTTP gateway, private method patch, or parsing of exception text. Socket
+timeout is 5/30s, retries are zero, and a containing prefork hard deadline must
+bound the entire wait and owned client cleanup. There is deliberately no separate
+future timeout that would return while the SDK thread is still sending.
+
+The executor must commit its attempt before entering this thin SDK function,
+recheck frozen scene and current permission, and obtain actual App, endpoint,
+tenant and advertiser admission. Hold the lease through `.get()` and client
+cleanup; process hard limit must be shorter than the lease with a cleanup margin.
+The function neither owns a DB session nor infers authorization from a caller's
+body. `CREATE_ENDPOINTS` and `ID_KEYS` expose the fixed maps for the executor.
+
+`TikTokResponseError` contains only the application-owned reason, integer
+`remote_code`, and sanitized `request_id`. Nonzero structured codes produce
+`tiktok_create_rejected`; missing/malformed expected IDs, transport failures,
+or malformed responses produce `create_result_unknown`. `remote_code=-1` means
+no trustworthy structured response, and zero with a missing ID still means
+unknown outcome. Neither a transport error nor a nonzero remote code is by itself
+proof of no external effect. Recovery belongs to the executor and readback.
+
+`tests/fakes/tiktok.py::FakeTikTokAPI.call_api` exposes only Smart+ create/get;
+unknown operations and status updates fail the test. Its synthetic per-layer
+store supports account-scoped pagination/filtering and the official future
+shape. Separately, `test_sdk_contract.py` intercepts urllib3 beneath the real
+pinned SDK to verify all three JSON POSTs, ENABLE, unmodeled Minis retention,
+nonzero structured errors, missing IDs, no retry, secret-free exceptions, and
+waiting for transport completion before owned client cleanup.
