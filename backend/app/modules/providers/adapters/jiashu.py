@@ -228,6 +228,10 @@ class JiashuClient:
                     allowed.get("drama_num") is not None
                     and str(allowed["drama_num"]) != attribution["dramaNum"]
                 )
+                or (
+                    allowed.get("charge_level") is not None
+                    and str(allowed["charge_level"]) != attribution["charge_level"]
+                )
             ):
                 raise failure("config_conflict")
         return {
@@ -282,12 +286,17 @@ class JiashuClient:
                 not isinstance(data, dict)
                 or not isinstance(data.get("url"), str)
                 or not data["url"]
-                or not isinstance(data.get("minis_path") or "", str)
+                or (
+                    data.get("minis_path") is not None
+                    and not isinstance(data["minis_path"], str)
+                )
             ):
                 raise failure("provider_result_unknown")
             return {
                 "url": data["url"],
-                "minis_path": string(data.get("minis_path") or ""),
+                "minis_path": ""
+                if data.get("minis_path") is None
+                else data["minis_path"],
             }
         if data is not True and not (type(data) is int and data > 0):
             raise failure("provider_result_unknown")

@@ -419,7 +419,8 @@ def test_sanitized_protocol_fixture_search_contract(kind):
     )
 
 
-def test_generate_malformed_path_is_unknown_after_send():
+@pytest.mark.parametrize("path", [{"malformed": True}, {}, [], False, 0])
+def test_generate_malformed_path_is_unknown_after_send(path):
     with httpx.Client(
         transport=httpx.MockTransport(
             lambda r: httpx.Response(
@@ -428,7 +429,7 @@ def test_generate_malformed_path_is_unknown_after_send():
                     "code": "0000",
                     "data": {
                         "url": "https://www.tiktok.com/minis/fixture",
-                        "minis_path": {"malformed": True},
+                        "minis_path": path,
                     },
                 },
             )
@@ -448,6 +449,33 @@ def test_generate_malformed_path_is_unknown_after_send():
                 },
             )
     assert error.value.code == "provider_result_unknown"
+
+
+def test_read_link_rejects_config_and_url_charge_level_conflict():
+    url = "https://www.tiktok.com/minis/fixture?channel=fixture_drama&vid=drama&dramaNum=2&charge_level=high"
+    with httpx.Client(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(
+                200,
+                json={
+                    "code": "0000",
+                    "data": {
+                        "config": {
+                            "vid": "drama",
+                            "drama_num": 2,
+                            "jump_url": url,
+                            "charge_level": "low",
+                        }
+                    },
+                },
+            )
+        )
+    ) as http:
+        with pytest.raises(DomainError) as error:
+            JiashuClient(http, session="fake", application_id="app").read_link(
+                "fixture_drama"
+            )
+    assert error.value.code == "config_conflict"
 
 
 def test_debug_wire_logs_do_not_disclose_authentication(caplog):

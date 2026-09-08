@@ -45,7 +45,7 @@ Host: `https://video-wechat-open.eastdrama.net`. All methods POST JSON. Business
 | `/Oversea/Video/getVideoList` | keywords, page, page_size=20 | data array, count integer; video_id/name/language |
 | `/Oversea/AppChannelConfig/getChannelList` | page, page_size=20, channel, customer_id="", remark="" | data array, count integer; filter exact channel locally |
 | `/Oversea/AppChannelConfig/create` | channel, remark, customer_id="" | true or positive integer acknowledgment |
-| `/Oversea/AppChannelConfig/generateGuideUrl` | channel, vid string, drama_num positive integer | nonempty url and minis_path |
+| `/Oversea/AppChannelConfig/generateGuideUrl` | channel, vid string, drama_num positive integer | nonempty url; minis_path may be missing/null or an empty string, but a present non-string value is malformed |
 | `/Oversea/AppChannelConfig/saveGuideUrl` | channel, vid string, drama_num, jump_url, minis_path | true or positive integer acknowledgment |
 | `/Oversea/AppChannelConfig/getGuideUrl` | channel | config object, including jump_url/vid/drama_num/minis_path when present |
 
@@ -62,6 +62,8 @@ Writes are deliberately separate calls:
 - `create_step("save", {channel,vid,drama_num,jump_url,minis_path,existing_config:{}})` saves exactly those values; returns `{accepted:true}`.
 
 The channel must equal channel_for(vid). Generate/save require the orchestration's preceding persisted config read and refuse an existing nonempty jump_url; the task must compare config and reuse instead of overwriting. Task 3 serializes the whole connection+application+channel scope across create/generate/save/read. A read of empty saved config cannot establish that a timed-out generate did not happen: such generation stays result_unknown, with no automatic replay. There is no evidenced independent generation-result lookup.
+
+Independent review added five failing-then-passing regressions: getGuideUrl must reject a supplied config charge_level that contradicts its URL attribution; generate must reject falsy non-string minis_path values (`{}`, `[]`, false, zero) as provider_result_unknown after a send. Missing/null path retains the CLI's optional empty-string behavior. P03 Tasks 1–2 now have 87 passing offline tests; these corrections do not add live business evidence.
 
 ## Wangyan
 
