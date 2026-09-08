@@ -74,6 +74,18 @@ class AssetPreparation(BaseModel):
         return self
 
 
+VIDEO_MIME_TYPES = frozenset(
+    {
+        "video/mp4",
+        "video/quicktime",
+        "video/x-msvideo",
+        "video/webm",
+        "video/mpeg",
+        "video/x-matroska",
+    }
+)
+
+
 class UploadFileRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -85,14 +97,7 @@ class UploadFileRequest(BaseModel):
     def valid_file(self) -> Self:
         if not self.file_name.strip() or any(ord(char) < 32 for char in self.file_name):
             raise ValueError("文件名无效")
-        if self.mime_type not in {
-            "video/mp4",
-            "video/quicktime",
-            "video/x-msvideo",
-            "video/webm",
-            "video/mpeg",
-            "video/x-matroska",
-        }:
+        if self.mime_type not in VIDEO_MIME_TYPES:
             raise ValueError("请选择视频文件")
         return self
 
@@ -187,3 +192,16 @@ class UploadAttemptPublic(BaseModel):
     status: str
     created_at: datetime
     error_code: str | None = None
+
+
+class UploadBatchSummary(BaseModel):
+    batch_id: UUID
+    bc_id: str
+    status: UploadStage
+    file_count: int
+    created_at: datetime
+
+
+class SignedPreview(BaseModel):
+    url: str = Field(repr=False)
+    expires_in: int = 300

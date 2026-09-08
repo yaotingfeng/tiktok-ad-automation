@@ -255,3 +255,36 @@ def open_original(
             body.close()
         if s3 is None:
             client.close()
+
+
+def sign_original_preview(*, key: str, mime_type: str) -> str:
+    """Local SigV4 GET capability; no HEAD, download or bucket permission change."""
+    from .schemas import VIDEO_MIME_TYPES
+
+    if mime_type not in VIDEO_MIME_TYPES:
+        raise storage_error("invalid_file")
+    settings.require_object_storage()
+    try:
+        client = make_s3()
+        try:
+            result = client.generate_presigned_url(
+                "get_object",
+                Params={
+                    "Bucket": settings.S3_BUCKET,
+                    "Key": key,
+                    "ResponseContentDisposition": "inline",
+                    "ResponseContentType": mime_type,
+                },
+                ExpiresIn=300,
+                HttpMethod="GET",
+            )
+            if not isinstance(result, str) or not result:
+                raise storage_error("object_storage_unavailable", retryable=True)
+            return result
+        finally:
+            client.close()
+    except DomainError:
+        raise
+    except Exception:
+        # Signing/endpoint errors may echo arguments; preserve no raw details.
+        raise storage_error("object_storage_unavailable", retryable=True) from None

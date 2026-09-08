@@ -71,3 +71,9 @@
 - Added page-atomic resumable discovery, candidate promotion after complete BC/account enumeration, per-call admission, durable recovery/outbox, and the bounded prefork resource task. Unknown capabilities and incomplete metadata remain blocked.
 - Verification: 189 account/tenant/jobs tests passed, including 41 Task 4 cases; independent 41-test review and migration roundtrip passed. Root added pytest importlib mode (`0befa24`) to resolve duplicate test filenames in the standard command. All TikTok transport was fake; full evidence and P07 boundaries are recorded in [discovery validation](validation/p02-discovery.md).
 - `sent_count` is a durable attempted-send counter after admission, not proof the HTTP transport started if the process crashed immediately afterward. Recovery relies on persisted page/claim/version state, not this counter.
+
+### P04 workspace material read APIs
+
+- Added tenant/BC upload-request recovery, lightweight upload batch pagination and on-demand 300-second private original preview URLs. GET routes do not enqueue work; viewers can read, and missing original/configuration/scope are explicit errors.
+- Batch file counts use bounded parent-page SQL aggregation; original preview uses local SigV4 GET signing with inline allowlisted video MIME and no-store. No bucket permission change or external SDK write.
+- Verification: 9 new regressions plus affected upload/progress/retry tests total 58 passed; Ruff, strict mypy and ty passed. See [material read API contract](validation/p04-material-read-apis.md). Root generates the client and independently reviews integration; no frontend files changed here.

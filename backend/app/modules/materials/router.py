@@ -11,6 +11,7 @@ from app.api.deps import CurrentUser, SessionDep
 from app.core.context import TenantContext
 from app.core.db import engine
 from app.core.pagination import Page
+from app.modules.materials import catalog
 from app.modules.materials.models import (
     AccountMaterial,
     MaterialFile,
@@ -27,9 +28,11 @@ from app.modules.materials.schemas import (
     CompleteUploadRequest,
     MaterialPublic,
     SignedPart,
+    SignedPreview,
     UploadAttemptPublic,
     UploadBatchRequest,
     UploadBatchResult,
+    UploadBatchSummary,
     UploadCompleted,
     UploadFileResult,
 )
@@ -68,6 +71,58 @@ def post_upload_batch(
         request_id=body.request_id,
     )
     session.commit()
+    return result
+
+
+@router.get("/upload-requests/{request_id}", response_model=UploadBatchResult)
+def read_upload_request(
+    tenant_id: UUID,
+    request_id: UUID,
+    bc_id: BCID,
+    session: SessionDep,
+    user: CurrentUser,
+) -> UploadBatchResult:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    return catalog.find_upload_request(
+        session, context=context, bc_id=bc_id, request_id=request_id
+    )
+
+
+@router.get("/upload-batches", response_model=Page[UploadBatchSummary])
+def read_upload_batches(
+    tenant_id: UUID,
+    bc_id: BCID,
+    session: SessionDep,
+    user: CurrentUser,
+    cursor: Cursor = None,
+    limit: Limit = 50,
+) -> Page[UploadBatchSummary]:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    return catalog.upload_batches_page(
+        session, context=context, bc_id=bc_id, cursor=cursor, limit=limit
+    )
+
+
+@router.get("/{material_id}/preview", response_model=SignedPreview)
+def read_original_preview(
+    tenant_id: UUID,
+    material_id: UUID,
+    bc_id: BCID,
+    response: Response,
+    session: SessionDep,
+    user: CurrentUser,
+) -> SignedPreview:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    result = catalog.original_preview(
+        session, context=context, bc_id=bc_id, material_id=material_id
+    )
+    response.headers["Cache-Control"] = "no-store"
     return result
 
 
