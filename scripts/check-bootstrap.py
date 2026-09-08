@@ -26,7 +26,7 @@ def check(base_url: str) -> None:
             "content-type", ""
         ), "Built login page unavailable"
         callback = client.get("/api/integrations/tiktok/callback")
-        assert callback.status_code in {400, 422, 503}, "Unexpected callback status"
+        assert callback.status_code in {400, 409, 422, 503}, "Unexpected callback status"
         assert callback.headers.get("content-type", "").startswith(
             "application/json"
         ), "Callback is not an API response"

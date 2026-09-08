@@ -61,14 +61,14 @@ def test_partial_app_lists_missing_names_without_values(client, monkeypatch):
     assert "opaque-app-value" not in response.text
 
 
-def test_configured_callback_does_not_pretend_to_exchange_oauth(client, monkeypatch):
+def test_configured_callback_requires_issued_state(client, monkeypatch):
     for name in ("TIKTOK_APP_ID", "TIKTOK_APP_SECRET", "TIKTOK_REDIRECT_URI"):
         monkeypatch.setattr(settings, name, "opaque-config-value")
     response = client.get(
         "/api/integrations/tiktok/callback", params={"auth_code": "sample"}
     )
-    assert response.status_code == 503
-    assert response.json()["code"] == "tiktok_oauth_unavailable"
+    assert response.status_code == 409
+    assert response.json()["code"] == "invalid_oauth_state"
 
 
 def test_public_signup_is_closed_and_does_not_create_users(client, session):
