@@ -90,7 +90,51 @@ def test_direct_grant_mutation_changes_revision_but_flags_do_not(directory_env):
         assert revision(session, env) == before + 1
 
 
-def test_metadata_and_new_membership_serialize_before_publishing(directory_env):
+def wait_for_advisory(pid, finished):
+    from time import monotonic, sleep
+
+    deadline = monotonic() + 2
+    while monotonic() < deadline:
+        with Session(engine) as session:
+            waiting = session.execute(
+                text("SELECT wait_event FROM pg_stat_activity WHERE pid=:pid"),
+                {"pid": pid},
+            ).scalar_one_or_none()
+        if waiting == "advisory":
+            return True
+        if finished.is_set():
+            return False
+        sleep(0.01)
+    return False
+
+
+def add_or_move_membership(session, env, new_env, operation):
+    if operation == "move":
+        session.execute(
+            text(
+                "UPDATE bc_account_access SET connection_id=:destination WHERE tenant_id=:tenant"
+            ),
+            {**env, "destination": new_env["connection"]},
+        )
+    else:
+        session.add(
+            BCAccountAccess(
+                tenant_id=env["tenant"],
+                bc_id=env["bc"],
+                advertiser_id=env["advertiser"],
+                connection_id=new_env["connection"],
+                authorized=True,
+                in_bc=True,
+                active=True,
+            )
+        )
+        session.flush()
+
+
+@pytest.mark.parametrize("operation", ["insert", "move"])
+def test_metadata_and_new_membership_serialize_before_publishing(
+    directory_env, operation
+):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
 
@@ -101,23 +145,16 @@ def test_metadata_and_new_membership_serialize_before_publishing(directory_env):
         session.flush()
         new_env = {**env, "connection": connection.id}
     started, finished = Event(), Event()
+    process_ids = []
 
     def insert():
         with Session(engine) as session, session.begin():
             session.execute(text("SET LOCAL statement_timeout='5s'"))
-            started.set()
-            session.add(
-                BCAccountAccess(
-                    tenant_id=env["tenant"],
-                    bc_id=env["bc"],
-                    advertiser_id=env["advertiser"],
-                    connection_id=new_env["connection"],
-                    authorized=True,
-                    in_bc=True,
-                    active=True,
-                )
+            process_ids.append(
+                session.execute(text("SELECT pg_backend_pid()")).scalar_one()
             )
-            session.flush()
+            started.set()
+            add_or_move_membership(session, env, new_env, operation)
         finished.set()
 
     with ThreadPoolExecutor(max_workers=1) as pool:
@@ -130,14 +167,14 @@ def test_metadata_and_new_membership_serialize_before_publishing(directory_env):
             )
             future = pool.submit(insert)
             assert started.wait(2)
-            # The uncommitted metadata must prevent publishing membership with an
-            # already-captured revision and the old visible account metadata.
-            blocked = not finished.wait(0.25)
+            # Assert PostgreSQL's actual lock wait, not just thread scheduling.
+            blocked = wait_for_advisory(process_ids[0], finished)
         future.result(timeout=5)
         assert blocked
 
 
-def test_new_membership_then_metadata_fences_the_new_scope(directory_env):
+@pytest.mark.parametrize("operation", ["insert", "move"])
+def test_new_membership_then_metadata_fences_the_new_scope(directory_env, operation):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
 
@@ -148,10 +185,14 @@ def test_new_membership_then_metadata_fences_the_new_scope(directory_env):
         session.flush()
         new_env = {**env, "connection": connection.id}
     started, finished = Event(), Event()
+    process_ids = []
 
     def metadata():
         with Session(engine) as session, session.begin():
             session.execute(text("SET LOCAL statement_timeout='5s'"))
+            process_ids.append(
+                session.execute(text("SELECT pg_backend_pid()")).scalar_one()
+            )
             started.set()
             session.execute(
                 text(
@@ -163,22 +204,11 @@ def test_new_membership_then_metadata_fences_the_new_scope(directory_env):
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         with Session(engine) as session, session.begin():
-            session.add(
-                BCAccountAccess(
-                    tenant_id=env["tenant"],
-                    bc_id=env["bc"],
-                    advertiser_id=env["advertiser"],
-                    connection_id=new_env["connection"],
-                    authorized=True,
-                    in_bc=True,
-                    active=True,
-                )
-            )
-            session.flush()
+            add_or_move_membership(session, env, new_env, operation)
             before = revision(session, new_env)
             future = pool.submit(metadata)
             assert started.wait(2)
-            blocked = not finished.wait(0.25)
+            blocked = wait_for_advisory(process_ids[0], finished)
         future.result(timeout=5)
         assert blocked
     with Session(engine) as session:

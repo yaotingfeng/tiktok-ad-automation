@@ -14,7 +14,6 @@ from uuid import UUID, uuid4
 import business_api_client as sdk  # type: ignore[import-untyped]
 from billiard.process import current_process  # type: ignore[import-untyped]
 from celery import current_task  # type: ignore[import-untyped]
-from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
@@ -35,6 +34,7 @@ from app.modules.accounts.capability_models import (
     CapabilityRequest,
 )
 from app.modules.accounts.capability_schemas import CapabilityEvidence
+from app.modules.accounts.directory_models import DirectoryRevision
 from app.modules.accounts.models import (
     AdvertiserAccount,
     BCAccountAccess,
@@ -45,7 +45,7 @@ from app.modules.tenants.permissions import require_tenant
 
 TASK_NAME = "accounts.refresh_capabilities"
 ENDPOINT = "/open_api/v1.3/bc/asset/get/"
-REVISION = "bc-token-roles-2026-09-09-v1"
+REVISION = "bc-token-roles-2026-09-09-v2"
 HARD_LIMIT = 45
 CLAIM_SECONDS = 60
 REPAIR_SECONDS = 120
@@ -112,23 +112,32 @@ def _connection(
 
 def _directory_basis(
     session: Session, context: TenantContext, bc_id: str, connection_id: UUID
-) -> str:
-    # Aggregate inside PostgreSQL: no full directory is materialized in Python.
-    # Capability/checked_at fields are excluded because this job publishes them.
-    value = session.execute(  # ty: ignore[deprecated] -- bounded PostgreSQL aggregate
-        text("""
-        SELECT md5(COALESCE(string_agg(jsonb_build_array(
-            g.advertiser_id,g.in_bc,g.authorized,g.active,g.last_seen_run_id,
-            a.currency,a.timezone,a.remote_status,a.ownership_conflict
-        )::text, ',' ORDER BY g.advertiser_id COLLATE "C"),''))
-        FROM bc_account_access g JOIN advertiser_account a
-          ON a.tenant_id=g.tenant_id AND a.advertiser_id=g.advertiser_id
-        WHERE g.tenant_id=:tenant AND g.bc_id=:bc AND g.connection_id=:connection
-    """),
-        {"tenant": context.tenant_id, "bc": bc_id, "connection": connection_id},
-    ).scalar_one()
+) -> str | None:
+    # Triggers fence every directory mutation in its own transaction. A pure
+    # primary-key read replaces the former all-account aggregate for each scene.
+    # Missing state fails closed; readers never lazily create or repair a fence.
+    with session.no_autoflush:
+        value = session.exec(
+            select(DirectoryRevision.revision).where(
+                DirectoryRevision.tenant_id == context.tenant_id,
+                DirectoryRevision.bc_id == bc_id,
+                DirectoryRevision.connection_id == connection_id,
+            )
+        ).first()
+    if value is None:
+        return None
     return sha256(
-        f"{REVISION}:{settings.BC_CAPABILITY_MAX_AGE_SECONDS}:{value}".encode()
+        json.dumps(
+            [
+                REVISION,
+                settings.BC_CAPABILITY_MAX_AGE_SECONDS,
+                str(context.tenant_id),
+                bc_id,
+                str(connection_id),
+                value,
+            ],
+            separators=(",", ":"),
+        ).encode()
     ).hexdigest()
 
 
@@ -187,6 +196,8 @@ def start_capability_refresh(
             raise DomainError("request_id_conflict", "同一请求不能更换授权连接")
         return original.id
     basis = _directory_basis(session, context, bc_id, connection_id)
+    if basis is None:
+        raise DomainError("capability_unavailable", "当前账户目录缺少可核实版本")
     now = datetime.now(UTC)
     existing = session.exec(
         select(CapabilityJob)
