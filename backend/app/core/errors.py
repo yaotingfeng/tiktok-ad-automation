@@ -3,6 +3,14 @@ from fastapi.responses import JSONResponse
 
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
+    "strategy_not_found": 404,
+    "copy_pool_not_found": 404,
+    "copy_pool_exhausted": 422,
+    "invalid_group_config": 422,
+    "invalid_name_template": 422,
+    "name_too_long": 422,
+    "invalid_strategy_name": 422,
+    "invalid_cta_options": 422,
     "empty_title": 422,
     "invalid_title": 422,
     "request_id_conflict": 409,
