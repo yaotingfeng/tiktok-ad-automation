@@ -1363,6 +1363,20 @@ export type Page_SubmissionListItem_ = {
 };
 
 /**
+ * Page[SubmissionMaterialPublic]
+ */
+export type Page_SubmissionMaterialPublic_ = {
+    /**
+     * Items
+     */
+    items: Array<SubmissionMaterialPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
  * Page[SubmissionUnitPublic]
  */
 export type Page_SubmissionUnitPublic_ = {
@@ -2505,6 +2519,37 @@ export type SubmissionListItem = {
     succeeded: ObjectCounts;
     failed: ObjectCounts;
     unknown: ObjectCounts;
+};
+
+/**
+ * SubmissionMaterialPublic
+ */
+export type SubmissionMaterialPublic = {
+    /**
+     * Material Id
+     */
+    material_id: string;
+    /**
+     * Position
+     */
+    position: number;
+    /**
+     * File Name
+     */
+    file_name: string;
+    /**
+     * Preview Available
+     */
+    preview_available: boolean;
+    /**
+     * Video Id
+     */
+    video_id: string | null;
+    /**
+     * Image Id
+     */
+    image_id: string | null;
+    step: StepPublic | null;
 };
 
 /**
@@ -6742,3 +6787,54 @@ export type buildsGetSubmissionEventsResponses = {
 };
 
 export type buildsGetSubmissionEventsResponse = buildsGetSubmissionEventsResponses[keyof buildsGetSubmissionEventsResponses];
+
+export type buildsGetSubmissionMaterialsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Submission Id
+         */
+        submission_id: string;
+        /**
+         * Unit Id
+         */
+        unit_id: string;
+        /**
+         * Group Id
+         */
+        group_id: string;
+    };
+    query?: {
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/submissions/{submission_id}/units/{unit_id}/groups/{group_id}/materials';
+};
+
+export type buildsGetSubmissionMaterialsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsGetSubmissionMaterialsError = buildsGetSubmissionMaterialsErrors[keyof buildsGetSubmissionMaterialsErrors];
+
+export type buildsGetSubmissionMaterialsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_SubmissionMaterialPublic_;
+};
+
+export type buildsGetSubmissionMaterialsResponse = buildsGetSubmissionMaterialsResponses[keyof buildsGetSubmissionMaterialsResponses];
