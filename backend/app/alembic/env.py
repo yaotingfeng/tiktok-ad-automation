@@ -20,6 +20,7 @@ fileConfig(config.config_file_name)
 # target_metadata = None
 
 from app.models import SQLModel  # noqa
+from app.jobs import models as jobs_models  # noqa: F401
 from app.core.config import settings # noqa
 
 target_metadata = SQLModel.metadata
