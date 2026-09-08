@@ -1,6 +1,6 @@
 # Smart+ Minis scene evidence
 
-Implementation contract: `minis-docs-2026-09-09-v1`. SDK pin:
+Implementation contract: `minis-docs-2026-09-09-v2`. SDK pin:
 `f809c396520df2d7b201a9ccc5378d822b728ed3`.
 The public documentation was read on 2026-09-09 through TikTok's unauthenticated
 portal documentation service. `tiktok-minis-source-hashes.json` records SHA-256 of
@@ -87,7 +87,12 @@ Losing any fence prevents evidence or capability publication. Each lease is
 released after the SDK call and its owned client have finished.
 
 Pagination is capped at 50 records/page and 1000 pages; total counts must remain
-stable and the completed count must match. Only two matching assets are retained
+stable and the completed count must match. Repeated IDs are rejected within each
+page and across every previously accepted page of the same generation. Each
+append-only page stores at most 50 SHA-256 ID digests; a scoped JSONB overlap
+query checks history after the attempt fence, without growing the compact state.
+Contract v2 invalidates prior evidence that lacked this uniqueness proof.
+Only two matching assets are retained
 (to distinguish unique from ambiguous), at most 50 CTA asset IDs, and at most 300
 region entries. These are local safety bounds, not claimed platform quotas.
 No names, emails, tokens, raw scope receipts or raw remote errors enter evidence.

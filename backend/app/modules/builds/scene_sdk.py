@@ -5,6 +5,7 @@ No generic path/method/query input and no write method exists here.
 """
 
 import json
+from hashlib import sha256
 from typing import Any
 
 import business_api_client as sdk  # type: ignore[import-untyped]
@@ -15,7 +16,7 @@ from app.integrations.tiktok.sdk import checked_data
 from .scene_schemas import SceneResource
 
 SDK_REVISION = "f809c396520df2d7b201a9ccc5378d822b728ed3"
-CONTRACT_REVISION = "minis-docs-2026-09-09-v1"
+CONTRACT_REVISION = "minis-docs-2026-09-09-v2"
 ENDPOINTS = {
     "account_roles": "/open_api/v1.3/bc/asset/get/",
     "identity": "/open_api/v1.3/identity/get/",
@@ -175,11 +176,21 @@ def parse_page(
     if page > max(1, info["total_page"]) or not last and not values:
         raise _invalid()
     matches = []
+    id_hashes: set[str] = set()
+    id_field = {
+        "account_roles": "asset_id",
+        "minis": "minis_id",
+        "identity": "identity_id",
+    }[resource]
     for item in values:
         if not isinstance(item, dict):
             raise _invalid()
+        remote_id = _string(item.get(id_field))
+        digest = sha256(remote_id.encode()).hexdigest()
+        if digest in id_hashes:
+            raise _invalid()
+        id_hashes.add(digest)
         if resource == "account_roles":
-            remote_id = _string(item.get("asset_id"))
             if remote_id == advertiser_id:
                 if item.get("asset_type") != "ADVERTISER" or item.get(
                     "advertiser_role"
@@ -189,7 +200,6 @@ def parse_page(
                     {"advertiser_id": remote_id, "role": item["advertiser_role"]}
                 )
         elif resource == "minis":
-            remote_id = _string(item.get("minis_id"))
             if remote_id == minis_id:
                 regions = item.get("region_codes")
                 if (
@@ -217,7 +227,6 @@ def parse_page(
                     }
                 )
         else:
-            remote_id = _string(item.get("identity_id"))
             if (
                 item.get("identity_type") != "BC_AUTH_TT"
                 or item.get("identity_authorized_bc_id") != bc_id
@@ -238,6 +247,7 @@ def parse_page(
     return (
         {
             "matches": matches[:2],
+            "item_id_hashes": sorted(id_hashes),
             "total_number": info["total_number"],
             "total_page": info["total_page"],
             "seen": len(values),

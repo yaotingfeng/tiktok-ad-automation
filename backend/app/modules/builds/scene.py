@@ -8,8 +8,8 @@ from uuid import UUID, uuid4
 
 from billiard.process import current_process  # type: ignore[import-untyped]
 from celery import current_task  # type: ignore[import-untyped]
-from sqlalchemy.dialects.postgresql import insert
-from sqlmodel import Session, select
+from sqlalchemy.dialects.postgresql import array, insert
+from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.credentials import decrypt_credentials
@@ -194,7 +194,10 @@ def _merge(
     if last and seen != page["total_number"]:
         raise DomainError("scene_response_unverified", "远端列表缺少完整分页证据")
     matches = ([] if first else previous.get("matches", [])) + page["matches"]
-    return {**page, "seen": seen, "matches": matches[:2]}
+    # Full-list uniqueness proof stays in bounded per-page evidence, not this
+    # compact accumulator or public SceneContext.
+    compact = {key: value for key, value in page.items() if key != "item_id_hashes"}
+    return {**compact, "seen": seen, "matches": matches[:2]}
 
 
 def refresh_scene_context(
@@ -380,6 +383,25 @@ def refresh_scene_context(
                 return SceneRefreshResult(
                     None, resource, False, None, ("scene_refresh_stale",)
                 )
+            if page > 1 and facts.get("item_id_hashes"):
+                repeated = session.exec(
+                    select(SceneEvidence.id)
+                    .where(
+                        SceneEvidence.tenant_id == context.tenant_id,
+                        SceneEvidence.state_id == state_id,
+                        SceneEvidence.generation == generation,
+                        SceneEvidence.endpoint == api.ENDPOINTS[resource],
+                        SceneEvidence.page < page,
+                        col(SceneEvidence.facts)["item_id_hashes"].op("?|")(
+                            array(facts["item_id_hashes"])
+                        ),
+                    )
+                    .limit(1)
+                ).first()
+                if repeated is not None:
+                    raise DomainError(
+                        "scene_pagination_changed", "远端列表包含重复记录，需要重新刷新"
+                    )
             if resource == "account_roles" and last:
                 known, build, upload = _scope_capabilities(fresh["connection"])
                 matches = combined.get("matches", [])
