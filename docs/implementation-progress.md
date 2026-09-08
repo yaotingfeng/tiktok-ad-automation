@@ -85,3 +85,9 @@
 - P05 草稿独立复核 PASS（25 项）；冻结预览实现与 HTTP 接口已就绪，builds 模块合计 124 项通过。冻结预览独立审查、全工作区 UI 独立审查进行中。
 - BC 账户权限引导任务正在开发，用完整只读能力检查把 UNKNOWN 授权事实转为可验证的创建/上传权限，避免依赖广告链接或逐剧重复扫描 BC。
 - 后续继续搭建工作区 UI、提交执行、结果核查/恢复及 P07 验证。未进行真实广告创建或真实外部业务联调。
+
+### P06 link-free BC capability bootstrap
+
+- Added isolated capability jobs/request aliases/pages/account-role evidence with migration `0005e_account_capabilities` (schema commit `2c107db`).
+- Explicit tenant/BC/connection refresh command, read-only status/evidence APIs, 50-row official current-token BC reads, complete-list publication in 100-grant transactions, durable claim/dispatch recovery. Details and integration registration contract: `docs/validation/p06-account-capabilities.md`.
+- Dedicated engineering age setting defaults to four hours from first observation; no per-link BC scan and no capability inferred from account visibility. Root owns Scene/draft/preview integration.
