@@ -295,11 +295,43 @@ def recover_preparations(*, database_engine: Any, limit: int = 100) -> int:
                     LinkPreparation.id == item.preparation_id,
                 )
             ).one()
-            # Repaired delivery is immediately due, but the stored watchdog
-            # horizon prevents each beat tick from superseding an in-flight job.
-            queue_item(
-                session, item, actor_id=prep.actor_id, revision=revision + 1, due=now
-            )
+            dispatch = session.exec(
+                select(PendingDispatch)
+                .where(
+                    PendingDispatch.tenant_id == item.tenant_id,
+                    PendingDispatch.task_key == f"provider-item:{item.id}:{revision}",
+                )
+                .with_for_update()
+            ).one_or_none()
+            if dispatch is None:
+                queue_item(
+                    session, item, actor_id=prep.actor_id, revision=revision, due=now
+                )
+            else:
+                if (
+                    dispatch.task_name != TASK_NAME
+                    or dispatch.actor_id != prep.actor_id
+                    or dispatch.payload
+                    != {"item_id": str(item.id), "revision": revision}
+                ):
+                    _quarantine(item)
+                    session.add(item)
+                    continue
+                # An unpublished delivery is healthy outbox backlog (possibly
+                # under broker backoff). A published delivery may be lost OR
+                # merely queued at a slow broker. Re-arm the same identity so
+                # the original and duplicate stay executable until a worker
+                # claims the revision. Only actual execution advances revision.
+                if dispatch.published_at is not None:
+                    dispatch.published_at = None
+                    dispatch.available_at = now
+                    session.add(dispatch)
+                work = dict(raw)
+                work["repair_after"] = (
+                    now + timedelta(seconds=WATCHDOG_SECONDS)
+                ).isoformat()
+                item.resolved = {**item.resolved, "_work": work}
+                session.add(item)
             repaired += 1
     return repaired
 
