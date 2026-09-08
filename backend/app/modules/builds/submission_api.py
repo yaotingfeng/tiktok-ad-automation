@@ -6,8 +6,10 @@ from uuid import UUID
 from fastapi import APIRouter, Query
 
 from app.api.deps import CurrentUser, SessionDep
+from app.core.errors import DomainError
 from app.core.pagination import Page
 from app.modules.builds import submissions
+from app.modules.builds.execution_models import Submission, SubmissionRequest
 from app.modules.builds.execution_schemas import (
     StepPublic,
     SubmissionReceipt,
@@ -20,6 +22,25 @@ from app.modules.tenants.permissions import require_tenant
 router = APIRouter(prefix="/tenants/{tenant_id}", tags=["builds"])
 Cursor = Annotated[str | None, Query(max_length=4096)]
 Limit = Annotated[int, Query(ge=1, le=100)]
+
+
+@router.get(
+    "/submission-requests/{request_id}",
+    response_model=SubmissionReceipt,
+    operation_id="builds-saved_submission",
+)
+def saved_submission(
+    tenant_id: UUID,
+    request_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+) -> SubmissionReceipt:
+    require_tenant(session, actor_id=user.id, tenant_id=tenant_id, action="read")
+    ledger = session.get(SubmissionRequest, (tenant_id, request_id))
+    submission = session.get(Submission, ledger.submission_id) if ledger else None
+    if submission is None or submission.tenant_id != tenant_id:
+        raise DomainError("resource_not_found", "提交请求尚未记录")
+    return SubmissionReceipt(submission_id=submission.id, status=submission.status)
 
 
 @router.post(
