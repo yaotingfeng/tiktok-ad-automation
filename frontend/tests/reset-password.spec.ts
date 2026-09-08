@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test"
+import { createUser } from "./utils/adminApi"
 import { waitForEmailHtml } from "./utils/mailpit"
-import { createUser } from "./utils/privateApi"
 import { randomEmail, randomPassword } from "./utils/random"
 import { logInUser } from "./utils/user"
 
@@ -38,7 +38,7 @@ test("User can reset password successfully using the link", async ({
   const password = randomPassword()
   const newPassword = randomPassword()
 
-  // Sign up a new user
+  // Create an account through the authenticated administrator API
   await createUser({ email, password })
 
   await page.goto("/recover-password")
@@ -85,7 +85,7 @@ test("Weak new password validation", async ({ page, request }) => {
   const password = randomPassword()
   const weakPassword = "123"
 
-  // Sign up a new user
+  // Create an account through the authenticated administrator API
   await createUser({ email, password })
 
   await page.goto("/recover-password")
