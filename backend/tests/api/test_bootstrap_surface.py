@@ -7,6 +7,25 @@ from app.core.config import settings
 from app.models import User
 
 
+def test_legacy_telemetry_configuration_does_not_capture_requests(monkeypatch):
+    import importlib
+    from unittest.mock import Mock
+
+    import sentry_sdk
+    from pydantic import HttpUrl
+
+    import app.main
+
+    initialize = Mock()
+    with monkeypatch.context() as patch:
+        patch.setattr(settings, "SENTRY_DSN", HttpUrl("https://public@example.com/1"))
+        patch.setattr(settings, "FASTAPI_ENV", None)
+        patch.setattr(sentry_sdk, "init", initialize)
+        importlib.reload(app.main)
+        initialize.assert_not_called()
+    importlib.reload(app.main)
+
+
 @pytest.fixture
 def empty_tiktok_app(monkeypatch):
     for name in ("TIKTOK_APP_ID", "TIKTOK_APP_SECRET", "TIKTOK_REDIRECT_URI"):

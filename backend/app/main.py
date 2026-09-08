@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import sentry_sdk
 from fastapi import FastAPI, HTTPException
 from fastapi.routing import APIRoute
 from starlette.middleware.cors import CORSMiddleware
@@ -17,9 +16,8 @@ def custom_generate_unique_id(route: APIRoute) -> str:
     return f"{tag}-{route.name}"
 
 
-if settings.SENTRY_DSN and settings.FASTAPI_ENV != "development":
-    sentry_sdk.init(dsn=str(settings.SENTRY_DSN), enable_tracing=True)
-
+# Do not initialize inherited request telemetry: OAuth query strings contain
+# credentials. Operational logs use app.core.logging's explicit safe fields.
 app = FastAPI(
     title=settings.PROJECT_NAME,
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
