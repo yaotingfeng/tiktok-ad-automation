@@ -46,3 +46,9 @@ P01 整合后后端 **156 passed**，仅继承的 Starlette/httpx 弃用提示�
 ## 下一步
 
 完成 P01 部署与前端复审，推送阶段代码。集成 P02 租户管理接口、实现租户/成员页面，同时推进 OAuth、账户目录发现/权限、批量解析和连接管理。代码审查/测试结果与实际外部联调分别记录。
+
+### P02 Task 4: directory discovery
+
+- Schema contract `596c1ae`: six directory models, tenant composite keys, one active connection generation, external ownership constraints; migration `02c_directory` after `02b_connections`.
+- Added page-atomic resumable discovery, candidate promotion after complete BC/account enumeration, per-call admission, durable recovery/outbox, and the bounded prefork resource task. Unknown capabilities and incomplete metadata remain blocked.
+- Verification: 189 account/tenant/jobs tests passed with `--import-mode=importlib`, including 41 Task 4 cases; Ruff, ty, compileall and migration downgrade/upgrade/check passed. All TikTok transport was fake; full evidence and P07 boundaries are recorded in `SDDP02/task-4-report.md`.
