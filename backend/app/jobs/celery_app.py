@@ -15,6 +15,7 @@ celery_app.conf.update(
     imports=(
         "app.jobs.tasks",
         "app.modules.accounts.tasks",
+        "app.modules.accounts.capability_tasks",
         "app.modules.providers.tasks",
         "app.modules.materials.tasks",
         "app.modules.builds.draft_tasks",
@@ -25,6 +26,11 @@ celery_app.conf.update(
     task_create_missing_queues=False,
     task_routes={"jobs.flush_dispatch": {"queue": "control"}},
     beat_schedule={
+        "repair-account-capabilities": {
+            "task": "accounts.repair_capabilities",
+            "schedule": 60.0,
+            "options": {"queue": "control"},
+        },
         "repair-build-previews": {
             "task": "builds.repair_previews",
             "schedule": 60.0,

@@ -3,6 +3,9 @@ from fastapi.responses import JSONResponse
 
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
+    "capability_not_found": 404,
+    "capability_unavailable": 409,
+    "capability_worker_unbounded": 503,
     "preview_not_found": 404,
     "preview_not_frozen": 409,
     "preview_group_too_large": 409,
