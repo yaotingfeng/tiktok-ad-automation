@@ -224,6 +224,74 @@ export type CandidateSelection = {
 };
 
 /**
+ * CapabilityJobPublic
+ */
+export type CapabilityJobPublic = {
+    /**
+     * Job Id
+     */
+    job_id: string;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Connection Id
+     */
+    connection_id: string;
+    /**
+     * Status
+     */
+    status: 'PENDING' | 'COMPLETE' | 'BLOCKED' | 'STALE' | 'FAILED';
+    /**
+     * Phase
+     */
+    phase: 'READ' | 'PUBLISH' | 'DONE';
+    /**
+     * Remote Read Count
+     */
+    remote_read_count: number;
+    /**
+     * Remote Total Count
+     */
+    remote_total_count: number | null;
+    /**
+     * Published Account Count
+     */
+    published_account_count: number;
+    /**
+     * Permissions Known
+     */
+    permissions_known: boolean;
+    /**
+     * Error Code
+     */
+    error_code: string | null;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Completed At
+     */
+    completed_at: string | null;
+};
+
+/**
+ * CapabilityRefreshRequest
+ */
+export type CapabilityRefreshRequest = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Connection Id
+     */
+    connection_id: string;
+};
+
+/**
  * CompleteUploadRequest
  */
 export type CompleteUploadRequest = {
@@ -404,6 +472,10 @@ export type DraftDramaPublic = {
  * DraftGroupEditRequest
  */
 export type DraftGroupEditRequest = {
+    /**
+     * Request Id
+     */
+    request_id?: string | null;
     /**
      * Expected Revision
      */
@@ -1091,6 +1163,20 @@ export type Page_MemberPublic_ = {
 };
 
 /**
+ * Page[PreviewDramaPublic]
+ */
+export type Page_PreviewDramaPublic_ = {
+    /**
+     * Items
+     */
+    items: Array<PreviewDramaPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
  * Page[PreviewInputPublic]
  */
 export type Page_PreviewInputPublic_ = {
@@ -1263,6 +1349,10 @@ export type Page_VersionPublic_ = {
  */
 export type PatchDraftRequest = {
     /**
+     * Request Id
+     */
+    request_id?: string | null;
+    /**
      * Expected Revision
      */
     expected_revision: number;
@@ -1378,6 +1468,60 @@ export type PreviewAccepted = {
      * Preview Id
      */
     preview_id: string;
+};
+
+/**
+ * PreviewDramaPublic
+ */
+export type PreviewDramaPublic = {
+    /**
+     * Drama Id
+     */
+    drama_id: string;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Account Count
+     */
+    account_count: number;
+    /**
+     * Ready Count
+     */
+    ready_count: number;
+    /**
+     * Preparing Count
+     */
+    preparing_count: number;
+    /**
+     * Blocked Count
+     */
+    blocked_count: number;
+    /**
+     * Material Count
+     */
+    material_count: number;
+    /**
+     * Material Group Count
+     */
+    material_group_count: number;
+    /**
+     * Eligible Campaign Count
+     */
+    eligible_campaign_count: number;
+    /**
+     * Eligible Adgroup Count
+     */
+    eligible_adgroup_count: number;
+    /**
+     * Eligible Ad Count
+     */
+    eligible_ad_count: number;
+    /**
+     * Daily Budget Sum
+     */
+    daily_budget_sum: string;
 };
 
 /**
@@ -3501,6 +3645,78 @@ export type accountsPatchConnectionResponses = {
 
 export type accountsPatchConnectionResponse = accountsPatchConnectionResponses[keyof accountsPatchConnectionResponses];
 
+export type accountsRefreshCapabilitiesData = {
+    body: CapabilityRefreshRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/bcs/{bc_id}/capability-refresh';
+};
+
+export type accountsRefreshCapabilitiesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type accountsRefreshCapabilitiesError = accountsRefreshCapabilitiesErrors[keyof accountsRefreshCapabilitiesErrors];
+
+export type accountsRefreshCapabilitiesResponses = {
+    /**
+     * Successful Response
+     */
+    200: CapabilityJobPublic;
+};
+
+export type accountsRefreshCapabilitiesResponse = accountsRefreshCapabilitiesResponses[keyof accountsRefreshCapabilitiesResponses];
+
+export type accountsCapabilityStatusData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+        /**
+         * Job Id
+         */
+        job_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/bcs/{bc_id}/capability-refresh/{job_id}';
+};
+
+export type accountsCapabilityStatusErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type accountsCapabilityStatusError = accountsCapabilityStatusErrors[keyof accountsCapabilityStatusErrors];
+
+export type accountsCapabilityStatusResponses = {
+    /**
+     * Successful Response
+     */
+    200: CapabilityJobPublic;
+};
+
+export type accountsCapabilityStatusResponse = accountsCapabilityStatusResponses[keyof accountsCapabilityStatusResponses];
+
 export type materialsReadUploadBatchesData = {
     body?: never;
     path: {
@@ -5278,6 +5494,10 @@ export type buildsPreviewUnitsData = {
          * Readiness
          */
         readiness?: 'READY' | 'PREPARING' | 'BLOCKED' | null;
+        /**
+         * Drama Id
+         */
+        drama_id?: string | null;
     };
     url: '/api/tenants/{tenant_id}/build-previews/{preview_id}/units';
 };
@@ -5325,6 +5545,14 @@ export type buildsPreviewInputsData = {
          * Limit
          */
         limit?: number;
+        /**
+         * Issues Only
+         */
+        issues_only?: boolean;
+        /**
+         * Status
+         */
+        status?: string | null;
     };
     url: '/api/tenants/{tenant_id}/build-previews/{preview_id}/inputs';
 };
@@ -5423,3 +5651,80 @@ export type buildsFrozenGroupsResponses = {
 };
 
 export type buildsFrozenGroupsResponse = buildsFrozenGroupsResponses[keyof buildsFrozenGroupsResponses];
+
+export type buildsSavedMutationData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Request Id
+         */
+        request_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-mutation-requests/{request_id}';
+};
+
+export type buildsSavedMutationErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsSavedMutationError = buildsSavedMutationErrors[keyof buildsSavedMutationErrors];
+
+export type buildsSavedMutationResponses = {
+    /**
+     * Successful Response
+     */
+    200: DraftSaved;
+};
+
+export type buildsSavedMutationResponse = buildsSavedMutationResponses[keyof buildsSavedMutationResponses];
+
+export type buildsPreviewDramasData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Preview Id
+         */
+        preview_id: string;
+    };
+    query?: {
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/build-previews/{preview_id}/dramas';
+};
+
+export type buildsPreviewDramasErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsPreviewDramasError = buildsPreviewDramasErrors[keyof buildsPreviewDramasErrors];
+
+export type buildsPreviewDramasResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_PreviewDramaPublic_;
+};
+
+export type buildsPreviewDramasResponse = buildsPreviewDramasResponses[keyof buildsPreviewDramasResponses];
