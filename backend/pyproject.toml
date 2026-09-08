@@ -41,6 +41,11 @@ build-backend = "hatchling.build"
 strict = true
 exclude = ["venv", ".venv", "alembic"]
 
+[tool.pytest.ini_options]
+# Business modules intentionally share test names such as test_admission.py.
+# Resolve them by package identity rather than competing top-level module names.
+addopts = ["--import-mode=importlib"]
+
 [tool.ruff]
 target-version = "py314"
 exclude = ["alembic"]
