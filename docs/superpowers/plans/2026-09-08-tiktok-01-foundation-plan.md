@@ -62,7 +62,7 @@
 - Consumes: 固定官方模板提交与 SDK 提交。
 - Produces: 保留模板 `app.api.deps.CurrentUser`、`SessionDep`、`app.models.User`；所有业务计划直接引用这些已有认证能力。
 
-- [ ] 在空目标目录建立模板分支，记录来源；复制本组 specs/plans 到新仓库 `docs/superpowers/`，保留资料目录原件。复制后将指向原资料目录的参考链接改为其真实绝对路径，检查文档互链；不把运营输出和凭据作为文档依赖一起复制。
+- [x] 在空目标目录建立模板分支，记录来源；复制本组 specs/plans 到新仓库 `docs/superpowers/`，保留资料目录原件。复制后将指向原资料目录的参考链接改为其真实绝对路径，检查文档互链；不把运营输出和凭据作为文档依赖一起复制。
 
 ```bash
 git clone https://github.com/fastapi/full-stack-fastapi-template.git /Users/yaotingfeng/Documents/ytf/tiktok-ad-automation
@@ -71,7 +71,7 @@ git checkout -b feat/tiktok-foundation cb740b656d7a0a6c5e12c7bf8e50343ec94ee9c7
 git remote rename origin template
 ```
 
-- [ ] 写 SDK 离线契约测试。通过 monkeypatch 拦截 SDK 的 `ApiClient.call_api`，不请求外部服务；同时检查 `CampaignCreationApi.smart_plus_campaign_create`、`AdgroupApi.smart_plus_adgroup_create`、`AdApi.smart_plus_ad_create`、`FileApi.ad_video_upload`、`CreativeManagementApi.creative_asset_share` 存在。
+- [x] 写 SDK 离线契约测试。通过 monkeypatch 拦截 SDK 的 `ApiClient.call_api`，不请求外部服务；同时检查 `CampaignCreationApi.smart_plus_campaign_create`、`AdgroupApi.smart_plus_adgroup_create`、`AdApi.smart_plus_ad_create`、`FileApi.ad_video_upload`、`CreativeManagementApi.creative_asset_share` 存在。
 
 ```python
 import business_api_client as sdk
@@ -86,7 +86,7 @@ def test_smart_plus_method_accepts_body_without_network(monkeypatch):
     assert len(calls) == 1
 ```
 
-- [ ] 在未安装 SDK 时运行 `uv run pytest tests/contracts/test_tiktok_sdk_surface.py -q`，确认是缺少 SDK 而失败；随后安装固定官方源码并锁依赖。
+- [x] 在未安装 SDK 时运行 `uv run pytest tests/contracts/test_tiktok_sdk_surface.py -q`，确认是缺少 SDK 而失败；随后安装固定官方源码并锁依赖。
 
 ```bash
 cd /Users/yaotingfeng/Documents/ytf/tiktok-ad-automation/backend
@@ -95,8 +95,8 @@ uv add 'celery[redis]' cryptography boto3
 uv run pytest tests/contracts/test_tiktok_sdk_surface.py -q
 ```
 
-- [ ] 在 `frontend/` 执行 `bun install --frozen-lockfile`、`bun run build`。SDK 契约和模板构建均须 PASS；报告只声称离线兼容，Minis 字段覆盖见 06/07。
-- [ ] 提交本任务：`git commit -m "foundation: pin template and official TikTok SDK"`，仅暂存上述工程与契约文件。
+- [x] 在 `frontend/` 执行 `bun install --frozen-lockfile`、`bun run build`。SDK 契约和模板构建均须 PASS；报告只声称离线兼容，Minis 字段覆盖见 06/07。
+- [x] 提交本任务：`git commit -m "foundation: pin template and official TikTok SDK"`，仅暂存上述工程与契约文件。
 
 ### Task 2: 统一租户上下文、业务错误和 API 前缀
 
@@ -108,7 +108,7 @@ uv run pytest tests/contracts/test_tiktok_sdk_surface.py -q
 - Produces: `TenantContext(tenant_id: UUID, actor_id: UUID, role: str)`；`DomainError(code: str, message: str, retryable: bool=False)`；`Page[T](items: list[T], next_cursor: str|None)`。
 - 租户权限解析由 02 的 `require_tenant` 实现；上下文类型本身不授权。
 
-- [ ] 写冻结上下文、错误响应与日志泄漏测试，再执行 `uv run pytest tests/core/test_contracts.py -q` 确认新模块缺失导致失败。
+- [x] 写冻结上下文、错误响应与日志泄漏测试，再执行 `uv run pytest tests/core/test_contracts.py -q` 确认新模块缺失导致失败。
 
 ```python
 from dataclasses import FrozenInstanceError
@@ -126,7 +126,7 @@ def test_context_cannot_change_tenant_and_logs_drop_secrets():
     }
 ```
 
-- [ ] 实现公共类型；`Page` 用 Pydantic 泛型响应，日志仅接受白名单字段，不记录任意请求体或异常对象字符串。
+- [x] 实现公共类型；`Page` 用 Pydantic 泛型响应，日志仅接受白名单字段，不记录任意请求体或异常对象字符串。
 
 ```python
 from dataclasses import dataclass
@@ -153,9 +153,9 @@ def log_fields(values: dict) -> dict:
     return {key: value for key, value in values.items() if key in allowed}
 ```
 
-- [ ] 将定义分别放入职责对应文件。`DomainError` 转 HTTP 时用固定映射：权限 403、资源不可见 404、版本/幂等冲突 409、配置输入错误 422、外部暂不可用 503；返回 `{code,message,retryable}`，不回传凭据。各模块把其明确错误码注册进 `ERROR_HTTP_STATUS`，未注册业务错误为500，不根据原始外部消息猜状态码。
-- [ ] 将模板 `API_V1_STR` 值改为 `/api`，同步 OAuth `tokenUrl`、OpenAPI 客户端、健康检查、测试与代理路径；用 `rg '/api/v1' backend frontend compose* scripts` 找出全部旧引用并逐项修正。
-- [ ] 保留模板生成客户端的 Bearer 配置，所有模块复用 `client.gen` 的认证。`frontend/src/main.tsx` 的全局处理改为仅401清除登录态；403展示当前操作无权限并保留登录，避免访问某租户失败使平台人员退出全部租户。[模板客户端配置](https://github.com/fastapi/full-stack-fastapi-template/blob/cb740b656d7a0a6c5e12c7bf8e50343ec94ee9c7/frontend/src/main.tsx)
+- [x] 将定义分别放入职责对应文件。`DomainError` 转 HTTP 时用固定映射：权限 403、资源不可见 404、版本/幂等冲突 409、配置输入错误 422、外部暂不可用 503；返回 `{code,message,retryable}`，不回传凭据。各模块把其明确错误码注册进 `ERROR_HTTP_STATUS`，未注册业务错误为500，不根据原始外部消息猜状态码。
+- [x] 将模板 `API_V1_STR` 值改为 `/api`，同步 OAuth `tokenUrl`、OpenAPI 客户端、健康检查、测试与代理路径；用 `rg '/api/v1' backend frontend compose* scripts` 找出全部旧引用并逐项修正。
+- [x] 保留模板生成客户端的 Bearer 配置，所有模块复用 `client.gen` 的认证。`frontend/src/main.tsx` 的全局处理改为仅401清除登录态；403展示当前操作无权限并保留登录，避免访问某租户失败使平台人员退出全部租户。[模板客户端配置](https://github.com/fastapi/full-stack-fastapi-template/blob/cb740b656d7a0a6c5e12c7bf8e50343ec94ee9c7/frontend/src/main.tsx)
 
 ```typescript
 if (error instanceof AxiosError && error.response?.status === 401) {
@@ -163,7 +163,7 @@ if (error instanceof AxiosError && error.response?.status === 401) {
   window.location.href = "/login"
 }
 ```
-- [ ] 后端重跑公共契约测试；按模板 `scripts/generate-client.sh` 生成客户端，再运行前端构建。提交 `foundation: establish tenant contracts and API paths`。
+- [x] 后端重跑公共契约测试；按模板 `scripts/generate-client.sh` 生成客户端，再运行前端构建。提交 `foundation: establish tenant contracts and API paths`。
 
 ### Task 3: 数据库、配置和后台进程可独立运行
 
@@ -177,7 +177,7 @@ if (error instanceof AxiosError && error.response?.status === 401) {
 - Produces: 后端测试 `session` fixture，绑定测试 PostgreSQL 事务；不同模块共用它，不使用 SQLite 代替锁、唯一约束和分页测试。
 - Produces: `redis_client` fixture 使用单独测试 Redis；`context` 是本轮测试租户上下文，`client` 是依赖覆盖到测试 session 的 FastAPI TestClient。业务模块 conftest 负责为 context 建真实租户与成员。
 
-- [ ] 加配置测试：没有 TikTok App 时应用仍能启动，连接状态为未配置；提供部分 App 字段时返回完整缺项列表，不进入授权交换。`uv run pytest tests/core/test_runtime_config.py -q` 先失败。
+- [x] 加配置测试：没有 TikTok App 时应用仍能启动，连接状态为未配置；提供部分 App 字段时返回完整缺项列表，不进入授权交换。`uv run pytest tests/core/test_runtime_config.py -q` 先失败。
 
 ```python
 def configured_app_fields(values: dict[str, str | None]) -> list[str]:
@@ -189,8 +189,8 @@ def test_app_setup_requires_all_fields():
     assert missing == ["TIKTOK_APP_SECRET", "TIKTOK_REDIRECT_URI"]
 ```
 
-- [ ] 将检查函数放入 `app/core/config.py`；与 P02 契约统一，新增密钥字段为 `str`，使用 `Field(default="", repr=False)` 隐藏 repr。禁止对 Settings 整体做日志输出或响应序列化，缺项检查只返回字段名；`.env.example` 只列变量说明，真实值仅写被忽略的运行配置。
-- [ ] 配置 Redis、Worker、Beat；两者使用后端同一镜像、同一依赖锁与数据库迁移版本。Celery 不使用结果后端作为业务完成依据。
+- [x] 将检查函数放入 `app/core/config.py`；与 P02 契约统一，新增密钥字段为 `str`，使用 `Field(default="", repr=False)` 隐藏 repr。禁止对 Settings 整体做日志输出或响应序列化，缺项检查只返回字段名；`.env.example` 只列变量说明，真实值仅写被忽略的运行配置。
+- [x] 配置 Redis、Worker、Beat；两者使用后端同一镜像、同一依赖锁与数据库迁移版本。Celery 不使用结果后端作为业务完成依据。
 
 ```python
 from celery import Celery
@@ -206,8 +206,8 @@ celery_app.conf.update(
 )
 ```
 
-- [ ] Worker 命令为 `celery -A app.jobs.celery_app:celery_app worker -Q resources,builds,control --loglevel=INFO`，Beat 使用 `celery -A app.jobs.celery_app:celery_app beat --loglevel=INFO`，只部署一个 Beat。后续任务注册及路由由各功能计划补全，未完成 Task 4 前不启动 Beat。
-- [ ] 测试配置以独立测试数据库运行 Alembic；`session` fixture 使用外层事务和 `join_transaction_mode="create_savepoint"`，测试结束回滚。应用客户端通过 dependency override 使用同一 session；并发测试自行建两个独立连接并清理 fixture 数据。
+- [x] Worker 命令为 `celery -A app.jobs.celery_app:celery_app worker -Q resources,builds,control --loglevel=INFO`，Beat 使用 `celery -A app.jobs.celery_app:celery_app beat --loglevel=INFO`，只部署一个 Beat。后续任务注册及路由由各功能计划补全，未完成 Task 4 前不启动 Beat。
+- [x] 测试配置以独立测试数据库运行 Alembic；`session` fixture 使用外层事务和 `join_transaction_mode="create_savepoint"`，测试结束回滚。应用客户端通过 dependency override 使用同一 session；并发测试自行建两个独立连接并清理 fixture 数据。
 
 ```python
 from uuid import uuid4
@@ -241,7 +241,7 @@ def redis_client():
 ```
 
 测试进程的 `DATABASE_URL` 指向独立测试库；`TEST_REDIS_URL` 指向单独测试 Redis。测试键使用每次运行唯一的 test-run ID，模块自行清理自身键，不清空共享实例。原模板测试 fixture 保留，只对新业务 `client` 的 DB 依赖做覆盖；应用重启型故障演练使用提交后的独立场景数据库，不能借外层测试事务假装进程可见。
-- [ ] 执行 `docker compose config --quiet`，执行迁移和配置测试；不把包含展开后密码的 Compose 配置打印到报告。提交 `foundation: configure database and worker processes`。
+- [x] 执行 `docker compose config --quiet`，执行迁移和配置测试；不把包含展开后密码的 Compose 配置打印到报告。提交 `foundation: configure database and worker processes`。
 
 ### Task 4: 事务提交后的可靠任务投递
 
@@ -254,7 +254,7 @@ def redis_client():
 - 该函数只在调用者当前事务中写待投递记录，函数内部不 commit、不发消息；名称表达“提交后才能投递”。
 - `flush_dispatch(limit: int=100) -> int` 扫描已提交记录发送给 Celery。后台函数入口统一接收 `tenant_id: str, actor_id: str, payload: dict`，入口重新查权限，禁止信任旧 role。
 
-- [ ] 写回滚不发送、提交后投递、发送后进程退出导致重复投递三项测试，运行 `uv run pytest tests/jobs/test_outbox.py -q` 确认失败。核心断言：
+- [x] 写回滚不发送、提交后投递、发送后进程退出导致重复投递三项测试，运行 `uv run pytest tests/jobs/test_outbox.py -q` 确认失败。核心断言：
 
 ```python
 def test_rollback_never_publishes(session, context, monkeypatch):
@@ -268,9 +268,9 @@ def test_rollback_never_publishes(session, context, monkeypatch):
     assert sent == []
 ```
 
-- [ ] 建 `PendingDispatch`：UUID 主键、tenant_id、actor_id、task_name、task_key、payload JSONB、available_at、published_at、attempts；唯一约束 `(tenant_id,task_key)`，待投递索引 `(available_at,id) WHERE published_at IS NULL`。重复键配置不同返回 `dispatch_key_conflict`，不能静默替换。
-- [ ] 同一迁移增加 `DispatchTenantCursor(tenant_id,last_published_at)`；enqueue 时幂等创建游标。投递器先选有到期消息的租户，按 last_published_at 空值优先、旧值优先轮换；每租户每轮最多投递5条、整轮最多100条，更新游标后换租户。这些是调度窗口，不限制租户账户数；T1 大量积压不能将 T2 小任务排在百万条消息后面。
-- [ ] 用 PostgreSQL INSERT ON CONFLICT 建记录，冲突后查询并比较 task_name/actor_id/payload；`payload` 禁止 token、cookie、文件正文，只携带内部 ID 和必要标量。现有记录返回同一 UUID。
+- [x] 建 `PendingDispatch`：UUID 主键、tenant_id、actor_id、task_name、task_key、payload JSONB、available_at、published_at、attempts；唯一约束 `(tenant_id,task_key)`，待投递索引 `(available_at,id) WHERE published_at IS NULL`。重复键配置不同返回 `dispatch_key_conflict`，不能静默替换。
+- [x] 同一迁移增加 `DispatchTenantCursor(tenant_id,last_published_at)`；enqueue 时幂等创建游标。投递器先选有到期消息的租户，按 last_published_at 空值优先、旧值优先轮换；每租户每轮最多投递5条、整轮最多100条，更新游标后换租户。这些是调度窗口，不限制租户账户数；T1 大量积压不能将 T2 小任务排在百万条消息后面。
+- [x] 用 PostgreSQL INSERT ON CONFLICT 建记录，冲突后查询并比较 task_name/actor_id/payload；`payload` 禁止 token、cookie、文件正文，只携带内部 ID 和必要标量。现有记录返回同一 UUID。
 
 ```python
 from sqlalchemy.dialects.postgresql import insert
@@ -282,7 +282,7 @@ statement = insert(PendingDispatch).values(
 session.exec(statement)
 ```
 
-- [ ] `flush_dispatch` 用 `FOR UPDATE SKIP LOCKED` 领取租户游标及本轮对应消息；task_name 注册表选择队列，调用下述发送方式后标记 published_at。Broker 失败写 attempts/下次时间，仍保持未投递；发送成功后进程崩溃会再次发送，消费者按业务稳定键去重。业务大批次仅持续补充有限可执行窗口到 Celery，不预先将百万个步骤全量投进 broker。
+- [x] `flush_dispatch` 用 `FOR UPDATE SKIP LOCKED` 领取租户游标及本轮对应消息；task_name 注册表选择队列，调用下述发送方式后标记 published_at。Broker 失败写 attempts/下次时间，仍保持未投递；发送成功后进程崩溃会再次发送，消费者按业务稳定键去重。业务大批次仅持续补充有限可执行窗口到 Celery，不预先将百万个步骤全量投进 broker。
 
 ```python
 celery_app.send_task(
@@ -292,8 +292,8 @@ celery_app.send_task(
 )
 ```
 
-- [ ] 定义注册表初始只含 `jobs.probe -> control`；各功能计划新增明确 task_name，不允许请求任意 Celery 函数。`jobs.flush_dispatch` 是 Beat 控制任务，不接收租户业务 payload；扫描公平性和批量业务限流由 06 扩展。
-- [ ] 新增 conftest `context` fixture，使用测试租户与操作人 UUID；并发测试证明两投递器不同时领取同一行。说明 `task_id` 相同不等于 Celery 自动去重，接收方仍需数据库业务幂等。迁移、测试通过后提交 `jobs: persist dispatch before publishing`。
+- [x] 定义注册表初始只含 `jobs.probe -> control`；各功能计划新增明确 task_name，不允许请求任意 Celery 函数。`jobs.flush_dispatch` 是 Beat 控制任务，不接收租户业务 payload；扫描公平性和批量业务限流由 06 扩展。
+- [x] 新增 conftest `context` fixture，使用测试租户与操作人 UUID；并发测试证明两投递器不同时领取同一行。说明 `task_id` 相同不等于 Celery 自动去重，接收方仍需数据库业务幂等。迁移、测试通过后提交 `jobs: persist dispatch before publishing`。
 
 补充租户轮换测试：T1有10,000条到期消息，T2仅1条；首轮发送包含T2且T1不超过5条。Broker不可用时不推进published_at；恢复后轮换规则仍生效。
 
@@ -378,7 +378,7 @@ with httpx.Client(base_url=base, timeout=15, follow_redirects=False) as client:
 - `admission_policy(endpoint: str) -> AdmissionPolicy` 从 Settings 的 `TIKTOK_CALL_POLICIES` 读取配置。应用总量、时间窗口与租户/账户并发是全局一致的基础配置；端点只可覆盖 endpoint_max_inflight/endpoint_calls_per_window/lease_ms。
 - P02 账户发现、P04 素材、P06 场景与广告调用均消费本任务；P06 另实现业务任务的租户公平调度，不重新定义限流器。
 
-- [ ] 先写真实 Redis 并发回归，使用每次测试唯一的 app_scope。两个 Worker 竞争相同应用总额度，其中一个失败时不能消耗该端点/租户的其它额度；不同应用不相互阻塞。运行 `uv run pytest tests/jobs/test_admission.py -q` 先确认模块缺失失败。
+- [x] 先写真实 Redis 并发回归，使用每次测试唯一的 app_scope。两个 Worker 竞争相同应用总额度，其中一个失败时不能消耗该端点/租户的其它额度；不同应用不相互阻塞。运行 `uv run pytest tests/jobs/test_admission.py -q` 先确认模块缺失失败。
 
 ```python
 from dataclasses import dataclass
@@ -400,7 +400,7 @@ class AdmissionPolicy(BaseModel):
     lease_ms: int = Field(gt=0)
 ```
 
-- [ ] `admission.py` 使用应用 ID 而不是连接 ID 作为共享范围。生成六个同 Redis hash slot 的键：应用/端点调用窗口、应用/端点/租户/账户在途租约。无具体账户的 BC 或 OAuth 查询传空 advertiser_id，仅用于内部额度分组，不把空 ID 加到 TikTok 请求中。
+- [x] `admission.py` 使用应用 ID 而不是连接 ID 作为共享范围。生成六个同 Redis hash slot 的键：应用/端点调用窗口、应用/端点/租户/账户在途租约。无具体账户的 BC 或 OAuth 查询传空 advertiser_id，仅用于内部额度分组，不把空 ID 加到 TikTok 请求中。
 
 ```python
 from hashlib import sha256
@@ -417,7 +417,7 @@ def admission_keys(app_scope, endpoint, tenant_id, advertiser_id):
     ]
 ```
 
-- [ ] 用 Lua 一次完成六个条件校验和写入，时间来自 Redis TIME。以下内容保存为 `admission.lua`；argv 为调用唯一 lease_id、窗口毫秒、租约毫秒、两种速率容量及四种在途容量。
+- [x] 用 Lua 一次完成六个条件校验和写入，时间来自 Redis TIME。以下内容保存为 `admission.lua`；argv 为调用唯一 lease_id、窗口毫秒、租约毫秒、两种速率容量及四种在途容量。
 
 ```lua
 local stamp = redis.call('TIME')
@@ -459,7 +459,7 @@ end
 return {1, 0}
 ```
 
-- [ ] 实现调用与释放。每一次真实 SDK 请求使用新的 lease_id；业务数据库的步骤尝试标识独立处理幂等。准入拒绝时根据 retry_after_ms 重新排队或给 OAuth 请求明确重试响应，不能让 Worker sleep 等额度。
+- [x] 实现调用与释放。每一次真实 SDK 请求使用新的 lease_id；业务数据库的步骤尝试标识独立处理幂等。准入拒绝时根据 retry_after_ms 重新排队或给 OAuth 请求明确重试响应，不能让 Worker sleep 等额度。
 
 ```python
 from pathlib import Path
@@ -484,8 +484,8 @@ def release_call(redis_client, *, app_scope, endpoint, tenant_id, advertiser_id,
     redis_client.eval(script, len(keys), *keys, str(lease_id))
 ```
 
-- [ ] 释放放在 SDK 调用 finally；释放 Redis 错误由调用方单独记录，不覆盖已经得到的远端结果，也不能把已成功请求转成可盲重试请求。租约长度必须大于该请求连接/读取总超时及处理余量；长视频调用可分配更长租约或独立端点策略。
-- [ ] `TIKTOK_CALL_POLICIES` 未配置时返回 `admission_unconfigured`，不能把额度无限大作为默认。测试显式配置小容量，例如窗口1000ms、应用2次、端点1次；这些仅是测试参数，不作为 TikTok 的官方限额。
+- [x] 释放放在 SDK 调用 finally；释放 Redis 错误由调用方单独记录，不覆盖已经得到的远端结果，也不能把已成功请求转成可盲重试请求。租约长度必须大于该请求连接/读取总超时及处理余量；长视频调用可分配更长租约或独立端点策略。
+- [x] `TIKTOK_CALL_POLICIES` 未配置时返回 `admission_unconfigured`，不能把额度无限大作为默认。测试显式配置小容量，例如窗口1000ms、应用2次、端点1次；这些仅是测试参数，不作为 TikTok 的官方限额。
 
 ```python
 from app.core.config import settings
@@ -502,7 +502,7 @@ def admission_policy(endpoint: str) -> AdmissionPolicy:
 ```
 
 Settings 中 `TIKTOK_CALL_POLICIES` 类型为 `dict`、缺省为空字典；配置错误返回503并阻止外部请求。对较长视频请求，租约配置必须覆盖其最大超时；ZSET TTL 使用已有租约的最晚到期时间，较短新请求不能使长请求租约提前失效。
-- [ ] 增加以下回归：两端点合计受应用窗口限制；两个租户共用应用；相同连接不同 Worker 不各获一份额度；release 后仍受速率限制；进程丢失最终靠租约到期恢复；Redis不可用零外部调用。全部通过后提交 `jobs: share API admission across workers`。
+- [x] 增加以下回归：两端点合计受应用窗口限制；两个租户共用应用；相同连接不同 Worker 不各获一份额度；release 后仍受速率限制；进程丢失最终靠租约到期恢复；Redis不可用零外部调用。全部通过后提交 `jobs: share API admission across workers`。
 
 ```python
 from concurrent.futures import ThreadPoolExecutor

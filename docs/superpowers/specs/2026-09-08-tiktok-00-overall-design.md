@@ -188,6 +188,6 @@ Celery 的重试需要业务幂等配合；其普通任务限流按 Worker 实�
 ## 12. 本地参考资料
 
 - [已有 TikTok 建设方案](/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/TikTok%20AD/TikTok%20漫剧广告投放工具建设方案.md)：作为历史架构参考，其账户、状态和数据范围由本轮决定覆盖。
-- [现有 TikTok skill](../../../.codex/skills/tiktok-smart-plus-drama-ads/SKILL.md)：参考接口经验、素材回查和台账机制，不继承固定批次规则。
+- [现有 TikTok skill](/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/.codex/skills/tiktok-smart-plus-drama-ads/SKILL.md)：参考接口经验、素材回查和台账机制，不继承固定批次规则。
 - [嘉书 CLI 文档](/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/TikTok%20AD/jiashu-drama-link-tool/README.md)：参考多账号、应用发现与取链协议。
 - 巨量参考项目：`/Users/yaotingfeng/Documents/ytf/ytf-ad-skill/ad_automation`，借鉴预览快照和任务恢复经验，领域对象按 TikTok 重新设计。

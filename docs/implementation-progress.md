@@ -1,23 +1,41 @@
-# Implementation progress
+# 实施进度
 
-## Current state
+## 当前状态
 
-2026-09-09: implementation authorized. User repository cloned; upstream template and approved designs imported. Working branch: feat/platform-implementation. No production feature task is complete yet.
+2026-09-09：已在用户指定仓库启动正式实施，集成分支 `feat/platform-implementation`。P01 工程基础已实现并通过本地整合测试；部署包配置已验证，独立部署审查待完成。P02 租户权限模型已提交，租户管理 API 和 OAuth 接入并行开发。尚未实现完整广告业务流程。
 
-## Execution rules
+| 范围 | 状态与证据 | 主要集成提交 |
+| --- | --- | --- |
+| P01 Task1 基线与官方 SDK | 冻结安装/构建通过；11 个离线契约，独立审查 PASS | 10ee3ee, dc4d3b0 |
+| P01 Tasks2/3 公共契约与进程配置 | API、安全错误/日志、真实数据库隔离、JSON任务、控制队列；独立审查 PASS | 6221f52, 6a66c24, ea18b79 |
+| P01 Tasks4/7 可靠投递与共享准入 | 52 个真实 PostgreSQL/Redis 测试；公平轮次、崩溃重投、并发锁、六项原子配额，独立审查 PASS | a01b13a, 34e151c |
+| P01 Task5 登录、工作台、回调入口 | API客户端再生成；16 个工作台浏览器测试；构建/TS通过；1024断点审查修正待最终复核 | 1f75633, 3097c72, 192eeab, b619f9a, 6b5cb77 |
+| P01 日志审查修复 | 删除会采集 OAuth 查询串的继承 Sentry 初始化；独立回归与复审 PASS | 8ef97a8 |
+| P01 Task6 运行与部署包 | 实际本地管理员登录、静态页面/健康/回调检查、Beat→Worker no-op均通过；Compose两套配置通过；没有本地Docker daemon或公网环境 | f192a30 |
+| P02 Task1 租户模型与动态权限 | 13 个真实数据库权限回归通过；后续任务已消费精确契约，独立审查待做 | e46930c |
 
-- Root coordinates the current session; subagents use gpt-6-astra/high. Do not interrupt slow-running agents on elapsed-time grounds.
-- Execute seven stage plans with the five delivery milestones in the roadmap. Review and commit task changes continuously.
-- Local environment currently has Python 3.14, PostgreSQL 17 and Redis 8. Bun and Docker are not on PATH. Install project-local Bun; use isolated local PostgreSQL/Redis processes for real integration tests. Docker deployment validation remains separately recorded until Docker is available.
-- Ruling: destination directory changes from tiktok-ads-platform to tiktok-ad-automation to match the user repository. Source design copies remain intact in the original documents repository.
-- Ruling: import the pinned template snapshot, retaining its license, instead of replacing the destination Git history. The user repository was empty.
-- Ruling: parallelize only independent worktrees with clear ownership; root integrates shared files and migrations. This follows the user's requested orchestration and overrides the skill's blanket single-implementer default.
+P01 整合后后端 **156 passed**，仅继承的 Starlette/httpx 弃用提示。前端完整工作台测试由 13 扩至 16，新增 900/1023/1024px 与焦点恢复。SDK/接口测试替身不代表真实平台联调通过。
 
-## Next tasks
+## 执行安排
 
-P01 Task1: install and verify pinned baseline plus official SDK.
-P01 Task2: public API/context/error contracts.
-P01 Task3: isolated DB/Redis configuration and fixtures.
-P01 Task4/5/7: outbox, workspace/callback, shared admission.
-P01 Task6: runnable deployment package and available-environment checks.
-Then P02 and subsequent roadmap stages; live OAuth/SDK tests depend on actual deployment/App credentials.
+- 所有执行与审查 sub agent 使用用户指定 `gpt-6-astra`、`high`；不会因耗时长而打断。
+- 当前会话主线程持续负责集成、生成客户端、迁移、验证与提交。独立任务使用隔离 worktree、明确文件所有权；共享文件由主线程整合。
+- 执行七份阶段计划，对应五批交付。P02完成后并行P03版权方、P04素材、P05策略逻辑；P06只读场景契约先于预览资源集成；再完成广告执行恢复与P07跨模块验收。
+- 阶段提交推送到用户 origin 的功能分支；不强推。原资料目录不修改，不复制运营凭据。
+
+## 已确认的实现裁定
+
+- 用户仓库为空，导入固定官方模板快照并保留许可证，origin保持用户仓库。
+- 实际模板为根目录 workspace/锁文件，计划中的旧锁路径按真实结构更正。
+- 素材上传不匹配剧目；搭建时按完整剧名包含匹配文件名。所有剧目铺同一批全部账户，SP为相同素材不同文案的N条创意。
+- 预览提交后三级广告创建直接ENABLE；实现阶段不发真实广告请求。
+- 本地P01诊断Worker使用macOS solo验证消息链路，不能把它当作后续任务硬截止证据；真实调用需硬截止小于共享租约有效期。
+- App、对象存储和配额未配置时相关业务明确阻止使用，登录/基本租户管理仍能运行。
+
+## 待外部条件
+
+没有实际部署主机/域名与 TikTok App，公网 HTTPS 回调、真实 OAuth、官方SDK真实账户发现和广告试投尚未验证。没有以示例 URL、账户或测试替身冒充这些结果。缺少这些条件不阻止后续本地模块实现。详见 [部署手册](runbooks/bootstrap-deployment.md)。
+
+## 下一步
+
+完成 P01 部署与前端复审，推送阶段代码。集成 P02 租户管理接口、实现租户/成员页面，同时推进 OAuth、账户目录发现/权限、批量解析和连接管理。代码审查/测试结果与实际外部联调分别记录。
