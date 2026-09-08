@@ -33,6 +33,9 @@ class Recovery(BaseModel):
 
 
 class SubmissionView(BaseModel):
+    actor_name: str = ""
+    provider_name: str | None = None
+    strategy_label: str = ""
     submission_id: UUID
     preview_id: UUID
     draft_id: UUID
@@ -87,6 +90,10 @@ class ExecutionUnit(BaseModel):
 
 
 class StepPublic(BaseModel):
+    title: str | None = None
+    advertiser_id: str | None = None
+    group_no: int | None = None
+    creative_no: int | None = None
     step_id: UUID
     unit_id: UUID
     kind: str
@@ -103,6 +110,14 @@ class StepPublic(BaseModel):
 
 
 class SubmissionUnitPublic(BaseModel):
+    account_name: str | None = None
+    group_count: int = 0
+    ad_count: int = 0
+    succeeded_group_count: int = 0
+    succeeded_ad_count: int = 0
+    material_count: int = 0
+    ready_material_count: int = 0
+    campaign_step: StepPublic | None = None
     unit_id: UUID
     drama_id: UUID
     title: str
@@ -119,3 +134,50 @@ class EvidencePublic(BaseModel):
     attempt: int
     conclusion: str
     observed_at: datetime
+
+
+class SubmissionMetadata(BaseModel):
+    actor_name: str
+    provider_name: str | None
+    strategy_label: str
+
+
+class SubmissionListItem(SubmissionMetadata):
+    submission_id: UUID
+    batch_short_id: str
+    bc_id: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    drama_count: int
+    account_count: int
+    excluded_unit_count: int
+    submitted: ObjectCounts
+    succeeded: ObjectCounts
+    failed: ObjectCounts
+    unknown: ObjectCounts
+
+
+class SubmissionGroupPublic(BaseModel):
+    group_id: UUID
+    unit_id: UUID
+    group_no: int
+    name: str
+    material_count: int
+    ad_count: int
+    step: StepPublic | None
+
+
+class SubmissionAdPublic(BaseModel):
+    planned_ad_id: UUID
+    group_id: UUID
+    creative_no: int
+    name: str
+    text: str
+    cta_option_ids: list[str]
+    step: StepPublic | None
+
+
+class SubmissionEventPublic(EvidencePublic):
+    unit_id: UUID
+    kind: str

@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
+    "invalid_submission_filter": 422,
     "preview_not_submittable": 409,
     "capability_not_found": 404,
     "capability_unavailable": 409,

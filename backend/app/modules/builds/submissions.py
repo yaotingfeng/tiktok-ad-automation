@@ -637,7 +637,12 @@ def get_submission(
             for name in fields.values()
         }
     )
+    from app.modules.builds.submission_catalog import metadata
+
     return SubmissionView(
+        **metadata(
+            session, tenant_id=context.tenant_id, submission_id=row.id
+        ).model_dump(),
         submission_id=row.id,
         preview_id=row.preview_id,
         draft_id=row.draft_id,
@@ -765,6 +770,15 @@ def get_submission_units(
         )
         for r in results[:limit]
     ]
+    from app.modules.builds.submission_catalog import enrich_units
+
+    enrich_units(
+        session,
+        context=context,
+        submission_id=row.id,
+        preview_id=row.preview_id,
+        items=items,
+    )
     return Page(
         items=items,
         next_cursor=encode_cursor(scope=scope, last_id=str(items[-1].unit_id))
@@ -808,6 +822,7 @@ def get_submission_steps(
         "FAILED",
         "RETRYABLE",
         "UNKNOWN",
+        "MISMATCH",
     }:
         raise DomainError("invalid_resolve_request", "步骤结果无效")
     scope, after = _page_scope(
@@ -843,7 +858,9 @@ def get_submission_steps(
         stmt = stmt.where(BuildUnit.drama_id == drama_id)
     if kind:
         stmt = stmt.where(ExecutionStep.kind == kind)
-    if result:
+    if result == "MISMATCH":
+        stmt = stmt.where(col(ExecutionStep.mismatch).is_(True))
+    elif result:
         stmt = stmt.where(ExecutionStep.status == result)
     rows = session.exec(stmt.order_by(col(ExecutionStep.id)).limit(limit + 1)).all()
     items = [
@@ -864,6 +881,9 @@ def get_submission_steps(
         )
         for s in rows[:limit]
     ]
+    from app.modules.builds.submission_catalog import enrich_steps
+
+    enrich_steps(session, context=context, submission_id=row.id, items=items)
     return Page(
         items=items,
         next_cursor=encode_cursor(scope=scope, last_id=str(items[-1].step_id))
