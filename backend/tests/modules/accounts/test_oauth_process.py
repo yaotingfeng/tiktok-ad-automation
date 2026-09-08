@@ -14,7 +14,7 @@ def blocked_worker(_channel, _app_id, _secret, _auth_code):
 
 
 def success_worker(channel, _app_id, _secret, _auth_code):
-    channel.send(("ok", "fake-process-token"))
+    channel.send(("ok", {"access_token": "fake-process-token", "scope": "[2,6]"}))
     channel.close()
 
 
@@ -39,14 +39,11 @@ def test_spawned_exchange_deadline_stops_child_before_return():
 
 def test_spawned_exchange_succeeds_from_request_thread():
     with ThreadPoolExecutor(max_workers=1) as pool:
-        assert (
-            pool.submit(
-                _exchange_token,
-                app_id="fake",
-                secret="fake",
-                auth_code="fake",
-                deadline_seconds=10,
-                _worker=success_worker,
-            ).result(timeout=12)
-            == "fake-process-token"
-        )
+        assert pool.submit(
+            _exchange_token,
+            app_id="fake",
+            secret="fake",
+            auth_code="fake",
+            deadline_seconds=10,
+            _worker=success_worker,
+        ).result(timeout=12) == {"access_token": "fake-process-token", "scope": "[2,6]"}

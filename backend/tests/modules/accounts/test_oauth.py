@@ -337,7 +337,7 @@ def test_permission_is_reloaded_after_exchange(
                 TikTokConnection, auth_attempt.connection_id
             ).status = "DISABLED"
         session.commit()
-        return "fake-token"
+        return {"access_token": "fake-token"}
 
     monkeypatch.setattr(auth, "_exchange_token", exchange)
     with pytest.raises(DomainError):

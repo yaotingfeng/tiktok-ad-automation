@@ -6,6 +6,7 @@ request Session, never alongside unrelated pending changes. No auth code is
 queued or automatically retried after exchange starts.
 """
 
+import json
 import multiprocessing
 import secrets
 from collections.abc import Callable
@@ -176,7 +177,26 @@ def _pending_attempt(
     return attempt
 
 
-def _token_request(*, app_id: str, secret: str, auth_code: str) -> str:
+def _token_credentials(data: dict[str, object]) -> dict[str, str]:
+    token = data.get("access_token")
+    if not isinstance(token, str) or not token or len(token) > 16384:
+        raise DomainError("invalid_token_response", "授权结果缺少访问凭据")
+    result = {"access_token": token}
+    if "scope" in data:
+        scope = data["scope"]
+        if (
+            not isinstance(scope, list)
+            or len(scope) > 1024
+            or any(type(item) is not int or not 0 < item < 2**64 for item in scope)
+        ):
+            raise DomainError("invalid_token_response", "授权权限范围格式无效")
+        # Existing tenant-bound credentials deliberately store string values.
+        # Missing scope remains missing; it never implies broad authorization.
+        result["scope"] = json.dumps(sorted(set(scope)), separators=(",", ":"))
+    return result
+
+
+def _token_request(*, app_id: str, secret: str, auth_code: str) -> dict[str, str]:
     """Direct official SDK call, executed only inside the bounded OAuth child."""
     with official_client() as client:
         response = business_api_client.AuthenticationApi(client).oauth2_access_token(
@@ -185,10 +205,7 @@ def _token_request(*, app_id: str, secret: str, auth_code: str) -> str:
             ),
             _request_timeout=(5, 30),
         )
-        token = checked_data(response).get("access_token")
-        if not isinstance(token, str) or not token or len(token) > 16384:
-            raise DomainError("invalid_token_response", "授权结果缺少访问凭据")
-        return token
+        return _token_credentials(checked_data(response))
 
 
 def _exchange_worker(
@@ -216,7 +233,7 @@ def _exchange_token(
     auth_code: str,
     deadline_seconds: float = OAUTH_DEADLINE_SECONDS,
     _worker: Callable[[Connection, str, str, str], None] = _exchange_worker,
-) -> str:
+) -> dict[str, str]:
     """Bound the entire generated request, including startup/DNS/body/cleanup.
 
     Spawn is safe when called by FastAPI's threadpool. A deadline never abandons a
@@ -246,8 +263,20 @@ def _exchange_token(
         if not isinstance(result, tuple) or len(result) != 2:
             raise DomainError("oauth_result_unknown", "授权结果未知，请重新发起授权")
         status, value = result
-        if status == "ok" and isinstance(value, str) and value:
-            return value
+        if (
+            status == "ok"
+            and isinstance(value, dict)
+            and set(value) <= {"access_token", "scope"}
+        ):
+            raw = {"access_token": value.get("access_token")}
+            if "scope" in value:
+                try:
+                    raw["scope"] = json.loads(value["scope"])
+                except ValueError, TypeError:
+                    raise DomainError(
+                        "invalid_token_response", "授权权限范围格式无效"
+                    ) from None
+            return _token_credentials(raw)
         if status == "failed" and value in {
             "tiktok_response_error",
             "invalid_token_response",
@@ -359,7 +388,7 @@ def finish_authorization(
         if connection.status == "DISABLED":
             raise DomainError("connection_unavailable", "当前租户连接已停用")
         attempt.candidate_ciphertext = encrypt_credentials(
-            tenant_id=context.tenant_id, value={"access_token": token}
+            tenant_id=context.tenant_id, value=token
         )
         attempt.status = "CANDIDATE_READY"
         if connection.credential_ciphertext is None:

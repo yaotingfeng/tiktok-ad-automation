@@ -119,7 +119,7 @@ def test_official_transport_serializes_and_deserializes_oauth(sdk_transport):
     token = auth._token_request(
         app_id="fake-app", secret="fake-secret", auth_code="fake-code"
     )
-    assert token == "fake-token"
+    assert token == {"access_token": "fake-token"}
     body = json.loads(sdk_transport[0][2]["body"])
     assert body == {
         "app_id": "fake-app",

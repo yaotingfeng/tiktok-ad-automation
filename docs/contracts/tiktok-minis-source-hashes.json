@@ -1,0 +1,86 @@
+{
+  "read_on": "2026-09-09",
+  "sdk_revision": "f809c396520df2d7b201a9ccc5378d822b728ed3",
+  "documents": [
+    {
+      "doc_id": "1853450329535490",
+      "url": "https://business-api.tiktok.com/portal/docs?id=1853450329535490",
+      "markdown_sha256": "4602721544344868c607062234366fccfbca22251dc2bed4246876a125615ab5"
+    },
+    {
+      "doc_id": "1739432717798401",
+      "url": "https://business-api.tiktok.com/portal/docs?id=1739432717798401",
+      "markdown_sha256": "964ec79aee74aa75cad6a1bf107a7fced380be253a0cb916c5afe6adbaafbf71"
+    },
+    {
+      "doc_id": "1740218420781057",
+      "url": "https://business-api.tiktok.com/portal/docs?id=1740218420781057",
+      "markdown_sha256": "c5e918c0fa621a0a7fe4a8ee5dad5f35703d160b95078738d05f0fafb8afbc96"
+    },
+    {
+      "doc_id": "1739362202742785",
+      "url": "https://business-api.tiktok.com/portal/docs?id=1739362202742785",
+      "markdown_sha256": "bfd54d33716dbfd823e92430aa900961591e5fb1a57ec75da3df0a1d29d44d20"
+    },
+    {
+      "doc_id": "1770016073586753",
+      "url": "https://business-api.tiktok.com/portal/docs?id=1770016073586753",
+      "markdown_sha256": "46aa35f764a6b69b8762c186bfd25d3547a5196218dff3fb4035533c07e22d2e"
+    },
+    {
+      "doc_id": "1753986142651394",
+      "url": "https://business-api.tiktok.com/portal/docs?id=1753986142651394",
+      "markdown_sha256": "e7d9a3e7f57d2f6c93ab126b4d485b7fa86a58913609c498185e1788412412aa"
+    },
+    {
+      "doc_id": "1737174886619138",
+      "url": "https://business-api.tiktok.com/portal/docs?id=1737174886619138",
+      "markdown_sha256": "ef72527cf986285a6b4f22173fe0bd9c4b9295504f3affe22e99844acaf208c2"
+    },
+    {
+      "doc_id": "1766324010279938",
+      "url": "https://business-api.tiktok.com/portal/docs?id=1766324010279938",
+      "markdown_sha256": "5e5bd2d192496c5c4eb9f0f26dc08d3dbe66dd31ceaacbc9cca6c6fbb7c5bec5"
+    },
+    {
+      "doc_id": "1853377811982657",
+      "url": "https://business-api.tiktok.com/portal/docs?id=1853377811982657",
+      "markdown_sha256": "95e187b62423d4b470b375ff989abf206ec7836658f5164b70d237198ca336a3"
+    },
+    {
+      "doc_id": "1843312852800706",
+      "url": "https://business-api.tiktok.com/portal/docs?id=1843312852800706",
+      "markdown_sha256": "3e3b540bf14827e7609ac14d002b98ac02ebbfdc075d300475f3818a20350a3a"
+    },
+    {
+      "doc_id": "1843314887930946",
+      "url": "https://business-api.tiktok.com/portal/docs?id=1843314887930946",
+      "markdown_sha256": "58778497df9159ff2935cd05ddff8819fb2e14aad0bf2f7709e7ca22c4b3509d"
+    },
+    {
+      "doc_id": "1843317390059522",
+      "url": "https://business-api.tiktok.com/portal/docs?id=1843317390059522",
+      "markdown_sha256": "0db3e651a7f701b0165c5de0cbbcf97560dab4e2f10ae6b5bef98696ccc5c2ec"
+    },
+    {
+      "doc_id": "1737585839634433",
+      "url": "https://business-api.tiktok.com/portal/docs?id=1737585839634433",
+      "markdown_sha256": "16f36fe7579057ebf816282023bb1d1ed9dd63bff46105395ae57bb85d865c1b"
+    },
+    {
+      "doc_id": "1843317411665921",
+      "url": "https://business-api.tiktok.com/portal/docs?id=1843317411665921",
+      "markdown_sha256": "e9d5540467d4c3ff61b4b525c96e873bc6bb535f7b8c758e7cfadb0e292e4abe"
+    },
+    {
+      "doc_id": "1843317445798914",
+      "url": "https://business-api.tiktok.com/portal/docs?id=1843317445798914",
+      "markdown_sha256": "a2e1f35b5c18fb30fef25b223d714209f509f2cbfb6ed9a48835615e28d7882f"
+    },
+    {
+      "doc_id": "1847839781968897",
+      "url": "https://business-api.tiktok.com/portal/docs?id=1847839781968897",
+      "markdown_sha256": "28c745c0b69d09e85216c164130260b1d1e8714e20980cc8ad8ce275c3d866ba"
+    }
+  ]
+}
