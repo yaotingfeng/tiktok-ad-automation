@@ -1,0 +1,27 @@
+# Explicit usage: docker compose -f compose.yml -f compose.staging.yml up --build -d
+# Do not include compose.override.yml in staging.
+services:
+  proxy:
+    image: traefik:v3.7
+    restart: unless-stopped
+    command:
+      - --providers.file.filename=/etc/traefik/dynamic.yml
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL:?Set ACME_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/certificates/acme.json
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+      - --log.level=INFO
+    ports: ['80:80', '443:443']
+    volumes:
+      - ./deploy/traefik.yml:/etc/traefik/dynamic.yml:ro
+      - tls-certificates:/certificates
+    depends_on:
+      backend: {condition: service_healthy}
+  backend:
+    environment:
+      FRONTEND_HOST: https://${DOMAIN:?Set DOMAIN}
+volumes:
+  tls-certificates:

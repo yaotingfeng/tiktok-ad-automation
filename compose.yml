@@ -1,88 +1,92 @@
+name: tiktok-ad-automation
+
+x-app-environment: &app-environment
+  PROJECT_NAME: ${PROJECT_NAME:-TikTok Ad Automation}
+  SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY}
+  FIRST_SUPERUSER: ${FIRST_SUPERUSER:?Set FIRST_SUPERUSER}
+  FIRST_SUPERUSER_PASSWORD: ${FIRST_SUPERUSER_PASSWORD:?Set FIRST_SUPERUSER_PASSWORD}
+  DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db:5432/app
+  REDIS_URL: redis://redis:6379/0
+  FRONTEND_HOST: ${FRONTEND_HOST:-http://localhost:5173}
+  TIKTOK_APP_ID: ${TIKTOK_APP_ID:-}
+  TIKTOK_APP_SECRET: ${TIKTOK_APP_SECRET:-}
+  TIKTOK_REDIRECT_URI: ${TIKTOK_REDIRECT_URI:-}
+  TIKTOK_CALL_POLICIES: ${TIKTOK_CALL_POLICIES:-{}}
+  CONNECTION_ENCRYPTION_KEY: ${CONNECTION_ENCRYPTION_KEY:-}
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+  S3_BUCKET: ${S3_BUCKET:-}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  EMAILS_FROM_EMAIL: ${EMAILS_FROM_EMAIL:-}
+
+x-app: &app
+  image: ${APP_IMAGE:-tiktok-ad-automation:local}
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
+  environment: *app-environment
+  restart: unless-stopped
+
 services:
-
-  proxy:
-    image: traefik:v3.7
-    volumes:
-      # Add Docker as a mounted volume, so that Traefik can read the labels of other services
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    command:
-      # Enable Docker in Traefik, so that it reads labels from Docker services
-      - --providers.docker
-      # Do not expose all Docker services, only the ones explicitly exposed
-      - --providers.docker.exposedbydefault=false
-      # Create an entrypoint "http" listening on port 80
-      - --entrypoints.http.address=:80
-      # Enable the access log, with HTTP requests
-      - --accesslog
-      # Enable the Traefik log, for configurations and errors
-      - --log
-
   db:
     image: postgres:18
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d app"]
-      interval: 10s
-      retries: 5
-      start_period: 30s
-      timeout: 10s
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
     volumes:
       - app-db-data:/var/lib/postgresql
-    environment:
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Variable not set}
-      - POSTGRES_DB=app
-
-  adminer:
-    image: adminer
-    depends_on:
-      - db
-    environment:
-      - ADMINER_DESIGN=pepa-linha-dark
-    labels:
-      # Enable Traefik for this service
-      - traefik.enable=true
-      # Route HTTP traffic for the Adminer subdomain
-      - traefik.http.routers.adminer-http.rule=Host(`adminer.${DOMAIN:-localhost}`)
-      - traefik.http.routers.adminer-http.entrypoints=http
-      # Define the port inside of the Docker service to use
-      - traefik.http.services.adminer.loadbalancer.server.port=8080
-
-  backend:
-    image: backend:latest
-    depends_on:
-      db:
-        condition: service_healthy
-        restart: true
-    environment:
-      PROJECT_NAME: ${PROJECT_NAME:?Variable not set}
-      SECRET_KEY: ${SECRET_KEY:?Variable not set}
-      FIRST_SUPERUSER: ${FIRST_SUPERUSER:?Variable not set}
-      FIRST_SUPERUSER_PASSWORD: ${FIRST_SUPERUSER_PASSWORD:?Variable not set}
-      SMTP_HOST: ${SMTP_HOST}
-      SMTP_USER: ${SMTP_USER:-}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      EMAILS_FROM_EMAIL: ${EMAILS_FROM_EMAIL}
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?Variable not set}@db:5432/app
-      SENTRY_DSN: ${SENTRY_DSN:-}
-
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/utils/health-check/"]
+      test: [CMD-SHELL, pg_isready -U postgres -d app]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+  redis:
+    image: redis:8
+    command: [redis-server, --appendonly, 'yes']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  prestart:
+    <<: *app
+    command: [bash, scripts/prestart.sh]
+    restart: 'no'
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+  backend:
+    <<: *app
+    command: [uvicorn, app.main:app, --host, 0.0.0.0, --port, '8000', --workers, '4', --no-access-log]
+    depends_on:
+      prestart: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, python, -c, 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/api/utils/health-check/", timeout=3)']
       interval: 10s
       timeout: 5s
       retries: 5
-
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    labels:
-      # Enable Traefik for this service
-      - traefik.enable=true
-
-      # Define the port inside of the Docker service to use
-      - traefik.http.services.backend.loadbalancer.server.port=8000
-
-      # Route HTTP traffic for this domain
-      - traefik.http.routers.backend-http.rule=Host(`${DOMAIN:-localhost}`)
-      - traefik.http.routers.backend-http.entrypoints=http
-
+  worker:
+    <<: *app
+    command: [celery, -A, app.jobs.celery_app:celery_app, worker, -Q, 'resources,builds,control', --loglevel=INFO]
+    depends_on:
+      prestart: {condition: service_completed_successfully}
+  beat:
+    <<: *app
+    command: [celery, -A, app.jobs.celery_app:celery_app, beat, --schedule, /var/run/celery/celerybeat-schedule, --loglevel=INFO]
+    volumes:
+      - beat-data:/var/run/celery
+    depends_on:
+      prestart: {condition: service_completed_successfully}
 volumes:
   app-db-data:
+  redis-data:
+  beat-data:

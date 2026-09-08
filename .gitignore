@@ -20,3 +20,7 @@ backend/app/frontend/
 **/__pycache__/
 *.pyc
 .DS_Store
+
+/deploy/traefik.yml
+/frontend/openapi.json
+/.runtime/*

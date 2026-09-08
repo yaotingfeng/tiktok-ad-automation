@@ -1,0 +1,14 @@
+# Copy to ignored deploy/traefik.yml and replace ads.example.com with DOMAIN.
+http:
+  routers:
+    application:
+      rule: Host(`ads.example.com`)
+      entryPoints: [websecure]
+      service: application
+      tls:
+        certResolver: le
+  services:
+    application:
+      loadBalancer:
+        servers:
+          - url: http://backend:8000
