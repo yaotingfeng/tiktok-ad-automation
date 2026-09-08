@@ -1,11 +1,14 @@
 #! /usr/bin/env bash
 
-set -e
-set -x
-
-cd backend
-FASTAPI_ENV=development uv run python -c "import app.main; import json; print(json.dumps(app.main.app.openapi()))" > ../openapi.json
-cd ..
-mv openapi.json frontend/
-bun run --filter frontend generate-client
-bun run lint
+set -euo pipefail
+cd "$(dirname "$0")/.."
+if command -v bun >/dev/null 2>&1; then
+  bun_command=bun
+else
+  bun_command="$PWD/.tools/node_modules/.bin/bun"
+fi
+(
+  cd backend
+  uv run --frozen python -c 'import json; from pathlib import Path; from app.main import app; Path("../frontend/openapi.json").write_text(json.dumps(app.openapi()))'
+)
+"$bun_command" run --filter frontend generate-client

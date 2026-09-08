@@ -1,15 +1,15 @@
-FROM oven/bun:1 AS frontend-build
+FROM oven/bun:1.4.2 AS frontend-build
 
 WORKDIR /app
 
 COPY package.json bun.lock /app/
 COPY frontend/package.json /app/frontend/
+COPY packages/react-email/package.json /app/packages/react-email/
 
-WORKDIR /app/frontend
-
-RUN bun install
+RUN bun install --frozen-lockfile
 
 COPY ./frontend /app/frontend
+WORKDIR /app/frontend
 
 ARG VITE_API_URL=
 
@@ -38,12 +38,11 @@ WORKDIR /app/
 # Ref: https://docs.astral.sh/uv/guides/integration/docker/#using-the-environment
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Install dependencies
-# Ref: https://docs.astral.sh/uv/guides/integration/docker/#intermediate-layers
+# Keep workspace manifests in the dependency layer; the SDK is pinned by uv.lock.
+COPY pyproject.toml uv.lock /app/
+COPY backend/pyproject.toml /app/backend/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --frozen --no-install-workspace --package app
+    uv sync --frozen --no-dev --no-install-workspace --package app
 
 COPY ./backend/scripts /app/backend/scripts
 
@@ -56,10 +55,8 @@ COPY --from=frontend-build /app/backend/app/frontend /app/backend/app/frontend
 # Sync the project
 # Ref: https://docs.astral.sh/uv/guides/integration/docker/#intermediate-layers
 RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --frozen --package app
+    uv sync --frozen --no-dev --package app
 
 WORKDIR /app/backend/
 
-CMD ["fastapi", "run", "--workers", "4"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--no-access-log"]

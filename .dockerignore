@@ -1,4 +1,13 @@
 .git
+.worktrees
+.runtime
+.tools
+.superpowers
+**/.env
+**/.env.*
+!**/.env.example
+**/playwright/.auth
+deploy/traefik.yml
 **/__pycache__
 **/.venv
 backend/htmlcov

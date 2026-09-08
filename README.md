@@ -1,88 +1,25 @@
-# Full Stack FastAPI Template
+# TikTok 短剧自动投放平台
 
-[![Test Docker Compose](../../actions/workflows/test-docker-compose.yml/badge.svg)](../../actions/workflows/test-docker-compose.yml)
-[![Test Backend](../../actions/workflows/test-backend.yml/badge.svg)](../../actions/workflows/test-backend.yml)
+多租户 TikTok 短剧投放工作台。后端为 FastAPI、PostgreSQL、Celery/Redis，前端为 React、TypeScript、shadcn/ui，TikTok 接入固定版本官方 Python SDK。
 
-## Technology Stack and Features
+当前实现和验证记录见 [实施进度](docs/implementation-progress.md)。产品规则、页面设计及七阶段任务见 [交付计划](docs/superpowers/plans/2026-09-08-tiktok-00-delivery-roadmap.md)。
 
-- ⚡ [**FastAPI**](https://fastapi.tiangolo.com) for the Python backend API.
-  - 🧰 [SQLModel](https://sqlmodel.tiangolo.com) for the Python SQL database interactions (ORM).
-  - 🔍 [Pydantic](https://docs.pydantic.dev), used by FastAPI, for the data validation and settings management.
-  - 💾 [PostgreSQL](https://www.postgresql.org) as the SQL database.
-- 🚀 [React](https://react.dev) for the frontend.
-  - 🧩 Built into the backend application and served by FastAPI on the same domain as the API.
-  - 💃 Using TypeScript, hooks, [Vite](https://vitejs.dev), and other parts of a modern frontend stack.
-  - 🎨 [Tailwind CSS](https://tailwindcss.com) and [shadcn/ui](https://ui.shadcn.com) for the frontend components.
-  - 🤖 An automatically generated frontend client.
-  - 🧪 [Playwright](https://playwright.dev) for end-to-end testing.
-  - 🦇 Dark mode support.
-- ☁️ [FastAPI Cloud](https://fastapicloud.com) for deployment.
-- 🐋 [Docker Compose](https://www.docker.com) for local services and self-hosted deployment.
-  - 📞 [Traefik](https://traefik.io) as a reverse proxy with automatic HTTPS.
-- 🔒 Secure password hashing by default.
-- 🔑 JWT (JSON Web Token) authentication.
-- 📫 Email-based password recovery.
-- ✉️ [React Email](https://react.email) for email templates.
-- 📬 [Mailpit](https://mailpit.axllent.org) for local email testing during development.
-- ✅ Tests with [Pytest](https://pytest.org).
-- 🏭 CI (continuous integration) and CD (continuous deployment) based on GitHub Actions.
+- [本地运行与 HTTPS 部署](docs/runbooks/bootstrap-deployment.md)
+- [工程版本基线](docs/engineering-baseline.md)
+- [整体设计](docs/superpowers/specs/2026-09-08-tiktok-00-overall-design.md)
 
-### Dashboard Login
+本地启动先复制 `.env.example` 为 `.env` 并填写独立开发环境。凭据不提交。应用可在未配置 TikTok App 时启动登录与回调入口；真实授权、版权方和广告操作须另有实际联调证据。
 
-![Dashboard login screenshot](img/login.png)
+```bash
+uv sync --frozen --package app
+bun install --frozen-lockfile
+bun run --filter frontend build
+cd backend
+uv run alembic upgrade head
+uv run python app/initial_data.py
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-access-log
+```
 
-### Dashboard - Admin
+默认管理账号由 `.env` 的 `FIRST_SUPERUSER` 和 `FIRST_SUPERUSER_PASSWORD` 初始化。没有公开注册入口。首次创建后改动环境变量不会自动重置已有用户密码。
 
-![Admin dashboard screenshot](img/dashboard.png)
-
-### Dashboard - Items
-
-![Items dashboard screenshot](img/dashboard-items.png)
-
-### Dashboard - Dark Mode
-
-![Dark mode dashboard screenshot](img/dashboard-dark.png)
-
-### React Email Templates
-
-![Email templates screenshot](img/react-email.png)
-
-### Mailpit - Local Email Testing
-
-![Mailpit screenshot](img/mailpit.png)
-
-### Interactive API Documentation
-
-![API docs](img/docs.png)
-
-## How to Use It
-
-Click the **Use this template** button at the top of this page to create a new repository.
-
-## Backend Development
-
-Backend docs: [backend/README.md](./backend/README.md).
-
-## Frontend Development
-
-Frontend docs: [frontend/README.md](./frontend/README.md).
-
-## Deployment
-
-FastAPI Cloud deployment: [deployment.md](./deployment.md).
-
-Self-hosted deployment with Docker Compose: [deployment-docker-compose.md](./deployment-docker-compose.md).
-
-## Development
-
-General development docs: [development.md](./development.md).
-
-This includes the local FastAPI and Vite workflow, Docker Compose services, `.env` configuration, and more.
-
-## Release Notes
-
-Check the file [release-notes.md](./release-notes.md).
-
-## License
-
-The Full Stack FastAPI Template is licensed under the terms of the MIT license.
+保留上游 FastAPI full-stack 模板 MIT 许可证，固定来源见工程基线。

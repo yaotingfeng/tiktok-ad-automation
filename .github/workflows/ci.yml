@@ -50,3 +50,12 @@ jobs:
         with: {bun-version: '1.4.2'}
       - run: bun install --frozen-lockfile
       - run: bun run --filter frontend build
+      - run: bun x playwright install --with-deps chromium
+        working-directory: frontend
+      - run: bun x playwright test --project workspace
+        working-directory: frontend
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - run: docker build -f backend/Dockerfile -t tiktok-ad-automation:ci .
