@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     TIKTOK_APP_ID: str = ""
     TIKTOK_APP_SECRET: str = Field(default="", repr=False)
     TIKTOK_REDIRECT_URI: str = ""
+    TIKTOK_AUTHORIZATION_URL: str = ""
     TIKTOK_CALL_POLICIES: dict[str, Any] = Field(default_factory=dict)
     CONNECTION_ENCRYPTION_KEY: str = Field(default="", repr=False)
     S3_ENDPOINT_URL: str = ""
