@@ -271,7 +271,11 @@ export class IntegrationsService {
     /**
      * Tiktok Callback
      *
-     * Stable callback address; tenant-bound state and SDK exchange arrive in P02.
+     * Restore authorization scope from state; never trust current browser tenant.
+     *
+     * This route has no CurrentUser dependency: its sole Session is dedicated to
+     * finish_authorization's durable state claim and candidate transactions.
+     * Raw callback parameters are not Pydantic fields or echoed validation inputs.
      */
     public static tiktokCallback<ThrowOnError extends boolean = true>(options?: Options<integrationsTiktokCallbackData, ThrowOnError>) {
         return (options?.client ?? client).get<integrationsTiktokCallbackResponses, unknown, ThrowOnError>({
