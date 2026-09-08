@@ -308,12 +308,13 @@ def search_user_candidates(
     _page_limit(limit)
     term = query.strip()
     if not term or len(term) > 255:
-        raise DomainError("invalid_member", "请输入用户姓名或邮箱")
+        raise DomainError("invalid_member", "请输入用户姓名、邮箱或完整 ID")
     statement = select(User).where(
         col(User.is_active).is_(True),
         or_(
             col(User.email).icontains(term, autoescape=True),
             col(User.full_name).icontains(term, autoescape=True),
+            sql_cast(User.id, String) == term,
         ),
     )
     if after_id is not None:

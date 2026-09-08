@@ -84,3 +84,22 @@ def test_candidate_search_treats_wildcards_as_literal(client, session):
         headers=headers(platform.id),
     )
     assert response.status_code == 200 and response.json()["items"] == []
+
+
+def test_candidate_search_accepts_exact_user_id(client, session):
+    platform = user(session, platform=True)
+    candidate = user(session)
+    response = client.get(
+        "/api/platform/user-candidates",
+        params={"query": str(candidate.id)},
+        headers=headers(platform.id),
+    )
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == [str(candidate.id)]
+    candidate.is_active = False
+    session.flush()
+    assert client.get(
+        "/api/platform/user-candidates",
+        params={"query": str(candidate.id)},
+        headers=headers(platform.id),
+    ).json()["items"] == []
