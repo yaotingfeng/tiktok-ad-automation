@@ -192,7 +192,8 @@ def _result(
                 (
                     attempt is None
                     and row.status == "blocked"
-                    and row.error_code == "no_upload_account"
+                    and row.error_code
+                    in {"no_upload_account", "action_forbidden", "tenant_forbidden"}
                 )
                 or (
                     attempt is not None

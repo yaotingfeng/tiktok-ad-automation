@@ -36,6 +36,7 @@ from .models import (
     MaterialFile,
     MaterialUploadAttempt,
     ObjectUpload,
+    UploadBatch,
 )
 from .storage import OriginalFile, open_original
 
@@ -57,6 +58,20 @@ def _material(
     require_tenant(
         session, actor_id=context.actor_id, tenant_id=context.tenant_id, action=action
     )
+    row = _locked_material(session, context, material_id)
+    if require_stored and row.storage_state != "stored":
+        raise DomainError("original_unavailable", "素材原文件尚未完整入库")
+    return row
+
+
+def _locked_material(
+    session: Session, context: TenantContext, material_id: UUID
+) -> MaterialFile:
+    """Scoped bookkeeping lock; callers separately authorize every action.
+
+    Lock before operation even for finalization: inserting an AccountMaterial
+    takes a foreign-key KEY SHARE lock on this file.
+    """
     row = session.exec(
         select(MaterialFile)
         .where(
@@ -66,8 +81,6 @@ def _material(
     ).first()
     if row is None:
         raise DomainError("material_not_found", "未找到当前租户素材")
-    if require_stored and row.storage_state != "stored":
-        raise DomainError("original_unavailable", "素材原文件尚未完整入库")
     return row
 
 
@@ -185,6 +198,49 @@ def _object_error(session: Session, material: MaterialFile, code: str | None) ->
         row.error_code = code
         row.status = "blocked" if code else "stored"
         _refresh_batch(session, material.tenant_id, material.id)
+
+
+def _record_unsent_denial(
+    session: Session, *, context: TenantContext, material_id: UUID, code: str
+) -> bool:
+    """Internal task bookkeeping only; never grants the denied upload action.
+
+    The original batch actor and exact tenant/file must match. An existing
+    source attempt owns its own recovery and must not become a fresh retry.
+    """
+    material = session.exec(
+        select(MaterialFile)
+        .where(
+            MaterialFile.tenant_id == context.tenant_id,
+            MaterialFile.id == material_id,
+        )
+        .with_for_update()
+    ).first()
+    if material is None or material.storage_state != "stored":
+        return False
+    upload = session.exec(
+        select(ObjectUpload).where(
+            ObjectUpload.tenant_id == context.tenant_id,
+            ObjectUpload.material_id == material_id,
+        )
+    ).first()
+    batch = session.get(UploadBatch, upload.batch_id) if upload else None
+    if (
+        batch is None
+        or batch.tenant_id != context.tenant_id
+        or batch.actor_id != context.actor_id
+    ):
+        return False
+    started = session.exec(
+        select(MaterialUploadAttempt.id).where(
+            MaterialUploadAttempt.tenant_id == context.tenant_id,
+            MaterialUploadAttempt.material_id == material_id,
+        )
+    ).first()
+    if started is not None:
+        return False
+    _object_error(session, material, code)
+    return True
 
 
 def _source_access(
@@ -372,7 +428,19 @@ def run_source_upload(
     claim_seconds = UPLOAD_CLAIM_SECONDS if kind == "upload" else READ_CLAIM_SECONDS
     deadline = datetime.now(UTC) + timedelta(seconds=hard_limit - 5)
     with Session(database_engine) as session, session.begin():
-        material = _material(session, context, material_id, require_stored=False)
+        try:
+            material = _material(session, context, material_id, require_stored=False)
+        except DomainError as error:
+            if (
+                kind == "upload"
+                and operation_id is None
+                and error.code in {"action_forbidden", "tenant_forbidden"}
+                and _record_unsent_denial(
+                    session, context=context, material_id=material_id, code=error.code
+                )
+            ):
+                return
+            raise
         if operation_id:
             operation = session.exec(
                 select(MaterialAssetOperation)
@@ -635,6 +703,7 @@ def run_source_upload(
                                 md5=content_md5,
                             )
         with Session(database_engine) as session, session.begin():
+            _locked_material(session, context, material_id)
             operation = _locked_operation(session, context, operation_id)
             if operation.attempt_token != claim:
                 return
@@ -734,6 +803,7 @@ def run_source_upload(
     except Exception as error:
         # Never persist/raise raw SDK exceptions (tokens, URLs and file paths).
         with Session(database_engine) as session, session.begin():
+            _locked_material(session, context, material_id)
             operation = _locked_operation(session, context, operation_id)
             if operation.attempt_token != claim:
                 return
