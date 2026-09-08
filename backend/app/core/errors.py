@@ -3,6 +3,8 @@ from fastapi.responses import JSONResponse
 
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
+    "empty_title": 422,
+    "invalid_title": 422,
     "invalid_account_action": 422,
     "invalid_cursor": 422,
     "invalid_resolve_request": 422,
