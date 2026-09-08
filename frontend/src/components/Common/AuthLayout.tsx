@@ -1,26 +1,17 @@
-import { Appearance } from "@/components/Common/Appearance"
-import { Logo } from "@/components/Common/Logo"
-import { Footer } from "./Footer"
+import { WorkspaceBrand } from "./WorkspaceBrand"
 
-interface AuthLayoutProps {
-  children: React.ReactNode
-}
-
-export function AuthLayout({ children }: AuthLayoutProps) {
+export function AuthLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="grid min-h-svh lg:grid-cols-2">
-      <div className="bg-muted dark:bg-zinc-900 relative hidden lg:flex lg:items-center lg:justify-center">
-        <Logo variant="full" className="h-16" asLink={false} />
-      </div>
-      <div className="flex flex-col gap-4 p-6 md:p-10">
-        <div className="flex justify-end">
-          <Appearance />
-        </div>
-        <div className="flex flex-1 items-center justify-center">
-          <div className="w-full max-w-xs">{children}</div>
-        </div>
-        <Footer />
-      </div>
+    <div className="flex min-h-svh flex-col">
+      <header className="border-b bg-card px-6 py-5 md:px-10">
+        <WorkspaceBrand />
+      </header>
+      <main className="flex flex-1 items-center justify-center px-4 py-12">
+        <div className="w-full max-w-[420px]">{children}</div>
+      </main>
+      <footer className="p-6 text-center text-xs text-muted-foreground">
+        短剧投放 · TikTok 工作台
+      </footer>
     </div>
   )
 }

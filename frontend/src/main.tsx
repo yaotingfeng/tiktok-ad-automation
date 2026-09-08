@@ -5,12 +5,12 @@ import {
   QueryClientProvider,
 } from "@tanstack/react-query"
 import { createRouter, RouterProvider } from "@tanstack/react-router"
-import { AxiosError } from "axios"
 import { StrictMode } from "react"
 import ReactDOM from "react-dom/client"
 import { client } from "./client/client.gen"
 import { ThemeProvider } from "./components/theme-provider"
 import { Toaster } from "./components/ui/sonner"
+import { handleApiError } from "./lib/api-feedback"
 import "./index.css"
 import { routeTree } from "./routeTree.gen"
 
@@ -19,16 +19,15 @@ client.setConfig({
   auth: () => localStorage.getItem("access_token") || "",
 })
 
-const handleApiError = (error: Error) => {
-  if (
-    error instanceof AxiosError &&
-    [401, 403].includes(error.response?.status ?? 0)
-  ) {
-    localStorage.removeItem("access_token")
-    window.location.href = "/login"
-  }
-}
 const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: (count, error) =>
+        ![401, 403].includes(
+          (error as { response?: { status: number } }).response?.status ?? 0,
+        ) && count < 2,
+    },
+  },
   queryCache: new QueryCache({
     onError: handleApiError,
   }),
@@ -46,7 +45,7 @@ declare module "@tanstack/react-router" {
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <ThemeProvider defaultTheme="dark" storageKey="vite-ui-theme">
+    <ThemeProvider defaultTheme="light" storageKey="workbench-theme">
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
         <Toaster richColors closeButton />

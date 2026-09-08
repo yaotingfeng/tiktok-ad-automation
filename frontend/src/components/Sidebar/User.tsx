@@ -1,10 +1,12 @@
 import { Link as RouterLink } from "@tanstack/react-router"
 import { ChevronsUpDown, LogOut, Settings } from "lucide-react"
+import type { UserPublic } from "@/client"
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -20,7 +22,7 @@ import useAuth from "@/hooks/useAuth"
 import { getInitials } from "@/utils"
 
 interface UserInfoProps {
-  fullName?: string
+  fullName?: string | null
   email?: string
 }
 
@@ -28,19 +30,21 @@ function UserInfo({ fullName, email }: UserInfoProps) {
   return (
     <div className="flex items-center gap-2.5 w-full min-w-0">
       <Avatar className="size-8">
-        <AvatarFallback className="bg-zinc-600 text-white">
-          {getInitials(fullName || "User")}
+        <AvatarFallback>
+          {getInitials(fullName || email || "用户")}
         </AvatarFallback>
       </Avatar>
       <div className="flex flex-col items-start min-w-0">
-        <p className="text-sm font-medium truncate w-full">{fullName}</p>
+        <p className="text-sm font-medium truncate w-full">
+          {fullName || "当前用户"}
+        </p>
         <p className="text-xs text-muted-foreground truncate w-full">{email}</p>
       </div>
     </div>
   )
 }
 
-export function User({ user }: { user: any }) {
+export function User({ user }: { user?: UserPublic | null }) {
   const { logout } = useAuth()
   const { isMobile, setOpenMobile } = useSidebar()
 
@@ -79,16 +83,18 @@ export function User({ user }: { user: any }) {
               <UserInfo fullName={user?.full_name} email={user?.email} />
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <RouterLink to="/settings" onClick={handleMenuClick}>
-              <DropdownMenuItem>
-                <Settings />
-                User Settings
+            <DropdownMenuGroup>
+              <DropdownMenuItem asChild>
+                <RouterLink to="/settings" onClick={handleMenuClick}>
+                  <Settings />
+                  个人设置
+                </RouterLink>
               </DropdownMenuItem>
-            </RouterLink>
-            <DropdownMenuItem onClick={handleLogout}>
-              <LogOut />
-              Log Out
-            </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleLogout}>
+                <LogOut />
+                退出登录
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarMenuItem>

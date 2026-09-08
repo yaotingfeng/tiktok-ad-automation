@@ -5,9 +5,9 @@ import {
   type Body_login_login_access_token as AccessToken,
   LoginService,
   type UserPublic,
-  type UserRegister,
   UsersService,
 } from "@/client"
+import { clearApiFeedback } from "@/lib/api-feedback"
 import { handleError } from "@/utils"
 import useCustomToast from "./useCustomToast"
 
@@ -20,22 +20,14 @@ const useAuth = () => {
   const queryClient = useQueryClient()
   const { showErrorToast } = useCustomToast()
 
-  const { data: user } = useQuery<UserPublic | null, Error>({
+  const {
+    data: user,
+    error,
+    isPending,
+  } = useQuery<UserPublic | null, Error>({
     queryKey: ["currentUser"],
     queryFn: async () => (await UsersService.readUserMe()).data,
     enabled: isLoggedIn(),
-  })
-
-  const signUpMutation = useMutation({
-    mutationFn: (data: UserRegister) =>
-      UsersService.registerUser({ body: data }),
-    onSuccess: () => {
-      navigate({ to: "/login" })
-    },
-    onError: handleError.bind(showErrorToast),
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["users"] })
-    },
   })
 
   const login = async (data: AccessToken) => {
@@ -55,11 +47,14 @@ const useAuth = () => {
 
   const logout = () => {
     localStorage.removeItem("access_token")
+    queryClient.clear()
+    clearApiFeedback()
     navigate({ to: "/login" })
   }
 
   return {
-    signUpMutation,
+    error,
+    isPending,
     loginMutation,
     logout,
     user,

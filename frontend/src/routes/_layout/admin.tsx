@@ -1,12 +1,13 @@
 import { useSuspenseQuery } from "@tanstack/react-query"
-import { createFileRoute, redirect } from "@tanstack/react-router"
+import { createFileRoute } from "@tanstack/react-router"
 import { Suspense } from "react"
-
+import { ErrorBoundary } from "react-error-boundary"
 import { type UserPublic, UsersService } from "@/client"
 import AddUser from "@/components/Admin/AddUser"
 import { columns, type UserTableData } from "@/components/Admin/columns"
 import { DataTable } from "@/components/Common/DataTable"
 import PendingUsers from "@/components/Pending/PendingUsers"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import useAuth from "@/hooks/useAuth"
 
 function getUsersQueryOptions() {
@@ -19,18 +20,10 @@ function getUsersQueryOptions() {
 
 export const Route = createFileRoute("/_layout/admin")({
   component: Admin,
-  beforeLoad: async () => {
-    const { data: user } = await UsersService.readUserMe()
-    if (!user.is_superuser) {
-      throw redirect({
-        to: "/",
-      })
-    }
-  },
   head: () => ({
     meta: [
       {
-        title: "Admin - FastAPI Template",
+        title: "平台管理 · 短剧投放",
       },
     ],
   }),
@@ -50,20 +43,40 @@ function UsersTableContent() {
 
 function UsersTable() {
   return (
-    <Suspense fallback={<PendingUsers />}>
-      <UsersTableContent />
-    </Suspense>
+    <ErrorBoundary
+      fallback={
+        <Alert variant="destructive">
+          <AlertTitle>无法读取用户列表</AlertTitle>
+          <AlertDescription>请检查账号权限或稍后重试。</AlertDescription>
+        </Alert>
+      }
+    >
+      <Suspense fallback={<PendingUsers />}>
+        <UsersTableContent />
+      </Suspense>
+    </ErrorBoundary>
   )
 }
 
 function Admin() {
+  const { user } = useAuth()
+  if (!user) return null
+  if (!user.is_superuser)
+    return (
+      <Alert variant="destructive">
+        <AlertTitle>无操作权限</AlertTitle>
+        <AlertDescription>
+          仅平台管理员可管理用户。请联系管理员获取权限。
+        </AlertDescription>
+      </Alert>
+    )
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Users</h1>
+          <h1 className="workspace-title">平台管理</h1>
           <p className="text-muted-foreground">
-            Manage user accounts and permissions
+            管理平台用户账号。租户开通与成员分配将在租户管理中提供。
           </p>
         </div>
         <AddUser />

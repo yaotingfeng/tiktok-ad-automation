@@ -4,6 +4,7 @@ import type { LucideIcon } from "lucide-react"
 import {
   SidebarGroup,
   SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -17,10 +18,11 @@ export type Item = {
 }
 
 interface MainProps {
+  label?: string
   items: Item[]
 }
 
-export function Main({ items }: MainProps) {
+export function Main({ items, label }: MainProps) {
   const { isMobile, setOpenMobile } = useSidebar()
   const router = useRouterState()
   const currentPath = router.location.pathname
@@ -33,7 +35,8 @@ export function Main({ items }: MainProps) {
 
   return (
     <SidebarGroup>
-      <SidebarGroupContent>
+      {label && <SidebarGroupLabel>{label}</SidebarGroupLabel>}
+      <SidebarGroupContent role="navigation" aria-label={label ?? "平台入口"}>
         <SidebarMenu>
           {items.map((item) => {
             const isActive = currentPath === item.path
@@ -43,6 +46,7 @@ export function Main({ items }: MainProps) {
                 <SidebarMenuButton
                   tooltip={item.title}
                   isActive={isActive}
+                  aria-current={isActive ? "page" : undefined}
                   asChild
                 >
                   <RouterLink to={item.path} onClick={handleMenuClick}>

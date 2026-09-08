@@ -1,142 +1,144 @@
 import { zodResolver } from "@hookform/resolvers/zod"
-import {
-  createFileRoute,
-  Link as RouterLink,
-  redirect,
-} from "@tanstack/react-router"
+import { createFileRoute, Link, redirect } from "@tanstack/react-router"
+import { ArrowRight, Loader2 } from "lucide-react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
-
-import type { Body_login_login_access_token as AccessToken } from "@/client"
 import { AuthLayout } from "@/components/Common/AuthLayout"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Button } from "@/components/ui/button"
 import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/components/ui/form"
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  Field,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { LoadingButton } from "@/components/ui/loading-button"
-import { PasswordInput } from "@/components/ui/password-input"
 import useAuth, { isLoggedIn } from "@/hooks/useAuth"
 
 const formSchema = z.object({
-  username: z.email({ message: "Invalid email address" }),
-  password: z
-    .string()
-    .min(1, { message: "Password is required" })
-    .min(8, { message: "Password must be at least 8 characters" }),
-}) satisfies z.ZodType<AccessToken>
-
+  username: z.email({ message: "请输入有效的邮箱地址" }),
+  password: z.string().min(1, { message: "请输入密码" }),
+})
 type FormData = z.infer<typeof formSchema>
 
 export const Route = createFileRoute("/login")({
   component: Login,
-  beforeLoad: async () => {
-    if (isLoggedIn()) {
-      throw redirect({
-        to: "/",
-      })
-    }
+  beforeLoad: () => {
+    if (isLoggedIn()) throw redirect({ to: "/" })
   },
-  head: () => ({
-    meta: [
-      {
-        title: "Log In - FastAPI Template",
-      },
-    ],
-  }),
+  head: () => ({ meta: [{ title: "登录 · 短剧投放" }] }),
 })
-
 function Login() {
   const { loginMutation } = useAuth()
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
     mode: "onBlur",
-    criteriaMode: "all",
-    defaultValues: {
-      username: "",
-      password: "",
-    },
+    defaultValues: { username: "", password: "" },
   })
-
-  const onSubmit = (data: FormData) => {
-    if (loginMutation.isPending) return
-    loginMutation.mutate(data)
-  }
-
+  const { errors } = form.formState
   return (
     <AuthLayout>
-      <Form {...form}>
-        <form
-          onSubmit={form.handleSubmit(onSubmit)}
-          className="flex flex-col gap-6"
-        >
-          <div className="flex flex-col items-center gap-2 text-center">
-            <h1 className="text-2xl font-bold">Login to your account</h1>
-          </div>
-
-          <div className="grid gap-4">
-            <FormField
-              control={form.control}
-              name="username"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Email</FormLabel>
-                  <FormControl>
-                    <Input
-                      data-testid="email-input"
-                      placeholder="user@example.com"
-                      type="email"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage className="text-xs" />
-                </FormItem>
+      <Card>
+        <CardHeader>
+          <CardTitle>
+            <h1 className="workspace-title">登录工作台</h1>
+          </CardTitle>
+          <CardDescription>
+            使用管理员分配的账号，进入你的投放工作空间。
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form
+            noValidate
+            onSubmit={form.handleSubmit((data) => {
+              if (!loginMutation.isPending) loginMutation.mutate(data)
+            })}
+          >
+            <FieldGroup>
+              <Field data-invalid={!!errors.username}>
+                <FieldLabel htmlFor="email">邮箱</FieldLabel>
+                <Input
+                  id="email"
+                  data-testid="email-input"
+                  type="email"
+                  autoComplete="username"
+                  placeholder="name@company.com"
+                  aria-invalid={!!errors.username}
+                  aria-describedby={errors.username ? "email-error" : undefined}
+                  {...form.register("username")}
+                />
+                {errors.username && (
+                  <FieldError id="email-error" errors={[errors.username]} />
+                )}
+              </Field>
+              <Field data-invalid={!!errors.password}>
+                <div className="flex items-center justify-between gap-3">
+                  <FieldLabel htmlFor="password">密码</FieldLabel>
+                  <Link
+                    to="/recover-password"
+                    className="text-xs text-primary hover:underline"
+                  >
+                    忘记密码？
+                  </Link>
+                </div>
+                <Input
+                  id="password"
+                  data-testid="password-input"
+                  type="password"
+                  autoComplete="current-password"
+                  placeholder="请输入密码"
+                  aria-invalid={!!errors.password}
+                  aria-describedby={
+                    errors.password ? "password-error" : undefined
+                  }
+                  {...form.register("password")}
+                />
+                {errors.password && (
+                  <FieldError id="password-error" errors={[errors.password]} />
+                )}
+              </Field>
+              {loginMutation.isError && (
+                <Alert variant="destructive">
+                  <AlertDescription>
+                    登录失败，请检查邮箱和密码后重试。
+                  </AlertDescription>
+                </Alert>
               )}
-            />
-
-            <FormField
-              control={form.control}
-              name="password"
-              render={({ field }) => (
-                <FormItem>
-                  <div className="flex items-center">
-                    <FormLabel>Password</FormLabel>
-                    <RouterLink
-                      to="/recover-password"
-                      className="ml-auto text-sm underline-offset-4 hover:underline"
-                    >
-                      Forgot your password?
-                    </RouterLink>
-                  </div>
-                  <FormControl>
-                    <PasswordInput
-                      data-testid="password-input"
-                      placeholder="Password"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage className="text-xs" />
-                </FormItem>
-              )}
-            />
-
-            <LoadingButton type="submit" loading={loginMutation.isPending}>
-              Log In
-            </LoadingButton>
-          </div>
-
-          <div className="text-center text-sm">
-            Don't have an account yet?{" "}
-            <RouterLink to="/signup" className="underline underline-offset-4">
-              Sign up
-            </RouterLink>
-          </div>
-        </form>
-      </Form>
+              <Field>
+                <Button type="submit" disabled={loginMutation.isPending}>
+                  {loginMutation.isPending ? (
+                    <>
+                      <Loader2
+                        data-icon="inline-start"
+                        className="animate-spin"
+                      />
+                      正在登录…
+                    </>
+                  ) : (
+                    <>
+                      登录工作台
+                      <ArrowRight data-icon="inline-end" />
+                    </>
+                  )}
+                </Button>
+              </Field>
+            </FieldGroup>
+          </form>
+        </CardContent>
+        <CardFooter>
+          <p className="text-xs text-muted-foreground">
+            账号由平台管理员开通。如需接入，请联系管理员。
+          </p>
+        </CardFooter>
+      </Card>
     </AuthLayout>
   )
 }
