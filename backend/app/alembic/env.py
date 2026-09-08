@@ -26,6 +26,7 @@ from app.modules.accounts import models as accounts_models  # noqa: F401
 from app.modules.accounts import capability_models  # noqa: F401
 from app.modules.accounts import directory_models  # noqa: F401
 from app.modules.builds import execution_models  # noqa: F401
+from app.modules.builds import scene_job_models  # noqa: F401
 from app.modules.materials import models as materials_models  # noqa: F401
 from app.modules.providers import models as provider_models  # noqa: F401
 from app.modules.strategies import models as strategy_models  # noqa: F401

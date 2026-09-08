@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
@@ -133,6 +134,15 @@ class DraftUnitReservation(SQLModel, table=True):
 class SubmissionUnit(SQLModel, table=True):
     __tablename__ = "submission_unit"
     __table_args__ = (
+        Index(
+            "ix_submission_unit_dispatch",
+            "tenant_id",
+            "submission_id",
+            "unit_id",
+            postgresql_where=text(
+                "disposition = 'INCLUDED' AND (expanded = false OR dispatch_id IS NOT NULL)"
+            ),
+        ),
         submission_fk(),
         UniqueConstraint("tenant_id", "unit_id", name="uq_submission_frozen_unit"),
         CheckConstraint("dispatch_revision >= 0", name="ck_unit_dispatch_revision"),
@@ -183,6 +193,18 @@ class SubmissionUnit(SQLModel, table=True):
 class ExecutionStep(SQLModel, table=True):
     __tablename__ = "execution_step"
     __table_args__ = (
+        Index("ix_execution_scope_status", "tenant_id", "submission_id", "status"),
+        Index(
+            "ix_execution_unit_due",
+            "tenant_id",
+            "submission_id",
+            "unit_id",
+            "due_at",
+            "id",
+            postgresql_where=text(
+                "status IN ('PENDING','RETRYABLE','UNKNOWN','RUNNING')"
+            ),
+        ),
         submission_fk(),
         ForeignKeyConstraint(
             ["tenant_id", "submission_id", "preview_id", "bc_id", "unit_id"],
