@@ -81,6 +81,21 @@
       "doc_id": "1847839781968897",
       "url": "https://business-api.tiktok.com/portal/docs?id=1847839781968897",
       "markdown_sha256": "28c745c0b69d09e85216c164130260b1d1e8714e20980cc8ad8ce275c3d866ba"
+    },
+    {
+      "doc_id": "1739091950439426",
+      "url": "https://business-api.tiktok.com/portal/docs?id=1739091950439426",
+      "markdown_sha256": "7a78ad610f36f5a716a0dddff9f7530d76671cc56b3e48612df8b13f89603dd8"
+    },
+    {
+      "doc_id": "1739092113671170",
+      "url": "https://business-api.tiktok.com/portal/docs?id=1739092113671170",
+      "markdown_sha256": "be28c201156e6e42159aae3401f089a071b0fe4911e337b567ad1872286d7c6f"
+    },
+    {
+      "doc_id": "1740307296329730",
+      "url": "https://business-api.tiktok.com/portal/docs?id=1740307296329730",
+      "markdown_sha256": "03e95ac1f2445d725655b5886b7014f7bc8c01ab78492e3a19dbdd886c73c0d5"
     }
   ]
 }

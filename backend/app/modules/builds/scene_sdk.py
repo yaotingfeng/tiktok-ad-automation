@@ -16,7 +16,7 @@ from app.integrations.tiktok.sdk import checked_data
 from .scene_schemas import SceneResource
 
 SDK_REVISION = "f809c396520df2d7b201a9ccc5378d822b728ed3"
-CONTRACT_REVISION = "minis-docs-2026-09-09-v2"
+CONTRACT_REVISION = "minis-docs-2026-09-09-v3"
 ENDPOINTS = {
     "account_roles": "/open_api/v1.3/bc/asset/get/",
     "identity": "/open_api/v1.3/identity/get/",
@@ -129,6 +129,7 @@ def parse_page(
         if not isinstance(values, list) or len(values) > 50:
             raise _invalid()
         ids = set()
+        assets = []
         for item in values:
             if (
                 not isinstance(item, dict)
@@ -140,9 +141,15 @@ def parse_page(
                 ids.add(_string(value))
                 if len(ids) > 50:
                     raise _invalid()
+            assets.append(
+                {
+                    "asset_ids": sorted(set(item["asset_ids"])),
+                    "asset_content": _string(item.get("asset_content")),
+                }
+            )
         if len(ids) > 50:
             raise _invalid()
-        return {"asset_ids": sorted(ids)}, True, request_id
+        return {"asset_ids": sorted(ids), "recommend_assets": assets}, True, request_id
     if resource == "vbo":
         result: dict[str, Any] = {}
         for key in ("vo_status", "vo_min_roas", "roas_status_day0", "roas_status_day7"):

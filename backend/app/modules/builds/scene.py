@@ -590,9 +590,14 @@ def read_scene_context(
             "identity_selection_required" if identities else "identity_unavailable"
         )
     dynamic = available.get("cta")
-    if dynamic and dynamic.facts.get("asset_ids"):
+    if (
+        dynamic
+        and dynamic.facts.get("asset_ids")
+        and dynamic.facts.get("recommend_assets")
+    ):
         cta = {
             "asset_ids": dynamic.facts["asset_ids"],
+            "recommend_assets": dynamic.facts["recommend_assets"],
             "requires_portfolio_creation": True,
         }
     else:

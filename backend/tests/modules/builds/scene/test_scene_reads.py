@@ -303,7 +303,8 @@ def test_complete_scene_keeps_missing_copy_limit_blocked_and_exact_wire(
                 "recommend_assets": [
                     {
                         "asset_ids": ["cta-2", "cta-1"],
-                        "asset_content": "private text excluded",
+                        "asset_content": "Watch now",
+                        "unneeded_description": "private text excluded",
                     }
                 ]
             },
@@ -315,6 +316,9 @@ def test_complete_scene_keeps_missing_copy_limit_blocked_and_exact_wire(
     result = read(scene_env)
     assert result.reason_codes == ("field_limits_unverified",)
     assert result.cta_fields["asset_ids"] == ("cta-1", "cta-2")
+    assert result.cta_fields["recommend_assets"] == (
+        {"asset_ids": ("cta-1", "cta-2"), "asset_content": "Watch now"},
+    )
     assert result.creative_fields["creative_info"]["identity_id"] == "identity-1"
     assert result.field_constraints["allowed_region_codes"] == ("CA", "US")
     assert len(result.evidence_ids) == 5

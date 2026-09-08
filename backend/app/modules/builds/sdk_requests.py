@@ -9,6 +9,7 @@ ASGI event-loop thread. No request or auth token is stored or logged here.
 
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,6 +37,82 @@ PROTECTED = frozenset(
         "operation_status",
     }
 )
+PORTFOLIO_ENDPOINT = "/open_api/v1.3/creative/portfolio/create/"
+
+
+def _nonempty(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def ad_assets(
+    mappings: Sequence[dict[str, str]],
+    *,
+    text: str,
+    url: str,
+    identity: dict[str, str],
+) -> dict[str, Any]:
+    """One SP text, the whole group, and verified target-account video/cover IDs."""
+    if not mappings:
+        raise DomainError("empty_material_group", "素材组不能为空")
+    if (
+        len(mappings) > 50
+        or not _nonempty(text)
+        or not _nonempty(url)
+        or set(identity)
+        != {"identity_type", "identity_id", "identity_authorized_bc_id"}
+        or identity.get("identity_type") != "BC_AUTH_TT"
+        or not all(_nonempty(value) for value in identity.values())
+    ):
+        raise DomainError("invalid_build_request", "创意信息无效")
+    creatives = []
+    for item in mappings:
+        if not _nonempty(item.get("video_id")) or not _nonempty(item.get("image_id")):
+            raise DomainError("target_asset_incomplete", "目标账户素材尚未核实")
+        creatives.append(
+            {
+                "creative_info": {
+                    **identity,
+                    "ad_format": "SINGLE_VIDEO",
+                    "video_info": {"video_id": item["video_id"]},
+                    "image_info": [{"web_uri": item["image_id"]}],
+                }
+            }
+        )
+    return {
+        "creative_list": creatives,
+        "ad_text_list": [{"ad_text": text}],
+        "landing_page_url_list": [{"landing_page_url": url}],
+    }
+
+
+def cta_portfolio(
+    *, advertiser_id: str, assets: Sequence[dict[str, Any]]
+) -> dict[str, Any]:
+    """Keep the recommended CTA text bound to its actual asset IDs."""
+    if not _nonempty(advertiser_id) or not 1 <= len(assets) <= 50:
+        raise DomainError("cta_unavailable", "缺少当前账户的 CTA 推荐证据")
+    content = []
+    seen: set[str] = set()
+    for asset in assets:
+        ids = asset.get("asset_ids")
+        if (
+            not _nonempty(asset.get("asset_content"))
+            or not isinstance(ids, (tuple, list))
+            or not 1 <= len(ids) <= 50
+            or not all(_nonempty(value) for value in ids)
+        ):
+            raise DomainError("cta_unavailable", "CTA 推荐证据不完整")
+        seen.update(ids)
+        content.append(
+            {"asset_ids": list(ids), "asset_content": asset["asset_content"]}
+        )
+    if len(seen) > 50:
+        raise DomainError("cta_unavailable", "CTA 推荐证据超出支持范围")
+    return {
+        "advertiser_id": advertiser_id,
+        "creative_portfolio_type": "CTA",
+        "portfolio_content": content,
+    }
 
 
 @dataclass(frozen=True)
@@ -122,6 +199,36 @@ def invoke_create(client: Any, *, kind: str, body: dict[str, Any]) -> RemoteCrea
         raise TikTokResponseError(
             code=-1, request_id=None, reason="create_result_unknown"
         ) from None
+    return _created(response, id_key=ID_KEYS[kind])
+
+
+def invoke_portfolio(client: Any, *, body: dict[str, Any]) -> RemoteCreated:
+    """One separately armed external effect; the same unknown-result rules apply."""
+    canonical = cta_portfolio(
+        advertiser_id=body.get("advertiser_id", ""),
+        assets=body.get("portfolio_content", ()),
+    )
+    if canonical != body:
+        raise DomainError("invalid_build_request", "CTA 请求必须使用已保存的推荐信息")
+    try:
+        response = (
+            sdk.CreativeManagementApi(client)
+            .creative_portfolio_create(
+                client.default_headers["Access-Token"],
+                body=canonical,
+                async_req=True,
+                _request_timeout=(5, 30),
+            )
+            .get()
+        )
+    except Exception:
+        raise TikTokResponseError(
+            code=-1, request_id=None, reason="create_result_unknown"
+        ) from None
+    return _created(response, id_key="creative_portfolio_id")
+
+
+def _created(response: object, *, id_key: str) -> RemoteCreated:
     raw_code = getattr(response, "code", None)
     request_id = _request_id(getattr(response, "request_id", None))
     if type(raw_code) is not int:
@@ -133,7 +240,7 @@ def invoke_create(client: Any, *, kind: str, body: dict[str, Any]) -> RemoteCrea
             code=raw_code, request_id=request_id, reason="tiktok_create_rejected"
         )
     data = getattr(response, "data", None)
-    remote_id = data.get(ID_KEYS[kind]) if isinstance(data, dict) else None
+    remote_id = data.get(id_key) if isinstance(data, dict) else None
     if not isinstance(remote_id, str) or not remote_id.strip() or len(remote_id) > 255:
         raise TikTokResponseError(
             code=0, request_id=request_id, reason="create_result_unknown"

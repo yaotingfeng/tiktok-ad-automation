@@ -1,6 +1,6 @@
 # Smart+ Minis scene evidence
 
-Implementation contract: `minis-docs-2026-09-09-v2`. SDK pin:
+Implementation contract: `minis-docs-2026-09-09-v3`. SDK pin:
 `f809c396520df2d7b201a9ccc5378d822b728ed3`.
 The public documentation was read on 2026-09-09 through TikTok's unauthenticated
 portal documentation service. `tiktok-minis-source-hashes.json` records SHA-256 of
@@ -167,3 +167,28 @@ shape. Separately, `test_sdk_contract.py` intercepts urllib3 beneath the real
 pinned SDK to verify all three JSON POSTs, ENABLE, unmodeled Minis retention,
 nonzero structured errors, missing IDs, no retry, secret-free exceptions, and
 waiting for transport completion before owned client cleanup.
+
+## Executable target creatives and dynamic CTA
+
+The [dynamic CTA guide](https://business-api.tiktok.com/portal/docs?id=1740307296329730)
+and [portfolio create](https://business-api.tiktok.com/portal/docs?id=1739091950439426)
+require each recommended `asset_content` to remain bound to its actual `asset_ids`.
+Contract v3 retains only those two fields from each recommendation, plus the
+flattened IDs used by preview selection. Generic extra response metadata is dropped.
+CTA text is public creative content, not an authentication secret. Old v2 evidence
+is invalidated by the scene basis revision.
+
+`cta_portfolio` compiles `creative_portfolio_type=CTA` and the bound recommended
+content. `invoke_portfolio` uses the pinned generated `CreativeManagementApi`
+(the package exports this class), awaits its official future, and expects
+`creative_portfolio_id`. Missing IDs and nonzero responses remain unknown outcomes.
+The separate CTA step is never counted as an advertising object. The
+[portfolio get](https://business-api.tiktok.com/portal/docs?id=1739092113671170)
+endpoint can read an already known portfolio ID; the list endpoint cannot recover
+an unknown CTA ID by absence.
+
+`ad_assets` uses every target-account video and verified cover in a material
+group for each SP, with one frozen ad text and URL. Identity cannot overwrite
+video/cover/ad-format fields. Empty or incomplete mappings fail before a request
+is armed. The eight new offline asset/wire cases and existing 26 official SDK
+contracts pass; together with the 58 scene tests this change passed 92 cases.
