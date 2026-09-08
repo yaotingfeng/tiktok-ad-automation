@@ -47,10 +47,15 @@ UNRESOLVED = ("pending", "sending", "result_unknown", "verifying", "confirmed_ab
 
 
 def _material(
-    session: Session, context: TenantContext, material_id: UUID
+    session: Session,
+    context: TenantContext,
+    material_id: UUID,
+    *,
+    action: str = "upload",
+    require_stored: bool = True,
 ) -> MaterialFile:
     require_tenant(
-        session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="upload"
+        session, actor_id=context.actor_id, tenant_id=context.tenant_id, action=action
     )
     row = session.exec(
         select(MaterialFile)
@@ -61,7 +66,7 @@ def _material(
     ).first()
     if row is None:
         raise DomainError("material_not_found", "未找到当前租户素材")
-    if row.storage_state != "stored":
+    if require_stored and row.storage_state != "stored":
         raise DomainError("original_unavailable", "素材原文件尚未完整入库")
     return row
 
@@ -81,9 +86,21 @@ def reserve_asset_operation(
     material_id: UUID,
     advertiser_id: str,
     path: str,
+    action: str = "upload",
 ) -> MaterialAssetOperation:
     """Caller transaction owns the file row lock; shared with Task4 writers."""
-    material = _material(session, context, material_id)
+    if action not in {"upload", "build"}:
+        raise DomainError("invalid_account_action", "素材操作动作无效")
+    material = _material(
+        session, context, material_id, action=action, require_stored=action == "upload"
+    )
+    resolve_account_access(
+        session,
+        context=context,
+        bc_id=material.bc_id,
+        advertiser_id=advertiser_id,
+        action=action,
+    )
     if path not in {"upload_original", "share_source"}:
         raise DomainError("invalid_asset_path", "素材准备路径无效")
     existing = session.exec(
@@ -355,7 +372,7 @@ def run_source_upload(
     claim_seconds = UPLOAD_CLAIM_SECONDS if kind == "upload" else READ_CLAIM_SECONDS
     deadline = datetime.now(UTC) + timedelta(seconds=hard_limit - 5)
     with Session(database_engine) as session, session.begin():
-        material = _material(session, context, material_id)
+        material = _material(session, context, material_id, require_stored=False)
         if operation_id:
             operation = session.exec(
                 select(MaterialAssetOperation)
@@ -550,6 +567,11 @@ def run_source_upload(
                 policy=policy,
             ):
                 with Session(database_engine) as session:
+                    # Every phase that updates file metadata locks file before
+                    # operation, matching initial claim and duplicate delivery.
+                    sending_material = _material(
+                        session, context, material_id, require_stored=False
+                    )
                     operation = _locked_operation(session, context, operation_id)
                     if operation.attempt_token != claim:
                         return
@@ -564,8 +586,6 @@ def run_source_upload(
                                 retryable=True,
                             )
                         if original:
-                            sending_material = session.get(MaterialFile, material_id)
-                            assert sending_material
                             sending_material.sha256, sending_material.video_md5 = (
                                 original.sha256,
                                 original.md5,
