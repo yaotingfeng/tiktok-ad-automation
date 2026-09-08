@@ -181,3 +181,13 @@ class SubmissionAdPublic(BaseModel):
 class SubmissionEventPublic(EvidencePublic):
     unit_id: UUID
     kind: str
+
+
+class SubmissionMaterialPublic(BaseModel):
+    material_id: UUID
+    position: int
+    file_name: str
+    preview_available: bool
+    video_id: str | None
+    image_id: str | None
+    step: StepPublic | None

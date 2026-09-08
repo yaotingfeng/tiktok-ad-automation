@@ -14,6 +14,7 @@ from app.modules.builds.execution_schemas import (
     SubmissionEventPublic,
     SubmissionGroupPublic,
     SubmissionListItem,
+    SubmissionMaterialPublic,
 )
 from app.modules.tenants.permissions import require_tenant
 
@@ -135,6 +136,35 @@ def get_submission_events(
         context=context,
         submission_id=submission_id,
         step_id=step_id,
+        cursor=cursor,
+        limit=limit,
+    )
+
+
+@router.get(
+    "/submissions/{submission_id}/units/{unit_id}/groups/{group_id}/materials",
+    response_model=Page[SubmissionMaterialPublic],
+    operation_id="builds-get_submission_materials",
+)
+def get_submission_materials(
+    tenant_id: UUID,
+    submission_id: UUID,
+    unit_id: UUID,
+    group_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    cursor: Cursor = None,
+    limit: Limit = 50,
+) -> Page[SubmissionMaterialPublic]:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    return catalog.get_submission_materials(
+        session,
+        context=context,
+        submission_id=submission_id,
+        unit_id=unit_id,
+        group_id=group_id,
         cursor=cursor,
         limit=limit,
     )

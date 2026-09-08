@@ -20,7 +20,9 @@ from app.modules.builds.execution_schemas import (
     SubmissionEventPublic,
     SubmissionGroupPublic,
     SubmissionListItem,
+    SubmissionMaterialPublic,
     SubmissionMetadata,
+    SubmissionUnitPublic,
 )
 from app.modules.builds.submissions import _page_scope, authorize, submission_row
 
@@ -476,7 +478,7 @@ def enrich_units(
     context: TenantContext,
     submission_id: UUID,
     preview_id: UUID,
-    items: list,
+    items: list[SubmissionUnitPublic],
 ) -> None:
     if not items:
         return
@@ -559,3 +561,97 @@ def enrich_steps(
     for item in items:
         for key in ["title", "advertiser_id", "group_no", "creative_no"]:
             setattr(item, key, indexed[item.step_id][key])
+
+
+def get_submission_materials(
+    session: Session,
+    *,
+    context: TenantContext,
+    submission_id: UUID,
+    unit_id: UUID,
+    group_id: UUID,
+    cursor: str | None = None,
+    limit: int = 50,
+) -> Page[SubmissionMaterialPublic]:
+
+    authorize(session, context)
+    submission = submission_row(session, context, submission_id)
+    scope, _ = _page_scope(
+        context,
+        submission,
+        "group_materials",
+        limit,
+        None,
+        {"unit": str(unit_id), "group": str(group_id)},
+    )
+    raw = decode_cursor(cursor, scope=scope)
+    try:
+        after = int(raw) if raw else 0
+        if after < 0:
+            raise ValueError
+    except ValueError, TypeError:
+        raise DomainError("invalid_cursor", "分页游标无效") from None
+    params = {
+        "tenant": context.tenant_id,
+        "submission": submission_id,
+        "preview": submission.preview_id,
+        "unit": unit_id,
+        "group": group_id,
+        "after": after,
+        "size": limit + 1,
+    }
+    group = (
+        cast(SASession, session)
+        .execute(
+            text(
+                "SELECT id FROM planned_group WHERE tenant_id=:tenant AND preview_id=:preview AND unit_id=:unit AND id=:group"
+            ),
+            params,
+        )
+        .first()
+    )
+    if not group:
+        raise DomainError("resource_not_found", "素材组不存在")
+    rows = (
+        cast(SASession, session)
+        .execute(
+            text(
+                """WITH page AS (
+ SELECT m.* FROM planned_group g JOIN preview_group_material m ON m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id AND m.drama_id=g.drama_id AND m.group_no=g.group_no
+ WHERE g.tenant_id=:tenant AND g.preview_id=:preview AND g.unit_id=:unit AND g.id=:group AND m.position>:after ORDER BY m.position LIMIT :size)
+ SELECT m.material_id,m.position,f.file_name,f.storage_state='stored' preview_available,
+ CASE WHEN e.status='SUCCEEDED' THEN e.resolved->'mapping'->>'video_id' ELSE NULL END video_id,
+ CASE WHEN e.status='SUCCEEDED' THEN e.resolved->'mapping'->>'image_id' ELSE NULL END image_id,
+ """
+                + STEP_JSON
+                + """ step FROM page m JOIN material_file f ON f.tenant_id=m.tenant_id AND f.bc_id=m.bc_id AND f.id=m.material_id
+ LEFT JOIN execution_step e ON e.tenant_id=m.tenant_id AND e.submission_id=:submission AND e.unit_id=:unit AND e.kind='MATERIAL' AND e.material_id=m.material_id ORDER BY m.position"""
+            ),
+            params,
+        )
+        .mappings()
+        .all()
+    )
+    items = [
+        SubmissionMaterialPublic(
+            **{
+                k: r[k]
+                for k in [
+                    "material_id",
+                    "position",
+                    "file_name",
+                    "preview_available",
+                    "video_id",
+                    "image_id",
+                ]
+            },
+            step=step_public(r),
+        )
+        for r in rows[:limit]
+    ]
+    return Page(
+        items=items,
+        next_cursor=encode_cursor(scope=scope, last_id=str(items[-1].position))
+        if len(rows) > limit
+        else None,
+    )

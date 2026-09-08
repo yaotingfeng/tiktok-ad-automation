@@ -508,3 +508,74 @@ def test_list_uses_one_page_aggregate_not_per_task_queries(session, context, fro
         assert len([s for s in statements if "result_counts AS" in s]) == 1
     finally:
         event.remove(connection, "before_cursor_execute", observe)
+
+
+def test_group_materials_page_returns_only_actual_target_mapping(
+    session, context, frozen
+):
+    from sqlmodel import select
+
+    from app.modules.builds.execution_models import ExecutionStep
+
+    identity = expanded(session, context, frozen)
+    unit = submissions.get_submission_units(
+        session, context=context, submission_id=identity, limit=1
+    ).items[0]
+    group = submission_catalog.get_submission_groups(
+        session, context=context, submission_id=identity, unit_id=unit.unit_id, limit=1
+    ).items[0]
+    first = submission_catalog.get_submission_materials(
+        session,
+        context=context,
+        submission_id=identity,
+        unit_id=unit.unit_id,
+        group_id=group.group_id,
+        limit=1,
+    )
+    assert (
+        len(first.items) == 1 and first.next_cursor and first.items[0].video_id is None
+    )
+    item = first.items[0]
+    step = session.exec(
+        select(ExecutionStep).where(
+            ExecutionStep.unit_id == unit.unit_id,
+            ExecutionStep.material_id == item.material_id,
+            ExecutionStep.kind == "MATERIAL",
+        )
+    ).first()
+    step.status = "SUCCEEDED"
+    step.resolved = {
+        "mapping": {
+            "video_id": "actual-target-video",
+            "image_id": "actual-target-cover",
+            "secret": "never-public",
+        }
+    }
+    session.add(step)
+    session.flush()
+    reread = submission_catalog.get_submission_materials(
+        session,
+        context=context,
+        submission_id=identity,
+        unit_id=unit.unit_id,
+        group_id=group.group_id,
+        limit=1,
+    )
+    assert (
+        reread.items[0].video_id == "actual-target-video"
+        and reread.items[0].image_id == "actual-target-cover"
+    )
+    assert "never-public" not in reread.model_dump_json()
+    tail = submission_catalog.get_submission_materials(
+        session,
+        context=context,
+        submission_id=identity,
+        unit_id=unit.unit_id,
+        group_id=group.group_id,
+        limit=1,
+        cursor=first.next_cursor,
+    )
+    assert (
+        tail.items[0].position > item.position
+        and tail.items[0].material_id != item.material_id
+    )
