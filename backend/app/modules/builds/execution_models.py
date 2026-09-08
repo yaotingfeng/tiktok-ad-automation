@@ -134,6 +134,9 @@ class SubmissionUnit(SQLModel, table=True):
     __tablename__ = "submission_unit"
     __table_args__ = (
         submission_fk(),
+        UniqueConstraint("tenant_id", "unit_id", name="uq_submission_frozen_unit"),
+        CheckConstraint("dispatch_revision >= 0", name="ck_unit_dispatch_revision"),
+        Index("ix_unit_dispatch_repair", "expanded", "repair_after", "unit_id"),
         ForeignKeyConstraint(
             ["tenant_id", "unit_id", "preview_id", "bc_id"],
             [
@@ -164,6 +167,17 @@ class SubmissionUnit(SQLModel, table=True):
     disposition: str
     reason_code: str | None = None
     expanded: bool = False
+
+    dispatch_revision: int = 0
+    dispatch_id: UUID | None = Field(default=None, foreign_key="pending_dispatch.id")
+    due_at: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+    repair_after: datetime = Field(
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
 
 
 class ExecutionStep(SQLModel, table=True):
@@ -226,6 +240,10 @@ class ExecutionStep(SQLModel, table=True):
             name="ck_step_request_intent",
         ),
         CheckConstraint(
+            "request_body IS NULL OR jsonb_typeof(request_body) = 'object'",
+            name="ck_step_body_object",
+        ),
+        CheckConstraint(
             "remote_id IS NULL OR length(trim(remote_id)) > 0", name="ck_step_remote_id"
         ),
         Index("ix_execution_step_due", "status", "due_at", "id"),
@@ -262,7 +280,7 @@ class ExecutionStep(SQLModel, table=True):
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
     request_body: dict[str, Any] | None = Field(
-        default=None, sa_column=Column(JSONB, nullable=True)
+        default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True)
     )
     request_body_digest: str | None = Field(default=None, max_length=64)
     resolved: dict[str, Any] = Field(
