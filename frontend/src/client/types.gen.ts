@@ -1023,6 +1023,24 @@ export type NewPassword = {
 };
 
 /**
+ * ObjectCounts
+ */
+export type ObjectCounts = {
+    /**
+     * Campaign Count
+     */
+    campaign_count?: number;
+    /**
+     * Adgroup Count
+     */
+    adgroup_count?: number;
+    /**
+     * Ad Count
+     */
+    ad_count?: number;
+};
+
+/**
  * Page[AccountAsset]
  */
 export type Page_AccountAsset_ = {
@@ -1261,6 +1279,20 @@ export type Page_ResolvedLink_ = {
 };
 
 /**
+ * Page[StepPublic]
+ */
+export type Page_StepPublic_ = {
+    /**
+     * Items
+     */
+    items: Array<StepPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
  * Page[StrategyPublic]
  */
 export type Page_StrategyPublic_ = {
@@ -1268,6 +1300,20 @@ export type Page_StrategyPublic_ = {
      * Items
      */
     items: Array<StrategyPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
+ * Page[SubmissionUnitPublic]
+ */
+export type Page_SubmissionUnitPublic_ = {
+    /**
+     * Items
+     */
+    items: Array<SubmissionUnitPublic>;
     /**
      * Next Cursor
      */
@@ -1865,6 +1911,32 @@ export type ProviderLinkPublic = {
 };
 
 /**
+ * Recovery
+ */
+export type Recovery = {
+    /**
+     * Retryable Step Count
+     */
+    retryable_step_count?: number;
+    /**
+     * Reconcilable Step Count
+     */
+    reconcilable_step_count?: number;
+    /**
+     * Can Retry
+     */
+    can_retry?: boolean;
+    /**
+     * Can Reconcile
+     */
+    can_reconcile?: boolean;
+    /**
+     * Reasons
+     */
+    reasons?: Array<string>;
+};
+
+/**
  * ResolveRequest
  */
 export type ResolveRequest = {
@@ -2031,6 +2103,64 @@ export type SignedPreview = {
 };
 
 /**
+ * StepPublic
+ */
+export type StepPublic = {
+    /**
+     * Step Id
+     */
+    step_id: string;
+    /**
+     * Unit Id
+     */
+    unit_id: string;
+    /**
+     * Kind
+     */
+    kind: string;
+    /**
+     * Group Id
+     */
+    group_id: string | null;
+    /**
+     * Planned Ad Id
+     */
+    planned_ad_id: string | null;
+    /**
+     * Material Id
+     */
+    material_id: string | null;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Remote Id
+     */
+    remote_id: string | null;
+    /**
+     * Error Code
+     */
+    error_code: string | null;
+    /**
+     * Operation Status
+     */
+    operation_status: string | null;
+    /**
+     * Review Status
+     */
+    review_status: string | null;
+    /**
+     * Mismatch
+     */
+    mismatch: boolean;
+    /**
+     * Checked At
+     */
+    checked_at: string | null;
+};
+
+/**
  * StrategyConfig
  */
 export type StrategyConfig_Input = {
@@ -2149,6 +2279,144 @@ export type StrategyStateRequest = {
      * Active
      */
     active: boolean;
+};
+
+/**
+ * SubmissionReceipt
+ */
+export type SubmissionReceipt = {
+    /**
+     * Submission Id
+     */
+    submission_id: string;
+    /**
+     * Status
+     */
+    status: string;
+};
+
+/**
+ * SubmissionUnitPublic
+ */
+export type SubmissionUnitPublic = {
+    /**
+     * Unit Id
+     */
+    unit_id: string;
+    /**
+     * Drama Id
+     */
+    drama_id: string;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Advertiser Id
+     */
+    advertiser_id: string;
+    /**
+     * Campaign Name
+     */
+    campaign_name: string;
+    /**
+     * Disposition
+     */
+    disposition: string;
+    /**
+     * Reason Codes
+     */
+    reason_codes: Array<string>;
+    /**
+     * Expanded
+     */
+    expanded: boolean;
+};
+
+/**
+ * SubmissionView
+ */
+export type SubmissionView = {
+    /**
+     * Submission Id
+     */
+    submission_id: string;
+    /**
+     * Preview Id
+     */
+    preview_id: string;
+    /**
+     * Draft Id
+     */
+    draft_id: string;
+    /**
+     * Batch Short Id
+     */
+    batch_short_id: string;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Expanded
+     */
+    expanded: boolean;
+    /**
+     * Currency
+     */
+    currency: string;
+    /**
+     * Daily Budget Sum
+     */
+    daily_budget_sum: string;
+    planned: ObjectCounts;
+    submitted: ObjectCounts;
+    succeeded: ObjectCounts;
+    failed: ObjectCounts;
+    excluded: ObjectCounts;
+    unknown: ObjectCounts;
+    pending: ObjectCounts;
+    /**
+     * Stage Counts
+     */
+    stage_counts: {
+        [key: string]: number;
+    };
+    /**
+     * Excluded Unit Count
+     */
+    excluded_unit_count: number;
+    /**
+     * Drama Count
+     */
+    drama_count: number;
+    /**
+     * Account Count
+     */
+    account_count: number;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Updated At
+     */
+    updated_at: string;
+    recovery?: Recovery;
+};
+
+/**
+ * SubmitRequest
+ */
+export type SubmitRequest = {
+    /**
+     * Request Id
+     */
+    request_id: string;
 };
 
 /**
@@ -5736,3 +6004,266 @@ export type buildsPreviewDramasResponses = {
 };
 
 export type buildsPreviewDramasResponse = buildsPreviewDramasResponses[keyof buildsPreviewDramasResponses];
+
+export type buildsSavedSubmissionData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Request Id
+         */
+        request_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/submission-requests/{request_id}';
+};
+
+export type buildsSavedSubmissionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsSavedSubmissionError = buildsSavedSubmissionErrors[keyof buildsSavedSubmissionErrors];
+
+export type buildsSavedSubmissionResponses = {
+    /**
+     * Successful Response
+     */
+    200: SubmissionReceipt;
+};
+
+export type buildsSavedSubmissionResponse = buildsSavedSubmissionResponses[keyof buildsSavedSubmissionResponses];
+
+export type buildsSubmitPreviewData = {
+    body: SubmitRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Preview Id
+         */
+        preview_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-previews/{preview_id}/submit';
+};
+
+export type buildsSubmitPreviewErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsSubmitPreviewError = buildsSubmitPreviewErrors[keyof buildsSubmitPreviewErrors];
+
+export type buildsSubmitPreviewResponses = {
+    /**
+     * Successful Response
+     */
+    202: SubmissionReceipt;
+};
+
+export type buildsSubmitPreviewResponse = buildsSubmitPreviewResponses[keyof buildsSubmitPreviewResponses];
+
+export type buildsGetSubmissionData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Submission Id
+         */
+        submission_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/submissions/{submission_id}';
+};
+
+export type buildsGetSubmissionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsGetSubmissionError = buildsGetSubmissionErrors[keyof buildsGetSubmissionErrors];
+
+export type buildsGetSubmissionResponses = {
+    /**
+     * Successful Response
+     */
+    200: SubmissionView;
+};
+
+export type buildsGetSubmissionResponse = buildsGetSubmissionResponses[keyof buildsGetSubmissionResponses];
+
+export type buildsGetSubmissionUnitsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Submission Id
+         */
+        submission_id: string;
+    };
+    query?: {
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+        /**
+         * Advertiser Id
+         */
+        advertiser_id?: string | null;
+        /**
+         * Drama Id
+         */
+        drama_id?: string | null;
+    };
+    url: '/api/tenants/{tenant_id}/submissions/{submission_id}/units';
+};
+
+export type buildsGetSubmissionUnitsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsGetSubmissionUnitsError = buildsGetSubmissionUnitsErrors[keyof buildsGetSubmissionUnitsErrors];
+
+export type buildsGetSubmissionUnitsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_SubmissionUnitPublic_;
+};
+
+export type buildsGetSubmissionUnitsResponse = buildsGetSubmissionUnitsResponses[keyof buildsGetSubmissionUnitsResponses];
+
+export type buildsGetSubmissionExcludedData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Submission Id
+         */
+        submission_id: string;
+    };
+    query?: {
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+        /**
+         * Advertiser Id
+         */
+        advertiser_id?: string | null;
+        /**
+         * Drama Id
+         */
+        drama_id?: string | null;
+    };
+    url: '/api/tenants/{tenant_id}/submissions/{submission_id}/excluded';
+};
+
+export type buildsGetSubmissionExcludedErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsGetSubmissionExcludedError = buildsGetSubmissionExcludedErrors[keyof buildsGetSubmissionExcludedErrors];
+
+export type buildsGetSubmissionExcludedResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_SubmissionUnitPublic_;
+};
+
+export type buildsGetSubmissionExcludedResponse = buildsGetSubmissionExcludedResponses[keyof buildsGetSubmissionExcludedResponses];
+
+export type buildsGetSubmissionStepsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Submission Id
+         */
+        submission_id: string;
+    };
+    query?: {
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+        /**
+         * Advertiser Id
+         */
+        advertiser_id?: string | null;
+        /**
+         * Drama Id
+         */
+        drama_id?: string | null;
+        /**
+         * Kind
+         */
+        kind?: string | null;
+        /**
+         * Result
+         */
+        result?: string | null;
+    };
+    url: '/api/tenants/{tenant_id}/submissions/{submission_id}/steps';
+};
+
+export type buildsGetSubmissionStepsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsGetSubmissionStepsError = buildsGetSubmissionStepsErrors[keyof buildsGetSubmissionStepsErrors];
+
+export type buildsGetSubmissionStepsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_StepPublic_;
+};
+
+export type buildsGetSubmissionStepsResponse = buildsGetSubmissionStepsResponses[keyof buildsGetSubmissionStepsResponses];
