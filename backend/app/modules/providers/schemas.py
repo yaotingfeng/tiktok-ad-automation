@@ -7,6 +7,7 @@ ProviderApplication row UUID nor the separately discovered TikTok Minis ID.
 import hashlib
 import json
 import math
+from datetime import datetime
 from typing import Any, Literal, Self
 from uuid import UUID
 
@@ -122,3 +123,52 @@ def link_reuse_key(
         allow_nan=False,
     )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+class ProviderConnectionCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: ProviderKind
+    display_name: str = Field(min_length=1, max_length=255)
+    credentials: dict[str, str] = Field(repr=False)
+
+
+class ProviderConnectionUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    display_name: str | None = Field(default=None, min_length=1, max_length=255)
+    credentials: dict[str, str] | None = Field(default=None, repr=False)
+    status: Literal["disabled"] | None = None
+
+
+class ProviderConnectionPublic(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    kind: str
+    display_name: str
+    status: str
+    verified_at: datetime | None = None
+    error_code: str | None = None
+
+
+class ProviderApplicationPublic(BaseModel):
+    external_id: str
+    name: str
+    tiktok_minis_id: str | None = None
+    available: bool
+
+
+class LinkPreparationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    connection_id: UUID
+    application_id: str = Field(min_length=1, max_length=255)
+    lines: list[str] = Field(min_length=1, max_length=1000)
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class PreparationAccepted(BaseModel):
+    task_id: UUID
+
+
+class CandidateSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    external_drama_id: str = Field(min_length=1, max_length=255)

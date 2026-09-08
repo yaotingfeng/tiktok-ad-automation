@@ -12,16 +12,25 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_ignore_result=True,
     result_backend=None,
-    imports=("app.jobs.tasks", "app.modules.accounts.tasks"),
+    imports=(
+        "app.jobs.tasks",
+        "app.modules.accounts.tasks",
+        "app.modules.providers.tasks",
+    ),
     task_queues=(Queue("resources"), Queue("builds"), Queue("control")),
     task_default_queue="control",
     task_create_missing_queues=False,
     task_routes={"jobs.flush_dispatch": {"queue": "control"}},
     beat_schedule={
+        "recover-provider-preparations": {
+            "task": "providers.recover_preparations",
+            "schedule": 15.0,
+            "options": {"queue": "control"},
+        },
         "flush-dispatch": {
             "task": "jobs.flush_dispatch",
             "schedule": 5.0,
             "options": {"queue": "control"},
-        }
+        },
     },
 )

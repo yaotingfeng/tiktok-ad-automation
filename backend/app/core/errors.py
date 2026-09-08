@@ -5,6 +5,10 @@ from fastapi.responses import JSONResponse
 ERROR_HTTP_STATUS: dict[str, int] = {
     "empty_title": 422,
     "invalid_title": 422,
+    "request_id_conflict": 409,
+    "candidate_not_available": 409,
+    "invalid_page_size": 422,
+    "provider_worker_unbounded": 503,
     "provider_request_invalid": 422,
     "provider_schema_unsupported": 409,
     "provider_session_expired": 409,
