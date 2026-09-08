@@ -303,6 +303,7 @@ def _parse(response: object, page: int) -> tuple[list[tuple[str, str]], int, int
             or len(aid) > 128
             or aid in seen
             or item.get("asset_type") != "ADVERTISER"
+            or not isinstance(role, str)
             or role not in {"ADMIN", "OPERATOR", "ANALYST"}
         ):
             raise invalid
