@@ -10,7 +10,7 @@ import base64
 import binascii
 import json
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlmodel import Session, col, select
 
@@ -22,6 +22,7 @@ from app.modules.providers.models import (
     ProviderApplication,
     ProviderConnection,
     ProviderDrama,
+    ProviderEffect,
 )
 from app.modules.providers.schemas import link_reuse_key
 from app.modules.tenants.permissions import require_tenant
@@ -193,3 +194,74 @@ def find_ready_link(
         )
         .execution_options(populate_existing=True)
     ).one_or_none()
+
+
+# Workflow helpers only flush; orchestration owns short transaction boundaries.
+def claim_remote_scope(
+    session: Session, *, tenant_id: UUID, scope_key: str, item_id: UUID
+) -> bool:
+    from sqlalchemy.dialects.postgresql import insert
+
+    from app.modules.providers.models import ProviderRemoteScope
+
+    session.exec(
+        insert(ProviderRemoteScope)
+        .values(
+            id=uuid4(),
+            tenant_id=tenant_id,
+            scope_key=scope_key,
+            status="idle",
+        )
+        .on_conflict_do_nothing(index_elements=["tenant_id", "scope_key"])
+    )
+    scope = session.exec(
+        select(ProviderRemoteScope)
+        .where(
+            ProviderRemoteScope.tenant_id == tenant_id,
+            ProviderRemoteScope.scope_key == scope_key,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one()
+    if scope.active_item_id is not None and scope.active_item_id != item_id:
+        return False
+    if scope.active_item_id is None:
+        scope.active_item_id = item_id
+        scope.status = "held"
+        session.add(scope)
+        session.flush()
+    return True
+
+
+def get_or_create_effect(
+    session: Session, *, tenant_id: UUID, scope_key: str, step: str, request_digest: str
+) -> ProviderEffect:
+    from sqlalchemy.dialects.postgresql import insert
+
+    from app.modules.providers.models import ProviderEffect
+
+    session.exec(
+        insert(ProviderEffect)
+        .values(
+            id=uuid4(),
+            tenant_id=tenant_id,
+            remote_scope_key=scope_key,
+            step=step,
+            request_digest=request_digest,
+            status="pending",
+            result={},
+        )
+        .on_conflict_do_nothing(
+            index_elements=["tenant_id", "remote_scope_key", "step", "request_digest"]
+        )
+    )
+    return session.exec(
+        select(ProviderEffect)
+        .where(
+            ProviderEffect.tenant_id == tenant_id,
+            ProviderEffect.remote_scope_key == scope_key,
+            ProviderEffect.step == step,
+            ProviderEffect.request_digest == request_digest,
+        )
+        .execution_options(populate_existing=True)
+    ).one()
