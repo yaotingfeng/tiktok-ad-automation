@@ -172,6 +172,10 @@ class ObjectUpload(SQLModel, table=True):
     status: str = "pending"
     task_id: UUID | None = None
     error_code: str | None = None
+    attempt_token: UUID | None = None
+    claimed_until: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True))
+    )
 
 
 class MaterialAssetOperation(SQLModel, table=True):
