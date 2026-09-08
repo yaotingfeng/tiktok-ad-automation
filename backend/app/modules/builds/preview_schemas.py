@@ -42,6 +42,8 @@ class PreviewUnit(BaseModel):
     drama_id: UUID
     title: str
     advertiser_id: str
+    currency: str
+    budget: Decimal
     campaign_name: str
     readiness: Readiness
     reason_codes: list[str]

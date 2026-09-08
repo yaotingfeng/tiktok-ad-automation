@@ -1659,6 +1659,14 @@ export type PreviewUnit = {
      */
     advertiser_id: string;
     /**
+     * Currency
+     */
+    currency: string;
+    /**
+     * Budget
+     */
+    budget: string;
+    /**
      * Campaign Name
      */
     campaign_name: string;

@@ -83,6 +83,10 @@ def test_preview_drama_groups_and_unit_filters_are_server_scoped(
     assert len(units["items"]) == 2 and all(
         u["drama_id"] == drama["drama_id"] for u in units["items"]
     )
+    assert all(
+        u["currency"] == "USD" and Decimal(u["budget"]) == 100
+        for u in units["items"]
+    )
     assert (
         client.get(
             f"{base}/units",

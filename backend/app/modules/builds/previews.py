@@ -770,7 +770,7 @@ def get_preview_units(
     readiness: str | None = None,
     drama_id: UUID | None = None,
 ) -> Page[PreviewUnit]:
-    _preview(session, context, preview_id)
+    preview = _preview(session, context, preview_id)
     scope, after = _page_scope(
         context,
         preview_id,
@@ -810,6 +810,8 @@ def get_preview_units(
                 drama_id=u.drama_id,
                 title=d.title,
                 advertiser_id=u.advertiser_id,
+                currency=u.currency,
+                budget=preview.budget,
                 campaign_name=u.campaign_name,
                 readiness=cast(Readiness, u.readiness),
                 reason_codes=u.reason_codes,
