@@ -1035,6 +1035,20 @@ export type Page_UploadAttemptPublic_ = {
 };
 
 /**
+ * Page[UploadBatchSummary]
+ */
+export type Page_UploadBatchSummary_ = {
+    /**
+     * Items
+     */
+    items: Array<UploadBatchSummary>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
  * Page[UserCandidate]
  */
 export type Page_UserCandidate_ = {
@@ -1503,6 +1517,20 @@ export type SignedPart = {
 };
 
 /**
+ * SignedPreview
+ */
+export type SignedPreview = {
+    /**
+     * Url
+     */
+    url: string;
+    /**
+     * Expires In
+     */
+    expires_in?: number;
+};
+
+/**
  * StrategyConfig
  */
 export type StrategyConfig_Input = {
@@ -1791,6 +1819,32 @@ export type UploadBatchResult = {
      * Files
      */
     files: Array<UploadFileResult>;
+};
+
+/**
+ * UploadBatchSummary
+ */
+export type UploadBatchSummary = {
+    /**
+     * Batch Id
+     */
+    batch_id: string;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Status
+     */
+    status: 'receiving' | 'stored' | 'uploading' | 'verifying' | 'available' | 'blocked' | 'result_unknown';
+    /**
+     * File Count
+     */
+    file_count: number;
+    /**
+     * Created At
+     */
+    created_at: string;
 };
 
 /**
@@ -3099,6 +3153,49 @@ export type accountsPatchConnectionResponses = {
 
 export type accountsPatchConnectionResponse = accountsPatchConnectionResponses[keyof accountsPatchConnectionResponses];
 
+export type materialsReadUploadBatchesData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/materials/upload-batches';
+};
+
+export type materialsReadUploadBatchesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialsReadUploadBatchesError = materialsReadUploadBatchesErrors[keyof materialsReadUploadBatchesErrors];
+
+export type materialsReadUploadBatchesResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_UploadBatchSummary_;
+};
+
+export type materialsReadUploadBatchesResponse = materialsReadUploadBatchesResponses[keyof materialsReadUploadBatchesResponses];
+
 export type materialsPostUploadBatchData = {
     body: UploadBatchRequest;
     path: {
@@ -3128,6 +3225,84 @@ export type materialsPostUploadBatchResponses = {
 };
 
 export type materialsPostUploadBatchResponse = materialsPostUploadBatchResponses[keyof materialsPostUploadBatchResponses];
+
+export type materialsReadUploadRequestData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Request Id
+         */
+        request_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/materials/upload-requests/{request_id}';
+};
+
+export type materialsReadUploadRequestErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialsReadUploadRequestError = materialsReadUploadRequestErrors[keyof materialsReadUploadRequestErrors];
+
+export type materialsReadUploadRequestResponses = {
+    /**
+     * Successful Response
+     */
+    200: UploadBatchResult;
+};
+
+export type materialsReadUploadRequestResponse = materialsReadUploadRequestResponses[keyof materialsReadUploadRequestResponses];
+
+export type materialsReadOriginalPreviewData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Material Id
+         */
+        material_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/materials/{material_id}/preview';
+};
+
+export type materialsReadOriginalPreviewErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialsReadOriginalPreviewError = materialsReadOriginalPreviewErrors[keyof materialsReadOriginalPreviewErrors];
+
+export type materialsReadOriginalPreviewResponses = {
+    /**
+     * Successful Response
+     */
+    200: SignedPreview;
+};
+
+export type materialsReadOriginalPreviewResponse = materialsReadOriginalPreviewResponses[keyof materialsReadOriginalPreviewResponses];
 
 export type materialsReadUploadBatchData = {
     body?: never;
