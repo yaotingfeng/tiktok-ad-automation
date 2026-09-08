@@ -7,6 +7,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 ConnectionStatus = Literal[
     "PENDING_AUTH", "DISCOVERING", "ACTIVE", "REAUTH_REQUIRED", "ERROR", "DISABLED"
 ]
+DiscoveryStatus = Literal[
+    "QUEUED", "RUNNING", "ADMISSION_WAIT", "ERROR", "COMPLETE", "CANCELLED"
+]
 
 
 class ConnectionPublic(BaseModel):
@@ -18,6 +21,7 @@ class ConnectionPublic(BaseModel):
     status: ConnectionStatus
     last_discovery: datetime | None = None
     last_authorized_at: datetime | None = None
+    discovery_status: DiscoveryStatus | None = None
     error_code: str | None = None
 
 

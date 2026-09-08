@@ -41,6 +41,7 @@ from app.modules.accounts.schemas import (
     BCPublic,
     ConnectionPublic,
     ConnectionUpdate,
+    DiscoveryStatus,
     ResolvedLine,
     ResolveRequest,
 )
@@ -315,6 +316,45 @@ def get_connections(
     latest_error = latest.with_only_columns(
         col(DiscoveryRun.error_code)
     ).scalar_subquery()
+    latest_status = latest.with_only_columns(col(DiscoveryRun.status)).scalar_subquery()
+    # Reauthorization keeps old credentials ACTIVE. Expose the candidate's
+    # separate progress, including the interval before its worker creates a run.
+    pending_attempt = (
+        select(col(AuthorizationAttempt.id))
+        .where(
+            AuthorizationAttempt.tenant_id == tenant_id,
+            AuthorizationAttempt.connection_id == TikTokConnection.id,
+            AuthorizationAttempt.base_credential_version
+            == TikTokConnection.credential_version,
+            AuthorizationAttempt.status == "CANDIDATE_READY",
+        )
+        .order_by(
+            col(AuthorizationAttempt.claimed_at).desc().nulls_last(),
+            col(AuthorizationAttempt.id).desc(),
+        )
+        .limit(1)
+        .correlate(TikTokConnection)
+        .scalar_subquery()
+    )
+    pending_status = (
+        select(col(DiscoveryRun.status))
+        .where(
+            DiscoveryRun.tenant_id == tenant_id,
+            DiscoveryRun.connection_id == TikTokConnection.id,
+            DiscoveryRun.candidate_attempt_id == pending_attempt,
+        )
+        .order_by(
+            col(DiscoveryRun.created_at).desc(),
+            col(DiscoveryRun.id).desc(),
+        )
+        .limit(1)
+        .correlate(TikTokConnection)
+        .scalar_subquery()
+    )
+    progress = case(
+        (pending_attempt.is_not(None), func.coalesce(pending_status, "QUEUED")),
+        else_=latest_status,
+    )
     authorized_time = (
         select(func.max(col(DiscoveryRun.completed_at)))
         .join(
@@ -333,27 +373,35 @@ def get_connections(
         )
         .scalar_subquery()
     )
-    statement = select(
-        TikTokConnection, latest_time, latest_error, authorized_time
-    ).where(TikTokConnection.tenant_id == tenant_id)
+    statement = sa_select(
+        TikTokConnection, latest_time, latest_error, authorized_time, progress
+    ).where(col(TikTokConnection.tenant_id) == tenant_id)
     if last_id is not None:
         try:
             last_uuid = UUID(last_id)
         except ValueError:
             raise DomainError("invalid_cursor", "连接游标无效") from None
-        statement = statement.where(TikTokConnection.id > last_uuid)
+        statement = statement.where(col(TikTokConnection.id) > last_uuid)
     if status is not None:
-        statement = statement.where(TikTokConnection.status == status)
-    rows = session.exec(
+        statement = statement.where(col(TikTokConnection.status) == status)
+    rows = SQLAlchemySession.execute(
+        session,
         statement.order_by(col(TikTokConnection.id))
         .limit(limit + 1)
         .execution_options(populate_existing=True)
     ).all()
     items = []
-    for connection, last_discovery, error_code, last_authorized_at in rows[:limit]:
+    for (
+        connection,
+        last_discovery,
+        error_code,
+        last_authorized_at,
+        discovery_status,
+    ) in rows[:limit]:
         item = ConnectionPublic.model_validate(connection)
         item.last_discovery = last_discovery
         item.last_authorized_at = last_authorized_at
+        item.discovery_status = cast(DiscoveryStatus | None, discovery_status)
         item.error_code = (
             error_code
             if error_code in ERROR_HTTP_STATUS

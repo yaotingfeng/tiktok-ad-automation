@@ -175,6 +175,10 @@ export type ConnectionPublic = {
      */
     last_authorized_at?: string | null;
     /**
+     * Discovery Status
+     */
+    discovery_status?: 'QUEUED' | 'RUNNING' | 'ADMISSION_WAIT' | 'ERROR' | 'COMPLETE' | 'CANCELLED' | null;
+    /**
      * Error Code
      */
     error_code?: string | null;

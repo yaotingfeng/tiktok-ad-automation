@@ -150,6 +150,54 @@ def headers(context):
     }
 
 
+def test_active_connection_exposes_candidate_discovery_progress(
+    client, session, account_access_case
+):
+    context, grant = account_access_case
+    connection = session.get(TikTokConnection, grant.connection_id)
+    attempt = AuthorizationAttempt(
+        tenant_id=context.tenant_id,
+        actor_id=context.actor_id,
+        connection_id=grant.connection_id,
+        state_hash=uuid4().hex,
+        expires_at=datetime.now(UTC),
+        status="CANDIDATE_READY",
+        base_credential_version=connection.credential_version,
+    )
+    session.add(attempt)
+    session.flush()
+    path = f"/api/tenants/{context.tenant_id}/tiktok/connections"
+
+    def read():
+        result = client.get(path, headers=headers(context))
+        assert result.status_code == 200
+        item = result.json()["items"][0]
+        assert item["status"] == "ACTIVE"
+        return item["discovery_status"]
+
+    assert read() == "QUEUED"
+    run = DiscoveryRun(
+        tenant_id=context.tenant_id,
+        actor_id=context.actor_id,
+        connection_id=connection.id,
+        candidate_attempt_id=attempt.id,
+        status="RUNNING",
+    )
+    session.add(run)
+    session.flush()
+    assert read() == "RUNNING"
+    for state in ("ADMISSION_WAIT", "ERROR"):
+        run.status = state
+        session.flush()
+        assert read() == state
+    run.status = "COMPLETE"
+    run.completed_at = datetime.now(UTC)
+    attempt.status = "ACCEPTED"
+    connection.credential_version += 1
+    session.flush()
+    assert read() == "COMPLETE"
+
+
 def test_directory_unique_across_connections_and_safe_fields(
     client, session, account_access_case
 ):
