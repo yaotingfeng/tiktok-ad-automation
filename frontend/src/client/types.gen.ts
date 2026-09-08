@@ -625,6 +625,146 @@ export type DramaCandidate = {
 };
 
 /**
+ * FrozenAd
+ */
+export type FrozenAd = {
+    /**
+     * Ad Id
+     */
+    ad_id: string;
+    /**
+     * Creative No
+     */
+    creative_no: number;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Copy Id
+     */
+    copy_id: string;
+    /**
+     * Text
+     */
+    text: string;
+    /**
+     * Cta Option Ids
+     */
+    cta_option_ids: Array<string>;
+};
+
+/**
+ * FrozenGroup
+ */
+export type FrozenGroup = {
+    /**
+     * Group Id
+     */
+    group_id: string;
+    /**
+     * Group No
+     */
+    group_no: number;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Material Ids
+     */
+    material_ids: Array<string>;
+    /**
+     * Ads
+     */
+    ads: Array<FrozenAd>;
+};
+
+/**
+ * FrozenUnit
+ */
+export type FrozenUnit = {
+    /**
+     * Unit Id
+     */
+    unit_id: string;
+    /**
+     * Preview Id
+     */
+    preview_id: string;
+    /**
+     * Tenant Id
+     */
+    tenant_id: string;
+    /**
+     * Drama Id
+     */
+    drama_id: string;
+    /**
+     * Link Id
+     */
+    link_id: string;
+    /**
+     * Strategy Version Id
+     */
+    strategy_version_id: string;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Advertiser Id
+     */
+    advertiser_id: string;
+    /**
+     * Connection Id
+     */
+    connection_id: string;
+    /**
+     * Currency
+     */
+    currency: string;
+    /**
+     * Timezone
+     */
+    timezone: string;
+    /**
+     * Campaign Name
+     */
+    campaign_name: string;
+    /**
+     * Protected Base
+     */
+    protected_base: string;
+    /**
+     * Url
+     */
+    url: string;
+    /**
+     * Budget
+     */
+    budget: string;
+    /**
+     * Target Roas
+     */
+    target_roas: string;
+    /**
+     * Readiness
+     */
+    readiness: 'READY' | 'PREPARING' | 'BLOCKED';
+    /**
+     * Reason Codes
+     */
+    reason_codes: Array<string>;
+    /**
+     * Scene Snapshot
+     */
+    scene_snapshot: {
+        [key: string]: unknown;
+    };
+};
+
+/**
  * HTTPValidationError
  */
 export type HTTPValidationError = {
@@ -909,6 +1049,20 @@ export type Page_DraftMaterialPublic_ = {
 };
 
 /**
+ * Page[FrozenGroup]
+ */
+export type Page_FrozenGroup_ = {
+    /**
+     * Items
+     */
+    items: Array<FrozenGroup>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
  * Page[MaterialPublic]
  */
 export type Page_MaterialPublic_ = {
@@ -930,6 +1084,34 @@ export type Page_MemberPublic_ = {
      * Items
      */
     items: Array<MemberPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
+ * Page[PreviewInputPublic]
+ */
+export type Page_PreviewInputPublic_ = {
+    /**
+     * Items
+     */
+    items: Array<PreviewInputPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
+ * Page[PreviewUnit]
+ */
+export type Page_PreviewUnit_ = {
+    /**
+     * Items
+     */
+    items: Array<PreviewUnit>;
     /**
      * Next Cursor
      */
@@ -1186,6 +1368,172 @@ export type PreparationSummary = {
     counts: {
         [key: string]: number;
     };
+};
+
+/**
+ * PreviewAccepted
+ */
+export type PreviewAccepted = {
+    /**
+     * Preview Id
+     */
+    preview_id: string;
+};
+
+/**
+ * PreviewInputPublic
+ */
+export type PreviewInputPublic = {
+    /**
+     * Kind
+     */
+    kind: string;
+    /**
+     * Line No
+     */
+    line_no: number;
+    /**
+     * Raw Text
+     */
+    raw_text: string;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Reason Code
+     */
+    reason_code: string | null;
+    /**
+     * Duplicate Of
+     */
+    duplicate_of: number | null;
+};
+
+/**
+ * PreviewRequest
+ */
+export type PreviewRequest = {
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+};
+
+/**
+ * PreviewSummary
+ */
+export type PreviewSummary = {
+    /**
+     * Preview Id
+     */
+    preview_id: string;
+    /**
+     * Draft Id
+     */
+    draft_id: string;
+    /**
+     * Draft Revision
+     */
+    draft_revision: number;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Status
+     */
+    status: 'BUILDING' | 'FROZEN' | 'OBSOLETE' | 'FAILED';
+    /**
+     * Currency
+     */
+    currency: string;
+    /**
+     * Campaign Count
+     */
+    campaign_count: number;
+    /**
+     * Adgroup Count
+     */
+    adgroup_count: number;
+    /**
+     * Ad Count
+     */
+    ad_count: number;
+    /**
+     * Blocked Count
+     */
+    blocked_count: number;
+    /**
+     * Preparing Count
+     */
+    preparing_count: number;
+    /**
+     * Input Issue Count
+     */
+    input_issue_count: number;
+    /**
+     * Total Unit Count
+     */
+    total_unit_count: number;
+    /**
+     * Daily Budget Sum
+     */
+    daily_budget_sum: string;
+    /**
+     * Content Digest
+     */
+    content_digest: string | null;
+    /**
+     * Error Code
+     */
+    error_code: string | null;
+    /**
+     * Created At
+     */
+    created_at: string;
+};
+
+/**
+ * PreviewUnit
+ */
+export type PreviewUnit = {
+    /**
+     * Unit Id
+     */
+    unit_id: string;
+    /**
+     * Drama Id
+     */
+    drama_id: string;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Advertiser Id
+     */
+    advertiser_id: string;
+    /**
+     * Campaign Name
+     */
+    campaign_name: string;
+    /**
+     * Readiness
+     */
+    readiness: 'READY' | 'PREPARING' | 'BLOCKED';
+    /**
+     * Reason Codes
+     */
+    reason_codes: Array<string>;
+    /**
+     * Group Count
+     */
+    group_count: number;
+    /**
+     * Ad Count
+     */
+    ad_count: number;
 };
 
 /**
@@ -4798,3 +5146,280 @@ export type buildsEditGroupsResponses = {
 };
 
 export type buildsEditGroupsResponse = buildsEditGroupsResponses[keyof buildsEditGroupsResponses];
+
+export type buildsGeneratePreviewData = {
+    body: PreviewRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/previews';
+};
+
+export type buildsGeneratePreviewErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsGeneratePreviewError = buildsGeneratePreviewErrors[keyof buildsGeneratePreviewErrors];
+
+export type buildsGeneratePreviewResponses = {
+    /**
+     * Successful Response
+     */
+    202: PreviewAccepted;
+};
+
+export type buildsGeneratePreviewResponse = buildsGeneratePreviewResponses[keyof buildsGeneratePreviewResponses];
+
+export type buildsPreviewRequestData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+        /**
+         * Revision
+         */
+        revision: number;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/previews/{revision}';
+};
+
+export type buildsPreviewRequestErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsPreviewRequestError = buildsPreviewRequestErrors[keyof buildsPreviewRequestErrors];
+
+export type buildsPreviewRequestResponses = {
+    /**
+     * Successful Response
+     */
+    200: PreviewAccepted;
+};
+
+export type buildsPreviewRequestResponse = buildsPreviewRequestResponses[keyof buildsPreviewRequestResponses];
+
+export type buildsPreviewSummaryData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Preview Id
+         */
+        preview_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-previews/{preview_id}';
+};
+
+export type buildsPreviewSummaryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsPreviewSummaryError = buildsPreviewSummaryErrors[keyof buildsPreviewSummaryErrors];
+
+export type buildsPreviewSummaryResponses = {
+    /**
+     * Successful Response
+     */
+    200: PreviewSummary;
+};
+
+export type buildsPreviewSummaryResponse = buildsPreviewSummaryResponses[keyof buildsPreviewSummaryResponses];
+
+export type buildsPreviewUnitsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Preview Id
+         */
+        preview_id: string;
+    };
+    query?: {
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+        /**
+         * Readiness
+         */
+        readiness?: 'READY' | 'PREPARING' | 'BLOCKED' | null;
+    };
+    url: '/api/tenants/{tenant_id}/build-previews/{preview_id}/units';
+};
+
+export type buildsPreviewUnitsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsPreviewUnitsError = buildsPreviewUnitsErrors[keyof buildsPreviewUnitsErrors];
+
+export type buildsPreviewUnitsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_PreviewUnit_;
+};
+
+export type buildsPreviewUnitsResponse = buildsPreviewUnitsResponses[keyof buildsPreviewUnitsResponses];
+
+export type buildsPreviewInputsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Preview Id
+         */
+        preview_id: string;
+    };
+    query: {
+        /**
+         * Kind
+         */
+        kind: 'drama' | 'account';
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/build-previews/{preview_id}/inputs';
+};
+
+export type buildsPreviewInputsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsPreviewInputsError = buildsPreviewInputsErrors[keyof buildsPreviewInputsErrors];
+
+export type buildsPreviewInputsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_PreviewInputPublic_;
+};
+
+export type buildsPreviewInputsResponse = buildsPreviewInputsResponses[keyof buildsPreviewInputsResponses];
+
+export type buildsFrozenUnitData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Unit Id
+         */
+        unit_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-units/{unit_id}';
+};
+
+export type buildsFrozenUnitErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsFrozenUnitError = buildsFrozenUnitErrors[keyof buildsFrozenUnitErrors];
+
+export type buildsFrozenUnitResponses = {
+    /**
+     * Successful Response
+     */
+    200: FrozenUnit;
+};
+
+export type buildsFrozenUnitResponse = buildsFrozenUnitResponses[keyof buildsFrozenUnitResponses];
+
+export type buildsFrozenGroupsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Unit Id
+         */
+        unit_id: string;
+    };
+    query?: {
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/build-units/{unit_id}/groups';
+};
+
+export type buildsFrozenGroupsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsFrozenGroupsError = buildsFrozenGroupsErrors[keyof buildsFrozenGroupsErrors];
+
+export type buildsFrozenGroupsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_FrozenGroup_;
+};
+
+export type buildsFrozenGroupsResponse = buildsFrozenGroupsResponses[keyof buildsFrozenGroupsResponses];
