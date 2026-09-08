@@ -200,7 +200,10 @@ export function ServerTable<T>({
     manualFiltering: true,
   })
   return (
-    <div aria-busy={fetching}>
+    <div
+      aria-busy={fetching}
+      className="[&>[data-slot=table-container]]:max-h-[60svh] [&>[data-slot=table-container]]:overflow-y-auto"
+    >
       {!!error && (
         <div className="p-4">
           <RequestError error={error} retry={retry} />
@@ -212,7 +215,7 @@ export function ServerTable<T>({
         </p>
       )}
       <Table>
-        <TableHeader>
+        <TableHeader className="sticky top-0 z-10 bg-muted">
           {table.getHeaderGroups().map((group) => (
             <TableRow key={group.id}>
               {group.headers.map((header) => (

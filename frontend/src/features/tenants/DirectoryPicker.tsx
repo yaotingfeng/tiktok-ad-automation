@@ -88,7 +88,9 @@ export function DirectoryPicker<T extends { id: string }>({
         </DialogHeader>
         <form
           onSubmit={(event) => {
+            // Portal events still bubble through the enclosing management form.
             event.preventDefault()
+            event.stopPropagation()
             paging.reset()
             setSearch(input.trim())
           }}

@@ -671,3 +671,103 @@ test("an unavailable tenant URL never reuses another tenant's scope or member da
     token,
   )
 })
+
+for (const kind of ["tenant", "member"] as const)
+  for (const submit of ["button", "Enter"] as const)
+    test(`${kind} candidate re-search by ${submit} never submits the parent editor`, async ({
+      page,
+    }) => {
+      const { requests } = await boundary(page)
+      const tenant = kind === "tenant"
+      await page.goto(tenant ? "/platform/tenants" : `/tenants/${A}/members`)
+      const title = tenant ? "新建租户" : "添加成员"
+      const label = tenant ? "初始管理员" : "已有用户"
+      await page.getByRole("button", { name: title }).click()
+      const sheet = page.getByRole("dialog", { name: title, exact: true })
+      if (tenant) await sheet.getByLabel("租户名称").fill("未提交租户")
+      await sheet.getByRole("combobox", { name: label }).click()
+      const picker = page.getByRole("dialog", { name: `选择${label}` })
+      await picker.getByLabel(`搜索${label}`).fill("候选")
+      await picker.getByRole("button", { name: "搜索", exact: true }).click()
+      await picker.getByRole("option", { name: /候选用户/ }).click()
+      await sheet.getByRole("combobox", { name: label }).click()
+      await picker.getByLabel(`搜索${label}`).fill("甲管理员")
+      if (submit === "Enter")
+        await picker.getByLabel(`搜索${label}`).press("Enter")
+      else
+        await picker.getByRole("button", { name: "搜索", exact: true }).click()
+      await expect(
+        picker.getByRole("option", { name: /甲管理员/ }),
+      ).toBeVisible()
+      expect(requests.filter((request) => request.method !== "GET")).toEqual([])
+      await page.keyboard.press("Escape")
+      await expect(sheet).toBeVisible()
+      await expect(sheet.getByRole("combobox", { name: label })).toContainText(
+        "候选用户",
+      )
+      if (tenant)
+        await expect(sheet.getByLabel("租户名称")).toHaveValue("未提交租户")
+      await sheet
+        .getByRole("button", { name: tenant ? "创建租户" : "保存成员" })
+        .click()
+      await expect(sheet).not.toBeVisible()
+      expect(
+        requests.filter((request) => request.method !== "GET"),
+      ).toHaveLength(1)
+    })
+
+for (const width of [1440, 390])
+  for (const kind of ["tenant", "member"] as const)
+    test(`${kind} long table keeps headers visible within its scroll region at ${width}px`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 900 })
+      await boundary(page, { count: 101, memberCount: 101 })
+      await page.goto(
+        kind === "tenant" ? "/platform/tenants" : `/tenants/${A}/members`,
+      )
+      const container = page.locator('[data-slot="table-container"]')
+      const header = page.locator('[data-slot="table-header"]')
+      for (const limit of [50, 100]) {
+        if (limit === 100) {
+          await page.getByRole("combobox", { name: "每页条数" }).click()
+          await page.getByRole("option", { name: "100 条" }).click()
+        }
+        await expect(page.locator("tbody tr")).toHaveCount(limit)
+        const dimensions = await container.evaluate((element) => ({
+          height: element.clientHeight,
+          scrollHeight: element.scrollHeight,
+          width: element.clientWidth,
+          scrollWidth: element.scrollWidth,
+        }))
+        expect(dimensions.height).toBeLessThanOrEqual(540)
+        expect(dimensions.scrollHeight).toBeGreaterThan(dimensions.height)
+        await container.evaluate((element) => {
+          element.scrollTop = 1000
+        })
+        await expect
+          .poll(() => container.evaluate((element) => element.scrollTop))
+          .toBeGreaterThan(500)
+        const region = await container.boundingBox()
+        const heading = await header.boundingBox()
+        expect(Math.abs(heading!.y - region!.y)).toBeLessThan(3)
+        await expect(header).toBeInViewport()
+        if (width === 390) {
+          expect(dimensions.scrollWidth).toBeGreaterThan(dimensions.width)
+          await container.evaluate((element) => {
+            element.scrollLeft = element.scrollWidth
+          })
+          expect(
+            await container.evaluate((element) => element.scrollLeft),
+          ).toBeGreaterThan(0)
+        }
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth <= innerWidth,
+          ),
+        ).toBe(true)
+        expect(
+          await page.evaluate(() => document.documentElement.scrollHeight),
+        ).toBeLessThan(1400)
+      }
+    })
