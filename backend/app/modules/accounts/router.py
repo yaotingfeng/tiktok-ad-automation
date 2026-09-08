@@ -3,7 +3,9 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, Response
 from sqlalchemy import and_, case, func, literal, or_
+from sqlalchemy import cast as sql_cast
 from sqlalchemy import select as sa_select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session as SQLAlchemySession
 from sqlmodel import col, select
 
@@ -18,6 +20,7 @@ from app.integrations.tiktok.auth import (
 from app.modules.accounts.access import OPERABLE_REMOTE_STATUSES
 from app.modules.accounts.models import (
     AdvertiserAccount,
+    AuthorizationAttempt,
     BCAccountAccess,
     DiscoveryRun,
     TenantBC,
@@ -221,11 +224,47 @@ def get_bcs(
     query: QueryText = "",
     cursor: Cursor = None,
     limit: Limit = 50,
+    connection_id: UUID | None = None,
 ) -> Page[BCPublic]:
     require_tenant(session, actor_id=user.id, tenant_id=tenant_id, action="read")
-    scope = {"kind": "bcs", "tenant_id": str(tenant_id), "query": query}
+    scope = {
+        "kind": "bcs",
+        "tenant_id": str(tenant_id),
+        "query": query,
+        "connection_id": str(connection_id) if connection_id else None,
+    }
     last_id = decode_cursor(cursor, scope=scope)
     statement = select(TenantBC).where(TenantBC.tenant_id == tenant_id)
+    if connection_id is not None:
+        connection = session.exec(
+            select(TikTokConnection).where(
+                TikTokConnection.tenant_id == tenant_id,
+                TikTokConnection.id == connection_id,
+            )
+        ).one_or_none()
+        if connection is None:
+            raise DomainError("connection_not_found", "当前租户连接不存在")
+        # Keep this in SQL: a large connection snapshot never becomes an API list
+        # or Python IN clause. Empty BCs are present even without any account grants.
+        latest_work = (
+            select(col(DiscoveryRun.work))
+            .where(
+                DiscoveryRun.tenant_id == tenant_id,
+                DiscoveryRun.connection_id == connection_id,
+                DiscoveryRun.status == "COMPLETE",
+            )
+            .order_by(
+                col(DiscoveryRun.completed_at).desc().nulls_last(),
+                col(DiscoveryRun.id).desc(),
+            )
+            .limit(1)
+            .scalar_subquery()
+        )
+        statement = statement.where(
+            sql_cast(latest_work, JSONB)["bc_ids"].contains(
+                func.jsonb_build_array(col(TenantBC.bc_id))
+            )
+        )
     if last_id is not None:
         statement = statement.where(TenantBC.bc_id > last_id)
     if query.strip():
@@ -276,9 +315,27 @@ def get_connections(
     latest_error = latest.with_only_columns(
         col(DiscoveryRun.error_code)
     ).scalar_subquery()
-    statement = select(TikTokConnection, latest_time, latest_error).where(
-        TikTokConnection.tenant_id == tenant_id
+    authorized_time = (
+        select(func.max(col(DiscoveryRun.completed_at)))
+        .join(
+            AuthorizationAttempt,
+            and_(
+                col(AuthorizationAttempt.tenant_id) == DiscoveryRun.tenant_id,
+                col(AuthorizationAttempt.id) == DiscoveryRun.candidate_attempt_id,
+                col(AuthorizationAttempt.connection_id) == DiscoveryRun.connection_id,
+            ),
+        )
+        .where(
+            DiscoveryRun.tenant_id == tenant_id,
+            DiscoveryRun.connection_id == TikTokConnection.id,
+            DiscoveryRun.status == "COMPLETE",
+            AuthorizationAttempt.status == "ACCEPTED",
+        )
+        .scalar_subquery()
     )
+    statement = select(
+        TikTokConnection, latest_time, latest_error, authorized_time
+    ).where(TikTokConnection.tenant_id == tenant_id)
     if last_id is not None:
         try:
             last_uuid = UUID(last_id)
@@ -293,9 +350,10 @@ def get_connections(
         .execution_options(populate_existing=True)
     ).all()
     items = []
-    for connection, last_discovery, error_code in rows[:limit]:
+    for connection, last_discovery, error_code, last_authorized_at in rows[:limit]:
         item = ConnectionPublic.model_validate(connection)
         item.last_discovery = last_discovery
+        item.last_authorized_at = last_authorized_at
         item.error_code = (
             error_code
             if error_code in ERROR_HTTP_STATUS

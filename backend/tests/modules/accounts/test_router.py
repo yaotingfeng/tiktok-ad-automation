@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlsplit
+from uuid import uuid4
 
 from sqlalchemy import insert
 from sqlmodel import select
@@ -19,6 +20,127 @@ from app.modules.tenants.models import AuditEvent, TenantMembership
 from tests.modules.accounts.test_access import (
     account_access_case as account_access_case,
 )
+
+
+def test_connection_bc_details_use_latest_complete_snapshot_and_scoped_cursor(
+    client, session, account_access_case, other_context
+):
+    context, grant = account_access_case
+    session.add_all(
+        [
+            TenantBC(tenant_id=context.tenant_id, bc_id="empty-bc", name="Empty BC"),
+            TenantBC(
+                tenant_id=context.tenant_id, bc_id="unrelated-bc", name="Unrelated"
+            ),
+        ]
+    )
+    session.add(
+        DiscoveryRun(
+            tenant_id=context.tenant_id,
+            actor_id=context.actor_id,
+            connection_id=grant.connection_id,
+            status="COMPLETE",
+            created_at=datetime.now(UTC) - timedelta(hours=1),
+            completed_at=datetime.now(UTC) - timedelta(minutes=30),
+            work={"bc_ids": [grant.bc_id, "empty-bc"]},
+        )
+    )
+    session.add(
+        DiscoveryRun(
+            tenant_id=context.tenant_id,
+            actor_id=context.actor_id,
+            connection_id=grant.connection_id,
+            status="ERROR",
+            work={"bc_ids": ["unrelated-bc"]},
+        )
+    )
+    session.flush()
+    path = f"/api/tenants/{context.tenant_id}/bcs"
+    params = {"connection_id": str(grant.connection_id), "limit": 1}
+    first = client.get(path, params=params, headers=headers(context))
+    assert first.status_code == 200
+    cursor = first.json()["next_cursor"]
+    assert cursor
+    second = client.get(
+        path, params={**params, "cursor": cursor}, headers=headers(context)
+    )
+    assert second.json()["next_cursor"] is None
+    assert {row["bc_id"] for row in first.json()["items"] + second.json()["items"]} == {
+        grant.bc_id,
+        "empty-bc",
+    }
+    assert (
+        client.get(
+            path, params={"cursor": cursor}, headers=headers(context)
+        ).status_code
+        == 422
+    )
+    assert (
+        client.get(
+            path, params={"connection_id": str(uuid4())}, headers=headers(context)
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            f"/api/tenants/{other_context.tenant_id}/bcs",
+            params=params,
+            headers=headers(other_context),
+        ).status_code
+        == 404
+    )
+
+
+def test_connection_authorized_time_uses_accepted_completed_candidate_only(
+    client, session, account_access_case
+):
+    context, grant = account_access_case
+    accepted = AuthorizationAttempt(
+        tenant_id=context.tenant_id,
+        actor_id=context.actor_id,
+        connection_id=grant.connection_id,
+        state_hash=uuid4().hex,
+        expires_at=datetime.now(UTC),
+        status="ACCEPTED",
+    )
+    pending = AuthorizationAttempt(
+        tenant_id=context.tenant_id,
+        actor_id=context.actor_id,
+        connection_id=grant.connection_id,
+        state_hash=uuid4().hex,
+        expires_at=datetime.now(UTC),
+        status="CANDIDATE_READY",
+    )
+    session.add_all([accepted, pending])
+    session.flush()
+    promoted_at = datetime.now(UTC) - timedelta(hours=2)
+    session.add(
+        DiscoveryRun(
+            tenant_id=context.tenant_id,
+            actor_id=context.actor_id,
+            connection_id=grant.connection_id,
+            candidate_attempt_id=accepted.id,
+            status="COMPLETE",
+            completed_at=promoted_at,
+        )
+    )
+    session.add(
+        DiscoveryRun(
+            tenant_id=context.tenant_id,
+            actor_id=context.actor_id,
+            connection_id=grant.connection_id,
+            candidate_attempt_id=pending.id,
+            status="ERROR",
+            completed_at=datetime.now(UTC),
+        )
+    )
+    session.flush()
+    response = client.get(
+        f"/api/tenants/{context.tenant_id}/tiktok/connections", headers=headers(context)
+    )
+    assert response.status_code == 200
+    value = response.json()["items"][0]["last_authorized_at"]
+    assert datetime.fromisoformat(value) == promoted_at
 
 
 def headers(context):

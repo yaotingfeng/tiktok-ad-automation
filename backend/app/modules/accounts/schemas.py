@@ -17,6 +17,7 @@ class ConnectionPublic(BaseModel):
     tenant_id: UUID
     status: ConnectionStatus
     last_discovery: datetime | None = None
+    last_authorized_at: datetime | None = None
     error_code: str | None = None
 
 

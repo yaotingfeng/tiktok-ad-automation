@@ -171,6 +171,10 @@ export type ConnectionPublic = {
      */
     last_discovery?: string | null;
     /**
+     * Last Authorized At
+     */
+    last_authorized_at?: string | null;
+    /**
      * Error Code
      */
     error_code?: string | null;
@@ -1498,6 +1502,10 @@ export type accountsGetBcsData = {
          * Limit
          */
         limit?: number;
+        /**
+         * Connection Id
+         */
+        connection_id?: string | null;
     };
     url: '/api/tenants/{tenant_id}/bcs';
 };
