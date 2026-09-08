@@ -9,5 +9,5 @@
 - Local integration services: PostgreSQL 17.5 and Redis 8. Production Compose/CI target PostgreSQL 18 and Redis 8. Local dedicated test databases are separate from `tiktok_dev`; test Redis uses a separate nonzero DB and UUID key ownership.
 - Frozen uv install, frozen Bun install, generated API client and frontend production build passed. SDK has 11 offline wrapper/transport contract tests and independent PASS review; no live TikTok compatibility claim.
 - SDK video upload requires multipart keyword arguments, unlike JSON-body Smart+ create/share wrappers. Minis-specific scene fields remain P06/P07 validation scope.
-- Docker Compose 5.5.1 parsed both local and explicit staging configurations. Docker daemon is unavailable locally; image build is assigned to GitHub CI and its result must be recorded separately.
+- Docker Compose 5.5.1 parsed both local and explicit staging configurations. Docker daemon is unavailable locally; GitHub CI successfully built the image at 3dcbe1d (run34266735739). Container startup/public deployment remains unverified.
 - Original reference documentation and CLI credentials remain in the source repository; no operational output, token or real account default was imported.

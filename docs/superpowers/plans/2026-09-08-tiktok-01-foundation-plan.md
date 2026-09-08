@@ -307,7 +307,7 @@ celery_app.send_task(
 - Produces: `GET /api/integrations/tiktok/callback`，未配置 App 时返回 503 `{code:"tiktok_app_not_configured",message:"等待配置开发者应用",retryable:false}`；02 在同一路由实现 state 校验与授权交换。
 - 公开注册接口关闭；保留已有管理员创建用户和登录能力，租户开通交给 02。
 
-- [ ] 先加测试：公开注册返回 403；缺 App 的回调返回明确错误；未登录访问工作台跳登录，已登录看到“尚未接入租户”而非虚构账户数据。执行 `uv run pytest tests/api/test_bootstrap_surface.py -q`。
+- [x] 先加测试：公开注册返回 403；缺 App 的回调返回明确错误；未登录访问工作台跳登录，已登录看到“尚未接入租户”而非虚构账户数据。执行 `uv run pytest tests/api/test_bootstrap_surface.py -q`。
 
 ```python
 def test_unconfigured_callback_is_explicit(client):
@@ -316,10 +316,10 @@ def test_unconfigured_callback_is_explicit(client):
     assert response.json()["code"] == "tiktok_app_not_configured"
 ```
 
-- [ ] 移除模板 Items 示例的公开路由和导航引用；保留历史模板迁移链，新增业务表采用新迁移，不重写已经应用的历史迁移。注册入口移除，后端同时拒绝公开注册。
-- [ ] 按[前端设计 UI-01 与全局布局](../specs/2026-09-08-tiktok-06-frontend-experience-design.md)组合模板现有 shadcn Sidebar、Field、Button、Card。导航按“投放工作 / 租户管理”分组：广告搭建、搭建任务、素材库、投放策略；账户与授权、版权方连接、成员管理。平台管理为独立入口。顶栏固定租户和 BC；首次无上下文用 S01 接入引导，未实现页面不显示虚构业务数字。保留页面角色和路由插槽，02 接管实际上下文。
-- [ ] 验收 UI-01 和工作台布局：1440/1280 宽导航与内容可读，窄屏收起侧栏、表单转单列；键盘可到达导航与主操作，表单 label/错误和 Sheet 标题齐全。401 返回登录，403 保留工作台显示无权限，不误删登录态。
-- [ ] 编写 Playwright 测试并运行；测试定义登录态使用模板已有测试账号 setup，业务账号由后续测试数据导入，均不使用真实广告凭据。
+- [x] 移除模板 Items 示例的公开路由和导航引用；保留历史模板迁移链，新增业务表采用新迁移，不重写已经应用的历史迁移。注册入口移除，后端同时拒绝公开注册。
+- [x] 按[前端设计 UI-01 与全局布局](../specs/2026-09-08-tiktok-06-frontend-experience-design.md)组合模板现有 shadcn Sidebar、Field、Button、Card。导航按“投放工作 / 租户管理”分组：广告搭建、搭建任务、素材库、投放策略；账户与授权、版权方连接、成员管理。平台管理为独立入口。顶栏固定租户和 BC；首次无上下文用 S01 接入引导，未实现页面不显示虚构业务数字。保留页面角色和路由插槽，02 接管实际上下文。
+- [x] 验收 UI-01 和工作台布局：1440/1280 宽导航与内容可读，窄屏收起侧栏、表单转单列；键盘可到达导航与主操作，表单 label/错误和 Sheet 标题齐全。401 返回登录，403 保留工作台显示无权限，不误删登录态。
+- [x] 编写 Playwright 测试并运行；测试定义登录态使用模板已有测试账号 setup，业务账号由后续测试数据导入，均不使用真实广告凭据。
 
 ```typescript
 import { expect, test } from "@playwright/test"
@@ -331,7 +331,7 @@ test("workspace shows tenant context", async ({ page }) => {
 })
 ```
 
-- [ ] `bunx playwright test tests/workspace-shell.spec.ts`、`bun run build` 通过后提交 `workspace: add login and connection entry points`。
+- [x] `bunx playwright test tests/workspace-shell.spec.ts`、`bun run build` 通过后提交 `workspace: add login and connection entry points`。
 
 ### Task 6: 交付可部署入口及回调地址证据
 
@@ -343,8 +343,8 @@ test("workspace shows tenant context", async ({ page }) => {
 - Produces: 部署地址、HTTPS 回调 URL、运行版本、登录验证结果；没有部署资源时产物为已验证的部署包，状态写“待配置运行环境”，不能填虚构 URL。
 - Consumes: 用户提供的实际主机/域名和部署凭据；这属于执行时的外部配置，不影响本轮完整写出计划。
 
-- [ ] Compose 预发布配置复用模板代理，设置实际域名、HTTPS、后端 `/api` 路由、前端静态资源；DB/Redis 不向公网发布端口，生产配置不包含开发环境 private 路由。
-- [ ] `scripts/check-bootstrap.py` 读取命令行基础 URL，验证公开健康检查和未配置回调的确定响应，不提交授权码或广告请求。
+- [x] Compose 预发布配置复用模板代理，设置实际域名、HTTPS、后端 `/api` 路由、前端静态资源；DB/Redis 不向公网发布端口，生产配置不包含开发环境 private 路由。
+- [x] `scripts/check-bootstrap.py` 读取命令行基础 URL，验证公开健康检查和未配置回调的确定响应，不提交授权码或广告请求。
 
 ```python
 import argparse
@@ -363,7 +363,7 @@ with httpx.Client(base_url=base, timeout=15, follow_redirects=False) as client:
 
 - [ ] 本地执行检查脚本并确认成功；部署到已配置环境后，对实际 HTTPS URL 再执行一次并记录结果。回调返回业务错误而非404表明路由存在，不能据此标记 OAuth 已成功。
 - [ ] 在部署记录中填写从实际配置读取的 `TIKTOK_REDIRECT_URI`，交给应用申请使用。App 申请完成后由 02/07 进行租户授权及真实 SDK 联调；当前无 App 不阻止部署登录和回调入口。
-- [ ] 提交 `foundation: document and verify bootstrap deployment`。本阶段完成条件为工程测试通过、进程可运行、部署包可验证；外部地址交付另列实际完成状态。
+- [x] 提交 `foundation: document and verify bootstrap deployment`。本阶段完成条件为工程测试通过、进程可运行、部署包可验证；外部地址交付另列实际完成状态。
 
 ### Task 7: 所有 Worker 共用的官方 API 调用准入
 
