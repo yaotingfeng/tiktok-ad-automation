@@ -158,8 +158,11 @@ export function TenantScopeProvider({
     const suffix = tenantId
       ? pathname.slice(`/tenants/${tenantId}`.length)
       : "/builds/new"
-    const destination =
-      suffix === "/members" && !canManage(target.role) ? "/builds/new" : suffix
+    const destination = suffix.startsWith("/strategies/")
+      ? "/strategies"
+      : suffix === "/members" && !canManage(target.role)
+        ? "/builds/new"
+        : suffix
     // Router guards run before the old scope unmounts or cancels any requests.
     void navigate({
       to: `/tenants/${target.id}${destination || "/builds/new"}`,

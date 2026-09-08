@@ -12,7 +12,7 @@ export function safeReturnPath(value: string | null): string | null {
   const target = new URL(value, window.location.origin)
   if (
     target.origin !== window.location.origin ||
-    !/^(\/(admin|settings|platform\/tenants)|\/tenants\/[a-f0-9-]{36}\/(accounts|members|builds\/new|build-tasks|materials|strategies|providers))\/?$/i.test(
+    !/^(\/(admin|settings|platform\/tenants)|\/tenants\/[a-f0-9-]{36}\/(accounts|members|builds\/new|build-tasks|materials|strategies(?:\/(?:new|[a-f0-9-]{36}))?|providers))\/?$/i.test(
       target.pathname,
     )
   )

@@ -34,12 +34,12 @@ export default defineConfig({
 
   /* Configure projects for major browsers */
   projects: [
-    { name: 'workspace', testMatch: /(workspace-shell|tenants-accounts|providers)\.spec\.ts/, use: { ...devices['Desktop Chrome'], storageState: { cookies: [], origins: [] } } },
+    { name: 'workspace', testMatch: /(workspace-shell|tenants-accounts|providers|strategies)\.spec\.ts/, use: { ...devices['Desktop Chrome'], storageState: { cookies: [], origins: [] } } },
     { name: 'setup', testMatch: /.*\.setup\.ts/ },
 
     {
       name: 'chromium',
-      testIgnore: /(workspace-shell|tenants-accounts|providers)\.spec\.ts/,
+      testIgnore: /(workspace-shell|tenants-accounts|providers|strategies)\.spec\.ts/,
       use: {
         ...devices['Desktop Chrome'],
         storageState: 'playwright/.auth/user.json',
