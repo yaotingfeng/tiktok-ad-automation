@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     S3_REGION: str = "us-east-1"
     S3_ACCESS_KEY_ID: str = Field(default="", repr=False)
     S3_SECRET_ACCESS_KEY: str = Field(default="", repr=False)
+    # Engineering limits: the pinned official SDK buffers multipart files.
+    MATERIAL_SDK_MAX_UPLOAD_BYTES: int = Field(default=256 * 1024 * 1024, gt=0)
+    MATERIAL_SDK_UPLOAD_MAX_INFLIGHT: int = Field(default=1, gt=0)
 
     @property
     def tiktok_app_missing_fields(self) -> list[str]:
