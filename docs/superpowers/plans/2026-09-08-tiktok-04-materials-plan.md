@@ -88,7 +88,7 @@ ensure_target_asset(session, *, context, bc_id: str, material_id: UUID,
 | MaterialDistribution | UUID、tenant_id、material_id、bc_id、advertiser_id、source_asset_id、operation_id、path、status、reason_code；唯一 tenant_id＋material_id＋advertiser_id 的未完成任务 |
 | MaterialAssetOperation | UUID、tenant_id、material_id、advertiser_id、path、status、attempt_token、request_digest、remote_response JSONB；唯一 tenant_id＋material_id＋advertiser_id 的未核实操作，源上传与目标分发共同使用 |
 
-- [ ] **步骤 1：先写字面包含、特殊字符和无永久归属回归。**
+- [x] **步骤 1：先写字面包含、特殊字符和无永久归属回归。**
 
 ```python
 from app.modules.materials.matching import filename_matches
@@ -105,9 +105,9 @@ def test_material_model_has_no_drama_ownership():
     assert "drama_id" not in MaterialFile.model_fields
 ```
 
-- [ ] **步骤 2：运行失败测试。** `uv run pytest tests/modules/materials/test_matching.py -q`；预期缺少目录模型与匹配函数而失败。
+- [x] **步骤 2：运行失败测试。** `uv run pytest tests/modules/materials/test_matching.py -q`；预期缺少目录模型与匹配函数而失败。
 
-- [ ] **步骤 3：实现 DTO、匹配、数据库约束和分页。**
+- [x] **步骤 3：实现 DTO、匹配、数据库约束和分页。**
 
 ```python
 from datetime import datetime
@@ -158,8 +158,8 @@ def filename_matches(file_name: str, title: str) -> bool:
 查询条件必含 tenant_id、bc_id，并排除尚未完整接收的文件；按 `file_name COLLATE "C" ASC, id ASC` 键集分页，每页 100 条多取一条。游标含租户、BC、标题摘要、文件名及 ID；调用时校验作用域。原始文件完整在库或已有可用账户资产时均可以返回候选。
 迁移创建 tenant_id/bc_id 查询索引、稳定排序索引和 `pg_trgm` 包含检索索引；不能一次加载全部素材再在 Python 过滤。同名不同内容分别保留；同哈希新文件名保留独立 MaterialFile，原对象去重只限同租户且不删原文件名入口。
 
-- [ ] **步骤 4：验证迁移、检索和分页。** `uv run alembic upgrade head`；`uv run pytest tests/modules/materials/test_matching.py tests/modules/materials/test_tenant_materials.py -q`。预期 205 个命中完整读取无丢失/重复，其他租户和 BC 不混入，特殊字符匹配与纯函数一致，缺省不建立剧目关系。
-- [ ] **步骤 5：提交本任务。** `git add app/modules/materials app/alembic/versions/0004_materials.py tests/modules/materials`，然后 `git commit -m "materials: add tenant library and literal title search"`。
+- [x] **步骤 4：验证迁移、检索和分页。** `uv run alembic upgrade head`；`uv run pytest tests/modules/materials/test_matching.py tests/modules/materials/test_tenant_materials.py -q`。预期 205 个命中完整读取无丢失/重复，其他租户和 BC 不混入，特殊字符匹配与纯函数一致，缺省不建立剧目关系。
+- [x] **步骤 5：提交本任务。** `git add app/modules/materials app/alembic/versions/0004_materials.py tests/modules/materials`，然后 `git commit -m "materials: add tenant library and literal title search"`。
 
 ### 任务 2：交付对象存储分片上传、进度和事务入队
 

@@ -91,7 +91,7 @@ def get_link_results(session, *, context: TenantContext, task_id: UUID,
 
 PromotionLink 的当前版本用部分唯一索引 `tenant_id,reuse_key WHERE status='ready'` 保证一个有效结果；旧结果转 `superseded` 后保留。连接、应用、剧目的关联采用带 tenant_id 的复合外键，迁移加入对应索引。
 
-- [ ] **步骤 1：先写约束与复用键回归。**
+- [x] **步骤 1：先写约束与复用键回归。**
 
 ```python
 from uuid import uuid4
@@ -116,9 +116,9 @@ def test_ready_link_requires_complete_identity():
                      application_id="app-a", status="ready")
 ```
 
-- [ ] **步骤 2：运行失败测试。** `uv run pytest tests/modules/providers/test_contracts.py -q`；预期尚无模块或校验器而失败。
+- [x] **步骤 2：运行失败测试。** `uv run pytest tests/modules/providers/test_contracts.py -q`；预期尚无模块或校验器而失败。
 
-- [ ] **步骤 3：实现 DTO、键与迁移。** DTO 使用以下完整字段，模型表按上表实现；迁移后创建两个租户的同名剧目，另一租户查询必须无结果。
+- [x] **步骤 3：实现 DTO、键与迁移。** DTO 使用以下完整字段，模型表按上表实现；迁移后创建两个租户的同名剧目，另一租户查询必须无结果。
 
 ```python
 import hashlib
@@ -177,8 +177,8 @@ def link_reuse_key(tenant_id: UUID, connection_id: UUID, application_id: str,
 `protected_base=""` 仅在版权方契约明确不存在名称归因要求时使用；未知归因契约不是空串。`tiktok_minis_id` 是已发现关联，可空；`application_id` 是版权方应用 ID，不能代替 TikTok Minis ID。
 内部 resolving/checking/creating/verifying 阶段统一对外映射为 pending，具体阶段另供任务详情展示，不能向 ResolvedLink.status 写入未定义枚举。
 
-- [ ] **步骤 4：验证迁移和隔离。** `uv run alembic upgrade head`；`uv run pytest tests/modules/providers/test_contracts.py tests/modules/providers/test_tenant_repository.py -q`；预期全部通过，跨租户外键插入失败，同配置键稳定，不同配置不混用。
-- [ ] **步骤 5：提交本任务。** `git add app/modules/providers app/alembic/versions/0003_provider_links.py tests/modules/providers`，然后 `git commit -m "providers: add tenant-scoped link contracts"`。
+- [x] **步骤 4：验证迁移和隔离。** `uv run alembic upgrade head`；`uv run pytest tests/modules/providers/test_contracts.py tests/modules/providers/test_tenant_repository.py -q`；预期全部通过，跨租户外键插入失败，同配置键稳定，不同配置不混用。
+- [x] **步骤 5：提交本任务。** `git add app/modules/providers app/alembic/versions/0003_provider_links.py tests/modules/providers`，然后 `git commit -m "providers: add tenant-scoped link contracts"`。
 
 ### 任务 2：核对真实版权方协议，实现独立连接适配器
 
@@ -190,13 +190,13 @@ def link_reuse_key(tenant_id: UUID, connection_id: UUID, application_id: str,
 
 **接口（Interfaces）：** 消费凭据加解密助手；输出 `ProviderSession(connection_id, application_id, http)`、`JiashuClient`、`WangyanClient`。两者提供 `search(title, page) -> dict`、`find_existing(drama_id, config, cursor) -> dict`、`create_step(step, payload) -> dict`、`read_link(remote_id) -> dict`，只返回脱敏业务数据；远端写动作由任务 3 调度。
 
-- [ ] **步骤 1：读取协议函数并形成核对清单。** 仅阅读原资料仓库 `jiashu-link-cli.js` 的 `searchDrama/listChannels/createChannel/generateGuideUrl/saveGuideUrl/getGuideUrl` 和 `drama-link-cli.js` 的 `getDramaList/createPromoteLink/getPromoteLinksRaw`；不读取账号存储与历史输出。将 HTTP 方法、路径、认证字段名称、分页结束条件、错误码、配置冲突、链接和归因字段来源记入 `providers-contract.md`。
+- [x] **步骤 1：读取协议函数并形成核对清单。** 仅阅读原资料仓库 `jiashu-link-cli.js` 的 `searchDrama/listChannels/createChannel/generateGuideUrl/saveGuideUrl/getGuideUrl` 和 `drama-link-cli.js` 的 `getDramaList/createPromoteLink/getPromoteLinksRaw`；不读取账号存储与历史输出。将 HTTP 方法、路径、认证字段名称、分页结束条件、错误码、配置冲突、链接和归因字段来源记入 `providers-contract.md`。
 
 当前证据中的嘉书顺序是 `getChannelList → create（缺失时）→ getGuideUrl → generateGuideUrl/saveGuideUrl（URL 缺失时）→ getGuideUrl`。网眼 `getPromoteLinksRaw` 默认只查近 30 天，服务不得照搬该历史窗口作为“全量查无链接”的依据。协议核对必须确认历史分页或远端精确查询的覆盖范围，未证明完整时返回 `lookup_incomplete`，禁止据此新建。
 
 网眼 CLI 中的 `campaign_name` 是由原始字段构造的；先核对版权方实际返回或当前网页渲染契约。优先保留远端原名，只有复核后的渲染契约及脱敏样例可进入适配器；不能仅凭旧注释宣布已验证。未核实归因格式返回 `attribution_contract_unverified`。嘉书应用与渠道前缀按连接发现，发现不到时返回明确错误，不写入历史账号默认值。
 
-- [ ] **步骤 2：先写独立会话和请求参数测试。**
+- [x] **步骤 2：先写独立会话和请求参数测试。**
 
 ```python
 import httpx
@@ -218,7 +218,7 @@ def test_two_connections_do_not_share_session_headers():
 
 运行 `uv run pytest tests/modules/providers/test_provider_protocols.py -q`；预期缺少客户端或全局会话实现不满足隔离而失败。
 
-- [ ] **步骤 3：实现显式上下文请求与错误映射。** 下列嘉书请求边界直接来自本地协议函数，真实登录及应用发现字段在本任务核对后以脱敏 fixture 固定；对 `10001` 只重新认证当前连接，对 `10005` 返回 `blocked_auth`，不能尝试其他租户账号。
+- [x] **步骤 3：实现显式上下文请求与错误映射。** 下列嘉书请求边界直接来自本地协议函数，真实登录及应用发现字段在本任务核对后以脱敏 fixture 固定；对 `10001` 只重新认证当前连接，对 `10005` 返回 `blocked_auth`，不能尝试其他租户账号。
 
 ```python
 import httpx
@@ -256,8 +256,8 @@ class JiashuClient:
 网眼对应独立 `httpx.Client` 请求 `/api/distribute_admin/drama/list`、`/promote/link/list`、`/promote/link/create` 的完整版权方路径；连接实例传入认证头，不设置进程级默认头。`httpx` 的错误由适配器按“只读可重试、写请求结果未知”交给任务 3，不把所有异常统一设为自动重试。
 在合法授权连接就绪后，核对登录、应用发现、历史链接回查与一条允许创建的链接，保存脱敏请求形状和字段类型；不保存令牌、密码、完整请求头。无连接时完成离线契约测试，并在交付记录注明真实验证尚未通过，不能把 mock 结果记为生产协议验收。
 
-- [ ] **步骤 4：回归并检查日志脱敏。** `uv run pytest tests/modules/providers/test_provider_protocols.py tests/modules/providers/test_connection_isolation.py -q`；预期两连接无串号，缺少应用权限不切账号，日志不含测试 session 原值。
-- [ ] **步骤 5：提交本任务。** `git add app/modules/providers tests/modules/providers ../docs/integrations/providers-contract.md`，然后 `git commit -m "providers: isolate verified provider sessions"`。
+- [x] **步骤 4：回归并检查日志脱敏。** `uv run pytest tests/modules/providers/test_provider_protocols.py tests/modules/providers/test_connection_isolation.py -q`；预期两连接无串号，缺少应用权限不切账号，日志不含测试 session 原值。
+- [x] **步骤 5：提交本任务。** `git add app/modules/providers tests/modules/providers ../docs/integrations/providers-contract.md`，然后 `git commit -m "providers: isolate verified provider sessions"`。
 
 ### 任务 3：实现复用、配置冲突与可恢复的外部写步骤
 
@@ -269,7 +269,7 @@ class JiashuClient:
 
 **接口（Interfaces）：** 输出 `check_jiashu_config(existing: dict, requested: dict) -> None`、`claim_effect(session, *, effect_id: UUID, tenant_id: UUID, attempt_token: UUID) -> bool`、`run_link_item(session, *, context: TenantContext, item_id: UUID) -> None`。`run_link_item` 接受准备任务的单行 ID，先解析明确剧目，再检查完整历史与复用结果。
 
-- [ ] **步骤 1：先写冲突和不盲目重放测试。**
+- [x] **步骤 1：先写冲突和不盲目重放测试。**
 
 ```python
 import pytest
@@ -287,9 +287,9 @@ def test_duplicate_delivery_never_replays_unknown_write(status):
     assert should_send(status) is False
 ```
 
-- [ ] **步骤 2：运行失败测试。** `uv run pytest tests/modules/providers/test_link_recovery.py -q`；预期缺少冲突检测与发送状态规则而失败。
+- [x] **步骤 2：运行失败测试。** `uv run pytest tests/modules/providers/test_link_recovery.py -q`；预期缺少冲突检测与发送状态规则而失败。
 
-- [ ] **步骤 3：实现配置比对和原子认领。**
+- [x] **步骤 3：实现配置比对和原子认领。**
 
 ```python
 from uuid import UUID
@@ -326,8 +326,8 @@ def claim_effect(session, *, effect_id: UUID, tenant_id: UUID,
 单独持久化嘉书的渠道创建、链接生成、保存、回查四个步骤。已有渠道但链接为空时补生成/保存，不重复建渠道。对已经持有 URL 的渠道先比对全部有效配置，再复用；规范化字段由任务 2 的协议样例确定，无法核实的有效配置必须阻塞而非假定相同。
 复用键防本地重复，`remote_scope_key` 额外防远端冲突：嘉书按连接＋应用＋渠道串行检查；网眼按已核实的远端唯一约束。先锁定 ProviderRemoteScope 行并设置 active_item_id，在全部子步骤结束前保留占用；不同配置请求不能因 request_digest 不同而绕开远端范围占用。sending 或 result_unknown 的任务未核实前不释放该范围。并发获取当前链接使用 PostgreSQL 唯一约束和短事务认领，不能只依赖 Redis 锁或单 Worker。
 
-- [ ] **步骤 4：验证真实 PostgreSQL 并发与中断恢复。** `uv run pytest tests/modules/providers/test_link_recovery.py tests/modules/providers/test_link_concurrency.py -q`；并发测试使用两个独立 session 同时认领同一 Effect，断言恰有一个返回 True。另模拟渠道已创建但保存未完成、保存超时回查已存在、十账户共享一剧链接，预期没有第二次创建请求。
-- [ ] **步骤 5：提交本任务。** `git add app/modules/providers tests/modules/providers`，然后 `git commit -m "providers: recover link writes without duplicates"`。
+- [x] **步骤 4：验证真实 PostgreSQL 并发与中断恢复。** `uv run pytest tests/modules/providers/test_link_recovery.py tests/modules/providers/test_link_concurrency.py -q`；并发测试使用两个独立 session 同时认领同一 Effect，断言恰有一个返回 True。另模拟渠道已创建但保存未完成、保存超时回查已存在、十账户共享一剧链接，预期没有第二次创建请求。
+- [x] **步骤 5：提交本任务。** `git add app/modules/providers tests/modules/providers`，然后 `git commit -m "providers: recover link writes without duplicates"`。
 
 ### 任务 4：接通批量准备、分页结果、候选纠错与 outbox
 
@@ -339,7 +339,7 @@ def claim_effect(session, *, effect_id: UUID, tenant_id: UUID,
 
 **接口（Interfaces）：** 输出顶部两项跨模块接口；输出 `choose_drama_candidate(session, *, context, input_id: UUID, external_drama_id: str) -> UUID`，只接受该输入行已返回的同应用候选，恢复单行取链；消费任务 3 `run_link_item`。
 
-- [ ] **步骤 1：先写批量输入和分页契约测试。**
+- [x] **步骤 1：先写批量输入和分页契约测试。**
 
 ```python
 from app.modules.providers.service import clean_lines
@@ -351,7 +351,7 @@ def test_batch_keeps_original_line_numbers_and_deduplicates():
 
 运行 `uv run pytest tests/modules/providers/test_preparation_api.py -q`；预期缺少模块入口而失败。大小写不同的输入不在前置清洗中合并，最终明确到相同远端剧 ID 后才合并有效剧目，保留各原始行结果。
 
-- [ ] **步骤 2：实现批量输入和持久化入口。**
+- [x] **步骤 2：实现批量输入和持久化入口。**
 
 ```python
 def clean_lines(lines: list[str]) -> list[tuple[int, str]]:
@@ -367,7 +367,7 @@ def clean_lines(lines: list[str]) -> list[tuple[int, str]]:
 
 `create_preparation_request` 先按 tenant_id 校验连接和应用，再计算完整输入摘要；相同 `request_id` 与同摘要返回已有任务，摘要不同返回 `request_id_conflict`。在同一事务内插入 LinkPreparation、各行 LinkPreparationItem 及 `enqueue_after_commit(session, context=context, task_name="providers.prepare_item", task_key=f"provider-item:{item.id}", payload={"item_id": str(item.id)})`。队列只放 item_id 和基础上下文，不放凭据、整批链接或原始大 JSON。
 
-- [ ] **步骤 3：实现键集分页和任务路由。** `read_preparation_results` 查询 tenant_id＋task_id，按 line_no、id 排序，默认每页 100 条，新增可选 page_size（50 或 100）并多取一条计算 next_cursor；UI 默认显式请求50条，非UI调用维持默认100条；游标包含 task_id、line_no、id，并验证不能用于另一任务。Worker 从基础上下文恢复操作者并校验连接归属，调用 `run_link_item`，异常写回原行。
+- [x] **步骤 3：实现键集分页和任务路由。** `read_preparation_results` 查询 tenant_id＋task_id，按 line_no、id 排序，默认每页 100 条，新增可选 page_size（50 或 100）并多取一条计算 next_cursor；UI 默认显式请求50条，非UI调用维持默认100条；游标包含 task_id、line_no、id，并验证不能用于另一任务。Worker 从基础上下文恢复操作者并校验连接归属，调用 `run_link_item`，异常写回原行。
 
 ```python
 from base64 import urlsafe_b64encode, urlsafe_b64decode
@@ -391,8 +391,8 @@ def decode_result_cursor(cursor: str, task_id: UUID) -> tuple[int, UUID]:
 
 注册 `POST /api/tenants/{tenant_id}/providers/link-preparations`、`GET /api/tenants/{tenant_id}/providers/link-preparations/{task_id}?cursor=&page_size=50`、`POST /api/tenants/{tenant_id}/providers/inputs/{input_id}/candidate`；POST 返回 202 和 task_id。连接管理使用 `/api/tenants/{tenant_id}/providers/connections` 的 GET/POST 与 `/api/tenants/{tenant_id}/providers/connections/{connection_id}` 的 PATCH；重新认证为其 `/verify` 子路径 POST，应用列表为其 `/applications` 子路径 GET。连接新增/重认证使用 manage，批量取链和候选恢复使用 provider_write，查询使用 read。连接列表、应用列表均分页，客户端不接收加密凭据字段。
 
-- [ ] **步骤 4：验证 API、重复提交、任务回滚和完整分页。** `uv run pytest tests/modules/providers/test_preparation_api.py tests/modules/providers/test_pagination.py -q`；预期 205 行默认得到 100/100/5 三页，显式 page_size=50 得到50/50/50/50/5，跨租户与跨任务游标失败，相同请求只入队一次，事务回滚不投递，异常行保留并且 ready 行可供搭建使用。
-- [ ] **步骤 5：提交本任务。** `git add app/modules/providers app/api/main.py tests/modules/providers`，然后 `git commit -m "providers: expose resumable batch link preparation"`。
+- [x] **步骤 4：验证 API、重复提交、任务回滚和完整分页。** `uv run pytest tests/modules/providers/test_preparation_api.py tests/modules/providers/test_pagination.py -q`；预期 205 行默认得到 100/100/5 三页，显式 page_size=50 得到50/50/50/50/5，跨租户与跨任务游标失败，相同请求只入队一次，事务回滚不投递，异常行保留并且 ready 行可供搭建使用。
+- [x] **步骤 5：提交本任务。** `git add app/modules/providers app/api/main.py tests/modules/providers`，然后 `git commit -m "providers: expose resumable batch link preparation"`。
 
 ### 任务 5：交付连接管理、链接结果与异常纠错页面
 

@@ -71,7 +71,7 @@
 - Consumes: `TenantContext`、`DomainError`、`require_tenant(..., action="strategy_write")`。
 - Produces: `StrategyConfig`、`create_strategy(session, *, context, name: str, config: StrategyConfig) -> UUID`、`append_version(session, *, context, strategy_id: UUID, config: StrategyConfig) -> UUID`、`get_version(session, *, context, version_id: UUID) -> StrategyConfig`。
 
-- [ ] **Step 1: 添加金额及不可变版本的失败测试。** 在 `test_versions.py` 导入下面实际接口；copy_pool_version使用迁移创建、Task 2填充的固定池版本UUID。
+- [x] **Step 1: 添加金额及不可变版本的失败测试。** 在 `test_versions.py` 导入下面实际接口；copy_pool_version使用迁移创建、Task 2填充的固定池版本UUID。
 
 ```python
 from decimal import Decimal
@@ -100,8 +100,8 @@ def test_version_keeps_budget_and_tenant(session, context, other_context):
         get_version(session, context=other_context, version_id=version_id)
 ```
 
-- [ ] **Step 2: 运行红测。** `uv run pytest tests/modules/strategies/test_versions.py -q`；预期新模块尚不存在导致失败。
-- [ ] **Step 3: 添加严格配置类型。** `extra="forbid"` 拒绝旧账户池、窗口和预算复制字段；Decimal 存入 NUMERIC，不经过浮点计算预算。
+- [x] **Step 2: 运行红测。** `uv run pytest tests/modules/strategies/test_versions.py -q`；预期新模块尚不存在导致失败。
+- [x] **Step 3: 添加严格配置类型。** `extra="forbid"` 拒绝旧账户池、窗口和预算复制字段；Decimal 存入 NUMERIC，不经过浮点计算预算。
 
 ```python
 from decimal import Decimal
@@ -120,7 +120,7 @@ class StrategyConfig(BaseModel):
     campaign_suffix: str = "-{YYYYMMDD}-{batch_short_id}"
 ```
 
-- [ ] **Step 4: 实现事务版本服务和迁移。** `Strategy(id, tenant_id, name, active, latest_version)`；`StrategyVersion(id, tenant_id, strategy_id, number, copy_pool_version_id, config JSONB, created_by, created_at)`。对 `(tenant_id,strategy_id,number)` 唯一，版本外键包含租户。先创建空的固定 CopyPoolVersion 记录，正文由 Task 2 填充；策略版本独立外键引用该池，不能只把引用藏在 JSON 内。以下 `append_version` 是核心事务，不在服务内部提交：
+- [x] **Step 4: 实现事务版本服务和迁移。** `Strategy(id, tenant_id, name, active, latest_version)`；`StrategyVersion(id, tenant_id, strategy_id, number, copy_pool_version_id, config JSONB, created_by, created_at)`。对 `(tenant_id,strategy_id,number)` 唯一，版本外键包含租户。先创建空的固定 CopyPoolVersion 记录，正文由 Task 2 填充；策略版本独立外键引用该池，不能只把引用藏在 JSON 内。以下 `append_version` 是核心事务，不在服务内部提交：
 
 ```python
 from uuid import uuid4
@@ -148,8 +148,8 @@ def append_version(session, *, context, strategy_id, config):
 ```
 
 `create_strategy` 插入 `latest_version=0` 主记录后调用此函数；`get_version` 用租户+版本 ID 查询并 `StrategyConfig.model_validate(row.config)`，未找到统一 `strategy_not_found`。迁移为策略版本表加拒绝 UPDATE/DELETE 的触发器，停用仅更新主表。为两并发版本追加增加唯一性测试，为跨租户版本引用增加外键失败测试。
-- [ ] **Step 5: 运行迁移与绿测。** `uv run alembic upgrade head`；`uv run pytest tests/modules/strategies/test_versions.py -q`，预期全部通过，旧版本保持原金额。
-- [ ] **Step 6: 提交本 Task。** `git add backend/app/modules/strategies backend/app/alembic/versions/0005_strategies_build_previews.py backend/tests/modules/strategies`；`git commit -m "strategies: persist tenant strategy versions"`。
+- [x] **Step 5: 运行迁移与绿测。** `uv run alembic upgrade head`；`uv run pytest tests/modules/strategies/test_versions.py -q`，预期全部通过，旧版本保持原金额。
+- [x] **Step 6: 提交本 Task。** `git add backend/app/modules/strategies backend/app/alembic/versions/0005_strategies_build_previews.py backend/tests/modules/strategies`；`git commit -m "strategies: persist tenant strategy versions"`。
 
 ### Task 2: 100 条英文文案、素材分组和确定性 SP 抽样
 
@@ -162,7 +162,7 @@ def append_version(session, *, context, strategy_id, config):
 - Consumes: `StrategyConfig`、`MaterialCandidate`。
 - Produces: `CopyChoice(copy_id: UUID, text: str)`、`GroupPlan(group_no: int, material_ids: tuple[UUID, ...], copies: tuple[CopyChoice, ...])`、`seed_copies() -> tuple[CopyChoice, ...]`、`make_groups(materials, *, group_size: int, creative_count: int, pool: tuple[CopyChoice, ...], seed: int) -> tuple[GroupPlan, ...]`。
 
-- [ ] **Step 1: 添加失败测试，验证真正的尾组、文案唯一及重复执行。** 使用 `SimpleNamespace` 只模拟本函数读取的素材字段，DB/账户测试不使用该替身。
+- [x] **Step 1: 添加失败测试，验证真正的尾组、文案唯一及重复执行。** 使用 `SimpleNamespace` 只模拟本函数读取的素材字段，DB/账户测试不使用该替身。
 
 ```python
 from types import SimpleNamespace
@@ -185,8 +185,8 @@ def test_tail_and_frozen_copy_choices():
         make_groups(files, group_size=10, creative_count=101, pool=pool, seed=51)
 ```
 
-- [ ] **Step 2: 运行红测。** `uv run pytest tests/modules/strategies/test_grouping.py -q`，预期缺少文案/分组实现。
-- [ ] **Step 3: 用以下可审阅的 10×10 固定组合生成全部 100 条种子。** 按双循环顺序落库，保存实际正文；运行期间不调用 AI，不把这些正文作为 CTA。
+- [x] **Step 2: 运行红测。** `uv run pytest tests/modules/strategies/test_grouping.py -q`，预期缺少文案/分组实现。
+- [x] **Step 3: 用以下可审阅的 10×10 固定组合生成全部 100 条种子。** 按双循环顺序落库，保存实际正文；运行期间不调用 AI，不把这些正文作为 CTA。
 
 ```python
 from dataclasses import dataclass
@@ -218,7 +218,7 @@ def seed_copies():
     return tuple(CopyChoice(uuid5(POOL_VERSION, text), text) for text in texts)
 ```
 
-- [ ] **Step 4: 编写完整纯函数分组。** 每个剧目素材组生成一次，后续账户行引用同一 GroupPlan；不得在账户循环里调用抽样。有效池正文去重后再判断容量。
+- [x] **Step 4: 编写完整纯函数分组。** 每个剧目素材组生成一次，后续账户行引用同一 GroupPlan；不得在账户循环里调用抽样。有效池正文去重后再判断容量。
 
 ```python
 from dataclasses import dataclass
@@ -249,7 +249,7 @@ def make_groups(materials, *, group_size, creative_count, pool, seed):
 ```
 
 扩展 `CopyPoolVersion` 并增加 `CopyEntry` 表和不可变版本约束，首次安装幂等 seed，列表以 `copy_id` 唯一。编辑内容产生新池版本；禁用条目不改旧版本。对空素材返回零组、同名不同 ID 不误合并、手动删除后尾组、98 条有效正文配 N=99 补充参数化测试。官方文案长度限制由计划 06 的场景能力校验，不在此臆定上限。
-- [ ] **Step 5: 绿测并提交。** `uv run pytest tests/modules/strategies/test_grouping.py -q`，预期全部通过；`git add backend/app/modules/strategies backend/tests/modules/strategies backend/app/alembic/versions/0005_strategies_build_previews.py`；`git commit -m "strategies: freeze grouped creative copy choices"`。
+- [x] **Step 5: 绿测并提交。** `uv run pytest tests/modules/strategies/test_grouping.py -q`，预期全部通过；`git add backend/app/modules/strategies backend/tests/modules/strategies backend/app/alembic/versions/0005_strategies_build_previews.py`；`git commit -m "strategies: freeze grouped creative copy choices"`。
 
 ### Task 3: 受保护名称和策略校验 API
 
@@ -262,7 +262,7 @@ def make_groups(materials, *, group_size, creative_count, pool, seed):
 - Consumes: `StrategyConfig`、`require_tenant`、Task 1 版本服务。
 - Produces: `render_names(*, protected_base: str, title: str, date_text: str, batch_short_id: str, suffix: str, group_no: int, creative_no: int, max_length: int) -> tuple[str, str, str]`；策略及文案池 API，路径与设计一致。
 
-- [ ] **Step 1: 添加前缀完整性与模板注入失败测试。**
+- [x] **Step 1: 添加前缀完整性与模板注入失败测试。**
 
 ```python
 import pytest
@@ -281,8 +281,8 @@ def test_protected_prefix_survives():
         render_names(**{**args, "max_length": 15}, suffix="-{YYYYMMDD}-{batch_short_id}")
 ```
 
-- [ ] **Step 2: 运行红测。** `uv run pytest tests/modules/strategies/test_naming.py -q`，预期命名函数缺失。
-- [ ] **Step 3: 添加白名单后缀实现。** `max_length` 来自已验证场景约束，测试值仅是 fixture，不是平台上限。
+- [x] **Step 2: 运行红测。** `uv run pytest tests/modules/strategies/test_naming.py -q`，预期命名函数缺失。
+- [x] **Step 3: 添加白名单后缀实现。** `max_length` 来自已验证场景约束，测试值仅是 fixture，不是平台上限。
 
 ```python
 from string import Formatter
@@ -309,7 +309,7 @@ def render_names(*, protected_base, title, date_text, batch_short_id, suffix,
     return campaign, group, ad
 ```
 
-- [ ] **Step 4: 注册 API 并固定鉴权动作。** 所有路由先 `require_tenant`；GET 使用 read，POST 创建/版本使用 strategy_write。返回 config 的 Decimal 为十进制字符串；支持策略停用、创建版本、获取指定池版本和只读 validate。API 的 validate 聚合字段错误、池容量和模板错误，不访问 TikTok。代码关键点：
+- [x] **Step 4: 注册 API 并固定鉴权动作。** 所有路由先 `require_tenant`；GET 使用 read，POST 创建/版本使用 strategy_write。返回 config 的 Decimal 为十进制字符串；支持策略停用、创建版本、获取指定池版本和只读 validate。API 的 validate 聚合字段错误、池容量和模板错误，不访问 TikTok。代码关键点：
 
 ```python
 from string import Formatter
@@ -325,7 +325,7 @@ def validate_strategy(config, pool):
 ```
 
 该函数与 `render_names` 共用模板解析函数，实际提交时也调用完整检查；API 将模板 parse 的 ValueError 转为 `invalid_name_template`。`test_api.py` 验证跨租户读取统一 404、普通无策略权限成员写入 403、未知字段 422、停用不会调用任何 SDK status 方法。
-- [ ] **Step 5: 绿测并提交。** `uv run pytest tests/modules/strategies -q`；预期全部通过。`git add backend/app/modules/strategies backend/app/api/main.py backend/tests/modules/strategies`；`git commit -m "strategies: validate protected names and tenant APIs"`。
+- [x] **Step 5: 绿测并提交。** `uv run pytest tests/modules/strategies -q`；预期全部通过。`git add backend/app/modules/strategies backend/app/api/main.py backend/tests/modules/strategies`；`git commit -m "strategies: validate protected names and tenant APIs"`。
 
 ### Task 4: 草稿输入、资源准备与可追溯编辑
 

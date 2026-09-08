@@ -1089,7 +1089,7 @@ def post_resolve(tenant_id: UUID, body: ResolveRequest, session: SessionDep, use
 
 侧栏使用统一顺序：广告搭建、搭建任务、素材库、投放策略、账户与授权、版权方连接、成员管理。平台管理保持独立入口；成员管理只向管理员显示。BulkAccountInput 是交给搭建页复用的组件，不在 UI-08 账户目录再做一套广告账户选择或搭建入口。当前租户/BC 固定在顶栏。
 
-- [ ] **Step 1: 写租户切换不泄漏旧页面和批量输入无二次勾选的 Playwright 测试。** 复用基础计划登录 storageState，通过 Playwright route fulfill 提供本地 API fake，所有外部 TikTok 请求均被拦截失败。
+- [x] **Step 1: 写租户切换不泄漏旧页面和批量输入无二次勾选的 Playwright 测试。** 复用基础计划登录 storageState，通过 Playwright route fulfill 提供本地 API fake，所有外部 TikTok 请求均被拦截失败。
 
 ```typescript
 import { test, expect } from "@playwright/test"
@@ -1116,9 +1116,9 @@ test("租户切换不展示旧账户", async ({ page }) => {
 })
 ```
 
-- [ ] **Step 2: 运行 `bunx playwright test tests/tenants-accounts.spec.ts`，预期页面/组件未实现而失败。**
+- [x] **Step 2: 运行 `bunx playwright test tests/tenants-accounts.spec.ts`，预期页面/组件未实现而失败。**
 
-- [ ] **Step 3: 实现租户切换及批量粘贴组件的核心行为。**
+- [x] **Step 3: 实现租户切换及批量粘贴组件的核心行为。**
 
 ```tsx
 // TenantScope.tsx 中的切换回调：先取消旧请求，再使旧缓存不可见。
@@ -1160,7 +1160,7 @@ export function BulkAccountInput({ value, onChange, onResolve, rows }: Props) {
 TenantScope 组件定义 `memberships` 为 `/api/me/tenants` 结果，`scope` 和 `draftEpoch` 为 React state，QueryClient 来自 `useQueryClient`；异步结果按 tenant query key 归属，不能回写新租户数据。大量解析结果在实际页面用服务端分页或分块分页容器，只将当前页 rows 传给组件。
 调用 switchTenant 或对应 switchBC 之前由离页守卫处理未保存表单；用户取消离页时不执行该回调。重挂载只清理当前浏览范围的 UI 状态，不调用删除/更新原草稿 API；返回原租户/BC 后仍能打开已保存草稿。路由中的 tenant_id 与顶栏上下文同步，不能仅改顶栏文字而继续请求旧租户。
 
-- [ ] **Step 4: 接入各管理页表单。** 租户页供平台创建、改名和停用；成员页固定三种租户角色；连接页显示等待配置应用、授权中、发现中、可用、重授权、错误与停用。账户页按 BC/名称/ID/状态查询、显示实际币种与访问冲突，下一页使用 next_cursor。错误行展示原文与原因，成功解析直接可用，无再次勾选；素材账户配置入口不存在。所有写操作依据角色隐藏按钮，并显示后端拒绝结果。
+- [x] **Step 4: 接入各管理页表单。** 租户页供平台创建、改名和停用；成员页固定三种租户角色；连接页显示等待配置应用、授权中、发现中、可用、重授权、错误与停用。账户页按 BC/名称/ID/状态查询、显示实际币种与访问冲突，下一页使用 next_cursor。错误行展示原文与原因，成功解析直接可用，无再次勾选；素材账户配置入口不存在。所有写操作依据角色隐藏按钮，并显示后端拒绝结果。
 
 本步骤的布局与状态验收具体化为：
 
@@ -1186,7 +1186,7 @@ TenantScope 组件定义 `memberships` 为 `/api/me/tenants` 结果，`scope` �
 | 401 与 403 | 前者进入登录并保留合法返回位置；后者保留登录，不能将无权限误报成会话过期 |
 | UI-02/UI-10 管理 Sheet | 表单、进行中、字段错误、成功关闭与焦点返回均有可见状态；不发送邀请邮件 |
 
-- [ ] **Step 5: 运行页面、类型与构建验证后提交。** 再加入 viewer 不显示“新增授权/修改成员”、空应用配置显示“等待配置开发者应用”、同名行显示 AMBIGUOUS、长 ID 保持文本、冲突账户仍列出但不能操作等断言。
+- [x] **Step 5: 运行页面、类型与构建验证后提交。** 再加入 viewer 不显示“新增授权/修改成员”、空应用配置显示“等待配置开发者应用”、同名行显示 AMBIGUOUS、长 ID 保持文本、冲突账户仍列出但不能操作等断言。
 
 ```bash
 cd frontend

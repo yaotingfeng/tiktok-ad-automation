@@ -81,6 +81,21 @@ export type AppConfiguration = {
 };
 
 /**
+ * AppendVersionRequest
+ */
+export type AppendVersionRequest = {
+    config: StrategyConfig_Input;
+    /**
+     * Expected Version
+     */
+    expected_version: number;
+    /**
+     * Request Id
+     */
+    request_id: string;
+};
+
+/**
  * AuthorizationRequest
  */
 export type AuthorizationRequest = {
@@ -149,6 +164,16 @@ export type Body_login_login_access_token = {
 };
 
 /**
+ * CandidateSelection
+ */
+export type CandidateSelection = {
+    /**
+     * External Drama Id
+     */
+    external_drama_id: string;
+};
+
+/**
  * ConnectionPublic
  *
  * Explicit allowlist: never serialize ORM credential fields to HTTP.
@@ -195,6 +220,75 @@ export type ConnectionUpdate = {
 };
 
 /**
+ * CopyPoolPublic
+ */
+export type CopyPoolPublic = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Entries
+     */
+    entries: Array<CopyPublic>;
+};
+
+/**
+ * CopyPublic
+ */
+export type CopyPublic = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Text
+     */
+    text: string;
+    /**
+     * Position
+     */
+    position: number;
+};
+
+/**
+ * CreateStrategyRequest
+ */
+export type CreateStrategyRequest = {
+    /**
+     * Name
+     */
+    name: string;
+    config: StrategyConfig_Input;
+    /**
+     * Request Id
+     */
+    request_id: string;
+};
+
+/**
+ * DramaCandidate
+ */
+export type DramaCandidate = {
+    /**
+     * External Drama Id
+     */
+    external_drama_id: string;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Language
+     */
+    language?: string | null;
+};
+
+/**
  * HTTPValidationError
  */
 export type HTTPValidationError = {
@@ -216,6 +310,34 @@ export type InputLine = {
      * Raw
      */
     raw: string;
+};
+
+/**
+ * LinkPreparationRequest
+ */
+export type LinkPreparationRequest = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Connection Id
+     */
+    connection_id: string;
+    /**
+     * Application Id
+     */
+    application_id: string;
+    /**
+     * Lines
+     */
+    lines: Array<string>;
+    /**
+     * Config
+     */
+    config?: {
+        [key: string]: unknown;
+    };
 };
 
 /**
@@ -351,6 +473,62 @@ export type Page_MemberPublic_ = {
 };
 
 /**
+ * Page[ProviderApplicationPublic]
+ */
+export type Page_ProviderApplicationPublic_ = {
+    /**
+     * Items
+     */
+    items: Array<ProviderApplicationPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
+ * Page[ProviderConnectionPublic]
+ */
+export type Page_ProviderConnectionPublic_ = {
+    /**
+     * Items
+     */
+    items: Array<ProviderConnectionPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
+ * Page[ResolvedLink]
+ */
+export type Page_ResolvedLink_ = {
+    /**
+     * Items
+     */
+    items: Array<ResolvedLink>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
+ * Page[StrategyPublic]
+ */
+export type Page_StrategyPublic_ = {
+    /**
+     * Items
+     */
+    items: Array<StrategyPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
  * Page[TenantSummary]
  */
 export type Page_TenantSummary_ = {
@@ -376,6 +554,122 @@ export type Page_UserCandidate_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+};
+
+/**
+ * Page[VersionPublic]
+ */
+export type Page_VersionPublic_ = {
+    /**
+     * Items
+     */
+    items: Array<VersionPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
+ * PreparationAccepted
+ */
+export type PreparationAccepted = {
+    /**
+     * Task Id
+     */
+    task_id: string;
+};
+
+/**
+ * ProviderApplicationPublic
+ */
+export type ProviderApplicationPublic = {
+    /**
+     * External Id
+     */
+    external_id: string;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Tiktok Minis Id
+     */
+    tiktok_minis_id?: string | null;
+    /**
+     * Available
+     */
+    available: boolean;
+};
+
+/**
+ * ProviderConnectionCreate
+ */
+export type ProviderConnectionCreate = {
+    /**
+     * Kind
+     */
+    kind: 'wangyan' | 'jiashu';
+    /**
+     * Display Name
+     */
+    display_name: string;
+    /**
+     * Credentials
+     */
+    credentials: {
+        [key: string]: string;
+    };
+};
+
+/**
+ * ProviderConnectionPublic
+ */
+export type ProviderConnectionPublic = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Kind
+     */
+    kind: string;
+    /**
+     * Display Name
+     */
+    display_name: string;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Verified At
+     */
+    verified_at?: string | null;
+    /**
+     * Error Code
+     */
+    error_code?: string | null;
+};
+
+/**
+ * ProviderConnectionUpdate
+ */
+export type ProviderConnectionUpdate = {
+    /**
+     * Display Name
+     */
+    display_name?: string | null;
+    /**
+     * Credentials
+     */
+    credentials?: {
+        [key: string]: string;
+    } | null;
+    /**
+     * Status
+     */
+    status?: 'disabled' | null;
 };
 
 /**
@@ -424,6 +718,205 @@ export type ResolvedLine = {
      * Reason
      */
     reason?: string | null;
+};
+
+/**
+ * ResolvedLink
+ */
+export type ResolvedLink = {
+    /**
+     * Input Id
+     */
+    input_id: string;
+    /**
+     * Line No
+     */
+    line_no: number;
+    /**
+     * Raw Input
+     */
+    raw_input: string;
+    /**
+     * Provider Kind
+     */
+    provider_kind: string;
+    /**
+     * Connection Id
+     */
+    connection_id: string;
+    /**
+     * Application Id
+     */
+    application_id: string;
+    /**
+     * Drama Id
+     */
+    drama_id?: string | null;
+    /**
+     * External Drama Id
+     */
+    external_drama_id?: string | null;
+    /**
+     * Title
+     */
+    title?: string | null;
+    /**
+     * Language
+     */
+    language?: string | null;
+    /**
+     * Link Id
+     */
+    link_id?: string | null;
+    /**
+     * Url
+     */
+    url?: string | null;
+    /**
+     * Protected Base
+     */
+    protected_base?: string | null;
+    /**
+     * Tiktok Minis Id
+     */
+    tiktok_minis_id?: string | null;
+    /**
+     * Status
+     */
+    status: 'pending' | 'needs_resolution' | 'blocked_auth' | 'config_conflict' | 'retryable_error' | 'result_unknown' | 'failed' | 'ready';
+    /**
+     * Candidates
+     */
+    candidates?: Array<DramaCandidate>;
+    /**
+     * Error Code
+     */
+    error_code?: string | null;
+    /**
+     * Error Message
+     */
+    error_message?: string | null;
+};
+
+/**
+ * StrategyConfig
+ */
+export type StrategyConfig_Input = {
+    /**
+     * Budget
+     */
+    budget: number | string;
+    /**
+     * Currency
+     */
+    currency: string;
+    /**
+     * Target Roas
+     */
+    target_roas: number | string;
+    /**
+     * Group Size
+     */
+    group_size: number;
+    /**
+     * Creative Count
+     */
+    creative_count: number;
+    /**
+     * Copy Pool Version
+     */
+    copy_pool_version: string;
+    /**
+     * Cta Option Ids
+     */
+    cta_option_ids?: Array<string>;
+    /**
+     * Campaign Suffix
+     */
+    campaign_suffix?: string;
+};
+
+/**
+ * StrategyConfig
+ */
+export type StrategyConfig_Output = {
+    /**
+     * Budget
+     */
+    budget: string;
+    /**
+     * Currency
+     */
+    currency: string;
+    /**
+     * Target Roas
+     */
+    target_roas: string;
+    /**
+     * Group Size
+     */
+    group_size: number;
+    /**
+     * Creative Count
+     */
+    creative_count: number;
+    /**
+     * Copy Pool Version
+     */
+    copy_pool_version: string;
+    /**
+     * Cta Option Ids
+     */
+    cta_option_ids?: Array<string>;
+    /**
+     * Campaign Suffix
+     */
+    campaign_suffix?: string;
+};
+
+/**
+ * StrategyPublic
+ */
+export type StrategyPublic = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Active
+     */
+    active: boolean;
+    /**
+     * Latest Version
+     */
+    latest_version: number;
+    /**
+     * Version Id
+     */
+    version_id: string;
+    config: StrategyConfig_Output;
+    /**
+     * Created By
+     */
+    created_by: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+};
+
+/**
+ * StrategyStateRequest
+ */
+export type StrategyStateRequest = {
+    /**
+     * Active
+     */
+    active: boolean;
 };
 
 /**
@@ -676,6 +1169,69 @@ export type ValidationError = {
     ctx?: {
         [key: string]: unknown;
     };
+};
+
+/**
+ * ValidationIssue
+ */
+export type ValidationIssue = {
+    /**
+     * Field
+     */
+    field: string;
+    /**
+     * Code
+     */
+    code: string;
+};
+
+/**
+ * ValidationResult
+ */
+export type ValidationResult = {
+    /**
+     * Valid
+     */
+    valid: boolean;
+    /**
+     * Errors
+     */
+    errors: Array<ValidationIssue>;
+    /**
+     * Scene Check Pending
+     */
+    scene_check_pending?: boolean;
+};
+
+/**
+ * VersionPublic
+ */
+export type VersionPublic = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Strategy Id
+     */
+    strategy_id: string;
+    /**
+     * Number
+     */
+    number: number;
+    config: StrategyConfig_Output;
+    /**
+     * Created By
+     */
+    created_by: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Request Id
+     */
+    request_id: string;
 };
 
 export type loginLoginAccessTokenData = {
@@ -1668,3 +2224,644 @@ export type accountsPatchConnectionResponses = {
 };
 
 export type accountsPatchConnectionResponse = accountsPatchConnectionResponses[keyof accountsPatchConnectionResponses];
+
+export type providersPostPreparationData = {
+    body: LinkPreparationRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/providers/link-preparations';
+};
+
+export type providersPostPreparationErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type providersPostPreparationError = providersPostPreparationErrors[keyof providersPostPreparationErrors];
+
+export type providersPostPreparationResponses = {
+    /**
+     * Successful Response
+     */
+    202: PreparationAccepted;
+};
+
+export type providersPostPreparationResponse = providersPostPreparationResponses[keyof providersPostPreparationResponses];
+
+export type providersGetPreparationData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Task Id
+         */
+        task_id: string;
+    };
+    query?: {
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Page Size
+         */
+        page_size?: number;
+    };
+    url: '/api/tenants/{tenant_id}/providers/link-preparations/{task_id}';
+};
+
+export type providersGetPreparationErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type providersGetPreparationError = providersGetPreparationErrors[keyof providersGetPreparationErrors];
+
+export type providersGetPreparationResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_ResolvedLink_;
+};
+
+export type providersGetPreparationResponse = providersGetPreparationResponses[keyof providersGetPreparationResponses];
+
+export type providersPostCandidateData = {
+    body: CandidateSelection;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Input Id
+         */
+        input_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/providers/inputs/{input_id}/candidate';
+};
+
+export type providersPostCandidateErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type providersPostCandidateError = providersPostCandidateErrors[keyof providersPostCandidateErrors];
+
+export type providersPostCandidateResponses = {
+    /**
+     * Successful Response
+     */
+    202: PreparationAccepted;
+};
+
+export type providersPostCandidateResponse = providersPostCandidateResponses[keyof providersPostCandidateResponses];
+
+export type providersListConnectionsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: {
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/providers/connections';
+};
+
+export type providersListConnectionsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type providersListConnectionsError = providersListConnectionsErrors[keyof providersListConnectionsErrors];
+
+export type providersListConnectionsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_ProviderConnectionPublic_;
+};
+
+export type providersListConnectionsResponse = providersListConnectionsResponses[keyof providersListConnectionsResponses];
+
+export type providersPostConnectionData = {
+    body: ProviderConnectionCreate;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/providers/connections';
+};
+
+export type providersPostConnectionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type providersPostConnectionError = providersPostConnectionErrors[keyof providersPostConnectionErrors];
+
+export type providersPostConnectionResponses = {
+    /**
+     * Successful Response
+     */
+    201: ProviderConnectionPublic;
+};
+
+export type providersPostConnectionResponse = providersPostConnectionResponses[keyof providersPostConnectionResponses];
+
+export type providersPatchConnectionData = {
+    body: ProviderConnectionUpdate;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Connection Id
+         */
+        connection_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/providers/connections/{connection_id}';
+};
+
+export type providersPatchConnectionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type providersPatchConnectionError = providersPatchConnectionErrors[keyof providersPatchConnectionErrors];
+
+export type providersPatchConnectionResponses = {
+    /**
+     * Successful Response
+     */
+    200: ProviderConnectionPublic;
+};
+
+export type providersPatchConnectionResponse = providersPatchConnectionResponses[keyof providersPatchConnectionResponses];
+
+export type providersPostVerifyData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Connection Id
+         */
+        connection_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/providers/connections/{connection_id}/verify';
+};
+
+export type providersPostVerifyErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type providersPostVerifyError = providersPostVerifyErrors[keyof providersPostVerifyErrors];
+
+export type providersPostVerifyResponses = {
+    /**
+     * Successful Response
+     */
+    200: ProviderConnectionPublic;
+};
+
+export type providersPostVerifyResponse = providersPostVerifyResponses[keyof providersPostVerifyResponses];
+
+export type providersListApplicationsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Connection Id
+         */
+        connection_id: string;
+    };
+    query?: {
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/providers/connections/{connection_id}/applications';
+};
+
+export type providersListApplicationsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type providersListApplicationsError = providersListApplicationsErrors[keyof providersListApplicationsErrors];
+
+export type providersListApplicationsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_ProviderApplicationPublic_;
+};
+
+export type providersListApplicationsResponse = providersListApplicationsResponses[keyof providersListApplicationsResponses];
+
+export type strategiesGetStrategiesData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: {
+        /**
+         * Query
+         */
+        query?: string;
+        /**
+         * Active
+         */
+        active?: boolean | null;
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/strategies';
+};
+
+export type strategiesGetStrategiesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type strategiesGetStrategiesError = strategiesGetStrategiesErrors[keyof strategiesGetStrategiesErrors];
+
+export type strategiesGetStrategiesResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_StrategyPublic_;
+};
+
+export type strategiesGetStrategiesResponse = strategiesGetStrategiesResponses[keyof strategiesGetStrategiesResponses];
+
+export type strategiesCreateData = {
+    body: CreateStrategyRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/strategies';
+};
+
+export type strategiesCreateErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type strategiesCreateError = strategiesCreateErrors[keyof strategiesCreateErrors];
+
+export type strategiesCreateResponses = {
+    /**
+     * Successful Response
+     */
+    201: StrategyPublic;
+};
+
+export type strategiesCreateResponse = strategiesCreateResponses[keyof strategiesCreateResponses];
+
+export type strategiesValidateData = {
+    body: StrategyConfig_Input;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/strategies/validate';
+};
+
+export type strategiesValidateErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type strategiesValidateError = strategiesValidateErrors[keyof strategiesValidateErrors];
+
+export type strategiesValidateResponses = {
+    /**
+     * Successful Response
+     */
+    200: ValidationResult;
+};
+
+export type strategiesValidateResponse = strategiesValidateResponses[keyof strategiesValidateResponses];
+
+export type strategiesGetOneData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Strategy Id
+         */
+        strategy_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/strategies/{strategy_id}';
+};
+
+export type strategiesGetOneErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type strategiesGetOneError = strategiesGetOneErrors[keyof strategiesGetOneErrors];
+
+export type strategiesGetOneResponses = {
+    /**
+     * Successful Response
+     */
+    200: StrategyPublic;
+};
+
+export type strategiesGetOneResponse = strategiesGetOneResponses[keyof strategiesGetOneResponses];
+
+export type strategiesSetStateData = {
+    body: StrategyStateRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Strategy Id
+         */
+        strategy_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/strategies/{strategy_id}';
+};
+
+export type strategiesSetStateErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type strategiesSetStateError = strategiesSetStateErrors[keyof strategiesSetStateErrors];
+
+export type strategiesSetStateResponses = {
+    /**
+     * Successful Response
+     */
+    200: StrategyPublic;
+};
+
+export type strategiesSetStateResponse = strategiesSetStateResponses[keyof strategiesSetStateResponses];
+
+export type strategiesVersionsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Strategy Id
+         */
+        strategy_id: string;
+    };
+    query?: {
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/strategies/{strategy_id}/versions';
+};
+
+export type strategiesVersionsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type strategiesVersionsError = strategiesVersionsErrors[keyof strategiesVersionsErrors];
+
+export type strategiesVersionsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_VersionPublic_;
+};
+
+export type strategiesVersionsResponse = strategiesVersionsResponses[keyof strategiesVersionsResponses];
+
+export type strategiesAppendData = {
+    body: AppendVersionRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Strategy Id
+         */
+        strategy_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/strategies/{strategy_id}/versions';
+};
+
+export type strategiesAppendErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type strategiesAppendError = strategiesAppendErrors[keyof strategiesAppendErrors];
+
+export type strategiesAppendResponses = {
+    /**
+     * Successful Response
+     */
+    201: VersionPublic;
+};
+
+export type strategiesAppendResponse = strategiesAppendResponses[keyof strategiesAppendResponses];
+
+export type strategiesVersionData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Version Id
+         */
+        version_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/strategy-versions/{version_id}';
+};
+
+export type strategiesVersionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type strategiesVersionError = strategiesVersionErrors[keyof strategiesVersionErrors];
+
+export type strategiesVersionResponses = {
+    /**
+     * Successful Response
+     */
+    200: VersionPublic;
+};
+
+export type strategiesVersionResponse = strategiesVersionResponses[keyof strategiesVersionResponses];
+
+export type strategiesSavedRequestData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Request Id
+         */
+        request_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/strategy-save-requests/{request_id}';
+};
+
+export type strategiesSavedRequestErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type strategiesSavedRequestError = strategiesSavedRequestErrors[keyof strategiesSavedRequestErrors];
+
+export type strategiesSavedRequestResponses = {
+    /**
+     * Successful Response
+     */
+    200: VersionPublic;
+};
+
+export type strategiesSavedRequestResponse = strategiesSavedRequestResponses[keyof strategiesSavedRequestResponses];
+
+export type strategiesCopyPoolData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Version Id
+         */
+        version_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/copy-pools/{version_id}';
+};
+
+export type strategiesCopyPoolErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type strategiesCopyPoolError = strategiesCopyPoolErrors[keyof strategiesCopyPoolErrors];
+
+export type strategiesCopyPoolResponses = {
+    /**
+     * Successful Response
+     */
+    200: CopyPoolPublic;
+};
+
+export type strategiesCopyPoolResponse = strategiesCopyPoolResponses[keyof strategiesCopyPoolResponses];
