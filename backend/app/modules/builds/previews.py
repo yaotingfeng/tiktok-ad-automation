@@ -13,6 +13,7 @@ from sqlmodel import Session, col, select
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.core.pagination import Page
+from app.modules.accounts.access import resolve_account_access
 from app.modules.accounts.resolver import decode_cursor, encode_cursor
 from app.modules.builds.drafts import get_draft
 from app.modules.builds.models import (
@@ -428,6 +429,24 @@ def _expand_unit(
             p.update(drama_after=p["current_drama"], current_drama=None)
             return
         try:
+            current_access = resolve_account_access(
+                session,
+                context=context,
+                bc_id=preview.bc_id,
+                advertiser_id=account.advertiser_id,
+                action="read",
+            )
+            if current_access.connection_id != account.connection_id:
+                raise DomainError(
+                    "account_authorization_changed", "账户授权已改变，请重新准备草稿"
+                )
+            if (
+                current_access.currency != account.currency
+                or current_access.timezone != account.timezone
+            ):
+                raise DomainError(
+                    "account_metadata_changed", "账户信息已改变，请重新准备草稿"
+                )
             scene = read_scene_context(
                 session,
                 context=context,
@@ -441,6 +460,8 @@ def _expand_unit(
                 "account_ownership_conflict",
                 "account_metadata_incomplete",
                 "account_access_denied",
+                "account_authorization_changed",
+                "account_metadata_changed",
                 "scene_link_unavailable",
                 "resource_not_found",
             }:
