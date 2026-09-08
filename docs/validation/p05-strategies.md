@@ -4,10 +4,10 @@
 
 固定文案池包含 100 条英文正文，迁移保存全部正文及稳定 ID。池封存后不可增删改；策略版本禁止 SQL UPDATE/DELETE，停用只修改策略主记录。每剧按文件名与素材 UUID 排序、保留尾组、每组无放回抽样一次；后续账户展开复用分组及正文，不在账户循环内重抽。
 
-策略保存请求必须带 `request_id`；追加版本另带 `expected_version`。租户与请求标识唯一，重复相同请求返回已保存结果，改动请求内容返回冲突。`GET /api/tenants/{tenant_id}/strategy-save-requests/{request_id}` 供保存结果未知时精确回查。版本历史、策略目录均为服务端游标分页。策略列表 API 不传 active 表示全部；页面默认可用时显式传 true。
+策略保存请求必须带 `request_id`；追加版本另带 `expected_version`。租户与请求标识唯一，重复相同请求返回已保存结果，改动请求内容返回冲突。`GET /api/tenants/{tenant_id}/strategy-save-requests/{request_id}` 供保存结果未知时精确回查。创建与追加版本均返回该请求对应的 VersionPublic（id为版本ID，另有strategy_id），不把后续latest版本当成本次保存结果；创建→追加→重放的回归先失败后通过。版本历史、策略目录均为服务端游标分页。策略列表 API 不传 active 表示全部；页面默认可用时显式传 true。
 
 命名只解析后缀中的 YYYYMMDD 和 batch_short_id；受保护版权方基础名原样拼接，不解析其中花括号，也不截断。日期、短码和平台名称长度由后续冻结预览提供。没有轮转、账户池或二次激活配置。
 
-验证：44 项策略测试通过，包括 3 个独立临时 PostgreSQL 库内双连接并发回归、请求幂等、旧版本保护、跨租户复合外键、角色变化、422/403/404 API 错误、预算精度、100 文案/尾组/稳定随机、禁止后缀注入。数据库空 JSON 与 NaN 的两项用例先失败再通过。迁移 `0005_strategies` 从 `0004c_object_claims` 升级、降级再升级通过，Alembic check 无差异。Ruff、strict mypy、ty 通过。
+验证：45 项策略测试通过，包括 3 个独立临时 PostgreSQL 库内双连接并发回归、请求幂等、旧版本保护、跨租户复合外键、角色变化、422/403/404 API 错误、预算精度、100 文案/尾组/稳定随机、禁止后缀注入。数据库空 JSON 与 NaN 的两项用例先失败再通过。迁移 `0005_strategies` 从 `0004c_object_claims` 升级、降级再升级通过，Alembic check 无差异。Ruff、strict mypy、ty 通过。
 
 迁移按交付保持不可变：本次先交付 `0005_strategies`，后续草稿与冻结预览使用追加迁移，替代计划中“在同一个未交付迁移内持续增表”的编排假设。尚未交付策略页面、草稿/预览和实际广告执行；本阶段没有外部 API 调用。独立审查结果另行登记进度文档。

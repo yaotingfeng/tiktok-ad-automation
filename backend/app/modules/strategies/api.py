@@ -52,21 +52,23 @@ def validate(
     return ValidationResult(valid=not errors, errors=errors)
 
 
-@router.post("/strategies", response_model=StrategyPublic, status_code=201)
+@router.post("/strategies", response_model=VersionPublic, status_code=201)
 def create(
     tenant_id: UUID, body: CreateStrategyRequest, session: SessionDep, user: CurrentUser
-) -> StrategyPublic:
+) -> VersionPublic:
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="strategy_write"
     )
-    identity = service.create_strategy(
+    service.create_strategy(
         session,
         context=context,
         name=body.name,
         config=body.config,
         request_id=body.request_id,
     )
-    result = service.get_strategy(session, context=context, strategy_id=identity)
+    result = service.get_saved_request(
+        session, context=context, request_id=body.request_id
+    )
     session.commit()
     return result
 

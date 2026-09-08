@@ -14,6 +14,33 @@ def headers(context):
     }
 
 
+def test_create_retry_returns_its_saved_version_after_a_later_edit(client, context):
+    base = f"/api/tenants/{context.tenant_id}"
+    request = uuid4()
+    body = {
+        "name": "Original",
+        "config": config().model_dump(mode="json"),
+        "request_id": str(request),
+    }
+    first = client.post(f"{base}/strategies", json=body, headers=headers(context))
+    saved = client.get(
+        f"{base}/strategy-save-requests/{request}", headers=headers(context)
+    ).json()
+    appended = client.post(
+        f"{base}/strategies/{saved['strategy_id']}/versions",
+        json={
+            "config": config(budget="200").model_dump(mode="json"),
+            "request_id": str(uuid4()),
+            "expected_version": 1,
+        },
+        headers=headers(context),
+    )
+    assert appended.status_code == 201
+    replay = client.post(f"{base}/strategies", json=body, headers=headers(context))
+    assert replay.status_code == 201
+    assert replay.json() == first.json()
+
+
 def test_versioned_save_recovery_history_and_local_disable(client, context):
     base = f"/api/tenants/{context.tenant_id}"
     request = uuid4()
@@ -26,7 +53,7 @@ def test_versioned_save_recovery_history_and_local_disable(client, context):
     assert first.status_code == 201, first.text
     initial = first.json()
     assert initial["config"]["budget"] == "100.25"
-    assert initial["latest_version"] == 1
+    assert initial["number"] == 1
     assert (
         client.post(f"{base}/strategies", json=body, headers=headers(context)).json()[
             "id"
@@ -36,9 +63,9 @@ def test_versioned_save_recovery_history_and_local_disable(client, context):
     recovered = client.get(
         f"{base}/strategy-save-requests/{request}", headers=headers(context)
     )
-    assert recovered.json()["id"] == initial["version_id"]
+    assert recovered.json()["id"] == initial["id"]
     revised = client.post(
-        f"{base}/strategies/{initial['id']}/versions",
+        f"{base}/strategies/{initial['strategy_id']}/versions",
         json={
             "config": config(budget="200").model_dump(mode="json"),
             "request_id": str(uuid4()),
@@ -50,18 +77,18 @@ def test_versioned_save_recovery_history_and_local_disable(client, context):
     assert revised.json()["number"] == 2
     assert (
         client.get(
-            f"{base}/strategy-versions/{initial['version_id']}",
+            f"{base}/strategy-versions/{initial['id']}",
             headers=headers(context),
         ).json()["config"]["budget"]
         == "100.25"
     )
     history = client.get(
-        f"{base}/strategies/{initial['id']}/versions?limit=1", headers=headers(context)
+        f"{base}/strategies/{initial['strategy_id']}/versions?limit=1", headers=headers(context)
     ).json()
     assert history["items"][0]["number"] == 2
     assert (
         client.get(
-            f"{base}/strategies/{initial['id']}/versions",
+            f"{base}/strategies/{initial['strategy_id']}/versions",
             params={"limit": 1, "cursor": history["next_cursor"]},
             headers=headers(context),
         ).json()["items"][0]["number"]
@@ -69,7 +96,7 @@ def test_versioned_save_recovery_history_and_local_disable(client, context):
     )
     assert (
         client.patch(
-            f"{base}/strategies/{initial['id']}",
+            f"{base}/strategies/{initial['strategy_id']}",
             json={"active": False},
             headers=headers(context),
         ).json()["active"]
@@ -85,7 +112,7 @@ def test_versioned_save_recovery_history_and_local_disable(client, context):
         client.get(f"{base}/strategies?active=false", headers=headers(context)).json()[
             "items"
         ][0]["id"]
-        == initial["id"]
+        == initial["strategy_id"]
     )
 
 
@@ -127,7 +154,7 @@ def test_api_scope_role_and_strict_fields(client, session, context, other_contex
     ).json()
     assert (
         client.get(
-            f"/api/tenants/{other_context.tenant_id}/strategy-versions/{created['version_id']}",
+            f"/api/tenants/{other_context.tenant_id}/strategy-versions/{created['id']}",
             headers=headers(other_context),
         ).status_code
         == 404
@@ -153,7 +180,7 @@ def test_api_scope_role_and_strict_fields(client, session, context, other_contex
     )
     assert (
         client.patch(
-            f"{base}/strategies/{created['id']}",
+            f"{base}/strategies/{created['strategy_id']}",
             json={"active": False},
             headers=headers(context),
         ).status_code

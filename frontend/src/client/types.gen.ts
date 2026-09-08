@@ -3609,7 +3609,7 @@ export type strategiesCreateResponses = {
     /**
      * Successful Response
      */
-    201: StrategyPublic;
+    201: VersionPublic;
 };
 
 export type strategiesCreateResponse = strategiesCreateResponses[keyof strategiesCreateResponses];
