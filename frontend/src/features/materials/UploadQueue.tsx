@@ -63,7 +63,7 @@ export function UploadQueue({
   }, [query.error, onForbidden])
   const refresh = async () => {
     const result = await query.refetch()
-    if (result.data && !result.error)
+    if (write && result.data && !result.error)
       await manager.confirmCompletion(result.data)
   }
   const data = query.data?.bc_id === bcId ? query.data : undefined

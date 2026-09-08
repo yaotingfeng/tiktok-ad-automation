@@ -364,11 +364,14 @@ export function useUploadManager(tenantId: string, bcId: string) {
     }
   }
   const confirmCompletion = async (batch: UploadBatchResult) => {
+    if (batch.bc_id !== origin.bcId) return
     for (const row of batch.files) {
+      if (!active.current || denied.current) return
       const record = saved.records[row.material_id]
       if (
         row.status !== "receiving" ||
         !record?.completionUnknown ||
+        record.uploadId !== row.upload_id ||
         record.parts.length !== row.part_count ||
         controllers.current.has(row.material_id)
       )
