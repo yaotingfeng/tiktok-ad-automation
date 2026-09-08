@@ -1,0 +1,226 @@
+from typing import Annotated, Literal
+from uuid import UUID
+
+from fastapi import APIRouter, Query
+from sqlmodel import select
+
+from app.api.deps import CurrentUser, SessionDep
+from app.core.errors import DomainError
+from app.core.pagination import Page
+from app.modules.builds import catalog, drafts
+from app.modules.builds.models import (
+    BuildDraft,
+    DraftPreparation,
+    DraftPreparationRequest,
+)
+from app.modules.builds.schemas import (
+    CreateDraftRequest,
+    DraftDramaPublic,
+    DraftGroupEditRequest,
+    DraftInputPublic,
+    DraftMaterialPublic,
+    DraftPrepareAccepted,
+    DraftPrepareRequest,
+    DraftSaved,
+    DraftSummary,
+    PatchDraftRequest,
+)
+from app.modules.tenants.permissions import require_tenant
+
+router = APIRouter(prefix="/tenants/{tenant_id}", tags=["builds"])
+Cursor = Annotated[str | None, Query(max_length=4096)]
+Limit = Annotated[int, Query(ge=1, le=100)]
+
+
+@router.post("/build-drafts", response_model=DraftSaved, status_code=201)
+def create(
+    tenant_id: UUID, body: CreateDraftRequest, session: SessionDep, user: CurrentUser
+) -> DraftSaved:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="build"
+    )
+    identity = drafts.create_draft(session, context=context, **body.model_dump())
+    draft = drafts.get_draft(session, context=context, draft_id=identity)
+    result = DraftSaved(draft_id=identity, revision=draft.revision)
+    session.commit()
+    return result
+
+
+@router.get("/build-draft-requests/{request_id}", response_model=DraftSaved)
+def saved_request(
+    tenant_id: UUID, request_id: UUID, session: SessionDep, user: CurrentUser
+) -> DraftSaved:
+    require_tenant(session, actor_id=user.id, tenant_id=tenant_id, action="read")
+    row = session.exec(
+        select(BuildDraft).where(
+            BuildDraft.tenant_id == tenant_id, BuildDraft.request_id == request_id
+        )
+    ).one_or_none()
+    if row is None:
+        raise DomainError("draft_not_found", "草稿保存请求尚未找到")
+    return DraftSaved(draft_id=row.id, revision=row.revision)
+
+
+@router.get(
+    "/build-preparation-requests/{request_id}", response_model=DraftPrepareAccepted
+)
+def saved_prepare_request(
+    tenant_id: UUID, request_id: UUID, session: SessionDep, user: CurrentUser
+) -> DraftPrepareAccepted:
+    require_tenant(session, actor_id=user.id, tenant_id=tenant_id, action="read")
+    row = session.get(DraftPreparationRequest, (tenant_id, request_id))
+    if row is None:
+        raise DomainError("draft_not_found", "草稿准备请求尚未找到")
+    prep = session.get(DraftPreparation, row.preparation_id)
+    assert prep
+    return DraftPrepareAccepted(task_id=prep.id, revision=prep.draft_revision)
+
+
+@router.get("/build-drafts/{draft_id}", response_model=DraftSummary)
+def summary(
+    tenant_id: UUID, draft_id: UUID, session: SessionDep, user: CurrentUser
+) -> DraftSummary:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    return catalog.draft_summary(session, context=context, draft_id=draft_id)
+
+
+@router.patch("/build-drafts/{draft_id}", response_model=DraftSaved)
+def update(
+    tenant_id: UUID,
+    draft_id: UUID,
+    body: PatchDraftRequest,
+    session: SessionDep,
+    user: CurrentUser,
+) -> DraftSaved:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="build"
+    )
+    revision = drafts.update_draft(
+        session,
+        context=context,
+        draft_id=draft_id,
+        **body.model_dump(exclude_none=True),
+    )
+    session.commit()
+    return DraftSaved(draft_id=draft_id, revision=revision)
+
+
+@router.post(
+    "/build-drafts/{draft_id}/prepare",
+    response_model=DraftPrepareAccepted,
+    status_code=202,
+)
+def prepare(
+    tenant_id: UUID,
+    draft_id: UUID,
+    body: DraftPrepareRequest,
+    session: SessionDep,
+    user: CurrentUser,
+) -> DraftPrepareAccepted:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="build"
+    )
+    task = drafts.prepare_draft(
+        session, context=context, draft_id=draft_id, request_id=body.request_id
+    )
+    prep = session.get(DraftPreparation, task)
+    assert prep
+    result = DraftPrepareAccepted(task_id=task, revision=prep.draft_revision)
+    session.commit()
+    return result
+
+
+@router.get("/build-drafts/{draft_id}/inputs", response_model=Page[DraftInputPublic])
+def inputs(
+    tenant_id: UUID,
+    draft_id: UUID,
+    kind: Literal["drama", "account"],
+    session: SessionDep,
+    user: CurrentUser,
+    status: Annotated[str | None, Query(max_length=32)] = None,
+    cursor: Cursor = None,
+    limit: Limit = 50,
+) -> Page[DraftInputPublic]:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    return catalog.inputs_page(
+        session,
+        context=context,
+        draft_id=draft_id,
+        kind=kind,
+        status=status,
+        cursor=cursor,
+        limit=limit,
+    )
+
+
+@router.get("/build-drafts/{draft_id}/dramas", response_model=Page[DraftDramaPublic])
+def dramas(
+    tenant_id: UUID,
+    draft_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    cursor: Cursor = None,
+    limit: Limit = 50,
+) -> Page[DraftDramaPublic]:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    return catalog.dramas_page(
+        session, context=context, draft_id=draft_id, cursor=cursor, limit=limit
+    )
+
+
+@router.get(
+    "/build-drafts/{draft_id}/dramas/{drama_id}/materials",
+    response_model=Page[DraftMaterialPublic],
+)
+def materials(
+    tenant_id: UUID,
+    draft_id: UUID,
+    drama_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    cursor: Cursor = None,
+    limit: Limit = 50,
+) -> Page[DraftMaterialPublic]:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    return catalog.materials_page(
+        session,
+        context=context,
+        draft_id=draft_id,
+        drama_id=drama_id,
+        cursor=cursor,
+        limit=limit,
+    )
+
+
+@router.patch(
+    "/build-drafts/{draft_id}/dramas/{drama_id}/groups", response_model=DraftSaved
+)
+def edit_groups(
+    tenant_id: UUID,
+    draft_id: UUID,
+    drama_id: UUID,
+    body: DraftGroupEditRequest,
+    session: SessionDep,
+    user: CurrentUser,
+) -> DraftSaved:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="build"
+    )
+    revision = drafts.edit_material_groups(
+        session,
+        context=context,
+        draft_id=draft_id,
+        drama_id=drama_id,
+        expected_revision=body.expected_revision,
+        groups=body.groups,
+    )
+    session.commit()
+    return DraftSaved(draft_id=draft_id, revision=revision)

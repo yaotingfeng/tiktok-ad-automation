@@ -3,6 +3,14 @@ from fastapi.responses import JSONResponse
 
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
+    "draft_not_found": 404,
+    "draft_input_invalid": 422,
+    "draft_inputs_empty": 422,
+    "draft_groups_invalid": 422,
+    "draft_revision_conflict": 409,
+    "draft_link_invalid": 409,
+    "draft_not_ready": 409,
+    "repeated_cursor": 409,
     "material_retry_not_allowed": 409,
     "sdk_upload_capacity_exceeded": 409,
     "invalid_file": 422,
@@ -96,6 +104,12 @@ ERROR_HTTP_STATUS: dict[str, int] = {
 # Public messages are application-owned. DomainError.message may contain raw
 # integration details, so it must never become an HTTP response or log field.
 ERROR_PUBLIC_MESSAGES: dict[str, str] = {
+    "draft_revision_conflict": "草稿已更新，请保留当前编辑并读取最新版本",
+    "draft_not_ready": "等待当前草稿准备完成后再调整素材",
+    "draft_inputs_empty": "至少输入一部剧目后再解析准备",
+    "draft_groups_invalid": "素材组配置无效，同一剧目不能重复使用同一素材",
+    "draft_link_invalid": "推广链接已变化，请重新准备",
+    "repeated_cursor": "资源分页异常，请重新准备",
     "material_retry_not_allowed": "当前平台上传步骤不能直接重试，请查看核实进度",
     "sdk_upload_capacity_exceeded": "原文件超过当前服务的上传容量配置，请联系管理员",
     "incomplete_object": "已接收文件大小与声明不一致",
