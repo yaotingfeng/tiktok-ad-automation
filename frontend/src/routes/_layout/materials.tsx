@@ -1,9 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router"
-import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
+import { WorkspaceEntry } from "@/features/tenants/TenantScope"
 
 export const Route = createFileRoute("/_layout/materials")({
   component: () => (
-    <WorkspaceEmpty
+    <WorkspaceEntry
       title="素材库"
       description="集中管理素材及其实际上传账户。"
     />

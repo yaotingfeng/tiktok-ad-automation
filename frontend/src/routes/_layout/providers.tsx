@@ -1,9 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router"
-import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
+import { WorkspaceEntry } from "@/features/tenants/TenantScope"
 
 export const Route = createFileRoute("/_layout/providers")({
   component: () => (
-    <WorkspaceEmpty
+    <WorkspaceEntry
       title="版权方连接"
       description="管理租户独立的版权方连接与应用配置。"
     />

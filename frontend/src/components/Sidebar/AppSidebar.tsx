@@ -35,7 +35,7 @@ const defaultManagementItems: Item[] = [
 export function AppSidebar({
   user,
   workItems = defaultWorkItems,
-  managementItems = defaultManagementItems,
+  managementItems,
 }: {
   user?: UserPublic | null
   workItems?: Item[]
@@ -48,12 +48,26 @@ export function AppSidebar({
       </SidebarHeader>
       <SidebarContent className="gap-5 px-2">
         <Main label="投放工作" items={workItems} />
-        <Main label="租户管理" items={managementItems} />
+        <Main
+          label="租户管理"
+          items={
+            managementItems ??
+            defaultManagementItems.filter(
+              (item) => item.path !== "/members" || user?.is_superuser,
+            )
+          }
+        />
       </SidebarContent>
       <SidebarFooter className="gap-3 px-2 pb-3">
         {user?.is_superuser && (
           <Main
-            items={[{ icon: LayoutGrid, title: "平台管理", path: "/admin" }]}
+            items={[
+              {
+                icon: LayoutGrid,
+                title: "平台管理",
+                path: "/platform/tenants",
+              },
+            ]}
           />
         )}
         <Separator />

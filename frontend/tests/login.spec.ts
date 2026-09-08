@@ -41,9 +41,11 @@ test("Log in with valid email and password ", async ({ page }) => {
   await fillForm(page, firstSuperuser, firstSuperuserPassword)
   await page.getByRole("button", { name: "登录工作台" }).click()
 
-  await page.waitForURL("/")
+  await page.waitForURL("/platform/tenants")
 
-  await expect(page.getByText("尚未接入租户")).toBeVisible()
+  await expect(
+    page.getByRole("heading", { name: "平台租户管理" }),
+  ).toBeVisible()
 })
 
 test("Log in with invalid email", async ({ page }) => {
@@ -73,9 +75,11 @@ test("Successful log out", async ({ page }) => {
   await fillForm(page, firstSuperuser, firstSuperuserPassword)
   await page.getByRole("button", { name: "登录工作台" }).click()
 
-  await page.waitForURL("/")
+  await page.waitForURL("/platform/tenants")
 
-  await expect(page.getByText("尚未接入租户")).toBeVisible()
+  await expect(
+    page.getByRole("heading", { name: "平台租户管理" }),
+  ).toBeVisible()
 
   await page.getByTestId("user-menu").click()
   await page.getByRole("menuitem", { name: "退出登录" }).click()
@@ -88,9 +92,11 @@ test("Logged-out user cannot access protected routes", async ({ page }) => {
   await fillForm(page, firstSuperuser, firstSuperuserPassword)
   await page.getByRole("button", { name: "登录工作台" }).click()
 
-  await page.waitForURL("/")
+  await page.waitForURL("/platform/tenants")
 
-  await expect(page.getByText("尚未接入租户")).toBeVisible()
+  await expect(
+    page.getByRole("heading", { name: "平台租户管理" }),
+  ).toBeVisible()
 
   await page.getByTestId("user-menu").click()
   await page.getByRole("menuitem", { name: "退出登录" }).click()

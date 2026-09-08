@@ -1,0 +1,208 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  Link,
+  Navigate,
+  useNavigate,
+  useRouterState,
+} from "@tanstack/react-router"
+import { createContext, type ReactNode, useContext, useEffect } from "react"
+import { type TenantSummary, TenantsService, type UserPublic } from "@/client"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Button } from "@/components/ui/button"
+import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
+import { DirectoryPicker } from "./DirectoryPicker"
+import { canManage, RequestError } from "./shared"
+
+export type TenantScope = {
+  tenantId: string
+  bcId: string | null
+  role: TenantSummary["role"]
+}
+type ScopeValue = {
+  scope: TenantScope | null
+  tenant: TenantSummary | null
+  tenantId: string | null
+  pending: boolean
+  error: unknown
+  forbidden: boolean
+  platform: boolean
+  user: UserPublic
+  switchTenant: (tenant: TenantSummary) => void
+  retry: () => void
+}
+const ScopeContext = createContext<ScopeValue | null>(null)
+
+export function TenantScopeProvider({
+  user,
+  children,
+}: {
+  user: UserPublic
+  children: ReactNode
+}) {
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  })
+  const tenantId = /^\/tenants\/([^/]+)/.exec(pathname)?.[1] ?? null
+  const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  const query = useQuery({
+    queryKey: ["tenant", tenantId, "scope"],
+    enabled: !!tenantId,
+    queryFn: async ({ signal }) =>
+      (
+        await TenantsService.getMyTenants({
+          query: { search: tenantId!, active: true, limit: 50 },
+          signal,
+        })
+      ).data,
+  })
+  const tenant =
+    query.data?.items.find((item) => item.id === tenantId && item.active) ??
+    null
+  useEffect(() => {
+    if (!tenantId) return
+    return () => {
+      // Every tenant request receives Query's signal; leaving cancels the transport too.
+      void queryClient.cancelQueries({ queryKey: ["tenant", tenantId] })
+      queryClient.removeQueries({ queryKey: ["tenant", tenantId] })
+    }
+  }, [tenantId, queryClient])
+  const switchTenant = (target: TenantSummary) => {
+    if (!target.active || target.id === tenantId) return
+    const suffix = tenantId
+      ? pathname.slice(`/tenants/${tenantId}`.length)
+      : "/builds/new"
+    const destination =
+      suffix === "/members" && !canManage(target.role) ? "/builds/new" : suffix
+    // Router guards run before the old scope unmounts or cancels any requests.
+    void navigate({
+      to: `/tenants/${target.id}${destination || "/builds/new"}`,
+      search: {},
+    })
+  }
+  const scope: TenantScope | null = tenant
+    ? { tenantId: tenant.id, bcId: null, role: tenant.role }
+    : null
+  // BC remains null until the accounts API supplies authorized BC choices. Future
+  // BC navigation uses the same URL/guard boundary and tenant+BC Query/Outlet keys.
+  return (
+    <ScopeContext.Provider
+      value={{
+        scope,
+        tenant,
+        tenantId,
+        user,
+        switchTenant,
+        pending: !!tenantId && query.isPending,
+        error: query.error,
+        forbidden: !!tenantId && !query.isPending && !query.error && !tenant,
+        platform: pathname.startsWith("/platform/") || pathname === "/admin",
+        retry: () => {
+          void query.refetch()
+        },
+      }}
+    >
+      {children}
+    </ScopeContext.Provider>
+  )
+}
+export function useTenantScope() {
+  const value = useContext(ScopeContext)
+  if (!value) throw new Error("TenantScopeProvider is required")
+  return value
+}
+export function TenantSelector() {
+  const { tenant, switchTenant } = useTenantScope()
+  return (
+    <DirectoryPicker<TenantSummary>
+      label="当前租户"
+      valueLabel={tenant?.name}
+      queryKey={["my-tenants", "selector"]}
+      load={async (search, cursor, limit, signal) =>
+        (
+          await TenantsService.getMyTenants({
+            query: { search, after_id: cursor, active: true, limit },
+            signal,
+          })
+        ).data
+      }
+      renderItem={(item) => <span>{item.name}</span>}
+      onSelect={switchTenant}
+    />
+  )
+}
+export function TenantAccessGate({ children }: { children: ReactNode }) {
+  const { pending, error, forbidden, retry } = useTenantScope()
+  if (pending) return <p role="status">正在读取租户权限…</p>
+  if (error) return <RequestError error={error} retry={retry} />
+  if (forbidden) return <PermissionPage />
+  return children
+}
+export function PermissionPage() {
+  return (
+    <Alert variant="destructive">
+      <AlertTitle>无权访问此页面</AlertTitle>
+      <AlertDescription>
+        <p>租户已停用，或当前账号没有所需权限。请联系管理员。</p>
+        <Button variant="outline" asChild>
+          <Link to="/">返回工作台</Link>
+        </Button>
+      </AlertDescription>
+    </Alert>
+  )
+}
+export function WorkspaceEntry({
+  title,
+  description,
+}: {
+  title?: string
+  description?: string
+}) {
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  })
+  const { user } = useTenantScope()
+  const query = useQuery({
+    queryKey: ["my-tenants", "entry"],
+    enabled: !user.is_superuser,
+    queryFn: async ({ signal }) =>
+      (
+        await TenantsService.getMyTenants({
+          query: { active: true, limit: 50 },
+          signal,
+        })
+      ).data,
+  })
+  if (user.is_superuser) return <Navigate to="/platform/tenants" />
+  if (query.isPending) return <p role="status">正在读取可用租户…</p>
+  if (query.error)
+    return (
+      <RequestError
+        error={query.error}
+        retry={() => {
+          void query.refetch()
+        }}
+      />
+    )
+  const tenant = query.data?.items[0]
+  if (tenant) {
+    const destinations = {
+      "/accounts": "/tenants/$tenantId/accounts",
+      "/members": "/tenants/$tenantId/members",
+      "/materials": "/tenants/$tenantId/materials",
+      "/build-tasks": "/tenants/$tenantId/build-tasks",
+      "/strategies": "/tenants/$tenantId/strategies",
+      "/providers": "/tenants/$tenantId/providers",
+    } as const
+    return (
+      <Navigate
+        to={
+          destinations[pathname as keyof typeof destinations] ??
+          "/tenants/$tenantId/builds/new"
+        }
+        params={{ tenantId: tenant.id }}
+      />
+    )
+  }
+  return <WorkspaceEmpty title={title} description={description} />
+}

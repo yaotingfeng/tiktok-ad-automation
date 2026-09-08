@@ -17,7 +17,6 @@ const navigation = [
   "投放策略",
   "账户与授权",
   "版权方连接",
-  "成员管理",
 ]
 
 async function apiBoundary(
@@ -54,12 +53,14 @@ async function apiBoundary(
         json: { access_token: token, token_type: "bearer" },
         headers,
       })
+    if (path.endsWith("/me/tenants"))
+      return route.fulfill({ json: { items: [], next_cursor: null }, headers })
     if (path.endsWith("/users/me"))
       return route.fulfill({
         status: options.meStatus ?? 200,
         json: options.meStatus
           ? { detail: "Forbidden" }
-          : { ...user, is_superuser: options.admin ?? true },
+          : { ...user, is_superuser: options.admin ?? false },
         headers,
       })
     if (path.endsWith("/users/") && request.method() === "POST")
@@ -151,7 +152,7 @@ for (const width of [1440, 1280]) {
       .getByRole("navigation")
       .getByRole("link")
       .allTextContents()
-    expect(labels).toEqual([...navigation, "平台管理"])
+    expect(labels).toEqual(navigation)
     await expect(page.getByRole("button", { name: "新建搭建" })).toBeDisabled()
     await expect(
       page.getByRole("link", { name: /Items|Dashboard|注册|Sign up/i }),
@@ -230,7 +231,7 @@ test("403 user query retains the shell and login token with readable permission 
 test("403 list query stays inside authenticated platform management", async ({
   page,
 }) => {
-  await apiBoundary(page, { usersStatus: 403 })
+  await apiBoundary(page, { admin: true, usersStatus: 403 })
   await page.goto("/admin")
   await expect(page.getByText("无法读取用户列表")).toBeVisible()
   await expect(
@@ -245,7 +246,7 @@ test("403 list query stays inside authenticated platform management", async ({
 test("admin creation remains available and a 403 mutation does not sign out", async ({
   page,
 }) => {
-  await apiBoundary(page, { createStatus: 403 })
+  await apiBoundary(page, { admin: true, createStatus: 403 })
   await page.goto("/admin")
   await page.getByRole("button", { name: "Add User" }).click()
   const dialog = page.getByRole("dialog")
@@ -294,7 +295,7 @@ test("401 clears an expired session and returns to login", async ({ page }) => {
 test("administrator can create an account through the retained authenticated form", async ({
   page,
 }) => {
-  await apiBoundary(page)
+  await apiBoundary(page, { admin: true })
   await page.goto("/admin")
   await page.getByRole("button", { name: "Add User" }).click()
   const dialog = page.getByRole("dialog")

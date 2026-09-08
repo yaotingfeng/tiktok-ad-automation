@@ -1,9 +1,11 @@
+import { Link } from "@tanstack/react-router"
 import { Building2, ShieldCheck } from "lucide-react"
 import type { CSSProperties, ReactNode } from "react"
 import type { UserPublic } from "@/client"
 import AppSidebar from "@/components/Sidebar/AppSidebar"
 import type { Item } from "@/components/Sidebar/Main"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import {
   SidebarInset,
@@ -25,6 +27,9 @@ export interface WorkspaceShellProps {
   context?: WorkspaceContext | null
   workItems?: Item[]
   managementItems?: Item[]
+  contextSelector?: ReactNode
+  bcSelector?: ReactNode
+  platform?: boolean
 }
 
 export function WorkspaceShell({
@@ -33,6 +38,9 @@ export function WorkspaceShell({
   context,
   workItems,
   managementItems,
+  contextSelector,
+  bcSelector,
+  platform = false,
 }: WorkspaceShellProps) {
   return (
     <SidebarProvider style={{ "--sidebar-width": "216px" } as CSSProperties}>
@@ -49,18 +57,28 @@ export function WorkspaceShell({
           <div className="flex min-w-0 flex-wrap items-center gap-3">
             <SidebarTrigger aria-label="切换导航" />
             <span className="hidden text-muted-foreground sm:inline">
-              工作空间
+              {platform ? "平台范围" : "工作空间"}
             </span>
-            <span className="flex items-center gap-2">
-              <Building2 className="size-4 text-muted-foreground" />
-              <strong className="break-all">
-                {context?.tenant.name ?? "未接入租户"}
-              </strong>
-            </span>
-            <Separator orientation="vertical" className="h-4!" />
-            <span className="text-muted-foreground break-all">
-              {context?.bc?.name ?? "BC 未连接"}
-            </span>
+            {contextSelector ?? (
+              <span className="flex items-center gap-2">
+                <Building2 className="size-4 text-muted-foreground" />
+                <strong className="break-all">
+                  {platform
+                    ? "平台管理"
+                    : (context?.tenant.name ?? "未接入租户")}
+                </strong>
+              </span>
+            )}
+            {!platform && (
+              <>
+                <Separator orientation="vertical" className="h-4!" />
+                {bcSelector ?? (
+                  <span className="text-muted-foreground break-all">
+                    {context?.bc?.name ?? "BC 未连接"}
+                  </span>
+                )}
+              </>
+            )}
           </div>
           <div className="flex min-w-0 flex-wrap items-center gap-3 text-xs">
             <span className="break-all">{user?.full_name || user?.email}</span>
@@ -72,6 +90,9 @@ export function WorkspaceShell({
             {context?.managedByPlatform && (
               <span className="text-muted-foreground">
                 当前代管：{context.tenant.name}
+                <Button asChild size="sm" variant="ghost">
+                  <Link to="/platform/tenants">返回平台</Link>
+                </Button>
               </span>
             )}
           </div>

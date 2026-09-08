@@ -23,6 +23,16 @@ import { Route as LayoutMembersRouteImport } from './routes/_layout/members'
 import { Route as LayoutProvidersRouteImport } from './routes/_layout/providers'
 import { Route as LayoutSettingsRouteImport } from './routes/_layout/settings'
 import { Route as LayoutStrategiesRouteImport } from './routes/_layout/strategies'
+import { Route as LayoutPlatformTenantsRouteImport } from './routes/_layout/platform.tenants'
+import { Route as LayoutTenantsTenantIdRouteImport } from './routes/_layout/tenants.$tenantId'
+import { Route as LayoutTenantsTenantIdIndexRouteImport } from './routes/_layout/tenants.$tenantId.index'
+import { Route as LayoutTenantsTenantIdAccountsRouteImport } from './routes/_layout/tenants.$tenantId.accounts'
+import { Route as LayoutTenantsTenantIdBuildTasksRouteImport } from './routes/_layout/tenants.$tenantId.build-tasks'
+import { Route as LayoutTenantsTenantIdMaterialsRouteImport } from './routes/_layout/tenants.$tenantId.materials'
+import { Route as LayoutTenantsTenantIdMembersRouteImport } from './routes/_layout/tenants.$tenantId.members'
+import { Route as LayoutTenantsTenantIdProvidersRouteImport } from './routes/_layout/tenants.$tenantId.providers'
+import { Route as LayoutTenantsTenantIdStrategiesRouteImport } from './routes/_layout/tenants.$tenantId.strategies'
+import { Route as LayoutTenantsTenantIdBuildsNewRouteImport } from './routes/_layout/tenants.$tenantId.builds.new'
 
 const LayoutRoute = LayoutRouteImport.update({
   id: '/_layout',
@@ -93,6 +103,64 @@ const LayoutStrategiesRoute = LayoutStrategiesRouteImport.update({
   path: '/strategies',
   getParentRoute: () => LayoutRoute,
 } as any)
+const LayoutPlatformTenantsRoute = LayoutPlatformTenantsRouteImport.update({
+  id: '/platform/tenants',
+  path: '/platform/tenants',
+  getParentRoute: () => LayoutRoute,
+} as any)
+const LayoutTenantsTenantIdRoute = LayoutTenantsTenantIdRouteImport.update({
+  id: '/tenants/$tenantId',
+  path: '/tenants/$tenantId',
+  getParentRoute: () => LayoutRoute,
+} as any)
+const LayoutTenantsTenantIdIndexRoute =
+  LayoutTenantsTenantIdIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => LayoutTenantsTenantIdRoute,
+  } as any)
+const LayoutTenantsTenantIdAccountsRoute =
+  LayoutTenantsTenantIdAccountsRouteImport.update({
+    id: '/accounts',
+    path: '/accounts',
+    getParentRoute: () => LayoutTenantsTenantIdRoute,
+  } as any)
+const LayoutTenantsTenantIdBuildTasksRoute =
+  LayoutTenantsTenantIdBuildTasksRouteImport.update({
+    id: '/build-tasks',
+    path: '/build-tasks',
+    getParentRoute: () => LayoutTenantsTenantIdRoute,
+  } as any)
+const LayoutTenantsTenantIdMaterialsRoute =
+  LayoutTenantsTenantIdMaterialsRouteImport.update({
+    id: '/materials',
+    path: '/materials',
+    getParentRoute: () => LayoutTenantsTenantIdRoute,
+  } as any)
+const LayoutTenantsTenantIdMembersRoute =
+  LayoutTenantsTenantIdMembersRouteImport.update({
+    id: '/members',
+    path: '/members',
+    getParentRoute: () => LayoutTenantsTenantIdRoute,
+  } as any)
+const LayoutTenantsTenantIdProvidersRoute =
+  LayoutTenantsTenantIdProvidersRouteImport.update({
+    id: '/providers',
+    path: '/providers',
+    getParentRoute: () => LayoutTenantsTenantIdRoute,
+  } as any)
+const LayoutTenantsTenantIdStrategiesRoute =
+  LayoutTenantsTenantIdStrategiesRouteImport.update({
+    id: '/strategies',
+    path: '/strategies',
+    getParentRoute: () => LayoutTenantsTenantIdRoute,
+  } as any)
+const LayoutTenantsTenantIdBuildsNewRoute =
+  LayoutTenantsTenantIdBuildsNewRouteImport.update({
+    id: '/builds/new',
+    path: '/builds/new',
+    getParentRoute: () => LayoutTenantsTenantIdRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof LayoutIndexRoute
@@ -108,6 +176,16 @@ export interface FileRoutesByFullPath {
   '/providers': typeof LayoutProvidersRoute
   '/settings': typeof LayoutSettingsRoute
   '/strategies': typeof LayoutStrategiesRoute
+  '/platform/tenants': typeof LayoutPlatformTenantsRoute
+  '/tenants/$tenantId': typeof LayoutTenantsTenantIdRouteWithChildren
+  '/tenants/$tenantId/accounts': typeof LayoutTenantsTenantIdAccountsRoute
+  '/tenants/$tenantId/build-tasks': typeof LayoutTenantsTenantIdBuildTasksRoute
+  '/tenants/$tenantId/materials': typeof LayoutTenantsTenantIdMaterialsRoute
+  '/tenants/$tenantId/members': typeof LayoutTenantsTenantIdMembersRoute
+  '/tenants/$tenantId/providers': typeof LayoutTenantsTenantIdProvidersRoute
+  '/tenants/$tenantId/strategies': typeof LayoutTenantsTenantIdStrategiesRoute
+  '/tenants/$tenantId/': typeof LayoutTenantsTenantIdIndexRoute
+  '/tenants/$tenantId/builds/new': typeof LayoutTenantsTenantIdBuildsNewRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
@@ -123,6 +201,15 @@ export interface FileRoutesByTo {
   '/settings': typeof LayoutSettingsRoute
   '/strategies': typeof LayoutStrategiesRoute
   '/': typeof LayoutIndexRoute
+  '/platform/tenants': typeof LayoutPlatformTenantsRoute
+  '/tenants/$tenantId/accounts': typeof LayoutTenantsTenantIdAccountsRoute
+  '/tenants/$tenantId/build-tasks': typeof LayoutTenantsTenantIdBuildTasksRoute
+  '/tenants/$tenantId/materials': typeof LayoutTenantsTenantIdMaterialsRoute
+  '/tenants/$tenantId/members': typeof LayoutTenantsTenantIdMembersRoute
+  '/tenants/$tenantId/providers': typeof LayoutTenantsTenantIdProvidersRoute
+  '/tenants/$tenantId/strategies': typeof LayoutTenantsTenantIdStrategiesRoute
+  '/tenants/$tenantId': typeof LayoutTenantsTenantIdIndexRoute
+  '/tenants/$tenantId/builds/new': typeof LayoutTenantsTenantIdBuildsNewRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -140,6 +227,16 @@ export interface FileRoutesById {
   '/_layout/settings': typeof LayoutSettingsRoute
   '/_layout/strategies': typeof LayoutStrategiesRoute
   '/_layout/': typeof LayoutIndexRoute
+  '/_layout/platform/tenants': typeof LayoutPlatformTenantsRoute
+  '/_layout/tenants/$tenantId': typeof LayoutTenantsTenantIdRouteWithChildren
+  '/_layout/tenants/$tenantId/accounts': typeof LayoutTenantsTenantIdAccountsRoute
+  '/_layout/tenants/$tenantId/build-tasks': typeof LayoutTenantsTenantIdBuildTasksRoute
+  '/_layout/tenants/$tenantId/materials': typeof LayoutTenantsTenantIdMaterialsRoute
+  '/_layout/tenants/$tenantId/members': typeof LayoutTenantsTenantIdMembersRoute
+  '/_layout/tenants/$tenantId/providers': typeof LayoutTenantsTenantIdProvidersRoute
+  '/_layout/tenants/$tenantId/strategies': typeof LayoutTenantsTenantIdStrategiesRoute
+  '/_layout/tenants/$tenantId/': typeof LayoutTenantsTenantIdIndexRoute
+  '/_layout/tenants/$tenantId/builds/new': typeof LayoutTenantsTenantIdBuildsNewRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -157,6 +254,16 @@ export interface FileRouteTypes {
     | '/providers'
     | '/settings'
     | '/strategies'
+    | '/platform/tenants'
+    | '/tenants/$tenantId'
+    | '/tenants/$tenantId/accounts'
+    | '/tenants/$tenantId/build-tasks'
+    | '/tenants/$tenantId/materials'
+    | '/tenants/$tenantId/members'
+    | '/tenants/$tenantId/providers'
+    | '/tenants/$tenantId/strategies'
+    | '/tenants/$tenantId/'
+    | '/tenants/$tenantId/builds/new'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
@@ -172,6 +279,15 @@ export interface FileRouteTypes {
     | '/settings'
     | '/strategies'
     | '/'
+    | '/platform/tenants'
+    | '/tenants/$tenantId/accounts'
+    | '/tenants/$tenantId/build-tasks'
+    | '/tenants/$tenantId/materials'
+    | '/tenants/$tenantId/members'
+    | '/tenants/$tenantId/providers'
+    | '/tenants/$tenantId/strategies'
+    | '/tenants/$tenantId'
+    | '/tenants/$tenantId/builds/new'
   id:
     | '__root__'
     | '/_layout'
@@ -188,6 +304,16 @@ export interface FileRouteTypes {
     | '/_layout/settings'
     | '/_layout/strategies'
     | '/_layout/'
+    | '/_layout/platform/tenants'
+    | '/_layout/tenants/$tenantId'
+    | '/_layout/tenants/$tenantId/accounts'
+    | '/_layout/tenants/$tenantId/build-tasks'
+    | '/_layout/tenants/$tenantId/materials'
+    | '/_layout/tenants/$tenantId/members'
+    | '/_layout/tenants/$tenantId/providers'
+    | '/_layout/tenants/$tenantId/strategies'
+    | '/_layout/tenants/$tenantId/'
+    | '/_layout/tenants/$tenantId/builds/new'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -298,8 +424,105 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutStrategiesRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/platform/tenants': {
+      id: '/_layout/platform/tenants'
+      path: '/platform/tenants'
+      fullPath: '/platform/tenants'
+      preLoaderRoute: typeof LayoutPlatformTenantsRouteImport
+      parentRoute: typeof LayoutRoute
+    }
+    '/_layout/tenants/$tenantId': {
+      id: '/_layout/tenants/$tenantId'
+      path: '/tenants/$tenantId'
+      fullPath: '/tenants/$tenantId'
+      preLoaderRoute: typeof LayoutTenantsTenantIdRouteImport
+      parentRoute: typeof LayoutRoute
+    }
+    '/_layout/tenants/$tenantId/': {
+      id: '/_layout/tenants/$tenantId/'
+      path: '/'
+      fullPath: '/tenants/$tenantId/'
+      preLoaderRoute: typeof LayoutTenantsTenantIdIndexRouteImport
+      parentRoute: typeof LayoutTenantsTenantIdRoute
+    }
+    '/_layout/tenants/$tenantId/accounts': {
+      id: '/_layout/tenants/$tenantId/accounts'
+      path: '/accounts'
+      fullPath: '/tenants/$tenantId/accounts'
+      preLoaderRoute: typeof LayoutTenantsTenantIdAccountsRouteImport
+      parentRoute: typeof LayoutTenantsTenantIdRoute
+    }
+    '/_layout/tenants/$tenantId/build-tasks': {
+      id: '/_layout/tenants/$tenantId/build-tasks'
+      path: '/build-tasks'
+      fullPath: '/tenants/$tenantId/build-tasks'
+      preLoaderRoute: typeof LayoutTenantsTenantIdBuildTasksRouteImport
+      parentRoute: typeof LayoutTenantsTenantIdRoute
+    }
+    '/_layout/tenants/$tenantId/materials': {
+      id: '/_layout/tenants/$tenantId/materials'
+      path: '/materials'
+      fullPath: '/tenants/$tenantId/materials'
+      preLoaderRoute: typeof LayoutTenantsTenantIdMaterialsRouteImport
+      parentRoute: typeof LayoutTenantsTenantIdRoute
+    }
+    '/_layout/tenants/$tenantId/members': {
+      id: '/_layout/tenants/$tenantId/members'
+      path: '/members'
+      fullPath: '/tenants/$tenantId/members'
+      preLoaderRoute: typeof LayoutTenantsTenantIdMembersRouteImport
+      parentRoute: typeof LayoutTenantsTenantIdRoute
+    }
+    '/_layout/tenants/$tenantId/providers': {
+      id: '/_layout/tenants/$tenantId/providers'
+      path: '/providers'
+      fullPath: '/tenants/$tenantId/providers'
+      preLoaderRoute: typeof LayoutTenantsTenantIdProvidersRouteImport
+      parentRoute: typeof LayoutTenantsTenantIdRoute
+    }
+    '/_layout/tenants/$tenantId/strategies': {
+      id: '/_layout/tenants/$tenantId/strategies'
+      path: '/strategies'
+      fullPath: '/tenants/$tenantId/strategies'
+      preLoaderRoute: typeof LayoutTenantsTenantIdStrategiesRouteImport
+      parentRoute: typeof LayoutTenantsTenantIdRoute
+    }
+    '/_layout/tenants/$tenantId/builds/new': {
+      id: '/_layout/tenants/$tenantId/builds/new'
+      path: '/builds/new'
+      fullPath: '/tenants/$tenantId/builds/new'
+      preLoaderRoute: typeof LayoutTenantsTenantIdBuildsNewRouteImport
+      parentRoute: typeof LayoutTenantsTenantIdRoute
+    }
   }
 }
+
+interface LayoutTenantsTenantIdRouteChildren {
+  LayoutTenantsTenantIdAccountsRoute: typeof LayoutTenantsTenantIdAccountsRoute
+  LayoutTenantsTenantIdBuildTasksRoute: typeof LayoutTenantsTenantIdBuildTasksRoute
+  LayoutTenantsTenantIdMaterialsRoute: typeof LayoutTenantsTenantIdMaterialsRoute
+  LayoutTenantsTenantIdMembersRoute: typeof LayoutTenantsTenantIdMembersRoute
+  LayoutTenantsTenantIdProvidersRoute: typeof LayoutTenantsTenantIdProvidersRoute
+  LayoutTenantsTenantIdStrategiesRoute: typeof LayoutTenantsTenantIdStrategiesRoute
+  LayoutTenantsTenantIdIndexRoute: typeof LayoutTenantsTenantIdIndexRoute
+  LayoutTenantsTenantIdBuildsNewRoute: typeof LayoutTenantsTenantIdBuildsNewRoute
+}
+
+const LayoutTenantsTenantIdRouteChildren: LayoutTenantsTenantIdRouteChildren = {
+  LayoutTenantsTenantIdAccountsRoute: LayoutTenantsTenantIdAccountsRoute,
+  LayoutTenantsTenantIdBuildTasksRoute: LayoutTenantsTenantIdBuildTasksRoute,
+  LayoutTenantsTenantIdMaterialsRoute: LayoutTenantsTenantIdMaterialsRoute,
+  LayoutTenantsTenantIdMembersRoute: LayoutTenantsTenantIdMembersRoute,
+  LayoutTenantsTenantIdProvidersRoute: LayoutTenantsTenantIdProvidersRoute,
+  LayoutTenantsTenantIdStrategiesRoute: LayoutTenantsTenantIdStrategiesRoute,
+  LayoutTenantsTenantIdIndexRoute: LayoutTenantsTenantIdIndexRoute,
+  LayoutTenantsTenantIdBuildsNewRoute: LayoutTenantsTenantIdBuildsNewRoute,
+}
+
+const LayoutTenantsTenantIdRouteWithChildren =
+  LayoutTenantsTenantIdRoute._addFileChildren(
+    LayoutTenantsTenantIdRouteChildren,
+  )
 
 interface LayoutRouteChildren {
   LayoutAccountsRoute: typeof LayoutAccountsRoute
@@ -311,6 +534,8 @@ interface LayoutRouteChildren {
   LayoutSettingsRoute: typeof LayoutSettingsRoute
   LayoutStrategiesRoute: typeof LayoutStrategiesRoute
   LayoutIndexRoute: typeof LayoutIndexRoute
+  LayoutPlatformTenantsRoute: typeof LayoutPlatformTenantsRoute
+  LayoutTenantsTenantIdRoute: typeof LayoutTenantsTenantIdRouteWithChildren
 }
 
 const LayoutRouteChildren: LayoutRouteChildren = {
@@ -323,6 +548,8 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutSettingsRoute: LayoutSettingsRoute,
   LayoutStrategiesRoute: LayoutStrategiesRoute,
   LayoutIndexRoute: LayoutIndexRoute,
+  LayoutPlatformTenantsRoute: LayoutPlatformTenantsRoute,
+  LayoutTenantsTenantIdRoute: LayoutTenantsTenantIdRouteWithChildren,
 }
 
 const LayoutRouteWithChildren =

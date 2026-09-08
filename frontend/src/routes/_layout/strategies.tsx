@@ -1,9 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router"
-import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
+import { WorkspaceEntry } from "@/features/tenants/TenantScope"
 
 export const Route = createFileRoute("/_layout/strategies")({
   component: () => (
-    <WorkspaceEmpty
+    <WorkspaceEntry
       title="投放策略"
       description="管理预算、出价、素材分组与创意规则。"
     />

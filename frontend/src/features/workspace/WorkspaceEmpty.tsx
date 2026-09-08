@@ -60,7 +60,7 @@ export function WorkspaceEmpty({
             <EmptyContent>
               {user?.is_superuser ? (
                 <Button asChild>
-                  <Link to="/admin">
+                  <Link to="/platform/tenants">
                     进入平台管理
                     <ArrowRight data-icon="inline-end" />
                   </Link>

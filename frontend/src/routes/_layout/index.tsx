@@ -1,7 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router"
-import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
-
+import { WorkspaceEntry } from "@/features/tenants/TenantScope"
 export const Route = createFileRoute("/_layout/")({
-  component: WorkspaceEmpty,
-  head: () => ({ meta: [{ title: "广告搭建 · 短剧投放" }] }),
+  component: WorkspaceEntry,
+  head: () => ({ meta: [{ title: "工作台 · 短剧投放" }] }),
 })

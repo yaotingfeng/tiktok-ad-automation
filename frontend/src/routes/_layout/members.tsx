@@ -1,9 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router"
-import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
+import { WorkspaceEntry } from "@/features/tenants/TenantScope"
 
 export const Route = createFileRoute("/_layout/members")({
   component: () => (
-    <WorkspaceEmpty
+    <WorkspaceEntry
       title="成员管理"
       description="按角色管理当前租户的成员权限。"
     />
