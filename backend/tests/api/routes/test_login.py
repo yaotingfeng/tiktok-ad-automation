@@ -52,6 +52,8 @@ def test_recovery_password(
     with (
         patch("app.core.config.settings.SMTP_HOST", "smtp.example.com"),
         patch("app.core.config.settings.SMTP_USER", "admin@example.com"),
+        patch("app.core.config.settings.EMAILS_FROM_EMAIL", "sender@example.com"),
+        patch("emails.message.Message.send") as transport,
     ):
         email = "test@example.com"
         r = client.post(
@@ -62,6 +64,9 @@ def test_recovery_password(
         assert r.json() == {
             "message": "If that email is registered, we sent a password recovery link"
         }
+
+        transport.assert_called_once()
+        assert transport.call_args.kwargs["to"] == email
 
 
 def test_recovery_password_user_not_exits(

@@ -55,14 +55,38 @@ class DomainError(Exception):
         self.retryable = retryable
 
 
+class ConfigurationError(DomainError):
+    """Expose only predefined setting names, never the values that failed checks."""
+
+    ALLOWED_FIELDS = frozenset(
+        {
+            "TIKTOK_APP_ID",
+            "TIKTOK_APP_SECRET",
+            "TIKTOK_REDIRECT_URI",
+            "CONNECTION_ENCRYPTION_KEY",
+            "S3_BUCKET",
+            "S3_REGION",
+            "S3_ACCESS_KEY_ID",
+            "S3_SECRET_ACCESS_KEY",
+        }
+    )
+
+    def __init__(self, code: str, fields: list[str]):
+        super().__init__(code, "Configuration incomplete")
+        self.fields = tuple(name for name in fields if name in self.ALLOWED_FIELDS)
+
+
 async def domain_error_handler(_request: Request, exc: DomainError) -> JSONResponse:
     status = ERROR_HTTP_STATUS.get(exc.code, 500)
     code = exc.code if exc.code in ERROR_HTTP_STATUS else "internal_error"
+    message = ERROR_PUBLIC_MESSAGES.get(code, _STATUS_MESSAGES[status])
+    if isinstance(exc, ConfigurationError) and exc.fields:
+        message += "，缺少或无效：" + ", ".join(exc.fields)
     return JSONResponse(
         status_code=status,
         content={
             "code": code,
-            "message": ERROR_PUBLIC_MESSAGES.get(code, _STATUS_MESSAGES[status]),
+            "message": message,
             "retryable": exc.retryable,
         },
     )
