@@ -5,6 +5,10 @@ from fastapi.responses import JSONResponse
 ERROR_HTTP_STATUS: dict[str, int] = {
     "tenant_forbidden": 403,
     "action_forbidden": 403,
+    "platform_forbidden": 403,
+    "invalid_tenant": 422,
+    "invalid_member": 422,
+    "last_tenant_admin": 409,
     "unknown_action": 422,
     "permission_denied": 403,
     "public_signup_disabled": 403,
@@ -30,6 +34,9 @@ ERROR_HTTP_STATUS: dict[str, int] = {
 # Public messages are application-owned. DomainError.message may contain raw
 # integration details, so it must never become an HTTP response or log field.
 ERROR_PUBLIC_MESSAGES: dict[str, str] = {
+    "last_tenant_admin": "请先设置其他租户管理员",
+    "invalid_tenant": "租户名称与初始管理员必须有效",
+    "invalid_member": "成员和租户角色必须有效",
     "public_signup_disabled": "公开注册已关闭，请联系平台管理员",
     "tiktok_app_not_configured": "等待配置开发者应用",
     "tiktok_app_incomplete": "开发者应用配置不完整",
