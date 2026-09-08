@@ -150,7 +150,7 @@ async function boundary(
         : reply(batches.get(BATCH))
     if (path.endsWith("/preview"))
       return reply({
-        url: "http://127.0.0.1:5183/original-preview?signature=secret-preview",
+        url: `${u.origin}/original-preview?signature=secret-preview`,
         expires_in: 300,
       })
     if (path.endsWith("/upload-batches"))
@@ -172,7 +172,7 @@ async function boundary(
       )
     if (path.endsWith("/sign"))
       return reply({
-        url: `http://127.0.0.1:5183/object-part/${path.split("/").slice(-4)[0]}/${path.split("/").slice(-2)[0]}?signature=secret`,
+        url: `${u.origin}/object-part/${path.split("/").slice(-4)[0]}/${path.split("/").slice(-2)[0]}?signature=secret`,
         expires_in: 900,
       })
     if (path.endsWith("/complete")) {
@@ -1059,4 +1059,199 @@ test("传输期间读取权限失效同时取消直传，不能继续发送后�
     .catch(() => {})
   expect(requests.filter((r) => r.path.endsWith("/sign"))).toHaveLength(1)
   expect(requests.filter((r) => r.path.endsWith("/complete"))).toHaveLength(0)
+})
+
+for (const permission of ["viewer", "revoked"] as const)
+  test(`independent: ${permission} refresh of uncertain local completion stays read-only`, async ({
+    page,
+  }) => {
+    const { requests, batches } = await boundary(page, {
+      role: permission === "viewer" ? "viewer" : "operator",
+    })
+    batches.set(BATCH, {
+      batch_id: BATCH,
+      bc_id: BC,
+      status: "receiving",
+      files: [
+        {
+          material_id: M,
+          upload_id: U,
+          file_name: "unfinished.mp4",
+          byte_size: 4,
+          part_size: 4,
+          part_count: 1,
+          status: "receiving",
+          received_bytes: null,
+          can_retry: false,
+        },
+      ],
+    })
+    await page.addInitScript(
+      ({ key, materialId, uploadId, batchId }) => {
+        sessionStorage.setItem(
+          key,
+          JSON.stringify({
+            batchIds: [batchId],
+            records: {
+              [materialId]: {
+                identity: {
+                  name: "unfinished.mp4",
+                  size: 4,
+                  type: "video/mp4",
+                  lastModified: 1,
+                },
+                uploadId,
+                parts: [
+                  {
+                    part_number: 1,
+                    etag: '"original-part"',
+                    hash: "original-hash",
+                  },
+                ],
+                completionUnknown: true,
+              },
+            },
+          }),
+        )
+      },
+      {
+        key: `materials-transfer:${A}:${BC}`,
+        materialId: M,
+        uploadId: U,
+        batchId: BATCH,
+      },
+    )
+    if (permission === "revoked") {
+      await page.route("**/api/tenants/*/materials?**", (route) =>
+        route.fulfill({ status: 403, json: { code: "action_forbidden" } }),
+      )
+      await page.goto(`${url}&batch_id=${BATCH}`)
+      await expect(
+        page.getByRole("alert").getByText("无权访问此页面", { exact: true }),
+      ).toBeVisible()
+      await page.getByRole("tab", { name: "上传队列", exact: true }).click()
+    } else await page.goto(`${url}&tab=uploads&batch_id=${BATCH}`)
+    await expect(
+      page.getByRole("table").getByText("unfinished.mp4", { exact: true }),
+    ).toBeVisible()
+    await expect(
+      page.getByRole("button", { name: "批量上传", exact: true }),
+    ).toHaveCount(0)
+    await page.getByRole("button", { name: "刷新状态", exact: true }).click()
+    await expect
+      .poll(
+        () =>
+          requests.filter((r) => r.path.endsWith(`/upload-batches/${BATCH}`))
+            .length,
+      )
+      .toBeGreaterThan(1)
+    await expect(
+      page.getByRole("button", { name: "刷新状态", exact: true }),
+    ).toBeEnabled()
+    await page.waitForTimeout(150)
+    expect(requests.filter((r) => r.method !== "GET")).toEqual([])
+  })
+
+async function uncertainCompletionBoundary(page: Page, count = 1) {
+  const setup = await boundary(page)
+  const batch: UploadBatchResult = {
+    batch_id: BATCH,
+    bc_id: BC,
+    status: "receiving",
+    files: Array.from({ length: count }, (_, i) => ({
+      material_id: i
+        ? `33333333-3333-4333-8333-${String(i).padStart(12, "0")}`
+        : M,
+      upload_id: U,
+      file_name: `unfinished-${i}.mp4`,
+      byte_size: 4,
+      part_size: 4,
+      part_count: 1,
+      status: "receiving",
+      received_bytes: null,
+      can_retry: false,
+    })),
+  }
+  setup.batches.set(BATCH, batch)
+  await page.addInitScript(
+    ({ key, batch }) => {
+      sessionStorage.setItem(
+        key,
+        JSON.stringify({
+          batchIds: [batch.batch_id],
+          records: Object.fromEntries(
+            batch.files.map((row) => [
+              row.material_id,
+              {
+                identity: {
+                  name: row.file_name,
+                  size: 4,
+                  type: "video/mp4",
+                  lastModified: 1,
+                },
+                uploadId: row.upload_id,
+                parts: [
+                  {
+                    part_number: 1,
+                    etag: '"original-part"',
+                    hash: "original-hash",
+                  },
+                ],
+                completionUnknown: true,
+              },
+            ]),
+          ),
+        }),
+      )
+    },
+    { key: `materials-transfer:${A}:${BC}`, batch },
+  )
+  return setup
+}
+
+test("independent: first completion 403 stops the remaining completion requests", async ({
+  page,
+}) => {
+  await uncertainCompletionBoundary(page, 2)
+  const completes: string[] = []
+  await page.route("**/materials/*/complete", (route) => {
+    completes.push(route.request().url())
+    return route.fulfill({ status: 403, json: { code: "action_forbidden" } })
+  })
+  await page.goto(`${url}&tab=uploads&batch_id=${BATCH}`)
+  await expect(
+    page.getByRole("table").getByText("unfinished-0.mp4", { exact: true }),
+  ).toBeVisible()
+  await page.getByRole("button", { name: "刷新状态", exact: true }).click()
+  await expect(
+    page.getByRole("button", { name: "批量上传", exact: true }),
+  ).toHaveCount(0)
+  await page.waitForTimeout(150)
+  expect(completes).toHaveLength(1)
+})
+
+test("independent: scope change during a recovery read never completes the old object", async ({
+  page,
+}) => {
+  const { requests } = await uncertainCompletionBoundary(page)
+  await page.goto(`${url}&tab=uploads&batch_id=${BATCH}`)
+  await expect(
+    page.getByRole("table").getByText("unfinished-0.mp4", { exact: true }),
+  ).toBeVisible()
+  let held: import("@playwright/test").Route | undefined
+  await page.route(`**/upload-batches/${BATCH}`, (route) => {
+    held = route
+  })
+  await page.getByRole("button", { name: "刷新状态", exact: true }).click()
+  await expect.poll(() => !!held).toBe(true)
+  await page.getByRole("combobox", { name: "当前 BC", exact: true }).click()
+  await page.getByRole("option", { name: /素材 BC 乙/ }).click()
+  await expect(page).toHaveURL(new RegExp(`bc_id=${BC2}`))
+  await held!
+    .fulfill({
+      json: { batch_id: BATCH, bc_id: BC, status: "receiving", files: [] },
+    })
+    .catch(() => {})
+  await page.waitForTimeout(150)
+  expect(requests.filter((r) => r.path.endsWith("/complete"))).toEqual([])
 })

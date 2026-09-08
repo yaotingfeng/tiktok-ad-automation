@@ -724,6 +724,7 @@ test("历史链接也使用 50/100 游标，不全量下载", async ({ page }) =
 })
 for (const viewport of [
   { width: 1440, height: 900 },
+  { width: 900, height: 900 },
   { width: 390, height: 844 },
 ])
   test(`版权方表格 ${viewport.width}px 有界滚动、固定表头、键盘复制`, async ({
