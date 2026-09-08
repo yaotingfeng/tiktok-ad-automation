@@ -1,0 +1,22 @@
+.vscode/*
+!.vscode/extensions.json
+node_modules/
+backend/app/frontend/
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
+# Local development, worktrees and credentials
+.env
+.env.*
+!.env.example
+!.env.test.example
+.worktrees/
+.superpowers/
+.runtime/
+.tools/
+**/.venv/
+**/__pycache__/
+*.pyc
+.DS_Store
