@@ -119,7 +119,9 @@ def matching_page(
             )
         )
     rows = session.exec(
-        statement.order_by(name_order, col(MaterialFile.id)).limit(101)
+        statement.order_by(name_order, col(MaterialFile.id))
+        .limit(101)
+        .execution_options(populate_existing=True)
     ).all()
     materials = rows[:100]
     # Candidate pages carry one representative verified location per file. The
@@ -153,6 +155,7 @@ def matching_page(
             select(AccountMaterial)
             .join(ranked, col(AccountMaterial.id) == ranked.c.id)
             .where(ranked.c.position == 1)
+            .execution_options(populate_existing=True)
         ).all()
         assets = {asset.material_id: asset for asset in candidates}
     items = [

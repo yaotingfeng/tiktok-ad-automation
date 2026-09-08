@@ -4,7 +4,7 @@ from threading import Barrier
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, SQLModel
 
@@ -278,3 +278,44 @@ def test_concurrent_operations_cannot_bypass_target_lock_with_another_path():
             cleanup.execute(delete(Tenant).where(Tenant.id == owner.tenant_id))
             cleanup.execute(delete(User).where(User.id == owner.actor_id))
             cleanup.commit()
+
+
+@pytest.mark.parametrize("value", [" ", "\t\n", "\u00a0", "\u202f", "\u3000"])
+def test_available_video_identity_rejects_all_python_whitespace(
+    session, context, value
+):
+    file = material(session, context, "Moon.mp4")
+    asset = mapping(session, context, file)
+    with pytest.raises(IntegrityError) as error, session.begin_nested():
+        asset.video_id = value
+        session.flush()
+    assert error.value.orig.sqlstate == "23514"
+
+
+def test_matching_reloads_storage_and_mapping_facts_in_existing_session(
+    session, context
+):
+    file = material(session, context, "Moon.mp4")
+    asset = mapping(session, context, file)
+    assert (
+        match_materials(session, context=context, bc_id="bc-a", title="Moon")
+        .items[0]
+        .original_available
+    )
+    session.execute(
+        update(MaterialFile)
+        .where(MaterialFile.id == file.id)
+        .values(storage_state="unavailable"),
+        execution_options={"synchronize_session": False},
+    )
+    session.execute(
+        update(AccountMaterial)
+        .where(AccountMaterial.id == asset.id)
+        .values(video_id="new-verified-video"),
+        execution_options={"synchronize_session": False},
+    )
+    item = match_materials(session, context=context, bc_id="bc-a", title="Moon").items[
+        0
+    ]
+    assert item.original_available is False
+    assert item.source_assets[0].video_id == "new-verified-video"

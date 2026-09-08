@@ -19,3 +19,5 @@ Validation on 2026-09-09:
 - Scoped Ruff, mypy and ty pass. Root integration uses isolated PostgreSQL and Redis; no S3 or TikTok calls occur in this task.
 
 This delivers Task 1 only. Multipart receiving, actual SDK upload, distribution/readiness and the material UI are subsequent tasks. No claim is made that live videos have been uploaded or verified.
+
+Independent review identified two additional boundaries: a whitespace-only VID could pass the database check and then fail public DTO validation, and an existing Session could retain stale storage/asset facts. Six new regressions reproduced both before correction. Matching now explicitly reloads rows. The additive `0004b_material_checks` migration aligns the database constraint with Python whitespace semantics and marks previously invalid available mappings unavailable while retaining their identities/history. A disposable database verifies that data repair and the downgrade/upgrade/check roundtrip; the original `0004_materials` migration remains unchanged. Material tests now number 26.

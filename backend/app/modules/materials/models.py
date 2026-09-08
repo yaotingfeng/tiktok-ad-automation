@@ -17,6 +17,27 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
+# Python str.strip whitespace, expressed with SQL chr() to avoid dependence on
+# database locale and to include nonbreaking and ideographic spaces.
+_VIDEO_ID_SPACES = (
+    *range(9, 14),
+    *range(28, 33),
+    133,
+    160,
+    5760,
+    *range(8192, 8203),
+    8232,
+    8233,
+    8239,
+    8287,
+    12288,
+)
+VIDEO_ID_NONEMPTY = (
+    "length(translate(video_id, "
+    + " || ".join(f"chr({value})" for value in _VIDEO_ID_SPACES)
+    + ", '')) > 0"
+)
+
 
 def material_reference() -> ForeignKeyConstraint:
     return ForeignKeyConstraint(
@@ -264,7 +285,7 @@ class AccountMaterial(SQLModel, table=True):
             name="ck_account_material_status",
         ),
         CheckConstraint(
-            "status != 'available' OR (video_id <> '' AND verified_at IS NOT NULL)",
+            f"status != 'available' OR ({VIDEO_ID_NONEMPTY} AND verified_at IS NOT NULL)",
             name="ck_account_material_verified",
         ),
     )
