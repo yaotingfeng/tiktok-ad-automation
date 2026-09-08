@@ -68,3 +68,10 @@ class SceneRefreshResult:
     complete: bool
     next_page: int | None
     reason_codes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ScenePreparation:
+    job_id: UUID | None
+    state: Literal["ready", "queued", "blocked"]
+    reason_code: str | None = None
