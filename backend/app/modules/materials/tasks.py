@@ -17,17 +17,11 @@ from .source_uploads import READ_HARD_LIMIT, UPLOAD_HARD_LIMIT, run_source_uploa
 
 register_dispatch_task("materials.upload_original", "resources")
 register_dispatch_task("materials.verify_original", "resources")
+register_dispatch_task("materials.prepare_target", "resources")
+register_dispatch_task("materials.verify_target", "resources")
 
 
-def _run(
-    task: Any,
-    *,
-    kind: str,
-    hard_limit: int,
-    tenant_id: str,
-    actor_id: str,
-    payload: dict[str, Any],
-) -> None:
+def require_bounded_worker(task: Any, *, hard_limit: int) -> None:
     limits = task.request.timelimit or (None, None)
     effective = limits[0] or task.time_limit
     if (
@@ -41,6 +35,18 @@ def _run(
         raise DomainError(
             "material_worker_unbounded", "素材任务需要启用 prefork 硬超时工作进程"
         )
+
+
+def _run(
+    task: Any,
+    *,
+    kind: str,
+    hard_limit: int,
+    tenant_id: str,
+    actor_id: str,
+    payload: dict[str, Any],
+) -> None:
+    require_bounded_worker(task, hard_limit=hard_limit)
     if (
         set(payload) - {"material_id", "operation_id", "claim_id", "revision"}
         or "material_id" not in payload
@@ -101,3 +107,88 @@ def verify_original(
         actor_id=actor_id,
         payload=payload,
     )
+
+
+def _run_target(
+    task: Any,
+    *,
+    kind: str,
+    hard_limit: int,
+    tenant_id: str,
+    actor_id: str,
+    payload: dict[str, Any],
+) -> None:
+    require_bounded_worker(task, hard_limit=hard_limit)
+    if set(payload) - {
+        "distribution_id",
+        "operation_id",
+        "revision",
+        "claim_id",
+        "observe",
+    } or not {"distribution_id", "operation_id"}.issubset(payload):
+        raise DomainError("invalid_asset_task", "目标素材工作任务参数无效")
+    from .distribution import run_distribution
+
+    with Redis.from_url(settings.REDIS_URL) as redis_client:
+        run_distribution(
+            database_engine=engine,
+            redis_client=redis_client,
+            context=TenantContext(
+                tenant_id=UUID(tenant_id), actor_id=UUID(actor_id), role="operator"
+            ),
+            distribution_id=UUID(payload["distribution_id"]),
+            operation_id=UUID(payload["operation_id"]),
+            kind=kind,
+            revision=payload.get("revision"),
+            recovery_claim_id=UUID(payload["claim_id"])
+            if payload.get("claim_id")
+            else None,
+        )
+
+
+@celery_app.task(  # type: ignore[untyped-decorator]
+    name="materials.prepare_target",
+    bind=True,
+    time_limit=UPLOAD_HARD_LIMIT,
+    soft_time_limit=UPLOAD_HARD_LIMIT - 10,
+)
+def prepare_target(
+    self: Any, *, tenant_id: str, actor_id: str, payload: dict[str, Any]
+) -> None:
+    _run_target(
+        self,
+        kind="prepare",
+        hard_limit=UPLOAD_HARD_LIMIT,
+        tenant_id=tenant_id,
+        actor_id=actor_id,
+        payload=payload,
+    )
+
+
+@celery_app.task(  # type: ignore[untyped-decorator]
+    name="materials.verify_target",
+    bind=True,
+    time_limit=READ_HARD_LIMIT,
+    soft_time_limit=READ_HARD_LIMIT - 5,
+)
+def verify_target(
+    self: Any, *, tenant_id: str, actor_id: str, payload: dict[str, Any]
+) -> None:
+    _run_target(
+        self,
+        kind="verify",
+        hard_limit=READ_HARD_LIMIT,
+        tenant_id=tenant_id,
+        actor_id=actor_id,
+        payload=payload,
+    )
+
+
+@celery_app.task(name="materials.repair_dispatches", time_limit=45)  # type: ignore[untyped-decorator]
+def repair_dispatches(limit: int = 100) -> int:
+    from sqlmodel import Session
+
+    from .distribution import repair_material_dispatches
+
+    with Session(engine) as session, session.begin():
+        return repair_material_dispatches(session, limit=limit)

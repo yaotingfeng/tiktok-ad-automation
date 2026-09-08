@@ -124,3 +124,31 @@ def test_verified_identity_is_target_readback_with_hash_and_displayable():
     ):
         assert verified_video({"list": [{**row, **override}]}, md5="a" * 32) is None
     assert verified_video({"list": []}, md5="a" * 32) is None
+
+
+def test_share_generated_body_keeps_source_mid_distinct_from_target_advertiser(
+    transport,
+):
+    from app.modules.materials.sdk_assets import share_video
+
+    calls, responses = transport
+    responses.append({"code": 0, "request_id": "offline-share", "data": {}})
+    with official_client(access_token="test-only-token") as client:
+        assert (
+            share_video(
+                client,
+                source_advertiser_id="source-account",
+                source_mid="source-material-id",
+                target_advertiser_id="target-account",
+            )
+            == {}
+        )
+    method, url, kwargs = calls[0]
+    assert method == "POST" and url.endswith("/creative/asset/share/")
+    assert json.loads(kwargs["body"]) == {
+        "advertiser_id": "source-account",
+        "asset_type": "VIDEO",
+        "material_ids": ["source-material-id"],
+        "shared_advertiser_ids": ["target-account"],
+    }
+    assert kwargs["timeout"].read_timeout == 30

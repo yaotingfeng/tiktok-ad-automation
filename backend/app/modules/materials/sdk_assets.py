@@ -158,3 +158,37 @@ def search_page(
         and _id(row, "video_id")
     ]
     return matches, last
+
+
+def share_video(
+    client: Any,
+    *,
+    source_advertiser_id: str,
+    source_mid: str,
+    target_advertiser_id: str,
+) -> dict[str, Any]:
+    """Generated method only; workflow must first establish capability evidence.
+
+    No production source/target pair has verified share permission/mapping
+    semantics in this deployment yet. Readiness consequently never chooses it.
+    """
+    from business_api_client.api.creative_management_api import (  # type: ignore[import-untyped]
+        CreativeManagementApi,
+    )
+    from business_api_client.models.asset_share_body import (  # type: ignore[import-untyped]
+        AssetShareBody,
+    )
+
+    body = AssetShareBody(
+        advertiser_id=source_advertiser_id,
+        asset_type="VIDEO",
+        material_ids=[source_mid],
+        shared_advertiser_ids=[target_advertiser_id],
+    )
+    return checked_data(
+        CreativeManagementApi(client).creative_asset_share(
+            access_token=client.default_headers["Access-Token"],
+            body=body,
+            _request_timeout=(5, 30),
+        )
+    )
