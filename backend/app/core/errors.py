@@ -76,7 +76,16 @@ class ConfigurationError(DomainError):
         self.fields = tuple(name for name in fields if name in self.ALLOWED_FIELDS)
 
 
-async def domain_error_handler(_request: Request, exc: DomainError) -> JSONResponse:
+async def domain_error_handler(_request: Request, exc: Exception) -> JSONResponse:
+    if not isinstance(exc, DomainError):
+        return JSONResponse(
+            status_code=500,
+            content={
+                "code": "internal_error",
+                "message": _STATUS_MESSAGES[500],
+                "retryable": False,
+            },
+        )
     status = ERROR_HTTP_STATUS.get(exc.code, 500)
     code = exc.code if exc.code in ERROR_HTTP_STATUS else "internal_error"
     message = ERROR_PUBLIC_MESSAGES.get(code, _STATUS_MESSAGES[status])

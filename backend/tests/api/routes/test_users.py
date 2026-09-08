@@ -316,43 +316,24 @@ def test_update_password_me_same_password_error(
     )
 
 
-def test_register_user(client: TestClient, db: Session) -> None:
+def test_register_user_is_disabled(client: TestClient, db: Session) -> None:
     username = random_email()
-    password = random_lower_string()
-    full_name = random_lower_string()
-    data = {"email": username, "password": password, "full_name": full_name}
-    r = client.post(
+    response = client.post(
         f"{settings.API_V1_STR}/users/signup",
-        json=data,
+        json={"email": username, "password": random_lower_string()},
     )
-    assert r.status_code == 200
-    created_user = r.json()
-    assert created_user["email"] == username
-    assert created_user["full_name"] == full_name
-
-    user_query = select(User).where(User.email == username)
-    user_db = db.exec(user_query).first()
-    assert user_db
-    assert user_db.email == username
-    assert user_db.full_name == full_name
-    verified, _ = verify_password(password, user_db.hashed_password)
-    assert verified
+    assert response.status_code == 403
+    assert response.json()["code"] == "public_signup_disabled"
+    assert db.exec(select(User).where(User.email == username)).first() is None
 
 
-def test_register_user_already_exists_error(client: TestClient) -> None:
-    password = random_lower_string()
-    full_name = random_lower_string()
-    data = {
-        "email": settings.FIRST_SUPERUSER,
-        "password": password,
-        "full_name": full_name,
-    }
-    r = client.post(
+def test_register_existing_user_does_not_reveal_existence(client: TestClient) -> None:
+    response = client.post(
         f"{settings.API_V1_STR}/users/signup",
-        json=data,
+        json={"email": settings.FIRST_SUPERUSER, "password": random_lower_string()},
     )
-    assert r.status_code == 400
-    assert r.json()["detail"] == "The user with this email already exists in the system"
+    assert response.status_code == 403
+    assert response.json()["code"] == "public_signup_disabled"
 
 
 def test_update_user(

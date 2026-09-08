@@ -11,6 +11,7 @@ from app.api.deps import (
     get_current_active_superuser,
 )
 from app.core.config import settings
+from app.core.errors import DomainError
 from app.core.security import get_password_hash, verify_password
 from app.models import (
     Item,
@@ -19,7 +20,6 @@ from app.models import (
     User,
     UserCreate,
     UserPublic,
-    UserRegister,
     UsersPublic,
     UserUpdate,
     UserUpdateMe,
@@ -143,20 +143,10 @@ def delete_user_me(session: SessionDep, current_user: CurrentUser) -> Any:
     return Message(message="User deleted successfully")
 
 
-@router.post("/signup", response_model=UserPublic)
-def register_user(session: SessionDep, user_in: UserRegister) -> Any:
-    """
-    Create new user without the need to be logged in.
-    """
-    user = crud.get_user_by_email(session=session, email=user_in.email)
-    if user:
-        raise HTTPException(
-            status_code=400,
-            detail="The user with this email already exists in the system",
-        )
-    user_create = UserCreate.model_validate(user_in)
-    user = crud.create_user(session=session, user_create=user_create)
-    return user
+@router.post("/signup", include_in_schema=False)
+def register_user() -> None:
+    """User provisioning is restricted to the authenticated administrator route."""
+    raise DomainError("public_signup_disabled", "公开注册已关闭，请联系平台管理员")
 
 
 @router.get("/{user_id}", response_model=UserPublic)

@@ -1,6 +1,6 @@
 import warnings
 from collections.abc import Mapping
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
 from cryptography.fernet import Fernet
 from pydantic import (
@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     TIKTOK_APP_ID: str = ""
     TIKTOK_APP_SECRET: str = Field(default="", repr=False)
     TIKTOK_REDIRECT_URI: str = ""
-    TIKTOK_CALL_POLICIES: dict = Field(default_factory=dict)
+    TIKTOK_CALL_POLICIES: dict[str, Any] = Field(default_factory=dict)
     CONNECTION_ENCRYPTION_KEY: str = Field(default="", repr=False)
     S3_ENDPOINT_URL: str = ""
     S3_BUCKET: str = ""
