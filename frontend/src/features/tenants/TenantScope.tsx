@@ -119,7 +119,11 @@ export function TenantScopeProvider({
   const switchBC = (target: BCPublic) => {
     if (target.bc_id === bcId) return
     void navigate({
-      to: pathname,
+      to: /\/build-tasks\//.test(pathname)
+        ? `/tenants/${tenantId}/build-tasks`
+        : /\/build-(drafts|previews)\//.test(pathname)
+          ? `/tenants/${tenantId}/builds/new`
+          : pathname,
       search: {
         bc_id: target.bc_id,
         ...(searchParams.tab ? { tab: searchParams.tab } : {}),
@@ -158,11 +162,15 @@ export function TenantScopeProvider({
     const suffix = tenantId
       ? pathname.slice(`/tenants/${tenantId}`.length)
       : "/builds/new"
-    const destination = suffix.startsWith("/strategies/")
-      ? "/strategies"
-      : suffix === "/members" && !canManage(target.role)
+    const destination = /^\/build-tasks\//.test(suffix)
+      ? "/build-tasks"
+      : /^\/build-(drafts|previews)\//.test(suffix)
         ? "/builds/new"
-        : suffix
+        : suffix.startsWith("/strategies/")
+          ? "/strategies"
+          : suffix === "/members" && !canManage(target.role)
+            ? "/builds/new"
+            : suffix
     // Router guards run before the old scope unmounts or cancels any requests.
     void navigate({
       to: `/tenants/${target.id}${destination || "/builds/new"}`,

@@ -39,7 +39,12 @@ export function Main({ items, label }: MainProps) {
       <SidebarGroupContent role="navigation" aria-label={label ?? "平台入口"}>
         <SidebarMenu>
           {items.map((item) => {
-            const isActive = currentPath === item.path
+            const isActive =
+              currentPath === item.path ||
+              (item.path.endsWith("/build-tasks") &&
+                currentPath.startsWith(`${item.path}/`)) ||
+              (item.path.endsWith("/builds/new") &&
+                /\/build-(drafts|previews)\//.test(currentPath))
 
             return (
               <SidebarMenuItem key={item.title}>
