@@ -6,8 +6,10 @@ Upload success proves receipt only; a separate account-scoped read verifies use.
 
 from typing import Any
 
-from business_api_client.api.file_api import FileApi
-from business_api_client.models.filtering_video_ad_search import FilteringVideoAdSearch
+from business_api_client.api.file_api import FileApi  # type: ignore[import-untyped]
+from business_api_client.models.filtering_video_ad_search import (  # type: ignore[import-untyped]
+    FilteringVideoAdSearch,
+)
 
 from app.core.errors import DomainError
 from app.integrations.tiktok.accounts import paged_rows
@@ -46,7 +48,7 @@ def upload_video(
     )
 
 
-def read_video(client: Any, *, advertiser_id: str, video_id: str) -> dict:
+def read_video(client: Any, *, advertiser_id: str, video_id: str) -> dict[str, Any]:
     return checked_data(
         FileApi(client).ad_video_info(
             advertiser_id=advertiser_id,
@@ -59,7 +61,7 @@ def read_video(client: Any, *, advertiser_id: str, video_id: str) -> dict:
 
 def search_videos(
     client: Any, *, advertiser_id: str, page: int, material_ids: list[str] | None = None
-) -> dict:
+) -> dict[str, Any]:
     kwargs = {}
     if material_ids:
         kwargs["filtering"] = FilteringVideoAdSearch(material_ids=material_ids)
@@ -79,7 +81,7 @@ def _schema_error() -> DomainError:
     return DomainError("unsupported_material_schema", "平台素材返回结构尚不支持核实")
 
 
-def _id(row: dict, key: str) -> str | None:
+def _id(row: dict[str, Any], key: str) -> str | None:
     value = row.get(key)
     return (
         value
@@ -88,7 +90,7 @@ def _id(row: dict, key: str) -> str | None:
     )
 
 
-def identity(row: dict) -> dict[str, str]:
+def identity(row: dict[str, Any]) -> dict[str, str]:
     video_id = _id(row, "video_id")
     if not video_id:
         raise _schema_error()
@@ -121,14 +123,14 @@ def parse_upload(response: object) -> dict[str, str]:
     return identity(data[0])
 
 
-def video_rows(data: dict) -> list[dict]:
+def video_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
     rows = data.get("list")
     if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
         raise _schema_error()
     return rows
 
 
-def verified_video(data: dict, *, md5: str) -> dict[str, str] | None:
+def verified_video(data: dict[str, Any], *, md5: str) -> dict[str, str] | None:
     rows = video_rows(data)
     # The one-ID lookup must have exactly one strong content match. Unknown
     # statuses, multiple records and missing signatures never imply readiness.
@@ -145,7 +147,7 @@ def verified_video(data: dict, *, md5: str) -> dict[str, str] | None:
 
 
 def search_page(
-    data: dict, *, page: int, remote_name: str, md5: str
+    data: dict[str, Any], *, page: int, remote_name: str, md5: str
 ) -> tuple[list[dict[str, str]], bool]:
     rows, last = paged_rows(data, page=page, page_size=PAGE_SIZE)
     matches = [
