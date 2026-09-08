@@ -43,6 +43,7 @@ from app.modules.builds.preview_schemas import (
 )
 from app.modules.builds.preview_validation import measured, name_reasons, scene_reasons
 from app.modules.builds.scene import read_scene_context
+from app.modules.builds.scene_schemas import SceneContext
 from app.modules.materials.service import get_material_readiness
 from app.modules.providers.models import PromotionLink
 from app.modules.strategies.naming import render_names
@@ -426,13 +427,29 @@ def _expand_unit(
         if account is None:
             p.update(drama_after=p["current_drama"], current_drama=None)
             return
-        scene = read_scene_context(
-            session,
-            context=context,
-            bc_id=preview.bc_id,
-            advertiser_id=account.advertiser_id,
-            link_id=drama.link_id,
-        )
+        try:
+            scene = read_scene_context(
+                session,
+                context=context,
+                bc_id=preview.bc_id,
+                advertiser_id=account.advertiser_id,
+                link_id=drama.link_id,
+            )
+        except DomainError as error:
+            if error.code not in {
+                "account_not_in_bc",
+                "account_ownership_conflict",
+                "account_metadata_incomplete",
+                "account_access_denied",
+                "scene_link_unavailable",
+                "resource_not_found",
+            }:
+                raise
+            scene = SceneContext(
+                supported=False,
+                reason_codes=(error.code,),
+                capability_revision="unavailable",
+            )
         name = _names(preview, drama, config, 1, 1)[0]
         unit = BuildUnit(
             **_scope(preview),
@@ -460,6 +477,7 @@ def _expand_unit(
                 BuildUnit.tenant_id == preview.tenant_id,
                 BuildUnit.preview_id == preview.id,
                 BuildUnit.advertiser_id == account.advertiser_id,
+                BuildUnit.campaign_digest == unit.campaign_digest,
                 BuildUnit.campaign_name == name,
             )
         ).all()
