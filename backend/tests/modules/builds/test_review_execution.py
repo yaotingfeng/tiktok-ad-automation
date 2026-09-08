@@ -93,3 +93,33 @@ def test_review_database_commit_failure_preserves_received_cta_id(
         # A known CTA ID must survive in append-only evidence because there is no
         # unknown-ID list endpoint. Recovery may not discard this successful GET key.
         assert any(row.summary.get("remote_id") == calls[0][2] for row in evidence)
+
+
+def test_review_fairness_redis_outage_defers_unsent_step(executable, monkeypatch):
+    import socket
+
+    from redis import Redis
+
+    db, _, ids = executable
+    calls = success_wire(monkeypatch)
+    # An actually refused local socket connection, with no fake workflow/Redis
+    # result. Bound-but-not-listening prevents another process taking the port.
+    with socket.socket() as unavailable:
+        unavailable.bind(("127.0.0.1", 0))
+        client = Redis(
+            host="127.0.0.1",
+            port=unavailable.getsockname()[1],
+            db=1,
+            socket_connect_timeout=0.1,
+            socket_timeout=0.1,
+        )
+        try:
+            run(executable, client, "CTA")
+        finally:
+            client.close()
+    assert not calls
+    with Session(db) as session:
+        step = session.get(ExecutionStep, ids["CTA"][0])
+        assert step.request_body is None and step.remote_id is None
+        assert step.error_code == "admission_unavailable"
+        assert step.status == "PENDING"
