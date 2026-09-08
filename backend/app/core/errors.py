@@ -3,6 +3,12 @@ from fastapi.responses import JSONResponse
 
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
+    "invalid_account_action": 422,
+    "account_not_in_bc": 404,
+    "account_ownership_conflict": 409,
+    "account_metadata_incomplete": 409,
+    "account_access_denied": 403,
+    "no_upload_account": 409,
     "tenant_forbidden": 403,
     "action_forbidden": 403,
     "platform_forbidden": 403,

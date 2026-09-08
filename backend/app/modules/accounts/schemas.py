@@ -15,3 +15,11 @@ class ConnectionPublic(BaseModel):
     id: UUID
     tenant_id: UUID
     status: ConnectionStatus
+
+
+class AccountAccess(BaseModel):
+    advertiser_id: str
+    bc_id: str
+    connection_id: UUID
+    currency: str
+    timezone: str
