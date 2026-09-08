@@ -316,6 +316,46 @@ export type CopyPublic = {
 };
 
 /**
+ * CreateDraftRequest
+ */
+export type CreateDraftRequest = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Strategy Version Id
+     */
+    strategy_version_id: string;
+    /**
+     * Provider Connection Id
+     */
+    provider_connection_id: string;
+    /**
+     * Application Id
+     */
+    application_id: string;
+    /**
+     * Drama Lines
+     */
+    drama_lines: Array<string>;
+    /**
+     * Account Lines
+     */
+    account_lines: Array<string>;
+    /**
+     * Link Config
+     */
+    link_config?: {
+        [key: string]: unknown;
+    };
+};
+
+/**
  * CreateStrategyRequest
  */
 export type CreateStrategyRequest = {
@@ -328,6 +368,242 @@ export type CreateStrategyRequest = {
      * Request Id
      */
     request_id: string;
+};
+
+/**
+ * DraftDramaPublic
+ */
+export type DraftDramaPublic = {
+    /**
+     * Drama Id
+     */
+    drama_id: string;
+    /**
+     * Link Id
+     */
+    link_id: string;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * First Line
+     */
+    first_line: number;
+    /**
+     * Material State
+     */
+    material_state: string;
+    /**
+     * Matched Count
+     */
+    matched_count: number;
+};
+
+/**
+ * DraftGroupEditRequest
+ */
+export type DraftGroupEditRequest = {
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+    /**
+     * Groups
+     */
+    groups: Array<Array<string>>;
+};
+
+/**
+ * DraftInputPublic
+ */
+export type DraftInputPublic = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Kind
+     */
+    kind: string;
+    /**
+     * Line No
+     */
+    line_no: number;
+    /**
+     * Raw Text
+     */
+    raw_text: string;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Reason Code
+     */
+    reason_code: string | null;
+    /**
+     * Duplicate Of
+     */
+    duplicate_of: number | null;
+    /**
+     * Advertiser Id
+     */
+    advertiser_id: string | null;
+    /**
+     * Drama Id
+     */
+    drama_id: string | null;
+    /**
+     * Provider Input Id
+     */
+    provider_input_id: string | null;
+    /**
+     * Candidates
+     */
+    candidates: Array<{
+        [key: string]: unknown;
+    }>;
+};
+
+/**
+ * DraftMaterialPublic
+ */
+export type DraftMaterialPublic = {
+    /**
+     * Material Id
+     */
+    material_id: string;
+    /**
+     * File Name
+     */
+    file_name: string;
+    /**
+     * Group No
+     */
+    group_no: number;
+    /**
+     * Position
+     */
+    position: number;
+    /**
+     * Shared With Other Drama
+     */
+    shared_with_other_drama: boolean;
+};
+
+/**
+ * DraftPrepareAccepted
+ */
+export type DraftPrepareAccepted = {
+    /**
+     * Task Id
+     */
+    task_id: string;
+    /**
+     * Revision
+     */
+    revision: number;
+};
+
+/**
+ * DraftPrepareRequest
+ */
+export type DraftPrepareRequest = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+};
+
+/**
+ * DraftSaved
+ */
+export type DraftSaved = {
+    /**
+     * Draft Id
+     */
+    draft_id: string;
+    /**
+     * Revision
+     */
+    revision: number;
+};
+
+/**
+ * DraftSummary
+ */
+export type DraftSummary = {
+    /**
+     * Draft Id
+     */
+    draft_id: string;
+    /**
+     * Revision
+     */
+    revision: number;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Status
+     */
+    status: 'DRAFT' | 'PREPARING' | 'READY' | 'BLOCKED';
+    /**
+     * Strategy Version Id
+     */
+    strategy_version_id: string;
+    /**
+     * Provider Connection Id
+     */
+    provider_connection_id: string;
+    /**
+     * Application Id
+     */
+    application_id: string;
+    /**
+     * Link Config
+     */
+    link_config: {
+        [key: string]: string | number | boolean | null;
+    };
+    /**
+     * Input Counts
+     */
+    input_counts: {
+        [key: string]: {
+            [key: string]: number;
+        };
+    };
+    /**
+     * Drama Count
+     */
+    drama_count: number;
+    /**
+     * Account Count
+     */
+    account_count: number;
+    /**
+     * Task Id
+     */
+    task_id: string | null;
+    /**
+     * Provider Task Id
+     */
+    provider_task_id: string | null;
+    /**
+     * Error Code
+     */
+    error_code: string | null;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Updated At
+     */
+    updated_at: string;
 };
 
 /**
@@ -591,6 +867,48 @@ export type Page_ConnectionPublic_ = {
 };
 
 /**
+ * Page[DraftDramaPublic]
+ */
+export type Page_DraftDramaPublic_ = {
+    /**
+     * Items
+     */
+    items: Array<DraftDramaPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
+ * Page[DraftInputPublic]
+ */
+export type Page_DraftInputPublic_ = {
+    /**
+     * Items
+     */
+    items: Array<DraftInputPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
+ * Page[DraftMaterialPublic]
+ */
+export type Page_DraftMaterialPublic_ = {
+    /**
+     * Items
+     */
+    items: Array<DraftMaterialPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
  * Page[MaterialPublic]
  */
 export type Page_MaterialPublic_ = {
@@ -742,6 +1060,42 @@ export type Page_VersionPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+};
+
+/**
+ * PatchDraftRequest
+ */
+export type PatchDraftRequest = {
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+    /**
+     * Strategy Version Id
+     */
+    strategy_version_id?: string | null;
+    /**
+     * Provider Connection Id
+     */
+    provider_connection_id?: string | null;
+    /**
+     * Application Id
+     */
+    application_id?: string | null;
+    /**
+     * Drama Lines
+     */
+    drama_lines?: Array<string> | null;
+    /**
+     * Account Lines
+     */
+    account_lines?: Array<string> | null;
+    /**
+     * Link Config
+     */
+    link_config?: {
+        [key: string]: unknown;
+    } | null;
 };
 
 /**
@@ -3890,3 +4244,382 @@ export type strategiesCopyPoolResponses = {
 };
 
 export type strategiesCopyPoolResponse = strategiesCopyPoolResponses[keyof strategiesCopyPoolResponses];
+
+export type buildsCreateData = {
+    body: CreateDraftRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts';
+};
+
+export type buildsCreateErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsCreateError = buildsCreateErrors[keyof buildsCreateErrors];
+
+export type buildsCreateResponses = {
+    /**
+     * Successful Response
+     */
+    201: DraftSaved;
+};
+
+export type buildsCreateResponse = buildsCreateResponses[keyof buildsCreateResponses];
+
+export type buildsSavedRequestData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Request Id
+         */
+        request_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-draft-requests/{request_id}';
+};
+
+export type buildsSavedRequestErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsSavedRequestError = buildsSavedRequestErrors[keyof buildsSavedRequestErrors];
+
+export type buildsSavedRequestResponses = {
+    /**
+     * Successful Response
+     */
+    200: DraftSaved;
+};
+
+export type buildsSavedRequestResponse = buildsSavedRequestResponses[keyof buildsSavedRequestResponses];
+
+export type buildsSavedPrepareRequestData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Request Id
+         */
+        request_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-preparation-requests/{request_id}';
+};
+
+export type buildsSavedPrepareRequestErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsSavedPrepareRequestError = buildsSavedPrepareRequestErrors[keyof buildsSavedPrepareRequestErrors];
+
+export type buildsSavedPrepareRequestResponses = {
+    /**
+     * Successful Response
+     */
+    200: DraftPrepareAccepted;
+};
+
+export type buildsSavedPrepareRequestResponse = buildsSavedPrepareRequestResponses[keyof buildsSavedPrepareRequestResponses];
+
+export type buildsSummaryData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}';
+};
+
+export type buildsSummaryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsSummaryError = buildsSummaryErrors[keyof buildsSummaryErrors];
+
+export type buildsSummaryResponses = {
+    /**
+     * Successful Response
+     */
+    200: DraftSummary;
+};
+
+export type buildsSummaryResponse = buildsSummaryResponses[keyof buildsSummaryResponses];
+
+export type buildsUpdateData = {
+    body: PatchDraftRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}';
+};
+
+export type buildsUpdateErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsUpdateError = buildsUpdateErrors[keyof buildsUpdateErrors];
+
+export type buildsUpdateResponses = {
+    /**
+     * Successful Response
+     */
+    200: DraftSaved;
+};
+
+export type buildsUpdateResponse = buildsUpdateResponses[keyof buildsUpdateResponses];
+
+export type buildsPrepareData = {
+    body: DraftPrepareRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/prepare';
+};
+
+export type buildsPrepareErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsPrepareError = buildsPrepareErrors[keyof buildsPrepareErrors];
+
+export type buildsPrepareResponses = {
+    /**
+     * Successful Response
+     */
+    202: DraftPrepareAccepted;
+};
+
+export type buildsPrepareResponse = buildsPrepareResponses[keyof buildsPrepareResponses];
+
+export type buildsInputsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query: {
+        /**
+         * Kind
+         */
+        kind: 'drama' | 'account';
+        /**
+         * Status
+         */
+        status?: string | null;
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/inputs';
+};
+
+export type buildsInputsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsInputsError = buildsInputsErrors[keyof buildsInputsErrors];
+
+export type buildsInputsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_DraftInputPublic_;
+};
+
+export type buildsInputsResponse = buildsInputsResponses[keyof buildsInputsResponses];
+
+export type buildsDramasData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: {
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/dramas';
+};
+
+export type buildsDramasErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsDramasError = buildsDramasErrors[keyof buildsDramasErrors];
+
+export type buildsDramasResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_DraftDramaPublic_;
+};
+
+export type buildsDramasResponse = buildsDramasResponses[keyof buildsDramasResponses];
+
+export type buildsMaterialsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+        /**
+         * Drama Id
+         */
+        drama_id: string;
+    };
+    query?: {
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/dramas/{drama_id}/materials';
+};
+
+export type buildsMaterialsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsMaterialsError = buildsMaterialsErrors[keyof buildsMaterialsErrors];
+
+export type buildsMaterialsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_DraftMaterialPublic_;
+};
+
+export type buildsMaterialsResponse = buildsMaterialsResponses[keyof buildsMaterialsResponses];
+
+export type buildsEditGroupsData = {
+    body: DraftGroupEditRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+        /**
+         * Drama Id
+         */
+        drama_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/dramas/{drama_id}/groups';
+};
+
+export type buildsEditGroupsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsEditGroupsError = buildsEditGroupsErrors[keyof buildsEditGroupsErrors];
+
+export type buildsEditGroupsResponses = {
+    /**
+     * Successful Response
+     */
+    200: DraftSaved;
+};
+
+export type buildsEditGroupsResponse = buildsEditGroupsResponses[keyof buildsEditGroupsResponses];

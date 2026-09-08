@@ -173,7 +173,7 @@ def filename_matches(file_name: str, title: str) -> bool:
 
 在 `schemas.py` 定义 `UploadFileRequest(file_name: str, size: int, mime_type: str)`、`UploadedPart(part_number: int, etag: str)`、`UploadFileResult(material_id: UUID, upload_id: UUID, part_size: int, part_count: int, status: str)`、`UploadBatchResult(batch_id: UUID, files: list[UploadFileResult])`。upload_id 是本地 ObjectUpload ID；分片默认 16 MiB，超过 10,000 片时提高分片大小，最后一片允许不足一片。size 必须大于 0，part_number 范围为 1～10,000，etag 不得为空。
 
-- [ ] **步骤 1：先写对象 key、完整性与跨租户回归。**
+- [x] **步骤 1：先写对象 key、完整性与跨租户回归。**
 
 ```python
 from uuid import uuid4
@@ -191,9 +191,9 @@ def test_incomplete_file_does_not_enter_platform_upload():
     assert error.value.code == "incomplete_object"
 ```
 
-- [ ] **步骤 2：运行失败测试。** `uv run pytest tests/modules/materials/test_object_uploads.py -q`；预期缺少对象存储功能而失败。
+- [x] **步骤 2：运行失败测试。** `uv run pytest tests/modules/materials/test_object_uploads.py -q`；预期缺少对象存储功能而失败。
 
-- [ ] **步骤 3：实现有租户范围的分片上传。** 复用 P01 锁定的 boto3 依赖和配置 `S3_BUCKET/S3_ENDPOINT_URL/S3_REGION`，访问凭据使用 `S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY` 运行配置，不能进入前端。对象存储 bucket 私有，上传授权只对当前 ObjectUpload 的 key、upload_id 和 part_number 签名，签名有效期 900 秒；续签前重新校验租户归属。
+- [x] **步骤 3：实现有租户范围的分片上传。** 复用 P01 锁定的 boto3 依赖和配置 `S3_BUCKET/S3_ENDPOINT_URL/S3_REGION`，访问凭据使用 `S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY` 运行配置，不能进入前端。对象存储 bucket 私有，上传授权只对当前 ObjectUpload 的 key、upload_id 和 part_number 签名，签名有效期 900 秒；续签前重新校验租户归属。
 
 ```python
 from uuid import UUID
@@ -221,8 +221,8 @@ def sign_part(s3, *, bucket: str, key: str, upload_id: str,
 `finish_upload` 完成后在同一数据库事务把文件标为 stored，并调用 `enqueue_after_commit(session, context=context, task_name="materials.upload_original", task_key=f"upload-original:{material_id}", payload={"material_id": str(material_id)})`。相同完成请求复用既有任务；对象完成成功而数据库提交失败时，通过已保存唯一 key 回查完成对象后恢复入队，不重新接收视频。
 注册 `POST /api/tenants/{tenant_id}/materials/upload-batches`、`POST /api/tenants/{tenant_id}/materials/{material_id}/upload-parts/{part_number}/sign`、`POST /api/tenants/{tenant_id}/materials/{material_id}/complete`、`GET /api/tenants/{tenant_id}/materials/upload-batches/{batch_id}`。进度明确分为 receiving、stored、uploading、verifying、available、blocked 或 result_unknown；浏览器关闭后只有 stored 及以后由后台继续。
 
-- [ ] **步骤 4：测试对象存储与事务边界。** 用 `botocore.stub.Stubber` 验证请求 key/upload_id/part_number，或基础测试环境 S3 兼容实例运行同一组集成测试；执行 `uv run pytest tests/modules/materials/test_object_uploads.py tests/modules/materials/test_upload_api.py -q`。预期错误长度不入队，跨租户无法签名/完成，同一完成请求一份 outbox，数据库回滚不发布 Celery。
-- [ ] **步骤 5：提交本任务。** `git add app/modules/materials app/api/main.py app/core/config.py pyproject.toml uv.lock tests/modules/materials`，然后 `git commit -m "materials: persist resumable object uploads"`。
+- [x] **步骤 4：测试对象存储与事务边界。** 用 `botocore.stub.Stubber` 验证请求 key/upload_id/part_number，或基础测试环境 S3 兼容实例运行同一组集成测试；执行 `uv run pytest tests/modules/materials/test_object_uploads.py tests/modules/materials/test_upload_api.py -q`。预期错误长度不入队，跨租户无法签名/完成，同一完成请求一份 outbox，数据库回滚不发布 Celery。
+- [x] **步骤 5：提交本任务。** `git add app/modules/materials app/api/main.py app/core/config.py pyproject.toml uv.lock tests/modules/materials`，然后 `git commit -m "materials: persist resumable object uploads"`。
 
 ### 任务 3：用官方 SDK 上传并核实实际来源账户资产
 
@@ -235,7 +235,7 @@ def sign_part(s3, *, bucket: str, key: str, upload_id: str,
 
 **接口（Interfaces）：** 消费 `assign_upload_account`、`resolve_account_access`、`sdk_client`；输出 `upload_video(client, *, advertiser_id: str, local_path: str, remote_name: str, md5: str)`、`read_video(client, *, advertiser_id: str, video_id: str)` 和 `run_source_upload(session, *, context, material_id: UUID) -> None`。返回的原始 SDK 响应由本任务归一化，保存真实 video_id/mid，不暴露 token。
 
-- [ ] **步骤 1：核对固定 SDK 并写请求层回归。** 读取锁定安装包中的 `FileApi.ad_video_upload/ad_video_info/ad_video_search`、`CreativeManagementApi.creative_asset_share` 和 `AssetShareBody/FilteringVideoAdSearch`，将方法参数、响应字段及权限差异记入契约文档。已查阅的[官方 FileApi](https://github.com/tiktok/tiktok-business-api-sdk/blob/f809c396520df2d7b201a9ccc5378d822b728ed3/python_sdk/business_api_client/api/file_api.py)包含上传与回查方法；实现继续以该 revision 安装代码为准。
+- [x] **步骤 1：核对固定 SDK 并写请求层回归。** 读取锁定安装包中的 `FileApi.ad_video_upload/ad_video_info/ad_video_search`、`CreativeManagementApi.creative_asset_share` 和 `AssetShareBody/FilteringVideoAdSearch`，将方法参数、响应字段及权限差异记入契约文档。已查阅的[官方 FileApi](https://github.com/tiktok/tiktok-business-api-sdk/blob/f809c396520df2d7b201a9ccc5378d822b728ed3/python_sdk/business_api_client/api/file_api.py)包含上传与回查方法；实现继续以该 revision 安装代码为准。
 
 ```python
 from unittest.mock import Mock
@@ -255,9 +255,9 @@ def test_upload_passes_actual_account_to_official_sdk(monkeypatch):
     assert kwargs["access_token"] == "test-only-token"
 ```
 
-- [ ] **步骤 2：运行失败测试。** `uv run pytest tests/modules/materials/test_sdk_assets.py -q`；预期缺少官方 SDK 业务调用函数而失败。
+- [x] **步骤 2：运行失败测试。** `uv run pytest tests/modules/materials/test_sdk_assets.py -q`；预期缺少官方 SDK 业务调用函数而失败。
 
-- [ ] **步骤 3：实现直接 SDK 调用与流式原文件读取。**
+- [x] **步骤 3：实现直接 SDK 调用与流式原文件读取。**
 
 ```python
 from business_api_client.api.file_api import FileApi
@@ -322,8 +322,8 @@ def admitted_asset_call(redis_client, *, app_scope, endpoint, context,
 
 用 Fake 官方 SDK 响应同时覆盖“上传成功但回查暂未出现”“目标返回不同 VID/MID”“实际账号权限失效”。真实授权就绪后用一个允许上传的短视频核实响应结构和可用性字段；只有完成此步骤才记录真实上传验收通过。
 
-- [ ] **步骤 4：验证来源追踪与 SDK 行为。** `uv run pytest tests/modules/materials/test_sdk_assets.py tests/modules/materials/test_source_uploads.py -q`。预期两次系统选中不同来源账户时两份历史均准确；重复投递不发第二次上传；SDK 返回成功但不可用时不是 available；日志不含 token。
-- [ ] **步骤 5：提交本任务。** `git add app/modules/materials tests/modules/materials ../docs/integrations/tiktok-materials-contract.md`，然后 `git commit -m "materials: upload through official SDK with source tracking"`。
+- [x] **步骤 4：验证来源追踪与 SDK 行为。** `uv run pytest tests/modules/materials/test_sdk_assets.py tests/modules/materials/test_source_uploads.py -q`。预期两次系统选中不同来源账户时两份历史均准确；重复投递不发第二次上传；SDK 返回成功但不可用时不是 available；日志不含 token。
+- [x] **步骤 5：提交本任务。** `git add app/modules/materials tests/modules/materials ../docs/integrations/tiktok-materials-contract.md`，然后 `git commit -m "materials: upload through official SDK with source tracking"`。
 
 ### 任务 4：区分预览只读检查与提交后的可靠分发
 
@@ -335,7 +335,7 @@ def admitted_asset_call(redis_client, *, app_scope, endpoint, context,
 
 **接口（Interfaces）：** 输出 `get_material_readiness` 与 `ensure_target_asset`，使用任务 1 DTO。`get_material_readiness` 只看本地已知状态；映射过期需回查时返回 preparable/existing_target，不能宣称当前远端一定可用。`ensure_target_asset` 返回的 queued.task_id 是持久化 MaterialDistribution ID。
 
-- [ ] **步骤 1：先写原文件退路和预览无外部写测试。**
+- [x] **步骤 1：先写原文件退路和预览无外部写测试。**
 
 ```python
 from app.modules.materials.readiness import choose_material_path
@@ -351,9 +351,9 @@ def test_no_source_no_original_is_explicitly_blocked():
         ("blocked", "unavailable")
 ```
 
-- [ ] **步骤 2：运行失败测试。** `uv run pytest tests/modules/materials/test_readiness.py -q`；预期尚无只读准备路径而失败。
+- [x] **步骤 2：运行失败测试。** `uv run pytest tests/modules/materials/test_readiness.py -q`；预期尚无只读准备路径而失败。
 
-- [ ] **步骤 3：实现固定路径选择、权限检查与分发入队。**
+- [x] **步骤 3：实现固定路径选择、权限检查与分发入队。**
 
 ```python
 def choose_material_path(*, target_verified: bool, target_known: bool,
@@ -374,7 +374,7 @@ def choose_material_path(*, target_verified: bool, target_known: bool,
 `ensure_target_asset` 再次校验 build 权限和实际账户归属；ready 返回映射，blocked 返回明确原因，其余原子获取或创建唯一未完成分发任务并调用 outbox。调用传入的 task_key 对应本次搭建步骤，另以 tenant_id＋material_id＋advertiser_id 约束共享执行，两个批次可等待同一分发结果。若目标恰是正在上传的源账户，分发任务关联已有 MaterialAssetOperation 等待结果，不因来源上传和搭建分发是两种任务而重复上传。
 禁止在 `get_material_readiness` 中调用 `ensure_target_asset` 或 SDK。API 不开放浏览器任意目标分发入口；搭建提交后由内部服务调用。
 
-- [ ] **步骤 4：实现原生分享、原文件上传与目标账户回查。** [官方 AssetShareBody](https://github.com/tiktok/tiktok-business-api-sdk/blob/f809c396520df2d7b201a9ccc5378d822b728ed3/python_sdk/business_api_client/models/asset_share_body.py)区分 material_ids 与 advertiser_ids，不能把源 VID 当作 MID；缺少有效 MID 时使用原文件上传路径。
+- [x] **步骤 4：实现原生分享、原文件上传与目标账户回查。** [官方 AssetShareBody](https://github.com/tiktok/tiktok-business-api-sdk/blob/f809c396520df2d7b201a9ccc5378d822b728ed3/python_sdk/business_api_client/models/asset_share_body.py)区分 material_ids 与 advertiser_ids，不能把源 VID 当作 MID；缺少有效 MID 时使用原文件上传路径。
 
 ```python
 from business_api_client.api.creative_management_api import CreativeManagementApi
@@ -405,8 +405,8 @@ def search_shared_video(client, *, advertiser_id: str, mid: str, page: int):
 分发每个外部写步骤在 MaterialAssetOperation 上采用 PostgreSQL 条件更新认领、先持久化 sending 再调用、按 attempt_token 保存结果；同一任务的 repeated delivery 不重复发送。只有明确的共享不支持或权限拒绝且确认未成功时，才切原文件上传；断网与超时进入 result_unknown。源文件可用时源账户失权不阻塞恢复，目标账户失权仍阻塞该组合。
 `AccountAsset.image_id/cover_url` 不能从源账户直接抄到目标；只记录目标回查结果，必要封面补齐由搭建执行根据官方广告参数调用素材能力完成。已 ready 的视频映射不等于任意广告参数均已校验。
 
-- [ ] **步骤 5：验证并发、映射和只读边界。** `uv run pytest tests/modules/materials/test_readiness.py tests/modules/materials/test_distribution.py tests/modules/materials/test_distribution_concurrency.py -q`；mock 断言预览阶段 SDK 和 outbox 调用数均为零；两批并发只产生一个未完成分发；源上传与目标为同账户的分发同时到达也只发送一次；目标 VID 不同仍使用目标 ID；源权限丢失但原文件完整可继续；超时不盲目改路径重发。
-- [ ] **步骤 6：提交本任务。** `git add app/modules/materials tests/modules/materials`，然后 `git commit -m "materials: separate readiness from resumable distribution"`。
+- [x] **步骤 5：验证并发、映射和只读边界。** `uv run pytest tests/modules/materials/test_readiness.py tests/modules/materials/test_distribution.py tests/modules/materials/test_distribution_concurrency.py -q`；mock 断言预览阶段 SDK 和 outbox 调用数均为零；两批并发只产生一个未完成分发；源上传与目标为同账户的分发同时到达也只发送一次；目标 VID 不同仍使用目标 ID；源权限丢失但原文件完整可继续；超时不盲目改路径重发。
+- [x] **步骤 6：提交本任务。** `git add app/modules/materials tests/modules/materials`，然后 `git commit -m "materials: separate readiness from resumable distribution"`。
 
 ### 任务 5：交付批量上传、素材目录和账户进度界面
 
