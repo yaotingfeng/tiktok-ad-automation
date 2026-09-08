@@ -1703,3 +1703,121 @@ test("failed candidate discovery retains the accepted BC and accounts without re
   )
   expect(requests.filter((request) => request.method !== "GET")).toHaveLength(0)
 })
+
+async function filteredDiscoveryBoundary(page: Page) {
+  const { requests } = await accountBoundary(page)
+  const state = {
+    completed: false,
+    bcReads: 0,
+    filteredEmpty: 0,
+    filteredPending: 0,
+  }
+  await page.route("**/api/tenants/*/bcs*", (route) => {
+    state.bcReads++
+    return route.fulfill({
+      json: {
+        items: state.completed
+          ? [{ bc_id: BC1, name: "已接受的 BC", ownership_conflict: false }]
+          : [],
+        next_cursor: null,
+      },
+    })
+  })
+  await page.route("**/api/tenants/*/tiktok/connections*", (route) => {
+    const query = new URL(route.request().url()).searchParams
+    const status = state.completed ? "ACTIVE" : "DISCOVERING"
+    const pending = {
+      id: CONN,
+      tenant_id: A,
+      status,
+      discovery_status: state.completed ? "COMPLETE" : "RUNNING",
+      last_discovery: state.completed ? "2026-09-09T10:00:00Z" : null,
+    }
+    if (query.get("status") && query.get("status") !== status) {
+      state.filteredEmpty++
+      return route.fulfill({ json: { items: [], next_cursor: null } })
+    }
+    if (query.get("status") === "DISCOVERING") state.filteredPending++
+    if (query.get("cursor"))
+      return route.fulfill({
+        json: {
+          items: [
+            {
+              id: "88888888-8888-4888-8888-888888888888",
+              tenant_id: A,
+              status: "ACTIVE",
+              discovery_status: null,
+              last_discovery: null,
+            },
+          ],
+          next_cursor: null,
+        },
+      })
+    return route.fulfill({ json: { items: [pending], next_cursor: "next" } })
+  })
+  return { state, requests }
+}
+
+test("a completed connection leaving the DISCOVERING filter refreshes accepted BCs", async ({
+  page,
+}) => {
+  const { state, requests } = await filteredDiscoveryBoundary(page)
+  await page.goto(`/tenants/${A}/accounts?tab=connections`)
+  await expect(page.getByRole("row", { name: new RegExp(CONN) })).toContainText(
+    "正在发现账户",
+  )
+  await expect(page.getByText("BC 未连接", { exact: true })).toBeVisible()
+  await page.getByRole("combobox", { name: "连接状态", exact: true }).click()
+  await page.getByRole("option", { name: "正在发现账户", exact: true }).click()
+  await expect.poll(() => state.filteredPending).toBeGreaterThan(0)
+  state.completed = true
+  await expect
+    .poll(() => state.filteredEmpty, { timeout: 12000 })
+    .toBeGreaterThan(0)
+  await expect.poll(() => state.bcReads).toBeGreaterThan(1)
+  await expect(page).toHaveURL(new RegExp(`bc_id=${BC1}`))
+  await page.getByRole("tab", { name: "账户", exact: true }).click()
+  await expect(page.getByRole("row", { name: /第一BC账户 2 / })).toContainText(
+    "可搭建",
+  )
+  expect(requests.filter((request) => request.method !== "GET")).toHaveLength(0)
+})
+
+for (const leaveBy of ["filter", "page"] as const)
+  test(`a pending connection leaving by ${leaveBy} is not declared complete and account entry rechecks accepted BCs`, async ({
+    page,
+  }) => {
+    const { state, requests } = await filteredDiscoveryBoundary(page)
+    await page.goto(`/tenants/${A}/accounts?tab=connections`)
+    await expect(
+      page.getByRole("row", { name: new RegExp(CONN) }),
+    ).toContainText("正在发现账户")
+    await expect(page.getByText("BC 未连接", { exact: true })).toBeVisible()
+    if (leaveBy === "filter") {
+      await page
+        .getByRole("combobox", { name: "连接状态", exact: true })
+        .click()
+      await page.getByRole("option", { name: "连接错误", exact: true }).click()
+      await expect(
+        page.getByText("没有符合条件的记录", { exact: true }),
+      ).toBeVisible()
+    } else {
+      await page.getByRole("button", { name: "下一页", exact: true }).click()
+      await expect(page.getByText("第 2 页", { exact: true })).toBeVisible()
+    }
+    await expect.poll(() => state.bcReads).toBeGreaterThan(1)
+    await expect(page.getByText("BC 未连接", { exact: true })).toBeVisible()
+    await expect(
+      page.getByText("发现进度：已完成", { exact: true }),
+    ).toHaveCount(0)
+    const readsBeforeEntry = state.bcReads
+    state.completed = true
+    await page.getByRole("tab", { name: "账户", exact: true }).click()
+    await expect.poll(() => state.bcReads).toBeGreaterThan(readsBeforeEntry)
+    await expect(
+      page.getByRole("row", { name: /第一BC账户 2 / }),
+    ).toContainText("可搭建")
+    expect(requests.filter((request) => request.method !== "GET")).toHaveLength(
+      0,
+    )
+  })

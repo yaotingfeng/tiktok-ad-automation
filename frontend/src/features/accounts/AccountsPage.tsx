@@ -1,7 +1,7 @@
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate, useSearch } from "@tanstack/react-router"
 import type { ColumnDef } from "@tanstack/react-table"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { type AccountPublic, AccountsService } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -73,6 +73,14 @@ export function AccountsPage() {
 }
 function AccountDirectory() {
   const { tenantId, scope, bc, bcPending, bcError, retryBC } = useTenantScope()
+  const queryClient = useQueryClient()
+  useEffect(() => {
+    // Discovery can finish while its row is off-page or this tab is closed.
+    // Account entry always rechecks the accepted BC directory, without discovery.
+    void queryClient.invalidateQueries({
+      queryKey: ["tenant", tenantId, "bcs"],
+    })
+  }, [tenantId, queryClient])
   const [input, setInput] = useState("")
   const [search, setSearch] = useState("")
   const [remoteInput, setRemoteInput] = useState("")

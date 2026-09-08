@@ -27,6 +27,17 @@ import {
   Identifier,
 } from "./presentation"
 
+function isDiscoveryPending(connection: ConnectionPublic) {
+  return (
+    connection.status !== "DISABLED" &&
+    (connection.discovery_status
+      ? ["QUEUED", "RUNNING", "ADMISSION_WAIT"].includes(
+          connection.discovery_status,
+        )
+      : connection.status === "DISCOVERING")
+  )
+}
+
 export function ConnectionsPage() {
   const { tenantId, scope, user } = useTenantScope()
   const search = useSearch({ from: "/_layout/tenants/$tenantId/accounts" })
@@ -60,22 +71,26 @@ export function ConnectionsPage() {
         })
       ).data,
     refetchInterval: (state) =>
-      state.state.data?.items.some(
-        (item) =>
-          item.status !== "DISABLED" &&
-          (item.discovery_status
-            ? ["QUEUED", "RUNNING", "ADMISSION_WAIT"].includes(
-                item.discovery_status,
-              )
-            : item.status === "DISCOVERING"),
-      )
-        ? 5000
-        : false,
+      state.state.data?.items.some(isDiscoveryPending) ? 5000 : false,
   })
   const observedDiscovery = useRef(new Map<string, ConnectionPublic>())
+  const visiblePending = useRef(new Set<string>())
   useEffect(() => {
-    let changed = false
-    for (const connection of query.data?.items ?? []) {
+    if (!query.data) return // Keep observations while filters/pages are loading.
+    const visibleIds = new Set(
+      query.data.items.map((connection) => connection.id),
+    )
+    // A pending row may leave a filter/page without its outcome being observed.
+    // Re-read accepted directories; disappearance is not a completion event.
+    let changed = Array.from(visiblePending.current).some(
+      (id) => !visibleIds.has(id),
+    )
+    visiblePending.current = new Set(
+      query.data.items
+        .filter(isDiscoveryPending)
+        .map((connection) => connection.id),
+    )
+    for (const connection of query.data.items) {
       const previous = observedDiscovery.current.get(connection.id)
       if (
         (connection.discovery_status === "COMPLETE" &&
