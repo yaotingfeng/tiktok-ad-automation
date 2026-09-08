@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4, uuid5
 
-from sqlalchemy import delete, or_, text
+from sqlalchemy import and_, delete, or_, text
 from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import Session, col, select
 
@@ -29,7 +29,7 @@ from app.modules.builds.models import (
 )
 from app.modules.materials.models import AccountMaterial, MaterialFile
 from app.modules.materials.service import match_materials
-from app.modules.providers.models import PromotionLink
+from app.modules.providers.models import LinkPreparation, PromotionLink
 from app.modules.providers.repository import get_application
 from app.modules.providers.schemas import _validate_json
 from app.modules.providers.service import get_link_results, prepare_links
@@ -285,39 +285,38 @@ def prepare_draft(
         )
         session.flush()
         return existing.id
-    if existing:
-        # A new explicit prepare after settled results refreshes local facts and
-        # observes the SAME provider task (including an unknown remote effect).
-        # Manual groups survive; automatic groups are rebuilt in stable order.
+    if existing or draft.status != "DRAFT":
         _bump_revision(session, draft, draft.revision)
+    # Every new local preparation starts account resolution afresh. Manual
+    # groups survive while automatic groups are rebuilt in stable order.
+    session.execute(
+        delete(DraftAccount).where(
+            col(DraftAccount.tenant_id) == context.tenant_id,
+            col(DraftAccount.draft_id) == draft.id,
+        )
+    )
+    dramas = session.exec(
+        select(DraftDrama).where(
+            DraftDrama.tenant_id == context.tenant_id,
+            DraftDrama.draft_id == draft.id,
+        )
+    ).all()
+    for drama in dramas:
+        if drama.material_state == "manual":
+            continue
         session.execute(
-            delete(DraftAccount).where(
-                col(DraftAccount.tenant_id) == context.tenant_id,
-                col(DraftAccount.draft_id) == draft.id,
+            delete(DraftGroupMaterial).where(
+                col(DraftGroupMaterial.tenant_id) == context.tenant_id,
+                col(DraftGroupMaterial.draft_id) == draft.id,
+                col(DraftGroupMaterial.drama_id) == drama.drama_id,
             )
         )
-        dramas = session.exec(
-            select(DraftDrama).where(
-                DraftDrama.tenant_id == context.tenant_id,
-                DraftDrama.draft_id == draft.id,
-            )
-        ).all()
-        for drama in dramas:
-            if drama.material_state == "manual":
-                continue
-            session.execute(
-                delete(DraftGroupMaterial).where(
-                    col(DraftGroupMaterial.tenant_id) == context.tenant_id,
-                    col(DraftGroupMaterial.draft_id) == draft.id,
-                    col(DraftGroupMaterial.drama_id) == drama.drama_id,
-                )
-            )
-            drama.material_state, drama.material_cursor, drama.matched_count = (
-                "pending",
-                None,
-                0,
-            )
-            session.add(drama)
+        drama.material_state, drama.material_cursor, drama.matched_count = (
+            "pending",
+            None,
+            0,
+        )
+        session.add(drama)
     lines = session.exec(
         select(DraftInput.raw_text)
         .where(
@@ -336,9 +335,38 @@ def prepare_draft(
         actor_id=context.actor_id,
         request_id=request_id,
     )
+    from app.modules.providers.link_steps import _digest
+
+    provider_digest = _digest(
+        [
+            str(draft.provider_connection_id),
+            draft.application_id,
+            list(lines),
+            draft.link_config,
+        ]
+    )
+    previous_provider = session.exec(
+        select(LinkPreparation.id)
+        .join(
+            DraftPreparation,
+            and_(
+                col(DraftPreparation.tenant_id) == LinkPreparation.tenant_id,
+                col(DraftPreparation.provider_task_id) == LinkPreparation.id,
+            ),
+        )
+        .where(
+            DraftPreparation.tenant_id == context.tenant_id,
+            DraftPreparation.draft_id == draft.id,
+            LinkPreparation.connection_id == draft.provider_connection_id,
+            LinkPreparation.application_id == draft.application_id,
+            LinkPreparation.request_digest == provider_digest,
+        )
+        .order_by(col(DraftPreparation.draft_revision).desc())
+        .limit(1)
+    ).first()
     prep.provider_task_id = (
-        existing.provider_task_id
-        if existing
+        previous_provider
+        if previous_provider is not None
         else prepare_links(
             session,
             context=context,

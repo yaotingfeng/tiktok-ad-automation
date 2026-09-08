@@ -82,6 +82,10 @@ def process_preparation(
             or prep.due_at > datetime.now(UTC)
         ):
             return
+        if prep.draft_revision != draft.revision:
+            prep.status = "OBSOLETE"
+            session.add(prep)
+            return
         try:
             with session.begin_nested():
                 done = continue_draft(session, context=context, task_id=identity)
