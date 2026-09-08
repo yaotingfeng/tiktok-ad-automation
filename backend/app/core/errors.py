@@ -3,6 +3,17 @@ from fastapi.responses import JSONResponse
 
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
+    "invalid_file": 422,
+    "invalid_part": 422,
+    "material_not_found": 404,
+    "upload_batch_not_found": 404,
+    "upload_in_progress": 409,
+    "upload_not_ready": 409,
+    "upload_not_retryable": 409,
+    "incomplete_object": 409,
+    "object_identity_unverified": 409,
+    "object_result_unknown": 409,
+    "object_storage_unavailable": 503,
     "strategy_not_found": 404,
     "copy_pool_not_found": 404,
     "copy_pool_exhausted": 422,
@@ -83,6 +94,12 @@ ERROR_HTTP_STATUS: dict[str, int] = {
 # Public messages are application-owned. DomainError.message may contain raw
 # integration details, so it must never become an HTTP response or log field.
 ERROR_PUBLIC_MESSAGES: dict[str, str] = {
+    "incomplete_object": "已接收文件大小与声明不一致",
+    "object_result_unknown": "对象存储操作结果待核实，请查看当前进度",
+    "object_identity_unverified": "尚未确认原文件身份",
+    "upload_in_progress": "当前文件正在处理，请稍后查看进度",
+    "upload_not_ready": "原文件尚未完整接收",
+    "upload_not_retryable": "当前阶段不能直接重试",
     "provider_session_expired": "版权方登录已失效，请重新验证当前连接",
     "provider_application_forbidden": "当前版权方连接没有该应用权限",
     "provider_result_unknown": "版权方写入结果未知，需要回查后继续",
