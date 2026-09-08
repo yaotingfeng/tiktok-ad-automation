@@ -29,6 +29,18 @@ ERROR_HTTP_STATUS: dict[str, int] = {
     "external_unavailable": 503,
     "tiktok_app_not_configured": 503,
     "tiktok_oauth_unavailable": 503,
+    "app_not_configured": 503,
+    "invalid_authorization_url": 422,
+    "invalid_oauth_state": 409,
+    "invalid_auth_code": 422,
+    "invalid_token_response": 409,
+    "oauth_result_unknown": 409,
+    "connection_not_found": 404,
+    "connection_unavailable": 409,
+    "credential_invalid": 409,
+    "credential_tenant_mismatch": 403,
+    "tiktok_response_error": 409,
+    "admission_deferred": 429,
 }
 
 # Public messages are application-owned. DomainError.message may contain raw
@@ -45,12 +57,17 @@ ERROR_PUBLIC_MESSAGES: dict[str, str] = {
     "admission_policy_invalid": "调用额度配置无效",
     "admission_unavailable": "调用配额服务暂不可用",
     "dispatch_key_conflict": "同一任务标识的配置不一致",
+    "app_not_configured": "等待配置开发者应用授权地址",
+    "invalid_oauth_state": "授权回调已失效或已使用，请重新发起授权",
+    "oauth_result_unknown": "授权结果未知，请重新发起授权",
+    "admission_deferred": "调用额度暂不可用，请稍后重试",
 }
 _STATUS_MESSAGES = {
     403: "当前操作无权限",
     404: "资源不存在或不可见",
     409: "资源版本或请求标识冲突",
     422: "配置或输入无效",
+    429: "调用额度暂不可用",
     503: "服务暂不可用",
     500: "内部服务错误",
 }
@@ -100,7 +117,14 @@ async def domain_error_handler(_request: Request, exc: Exception) -> JSONRespons
     message = ERROR_PUBLIC_MESSAGES.get(code, _STATUS_MESSAGES[status])
     if isinstance(exc, ConfigurationError) and exc.fields:
         message += "，缺少或无效：" + ", ".join(exc.fields)
+    retry_after_ms = getattr(exc, "retry_after_ms", None)
+    headers = (
+        {"Retry-After": str(max(1, (retry_after_ms + 999) // 1000))}
+        if isinstance(retry_after_ms, int) and retry_after_ms > 0
+        else None
+    )
     return JSONResponse(
+        headers=headers,
         status_code=status,
         content={
             "code": code,
