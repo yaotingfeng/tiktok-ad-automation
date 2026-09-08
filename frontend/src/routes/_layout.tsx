@@ -8,6 +8,7 @@ import {
   SlidersHorizontal,
   Users,
 } from "lucide-react"
+import { BCSelector } from "@/features/accounts/BCSelector"
 import { canManage, roleLabels } from "@/features/tenants/shared"
 import {
   TenantAccessGate,
@@ -18,11 +19,15 @@ import {
 import { ApiFeedback } from "@/features/workspace/ApiFeedback"
 import { WorkspaceShell } from "@/features/workspace/WorkspaceShell"
 import useAuth, { isLoggedIn } from "@/hooks/useAuth"
+import { rememberLoginReturn } from "@/lib/login-return"
 
 export const Route = createFileRoute("/_layout")({
   component: Layout,
-  beforeLoad: () => {
-    if (!isLoggedIn()) throw redirect({ to: "/login" })
+  beforeLoad: ({ location }) => {
+    if (!isLoggedIn()) {
+      rememberLoginReturn(location.pathname + location.searchStr)
+      throw redirect({ to: "/login" })
+    }
   },
 })
 function Layout() {
@@ -45,7 +50,7 @@ function Layout() {
   )
 }
 function ScopedLayout() {
-  const { scope, tenant, tenantId, user, platform } = useTenantScope()
+  const { scope, tenant, tenantId, user, platform, bc } = useTenantScope()
   const prefix = `/tenants/${tenantId}`
   const workItems = tenantId
     ? [
@@ -76,13 +81,14 @@ function ScopedLayout() {
         tenant && scope
           ? {
               tenant: { id: tenant.id, name: tenant.name },
-              bc: null,
+              bc: bc ? { id: bc.bc_id, name: bc.name } : null,
               roleLabel: roleLabels[scope.role],
               managedByPlatform: scope.role === "platform_admin",
             }
           : null
       }
       contextSelector={tenantId ? <TenantSelector /> : undefined}
+      bcSelector={tenant ? <BCSelector key={tenantId} /> : undefined}
       workItems={workItems}
       managementItems={managementItems}
     >

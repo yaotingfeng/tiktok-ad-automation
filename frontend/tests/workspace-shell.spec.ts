@@ -287,6 +287,7 @@ test("401 clears an expired session and returns to login", async ({ page }) => {
   )
   await page.goto("/")
   await expect(page).toHaveURL("/login")
+  await expect(page.getByText("登录已过期，请重新登录。")).toBeVisible()
   expect(
     await page.evaluate(() => localStorage.getItem("access_token")),
   ).toBeNull()
@@ -378,3 +379,41 @@ for (const width of [900, 1023, 1024]) {
     ).toBeVisible()
   })
 }
+
+test("unauthenticated internal links resume the original tenant BC and tab after login", async ({
+  page,
+}) => {
+  await apiBoundary(page, { authenticated: false })
+  const target =
+    "/tenants/11111111-1111-4111-8111-111111111111/accounts?tab=connections&bc_id=7000000000000000001"
+  await page.goto(target)
+  await expect(page).toHaveURL(/\/login$/)
+  await page.getByLabel("邮箱", { exact: true }).fill("member@example.com")
+  await page.getByLabel("密码", { exact: true }).fill("synthetic-password")
+  await page.getByRole("button", { name: "登录工作台", exact: true }).click()
+  await expect(page).toHaveURL(target)
+  await expect(page.getByText("无权访问此页面", { exact: true })).toBeVisible()
+  expect(
+    await page.evaluate(() => sessionStorage.getItem("workspace-login-return")),
+  ).toBeNull()
+})
+
+for (const target of [
+  "https://example.com/",
+  "//example.com/",
+  "/\\example.com/",
+  "/api/users/",
+])
+  test(`login rejects unsafe stored return ${target}`, async ({ page }) => {
+    await apiBoundary(page, { authenticated: false })
+    await page.addInitScript(
+      (value) => sessionStorage.setItem("workspace-login-return", value),
+      target,
+    )
+    await page.goto("/login")
+    await page.getByLabel("邮箱", { exact: true }).fill("member@example.com")
+    await page.getByLabel("密码", { exact: true }).fill("synthetic-password")
+    await page.getByRole("button", { name: "登录工作台", exact: true }).click()
+    await expect(page).toHaveURL("/")
+    await expect(page.getByText("尚未接入租户", { exact: true })).toBeVisible()
+  })

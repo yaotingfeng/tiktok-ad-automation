@@ -12,6 +12,10 @@ import { ThemeProvider } from "./components/theme-provider"
 import { Toaster } from "./components/ui/sonner"
 import { handleApiError } from "./lib/api-feedback"
 import "./index.css"
+import {
+  parseWorkspaceSearch,
+  stringifyWorkspaceSearch,
+} from "./lib/search-params"
 import { routeTree } from "./routeTree.gen"
 
 client.setConfig({
@@ -36,7 +40,11 @@ const queryClient = new QueryClient({
   }),
 })
 
-const router = createRouter({ routeTree })
+const router = createRouter({
+  routeTree,
+  parseSearch: parseWorkspaceSearch,
+  stringifySearch: stringifyWorkspaceSearch,
+})
 declare module "@tanstack/react-router" {
   interface Register {
     router: typeof router

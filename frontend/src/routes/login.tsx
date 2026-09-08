@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import useAuth, { isLoggedIn } from "@/hooks/useAuth"
+import { loginExpired } from "@/lib/login-return"
 
 const formSchema = z.object({
   username: z.email({ message: "请输入有效的邮箱地址" }),
@@ -56,6 +57,11 @@ function Login() {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {loginExpired() && (
+            <Alert className="mb-4">
+              <AlertDescription>登录已过期，请重新登录。</AlertDescription>
+            </Alert>
+          )}
           <form
             noValidate
             onSubmit={form.handleSubmit((data) => {

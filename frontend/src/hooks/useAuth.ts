@@ -8,6 +8,7 @@ import {
   UsersService,
 } from "@/client"
 import { clearApiFeedback } from "@/lib/api-feedback"
+import { clearLoginReturn, consumeLoginReturn } from "@/lib/login-return"
 import { handleError } from "@/utils"
 import useCustomToast from "./useCustomToast"
 
@@ -40,7 +41,10 @@ const useAuth = () => {
   const loginMutation = useMutation({
     mutationFn: login,
     onSuccess: () => {
-      navigate({ to: "/" })
+      const returnTo = consumeLoginReturn()
+      clearApiFeedback()
+      if (returnTo) window.location.assign(returnTo)
+      else navigate({ to: "/" })
     },
     onError: handleError.bind(showErrorToast),
   })
@@ -49,6 +53,7 @@ const useAuth = () => {
     localStorage.removeItem("access_token")
     queryClient.clear()
     clearApiFeedback()
+    clearLoginReturn()
     navigate({ to: "/login" })
   }
 

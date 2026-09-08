@@ -6,7 +6,14 @@ import {
   useRouterState,
 } from "@tanstack/react-router"
 import { createContext, type ReactNode, useContext, useEffect } from "react"
-import { type TenantSummary, TenantsService, type UserPublic } from "@/client"
+import {
+  AccountsService,
+  type BCPublic,
+  type Page_BCPublic_,
+  type TenantSummary,
+  TenantsService,
+  type UserPublic,
+} from "@/client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
@@ -29,6 +36,12 @@ type ScopeValue = {
   user: UserPublic
   switchTenant: (tenant: TenantSummary) => void
   retry: () => void
+  bc: BCPublic | null
+  bcDirectory?: Page_BCPublic_
+  bcPending: boolean
+  bcError: unknown
+  retryBC: () => void
+  switchBC: (bc: BCPublic) => void
 }
 const ScopeContext = createContext<ScopeValue | null>(null)
 
@@ -42,6 +55,14 @@ export function TenantScopeProvider({
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   })
+  const searchParams = useRouterState({
+    select: (state) =>
+      state.location.search as {
+        bc_id?: string
+        tab?: "accounts" | "connections"
+      },
+  })
+  const requestedBC = searchParams.bc_id
   const tenantId = /^\/tenants\/([^/]+)/.exec(pathname)?.[1] ?? null
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -59,6 +80,68 @@ export function TenantScopeProvider({
   const tenant =
     query.data?.items.find((item) => item.id === tenantId && item.active) ??
     null
+  const bcQuery = useQuery({
+    queryKey: ["tenant", tenantId, "bcs", "directory"],
+    enabled: !!tenant,
+    queryFn: async ({ signal }) =>
+      (
+        await AccountsService.getBcs({
+          path: { tenant_id: tenantId! },
+          query: { limit: 50 },
+          signal,
+        })
+      ).data,
+  })
+  const initialBC = bcQuery.data?.items.find(
+    (item) => item.bc_id === requestedBC,
+  )
+  const exactBC = useQuery({
+    queryKey: ["tenant", tenantId, "bcs", "exact", requestedBC],
+    enabled: !!tenant && !!requestedBC && !!bcQuery.data && !initialBC,
+    queryFn: async ({ signal }) =>
+      (
+        await AccountsService.getBcs({
+          path: { tenant_id: tenantId! },
+          query: { query: requestedBC, limit: 50 },
+          signal,
+        })
+      ).data,
+  })
+  const bc = requestedBC
+    ? (initialBC ??
+      exactBC.data?.items.find((item) => item.bc_id === requestedBC) ??
+      null)
+    : (bcQuery.data?.items[0] ?? null)
+  const bcId = bc?.bc_id ?? null
+  const switchBC = (target: BCPublic) => {
+    if (target.bc_id === bcId) return
+    void navigate({
+      to: pathname,
+      search: {
+        bc_id: target.bc_id,
+        ...(searchParams.tab ? { tab: searchParams.tab } : {}),
+      },
+    })
+  }
+  useEffect(() => {
+    if (!bc || requestedBC) return
+    void navigate({
+      to: pathname,
+      search: { ...searchParams, bc_id: bc.bc_id },
+      replace: true,
+    })
+  }, [bc, requestedBC, pathname, navigate, searchParams])
+  useEffect(() => {
+    if (!tenantId || !bcId) return
+    return () => {
+      void queryClient.cancelQueries({
+        queryKey: ["tenant", tenantId, "accounts", bcId],
+      })
+      queryClient.removeQueries({
+        queryKey: ["tenant", tenantId, "accounts", bcId],
+      })
+    }
+  }, [tenantId, bcId, queryClient])
   useEffect(() => {
     if (!tenantId) return
     return () => {
@@ -77,14 +160,12 @@ export function TenantScopeProvider({
     // Router guards run before the old scope unmounts or cancels any requests.
     void navigate({
       to: `/tenants/${target.id}${destination || "/builds/new"}`,
-      search: {},
+      search: { bc_id: undefined },
     })
   }
   const scope: TenantScope | null = tenant
-    ? { tenantId: tenant.id, bcId: null, role: tenant.role }
+    ? { tenantId: tenant.id, bcId, role: tenant.role }
     : null
-  // BC remains null until the accounts API supplies authorized BC choices. Future
-  // BC navigation uses the same URL/guard boundary and tenant+BC Query/Outlet keys.
   return (
     <ScopeContext.Provider
       value={{
@@ -93,6 +174,21 @@ export function TenantScopeProvider({
         tenantId,
         user,
         switchTenant,
+        bc,
+        bcDirectory: bcQuery.data,
+        bcPending:
+          !!tenant &&
+          (bcQuery.isPending ||
+            (!!requestedBC &&
+              !!bcQuery.data &&
+              !initialBC &&
+              exactBC.isPending)),
+        bcError: bcQuery.error || exactBC.error,
+        retryBC: () => {
+          void bcQuery.refetch()
+          if (requestedBC && !initialBC) void exactBC.refetch()
+        },
+        switchBC,
         pending: !!tenantId && query.isPending,
         error: query.error,
         forbidden: !!tenantId && !query.isPending && !query.error && !tenant,

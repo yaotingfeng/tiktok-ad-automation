@@ -35,7 +35,7 @@ export function TenantPlaceholder({ title }: { title: string }) {
       </div>
       <Card>
         <CardHeader>
-          <CardTitle>接入 TikTok BC</CardTitle>
+          <CardTitle>{scope?.bcId ? "功能准备中" : "接入 TikTok BC"}</CardTitle>
           <CardDescription>在当前租户中连接业务资产后继续。</CardDescription>
         </CardHeader>
         <CardContent>
@@ -44,10 +44,13 @@ export function TenantPlaceholder({ title }: { title: string }) {
               <EmptyMedia variant="icon">
                 <Building2 />
               </EmptyMedia>
-              <EmptyTitle>尚未连接 TikTok BC</EmptyTitle>
+              <EmptyTitle>
+                {scope?.bcId ? "当前功能尚未开放" : "尚未连接 TikTok BC"}
+              </EmptyTitle>
               <EmptyDescription id="bc-required">
-                请联系管理员完成 TikTok 接入。当前没有可用的
-                BC，暂时无法创建广告或读取账户素材。
+                {scope?.bcId
+                  ? "已选择当前 BC；此业务功能将在后续版本接入。"
+                  : "请联系管理员完成 TikTok 接入。当前没有可用的 BC，暂时无法创建广告或读取账户素材。"}
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
