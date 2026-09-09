@@ -40,6 +40,9 @@ def measure(*, accounts: int, dramas: int, cadence: float) -> dict[str, Any]:
     transport = Transport()
     result: dict[str, Any] = {
         "schema": "p07-expansion-delivery-v1",
+        "source_revision": recorder.report["source_revision"],
+        "source_dirty": recorder.report["source_dirty"],
+        "environment": recorder.report["environment"],
         "accounts": accounts,
         "dramas": dramas,
         "cadence_seconds": cadence,
@@ -226,10 +229,15 @@ def main() -> None:
     if args.accounts < 1 or args.dramas < 1 or not 0 < args.cadence <= 60:
         parser.error("invalid bounded benchmark parameters")
     result = measure(accounts=args.accounts, dramas=args.dramas, cadence=args.cadence)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     print(
         json.dumps(
-            {key: value for key, value in result.items() if key != "deliveries"}
+            {
+                key: value
+                for key, value in result.items()
+                if key not in {"deliveries", "query_profiles"}
+            }
         ),
         flush=True,
     )
