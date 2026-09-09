@@ -676,3 +676,357 @@ test("刷新失败保留已加载任务结果并标明读取失败", async ({ pa
   await expect(page.getByText("真实Campaign", { exact: true })).toBeVisible()
   await expect(page.getByTestId("count-ad-succeeded")).toHaveText("1")
 })
+
+test("操作记录独立服务端50/100分页，不预先读取后续证据", async ({ page }) => {
+  await boundary(page)
+  const reads: URLSearchParams[] = []
+  await page.route("**/api/tenants/*/submissions/*/events*", async (route) => {
+    const query = new URL(route.request().url()).searchParams
+    reads.push(query)
+    const offset = Number(query.get("cursor") || 0),
+      limit = Number(query.get("limit"))
+    await route.fulfill({
+      json: {
+        items: Array.from(
+          { length: Math.min(limit, 111 - offset) },
+          (_, i) => ({
+            evidence_id: `event-${offset + i + 1}`,
+            step_id: E,
+            unit_id: U,
+            kind: "AD",
+            attempt: offset + i + 1,
+            conclusion: "UNKNOWN",
+            observed_at: "2026-09-09T01:05:00Z",
+          }),
+        ),
+        next_cursor: offset + limit < 111 ? String(offset + limit) : null,
+      },
+    })
+  })
+  await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}&tab=events`)
+  await expect(page.getByRole("table").last().getByRole("row")).toHaveCount(51)
+  expect(reads).toHaveLength(1)
+  expect(reads[0].get("limit")).toBe("50")
+  await page.getByRole("button", { name: "下一页", exact: true }).click()
+  await expect(page.getByText("第 2 页", { exact: true })).toBeVisible()
+  expect(reads[1].get("cursor")).toBe("50")
+  await page.getByRole("combobox", { name: "每页条数" }).click()
+  await page.getByRole("option", { name: "100 条", exact: true }).click()
+  await expect(page.getByRole("table").last().getByRole("row")).toHaveCount(101)
+  expect(reads.slice(-1)[0].get("limit")).toBe("100")
+  expect(reads.slice(-1)[0].get("cursor")).toBeNull()
+})
+
+test("已读详情刷新403清除受限结果并保留登录", async ({ page }) => {
+  await boundary(page)
+  await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
+  await expect(page.getByText("真实Campaign", { exact: true })).toBeVisible()
+  await page.route("**/api/tenants/*/submissions/**", (route) =>
+    route.fulfill({ status: 403, json: { code: "action_forbidden" } }),
+  )
+  await page.getByRole("button", { name: "刷新任务结果", exact: true }).click()
+  await expect(page.getByText("无权访问此页面", { exact: true })).toBeVisible()
+  await expect(page.getByText("真实Campaign", { exact: true })).toHaveCount(0)
+  expect(await page.evaluate(() => localStorage.getItem("access_token"))).toBe(
+    "build-test-token",
+  )
+})
+
+const RECOVERY = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab"
+async function recoveryBoundary(
+  page: Page,
+  mode?: "lost" | "missing" | "forbidden" | "unauthorized" | "no-candidates",
+) {
+  const api = await boundary(page)
+  let requestId = ""
+  const calls: { path: string; method: string }[] = []
+  const progress = {
+    recovery_id: RECOVERY,
+    request_id: "",
+    submission_id: ID,
+    kind: "RECONCILE",
+    state: "QUEUED",
+    scheduled_count: 0,
+    reason_code: null,
+  }
+  const original = () => ({
+    ...progress,
+    state: "QUEUED",
+    scheduled_count: 0,
+    reason_code: null,
+  })
+  await page.route("**/api/tenants/*/submission**", async (route) => {
+    const request = route.request(),
+      path = new URL(request.url()).pathname
+    if (!/\/(retry|reconcile)$|\/submission-recover/.test(path))
+      return route.fallback()
+    expect(request.headers().authorization).toBe("Bearer build-test-token")
+    calls.push({ path, method: request.method() })
+    if (request.method() === "POST") {
+      expect(Object.keys(request.postDataJSON())).toEqual(["request_id"])
+      requestId = request.postDataJSON().request_id
+      expect(requestId).toMatch(/^[0-9a-f-]{36}$/)
+      progress.request_id = requestId
+      progress.kind = path.endsWith("/retry") ? "RETRY" : "RECONCILE"
+      if (mode === "unauthorized")
+        return route.fulfill({
+          status: 401,
+          json: { code: "not_authenticated" },
+        })
+      if (mode === "forbidden")
+        return route.fulfill({
+          status: 403,
+          json: { code: "action_forbidden" },
+        })
+      if (mode === "no-candidates") {
+        api.summary.recovery.can_reconcile = false
+        api.summary.recovery.reconcilable_step_count = 0
+        return route.fulfill({
+          status: 409,
+          json: { code: "recovery_no_candidates" },
+        })
+      }
+      if (mode === "lost" || mode === "missing") return route.abort("failed")
+      return route.fulfill({ status: 202, json: original() })
+    }
+    if (path.includes("/submission-recovery-requests/")) {
+      expect(path.split("/").pop()).toBe(requestId)
+      if (mode === "missing")
+        return route.fulfill({
+          status: 404,
+          json: { code: "resource_not_found" },
+        })
+      return route.fulfill({ json: original() })
+    }
+    expect(path.split("/").pop()).toBe(RECOVERY)
+    return route.fulfill({ json: progress })
+  })
+  return { ...api, progress, calls }
+}
+
+test("UNKNOWN只核查，QUEUED零回执与当前扫描调度进度分开", async ({ page }) => {
+  const api = await recoveryBoundary(page)
+  await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
+  await expect(page.getByRole("button", { name: /重试失败步骤/ })).toHaveCount(
+    0,
+  )
+  await page
+    .getByRole("button", { name: "核查待核实项（1）", exact: true })
+    .click()
+  await expect(
+    page.getByText("已安排核查，等待扫描。", { exact: true }),
+  ).toBeVisible()
+  expect(api.calls.filter((c) => c.method === "POST")).toHaveLength(1)
+  expect(api.calls[0].path).toMatch(/\/reconcile$/)
+  await expect
+    .poll(() =>
+      api.calls.some((c) => c.path.includes("/submission-recoveries/")),
+    )
+    .toBe(true)
+  api.progress.state = "COMPLETED"
+  api.progress.scheduled_count = 1
+  api.summary.succeeded = counts(1, 1, 2)
+  api.summary.unknown = counts(0, 0, 0)
+  api.summary.status = "COMPLETED"
+  api.summary.recovery.can_reconcile = false
+  await page.getByRole("button", { name: "刷新恢复进度", exact: true }).click()
+  await expect(
+    page.getByText("扫描完成，已安排 1 个步骤。实际执行结果以任务统计为准。", {
+      exact: true,
+    }),
+  ).toBeVisible()
+  await expect(page.getByTestId("count-ad-succeeded")).toHaveText("2")
+  expect(api.calls.filter((c) => c.method === "POST")).toHaveLength(1)
+})
+
+test("恢复响应丢失刷新后只查同请求和当前进度，不再POST", async ({ page }) => {
+  const api = await recoveryBoundary(page, "lost")
+  await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
+  await page
+    .getByRole("button", { name: "核查待核实项（1）", exact: true })
+    .click()
+  await expect(
+    page.getByText("恢复请求结果尚未确认。", { exact: true }),
+  ).toBeVisible()
+  await page.reload()
+  await page
+    .getByRole("button", { name: "确认恢复请求结果", exact: true })
+    .click()
+  await expect(
+    page.getByText("已安排核查，等待扫描。", { exact: true }),
+  ).toBeVisible()
+  await expect
+    .poll(() =>
+      api.calls.some((c) => c.path.includes("/submission-recoveries/")),
+    )
+    .toBe(true)
+  expect(api.calls.filter((c) => c.method === "POST")).toHaveLength(1)
+  expect(
+    api.calls.filter((c) => c.path.includes("/submission-recovery-requests/")),
+  ).toHaveLength(1)
+})
+
+test("恢复403隐藏写入动作且保留已读取结果和登录", async ({ page }) => {
+  await recoveryBoundary(page, "forbidden")
+  await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
+  await page
+    .getByRole("button", { name: "核查待核实项（1）", exact: true })
+    .click()
+  await expect(
+    page.getByText("当前角色无权执行恢复操作。", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: /核查待核实项|重试失败步骤/ }),
+  ).toHaveCount(0)
+  await expect(page.getByText("真实Campaign", { exact: true })).toBeVisible()
+  expect(await page.evaluate(() => localStorage.getItem("access_token"))).toBe(
+    "build-test-token",
+  )
+})
+
+test("恢复原请求404继续同键核实，切BC可取消且不删除原记录", async ({
+  page,
+}) => {
+  const { BC2 } = await import("./utils/buildsBoundary")
+  const api = await recoveryBoundary(page, "missing")
+  await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
+  await page
+    .getByRole("button", { name: "核查待核实项（1）", exact: true })
+    .click()
+  await page
+    .getByRole("button", { name: "确认恢复请求结果", exact: true })
+    .click()
+  await expect(
+    page.getByText("尚未查到原请求，不能据此重新安排。请继续核实。", {
+      exact: true,
+    }),
+  ).toBeVisible()
+  await page.getByRole("combobox", { name: "当前 BC", exact: true }).click()
+  await page.getByRole("option").filter({ hasText: "备用 BC" }).click()
+  await expect(
+    page.getByRole("heading", { name: "恢复请求尚未确认", exact: true }),
+  ).toBeVisible()
+  await page.getByRole("button", { name: "留在当前页", exact: true }).click()
+  expect(new URL(page.url()).searchParams.get("bc_id")).toBe(BC)
+  await page.getByRole("combobox", { name: "当前 BC", exact: true }).click()
+  await page.getByRole("option").filter({ hasText: "备用 BC" }).click()
+  await page
+    .getByRole("button", { name: "离开并稍后核实", exact: true })
+    .click()
+  await expect(page).toHaveURL((url) => url.searchParams.get("bc_id") === BC2)
+  expect(
+    await page.evaluate(
+      ({ T, BC, ID }) =>
+        JSON.parse(
+          sessionStorage.getItem(`submission-recovery:${T}:${BC}:${ID}`) ||
+            "null",
+        )?.requestId,
+      { T, BC, ID },
+    ),
+  ).toBe(api.progress.request_id)
+  expect(api.calls.filter((c) => c.method === "POST")).toHaveLength(1)
+})
+
+test("失败和未知同时存在，重试仅使用服务端允许的失败步骤", async ({ page }) => {
+  const api = await recoveryBoundary(page)
+  api.summary.recovery.can_retry = true
+  api.summary.recovery.retryable_step_count = 3
+  await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
+  await expect(
+    page.getByRole("button", { name: "核查待核实项（1）", exact: true }),
+  ).toBeVisible()
+  await page
+    .getByRole("button", { name: "重试失败步骤（3）", exact: true })
+    .click()
+  await expect(
+    page.getByText("已安排重试，等待扫描。", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "核查待核实项（1）", exact: true }),
+  ).toBeDisabled()
+  expect(
+    api.calls.filter((c) => c.method === "POST").map((c) => c.path),
+  ).toEqual([`/api/tenants/${T}/submissions/${ID}/retry`])
+  await expect(page.getByText("campaign-real", { exact: true })).toBeVisible()
+  await expect(page.getByTestId("count-ad-succeeded")).toHaveText("1")
+  api.progress.state = "FAILED"
+  api.progress.scheduled_count = 2
+  await page.getByRole("button", { name: "刷新恢复进度", exact: true }).click()
+  await expect(
+    page.getByText("扫描未完成，已安排 2 个步骤；已安排的工作保持现状。", {
+      exact: true,
+    }),
+  ).toBeVisible()
+})
+
+test("恢复无候选409刷新服务端能力，不模拟安排成功", async ({ page }) => {
+  const api = await recoveryBoundary(page, "no-candidates")
+  await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
+  await page
+    .getByRole("button", { name: "核查待核实项（1）", exact: true })
+    .click()
+  await expect(
+    page.getByText("当前已没有符合条件的步骤，已重新读取任务结果。", {
+      exact: true,
+    }),
+  ).toBeVisible()
+  await expect(page.getByRole("button", { name: /核查待核实项/ })).toHaveCount(
+    0,
+  )
+  await expect(
+    page.getByText("已安排核查，等待扫描。", { exact: true }),
+  ).toHaveCount(0)
+  expect(api.calls.filter((c) => c.method === "POST")).toHaveLength(1)
+})
+
+test("恢复401失效登录并保留合法任务回跳", async ({ page }) => {
+  await recoveryBoundary(page, "unauthorized")
+  const dialogs: string[] = []
+  page.on("dialog", (dialog) => {
+    dialogs.push(dialog.type())
+    void dialog.dismiss()
+  })
+  await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
+  await page
+    .getByRole("button", { name: "核查待核实项（1）", exact: true })
+    .click()
+  await expect(page).toHaveURL(/\/login/)
+  expect(
+    await page.evaluate(() => localStorage.getItem("access_token")),
+  ).toBeNull()
+  expect(dialogs).toEqual([])
+})
+
+test("原恢复回查401允许登录且保留尚未知的原请求编号", async ({ page }) => {
+  const api = await recoveryBoundary(page, "lost")
+  const dialogs: string[] = []
+  page.on("dialog", (dialog) => {
+    dialogs.push(dialog.type())
+    void dialog.dismiss()
+  })
+  await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
+  await page
+    .getByRole("button", { name: "核查待核实项（1）", exact: true })
+    .click()
+  await expect(
+    page.getByText("恢复请求结果尚未确认。", { exact: true }),
+  ).toBeVisible()
+  await page.route("**/api/tenants/*/submission-recovery-requests/*", (route) =>
+    route.fulfill({ status: 401, json: { code: "not_authenticated" } }),
+  )
+  await page
+    .getByRole("button", { name: "确认恢复请求结果", exact: true })
+    .click()
+  await expect(page).toHaveURL(/\/login/)
+  expect(dialogs).toEqual([])
+  expect(
+    await page.evaluate(
+      ({ T, BC, ID }) =>
+        JSON.parse(
+          sessionStorage.getItem(`submission-recovery:${T}:${BC}:${ID}`) ||
+            "null",
+        )?.requestId,
+      { T, BC, ID },
+    ),
+  ).toBe(api.progress.request_id)
+})

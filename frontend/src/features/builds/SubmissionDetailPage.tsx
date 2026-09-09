@@ -15,6 +15,7 @@ import {
   SubmissionBadge,
   SubmissionProgress,
 } from "./SubmissionPresentation"
+import { SubmissionRecoveryActions } from "./SubmissionRecoveryActions"
 import {
   SubmissionEventsTable,
   SubmissionFilterBar,
@@ -254,17 +255,13 @@ function Detail({
           </div>
         </AlertDescription>
       </Alert>
-      {/* Recovery adapter is connected only after the generated server contract is available. */}
-      {!write && (
-        <p className="text-sm text-muted-foreground">
-          当前角色仅可查看任务结果。
-        </p>
-      )}
-      {!!data.recovery?.reasons?.length && (
-        <p className="text-sm">
-          处理条件：{data.recovery?.reasons?.join("、")}
-        </p>
-      )}
+      <SubmissionRecoveryActions
+        tenantId={tenantId}
+        bcId={bcId}
+        submissionId={submissionId}
+        recovery={data.recovery}
+        write={write}
+      />
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" asChild>
           <Link

@@ -23,8 +23,10 @@ export function BuildGuard({
   leaveLabel?: string
 }) {
   const blocker = useBlocker({
-    shouldBlockFn: () => dirty,
-    enableBeforeUnload: dirty,
+    // A forced 401 login transition must retain the request ledger without
+    // being trapped by the unsaved-input prompt. Authorization remains server-owned.
+    shouldBlockFn: () => dirty && !!localStorage.getItem("access_token"),
+    enableBeforeUnload: () => dirty && !!localStorage.getItem("access_token"),
     withResolver: true,
   })
   return (
