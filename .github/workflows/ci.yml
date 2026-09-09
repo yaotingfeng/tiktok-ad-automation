@@ -52,6 +52,9 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with: {python-version: '3.14'}
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+      - name: Isolate unused Chrome APT repository
+        if: matrix.suite == 'modules' || matrix.suite == 'browser'
+        run: sudo bash scripts/ci-isolate-chrome-apt-source.sh /etc/apt/sources.list.d "$RUNNER_TEMP/tiktok-ci-disabled-apt-sources"
       - name: Install PostgreSQL 18 backup clients
         if: matrix.suite == 'modules'
         run: |
@@ -90,6 +93,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Isolate unused Chrome APT repository
+        run: sudo bash scripts/ci-isolate-chrome-apt-source.sh /etc/apt/sources.list.d "$RUNNER_TEMP/tiktok-ci-disabled-apt-sources"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with: {bun-version: '1.4.2'}
       - run: bun install --frozen-lockfile
