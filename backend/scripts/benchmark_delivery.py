@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
-from app.jobs import outbox
+from app.jobs import outbox, tasks
 from app.jobs.celery_app import celery_app
 from app.jobs.models import PendingDispatch
 from app.modules.builds.execution_models import ExecutionStep, Submission
@@ -34,18 +34,27 @@ from scripts.benchmark_support import (
 )
 
 
-def measure(*, accounts: int, dramas: int, cadence: float) -> dict[str, Any]:
+def measure(
+    *, accounts: int, dramas: int, cadence: float, publisher: str = "single-round"
+) -> dict[str, Any]:
     parameters = Parameters(accounts=accounts, dramas=dramas, target_accounts=accounts)
     recorder = Recorder(parameters)
     transport = Transport()
     result: dict[str, Any] = {
-        "schema": "p07-expansion-delivery-v1",
+        "schema": "p07-expansion-delivery-v2",
         "source_revision": recorder.report["source_revision"],
         "source_dirty": recorder.report["source_dirty"],
         "environment": recorder.report["environment"],
         "accounts": accounts,
         "dramas": dramas,
         "cadence_seconds": cadence,
+        "publisher": publisher,
+        "publisher_max_rounds": settings.DISPATCH_MAX_ROUNDS
+        if publisher == "drain"
+        else 1,
+        "publisher_time_budget_seconds": settings.DISPATCH_TIME_BUDGET_SECONDS
+        if publisher == "drain"
+        else None,
         "complete": False,
         "boundary": "Real SDK GET transports, preparation, preview, outbox, current delivery ID and expansion DB pages. Broker captured locally. Ordinary execution messages accepted but not executed. No advertising API writes.",
     }
@@ -113,21 +122,53 @@ def measure(*, accounts: int, dramas: int, cadence: float) -> dict[str, Any]:
         round_number, deliveries = 0, []
         t2_seconds = None
         messages: list[dict[str, Any]] = []
+        publications: list[dict[str, Any]] = []
 
         def broker(name: str, **kwargs: Any) -> None:
             messages.append({"name": name, **kwargs})
+
+        def publish(*, tail: bool = False) -> int:
+            messages.clear()
+            started = perf_counter()
+            with (
+                patch.object(outbox, "engine", engine),
+                patch.object(celery_app, "send_task", broker),
+            ):
+                count = (
+                    tasks.drain_dispatch(limit=100)
+                    if publisher == "drain"
+                    else outbox.flush_dispatch(limit=100)
+                )
+            elapsed = perf_counter() - started
+            assert count == len(messages)
+            assert len({message["task_id"] for message in messages}) == count
+            publications.append(
+                {
+                    "tail_only": tail,
+                    "seconds": elapsed,
+                    "messages": count,
+                    "ordinary_messages": sum(
+                        message["name"] != "builds.expand_submission"
+                        for message in messages
+                    ),
+                    "tenants": {
+                        f"T{index + 1}": sum(
+                            message["kwargs"]["tenant_id"]
+                            == str(scope.context.tenant_id)
+                            for message in messages
+                        )
+                        for index, scope in enumerate(scopes)
+                    },
+                }
+            )
+            return count
 
         while True:
             if round_number:
                 sleep(max(0.0, cadence - (perf_counter() - previous_round)))
             previous_round = perf_counter()
             round_number += 1
-            messages.clear()
-            with (
-                patch.object(outbox, "engine", engine),
-                patch.object(celery_app, "send_task", broker),
-            ):
-                published = outbox.flush_dispatch(limit=100)
+            published = publish()
             for message in messages:
                 if message["name"] != "builds.expand_submission":
                     continue
@@ -215,6 +256,28 @@ def measure(*, accounts: int, dramas: int, cadence: float) -> dict[str, Any]:
                 ).all()
             )
         assert sum(result["steps_by_kind"].values()) == accounts * dramas * 51
+        # Drain only genuinely generated ordinary unit dispatches after expansion.
+        # No worker executes those messages and no remote request is made.
+        tail_start = perf_counter()
+        if publisher == "drain":
+            for _ in range(2000):
+                with Session(engine) as session:
+                    pending = session.exec(
+                        select(PendingDispatch.id)
+                        .where(col(PendingDispatch.published_at).is_(None))
+                        .limit(1)
+                    ).first()
+                if pending is None:
+                    break
+                sleep(max(0.0, cadence - (perf_counter() - previous_round)))
+                previous_round = perf_counter()
+                if not publish(tail=True):
+                    raise AssertionError("Remaining ordinary publication stopped")
+            else:
+                raise AssertionError("Tail publication exceeded benchmark bound")
+        result["tail_publication_seconds"] = perf_counter() - tail_start
+        result["publications"] = publications
+        result["peak_rss_bytes"] = rss_bytes()
     result["complete"] = True
     return result
 
@@ -223,12 +286,25 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--accounts", type=int, default=100)
     parser.add_argument("--dramas", type=int, default=10)
-    parser.add_argument("--cadence", type=float, default=5.0)
+    parser.add_argument("--cadence", type=float)
+    parser.add_argument(
+        "--publisher", choices=("single-round", "drain"), default="single-round"
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    if args.accounts < 1 or args.dramas < 1 or not 0 < args.cadence <= 60:
+    cadence = (
+        args.cadence
+        if args.cadence is not None
+        else (1.0 if args.publisher == "drain" else 5.0)
+    )
+    if args.accounts < 1 or args.dramas < 1 or not 0 < cadence <= 60:
         parser.error("invalid bounded benchmark parameters")
-    result = measure(accounts=args.accounts, dramas=args.dramas, cadence=args.cadence)
+    result = measure(
+        accounts=args.accounts,
+        dramas=args.dramas,
+        cadence=cadence,
+        publisher=args.publisher,
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     print(
@@ -236,7 +312,7 @@ def main() -> None:
             {
                 key: value
                 for key, value in result.items()
-                if key not in {"deliveries", "query_profiles"}
+                if key not in {"deliveries", "query_profiles", "publications"}
             }
         ),
         flush=True,
