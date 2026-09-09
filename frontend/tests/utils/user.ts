@@ -1,9 +1,13 @@
 import { expect, type Page } from "@playwright/test"
 
-export async function logInUser(page: Page, email: string, password: string) {
+export async function logInUser(
+  page: Page,
+  username: string,
+  password: string,
+) {
   await page.goto("/login")
 
-  await page.getByTestId("email-input").fill(email)
+  await page.getByTestId("username-input").fill(username)
   await page.getByTestId("password-input").fill(password)
   await page.getByRole("button", { name: "登录工作台" }).click()
   await page.waitForURL((url) => url.pathname !== "/login")

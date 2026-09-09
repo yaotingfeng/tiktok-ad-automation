@@ -75,7 +75,7 @@ def synthetic_id(key: str) -> str:
 @dataclass
 class Scope:
     context: TenantContext
-    email: str
+    username: str
     bc_id: str
     connection_id: UUID
     provider_id: UUID
@@ -85,9 +85,9 @@ class Scope:
     sources: tuple[str, ...]
     label: str = ""
     material_ids: list[UUID] = field(default_factory=list)
-    admin_email: str = ""
+    admin_username: str = ""
     admin_id: UUID | None = None
-    platform_email: str = ""
+    platform_username: str = ""
     platform_id: UUID | None = None
 
 
@@ -800,16 +800,16 @@ def seed_scope(
     with Session(database_engine) as session, session.begin():
         tenant = Tenant(name="Acceptance " + label)
         user = User(
-            email=f"{label}-{uuid4().hex}@example.com",
+            username=f"acceptance-{uuid4().hex}",
             hashed_password=get_password_hash(PASSWORD),
             is_superuser=False,
         )
         admin = User(
-            email=f"{label}-admin-{uuid4().hex}@example.com",
+            username=f"acceptance-admin-{uuid4().hex}",
             hashed_password=get_password_hash(PASSWORD),
         )
         platform = User(
-            email=f"{label}-platform-{uuid4().hex}@example.com",
+            username=f"acceptance-platform-{uuid4().hex}",
             hashed_password=get_password_hash(PASSWORD),
             is_superuser=True,
         )
@@ -882,7 +882,7 @@ def seed_scope(
         ).one()
         scope = Scope(
             context,
-            user.email,
+            user.username,
             bc,
             conn.id,
             provider.id,
@@ -892,8 +892,8 @@ def seed_scope(
             tuple(synthetic_id(f"{label}:source:{n}") for n in range(2)),
         )
         scope.label = label
-        scope.admin_email, scope.admin_id = admin.email, admin.id
-        scope.platform_email, scope.platform_id = platform.email, platform.id
+        scope.admin_username, scope.admin_id = admin.username, admin.id
+        scope.platform_username, scope.platform_id = platform.username, platform.id
         for i, advertiser in enumerate(scope.accounts + scope.sources):
             session.add(
                 AdvertiserAccount(

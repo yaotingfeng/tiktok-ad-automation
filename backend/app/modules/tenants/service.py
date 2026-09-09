@@ -241,7 +241,7 @@ def member_public(member: TenantMembership, user: User) -> MemberPublic:
         user_id=member.user_id,
         role=cast(MemberRole, member.role),
         active=member.active,
-        email=user.email,
+        username=user.username,
         full_name=user.full_name,
         user_active=user.is_active,
     )
@@ -276,7 +276,7 @@ def list_members(
         term = search.strip()
         statement = statement.where(
             or_(
-                col(User.email).icontains(term, autoescape=True),
+                col(User.username).icontains(term, autoescape=True),
                 col(User.full_name).icontains(term, autoescape=True),
                 sql_cast(User.id, String) == term,
             )
@@ -308,11 +308,11 @@ def search_user_candidates(
     _page_limit(limit)
     term = query.strip()
     if not term or len(term) > 255:
-        raise DomainError("invalid_member", "请输入用户姓名、邮箱或完整 ID")
+        raise DomainError("invalid_member", "请输入用户姓名、账号或完整 ID")
     statement = select(User).where(
         col(User.is_active).is_(True),
         or_(
-            col(User.email).icontains(term, autoescape=True),
+            col(User.username).icontains(term, autoescape=True),
             col(User.full_name).icontains(term, autoescape=True),
             sql_cast(User.id, String) == term,
         ),
@@ -321,7 +321,7 @@ def search_user_candidates(
         statement = statement.where(User.id > after_id)
     rows = session.exec(statement.order_by(col(User.id)).limit(limit + 1)).all()
     items = [
-        UserCandidate(id=user.id, email=user.email, full_name=user.full_name)
+        UserCandidate(id=user.id, username=user.username, full_name=user.full_name)
         for user in rows[:limit]
     ]
     return Page(

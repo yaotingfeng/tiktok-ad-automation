@@ -17,11 +17,9 @@ from app.modules.tenants.service import set_member
 def committed_tenant():
     """Own committed scenario rows; no test savepoint pretends process visibility."""
     tenant = Tenant(name=f"concurrency-{uuid4()}")
-    platform = User(
-        email=f"{uuid4()}@example.com", hashed_password="unused", is_superuser=True
-    )
-    first = User(email=f"{uuid4()}@example.com", hashed_password="unused")
-    second = User(email=f"{uuid4()}@example.com", hashed_password="unused")
+    platform = User(username=f"{uuid4()}", hashed_password="unused", is_superuser=True)
+    first = User(username=f"{uuid4()}", hashed_password="unused")
+    second = User(username=f"{uuid4()}", hashed_password="unused")
     ids = [platform.id, first.id, second.id]
     tenant_id = tenant.id
     with Session(engine) as session:

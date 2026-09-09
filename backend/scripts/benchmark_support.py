@@ -328,7 +328,7 @@ def seed_inventory(engine: Engine, parameters: Parameters, label: str = "t1") ->
     with Session(engine, expire_on_commit=False) as session, session.begin():
         tenant, user = (
             Tenant(name="Synthetic capacity " + label),
-            User(email=f"{uuid4()}@example.com", hashed_password="unused"),
+            User(username=f"{uuid4()}", hashed_password="unused"),
         )
         session.add_all([tenant, user])
         session.flush()

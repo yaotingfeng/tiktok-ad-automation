@@ -81,7 +81,9 @@ export function WorkspaceShell({
             )}
           </div>
           <div className="flex min-w-0 flex-wrap items-center gap-3 text-xs">
-            <span className="break-all">{user?.full_name || user?.email}</span>
+            <span className="break-all">
+              {user?.full_name || user?.username}
+            </span>
             <Badge variant="secondary">
               <ShieldCheck />
               {context?.roleLabel ??

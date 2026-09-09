@@ -13,7 +13,7 @@ const PendingUsers = () => (
     <TableHeader>
       <TableRow>
         <TableHead>Full Name</TableHead>
-        <TableHead>Email</TableHead>
+        <TableHead>账号</TableHead>
         <TableHead>Role</TableHead>
         <TableHead>Status</TableHead>
         <TableHead>

@@ -90,14 +90,14 @@ export function MembersPage() {
   const writable = !isForbidden(query.error)
   const columns: ColumnDef<MemberPublic>[] = [
     {
-      accessorKey: "email",
-      header: "姓名 / 邮箱",
+      accessorKey: "username",
+      header: "姓名 / 账号",
       cell: ({ row }) => (
         <div className="flex flex-col gap-1">
           <span className="font-medium">
             {row.original.full_name || "未设置姓名"}
           </span>
-          <span>{row.original.email}</span>
+          <span>{row.original.username}</span>
           <span className="font-mono text-xs text-muted-foreground">
             {row.original.user_id}
           </span>
@@ -166,7 +166,7 @@ export function MembersPage() {
           >
             <Field className="max-w-sm">
               <FieldLabel htmlFor="member-search">
-                搜索成员姓名或邮箱
+                搜索成员姓名或账号
               </FieldLabel>
               <Input
                 id="member-search"
@@ -264,7 +264,11 @@ function MemberEditor({
 }) {
   const [user, setUser] = useState<UserCandidate | null>(
     member
-      ? { id: member.user_id, email: member.email, full_name: member.full_name }
+      ? {
+          id: member.user_id,
+          username: member.username,
+          full_name: member.full_name,
+        }
       : null,
   )
   const [role, setRole] = useState<MemberSet["role"]>(
@@ -333,14 +337,14 @@ function MemberEditor({
             <FieldLabel>已有用户</FieldLabel>
             {member ? (
               <p className="break-all text-sm">
-                {member.full_name || member.email} · {member.email}
+                {member.full_name || member.username} · {member.username}
               </p>
             ) : (
               <DirectoryPicker<UserCandidate>
                 label="已有用户"
                 valueLabel={
                   user
-                    ? `${user.full_name || user.email} · ${user.email}`
+                    ? `${user.full_name || user.username} · ${user.username}`
                     : undefined
                 }
                 queryKey={["tenant", tenantId, "member-candidates"]}
@@ -359,9 +363,9 @@ function MemberEditor({
                 }
                 renderItem={(candidate) => (
                   <>
-                    <span>{candidate.full_name || candidate.email}</span>
+                    <span>{candidate.full_name || candidate.username}</span>
                     <span className="text-xs text-muted-foreground">
-                      {candidate.email}
+                      {candidate.username}
                     </span>
                   </>
                 )}

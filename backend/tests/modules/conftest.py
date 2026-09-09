@@ -9,7 +9,7 @@ from app.modules.tenants.models import Tenant, TenantMembership
 
 
 def create_context(session: Session, *, role: str = "operator") -> TenantContext:
-    user = User(email=f"{uuid4()}@example.com", hashed_password="unused")
+    user = User(username=f"{uuid4()}", hashed_password="unused")
     tenant = Tenant(name=f"test-{uuid4()}")
     session.add_all([user, tenant])
     session.flush()

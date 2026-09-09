@@ -12,7 +12,7 @@ def make_settings(**values):
         SECRET_KEY="unit-test-signing-key",
         PROJECT_NAME="Tests",
         DATABASE_URL="postgresql://test:test@localhost/app_test",
-        FIRST_SUPERUSER="admin@example.com",
+        FIRST_SUPERUSER="admin",
         FIRST_SUPERUSER_PASSWORD="unit-test-password",
         **values,
     )

@@ -31,8 +31,8 @@ def update_user(*, session: Session, db_user: User, user_in: UserUpdate) -> Any:
     return db_user
 
 
-def get_user_by_email(*, session: Session, email: str) -> User | None:
-    statement = select(User).where(User.email == email)
+def get_user_by_username(*, session: Session, username: str) -> User | None:
+    statement = select(User).where(User.username == username.strip().lower())
     session_user = session.exec(statement).first()
     return session_user
 
@@ -42,11 +42,11 @@ def get_user_by_email(*, session: Session, email: str) -> User | None:
 DUMMY_HASH = "$argon2id$v=19$m=65536,t=3,p=4$MjQyZWE1MzBjYjJlZTI0Yw$YTU4NGM5ZTZmYjE2NzZlZjY0ZWY3ZGRkY2U2OWFjNjk"
 
 
-def authenticate(*, session: Session, email: str, password: str) -> User | None:
-    db_user = get_user_by_email(session=session, email=email)
+def authenticate(*, session: Session, username: str, password: str) -> User | None:
+    db_user = get_user_by_username(session=session, username=username)
     if not db_user:
         # Prevent timing attacks by running password verification even when user doesn't exist
-        # This ensures the response time is similar whether or not the email exists
+        # This ensures the response time is similar whether or not the username exists
         verify_password(password, DUMMY_HASH)
         return None
     verified, updated_password_hash = verify_password(password, db_user.hashed_password)

@@ -111,9 +111,7 @@ def test_admin_cannot_execute_recovery_using_revoked_original_actor(executable):
     db, context, _ = executable
     submission_id, _ = setup_failure(executable)
     with Session(db) as session, session.begin():
-        admin = User(
-            email=f"{uuid4()}@example.com", hashed_password="unused", is_superuser=True
-        )
+        admin = User(username=f"{uuid4()}", hashed_password="unused", is_superuser=True)
         session.add(admin)
         session.flush()
         admin_context = TenantContext(
@@ -150,9 +148,7 @@ def test_recovery_request_actor_does_not_replace_original_execution_actor(execut
     db, context, _ = executable
     submission_id, step_id = setup_failure(executable)
     with Session(db) as session, session.begin():
-        admin = User(
-            email=f"{uuid4()}@example.com", hashed_password="unused", is_superuser=True
-        )
+        admin = User(username=f"{uuid4()}", hashed_password="unused", is_superuser=True)
         session.add(admin)
         session.flush()
         admin_context = TenantContext(

@@ -33,7 +33,7 @@ from app.modules.builds.submissions import (
 
 StatusGroup = Literal["all", "active", "attention", "completed"]
 METADATA = """
-SELECT s.id submission_id,coalesce(nullif(actor.full_name,''),actor.email) actor_name,
+SELECT s.id submission_id,coalesce(nullif(actor.full_name,''),actor.username) actor_name,
  st.name || ' v' || sv.number::text strategy_label,
  (SELECT string_agg(names.display_name,'、' ORDER BY names.display_name) FROM (
  SELECT DISTINCT pc.display_name FROM preview_drama d

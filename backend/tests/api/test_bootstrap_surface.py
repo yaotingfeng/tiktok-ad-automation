@@ -18,7 +18,7 @@ def test_legacy_telemetry_configuration_does_not_capture_requests(monkeypatch):
 
     initialize = Mock()
     with monkeypatch.context() as patch:
-        patch.setattr(settings, "SENTRY_DSN", HttpUrl("https://public@example.com/1"))
+        patch.setattr(settings, "SENTRY_DSN", HttpUrl("https://public/1"))
         patch.setattr(settings, "FASTAPI_ENV", None)
         patch.setattr(sentry_sdk, "init", initialize)
         importlib.reload(app.main)
@@ -72,12 +72,13 @@ def test_configured_callback_requires_issued_state(client, monkeypatch):
 
 
 def test_public_signup_is_closed_and_does_not_create_users(client, session):
-    email = f"{uuid4().hex}@example.com"
+    username = f"{uuid4().hex}"
     response = client.post(
-        "/api/users/signup", json={"email": email, "password": "valid-test-password"}
+        "/api/users/signup",
+        json={"username": username, "password": "valid-test-password"},
     )
     assert response.status_code == 403
-    assert session.exec(select(User).where(User.email == email)).first() is None
+    assert session.exec(select(User).where(User.username == username)).first() is None
     assert client.post("/api/users/signup", json={}).status_code == 403
 
 

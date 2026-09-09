@@ -23,7 +23,7 @@ from app.api.deps import get_db  # noqa: E402
 from app.core.context import TenantContext  # noqa: E402
 from app.core.db import engine, init_db  # noqa: E402
 from app.main import app  # noqa: E402
-from tests.utils.user import authentication_token_from_email  # noqa: E402
+from tests.utils.user import authentication_token_from_username  # noqa: E402
 from tests.utils.utils import get_superuser_token_headers  # noqa: E402
 
 
@@ -80,8 +80,8 @@ def superuser_token_headers(client: TestClient) -> dict[str, str]:
 
 @pytest.fixture
 def normal_user_token_headers(client: TestClient, db: Session) -> dict[str, str]:
-    return authentication_token_from_email(
-        client=client, email=settings.EMAIL_TEST_USER, db=db
+    return authentication_token_from_username(
+        client=client, username=settings.TEST_USERNAME, db=db
     )
 
 

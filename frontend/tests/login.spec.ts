@@ -4,8 +4,8 @@ import { randomPassword } from "./utils/random.ts"
 
 test.use({ storageState: { cookies: [], origins: [] } })
 
-const fillForm = async (page: Page, email: string, password: string) => {
-  await page.getByTestId("email-input").fill(email)
+const fillForm = async (page: Page, username: string, password: string) => {
+  await page.getByTestId("username-input").fill(username)
   await page.getByTestId("password-input").fill(password)
 }
 
@@ -19,7 +19,7 @@ const verifyInput = async (page: Page, testId: string) => {
 test("Inputs are visible, empty and editable", async ({ page }) => {
   await page.goto("/login")
 
-  await verifyInput(page, "email-input")
+  await verifyInput(page, "username-input")
   await verifyInput(page, "password-input")
 })
 
@@ -35,7 +35,7 @@ test("Forgot Password link is visible", async ({ page }) => {
   await expect(page.getByRole("link", { name: "忘记密码？" })).toBeVisible()
 })
 
-test("Log in with valid email and password ", async ({ page }) => {
+test("Log in with valid username and password ", async ({ page }) => {
   await page.goto("/login")
 
   await fillForm(page, firstSuperuser, firstSuperuserPassword)
@@ -48,13 +48,15 @@ test("Log in with valid email and password ", async ({ page }) => {
   ).toBeVisible()
 })
 
-test("Log in with invalid email", async ({ page }) => {
+test("Log in with invalid username", async ({ page }) => {
   await page.goto("/login")
 
-  await fillForm(page, "invalidemail", firstSuperuserPassword)
+  await fillForm(page, "legacy@example.com", firstSuperuserPassword)
   await page.getByRole("button", { name: "登录工作台" }).click()
 
-  await expect(page.getByText("请输入有效的邮箱地址")).toBeVisible()
+  await expect(
+    page.getByText("账号需为 3–64 位字母、数字、下划线、点或短横线"),
+  ).toBeVisible()
 })
 
 test("Log in with invalid password", async ({ page }) => {
@@ -65,7 +67,7 @@ test("Log in with invalid password", async ({ page }) => {
   await page.getByRole("button", { name: "登录工作台" }).click()
 
   await expect(
-    page.getByText("登录失败，请检查邮箱和密码后重试。"),
+    page.getByText("登录失败，请检查账号和密码后重试。"),
   ).toBeVisible()
 })
 

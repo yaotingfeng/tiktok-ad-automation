@@ -77,7 +77,7 @@ def rehearse(*, output: Path | None = None) -> dict[str, object]:
     ):
         with Session(source) as session, session.begin():
             tenant = Tenant(name="Synthetic restore rehearsal", active=False)
-            actor = User(email=f"{uuid4()}@example.com", hashed_password="unused")
+            actor = User(username=f"{uuid4()}", hashed_password="unused")
             session.add_all([tenant, actor])
             session.flush()
             session.add(TenantBC(tenant_id=tenant.id, bc_id="synthetic-restore-bc"))

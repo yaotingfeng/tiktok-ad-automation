@@ -1,7 +1,6 @@
 import { expect, test } from "@playwright/test"
-import { firstSuperuser, firstSuperuserPassword } from "./config.ts"
 import { createUser } from "./utils/adminApi.ts"
-import { randomEmail, randomPassword } from "./utils/random"
+import { randomPassword, randomUsername } from "./utils/random"
 import { logInUser, logOutUser } from "./utils/user"
 
 const tabs = ["My profile", "Password", "Danger zone"]
@@ -23,17 +22,17 @@ test("All tabs are visible", async ({ page }) => {
 
 test.describe("Edit user profile", () => {
   test.use({ storageState: { cookies: [], origins: [] } })
-  let email: string
+  let username: string
   let password: string
 
   test.beforeAll(async () => {
-    email = randomEmail()
+    username = randomUsername()
     password = randomPassword()
-    await createUser({ email, password })
+    await createUser({ username, password })
   })
 
   test.beforeEach(async ({ page }) => {
-    await logInUser(page, email, password)
+    await logInUser(page, username, password)
     await page.goto("/settings")
     await page.getByRole("tab", { name: "My profile" }).click()
   })
@@ -51,37 +50,39 @@ test.describe("Edit user profile", () => {
     ).toBeVisible()
   })
 
-  test("Edit user email with an invalid email shows error", async ({
+  test("Edit user username with an invalid username shows error", async ({
     page,
   }) => {
     await page.getByRole("button", { name: "Edit" }).click()
-    await page.getByLabel("Email").fill("")
+    await page.getByLabel("账号").fill("")
     await page.locator("body").click()
 
-    await expect(page.getByText("Invalid email address")).toBeVisible()
+    await expect(
+      page.getByText("账号需为 3–64 位字母、数字、下划线、点或短横线"),
+    ).toBeVisible()
   })
 })
 
-test.describe("Edit user email", () => {
+test.describe("Edit user username", () => {
   test.use({ storageState: { cookies: [], origins: [] } })
 
-  test("Edit user email with a valid email", async ({ page }) => {
-    const email = randomEmail()
+  test("Edit user username with a valid username", async ({ page }) => {
+    const username = randomUsername()
     const password = randomPassword()
-    const updatedEmail = randomEmail()
+    const updatedUsername = randomUsername()
 
-    await createUser({ email, password })
-    await logInUser(page, email, password)
+    await createUser({ username, password })
+    await logInUser(page, username, password)
     await page.goto("/settings")
     await page.getByRole("tab", { name: "My profile" }).click()
 
     await page.getByRole("button", { name: "Edit" }).click()
-    await page.getByLabel("Email").fill(updatedEmail)
+    await page.getByLabel("账号").fill(updatedUsername)
     await page.getByRole("button", { name: "Save" }).click()
 
     await expect(page.getByText("User updated successfully")).toBeVisible()
     await expect(
-      page.locator("form").getByText(updatedEmail, { exact: true }),
+      page.locator("form").getByText(updatedUsername, { exact: true }),
     ).toBeVisible()
   })
 })
@@ -90,11 +91,11 @@ test.describe("Cancel edit actions", () => {
   test.use({ storageState: { cookies: [], origins: [] } })
 
   test("Cancel edit action restores original name", async ({ page }) => {
-    const email = randomEmail()
+    const username = randomUsername()
     const password = randomPassword()
-    const user = await createUser({ email, password })
+    const user = await createUser({ username, password })
 
-    await logInUser(page, email, password)
+    await logInUser(page, username, password)
     await page.goto("/settings")
     await page.getByRole("tab", { name: "My profile" }).click()
     await page.getByRole("button", { name: "Edit" }).click()
@@ -106,20 +107,20 @@ test.describe("Cancel edit actions", () => {
     ).toBeVisible()
   })
 
-  test("Cancel edit action restores original email", async ({ page }) => {
-    const email = randomEmail()
+  test("Cancel edit action restores original username", async ({ page }) => {
+    const username = randomUsername()
     const password = randomPassword()
-    await createUser({ email, password })
+    await createUser({ username, password })
 
-    await logInUser(page, email, password)
+    await logInUser(page, username, password)
     await page.goto("/settings")
     await page.getByRole("tab", { name: "My profile" }).click()
     await page.getByRole("button", { name: "Edit" }).click()
-    await page.getByLabel("Email").fill(randomEmail())
+    await page.getByLabel("账号").fill(randomUsername())
     await page.getByRole("button", { name: "Cancel" }).first().click()
 
     await expect(
-      page.locator("form").getByText(email, { exact: true }),
+      page.locator("form").getByText(username, { exact: true }),
     ).toBeVisible()
   })
 })
@@ -128,12 +129,12 @@ test.describe("Change password", () => {
   test.use({ storageState: { cookies: [], origins: [] } })
 
   test("Update password successfully", async ({ page }) => {
-    const email = randomEmail()
+    const username = randomUsername()
     const password = randomPassword()
     const newPassword = randomPassword()
 
-    await createUser({ email, password })
-    await logInUser(page, email, password)
+    await createUser({ username, password })
+    await logInUser(page, username, password)
 
     await page.goto("/settings")
     await page.getByRole("tab", { name: "Password" }).click()
@@ -145,23 +146,23 @@ test.describe("Change password", () => {
     await expect(page.getByText("Password updated successfully")).toBeVisible()
 
     await logOutUser(page)
-    await logInUser(page, email, newPassword)
+    await logInUser(page, username, newPassword)
   })
 })
 
 test.describe("Change password validation", () => {
   test.use({ storageState: { cookies: [], origins: [] } })
-  let email: string
+  let username: string
   let password: string
 
   test.beforeAll(async () => {
-    email = randomEmail()
+    username = randomUsername()
     password = randomPassword()
-    await createUser({ email, password })
+    await createUser({ username, password })
   })
 
   test.beforeEach(async ({ page }) => {
-    await logInUser(page, email, password)
+    await logInUser(page, username, password)
     await page.goto("/settings")
     await page.getByRole("tab", { name: "Password" }).click()
   })
@@ -202,55 +203,14 @@ test.describe("Change password validation", () => {
   })
 })
 
-test("Appearance button is visible in sidebar", async ({ page }) => {
+test("Account settings retain the approved light workspace", async ({
+  page,
+}) => {
   await page.goto("/settings")
-  await expect(page.getByTestId("theme-button")).toBeVisible()
-})
-
-test("User can switch between theme modes", async ({ page }) => {
-  await page.goto("/settings")
-
-  await page.getByTestId("theme-button").click()
-  await page.getByTestId("dark-mode").click()
-  await expect(page.locator("html")).toHaveClass(/dark/)
-
-  await expect(page.getByTestId("dark-mode")).not.toBeVisible()
-
-  await page.getByTestId("theme-button").click()
-  await page.getByTestId("light-mode").click()
+  await expect(page.getByRole("tab", { name: "My profile" })).toBeVisible()
   await expect(page.locator("html")).toHaveClass(/light/)
-})
-
-test("Selected mode is preserved across sessions", async ({ page }) => {
-  await page.goto("/settings")
-
-  await page.getByTestId("theme-button").click()
-  if (
-    await page.evaluate(() =>
-      document.documentElement.classList.contains("dark"),
-    )
-  ) {
-    await page.getByTestId("light-mode").click()
-    await page.getByTestId("theme-button").click()
-  }
-
-  const isLightMode = await page.evaluate(() =>
-    document.documentElement.classList.contains("light"),
-  )
-  expect(isLightMode).toBe(true)
-
-  await page.getByTestId("theme-button").click()
-  await page.getByTestId("dark-mode").click()
-  let isDarkMode = await page.evaluate(() =>
-    document.documentElement.classList.contains("dark"),
-  )
-  expect(isDarkMode).toBe(true)
-
-  await logOutUser(page)
-  await logInUser(page, firstSuperuser, firstSuperuserPassword)
-
-  isDarkMode = await page.evaluate(() =>
-    document.documentElement.classList.contains("dark"),
-  )
-  expect(isDarkMode).toBe(true)
+  await expect(page.getByTestId("theme-button")).toHaveCount(0)
+  await page.reload()
+  await expect(page.getByRole("tab", { name: "My profile" })).toBeVisible()
+  await expect(page.locator("html")).toHaveClass(/light/)
 })

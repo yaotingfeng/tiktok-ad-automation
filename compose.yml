@@ -26,11 +26,6 @@ x-app-environment: &app-environment
   S3_REGION: ${S3_REGION:-us-east-1}
   S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
   S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
-  SMTP_HOST: ${SMTP_HOST:-}
-  SMTP_PORT: ${SMTP_PORT:-587}
-  SMTP_USER: ${SMTP_USER:-}
-  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-  EMAILS_FROM_EMAIL: ${EMAILS_FROM_EMAIL:-}
 
 x-app: &app
   image: ${APP_IMAGE:-tiktok-ad-automation:local}

@@ -4,7 +4,7 @@ import { PERMISSION_MESSAGE } from "@/lib/api-feedback"
 function extractErrorMessage(err: Error): string {
   if (err instanceof AxiosError) {
     if (err.response?.status === 403) return PERMISSION_MESSAGE
-    if (err.response?.status === 401) return "邮箱或密码不正确，或登录已过期。"
+    if (err.response?.status === 401) return "账号或密码不正确，或登录已过期。"
     const errDetail = (err.response?.data as any)?.detail
     if (Array.isArray(errDetail) && errDetail.length > 0) {
       return errDetail[0].msg

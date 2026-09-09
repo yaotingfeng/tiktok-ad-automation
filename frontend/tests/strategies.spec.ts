@@ -108,7 +108,7 @@ async function boundary(
     if (path === "/api/users/me")
       return reply({
         id: U,
-        email: "operator@example.com",
+        username: "operator",
         full_name: "策略测试用户",
         is_active: true,
         is_superuser: false,
@@ -578,7 +578,7 @@ for (const path of [`/tenants/${A}/strategies/new`, editUrl])
     await boundary(page, { loggedOut: true })
     await page.goto(path)
     await expect(page).toHaveURL(/\/login$/)
-    await page.getByLabel("邮箱", { exact: true }).fill("operator@example.com")
+    await page.getByLabel("账号", { exact: true }).fill("operator")
     await page.getByLabel("密码", { exact: true }).fill("synthetic-password")
     await page.getByRole("button", { name: "登录工作台", exact: true }).click()
     await expect(page).toHaveURL(path)

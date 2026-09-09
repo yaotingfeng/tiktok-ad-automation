@@ -16,7 +16,7 @@ from app.modules.tenants.service import create_tenant, set_member
 
 def user(session, *, platform=False):
     result = User(
-        email=f"{uuid4()}@example.com", hashed_password="unused", is_superuser=platform
+        username=f"{uuid4()}", hashed_password="unused", is_superuser=platform
     )
     session.add(result)
     session.flush()
@@ -260,14 +260,14 @@ def test_members_list_filters_seek_and_excludes_secrets(client, session):
     assert len({member["user_id"] for member in first["items"] + second["items"]}) == 3
     assert second["next_cursor"] is None
     target = members[0]
-    filtered = client.get(path, params={"search": target.email}, headers=auth).json()
+    filtered = client.get(path, params={"search": target.username}, headers=auth).json()
     assert [item["user_id"] for item in filtered["items"]] == [str(target.id)]
     assert set(filtered["items"][0]) == {
         "tenant_id",
         "user_id",
         "role",
         "active",
-        "email",
+        "username",
         "full_name",
         "user_active",
     }

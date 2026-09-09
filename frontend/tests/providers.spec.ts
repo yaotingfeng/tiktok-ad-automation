@@ -114,7 +114,7 @@ async function boundary(
     if (path === "/api/users/me")
       return reply({
         id: inputId,
-        email: "operator@example.com",
+        username: "operator",
         full_name: "测试用户",
         is_active: true,
         is_superuser: false,

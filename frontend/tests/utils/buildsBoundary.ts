@@ -161,7 +161,7 @@ export async function buildsBoundary(
     if (path === "/api/users/me")
       return reply({
         id: T,
-        email: "operator@example.com",
+        username: "operator",
         is_active: true,
         is_superuser: false,
         full_name: "搭建测试用户",

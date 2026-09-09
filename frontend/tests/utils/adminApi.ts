@@ -10,10 +10,10 @@ const setupClient = createClient({
 })
 
 export const createUser = async ({
-  email,
+  username,
   password,
 }: {
-  email: string
+  username: string
   password: string
 }) => {
   const login = await LoginService.loginAccessToken({
@@ -24,7 +24,7 @@ export const createUser = async ({
     client: setupClient,
     auth: login.data.access_token,
     body: {
-      email,
+      username,
       password,
       full_name: "Test User",
       is_active: true,

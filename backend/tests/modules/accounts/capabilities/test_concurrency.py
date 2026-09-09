@@ -79,7 +79,7 @@ def test_receipt_rejects_authority_or_claim_change(
             else:
                 from app.models import User
 
-                other = User(email=f"{uuid4()}@example.com", hashed_password="unused")
+                other = User(username=f"{uuid4()}", hashed_password="unused")
                 session.add(other)
                 session.flush()
                 job.actor_id = other.id

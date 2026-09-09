@@ -5,7 +5,7 @@ const authFile = "playwright/.auth/user.json"
 
 setup("authenticate", async ({ page }) => {
   await page.goto("/login")
-  await page.getByTestId("email-input").fill(firstSuperuser)
+  await page.getByTestId("username-input").fill(firstSuperuser)
   await page.getByTestId("password-input").fill(firstSuperuserPassword)
   await page.getByRole("button", { name: "登录工作台" }).click()
   await page.waitForURL("/platform/tenants")

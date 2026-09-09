@@ -53,9 +53,7 @@ def test_viewer_cannot_write(session, context, action):
 
 
 def test_platform_actor_preserved_without_membership(session, other_context):
-    platform = User(
-        email=f"{uuid4()}@example.com", hashed_password="unused", is_superuser=True
-    )
+    platform = User(username=f"{uuid4()}", hashed_password="unused", is_superuser=True)
     session.add(platform)
     session.flush()
     resolved = require_tenant(

@@ -13,7 +13,7 @@ def test_managers_search_active_users_without_private_fields(client, session, co
     marker = uuid4().hex
     candidates = [
         User(
-            email=f"{marker}-{i}@example.com",
+            username=f"{marker}-{i}",
             full_name="候选用户",
             hashed_password="private",
             is_active=i < 3,
@@ -36,7 +36,7 @@ def test_managers_search_active_users_without_private_fields(client, session, co
     assert second["next_cursor"] is None
     rows = data["items"] + second["items"]
     assert {row["id"] for row in rows} == {str(item.id) for item in candidates[:3]}
-    assert all(set(row) == {"id", "email", "full_name"} for row in rows)
+    assert all(set(row) == {"id", "username", "full_name"} for row in rows)
     assert "private" not in first.text
     member.role = "viewer"
     session.flush()
@@ -58,7 +58,7 @@ def test_candidate_search_requires_scoped_management(
     platform = user(session, platform=True)
     assert client.get(
         "/api/platform/user-candidates",
-        params={"query": str(platform.email)},
+        params={"query": str(platform.username)},
         headers=headers(platform.id),
     ).json()["items"][0]["id"] == str(platform.id)
 
@@ -98,8 +98,11 @@ def test_candidate_search_accepts_exact_user_id(client, session):
     assert [item["id"] for item in response.json()["items"]] == [str(candidate.id)]
     candidate.is_active = False
     session.flush()
-    assert client.get(
-        "/api/platform/user-candidates",
-        params={"query": str(candidate.id)},
-        headers=headers(platform.id),
-    ).json()["items"] == []
+    assert (
+        client.get(
+            "/api/platform/user-candidates",
+            params={"query": str(candidate.id)},
+            headers=headers(platform.id),
+        ).json()["items"]
+        == []
+    )

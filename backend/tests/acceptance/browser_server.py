@@ -159,7 +159,7 @@ def scenario(options: ScenarioRequest):
         return {
             "tenant_id": str(scope.context.tenant_id),
             "bc_id": scope.bc_id,
-            "email": scope.email,
+            "username": scope.username,
             "password": PASSWORD,
             "accounts": scope.accounts,
             "other_tenant_id": str(other.context.tenant_id),

@@ -4,7 +4,7 @@ import { expect, type Page, test } from "@playwright/test"
 // The token/user below are synthetic and never sent to a live server.
 const user = {
   id: "00000000-0000-4000-8000-000000000001",
-  email: "workspace-test@example.invalid",
+  username: "workspace-test",
   full_name: "测试管理员",
   is_active: true,
   is_superuser: true,
@@ -107,11 +107,13 @@ test("unauthenticated entry and obsolete signup lead to the Chinese login", asyn
   await expect(page).toHaveURL("/login")
   await expect(page.locator('input[autocomplete="username"]')).toBeVisible()
   await page.getByRole("button", { name: "登录工作台" }).click()
-  await expect(page.getByLabel("邮箱", { exact: true })).toHaveAttribute(
+  await expect(page.getByLabel("账号", { exact: true })).toHaveAttribute(
     "aria-invalid",
     "true",
   )
-  await expect(page.getByText("请输入有效的邮箱地址")).toBeVisible()
+  await expect(
+    page.getByText("账号需为 3–64 位字母、数字、下划线、点或短横线"),
+  ).toBeVisible()
 })
 
 test("login submits credentials then reads the authenticated user with a bearer token", async ({
@@ -119,7 +121,7 @@ test("login submits credentials then reads the authenticated user with a bearer 
 }) => {
   await apiBoundary(page, { authenticated: false })
   await page.goto("/login")
-  await page.getByLabel("邮箱", { exact: true }).fill(user.email)
+  await page.getByLabel("账号", { exact: true }).fill(user.username)
   await page.getByLabel("密码", { exact: true }).fill("synthetic-password")
   const loginRequest = page.waitForRequest((request) =>
     request.url().includes("/login/access-token"),
@@ -131,7 +133,7 @@ test("login submits credentials then reads the authenticated user with a bearer 
   const login = await loginRequest
   expect(new URL(login.url()).pathname).toBe("/api/login/access-token")
   expect(new URLSearchParams(login.postData()!).get("username")).toBe(
-    user.email,
+    user.username,
   )
   const me = await meRequest
   expect(new URL(me.url()).pathname).toBe("/api/users/me")
@@ -201,7 +203,7 @@ test("mobile login fits one column and supports keyboard submission", async ({
   await page.setViewportSize({ width: 390, height: 844 })
   await apiBoundary(page, { authenticated: false })
   await page.goto("/login")
-  await page.getByLabel("邮箱", { exact: true }).fill(user.email)
+  await page.getByLabel("账号", { exact: true }).fill(user.username)
   await page.getByLabel("密码", { exact: true }).fill("synthetic-password")
   await page.screenshot({
     path: test.info().outputPath("login-mobile.png"),
@@ -250,7 +252,7 @@ test("admin creation remains available and a 403 mutation does not sign out", as
   await page.goto("/admin")
   await page.getByRole("button", { name: "Add User" }).click()
   const dialog = page.getByRole("dialog")
-  await dialog.getByLabel("Email").fill("new-user@example.invalid")
+  await dialog.getByLabel("账号").fill("new-user")
   await dialog.getByLabel("Set Password").fill("synthetic-password")
   await dialog.getByLabel("Confirm Password").fill("synthetic-password")
   await dialog.getByRole("button", { name: "Save", exact: true }).click()
@@ -300,7 +302,7 @@ test("administrator can create an account through the retained authenticated for
   await page.goto("/admin")
   await page.getByRole("button", { name: "Add User" }).click()
   const dialog = page.getByRole("dialog")
-  await dialog.getByLabel("Email").fill("new-user@example.com")
+  await dialog.getByLabel("账号").fill("new-user")
   await dialog.getByLabel("Set Password").fill("synthetic-password")
   await dialog.getByLabel("Confirm Password").fill("synthetic-password")
   const created = page.waitForRequest(
@@ -311,8 +313,10 @@ test("administrator can create an account through the retained authenticated for
   await dialog.getByRole("button", { name: "Save", exact: true }).click()
   const request = await created
   expect(request.headers().authorization).toBe(`Bearer ${token}`)
+  expect(request.postDataJSON()).not.toHaveProperty("email")
+  expect(request.postDataJSON()).not.toHaveProperty("confirm_password")
   expect(request.postDataJSON()).toMatchObject({
-    email: "new-user@example.com",
+    username: "new-user",
     password: "synthetic-password",
   })
   await expect(page.getByText("User created successfully")).toBeVisible()
@@ -388,7 +392,7 @@ test("unauthenticated internal links resume the original tenant BC and tab after
     "/tenants/11111111-1111-4111-8111-111111111111/accounts?tab=connections&bc_id=7000000000000000001"
   await page.goto(target)
   await expect(page).toHaveURL(/\/login$/)
-  await page.getByLabel("邮箱", { exact: true }).fill("member@example.com")
+  await page.getByLabel("账号", { exact: true }).fill("member")
   await page.getByLabel("密码", { exact: true }).fill("synthetic-password")
   await page.getByRole("button", { name: "登录工作台", exact: true }).click()
   await expect(page).toHaveURL(target)
@@ -411,7 +415,7 @@ for (const target of [
       target,
     )
     await page.goto("/login")
-    await page.getByLabel("邮箱", { exact: true }).fill("member@example.com")
+    await page.getByLabel("账号", { exact: true }).fill("member")
     await page.getByLabel("密码", { exact: true }).fill("synthetic-password")
     await page.getByRole("button", { name: "登录工作台", exact: true }).click()
     await expect(page).toHaveURL("/")

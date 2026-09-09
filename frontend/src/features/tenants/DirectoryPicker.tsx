@@ -103,7 +103,7 @@ export function DirectoryPicker<T extends { id: string }>({
               maxLength={255}
               value={input}
               onChange={(event) => setInput(event.target.value)}
-              placeholder="输入名称、邮箱或完整 ID"
+              placeholder="输入名称、账号或完整 ID"
             />
           </Field>
           <Button type="submit">搜索</Button>

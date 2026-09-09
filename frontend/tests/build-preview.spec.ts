@@ -182,7 +182,7 @@ for (const suffix of [
     const target = `/tenants/${T}/${suffix}?bc_id=${BC}`
     await page.goto(target)
     await expect(page).toHaveURL(/\/login$/)
-    await page.getByLabel("邮箱", { exact: true }).fill("operator@example.com")
+    await page.getByLabel("账号", { exact: true }).fill("operator")
     await page.getByLabel("密码", { exact: true }).fill("synthetic-password")
     await page.getByRole("button", { name: "登录工作台", exact: true }).click()
     await expect(page).toHaveURL(target)

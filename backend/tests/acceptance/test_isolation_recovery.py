@@ -32,7 +32,7 @@ def test_cross_tenant_http_reads_and_frozen_cursor_are_isolated(acceptance_scena
         with TestClient(app) as client:
             login = client.post(
                 "/api/login/access-token",
-                data={"username": scenario.scope.email, "password": PASSWORD},
+                data={"username": scenario.scope.username, "password": PASSWORD},
             )
             assert login.status_code == 200
             headers = {"Authorization": "Bearer " + login.json()["access_token"]}
@@ -64,7 +64,7 @@ def test_cross_tenant_http_reads_and_frozen_cursor_are_isolated(acceptance_scena
             )
             other_login = client.post(
                 "/api/login/access-token",
-                data={"username": scenario.other.email, "password": PASSWORD},
+                data={"username": scenario.other.username, "password": PASSWORD},
             )
             assert other_login.status_code == 200
             other_headers = {
@@ -535,7 +535,10 @@ def test_platform_delegation_records_actual_actor_and_target_tenant(
         with TestClient(app) as client:
             token = client.post(
                 "/api/login/access-token",
-                data={"username": scenario.scope.platform_email, "password": PASSWORD},
+                data={
+                    "username": scenario.scope.platform_username,
+                    "password": PASSWORD,
+                },
             )
             assert token.status_code == 200
             headers = {"Authorization": "Bearer " + token.json()["access_token"]}

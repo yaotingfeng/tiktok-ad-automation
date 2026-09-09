@@ -35,7 +35,7 @@ def test_test_redis_must_be_separate():
 
 
 def test_fixture_commit_is_not_visible_outside_outer_transaction(session):
-    user = User(email=f"{uuid4().hex}@example.com", hashed_password="unused")
+    user = User(username=f"{uuid4().hex}", hashed_password="unused")
     session.add(user)
     session.commit()
     assert session.get(User, user.id) is not None

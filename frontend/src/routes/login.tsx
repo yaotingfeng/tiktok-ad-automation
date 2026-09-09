@@ -23,9 +23,10 @@ import {
 import { Input } from "@/components/ui/input"
 import useAuth, { isLoggedIn } from "@/hooks/useAuth"
 import { loginExpired } from "@/lib/login-return"
+import { usernameSchema } from "@/lib/username"
 
 const formSchema = z.object({
-  username: z.email({ message: "请输入有效的邮箱地址" }),
+  username: usernameSchema,
   password: z.string().min(1, { message: "请输入密码" }),
 })
 type FormData = z.infer<typeof formSchema>
@@ -70,19 +71,21 @@ function Login() {
           >
             <FieldGroup>
               <Field data-invalid={!!errors.username}>
-                <FieldLabel htmlFor="email">邮箱</FieldLabel>
+                <FieldLabel htmlFor="username">账号</FieldLabel>
                 <Input
-                  id="email"
-                  data-testid="email-input"
-                  type="email"
+                  id="username"
+                  data-testid="username-input"
+                  type="text"
                   autoComplete="username"
-                  placeholder="name@company.com"
+                  placeholder="请输入账号"
                   aria-invalid={!!errors.username}
-                  aria-describedby={errors.username ? "email-error" : undefined}
+                  aria-describedby={
+                    errors.username ? "username-error" : undefined
+                  }
                   {...form.register("username")}
                 />
                 {errors.username && (
-                  <FieldError id="email-error" errors={[errors.username]} />
+                  <FieldError id="username-error" errors={[errors.username]} />
                 )}
               </Field>
               <Field data-invalid={!!errors.password}>
@@ -114,7 +117,7 @@ function Login() {
               {loginMutation.isError && (
                 <Alert variant="destructive">
                   <AlertDescription>
-                    登录失败，请检查邮箱和密码后重试。
+                    登录失败，请检查账号和密码后重试。
                   </AlertDescription>
                 </Alert>
               )}

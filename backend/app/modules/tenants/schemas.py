@@ -1,7 +1,7 @@
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.tenants.permissions import Role
 
@@ -39,12 +39,12 @@ class MemberPublic(BaseModel):
     user_id: UUID
     role: MemberRole
     active: bool
-    email: EmailStr
+    username: str
     full_name: str | None
     user_active: bool
 
 
 class UserCandidate(BaseModel):
     id: UUID
-    email: EmailStr
+    username: str
     full_name: str | None

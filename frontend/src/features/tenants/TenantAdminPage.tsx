@@ -380,7 +380,7 @@ function TenantEditor({
                   label="初始管理员"
                   valueLabel={
                     administrator
-                      ? `${administrator.full_name || administrator.email} · ${administrator.email}`
+                      ? `${administrator.full_name || administrator.username} · ${administrator.username}`
                       : undefined
                   }
                   queryKey={["platform", "user-candidates"]}
@@ -400,9 +400,9 @@ function TenantEditor({
                   }
                   renderItem={(item) => (
                     <>
-                      <span>{item.full_name || item.email}</span>
+                      <span>{item.full_name || item.username}</span>
                       <span className="text-xs text-muted-foreground">
-                        {item.email}
+                        {item.username}
                       </span>
                     </>
                   )}
@@ -464,10 +464,11 @@ function TenantDetails({ tenant }: { tenant: TenantSummary }) {
             {query.data?.items.map((member) => (
               <li key={member.user_id} className="flex flex-col gap-1">
                 <span>
-                  {member.full_name || member.email} · {roleLabels[member.role]}
+                  {member.full_name || member.username} ·{" "}
+                  {roleLabels[member.role]}
                 </span>
                 <span className="break-all text-sm text-muted-foreground">
-                  {member.email}
+                  {member.username}
                 </span>
               </li>
             ))}

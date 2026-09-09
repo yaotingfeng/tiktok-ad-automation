@@ -13,7 +13,7 @@ type Tenant = { id: string; name: string; active: boolean; role: Role }
 type Member = {
   tenant_id: string
   user_id: string
-  email: string
+  username: string
   full_name: string
   role: Exclude<Role, "platform_admin">
   active: boolean
@@ -67,7 +67,7 @@ async function boundary(
       {
         tenant_id: A,
         user_id: U,
-        email: "jia@example.com",
+        username: "jia",
         full_name: "甲管理员",
         role: "tenant_admin",
         active: true,
@@ -78,7 +78,7 @@ async function boundary(
       {
         tenant_id: B,
         user_id: V,
-        email: "yi@example.com",
+        username: "yi-user",
         full_name: "乙投手",
         role: "operator",
         active: true,
@@ -91,7 +91,7 @@ async function boundary(
       members[A].push({
         tenant_id: A,
         user_id: `99999999-9999-4999-8999-${String(i).padStart(12, "0")}`,
-        email: `member${i}@example.com`,
+        username: `member${i}`,
         full_name: `分页成员 ${i}`,
         role: "operator",
         active: true,
@@ -99,8 +99,8 @@ async function boundary(
       })
   const requests: Request[] = []
   const candidates = [
-    { id: U, email: "jia@example.com", full_name: "甲管理员" },
-    { id: V, email: "candidate@example.com", full_name: "候选用户" },
+    { id: U, username: "jia", full_name: "甲管理员" },
+    { id: V, username: "candidate", full_name: "候选用户" },
   ]
   await page.addInitScript(
     (value) => localStorage.setItem("access_token", value),
@@ -160,7 +160,7 @@ async function boundary(
     if (path === "/api/users/me")
       return reply({
         id: U,
-        email: "admin@example.com",
+        username: "admin",
         full_name: "当前用户",
         is_active: true,
         is_superuser: options.platform ?? true,
@@ -194,7 +194,7 @@ async function boundary(
       return reply(
         paginate(
           candidates.filter((candidate) =>
-            `${candidate.email}${candidate.full_name}`.includes(
+            `${candidate.username}${candidate.full_name}`.includes(
               q.get("query") ?? "",
             ),
           ),
@@ -233,7 +233,7 @@ async function boundary(
               (!q.has("role") || row.role === q.get("role")) &&
               (!q.has("active") ||
                 row.active === (q.get("active") === "true")) &&
-              `${row.email}${row.full_name}`.toLowerCase().includes(search),
+              `${row.username}${row.full_name}`.toLowerCase().includes(search),
           ),
         ),
       )
@@ -252,7 +252,7 @@ async function boundary(
       const row = {
         tenant_id: scope,
         user_id: candidate.id,
-        email: candidate.email,
+        username: candidate.username,
         full_name: candidate.full_name,
         role: body.role,
         active: body.active,
@@ -556,7 +556,7 @@ test("members pagination and role/status search are scoped server queries", asyn
   await expect(page.locator("tbody tr")).toHaveCount(1)
   await page.getByRole("combobox", { name: "状态筛选" }).click()
   await page.getByRole("option", { name: "正常", exact: true }).click()
-  await page.getByLabel("搜索成员姓名或邮箱").fill("甲")
+  await page.getByLabel("搜索成员姓名或账号").fill("甲")
   await page.getByRole("button", { name: "搜索", exact: true }).click()
   await expect
     .poll(() =>

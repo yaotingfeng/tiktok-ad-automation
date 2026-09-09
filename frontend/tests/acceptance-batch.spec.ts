@@ -8,7 +8,7 @@ import {
 type Scenario = {
   tenant_id: string
   bc_id: string
-  email: string
+  username: string
   password: string
   accounts: string[]
   other_tenant_id: string
@@ -27,7 +27,7 @@ async function seed(
 }
 async function login(page: Page, scope: Scenario) {
   await page.goto(`/tenants/${scope.tenant_id}/builds/new?bc_id=${scope.bc_id}`)
-  await page.getByLabel("邮箱", { exact: true }).fill(scope.email)
+  await page.getByLabel("账号", { exact: true }).fill(scope.username)
   await page.getByLabel("密码", { exact: true }).fill(scope.password)
   await page.getByRole("button", { name: "登录工作台", exact: true }).click()
   await expect(page.getByLabel("剧目名称", { exact: true })).toBeVisible()
