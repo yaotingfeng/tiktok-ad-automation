@@ -4,43 +4,13 @@ import pytest
 from sqlmodel import Session, select
 
 from app.modules.builds import previews
-from app.modules.builds.models import DraftPreparation
 from app.modules.materials.models import AccountMaterial
-from app.modules.providers.models import LinkPreparationItem
 
 
 @pytest.mark.parametrize("acceptance_scenario", ["jiashu", "wangyan"], indirect=True)
 def test_real_preparation_freeze_submission_and_official_sdk(acceptance_scenario):
     scenario = acceptance_scenario
-    prep_id = scenario.prepare()
-    with Session(scenario.database_engine) as session:
-        prep = session.get(DraftPreparation, prep_id)
-        if (
-            scenario.scope.provider_id
-            and scenario.runtime.wire.calls["provider:/api/distribute_admin/drama/list"]
-        ):
-            items = session.exec(
-                select(LinkPreparationItem).where(
-                    LinkPreparationItem.tenant_id == scenario.scope.context.tenant_id
-                )
-            ).all()
-            assert items and all(
-                item.resolved.get("error_code") == "lookup_incomplete" for item in items
-            )
-            assert not scenario.runtime.wire.smart.calls
-            assert prep.status == "READY"
-            preview_id = scenario.freeze()
-            blocked = previews.get_preview_summary(
-                session, context=scenario.scope.context, preview_id=preview_id
-            )
-            assert blocked.status == "FROZEN" and blocked.campaign_count == 0
-            assert blocked.input_issue_count == 2
-            from app.core.errors import DomainError
-
-            with pytest.raises(DomainError) as refused:
-                scenario.submit()
-            assert refused.value.code == "preview_not_submittable"
-            return
+    scenario.prepare()
     preview_id = scenario.freeze()
     with Session(scenario.database_engine) as session:
         preview = previews.get_preview_summary(

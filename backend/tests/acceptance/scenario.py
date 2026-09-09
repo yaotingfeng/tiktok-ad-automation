@@ -95,6 +95,9 @@ class Wire:
 
     def __init__(self) -> None:
         self.smart = FakeTikTokAPI()
+        self.wangyan_links: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        self.wangyan_lose_reply = False
+        self.wangyan_duplicate_created = False
         self.scopes: dict[str, Scope] = {}
         self.objects: dict[str, tuple[bytes, UUID, UUID]] = {}
         self.videos: dict[tuple[str, str], dict[str, Any]] = {}
@@ -333,7 +336,12 @@ class Wire:
     def provider(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
         self.calls["provider:" + path] += 1
-        application = request.url.params.get("app") or request.url.params.get("channel")
+        body = json.loads(request.content) if request.content else {}
+        application = (
+            request.url.params.get("app")
+            or request.url.params.get("channel")
+            or body.get("app")
+        )
         scopes = [
             scope
             for scope in self.scopes.values()
@@ -343,17 +351,70 @@ class Wire:
             raise AssertionError("Provider wire rejected an unknown application scope")
         label = scopes[0].label
         if request.url.host == "partners.shortswave.com":
-            assert path.endswith("/drama/list")
             if request.headers.get("cookie") != "x-ds-admin-token=synthetic-" + label:
                 raise AssertionError("Provider wire rejected mismatched credentials")
-            page = int(request.url.params["page"])
-            title = request.url.params["title"]
-            rows = (
-                [{"id": str(DRAMAS.index(title) + 1), "title": title, "lang": "en"}]
-                if page == 1
-                else []
-            )
-            return httpx.Response(200, json={"code": 0, "data": rows})
+            if path.endswith("/drama/list"):
+                page = int(request.url.params["page"])
+                title = request.url.params["title"]
+                rows = (
+                    [
+                        {
+                            "id": "opaque-drama-" + str(DRAMAS.index(title) + 1),
+                            "title": title,
+                            "lang": "en",
+                        }
+                    ]
+                    if page == 1
+                    else []
+                )
+                return httpx.Response(200, json={"code": 0, "data": rows})
+            if path.endswith("/link/list"):
+                query = request.url.params
+                assert query["start"] == "1970-01-01" and query["end"]
+                if query.get("id"):
+                    rows = [
+                        row
+                        for (app, _), links in self.wangyan_links.items()
+                        if app == application
+                        for row in links
+                        if str(row["id"]) == query["id"]
+                    ]
+                else:
+                    rows = self.wangyan_links.get((application, query["drama_id"]), [])
+                offset = (int(query["page"]) - 1) * 20
+                return httpx.Response(
+                    200,
+                    json={
+                        "code": 0,
+                        "data": rows[offset : offset + 20],
+                        "total": len(rows),
+                    },
+                )
+            assert path.endswith("/link/create") and request.method == "POST"
+            assert body["promote_platform"] == "tiktok" and body["chapter_index"] == 1
+            assert body["promote_name"].startswith("ytf-")
+            opaque = body["drama_id"]
+            assert opaque in {"opaque-drama-1", "opaque-drama-2"}
+            rows = self.wangyan_links.setdefault((application, opaque), [])
+            identity = 1001 + sum(len(links) for links in self.wangyan_links.values())
+            row = {
+                "id": identity,
+                "app": application,
+                "drama_id": opaque,
+                "drama_int_id": 70 + int(opaque.rsplit("-", 1)[1]),
+                "chapter_index": 1,
+                "promote_platform": "tiktok",
+                "promote_name": body["promote_name"],
+                "tt_minis_link": f"https://www.tiktok.com/minis/acceptance?link_id={identity}",
+            }
+            rows.append(row)
+            if self.wangyan_duplicate_created:
+                rows.append({**row, "id": identity + 1})
+            if self.wangyan_lose_reply:
+                raise httpx.ReadTimeout(
+                    "Synthetic remote create committed; response lost", request=request
+                )
+            return httpx.Response(200, json={"code": 0, "data": {"id": identity}})
         assert (
             request.url.host == "video-wechat-open.eastdrama.net"
             and request.method == "POST"
@@ -472,29 +533,41 @@ class Runtime:
             task.pop_request()
         self.delivered.append(message)
 
-    def step_job(self) -> bool:
-        """Run at most one actual delivery; useful for crash-boundary barriers."""
-        from app.jobs.outbox import flush_dispatch
+    def publish_due(self) -> None:
+        # Execute the registered production control task: its bounded fair drain
+        # is part of the behavior under acceptance, not a fake publisher loop.
+        self.deliver(
+            {
+                "name": "jobs.flush_dispatch",
+                "kwargs": {"limit": 100},
+                "task_id": str(uuid4()),
+                "queue": "control",
+            }
+        )
 
+    def step_job(self) -> bool:
+        """Run at most one actual business delivery at a crash-boundary barrier."""
         self.tick_beat()
-        flush_dispatch(limit=100)
+        self.publish_due()
         if not self.messages:
             return False
         self.deliver(self.messages.popleft())
         return True
 
     def pump_jobs(self, max_steps: int = 1000) -> int:
-        from app.jobs.outbox import flush_dispatch
-
+        # A legal large graph can exceed 1000 deliveries. Yield a bounded chunk
+        # to drive_until so its real elapsed deadline, predicate and diagnostics
+        # remain authoritative even on a slower CI machine.
+        deadline = time.monotonic() + 10
         for count in range(max_steps):
             self.tick_beat()
-            flush_dispatch(limit=100)
+            self.publish_due()
             if not self.messages:
                 return count
             self.deliver(self.messages.popleft())
-        raise AssertionError(
-            f"Task pump exceeded {max_steps}; pending task IDs: {[m['task_id'] for m in self.messages]}"
-        )
+            if time.monotonic() >= deadline:
+                return count + 1
+        return max_steps
 
     def drive_until(self, predicate: Callable[[], bool], timeout: float = 240) -> None:
         deadline = time.monotonic() + timeout
