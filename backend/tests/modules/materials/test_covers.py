@@ -862,3 +862,44 @@ def test_repair_preserves_unpublished_broker_backoff_and_published_generation(
         old.dispatch_id,
         old.revision,
     )
+
+
+def test_cover_worker_rejects_unbounded_execution_before_any_sdk(source_env, wire):
+    import pytest
+
+    from app.core.errors import DomainError
+    from app.modules.materials import cover_tasks
+
+    for task in (cover_tasks.prepare_cover, cover_tasks.verify_cover):
+        assert task.time_limit == 45 and task.soft_time_limit == 40
+        with pytest.raises(DomainError, match="prefork"):
+            task.run(
+                tenant_id=str(source_env["context"].tenant_id),
+                actor_id=str(source_env["context"].actor_id),
+                payload={"job_id": str(uuid4()), "revision": 1},
+            )
+    assert not wire[0]
+
+
+def test_cover_worker_rejects_boolean_revision_and_extra_payload_before_db(
+    source_env, wire, monkeypatch
+):
+    import pytest
+
+    from app.core.errors import DomainError
+    from app.modules.materials import cover_tasks
+
+    monkeypatch.setattr(
+        cover_tasks, "require_bounded_worker", lambda *args, **kwargs: None
+    )
+    for payload in (
+        {"job_id": str(uuid4()), "revision": True},
+        {"job_id": str(uuid4()), "revision": 1, "url": "https://example.com/untrusted"},
+    ):
+        with pytest.raises(DomainError, match="参数无效"):
+            cover_tasks.prepare_cover.run(
+                tenant_id=str(source_env["context"].tenant_id),
+                actor_id=str(source_env["context"].actor_id),
+                payload=payload,
+            )
+    assert not wire[0]
