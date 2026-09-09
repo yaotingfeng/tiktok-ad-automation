@@ -80,9 +80,25 @@ AND (s.parent_step_id IS NULL OR EXISTS (SELECT 1 FROM execution_step p WHERE p.
 AND (s.kind<>'CAMPAIGN' OR EXISTS (SELECT 1 FROM execution_step cta WHERE cta.tenant_id=s.tenant_id AND cta.submission_id=s.submission_id AND cta.unit_id=s.unit_id AND cta.kind='CTA' AND cta.status='SUCCEEDED' AND cta.remote_id IS NOT NULL))
 AND (s.kind NOT IN ('CAMPAIGN','ADGROUP') OR {GROUP_READY})
 """
+# Two disjoint candidate branches avoid evaluating a correlated parent query
+# against every pending step. Keep these fixed predicates identical to the
+# partial indexes, including for PostgreSQL generic prepared plans.
+RECONCILE_CANDIDATES = """(
+ SELECT candidate.id FROM execution_step candidate
+ WHERE candidate.tenant_id=:tenant AND candidate.submission_id=:submission
+ AND candidate.dispatch_id IS NULL
+ AND (candidate.status='UNKNOWN' OR candidate.mismatch
+      OR (candidate.kind='MATERIAL' AND candidate.status='FAILED'))
+ UNION ALL
+ SELECT child.id FROM execution_step parent JOIN execution_step child
+ ON child.tenant_id=parent.tenant_id AND child.submission_id=parent.submission_id
+ AND child.parent_step_id=parent.id
+ WHERE parent.tenant_id=:tenant AND parent.submission_id=:submission
+ AND parent.remote_id IS NOT NULL AND child.dispatch_id IS NULL
+ AND child.kind='READBACK' AND child.status<>'SUCCEEDED'
+ AND child.status<>'UNKNOWN' AND NOT child.mismatch
+) candidates JOIN execution_step s ON s.id=candidates.id"""
 RECONCILE = f"""
-AND (s.status='UNKNOWN' OR s.mismatch OR (s.kind='MATERIAL' AND s.status='FAILED') OR (s.kind='READBACK' AND s.status<>'SUCCEEDED' AND EXISTS
- (SELECT 1 FROM execution_step p WHERE p.tenant_id=s.tenant_id AND p.submission_id=s.submission_id AND p.id=s.parent_step_id AND p.remote_id IS NOT NULL)))
 AND (s.kind<>'MATERIAL' OR (s.cover_job_id IS NULL AND EXISTS (SELECT 1 FROM material_distribution d JOIN material_asset_operation o
  ON o.id=d.operation_id AND o.tenant_id=d.tenant_id AND o.bc_id=d.bc_id AND o.material_id=d.material_id AND o.advertiser_id=d.advertiser_id
  WHERE d.id=s.distribution_id AND d.tenant_id=s.tenant_id AND d.bc_id=s.bc_id AND d.material_id=s.material_id AND d.advertiser_id=u.advertiser_id
@@ -99,8 +115,11 @@ def _params(row: Submission) -> dict[str, Any]:
 
 
 def _query(_row: Submission, kind: str, *, account: bool = True) -> str:
+    base = BASE
+    if kind != "RETRY":
+        base = base.replace("execution_step s", RECONCILE_CANDIDATES, 1)
     return (
-        BASE + (RETRY if kind == "RETRY" else RECONCILE) + (ACCOUNT if account else "")
+        base + (RETRY if kind == "RETRY" else RECONCILE) + (ACCOUNT if account else "")
     )
 
 

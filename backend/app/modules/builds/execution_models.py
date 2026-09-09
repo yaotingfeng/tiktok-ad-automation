@@ -195,6 +195,33 @@ class SubmissionUnit(SQLModel, table=True):
 class ExecutionStep(SQLModel, table=True):
     __tablename__ = "execution_step"
     __table_args__ = (
+        Index(
+            "ix_recovery_candidates",
+            "tenant_id",
+            "submission_id",
+            "id",
+            postgresql_where=text(
+                "dispatch_id IS NULL AND (status='UNKNOWN' OR mismatch "
+                "OR (kind='MATERIAL' AND status='FAILED'))"
+            ),
+        ),
+        Index(
+            "ix_recovery_known_parent",
+            "tenant_id",
+            "submission_id",
+            "id",
+            postgresql_where=text("remote_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_recovery_readback_parent",
+            "tenant_id",
+            "submission_id",
+            "parent_step_id",
+            "id",
+            postgresql_where=text(
+                "dispatch_id IS NULL AND kind='READBACK' AND status<>'SUCCEEDED'"
+            ),
+        ),
         Index("ix_execution_scope_status", "tenant_id", "submission_id", "status"),
         Index(
             "ix_execution_unit_due",
