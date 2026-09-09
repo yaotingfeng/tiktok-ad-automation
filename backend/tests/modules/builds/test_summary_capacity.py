@@ -8,7 +8,7 @@ from sqlalchemy import event, text
 from sqlalchemy.orm import Session as SASession
 from sqlmodel import select
 
-from app.modules.builds import submissions
+from app.modules.builds import submission_catalog, submissions
 from app.modules.builds.execution_models import ExecutionStep, Submission
 from tests.modules.builds.test_previews import prepared as prepared
 from tests.modules.builds.test_submissions import frozen as frozen
@@ -28,7 +28,9 @@ from tests.modules.builds.test_submissions import frozen as frozen
         "precedence",
     ],
 )
-def test_summary_outcomes_equal_frozen_legacy_oracle(session, context, frozen, case):
+def test_summary_outcomes_equal_frozen_legacy_oracle(
+    session, context, frozen, case, monkeypatch
+):
     identity = submissions.submit_preview(
         session, context=context, preview_id=frozen, request_id=uuid4()
     ).submission_id
@@ -90,10 +92,24 @@ def test_summary_outcomes_equal_frozen_legacy_oracle(session, context, frozen, c
         assert getattr(view, state).model_dump() == {
             field: values.get(kind, 0) for kind, field in fields.items()
         }
+    actual = submission_catalog.list_submissions(
+        session, context=context, bc_id=view.bc_id
+    )
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            submission_catalog,
+            "COUNTS",
+            Path(__file__).with_name("legacy_catalog_counts.sql").read_text(),
+        )
+        legacy = submission_catalog.list_submissions(
+            session, context=context, bc_id=view.bc_id
+        )
+    assert actual.model_dump() == legacy.model_dump()
 
 
+@pytest.mark.parametrize("catalog", [False, True])
 def test_summary_plan_never_rescans_all_material_groups_per_object(
-    session, context, frozen
+    session, context, frozen, catalog
 ):
     identity = submissions.submit_preview(
         session, context=context, preview_id=frozen, request_id=uuid4()
@@ -106,12 +122,20 @@ def test_summary_plan_never_rescans_all_material_groups_per_object(
     connection = session.connection()
 
     def capture(_conn, _cursor, statement, parameters, _context, _many):
-        if "SELECT kind,outcome,count(*)" in statement:
+        if (
+            "SELECT kind,outcome,count(*)" in statement
+            or "result_counts AS (" in statement
+        ):
             captured.append((statement, parameters))
 
     event.listen(connection, "before_cursor_execute", capture)
     try:
-        submissions.get_submission(session, context=context, submission_id=identity)
+        if catalog:
+            submission_catalog.list_submissions(
+                session, context=context, bc_id="bc-draft"
+            )
+        else:
+            submissions.get_submission(session, context=context, submission_id=identity)
     finally:
         event.remove(connection, "before_cursor_execute", capture)
     assert len(captured) == 1

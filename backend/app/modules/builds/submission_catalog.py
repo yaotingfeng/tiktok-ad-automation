@@ -79,12 +79,26 @@ COUNTS = """
  count(*) FILTER(WHERE NOT included) excluded_unit_count,count(*) FILTER(WHERE included) submitted_c,
  coalesce(sum(group_count) FILTER(WHERE included),0) submitted_g,coalesce(sum(ad_count) FILTER(WHERE included),0) submitted_a
  FROM scope GROUP BY submission_id
-), material_groups AS (
- SELECT p.id submission_id,g.id group_id,g.unit_id,coalesce(bool_or(ms.status='FAILED'),false) failed
- FROM page p JOIN planned_group g ON g.tenant_id=p.tenant_id AND g.preview_id=p.preview_id
- LEFT JOIN preview_group_material m ON m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id AND m.drama_id=g.drama_id AND m.group_no=g.group_no
- LEFT JOIN execution_step ms ON ms.tenant_id=g.tenant_id AND ms.submission_id=p.id AND ms.unit_id=g.unit_id AND ms.kind='MATERIAL' AND ms.material_id=m.material_id
- GROUP BY p.id,g.id,g.unit_id
+), failed_ancestors AS MATERIALIZED (
+ SELECT p.id submission_id,s.unit_id,bool_or(s.kind='CTA') cta_failed,bool_or(s.kind='CAMPAIGN') campaign_failed
+ FROM page p JOIN execution_step s ON s.tenant_id=p.tenant_id AND s.submission_id=p.id
+ WHERE s.status='FAILED' AND s.kind IN ('CTA','CAMPAIGN') GROUP BY p.id,s.unit_id
+), failed_adgroups AS MATERIALIZED (
+ SELECT DISTINCT p.id submission_id,s.unit_id,s.group_id FROM page p
+ JOIN execution_step s ON s.tenant_id=p.tenant_id AND s.submission_id=p.id
+ WHERE s.status='FAILED' AND s.kind='ADGROUP'
+), material_failed_groups AS MATERIALIZED (
+ SELECT DISTINCT p.id submission_id,p.preview_id,g.id group_id,g.unit_id
+ FROM page p JOIN execution_step ms ON ms.tenant_id=p.tenant_id AND ms.submission_id=p.id
+ JOIN planned_group g ON g.tenant_id=p.tenant_id AND g.preview_id=p.preview_id AND g.unit_id=ms.unit_id
+ JOIN preview_group_material m ON m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id
+ AND m.drama_id=g.drama_id AND m.group_no=g.group_no AND m.material_id=ms.material_id
+ WHERE ms.kind='MATERIAL' AND ms.status='FAILED'
+), material_failed_units AS MATERIALIZED (
+ SELECT mg.submission_id,mg.unit_id FROM material_failed_groups mg
+ GROUP BY mg.submission_id,mg.preview_id,mg.unit_id
+ HAVING count(*)=(SELECT count(*) FROM planned_group g
+ WHERE g.tenant_id=:tenant AND g.preview_id=mg.preview_id AND g.unit_id=mg.unit_id)
 ), objects AS (
  SELECT u.submission_id,u.id unit_id,'CAMPAIGN' kind,NULL::uuid group_id,NULL::uuid ad_id FROM scope u WHERE included
  UNION ALL SELECT u.submission_id,u.id,'ADGROUP',g.id,NULL FROM scope u JOIN planned_group g ON g.tenant_id=u.tenant_id AND g.preview_id=u.preview_id AND g.unit_id=u.id WHERE included
@@ -93,11 +107,17 @@ COUNTS = """
  SELECT o.submission_id,o.kind, CASE
  WHEN nullif(trim(s.remote_id),'') IS NOT NULL THEN 'succeeded'
  WHEN s.status IN ('SUCCEEDED','UNKNOWN') THEN 'unknown'
- WHEN s.status='FAILED' OR EXISTS (SELECT 1 FROM execution_step ancestor WHERE ancestor.tenant_id=:tenant AND ancestor.submission_id=o.submission_id AND ancestor.unit_id=o.unit_id AND ancestor.status='FAILED' AND (ancestor.kind='CTA' OR (ancestor.kind='CAMPAIGN' AND o.kind!='CAMPAIGN') OR (ancestor.kind='ADGROUP' AND o.kind='AD' AND ancestor.group_id=o.group_id)))
- OR (o.kind='CAMPAIGN' AND EXISTS (SELECT 1 FROM material_groups mg WHERE mg.submission_id=o.submission_id AND mg.unit_id=o.unit_id) AND NOT EXISTS (SELECT 1 FROM material_groups mg WHERE mg.submission_id=o.submission_id AND mg.unit_id=o.unit_id AND NOT mg.failed))
- OR (o.kind IN ('ADGROUP','AD') AND EXISTS (SELECT 1 FROM material_groups mg WHERE mg.submission_id=o.submission_id AND mg.group_id=o.group_id AND mg.failed)) THEN 'failed'
+ WHEN s.status='FAILED' OR fa.cta_failed
+ OR (o.kind!='CAMPAIGN' AND fa.campaign_failed)
+ OR (o.kind='AD' AND fg.group_id IS NOT NULL)
+ OR (o.kind='CAMPAIGN' AND mu.unit_id IS NOT NULL)
+ OR (o.kind IN ('ADGROUP','AD') AND mg.group_id IS NOT NULL) THEN 'failed'
  ELSE 'pending' END outcome
  FROM objects o LEFT JOIN execution_step s ON s.tenant_id=:tenant AND s.submission_id=o.submission_id AND s.unit_id=o.unit_id AND s.kind=o.kind AND s.group_id IS NOT DISTINCT FROM o.group_id AND s.planned_ad_id IS NOT DISTINCT FROM o.ad_id
+ LEFT JOIN failed_ancestors fa ON fa.submission_id=o.submission_id AND fa.unit_id=o.unit_id
+ LEFT JOIN failed_adgroups fg ON fg.submission_id=o.submission_id AND fg.unit_id=o.unit_id AND fg.group_id=o.group_id
+ LEFT JOIN material_failed_groups mg ON mg.submission_id=o.submission_id AND mg.unit_id=o.unit_id AND mg.group_id=o.group_id
+ LEFT JOIN material_failed_units mu ON mu.submission_id=o.submission_id AND mu.unit_id=o.unit_id
 ), result_counts AS (
  SELECT submission_id,kind,outcome,count(*) n FROM results GROUP BY submission_id,kind,outcome
 ), outcomes AS (
@@ -237,7 +257,9 @@ def list_submissions(
                     adgroup_count=row["submitted_g"],
                     ad_count=row["submitted_a"],
                 ),
-                **outcomes,
+                succeeded=outcomes["succeeded"],
+                failed=outcomes["failed"],
+                unknown=outcomes["unknown"],
             )
         )
     return Page(
