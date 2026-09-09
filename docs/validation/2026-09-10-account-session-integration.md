@@ -22,6 +22,14 @@
 - 合并后在本地生产静态页面运行版权方 Playwright：21 passed（8.6 秒）；覆盖自动恢复提示、租户权限、分页与凭据表单。这组 API 为边界替身。
 - 账号子任务另有真实 API Chromium 37 passed、工作台全部 263 用例覆盖；具体命令、分开运行原因及数据库迁移回归见账号验证记录。
 
+### CI 备份客户端修复
+
+首轮远端 [CI 34382289398](https://github.com/yaotingfeng/tiktok-ad-automation/actions/runs/34382289398) 的 frontend、image、browser、campaign-recovery、other-recovery、acceptance 六组通过；modules 唯一失败是新增真实备份还原测试调用 PATH 中的 `pg_dump` 返回非零。该流水线使用 PostgreSQL 18 服务，而 Ubuntu 托管镜像的默认客户端可能更旧；原异常没有输出 stderr，不能把具体版本冲突当作已经读取到的错误文本。
+
+`396852a` 为 modules 显式安装 PostgreSQL 18 客户端并指定 `PG_BIN_DIR`，在长测试开始前读取服务端和两个客户端的版本，要求 `pg_dump ≥ server`、`pg_restore ≥ pg_dump`。配置目录无效时直接失败，备份、恢复及身份保留断言均继续执行；异常只展示工具名、版本或退出码，不输出连接参数和原始 stderr。
+
+合并分支在独立测试数据库重新执行版本检查及真实备份还原迁移：7 passed（1.68 秒），全量 Ruff 通过。Linux 的客户端安装及完整测试结果以修复提交之后的远端 CI 为准。
+
 ## 实际本地应用升级
 
 应用位于 `projects/tiktok-ad-automation`，旧工作区快捷路径仍指向同一目录；本轮未覆盖工作区原有 15 份未提交文档，逐文件 SHA-256 核对一致。
