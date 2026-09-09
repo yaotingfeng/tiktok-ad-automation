@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-2026-09-09：持续在用户指定仓库 `feat/platform-implementation` 实施。P01/P02 已交付并独立复核通过；P03 版权方后端及工作区已接通；P04 上传、回查与分发已独立复核通过，素材页面开发中；P05 策略后端和页面已实现，草稿已接通并正在完成独立复核；P06 官方场景证据和权限验证实现中。冻结预览、广告执行和最终验收仍在继续，未执行真实广告操作。
+2026-09-09：持续在用户指定仓库 `feat/platform-implementation` 实施。P01～P04 的后端与页面已集成；P05 草稿、冻结预览、批量搭建与提交页面已集成；P06 持久提交、分步创建、官方 SDK 回读和队列修复已集成。共享 Scene 自动准备、恢复操作与完整任务详情页面继续开发，P07 开始进程故障与发布验证。没有执行真实广告操作。
 
 | 范围 | 状态与证据 | 主要集成提交 |
 | --- | --- | --- |
@@ -27,7 +27,7 @@
 | P05 Task4 草稿与API | 24 项通过；全行反馈、分批解析、字面素材匹配、可追溯编辑、只读分页；已修复独立审查3类P2，待最终复核 | 415a878, 24448d5, e0b3d37, 3d369d7 |
 | P05 策略页面 | 26 项策略浏览器测试，连同其他工作区共128项通过；保存/冲突/回查/租户切换及三种屏宽 | 9d60a15 |
 
-完整后端在 `415a878` 为 **710 passed**（47.70秒）；后续草稿审查新增与修复的 24 项聚焦测试通过。Ruff与新增模块 strict mypy/ty 通过；仅继承的 Starlette/httpx 弃用提示。最新策略 UI 整套 workspace 浏览器 **128 passed**；SDK/接口测试替身不代表真实平台联调通过。
+完整后端在 `7dddbe4` 为 **1,059 passed**（136.11 秒）。执行核心独立审查关闭三项 P2，17 条独立回归及审查分支全部 247 条 builds 测试通过。当前已集成 P05 UI 的工作区浏览器 **210 passed**；P06 任务详情与恢复界面的验证尚在继续。新增 Linux prefork 硬截止测试在 macOS 明确跳过，等待 Linux CI 实证。SDK/接口替身不代表真实平台联调通过。
 
 ## 远端与新增验证
 
@@ -63,7 +63,7 @@
 
 ## 下一步
 
-完成素材页面、草稿独立复核及工作区整体验收；以已核实的 P06 只读场景证据生成冻结预览，再实现广告执行、恢复与 P07 跨模块验收。各阶段持续提交并推送；不把依赖外部凭据的联调记为已完成。
+完成共享 Scene 自动准备、恢复请求永久回执和任务详情界面，继续 P07 全流程、容量与发布验证。各阶段持续提交并推送；不把依赖外部凭据的联调记为已完成。
 
 ### P02 Task 4: directory discovery
 
@@ -91,3 +91,15 @@
 - Added isolated capability jobs/request aliases/pages/account-role evidence with migration `0005e_account_capabilities` (schema commit `2c107db`).
 - Explicit tenant/BC/connection refresh command, read-only status/evidence APIs, 50-row official current-token BC reads, complete-list publication in 100-grant transactions, durable claim/dispatch recovery. Details and integration registration contract: `docs/validation/p06-account-capabilities.md`.
 - Dedicated engineering age setting defaults to four hours from first observation; no per-link BC scan and no capability inferred from account visibility. Root owns Scene/draft/preview integration.
+
+## 2026-09-09：搭建执行与任务查询
+
+- 冻结预览独立审查通过；批量输入、原输入完整分页、分组编辑回执、按剧聚合、预算守恒、预览提交与未知响应回查均已接实际 API，UI 集成 `c29710a`。
+- 提交与分批展开 `7761232`：同一预览永久只提交一次，同一草稿的历史组合预留不重复创建；账户×剧目展开及步骤持久化均有界。GET 不触发 SDK 或新任务。
+- BC 能力目录版本 `ac9bc53` / `a97a21b`：真实 PostgreSQL 验证 5,000 账户后，能力读取按目录版本主键查询，不再逐次扫描整个 BC；目录插入、移动、删除与并发事务均有版本围栏。
+- 执行状态、准入与 SDK 创建 `315fe06` / `b1cfde8` / `a1b8764`：请求意图提交后才调用 SDK，已知 ID 及时持久化；Campaign/Ad Group/Ad 直接 ENABLE，SP 共用目标 VID/封面且文案不同。
+- 独立审查修复 `7689b26`：CTA 放在官方 `ad_configuration.call_to_action_id`；已收到远端 ID 但 PostgreSQL commit 失败时，在新的安全事务中保留 `LATE_CREATED` 证据；Redis 暂不可用保留未发送步骤重排。文案 100 字符是明确的应用策略。
+- 官方 SDK 回读 `771933a`：分页完整性、同名歧义、实际父级与目标素材、CTA、预算、ROAS、链接、文案与 ENABLE 状态均核对；找不到或无法唯一匹配保持 UNKNOWN。
+- 任务查询 `ec483bd` / `9ca6d13`：列表与分层详情均分页，组内素材显示已核实的目标 VID/封面，事件仅暴露白名单；版权方/策略绑定来自冻结预览。
+- 队列执行 `7dddbe4`：unit→step 锁序、结果与下一步 outbox 同事务、当前消息修复与业务退避分开；完整成功、远端成功丢响应后回读续建、回读为空停止自动重试已通过 10 条专项测试。
+- Linux 进程故障测试 `a842358` 已提交，运行状态独立记录；当前新增 Scene 编排、recovery 与 UI 不在上述已通过范围中。
