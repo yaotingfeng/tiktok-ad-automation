@@ -17,9 +17,10 @@ type Scenario = {
 async function seed(
   request: APIRequestContext,
   partial = false,
+  providerKind: "jiashu" | "wangyan" = "jiashu",
 ): Promise<Scenario> {
   const response = await request.post("/__acceptance__/scenario", {
-    data: { partial_currency: partial },
+    data: { partial_currency: partial, provider_kind: providerKind },
   })
   expect(response.ok()).toBeTruthy()
   return response.json()
@@ -31,11 +32,15 @@ async function login(page: Page, scope: Scenario) {
   await page.getByRole("button", { name: "登录工作台", exact: true }).click()
   await expect(page.getByLabel("剧目名称", { exact: true })).toBeVisible()
 }
-async function inputs(page: Page, scope: Scenario) {
+async function inputs(
+  page: Page,
+  scope: Scenario,
+  providerKind: "jiashu" | "wangyan" = "jiashu",
+) {
   await page.getByRole("combobox", { name: "版权方连接", exact: true }).click()
   await page
     .getByRole("option")
-    .filter({ hasText: "jiashu acceptance" })
+    .filter({ hasText: `${providerKind} acceptance` })
     .click()
   await page.getByRole("combobox", { name: "推广应用", exact: true }).click()
   await page.getByRole("option").filter({ hasText: "Acceptance Minis" }).click()
@@ -72,8 +77,9 @@ async function prepare(
   page: Page,
   request: APIRequestContext,
   scope: Scenario,
+  providerKind: "jiashu" | "wangyan" = "jiashu",
 ) {
-  await inputs(page, scope)
+  await inputs(page, scope, providerKind)
   await page.getByRole("button", { name: "解析并准备", exact: true }).click()
   await expect(
     page.getByRole("heading", { name: "准备与调整", exact: true }),
@@ -325,4 +331,75 @@ test("真实币种差异排除两组合；普通投手访问另一租户保留�
     token,
   )
   expect(page.url()).not.toContain("/login")
+})
+
+test("真实 API 网眼入口：正式归因、完整账户编号与冻结 6/18/36", async ({
+  page,
+  request,
+}, testInfo) => {
+  const scope = await seed(request, false, "wangyan")
+  const before = await (
+    await request.get(`/__acceptance__/evidence/${scope.tenant_id}`)
+  ).json()
+  await login(page, scope)
+  await prepare(page, request, scope, "wangyan")
+  const { previewId, summary } = await freeze(page, request, scope)
+  expect([
+    summary.campaign_count,
+    summary.adgroup_count,
+    summary.ad_count,
+  ]).toEqual([6, 18, 36])
+  expect(summary.blocked_count).toBe(0)
+  expect(summary.daily_budget_sum).toMatch(/^600(?:\.0+)?$/)
+  const token = await page.evaluate(() => localStorage.getItem("access_token"))
+  const response = await request.get(
+    `/api/tenants/${scope.tenant_id}/build-previews/${previewId}/units?limit=50`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+    },
+  )
+  expect(response.ok()).toBeTruthy()
+  const units = await response.json()
+  expect(units.next_cursor).toBeNull()
+  expect(units.items).toHaveLength(6)
+  expect(
+    [
+      ...new Set(
+        units.items.map((u: { advertiser_id: string }) => u.advertiser_id),
+      ),
+    ].sort(),
+  ).toEqual([...scope.accounts].sort())
+  for (const unit of units.items) {
+    expect(unit.advertiser_id).toMatch(/^\d{20}$/)
+    expect(unit.campaign_name).toMatch(
+      /^\{b(?:71|72)\/s[1-9]\d*\/c1\}-(?:The Bond|Hidden Promise)/,
+    )
+  }
+  await page.getByRole("tab", { name: "账户组合", exact: true }).click()
+  await expect(
+    page.getByText(scope.accounts[0], { exact: true }).first(),
+  ).toBeVisible()
+  await page.getByRole("button", { name: "查看冻结详情" }).first().click()
+  await expect(
+    page
+      .getByRole("dialog")
+      .getByText(/https:\/\/www\.tiktok\.com\/minis\/acceptance\?link_id=/)
+      .first(),
+  ).toBeVisible()
+  await page.screenshot({
+    path: testInfo.outputPath("wangyan-frozen-detail.png"),
+    fullPage: true,
+    animations: "disabled",
+  })
+  const evidence = await (
+    await request.get(`/__acceptance__/evidence/${scope.tenant_id}`)
+  ).json()
+  expect(evidence.submission_count).toBe(0)
+  expect(evidence.smart_posts).toBe(before.smart_posts)
+  expect(
+    (evidence.sdk_calls["provider:/api/distribute_admin/promote/link/create"] ||
+      0) -
+      (before.sdk_calls["provider:/api/distribute_admin/promote/link/create"] ||
+        0),
+  ).toBe(2)
 })

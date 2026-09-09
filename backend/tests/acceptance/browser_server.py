@@ -9,7 +9,7 @@ import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 import uvicorn
@@ -131,6 +131,7 @@ app.add_middleware(DeliveryFault)
 
 class ScenarioRequest(BaseModel):
     partial_currency: bool = False
+    provider_kind: Literal["jiashu", "wangyan"] = "jiashu"
 
 
 @app.get("/__acceptance__/health")
@@ -142,7 +143,7 @@ def health():
 def scenario(options: ScenarioRequest):
     with lock:
         label = "browser-" + uuid4().hex[:10]
-        scope = seed_scope(engine, wire, label=label)
+        scope = seed_scope(engine, wire, label=label, provider_kind=options.provider_kind)
         other = seed_scope(engine, wire, label=label + "-other", material_count=1)
         scopes[str(scope.context.tenant_id)] = scope
         scopes[str(other.context.tenant_id)] = other
