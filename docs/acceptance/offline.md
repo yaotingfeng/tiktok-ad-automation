@@ -10,7 +10,7 @@
 
 目标封面在创建广告时重新核实，最终发送前再次核对当前视频/封面与证据期限；已确定成功的节点保持原状。`47f108b` 的执行/恢复/回读相关 **75 项通过**，另有独立 **73 项回归与 1 项双素材作用域探针通过**。具体规则见[封面契约](../contracts/tiktok-covers.md)。
 
-`0013_dispatch_expansion_index` 已完成真实 pg_dump/pg_restore 演练，所有表行数、合成凭据解密、对象元数据和待发任务均一致；没有启动消费者或对象存储调用。结果见 [backup-restore.json](backup-restore.json)。
+`0014_recovery_candidates` 已完成真实 pg_dump/pg_restore 演练，所有表行数、合成凭据解密、对象元数据和待发任务均一致；没有启动消费者或对象存储调用。结果见 [backup-restore.json](backup-restore.json)。
 
 ## 早期执行基线
 
@@ -27,6 +27,8 @@
 
 ## 执行与故障证据
 
+两版权方的 18 项跨模块验收已分别自然完成：两项主链、两项网眼未知取链恢复、五项预览/输入/任务驱动、五项隔离/权限/请求别名及四项 SDK 创建丢响应。原 SDK 故障四变体等待实际租约和 Beat（1,206.24 秒），没有修改时钟或缩短生产租约。`790fe0f` 的网眼可选名称修正后，完整版权方回归 233 项通过；只有持久化的真实创建 ID 回执允许精确回读省略可选名称，未知历史匹配仍要求稳定名称。
+
 `backend/tests/modules/builds/test_execution_tasks.py` 从持久 outbox 逐个推进依赖。素材本地映射核实后创建 CTA、Campaign、Ad Group、两条不同文案的 SP，然后通过官方 GET 接口回读。正常流程共有 5 次 create（包含 CTA），三层广告均为 ENABLE。
 
 远端 Campaign 已创建但响应丢失时，记录 UNKNOWN；模拟原租约确已过期后，真实恢复服务通过 GET 找回 ID，再继续其余广告。创建次数仍是 5 次。查询返回空时只发生 CTA 与 Campaign 两次 create，Campaign 保持 UNKNOWN，任务为 NEEDS_REVIEW；不会循环核查或发出第二次 create。
@@ -37,7 +39,7 @@
 
 ## 最终验收与外部条件
 
-最新代码继续进行统一 CI、完整故障场景和容量汇总查询复验。已完成的 100,000 账户目录、200,000 Campaign / 600,000 Group / 1,200,000 Ad 冻结计划和 10,200,000 执行步骤有实际数据库记录；最终性能与恢复副本的证据由[容量记录](capacity.md)单独给出，不能解释为已创建真实广告。
+集成 `3e72e94` 的[完整七项 CI](https://github.com/yaotingfeng/tiktok-ad-automation/actions/runs/34316838207)已全部通过，包括模块、跨模块验收、两组故障恢复、真实后端浏览器、前端与镜像。后续的网眼可选名称修正、第四项浏览器验收和容量查询优化仍需核对最终提交 CI。已完成的 100,000 账户目录、200,000 Campaign / 600,000 Group / 1,200,000 Ad 冻结计划和 10,200,000 执行步骤有实际数据库记录；最终性能与恢复副本的证据由[容量记录](capacity.md)单独给出，不能解释为已创建真实广告。
 
 Linux prefork 硬截止测试位于 `test_prefork_deadline.py`：官方 SDK 连接本地停滞 HTTP 服务，由实际 Celery prefork 硬截止终止子进程，再验证 UNKNOWN、保留请求和无重复 POST。macOS 跳过不算通过，Linux CI 结果单独核对。
 

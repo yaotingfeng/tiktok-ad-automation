@@ -1,8 +1,8 @@
 {
   "complete": true,
-  "seconds": 2.321,
+  "seconds": 1.128,
   "schema": {
-    "migration": "0013_dispatch_expansion_index",
+    "migration": "0014_recovery_candidates",
     "rows": {
       "account_capability_asset": 0,
       "account_capability_job": 0,
@@ -81,7 +81,7 @@
       "user": 1
     }
   },
-  "archive_bytes": 298896,
+  "archive_bytes": 300278,
   "credential_decryption": "passed with original synthetic key",
   "material_object_metadata": "preserved; object storage itself was not exercised",
   "pending_dispatch": "preserved without starting any consumer",
