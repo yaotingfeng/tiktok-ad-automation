@@ -231,3 +231,22 @@ def test_other_tenant_due_expansion_gets_a_yield_after_one_page(submitted):
     done, count, revision, dispatch, _ = snapshot(case)
     assert not done and 0 < count <= 100
     assert revision == 1 and dispatch != identity
+
+
+def test_actual_other_tenant_probe_keeps_partial_index_with_generic_plan(submitted):
+    from tests.jobs.test_expansion_index import (
+        assert_prepared_index,
+        capture_expansion_queries,
+    )
+
+    case, _ = submitted
+    captured = []
+    remove = capture_expansion_queries(case.database_engine, captured)
+    try:
+        deliver(case)
+    finally:
+        remove()
+    assert captured
+    assert_prepared_index(
+        case.database_engine, captured[0], case.scope.context.tenant_id
+    )

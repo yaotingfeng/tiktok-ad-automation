@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, NoReturn, cast
 from uuid import UUID, uuid4
 
+from sqlalchemy import literal
 from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session, col, select
 
@@ -191,7 +192,12 @@ def flush_dispatch(limit: int = 100) -> int:
             )
             records = list(
                 session.exec(
-                    pending.where(PendingDispatch.task_name == _EXPANSION_TASK).limit(1)
+                    # A fixed literal preserves the partial-index proof when
+                    # PostgreSQL switches a prepared query to a generic plan.
+                    pending.where(
+                        PendingDispatch.task_name
+                        == literal(_EXPANSION_TASK, literal_execute=True)
+                    ).limit(1)
                 ).all()
             )
             ordinary_slots = slots - len(records)

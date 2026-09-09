@@ -24,6 +24,15 @@ class PendingDispatch(SQLModel, table=True):
             "id",
             postgresql_where=text("published_at IS NULL"),
         ),
+        Index(
+            "ix_dispatch_expansion_pending",
+            "tenant_id",
+            "available_at",
+            "id",
+            postgresql_where=text(
+                "published_at IS NULL AND task_name = 'builds.expand_submission'"
+            ),
+        ),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)

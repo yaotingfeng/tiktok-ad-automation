@@ -5,6 +5,7 @@ from time import monotonic
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import literal
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -116,7 +117,10 @@ def process_submission(
                     select(PendingDispatch.id)
                     .where(
                         PendingDispatch.tenant_id != tenant_id,
-                        PendingDispatch.task_name == TASK_NAME,
+                        # This trusted task constant is the partial-index
+                        # predicate, including in PostgreSQL generic plans.
+                        PendingDispatch.task_name
+                        == literal(TASK_NAME, literal_execute=True),
                         col(PendingDispatch.published_at).is_(None),
                         PendingDispatch.available_at <= datetime.now(UTC),
                     )
