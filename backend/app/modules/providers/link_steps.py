@@ -967,7 +967,7 @@ def run_link_item(
         )
         if (
             kind == "wangyan"
-            and code != "provider_rejected"
+            and code not in {"provider_rejected", "config_conflict"}
             and (
                 work.get("active_effect")
                 or work.get("uncertain_effect")

@@ -483,3 +483,24 @@ def test_known_receipt_checkpoint_failure_remains_read_recoverable(
     assert item.status == "result_unknown", item.resolved
     assert finish(workflow).status == "ready"
     assert failures == [True] and len(writes(workflow)) == 1
+
+
+def test_known_remote_config_conflict_is_reported_without_recreate(workflow):
+    while not writes(workflow):
+        advance(workflow)
+    workflow[-1].rows[0]["chapter_index"] = 2
+    item = advance(workflow)
+    assert item.status == "config_conflict", item.resolved
+    assert item.resolved["error_code"] == "config_conflict"
+    calls = len(workflow[-1].calls)
+    advance(workflow)
+    assert len(workflow[-1].calls) == calls and len(writes(workflow)) == 1
+    with Session(workflow[0]) as session:
+        assert (
+            session.exec(
+                select(ProviderEffect).where(ProviderEffect.step == "wy_receipt")
+            )
+            .one()
+            .remote_id
+            == "901"
+        )
