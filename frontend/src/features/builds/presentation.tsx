@@ -144,6 +144,7 @@ const reasonLabels: Record<string, string> = {
   currency_mismatch: "账户币种与策略不一致",
   materials_missing: "未匹配到可用素材",
   material_unavailable: "素材暂不可用于此账户",
+  material_refresh_required: "正在重新核实目标账户的视频与封面",
   cover_pending: "正在准备目标账户的视频封面",
   cover_result_unknown: "封面上传结果待核实，请核查原任务，勿重复上传",
   cover_permission_unverified: "当前连接的封面读写权限尚未核实",

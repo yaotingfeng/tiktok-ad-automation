@@ -7,6 +7,7 @@
 - [本地运行与 HTTPS 部署](docs/runbooks/bootstrap-deployment.md)
 - [工程版本基线](docs/engineering-baseline.md)
 - [整体设计](docs/superpowers/specs/2026-09-08-tiktok-00-overall-design.md)
+- [功能、页面与实际验收截图](docs/acceptance/functional-delivery.md)
 
 本地启动先复制 `.env.example` 为 `.env` 并填写独立开发环境。凭据不提交。应用可在未配置 TikTok App 时启动登录与回调入口；真实授权、版权方和广告操作须另有实际联调证据。
 

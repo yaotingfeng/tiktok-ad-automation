@@ -37,6 +37,8 @@ docker compose -f compose.yml -f compose.staging.yml exec -T worker celery -A ap
 docker compose -f compose.yml -f compose.staging.yml logs --tail 100 worker beat
 ```
 
+长时间等待的广告会在发送前重新检查视频和封面。若广告本身从未发送，但封面上传结果未知，任务可显示本地失败；用户重试该广告时，系统先对原封面任务进行只读核查，已有 ID 优先 GET，不能直接重复上传。仍有歧义则保持待核实。已经成功的素材准备历史和已创建广告不会因此重开。
+
 ## 备份与恢复
 
 备份必须包含 PostgreSQL、原件对象存储和独立保管的 `CONNECTION_ENCRYPTION_KEY`。数据库备份中的密文凭据需要同一加密密钥才能解开。保存备份完成时间、应用 SHA/镜像 digest、Alembic head、对象备份位置；归档保存在受控存储，不提交到 Git。
