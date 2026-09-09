@@ -196,8 +196,13 @@ def submit_preview(
     return SubmissionReceipt(submission_id=existing.id, status=existing.status)
 
 
+# Preserve correlation even before freshly generated plan tables are analyzed.
+# Without these optimizer boundaries PostgreSQL can repeatedly join every ad to
+# every group in the preview, or materialize all steps in a large submission.
 BLUEPRINTS = """
-WITH candidates AS (
+WITH unit_groups AS MATERIALIZED (
+ SELECT id FROM planned_group WHERE tenant_id=:tenant AND preview_id=:preview AND unit_id=:unit
+), candidates AS (
  SELECT 0 priority, 'MATERIAL:'||m.material_id k, NULL::text parent,
  'MATERIAL' kind, NULL::uuid group_id, NULL::uuid ad_id, m.material_id
  FROM preview_group_material m WHERE m.tenant_id=:tenant AND m.preview_id=:preview AND m.drama_id=:drama
@@ -205,18 +210,20 @@ WITH candidates AS (
  UNION ALL SELECT 2,'CAMPAIGN',NULL,'CAMPAIGN',NULL,NULL,NULL
  UNION ALL SELECT 3,'READBACK:CAMPAIGN','CAMPAIGN','READBACK',NULL,NULL,NULL
  UNION ALL SELECT 4,'ADGROUP:'||g.id,'CAMPAIGN','ADGROUP',g.id,NULL,NULL
- FROM planned_group g WHERE g.tenant_id=:tenant AND g.preview_id=:preview AND g.unit_id=:unit
+ FROM unit_groups g
  UNION ALL SELECT 5,'READBACK:ADGROUP:'||g.id,'ADGROUP:'||g.id,'READBACK',g.id,NULL,NULL
- FROM planned_group g WHERE g.tenant_id=:tenant AND g.preview_id=:preview AND g.unit_id=:unit
+ FROM unit_groups g
  UNION ALL SELECT 6,'AD:'||a.id,'ADGROUP:'||g.id,'AD',g.id,a.id,NULL
- FROM planned_ad a JOIN planned_group g ON g.tenant_id=a.tenant_id AND g.preview_id=a.preview_id AND g.id=a.group_id
- WHERE g.tenant_id=:tenant AND g.preview_id=:preview AND g.unit_id=:unit
+ FROM unit_groups g JOIN LATERAL (
+ SELECT id FROM planned_ad WHERE tenant_id=:tenant AND preview_id=:preview AND group_id=g.id OFFSET 0
+ ) a ON true
  UNION ALL SELECT 7,'READBACK:AD:'||a.id,'AD:'||a.id,'READBACK',g.id,a.id,NULL
- FROM planned_ad a JOIN planned_group g ON g.tenant_id=a.tenant_id AND g.preview_id=a.preview_id AND g.id=a.group_id
- WHERE g.tenant_id=:tenant AND g.preview_id=:preview AND g.unit_id=:unit)
+ FROM unit_groups g JOIN LATERAL (
+ SELECT id FROM planned_ad WHERE tenant_id=:tenant AND preview_id=:preview AND group_id=g.id OFFSET 0
+ ) a ON true)
 SELECT * FROM candidates c WHERE NOT EXISTS (
  SELECT 1 FROM execution_step s WHERE s.tenant_id=:tenant AND s.submission_id=:submission
- AND s.step_key=CAST(:unit AS text)||':'||c.k)
+ AND s.unit_id=:unit AND s.step_key=CAST(:unit AS text)||':'||c.k OFFSET 0)
 ORDER BY priority,k LIMIT :limit
 """
 
@@ -369,7 +376,16 @@ def expand_submission(
         # One bounded VALUES statement checks self-reference FKs at statement
         # completion. Parents are either in this page or a committed prior page;
         # deterministic IDs, the locked cursor and rollback semantics are unchanged.
-        SQLAlchemySession.execute(session, insert(ExecutionStep).values(step_rows))
+        # RETURNING enables PostgreSQL insertmanyvalues with a cached one-row
+        # compilation template. Explicit .values(all_rows) recompiles thousands
+        # of bind parameters for every page and defeats the batching benefit.
+        SQLAlchemySession.execute(
+            session,
+            insert(ExecutionStep)
+            .returning(col(ExecutionStep.id))
+            .execution_options(render_nulls=True),
+            step_rows,
+        ).all()
         used += len(step_rows)
     row.updated_at = datetime.now(UTC)
     session.add(row)

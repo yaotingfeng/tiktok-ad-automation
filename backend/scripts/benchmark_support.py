@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import socket
 from collections import Counter
 from collections.abc import Iterator
@@ -25,7 +26,7 @@ from uuid import UUID, uuid4
 import httpx
 from cryptography.fernet import Fernet
 from redis import Redis
-from sqlalchemy import func, insert
+from sqlalchemy import func, insert, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session, col, select
@@ -34,6 +35,7 @@ from urllib3.response import HTTPResponse
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.credentials import encrypt_credentials
+from app.jobs.celery_app import celery_app
 from app.models import User
 from app.modules.accounts.capabilities import (
     process_capability,
@@ -64,6 +66,7 @@ from app.modules.builds.previews import (
 from app.modules.builds.scene_job_models import SceneJob
 from app.modules.builds.scene_jobs import ensure_scene_preparation, process_scene_job
 from app.modules.builds.submissions import (
+    BLUEPRINTS,
     expand_submission,
     get_submission,
     submit_preview,
@@ -546,7 +549,8 @@ def bootstrap(
         units=iterations,
         seconds=perf_counter() - started,
         configured_age_seconds=settings.BC_CAPABILITY_MAX_AGE_SECONDS,
-        minimum_default_cadence_seconds=iterations * 5,
+        minimum_default_cadence_seconds=iterations
+        * float(celery_app.conf.beat_schedule["flush-dispatch"]["schedule"]),
     )
     started = perf_counter()
     for number in range(target_count):
@@ -801,6 +805,42 @@ def run_scenario(
                 preview_id=preview_id,
                 request_id=uuid4(),
             )
+        # Observe the real expansion plan on newly written tables, before relying
+        # on autovacuum statistics. Only the JSON plan is retained, never rows.
+        with Session(engine) as session:
+            first = session.exec(
+                select(BuildUnit)
+                .where(BuildUnit.preview_id == preview_id)
+                .order_by(col(BuildUnit.id))
+                .limit(1)
+            ).one()
+            plan = SASession.execute(
+                session,
+                text("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + BLUEPRINTS),
+                {
+                    "tenant": scope.context.tenant_id,
+                    "submission": receipt.submission_id,
+                    "preview": preview_id,
+                    "unit": first.id,
+                    "drama": first.drama_id,
+                    "limit": 100,
+                },
+            ).scalar_one()
+        # All source identities are synthetic; redact them anyway to keep the
+        # committed query plan reusable as infrastructure evidence only.
+        redacted = json.loads(
+            re.sub(
+                r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}",
+                "synthetic-id",
+                json.dumps(plan),
+            )
+        )
+        recorder.progress(
+            "expansion_query_plan",
+            execution_ms=plan[0]["Execution Time"],
+            shared_hit_blocks=plan[0]["Plan"]["Shared Hit Blocks"],
+            plan=redacted,
+        )
         calls = 0
         while True:
             with Session(engine) as session, session.begin():

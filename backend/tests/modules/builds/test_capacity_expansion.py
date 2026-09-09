@@ -61,3 +61,27 @@ def test_bounded_expansion_inserts_one_statement_per_page_and_rolls_back(
         session, context=context, submission_id=receipt.submission_id
     )
     assert session.exec(select(func.count()).select_from(ExecutionStep)).one() == before
+
+
+def test_step_pages_reuse_compiled_insert_instead_of_rebuilding_all_parameters(
+    session, context, frozen
+):
+    receipt = submissions.submit_preview(
+        session, context=context, preview_id=frozen, request_id=uuid4()
+    )
+    cache_hits = []
+
+    def record(_c, _cur, statement, _p, execution_context, _many):
+        if statement.startswith("INSERT INTO execution_step"):
+            cache_hits.append(execution_context.cache_hit.name)
+
+    connection = session.connection()
+    event.listen(connection, "before_cursor_execute", record)
+    try:
+        for _ in range(4):
+            submissions.expand_submission(
+                session, context=context, submission_id=receipt.submission_id, limit=10
+            )
+    finally:
+        event.remove(connection, "before_cursor_execute", record)
+    assert len(cache_hits) == 4 and "CACHE_HIT" in cache_hits

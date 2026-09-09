@@ -15,6 +15,7 @@ import os
 import platform
 import re
 import resource
+import subprocess
 import sys
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -188,9 +189,17 @@ class Recorder:
                 "platform": platform.platform(),
                 "python": platform.python_version(),
                 "cpu_count": os.cpu_count(),
+                "machine": platform.machine(),
             },
             "phases": {},
             "complete": False,
+            "source_revision": subprocess.run(
+                ["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+            ).stdout.strip(),
+            "source_dirty": subprocess.run(
+                ["git", "diff", "--quiet"], check=False, capture_output=True
+            ).returncode
+            != 0,
         }
 
     def save(self) -> None:
@@ -211,7 +220,11 @@ class Recorder:
         self.save()
         print(  # noqa: T201 -- bounded benchmark progress, never credentials or business rows.
             json.dumps(
-                {"phase": phase, **metrics, "peak_rss_bytes": rss_bytes()},
+                {
+                    "phase": phase,
+                    **{key: value for key, value in metrics.items() if key != "plan"},
+                    "peak_rss_bytes": rss_bytes(),
+                },
                 sort_keys=True,
             ),
             flush=True,
@@ -241,6 +254,15 @@ def run_benchmark(
             recorder.report["environment"]["postgresql"] = connection.scalar(
                 text("SHOW server_version")
             )
+            recorder.report["environment"]["postgresql_settings"] = [
+                dict(row)
+                for row in connection.execute(
+                    text(
+                        "SELECT name,setting,unit FROM pg_settings WHERE name IN "
+                        "('shared_buffers','work_mem','max_connections','jit','max_parallel_workers_per_gather') ORDER BY name"
+                    )
+                ).mappings()
+            ]
     recorder.report["complete"] = True
     recorder.save()
     return recorder.report
