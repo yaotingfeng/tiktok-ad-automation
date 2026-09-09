@@ -22,7 +22,7 @@ Unknown Wangyan business error codes are still treated as rejection, not guessed
 
 ## Schema and verification
 
-`0016_provider_session_refresh` adds a tenant/connection-bound refresh record with a candidate ciphertext, phase, lease, attempts, due time and discovered application facts. The composite foreign key cascades on connection deletion. No token, password, candidate ciphertext or new refresh field appears in the public connection DTO. The development branch initially uses parent `0014_recovery_candidates`; integration must attach it after the separately owned `0015` migration.
+`0016_provider_session_refresh` adds a tenant/connection-bound refresh record with a candidate ciphertext, phase, lease, attempts, due time and discovered application facts. The composite foreign key cascades on connection deletion. No token, password, candidate ciphertext or new refresh field appears in the public connection DTO. The integrated migration follows `0015_username_auth`, forming a single migration head.
 
 Real PostgreSQL tests: `backend/tests/modules/providers/test_auto_relogin.py` covers both providers, same-connection contention and cross-tenant rejection, lock-free HTTP, stale/disabled/password/actor fencing, lost-dispatch repair, bounded backoff, original application generation, changed application configuration, unknown save recovery and non-replay of unknown generation. The initial expiry expectation, continuation-cadence expectation, initial-password classification, transient-outage cooldown, candidate-session expiry and worker soft-deadline recovery were observed failing before implementation, then passed.
 

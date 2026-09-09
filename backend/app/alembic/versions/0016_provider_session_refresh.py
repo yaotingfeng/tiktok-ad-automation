@@ -5,7 +5,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "0016_provider_session_refresh"
-down_revision = "0014_recovery_candidates"
+down_revision = "0015_username_auth"
 branch_labels = None
 depends_on = None
 
