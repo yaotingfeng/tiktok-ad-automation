@@ -298,7 +298,12 @@ class WangyanClient:
             raise failure("lookup_incomplete")
         items = []
         for row in rows:
-            if _comparable(row) == (self.application_id, drama_id, "tiktok", episode):
+            app, drama, platform, chapter = _comparable(row)
+            if (app, drama) != (self.application_id, drama_id):
+                # Both are explicit server filters. A response outside that scope
+                # cannot establish absence and authorize creation in this scope.
+                raise failure("lookup_incomplete")
+            if (platform, chapter) == ("tiktok", episode):
                 items.append(_link(row))
         complete = state["page"] * PAGE_SIZE >= total
         next_cursor = None

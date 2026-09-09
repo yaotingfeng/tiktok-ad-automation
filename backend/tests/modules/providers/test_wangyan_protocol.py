@@ -78,13 +78,11 @@ def test_full_history_cursor_preserves_dates_total_and_every_observed_identity()
     assert requests[0].url.params["end"] == requests[1].url.params["end"]
 
 
-def test_candidates_require_exact_scope_but_observation_covers_filtered_rows():
+def test_candidates_filter_platform_and_episode_within_exact_requested_scope():
     api = client(
         lambda request: reply(
             [
                 row(1),
-                row(2, app="other.app"),
-                row(3, drama_id="other-drama"),
                 row(4, promote_platform="facebook"),
                 row(5, chapter_index=1),
             ]
@@ -92,11 +90,17 @@ def test_candidates_require_exact_scope_but_observation_covers_filtered_rows():
     )
     result = api.find_existing("opaque-drama", {"episode": 2}, None)
     assert [item["remote_id"] for item in result["items"]] == ["1"]
-    assert (
-        result["observed_ids"] == ["1", "2", "3", "4", "5"]
-        and result["complete"] is True
-    )
+    assert result["observed_ids"] == ["1", "4", "5"] and result["complete"] is True
     assert result["items"][0]["promote_name"] == "stable-fixture-name"
+
+
+@pytest.mark.parametrize("changes", [{"app": "other.app"}, {"drama_id": "other-drama"}])
+def test_response_outside_explicit_scope_cannot_prove_requested_link_absence(changes):
+    api = client(lambda request: reply([row(1, **changes)]))
+    with pytest.raises(
+        DomainError, check=lambda error: error.code == "lookup_incomplete"
+    ):
+        api.find_existing("opaque-drama", {"episode": 2}, None)
 
 
 @pytest.mark.parametrize(
