@@ -16,6 +16,7 @@ import { CopyField } from "@/features/providers/presentation"
 import { normalizeDecimal } from "@/features/strategies/validation"
 import { ManagementSheet } from "@/features/tenants/ManagementSheet"
 import {
+  canManage,
   Pager,
   RequestError,
   ServerTable,
@@ -39,6 +40,8 @@ export function PreviewWorkspace() {
   if (!tenantId || !scope?.bcId || !bc || !previewId)
     return (
       <WorkspaceEmpty
+        tenantId={tenantId}
+        canConnect={canManage(scope?.role)}
         title="请先选择有效的 BC"
         description="冻结预览属于创建时的租户与 BC。"
       />
@@ -66,6 +69,7 @@ export function BuildPreviewPanel({
   write: boolean
   onSubmit?: PreviewSubmit
 }) {
+  const { scope } = useTenantScope()
   const [tab, setTab] = useState("dramas"),
     [dramaId, setDramaId] = useState<string | undefined>(),
     [unit, setUnit] = useState<PreviewUnit | null>(null),
@@ -100,6 +104,10 @@ export function BuildPreviewPanel({
   if (!current || current.bc_id !== bcId)
     return (
       <WorkspaceEmpty
+        tenantId={tenantId}
+        canConnect={canManage(scope?.role)}
+        reason="bc-mismatch"
+        resourceBcId={current?.bc_id}
         title="当前 BC 与预览不一致"
         description="请切换到预览所属 BC 查看冻结范围。"
       />

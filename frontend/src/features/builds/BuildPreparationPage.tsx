@@ -22,6 +22,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { FilterSelect } from "@/features/accounts/presentation"
 import {
+  canManage,
   isForbidden,
   Pager,
   RequestError,
@@ -54,6 +55,8 @@ export function BuildPreparationPage() {
   if (!tenantId || !scope?.bcId || !bc || !draftId)
     return (
       <WorkspaceEmpty
+        tenantId={tenantId}
+        canConnect={canManage(scope?.role)}
         title="请先选择有效的 BC"
         description="草稿属于创建时的租户与 BC。请通过顶栏选择。"
       />
@@ -79,6 +82,7 @@ function Preparation({
   draftId: string
   write: boolean
 }) {
+  const { scope } = useTenantScope()
   const queryClient = useQueryClient(),
     navigate = useNavigate(),
     search = useRouterState({
@@ -349,6 +353,10 @@ function Preparation({
   if (!current || !scoped)
     return (
       <WorkspaceEmpty
+        tenantId={tenantId}
+        canConnect={canManage(scope?.role)}
+        reason="bc-mismatch"
+        resourceBcId={current?.bc_id}
         title="当前 BC 与草稿不一致"
         description="请返回草稿所属 BC 查看，或在当前 BC 新建搭建。"
       />

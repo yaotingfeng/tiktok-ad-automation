@@ -19,7 +19,12 @@ import {
   Identifier,
 } from "@/features/accounts/presentation"
 import { DirectoryPicker } from "@/features/tenants/DirectoryPicker"
-import { isForbidden, Pager, RequestError } from "@/features/tenants/shared"
+import {
+  canManage,
+  isForbidden,
+  Pager,
+  RequestError,
+} from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
 import {
@@ -39,6 +44,8 @@ export function SubmissionListPage() {
   if (!tenantId || !scope?.bcId || !bc)
     return (
       <WorkspaceEmpty
+        tenantId={tenantId}
+        canConnect={canManage(scope?.role)}
         title="请先选择有效的 BC"
         description="搭建任务按当前租户与 BC 展示。"
       />

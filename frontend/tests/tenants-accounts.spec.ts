@@ -643,7 +643,9 @@ test("ordinary entry resolves an authorized tenant with scoped navigation and no
     "租户甲",
   )
   await expect(
-    page.getByRole("link", { name: "成员管理", exact: true }),
+    page
+      .getByRole("navigation", { name: "租户管理" })
+      .getByRole("link", { name: "成员管理", exact: true }),
   ).toHaveAttribute("href", `/tenants/${A}/members`)
   await expect(
     page.getByRole("link", { name: "素材库", exact: true }),
@@ -1822,4 +1824,134 @@ for (const leaveBy of ["filter", "page"] as const)
     expect(requests.filter((request) => request.method !== "GET")).toHaveLength(
       0,
     )
+  })
+
+for (const width of [1440, 390])
+  test(`platform navigation requires explicit tenant entry and keeps BC-independent tools usable at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 })
+    const { requests } = await boundary(page)
+    await page.route("**/api/tenants/*/tiktok/configuration", (route) =>
+      route.fulfill({
+        json: {
+          configured: false,
+          status: "NOT_CONFIGURED",
+          missing_fields: [
+            "TIKTOK_APP_ID",
+            "TIKTOK_APP_SECRET",
+            "TIKTOK_REDIRECT_URI",
+          ],
+          code: "tiktok_app_not_configured",
+        },
+      }),
+    )
+    await page.route("**/api/tenants/*/tiktok/connections?*", (route) =>
+      route.fulfill({ json: { items: [], next_cursor: null } }),
+    )
+    await page.route("**/api/tenants/*/strategies?*", (route) =>
+      route.fulfill({ json: { items: [], next_cursor: null } }),
+    )
+    await page.route("**/api/tenants/*/providers/connections?*", (route) =>
+      route.fulfill({ json: { items: [], next_cursor: null } }),
+    )
+    await page.goto("/")
+    await expect(page).toHaveURL("/platform/tenants")
+    await expect(
+      page.getByRole("link", { name: "投放策略", exact: true }),
+    ).toHaveCount(0)
+    await expect(
+      page.getByText(
+        "请从租户列表点击“进入租户”，再使用该租户的投放与管理功能。",
+        { exact: true },
+      ),
+    ).toBeVisible()
+    expect(requests.filter((r) => r.path.includes("/bcs"))).toHaveLength(0)
+    await page
+      .getByRole("row", { name: new RegExp(A) })
+      .getByRole("button", { name: "进入租户", exact: true })
+      .click()
+    await expect(page).toHaveURL(`/tenants/${A}/builds/new`)
+    const main = page.getByRole("main")
+    await expect(main.getByText("尚未接入租户", { exact: true })).toHaveCount(0)
+    await main
+      .getByRole("link", { name: "查看账户与授权", exact: true })
+      .click()
+    await expect(
+      page.getByText("等待配置开发者应用", { exact: true }),
+    ).toBeVisible()
+    await expect(
+      page.getByRole("button", { name: "新增授权", exact: true }),
+    ).toBeDisabled()
+    await page.goto(`/tenants/${A}/builds/new`)
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true)
+    await expect(
+      main.getByRole("heading", { name: "尚未连接 TikTok BC", exact: true }),
+    ).toBeVisible()
+    await page.screenshot({
+      path: test.info().outputPath(`tenant-no-bc-${width}.png`),
+      fullPage: true,
+      animations: "disabled",
+    })
+    await main.getByRole("link", { name: "投放策略", exact: true }).click()
+    await expect(page).toHaveURL(`/tenants/${A}/strategies`)
+    await page.getByRole("link", { name: "新建策略", exact: true }).click()
+    await expect(page.getByLabel("策略名称", { exact: true })).toBeEditable()
+    await page.goto(`/tenants/${A}/builds/new`)
+    await main.getByRole("link", { name: "版权方连接", exact: true }).click()
+    await page.getByRole("button", { name: "新增连接", exact: true }).click()
+    await expect(
+      page.getByRole("dialog", { name: "新增版权方连接", exact: true }),
+    ).toBeVisible()
+    await page.goto(`/tenants/${A}/builds/new`)
+    await main.getByRole("link", { name: "成员管理", exact: true }).click()
+    await page.getByRole("button", { name: "添加成员", exact: true }).click()
+    await expect(
+      page.getByRole("dialog", { name: "添加成员", exact: true }),
+    ).toBeVisible()
+    expect(requests.filter((r) => r.method !== "GET")).toHaveLength(0)
+  })
+
+for (const destination of [
+  "materials",
+  "build-tasks",
+  `build-drafts/${U}`,
+  `build-previews/${U}`,
+  `build-tasks/${U}`,
+])
+  test(`tenant BC empty state retains context for ${destination}`, async ({
+    page,
+  }) => {
+    await boundary(page)
+    await page.goto(`/tenants/${A}/${destination}`)
+    const main = page.getByRole("main")
+    await expect(main.getByText("尚未接入租户", { exact: true })).toHaveCount(0)
+    await expect(
+      main.getByRole("link", { name: "查看账户与授权", exact: true }),
+    ).toHaveAttribute("href", `/tenants/${A}/accounts?tab=connections`)
+    await expect(
+      main.getByRole("link", { name: "投放策略", exact: true }),
+    ).toBeVisible()
+  })
+
+for (const role of ["viewer", "operator"] as const)
+  test(`${role} BC empty state offers read access without admin shortcuts`, async ({
+    page,
+  }) => {
+    await boundary(page, { platform: false, role })
+    await page.goto(`/tenants/${A}/materials`)
+    const main = page.getByRole("main")
+    await expect(
+      main.getByRole("link", { name: "成员管理", exact: true }),
+    ).toHaveCount(0)
+    await expect(
+      main.getByRole("link", { name: "投放策略", exact: true }),
+    ).toBeVisible()
+    await expect(
+      main.getByText(/请联系租户管理员完成 TikTok 授权/),
+    ).toBeVisible()
   })

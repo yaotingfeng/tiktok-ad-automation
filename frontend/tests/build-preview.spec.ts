@@ -408,3 +408,25 @@ test("冻结预算保持长Decimal有效位并只移除小数尾零", async ({ p
   ).toBeVisible()
   expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
 })
+
+test("BC mismatch preserves tenant identity and directs to the frozen BC", async ({
+  page,
+}) => {
+  const { BC2 } = await import("./utils/buildsBoundary")
+  await buildsBoundary(page)
+  await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC2}`)
+  await expect(
+    page.getByRole("heading", { name: "当前 BC 与预览不一致" }),
+  ).toBeVisible()
+  await expect(page.getByText("尚未接入租户", { exact: true })).toHaveCount(0)
+  await expect(
+    page.getByText("尚未连接 TikTok BC", { exact: true }),
+  ).toHaveCount(0)
+  await page
+    .getByRole("link", { name: "切换到资源所属 BC", exact: true })
+    .click()
+  await expect(page).toHaveURL(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
+  await expect(
+    page.getByText("6 Campaign · 18 Ad Group · 36 Ad", { exact: true }),
+  ).toBeVisible()
+})

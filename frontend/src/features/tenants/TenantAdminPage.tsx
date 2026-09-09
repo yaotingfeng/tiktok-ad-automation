@@ -161,7 +161,7 @@ export function TenantAdminPage() {
         <div className="flex flex-col gap-2">
           <h1 className="workspace-title">平台租户管理</h1>
           <p className="text-sm text-muted-foreground">
-            开通租户、维护状态，并进入租户工作台。
+            请从租户列表点击“进入租户”，再使用该租户的投放与管理功能。
           </p>
         </div>
         <div className="flex gap-2">

@@ -63,7 +63,9 @@ function ScopedLayout() {
           path: `${prefix}/strategies`,
         },
       ]
-    : undefined
+    : platform
+      ? []
+      : undefined
   const managementItems = tenantId
     ? [
         { icon: Monitor, title: "账户与授权", path: `${prefix}/accounts` },
@@ -72,7 +74,9 @@ function ScopedLayout() {
           ? [{ icon: Users, title: "成员管理", path: `${prefix}/members` }]
           : []),
       ]
-    : undefined
+    : platform
+      ? []
+      : undefined
   return (
     <WorkspaceShell
       user={user}

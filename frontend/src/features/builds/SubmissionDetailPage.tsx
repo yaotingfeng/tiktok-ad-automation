@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { displayTime, Identifier } from "@/features/accounts/presentation"
 import { normalizeDecimal } from "@/features/strategies/validation"
-import { isForbidden, RequestError } from "@/features/tenants/shared"
+import { canManage, isForbidden, RequestError } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
 import {
@@ -38,6 +38,8 @@ export function SubmissionDetailPage() {
   if (!tenantId || !scope?.bcId || !bc || !id)
     return (
       <WorkspaceEmpty
+        tenantId={tenantId}
+        canConnect={canManage(scope?.role)}
         title="请先选择有效的 BC"
         description="搭建任务属于提交时的租户与 BC。"
       />
@@ -66,6 +68,7 @@ function Detail({
   submissionId: string
   write: boolean
 }) {
+  const { scope } = useTenantScope()
   const navigate = useNavigate(),
     client = useQueryClient(),
     search = useRouterState({
@@ -169,6 +172,10 @@ function Detail({
   if (!data || data.bc_id !== bcId)
     return (
       <WorkspaceEmpty
+        tenantId={tenantId}
+        canConnect={canManage(scope?.role)}
+        reason="bc-mismatch"
+        resourceBcId={data?.bc_id}
         title="当前 BC 与任务不一致"
         description="请切换到提交时的 BC 查看任务。"
       />

@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { canManage } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
 import { AssetDetails } from "./AssetDetails"
@@ -26,6 +27,8 @@ export function MaterialsPage() {
   if (!tenantId || !scope?.bcId || !bc)
     return (
       <WorkspaceEmpty
+        tenantId={tenantId}
+        canConnect={canManage(scope?.role)}
         title="请先选择有效的 BC"
         description={
           bcPending

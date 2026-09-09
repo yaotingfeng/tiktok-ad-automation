@@ -47,16 +47,18 @@ export function AppSidebar({
         <WorkspaceBrand />
       </SidebarHeader>
       <SidebarContent className="gap-5 px-2">
-        <Main label="投放工作" items={workItems} />
-        <Main
-          label="租户管理"
-          items={
-            managementItems ??
-            defaultManagementItems.filter(
-              (item) => item.path !== "/members" || user?.is_superuser,
-            )
-          }
-        />
+        {workItems.length > 0 && <Main label="投放工作" items={workItems} />}
+        {managementItems?.length !== 0 && (
+          <Main
+            label="租户管理"
+            items={
+              managementItems ??
+              defaultManagementItems.filter(
+                (item) => item.path !== "/members" || user?.is_superuser,
+              )
+            }
+          />
+        )}
       </SidebarContent>
       <SidebarFooter className="gap-3 px-2 pb-3">
         {user?.is_superuser && (
