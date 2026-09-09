@@ -120,12 +120,13 @@ def test_hard_kill_cannot_replay_an_armed_official_create(
             assert received.wait(10), "official SDK did not reach the local transport"
             assert requests[0][1] == "REQUEST_ARMED" and requests[0][2]
             deadline = time.monotonic() + 12
-            while (
-                worker.pool._pool._pool[0].pid == original_pid
-                and time.monotonic() < deadline
-            ):
+            replacement = []
+            while time.monotonic() < deadline:
+                replacement = [p.pid for p in tuple(worker.pool._pool._pool)]
+                if replacement and original_pid not in replacement:
+                    break
                 time.sleep(0.05)
-            assert worker.pool._pool._pool[0].pid != original_pid, (
+            assert replacement and original_pid not in replacement, (
                 "hard deadline did not replace the blocked child"
             )
             assert time.monotonic() - started < 15
