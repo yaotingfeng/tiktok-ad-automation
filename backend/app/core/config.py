@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     DATABASE_URL: PostgresDsn = Field(repr=False)
 
     REDIS_URL: str = Field(default="redis://localhost:6379/0", repr=False)
+    # Local broker publishing only; external API admission remains per request.
+    DISPATCH_MAX_ROUNDS: int = Field(default=20, ge=1, le=100)
+    DISPATCH_TIME_BUDGET_SECONDS: float = Field(default=1.0, gt=0, le=5)
     TIKTOK_APP_ID: str = ""
     TIKTOK_APP_SECRET: str = Field(default="", repr=False)
     TIKTOK_REDIRECT_URI: str = ""

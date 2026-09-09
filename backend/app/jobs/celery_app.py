@@ -83,7 +83,7 @@ celery_app.conf.update(
         },
         "flush-dispatch": {
             "task": "jobs.flush_dispatch",
-            "schedule": 5.0,
+            "schedule": 1.0,
             "options": {"queue": "control"},
         },
     },
