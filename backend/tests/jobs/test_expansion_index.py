@@ -2,10 +2,8 @@
 
 # ruff: noqa: F811
 import re
-from pathlib import Path
 
 from alembic import command
-from alembic.config import Config
 from psycopg import sql
 from sqlalchemy import event, inspect, text
 
@@ -116,29 +114,45 @@ def test_actual_priority_query_uses_partial_index_after_prepared_warmup(queues):
     assert_prepared_index(db, captured[0], first.tenant_id)
 
 
-def test_expansion_index_fresh_roundtrip_matches_model(
-    isolated_strategy_database, monkeypatch
-):
-    from app.core.config import settings
+def test_expansion_index_fresh_roundtrip_matches_model(monkeypatch):
+    from tests.migration_database import historical_database
 
-    db, _, _ = isolated_strategy_database
+    with historical_database(monkeypatch, "0012_material_covers") as (db, config):
 
-    def indexes():
-        return {row["name"]: row for row in inspect(db).get_indexes("pending_dispatch")}
+        def indexes():
+            return {
+                row["name"]: row for row in inspect(db).get_indexes("pending_dispatch")
+            }
 
-    actual = indexes()[INDEX]
-    assert actual["column_names"] == ["tenant_id", "available_at", "id"]
-    predicate = actual["dialect_options"]["postgresql_where"]
-    assert "published_at IS NULL" in predicate
-    assert "builds.expand_submission" in predicate
-    backend = Path(__file__).resolve().parents[2]
-    config = Config(str(backend / "alembic.ini"))
-    config.set_main_option("script_location", str(backend / "app/alembic"))
-    monkeypatch.setattr(
-        settings, "DATABASE_URL", db.url.render_as_string(hide_password=False)
-    )
-    command.downgrade(config, "0012_material_covers")
-    assert INDEX not in indexes()
-    command.upgrade(config, "head")
-    assert indexes()[INDEX] == actual
-    command.check(config)
+        assert INDEX not in indexes()
+        with db.begin() as connection:
+            connection.execute(
+                text("""
+                INSERT INTO pending_dispatch
+                    (id, tenant_id, actor_id, task_name, task_key, payload, available_at, attempts)
+                VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(),
+                        'builds.expand_submission', 'historical-expansion', '{}'::jsonb, now(), 0)
+            """)
+            )
+        command.upgrade(config, "0013_dispatch_expansion_index")
+        actual = indexes()[INDEX]
+        assert actual["column_names"] == ["tenant_id", "available_at", "id"]
+        predicate = actual["dialect_options"]["postgresql_where"]
+        assert "published_at IS NULL" in predicate
+        assert "builds.expand_submission" in predicate
+        command.downgrade(config, "0012_material_covers")
+        assert INDEX not in indexes()
+        command.upgrade(config, "0013_dispatch_expansion_index")
+        assert indexes()[INDEX] == actual
+        command.upgrade(config, "head")
+        assert indexes()[INDEX] == actual
+        with db.connect() as connection:
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT count(*) FROM pending_dispatch WHERE task_key='historical-expansion'"
+                    )
+                ).scalar_one()
+                == 1
+            )
+        command.check(config)

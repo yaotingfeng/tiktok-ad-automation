@@ -463,32 +463,103 @@ def test_truncate_keeps_tombstone_and_is_transactional(directory_env):
         assert revision(session, env) == before
 
 
-def test_migration_backfills_live_scope_and_roundtrips(directory_env):
-    from pathlib import Path
+def test_migration_backfills_live_scope_and_roundtrips(monkeypatch):
+    from uuid import uuid4
 
     from alembic import command
-    from alembic.config import Config
+    from sqlalchemy import inspect
 
-    backend = Path(__file__).resolve().parents[4]
-    config = Config(str(backend / "alembic.ini"))
-    config.set_main_option("script_location", str(backend / "app/alembic"))
-    command.downgrade(config, "0006a_unit_dispatch")
-    try:
-        with Session(engine) as session, session.begin():
-            session.execute(
+    from app.core.security import get_password_hash
+    from tests.migration_database import historical_database
+
+    env = {
+        "tenant": uuid4(),
+        "actor": uuid4(),
+        "connection": uuid4(),
+        "bc": "revision-bc",
+        "advertiser": "revision-account",
+    }
+    password_hash = get_password_hash("Historical-fixture-password-123")
+    with historical_database(monkeypatch, "0006a_unit_dispatch") as (db, config):
+        assert "account_directory_revision" not in inspect(db).get_table_names()
+        with db.begin() as connection:
+            # Explicit historical columns: current User has no email attribute.
+            connection.execute(
                 text(
-                    "UPDATE advertiser_account SET currency='EUR' WHERE tenant_id=:tenant"
+                    'INSERT INTO "user" (id,email,hashed_password,is_active,is_superuser) VALUES (:actor, :email, :hash, true, false)'
                 ),
-                directory_env,
+                {
+                    **env,
+                    "email": "historical-actor@example.test",
+                    "hash": password_hash,
+                },
             )
-    finally:
+            connection.execute(
+                text(
+                    "INSERT INTO tenant (id,name,active) VALUES (:tenant,'Historical tenant',true)"
+                ),
+                env,
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO tenant_membership (tenant_id,user_id,role,active) VALUES (:tenant,:actor,'operator',true)"
+                ),
+                env,
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO tiktok_connection (id,tenant_id,status,credential_version) VALUES (:connection,:tenant,'ACTIVE',0)"
+                ),
+                env,
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO tenant_bc (tenant_id,bc_id,name,ownership_conflict) VALUES (:tenant,:bc,'',false)"
+                ),
+                env,
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO advertiser_account (tenant_id,advertiser_id,name,currency,timezone,remote_status,ownership_conflict) VALUES (:tenant,:advertiser,'','USD','UTC','ENABLE',false)"
+                ),
+                env,
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO bc_account_access (tenant_id,bc_id,connection_id,advertiser_id,in_bc,authorized,active,can_upload,can_build,permission_state) VALUES (:tenant,:bc,:connection,:advertiser,true,true,true,false,false,'UNKNOWN')"
+                ),
+                env,
+            )
+
+        # Verify both first upgrade/backfill and an actual historical roundtrip.
+        for cycle in range(2):
+            command.upgrade(config, "0007_directory_revision")
+            with Session(db) as session, session.begin():
+                assert revision(session, env) == 1
+                session.execute(
+                    text(
+                        "UPDATE advertiser_account SET currency=:currency WHERE tenant_id=:tenant"
+                    ),
+                    {**env, "currency": "EUR" if cycle == 0 else "JPY"},
+                )
+                assert revision(session, env) == 2
+            if cycle == 0:
+                command.downgrade(config, "0006a_unit_dispatch")
+                assert "account_directory_revision" not in inspect(db).get_table_names()
+
         command.upgrade(config, "head")
-    with Session(engine) as session, session.begin():
-        assert revision(session, directory_env) == 1
-        session.execute(
-            text(
-                "UPDATE advertiser_account SET currency='JPY' WHERE tenant_id=:tenant"
-            ),
-            directory_env,
-        )
-        assert revision(session, directory_env) == 2
+        command.check(config)
+        with Session(db) as session:
+            assert revision(session, env) == 2
+            actor = session.get(User, env["actor"])
+            assert actor.username == "historical-actor"
+            assert actor.hashed_password == password_hash
+            assert (
+                session.execute(
+                    text(
+                        "SELECT role FROM tenant_membership WHERE tenant_id=:tenant AND user_id=:actor"
+                    ),
+                    env,
+                ).scalar_one()
+                == "operator"
+            )
