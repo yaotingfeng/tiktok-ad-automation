@@ -337,6 +337,12 @@ def _save_receipt(
 
 
 def _mark_uncertain(work: dict[str, Any], effect: ProviderEffect) -> None:
+    if effect.attempt_token is None or effect.status not in {
+        "sending",
+        "result_unknown",
+        "succeeded",
+    }:
+        raise core._error("provider_state_invalid")
     work["uncertain_effect"] = str(effect.id)
     work["uncertain_attempt_token"] = str(effect.attempt_token)
     work.pop("active_effect", None)
@@ -434,6 +440,8 @@ def verified_data(
     work: dict[str, Any],
     config: dict[str, Any],
     application_id: str,
+    *,
+    require_name: bool = False,
 ) -> dict[str, Any]:
     if (
         not isinstance(data, dict)
@@ -456,8 +464,10 @@ def verified_data(
         or core._positive(attribution.get("chapter_index")) != episode
     ):
         raise core._error("config_conflict")
-    if work.get("uncertain_effect") and data.get("promote_name") != work.get(
-        "promote_name"
+    if (
+        work.get("promote_name")
+        and data.get("promote_name") != work["promote_name"]
+        and (require_name or data.get("promote_name") is not None)
     ):
         raise core._error("provider_result_unknown")
     if not data.get("url") or data["url"] != actual.get("jump_url"):
@@ -506,11 +516,34 @@ def advance(
         _create(session, context, item_id, token, work, config, client)
         return None
     if work["stage"] == "verify":
+        direct_receipt = False
+        if work.get("promote_name") and not work.get("uncertain_effect"):
+            # A local publication failure may follow an already verified effect.
+            # Restore its original fence, never interpret it as ordinary history.
+            _mark_uncertain(work, _creation(session, context, item_id, work, config))
         if work.get("uncertain_effect"):
             effect = _recovery_effect(session, context, item_id, work, config)
             known = _known(session, context, effect)
             if known and known != work.get("remote_id"):
                 raise core._error("provider_result_unknown")
+            direct_receipt = (
+                session.exec(
+                    select(ProviderEffect.id)
+                    .where(
+                        ProviderEffect.tenant_id == context.tenant_id,
+                        ProviderEffect.remote_scope_key == scope,
+                        ProviderEffect.step == "wy_receipt",
+                        ProviderEffect.status == "succeeded",
+                        ProviderEffect.remote_id == work.get("remote_id"),
+                        col(ProviderEffect.result)["effect_id"].astext
+                        == str(effect.id),
+                        col(ProviderEffect.result)["attempt"].astext
+                        == str(effect.attempt_token),
+                    )
+                    .limit(1)
+                ).first()
+                is not None
+            )
             session.commit()
         data = _read(
             session,
@@ -520,7 +553,13 @@ def advance(
             work,
             lambda: client.read_link(_identity(work.get("remote_id"))),
         )
-        data = verified_data(data, work, config, application_id)
+        data = verified_data(
+            data,
+            work,
+            config,
+            application_id,
+            require_name=bool(work.get("promote_name")) and not direct_receipt,
+        )
         if work.get("uncertain_effect"):
             effect = _recovery_effect(session, context, item_id, work, config)
             effect.status, effect.remote_id = "succeeded", data["remote_id"]

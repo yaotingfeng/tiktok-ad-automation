@@ -423,14 +423,15 @@ def test_client_cleanup_systemexit_cannot_drop_known_receipt(workflow, monkeypat
     assert finish(workflow).status == "ready" and len(writes(workflow)) == 1
 
 
-def test_unknown_create_exact_read_rechecks_correlated_name(workflow):
+@pytest.mark.parametrize("changed_name", [None, "someone-elses-create"])
+def test_unknown_create_exact_read_rechecks_correlated_name(workflow, changed_name):
     remote = workflow[-1]
     remote.lose_reply = True
     for _ in range(9):
         item = advance(workflow)
         if item.resolved.get("_work", {}).get("stage") == "verify":
             break
-    remote.rows[0]["promote_name"] = "someone-elses-create"
+    remote.rows[0]["promote_name"] = changed_name
     item = advance(workflow)
     assert item.status == "result_unknown"
     assert len(writes(workflow)) == 1
@@ -560,3 +561,41 @@ def test_same_remote_scope_never_creates_for_a_second_preparation(workflow, unkn
         assert item.resolved["error_code"] == "provider_scope_busy"
     else:
         assert remote.calls[-1][2]["id"] == "901"
+
+
+def test_worker_exit_after_remote_commit_recovers_without_any_receipt(workflow):
+    def worker_exit():
+        raise SystemExit("synthetic worker terminated before receiving response")
+
+    workflow[-1].after_post = worker_exit
+    with pytest.raises(SystemExit):
+        finish(workflow)
+    with Session(workflow[0]) as session:
+        effect = session.exec(
+            select(ProviderEffect).where(ProviderEffect.step == "create")
+        ).one()
+        assert effect.status == "sending" and effect.remote_id is None
+        assert not session.exec(
+            select(ProviderEffect).where(ProviderEffect.step == "wy_receipt")
+        ).all()
+    expire_completed_worker_claim(workflow)
+    assert finish(workflow).status == "ready"
+    assert len(writes(workflow)) == 1
+    assert workflow[-1].calls[-1][2]["id"] == "901"
+
+
+def test_direct_known_id_receipt_does_not_require_optional_remote_name(workflow):
+    while not writes(workflow):
+        advance(workflow)
+    workflow[-1].rows[0].pop("promote_name")
+    assert finish(workflow).status == "ready"
+    assert len(writes(workflow)) == 1
+    assert workflow[-1].calls[-1][2]["id"] == "901"
+
+
+def test_direct_known_id_still_rejects_a_nonempty_wrong_name(workflow):
+    while not writes(workflow):
+        advance(workflow)
+    workflow[-1].rows[0]["promote_name"] = "someone-elses-create"
+    assert advance(workflow).status == "result_unknown"
+    assert len(writes(workflow)) == 1
