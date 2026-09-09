@@ -1,0 +1,228 @@
+{
+  "complete": true,
+  "database_bytes": 83201171,
+  "elapsed_seconds": 302.6306454159785,
+  "environment": {
+    "cpu_count": 10,
+    "platform": "macOS-26.3-arm64-arm-64bit-Mach-O",
+    "postgresql": "17.5 (Homebrew)",
+    "python": "3.14.6"
+  },
+  "external_mode": "offline SDK/provider transport doubles; no ad execution",
+  "parameters": {
+    "accounts": 1000,
+    "creative_count": 2,
+    "dramas": 10,
+    "group_size": 10,
+    "materials_per_drama": 30,
+    "seed": 20260908,
+    "target_accounts": 100
+  },
+  "peak_rss_bytes": 169885696,
+  "phases": {
+    "capability": {
+      "configured_age_seconds": 86400,
+      "cumulative_sql_statements": 1847,
+      "minimum_default_cadence_seconds": 155,
+      "seconds": 0.5879160000476986,
+      "units": 31
+    },
+    "directory": {
+      "cumulative_sql_statements": 700,
+      "max_response_bytes": 30624,
+      "ordered_key_digest": "81be0517168dc33ac71acc2e899003588970db2fa49973540e26c050a4eef24b",
+      "p95_seconds": 0.012649583863094449,
+      "page_max": 100,
+      "pages": 10,
+      "rows": 1000,
+      "seconds": 0.10502150002866983
+    },
+    "draft": {
+      "cumulative_sql_statements": 61578,
+      "seconds": 1.8451568752061576,
+      "units": 15
+    },
+    "preview": {
+      "calls": 26,
+      "cumulative_sql_statements": 195250,
+      "seconds": 31.32278912491165,
+      "summary": {
+        "ad_count": 6000,
+        "adgroup_count": 3000,
+        "bc_id": "capacity-bc-t1",
+        "blocked_count": 0,
+        "campaign_count": 1000,
+        "content_digest": "5457e7686e0b5c876fcdb32ad6e42685ce30913fd1ef69f466cd9bf4291843f4",
+        "created_at": "2026-09-09T09:07:26.061520+08:00",
+        "currency": "USD",
+        "daily_budget_sum": "100000.000000000000",
+        "draft_id": "78242a43-5b9f-4645-9498-ccb96b9db1bc",
+        "draft_revision": 1,
+        "error_code": null,
+        "input_issue_count": 0,
+        "preparing_count": 990,
+        "preview_id": "6f6d5351-cb29-4a82-af1b-d708004ca905",
+        "status": "FROZEN",
+        "total_unit_count": 1000
+      }
+    },
+    "preview_pages": {
+      "cumulative_sql_statements": 195300,
+      "max_response_bytes": 36652,
+      "ordered_key_digest": "e4f9da787de5f9e13cae7bd9ce007d4b37aee835e62acf02a77c2eb7e34b959a",
+      "p95_seconds": 0.006759457988664508,
+      "page_max": 100,
+      "pages": 10,
+      "rows": 1000,
+      "seconds": 0.04963458306156099
+    },
+    "preview_progress": {
+      "calls": 20,
+      "cumulative_sql_statements": 165108,
+      "seconds": 24.01785087492317,
+      "units": 774
+    },
+    "runtime": {
+      "cumulative_sql_statements": 218541,
+      "fairness": {
+        "first_round_t1_messages": 5,
+        "measurement": "real fair outbox round and first T2 preview task completion; broker transport captured locally",
+        "t1_backlog": 1574,
+        "t2_first_task_seconds": 0.053946750005707145,
+        "t2_units_after_first_task": 1
+      },
+      "rate_limit": {
+        "claim_released": true,
+        "due_delay_seconds": 1.99789,
+        "inflight_after_release": 0,
+        "next_revision": 1,
+        "recovered_status": "COMPLETE",
+        "recovery_seconds": 2.0834591249004006,
+        "status": "PENDING",
+        "worker_seconds": 0.008960458915680647
+      },
+      "shared_quota": {
+        "configured_app_inflight": 2,
+        "granted": 2,
+        "inflight_after_release": 0,
+        "seconds": 0.002556541934609413,
+        "worker_kind": "concurrent thread clients, shared Redis Lua",
+        "workers": 8
+      }
+    },
+    "scene": {
+      "accounts": 100,
+      "cumulative_sql_statements": 51547,
+      "seconds": 12.68774166610092
+    },
+    "scene_progress": {
+      "accounts": 100,
+      "cumulative_sql_statements": 51547,
+      "seconds": 12.687158500077203
+    },
+    "seed": {
+      "accounts": 1000,
+      "cumulative_sql_statements": 650,
+      "materials": 300,
+      "seconds": 0.22573279100470245
+    },
+    "submission": {
+      "calls": 531,
+      "cumulative_sql_statements": 216995,
+      "seconds": 252.97535504191183,
+      "steps": {
+        "AD": 6000,
+        "ADGROUP": 3000,
+        "CAMPAIGN": 1000,
+        "CTA": 1000,
+        "MATERIAL": 30000,
+        "READBACK": 10000
+      },
+      "summary": {
+        "account_count": 100,
+        "actor_name": "50f3aa8d-c69a-45ed-b5cf-1de9dd147cd4@example.com",
+        "batch_short_id": "6f6d5351cb294a82af1bd708004ca905",
+        "bc_id": "capacity-bc-t1",
+        "created_at": "2026-09-09T09:07:57.443430+08:00",
+        "currency": "USD",
+        "daily_budget_sum": "100000.000000000000",
+        "draft_id": "78242a43-5b9f-4645-9498-ccb96b9db1bc",
+        "drama_count": 10,
+        "excluded": {
+          "ad_count": 0,
+          "adgroup_count": 0,
+          "campaign_count": 0
+        },
+        "excluded_unit_count": 0,
+        "expanded": true,
+        "failed": {
+          "ad_count": 0,
+          "adgroup_count": 0,
+          "campaign_count": 0
+        },
+        "pending": {
+          "ad_count": 6000,
+          "adgroup_count": 3000,
+          "campaign_count": 1000
+        },
+        "planned": {
+          "ad_count": 6000,
+          "adgroup_count": 3000,
+          "campaign_count": 1000
+        },
+        "preview_id": "6f6d5351-cb29-4a82-af1b-d708004ca905",
+        "provider_name": "Synthetic capacity",
+        "recovery": {
+          "can_reconcile": false,
+          "can_retry": false,
+          "reasons": [],
+          "reconcilable_step_count": 0,
+          "retryable_step_count": 0
+        },
+        "stage_counts": {
+          "AD:PENDING": 6000,
+          "ADGROUP:PENDING": 3000,
+          "CAMPAIGN:PENDING": 1000,
+          "CTA:PENDING": 1000,
+          "MATERIAL:PENDING": 30000,
+          "READBACK:PENDING": 10000
+        },
+        "status": "RUNNING",
+        "strategy_label": "Capacity strategy v1",
+        "submission_id": "79e24fe3-73f5-45cc-b3df-7a0b297b1417",
+        "submitted": {
+          "ad_count": 6000,
+          "adgroup_count": 3000,
+          "campaign_count": 1000
+        },
+        "succeeded": {
+          "ad_count": 0,
+          "adgroup_count": 0,
+          "campaign_count": 0
+        },
+        "unknown": {
+          "ad_count": 0,
+          "adgroup_count": 0,
+          "campaign_count": 0
+        },
+        "updated_at": "2026-09-09T09:12:10.346814+08:00"
+      }
+    }
+  },
+  "plan_counts": {
+    "ad": 6000,
+    "campaign": 1000,
+    "group": 3000
+  },
+  "schema": "p07-capacity-v1",
+  "sql_statements": 218543,
+  "transport_call_counts": {
+    "/open_api/v1.3/bc/asset/get/": 20,
+    "/open_api/v1.3/creative/cta/recommend/": 100,
+    "/open_api/v1.3/identity/get/": 100,
+    "/open_api/v1.3/minis/get/": 100,
+    "/open_api/v1.3/tool/region/": 100,
+    "/open_api/v1.3/tool/vbo_status/": 100,
+    "provider-search": 10
+  }
+}

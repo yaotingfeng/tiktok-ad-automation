@@ -1,0 +1,42 @@
+{
+  "complete": true,
+  "database_bytes": 18522639,
+  "elapsed_seconds": 2.8797487078700215,
+  "environment": {
+    "cpu_count": 10,
+    "platform": "macOS-26.3-arm64-arm-64bit-Mach-O",
+    "postgresql": "17.5 (Homebrew)",
+    "python": "3.14.6"
+  },
+  "external_mode": "offline SDK/provider transport doubles; no ad execution",
+  "parameters": {
+    "accounts": 10000,
+    "creative_count": 2,
+    "dramas": 2,
+    "group_size": 10,
+    "materials_per_drama": 30,
+    "seed": 20260908,
+    "target_accounts": 3
+  },
+  "peak_rss_bytes": 165412864,
+  "phases": {
+    "directory": {
+      "cumulative_sql_statements": 672,
+      "max_response_bytes": 30624,
+      "ordered_key_digest": "76d29f373bb66e968a4d5638427d6a0d87b32dd736780d3e90a643091908023a",
+      "p95_seconds": 0.008559250039979815,
+      "page_max": 100,
+      "pages": 100,
+      "rows": 10000,
+      "seconds": 0.8674340420402586
+    },
+    "seed": {
+      "accounts": 10000,
+      "cumulative_sql_statements": 172,
+      "materials": 60,
+      "seconds": 1.674879499943927
+    }
+  },
+  "schema": "p07-capacity-v1",
+  "sql_statements": 674
+}

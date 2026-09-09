@@ -1,0 +1,160 @@
+{
+  "schema": "p07-expansion-delivery-v1",
+  "accounts": 100,
+  "dramas": 10,
+  "cadence_seconds": 5.0,
+  "complete": true,
+  "boundary": "Real SDK GET transports, preparation, preview, outbox, current delivery ID and expansion DB pages. Broker captured locally. Ordinary execution messages accepted but not executed. No advertising API writes.",
+  "t1_backlog_at_t2_submission": 163,
+  "seconds": 79.23578375019133,
+  "rounds": 8,
+  "deliveries": [
+    {
+      "round": 1,
+      "tenant": "T1",
+      "revision": 0,
+      "seconds": 10.093366957968101,
+      "cumulative_steps": 8275,
+      "expanded": false
+    },
+    {
+      "round": 2,
+      "tenant": "T2",
+      "revision": 0,
+      "seconds": 0.03560070809908211,
+      "cumulative_steps": 102,
+      "expanded": true
+    },
+    {
+      "round": 2,
+      "tenant": "T1",
+      "revision": 1,
+      "seconds": 10.00816574995406,
+      "cumulative_steps": 14433,
+      "expanded": false
+    },
+    {
+      "round": 3,
+      "tenant": "T1",
+      "revision": 2,
+      "seconds": 10.111044292105362,
+      "cumulative_steps": 23575,
+      "expanded": false
+    },
+    {
+      "round": 4,
+      "tenant": "T1",
+      "revision": 3,
+      "seconds": 10.058667916804552,
+      "cumulative_steps": 30311,
+      "expanded": false
+    },
+    {
+      "round": 5,
+      "tenant": "T1",
+      "revision": 4,
+      "seconds": 10.18275870801881,
+      "cumulative_steps": 36085,
+      "expanded": false
+    },
+    {
+      "round": 6,
+      "tenant": "T1",
+      "revision": 5,
+      "seconds": 10.25208591693081,
+      "cumulative_steps": 40800,
+      "expanded": false
+    },
+    {
+      "round": 7,
+      "tenant": "T1",
+      "revision": 6,
+      "seconds": 10.156980959000066,
+      "cumulative_steps": 44745,
+      "expanded": false
+    },
+    {
+      "round": 8,
+      "tenant": "T1",
+      "revision": 7,
+      "seconds": 8.276249250164255,
+      "cumulative_steps": 51000,
+      "expanded": true
+    }
+  ],
+  "t2_complete_seconds": 0.04016895778477192,
+  "peak_rss_bytes": 170688512,
+  "query_profiles": [
+    {
+      "statement_shape": "INSERT INTO execution_step (id, tenant_id, submission_id, preview_id, bc_id, unit_id, kind, step_key, group_id, planned_ad_id, material_id, parent_step_id, distribution_id, cover_job_id, status, phase, remote_id, attempt, lease_token, lease_expires_at, request_body, request_body_digest, resolved, error_code, operation_status, review_status, mismatch, checked_at, due_at, dispatch_revision, dispatch_id, updated_at) VALUES (%(id)s::UUID, %(tenant_id)s::UUID, %(submission_id)s::UUID, %(preview_id)s::UUID, %(bc_id)s::VARCHAR, %(unit_id)s::UUID, %(kind)s::VARCHAR, %(step_key)s::VARCHAR, %(group_id)s::UUID, %(planned_ad_id)s::UUID, %(material_id)s::UUID, %(parent_step_id)s::UUID, %(distribution_id)s::UUID, %(cover_job_id)s::UUID, %(status)s::VARCHAR, %(phase)s::VARCHAR, %(remote_id)s::VARCHAR, %(attempt)s::INTEGER, %(lease_token)s::UUID, %(lease_expires_at)s::TIMESTAMP WITH TIME ZONE, %(request_body)s::JSONB, %(request_body_digest)s::VARCHAR, %(resolved)s::JSONB, %(error_code)s::VARCHAR, %(operation_status)s::VARCHAR, %(review_status)s::VARCHAR, %(mismatch)s, %(checked_at)s::TIMESTAMP WITH TIME ZONE, %(due_at)s::TIMESTAMP WITH TIME ZONE, %(dispatch_revision)s::INTEGER, %(dispatch_id)s::UU",
+      "calls": 1503,
+      "seconds": 57.83417134452611,
+      "max_seconds": 0.32758525013923645
+    },
+    {
+      "statement_shape": "WITH unit_groups AS MATERIALIZED ( SELECT id FROM planned_group WHERE tenant_id=%(tenant)s AND preview_id=%(preview)s AND unit_id=%(unit)s ), candidates AS ( SELECT 0 priority, 'MATERIAL:'||m.material_id k, NULL::text parent, 'MATERIAL' kind, NULL::uuid group_id, NULL::uuid ad_id, m.material_id FROM preview_group_material m WHERE m.tenant_id=%(tenant)s AND m.preview_id=%(preview)s AND m.drama_id=%(drama)s UNION ALL SELECT 1,'CTA',NULL,'CTA',NULL,NULL,NULL UNION ALL SELECT 2,'CAMPAIGN',NULL,'CAMPAIGN',NULL,NULL,NULL UNION ALL SELECT 3,'READBACK:CAMPAIGN','CAMPAIGN','READBACK',NULL,NULL,NULL UNION ALL SELECT 4,'ADGROUP:'||g.id,'CAMPAIGN','ADGROUP',g.id,NULL,NULL FROM unit_groups g UNION ALL SELECT 5,'READBACK:ADGROUP:'||g.id,'ADGROUP:'||g.id,'READBACK',g.id,NULL,NULL FROM unit_groups g UNION ALL SELECT 6,'AD:'||a.id,'ADGROUP:'||g.id,'AD',g.id,a.id,NULL FROM unit_groups g JOIN LATERAL ( SELECT id FROM planned_ad WHERE tenant_id=%(tenant)s AND preview_id=%(preview)s AND group_id=g.id OFFSET 0 ) a ON true UNION ALL SELECT 7,'READBACK:AD:'||a.id,'AD:'||a.id,'READBACK',g.id,a.id,NULL FROM unit_groups g JOIN LATERAL ( SELECT id FROM planned_ad WHERE tenant_id=%(tenant)s AND preview_id=%(pr",
+      "calls": 2505,
+      "seconds": 10.282587932655588,
+      "max_seconds": 0.03526641591452062
+    },
+    {
+      "statement_shape": "SELECT build_unit.id, build_unit.tenant_id, build_unit.preview_id, build_unit.bc_id, build_unit.drama_id, build_unit.advertiser_id, build_unit.connection_id, build_unit.currency, build_unit.timezone, build_unit.campaign_name, build_unit.campaign_digest, build_unit.readiness, build_unit.reason_codes, build_unit.scene_snapshot, build_unit.group_count, build_unit.ad_count, build_unit.complete FROM build_unit WHERE build_unit.tenant_id = %(tenant_id_1)s::UUID AND build_unit.id = %(id_1)s::UUID AND build_unit.preview_id = %(preview_id_1)s::UUID",
+      "calls": 2505,
+      "seconds": 0.436620800755918,
+      "max_seconds": 0.0035338751040399075
+    },
+    {
+      "statement_shape": "SELECT submission_unit.tenant_id, submission_unit.submission_id, submission_unit.unit_id, submission_unit.preview_id, submission_unit.bc_id, submission_unit.disposition, submission_unit.reason_code, submission_unit.expanded, submission_unit.dispatch_revision, submission_unit.dispatch_id, submission_unit.due_at, submission_unit.repair_after FROM submission_unit WHERE submission_unit.tenant_id = %(tenant_id_1)s::UUID AND submission_unit.submission_id = %(submission_id_1)s::UUID AND submission_unit.expanded IS false ORDER BY submission_unit.unit_id LIMIT %(param_1)s::INTEGER",
+      "calls": 3509,
+      "seconds": 0.2852135761640966,
+      "max_seconds": 0.0008823329117149115
+    },
+    {
+      "statement_shape": "SELECT build_unit.id, build_unit.tenant_id, build_unit.preview_id, build_unit.bc_id, build_unit.drama_id, build_unit.advertiser_id, build_unit.connection_id, build_unit.currency, build_unit.timezone, build_unit.campaign_name, build_unit.campaign_digest, build_unit.readiness, build_unit.reason_codes, build_unit.scene_snapshot, build_unit.group_count, build_unit.ad_count, build_unit.complete FROM build_unit WHERE build_unit.tenant_id = %(tenant_id_1)s::UUID AND build_unit.preview_id = %(preview_id_1)s::UUID AND build_unit.id > %(id_1)s::UUID ORDER BY build_unit.id LIMIT %(param_1)s::INTEGER",
+      "calls": 1002,
+      "seconds": 0.24899946805089712,
+      "max_seconds": 0.0017095408402383327
+    },
+    {
+      "statement_shape": "INSERT INTO draft_unit_reservation (tenant_id, draft_id, drama_id, advertiser_id, bc_id, submission_id, preview_id, unit_id) VALUES (%(tenant_id)s::UUID, %(draft_id)s::UUID, %(drama_id)s::UUID, %(advertiser_id)s::VARCHAR, %(bc_id)s::VARCHAR, %(submission_id)s::UUID, %(preview_id)s::UUID, %(unit_id)s::UUID)",
+      "calls": 1002,
+      "seconds": 0.16947998944669962,
+      "max_seconds": 0.001591583015397191
+    },
+    {
+      "statement_shape": "UPDATE submission_unit SET dispatch_id=%(dispatch_id)s::UUID, due_at=%(due_at)s::TIMESTAMP WITH TIME ZONE, repair_after=%(repair_after)s::TIMESTAMP WITH TIME ZONE WHERE submission_unit.tenant_id = %(submission_unit_tenant_id)s::UUID AND submission_unit.submission_id = %(submission_unit_submission_id)s::UUID AND submission_unit.unit_id = %(submission_unit_unit_id)s::UUID",
+      "calls": 1002,
+      "seconds": 0.16062380303628743,
+      "max_seconds": 0.0014032910112291574
+    },
+    {
+      "statement_shape": "UPDATE submission_unit SET expanded=%(expanded)s WHERE submission_unit.tenant_id = %(submission_unit_tenant_id)s::UUID AND submission_unit.submission_id = %(submission_unit_submission_id)s::UUID AND submission_unit.unit_id = %(submission_unit_unit_id)s::UUID",
+      "calls": 1002,
+      "seconds": 0.14531360915862024,
+      "max_seconds": 0.00195229216478765
+    },
+    {
+      "statement_shape": "INSERT INTO submission_unit (tenant_id, submission_id, unit_id, preview_id, bc_id, disposition, reason_code, expanded, dispatch_revision, dispatch_id, due_at, repair_after) VALUES (%(tenant_id)s::UUID, %(submission_id)s::UUID, %(unit_id)s::UUID, %(preview_id)s::UUID, %(bc_id)s::VARCHAR, %(disposition)s::VARCHAR, %(reason_code)s::VARCHAR, %(expanded)s, %(dispatch_revision)s::INTEGER, %(dispatch_id)s::UUID, %(due_at)s::TIMESTAMP WITH TIME ZONE, %(repair_after)s::TIMESTAMP WITH TIME ZONE)",
+      "calls": 1002,
+      "seconds": 0.12323167780414224,
+      "max_seconds": 0.0006419999990612268
+    },
+    {
+      "statement_shape": "INSERT INTO pending_dispatch (id, tenant_id, actor_id, task_name, task_key, payload, available_at, attempts) VALUES (%(id)s::UUID, %(tenant_id)s::UUID, %(actor_id)s::UUID, %(task_name)s::VARCHAR, %(task_key)s::VARCHAR, %(payload)s::JSONB, %(available_at)s::TIMESTAMP WITH TIME ZONE, %(attempts)s::INTEGER) ON CONFLICT (tenant_id, task_key) DO NOTHING RETURNING pending_dispatch.id",
+      "calls": 1010,
+      "seconds": 0.11435246584005654,
+      "max_seconds": 0.0032135839574038982
+    }
+  ],
+  "steps_by_kind": {
+    "CAMPAIGN": 1000,
+    "AD": 6000,
+    "READBACK": 10000,
+    "ADGROUP": 3000,
+    "CTA": 1000,
+    "MATERIAL": 30000
+  },
+  "source_revision": "f70c7d0",
+  "source_dirty": false,
+  "metadata_note": "Source revision recorded from isolated delivery worktree; first run used the subsequently committed benchmark helper."
+}

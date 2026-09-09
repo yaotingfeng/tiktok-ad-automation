@@ -1,0 +1,28 @@
+{
+  "schema": "p07-capacity-progress-io-sample-v1",
+  "source_revision": "217986b",
+  "observed_at": "2026-09-09T04:01:59.491864+00:00",
+  "samples": 60,
+  "interval_seconds": 0.1,
+  "states": {
+    "active/IO/DataFileRead/other": 6,
+    "active/IO/DataFileRead/step_insert": 15,
+    "active/IO/DataFileWrite/step_insert": 16,
+    "active/Timeout/VacuumDelay/other": 1,
+    "active/Client/ClientRead/other": 1,
+    "active/CPU/none/other": 1,
+    "idle in transaction/CPU/none/other": 2,
+    "idle in transaction/Client/ClientRead/other": 15,
+    "active/CPU/none/step_insert": 4
+  },
+  "database_bytes": 5977457167,
+  "free_disk_bytes": 121446805504,
+  "latest_progress": {
+    "calls": 47000,
+    "cumulative_sql_statements": 29363606,
+    "peak_rss_bytes": 166100992,
+    "phase": "submission_progress",
+    "seconds": 2514.191123292083
+  },
+  "note": "Read-only pg_stat_activity samples of the largest benchmark-owned temporary database. Overlapping development workload exists. Wait samples do not establish comprehensive causality."
+}

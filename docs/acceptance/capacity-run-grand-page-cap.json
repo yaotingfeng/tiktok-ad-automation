@@ -1,0 +1,43 @@
+{
+  "complete": false,
+  "elapsed_seconds": 31.23647424997762,
+  "environment": {
+    "cpu_count": 10,
+    "machine": "arm64",
+    "platform": "macOS-26.3-arm64-arm-64bit-Mach-O",
+    "python": "3.14.6"
+  },
+  "external_mode": "offline SDK/provider transport doubles; no ad execution",
+  "parameters": {
+    "accounts": 100000,
+    "creative_count": 2,
+    "dramas": 200,
+    "group_size": 10,
+    "materials_per_drama": 30,
+    "seed": 20260908,
+    "target_accounts": 1000
+  },
+  "peak_rss_bytes": 164823040,
+  "phases": {
+    "directory": {
+      "cumulative_sql_statements": 17628,
+      "max_response_bytes": 30624,
+      "ordered_key_digest": "081d6fa52fdce99971e91a892e9f961bc0a8f846ca4a7c345ed775ca43bccd20",
+      "p95_seconds": 0.05014749988913536,
+      "page_max": 100,
+      "pages": 1000,
+      "rows": 100000,
+      "seconds": 21.986577791161835
+    },
+    "seed": {
+      "accounts": 100000,
+      "cumulative_sql_statements": 12628,
+      "materials": 6000,
+      "seconds": 8.89978237496689
+    }
+  },
+  "schema": "p07-capacity-v1",
+  "source_dirty": false,
+  "source_revision": "4e3012d413650ed7fe7715e2c3a19a49b85691f6",
+  "sql_statements": 17628
+}

@@ -1,0 +1,657 @@
+{
+  "schema": "p07-capacity-summary-plan-v1",
+  "source_revision": "217986b",
+  "analyze": false,
+  "submission_expanded": true,
+  "plan": {
+    "Plan": {
+      "Node Type": "Aggregate",
+      "Strategy": "Sorted",
+      "Partial Mode": "Simple",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Startup Cost": 11904891.76,
+      "Total Cost": 69364229.85,
+      "Plan Rows": 998236,
+      "Plan Width": 72,
+      "Group Key": [
+        "\"*SELECT* 1\".kind",
+        "(CASE WHEN (NULLIF(TRIM(BOTH FROM s.remote_id), ''::text) IS NOT NULL) THEN 'succeeded'::text WHEN ((s.status)::text = ANY ('{SUCCEEDED,UNKNOWN}'::text[])) THEN 'unknown'::text WHEN (((s.status)::text = 'FAILED'::text) OR EXISTS(SubPlan 5) OR ((\"*SELECT* 1\".kind = 'CAMPAIGN'::text) AND EXISTS(SubPlan 6) AND (NOT EXISTS(SubPlan 7))) OR ((\"*SELECT* 1\".kind = ANY ('{ADGROUP,AD}'::text[])) AND EXISTS(SubPlan 8))) THEN 'failed'::text ELSE 'pending'::text END)"
+      ],
+      "Plans": [
+        {
+          "Node Type": "Seq Scan",
+          "Parent Relationship": "InitPlan",
+          "Subplan Name": "CTE scope",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Relation Name": "build_unit",
+          "Alias": "u_3",
+          "Startup Cost": 0.0,
+          "Total Cost": 6657801.25,
+          "Plan Rows": 198300,
+          "Plan Width": 1883,
+          "Filter": "((tenant_id = 'synthetic-id'::uuid) AND (preview_id = 'synthetic-id'::uuid))",
+          "Plans": [
+            {
+              "Node Type": "Nested Loop",
+              "Parent Relationship": "SubPlan",
+              "Subplan Name": "SubPlan 1",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Join Type": "Inner",
+              "Startup Cost": 0.54,
+              "Total Cost": 16.61,
+              "Plan Rows": 1,
+              "Plan Width": 0,
+              "Inner Unique": true,
+              "Plans": [
+                {
+                  "Node Type": "Index Scan",
+                  "Parent Relationship": "Outer",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Scan Direction": "Forward",
+                  "Index Name": "uq_submission_preview",
+                  "Relation Name": "build_submission",
+                  "Alias": "old",
+                  "Startup Cost": 0.12,
+                  "Total Cost": 8.15,
+                  "Plan Rows": 1,
+                  "Plan Width": 32,
+                  "Index Cond": "(tenant_id = 'synthetic-id'::uuid)",
+                  "Filter": "((ordinal < '1'::smallint) AND (draft_id = 'synthetic-id'::uuid))"
+                },
+                {
+                  "Node Type": "Index Scan",
+                  "Parent Relationship": "Inner",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Scan Direction": "Forward",
+                  "Index Name": "uq_build_unit_pair",
+                  "Relation Name": "build_unit",
+                  "Alias": "old_u",
+                  "Startup Cost": 0.42,
+                  "Total Cost": 8.45,
+                  "Plan Rows": 1,
+                  "Plan Width": 32,
+                  "Index Cond": "((tenant_id = 'synthetic-id'::uuid) AND (preview_id = old.preview_id) AND (drama_id = u_3.drama_id) AND ((advertiser_id)::text = (u_3.advertiser_id)::text))",
+                  "Filter": "(complete AND ((readiness)::text = ANY ('{READY,PREPARING}'::text[])))"
+                }
+              ]
+            },
+            {
+              "Node Type": "Nested Loop",
+              "Parent Relationship": "SubPlan",
+              "Subplan Name": "SubPlan 2",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Join Type": "Inner",
+              "Startup Cost": 0.54,
+              "Total Cost": 16.61,
+              "Plan Rows": 1,
+              "Plan Width": 0,
+              "Inner Unique": true,
+              "Plans": [
+                {
+                  "Node Type": "Index Scan",
+                  "Parent Relationship": "Outer",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Scan Direction": "Forward",
+                  "Index Name": "uq_submission_preview",
+                  "Relation Name": "build_submission",
+                  "Alias": "old_1",
+                  "Startup Cost": 0.12,
+                  "Total Cost": 8.15,
+                  "Plan Rows": 1,
+                  "Plan Width": 32,
+                  "Index Cond": "(tenant_id = 'synthetic-id'::uuid)",
+                  "Filter": "((ordinal < '1'::smallint) AND (draft_id = 'synthetic-id'::uuid))"
+                },
+                {
+                  "Node Type": "Index Scan",
+                  "Parent Relationship": "Inner",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Scan Direction": "Forward",
+                  "Index Name": "uq_build_unit_pair",
+                  "Relation Name": "build_unit",
+                  "Alias": "old_u_1",
+                  "Startup Cost": 0.42,
+                  "Total Cost": 8.45,
+                  "Plan Rows": 1,
+                  "Plan Width": 32,
+                  "Index Cond": "((tenant_id = 'synthetic-id'::uuid) AND (preview_id = old_1.preview_id) AND (drama_id = u_3.drama_id) AND ((advertiser_id)::text = (u_3.advertiser_id)::text))",
+                  "Filter": "(complete AND ((readiness)::text = ANY ('{READY,PREPARING}'::text[])))"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "Node Type": "Aggregate",
+          "Strategy": "Sorted",
+          "Partial Mode": "Finalize",
+          "Parent Relationship": "InitPlan",
+          "Subplan Name": "CTE material_groups",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Startup Cost": 1226978.08,
+          "Total Cost": 1393997.6,
+          "Plan Rows": 600035,
+          "Plan Width": 34,
+          "Group Key": [
+            "g_2.id",
+            "g_2.unit_id"
+          ],
+          "Plans": [
+            {
+              "Node Type": "Gather Merge",
+              "Parent Relationship": "Outer",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Startup Cost": 1226978.08,
+              "Total Cost": 1366996.02,
+              "Plan Rows": 1200070,
+              "Plan Width": 50,
+              "Workers Planned": 2,
+              "Plans": [
+                {
+                  "Node Type": "Sort",
+                  "Parent Relationship": "Outer",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Startup Cost": 1225978.06,
+                  "Total Cost": 1227478.14,
+                  "Plan Rows": 600035,
+                  "Plan Width": 50,
+                  "Sort Key": [
+                    "g_2.id",
+                    "g_2.unit_id"
+                  ],
+                  "Plans": [
+                    {
+                      "Node Type": "Aggregate",
+                      "Strategy": "Hashed",
+                      "Partial Mode": "Partial",
+                      "Parent Relationship": "Outer",
+                      "Parallel Aware": false,
+                      "Async Capable": false,
+                      "Startup Cost": 1083283.11,
+                      "Total Cost": 1147880.64,
+                      "Plan Rows": 600035,
+                      "Plan Width": 50,
+                      "Group Key": [
+                        "g_2.id",
+                        "g_2.unit_id"
+                      ],
+                      "Planned Partitions": 16,
+                      "Plans": [
+                        {
+                          "Node Type": "Hash Join",
+                          "Parent Relationship": "Outer",
+                          "Parallel Aware": true,
+                          "Async Capable": false,
+                          "Join Type": "Right",
+                          "Startup Cost": 117443.05,
+                          "Total Cost": 748888.59,
+                          "Plan Rows": 2500146,
+                          "Plan Width": 72,
+                          "Inner Unique": false,
+                          "Hash Cond": "((ms.unit_id = g_2.unit_id) AND (ms.material_id = m.material_id))",
+                          "Plans": [
+                            {
+                              "Node Type": "Seq Scan",
+                              "Parent Relationship": "Outer",
+                              "Parallel Aware": true,
+                              "Async Capable": false,
+                              "Relation Name": "execution_step",
+                              "Alias": "ms",
+                              "Startup Cost": 0.0,
+                              "Total Cost": 452157.53,
+                              "Plan Rows": 2500886,
+                              "Plan Width": 72,
+                              "Filter": "((submission_id = 'synthetic-id'::uuid) AND ((kind)::text = 'MATERIAL'::text) AND (tenant_id = 'synthetic-id'::uuid))"
+                            },
+                            {
+                              "Node Type": "Hash",
+                              "Parent Relationship": "Inner",
+                              "Parallel Aware": true,
+                              "Async Capable": false,
+                              "Startup Cost": 53082.86,
+                              "Total Cost": 53082.86,
+                              "Plan Rows": 2500146,
+                              "Plan Width": 64,
+                              "Plans": [
+                                {
+                                  "Node Type": "Nested Loop",
+                                  "Parent Relationship": "Outer",
+                                  "Parallel Aware": false,
+                                  "Async Capable": false,
+                                  "Join Type": "Left",
+                                  "Startup Cost": 0.29,
+                                  "Total Cost": 53082.86,
+                                  "Plan Rows": 2500146,
+                                  "Plan Width": 64,
+                                  "Inner Unique": false,
+                                  "Plans": [
+                                    {
+                                      "Node Type": "Seq Scan",
+                                      "Parent Relationship": "Outer",
+                                      "Parallel Aware": true,
+                                      "Async Capable": false,
+                                      "Relation Name": "planned_group",
+                                      "Alias": "g_2",
+                                      "Startup Cost": 0.0,
+                                      "Total Cost": 18385.22,
+                                      "Plan Rows": 250015,
+                                      "Plan Width": 84,
+                                      "Filter": "((tenant_id = 'synthetic-id'::uuid) AND (preview_id = 'synthetic-id'::uuid))"
+                                    },
+                                    {
+                                      "Node Type": "Memoize",
+                                      "Parent Relationship": "Inner",
+                                      "Parallel Aware": false,
+                                      "Async Capable": false,
+                                      "Startup Cost": 0.29,
+                                      "Total Cost": 0.54,
+                                      "Plan Rows": 10,
+                                      "Plan Width": 68,
+                                      "Cache Key": "g_2.drama_id, g_2.group_no",
+                                      "Cache Mode": "logical",
+                                      "Plans": [
+                                        {
+                                          "Node Type": "Index Scan",
+                                          "Parent Relationship": "Outer",
+                                          "Parallel Aware": false,
+                                          "Async Capable": false,
+                                          "Scan Direction": "Forward",
+                                          "Index Name": "preview_group_material_pkey",
+                                          "Relation Name": "preview_group_material",
+                                          "Alias": "m",
+                                          "Startup Cost": 0.28,
+                                          "Total Cost": 0.53,
+                                          "Plan Rows": 10,
+                                          "Plan Width": 68,
+                                          "Index Cond": "((tenant_id = 'synthetic-id'::uuid) AND (preview_id = 'synthetic-id'::uuid) AND (drama_id = g_2.drama_id) AND (group_no = g_2.group_no))"
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "Node Type": "Incremental Sort",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Startup Cost": 3853092.91,
+          "Total Cost": 32604349.05,
+          "Plan Rows": 998236,
+          "Plan Width": 64,
+          "Sort Key": [
+            "\"*SELECT* 1\".kind",
+            "(CASE WHEN (NULLIF(TRIM(BOTH FROM s.remote_id), ''::text) IS NOT NULL) THEN 'succeeded'::text WHEN ((s.status)::text = ANY ('{SUCCEEDED,UNKNOWN}'::text[])) THEN 'unknown'::text WHEN (((s.status)::text = 'FAILED'::text) OR EXISTS(SubPlan 5) OR ((\"*SELECT* 1\".kind = 'CAMPAIGN'::text) AND EXISTS(SubPlan 6) AND (NOT EXISTS(SubPlan 7))) OR ((\"*SELECT* 1\".kind = ANY ('{ADGROUP,AD}'::text[])) AND EXISTS(SubPlan 8))) THEN 'failed'::text ELSE 'pending'::text END)"
+          ],
+          "Presorted Key": [
+            "\"*SELECT* 1\".kind"
+          ],
+          "Plans": [
+            {
+              "Node Type": "Merge Join",
+              "Parent Relationship": "Outer",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Join Type": "Left",
+              "Startup Cost": 3708676.96,
+              "Total Cost": 32530549.63,
+              "Plan Rows": 998236,
+              "Plan Width": 64,
+              "Inner Unique": false,
+              "Merge Cond": "((\"*SELECT* 1\".kind = (s.kind)::text) AND (\"*SELECT* 1\".unit_id = s.unit_id))",
+              "Join Filter": "((NOT (s.group_id IS DISTINCT FROM \"*SELECT* 1\".group_id)) AND (NOT (s.planned_ad_id IS DISTINCT FROM \"*SELECT* 1\".ad_id)))",
+              "Plans": [
+                {
+                  "Node Type": "Sort",
+                  "Parent Relationship": "Outer",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Startup Cost": 421436.39,
+                  "Total Cost": 423931.98,
+                  "Plan Rows": 998236,
+                  "Plan Width": 80,
+                  "Sort Key": [
+                    "\"*SELECT* 1\".kind",
+                    "\"*SELECT* 1\".unit_id"
+                  ],
+                  "Plans": [
+                    {
+                      "Node Type": "Append",
+                      "Parent Relationship": "Outer",
+                      "Parallel Aware": false,
+                      "Async Capable": false,
+                      "Startup Cost": 0.0,
+                      "Total Cost": 233256.06,
+                      "Plan Rows": 998236,
+                      "Plan Width": 80,
+                      "Subplans Removed": 0,
+                      "Plans": [
+                        {
+                          "Node Type": "Subquery Scan",
+                          "Parent Relationship": "Member",
+                          "Parallel Aware": false,
+                          "Async Capable": false,
+                          "Alias": "*SELECT* 1",
+                          "Startup Cost": 0.0,
+                          "Total Cost": 4957.5,
+                          "Plan Rows": 99150,
+                          "Plan Width": 80,
+                          "Plans": [
+                            {
+                              "Node Type": "CTE Scan",
+                              "Parent Relationship": "Subquery",
+                              "Parallel Aware": false,
+                              "Async Capable": false,
+                              "CTE Name": "scope",
+                              "Alias": "u",
+                              "Startup Cost": 0.0,
+                              "Total Cost": 3966.0,
+                              "Plan Rows": 99150,
+                              "Plan Width": 80,
+                              "Filter": "included"
+                            }
+                          ]
+                        },
+                        {
+                          "Node Type": "Subquery Scan",
+                          "Parent Relationship": "Member",
+                          "Parallel Aware": false,
+                          "Async Capable": false,
+                          "Alias": "*SELECT* 2",
+                          "Startup Cost": 6573.12,
+                          "Total Cost": 53717.21,
+                          "Plan Rows": 299717,
+                          "Plan Width": 80,
+                          "Plans": [
+                            {
+                              "Node Type": "Hash Join",
+                              "Parent Relationship": "Subquery",
+                              "Parallel Aware": false,
+                              "Async Capable": false,
+                              "Join Type": "Inner",
+                              "Startup Cost": 6573.12,
+                              "Total Cost": 50720.04,
+                              "Plan Rows": 299717,
+                              "Plan Width": 80,
+                              "Inner Unique": false,
+                              "Hash Cond": "((g.tenant_id = u_1.tenant_id) AND (g.preview_id = u_1.preview_id) AND (g.unit_id = u_1.id))",
+                              "Plans": [
+                                {
+                                  "Node Type": "Seq Scan",
+                                  "Parent Relationship": "Outer",
+                                  "Parallel Aware": false,
+                                  "Async Capable": false,
+                                  "Relation Name": "planned_group",
+                                  "Alias": "g",
+                                  "Startup Cost": 0.0,
+                                  "Total Cost": 20635.35,
+                                  "Plan Rows": 600035,
+                                  "Plan Width": 64
+                                },
+                                {
+                                  "Node Type": "Hash",
+                                  "Parent Relationship": "Inner",
+                                  "Parallel Aware": false,
+                                  "Async Capable": false,
+                                  "Startup Cost": 3966.0,
+                                  "Total Cost": 3966.0,
+                                  "Plan Rows": 99150,
+                                  "Plan Width": 48,
+                                  "Plans": [
+                                    {
+                                      "Node Type": "CTE Scan",
+                                      "Parent Relationship": "Outer",
+                                      "Parallel Aware": false,
+                                      "Async Capable": false,
+                                      "CTE Name": "scope",
+                                      "Alias": "u_1",
+                                      "Startup Cost": 0.0,
+                                      "Total Cost": 3966.0,
+                                      "Plan Rows": 99150,
+                                      "Plan Width": 48,
+                                      "Filter": "included"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "Node Type": "Subquery Scan",
+                          "Parent Relationship": "Member",
+                          "Parallel Aware": false,
+                          "Async Capable": false,
+                          "Alias": "*SELECT* 3",
+                          "Startup Cost": 60356.09,
+                          "Total Cost": 169590.17,
+                          "Plan Rows": 599369,
+                          "Plan Width": 80,
+                          "Plans": [
+                            {
+                              "Node Type": "Hash Join",
+                              "Parent Relationship": "Subquery",
+                              "Parallel Aware": false,
+                              "Async Capable": false,
+                              "Join Type": "Inner",
+                              "Startup Cost": 60356.09,
+                              "Total Cost": 163596.48,
+                              "Plan Rows": 599369,
+                              "Plan Width": 80,
+                              "Inner Unique": false,
+                              "Hash Cond": "((a.tenant_id = g_1.tenant_id) AND (a.preview_id = g_1.preview_id) AND (a.group_id = g_1.id))",
+                              "Plans": [
+                                {
+                                  "Node Type": "Seq Scan",
+                                  "Parent Relationship": "Outer",
+                                  "Parallel Aware": false,
+                                  "Async Capable": false,
+                                  "Relation Name": "planned_ad",
+                                  "Alias": "a",
+                                  "Startup Cost": 0.0,
+                                  "Total Cost": 53576.39,
+                                  "Plan Rows": 1199939,
+                                  "Plan Width": 64
+                                },
+                                {
+                                  "Node Type": "Hash",
+                                  "Parent Relationship": "Inner",
+                                  "Parallel Aware": false,
+                                  "Async Capable": false,
+                                  "Startup Cost": 50720.04,
+                                  "Total Cost": 50720.04,
+                                  "Plan Rows": 299717,
+                                  "Plan Width": 96,
+                                  "Plans": [
+                                    {
+                                      "Node Type": "Hash Join",
+                                      "Parent Relationship": "Outer",
+                                      "Parallel Aware": false,
+                                      "Async Capable": false,
+                                      "Join Type": "Inner",
+                                      "Startup Cost": 6573.12,
+                                      "Total Cost": 50720.04,
+                                      "Plan Rows": 299717,
+                                      "Plan Width": 96,
+                                      "Inner Unique": false,
+                                      "Hash Cond": "((g_1.tenant_id = u_2.tenant_id) AND (g_1.preview_id = u_2.preview_id) AND (g_1.unit_id = u_2.id))",
+                                      "Plans": [
+                                        {
+                                          "Node Type": "Seq Scan",
+                                          "Parent Relationship": "Outer",
+                                          "Parallel Aware": false,
+                                          "Async Capable": false,
+                                          "Relation Name": "planned_group",
+                                          "Alias": "g_1",
+                                          "Startup Cost": 0.0,
+                                          "Total Cost": 20635.35,
+                                          "Plan Rows": 600035,
+                                          "Plan Width": 64
+                                        },
+                                        {
+                                          "Node Type": "Hash",
+                                          "Parent Relationship": "Inner",
+                                          "Parallel Aware": false,
+                                          "Async Capable": false,
+                                          "Startup Cost": 3966.0,
+                                          "Total Cost": 3966.0,
+                                          "Plan Rows": 99150,
+                                          "Plan Width": 48,
+                                          "Plans": [
+                                            {
+                                              "Node Type": "CTE Scan",
+                                              "Parent Relationship": "Outer",
+                                              "Parallel Aware": false,
+                                              "Async Capable": false,
+                                              "CTE Name": "scope",
+                                              "Alias": "u_2",
+                                              "Startup Cost": 0.0,
+                                              "Total Cost": 3966.0,
+                                              "Plan Rows": 99150,
+                                              "Plan Width": 48,
+                                              "Filter": "included"
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Node Type": "Materialize",
+                  "Parent Relationship": "Inner",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Startup Cost": 3287240.57,
+                  "Total Cost": 3338244.37,
+                  "Plan Rows": 10200759,
+                  "Plan Width": 96,
+                  "Plans": [
+                    {
+                      "Node Type": "Sort",
+                      "Parent Relationship": "Outer",
+                      "Parallel Aware": false,
+                      "Async Capable": false,
+                      "Startup Cost": 3287240.57,
+                      "Total Cost": 3312742.47,
+                      "Plan Rows": 10200759,
+                      "Plan Width": 96,
+                      "Sort Key": [
+                        "s.kind",
+                        "s.unit_id"
+                      ],
+                      "Plans": [
+                        {
+                          "Node Type": "Seq Scan",
+                          "Parent Relationship": "Outer",
+                          "Parallel Aware": false,
+                          "Async Capable": false,
+                          "Relation Name": "execution_step",
+                          "Alias": "s",
+                          "Startup Cost": 0.0,
+                          "Total Cost": 530788.39,
+                          "Plan Rows": 10200759,
+                          "Plan Width": 96,
+                          "Filter": "((tenant_id = 'synthetic-id'::uuid) AND (submission_id = 'synthetic-id'::uuid))"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Node Type": "Index Scan",
+                  "Parent Relationship": "SubPlan",
+                  "Subplan Name": "SubPlan 5",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "Scan Direction": "Forward",
+                  "Index Name": "ix_execution_scope_status",
+                  "Relation Name": "execution_step",
+                  "Alias": "ancestor",
+                  "Startup Cost": 0.43,
+                  "Total Cost": 6.22,
+                  "Plan Rows": 1,
+                  "Plan Width": 0,
+                  "Index Cond": "((tenant_id = 'synthetic-id'::uuid) AND (submission_id = 'synthetic-id'::uuid) AND ((status)::text = 'FAILED'::text))",
+                  "Filter": "((unit_id = \"*SELECT* 1\".unit_id) AND (((kind)::text = 'CTA'::text) OR (((kind)::text = 'CAMPAIGN'::text) AND (\"*SELECT* 1\".kind <> 'CAMPAIGN'::text)) OR (((kind)::text = 'ADGROUP'::text) AND (\"*SELECT* 1\".kind = 'AD'::text) AND (group_id = \"*SELECT* 1\".group_id))))"
+                },
+                {
+                  "Node Type": "CTE Scan",
+                  "Parent Relationship": "SubPlan",
+                  "Subplan Name": "SubPlan 6",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "CTE Name": "material_groups",
+                  "Alias": "mg",
+                  "Startup Cost": 0.0,
+                  "Total Cost": 13500.79,
+                  "Plan Rows": 3000,
+                  "Plan Width": 0,
+                  "Filter": "(unit_id = \"*SELECT* 1\".unit_id)"
+                },
+                {
+                  "Node Type": "CTE Scan",
+                  "Parent Relationship": "SubPlan",
+                  "Subplan Name": "SubPlan 7",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "CTE Name": "material_groups",
+                  "Alias": "mg_1",
+                  "Startup Cost": 0.0,
+                  "Total Cost": 13500.79,
+                  "Plan Rows": 1500,
+                  "Plan Width": 0,
+                  "Filter": "((NOT failed) AND (unit_id = \"*SELECT* 1\".unit_id))"
+                },
+                {
+                  "Node Type": "CTE Scan",
+                  "Parent Relationship": "SubPlan",
+                  "Subplan Name": "SubPlan 8",
+                  "Parallel Aware": false,
+                  "Async Capable": false,
+                  "CTE Name": "material_groups",
+                  "Alias": "mg_2",
+                  "Startup Cost": 0.0,
+                  "Total Cost": 13500.79,
+                  "Plan Rows": 1500,
+                  "Plan Width": 0,
+                  "Filter": "(failed AND (group_id = \"*SELECT* 1\".group_id))"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "source_revision": "217986b",
+  "kind": "independent read-only snapshot during grand run",
+  "job": {
+    "status": "COMPLETE",
+    "phase": "DONE",
+    "total_pages": 2000,
+    "total_count": 100000,
+    "seen_count": 100000,
+    "published_count": 100000,
+    "first_observation_age_seconds": 86400
+  },
+  "grants": [
+    {
+      "permission_state": "VERIFIED",
+      "can_build": true,
+      "can_upload": true,
+      "accounts": 100000
+    }
+  ]
+}

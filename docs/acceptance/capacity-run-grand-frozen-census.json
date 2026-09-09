@@ -1,0 +1,17 @@
+{
+  "schema": "p07-capacity-frozen-census-v1",
+  "source_revision": "217986b",
+  "read_only_transaction": true,
+  "status": "FROZEN",
+  "readiness_counts": {
+    "PREPARING": 199977,
+    "READY": 23
+  },
+  "plan_counts": {
+    "build_unit": 200000,
+    "planned_group": 600000,
+    "planned_ad": 1200000
+  },
+  "database_bytes_during_early_expansion": 1697967251,
+  "scope": "Synthetic frozen planning only; PREPARING preserves real material-dependency and cache-age semantics. No ad execution."
+}

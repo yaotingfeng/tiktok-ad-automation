@@ -1,0 +1,200 @@
+{
+  "complete": true,
+  "database_bytes": 76819603,
+  "elapsed_seconds": 251.45950479106978,
+  "environment": {
+    "cpu_count": 10,
+    "platform": "macOS-26.3-arm64-arm-64bit-Mach-O",
+    "postgresql": "17.5 (Homebrew)",
+    "python": "3.14.6"
+  },
+  "external_mode": "offline SDK/provider transport doubles; no ad execution",
+  "parameters": {
+    "accounts": 1000,
+    "creative_count": 2,
+    "dramas": 10,
+    "group_size": 10,
+    "materials_per_drama": 30,
+    "seed": 20260908,
+    "target_accounts": 100
+  },
+  "peak_rss_bytes": 175882240,
+  "phases": {
+    "capability": {
+      "configured_age_seconds": 86400,
+      "cumulative_sql_statements": 1847,
+      "minimum_default_cadence_seconds": 155,
+      "seconds": 0.5193827908951789,
+      "units": 31
+    },
+    "directory": {
+      "cumulative_sql_statements": 700,
+      "max_response_bytes": 30624,
+      "ordered_key_digest": "81be0517168dc33ac71acc2e899003588970db2fa49973540e26c050a4eef24b",
+      "p95_seconds": 0.012733957963064313,
+      "page_max": 100,
+      "pages": 10,
+      "rows": 1000,
+      "seconds": 0.1051586251705885
+    },
+    "draft": {
+      "cumulative_sql_statements": 61578,
+      "seconds": 2.082048583077267,
+      "units": 15
+    },
+    "preview": {
+      "calls": 26,
+      "cumulative_sql_statements": 759730,
+      "seconds": 150.33511808305047,
+      "summary": {
+        "ad_count": 6000,
+        "adgroup_count": 3000,
+        "bc_id": "capacity-bc-t1",
+        "blocked_count": 0,
+        "campaign_count": 1000,
+        "content_digest": "e63d0e34501e9f7a688027c23ef9173590484930b6aa61eb9163e3075f422a5f",
+        "created_at": "2026-09-09T08:41:05.117810+08:00",
+        "currency": "USD",
+        "daily_budget_sum": "100000.000000000000",
+        "draft_id": "6efd859c-bd4d-47ac-b2c3-2978d44a8e51",
+        "draft_revision": 1,
+        "error_code": null,
+        "input_issue_count": 0,
+        "preparing_count": 990,
+        "preview_id": "97f1281b-7c4c-4c96-92eb-55bbfbe38be7",
+        "status": "FROZEN",
+        "total_unit_count": 1000
+      }
+    },
+    "preview_pages": {
+      "cumulative_sql_statements": 759780,
+      "max_response_bytes": 36652,
+      "ordered_key_digest": "27c2fb740b69da3b83a79e5d07c10de664bc8a1dc2599cdff4997483388738f9",
+      "p95_seconds": 0.006818374851718545,
+      "page_max": 100,
+      "pages": 10,
+      "rows": 1000,
+      "seconds": 0.04965037479996681
+    },
+    "preview_progress": {
+      "calls": 20,
+      "cumulative_sql_statements": 601950,
+      "seconds": 116.20318774995394,
+      "units": 774
+    },
+    "scene": {
+      "accounts": 100,
+      "cumulative_sql_statements": 51547,
+      "seconds": 11.853694458026439
+    },
+    "scene_progress": {
+      "accounts": 100,
+      "cumulative_sql_statements": 51547,
+      "seconds": 11.853256416972727
+    },
+    "seed": {
+      "accounts": 1000,
+      "cumulative_sql_statements": 650,
+      "materials": 300,
+      "seconds": 0.22336370777338743
+    },
+    "submission": {
+      "calls": 531,
+      "cumulative_sql_statements": 830975,
+      "seconds": 85.93959545879625,
+      "steps": {
+        "AD": 6000,
+        "ADGROUP": 3000,
+        "CAMPAIGN": 1000,
+        "CTA": 1000,
+        "MATERIAL": 30000,
+        "READBACK": 10000
+      },
+      "summary": {
+        "account_count": 100,
+        "actor_name": "af2659fb-d6a1-4e6c-a2ee-7bef1631b070@example.com",
+        "batch_short_id": "97f1281b7c4c4c9692eb55bbfbe38be7",
+        "bc_id": "capacity-bc-t1",
+        "created_at": "2026-09-09T08:43:35.509296+08:00",
+        "currency": "USD",
+        "daily_budget_sum": "100000.000000000000",
+        "draft_id": "6efd859c-bd4d-47ac-b2c3-2978d44a8e51",
+        "drama_count": 10,
+        "excluded": {
+          "ad_count": 0,
+          "adgroup_count": 0,
+          "campaign_count": 0
+        },
+        "excluded_unit_count": 0,
+        "expanded": true,
+        "failed": {
+          "ad_count": 0,
+          "adgroup_count": 0,
+          "campaign_count": 0
+        },
+        "pending": {
+          "ad_count": 6000,
+          "adgroup_count": 3000,
+          "campaign_count": 1000
+        },
+        "planned": {
+          "ad_count": 6000,
+          "adgroup_count": 3000,
+          "campaign_count": 1000
+        },
+        "preview_id": "97f1281b-7c4c-4c96-92eb-55bbfbe38be7",
+        "provider_name": "Synthetic capacity",
+        "recovery": {
+          "can_reconcile": false,
+          "can_retry": false,
+          "reasons": [],
+          "reconcilable_step_count": 0,
+          "retryable_step_count": 0
+        },
+        "stage_counts": {
+          "AD:PENDING": 6000,
+          "ADGROUP:PENDING": 3000,
+          "CAMPAIGN:PENDING": 1000,
+          "CTA:PENDING": 1000,
+          "MATERIAL:PENDING": 30000,
+          "READBACK:PENDING": 10000
+        },
+        "status": "RUNNING",
+        "strategy_label": "Capacity strategy v1",
+        "submission_id": "e4333fa2-d758-4f6a-a35f-6b97b5ee3106",
+        "submitted": {
+          "ad_count": 6000,
+          "adgroup_count": 3000,
+          "campaign_count": 1000
+        },
+        "succeeded": {
+          "ad_count": 0,
+          "adgroup_count": 0,
+          "campaign_count": 0
+        },
+        "unknown": {
+          "ad_count": 0,
+          "adgroup_count": 0,
+          "campaign_count": 0
+        },
+        "updated_at": "2026-09-09T08:45:01.367550+08:00"
+      }
+    }
+  },
+  "plan_counts": {
+    "ad": 6000,
+    "campaign": 1000,
+    "group": 3000
+  },
+  "schema": "p07-capacity-v1",
+  "sql_statements": 830977,
+  "transport_call_counts": {
+    "/open_api/v1.3/bc/asset/get/": 20,
+    "/open_api/v1.3/creative/cta/recommend/": 100,
+    "/open_api/v1.3/identity/get/": 100,
+    "/open_api/v1.3/minis/get/": 100,
+    "/open_api/v1.3/tool/region/": 100,
+    "/open_api/v1.3/tool/vbo_status/": 100,
+    "provider-search": 10
+  }
+}

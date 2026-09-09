@@ -1,0 +1,33 @@
+{
+  "failed": {
+    "ad_count": 0,
+    "adgroup_count": 0,
+    "campaign_count": 0
+  },
+  "measured_implementation_committed_as": "c83f731",
+  "observed_at": "2026-09-09T06:17:50.408723+00:00",
+  "page_limit": 100,
+  "read_only_transaction": true,
+  "response_bytes": 749,
+  "schema": "p07-capacity-catalog-fixed-v1",
+  "seconds": 17.302192749921232,
+  "source_dirty": true,
+  "source_note": "Measured after catalog fix before its commit; subsequent explicit DTO keyword typing did not change SQL or response semantics.",
+  "source_revision": "2a3babd",
+  "submissions": 1,
+  "submitted": {
+    "ad_count": 1200000,
+    "adgroup_count": 600000,
+    "campaign_count": 200000
+  },
+  "succeeded": {
+    "ad_count": 0,
+    "adgroup_count": 0,
+    "campaign_count": 0
+  },
+  "unknown": {
+    "ad_count": 0,
+    "adgroup_count": 0,
+    "campaign_count": 0
+  }
+}

@@ -1,0 +1,106 @@
+{
+  "schema": "p07-expansion-delivery-v1",
+  "accounts": 100,
+  "dramas": 10,
+  "cadence_seconds": 5.0,
+  "complete": true,
+  "boundary": "Real SDK GET transports, preparation, preview, outbox, current delivery ID and expansion DB pages. Broker captured locally. Ordinary execution messages accepted but not executed. No advertising API writes.",
+  "t1_backlog_at_t2_submission": 165,
+  "seconds": 73.4314120837953,
+  "rounds": 9,
+  "deliveries": [
+    {
+      "round": 1,
+      "tenant": "T1",
+      "revision": 0,
+      "seconds": 10.084386209025979,
+      "cumulative_steps": 8371,
+      "expanded": false
+    },
+    {
+      "round": 2,
+      "tenant": "T2",
+      "revision": 0,
+      "seconds": 0.0368318329565227,
+      "cumulative_steps": 102,
+      "expanded": true
+    },
+    {
+      "round": 2,
+      "tenant": "T1",
+      "revision": 1,
+      "seconds": 10.079825999913737,
+      "cumulative_steps": 12701,
+      "expanded": false
+    },
+    {
+      "round": 3,
+      "tenant": "T1",
+      "revision": 2,
+      "seconds": 10.203758375020698,
+      "cumulative_steps": 15973,
+      "expanded": false
+    },
+    {
+      "round": 4,
+      "tenant": "T1",
+      "revision": 3,
+      "seconds": 10.18852545809932,
+      "cumulative_steps": 18861,
+      "expanded": false
+    },
+    {
+      "round": 5,
+      "tenant": "T1",
+      "revision": 4,
+      "seconds": 10.133791957981884,
+      "cumulative_steps": 21363,
+      "expanded": false
+    },
+    {
+      "round": 6,
+      "tenant": "T1",
+      "revision": 5,
+      "seconds": 10.126466250047088,
+      "cumulative_steps": 23575,
+      "expanded": false
+    },
+    {
+      "round": 7,
+      "tenant": "T1",
+      "revision": 6,
+      "seconds": 4.164348874939606,
+      "cumulative_steps": 33199,
+      "expanded": false
+    },
+    {
+      "round": 8,
+      "tenant": "T1",
+      "revision": 7,
+      "seconds": 2.8490162501111627,
+      "cumulative_steps": 42821,
+      "expanded": false
+    },
+    {
+      "round": 9,
+      "tenant": "T1",
+      "revision": 8,
+      "seconds": 2.4999095839448273,
+      "cumulative_steps": 51000,
+      "expanded": true
+    }
+  ],
+  "t2_complete_seconds": 0.04551166691817343,
+  "peak_rss_bytes": 162381824,
+  "steps_by_kind": {
+    "CAMPAIGN": 1000,
+    "AD": 6000,
+    "READBACK": 10000,
+    "ADGROUP": 3000,
+    "CTA": 1000,
+    "MATERIAL": 30000
+  },
+  "source_revision": "14dd00c",
+  "source_dirty": true,
+  "metadata_note": "Source revision recorded from isolated delivery worktree; first run used the subsequently committed benchmark helper."
+}

@@ -1,0 +1,54 @@
+{
+  "schema": "p07-capacity-database-environment-v1",
+  "observed_at": "2026-09-09T03:55:26.874719+00:00",
+  "source_revision": "217986b",
+  "deployment": "Native Homebrew PostgreSQL on the shared macOS host; no container",
+  "settings_changed": false,
+  "settings": [
+    {
+      "name": "checkpoint_timeout",
+      "setting": "300",
+      "unit": "s"
+    },
+    {
+      "name": "effective_cache_size",
+      "setting": "524288",
+      "unit": "8kB"
+    },
+    {
+      "name": "effective_io_concurrency",
+      "setting": "0",
+      "unit": null
+    },
+    {
+      "name": "maintenance_work_mem",
+      "setting": "65536",
+      "unit": "kB"
+    },
+    {
+      "name": "max_wal_size",
+      "setting": "1024",
+      "unit": "MB"
+    },
+    {
+      "name": "random_page_cost",
+      "setting": "4",
+      "unit": null
+    },
+    {
+      "name": "server_version",
+      "setting": "17.5 (Homebrew)",
+      "unit": null
+    },
+    {
+      "name": "shared_buffers",
+      "setting": "16384",
+      "unit": "8kB"
+    },
+    {
+      "name": "work_mem",
+      "setting": "4096",
+      "unit": "kB"
+    }
+  ]
+}

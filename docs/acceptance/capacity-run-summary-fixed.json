@@ -1,0 +1,158 @@
+{
+  "observed_at": "2026-09-09T06:06:37.004189+00:00",
+  "queries": [
+    {
+      "kind": "metadata",
+      "seconds": 0.0002768330741673708
+    },
+    {
+      "kind": "metadata",
+      "seconds": 0.0041879171039909124
+    },
+    {
+      "kind": "metadata",
+      "seconds": 0.0010921249631792307
+    },
+    {
+      "kind": "metadata",
+      "seconds": 0.0009909579530358315
+    },
+    {
+      "kind": "metadata",
+      "seconds": 0.0010763751342892647
+    },
+    {
+      "kind": "metadata",
+      "seconds": 0.00019170809537172318
+    },
+    {
+      "kind": "metadata",
+      "seconds": 0.0020421671215444803
+    },
+    {
+      "kind": "scope",
+      "seconds": 0.6451284170616418
+    },
+    {
+      "kind": "outcomes",
+      "seconds": 9.23767870804295
+    },
+    {
+      "kind": "stages",
+      "seconds": 4.225499958032742
+    },
+    {
+      "kind": "metadata",
+      "seconds": 0.03876054217107594
+    },
+    {
+      "kind": "metadata",
+      "seconds": 0.00017812498845160007
+    },
+    {
+      "kind": "metadata",
+      "seconds": 0.0005142090376466513
+    },
+    {
+      "kind": "metadata",
+      "seconds": 0.0008312079589813948
+    },
+    {
+      "kind": "metadata",
+      "seconds": 0.00012091686949133873
+    },
+    {
+      "kind": "metadata",
+      "seconds": 6.820796988904476e-05
+    },
+    {
+      "kind": "metadata",
+      "seconds": 9.304191917181015e-05
+    },
+    {
+      "kind": "metadata",
+      "seconds": 0.0010595410130918026
+    },
+    {
+      "kind": "metadata",
+      "seconds": 13.001576292095706
+    },
+    {
+      "kind": "metadata",
+      "seconds": 8.996678834082559
+    }
+  ],
+  "read_only_transaction": true,
+  "schema": "p07-capacity-summary-fixed-v1",
+  "seconds": 36.250945874955505,
+  "source_revision": "2a3babd",
+  "summary": {
+    "account_count": 1000,
+    "actor_name": "10207909-2a95-40c4-8c0d-bf490c7f4f0d@example.com",
+    "batch_short_id": "0444d75665844adabe06a37b56e63f70",
+    "bc_id": "capacity-bc-t1",
+    "created_at": "2026-09-09T11:19:02.224341+08:00",
+    "currency": "USD",
+    "daily_budget_sum": "20000000.000000000000",
+    "draft_id": "2b52aab9-ef28-4239-94bd-b401739cc562",
+    "drama_count": 200,
+    "excluded": {
+      "ad_count": 0,
+      "adgroup_count": 0,
+      "campaign_count": 0
+    },
+    "excluded_unit_count": 0,
+    "expanded": true,
+    "failed": {
+      "ad_count": 0,
+      "adgroup_count": 0,
+      "campaign_count": 0
+    },
+    "pending": {
+      "ad_count": 1200000,
+      "adgroup_count": 600000,
+      "campaign_count": 200000
+    },
+    "planned": {
+      "ad_count": 1200000,
+      "adgroup_count": 600000,
+      "campaign_count": 200000
+    },
+    "provider_name": "Synthetic capacity",
+    "recovery": {
+      "can_reconcile": false,
+      "can_retry": false,
+      "reasons": [
+        "recovery_no_candidates"
+      ],
+      "reconcilable_step_count": 0,
+      "retryable_step_count": 0
+    },
+    "stage_counts": {
+      "AD:PENDING": 1200000,
+      "ADGROUP:PENDING": 600000,
+      "CAMPAIGN:PENDING": 200000,
+      "CTA:PENDING": 200000,
+      "MATERIAL:PENDING": 6000000,
+      "READBACK:PENDING": 2000000
+    },
+    "status": "RUNNING",
+    "strategy_label": "Capacity strategy v1",
+    "submitted": {
+      "ad_count": 1200000,
+      "adgroup_count": 600000,
+      "campaign_count": 200000
+    },
+    "succeeded": {
+      "ad_count": 0,
+      "adgroup_count": 0,
+      "campaign_count": 0
+    },
+    "unknown": {
+      "ad_count": 0,
+      "adgroup_count": 0,
+      "campaign_count": 0
+    },
+    "updated_at": "2026-09-09T13:11:24.081312+08:00"
+  }
+}
