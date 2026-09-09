@@ -66,6 +66,11 @@ DRAMAS = ("The Bond", "Hidden Promise")
 PASSWORD = "Offline-acceptance-2026!"
 
 
+def synthetic_id(key: str) -> str:
+    """Stable 20-digit opaque identifier, above JavaScript's safe integer range."""
+    return str(10**19 + int(hashlib.sha256(key.encode()).hexdigest()[:14], 16))
+
+
 @dataclass
 class Scope:
     context: TenantContext
@@ -77,6 +82,7 @@ class Scope:
     version_id: UUID
     accounts: tuple[str, ...]
     sources: tuple[str, ...]
+    label: str = ""
     material_ids: list[UUID] = field(default_factory=list)
     admin_email: str = ""
     admin_id: UUID | None = None
@@ -112,6 +118,22 @@ class Wire:
             if method == "POST" and not query
             else query
         )
+        account = body.get("advertiser_id") or query.get("advertiser_id")
+        scopes = [
+            scope
+            for scope in self.scopes.values()
+            if (
+                account in scope.accounts + scope.sources
+                if account
+                else scope.bc_id == query.get("bc_id")
+            )
+        ]
+        if (
+            len(scopes) != 1
+            or kwargs.get("headers", {}).get("Access-Token")
+            != "synthetic-" + scopes[0].label
+        ):
+            raise AssertionError("TikTok wire rejected a tenant/credential mismatch")
         if "/smart_plus/" in path:
             response = self.smart.call_api(
                 path, method, body=body, query_params=list(query.items())
@@ -278,11 +300,13 @@ class Wire:
             data = self.portfolios[query["creative_portfolio_id"]]
         elif path.endswith("/adgroup/get/"):
             filters = json.loads(query["filtering"])
+            assert set(filters) == {"campaign_ids", "adgroup_ids"}
             rows = [
                 row
                 for row in self.smart.store["adgroup"].values()
                 if row["advertiser_id"] == query["advertiser_id"]
                 and row["adgroup_id"] in filters["adgroup_ids"]
+                and row["campaign_id"] in filters["campaign_ids"]
             ]
             data = {
                 "list": rows,
@@ -309,8 +333,19 @@ class Wire:
     def provider(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
         self.calls["provider:" + path] += 1
+        application = request.url.params.get("app") or request.url.params.get("channel")
+        scopes = [
+            scope
+            for scope in self.scopes.values()
+            if scope.application_id == application
+        ]
+        if len(scopes) != 1:
+            raise AssertionError("Provider wire rejected an unknown application scope")
+        label = scopes[0].label
         if request.url.host == "partners.shortswave.com":
             assert path.endswith("/drama/list")
+            if request.headers.get("cookie") != "x-ds-admin-token=synthetic-" + label:
+                raise AssertionError("Provider wire rejected mismatched credentials")
             page = int(request.url.params["page"])
             title = request.url.params["title"]
             rows = (
@@ -323,6 +358,8 @@ class Wire:
             request.url.host == "video-wechat-open.eastdrama.net"
             and request.method == "POST"
         )
+        if request.headers.get("session") != "synthetic-" + label:
+            raise AssertionError("Provider wire rejected mismatched credentials")
         body = json.loads(request.content)
         if path.endswith("/getVideoList"):
             title = body["keywords"]
@@ -617,8 +654,10 @@ def seed_scope(
         session.add(
             TenantMembership(tenant_id=tenant.id, user_id=admin.id, role="tenant_admin")
         )
-        bc = "acceptance-bc-" + label
-        session.add(TenantBC(tenant_id=tenant.id, bc_id=bc))
+        bc = synthetic_id("bc:" + label)
+        session.add(
+            TenantBC(tenant_id=tenant.id, bc_id=bc, name="Acceptance BC " + label)
+        )
         conn = TikTokConnection(
             tenant_id=tenant.id,
             status="ACTIVE",
@@ -638,9 +677,9 @@ def seed_scope(
             verification_token=verification,
             encrypted_credentials=encrypt_credentials(
                 tenant_id=tenant.id,
-                value={"session": "synthetic-session"}
+                value={"session": "synthetic-" + label}
                 if provider_kind == "jiashu"
-                else {"token": "synthetic"},
+                else {"token": "synthetic-" + label},
             ),
         )
         session.add_all([conn, provider])
@@ -648,7 +687,7 @@ def seed_scope(
         app = ProviderApplication(
             tenant_id=tenant.id,
             connection_id=provider.id,
-            external_id="acceptance-app",
+            external_id="acceptance-app-" + label,
             name="Acceptance Minis",
             tiktok_minis_id="acceptance-minis",
             channel_config={
@@ -681,9 +720,10 @@ def seed_scope(
             provider.id,
             app.external_id,
             version.id,
-            tuple(f"{label}-target-{n}" for n in range(3)),
-            tuple(f"{label}-source-{n}" for n in range(2)),
+            tuple(synthetic_id(f"{label}:target:{n}") for n in range(3)),
+            tuple(synthetic_id(f"{label}:source:{n}") for n in range(2)),
         )
+        scope.label = label
         scope.admin_email, scope.admin_id = admin.email, admin.id
         scope.platform_email, scope.platform_id = platform.email, platform.id
         for i, advertiser in enumerate(scope.accounts + scope.sources):
