@@ -6,6 +6,8 @@ export function BuildWorkspace() {
   if (!tenantId || !scope?.bcId || !bc)
     return (
       <WorkspaceEmpty
+        tenantId={tenantId}
+        canConnect={scope?.role !== undefined && scope.role !== "viewer"}
         title={scope?.bcId ? "请先选择有效的 BC" : "尚未连接 TikTok BC"}
         description={
           bcPending

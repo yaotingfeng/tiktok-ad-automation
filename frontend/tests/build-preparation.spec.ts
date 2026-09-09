@@ -469,3 +469,34 @@ test("未知候选选择关闭重开也不允许重复或改选", async ({ page 
     ),
   ).toHaveLength(0)
 })
+
+for (const viewer of [false, true]) {
+  test(`已有租户无BC仅引导当前账户页（${viewer ? "viewer" : "operator"}）`, async ({
+    page,
+  }) => {
+    const api = await buildsBoundary(page, { viewer })
+    await page.route("**/api/tenants/*/bcs*", (route) =>
+      route.fulfill({ json: { items: [], next_cursor: null } }),
+    )
+    await page.goto(`/tenants/${tenant}/builds/new`)
+    await expect(
+      page.getByRole("heading", { name: "尚未连接 TikTok BC", exact: true }),
+    ).toBeVisible()
+    await expect(page.getByText("尚未接入租户", { exact: true })).toHaveCount(0)
+    await expect(
+      page.getByText(/当前尚无租户和 BC|请联系平台管理员/),
+    ).toHaveCount(0)
+    const link = page.getByRole("link", { name: "查看账户与授权", exact: true })
+    await expect(link).toHaveAttribute(
+      "href",
+      `/tenants/${tenant}/accounts?tab=connections`,
+    )
+    if (viewer)
+      await expect(
+        page.getByText(/请联系租户管理员或投手完成 TikTok 授权/),
+      ).toBeVisible()
+    expect(
+      api.requests.filter((request) => request.method === "POST"),
+    ).toHaveLength(0)
+  })
+}
