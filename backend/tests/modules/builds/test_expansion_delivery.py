@@ -141,6 +141,22 @@ def test_permission_is_rechecked_after_each_committed_page(submitted):
 def test_page_budget_yields_one_current_successor(submitted, monkeypatch):
     case, identity = submitted
     monkeypatch.setattr(submission_tasks, "MAX_DELIVERY_PAGES", 2, raising=False)
+    # Existing ordinary fanout must not bury the actual generated successor.
+    from app.jobs.outbox import enqueue_after_commit, flush_dispatch
+
+    old = datetime.now(UTC) - timedelta(minutes=1)
+    with Session(case.database_engine) as session, session.begin():
+        for _ in range(200):
+            ordinary_id = enqueue_after_commit(
+                session,
+                context=case.scope.context,
+                task_name=submission_tasks.UNIT_TASK_NAME,
+                task_key=f"queued-unit:{uuid4()}",
+                payload={"unit_id": str(uuid4()), "revision": 0},
+            )
+            ordinary = session.get(PendingDispatch, ordinary_id)
+            ordinary.available_at = old
+            session.add(ordinary)
     deliver(case)
     done, count, revision, dispatch, _ = snapshot(case)
     assert not done and 100 < count <= 200
@@ -161,6 +177,8 @@ def test_page_budget_yields_one_current_successor(submitted, monkeypatch):
             "revision": 1,
         }
         assert successor.actor_id == case.scope.context.actor_id
+    assert flush_dispatch(limit=5) == 5
+    assert str(dispatch) in [item["task_id"] for item in case.runtime.messages]
 
 
 def test_current_dispatch_identity_and_transport_backoff_are_not_bypassed(submitted):

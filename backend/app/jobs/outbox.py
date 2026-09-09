@@ -9,7 +9,7 @@ import json
 import math
 import re
 from datetime import UTC, datetime, timedelta
-from typing import NoReturn
+from typing import Any, NoReturn, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy.dialects.postgresql import insert
@@ -21,6 +21,10 @@ from app.core.errors import DomainError
 from app.jobs.celery_app import celery_app
 from app.jobs.models import DispatchTenantCursor, PendingDispatch
 from app.jobs.tasks import dispatch_queue
+
+# One expansion slot keeps a generated successor ahead of its own unit fanout.
+# Other expansion messages never consume ordinary FIFO slots in this round.
+_EXPANSION_TASK = "builds.expand_submission"
 
 _SECRET_NAMES = {
     "token",
@@ -43,7 +47,7 @@ _SECRET_NAMES = {
 }
 
 
-def validate_dispatch_payload(payload: dict) -> dict:
+def validate_dispatch_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Accept small JSON references/scalars, never credentials or file bodies."""
 
     def invalid() -> NoReturn:
@@ -85,7 +89,7 @@ def validate_dispatch_payload(payload: dict) -> dict:
     if len(encoded.encode()) > 16384:
         invalid()
     # Snapshot caller-owned objects: later mutation cannot change the dispatch.
-    return json.loads(encoded)
+    return cast(dict[str, Any], json.loads(encoded))
 
 
 def enqueue_after_commit(
@@ -94,7 +98,7 @@ def enqueue_after_commit(
     context: TenantContext,
     task_name: str,
     task_key: str,
-    payload: dict,
+    payload: dict[str, Any],
 ) -> UUID:
     """Write in the caller's transaction. Never commit or publish here."""
     dispatch_queue(task_name)
@@ -121,7 +125,7 @@ def enqueue_after_commit(
         .returning(col(PendingDispatch.id))
     ).first()
     if result is not None:
-        return result[0]
+        return cast(UUID, result[0])
     existing = session.exec(
         select(PendingDispatch).where(
             PendingDispatch.tenant_id == context.tenant_id,
@@ -139,7 +143,12 @@ def enqueue_after_commit(
 
 
 def flush_dispatch(limit: int = 100) -> int:
-    """One fair round, at most five messages per tenant and 100 in total."""
+    """One tenant round: at most one expansion, then ordinary FIFO; <=5/tenant.
+
+    With only expansions due we deliberately leave the other slots unused.
+    A second expansion cannot starve ordinary work as new requests arrive.
+    Broker failures retain their original delivery IDs and normal backoff.
+    """
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
         raise ValueError("Dispatch limit must be a positive integer")
     limit = min(limit, 100)
@@ -169,7 +178,8 @@ def flush_dispatch(limit: int = 100) -> int:
         for cursor in cursors:
             if attempted >= limit:
                 break
-            records = session.exec(
+            slots = min(5, limit - attempted)
+            pending = (
                 select(PendingDispatch)
                 .where(
                     PendingDispatch.tenant_id == cursor.tenant_id,
@@ -177,9 +187,22 @@ def flush_dispatch(limit: int = 100) -> int:
                     col(PendingDispatch.available_at) <= now,
                 )
                 .order_by(col(PendingDispatch.available_at), col(PendingDispatch.id))
-                .limit(min(5, limit - attempted))
                 .with_for_update(skip_locked=True)
-            ).all()
+            )
+            records = list(
+                session.exec(
+                    pending.where(PendingDispatch.task_name == _EXPANSION_TASK).limit(1)
+                ).all()
+            )
+            ordinary_slots = slots - len(records)
+            if ordinary_slots:
+                records.extend(
+                    session.exec(
+                        pending.where(
+                            PendingDispatch.task_name != _EXPANSION_TASK
+                        ).limit(ordinary_slots)
+                    ).all()
+                )
             for record in records:
                 attempted += 1
                 record.attempts += 1
