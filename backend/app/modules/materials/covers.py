@@ -7,7 +7,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from redis import Redis
-from sqlalchemy import Engine, func
+from sqlalchemy import Engine, func, or_
 from sqlalchemy.dialects.postgresql import array, insert
 from sqlmodel import Session, col, select
 
@@ -211,12 +211,14 @@ def ensure_cover(
     ):
         return AssetPreparation(state="blocked", reason_code="cover_video_not_ready")
     job = session.exec(
-        select(MaterialCoverJob).where(
+        select(MaterialCoverJob)
+        .where(
             MaterialCoverJob.tenant_id == context.tenant_id,
             MaterialCoverJob.asset_id == asset.id,
             MaterialCoverJob.connection_id == asset.connection_id,
             MaterialCoverJob.video_id == asset.video_id,
         )
+        .with_for_update()
     ).first()
     if job:
         _access(session, context, job)
@@ -374,6 +376,16 @@ def _claim(
             or job.dispatch_id != dispatch_id
             or job.revision != revision
             or job.status not in {"PENDING", "PREPARING", "VERIFYING"}
+        ):
+            return None
+        dispatch = session.get(PendingDispatch, dispatch_id)
+        expected_task = "materials.verify_cover" if read else "materials.prepare_cover"
+        if dispatch is None or (
+            dispatch.tenant_id != job.tenant_id
+            or dispatch.actor_id != job.actor_id
+            or dispatch.task_name != expected_task
+            or dispatch.task_key != f"cover:{job.id}:{job.revision}"
+            or dispatch.payload != {"job_id": str(job.id), "revision": job.revision}
         ):
             return None
         if job.claimed_until and job.claimed_until > _now():
@@ -758,13 +770,49 @@ def repair_cover_dispatches(session: Session, *, limit: int = 100) -> int:
         .where(
             col(MaterialCoverJob.status).in_(["PENDING", "PREPARING", "VERIFYING"]),
             MaterialCoverJob.repair_after <= _now(),
+            or_(
+                col(MaterialCoverJob.claimed_until).is_(None),
+                col(MaterialCoverJob.claimed_until) <= _now(),
+            ),
         )
         .order_by(col(MaterialCoverJob.repair_after), col(MaterialCoverJob.id))
         .limit(limit)
         .with_for_update(skip_locked=True)
     ).all()
+    count = 0
+    now = _now()
     for job in jobs:
-        _queue(
-            session, job, read=bool(job.request_armed_at) or job.status == "VERIFYING"
-        )
-    return len(jobs)
+        dispatch = session.exec(
+            select(PendingDispatch)
+            .where(PendingDispatch.id == job.dispatch_id)
+            .with_for_update()
+        ).first()
+        read = bool(job.request_armed_at) or job.status == "VERIFYING"
+        expected_task = "materials.verify_cover" if read else "materials.prepare_cover"
+        if dispatch is not None and (
+            dispatch.tenant_id != job.tenant_id
+            or dispatch.actor_id != job.actor_id
+            or dispatch.task_name
+            not in {"materials.prepare_cover", "materials.verify_cover"}
+            or dispatch.task_key != f"cover:{job.id}:{job.revision}"
+            or dispatch.payload != {"job_id": str(job.id), "revision": job.revision}
+        ):
+            _stop(job, "dispatch_payload_invalid", unknown=bool(job.request_armed_at))
+        elif dispatch is None or dispatch.task_name != expected_task:
+            # A dead armed PREPARE can only advance to a new read-only phase.
+            if job.request_armed_at:
+                job.error_code = "cover_result_unknown"
+            _queue(session, job, read=read)
+        else:
+            job.claim_token = job.claimed_until = None
+            if (
+                dispatch.published_at is not None
+                and dispatch.published_at <= now - timedelta(seconds=CLAIM_SECONDS)
+            ):
+                dispatch.published_at = None
+            # Preserve the broker's pending identity, attempts and backoff.
+            job.repair_after = max(
+                now, dispatch.available_at, dispatch.published_at or now
+            ) + timedelta(seconds=CLAIM_SECONDS)
+        count += 1
+    return count

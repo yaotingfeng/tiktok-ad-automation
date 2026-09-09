@@ -468,3 +468,397 @@ def test_revoke_between_video_get_and_post_blocks_without_arming(
     assert job_state(identity).request_armed_at is None
     assert job_state(identity).status == "BLOCKED"
     assert [call[0] for call in wire[0]] == ["GET"]
+
+
+def test_known_receipt_commits_before_sdk_cleanup_interrupt(
+    source_env, redis_client, wire, monkeypatch
+):
+    import urllib3
+    from billiard.exceptions import SoftTimeLimitExceeded
+
+    scopes(source_env)
+    seed(source_env)
+    identity = queue(source_env).task_id
+    original = urllib3.PoolManager.clear
+    seen = []
+
+    def cleanup(pool):
+        original(pool)
+        if len(wire[0]) == 2:
+            job = job_state(identity)
+            seen.append(job.known_image_id)
+            raise SoftTimeLimitExceeded()
+
+    monkeypatch.setattr(urllib3.PoolManager, "clear", cleanup)
+    wire[1].extend([video_info(), {"image_id": "target-image", "signature": "a" * 32}])
+    run(source_env, redis_client, identity)
+    assert seen == ["target-image"]
+    assert job_state(identity).status == "VERIFYING"
+    # Interrupted SDK scopes retain their leases until process deadline. Move
+    # only this fixture's lease scores into the past; admission runs real Lua.
+    from app.core.config import settings
+    from app.jobs.admission import admission_keys
+
+    keys = admission_keys(
+        settings.TIKTOK_APP_ID,
+        covers.api.UPLOAD_ENDPOINT,
+        source_env["context"].tenant_id,
+        "actual-account",
+    )
+    for key in keys[2:]:
+        members = redis_client.zrange(key, 0, -1)
+        assert members
+        redis_client.zadd(key, dict.fromkeys(members, 0))
+    wire[1].append(image_info(identity))
+    run(source_env, redis_client, identity, read=True)
+    assert job_state(identity).status == "READY"
+    assert [call[0] for call in wire[0]].count("POST") == 1
+
+
+def test_receipt_transaction_failure_appends_id_before_cleanup_then_only_reads(
+    source_env, redis_client, wire, monkeypatch
+):
+    from datetime import timedelta
+
+    import urllib3
+    from sqlalchemy import event
+
+    from app.modules.materials.cover_models import MaterialCoverReceipt
+
+    scopes(source_env)
+    seed(source_env)
+    identity = queue(source_env).task_id
+    failed = []
+    original = urllib3.PoolManager.clear
+
+    def reject_receipt(_conn, _cursor, statement, _params, _context, _many):
+        if (
+            "UPDATE material_cover_job SET" in statement
+            and "known_image_id=" in statement
+            and not failed
+        ):
+            failed.append(True)
+            raise RuntimeError("synthetic receipt commit failure")
+
+    def cleanup(pool):
+        if len(wire[0]) == 2:
+            with Session(engine) as session:
+                assert (
+                    session.exec(
+                        select(MaterialCoverReceipt.image_id).where(
+                            MaterialCoverReceipt.job_id == identity
+                        )
+                    ).one()
+                    == "target-image"
+                )
+        original(pool)
+
+    monkeypatch.setattr(urllib3.PoolManager, "clear", cleanup)
+    event.listen(engine, "before_cursor_execute", reject_receipt)
+    try:
+        wire[1].extend(
+            [video_info(), {"image_id": "target-image", "signature": "a" * 32}]
+        )
+        run(source_env, redis_client, identity)
+    finally:
+        event.remove(engine, "before_cursor_execute", reject_receipt)
+    assert failed
+    with Session(engine) as session, session.begin():
+        job = session.get(MaterialCoverJob, identity)
+        job.claimed_until = job.repair_after = covers._now() - timedelta(seconds=1)
+        covers.repair_cover_dispatches(session)
+    wire[1].append(image_info(identity))
+    run(source_env, redis_client, identity, read=True)
+    assert job_state(identity).status == "READY"
+    assert [call[0] for call in wire[0]].count("POST") == 1
+
+
+def test_armed_dead_worker_is_repaired_to_read_only_and_old_nonce_cannot_write(
+    source_env, redis_client, wire
+):
+    from datetime import timedelta
+
+    scopes(source_env)
+    seed(source_env)
+    identity = queue(source_env).task_id
+    old = job_state(identity)
+    claim = covers._claim(
+        engine,
+        source_env["context"],
+        identity,
+        old.dispatch_id,
+        old.revision,
+        read=False,
+    )
+    with Session(engine) as session, session.begin():
+        job = session.get(MaterialCoverJob, identity)
+        job.request_armed_at = covers._now()
+        job.claimed_until = job.repair_after = covers._now() - timedelta(seconds=1)
+        assert covers.repair_cover_dispatches(session) == 1
+    wire[1].append(search_page([]))
+    run(
+        source_env,
+        redis_client,
+        identity,
+        dispatch=old.dispatch_id,
+        revision=old.revision,
+    )
+    assert not wire[0]
+    run(source_env, redis_client, identity, read=True)
+    assert job_state(identity).status == "UNKNOWN"
+    assert [call[0] for call in wire[0]] == ["GET"]
+    with Session(engine) as session:
+        assert (
+            covers._fenced(session, source_env["context"], identity, claim[1]) is None
+        )
+
+
+def test_concurrent_callers_and_duplicate_workers_share_one_post(
+    source_env, redis_client, wire
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    scopes(source_env)
+    seed(source_env)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: queue(source_env), range(2)))
+    assert results[0].task_id == results[1].task_id
+    identity = results[0].task_id
+    entered, release = Event(), Event()
+
+    def video():
+        entered.set()
+        assert release.wait(timeout=5)
+        return video_info()
+
+    wire[1].extend([video, {"image_id": "target-image", "signature": "a" * 32}])
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        original = pool.submit(run, source_env, redis_client, identity)
+        assert entered.wait(timeout=5)
+        duplicate = pool.submit(run, source_env, redis_client, identity)
+        duplicate.result(timeout=5)
+        release.set()
+        original.result(timeout=5)
+    assert [call[0] for call in wire[0]] == ["GET", "POST"]
+
+
+def test_retry_refuses_every_armed_known_receipt_and_active_dispatch(
+    source_env, redis_client, wire
+):
+    import pytest
+
+    from app.core.errors import DomainError
+    from app.modules.materials.cover_models import MaterialCoverReceipt
+
+    identity = successful_upload(source_env, redis_client, wire)
+    with Session(engine) as session, session.begin():
+        with pytest.raises(DomainError, match="只能核查"):
+            covers.request_cover_retry(
+                session, context=source_env["context"], job_id=identity
+            )
+        job = session.get(MaterialCoverJob, identity)
+        job.status = "BLOCKED"
+        job.known_image_id = None
+        job.request_armed_at = None
+        job.claim_token = job.claimed_until = job.dispatch_id = None
+        session.add(
+            MaterialCoverReceipt(
+                tenant_id=job.tenant_id, job_id=job.id, image_id="late-image"
+            )
+        )
+        session.flush()
+        with pytest.raises(DomainError, match="只能核查"):
+            covers.request_cover_retry(
+                session, context=source_env["context"], job_id=identity
+            )
+    assert [call[0] for call in wire[0]].count("POST") == 1
+
+
+def test_suggestion_url_is_uploaded_but_its_id_and_url_are_not_stored(
+    source_env, redis_client, wire
+):
+    scopes(source_env)
+    seed(source_env)
+    identity = queue(source_env).task_id
+    wire[1].extend(
+        [
+            video_info(None),
+            {
+                "list": [
+                    {
+                        "id": "not-image-id",
+                        "url": "https://example.com/suggest-secret",
+                        "width": 360,
+                        "height": 640,
+                    }
+                ]
+            },
+            {"image_id": "target-image", "signature": "a" * 32},
+        ]
+    )
+    run(source_env, redis_client, identity)
+    assert [call[0] for call in wire[0]] == ["GET", "GET", "POST"]
+    assert job_state(identity).known_image_id == "target-image"
+    assert "suggest-secret" not in job_state(identity).model_dump_json()
+
+
+def test_repair_does_not_replace_live_claim_even_if_repair_timestamp_is_due(source_env):
+    from datetime import timedelta
+
+    seed(source_env)
+    identity = queue(source_env).task_id
+    old = job_state(identity)
+    claim = covers._claim(
+        engine,
+        source_env["context"],
+        identity,
+        old.dispatch_id,
+        old.revision,
+        read=False,
+    )
+    with Session(engine) as session, session.begin():
+        session.get(MaterialCoverJob, identity).repair_after = (
+            covers._now() - timedelta(seconds=1)
+        )
+        session.flush()
+        assert covers.repair_cover_dispatches(session) == 0
+    assert job_state(identity).claim_token == claim[1]
+
+
+def test_wrong_task_kind_cannot_consume_current_prepare_dispatch(
+    source_env, redis_client, wire
+):
+    scopes(source_env)
+    seed(source_env)
+    identity = queue(source_env).task_id
+    before = job_state(identity)
+    run(source_env, redis_client, identity, read=True)
+    after = job_state(identity)
+    assert (after.status, after.revision, after.claim_token) == (
+        before.status,
+        before.revision,
+        None,
+    )
+    assert not wire[0]
+
+
+def test_scope_and_viewer_reads_are_local_but_cannot_retry_or_prepare(
+    source_env, redis_client, wire
+):
+    import pytest
+
+    from app.core.errors import DomainError
+    from app.modules.tenants.models import TenantMembership
+    from tests.modules.conftest import create_context
+
+    scopes(source_env)
+    seed(source_env)
+    identity = queue(source_env).task_id
+    with Session(engine) as session, session.begin():
+        temporary = session.begin_nested()
+        other = create_context(session)
+        with pytest.raises(DomainError):
+            covers.get_cover_status(session, context=other, job_id=identity)
+        temporary.rollback()
+        membership = session.get(
+            TenantMembership,
+            (source_env["context"].tenant_id, source_env["context"].actor_id),
+        )
+        membership.role = "viewer"
+    with Session(engine) as session:
+        value = covers.get_cover_status(
+            session, context=source_env["context"], job_id=identity
+        )
+        assert value.task_id == identity and value.state == "queued"
+        with pytest.raises(DomainError):
+            covers.request_cover_reconciliation(
+                session, context=source_env["context"], job_id=identity
+            )
+    run(source_env, redis_client, identity)
+    assert job_state(identity).status == "BLOCKED" and not wire[0]
+
+
+def test_every_sdk_call_releases_db_and_separately_checks_shared_admission(
+    source_env, redis_client, wire
+):
+    from sqlalchemy import text
+
+    from app.core.config import settings
+    from app.jobs.admission import admission_keys
+
+    scopes(source_env)
+    seed(source_env)
+    identity = queue(source_env).task_id
+
+    def inspect(endpoint, response):
+        with Session(engine) as session:
+            current = session.execute(
+                text(
+                    "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND state='idle in transaction' AND pid<>pg_backend_pid()"
+                )
+            ).scalar_one()
+            assert current == 0
+        keys = admission_keys(
+            settings.TIKTOK_APP_ID,
+            endpoint,
+            source_env["context"].tenant_id,
+            "actual-account",
+        )
+        assert all(redis_client.zcard(key) == 1 for key in keys[2:])
+        return response
+
+    wire[1].extend(
+        [
+            lambda: inspect(covers.VIDEO_INFO_ENDPOINT, video_info()),
+            lambda: inspect(
+                covers.api.UPLOAD_ENDPOINT,
+                {"image_id": "target-image", "signature": "a" * 32},
+            ),
+        ]
+    )
+    run(source_env, redis_client, identity)
+    wire[1].append(lambda: inspect(covers.api.INFO_ENDPOINT, image_info(identity)))
+    run(source_env, redis_client, identity, read=True)
+    assert job_state(identity).status == "READY"
+
+
+def test_repair_preserves_unpublished_broker_backoff_and_published_generation(
+    source_env,
+):
+    from datetime import timedelta
+
+    from app.jobs.models import PendingDispatch
+
+    seed(source_env)
+    identity = queue(source_env).task_id
+    old = job_state(identity)
+    future = covers._now() + timedelta(hours=1)
+    with Session(engine) as session, session.begin():
+        session.get(MaterialCoverJob, identity).repair_after = (
+            covers._now() - timedelta(seconds=1)
+        )
+        dispatch = session.get(PendingDispatch, old.dispatch_id)
+        dispatch.available_at, dispatch.attempts = future, 4
+        session.flush()
+        covers.repair_cover_dispatches(session)
+    assert (job_state(identity).dispatch_id, job_state(identity).revision) == (
+        old.dispatch_id,
+        old.revision,
+    )
+    with Session(engine) as session, session.begin():
+        dispatch = session.get(PendingDispatch, old.dispatch_id)
+        assert dispatch.available_at == future and dispatch.attempts == 4
+        dispatch.published_at = covers._now() - timedelta(seconds=120)
+        dispatch.available_at = covers._now() - timedelta(seconds=120)
+        session.get(MaterialCoverJob, identity).repair_after = (
+            covers._now() - timedelta(seconds=1)
+        )
+        session.flush()
+        assert covers.repair_cover_dispatches(session) == 1
+    with Session(engine) as session:
+        assert session.get(PendingDispatch, old.dispatch_id).published_at is None
+    assert (job_state(identity).dispatch_id, job_state(identity).revision) == (
+        old.dispatch_id,
+        old.revision,
+    )
