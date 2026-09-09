@@ -66,7 +66,7 @@ export function WorkspaceEmpty({
                 {tenantId
                   ? canConnect
                     ? "请前往当前租户的账户与授权页面完成 TikTok 授权，再通过顶栏选择 BC。"
-                    : "请联系租户管理员或投手完成 TikTok 授权。你可以在账户与授权页面查看连接情况。"
+                    : "请联系租户管理员完成 TikTok 授权。你可以在账户与授权页面查看连接情况。"
                   : "请联系平台管理员开通租户并分配成员权限。接入后可连接 TikTok BC、配置版权方并开始投放。"}
               </EmptyDescription>
             </EmptyHeader>

@@ -1,3 +1,4 @@
+import { canManage } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
 import { BuildInputPage } from "./BuildInputPage"
@@ -7,7 +8,7 @@ export function BuildWorkspace() {
     return (
       <WorkspaceEmpty
         tenantId={tenantId}
-        canConnect={scope?.role !== undefined && scope.role !== "viewer"}
+        canConnect={canManage(scope?.role)}
         title={scope?.bcId ? "请先选择有效的 BC" : "尚未连接 TikTok BC"}
         description={
           bcPending

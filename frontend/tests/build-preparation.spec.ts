@@ -491,10 +491,9 @@ for (const viewer of [false, true]) {
       "href",
       `/tenants/${tenant}/accounts?tab=connections`,
     )
-    if (viewer)
-      await expect(
-        page.getByText(/请联系租户管理员或投手完成 TikTok 授权/),
-      ).toBeVisible()
+    await expect(
+      page.getByText(/请联系租户管理员完成 TikTok 授权/),
+    ).toBeVisible()
     expect(
       api.requests.filter((request) => request.method === "POST"),
     ).toHaveLength(0)
