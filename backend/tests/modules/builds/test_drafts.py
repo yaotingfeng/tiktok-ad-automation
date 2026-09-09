@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -108,6 +108,52 @@ def account(session, context, identity="account-A"):
             active=True,
             can_build=True,
             permission_state="VERIFIED",
+        )
+    )
+    session.flush()
+    # Explicit offline COMPLETE evidence: VERIFIED flags alone no longer establish
+    # a current-token role/scope proof. No credentials or remote SDK are needed.
+    from app.modules.accounts.capabilities import _directory_basis
+    from app.modules.accounts.capability_models import (
+        CapabilityAsset,
+        CapabilityJob,
+        CapabilityPage,
+    )
+
+    job = CapabilityJob(
+        tenant_id=context.tenant_id,
+        bc_id="bc-draft",
+        connection_id=connection.id,
+        actor_id=context.actor_id,
+        credential_version=connection.credential_version,
+        directory_basis=_directory_basis(session, context, "bc-draft", connection.id),
+        status="COMPLETE",
+        phase="DONE",
+        scope_known=True,
+        scope_build=True,
+        completed_at=datetime.now(UTC),
+        expires_at=datetime.now(UTC) + timedelta(hours=4),
+    )
+    session.add(job)
+    session.flush()
+    session.add(
+        CapabilityPage(
+            job_id=job.id,
+            page=1,
+            tenant_id=context.tenant_id,
+            bc_id="bc-draft",
+            row_count=1,
+        )
+    )
+    session.flush()
+    session.add(
+        CapabilityAsset(
+            job_id=job.id,
+            page=1,
+            tenant_id=context.tenant_id,
+            bc_id="bc-draft",
+            advertiser_id=identity,
+            role="OPERATOR",
         )
     )
     session.flush()
@@ -437,3 +483,41 @@ def test_prepare_request_aliases_stay_bound_and_refresh_observes_same_provider_t
         prepare_draft(session, context=context, draft_id=draft_id, request_id=first)
         == task
     )
+
+
+def test_scene_reference_uses_a_current_ready_link_when_first_drama_link_changed(
+    session, context, intent, monkeypatch
+):
+    from app.modules.builds import drafts
+    from app.modules.builds.scene_schemas import ScenePreparation
+
+    account(session, context)
+    material(session, context, "Moon - Short Drama.mp4", bc="bc-draft")
+    draft_id = create_draft(session, context=context, **intent)
+    task_id = prepare_draft(
+        session, context=context, draft_id=draft_id, request_id=uuid4()
+    )
+    ready_links(session, context, task_id, intent)
+    prep = session.get(DraftPreparation, task_id)
+    for _ in range(10):
+        if prep.phase == "materials":
+            break
+        continue_draft(session, context=context, task_id=task_id)
+    assert prep.phase == "materials"
+    dramas = session.exec(
+        select(DraftDrama)
+        .where(DraftDrama.draft_id == draft_id)
+        .order_by(DraftDrama.first_line)
+    ).all()
+    assert len(dramas) == 2
+    session.get(PromotionLink, dramas[0].link_id).status = "invalid"
+    session.flush()
+    called = []
+
+    def ensure(_session, **kwargs):
+        called.append(kwargs["link_id"])
+        return ScenePreparation(None, "blocked", "fixture_scene_unavailable")
+
+    monkeypatch.setattr(drafts, "ensure_scene_preparation", ensure)
+    finish(session, context, task_id)
+    assert called == [dramas[1].link_id]

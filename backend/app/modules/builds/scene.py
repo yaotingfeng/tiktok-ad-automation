@@ -11,6 +11,7 @@ from celery import current_task  # type: ignore[import-untyped]
 from sqlalchemy.dialects.postgresql import array, insert
 from sqlmodel import Session, col, select
 
+from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.credentials import decrypt_credentials
 from app.core.errors import DomainError
@@ -18,6 +19,7 @@ from app.integrations.tiktok.sdk import admitted_account_call, sdk_client
 from app.jobs.admission import admission_policy
 from app.modules.accounts.access import resolve_account_access, usable_grants
 from app.modules.accounts.models import BCAccountAccess, TikTokConnection
+from app.modules.accounts.schemas import AccountAccess
 from app.modules.providers.models import (
     PromotionLink,
     ProviderApplication,
@@ -44,22 +46,126 @@ RESOURCES: tuple[SceneResource, ...] = (
 
 def _require_bounded_worker() -> None:
     task = current_task
-    limit = (
-        (task.request.timelimit or (None, None))[0] or getattr(task, "time_limit", None)
-        if task
-        else None
-    )
+    request = getattr(task, "request", None)
+    limits = getattr(request, "timelimit", None)
+    limit = limits[0] if isinstance(limits, (tuple, list)) and limits else None
+    if limit is None:
+        limit = getattr(task, "time_limit", None)
     if (
-        not task
+        not request
         or not current_process().daemon
         or not current_process().name.startswith("ForkPoolWorker-")
-        or task.request.called_directly
-        or task.request.is_eager
+        or getattr(request, "called_directly", True)
+        or getattr(request, "is_eager", True)
         or isinstance(limit, bool)
         or not isinstance(limit, (int, float))
         or not 0 < limit <= HARD_LIMIT
     ):
         raise DomainError("scene_worker_unbounded", "场景刷新需要有界后台任务")
+
+
+def _application_scope(
+    session: Session,
+    *,
+    context: TenantContext,
+    bc_id: str,
+    advertiser_id: str,
+    provider_connection_id: UUID,
+    application_id: str,
+    connection_id: UUID | None = None,
+    lock: bool = False,
+) -> dict[str, Any]:
+    # Prefer the same usable build connection chosen by draft/execution. Before
+    # bootstrap there may only be a readable UNKNOWN grant, which is not proof.
+    try:
+        access = resolve_account_access(
+            session,
+            context=context,
+            bc_id=bc_id,
+            advertiser_id=advertiser_id,
+            action="build",
+        )
+    except DomainError:
+        access = resolve_account_access(
+            session,
+            context=context,
+            bc_id=bc_id,
+            advertiser_id=advertiser_id,
+            action="read",
+        )
+    chosen = connection_id or access.connection_id
+    grant = session.exec(
+        usable_grants(tenant_id=context.tenant_id, bc_id=bc_id, action="read")
+        .where(
+            BCAccountAccess.advertiser_id == advertiser_id,
+            BCAccountAccess.connection_id == chosen,
+        )
+        .execution_options(populate_existing=True)
+    ).first()
+    if grant is None:
+        raise DomainError("account_access_denied", "当前授权不支持该账户操作")
+    statement = select(TikTokConnection).where(
+        TikTokConnection.id == chosen, TikTokConnection.tenant_id == context.tenant_id
+    )
+    if lock:
+        statement = statement.with_for_update()
+    connection = session.exec(statement.execution_options(populate_existing=True)).one()
+    provider = session.get(
+        ProviderConnection, provider_connection_id, populate_existing=True
+    )
+    app = session.exec(
+        select(ProviderApplication)
+        .where(
+            ProviderApplication.tenant_id == context.tenant_id,
+            ProviderApplication.connection_id == provider_connection_id,
+            ProviderApplication.external_id == application_id,
+        )
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if (
+        not provider
+        or provider.tenant_id != context.tenant_id
+        or provider.status != "active"
+        or not provider.verification_token
+        or app is None
+        or app.channel_config.get("verification_token")
+        != str(provider.verification_token)
+    ):
+        raise DomainError("scene_link_unavailable", "版权方应用需要重新核实")
+    basis = {
+        "sdk_contract_revision": api.CONTRACT_REVISION,
+        "constraints_revision": limits.REVISION,
+        "max_age_seconds": settings.SCENE_MAX_AGE_SECONDS,
+        "tiktok_app_id": settings.TIKTOK_APP_ID,
+        "tenant_id": str(context.tenant_id),
+        "bc_id": bc_id,
+        "advertiser_id": advertiser_id,
+        "connection_id": str(connection.id),
+        "credential_version": connection.credential_version,
+        "grant_run": str(grant.last_seen_run_id),
+        "currency": access.currency,
+        "timezone": access.timezone,
+        "provider_id": str(provider.id),
+        "provider_version": provider.credential_version,
+        "provider_verification": str(provider.verification_token),
+        "application_id": app.external_id,
+        "minis_id": app.tiktok_minis_id,
+    }
+    return {
+        "access": AccountAccess(
+            advertiser_id=advertiser_id,
+            bc_id=bc_id,
+            connection_id=chosen,
+            currency=access.currency,
+            timezone=access.timezone,
+        ),
+        "connection": connection,
+        "grant": grant,
+        "provider": provider,
+        "application": app,
+        "minis_id": app.tiktok_minis_id,
+        "basis": sha256(json.dumps(basis, sort_keys=True).encode()).hexdigest(),
+    }
 
 
 def _scope(
@@ -71,76 +177,32 @@ def _scope(
     link_id: UUID,
     lock: bool = False,
 ) -> dict[str, Any]:
-    access = resolve_account_access(
-        session,
-        context=context,
-        bc_id=bc_id,
-        advertiser_id=advertiser_id,
-        action="read",
+    # Link checks happen on every consumer request; its URL/version are not input
+    # parameters to the reusable account/application GETs.
+    require_tenant(
+        session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read"
     )
-    statement = select(TikTokConnection).where(
-        TikTokConnection.id == access.connection_id,
-        TikTokConnection.tenant_id == context.tenant_id,
-    )
-    if lock:
-        statement = statement.with_for_update()
-    connection = session.exec(statement.execution_options(populate_existing=True)).one()
     link = session.exec(
         select(PromotionLink)
         .where(
-            PromotionLink.id == link_id, PromotionLink.tenant_id == context.tenant_id
+            PromotionLink.id == link_id,
+            PromotionLink.tenant_id == context.tenant_id,
         )
         .execution_options(populate_existing=True)
     ).first()
     if link is None:
         raise DomainError("resource_not_found", "当前租户推广链接不存在")
-    provider = session.get(
-        ProviderConnection, link.connection_id, populate_existing=True
+    if link.status != "ready" or not link.verified_at:
+        raise DomainError("scene_link_unavailable", "推广链接需要重新核实")
+    return _application_scope(
+        session,
+        context=context,
+        bc_id=bc_id,
+        advertiser_id=advertiser_id,
+        provider_connection_id=link.connection_id,
+        application_id=link.application_id,
+        lock=lock,
     )
-    app = session.exec(
-        select(ProviderApplication)
-        .where(
-            ProviderApplication.tenant_id == context.tenant_id,
-            ProviderApplication.connection_id == link.connection_id,
-            ProviderApplication.external_id == link.application_id,
-        )
-        .execution_options(populate_existing=True)
-    ).one()
-    if (
-        not provider
-        or provider.tenant_id != context.tenant_id
-        or provider.status != "active"
-        or not provider.verification_token
-        or app.channel_config.get("verification_token")
-        != str(provider.verification_token)
-        or link.status != "ready"
-        or not link.verified_at
-    ):
-        raise DomainError("scene_link_unavailable", "推广链接或版权方应用需要重新核实")
-    grant = session.get(
-        BCAccountAccess,
-        (context.tenant_id, bc_id, advertiser_id, access.connection_id),
-        populate_existing=True,
-    )
-    assert grant is not None
-    basis = {
-        "sdk_contract_revision": api.CONTRACT_REVISION,
-        "connection_id": str(connection.id),
-        "credential_version": connection.credential_version,
-        "grant_run": str(grant.last_seen_run_id),
-        "provider_version": provider.credential_version,
-        "provider_verification": str(provider.verification_token),
-        "link_version": link.version,
-        "link_url": link.url,
-        "minis_id": app.tiktok_minis_id,
-    }
-    return {
-        "access": access,
-        "connection": connection,
-        "grant": grant,
-        "minis_id": app.tiktok_minis_id,
-        "basis": sha256(json.dumps(basis, sort_keys=True).encode()).hexdigest(),
-    }
 
 
 def _states(
@@ -183,7 +245,7 @@ def _merge(
     first: bool,
     last: bool,
 ) -> dict[str, Any]:
-    if resource in {"cta", "vbo"}:
+    if resource in {"cta", "vbo", "regions"}:
         return page
     if not first and (
         previous.get("total_number") != page["total_number"]
@@ -480,6 +542,104 @@ def refresh_scene_context(
         return SceneRefreshResult(None, resource, False, None, (safe,))
 
 
+def _assemble_scene(
+    *,
+    scope: dict[str, Any],
+    facts: dict[str, Any],
+    reasons: list[str],
+    evidence_ids: tuple[UUID, ...],
+    capability: Any,
+    locally_operable: bool,
+) -> SceneContext:
+    if capability is None or not capability.scope_verified:
+        reasons.append("account_scope_unverified")
+    if capability is None or not capability.can_build or not locally_operable:
+        reasons.append("account_build_unverified")
+    campaign = {
+        "objective_type": "APP_PROMOTION",
+        "app_promotion_type": "MINIS",
+        "campaign_type": "REGULAR_CAMPAIGN",
+        "catalog_enabled": False,
+        "budget_mode": "BUDGET_MODE_DYNAMIC_DAILY_BUDGET",
+    }
+    group: dict[str, Any] = {}
+    creative: dict[str, Any] = {}
+    cta: dict[str, Any] = {}
+    constraints, missing = limits.constraints_for(scope["access"].currency)
+    reasons.extend(missing)
+    matches = facts.get("minis", {}).get("matches", [])
+    if (
+        len(matches) == 1
+        and matches[0]["status"] == "ACTIVE"
+        and matches[0]["type"] == "MINI_SERIES"
+    ):
+        group = {
+            "promotion_type": "MINI_APP",
+            "minis_id": matches[0]["minis_id"],
+            "optimization_goal": "VALUE",
+            "optimization_event": "ACTIVE_PAY",
+            "bid_type": "BID_TYPE_NO_BID",
+            "deep_bid_type": "VO_MIN_ROAS",
+            "billing_event": "OCPM",
+            "placement_type": "PLACEMENT_TYPE_NORMAL",
+            "placements": ["PLACEMENT_TIKTOK"],
+        }
+        allowed = matches[0]["regions"]
+        constraints["allowed_region_codes"] = allowed
+        targets = [
+            item
+            for item in facts.get("regions", {}).get("locations", [])
+            if item["region_code"] in allowed
+        ]
+        if targets:
+            group["targeting_spec"] = {
+                "location_ids": sorted(item["location_id"] for item in targets)
+            }
+            constraints["target_regions"] = targets
+            constraints["targeting_source"] = "tool-region-doc1737189539571713"
+        else:
+            reasons.append("scene_targeting_unavailable")
+    else:
+        reasons.append("minis_unavailable")
+    identities = facts.get("identity", {}).get("matches", [])
+    if len(identities) == 1:
+        creative = {"creative_info": {**identities[0], "ad_format": "SINGLE_VIDEO"}}
+    else:
+        reasons.append(
+            "identity_selection_required" if identities else "identity_unavailable"
+        )
+    dynamic = facts.get("cta", {})
+    if dynamic.get("asset_ids") and dynamic.get("recommend_assets"):
+        cta = {
+            "asset_ids": dynamic["asset_ids"],
+            "recommend_assets": dynamic["recommend_assets"],
+            "requires_portfolio_creation": True,
+        }
+    else:
+        reasons.append("cta_unavailable")
+    if facts.get("vbo", {}).get("vo_min_roas") != "QUALIFIED":
+        reasons.append("minis_vbo_unverified")
+    revision = sha256(
+        (
+            scope["basis"] + "".join(sorted(str(value) for value in evidence_ids))
+        ).encode()
+    ).hexdigest()
+    return SceneContext(
+        supported=not reasons,
+        reason_codes=tuple(sorted(set(reasons))),
+        capability_revision=revision,
+        campaign_fields=campaign,
+        adgroup_fields=group,
+        creative_fields=creative,
+        cta_fields=cta,
+        name_limit=512,
+        creative_limit=50,
+        copy_length_limit=limits.COPY_LENGTH_LIMIT,
+        evidence_ids=evidence_ids,
+        field_constraints=constraints,
+    )
+
+
 def read_scene_context(
     session: Session,
     *,
@@ -488,7 +648,11 @@ def read_scene_context(
     advertiser_id: str,
     link_id: UUID,
 ) -> SceneContext:
-    """Local facts only. No network, credential decryption, mutation or flush."""
+    """Pure local facts. Link remains validated even when assets are shared."""
+    from app.modules.accounts.capabilities import get_capability_evidence
+
+    from .scene_job_models import SceneJob
+
     with session.no_autoflush:
         scope = _scope(
             session,
@@ -497,28 +661,65 @@ def read_scene_context(
             advertiser_id=advertiser_id,
             link_id=link_id,
         )
-        states = session.exec(
-            _states(context, bc_id, advertiser_id, link_id).execution_options(
-                populate_existing=True
+        now = datetime.now(UTC)
+        job = session.exec(
+            select(SceneJob)
+            .where(
+                SceneJob.tenant_id == context.tenant_id,
+                SceneJob.scope_basis == scope["basis"],
             )
-        ).all()
-    now = datetime.now(UTC)
-    available = {
-        state.resource: state
-        for state in states
-        if state.basis_digest == scope["basis"]
-        and state.complete
-        and state.expires_at
-        and state.expires_at > now
-    }
-    reasons = []
-    if len(available) != len(RESOURCES):
-        reasons.append("scene_evidence_missing")
-    if any(state.expires_at and state.expires_at <= now for state in states):
-        reasons.append("scene_evidence_expired")
-    reasons.extend(state.error_code for state in states if state.error_code)
-    grant = scope["grant"]
-    with session.no_autoflush:
+            .order_by(col(SceneJob.created_at).desc(), col(SceneJob.id).desc())
+            .limit(1)
+            .execution_options(populate_existing=True)
+        ).first()
+        reasons: list[str] = []
+        facts: dict[str, Any] = {}
+        evidence_ids: tuple[UUID, ...] = ()
+        if job is not None:
+            if job.status == "COMPLETE" and job.expires_at and job.expires_at > now:
+                facts, evidence_ids = job.facts, (job.id,)
+            else:
+                reasons.append(
+                    "scene_evidence_expired"
+                    if job.expires_at and job.expires_at <= now
+                    else "scene_evidence_missing"
+                )
+                if job.error_code:
+                    reasons.append(job.error_code)
+        else:
+            # Legacy direct refresh remains readable for diagnostics, but cannot
+            # establish current build permission without the shared BC proof.
+            states = session.exec(
+                _states(context, bc_id, advertiser_id, link_id).execution_options(
+                    populate_existing=True
+                )
+            ).all()
+            facts = {
+                state.resource: state.facts
+                for state in states
+                if state.basis_digest == scope["basis"]
+                and state.complete
+                and state.expires_at
+                and state.expires_at > now
+            }
+            evidence_ids = tuple(
+                state.last_evidence_id
+                for state in states
+                if state.last_evidence_id and state.basis_digest == scope["basis"]
+            )
+            reasons.append("scene_evidence_missing")
+            if any(state.expires_at and state.expires_at <= now for state in states):
+                reasons.append("scene_evidence_expired")
+            reasons.extend(state.error_code for state in states if state.error_code)
+        capability = get_capability_evidence(
+            session,
+            context=context,
+            bc_id=bc_id,
+            advertiser_id=advertiser_id,
+            connection_id=scope["connection"].id,
+        )
+        if capability:
+            evidence_ids += capability.evidence_ids
         try:
             require_tenant(
                 session,
@@ -539,96 +740,11 @@ def read_scene_context(
             )
         except DomainError:
             locally_operable = False
-    roles = available.get("account_roles")
-    if not roles or not roles.facts.get("scope_verified"):
-        reasons.append("account_scope_unverified")
-    if (
-        not locally_operable
-        or not roles
-        or not roles.facts.get("can_build")
-        or grant.permission_state != "VERIFIED"
-        or not grant.can_build
-    ):
-        reasons.append("account_build_unverified")
-    campaign = {
-        "objective_type": "APP_PROMOTION",
-        "app_promotion_type": "MINIS",
-        "campaign_type": "REGULAR_CAMPAIGN",
-        "catalog_enabled": False,
-        "budget_mode": "BUDGET_MODE_DYNAMIC_DAILY_BUDGET",
-    }
-    group: dict[str, Any] = {}
-    creative: dict[str, Any] = {}
-    cta: dict[str, Any] = {}
-    constraints, missing_constraints = limits.constraints_for(scope["access"].currency)
-    reasons.extend(missing_constraints)
-    minis = available.get("minis")
-    matches = minis.facts.get("matches", []) if minis else []
-    if (
-        len(matches) == 1
-        and matches[0]["status"] == "ACTIVE"
-        and matches[0]["type"] == "MINI_SERIES"
-    ):
-        group = {
-            "promotion_type": "MINI_APP",
-            "minis_id": matches[0]["minis_id"],
-            "optimization_goal": "VALUE",
-            "optimization_event": "ACTIVE_PAY",
-            "bid_type": "BID_TYPE_NO_BID",
-            "deep_bid_type": "VO_MIN_ROAS",
-            "billing_event": "OCPM",
-        }
-        constraints["allowed_region_codes"] = matches[0]["regions"]
-    else:
-        reasons.append("minis_unavailable")
-    identity = available.get("identity")
-    identities = identity.facts.get("matches", []) if identity else []
-    if len(identities) == 1:
-        creative = {"creative_info": {**identities[0], "ad_format": "SINGLE_VIDEO"}}
-    else:
-        reasons.append(
-            "identity_selection_required" if identities else "identity_unavailable"
+        return _assemble_scene(
+            scope=scope,
+            facts=facts,
+            reasons=reasons,
+            evidence_ids=evidence_ids,
+            capability=capability,
+            locally_operable=locally_operable,
         )
-    dynamic = available.get("cta")
-    if (
-        dynamic
-        and dynamic.facts.get("asset_ids")
-        and dynamic.facts.get("recommend_assets")
-    ):
-        cta = {
-            "asset_ids": dynamic.facts["asset_ids"],
-            "recommend_assets": dynamic.facts["recommend_assets"],
-            "requires_portfolio_creation": True,
-        }
-    else:
-        reasons.append("cta_unavailable")
-    vbo = available.get("vbo")
-    if not vbo or vbo.facts.get("vo_min_roas") != "QUALIFIED":
-        reasons.append("minis_vbo_unverified")
-    evidence_ids = tuple(
-        state.last_evidence_id
-        for state in states
-        if state.last_evidence_id and state.basis_digest == scope["basis"]
-    )
-    revision = sha256(
-        (
-            api.CONTRACT_REVISION
-            + limits.REVISION
-            + scope["basis"]
-            + "".join(sorted(str(value) for value in evidence_ids))
-        ).encode()
-    ).hexdigest()
-    return SceneContext(
-        supported=not reasons,
-        reason_codes=tuple(sorted(set(reasons))),
-        capability_revision=revision,
-        campaign_fields=campaign,
-        adgroup_fields=group,
-        creative_fields=creative,
-        cta_fields=cta,
-        name_limit=512,
-        creative_limit=50,
-        copy_length_limit=limits.COPY_LENGTH_LIMIT or 0,
-        evidence_ids=evidence_ids,
-        field_constraints=constraints,
-    )

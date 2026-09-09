@@ -89,7 +89,8 @@ def page(items, *, key="list", number=1, total=1):
 def test_preview_reads_missing_evidence_without_network_or_mutation(scene_env, wire):
     result = read(scene_env)
     assert not result.supported and "scene_evidence_missing" in result.reason_codes
-    assert result.copy_length_limit == 0
+    assert result.copy_length_limit == 100
+    assert result.field_constraints["platform_copy_length"] is None
     assert not wire[0]
     with Session(engine) as session:
         grant = session.get(
@@ -144,7 +145,8 @@ def test_current_token_role_plus_scope_establishes_capability_only_on_refresh(
         )
     result = read(scene_env)
     assert not result.supported  # Other required scene facts are still missing.
-    assert "field_limits_unverified" in result.reason_codes
+    assert "account_scope_unverified" in result.reason_codes
+    assert "field_limits_unverified" not in result.reason_codes
     assert receipt.evidence_id in result.evidence_ids
 
 
@@ -282,7 +284,7 @@ def test_scope_and_actual_token_role_are_independent(
     assert not read(scene_env).supported
 
 
-def test_complete_scene_keeps_missing_copy_limit_blocked_and_exact_wire(
+def test_legacy_scene_remains_diagnostic_without_shared_proof_and_targeting(
     scene_env, wire, redis_client
 ):
     wire[1].extend(
@@ -314,7 +316,12 @@ def test_complete_scene_keeps_missing_copy_limit_blocked_and_exact_wire(
     for resource in ("account_roles", "identity", "minis", "cta", "vbo"):
         assert refresh(scene_env, redis_client, resource).complete
     result = read(scene_env)
-    assert result.reason_codes == ("field_limits_unverified",)
+    assert set(result.reason_codes) == {
+        "account_build_unverified",
+        "account_scope_unverified",
+        "scene_evidence_missing",
+        "scene_targeting_unavailable",
+    }
     assert result.cta_fields["asset_ids"] == ("cta-1", "cta-2")
     assert result.cta_fields["recommend_assets"] == (
         {"asset_ids": ("cta-1", "cta-2"), "asset_content": "Watch now"},

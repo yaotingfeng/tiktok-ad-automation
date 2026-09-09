@@ -4,7 +4,7 @@ from dataclasses import dataclass, field, fields
 from typing import Any, Literal, Never
 from uuid import UUID
 
-SceneResource = Literal["account_roles", "identity", "minis", "cta", "vbo"]
+SceneResource = Literal["account_roles", "identity", "minis", "cta", "vbo", "regions"]
 
 
 class FrozenDict(dict[str, Any]):

@@ -1,6 +1,7 @@
 """Pinned official SDK GET calls with public-document parameter/response proofs.
 
-Admission and the worker hard deadline are enforced by scene.refresh_scene_context.
+Admission and the worker hard deadline are enforced by scene_jobs.process_scene_job
+(and the legacy standalone scene.refresh_scene_context diagnostic helper).
 No generic path/method/query input and no write method exists here.
 """
 
@@ -16,13 +17,14 @@ from app.integrations.tiktok.sdk import checked_data
 from .scene_schemas import SceneResource
 
 SDK_REVISION = "f809c396520df2d7b201a9ccc5378d822b728ed3"
-CONTRACT_REVISION = "minis-docs-2026-09-09-v3"
+CONTRACT_REVISION = "minis-docs-2026-09-09-v4"
 ENDPOINTS = {
     "account_roles": "/open_api/v1.3/bc/asset/get/",
     "identity": "/open_api/v1.3/identity/get/",
     "minis": "/open_api/v1.3/minis/get/",
     "cta": "/open_api/v1.3/creative/cta/recommend/",
     "vbo": "/open_api/v1.3/tool/vbo_status/",
+    "regions": "/open_api/v1.3/tool/region/",
 }
 PAGE_SIZE = 50
 
@@ -68,6 +70,18 @@ def request_page(
             ("promotion_type", "MINI_APP"),
             ("placements", json.dumps(["PLACEMENT_TIKTOK"])),
             ("optimization_goal", "VALUE"),
+        ]
+    elif resource == "regions":
+        # doc1737189539571713 explicitly includes MINIS and a complete country list.
+        # Pinned ToolApi.tool_region omits app_promotion_type/promotion_type.
+        query = [
+            ("advertiser_id", advertiser_id),
+            ("placements", json.dumps(["PLACEMENT_TIKTOK"])),
+            ("objective_type", "APP_PROMOTION"),
+            ("app_promotion_type", "MINIS"),
+            ("promotion_type", "MINI_APP"),
+            ("level_range", "TO_COUNTRY"),
+            ("language", "en"),
         ]
     else:
         # The generated VBO method lacks documented
@@ -124,6 +138,59 @@ def parse_page(
         if isinstance(raw_request_id, str) and len(raw_request_id) <= 128
         else None
     )
+    if resource == "regions":
+        codes, rows = data.get("region_list"), data.get("region_info")
+        if (
+            page != 1
+            or not isinstance(codes, list)
+            or not isinstance(rows, list)
+            or len(codes) > 300
+            or len(rows) > 300
+            or any(
+                not isinstance(value, str)
+                or len(value) != 2
+                or not value.isascii()
+                or not value.isupper()
+                or not value.isalpha()
+                for value in codes
+            )
+            or len(set(codes)) != len(codes)
+        ):
+            raise _invalid()
+        locations: dict[str, str] = {}
+        identifiers: set[str] = set()
+        for row in rows:
+            if (
+                not isinstance(row, dict)
+                or row.get("level") != "COUNTRY"
+                or row.get("area_type") != "ADMIN"
+            ):
+                raise _invalid()
+            code, identity = (
+                _string(row.get("region_code")),
+                _string(row.get("location_id")),
+            )
+            if (
+                code not in codes
+                or code in locations
+                or identity in identifiers
+                or identity == code
+            ):
+                raise _invalid()
+            locations[code] = identity
+            identifiers.add(identity)
+        if set(locations) != set(codes):
+            raise _invalid()
+        return (
+            {
+                "locations": [
+                    {"region_code": code, "location_id": locations[code]}
+                    for code in sorted(locations)
+                ]
+            },
+            True,
+            request_id,
+        )
     if resource == "cta":
         values = data.get("recommend_assets")
         if not isinstance(values, list) or len(values) > 50:

@@ -8,14 +8,20 @@ from typing import Any
 from uuid import UUID, uuid4, uuid5
 
 from sqlalchemy import and_, delete, or_, text
+from sqlalchemy.orm import Session as SASession
 from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.core.pagination import Page
-from app.modules.accounts.access import resolve_account_access
-from app.modules.accounts.models import TenantBC
+from app.modules.accounts.access import resolve_account_access, usable_grants
+from app.modules.accounts.capabilities import (
+    get_capability_evidence,
+    start_capability_refresh,
+)
+from app.modules.accounts.capability_models import CapabilityJob
+from app.modules.accounts.models import BCAccountAccess, TenantBC, TikTokConnection
 from app.modules.accounts.resolver import resolve_lines
 from app.modules.accounts.schemas import InputLine
 from app.modules.builds.models import (
@@ -27,6 +33,13 @@ from app.modules.builds.models import (
     DraftPreparation,
     DraftPreparationRequest,
 )
+from app.modules.builds.scene_job_models import (
+    DraftCapabilityDependency,
+    DraftSceneDependency,
+    DraftScenePreparation,
+    SceneJob,
+)
+from app.modules.builds.scene_jobs import ensure_scene_preparation
 from app.modules.materials.models import AccountMaterial, MaterialFile
 from app.modules.materials.service import match_materials
 from app.modules.providers.models import LinkPreparation, PromotionLink
@@ -217,7 +230,8 @@ def create_draft(
             ensure_ascii=False,
         ).encode()
     ).hexdigest()
-    session.execute(
+    SASession.execute(
+        session,
         text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
         {"key": f"draft:{context.tenant_id}:{request_id}"},
     )
@@ -257,7 +271,8 @@ def prepare_draft(
     from app.modules.builds.draft_tasks import queue_preparation
 
     _authorize(session, context)
-    session.execute(
+    SASession.execute(
+        session,
         text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
         {"key": f"draft-prepare:{context.tenant_id}:{request_id}"},
     )
@@ -289,11 +304,12 @@ def prepare_draft(
         _bump_revision(session, draft, draft.revision)
     # Every new local preparation starts account resolution afresh. Manual
     # groups survive while automatic groups are rebuilt in stable order.
-    session.execute(
+    SASession.execute(
+        session,
         delete(DraftAccount).where(
             col(DraftAccount.tenant_id) == context.tenant_id,
             col(DraftAccount.draft_id) == draft.id,
-        )
+        ),
     )
     dramas = session.exec(
         select(DraftDrama).where(
@@ -304,12 +320,13 @@ def prepare_draft(
     for drama in dramas:
         if drama.material_state == "manual":
             continue
-        session.execute(
+        SASession.execute(
+            session,
             delete(DraftGroupMaterial).where(
                 col(DraftGroupMaterial.tenant_id) == context.tenant_id,
                 col(DraftGroupMaterial.draft_id) == draft.id,
                 col(DraftGroupMaterial.drama_id) == drama.drama_id,
-            )
+            ),
         )
         drama.material_state, drama.material_cursor, drama.matched_count = (
             "pending",
@@ -394,6 +411,249 @@ def prepare_draft(
     return prep.id
 
 
+def _scene_prep(
+    session: Session, draft: BuildDraft, prep: DraftPreparation
+) -> DraftScenePreparation:
+    row = session.get(DraftScenePreparation, (draft.tenant_id, prep.id))
+    if row is None:
+        row = DraftScenePreparation(
+            tenant_id=draft.tenant_id, draft_id=draft.id, preparation_id=prep.id
+        )
+        session.add(row)
+        session.flush()
+    return row
+
+
+def _capabilities_page(
+    session: Session, context: TenantContext, draft: BuildDraft, prep: DraftPreparation
+) -> bool:
+    state = _scene_prep(session, draft, prep)
+    if state.capabilities_complete:
+        return True
+    if not state.capabilities_queued:
+        grants = usable_grants(
+            tenant_id=context.tenant_id, bc_id=draft.bc_id, action="read"
+        )
+        eligible = (
+            grants.where(BCAccountAccess.connection_id == TikTokConnection.id)
+            .correlate(TikTokConnection)
+            .exists()
+        )
+        query = select(TikTokConnection.id).where(
+            TikTokConnection.tenant_id == context.tenant_id,
+            TikTokConnection.status == "ACTIVE",
+            col(TikTokConnection.credential_ciphertext).is_not(None),
+            TikTokConnection.credential_ciphertext != "",
+            eligible,
+        )
+        if state.connection_after is not None:
+            query = query.where(TikTokConnection.id > state.connection_after)
+        connections = session.exec(
+            query.order_by(col(TikTokConnection.id)).limit(PAGE_SIZE)
+        ).all()
+        for identity in connections:
+            job_id = start_capability_refresh(
+                session,
+                context=context,
+                bc_id=draft.bc_id,
+                connection_id=identity,
+                request_id=uuid5(prep.id, f"capability:{identity}"),
+            )
+            session.add(
+                DraftCapabilityDependency(
+                    tenant_id=context.tenant_id,
+                    draft_id=draft.id,
+                    preparation_id=prep.id,
+                    bc_id=draft.bc_id,
+                    connection_id=identity,
+                    job_id=job_id,
+                )
+            )
+        if connections:
+            state.connection_after = connections[-1]
+        state.capabilities_queued = len(connections) < PAGE_SIZE
+        session.flush()
+        if not state.capabilities_queued:
+            return False
+    finished = session.exec(
+        select(DraftCapabilityDependency, CapabilityJob)
+        .join(
+            CapabilityJob,
+            (col(CapabilityJob.tenant_id) == DraftCapabilityDependency.tenant_id)
+            & (col(CapabilityJob.id) == DraftCapabilityDependency.job_id),
+        )
+        .where(
+            DraftCapabilityDependency.tenant_id == context.tenant_id,
+            DraftCapabilityDependency.preparation_id == prep.id,
+            DraftCapabilityDependency.status == "PENDING",
+            CapabilityJob.status != "PENDING",
+        )
+        .order_by(col(DraftCapabilityDependency.connection_id))
+        .limit(PAGE_SIZE)
+    ).all()
+    for dependency, job in finished:
+        if job.status == "STALE":
+            dependency.job_id = start_capability_refresh(
+                session,
+                context=context,
+                bc_id=draft.bc_id,
+                connection_id=dependency.connection_id,
+                request_id=uuid4(),
+            )
+        elif job.status == "COMPLETE" and job.scope_known and job.scope_build:
+            dependency.status = "COMPLETE"
+        else:
+            dependency.status, dependency.error_code = (
+                "BLOCKED",
+                (
+                    job.error_code
+                    or (
+                        "account_scope_unverified"
+                        if not job.scope_known
+                        else "account_build_unverified"
+                    )
+                ),
+            )
+    session.flush()
+    pending = session.exec(
+        select(DraftCapabilityDependency.connection_id)
+        .where(
+            DraftCapabilityDependency.tenant_id == context.tenant_id,
+            DraftCapabilityDependency.preparation_id == prep.id,
+            DraftCapabilityDependency.status == "PENDING",
+        )
+        .limit(1)
+    ).first()
+    state.capabilities_complete = state.capabilities_queued and pending is None
+    return state.capabilities_complete
+
+
+def _scenes_page(
+    session: Session, context: TenantContext, draft: BuildDraft, prep: DraftPreparation
+) -> None:
+    state = _scene_prep(session, draft, prep)
+    # One draft has one provider application. Links were all checked in the
+    # preceding phase; choosing one reference here never picks a remote identity.
+    link_id = session.exec(
+        select(DraftDrama.link_id)
+        .join(
+            PromotionLink,
+            (col(PromotionLink.tenant_id) == DraftDrama.tenant_id)
+            & (col(PromotionLink.id) == DraftDrama.link_id),
+        )
+        .where(
+            DraftDrama.tenant_id == context.tenant_id,
+            DraftDrama.draft_id == draft.id,
+            DraftDrama.matched_count > 0,
+            PromotionLink.connection_id == draft.provider_connection_id,
+            PromotionLink.application_id == draft.application_id,
+            PromotionLink.status == "ready",
+            col(PromotionLink.verified_at).is_not(None),
+        )
+        .order_by(col(DraftDrama.first_line), col(DraftDrama.drama_id))
+        .limit(1)
+    ).first()
+    if link_id is None:
+        prep.status, prep.phase, draft.status = "READY", "done", "READY"
+        return
+    if not state.scenes_queued:
+        query = select(DraftAccount.advertiser_id).where(
+            DraftAccount.tenant_id == context.tenant_id,
+            DraftAccount.draft_id == draft.id,
+        )
+        if state.scene_after is not None:
+            query = query.where(DraftAccount.advertiser_id > state.scene_after)
+        accounts = session.exec(
+            query.order_by(col(DraftAccount.advertiser_id)).limit(PAGE_SIZE)
+        ).all()
+        for advertiser_id in accounts:
+            result = ensure_scene_preparation(
+                session,
+                context=context,
+                bc_id=draft.bc_id,
+                advertiser_id=advertiser_id,
+                link_id=link_id,
+            )
+            session.add(
+                DraftSceneDependency(
+                    tenant_id=context.tenant_id,
+                    draft_id=draft.id,
+                    preparation_id=prep.id,
+                    bc_id=draft.bc_id,
+                    advertiser_id=advertiser_id,
+                    job_id=result.job_id,
+                    status={
+                        "ready": "COMPLETE",
+                        "queued": "PENDING",
+                        "blocked": "BLOCKED",
+                    }[result.state],
+                    error_code=result.reason_code,
+                )
+            )
+        if accounts:
+            state.scene_after = accounts[-1]
+        state.scenes_queued = len(accounts) < PAGE_SIZE
+        session.flush()
+        if not state.scenes_queued:
+            return
+    finished = session.exec(
+        select(DraftSceneDependency, SceneJob)
+        .join(
+            SceneJob,
+            (col(SceneJob.tenant_id) == DraftSceneDependency.tenant_id)
+            & (col(SceneJob.id) == DraftSceneDependency.job_id),
+        )
+        .where(
+            DraftSceneDependency.tenant_id == context.tenant_id,
+            DraftSceneDependency.preparation_id == prep.id,
+            DraftSceneDependency.status == "PENDING",
+            SceneJob.status != "PENDING",
+        )
+        .order_by(col(DraftSceneDependency.advertiser_id))
+        .limit(PAGE_SIZE)
+    ).all()
+    for dependency, job in finished:
+        # Once a job has completed, another account's queue delay must not turn
+        # preparation into an endless refresh sweep. The pure preview will report
+        # expired facts; execution ensure can renew the identical scope later.
+        if (
+            job.status == "COMPLETE"
+            and job.expires_at
+            and job.expires_at <= datetime.now(UTC)
+        ):
+            dependency.status, dependency.error_code = (
+                "BLOCKED",
+                "scene_evidence_expired",
+            )
+            continue
+        result = ensure_scene_preparation(
+            session,
+            context=context,
+            bc_id=draft.bc_id,
+            advertiser_id=dependency.advertiser_id,
+            link_id=link_id,
+        )
+        dependency.job_id = result.job_id
+        dependency.status = {
+            "ready": "COMPLETE",
+            "queued": "PENDING",
+            "blocked": "BLOCKED",
+        }[result.state]
+        dependency.error_code = result.reason_code
+    session.flush()
+    pending = session.exec(
+        select(DraftSceneDependency.advertiser_id)
+        .where(
+            DraftSceneDependency.tenant_id == context.tenant_id,
+            DraftSceneDependency.preparation_id == prep.id,
+            DraftSceneDependency.status == "PENDING",
+        )
+        .limit(1)
+    ).first()
+    if state.scenes_queued and pending is None:
+        prep.status, prep.phase, draft.status = "READY", "done", "READY"
+
+
 def _accounts_page(
     session: Session, context: TenantContext, draft: BuildDraft, prep: DraftPreparation
 ) -> None:
@@ -417,6 +677,90 @@ def _accounts_page(
         bc_id=draft.bc_id,
         lines=[InputLine(line_no=row.line_no, raw=row.raw_text) for row in rows],
     )
+    # Grant flags alone are not a complete role/scope proof. Before storing any
+    # row of this page, wait for a renewed proof if its earlier completed job aged.
+    for result in results:
+        if (
+            result.status == "BLOCKED"
+            and result.reason == "account_access_denied"
+            and result.advertiser_id
+        ):
+            # Diagnose only through a currently readable tenant/BC grant. The
+            # strict resolver still controls admission and never upgrades UNKNOWN.
+            try:
+                readable = resolve_account_access(
+                    session,
+                    context=context,
+                    bc_id=draft.bc_id,
+                    advertiser_id=result.advertiser_id,
+                    action="read",
+                )
+            except DomainError:
+                pass
+            else:
+                dependency = session.get(
+                    DraftCapabilityDependency,
+                    (context.tenant_id, prep.id, readable.connection_id),
+                )
+                if dependency and dependency.error_code:
+                    result.reason = dependency.error_code
+                else:
+                    proof = get_capability_evidence(
+                        session,
+                        context=context,
+                        bc_id=draft.bc_id,
+                        advertiser_id=result.advertiser_id,
+                        connection_id=readable.connection_id,
+                    )
+                    result.reason = (
+                        "account_scope_unverified"
+                        if proof is None or not proof.scope_verified
+                        else "account_build_unverified"
+                    )
+        if result.status != "MATCHED" or not result.advertiser_id:
+            continue
+        access = resolve_account_access(
+            session,
+            context=context,
+            bc_id=draft.bc_id,
+            advertiser_id=result.advertiser_id,
+            action="build",
+        )
+        proof = get_capability_evidence(
+            session,
+            context=context,
+            bc_id=draft.bc_id,
+            advertiser_id=result.advertiser_id,
+            connection_id=access.connection_id,
+        )
+        if proof is not None and proof.can_build:
+            continue
+        dependency = session.get(
+            DraftCapabilityDependency,
+            (context.tenant_id, prep.id, access.connection_id),
+        )
+        if dependency is None or dependency.status == "BLOCKED":
+            result.status, result.reason = (
+                "BLOCKED",
+                (
+                    dependency.error_code
+                    if dependency and dependency.error_code
+                    else "account_scope_unverified"
+                ),
+            )
+        elif proof is not None:
+            result.status, result.reason = "BLOCKED", "account_build_unverified"
+        else:
+            dependency.job_id = start_capability_refresh(
+                session,
+                context=context,
+                bc_id=draft.bc_id,
+                connection_id=access.connection_id,
+                request_id=uuid4(),
+            )
+            dependency.status = "PENDING"
+            _scene_prep(session, draft, prep).capabilities_complete = False
+            return
     for row, result in zip(rows, results, strict=True):
         row.status, row.reason_code = result.status.lower(), result.reason
         row.advertiser_id, row.duplicate_of = result.advertiser_id, result.duplicate_of
@@ -541,7 +885,7 @@ def _materials_page(
             prep.pending_links = False
             prep.phase = "links"
         else:
-            prep.status, prep.phase, draft.status = "READY", "done", "READY"
+            _scenes_page(session, context, draft, prep)
         return
     page = match_materials(
         session,
@@ -607,7 +951,8 @@ def continue_draft(session: Session, *, context: TenantContext, task_id: UUID) -
     if prep.draft_revision != draft.revision:
         prep.status = "OBSOLETE"
     elif prep.phase == "accounts":
-        _accounts_page(session, context, draft, prep)
+        if _capabilities_page(session, context, draft, prep):
+            _accounts_page(session, context, draft, prep)
     elif prep.phase == "links":
         _links_page(session, context, draft, prep)
     elif prep.phase == "materials":
@@ -678,12 +1023,13 @@ def edit_material_groups(
         if set(actual) != set(chunk):
             raise DomainError("material_not_found", "素材不在当前租户 BC 可用素材库")
     revision = _bump_revision(session, draft, expected_revision)
-    session.execute(
+    SASession.execute(
+        session,
         delete(DraftGroupMaterial).where(
             col(DraftGroupMaterial.tenant_id) == context.tenant_id,
             col(DraftGroupMaterial.draft_id) == draft.id,
             col(DraftGroupMaterial.drama_id) == drama_id,
-        )
+        ),
     )
     for group_no, group in enumerate(groups, 1):
         for position, identity in enumerate(group, 1):
@@ -764,11 +1110,12 @@ def update_draft(
         return draft.revision
     revision = _bump_revision(session, draft, expected_revision)
     for model in (DraftGroupMaterial, DraftDrama, DraftAccount, DraftInput):
-        session.execute(
+        SASession.execute(
+            session,
             delete(model).where(
                 col(model.tenant_id) == context.tenant_id,
                 col(model.draft_id) == draft.id,
-            )
+            ),
         )
     draft.strategy_version_id = intent["strategy_version_id"]
     draft.provider_connection_id = intent["provider_connection_id"]

@@ -102,7 +102,11 @@ def process_preparation(
             queue_preparation(
                 session,
                 prep,
-                delay=5 if prep.phase == "links" and prep.link_cursor is None else 0,
+                delay=5
+                if prep.phase in {"accounts", "materials"}
+                or prep.phase == "links"
+                and prep.link_cursor is None
+                else 0,
             )
 
 

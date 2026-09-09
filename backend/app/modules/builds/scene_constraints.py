@@ -1,14 +1,15 @@
-"""Reviewed platform constraint revision. No runtime/client limit overrides.
+"""Versioned platform facts and separately identified application copy policy.
 
-Update only with new official evidence and contract tests. Missing evidence is
-represented by None, never by a fictional zero platform limit.
+An undocumented platform maximum stays None. This application independently
+limits its English copy pool to 1..100 characters; it is not a TikTok quota.
 """
 
 from typing import Any
 
-REVISION = "minis-constraints-2026-09-09-v1"
-COPY_LENGTH_LIMIT: int | None = None
-COPY_LENGTH_MEASUREMENT: str | None = None
+REVISION = "minis-constraints-2026-09-09-v2"
+PLATFORM_COPY_LENGTH_LIMIT: int | None = None
+COPY_LENGTH_LIMIT = 100
+COPY_LENGTH_MEASUREMENT = "characters"
 
 
 def constraints_for(currency: str) -> tuple[dict[str, Any], tuple[str, ...]]:
@@ -25,6 +26,13 @@ def constraints_for(currency: str) -> tuple[dict[str, Any], tuple[str, ...]]:
         "max_creatives_per_ad": 50,
         "max_ads_per_adgroup": 30,
         "roas_bid": {"minimum": "0.01", "maximum": "1000"},
+        "platform_copy_length": PLATFORM_COPY_LENGTH_LIMIT,
+        "copy_policy": {
+            "source": "APPLICATION",
+            "minimum": 1,
+            "maximum": COPY_LENGTH_LIMIT,
+            "measurement": COPY_LENGTH_MEASUREMENT,
+        },
         "copy_length": COPY_LENGTH_LIMIT,
         "copy_measurement": COPY_LENGTH_MEASUREMENT,
     }
@@ -38,6 +46,4 @@ def constraints_for(currency: str) -> tuple[dict[str, Any], tuple[str, ...]]:
         }
     else:
         reasons.append("budget_limits_unverified")
-    if COPY_LENGTH_LIMIT is None or COPY_LENGTH_MEASUREMENT is None:
-        reasons.append("field_limits_unverified")
     return constraints, tuple(reasons)

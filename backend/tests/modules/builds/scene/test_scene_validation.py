@@ -157,9 +157,11 @@ def test_constraints_have_a_reviewed_version_and_no_unknown_numeric_limit():
     constraints, reasons = limits.constraints_for("USD")
     assert constraints["revision"] == limits.REVISION
     assert (
-        constraints["copy_length"] is None and constraints["copy_measurement"] is None
+        constraints["copy_length"] == 100
+        and constraints["copy_measurement"] == "characters"
     )
-    assert "field_limits_unverified" in reasons
+    assert constraints["platform_copy_length"] is None
+    assert "field_limits_unverified" not in reasons
     other, reasons = limits.constraints_for("UNKNOWN")
     assert "campaign_daily_budget" not in other
     assert "budget_limits_unverified" in reasons
