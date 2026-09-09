@@ -47,6 +47,7 @@ class Remote:
     lose_reply: bool = False
     expose_created: bool = True
     duplicate_created: bool = False
+    reject: bool = False
     after_post: object = None
     session: object = None
 
@@ -88,6 +89,8 @@ class Remote:
         assert payload["chapter_index"] == 1 and payload["promote_name"].startswith(
             "ytf-"
         )
+        if self.reject:
+            return httpx.Response(200, json={"code": 400, "data": None})
         row = remote_link(901, name=payload["promote_name"])
         if self.expose_created:
             self.rows.append(row)
@@ -504,3 +507,56 @@ def test_known_remote_config_conflict_is_reported_without_recreate(workflow):
             .remote_id
             == "901"
         )
+
+
+def test_definite_remote_rejection_stays_failed_without_auto_replay(workflow):
+    workflow[-1].reject = True
+    item = finish(workflow)
+    assert (
+        item.status == "failed" and item.resolved["error_code"] == "provider_rejected"
+    )
+    assert not workflow[-1].rows and len(writes(workflow)) == 1
+    with Session(workflow[0]) as session:
+        effect = session.exec(
+            select(ProviderEffect).where(ProviderEffect.step == "create")
+        ).one()
+        assert effect.status == "failed" and effect.remote_id is None
+        assert not session.exec(
+            select(ProviderEffect).where(ProviderEffect.step == "wy_receipt")
+        ).all()
+    for _ in range(3):
+        advance(workflow)
+    assert len(writes(workflow)) == 1
+
+
+@pytest.mark.parametrize("unknown", [False, True])
+def test_same_remote_scope_never_creates_for_a_second_preparation(workflow, unknown):
+    remote = workflow[-1]
+    remote.lose_reply = unknown
+    remote.expose_created = not unknown
+    first = finish(workflow, limit=8)
+    assert first.status == ("result_unknown" if unknown else "ready")
+    with Session(workflow[0]) as session, session.begin():
+        prep = prepare_links(
+            session,
+            context=workflow[1],
+            connection_id=workflow[3],
+            application_id="wy-app",
+            lines=["Moon"],
+            config={"episode": 1},
+            request_id=uuid4(),
+        )
+        item = session.exec(
+            select(LinkPreparationItem).where(
+                LinkPreparationItem.preparation_id == prep
+            )
+        ).one()
+        identity = item.id
+    other = (*workflow[:2], identity, *workflow[3:])
+    item = finish(other, limit=8)
+    assert item.status == ("pending" if unknown else "ready"), item.resolved
+    assert len(writes(workflow)) == 1
+    if unknown:
+        assert item.resolved["error_code"] == "provider_scope_busy"
+    else:
+        assert remote.calls[-1][2]["id"] == "901"
