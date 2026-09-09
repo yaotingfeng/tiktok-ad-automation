@@ -1,8 +1,8 @@
 {
   "complete": true,
-  "seconds": 1.801,
+  "seconds": 1.656,
   "schema": {
-    "migration": "0011_recovery_evidence_index",
+    "migration": "0012_material_covers",
     "rows": {
       "account_capability_asset": 0,
       "account_capability_job": 0,
@@ -43,6 +43,9 @@
       "link_preparation": 0,
       "link_preparation_item": 0,
       "material_asset_operation": 0,
+      "material_cover_job": 0,
+      "material_cover_job_page": 0,
+      "material_cover_receipt": 0,
       "material_distribution": 0,
       "material_file": 1,
       "material_upload_attempt": 0,
@@ -78,7 +81,7 @@
       "user": 1
     }
   },
-  "archive_bytes": 286516,
+  "archive_bytes": 298433,
   "credential_decryption": "passed with original synthetic key",
   "material_object_metadata": "preserved; object storage itself was not exercised",
   "pending_dispatch": "preserved without starting any consumer",

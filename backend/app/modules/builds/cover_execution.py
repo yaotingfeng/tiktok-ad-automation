@@ -104,13 +104,19 @@ def recover_cover_results(*, database_engine: Any, limit: int = 100) -> int:
                     tenant_id=context.tenant_id,
                     action="build",
                 )
-                resolve_account_access(
+                access = resolve_account_access(
                     session,
                     context=context,
                     bc_id=step.bc_id,
                     advertiser_id=unit.advertiser_id,
                     action="build",
                 )
+                if (access.connection_id, access.currency, access.timezone) != (
+                    unit.connection_id,
+                    unit.currency,
+                    unit.timezone,
+                ):
+                    raise DomainError("new_preview_required", "账户与冻结预览不一致")
                 result = get_cover_status(session, context=context, job_id=job.id)
             except DomainError as error:
                 step.error_code, step.updated_at = error.code, datetime.now(UTC)

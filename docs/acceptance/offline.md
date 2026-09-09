@@ -1,6 +1,14 @@
 # 离线验收记录
 
-## 当前记录
+## 最新集成验证
+
+`d6684c1`：`uv run pytest --ignore=tests/acceptance -q --tb=short --show-capture=no` 为 **1,224 passed、1 skipped**（211.72 秒）。仅 Linux 运行的 prefork 故障测试在 macOS 跳过；该测试已在 `1660e86` 的 [Linux CI](https://github.com/yaotingfeng/tiktok-ad-automation/actions/runs/34297735517) 通过，后端、前端和镜像任务均成功。
+
+同一集成的嘉书跨模块成功场景在 140.44 秒完成：真实草稿准备、权限与 Scene 任务、冻结及提交；138 个目标视频与 138 个封面均经过实际 SDK 序列化和独立回读。最终 6 Campaign、18 Ad Group、36 Ad，三层全 ENABLE、日预算 600 USD。业务逻辑、数据库、Redis 和持久任务真实执行，只有外部 HTTP/S3 传输使用替身。其余故障场景和真实后端浏览器仍在运行。
+
+目标封面使用独立持久任务和实际目标账户 image ID。未取得确定回执的图片上传只进行 GET 核查；视频已明确回读成功后可继续准备封面，不能重新上传该视频。调用前重新检查原操作者权限，SDK 清理中断保留已知 ID 和额度租约。
+
+## 早期执行基线
 
 2026-09-09，集成提交 `7dddbe4`。环境为 macOS、Python 3.14.6、PostgreSQL 17.5、Redis 8。数据库测试使用独立 `*_test` 数据库；需要跨事务可见的测试创建并清理自己拥有的临时数据库。Redis 测试使用与业务不同的非零数据库，仅清理所属 key。
 

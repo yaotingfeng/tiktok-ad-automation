@@ -7,7 +7,7 @@ from sqlalchemy import text
 from sqlmodel import Session, select
 
 from app.jobs.models import PendingDispatch
-from app.modules.accounts.models import BCAccountAccess
+from app.modules.accounts.models import AdvertiserAccount, BCAccountAccess
 from app.modules.builds import recovery
 from app.modules.builds.cover_execution import recover_cover_results
 from app.modules.builds.execution import process_step
@@ -66,7 +66,7 @@ def pending(env, redis_client):
         return identity, job.id, step.submission_id
 
 
-@pytest.mark.parametrize("revoked", [False, True])
+@pytest.mark.parametrize("revoked", [False, True, "currency"])
 def test_verified_cover_wakes_original_step_only_with_current_actor(
     executable, redis_client, revoked
 ):
@@ -84,7 +84,13 @@ def test_verified_cover_wakes_original_step_only_with_current_actor(
         asset.image_id = job.known_image_id
         step = session.get(ExecutionStep, identity)
         step.status, step.phase = "UNKNOWN", "DONE"
-        if revoked:
+        if revoked == "currency":
+            account = session.get(
+                AdvertiserAccount, (context.tenant_id, job.advertiser_id)
+            )
+            account.currency = "EUR"
+            session.add(account)
+        elif revoked:
             member = session.exec(
                 select(TenantMembership).where(
                     TenantMembership.tenant_id == context.tenant_id,
