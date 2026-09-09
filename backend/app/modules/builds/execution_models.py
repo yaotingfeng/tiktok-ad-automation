@@ -330,6 +330,7 @@ class ExecutionStep(SQLModel, table=True):
 class StepEvidence(SQLModel, table=True):
     __tablename__ = "step_evidence"
     __table_args__ = (
+        Index("ix_step_evidence_identity", "tenant_id", "submission_id", "step_id"),
         ForeignKeyConstraint(
             ["tenant_id", "submission_id", "step_id"],
             [
