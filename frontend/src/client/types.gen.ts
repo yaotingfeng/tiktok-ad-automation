@@ -2571,6 +2571,10 @@ export type SubmissionReceipt = {
  */
 export type SubmissionUnitPublic = {
     /**
+     * Result Status
+     */
+    result_status?: string | null;
+    /**
      * Account Name
      */
     account_name?: string | null;
