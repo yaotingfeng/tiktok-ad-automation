@@ -804,12 +804,10 @@ test("策略列表与历史预算去尾零但编辑原文保留", async ({ page 
   ).toBeVisible()
   await page.getByRole("button", { name: "查看版本", exact: true }).click()
   await expect(
-    page
-      .getByRole("dialog")
-      .getByRole("cell", {
-        name: "USD 9007199254740993123456.1234 ROAS 1.08 倍",
-        exact: true,
-      }),
+    page.getByRole("dialog").getByRole("cell", {
+      name: "USD 9007199254740993123456.1234 ROAS 1.08 倍",
+      exact: true,
+    }),
   ).toBeVisible()
   await page
     .getByRole("dialog")
@@ -820,3 +818,65 @@ test("策略列表与历史预算去尾零但编辑原文保留", async ({ page 
   )
   expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
 })
+
+for (const selection of [
+  "pointer-last",
+  "pointer-first",
+  "keyboard-first",
+] as const)
+  test(`空白新建策略选择预算币种后保留 USD 并可提交 (${selection})`, async ({
+    page,
+  }) => {
+    const { requests } = await boundary(page, { empty: true })
+    await page.goto(`/tenants/${A}/strategies/new`)
+    const currency = page.getByRole("combobox", {
+      name: "预算币种",
+      exact: true,
+    })
+    await expect(currency).toHaveText("选择币种")
+    const selectCurrency = async () => {
+      if (selection === "keyboard-first") {
+        await currency.focus()
+        await currency.press("Enter")
+        await expect(
+          page.getByRole("option", { name: "AED", exact: true }),
+        ).toBeFocused()
+        await page.keyboard.type("USD")
+        await expect(
+          page.getByRole("option", { name: "USD", exact: true }),
+        ).toBeFocused()
+        await page.keyboard.press("Enter")
+      } else {
+        await currency.click()
+        await page.getByRole("option", { name: "USD", exact: true }).click()
+      }
+      await expect(currency).toHaveText("USD")
+    }
+    if (selection !== "pointer-last") await selectCurrency()
+    await page.getByLabel("策略名称", { exact: true }).fill("空白新建策略")
+    await page.getByLabel("Campaign 日预算", { exact: true }).fill("100")
+    await page.getByLabel("目标 ROAS", { exact: true }).fill("1.08")
+    await page.getByLabel("每组素材数量", { exact: true }).fill("10")
+    await page.getByLabel("创意数量", { exact: true }).fill("2")
+    if (selection === "pointer-last") await selectCurrency()
+    await page.getByLabel("策略名称", { exact: true }).focus()
+    await expect(currency).toHaveText("USD")
+    await expect(
+      page.getByRole("button", { name: "创建策略", exact: true }),
+    ).toBeEnabled()
+    await page.getByRole("button", { name: "创建策略", exact: true }).click()
+    await expect(page).toHaveURL(
+      /\/strategies\/66666666-6666-4666-8666-666666666666/,
+    )
+    const writes = requests.filter(
+      (r) => r.method === "POST" && r.path.endsWith("/strategies"),
+    )
+    expect(writes).toHaveLength(1)
+    expect(writes[0].body.config).toMatchObject({
+      currency: "USD",
+      budget: "100",
+      target_roas: "1.08",
+      group_size: 10,
+      creative_count: 2,
+    })
+  })
