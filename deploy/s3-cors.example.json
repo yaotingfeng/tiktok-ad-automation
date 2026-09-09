@@ -1,0 +1,9 @@
+[
+  {
+    "AllowedOrigins": ["https://replace-with-your-app.example"],
+    "AllowedMethods": ["PUT", "GET", "HEAD"],
+    "AllowedHeaders": ["Content-Type", "Range", "x-amz-*"],
+    "ExposeHeaders": ["ETag", "Content-Length", "Content-Range", "Accept-Ranges"],
+    "MaxAgeSeconds": 900
+  }
+]
