@@ -30,6 +30,10 @@
 
 合并分支在独立测试数据库重新执行版本检查及真实备份还原迁移：7 passed（1.68 秒），全量 Ruff 通过。Linux 的客户端安装及完整测试结果以修复提交之后的远端 CI 为准。
 
+后续 [CI 34384519155](https://github.com/yaotingfeng/tiktok-ad-automation/actions/runs/34384519155) 中，modules 的首次 `apt-get update`、frontend 和 browser 的 Playwright 系统依赖安装均在访问 `https://dl.google.com/linux/chrome-stable/deb` 时出现 `Hash Sum mismatch`，尚未执行对应测试。已分别从三个任务的可见日志确认同一包源错误；项目使用 Playwright 管理的 Chromium，不依赖该预装 Google Chrome 软件源。修复限定为 CI 临时 runner 隔离这个未使用的源，保留 APT 签名与哈希校验，不忽略依赖安装或测试失败。
+
+`348ed12` 接入共享隔离脚本：只匹配上述确切 URI，混合其他仓库或符号链接的文件拒绝移动，Ubuntu/PGDG 源保留；合并分支运行 `bash scripts/test-ci-apt-sources.sh` 通过，覆盖两种源格式、无关源保留、幂等及混合源拒绝。实际 Linux 安装与测试仍由后续 CI 验证。
+
 ## 实际本地应用升级
 
 应用位于 `projects/tiktok-ad-automation`，旧工作区快捷路径仍指向同一目录；本轮未覆盖工作区原有 15 份未提交文档，逐文件 SHA-256 核对一致。
