@@ -2,7 +2,7 @@
 
 ## 最新集成验证
 
-本地集成 `3e72e94` 的模块回归：`PYTHONPATH=. uv run pytest --ignore=tests/acceptance -q --tb=short --show-capture=no`，**1,317 passed、1 skipped，731.72 秒**。唯一跳过项是在 Linux 上运行的真实 prefork 截止测试；同一提交的 [Linux 模块 CI](https://github.com/yaotingfeng/tiktok-ad-automation/actions/runs/34316838207/job/102354717712) 已通过。此计数不包含其后新增的网眼测试和容量汇总优化；最终提交仍需对应 CI 验证。
+本地集成 `3e72e94` 的模块回归：`PYTHONPATH=. uv run pytest --ignore=tests/acceptance -q --tb=short --show-capture=no`，**1,317 passed、1 skipped，731.72 秒**。唯一跳过项是在 Linux 上运行的真实 prefork 截止测试；同一提交的 [Linux 模块 CI](https://github.com/yaotingfeng/tiktok-ad-automation/actions/runs/34316838207/job/102354717712) 已通过。此计数对应该次集成，不包含后续新增的网眼与容量专项。最终提交的完整 CI 按 SHA 查看[分支工作流记录](https://github.com/yaotingfeng/tiktok-ad-automation/actions/workflows/ci.yml?query=branch%3Afeat%2Fplatform-implementation)。
 
 前端完整工作区 **248 项通过（1.7 分钟）**，生产 TypeScript/Vite 构建通过。真实后端浏览器原三项已在本地及上述 CI 的 browser 任务通过；网眼第四项实际准备/冻结另跑 **1 项通过（40.9 秒）**。各场景、页面覆盖和合成数据截图见[功能交付对照](functional-delivery.md)。
 
@@ -37,10 +37,12 @@
 
 消息恢复专项覆盖已提交成功 receipt 后、唤醒下游之前进程退出。相同 delivery ID/revision 再次送达只执行持久续调；已成功回读的源步骤保持 READ 投递模式，不能误改为 create。结果确认和 unit 唤醒在同一数据库事务提交。
 
-## 最终验收与外部条件
+## 容量与最终集成
 
-集成 `3e72e94` 的[完整七项 CI](https://github.com/yaotingfeng/tiktok-ad-automation/actions/runs/34316838207)已全部通过，包括模块、跨模块验收、两组故障恢复、真实后端浏览器、前端与镜像。后续的网眼可选名称修正、第四项浏览器验收和容量查询优化仍需核对最终提交 CI。已完成的 100,000 账户目录、200,000 Campaign / 600,000 Group / 1,200,000 Ad 冻结计划和 10,200,000 执行步骤有实际数据库记录；最终性能与恢复副本的证据由[容量记录](capacity.md)单独给出，不能解释为已创建真实广告。
+集成 `3e72e94` 的[完整七项 CI](https://github.com/yaotingfeng/tiktok-ad-automation/actions/runs/34316838207)已全部通过，包括模块、跨模块验收、两组故障恢复、真实后端浏览器、前端与镜像。后续的网眼可选名称修正、第四项浏览器验收及容量优化均已集成并各自通过专项与独立复核；最终整套 CI 结果按上述分支页面的精确 SHA 核对。已完成的 100,000 账户目录、200,000 Campaign / 600,000 Group / 1,200,000 Ad 冻结计划和 10,200,000 执行步骤有实际数据库记录；详情汇总实测 11.642 秒，单个巨型批次的列表页 17.302 秒；恢复计数的约 22 秒开销降至约 15 毫秒。完整性能与恢复副本证据见[容量记录](capacity.md)，不能解释为已创建真实广告。
 
 Linux prefork 硬截止测试位于 `test_prefork_deadline.py`：官方 SDK 连接本地停滞 HTTP 服务，由实际 Celery prefork 硬截止终止子进程，再验证 UNKNOWN、保留请求和无重复 POST。macOS 跳过不算通过，Linux CI 结果单独核对。
 
 真实 TikTok、版权方、S3、OAuth 与试投状态见[真实联调记录](live-sdk.md)。
+
+最后新增的汇总、恢复计数与网眼工作流集成回归为 **49 passed，19.40 秒**；后续独立恢复资格探针另有 2 项通过（涵盖 112 种状态组合）。`0014` 的升级、降级与模型比对均已验证，最新备份演练保留精确迁移版本。

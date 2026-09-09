@@ -2,9 +2,9 @@
 
 ## 当前验证状态（2026-09-09）
 
-本地真实 PostgreSQL 17.5 / Redis 8 已验证迁移、管理员登录、受保护用户接口、静态登录页、未配置 App 的回调业务响应、Worker 消费和 Beat 投递。P01 后端整合后 156 个测试通过；前端工作台 16 个浏览器测试通过，包括平板边界与焦点恢复。
+本地真实 PostgreSQL 17.5 / Redis 8 已验证迁移、管理员登录、受保护用户接口、静态页面、回调业务响应以及后台投递。应用功能、两版权方完整离线搭建、浏览器和大量账户验收见[功能与页面交付](../acceptance/functional-delivery.md)、[离线记录](../acceptance/offline.md)和[容量记录](../acceptance/capacity.md)。
 
-Compose 本地与预发布配置已由 `docker-compose config` 校验。当前机器没有 Docker daemon，尚未执行容器镜像构建或容器启动；GitHub CI 已构建 `3dcbe1d` 镜像成功（见实施进度）。没有实际部署主机、域名及 App 配置，公网 HTTPS 登录/回调地址状态为 **待配置运行环境**；没有真实 OAuth 成功或广告创建证据。
+当前本地 origin 为 `http://127.0.0.1:8011`；它没有公网或 HTTPS 含义。Compose 两套配置已校验，GitHub CI 已实际构建镜像。没有实际部署主机、域名及 App 配置，公网 HTTPS 回调、真实 OAuth 与真实广告创建按[外部联调清单](../acceptance/live-sdk.md)执行。
 
 ## 配置与依赖
 
