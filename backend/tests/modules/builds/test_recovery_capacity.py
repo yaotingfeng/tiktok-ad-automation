@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import text
 from sqlmodel import select
 
+from app.modules.accounts.models import BCAccountAccess
 from app.modules.builds import recovery, submissions
 from app.modules.builds.execution_models import ExecutionStep, StepEvidence, Submission
 from tests.modules.builds.test_previews import prepared as prepared
@@ -37,6 +38,8 @@ def expanded(session, context, frozen):
         "pending",
         "unknown",
         "mismatch",
+        "succeeded_mismatch",
+        "account_denied",
         "readback_known",
         "readback_overlap",
         "readback_succeeded",
@@ -53,9 +56,11 @@ def test_recovery_candidates_equal_legacy(session, context, frozen, case):
     if case == "unknown":
         for s in steps:
             s.status = "UNKNOWN"
-    elif case == "mismatch":
+    elif case in {"mismatch", "succeeded_mismatch"}:
         for s in steps:
             s.mismatch = True
+            if case == "succeeded_mismatch":
+                s.status = "SUCCEEDED"
     elif case.startswith("readback_"):
         for s in readbacks:
             session.get(ExecutionStep, s.parent_step_id).remote_id = "remote-" + str(
@@ -87,6 +92,13 @@ def test_recovery_candidates_equal_legacy(session, context, frozen, case):
         for s in steps:
             if s.kind == "MATERIAL":
                 s.status = "FAILED"
+    if case == "account_denied":
+        cta.status = "FAILED"
+        for access in session.exec(
+            select(BCAccountAccess).where(BCAccountAccess.tenant_id == row.tenant_id)
+        ):
+            access.active = False
+            session.add(access)
     for s in steps:
         session.add(s)
     session.flush()
@@ -97,20 +109,40 @@ def test_recovery_candidates_equal_legacy(session, context, frozen, case):
             .with_name("legacy_recovery_" + kind.lower() + ".sql")
             .read_text()
         )
-        expected = set(session.execute(text(legacy), params).scalars())
-        actual = list(
-            session.execute(
-                text("SELECT s.id " + recovery._query(row, kind)), params
-            ).scalars()
-        )
-        assert len(actual) == len(set(actual)), (
-            "Overlapping candidate branches must not double count"
-        )
-        assert set(actual) == expected
-        if case in {"pending", "readback_succeeded", "armed_evidence", "active_lease"}:
-            assert not actual
-        if case in {"readback_known", "readback_overlap"} and kind == "RECONCILE":
-            assert len(actual) == len(readbacks)
+        for account in (True, False):
+            oracle = legacy if account else legacy.rsplit("AND u.connection_id=", 1)[0]
+            expected = set(session.execute(text(oracle), params).scalars())
+            actual = list(
+                session.execute(
+                    text("SELECT s.id " + recovery._query(row, kind, account=account)),
+                    params,
+                ).scalars()
+            )
+            assert len(actual) == len(set(actual)), (
+                "Overlapping candidate branches must not double count"
+            )
+            assert set(actual) == expected
+            if case in {
+                "pending",
+                "readback_succeeded",
+                "armed_evidence",
+                "active_lease",
+            }:
+                assert not actual
+            if case in {"readback_known", "readback_overlap"} and kind == "RECONCILE":
+                assert len(actual) == len(readbacks)
+            if case == "account_denied" and kind == "RETRY":
+                assert len(actual) == (0 if account else 1)
+            assert not list(
+                session.execute(
+                    text("SELECT s.id " + recovery._query(row, kind, account=account)),
+                    {**params, "tenant": uuid4()},
+                ).scalars()
+            )
+    if case == "account_denied":
+        summary = recovery.recovery_summary(session, context=context, submission=row)
+        assert summary.reasons == ["account_access_denied"]
+        assert not summary.can_retry and not summary.can_reconcile
 
 
 def nodes(node):
