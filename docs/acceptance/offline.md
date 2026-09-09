@@ -2,11 +2,15 @@
 
 ## 最新集成验证
 
-`d6684c1`：`uv run pytest --ignore=tests/acceptance -q --tb=short --show-capture=no` 为 **1,224 passed、1 skipped**（211.72 秒）。仅 Linux 运行的 prefork 故障测试在 macOS 跳过；该测试已在 `1660e86` 的 [Linux CI](https://github.com/yaotingfeng/tiktok-ad-automation/actions/runs/34297735517) 通过，后端、前端和镜像任务均成功。
+本地集成 `3e72e94` 的模块回归：`PYTHONPATH=. uv run pytest --ignore=tests/acceptance -q --tb=short --show-capture=no`，**1,317 passed、1 skipped，731.72 秒**。唯一跳过项是在 Linux 上运行的真实 prefork 截止测试；同一提交的 [Linux 模块 CI](https://github.com/yaotingfeng/tiktok-ad-automation/actions/runs/34316838207/job/102354717712) 已通过。此计数不包含其后新增的网眼测试和容量汇总优化；最终提交仍需对应 CI 验证。
 
-同一集成的嘉书跨模块成功场景在 140.44 秒完成：真实草稿准备、权限与 Scene 任务、冻结及提交；138 个目标视频与 138 个封面均经过实际 SDK 序列化和独立回读。最终 6 Campaign、18 Ad Group、36 Ad，三层全 ENABLE、日预算 600 USD。业务逻辑、数据库、Redis 和持久任务真实执行，只有外部 HTTP/S3 传输使用替身。其余故障场景和真实后端浏览器仍在运行。
+前端完整工作区 **248 项通过（1.7 分钟）**，生产 TypeScript/Vite 构建通过。真实后端浏览器原三项已在本地及上述 CI 的 browser 任务通过；网眼第四项实际准备/冻结另跑 **1 项通过（40.9 秒）**。各场景、页面覆盖和合成数据截图见[功能交付对照](functional-delivery.md)。
 
-目标封面使用独立持久任务和实际目标账户 image ID。未取得确定回执的图片上传只进行 GET 核查；视频已明确回读成功后可继续准备封面，不能重新上传该视频。调用前重新检查原操作者权限，SDK 清理中断保留已知 ID 和额度租约。
+嘉书与网眼完整主链各一次均通过（两项合计 279.19 秒）：真实草稿准备、权限与 Scene 任务、冻结和提交，每个场景 138 个目标视频与 138 个封面经过实际 SDK 序列化和独立回读；最终 6 Campaign、18 Ad Group、36 Ad，三层全 ENABLE、Campaign 日预算合计 USD 600。业务实现、PostgreSQL、Redis 和持久任务真实执行，只有外部 HTTP/S3 传输使用替身。
+
+目标封面在创建广告时重新核实，最终发送前再次核对当前视频/封面与证据期限；已确定成功的节点保持原状。`47f108b` 的执行/恢复/回读相关 **75 项通过**，另有独立 **73 项回归与 1 项双素材作用域探针通过**。具体规则见[封面契约](../contracts/tiktok-covers.md)。
+
+`0013_dispatch_expansion_index` 已完成真实 pg_dump/pg_restore 演练，所有表行数、合成凭据解密、对象元数据和待发任务均一致；没有启动消费者或对象存储调用。结果见 [backup-restore.json](backup-restore.json)。
 
 ## 早期执行基线
 
@@ -31,10 +35,10 @@
 
 消息恢复专项覆盖已提交成功 receipt 后、唤醒下游之前进程退出。相同 delivery ID/revision 再次送达只执行持久续调；已成功回读的源步骤保持 READ 投递模式，不能误改为 create。结果确认和 unit 唤醒在同一数据库事务提交。
 
-## 尚在进行的本地验收
+## 最终验收与外部条件
 
-共享 Scene 自动准备、两版权方全流程验收、恢复入口、完整任务 UI、100,000 目录和大批计划容量仍在继续。本文件只记录已有运行证据；后续完成后补充精确提交与指标。
+最新代码继续进行统一 CI、完整故障场景和容量汇总查询复验。已完成的 100,000 账户目录、200,000 Campaign / 600,000 Group / 1,200,000 Ad 冻结计划和 10,200,000 执行步骤有实际数据库记录；最终性能与恢复副本的证据由[容量记录](capacity.md)单独给出，不能解释为已创建真实广告。
 
-Linux prefork 硬截止测试位于 `test_prefork_deadline.py`：官方 SDK 连接本地停滞 HTTP 服务，由实际 Celery prefork 硬截止终止子进程，再验证 UNKNOWN、保留请求和无重复 POST。macOS 跳过不算通过，Linux CI 结果单独补录。
+Linux prefork 硬截止测试位于 `test_prefork_deadline.py`：官方 SDK 连接本地停滞 HTTP 服务，由实际 Celery prefork 硬截止终止子进程，再验证 UNKNOWN、保留请求和无重复 POST。macOS 跳过不算通过，Linux CI 结果单独核对。
 
-真实 TikTok、版权方、S3、OAuth 与试投状态见 [真实联调记录](live-sdk.md)。
+真实 TikTok、版权方、S3、OAuth 与试投状态见[真实联调记录](live-sdk.md)。
