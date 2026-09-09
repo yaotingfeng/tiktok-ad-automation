@@ -424,6 +424,33 @@ class Runtime:
     messages: deque = field(default_factory=deque)
     delivered: list[dict[str, Any]] = field(default_factory=list)
 
+    beat_due: dict[str, float] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        now = time.monotonic()
+        self.beat_due = {
+            name: now + float(entry["schedule"])
+            for name, entry in celery_app.conf.beat_schedule.items()
+            if entry["task"] != "jobs.flush_dispatch"
+        }
+
+    def tick_beat(self) -> None:
+        # A BUSY read deliberately retains its original published message. The
+        # actual periodic repair re-publishes it after its safety lease expires.
+        # Use production intervals and real time; never expire leases by hand.
+        now = time.monotonic()
+        for name, due in self.beat_due.items():
+            if now < due:
+                continue
+            entry = celery_app.conf.beat_schedule[name]
+            self.beat_due[name] = now + float(entry["schedule"])
+            self.publish(
+                entry["task"],
+                kwargs=dict(entry.get("kwargs", {})),
+                task_id=str(uuid4()),
+                queue=entry["options"]["queue"],
+            )
+
     def publish(self, name: str, **kwargs: Any) -> SimpleNamespace:
         message = {"name": name, **kwargs}
         self.messages.append(message)
@@ -449,6 +476,7 @@ class Runtime:
         """Run at most one actual delivery; useful for crash-boundary barriers."""
         from app.jobs.outbox import flush_dispatch
 
+        self.tick_beat()
         flush_dispatch(limit=100)
         if not self.messages:
             return False
@@ -459,6 +487,7 @@ class Runtime:
         from app.jobs.outbox import flush_dispatch
 
         for count in range(max_steps):
+            self.tick_beat()
             flush_dispatch(limit=100)
             if not self.messages:
                 return count

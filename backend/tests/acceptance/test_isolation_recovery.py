@@ -185,9 +185,28 @@ def test_remote_commit_lost_reply_uses_get_without_recreating(
     create_endpoint = f"/open_api/v1.3/smart_plus/{kind}/create/"
     get_endpoint = f"/open_api/v1.3/smart_plus/{kind}/get/"
     scenario.submit()
-    scenario.runtime.drive_until(
-        lambda: scenario.view().status not in {"QUEUED", "RUNNING"}
-    )
+
+    def settled():
+        # NEEDS_REVIEW has deliberate precedence while unrelated units still run.
+        # Wait for their actual readbacks and the ambiguous create's GET, rather
+        # than interpreting the aggregate label as a worker completion signal.
+        if not ambiguous:
+            return scenario.view().status == "COMPLETED"
+        if wire.calls[get_endpoint] < expected_creates:
+            return False
+        with Session(scenario.database_engine) as session:
+            verified = session.exec(
+                select(func.count())
+                .select_from(ExecutionStep)
+                .where(
+                    ExecutionStep.submission_id == scenario.submission_id,
+                    ExecutionStep.kind == "READBACK",
+                    ExecutionStep.status == "SUCCEEDED",
+                )
+            ).one()
+        return verified == (20 if kind == "campaign" else 23)
+
+    scenario.runtime.drive_until(settled, timeout=420)
     view = scenario.view()
     assert wire.calls[create_endpoint] == expected_creates, (
         scenario.runtime.diagnostics()
