@@ -105,3 +105,39 @@ def test_capacity_runtime_measures_shared_quota_and_429_release(tmp_path):
     assert runtime["fairness"]["t1_backlog"] > 0
     assert runtime["fairness"]["first_round_t1_messages"] <= 5
     assert runtime["fairness"]["t2_first_task_seconds"] < 10
+
+
+def test_failed_benchmark_drops_only_its_owned_database_and_records_safe_failure(
+    tmp_path, monkeypatch
+):
+    import json
+
+    from sqlalchemy import text
+
+    from app.core.db import engine
+    from scripts import benchmark_support
+    from scripts.benchmark_batches import Parameters, run_benchmark
+
+    captured = []
+
+    def crash(database_engine, *_args, **_kwargs):
+        captured.append(database_engine.url.database)
+        raise RuntimeError("private synthetic transport body")
+
+    monkeypatch.setattr(benchmark_support, "run_scenario", crash)
+    output = tmp_path / "failed.json"
+    with pytest.raises(RuntimeError, match="private synthetic"):
+        run_benchmark(
+            Parameters(accounts=4, dramas=1, target_accounts=2), output=output
+        )
+    with engine.connect() as connection:
+        assert (
+            connection.scalar(
+                text("SELECT count(*) FROM pg_database WHERE datname=:name"),
+                {"name": captured[0]},
+            )
+            == 0
+        )
+    result = json.loads(output.read_text())
+    assert result["complete"] is False and result["failure_type"] == "RuntimeError"
+    assert "private synthetic" not in output.read_text()

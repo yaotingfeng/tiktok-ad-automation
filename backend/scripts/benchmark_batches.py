@@ -238,31 +238,38 @@ def run_benchmark(
     from scripts.benchmark_support import run_scenario
 
     recorder = Recorder(parameters, output)
-    with owned_database(str(settings.DATABASE_URL)) as database_engine:
+    try:
+        with owned_database(str(settings.DATABASE_URL)) as database_engine:
 
-        def count_sql(*_args: Any) -> None:
-            recorder.sql_count += 1
+            def count_sql(*_args: Any) -> None:
+                recorder.sql_count += 1
 
-        event.listen(database_engine, "before_cursor_execute", count_sql)
-        run_scenario(
-            database_engine, parameters, recorder, directory_only=directory_only
-        )
-        with database_engine.connect() as connection:
-            recorder.report["database_bytes"] = connection.scalar(
-                text("SELECT pg_database_size(current_database())")
+            event.listen(database_engine, "before_cursor_execute", count_sql)
+            run_scenario(
+                database_engine, parameters, recorder, directory_only=directory_only
             )
-            recorder.report["environment"]["postgresql"] = connection.scalar(
-                text("SHOW server_version")
-            )
-            recorder.report["environment"]["postgresql_settings"] = [
-                dict(row)
-                for row in connection.execute(
-                    text(
-                        "SELECT name,setting,unit FROM pg_settings WHERE name IN "
-                        "('shared_buffers','work_mem','max_connections','jit','max_parallel_workers_per_gather') ORDER BY name"
-                    )
-                ).mappings()
-            ]
+            with database_engine.connect() as connection:
+                recorder.report["database_bytes"] = connection.scalar(
+                    text("SELECT pg_database_size(current_database())")
+                )
+                recorder.report["environment"]["postgresql"] = connection.scalar(
+                    text("SHOW server_version")
+                )
+                recorder.report["environment"]["postgresql_settings"] = [
+                    dict(row)
+                    for row in connection.execute(
+                        text(
+                            "SELECT name,setting,unit FROM pg_settings WHERE name IN "
+                            "('shared_buffers','work_mem','max_connections','jit','max_parallel_workers_per_gather') ORDER BY name"
+                        )
+                    ).mappings()
+                ]
+    except BaseException as error:
+        # A failed run remains visibly incomplete after owned-database cleanup.
+        # Error messages/SQL parameters may contain private data; never persist them.
+        recorder.report["failure_type"] = type(error).__name__
+        recorder.save()
+        raise
     recorder.report["complete"] = True
     recorder.save()
     return recorder.report

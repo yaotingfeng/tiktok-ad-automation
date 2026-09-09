@@ -294,8 +294,11 @@ def _parse(response: object, page: int) -> tuple[list[tuple[str, str]], int, int
         )
         or info["page"] != page
         or info["page_size"] != 50
-        or not 0 <= info["total_page"] <= 1000
-        or info["total_number"] < 0
+        or page < 1
+        or info["total_page"] < 0
+        # Storage bound, not a platform/account-count policy. A 1000-page cap
+        # incorrectly rejects valid 100k-account directories at 50 rows/page.
+        or not 0 <= info["total_number"] <= 2**31 - 1
         or page > max(1, info["total_page"])
     ):
         raise invalid
