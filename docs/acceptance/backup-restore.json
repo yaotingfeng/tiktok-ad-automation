@@ -1,8 +1,8 @@
 {
   "complete": true,
-  "seconds": 1.656,
+  "seconds": 2.321,
   "schema": {
-    "migration": "0012_material_covers",
+    "migration": "0013_dispatch_expansion_index",
     "rows": {
       "account_capability_asset": 0,
       "account_capability_job": 0,
@@ -81,7 +81,7 @@
       "user": 1
     }
   },
-  "archive_bytes": 298433,
+  "archive_bytes": 298896,
   "credential_decryption": "passed with original synthetic key",
   "material_object_metadata": "preserved; object storage itself was not exercised",
   "pending_dispatch": "preserved without starting any consumer",
