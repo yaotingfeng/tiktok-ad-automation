@@ -1,10 +1,11 @@
 """Publish verified cover results to the original frozen MATERIAL steps."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlmodel import Session, col, select
 
+from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.modules.accounts.access import resolve_account_access
@@ -15,8 +16,14 @@ from app.modules.builds.execution_models import (
     SubmissionUnit,
 )
 from app.modules.builds.execution_state import evidence
-from app.modules.builds.preview_models import BuildUnit
+from app.modules.builds.preview_models import (
+    BuildUnit,
+    PlannedGroup,
+    PreviewGroupMaterial,
+)
 from app.modules.materials.cover_models import MaterialCoverJob
+from app.modules.materials.models import AccountMaterial
+from app.modules.materials.readiness import mapping_fresh
 from app.modules.tenants.permissions import require_tenant
 
 
@@ -36,6 +43,132 @@ def cover_matches_step(
         unit.advertiser_id,
         unit.connection_id,
     )
+
+
+def retry_ad_covers(
+    session: Session, *, context: TenantContext, step: ExecutionStep, unit: BuildUnit
+) -> None:
+    """An explicit retry of an unsent AD resumes its bounded cover dependencies.
+
+    Completed MATERIAL steps remain historical facts. An uncertain image upload
+    always keeps its original identity and receives read-only reconciliation.
+    """
+    from app.modules.materials.covers import (
+        request_cover_reconciliation,
+        request_cover_retry,
+    )
+
+    if step.kind != "AD" or step.request_body is not None or step.remote_id:
+        raise DomainError("execution_requires_reconciliation", "广告结果需要先核实")
+    jobs = session.exec(
+        select(MaterialCoverJob)
+        .join(
+            AccountMaterial,
+            (col(AccountMaterial.id) == MaterialCoverJob.asset_id)
+            & (col(AccountMaterial.tenant_id) == MaterialCoverJob.tenant_id)
+            & (col(AccountMaterial.video_id) == MaterialCoverJob.video_id)
+            & (col(AccountMaterial.connection_id) == MaterialCoverJob.connection_id),
+        )
+        .join(
+            PreviewGroupMaterial,
+            (col(PreviewGroupMaterial.tenant_id) == AccountMaterial.tenant_id)
+            & (col(PreviewGroupMaterial.material_id) == AccountMaterial.material_id),
+        )
+        .join(
+            PlannedGroup,
+            (col(PlannedGroup.tenant_id) == PreviewGroupMaterial.tenant_id)
+            & (col(PlannedGroup.preview_id) == PreviewGroupMaterial.preview_id)
+            & (col(PlannedGroup.drama_id) == PreviewGroupMaterial.drama_id)
+            & (col(PlannedGroup.group_no) == PreviewGroupMaterial.group_no),
+        )
+        .where(
+            MaterialCoverJob.tenant_id == context.tenant_id,
+            MaterialCoverJob.bc_id == step.bc_id,
+            MaterialCoverJob.advertiser_id == unit.advertiser_id,
+            MaterialCoverJob.connection_id == unit.connection_id,
+            PlannedGroup.preview_id == step.preview_id,
+            PlannedGroup.unit_id == step.unit_id,
+            PlannedGroup.id == step.group_id,
+        )
+        .order_by(col(MaterialCoverJob.id))
+        .limit(50)
+    ).all()
+    for job in jobs:
+        if job.status == "BLOCKED" and job.request_armed_at is None:
+            request_cover_retry(session, context=context, job_id=job.id)
+        else:
+            request_cover_reconciliation(session, context=context, job_id=job.id)
+
+
+def validate_ad_assets(
+    session: Session, *, step: ExecutionStep, unit: BuildUnit, body: dict[str, Any]
+) -> None:
+    """Pure local final fence, after admission and immediately before AD arming."""
+    rows = session.exec(
+        select(PreviewGroupMaterial.material_id, AccountMaterial, MaterialCoverJob)
+        .select_from(PreviewGroupMaterial)
+        .join(
+            PlannedGroup,
+            (col(PlannedGroup.tenant_id) == PreviewGroupMaterial.tenant_id)
+            & (col(PlannedGroup.preview_id) == PreviewGroupMaterial.preview_id)
+            & (col(PlannedGroup.drama_id) == PreviewGroupMaterial.drama_id)
+            & (col(PlannedGroup.group_no) == PreviewGroupMaterial.group_no),
+        )
+        .outerjoin(
+            AccountMaterial,
+            (col(AccountMaterial.tenant_id) == PreviewGroupMaterial.tenant_id)
+            & (col(AccountMaterial.material_id) == PreviewGroupMaterial.material_id)
+            & (col(AccountMaterial.bc_id) == step.bc_id)
+            & (col(AccountMaterial.advertiser_id) == unit.advertiser_id)
+            & (col(AccountMaterial.connection_id) == unit.connection_id),
+        )
+        .outerjoin(
+            MaterialCoverJob,
+            (col(MaterialCoverJob.tenant_id) == AccountMaterial.tenant_id)
+            & (col(MaterialCoverJob.asset_id) == AccountMaterial.id)
+            & (col(MaterialCoverJob.connection_id) == AccountMaterial.connection_id)
+            & (col(MaterialCoverJob.video_id) == AccountMaterial.video_id),
+        )
+        .where(
+            PlannedGroup.tenant_id == step.tenant_id,
+            PlannedGroup.preview_id == step.preview_id,
+            PlannedGroup.unit_id == step.unit_id,
+            PlannedGroup.id == step.group_id,
+        )
+        .order_by(col(PreviewGroupMaterial.position))
+        .limit(51)
+        .execution_options(populate_existing=True)
+    ).all()
+    cutoff = datetime.now(UTC) - timedelta(
+        seconds=settings.MATERIAL_ASSET_MAX_AGE_SECONDS
+    )
+    expected = []
+    valid = 1 <= len(rows) <= 50
+    for _, mapping, job in rows:
+        if not mapping_fresh(mapping) or not mapping or not mapping.image_id:
+            valid = False
+            continue
+        if job and (
+            job.status != "READY"
+            or job.updated_at < cutoff
+            or job.known_image_id != mapping.image_id
+        ):
+            valid = False
+        expected.append((mapping.video_id, mapping.image_id))
+    try:
+        actual = [
+            (
+                entry["creative_info"]["video_info"]["video_id"],
+                entry["creative_info"]["image_info"][0]["web_uri"],
+            )
+            for entry in body["creative_list"]
+        ]
+    except KeyError, TypeError, IndexError:
+        raise DomainError("invalid_build_request", "创意素材结构无效") from None
+    if not valid or actual != expected:
+        raise DomainError(
+            "material_refresh_required", "目标素材已变化，需要重新核实", retryable=True
+        )
 
 
 def recover_cover_results(*, database_engine: Any, limit: int = 100) -> int:

@@ -100,6 +100,10 @@ def arm_request(
         raise DomainError("account_authorization_changed", "冻结账户授权已变化")
     if not isinstance(body, dict) or body.get("advertiser_id") != claim.advertiser_id:
         raise DomainError("invalid_build_request", "请求账户与冻结组合不一致")
+    if claim.kind == "AD":
+        from app.modules.builds.cover_execution import validate_ad_assets
+
+        validate_ad_assets(session, step=step, unit=unit, body=body)
     if (
         claim.kind in {"CAMPAIGN", "ADGROUP", "AD"}
         and body.get("operation_status") != "ENABLE"

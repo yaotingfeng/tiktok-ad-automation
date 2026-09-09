@@ -478,6 +478,10 @@ def _schedule(
     if job.kind == "RECONCILE" and step.kind == "MATERIAL":
         return _material_reconciliation(session, step=step, unit=unit, context=original)
     if job.kind == "RETRY":
+        if step.kind == "AD":
+            from app.modules.builds.cover_execution import retry_ad_covers
+
+            retry_ad_covers(session, context=original, step=step, unit=unit)
         if step.kind == "MATERIAL" and step.cover_job_id:
             from app.modules.materials.covers import request_cover_retry
 

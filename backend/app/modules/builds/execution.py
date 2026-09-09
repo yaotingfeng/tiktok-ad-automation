@@ -287,10 +287,28 @@ def prepare_request(
             if ready.state != "ready" or not ready.mapping:
                 waiting = True
                 continue
+            from app.modules.materials.covers import ensure_cover
+
+            cover = ensure_cover(
+                session,
+                context=context,
+                bc_id=claim.bc_id,
+                material_id=material_id,
+                advertiser_id=claim.advertiser_id,
+                task_key=f"build-cover:{claim.step_id}:{material_id}",
+            )
+            if cover.state == "blocked":
+                raise DomainError(
+                    cover.reason_code or "target_asset_incomplete",
+                    "目标视频封面尚未核实",
+                )
+            if cover.state != "ready" or not cover.mapping:
+                waiting = True
+                continue
             mappings.append(
                 {
-                    "video_id": ready.mapping.video_id,
-                    "image_id": ready.mapping.image_id or "",
+                    "video_id": cover.mapping.video_id,
+                    "image_id": cover.mapping.image_id or "",
                 }
             )
         if waiting:
