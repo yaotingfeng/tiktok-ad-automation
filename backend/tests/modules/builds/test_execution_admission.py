@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 import pytest
+from billiard.exceptions import SoftTimeLimitExceeded
 
 from app.core.config import settings
 from app.core.context import TenantContext
@@ -88,3 +89,33 @@ def test_lease_must_outlive_whole_prefork_deadline(redis_client, monkeypatch):
         ):
             raise AssertionError("unsafe call executed")
     assert caught.value.code == "admission_policy_invalid"
+
+
+@pytest.mark.parametrize(
+    "interrupt", [SystemExit, KeyboardInterrupt, SoftTimeLimitExceeded]
+)
+def test_worker_interrupt_keeps_quota_until_process_deadline(
+    redis_client, monkeypatch, interrupt
+):
+    from app.integrations.tiktok.sdk import AccountAdmissionDeferred
+    from app.modules.builds.execution_admission import admitted_build_call
+
+    policy(monkeypatch)
+    context = TenantContext(tenant_id=uuid4(), actor_id=uuid4(), role="operator")
+    endpoint = "/fixture/interrupted/create/"
+    keys = admission_keys(settings.TIKTOK_APP_ID, endpoint, context.tenant_id, "a")
+    try:
+        with pytest.raises(interrupt):
+            with admitted_build_call(
+                redis_client, context=context, endpoint=endpoint, advertiser_id="a"
+            ):
+                raise interrupt()
+        assert all(redis_client.zcard(key) == 1 for key in keys[2:])
+        assert all(0 < redis_client.pttl(key) <= 120000 for key in keys[2:])
+        with pytest.raises(AccountAdmissionDeferred):
+            with admitted_build_call(
+                redis_client, context=context, endpoint=endpoint, advertiser_id="a"
+            ):
+                pytest.fail("an unwinding process must retain its account quota")
+    finally:
+        redis_client.delete(*keys)

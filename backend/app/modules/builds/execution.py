@@ -521,8 +521,16 @@ def process_step(
                     )
                     # Save the known ID before client cleanup; cleanup failure cannot
                     # turn a recorded success into a duplicate create.
-                    with Session(database_engine) as receipt, receipt.begin():
-                        outcome = record_created(receipt, claim=claim, result=result)
+                    try:
+                        with Session(database_engine) as receipt, receipt.begin():
+                            outcome = record_created(receipt, claim=claim, result=result)
+                    except Exception:
+                        # Cleanup may itself terminate this worker. Preserve the
+                        # received ID before entering that cleanup boundary.
+                        with Session(database_engine) as receipt, receipt.begin():
+                            outcome = preserve_created_receipt(
+                                receipt, claim=claim, result=result
+                            )
             return outcome
     except AccountAdmissionDeferred as error:
         return _local_result(

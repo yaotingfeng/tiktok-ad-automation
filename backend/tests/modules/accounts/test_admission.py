@@ -1,6 +1,7 @@
 from unittest.mock import Mock
 
 import pytest
+from billiard.exceptions import SoftTimeLimitExceeded
 from redis.exceptions import ConnectionError
 
 from app.core.config import settings
@@ -140,3 +141,37 @@ def test_retry_after_http_header():
     )
     assert response.status_code == 429
     assert response.headers["Retry-After"] == "2"
+
+
+@pytest.mark.parametrize(
+    "interrupt", [SystemExit, KeyboardInterrupt, SoftTimeLimitExceeded]
+)
+def test_interrupted_sdk_scope_retains_real_redis_lease(
+    context, redis_client, policy, interrupt
+):
+    policy.app_max_inflight = 1
+    endpoint = "/fixture/interrupted/get/"
+    keys = admission_keys(settings.TIKTOK_APP_ID, endpoint, context.tenant_id, "a")
+    try:
+        with pytest.raises(interrupt):
+            with sdk.admitted_account_call(
+                redis_client,
+                context=context,
+                endpoint=endpoint,
+                advertiser_id="a",
+                policy=policy,
+            ):
+                raise interrupt()
+        assert all(redis_client.zcard(key) == 1 for key in keys[2:])
+        assert all(0 < redis_client.pttl(key) <= 120000 for key in keys[2:])
+        with pytest.raises(sdk.AccountAdmissionDeferred):
+            with sdk.admitted_account_call(
+                redis_client,
+                context=context,
+                endpoint=endpoint,
+                advertiser_id="a",
+                policy=policy,
+            ):
+                pytest.fail("scope cleanup cannot release a terminating call")
+    finally:
+        redis_client.delete(*keys)

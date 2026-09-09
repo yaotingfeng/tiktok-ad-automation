@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 
 import business_api_client  # type: ignore[import-untyped]
 import business_api_client.tiktok_business.tiktok_exceptions as sdk_errors  # type: ignore[import-untyped]
+from billiard.exceptions import SoftTimeLimitExceeded  # type: ignore[import-untyped]
 from business_api_client.rest import ApiException  # type: ignore[import-untyped]
 from redis import Redis
 from redis.exceptions import RedisError
@@ -27,6 +28,8 @@ from app.core.errors import DomainError
 from app.jobs.admission import AdmissionPolicy, admit_call, release_call
 from app.modules.accounts.models import TikTokConnection
 from app.modules.tenants.permissions import require_tenant
+
+SDK_SCOPE_INTERRUPTS = (SystemExit, KeyboardInterrupt, SoftTimeLimitExceeded)
 
 
 class AccountAdmissionDeferred(DomainError):
@@ -89,9 +92,28 @@ def official_client(
     finally:
         client.default_headers.pop("Access-Token", None)
         client.last_response = None
-        client.rest_client.pool_manager.clear()
-        client.pool.close()
-        client.pool.join()
+        cleanup_interrupt: SoftTimeLimitExceeded | None = None
+        try:
+            client.rest_client.pool_manager.clear()
+        except SoftTimeLimitExceeded as error:
+            # Finishing a task while its SDK thread still runs cancels the task's
+            # hard deadline. Cleanup must finish or be ended by the hard kill.
+            cleanup_interrupt = error
+        finally:
+            while True:
+                try:
+                    client.pool.close()
+                    client.pool.join()
+                    break
+                except SoftTimeLimitExceeded as error:
+                    cleanup_interrupt = error
+                    continue
+                except Exception:
+                    # An unjoinable owned SDK pool must not survive as a thread
+                    # in a worker that starts accepting other tasks.
+                    raise SystemExit("sdk_cleanup_incomplete") from None
+        if cleanup_interrupt is not None:
+            raise cleanup_interrupt
 
 
 @contextmanager
@@ -145,18 +167,25 @@ def admitted_account_call(
     )
     if not admission.granted:
         raise AccountAdmissionDeferred(admission.retry_after_ms)
+    interrupted = False
     try:
         yield
+    except SDK_SCOPE_INTERRUPTS:
+        interrupted = True
+        raise
     finally:
         try:
-            release_call(
-                redis_client,
-                app_scope=app_scope,
-                endpoint=endpoint,
-                tenant_id=context.tenant_id,
-                advertiser_id=advertiser_id,
-                lease_id=lease_id,
-            )
+            # SIGTERM can unwind Python finally blocks before process exit.
+            # Keep the lease until its deadline instead of admitting overlap.
+            if not interrupted:
+                release_call(
+                    redis_client,
+                    app_scope=app_scope,
+                    endpoint=endpoint,
+                    tenant_id=context.tenant_id,
+                    advertiser_id=advertiser_id,
+                    lease_id=lease_id,
+                )
         except RedisError, DomainError:
             logging.getLogger(__name__).warning(
                 "admission_release_failed",

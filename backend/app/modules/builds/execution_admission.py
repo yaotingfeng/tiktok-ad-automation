@@ -11,7 +11,7 @@ from redis.exceptions import RedisError
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
-from app.integrations.tiktok.sdk import AccountAdmissionDeferred
+from app.integrations.tiktok.sdk import SDK_SCOPE_INTERRUPTS, AccountAdmissionDeferred
 from app.jobs.admission import admission_policy, admit_call, release_call
 from app.modules.builds.fairness import finish_fair_turn, take_fair_turn
 
@@ -36,7 +36,7 @@ def admitted_build_call(
         turn_ms=3000,
     ):
         raise AccountAdmissionDeferred(1000)
-    granted, turn_finished = False, False
+    granted, turn_finished, interrupted = False, False, False
     try:
         admission = admit_call(
             redis_client,
@@ -60,6 +60,9 @@ def admitted_build_call(
         if not granted:
             raise AccountAdmissionDeferred(admission.retry_after_ms)
         yield
+    except SDK_SCOPE_INTERRUPTS:
+        interrupted = True
+        raise
     finally:
         if not turn_finished:
             try:
@@ -73,7 +76,7 @@ def admitted_build_call(
                 )
             except RedisError, DomainError:
                 pass  # Its short token-fenced TTL is the fallback; no SDK ran.
-        if granted:
+        if granted and not interrupted:
             try:
                 release_call(
                     redis_client,
