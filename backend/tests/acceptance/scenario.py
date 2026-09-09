@@ -47,7 +47,12 @@ from app.modules.accounts.models import (
 from app.modules.builds import drafts, previews, submissions
 from app.modules.builds.models import BuildDraft, DraftPreparation
 from app.modules.builds.preview_models import BuildPreview
-from app.modules.materials.models import AccountMaterial, MaterialFile
+from app.modules.materials.models import (
+    AccountMaterial,
+    MaterialAssetOperation,
+    MaterialFile,
+    MaterialUploadAttempt,
+)
 from app.modules.materials.storage import object_key_for
 from app.modules.providers.models import ProviderApplication, ProviderConnection
 from app.modules.strategies.copy_pool import POOL_VERSION
@@ -73,6 +78,10 @@ class Scope:
     accounts: tuple[str, ...]
     sources: tuple[str, ...]
     material_ids: list[UUID] = field(default_factory=list)
+    admin_email: str = ""
+    admin_id: UUID | None = None
+    platform_email: str = ""
+    platform_id: UUID | None = None
 
 
 class Wire:
@@ -84,14 +93,19 @@ class Wire:
         self.objects: dict[str, tuple[bytes, UUID, UUID]] = {}
         self.videos: dict[tuple[str, str], dict[str, Any]] = {}
         self.portfolios: dict[str, dict[str, Any]] = {}
+        self.images: dict[tuple[str, str], dict[str, Any]] = {}
         self.calls: Counter[str] = Counter()
+        self.minis_unavailable_accounts: set[str] = set()
         self.lose_response_kind: str | None = None
         self.ambiguous_kind: str | None = None
         self.after_create: Callable[[str, dict[str, Any]], None] | None = None
+        self.before_get: Callable[[str], None] | None = None
 
     def sdk(self, _pool: Any, method: str, url: str, **kwargs: Any) -> HTTPResponse:
         path = urlsplit(url).path
         self.calls[path] += 1
+        if method == "GET" and self.before_get:
+            self.before_get(path)
         query = dict(kwargs.get("fields") or [])
         body = (
             json.loads(kwargs.get("body") or "{}")
@@ -162,6 +176,8 @@ class Wire:
                 ],
                 "page_info": self.page(1, 50, 1),
             }
+            if query["advertiser_id"] in self.minis_unavailable_accounts:
+                data = {"list": [], "page_info": self.page(1, 50, 0)}
         elif path.endswith("/creative/cta/recommend/"):
             data = {
                 "recommend_assets": [
@@ -191,6 +207,8 @@ class Wire:
                 "material_id": f"target-mid-{len(self.videos)}",
                 "signature": query["video_signature"],
                 "displayable": True,
+                "width": 720,
+                "height": 1280,
                 "video_cover_url": f"https://p16.example.com/cover-{len(self.videos)}.jpeg",
                 "file_name": query["file_name"],
             }
@@ -208,6 +226,44 @@ class Wire:
                     for identity in ids
                     if (query["advertiser_id"], identity) in self.videos
                 ]
+            }
+        elif path.endswith("/file/image/ad/upload/"):
+            assert method == "POST" and body["upload_type"] == "UPLOAD_BY_URL"
+            assert body["image_url"].startswith("https://p16.example.com/cover-")
+            image_id = f"target-image-{len(self.images)}"
+            data = {
+                "image_id": image_id,
+                "file_name": body["file_name"],
+                "displayable": True,
+                "width": 720,
+                "height": 1280,
+                "signature": hashlib.md5(body["image_url"].encode()).hexdigest(),
+            }
+            self.images[(body["advertiser_id"], image_id)] = data
+        elif path.endswith("/file/image/ad/info/"):
+            ids = (
+                json.loads(query["image_ids"])
+                if isinstance(query["image_ids"], str)
+                else query["image_ids"]
+            )
+            data = {
+                "list": [
+                    self.images[(query["advertiser_id"], identity)]
+                    for identity in ids
+                    if (query["advertiser_id"], identity) in self.images
+                ]
+            }
+        elif path.endswith("/file/image/ad/search/"):
+            assert not query.get("filtering")
+            rows = [
+                row
+                for (account, _), row in self.images.items()
+                if account == query["advertiser_id"]
+            ]
+            page, size = int(query["page"]), int(query["page_size"])
+            data = {
+                "list": rows[(page - 1) * size : page * size],
+                "page_info": self.page(page, size, len(rows)),
             }
         elif path.endswith("/creative/portfolio/create/"):
             identity = str(800000 + len(self.portfolios))
@@ -345,6 +401,16 @@ class Runtime:
         finally:
             task.pop_request()
         self.delivered.append(message)
+
+    def step_job(self) -> bool:
+        """Run at most one actual delivery; useful for crash-boundary barriers."""
+        from app.jobs.outbox import flush_dispatch
+
+        flush_dispatch(limit=100)
+        if not self.messages:
+            return False
+        self.deliver(self.messages.popleft())
+        return True
 
     def pump_jobs(self, max_steps: int = 1000) -> int:
         from app.jobs.outbox import flush_dispatch
@@ -514,11 +580,23 @@ def seed_scope(
             hashed_password=get_password_hash(PASSWORD),
             is_superuser=False,
         )
-        session.add_all([tenant, user])
+        admin = User(
+            email=f"{label}-admin-{uuid4().hex}@example.com",
+            hashed_password=get_password_hash(PASSWORD),
+        )
+        platform = User(
+            email=f"{label}-platform-{uuid4().hex}@example.com",
+            hashed_password=get_password_hash(PASSWORD),
+            is_superuser=True,
+        )
+        session.add_all([tenant, user, admin, platform])
         session.flush()
         context = TenantContext(tenant_id=tenant.id, actor_id=user.id, role="operator")
         session.add(
             TenantMembership(tenant_id=tenant.id, user_id=user.id, role="operator")
+        )
+        session.add(
+            TenantMembership(tenant_id=tenant.id, user_id=admin.id, role="tenant_admin")
         )
         bc = "acceptance-bc-" + label
         session.add(TenantBC(tenant_id=tenant.id, bc_id=bc))
@@ -587,6 +665,8 @@ def seed_scope(
             tuple(f"{label}-target-{n}" for n in range(3)),
             tuple(f"{label}-source-{n}" for n in range(2)),
         )
+        scope.admin_email, scope.admin_id = admin.email, admin.id
+        scope.platform_email, scope.platform_id = platform.email, platform.id
         for i, advertiser in enumerate(scope.accounts + scope.sources):
             session.add(
                 AdvertiserAccount(
@@ -645,6 +725,34 @@ def seed_scope(
                         mid="source-mid-" + str(material_id),
                         status="available",
                         verified_at=datetime.now(UTC),
+                    )
+                )
+                operation = MaterialAssetOperation(
+                    tenant_id=tenant.id,
+                    bc_id=bc,
+                    material_id=material.id,
+                    advertiser_id=scope.sources[number % 2],
+                    path="upload_original",
+                    status="succeeded",
+                    request_digest=hashlib.sha256(contents).hexdigest(),
+                    remote_response={
+                        "video_id": "source-vid-" + str(material.id),
+                        "mid": "source-mid-" + str(material.id),
+                    },
+                )
+                session.add(operation)
+                session.flush()
+                session.add(
+                    MaterialUploadAttempt(
+                        tenant_id=tenant.id,
+                        bc_id=bc,
+                        material_id=material.id,
+                        advertiser_id=scope.sources[number % 2],
+                        connection_id=conn.id,
+                        operation_id=operation.id,
+                        status="succeeded",
+                        request_digest=operation.request_digest,
+                        remote_response=dict(operation.remote_response),
                     )
                 )
                 scope.material_ids.append(material.id)
