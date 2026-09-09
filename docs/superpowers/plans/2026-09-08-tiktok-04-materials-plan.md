@@ -14,7 +14,7 @@
 
 ## Global Constraints
 
-- 新应用根目录为 `/Users/yaotingfeng/Documents/ytf/tiktok-ad-automation`，下文路径均相对它；本轮不创建应用目录。
+- 新应用根目录为 `/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/tiktok-ad-automation`，下文路径均相对它。2026-09-09 已迁入当前工作区。
 - 用户本地批量上传素材，系统保存文件名和文件信息，上传时不识别或绑定所属剧目。
 - 上传界面固定提示：**请在素材文件名中包含完整剧目名称。广告搭建时，系统会根据剧名自动匹配素材。**
 - 用户无需配置素材账户；系统从当前租户、当前 BC 的授权且具备上传权限的账户中指定一个。

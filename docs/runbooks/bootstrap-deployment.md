@@ -6,6 +6,17 @@
 
 当前本地 origin 为 `http://127.0.0.1:8011`；它没有公网或 HTTPS 含义。Compose 两套配置已校验，GitHub CI 已实际构建镜像。没有实际部署主机、域名及 App 配置，公网 HTTPS 回调、真实 OAuth 与真实广告创建按[外部联调清单](../acceptance/live-sdk.md)执行。
 
+当前应用根目录为 `/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/tiktok-ad-automation/`。2026-09-09 迁移时保留了独立 Git 历史、worktree、私有配置及 PostgreSQL / Redis / Beat 数据；重建主虚拟环境并从新目录重启了服务。不要继续使用旧的同级目录启动命令。
+
+## 首次使用与可用范围
+
+1. 打开当前本地地址 `http://127.0.0.1:8011`，用本机私有 `.env` 的 `FIRST_SUPERUSER` 与 `FIRST_SUPERUSER_PASSWORD` 登录。凭据不会放入文档或 Git。
+2. 平台管理员先在“平台租户管理”中点击某一行的“进入租户”。平台范围只提供租户和用户管理；业务菜单在明确进入租户后出现，不会自动选择第一个租户。
+3. 在租户内，可以先保存投放策略。平台管理员或租户管理员还可以配置版权方连接、管理成员；这些入口不依赖 BC 授权。版权方实际验证与取链需要该租户自己的有效凭据。
+4. 素材、搭建和任务页面在没有 BC 时显示连接说明，并提供已可使用的配置入口。App 尚未配置时，账户授权页面说明缺失配置；不能用示例 BC 或假授权使真实操作放行。
+
+当前宿主机 Worker 使用 macOS `solo` 模式，仅用于基础运行诊断。需要硬截止的能力、Scene、素材和广告任务会拒绝在该模式下执行。完整任务执行必须按下方 Compose / Linux prefork 配置运行；外部投放还需要对象存储、App、租户授权和版权方凭据，并完成真实联调。页面及离线自动化测试通过不能替代这些验收。
+
 ## 配置与依赖
 
 依赖 Python 3.14、uv、Bun 1.4.2、PostgreSQL 18（本地现有 17.5 已测）、Redis 8；容器方案需要 Docker Engine 与 Compose v2 或更新版本。根目录 `uv.lock`、`bun.lock` 均须冻结安装。
@@ -88,6 +99,6 @@ docker compose -f compose.yml -f compose.staging.yml up -d --build
 
 对实际 HTTPS origin 执行检查，人工验证管理员登录。随后从实际配置填写 `TIKTOK_REDIRECT_URI=https://实际域名/api/integrations/tiktok/callback`，用于申请开发者 App。该路径示例不能当成已部署地址。App 创建后设置 App ID/secret/授权门户 URL 与核实后的调用额度，再执行租户授权验收。
 
-## 本轮本地证据
+## 初次启动证据（历史）
 
 验证 origin 为 `http://127.0.0.1:8010`，不具有公网或 HTTPS 含义。2026-09-09：健康检查、静态登录、回调 503 稳定错误、未知 API 404 全部通过；实际初始化管理员登录及受保护 profile 通过。持久化 no-op `jobs.probe` 经 Beat → Worker 消费成功，outbox `published_at` 已写且 attempts=1。全部使用本地实例，没有 TikTok/版权方调用。

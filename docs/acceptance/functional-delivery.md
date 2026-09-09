@@ -2,6 +2,8 @@
 
 设计依据为[整体设计](../superpowers/specs/2026-09-08-tiktok-00-overall-design.md)、六份功能设计及[七阶段实施计划](../superpowers/plans/2026-09-08-tiktok-00-delivery-roadmap.md)。本页说明实际实现与验证范围；最新集成测试和提交见[离线验收](offline.md)，规模指标见[容量验收](capacity.md)。
 
+2026-09-09 用户反馈后，已补修平台管理员的无租户菜单和租户无 BC 空态，并在真实本地 API 上完成策略创建、编辑和刷新回读。目录调整、截图和当前仍不能执行真实投放的原因见[首次使用验收](../validation/local-usability.md)。
+
 ## 页面与业务入口
 
 | 页面 | 已实现的行为 | 回归文件（`frontend/tests/`） |

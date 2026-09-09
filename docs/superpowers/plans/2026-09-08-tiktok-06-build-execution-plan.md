@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- 未来应用目录 `/Users/yaotingfeng/Documents/ytf/tiktok-ad-automation`；所有代码路径相对此目录。本轮只写计划，不实现、部署或调用业务 API。
+- 应用目录 `/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/tiktok-ad-automation`；所有代码路径相对此目录。本文件保留原实施计划，当前完成情况见 `docs/implementation-progress.md`。
 - 官方 SDK 固定 Git revision `f809c396520df2d7b201a9ccc5378d822b728ed3` 的 `python_sdk` 子目录，import 为 `business_api_client`；不修改 SDK 源码，不自建 HTTP、MCP 或抽象 Gateway。
 - “用户提交的动作明确为‘创建并立即启用’：三层创建请求都直接带 `ENABLE`。”
 - “回读只核查实际结果，不作为开启投放的门槛，不存在第二次启用授权步骤。”

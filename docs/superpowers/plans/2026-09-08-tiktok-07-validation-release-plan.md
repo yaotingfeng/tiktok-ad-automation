@@ -24,7 +24,7 @@
 
 ## 前置与文件范围
 
-代码路径相对 `/Users/yaotingfeng/Documents/ytf/tiktok-ad-automation`。P01～P06 的功能任务已通过各自检查后再运行本计划，不重复执行全部旧测试作为无目的的额外验收。
+代码路径相对 `/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/tiktok-ad-automation`。P01～P06 的功能任务已通过各自检查后再运行本计划，不重复执行全部旧测试作为无目的的额外验收。
 
 | 文件 | 职责 |
 | --- | --- |

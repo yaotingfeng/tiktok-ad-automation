@@ -172,7 +172,7 @@ Celery 的重试需要业务幂等配合；其普通任务限流按 Worker 实�
 
 实施计划将明确任务、文件、数据库迁移、接口联调、测试与验收。开发者应用申请由基础地址交付后启动，真实广告联调依赖应用与相应权限就绪。此前可以验证页面、确定性计划生成和模拟接口流程，不能将模拟通过当成真实 SDK 联调完成。
 
-当前文档保存于现有资料目录的 `docs/superpowers/specs/`。实施计划采用独立应用目录 `/Users/yaotingfeng/Documents/ytf/tiktok-ad-automation`；本轮只形成文档，不初始化项目、安装依赖或修改投放脚本。
+当前文档保存于现有资料目录的 `docs/superpowers/specs/`。实施计划采用独立应用目录 `/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/tiktok-ad-automation`；2026-09-09 已将独立应用迁入当前资料工作区，当前实施情况见 `docs/implementation-progress.md`。
 
 ## 11. 整体验收原则
 
