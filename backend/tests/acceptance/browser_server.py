@@ -143,7 +143,9 @@ def health():
 def scenario(options: ScenarioRequest):
     with lock:
         label = "browser-" + uuid4().hex[:10]
-        scope = seed_scope(engine, wire, label=label, provider_kind=options.provider_kind)
+        scope = seed_scope(
+            engine, wire, label=label, provider_kind=options.provider_kind
+        )
         other = seed_scope(engine, wire, label=label + "-other", material_count=1)
         scopes[str(scope.context.tenant_id)] = scope
         scopes[str(other.context.tenant_id)] = other
@@ -165,10 +167,20 @@ def scenario(options: ScenarioRequest):
         }
 
 
+class PumpRequest(BaseModel):
+    tenant_id: UUID | None = None
+
+
 @app.post("/__acceptance__/pump")
-def pump():
+def pump(options: PumpRequest | None = None):
     with lock:
-        return {"delivered": runtime.pump_jobs(), "diagnostics": runtime.diagnostics()}
+        tenant_id = options.tenant_id if options else None
+        if tenant_id is not None and str(tenant_id) not in scopes:
+            raise HTTPException(404)
+        return {
+            "delivered": runtime.pump_jobs(),
+            "diagnostics": runtime.diagnostics(tenant_id=tenant_id),
+        }
 
 
 @app.post("/__acceptance__/lose-submission-response")

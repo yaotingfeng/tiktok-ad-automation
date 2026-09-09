@@ -29,7 +29,8 @@ import httpx
 from botocore.awsrequest import AWSResponse
 from cryptography.fernet import Fernet
 from redis import Redis
-from sqlmodel import Session, select
+from sqlalchemy import func
+from sqlmodel import Session, col, select
 from urllib3.response import HTTPResponse
 
 from app.core.config import settings
@@ -581,31 +582,96 @@ class Runtime:
                 )
             time.sleep(0.1)
 
-    def diagnostics(self) -> str:
+    def diagnostics(self, *, tenant_id: UUID | None = None) -> str:
+        """Safe local aggregates; observing one tenant never changes global delivery."""
+        from app.jobs.models import PendingDispatch
         from app.modules.builds.execution_models import ExecutionStep
         from app.modules.materials.cover_models import MaterialCoverJob
         from app.modules.materials.models import MaterialDistribution
 
+        def scoped(query: Any, model: Any) -> Any:
+            return query.where(model.tenant_id == tenant_id) if tenant_id else query
+
+        def counts(session: Session, model: Any, *columns: Any) -> dict:
+            query = scoped(select(*columns, func.count()).group_by(*columns), model)
+            return {tuple(row[:-1]): row[-1] for row in session.exec(query)}
+
+        queued_tenants = [
+            message.get("kwargs", {}).get("tenant_id") for message in self.messages
+        ]
+        queued = {
+            "total": len(queued_tenants),
+            "matching_tenant": sum(
+                value is not None
+                and (tenant_id is None or str(value) == str(tenant_id))
+                for value in queued_tenants
+            ),
+            "other_tenants": sum(
+                value is not None
+                and tenant_id is not None
+                and str(value) != str(tenant_id)
+                for value in queued_tenants
+            ),
+            "unscoped": queued_tenants.count(None),
+        }
         with Session(self.database_engine) as session:
+            pending = scoped(
+                select(
+                    PendingDispatch.task_name,
+                    func.count(),
+                    func.min(PendingDispatch.available_at),
+                )
+                .where(col(PendingDispatch.published_at).is_(None))
+                .group_by(PendingDispatch.task_name),
+                PendingDispatch,
+            )
+            dispatches = session.exec(pending).all()
+            nearest = min((row[2] for row in dispatches), default=None)
             return repr(
                 {
                     "drafts": [
-                        (r.status, r.phase, r.error_code)
-                        for r in session.exec(select(DraftPreparation))
+                        tuple(row)
+                        for row in session.exec(
+                            scoped(
+                                select(
+                                    DraftPreparation.status,
+                                    DraftPreparation.phase,
+                                    DraftPreparation.error_code,
+                                ),
+                                DraftPreparation,
+                            )
+                        )
                     ],
-                    "steps": Counter(
-                        (r.kind, r.status, r.error_code)
-                        for r in session.exec(select(ExecutionStep))
+                    "steps": counts(
+                        session,
+                        ExecutionStep,
+                        ExecutionStep.kind,
+                        ExecutionStep.status,
+                        ExecutionStep.error_code,
                     ),
+                    # Wire counters are global to this serial test transport; do
+                    # not present them as per-tenant external-call evidence.
                     "wire": dict(self.wire.calls),
-                    "covers": Counter(
-                        (r.status, r.error_code)
-                        for r in session.exec(select(MaterialCoverJob))
+                    "wire_scope": "all_tenants",
+                    "covers": counts(
+                        session,
+                        MaterialCoverJob,
+                        MaterialCoverJob.status,
+                        MaterialCoverJob.error_code,
                     ),
-                    "materials": Counter(
-                        (r.status, r.reason_code)
-                        for r in session.exec(select(MaterialDistribution))
+                    "materials": counts(
+                        session,
+                        MaterialDistribution,
+                        MaterialDistribution.status,
+                        MaterialDistribution.reason_code,
                     ),
+                    "unpublished_dispatches": {row[0]: row[1] for row in dispatches},
+                    "nearest_due_seconds": (
+                        max(0, round((nearest - datetime.now(UTC)).total_seconds(), 3))
+                        if nearest is not None
+                        else None
+                    ),
+                    "queued_messages": queued,
                 }
             )
 
