@@ -118,6 +118,11 @@ class Wire:
             )
             data = response.data
             kind = path.split("/")[4]
+            if method == "GET" and kind == "adgroup":
+                # The Smart+ adgroup get contract does not supply operation_status.
+                # Force the production independent standard adgroup GET fallback.
+                for row in data["list"]:
+                    row.pop("operation_status", None)
             if method == "POST":
                 if self.after_create:
                     self.after_create(kind, data)
@@ -392,6 +397,7 @@ class Runtime:
         # Only the production execution-environment guard is substituted. The
         # registered original task function still validates payload and identity.
         task.push_request(
+            id=message["task_id"],
             called_directly=False,
             is_eager=False,
             timelimit=(task.time_limit, task.soft_time_limit),
@@ -438,6 +444,7 @@ class Runtime:
 
     def diagnostics(self) -> str:
         from app.modules.builds.execution_models import ExecutionStep
+        from app.modules.materials.cover_models import MaterialCoverJob
         from app.modules.materials.models import MaterialDistribution
 
         with Session(self.database_engine) as session:
@@ -450,6 +457,11 @@ class Runtime:
                     "steps": Counter(
                         (r.kind, r.status, r.error_code)
                         for r in session.exec(select(ExecutionStep))
+                    ),
+                    "wire": dict(self.wire.calls),
+                    "covers": Counter(
+                        (r.status, r.error_code)
+                        for r in session.exec(select(MaterialCoverJob))
                     ),
                     "materials": Counter(
                         (r.status, r.reason_code)
@@ -545,6 +557,13 @@ def offline_runtime(wire: Wire, database_engine: Any) -> Iterator[Runtime]:
         ]:
             stack.enter_context(
                 patch("app.modules." + target, lambda *args, **kwargs: None)
+            )
+        if "app.modules.materials.cover_tasks" in celery_app.conf.imports:
+            stack.enter_context(
+                patch(
+                    "app.modules.materials.cover_tasks.require_bounded_worker",
+                    lambda *args, **kwargs: None,
+                )
             )
         stack.enter_context(
             patch(

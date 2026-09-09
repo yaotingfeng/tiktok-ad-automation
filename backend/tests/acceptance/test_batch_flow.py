@@ -28,7 +28,18 @@ def test_real_preparation_freeze_submission_and_official_sdk(acceptance_scenario
                 item.resolved.get("error_code") == "lookup_incomplete" for item in items
             )
             assert not scenario.runtime.wire.smart.calls
-            assert prep.status in {"READY", "BLOCKED"}
+            assert prep.status == "READY"
+            preview_id = scenario.freeze()
+            blocked = previews.get_preview_summary(
+                session, context=scenario.scope.context, preview_id=preview_id
+            )
+            assert blocked.status == "FROZEN" and blocked.campaign_count == 0
+            assert blocked.input_issue_count == 2
+            from app.core.errors import DomainError
+
+            with pytest.raises(DomainError) as refused:
+                scenario.submit()
+            assert refused.value.code == "preview_not_submittable"
             return
     preview_id = scenario.freeze()
     with Session(scenario.database_engine) as session:
@@ -62,6 +73,9 @@ def test_real_preparation_freeze_submission_and_official_sdk(acceptance_scenario
         for row in rows.values()
     )
     assert wire.calls["/open_api/v1.3/file/video/ad/upload/"] == 138
+    assert wire.calls["/open_api/v1.3/file/image/ad/upload/"] == 138
+    assert wire.calls["/open_api/v1.3/file/image/ad/info/"] >= 138
+    assert wire.calls["/open_api/v1.3/adgroup/get/"] >= 18
     with Session(scenario.database_engine) as session:
         targets = session.exec(
             select(AccountMaterial).where(
@@ -217,5 +231,26 @@ def test_partial_input_and_material_matching_use_actual_preparation(
                 )
             ).all()
             assert {drama.title for _, drama in rows} == {"The Bond", "Hidden Promise"}
+    scenario.submit()
+    submitted = scenario.view()
+    if variant in {"currency", "minis"}:
+        assert submitted.submitted.model_dump() == {
+            "campaign_count": 4,
+            "adgroup_count": 12,
+            "ad_count": 24,
+        }
+        assert Decimal(submitted.daily_budget_sum) == Decimal("400")
+        assert submitted.excluded_unit_count == 2
+        assert submitted.excluded.model_dump() == {
+            "campaign_count": 2,
+            "adgroup_count": 6,
+            "ad_count": 12,
+        }
+        for name, planned_count in submitted.planned.model_dump().items():
+            assert planned_count == getattr(submitted.submitted, name) + getattr(
+                submitted.excluded, name
+            )
+    else:
+        assert submitted.submitted.campaign_count == 6
     assert not scenario.runtime.wire.smart.calls
     assert not scenario.runtime.wire.videos

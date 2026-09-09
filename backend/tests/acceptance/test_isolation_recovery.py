@@ -171,36 +171,40 @@ def test_cross_tenant_http_reads_and_frozen_cursor_are_isolated(acceptance_scena
 
 @pytest.mark.parametrize("acceptance_scenario", [{"material_count": 1}], indirect=True)
 @pytest.mark.parametrize("ambiguous", [False, True])
+@pytest.mark.parametrize("kind", ["campaign", "ad"])
 def test_remote_commit_lost_reply_uses_get_without_recreating(
-    acceptance_scenario, ambiguous
+    acceptance_scenario, ambiguous, kind
 ):
     scenario = acceptance_scenario
     scenario.prepare()
     scenario.freeze()
     wire = scenario.runtime.wire
-    wire.lose_response_kind = "campaign"
-    wire.ambiguous_kind = "campaign" if ambiguous else None
+    wire.lose_response_kind = kind
+    wire.ambiguous_kind = kind if ambiguous else None
+    expected_creates = 6 if kind == "campaign" else 12
+    create_endpoint = f"/open_api/v1.3/smart_plus/{kind}/create/"
+    get_endpoint = f"/open_api/v1.3/smart_plus/{kind}/get/"
     scenario.submit()
     scenario.runtime.drive_until(
         lambda: scenario.view().status not in {"QUEUED", "RUNNING"}
     )
     view = scenario.view()
-    assert wire.calls["/open_api/v1.3/smart_plus/campaign/create/"] == 6, (
+    assert wire.calls[create_endpoint] == expected_creates, (
         scenario.runtime.diagnostics()
     )
-    assert wire.calls["/open_api/v1.3/smart_plus/campaign/get/"] >= 6
+    assert wire.calls[get_endpoint] >= expected_creates
     if ambiguous:
         assert view.status == "NEEDS_REVIEW"
         with Session(scenario.database_engine) as session:
             unknown = session.exec(
                 select(ExecutionStep).where(
                     ExecutionStep.submission_id == scenario.submission_id,
-                    ExecutionStep.kind == "CAMPAIGN",
+                    ExecutionStep.kind == kind.upper(),
                     ExecutionStep.status == "UNKNOWN",
                 )
             ).all()
             assert len(unknown) == 1 and unknown[0].remote_id is None
-        assert len(wire.smart.store["campaign"]) == 7
+        assert len(wire.smart.store[kind]) == expected_creates + 1
         from app.modules.builds.recovery import (
             get_recovery,
             get_request,
@@ -239,18 +243,18 @@ def test_remote_commit_lost_reply_uses_get_without_recreating(
                 == receipt
             )
             assert receipt.state == "QUEUED" and receipt.scheduled_count == 0
-        assert wire.calls["/open_api/v1.3/smart_plus/campaign/create/"] == 6
+        assert wire.calls[create_endpoint] == expected_creates
 
     else:
         assert view.status == "COMPLETED", scenario.runtime.diagnostics()
-        assert len(wire.smart.store["campaign"]) == 6
+        assert len(wire.smart.store[kind]) == expected_creates
         assert view.succeeded.campaign_count == 6
-    creates = wire.calls["/open_api/v1.3/smart_plus/campaign/create/"]
+    creates = wire.calls[create_endpoint]
     for message in list(scenario.runtime.delivered):
         if message["name"] in {"builds.execute_step", "builds.reconcile_step"}:
             scenario.runtime.deliver(message)
     scenario.runtime.pump_jobs()
-    assert wire.calls["/open_api/v1.3/smart_plus/campaign/create/"] == creates
+    assert wire.calls[create_endpoint] == creates
 
 
 @pytest.mark.parametrize("acceptance_scenario", [{"material_count": 1}], indirect=True)
@@ -291,7 +295,7 @@ def test_submission_aliases_and_duplicate_delivery_do_not_repeat_post(
 
 
 @pytest.mark.parametrize("acceptance_scenario", [{"material_count": 1}], indirect=True)
-def test_revocation_after_first_campaign_preserves_enable_and_stops_children(
+def test_revocation_after_first_ad_preserves_enable_and_stops_remaining_creatives(
     acceptance_scenario,
 ):
     scenario = acceptance_scenario
@@ -300,7 +304,7 @@ def test_revocation_after_first_campaign_preserves_enable_and_stops_children(
     wire = scenario.runtime.wire
 
     def revoke(kind, _body):
-        if kind == "campaign":
+        if kind == "ad":
             wire.after_create = None
             with Session(scenario.database_engine) as session, session.begin():
                 member = session.get(
@@ -315,18 +319,15 @@ def test_revocation_after_first_campaign_preserves_enable_and_stops_children(
     scenario.runtime.drive_until(
         lambda: scenario.view().status not in {"QUEUED", "RUNNING"}
     )
-    assert len(wire.smart.store["campaign"]) == 1, scenario.runtime.diagnostics()
-    assert (
-        next(iter(wire.smart.store["campaign"].values()))["operation_status"]
-        == "ENABLE"
-    )
-    assert not wire.smart.store["adgroup"] and not wire.smart.store["ad"]
+    assert len(wire.smart.store["ad"]) == 1, scenario.runtime.diagnostics()
+    assert next(iter(wire.smart.store["ad"].values()))["operation_status"] == "ENABLE"
+    assert wire.smart.store["campaign"] and wire.smart.store["adgroup"]
     assert all(c["path"].endswith(("/create/", "/get/")) for c in wire.smart.calls)
     with Session(scenario.database_engine) as session:
         known = session.exec(
             select(ExecutionStep).where(
                 ExecutionStep.submission_id == scenario.submission_id,
-                ExecutionStep.kind == "CAMPAIGN",
+                ExecutionStep.kind == "AD",
                 ExecutionStep.remote_id.is_not(None),
             )
         ).all()
@@ -495,3 +496,73 @@ def test_expired_armed_attempt_late_receipt_cannot_replace_reader_lease(
         )
         == 1
     )
+
+
+def test_platform_delegation_records_actual_actor_and_target_tenant(
+    acceptance_scenario,
+):
+    from app.jobs.models import PendingDispatch
+    from app.modules.builds.models import BuildDraft, DraftPreparation
+
+    scenario = acceptance_scenario
+
+    def database_session():
+        with Session(scenario.database_engine) as session:
+            yield session
+
+    previous = app.dependency_overrides.copy()
+    app.dependency_overrides[get_db] = database_session
+    try:
+        with TestClient(app) as client:
+            token = client.post(
+                "/api/login/access-token",
+                data={"username": scenario.scope.platform_email, "password": PASSWORD},
+            )
+            assert token.status_code == 200
+            headers = {"Authorization": "Bearer " + token.json()["access_token"]}
+            tenant_id = scenario.other.context.tenant_id
+            created = client.post(
+                f"/api/tenants/{tenant_id}/build-drafts",
+                headers=headers,
+                json={
+                    "request_id": str(uuid4()),
+                    "bc_id": scenario.other.bc_id,
+                    "strategy_version_id": str(scenario.other.version_id),
+                    "provider_connection_id": str(scenario.other.provider_id),
+                    "application_id": scenario.other.application_id,
+                    "drama_lines": ["The Bond"],
+                    "account_lines": list(scenario.other.accounts),
+                    "link_config": {"episode": 1},
+                },
+            )
+            assert created.status_code == 201
+            draft_id = created.json()["draft_id"]
+            prepared = client.post(
+                f"/api/tenants/{tenant_id}/build-drafts/{draft_id}/prepare",
+                headers=headers,
+                json={"request_id": str(uuid4())},
+            )
+            assert prepared.status_code == 202
+            with Session(scenario.database_engine) as session:
+                from uuid import UUID
+
+                row = session.get(BuildDraft, UUID(draft_id))
+                assert (
+                    row.tenant_id == tenant_id
+                    and row.created_by == scenario.scope.platform_id
+                )
+                prep = session.get(DraftPreparation, UUID(prepared.json()["task_id"]))
+                assert prep.actor_id == scenario.scope.platform_id
+                dispatched = session.exec(
+                    select(PendingDispatch).where(
+                        PendingDispatch.tenant_id == tenant_id
+                    )
+                ).all()
+                assert dispatched and all(
+                    message.actor_id == scenario.scope.platform_id
+                    for message in dispatched
+                )
+            assert not scenario.runtime.wire.calls
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(previous)
