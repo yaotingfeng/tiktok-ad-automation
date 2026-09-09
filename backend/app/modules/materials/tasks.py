@@ -125,8 +125,11 @@ def _run_target(
         "revision",
         "claim_id",
         "observe",
+        "read_only",
     } or not {"distribution_id", "operation_id"}.issubset(payload):
         raise DomainError("invalid_asset_task", "目标素材工作任务参数无效")
+    if "read_only" in payload and type(payload["read_only"]) is not bool:
+        raise DomainError("invalid_asset_task", "素材只读标记无效")
     from .distribution import run_distribution
 
     with Redis.from_url(settings.REDIS_URL) as redis_client:
@@ -139,6 +142,7 @@ def _run_target(
             distribution_id=UUID(payload["distribution_id"]),
             operation_id=UUID(payload["operation_id"]),
             kind=kind,
+            read_only=payload.get("read_only", False),
             revision=payload.get("revision"),
             recovery_claim_id=UUID(payload["claim_id"])
             if payload.get("claim_id")

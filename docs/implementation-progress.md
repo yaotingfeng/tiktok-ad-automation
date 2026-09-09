@@ -103,3 +103,10 @@
 - 任务查询 `ec483bd` / `9ca6d13`：列表与分层详情均分页，组内素材显示已核实的目标 VID/封面，事件仅暴露白名单；版权方/策略绑定来自冻结预览。
 - 队列执行 `7dddbe4`：unit→step 锁序、结果与下一步 outbox 同事务、当前消息修复与业务退避分开；完整成功、远端成功丢响应后回读续建、回读为空停止自动重试已通过 10 条专项测试。
 - Linux 进程故障测试 `a842358` 已提交，运行状态独立记录；当前新增 Scene 编排、recovery 与 UI 不在上述已通过范围中。
+## P06 recovery backend — 2026-09-09
+
+- Added permanent tenant-scoped retry/reconcile request receipts and separate mutable recovery progress (`0010_submission_recovery`); immutable intent triggers and preview/BC composite foreign keys. Added per-step evidence index (`0011_recovery_evidence_index`).
+- Added 100-step durable recovery scanning, caller/original-actor separation, current account gates, dependency-aware definitely-unsent retry, existing readback queue reuse, exact current-generation outbox repair, and SQL-derived recovery counts/buttons. Historical receipt GET remains QUEUED/0 and read-only; job COMPLETED means scan scheduling finished.
+- MATERIAL reconciliation now carries strict `read_only` through the original distribution verifier and all continuations. Delayed failure cannot select a new upload; successful original receipts can revalidate their existing VID. Original frozen intent and actual source history remain intact.
+- Verified on isolated PostgreSQL and actual Redis with official SDK transport doubles: 476 builds/materials regressions passed; 38 focused recovery/SDK checks passed; final 20 boundary/SDK checks passed after the last strict-read changes. Ruff, mypy, ty, Alembic upgrade/check, and diff whitespace checks passed. No real provider/TikTok/S3 operations.
+- Integration: include `builds.recovery_api.router`; include `app.modules.builds.recovery_tasks` in Celery; register periodic `builds.repair_recoveries` on control; map `recovery_no_candidates` to HTTP 409. Root owns bounded terminal material-result synchronization and shared API/client registration. Details: `docs/contracts/submission-recovery.md`.

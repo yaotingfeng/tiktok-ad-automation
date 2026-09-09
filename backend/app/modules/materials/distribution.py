@@ -64,7 +64,10 @@ def queue_distribution(
     due: datetime | None = None,
     claim_id: UUID | None = None,
     observe: bool = False,
+    read_only: bool = False,
 ) -> None:
+    if read_only and kind != "verify":
+        raise DomainError("invalid_asset_task", "只读核实不能安排上传")
     payload: dict[str, Any] = {
         "distribution_id": str(dist.id),
         "operation_id": str(operation.id),
@@ -79,6 +82,12 @@ def queue_distribution(
         revision = operation.remote_response.get("revision", 0)
         payload["revision"] = revision
         key = f"material-target:{dist.id}:{operation.id}:{revision}:{kind}"
+    if read_only:
+        payload["read_only"] = True
+        key += f":read:{operation.id}"
+        if observe:
+            payload["revision"] = operation.remote_response.get("revision", 0)
+            key += f":{payload['revision']}"
     existing = session.exec(
         select(PendingDispatch)
         .where(
@@ -88,6 +97,12 @@ def queue_distribution(
         .with_for_update()
     ).first()
     if existing:
+        if (existing.actor_id, existing.task_name, existing.payload) != (
+            dist.actor_id,
+            f"materials.{kind}_target",
+            payload,
+        ):
+            raise DomainError("dispatch_payload_invalid", "素材核实投递身份不匹配")
         # Reuse one observation record; never invalidate an unpublished message
         # or reset broker backoff while waiting for a source-owned operation.
         if observe and existing.published_at is not None:
@@ -311,9 +326,10 @@ def run_distribution(
     revision: int | None = None,
     recovery_claim_id: UUID | None = None,
     s3: Any = None,
+    read_only: bool = False,
 ) -> None:
     """One official call at most; production entrypoint enforces a process deadline."""
-    if kind not in {"prepare", "verify"}:
+    if kind not in {"prepare", "verify"} or (read_only and kind != "verify"):
         raise DomainError("invalid_asset_task", "目标素材工作任务无效")
     claim = uuid4()
     hard = UPLOAD_HARD_LIMIT if kind == "prepare" else READ_HARD_LIMIT
@@ -321,7 +337,9 @@ def run_distribution(
     deadline = datetime.now(UTC) + timedelta(seconds=hard - 5)
     with Session(database_engine) as session, session.begin():
         dist = _load_distribution(session, context, distribution_id)
-        if dist.status not in ACTIVE_DISTRIBUTIONS:
+        if dist.status not in ACTIVE_DISTRIBUTIONS and not (
+            read_only and dist.status in {"ready", "blocked"}
+        ):
             return
         try:
             require_tenant(
@@ -345,6 +363,12 @@ def run_distribution(
         if operation_id is not None and operation_id != dist.operation_id:
             return
         operation = _locked_operation(session, context, dist.operation_id)
+        if (
+            read_only
+            and revision is not None
+            and revision != operation.remote_response.get("revision", 0)
+        ):
+            return
         source = _attempt(session, operation.id)
         mapping = target_mapping(
             session,
@@ -353,11 +377,39 @@ def run_distribution(
             material_id=dist.material_id,
             advertiser_id=dist.advertiser_id,
         )
-        if mapping_fresh(mapping) and (
-            source or operation.status in {"pending", "succeeded"}
+        if (
+            not read_only
+            and mapping_fresh(mapping)
+            and (source or operation.status in {"pending", "succeeded"})
         ):
             dist.status, dist.reason_code = "ready", None
             return
+        if read_only and operation.status in {"failed", "pending", "confirmed_absent"}:
+            # A delayed manual read cannot acquire a new upload authority. Keep
+            # the actual operation history intact even after definitive failure.
+            if operation.status == "failed":
+                _blocked(dist, "material_operation_failed")
+            return
+        if read_only and operation.status == "succeeded":
+            if revision is not None and revision != operation.remote_response.get(
+                "revision", 0
+            ):
+                return
+            if operation.claimed_until and operation.claimed_until > datetime.now(UTC):
+                return
+            known_id = operation.remote_response.get("video_id") or (
+                mapping.video_id if mapping else None
+            )
+            if not isinstance(known_id, str) or not known_id.strip():
+                return
+            # Revalidate the actual receipt in the same fenced operation. This
+            # never reserves a fresh upload or changes source-account history.
+            operation.remote_response = {
+                **operation.remote_response,
+                "video_id": known_id,
+            }
+            operation.status, dist.status = "verifying", "verifying"
+            source = None
         if source:
             if (
                 operation.status == "failed"
@@ -383,7 +435,9 @@ def run_distribution(
                     path="upload_original",
                 )
                 dist.operation_id, dist.path = operation.id, "upload_original"
-                queue_distribution(session, dist, operation, kind="prepare")
+                queue_distribution(
+                    session, dist, operation, read_only=read_only, kind="prepare"
+                )
             elif operation.status == "succeeded":
                 # The source completed while an observation was delayed beyond
                 # the cache window. Revalidate under a new target-owned read.
@@ -396,7 +450,9 @@ def run_distribution(
                     path="existing_target",
                 )
                 dist.operation_id, dist.path = operation.id, "existing_target"
-                queue_distribution(session, dist, operation, kind="verify")
+                queue_distribution(
+                    session, dist, operation, read_only=read_only, kind="verify"
+                )
             else:
                 dist.status = (
                     "result_unknown"
@@ -407,6 +463,7 @@ def run_distribution(
                     session,
                     dist,
                     operation,
+                    read_only=read_only,
                     kind="verify",
                     observe=True,
                     due=datetime.now(UTC) + timedelta(seconds=60),
@@ -447,7 +504,9 @@ def run_distribution(
             )
             dist.operation_id, dist.path = operation.id, "upload_original"
             if kind != "prepare":
-                queue_distribution(session, dist, operation, kind="prepare")
+                queue_distribution(
+                    session, dist, operation, read_only=read_only, kind="prepare"
+                )
                 return
         if operation.status not in UNRESOLVED:
             return
@@ -459,7 +518,9 @@ def run_distribution(
         if expected != kind:
             if expired_send:
                 operation.attempt_token, operation.claimed_until = None, None
-                queue_distribution(session, dist, operation, kind="verify")
+                queue_distribution(
+                    session, dist, operation, read_only=read_only, kind="verify"
+                )
             return
         try:
             if kind == "prepare":
@@ -499,6 +560,8 @@ def run_distribution(
                     "error_code": error.code,
                 }
             return
+        if read_only:
+            dist.status = "verifying"
         previous_status = operation.status
         current_revision = operation.remote_response.get("revision", 0) + 1
         operation.remote_response = {
@@ -514,6 +577,7 @@ def run_distribution(
             session,
             dist,
             operation,
+            read_only=read_only,
             kind=kind,
             due=operation.claimed_until,
             claim_id=claim,
@@ -686,6 +750,7 @@ def run_distribution(
                     session,
                     dist,
                     operation,
+                    read_only=read_only,
                     kind="verify",
                     due=datetime.now(UTC) + timedelta(seconds=60),
                 )
@@ -740,6 +805,7 @@ def run_distribution(
                     session,
                     dist,
                     operation,
+                    read_only=read_only,
                     kind=kind if deferred else "verify",
                     due=datetime.now(UTC) + timedelta(seconds=delay),
                 )
@@ -841,9 +907,20 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
             col(PendingDispatch.task_name).in_(
                 ["materials.prepare_target", "materials.verify_target"]
             ),
-            col(MaterialDistribution.status).in_(ACTIVE_DISTRIBUTIONS),
             or_(
-                and_(payload["observe"].astext == "true", op_owner),
+                col(MaterialDistribution.status).in_(ACTIVE_DISTRIBUTIONS),
+                and_(
+                    payload["read_only"].astext == "true",
+                    col(MaterialDistribution.status).in_(["ready", "blocked"]),
+                ),
+            ),
+            or_(
+                and_(payload["read_only"].astext == "true", live_message),
+                and_(
+                    payload["observe"].astext == "true",
+                    payload["read_only"].astext.is_distinct_from("true"),
+                    op_owner,
+                ),
                 and_(col(MaterialAssetOperation.status).in_(UNRESOLVED), live_message),
             ),
         )

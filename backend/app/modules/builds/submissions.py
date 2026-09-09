@@ -637,6 +637,7 @@ def get_submission(
             for name in fields.values()
         }
     )
+    from app.modules.builds.recovery import recovery_summary
     from app.modules.builds.submission_catalog import metadata
 
     return SubmissionView(
@@ -656,6 +657,7 @@ def get_submission(
         submitted=submitted,
         excluded=excluded,
         stage_counts=stage_counts,
+        recovery=recovery_summary(session, context=context, submission=row),
         excluded_unit_count=scope["excluded_units"],
         drama_count=scope["dramas"],
         account_count=scope["accounts"],
