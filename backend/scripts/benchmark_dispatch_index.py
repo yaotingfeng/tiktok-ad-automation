@@ -35,6 +35,11 @@ def measure(rows: int) -> dict[str, Any]:
     with owned_database(str(settings.DATABASE_URL)) as engine:
         tenant, actor = uuid4(), uuid4()
         with engine.begin() as connection:
+            # New heads already include the fix. Remove only this index in
+            # this newly owned disposable DB so "before" remains a baseline.
+            connection.exec_driver_sql(
+                "DROP INDEX IF EXISTS ix_dispatch_expansion_pending"
+            )
             connection.execute(
                 text("""INSERT INTO pending_dispatch(id,tenant_id,actor_id,task_name,task_key,payload,available_at,published_at,attempts)
                 SELECT gen_random_uuid(),:tenant,:actor,'builds.process_unit','synthetic-unit-'||n,'{}'::jsonb,
