@@ -522,8 +522,7 @@ def advance(
         )
         data = verified_data(data, work, config, application_id)
         if work.get("uncertain_effect"):
-            effect = session.get(ProviderEffect, UUID(work["uncertain_effect"]))
-            assert effect
+            effect = _recovery_effect(session, context, item_id, work, config)
             effect.status, effect.remote_id = "succeeded", data["remote_id"]
             effect.result = {**effect.result, "verified": True}
             session.add(effect)
