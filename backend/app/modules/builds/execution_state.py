@@ -160,6 +160,38 @@ def record_created(session: Session, *, claim: StepClaim, result: RemoteCreated)
     return step.status
 
 
+def preserve_created_receipt(
+    session: Session, *, claim: StepClaim, result: RemoteCreated
+) -> str:
+    """Persist a received ID after a failed success transaction, without a replay.
+
+    This fresh transaction writes append-only evidence. A previously committed
+    success remains successful; an uncommitted receipt needs readback. Never
+    change a newer nonce, attempt, expiry, phase, body, or actual object ID.
+    """
+    step = _step(session, claim)
+    evidence(
+        session,
+        step=step,
+        claim=claim,
+        conclusion="LATE_CREATED",
+        request_id=result.request_id,
+        summary={
+            "remote_id": result.remote_id,
+            "operation_status": result.operation_status,
+        },
+    )
+    if step.remote_id:
+        if step.remote_id != result.remote_id:
+            step.mismatch, step.error_code = True, "conflicting_remote_receipt"
+    elif step.status != "SUCCEEDED":
+        step.status, step.error_code = "UNKNOWN", "late_creation_receipt"
+    step.updated_at = datetime.now(UTC)
+    session.add(step)
+    session.flush()
+    return step.status
+
+
 def record_unknown(
     session: Session,
     *,

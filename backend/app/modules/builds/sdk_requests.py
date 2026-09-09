@@ -38,6 +38,8 @@ PROTECTED = frozenset(
     }
 )
 PORTFOLIO_ENDPOINT = "/open_api/v1.3/creative/portfolio/create/"
+# Application copy policy, not an asserted TikTok platform limit.
+APPLICATION_COPY_MAX_CHARACTERS = 100
 
 
 def _nonempty(value: object) -> bool:
@@ -64,6 +66,8 @@ def ad_assets(
         or not all(_nonempty(value) for value in identity.values())
     ):
         raise DomainError("invalid_build_request", "创意信息无效")
+    if len(text) > APPLICATION_COPY_MAX_CHARACTERS:
+        raise DomainError("copy_too_long", "应用文案策略最多允许 100 个字符")
     creatives = []
     for item in mappings:
         if not _nonempty(item.get("video_id")) or not _nonempty(item.get("image_id")):

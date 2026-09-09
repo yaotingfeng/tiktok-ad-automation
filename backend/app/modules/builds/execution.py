@@ -21,6 +21,7 @@ from app.modules.builds.execution_state import (
     arm_request,
     evidence,
     finish_local,
+    preserve_created_receipt,
     record_created,
     record_unknown,
 )
@@ -34,6 +35,7 @@ from app.modules.builds.scene import read_scene_context
 from app.modules.builds.sdk_requests import (
     CREATE_ENDPOINTS,
     PORTFOLIO_ENDPOINT,
+    RemoteCreated,
     TikTokResponseError,
     ad_assets,
     compile_request,
@@ -305,7 +307,7 @@ def prepare_request(
         ).one()
         if cta.status != "SUCCEEDED" or not cta.remote_id:
             raise DomainError("cta_not_ready", "CTA 尚未准备完成", retryable=True)
-        resolved["call_to_action_id"] = cta.remote_id
+        resolved["ad_configuration"] = {"call_to_action_id": cta.remote_id}
         fixed.update(adgroup_id=_parent(session, step), ad_name=ad.name)
     else:
         raise DomainError("invalid_build_kind", "该步骤不是广告创建请求")
@@ -383,6 +385,7 @@ def process_step(
             return step.status
     assert claim
     armed = False
+    result: RemoteCreated | None = None
     try:
         with Session(database_engine) as session, session.begin():
             frozen = _frozen(session, context, claim)
@@ -481,6 +484,12 @@ def process_step(
     except Exception as error:
         if armed:
             with Session(database_engine) as session, session.begin():
+                if result is not None:
+                    # A received ID is useful even when its success transaction
+                    # rolled back. CTA has no unknown-ID list fallback. Append the
+                    # receipt without overwriting any newer owner or claiming a
+                    # failed commit succeeded; subsequent recovery is read-only.
+                    return preserve_created_receipt(session, claim=claim, result=result)
                 return record_unknown(
                     session,
                     claim=claim,

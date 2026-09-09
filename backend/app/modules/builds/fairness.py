@@ -25,7 +25,9 @@ def _execute(redis_client: Any, keys: list[str], args: list[str | int]) -> bool:
     try:
         return bool(redis_client.eval(SCRIPT, len(keys), *keys, *args))
     except RedisError:
-        raise DomainError("admission_unavailable", "调度服务暂不可用") from None
+        raise DomainError(
+            "admission_unavailable", "调度服务暂不可用", retryable=True
+        ) from None
 
 
 def take_fair_turn(

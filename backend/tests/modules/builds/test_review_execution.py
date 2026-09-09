@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from sqlalchemy import text
 from sqlmodel import Session, select
 from urllib3.response import HTTPResponse
@@ -93,6 +94,53 @@ def test_review_database_commit_failure_preserves_received_cta_id(
         # A known CTA ID must survive in append-only evidence because there is no
         # unknown-ID list endpoint. Recovery may not discard this successful GET key.
         assert any(row.summary.get("remote_id") == calls[0][2] for row in evidence)
+        saved_body = step.request_body
+    # Once the transient database failure is gone, use that receipt for the only
+    # supported CTA GET. No unknown-ID search and no second create is necessary.
+    from datetime import UTC, datetime, timedelta
+
+    with db.begin() as connection:
+        connection.execute(
+            text("DROP TRIGGER review_deferred_receipt ON execution_step")
+        )
+    with Session(db) as session, session.begin():
+        step = session.get(ExecutionStep, ids["CTA"][0])
+        step.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        session.add(step)
+    from app.modules.builds import reconciliation
+
+    bounded_readback(monkeypatch)
+    reads = []
+
+    def read(_pool, method, url, **kwargs):
+        assert method == "GET" and url.endswith("/creative/portfolio/get/")
+        query = dict(kwargs["fields"])
+        assert query["creative_portfolio_id"] == calls[0][2]
+        reads.append(query)
+        return HTTPResponse(
+            body=json.dumps(
+                {
+                    "code": 0,
+                    "data": {
+                        "creative_portfolio_id": calls[0][2],
+                        "creative_portfolio_type": "CTA",
+                        "portfolio_content": saved_body["portfolio_content"],
+                    },
+                    "request_id": "recovered",
+                }
+            ).encode(),
+            status=200,
+        )
+
+    monkeypatch.setattr("urllib3.PoolManager.request", read)
+    result = reconciliation.process_reconciliation(
+        database_engine=db,
+        redis_client=redis_client,
+        context=executable[1],
+        step_id=ids["CTA"][0],
+        revision=0,
+    )
+    assert result.state == "SUCCEEDED" and len(reads) == 1 and len(calls) == 1
 
 
 def test_review_fairness_redis_outage_defers_unsent_step(executable, monkeypatch):
@@ -123,3 +171,327 @@ def test_review_fairness_redis_outage_defers_unsent_step(executable, monkeypatch
         assert step.request_body is None and step.remote_id is None
         assert step.error_code == "admission_unavailable"
         assert step.status == "PENDING"
+
+
+@pytest.mark.parametrize("provider_verified", [False, True])
+def test_review_real_scene_checks_provider_and_missing_evidence(
+    executable, redis_client, monkeypatch, provider_verified
+):
+    from app.modules.builds import execution, scene
+
+    db, _, ids = executable
+    calls = success_wire(monkeypatch)
+    if provider_verified:
+        from uuid import uuid4
+
+        from app.modules.providers.models import ProviderApplication, ProviderConnection
+
+        with Session(db) as session, session.begin():
+            provider = session.exec(select(ProviderConnection)).one()
+            provider.verification_token = uuid4()
+            app = session.exec(select(ProviderApplication)).one()
+            app.channel_config = {
+                **app.channel_config,
+                "verification_token": str(provider.verification_token),
+            }
+            session.add_all([provider, app])
+    monkeypatch.setattr(execution, "read_scene_context", scene.read_scene_context)
+    run(executable, redis_client, "CTA")
+    assert not calls
+    with Session(db) as session:
+        step = session.get(ExecutionStep, ids["CTA"][0])
+        assert (step.status, step.error_code) == (
+            ("PENDING", "scene_refresh_required")
+            if provider_verified
+            else ("FAILED", "scene_link_unavailable")
+        )
+        assert step.request_body is None
+
+
+def test_review_real_metadata_change_after_admission_blocks_old_budget_currency(
+    executable, redis_client, monkeypatch
+):
+    from contextlib import contextmanager
+
+    from app.modules.accounts.models import AdvertiserAccount
+    from app.modules.builds import execution
+
+    db, context, ids = executable
+    calls = success_wire(monkeypatch)
+    original = execution.admitted_build_call
+
+    @contextmanager
+    def change(*args, **kwargs):
+        with original(*args, **kwargs):
+            with Session(db) as session, session.begin():
+                account = session.get(
+                    AdvertiserAccount, (context.tenant_id, "account-A")
+                )
+                account.currency = "EUR"
+                session.add(account)
+            yield
+
+    monkeypatch.setattr(execution, "admitted_build_call", change)
+    run(executable, redis_client, "CTA")
+    assert not calls
+    with Session(db) as session:
+        step = session.get(ExecutionStep, ids["CTA"][0])
+        assert step.status == "FAILED" and step.error_code == "account_metadata_changed"
+        assert step.request_body is None
+
+
+def test_review_scene_business_change_after_admission_does_not_arm(
+    executable, redis_client, monkeypatch
+):
+    from contextlib import contextmanager
+    from dataclasses import replace
+
+    from app.modules.builds import execution
+
+    db, _, ids = executable
+    calls = success_wire(monkeypatch)
+    current_scene, admission = (
+        execution.read_scene_context,
+        execution.admitted_build_call,
+    )
+
+    @contextmanager
+    def change(*args, **kwargs):
+        with admission(*args, **kwargs):
+
+            def changed(*scene_args, **scene_kwargs):
+                current = current_scene(*scene_args, **scene_kwargs)
+                return replace(current, cta_fields={"asset_ids": ["changed"]})
+
+            monkeypatch.setattr(execution, "read_scene_context", changed)
+            yield
+
+    monkeypatch.setattr(execution, "admitted_build_call", change)
+    run(executable, redis_client, "CTA")
+    assert not calls
+    with Session(db) as session:
+        step = session.get(ExecutionStep, ids["CTA"][0])
+        assert step.error_code == "scene_intent_changed" and step.request_body is None
+
+
+def test_review_pre_arm_commit_rejection_never_reaches_transport(
+    executable, redis_client, monkeypatch
+):
+    db, _, ids = executable
+    with db.begin() as connection:
+        connection.execute(
+            text("""
+            CREATE FUNCTION review_reject_arm() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+              IF NEW.phase='REQUEST_ARMED' THEN
+                RAISE EXCEPTION 'review deferred arm rejection' USING ERRCODE='23514';
+              END IF;
+              RETURN NEW;
+            END $$
+        """)
+        )
+        connection.execute(
+            text("""
+            CREATE CONSTRAINT TRIGGER review_deferred_arm
+            AFTER UPDATE ON execution_step DEFERRABLE INITIALLY DEFERRED
+            FOR EACH ROW EXECUTE FUNCTION review_reject_arm()
+        """)
+        )
+    calls = success_wire(monkeypatch)
+    run(executable, redis_client, "CTA")
+    assert not calls
+    with Session(db) as session:
+        step = session.get(ExecutionStep, ids["CTA"][0])
+        assert step.request_body is None and step.remote_id is None
+        assert step.status == "FAILED"
+
+
+@pytest.mark.parametrize(
+    "cleanup_failure,known_id", [(False, False), (True, False), (True, True)]
+)
+def test_review_actual_late_sdk_receipt_preserves_new_owner_nonce(
+    executable, redis_client, monkeypatch, cleanup_failure, known_id
+):
+    from datetime import UTC, datetime, timedelta
+    from uuid import uuid4
+
+    db, _, ids = executable
+    identity, replacement = ids["CTA"][0], uuid4()
+    if cleanup_failure:
+        from contextlib import contextmanager
+
+        from app.modules.builds import execution
+
+        original_client = execution.sdk_client
+
+        @contextmanager
+        def failing_cleanup(*args, **kwargs):
+            with original_client(*args, **kwargs) as client:
+                yield client
+            raise RuntimeError("review cleanup failure")
+
+        monkeypatch.setattr(execution, "sdk_client", failing_cleanup)
+    writes = []
+
+    def request(_pool, method, _url, **_kwargs):
+        writes.append(method)
+        with Session(db) as session, session.begin():
+            step = session.exec(
+                select(ExecutionStep)
+                .where(ExecutionStep.id == identity)
+                .with_for_update(nowait=True)
+            ).one()
+            assert step.phase == "REQUEST_ARMED" and step.attempt == 1
+            step.status = "SUCCEEDED" if known_id else "UNKNOWN"
+            if known_id:
+                step.remote_id, step.phase = "new-actual", "DONE"
+            step.attempt = 2
+            step.lease_token = replacement
+            step.lease_expires_at = datetime.now(UTC) + timedelta(seconds=60)
+            session.add(step)
+        return HTTPResponse(
+            body=b'{"code":0,"data":{"creative_portfolio_id":"late-actual"},"request_id":"late"}',
+            status=200,
+        )
+
+    monkeypatch.setattr("urllib3.PoolManager.request", request)
+    run(executable, redis_client, "CTA")
+    run(executable, redis_client, "CTA")
+    assert writes == ["POST"]
+    with Session(db) as session:
+        step = session.get(ExecutionStep, identity)
+        assert step.status == ("SUCCEEDED" if known_id else "UNKNOWN")
+        assert step.remote_id == ("new-actual" if known_id else None)
+        assert step.lease_token == replacement and step.attempt == 2
+        late = session.exec(
+            select(StepEvidence).where(
+                StepEvidence.step_id == identity,
+                StepEvidence.conclusion == "LATE_CREATED",
+            )
+        ).all()
+        assert len(late) == (2 if cleanup_failure else 1)
+        assert all(
+            row.summary["remote_id"] == "late-actual"
+            and row.attempt == 1
+            and row.lease_token != replacement
+            for row in late
+        )
+        if known_id:
+            assert step.mismatch
+
+
+@pytest.mark.parametrize("copy", ["", "  \t\n", "a" * 101, "剧" * 101])
+def test_review_ad_copy_application_policy_rejects_blank_or_over_100(copy):
+    from app.core.errors import DomainError
+    from app.modules.builds.sdk_requests import ad_assets
+
+    with pytest.raises(DomainError):
+        ad_assets(
+            [{"video_id": "target", "image_id": "cover"}],
+            text=copy,
+            url="https://example.test/frozen",
+            identity={
+                "identity_type": "BC_AUTH_TT",
+                "identity_id": "identity",
+                "identity_authorized_bc_id": "bc",
+            },
+        )
+
+
+def test_review_ad_copy_application_policy_counts_characters_not_bytes():
+    from app.modules.builds.sdk_requests import ad_assets
+
+    body = ad_assets(
+        [{"video_id": "target", "image_id": "cover"}],
+        text="剧" * 100,
+        url="https://example.test/frozen",
+        identity={
+            "identity_type": "BC_AUTH_TT",
+            "identity_id": "identity",
+            "identity_authorized_bc_id": "bc",
+        },
+    )
+    assert body["ad_text_list"] == [{"ad_text": "剧" * 100}]
+
+
+def bounded_readback(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.modules.builds import reconciliation
+
+    monkeypatch.setattr(
+        reconciliation,
+        "current_task",
+        SimpleNamespace(
+            request=SimpleNamespace(
+                timelimit=(45, 40), called_directly=False, is_eager=False
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        reconciliation,
+        "current_process",
+        lambda: SimpleNamespace(daemon=True, name="ForkPoolWorker-1"),
+    )
+
+
+def test_review_actual_ad_execution_body_passes_strict_readback(
+    executable, redis_client, monkeypatch
+):
+    from app.modules.builds import reconciliation
+
+    db, context, ids = executable
+    calls = success_wire(monkeypatch)
+    for kind in ("MATERIAL", "CTA", "CAMPAIGN", "ADGROUP", "AD"):
+        run(executable, redis_client, kind)
+    with Session(db) as session:
+        readback = session.exec(
+            select(ExecutionStep).where(
+                ExecutionStep.kind == "READBACK",
+                ExecutionStep.parent_step_id == ids["AD"][0],
+            )
+        ).one()
+        readback_id = readback.id
+        source = session.get(ExecutionStep, ids["AD"][0])
+        expected, actual_id = source.request_body, source.remote_id
+    bounded_readback(monkeypatch)
+    reads = []
+
+    def read(_pool, method, url, **_kwargs):
+        assert method == "GET" and url.endswith("/smart_plus/ad/get/")
+        reads.append(url)
+        return HTTPResponse(
+            body=json.dumps(
+                {
+                    "code": 0,
+                    "request_id": "ad-read",
+                    "data": {
+                        "list": [
+                            {
+                                **expected,
+                                "smart_plus_ad_id": actual_id,
+                                "secondary_status": "AD_STATUS_AUDIT",
+                            }
+                        ],
+                        "page_info": {
+                            "page": 1,
+                            "page_size": 100,
+                            "total_number": 1,
+                            "total_page": 1,
+                        },
+                    },
+                }
+            ).encode(),
+            status=200,
+        )
+
+    monkeypatch.setattr("urllib3.PoolManager.request", read)
+    result = reconciliation.process_reconciliation(
+        database_engine=db,
+        redis_client=redis_client,
+        context=context,
+        step_id=readback_id,
+        revision=0,
+    )
+    assert result.state == "SUCCEEDED" and len(reads) == 1
+    assert len([kind for kind, _, _ in calls if kind == "ad"]) == 2
