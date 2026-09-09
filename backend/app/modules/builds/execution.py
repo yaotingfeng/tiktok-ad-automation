@@ -18,6 +18,7 @@ from app.modules.builds.execution_admission import HARD_LIMIT, admitted_build_ca
 from app.modules.builds.execution_models import ExecutionStep, Submission
 from app.modules.builds.execution_schemas import StepClaim
 from app.modules.builds.execution_state import (
+    active_attempt,
     arm_request,
     evidence,
     finish_local,
@@ -32,6 +33,7 @@ from app.modules.builds.preview_models import (
 )
 from app.modules.builds.preview_schemas import FrozenUnit
 from app.modules.builds.scene import read_scene_context
+from app.modules.builds.scene_jobs import ensure_scene_preparation
 from app.modules.builds.sdk_requests import (
     CREATE_ENDPOINTS,
     PORTFOLIO_ENDPOINT,
@@ -134,7 +136,12 @@ def _current_scene(
     if not scene.supported:
         transient = bool(
             set(scene.reason_codes)
-            & {"scene_evidence_missing", "scene_evidence_expired"}
+            & {
+                "scene_evidence_missing",
+                "scene_evidence_expired",
+                "account_scope_unverified",
+                "account_build_unverified",
+            }
         )
         raise DomainError(
             "scene_refresh_required" if transient else "scene_no_longer_supported",
@@ -327,6 +334,49 @@ def _local_result(
         )
 
 
+def _prepare_scene_dependency(
+    database_engine: Any, context: TenantContext, claim: StepClaim
+) -> str:
+    """Commit resource preparation separately after the unarmed read transaction ends."""
+    with Session(database_engine) as session, session.begin():
+        step = session.exec(
+            select(ExecutionStep)
+            .where(
+                ExecutionStep.id == claim.step_id,
+                ExecutionStep.tenant_id == context.tenant_id,
+            )
+            .with_for_update()
+        ).one()
+        if not active_attempt(step, claim, phase="CLAIMED"):
+            return step.status
+        try:
+            frozen = _frozen(session, context, claim)
+            preparation = ensure_scene_preparation(
+                session,
+                context=context,
+                bc_id=frozen.bc_id,
+                advertiser_id=frozen.advertiser_id,
+                link_id=frozen.link_id,
+            )
+            return finish_local(
+                session,
+                claim=claim,
+                status="FAILED" if preparation.state == "blocked" else "PENDING",
+                code=preparation.reason_code
+                if preparation.state == "blocked"
+                else "scene_refresh_required",
+                delay=0 if preparation.state == "ready" else 15,
+            )
+        except DomainError as error:
+            return finish_local(
+                session,
+                claim=claim,
+                status="PENDING" if error.retryable else "FAILED",
+                code=error.code,
+                delay=15,
+            )
+
+
 def process_step(
     *,
     database_engine: Any,
@@ -508,4 +558,6 @@ def process_step(
             if isinstance(error, DomainError)
             else DomainError("execution_prepare_failed", "执行准备未完成")
         )
+        if safe.code == "scene_refresh_required":
+            return _prepare_scene_dependency(database_engine, context, claim)
         return _local_result(database_engine, claim, safe)

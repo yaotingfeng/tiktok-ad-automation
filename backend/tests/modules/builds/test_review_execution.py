@@ -190,6 +190,7 @@ def test_review_real_scene_checks_provider_and_missing_evidence(
             provider = session.exec(select(ProviderConnection)).one()
             provider.verification_token = uuid4()
             app = session.exec(select(ProviderApplication)).one()
+            app.tiktok_minis_id = "minis-1"
             app.channel_config = {
                 **app.channel_config,
                 "verification_token": str(provider.verification_token),

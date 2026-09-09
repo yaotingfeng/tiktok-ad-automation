@@ -8,7 +8,7 @@ from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
-from app.modules.builds.dispatch import finalize_submission, queue_step, wake_unit
+from app.modules.builds.dispatch import finalize_submission, wake_unit
 from app.modules.builds.execution_models import (
     ExecutionStep,
     Submission,
@@ -16,7 +16,8 @@ from app.modules.builds.execution_models import (
 )
 from app.modules.builds.execution_state import evidence
 from app.modules.builds.preview_models import BuildUnit
-from app.modules.materials.models import MaterialDistribution
+from app.modules.materials.models import MaterialAssetOperation, MaterialDistribution
+from app.modules.materials.readiness import get_material_readiness
 from app.modules.tenants.permissions import require_tenant
 
 
@@ -95,11 +96,50 @@ def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
                 )
             except DomainError as error:
                 denied = error.code
+            operation = (
+                session.get(MaterialAssetOperation, dist.operation_id)
+                if dist.operation_id
+                else None
+            )
+            if denied or (
+                dist.status == "blocked"
+                and operation
+                and operation.status in {"sending", "result_unknown", "verifying"}
+            ):
+                step.error_code = (
+                    denied or dist.reason_code or "material_result_unknown"
+                )
+                step.updated_at = datetime.now(UTC)
+                session.add(step)
+                continue
             if dist.status == "ready" and denied is None:
-                # The next MATERIAL step uses ensure_target_asset, which must
-                # recheck current target mapping/cover/authority before success.
-                step.status, step.phase, step.error_code = "PENDING", "IDLE", None
-                queue_step(session, step=step, submission=row)
+                assert step.material_id and frozen
+                readiness = get_material_readiness(
+                    session,
+                    context=context,
+                    bc_id=step.bc_id,
+                    material_id=step.material_id,
+                    advertiser_id=frozen.advertiser_id,
+                )
+                if (
+                    readiness.state != "ready"
+                    or not readiness.mapping
+                    or not readiness.mapping.image_id
+                    or readiness.mapping.connection_id != frozen.connection_id
+                ):
+                    # A historic distribution receipt is not proof of a current
+                    # target mapping. Keep uncertainty; never call an upload-capable
+                    # ensure helper to recover an ambiguous upload.
+                    step.error_code = "target_asset_requires_reconciliation"
+                    step.updated_at = datetime.now(UTC)
+                    session.add(step)
+                    continue
+                step.status, step.phase, step.error_code = "SUCCEEDED", "DONE", None
+                step.resolved = {
+                    **step.resolved,
+                    "mapping": readiness.mapping.model_dump(mode="json"),
+                }
+                step.dispatch_id = None
                 conclusion = "MATERIAL_VERIFIED"
             else:
                 step.status, step.phase = "FAILED", "DONE"
