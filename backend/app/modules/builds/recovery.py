@@ -39,6 +39,12 @@ REPAIR_SECONDS = 120
 
 # These are repairs of frozen input, not retryable transport failures.
 INTENT_ERRORS = "'scene_intent_changed','scene_no_longer_supported','new_preview_required','copy_too_long','blank_copy','invalid_copy'"
+COVER_SCOPE = """c.id=s.cover_job_id AND c.tenant_id=s.tenant_id AND c.bc_id=s.bc_id
+AND c.material_id=s.material_id AND c.advertiser_id=u.advertiser_id AND c.connection_id=u.connection_id"""
+COVER_RETRY = f"""EXISTS (SELECT 1 FROM material_cover_job c WHERE {COVER_SCOPE}
+AND c.status='BLOCKED' AND c.request_armed_at IS NULL AND c.known_image_id IS NULL
+AND c.dispatch_id IS NULL AND (c.claimed_until IS NULL OR c.claimed_until <= :now)
+AND NOT EXISTS (SELECT 1 FROM material_cover_receipt cr WHERE cr.tenant_id=c.tenant_id AND cr.job_id=c.id))"""
 BASE = """
 FROM execution_step s JOIN build_unit u ON u.tenant_id=s.tenant_id AND u.preview_id=s.preview_id AND u.id=s.unit_id
 JOIN submission_unit su ON su.tenant_id=s.tenant_id AND su.submission_id=s.submission_id AND su.unit_id=s.unit_id
@@ -69,18 +75,22 @@ AND s.status IN ('FAILED','RETRYABLE') AND s.request_body IS NULL AND s.remote_i
 AND s.phase<>'REQUEST_ARMED' AND s.kind<>'READBACK' AND coalesce(s.error_code,'') NOT IN ({INTENT_ERRORS})
 AND NOT EXISTS (SELECT 1 FROM step_evidence e WHERE e.tenant_id=s.tenant_id AND e.submission_id=s.submission_id AND e.step_id=s.id
  AND (e.conclusion IN ('REQUEST_ARMED','CREATED','LATE_CREATED') OR e.summary ? 'remote_id'))
-AND (s.kind<>'MATERIAL' OR s.distribution_id IS NULL)
+AND (s.kind<>'MATERIAL' OR (s.cover_job_id IS NULL AND s.distribution_id IS NULL) OR {COVER_RETRY})
 AND (s.parent_step_id IS NULL OR EXISTS (SELECT 1 FROM execution_step p WHERE p.tenant_id=s.tenant_id AND p.submission_id=s.submission_id AND p.id=s.parent_step_id AND p.status='SUCCEEDED' AND p.remote_id IS NOT NULL))
 AND (s.kind<>'CAMPAIGN' OR EXISTS (SELECT 1 FROM execution_step cta WHERE cta.tenant_id=s.tenant_id AND cta.submission_id=s.submission_id AND cta.unit_id=s.unit_id AND cta.kind='CTA' AND cta.status='SUCCEEDED' AND cta.remote_id IS NOT NULL))
 AND (s.kind NOT IN ('CAMPAIGN','ADGROUP') OR {GROUP_READY})
 """
-RECONCILE = """
+RECONCILE = f"""
 AND (s.status='UNKNOWN' OR s.mismatch OR (s.kind='MATERIAL' AND s.status='FAILED') OR (s.kind='READBACK' AND s.status<>'SUCCEEDED' AND EXISTS
  (SELECT 1 FROM execution_step p WHERE p.tenant_id=s.tenant_id AND p.submission_id=s.submission_id AND p.id=s.parent_step_id AND p.remote_id IS NOT NULL)))
-AND (s.kind<>'MATERIAL' OR EXISTS (SELECT 1 FROM material_distribution d JOIN material_asset_operation o
+AND (s.kind<>'MATERIAL' OR (s.cover_job_id IS NULL AND EXISTS (SELECT 1 FROM material_distribution d JOIN material_asset_operation o
  ON o.id=d.operation_id AND o.tenant_id=d.tenant_id AND o.bc_id=d.bc_id AND o.material_id=d.material_id AND o.advertiser_id=d.advertiser_id
  WHERE d.id=s.distribution_id AND d.tenant_id=s.tenant_id AND d.bc_id=s.bc_id AND d.material_id=s.material_id AND d.advertiser_id=u.advertiser_id
  AND d.status IN ('result_unknown','verifying','preparing','ready','blocked') AND o.status IN ('sending','result_unknown','verifying','succeeded')))
+ OR EXISTS (SELECT 1 FROM material_cover_job c WHERE {COVER_SCOPE}
+ AND c.dispatch_id IS NULL AND (c.claimed_until IS NULL OR c.claimed_until <= :now)
+ AND (c.request_armed_at IS NOT NULL OR c.known_image_id IS NOT NULL
+ OR EXISTS (SELECT 1 FROM material_cover_receipt cr WHERE cr.tenant_id=c.tenant_id AND cr.job_id=c.id))))
 """
 
 
@@ -320,8 +330,33 @@ def _owned(job: SubmissionRecovery, token: UUID, revision: int) -> bool:
 
 
 def _material_reconciliation(
-    session: Session, *, step: ExecutionStep, unit: BuildUnit
+    session: Session, *, step: ExecutionStep, unit: BuildUnit, context: TenantContext
 ) -> bool:
+    if step.cover_job_id:
+        from app.modules.builds.cover_execution import cover_matches_step
+        from app.modules.materials.cover_models import MaterialCoverJob
+        from app.modules.materials.covers import request_cover_reconciliation
+
+        cover = session.get(MaterialCoverJob, step.cover_job_id)
+        if cover is None or not cover_matches_step(cover, step, unit):
+            return False
+        request_cover_reconciliation(session, context=context, job_id=cover.id)
+        step.status, step.phase, step.error_code = (
+            "UNKNOWN",
+            "DONE",
+            "cover_result_unknown",
+        )
+        step.lease_token = step.lease_expires_at = None
+        session.add(step)
+        evidence(
+            session,
+            step=step,
+            claim=None,
+            conclusion="COVER_RECONCILIATION_REQUESTED",
+            summary={"cover_job_id": str(cover.id)},
+        )
+        return True
+
     from app.modules.materials.distribution import queue_distribution
     from app.modules.materials.models import (
         MaterialAssetOperation,
@@ -441,8 +476,12 @@ def _schedule(
     ) != (unit.currency, unit.timezone):
         return False
     if job.kind == "RECONCILE" and step.kind == "MATERIAL":
-        return _material_reconciliation(session, step=step, unit=unit)
+        return _material_reconciliation(session, step=step, unit=unit, context=original)
     if job.kind == "RETRY":
+        if step.kind == "MATERIAL" and step.cover_job_id:
+            from app.modules.materials.covers import request_cover_retry
+
+            request_cover_retry(session, context=original, job_id=step.cover_job_id)
         step.phase, step.lease_token, step.lease_expires_at, step.error_code = (
             "IDLE",
             None,

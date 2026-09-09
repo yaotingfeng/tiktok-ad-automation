@@ -548,6 +548,10 @@ def repair_execution(*, database_engine: Any, limit: int = 100) -> int:
             unit.repair_after = now + timedelta(seconds=REPAIR_SECONDS)
             session.add(unit)
             count += 1
-    return count + recover_material_results(
-        database_engine=database_engine, limit=limit
+    from app.modules.builds.cover_execution import recover_cover_results
+
+    return (
+        count
+        + recover_material_results(database_engine=database_engine, limit=limit)
+        + recover_cover_results(database_engine=database_engine, limit=limit)
     )

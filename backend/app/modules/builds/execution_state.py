@@ -227,9 +227,11 @@ def finish_local(
     delay: int = 0,
 ) -> str:
     """Pre-network failure, a queued material dependency, or a verified mapping."""
-    if status not in {"FAILED", "PENDING", "SUCCEEDED"}:
-        raise ValueError("unsupported local outcome")
     step = _step(session, claim)
+    if status not in {"FAILED", "PENDING", "SUCCEEDED"} and not (
+        status == "UNKNOWN" and claim.kind == "MATERIAL" and step.cover_job_id
+    ):
+        raise ValueError("unsupported local outcome")
     if not active_attempt(step, claim, phase="CLAIMED"):
         return step.status
     step.status, step.phase, step.error_code = (

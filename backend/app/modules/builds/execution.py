@@ -449,6 +449,36 @@ def process_step(
                     advertiser_id=claim.advertiser_id,
                     task_key=f"build:{claim.step_id}",
                 )
+                if ready.state == "ready":
+                    from app.modules.materials.covers import ensure_cover
+
+                    ready = ensure_cover(
+                        session,
+                        context=context,
+                        bc_id=claim.bc_id,
+                        material_id=claim.material_id,
+                        advertiser_id=claim.advertiser_id,
+                        task_key=f"build-cover:{claim.step_id}",
+                    )
+                    step = session.get(ExecutionStep, claim.step_id)
+                    assert step
+                    step.cover_job_id = ready.task_id
+                    session.add(step)
+                    if ready.state == "queued":
+                        return finish_local(
+                            session,
+                            claim=claim,
+                            status="PENDING",
+                            code="cover_pending",
+                            delay=15,
+                        )
+                    if ready.reason_code == "cover_result_unknown":
+                        return finish_local(
+                            session,
+                            claim=claim,
+                            status="UNKNOWN",
+                            code="cover_result_unknown",
+                        )
                 if ready.state == "queued":
                     step = session.get(ExecutionStep, claim.step_id)
                     assert step
@@ -523,7 +553,9 @@ def process_step(
                     # turn a recorded success into a duplicate create.
                     try:
                         with Session(database_engine) as receipt, receipt.begin():
-                            outcome = record_created(receipt, claim=claim, result=result)
+                            outcome = record_created(
+                                receipt, claim=claim, result=result
+                            )
                     except Exception:
                         # Cleanup may itself terminate this worker. Preserve the
                         # received ID before entering that cleanup boundary.

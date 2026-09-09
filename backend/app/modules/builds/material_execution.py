@@ -35,6 +35,7 @@ def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
             .where(
                 ExecutionStep.kind == "MATERIAL",
                 ExecutionStep.status == "UNKNOWN",
+                col(ExecutionStep.cover_job_id).is_(None),
                 col(MaterialDistribution.status).in_(["ready", "blocked"]),
             )
             .order_by(col(ExecutionStep.updated_at), col(ExecutionStep.id))
@@ -65,6 +66,7 @@ def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
                 step.kind != "MATERIAL"
                 or step.status != "UNKNOWN"
                 or step.distribution_id is None
+                or step.cover_job_id is not None
             ):
                 continue
             dist = session.get(MaterialDistribution, step.distribution_id)
@@ -124,7 +126,6 @@ def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
                 if (
                     readiness.state != "ready"
                     or not readiness.mapping
-                    or not readiness.mapping.image_id
                     or readiness.mapping.connection_id != frozen.connection_id
                 ):
                     # A historic distribution receipt is not proof of a current
@@ -133,6 +134,47 @@ def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
                     step.error_code = "target_asset_requires_reconciliation"
                     step.updated_at = datetime.now(UTC)
                     session.add(step)
+                    continue
+                if not readiness.mapping.image_id:
+                    # The video is now positively verified. Prepare its separate,
+                    # durable image dependency; never re-enter video upload recovery.
+                    from app.modules.materials.covers import ensure_cover
+
+                    try:
+                        cover = ensure_cover(
+                            session,
+                            context=context,
+                            bc_id=step.bc_id,
+                            material_id=step.material_id,
+                            advertiser_id=frozen.advertiser_id,
+                            task_key=f"build-cover:{step.id}",
+                        )
+                    except DomainError as error:
+                        step.error_code, step.updated_at = error.code, datetime.now(UTC)
+                        session.add(step)
+                        continue
+                    if cover.task_id is None:
+                        step.error_code = cover.reason_code or "cover_video_not_ready"
+                        step.updated_at = datetime.now(UTC)
+                        session.add(step)
+                        continue
+                    step.cover_job_id = cover.task_id
+                    step.status, step.phase = "UNKNOWN", "DONE"
+                    step.error_code = cover.reason_code or "cover_pending"
+                    if cover.state == "queued":
+                        step.status, step.phase = "PENDING", "IDLE"
+                    step.dispatch_id = step.lease_token = step.lease_expires_at = None
+                    step.updated_at = datetime.now(UTC)
+                    session.add(step)
+                    evidence(
+                        session,
+                        step=step,
+                        claim=None,
+                        conclusion="VIDEO_VERIFIED_COVER_PENDING",
+                    )
+                    wake_unit(session, unit_id=unit_id, context=context)
+                    submissions[row.id] = context
+                    changed += 1
                     continue
                 step.status, step.phase, step.error_code = "SUCCEEDED", "DONE", None
                 step.resolved = {
