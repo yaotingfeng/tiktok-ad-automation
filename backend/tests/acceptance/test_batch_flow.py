@@ -224,3 +224,103 @@ def test_partial_input_and_material_matching_use_actual_preparation(
         assert submitted.submitted.campaign_count == 6
     assert not scenario.runtime.wire.smart.calls
     assert not scenario.runtime.wire.videos
+
+
+@pytest.mark.parametrize("acceptance_scenario", ["wangyan"], indirect=True)
+def test_wangyan_lost_create_reply_recovers_full_batch_without_repost(
+    acceptance_scenario,
+):
+    wire = acceptance_scenario.runtime.wire
+    wire.wangyan_lose_reply = True
+    test_real_preparation_freeze_submission_and_official_sdk(acceptance_scenario)
+    assert wire.calls["provider:/api/distribute_admin/promote/link/create"] == 2
+    assert sum(len(rows) for rows in wire.wangyan_links.values()) == 2
+    from app.modules.providers.models import PromotionLink, ProviderEffect
+
+    with Session(acceptance_scenario.database_engine) as session:
+        links = session.exec(select(PromotionLink)).all()
+        assert len(links) == 2 and all(link.status == "ready" for link in links)
+        assert all(link.protected_base.startswith("{b7") for link in links)
+        assert all(
+            link.protected_base.endswith(("-The Bond", "-Hidden Promise"))
+            for link in links
+        )
+        creates = session.exec(
+            select(ProviderEffect).where(ProviderEffect.step == "create")
+        ).all()
+        assert len(creates) == 2 and all(
+            effect.status == "succeeded" for effect in creates
+        )
+
+
+@pytest.mark.parametrize("acceptance_scenario", ["wangyan"], indirect=True)
+def test_wangyan_ambiguous_create_recovery_blocks_without_second_post(
+    acceptance_scenario,
+):
+    from app.modules.providers.models import LinkPreparationItem
+
+    scenario = acceptance_scenario
+    wire = scenario.runtime.wire
+    wire.wangyan_lose_reply = True
+    wire.wangyan_duplicate_created = True
+    scenario.prepare()
+
+    def scanned():
+        with Session(scenario.database_engine) as session:
+            items = session.exec(
+                select(LinkPreparationItem).where(
+                    LinkPreparationItem.tenant_id == scenario.scope.context.tenant_id
+                )
+            ).all()
+            return len(items) == 2 and all(
+                item.resolved.get("_work", {}).get("wy_scan", {}).get("done")
+                for item in items
+            )
+
+    scenario.runtime.drive_until(scanned)
+    assert wire.calls["provider:/api/distribute_admin/promote/link/create"] == 2
+    assert sum(len(rows) for rows in wire.wangyan_links.values()) == 4
+    with Session(scenario.database_engine) as session:
+        items = session.exec(
+            select(LinkPreparationItem).where(
+                LinkPreparationItem.tenant_id == scenario.scope.context.tenant_id
+            )
+        ).all()
+        assert all(item.status == "result_unknown" for item in items)
+    assert not wire.smart.calls and not wire.videos
+
+
+def test_runtime_executes_production_control_and_yields_bounded_chunks(
+    acceptance_scenario,
+):
+    from uuid import uuid4
+
+    from app.jobs.outbox import enqueue_after_commit
+
+    scenario = acceptance_scenario
+    with Session(scenario.database_engine) as session, session.begin():
+        identities = [
+            enqueue_after_commit(
+                session,
+                context=scenario.scope.context,
+                task_name="jobs.probe",
+                task_key="acceptance-probe-" + str(uuid4()),
+                payload={},
+            )
+            for _ in range(12)
+        ]
+    runtime = scenario.runtime
+    assert runtime.step_job()
+    # The registered control drain publishes several fair rounds in one call.
+    assert runtime.delivered[0]["name"] == "jobs.flush_dispatch"
+    assert len(runtime.messages) == 11
+    assert runtime.pump_jobs(max_steps=3) == 3
+    assert len(runtime.messages) == 8
+    runtime.drive_until(lambda: not runtime.messages)
+    deliveries = [
+        message for message in runtime.delivered if message["name"] == "jobs.probe"
+    ]
+    assert len(deliveries) == 12 and {
+        message["task_id"] for message in deliveries
+    } == set(map(str, identities))
+    assert not runtime.wire.smart.calls
