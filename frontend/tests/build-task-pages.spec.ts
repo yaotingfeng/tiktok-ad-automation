@@ -217,6 +217,7 @@ async function boundary(
   return {
     requests,
     summary,
+    step,
     releaseUnits,
     setNewest: () => {
       newest = true
@@ -1030,3 +1031,20 @@ test("原恢复回查401允许登录且保留尚未知的原请求编号", async
     ),
   ).toBe(api.progress.request_id)
 })
+
+for (const [code, label] of [
+  ["cover_pending", "正在准备目标账户的视频封面"],
+  ["cover_result_unknown", "封面上传结果待核实，请核查原任务，勿重复上传"],
+  ["cover_permission_unverified", "当前连接的封面读写权限尚未核实"],
+  ["cover_video_changed", "目标视频或连接已变化，请重新准备当前素材"],
+  ["cover_evidence_stale", "封面核实已过期，需要重新读取平台结果"],
+]) {
+  test(`封面状态 ${code} 显示中文原因`, async ({ page }) => {
+    const api = await boundary(page)
+    api.step.error_code = code
+    api.step.kind = "MATERIAL"
+    await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}&tab=issues`)
+    await expect(page.getByText(label, { exact: true })).toBeVisible()
+    await expect(page.getByText(code, { exact: true })).toBeVisible()
+  })
+}
