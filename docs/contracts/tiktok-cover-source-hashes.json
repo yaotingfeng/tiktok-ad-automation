@@ -1,0 +1,37 @@
+[
+  {
+    "doc_id": "1739067433456642",
+    "url": "https://business-api.tiktok.com/portal/docs?id=1739067433456642",
+    "content_sha256": "8ba303422ae61eb5cb54039e010bb9f3b187cb536adb13e4c43c2b9d25444aec",
+    "retrieved": "2026-09-09",
+    "evidence": "official public documentation; no business request"
+  },
+  {
+    "doc_id": "1740051721711618",
+    "url": "https://business-api.tiktok.com/portal/docs?id=1740051721711618",
+    "content_sha256": "f29503ea73cd1655455da7406c8c670aa363e5aa4a57e5929e1e0207bd2bfa2a",
+    "retrieved": "2026-09-09",
+    "evidence": "official public documentation; no business request"
+  },
+  {
+    "doc_id": "1740052016789506",
+    "url": "https://business-api.tiktok.com/portal/docs?id=1740052016789506",
+    "content_sha256": "08b3d9b25871fb889695dcd0533e0d1bcf93afa29cb3f9c5f7dc9698f86e0808",
+    "retrieved": "2026-09-09",
+    "evidence": "official public documentation; no business request"
+  },
+  {
+    "doc_id": "1740050161973250",
+    "url": "https://business-api.tiktok.com/portal/docs?id=1740050161973250",
+    "content_sha256": "beddce5c93dd7f2fac3c10fa15231422f2ce4d6143cf32cb236818953d7f5abf",
+    "retrieved": "2026-09-09",
+    "evidence": "official public documentation; no business request"
+  },
+  {
+    "doc_id": "1740051189071873",
+    "url": "https://business-api.tiktok.com/portal/docs?id=1740051189071873",
+    "content_sha256": "0742a740d91aacd012a9d83caa295c97ec921dd70b329b8bd4bb48feee6e7ed3",
+    "retrieved": "2026-09-09",
+    "evidence": "official public documentation; no business request"
+  }
+]

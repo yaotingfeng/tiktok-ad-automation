@@ -16,6 +16,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
+from app.modules.materials import cover_models  # noqa: F401 - register scoped FK target
+
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
@@ -293,6 +295,7 @@ class ExecutionStep(SQLModel, table=True):
     distribution_id: UUID | None = Field(
         default=None, foreign_key="material_distribution.id"
     )
+    cover_job_id: UUID | None = Field(default=None, foreign_key="material_cover_job.id")
     status: str = "PENDING"
     phase: str = "IDLE"
     remote_id: str | None = None

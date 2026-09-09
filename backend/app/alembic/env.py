@@ -28,6 +28,7 @@ from app.modules.builds import execution_models  # noqa: F401
 from app.modules.builds import recovery_models  # noqa: F401
 from app.modules.builds import scene_job_models  # noqa: F401
 from app.modules.materials import models as materials_models  # noqa: F401
+from app.modules.materials import cover_models  # noqa: F401
 from app.modules.providers import models as provider_models  # noqa: F401
 from app.modules.strategies import models as strategy_models  # noqa: F401
 from app.modules.builds import models as builds_models  # noqa: F401
