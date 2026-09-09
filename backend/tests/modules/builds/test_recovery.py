@@ -99,12 +99,18 @@ def test_request_replay_original_and_read_only_current_progress(executable):
         },
         {
             "lease_token": uuid4(),
-            "lease_expires_at": datetime.now(UTC) + timedelta(minutes=2),
         },
         {"error_code": "scene_intent_changed"},
     ],
 )
 def test_unsafe_or_changed_intent_never_retries(executable, changes):
+    if "lease_token" in changes:
+        # Parametrization happens at collection; long CI runs must still exercise
+        # a live lease when this case actually executes.
+        changes = {
+            **changes,
+            "lease_expires_at": datetime.now(UTC) + timedelta(minutes=2),
+        }
     submission_id, _ = setup_failure(executable, **changes)
     with pytest.raises(DomainError, check=lambda e: e.code == "recovery_no_candidates"):
         request(executable, submission_id)
