@@ -967,12 +967,18 @@ def run_link_item(
         )
         if (
             kind == "wangyan"
-            and status == "blocked_auth"
-            and (work.get("active_effect") or work.get("uncertain_effect"))
+            and code != "provider_rejected"
+            and (
+                work.get("active_effect")
+                or work.get("uncertain_effect")
+                or work.get("remote_id")
+            )
         ):
-            # A sent write keeps its read-only recovery entry live during denial.
+            # Known effects keep read-only recovery through local failures too.
             # Every next HTTP still requires the original actor and credentials.
             status = "result_unknown"
+            if work.get("stage") == "done":
+                work["stage"] = "verify"
         # Persist only application-owned codes/text. No raw exception or response.
         _finish_unit(
             session,

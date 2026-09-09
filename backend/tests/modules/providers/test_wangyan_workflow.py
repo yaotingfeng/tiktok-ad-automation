@@ -298,3 +298,188 @@ def test_incomplete_history_never_authorizes_create(workflow, fault):
         item.status == "failed" and item.resolved["error_code"] == "lookup_incomplete"
     )
     assert not writes(workflow)
+
+
+def test_duplicate_worker_during_real_post_cannot_send_again(workflow):
+    from concurrent.futures import ThreadPoolExecutor
+
+    remote = workflow[-1]
+
+    def duplicate():
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            assert pool.submit(advance, workflow).result(timeout=10).status == "pending"
+
+    remote.after_post = duplicate
+    assert finish(workflow).status == "ready"
+    assert len(writes(workflow)) == 1
+
+
+def expire_completed_worker_claim(workflow):
+    from datetime import UTC, datetime, timedelta
+
+    with Session(workflow[0]) as session, session.begin():
+        item = session.get(LinkPreparationItem, workflow[2])
+        state = dict(item.resolved)
+        work = dict(state["_work"])
+        if "claim_token" in work:
+            work["claim_until"] = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+        item.resolved = {**state, "_work": work}
+        session.add(item)
+
+
+def test_late_receipt_preserves_new_owner_checkpoint(workflow):
+    remote = workflow[-1]
+    new_owner = str(uuid4())
+
+    def change_owner():
+        with Session(workflow[0]) as session, session.begin():
+            item = session.get(LinkPreparationItem, workflow[2])
+            state = dict(item.resolved)
+            item.resolved = {
+                **state,
+                "_work": {**state["_work"], "claim_token": new_owner},
+            }
+            session.add(item)
+
+    remote.after_post = change_owner
+    for _ in range(8):
+        item = advance(workflow)
+        if writes(workflow):
+            break
+    assert item.resolved["_work"]["claim_token"] == new_owner
+    assert item.resolved["_work"]["stage"] == "create"
+    with Session(workflow[0]) as session:
+        effect = session.exec(
+            select(ProviderEffect).where(ProviderEffect.step == "create")
+        ).one()
+        assert effect.remote_id == "901" and effect.status == "result_unknown"
+        assert (
+            session.exec(
+                select(ProviderEffect).where(ProviderEffect.step == "wy_receipt")
+            )
+            .one()
+            .remote_id
+            == "901"
+        )
+    expire_completed_worker_claim(workflow)
+    assert finish(workflow).status == "ready"
+    assert len(writes(workflow)) == 1
+
+
+def test_receipt_survives_actual_pg_transaction_failure(workflow, monkeypatch):
+    from sqlalchemy import text
+
+    remote = workflow[-1]
+    original_commit = Session.commit
+    failures = []
+
+    def commit(session):
+        if session is remote.session and writes(workflow) and not failures:
+            failures.append(True)
+            # An actual failed PostgreSQL transaction, followed by receipt rescue.
+            session.exec(text("SELECT * FROM acceptance_missing_receipt_table"))
+        return original_commit(session)
+
+    monkeypatch.setattr(Session, "commit", commit)
+    assert finish(workflow).status == "ready"
+    assert failures == [True] and len(writes(workflow)) == 1
+    with Session(workflow[0]) as session:
+        assert (
+            session.exec(
+                select(ProviderEffect).where(ProviderEffect.step == "wy_receipt")
+            )
+            .one()
+            .remote_id
+            == "901"
+        )
+
+
+def test_client_cleanup_systemexit_cannot_drop_known_receipt(workflow, monkeypatch):
+    original_exit = httpx.Client.__exit__
+    raised = []
+
+    def cleanup(client, *args):
+        original_exit(client, *args)
+        if writes(workflow) and not raised:
+            raised.append(True)
+            raise SystemExit("synthetic terminated worker cleanup")
+
+    monkeypatch.setattr(httpx.Client, "__exit__", cleanup)
+    with pytest.raises(SystemExit):
+        finish(workflow)
+    with Session(workflow[0]) as session:
+        assert (
+            session.exec(
+                select(ProviderEffect).where(ProviderEffect.step == "wy_receipt")
+            )
+            .one()
+            .remote_id
+            == "901"
+        )
+    expire_completed_worker_claim(workflow)
+    assert finish(workflow).status == "ready" and len(writes(workflow)) == 1
+
+
+def test_unknown_create_exact_read_rechecks_correlated_name(workflow):
+    remote = workflow[-1]
+    remote.lose_reply = True
+    for _ in range(9):
+        item = advance(workflow)
+        if item.resolved.get("_work", {}).get("stage") == "verify":
+            break
+    remote.rows[0]["promote_name"] = "someone-elses-create"
+    item = advance(workflow)
+    assert item.status == "result_unknown"
+    assert len(writes(workflow)) == 1
+    with Session(workflow[0]) as session:
+        assert not session.exec(select(PromotionLink)).all()
+
+
+def test_unknown_scan_rejects_forged_effect_nonce_before_get(workflow):
+    remote = workflow[-1]
+    remote.lose_reply = True
+    while not writes(workflow):
+        advance(workflow)
+    with Session(workflow[0]) as session, session.begin():
+        item = session.get(LinkPreparationItem, workflow[2])
+        state = dict(item.resolved)
+        item.resolved = {
+            **state,
+            "_work": {**state["_work"], "uncertain_attempt_token": str(uuid4())},
+        }
+        session.add(item)
+    calls = len(remote.calls)
+    item = advance(workflow)
+    assert (
+        item.status == "result_unknown"
+        and item.resolved["error_code"] == "provider_state_invalid"
+    )
+    assert len(remote.calls) == calls
+
+
+def test_known_receipt_checkpoint_failure_remains_read_recoverable(
+    workflow, monkeypatch
+):
+    from sqlalchemy import text
+
+    from app.modules.providers import wangyan_steps
+
+    original = wangyan_steps._checkpoint
+    failures = []
+
+    def checkpoint(session, context, item_id, token, work):
+        if (
+            work.get("remote_id") == "901"
+            and work["stage"] == "verify"
+            and not failures
+        ):
+            failures.append(True)
+            session.exec(text("SELECT * FROM acceptance_missing_checkpoint_table"))
+        return original(session, context, item_id, token, work)
+
+    monkeypatch.setattr(wangyan_steps, "_checkpoint", checkpoint)
+    while not writes(workflow):
+        item = advance(workflow)
+    assert item.status == "result_unknown", item.resolved
+    assert finish(workflow).status == "ready"
+    assert failures == [True] and len(writes(workflow)) == 1
