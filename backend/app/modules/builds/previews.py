@@ -601,7 +601,9 @@ def _expand_unit(
         _block(unit, name_reasons(ad_name, "ad", unit.scene_snapshot))
         method = unit.scene_snapshot["field_constraints"].get("copy_measurement")
         copy_limit = unit.scene_snapshot["copy_length_limit"]
-        if method not in {"characters", "cjk_weighted"} or not copy_limit:
+        if not copy.text.strip():
+            _block(unit, ["copy_empty"])
+        elif method not in {"characters", "cjk_weighted"} or not copy_limit:
             _block(unit, ["field_limits_unverified"])
         elif measured(copy.text, method) > copy_limit:
             _block(unit, ["copy_too_long"])

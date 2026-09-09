@@ -21,12 +21,18 @@ celery_app.conf.update(
         "app.modules.builds.draft_tasks",
         "app.modules.builds.preview_tasks",
         "app.modules.builds.submission_tasks",
+        "app.modules.builds.tasks",
     ),
     task_queues=(Queue("resources"), Queue("builds"), Queue("control")),
     task_default_queue="control",
     task_create_missing_queues=False,
     task_routes={"jobs.flush_dispatch": {"queue": "control"}},
     beat_schedule={
+        "repair-build-execution": {
+            "task": "builds.repair_execution",
+            "schedule": 60.0,
+            "options": {"queue": "control"},
+        },
         "repair-build-submissions": {
             "task": "builds.repair_submissions",
             "schedule": 60.0,

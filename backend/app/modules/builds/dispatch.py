@@ -75,6 +75,7 @@ def queue_step(
             "execution_requires_reconciliation", "该步骤必须先核实远端结果"
         )
     name = READ_TASK if reconcile else STEP_TASK
+    step.resolved = {**step.resolved, "dispatch_task": name}
     step.dispatch_revision += 1
     step.due_at = datetime.now(UTC) + timedelta(seconds=max(0, delay))
     step.updated_at = datetime.now(UTC)
@@ -310,7 +311,14 @@ def process_unit(
                         col(ExecutionStep.status) == "RUNNING",
                         col(ExecutionStep.lease_expires_at) <= now,
                     ),
-                    and_(col(ExecutionStep.status) == "UNKNOWN", ~current_read),
+                    and_(
+                        col(ExecutionStep.status) == "UNKNOWN",
+                        col(ExecutionStep.kind) != "MATERIAL",
+                        col(ExecutionStep.resolved)[
+                            "dispatch_reconciliation_done"
+                        ].astext.is_distinct_from("true"),
+                        ~current_read,
+                    ),
                 ),
             )
             .order_by(col(ExecutionStep.due_at), col(ExecutionStep.id))
@@ -413,7 +421,13 @@ def _repair_message(
     dispatch = (
         session.get(PendingDispatch, step.dispatch_id) if step.dispatch_id else None
     )
-    mode = step.kind == "READBACK" or step.status == "UNKNOWN"
+    recorded = step.resolved.get("dispatch_task")
+    mode = (
+        recorded == READ_TASK
+        if recorded in {READ_TASK, STEP_TASK}
+        else step.kind != "MATERIAL"
+        and (step.kind == "READBACK" or step.status == "UNKNOWN")
+    )
     expected = READ_TASK if mode else STEP_TASK
     if dispatch is None:
         queue_step(session, step=step, submission=row, reconcile=mode)
@@ -429,10 +443,11 @@ def _repair_message(
         expected,
         {"step_id": str(step.id), "revision": step.dispatch_revision},
     ):
-        step.status, step.error_code = (
-            "UNKNOWN" if step.request_body is not None else "FAILED",
-            "dispatch_payload_invalid",
-        )
+        if step.remote_id or step.status == "SUCCEEDED":
+            step.mismatch = True
+        else:
+            step.status = "UNKNOWN" if step.request_body is not None else "FAILED"
+        step.error_code = "dispatch_payload_invalid"
         step.resolved = {**step.resolved, "dispatch_reconciliation_done": True}
         session.add(step)
         return
@@ -461,7 +476,9 @@ def repair_execution(*, database_engine: Any, limit: int = 100) -> int:
                         col(ExecutionStep.lease_expires_at) <= now,
                     ),
                     and_(
-                        col(ExecutionStep.status).in_(["QUEUED", "PENDING"]),
+                        col(ExecutionStep.status).in_(
+                            ["QUEUED", "PENDING", "SUCCEEDED", "FAILED"]
+                        ),
                         col(ExecutionStep.due_at) <= now,
                         col(ExecutionStep.updated_at)
                         <= now - timedelta(seconds=REPAIR_SECONDS),
@@ -469,6 +486,7 @@ def repair_execution(*, database_engine: Any, limit: int = 100) -> int:
                     ),
                     and_(
                         col(ExecutionStep.status) == "UNKNOWN",
+                        col(ExecutionStep.kind) != "MATERIAL",
                         col(ExecutionStep.due_at) <= now,
                         col(ExecutionStep.updated_at)
                         <= now - timedelta(seconds=REPAIR_SECONDS),
