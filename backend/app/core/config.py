@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     MATERIAL_SDK_MAX_UPLOAD_BYTES: int = Field(default=256 * 1024 * 1024, gt=0)
     MATERIAL_SDK_UPLOAD_MAX_INFLIGHT: int = Field(default=1, gt=0)
     MATERIAL_ASSET_MAX_AGE_SECONDS: int = Field(default=900, gt=0)
-    BC_CAPABILITY_MAX_AGE_SECONDS: int = Field(default=14400, ge=60, le=86400)
+    BC_CAPABILITY_MAX_AGE_SECONDS: int = Field(default=86400, ge=60, le=86400)
     # Engineering observation age for shared scene facts, not a platform quota.
     SCENE_MAX_AGE_SECONDS: int = Field(default=86400, ge=60, le=604800)
 
