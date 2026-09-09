@@ -1,7 +1,6 @@
 """Real PostgreSQL backup/restore and upgrade of existing user identities."""
 
 import os
-import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -18,6 +17,7 @@ from app.core.security import get_password_hash, verify_password
 from app.models import User
 from app.modules.tenants.service import require_tenant
 from tests.database import require_test_database
+from tests.pg_backup import backup_tools, run_backup_tool
 
 
 def test_backup_restore_upgrade_preserves_identity_and_resolves_collisions(
@@ -36,6 +36,7 @@ def test_backup_restore_upgrade_preserves_identity_and_resolves_collisions(
         with psycopg.connect(
             admin_url.render_as_string(hide_password=False), autocommit=True
         ) as admin:
+            dump_tool, restore_tool = backup_tools(admin.info.server_version // 10000)
             for name in names:
                 admin.execute(
                     sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name))
@@ -112,17 +113,14 @@ def test_backup_restore_upgrade_preserves_identity_and_resolves_collisions(
             PGDATABASE=names[0],
         )
         backup = tmp_path / "private-pre-upgrade.dump"
-        subprocess.run(
-            ["pg_dump", "--format=custom", "--no-owner", "--file", str(backup)],
-            env=env,
-            check=True,
-            capture_output=True,
+        run_backup_tool(
+            dump_tool, ["--format=custom", "--no-owner", "--file", str(backup)], env
         )
         backup.chmod(0o600)
         env["PGDATABASE"] = names[1]
-        subprocess.run(
+        run_backup_tool(
+            restore_tool,
             [
-                "pg_restore",
                 "--no-owner",
                 "--no-privileges",
                 "--dbname",
@@ -130,8 +128,6 @@ def test_backup_restore_upgrade_preserves_identity_and_resolves_collisions(
                 str(backup),
             ],
             env=env,
-            check=True,
-            capture_output=True,
         )
         mappings = []
         for index, url in enumerate(urls):

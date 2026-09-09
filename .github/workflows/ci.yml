@@ -52,7 +52,21 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with: {python-version: '3.14'}
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+      - name: Install PostgreSQL 18 backup clients
+        if: matrix.suite == 'modules'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-client-18
+          test -x /usr/lib/postgresql/18/bin/pg_dump
+          test -x /usr/lib/postgresql/18/bin/pg_restore
+          echo "PG_BIN_DIR=/usr/lib/postgresql/18/bin" >> "$GITHUB_ENV"
       - run: uv sync --frozen --package app
+      - name: Check backup client and server versions before the module suite
+        if: matrix.suite == 'modules'
+        run: uv run python -m tests.pg_backup
+        working-directory: backend
       - run: uv run ruff check app tests && uv run ty check app
         if: matrix.suite == 'modules'
         working-directory: backend
