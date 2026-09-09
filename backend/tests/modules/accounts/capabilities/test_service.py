@@ -374,7 +374,7 @@ def test_account_capability_age_setting_has_finite_engineering_bounds():
     from app.core.config import Settings, settings
 
     values = settings.model_dump()
-    assert settings.BC_CAPABILITY_MAX_AGE_SECONDS == 14400
+    assert Settings.model_fields["BC_CAPABILITY_MAX_AGE_SECONDS"].default == 86400
     for invalid in [0, 59, 86401, 1.5, True]:
         with pytest.raises(ValidationError):
             Settings.model_validate(

@@ -85,3 +85,23 @@ def test_small_benchmark_generates_real_frozen_plan_and_submission(tmp_path):
     assert calls["/open_api/v1.3/bc/asset/get/"] == 1
     assert calls["/open_api/v1.3/identity/get/"] == 2
     assert not any("/create/" in name for name in calls)
+
+
+def test_capacity_runtime_measures_shared_quota_and_429_release(tmp_path):
+    from scripts.benchmark_batches import Parameters, run_benchmark
+
+    result = run_benchmark(
+        Parameters(accounts=4, dramas=1, target_accounts=2),
+        output=tmp_path / "runtime.json",
+    )
+    runtime = result["phases"]["runtime"]
+    assert runtime["shared_quota"]["workers"] == 8
+    assert runtime["shared_quota"]["granted"] == 2
+    assert runtime["shared_quota"]["inflight_after_release"] == 0
+    assert runtime["rate_limit"]["claim_released"]
+    assert runtime["rate_limit"]["worker_seconds"] < 2
+    assert runtime["rate_limit"]["due_delay_seconds"] > 1
+    assert runtime["fairness"]["t2_units_after_first_task"] > 0
+    assert runtime["fairness"]["t1_backlog"] > 0
+    assert runtime["fairness"]["first_round_t1_messages"] <= 5
+    assert runtime["fairness"]["t2_first_task_seconds"] < 10

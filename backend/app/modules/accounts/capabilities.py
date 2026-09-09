@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 
 import business_api_client as sdk  # type: ignore[import-untyped]
 from billiard.process import current_process  # type: ignore[import-untyped]
+from business_api_client.rest import ApiException  # type: ignore[import-untyped]
 from celery import current_task  # type: ignore[import-untyped]
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
@@ -535,14 +536,26 @@ def process_capability(
                     session, context=context, connection_id=connection_id
                 ) as client:
                     session.close()
-                    response = sdk.BCApi(client).bc_asset_get(
-                        bc_id,
-                        "ADVERTISER",
-                        client.default_headers["Access-Token"],
-                        page=page,
-                        page_size=50,
-                        _request_timeout=(5, 30),
-                    )
+                    try:
+                        response = sdk.BCApi(client).bc_asset_get(
+                            bc_id,
+                            "ADVERTISER",
+                            client.default_headers["Access-Token"],
+                            page=page,
+                            page_size=50,
+                            _request_timeout=(5, 30),
+                        )
+                    except ApiException as error:
+                        # Inspect only the structured HTTP status before sdk_client
+                        # sanitizes errors. A throttled GET must release its worker
+                        # and enter the existing durable retry/backoff path.
+                        if error.status == 429:
+                            raise DomainError(
+                                "capability_remote_unavailable",
+                                "账户能力读取暂不可用",
+                                retryable=True,
+                            ) from None
+                        raise
         rows, total_pages, total_count = _parse(response, page)
         with Session(database_engine) as session, session.begin():
             job = _locked_job(session, tenant_id, job_id)

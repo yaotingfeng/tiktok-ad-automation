@@ -45,7 +45,7 @@ from app.modules.builds.preview_schemas import (
 from app.modules.builds.preview_validation import measured, name_reasons, scene_reasons
 from app.modules.builds.scene import read_scene_context
 from app.modules.builds.scene_schemas import SceneContext
-from app.modules.materials.service import get_material_readiness
+from app.modules.materials.readiness import get_material_readiness_batch
 from app.modules.providers.models import PromotionLink
 from app.modules.strategies.naming import render_names
 from app.modules.strategies.schemas import StrategyConfig
@@ -562,14 +562,18 @@ def _expand_unit(
             )
             .order_by(col(PreviewGroupMaterial.position))
         ).all()
-        for material_id in materials:
-            result = get_material_readiness(
+        readiness = (
+            get_material_readiness_batch(
                 session,
                 context=context,
                 bc_id=preview.bc_id,
-                material_id=material_id,
+                material_ids=list(materials),
                 advertiser_id=unit.advertiser_id,
             )
+            if materials
+            else {}
+        )
+        for result in readiness.values():
             if result.state == "blocked":
                 _block(unit, [result.reason_code or "material_unavailable"])
             elif result.state == "preparable" and unit.readiness != "BLOCKED":

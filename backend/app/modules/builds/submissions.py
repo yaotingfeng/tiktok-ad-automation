@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid5
 
-from sqlalchemy import func, text
+from sqlalchemy import func, insert, text
 from sqlalchemy.orm import Session as SQLAlchemySession
 from sqlmodel import Session, col, select
 
@@ -342,6 +342,7 @@ def expand_submission(
             session.flush()
             used += 1
             continue
+        step_rows = []
         for candidate in candidates:
             key = f"{frozen.id}:{candidate['k']}"
             parent = (
@@ -349,7 +350,7 @@ def expand_submission(
                 if candidate["parent"]
                 else None
             )
-            session.add(
+            step_rows.append(
                 ExecutionStep(
                     id=uuid5(row.id, key),
                     tenant_id=row.tenant_id,
@@ -363,11 +364,13 @@ def expand_submission(
                     planned_ad_id=candidate["ad_id"],
                     material_id=candidate["material_id"],
                     parent_step_id=parent,
-                )
+                ).model_dump()
             )
-            # Preserve parent insertion ordering for the self-reference FK.
-            session.flush()
-            used += 1
+        # One bounded VALUES statement checks self-reference FKs at statement
+        # completion. Parents are either in this page or a committed prior page;
+        # deterministic IDs, the locked cursor and rollback semantics are unchanged.
+        SQLAlchemySession.execute(session, insert(ExecutionStep).values(step_rows))
+        used += len(step_rows)
     row.updated_at = datetime.now(UTC)
     session.add(row)
     return False

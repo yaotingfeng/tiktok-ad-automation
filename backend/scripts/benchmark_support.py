@@ -840,3 +840,8 @@ def run_scenario(
             summary=view.model_dump(mode="json"),
         )
         recorder.report["transport_call_counts"] = dict(transport.calls)
+        from scripts.benchmark_runtime import measure_runtime
+
+        recorder.progress(
+            "runtime", **measure_runtime(engine, redis_client, transport, scope)
+        )

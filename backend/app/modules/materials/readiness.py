@@ -178,17 +178,43 @@ def require_upload_path(
     require_execution_config(upload=True, endpoint=api.UPLOAD_ENDPOINT)
 
 
-def get_material_readiness(
+def get_material_readiness_batch(
     session: Session,
     *,
     context: TenantContext,
     bc_id: str,
-    material_id: UUID,
+    material_ids: list[UUID],
     advertiser_id: str,
-) -> MaterialReadiness:
-    material = load_material(
-        session, context=context, bc_id=bc_id, material_id=material_id
-    )
+) -> dict[UUID, MaterialReadiness]:
+    """Read one bounded group with current authority, without cross-call caching.
+
+    All rows and authorization checks belong to this caller's short transaction.
+    The single-material API delegates here so path priority cannot diverge.
+    """
+    if not material_ids or len(material_ids) > 50:
+        raise ValueError("material readiness requires 1..50 materials")
+    identities = set(material_ids)
+    require_material_scope(session, context=context, bc_id=bc_id)
+    materials = session.exec(
+        select(MaterialFile)
+        .where(
+            MaterialFile.tenant_id == context.tenant_id,
+            MaterialFile.bc_id == bc_id,
+            col(MaterialFile.id).in_(identities),
+        )
+        .execution_options(populate_existing=True)
+    ).all()
+    if len(materials) != len(identities):
+        raise DomainError("material_not_found", "未找到当前租户 BC 素材")
+
+    def blocked(error: DomainError) -> MaterialReadiness:
+        return MaterialReadiness(
+            state="blocked",
+            path="unavailable",
+            reason_code=error.code,
+            reason_message=error.message,
+        )
+
     try:
         resolve_account_access(
             session,
@@ -197,48 +223,45 @@ def get_material_readiness(
             advertiser_id=advertiser_id,
             action="build",
         )
-        mapping = target_mapping(
-            session,
-            context=context,
-            bc_id=bc_id,
-            material_id=material_id,
-            advertiser_id=advertiser_id,
-        )
-        if mapping_fresh(mapping):
-            assert mapping
-            return MaterialReadiness(
-                state="ready", path="existing_target", mapping=asset_public(mapping)
+    except DomainError as error:
+        return {identity: blocked(error) for identity in identities}
+    mappings = {
+        row.material_id: row
+        for row in session.exec(
+            select(AccountMaterial)
+            .where(
+                AccountMaterial.tenant_id == context.tenant_id,
+                AccountMaterial.bc_id == bc_id,
+                col(AccountMaterial.material_id).in_(identities),
+                AccountMaterial.advertiser_id == advertiser_id,
             )
-        operation = session.exec(
-            select(MaterialAssetOperation).where(
+            .execution_options(populate_existing=True)
+        ).all()
+    }
+    # Partial unique index guarantees at most one unresolved operation per material.
+    operations = {
+        row.material_id: row
+        for row in session.exec(
+            select(MaterialAssetOperation)
+            .where(
                 MaterialAssetOperation.tenant_id == context.tenant_id,
                 MaterialAssetOperation.bc_id == bc_id,
-                MaterialAssetOperation.material_id == material_id,
+                col(MaterialAssetOperation.material_id).in_(identities),
                 MaterialAssetOperation.advertiser_id == advertiser_id,
                 col(MaterialAssetOperation.status).in_(
                     ["sending", "verifying", "result_unknown"]
                 ),
             )
-        ).first()
-        if (mapping and mapping.video_id.strip()) or operation:
-            if not material.video_md5 or len(material.video_md5) != 32:
-                raise DomainError("material_digest_missing", "素材缺少可核实内容摘要")
-            endpoint = (
-                api.INFO_ENDPOINT
-                if mapping or (operation and operation.remote_response.get("video_id"))
-                else api.SEARCH_ENDPOINT
-            )
-            require_execution_config(upload=False, endpoint=endpoint)
-            return MaterialReadiness(
-                state="preparable",
-                path="existing_target",
-                mapping=asset_public(mapping) if mapping else None,
-            )
-        unconfirmed_share = session.exec(
-            select(MaterialAssetOperation.id)
+            .execution_options(populate_existing=True)
+        ).all()
+    }
+    unconfirmed = set(
+        session.exec(
+            select(MaterialAssetOperation.material_id)
             .where(
                 MaterialAssetOperation.tenant_id == context.tenant_id,
-                MaterialAssetOperation.material_id == material_id,
+                MaterialAssetOperation.bc_id == bc_id,
+                col(MaterialAssetOperation.material_id).in_(identities),
                 MaterialAssetOperation.advertiser_id == advertiser_id,
                 MaterialAssetOperation.path == "share_source",
                 MaterialAssetOperation.status == "failed",
@@ -246,32 +269,122 @@ def get_material_readiness(
                     "definite_no_effect"
                 ].astext.is_distinct_from("true"),
             )
-            .limit(1)
-        ).first()
-        if unconfirmed_share is not None:
-            raise DomainError(
-                "material_share_unconfirmed", "共享尚无明确未生效证据，需要先核实结果"
-            )
-        # No live contract/permission evidence currently establishes cross-account
-        # sharing. A source MID alone cannot turn this flag on.
-        legal_source = has_legal_source_mid(
-            session,
-            context=context,
-            bc_id=bc_id,
-            material_id=material_id,
-            advertiser_id=advertiser_id,
+            .distinct()
+        ).all()
+    )
+    grant = (
+        usable_grants(tenant_id=context.tenant_id, bc_id=bc_id, action="read")
+        .where(
+            BCAccountAccess.advertiser_id == AccountMaterial.advertiser_id,
+            BCAccountAccess.connection_id == AccountMaterial.connection_id,
         )
-        if material.storage_state == "stored":
-            require_upload_path(
-                session, context=context, material=material, advertiser_id=advertiser_id
+        .exists()
+    )
+    legal_sources = set(
+        session.exec(
+            select(AccountMaterial.material_id)
+            .where(
+                AccountMaterial.tenant_id == context.tenant_id,
+                AccountMaterial.bc_id == bc_id,
+                col(AccountMaterial.material_id).in_(identities),
+                AccountMaterial.advertiser_id != advertiser_id,
+                AccountMaterial.status == "available",
+                col(AccountMaterial.verified_at).is_not(None),
+                col(AccountMaterial.mid).is_not(None),
+                col(AccountMaterial.mid) != "",
+                grant,
             )
-            return MaterialReadiness(state="preparable", path="upload_original")
-        code = "material_share_unverified" if legal_source else "original_unavailable"
-        raise DomainError(code, "没有已核实的原生共享路径或完整原文件")
-    except DomainError as error:
-        return MaterialReadiness(
-            state="blocked",
-            path="unavailable",
-            reason_code=error.code,
-            reason_message=error.message,
-        )
+            .distinct()
+        ).all()
+    )
+    # Deployment policy and the upload permission are identical for this bounded
+    # group. Check lazily so existing verified target assets keep their priority.
+    upload_checked = False
+    upload_error: DomainError | None = None
+    result: dict[UUID, MaterialReadiness] = {}
+    for material in materials:
+        mapping = mappings.get(material.id)
+        operation = operations.get(material.id)
+        try:
+            if mapping_fresh(mapping):
+                assert mapping
+                result[material.id] = MaterialReadiness(
+                    state="ready", path="existing_target", mapping=asset_public(mapping)
+                )
+                continue
+            if (mapping and mapping.video_id.strip()) or operation:
+                if not material.video_md5 or len(material.video_md5) != 32:
+                    raise DomainError(
+                        "material_digest_missing", "素材缺少可核实内容摘要"
+                    )
+                endpoint = (
+                    api.INFO_ENDPOINT
+                    if mapping
+                    or (operation and operation.remote_response.get("video_id"))
+                    else api.SEARCH_ENDPOINT
+                )
+                require_execution_config(upload=False, endpoint=endpoint)
+                result[material.id] = MaterialReadiness(
+                    state="preparable",
+                    path="existing_target",
+                    mapping=asset_public(mapping) if mapping else None,
+                )
+                continue
+            if material.id in unconfirmed:
+                raise DomainError(
+                    "material_share_unconfirmed",
+                    "共享尚无明确未生效证据，需要先核实结果",
+                )
+            if material.storage_state == "stored":
+                if material.byte_size > settings.MATERIAL_SDK_MAX_UPLOAD_BYTES:
+                    raise DomainError(
+                        "sdk_upload_capacity_exceeded",
+                        "原文件超过当前平台上传内存容量边界",
+                    )
+                if not upload_checked:
+                    try:
+                        resolve_account_access(
+                            session,
+                            context=context,
+                            bc_id=bc_id,
+                            advertiser_id=advertiser_id,
+                            action="upload",
+                        )
+                        require_execution_config(
+                            upload=True, endpoint=api.UPLOAD_ENDPOINT
+                        )
+                    except DomainError as error:
+                        upload_error = error
+                    upload_checked = True
+                if upload_error:
+                    raise upload_error
+                result[material.id] = MaterialReadiness(
+                    state="preparable", path="upload_original"
+                )
+                continue
+            code = (
+                "material_share_unverified"
+                if material.id in legal_sources
+                else "original_unavailable"
+            )
+            raise DomainError(code, "没有已核实的原生共享路径或完整原文件")
+        except DomainError as error:
+            result[material.id] = blocked(error)
+    return result
+
+
+def get_material_readiness(
+    session: Session,
+    *,
+    context: TenantContext,
+    bc_id: str,
+    material_id: UUID,
+    advertiser_id: str,
+) -> MaterialReadiness:
+    return get_material_readiness_batch(
+        session,
+        context=context,
+        bc_id=bc_id,
+        material_ids=[material_id],
+        advertiser_id=advertiser_id,
+    )[material_id]

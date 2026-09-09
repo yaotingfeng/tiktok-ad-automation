@@ -71,8 +71,11 @@ def test_partial_publication_has_no_complete_evidence(
 
 
 def test_expiry_is_anchored_at_first_observation_not_each_read_or_publish(
-    capability_env, wire, redis_client
+    capability_env, wire, redis_client, monkeypatch
 ):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "BC_CAPABILITY_MAX_AGE_SECONDS", 14400)
     env = capability_env
     job_id = start(env)
     wire[1].append(page(["actual-account"] + [f"remote-{n}" for n in range(49)], 1, 51))

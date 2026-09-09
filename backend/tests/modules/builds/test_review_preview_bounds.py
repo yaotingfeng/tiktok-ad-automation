@@ -217,7 +217,7 @@ def test_frozen_read_services_issue_only_selects_and_never_advance_tasks(
         )
 
     monkeypatch.setattr(service, "ensure_target_asset", forbidden)
-    monkeypatch.setattr(previews, "get_material_readiness", forbidden)
+    monkeypatch.setattr(previews, "get_material_readiness_batch", forbidden)
     monkeypatch.setattr(previews, "read_scene_context", forbidden)
     event.listen(session.connection(), "before_cursor_execute", query)
     try:

@@ -93,8 +93,11 @@ def prepared(session, context, intent, monkeypatch):
     monkeypatch.setattr(previews, "read_scene_context", lambda *a, **kw: scene)
     monkeypatch.setattr(
         previews,
-        "get_material_readiness",
-        lambda *a, **kw: SimpleNamespace(state="preparable", reason_code=None),
+        "get_material_readiness_batch",
+        lambda *a, **kw: {
+            identity: SimpleNamespace(state="preparable", reason_code=None)
+            for identity in kw["material_ids"]
+        },
     )
     return draft
 
