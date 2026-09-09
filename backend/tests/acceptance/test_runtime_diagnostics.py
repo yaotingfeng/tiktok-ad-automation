@@ -155,7 +155,7 @@ def test_scoped_diagnostics_are_readonly_and_preserve_other_queue(acceptance_sce
     assert missing["nearest_due_seconds"] is None
 
 
-def test_pump_optional_scope_is_validated_before_any_delivery(monkeypatch, tmp_path):
+def diagnostic_server(monkeypatch, tmp_path):
     # Import the actual test-server routes onto a separate app: production app
     # globals, running browser servers, lifespan and real jobs remain untouched.
     import app.main
@@ -170,6 +170,11 @@ def test_pump_optional_scope_is_validated_before_any_delivery(monkeypatch, tmp_p
     assert spec and spec.loader
     server = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(server)
+    return server, application
+
+
+def test_pump_optional_scope_is_validated_before_any_delivery(monkeypatch, tmp_path):
+    server, application = diagnostic_server(monkeypatch, tmp_path)
     tenant = uuid4()
     server.scopes[str(tenant)] = object()
     calls = []
@@ -197,3 +202,31 @@ def test_pump_optional_scope_is_validated_before_any_delivery(monkeypatch, tmp_p
     ):
         assert client.post("/__acceptance__/pump", json=payload).status_code == expected
     assert calls == before
+
+
+def test_smart_post_evidence_excludes_another_scenarios_background_work(
+    acceptance_scenario, monkeypatch, tmp_path
+):
+    scenario = acceptance_scenario
+    server, application = diagnostic_server(monkeypatch, tmp_path)
+    server.engine = scenario.database_engine
+    server.wire = scenario.runtime.wire
+    for scope in (scenario.scope, scenario.other):
+        server.scopes[str(scope.context.tenant_id)] = scope
+        server.wire.smart.calls.append(
+            {"method": "POST", "body": {"advertiser_id": scope.accounts[0]}}
+        )
+    server.wire.smart.calls.append(
+        {"method": "GET", "body": {"advertiser_id": scenario.scope.accounts[0]}}
+    )
+    # An accidental advertisement in this tenant's material source account is
+    # still a real POST and must not disappear from a no-write assertion.
+    server.wire.smart.calls.append(
+        {"method": "POST", "body": {"advertiser_id": scenario.scope.sources[0]}}
+    )
+    client = TestClient(application)
+    for scope, expected in ((scenario.scope, 2), (scenario.other, 1)):
+        response = client.get(f"/__acceptance__/evidence/{scope.context.tenant_id}")
+        assert response.status_code == 200
+        assert response.json()["smart_posts"] == expected
+        assert response.json()["submission_count"] == 0

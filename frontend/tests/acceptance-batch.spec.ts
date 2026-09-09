@@ -56,22 +56,51 @@ async function inputs(
     .getByLabel("广告账户", { exact: true })
     .fill(scope.accounts.join("\n"))
 }
+type Progress = { ready: boolean; state: Record<string, unknown> }
 async function pumpUntil(
   request: APIRequestContext,
-  predicate: () => Promise<boolean>,
+  scope: Scenario,
+  phase: "preparation" | "preview" | "execution",
+  predicate: () => Promise<Progress>,
 ) {
-  await expect
-    .poll(
-      async () => {
-        const response = await request.post("/__acceptance__/pump", {
-          timeout: 120_000,
-        })
-        expect(response.ok()).toBeTruthy()
-        return predicate()
-      },
-      { timeout: 180_000, intervals: [250, 500, 1000] },
+  // Execution includes 138 video uploads, their real 60-second delayed reads,
+  // 138 covers and the advertising graph. Match the backend acceptance budget;
+  // the existing 600-second test deadline still bounds the complete scenario.
+  const timeout = phase === "execution" ? 240_000 : 180_000
+  const startedAt = performance.now()
+  let lastProgressAt = startedAt
+  let state = "No business state read"
+  let diagnostics = "No task delivery completed"
+  try {
+    await expect
+      .poll(
+        async () => {
+          const response = await request.post("/__acceptance__/pump", {
+            data: { tenant_id: scope.tenant_id },
+            timeout: 120_000,
+          })
+          expect(response.ok()).toBeTruthy()
+          diagnostics = (await response.json()).diagnostics
+          const progress = await predicate()
+          const nextState = JSON.stringify(progress.state)
+          if (nextState !== state) {
+            state = nextState
+            lastProgressAt = performance.now()
+          }
+          return progress.ready
+        },
+        { timeout, intervals: [250, 500, 1000] },
+      )
+      .toBeTruthy()
+    console.info(
+      `Acceptance ${phase} completed in ${((performance.now() - startedAt) / 1000).toFixed(1)}s: ${state}`,
     )
-    .toBeTruthy()
+  } catch (error) {
+    console.error(
+      `Acceptance ${phase} after ${((performance.now() - startedAt) / 1000).toFixed(1)}s; last reported state change ${((performance.now() - lastProgressAt) / 1000).toFixed(1)}s ago: ${state}; task diagnostics: ${diagnostics}`,
+    )
+    throw error
+  }
 }
 async function prepare(
   page: Page,
@@ -86,13 +115,16 @@ async function prepare(
   ).toBeVisible()
   const draftId = /build-drafts\/([^?]+)/.exec(new URL(page.url()).pathname)![1]
   const token = await page.evaluate(() => localStorage.getItem("access_token"))
-  await pumpUntil(request, async () => {
+  await pumpUntil(request, scope, "preparation", async () => {
     const response = await request.get(
       `/api/tenants/${scope.tenant_id}/build-drafts/${draftId}`,
       { headers: { Authorization: `Bearer ${token}` } },
     )
     const data = await response.json()
-    return data.status === "READY" || data.status === "BLOCKED"
+    return {
+      ready: data.status === "READY" || data.status === "BLOCKED",
+      state: { status: data.status },
+    }
   })
   await page.getByRole("button", { name: "刷新准备结果", exact: true }).click()
   return draftId
@@ -105,13 +137,16 @@ async function freeze(page: Page, request: APIRequestContext, scope: Scenario) {
   )![1]
   const token = await page.evaluate(() => localStorage.getItem("access_token"))
   let summary: Record<string, unknown> = {}
-  await pumpUntil(request, async () => {
+  await pumpUntil(request, scope, "preview", async () => {
     const response = await request.get(
       `/api/tenants/${scope.tenant_id}/build-previews/${previewId}`,
       { headers: { Authorization: `Bearer ${token}` } },
     )
     summary = await response.json()
-    return summary.status === "FROZEN"
+    return {
+      ready: summary.status === "FROZEN",
+      state: { status: summary.status },
+    }
   })
   await page.getByRole("button", { name: "刷新预览状态", exact: true }).click()
   return { previewId, summary }
@@ -154,13 +189,22 @@ test("真实 API 两剧三户：冻结 6/18/36 与 USD600，提交并完成后�
   )![1]
   const token = await page.evaluate(() => localStorage.getItem("access_token"))
   let task: any
-  await pumpUntil(request, async () => {
+  await pumpUntil(request, scope, "execution", async () => {
     const response = await request.get(
       `/api/tenants/${scope.tenant_id}/submissions/${submissionId}`,
       { headers: { Authorization: `Bearer ${token}` } },
     )
     task = await response.json()
-    return !["QUEUED", "RUNNING"].includes(task.status)
+    return {
+      ready: !["QUEUED", "RUNNING"].includes(task.status),
+      state: {
+        status: task.status,
+        stage_counts: task.stage_counts,
+        succeeded: task.succeeded,
+        failed: task.failed,
+        unknown: task.unknown,
+      },
+    }
   })
   expect(task.succeeded).toEqual({
     campaign_count: 6,
@@ -216,12 +260,13 @@ test("真实草稿编辑使旧预览失效；提交响应丢失后仅按原请�
   await page.getByRole("button", { name: "返回调整", exact: true }).click()
   await page.getByRole("button", { name: "解析并准备", exact: true }).click()
   const draftId = /build-drafts\/([^?]+)/.exec(new URL(page.url()).pathname)![1]
-  await pumpUntil(request, async () => {
+  await pumpUntil(request, scope, "preparation", async () => {
     const response = await request.get(
       `/api/tenants/${scope.tenant_id}/build-drafts/${draftId}`,
       { headers: { Authorization: `Bearer ${token}` } },
     )
-    return (await response.json()).status === "READY"
+    const draft = await response.json()
+    return { ready: draft.status === "READY", state: { status: draft.status } }
   })
   await page.getByRole("button", { name: "刷新准备结果", exact: true }).click()
   const current = await freeze(page, request, scope)
@@ -262,13 +307,22 @@ test("真实草稿编辑使旧预览失效；提交响应丢失后仅按原请�
   const submissionId = /build-tasks\/([^?]+)/.exec(
     new URL(page.url()).pathname,
   )![1]
-  await pumpUntil(request, async () => {
+  await pumpUntil(request, scope, "execution", async () => {
     const response = await request.get(
       `/api/tenants/${scope.tenant_id}/submissions/${submissionId}`,
       { headers: { Authorization: `Bearer ${token}` } },
     )
     const task = await response.json()
-    return task.succeeded.ad_count === 36
+    return {
+      ready: task.succeeded.ad_count === 36,
+      state: {
+        status: task.status,
+        stage_counts: task.stage_counts,
+        succeeded: task.succeeded,
+        failed: task.failed,
+        unknown: task.unknown,
+      },
+    }
   })
 })
 

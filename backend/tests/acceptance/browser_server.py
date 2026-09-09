@@ -194,6 +194,8 @@ def lose_response():
 def evidence(tenant_id: UUID):
     if str(tenant_id) not in scopes:
         raise HTTPException(404)
+    scope = scopes[str(tenant_id)]
+    owned_accounts = set(scope.accounts + scope.sources)
     with Session(engine) as session:
         count = session.exec(
             select(func.count())
@@ -204,7 +206,11 @@ def evidence(tenant_id: UUID):
         "requests": [r for r in requests if f"/tenants/{tenant_id}/" in r["path"]],
         "submission_count": count,
         "sdk_calls": dict(wire.calls),
-        "smart_posts": len([c for c in wire.smart.calls if c["method"] == "POST"]),
+        "smart_posts": sum(
+            call["method"] == "POST"
+            and call["body"].get("advertiser_id") in owned_accounts
+            for call in wire.smart.calls
+        ),
     }
 
 
