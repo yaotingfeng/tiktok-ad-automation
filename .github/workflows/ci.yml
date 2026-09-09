@@ -7,7 +7,22 @@ permissions:
   contents: read
 jobs:
   backend:
+    name: backend (${{ matrix.suite }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: modules
+            pytest-args: --ignore=tests/acceptance
+          - suite: acceptance
+            pytest-args: tests/acceptance -k 'not lost_reply'
+          - suite: campaign-recovery
+            pytest-args: tests/acceptance -k 'lost_reply and campaign'
+          - suite: other-recovery
+            pytest-args: tests/acceptance -k 'lost_reply and not campaign'
+          - suite: browser
+            pytest-args: ''
     services:
       postgres:
         image: postgres:18
@@ -38,10 +53,25 @@ jobs:
         with: {python-version: '3.14'}
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
       - run: uv sync --frozen --package app
-      - run: uv run pytest -q
+      - run: uv run ruff check app tests && uv run ty check app
+        if: matrix.suite == 'modules'
         working-directory: backend
-      - run: uv run ruff check app tests
+      - run: uv run pytest -q --tb=short --show-capture=no ${{ matrix.pytest-args }}
+        if: matrix.suite != 'browser'
         working-directory: backend
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        if: matrix.suite == 'browser'
+        with: {bun-version: '1.4.2'}
+      - run: bun install --frozen-lockfile && bun run --filter frontend build
+        if: matrix.suite == 'browser'
+        env:
+          VITE_API_URL: ''
+      - run: bun x playwright install --with-deps chromium
+        if: matrix.suite == 'browser'
+        working-directory: frontend
+      - run: bun x playwright test --config=playwright.acceptance.config.ts
+        if: matrix.suite == 'browser'
+        working-directory: frontend
   frontend:
     runs-on: ubuntu-latest
     steps:
