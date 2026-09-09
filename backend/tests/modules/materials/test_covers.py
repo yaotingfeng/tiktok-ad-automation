@@ -130,6 +130,40 @@ def successful_upload(env, redis_client, wire):
     return result.task_id
 
 
+def test_stale_ready_cover_explicit_reconciliation_only_refreshes_known_image(
+    source_env, redis_client, wire
+):
+    from datetime import UTC, datetime, timedelta
+
+    from app.jobs.models import PendingDispatch
+
+    identity = successful_upload(source_env, redis_client, wire)
+    wire[1].append(image_info(identity))
+    run(source_env, redis_client, identity, read=True)
+    assert job_state(identity).status == "READY"
+    with Session(engine) as session, session.begin():
+        job = session.get(MaterialCoverJob, identity)
+        job.updated_at = datetime.now(UTC) - timedelta(hours=1)
+        session.add(job)
+    before = job_state(identity)
+    with Session(engine) as session, session.begin():
+        result = covers.request_cover_reconciliation(
+            session, context=source_env["context"], job_id=identity
+        )
+        assert result.state == "queued"
+        job = session.get(MaterialCoverJob, identity)
+        assert job.known_image_id == before.known_image_id
+        assert job.request_armed_at == before.request_armed_at
+        assert (
+            session.get(PendingDispatch, job.dispatch_id).task_name
+            == "materials.verify_cover"
+        )
+    wire[1].append(image_info(identity))
+    run(source_env, redis_client, identity, read=True)
+    assert job_state(identity).status == "READY"
+    assert [call[0] for call in wire[0]] == ["GET", "POST", "GET", "GET"]
+
+
 def test_upload_arms_before_wire_and_readback_updates_only_target(
     source_env, redis_client, wire
 ):

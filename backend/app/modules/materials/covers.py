@@ -298,6 +298,11 @@ def request_cover_reconciliation(
         TenantContext(tenant_id=job.tenant_id, actor_id=job.actor_id, role="operator"),
         job,
     )
+    if job.status == "READY" and not _fresh(job):
+        # A delayed build may resume after its positive image evidence expires.
+        # Revalidate the known ID, preserving the original upload identity.
+        _queue(session, job, read=True)
+        return _result(session, job)
     if (
         job.status in {"READY", "PENDING", "PREPARING", "VERIFYING"}
         or job.request_armed_at is None
