@@ -13,6 +13,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { CopyField } from "@/features/providers/presentation"
+import { normalizeDecimal } from "@/features/strategies/validation"
 import { ManagementSheet } from "@/features/tenants/ManagementSheet"
 import {
   Pager,
@@ -290,7 +291,8 @@ export function PreviewSummaryBar({
             · {preview.ad_count} Ad
           </p>
           <p className="mt-1 text-sm">
-            配置日预算合计 {preview.currency} {preview.daily_budget_sum}
+            配置日预算合计 {preview.currency}{" "}
+            {normalizeDecimal(preview.daily_budget_sum)}
           </p>
           <p className="text-xs text-muted-foreground">
             各 Campaign 配置日预算之和，非预计实际消耗。排除{" "}
@@ -425,7 +427,7 @@ export function PreviewUnitTable({
           {
             header: "Campaign 日预算",
             cell: ({ row }) =>
-              `${row.original.currency} ${row.original.budget}`,
+              `${row.original.currency} ${normalizeDecimal(row.original.budget)}`,
           },
           {
             header: "Campaign 名称",
@@ -606,7 +608,8 @@ function FrozenUnitSheet({
               expanded
             />
             <p className="text-sm">
-              Campaign 日预算 {detail.data.currency} {detail.data.budget} · ROAS{" "}
+              Campaign 日预算 {detail.data.currency}{" "}
+              {normalizeDecimal(detail.data.budget)} · ROAS{" "}
               {detail.data.target_roas}
             </p>
             <CopyField label="推广链接" value={detail.data.url} expanded />
@@ -725,7 +728,7 @@ function PreviewDramaTable({
           {
             header: "配置日预算合计",
             cell: ({ row }) =>
-              `${preview.currency} ${row.original.daily_budget_sum}`,
+              `${preview.currency} ${normalizeDecimal(row.original.daily_budget_sum)}`,
           },
           {
             header: "操作",

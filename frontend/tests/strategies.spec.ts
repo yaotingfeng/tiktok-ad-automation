@@ -259,7 +259,7 @@ test("23 条素材的创意数量 2→3 只改变 Ad 数量，不倍增预算", 
   ).toBeVisible()
   await expect(example.getByText("9 条 Ad", { exact: true })).toBeVisible()
   await expect(
-    example.getByText("USD 100.00 / Campaign / 天", { exact: true }),
+    example.getByText("USD 100 / Campaign / 天", { exact: true }),
   ).toBeVisible()
   await expect(page.getByLabel("自定义 CTA")).toHaveCount(0)
 })
@@ -415,7 +415,7 @@ test("策略205条列表默认可用、50/100服务端游标与字段对应", as
   await page.goto(`/tenants/${A}/strategies`)
   await expect(page.locator("tbody tr")).toHaveCount(50)
   const first = page.locator("tbody tr").first()
-  await expect(first).toContainText("USD 100.00")
+  await expect(first).toContainText("USD 100")
   await expect(first).toContainText("1.08 倍")
   await expect(first).toContainText("10 条/组")
   await expect(first).toContainText("SP1～SP2")
@@ -788,4 +788,35 @@ test("后台检查版本变化保留本地配置，临时读取失败也不卸�
   await expect(page.getByLabel("Campaign 日预算", { exact: true })).toHaveValue(
     "130.00",
   )
+})
+
+test("策略列表与历史预算去尾零但编辑原文保留", async ({ page }) => {
+  const api = await boundary(page)
+  const budget = "9007199254740993123456.123400000000"
+  api.records[0].config.budget = budget
+  api.versions[0].config.budget = budget
+  await page.goto(`/tenants/${A}/strategies`)
+  await expect(
+    page.getByRole("cell", {
+      name: "USD 9007199254740993123456.1234 每个 Campaign / 天",
+      exact: true,
+    }),
+  ).toBeVisible()
+  await page.getByRole("button", { name: "查看版本", exact: true }).click()
+  await expect(
+    page
+      .getByRole("dialog")
+      .getByRole("cell", {
+        name: "USD 9007199254740993123456.1234 ROAS 1.08 倍",
+        exact: true,
+      }),
+  ).toBeVisible()
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "查看版本", exact: true })
+    .click()
+  await expect(page.getByLabel("Campaign 日预算", { exact: true })).toHaveValue(
+    budget,
+  )
+  expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
 })

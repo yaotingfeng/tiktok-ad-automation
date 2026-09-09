@@ -140,6 +140,7 @@ export function BuildSteps({ step }: { step: 1 | 2 | 3 }) {
 }
 
 const reasonLabels: Record<string, string> = {
+  recovery_no_candidates: "当前没有需要重试或核查的步骤。",
   currency_mismatch: "账户币种与策略不一致",
   materials_missing: "未匹配到可用素材",
   material_unavailable: "素材暂不可用于此账户",
@@ -178,7 +179,7 @@ export function BuildReason({ code }: { code: string | null }) {
       {reasonLabels[code] && (
         <span className="block">{reasonLabels[code]}</span>
       )}
-      <span>{code}</span>
+      {code !== "recovery_no_candidates" && <span>{code}</span>}
     </span>
   )
 }

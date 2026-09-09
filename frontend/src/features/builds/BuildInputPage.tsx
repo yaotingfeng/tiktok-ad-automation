@@ -17,6 +17,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Textarea } from "@/components/ui/textarea"
 import { versionQuery } from "@/features/strategies/queries"
+import { normalizeDecimal } from "@/features/strategies/validation"
 import { DirectoryPicker } from "@/features/tenants/DirectoryPicker"
 import { ApplicationPicker } from "./ApplicationPicker"
 import { mutationKey } from "./api"
@@ -378,7 +379,7 @@ export function BuildInputPage({
             </h2>
             <p>
               每个 Campaign 日预算 {version.data.config.currency}{" "}
-              {version.data.config.budget} · 目标 ROAS{" "}
+              {normalizeDecimal(version.data.config.budget)} · 目标 ROAS{" "}
               {version.data.config.target_roas} · 每组{" "}
               {version.data.config.group_size} 份素材 ·{" "}
               {version.data.config.creative_count} 条 SP 创意

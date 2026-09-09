@@ -8,6 +8,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { normalizeDecimal } from "@/features/strategies/validation"
 export function StrategyStructureExample({
   groupSize,
   creativeCount,
@@ -81,7 +82,7 @@ export function StrategyStructureExample({
         )}
         <p>
           {budget && currency
-            ? `${currency} ${budget} / Campaign / 天`
+            ? `${currency} ${normalizeDecimal(budget)} / Campaign / 天`
             : "填写 Campaign 日预算和币种后显示金额。"}
         </p>
         <p className="text-sm text-muted-foreground">

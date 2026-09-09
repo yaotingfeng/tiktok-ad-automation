@@ -59,7 +59,7 @@ async function boundary(
       can_reconcile: true,
       retryable_step_count: 0,
       reconcilable_step_count: 1,
-      reasons: [],
+      reasons: [] as string[],
     },
   }
   const step = {
@@ -1048,3 +1048,29 @@ for (const [code, label] of [
     await expect(page.getByText(code, { exact: true })).toBeVisible()
   })
 }
+
+test("完成任务使用中文说明无需恢复并保留预算大数精度", async ({ page }) => {
+  const api = await boundary(page)
+  api.summary.status = "COMPLETED"
+  api.summary.daily_budget_sum = "9007199254740993123456.123400000000"
+  api.summary.recovery = {
+    can_retry: false,
+    can_reconcile: false,
+    retryable_step_count: 0,
+    reconcilable_step_count: 0,
+    reasons: ["recovery_no_candidates"],
+  }
+  await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
+  await expect(
+    page.getByText("当前没有需要重试或核查的步骤。", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByText("recovery_no_candidates", { exact: true }),
+  ).toHaveCount(0)
+  await expect(
+    page.getByText(/配置日预算合计 USD 9007199254740993123456\.1234，/),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: /重试失败步骤|核查待核实项/ }),
+  ).toHaveCount(0)
+})

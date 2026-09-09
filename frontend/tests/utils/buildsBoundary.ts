@@ -108,6 +108,8 @@ export async function buildsBoundary(
   let releaseInput: () => void = () => {}
   const waitInput = new Promise<void>((resolve) => (releaseInput = resolve))
   const units = Array.from({ length: options.unitCount || 6 }, (_, i) => ({
+    budget: "100.00",
+    currency: "USD",
     unit_id: `aaaaaaaa-aaaa-4aaa-8aaa-${String(i + 1).padStart(12, "0")}`,
     drama_id: i < 3 ? DR : S,
     title: i < 3 ? "完整剧名1" : "完整剧名2",

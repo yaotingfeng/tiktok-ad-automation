@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { displayTime, Identifier } from "@/features/accounts/presentation"
+import { normalizeDecimal } from "@/features/strategies/validation"
 import { isForbidden, RequestError } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
@@ -248,8 +249,9 @@ function Detail({
               <p>已创建部分保持现状；启用状态、审核和实际投放分别核实。</p>
             )}
             <p>
-              配置日预算合计 {data.currency} {data.daily_budget_sum}，为已提交
-              Campaign 配置之和，非预计实际消耗。
+              配置日预算合计 {data.currency}{" "}
+              {normalizeDecimal(data.daily_budget_sum)}，为已提交 Campaign
+              配置之和，非预计实际消耗。
             </p>
             {!data.expanded && <p>后台正在展开执行范围，统计将继续更新。</p>}
           </div>

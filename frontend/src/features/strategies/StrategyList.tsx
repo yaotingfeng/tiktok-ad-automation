@@ -17,6 +17,7 @@ import {
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { displayTime, FilterSelect } from "@/features/accounts/presentation"
+import { normalizeDecimal } from "@/features/strategies/validation"
 import {
   isForbidden,
   Pager,
@@ -101,7 +102,8 @@ export function StrategyList() {
         header: "Campaign 日预算",
         cell: ({ row }) => (
           <div>
-            {row.original.config.currency} {row.original.config.budget}
+            {row.original.config.currency}{" "}
+            {normalizeDecimal(row.original.config.budget)}
             <p className="text-xs text-muted-foreground">每个 Campaign / 天</p>
           </div>
         ),

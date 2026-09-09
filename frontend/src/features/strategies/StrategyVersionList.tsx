@@ -5,6 +5,7 @@ import { useMemo } from "react"
 import { StrategiesService, type VersionPublic } from "@/client"
 import { Button } from "@/components/ui/button"
 import { displayTime } from "@/features/accounts/presentation"
+import { normalizeDecimal } from "@/features/strategies/validation"
 import { ManagementSheet } from "@/features/tenants/ManagementSheet"
 import {
   Pager,
@@ -52,7 +53,7 @@ export function StrategyVersionList({
         header: "预算 / ROAS",
         cell: ({ row: { original: r } }) => (
           <div>
-            {r.config.currency} {r.config.budget}
+            {r.config.currency} {normalizeDecimal(r.config.budget)}
             <p>ROAS {r.config.target_roas} 倍</p>
           </div>
         ),
