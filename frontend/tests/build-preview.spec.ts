@@ -235,7 +235,7 @@ test("明确三级数量后创建并立即启用，仅提交一次并读取真�
     /\/build-tasks\/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb/,
   )
   await expect(
-    page.getByRole("heading", { name: "搭建任务", exact: true }),
+    page.getByRole("heading", { name: "任务 batch-real", exact: true }),
   ).toBeVisible()
   await expect(page.getByText("排队中", { exact: true })).toBeVisible()
   expect(
@@ -264,7 +264,7 @@ test("提交响应丢失后刷新只回查原请求，返回预览不能再次�
   await page.reload()
   await page.getByRole("button", { name: "查询原提交结果" }).click()
   await expect(
-    page.getByRole("heading", { name: "搭建任务", exact: true }),
+    page.getByRole("heading", { name: "任务 batch-real", exact: true }),
   ).toBeVisible()
   expect(
     api.requests.filter(
@@ -279,7 +279,7 @@ test("提交响应丢失后刷新只回查原请求，返回预览不能再次�
   ).toBeDisabled()
   await page.getByRole("button", { name: "查看已受理任务" }).click()
   await expect(
-    page.getByRole("heading", { name: "搭建任务", exact: true }),
+    page.getByRole("heading", { name: "任务 batch-real", exact: true }),
   ).toBeVisible()
   expect(
     api.requests.filter(

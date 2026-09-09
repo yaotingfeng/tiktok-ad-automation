@@ -382,6 +382,8 @@ export async function buildsBoundary(
       return options.lookup404
         ? reply({ code: "resource_not_found" }, 404)
         : reply({ submission_id: submissionId, status: "QUEUED" })
+    if (path.endsWith(`/submissions/${submissionId}/units`))
+      return reply({ items: [], next_cursor: null })
     if (path.endsWith(`/submissions/${submissionId}`)) {
       const zero = { campaign_count: 0, adgroup_count: 0, ad_count: 0 }
       return reply({

@@ -1,6 +1,5 @@
-import { createFileRoute } from "@tanstack/react-router"
-import { TenantPlaceholder } from "@/features/tenants/TenantPlaceholder"
+import { createFileRoute, Outlet } from "@tanstack/react-router"
 export const Route = createFileRoute("/_layout/tenants/$tenantId/build-tasks")({
-  component: () => <TenantPlaceholder title="搭建任务" />,
+  component: Outlet,
   head: () => ({ meta: [{ title: "搭建任务 · 短剧投放" }] }),
 })

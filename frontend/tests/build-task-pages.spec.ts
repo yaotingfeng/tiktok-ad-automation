@@ -1,0 +1,678 @@
+import { expect, type Page, test } from "@playwright/test"
+import { BC, buildsBoundary, D, DR, P, T } from "./utils/buildsBoundary"
+
+test.use({ timezoneId: "Asia/Shanghai" })
+const ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+const G = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+const U = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+const E = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+const counts = (c: number, g: number, a: number) => ({
+  campaign_count: c,
+  adgroup_count: g,
+  ad_count: a,
+})
+async function boundary(
+  page: Page,
+  options: {
+    viewer?: boolean
+    count?: number
+    denied?: boolean
+    delayedUnits?: boolean
+  } = {},
+) {
+  await buildsBoundary(page, { viewer: options.viewer })
+  const requests: { path: string; query: URLSearchParams; method: string }[] =
+    []
+  let releaseUnits = () => {}
+  const unitsWait = new Promise<void>((resolve) => {
+    releaseUnits = resolve
+  })
+  let newest = false
+  const summary = {
+    submission_id: ID,
+    preview_id: P,
+    draft_id: D,
+    batch_short_id: "B0909-01",
+    bc_id: BC,
+    status: "NEEDS_REVIEW",
+    expanded: true,
+    currency: "USD",
+    daily_budget_sum: "100.00",
+    actor_name: "真实提交人",
+    provider_name: "真实版权方",
+    strategy_label: "测试策略 v2",
+    planned: counts(1, 1, 2),
+    submitted: counts(1, 1, 2),
+    succeeded: counts(1, 1, 1),
+    failed: counts(0, 0, 0),
+    unknown: counts(0, 0, 1),
+    pending: counts(0, 0, 0),
+    excluded: counts(0, 0, 0),
+    stage_counts: { "MATERIAL:SUCCEEDED": 2, "READBACK:UNKNOWN": 1 },
+    excluded_unit_count: 0,
+    drama_count: 1,
+    account_count: 1,
+    created_at: "2026-09-09T01:00:00Z",
+    updated_at: "2026-09-09T01:05:00Z",
+    recovery: {
+      can_retry: false,
+      can_reconcile: true,
+      retryable_step_count: 0,
+      reconcilable_step_count: 1,
+      reasons: [],
+    },
+  }
+  const step = {
+    step_id: E,
+    unit_id: U,
+    kind: "AD",
+    group_id: G,
+    planned_ad_id: E,
+    material_id: null,
+    status: "UNKNOWN",
+    remote_id: null,
+    error_code: "result_unknown",
+    operation_status: null,
+    review_status: null,
+    mismatch: false,
+    checked_at: null,
+    title: "真实剧目",
+    advertiser_id: "90071992547409931235",
+    group_no: 1,
+    creative_no: 2,
+  }
+  await page.route("**/api/tenants/*/submissions**", async (route) => {
+    const req = route.request(),
+      url = new URL(req.url()),
+      path = url.pathname
+    expect(req.headers().authorization).toBe("Bearer build-test-token")
+    requests.push({ path, query: url.searchParams, method: req.method() })
+    if (options.denied)
+      return route.fulfill({ status: 403, json: { code: "action_forbidden" } })
+    const paged = (rows: unknown[]) => {
+      const n = Number(url.searchParams.get("cursor") || 0),
+        limit = Number(url.searchParams.get("limit") || 50)
+      return route.fulfill({
+        json: {
+          items: rows.slice(n, n + limit),
+          next_cursor: rows.length > n + limit ? String(n + limit) : null,
+        },
+      })
+    }
+    if (path.endsWith("/submissions") && url.searchParams.get("bc_id") !== BC)
+      return paged([])
+    if (path.endsWith("/submissions"))
+      return paged([
+        ...(newest
+          ? [
+              {
+                ...summary,
+                submission_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                batch_short_id: "最新任务",
+              },
+            ]
+          : []),
+        ...Array.from({ length: options.count ?? 1 }, (_, i) => ({
+          ...summary,
+          submission_id:
+            i === 0
+              ? ID
+              : `bbbbbbbb-bbbb-4bbb-8bbb-${String(i).padStart(12, "0")}`,
+          batch_short_id: `B0909-${i + 1}`,
+        })),
+      ])
+    if (/\/submissions\/[a-f0-9-]{36}$/.test(path))
+      return route.fulfill({
+        json: { ...summary, submission_id: path.split("/").pop() },
+      })
+    if (path.endsWith("/units") && options.delayedUnits) await unitsWait
+    if (path.endsWith("/units"))
+      return paged([
+        {
+          unit_id: U,
+          drama_id: DR,
+          title: "真实剧目",
+          advertiser_id: step.advertiser_id,
+          account_name: "真实账户",
+          campaign_name: "真实Campaign",
+          result_status: summary.status,
+          disposition: "INCLUDED",
+          reason_codes: [],
+          expanded: true,
+          group_count: 1,
+          ad_count: 2,
+          succeeded_group_count: 1,
+          succeeded_ad_count: 1,
+          material_count: 2,
+          ready_material_count: 2,
+          campaign_step: {
+            ...step,
+            kind: "CAMPAIGN",
+            status: "SUCCEEDED",
+            remote_id: "campaign-real",
+            operation_status: "ENABLE",
+            review_status: "PENDING",
+            checked_at: "2026-09-09T01:04:00Z",
+          },
+        },
+      ])
+    if (path.endsWith("/groups"))
+      return paged([
+        {
+          group_id: G,
+          unit_id: U,
+          group_no: 1,
+          name: "真实素材组",
+          material_count: 2,
+          ad_count: 2,
+          step: {
+            ...step,
+            kind: "ADGROUP",
+            status: "SUCCEEDED",
+            remote_id: "group-real",
+            operation_status: "ENABLE",
+          },
+        },
+      ])
+    if (path.endsWith("/materials"))
+      return paged([
+        {
+          material_id: E,
+          position: 1,
+          file_name: "真实剧目-素材.mp4",
+          preview_available: true,
+          video_id: "target-video-real",
+          image_id: "target-cover-real",
+          step: { ...step, kind: "MATERIAL", status: "SUCCEEDED" },
+        },
+      ])
+    if (path.endsWith("/ads"))
+      return paged([
+        {
+          planned_ad_id: E,
+          group_id: G,
+          creative_no: 2,
+          name: "SP2",
+          text: "冻结真实广告正文",
+          cta_option_ids: ["real-cta"],
+          step,
+        },
+      ])
+    if (path.endsWith("/steps")) return paged([step])
+    if (path.endsWith("/excluded")) return paged([])
+    if (path.endsWith("/events"))
+      return paged([
+        {
+          evidence_id: E,
+          step_id: E,
+          unit_id: U,
+          kind: "AD",
+          attempt: 1,
+          conclusion: "UNKNOWN",
+          observed_at: "2026-09-09T01:05:00Z",
+        },
+      ])
+    throw new Error(`Unexpected task boundary ${path}`)
+  })
+  return {
+    requests,
+    summary,
+    releaseUnits,
+    setNewest: () => {
+      newest = true
+    },
+  }
+}
+
+test("任务列表默认50并显示真实提交范围，只有详情操作", async ({ page }) => {
+  const api = await boundary(page, { count: 131 })
+  await page.goto(`/tenants/${T}/build-tasks?bc_id=${BC}`)
+  await expect(
+    page.getByText("查看创建进度并处理异常", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("link", { name: "查看详情", exact: true }),
+  ).toHaveCount(50)
+  expect(
+    api.requests
+      .filter((r) => r.path.endsWith("/submissions"))[0]
+      .query.get("limit"),
+  ).toBe("50")
+  await expect(page.getByRole("checkbox")).toHaveCount(0)
+  await page.getByRole("button", { name: "下一页", exact: true }).click()
+  await expect
+    .poll(() =>
+      api.requests
+        .filter((r) => r.path.endsWith("/submissions"))
+        .some((r) => r.query.get("cursor") === "50"),
+    )
+    .toBe(true)
+})
+
+test("任务详情三级对象守恒，按需展开真实素材组和SP正文", async ({ page }) => {
+  const api = await boundary(page)
+  await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
+  await expect(
+    page.getByRole("heading", { name: "任务 B0909-01", exact: true }),
+  ).toBeVisible()
+  await expect(page.getByTestId("count-ad-succeeded")).toHaveText("1")
+  await expect(page.getByTestId("count-ad-unknown")).toHaveText("1")
+  expect(api.requests.filter((r) => r.path.endsWith("/groups"))).toHaveLength(0)
+  await page.getByRole("button", { name: "展开素材组", exact: true }).click()
+  await expect(page.getByText("真实素材组", { exact: true })).toBeVisible()
+  expect(api.requests.filter((r) => r.path.endsWith("/ads"))).toHaveLength(0)
+  await page.getByRole("button", { name: "查看 SP 创意", exact: true }).click()
+  await expect(
+    page.getByText("冻结真实广告正文", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: /再次启用|停止广告|激活/ }),
+  ).toHaveCount(0)
+})
+
+test("切换列表筛选总是回首页，返回曾访问筛选不复用旧页", async ({ page }) => {
+  const api = await boundary(page, { count: 131 })
+  await page.goto(`/tenants/${T}/build-tasks?bc_id=${BC}`)
+  await page.getByRole("tab", { name: "需要处理", exact: true }).click()
+  await page.getByRole("button", { name: "下一页", exact: true }).click()
+  await expect
+    .poll(() =>
+      api.requests
+        .filter(
+          (r) =>
+            r.path.endsWith("/submissions") &&
+            r.query.get("status_group") === "attention",
+        )
+        .slice(-1)[0]
+        ?.query.get("cursor"),
+    )
+    .toBe("50")
+  await page.getByRole("tab", { name: "全部", exact: true }).click()
+  await page.getByRole("tab", { name: "需要处理", exact: true }).click()
+  await expect(page.getByText("第 1 页", { exact: true })).toBeVisible()
+  expect(
+    api.requests
+      .filter(
+        (r) =>
+          r.path.endsWith("/submissions") &&
+          r.query.get("status_group") === "attention",
+      )
+      .slice(-1)[0]
+      ?.query.get("cursor"),
+  ).toBeNull()
+})
+
+test("任务由进行中到完成时刷新已显示单位详情，不能只更新摘要", async ({
+  page,
+}) => {
+  const api = await boundary(page)
+  api.summary.status = "RUNNING"
+  await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
+  await expect(
+    page.getByRole("button", { name: "展开素材组", exact: true }),
+  ).toBeVisible()
+  const initial = api.requests.filter((r) => r.path.endsWith("/units")).length
+  api.summary.status = "COMPLETED"
+  api.summary.succeeded = counts(1, 1, 2)
+  api.summary.unknown = counts(0, 0, 0)
+  api.summary.updated_at = "2026-09-09T01:06:00Z"
+  await expect(
+    page.getByText("本次提交已完成。", { exact: true }),
+  ).toBeVisible()
+  await expect
+    .poll(() => api.requests.filter((r) => r.path.endsWith("/units")).length)
+    .toBeGreaterThan(initial)
+})
+
+test("列表进入详情再返回保留已提交筛选和当前页", async ({ page }) => {
+  const api = await boundary(page, { count: 131 })
+  await page.goto(`/tenants/${T}/build-tasks?bc_id=${BC}`)
+  await page.getByLabel("搜索任务", { exact: true }).fill("Moon_%")
+  await page.getByRole("button", { name: "搜索", exact: true }).click()
+  await page.getByRole("button", { name: "下一页", exact: true }).click()
+  await expect(page.getByText("第 2 页", { exact: true })).toBeVisible()
+  await page
+    .getByRole("link", { name: "查看详情", exact: true })
+    .first()
+    .click()
+  await expect(
+    page.getByRole("heading", { name: "任务 B0909-01", exact: true }),
+  ).toBeVisible()
+  await page.getByRole("link", { name: "返回任务列表" }).click()
+  await expect(page.getByLabel("搜索任务", { exact: true })).toHaveValue(
+    "Moon_%",
+  )
+  await expect(page.getByText("第 2 页", { exact: true })).toBeVisible()
+  expect(
+    api.requests
+      .filter(
+        (r) => r.path.endsWith("/submissions") && r.query.get("limit") === "50",
+      )
+      .slice(-1)[0]
+      .query.get("cursor"),
+  ).toBe("50")
+})
+
+test("列表100条服务端页长与日期半开范围，完整长BC不转数字", async ({
+  page,
+}) => {
+  const api = await boundary(page, { count: 131 })
+  await page.goto(
+    `/tenants/${T}/build-tasks?bc_id=${BC}&range=custom&from=2026-09-01&to=2026-09-09`,
+  )
+  await page.getByRole("combobox", { name: "每页条数" }).click()
+  await page.getByRole("option", { name: "100 条", exact: true }).click()
+  await expect(
+    page.getByRole("link", { name: "查看详情", exact: true }),
+  ).toHaveCount(100)
+  const req = api.requests
+    .filter(
+      (r) => r.path.endsWith("/submissions") && r.query.get("limit") === "100",
+    )
+    .slice(-1)[0]
+  expect(req.query.get("bc_id")).toBe(BC)
+  expect(req.query.get("created_from")).toBe("2026-08-31T16:00:00.000Z")
+  expect(req.query.get("created_to")).toBe("2026-09-09T16:00:00.000Z")
+  expect(req.query.get("cursor")).toBeNull()
+})
+
+test("列表新任务只提示，不插入正在浏览的第二页", async ({ page }) => {
+  await page.clock.install()
+  const api = await boundary(page, { count: 131 })
+  await page.goto(`/tenants/${T}/build-tasks?bc_id=${BC}`)
+  await page.getByRole("button", { name: "下一页", exact: true }).click()
+  await expect(page.getByText("第 2 页", { exact: true })).toBeVisible()
+  const first = await page
+    .getByRole("link", { name: /B0909-/ })
+    .first()
+    .textContent()
+  await page.clock.runFor(100)
+  api.setNewest()
+  await page.clock.fastForward(31000)
+  await expect
+    .poll(
+      () =>
+        api.requests.filter(
+          (r) =>
+            r.path.endsWith("/submissions") && r.query.get("limit") === "1",
+        ).length,
+    )
+    .toBeGreaterThan(1)
+  await expect(
+    page.getByText("有新任务，刷新查看。", { exact: true }),
+  ).toBeVisible()
+  expect(
+    await page
+      .getByRole("link", { name: /B0909-/ })
+      .first()
+      .textContent(),
+  ).toBe(first)
+  await page.getByRole("button", { name: "刷新至首页" }).click()
+  await expect(page.getByText("第 1 页", { exact: true })).toBeVisible()
+  await expect(
+    page.getByRole("link", { name: "最新任务", exact: true }),
+  ).toBeVisible()
+})
+
+test("异常定位与操作记录只读按需查询，并保留平台ENABLE的真实含义", async ({
+  page,
+}) => {
+  const api = await boundary(page)
+  await page.goto(
+    `/tenants/${T}/build-tasks/${ID}?bc_id=${BC}&tab=issues&result=UNKNOWN`,
+  )
+  await expect(
+    page.getByRole("button", { name: "查看原因", exact: true }),
+  ).toBeVisible()
+  const req = api.requests.find((r) => r.path.endsWith("/steps"))!
+  expect(req.query.get("result")).toBe("UNKNOWN")
+  expect(req.query.get("limit")).toBe("50")
+  expect(api.requests.filter((r) => r.path.endsWith("/events"))).toHaveLength(0)
+  await page.getByRole("button", { name: "查看原因", exact: true }).click()
+  await expect(
+    page.getByRole("heading", { name: "结果与处理建议" }),
+  ).toBeVisible()
+  expect(
+    api.requests.find((r) => r.path.endsWith("/events"))?.query.get("step_id"),
+  ).toBe(E)
+  await page.keyboard.press("Escape")
+  await page.getByRole("tab", { name: "搭建明细", exact: true }).click()
+  await expect(
+    page.getByText("操作状态：已启用（ENABLE）", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByText("审核/投放状态：PENDING", { exact: true }),
+  ).toBeVisible()
+  expect(api.requests.every((r) => r.method === "GET")).toBe(true)
+})
+
+test("组内素材分页展示实际目标VID，点击原件才请求短期预览", async ({
+  page,
+}) => {
+  const api = await boundary(page)
+  let previews = 0
+  await page.route(`**/api/tenants/${T}/materials/${E}/preview?*`, (route) => {
+    previews++
+    expect(new URL(route.request().url()).searchParams.get("bc_id")).toBe(BC)
+    return route.fulfill({
+      json: {
+        url: "https://storage.example.com/task-preview.mp4",
+        expires_in: 300,
+      },
+    })
+  })
+  await page.route("https://storage.example.com/task-preview.mp4", (route) =>
+    route.fulfill({
+      body: "isolated-video-boundary",
+      contentType: "video/mp4",
+    }),
+  )
+  await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
+  await page.getByRole("button", { name: "展开素材组", exact: true }).click()
+  await page.getByRole("button", { name: "查看素材", exact: true }).click()
+  await expect(page.getByText(/目标 VID：target-video-real/)).toBeVisible()
+  expect(previews).toBe(0)
+  expect(
+    api.requests.find((r) => r.path.endsWith("/materials"))?.query.get("limit"),
+  ).toBe("50")
+  await page.getByRole("button", { name: "预览原件", exact: true }).click()
+  await expect(
+    page.getByRole("heading", { name: "素材原件预览" }),
+  ).toBeVisible()
+  expect(previews).toBe(1)
+  await expect(page.locator("video")).toHaveAttribute(
+    "src",
+    "https://storage.example.com/task-preview.mp4",
+  )
+})
+
+for (const viewer of [true, false])
+  test(`任务页面403保留登录，viewer=${viewer}`, async ({ page }) => {
+    await boundary(page, { viewer, denied: true })
+    await page.goto(`/tenants/${T}/build-tasks?bc_id=${BC}`)
+    await expect(page.getByText(/当前角色无权执行此操作/).first()).toBeVisible()
+    await expect(
+      page.getByRole("link", { name: "新建搭建", exact: true }),
+    ).toHaveCount(0)
+    expect(
+      await page.evaluate(() => localStorage.getItem("access_token")),
+    ).toBe("build-test-token")
+  })
+
+test("viewer没有新建和恢复动作，仍可读取任务所有已知结果", async ({ page }) => {
+  await boundary(page, { viewer: true })
+  await page.goto(`/tenants/${T}/build-tasks?bc_id=${BC}`)
+  await expect(
+    page.getByRole("link", { name: "查看详情", exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("link", { name: "新建搭建", exact: true }),
+  ).toHaveCount(0)
+  await page.getByRole("link", { name: "查看详情", exact: true }).click()
+  await expect(page.getByTestId("count-ad-succeeded")).toHaveText("1")
+  await expect(
+    page.getByRole("button", { name: /重试失败|核查待核实/ }),
+  ).toHaveCount(0)
+})
+
+for (const width of [1440, 900, 390])
+  test(`任务工作区 ${width}px 表格有界滚动与键盘侧栏`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 })
+    await boundary(page, { count: 131 })
+    await page.goto(`/tenants/${T}/build-tasks?bc_id=${BC}`)
+    await expect(
+      page.getByRole("link", { name: "查看详情", exact: true }),
+    ).toHaveCount(50)
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true)
+    const box = page.locator('[data-slot="table-container"]').first()
+    expect(
+      await box.evaluate(
+        (e) =>
+          e.scrollHeight > e.clientHeight &&
+          e.clientHeight <= window.innerHeight * 0.61,
+      ),
+    ).toBe(true)
+    expect(
+      await page
+        .getByRole("columnheader", { name: "任务", exact: true })
+        .evaluate((e) => getComputedStyle(e).position),
+    ).toBe("sticky")
+    const screenshots = process.env.TASK_SCREENSHOT_DIR
+    if (screenshots)
+      await page.screenshot({
+        path: `${screenshots}/task-6-submission-list-${width}.png`,
+        fullPage: true,
+        animations: "disabled",
+      })
+    await page
+      .getByRole("link", { name: "查看详情", exact: true })
+      .first()
+      .click()
+    await expect(
+      page.getByRole("heading", { name: "任务 B0909-01", exact: true }),
+    ).toBeVisible()
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true)
+    await page.getByRole("button", { name: "展开素材组", exact: true }).focus()
+    await page.keyboard.press("Enter")
+    await expect(
+      page.getByRole("heading", { name: "真实剧目 · 素材组", exact: true }),
+    ).toBeVisible()
+    await page.keyboard.press("Escape")
+    await expect(
+      page.getByRole("button", { name: "展开素材组", exact: true }),
+    ).toBeFocused()
+    if (screenshots) {
+      await page.evaluate(() => window.scrollTo(0, 0))
+      await page.screenshot({
+        path: `${screenshots}/task-6-submission-detail-${width}.png`,
+        fullPage: true,
+        animations: "disabled",
+      })
+    }
+  })
+
+test("读取详情时切BC取消旧请求并到新BC列表，不带旧任务ID", async ({ page }) => {
+  const { BC2 } = await import("./utils/buildsBoundary"),
+    api = await boundary(page, { delayedUnits: true })
+  const failed: string[] = []
+  page.on("requestfailed", (r) => failed.push(r.url()))
+  await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
+  await expect
+    .poll(() => api.requests.some((r) => r.path.endsWith("/units")))
+    .toBe(true)
+  await page.getByRole("combobox", { name: "当前 BC", exact: true }).click()
+  await page.getByRole("option").filter({ hasText: "备用 BC" }).click()
+  await expect(page).toHaveURL(
+    (url) =>
+      url.pathname === `/tenants/${T}/build-tasks` &&
+      url.searchParams.get("bc_id") === BC2,
+  )
+  await expect
+    .poll(() => failed.some((url) => url.includes(`/submissions/${ID}/units`)))
+    .toBe(true)
+  api.releaseUnits()
+  await expect(
+    page.getByRole("heading", { name: "搭建任务", exact: true }),
+  ).toBeVisible()
+  expect(
+    api.requests
+      .filter((r) => r.path.endsWith("/submissions"))
+      .slice(-1)[0]
+      .query.get("bc_id"),
+  ).toBe(BC2)
+})
+
+test("首次无任务与筛选无结果使用不同空态", async ({ page }) => {
+  await boundary(page, { count: 0 })
+  await page.goto(`/tenants/${T}/build-tasks?bc_id=${BC}`)
+  await expect(page.getByText("还没有搭建任务", { exact: true })).toBeVisible()
+  await expect(page.getByRole("link", { name: "新建搭建" })).toBeVisible()
+  await page.getByRole("textbox", { name: "搜索任务" }).fill("不存在")
+  await page.getByRole("button", { name: "搜索", exact: true }).click()
+  await expect(
+    page.getByText("没有符合筛选的任务", { exact: true }),
+  ).toBeVisible()
+})
+
+test("异常深链更改筛选后刷新保留新的结果条件", async ({ page }) => {
+  const api = await boundary(page)
+  await page.goto(
+    `/tenants/${T}/build-tasks/${ID}?bc_id=${BC}&tab=issues&result=UNKNOWN`,
+  )
+  await page.getByRole("combobox", { name: "创建结果筛选" }).click()
+  await page.getByRole("option", { name: "确定失败", exact: true }).click()
+  await expect
+    .poll(() =>
+      api.requests
+        .filter((r) => r.path.endsWith("/steps"))
+        .slice(-1)[0]
+        ?.query.get("result"),
+    )
+    .toBe("FAILED")
+  await page.reload()
+  await expect(page.getByRole("combobox", { name: "创建结果筛选" })).toHaveText(
+    "确定失败",
+  )
+  expect(
+    api.requests
+      .filter((r) => r.path.endsWith("/steps"))
+      .slice(-1)[0]
+      ?.query.get("result"),
+  ).toBe("FAILED")
+})
+
+test("Campaign成功但Ad仍未知时组合保持待核实", async ({ page }) => {
+  await boundary(page)
+  await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
+  const row = page.getByRole("row").filter({ hasText: "真实Campaign" })
+  await expect(row.getByText("待核实", { exact: true })).toBeVisible()
+  await expect(row.getByText("已成功", { exact: true })).toHaveCount(0)
+  await expect(page.getByTestId("count-ad-unknown")).toHaveText("1")
+  await expect(row.getByText("campaign-real", { exact: true })).toBeVisible()
+})
+
+test("刷新失败保留已加载任务结果并标明读取失败", async ({ page }) => {
+  await boundary(page)
+  await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
+  await expect(page.getByText("真实Campaign", { exact: true })).toBeVisible()
+  await page.route("**/api/tenants/*/submissions/**", (route) =>
+    route.fulfill({ status: 503, json: { code: "temporarily_unavailable" } }),
+  )
+  await page.getByRole("button", { name: "刷新任务结果", exact: true }).click()
+  await expect(
+    page.getByText("请求未完成", { exact: true }).first(),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("heading", { name: "任务 B0909-01", exact: true }),
+  ).toBeVisible()
+  await expect(page.getByText("真实Campaign", { exact: true })).toBeVisible()
+  await expect(page.getByTestId("count-ad-succeeded")).toHaveText("1")
+})
