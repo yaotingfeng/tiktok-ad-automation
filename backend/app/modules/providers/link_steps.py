@@ -538,7 +538,12 @@ def _publish(
         session.rollback()
         return
     _authority(session, context, connection, work)
-    _verified(data, work, prep.config)
+    if connection.kind == "wangyan":
+        from app.modules.providers.wangyan_steps import verified_data
+
+        data = verified_data(data, work, prep.config, prep.application_id)
+    else:
+        _verified(data, work, prep.config)
     if not data.get("url"):
         raise _error("provider_result_unknown")
     key = link_reuse_key(
@@ -695,6 +700,7 @@ def run_link_item(
     """Run one request unit; rescheduling belongs to the transactional task layer."""
     token = uuid4()
     work: dict[str, Any] = {}
+    kind: str | None = None
     try:
         claimed = _claim_unit(session, context, item_id, token)
         if claimed is None:
@@ -703,6 +709,7 @@ def run_link_item(
         if work["stage"] == "invalid":
             raise _error("provider_state_invalid")
         item, prep, connection, _ = _load(session, context, item_id)
+        kind = connection.kind
         _authority(session, context, connection, work)
         stage = work["stage"]
         # Close snapshot transaction before the factory/HTTP call; no database
@@ -753,6 +760,31 @@ def run_link_item(
                     )
                     return
                 session.commit()
+            if kind == "wangyan":
+                from app.modules.providers.adapters.wangyan import WangyanClient
+                from app.modules.providers.wangyan_steps import advance, guard
+
+                if not isinstance(client, WangyanClient):
+                    raise _error("provider_state_invalid")
+                if stage != "search":
+                    data = advance(
+                        session,
+                        context,
+                        item_id,
+                        token,
+                        work,
+                        config,
+                        client,
+                        connection_id,
+                        application_id,
+                    )
+                    if data is not None:
+                        _publish(session, context, item_id, token, work, data)
+                    else:
+                        _finish_unit(session, context, item_id, token, work)
+                    return
+                guard(session, context, item_id, token, work)
+                session.commit()
             if stage == "search":
                 rows, cursor = _page(
                     client.search(raw_input.strip(), page=work["search_page"])
@@ -794,11 +826,7 @@ def run_link_item(
                     work["lookup_found"] = None
             else:
                 if kind != "jiashu":
-                    # Wangyan currently cannot prove full history/remote uniqueness.
-                    client.find_existing(
-                        work["drama"]["external_drama_id"], config, None
-                    )
-                    raise _error("lookup_incomplete")
+                    raise _error("provider_state_invalid")
                 if not isinstance(client, JiashuClient):
                     raise _error("provider_state_invalid")
                 channel_for = client.channel_for
@@ -937,6 +965,14 @@ def run_link_item(
             if code == "provider_scope_busy"
             else "failed"
         )
+        if (
+            kind == "wangyan"
+            and status == "blocked_auth"
+            and (work.get("active_effect") or work.get("uncertain_effect"))
+        ):
+            # A sent write keeps its read-only recovery entry live during denial.
+            # Every next HTTP still requires the original actor and credentials.
+            status = "result_unknown"
         # Persist only application-owned codes/text. No raw exception or response.
         _finish_unit(
             session,
