@@ -66,6 +66,64 @@ def measure(rows: int) -> dict[str, Any]:
                     "shared_hit_blocks": plan["Plan"]["Shared Hit Blocks"],
                     "plan": json.loads(encoded),
                 }
+        with engine.begin() as connection:
+            connection.execute(text("SET LOCAL plan_cache_mode = force_generic_plan"))
+            connection.exec_driver_sql("""PREPARE priority_probe(uuid,text) AS SELECT * FROM pending_dispatch
+            WHERE tenant_id=$1 AND published_at IS NULL AND available_at<=now()
+            AND task_name=$2 ORDER BY available_at,id LIMIT 1 FOR UPDATE SKIP LOCKED""")
+            # Both literals are controlled synthetic values, never user input.
+            plan = connection.exec_driver_sql(
+                f"EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) EXECUTE priority_probe('{tenant}','builds.expand_submission')"
+            ).scalar_one()[0]
+            assert plan["Plan"]["Actual Rows"] == 1
+            result["after_generic_bound_task"] = {
+                "execution_ms": plan["Execution Time"],
+                "shared_hit_blocks": plan["Plan"]["Shared Hit Blocks"],
+                "plan": json.loads(
+                    json.dumps(plan).replace(str(tenant), "<synthetic-tenant>")
+                ),
+            }
+            connection.exec_driver_sql("DEALLOCATE priority_probe")
+            connection.execute(text("SET LOCAL plan_cache_mode = auto"))
+            connection.exec_driver_sql("""PREPARE priority_probe_auto(uuid,text) AS SELECT * FROM pending_dispatch
+            WHERE tenant_id=$1 AND published_at IS NULL AND available_at<=now()
+            AND task_name=$2 ORDER BY available_at,id LIMIT 1 FOR UPDATE SKIP LOCKED""")
+            execute = (
+                f"EXECUTE priority_probe_auto('{tenant}','builds.expand_submission')"
+            )
+            for _ in range(10):
+                assert connection.exec_driver_sql(execute).first() is not None
+            plan = connection.exec_driver_sql(
+                "EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) " + execute
+            ).scalar_one()[0]
+            counters = connection.exec_driver_sql(
+                "SELECT generic_plans,custom_plans FROM pg_prepared_statements WHERE name='priority_probe_auto'"
+            ).one()
+            result["after_auto_bound_task"] = {
+                "execution_ms": plan["Execution Time"],
+                "shared_hit_blocks": plan["Plan"]["Shared Hit Blocks"],
+                "generic_plans": counters[0],
+                "custom_plans": counters[1],
+                "plan": json.loads(
+                    json.dumps(plan).replace(str(tenant), "<synthetic-tenant>")
+                ),
+            }
+            connection.exec_driver_sql("DEALLOCATE priority_probe_auto")
+            connection.execute(text("SET LOCAL plan_cache_mode = force_generic_plan"))
+            connection.exec_driver_sql("""PREPARE priority_probe_literal(uuid) AS SELECT * FROM pending_dispatch
+            WHERE tenant_id=$1 AND published_at IS NULL AND available_at<=now()
+            AND task_name='builds.expand_submission' ORDER BY available_at,id LIMIT 1 FOR UPDATE SKIP LOCKED""")
+            plan = connection.exec_driver_sql(
+                f"EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) EXECUTE priority_probe_literal('{tenant}')"
+            ).scalar_one()[0]
+            result["after_generic_literal_task"] = {
+                "execution_ms": plan["Execution Time"],
+                "shared_hit_blocks": plan["Plan"]["Shared Hit Blocks"],
+                "plan": json.loads(
+                    json.dumps(plan).replace(str(tenant), "<synthetic-tenant>")
+                ),
+            }
+            connection.exec_driver_sql("DEALLOCATE priority_probe_literal")
     result["complete"] = True
     return result
 
@@ -90,7 +148,13 @@ def main() -> None:
                     for field, value in result[key].items()
                     if field != "plan"
                 }
-                for key in ("before", "after")
+                for key in (
+                    "before",
+                    "after",
+                    "after_generic_bound_task",
+                    "after_auto_bound_task",
+                    "after_generic_literal_task",
+                )
             }
         ),
         flush=True,
