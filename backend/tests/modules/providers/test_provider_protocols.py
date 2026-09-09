@@ -218,7 +218,7 @@ def test_transport_failure_distinguishes_reads_from_unknown_writes(
     assert "raw-private-secret" not in str(error.value)
 
 
-def test_wangyan_cookie_login_search_and_unverified_contracts():
+def test_wangyan_cookie_login_and_search():
     seen = []
 
     def handle(request):
@@ -256,18 +256,6 @@ def test_wangyan_cookie_login_search_and_unverified_contracts():
         assert client.search("Moon", 1)["items"] == [
             {"external_drama_id": "drama", "title": "Moon", "language": "en"}
         ]
-        for method, args, expected in [
-            (client.find_existing, ("drama", {}, None), "lookup_incomplete"),
-            (client.read_link, ("remote",), "lookup_incomplete"),
-            (
-                client.create_step,
-                ("create", {"drama_id": "drama", "episode": 1}),
-                "lookup_incomplete",
-            ),
-        ]:
-            with pytest.raises(DomainError) as error:
-                method(*args)
-            assert error.value.code == expected
     assert len(seen) == 2
 
 

@@ -19,7 +19,7 @@ Offsets below are zero-based decoded Unicode character offsets in that exact bun
 | 31398 / 35187 | App selection uses package_name, name, and is_tt; applications are not globally identical or implicitly single-app. |
 | 93764 | Drama list uses page/page_size; its wider frontend protocol also reads a top-level response total. |
 | 122250 | `LinkAdvertModal` constructs the b/s/c prefix from drama_int_id/id/chapter_index; Minis mode retains `tt_minis_link` and appends the looked-up drama title to the campaign name. |
-| 128015 | Promotion-link list uses page/page_size, optional start/end from time_range, and top-level total. This does not prove omitted dates provide complete history or an exact-ID endpoint. |
+| 128015 | Promotion-link list uses page/page_size, optional start/end from time_range, and top-level total. The subsequently inspected id form and payload forwarding establish an exact-ID query; see the Wangyan supplement. |
 
 The old document's claim that a bundle had been verified was not used as fresh proof: the public bytes were retrieved and the relevant functions independently inspected. No business response has been marked live-verified.
 
@@ -73,7 +73,7 @@ Public frontend source confirms GET `/api/account/group/apps` with no explicit a
 
 GET `/api/distribute_admin/drama/list` sends explicit app, title, page, page_size=20. It normalizes only id/title/lang; id is the opaque external drama identity, int_id is a different numeric attribution/search identity. Search continues past a short nonempty page until an empty page; malformed/non-array data is rejected. This search completeness does not authorize link creation.
 
-The old raw link method is GET `/api/distribute_admin/promote/link/list` with app/page/page_size/start/end and defaults to only the preceding 30 days. Public source confirms pagination/total and a date filter, but neither date omission nor a clear-all UI proves backend full-history coverage. No exact remote-ID lookup contract is established. Therefore `find_existing` and `read_link` currently raise lookup_incomplete, and `create_step` also raises lookup_incomplete before any HTTP request. A frontend boolean cannot bypass this gate. The known future create transport is POST `/api/distribute_admin/promote/link/create` with app/drama_id/chapter_index/promote_platform; it is not executed by this revision.
+The adapter now implements explicit-date, total-checked promotion history, exact-ID read-back and a single create POST. The earlier conclusion that the 30-day CLI default implied no implementable complete-history query or exact-ID filter was incomplete. See [Wangyan link protocol supplement](wangyan-link-protocol.md) for pinned source offsets, strict pagination and configuration contracts, stable operation-name support, unknown-write handling, and the remaining live release acceptance boundary. This implementation does not establish server snapshot isolation or permit replay of an unknown write.
 
 `render_attribution(row,title)` preferentially retains a nonempty remote campaign_name. Otherwise the retrieved public source establishes `{b<drama_int_id>/s<id>/c<chapter_index>}-<title>` for the inspected Minis renderer. Missing/invalid identities or title raise attribution_contract_unverified; no generic fallback prefix is manufactured. The title must come from the identified drama lookup; merely calling this normalizer does not prove application permission or complete link history and cannot enable creation.
 
