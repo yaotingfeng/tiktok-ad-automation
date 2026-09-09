@@ -579,3 +579,51 @@ def test_group_materials_page_returns_only_actual_target_mapping(
         tail.items[0].position > item.position
         and tail.items[0].material_id != item.material_id
     )
+
+
+def test_unit_result_includes_unknown_ad_after_campaign_success(
+    session, context, frozen
+):
+    from sqlmodel import select
+
+    from app.modules.builds.execution_models import ExecutionStep
+
+    identity = expanded(session, context, frozen)
+    campaign = session.exec(
+        select(ExecutionStep).where(ExecutionStep.kind == "CAMPAIGN")
+    ).first()
+    campaign.status = "SUCCEEDED"
+    campaign.remote_id = "known-campaign"
+    session.add(campaign)
+    ad = session.exec(
+        select(ExecutionStep).where(
+            ExecutionStep.kind == "AD", ExecutionStep.unit_id == campaign.unit_id
+        )
+    ).first()
+    ad.status = "UNKNOWN"
+    session.add(ad)
+    session.flush()
+    units = submissions.get_submission_units(
+        session, context=context, submission_id=identity
+    )
+    unit = next(row for row in units.items if row.unit_id == campaign.unit_id)
+    assert unit.result_status == "NEEDS_REVIEW"
+    assert unit.campaign_step.remote_id == "known-campaign"
+
+
+def test_unit_success_without_remote_id_is_not_completed(session, context, frozen):
+    from sqlmodel import select
+
+    from app.modules.builds.execution_models import ExecutionStep
+
+    identity = expanded(session, context, frozen)
+    ad = session.exec(select(ExecutionStep).where(ExecutionStep.kind == "AD")).first()
+    ad.status = "SUCCEEDED"
+    session.add(ad)
+    session.flush()
+    rows = submissions.get_submission_units(
+        session, context=context, submission_id=identity
+    ).items
+    assert (
+        next(u for u in rows if u.unit_id == ad.unit_id).result_status == "NEEDS_REVIEW"
+    )

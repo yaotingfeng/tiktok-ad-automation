@@ -24,7 +24,12 @@ from app.modules.builds.execution_schemas import (
     SubmissionMetadata,
     SubmissionUnitPublic,
 )
-from app.modules.builds.submissions import _page_scope, authorize, submission_row
+from app.modules.builds.submissions import (
+    _page_scope,
+    aggregate_status,
+    authorize,
+    submission_row,
+)
 
 StatusGroup = Literal["all", "active", "attention", "completed"]
 METADATA = """
@@ -491,13 +496,15 @@ def enrich_units(
 ), counts AS (
  SELECT e.unit_id,count(*) FILTER(WHERE e.kind='ADGROUP' AND nullif(trim(e.remote_id),'') IS NOT NULL) succeeded_group_count,
  count(*) FILTER(WHERE e.kind='AD' AND nullif(trim(e.remote_id),'') IS NOT NULL) succeeded_ad_count,
- count(*) FILTER(WHERE e.kind='MATERIAL' AND e.status='SUCCEEDED') ready_material_count
+ count(*) FILTER(WHERE e.kind='MATERIAL' AND e.status='SUCCEEDED') ready_material_count,
+ array_agg(DISTINCT e.status) states,bool_or(e.mismatch) mismatch,
+ bool_or(e.kind IN ('CAMPAIGN','ADGROUP','AD') AND e.status='SUCCEEDED' AND nullif(trim(e.remote_id),'') IS NULL) unverified_success
  FROM execution_step e JOIN page u ON e.unit_id=u.id WHERE e.tenant_id=:tenant AND e.submission_id=:submission GROUP BY e.unit_id
 ), materials AS (
  SELECT u.id unit_id,count(m.material_id) material_count FROM page u LEFT JOIN preview_group_material m ON m.tenant_id=u.tenant_id AND m.preview_id=u.preview_id AND m.drama_id=u.drama_id GROUP BY u.id
 )
  SELECT u.id,ac.name account_name,u.group_count,u.ad_count,coalesce(c.succeeded_group_count,0) succeeded_group_count,coalesce(c.succeeded_ad_count,0) succeeded_ad_count,
- coalesce(c.ready_material_count,0) ready_material_count,m.material_count,"""
+ coalesce(c.ready_material_count,0) ready_material_count,m.material_count,c.states,c.mismatch,c.unverified_success,"""
                 + STEP_JSON
                 + """ step FROM page u
  LEFT JOIN counts c ON c.unit_id=u.id LEFT JOIN materials m ON m.unit_id=u.id
@@ -528,6 +535,16 @@ def enrich_units(
         ]:
             setattr(item, key, row[key])
         item.campaign_step = step_public(row)
+        states = set(row["states"] or [])
+        if row["unverified_success"]:
+            states.add("UNKNOWN")
+        if row["mismatch"]:
+            states.add("MISMATCH")
+        if not item.expanded:
+            states.add("PENDING" if states else "QUEUED")
+        item.result_status = (
+            "EXCLUDED" if item.disposition == "EXCLUDED" else aggregate_status(states)
+        )
 
 
 def enrich_steps(

@@ -110,6 +110,7 @@ class StepPublic(BaseModel):
 
 
 class SubmissionUnitPublic(BaseModel):
+    result_status: str | None = None
     account_name: str | None = None
     group_count: int = 0
     ad_count: int = 0
