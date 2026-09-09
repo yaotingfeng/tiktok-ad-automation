@@ -5,7 +5,9 @@ from app.modules.accounts.capability_router import router as capability_router
 from app.modules.accounts.router import router as accounts_router
 from app.modules.builds.api import router as builds_router
 from app.modules.builds.submission_api import router as submission_router
-from app.modules.builds.submission_catalog_api import router as submission_catalog_router
+from app.modules.builds.submission_catalog_api import (
+    router as submission_catalog_router,
+)
 from app.modules.materials.router import router as materials_router
 from app.modules.providers.router import router as providers_router
 from app.modules.strategies.api import router as strategies_router
