@@ -2007,6 +2007,50 @@ export type Recovery = {
 };
 
 /**
+ * RecoveryReceipt
+ */
+export type RecoveryReceipt = {
+    /**
+     * Recovery Id
+     */
+    recovery_id: string;
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Submission Id
+     */
+    submission_id: string;
+    /**
+     * Kind
+     */
+    kind: 'RETRY' | 'RECONCILE';
+    /**
+     * State
+     */
+    state: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+    /**
+     * Scheduled Count
+     */
+    scheduled_count: number;
+    /**
+     * Reason Code
+     */
+    reason_code?: string | null;
+};
+
+/**
+ * RecoveryRequestInput
+ */
+export type RecoveryRequestInput = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+};
+
+/**
  * ResolveRequest
  */
 export type ResolveRequest = {
@@ -6842,3 +6886,139 @@ export type buildsGetSubmissionMaterialsResponses = {
 };
 
 export type buildsGetSubmissionMaterialsResponse = buildsGetSubmissionMaterialsResponses[keyof buildsGetSubmissionMaterialsResponses];
+
+export type buildsRetrySubmissionData = {
+    body: RecoveryRequestInput;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Submission Id
+         */
+        submission_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/submissions/{submission_id}/retry';
+};
+
+export type buildsRetrySubmissionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsRetrySubmissionError = buildsRetrySubmissionErrors[keyof buildsRetrySubmissionErrors];
+
+export type buildsRetrySubmissionResponses = {
+    /**
+     * Successful Response
+     */
+    202: RecoveryReceipt;
+};
+
+export type buildsRetrySubmissionResponse = buildsRetrySubmissionResponses[keyof buildsRetrySubmissionResponses];
+
+export type buildsReconcileSubmissionData = {
+    body: RecoveryRequestInput;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Submission Id
+         */
+        submission_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/submissions/{submission_id}/reconcile';
+};
+
+export type buildsReconcileSubmissionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsReconcileSubmissionError = buildsReconcileSubmissionErrors[keyof buildsReconcileSubmissionErrors];
+
+export type buildsReconcileSubmissionResponses = {
+    /**
+     * Successful Response
+     */
+    202: RecoveryReceipt;
+};
+
+export type buildsReconcileSubmissionResponse = buildsReconcileSubmissionResponses[keyof buildsReconcileSubmissionResponses];
+
+export type buildsSavedSubmissionRecoveryData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Request Id
+         */
+        request_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/submission-recovery-requests/{request_id}';
+};
+
+export type buildsSavedSubmissionRecoveryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsSavedSubmissionRecoveryError = buildsSavedSubmissionRecoveryErrors[keyof buildsSavedSubmissionRecoveryErrors];
+
+export type buildsSavedSubmissionRecoveryResponses = {
+    /**
+     * Successful Response
+     */
+    200: RecoveryReceipt;
+};
+
+export type buildsSavedSubmissionRecoveryResponse = buildsSavedSubmissionRecoveryResponses[keyof buildsSavedSubmissionRecoveryResponses];
+
+export type buildsGetSubmissionRecoveryData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Recovery Id
+         */
+        recovery_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/submission-recoveries/{recovery_id}';
+};
+
+export type buildsGetSubmissionRecoveryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsGetSubmissionRecoveryError = buildsGetSubmissionRecoveryErrors[keyof buildsGetSubmissionRecoveryErrors];
+
+export type buildsGetSubmissionRecoveryResponses = {
+    /**
+     * Successful Response
+     */
+    200: RecoveryReceipt;
+};
+
+export type buildsGetSubmissionRecoveryResponse = buildsGetSubmissionRecoveryResponses[keyof buildsGetSubmissionRecoveryResponses];

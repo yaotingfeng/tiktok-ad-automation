@@ -4,6 +4,7 @@ from app.api.routes import integrations, login, users, utils
 from app.modules.accounts.capability_router import router as capability_router
 from app.modules.accounts.router import router as accounts_router
 from app.modules.builds.api import router as builds_router
+from app.modules.builds.recovery_api import router as recovery_router
 from app.modules.builds.submission_api import router as submission_router
 from app.modules.builds.submission_catalog_api import (
     router as submission_catalog_router,
@@ -27,3 +28,4 @@ api_router.include_router(strategies_router)
 api_router.include_router(builds_router)
 api_router.include_router(submission_router)
 api_router.include_router(submission_catalog_router)
+api_router.include_router(recovery_router)
