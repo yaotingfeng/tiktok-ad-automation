@@ -517,7 +517,9 @@ for (const role of ["viewer", "operator"] as const)
     ).toBe(token)
     await page.getByRole("link", { name: "广告搭建", exact: true }).click()
     await expect(page).toHaveURL(`/tenants/${A}/builds/new`)
-    await expect(page.getByText("尚未连接 TikTok BC")).toBeVisible()
+    await expect(
+      page.getByRole("heading", { name: "尚未连接 TikTok BC", exact: true }),
+    ).toBeVisible()
     if (role === "viewer")
       await expect(page.getByRole("button", { name: "新建搭建" })).toHaveCount(
         0,
