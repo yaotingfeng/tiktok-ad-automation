@@ -9,14 +9,14 @@ export const connectionStates: Record<string, string> = {
   pending: "待验证",
   active: "可用",
   verifying: "正在验证",
-  reauth_required: "需要重新认证",
+  reauth_required: "等待自动恢复",
   error: "验证异常",
   disabled: "已停用",
 }
 export const resultStates: Record<string, string> = {
   pending: "处理中",
   needs_resolution: "待选候选",
-  blocked_auth: "连接需要重新认证",
+  blocked_auth: "连接或权限需处理",
   config_conflict: "配置冲突",
   retryable_error: "暂时失败",
   result_unknown: "结果待核实",
@@ -25,7 +25,10 @@ export const resultStates: Record<string, string> = {
 }
 const errors: Record<string, string> = {
   provider_auth_expired: "版权方认证已过期",
-  provider_session_expired: "版权方认证已过期",
+  provider_session_expired: "版权方会话已过期，系统将自动恢复后继续。",
+  provider_session_refreshing: "正在自动恢复版权方连接，完成后继续当前任务。",
+  provider_session_refresh_failed:
+    "版权方连接暂未恢复，请稍后检查网络或联系管理员。",
   provider_application_forbidden:
     "该账号无权访问此应用，请联系管理员检查应用权限。",
   connection_unavailable: "连接尚不可用，请联系管理员检查验证状态。",

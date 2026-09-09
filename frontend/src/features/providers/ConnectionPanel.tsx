@@ -75,7 +75,9 @@ export function ConnectionPanel({
       status: statusFilter === "all" ? undefined : (statusFilter as "active"),
     }),
     refetchInterval: (q) =>
-      q.state.data?.items.some((row) => row.status === "verifying")
+      q.state.data?.items.some((row) =>
+        ["verifying", "reauth_required"].includes(row.status),
+      )
         ? 3000
         : false,
   })
@@ -185,7 +187,7 @@ export function ConnectionPanel({
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           {manage
-            ? "保存凭据后需显式验证；浏览不会重新登录版权方。"
+            ? "首次保存后验证连接；取链时会自动恢复过期会话。账号或密码变更后请更新凭据。"
             : "连接凭据由租户管理员维护。"}
         </p>
         {manage && <Button onClick={() => setEditing("new")}>新增连接</Button>}
@@ -575,7 +577,8 @@ export function Applications({
               }) => (
                 <Button
                   disabled={
-                    !row.original.available || connection.status !== "active"
+                    !row.original.available ||
+                    !["active", "reauth_required"].includes(connection.status)
                   }
                   onClick={() => onSelect(row.original)}
                 >

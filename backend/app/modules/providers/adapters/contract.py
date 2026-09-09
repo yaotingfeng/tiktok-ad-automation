@@ -69,10 +69,14 @@ def request_json(
         if not isinstance(body, dict):
             raise ValueError
         return body, response
-    except httpx.HTTPError, ValueError:
+    except httpx.HTTPError:
         raise failure(
             "provider_result_unknown" if write else "provider_unavailable",
             retryable=not write,
+        ) from None
+    except ValueError:
+        raise failure(
+            "provider_result_unknown" if write else "provider_schema_unsupported"
         ) from None
 
 

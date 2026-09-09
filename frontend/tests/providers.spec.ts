@@ -168,8 +168,8 @@ async function boundary(
       if (options.verifyFails)
         return reply(
           {
-            code: "provider_session_expired",
-            message: "版权方认证已过期",
+            code: "provider_auth_failed",
+            message: "版权方认证失败，请检查账号与密码。",
             retryable: false,
           },
           409,
@@ -362,7 +362,9 @@ test("连接保存为待验证，显式验证失败清空密码并保留名称",
   await sheet.getByRole("button", { name: "保存并验证" }).click()
   await expect(sheet.getByLabel("密码", { exact: true })).toHaveValue("")
   await expect(sheet.getByLabel("连接名称")).toHaveValue("新网眼连接")
-  await expect(sheet.getByText("版权方认证已过期")).toBeVisible()
+  await expect(
+    sheet.getByText("版权方认证失败，请检查账号与密码。"),
+  ).toBeVisible()
   expect(
     requests.filter((r) => r.method === "POST").map((r) => r.path),
   ).toEqual([
@@ -603,7 +605,7 @@ test("未知结果只刷新已记录进度，认证异常不注销平台登录",
     .getByRole("button", { name: "查看详情" })
     .click()
   await expect(
-    page.getByText("请联系租户管理员重新认证当前连接。"),
+    page.getByText("请联系租户管理员检查账号凭据、应用配置或操作权限。"),
   ).toBeVisible()
   await expect(
     page.getByRole("button", { name: /重试|重新创建|批量|更新认证/ }),
@@ -780,4 +782,33 @@ test("停用连接需要明确确认，取消保留正在编辑的草稿", async
   expect(
     requests.filter((r) => r.method === "PATCH").map((r) => r.body),
   ).toEqual([{ status: "disabled" }])
+})
+
+test("过期会话显示自动恢复且不会要求用户重新登录", async ({ page }) => {
+  const { requests } = await boundary(page)
+  await page.route(
+    "**/api/tenants/*/providers/connections?*",
+    async (route) => {
+      await route.fulfill({
+        json: {
+          items: [
+            {
+              ...connections[0],
+              status: "reauth_required",
+              error_code: "provider_session_refreshing",
+            },
+          ],
+          next_cursor: null,
+        },
+      })
+    },
+  )
+  await page.goto(`/tenants/${tenantId}/providers`)
+  await expect(
+    page.locator("tbody").getByText("等待自动恢复", { exact: true }),
+  ).toBeVisible()
+  await expect(page.getByText(/取链时会自动恢复过期会话/)).toBeVisible()
+  expect(requests.filter((request) => request.method === "POST")).toHaveLength(
+    0,
+  )
 })

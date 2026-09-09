@@ -296,7 +296,7 @@ export function LinkResultTable({ taskId }: { taskId: string }) {
               value={detail.protected_base}
             />
             {detail.status === "blocked_auth" && (
-              <p>请联系租户管理员重新认证当前连接。</p>
+              <p>请联系租户管理员检查账号凭据、应用配置或操作权限。</p>
             )}
             {detail.status === "result_unknown" && (
               <p>

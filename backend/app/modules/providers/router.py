@@ -373,7 +373,7 @@ def list_applications(
                 external_id=row.external_id,
                 name=row.name,
                 tiktok_minis_id=row.tiktok_minis_id,
-                available=connection.status == "active"
+                available=connection.status in {"active", "reauth_required"}
                 and connection.verification_token is not None
                 and row.channel_config.get("verification_token")
                 == str(connection.verification_token),

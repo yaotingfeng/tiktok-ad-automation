@@ -47,7 +47,11 @@ ERROR_MESSAGES = {
     "provider_result_unknown": "远端结果待核实，不会自动重放未知写入",
     "provider_unavailable": "版权方暂不可用，将从当前步骤重试",
     "provider_scope_busy": "该远端渠道正在处理另一项请求",
-    "provider_session_expired": "版权方连接需要重新认证",
+    "provider_session_expired": "版权方会话已过期，正在自动恢复",
+    "provider_session_refreshing": "正在自动恢复版权方连接，随后继续当前步骤",
+    "provider_auth_failed": "版权方账号或密码不可用，请管理员更新连接凭据",
+    "provider_session_refresh_failed": "版权方连接恢复暂未成功，请检查连接状态",
+    "connection_unavailable": "版权方连接不可用，请检查连接状态",
     "provider_application_forbidden": "该连接不能访问当前应用",
     "provider_credentials_changed": "连接认证已变化，请重新确认当前操作",
     "provider_schema_unsupported": "版权方返回结构尚未核实",
@@ -201,8 +205,13 @@ def _authority(
         tenant_id=context.tenant_id,
         action="provider_write",
     )
-    if connection.status != "active":
-        raise _error("provider_session_expired")
+    if connection.status not in {"active", "reauth_required"}:
+        raise _error(
+            connection.error_code
+            if connection.error_code
+            in {"provider_auth_failed", "provider_session_refresh_failed"}
+            else "connection_unavailable"
+        )
     if work.get(
         "credential_version", connection.credential_version
     ) != connection.credential_version or work.get(
@@ -653,6 +662,7 @@ def _effect_request(
             "provider_result_unknown",
             "provider_unavailable",
             "provider_schema_unsupported",
+            "provider_session_expired",
         }
         _persist_effect(
             session,
@@ -954,20 +964,32 @@ def run_link_item(
                 "provider_session_expired",
                 "provider_application_forbidden",
                 "provider_credentials_changed",
+                "provider_auth_failed",
+                "provider_session_refresh_failed",
+                "connection_unavailable",
             }
             else "config_conflict"
             if code in {"config_conflict", "config_unverifiable"}
             else "result_unknown"
             if code in {"provider_result_unknown", "provider_state_invalid"}
             else "retryable_error"
-            if code == "provider_unavailable"
+            if code in {"provider_unavailable", "provider_session_refreshing"}
             else "pending"
             if code == "provider_scope_busy"
             else "failed"
         )
         if (
             kind == "wangyan"
-            and code not in {"provider_rejected", "config_conflict"}
+            and code
+            not in {
+                "provider_rejected",
+                "config_conflict",
+                "provider_auth_failed",
+                "provider_session_refresh_failed",
+                "connection_unavailable",
+                "provider_application_forbidden",
+                "provider_credentials_changed",
+            }
             and (
                 work.get("active_effect")
                 or work.get("uncertain_effect")

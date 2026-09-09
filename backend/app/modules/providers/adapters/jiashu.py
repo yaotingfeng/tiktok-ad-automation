@@ -100,7 +100,7 @@ class JiashuClient:
             )
         return body["data"]
 
-    def discover_applications(self) -> list[JsonDict]:
+    def application_list(self) -> list[JsonDict]:
         rows = self.post("/Oversea/App/getAppSwitchList", {"type": 1}, discover=True)
         if (
             not isinstance(rows, list)
@@ -108,30 +108,38 @@ class JiashuClient:
             or any(not isinstance(row, dict) for row in rows)
         ):
             raise failure("provider_application_discovery_unverified")
-        result = []
-        seen = set()
+        result: list[JsonDict] = []
+        seen: set[str] = set()
         for row in rows:
             app_id = external_id(row.get("appid"))
             if app_id in seen:
                 raise failure("provider_schema_unsupported")
             seen.add(app_id)
-            app = JiashuClient(self.http, session=self.session, application_id=app_id)
-            options = app.post(PREFIX + "getOptions", {"customer_id": ""})
-            prefix = (
-                options.get("channel_prefix") if isinstance(options, dict) else None
-            )
-            if not isinstance(prefix, str) or not prefix or prefix == "_":
-                # No history-derived or old-account fallback prefix.
-                raise failure("provider_channel_prefix_missing")
             result.append(
                 {
                     "external_id": app_id,
                     "name": string(row.get("name")),
-                    "channel_config": {"channel_prefix": prefix},
+                    "channel_config": {},
                     "tiktok_minis_id": None,
                 }
             )
         return result
+
+    def application_options(self, application_id: str) -> JsonDict:
+        app = JiashuClient(
+            self.http, session=self.session, application_id=application_id
+        )
+        options = app.post(PREFIX + "getOptions", {"customer_id": ""})
+        prefix = options.get("channel_prefix") if isinstance(options, dict) else None
+        if not isinstance(prefix, str) or not prefix or prefix == "_":
+            raise failure("provider_channel_prefix_missing")
+        return {"channel_prefix": prefix}
+
+    def discover_applications(self) -> list[JsonDict]:
+        rows = self.application_list()
+        for row in rows:
+            row["channel_config"] = self.application_options(row["external_id"])
+        return rows
 
     def search(self, title: str, page: int) -> JsonDict:
         page = positive(page)

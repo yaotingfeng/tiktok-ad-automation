@@ -239,7 +239,7 @@ def test_session_expiry_marks_only_current_connection_without_retry(connections)
             transport=httpx.MockTransport(expired),
         ) as scope:
             scope.client.search("Moon", 1)
-    assert error.value.code == "provider_session_expired" and len(requests) == 1
+    assert error.value.code == "provider_session_refreshing" and len(requests) == 1
     with Session(engine) as session:
         assert session.get(ProviderConnection, ids[0]).status == "reauth_required"
         assert session.get(ProviderConnection, ids[1]).status == "active"

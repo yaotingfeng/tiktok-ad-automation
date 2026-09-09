@@ -23,7 +23,11 @@ from app.modules.providers.link_steps import (
     _utc,
     run_link_item,
 )
-from app.modules.providers.models import LinkPreparation, LinkPreparationItem
+from app.modules.providers.models import (
+    LinkPreparation,
+    LinkPreparationItem,
+    ProviderSessionRefresh,
+)
 
 HARD_LIMIT_SECONDS = 45
 WATCHDOG_SECONDS = CLAIM_SECONDS + 5
@@ -184,7 +188,18 @@ def process_item(
             rounds = min(work.get("retry_round", 0) + 1, 8) if retry else 0
             work["retry_round"] = rounds
             item.resolved = {**item.resolved, "_work": work}
-            delay = min(300, 5 * 2**rounds) if retry else 0
+            delay: float = min(300, 5 * 2**rounds) if retry else 0
+            if item.resolved.get("error_code") == "provider_session_refreshing":
+                # Connection driver owns its persisted network backoff. Successful
+                # login/discovery pages should not exponentially delay each other.
+                work["retry_round"] = 0
+                item.resolved = {**item.resolved, "_work": work}
+                delay = 5
+                refresh = session.get(ProviderSessionRefresh, prep.connection_id)
+                if refresh and refresh.tenant_id == tenant_id and refresh.due_at:
+                    delay = max(
+                        delay, (refresh.due_at - datetime.now(UTC)).total_seconds()
+                    )
             queue_item(
                 session,
                 item,

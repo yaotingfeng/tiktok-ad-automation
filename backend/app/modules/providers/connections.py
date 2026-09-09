@@ -1,8 +1,8 @@
 """Tenant-bound encrypted connections and independently owned provider sessions.
 
 Verification owns short database transactions and never holds one over HTTP.
-Network failures require explicit verification; no cross-account fallback or
-implicit replay of a provider write is permitted.
+Session renewal is driven by bounded durable business continuations; no cross-
+account fallback or implicit replay of a provider write is permitted.
 """
 
 from collections.abc import Iterator
@@ -149,6 +149,7 @@ def verify_connection(
             now,
         )
         row.error_code = None
+    logged_in = False
     try:
         with httpx.Client(
             transport=transport, trust_env=False, follow_redirects=False, timeout=30
@@ -159,12 +160,14 @@ def verify_connection(
                     username=credentials["username"],
                     password=credentials["password"],
                 )
+                logged_in = True
                 applications = client.discover_applications()
                 credentials["session"] = client.session
             else:
                 other = WangyanClient.login(
                     http, email=credentials["email"], password=credentials["password"]
                 )
+                logged_in = True
                 applications = other.discover_applications()
                 credentials["token"] = other.token
         with Session(database_engine) as session, session.begin():
@@ -222,6 +225,8 @@ def verify_connection(
             )
     except Exception as error:
         code = error.code if isinstance(error, DomainError) else "provider_unavailable"
+        if code in {"provider_session_expired", "provider_rejected"} and not logged_in:
+            code = "provider_auth_failed"
         with Session(database_engine) as session, session.begin():
             row = _connection(session, context, connection_id, lock=True)
             if (
@@ -229,17 +234,12 @@ def verify_connection(
                 and row.credential_version == version
                 and row.status == "verifying"
             ):
-                row.status = (
-                    "reauth_required"
-                    if code
-                    in {"provider_session_expired", "provider_application_forbidden"}
-                    else "error"
-                )
+                row.status = "error"
                 row.error_code = code
                 row.verification_token = None
                 row.verifying_started_at = None
         if isinstance(error, DomainError):
-            raise
+            raise failure(code, retryable=error.retryable) from None
         raise failure("provider_unavailable", retryable=True) from None
 
 
@@ -255,6 +255,27 @@ def open_provider_session(
 ) -> Iterator[ProviderSession]:
     if action not in {"read", "provider_write"}:
         raise failure("provider_request_invalid")
+    from .session_refresh import advance_session_refresh, mark_expired
+
+    # Release this snapshot before the refresh driver opens its short claim txn.
+    with Session(database_engine) as snapshot:
+        require_tenant(
+            snapshot,
+            actor_id=context.actor_id,
+            tenant_id=context.tenant_id,
+            action=action,
+        )
+        pending = (
+            _connection(snapshot, context, connection_id).status == "reauth_required"
+        )
+    if pending:
+        advance_session_refresh(
+            database_engine=database_engine,
+            context=context,
+            connection_id=connection_id,
+            action=action,
+            transport=transport,
+        )
     with Session(database_engine) as session:
         require_tenant(
             session,
@@ -280,6 +301,7 @@ def open_provider_session(
             tenant_id=context.tenant_id, ciphertext=row.encrypted_credentials
         )
         kind, version, claim = row.kind, row.credential_version, row.verification_token
+        ciphertext = row.encrypted_credentials
         prefix = app.channel_config.get("channel_prefix", "")
     try:
         with httpx.Client(
@@ -305,12 +327,13 @@ def open_provider_session(
             )
     except DomainError as error:
         if error.code == "provider_session_expired":
-            with Session(database_engine) as session, session.begin():
-                row = _connection(session, context, connection_id, lock=True)
-                if (
-                    row.credential_version == version
-                    and row.verification_token == claim
-                    and row.status == "active"
-                ):
-                    row.status, row.error_code = "reauth_required", error.code
+            mark_expired(
+                database_engine=database_engine,
+                context=context,
+                connection_id=connection_id,
+                version=version,
+                verification=claim,
+                ciphertext=ciphertext,
+            )
+            raise failure("provider_session_refreshing", retryable=True) from None
         raise

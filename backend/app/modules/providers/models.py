@@ -335,3 +335,50 @@ class ProviderEffect(SQLModel, table=True):
     result: dict[str, Any] = Field(
         default_factory=dict, sa_column=Column(JSONB, nullable=False)
     )
+
+
+class ProviderSessionRefresh(SQLModel, table=True):
+    """One fenced refresh per connection; candidate session remains encrypted."""
+
+    __tablename__ = "provider_session_refresh"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "connection_id"],
+            ["provider_connection.tenant_id", "provider_connection.id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "phase IN ('login','applications','options','complete','failed')",
+            name="ck_provider_refresh_phase",
+        ),
+        CheckConstraint(
+            "attempts >= 0 AND login_attempts >= 0 AND option_index >= 0 AND cooldown_rounds >= 0",
+            name="ck_provider_refresh_counters",
+        ),
+    )
+    connection_id: UUID = Field(primary_key=True)
+    tenant_id: UUID = Field(index=True)
+    credential_version: int
+    verification_token: UUID
+    phase: str = "login"
+    claim_token: UUID | None = None
+    claimed_until: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True))
+    )
+    due_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True))
+    )
+    window_started_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False)
+    )
+    cooldown_rounds: int = 0
+    unavailable_since: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True))
+    )
+    attempts: int = 0
+    login_attempts: int = 0
+    option_index: int = 0
+    candidate_ciphertext: str | None = Field(default=None, repr=False, exclude=True)
+    applications: list[dict[str, Any]] = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False)
+    )
