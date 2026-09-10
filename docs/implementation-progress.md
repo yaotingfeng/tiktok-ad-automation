@@ -2,6 +2,8 @@
 
 ## 当前状态
 
+2026-09-10 视觉调整：用户确认后已按官方 dashboard-01 统一中性色主题、288px inset侧栏、16px顶栏标题、自适应内容区及单边框列表，代码 `eb613a4`。原有310项workspace回归、新增5项几何回归及生产构建通过；实际8011应用已更新并核对标题、24px边距与菜单跳转。[实施计划](superpowers/plans/2026-09-10-shadcn-official-alignment.md)与[验收记录](validation/2026-09-10-official-ui.md)覆盖本轮变更，以下保留业务功能交付历史。
+
 2026-09-10：普通账号密码登录、邮箱移除和租户版权方自动续登已交付；运行时使用独立Python协议适配器，不调用网眼/嘉书CLI或共享其账号文件。账号身份保留迁移、自动续登和本地浏览器证据见[账号与续登验收](validation/2026-09-10-account-session-integration.md)，该基线 `a176fd8` 的 [CI 34385153117](https://github.com/yaotingfeng/tiktok-ad-automation/actions/runs/34385153117) 七组通过。
 
 本轮继续实现[独立R2上传计划](superpowers/plans/2026-09-10-r2-batch-video-upload-plan.md)：Task1～7代码已形成，Task8已具备离线浏览器、完整业务链、10k/20k元数据和1,000文件故障验收；最终集成回归与本地更新记录在下节。真实R2/TikTok、CORS、当前媒体域名、生产prefork和日吞吐仍按[运行手册](runbooks/r2-video-upload.md)验收，新导入、自动清理默认均关闭。
