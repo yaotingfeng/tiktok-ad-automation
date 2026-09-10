@@ -204,22 +204,36 @@ def _evaluate(
 
     def blocked(reason: str) -> dict[str, Any]:
         if enqueue:
-            parent = db.get(IngestSession, row.session_id)
-            assert parent is not None
-            db.add(
-                AuditEvent(
-                    tenant_id=obj.tenant_id,
-                    actor_id=parent.actor_id,
-                    action="materials.abandonment_blocked",
-                    target_id=str(obj.id),
-                    details={
-                        "object_id": str(obj.id),
-                        "generation": obj.generation,
-                        "reason": reason,
-                        "last_progress_at": progress.isoformat(),
-                    },
+            details = {
+                "object_id": str(obj.id),
+                "generation": obj.generation,
+                "reason": reason,
+                "last_progress_at": progress.isoformat(),
+            }
+            # All writers hold the same object lock. Repeated maintenance passes
+            # must not grow an unchanged unknown-result alert without bound.
+            existing_alert = db.exec(
+                select(col(AuditEvent.id))
+                .where(
+                    col(AuditEvent.tenant_id) == obj.tenant_id,
+                    col(AuditEvent.action) == "materials.abandonment_blocked",
+                    col(AuditEvent.target_id) == str(obj.id),
+                    col(AuditEvent.details).contains(details),
                 )
-            )
+                .limit(1)
+            ).first()
+            if existing_alert is None:
+                parent = db.get(IngestSession, row.session_id)
+                assert parent is not None
+                db.add(
+                    AuditEvent(
+                        tenant_id=obj.tenant_id,
+                        actor_id=parent.actor_id,
+                        action="materials.abandonment_blocked",
+                        target_id=str(obj.id),
+                        details=details,
+                    )
+                )
         return {**result, "reason": reason}
 
     if obj.error_code in TRANSPORT_UNKNOWN:

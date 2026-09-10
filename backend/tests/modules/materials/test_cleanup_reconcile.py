@@ -395,3 +395,63 @@ def test_stale_generation_is_reported_and_unmodified(session, context, monkeypat
     assert result["queued"] == 0
     assert result["items"][0]["reason"] == "scope_or_generation_unverified"
     assert objects[0].status == "receiving"
+
+
+def test_repeated_blocked_scans_deduplicate_same_evidence_but_keep_new_progress(
+    session, context, monkeypatch
+):
+    from app.modules.tenants.models import AuditEvent
+
+    service = module()
+    monkeypatch.setattr(settings, "MATERIAL_CLEANUP_ENABLED", True)
+    _, _, files, objects = candidate(session, context)
+    obj = objects[0]
+    obj.error_code = "multipart_create_unknown"
+    session.flush()
+
+    def alerts():
+        return session.exec(
+            select(AuditEvent).where(
+                AuditEvent.tenant_id == context.tenant_id,
+                AuditEvent.target_id == str(obj.id),
+                AuditEvent.action == "materials.abandonment_blocked",
+            )
+        ).all()
+
+    for _ in range(3):
+        result = service.scan_abandoned_objects(session, context=context, enqueue=True)
+        assert result["queued"] == 0
+        assert result["items"][0]["reason"] == "transport_result_unknown"
+    assert len(alerts()) == 1
+
+    # A newer real receipt remains old enough to be abandoned, but is new evidence.
+    obj.received_at = obj.reserved_at + timedelta(minutes=1)
+    session.flush()
+    service.scan_abandoned_objects(session, context=context, enqueue=True)
+    service.scan_abandoned_objects(session, context=context, enqueue=True)
+    assert len(alerts()) == 2
+
+    obj.error_code = None
+    asset = mapping(session, context, files[0])
+    asset.status = "unavailable"
+    operation = MaterialAssetOperation(
+        tenant_id=context.tenant_id,
+        bc_id=obj.bc_id,
+        material_id=obj.material_id,
+        advertiser_id=asset.advertiser_id,
+        path="upload_original",
+        status="result_unknown",
+        request_digest="d" * 64,
+    )
+    session.add(operation)
+    session.flush()
+    service.scan_abandoned_objects(session, context=context, enqueue=True)
+    service.scan_abandoned_objects(session, context=context, enqueue=True)
+    events = alerts()
+    assert len(events) == 3
+    assert {event.details["reason"] for event in events} == {
+        "transport_result_unknown",
+        "source_result_unknown",
+    }
+    assert obj.reserved_bytes == obj.expected_bytes
+    assert operation.status == "result_unknown"
