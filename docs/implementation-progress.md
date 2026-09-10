@@ -1,5 +1,13 @@
 # 实施进度
 
+## 2026-09-10：新加坡测试服务器无 Docker 部署
+
+- 按用户授权在 `137.220.150.31:22211` 安装原生依赖，以固定提交 `995f89569880df330b02314bfff5e1df33256b1a` 部署至 `/opt/tt-ada-staging/releases/`，未安装 Docker、未复制本地或生产业务数据和集成凭据。
+- 公网入口 `https://137.220.150.31`，受信任 IP 证书与每小时自动续期已配置；API、2 进程 Linux prefork Worker、唯一 Beat 由独立 systemd 服务管理并开机自启。PostgreSQL、Redis、API 仅本机监听。
+- 服务器冻结依赖安装、前端构建、迁移 head、管理员 HTTPS 登录/受保护接口、72 项真实 PostgreSQL/Redis 登录与调度回归、持久化 outbox→Beat→Worker no-op、浏览器登录页与无 console error 均通过。首次回归因应用角色没有 CREATEDB 导致 8 项测试未通过，改用独立测试角色后全部通过，未扩大应用数据库角色权限。
+- 每日私有备份已配置且首次执行成功，PostgreSQL 临时库恢复与 Redis RDB 完整性检查通过；IP 证书续期 dry-run 通过。未执行真实 TikTok/R2/版权方调用，素材导入与清理保持关闭。
+- [环境手册](runbooks/staging-singapore.md) 和 [验收记录](validation/2026-09-10-staging-singapore-release.md) 记录服务、版本、备份和边界。本轮文档提交以 `docs: record native Singapore staging deployment` 标识；不推送。当前仓库没有本地 `main` 分支，保留既有 `feat/platform-implementation`，不自动创建分支。
+
 ## 2026-09-10：品牌更名 TK-ADA 与标题微调
 
 - 按用户要求统一实际页面、浏览器标签、默认配置与 README 的产品名为 `TK-ADA`。左上角共享品牌主标题从14px增至18px，副标题为11px的“广告投放工具”；登录按钮只显示“登录”，移除箭头，保留加载状态。其余页面字号、颜色、卡片和间距不调整。
