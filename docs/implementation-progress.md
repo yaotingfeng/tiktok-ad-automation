@@ -1,5 +1,11 @@
 # 实施进度
 
+## 2026-09-10：统一 TK-ADA 应用图标
+
+- 使用用户确认的黑白 A/播放符号图标，统一登录页、桌面侧栏和移动导航；保留 18px 品牌名及 11px 副标题。补齐 32px favicon、180px Apple 主屏幕图标、192/512px manifest 图标和开发者平台上传原图。
+- 删除未使用的 FastAPI Logo 组件、模板图标和旧品牌样式；不新增离线缓存或服务工作线程。
+- TypeScript/Vite 构建、22 项 workspace-shell 浏览器回归、改动组件与 manifest 的 Biome 检查、git diff --check 通过。代码提交以 `feat: apply TK-ADA app icon across system` 标识；新加坡发布验收另行记录。
+
 ## 2026-09-10：新加坡测试账号与租户初始化
 
 - 按用户授权，经 sslip.io HTTPS 应用 API 修改平台管理员 `admin` 密码，创建 `junbo` 租户及同名租户管理员；密码仅同步服务器与本地私有配置，不写入 Git。

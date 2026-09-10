@@ -137,10 +137,6 @@
     font-weight: 600;
     letter-spacing: -0.025em;
   }
-  .brand-mark {
-    background: var(--foreground);
-    color: var(--card);
-  }
   .group[data-collapsible="icon"] .brand-copy {
     display: none;
   }

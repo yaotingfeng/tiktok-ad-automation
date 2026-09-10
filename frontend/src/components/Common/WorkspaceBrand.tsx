@@ -1,11 +1,13 @@
-import { ArrowUpRight } from "lucide-react"
-
 export function WorkspaceBrand() {
   return (
     <div className="flex items-center gap-2.5">
-      <span className="brand-mark flex size-8 shrink-0 items-center justify-center rounded-lg">
-        <ArrowUpRight className="size-4" />
-      </span>
+      <img
+        src="/assets/brand/icon-192.png"
+        alt="TK-ADA 图标"
+        width={32}
+        height={32}
+        className="size-8 shrink-0 rounded-lg"
+      />
       <div className="brand-copy min-w-0">
         <p className="text-lg leading-6 font-semibold">TK-ADA</p>
         <p className="text-[11px] leading-4 text-muted-foreground">
