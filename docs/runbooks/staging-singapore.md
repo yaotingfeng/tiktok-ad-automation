@@ -19,7 +19,7 @@
 
 ## 当前实例与操作
 
-- 运行提交：`995f89569880df330b02314bfff5e1df33256b1a`；首次部署记录见 [验收记录](../validation/2026-09-10-staging-singapore-release.md)。
+- 运行提交：`8b59aed363c35bef317f6cd0fc30da48c40c723a`；本次为图标更新，见 [图标发布验收](../validation/2026-09-10-staging-singapore-icon-release.md)。首次部署记录见 [验收记录](../validation/2026-09-10-staging-singapore-release.md)。
 - 入口：`https://137.220.150.31`，80 跳转 443。已签发受信任 IP 证书，非自签名证书；无需域名即可访问本次测试入口。真实 TikTok 回调/App 接入另行配置并验收。
 - Python `3.14.2` / uv `0.9.26` / Bun `1.4.2` / PostgreSQL `18.6` / Redis `8.10.1` / Certbot `5.8.0`。另已安装 Nginx、FFmpeg 和基础编译依赖；未安装 Docker。
 - 数据库 `tt_ada_staging`，角色 `tt_ada`；应用角色无 CREATEDB 或超级用户权限。回归测试使用单独测试角色与 `tt_ada_acceptance_test`、Redis DB 14/15，业务使用 Redis DB 0。

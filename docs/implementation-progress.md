@@ -4,7 +4,7 @@
 
 - 使用用户确认的黑白 A/播放符号图标，统一登录页、桌面侧栏和移动导航；保留 18px 品牌名及 11px 副标题。补齐 32px favicon、180px Apple 主屏幕图标、192/512px manifest 图标和开发者平台上传原图。
 - 删除未使用的 FastAPI Logo 组件、模板图标和旧品牌样式；不新增离线缓存或服务工作线程。
-- TypeScript/Vite 构建、22 项 workspace-shell 浏览器回归、改动组件与 manifest 的 Biome 检查、git diff --check 通过。代码提交以 `feat: apply TK-ADA app icon across system` 标识；新加坡发布验收另行记录。
+- TypeScript/Vite 构建、22 项 workspace-shell 浏览器回归、改动组件与 manifest 的 Biome 检查、git diff --check 通过。代码提交 `8b59aed`；已发布新加坡测试环境，线上图标字节/尺寸、manifest、入口边界、管理员登录与 Worker ping 通过，备份 timer 已恢复。服务器编译因内存限制退出 137，改用相同提交的本地已验证产物；未修改生产环境。[发布记录](validation/2026-09-10-staging-singapore-icon-release.md)。
 
 ## 2026-09-10：新加坡测试账号与租户初始化
 
