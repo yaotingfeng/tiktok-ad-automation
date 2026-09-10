@@ -45,3 +45,15 @@ runuser -u tt-ada -- /opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.ce
 - 回滚时先冻结写入并排空服务。只有确认数据库兼容时才切回旧 `current`；需要还原时先用新库/新 Redis 实例验证备份，禁止覆盖仍带旧 AOF 的 Redis 数据目录。首次部署没有上一个应用版本。
 
 验收结束后已将专用测试角色 `tt_ada_test` 设置为 `NOLOGIN NOCREATEDB`，测试配置收紧为 root 0600；后续重跑创建临时库的用例时，由运维按测试范围临时启用，结束后再次收回。
+
+## Sites 域名入口（2026-09-10）
+
+用户指定的访问别名为 `https://ytf-server-gateway.defuelscoulter38963.chatgpt.site`，已发布服务器端 HTTPS 转发。Sites 项目 `appgprj_6aa29de565c881918beb43a148b6452c` 当前保持仅所有者访问；需要 Sites 登录后，再使用 TK-ADA 原管理员账号登录。原 IP HTTPS 入口继续可用，应用自身 FRONTEND_HOST 保留原 IP，Sites 作为访问别名。
+
+Sites 独立源码在相邻 `server-sites-gateway/` 项目，发布源码 `148a0a7fce5fd9487366f7006852b5ff5458e29c`，版本 1。不能把该子域名当作可修改 A 记录的独立 DNS 域名。
+
+由于 Cloudflare Workers 不支持直接向 IP 发起 fetch，回源使用 `https://tk-ada.137-220-150-31.sslip.io`。该 DNS 在服务器上已核实解析至 `137.220.150.31`；新建独立 Nginx TLS 主机，证书受信任且到期日 2026-12-09，由已有每小时 Certbot timer 一并续期，独立 dry-run 已通过。该回源依赖 sslip.io 公共 DNS，未来可替换为自有域名。Nginx 修改前副本为 `/root/tt-ada-staging-nginx-before-sites`，修改后已补做私有备份。
+
+代理保留路径（包括尾斜杠）、查询、HTTP 方法/请求体、业务 JWT、状态码与静态资源；不把 Sites 登录 Cookie 或内部身份头传给原站，不记录请求体与授权查询，不缓存代理响应。当前应用使用 JWT，不以 Cookie 登录；新增 Cookie 登录机制时必须重新评估代理契约。原站绝对跳转改写为 Sites 地址。
+
+验收：5 项代理边界测试、改动文件 lint、Sites 构建、线上健康/登录 HTML/JS 资源/回调/404/未登录 401、真实管理员登录和 profile 全部通过；无 Sites 身份访问仍被 401 拒绝。Sites 脚手架未使用的 UI 组件存在原有 lint 问题；本次改动文件 lint 无错误。未执行真实 TikTok/R2/版权方操作。

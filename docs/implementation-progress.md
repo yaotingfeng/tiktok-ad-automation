@@ -1,5 +1,12 @@
 # 实施进度
 
+## 2026-09-10：新加坡测试环境 Sites 域名接入
+
+- 按用户要求发布现有 Sites 域名 `https://ytf-server-gateway.defuelscoulter38963.chatgpt.site`，保留其仅所有者访问设置，转发至新加坡 TK-ADA。Sites 独立源码 `148a0a7fce5fd9487366f7006852b5ff5458e29c` 已上传并发布版本 1，原 IP 入口继续有效。
+- 服务器新增 sslip.io 主机名的 HTTPS 回源站点及受信任证书，以满足 Workers 不支持裸 IP fetch 的限制；既有每小时证书续期 timer 接管新证书，dry-run 与更新后备份通过。
+- 使用自定义 Worker 在框架 URL 规范化之前转发，保留 FastAPI 尾斜杠、状态码、字节流、业务 JWT，剥离 Sites Cookie 和身份头。5 项边界测试、改动文件 lint、构建与实际线上登录/受保护 profile/静态 JS/API 边界验收通过，未开放 Sites 访问权限或执行外部广告操作。
+- 详见 [测试环境手册](runbooks/staging-singapore.md)。本仓库文档提交以 `docs: record Sites gateway for Singapore staging` 标识；应用仓库未推送，运行 SHA 未变化。
+
 ## 2026-09-10：新加坡测试服务器无 Docker 部署
 
 - 按用户授权在 `137.220.150.31:22211` 安装原生依赖，以固定提交 `995f89569880df330b02314bfff5e1df33256b1a` 部署至 `/opt/tt-ada-staging/releases/`，未安装 Docker、未复制本地或生产业务数据和集成凭据。
