@@ -417,3 +417,32 @@ test("parent import intent survives refresh with immutable request scope and no 
   expect(value.page).toHaveLength(1)
   expect(value.changed).toBe("registration_conflict")
 })
+
+test("one reselected File cannot silently satisfy two indistinguishable manifest entries", async ({
+  page,
+}) => {
+  const value = await page.evaluate(async () => {
+    const path = "/tests/harness/upload-foundation.ts"
+    return (
+      await import(/* @vite-ignore */ path)
+    ).duplicateManifestReselectScenario()
+  })
+  expect(value.reselect).toEqual({ matched: 0, issues: 2 })
+  expect(value.result.completed).toBe(0)
+  expect(
+    value.requests.filter((r: { kind: string }) => r.kind === "put"),
+  ).toHaveLength(0)
+})
+
+test("new generation without a multipart ID still rejects old completion receipts", async ({
+  page,
+}) => {
+  const value = await page.evaluate(async () => {
+    const path = "/tests/harness/upload-foundation.ts"
+    return (await import(/* @vite-ignore */ path)).newGenerationFloorScenario()
+  })
+  expect(value.oldReceipt).toBe("upload_identity_changed")
+  expect(value.row.minimumGeneration).toBe(2)
+  expect(value.row.state).toBe("registered")
+  expect(value.row.upload).toBeNull()
+})

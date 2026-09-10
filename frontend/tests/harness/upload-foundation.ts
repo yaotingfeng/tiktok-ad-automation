@@ -595,3 +595,36 @@ export async function importIntentScenario() {
   reopened.close()
   return { saved, found, other: other ?? null, page, changed, restored }
 }
+
+export async function duplicateManifestReselectScenario() {
+  const f = await fixture(2, 8, 8)
+  f.files[1] = new File([new Uint8Array(8).fill(2)], f.files[0].name, {
+    type: f.files[0].type,
+    lastModified: f.files[0].lastModified,
+  })
+  const scheduler = f.scheduler()
+  await scheduler.registerFiles(f.files)
+  scheduler.dispose()
+  const replacement = f.scheduler()
+  const reselect = await replacement.reselectFiles([f.files[0]])
+  const result = await replacement.run()
+  f.store.close()
+  return { reselect, result, requests: f.requests, events: f.events }
+}
+
+export async function newGenerationFloorScenario() {
+  const f = await fixture(1, 8, 8)
+  const scheduler = f.scheduler()
+  await scheduler.registerFiles(f.files)
+  await scheduler.run()
+  await f.store.resetGeneration(f.scope, 0, 2)
+  let oldReceipt = ""
+  try {
+    await f.store.bindUpload(f.scope, 0, f.identity(0))
+  } catch (error) {
+    oldReceipt = (error as Error).message
+  }
+  const row = await f.store.getFile(f.scope, 0)
+  f.store.close()
+  return { oldReceipt, row }
+}

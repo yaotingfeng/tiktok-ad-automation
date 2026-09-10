@@ -1,21 +1,57 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
-import { useEffect, useState } from "react"
-import { MaterialsService, type UploadFileResult } from "@/client"
+import { useEffect, useRef, useState } from "react"
+import { type IngestFilePublic, MaterialIngestService } from "@/client"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Progress } from "@/components/ui/progress"
-import { FilterSelect } from "@/features/accounts/presentation"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   isForbidden,
   Pager,
+  RequestError,
   ServerTable,
-  useCursorPage,
+  useRetainedData,
 } from "@/features/tenants/shared"
-import { bytes, CopyValue, issue, materialKey, Stage } from "./presentation"
-import type { UploadManager } from "./useUploadManager"
+import { canRestartOriginal } from "./ingest-transfer"
+import { bytes, issue, materialKey, Stage } from "./presentation"
+import { useIngestPage } from "./useIngestPage"
+import { type UploadManager, useFileProgress } from "./useUploadManager"
+
+function TransferCell({
+  file,
+  manager,
+}: {
+  file: IngestFilePublic
+  manager: UploadManager
+}) {
+  const progress = useFileProgress(manager, file.client_index)
+  const received = Math.max(file.received_bytes, progress?.receivedBytes ?? 0)
+  return (
+    <div className="flex min-w-32 flex-col gap-1">
+      <Progress
+        value={Math.min(100, (100 * received) / file.size)}
+        aria-label={`${file.file_name} 接收进度`}
+      />
+      <span className="text-xs text-muted-foreground">
+        {bytes(received)} / {bytes(file.size)}
+      </span>
+      {progress?.errorCode && (
+        <span className="text-xs text-muted-foreground">
+          {issue(progress.errorCode)}
+        </span>
+      )}
+    </div>
+  )
+}
 export function UploadQueue({
   tenantId,
   bcId,
@@ -23,8 +59,8 @@ export function UploadQueue({
   manager,
   write,
   onDetails,
-  onHistory,
   onForbidden,
+  onHistory,
 }: {
   tenantId: string
   bcId: string
@@ -32,270 +68,305 @@ export function UploadQueue({
   manager: UploadManager
   write: boolean
   onDetails: (id: string) => void
-  onHistory: () => void
   onForbidden: () => void
+  onHistory: () => void
 }) {
-  const [filter, setFilter] = useState("all"),
-    [retrying, setRetrying] = useState(false),
-    cache = useQueryClient(),
-    paging = useCursorPage()
-  const query = useQuery({
-    queryKey: [...materialKey(tenantId, bcId), "batch", batchId],
+  const paging = useIngestPage()
+  const [status, setStatus] = useState("all")
+  const select = useRef<HTMLInputElement>(null)
+  const single = useRef<HTMLInputElement>(null)
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
+  const summaryQuery = useQuery({
+    queryKey: [...materialKey(tenantId, bcId), "ingest-summary", batchId],
     queryFn: async ({ signal }) => {
-      const { data } = await MaterialsService.readUploadBatch({
-        path: { tenant_id: tenantId, batch_id: batchId },
-        signal,
-      })
-      if (data.bc_id !== bcId) throw new Error("batch_scope_mismatch")
-      return data
+      const summary = (
+        await MaterialIngestService.readIngestSummary({
+          path: { tenant_id: tenantId, session_id: batchId },
+          signal,
+        })
+      ).data
+      if (summary.bc_id !== bcId) throw new Error("scope_mismatch")
+      return summary
     },
-    refetchInterval: (q) =>
-      q.state.data?.files.some((f) =>
-        ["stored", "uploading", "verifying", "result_unknown"].includes(
-          f.status,
-        ),
-      )
-        ? 3000
-        : false,
+    refetchInterval: (query) => (query.state.error ? false : 3000),
   })
+  const summary = useRetainedData(summaryQuery.data, summaryQuery.error)
+  const query = useQuery({
+    enabled: !!summaryQuery.data && !summaryQuery.error,
+    queryKey: [
+      ...materialKey(tenantId, bcId),
+      "ingest-files",
+      batchId,
+      status,
+      paging.cursor,
+      paging.limit,
+    ],
+    queryFn: async ({ signal }) =>
+      (
+        await MaterialIngestService.listIngestFiles({
+          path: { tenant_id: tenantId, session_id: batchId },
+          query: {
+            cursor: paging.cursor,
+            limit: paging.limit,
+            status: status === "all" ? undefined : status,
+          },
+          signal,
+        })
+      ).data,
+    refetchInterval: (query) => (query.state.error ? false : 3000),
+  })
+  const data = useRetainedData(query.data, query.error)
   useEffect(() => {
-    if (isForbidden(query.error)) onForbidden()
-  }, [query.error, onForbidden])
-  const refresh = async () => {
-    const result = await query.refetch()
-    if (write && result.data && !result.error)
-      await manager.confirmCompletion(result.data)
-  }
-  const data = query.data?.bc_id === bcId ? query.data : undefined
+    if (isForbidden(summaryQuery.error) || isForbidden(query.error))
+      onForbidden()
+  }, [summaryQuery.error, query.error, onForbidden])
   useEffect(() => {
-    if (data) manager.observe(data)
-  }, [data, manager.observe])
+    if (summaryQuery.data && !summaryQuery.error)
+      void manager.control.openSession(summaryQuery.data).catch(() => {})
+  }, [summaryQuery.data, summaryQuery.error, manager.control])
   useEffect(() => {
-    if (data)
-      void cache.invalidateQueries({
-        queryKey: [...materialKey(tenantId, bcId), "library"],
-      })
-  }, [data, cache, tenantId, bcId])
-  const retryable =
-    data?.files.filter((f) => f.can_retry && f.status === "blocked") || []
-  const rows =
-    data?.files.filter(
-      (f) =>
-        filter === "all" ||
-        (filter === "complete" && f.status === "available") ||
-        (filter === "attention" &&
-          ["blocked", "result_unknown"].includes(f.status)) ||
-        (filter === "pending" &&
-          !["available", "blocked", "result_unknown"].includes(f.status)),
-    ) || []
-  const columns: ColumnDef<UploadFileResult>[] = [
+    if (data?.items)
+      void manager.control.observePage(batchId, data.items).catch(() => {})
+  }, [data, batchId, manager.control])
+  const busy = manager.creating || manager.transferring
+  const columns: ColumnDef<IngestFilePublic>[] = [
     {
-      header: "文件",
-      cell: ({ row: { original: r } }) => (
-        <div className="min-w-48 max-w-64">
-          <p className="truncate" title={r.file_name}>
-            {r.file_name}
-          </p>
-          <p className="text-xs text-muted-foreground">{bytes(r.byte_size)}</p>
-        </div>
+      header: "原文件",
+      cell: ({ row }) => (
+        <span className="break-all">{row.original.file_name}</span>
       ),
     },
     {
-      header: "本地传输",
-      cell: ({ row: { original: r } }) => {
-        const p = manager.progress[r.material_id],
-          received =
-            r.status === "receiving"
-              ? (p?.bytes ?? r.received_bytes)
-              : (r.received_bytes ?? p?.bytes)
-        return (
-          <div className="min-w-40 max-w-64">
-            {received != null ? (
-              <>
-                <p className="text-xs">
-                  {bytes(received)} / {bytes(r.byte_size)}
-                </p>
-                <Progress
-                  aria-label={`${r.file_name} 原文件传输`}
-                  value={Math.min(100, (received / r.byte_size) * 100)}
-                />
-              </>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                尚无已确认传输进度
-              </p>
-            )}
-            {r.status === "receiving" && !p?.busy && (
-              <p className="text-xs text-muted-foreground">
-                需要继续上传原文件
-              </p>
-            )}
-          </div>
-        )
-      },
+      header: "接收进度",
+      cell: ({ row }) => <TransferCell file={row.original} manager={manager} />,
     },
     {
-      header: "当前阶段",
-      cell: ({ row }) => <Stage status={row.original.status} />,
+      header: "平台入库",
+      cell: ({ row }) => <Stage status={row.original.platform_status} />,
     },
     {
-      header: "实际上传账户",
-      cell: ({ row: { original: r } }) =>
-        r.latest_advertiser_id ? (
-          <CopyValue value={r.latest_advertiser_id} />
-        ) : (
-          "系统尚未分配"
-        ),
-    },
-    {
-      header: "处理信息",
-      cell: ({ row: { original: r } }) => (
-        <p className="min-w-40 max-w-72 text-xs">
-          {r.error_code
-            ? issue(r.error_code)
-            : manager.progress[r.material_id]?.message ||
-              (r.status === "stored"
-                ? "原文件已保留，后台继续；不等于账户素材已可用。"
-                : r.status === "result_unknown"
-                  ? "正在核实外部结果，不能重复上传。"
-                  : "查看实际账户记录了解处理结果。")}
-        </p>
+      header: "临时原件",
+      cell: ({ row }) => (
+        <Stage status={row.original.temporary_storage_status} />
       ),
+    },
+    {
+      header: "实际源账户",
+      cell: ({ row }) => (
+        <span className="font-mono text-xs">
+          {row.original.source_advertiser_id || "尚未入库"}
+        </span>
+      ),
+    },
+    {
+      header: "处理说明",
+      cell: ({ row }) =>
+        row.original.error_code
+          ? issue(row.original.error_code)
+          : row.original.operation_status === "result_unknown"
+            ? "结果待核实，不会重复上传"
+            : "—",
     },
     {
       header: "操作",
-      cell: ({ row: { original: r } }) => {
-        const p = manager.progress[r.material_id],
-          unknown = manager.records[r.material_id]?.completionUnknown
-        return (
-          <div className="flex min-w-40 flex-col items-start gap-1">
+      cell: ({ row }) => (
+        <div className="flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => onDetails(row.original.material_id)}
+          >
+            查看详情
+          </Button>
+          {write && row.original.received_bytes < row.original.size && (
             <Button
-              variant="ghost"
               size="sm"
-              onClick={() => onDetails(r.material_id)}
+              variant="outline"
+              disabled={busy}
+              onClick={() => {
+                setSelectedIndex(row.original.client_index)
+                single.current?.click()
+              }}
             >
-              查看记录
+              重选此文件
             </Button>
-            {r.status === "result_unknown" || unknown ? (
+          )}
+          {write &&
+            summary &&
+            row.original.received_bytes < row.original.size &&
+            row.original.operation_status === "idle" &&
+            ["waiting_capacity", "receiving"].includes(
+              row.original.temporary_storage_status,
+            ) && (
               <Button
-                variant="outline"
                 size="sm"
-                onClick={() => void refresh()}
+                variant="ghost"
+                disabled={busy}
+                onClick={() =>
+                  void manager.control
+                    .cancel(summary, row.original)
+                    .then(() => {
+                      void query.refetch()
+                      void summaryQuery.refetch()
+                    })
+                }
               >
-                查看核实进度
+                放弃此文件
               </Button>
-            ) : write && r.can_retry && r.status === "blocked" ? (
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={retrying || p?.busy}
-                onClick={() => void manager.retry(batchId, r)}
-              >
-                重试
-              </Button>
-            ) : write && r.status === "receiving" && !p?.busy ? (
-              <Field>
-                <FieldLabel
-                  htmlFor={`resume-${r.material_id}`}
-                  className="text-xs"
-                >
-                  重新选择原文件
-                </FieldLabel>
-                <Input
-                  className="max-w-52 text-xs"
-                  type="file"
-                  accept="video/*"
-                  id={`resume-${r.material_id}`}
-                  disabled={
-                    Object.values(manager.progress).filter((p) => p.busy)
-                      .length >= 2
-                  }
-                  onChange={(e) => {
-                    const file = e.target.files?.[0]
-                    if (file) void manager.run(batchId, r, file)
-                    e.target.value = ""
-                  }}
-                />
-              </Field>
-            ) : null}
-          </div>
-        )
-      },
+            )}
+          {write && canRestartOriginal(row.original) && summary && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={() =>
+                void manager
+                  .retry(summary, row.original)
+                  .then(() => query.refetch())
+              }
+            >
+              重试此文件
+            </Button>
+          )}
+        </div>
+      ),
     },
   ]
+  if (summaryQuery.error)
+    return (
+      <RequestError
+        error={summaryQuery.error}
+        retry={() => void summaryQuery.refetch()}
+      />
+    )
   return (
-    <>
-      <div className="flex flex-wrap items-center gap-3 p-4">
-        <Button variant="ghost" onClick={onHistory}>
-          全部上传批次
+    <div className="flex flex-col gap-4 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Button variant="outline" onClick={onHistory}>
+          返回导入历史
         </Button>
-        <p className="min-w-0 break-all text-xs text-muted-foreground">
-          本次批次 {batchId}
-        </p>
-        <FilterSelect
-          label="队列状态"
-          choices={{
-            pending: "处理中",
-            attention: "需处理",
-            complete: "已完成",
-          }}
-          value={filter}
-          onChange={(value) => {
-            setFilter(value)
-            paging.reset()
-          }}
-        />
         <Button
           variant="outline"
-          onClick={() => void refresh()}
-          disabled={query.isFetching}
+          onClick={() => {
+            void summaryQuery.refetch()
+            void query.refetch()
+          }}
         >
-          刷新状态
+          刷新进度
         </Button>
-        {write && retryable.length > 0 && (
+      </div>
+      {summary && (
+        <Alert>
+          <AlertDescription>
+            <p>
+              导入 {summary.expected_count} 个文件 ·{" "}
+              {bytes(summary.total_bytes)}
+            </p>
+            <p>
+              已登记 {summary.accepted_count} · 已接收 {summary.uploaded_count}{" "}
+              · 平台可用 {summary.ready_count} · 已清理 {summary.cleaned_count}{" "}
+              · 失败 {summary.failed_count}
+            </p>
+            <p>
+              当前暂存占用 {bytes(summary.reserved_bytes)}，其中已存储{" "}
+              {bytes(summary.stored_bytes)}
+              。临时原件清理不影响已经核实的账户素材。
+            </p>
+          </AlertDescription>
+        </Alert>
+      )}
+      {write && summary && (
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="outline"
-            disabled={retrying}
-            onClick={async () => {
-              setRetrying(true)
-              try {
-                for (const row of retryable) await manager.retry(batchId, row)
-              } finally {
-                setRetrying(false)
-              }
-            }}
+            disabled={busy || !!manager.pending}
+            onClick={() => void manager.resume(summary)}
           >
-            重试明确失败项
+            继续传输 / 核实接收
           </Button>
-        )}
-      </div>
+          <Button
+            variant="outline"
+            disabled={busy || !!manager.pending}
+            onClick={() => select.current?.click()}
+          >
+            重新选择未传完的文件
+          </Button>
+          <Input
+            ref={select}
+            className="hidden"
+            aria-label="重新选择未传完的文件"
+            type="file"
+            multiple
+            accept="video/*"
+            onChange={(event) => {
+              const files = Array.from(event.target.files ?? [])
+              event.target.value = ""
+              if (files.length) void manager.resume(summary, files)
+            }}
+          />
+          {manager.transferring && (
+            <Button variant="outline" onClick={manager.control.pause}>
+              暂停本地传输
+            </Button>
+          )}
+        </div>
+      )}
       {!!manager.error && (
         <Alert variant="destructive">
           <AlertDescription>{issue(manager.error)}</AlertDescription>
         </Alert>
       )}
+      <Input
+        ref={single}
+        className="hidden"
+        aria-label="重选单个原文件"
+        type="file"
+        accept="video/*"
+        onChange={(event) => {
+          const files = Array.from(event.target.files ?? [])
+          event.target.value = ""
+          if (summary && selectedIndex !== null && files.length)
+            void manager.control.reselectFile(summary, selectedIndex, files)
+        }}
+      />
+      <p className="text-sm text-muted-foreground">
+        刷新后浏览器不能继续读取原文件，未传完的文件需重新选择并核验。暂存空间不足时保留排队信息，空间释放后继续。
+      </p>
+      <Select
+        value={status}
+        onValueChange={(value) => {
+          setStatus(value)
+          paging.reset()
+        }}
+      >
+        <SelectTrigger aria-label="筛选导入状态" className="w-56">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            <SelectItem value="all">全部文件</SelectItem>
+            <SelectItem value="registered">待接收</SelectItem>
+            <SelectItem value="waiting_capacity">等待暂存空间</SelectItem>
+            <SelectItem value="receiving">正在接收</SelectItem>
+            <SelectItem value="failed">失败</SelectItem>
+          </SelectGroup>
+        </SelectContent>
+      </Select>
       <ServerTable
-        rows={rows.slice(
-          (paging.page - 1) * paging.limit,
-          paging.page * paging.limit,
-        )}
+        rows={data?.items ?? []}
         columns={columns}
-        loading={query.isPending}
+        loading={query.isPending && !data}
         fetching={query.isFetching}
         error={query.error}
         retry={() => void query.refetch()}
-        filtered={filter !== "all"}
-        emptyTitle="本批次没有文件"
+        filtered={status !== "all"}
+        emptyTitle="暂无已登记文件"
       />
       <Pager
         paging={paging}
-        nextCursor={
-          paging.page * paging.limit < rows.length
-            ? String(paging.page + 1)
-            : null
-        }
+        nextCursor={data?.next_cursor}
         busy={query.isFetching}
       />
-    </>
+    </div>
   )
 }

@@ -847,6 +847,409 @@ export type HTTPValidationError = {
 };
 
 /**
+ * IngestChunkCreate
+ */
+export type IngestChunkCreate = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Files
+     */
+    files: Array<IngestFileInput>;
+};
+
+/**
+ * IngestChunkResult
+ */
+export type IngestChunkResult = {
+    /**
+     * Session Id
+     */
+    session_id: string;
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Items
+     */
+    items: Array<IngestFilePublic>;
+};
+
+/**
+ * IngestFileInput
+ */
+export type IngestFileInput = {
+    /**
+     * File Name
+     */
+    file_name: string;
+    /**
+     * Size
+     */
+    size: number;
+    /**
+     * Mime Type
+     */
+    mime_type: string;
+    /**
+     * Client Index
+     */
+    client_index: number;
+    /**
+     * Last Modified Ms
+     */
+    last_modified_ms?: number | null;
+};
+
+/**
+ * IngestFilePublic
+ */
+export type IngestFilePublic = {
+    /**
+     * Material Id
+     */
+    material_id: string;
+    /**
+     * Client Index
+     */
+    client_index: number;
+    /**
+     * File Name
+     */
+    file_name: string;
+    /**
+     * Size
+     */
+    size: number;
+    /**
+     * Mime Type
+     */
+    mime_type: string;
+    /**
+     * Last Modified Ms
+     */
+    last_modified_ms?: number | null;
+    /**
+     * Generation
+     */
+    generation: number;
+    /**
+     * Upload Id
+     */
+    upload_id: string | null;
+    /**
+     * Part Size
+     */
+    part_size: number;
+    /**
+     * Part Count
+     */
+    part_count: number;
+    /**
+     * Can Retry
+     */
+    can_retry: boolean;
+    /**
+     * Operation Revision
+     */
+    operation_revision: number;
+    /**
+     * Platform Status
+     */
+    platform_status: string;
+    /**
+     * Temporary Storage Status
+     */
+    temporary_storage_status: string;
+    /**
+     * Received Bytes
+     */
+    received_bytes: number;
+    /**
+     * Source Advertiser Id
+     */
+    source_advertiser_id: string | null;
+    /**
+     * Error Code
+     */
+    error_code: string | null;
+    /**
+     * Operation Status
+     */
+    operation_status?: string;
+    /**
+     * Task Id
+     */
+    task_id?: string | null;
+};
+
+/**
+ * IngestIdentity
+ */
+export type IngestIdentity = {
+    /**
+     * Generation
+     */
+    generation: number;
+    /**
+     * Upload Id
+     */
+    upload_id?: string | null;
+    /**
+     * Operation Revision
+     */
+    operation_revision: number;
+};
+
+/**
+ * IngestPart
+ */
+export type IngestPart = {
+    /**
+     * Part Number
+     */
+    part_number: number;
+    /**
+     * Byte Size
+     */
+    byte_size: number;
+    /**
+     * Etag
+     */
+    etag: string;
+};
+
+/**
+ * IngestPartUrl
+ */
+export type IngestPartUrl = {
+    /**
+     * Part Number
+     */
+    part_number: number;
+    /**
+     * Byte Size
+     */
+    byte_size: number;
+    /**
+     * Url
+     */
+    url: string;
+    /**
+     * Expires In
+     */
+    expires_in: number;
+};
+
+/**
+ * IngestPartUrls
+ */
+export type IngestPartUrls = {
+    /**
+     * Generation
+     */
+    generation: number;
+    /**
+     * Upload Id
+     */
+    upload_id: string;
+    /**
+     * Operation Revision
+     */
+    operation_revision: number;
+    /**
+     * Items
+     */
+    items: Array<IngestPartUrl>;
+};
+
+/**
+ * IngestPartUrlsCreate
+ */
+export type IngestPartUrlsCreate = {
+    /**
+     * Generation
+     */
+    generation: number;
+    /**
+     * Upload Id
+     */
+    upload_id: string;
+    /**
+     * Operation Revision
+     */
+    operation_revision: number;
+    /**
+     * Part Numbers
+     */
+    part_numbers: Array<number>;
+};
+
+/**
+ * IngestPartsPage
+ */
+export type IngestPartsPage = {
+    /**
+     * Generation
+     */
+    generation: number;
+    /**
+     * Upload Id
+     */
+    upload_id: string;
+    /**
+     * Operation Revision
+     */
+    operation_revision: number;
+    /**
+     * Items
+     */
+    items: Array<IngestPart>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
+ * IngestSealIssue
+ */
+export type IngestSealIssue = {
+    /**
+     * Code
+     */
+    code: 'file_count_mismatch' | 'total_bytes_mismatch';
+    /**
+     * Expected
+     */
+    expected: number;
+    /**
+     * Accepted
+     */
+    accepted: number;
+};
+
+/**
+ * IngestSealResult
+ */
+export type IngestSealResult = {
+    /**
+     * Sealed
+     */
+    sealed: boolean;
+    /**
+     * Issues
+     */
+    issues: Array<IngestSealIssue>;
+    summary: IngestSummary;
+};
+
+/**
+ * IngestSessionCreate
+ */
+export type IngestSessionCreate = {
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * File Count
+     */
+    file_count: number;
+    /**
+     * Total Bytes
+     */
+    total_bytes: number;
+};
+
+/**
+ * IngestSummary
+ */
+export type IngestSummary = {
+    /**
+     * Session Id
+     */
+    session_id: string;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Expected Count
+     */
+    expected_count: number;
+    /**
+     * Total Bytes
+     */
+    total_bytes: number;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Registration Cursor
+     */
+    registration_cursor: number;
+    /**
+     * Accepted Count
+     *
+     * Cumulative distinct accepted files.
+     */
+    accepted_count: number;
+    /**
+     * Uploaded Count
+     *
+     * Cumulative files completely received at least once.
+     */
+    uploaded_count: number;
+    /**
+     * Ready Count
+     *
+     * Cumulative files verified in their actual source account.
+     */
+    ready_count: number;
+    /**
+     * Failed Count
+     *
+     * Current failed files; decreases when retried.
+     */
+    failed_count: number;
+    /**
+     * Cleaned Count
+     *
+     * Cumulative files with a confirmed original cleanup.
+     */
+    cleaned_count: number;
+    /**
+     * Reserved Bytes
+     *
+     * Current session occupancy, including unconfirmed deletion.
+     */
+    reserved_bytes: number;
+    /**
+     * Stored Bytes
+     *
+     * Current stored bytes, a subset of reserved bytes.
+     */
+    stored_bytes: number;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+    /**
+     * Created At
+     */
+    created_at: string;
+};
+
+/**
  * InputLine
  */
 export type InputLine = {
@@ -1132,6 +1535,34 @@ export type Page_FrozenGroup_ = {
      * Items
      */
     items: Array<FrozenGroup>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
+ * Page[IngestFilePublic]
+ */
+export type Page_IngestFilePublic_ = {
+    /**
+     * Items
+     */
+    items: Array<IngestFilePublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
+ * Page[IngestSummary]
+ */
+export type Page_IngestSummary_ = {
+    /**
+     * Items
+     */
+    items: Array<IngestSummary>;
     /**
      * Next Cursor
      */
@@ -4223,6 +4654,592 @@ export type accountsCapabilityStatusResponses = {
 };
 
 export type accountsCapabilityStatusResponse = accountsCapabilityStatusResponses[keyof accountsCapabilityStatusResponses];
+
+export type listIngestSessionsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/materials/ingest-sessions';
+};
+
+export type listIngestSessionsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type listIngestSessionsError = listIngestSessionsErrors[keyof listIngestSessionsErrors];
+
+export type listIngestSessionsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_IngestSummary_;
+};
+
+export type listIngestSessionsResponse = listIngestSessionsResponses[keyof listIngestSessionsResponses];
+
+export type createIngestSessionData = {
+    body: IngestSessionCreate;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/materials/ingest-sessions';
+};
+
+export type createIngestSessionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type createIngestSessionError = createIngestSessionErrors[keyof createIngestSessionErrors];
+
+export type createIngestSessionResponses = {
+    /**
+     * Successful Response
+     */
+    201: IngestSummary;
+};
+
+export type createIngestSessionResponse = createIngestSessionResponses[keyof createIngestSessionResponses];
+
+export type readIngestRequestData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Request Id
+         */
+        request_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/materials/ingest-requests/{request_id}';
+};
+
+export type readIngestRequestErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type readIngestRequestError = readIngestRequestErrors[keyof readIngestRequestErrors];
+
+export type readIngestRequestResponses = {
+    /**
+     * Successful Response
+     */
+    200: IngestSummary;
+};
+
+export type readIngestRequestResponse = readIngestRequestResponses[keyof readIngestRequestResponses];
+
+export type readIngestSummaryData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Session Id
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/materials/ingest-sessions/{session_id}';
+};
+
+export type readIngestSummaryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type readIngestSummaryError = readIngestSummaryErrors[keyof readIngestSummaryErrors];
+
+export type readIngestSummaryResponses = {
+    /**
+     * Successful Response
+     */
+    200: IngestSummary;
+};
+
+export type readIngestSummaryResponse = readIngestSummaryResponses[keyof readIngestSummaryResponses];
+
+export type createIngestChunkData = {
+    body: IngestChunkCreate;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Session Id
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/materials/ingest-sessions/{session_id}/chunks';
+};
+
+export type createIngestChunkErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type createIngestChunkError = createIngestChunkErrors[keyof createIngestChunkErrors];
+
+export type createIngestChunkResponses = {
+    /**
+     * Successful Response
+     */
+    201: IngestChunkResult;
+};
+
+export type createIngestChunkResponse = createIngestChunkResponses[keyof createIngestChunkResponses];
+
+export type readIngestChunkData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Session Id
+         */
+        session_id: string;
+        /**
+         * Request Id
+         */
+        request_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/materials/ingest-sessions/{session_id}/chunks/{request_id}';
+};
+
+export type readIngestChunkErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type readIngestChunkError = readIngestChunkErrors[keyof readIngestChunkErrors];
+
+export type readIngestChunkResponses = {
+    /**
+     * Successful Response
+     */
+    200: IngestChunkResult;
+};
+
+export type readIngestChunkResponse = readIngestChunkResponses[keyof readIngestChunkResponses];
+
+export type sealIngestSessionData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Session Id
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/materials/ingest-sessions/{session_id}/seal';
+};
+
+export type sealIngestSessionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type sealIngestSessionError = sealIngestSessionErrors[keyof sealIngestSessionErrors];
+
+export type sealIngestSessionResponses = {
+    /**
+     * Successful Response
+     */
+    200: IngestSealResult;
+};
+
+export type sealIngestSessionResponse = sealIngestSessionResponses[keyof sealIngestSessionResponses];
+
+export type listIngestFilesData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Session Id
+         */
+        session_id: string;
+    };
+    query?: {
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+        /**
+         * Status
+         */
+        status?: string | null;
+    };
+    url: '/api/tenants/{tenant_id}/materials/ingest-sessions/{session_id}/files';
+};
+
+export type listIngestFilesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type listIngestFilesError = listIngestFilesErrors[keyof listIngestFilesErrors];
+
+export type listIngestFilesResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_IngestFilePublic_;
+};
+
+export type listIngestFilesResponse = listIngestFilesResponses[keyof listIngestFilesResponses];
+
+export type readIngestFileData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Session Id
+         */
+        session_id: string;
+        /**
+         * Material Id
+         */
+        material_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/materials/ingest-sessions/{session_id}/files/{material_id}';
+};
+
+export type readIngestFileErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type readIngestFileError = readIngestFileErrors[keyof readIngestFileErrors];
+
+export type readIngestFileResponses = {
+    /**
+     * Successful Response
+     */
+    200: IngestFilePublic;
+};
+
+export type readIngestFileResponse = readIngestFileResponses[keyof readIngestFileResponses];
+
+export type resumeIngestFileData = {
+    body: IngestIdentity;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Session Id
+         */
+        session_id: string;
+        /**
+         * Material Id
+         */
+        material_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/materials/ingest-sessions/{session_id}/files/{material_id}/resume';
+};
+
+export type resumeIngestFileErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type resumeIngestFileError = resumeIngestFileErrors[keyof resumeIngestFileErrors];
+
+export type resumeIngestFileResponses = {
+    /**
+     * Successful Response
+     */
+    200: IngestFilePublic;
+};
+
+export type resumeIngestFileResponse = resumeIngestFileResponses[keyof resumeIngestFileResponses];
+
+export type signIngestPartsData = {
+    body: IngestPartUrlsCreate;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Session Id
+         */
+        session_id: string;
+        /**
+         * Material Id
+         */
+        material_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/materials/ingest-sessions/{session_id}/files/{material_id}/part-urls';
+};
+
+export type signIngestPartsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type signIngestPartsError = signIngestPartsErrors[keyof signIngestPartsErrors];
+
+export type signIngestPartsResponses = {
+    /**
+     * Successful Response
+     */
+    200: IngestPartUrls;
+};
+
+export type signIngestPartsResponse = signIngestPartsResponses[keyof signIngestPartsResponses];
+
+export type listIngestPartsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Session Id
+         */
+        session_id: string;
+        /**
+         * Material Id
+         */
+        material_id: string;
+    };
+    query: {
+        /**
+         * Generation
+         */
+        generation: number;
+        /**
+         * Upload Id
+         */
+        upload_id: string;
+        /**
+         * Operation Revision
+         */
+        operation_revision: number;
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/materials/ingest-sessions/{session_id}/files/{material_id}/parts';
+};
+
+export type listIngestPartsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type listIngestPartsError = listIngestPartsErrors[keyof listIngestPartsErrors];
+
+export type listIngestPartsResponses = {
+    /**
+     * Successful Response
+     */
+    200: IngestPartsPage;
+};
+
+export type listIngestPartsResponse = listIngestPartsResponses[keyof listIngestPartsResponses];
+
+export type completeIngestFileData = {
+    body: IngestIdentity;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Session Id
+         */
+        session_id: string;
+        /**
+         * Material Id
+         */
+        material_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/materials/ingest-sessions/{session_id}/files/{material_id}/complete';
+};
+
+export type completeIngestFileErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type completeIngestFileError = completeIngestFileErrors[keyof completeIngestFileErrors];
+
+export type completeIngestFileResponses = {
+    /**
+     * Successful Response
+     */
+    200: IngestFilePublic;
+};
+
+export type completeIngestFileResponse = completeIngestFileResponses[keyof completeIngestFileResponses];
+
+export type cancelIngestFileData = {
+    body: IngestIdentity;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Session Id
+         */
+        session_id: string;
+        /**
+         * Material Id
+         */
+        material_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/materials/ingest-sessions/{session_id}/files/{material_id}/cancel';
+};
+
+export type cancelIngestFileErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type cancelIngestFileError = cancelIngestFileErrors[keyof cancelIngestFileErrors];
+
+export type cancelIngestFileResponses = {
+    /**
+     * Successful Response
+     */
+    200: IngestFilePublic;
+};
+
+export type cancelIngestFileResponse = cancelIngestFileResponses[keyof cancelIngestFileResponses];
+
+export type createIngestGenerationData = {
+    body: IngestIdentity;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Session Id
+         */
+        session_id: string;
+        /**
+         * Material Id
+         */
+        material_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/materials/ingest-sessions/{session_id}/files/{material_id}/new-generation';
+};
+
+export type createIngestGenerationErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type createIngestGenerationError = createIngestGenerationErrors[keyof createIngestGenerationErrors];
+
+export type createIngestGenerationResponses = {
+    /**
+     * Successful Response
+     */
+    200: IngestFilePublic;
+};
+
+export type createIngestGenerationResponse = createIngestGenerationResponses[keyof createIngestGenerationResponses];
 
 export type materialsReadUploadBatchesData = {
     body?: never;

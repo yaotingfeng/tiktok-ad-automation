@@ -36,6 +36,8 @@ export type UploadFileRecord = UploadScope & {
   materialId: string | null
   upload: MultipartIdentity | null
   state: UploadFileState
+  /** Persisted even while a newly authorized generation has no multipart ID yet. */
+  minimumGeneration?: number
 }
 export type LocalPart = {
   partNumber: number
@@ -176,6 +178,7 @@ function cleanUpload(upload: MultipartIdentity): MultipartIdentity {
 function cleanFile(row: UploadFileRecord): UploadFileRecord {
   assert(
     integer(row.clientIndex) &&
+      integer(row.minimumGeneration ?? 1, 1) &&
       label(row.registrationRequestId) &&
       label(row.file.name) &&
       integer(row.file.size, 1) &&
@@ -200,6 +203,7 @@ function cleanFile(row: UploadFileRecord): UploadFileRecord {
     materialId: row.materialId,
     upload: row.upload ? cleanUpload(row.upload) : null,
     state: row.state,
+    minimumGeneration: row.minimumGeneration ?? 1,
   }
 }
 function result<T>(request: IDBRequest<T>): Promise<T> {
@@ -477,6 +481,41 @@ export class UploadStore {
       signal,
     )
   }
+  async resetGeneration(
+    scope: UploadScope,
+    index: number,
+    generation: number,
+    signal?: AbortSignal,
+  ) {
+    assert(integer(generation, 1))
+    await this.transaction(
+      [FILES, PARTS],
+      "readwrite",
+      async (tx) => {
+        const store = tx.objectStore(FILES)
+        const row = await result<UploadFileRecord | undefined>(
+          store.get(fileKey(cleanScope(scope), index)),
+        )
+        if (
+          !row?.materialId ||
+          generation <
+            Math.max(row.minimumGeneration ?? 1, row.upload?.generation ?? 1)
+        )
+          throw new UploadError("upload_identity_changed")
+        if (
+          generation ===
+          Math.max(row.minimumGeneration ?? 1, row.upload?.generation ?? 1)
+        )
+          return
+        row.minimumGeneration = generation
+        row.upload = null
+        row.state = "registered"
+        await result(store.put(cleanFile(row)))
+        await result(tx.objectStore(PARTS).delete(range(fileKey(scope, index))))
+      },
+      signal,
+    )
+  }
   async bindUpload(
     scope: UploadScope,
     index: number,
@@ -495,6 +534,7 @@ export class UploadStore {
         if (
           !row ||
           row.materialId !== clean.materialId ||
+          clean.generation < (row.minimumGeneration ?? 1) ||
           row.state === "completed" ||
           (row.upload &&
             (row.upload.generation > clean.generation ||

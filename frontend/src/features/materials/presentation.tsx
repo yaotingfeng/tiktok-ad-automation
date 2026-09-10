@@ -6,6 +6,17 @@ import { Button } from "@/components/ui/button"
 export const namingHint =
   "请在素材文件名中包含完整剧目名称。广告搭建时，系统会根据剧名自动匹配素材。"
 export const stages: Record<string, string> = {
+  registering: "正在登记导入文件",
+  sealed: "文件登记完整",
+  waiting_capacity: "等待暂存空间",
+  reserved: "已预留暂存空间",
+  validating: "正在校验原文件",
+  verified: "原文件已校验",
+  cleanup_pending: "等待清理原件",
+  deleting: "正在清理原件",
+  delete_unknown: "清理结果待核实",
+  deleted: "临时原件已清理",
+  missing: "尚无临时原件",
   receiving: "等待原文件接收",
   stored: "原文件已接收，等待平台上传",
   uploading: "正在上传 TikTok",
@@ -54,6 +65,19 @@ export function CopyValue({ value, label }: { value: string; label?: string }) {
   )
 }
 const errors: Record<string, string> = {
+  needs_reselect: "请重新选择未传完的原文件，再继续传输。",
+  wrong_file: "文件内容或元数据与原文件不一致，请重新选择。",
+  ambiguous_file: "有多个相同元数据的文件，请单独重新选择以核验。",
+  needs_new_generation:
+    "缺少可信分片校验记录，需要安全重新上传。请核实后重试。",
+  storage_backpressure: "暂存空间已满，文件排队等待释放容量。",
+  upload_identity_changed: "上传状态已变化，请刷新核实当前版本。",
+  registration_required: "文件登记尚未完整，请按原导入继续。",
+  registration_conflict: "所选文件与原导入记录不一致，请选择原文件。",
+  completion_unknown: "原文件接收结果待核实，不会直接重传。",
+  part_signature_expired: "分片链接已过期，系统核实后会重新签发。",
+  part_rejected: "文件当前无法继续传输，请查看服务器状态。",
+  transfer_unavailable: "传输暂未完成，请检查网络后按原导入继续。",
   no_upload_account:
     "当前 BC 暂无可上传账户，原文件保留，请联系管理员处理授权。",
   no_available_upload_account:
@@ -70,6 +94,8 @@ const errors: Record<string, string> = {
   blocked_auth: "平台账户授权失效，原文件保留。",
 }
 export function issue(error: unknown): string {
+  if (error instanceof Error && errors[error.message])
+    return errors[error.message]
   if (error instanceof Error && error.message === "resume_storage_unavailable")
     return "浏览器无法保存上传恢复信息，请释放当前站点存储空间后重试。尚未创建批次。"
   if (typeof error === "string")

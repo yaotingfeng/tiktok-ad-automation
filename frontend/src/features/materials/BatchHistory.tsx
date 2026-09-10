@@ -1,17 +1,17 @@
 import { useQuery } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
 import { useEffect } from "react"
-import { MaterialsService, type UploadBatchSummary } from "@/client"
+import { type IngestSummary, MaterialIngestService } from "@/client"
 import { Button } from "@/components/ui/button"
 import { displayTime } from "@/features/accounts/presentation"
 import {
   isForbidden,
   Pager,
   ServerTable,
-  useCursorPage,
   useRetainedData,
 } from "@/features/tenants/shared"
 import { materialKey, Stage } from "./presentation"
+import { useIngestPage } from "./useIngestPage"
 export function BatchHistory({
   tenantId,
   bcId,
@@ -25,18 +25,18 @@ export function BatchHistory({
   enabled: boolean
   onForbidden: () => void
 }) {
-  const paging = useCursorPage(),
+  const paging = useIngestPage(),
     query = useQuery({
       enabled,
       queryKey: [
         ...materialKey(tenantId, bcId),
-        "batches",
+        "ingest-sessions",
         paging.cursor,
         paging.limit,
       ],
       queryFn: async ({ signal }) =>
         (
-          await MaterialsService.readUploadBatches({
+          await MaterialIngestService.listIngestSessions({
             path: { tenant_id: tenantId },
             query: { bc_id: bcId, cursor: paging.cursor, limit: paging.limit },
             signal,
@@ -47,18 +47,23 @@ export function BatchHistory({
   useEffect(() => {
     if (isForbidden(query.error)) onForbidden()
   }, [query.error, onForbidden])
-  const columns: ColumnDef<UploadBatchSummary>[] = [
+  const columns: ColumnDef<IngestSummary>[] = [
     {
-      header: "上传批次",
+      header: "导入会话",
       cell: ({ row }) => (
-        <Button variant="link" onClick={() => onOpen(row.original.batch_id)}>
-          {row.original.batch_id}
+        <Button variant="link" onClick={() => onOpen(row.original.session_id)}>
+          {row.original.session_id}
         </Button>
       ),
     },
     {
       header: "文件数量",
-      cell: ({ row }) => `${row.original.file_count} 个文件`,
+      cell: ({ row }) => `${row.original.expected_count} 个文件`,
+    },
+    {
+      header: "独立进度",
+      cell: ({ row }) =>
+        `已接收 ${row.original.uploaded_count} · 可用 ${row.original.ready_count} · 已清理 ${row.original.cleaned_count}`,
     },
     {
       header: "当前阶段",
@@ -74,7 +79,7 @@ export function BatchHistory({
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => onOpen(row.original.batch_id)}
+          onClick={() => onOpen(row.original.session_id)}
         >
           查看上传队列
         </Button>
@@ -91,7 +96,7 @@ export function BatchHistory({
         error={query.error}
         retry={() => void query.refetch()}
         filtered={false}
-        emptyTitle="暂无上传批次"
+        emptyTitle="暂无导入会话"
       />
       <Pager
         paging={paging}

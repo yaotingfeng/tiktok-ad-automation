@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { canManage } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
@@ -67,6 +68,7 @@ function MaterialWorkspace({
   useEffect(() => {
     if (!allowed) manager.revokePermission()
   }, [allowed, manager.revokePermission])
+  const pendingFiles = useRef<HTMLInputElement>(null)
   const recoveryAttempted = useRef<string | null>(null)
   useEffect(() => {
     if (
@@ -78,7 +80,7 @@ function MaterialWorkspace({
       void manager.recover().then((batch) => {
         if (batch) {
           setSheet(false)
-          setStarted(batch.batch_id)
+          setStarted(batch.session_id)
         }
       })
     }
@@ -118,7 +120,7 @@ function MaterialWorkspace({
         <div className="flex flex-col gap-2">
           <h1 className="workspace-title">素材库</h1>
           <p className="text-sm text-muted-foreground">
-            统一保存素材，并记录每份素材实际上传的广告账户。
+            视频临时中转，平台确认入库后清理原件；保留实际上传账户与可用素材记录。
           </p>
         </div>
         {write && (
@@ -136,9 +138,7 @@ function MaterialWorkspace({
       {manager.pending && !manager.creating && (
         <Alert>
           <AlertDescription>
-            <p>
-              批次创建结果尚未确认，按原请求核实。未查到结果不代表未创建，请勿重复上传。
-            </p>
+            <p>导入创建结果尚未确认，按原请求核实。未查到结果不代表未创建。</p>
             <Button
               variant="outline"
               size="sm"
@@ -146,13 +146,57 @@ function MaterialWorkspace({
                 void manager.recover().then((batch) => {
                   if (batch) {
                     setSheet(false)
-                    setStarted(batch.batch_id)
+                    setStarted(batch.session_id)
                   }
                 })
               }
             >
-              核实批次创建结果
+              核实导入创建结果
             </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={manager.creating || !manager.pending.metadataReady}
+              onClick={() =>
+                void manager.retryCreation().then((session) => {
+                  if (session) setStarted(session.session_id)
+                })
+              }
+            >
+              按原请求继续创建
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      {manager.pending && !manager.pending.metadataReady && (
+        <Alert>
+          <AlertDescription>
+            <p>
+              本地文件登记曾中断。请重新选择此次导入的全部文件，按原请求继续。
+            </p>
+            <Button
+              variant="outline"
+              disabled={manager.creating}
+              onClick={() => pendingFiles.current?.click()}
+            >
+              重选此导入全部文件
+            </Button>
+            <Input
+              ref={pendingFiles}
+              aria-label="重选此导入全部文件"
+              className="hidden"
+              type="file"
+              multiple
+              accept="video/*"
+              onChange={(event) => {
+                const files = Array.from(event.target.files ?? [])
+                event.target.value = ""
+                if (files.length)
+                  void manager.restorePendingFiles(files).then((session) => {
+                    if (session) setStarted(session.session_id)
+                  })
+              }}
+            />
           </AlertDescription>
         </Alert>
       )}
@@ -210,7 +254,7 @@ function MaterialWorkspace({
           onClose={() => setSheet(false)}
           onStarted={(batch) => {
             setSheet(false)
-            setStarted(batch.batch_id)
+            setStarted(batch.session_id)
           }}
         />
       )}

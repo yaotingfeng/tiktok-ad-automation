@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { namingHint } from "./presentation"
+import { MAX_BROWSER_FILE_BYTES } from "./upload-scheduler"
 export const supportedTypes = new Set([
   "video/mp4",
   "video/quicktime",
@@ -13,7 +14,8 @@ export const supportedTypes = new Set([
 ])
 export function fileIssue(file: File) {
   if (!file.size) return "文件为空"
-  if (file.size > 5 * 1024 ** 4) return "文件超过 5 TB"
+  if (file.size > MAX_BROWSER_FILE_BYTES)
+    return "文件超过当前单文件 256 MiB 工程容量"
   if (!supportedTypes.has(file.type))
     return "请选择 MP4、MOV、AVI、WebM、MPEG 或 MKV 视频"
   if (
@@ -46,7 +48,8 @@ export function UploadPanel({
         }}
       >
         <p className="mb-3 text-sm text-muted-foreground">
-          将本地视频拖到此处，或选择多个文件。
+          一次最多选择 20000 个视频，每个文件最多 256
+          MiB。刷新后未传完的文件需要重新选择。
         </p>
         <Button
           type="button"

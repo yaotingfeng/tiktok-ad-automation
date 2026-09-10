@@ -36,7 +36,10 @@ export type TransferCallbacks = {
     signal: AbortSignal,
   ): Promise<readonly { clientIndex: number; materialId: string }[]>
   /** Reserve/reauthorize through the application; never sign before receiving capacity. */
-  resumeFile(input: TransferRequest, signal: AbortSignal): Promise<ResumeResult>
+  resumeFile(
+    input: TransferRequest & { hasLocalFile: boolean },
+    signal: AbortSignal,
+  ): Promise<ResumeResult>
   listParts(
     input: MultipartRequest & { cursor: string | null; limit: 100 },
     signal: AbortSignal,
@@ -377,9 +380,20 @@ export class UploadScheduler {
     const summary = { matched: 0, issues: 0 }
     try {
       const candidates = this.selection(files)
+      const manifestCounts = new Map<string, number>()
+      for await (const row of this.records(signal)) {
+        if (row.state !== "completed") {
+          const key = this.selectionKey(row.file)
+          manifestCounts.set(key, (manifestCounts.get(key) ?? 0) + 1)
+        }
+      }
       for await (const row of this.records(signal)) {
         if (row.state === "completed") continue
         try {
+          if ((manifestCounts.get(this.selectionKey(row.file)) ?? 0) > 1) {
+            this.files.delete(row.clientIndex)
+            throw new UploadError("ambiguous_file")
+          }
           await this.attach(
             row,
             candidates.get(this.selectionKey(row.file)) ?? [],
@@ -565,7 +579,11 @@ export class UploadScheduler {
     valid(record.materialId)
     const request = { scope: this.scope, record }
     const resumed = await this.call(
-      () => this.options.callbacks.resumeFile(request, signal),
+      () =>
+        this.options.callbacks.resumeFile(
+          { ...request, hasLocalFile: this.files.has(record.clientIndex) },
+          signal,
+        ),
       signal,
     )
     if (resumed.state === "waiting_capacity")
