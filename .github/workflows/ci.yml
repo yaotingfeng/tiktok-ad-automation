@@ -53,7 +53,6 @@ jobs:
         with: {python-version: '3.14'}
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
       - name: Isolate unused Chrome APT repository
-        if: matrix.suite == 'modules' || matrix.suite == 'browser'
         run: sudo bash scripts/ci-isolate-chrome-apt-source.sh /etc/apt/sources.list.d "$RUNNER_TEMP/tiktok-ci-disabled-apt-sources"
       - name: Install PostgreSQL 18 backup clients
         if: matrix.suite == 'modules'
@@ -67,7 +66,6 @@ jobs:
           echo "PG_BIN_DIR=/usr/lib/postgresql/18/bin" >> "$GITHUB_ENV"
       - run: uv sync --frozen --package app
       - name: Install media validation tools
-        if: matrix.suite != 'browser'
         run: |
           if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
             sudo apt-get update
@@ -95,6 +93,10 @@ jobs:
         if: matrix.suite == 'browser'
         working-directory: frontend
       - run: bun x playwright test --config=playwright.acceptance.config.ts
+        if: matrix.suite == 'browser'
+        working-directory: frontend
+      - name: Verify R2 browser ingestion through the real API
+        run: bun x playwright test --config=playwright.r2-acceptance.config.ts
         if: matrix.suite == 'browser'
         working-directory: frontend
   frontend:
