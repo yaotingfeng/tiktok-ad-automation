@@ -58,7 +58,7 @@ export function StrategyEditor({
     )
   if ((requestedVersion && version.isPending) || (recordId && record.isPending))
     return (
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="grid w-full max-w-7xl gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
         <Skeleton className="h-96" />
         <Skeleton className="h-72" />
       </div>

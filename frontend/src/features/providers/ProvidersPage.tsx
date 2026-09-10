@@ -1,6 +1,7 @@
 import { useNavigate, useSearch } from "@tanstack/react-router"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useTenantScope } from "@/features/tenants/TenantScope"
+import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import { ConnectionPanel } from "./ConnectionPanel"
 import { LinkHistory } from "./LinkHistory"
 import { LinkResultTable } from "./LinkResultTable"
@@ -18,12 +19,13 @@ export function ProvidersPage() {
   return (
     <>
       <div className="flex flex-col gap-2">
-        <h1 className="workspace-title">版权方连接</h1>
+        <WorkspacePageTitle>版权方连接</WorkspacePageTitle>
         <p className="text-sm text-muted-foreground">
           当前租户：{tenant?.name} · 连接与推广链接属于租户，不按 BC 筛选。
         </p>
       </div>
       <Tabs
+        className="gap-4"
         value={search.tab}
         onValueChange={(tab) => go(tab === "links" ? "links" : "connections")}
       >

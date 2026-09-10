@@ -5,7 +5,6 @@ import { useMemo, useState } from "react"
 import { StrategiesService, type StrategyPublic } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -26,6 +25,7 @@ import {
   useRetainedData,
 } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
+import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import { handleApiError } from "@/lib/api-feedback"
 import { StrategyError as RequestError } from "./feedback"
 import { strategyKey } from "./queries"
@@ -215,7 +215,7 @@ export function StrategyList() {
     <>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex flex-col gap-2">
-          <h1 className="workspace-title">投放策略</h1>
+          <WorkspacePageTitle>投放策略</WorkspacePageTitle>
           <p className="text-sm text-muted-foreground">
             当前租户策略 · {tenant?.name} · 不按 BC 筛选
           </p>
@@ -232,68 +232,66 @@ export function StrategyList() {
           </Button>
         )}
       </div>
-      <Card>
-        <CardContent className="p-0">
-          <form
-            className="flex flex-wrap items-end gap-3 p-4"
-            onSubmit={(e) => {
-              e.preventDefault()
-              setSearch(input.trim())
+      <div className="flex min-w-0 flex-col gap-4">
+        <form
+          className="flex flex-wrap items-end gap-3"
+          onSubmit={(e) => {
+            e.preventDefault()
+            setSearch(input.trim())
+            paging.reset()
+          }}
+        >
+          <Field className="w-full sm:w-80">
+            <FieldLabel htmlFor="strategy-search">策略名称</FieldLabel>
+            <Input
+              id="strategy-search"
+              maxLength={255}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="搜索策略名称"
+            />
+          </Field>
+          <FilterSelect
+            label="策略状态"
+            choices={{ active: "可用", inactive: "已停用" }}
+            value={active}
+            onChange={(v) => {
+              setActive(v)
+              paging.reset()
+            }}
+          />
+          <Button variant="outline" type="submit">
+            搜索
+          </Button>
+          <Button
+            variant="ghost"
+            type="button"
+            onClick={() => {
+              setInput("")
+              setSearch("")
+              setActive("all")
               paging.reset()
             }}
           >
-            <Field className="min-w-48 flex-1">
-              <FieldLabel htmlFor="strategy-search">策略名称</FieldLabel>
-              <Input
-                id="strategy-search"
-                maxLength={255}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="搜索策略名称"
-              />
-            </Field>
-            <FilterSelect
-              label="策略状态"
-              choices={{ active: "可用", inactive: "已停用" }}
-              value={active}
-              onChange={(v) => {
-                setActive(v)
-                paging.reset()
-              }}
-            />
-            <Button variant="outline" type="submit">
-              搜索
-            </Button>
-            <Button
-              variant="ghost"
-              type="button"
-              onClick={() => {
-                setInput("")
-                setSearch("")
-                setActive("all")
-                paging.reset()
-              }}
-            >
-              清除筛选
-            </Button>
-          </form>
-          <ServerTable
-            rows={data?.items || []}
-            columns={columns}
-            loading={query.isPending && !data}
-            fetching={query.isFetching}
-            error={query.error}
-            retry={() => void query.refetch()}
-            filtered={!!search || active === "inactive"}
-            emptyTitle="还没有投放策略"
-          />
-          <Pager
-            paging={paging}
-            nextCursor={data?.next_cursor}
-            busy={query.isFetching}
-          />
-        </CardContent>
-      </Card>
+            清除筛选
+          </Button>
+        </form>
+        <ServerTable
+          rows={data?.items || []}
+          columns={columns}
+          loading={query.isPending && !data}
+          fetching={query.isFetching}
+          error={query.error}
+          retry={() => void query.refetch()}
+          filtered={!!search || active === "inactive"}
+          emptyTitle="还没有投放策略"
+        />
+        <Pager
+          paging={paging}
+          nextCursor={data?.next_cursor}
+          busy={query.isFetching}
+        />
+      </div>
       {history && (
         <StrategyVersionList
           strategyId={history.id}

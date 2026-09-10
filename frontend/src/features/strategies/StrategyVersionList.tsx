@@ -126,21 +126,23 @@ export function StrategyVersionList({
       dirty={false}
       onClose={onClose}
     >
-      <ServerTable
-        rows={data?.items || []}
-        columns={columns}
-        loading={query.isPending && !data}
-        fetching={query.isFetching}
-        error={query.error}
-        retry={() => void query.refetch()}
-        filtered={false}
-        emptyTitle="暂无策略版本"
-      />
-      <Pager
-        paging={paging}
-        nextCursor={data?.next_cursor}
-        busy={query.isFetching}
-      />
+      <div className="flex min-w-0 flex-col gap-4">
+        <ServerTable
+          rows={data?.items || []}
+          columns={columns}
+          loading={query.isPending && !data}
+          fetching={query.isFetching}
+          error={query.error}
+          retry={() => void query.refetch()}
+          filtered={false}
+          emptyTitle="暂无策略版本"
+        />
+        <Pager
+          paging={paging}
+          nextCursor={data?.next_cursor}
+          busy={query.isFetching}
+        />
+      </div>
     </ManagementSheet>
   )
 }

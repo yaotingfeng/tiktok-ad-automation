@@ -14,6 +14,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
+import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import { useTenantScope } from "./TenantScope"
 
 export function TenantPlaceholder({ title }: { title: string }) {
@@ -22,7 +23,7 @@ export function TenantPlaceholder({ title }: { title: string }) {
     <>
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex flex-col gap-2">
-          <h1 className="workspace-title">{title}</h1>
+          <WorkspacePageTitle>{title}</WorkspacePageTitle>
           <p className="text-sm text-muted-foreground">
             {tenant!.name} · 当前租户工作空间
           </p>

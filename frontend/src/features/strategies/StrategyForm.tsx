@@ -46,6 +46,7 @@ import {
 } from "@/components/ui/select"
 import { ManagementSheet } from "@/features/tenants/ManagementSheet"
 import { useTenantScope } from "@/features/tenants/TenantScope"
+import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import { handleApiError } from "@/lib/api-feedback"
 import { CopyPoolSheet } from "./CopyPoolSheet"
 import { StrategyError as RequestError } from "./feedback"
@@ -390,13 +391,13 @@ export function StrategyForm({
   return (
     <>
       <div className="flex flex-col gap-2">
-        <h1 className="workspace-title">
+        <WorkspacePageTitle>
           {strategyId
             ? readonly
               ? "策略版本详情"
               : "编辑投放策略"
             : "新建投放策略"}
-        </h1>
+        </WorkspacePageTitle>
         <p className="text-sm text-muted-foreground">
           当前租户策略 · {strategy?.name || "新策略"}{" "}
           {baseNumber > 0 && (
@@ -474,11 +475,11 @@ export function StrategyForm({
           </AlertDescription>
         </Alert>
       )}
-      <div className="grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="grid w-full min-w-0 max-w-7xl items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
         <form
           id="strategy-form"
           noValidate
-          className="flex min-w-0 flex-col gap-5 pb-5"
+          className="flex min-w-0 flex-col gap-6 pb-6"
           onSubmit={(e) => {
             e.preventDefault()
             void save()
@@ -713,7 +714,7 @@ export function StrategyForm({
             </CardContent>
           </Card>
         </form>
-        <aside className="flex min-w-0 flex-col gap-5">
+        <aside className="flex min-w-0 flex-col gap-6">
           <StrategyStructureExample
             groupSize={/^\d+$/.test(groupSize) ? cfg.group_size : Number.NaN}
             creativeCount={
@@ -725,7 +726,7 @@ export function StrategyForm({
           <StrategyNamingExample suffix={suffix} />
         </aside>
       </div>
-      <div className="sticky bottom-0 flex flex-wrap items-center justify-between gap-3 border-t bg-background px-4 py-3">
+      <div className="sticky bottom-0 flex w-full max-w-7xl flex-wrap items-center justify-between gap-3 border-t bg-background px-4 py-3">
         <p className="text-sm text-muted-foreground">
           {readonly
             ? "只读版本，已提交任务继续使用原配置。"

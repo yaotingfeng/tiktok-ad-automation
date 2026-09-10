@@ -87,7 +87,7 @@ export function BatchHistory({
     },
   ]
   return (
-    <>
+    <div className="flex min-w-0 flex-col gap-4">
       <ServerTable
         rows={data?.items || []}
         columns={columns}
@@ -103,6 +103,6 @@ export function BatchHistory({
         nextCursor={data?.next_cursor}
         busy={query.isFetching}
       />
-    </>
+    </div>
   )
 }

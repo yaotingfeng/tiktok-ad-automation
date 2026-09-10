@@ -6,7 +6,6 @@ import { AccountsService, type BCPublic, type ConnectionPublic } from "@/client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
 import { ManagementSheet } from "@/features/tenants/ManagementSheet"
 import {
   canManage,
@@ -277,47 +276,45 @@ export function ConnectionsPage() {
           </Button>
         )}
       </div>
-      <Card>
-        <CardContent className="p-0">
-          <div className="flex flex-wrap items-center gap-3 p-4">
-            <FilterSelect
-              label="连接状态"
-              choices={connectionLabels}
-              value={status}
-              onChange={(value) => {
-                setStatus(value)
-                paging.reset()
-              }}
-            />
-            <Button
-              variant="ghost"
-              onClick={() => {
-                setStatus("all")
-                paging.reset()
-              }}
-            >
-              清除筛选
-            </Button>
-          </div>
-          <ServerTable
-            rows={data?.items ?? []}
-            columns={columns}
-            loading={query.isPending && !data}
-            fetching={query.isFetching}
-            error={query.error}
-            retry={() => {
-              void query.refetch()
+      <div className="flex min-w-0 flex-col gap-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <FilterSelect
+            label="连接状态"
+            choices={connectionLabels}
+            value={status}
+            onChange={(value) => {
+              setStatus(value)
+              paging.reset()
             }}
-            filtered={status !== "all"}
-            emptyTitle="当前租户尚无授权连接"
           />
-          <Pager
-            paging={paging}
-            nextCursor={data?.next_cursor}
-            busy={query.isFetching}
-          />
-        </CardContent>
-      </Card>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setStatus("all")
+              paging.reset()
+            }}
+          >
+            清除筛选
+          </Button>
+        </div>
+        <ServerTable
+          rows={data?.items ?? []}
+          columns={columns}
+          loading={query.isPending && !data}
+          fetching={query.isFetching}
+          error={query.error}
+          retry={() => {
+            void query.refetch()
+          }}
+          filtered={status !== "all"}
+          emptyTitle="当前租户尚无授权连接"
+        />
+        <Pager
+          paging={paging}
+          nextCursor={data?.next_cursor}
+          busy={query.isFetching}
+        />
+      </div>
       {detail && (
         <ConnectionDetails
           detail={

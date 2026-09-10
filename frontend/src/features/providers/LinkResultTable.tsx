@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { ProvidersService, type ResolvedLink } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
 import { FilterSelect } from "@/features/accounts/presentation"
 import { ManagementSheet } from "@/features/tenants/ManagementSheet"
 import {
@@ -212,33 +211,28 @@ export function LinkResultTable({ taskId }: { taskId: string }) {
           paging.reset()
         }}
       />
-      <Card>
-        <CardContent className="p-0">
-          <ServerTable
-            rows={data?.items || []}
-            columns={columns}
-            loading={query.isPending && !data}
-            fetching={query.isFetching}
-            error={query.error}
-            retry={() => void query.refetch()}
-            filtered={filter !== "all"}
-            emptyTitle="本次任务尚无结果"
-          />
-          {query.error && data && (
-            <p
-              role="status"
-              className="px-4 py-2 text-sm text-muted-foreground"
-            >
-              保留上次读取的列表，请重试以获取当前结果。
-            </p>
-          )}
-          <Pager
-            paging={paging}
-            nextCursor={data?.next_cursor}
-            busy={query.isFetching}
-          />
-        </CardContent>
-      </Card>
+      <div className="flex min-w-0 flex-col gap-4">
+        <ServerTable
+          rows={data?.items || []}
+          columns={columns}
+          loading={query.isPending && !data}
+          fetching={query.isFetching}
+          error={query.error}
+          retry={() => void query.refetch()}
+          filtered={filter !== "all"}
+          emptyTitle="本次任务尚无结果"
+        />
+        {query.error && data && (
+          <p role="status" className="text-sm text-muted-foreground">
+            保留上次读取的列表，请重试以获取当前结果。
+          </p>
+        )}
+        <Pager
+          paging={paging}
+          nextCursor={data?.next_cursor}
+          busy={query.isFetching}
+        />
+      </div>
       {showScope && summary.data && (
         <ManagementSheet
           title="取链任务范围"

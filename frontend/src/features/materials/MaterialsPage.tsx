@@ -2,7 +2,6 @@ import { useBlocker, useNavigate, useRouterState } from "@tanstack/react-router"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -16,6 +15,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { canManage } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
+import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import { AssetDetails } from "./AssetDetails"
 import { BatchHistory } from "./BatchHistory"
 import { BatchUploadSheet } from "./BatchUploadSheet"
@@ -118,7 +118,7 @@ function MaterialWorkspace({
     <>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex flex-col gap-2">
-          <h1 className="workspace-title">素材库</h1>
+          <WorkspacePageTitle>素材库</WorkspacePageTitle>
           <p className="text-sm text-muted-foreground">
             视频临时中转，平台确认入库后清理原件；保留实际上传账户与可用素材记录。
           </p>
@@ -200,54 +200,52 @@ function MaterialWorkspace({
           </AlertDescription>
         </Alert>
       )}
-      <Card>
-        <CardContent className="p-0">
-          <Tabs value={tab} onValueChange={(v) => go(v)}>
-            <TabsList className="m-4">
-              <TabsTrigger value="library">素材库</TabsTrigger>
-              <TabsTrigger value="uploads">上传队列</TabsTrigger>
-            </TabsList>
-          </Tabs>
-          <section aria-label="素材目录" hidden={tab !== "library"}>
-            <MaterialTable
+      <div className="flex min-w-0 flex-col gap-4">
+        <Tabs value={tab} onValueChange={(v) => go(v)}>
+          <TabsList>
+            <TabsTrigger value="library">素材库</TabsTrigger>
+            <TabsTrigger value="uploads">上传队列</TabsTrigger>
+          </TabsList>
+        </Tabs>
+        <section aria-label="素材目录" hidden={tab !== "library"}>
+          <MaterialTable
+            tenantId={tenantId}
+            bcId={bcId}
+            onDetails={setDetails}
+            onForbidden={manager.revokePermission}
+            enabled={tab === "library"}
+          />
+        </section>
+        <section aria-label="上传批次与队列" hidden={tab !== "uploads"}>
+          {search.batch_id ? (
+            <UploadQueue
+              key={search.batch_id}
               tenantId={tenantId}
               bcId={bcId}
+              batchId={search.batch_id}
+              manager={manager}
+              write={write}
               onDetails={setDetails}
               onForbidden={manager.revokePermission}
-              enabled={tab === "library"}
+              onHistory={() =>
+                void navigate({
+                  to: "/tenants/$tenantId/materials",
+                  params: { tenantId },
+                  search: { bc_id: bcId, tab: "uploads" },
+                })
+              }
             />
-          </section>
-          <section aria-label="上传批次与队列" hidden={tab !== "uploads"}>
-            {search.batch_id ? (
-              <UploadQueue
-                key={search.batch_id}
-                tenantId={tenantId}
-                bcId={bcId}
-                batchId={search.batch_id}
-                manager={manager}
-                write={write}
-                onDetails={setDetails}
-                onForbidden={manager.revokePermission}
-                onHistory={() =>
-                  void navigate({
-                    to: "/tenants/$tenantId/materials",
-                    params: { tenantId },
-                    search: { bc_id: bcId, tab: "uploads" },
-                  })
-                }
-              />
-            ) : (
-              <BatchHistory
-                enabled={tab === "uploads"}
-                onForbidden={manager.revokePermission}
-                tenantId={tenantId}
-                bcId={bcId}
-                onOpen={(id) => go("uploads", id)}
-              />
-            )}
-          </section>
-        </CardContent>
-      </Card>
+          ) : (
+            <BatchHistory
+              enabled={tab === "uploads"}
+              onForbidden={manager.revokePermission}
+              tenantId={tenantId}
+              bcId={bcId}
+              onOpen={(id) => go("uploads", id)}
+            />
+          )}
+        </section>
+      </div>
       {sheet && (
         <BatchUploadSheet
           manager={manager}

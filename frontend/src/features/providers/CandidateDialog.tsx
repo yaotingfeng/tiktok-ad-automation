@@ -68,36 +68,38 @@ export function CandidateDialog({
           </DialogDescription>
         </DialogHeader>
         {error && <ProviderError error={error} />}
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>正式剧名</TableHead>
-              <TableHead>语言</TableHead>
-              <TableHead>应用 / 剧目 ID</TableHead>
-              <TableHead>操作</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {item.candidates?.map((candidate) => (
-              <TableRow key={candidate.external_drama_id}>
-                <TableCell>{candidate.title}</TableCell>
-                <TableCell>{candidate.language || "待核实"}</TableCell>
-                <TableCell>
-                  <p>{item.application_id}</p>
-                  <p>{candidate.external_drama_id}</p>
-                </TableCell>
-                <TableCell>
-                  <Button
-                    disabled={pending}
-                    onClick={() => void choose(candidate.external_drama_id)}
-                  >
-                    使用此剧目
-                  </Button>
-                </TableCell>
+        <div className="overflow-hidden rounded-lg border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>正式剧名</TableHead>
+                <TableHead>语言</TableHead>
+                <TableHead>应用 / 剧目 ID</TableHead>
+                <TableHead>操作</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {item.candidates?.map((candidate) => (
+                <TableRow key={candidate.external_drama_id}>
+                  <TableCell>{candidate.title}</TableCell>
+                  <TableCell>{candidate.language || "待核实"}</TableCell>
+                  <TableCell>
+                    <p>{item.application_id}</p>
+                    <p>{candidate.external_drama_id}</p>
+                  </TableCell>
+                  <TableCell>
+                    <Button
+                      disabled={pending}
+                      onClick={() => void choose(candidate.external_drama_id)}
+                    >
+                      使用此剧目
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       </DialogContent>
     </Dialog>
   )

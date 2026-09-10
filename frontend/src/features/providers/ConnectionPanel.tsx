@@ -8,7 +8,6 @@ import {
 } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -192,90 +191,83 @@ export function ConnectionPanel({
         </p>
         {manage && <Button onClick={() => setEditing("new")}>新增连接</Button>}
       </div>
-      <Card>
-        <CardContent className="p-0">
-          <form
-            className="flex flex-wrap items-end gap-3 p-4"
-            onSubmit={(e) => {
-              e.preventDefault()
-              setSearch(input.trim())
+      <div className="flex min-w-0 flex-col gap-4">
+        <form
+          className="flex flex-wrap items-end gap-3"
+          onSubmit={(e) => {
+            e.preventDefault()
+            setSearch(input.trim())
+            paging.reset()
+          }}
+        >
+          <Field className="w-full sm:w-80">
+            <FieldLabel htmlFor="provider-connection-search">
+              连接名称
+            </FieldLabel>
+            <Input
+              id="provider-connection-search"
+              maxLength={255}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="搜索连接名称"
+            />
+          </Field>
+          <FilterSelect
+            label="版权方"
+            choices={kinds}
+            value={kindFilter}
+            onChange={(v) => {
+              setKindFilter(v)
+              paging.reset()
+            }}
+          />
+          <FilterSelect
+            label="验证状态"
+            choices={connectionStates}
+            value={statusFilter}
+            onChange={(v) => {
+              setStatusFilter(v)
+              paging.reset()
+            }}
+          />
+          <Button type="submit" variant="outline">
+            搜索
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => {
+              setInput("")
+              setSearch("")
+              setKindFilter("all")
+              setStatusFilter("all")
               paging.reset()
             }}
           >
-            <Field className="min-w-48 flex-1">
-              <FieldLabel htmlFor="provider-connection-search">
-                连接名称
-              </FieldLabel>
-              <Input
-                id="provider-connection-search"
-                maxLength={255}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="搜索连接名称"
-              />
-            </Field>
-            <FilterSelect
-              label="版权方"
-              choices={kinds}
-              value={kindFilter}
-              onChange={(v) => {
-                setKindFilter(v)
-                paging.reset()
-              }}
-            />
-            <FilterSelect
-              label="验证状态"
-              choices={connectionStates}
-              value={statusFilter}
-              onChange={(v) => {
-                setStatusFilter(v)
-                paging.reset()
-              }}
-            />
-            <Button type="submit" variant="outline">
-              搜索
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => {
-                setInput("")
-                setSearch("")
-                setKindFilter("all")
-                setStatusFilter("all")
-                paging.reset()
-              }}
-            >
-              清除筛选
-            </Button>
-          </form>
-          <ServerTable
-            rows={data?.items || []}
-            columns={columns}
-            loading={query.isPending && !data}
-            fetching={query.isFetching}
-            error={query.error}
-            retry={() => void query.refetch()}
-            filtered={
-              !!search || kindFilter !== "all" || statusFilter !== "all"
-            }
-            emptyTitle="尚未添加版权方连接"
-          />
-          {query.error && data && (
-            <p
-              role="status"
-              className="px-4 py-2 text-sm text-muted-foreground"
-            >
-              保留上次读取的列表，请重试以获取当前结果。
-            </p>
-          )}
-          <Pager
-            paging={paging}
-            nextCursor={data?.next_cursor}
-            busy={query.isFetching}
-          />
-        </CardContent>
-      </Card>
+            清除筛选
+          </Button>
+        </form>
+        <ServerTable
+          rows={data?.items || []}
+          columns={columns}
+          loading={query.isPending && !data}
+          fetching={query.isFetching}
+          error={query.error}
+          retry={() => void query.refetch()}
+          filtered={!!search || kindFilter !== "all" || statusFilter !== "all"}
+          emptyTitle="尚未添加版权方连接"
+        />
+        {query.error && data && (
+          <p role="status" className="text-sm text-muted-foreground">
+            保留上次读取的列表，请重试以获取当前结果。
+          </p>
+        )}
+        <Pager
+          paging={paging}
+          nextCursor={data?.next_cursor}
+          busy={query.isFetching}
+        />
+      </div>
       {editing && (
         <ConnectionEditor
           key={editing === "new" ? "new" : editing.id}

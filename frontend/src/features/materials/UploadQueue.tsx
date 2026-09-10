@@ -256,7 +256,7 @@ export function UploadQueue({
       />
     )
   return (
-    <div className="flex flex-col gap-4 p-4">
+    <div className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Button variant="outline" onClick={onHistory}>
           返回导入历史

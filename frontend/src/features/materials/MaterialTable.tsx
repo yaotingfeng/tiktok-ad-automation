@@ -155,9 +155,9 @@ export function MaterialTable({
     paging.reset()
   }
   return (
-    <>
+    <div className="flex min-w-0 flex-col gap-4">
       <form
-        className="flex flex-wrap items-end gap-3 p-4"
+        className="flex flex-wrap items-end gap-3"
         onSubmit={(e) => {
           e.preventDefault()
           if (from && to && from > to) return
@@ -166,7 +166,7 @@ export function MaterialTable({
           paging.reset()
         }}
       >
-        <Field className="min-w-48 flex-1">
+        <Field className="w-full sm:w-80">
           <FieldLabel htmlFor="material-search">素材文件名</FieldLabel>
           <Input
             id="material-search"
@@ -238,6 +238,6 @@ export function MaterialTable({
         nextCursor={data?.next_cursor}
         busy={query.isFetching}
       />
-    </>
+    </div>
   )
 }

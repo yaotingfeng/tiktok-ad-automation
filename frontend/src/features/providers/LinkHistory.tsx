@@ -10,7 +10,6 @@ import {
 } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -165,116 +164,111 @@ export function LinkHistory({
   )
   return (
     <div className="flex flex-col gap-4">
-      <Card>
-        <CardContent className="p-0">
-          <form
-            className="flex flex-wrap items-end gap-3 p-4"
-            onSubmit={(e) => {
-              e.preventDefault()
-              setSearch(input.trim())
+      <div className="flex min-w-0 flex-col gap-4">
+        <form
+          className="flex flex-wrap items-end gap-3"
+          onSubmit={(e) => {
+            e.preventDefault()
+            setSearch(input.trim())
+            paging.reset()
+          }}
+        >
+          <Field className="w-full sm:w-80">
+            <FieldLabel htmlFor="provider-link-search">
+              剧名或剧目 ID
+            </FieldLabel>
+            <Input
+              id="provider-link-search"
+              maxLength={255}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="搜索正式剧名或完整剧目 ID"
+            />
+          </Field>
+          <DirectoryPicker
+            label="版权方连接"
+            valueLabel={
+              connectionId ? connectionName || connectionId : undefined
+            }
+            queryKey={[...providerKey(tenantId!), "connection-filter"]}
+            load={async (query, cursor, limit, signal) =>
+              (
+                await ProvidersService.listConnections({
+                  path: { tenant_id: tenantId! },
+                  query: { query, cursor, limit },
+                  signal,
+                })
+              ).data!
+            }
+            renderItem={(row) => (
+              <span>
+                {row.display_name} · {kinds[row.kind]}
+              </span>
+            )}
+            onSelect={(row) => {
+              setConnectionName(row.display_name)
+              setApplication(undefined)
+              paging.reset()
+              onConnection(row.id)
+            }}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            disabled={!connectionId}
+            onClick={() => setPickApp(true)}
+          >
+            {application?.name || "筛选应用"}
+          </Button>
+          <FilterSelect
+            label="链接状态"
+            choices={states}
+            value={status}
+            onChange={(v) => {
+              setStatus(v)
               paging.reset()
             }}
+          />
+          <Button type="submit" variant="outline">
+            搜索
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => {
+              setInput("")
+              setSearch("")
+              setApplication(undefined)
+              setConnectionName("")
+              setStatus("all")
+              paging.reset()
+              onConnection(undefined)
+            }}
           >
-            <Field className="min-w-48 flex-1">
-              <FieldLabel htmlFor="provider-link-search">
-                剧名或剧目 ID
-              </FieldLabel>
-              <Input
-                id="provider-link-search"
-                maxLength={255}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="搜索正式剧名或完整剧目 ID"
-              />
-            </Field>
-            <DirectoryPicker
-              label="版权方连接"
-              valueLabel={
-                connectionId ? connectionName || connectionId : undefined
-              }
-              queryKey={[...providerKey(tenantId!), "connection-filter"]}
-              load={async (query, cursor, limit, signal) =>
-                (
-                  await ProvidersService.listConnections({
-                    path: { tenant_id: tenantId! },
-                    query: { query, cursor, limit },
-                    signal,
-                  })
-                ).data!
-              }
-              renderItem={(row) => (
-                <span>
-                  {row.display_name} · {kinds[row.kind]}
-                </span>
-              )}
-              onSelect={(row) => {
-                setConnectionName(row.display_name)
-                setApplication(undefined)
-                paging.reset()
-                onConnection(row.id)
-              }}
-            />
-            <Button
-              type="button"
-              variant="outline"
-              disabled={!connectionId}
-              onClick={() => setPickApp(true)}
-            >
-              {application?.name || "筛选应用"}
-            </Button>
-            <FilterSelect
-              label="链接状态"
-              choices={states}
-              value={status}
-              onChange={(v) => {
-                setStatus(v)
-                paging.reset()
-              }}
-            />
-            <Button type="submit" variant="outline">
-              搜索
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => {
-                setInput("")
-                setSearch("")
-                setApplication(undefined)
-                setConnectionName("")
-                setStatus("all")
-                paging.reset()
-                onConnection(undefined)
-              }}
-            >
-              清除筛选
-            </Button>
-          </form>
-          <ServerTable
-            rows={data?.items || []}
-            columns={columns}
-            loading={query.isPending && !data}
-            fetching={query.isFetching}
-            error={query.error}
-            retry={() => void query.refetch()}
-            filtered={filtered}
-            emptyTitle="尚无推广链接记录"
-          />
-          {query.error && data && (
-            <p
-              role="status"
-              className="px-4 py-2 text-sm text-muted-foreground"
-            >
-              保留上次读取的列表，请重试以获取当前结果。
-            </p>
-          )}
-          <Pager
-            paging={paging}
-            nextCursor={data?.next_cursor}
-            busy={query.isFetching}
-          />
-        </CardContent>
-      </Card>
+            清除筛选
+          </Button>
+        </form>
+        <ServerTable
+          rows={data?.items || []}
+          columns={columns}
+          loading={query.isPending && !data}
+          fetching={query.isFetching}
+          error={query.error}
+          retry={() => void query.refetch()}
+          filtered={filtered}
+          emptyTitle="尚无推广链接记录"
+        />
+        {query.error && data && (
+          <p role="status" className="text-sm text-muted-foreground">
+            保留上次读取的列表，请重试以获取当前结果。
+          </p>
+        )}
+        <Pager
+          paging={paging}
+          nextCursor={data?.next_cursor}
+          busy={query.isFetching}
+        />
+      </div>
       {!query.isPending && !query.error && !data?.items.length && !filtered && (
         <Empty>
           <EmptyHeader>
