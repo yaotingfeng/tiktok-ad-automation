@@ -19,11 +19,13 @@ def abandon_transport(
         raise storage_error("cleanup_unverified")
     if obj.claimed_until and obj.claimed_until > datetime.now(UTC):
         raise storage_error("original_in_use")
+    if obj.error_code == "multipart_collecting":
+        # Only ListParts was sent. Fence its late callback before allowing Abort.
+        obj.claim_token, obj.claimed_until, obj.error_code = None, None, None
     # A lost Create/Complete must recover its identity/result before cleanup.
     if obj.error_code in {
         "multipart_creating",
         "multipart_create_unknown",
-        "multipart_collecting",
         "multipart_completing",
         "multipart_complete_unknown",
     }:

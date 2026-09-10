@@ -475,7 +475,7 @@ def sign_parts(
         )
         _receiving(obj, row)
         sizes = [(number, _part_bytes(obj, number)) for number in identity.part_numbers]
-        from .part_receipts import signing_window
+        from .part_receipts import signing_window, verify_signed_deadline
 
         uses = signing_window(
             db,
@@ -490,39 +490,43 @@ def sign_parts(
                 use.id,
                 use.nonce,
                 use.revision,
-                int((use.expires_at - _now()).total_seconds()),
+                use.expires_at,
             )
             for use in uses
         }
-        if any(permission[3] < 60 for permission in permissions.values()):
-            raise DomainError(
-                "part_permission_expired", "分片签名已到期，请恢复上传窗口"
-            )
         snapshot = _snapshot(obj)
     assert snapshot.storage_bucket is not None and snapshot.s3_upload_id is not None
     client = s3
     try:
         client = client if client is not None else storage.make_object_s3(snapshot)
-        items = [
-            IngestPartUrl(
+        items = []
+        for number, size in sizes:
+            expires_in = int((permissions[number][3] - _now()).total_seconds())
+            if expires_in < 60:
+                raise DomainError(
+                    "part_permission_expired", "分片签名已到期，请恢复上传窗口"
+                )
+            url = storage.sign_part(
+                client,
+                bucket=snapshot.storage_bucket,
+                key=snapshot.object_key,
+                upload_id=snapshot.s3_upload_id,
                 part_number=number,
                 byte_size=size,
-                expires_in=permissions[number][3],
-                permission_id=permissions[number][0],
-                permission_nonce=permissions[number][1],
-                permission_revision=permissions[number][2],
-                url=storage.sign_part(
-                    client,
-                    bucket=snapshot.storage_bucket,
-                    key=snapshot.object_key,
-                    upload_id=snapshot.s3_upload_id,
+                expires_in=expires_in,
+            )
+            verify_signed_deadline(url, permissions[number][3])
+            items.append(
+                IngestPartUrl(
                     part_number=number,
                     byte_size=size,
-                    expires_in=permissions[number][3],
-                ),
+                    expires_in=expires_in,
+                    permission_id=permissions[number][0],
+                    permission_nonce=permissions[number][1],
+                    permission_revision=permissions[number][2],
+                    url=url,
+                )
             )
-            for number, size in sizes
-        ]
         with Session(database_engine) as db:
             _, obj, row = _locked(
                 db,
@@ -754,7 +758,7 @@ def complete_file(
             )
             collected = snapshot.parts + [part.model_dump() for part in parts]
             with Session(database_engine) as db, db.begin():
-                _, obj, _ = _token_locked(
+                file, obj, row = _token_locked(
                     db,
                     context=context,
                     session_id=session_id,
@@ -762,6 +766,12 @@ def complete_file(
                     identity=identity,
                     nonce=nonce,
                 )
+                if row.status == "cancelled" or obj.status != "receiving":
+                    # ListParts was read-only. A cancel during that RPC must
+                    # never acquire new Complete authority on its late return.
+                    _clear_claim(obj)
+                    obj.error_code = None
+                    return service.file_public(row, file, obj)
                 obj.parts = collected
                 if following is not None:
                     _clear_claim(obj)

@@ -6,6 +6,7 @@ attempt later uploads the same part; Complete or safe cleanup must settle them.
 
 from datetime import UTC, datetime
 from typing import Any, cast
+from urllib.parse import parse_qs, urlsplit
 from uuid import UUID, uuid5
 
 from sqlmodel import Session, col, select
@@ -23,6 +24,24 @@ from .ingest_schemas import (
 )
 from .object_uses import acquire_original_use
 from .storage import storage_error
+
+
+def verify_signed_deadline(url: str, deadline: datetime) -> None:
+    from datetime import timedelta
+
+    try:
+        fields = parse_qs(urlsplit(url).query, strict_parsing=True)
+        dates, durations = fields["X-Amz-Date"], fields["X-Amz-Expires"]
+        if len(dates) != 1 or len(durations) != 1:
+            raise ValueError
+        issued = datetime.strptime(dates[0], "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+        duration = int(durations[0])
+        if not 1 <= duration <= 900 or issued + timedelta(seconds=duration) > deadline:
+            raise ValueError
+    except KeyError, TypeError, ValueError, OverflowError:
+        # Never return a capability whose actual wire deadline is later than
+        # its durable permission, even after signer/credential setup stalls.
+        raise storage_error("part_permission_expired") from None
 
 
 def signing_window(

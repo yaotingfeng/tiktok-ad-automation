@@ -326,8 +326,15 @@ class FakeR2:
         }
 
     def generate_presigned_url(self, operation, **values):
+        from datetime import UTC, datetime
+
         self.record("sign", {"operation": operation, **values})
-        return "https://storage.invalid/part?signed=test-only"
+        return (
+            "https://storage.invalid/part?signed=test-only&X-Amz-Date="
+            + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            + "&X-Amz-Expires="
+            + str(values["ExpiresIn"])
+        )
 
     def complete_multipart_upload(self, **values):
         from botocore.exceptions import ReadTimeoutError
