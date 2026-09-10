@@ -5,7 +5,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from app.core.config import Settings
-from app.core.errors import ConfigurationError
+from app.core.errors import ConfigurationError, DomainError
 from app.modules.materials import storage, uploads
 from tests.modules.materials.test_object_uploads import (
     FakeS3,
@@ -123,5 +123,59 @@ def test_part_signature_binds_bytes_to_reserved_layout(monkeypatch):
         assert parse_qs(urlsplit(signed).query)["X-Amz-SignedHeaders"] == [
             "content-length;host"
         ]
+    finally:
+        client.close()
+
+
+def test_object_factory_keeps_pinned_namespace_after_deployment_bucket_changes(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    config = r2_settings()
+    monkeypatch.setattr(storage, "settings", config)
+    calls = []
+    monkeypatch.setattr(
+        storage.boto3,
+        "client",
+        lambda *args, **kwargs: calls.append(kwargs) or object(),
+    )
+    obj = SimpleNamespace(
+        storage_provider="r2",
+        storage_bucket="old-private-bucket",
+        storage_endpoint="https://previous.r2.cloudflarestorage.com",
+    )
+    storage.make_object_s3(obj)
+    assert calls[0]["endpoint_url"] == obj.storage_endpoint
+    assert calls[0]["region_name"] == "auto"
+    obj.storage_provider = None
+    with pytest.raises(DomainError) as error:
+        storage.make_object_s3(obj)
+    assert error.value.code == "object_namespace_unverified"
+
+
+def test_part_signing_uses_the_same_bounded_lifetime_as_its_permission(monkeypatch):
+    monkeypatch.setattr(storage, "settings", r2_settings())
+    client = storage.make_s3()
+    try:
+        url = storage.sign_part(
+            client,
+            bucket="private",
+            key="owned",
+            upload_id="test-upload",
+            part_number=1,
+            byte_size=100,
+            expires_in=60,
+        )
+        assert parse_qs(urlsplit(url).query)["X-Amz-Expires"] == ["60"]
+        with pytest.raises(DomainError):
+            storage.sign_part(
+                client,
+                bucket="private",
+                key="owned",
+                upload_id="test-upload",
+                part_number=1,
+                expires_in=901,
+            )
     finally:
         client.close()

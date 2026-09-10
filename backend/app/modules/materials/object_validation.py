@@ -292,14 +292,14 @@ def validate_original(
         )
     with Session(database_engine) as session, session.begin():
         current = locked_object(session, object_id=object_id)
+        # This exact local read has ended even if a successor owns the object.
+        release_original_use(session, use_id=use_id, nonce=use_nonce)
         if (
             current.claim_token != owner
             or current.generation != generation
             or current.revision != revision
         ):
             return
-        # Own the exact validator claim; always close this finished local read.
-        release_original_use(session, use_id=use_id, nonce=use_nonce)
         try:
             locked_object(session, object_id=object_id, context=context, current=True)
         except DomainError as error:

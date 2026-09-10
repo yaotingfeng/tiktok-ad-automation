@@ -111,8 +111,11 @@ def sign_part(
     upload_id: str,
     part_number: int,
     byte_size: int | None = None,
+    expires_in: int = 900,
 ) -> str:
     if type(part_number) is not int or not 1 <= part_number <= 10000:
+        raise storage_error("invalid_part")
+    if type(expires_in) is not int or not 60 <= expires_in <= 900:
         raise storage_error("invalid_part")
     if byte_size is not None and (
         type(byte_size) is not int or not 0 < byte_size <= 5 * 1024**3
@@ -132,7 +135,7 @@ def sign_part(
             s3.generate_presigned_url(
                 "upload_part",
                 Params=params,
-                ExpiresIn=900,
+                ExpiresIn=expires_in,
             ),
         )
     except BotoCoreError, ClientError:

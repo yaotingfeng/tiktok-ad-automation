@@ -363,3 +363,111 @@ def test_revoked_actor_after_get_cannot_publish_trusted_source(
                 PendingDispatch.task_name == "materials.upload_original",
             )
         ).first()
+
+
+def test_late_validation_receipt_cannot_overwrite_new_owner_and_closes_own_use(
+    validation_case, monkeypatch
+):
+    from app.modules.materials import object_validation
+
+    context, object_id, material_id, _, _, dispatch_id = validation_case
+    replacement = uuid4()
+    monkeypatch.setattr(
+        object_validation,
+        "inspect_video",
+        lambda *_args, **_kwargs: {"width": 1080, "height": 1920, "duration": 1.0},
+    )
+
+    def replace_owner():
+        with Session(engine) as session, session.begin():
+            obj = session.get(TemporaryMaterialObject, object_id)
+            obj.claim_token = replacement
+
+    with Session(engine) as session:
+        transport = FakeStorage(
+            session.get(TemporaryMaterialObject, object_id),
+            session.get(MaterialFile, material_id),
+            on_read=replace_owner,
+        )
+        payload = session.get(PendingDispatch, dispatch_id).payload
+    validate_original(
+        database_engine=engine,
+        context=context,
+        object_id=object_id,
+        dispatch_id=dispatch_id,
+        generation=1,
+        revision=payload["revision"],
+        s3=transport,
+    )
+    with Session(engine) as session:
+        obj = session.get(TemporaryMaterialObject, object_id)
+        assert obj.claim_token == replacement and obj.digest_verified_at is None
+        assert not session.exec(
+            select(OriginalUse).where(
+                OriginalUse.tenant_id == context.tenant_id,
+                OriginalUse.status == "active",
+            )
+        ).first()
+
+
+def test_streaming_validator_uses_real_media_probe_and_removes_temporary_copy(
+    tmp_path, monkeypatch
+):
+    import hashlib
+    import subprocess
+    from contextlib import contextmanager
+    from tempfile import TemporaryDirectory as RealTemporaryDirectory
+    from types import SimpleNamespace
+
+    from app.modules.materials import object_validation
+
+    video = tmp_path / "small.mp4"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=160x240:d=0.2",
+            "-an",
+            "-c:v",
+            "mpeg4",
+            str(video),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=15,
+    )
+    content = video.read_bytes()
+    obj = SimpleNamespace(
+        id=uuid4(),
+        tenant_id=uuid4(),
+        bc_id="test-bc",
+        material_id=uuid4(),
+        generation=2,
+        expected_bytes=len(content),
+        storage_bucket="private-test",
+        object_key="owned-test/original",
+    )
+    file = SimpleNamespace(mime_type="video/mp4")
+    folders = []
+
+    @contextmanager
+    def tracked(**kwargs):
+        with RealTemporaryDirectory(**kwargs) as directory:
+            folders.append(directory)
+            yield directory
+
+    monkeypatch.setattr(object_validation, "TemporaryDirectory", tracked)
+    sha256, md5, media = object_validation._read_original(
+        FakeStorage(obj, file, body=content), obj, file
+    )
+    assert sha256 == hashlib.sha256(content).hexdigest()
+    assert md5 == hashlib.md5(content, usedforsecurity=False).hexdigest()
+    assert media["width"] == 160 and media["height"] == 240
+    assert media["duration"] > 0
+    from pathlib import Path
+
+    assert folders and all(not Path(folder).exists() for folder in folders)
