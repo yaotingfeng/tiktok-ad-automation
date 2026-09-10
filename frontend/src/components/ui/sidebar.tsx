@@ -218,7 +218,7 @@ function Sidebar({
           }}
         >
           <SheetHeader className="sr-only">
-            <SheetTitle>工作台导航</SheetTitle>
+            <SheetTitle>TT ADA 导航</SheetTitle>
             <SheetDescription>选择投放工作或租户管理页面。</SheetDescription>
           </SheetHeader>
           <div className="flex h-full w-full flex-col">{children}</div>

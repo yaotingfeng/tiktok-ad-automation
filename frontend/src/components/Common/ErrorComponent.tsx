@@ -16,11 +16,11 @@ const ErrorComponent = () => (
         <CardTitle>
           <h1 className="workspace-title">页面暂时无法加载</h1>
         </CardTitle>
-        <CardDescription>请稍后重试，或返回工作台重新进入。</CardDescription>
+        <CardDescription>请稍后重试，或返回首页重新进入。</CardDescription>
       </CardHeader>
       <CardContent>
         <Button asChild>
-          <Link to="/">返回工作台</Link>
+          <Link to="/">返回首页</Link>
         </Button>
       </CardContent>
     </Card>

@@ -17,12 +17,12 @@ const NotFound = () => (
           <h1 className="workspace-title">页面不存在</h1>
         </CardTitle>
         <CardDescription>
-          404 · 请检查页面地址，或返回工作台继续操作。
+          404 · 请检查页面地址，或返回首页继续操作。
         </CardDescription>
       </CardHeader>
       <CardContent>
         <Button asChild>
-          <Link to="/">返回工作台</Link>
+          <Link to="/">返回首页</Link>
         </Button>
       </CardContent>
     </Card>

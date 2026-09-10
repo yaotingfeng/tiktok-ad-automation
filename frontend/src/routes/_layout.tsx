@@ -39,7 +39,7 @@ function Layout() {
         <p role="status">
           {error
             ? "暂时无法读取用户信息，请刷新页面重试。"
-            : "正在载入工作空间…"}
+            : "正在载入 TT ADA…"}
         </p>
       </WorkspaceShell>
     )

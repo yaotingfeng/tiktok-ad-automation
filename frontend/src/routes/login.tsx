@@ -36,7 +36,7 @@ export const Route = createFileRoute("/login")({
   beforeLoad: () => {
     if (isLoggedIn()) throw redirect({ to: "/" })
   },
-  head: () => ({ meta: [{ title: "登录 · 短剧投放" }] }),
+  head: () => ({ meta: [{ title: "登录 · TT ADA" }] }),
 })
 function Login() {
   const { loginMutation } = useAuth()
@@ -51,11 +51,9 @@ function Login() {
       <Card>
         <CardHeader>
           <CardTitle>
-            <h1 className="workspace-title">登录工作台</h1>
+            <h1 className="workspace-title">登录 TT ADA</h1>
           </CardTitle>
-          <CardDescription>
-            使用管理员分配的账号，进入你的投放工作空间。
-          </CardDescription>
+          <CardDescription>使用管理员分配的账号登录。</CardDescription>
         </CardHeader>
         <CardContent>
           {loginExpired() && (
@@ -133,7 +131,7 @@ function Login() {
                     </>
                   ) : (
                     <>
-                      登录工作台
+                      登录 TT ADA
                       <ArrowRight data-icon="inline-end" />
                     </>
                   )}

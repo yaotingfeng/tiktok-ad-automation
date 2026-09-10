@@ -7,5 +7,5 @@ export const Route = createFileRoute("/_layout/tenants/$tenantId/materials")({
     batch_id: z.uuid().optional().catch(undefined),
   }),
   component: MaterialsPage,
-  head: () => ({ meta: [{ title: "素材库 · 短剧投放" }] }),
+  head: () => ({ meta: [{ title: "素材库 · TT ADA" }] }),
 })

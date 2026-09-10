@@ -1,6 +1,6 @@
-# TikTok 短剧自动投放平台
+# TT ADA
 
-多租户 TikTok 短剧投放工作台。后端为 FastAPI、PostgreSQL、Celery/Redis，前端为 React、TypeScript、shadcn/ui，TikTok 接入固定版本官方 Python SDK。
+TT ADA 是多租户 TikTok 短剧广告自动投放工具。后端为 FastAPI、PostgreSQL、Celery/Redis，前端为 React、TypeScript、shadcn/ui，TikTok 接入固定版本官方 Python SDK。
 
 当前实现和验证记录见 [实施进度](docs/implementation-progress.md)。产品规则、页面设计及七阶段任务见 [交付计划](docs/superpowers/plans/2026-09-08-tiktok-00-delivery-roadmap.md)。
 

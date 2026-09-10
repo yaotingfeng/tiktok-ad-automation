@@ -26,7 +26,7 @@ test("Inputs are visible, empty and editable", async ({ page }) => {
 test("Log In button is visible", async ({ page }) => {
   await page.goto("/login")
 
-  await expect(page.getByRole("button", { name: "登录工作台" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "登录 TT ADA" })).toBeVisible()
 })
 
 test("Forgot Password link is visible", async ({ page }) => {
@@ -39,7 +39,7 @@ test("Log in with valid username and password ", async ({ page }) => {
   await page.goto("/login")
 
   await fillForm(page, firstSuperuser, firstSuperuserPassword)
-  await page.getByRole("button", { name: "登录工作台" }).click()
+  await page.getByRole("button", { name: "登录 TT ADA" }).click()
 
   await page.waitForURL("/platform/tenants")
 
@@ -52,7 +52,7 @@ test("Log in with invalid username", async ({ page }) => {
   await page.goto("/login")
 
   await fillForm(page, "legacy@example.com", firstSuperuserPassword)
-  await page.getByRole("button", { name: "登录工作台" }).click()
+  await page.getByRole("button", { name: "登录 TT ADA" }).click()
 
   await expect(
     page.getByText("账号需为 3–64 位字母、数字、下划线、点或短横线"),
@@ -64,7 +64,7 @@ test("Log in with invalid password", async ({ page }) => {
 
   await page.goto("/login")
   await fillForm(page, firstSuperuser, password)
-  await page.getByRole("button", { name: "登录工作台" }).click()
+  await page.getByRole("button", { name: "登录 TT ADA" }).click()
 
   await expect(
     page.getByText("登录失败，请检查账号和密码后重试。"),
@@ -75,7 +75,7 @@ test("Successful log out", async ({ page }) => {
   await page.goto("/login")
 
   await fillForm(page, firstSuperuser, firstSuperuserPassword)
-  await page.getByRole("button", { name: "登录工作台" }).click()
+  await page.getByRole("button", { name: "登录 TT ADA" }).click()
 
   await page.waitForURL("/platform/tenants")
 
@@ -92,7 +92,7 @@ test("Logged-out user cannot access protected routes", async ({ page }) => {
   await page.goto("/login")
 
   await fillForm(page, firstSuperuser, firstSuperuserPassword)
-  await page.getByRole("button", { name: "登录工作台" }).click()
+  await page.getByRole("button", { name: "登录 TT ADA" }).click()
 
   await page.waitForURL("/platform/tenants")
 

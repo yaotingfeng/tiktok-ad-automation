@@ -1,5 +1,13 @@
 # 实施进度
 
+## 2026-09-10：产品统一命名为 TT ADA
+
+- 用户要求产品改名为 `TT ADA`，所有实际页面不再使用“短剧投放”“TikTok 工作台”或“工作台”作为名称。已覆盖登录页及页脚、侧栏品牌及移动导航、所有已有路由标题、设置页、根路由兜底和返回首页提示；功能页继续使用素材库、广告搭建等业务名称。
+- 同步 README、`.env.example` 与 Compose 默认产品名，并更新既有浏览器测试的文案定位器。技术包名、仓库路径及历史设计记录保留。
+- 验证：`bun run build`、改动 TS/TSX 的 Biome 检查及 `git diff --check` 通过；`bunx playwright test --project workspace --workers 4 --reporter line` 全部 **318 项通过（2.1 分钟）**。独立静态复核未发现业务改动或实际页面旧名称遗漏。
+- 本地 `http://127.0.0.1:8011` 已更新，私有配置仅同步 `PROJECT_NAME` 并重启 API；OpenAPI 标题为 `TT ADA`，bootstrap 检查通过。使用实际本地登录只读检查登录、平台管理、账号设置、租户功能及 404 共 12 个页面，标题与页面文案通过；截图和检查结果保存在忽略的 `.runtime/tt-ada-*`，不提交凭据或本地数据。
+- 本轮提交以 `ui: rename product to TT ADA across all pages` 为标识；未推送。
+
 ## 2026-09-10：仓库协作约束更新
 
 - 按用户要求更新 `AGENTS.md`：明确独立仓库、聚焦提交、已有分支工作树、合并与显式推送规则，替换旧的功能分支开发及推送约束。

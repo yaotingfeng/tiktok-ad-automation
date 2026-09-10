@@ -8,5 +8,5 @@ export const Route = createFileRoute("/_layout/strategies")({
       description="管理预算、出价、素材分组与创意规则。"
     />
   ),
-  head: () => ({ meta: [{ title: "投放策略 · 短剧投放" }] }),
+  head: () => ({ meta: [{ title: "投放策略 · TT ADA" }] }),
 })

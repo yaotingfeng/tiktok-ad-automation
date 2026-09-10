@@ -10,7 +10,7 @@ export function AuthLayout({ children }: { children: React.ReactNode }) {
         <div className="w-full max-w-[420px]">{children}</div>
       </main>
       <footer className="p-6 text-center text-xs text-muted-foreground">
-        短剧投放 · TikTok 工作台
+        TT ADA
       </footer>
     </div>
   )

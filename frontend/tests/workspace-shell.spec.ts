@@ -136,12 +136,12 @@ test("unauthenticated entry and obsolete signup lead to the Chinese login", asyn
   await apiBoundary(page, { authenticated: false })
   await page.goto("/")
   await expect(page).toHaveURL("/login")
-  await expect(page.getByRole("heading", { name: "登录工作台" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "登录 TT ADA" })).toBeVisible()
   await expect(page.getByRole("link", { name: /注册|Sign up/i })).toHaveCount(0)
   await page.goto("/signup")
   await expect(page).toHaveURL("/login")
   await expect(page.locator('input[autocomplete="username"]')).toBeVisible()
-  await page.getByRole("button", { name: "登录工作台" }).click()
+  await page.getByRole("button", { name: "登录 TT ADA" }).click()
   await expect(page.getByLabel("账号", { exact: true })).toHaveAttribute(
     "aria-invalid",
     "true",
@@ -164,7 +164,7 @@ test("login submits credentials then reads the authenticated user with a bearer 
   const meRequest = page.waitForRequest((request) =>
     request.url().includes("/users/me"),
   )
-  await page.getByRole("button", { name: "登录工作台" }).click()
+  await page.getByRole("button", { name: "登录 TT ADA" }).click()
   const login = await loginRequest
   expect(new URL(login.url()).pathname).toBe("/api/login/access-token")
   expect(new URLSearchParams(login.postData()!).get("username")).toBe(
@@ -218,7 +218,7 @@ test("mobile navigation sheet is labelled, keyboard accessible, and closes after
   const trigger = page.getByRole("button", { name: "切换导航" })
   await trigger.focus()
   await page.keyboard.press("Enter")
-  const dialog = page.getByRole("dialog", { name: "工作台导航" })
+  const dialog = page.getByRole("dialog", { name: "TT ADA 导航" })
   await expect(dialog).toBeVisible()
   const accountLink = dialog.getByRole("link", { name: "账户与授权" })
   await accountLink.focus()
@@ -375,7 +375,7 @@ for (const width of [900, 1023, 1024]) {
     await expect(page.getByText("尚未接入租户", { exact: true })).toBeVisible()
     const trigger = page.getByRole("button", { name: "切换导航" })
     const desktopSidebar = page.locator('[data-slot="sidebar-container"]')
-    const dialog = page.getByRole("dialog", { name: "工作台导航" })
+    const dialog = page.getByRole("dialog", { name: "TT ADA 导航" })
 
     if (width < 1024) {
       await expect(desktopSidebar).toHaveCount(0)
@@ -429,7 +429,7 @@ test("unauthenticated internal links resume the original tenant BC and tab after
   await expect(page).toHaveURL(/\/login$/)
   await page.getByLabel("账号", { exact: true }).fill("member")
   await page.getByLabel("密码", { exact: true }).fill("synthetic-password")
-  await page.getByRole("button", { name: "登录工作台", exact: true }).click()
+  await page.getByRole("button", { name: "登录 TT ADA", exact: true }).click()
   await expect(page).toHaveURL(target)
   await expect(page.getByText("无权访问此页面", { exact: true })).toBeVisible()
   expect(
@@ -452,7 +452,7 @@ for (const target of [
     await page.goto("/login")
     await page.getByLabel("账号", { exact: true }).fill("member")
     await page.getByLabel("密码", { exact: true }).fill("synthetic-password")
-    await page.getByRole("button", { name: "登录工作台", exact: true }).click()
+    await page.getByRole("button", { name: "登录 TT ADA", exact: true }).click()
     await expect(page).toHaveURL("/")
     await expect(page.getByText("尚未接入租户", { exact: true })).toBeVisible()
   })

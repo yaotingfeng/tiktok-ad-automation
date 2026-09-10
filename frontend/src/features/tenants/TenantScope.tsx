@@ -255,7 +255,7 @@ export function PermissionPage() {
       <AlertDescription>
         <p>租户已停用，或当前账号没有所需权限。请联系管理员。</p>
         <Button variant="outline" asChild>
-          <Link to="/">返回工作台</Link>
+          <Link to="/">返回首页</Link>
         </Button>
       </AlertDescription>
     </Alert>

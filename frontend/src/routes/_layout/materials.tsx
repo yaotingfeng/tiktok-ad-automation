@@ -8,5 +8,5 @@ export const Route = createFileRoute("/_layout/materials")({
       description="集中管理素材及其实际上传账户。"
     />
   ),
-  head: () => ({ meta: [{ title: "素材库 · 短剧投放" }] }),
+  head: () => ({ meta: [{ title: "素材库 · TT ADA" }] }),
 })

@@ -9,7 +9,7 @@ export async function logInUser(
 
   await page.getByTestId("username-input").fill(username)
   await page.getByTestId("password-input").fill(password)
-  await page.getByRole("button", { name: "登录工作台" }).click()
+  await page.getByRole("button", { name: "登录 TT ADA" }).click()
   await page.waitForURL((url) => url.pathname !== "/login")
   await expect(page.getByTestId("user-menu")).toBeVisible()
 }
