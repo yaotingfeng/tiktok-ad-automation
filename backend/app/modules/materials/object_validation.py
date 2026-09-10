@@ -74,6 +74,10 @@ def enqueue_validation(
         tenant_id=obj.tenant_id, actor_id=batch.actor_id, role="operator"
     )
     obj.revision += 1
+    # This new stage is runnable immediately. Its preceding multipart RPC's
+    # claim deadline is not a validation retry delay. The idempotent return
+    # above deliberately preserves backoff of an already-created validation.
+    obj.next_attempt_at = datetime.now(UTC)
     payload = {
         "object_id": str(obj.id),
         "generation": obj.generation,

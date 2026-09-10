@@ -157,6 +157,23 @@ def test_completion_enqueues_exact_validator_once(session, context):
     ).first()
 
 
+def test_new_validation_is_due_immediately_but_replay_preserves_retry_backoff(
+    session, context
+):
+    _, _, materials = ingest_fixture(session, context)
+    obj = original(session, context, materials[0], status="stored")
+    materials[0].current_object_generation = obj.generation
+    obj.next_attempt_at = datetime.now(UTC) + timedelta(minutes=3)
+    session.flush()
+    dispatch_id = enqueue_validation(session, context=context, object_id=obj.id)
+    assert obj.next_attempt_at <= datetime.now(UTC)
+    retry_at = datetime.now(UTC) + timedelta(minutes=1)
+    obj.next_attempt_at = retry_at
+    session.flush()
+    assert enqueue_validation(session, context=context, object_id=obj.id) == dispatch_id
+    assert obj.next_attempt_at == retry_at
+
+
 def test_corrupt_stream_never_marks_trusted_or_enqueues_source(
     validation_case, monkeypatch
 ):
