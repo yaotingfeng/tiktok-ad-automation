@@ -46,7 +46,15 @@ runuser -u tt-ada -- /opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.ce
 
 验收结束后已将专用测试角色 `tt_ada_test` 设置为 `NOLOGIN NOCREATEDB`，测试配置收紧为 root 0600；后续重跑创建临时库的用例时，由运维按测试范围临时启用，结束后再次收回。
 
-## Sites 域名入口（2026-09-10）
+## Sites 转发已停用（2026-09-10）
+
+用户明确要求删除 Sites 转发入口。转发源码与 UPSTREAM_ORIGIN / SITE_ORIGIN 环境变量已删除，发布停用版本 2（源码 `5a1e34fccfeb73a4ebf081c151301394938ddd4f`）。旧入口的 GET 首页、健康路径、POST 登录均已验证返回 HTTP 410，不再连接原站或重定向。
+
+当前直接访问 `https://tk-ada.137-220-150-31.sslip.io`；健康检查通过。服务器、数据库、原 IP 入口、sslip.io 证书与续期均未修改。Sites 工具未提供整站删除接口，因此平台项目记录与既有访问控制保留，不能将停用转发描述为整个 Sites 项目已删除。
+
+以下接入过程为历史记录，不代表 Sites 仍在转发。
+
+### Sites 域名接入历史（2026-09-10）
 
 用户指定的访问别名为 `https://ytf-server-gateway.defuelscoulter38963.chatgpt.site`，已发布服务器端 HTTPS 转发。Sites 项目 `appgprj_6aa29de565c881918beb43a148b6452c` 当前保持仅所有者访问；需要 Sites 登录后，再使用 TK-ADA 原管理员账号登录。原 IP HTTPS 入口继续可用，应用自身 FRONTEND_HOST 保留原 IP，Sites 作为访问别名。
 

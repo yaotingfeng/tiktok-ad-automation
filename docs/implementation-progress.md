@@ -1,5 +1,11 @@
 # 实施进度
 
+## 2026-09-10：按用户要求停用 Sites 转发
+
+- 删除独立 Sites 项目的转发实现和回源环境变量，发布版本 2，源码提交 `5a1e34fccfeb73a4ebf081c151301394938ddd4f`。旧入口所有请求直接返回 410，不再回源或重定向；未删除 sslip.io 域名或修改 TK-ADA 服务器。
+- 构建、改动文件 lint、线上 GET 首页/健康路径和 POST 登录返回 410、sslip.io 健康返回 true 均验证通过。Sites 平台项目记录保留，当前工具没有整站删除接口。
+- 本仓库文档以 `docs: record retirement of Sites forwarding` 聚焦提交，不推送。此前 Sites 接入条目为历史记录，以本条停用状态为准。
+
 ## 2026-09-10：新加坡测试环境 Sites 域名接入
 
 - 按用户要求发布现有 Sites 域名 `https://ytf-server-gateway.defuelscoulter38963.chatgpt.site`，保留其仅所有者访问设置，转发至新加坡 TK-ADA。Sites 独立源码 `148a0a7fce5fd9487366f7006852b5ff5458e29c` 已上传并发布版本 1，原 IP 入口继续有效。
