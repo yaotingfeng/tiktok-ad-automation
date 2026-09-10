@@ -287,6 +287,7 @@ class FakeR2:
     def create_multipart_upload(self, **values):
         from botocore.exceptions import ReadTimeoutError
 
+        assert "ACL" not in values
         self.record("create", values)
         remote = str(uuid4())
         self.uploads[remote] = {**values, "parts": []}

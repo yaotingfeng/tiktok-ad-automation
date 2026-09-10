@@ -21,7 +21,7 @@ from sqlmodel import Session, col, select
 
 from app.core.config import settings
 from app.core.context import TenantContext
-from app.core.errors import DomainError
+from app.core.errors import ERROR_HTTP_STATUS, DomainError
 from app.jobs.outbox import enqueue_after_commit
 from app.modules.accounts.models import TenantBC
 from app.modules.materials.models import (
@@ -78,6 +78,8 @@ def _upload(
     lock: bool = False,
     action: str = "upload",
 ) -> ObjectUpload:
+    if action != "read" and settings.OBJECT_STORAGE_PROVIDER == "r2":
+        raise storage_error("ingest_api_required")
     require_tenant(
         session, actor_id=context.actor_id, tenant_id=context.tenant_id, action=action
     )
@@ -137,7 +139,8 @@ def public_error(code: object) -> str | None:
         return None
     return (
         code
-        if isinstance(code, str) and code in SAFE_ERROR_CODES
+        if isinstance(code, str)
+        and (code in SAFE_ERROR_CODES or code in ERROR_HTTP_STATUS)
         else "material_response_unknown"
     )
 
@@ -273,8 +276,44 @@ def get_upload_file_result(
     session: Session, *, context: TenantContext, material_id: UUID
 ) -> UploadFileResult:
     row = _upload(session, context, material_id, action="read")
-    batch = get_upload_batch(session, context=context, batch_id=row.batch_id)
-    return next(file for file in batch.files if file.material_id == material_id)
+    file = session.exec(
+        select(MaterialFile)
+        .where(
+            MaterialFile.tenant_id == context.tenant_id,
+            MaterialFile.bc_id == row.bc_id,
+            MaterialFile.id == material_id,
+        )
+        .execution_options(populate_existing=True)
+    ).one()
+    latest = session.exec(
+        select(MaterialUploadAttempt, MaterialAssetOperation)
+        .join(
+            MaterialAssetOperation,
+            (col(MaterialAssetOperation.id) == col(MaterialUploadAttempt.operation_id))
+            & (
+                col(MaterialAssetOperation.tenant_id)
+                == col(MaterialUploadAttempt.tenant_id)
+            ),
+        )
+        .where(
+            MaterialUploadAttempt.tenant_id == context.tenant_id,
+            MaterialUploadAttempt.bc_id == row.bc_id,
+            MaterialUploadAttempt.material_id == material_id,
+        )
+        .order_by(
+            col(MaterialUploadAttempt.created_at).desc(),
+            col(MaterialUploadAttempt.id).desc(),
+        )
+        .limit(1)
+        .execution_options(populate_existing=True)
+    ).first()
+    result = _result(row, file, *(latest or (None, None)))
+    live = require_tenant(
+        session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read"
+    )
+    if live.role == "viewer" or settings.OBJECT_STORAGE_PROVIDER == "r2":
+        result.can_retry = False
+    return result
 
 
 def _aggregate(files: list[UploadFileResult]) -> UploadStage:
@@ -308,7 +347,7 @@ def get_upload_batch(
         raise storage_error("upload_batch_not_found")
     require_bc(session, context=context, bc_id=batch.bc_id, action="read")
     files = _batch_files(session, context.tenant_id, batch_id)
-    if live.role == "viewer":
+    if live.role == "viewer" or settings.OBJECT_STORAGE_PROVIDER == "r2":
         for file in files:
             file.can_retry = False
     return UploadBatchResult(
@@ -342,6 +381,8 @@ def start_upload_batch(
     request_id: UUID,
 ) -> UploadBatchResult:
     require_bc(session, context=context, bc_id=bc_id, action="upload")
+    if settings.OBJECT_STORAGE_PROVIDER == "r2":
+        raise storage_error("ingest_api_required")
     if not 1 <= len(files) <= 200:
         raise storage_error("invalid_file")
     # Validate again for direct service callers; callers cannot smuggle table fields.

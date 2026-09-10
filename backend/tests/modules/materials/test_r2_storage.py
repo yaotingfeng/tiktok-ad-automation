@@ -78,19 +78,17 @@ def test_r2_configuration_rejects_unsigned_api_namespace_errors_without_secrets(
     assert "secret-marker" not in str(raised.value)
 
 
-def test_r2_multipart_request_omits_unsupported_acl(monkeypatch, upload_owner):
+def test_r2_legacy_entry_cannot_bypass_new_budget_and_validation(
+    monkeypatch, upload_owner
+):
     configured = r2_settings()
     monkeypatch.setattr(storage, "settings", configured)
     monkeypatch.setattr(uploads, "settings", configured)
     remote = FakeS3()
-    result = start(upload_owner, remote)
-    requests = [args for name, args in remote.calls if name == "create"]
-    assert len(requests) == 1
-    request = requests[0]
-    assert "ACL" not in request
-    assert request["Metadata"]["tenant-id"] == str(upload_owner.tenant_id)
-    assert request["Metadata"]["material-id"] == str(result.files[0].material_id)
-    assert request["ContentType"] == "video/mp4"
+    with pytest.raises(DomainError) as error:
+        start(upload_owner, remote)
+    assert error.value.code == "ingest_api_required"
+    assert remote.calls == []
 
 
 def test_legacy_s3_still_accepts_its_explicit_private_endpoint(monkeypatch):

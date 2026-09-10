@@ -3,6 +3,9 @@ from fastapi.responses import JSONResponse
 
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
+    "ingest_api_required": 409,
+    "material_remote_source_unavailable": 409,
+    "material_share_unverified": 409,
     "ingest_disabled": 503,
     "material_ingest_disabled": 503,
     "url_upload_capacity_exceeded": 422,
@@ -144,6 +147,8 @@ ERROR_HTTP_STATUS: dict[str, int] = {
 # Public messages are application-owned. DomainError.message may contain raw
 # integration details, so it must never become an HTTP response or log field.
 ERROR_PUBLIC_MESSAGES: dict[str, str] = {
+    "ingest_api_required": "请从新版批量上传入口导入文件",
+    "material_remote_source_unavailable": "来源账户素材暂不可读，请恢复授权或重新上传",
     "ingest_disabled": "批量导入尚未启用，请联系平台管理员",
     "material_ingest_disabled": "新素材入库已暂停，已有任务继续核实",
     "storage_backpressure": "临时空间正在释放，文件已保留在上传队列",
