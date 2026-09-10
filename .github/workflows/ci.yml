@@ -66,6 +66,14 @@ jobs:
           test -x /usr/lib/postgresql/18/bin/pg_restore
           echo "PG_BIN_DIR=/usr/lib/postgresql/18/bin" >> "$GITHUB_ENV"
       - run: uv sync --frozen --package app
+      - name: Install media validation tools
+        if: matrix.suite != 'browser'
+        run: |
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
+          ffprobe -version
       - name: Check backup client and server versions before the module suite
         if: matrix.suite == 'modules'
         run: uv run python -m tests.pg_backup

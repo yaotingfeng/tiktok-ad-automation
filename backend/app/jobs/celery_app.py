@@ -34,6 +34,11 @@ celery_app.conf.update(
     task_create_missing_queues=False,
     task_routes={"jobs.flush_dispatch": {"queue": "control"}},
     beat_schedule={
+        "scan-abandoned-materials": {
+            "task": "materials.scan_abandoned_objects",
+            "schedule": 30.0,
+            "options": {"queue": "control"},
+        },
         "repair-material-ingest-transports": {
             "task": "materials.repair_ingest_transports",
             "schedule": 30.0,

@@ -3,14 +3,17 @@
 from typing import Any
 from uuid import UUID
 
+from redis import Redis
 from sqlmodel import Session
 
+from app.core.config import settings
 from app.core.db import engine
 from app.core.errors import DomainError
 from app.jobs.celery_app import celery_app
 from app.jobs.models import PendingDispatch
 
 from .cleanup import CLEANUP_HARD_LIMIT, repair_cleanups, run_cleanup
+from .cleanup_scan import scan_abandonment_page
 from .tasks import require_bounded_worker
 
 
@@ -60,3 +63,17 @@ def cleanup_original(
 def repair_cleanup_tasks(limit: int = 100) -> int:
     with Session(engine) as session, session.begin():
         return repair_cleanups(session, limit=limit)
+
+
+@celery_app.task(
+    name="materials.scan_abandoned_objects",
+    bind=True,
+    time_limit=45,
+    soft_time_limit=40,
+)  # type: ignore[untyped-decorator]
+def scan_abandoned_objects_task(self: Any, limit: int = 100) -> int:
+    require_bounded_worker(self, hard_limit=45)
+    with Redis.from_url(settings.REDIS_URL) as redis_client:
+        return scan_abandonment_page(
+            database_engine=engine, redis_client=redis_client, limit=limit
+        )
