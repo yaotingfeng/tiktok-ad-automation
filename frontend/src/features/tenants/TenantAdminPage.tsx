@@ -15,6 +15,7 @@ import {
 } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card"
 import {
   Field,
   FieldError,
@@ -77,11 +78,14 @@ export function TenantAdminPage() {
   const columns: ColumnDef<TenantSummary>[] = [
     {
       accessorKey: "name",
+      minSize: 320,
       header: "租户名称 / ID",
       cell: ({ row }) => (
         <div className="flex flex-col gap-1">
-          <span className="font-medium">{row.original.name}</span>
-          <span className="font-mono text-xs text-muted-foreground">
+          <span className="wrap-anywhere whitespace-normal font-medium">
+            {row.original.name}
+          </span>
+          <span className="wrap-anywhere whitespace-normal font-mono text-xs text-muted-foreground">
             {row.original.id}
           </span>
           <Button
@@ -102,6 +106,7 @@ export function TenantAdminPage() {
     },
     {
       accessorKey: "active",
+      size: 120,
       header: "状态",
       cell: ({ row }) => (
         <Badge variant={row.original.active ? "secondary" : "outline"}>
@@ -111,6 +116,7 @@ export function TenantAdminPage() {
     },
     {
       id: "actions",
+      size: 360,
       header: "操作",
       cell: ({ row }) => (
         <div className="flex items-center gap-2">
@@ -157,8 +163,8 @@ export function TenantAdminPage() {
   ]
   return (
     <>
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex min-w-0 flex-col gap-1">
           <WorkspacePageTitle>平台租户管理</WorkspacePageTitle>
           <p className="text-sm text-muted-foreground">
             请从租户列表点击“进入租户”，再使用该租户的投放与管理功能。
@@ -175,67 +181,74 @@ export function TenantAdminPage() {
           )}
         </div>
       </div>
-      <div className="flex min-w-0 flex-col gap-4">
-        <h2 className="sr-only">租户列表</h2>
-        <form
-          className="flex flex-wrap items-end gap-3"
-          onSubmit={(event) => {
-            event.preventDefault()
-            paging.reset()
-            setSearch(input.trim())
-          }}
-        >
-          <Field className="w-full sm:w-80">
-            <FieldLabel htmlFor="tenant-search">搜索租户名称或 ID</FieldLabel>
-            <Input
-              id="tenant-search"
-              maxLength={255}
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              placeholder="名称或完整租户 ID"
-            />
-          </Field>
-          <Button variant="outline" type="submit">
-            搜索
-          </Button>
-          <StatusSelect
-            value={status}
-            onChange={(value) => {
+      <Card className="min-w-0">
+        <CardHeader>
+          <h2 className="sr-only">租户列表</h2>
+          <form
+            className="flex flex-wrap items-end gap-3"
+            onSubmit={(event) => {
+              event.preventDefault()
               paging.reset()
-              setStatus(value)
-            }}
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => {
-              setInput("")
-              setSearch("")
-              setStatus("all")
-              paging.reset()
+              setSearch(input.trim())
             }}
           >
-            清除筛选
-          </Button>
-        </form>
-        <ServerTable
-          rows={data?.items ?? []}
-          columns={columns}
-          loading={query.isPending}
-          fetching={query.isFetching}
-          error={query.error}
-          retry={() => {
-            void query.refetch()
-          }}
-          filtered={!!search || status !== "all"}
-          emptyTitle="尚未开通租户"
-        />
-        <Pager
-          paging={paging}
-          nextCursor={data?.next_cursor}
-          busy={query.isFetching || !!query.error}
-        />
-      </div>
+            <Field className="w-full sm:w-80">
+              <FieldLabel htmlFor="tenant-search">搜索租户名称或 ID</FieldLabel>
+              <Input
+                id="tenant-search"
+                maxLength={255}
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                placeholder="名称或完整租户 ID"
+              />
+            </Field>
+            <Button variant="outline" type="submit">
+              搜索
+            </Button>
+            <StatusSelect
+              value={status}
+              onChange={(value) => {
+                paging.reset()
+                setStatus(value)
+              }}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                setInput("")
+                setSearch("")
+                setStatus("all")
+                paging.reset()
+              }}
+            >
+              清除筛选
+            </Button>
+          </form>
+        </CardHeader>
+        <CardContent className="min-w-0">
+          <ServerTable
+            fixedLayout={{ fillColumn: "name" }}
+            rows={data?.items ?? []}
+            columns={columns}
+            loading={query.isPending}
+            fetching={query.isFetching}
+            error={query.error}
+            retry={() => {
+              void query.refetch()
+            }}
+            filtered={!!search || status !== "all"}
+            emptyTitle="尚未开通租户"
+          />
+        </CardContent>
+        <CardFooter className="block">
+          <Pager
+            paging={paging}
+            nextCursor={data?.next_cursor}
+            busy={query.isFetching || !!query.error}
+          />
+        </CardFooter>
+      </Card>
       {editor && (
         <TenantEditor
           key={

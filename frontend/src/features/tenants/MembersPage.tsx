@@ -15,6 +15,7 @@ import {
 } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card"
 import {
   Field,
   FieldError,
@@ -91,14 +92,17 @@ export function MembersPage() {
   const columns: ColumnDef<MemberPublic>[] = [
     {
       accessorKey: "username",
+      minSize: 320,
       header: "姓名 / 账号",
       cell: ({ row }) => (
         <div className="flex flex-col gap-1">
-          <span className="font-medium">
+          <span className="wrap-anywhere whitespace-normal font-medium">
             {row.original.full_name || "未设置姓名"}
           </span>
-          <span>{row.original.username}</span>
-          <span className="font-mono text-xs text-muted-foreground">
+          <span className="wrap-anywhere whitespace-normal">
+            {row.original.username}
+          </span>
+          <span className="wrap-anywhere whitespace-normal font-mono text-xs text-muted-foreground">
             {row.original.user_id}
           </span>
         </div>
@@ -106,6 +110,7 @@ export function MembersPage() {
     },
     {
       accessorKey: "role",
+      size: 144,
       header: "角色",
       cell: ({ row }) => (
         <Badge variant="secondary">{roleLabels[row.original.role]}</Badge>
@@ -113,6 +118,7 @@ export function MembersPage() {
     },
     {
       accessorKey: "active",
+      size: 168,
       header: "状态",
       cell: ({ row }) => (
         <div className="flex flex-wrap gap-1">
@@ -127,6 +133,7 @@ export function MembersPage() {
     },
     {
       id: "actions",
+      size: 144,
       header: "操作",
       cell: ({ row }) =>
         writable && (
@@ -142,8 +149,8 @@ export function MembersPage() {
   ]
   return (
     <>
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex min-w-0 flex-col gap-1">
           <WorkspacePageTitle>成员管理</WorkspacePageTitle>
           <p className="text-sm text-muted-foreground">
             {tenant!.name} · 管理当前租户的成员与固定角色。
@@ -151,88 +158,97 @@ export function MembersPage() {
         </div>
         {writable && <Button onClick={() => setEditor("new")}>添加成员</Button>}
       </div>
-      <div className="flex min-w-0 flex-col gap-4">
-        <h2 className="sr-only">成员列表</h2>
-        <form
-          className="flex flex-wrap items-end gap-3"
-          onSubmit={(event) => {
-            event.preventDefault()
-            paging.reset()
-            setSearch(input.trim())
-          }}
-        >
-          <Field className="w-full sm:w-80">
-            <FieldLabel htmlFor="member-search">搜索成员姓名或账号</FieldLabel>
-            <Input
-              id="member-search"
-              maxLength={255}
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
+      <Card className="min-w-0">
+        <CardHeader>
+          <h2 className="sr-only">成员列表</h2>
+          <form
+            className="flex flex-wrap items-end gap-3"
+            onSubmit={(event) => {
+              event.preventDefault()
+              paging.reset()
+              setSearch(input.trim())
+            }}
+          >
+            <Field className="w-full sm:w-80">
+              <FieldLabel htmlFor="member-search">
+                搜索成员姓名或账号
+              </FieldLabel>
+              <Input
+                id="member-search"
+                maxLength={255}
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+              />
+            </Field>
+            <Button type="submit" variant="outline">
+              搜索
+            </Button>
+            <Select
+              value={role}
+              onValueChange={(value) => {
+                paging.reset()
+                setRole(value)
+              }}
+            >
+              <SelectTrigger aria-label="角色筛选">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="all">全部角色</SelectItem>
+                  {memberRoles.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {roleLabels[value]}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <StatusSelect
+              value={status}
+              onChange={(value) => {
+                paging.reset()
+                setStatus(value)
+              }}
             />
-          </Field>
-          <Button type="submit" variant="outline">
-            搜索
-          </Button>
-          <Select
-            value={role}
-            onValueChange={(value) => {
-              paging.reset()
-              setRole(value)
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                setInput("")
+                setSearch("")
+                setStatus("all")
+                setRole("all")
+                paging.reset()
+              }}
+            >
+              清除筛选
+            </Button>
+          </form>
+        </CardHeader>
+        <CardContent className="min-w-0">
+          <ServerTable
+            fixedLayout={{ fillColumn: "username" }}
+            rows={data?.items ?? []}
+            columns={columns}
+            loading={query.isPending}
+            fetching={query.isFetching}
+            error={query.error}
+            retry={() => {
+              void query.refetch()
             }}
-          >
-            <SelectTrigger aria-label="角色筛选">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectItem value="all">全部角色</SelectItem>
-                {memberRoles.map((value) => (
-                  <SelectItem key={value} value={value}>
-                    {roleLabels[value]}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-          <StatusSelect
-            value={status}
-            onChange={(value) => {
-              paging.reset()
-              setStatus(value)
-            }}
+            filtered={!!search || status !== "all" || role !== "all"}
+            emptyTitle="尚无成员记录"
           />
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => {
-              setInput("")
-              setSearch("")
-              setStatus("all")
-              setRole("all")
-              paging.reset()
-            }}
-          >
-            清除筛选
-          </Button>
-        </form>
-        <ServerTable
-          rows={data?.items ?? []}
-          columns={columns}
-          loading={query.isPending}
-          fetching={query.isFetching}
-          error={query.error}
-          retry={() => {
-            void query.refetch()
-          }}
-          filtered={!!search || status !== "all" || role !== "all"}
-          emptyTitle="尚无成员记录"
-        />
-        <Pager
-          paging={paging}
-          nextCursor={data?.next_cursor}
-          busy={query.isFetching || !!query.error}
-        />
-      </div>
+        </CardContent>
+        <CardFooter className="block">
+          <Pager
+            paging={paging}
+            nextCursor={data?.next_cursor}
+            busy={query.isFetching || !!query.error}
+          />
+        </CardFooter>
+      </Card>
       {editor && (
         <MemberEditor
           key={editor === "new" ? "new" : editor.user_id}

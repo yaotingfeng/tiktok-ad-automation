@@ -18,7 +18,7 @@ export function ProvidersPage() {
   }
   return (
     <>
-      <div className="flex flex-col gap-2">
+      <div className="flex min-w-0 flex-col gap-1">
         <WorkspacePageTitle>版权方连接</WorkspacePageTitle>
         <p className="text-sm text-muted-foreground">
           当前租户：{tenant?.name} · 连接与推广链接属于租户，不按 BC 筛选。

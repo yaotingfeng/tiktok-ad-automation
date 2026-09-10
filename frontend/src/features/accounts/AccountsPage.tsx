@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react"
 import { type AccountPublic, AccountsService } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card"
 import {
   Empty,
   EmptyDescription,
@@ -38,7 +39,7 @@ export function AccountsPage() {
   const navigate = useNavigate()
   return (
     <>
-      <div className="flex flex-col gap-2">
+      <div className="flex min-w-0 flex-col gap-1">
         <WorkspacePageTitle>账户与授权</WorkspacePageTitle>
         <p className="text-sm text-muted-foreground">
           {tenant?.name} · 查看本地账户目录与授权连接
@@ -128,7 +129,9 @@ function AccountDirectory() {
         header: "广告账户",
         cell: ({ row: { original: item } }) => (
           <div className="flex flex-col gap-1">
-            <strong>{item.name || "名称待完善"}</strong>
+            <strong className="max-w-80 wrap-anywhere whitespace-normal">
+              {item.name || "名称待完善"}
+            </strong>
             <Identifier value={item.advertiser_id} />
           </div>
         ),
@@ -207,81 +210,87 @@ function AccountDirectory() {
         当前 BC：{bc?.name || "正在读取…"} ·
         仅展示本地已知目录；每个账户的核验时间见列表。
       </p>
-      <div className="flex min-w-0 flex-col gap-4">
-        <form
-          className="flex flex-wrap items-end gap-3"
-          onSubmit={(event) => {
-            event.preventDefault()
-            setSearch(input.trim())
-            setRemoteStatus(remoteInput.trim())
-            paging.reset()
-          }}
-        >
-          <Field className="w-full sm:w-80">
-            <FieldLabel htmlFor="account-search">账户名称或 ID</FieldLabel>
-            <Input
-              id="account-search"
-              maxLength={255}
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              placeholder="搜索账户名称或完整 ID"
-            />
-          </Field>
-          <Field className="w-44">
-            <FieldLabel htmlFor="remote-status">平台状态</FieldLabel>
-            <Input
-              id="remote-status"
-              maxLength={64}
-              value={remoteInput}
-              onChange={(event) => setRemoteInput(event.target.value)}
-              placeholder="输入平台原始状态"
-            />
-          </Field>
-          <FilterSelect
-            label="可用性"
-            choices={availabilityLabels}
-            value={availability}
-            onChange={(value) => {
-              setAvailability(value)
-              paging.reset()
-            }}
-          />
-          <Button type="submit" variant="outline">
-            搜索
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => {
-              setInput("")
-              setSearch("")
-              setRemoteInput("")
-              setRemoteStatus("")
-              setAvailability("all")
+      <Card className="min-w-0">
+        <CardHeader>
+          <form
+            className="flex flex-wrap items-end gap-3"
+            onSubmit={(event) => {
+              event.preventDefault()
+              setSearch(input.trim())
+              setRemoteStatus(remoteInput.trim())
               paging.reset()
             }}
           >
-            清除筛选
-          </Button>
-        </form>
-        <ServerTable
-          rows={data?.items ?? []}
-          columns={columns}
-          loading={bcPending || (query.isPending && !data)}
-          fetching={bcPending || query.isFetching}
-          error={query.error}
-          retry={() => {
-            void query.refetch()
-          }}
-          filtered={!!search || !!remoteStatus || availability !== "all"}
-          emptyTitle="当前 BC 尚无账户"
-        />
-        <Pager
-          paging={paging}
-          nextCursor={data?.next_cursor}
-          busy={query.isFetching || bcPending}
-        />
-      </div>
+            <Field className="w-full sm:w-80">
+              <FieldLabel htmlFor="account-search">账户名称或 ID</FieldLabel>
+              <Input
+                id="account-search"
+                maxLength={255}
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                placeholder="搜索账户名称或完整 ID"
+              />
+            </Field>
+            <Field className="w-44">
+              <FieldLabel htmlFor="remote-status">平台状态</FieldLabel>
+              <Input
+                id="remote-status"
+                maxLength={64}
+                value={remoteInput}
+                onChange={(event) => setRemoteInput(event.target.value)}
+                placeholder="输入平台原始状态"
+              />
+            </Field>
+            <FilterSelect
+              label="可用性"
+              choices={availabilityLabels}
+              value={availability}
+              onChange={(value) => {
+                setAvailability(value)
+                paging.reset()
+              }}
+            />
+            <Button type="submit" variant="outline">
+              搜索
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                setInput("")
+                setSearch("")
+                setRemoteInput("")
+                setRemoteStatus("")
+                setAvailability("all")
+                paging.reset()
+              }}
+            >
+              清除筛选
+            </Button>
+          </form>
+        </CardHeader>
+        <CardContent className="min-w-0">
+          <ServerTable
+            rows={data?.items ?? []}
+            columns={columns}
+            loading={bcPending || (query.isPending && !data)}
+            fetching={bcPending || query.isFetching}
+            error={query.error}
+            retry={() => {
+              void query.refetch()
+            }}
+            filtered={!!search || !!remoteStatus || availability !== "all"}
+            emptyTitle="当前 BC 尚无账户"
+          />
+        </CardContent>
+        <CardFooter className="block">
+          <Pager
+            paging={paging}
+            nextCursor={data?.next_cursor}
+            busy={query.isFetching || bcPending}
+          />
+        </CardFooter>
+      </Card>
       {detail && (
         <ManagementSheet
           title="账户详情"

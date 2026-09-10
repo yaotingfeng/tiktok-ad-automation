@@ -18,7 +18,10 @@ export const columns: ColumnDef<UserTableData>[] = [
       return (
         <div className="flex items-center gap-2">
           <span
-            className={cn("font-medium", !fullName && "text-muted-foreground")}
+            className={cn(
+              "max-w-80 wrap-anywhere whitespace-normal font-medium",
+              !fullName && "text-muted-foreground",
+            )}
           >
             {fullName || "N/A"}
           </span>
@@ -35,7 +38,9 @@ export const columns: ColumnDef<UserTableData>[] = [
     accessorKey: "username",
     header: "账号",
     cell: ({ row }) => (
-      <span className="text-muted-foreground">{row.original.username}</span>
+      <span className="block max-w-64 wrap-anywhere whitespace-normal text-muted-foreground">
+        {row.original.username}
+      </span>
     ),
   },
   {

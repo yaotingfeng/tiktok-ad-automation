@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { ProvidersService, type ResolvedLink } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card"
 import { FilterSelect } from "@/features/accounts/presentation"
 import { ManagementSheet } from "@/features/tenants/ManagementSheet"
 import {
@@ -202,37 +203,43 @@ export function LinkResultTable({ taskId }: { taskId: string }) {
           retry={() => void summary.refetch()}
         />
       )}
-      <FilterSelect
-        label="结果状态"
-        value={filter}
-        choices={{ exceptions: "仅异常", ...resultStates }}
-        onChange={(v) => {
-          setFilter(v)
-          paging.reset()
-        }}
-      />
-      <div className="flex min-w-0 flex-col gap-4">
-        <ServerTable
-          rows={data?.items || []}
-          columns={columns}
-          loading={query.isPending && !data}
-          fetching={query.isFetching}
-          error={query.error}
-          retry={() => void query.refetch()}
-          filtered={filter !== "all"}
-          emptyTitle="本次任务尚无结果"
-        />
-        {query.error && data && (
-          <p role="status" className="text-sm text-muted-foreground">
-            保留上次读取的列表，请重试以获取当前结果。
-          </p>
-        )}
-        <Pager
-          paging={paging}
-          nextCursor={data?.next_cursor}
-          busy={query.isFetching}
-        />
-      </div>
+      <Card className="min-w-0">
+        <CardHeader>
+          <FilterSelect
+            label="结果状态"
+            value={filter}
+            choices={{ exceptions: "仅异常", ...resultStates }}
+            onChange={(v) => {
+              setFilter(v)
+              paging.reset()
+            }}
+          />
+        </CardHeader>
+        <CardContent className="flex min-w-0 flex-col gap-4">
+          <ServerTable
+            rows={data?.items || []}
+            columns={columns}
+            loading={query.isPending && !data}
+            fetching={query.isFetching}
+            error={query.error}
+            retry={() => void query.refetch()}
+            filtered={filter !== "all"}
+            emptyTitle="本次任务尚无结果"
+          />
+          {query.error && data && (
+            <p role="status" className="text-sm text-muted-foreground">
+              保留上次读取的列表，请重试以获取当前结果。
+            </p>
+          )}
+        </CardContent>
+        <CardFooter className="block">
+          <Pager
+            paging={paging}
+            nextCursor={data?.next_cursor}
+            busy={query.isFetching}
+          />
+        </CardFooter>
+      </Card>
       {showScope && summary.data && (
         <ManagementSheet
           title="取链任务范围"

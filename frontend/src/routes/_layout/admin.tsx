@@ -8,6 +8,7 @@ import { columns, type UserTableData } from "@/components/Admin/columns"
 import { DataTable } from "@/components/Common/DataTable"
 import PendingUsers from "@/components/Pending/PendingUsers"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Card, CardContent } from "@/components/ui/card"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import useAuth from "@/hooks/useAuth"
 
@@ -52,7 +53,15 @@ function UsersTable() {
         </Alert>
       }
     >
-      <Suspense fallback={<PendingUsers />}>
+      <Suspense
+        fallback={
+          <Card className="min-w-0">
+            <CardContent className="min-w-0">
+              <PendingUsers />
+            </CardContent>
+          </Card>
+        }
+      >
         <UsersTableContent />
       </Suspense>
     </ErrorBoundary>
@@ -72,9 +81,9 @@ function Admin() {
       </Alert>
     )
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex min-w-0 flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
+        <div className="flex min-w-0 flex-col gap-1">
           <WorkspacePageTitle>平台管理</WorkspacePageTitle>
           <p className="text-sm text-muted-foreground">
             管理平台用户账号。租户开通与成员分配将在租户管理中提供。

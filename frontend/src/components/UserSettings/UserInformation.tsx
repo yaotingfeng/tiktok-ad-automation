@@ -5,6 +5,7 @@ import { useForm } from "react-hook-form"
 import { z } from "zod"
 import { UsersService, type UserUpdateMe } from "@/client"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Form,
   FormControl,
@@ -81,90 +82,96 @@ const UserInformation = () => {
   }
 
   return (
-    <div className="max-w-md">
-      <h3 className="text-lg font-semibold py-4">User Information</h3>
-      <Form {...form}>
-        <form
-          onSubmit={form.handleSubmit(onSubmit)}
-          className="flex flex-col gap-4"
-        >
-          <FormField
-            control={form.control}
-            name="full_name"
-            render={({ field }) =>
-              editMode ? (
-                <FormItem>
-                  <FormLabel>Full name</FormLabel>
-                  <FormControl>
-                    <Input type="text" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              ) : (
-                <FormItem>
-                  <FormLabel>Full name</FormLabel>
-                  <p
-                    className={cn(
-                      "py-2 truncate max-w-sm",
-                      !field.value && "text-muted-foreground",
-                    )}
+    <Card className="w-full min-w-0 max-w-2xl">
+      <CardHeader>
+        <CardTitle>
+          <h3>User Information</h3>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <Form {...form}>
+          <form
+            onSubmit={form.handleSubmit(onSubmit)}
+            className="flex max-w-md flex-col gap-6"
+          >
+            <FormField
+              control={form.control}
+              name="full_name"
+              render={({ field }) =>
+                editMode ? (
+                  <FormItem>
+                    <FormLabel>Full name</FormLabel>
+                    <FormControl>
+                      <Input type="text" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                ) : (
+                  <FormItem>
+                    <FormLabel>Full name</FormLabel>
+                    <p
+                      className={cn(
+                        "py-2 truncate max-w-sm",
+                        !field.value && "text-muted-foreground",
+                      )}
+                    >
+                      {field.value || "N/A"}
+                    </p>
+                  </FormItem>
+                )
+              }
+            />
+
+            <FormField
+              control={form.control}
+              name="username"
+              render={({ field }) =>
+                editMode ? (
+                  <FormItem>
+                    <FormLabel>账号</FormLabel>
+                    <FormControl>
+                      <Input type="text" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                ) : (
+                  <FormItem>
+                    <FormLabel>账号</FormLabel>
+                    <p className="py-2 truncate max-w-sm">{field.value}</p>
+                  </FormItem>
+                )
+              }
+            />
+
+            <div className="flex gap-3">
+              {editMode ? (
+                <>
+                  <LoadingButton
+                    type="submit"
+                    loading={mutation.isPending}
+                    disabled={!form.formState.isDirty}
                   >
-                    {field.value || "N/A"}
-                  </p>
-                </FormItem>
-              )
-            }
-          />
-
-          <FormField
-            control={form.control}
-            name="username"
-            render={({ field }) =>
-              editMode ? (
-                <FormItem>
-                  <FormLabel>账号</FormLabel>
-                  <FormControl>
-                    <Input type="text" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
+                    Save
+                  </LoadingButton>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={onCancel}
+                    disabled={mutation.isPending}
+                  >
+                    Cancel
+                  </Button>
+                </>
               ) : (
-                <FormItem>
-                  <FormLabel>账号</FormLabel>
-                  <p className="py-2 truncate max-w-sm">{field.value}</p>
-                </FormItem>
-              )
-            }
-          />
-
-          <div className="flex gap-3">
-            {editMode ? (
-              <>
-                <LoadingButton
-                  type="submit"
-                  loading={mutation.isPending}
-                  disabled={!form.formState.isDirty}
-                >
-                  Save
-                </LoadingButton>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={onCancel}
-                  disabled={mutation.isPending}
-                >
-                  Cancel
+                <Button type="button" onClick={toggleEditMode}>
+                  Edit
                 </Button>
-              </>
-            ) : (
-              <Button type="button" onClick={toggleEditMode}>
-                Edit
-              </Button>
-            )}
-          </div>
-        </form>
-      </Form>
-    </div>
+              )}
+            </div>
+          </form>
+        </Form>
+      </CardContent>
+    </Card>
   )
 }
 
