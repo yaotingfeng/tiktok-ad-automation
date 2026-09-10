@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from uuid import UUID
 
-from sqlalchemy import func, text
+from sqlalchemy import func
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -31,17 +31,13 @@ def _account_lock(db: Session, *, tenant_id: UUID, advertiser_id: str) -> bool:
         "big",
         signed=True,
     )
-    return bool(
-        db.execute(
-            text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": key}
-        ).scalar_one()
-    )
+    return bool(db.exec(select(func.pg_try_advisory_xact_lock(key))).one())
 
 
 def source_file(
     db: Session, *, context: TenantContext, bc_id: str, material_id: UUID
 ) -> IngestSessionFile:
-    material = db.execute(
+    material = db.exec(
         select(MaterialFile)
         .where(
             MaterialFile.tenant_id == context.tenant_id,
@@ -49,25 +45,21 @@ def source_file(
             MaterialFile.id == material_id,
         )
         .with_for_update()
-    ).scalar_one_or_none()
+    ).one_or_none()
     if material is None:
         raise DomainError("material_not_found", "未找到当前租户素材")
     # A generation belongs to one ingest identity. Ambiguous links cannot choose
     # a source or charge another import's current occupancy.
-    rows = (
-        db.execute(
-            select(IngestSessionFile)
-            .where(
-                IngestSessionFile.tenant_id == context.tenant_id,
-                IngestSessionFile.bc_id == bc_id,
-                IngestSessionFile.material_id == material_id,
-            )
-            .limit(2)
-            .with_for_update()
+    rows = db.exec(
+        select(IngestSessionFile)
+        .where(
+            IngestSessionFile.tenant_id == context.tenant_id,
+            IngestSessionFile.bc_id == bc_id,
+            IngestSessionFile.material_id == material_id,
         )
-        .scalars()
-        .all()
-    )
+        .limit(2)
+        .with_for_update()
+    ).all()
     if len(rows) != 1:
         raise DomainError("ingest_identity_unverified", "素材导入身份缺失或存在歧义")
     assert isinstance(rows[0], IngestSessionFile)
@@ -123,7 +115,7 @@ def claim_source_account(
             connection_id=row.connection_id,
         )
     if reselect:
-        unsafe_prior = db.execute(
+        unsafe_prior = db.exec(
             select(MaterialAssetOperation.id)
             .where(
                 MaterialAssetOperation.tenant_id == context.tenant_id,
@@ -161,7 +153,7 @@ def claim_source_account(
     grants = usable_grants(
         tenant_id=context.tenant_id, bc_id=bc_id, action="upload"
     ).subquery()
-    candidates = db.execute(
+    candidates = db.exec(
         select(grants.c.advertiser_id, grants.c.connection_id)
         .outerjoin(loads, grants.c.advertiser_id == loads.c.advertiser_id)
         .where(
@@ -182,7 +174,7 @@ def claim_source_account(
             db, tenant_id=context.tenant_id, advertiser_id=advertiser_id
         ):
             continue
-        occupied = db.execute(
+        occupied = db.exec(
             select(
                 func.coalesce(func.sum(SourceAccountLoad.in_flight), 0),
                 func.max(SourceAccountLoad.cooldown_until),
@@ -241,7 +233,7 @@ def release_source_account(
     Marker and counter are updated atomically; repeated successful callbacks are
     no-ops. UNKNOWN and armed failed operations cannot release a live slot.
     """
-    locked = db.execute(
+    locked = db.exec(
         select(MaterialAssetOperation)
         .where(
             MaterialAssetOperation.id == operation.id,
@@ -249,7 +241,7 @@ def release_source_account(
         )
         .with_for_update()
         .execution_options(populate_existing=True)
-    ).scalar_one()
+    ).one()
     if not locked.remote_response.get("source_slot_held"):
         return False
     if locked.status != "succeeded" and not (
