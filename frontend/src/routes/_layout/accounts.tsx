@@ -8,5 +8,5 @@ export const Route = createFileRoute("/_layout/accounts")({
       description="管理当前租户的 TikTok BC 与广告账户授权。"
     />
   ),
-  head: () => ({ meta: [{ title: "账户与授权 · TT ADA" }] }),
+  head: () => ({ meta: [{ title: "账户与授权 · TK-ADA" }] }),
 })

@@ -21,5 +21,5 @@ export const Route = createFileRoute("/_layout/tenants/$tenantId/accounts")({
         : undefined,
   }),
   component: AccountsPage,
-  head: () => ({ meta: [{ title: "账户与授权 · TT ADA" }] }),
+  head: () => ({ meta: [{ title: "账户与授权 · TK-ADA" }] }),
 })

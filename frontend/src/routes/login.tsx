@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod"
 import { createFileRoute, Link, redirect } from "@tanstack/react-router"
-import { ArrowRight, Loader2 } from "lucide-react"
+import { Loader2 } from "lucide-react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
 import { AuthLayout } from "@/components/Common/AuthLayout"
@@ -36,7 +36,7 @@ export const Route = createFileRoute("/login")({
   beforeLoad: () => {
     if (isLoggedIn()) throw redirect({ to: "/" })
   },
-  head: () => ({ meta: [{ title: "登录 · TT ADA" }] }),
+  head: () => ({ meta: [{ title: "登录 · TK-ADA" }] }),
 })
 function Login() {
   const { loginMutation } = useAuth()
@@ -51,7 +51,7 @@ function Login() {
       <Card>
         <CardHeader>
           <CardTitle>
-            <h1 className="workspace-title">登录 TT ADA</h1>
+            <h1 className="workspace-title">登录 TK-ADA</h1>
           </CardTitle>
           <CardDescription>使用管理员分配的账号登录。</CardDescription>
         </CardHeader>
@@ -130,10 +130,7 @@ function Login() {
                       正在登录…
                     </>
                   ) : (
-                    <>
-                      登录 TT ADA
-                      <ArrowRight data-icon="inline-end" />
-                    </>
+                    "登录"
                   )}
                 </Button>
               </Field>

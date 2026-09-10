@@ -363,7 +363,7 @@ function TenantEditor({
           <p className="text-sm leading-7">
             {original!.active
               ? "停用后将阻止该租户新的系统业务操作，并暂停尚未执行的步骤。历史记录会保留，已在 TikTok 启用的广告不会自动停止。"
-              : "恢复后，该租户的成员可按原有权限进入 TT ADA。"}
+              : "恢复后，该租户的成员可按原有权限进入 TK-ADA。"}
           </p>
         ) : (
           <FieldGroup>

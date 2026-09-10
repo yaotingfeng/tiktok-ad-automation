@@ -1,5 +1,5 @@
 [Unit]
-Description=TT ADA production database and configuration backup
+Description=TK-ADA production database and configuration backup
 Requires=docker.service
 After=docker.service
 

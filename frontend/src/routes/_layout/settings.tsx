@@ -17,7 +17,7 @@ export const Route = createFileRoute("/_layout/settings")({
   head: () => ({
     meta: [
       {
-        title: "账号设置 · TT ADA",
+        title: "账号设置 · TK-ADA",
       },
     ],
   }),

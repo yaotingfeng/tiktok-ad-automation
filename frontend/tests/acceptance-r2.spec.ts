@@ -31,7 +31,7 @@ test("real login and ingest APIs receive browser files through a loopback HTTPS 
   await page.goto(`/tenants/${scope.tenant_id}/materials?bc_id=${scope.bc_id}`)
   await page.getByLabel("账号", { exact: true }).fill(scope.username)
   await page.getByLabel("密码", { exact: true }).fill(scope.password)
-  await page.getByRole("button", { name: "登录 TT ADA", exact: true }).click()
+  await page.getByRole("button", { name: "登录", exact: true }).click()
   await expect(
     page.getByRole("heading", { name: "素材库", exact: true }),
   ).toBeVisible()

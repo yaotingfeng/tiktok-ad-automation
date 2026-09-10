@@ -7,8 +7,10 @@ export function WorkspaceBrand() {
         <ArrowUpRight className="size-4" />
       </span>
       <div className="brand-copy min-w-0">
-        <p className="text-sm font-semibold">TT ADA</p>
-        <p className="text-xs text-muted-foreground">广告自动化</p>
+        <p className="text-lg leading-6 font-semibold">TK-ADA</p>
+        <p className="text-[11px] leading-4 text-muted-foreground">
+          广告投放工具
+        </p>
       </div>
     </div>
   )

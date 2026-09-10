@@ -15,5 +15,5 @@ export const Route = createFileRoute(
         ? s.result
         : undefined,
   }),
-  head: () => ({ meta: [{ title: "任务详情 · TT ADA" }] }),
+  head: () => ({ meta: [{ title: "任务详情 · TK-ADA" }] }),
 })

@@ -1,5 +1,5 @@
 [Unit]
-Description=Daily TT ADA production backup at 03:30 Asia/Shanghai
+Description=Daily TK-ADA production backup at 03:30 Asia/Shanghai
 
 [Timer]
 OnCalendar=*-*-* 03:30:00 Asia/Shanghai

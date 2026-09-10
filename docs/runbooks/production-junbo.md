@@ -1,4 +1,4 @@
-# TT ADA 骏伯生产环境与发布规则
+# TK-ADA 骏伯生产环境与发布规则
 
 ## 环境与首发授权
 
@@ -29,6 +29,8 @@
 
 ## 版本与目录约定
 
+- 2026-09-10 产品显示名称更新为 `TK-ADA`。既有 `/opt/tt-ada` 路径、`tt-ada-production` 项目名、镜像前缀、备份服务和持久卷继续使用原技术标识，避免因名称变更创建新的数据库/队列。仅同步私有配置 `PROJECT_NAME`，不重置账号或密钥。
+
 - 截至首发，仓库只有已发布的默认分支 `feat/platform-implementation`，没有 `main`；本次按现有分支提交和推送，不擅自创建分支。以后若用户建立 main，应先核对祖先关系和测试记录，再按仓库默认规则发布 main。
 - 每次发布以完整 40 位 Git SHA 为单位。只打包已提交、已推送并通过相关检查的源代码；禁止把整个本地目录、`.env`、`.runtime`、`.worktrees`、会话、上传视频或本地数据库复制到生产。
 - 生产源码：`/opt/tt-ada/releases/<SHA>`，发布后不可原地编辑；应用镜像 `tt-ada:<SHA>` 不覆盖旧 tag。数据库、Redis 及环境配置独立于版本目录。
@@ -39,7 +41,7 @@
 
 1. 运维端核对 `git status -sb`、`git rev-parse --show-toplevel`、提交差异、测试及远程 SHA。执行 `git archive --format=tar <SHA>`，通过 SSH 传到上述同名版本目录。
    首次创建 `/opt/tt-ada/releases`、`/opt/tt-ada/backups`（0700）、`/etc/tt-ada`（0700）及 `/var/log/nginx`；不要假定宝塔安装已建立系统 Nginx 日志目录。
-2. 私有环境文件由运维安全创建：`PROJECT_NAME=TT ADA`、`FRONTEND_HOST=https://manjuad.gzjunbo.net:8000`、`TT_ADA_BACKEND_PORT=18000`、独立 `SECRET_KEY`、`CONNECTION_ENCRYPTION_KEY`、`POSTGRES_PASSWORD`，以及用户授权的初始化管理员凭据。不要复用本地密钥。
+2. 私有环境文件由运维安全创建：`PROJECT_NAME=TK-ADA`、`FRONTEND_HOST=https://manjuad.gzjunbo.net:8000`、`TT_ADA_BACKEND_PORT=18000`、独立 `SECRET_KEY`、`CONNECTION_ENCRYPTION_KEY`、`POSTGRES_PASSWORD`，以及用户授权的初始化管理员凭据。不要复用本地密钥。
 3. 以下命令在服务器执行，`RELEASE_SHA` 必须替换为已验证的完整 SHA。配置检查只能输出 `--quiet`、服务名或必要非敏感字段，不能输出整个环境。
    国内服务器的生产构建使用腾讯云 Debian/PyPI 镜像站，保留 APT 签名及 uv.lock 包摘要校验，uv 固定 0.9.26。Dockerfile 仅在构建层替换锁文件副本的索引和下载地址，仓库锁文件、包版本、hash 及 TikTok 官方 SDK Git commit 不变；`uv sync --frozen` 不重新解析依赖。不要修改整机 Docker 镜像源或其他项目依赖来解决单项目构建问题。
 

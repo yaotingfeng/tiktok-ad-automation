@@ -25,7 +25,7 @@ export const Route = createFileRoute("/_layout/admin")({
   head: () => ({
     meta: [
       {
-        title: "平台管理 · TT ADA",
+        title: "平台管理 · TK-ADA",
       },
     ],
   }),
