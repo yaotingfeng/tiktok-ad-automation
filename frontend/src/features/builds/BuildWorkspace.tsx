@@ -20,10 +20,12 @@ export function BuildWorkspace() {
     )
   return (
     <div className="flex min-w-0 flex-col gap-6">
-      <WorkspacePageTitle>广告搭建</WorkspacePageTitle>
-      <p className="text-sm text-muted-foreground">
-        批量输入剧目和账户，自动准备推广链接与素材。
-      </p>
+      <div className="flex min-w-0 flex-col gap-1">
+        <WorkspacePageTitle>广告搭建</WorkspacePageTitle>
+        <p className="text-sm text-muted-foreground">
+          批量输入剧目和账户，自动准备推广链接与素材。
+        </p>
+      </div>
       <BuildInputPage
         key={`${tenantId}:${scope.bcId}`}
         tenantId={tenantId}

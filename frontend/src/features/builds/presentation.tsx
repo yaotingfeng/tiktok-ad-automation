@@ -2,6 +2,7 @@ import { useBlocker } from "@tanstack/react-router"
 import { AxiosError } from "axios"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -118,24 +119,28 @@ export const unknownOutcome = (error: unknown) =>
   error.response.status >= 500
 export function BuildSteps({ step }: { step: 1 | 2 | 3 }) {
   return (
-    <ol
-      aria-label="搭建步骤"
-      className="grid grid-cols-3 gap-2 rounded-lg border bg-card p-4 text-sm"
-    >
-      {["批量输入", "准备与调整", "搭建预览"].map((label, i) => (
-        <li
-          key={label}
-          aria-current={i + 1 === step ? "step" : undefined}
-          className={
-            i + 1 === step
-              ? "font-semibold text-primary"
-              : "text-muted-foreground"
-          }
+    <Card className="min-w-0">
+      <CardContent>
+        <ol
+          aria-label="搭建步骤"
+          className="grid min-w-0 grid-cols-3 gap-2 text-sm"
         >
-          {i + 1} · {label}
-        </li>
-      ))}
-    </ol>
+          {["批量输入", "准备与调整", "搭建预览"].map((label, i) => (
+            <li
+              key={label}
+              aria-current={i + 1 === step ? "step" : undefined}
+              className={
+                i + 1 === step
+                  ? "font-semibold text-primary"
+                  : "text-muted-foreground"
+              }
+            >
+              {i + 1} · {label}
+            </li>
+          ))}
+        </ol>
+      </CardContent>
+    </Card>
   )
 }
 

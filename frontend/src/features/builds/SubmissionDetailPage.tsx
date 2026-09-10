@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react"
 import { BuildsService } from "@/client"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { displayTime, Identifier } from "@/features/accounts/presentation"
@@ -195,14 +196,16 @@ function Detail({
           </p>
         </div>
       )}
-      <WorkspacePageTitle>任务 {data.batch_short_id}</WorkspacePageTitle>
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <SubmissionBadge status={data.status} />
-          <span className="text-sm">
-            {data.drama_count} 剧 · {data.account_count} 户 · 另有{" "}
-            {data.excluded_unit_count} 个排除组合
-          </span>
+        <div className="flex min-w-0 flex-col gap-1">
+          <WorkspacePageTitle>任务 {data.batch_short_id}</WorkspacePageTitle>
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <SubmissionBadge status={data.status} />
+            <span className="text-sm">
+              {data.drama_count} 剧 · {data.account_count} 户 · 另有{" "}
+              {data.excluded_unit_count} 个排除组合
+            </span>
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={refresh}>
@@ -211,31 +214,33 @@ function Detail({
           {back}
         </div>
       </div>
-      <div className="flex flex-col gap-2 rounded-lg border bg-card p-4 text-sm">
-        <div className="flex flex-wrap gap-4">
-          <span>
-            任务所属：{tenantName} · BC {data.bc_id}
-          </span>
-          <span>提交人：{data.actor_name || "暂未获取"}</span>
-        </div>
-        <div className="flex flex-wrap gap-4">
-          <span>版权方：{data.provider_name || "暂无冻结版权方"}</span>
-          <span>策略：{data.strategy_label || "暂未获取"}</span>
-        </div>
-        <details>
-          <summary className="cursor-pointer text-muted-foreground">
-            完整编号与时间
-          </summary>
-          <div className="mt-2 flex flex-col gap-2">
-            <Identifier value={data.submission_id} />
+      <Card className="min-w-0">
+        <CardContent className="flex min-w-0 flex-col gap-2 text-sm">
+          <div className="flex flex-wrap gap-4">
             <span>
-              提交于 {displayTime(data.created_at)} · 最近更新{" "}
-              {displayTime(data.updated_at)}
+              任务所属：{tenantName} · BC {data.bc_id}
             </span>
-            <Identifier value={data.preview_id} />
+            <span>提交人：{data.actor_name || "暂未获取"}</span>
           </div>
-        </details>
-      </div>
+          <div className="flex flex-wrap gap-4">
+            <span>版权方：{data.provider_name || "暂无冻结版权方"}</span>
+            <span>策略：{data.strategy_label || "暂未获取"}</span>
+          </div>
+          <details>
+            <summary className="cursor-pointer text-muted-foreground">
+              完整编号与时间
+            </summary>
+            <div className="mt-2 flex flex-col gap-2">
+              <Identifier value={data.submission_id} />
+              <span>
+                提交于 {displayTime(data.created_at)} · 最近更新{" "}
+                {displayTime(data.updated_at)}
+              </span>
+              <Identifier value={data.preview_id} />
+            </div>
+          </details>
+        </CardContent>
+      </Card>
       <SubmissionProgress data={data} />
       <Alert>
         <AlertDescription>
@@ -290,61 +295,67 @@ function Detail({
           </Link>
         </Button>
       </div>
-      <Tabs
-        value={tab}
-        onValueChange={(value) =>
-          void navigate({
-            to: "/tenants/$tenantId/build-tasks/$submissionId",
-            params: { tenantId, submissionId },
-            search: { bc_id: bcId, tab: value },
-          })
-        }
-      >
-        <TabsList>
-          <TabsTrigger value="details">搭建明细</TabsTrigger>
-          <TabsTrigger value="issues">异常与待核实</TabsTrigger>
-          <TabsTrigger value="excluded">排除项</TabsTrigger>
-          <TabsTrigger value="events">操作记录</TabsTrigger>
-        </TabsList>
-      </Tabs>
-      {tab !== "events" && (
-        <SubmissionFilterBar
-          key={tab}
-          tenantId={tenantId}
-          bcId={bcId}
-          previewId={data.preview_id}
-          {...current}
-          onAccount={(v) => patch({ advertiserId: v })}
-          onDrama={(v) => patch({ dramaId: v })}
-          {...(tab === "issues"
-            ? {
-                onKind: (v: string) => patch({ kind: v }),
-                onResult: (v: string) => patch({ result: v }),
-              }
-            : {})}
-        />
-      )}
-      {tab === "events" ? (
-        <SubmissionEventsTable {...{ tenantId, bcId, submissionId }} />
-      ) : tab === "issues" ? (
-        <SubmissionStepsTable
-          {...{ tenantId, bcId, submissionId, ...current }}
-        />
-      ) : (
-        <>
-          <p className="text-xs text-muted-foreground">
-            {tab === "excluded"
-              ? "排除组合未提交，不提供重试；修复后需在新预览明确提交。"
-              : "已创建表示已有远端对象；ENABLE 表示启用，不表示已投放或已消耗。"}
-          </p>
-          <SubmissionUnitsTable
-            {...{ tenantId, bcId, submissionId }}
-            advertiserId={current.advertiserId}
-            dramaId={current.dramaId}
-            excluded={tab === "excluded"}
-          />
-        </>
-      )}
+      <Card className="min-w-0">
+        <CardHeader className="min-w-0 gap-4">
+          <Tabs
+            value={tab}
+            onValueChange={(value) =>
+              void navigate({
+                to: "/tenants/$tenantId/build-tasks/$submissionId",
+                params: { tenantId, submissionId },
+                search: { bc_id: bcId, tab: value },
+              })
+            }
+          >
+            <TabsList>
+              <TabsTrigger value="details">搭建明细</TabsTrigger>
+              <TabsTrigger value="issues">异常与待核实</TabsTrigger>
+              <TabsTrigger value="excluded">排除项</TabsTrigger>
+              <TabsTrigger value="events">操作记录</TabsTrigger>
+            </TabsList>
+          </Tabs>
+          {tab !== "events" && (
+            <SubmissionFilterBar
+              key={tab}
+              tenantId={tenantId}
+              bcId={bcId}
+              previewId={data.preview_id}
+              {...current}
+              onAccount={(v) => patch({ advertiserId: v })}
+              onDrama={(v) => patch({ dramaId: v })}
+              {...(tab === "issues"
+                ? {
+                    onKind: (v: string) => patch({ kind: v }),
+                    onResult: (v: string) => patch({ result: v }),
+                  }
+                : {})}
+            />
+          )}
+        </CardHeader>
+        <CardContent className="flex min-w-0 flex-col gap-4">
+          {tab === "events" ? (
+            <SubmissionEventsTable {...{ tenantId, bcId, submissionId }} />
+          ) : tab === "issues" ? (
+            <SubmissionStepsTable
+              {...{ tenantId, bcId, submissionId, ...current }}
+            />
+          ) : (
+            <>
+              <p className="text-xs text-muted-foreground">
+                {tab === "excluded"
+                  ? "排除组合未提交，不提供重试；修复后需在新预览明确提交。"
+                  : "已创建表示已有远端对象；ENABLE 表示启用，不表示已投放或已消耗。"}
+              </p>
+              <SubmissionUnitsTable
+                {...{ tenantId, bcId, submissionId }}
+                advertiserId={current.advertiserId}
+                dramaId={current.dramaId}
+                excluded={tab === "excluded"}
+              />
+            </>
+          )}
+        </CardContent>
+      </Card>
     </div>
   )
 }

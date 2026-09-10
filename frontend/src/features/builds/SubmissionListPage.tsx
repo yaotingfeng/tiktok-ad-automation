@@ -10,6 +10,7 @@ import {
 } from "@/client"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -281,9 +282,13 @@ function List({
   )
   return (
     <div className="flex min-w-0 flex-col gap-6">
-      <WorkspacePageTitle>搭建任务</WorkspacePageTitle>
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground">查看创建进度并处理异常</p>
+        <div className="flex min-w-0 flex-col gap-1">
+          <WorkspacePageTitle>搭建任务</WorkspacePageTitle>
+          <p className="text-sm text-muted-foreground">
+            查看创建进度并处理异常
+          </p>
+        </div>
         {allowed && (
           <Button asChild>
             <Link
@@ -296,178 +301,187 @@ function List({
           </Button>
         )}
       </div>
-      <Tabs
-        value={status}
-        onValueChange={(value) => apply({ status_group: value })}
-      >
-        <TabsList>
-          <TabsTrigger value="all">全部</TabsTrigger>
-          <TabsTrigger value="active">排队与进行中</TabsTrigger>
-          <TabsTrigger value="attention">需要处理</TabsTrigger>
-          <TabsTrigger value="completed">已完成</TabsTrigger>
-        </TabsList>
-      </Tabs>
-      <form
-        className="flex flex-wrap items-end gap-3"
-        onSubmit={(e) => {
-          e.preventDefault()
-          e.stopPropagation()
-          apply({ q: input })
-        }}
-      >
-        <Field className="min-w-56 flex-1">
-          <FieldLabel htmlFor="task-search">搜索任务</FieldLabel>
-          <Input
-            id="task-search"
-            placeholder="任务编号、剧名或账户"
-            value={input}
-            maxLength={255}
-            onChange={(e) => setInput(e.target.value)}
-          />
-        </Field>
-        <Button type="submit" variant="outline">
-          搜索
-        </Button>
-        <Field className="w-auto">
-          <FieldLabel>提交日期</FieldLabel>
-          <FilterSelect
-            label="提交日期范围"
-            value={range}
-            onChange={(value) => {
-              const dates =
-                value === "all"
-                  ? { from: "", to: "" }
-                  : dateRange(value === "30" ? 30 : 7)
-              apply({ range: value, ...(value === "custom" ? {} : dates) })
-            }}
-            choices={{
-              "7": "最近 7 天",
-              "30": "最近 30 天",
-              custom: "自定义日期",
-              all: "全部日期",
-            }}
-          />
-        </Field>
-        {range === "custom" && (
-          <>
-            <Field className="w-auto">
-              <FieldLabel htmlFor="task-from">开始日期</FieldLabel>
-              <Input
-                id="task-from"
-                type="date"
-                value={from}
-                onChange={(e) => apply({ from: e.target.value })}
-              />
-            </Field>
-            <Field className="w-auto">
-              <FieldLabel htmlFor="task-to">结束日期</FieldLabel>
-              <Input
-                id="task-to"
-                type="date"
-                value={to}
-                onChange={(e) => apply({ to: e.target.value })}
-              />
-            </Field>
-          </>
-        )}
-        <Field className="w-auto">
-          <FieldLabel>版权方</FieldLabel>
-          <DirectoryPicker<ProviderConnectionPublic>
-            label="筛选版权方"
-            valueLabel={providerLabel || provider || "全部版权方"}
-            queryKey={["tenant", tenantId, "task-provider-filter"]}
-            load={async (query, cursor, limit, signal) =>
-              (
-                await ProvidersService.listConnections({
-                  path: { tenant_id: tenantId },
-                  query: { query, cursor, limit },
-                  signal,
-                })
-              ).data
-            }
-            renderItem={(r) => <span>{r.display_name}</span>}
-            onSelect={(r) => {
-              setProviderLabel(r.display_name)
-              apply({ provider_connection_id: r.id })
-            }}
-          />
-        </Field>
-        {provider && (
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => {
-              setProviderLabel(undefined)
-              apply({ provider_connection_id: undefined })
+      <Card className="min-w-0">
+        <CardHeader className="min-w-0 gap-4">
+          <Tabs
+            value={status}
+            onValueChange={(value) => apply({ status_group: value })}
+          >
+            <TabsList>
+              <TabsTrigger value="all">全部</TabsTrigger>
+              <TabsTrigger value="active">排队与进行中</TabsTrigger>
+              <TabsTrigger value="attention">需要处理</TabsTrigger>
+              <TabsTrigger value="completed">已完成</TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <form
+            className="flex flex-wrap items-end gap-3"
+            onSubmit={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              apply({ q: input })
             }}
           >
-            清除版权方
-          </Button>
-        )}
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={() => {
-            setInput("")
-            setProviderLabel(undefined)
-            apply({
-              q: undefined,
-              status_group: "all",
-              provider_connection_id: undefined,
-              range: "all",
-              from: "",
-              to: "",
-            })
-          }}
-        >
-          清除筛选
-        </Button>
-      </form>
-      {newer && (
-        <Alert>
-          <AlertDescription>
-            <p>有新任务，刷新查看。</p>
+            <Field className="w-full sm:w-80">
+              <FieldLabel htmlFor="task-search">搜索任务</FieldLabel>
+              <Input
+                id="task-search"
+                placeholder="任务编号、剧名或账户"
+                value={input}
+                maxLength={255}
+                onChange={(e) => setInput(e.target.value)}
+              />
+            </Field>
+            <Button type="submit" variant="outline">
+              搜索
+            </Button>
+            <Field className="w-auto">
+              <FieldLabel>提交日期</FieldLabel>
+              <FilterSelect
+                label="提交日期范围"
+                value={range}
+                onChange={(value) => {
+                  const dates =
+                    value === "all"
+                      ? { from: "", to: "" }
+                      : dateRange(value === "30" ? 30 : 7)
+                  apply({ range: value, ...(value === "custom" ? {} : dates) })
+                }}
+                choices={{
+                  "7": "最近 7 天",
+                  "30": "最近 30 天",
+                  custom: "自定义日期",
+                  all: "全部日期",
+                }}
+              />
+            </Field>
+            {range === "custom" && (
+              <>
+                <Field className="w-auto">
+                  <FieldLabel htmlFor="task-from">开始日期</FieldLabel>
+                  <Input
+                    id="task-from"
+                    type="date"
+                    value={from}
+                    onChange={(e) => apply({ from: e.target.value })}
+                  />
+                </Field>
+                <Field className="w-auto">
+                  <FieldLabel htmlFor="task-to">结束日期</FieldLabel>
+                  <Input
+                    id="task-to"
+                    type="date"
+                    value={to}
+                    onChange={(e) => apply({ to: e.target.value })}
+                  />
+                </Field>
+              </>
+            )}
+            <Field className="w-auto">
+              <FieldLabel>版权方</FieldLabel>
+              <DirectoryPicker<ProviderConnectionPublic>
+                label="筛选版权方"
+                valueLabel={providerLabel || provider || "全部版权方"}
+                queryKey={["tenant", tenantId, "task-provider-filter"]}
+                load={async (query, cursor, limit, signal) =>
+                  (
+                    await ProvidersService.listConnections({
+                      path: { tenant_id: tenantId },
+                      query: { query, cursor, limit },
+                      signal,
+                    })
+                  ).data
+                }
+                renderItem={(r) => <span>{r.display_name}</span>}
+                onSelect={(r) => {
+                  setProviderLabel(r.display_name)
+                  apply({ provider_connection_id: r.id })
+                }}
+              />
+            </Field>
+            {provider && (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  setProviderLabel(undefined)
+                  apply({ provider_connection_id: undefined })
+                }}
+              >
+                清除版权方
+              </Button>
+            )}
             <Button
-              variant="outline"
+              type="button"
+              variant="ghost"
               onClick={() => {
-                paging.reset()
-                setHeadSeen(head.data?.items[0]?.submission_id)
-                void query.refetch()
+                setInput("")
+                setProviderLabel(undefined)
+                apply({
+                  q: undefined,
+                  status_group: "all",
+                  provider_connection_id: undefined,
+                  range: "all",
+                  from: "",
+                  to: "",
+                })
               }}
             >
-              刷新至首页
+              清除筛选
             </Button>
-          </AlertDescription>
-        </Alert>
-      )}
-      {query.error && (!query.data || isForbidden(query.error)) ? (
-        <RequestError error={query.error} retry={() => void query.refetch()} />
-      ) : (
-        <>
-          <ServerTable
-            rows={query.data?.items || []}
-            columns={columns}
-            loading={query.isPending}
-            fetching={query.isFetching}
-            error={query.error}
-            retry={() => void query.refetch()}
-            filtered={false}
-            emptyTitle={
-              q ||
-              provider ||
-              status !== "all" ||
-              (head.data?.items.length ?? 0) > 0
-                ? "没有符合筛选的任务"
-                : "还没有搭建任务"
-            }
-          />
-          <Pager
-            paging={paging}
-            nextCursor={query.data?.next_cursor}
-            busy={query.isFetching}
-          />
-        </>
-      )}
+          </form>
+        </CardHeader>
+        <CardContent className="flex min-w-0 flex-col gap-4">
+          {newer && (
+            <Alert>
+              <AlertDescription>
+                <p>有新任务，刷新查看。</p>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    paging.reset()
+                    setHeadSeen(head.data?.items[0]?.submission_id)
+                    void query.refetch()
+                  }}
+                >
+                  刷新至首页
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+          {query.error && (!query.data || isForbidden(query.error)) ? (
+            <RequestError
+              error={query.error}
+              retry={() => void query.refetch()}
+            />
+          ) : (
+            <>
+              <ServerTable
+                rows={query.data?.items || []}
+                columns={columns}
+                loading={query.isPending}
+                fetching={query.isFetching}
+                error={query.error}
+                retry={() => void query.refetch()}
+                filtered={false}
+                emptyTitle={
+                  q ||
+                  provider ||
+                  status !== "all" ||
+                  (head.data?.items.length ?? 0) > 0
+                    ? "没有符合筛选的任务"
+                    : "还没有搭建任务"
+                }
+              />
+              <Pager
+                paging={paging}
+                nextCursor={query.data?.next_cursor}
+                busy={query.isFetching}
+              />
+            </>
+          )}
+        </CardContent>
+      </Card>
       <p className="text-xs text-muted-foreground">
         日期按浏览器本地时区筛选。任务创建结果与审核、实际投放和消耗分别记录；本页不会改变广告状态。
       </p>

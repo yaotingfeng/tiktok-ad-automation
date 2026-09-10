@@ -9,7 +9,7 @@ import {
 } from "@/client"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { CopyField } from "@/features/providers/presentation"
@@ -121,12 +121,14 @@ export function BuildPreviewPanel({
     })
   return (
     <div className="flex min-w-0 flex-col gap-6">
-      <WorkspacePageTitle>搭建预览</WorkspacePageTitle>
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground">
-          草稿 v{current.draft_revision} ·{" "}
-          <BuildStatus value={current.status} />
-        </p>
+        <div className="flex min-w-0 flex-col gap-1">
+          <WorkspacePageTitle>搭建预览</WorkspacePageTitle>
+          <p className="text-sm text-muted-foreground">
+            草稿 v{current.draft_revision} ·{" "}
+            <BuildStatus value={current.status} />
+          </p>
+        </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => void summary.refetch()}>
             刷新预览状态
@@ -214,48 +216,54 @@ export function BuildPreviewPanel({
               条输入问题，未形成组合。仅提交可用与提交后可分发范围，排除项不会自动补入。
             </AlertDescription>
           </Alert>
-          <Tabs
-            value={tab}
-            onValueChange={(value) => {
-              setTab(value)
-              setDramaId(undefined)
-            }}
-          >
-            <TabsList>
-              <TabsTrigger value="dramas">剧目汇总</TabsTrigger>
-              <TabsTrigger value="units">账户组合</TabsTrigger>
-              <TabsTrigger value="excluded">排除组合</TabsTrigger>
-              <TabsTrigger value="issues">输入问题</TabsTrigger>
-            </TabsList>
-          </Tabs>
-          {tab === "dramas" ? (
-            <PreviewDramaTable
-              tenantId={tenantId}
-              bcId={bcId}
-              preview={current}
-              onDrama={(id) => {
-                setDramaId(id)
-                setTab("units")
-              }}
-            />
-          ) : tab === "issues" ? (
-            <PreviewExclusions
-              tenantId={tenantId}
-              bcId={bcId}
-              previewId={previewId}
-              onEdit={back}
-            />
-          ) : (
-            <PreviewUnitTable
-              key={tab}
-              tenantId={tenantId}
-              bcId={bcId}
-              previewId={previewId}
-              dramaId={dramaId}
-              excluded={tab === "excluded"}
-              onUnit={setUnit}
-            />
-          )}
+          <Card className="min-w-0">
+            <CardHeader className="min-w-0">
+              <Tabs
+                value={tab}
+                onValueChange={(value) => {
+                  setTab(value)
+                  setDramaId(undefined)
+                }}
+              >
+                <TabsList>
+                  <TabsTrigger value="dramas">剧目汇总</TabsTrigger>
+                  <TabsTrigger value="units">账户组合</TabsTrigger>
+                  <TabsTrigger value="excluded">排除组合</TabsTrigger>
+                  <TabsTrigger value="issues">输入问题</TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </CardHeader>
+            <CardContent className="min-w-0">
+              {tab === "dramas" ? (
+                <PreviewDramaTable
+                  tenantId={tenantId}
+                  bcId={bcId}
+                  preview={current}
+                  onDrama={(id) => {
+                    setDramaId(id)
+                    setTab("units")
+                  }}
+                />
+              ) : tab === "issues" ? (
+                <PreviewExclusions
+                  tenantId={tenantId}
+                  bcId={bcId}
+                  previewId={previewId}
+                  onEdit={back}
+                />
+              ) : (
+                <PreviewUnitTable
+                  key={tab}
+                  tenantId={tenantId}
+                  bcId={bcId}
+                  previewId={previewId}
+                  dramaId={dramaId}
+                  excluded={tab === "excluded"}
+                  onUnit={setUnit}
+                />
+              )}
+            </CardContent>
+          </Card>
           <PreviewSummaryBar
             preview={current}
             write={write && !submission.forbidden && !summary.error}
@@ -289,61 +297,63 @@ export function PreviewSummaryBar({
   const [pending, setPending] = useState(false),
     [error, setError] = useState<unknown>()
   return (
-    <div className="sticky bottom-0 space-y-3 rounded-lg border bg-background p-4 shadow-sm">
-      {!!error && <RequestError error={error} />}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <p className="font-semibold">
-            {preview.campaign_count} Campaign · {preview.adgroup_count} Ad Group
-            · {preview.ad_count} Ad
-          </p>
-          <p className="mt-1 text-sm">
-            配置日预算合计 {preview.currency}{" "}
-            {normalizeDecimal(preview.daily_budget_sum)}
-          </p>
-          <p className="text-xs text-muted-foreground">
-            各 Campaign 配置日预算之和，非预计实际消耗。排除{" "}
-            {preview.blocked_count} 个阻断组合，{preview.preparing_count}{" "}
-            个组合将在提交后分发素材。
-          </p>
-        </div>
-        {write && (
-          <div className="space-y-2">
-            <Button
-              disabled={
-                !onSubmit ||
-                unavailable ||
-                pending ||
-                preview.status !== "FROZEN" ||
-                preview.campaign_count === 0
-              }
-              aria-label={`创建并立即启用 ${preview.campaign_count} 个 Campaign / ${preview.adgroup_count} 个 Ad Group / ${preview.ad_count} 条 Ad`}
-              onClick={async () => {
-                if (!onSubmit || pending) return
-                setPending(true)
-                try {
-                  await onSubmit(preview)
-                } catch (e) {
-                  setError(e)
-                } finally {
-                  setPending(false)
-                }
-              }}
-            >
-              {pending ? "正在确认提交结果" : "创建并立即启用"}
-            </Button>
-            <p className="text-xs text-muted-foreground">
-              将直接创建并启用，审核与实际投放状态由 TikTok 决定。
+    <Card className="sticky bottom-0 min-w-0">
+      <CardContent className="flex min-w-0 flex-col gap-3">
+        {!!error && <RequestError error={error} />}
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <p className="font-semibold">
+              {preview.campaign_count} Campaign · {preview.adgroup_count} Ad
+              Group · {preview.ad_count} Ad
             </p>
-            {!onSubmit && (
-              <p className="text-xs text-muted-foreground">
-                提交功能尚未开放，当前可查看与调整预览。
-              </p>
-            )}
+            <p className="mt-1 text-sm">
+              配置日预算合计 {preview.currency}{" "}
+              {normalizeDecimal(preview.daily_budget_sum)}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              各 Campaign 配置日预算之和，非预计实际消耗。排除{" "}
+              {preview.blocked_count} 个阻断组合，{preview.preparing_count}{" "}
+              个组合将在提交后分发素材。
+            </p>
           </div>
-        )}
-      </div>
-    </div>
+          {write && (
+            <div className="space-y-2">
+              <Button
+                disabled={
+                  !onSubmit ||
+                  unavailable ||
+                  pending ||
+                  preview.status !== "FROZEN" ||
+                  preview.campaign_count === 0
+                }
+                aria-label={`创建并立即启用 ${preview.campaign_count} 个 Campaign / ${preview.adgroup_count} 个 Ad Group / ${preview.ad_count} 条 Ad`}
+                onClick={async () => {
+                  if (!onSubmit || pending) return
+                  setPending(true)
+                  try {
+                    await onSubmit(preview)
+                  } catch (e) {
+                    setError(e)
+                  } finally {
+                    setPending(false)
+                  }
+                }}
+              >
+                {pending ? "正在确认提交结果" : "创建并立即启用"}
+              </Button>
+              <p className="text-xs text-muted-foreground">
+                将直接创建并启用，审核与实际投放状态由 TikTok 决定。
+              </p>
+              {!onSubmit && (
+                <p className="text-xs text-muted-foreground">
+                  提交功能尚未开放，当前可查看与调整预览。
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 export function PreviewUnitTable({

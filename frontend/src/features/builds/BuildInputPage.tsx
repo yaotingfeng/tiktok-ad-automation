@@ -13,7 +13,7 @@ import {
 } from "@/client"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Textarea } from "@/components/ui/textarea"
 import { versionQuery } from "@/features/strategies/queries"
@@ -375,10 +375,12 @@ export function BuildInputPage({
       </Alert>
       {version.data && (
         <Card className="min-w-0">
+          <CardHeader className="min-w-0">
+            <CardTitle>
+              <h2>策略摘要 · v{version.data.number}</h2>
+            </CardTitle>
+          </CardHeader>
           <CardContent className="text-sm">
-            <h2 className="mb-2 font-semibold">
-              策略摘要 · v{version.data.number}
-            </h2>
             <p>
               每个 Campaign 日预算 {version.data.config.currency}{" "}
               {normalizeDecimal(version.data.config.budget)} · 目标 ROAS{" "}
@@ -389,47 +391,49 @@ export function BuildInputPage({
           </CardContent>
         </Card>
       )}
-      <div className="sticky bottom-0 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-background p-4">
-        <p className="text-sm text-muted-foreground">
-          解析剧目与账户，复用或获取推广链接；此步尚未创建广告。
-        </p>
-        <div className="flex flex-wrap gap-2">
-          {onCancel && (
-            <Button variant="outline" disabled={busy} onClick={onCancel}>
-              返回准备
-            </Button>
-          )}
-          {write && (
-            <>
-              <Button
-                variant="outline"
-                disabled={
-                  disabled ||
-                  !values.version ||
-                  !values.application ||
-                  !values.drama.trim() ||
-                  !values.account.trim()
-                }
-                onClick={() => void save(false)}
-              >
-                保存草稿
+      <Card className="sticky bottom-0 min-w-0">
+        <CardContent className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-muted-foreground">
+            解析剧目与账户，复用或获取推广链接；此步尚未创建广告。
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {onCancel && (
+              <Button variant="outline" disabled={busy} onClick={onCancel}>
+                返回准备
               </Button>
-              <Button
-                disabled={
-                  disabled ||
-                  !values.version ||
-                  !values.application ||
-                  !values.drama.trim() ||
-                  !values.account.trim()
-                }
-                onClick={() => void save(true)}
-              >
-                {busy ? "正在保存…" : "解析并准备"}
-              </Button>
-            </>
-          )}
-        </div>
-      </div>
+            )}
+            {write && (
+              <>
+                <Button
+                  variant="outline"
+                  disabled={
+                    disabled ||
+                    !values.version ||
+                    !values.application ||
+                    !values.drama.trim() ||
+                    !values.account.trim()
+                  }
+                  onClick={() => void save(false)}
+                >
+                  保存草稿
+                </Button>
+                <Button
+                  disabled={
+                    disabled ||
+                    !values.version ||
+                    !values.application ||
+                    !values.drama.trim() ||
+                    !values.account.trim()
+                  }
+                  onClick={() => void save(true)}
+                >
+                  {busy ? "正在保存…" : "解析并准备"}
+                </Button>
+              </>
+            )}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

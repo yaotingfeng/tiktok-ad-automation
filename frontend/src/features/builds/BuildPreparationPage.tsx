@@ -10,7 +10,7 @@ import {
 } from "@/client"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -365,11 +365,13 @@ function Preparation({
   if (search.edit) {
     return (
       <div className="flex min-w-0 flex-col gap-6">
-        <WorkspacePageTitle>编辑搭建输入</WorkspacePageTitle>
-        <div className="flex flex-wrap items-center gap-3">
-          <p className="text-sm text-muted-foreground">
-            服务器草稿 v{current.revision} · 本地输入会保留，保存时检查版本。
-          </p>
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-1">
+            <WorkspacePageTitle>编辑搭建输入</WorkspacePageTitle>
+            <p className="text-sm text-muted-foreground">
+              服务器草稿 v{current.revision} · 本地输入会保留，保存时检查版本。
+            </p>
+          </div>
           <Button variant="outline" onClick={() => void summary.refetch()}>
             检查最新草稿状态
           </Button>
@@ -433,11 +435,13 @@ function Preparation({
   }
   return (
     <div className="flex min-w-0 flex-col gap-6">
-      <WorkspacePageTitle>准备与调整</WorkspacePageTitle>
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground">
-          草稿 v{current.revision} · <BuildStatus value={current.status} />
-        </p>
+        <div className="flex min-w-0 flex-col gap-1">
+          <WorkspacePageTitle>准备与调整</WorkspacePageTitle>
+          <p className="text-sm text-muted-foreground">
+            草稿 v{current.revision} · <BuildStatus value={current.status} />
+          </p>
+        </div>
         <Button
           variant="outline"
           onClick={() =>
@@ -541,69 +545,77 @@ function Preparation({
           </Link>
         </Button>
       )}
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsList>
-          <TabsTrigger value="dramas">剧目与素材</TabsTrigger>
-          <TabsTrigger value="accounts">账户解析</TabsTrigger>
-          <TabsTrigger value="inputs">剧目输入</TabsTrigger>
-        </TabsList>
-      </Tabs>
-      {tab === "dramas" ? (
-        <DramaTable
-          tenantId={tenantId}
-          bcId={bcId}
-          summary={current}
-          onMaterial={setMaterial}
-          onLink={setLinkId}
-        />
-      ) : (
-        <InputTable
-          key={tab}
-          tenantId={tenantId}
-          bcId={bcId}
-          summary={current}
-          kind={tab === "accounts" ? "account" : "drama"}
-          write={allowed}
-          onChanged={() => void prepare()}
-          onEdit={edit}
-        />
-      )}
-      <div className="sticky bottom-0 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-background p-4">
-        <span className="text-sm">预览将明确列出可搭建范围与排除原因。</span>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" disabled={busy} onClick={edit}>
-            {allowed ? "返回输入" : "查看原输入"}
-          </Button>
-          {allowed && (
-            <>
-              <Button
-                variant="outline"
-                disabled={
-                  busy ||
-                  !!pending ||
-                  !!pendingMutation ||
-                  current.status === "PREPARING"
-                }
-                onClick={() => void prepare()}
-              >
-                解析并准备
-              </Button>
-              <Button
-                disabled={
-                  busy ||
-                  !!pending ||
-                  previewRevision !== null ||
-                  !!pendingMutation ||
-                  current.status === "PREPARING"
-                }
-                onClick={() => void preview()}
-              >
-                生成搭建预览
-              </Button>
-            </>
+      <Card className="min-w-0">
+        <CardHeader className="min-w-0">
+          <Tabs value={tab} onValueChange={setTab}>
+            <TabsList>
+              <TabsTrigger value="dramas">剧目与素材</TabsTrigger>
+              <TabsTrigger value="accounts">账户解析</TabsTrigger>
+              <TabsTrigger value="inputs">剧目输入</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        </CardHeader>
+        <CardContent className="min-w-0">
+          {tab === "dramas" ? (
+            <DramaTable
+              tenantId={tenantId}
+              bcId={bcId}
+              summary={current}
+              onMaterial={setMaterial}
+              onLink={setLinkId}
+            />
+          ) : (
+            <InputTable
+              key={tab}
+              tenantId={tenantId}
+              bcId={bcId}
+              summary={current}
+              kind={tab === "accounts" ? "account" : "drama"}
+              write={allowed}
+              onChanged={() => void prepare()}
+              onEdit={edit}
+            />
           )}
-        </div>
-      </div>
+        </CardContent>
+      </Card>
+      <Card className="sticky bottom-0 min-w-0">
+        <CardContent className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+          <span className="text-sm">预览将明确列出可搭建范围与排除原因。</span>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" disabled={busy} onClick={edit}>
+              {allowed ? "返回输入" : "查看原输入"}
+            </Button>
+            {allowed && (
+              <>
+                <Button
+                  variant="outline"
+                  disabled={
+                    busy ||
+                    !!pending ||
+                    !!pendingMutation ||
+                    current.status === "PREPARING"
+                  }
+                  onClick={() => void prepare()}
+                >
+                  解析并准备
+                </Button>
+                <Button
+                  disabled={
+                    busy ||
+                    !!pending ||
+                    previewRevision !== null ||
+                    !!pendingMutation ||
+                    current.status === "PREPARING"
+                  }
+                  onClick={() => void preview()}
+                >
+                  生成搭建预览
+                </Button>
+              </>
+            )}
+          </div>
+        </CardContent>
+      </Card>
       {linkId && (
         <BuildLinkSheet
           tenantId={tenantId}
