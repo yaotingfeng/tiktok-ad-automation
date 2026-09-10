@@ -503,7 +503,11 @@ def initialize_object_upload(
                     Bucket=bucket,
                     Key=key,
                     ContentType=mime,
-                    ACL="private",
+                    **(
+                        {"ACL": "private"}
+                        if settings.OBJECT_STORAGE_PROVIDER == "s3"
+                        else {}
+                    ),
                     Metadata={
                         "tenant-id": str(context.tenant_id),
                         "material-id": str(material_id),

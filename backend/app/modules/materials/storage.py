@@ -68,7 +68,9 @@ def make_s3() -> Any:
     return boto3.client(
         "s3",
         endpoint_url=settings.S3_ENDPOINT_URL or None,
-        region_name=settings.S3_REGION,
+        region_name=(
+            "auto" if settings.OBJECT_STORAGE_PROVIDER == "r2" else settings.S3_REGION
+        ),
         aws_access_key_id=settings.S3_ACCESS_KEY_ID,
         aws_secret_access_key=settings.S3_SECRET_ACCESS_KEY,
         config=Config(
@@ -82,21 +84,34 @@ def make_s3() -> Any:
 
 
 def sign_part(
-    s3: Any, *, bucket: str, key: str, upload_id: str, part_number: int
+    s3: Any,
+    *,
+    bucket: str,
+    key: str,
+    upload_id: str,
+    part_number: int,
+    byte_size: int | None = None,
 ) -> str:
     if type(part_number) is not int or not 1 <= part_number <= 10000:
         raise storage_error("invalid_part")
+    if byte_size is not None and (
+        type(byte_size) is not int or not 0 < byte_size <= 5 * 1024**3
+    ):
+        raise storage_error("invalid_part")
+    params: dict[str, Any] = {
+        "Bucket": bucket,
+        "Key": key,
+        "UploadId": upload_id,
+        "PartNumber": part_number,
+    }
+    if byte_size is not None:
+        params["ContentLength"] = byte_size
     try:
         return cast(
             str,
             s3.generate_presigned_url(
                 "upload_part",
-                Params={
-                    "Bucket": bucket,
-                    "Key": key,
-                    "UploadId": upload_id,
-                    "PartNumber": part_number,
-                },
+                Params=params,
                 ExpiresIn=900,
             ),
         )

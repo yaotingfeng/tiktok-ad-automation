@@ -196,6 +196,7 @@ class ConfigurationError(DomainError):
             "TIKTOK_REDIRECT_URI",
             "CONNECTION_ENCRYPTION_KEY",
             "S3_BUCKET",
+            "S3_ENDPOINT_URL",
             "S3_REGION",
             "S3_ACCESS_KEY_ID",
             "S3_SECRET_ACCESS_KEY",

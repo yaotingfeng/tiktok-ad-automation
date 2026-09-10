@@ -1,6 +1,7 @@
 import warnings
 from collections.abc import Mapping
 from typing import Any, Literal, Self
+from urllib.parse import urlsplit
 
 from cryptography.fernet import Fernet
 from pydantic import (
@@ -52,6 +53,7 @@ class Settings(BaseSettings):
     TIKTOK_AUTHORIZATION_URL: str = ""
     TIKTOK_CALL_POLICIES: dict[str, Any] = Field(default_factory=dict)
     CONNECTION_ENCRYPTION_KEY: str = Field(default="", repr=False)
+    OBJECT_STORAGE_PROVIDER: Literal["s3", "r2"] = "s3"
     S3_ENDPOINT_URL: str = ""
     S3_BUCKET: str = ""
     S3_REGION: str = "us-east-1"
@@ -91,7 +93,9 @@ class Settings(BaseSettings):
             ) from None
 
     def require_object_storage(self) -> None:
-        names = ("S3_BUCKET", "S3_REGION", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY")
+        names = ["S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"]
+        if self.OBJECT_STORAGE_PROVIDER == "s3":
+            names.append("S3_REGION")
         placeholders = {
             "changethis",
             "change-me",
@@ -106,6 +110,25 @@ class Settings(BaseSettings):
             if not getattr(self, name).strip()
             or getattr(self, name).lower() in placeholders
         ]
+        if self.OBJECT_STORAGE_PROVIDER == "r2":
+            try:
+                endpoint = urlsplit(self.S3_ENDPOINT_URL)
+                valid_endpoint = (
+                    endpoint.scheme == "https"
+                    and bool(endpoint.hostname)
+                    and endpoint.hostname.endswith(".r2.cloudflarestorage.com")
+                    and endpoint.hostname != "r2.cloudflarestorage.com"
+                    and endpoint.username is None
+                    and endpoint.password is None
+                    and endpoint.port in {None, 443}
+                    and endpoint.path in {"", "/"}
+                    and not endpoint.query
+                    and not endpoint.fragment
+                )
+            except ValueError:
+                valid_endpoint = False
+            if not valid_endpoint:
+                missing.append("S3_ENDPOINT_URL")
         if missing:
             raise ConfigurationError("object_storage_unconfigured", missing)
 
