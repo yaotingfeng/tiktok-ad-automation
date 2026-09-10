@@ -446,3 +446,185 @@ test("new generation without a multipart ID still rejects old completion receipt
   expect(value.row.state).toBe("registered")
   expect(value.row.upload).toBeNull()
 })
+
+test("permission ledger persists exact intent, direct receipts and sticky unknown without URL or Blob", async ({
+  page,
+}) => {
+  const result = await page.evaluate(async () => {
+    const path = "/src/features/materials/upload-permissions.ts"
+    const { UploadPermissionLedger } = await import(/* @vite-ignore */ path)
+    const name = `permissions-${crypto.randomUUID()}`
+    let ledger = await UploadPermissionLedger.open(name)
+    const scope = {
+      tenantId: "tenant",
+      bcId: "12345678901234567890",
+      sessionId: crypto.randomUUID(),
+    }
+    const intent = {
+      scope,
+      clientIndex: 0,
+      identity: {
+        materialId: "material",
+        generation: 1,
+        uploadId: "upload",
+        operationRevision: 7,
+        partSize: 8,
+        partCount: 1,
+      },
+      requestId: crypto.randomUUID(),
+      partNumber: 1,
+    }
+    await ledger.begin({
+      ...intent,
+      url: "https://private.test/signed?token=secret",
+      blob: new Blob(["private"]),
+    })
+    const permission = {
+      id: crypto.randomUUID(),
+      nonce: crypto.randomUUID(),
+      revision: 0,
+      partNumber: 1,
+    }
+    await ledger.signed(intent, permission)
+    await ledger.armed(intent)
+    await ledger.settled(intent, "unknown")
+    await ledger.settled(intent, "completed", "etag-late")
+    ledger.close()
+    ledger = await UploadPermissionLedger.open(name)
+    const page = await ledger.page(scope)
+    const foreign = await ledger.page({ ...scope, tenantId: "other" })
+    const raw = JSON.stringify(page)
+    ledger.close()
+    return {
+      state: page.items[0].state,
+      foreign: foreign.items.length,
+      leaked:
+        raw.includes("secret") || raw.includes("blob") || raw.includes("url"),
+      count: page.items.length,
+    }
+  })
+  expect(result).toEqual({
+    state: "unknown",
+    foreign: 0,
+    leaked: false,
+    count: 1,
+  })
+})
+
+for (const duringSign of [false, true])
+  test(`ordinary cancellation drains without abort, signed-only=${duringSign}`, async ({
+    page,
+  }) => {
+    const result = await page.evaluate(async (duringSign) => {
+      const path = "/tests/harness/upload-permission-foundation.ts"
+      return (await import(/* @vite-ignore */ path)).drainScenario(duringSign)
+    }, duringSign)
+    expect(result.waited).toBe(true)
+    expect(result.result.stopped).toBe(true)
+    expect(result.signs).toBe(2)
+    expect(result.puts).toBe(duringSign ? 0 : 2)
+    expect(result.completes).toBe(0)
+    expect(result.states).toEqual(
+      Array(2).fill(duringSign ? "unused" : "completed"),
+    )
+    expect(result.acknowledged).toBe(true)
+    expect(result.receiptSizes.every((size: number) => size <= 2)).toBe(true)
+  })
+
+test("forced pause keeps an armed PUT unknown even when ListParts later contains its ETag", async ({
+  page,
+}) => {
+  const result = await page.evaluate(async () => {
+    const path = "/tests/harness/upload-permission-foundation.ts"
+    return (
+      await import(/* @vite-ignore */ path)
+    ).interruptedPermissionScenario()
+  })
+  expect(result.error).toBe("AbortError")
+  expect(result.before).toBe("armed")
+  expect(result.after).toBe("unknown")
+  expect(result.remoteHasPart).toBe(true)
+  expect(result.callbacksAfterPause).toBe(0)
+  expect(result.acknowledgementsAtPause).toBe(0)
+  expect(result.outcome.unknown).toBe(1)
+  expect(result.receipts[0].outcomes).toEqual(["unknown"])
+})
+
+for (const mode of ["sign", "put", "ack"] as const)
+  test(`permission recovery preserves original facts after lost ${mode}`, async ({
+    page,
+  }) => {
+    const result = await page.evaluate(async (mode) => {
+      const path = "/tests/harness/upload-permission-foundation.ts"
+      return (await import(/* @vite-ignore */ path)).permissionRetryScenario(
+        mode,
+      )
+    }, mode)
+    expect(result.acknowledged).toBe(true)
+    if (mode === "sign") {
+      expect(result.signatures).toHaveLength(2)
+      expect(new Set(result.signatures).size).toBe(1)
+      expect(result.states).toEqual(["completed"])
+    } else if (mode === "put") {
+      expect(new Set(result.signatures).size).toBe(2)
+      expect(result.states).toEqual(["completed", "unknown"])
+    } else {
+      expect(result.puts).toBe(1)
+      expect(result.receipts).toHaveLength(2)
+      expect(result.receipts[0].ids).toEqual(result.receipts[1].ids)
+    }
+  })
+
+test("lost signing response is recovered by original request GET and reported unused without PUT", async ({
+  page,
+}) => {
+  const result = await page.evaluate(async () => {
+    const path = "/tests/harness/upload-permission-foundation.ts"
+    return (
+      await import(/* @vite-ignore */ path)
+    ).lostSigningResponseRecoveryScenario()
+  })
+  expect(result.state).toBe("unused")
+  expect(result.acknowledged).toBe(true)
+  expect(result.signs).toBe(0)
+  expect(result.puts).toBe(0)
+  expect(result.outcome).toEqual({
+    completed: 0,
+    unused: 1,
+    unknown: 0,
+    unresolved: 0,
+  })
+})
+
+test("drain while the durable arm transaction settles sends no new PUT", async ({
+  page,
+}) => {
+  const result = await page.evaluate(async () => {
+    const path = "/tests/harness/upload-permission-foundation.ts"
+    return (await import(/* @vite-ignore */ path)).drainScenario(false, true)
+  })
+  expect(result.waited).toBe(true)
+  expect(result.puts).toBe(0)
+  expect(result.states).toEqual(["unused", "unused"])
+  expect(result.acknowledged).toBe(true)
+})
+
+test("501 permission receipts recover with 100-row local pages and at most two server receipts per callback", async ({
+  page,
+}) => {
+  const result = await page.evaluate(async () => {
+    const path = "/tests/harness/upload-permission-foundation.ts"
+    return (
+      await import(/* @vite-ignore */ path)
+    ).boundedPermissionRecoveryScenario()
+  })
+  expect(result.outcome).toEqual({
+    completed: 0,
+    unused: 501,
+    unknown: 0,
+    unresolved: 0,
+  })
+  expect(result.widths).toEqual([100, 100, 100, 100, 100, 1])
+  expect(result.requests.every((size: number) => size <= 2)).toBe(true)
+  expect(result.distinct).toBe(501)
+})

@@ -65,6 +65,8 @@ export type UploadErrorCode =
   | "completion_unknown"
   | "permission_denied"
   | "transfer_unavailable"
+  | "transfer_stopped"
+  | "permission_receipts_unavailable"
 
 export class UploadError extends Error {
   constructor(

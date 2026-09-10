@@ -1,4 +1,12 @@
 /** Adapter boundary, not a second HTTP API schema. UI/generated-client integration lives outside this module. */
+import type {
+  PermissionCursor,
+  PermissionIdentity,
+  PermissionOutcome,
+  PermissionRecord,
+  SignIntent,
+  UploadPermissionLedger,
+} from "./upload-permissions"
 import {
   fileIdentity,
   type LocalPart,
@@ -49,9 +57,9 @@ export type TransferCallbacks = {
     nextCursor: string | null
   }>
   signPart(
-    input: MultipartRequest & { partNumber: number },
+    input: MultipartRequest & { partNumber: number; requestId?: string },
     signal: AbortSignal,
-  ): Promise<{ url: string }>
+  ): Promise<{ url: string; permission?: PermissionIdentity }>
   putPart?(
     input: { url: string; blob: Blob },
     signal: AbortSignal,
@@ -78,6 +86,33 @@ export type TransferRunResult = {
   completed: number
   issues: number
   retryAfterMs?: number
+  stopped?: boolean
+}
+export type PermissionCallbacks = {
+  ledger: UploadPermissionLedger
+  readSignPermission(
+    input: MultipartRequest & { requestId: string; partNumber: number },
+    signal: AbortSignal,
+  ): Promise<{
+    permission: PermissionIdentity
+    outcome: "signed" | PermissionOutcome
+  } | null>
+  acknowledgeReceipts(
+    input: MultipartRequest & {
+      receipts: readonly {
+        permission: PermissionIdentity
+        outcome: PermissionOutcome
+        etag: string | null
+      }[]
+    },
+    signal: AbortSignal,
+  ): Promise<readonly string[]>
+}
+export type CancellationDrain = {
+  completed: number
+  unused: number
+  unknown: number
+  unresolved: number
 }
 export type SchedulerOptions = {
   scope: UploadScope
@@ -88,6 +123,8 @@ export type SchedulerOptions = {
   maxParts?: number
   retryBaseMs?: number
   onProgress?: (event: TransferProgress) => void
+  /** Required for certified cancellation. Older adapters cannot certify a drain. */
+  permissions?: PermissionCallbacks
 }
 
 function valid(condition: unknown): asserts condition {
@@ -163,6 +200,7 @@ export class UploadScheduler {
   private readonly progressAt = new Map<number, number>()
   private controller: AbortController | null = null
   private running: Promise<TransferRunResult> | null = null
+  private stopRequested = false
   private readonly cancelScope = () => {
     this.pause()
     this.files.clear()
@@ -187,6 +225,20 @@ export class UploadScheduler {
   pause() {
     this.controller?.abort(new DOMException("Transfer paused", "AbortError"))
   }
+  /** Stop scheduling, keep current HTTP alive, then publish its durable outcomes. */
+  async drainForCancellation(): Promise<CancellationDrain> {
+    if (!this.options.permissions)
+      throw new UploadError("permission_receipts_unavailable")
+    this.stopRequested = true
+    if (this.running) await this.running
+    const signal = this.start()
+    this.stopRequested = true
+    try {
+      return await this.recoverPermissionReceipts(signal)
+    } finally {
+      this.controller = null
+    }
+  }
   dispose() {
     this.pause()
     this.files.clear()
@@ -196,6 +248,7 @@ export class UploadScheduler {
     this.options.signal.throwIfAborted()
     if (this.controller) throw new UploadError("transfer_unavailable")
     this.controller = new AbortController()
+    this.stopRequested = false
     return this.controller.signal
   }
   private check(signal: AbortSignal) {
@@ -252,7 +305,7 @@ export class UploadScheduler {
     rows: readonly UploadFileRecord[],
     signal: AbortSignal,
   ) {
-    if (rows.every((row) => row.materialId)) return
+    if (this.stopRequested || rows.every((row) => row.materialId)) return
     valid(
       rows.length > 0 &&
         rows.length <= 200 &&
@@ -331,6 +384,7 @@ export class UploadScheduler {
   private async retryRegistrations(signal: AbortSignal) {
     let chunk: UploadFileRecord[] = []
     for await (const row of this.records(signal)) {
+      if (this.stopRequested) return
       if (
         chunk.length &&
         row.registrationRequestId !== chunk[0].registrationRequestId
@@ -471,17 +525,27 @@ export class UploadScheduler {
     const rows = this.records(signal)
     const summary: TransferRunResult = { completed: 0, issues: 0 }
     const worker = async () => {
-      while (!summary.retryAfterMs) {
+      while (!summary.retryAfterMs && !this.stopRequested) {
         this.check(signal)
         const next = await rows.next()
-        if (next.done || summary.retryAfterMs) return
+        if (next.done || summary.retryAfterMs || this.stopRequested) return
         const row = next.value
         if (row.state === "completed") continue
         try {
+          if (this.options.permissions) {
+            const receipts = await this.recoverPermissionReceipts(
+              signal,
+              row.clientIndex,
+            )
+            if (receipts.unresolved)
+              throw new UploadError("transfer_unavailable")
+          }
+          if (this.stopRequested) return
           await this.transfer(row, signal)
-          summary.completed++
+          if (!this.stopRequested) summary.completed++
         } catch (error) {
           this.check(signal)
+          if (this.stopRequested) return
           const issue =
             error instanceof UploadError
               ? error
@@ -517,6 +581,7 @@ export class UploadScheduler {
     this.check(signal)
     for (const value of results)
       if (value.status === "rejected") throw value.reason
+    if (this.stopRequested) summary.stopped = true
     return summary
   }
   private async remoteParts(input: MultipartRequest, signal: AbortSignal) {
@@ -568,6 +633,130 @@ export class UploadScheduler {
       }
     } while (cursor !== null)
     return found
+  }
+  private async recoverPermissionReceipts(
+    signal: AbortSignal,
+    clientIndex?: number,
+  ): Promise<CancellationDrain> {
+    const support = this.options.permissions
+    if (!support) throw new UploadError("permission_receipts_unavailable")
+    const stats: CancellationDrain = {
+      completed: 0,
+      unused: 0,
+      unknown: 0,
+      unresolved: 0,
+    }
+    let cursor: PermissionCursor | null = null
+    let pending: PermissionRecord[] = []
+    const flush = async () => {
+      if (!pending.length) return
+      const first = pending[0]
+      const file = await this.options.store.getFile(
+        this.scope,
+        first.clientIndex,
+      )
+      valid(file?.materialId === first.identity.materialId)
+      const accepted = await this.call(
+        () =>
+          support.acknowledgeReceipts(
+            {
+              scope: this.scope,
+              record: file,
+              identity: first.identity,
+              receipts: pending.map((row) => ({
+                permission: row.permission!,
+                outcome: row.state as PermissionOutcome,
+                etag: row.etag,
+              })),
+            },
+            signal,
+          ),
+        signal,
+      )
+      valid(
+        accepted.length === pending.length &&
+          new Set(accepted).size === accepted.length &&
+          pending.every((row) => accepted.includes(row.permission!.id)),
+      )
+      for (const row of pending)
+        await support.ledger.acknowledge(row, row.permission!.id, signal)
+      pending = []
+    }
+    do {
+      this.check(signal)
+      const page = await support.ledger.page(
+        this.scope,
+        cursor,
+        100,
+        clientIndex,
+      )
+      for (let row of page.items) {
+        this.check(signal)
+        if (row.state === "requested") {
+          const file = await this.options.store.getFile(
+            this.scope,
+            row.clientIndex,
+          )
+          valid(file?.materialId === row.identity.materialId)
+          const observation = await this.call(
+            () =>
+              support.readSignPermission(
+                {
+                  scope: this.scope,
+                  record: file,
+                  identity: row.identity,
+                  requestId: row.requestId,
+                  partNumber: row.partNumber,
+                },
+                signal,
+              ),
+            signal,
+          )
+          if (!observation) {
+            stats.unresolved++
+            continue
+          }
+          row = await support.ledger.signed(row, observation.permission, signal)
+          // No local direct acknowledgement exists. Never manufacture one from a GET.
+          if (
+            observation.outcome === "unknown" ||
+            observation.outcome === "completed"
+          )
+            row = await support.ledger.settled(
+              row,
+              "unknown",
+              undefined,
+              signal,
+            )
+        }
+        if (row.state === "signed")
+          row = await support.ledger.settled(row, "unused", undefined, signal)
+        if (row.state === "armed")
+          row = await support.ledger.settled(row, "unknown", undefined, signal)
+        if (
+          row.state !== "completed" &&
+          row.state !== "unused" &&
+          row.state !== "unknown"
+        ) {
+          stats.unresolved++
+          continue
+        }
+        stats[row.state]++
+        if (!row.acknowledged) {
+          if (
+            pending.length &&
+            (!sameUpload(pending[0].identity, row.identity) ||
+              pending[0].clientIndex !== row.clientIndex)
+          )
+            await flush()
+          pending.push(row)
+          if (pending.length === 2) await flush()
+        }
+      }
+      cursor = page.nextCursor
+    } while (cursor)
+    await flush()
+    return stats
   }
   private partSize(input: MultipartRequest, part: number) {
     return Math.min(
@@ -677,7 +866,7 @@ export class UploadScheduler {
     let next = 1
     let failed = false
     const partWorker = async () => {
-      while (!failed) {
+      while (!failed && !this.stopRequested) {
         this.check(signal)
         const part = next++
         if (part > identity.partCount) return
@@ -706,6 +895,9 @@ export class UploadScheduler {
     this.check(signal)
     for (const value of results)
       if (value.status === "rejected") throw value.reason
+    if (this.options.permissions)
+      await this.recoverPermissionReceipts(signal, record.clientIndex)
+    if (this.stopRequested) return
     valid(confirmed.size === identity.partCount)
     let completedIdentity: MultipartIdentity
     try {
@@ -764,8 +956,11 @@ export class UploadScheduler {
       state: "prepared",
       etag: null,
     }
+    const ledger = this.options.permissions?.ledger
+    let intent: SignIntent | undefined
     for (let attempt = 0; attempt < 3; attempt++) {
       this.check(signal)
+      if (this.stopRequested) throw new UploadError("transfer_stopped")
       if (attempt) {
         await sleep(this.retryBaseMs * 2 ** (attempt - 1), signal)
         // Fresh authoritative state after EVERY uncertain attempt. Never trust an
@@ -791,12 +986,50 @@ export class UploadScheduler {
         proof,
         signal,
       )
+      if (ledger && !intent) {
+        intent = {
+          scope: this.scope,
+          clientIndex: input.record.clientIndex,
+          identity: input.identity,
+          requestId: crypto.randomUUID(),
+          partNumber,
+        }
+        await ledger.begin(intent, signal)
+      }
+      if (this.stopRequested) {
+        if (ledger && intent) await ledger.unusedBeforeSend(intent, signal)
+        throw new UploadError("transfer_stopped")
+      }
+      let armed = false
+      let directCompleted = false
       try {
         const signed = await this.call(
           () =>
-            this.options.callbacks.signPart({ ...input, partNumber }, signal),
+            this.options.callbacks.signPart(
+              {
+                ...input,
+                partNumber,
+                ...(intent ? { requestId: intent.requestId } : {}),
+              },
+              signal,
+            ),
           signal,
         )
+        if (ledger && intent) {
+          valid(signed.permission)
+          await ledger.signed(intent, signed.permission, signal)
+          if (this.stopRequested) {
+            await ledger.settled(intent, "unused", undefined, signal)
+            throw new UploadError("transfer_stopped")
+          }
+          await ledger.armed(intent, signal)
+          armed = true
+          if (this.stopRequested) {
+            await ledger.unusedBeforeSend(intent, signal)
+            armed = false
+            throw new UploadError("transfer_stopped")
+          }
+        } else if (this.stopRequested) throw new UploadError("transfer_stopped")
         const receipt = await this.call(
           () =>
             (this.options.callbacks.putPart ?? putSignedPart)(
@@ -808,6 +1041,9 @@ export class UploadScheduler {
         valid(
           typeof receipt.etag === "string" && receipt.etag.trim().length > 0,
         )
+        directCompleted = true
+        if (ledger && intent)
+          await ledger.settled(intent, "completed", receipt.etag, signal)
         await this.options.store.putPart(
           this.scope,
           input.record.clientIndex,
@@ -818,6 +1054,10 @@ export class UploadScheduler {
         return { partNumber, byteSize: blob.size, etag: receipt.etag }
       } catch (error) {
         this.check(signal)
+        if (ledger && intent && armed && !directCompleted) {
+          await ledger.settled(intent, "unknown", undefined, signal)
+          intent = undefined // A fresh signature never replaces an older unknown permission.
+        }
         if (
           !(error instanceof UploadError) ||
           ![
