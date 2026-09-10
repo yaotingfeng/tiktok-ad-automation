@@ -93,6 +93,10 @@ class IngestSession(SQLModel, table=True):
             "accepted_bytes >= 0 AND uploaded_bytes >= 0 AND ready_bytes >= 0 AND cleaned_bytes >= 0 AND accepted_bytes <= expected_bytes AND uploaded_bytes <= accepted_bytes AND ready_bytes <= accepted_bytes AND cleaned_bytes <= accepted_bytes",
             name="ck_ingest_session_bytes",
         ),
+        CheckConstraint(
+            "reserved_bytes >= 0 AND stored_bytes >= 0 AND stored_bytes <= reserved_bytes",
+            name="ck_ingest_session_occupancy",
+        ),
         Index("ix_ingest_session_recovery", "status", "next_attempt_at", "id"),
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -114,6 +118,9 @@ class IngestSession(SQLModel, table=True):
     uploaded_bytes: int = Field(default=0, sa_column=bigint())
     ready_bytes: int = Field(default=0, sa_column=bigint())
     cleaned_bytes: int = Field(default=0, sa_column=bigint())
+    # Current admitted occupancy, separate from cumulative uploaded/cleaned facts.
+    reserved_bytes: int = Field(default=0, sa_column=bigint())
+    stored_bytes: int = Field(default=0, sa_column=bigint())
     revision: int = 0
     dispatch_id: UUID | None = Field(default=None, foreign_key="pending_dispatch.id")
     next_attempt_at: datetime = Field(
@@ -221,7 +228,7 @@ class TemporaryMaterialObject(SQLModel, table=True):
             name="ck_temporary_object_claim",
         ),
         CheckConstraint(
-            "status != 'verified' OR (sha256 IS NOT NULL AND video_md5 IS NOT NULL AND digest_verified_at IS NOT NULL AND actual_bytes = expected_bytes)",
+            "status != 'verified' OR (sha256 IS NOT NULL AND video_md5 IS NOT NULL AND digest_verified_at IS NOT NULL AND actual_bytes IS NOT NULL AND actual_bytes = expected_bytes)",
             name="ck_temporary_object_verified",
         ),
         Index("ix_temporary_object_recovery", "status", "next_attempt_at", "id"),

@@ -557,3 +557,100 @@ def test_manifest_identity_and_generation_are_fenced(session, context):
     with pytest.raises(IntegrityError), session.begin_nested():
         row.current_generation = 1
         session.flush()
+
+
+@pytest.mark.parametrize("actual_bytes", [None, 123])
+def test_verified_original_rejects_missing_or_mismatched_length_with_hashes(
+    session, context, actual_bytes
+):
+    file = material(session, context, "verified-length.mp4")
+    with pytest.raises(IntegrityError) as error, session.begin_nested():
+        original(
+            session,
+            context,
+            file,
+            status="verified",
+            actual_bytes=actual_bytes,
+            sha256="a" * 64,
+            video_md5="b" * 32,
+            digest_verified_at=datetime.now(UTC),
+        )
+    assert error.value.orig.diag.constraint_name == "ck_temporary_object_verified"
+
+
+@pytest.mark.parametrize(
+    "object_state",
+    [None, "previous_generation_only", "deleted", "cleanup_pending", "missing"],
+)
+def test_downgrade_missing_or_cleaned_current_original_remains_unavailable(
+    session, context, object_state
+):
+    file = material(session, context, "downgrade-lost.mp4")
+    legacy = material(session, context, "legacy-no-generation.mp4")
+    asset = mapping(session, context, file)
+    asset.mid = "retained-mid"
+    obj = original(
+        session,
+        context,
+        file,
+        status="stored"
+        if object_state == "previous_generation_only"
+        else object_state or "deleted",
+    )
+    file.current_object_generation = (
+        2 if object_state == "previous_generation_only" else obj.generation
+    )
+    session.flush()
+    if object_state is None:
+        session.delete(obj)
+        session.flush()
+    identities = file.id, asset.id, asset.video_id, asset.mid, legacy.id
+    assert not file.original_available
+    migration = import_module(
+        "app.alembic.versions.r2_transient_ingest_persist_transient_originals_and_ingest_"
+    )
+    with Operations.context(MigrationContext.configure(session.connection())):
+        migration.downgrade()
+    file_id, asset_id, video_id, mid, legacy_id = identities
+    assert (
+        session.execute(
+            text("SELECT storage_state FROM material_file WHERE id = :id"),
+            {"id": file_id},
+        ).scalar_one()
+        == "unavailable"
+    )
+    assert session.execute(
+        text("SELECT material_id, video_id, mid FROM account_material WHERE id = :id"),
+        {"id": asset_id},
+    ).one() == (file_id, video_id, mid)
+    assert (
+        session.execute(
+            text("SELECT storage_state FROM material_file WHERE id = :id"),
+            {"id": legacy_id},
+        ).scalar_one()
+        == "stored"
+    )
+    with Operations.context(MigrationContext.configure(session.connection())):
+        migration.upgrade()
+
+
+def test_session_occupancy_is_nonnegative_and_stored_is_subset(session, context):
+    batch, _, _ = ingest_fixture(session, context)
+    for reserved, stored in ((-1, 0), (0, -1), (10, 11)):
+        with pytest.raises(IntegrityError), session.begin_nested():
+            session.execute(
+                text(
+                    "UPDATE ingest_session SET reserved_bytes = :reserved, stored_bytes = :stored WHERE id = :id"
+                ),
+                {"id": batch.id, "reserved": reserved, "stored": stored},
+            )
+    session.execute(
+        text(
+            "UPDATE ingest_session SET reserved_bytes = 123, stored_bytes = 100 WHERE id = :id"
+        ),
+        {"id": batch.id},
+    )
+    assert session.execute(
+        text("SELECT reserved_bytes, stored_bytes FROM ingest_session WHERE id = :id"),
+        {"id": batch.id},
+    ).one() == (123, 100)

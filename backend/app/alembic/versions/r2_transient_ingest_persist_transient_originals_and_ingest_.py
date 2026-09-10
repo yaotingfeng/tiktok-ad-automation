@@ -71,6 +71,8 @@ def upgrade():
         sa.Column("uploaded_bytes", sa.BigInteger(), nullable=False),
         sa.Column("ready_bytes", sa.BigInteger(), nullable=False),
         sa.Column("cleaned_bytes", sa.BigInteger(), nullable=False),
+        sa.Column("reserved_bytes", sa.BigInteger(), nullable=False),
+        sa.Column("stored_bytes", sa.BigInteger(), nullable=False),
         sa.Column("revision", sa.Integer(), nullable=False),
         sa.Column("dispatch_id", sa.Uuid(), nullable=True),
         sa.Column("next_attempt_at", sa.DateTime(timezone=True), nullable=False),
@@ -86,6 +88,10 @@ def upgrade():
         sa.CheckConstraint(
             "expected_files > 0 AND expected_bytes > 0 AND registration_cursor >= 0 AND revision >= 0",
             name="ck_ingest_session_manifest",
+        ),
+        sa.CheckConstraint(
+            "reserved_bytes >= 0 AND stored_bytes >= 0 AND stored_bytes <= reserved_bytes",
+            name="ck_ingest_session_occupancy",
         ),
         sa.ForeignKeyConstraint(
             ["dispatch_id"],
@@ -154,7 +160,7 @@ def upgrade():
         sa.Column("next_attempt_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(
-            "status != 'verified' OR (sha256 IS NOT NULL AND video_md5 IS NOT NULL AND digest_verified_at IS NOT NULL AND actual_bytes = expected_bytes)",
+            "status != 'verified' OR (sha256 IS NOT NULL AND video_md5 IS NOT NULL AND digest_verified_at IS NOT NULL AND actual_bytes IS NOT NULL AND actual_bytes = expected_bytes)",
             name="ck_temporary_object_verified",
         ),
         sa.CheckConstraint(
@@ -611,10 +617,22 @@ def upgrade():
 
 
 def downgrade():
-    op.execute("DROP TRIGGER IF EXISTS ingest_manifest_identity_immutable ON ingest_session_file")
+    op.execute(
+        "DROP TRIGGER IF EXISTS ingest_manifest_identity_immutable ON ingest_session_file"
+    )
     op.execute("DROP FUNCTION IF EXISTS guard_ingest_manifest_identity()")
     # Rollback can remove metadata, never recover already deleted object bytes.
     # Before reverting readers, conservatively mark nonusable current objects.
+    # The object ledger is independently deletable; a missing current row must
+    # not regain the legacy stored fallback when the generation marker is dropped.
+    op.execute("""
+        UPDATE material_file m SET storage_state = 'unavailable'
+        WHERE m.current_object_generation IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM temporary_material_object o
+            WHERE o.tenant_id = m.tenant_id AND o.bc_id = m.bc_id
+              AND o.material_id = m.id AND o.generation = m.current_object_generation
+        )
+    """)
     op.execute("""
         UPDATE material_file m SET object_key = o.object_key, storage_state = CASE
             WHEN o.status IN ('stored','validating','verified') THEN 'stored'
