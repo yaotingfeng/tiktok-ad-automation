@@ -19,6 +19,7 @@ celery_app.conf.update(
         "app.modules.providers.tasks",
         "app.modules.materials.tasks",
         "app.modules.materials.cover_tasks",
+        "app.modules.materials.validation_tasks",
         "app.modules.builds.draft_tasks",
         "app.modules.builds.preview_tasks",
         "app.modules.builds.submission_tasks",
@@ -31,6 +32,11 @@ celery_app.conf.update(
     task_create_missing_queues=False,
     task_routes={"jobs.flush_dispatch": {"queue": "control"}},
     beat_schedule={
+        "repair-material-validations": {
+            "task": "materials.repair_validations",
+            "schedule": 60.0,
+            "options": {"queue": "control"},
+        },
         "repair-material-covers": {
             "task": "materials.repair_covers",
             "schedule": 60.0,

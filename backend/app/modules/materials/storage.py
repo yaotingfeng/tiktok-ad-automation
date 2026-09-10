@@ -19,7 +19,7 @@ from botocore.exceptions import (  # type: ignore[import-untyped]
 )
 from sqlmodel import Session, select
 
-from app.core.config import settings
+from app.core.config import Settings, settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.modules.materials.models import MaterialFile
@@ -48,8 +48,9 @@ def verify_object_size(*, expected: int, actual: int) -> None:
         raise storage_error("incomplete_object")
 
 
-def make_s3() -> Any:
-    settings.require_object_storage()
+def make_s3(config: Settings | None = None) -> Any:
+    config = config or settings
+    config.require_object_storage()
     # Wire DEBUG logs include credentials, signatures and object identifiers.
     for name in (
         "boto3",
@@ -67,12 +68,12 @@ def make_s3() -> Any:
         logging.getLogger(name).disabled = True
     return boto3.client(
         "s3",
-        endpoint_url=settings.S3_ENDPOINT_URL or None,
+        endpoint_url=config.S3_ENDPOINT_URL or None,
         region_name=(
-            "auto" if settings.OBJECT_STORAGE_PROVIDER == "r2" else settings.S3_REGION
+            "auto" if config.OBJECT_STORAGE_PROVIDER == "r2" else config.S3_REGION
         ),
-        aws_access_key_id=settings.S3_ACCESS_KEY_ID,
-        aws_secret_access_key=settings.S3_SECRET_ACCESS_KEY,
+        aws_access_key_id=config.S3_ACCESS_KEY_ID,
+        aws_secret_access_key=config.S3_SECRET_ACCESS_KEY,
         config=Config(
             signature_version="s3v4",
             connect_timeout=5,
@@ -80,6 +81,25 @@ def make_s3() -> Any:
             retries={"total_max_attempts": 1},
             s3={"addressing_style": "path"},
         ),
+    )
+
+
+def make_object_s3(obj: Any) -> Any:
+    """Use the generation's pinned namespace with deployment-managed credentials."""
+    if (
+        obj.storage_provider not in {"r2", "s3"}
+        or not obj.storage_bucket
+        or obj.storage_endpoint is None
+    ):
+        raise storage_error("object_namespace_unverified")
+    return make_s3(
+        settings.model_copy(
+            update={
+                "OBJECT_STORAGE_PROVIDER": obj.storage_provider,
+                "S3_ENDPOINT_URL": obj.storage_endpoint,
+                "S3_BUCKET": obj.storage_bucket,
+            }
+        )
     )
 
 

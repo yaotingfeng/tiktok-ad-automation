@@ -62,6 +62,17 @@ class Settings(BaseSettings):
     # Engineering limits: the pinned official SDK buffers multipart files.
     MATERIAL_SDK_MAX_UPLOAD_BYTES: int = Field(default=256 * 1024 * 1024, gt=0)
     MATERIAL_SDK_UPLOAD_MAX_INFLIGHT: int = Field(default=1, gt=0)
+    MATERIAL_INGEST_ENABLED: bool = False
+    MATERIAL_CLEANUP_ENABLED: bool = False
+    MATERIAL_URL_MAX_UPLOAD_BYTES: int = Field(default=256 * 1024 * 1024, gt=0)
+    MATERIAL_STORAGE_GLOBAL_BYTES: int = Field(default=8 * 1024**3, gt=0)
+    MATERIAL_STORAGE_TENANT_BYTES: int = Field(default=2 * 1024**3, gt=0)
+    MATERIAL_PART_URL_SECONDS: int = Field(default=900, ge=60, le=900)
+    MATERIAL_INGEST_URL_SECONDS: int = Field(default=7200, ge=60, le=7200)
+    MATERIAL_VALIDATION_SECONDS: int = Field(default=300, ge=30, le=600)
+    MATERIAL_ABANDON_SECONDS: int = Field(default=86400, ge=3600)
+    # Exact platform media hosts must be verified for the deployment before relay.
+    MATERIAL_REMOTE_MEDIA_HOSTS: frozenset[str] = Field(default_factory=frozenset)
     MATERIAL_ASSET_MAX_AGE_SECONDS: int = Field(default=900, gt=0)
     BC_CAPABILITY_MAX_AGE_SECONDS: int = Field(default=86400, ge=60, le=86400)
     # Engineering observation age for shared scene facts, not a platform quota.
