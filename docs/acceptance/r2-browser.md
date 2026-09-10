@@ -45,3 +45,56 @@ The first run reached real login but failed a test locator that assumed a BC dro
 The final repeat after explicit same-origin configuration and private-settings isolation also passed: **5.6s** for the scenario, **15.5s** total. Its independent database was automatically dropped as well.
 
 Targeted Ruff, Ty (with the isolated backend import path), frontend TypeScript/Biome and the real production build pass. Shared CI registration is intentionally left to root integration; this config is a separate short lane and does not rerun the advertising acceptance suite.
+
+## Bounded 20,000-file selection evidence
+
+### Existing evidence and its limits
+
+`frontend/tests/materials.spec.ts`, test **大批导入一次选择 20000 文件仅渲染 100 行并保留同名文件**, already asserts 20,000 accepted selections, an enabled start button, exactly 100 rendered list items on each of two pages, preserved duplicate filenames and zero application POSTs. Its earlier approximately 2.1-second test duration includes navigation, synthetic fixture creation and assertions; it was **not** a measurement of first UI feedback.
+
+`frontend/tests/upload-foundation.spec.ts`, test **20,000 file metadata stays chunked and seek pages stay scoped**, calls `metadataScaleScenario()` in `tests/harness/upload-foundation.ts`. That helper measures `registerFiles()` after the fixture's File objects already exist: 100 registration chunks of at most 200, local IndexedDB writes and a scoped seek page. The latest recorded foundation run was **7.789s** (an earlier run was 6.364s). These are synthetic browser metadata-registration measurements, not selection-feedback latency or real upload throughput. The prior tests/reports contain no browser JS-heap measurement.
+
+### One measured selection
+
+A one-off probe used the production build at `442c0ba`, the real isolated FastAPI/JWT entry point above and Chromium's CDP. It opened the upload sheet, then selected **20,000 synthetic File objects of five bytes each** (100,000 payload bytes), retaining the existing duplicate-name pattern. It did **not** click Start: real database evidence remained zero ingest sessions/materials/validator jobs, and the HTTPS storage gateway received zero PUTs. Only one run reached the measured 20k selection; an initial probe exited before constructing files because it incorrectly expected the intentionally hidden native file input to be visible.
+
+Recorded at 2026-09-10 02:16:36 UTC, on **Apple M4, 10 logical CPUs, Darwin 25.3.0 arm64, Chromium 151.0.7922.34**, 1440×900 viewport, no CPU throttling. This is a single warm-page observation, not P50/P95 or a lower-end-machine guarantee.
+
+| Measurement | Result |
+| --- | ---: |
+| Construct 20k synthetic File/DataTransfer entries | 1,568.1 ms |
+| Assign the prepared FileList to the input | 0 ms at the observed timer resolution |
+| Dispatch `change` → enabled 20k start button and 100-row DOM | 16.4 ms |
+| Dispatch `change` → two animation frames after the ready DOM | 25.0 ms |
+| Rendered file rows, page 1 and page 2 | 100 / 100 |
+| Rows intersecting the viewport after ancestor clipping | 7 |
+| Connected elements inside the sheet / whole page | 526 / 855 |
+| CDP DOM nodes before / after | 1,612 / 3,335 |
+
+A MutationObserver stopped the readiness clock only when the 20k button was enabled and all 100 list rows existed. Two subsequent animation frames are reported separately; this is a paint-opportunity proxy, not a compositor presentation timestamp. IntersectionObserver counted actual viewport-intersecting rows. `querySelectorAll('*')` counted connected elements; CDP DOM counters additionally include text/comment and retained/detached nodes, so the two counts are not interchangeable.
+
+The prepared-FileList → UI response meets the plan's 1-second target in this observation. **The synthetic construction + delivery sequence takes approximately 1.593s and must not be reported as under one second.** Creating File objects in JavaScript is not the native OS file picker's enumeration/read-permission latency; that path was not timed.
+
+### Browser JS heap samples
+
+The probe used CDP `Runtime.getHeapUsage().usedSize`, with explicit `HeapProfiler.collectGarbage` only at the labelled points. No production instrumentation or behavior changed.
+
+| Sampling point | JS heap used, bytes | MiB |
+| --- | ---: | ---: |
+| Empty sheet, after forced GC | 7,621,100 | 7.268 |
+| After constructing the synthetic FileList | 8,127,756 | 7.751 |
+| After rendering the 20k selection | 11,931,768 | 11.379 |
+| Selection retained, after forced GC | 10,222,384 | 9.749 |
+
+The retained post-GC increase was **2,601,284 bytes (2.481 MiB)**. The largest observed JS-heap sample was 11.379 MiB; **this is not a measured peak**. Sampling can miss allocation/GC spikes and does not account for total native renderer memory, Blob storage, GPU memory, browser process RSS, OS cache or backend Worker RSS. CDP's separate embedder/backing-store fields are retained in the raw artifact but are not relabelled as JS heap or added into a claimed process-memory total.
+
+The one-off probe and raw output are retained locally in the isolated worktree under `.runtime/r2-selection/selection.spec.ts` and `.runtime/r2-selection-metrics.json`. The probe passed in 2.6s (10.4s including setup/build/migrations). Its owned PostgreSQL database was automatically removed; no uploaded file, real storage object or deployment credential was used. Only this documentation supplement is committed.
+
+### Task4 measurements still outstanding
+
+- Native OS selection/drag-and-drop enumeration and first feedback for real 10k/20k files; the synthetic construction and prepared-FileList handoff are separately reported above. A separate 10k UI timing was not collected here.
+- Repeated-run latency distributions and behavior on slower or constrained-memory machines; this single desktop Chromium observation is not a general 1-second SLA.
+- Actual peak JS heap and full browser/renderer memory during selection, 4×2 active 16 MiB part buffers, hashing and network transfer. Worker RSS belongs to the backend capacity report and cannot be inferred from these browser samples.
+- A full 20k browser→FastAPI upload/reload/reselection/receipt-recovery run and long-lived multi-import IndexedDB/storage-pressure behavior. Existing coverage combines 20k synthetic metadata handling, separate backend scale tests, bounded browser recovery fixtures and the three-file real-API scenario above; those are not equivalent to a 20k end-to-end video run.
+
+This supplement establishes bounded DOM rendering and a measured desktop selection handoff. It does not establish video-network throughput, daily ingestion capacity or a true peak-memory acceptance result.
