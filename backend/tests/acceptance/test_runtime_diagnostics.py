@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import event
@@ -16,6 +17,73 @@ from app.jobs.models import PendingDispatch
 from app.modules.builds import drafts
 from app.modules.materials.cover_models import MaterialCoverJob
 from app.modules.materials.models import AccountMaterial, MaterialDistribution
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "materials.reconcile_ingest_transport",
+        "materials.validate_original",
+        "materials.cleanup_original",
+    ],
+)
+def test_material_runtime_keeps_real_payload_and_hard_limit_guards(
+    isolated_strategy_database, monkeypatch, name
+):
+    from app.core.errors import DomainError
+    from app.jobs.celery_app import celery_app
+    from tests.acceptance.scenario import Wire, offline_runtime
+
+    database_engine, _, _ = isolated_strategy_database
+    with offline_runtime(Wire(), database_engine) as runtime:
+        task = celery_app.tasks[name]
+        message = {
+            "name": name,
+            "task_id": str(uuid4()),
+            "kwargs": {
+                "tenant_id": str(uuid4()),
+                "actor_id": str(uuid4()),
+                "payload": {},
+            },
+        }
+        previous = task.request
+        with pytest.raises(DomainError) as invalid:
+            runtime.deliver(message)
+        assert invalid.value.code == "invalid_asset_task"
+        assert task.request is previous and runtime.delivered == []
+        # Runtime reads the task's configured limit; it must not bypass guards
+        # or hard-code 45 seconds for every future resource/control task.
+        monkeypatch.setattr(task, "time_limit", 100_000)
+        with pytest.raises(DomainError) as unbounded:
+            runtime.deliver(message)
+        assert unbounded.value.code == "material_worker_unbounded"
+        assert task.request is previous
+
+
+def test_every_material_beat_task_is_delivered_by_offline_runtime(
+    isolated_strategy_database,
+):
+    from app.jobs.celery_app import celery_app
+    from tests.acceptance.scenario import Wire, offline_runtime
+
+    database_engine, _, _ = isolated_strategy_database
+    with offline_runtime(Wire(), database_engine) as runtime:
+        entries = {
+            name: entry
+            for name, entry in celery_app.conf.beat_schedule.items()
+            if entry["task"].startswith("materials.")
+        }
+        assert any(
+            entry["task"] == "materials.repair_ingest_transports"
+            for entry in entries.values()
+        )
+        for name in entries:
+            runtime.beat_due[name] = 0
+        runtime.tick_beat()
+        while runtime.messages:
+            runtime.deliver(runtime.messages.popleft())
+        expected = {entry["task"] for entry in entries.values()}
+        assert {message["name"] for message in runtime.delivered} == expected
 
 
 def test_scoped_diagnostics_are_readonly_and_preserve_other_queue(acceptance_scenario):

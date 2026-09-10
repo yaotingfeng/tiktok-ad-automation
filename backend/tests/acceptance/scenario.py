@@ -520,8 +520,8 @@ class Runtime:
 
     def deliver(self, message: dict[str, Any]) -> None:
         task = celery_app.tasks[message["name"]]
-        # Only the production execution-environment guard is substituted. The
-        # registered original task function still validates payload and identity.
+        # Model the worker request with each registered task's own limits. The
+        # material guards remain real; offline_runtime supplies only process facts.
         task.push_request(
             id=message["task_id"],
             called_directly=False,
@@ -758,24 +758,17 @@ def offline_runtime(wire: Wire, database_engine: Any) -> Iterator[Runtime]:
             "builds.scene_jobs._require_bounded_worker",
             "builds.execution._require_bounded_worker",
             "builds.reconciliation.require_bounded_worker",
-            "materials.tasks.require_bounded_worker",
         ]:
             stack.enter_context(
                 patch("app.modules." + target, lambda *args, **kwargs: None)
             )
-        if "app.modules.materials.cover_tasks" in celery_app.conf.imports:
+        for module_name in ("materials", "providers"):
             stack.enter_context(
                 patch(
-                    "app.modules.materials.cover_tasks.require_bounded_worker",
-                    lambda *args, **kwargs: None,
+                    f"app.modules.{module_name}.tasks.current_process",
+                    lambda: SimpleNamespace(daemon=True, name="ForkPoolWorker-offline"),
                 )
             )
-        stack.enter_context(
-            patch(
-                "app.modules.providers.tasks.current_process",
-                lambda: SimpleNamespace(daemon=True, name="ForkPoolWorker-offline"),
-            )
-        )
         with Redis.from_url(redis_url, decode_responses=True) as redis_client:
             try:
                 yield runtime
