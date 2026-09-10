@@ -205,3 +205,15 @@ class UploadBatchSummary(BaseModel):
 class SignedPreview(BaseModel):
     url: str = Field(repr=False)
     expires_in: int = 300
+
+
+class RemoteMaterialPreview(BaseModel):
+    """Current response-only URL; platform expiry is not assumed."""
+
+    url: str = Field(repr=False)
+    advertiser_id: str
+    video_id: str
+    width: int
+    height: int
+    duration: float
+    format: str

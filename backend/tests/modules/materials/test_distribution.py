@@ -215,7 +215,7 @@ def test_revocation_before_target_write_blocks_it(source_env, redis_client, wire
     assert state(prepared.task_id)[0].status == "blocked" and wire[0] == []
 
 
-def test_unsent_share_falls_back_to_original_after_source_revocation(
+def test_unsent_share_without_capability_blocks_after_source_revocation(
     source_env, redis_client, wire, original_s3
 ):
     with Session(engine) as session, session.begin():
@@ -245,9 +245,10 @@ def test_unsent_share_falls_back_to_original_after_source_revocation(
     wire[1].append([{"video_id": "target-receipt"}])
     run(source_env, redis_client, dist_id, kind="prepare", s3=original_s3[0])
     dist, op, _ = state(dist_id)
-    assert dist.path == op.path == "upload_original"
-    assert op.remote_response["share_disabled_before_send"] is True
-    assert len(wire[0]) == 1 and wire[0][0][1].endswith("/file/video/ad/upload/")
+    assert op.path == "share_source"
+    assert dist.status == "blocked" and op.status == "failed"
+    assert op.remote_response["definite_no_effect"] is True
+    assert len(wire[0]) == 0
 
 
 def test_definitely_rejected_share_uses_new_upload_operation_preserving_failure(

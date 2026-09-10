@@ -1,7 +1,7 @@
 """Bounded upload history and authorized read-only original capabilities."""
 
-from datetime import datetime
-from typing import cast
+from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import and_, func, or_
@@ -9,13 +9,68 @@ from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
+from app.core.errors import DomainError
 from app.core.pagination import Page
 
 from .models import MaterialFile, ObjectUpload, UploadBatch
 from .repository import decode_material_cursor, encode_material_cursor
-from .schemas import SignedPreview, UploadBatchResult, UploadBatchSummary, UploadStage
+from .schemas import (
+    RemoteMaterialPreview,
+    SignedPreview,
+    UploadBatchResult,
+    UploadBatchSummary,
+    UploadStage,
+)
 from .storage import object_key_for, sign_original_preview, storage_error
 from .uploads import get_upload_batch, require_bc
+
+
+def remote_preview(
+    *,
+    database_engine: Any,
+    redis_client: Any,
+    context: TenantContext,
+    bc_id: str,
+    material_id: UUID,
+) -> RemoteMaterialPreview:
+    """Read-only SDK INFO with socket budget; no DNS-wide process deadline claim.
+
+    This dedicated HTTP control-plane request never changes readiness, queues
+    work or issues an original-use permission. Sources and authority are fresh.
+    """
+    from .remote_sources import read_remote_source, resolve_remote_source
+    from .source_uploads import READ_HARD_LIMIT
+
+    deadline = datetime.now(UTC) + timedelta(seconds=READ_HARD_LIMIT - 5)
+    with Session(database_engine) as db:
+        require_bc(db, context=context, bc_id=bc_id, action="read")
+        source = resolve_remote_source(
+            db, context=context, bc_id=bc_id, material_id=material_id
+        )
+        if source is None:
+            raise DomainError(
+                "material_remote_source_unavailable", "暂无法预览，请恢复来源授权或补传"
+            )
+        source_id = source.id
+    preview = read_remote_source(
+        database_engine=database_engine,
+        redis_client=redis_client,
+        context=context,
+        bc_id=bc_id,
+        material_id=material_id,
+        source_asset_id=source_id,
+        deadline=deadline,
+        hard_limit=READ_HARD_LIMIT,
+    )
+    return RemoteMaterialPreview(
+        url=preview.url,
+        advertiser_id=preview.advertiser_id,
+        video_id=preview.video_id,
+        width=preview.width,
+        height=preview.height,
+        duration=preview.duration,
+        format=preview.format,
+    )
 
 
 def find_upload_request(

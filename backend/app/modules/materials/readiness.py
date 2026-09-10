@@ -15,6 +15,7 @@ from app.modules.accounts.models import BCAccountAccess
 
 from . import sdk_assets as api
 from .models import AccountMaterial, MaterialAssetOperation, MaterialFile
+from .remote_sources import require_remote_material
 from .repository import asset_public, require_material_scope
 from .schemas import MaterialReadiness
 from .source_uploads import READ_HARD_LIMIT, UPLOAD_HARD_LIMIT
@@ -133,7 +134,9 @@ def has_legal_source_mid(
     )
 
 
-def require_execution_config(*, upload: bool, endpoint: str) -> None:
+def require_execution_config(
+    *, upload: bool, endpoint: str, original: bool = True
+) -> None:
     """Detect known deployment failures locally; runtime checks still enforce them."""
     settings.require_tiktok_app()
     settings.require_connection_encryption()
@@ -147,7 +150,7 @@ def require_execution_config(*, upload: bool, endpoint: str) -> None:
         raise DomainError(
             "admission_policy_invalid", "素材调用租约必须长于工作进程硬限"
         )
-    if upload:
+    if upload and original:
         settings.require_object_storage()
         if policy.endpoint_max_inflight > settings.MATERIAL_SDK_UPLOAD_MAX_INFLIGHT:
             raise DomainError(
@@ -162,6 +165,8 @@ def require_upload_path(
     material: MaterialFile,
     advertiser_id: str,
 ) -> None:
+    if material.current_object_generation is not None:
+        raise DomainError("material_result_pending", "请等待来源账户素材核实后继续")
     if material.storage_state != "stored":
         raise DomainError("original_unavailable", "没有可用的完整原文件")
     if material.byte_size > settings.MATERIAL_SDK_MAX_UPLOAD_BYTES:
@@ -290,8 +295,7 @@ def get_material_readiness_batch(
                 AccountMaterial.advertiser_id != advertiser_id,
                 AccountMaterial.status == "available",
                 col(AccountMaterial.verified_at).is_not(None),
-                col(AccountMaterial.mid).is_not(None),
-                col(AccountMaterial.mid) != "",
+                col(AccountMaterial.video_id) != "",
                 grant,
             )
             .distinct()
@@ -335,7 +339,38 @@ def get_material_readiness_batch(
                     "material_share_unconfirmed",
                     "共享尚无明确未生效证据，需要先核实结果",
                 )
+            if material.id in legal_sources and settings.MATERIAL_REMOTE_MEDIA_HOSTS:
+                require_remote_material(material)
+                if material.byte_size > settings.MATERIAL_URL_MAX_UPLOAD_BYTES:
+                    raise DomainError(
+                        "url_upload_capacity_exceeded",
+                        "素材超过当前URL转存工程容量限制",
+                    )
+                resolve_account_access(
+                    session,
+                    context=context,
+                    bc_id=bc_id,
+                    advertiser_id=advertiser_id,
+                    action="upload",
+                )
+                require_execution_config(
+                    upload=True, endpoint=api.UPLOAD_ENDPOINT, original=False
+                )
+                require_execution_config(upload=False, endpoint=api.INFO_ENDPOINT)
+                result[material.id] = MaterialReadiness(
+                    state="preparable", path="share_source"
+                )
+                continue
             if material.storage_state == "stored":
+                if material.current_object_generation is not None:
+                    raise DomainError(
+                        "material_preview_unverified"
+                        if material.id in legal_sources
+                        else "material_result_pending",
+                        "需配置已核实的视频域名后才能分发"
+                        if material.id in legal_sources
+                        else "请等待来源账户素材核实后继续",
+                    )
                 if material.byte_size > settings.MATERIAL_SDK_MAX_UPLOAD_BYTES:
                     raise DomainError(
                         "sdk_upload_capacity_exceeded",
@@ -367,6 +402,15 @@ def get_material_readiness_batch(
                 if material.id in legal_sources
                 else "original_unavailable"
             )
+            if material.current_object_generation is not None:
+                raise DomainError(
+                    "material_preview_unverified"
+                    if material.id in legal_sources
+                    else "material_remote_source_unavailable",
+                    "需配置已核实的视频域名后才能分发"
+                    if material.id in legal_sources
+                    else "没有可用来源，请恢复账户授权或重新上传原文件",
+                )
             raise DomainError(code, "没有已核实的原生共享路径或完整原文件")
         except DomainError as error:
             result[material.id] = blocked(error)

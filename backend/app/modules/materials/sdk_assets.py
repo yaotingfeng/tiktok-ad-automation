@@ -416,7 +416,13 @@ def video_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def verified_video(data: dict[str, Any], *, md5: str) -> dict[str, str] | None:
+def verified_video(
+    data: dict[str, Any],
+    *,
+    md5: str,
+    expected_video_id: str | None = None,
+    expected_size: int | None = None,
+) -> dict[str, str] | None:
     rows = video_rows(data)
     # The one-ID lookup must have exactly one strong content match. Unknown
     # statuses, multiple records and missing signatures never imply readiness.
@@ -427,6 +433,22 @@ def verified_video(data: dict[str, Any], *, md5: str) -> dict[str, str] | None:
         row.get("displayable") is not True
         or row.get("signature") != md5
         or not _id(row, "video_id")
+    ):
+        return None
+    if expected_video_id is not None and row.get("video_id") != expected_video_id:
+        return None
+    if expected_size is not None and (
+        type(row.get("size")) is not int
+        or row["size"] != expected_size
+        or type(row.get("width")) is not int
+        or row["width"] <= 0
+        or type(row.get("height")) is not int
+        or row["height"] <= 0
+        or type(row.get("duration")) not in (int, float)
+        or not math.isfinite(row["duration"])
+        or row["duration"] <= 0
+        or not isinstance(row.get("format"), str)
+        or row["format"].lower() not in _REMOTE_VIDEO_FORMATS
     ):
         return None
     return identity(row)

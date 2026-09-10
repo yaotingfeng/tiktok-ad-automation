@@ -4,10 +4,12 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Query, Response
+from redis import Redis
 from sqlalchemy import and_, case, func, or_
 from sqlmodel import Session, col, select
 
 from app.api.deps import CurrentUser, SessionDep
+from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.db import engine
 from app.core.pagination import Page
@@ -27,6 +29,7 @@ from app.modules.materials.schemas import (
     AccountAsset,
     CompleteUploadRequest,
     MaterialPublic,
+    RemoteMaterialPreview,
     SignedPart,
     SignedPreview,
     UploadAttemptPublic,
@@ -122,6 +125,33 @@ def read_original_preview(
     result = catalog.original_preview(
         session, context=context, bc_id=bc_id, material_id=material_id
     )
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.get("/{material_id}/remote-preview", response_model=RemoteMaterialPreview)
+def read_remote_preview(
+    tenant_id: UUID,
+    material_id: UUID,
+    bc_id: BCID,
+    response: Response,
+    session: SessionDep,
+    user: CurrentUser,
+) -> RemoteMaterialPreview:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    # End request authentication's transaction before the admitted external read.
+    session.commit()
+    session.close()
+    with Redis.from_url(settings.REDIS_URL) as redis_client:
+        result = catalog.remote_preview(
+            database_engine=engine,
+            redis_client=redis_client,
+            context=context,
+            bc_id=bc_id,
+            material_id=material_id,
+        )
     response.headers["Cache-Control"] = "no-store"
     return result
 
