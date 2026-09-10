@@ -27,9 +27,12 @@ RUN sed -E -i "s|https?://deb.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.li
 
 ENV PYTHONUNBUFFERED=1
 
-# 使用官方 PyPI 分发的固定 uv 版本，避免构建依赖额外的 GHCR 大文件连接。
+# 镜像站只替换下载地址，包版本与锁文件摘要保持不变。
+ARG PYPI_INDEX_URL=https://pypi.org/simple
+ARG PYPI_FILES_URL=https://files.pythonhosted.org
+# 使用 PyPI 分发的固定 uv 版本，避免构建依赖额外的 GHCR 大文件连接。
 # Ref: https://docs.astral.sh/uv/getting-started/installation/#pypi
-RUN pip install --no-cache-dir uv==0.9.26
+RUN pip install --no-cache-dir --index-url "${PYPI_INDEX_URL}" uv==0.9.26
 
 # Compile bytecode
 # Ref: https://docs.astral.sh/uv/guides/integration/docker/#compiling-bytecode
@@ -48,6 +51,8 @@ ENV PATH="/app/.venv/bin:$PATH"
 # Keep workspace manifests in the dependency layer; the SDK is pinned by uv.lock.
 COPY pyproject.toml uv.lock /app/
 COPY backend/pyproject.toml /app/backend/
+# frozen 同步使用锁文件内的下载 URL；仅修改镜像内副本的来源，不重新解析依赖。
+RUN python -c 'import os; from pathlib import Path; p = Path("uv.lock"); p.write_text(p.read_text().replace("https://pypi.org/simple", os.environ["PYPI_INDEX_URL"]).replace("https://files.pythonhosted.org", os.environ["PYPI_FILES_URL"]))'
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-workspace --package app
 

@@ -41,7 +41,7 @@
    首次创建 `/opt/tt-ada/releases`、`/opt/tt-ada/backups`（0700）、`/etc/tt-ada`（0700）及 `/var/log/nginx`；不要假定宝塔安装已建立系统 Nginx 日志目录。
 2. 私有环境文件由运维安全创建：`PROJECT_NAME=TT ADA`、`FRONTEND_HOST=https://manjuad.gzjunbo.net:8000`、`TT_ADA_BACKEND_PORT=18000`、独立 `SECRET_KEY`、`CONNECTION_ENCRYPTION_KEY`、`POSTGRES_PASSWORD`，以及用户授权的初始化管理员凭据。不要复用本地密钥。
 3. 以下命令在服务器执行，`RELEASE_SHA` 必须替换为已验证的完整 SHA。配置检查只能输出 `--quiet`、服务名或必要非敏感字段，不能输出整个环境。
-   国内服务器的生产构建使用腾讯云 Debian 镜像站并保留 APT 签名校验；uv 从官方 PyPI 安装固定版本 0.9.26。Python/Bun、uv.lock 和 bun.lock 的版本约束不变。不要修改整机 Docker 镜像源或其他项目依赖来解决单项目构建问题。
+   国内服务器的生产构建使用腾讯云 Debian/PyPI 镜像站，保留 APT 签名及 uv.lock 包摘要校验，uv 固定 0.9.26。Dockerfile 仅在构建层替换锁文件副本的索引和下载地址，仓库锁文件、包版本、hash 及 TikTok 官方 SDK Git commit 不变；`uv sync --frozen` 不重新解析依赖。不要修改整机 Docker 镜像源或其他项目依赖来解决单项目构建问题。
 
 ```bash
 RELEASE_SHA=<完整40位SHA>
