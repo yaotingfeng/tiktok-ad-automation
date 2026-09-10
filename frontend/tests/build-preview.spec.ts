@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test"
 import { BC, buildsBoundary, P, T } from "./utils/buildsBoundary"
+import { expectWorkspaceLayout } from "./utils/workspaceLayout"
 
 test("冻结预览两剧三账户实际六Campaign，金额使用后端字符串，明细按需读取", async ({
   page,
@@ -67,6 +68,7 @@ for (const width of [1440, 900, 390])
     await expect(
       page.getByRole("heading", { name: "搭建预览", exact: true }),
     ).toBeVisible()
+    await expectWorkspaceLayout(page)
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= window.innerWidth,
@@ -118,6 +120,7 @@ for (const width of [1440, 900, 390])
     await page.goto(`/tenants/${T}/builds/new?bc_id=${BC}`)
     await pickInputs(page)
     await expect(page.locator('[data-slot="dialog-overlay"]')).toHaveCount(0)
+    await expectWorkspaceLayout(page)
     await page.evaluate(() => window.scrollTo(0, 0))
     const screenshots = process.env.BUILD_SCREENSHOT_DIR
     expect(
@@ -138,6 +141,7 @@ for (const width of [1440, 900, 390])
     await expect(
       page.getByRole("button", { name: "查看与调整素材" }).first(),
     ).toBeVisible()
+    await expectWorkspaceLayout(page)
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= window.innerWidth,

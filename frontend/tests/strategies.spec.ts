@@ -576,7 +576,7 @@ for (const width of [390, 1024, 1440]) {
   })
 }
 
-test("策略列表离开编辑并返回时恢复标题位置和局部主题", async ({ page }) => {
+test("策略列表进入编辑并返回时保持正文标题和中性主题", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   const { requests } = await boundary(page)
   await page.goto(`/tenants/${A}/strategies`)
@@ -602,26 +602,27 @@ test("策略列表离开编辑并返回时恢复标题位置和局部主题", as
   await expect(header).toHaveText("投放工作")
   await expect(header.getByRole("heading", { level: 1 })).toHaveCount(0)
   const listTheme = await readTheme()
-  expect(listTheme.primary).not.toBe(listTheme.rootPrimary)
+  expect(listTheme.primary).toBe(listTheme.rootPrimary)
   expect(listTheme.mainPrimary).toBe(listTheme.rootPrimary)
   await page.getByRole("link", { name: "租户策略", exact: true }).click()
   await expect(page).toHaveURL(editUrl)
   await expect(
-    header.getByRole("heading", {
+    main.getByRole("heading", {
       level: 1,
       name: "编辑投放策略",
       exact: true,
     }),
-  ).toHaveCSS("font-size", "16px")
+  ).toHaveCSS("font-size", "22px")
   await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1)
-  await expect(main.getByRole("heading", { level: 1 })).toHaveCount(0)
+  await expect(header.getByRole("heading", { level: 1 })).toHaveCount(0)
+  await expect(header).toHaveText("投放工作")
   await expect(main.locator('[data-presentation="strategy-list"]')).toHaveCount(
     0,
   )
   const editTheme = await readTheme()
   expect(editTheme.primary).toBe(editTheme.rootPrimary)
   expect(editTheme.mainPrimary).toBe(editTheme.rootPrimary)
-  expect(editTheme.background).not.toBe(listTheme.background)
+  expect(editTheme).toEqual(listTheme)
   await page.getByRole("button", { name: "取消", exact: true }).click()
   await expect(page).toHaveURL(new RegExp(`/tenants/${A}/strategies/?$`))
   await expect(
@@ -630,6 +631,65 @@ test("策略列表离开编辑并返回时恢复标题位置和局部主题", as
   await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1)
   await expect(header).toHaveText("投放工作")
   expect(await readTheme()).toEqual(listTheme)
+  expect(requests.filter((request) => request.method !== "GET")).toHaveLength(0)
+})
+
+test("深色策略页主按钮保持中性色并具有可读文字和可见边界对比", async ({
+  page,
+}) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("workbench-theme", "dark"),
+  )
+  const { requests } = await boundary(page)
+  await page.goto(`/tenants/${A}/strategies`)
+  await expect(page.locator("html")).toHaveClass(/dark/)
+  const button = page.getByRole("link", { name: "新建策略", exact: true })
+  await expect(button).toBeVisible()
+  await expect(button).toBeEnabled()
+  const contrast = await button.evaluate((el) => {
+    const canvas = document.createElement("canvas")
+    canvas.width = canvas.height = 1
+    const context = canvas.getContext("2d")!
+    const rgb = (css: string) => {
+      context.clearRect(0, 0, 1, 1)
+      context.fillStyle = css
+      context.fillRect(0, 0, 1, 1)
+      return Array.from(context.getImageData(0, 0, 1, 1).data).slice(0, 3)
+    }
+    const luminance = (values: number[]) =>
+      values
+        .map((v) => {
+          const n = v / 255
+          return n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4
+        })
+        .reduce(
+          (total, value, index) =>
+            total + value * [0.2126, 0.7152, 0.0722][index],
+          0,
+        )
+    const ratio = (a: number[], b: number[]) => {
+      const x = luminance(a),
+        y = luminance(b)
+      return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)
+    }
+    const style = getComputedStyle(el)
+    const background = rgb(style.backgroundColor)
+    const foreground = rgb(style.color)
+    const main = rgb(
+      getComputedStyle(document.querySelector("#workspace-main")!)
+        .backgroundColor,
+    )
+    return {
+      text: ratio(background, foreground),
+      boundary: ratio(background, main),
+      backgroundChroma: Math.max(...background) - Math.min(...background),
+      foregroundChroma: Math.max(...foreground) - Math.min(...foreground),
+    }
+  })
+  expect(contrast.text).toBeGreaterThanOrEqual(4.5)
+  expect(contrast.boundary).toBeGreaterThanOrEqual(3)
+  expect(contrast.backgroundChroma).toBeLessThanOrEqual(1)
+  expect(contrast.foregroundChroma).toBeLessThanOrEqual(1)
   expect(requests.filter((request) => request.method !== "GET")).toHaveLength(0)
 })
 

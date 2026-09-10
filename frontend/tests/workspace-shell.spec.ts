@@ -95,21 +95,37 @@ async function expectNoOverflow(page: Page) {
   ).toBe(true)
 }
 
-test("dashboard layout keeps one 16px header title as navigation changes", async ({
+test("workspace navigation keeps one 22px content title and a stable neutral shell", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 2304, height: 1080 })
   await apiBoundary(page)
   await page.goto("/")
+  const main = page.locator("#workspace-main")
+  const header = page.locator('[data-slot="workspace-page-title"]')
+  let background: string | undefined
   for (const title of ["素材库", "投放策略", "账户与授权"]) {
     await page.getByRole("link", { name: title, exact: true }).click()
-    const heading = page.getByRole("heading", { level: 1 })
-    await expect(heading).toHaveCount(1)
+    const heading = main.getByRole("heading", { level: 1 })
+    await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1)
     await expect(heading).toHaveText(title)
+    await expect(heading).toHaveCSS("font-size", "22px")
+    await expect(header).toHaveText("投放工作")
     await expect(
       page.locator("header").getByRole("heading", { level: 1 }),
-    ).toHaveText(title)
-    await expect(heading).toHaveCSS("font-size", "16px")
+    ).toHaveCount(0)
+    const colors = await main.evaluate((el) => ({
+      background: getComputedStyle(el).backgroundColor,
+      header: getComputedStyle(el.previousElementSibling!).backgroundColor,
+      primary: getComputedStyle(el).getPropertyValue("--primary").trim(),
+      rootPrimary: getComputedStyle(document.documentElement)
+        .getPropertyValue("--primary")
+        .trim(),
+    }))
+    expect(colors.background).not.toBe(colors.header)
+    expect(colors.primary).toBe(colors.rootPrimary)
+    background ??= colors.background
+    expect(colors.background).toBe(background)
     await expectNoOverflow(page)
   }
 })

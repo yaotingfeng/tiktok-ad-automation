@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "@playwright/test"
 import type { ProviderConnectionPublic, ResolvedLink } from "../src/client"
+import { expectWorkspaceLayout } from "./utils/workspaceLayout"
 
 const tenantId = "11111111-1111-4111-8111-111111111111"
 const connectionId = "22222222-2222-4222-8222-222222222222"
@@ -736,6 +737,7 @@ for (const viewport of [
     await boundary(page, { count: 50 })
     await page.goto(resultsUrl)
     await expect(page.locator("tbody tr")).toHaveCount(50)
+    await expectWorkspaceLayout(page)
     await page.screenshot({
       path: testInfo.outputPath(`providers-${viewport.width}.png`),
       fullPage: true,

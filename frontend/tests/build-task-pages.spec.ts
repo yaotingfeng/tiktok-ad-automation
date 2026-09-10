@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "@playwright/test"
 import { BC, buildsBoundary, D, DR, P, T } from "./utils/buildsBoundary"
+import { expectWorkspaceLayout } from "./utils/workspaceLayout"
 
 test.use({ timezoneId: "Asia/Shanghai" })
 const ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -524,6 +525,7 @@ for (const width of [1440, 900, 390])
     await expect(
       page.getByRole("link", { name: "查看详情", exact: true }),
     ).toHaveCount(50)
+    await expectWorkspaceLayout(page)
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= window.innerWidth,
@@ -556,6 +558,7 @@ for (const width of [1440, 900, 390])
     await expect(
       page.getByRole("heading", { name: "任务 B0909-01", exact: true }),
     ).toBeVisible()
+    await expectWorkspaceLayout(page)
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= window.innerWidth,

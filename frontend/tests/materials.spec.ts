@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test"
-
 import type { MaterialPublic, UploadBatchResult } from "../src/client"
+import { expectWorkspaceLayout } from "./utils/workspaceLayout"
 
 const A = "11111111-1111-4111-8111-111111111111",
   B = "22222222-2222-4222-8222-222222222222",
@@ -380,6 +380,7 @@ for (const width of [1440, 900, 390])
     await expect(
       page.getByText(original.file_name, { exact: true }),
     ).toBeVisible()
+    await expectWorkspaceLayout(page)
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth,

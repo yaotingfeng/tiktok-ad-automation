@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test"
+import { expectWorkspaceLayout } from "./utils/workspaceLayout"
 
 // Synthetic HTTP boundary fixtures; the real application, router, generated SDK,
 // dialogs and queries render unmodified. No TikTok or live user data is involved.
@@ -607,6 +608,7 @@ for (const width of [1440, 390])
     await boundary(page)
     await page.goto("/platform/tenants")
     await expect(page.getByRole("row", { name: new RegExp(A) })).toBeVisible()
+    await expectWorkspaceLayout(page)
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= window.innerWidth,
@@ -739,6 +741,7 @@ for (const width of [1440, 390])
           await page.getByRole("option", { name: "100 条" }).click()
         }
         await expect(page.locator("tbody tr")).toHaveCount(limit)
+        await expectWorkspaceLayout(page)
         const dimensions = await container.evaluate((element) => ({
           height: element.clientHeight,
           scrollHeight: element.scrollHeight,
@@ -1391,6 +1394,7 @@ for (const width of [1440, 390])
     await accountBoundary(page)
     await page.goto(`/tenants/${A}/accounts?bc_id=${BC1}`)
     await expect(page.locator("tbody tr")).toHaveCount(50)
+    await expectWorkspaceLayout(page)
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth,
