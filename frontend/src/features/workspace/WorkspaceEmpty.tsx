@@ -17,6 +17,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
+import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import useAuth from "@/hooks/useAuth"
 
 export function WorkspaceEmpty({
@@ -40,7 +41,7 @@ export function WorkspaceEmpty({
     <>
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex flex-col gap-2">
-          <h1 className="workspace-title">{title}</h1>
+          <WorkspacePageTitle>{title}</WorkspacePageTitle>
           <p className="text-sm text-muted-foreground">{description}</p>
         </div>
         {title === "广告搭建" && (

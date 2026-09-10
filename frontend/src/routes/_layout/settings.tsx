@@ -1,9 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router"
-
 import ChangePassword from "@/components/UserSettings/ChangePassword"
 import DeleteAccount from "@/components/UserSettings/DeleteAccount"
 import UserInformation from "@/components/UserSettings/UserInformation"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import useAuth from "@/hooks/useAuth"
 
 const tabsConfig = [
@@ -34,10 +34,10 @@ function UserSettings() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex w-full max-w-7xl flex-col gap-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">User Settings</h1>
-        <p className="text-muted-foreground">
+        <WorkspacePageTitle>User Settings</WorkspacePageTitle>
+        <p className="text-sm text-muted-foreground">
           Manage your account settings and preferences
         </p>
       </div>

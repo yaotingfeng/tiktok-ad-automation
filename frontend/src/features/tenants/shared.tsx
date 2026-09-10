@@ -108,7 +108,7 @@ export function Pager({
   busy: boolean
 }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t p-4">
+    <div className="flex flex-wrap items-center justify-between gap-3">
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <span>每页</span>
         <Select
@@ -202,7 +202,7 @@ export function ServerTable<T>({
   return (
     <div
       aria-busy={fetching}
-      className="[&>[data-slot=table-container]]:max-h-[60svh] [&>[data-slot=table-container]]:overflow-y-auto"
+      className="min-w-0 overflow-hidden rounded-lg border [&>[data-slot=table-container]]:max-h-[60svh] [&>[data-slot=table-container]]:overflow-y-auto"
     >
       {!!error && (
         <div className="p-4">

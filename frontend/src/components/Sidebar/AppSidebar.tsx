@@ -42,11 +42,11 @@ export function AppSidebar({
   managementItems?: Item[]
 }) {
   return (
-    <Sidebar collapsible="icon">
-      <SidebarHeader className="px-6 py-6 group-data-[collapsible=icon]:px-2">
+    <Sidebar collapsible="icon" variant="inset">
+      <SidebarHeader>
         <WorkspaceBrand />
       </SidebarHeader>
-      <SidebarContent className="gap-5 px-2">
+      <SidebarContent>
         {workItems.length > 0 && <Main label="投放工作" items={workItems} />}
         {managementItems?.length !== 0 && (
           <Main
@@ -60,7 +60,7 @@ export function AppSidebar({
           />
         )}
       </SidebarContent>
-      <SidebarFooter className="gap-3 px-2 pb-3">
+      <SidebarFooter>
         {user?.is_superuser && (
           <Main
             items={[

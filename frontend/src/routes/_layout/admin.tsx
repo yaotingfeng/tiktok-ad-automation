@@ -8,6 +8,7 @@ import { columns, type UserTableData } from "@/components/Admin/columns"
 import { DataTable } from "@/components/Common/DataTable"
 import PendingUsers from "@/components/Pending/PendingUsers"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import useAuth from "@/hooks/useAuth"
 
 function getUsersQueryOptions() {
@@ -74,8 +75,8 @@ function Admin() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="workspace-title">平台管理</h1>
-          <p className="text-muted-foreground">
+          <WorkspacePageTitle>平台管理</WorkspacePageTitle>
+          <p className="text-sm text-muted-foreground">
             管理平台用户账号。租户开通与成员分配将在租户管理中提供。
           </p>
         </div>
