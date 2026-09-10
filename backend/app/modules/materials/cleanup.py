@@ -15,6 +15,7 @@ from app.jobs.outbox import enqueue_after_commit
 from app.jobs.tasks import register_dispatch_task
 from app.modules.tenants.models import AuditEvent
 
+from .cleanup_abandoned import abandon_transport, abort_original, parts_removed
 from .ingest_models import (
     IngestSession,
     IngestSessionFile,
@@ -236,7 +237,8 @@ def _finish_deleted(
     now = datetime.now(UTC)
     cleanup.status, cleanup.head_confirmed_at = "deleted", now
     # A post-send HEAD404 is positive deletion evidence even after a lost reply.
-    cleanup.delete_confirmed_at = cleanup.delete_confirmed_at or now
+    if cleanup.delete_sent_at:
+        cleanup.delete_confirmed_at = cleanup.delete_confirmed_at or now
     cleanup.claim_token, cleanup.claimed_until, cleanup.error_code = None, None, None
     obj.status, obj.deleted_at, obj.error_code = "deleted", now, None
     session.flush()
@@ -309,7 +311,10 @@ def run_cleanup(
             or (cleanup.claimed_until and cleanup.claimed_until > now)
         ):
             return
-        readback = cleanup.delete_sent_at is not None
+        readback = cleanup.delete_sent_at is not None or bool(
+            cleanup.eligibility_evidence.get("abort_sent_at")
+        )
+        transport = cleanup.eligibility_evidence.get("transport", "delete")
         if not settings.MATERIAL_CLEANUP_ENABLED and not readback:
             _defer(session, cleanup, code="cleanup_disabled")
             return
@@ -324,16 +329,20 @@ def run_cleanup(
             return
         if not readback:
             try:
-                if cleanup.reason != "verified_source":
-                    raise storage_error("cleanup_abandon_pending")
-                evidence = _receipt(
-                    session,
-                    obj,
-                    UUID(cleanup.eligibility_evidence["source_receipt_id"]),
-                )
-                if evidence != cleanup.eligibility_evidence:
-                    raise storage_error("cleanup_unverified")
-                if _active_uses(session, obj):
+                if cleanup.reason == "verified_source":
+                    evidence = _receipt(
+                        session,
+                        obj,
+                        UUID(cleanup.eligibility_evidence["source_receipt_id"]),
+                    )
+                    if evidence != cleanup.eligibility_evidence:
+                        raise storage_error("cleanup_unverified")
+                else:
+                    transport = abandon_transport(session, obj, cleanup)
+                uses = _active_uses(session, obj)
+                if any(
+                    transport != "abort" or use.purpose != "part_put" for use in uses
+                ):
                     raise storage_error("original_in_use")
             except (DomainError, KeyError, ValueError) as error:
                 _defer(
@@ -352,7 +361,14 @@ def run_cleanup(
         cleanup.attempt_count += 1
         cleanup.status = "delete_unknown" if readback else "deleting"
         obj.status = cleanup.status
-        if not readback:
+        if not readback and transport == "abort":
+            cleanup.eligibility_evidence = {
+                **cleanup.eligibility_evidence,
+                "transport": "abort",
+                "abort_sent_at": now.isoformat(),
+                "upload_id": obj.s3_upload_id,
+            }
+        elif not readback:
             cleanup.delete_sent_at = now
         # Persist a recovery delivery before leaving the transaction; a hard-killed
         # worker never strands a claim whose broker message was already delivered.
@@ -365,10 +381,18 @@ def run_cleanup(
                 )
         session.flush()
         session.expunge(obj)
-    absent, failure = False, None
+    absent, aborted, failure = False, False, None
     try:
         client = s3 or make_object_s3(obj)
-        if readback:
+        if transport == "abort":
+            if readback:
+                aborted = parts_removed(client, obj)
+            if not aborted and settings.MATERIAL_CLEANUP_ENABLED:
+                abort_original(client, obj)
+                aborted = parts_removed(client, obj)
+            if aborted:
+                absent = _head_absent(client, obj)
+        elif readback:
             absent = _head_absent(client, obj)
             if not absent and settings.MATERIAL_CLEANUP_ENABLED:
                 client.delete_object(Bucket=obj.storage_bucket, Key=obj.object_key)
@@ -385,7 +409,14 @@ def run_cleanup(
         cleanup = session.get(ObjectCleanup, cleanup_id, populate_existing=True)
         if not cleanup or cleanup.claim_token != owner:
             return
-        if absent:
+        if aborted:
+            cleanup.abort_confirmed_at = datetime.now(UTC)
+        if absent and transport == "abort" and _active_uses(session, obj):
+            # Abort and empty ListParts cannot prove an unknown in-flight PUT
+            # has ended. Keep its reservation until its own completion evidence.
+            obj.status = "delete_unknown"
+            _defer(session, cleanup, code="part_result_unknown", unknown=True)
+        elif absent:
             _finish_deleted(session, obj, cleanup)
         else:
             obj.status = "delete_unknown"
