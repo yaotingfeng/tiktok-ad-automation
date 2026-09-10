@@ -32,7 +32,6 @@ import { handleApiError } from "@/lib/api-feedback"
 import { StrategyError as RequestError } from "./feedback"
 import { strategyKey } from "./queries"
 import { StrategyVersionList } from "./StrategyVersionList"
-import "./strategy-list.css"
 export function StrategyList() {
   const { tenantId, tenant, scope } = useTenantScope(),
     client = useQueryClient(),
@@ -239,9 +238,7 @@ export function StrategyList() {
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <WorkspacePageTitle placement="content" sectionLabel="投放工作">
-            投放策略
-          </WorkspacePageTitle>
+          <WorkspacePageTitle>投放策略</WorkspacePageTitle>
           <p className="text-sm text-muted-foreground">
             当前租户策略 · {tenant?.name} · 不按 BC 筛选
           </p>
@@ -253,14 +250,14 @@ export function StrategyList() {
               params={{ tenantId: tenantId! }}
               search={{ bc_id: scope?.bcId || undefined }}
             >
-              <Plus />
+              <Plus data-icon="inline-start" />
               新建策略
             </Link>
           </Button>
         )}
       </div>
-      <Card className="min-w-0 gap-5 py-4 lg:gap-6 lg:py-6">
-        <CardHeader className="px-4 lg:px-6">
+      <Card>
+        <CardHeader>
           <form
             className="flex flex-wrap items-end gap-3"
             onSubmit={(e) => {
@@ -305,7 +302,7 @@ export function StrategyList() {
             </Button>
           </form>
         </CardHeader>
-        <CardContent className="strategy-list-table min-w-0 px-4 lg:px-6">
+        <CardContent>
           <ServerTable
             fixedLayout={{ fillColumn: "name" }}
             rows={data?.items || []}
@@ -318,7 +315,7 @@ export function StrategyList() {
             emptyTitle="还没有投放策略"
           />
         </CardContent>
-        <CardFooter className="block px-4 lg:px-6">
+        <CardFooter className="block">
           <Pager
             paging={paging}
             nextCursor={data?.next_cursor}

@@ -1,7 +1,7 @@
 # TikTok Ad Automation
 
 ## Execution contract
-- Follow docs/superpowers/specs and stage plans. The dashboard-01 baseline follows docs/superpowers/plans/2026-09-10-shadcn-official-alignment.md. Subsequent user feedback authorizes a strategy-list-only visual refinement in docs/validation/2026-09-10-strategy-ui-refinement.md; preserve the baseline for other pages until the pilot is reviewed.
+- Follow docs/superpowers/specs and stage plans. Current approved visual design is the strategy-page refinement extended to all pages with the original neutral black primary button, per docs/superpowers/plans/2026-09-10-workspace-visual-rollout.md. It supersedes the dashboard-01 header-title/uncontained-table layout and the pilot's blue primary color.
 - The user requested git commits and implementation in this repository. Keep origin git@github.com:yaotingfeng/tiktok-ad-automation.git. Work on feature branches/worktrees, commit reviewed task changes, push feature branches without force.
 - All subagents use gpt-6-astra with high reasoning. Do not interrupt a subagent merely because it takes a long time. Root coordinates integration, migrations and shared contracts.
 - User preferences override optional Superpowers ceremony; use skills proportionately. Independent workers may run in parallel in isolated worktrees with explicit file ownership. Do not spawn child agents from implementation workers.

@@ -1,29 +1,30 @@
 import { Link } from "@tanstack/react-router"
 import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { AuthLayout } from "./AuthLayout"
 
-const ErrorComponent = () => {
-  return (
-    <div
-      className="flex min-h-screen items-center justify-center flex-col p-4"
-      data-testid="error-component"
-    >
-      <div className="flex items-center z-10">
-        <div className="flex flex-col ml-4 items-center justify-center p-4">
-          <span className="text-6xl md:text-8xl font-bold leading-none mb-4">
-            Error
-          </span>
-          <span className="text-2xl font-bold mb-2">Oops!</span>
-        </div>
-      </div>
-
-      <p className="text-lg text-muted-foreground mb-4 text-center z-10">
-        Something went wrong. Please try again.
-      </p>
-      <Link to="/">
-        <Button>Go Home</Button>
-      </Link>
-    </div>
-  )
-}
+const ErrorComponent = () => (
+  <AuthLayout>
+    <Card data-testid="error-component">
+      <CardHeader>
+        <CardTitle>
+          <h1 className="workspace-title">页面暂时无法加载</h1>
+        </CardTitle>
+        <CardDescription>请稍后重试，或返回工作台重新进入。</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Button asChild>
+          <Link to="/">返回工作台</Link>
+        </Button>
+      </CardContent>
+    </Card>
+  </AuthLayout>
+)
 
 export default ErrorComponent

@@ -80,7 +80,7 @@ export function StrategyStructureExample({
             </div>
           </>
         )}
-        <p>
+        <p className="wrap-anywhere">
           {budget && currency
             ? `${currency} ${normalizeDecimal(budget)} / Campaign / 天`
             : "填写 Campaign 日预算和币种后显示金额。"}

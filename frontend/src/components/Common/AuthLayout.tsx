@@ -2,7 +2,7 @@ import { WorkspaceBrand } from "./WorkspaceBrand"
 
 export function AuthLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex min-h-svh flex-col">
+    <div className="flex min-h-svh flex-col bg-muted">
       <header className="border-b bg-card px-6 py-5 md:px-10">
         <WorkspaceBrand />
       </header>

@@ -50,126 +50,128 @@ export function WorkspaceEmpty({
           </Button>
         )}
       </div>
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            {mismatch
-              ? "切换 BC 上下文"
-              : tenantId
-                ? "连接 TikTok BC"
-                : "接入工作空间"}
-          </CardTitle>
-          <CardDescription>
-            {mismatch
-              ? "资源保留在原租户与 BC，不会因切换上下文而改变。"
-              : tenantId
-                ? "为当前租户连接 TikTok BC 后，即可开始广告搭建。"
-                : "完成租户接入后，即可使用投放工具。"}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Empty className="min-h-72">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <Building2 />
-              </EmptyMedia>
-              <EmptyTitle>
-                {mismatch
-                  ? "请选择资源所属 BC"
-                  : tenantId
-                    ? "尚未连接 TikTok BC"
-                    : "尚未接入租户"}
-              </EmptyTitle>
-              <EmptyDescription>
-                {mismatch
-                  ? "当前选择的 BC 与资源所属范围不一致，请切换后继续查看。"
-                  : tenantId
-                    ? canConnect
-                      ? "请前往当前租户的账户与授权页面完成 TikTok 授权，再通过顶栏选择 BC。"
-                      : "请联系租户管理员完成 TikTok 授权。你可以在账户与授权页面查看连接情况。"
-                    : "请联系平台管理员开通租户并分配成员权限。接入后可连接 TikTok BC、配置版权方并开始投放。"}
-              </EmptyDescription>
-            </EmptyHeader>
-            <EmptyContent>
-              {mismatch ? (
-                resourceBcId ? (
+      <div className="grid min-w-0 items-start gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(18rem,1fr)]">
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              {mismatch
+                ? "切换 BC 上下文"
+                : tenantId
+                  ? "连接 TikTok BC"
+                  : "接入工作空间"}
+            </CardTitle>
+            <CardDescription>
+              {mismatch
+                ? "资源保留在原租户与 BC，不会因切换上下文而改变。"
+                : tenantId
+                  ? "为当前租户连接 TikTok BC 后，即可开始广告搭建。"
+                  : "完成租户接入后，即可使用投放工具。"}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Empty className="items-start border-0 p-0 text-left md:p-0">
+              <EmptyHeader className="max-w-xl items-start text-left">
+                <EmptyMedia variant="icon">
+                  <Building2 />
+                </EmptyMedia>
+                <EmptyTitle>
+                  {mismatch
+                    ? "请选择资源所属 BC"
+                    : tenantId
+                      ? "尚未连接 TikTok BC"
+                      : "尚未接入租户"}
+                </EmptyTitle>
+                <EmptyDescription>
+                  {mismatch
+                    ? "当前选择的 BC 与资源所属范围不一致，请切换后继续查看。"
+                    : tenantId
+                      ? canConnect
+                        ? "请前往当前租户的账户与授权页面完成 TikTok 授权，再通过顶栏选择 BC。"
+                        : "请联系租户管理员完成 TikTok 授权。你可以在账户与授权页面查看连接情况。"
+                      : "请联系平台管理员开通租户并分配成员权限。接入后可连接 TikTok BC、配置版权方并开始投放。"}
+                </EmptyDescription>
+              </EmptyHeader>
+              <EmptyContent className="items-start">
+                {mismatch ? (
+                  resourceBcId ? (
+                    <Button asChild>
+                      <Link
+                        to="."
+                        search={(previous) => ({
+                          ...previous,
+                          bc_id: resourceBcId,
+                        })}
+                      >
+                        切换到资源所属 BC
+                        <ArrowRight data-icon="inline-end" />
+                      </Link>
+                    </Button>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      请通过顶栏选择资源所属 BC。
+                    </p>
+                  )
+                ) : tenantId ? (
                   <Button asChild>
                     <Link
-                      to="."
-                      search={(previous) => ({
-                        ...previous,
-                        bc_id: resourceBcId,
-                      })}
+                      to="/tenants/$tenantId/accounts"
+                      params={{ tenantId }}
+                      search={{ tab: "connections" }}
                     >
-                      切换到资源所属 BC
+                      查看账户与授权
+                      <ArrowRight data-icon="inline-end" />
+                    </Link>
+                  </Button>
+                ) : user?.is_superuser ? (
+                  <Button asChild>
+                    <Link to="/platform/tenants">
+                      进入平台管理
                       <ArrowRight data-icon="inline-end" />
                     </Link>
                   </Button>
                 ) : (
                   <p className="text-sm text-muted-foreground">
-                    请通过顶栏选择资源所属 BC。
+                    请联系平台管理员完成接入
                   </p>
-                )
-              ) : tenantId ? (
-                <Button asChild>
-                  <Link
-                    to="/tenants/$tenantId/accounts"
-                    params={{ tenantId }}
-                    search={{ tab: "connections" }}
-                  >
-                    查看账户与授权
-                    <ArrowRight data-icon="inline-end" />
-                  </Link>
-                </Button>
-              ) : user?.is_superuser ? (
-                <Button asChild>
-                  <Link to="/platform/tenants">
-                    进入平台管理
-                    <ArrowRight data-icon="inline-end" />
-                  </Link>
-                </Button>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  请联系平台管理员完成接入
-                </p>
-              )}
-            </EmptyContent>
-          </Empty>
-        </CardContent>
-      </Card>
-      {tenantId && (
-        <Card>
-          <CardHeader>
-            <CardTitle>无需连接 BC 即可使用</CardTitle>
-            <CardDescription>
-              投放策略与版权方连接属于当前租户。可用操作由你的租户角色决定。
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-wrap gap-3">
-            <Button asChild variant="outline">
-              <Link to="/tenants/$tenantId/strategies" params={{ tenantId }}>
-                投放策略
-              </Link>
-            </Button>
-            <Button asChild variant="outline">
-              <Link
-                to="/tenants/$tenantId/providers"
-                params={{ tenantId }}
-                search={{ tab: "connections" }}
-              >
-                版权方连接
-              </Link>
-            </Button>
-            {canConnect && (
-              <Button asChild variant="outline">
-                <Link to="/tenants/$tenantId/members" params={{ tenantId }}>
-                  成员管理
-                </Link>
-              </Button>
-            )}
+                )}
+              </EmptyContent>
+            </Empty>
           </CardContent>
         </Card>
-      )}
+        {tenantId && (
+          <Card>
+            <CardHeader>
+              <CardTitle>无需连接 BC 即可使用</CardTitle>
+              <CardDescription>
+                投放策略与版权方连接属于当前租户。可用操作由你的租户角色决定。
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-3">
+              <Button asChild variant="outline">
+                <Link to="/tenants/$tenantId/strategies" params={{ tenantId }}>
+                  投放策略
+                </Link>
+              </Button>
+              <Button asChild variant="outline">
+                <Link
+                  to="/tenants/$tenantId/providers"
+                  params={{ tenantId }}
+                  search={{ tab: "connections" }}
+                >
+                  版权方连接
+                </Link>
+              </Button>
+              {canConnect && (
+                <Button asChild variant="outline">
+                  <Link to="/tenants/$tenantId/members" params={{ tenantId }}>
+                    成员管理
+                  </Link>
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+        )}
+      </div>
       <Alert>
         <Info />
         <AlertTitle>

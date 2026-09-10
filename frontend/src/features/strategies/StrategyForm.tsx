@@ -390,38 +390,40 @@ export function StrategyForm({
   )
   return (
     <>
-      <div className="flex flex-col gap-2">
-        <WorkspacePageTitle>
-          {strategyId
-            ? readonly
-              ? "策略版本详情"
-              : "编辑投放策略"
-            : "新建投放策略"}
-        </WorkspacePageTitle>
-        <p className="text-sm text-muted-foreground">
-          当前租户策略 · {strategy?.name || "新策略"}{" "}
-          {baseNumber > 0 && (
-            <Badge variant="outline">
-              {copy ? "复制来源" : "来源版本"} v{baseNumber}
-            </Badge>
-          )}
-        </p>
+      <div className="flex w-full max-w-7xl flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-1">
+          <WorkspacePageTitle>
+            {strategyId
+              ? readonly
+                ? "策略版本详情"
+                : "编辑投放策略"
+              : "新建投放策略"}
+          </WorkspacePageTitle>
+          <p className="text-sm text-muted-foreground">
+            当前租户策略 · {strategy?.name || "新策略"}{" "}
+            {baseNumber > 0 && (
+              <Badge variant="outline">
+                {copy ? "复制来源" : "来源版本"} v{baseNumber}
+              </Badge>
+            )}
+          </p>
+        </div>
+        {strategyId && !readonly && (
+          <Button
+            className="self-start"
+            variant="outline"
+            size="sm"
+            disabled={pending || !!unknownRequest}
+            onClick={() =>
+              void client.invalidateQueries({
+                queryKey: strategyQuery(tenantId, strategyId).queryKey,
+              })
+            }
+          >
+            检查最新版本
+          </Button>
+        )}
       </div>
-      {strategyId && !readonly && (
-        <Button
-          className="self-start"
-          variant="outline"
-          size="sm"
-          disabled={pending || !!unknownRequest}
-          onClick={() =>
-            void client.invalidateQueries({
-              queryKey: strategyQuery(tenantId, strategyId).queryKey,
-            })
-          }
-        >
-          检查最新版本
-        </Button>
-      )}
       {!copy && strategy?.active === false && (
         <Alert>
           <AlertTitle>策略已停用</AlertTitle>

@@ -16,7 +16,9 @@ function RecoverPassword() {
     <AuthLayout>
       <Card>
         <CardHeader>
-          <CardTitle>联系管理员重置密码</CardTitle>
+          <CardTitle>
+            <h1 className="workspace-title">联系管理员重置密码</h1>
+          </CardTitle>
           <CardDescription>
             请联系平台管理员核实账号身份并设置新密码。本系统不提供邮件找回。
           </CardDescription>
