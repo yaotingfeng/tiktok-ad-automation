@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react"
 import { type IngestFilePublic, MaterialIngestService } from "@/client"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Progress } from "@/components/ui/progress"
 import {
@@ -38,7 +39,7 @@ function TransferCell({
   const progress = useFileProgress(manager, file.client_index)
   const received = Math.max(file.received_bytes, progress?.receivedBytes ?? 0)
   return (
-    <div className="flex min-w-32 flex-col gap-1">
+    <div className="flex min-w-40 max-w-64 flex-col gap-1 whitespace-normal">
       <Progress
         value={Math.min(100, (100 * received) / file.size)}
         aria-label={`${file.file_name} 接收进度`}
@@ -135,7 +136,9 @@ export function UploadQueue({
     {
       header: "原文件",
       cell: ({ row }) => (
-        <span className="break-all">{row.original.file_name}</span>
+        <span className="block min-w-52 max-w-80 wrap-anywhere whitespace-normal">
+          {row.original.file_name}
+        </span>
       ),
     },
     {
@@ -356,41 +359,49 @@ export function UploadQueue({
       <p className="text-sm text-muted-foreground">
         刷新后浏览器不能继续读取原文件，未传完的文件需重新选择并核验。暂存空间不足时保留排队信息，空间释放后继续。
       </p>
-      <Select
-        value={status}
-        onValueChange={(value) => {
-          setStatus(value)
-          paging.reset()
-        }}
-      >
-        <SelectTrigger aria-label="筛选导入状态" className="w-56">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectGroup>
-            <SelectItem value="all">全部文件</SelectItem>
-            <SelectItem value="registered">待接收</SelectItem>
-            <SelectItem value="waiting_capacity">等待暂存空间</SelectItem>
-            <SelectItem value="receiving">正在接收</SelectItem>
-            <SelectItem value="failed">失败</SelectItem>
-          </SelectGroup>
-        </SelectContent>
-      </Select>
-      <ServerTable
-        rows={data?.items ?? []}
-        columns={columns}
-        loading={query.isPending && !data}
-        fetching={query.isFetching}
-        error={query.error}
-        retry={() => void query.refetch()}
-        filtered={status !== "all"}
-        emptyTitle="暂无已登记文件"
-      />
-      <Pager
-        paging={paging}
-        nextCursor={data?.next_cursor}
-        busy={query.isFetching}
-      />
+      <Card className="min-w-0">
+        <CardHeader>
+          <Select
+            value={status}
+            onValueChange={(value) => {
+              setStatus(value)
+              paging.reset()
+            }}
+          >
+            <SelectTrigger aria-label="筛选导入状态" className="w-56">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="all">全部文件</SelectItem>
+                <SelectItem value="registered">待接收</SelectItem>
+                <SelectItem value="waiting_capacity">等待暂存空间</SelectItem>
+                <SelectItem value="receiving">正在接收</SelectItem>
+                <SelectItem value="failed">失败</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </CardHeader>
+        <CardContent className="min-w-0">
+          <ServerTable
+            rows={data?.items ?? []}
+            columns={columns}
+            loading={query.isPending && !data}
+            fetching={query.isFetching}
+            error={query.error}
+            retry={() => void query.refetch()}
+            filtered={status !== "all"}
+            emptyTitle="暂无已登记文件"
+          />
+        </CardContent>
+        <CardFooter className="block">
+          <Pager
+            paging={paging}
+            nextCursor={data?.next_cursor}
+            busy={query.isFetching}
+          />
+        </CardFooter>
+      </Card>
     </div>
   )
 }

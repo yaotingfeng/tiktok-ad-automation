@@ -47,7 +47,9 @@ export function bytes(value: number) {
 export function CopyValue({ value, label }: { value: string; label?: string }) {
   return (
     <span className="flex min-w-0 items-center gap-1">
-      <span className="min-w-0 break-all font-mono text-xs">{value}</span>
+      <span className="min-w-0 wrap-anywhere whitespace-normal font-mono text-xs">
+        {value}
+      </span>
       <Button
         size="icon"
         variant="ghost"

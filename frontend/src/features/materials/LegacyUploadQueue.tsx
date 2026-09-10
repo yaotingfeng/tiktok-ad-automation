@@ -4,6 +4,7 @@ import { useEffect } from "react"
 import { MaterialsService, type UploadFileResult } from "@/client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import {
   isForbidden,
   ServerTable,
@@ -48,7 +49,9 @@ export function LegacyUploadQueue({
     {
       header: "原文件",
       cell: ({ row }) => (
-        <span className="break-all">{row.original.file_name}</span>
+        <span className="block min-w-52 max-w-80 wrap-anywhere whitespace-normal">
+          {row.original.file_name}
+        </span>
       ),
     },
     { header: "文件大小", cell: ({ row }) => bytes(row.original.byte_size) },
@@ -83,29 +86,33 @@ export function LegacyUploadQueue({
     },
   ]
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        {data && <Stage status={data.status} />}
-        <Button variant="outline" onClick={onHistory}>
-          返回导入历史
-        </Button>
-      </div>
-      <Alert>
-        <AlertTitle>历史批次仅供查看</AlertTitle>
-        <AlertDescription>
-          保留原批次状态和实际来源。新文件请使用批量上传建立导入会话。
-        </AlertDescription>
-      </Alert>
-      <ServerTable
-        rows={data?.files || []}
-        columns={columns}
-        loading={query.isPending && !data}
-        fetching={query.isFetching}
-        error={query.error}
-        retry={() => void query.refetch()}
-        filtered={false}
-        emptyTitle="此历史批次没有文件"
-      />
-    </div>
+    <Card className="min-w-0">
+      <CardHeader className="gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {data && <Stage status={data.status} />}
+          <Button variant="outline" onClick={onHistory}>
+            返回导入历史
+          </Button>
+        </div>
+        <Alert>
+          <AlertTitle>历史批次仅供查看</AlertTitle>
+          <AlertDescription>
+            保留原批次状态和实际来源。新文件请使用批量上传建立导入会话。
+          </AlertDescription>
+        </Alert>
+      </CardHeader>
+      <CardContent className="min-w-0">
+        <ServerTable
+          rows={data?.files || []}
+          columns={columns}
+          loading={query.isPending && !data}
+          fetching={query.isFetching}
+          error={query.error}
+          retry={() => void query.refetch()}
+          filtered={false}
+          emptyTitle="此历史批次没有文件"
+        />
+      </CardContent>
+    </Card>
   )
 }

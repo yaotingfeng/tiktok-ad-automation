@@ -40,14 +40,14 @@ export function UploadPanel({
       <FieldDescription>{namingHint}</FieldDescription>
       <section
         aria-label="本地视频拖放区"
-        className="rounded-md border border-dashed p-6"
+        className="flex min-w-0 flex-col items-start gap-3 rounded-lg border border-dashed p-4 lg:p-6"
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => {
           e.preventDefault()
           if (!disabled) onFiles(Array.from(e.dataTransfer.files))
         }}
       >
-        <p className="mb-3 text-sm text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           一次最多选择 20000 个视频，每个文件最多 256
           MiB。刷新后未传完的文件需要重新选择。
         </p>

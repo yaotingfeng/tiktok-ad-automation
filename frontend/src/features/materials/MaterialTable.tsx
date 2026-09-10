@@ -3,6 +3,7 @@ import type { ColumnDef } from "@tanstack/react-table"
 import { useEffect, useState } from "react"
 import { type MaterialPublic, MaterialsService } from "@/client"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card"
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { displayTime, FilterSelect } from "@/features/accounts/presentation"
@@ -73,8 +74,10 @@ export function MaterialTable({
   const columns: ColumnDef<MaterialPublic>[] = [
     {
       header: "素材文件",
+      id: "file",
+      minSize: 280,
       cell: ({ row: { original: r } }) => (
-        <div className="min-w-52 max-w-72">
+        <div className="min-w-0">
           <Button
             className="h-auto max-w-full justify-start p-0"
             variant="link"
@@ -90,8 +93,9 @@ export function MaterialTable({
     },
     {
       header: "文件信息",
+      size: 200,
       cell: ({ row: { original: r } }) => (
-        <div>
+        <div className="wrap-anywhere whitespace-normal">
           {bytes(r.byte_size)}
           <p className="text-xs text-muted-foreground">
             {r.duration != null && r.width != null && r.height != null
@@ -103,10 +107,12 @@ export function MaterialTable({
     },
     {
       header: "平台入库状态",
+      size: 248,
       cell: ({ row: { original: r } }) => <Stage status={r.status} />,
     },
     {
       header: "上传账户（最近一次）",
+      size: 240,
       cell: ({ row: { original: r } }) =>
         r.latest_advertiser_id ? (
           <CopyValue value={r.latest_advertiser_id} />
@@ -118,6 +124,7 @@ export function MaterialTable({
     },
     {
       header: "可用账户数",
+      size: 160,
       cell: ({ row: { original: r } }) => (
         <Button
           variant="ghost"
@@ -130,10 +137,12 @@ export function MaterialTable({
     },
     {
       header: "文件登记时间",
+      size: 200,
       cell: ({ row: { original: r } }) => displayTime(r.created_at),
     },
     {
       header: "操作",
+      size: 208,
       cell: ({ row: { original: r } }) => (
         <Button
           variant="ghost"
@@ -155,89 +164,96 @@ export function MaterialTable({
     paging.reset()
   }
   return (
-    <div className="flex min-w-0 flex-col gap-4">
-      <form
-        className="flex flex-wrap items-end gap-3"
-        onSubmit={(e) => {
-          e.preventDefault()
-          if (from && to && from > to) return
-          setSearch(input)
-          setDates({ from, to })
-          paging.reset()
-        }}
-      >
-        <Field className="w-full sm:w-80">
-          <FieldLabel htmlFor="material-search">素材文件名</FieldLabel>
-          <Input
-            id="material-search"
-            placeholder="搜索完整或部分文件名"
-            maxLength={1000}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-          />
-        </Field>
-        <FilterSelect
-          label="素材状态"
-          value={status}
-          choices={Object.fromEntries(
-            Object.entries(stages).filter(([key]) =>
-              [
-                "receiving",
-                "stored",
-                "uploading",
-                "verifying",
-                "available",
-                "blocked",
-                "result_unknown",
-              ].includes(key),
-            ),
-          )}
-          onChange={(v) => {
-            setStatus(v)
+    <Card className="min-w-0">
+      <CardHeader>
+        <form
+          className="flex flex-wrap items-end gap-3"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (from && to && from > to) return
+            setSearch(input)
+            setDates({ from, to })
             paging.reset()
           }}
+        >
+          <Field className="w-full sm:w-80">
+            <FieldLabel htmlFor="material-search">素材文件名</FieldLabel>
+            <Input
+              id="material-search"
+              placeholder="搜索完整或部分文件名"
+              maxLength={1000}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+            />
+          </Field>
+          <FilterSelect
+            label="素材状态"
+            value={status}
+            choices={Object.fromEntries(
+              Object.entries(stages).filter(([key]) =>
+                [
+                  "receiving",
+                  "stored",
+                  "uploading",
+                  "verifying",
+                  "available",
+                  "blocked",
+                  "result_unknown",
+                ].includes(key),
+              ),
+            )}
+            onChange={(v) => {
+              setStatus(v)
+              paging.reset()
+            }}
+          />
+          <Field className="w-40">
+            <FieldLabel htmlFor="material-from">开始日期</FieldLabel>
+            <Input
+              id="material-from"
+              type="date"
+              value={from}
+              onChange={(e) => setFrom(e.target.value)}
+            />
+          </Field>
+          <Field className="w-40">
+            <FieldLabel htmlFor="material-to">结束日期</FieldLabel>
+            <Input
+              id="material-to"
+              type="date"
+              min={from || undefined}
+              value={to}
+              onChange={(e) => setTo(e.target.value)}
+            />
+          </Field>
+          <Button variant="outline" type="submit">
+            搜索
+          </Button>
+          <Button variant="ghost" type="button" onClick={reset}>
+            清空筛选
+          </Button>
+        </form>
+      </CardHeader>
+      <CardContent className="min-w-0">
+        <ServerTable
+          fixedLayout={{ fillColumn: "file" }}
+          rows={data?.items || []}
+          columns={columns}
+          loading={query.isPending && !data}
+          fetching={query.isFetching}
+          error={query.error}
+          retry={() => void query.refetch()}
+          filtered={!!search || status !== "all" || !!dates.from || !!dates.to}
+          emptyTitle="还没有上传素材"
         />
-        <Field className="w-40">
-          <FieldLabel htmlFor="material-from">开始日期</FieldLabel>
-          <Input
-            id="material-from"
-            type="date"
-            value={from}
-            onChange={(e) => setFrom(e.target.value)}
-          />
-        </Field>
-        <Field className="w-40">
-          <FieldLabel htmlFor="material-to">结束日期</FieldLabel>
-          <Input
-            id="material-to"
-            type="date"
-            min={from || undefined}
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-          />
-        </Field>
-        <Button variant="outline" type="submit">
-          搜索
-        </Button>
-        <Button variant="ghost" type="button" onClick={reset}>
-          清空筛选
-        </Button>
-      </form>
-      <ServerTable
-        rows={data?.items || []}
-        columns={columns}
-        loading={query.isPending && !data}
-        fetching={query.isFetching}
-        error={query.error}
-        retry={() => void query.refetch()}
-        filtered={!!search || status !== "all" || !!dates.from || !!dates.to}
-        emptyTitle="还没有上传素材"
-      />
-      <Pager
-        paging={paging}
-        nextCursor={data?.next_cursor}
-        busy={query.isFetching}
-      />
-    </div>
+      </CardContent>
+      <CardFooter className="block">
+        <Pager
+          paging={paging}
+          nextCursor={data?.next_cursor}
+          busy={query.isFetching}
+        />
+      </CardFooter>
+    </Card>
   )
 }

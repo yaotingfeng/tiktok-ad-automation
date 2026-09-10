@@ -220,7 +220,7 @@ export function AssetDetails({
       dirty={false}
       onClose={onClose}
     >
-      <div className="flex flex-col gap-5">
+      <div className="flex min-w-0 flex-col gap-6 py-2">
         {detail.isPending ? (
           <Skeleton className="h-24" />
         ) : detail.error ? (
@@ -230,7 +230,10 @@ export function AssetDetails({
           />
         ) : (
           detail.data && (
-            <section aria-label="文件信息" className="flex flex-col gap-2">
+            <section
+              aria-label="文件信息"
+              className="flex min-w-0 flex-col gap-3"
+            >
               <h2 className="font-semibold">原始文件</h2>
               <CopyValue label="文件名" value={detail.data.file_name} />
               <p className="text-sm">
@@ -291,7 +294,7 @@ export function AssetDetails({
                   src={preview.url}
                   controls
                   preload="metadata"
-                  className="max-h-80 w-full"
+                  className="max-h-80 w-full rounded-lg"
                   onError={() => {
                     setPreviewError(true)
                     setPreview(null)
@@ -303,8 +306,11 @@ export function AssetDetails({
             </section>
           )
         )}
-        <section aria-label="来源上传记录">
-          <h2 className="mb-2 font-semibold">来源上传记录</h2>
+        <section
+          aria-label="来源上传记录"
+          className="flex min-w-0 flex-col gap-4"
+        >
+          <h2 className="font-semibold">来源上传记录</h2>
           <ServerTable
             rows={h?.items || []}
             columns={hc}
@@ -321,8 +327,8 @@ export function AssetDetails({
             busy={attempts.isFetching}
           />
         </section>
-        <section aria-label="账户资产">
-          <h2 className="mb-2 font-semibold">账户资产</h2>
+        <section aria-label="账户资产" className="flex min-w-0 flex-col gap-4">
+          <h2 className="font-semibold">账户资产</h2>
           <ServerTable
             rows={a?.items || []}
             columns={ac}

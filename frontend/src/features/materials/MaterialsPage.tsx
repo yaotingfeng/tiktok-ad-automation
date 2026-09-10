@@ -116,8 +116,8 @@ function MaterialWorkspace({
   }, [started, go])
   return (
     <>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex flex-col gap-2">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-1">
           <WorkspacePageTitle>素材库</WorkspacePageTitle>
           <p className="text-sm text-muted-foreground">
             视频临时中转，平台确认入库后清理原件；保留实际上传账户与可用素材记录。
@@ -207,7 +207,11 @@ function MaterialWorkspace({
             <TabsTrigger value="uploads">上传队列</TabsTrigger>
           </TabsList>
         </Tabs>
-        <section aria-label="素材目录" hidden={tab !== "library"}>
+        <section
+          aria-label="素材目录"
+          className="min-w-0"
+          hidden={tab !== "library"}
+        >
           <MaterialTable
             tenantId={tenantId}
             bcId={bcId}
@@ -216,7 +220,11 @@ function MaterialWorkspace({
             enabled={tab === "library"}
           />
         </section>
-        <section aria-label="上传批次与队列" hidden={tab !== "uploads"}>
+        <section
+          aria-label="上传批次与队列"
+          className="min-w-0"
+          hidden={tab !== "uploads"}
+        >
           {search.batch_id ? (
             <UploadQueue
               key={search.batch_id}

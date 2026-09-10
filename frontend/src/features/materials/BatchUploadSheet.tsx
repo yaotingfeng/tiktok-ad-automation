@@ -72,7 +72,7 @@ export function BatchUploadSheet({
         </Button>
       }
     >
-      <FieldGroup>
+      <FieldGroup className="min-w-0 py-2">
         <UploadPanel
           disabled={locked || manager.forbidden}
           onFiles={(incoming) => {
@@ -108,14 +108,14 @@ export function BatchUploadSheet({
             </AlertDescription>
           </Alert>
         )}
-        <ul className="flex flex-col gap-2">
+        <ul className="flex min-w-0 flex-col divide-y overflow-hidden rounded-lg border empty:hidden">
           {visible.map(({ index, file, problem }) => (
             <li
               key={index}
-              className="flex items-center justify-between gap-3 rounded-md border p-3"
+              className="flex min-w-0 items-center justify-between gap-3 p-3"
             >
               <div className="min-w-0">
-                <p className="break-all text-sm">{file.name}</p>
+                <p className="wrap-anywhere text-sm">{file.name}</p>
                 <p className="text-xs text-muted-foreground">
                   {bytes(file.size)} · {problem || "可以上传"}
                 </p>
@@ -141,7 +141,7 @@ export function BatchUploadSheet({
         {files.size > FILE_WINDOW && (
           <nav
             aria-label="待选文件分页"
-            className="flex items-center justify-between gap-2"
+            className="flex flex-wrap items-center justify-between gap-2"
           >
             <Button
               variant="outline"
