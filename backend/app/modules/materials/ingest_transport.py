@@ -273,7 +273,6 @@ def resume_file(
     identity: IngestIdentity,
     s3: Any = None,
 ) -> IngestFilePublic:
-    service.require_ingest_storage()
     with Session(database_engine) as db, db.begin():
         file, obj, row = _locked(
             db,
@@ -283,6 +282,15 @@ def resume_file(
             identity=identity,
             check_revision=False,
             allow_unknown_upload=True,
+        )
+        recovering = obj.error_code in {
+            "multipart_creating",
+            "multipart_create_unknown",
+        }
+        service.require_ingest_storage(
+            reconciliation=recovering
+            or bool(obj.s3_upload_id)
+            or obj.received_at is not None
         )
         if identity.operation_revision > obj.revision:
             raise DomainError("version_conflict", "素材操作版本无效")
@@ -296,10 +304,6 @@ def resume_file(
             return service.file_public(row, file, obj)
         if obj.s3_upload_id or _busy(obj):
             return service.file_public(row, file, obj)
-        recovering = obj.error_code in {
-            "multipart_creating",
-            "multipart_create_unknown",
-        }
         if not reserve_object(
             db, context=context, object_id=obj.id, byte_size=obj.expected_bytes
         ):
@@ -665,7 +669,6 @@ def complete_file(
     identity: IngestIdentity,
     s3: Any = None,
 ) -> IngestFilePublic:
-    service.require_ingest_storage()
     with Session(database_engine) as db, db.begin():
         file, obj, row = _locked(
             db,
@@ -674,6 +677,13 @@ def complete_file(
             material_id=material_id,
             identity=identity,
             check_revision=False,
+        )
+        recovering = obj.error_code in {
+            "multipart_completing",
+            "multipart_complete_unknown",
+        }
+        service.require_ingest_storage(
+            reconciliation=recovering or obj.received_at is not None
         )
         if obj.received_at is not None:
             return service.file_public(row, file, obj)
@@ -687,10 +697,6 @@ def complete_file(
             raise DomainError("version_conflict", "素材操作版本无效")
         if identity.operation_revision != obj.revision or _busy(obj):
             return service.file_public(row, file, obj)
-        recovering = obj.error_code in {
-            "multipart_completing",
-            "multipart_complete_unknown",
-        }
         nonce = _claim(
             obj, "multipart_complete_unknown" if recovering else "multipart_collecting"
         )

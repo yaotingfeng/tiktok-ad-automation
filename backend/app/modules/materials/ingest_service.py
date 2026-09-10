@@ -44,8 +44,8 @@ from app.modules.materials.storage import part_layout
 from app.modules.materials.uploads import public_error, require_bc
 
 
-def require_ingest_storage() -> None:
-    if not getattr(settings, "MATERIAL_INGEST_ENABLED", False):
+def require_ingest_storage(*, reconciliation: bool = False) -> None:
+    if not reconciliation and not getattr(settings, "MATERIAL_INGEST_ENABLED", False):
         raise DomainError("ingest_disabled", "批量导入尚未启用")
     if settings.OBJECT_STORAGE_PROVIDER != "r2":
         raise DomainError("object_storage_unconfigured", "批量导入需要私有 R2 存储")

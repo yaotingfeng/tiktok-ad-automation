@@ -99,3 +99,55 @@ def test_repair_keeps_unpublished_current_dispatch_backoff(api, remote):
         task = db.get(PendingDispatch, dispatch_id)
         assert task.attempts == 5
         assert task.available_at == due
+
+
+def test_disabled_ingest_allows_only_existing_sent_transport_reconciliation(
+    api, remote, monkeypatch
+):
+    from app.modules.materials import ingest_service
+
+    client, _ = api
+    _, create_url, initial = prepare_file(api)
+    remote.create_unknown = True
+    assert (
+        client.post(create_url + "/resume", json=identity(initial)).status_code == 409
+    )
+    remote.create_unknown = False
+    _, complete_url, receiving = prepare_file(api)
+    receiving = client.post(complete_url + "/resume", json=identity(receiving)).json()
+    receive(remote, receiving)
+    remote.complete_unknown = True
+    assert (
+        client.post(complete_url + "/complete", json=identity(receiving)).status_code
+        == 409
+    )
+    remote.complete_unknown = False
+    _, untouched_url, untouched = prepare_file(api)
+    _, unsent_url, unsent = prepare_file(api)
+    unsent = client.post(unsent_url + "/resume", json=identity(unsent)).json()
+    receive(remote, unsent)
+    monkeypatch.setattr(ingest_service.settings, "MATERIAL_INGEST_ENABLED", False)
+    before = len(remote.calls)
+    known = client.get(create_url).json()
+    response = client.post(create_url + "/resume", json=identity(known))
+    assert response.status_code == 200, response.text
+    known = client.get(complete_url).json()
+    response = client.post(complete_url + "/complete", json=identity(known))
+    assert response.status_code == 200, response.text
+    assert response.json()["temporary_storage_status"] == "stored"
+    assert [name for name, _ in remote.calls[before:]] == ["list_uploads", "head"]
+    before = len(remote.calls)
+    assert (
+        client.post(untouched_url + "/resume", json=identity(untouched)).status_code
+        == 503
+    )
+    assert (
+        client.post(unsent_url + "/complete", json=identity(unsent)).status_code == 503
+    )
+    assert (
+        client.post(
+            unsent_url + "/part-urls", json={**identity(unsent), "part_numbers": [1]}
+        ).status_code
+        == 503
+    )
+    assert len(remote.calls) == before
