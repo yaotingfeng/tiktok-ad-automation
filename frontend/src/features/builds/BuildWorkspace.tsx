@@ -1,6 +1,7 @@
 import { canManage } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
+import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import { BuildInputPage } from "./BuildInputPage"
 export function BuildWorkspace() {
   const { tenantId, scope, bc, bcPending } = useTenantScope()
@@ -18,13 +19,11 @@ export function BuildWorkspace() {
       />
     )
   return (
-    <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">广告搭建</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          批量输入剧目和账户，自动准备推广链接与素材。
-        </p>
-      </div>
+    <div className="flex min-w-0 flex-col gap-6">
+      <WorkspacePageTitle>广告搭建</WorkspacePageTitle>
+      <p className="text-sm text-muted-foreground">
+        批量输入剧目和账户，自动准备推广链接与素材。
+      </p>
       <BuildInputPage
         key={`${tenantId}:${scope.bcId}`}
         tenantId={tenantId}

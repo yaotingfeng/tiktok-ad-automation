@@ -24,6 +24,7 @@ import {
 } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
+import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import { buildKey } from "./api"
 import {
   BuildGuard,
@@ -119,15 +120,13 @@ export function BuildPreviewPanel({
       search: { bc_id: bcId },
     })
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">搭建预览</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            草稿 v{current.draft_revision} ·{" "}
-            <BuildStatus value={current.status} />
-          </p>
-        </div>
+    <div className="flex min-w-0 flex-col gap-6">
+      <WorkspacePageTitle>搭建预览</WorkspacePageTitle>
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">
+          草稿 v{current.draft_revision} ·{" "}
+          <BuildStatus value={current.status} />
+        </p>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => void summary.refetch()}>
             刷新预览状态
@@ -195,7 +194,7 @@ export function BuildPreviewPanel({
       )}
       {current.status === "BUILDING" || current.status === "FAILED" ? (
         <Card>
-          <CardContent className="space-y-2 pt-5">
+          <CardContent className="flex min-w-0 flex-col gap-2">
             <p role="status">
               {current.status === "FAILED"
                 ? "尚未生成完整冻结预览，请返回调整并核实原因。"
@@ -389,7 +388,7 @@ export function PreviewUnitTable({
         ).data,
     })
   return (
-    <Card className="gap-0 overflow-hidden">
+    <div className="flex min-w-0 flex-col gap-4">
       <ServerTable
         rows={query.data?.items || []}
         loading={query.isPending}
@@ -461,7 +460,7 @@ export function PreviewUnitTable({
         nextCursor={query.data?.next_cursor}
         busy={query.isFetching}
       />
-    </Card>
+    </div>
   )
 }
 function PreviewExclusions({
@@ -502,7 +501,7 @@ function PreviewExclusions({
         ).data,
     })
   return (
-    <div className="space-y-3">
+    <div className="flex min-w-0 flex-col gap-4">
       <Tabs
         value={kind}
         onValueChange={(v) => {
@@ -515,7 +514,7 @@ function PreviewExclusions({
           <TabsTrigger value="account">账户输入</TabsTrigger>
         </TabsList>
       </Tabs>
-      <Card className="gap-0 overflow-hidden">
+      <div className="flex min-w-0 flex-col gap-4">
         <ServerTable
           rows={query.data?.items || []}
           loading={query.isPending}
@@ -553,7 +552,7 @@ function PreviewExclusions({
           nextCursor={query.data?.next_cursor}
           busy={query.isFetching}
         />
-      </Card>
+      </div>
     </div>
   )
 }
@@ -713,7 +712,7 @@ function PreviewDramaTable({
         ).data,
     })
   return (
-    <Card className="gap-0 overflow-hidden">
+    <div className="flex min-w-0 flex-col gap-4">
       <ServerTable
         rows={query.data?.items || []}
         columns={[
@@ -762,6 +761,6 @@ function PreviewDramaTable({
         nextCursor={query.data?.next_cursor}
         busy={query.isFetching}
       />
-    </Card>
+    </div>
   )
 }

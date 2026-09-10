@@ -11,6 +11,7 @@ import { normalizeDecimal } from "@/features/strategies/validation"
 import { canManage, isForbidden, RequestError } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
+import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import {
   countObjects,
   SubmissionBadge,
@@ -181,7 +182,7 @@ function Detail({
       />
     )
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex min-w-0 flex-col gap-6">
       {query.error && (
         <div className="flex flex-col gap-2">
           <RequestError
@@ -194,16 +195,14 @@ function Detail({
           </p>
         </div>
       )}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">任务 {data.batch_short_id}</h1>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <SubmissionBadge status={data.status} />
-            <span className="text-sm">
-              {data.drama_count} 剧 · {data.account_count} 户 · 另有{" "}
-              {data.excluded_unit_count} 个排除组合
-            </span>
-          </div>
+      <WorkspacePageTitle>任务 {data.batch_short_id}</WorkspacePageTitle>
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <SubmissionBadge status={data.status} />
+          <span className="text-sm">
+            {data.drama_count} 剧 · {data.account_count} 户 · 另有{" "}
+            {data.excluded_unit_count} 个排除组合
+          </span>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={refresh}>

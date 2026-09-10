@@ -14,7 +14,7 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { Field, FieldLabel } from "@/components/ui/field"
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Textarea } from "@/components/ui/textarea"
 import { versionQuery } from "@/features/strategies/queries"
 import { normalizeDecimal } from "@/features/strategies/validation"
@@ -232,7 +232,7 @@ export function BuildInputPage({
     }
   }
   return (
-    <div className="space-y-5">
+    <div className="flex w-full min-w-0 max-w-7xl flex-col gap-6">
       <BuildSteps step={1} />
       <BuildGuard dirty={!leaving && (dirty || busy || !!pending)} />
       {!!error && <BuildError error={error} />}
@@ -263,87 +263,89 @@ export function BuildInputPage({
         </Alert>
       )}
       {!write && <p role="status">当前为只读角色，可以查看已保存草稿。</p>}
-      <Card className="py-4">
-        <CardContent className="grid gap-4 px-4 md:grid-cols-3">
-          <Field>
-            <FieldLabel>版权方连接</FieldLabel>
-            <DirectoryPicker<ProviderConnectionPublic>
-              label="版权方连接"
-              valueLabel={labels.connection || values.connection}
-              disabled={disabled}
-              queryKey={["tenant", tenantId, "builds", "provider-picker"]}
-              load={async (query, cursor, limit, signal) =>
-                (
-                  await ProvidersService.listConnections({
-                    path: { tenant_id: tenantId },
-                    query: { query, cursor, limit, status: "active" },
-                    signal,
-                  })
-                ).data
-              }
-              renderItem={(item) => <span>{item.display_name}</span>}
-              onSelect={(item) => {
-                change({ connection: item.id, application: "" })
-                setLabels((l) => ({
-                  ...l,
-                  connection: item.display_name,
-                  application: "",
-                }))
-              }}
-            />
-          </Field>
-          <Field>
-            <FieldLabel>推广应用</FieldLabel>
-            <ApplicationPicker
-              tenantId={tenantId}
-              connectionId={values.connection}
-              value={labels.application || values.application}
-              disabled={disabled || !values.connection}
-              onSelect={(item) => {
-                change({ application: item.external_id })
-                setLabels((l) => ({ ...l, application: item.name }))
-              }}
-            />
-            <p className="text-xs text-muted-foreground">
-              仅使用当前连接下的可用推广应用。
-            </p>
-          </Field>
-          <Field>
-            <FieldLabel>投放策略</FieldLabel>
-            <DirectoryPicker<StrategyPublic>
-              label="投放策略"
-              valueLabel={labels.version || values.version}
-              disabled={disabled}
-              queryKey={["tenant", tenantId, "builds", "strategy-picker"]}
-              load={async (query, cursor, limit, signal) =>
-                (
-                  await StrategiesService.getStrategies({
-                    path: { tenant_id: tenantId },
-                    query: { query, cursor, limit, active: true },
-                    signal,
-                  })
-                ).data
-              }
-              renderItem={(item) => (
-                <span>
-                  {item.name} · v{item.latest_version}
-                </span>
-              )}
-              onSelect={(item) => {
-                change({ version: item.version_id })
-                setLabels((l) => ({
-                  ...l,
-                  version: `${item.name} · v${item.latest_version}`,
-                }))
-              }}
-            />
-          </Field>
+      <Card className="min-w-0">
+        <CardContent>
+          <FieldGroup className="grid min-w-0 gap-6 md:grid-cols-3">
+            <Field>
+              <FieldLabel>版权方连接</FieldLabel>
+              <DirectoryPicker<ProviderConnectionPublic>
+                label="版权方连接"
+                valueLabel={labels.connection || values.connection}
+                disabled={disabled}
+                queryKey={["tenant", tenantId, "builds", "provider-picker"]}
+                load={async (query, cursor, limit, signal) =>
+                  (
+                    await ProvidersService.listConnections({
+                      path: { tenant_id: tenantId },
+                      query: { query, cursor, limit, status: "active" },
+                      signal,
+                    })
+                  ).data
+                }
+                renderItem={(item) => <span>{item.display_name}</span>}
+                onSelect={(item) => {
+                  change({ connection: item.id, application: "" })
+                  setLabels((l) => ({
+                    ...l,
+                    connection: item.display_name,
+                    application: "",
+                  }))
+                }}
+              />
+            </Field>
+            <Field>
+              <FieldLabel>推广应用</FieldLabel>
+              <ApplicationPicker
+                tenantId={tenantId}
+                connectionId={values.connection}
+                value={labels.application || values.application}
+                disabled={disabled || !values.connection}
+                onSelect={(item) => {
+                  change({ application: item.external_id })
+                  setLabels((l) => ({ ...l, application: item.name }))
+                }}
+              />
+              <p className="text-xs text-muted-foreground">
+                仅使用当前连接下的可用推广应用。
+              </p>
+            </Field>
+            <Field>
+              <FieldLabel>投放策略</FieldLabel>
+              <DirectoryPicker<StrategyPublic>
+                label="投放策略"
+                valueLabel={labels.version || values.version}
+                disabled={disabled}
+                queryKey={["tenant", tenantId, "builds", "strategy-picker"]}
+                load={async (query, cursor, limit, signal) =>
+                  (
+                    await StrategiesService.getStrategies({
+                      path: { tenant_id: tenantId },
+                      query: { query, cursor, limit, active: true },
+                      signal,
+                    })
+                  ).data
+                }
+                renderItem={(item) => (
+                  <span>
+                    {item.name} · v{item.latest_version}
+                  </span>
+                )}
+                onSelect={(item) => {
+                  change({ version: item.version_id })
+                  setLabels((l) => ({
+                    ...l,
+                    version: `${item.name} · v${item.latest_version}`,
+                  }))
+                }}
+              />
+            </Field>
+          </FieldGroup>
         </CardContent>
       </Card>
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid min-w-0 gap-6 md:grid-cols-2">
         {(["drama", "account"] as const).map((kind) => (
-          <Card key={kind} className="py-4">
-            <CardContent className="space-y-3 px-4">
+          <Card key={kind} className="min-w-0">
+            <CardContent className="flex min-w-0 flex-col gap-3">
               <Field>
                 <FieldLabel htmlFor={`build-${kind}`}>
                   {kind === "drama" ? "剧目名称" : "广告账户"}
@@ -372,8 +374,8 @@ export function BuildInputPage({
         <AlertDescription>全部剧目将覆盖同一批全部有效账户</AlertDescription>
       </Alert>
       {version.data && (
-        <Card className="py-4">
-          <CardContent className="px-4 text-sm">
+        <Card className="min-w-0">
+          <CardContent className="text-sm">
             <h2 className="mb-2 font-semibold">
               策略摘要 · v{version.data.number}
             </h2>

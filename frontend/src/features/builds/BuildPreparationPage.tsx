@@ -31,6 +31,7 @@ import {
 } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
+import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import {
   buildKey,
   loadDraftInputs,
@@ -363,8 +364,8 @@ function Preparation({
     )
   if (search.edit) {
     return (
-      <div className="space-y-5">
-        <h1 className="text-2xl font-semibold">编辑搭建输入</h1>
+      <div className="flex min-w-0 flex-col gap-6">
+        <WorkspacePageTitle>编辑搭建输入</WorkspacePageTitle>
         <div className="flex flex-wrap items-center gap-3">
           <p className="text-sm text-muted-foreground">
             服务器草稿 v{current.revision} · 本地输入会保留，保存时检查版本。
@@ -381,7 +382,7 @@ function Preparation({
         )}
         {!restored ? (
           <Card>
-            <CardContent className="space-y-3 pt-5">
+            <CardContent className="flex min-w-0 flex-col gap-3">
               <p role="status">
                 {restoring
                   ? `正在恢复完整原输入，已加载 ${progress} 行…`
@@ -431,14 +432,12 @@ function Preparation({
     )
   }
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">准备与调整</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            草稿 v{current.revision} · <BuildStatus value={current.status} />
-          </p>
-        </div>
+    <div className="flex min-w-0 flex-col gap-6">
+      <WorkspacePageTitle>准备与调整</WorkspacePageTitle>
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">
+          草稿 v{current.revision} · <BuildStatus value={current.status} />
+        </p>
         <Button
           variant="outline"
           onClick={() =>
@@ -510,7 +509,7 @@ function Preparation({
           ],
         ].map(([label, value]) => (
           <Card key={label}>
-            <CardContent className="pt-4">
+            <CardContent>
               <p className="text-xs text-muted-foreground">{label}</p>
               <p className="mt-1 text-xl font-semibold">{value}</p>
             </CardContent>
@@ -664,7 +663,7 @@ function DramaTable({
       refetchInterval: summary.status === "PREPARING" ? 2000 : false,
     })
   return (
-    <Card className="gap-0 overflow-hidden">
+    <div className="flex min-w-0 flex-col gap-4">
       {query.error ? (
         <RequestError error={query.error} retry={() => void query.refetch()} />
       ) : (
@@ -725,7 +724,7 @@ function DramaTable({
         nextCursor={query.data?.next_cursor}
         busy={query.isFetching}
       />
-    </Card>
+    </div>
   )
 }
 function InputTable({
@@ -814,7 +813,7 @@ function InputTable({
     }
   }
   return (
-    <div className="space-y-3">
+    <div className="flex min-w-0 flex-col gap-4">
       <FilterSelect
         label="输入状态"
         value={status}
@@ -826,7 +825,7 @@ function InputTable({
           Object.keys(summary.input_counts[kind] || {}).map((k) => [k, k]),
         )}
       />
-      <Card className="gap-0 overflow-hidden">
+      <div className="flex min-w-0 flex-col gap-4">
         {query.error ? (
           <RequestError error={query.error} />
         ) : (
@@ -892,7 +891,7 @@ function InputTable({
           nextCursor={query.data?.next_cursor}
           busy={query.isFetching}
         />
-      </Card>
+      </div>
       <Dialog
         open={!!candidate}
         onOpenChange={(open) => {

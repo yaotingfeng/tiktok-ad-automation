@@ -27,6 +27,7 @@ import {
 } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
+import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import {
   countObjects,
   SubmissionTable as ServerTable,
@@ -279,14 +280,10 @@ function List({
     [tenantId, bcId],
   )
   return (
-    <div className="flex flex-col gap-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">搭建任务</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            查看创建进度并处理异常
-          </p>
-        </div>
+    <div className="flex min-w-0 flex-col gap-6">
+      <WorkspacePageTitle>搭建任务</WorkspacePageTitle>
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">查看创建进度并处理异常</p>
         {allowed && (
           <Button asChild>
             <Link

@@ -1,6 +1,5 @@
 import type { StepPublic, SubmissionView } from "@/client"
 import { Badge } from "@/components/ui/badge"
-import { Card, CardContent } from "@/components/ui/card"
 import {
   Table,
   TableBody,
@@ -74,9 +73,9 @@ export function PlatformState({ step }: { step?: StepPublic | null }) {
 }
 export function SubmissionProgress({ data }: { data: SubmissionView }) {
   return (
-    <Card className="py-4">
-      <CardContent className="px-4">
-        <h2 className="mb-3 font-semibold">广告创建结果</h2>
+    <section className="flex min-w-0 flex-col gap-4">
+      <h2 className="font-semibold">广告创建结果</h2>
+      <div className="min-w-0 overflow-hidden rounded-lg border">
         <Table>
           <TableHeader>
             <TableRow>
@@ -123,24 +122,23 @@ export function SubmissionProgress({ data }: { data: SubmissionView }) {
             ))}
           </TableBody>
         </Table>
-        <p className="mt-3 text-xs text-muted-foreground">
-          已创建事实与结果差异分别记录；素材、CTA
-          与核查步骤不计入上述广告对象数。
-        </p>
-        <div className="mt-3 flex flex-wrap gap-3 text-xs">
-          {Object.entries(data.stage_counts)
-            .filter(([key]) => /^(MATERIAL|CTA|READBACK):/.test(key))
-            .map(([key, count]) => {
-              const [kind, status] = key.split(":")
-              return (
-                <span key={key}>
-                  {stepKinds[kind]} · {stepStates[status] || status} {count}
-                </span>
-              )
-            })}
-        </div>
-      </CardContent>
-    </Card>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        已创建事实与结果差异分别记录；素材、CTA 与核查步骤不计入上述广告对象数。
+      </p>
+      <div className="flex min-w-0 flex-wrap gap-3 text-xs">
+        {Object.entries(data.stage_counts)
+          .filter(([key]) => /^(MATERIAL|CTA|READBACK):/.test(key))
+          .map(([key, count]) => {
+            const [kind, status] = key.split(":")
+            return (
+              <span key={key}>
+                {stepKinds[kind]} · {stepStates[status] || status} {count}
+              </span>
+            )
+          })}
+      </div>
+    </section>
   )
 }
 export function countObjects(value: {
@@ -159,7 +157,7 @@ export function SubmissionTable<T>(
   props: Parameters<typeof ServerTable<T>>[0],
 ) {
   return (
-    <div className="[&_th:first-child]:sticky [&_th:first-child]:left-0 [&_th:first-child]:bg-muted [&_td:first-child]:sticky [&_td:first-child]:left-0 [&_td:first-child]:min-w-40 [&_td:first-child]:max-w-60 [&_td:first-child]:whitespace-normal [&_td:first-child]:bg-card [&_td:first-child_span]:break-all">
+    <div className="min-w-0 [&_th:first-child]:sticky [&_th:first-child]:left-0 [&_th:first-child]:bg-muted [&_td:first-child]:sticky [&_td:first-child]:left-0 [&_td:first-child]:min-w-40 [&_td:first-child]:max-w-60 [&_td:first-child]:whitespace-normal [&_td:first-child]:bg-card [&_td:first-child_span]:break-all">
       <ServerTable {...props} />
     </div>
   )
