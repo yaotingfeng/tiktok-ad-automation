@@ -30,6 +30,8 @@ ENV PYTHONUNBUFFERED=1
 # 镜像站只替换下载地址，包版本与锁文件摘要保持不变。
 ARG PYPI_INDEX_URL=https://pypi.org/simple
 ARG PYPI_FILES_URL=https://files.pythonhosted.org
+# SDK 和本项目的构建依赖也使用同一索引。
+ENV UV_DEFAULT_INDEX=${PYPI_INDEX_URL}
 # 使用 PyPI 分发的固定 uv 版本，避免构建依赖额外的 GHCR 大文件连接。
 # Ref: https://docs.astral.sh/uv/getting-started/installation/#pypi
 RUN pip install --no-cache-dir --index-url "${PYPI_INDEX_URL}" uv==0.9.26
