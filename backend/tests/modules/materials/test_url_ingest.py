@@ -241,9 +241,22 @@ def test_only_strong_exact_readback_releases_use_and_source_slot(
             == 0
         )
         assert db.get(IngestSession, url_env["session_id"]).ready_count == 1
+        from app.modules.materials.ingest_models import ObjectCleanup
+
+        cleanup = db.exec(
+            select(ObjectCleanup).where(
+                ObjectCleanup.tenant_id == url_env["context"].tenant_id
+            )
+        ).one()
+        assert cleanup.eligibility_evidence["source_receipt_id"] == str(op_id)
+        assert (
+            db.get(PendingDispatch, cleanup.dispatch_id).task_name
+            == "materials.cleanup_original"
+        )
         assert db.get(IngestSession, url_env["session_id"]).ready_bytes == len(CONTENT)
         assert (
-            db.get(TemporaryMaterialObject, url_env["object_id"]).status == "verified"
+            db.get(TemporaryMaterialObject, url_env["object_id"]).status
+            == "cleanup_pending"
         )
         evidence = repr(op.remote_response) + repr(
             db.exec(

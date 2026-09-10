@@ -417,7 +417,9 @@ def _finish(
                 material_id=material_id,
                 milestone="ready",
             )
-            # Task 7 attaches cleanup scheduling here, in the same transaction.
+            from .cleanup import schedule_cleanup
+
+            schedule_cleanup(db, object_id=obj.id, source_receipt_id=operation.id)
         else:
             if (
                 kind == "verify"
@@ -699,12 +701,12 @@ def run_url_source_upload(
             due=operation.claimed_until,
             recovery_claim_id=claim,
         )
-        work = {
+        work: dict[str, Any] = {
             **operation.remote_response,
             "bc_id": material.bc_id,
             "advertiser_id": operation.advertiser_id,
             "connection_id": attempt.connection_id,
-            "md5": obj.video_md5,
+            "md5": obj.video_md5 or "",
             "byte_size": obj.expected_bytes,
         }
     post_attempted = False
