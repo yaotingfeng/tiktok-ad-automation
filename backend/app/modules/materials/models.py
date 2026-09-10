@@ -1,5 +1,5 @@
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -12,10 +12,15 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     event,
+    select,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import object_session
 from sqlmodel import Field, SQLModel
+
+if TYPE_CHECKING:
+    from .ingest_models import TemporaryMaterialObject
 
 # Python str.strip whitespace, expressed with SQL chr() to avoid dependence on
 # database locale and to include nonbreaking and ideographic spaces.
@@ -108,10 +113,41 @@ class MaterialFile(SQLModel, table=True):
     width: int | None = None
     height: int | None = None
     storage_state: str = "receiving"
+    # Null means the legacy upload path; migrated originals have generation 1.
+    current_object_generation: int | None = None
+    digest_verified_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True))
+    )
+    digest_source: str | None = Field(default=None, max_length=64)
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC),
         sa_column=Column(DateTime(timezone=True), nullable=False),
     )
+
+    @property
+    def current_object(self) -> TemporaryMaterialObject | None:
+        from .ingest_models import TemporaryMaterialObject
+
+        db = object_session(self)
+        if db is None or self.current_object_generation is None:
+            return None
+        return db.execute(
+            select(TemporaryMaterialObject)
+            .where(
+                TemporaryMaterialObject.tenant_id == self.tenant_id,
+                TemporaryMaterialObject.bc_id == self.bc_id,
+                TemporaryMaterialObject.material_id == self.id,
+                TemporaryMaterialObject.generation == self.current_object_generation,
+            )
+            .execution_options(populate_existing=True)
+        ).scalar_one_or_none()
+
+    @property
+    def original_available(self) -> bool:
+        if self.current_object_generation is None:
+            return self.storage_state == "stored"
+        original = self.current_object
+        return original is not None and original.original_available
 
 
 @event.listens_for(MaterialFile, "before_insert")
