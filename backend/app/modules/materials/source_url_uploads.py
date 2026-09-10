@@ -805,16 +805,26 @@ def run_url_source_upload(
                                 budget=budget,
                             )
                         )
-                        _receipt(
-                            database_engine,
-                            context=context,
-                            material_id=material_id,
-                            object_id=object_id,
-                            generation=generation,
-                            operation_id=operation_id,
-                            claim=claim,
-                            evidence=evidence,
-                        )
+                        # A transient receipt transaction failure gets one fresh
+                        # persistence attempt before SDK cleanup, never a new POST.
+                        for receipt_attempt in range(2):
+                            try:
+                                _receipt(
+                                    database_engine,
+                                    context=context,
+                                    material_id=material_id,
+                                    object_id=object_id,
+                                    generation=generation,
+                                    operation_id=operation_id,
+                                    claim=claim,
+                                    evidence=evidence,
+                                )
+                                break
+                            except SDK_SCOPE_INTERRUPTS:
+                                raise
+                            except Exception:
+                                if receipt_attempt:
+                                    raise
                     elif work.get("video_id"):
                         evidence = _verified(
                             api.read_video(

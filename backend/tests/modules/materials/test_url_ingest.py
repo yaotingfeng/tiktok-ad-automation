@@ -889,3 +889,76 @@ def test_source_wrapper_rejects_partial_or_boolean_generation(
             payload={"material_id": str(url_env["material_id"]), **extra},
         )
     assert error.value.code == "invalid_asset_task"
+
+
+def test_received_vid_commit_failure_retries_receipt_without_another_post(
+    url_env, redis_client, wire, monkeypatch
+):
+    import urllib3
+    from sqlalchemy import event
+
+    failed, closed_with_receipt = [], []
+    original_clear = urllib3.PoolManager.clear
+
+    def fail_receipt_once(_conn, _cursor, statement, _params, _context, _many):
+        if (
+            "UPDATE material_asset_operation SET" in statement
+            and len(wire[0]) == 1
+            and not failed
+        ):
+            failed.append(True)
+            raise RuntimeError("synthetic receipt transaction failure")
+
+    def clear(pool):
+        if wire[0]:
+            assert (
+                operation(url_env).remote_response.get("video_id")
+                == "actual-source-vid"
+            )
+            closed_with_receipt.append(True)
+        original_clear(pool)
+
+    monkeypatch.setattr(urllib3.PoolManager, "clear", clear)
+    event.listen(engine, "before_cursor_execute", fail_receipt_once)
+    try:
+        wire[1].append(
+            [{"video_id": "actual-source-vid", "material_id": "actual-source-mid"}]
+        )
+        run(url_env, redis_client)
+    finally:
+        event.remove(engine, "before_cursor_execute", fail_receipt_once)
+    assert failed and closed_with_receipt
+    op = operation(url_env)
+    assert op.remote_response["video_id"] == "actual-source-vid"
+    assert op.remote_response["mid"] == "actual-source-mid"
+    assert [call[0] for call in wire[0]] == ["POST"]
+
+
+def test_two_receipt_failures_keep_unknown_intent_and_do_not_repeat_post(
+    url_env, redis_client, wire
+):
+    from sqlalchemy import event
+
+    failures = []
+
+    def reject_receipts(_conn, _cursor, statement, _params, _context, _many):
+        if (
+            "UPDATE material_asset_operation SET" in statement
+            and wire[0]
+            and len(failures) < 2
+        ):
+            failures.append(True)
+            raise RuntimeError(URL)
+
+    event.listen(engine, "before_cursor_execute", reject_receipts)
+    try:
+        wire[1].append([{"video_id": "actual-source-vid"}])
+        run(url_env, redis_client)
+    finally:
+        event.remove(engine, "before_cursor_execute", reject_receipts)
+    assert len(failures) == 2
+    op = operation(url_env)
+    assert op.status == "result_unknown" and op.remote_response["send_armed"] is True
+    assert URL not in repr(op.remote_response)
+    run(url_env, redis_client)
+    assert [call[0] for call in wire[0]] == ["POST"]
