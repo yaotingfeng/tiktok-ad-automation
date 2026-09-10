@@ -249,6 +249,9 @@ test("logout aborts direct PUTs before navigation even when the leave dialog is 
       route.fulfill({ status: 200, headers: { ETag: "late" } }).catch(() => {}),
     ),
   )
+  // Logout can replace the document after requests abort. Inspect storage only
+  // once that navigation has committed; this must not race the old JS context.
+  await page.waitForURL(/\/login(?:\?.*)?$/)
   expect(
     await page.evaluate(() => localStorage.getItem("access_token")),
   ).toBeNull()
