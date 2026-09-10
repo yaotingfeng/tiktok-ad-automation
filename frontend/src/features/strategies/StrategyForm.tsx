@@ -102,7 +102,8 @@ export function StrategyForm({
       copy ? `${strategy?.name || "策略"} 副本` : strategy?.name || "",
     ),
     [budget, setBudget] = useState(initial?.budget || ""),
-    [currency, setCurrency] = useState(initial?.currency || ""),
+    // 新建策略固定使用 USD；已有版本按原币种展示，避免隐式改币种或换汇。
+    [currency] = useState(initial?.currency || "USD"),
     [roas, setRoas] = useState(initial?.target_roas || ""),
     [groupSize, setGroupSize] = useState(
       initial ? String(initial.group_size) : "",
@@ -157,7 +158,6 @@ export function StrategyForm({
     ? !!baseline && configFingerprint(cfg) !== configFingerprint(baseline)
     : !!name ||
       !!budget ||
-      !!currency ||
       !!roas ||
       !!groupSize ||
       !!creativeCount ||
@@ -522,13 +522,9 @@ export function StrategyForm({
                   setBudget,
                   "每个 Campaign / 天；金额按十进制字符串保存。",
                 )}
-                <Field data-invalid={invalid("currency")}>
+                <Field data-disabled data-invalid={invalid("currency")}>
                   <FieldLabel htmlFor="strategy-currency">预算币种</FieldLabel>
-                  <Select
-                    value={currency}
-                    disabled={readonly || pending || !!unknownRequest}
-                    onValueChange={change("currency", setCurrency)}
-                  >
+                  <Select value={currency} disabled>
                     <SelectTrigger
                       id="strategy-currency"
                       aria-label="预算币种"
@@ -554,7 +550,7 @@ export function StrategyForm({
                     </SelectContent>
                   </Select>
                   <FieldDescription>
-                    与目标账户币种匹配；不自动换算。
+                    暂不支持切换币种；须与目标账户一致，不自动换算。
                   </FieldDescription>
                   {invalid("currency") && (
                     <FieldError>{errors.currency}</FieldError>

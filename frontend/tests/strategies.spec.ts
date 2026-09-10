@@ -1152,64 +1152,41 @@ test("策略固定列完整显示超长预算和ROAS且文字不覆盖相邻单�
   ).toHaveLength(0)
 })
 
-for (const selection of [
-  "pointer-last",
-  "pointer-first",
-  "keyboard-first",
-] as const)
-  test(`空白新建策略选择预算币种后保留 USD 并可提交 (${selection})`, async ({
-    page,
-  }) => {
-    const { requests } = await boundary(page, { empty: true })
-    await page.goto(`/tenants/${A}/strategies/new`)
-    const currency = page.getByRole("combobox", {
-      name: "预算币种",
-      exact: true,
-    })
-    await expect(currency).toHaveText("选择币种")
-    const selectCurrency = async () => {
-      if (selection === "keyboard-first") {
-        await currency.focus()
-        await currency.press("Enter")
-        await expect(
-          page.getByRole("option", { name: "AED", exact: true }),
-        ).toBeFocused()
-        await page.keyboard.type("USD")
-        await expect(
-          page.getByRole("option", { name: "USD", exact: true }),
-        ).toBeFocused()
-        await page.keyboard.press("Enter")
-      } else {
-        await currency.click()
-        await page.getByRole("option", { name: "USD", exact: true }).click()
-      }
-      await expect(currency).toHaveText("USD")
-    }
-    if (selection !== "pointer-last") await selectCurrency()
-    await page.getByLabel("策略名称", { exact: true }).fill("空白新建策略")
-    await page.getByLabel("Campaign 日预算", { exact: true }).fill("100")
-    await page.getByLabel("目标 ROAS", { exact: true }).fill("1.08")
-    await page.getByLabel("每组素材数量", { exact: true }).fill("10")
-    await page.getByLabel("创意数量", { exact: true }).fill("2")
-    if (selection === "pointer-last") await selectCurrency()
-    await page.getByLabel("策略名称", { exact: true }).focus()
-    await expect(currency).toHaveText("USD")
-    await expect(
-      page.getByRole("button", { name: "创建策略", exact: true }),
-    ).toBeEnabled()
-    await page.getByRole("button", { name: "创建策略", exact: true }).click()
-    await expect(page).toHaveURL(
-      /\/strategies\/66666666-6666-4666-8666-666666666666/,
-    )
-    const writes = requests.filter(
-      (r) => r.method === "POST" && r.path.endsWith("/strategies"),
-    )
-    expect(writes).toHaveLength(1)
-    expect(writes[0].body.config).toMatchObject({
-      currency: "USD",
-      budget: "100",
-      target_roas: "1.08",
-      group_size: 10,
-      creative_count: 2,
-    })
+test("空白新建策略默认 USD，币种禁止展开且保存仍提交 USD", async ({ page }) => {
+  const { requests } = await boundary(page, { empty: true })
+  await page.goto(`/tenants/${A}/strategies/new`)
+  const currency = page.getByRole("combobox", {
+    name: "预算币种",
+    exact: true,
   })
+  await expect(currency).toHaveText("USD")
+  await expect(currency).toBeDisabled()
+  await currency.click({ force: true })
+  await expect(page.getByRole("listbox")).toHaveCount(0)
+  await page.getByLabel("策略名称", { exact: true }).fill("空白新建策略")
+  await page.getByLabel("Campaign 日预算", { exact: true }).fill("100")
+  await page.keyboard.press("Tab")
+  await expect(page.getByLabel("目标 ROAS", { exact: true })).toBeFocused()
+  await page.getByLabel("目标 ROAS", { exact: true }).fill("1.08")
+  await page.getByLabel("每组素材数量", { exact: true }).fill("10")
+  await page.getByLabel("创意数量", { exact: true }).fill("2")
+  await expect(currency).toHaveText("USD")
+  await expect(
+    page.getByRole("button", { name: "创建策略", exact: true }),
+  ).toBeEnabled()
+  await page.getByRole("button", { name: "创建策略", exact: true }).click()
+  await expect(page).toHaveURL(
+    /\/strategies\/66666666-6666-4666-8666-666666666666/,
+  )
+  const writes = requests.filter(
+    (r) => r.method === "POST" && r.path.endsWith("/strategies"),
+  )
+  expect(writes).toHaveLength(1)
+  expect(writes[0].body.config).toMatchObject({
+    currency: "USD",
+    budget: "100",
+    target_roas: "1.08",
+    group_size: 10,
+    creative_count: 2,
+  })
+})
