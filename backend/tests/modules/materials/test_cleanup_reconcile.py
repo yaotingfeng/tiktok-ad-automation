@@ -5,11 +5,12 @@ from importlib.util import find_spec
 from uuid import uuid4
 
 import pytest
+from sqlmodel import select
+
 from app.core.config import settings
 from app.jobs.models import PendingDispatch
 from app.modules.materials.ingest_models import ObjectCleanup, OriginalUse
 from app.modules.materials.models import MaterialAssetOperation, MaterialUploadAttempt
-from sqlmodel import select
 from tests.modules.materials.test_ingest_models import ingest_fixture, original
 from tests.modules.materials.test_object_uploads import upload_owner as upload_owner
 from tests.modules.materials.test_tenant_materials import mapping
@@ -209,8 +210,9 @@ def test_recent_upload_attempt_counts_as_progress(session, context, monkeypatch)
 
 
 def test_orphan_scan_is_readonly_and_only_recognizes_same_namespace(upload_owner):
-    from app.core.db import engine
     from sqlmodel import Session
+
+    from app.core.db import engine
 
     context = upload_owner
     service = module()
@@ -288,9 +290,10 @@ def test_disabled_or_readonly_scan_never_creates_intent_or_rewrites_unknown(
 
 
 def test_multipart_orphans_require_exact_upload_identity_and_cursor_scope(upload_owner):
+    from sqlmodel import Session
+
     from app.core.db import engine
     from app.core.errors import DomainError
-    from sqlmodel import Session
 
     service = module()
     context = upload_owner

@@ -14,9 +14,10 @@ def test_capacity_refuses_main_database_before_loading_runtime():
 
 
 def test_capacity_uses_real_routes_and_removes_only_its_fixture():
+    from sqlmodel import Session, select
+
     from app.core.db import engine
     from app.modules.tenants.models import Tenant
-    from sqlmodel import Session, select
 
     script = load_script("acceptance-r2-capacity.py")
     with Session(engine) as db:
@@ -40,10 +41,11 @@ def test_capacity_uses_real_routes_and_removes_only_its_fixture():
 
 def test_capacity_failure_cleans_own_fixture_and_budget_delta(monkeypatch):
     import pytest
+    from sqlmodel import Session, select
+
     from app.core.db import engine
     from app.modules.materials.ingest_models import ObjectBudget
     from app.modules.tenants.models import Tenant
-    from sqlmodel import Session, select
 
     script = load_script("acceptance-r2-capacity.py")
     with Session(engine) as db:

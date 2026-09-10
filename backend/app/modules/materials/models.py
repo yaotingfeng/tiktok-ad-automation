@@ -17,7 +17,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import object_session
-from sqlmodel import Field, SQLModel
+from sqlmodel import Field, SQLModel, col
 
 if TYPE_CHECKING:
     from .ingest_models import TemporaryMaterialObject
@@ -134,10 +134,10 @@ class MaterialFile(SQLModel, table=True):
         return db.execute(
             select(TemporaryMaterialObject)
             .where(
-                TemporaryMaterialObject.tenant_id == self.tenant_id,
-                TemporaryMaterialObject.bc_id == self.bc_id,
-                TemporaryMaterialObject.material_id == self.id,
-                TemporaryMaterialObject.generation == self.current_object_generation,
+                col(TemporaryMaterialObject.tenant_id) == self.tenant_id,
+                col(TemporaryMaterialObject.bc_id) == self.bc_id,
+                col(TemporaryMaterialObject.material_id) == self.id,
+                col(TemporaryMaterialObject.generation) == self.current_object_generation,
             )
             .execution_options(populate_existing=True)
         ).scalar_one_or_none()
