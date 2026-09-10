@@ -1015,25 +1015,43 @@ def repair_ingest_transports(db: Session, *, limit: int = 100) -> int:
         context = TenantContext(
             tenant_id=obj.tenant_id, actor_id=parent.actor_id, role="operator"
         )
+        task_key = f"ingest-reconcile:{obj.id}:{obj.revision}"
+        previous_dispatch = db.exec(
+            select(col(PendingDispatch.id)).where(
+                col(PendingDispatch.tenant_id) == obj.tenant_id,
+                col(PendingDispatch.task_key) == task_key,
+            )
+        ).one_or_none()
         dispatch_id = enqueue_after_commit(
             db,
             context=context,
             task_name="materials.reconcile_ingest_transport",
-            task_key=f"ingest-reconcile:{obj.id}:{obj.revision}",
+            task_key=task_key,
             payload={
                 "object_id": str(obj.id),
                 "generation": obj.generation,
                 "revision": obj.revision,
             },
         )
-        dispatch = db.get(PendingDispatch, dispatch_id)
-        assert dispatch is not None
-        if dispatch.published_at is None or dispatch.published_at <= now - timedelta(
-            seconds=120
+        dispatch = db.exec(
+            select(PendingDispatch)
+            .where(
+                col(PendingDispatch.id) == dispatch_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).one()
+        if previous_dispatch is None:
+            enqueued += 1
+        elif (
+            dispatch.published_at is not None
+            and dispatch.published_at <= now - timedelta(seconds=120)
         ):
             dispatch.published_at = None
-            dispatch.available_at = now
+            dispatch.available_at = max(dispatch.available_at, now)
             enqueued += 1
+        # Unpublished rows belong to the outbox, including its broker backoff.
+        # A periodic business repair must not reset attempts or available_at.
         obj.next_attempt_at = now + timedelta(seconds=120)
     return enqueued
 

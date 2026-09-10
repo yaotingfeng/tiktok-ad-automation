@@ -1,0 +1,101 @@
+from datetime import UTC, datetime, timedelta
+from uuid import UUID
+
+from sqlmodel import Session, select
+
+from app.core.db import engine
+from app.jobs.models import PendingDispatch
+from app.modules.materials.ingest_models import (
+    IngestSessionFile,
+    TemporaryMaterialObject,
+    transition_ingest_file,
+)
+from app.modules.materials.ingest_transport import repair_ingest_transports
+from tests.conftest import migrated_database as migrated_database
+from tests.modules.materials.test_ingest_api import (
+    api as api,
+)
+from tests.modules.materials.test_ingest_api import (
+    identity,
+    prepare_file,
+    receive,
+)
+from tests.modules.materials.test_ingest_api import (
+    remote as remote,
+)
+from tests.modules.materials.test_object_uploads import upload_owner as upload_owner
+
+
+def test_new_generation_read_does_not_inherit_previous_received_bytes(api, remote):
+    client, _ = api
+    parent, url, row = prepare_file(api)
+    row = client.post(url + "/resume", json=identity(row)).json()
+    receive(remote, row)
+    completed = client.post(url + "/complete", json=identity(row))
+    assert completed.status_code == 200
+    assert client.get(parent).json()["uploaded_count"] == 1
+    # Authoritative cleanup outcome is seeded here; no remote cleanup is invoked.
+    with Session(engine) as db, db.begin():
+        obj = db.exec(
+            select(TemporaryMaterialObject).where(
+                TemporaryMaterialObject.material_id == UUID(row["material_id"])
+            )
+        ).one()
+        obj.status = "deleted"
+        obj.reservation_released_at = datetime.now(UTC)
+        obj.deleted_at = obj.reservation_released_at
+        file = db.exec(
+            select(IngestSessionFile).where(
+                IngestSessionFile.material_id == obj.material_id
+            )
+        ).one()
+        transition_ingest_file(
+            db,
+            tenant_id=file.tenant_id,
+            file_id=file.id,
+            expected_revision=file.revision,
+            status="failed",
+        )
+    current = client.get(url).json()
+    assert current["can_retry"]
+    fresh = client.post(url + "/new-generation", json=identity(current))
+    assert fresh.status_code == 200, fresh.text
+    assert fresh.json()["received_bytes"] == 0
+    persisted = client.get(url).json()
+    assert persisted["generation"] == 2
+    assert persisted["received_bytes"] == 0
+
+
+def test_repair_keeps_unpublished_current_dispatch_backoff(api, remote):
+    client, _ = api
+    _, url, row = prepare_file(api)
+    row = client.post(url + "/resume", json=identity(row)).json()
+    receive(remote, row)
+    remote.complete_unknown = True
+    assert client.post(url + "/complete", json=identity(row)).status_code == 409
+    with Session(engine) as db, db.begin():
+        obj = db.exec(
+            select(TemporaryMaterialObject).where(
+                TemporaryMaterialObject.material_id == UUID(row["material_id"])
+            )
+        ).one()
+        obj.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
+        object_id = obj.id
+    with Session(engine) as db, db.begin():
+        assert repair_ingest_transports(db) == 1
+        obj = db.get(TemporaryMaterialObject, object_id)
+        task = db.exec(
+            select(PendingDispatch).where(
+                PendingDispatch.task_key
+                == f"ingest-reconcile:{object_id}:{obj.revision}"
+            )
+        ).one()
+        task.available_at = datetime.now(UTC) + timedelta(minutes=10)
+        task.attempts = 5
+        due, dispatch_id = task.available_at, task.id
+        obj.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
+    with Session(engine) as db, db.begin():
+        repair_ingest_transports(db)
+        task = db.get(PendingDispatch, dispatch_id)
+        assert task.attempts == 5
+        assert task.available_at == due

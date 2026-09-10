@@ -154,7 +154,6 @@ def file_statement(context: TenantContext, session_id: UUID) -> Any:
             IngestSessionFile,
             MaterialFile,
             TemporaryMaterialObject,
-            col(IngestMilestone.id).is_not(None),
         )
         .join(
             MaterialFile,
@@ -176,16 +175,6 @@ def file_statement(context: TenantContext, session_id: UUID) -> Any:
                 == col(IngestSessionFile.current_generation),
             ),
         )
-        .outerjoin(
-            IngestMilestone,
-            and_(
-                col(IngestMilestone.tenant_id) == col(IngestSessionFile.tenant_id),
-                col(IngestMilestone.bc_id) == col(IngestSessionFile.bc_id),
-                col(IngestMilestone.session_id) == col(IngestSessionFile.session_id),
-                col(IngestMilestone.material_id) == col(IngestSessionFile.material_id),
-                col(IngestMilestone.milestone) == "uploaded",
-            ),
-        )
         .where(
             col(IngestSessionFile.tenant_id) == context.tenant_id,
             col(IngestSessionFile.session_id) == session_id,
@@ -198,7 +187,6 @@ def file_public(
     row: IngestSessionFile,
     material: MaterialFile,
     original: TemporaryMaterialObject | None,
-    uploaded: bool = False,
 ) -> IngestFilePublic:
     part_size, part_count = part_layout(row.byte_size)
     stage = {
@@ -232,9 +220,7 @@ def file_public(
         operation_revision=original.revision if original else row.revision,
         platform_status=stage,
         temporary_storage_status=original.status if original else "missing",
-        received_bytes=row.byte_size
-        if uploaded or (original and original.received_at)
-        else 0,
+        received_bytes=row.byte_size if original and original.received_at else 0,
         source_advertiser_id=row.source_advertiser_id,
         can_retry=(
             row.status in {"failed", "blocked", "cancelled"}
