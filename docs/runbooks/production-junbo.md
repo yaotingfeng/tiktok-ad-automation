@@ -18,6 +18,8 @@
 
 首发应用版本为 `016217f65a39330b4b715ab043fe866eea87810c`；最终发布证据见 [生产发布验收](../validation/2026-09-10-production-release.md)。后续发布先核对实际 current 与最新验收记录，不把本文首发 SHA 当作永远固定的版本。不能将其他项目的数据库、端口、目录或本地测试数据用于生产。
 
+当前已发布版本更新为 `d09c070fca637eb54fa0fe2779d07d04aff6d556`（TK-ADA品牌更新，无数据库迁移），见 [本轮发布记录](../validation/2026-09-10-tk-ada-brand-release.md)。后续以服务器实际 current 与最新记录共同确认。
+
 ## 本次部署边界
 
 - 独立目录 `/opt/tt-ada`，独立 Compose 项目 `tt-ada-production`，独立 PostgreSQL/Redis 持久卷。

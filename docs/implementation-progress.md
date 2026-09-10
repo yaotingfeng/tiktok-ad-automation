@@ -5,7 +5,7 @@
 - 按用户要求统一实际页面、浏览器标签、默认配置与 README 的产品名为 `TK-ADA`。左上角共享品牌主标题从14px增至18px，副标题为11px的“广告投放工具”；登录按钮只显示“登录”，移除箭头，保留加载状态。其余页面字号、颜色、卡片和间距不调整。
 - 同步既有登录及移动导航测试定位器。TypeScript/Vite生产构建、33个改动TS/TSX文件的Biome检查、22项workspace-shell浏览器回归和本地实际登录页尺寸核对通过。
 - 无数据库迁移或业务逻辑变化。生产仍使用原目录、Compose项目、持久卷及备份服务标识，避免名称变更创建新数据环境；发布时只同步私有 PROJECT_NAME，按生产规则备份、换版并只读验收。
-- 本轮代码提交以 `ui: rename product to TK-ADA and refine brand typography` 标识；生产发布结果另记在 `docs/validation/2026-09-10-tk-ada-brand-release.md`。
+- 代码 `d09c070` 已提交、推送并发布；生产只读浏览器18项、两环境bootstrap、实际18px/11px品牌及登录按钮检查通过。发布前备份完成，数据库head和用户/租户/策略数量保持一致，定时备份已恢复。[生产发布记录](validation/2026-09-10-tk-ada-brand-release.md)包含版本、回退入口与验证边界。
 
 ## 2026-09-10：骏伯生产发布与基础验收
 
