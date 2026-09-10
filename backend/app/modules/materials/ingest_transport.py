@@ -294,17 +294,32 @@ def resume_file(
         )
         if identity.operation_revision > obj.revision:
             raise DomainError("version_conflict", "素材操作版本无效")
-        if row.error_code == "user_cancelled" or obj.status in {
-            "cleanup_pending",
-            "deleting",
-            "delete_unknown",
-            "deleted",
-            "missing",
-        }:
+        cancelled_recovery = (
+            row.error_code == "user_cancelled"
+            and obj.status == "cleanup_pending"
+            and recovering
+        )
+        if not cancelled_recovery and (
+            row.error_code == "user_cancelled"
+            or obj.status
+            in {
+                "cleanup_pending",
+                "deleting",
+                "delete_unknown",
+                "deleted",
+                "missing",
+            }
+        ):
             return service.file_public(row, file, obj)
         if obj.s3_upload_id or _busy(obj):
             return service.file_public(row, file, obj)
-        if not reserve_object(
+        if recovering:
+            if (
+                obj.reserved_bytes != obj.expected_bytes
+                or obj.reservation_released_at is not None
+            ):
+                raise DomainError("object_budget_corrupt", "暂存预留需要核查")
+        elif not reserve_object(
             db, context=context, object_id=obj.id, byte_size=obj.expected_bytes
         ):
             return service.file_public(row, file, obj)
@@ -687,10 +702,14 @@ def complete_file(
         )
         if obj.received_at is not None:
             return service.file_public(row, file, obj)
-        if (
-            obj.status != "receiving"
-            or not obj.s3_upload_id
-            or row.error_code == "user_cancelled"
+        cancelled_recovery = (
+            row.error_code == "user_cancelled"
+            and obj.status == "cleanup_pending"
+            and recovering
+        )
+        if not obj.s3_upload_id or (
+            not cancelled_recovery
+            and (obj.status != "receiving" or row.error_code == "user_cancelled")
         ):
             raise DomainError("upload_not_ready", "原件当前不可完成")
         if identity.operation_revision > obj.revision:
@@ -963,7 +982,9 @@ def repair_ingest_transports(db: Session, *, limit: int = 100) -> int:
         select(col(TemporaryMaterialObject.id))
         .where(
             text(RECOVERY_PREDICATE),
-            col(TemporaryMaterialObject.status).in_(["reserved", "receiving"]),
+            col(TemporaryMaterialObject.status).in_(
+                ["reserved", "receiving", "cleanup_pending"]
+            ),
             col(TemporaryMaterialObject.next_attempt_at) <= now,
             or_(
                 col(TemporaryMaterialObject.claimed_until).is_(None),
@@ -1014,7 +1035,10 @@ def repair_ingest_transports(db: Session, *, limit: int = 100) -> int:
                 col(IngestSessionFile.current_generation) == obj.generation,
             )
         ).one_or_none()
-        if row is None or row.error_code == "user_cancelled":
+        if row is None or (
+            row.error_code == "user_cancelled"
+            and obj.error_code == "multipart_collecting"
+        ):
             continue
         parent = db.get(IngestSession, row.session_id)
         assert parent is not None
@@ -1091,7 +1115,10 @@ def reconcile_ingest_transport(
         ).one_or_none()
         if (
             row is None
-            or row.error_code == "user_cancelled"
+            or (
+                row.error_code == "user_cancelled"
+                and obj.error_code == "multipart_collecting"
+            )
             or obj.error_code not in RECOVERY_ERRORS
         ):
             return

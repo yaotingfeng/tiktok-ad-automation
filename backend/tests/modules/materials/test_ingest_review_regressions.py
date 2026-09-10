@@ -151,3 +151,83 @@ def test_disabled_ingest_allows_only_existing_sent_transport_reconciliation(
         == 503
     )
     assert len(remote.calls) == before
+
+
+def test_cancelled_lost_create_and_complete_recover_readonly_identity(
+    api, remote, upload_owner, monkeypatch
+):
+    from uuid import uuid4
+
+    from app.modules.materials import ingest_service
+    from app.modules.materials.ingest_transport import reconcile_ingest_transport
+
+    client, _ = api
+    cases = []
+    for phase in ("create", "complete"):
+        parent, url, row = prepare_file(api)
+        if phase == "create":
+            remote.create_unknown = True
+            assert client.post(url + "/resume", json=identity(row)).status_code == 409
+            remote.create_unknown = False
+        else:
+            row = client.post(url + "/resume", json=identity(row)).json()
+            receive(remote, row)
+            remote.complete_unknown = True
+            assert client.post(url + "/complete", json=identity(row)).status_code == 409
+            remote.complete_unknown = False
+        # Simulate process loss after send, preserving its unexpired claim at cancel.
+        with Session(engine) as db, db.begin():
+            obj = db.exec(
+                select(TemporaryMaterialObject).where(
+                    TemporaryMaterialObject.material_id == UUID(row["material_id"])
+                )
+            ).one()
+            obj.error_code = (
+                "multipart_creating" if phase == "create" else "multipart_completing"
+            )
+            obj.claim_token = uuid4()
+            obj.claimed_until = datetime.now(UTC) + timedelta(seconds=180)
+            original_claim = obj.claim_token
+        current = client.get(url).json()
+        cancelled = client.post(url + "/cancel", json=identity(current))
+        assert cancelled.status_code == 200, cancelled.text
+        with Session(engine) as db, db.begin():
+            obj = db.exec(
+                select(TemporaryMaterialObject).where(
+                    TemporaryMaterialObject.material_id == UUID(row["material_id"])
+                )
+            ).one()
+            assert obj.claim_token == original_claim
+            obj.claimed_until = datetime.now(UTC) - timedelta(seconds=1)
+            obj.next_attempt_at = obj.claimed_until
+            token = {
+                "object_id": obj.id,
+                "generation": obj.generation,
+                "revision": obj.revision,
+            }
+        cases.append((phase, parent, url, token))
+    monkeypatch.setattr(ingest_service.settings, "MATERIAL_INGEST_ENABLED", False)
+    with Session(engine) as db, db.begin():
+        assert repair_ingest_transports(db) == 2
+    before = len(remote.calls)
+    for phase, parent, url, token in cases:
+        reconcile_ingest_transport(
+            database_engine=engine, context=upload_owner, **token, s3=remote
+        )
+        current = client.get(url).json()
+        assert current["temporary_storage_status"] == "cleanup_pending"
+        assert current["platform_status"] == "blocked" and current["upload_id"]
+        assert client.get(parent).json()["uploaded_count"] == (
+            1 if phase == "complete" else 0
+        )
+        with Session(engine) as db:
+            obj = db.get(TemporaryMaterialObject, token["object_id"])
+            assert obj.claim_token is None and obj.error_code is None
+            tasks = db.exec(
+                select(PendingDispatch).where(
+                    PendingDispatch.tenant_id == upload_owner.tenant_id,
+                    PendingDispatch.task_name == "materials.validate_original",
+                )
+            ).all()
+            assert not tasks
+    assert [name for name, _ in remote.calls[before:]] == ["list_uploads", "head"]
