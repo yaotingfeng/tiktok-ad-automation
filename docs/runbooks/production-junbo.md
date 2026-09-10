@@ -10,13 +10,13 @@
 | SSH | `ubuntu`，端口 `54231`；使用运维凭据或已授权 SSH 密钥 |
 | 资源 | 16 vCPU、约 32 GiB 内存；首次核查可用约 16 GiB，根盘剩余约 820 GiB |
 | 域名 | `manjuad.gzjunbo.net` 已解析到上述 IP |
-| 拟用公网入口 | `https://manjuad.gzjunbo.net:8000/`；同端口 HTTP 自动转 HTTPS |
-| 端口核查 | 8000 和拟用内部端口 18000 未监听；需新增仅 8000 的防火墙放行并从公网验收 |
+| 公网入口 | `https://manjuad.gzjunbo.net:8000/`；同端口 HTTP 308 自动转 HTTPS |
+| 端口核查 | 8000 公网 HTTPS 已实测可用；API 仅监听 127.0.0.1:18000；仅新增 8000 防火墙规则 |
 | 共存项目 | 80/443 和现有 Docker 容器归原项目使用；禁止停止、替换或修改其配置和数据 |
 | 现有反向代理 | 宝塔 Nginx，配置入口 `/www/server/nginx/conf/nginx.conf` |
 | 域名证书 | `/etc/nginx/ssl/gzjunbo.net/gzjunbo.net.pem`；只引用现有证书，不复制私钥入仓库 |
 
-此节为部署前核查记录，最终发布证据见 `docs/validation/2026-09-10-production-release.md`（验收后生成）。只有本文记录的环境与固定版本可作为后续发布目标，不能将其他项目的数据库、端口、目录或本地测试数据用于生产。
+首发应用版本为 `016217f65a39330b4b715ab043fe866eea87810c`；最终发布证据见 [生产发布验收](../validation/2026-09-10-production-release.md)。后续发布先核对实际 current 与最新验收记录，不把本文首发 SHA 当作永远固定的版本。不能将其他项目的数据库、端口、目录或本地测试数据用于生产。
 
 ## 本次部署边界
 
@@ -73,10 +73,13 @@ sudo systemctl enable --now tt-ada-backup.timer
 
 1. 先阅读本文和最新发布记录，确认当前 SHA、镜像 ID、Alembic head、数据库备份及外部开关。核对 80/443 原项目可访问，确认剩余内存和磁盘。审查代码及迁移，不在生产生成迁移。
 2. 相关测试通过后提交、推送，打包新 SHA 到新目录，运行新版本的 `config --quiet` 和 `build prestart`。构建失败不触碰正在运行的版本。
-3. 安排维护窗口，停止旧 API 接收写入，再停止 Beat；正常停止三个 Worker 并核实没有正在执行的任务。素材 Worker 等待时间最多 960 秒，禁止用强杀缩短业务任务退出。排队及尚未发布的消息保留，迁移必须兼容其任务名与 payload。
+3. 安排维护窗口，先暂停每日备份 timer，并等待已经启动的备份服务自然结束；禁止迁移与定时备份并行，以免 current 尚未切换时把新数据库误标为旧版本。不要停止正在执行的备份 service。然后停止旧 API 接收写入，再停止 Beat；正常停止三个 Worker 并核实没有正在执行的任务。素材 Worker 等待时间最多 960 秒，禁止用强杀缩短业务任务退出。排队及尚未发布的消息保留，迁移必须兼容其任务名与 payload。
 
 ```bash
 OLD_COMPOSE=/opt/tt-ada/current/deploy/production-compose.sh
+sudo systemctl stop tt-ada-backup.timer
+# 若显示 activating/running，等待该次备份完成后再继续，不强行停止。
+sudo systemctl show tt-ada-backup.service -p ActiveState -p SubState
 sudo "$OLD_COMPOSE" stop backend beat
 sudo "$OLD_COMPOSE" stop worker worker-builds worker-control
 sudo /opt/tt-ada/current/deploy/backup-production.sh before-release
@@ -84,15 +87,34 @@ sudo /opt/tt-ada/current/deploy/backup-production.sh before-release
 
 4. 备份目录必须有 `COMPLETE`，并通过 `sha256sum -c SHA256SUMS`。记录备份路径、旧 SHA、旧镜像 ID、旧 head。随后在新版本执行 `run --rm --no-deps prestart`；非零退出时禁止启动新 API/Worker。
 5. 对比新版本 `alembic current` 与 `alembic heads`，必须只有一个相同 head；再按首次发布命令启动 API、三个 Worker 和唯一 Beat。验证通过后才原子切换 current。
-6. 保留旧镜像、旧版本目录及发版前备份。发布记录写明新旧 SHA、迁移 ID、验证结果、异常与回滚入口，提交并推送到仓库。
+6. 保留旧镜像、旧版本目录及发版前备份。发布成功或完成中止恢复处理后，执行 `sudo systemctl start tt-ada-backup.timer` 并核对下一次触发时间。发布记录写明新旧 SHA、迁移 ID、验证结果、异常与回滚入口，提交并推送到仓库。
 
 数据库规则：只能新增审查后的 Alembic 迁移；禁止改写已发布迁移、手工增删业务列/索引或直接改数据绕过状态机。删列、类型转换、非空约束、索引创建及数据回填必须评估锁表、数据量和旧任务兼容性；需要时分版本添加、回填、切换、清理。普通重新启动不是数据库升级，不重新初始化已有账号密码。
+
+## 受限网络下的官方 SDK 构建缓存
+
+首发发现 GitHub HTTPS 下载超时。已从开发端现有 uv Git 缓存导出官方 SDK 完整 Git bundle，经 SSH 传输、两端 SHA256 比对，再通过 Git fsck 和固定 commit 验证后导入服务器 BuildKit 缓存。应用仍按 `uv.lock` 的官方 Git 来源构建，不改为第三方 SDK，也不复制开发虚拟环境、配置或已安装包。
+
+- 当前 SDK commit：`f809c396520df2d7b201a9ccc5378d822b728ed3`。
+- 恢复包：`/opt/tt-ada/build-cache/sdk-f809c396/sdk.bundle`，SHA256 `dd1fec96351cc838b8c3d79f1c942453e4e6b753caf3ec0e92b33c179c55e1da`。
+- 同目录 `Dockerfile` 与 `compose.yml` 为只导入构建缓存的文件；uv 0.9.26 缓存目录为 `/root/.cache/uv/git-v0/db/3866c37f65d3b64f`。不启动额外业务服务。
+- 若应用构建提示 GitHub 下载超时且 commit 仍相同，先确认没有另一项 TT ADA 构建占用该缓存，再运行以下命令，然后重新运行已发布版本的 `build prestart`。
+
+```bash
+sudo sha256sum /opt/tt-ada/build-cache/sdk-f809c396/sdk.bundle
+# 必须与上面的固定摘要一致；不一致时停止。
+sudo docker compose --project-name tt-ada-build-cache \
+  -f /opt/tt-ada/build-cache/sdk-f809c396/compose.yml build --no-cache sdk-cache
+```
+
+`--no-cache` 确保缓存恢复步骤实际执行；不会关闭或删除其他项目。SDK commit 或 uv 缓存格式变更时，不能继续复用此流程中的旧 ref/目录：在可访问官方 GitHub 的构建端取得新的锁定提交，重新导出 bundle、审查 fsck/commit/摘要后保存新恢复包，并更新本文。优先在网络正常的构建环境构建完整镜像并传输其固定 digest；不要为下载问题修改整机代理、Docker 源或系统配置。
 
 ## 备份、恢复与回滚
 
 - `deploy/backup-production.sh` 保存 PostgreSQL custom archive、全局角色、Redis RDB、独立加密/签名配置、Git SHA、镜像 ID、Alembic head 和校验摘要。日志只输出备份路径，不输出凭据；Redis AOF 持久卷保留。
 - 每天北京时间 03:30 左右自动备份；发版前必须额外执行停写备份。每日在线备份的 PostgreSQL/Redis 不构成同一时刻快照，灾后恢复必须核对 outbox/任务状态，不能直接全量重放。
 - 首发及关键迁移后，将备份恢复到同一 TT ADA PostgreSQL 实例的**新临时验证数据库**，执行 `pg_restore --exit-on-error --no-owner --no-acl`，比较迁移版本、用户、租户、成员和策略记录数量；不连接 Worker，不使用生产 app 库作为恢复目标。验证后只删除本次创建的临时库。
+- Redis 使用 AOF，备份脚本额外保存 RDB。禁止把 RDB 直接覆盖到仍有旧 AOF 的生产卷后启动：旧 AOF 可能优先加载。恢复须先在独立 Redis 实例和新卷验证 RDB，再按 Redis 流程启用并生成 AOF；与对应 PostgreSQL 的 outbox/任务结果核对后才能安排切换，不就地覆盖旧卷。
 - 至少保留最近 14 份日备份及最近 7 次发布前备份；脚本不会自动删除旧备份。清理时逐一确认完整标记、恢复验证及保留范围，不做整机或全桶清理。当前备份在同机，不能抵御主机/磁盘整体故障；异机备份目的地须另行配置。
 - 无迁移且旧代码兼容时：停止新 API/Beat/Worker，使用旧版本脚本启动旧镜像，验收后切回 current。不要重建数据库/Redis 卷。
 - 涉及不兼容迁移时，优先修复前进；只有停止所有写入、明确回滚期间新增数据的处理方式并确认恢复范围后，才恢复与旧镜像匹配的备份。禁止自动 `alembic downgrade` 或把旧镜像直接接到不兼容的新库；恢复备份可能丢失备份后的业务变更。

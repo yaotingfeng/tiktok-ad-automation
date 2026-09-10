@@ -38,3 +38,4 @@ Python uses uv in backend; frontend uses Bun and the official template lockfile.
 - 生产入口为 `https://manjuad.gzjunbo.net:8000`，独立 Compose 项目 `tt-ada-production`，版本目录 `/opt/tt-ada/releases/<Git SHA>`。必须使用已发布版本的 `deploy/production-compose.sh`，不混用本地或 staging 配置。
 - 数据库变更必须通过审查后的 Alembic 迁移；迁移前冻结写入、正常排空在执行任务并完成可恢复备份。禁止直接修改生产表结构、改写历史迁移、清空队列/持久卷或未经兼容性核实直接回退数据库。所有环境凭据、备份、会话均不进 Git。
 - 首发基础验收与真实 TikTok/R2/版权方联调分别记录；用户尚未配置的外部集成不得通过演示凭据或开启自动化绕过。
+- 发布验收记录位于 `docs/validation/2026-09-10-production-release.md`，后续每次发版新增对应日期记录并更新实施进度。迁移期间暂停备份 timer，等待已启动的备份自然结束；发布或中止恢复处理结束后恢复 timer。Redis RDB 恢复先在新实例/卷验证，禁止覆盖仍带旧 AOF 的生产卷。

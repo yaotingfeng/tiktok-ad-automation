@@ -1,6 +1,8 @@
 # 发布与部署
 
-首次配置和宿主机命令见 [bootstrap-deployment.md](bootstrap-deployment.md)。本手册补充版本、素材存储和升级顺序。配置校验、镜像 CI 与真实公网部署分别记录，当前没有公网部署或真实 TikTok 联调证据。
+骏伯生产环境使用独立 8000 HTTPS 入口，发布与数据库操作必须遵循 [production-junbo.md](production-junbo.md)，不执行下面的通用 staging 命令。首次生产验收见 [发布记录](../validation/2026-09-10-production-release.md)。真实 TikTok 联调仍需单独完成。
+
+其他环境的首次配置和宿主机命令见 [bootstrap-deployment.md](bootstrap-deployment.md)。下文为通用 staging 方案，补充版本、素材存储和升级顺序。
 
 ## 固定发布版本
 
