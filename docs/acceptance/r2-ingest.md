@@ -21,7 +21,7 @@ python ../scripts/acceptance-r2-capacity.py --count 20000 --output /tmp/r2-capac
 
 脚本的多文件接收计量不上传文件字节。另有三文件、256-byte合成窗口：两个文件获准，第三个waiting_capacity；通过明确标记的synthetic deletion-evidence fixture调用真实release helper后，第三个恢复。该结果证明账务背压及恢复，不证明R2物理占用、清理Worker或取消在途PUT已经正确完成。来源账户公平性、WorkerRSS、校验临时磁盘、1000混合故障和源/目标全链路明确输出pending/not_measured。
 
-`--scenario mixed-faults-1000` 是待集成验收入口，当前返回pending及退出2，不运行假通过场景。后续实际harness应输出每个文件最终状态、原operation身份、外部Create/Complete/源上传/分享次数、限流/过期签名/超时/进程重启分布、临时空间峰值、队列/清理积压、P50/P95、资源Worker RSS和目标可用证据，并证明UNKNOWN不重复发送。
+`--scenario mixed-faults-1000` 不执行pytest业务链，仍返回pending及退出2。已实现的独立命令是 `python -m pytest tests/acceptance/test_r2_pipeline.py -q`，其6条完整MP4链及1,000文件控制面故障记录见[业务链验收](r2-pipeline.md)。后者覆盖容量等待、旧revision、取消和丢Create/Complete响应，400个对象经真实清理worker回收；不包含1,000次SDK入库、实际429、过期签名服务端执行、进程重启和Worker峰值RSS。更广的运行指标仍待独立验收，不能混入已完成计数。
 
 ## 已执行的合成容量运行（2026-09-10）
 
@@ -57,8 +57,8 @@ run_id：10k为`1b31e9c597204d02ad290f8189eb49b2`，20k为`77f016c8f0b94cbb94772
 | 当前官方媒体HTTPS精确host allowlist | 不提供未经验证的域名 | pending |
 | 官方SDK URL源上传及VID/md5/来源账户回读 | 需授权小批、当前连接与媒体证据 | pending |
 | >256MiB URL视频 | 默认本地上限256MiB，未调大 | pending |
-| 原件删除后新目标分发、封面与搭建 | 需Task6/7集成和真实授权全链路 | pending |
-| 1000混合故障完整Worker链 | 分开harness入口，当前明确退出2 | pending |
+| 原件删除后新目标分发、封面与搭建 | Task6/7及6条合成完整链已通过；真实授权链路未执行 | live pending |
+| 1000混合故障完整Worker链 | 控制面1,000文件、400次清理已通过；1,000源/目标入库和进程故障未覆盖 | wider load pending |
 | 在途/未知PUT取消的可靠终止与空间释放 | 不能用TTL、Abort响应或一次空页代替证据 | pending |
 | Linux prefork硬时限/单Beat/队列重启 | 部署要求和任务边界测试，不是实际Linux演练 | pending |
 | 真实日量、带宽、平台配额、Worker内存与磁盘 | 元数据测试未覆盖 | pending |

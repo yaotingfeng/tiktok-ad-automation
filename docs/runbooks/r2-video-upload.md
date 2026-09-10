@@ -43,6 +43,10 @@ celery -A app.jobs.celery_app:celery_app beat --schedule=/var/run/celery/celeryb
 
 当前生产 Dockerfile 已安装 ffmpeg，校验使用 ffprobe；部署镜像仍应执行 `ffprobe -version` 并核对镜像摘要。摘要校验 Worker 会有界读取 R2 原件并使用可清理临时文件，API 不转发视频字节。监控资源 Worker RSS、临时磁盘、超时与退出后临时文件清理；不能宣称整个服务从不读取视频。
 
+`materials.scan_abandoned_objects` 每30秒在control扫描至多100个对象。游标在数据库提交后由Redis持有者校验写入，空页重新开始；扫描锁75秒、任务硬限45秒，旧进程不能覆盖新游标。关闭自动清理开关也停止新放弃对象扫描。依据最近实际活动时间、所有权和消费者证据判断资格，发现UNKNOWN不会按年龄删除。重复同一异常证据只记一次审计。
+
+人工对账入口为 `python scripts/reconcile-r2.py --help`，默认只读；仅在明确tenant、BC及对象命名空间后使用对应参数。未知归属只报告，不能用扫描结果自动认领历史文件。桶级未完成分片生命周期只能作为另行配置的兜底，应用不会自动修改桶生命周期，也不对完整对象设置统一过期删除。
+
 ## 私有桶和 CORS
 
 关闭桶公开访问，包括开发用公开访问地址。使用应用真实前端 origin 替换下面的保留示例，不使用 `*`。浏览器分片 PUT 需要读到 ETag；Content-Length 由浏览器发送并与服务端签名绑定，业务代码不自行设置浏览器禁止的请求头。CORS 仅控制浏览器跨源访问，不代替私有权限或签名授权。
@@ -96,5 +100,9 @@ python scripts/check-r2.py --probe
 先将 `MATERIAL_INGEST_ENABLED=False`、`MATERIAL_CLEANUP_ENABLED=False`，停止新权限、新创建/完成和新删除。保留已有发送记录的 readback消费者及单Beat：完整代次和发送证据允许 exact ListMultipartUploads/HEAD回查，不允许补发 Create/Complete。源/目标/删除已有 UNKNOWN 同样保留原 operation 身份回查，不因 Token变化、URL过期或进程重启换路径重发。
 
 Cancel只先关闭浏览器继续接收并安排清理。仍有未知平台读取、原件使用记录、在途 PUT或运输 claim时，额度继续占用。对真正已完成的原件，Complete+HEAD可关闭part uses；未完成 PUT不能因为URL TTL到期就自动结束。AWS说明在途part停止后仍可能迟到，并且ListParts不返回尚未完成的part，因此普通取消的释放需要可靠的请求结束和对象/分片关闭证据；R2具体终止语义是上线验证项。[AWS multipart说明](https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html)
+
+每次分片签名有独立 `request_id` 和权限记录，一个权限最多发一次PUT。请求身份先保存到IndexedDB，再调用签名API；重试使用新权限，旧的unknown不被覆盖。服务端同时核对实际SigV4到期时间不超过该权限台账期限，重复取签名不延长旧权限。
+
+分片回执包含completed、unused、unknown三种结果。completed必须用实际ListParts的大小和ETag核对；unused是受控浏览器对“从未启动该权限PUT”的声明，存储服务不能独立证明这个否定事实，因此该协议依赖官方客户端遵守一次权限一次发送。自制客户端不得在声明unused后再用旧URL发送。超时、abort或刷新丢失结果只能是unknown，不能改成unused。浏览器取消会停止新任务、等待已启动请求收尾并提交回执；服务端仍须等待权限到期、exact Abort/ListParts/HEAD关闭证据后才能释放未完成对象的预算。单独ACK、过期或一次HEAD404均不释放预算；真正无法判定的PUT继续保留空间并进入运维核查。
 
 不得通过回滚数据库、把状态改为stored、归零预算、清空未知用途或删除素材主记录来“恢复”远端已删除字节。缺失的原件仍是缺失；已验证平台映射继续保存。数据库迁移回退仅用于有计划的数据兼容操作，不是对象存储恢复机制。任何人工解除阻塞都必须关联本租户/BC/代次的可审查证据。

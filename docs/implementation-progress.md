@@ -2,6 +2,50 @@
 
 ## 当前状态
 
+2026-09-10：普通账号密码登录、邮箱移除和租户版权方自动续登已交付；运行时使用独立Python协议适配器，不调用网眼/嘉书CLI或共享其账号文件。账号身份保留迁移、自动续登和本地浏览器证据见[账号与续登验收](validation/2026-09-10-account-session-integration.md)，该基线 `a176fd8` 的 [CI 34385153117](https://github.com/yaotingfeng/tiktok-ad-automation/actions/runs/34385153117) 七组通过。
+
+本轮继续实现[独立R2上传计划](superpowers/plans/2026-09-10-r2-batch-video-upload-plan.md)：Task1～7代码已形成，Task8已具备离线浏览器、完整业务链、10k/20k元数据和1,000文件故障验收；最终集成回归与本地更新记录在下节。真实R2/TikTok、CORS、当前媒体域名、生产prefork和日吞吐仍按[运行手册](runbooks/r2-video-upload.md)验收，新导入、自动清理默认均关闭。
+
+| 范围 | 当前行为与证据 | 主要提交 |
+| --- | --- | --- |
+| 临时对象和预算 | 对象代次不可变；tenant/BC隔离；全局8GiB、租户2GiB为应用暂存窗口，预留和已存不重复相加；清理证据释放一次 | 83adf1e, 3beba10, 0b2cdc1 |
+| 导入API与恢复 | 最大20k文件；≤200一批，≤100明细分页；稳定请求回执、发送前持久意图、响应丢失只读回查 | d521929, 7bc1912, eacc3a0, 8642e78 |
+| 浏览器批量上传 | 4文件×2分片有界传输；IndexedDB保存恢复元数据；暂停、重选核对、跨范围停止；上传不绑定剧目 | 7582056, 9696fb5, 5dc4135 |
+| 分片权限及取消 | 每次权限独立身份；completed实际回查、unused受控浏览器声明、unknown保留；实际签名期限不越过台账；取消竞态不能继续Complete | 301a46f, 2d199cb |
+| 校验与来源入库 | 流式MD5/SHA256与ffprobe；事务outbox交接；合法来源公平分流；官方SDK URL上传和强回读，记录实际广告账户 | 0b2cdc1, b745e2e, 2df5e85, 2a440ba |
+| 删除后素材使用 | 即时授权TikTok URL接力、新目标实际VID/封面、只读预览；新代次不退回文件上传 | e005bd1, 02c0ee8 |
+| 自动清理与回收 | 源强回读成功后即安排删除；exact代次Delete/HEAD、Abort/ListParts/HEAD；消费者或结果未知保留预算；定时100项扫描与审计去重 | 8186adc, bc1c9ba, 76cd455, 856b83f, ce0e12f |
+| 部署与验收 | 默认零网络检查；显式probe仅自建key；真实API浏览器3文件/4PUT、6条完整业务链、1,000文件400次清理；独立审查通过 | 20d8fed, dc3f5c7, 304a231, 865158c |
+
+本轮证据按边界区分：[10k/20k元数据](acceptance/r2-ingest.md)、[浏览器→真实API](acceptance/r2-browser.md)、[API→校验→源→清理→目标](acceptance/r2-pipeline.md)。浏览器完整上传3个文件、16,782,295字节，终点是stored及3个待发校验任务；后端6条完整链使用真实数据库/校验/业务逻辑和外部传输替身，不冒称Cloudflare或TikTok实际成功。1,000文件混合故障中400个对象实际经清理worker回收，预算归零；它不是1,000次视频平台入库。
+
+20,000文件选择测量：准备好FileList后16.4ms出现可用界面，DOM100行；合成FileList构造另用1,568.1ms，不能称整个选择过程小于1秒。JS堆为离散样本，未测真实峰值、Worker RSS、慢机P95或生产日量。
+
+### 本轮最终集成验证
+
+以下为合并工作树的实跑证据，外部服务均为传输替身；不沿用账号基线的通过数字。
+
+- 完整后端模块（不含独立acceptance目录）：**1,687 passed、1 skipped，730.06秒**。唯一skip为已有Linux prefork测试；该次启动于 `92cf783`，随后SQLModel类型修复另有34项回归；没有把中途改动冒称已被同一次旧进程载入。
+- 最终 `742f94a` 的源选择/源上传、分片权限回归、新validator进程测试、R2 probe/capacity以及6条全链/1,000故障批次联合运行：**60 passed、1 skipped，41.10秒**。skip为新增Linux实际硬终止测试，本机只运行其PG用途归属companion；实际Linux结果由CI提供。
+- 前端TypeScript和生产构建通过；完整workspace **310 passed，1.8分钟**。首轮309通过/1失败为退出登录导航时读取旧JS上下文；`d29c699` 等待实际登录导航，保留全部停止传输/不再Complete/清除登录断言，连续5次通过后重跑上述全套。
+- 合并分支真实浏览器→FastAPI/JWT→loopback HTTPS R2边界：**1 passed，38.8秒**（场景10.1秒），3文件/4PUT/16,782,295字节，3个stored和3个待发校验outbox，刷新零重传，哈希一致。该测试没有启动素材worker。
+- 全量Ruff、Ty无诊断通过，Alembic check无新差异。Compose缺失的11个新R2环境字段已在 `153e704` 补齐，独立CLI实际渲染默认/覆盖×本地/预发布四种配置，API/Worker/Beat/prestart全部一致；未启动容器。
+- 代码提交 `153e7045eb1e25fd28a9f9bf0bc75b53aee76118` 的 [CI 34429426415](https://github.com/yaotingfeng/tiktok-ad-automation/actions/runs/34429426415) 包含7个独立任务和新增实际API浏览器验收。链接对应确切代码版本，结果以该运行记录为准；文档追加不替代代码验证。
+
+集成中修复了校验初次投递继承未来时间、签名实际期限超台账、取消与Complete竞态、放弃扫描重复告警，以及离线任务调度器缺失真实prefork上下文等问题。Linux validator测试使用原生产handler/guard和真实独占PG/Redis，3秒测试硬期限杀死子进程后检查旧用途保留；它不证明源上传UNKNOWN全链故障或进程被杀后的临时磁盘回收。
+
+### 主目录与本地应用更新
+
+代码已快进到实际目录 `projects/tiktok-ad-automation/`，主目录和隔离开发分支的代码提交同为 `153e704`。原15份路径整理文档先单独提交为 `aedeacf` 再合并，未覆盖；原有未跟踪 `docs/design-history/` 仍保留。后续文档提交继续同步两个分支。
+
+对实际开发库做私有备份，先恢复到新建独占 `_test` 库，执行三次新迁移和Alembic check，核对用户/密码哈希/租户/成员/策略/已有连接与素材记录保持一致。之后仅停止已登记且工作目录匹配的API、Worker、单Beat，再做最终备份；实际库升级至 `r2_part_receipts`，原记录再次核对一致。测试恢复库已删除，业务数据库和Redis保留。
+
+从主目录重建前端并重启 `http://127.0.0.1:8011`；健康、静态登录、回调业务错误和未知API边界检查通过。用户可见浏览器确认已有admin会话可读用户管理，新增用户表单无邮箱；进入原租户后，原策略v2仍显示USD120、ROAS1.08、10素材/组、3创意，版权方独立凭据表单及自动恢复提示可用。未创建测试业务数据、未验证版权方凭据、未请求TikTok授权或写广告。
+
+本地配置选择R2，两个部署开关保持false，尚未提供实际桶/凭据或TikTok BC。macOS Worker仍为solo基础诊断，素材生产任务需要Linux prefork。因此当前本地页面可访问、数据已保留，不代表本机可以完成真实视频入库与投放。实际部署条件继续按运行手册处理。
+
+### 2026-09-09交付基线（历史）
+
 2026-09-09：用户指定仓库 `feat/platform-implementation` 的 P01～P06 功能与页面已完成；P07 本地业务、浏览器、容量、故障与备份恢复验收已完成。最终代码包括网眼/嘉书持久取链、共享 Scene 准备、目标封面准备和发送前检查、大批汇总与恢复计数优化。没有执行真实广告操作。服务器、域名、App 与租户授权后的外部验收仍按单独清单推进。
 
 最新测试与截图见[离线验收](acceptance/offline.md)、[功能页面对照](acceptance/functional-delivery.md)及[容量记录](acceptance/capacity.md)。下表及后续按阶段保留历史提交，不能用历史计数替代最新提交的验证。

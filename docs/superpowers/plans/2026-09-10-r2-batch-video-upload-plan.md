@@ -28,6 +28,19 @@
 
 ## 当前差距与交付顺序
 
+**2026-09-10实施更新：** 下述差距和逐步红测清单保留原计划编写时状态；当前实现已覆盖Task1～7，Task8已有离线浏览器、完整业务链和容量证据，生产联调项仍未完成。接口中的示例形状已由实际OpenAPI取代，新增每次分片权限与回执协议见[运行手册](../../runbooks/r2-video-upload.md)。最新回归及提交记录以[实施进度](../../implementation-progress.md)为准，不能把原始未勾选清单解读为尚无代码，也不能把代码交付解读为真实平台验收通过。
+
+| 任务 | 当前交付 | 证据入口 |
+| --- | --- | --- |
+| 1 临时对象模型 | 已实现；追加3次迁移，保留旧素材身份 | ingest_models、迁移/账务测试 |
+| 2 R2、预算、校验 | 已实现；真实PG/Redis并发、有界流式摘要和ffprobe | storage/object_budget/object_validation及相关测试 |
+| 3 大批API | 已实现；20k受理、幂等chunk、seek分页、取消和发送回查 | [容量/API验收](../../acceptance/r2-ingest.md) |
+| 4 批量上传UI | 已实现；4文件×2分片窗口、IndexedDB恢复、逐权限回执 | [真实浏览器/API验收](../../acceptance/r2-browser.md) |
+| 5 来源URL入库 | 已实现；官方SDK、来源公平选择、强回读和未知结果恢复 | source_selection/source_uploads及SDK测试 |
+| 6 删除后目标路径 | 已实现；授权源URL接力、目标实际VID和封面、即时预览 | [完整业务链](../../acceptance/r2-pipeline.md) |
+| 7 清理与回收 | 已实现；exact代次、删除回查、取消/放弃扫描、预算守恒 | cleanup、cleanup_reconcile及并发测试 |
+| 8 验收和部署 | 离线证据与部署工具已形成；实际R2/TikTok和生产负载待授权环境 | [运行手册](../../runbooks/r2-video-upload.md)及三份验收记录 |
+
 基线 `a310428` 的 `storage.make_s3()` 支持泛用 S3，但 `uploads.initialize_object_upload()` 发送 `ACL="private"`，R2 不支持该 ACL 参数。`sdk_assets.upload_video()` 只用 `UPLOAD_BY_FILE`，文件摘要在 `open_original()` 下载期间计算。`readiness` 没有启用实际共享，删除原件会阻断新目标账户。没有删除任务、清理回执或存储字节预算。
 
 现有 API 单批最多 200；批次列表有 SQL 分页，详情却全量返回，单文件查询也先读整批；上传页在浏览器中切片展示。不能仅把 200 改成 20,000。
@@ -360,4 +373,4 @@ def test_lost_delete_reply_is_read_back_without_reupload(app_state, cleanup):
 5. R2原件删除后，已有/新目标素材、搭建匹配、冻结、目标封面及失败恢复仍有完整路径。
 6. 10,000/20,000工程验收有可重复记录；真实日吞吐及外部兼容另有授权环境证据。
 
-当前本计划的实现步骤均未执行；R2实际账户/桶/凭据以及授权后的外部验证仍是部署输入。不得复用历史测试目录中的运营凭据替代用户的部署配置。
+实现状态见上方任务表。R2实际账户/桶/凭据、浏览器CORS、当前TikTok媒体主机、真实源入库→删除→新目标及日吞吐仍需部署证据；不得复用历史测试目录中的运营凭据替代用户配置。10k/20k元数据和1,000文件故障测试没有测量真实日量或Worker峰值RSS，相关指标继续明确留待验收。

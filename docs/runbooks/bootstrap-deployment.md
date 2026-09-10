@@ -2,6 +2,8 @@
 
 ## 当前验证状态（2026-09-09）
 
+2026-09-10更新：普通账号密码及租户版权方自动续登已升级，本地库进一步升级至 `r2_part_receipts`，已验证备份恢复及原记录保留。R2批量上传、源入库后清理和原件删除后的目标分发实现与本地/外部验收边界见[实施进度](../implementation-progress.md)及[R2运行手册](r2-video-upload.md)。主目录已重建并重启8011；新导入、自动清理两个开关保持关闭，不能用本地solo实例验收生产素材任务。
+
 本地真实 PostgreSQL 17.5 / Redis 8 已验证迁移、管理员登录、受保护用户接口、静态页面、回调业务响应以及后台投递。应用功能、两版权方完整离线搭建、浏览器和大量账户验收见[功能与页面交付](../acceptance/functional-delivery.md)、[离线记录](../acceptance/offline.md)和[容量记录](../acceptance/capacity.md)。
 
 当前本地 origin 为 `http://127.0.0.1:8011`；它没有公网或 HTTPS 含义。Compose 两套配置已校验，GitHub CI 已实际构建镜像。没有实际部署主机、域名及 App 配置，公网 HTTPS 回调、真实 OAuth 与真实广告创建按[外部联调清单](../acceptance/live-sdk.md)执行。
