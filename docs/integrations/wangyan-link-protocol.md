@@ -2,7 +2,7 @@
 
 Reviewed 2026-09-09 against public static source and local CLI protocol functions. This supersedes the earlier conclusion in providers-contract.md that exact-ID lookup was unavailable. No authentication, business-service request or provider write was performed. Fixtures are synthetic, not captured business receipts.
 
-Public source: `https://partners.shortswave.com/assets/20260724/business-A-IRbkW0.js`, 511,608 bytes, SHA256 `7a9b1de1f4f10cde11e58839270c89d8c40435454c681d1fda07685a7c90344f`. Offsets are decoded Unicode character offsets. Local CLI source: `TikTok AD/wangyan-drama-link-tool/drama-link-cli.js`, only createPromoteLink/getPromoteLinks/getPromoteLinksRaw and related protocol functions were read; no account/session/output data was used.
+Public source: `https://partners.shortswave.com/assets/20260724/business-A-IRbkW0.js`, 511,608 bytes, SHA256 `7a9b1de1f4f10cde11e58839270c89d8c40435454c681d1fda07685a7c90344f`. Offsets are decoded Unicode character offsets. Local CLI source: `projects/wangyan-drama-link-tool/drama-link-cli.js`, only createPromoteLink/getPromoteLinks/getPromoteLinksRaw and related protocol functions were read; no account/session/output data was used.
 
 | Offset | Observed source fact |
 | --- | --- |

@@ -6,7 +6,7 @@
 
 当前本地 origin 为 `http://127.0.0.1:8011`；它没有公网或 HTTPS 含义。Compose 两套配置已校验，GitHub CI 已实际构建镜像。没有实际部署主机、域名及 App 配置，公网 HTTPS 回调、真实 OAuth 与真实广告创建按[外部联调清单](../acceptance/live-sdk.md)执行。
 
-当前应用根目录为 `/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/tiktok-ad-automation/`。2026-09-09 迁移时保留了独立 Git 历史、worktree、私有配置及 PostgreSQL / Redis / Beat 数据；重建主虚拟环境并从新目录重启了服务。不要继续使用旧的同级目录启动命令。
+当前应用根目录为 `/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/projects/tiktok-ad-automation/`。2026-09-09 迁移时保留了独立 Git 历史、worktree、私有配置及 PostgreSQL / Redis / Beat 数据；重建主虚拟环境并从新目录重启了服务。不要继续使用旧的同级目录启动命令。
 
 ## 首次使用与可用范围
 

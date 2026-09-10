@@ -20,7 +20,7 @@
 - “用户无需配置固定素材账户”；每次上传记录实际账户，不引入租户素材账户设置表单。
 - “资产发现使用分页任务和持久化进度，支持恢复中断”；局部发现失败不能将未扫描到的账户标为移除。
 - 统一业务前缀 `/api/tenants/{tenant_id}/`，平台 `/api/platform/`，回调 `/api/integrations/tiktok/callback`；不新建 `/api/v1` 路由。
-- `APP_ROOT=/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/tiktok-ad-automation`；本计划所有代码路径相对 APP_ROOT。目录已在 2026-09-09 迁入当前工作区，已有工程与数据不得覆盖。
+- `APP_ROOT=/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/projects/tiktok-ad-automation`；本计划所有代码路径相对 APP_ROOT。目录已在 2026-09-09 迁入当前工作区，已有工程与数据不得覆盖。
 - 先完成 `01-foundation`：提供模板登录、专用本地测试 PostgreSQL、SDK 锁定、上下文、错误、分页和事务 outbox。固定模板 revision `cb740b656d7a0a6c5e12c7bf8e50343ec94ee9c7`，固定 SDK revision `f809c396520df2d7b201a9ccc5378d822b728ed3`。
 - 保留模板 `app.models.User` 的 `is_active/is_superuser` 与 `app.api.deps.CurrentUser/SessionDep`。运行命令从 APP_ROOT 开始，后端用 `uv`，前端用 `bun`。
 - 本计划测试只用本地数据库与 SDK fake，不发起真实 TikTok 请求。SDK 与 Python 3.14 兼容性由基础计划实际验证；授权门户及真实资产字段由应用获批后的联调验收确认。

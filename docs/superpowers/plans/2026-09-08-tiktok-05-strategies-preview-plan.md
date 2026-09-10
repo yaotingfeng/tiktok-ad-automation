@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- 应用根目录为 `/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/tiktok-ad-automation`，下文代码路径均相对该目录。目录已在 2026-09-09 迁入当前工作区，实施状态见 `docs/implementation-progress.md`。
+- 应用根目录为 `/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/projects/tiktok-ad-automation`，下文代码路径均相对该目录。目录已在 2026-09-09 迁入当前工作区，实施状态见 `docs/implementation-progress.md`。
 - 依赖计划 01～04；模板与 SDK revision、锁文件、共享身份/错误/分页/outbox 沿用计划 01，不复制基础设施。
 - “Campaign、Ad Group、Ad 的创建请求均直接使用 `operation_status=ENABLE`。”本计划不发起这些创建。
 - “单次提交只能包含一个租户、一个 BC，以及该上下文授权范围内的目标账户。”

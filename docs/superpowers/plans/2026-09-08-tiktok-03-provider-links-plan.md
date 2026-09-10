@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- 新应用根目录固定为 `/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/tiktok-ad-automation`，下文文件路径均相对该目录。2026-09-09 已迁入当前工作区。
+- 新应用根目录固定为 `/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/projects/tiktok-ad-automation`，下文文件路径均相对该目录。2026-09-09 已迁入当前工作区。
 - 每个租户独立管理版权方连接；相同版权方在不同租户之间不共享凭据、可见应用或推广链接。
 - 同一租户、连接、应用、剧目及推广配置，复用已有链接；先查，缺失时才创建。
 - 自动解析成功的剧目直接进入预览；重名、多语种等歧义由用户处理，不能自动猜测。
