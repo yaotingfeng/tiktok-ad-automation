@@ -6,7 +6,8 @@ import {
   MaterialIngestService,
 } from "@/client"
 import { handleApiError } from "@/lib/api-feedback"
-import type { TransferCallbacks } from "./upload-scheduler"
+import type { UploadPermissionLedger } from "./upload-permissions"
+import type { PermissionCallbacks, TransferCallbacks } from "./upload-scheduler"
 import {
   type MultipartIdentity,
   UploadError,
@@ -121,7 +122,8 @@ export function ingestCallbacks(options: {
   sessionId: () => string
   guard: (signal: AbortSignal) => void
   observe: (file: IngestFilePublic) => void
-}): TransferCallbacks {
+  ledger: UploadPermissionLedger
+}): TransferCallbacks & { permissions: PermissionCallbacks } {
   const path = (materialId: string) => ({
     tenant_id: options.tenantId,
     session_id: options.sessionId(),
@@ -147,7 +149,76 @@ export function ingestCallbacks(options: {
     options.observe(file)
     return file
   }
+  const checkIdentity = (
+    result: {
+      generation: number
+      upload_id: string | null
+      operation_revision: number
+    },
+    identity: MultipartIdentity,
+  ) => {
+    if (
+      result.generation !== identity.generation ||
+      result.upload_id !== identity.uploadId ||
+      result.operation_revision < identity.operationRevision
+    )
+      throw new UploadError("upload_identity_changed")
+  }
   return {
+    permissions: {
+      ledger: options.ledger,
+      async readSignPermission(input, signal) {
+        const result = await invoke(signal, () =>
+          MaterialIngestService.readIngestPartPermissions({
+            path: path(input.identity.materialId),
+            query: {
+              ...requestIdentity(input.identity),
+              upload_id: input.identity.uploadId,
+              request_id: input.requestId,
+            },
+            signal,
+          }),
+        )
+        checkIdentity(result, input.identity)
+        if (result.request_id !== input.requestId || result.items.length > 1)
+          throw new UploadError("response_invalid")
+        const part = result.items[0]
+        if (!part) return null
+        if (part.part_number !== input.partNumber)
+          throw new UploadError("response_invalid")
+        return {
+          permission: {
+            id: part.permission_id,
+            nonce: part.permission_nonce,
+            revision: part.permission_revision,
+            partNumber: part.part_number,
+          },
+          outcome: part.outcome,
+        }
+      },
+      async acknowledgeReceipts(input, signal) {
+        const result = await invoke(signal, () =>
+          MaterialIngestService.acknowledgeIngestParts({
+            path: path(input.identity.materialId),
+            body: {
+              ...requestIdentity(input.identity),
+              upload_id: input.identity.uploadId,
+              receipts: input.receipts.map(({ permission, outcome, etag }) => ({
+                part_number: permission.partNumber,
+                permission_id: permission.id,
+                permission_nonce: permission.nonce,
+                permission_revision: permission.revision,
+                outcome,
+                etag,
+              })),
+            },
+            signal,
+          }),
+        )
+        checkIdentity(result, input.identity)
+        return result.accepted_permission_ids
+      },
+    },
     async registerChunk(input, signal) {
       const result = await invoke(signal, () =>
         MaterialIngestService.createIngestChunk({
@@ -256,6 +327,7 @@ export function ingestCallbacks(options: {
       }
     },
     async signPart(input, signal) {
+      if (!input.requestId) throw new UploadError("response_invalid")
       const result = await invoke(signal, () =>
         MaterialIngestService.signIngestParts({
           path: path(input.identity.materialId),
@@ -263,6 +335,7 @@ export function ingestCallbacks(options: {
             ...requestIdentity(input.identity),
             upload_id: input.identity.uploadId,
             part_numbers: [input.partNumber],
+            request_id: input.requestId,
           },
           signal,
         }),
@@ -282,7 +355,15 @@ export function ingestCallbacks(options: {
         part.byte_size !== expected
       )
         throw new UploadError("response_invalid")
-      return { url: part.url }
+      return {
+        url: part.url,
+        permission: {
+          id: part.permission_id,
+          nonce: part.permission_nonce,
+          revision: part.permission_revision,
+          partNumber: part.part_number,
+        },
+      }
     },
     async completeFile(input, signal) {
       // Local parts are proof for browser resume. The server enumerates R2 itself.

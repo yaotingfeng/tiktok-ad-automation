@@ -577,3 +577,209 @@ for (const status of [403, 503])
     ).toHaveCount(0)
     expect(legacyReads).toBe(0)
   })
+
+test("ordinary cancellation waits for direct PUT receipts without aborting or completing the object", async ({
+  page,
+}) => {
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const f = await ingestBoundary(page, { putGate: () => gate })
+  await begin(page)
+  await expect.poll(() => f.puts.length).toBe(2)
+  const cancel = page.getByRole("button", { name: "放弃此文件", exact: true })
+  try {
+    await expect(cancel).toBeEnabled()
+    await cancel.click()
+    await expect(cancel).toBeDisabled()
+    expect(f.calls.filter((c) => c.path.endsWith("/cancel"))).toHaveLength(0)
+    expect(f.calls.filter((c) => c.path.endsWith("/complete"))).toHaveLength(0)
+    release()
+    await expect
+      .poll(() => f.calls.filter((c) => c.path.endsWith("/cancel")).length)
+      .toBe(1)
+    const receipts = f.calls
+      .filter((c) => c.path.endsWith("/part-receipts"))
+      .flatMap((c) => c.body.receipts)
+    expect(receipts).toHaveLength(2)
+    expect(receipts.every((r) => r.outcome === "completed" && r.etag)).toBe(
+      true,
+    )
+    expect(
+      f.calls.findIndex((c) => c.path.endsWith("/part-receipts")),
+    ).toBeLessThan(f.calls.findIndex((c) => c.path.endsWith("/cancel")))
+    expect(f.calls.filter((c) => c.path.endsWith("/complete"))).toHaveLength(0)
+    expect(f.files.get(0)?.temporary_storage_status).toBe("cleanup_pending")
+    expect(f.files.get(0)?.can_retry).toBe(false)
+  } finally {
+    release()
+  }
+})
+
+test("lost receipt acknowledgement refresh reuses direct evidence without another PUT", async ({
+  page,
+}) => {
+  const f = await ingestBoundary(page, { lostPartAck: true })
+  await begin(page)
+  await expect
+    .poll(() => f.calls.filter((c) => c.path.endsWith("/part-receipts")).length)
+    .toBe(1)
+  await expect(
+    page.getByRole("button", { name: "继续传输 / 核实接收", exact: true }),
+  ).toBeEnabled()
+  const first = f.calls.find((c) => c.path.endsWith("/part-receipts"))!.body
+  expect(f.puts).toHaveLength(2)
+  expect(f.summary.uploaded_count).toBe(0)
+  await page.reload()
+  await page
+    .getByRole("button", { name: "继续传输 / 核实接收", exact: true })
+    .click()
+  await expect
+    .poll(() => f.calls.filter((c) => c.path.endsWith("/part-receipts")).length)
+    .toBe(2)
+  // Refresh cannot retain File access. Publishing durable HTTP evidence does not
+  // manufacture a reselected file or skip the existing hash proof requirement.
+  expect(f.summary.uploaded_count).toBe(0)
+  await expect(
+    page.getByRole("button", { name: "重选此文件", exact: true }),
+  ).toBeEnabled()
+  await page.getByRole("button", { name: "重选此文件", exact: true }).click()
+  await page
+    .getByLabel("重选单个原文件", { exact: true })
+    .evaluate((input: HTMLInputElement, modified) => {
+      const selection = new DataTransfer()
+      selection.items.add(
+        new File([new Uint8Array(8).fill(1)], "完整剧名_0.mp4", {
+          type: "video/mp4",
+          lastModified: modified,
+        }),
+      )
+      input.files = selection.files
+      input.dispatchEvent(new Event("change", { bubbles: true }))
+    }, f.files.get(0)!.last_modified_ms!)
+  await expect.poll(() => f.summary.uploaded_count).toBe(1)
+  const receipts = f.calls.filter((c) => c.path.endsWith("/part-receipts"))
+  expect(receipts).toHaveLength(2)
+  expect(receipts[1].body).toEqual(first)
+  expect(f.puts).toHaveLength(2)
+  expect(f.calls.filter((c) => c.path.endsWith("/part-urls"))).toHaveLength(2)
+})
+
+test("forced pause retains unknown PUT permission while later cancellation records intent only", async ({
+  page,
+}) => {
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const f = await ingestBoundary(page, { putGate: () => gate })
+  await begin(page)
+  await expect.poll(() => f.puts.length).toBe(2)
+  try {
+    const failed = page.waitForEvent("requestfailed", {
+      predicate: (r) => r.url().startsWith("https://storage.test/"),
+    })
+    await page
+      .getByRole("button", { name: "暂停本地传输", exact: true })
+      .click()
+    await failed
+    await expect(
+      page.getByRole("button", { name: "继续传输 / 核实接收", exact: true }),
+    ).toBeEnabled()
+    release()
+    await page.getByRole("button", { name: "放弃此文件", exact: true }).click()
+    await expect
+      .poll(() => f.calls.filter((c) => c.path.endsWith("/cancel")).length)
+      .toBe(1)
+    const receipts = f.calls
+      .filter((c) => c.path.endsWith("/part-receipts"))
+      .flatMap((c) => c.body.receipts)
+    expect(receipts).toHaveLength(2)
+    expect(receipts.every((r) => r.outcome === "unknown" && !r.etag)).toBe(true)
+    expect(f.files.get(0)?.temporary_storage_status).toBe("cleanup_pending")
+    expect(f.files.get(0)?.can_retry).toBe(false)
+    expect(f.calls.filter((c) => c.path.endsWith("/complete"))).toHaveLength(0)
+  } finally {
+    release()
+  }
+})
+
+for (const failure of ["lostSign", "failFirstPut"] as const) {
+  test(`${failure}: signing retries preserve an unused window; every additional PUT has a new permission`, async ({
+    page,
+  }) => {
+    const f = await ingestBoundary(page, { [failure]: true })
+    await begin(page)
+    await expect
+      .poll(() => f.summary.uploaded_count, { timeout: 10000 })
+      .toBe(1)
+    const signs = f.calls.filter((c) => c.path.endsWith("/part-urls"))
+    expect(signs).toHaveLength(3)
+    const retried = signs.filter(
+      (c) => c.body.part_numbers[0] === signs[0].body.part_numbers[0],
+    )
+    expect(retried).toHaveLength(2)
+    const outcomes = [...f.permissions.values()].map((p) => p.outcome)
+    if (failure === "lostSign") {
+      expect(retried[1].body.request_id).toBe(retried[0].body.request_id)
+      expect(f.permissions.size).toBe(2)
+      expect(f.puts).toHaveLength(2)
+      expect(outcomes).toEqual(["completed", "completed"])
+    } else {
+      expect(retried[1].body.request_id).not.toBe(retried[0].body.request_id)
+      expect(f.permissions.size).toBe(3)
+      expect(f.puts).toHaveLength(3)
+      expect(outcomes.filter((o) => o === "unknown")).toHaveLength(1)
+      expect(outcomes.filter((o) => o === "completed")).toHaveLength(2)
+      const unknown = f.calls
+        .filter((c) => c.path.endsWith("/part-receipts"))
+        .flatMap((c) => c.body.receipts)
+        .filter((r) => r.outcome === "unknown")
+      expect(unknown).toHaveLength(1)
+      expect(unknown[0].etag).toBeNull()
+    }
+  })
+}
+
+test("cancelling one file pauses the bounded import and other files resume from their saved part proofs", async ({
+  page,
+}) => {
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const f = await ingestBoundary(page, { putGate: () => gate })
+  await begin(page, 6)
+  await expect.poll(() => f.puts.length).toBe(8)
+  try {
+    await page
+      .getByRole("row")
+      .filter({ hasText: "完整剧名_0.mp4" })
+      .getByRole("button", { name: "放弃此文件", exact: true })
+      .click()
+    release()
+    await expect
+      .poll(() => f.calls.filter((c) => c.path.endsWith("/cancel")).length)
+      .toBe(1)
+    await expect(
+      page.getByText(
+        "本次传输已暂停。其余未完成文件保留进度，可点“继续传输 / 核实接收”恢复。",
+        { exact: true },
+      ),
+    ).toBeVisible()
+    expect(f.puts).toHaveLength(8)
+    expect(f.summary.uploaded_count).toBe(0)
+    await page
+      .getByRole("button", { name: "继续传输 / 核实接收", exact: true })
+      .click()
+    await expect
+      .poll(() => f.summary.uploaded_count, { timeout: 10000 })
+      .toBe(5)
+    expect(f.puts).toHaveLength(12)
+    expect(f.puts.filter((p) => p.index < 4)).toHaveLength(8)
+    expect(f.files.get(0)?.temporary_storage_status).toBe("cleanup_pending")
+  } finally {
+    release()
+  }
+})

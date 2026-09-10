@@ -203,7 +203,7 @@ export function UploadQueue({
               <Button
                 size="sm"
                 variant="ghost"
-                disabled={busy}
+                disabled={manager.creating}
                 onClick={() =>
                   void manager.control
                     .cancel(summary, row.original)
@@ -271,6 +271,14 @@ export function UploadQueue({
           刷新进度
         </Button>
       </div>
+      {manager.pausedAfterCancellation && !manager.creating && (
+        <Alert>
+          <AlertDescription>
+            本次传输已暂停。其余未完成文件保留进度，可点“继续传输 /
+            核实接收”恢复。
+          </AlertDescription>
+        </Alert>
+      )}
       {summary && (
         <Alert>
           <AlertDescription>

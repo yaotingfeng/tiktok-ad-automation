@@ -10,6 +10,7 @@ import {
   ingestCallbacks,
   transferError,
 } from "./ingest-transfer"
+import { UploadPermissionLedger } from "./upload-permissions"
 import { type TransferProgress, UploadScheduler } from "./upload-scheduler"
 import { UploadError, type UploadImport, UploadStore } from "./upload-store"
 
@@ -17,6 +18,7 @@ export type IngestManagerState = {
   creating: boolean
   transferring: boolean
   unfinished: boolean
+  pausedAfterCancellation: boolean
   forbidden: boolean
   pending: UploadImport | null
   sessionId: string | null
@@ -24,6 +26,8 @@ export type IngestManagerState = {
 }
 export class IngestManager {
   private store: UploadStore | null = null
+  private permissionLedger: UploadPermissionLedger | null = null
+  private cancelling = false
   private abort = new AbortController()
   private scheduler: UploadScheduler | null = null
   private draining: Promise<unknown> | null = null
@@ -38,6 +42,7 @@ export class IngestManager {
     creating: false,
     transferring: false,
     unfinished: false,
+    pausedAfterCancellation: false,
     forbidden: false,
     pending: null,
     sessionId: null,
@@ -75,11 +80,20 @@ export class IngestManager {
     this.opening = (async () => {
       try {
         const store = await UploadStore.open()
+        let ledger: UploadPermissionLedger
+        try {
+          ledger = await UploadPermissionLedger.open()
+        } catch (error) {
+          store.close()
+          throw error
+        }
         if (signal.aborted) {
+          ledger.close()
           store.close()
           return
         }
         this.store = store
+        this.permissionLedger = ledger
         let after: string | null = null
         do {
           const imports = await store.listImports(
@@ -110,6 +124,8 @@ export class IngestManager {
     this.timer = null
     this.store?.close()
     this.store = null
+    this.permissionLedger?.close()
+    this.permissionLedger = null
     this.progress.clear()
   }
   revokePermission = () => {
@@ -132,7 +148,8 @@ export class IngestManager {
   private async ready() {
     await this.opening
     this.guard(this.abort.signal)
-    if (!this.store) throw new UploadError("storage_unavailable")
+    if (!this.store || !this.permissionLedger)
+      throw new UploadError("storage_unavailable")
     return this.store
   }
   private failure(error: unknown) {
@@ -147,20 +164,23 @@ export class IngestManager {
     this.scheduler?.dispose()
     this.intent = intent
     this.progress.clear()
+    const callbacks = ingestCallbacks({
+      tenantId: this.tenantId,
+      sessionId: () => {
+        if (!this.intent?.serverSessionId)
+          throw new UploadError("registration_required")
+        return this.intent.serverSessionId
+      },
+      guard: this.guard,
+      observe: () => {},
+      ledger: this.permissionLedger!,
+    })
     this.scheduler = new UploadScheduler({
       scope: intent,
       store: this.store!,
       signal: this.abort.signal,
-      callbacks: ingestCallbacks({
-        tenantId: this.tenantId,
-        sessionId: () => {
-          if (!this.intent?.serverSessionId)
-            throw new UploadError("registration_required")
-          return this.intent.serverSessionId
-        },
-        guard: this.guard,
-        observe: () => {},
-      }),
+      callbacks,
+      permissions: callbacks.permissions,
       onProgress: (event) => {
         this.progress.set(event.clientIndex, event)
         for (const listener of this.progressListeners.get(event.clientIndex) ??
@@ -323,6 +343,7 @@ export class IngestManager {
   }
   private async run() {
     if (
+      this.cancelling ||
       this.snapshot.transferring ||
       !this.scheduler ||
       !this.intent?.serverSessionId
@@ -331,7 +352,11 @@ export class IngestManager {
     const scheduler = this.scheduler,
       intent = this.intent,
       signal = this.abort.signal
-    this.update({ transferring: true, error: null })
+    this.update({
+      transferring: true,
+      pausedAfterCancellation: false,
+      error: null,
+    })
     try {
       const transfer = scheduler.run()
       this.draining = transfer
@@ -339,6 +364,10 @@ export class IngestManager {
       this.draining = null
       this.guard(signal)
       if (this.scheduler !== scheduler) return
+      if (result.stopped || this.cancelling) {
+        this.update({ unfinished: true })
+        return
+      }
       const seal = (
         await MaterialIngestService.sealIngestSession({
           path: {
@@ -421,6 +450,7 @@ export class IngestManager {
     if (existing) this.bind(existing)
     this.update({
       sessionId: summary.session_id,
+      pausedAfterCancellation: false,
       unfinished: false,
       transferring: false,
     })
@@ -537,27 +567,67 @@ export class IngestManager {
   }
   cancel = async (summary: IngestSummary, file: IngestFilePublic) => {
     if (
-      this.snapshot.transferring ||
       this.snapshot.creating ||
       this.snapshot.forbidden ||
-      file.operation_status === "result_unknown"
+      file.operation_status === "result_unknown" ||
+      (this.snapshot.transferring &&
+        this.intent?.serverSessionId !== summary.session_id)
     )
       return
+    this.cancelling = true
+    if (this.timer) clearTimeout(this.timer)
+    this.timer = null
     this.update({ creating: true, error: null })
+    // Stop synchronously before even the local database lookup can yield to a
+    // newly completed PUT and let it schedule object completion.
+    let drain =
+      this.intent?.serverSessionId === summary.session_id && this.scheduler
+        ? this.scheduler.drainForCancellation()
+        : null
+    void drain?.catch(() => {})
     try {
-      await this.ready()
+      const store = await this.ready()
       this.checkSummary(summary)
+      const local = await store.findImport(
+        this.tenantId,
+        this.bcId,
+        summary.session_id,
+      )
       this.guard(this.abort.signal)
+      // No import on this browser means no local PUT to drain. The server still
+      // retains other browsers' unresolved permissions; this is never an absence proof.
+      if (!drain && local) drain = this.bind(local).drainForCancellation()
+      if (drain) {
+        const result = await drain
+        this.guard(this.abort.signal)
+        this.update({ pausedAfterCancellation: true, unfinished: true })
+        if (result.unknown || result.unresolved)
+          this.update({ error: new UploadError("completion_unknown") })
+      }
+      const path = {
+        tenant_id: this.tenantId,
+        session_id: summary.session_id,
+        material_id: file.material_id,
+      }
+      const current = (
+        await MaterialIngestService.readIngestFile({
+          path,
+          signal: this.abort.signal,
+        })
+      ).data
+      this.guard(this.abort.signal)
+      if (
+        current.material_id !== file.material_id ||
+        current.client_index !== file.client_index ||
+        current.generation !== file.generation
+      )
+        throw new UploadError("upload_identity_changed")
       await MaterialIngestService.cancelIngestFile({
-        path: {
-          tenant_id: this.tenantId,
-          session_id: summary.session_id,
-          material_id: file.material_id,
-        },
+        path,
         body: {
-          generation: file.generation,
-          upload_id: file.upload_id,
-          operation_revision: file.operation_revision,
+          generation: current.generation,
+          upload_id: current.upload_id,
+          operation_revision: current.operation_revision,
         },
         signal: this.abort.signal,
       })
@@ -565,6 +635,7 @@ export class IngestManager {
     } catch (error) {
       this.failure(error)
     } finally {
+      this.cancelling = false
       if (!this.abort.signal.aborted) this.update({ creating: false })
     }
   }

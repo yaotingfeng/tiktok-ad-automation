@@ -1,5 +1,9 @@
 import { expect, type Page } from "@playwright/test"
-import type { IngestFilePublic, IngestSummary } from "../../src/client"
+import type {
+  IngestFilePublic,
+  IngestPartPermission,
+  IngestSummary,
+} from "../../src/client"
 export const TENANT = "11111111-1111-4111-8111-111111111111"
 export const TENANT_B = "22222222-2222-4222-8222-222222222222"
 export const BC = "9876543210987654321"
@@ -24,6 +28,10 @@ export async function ingestBoundary(
     completingPages?: number
     backpressure?: boolean
     denySign?: boolean
+    putGate?: () => Promise<void>
+    lostPartAck?: boolean
+    lostSign?: boolean
+    failFirstPut?: boolean
   } = {},
 ) {
   const calls: {
@@ -32,6 +40,10 @@ export async function ingestBoundary(
     body: any
     query: URLSearchParams
   }[] = []
+  const permissions = new Map<string, IngestPartPermission>()
+  let lostPartAck = !!options.lostPartAck
+  let lostSign = !!options.lostSign
+  let failFirstPut = !!options.failFirstPut
   const puts: { index: number; part: number; bytes: number }[] = []
   const files = new Map<number, IngestFilePublic>()
   const parts = new Map<
@@ -276,9 +288,25 @@ export async function ingestBoundary(
     if (path.endsWith("/part-urls")) {
       if (options.denySign) return reply({ code: "action_forbidden" }, 403)
       expect(body.operation_revision).toBe(file.operation_revision)
+      expect(body.request_id).toMatch(/^[0-9a-f-]{36}$/)
+      expect(body.part_numbers.length).toBeLessThanOrEqual(2)
+      const key = `${file.material_id}:${body.request_id}`
+      if (!permissions.has(key))
+        permissions.set(key, {
+          part_number: body.part_numbers[0],
+          permission_id: crypto.randomUUID(),
+          permission_nonce: crypto.randomUUID(),
+          permission_revision: 1,
+          outcome: "signed",
+        })
+      if (lostSign) {
+        lostSign = false
+        return route.abort("failed")
+      }
       return reply({
         ...identity(),
         items: body.part_numbers.map((part: number) => ({
+          ...permissions.get(key),
           part_number: part,
           byte_size: Math.min(
             file.part_size,
@@ -289,11 +317,54 @@ export async function ingestBoundary(
         })),
       })
     }
+    if (path.endsWith("/part-permissions")) {
+      const permission = permissions.get(
+        `${file.material_id}:${url.searchParams.get("request_id")}`,
+      )
+      return reply({
+        ...identity(),
+        request_id: url.searchParams.get("request_id"),
+        items: permission ? [permission] : [],
+      })
+    }
+    if (path.endsWith("/part-receipts")) {
+      expect(body.receipts.length).toBeGreaterThan(0)
+      expect(body.receipts.length).toBeLessThanOrEqual(2)
+      for (const receipt of body.receipts) {
+        const permission = [...permissions.entries()].find(
+          ([key, p]) =>
+            key.startsWith(`${file.material_id}:`) &&
+            p.permission_id === receipt.permission_id,
+        )?.[1]
+        expect(permission).toBeDefined()
+        expect(receipt.permission_nonce).toBe(permission!.permission_nonce)
+        expect(receipt.permission_revision).toBe(
+          permission!.permission_revision,
+        )
+        expect(receipt.part_number).toBe(permission!.part_number)
+        expect(["signed", receipt.outcome]).toContain(permission!.outcome)
+        if (receipt.outcome === "completed")
+          expect(receipt.etag).toBe(
+            parts.get(file.client_index)?.get(receipt.part_number)?.etag,
+          )
+        permission!.outcome = receipt.outcome
+      }
+      if (lostPartAck) {
+        lostPartAck = false
+        return route.abort("failed")
+      }
+      return reply({
+        ...identity(),
+        accepted_permission_ids: body.receipts.map((r: any) => r.permission_id),
+      })
+    }
     if (path.endsWith("/cancel")) {
       expect(body).toEqual(identity())
       file.platform_status = "blocked"
-      file.temporary_storage_status = "waiting_capacity"
-      file.can_retry = true
+      file.temporary_storage_status = file.upload_id
+        ? "cleanup_pending"
+        : "waiting_capacity"
+      file.can_retry = !file.upload_id
       file.operation_revision++
       return reply(file)
     }
@@ -348,6 +419,11 @@ export async function ingestBoundary(
       part = Number(match[2]),
       bytes = request.postDataBuffer()!.length
     puts.push({ index, part, bytes })
+    await options.putGate?.()
+    if (failFirstPut) {
+      failFirstPut = false
+      return route.fulfill({ status: 503 })
+    }
     const record = parts.get(index) ?? new Map()
     record.set(part, {
       part_number: part,
@@ -366,6 +442,7 @@ export async function ingestBoundary(
   })
   return {
     calls,
+    permissions,
     puts,
     files,
     parts,
