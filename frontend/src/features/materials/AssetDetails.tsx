@@ -1,9 +1,10 @@
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
 import { useEffect, useRef, useState } from "react"
 import {
   type AccountAsset,
   MaterialsService,
+  type RemoteMaterialPreview,
   type UploadAttemptPublic,
 } from "@/client"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -21,6 +22,11 @@ import {
 } from "@/features/tenants/shared"
 import { handleApiError } from "@/lib/api-feedback"
 import { bytes, CopyValue, issue, materialKey, Stage } from "./presentation"
+
+type Preview =
+  | { kind: "original"; url: string }
+  | ({ kind: "remote" } & RemoteMaterialPreview)
+
 export function AssetDetails({
   tenantId,
   bcId,
@@ -34,16 +40,34 @@ export function AssetDetails({
   onClose: () => void
   onForbidden: () => void
 }) {
-  const [preview, setPreview] = useState<string | null>(null),
+  const queryClient = useQueryClient()
+  const [sessionToken] = useState(() => localStorage.getItem("access_token"))
+  const [previewAuthorized, setPreviewAuthorized] = useState(true)
+  const [preview, setPreview] = useState<Preview | null>(null),
     [previewError, setPreviewError] = useState(false),
     [previewLoading, setPreviewLoading] = useState(false),
     previewController = useRef<AbortController | null>(null)
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    let revoked = false
+    const checkSession = () => {
+      if (!revoked && sessionToken !== localStorage.getItem("access_token")) {
+        revoked = true
+        previewController.current?.abort()
+        setPreview(null)
+        setPreviewError(false)
+        setPreviewLoading(false)
+        setPreviewAuthorized(false)
+      }
+    }
+    const unsubscribe = queryClient.getQueryCache().subscribe(checkSession)
+    window.addEventListener("storage", checkSession)
+    checkSession()
+    return () => {
+      unsubscribe()
+      window.removeEventListener("storage", checkSession)
       previewController.current?.abort()
-    },
-    [],
-  )
+    }
+  }, [queryClient, sessionToken])
   const path = { tenant_id: tenantId, material_id: materialId },
     key = [...materialKey(tenantId, bcId), "details", materialId]
   const detail = useQuery({
@@ -95,6 +119,51 @@ export function AssetDetails({
     if ([detail.error, assets.error, attempts.error].some(isForbidden))
       onForbidden()
   }, [detail.error, assets.error, attempts.error, onForbidden])
+  async function loadPreview(kind: "original" | "remote") {
+    if (
+      !previewAuthorized ||
+      !sessionToken ||
+      sessionToken !== localStorage.getItem("access_token")
+    )
+      return
+    previewController.current?.abort()
+    const controller = new AbortController()
+    previewController.current = controller
+    setPreviewLoading(true)
+    setPreviewError(false)
+    setPreview(null)
+    try {
+      const request = {
+        path,
+        query: { bc_id: bcId },
+        signal: controller.signal,
+      }
+      const result: Preview =
+        kind === "remote"
+          ? {
+              kind,
+              ...(await MaterialsService.readRemotePreview(request)).data,
+            }
+          : {
+              kind,
+              url: (await MaterialsService.readOriginalPreview(request)).data
+                .url,
+            }
+      if (
+        !controller.signal.aborted &&
+        sessionToken === localStorage.getItem("access_token")
+      )
+        setPreview(result)
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        if (error instanceof Error) handleApiError(error)
+        if (isForbidden(error)) onForbidden()
+        setPreviewError(true)
+      }
+    } finally {
+      if (!controller.signal.aborted) setPreviewLoading(false)
+    }
+  }
   const ac: ColumnDef<AccountAsset>[] = [
     {
       header: "实际账户",
@@ -169,56 +238,57 @@ export function AssetDetails({
               </p>
               <p className="text-sm text-muted-foreground">
                 {detail.data.original_available
-                  ? "原文件已完整接收并保留"
-                  : "原文件尚未完整接收"}
+                  ? "暂存原件当前可读取"
+                  : "暂无可读取的暂存原件"}
               </p>
               <Stage status={detail.data.status} />
-              {detail.data.original_available && (
-                <Button
-                  variant="outline"
-                  disabled={previewLoading}
-                  onClick={async () => {
-                    previewController.current?.abort()
-                    const c = new AbortController()
-                    previewController.current = c
-                    setPreviewLoading(true)
-                    setPreviewError(false)
-                    setPreview(null)
-                    try {
-                      const { data } =
-                        await MaterialsService.readOriginalPreview({
-                          path,
-                          query: { bc_id: bcId },
-                          signal: c.signal,
-                        })
-                      if (!c.signal.aborted) setPreview(data.url)
-                    } catch (e) {
-                      if (e instanceof Error) handleApiError(e)
-                      if (isForbidden(e)) onForbidden()
-                      if (!c.signal.aborted) setPreviewError(true)
-                    } finally {
-                      if (!c.signal.aborted) setPreviewLoading(false)
-                    }
-                  }}
-                >
-                  {previewLoading
-                    ? "正在读取原文件…"
-                    : preview
-                      ? "重新获取预览"
-                      : "预览原文件"}
-                </Button>
+              <div className="flex flex-wrap gap-2">
+                {detail.data.available_account_count > 0 && (
+                  <Button
+                    variant="outline"
+                    disabled={previewLoading || !previewAuthorized}
+                    onClick={() => void loadPreview("remote")}
+                  >
+                    {previewLoading ? "正在读取预览…" : "预览账户素材"}
+                  </Button>
+                )}
+                {detail.data.original_available && (
+                  <Button
+                    variant="outline"
+                    disabled={previewLoading || !previewAuthorized}
+                    onClick={() => void loadPreview("original")}
+                  >
+                    {previewLoading ? "正在读取预览…" : "预览原文件"}
+                  </Button>
+                )}
+              </div>
+              {preview?.kind === "remote" && (
+                <div className="flex flex-col gap-1 text-sm">
+                  <span>实际预览账户</span>
+                  <CopyValue value={preview.advertiser_id} />
+                  <span>实际预览 VID</span>
+                  <CopyValue value={preview.video_id} />
+                  <span className="text-muted-foreground">
+                    {preview.width} × {preview.height} · {preview.duration} 秒 ·{" "}
+                    {preview.format}
+                  </span>
+                </div>
               )}
               {previewError && (
                 <Alert variant="destructive">
                   <AlertDescription>
-                    原文件预览暂不可用，请重新获取预览。
+                    暂无法预览，请稍后重新获取。
                   </AlertDescription>
                 </Alert>
               )}
               {preview && (
                 <video
-                  aria-label="原文件视频预览"
-                  src={preview}
+                  aria-label={
+                    preview.kind === "remote"
+                      ? "账户素材视频预览"
+                      : "原文件视频预览"
+                  }
+                  src={preview.url}
                   controls
                   preload="metadata"
                   className="max-h-80 w-full"

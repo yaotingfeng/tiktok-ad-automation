@@ -3707,6 +3707,42 @@ export type VersionPublic = {
     request_id: string;
 };
 
+/**
+ * RemoteMaterialPreview
+ *
+ * Current response-only URL; platform expiry is not assumed.
+ */
+export type RemoteMaterialPreview = {
+    /**
+     * Url
+     */
+    url: string;
+    /**
+     * Advertiser Id
+     */
+    advertiser_id: string;
+    /**
+     * Video Id
+     */
+    video_id: string;
+    /**
+     * Width
+     */
+    width: number;
+    /**
+     * Height
+     */
+    height: number;
+    /**
+     * Duration
+     */
+    duration: number;
+    /**
+     * Format
+     */
+    format: string;
+};
+
 export type loginLoginAccessTokenData = {
     body: Body_login_login_access_token;
     path?: never;
@@ -7910,3 +7946,42 @@ export type buildsGetSubmissionRecoveryResponses = {
 };
 
 export type buildsGetSubmissionRecoveryResponse = buildsGetSubmissionRecoveryResponses[keyof buildsGetSubmissionRecoveryResponses];
+
+export type materialsReadRemotePreviewData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Material Id
+         */
+        material_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/materials/{material_id}/remote-preview';
+};
+
+export type materialsReadRemotePreviewErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialsReadRemotePreviewError = materialsReadRemotePreviewErrors[keyof materialsReadRemotePreviewErrors];
+
+export type materialsReadRemotePreviewResponses = {
+    /**
+     * Successful Response
+     */
+    200: RemoteMaterialPreview;
+};
+
+export type materialsReadRemotePreviewResponse = materialsReadRemotePreviewResponses[keyof materialsReadRemotePreviewResponses];

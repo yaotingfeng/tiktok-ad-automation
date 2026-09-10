@@ -260,6 +260,7 @@ function MaterialWorkspace({
       )}
       {details && (
         <AssetDetails
+          key={details}
           tenantId={tenantId}
           bcId={bcId}
           materialId={details}

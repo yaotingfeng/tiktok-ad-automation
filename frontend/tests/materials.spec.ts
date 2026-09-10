@@ -518,3 +518,156 @@ test("大批导入超过 20000 明确阻止且仍保持有界窗口", async ({ p
   ).toBeDisabled()
   await expect(sheet.getByRole("listitem")).toHaveCount(100)
 })
+
+test("暂存原件清理后按需预览账户素材，不持久化远端 URL 或改写可用状态", async ({
+  page,
+}) => {
+  const { requests } = await boundary(page, { role: "viewer" })
+  await page.route(`**/materials/${M}?**`, (route) =>
+    route.fulfill({ json: { ...original, original_available: false } }),
+  )
+  let reads = 0
+  await page.route("**/remote-preview?**", (route) => {
+    expect(route.request().method()).toBe("GET")
+    expect(new URL(route.request().url()).searchParams.get("bc_id")).toBe(BC)
+    reads++
+    return route.fulfill({
+      headers: { "Cache-Control": "no-store" },
+      json: {
+        url: "https://video.test/preview?signature=remote-preview-secret",
+        advertiser_id: "7777777777777777777",
+        video_id: "actual-target-video",
+        width: 720,
+        height: 1280,
+        duration: 30,
+        format: "mp4",
+      },
+    })
+  })
+  await page.route("https://video.test/**", () => {})
+  await page.goto(url)
+  await page
+    .getByRole("button", { name: "查看文件与账户记录", exact: true })
+    .click()
+  await expect(
+    page.getByText("暂无可读取的暂存原件", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "预览原文件", exact: true }),
+  ).toHaveCount(0)
+  expect(reads).toBe(0)
+  await page.getByRole("button", { name: "预览账户素材", exact: true }).click()
+  await expect(page.getByLabel("账户素材视频预览")).toHaveAttribute(
+    "src",
+    /remote-preview-secret/,
+  )
+  await expect(
+    page.getByText("actual-target-video", { exact: true }),
+  ).toBeVisible()
+  expect(
+    await page.evaluate(() =>
+      JSON.stringify({ local: localStorage, session: sessionStorage }),
+    ),
+  ).not.toContain("remote-preview-secret")
+  await page.getByRole("button", { name: "关闭", exact: true }).click()
+  await page
+    .getByRole("button", { name: "查看文件与账户记录", exact: true })
+    .click()
+  await expect(page.locator("video")).toHaveCount(0)
+  expect(reads).toBe(1)
+  expect(requests.filter((request) => request.method !== "GET")).toHaveLength(0)
+})
+
+test("远端预览读取失败只显示暂无法预览，关闭后迟到回复不进入新范围", async ({
+  page,
+}) => {
+  await boundary(page, { role: "viewer" })
+  await page.route("**/remote-preview?**", (route) =>
+    route.fulfill({
+      status: 409,
+      json: { code: "material_preview_unavailable", message: "暂无法预览" },
+    }),
+  )
+  await page.goto(url)
+  await page
+    .getByRole("button", { name: "查看文件与账户记录", exact: true })
+    .click()
+  await page.getByRole("button", { name: "预览账户素材", exact: true }).click()
+  await expect(
+    page.getByText("暂无法预览，请稍后重新获取。", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("dialog").getByText("账户素材可用", { exact: true }).first(),
+  ).toBeVisible()
+  let release!: () => void
+  const pending = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let called = false
+  await page.route("**/remote-preview?**", async (route) => {
+    called = true
+    await pending
+    await route
+      .fulfill({
+        json: {
+          url: "https://video.test/late?secret=late-preview",
+          advertiser_id: "7777777777777777777",
+          video_id: "late-video",
+          width: 720,
+          height: 1280,
+          duration: 30,
+          format: "mp4",
+        },
+      })
+      .catch(() => {})
+  })
+  await page.getByRole("button", { name: "预览账户素材", exact: true }).click()
+  await expect.poll(() => called).toBe(true)
+  await page.getByRole("button", { name: "关闭", exact: true }).click()
+  release()
+  await page
+    .getByRole("button", { name: "查看文件与账户记录", exact: true })
+    .click()
+  await expect(page.locator("video")).toHaveCount(0)
+  await expect(page.getByText("late-video", { exact: true })).toHaveCount(0)
+})
+
+test("账户预览随当前登录失效立即清除，不能继续请求预览", async ({ page }) => {
+  await boundary(page, { role: "viewer" })
+  let reads = 0
+  await page.route("**/remote-preview?**", (route) => {
+    reads++
+    return route.fulfill({
+      json: {
+        url: "https://video.test/preview?signature=auth-bound",
+        advertiser_id: "7777777777777777777",
+        video_id: "auth-bound-video",
+        width: 720,
+        height: 1280,
+        duration: 30,
+        format: "mp4",
+      },
+    })
+  })
+  await page.route("https://video.test/**", () => {})
+  await page.goto(url)
+  await page
+    .getByRole("button", { name: "查看文件与账户记录", exact: true })
+    .click()
+  await page.getByRole("button", { name: "预览账户素材", exact: true }).click()
+  await expect(page.locator("video")).toHaveCount(1)
+  await page.evaluate(() => {
+    localStorage.setItem("access_token", "different-session-token")
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: "access_token",
+        newValue: "different-session-token",
+      }),
+    )
+  })
+  await expect(page.locator("video")).toHaveCount(0)
+  await expect(
+    page.getByRole("button", { name: "预览账户素材", exact: true }),
+  ).toBeDisabled()
+  expect(reads).toBe(1)
+})
