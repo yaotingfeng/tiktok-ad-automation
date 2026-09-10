@@ -23,6 +23,9 @@ services:
     logging: *production-logging
   prestart:
     image: *release-image
+    build:
+      args:
+        DEBIAN_MIRROR: https://mirrors.cloud.tencent.com
     cpus: 1.0
     mem_limit: 1024m
     logging: *production-logging

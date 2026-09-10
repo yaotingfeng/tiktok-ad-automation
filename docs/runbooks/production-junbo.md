@@ -38,8 +38,10 @@
 ## 首次发布
 
 1. 运维端核对 `git status -sb`、`git rev-parse --show-toplevel`、提交差异、测试及远程 SHA。执行 `git archive --format=tar <SHA>`，通过 SSH 传到上述同名版本目录。
+   首次创建 `/opt/tt-ada/releases`、`/opt/tt-ada/backups`（0700）、`/etc/tt-ada`（0700）及 `/var/log/nginx`；不要假定宝塔安装已建立系统 Nginx 日志目录。
 2. 私有环境文件由运维安全创建：`PROJECT_NAME=TT ADA`、`FRONTEND_HOST=https://manjuad.gzjunbo.net:8000`、`TT_ADA_BACKEND_PORT=18000`、独立 `SECRET_KEY`、`CONNECTION_ENCRYPTION_KEY`、`POSTGRES_PASSWORD`，以及用户授权的初始化管理员凭据。不要复用本地密钥。
 3. 以下命令在服务器执行，`RELEASE_SHA` 必须替换为已验证的完整 SHA。配置检查只能输出 `--quiet`、服务名或必要非敏感字段，不能输出整个环境。
+   国内服务器的生产构建使用腾讯云 Debian 镜像站并保留 APT 签名校验；uv 从官方 PyPI 安装固定版本 0.9.26。Python/Bun、uv.lock 和 bun.lock 的版本约束不变。不要修改整机 Docker 镜像源或其他项目依赖来解决单项目构建问题。
 
 ```bash
 RELEASE_SHA=<完整40位SHA>

@@ -13,6 +13,7 @@ fi
 compose="$release_dir/deploy/production-compose.sh"
 
 # 防止定时备份与发版前备份交叠；不停止其他应用或操作其数据库。
+install -d -m 0700 /opt/tt-ada/backups
 exec 9>/opt/tt-ada/backups/.lock
 flock -w 60 9
 backup_dir="/opt/tt-ada/backups/$(date -u +%Y%m%dT%H%M%SZ)-$reason"

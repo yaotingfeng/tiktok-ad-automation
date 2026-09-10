@@ -18,13 +18,18 @@ RUN bun run build
 
 FROM python:3.14
 
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+# 国内生产主机可选择已验证的镜像站；APT 仍验证 Debian 签名和包摘要。
+ARG DEBIAN_MIRROR=https://deb.debian.org
+RUN sed -E -i "s|https?://deb.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
+    && apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update \
+    && apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 ENV PYTHONUNBUFFERED=1
 
-# Install uv
-# Ref: https://docs.astral.sh/uv/guides/integration/docker/#installing-uv
-COPY --from=ghcr.io/astral-sh/uv:0.9.26 /uv /uvx /bin/
+# 使用官方 PyPI 分发的固定 uv 版本，避免构建依赖额外的 GHCR 大文件连接。
+# Ref: https://docs.astral.sh/uv/getting-started/installation/#pypi
+RUN pip install --no-cache-dir uv==0.9.26
 
 # Compile bytecode
 # Ref: https://docs.astral.sh/uv/guides/integration/docker/#compiling-bytecode
