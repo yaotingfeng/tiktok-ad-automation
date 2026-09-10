@@ -408,9 +408,7 @@ def test_upgrade_preserves_legacy_ids_keys_multipart_and_mapping(session, contex
     session.flush()
     identities = [(file.id, file.object_key, file.storage_state) for file in files]
     old_asset_id, old_vid = asset.id, asset.video_id
-    migration = import_module(
-        "app.alembic.versions.r2_transient_ingest_persist_transient_originals_and_ingest_"
-    )
+    migration = ingest_migration_chain()
     with Operations.context(MigrationContext.configure(session.connection())):
         migration.downgrade()
         migration.upgrade()
@@ -606,9 +604,7 @@ def test_downgrade_missing_or_cleaned_current_original_remains_unavailable(
         session.flush()
     identities = file.id, asset.id, asset.video_id, asset.mid, legacy.id
     assert not file.original_available
-    migration = import_module(
-        "app.alembic.versions.r2_transient_ingest_persist_transient_originals_and_ingest_"
-    )
+    migration = ingest_migration_chain()
     with Operations.context(MigrationContext.configure(session.connection())):
         migration.downgrade()
     file_id, asset_id, video_id, mid, legacy_id = identities
@@ -654,3 +650,59 @@ def test_session_occupancy_is_nonnegative_and_stored_is_subset(session, context)
         text("SELECT reserved_bytes, stored_bytes FROM ingest_session WHERE id = :id"),
         {"id": batch.id},
     ).one() == (123, 100)
+
+
+def ingest_migration_chain():
+    """Base round-trip coverage remains valid after the bounded-chunk child."""
+    from types import SimpleNamespace
+
+    base = import_module(
+        "app.alembic.versions.r2_transient_ingest_persist_transient_originals_and_ingest_"
+    )
+    child = import_module(
+        "app.alembic.versions.r2_ingest_chunks_persist_bounded_ingest_chunk_receipts_"
+    )
+
+    def upgrade():
+        base.upgrade()
+        child.upgrade()
+
+    def downgrade():
+        child.downgrade()
+        base.downgrade()
+
+    return SimpleNamespace(upgrade=upgrade, downgrade=downgrade)
+
+
+def test_chunk_receipt_bound_and_local_fingerprint_are_enforced_by_postgres(
+    session, context
+):
+    from app.modules.materials.ingest_models import IngestChunk
+
+    batch, rows, _ = ingest_fixture(session, context)
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.add(
+            IngestChunk(
+                tenant_id=context.tenant_id,
+                bc_id=batch.bc_id,
+                session_id=batch.id,
+                request_id=uuid4(),
+                request_digest="a" * 64,
+                client_indexes=list(range(201)),
+            )
+        )
+        session.flush()
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.execute(
+            update(IngestSessionFile)
+            .where(IngestSessionFile.id == rows[0].id)
+            .values(last_modified_ms=10)
+        )
+    assert (
+        session.execute(
+            select(IngestSessionFile.last_modified_ms).where(
+                IngestSessionFile.id == rows[0].id
+            )
+        ).scalar_one()
+        is None
+    )

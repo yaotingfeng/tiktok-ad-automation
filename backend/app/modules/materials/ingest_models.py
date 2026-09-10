@@ -17,11 +17,11 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     UniqueConstraint,
-    select,
+    text,
     update,
 )
 from sqlalchemy.dialects.postgresql import JSONB, insert
-from sqlmodel import Field, Session, SQLModel
+from sqlmodel import Field, Session, SQLModel, col, select
 
 from .models import access_reference, material_reference
 
@@ -97,6 +97,7 @@ class IngestSession(SQLModel, table=True):
             "reserved_bytes >= 0 AND stored_bytes >= 0 AND stored_bytes <= reserved_bytes",
             name="ck_ingest_session_occupancy",
         ),
+        Index("ix_ingest_session_history", "tenant_id", "bc_id", "created_at", "id"),
         Index("ix_ingest_session_recovery", "status", "next_attempt_at", "id"),
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -126,6 +127,30 @@ class IngestSession(SQLModel, table=True):
     next_attempt_at: datetime = Field(
         default_factory=utcnow, sa_column=timestamp(nullable=False)
     )
+    created_at: datetime = Field(
+        default_factory=utcnow, sa_column=timestamp(nullable=False)
+    )
+
+
+class IngestChunk(SQLModel, table=True):
+    __tablename__ = "ingest_chunk"
+    __table_args__ = (
+        session_reference(),
+        UniqueConstraint(
+            "tenant_id", "session_id", "request_id", name="uq_ingest_chunk_request"
+        ),
+        CheckConstraint(
+            "jsonb_array_length(client_indexes) BETWEEN 1 AND 200",
+            name="ck_ingest_chunk_bound",
+        ),
+    )
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    tenant_id: UUID
+    bc_id: str = Field(max_length=128)
+    session_id: UUID
+    request_id: UUID
+    request_digest: str = Field(max_length=64)
+    client_indexes: list[int] = Field(sa_column=Column(JSONB, nullable=False))
     created_at: datetime = Field(
         default_factory=utcnow, sa_column=timestamp(nullable=False)
     )
@@ -175,6 +200,18 @@ class IngestSessionFile(SQLModel, table=True):
             "client_index",
             "material_id",
         ),
+        CheckConstraint(
+            "last_modified_ms IS NULL OR last_modified_ms >= 0",
+            name="ck_ingest_file_modified",
+        ),
+        Index(
+            "ix_ingest_file_status_seek",
+            "tenant_id",
+            "session_id",
+            "status",
+            "client_index",
+            "material_id",
+        ),
         Index("ix_ingest_file_recovery", "status", "next_attempt_at", "id"),
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -185,6 +222,7 @@ class IngestSessionFile(SQLModel, table=True):
     material_id: UUID
     byte_size: int = Field(sa_column=bigint())
     manifest_digest: str = Field(max_length=64)
+    last_modified_ms: int | None = Field(default=None, sa_column=Column(BigInteger))
     status: str = Field(default="registered", max_length=32)
     current_generation: int = 1
     source_advertiser_id: str | None = Field(default=None, max_length=128)
@@ -230,6 +268,15 @@ class TemporaryMaterialObject(SQLModel, table=True):
         CheckConstraint(
             "status != 'verified' OR (sha256 IS NOT NULL AND video_md5 IS NOT NULL AND digest_verified_at IS NOT NULL AND actual_bytes IS NOT NULL AND actual_bytes = expected_bytes)",
             name="ck_temporary_object_verified",
+        ),
+        Index(
+            "ix_ingest_transport_recovery",
+            "status",
+            "next_attempt_at",
+            "id",
+            postgresql_where=text(
+                "error_code IN ('multipart_creating','multipart_create_unknown','multipart_collecting','multipart_completing','multipart_complete_unknown')"
+            ),
         ),
         Index("ix_temporary_object_recovery", "status", "next_attempt_at", "id"),
     )
@@ -475,15 +522,15 @@ def record_milestone(
     """Record a lifetime file fact once, using fixed-size indexed SQL only."""
     if milestone not in {"accepted", "uploaded", "ready", "cleaned"}:
         raise ValueError("unknown ingest milestone")
-    size = db.execute(
-        select(IngestSessionFile.byte_size).where(
-            IngestSessionFile.tenant_id == tenant_id,
-            IngestSessionFile.bc_id == bc_id,
-            IngestSessionFile.session_id == session_id,
-            IngestSessionFile.material_id == material_id,
+    size = db.exec(
+        select(col(IngestSessionFile.byte_size)).where(
+            col(IngestSessionFile.tenant_id) == tenant_id,
+            col(IngestSessionFile.bc_id) == bc_id,
+            col(IngestSessionFile.session_id) == session_id,
+            col(IngestSessionFile.material_id) == material_id,
         )
-    ).scalar_one()
-    inserted = db.execute(
+    ).one()
+    inserted = db.exec(
         insert(IngestMilestone)
         .values(
             id=uuid4(),
@@ -496,18 +543,18 @@ def record_milestone(
             created_at=utcnow(),
         )
         .on_conflict_do_nothing(constraint="uq_ingest_milestone")
-        .returning(IngestMilestone.id)
-    ).scalar_one_or_none()
+        .returning(col(IngestMilestone.id))
+    ).first()
     if inserted is None:
         return False
     count_column = getattr(IngestSession, f"{milestone}_count")
     byte_column = getattr(IngestSession, f"{milestone}_bytes")
-    db.execute(
+    db.exec(
         update(IngestSession)
         .where(
-            IngestSession.id == session_id,
-            IngestSession.tenant_id == tenant_id,
-            IngestSession.bc_id == bc_id,
+            col(IngestSession.id) == session_id,
+            col(IngestSession.tenant_id) == tenant_id,
+            col(IngestSession.bc_id) == bc_id,
         )
         .values({count_column: count_column + 1, byte_column: byte_column + size})
     )
@@ -528,15 +575,15 @@ def transition_ingest_file(
     This does not assert provider evidence or authorize a transition. The caller
     owns that policy and records cumulative milestones after verified outcomes.
     """
-    row = db.execute(
+    row = db.exec(
         select(IngestSessionFile)
         .where(
-            IngestSessionFile.tenant_id == tenant_id,
-            IngestSessionFile.id == file_id,
+            col(IngestSessionFile.tenant_id) == tenant_id,
+            col(IngestSessionFile.id) == file_id,
         )
         .with_for_update()
         .execution_options(populate_existing=True)
-    ).scalar_one_or_none()
+    ).one_or_none()
     if row is None or row.revision != expected_revision:
         return False
     previous = row.status
@@ -558,11 +605,12 @@ def transition_ingest_file(
     db.flush()
     delta = int(status == "failed") - int(previous == "failed")
     if delta:
-        db.execute(
+        db.exec(
             update(IngestSession)
             .where(
-                IngestSession.tenant_id == tenant_id, IngestSession.id == row.session_id
+                col(IngestSession.tenant_id) == tenant_id,
+                col(IngestSession.id) == row.session_id,
             )
-            .values(failed_count=IngestSession.failed_count + delta)
+            .values(failed_count=col(IngestSession.failed_count) + delta)
         )
     return True
