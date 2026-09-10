@@ -34,3 +34,7 @@ Python uses uv in backend; frontend uses Bun and the official template lockfile.
 - 明确区分本地开发和生产环境，不能将本地验证视为生产验证。
 - 发布必须遵循 `docs/runbooks/deployment.md`；首次部署同时参考 `docs/runbooks/bootstrap-deployment.md`。
 - 修改服务器、数据库或自动化开关前，先阅读目标环境说明；涉及生产时必须先读生产环境说明，确认目标、影响范围和授权。缺少环境说明时先补齐信息，再执行变更。
+- 骏伯生产环境必须先读 `docs/runbooks/production-junbo.md`，按其中固定版本、独立端口、服务排空、备份、Alembic 迁移、验收和回滚流程发布；禁止对同机其他项目执行停机、覆盖配置或数据操作。
+- 生产入口为 `https://manjuad.gzjunbo.net:8000`，独立 Compose 项目 `tt-ada-production`，版本目录 `/opt/tt-ada/releases/<Git SHA>`。必须使用已发布版本的 `deploy/production-compose.sh`，不混用本地或 staging 配置。
+- 数据库变更必须通过审查后的 Alembic 迁移；迁移前冻结写入、正常排空在执行任务并完成可恢复备份。禁止直接修改生产表结构、改写历史迁移、清空队列/持久卷或未经兼容性核实直接回退数据库。所有环境凭据、备份、会话均不进 Git。
+- 首发基础验收与真实 TikTok/R2/版权方联调分别记录；用户尚未配置的外部集成不得通过演示凭据或开启自动化绕过。

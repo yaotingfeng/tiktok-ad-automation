@@ -1,0 +1,12 @@
+[Unit]
+Description=TT ADA production database and configuration backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+ExecStart=/opt/tt-ada/current/deploy/backup-production.sh scheduled
+TimeoutStartSec=1800
+Nice=10

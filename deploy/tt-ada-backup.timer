@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily TT ADA production backup at 03:30 Asia/Shanghai
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=300
+Unit=tt-ada-backup.service
+
+[Install]
+WantedBy=timers.target

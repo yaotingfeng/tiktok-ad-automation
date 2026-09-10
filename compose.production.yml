@@ -1,0 +1,75 @@
+# 骏伯生产环境专用：仅与 compose.yml 组合，公网入口由主机 Nginx 提供。
+name: tt-ada-production
+
+x-release-image: &release-image ${APP_IMAGE:?Set APP_IMAGE to the verified release image}
+x-production-logging: &production-logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
+services:
+  db:
+    cpus: 1.0
+    mem_limit: 1536m
+    stop_grace_period: 120s
+    logging: *production-logging
+  redis:
+    cpus: 0.5
+    mem_limit: 384m
+    # 队列与准入状态不能被缓存淘汰；内存预算给 AOF/进程预留空间。
+    command: [redis-server, --appendonly, 'yes', --maxmemory, 192mb, --maxmemory-policy, noeviction]
+    stop_grace_period: 60s
+    logging: *production-logging
+  prestart:
+    image: *release-image
+    cpus: 1.0
+    mem_limit: 1024m
+    logging: *production-logging
+  backend:
+    image: *release-image
+    command: [uvicorn, app.main:app, --host, 0.0.0.0, --port, '8000', --workers, '1', --no-access-log, --proxy-headers, --forwarded-allow-ips, '*']
+    ports: ['127.0.0.1:${TT_ADA_BACKEND_PORT:-18000}:8000']
+    cpus: 1.0
+    mem_limit: 768m
+    stop_grace_period: 60s
+    init: true
+    logging: *production-logging
+  worker:
+    image: *release-image
+    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, resources, --concurrency=1, '--hostname=resources@%h', --loglevel=INFO]
+    cpus: 1.0
+    mem_limit: 2048m
+    # 素材任务硬截止最长 900 秒，升级时先正常排空再替换镜像。
+    stop_grace_period: 960s
+    init: true
+    logging: *production-logging
+  worker-builds:
+    extends:
+      file: compose.yml
+      service: worker
+    image: *release-image
+    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, builds, --concurrency=1, '--hostname=builds@%h', --loglevel=INFO]
+    cpus: 0.75
+    mem_limit: 768m
+    stop_grace_period: 90s
+    init: true
+    logging: *production-logging
+  worker-control:
+    extends:
+      file: compose.yml
+      service: worker
+    image: *release-image
+    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, control, --concurrency=1, '--hostname=control@%h', --loglevel=INFO]
+    cpus: 0.5
+    mem_limit: 512m
+    stop_grace_period: 90s
+    init: true
+    logging: *production-logging
+  beat:
+    image: *release-image
+    cpus: 0.25
+    mem_limit: 256m
+    stop_grace_period: 30s
+    init: true
+    logging: *production-logging
