@@ -6,8 +6,8 @@ Reviewed 2026-09-09. These adapters are an offline implementation of inspected p
 
 Only protocol functions and explanatory documents were read in the original repository:
 
-- `TikTok AD/jiashu-drama-link-tool/jiashu-link-cli.js`: `post`, `loginAccount`, `discoverAccount`, `searchDrama`, `listChannels`, `createChannel`, `generateGuideUrl`, `saveGuideUrl`, `getGuideUrl`; accompanying README.
-- `TikTok AD/wangyan-drama-link-tool/drama-link-cli.js`: `login`, `request`, `getDramaList`, `createPromoteLink`, `getPromoteLinksRaw`; `短剧分销平台 API 分析.md` and targeted protocol sections of `短剧分销平台 - 推广链接生成CLI工具.md`. No Wangyan README.md exists at that path. No credential/account store, session file, or output report was read or imported.
+- `projects/jiashu-drama-link-tool/jiashu-link-cli.js`: `post`, `loginAccount`, `discoverAccount`, `searchDrama`, `listChannels`, `createChannel`, `generateGuideUrl`, `saveGuideUrl`, `getGuideUrl`; accompanying README.
+- `projects/wangyan-drama-link-tool/drama-link-cli.js`: `login`, `request`, `getDramaList`, `createPromoteLink`, `getPromoteLinksRaw`; `短剧分销平台 API 分析.md` and targeted protocol sections of `短剧分销平台 - 推广链接生成CLI工具.md`. No Wangyan README.md exists at that path. No credential/account store, session file, or output report was read or imported.
 - Public static JavaScript fetched without cookies/authentication, without running it, from `https://partners.shortswave.com/assets/20260724/business-A-IRbkW0.js`. HTTP 200, 511,608 bytes; SHA256 `7a9b1de1f4f10cde11e58839270c89d8c40435454c681d1fda07685a7c90344f`. This proves that version's frontend protocol/rendering, not current authenticated business-service behavior.
 
 Offsets below are zero-based decoded Unicode character offsets in that exact bundle:

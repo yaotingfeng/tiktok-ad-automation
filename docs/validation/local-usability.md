@@ -4,7 +4,7 @@
 
 ## 目录与运行状态
 
-应用已实际迁入 `/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/tiktok-ad-automation/`，保留独立 Git 仓库与 `git@github.com:yaotingfeng/tiktok-ad-automation.git`，不是指向旧目录的快捷链接。旧目录不再用于运行。
+应用已实际迁入 `/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/projects/tiktok-ad-automation/`，保留独立 Git 仓库与 `git@github.com:yaotingfeng/tiktok-ad-automation.git`，不是指向旧目录的快捷链接。旧目录不再用于运行。
 
 迁移前正常停止 API、Worker、Beat、PostgreSQL 和 Redis，保存 Redis 快照。迁移后修复 Git worktree 元数据和绝对链接，重建主 `.venv`，从新目录恢复服务。独立只读复核确认 Git 历史、editable app 路径、服务工作目录、数据库迁移 `0014_recovery_candidates`、原用户与租户以及 Redis 均正常，私有配置仍未纳入 Git。
 

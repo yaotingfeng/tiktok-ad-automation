@@ -119,3 +119,10 @@
 - MATERIAL reconciliation now carries strict `read_only` through the original distribution verifier and all continuations. Delayed failure cannot select a new upload; successful original receipts can revalidate their existing VID. Original frozen intent and actual source history remain intact.
 - Verified on isolated PostgreSQL and actual Redis with official SDK transport doubles: 476 builds/materials regressions passed; 38 focused recovery/SDK checks passed; final 20 boundary/SDK checks passed after the last strict-read changes. Ruff, mypy, ty, Alembic upgrade/check, and diff whitespace checks passed. No real provider/TikTok/S3 operations.
 - Integration: include `builds.recovery_api.router`; include `app.modules.builds.recovery_tasks` in Celery; register periodic `builds.repair_recoveries` on control; map `recovery_no_candidates` to HTTP 409. Root owns bounded terminal material-result synchronization and shared API/client registration. Details: `docs/contracts/submission-recovery.md`.
+
+## 2026-09-09：工作区目录整理
+
+- 应用迁入 `projects/tiktok-ad-automation/`；工作区根目录旧入口保留为兼容符号链接，供现有虚拟环境与运行进程使用。
+- 修复并验证 51 个 Git worktree 的访问路径，同步应用文档中的工作区绝对路径和兄弟工具路径。业务实现未改动。
+- 根目录旧设计计划整体归档至工作区 `archive/workspace-design-20260909/`；应用内设计与实施进度继续作为当前开发入口。
+- 验证：Git worktree 访问、`git diff --check`、Python 虚拟环境可执行文件通过；工作区批处理、VID 接力、骏伯监控离线回归通过。未运行应用全量测试，未调用外部广告接口或发送消息。

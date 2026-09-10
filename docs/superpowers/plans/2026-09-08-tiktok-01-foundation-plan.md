@@ -22,7 +22,7 @@
 
 ## 执行位置与工程基线
 
-本计划中的代码路径均相对应用根目录 `APP_ROOT=/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/tiktok-ad-automation`。2026-09-09 已按用户要求迁入当前资料工作区，保留独立 Git 仓库、历史和本地数据。以下初始化步骤保留最初计划记录；目录已有工程，不得重新克隆或覆盖。
+本计划中的代码路径均相对应用根目录 `APP_ROOT=/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/projects/tiktok-ad-automation`。2026-09-09 已按用户要求迁入当前资料工作区，保留独立 Git 仓库、历史和本地数据。以下初始化步骤保留最初计划记录；目录已有工程，不得重新克隆或覆盖。
 
 当前资料目录不是应用 Git 仓库。以下 Git 命令仅在新应用仓库执行；不初始化当前资料目录，不复制广告 outputs、凭据或历史固定账户。
 
@@ -65,8 +65,8 @@
 - [x] 在空目标目录建立模板分支，记录来源；复制本组 specs/plans 到新仓库 `docs/superpowers/`，保留资料目录原件。复制后将指向原资料目录的参考链接改为其真实绝对路径，检查文档互链；不把运营输出和凭据作为文档依赖一起复制。
 
 ```bash
-git clone https://github.com/fastapi/full-stack-fastapi-template.git /Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/tiktok-ad-automation
-cd /Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/tiktok-ad-automation
+git clone https://github.com/fastapi/full-stack-fastapi-template.git /Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/projects/tiktok-ad-automation
+cd /Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/projects/tiktok-ad-automation
 git checkout -b feat/tiktok-foundation cb740b656d7a0a6c5e12c7bf8e50343ec94ee9c7
 git remote rename origin template
 ```
@@ -89,7 +89,7 @@ def test_smart_plus_method_accepts_body_without_network(monkeypatch):
 - [x] 在未安装 SDK 时运行 `uv run pytest tests/contracts/test_tiktok_sdk_surface.py -q`，确认是缺少 SDK 而失败；随后安装固定官方源码并锁依赖。
 
 ```bash
-cd /Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/tiktok-ad-automation/backend
+cd /Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/projects/tiktok-ad-automation/backend
 uv add 'python_sdk @ git+https://github.com/tiktok/tiktok-business-api-sdk.git@f809c396520df2d7b201a9ccc5378d822b728ed3#subdirectory=python_sdk'
 uv add 'celery[redis]' cryptography boto3
 uv run pytest tests/contracts/test_tiktok_sdk_surface.py -q

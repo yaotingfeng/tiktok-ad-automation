@@ -4,7 +4,7 @@
 
 当前实现和验证记录见 [实施进度](docs/implementation-progress.md)。产品规则、页面设计及七阶段任务见 [交付计划](docs/superpowers/plans/2026-09-08-tiktok-00-delivery-roadmap.md)。
 
-当前本地代码位于 `/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/tiktok-ad-automation/`，是资料工作区内的独立 Git 仓库。2026-09-09 已从原同级目录迁入，保留 Git 历史与本地数据；下列命令均从这个应用根目录开始。
+当前本地代码位于 `/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/projects/tiktok-ad-automation/`，是资料工作区内的独立 Git 仓库。2026-09-09 已从原同级目录迁入，保留 Git 历史与本地数据；下列命令均从这个应用根目录开始。
 
 - [本地运行与 HTTPS 部署](docs/runbooks/bootstrap-deployment.md)
 - [工程版本基线](docs/engineering-baseline.md)
