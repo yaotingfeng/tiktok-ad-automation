@@ -164,18 +164,16 @@ test("default PUT sends exact bytes without app credentials, cookies, or referre
 }) => {
   let received: Buffer = Buffer.alloc(0)
   let headers: Record<string, string> = {}
-  await page
-    .context()
-    .addCookies([
-      {
-        name: "session",
-        value: "must-not-send",
-        domain: "storage.invalid",
-        path: "/",
-        secure: true,
-        sameSite: "None",
-      },
-    ])
+  await page.context().addCookies([
+    {
+      name: "session",
+      value: "must-not-send",
+      domain: "storage.invalid",
+      path: "/",
+      secure: true,
+      sameSite: "None",
+    },
+  ])
   await page.route("https://storage.invalid/**", async (route) => {
     headers = await route.request().allHeaders()
     received = route.request().postDataBuffer() ?? Buffer.alloc(0)
@@ -371,4 +369,51 @@ test("IndexedDB persists only scoped metadata and fences old multipart receipts"
   expect(result.foreign).toBeNull()
   expect(result.row.upload.generation).toBe(2)
   expect(result.durable).not.toMatch(/secret|forbidden|password|"blob"|"url"/)
+})
+
+for (const stale of [false, true]) {
+  test(`exclusive completion persists returned revision with original ownership fence stale=${stale}`, async ({
+    page,
+  }) => {
+    const value = await page.evaluate(async (stale) => {
+      const path = "/tests/harness/upload-foundation.ts"
+      return (await import(/* @vite-ignore */ path)).completionRevisionScenario(
+        stale,
+      )
+    }, stale)
+    expect(value.row.upload.operationRevision).toBe(stale ? 12 : 9)
+    expect(value.result.completed).toBe(stale ? 0 : 1)
+    expect(value.row.state === "completed").toBe(!stale)
+  })
+}
+
+test("short non-final ListParts page follows its cursor before completion", async ({
+  page,
+}) => {
+  const value = await page.evaluate(async () => {
+    const path = "/tests/harness/upload-foundation.ts"
+    return (await import(/* @vite-ignore */ path)).shortPartsScenario()
+  })
+  expect(value.resumed.completed).toBe(1)
+  expect(
+    value.requests.filter((r: { kind: string }) => r.kind === "put"),
+  ).toHaveLength(0)
+})
+
+test("parent import intent survives refresh with immutable request scope and no secret or blob fields", async ({
+  page,
+}) => {
+  const value = await page.evaluate(async () => {
+    const path = "/tests/harness/upload-foundation.ts"
+    return (await import(/* @vite-ignore */ path)).importIntentScenario()
+  })
+  expect(value.saved).toEqual(value.restored)
+  expect(value.found).toEqual(value.saved)
+  expect(value.saved.metadataReady).toBe(true)
+  expect(value.saved.serverSessionId).toBe("server-session")
+  expect(value.saved).not.toHaveProperty("blob")
+  expect(value.saved).not.toHaveProperty("signedUrl")
+  expect(value.other).toBeNull()
+  expect(value.page).toHaveLength(1)
+  expect(value.changed).toBe("registration_conflict")
 })

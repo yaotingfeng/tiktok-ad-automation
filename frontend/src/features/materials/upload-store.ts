@@ -1,5 +1,14 @@
 /** Browser metadata only. All writes project explicit fields; never persist API responses. */
 export type UploadScope = { tenantId: string; bcId: string; sessionId: string }
+/** Stable browser key; serverSessionId is the actual API session after its receipt. */
+export type UploadImport = UploadScope & {
+  requestId: string
+  fileCount: number
+  totalBytes: number
+  serverSessionId: string | null
+  metadataReady: boolean
+  createdAt: number
+}
 export type LocalFileIdentity = {
   name: string
   size: number
@@ -65,6 +74,7 @@ export class UploadError extends Error {
   }
 }
 
+const IMPORTS = "imports"
 const FILES = "files"
 const PARTS = "parts"
 const scopeFields = ["tenantId", "bcId", "sessionId"]
@@ -208,10 +218,20 @@ export class UploadStore {
     return new Promise((resolve, reject) => {
       let settled = false
       try {
-        const request = indexedDB.open(name, 1)
+        const request = indexedDB.open(name, 2)
         request.onupgradeneeded = () => {
-          request.result.createObjectStore(FILES, { keyPath: fileFields })
-          request.result.createObjectStore(PARTS, { keyPath: partFields })
+          if (!request.result.objectStoreNames.contains(FILES))
+            request.result.createObjectStore(FILES, { keyPath: fileFields })
+          if (!request.result.objectStoreNames.contains(PARTS))
+            request.result.createObjectStore(PARTS, { keyPath: partFields })
+          const imports = request.result.createObjectStore(IMPORTS, {
+            keyPath: scopeFields,
+          })
+          imports.createIndex(
+            "server_scope",
+            ["tenantId", "bcId", "serverSessionId"],
+            { unique: true },
+          )
         }
         request.onerror = request.onblocked = () => {
           settled = true
@@ -280,6 +300,94 @@ export class UploadStore {
           abort()
         })
     })
+  }
+  async putImport(value: UploadImport, signal?: AbortSignal) {
+    const clean: UploadImport = {
+      ...cleanScope(value),
+      requestId: value.requestId,
+      fileCount: value.fileCount,
+      totalBytes: value.totalBytes,
+      serverSessionId: value.serverSessionId,
+      metadataReady: value.metadataReady,
+      createdAt: value.createdAt,
+    }
+    assert(
+      label(clean.requestId) &&
+        integer(clean.fileCount, 1) &&
+        clean.fileCount <= 20000 &&
+        integer(clean.totalBytes, 1) &&
+        integer(clean.createdAt) &&
+        typeof clean.metadataReady === "boolean" &&
+        (clean.serverSessionId === null || label(clean.serverSessionId)),
+    )
+    await this.transaction(
+      [IMPORTS],
+      "readwrite",
+      async (tx) => {
+        const store = tx.objectStore(IMPORTS)
+        const old = await result<UploadImport | undefined>(
+          store.get(scopeKey(clean)),
+        )
+        if (old) {
+          if (
+            old.requestId !== clean.requestId ||
+            old.fileCount !== clean.fileCount ||
+            old.totalBytes !== clean.totalBytes ||
+            old.createdAt !== clean.createdAt ||
+            (old.serverSessionId &&
+              clean.serverSessionId &&
+              old.serverSessionId !== clean.serverSessionId)
+          )
+            throw new UploadError("registration_conflict")
+          clean.serverSessionId ??= old.serverSessionId
+          clean.metadataReady ||= old.metadataReady
+        }
+        await result(store.put(clean))
+      },
+      signal,
+    )
+  }
+  async getImport(scope: UploadScope): Promise<UploadImport | undefined> {
+    return this.transaction([IMPORTS], "readonly", (tx) =>
+      result(tx.objectStore(IMPORTS).get(scopeKey(cleanScope(scope)))),
+    )
+  }
+  async findImport(
+    tenantId: string,
+    bcId: string,
+    serverSessionId: string,
+  ): Promise<UploadImport | undefined> {
+    assert(label(tenantId) && label(bcId) && label(serverSessionId))
+    return this.transaction([IMPORTS], "readonly", (tx) =>
+      result(
+        tx
+          .objectStore(IMPORTS)
+          .index("server_scope")
+          .get([tenantId, bcId, serverSessionId]),
+      ),
+    )
+  }
+  async listImports(
+    tenantId: string,
+    bcId: string,
+    after: string | null = null,
+    limit = 100,
+  ): Promise<UploadImport[]> {
+    assert(label(tenantId) && label(bcId) && integer(limit, 1) && limit <= 100)
+    return this.transaction([IMPORTS], "readonly", (tx) =>
+      result(
+        tx
+          .objectStore(IMPORTS)
+          .getAll(
+            IDBKeyRange.bound(
+              [tenantId, bcId, after ?? ""],
+              [tenantId, bcId, []],
+              true,
+            ),
+            limit,
+          ),
+      ),
+    )
   }
   async putFiles(rows: readonly UploadFileRecord[], signal?: AbortSignal) {
     assert(rows.length > 0 && rows.length <= 200)
@@ -478,7 +586,17 @@ export class UploadStore {
     index: number,
     upload: MultipartIdentity,
     signal?: AbortSignal,
+    confirmed: MultipartIdentity = upload,
   ) {
+    cleanUpload(confirmed)
+    if (
+      !sameUpload(
+        { ...confirmed, operationRevision: upload.operationRevision },
+        upload,
+      ) ||
+      confirmed.operationRevision < upload.operationRevision
+    )
+      throw new UploadError("upload_identity_changed")
     await this.transaction(
       [FILES, PARTS],
       "readwrite",
@@ -489,6 +607,7 @@ export class UploadStore {
         )
         if (!row?.materialId || !sameUpload(row.upload, upload))
           throw new UploadError("upload_identity_changed")
+        row.upload = cleanUpload(confirmed)
         row.state = "completed"
         await result(store.put(cleanFile(row)))
         await result(tx.objectStore(PARTS).delete(range(fileKey(scope, index))))

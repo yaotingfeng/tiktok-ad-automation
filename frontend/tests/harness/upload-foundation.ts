@@ -167,6 +167,7 @@ export async function fixture(count = 9, size = 24, partSize = 8) {
         lostComplete = false
         throw new Error("lost completion")
       }
+      return input.identity
     },
   }
   const events: unknown[] = []
@@ -496,4 +497,101 @@ export async function invalidatedPartScenario() {
   const result = await scheduler.run()
   f.store.close()
   return { result, requests: f.requests }
+}
+
+export async function completionRevisionScenario(stale = false) {
+  const f = await fixture(1, 8, 8)
+  const scheduler = f.scheduler()
+  await scheduler.registerFiles(f.files)
+  f.callbacks.completeFile = async () => {
+    if (stale)
+      await f.store.bindUpload(f.scope, 0, {
+        ...f.identity(0),
+        operationRevision: 12,
+      })
+    return { ...f.identity(0), operationRevision: 9 }
+  }
+  const result = await scheduler.run()
+  const row = await f.store.getFile(f.scope, 0)
+  f.store.close()
+  return { result, row }
+}
+
+export async function shortPartsScenario() {
+  const f = await fixture(1, 2, 1)
+  const scheduler = f.scheduler()
+  await scheduler.registerFiles(f.files)
+  await f.store.bindUpload(f.scope, 0, f.identity(0))
+  const hash = Array.from(
+    new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array([1]))),
+    (n) => n.toString(16).padStart(2, "0"),
+  ).join("")
+  for (let partNumber = 1; partNumber <= 2; partNumber++)
+    await f.store.putPart(f.scope, 0, f.identity(0), {
+      partNumber,
+      byteSize: 1,
+      sha256: hash,
+      etag: `part-${partNumber}`,
+      state: "confirmed",
+    })
+  f.callbacks.listParts = async (input) => ({
+    identity: input.identity,
+    parts: [
+      {
+        partNumber: input.cursor ? 2 : 1,
+        byteSize: 1,
+        etag: input.cursor ? "part-2" : "part-1",
+      },
+    ],
+    nextCursor: input.cursor ? null : "opaque-next",
+  })
+  const resumed = await scheduler.run()
+  f.store.close()
+  return { resumed, requests: f.requests }
+}
+
+export async function importIntentScenario() {
+  const store = await UploadStore.open(`imports-${crypto.randomUUID()}`)
+  const scope = {
+    tenantId: "tenant-a",
+    bcId: "123",
+    sessionId: crypto.randomUUID(),
+  }
+  const intent = {
+    ...scope,
+    requestId: scope.sessionId,
+    fileCount: 20000,
+    totalBytes: 100000,
+    serverSessionId: null,
+    metadataReady: false,
+    createdAt: Date.now(),
+    blob: new Blob(["never-store"]),
+    signedUrl: "https://private.invalid/?secret=never-store",
+  }
+  await store.putImport(intent)
+  await store.putImport({
+    ...intent,
+    metadataReady: true,
+    serverSessionId: "server-session",
+  })
+  let changed = ""
+  try {
+    await store.putImport({ ...intent, totalBytes: 1 })
+  } catch (error) {
+    changed = (error as Error).message
+  }
+  const saved = await store.getImport(scope)
+  const found = await store.findImport(
+    scope.tenantId,
+    scope.bcId,
+    "server-session",
+  )
+  const other = await store.findImport("tenant-b", scope.bcId, "server-session")
+  const page = await store.listImports(scope.tenantId, scope.bcId)
+  const name = store.name
+  store.close()
+  const reopened = await UploadStore.open(name)
+  const restored = await reopened.getImport(scope)
+  reopened.close()
+  return { saved, found, other: other ?? null, page, changed, restored }
 }

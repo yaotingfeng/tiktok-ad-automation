@@ -57,7 +57,7 @@ export type TransferCallbacks = {
   completeFile(
     input: MultipartRequest & { parts: readonly RemotePart[] },
     signal: AbortSignal,
-  ): Promise<void>
+  ): Promise<MultipartIdentity>
 }
 export type TransferProgress = {
   clientIndex: number
@@ -284,9 +284,9 @@ export class UploadScheduler {
         signal,
       )
   }
-  /** Same ordered selection retries the same persisted chunk keys after a lost reply.
-   * Registration can also resume from metadata alone via run(), after refresh. */
-  async registerFiles(files: readonly File[]) {
+  /** Persist the complete manifest before the parent-session HTTP request.
+   * Bounded IDB transactions retain no File/Blob; in-memory references stay scoped. */
+  async stageFiles(files: readonly File[]) {
     valid(files.length > 0 && files.length <= 20_000)
     for (const file of files)
       valid(file.size > 0 && file.size <= MAX_BROWSER_FILE_BYTES)
@@ -310,24 +310,17 @@ export class UploadScheduler {
         await this.options.store.putFiles(rows, signal)
         for (const row of rows)
           this.files.set(row.clientIndex, files[row.clientIndex])
-        // Read actual bindings; an already registered chunk is never created again.
-        const actual = [
-          ...(await this.options.store.listFiles(
-            this.scope,
-            start - 1,
-            Math.min(rows.length, 100),
-          )),
-          ...(rows.length > 100
-            ? await this.options.store.listFiles(
-                this.scope,
-                start + 99,
-                rows.length - 100,
-              )
-            : []),
-        ]
-        valid(actual.length === rows.length)
-        await this.registerChunk(actual, signal)
       }
+    } finally {
+      this.controller = null
+    }
+  }
+  /** Same ordered selection retries stable chunk keys; all metadata is durable first. */
+  async registerFiles(files: readonly File[]) {
+    await this.stageFiles(files)
+    const signal = this.start()
+    try {
+      await this.retryRegistrations(signal)
     } finally {
       this.controller = null
     }
@@ -554,7 +547,7 @@ export class UploadScheduler {
           typeof cursor === "string" &&
             cursor.length > 0 &&
             !cursors.has(cursor) &&
-            page.parts.length === 100 &&
+            page.parts.length > 0 &&
             cursors.size < 100,
         )
         cursors.add(cursor)
@@ -696,8 +689,9 @@ export class UploadScheduler {
     for (const value of results)
       if (value.status === "rejected") throw value.reason
     valid(confirmed.size === identity.partCount)
+    let completedIdentity: MultipartIdentity
     try {
-      await this.call(
+      completedIdentity = await this.call(
         () =>
           this.options.callbacks.completeFile(
             {
@@ -721,6 +715,7 @@ export class UploadScheduler {
       record.clientIndex,
       identity,
       signal,
+      completedIdentity,
     )
     this.files.delete(record.clientIndex)
     this.notify(
