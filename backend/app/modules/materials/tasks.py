@@ -48,10 +48,23 @@ def _run(
 ) -> None:
     require_bounded_worker(task, hard_limit=hard_limit)
     if (
-        set(payload) - {"material_id", "operation_id", "claim_id", "revision"}
+        set(payload)
+        - {
+            "material_id",
+            "operation_id",
+            "claim_id",
+            "revision",
+            "object_id",
+            "generation",
+        }
         or "material_id" not in payload
     ):
         raise DomainError("invalid_asset_task", "素材工作任务参数无效")
+    if ("object_id" in payload) != ("generation" in payload) or (
+        "generation" in payload
+        and (type(payload["generation"]) is not int or payload["generation"] < 1)
+    ):
+        raise DomainError("invalid_asset_task", "原件任务缺少精确代次")
     with Redis.from_url(settings.REDIS_URL) as redis_client:
         run_source_upload(
             database_engine=engine,
@@ -68,6 +81,8 @@ def _run(
             if payload.get("claim_id")
             else None,
             revision=payload.get("revision"),
+            object_id=UUID(payload["object_id"]) if payload.get("object_id") else None,
+            generation=payload.get("generation"),
         )
 
 

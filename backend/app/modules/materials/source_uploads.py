@@ -152,8 +152,12 @@ def _queue(
     kind: str,
     due: datetime | None = None,
     recovery_claim_id: UUID | None = None,
+    object_id: UUID | None = None,
+    generation: int | None = None,
 ) -> UUID:
     payload: dict[str, Any] = {"material_id": str(material_id)}
+    if object_id is not None:
+        payload.update(object_id=str(object_id), generation=generation)
     if operation_id:
         payload["operation_id"] = str(operation_id)
         operation = session.get(MaterialAssetOperation, operation_id)
@@ -169,6 +173,17 @@ def _queue(
         task_key=f"material:{material_id}:{uuid4()}",
         payload=payload,
     )
+    if object_id is not None:
+        from .ingest_models import IngestSessionFile
+
+        ingest_file = session.exec(
+            select(IngestSessionFile).where(
+                IngestSessionFile.tenant_id == context.tenant_id,
+                IngestSessionFile.material_id == material_id,
+                IngestSessionFile.current_generation == generation,
+            )
+        ).one()
+        ingest_file.dispatch_id = dispatch_id
     if due:
         dispatch = session.get(PendingDispatch, dispatch_id)
         assert dispatch
@@ -323,7 +338,13 @@ def request_source_retry(
     An unknown/verifying send never changes account or becomes a blind retry.
     Each new attempt records its actual selected connection/account permanently.
     """
-    material = _material(session, context, material_id)
+    material = _material(session, context, material_id, require_stored=False)
+    if material.current_object_generation is not None:
+        from .source_url_uploads import request_url_retry
+
+        return request_url_retry(session, context=context, material_id=material_id)
+    if material.storage_state != "stored":
+        raise DomainError("original_unavailable", "素材原文件尚未完整入库")
     previous = session.exec(
         select(MaterialUploadAttempt)
         .where(
@@ -419,8 +440,51 @@ def run_source_upload(
     s3: Any = None,
     recovery_claim_id: UUID | None = None,
     revision: int | None = None,
+    object_id: UUID | None = None,
+    generation: int | None = None,
 ) -> None:
     """Testable worker body; production wrapper MUST enforce the hard process limit."""
+    # Repair dispatches may reference a known operation; its durable metadata
+    # supplies the exact generation. An initial new-path message must supply it.
+    if object_id is None and operation_id is not None:
+        with Session(database_engine) as route:
+            op = route.exec(
+                select(MaterialAssetOperation).where(
+                    MaterialAssetOperation.id == operation_id,
+                    MaterialAssetOperation.tenant_id == context.tenant_id,
+                    MaterialAssetOperation.material_id == material_id,
+                )
+            ).first()
+            if op is not None and op.remote_response.get("object_id"):
+                object_id = UUID(op.remote_response["object_id"])
+                generation = op.remote_response.get("generation")
+    if object_id is not None or generation is not None:
+        if object_id is None or type(generation) is not int or generation < 1:
+            raise DomainError("invalid_asset_task", "原件任务缺少精确代次")
+        from .source_url_uploads import run_url_source_upload
+
+        return run_url_source_upload(
+            database_engine=database_engine,
+            redis_client=redis_client,
+            context=context,
+            material_id=material_id,
+            object_id=object_id,
+            generation=generation,
+            kind=kind,
+            operation_id=operation_id,
+            s3=s3,
+            recovery_claim_id=recovery_claim_id,
+            revision=revision,
+        )
+    with Session(database_engine) as route:
+        current = route.exec(
+            select(MaterialFile.current_object_generation).where(
+                MaterialFile.id == material_id,
+                MaterialFile.tenant_id == context.tenant_id,
+            )
+        ).first()
+        if current is not None:
+            raise DomainError("invalid_asset_task", "代次素材不能回退旧文件上传路径")
     if kind not in {"upload", "verify"}:
         raise DomainError("invalid_asset_task", "素材工作任务无效")
     claim = uuid4()

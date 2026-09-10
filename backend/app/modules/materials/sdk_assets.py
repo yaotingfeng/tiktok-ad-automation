@@ -323,19 +323,30 @@ def upload_video(
     )
 
 
-def read_video(client: Any, *, advertiser_id: str, video_id: str) -> dict[str, Any]:
+def read_video(
+    client: Any,
+    *,
+    advertiser_id: str,
+    video_id: str,
+    budget: RemoteCallBudget | None = None,
+) -> dict[str, Any]:
     return checked_data(
         FileApi(client).ad_video_info(
             advertiser_id=advertiser_id,
             video_ids=[video_id],
             access_token=client.default_headers["Access-Token"],
-            _request_timeout=(5, 30),
+            _request_timeout=budget.timeout(upload=False) if budget else (5, 30),
         )
     )
 
 
 def search_videos(
-    client: Any, *, advertiser_id: str, page: int, material_ids: list[str] | None = None
+    client: Any,
+    *,
+    advertiser_id: str,
+    page: int,
+    material_ids: list[str] | None = None,
+    budget: RemoteCallBudget | None = None,
 ) -> dict[str, Any]:
     kwargs = {}
     if material_ids:
@@ -346,7 +357,7 @@ def search_videos(
             access_token=client.default_headers["Access-Token"],
             page=page,
             page_size=PAGE_SIZE,
-            _request_timeout=(5, 30),
+            _request_timeout=budget.timeout(upload=False) if budget else (5, 30),
             **kwargs,
         )
     )

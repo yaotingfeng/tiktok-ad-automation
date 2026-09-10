@@ -424,3 +424,38 @@ def test_worker_interrupt_remains_an_interrupt(transport, budget, operation):
     with official_client(access_token=TOKEN) as client:
         with pytest.raises(SoftTimeLimitExceeded):
             operation(client, budget)
+
+
+@pytest.mark.parametrize("method", ["info", "search"])
+def test_existing_read_wrappers_accept_actual_budget_and_reject_expired_before_io(
+    transport, budget, method
+):
+    from datetime import timedelta
+
+    from app.modules.materials.sdk_assets import read_video, search_videos
+
+    wrapper = read_video if method == "info" else search_videos
+    kwargs = (
+        {"advertiser_id": "actual-account", "video_id": "known-vid"}
+        if method == "info"
+        else {"advertiser_id": "actual-account", "page": 1}
+    )
+    with official_client(access_token=TOKEN) as client:
+        with pytest.raises(DomainError) as error:
+            wrapper(
+                client,
+                budget=replace(
+                    budget, deadline=datetime.now(UTC) - timedelta(seconds=1)
+                ),
+                **kwargs,
+            )
+        assert error.value.code == "material_deadline"
+        assert transport[0] == []
+        transport[1].append({"code": 0, "data": {"list": []}})
+        wrapper(
+            client,
+            budget=replace(budget, deadline=datetime.now(UTC) + timedelta(seconds=12)),
+            **kwargs,
+        )
+    timeout = transport[0][0][2]["timeout"]
+    assert timeout.connect_timeout + timeout.read_timeout <= 7
