@@ -20,7 +20,7 @@ from app.modules.strategies.models import (
     Strategy,
     StrategyVersion,
 )
-from app.modules.strategies.naming import validate_suffix
+from app.modules.strategies.naming import validate_name_template, validate_suffix
 from app.modules.strategies.schemas import (
     CopyPoolPublic,
     CopyPublic,
@@ -99,10 +99,18 @@ def validate_strategy(
         if error.code != "copy_pool_not_found":
             raise
         errors.append(ValidationIssue(field="copy_pool_version", code=error.code))
-    try:
-        validate_suffix(config.campaign_suffix)
-    except DomainError as error:
-        errors.append(ValidationIssue(field="campaign_suffix", code=error.code))
+    for field, value, validate in (
+        (
+            "campaign_name_template",
+            config.campaign_name_template,
+            validate_name_template,
+        ),
+        ("campaign_suffix", config.campaign_suffix, validate_suffix),
+    ):
+        try:
+            validate(value)
+        except DomainError as error:
+            errors.append(ValidationIssue(field=field, code=error.code))
     if len(set(config.cta_option_ids)) != len(config.cta_option_ids) or any(
         not option.strip() or len(option) > 255 for option in config.cta_option_ids
     ):

@@ -31,6 +31,7 @@ import {
   BuildReason,
   BuildStatus,
   BuildSteps,
+  reasonLabels,
 } from "./presentation"
 import { usePreviewSubmission } from "./usePreviewSubmission"
 export type PreviewSubmit = (preview: PreviewSummary) => Promise<void>
@@ -190,7 +191,10 @@ export function BuildPreviewPanel({
       {current.status === "FAILED" && (
         <Alert variant="destructive">
           <AlertDescription>
-            预览未完成：{current.error_code || "请核实当前草稿后重新生成"}
+            预览未完成：
+            {current.error_code
+              ? reasonLabels[current.error_code] || current.error_code
+              : "请核实当前草稿后重新生成"}
           </AlertDescription>
         </Alert>
       )}

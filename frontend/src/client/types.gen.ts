@@ -2918,6 +2918,10 @@ export type StrategyConfig_Input = {
      */
     cta_option_ids?: Array<string>;
     /**
+     * Campaign Name Template
+     */
+    campaign_name_template?: string;
+    /**
      * Campaign Suffix
      */
     campaign_suffix?: string;
@@ -2955,6 +2959,10 @@ export type StrategyConfig_Output = {
      * Cta Option Ids
      */
     cta_option_ids?: Array<string>;
+    /**
+     * Campaign Name Template
+     */
+    campaign_name_template?: string;
     /**
      * Campaign Suffix
      */

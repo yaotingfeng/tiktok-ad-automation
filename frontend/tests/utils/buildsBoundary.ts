@@ -39,6 +39,7 @@ export async function buildsBoundary(
     updateUnknown?: boolean
     delayedInput?: boolean
     previewStatus?: string
+    previewError?: string
     blocked?: boolean
     empty?: boolean
   } = {},
@@ -95,7 +96,7 @@ export async function buildsBoundary(
     total_unit_count: 6,
     daily_budget_sum: options.blocked ? "400.00" : "600.00",
     content_digest: "frozen-digest",
-    error_code: null,
+    error_code: options.previewError || null,
     created_at: "2026-09-09T00:00:00Z",
   }
   let materials = Array.from({ length: 23 }, (_, i) => ({

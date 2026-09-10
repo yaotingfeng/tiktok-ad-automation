@@ -118,6 +118,9 @@ class PreviewDrama(PreviewRow, table=True):
     drama_id: UUID = Field(primary_key=True)
     link_id: UUID
     title: str = Field(max_length=1000)
+    # 冻结命名输入，后续跨账户展开不再读取可变的版权方资料。
+    provider_pinyin: str = Field(default="", max_length=32)
+    external_drama_id: str = Field(default="", max_length=255)
     url: str
     protected_base: str
     reason_codes: list[str] = Field(

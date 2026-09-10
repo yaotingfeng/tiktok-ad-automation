@@ -702,6 +702,9 @@ def offline_runtime(wire: Wire, database_engine: Any) -> Iterator[Runtime]:
                 TIKTOK_REDIRECT_URI="https://example.com/callback",
                 CONNECTION_ENCRYPTION_KEY=Fernet.generate_key().decode(),
                 REDIS_URL=redis_url,
+                # 验收夹具模拟 S3，不能继承开发机的 R2 类型与区域配置。
+                OBJECT_STORAGE_PROVIDER="s3",
+                S3_REGION="us-east-1",
                 S3_ENDPOINT_URL="http://127.0.0.1:19000",
                 S3_BUCKET="acceptance-offline",
                 S3_ACCESS_KEY_ID="synthetic",

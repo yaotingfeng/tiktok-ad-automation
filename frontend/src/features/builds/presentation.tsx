@@ -144,7 +144,7 @@ export function BuildSteps({ step }: { step: 1 | 2 | 3 }) {
   )
 }
 
-const reasonLabels: Record<string, string> = {
+export const reasonLabels: Record<string, string> = {
   recovery_no_candidates: "当前没有需要重试或核查的步骤。",
   currency_mismatch: "账户币种与策略不一致",
   materials_missing: "未匹配到可用素材",
@@ -167,6 +167,9 @@ const reasonLabels: Record<string, string> = {
   account_ownership_conflict: "账户归属存在冲突",
   account_metadata_incomplete: "账户信息尚未完善",
   scene_link_unavailable: "链接或应用资产尚不可用",
+  preview_naming_outdated: "命名规则已更新，请修改草稿后重新生成预览。",
+  preview_batch_number_exhausted: "暂未分配到唯一随机号，请重试。",
+  naming_context_missing: "缺少版权方或剧目标识，请重新准备剧目。",
   name_too_long: "生成名称超过平台长度限制",
   name_invalid: "生成名称包含不支持字符",
   duplicate_campaign_name: "Campaign 名称重复",

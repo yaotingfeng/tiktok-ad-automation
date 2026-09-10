@@ -434,3 +434,18 @@ test("BC mismatch preserves tenant identity and directs to the frozen BC", async
     page.getByText("6 Campaign · 18 Ad Group · 36 Ad", { exact: true }),
   ).toBeVisible()
 })
+
+test("旧版未完成预览显示中文重建提示并禁止提交", async ({ page }) => {
+  const api = await buildsBoundary(page, {
+    previewStatus: "FAILED",
+    previewError: "preview_naming_outdated",
+  })
+  await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
+  await expect(
+    page.getByText(/命名规则已更新，请修改草稿后重新生成预览/),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: /创建并立即启用/ }),
+  ).toHaveCount(0)
+  expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
+})

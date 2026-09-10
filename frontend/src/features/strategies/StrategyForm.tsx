@@ -60,9 +60,11 @@ import { StrategyNamingExample } from "./StrategyNamingExample"
 import { StrategyStructureExample } from "./StrategyStructureExample"
 import {
   configFingerprint,
+  DEFAULT_NAME_TEMPLATE,
   DEFAULT_SUFFIX,
   decimalError,
   issueMessages,
+  nameTemplateError,
   suffixError,
 } from "./validation"
 
@@ -76,6 +78,7 @@ const fieldNames: Record<string, string> = {
   group_size: "每组素材数量",
   creative_count: "创意数量",
   campaign_suffix: "Campaign 后缀模板",
+  campaign_name_template: "默认命名模板",
   copy_pool_version: "文案池版本",
   cta_option_ids: "CTA 配置",
   name: "策略名称",
@@ -111,7 +114,10 @@ export function StrategyForm({
     [creativeCount, setCreativeCount] = useState(
       initial ? String(initial.creative_count) : "",
     ),
-    [suffix, setSuffix] = useState(initial?.campaign_suffix ?? DEFAULT_SUFFIX)
+    [suffix, setSuffix] = useState(initial?.campaign_suffix ?? DEFAULT_SUFFIX),
+    [nameTemplate, setNameTemplate] = useState(
+      initial?.campaign_name_template ?? DEFAULT_NAME_TEMPLATE,
+    )
   const [baseline, setBaseline] = useState(initial),
     [baseNumber, setBaseNumber] = useState(
       version?.number || strategy?.latest_version || 0,
@@ -148,6 +154,7 @@ export function StrategyForm({
     copy_pool_version: copyPoolVersion,
     cta_option_ids: ctaIds,
     campaign_suffix: suffix,
+    campaign_name_template: nameTemplate,
   }
   const readonly =
     forceReadonly ||
@@ -161,13 +168,15 @@ export function StrategyForm({
       !!roas ||
       !!groupSize ||
       !!creativeCount ||
-      suffix !== DEFAULT_SUFFIX
+      suffix !== DEFAULT_SUFFIX ||
+      nameTemplate !== DEFAULT_NAME_TEMPLATE
   const local: Record<string, string> = {}
   if (!name.trim()) local.name = "请填写策略名称。"
   if (name.length > 120) local.name = "名称不能超过 120 个字符。"
   const budgetIssue = decimalError(budget),
     roasIssue = decimalError(roas),
-    nameIssue = suffixError(suffix)
+    nameIssue = suffixError(suffix),
+    templateIssue = nameTemplateError(nameTemplate)
   if (budgetIssue) local.budget = budgetIssue
   if (roasIssue) local.target_roas = roasIssue
   if (!/^[A-Z]{3}$/.test(currency)) local.currency = "请选择预算币种。"
@@ -186,6 +195,7 @@ export function StrategyForm({
   else if (capacity !== undefined && cfg.creative_count > capacity)
     local.creative_count = `创意数量不能超过 ${capacity} 条有效且不重复的英文文案。`
   if (nameIssue) local.campaign_suffix = nameIssue
+  if (templateIssue) local.campaign_name_template = templateIssue
   const errors = { ...local, ...serverErrors },
     firstError = Object.keys(errors)[0]
   useEffect(() => {
@@ -340,7 +350,7 @@ export function StrategyForm({
       if (code === "copy_pool_exhausted")
         setServerErrors({ creative_count: issueMessages[code] })
       if (code === "invalid_name_template")
-        setServerErrors({ campaign_suffix: issueMessages[code] })
+        setServerErrors({ campaign_name_template: issueMessages[code] })
     } finally {
       inFlight.current = false
       setPending(false)
@@ -663,16 +673,49 @@ export function StrategyForm({
             <CardHeader>
               <CardTitle>广告命名</CardTitle>
               <CardDescription>
-                归因基础名来自版权方，只编辑 Campaign 后缀。
+                嘉书等版权方使用默认模板；网眼等已有归因规则的版权方优先使用专用规则。
               </CardDescription>
             </CardHeader>
             <CardContent>
               <FieldGroup>
                 {input(
+                  "campaign_name_template",
+                  nameTemplate,
+                  setNameTemplate,
+                  "必须保留剧目 ID 和随机号。剧目 ID 为版权方的剧目 ID，随机号为系统分配的 12 位数字。",
+                )}
+                {!readonly && (
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      ["版权方拼音", "{provider_pinyin}"],
+                      ["剧名", "{drama_name}"],
+                      ["剧目 ID", "{drama_id}"],
+                      ["随机号", "{random}"],
+                      ["日期", "{YYYYMMDD}"],
+                    ].map(([label, variable]) => (
+                      <Button
+                        key={variable}
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={pending || !!unknownRequest}
+                        onClick={() =>
+                          change(
+                            "campaign_name_template",
+                            setNameTemplate,
+                          )(nameTemplate + variable)
+                        }
+                      >
+                        插入{label}变量
+                      </Button>
+                    ))}
+                  </div>
+                )}
+                {input(
                   "campaign_suffix",
                   suffix,
                   setSuffix,
-                  "必须包含批次号变量。广告组继承 Campaign 名称-g{group_no}，广告继承广告组名称-sp{creative_no}。",
+                  "仅用于网眼等专用归因基础名，必须包含批次号变量（同一 12 位随机号）。广告组和广告分别追加 -g01、-sp1 等编号。",
                 )}
                 {!readonly && (
                   <div className="flex flex-wrap gap-2">
@@ -721,7 +764,7 @@ export function StrategyForm({
             budget={budgetIssue ? "" : budget}
             currency={currency}
           />
-          <StrategyNamingExample suffix={suffix} />
+          <StrategyNamingExample suffix={suffix} nameTemplate={nameTemplate} />
         </aside>
       </div>
       <div className="sticky bottom-0 flex w-full max-w-7xl flex-wrap items-center justify-between gap-3 border-t bg-background px-4 py-3">

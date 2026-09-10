@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from collections.abc import Callable, Iterable, Iterator
 from datetime import UTC, datetime
 from random import Random
@@ -15,6 +16,7 @@ from app.core.errors import DomainError
 from app.core.pagination import Page
 from app.modules.accounts.access import resolve_account_access
 from app.modules.accounts.resolver import decode_cursor, encode_cursor
+from app.modules.builds.batch_numbers import insert_preview_with_number
 from app.modules.builds.drafts import get_draft
 from app.modules.builds.models import (
     DraftAccount,
@@ -46,7 +48,11 @@ from app.modules.builds.preview_validation import measured, name_reasons, scene_
 from app.modules.builds.scene import read_scene_context
 from app.modules.builds.scene_schemas import SceneContext
 from app.modules.materials.readiness import get_material_readiness_batch
-from app.modules.providers.models import PromotionLink
+from app.modules.providers.models import (
+    PromotionLink,
+    ProviderConnection,
+    ProviderDrama,
+)
 from app.modules.strategies.naming import render_names
 from app.modules.strategies.schemas import StrategyConfig
 from app.modules.strategies.service import get_copies, get_version
@@ -163,9 +169,7 @@ def generate_preview(
         budget=config.budget,
         target_roas=config.target_roas,
     )
-    # The full random UUID is a unique batch discriminator, never a short prefix
-    # that can collide under large-account workloads.
-    row.batch_short_id = row.id.hex
+    insert_preview_with_number(session, row)
     row.progress = {
         "phase": "inputs",
         "kind": "drama",
@@ -270,11 +274,27 @@ def _snapshot_drama(
                 PromotionLink.id == drama.link_id,
             )
         ).one()
+        provider_drama, connection = session.exec(
+            select(ProviderDrama, ProviderConnection)
+            .join(
+                ProviderConnection,
+                (col(ProviderConnection.tenant_id) == col(ProviderDrama.tenant_id))
+                & (col(ProviderConnection.id) == col(ProviderDrama.connection_id)),
+            )
+            .where(
+                ProviderDrama.tenant_id == preview.tenant_id,
+                ProviderDrama.id == drama.drama_id,
+                ProviderDrama.connection_id == link.connection_id,
+                ProviderDrama.application_id == link.application_id,
+            )
+        ).one()
         frozen = PreviewDrama(
             **_scope(preview),
             drama_id=drama.drama_id,
             link_id=drama.link_id,
             title=drama.title,
+            provider_pinyin=connection.kind,
+            external_drama_id=provider_drama.external_drama_id,
             url=link.url or "",
             protected_base=link.protected_base or "",
             reason_codes=[]
@@ -374,6 +394,9 @@ def _names(
         group_no=group,
         creative_no=creative,
         max_length=10000,
+        provider_pinyin=drama.provider_pinyin,
+        external_drama_id=drama.external_drama_id,
+        template=config.campaign_name_template,
     )
 
 
@@ -663,6 +686,13 @@ def continue_preview(
     draft = get_draft(session, context=context, draft_id=initial.draft_id, lock=True)
     preview = _preview(session, context, preview_id, lock=True)
     if preview.status != "BUILDING":
+        return True
+    if not re.fullmatch(r"[0-9]{12}", preview.batch_short_id):
+        # 旧版未冻结预览不可混用新规则；冻结及已提交名称继续读取原记录。
+        preview.status = "FAILED"
+        preview.error_code = "preview_naming_outdated"
+        session.add(preview)
+        session.flush()
         return True
     if draft.revision != preview.draft_revision:
         preview.status = "OBSOLETE"

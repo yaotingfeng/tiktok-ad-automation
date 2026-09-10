@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
+from app.modules.strategies.naming import DEFAULT_NAME_TEMPLATE
+
 
 def exact_decimal(value: Any) -> Any:
     if isinstance(value, (float, bool)):
@@ -28,6 +30,7 @@ class StrategyConfig(BaseModel):
     creative_count: int = Field(gt=0, strict=True)
     copy_pool_version: UUID
     cta_option_ids: tuple[str, ...] = ()
+    campaign_name_template: str = Field(default=DEFAULT_NAME_TEMPLATE, max_length=1000)
     campaign_suffix: str = Field(
         default="-{YYYYMMDD}-{batch_short_id}", max_length=1000
     )
