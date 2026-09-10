@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import Literal, Self
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -101,6 +101,7 @@ class IngestIdentity(BaseModel):
 
 
 class IngestPartUrlsCreate(IngestIdentity):
+    request_id: UUID = Field(default_factory=uuid4)
     upload_id: str = Field(min_length=1, max_length=512)
     part_numbers: list[int] = Field(min_length=1, max_length=2)
 
@@ -121,6 +122,52 @@ class IngestPartUrl(BaseModel):
     byte_size: int
     url: str = Field(repr=False)
     expires_in: int
+    permission_id: UUID
+    permission_nonce: UUID
+    permission_revision: int
+
+
+class IngestPartPermission(BaseModel):
+    part_number: int
+    permission_id: UUID
+    permission_nonce: UUID
+    permission_revision: int
+    outcome: Literal["signed", "completed", "unused", "unknown"]
+
+
+class IngestPartPermissions(BaseModel):
+    generation: int
+    upload_id: str
+    operation_revision: int
+    request_id: UUID
+    items: list[IngestPartPermission]
+
+
+class IngestPartReceipt(BaseModel):
+    model_config = {"extra": "forbid"}
+    part_number: int = Field(ge=1, le=10000, strict=True)
+    permission_id: UUID
+    permission_nonce: UUID
+    permission_revision: int = Field(ge=0, strict=True)
+    outcome: Literal["completed", "unused", "unknown"]
+    etag: str | None = Field(default=None, min_length=1, max_length=512)
+
+    @model_validator(mode="after")
+    def completed_etag(self) -> Self:
+        if self.outcome == "completed" and not self.etag:
+            raise ValueError("completed PUT requires an ETag")
+        return self
+
+
+class IngestPartReceiptsCreate(IngestIdentity):
+    receipts: list[IngestPartReceipt] = Field(min_length=1, max_length=2)
+
+
+class IngestPartReceiptsResult(BaseModel):
+    generation: int
+    upload_id: str
+    operation_revision: int
+    accepted_permission_ids: list[UUID]
 
 
 class IngestPartUrls(BaseModel):

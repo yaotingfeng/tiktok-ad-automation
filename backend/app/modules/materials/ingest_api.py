@@ -17,6 +17,9 @@ from app.modules.materials.ingest_schemas import (
     IngestChunkResult,
     IngestFilePublic,
     IngestIdentity,
+    IngestPartPermissions,
+    IngestPartReceiptsCreate,
+    IngestPartReceiptsResult,
     IngestPartsPage,
     IngestPartUrls,
     IngestPartUrlsCreate,
@@ -278,6 +281,74 @@ def sign_ingest_parts(
     session.rollback()
     response.headers["Cache-Control"] = "no-store"
     return sign_parts(
+        database_engine=engine,
+        context=context,
+        session_id=session_id,
+        material_id=material_id,
+        identity=body,
+    )
+
+
+@router.get(
+    "/ingest-sessions/{session_id}/files/{material_id}/part-permissions",
+    response_model=IngestPartPermissions,
+    operation_id="read_ingest_part_permissions",
+)
+def read_ingest_part_permissions(
+    tenant_id: UUID,
+    session_id: UUID,
+    material_id: UUID,
+    request_id: UUID,
+    generation: Annotated[int, Query(ge=1)],
+    upload_id: Annotated[str, Query(min_length=1, max_length=512)],
+    operation_revision: Annotated[int, Query(ge=0)],
+    response: Response,
+    session: SessionDep,
+    user: CurrentUser,
+) -> IngestPartPermissions:
+    from .part_receipts import read_permissions
+
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="upload"
+    )
+    session.rollback()
+    response.headers["Cache-Control"] = "no-store"
+    return read_permissions(
+        database_engine=engine,
+        context=context,
+        session_id=session_id,
+        material_id=material_id,
+        request_id=request_id,
+        identity=IngestIdentity(
+            generation=generation,
+            upload_id=upload_id,
+            operation_revision=operation_revision,
+        ),
+    )
+
+
+@router.post(
+    "/ingest-sessions/{session_id}/files/{material_id}/part-receipts",
+    response_model=IngestPartReceiptsResult,
+    operation_id="acknowledge_ingest_parts",
+)
+def acknowledge_ingest_parts(
+    tenant_id: UUID,
+    session_id: UUID,
+    material_id: UUID,
+    body: IngestPartReceiptsCreate,
+    response: Response,
+    session: SessionDep,
+    user: CurrentUser,
+) -> IngestPartReceiptsResult:
+    from .part_receipts import acknowledge_parts
+
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="upload"
+    )
+    session.rollback()
+    response.headers["Cache-Control"] = "no-store"
+    return acknowledge_parts(
         database_engine=engine,
         context=context,
         session_id=session_id,

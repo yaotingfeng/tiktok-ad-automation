@@ -434,9 +434,15 @@ def test_resume_sign_list_complete_preserves_exact_identity_and_durable_handoff(
     assert row["temporary_storage_status"] == "receiving"
     assert row["upload_id"]
     initial_revision = row["operation_revision"]
+    signing_request_id = str(uuid4())
     for _ in range(2):
         signed = client.post(
-            url + "/part-urls", json={**identity(row), "part_numbers": [1]}
+            url + "/part-urls",
+            json={
+                **identity(row),
+                "request_id": signing_request_id,
+                "part_numbers": [1],
+            },
         )
         assert signed.status_code == 200, signed.text
         assert signed.json()["operation_revision"] == initial_revision
@@ -656,9 +662,11 @@ def test_completion_pages_and_independent_part_permissions(api, remote, monkeypa
         object_id = obj.id
     row = client.post(url + "/resume", json=identity(row)).json()
     assert row["part_count"] == 101
-    for numbers in ([1, 2], [2]):
+    windows = [(str(uuid4()), [1, 2]), (str(uuid4()), [2])]
+    for request_id, numbers in windows:
         signed = client.post(
-            url + "/part-urls", json={**identity(row), "part_numbers": numbers}
+            url + "/part-urls",
+            json={**identity(row), "request_id": request_id, "part_numbers": numbers},
         )
         assert signed.status_code == 200, signed.text
         assert signed.json()["operation_revision"] == row["operation_revision"]
@@ -669,8 +677,9 @@ def test_completion_pages_and_independent_part_permissions(api, remote, monkeypa
             )
         ).all()
         assert {use.operation_id for use in uses} == {
-            uuid5(object_id, "part:1"),
-            uuid5(object_id, "part:2"),
+            uuid5(object_id, f"part:{request_id}:{number}")
+            for request_id, numbers in windows
+            for number in numbers
         }
         assert all(use.status == "active" for use in uses)
     receive(remote, row)

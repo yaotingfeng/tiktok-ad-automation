@@ -360,6 +360,9 @@ class OriginalUse(SQLModel, table=True):
     nonce: UUID = Field(default_factory=uuid4, unique=True)
     status: str = Field(default="active", max_length=16)
     revision: int = 0
+    completion_evidence: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
     expires_at: datetime = Field(sa_column=timestamp(nullable=False))
     permission_issued_at: datetime | None = Field(default=None, sa_column=timestamp())
     released_at: datetime | None = Field(default=None, sa_column=timestamp())

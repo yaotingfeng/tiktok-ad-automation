@@ -198,6 +198,26 @@ def _active_uses(session: Session, obj: TemporaryMaterialObject) -> list[Origina
     return active
 
 
+def _close_acknowledged_parts(session: Session, obj: TemporaryMaterialObject) -> None:
+    """Only after fresh exact Abort/ListParts/HEAD closure, with client receipts.
+
+    The expiry closes permission to start another request; completed/unused
+    receipts account for the controlled client's started exchanges. A timeout,
+    aborted browser request or unacknowledged permission remains active.
+    """
+    now = datetime.now(UTC)
+    for use in _active_uses(session, obj):
+        if (
+            use.purpose == "part_put"
+            and use.expires_at <= now
+            and use.completion_evidence.get("outcome") in {"completed", "unused"}
+            and use.completion_evidence.get("acknowledged_at")
+        ):
+            use.status, use.released_at = "released", now
+            use.revision += 1
+    session.flush()
+
+
 def _head_absent(s3: Any, obj: TemporaryMaterialObject) -> bool:
     try:
         s3.head_object(Bucket=obj.storage_bucket, Key=obj.object_key)
@@ -411,6 +431,8 @@ def run_cleanup(
             return
         if aborted:
             cleanup.abort_confirmed_at = datetime.now(UTC)
+        if absent and transport == "abort":
+            _close_acknowledged_parts(session, obj)
         if absent and transport == "abort" and _active_uses(session, obj):
             # Abort and empty ListParts cannot prove an unknown in-flight PUT
             # has ended. Keep its reservation until its own completion evidence.

@@ -3,6 +3,10 @@ from fastapi.responses import JSONResponse
 
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
+    "part_permission_expired": 409,
+    "part_permission_closed": 409,
+    "part_result_unknown": 409,
+    "part_receipt_unverified": 409,
     "ingest_api_required": 409,
     "material_remote_source_unavailable": 409,
     "material_share_unverified": 409,

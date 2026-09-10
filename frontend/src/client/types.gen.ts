@@ -1023,6 +1023,132 @@ export type IngestPart = {
 };
 
 /**
+ * IngestPartPermission
+ */
+export type IngestPartPermission = {
+    /**
+     * Part Number
+     */
+    part_number: number;
+    /**
+     * Permission Id
+     */
+    permission_id: string;
+    /**
+     * Permission Nonce
+     */
+    permission_nonce: string;
+    /**
+     * Permission Revision
+     */
+    permission_revision: number;
+    /**
+     * Outcome
+     */
+    outcome: 'signed' | 'completed' | 'unused' | 'unknown';
+};
+
+/**
+ * IngestPartPermissions
+ */
+export type IngestPartPermissions = {
+    /**
+     * Generation
+     */
+    generation: number;
+    /**
+     * Upload Id
+     */
+    upload_id: string;
+    /**
+     * Operation Revision
+     */
+    operation_revision: number;
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Items
+     */
+    items: Array<IngestPartPermission>;
+};
+
+/**
+ * IngestPartReceipt
+ */
+export type IngestPartReceipt = {
+    /**
+     * Part Number
+     */
+    part_number: number;
+    /**
+     * Permission Id
+     */
+    permission_id: string;
+    /**
+     * Permission Nonce
+     */
+    permission_nonce: string;
+    /**
+     * Permission Revision
+     */
+    permission_revision: number;
+    /**
+     * Outcome
+     */
+    outcome: 'completed' | 'unused' | 'unknown';
+    /**
+     * Etag
+     */
+    etag?: string | null;
+};
+
+/**
+ * IngestPartReceiptsCreate
+ */
+export type IngestPartReceiptsCreate = {
+    /**
+     * Generation
+     */
+    generation: number;
+    /**
+     * Upload Id
+     */
+    upload_id?: string | null;
+    /**
+     * Operation Revision
+     */
+    operation_revision: number;
+    /**
+     * Receipts
+     */
+    receipts: Array<IngestPartReceipt>;
+};
+
+/**
+ * IngestPartReceiptsResult
+ */
+export type IngestPartReceiptsResult = {
+    /**
+     * Generation
+     */
+    generation: number;
+    /**
+     * Upload Id
+     */
+    upload_id: string;
+    /**
+     * Operation Revision
+     */
+    operation_revision: number;
+    /**
+     * Accepted Permission Ids
+     */
+    accepted_permission_ids: Array<string>;
+};
+
+/**
  * IngestPartUrl
  */
 export type IngestPartUrl = {
@@ -1042,6 +1168,18 @@ export type IngestPartUrl = {
      * Expires In
      */
     expires_in: number;
+    /**
+     * Permission Id
+     */
+    permission_id: string;
+    /**
+     * Permission Nonce
+     */
+    permission_nonce: string;
+    /**
+     * Permission Revision
+     */
+    permission_revision: number;
 };
 
 /**
@@ -1082,6 +1220,10 @@ export type IngestPartUrlsCreate = {
      * Operation Revision
      */
     operation_revision: number;
+    /**
+     * Request Id
+     */
+    request_id?: string;
     /**
      * Part Numbers
      */
@@ -2468,6 +2610,42 @@ export type RecoveryRequestInput = {
 };
 
 /**
+ * RemoteMaterialPreview
+ *
+ * Current response-only URL; platform expiry is not assumed.
+ */
+export type RemoteMaterialPreview = {
+    /**
+     * Url
+     */
+    url: string;
+    /**
+     * Advertiser Id
+     */
+    advertiser_id: string;
+    /**
+     * Video Id
+     */
+    video_id: string;
+    /**
+     * Width
+     */
+    width: number;
+    /**
+     * Height
+     */
+    height: number;
+    /**
+     * Duration
+     */
+    duration: number;
+    /**
+     * Format
+     */
+    format: string;
+};
+
+/**
  * ResolveRequest
  */
 export type ResolveRequest = {
@@ -3705,42 +3883,6 @@ export type VersionPublic = {
      * Request Id
      */
     request_id: string;
-};
-
-/**
- * RemoteMaterialPreview
- *
- * Current response-only URL; platform expiry is not assumed.
- */
-export type RemoteMaterialPreview = {
-    /**
-     * Url
-     */
-    url: string;
-    /**
-     * Advertiser Id
-     */
-    advertiser_id: string;
-    /**
-     * Video Id
-     */
-    video_id: string;
-    /**
-     * Width
-     */
-    width: number;
-    /**
-     * Height
-     */
-    height: number;
-    /**
-     * Duration
-     */
-    duration: number;
-    /**
-     * Format
-     */
-    format: string;
 };
 
 export type loginLoginAccessTokenData = {
@@ -5104,6 +5246,99 @@ export type signIngestPartsResponses = {
 
 export type signIngestPartsResponse = signIngestPartsResponses[keyof signIngestPartsResponses];
 
+export type readIngestPartPermissionsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Session Id
+         */
+        session_id: string;
+        /**
+         * Material Id
+         */
+        material_id: string;
+    };
+    query: {
+        /**
+         * Request Id
+         */
+        request_id: string;
+        /**
+         * Generation
+         */
+        generation: number;
+        /**
+         * Upload Id
+         */
+        upload_id: string;
+        /**
+         * Operation Revision
+         */
+        operation_revision: number;
+    };
+    url: '/api/tenants/{tenant_id}/materials/ingest-sessions/{session_id}/files/{material_id}/part-permissions';
+};
+
+export type readIngestPartPermissionsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type readIngestPartPermissionsError = readIngestPartPermissionsErrors[keyof readIngestPartPermissionsErrors];
+
+export type readIngestPartPermissionsResponses = {
+    /**
+     * Successful Response
+     */
+    200: IngestPartPermissions;
+};
+
+export type readIngestPartPermissionsResponse = readIngestPartPermissionsResponses[keyof readIngestPartPermissionsResponses];
+
+export type acknowledgeIngestPartsData = {
+    body: IngestPartReceiptsCreate;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Session Id
+         */
+        session_id: string;
+        /**
+         * Material Id
+         */
+        material_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/materials/ingest-sessions/{session_id}/files/{material_id}/part-receipts';
+};
+
+export type acknowledgeIngestPartsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type acknowledgeIngestPartsError = acknowledgeIngestPartsErrors[keyof acknowledgeIngestPartsErrors];
+
+export type acknowledgeIngestPartsResponses = {
+    /**
+     * Successful Response
+     */
+    200: IngestPartReceiptsResult;
+};
+
+export type acknowledgeIngestPartsResponse = acknowledgeIngestPartsResponses[keyof acknowledgeIngestPartsResponses];
+
 export type listIngestPartsData = {
     body?: never;
     path: {
@@ -5427,6 +5662,45 @@ export type materialsReadOriginalPreviewResponses = {
 };
 
 export type materialsReadOriginalPreviewResponse = materialsReadOriginalPreviewResponses[keyof materialsReadOriginalPreviewResponses];
+
+export type materialsReadRemotePreviewData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Material Id
+         */
+        material_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/materials/{material_id}/remote-preview';
+};
+
+export type materialsReadRemotePreviewErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialsReadRemotePreviewError = materialsReadRemotePreviewErrors[keyof materialsReadRemotePreviewErrors];
+
+export type materialsReadRemotePreviewResponses = {
+    /**
+     * Successful Response
+     */
+    200: RemoteMaterialPreview;
+};
+
+export type materialsReadRemotePreviewResponse = materialsReadRemotePreviewResponses[keyof materialsReadRemotePreviewResponses];
 
 export type materialsReadUploadBatchData = {
     body?: never;
@@ -7946,42 +8220,3 @@ export type buildsGetSubmissionRecoveryResponses = {
 };
 
 export type buildsGetSubmissionRecoveryResponse = buildsGetSubmissionRecoveryResponses[keyof buildsGetSubmissionRecoveryResponses];
-
-export type materialsReadRemotePreviewData = {
-    body?: never;
-    path: {
-        /**
-         * Tenant Id
-         */
-        tenant_id: string;
-        /**
-         * Material Id
-         */
-        material_id: string;
-    };
-    query: {
-        /**
-         * Bc Id
-         */
-        bc_id: string;
-    };
-    url: '/api/tenants/{tenant_id}/materials/{material_id}/remote-preview';
-};
-
-export type materialsReadRemotePreviewErrors = {
-    /**
-     * Validation Error
-     */
-    422: HTTPValidationError;
-};
-
-export type materialsReadRemotePreviewError = materialsReadRemotePreviewErrors[keyof materialsReadRemotePreviewErrors];
-
-export type materialsReadRemotePreviewResponses = {
-    /**
-     * Successful Response
-     */
-    200: RemoteMaterialPreview;
-};
-
-export type materialsReadRemotePreviewResponse = materialsReadRemotePreviewResponses[keyof materialsReadRemotePreviewResponses];

@@ -7,7 +7,7 @@ hard limit; large byte reads and provider ingestion belong to bounded workers.
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import UUID, uuid4, uuid5
+from uuid import UUID, uuid4
 
 from billiard.exceptions import SoftTimeLimitExceeded
 from botocore.exceptions import BotoCoreError, ClientError
@@ -44,7 +44,7 @@ from .ingest_schemas import (
 )
 from .models import AccountMaterial, MaterialAssetOperation, MaterialFile
 from .object_budget import mark_object_stored, reserve_object
-from .object_uses import acquire_original_use, release_object_uses
+from .object_uses import release_object_uses
 from .object_validation import enqueue_validation
 from .repository import decode_material_cursor, encode_material_cursor
 
@@ -475,14 +475,28 @@ def sign_parts(
         )
         _receiving(obj, row)
         sizes = [(number, _part_bytes(obj, number)) for number in identity.part_numbers]
-        for number, _ in sizes:
-            acquire_original_use(
-                db,
-                context=context,
-                object_id=obj.id,
-                purpose="part_put",
-                operation_id=uuid5(obj.id, f"part:{number}"),
-                lifetime_seconds=ttl,
+        from .part_receipts import signing_window
+
+        uses = signing_window(
+            db,
+            context=context,
+            obj=obj,
+            request_id=identity.request_id,
+            numbers=identity.part_numbers,
+            ttl=ttl,
+        )
+        permissions = {
+            use.completion_evidence["part_number"]: (
+                use.id,
+                use.nonce,
+                use.revision,
+                int((use.expires_at - _now()).total_seconds()),
+            )
+            for use in uses
+        }
+        if any(permission[3] < 60 for permission in permissions.values()):
+            raise DomainError(
+                "part_permission_expired", "分片签名已到期，请恢复上传窗口"
             )
         snapshot = _snapshot(obj)
     assert snapshot.storage_bucket is not None and snapshot.s3_upload_id is not None
@@ -493,7 +507,10 @@ def sign_parts(
             IngestPartUrl(
                 part_number=number,
                 byte_size=size,
-                expires_in=ttl,
+                expires_in=permissions[number][3],
+                permission_id=permissions[number][0],
+                permission_nonce=permissions[number][1],
+                permission_revision=permissions[number][2],
                 url=storage.sign_part(
                     client,
                     bucket=snapshot.storage_bucket,
@@ -501,7 +518,7 @@ def sign_parts(
                     upload_id=snapshot.s3_upload_id,
                     part_number=number,
                     byte_size=size,
-                    expires_in=ttl,
+                    expires_in=permissions[number][3],
                 ),
             )
             for number, size in sizes

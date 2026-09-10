@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from botocore.exceptions import ClientError
 from sqlmodel import Session
 
@@ -173,3 +174,49 @@ def test_cancel_does_not_delete_unknown_tiktok_read(cleanup_case):
     assert remote.deletes == 0
     with Session(engine) as db:
         assert db.get(TemporaryMaterialObject, cleanup_case[1]).reserved_bytes == 5
+
+
+@pytest.mark.parametrize("outcome", ["completed", "unused"])
+def test_acknowledged_parts_need_expired_capability_and_fresh_remote_closure(
+    cleanup_case, outcome
+):
+    identity = cancelled(cleanup_case)
+    context, object_id, _, _, _ = cleanup_case
+    with Session(engine) as db, db.begin():
+        obj = db.get(TemporaryMaterialObject, object_id)
+        use = OriginalUse(
+            tenant_id=context.tenant_id,
+            bc_id=obj.bc_id,
+            material_id=obj.material_id,
+            generation=obj.generation,
+            actor_id=context.actor_id,
+            purpose="part_put",
+            expires_at=datetime.now(UTC) + timedelta(minutes=5),
+            completion_evidence={
+                "outcome": outcome,
+                "acknowledged_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        db.add(use)
+        db.flush()
+        use_id = use.id
+    remote = MultipartStorage()
+    run_cleanup(database_engine=engine, cleanup_id=identity, s3=remote)
+    with Session(engine) as db, db.begin():
+        assert db.get(TemporaryMaterialObject, object_id).reserved_bytes == 5
+        db.get(OriginalUse, use_id).expires_at = datetime.now(UTC) - timedelta(
+            seconds=1
+        )
+    due(identity)
+    # Even an acknowledged expired permission cannot waive fresh HEAD evidence.
+    remote.forbidden = True
+    run_cleanup(database_engine=engine, cleanup_id=identity, s3=remote)
+    with Session(engine) as db:
+        assert db.get(OriginalUse, use_id).status == "active"
+        assert db.get(TemporaryMaterialObject, object_id).reserved_bytes == 5
+    remote.forbidden = False
+    due(identity)
+    run_cleanup(database_engine=engine, cleanup_id=identity, s3=remote)
+    with Session(engine) as db:
+        assert db.get(OriginalUse, use_id).status == "released"
+        assert db.get(TemporaryMaterialObject, object_id).reserved_bytes == 0
