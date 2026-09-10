@@ -410,82 +410,104 @@ test("预算大数十进制原文保存，结构和命名示例不进入配置",
   )
   expect(write.body.expected_version).toBe(1)
 })
-test("dashboard layout uses the full 2304px panel with either sidebar state", async ({
-  page,
-}) => {
+test("策略卡片在2304px展开和收起侧栏时保留留白与固定短列", async ({ page }) => {
   await page.setViewportSize({ width: 2304, height: 1080 })
   await boundary(page, { count: 55 })
   await page.goto(`/tenants/${A}/strategies`)
   await expect(page.locator("tbody tr")).toHaveCount(50)
+  const section = page.locator('[data-presentation="strategy-list"]')
+  const card = section.locator('[data-slot="card"]')
+  const table = section.locator('[data-slot="table-container"]')
   const sidebar = page.locator('[data-slot="sidebar"]')
   await expect(sidebar).toHaveAttribute("data-state", "expanded")
-  await expect
-    .poll(
-      async () =>
-        (await page.locator('[data-slot="sidebar-container"]').boundingBox())
-          ?.width,
-    )
-    .toBe(288)
   let expandedWidth = 0
+  let expandedColumns: number[] = []
   for (const state of ["expanded", "collapsed"] as const) {
     if (state === "collapsed") {
       await page.getByRole("button", { name: "切换导航" }).click()
       await expect(sidebar).toHaveAttribute("data-state", state)
     }
-    // Measure the visible list against its panel, including the inset margin.
-    // Poll through the sidebar width transition instead of sleeping.
     await expect
       .poll(async () =>
-        page.locator('[data-slot="table-container"]').evaluate((el) => {
-          const table = el.getBoundingClientRect()
+        card.evaluate((el) => {
+          const rect = el.getBoundingClientRect()
           const panel = el
             .closest('[data-slot="sidebar-inset"]')!
             .getBoundingClientRect()
           return Math.max(
-            Math.abs(table.left - panel.left - 25),
-            Math.abs(panel.right - table.right - 25),
+            Math.abs(rect.left - panel.left - 24),
+            Math.abs(panel.right - rect.right - 24),
           )
         }),
       )
       .toBeLessThanOrEqual(1)
-    const width = (await page
-      .locator('[data-slot="table-container"]')
-      .boundingBox())!.width
-    expect(width).toBeGreaterThan(1536)
-    if (state === "expanded") expandedWidth = width
-    else
+    const innerGap = await table.evaluate((el) => {
+      const card = el.closest('[data-slot="card"]')!
+      const edge = el.parentElement!.getBoundingClientRect()
+      const bounds = card.getBoundingClientRect()
+      const style = getComputedStyle(card)
+      return [
+        edge.left - bounds.left - parseFloat(style.borderLeftWidth),
+        bounds.right - edge.right - parseFloat(style.borderRightWidth),
+      ]
+    })
+    for (const gap of innerGap) expect(gap).toBeCloseTo(24, 0)
+    if (state === "collapsed") {
+      await expect
+        .poll(async () => (await table.boundingBox())!.width)
+        .toBeGreaterThan(expandedWidth + 150)
       await expect
         .poll(
           async () =>
-            (await page.locator('[data-slot="table-container"]').boundingBox())!
-              .width,
+            (await page
+              .locator('[data-slot="sidebar-container"]')
+              .boundingBox())!.width,
         )
-        .toBeGreaterThan(expandedWidth + 150)
+        .toBe(66)
+    }
+    const widths = await section
+      .locator("thead th")
+      .evaluateAll((cells) =>
+        cells.map((cell) => cell.getBoundingClientRect().width),
+      )
+    expect(widths[0]).toBeGreaterThanOrEqual(220)
+    if (state === "expanded") {
+      expandedWidth = (await table.boundingBox())!.width
+      expect(expandedWidth).toBeGreaterThan(1536)
+      expandedColumns = widths
+    } else {
+      for (let i = 1; i < widths.length; i++)
+        expect(widths[i]).toBeCloseTo(expandedColumns[i], 0)
+      expect(widths[0]).toBeGreaterThan(expandedColumns[0] + 150)
+    }
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(2304)
   }
 })
 
 for (const width of [390, 1024, 1440]) {
-  test(`dashboard layout keeps strategy toolbar, table and pager separate at ${width}px`, async ({
-    page,
-  }) => {
+  test(`策略卡片在${width}px保留内距、横滚与搜索分页`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 })
     await boundary(page, { count: 55 })
     await page.goto(`/tenants/${A}/strategies`)
     await expect(page.locator("tbody tr")).toHaveCount(50)
-    const table = page.locator('[data-slot="table-container"]')
-    const toolbar = page
-      .locator("form")
-      .filter({ has: page.getByLabel("策略名称", { exact: true }) })
+    const section = page.locator('[data-presentation="strategy-list"]')
+    const card = section.locator('[data-slot="card"]')
+    const table = section.locator('[data-slot="table-container"]')
+    const toolbar = card.locator("form")
     const next = page.getByRole("button", { name: "下一页", exact: true })
+    const cardBox = (await card.boundingBox())!
     const tableBox = (await table.boundingBox())!
     const toolbarBox = (await toolbar.boundingBox())!
     const nextBox = (await next.boundingBox())!
     expect(
       tableBox.y - (toolbarBox.y + toolbarBox.height),
-    ).toBeGreaterThanOrEqual(8)
-    expect(nextBox.y - (tableBox.y + tableBox.height)).toBeGreaterThanOrEqual(8)
-    // The table gets one enclosure; a second border around toolbar + pager
-    // recreates the nested Card that this layout removes.
+    ).toBeGreaterThanOrEqual(16)
+    expect(nextBox.y - (tableBox.y + tableBox.height)).toBeGreaterThanOrEqual(
+      16,
+    )
+    expect(toolbarBox.x - cardBox.x - 1).toBeCloseTo(width < 1024 ? 16 : 24, 0)
     const enclosures = await table.evaluate((el) => {
       const bordered: Element[] = []
       for (
@@ -500,16 +522,28 @@ for (const width of [390, 1024, 1440]) {
             style.borderBottomWidth,
             style.borderLeftWidth,
             style.borderRightWidth,
-          ].every((value) => Number.parseFloat(value) > 0)
+          ].every((value) => parseFloat(value) > 0)
         )
           bordered.push(node)
       }
+      const inner = bordered[0].getBoundingClientRect()
+      const outer = bordered[1].getBoundingClientRect()
+      const border = getComputedStyle(bordered[1])
       return {
         count: bordered.length,
-        containsToolbar: bordered.some((node) => node.querySelector("form")),
+        cardContainsToolbar: bordered[1].querySelector("form") !== null,
+        tableContainsToolbar: bordered[0].querySelector("form") !== null,
+        gaps: [
+          inner.left - outer.left - parseFloat(border.borderLeftWidth),
+          outer.right - inner.right - parseFloat(border.borderRightWidth),
+        ],
       }
     })
-    expect(enclosures).toEqual({ count: 1, containsToolbar: false })
+    expect(enclosures.count).toBe(2)
+    expect(enclosures.cardContainsToolbar).toBe(true)
+    expect(enclosures.tableContainsToolbar).toBe(false)
+    for (const gap of enclosures.gaps)
+      expect(gap).toBeCloseTo(width < 1024 ? 16 : 24, 0)
     const scroll = await table.evaluate((el) => {
       el.scrollLeft = 200
       return {
@@ -519,20 +553,85 @@ for (const width of [390, 1024, 1440]) {
       }
     })
     await expect(table).toHaveCSS("overflow-x", "auto")
-    if (width <= 1024) {
-      expect(scroll.content).toBeGreaterThan(scroll.width)
-      expect(scroll.left).toBeGreaterThan(0)
-    }
+    expect(scroll.content).toBeGreaterThan(scroll.width)
+    expect(scroll.left).toBeGreaterThan(0)
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth),
     ).toBeLessThanOrEqual(width)
     await next.click()
     await expect(page.locator("tbody tr")).toHaveCount(5)
+    await table.evaluate((el) => {
+      el.scrollLeft = 0
+    })
     await expect(
       page.getByRole("link", { name: "分页策略 51", exact: true }),
     ).toBeVisible()
+    await page.getByLabel("策略名称", { exact: true }).fill("分页策略 55")
+    await page.getByRole("button", { name: "搜索", exact: true }).click()
+    await expect(page.locator("tbody tr")).toHaveCount(1)
+    await expect(
+      page.getByRole("link", { name: "分页策略 55", exact: true }),
+    ).toBeVisible()
+    await expect(next).toBeDisabled()
   })
 }
+
+test("策略列表离开编辑并返回时恢复标题位置和局部主题", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const { requests } = await boundary(page)
+  await page.goto(`/tenants/${A}/strategies`)
+  const main = page.locator("#workspace-main")
+  const header = page.locator('[data-slot="workspace-page-title"]')
+  const readTheme = () =>
+    main.evaluate((el) => ({
+      background: getComputedStyle(el).backgroundColor,
+      primary: getComputedStyle(
+        el.querySelector('[data-presentation="strategy-list"]') ?? el,
+      )
+        .getPropertyValue("--primary")
+        .trim(),
+      mainPrimary: getComputedStyle(el).getPropertyValue("--primary").trim(),
+      rootPrimary: getComputedStyle(document.documentElement)
+        .getPropertyValue("--primary")
+        .trim(),
+    }))
+  await expect(
+    main.getByRole("heading", { level: 1, name: "投放策略", exact: true }),
+  ).toHaveCSS("font-size", "22px")
+  await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1)
+  await expect(header).toHaveText("投放工作")
+  await expect(header.getByRole("heading", { level: 1 })).toHaveCount(0)
+  const listTheme = await readTheme()
+  expect(listTheme.primary).not.toBe(listTheme.rootPrimary)
+  expect(listTheme.mainPrimary).toBe(listTheme.rootPrimary)
+  await page.getByRole("link", { name: "租户策略", exact: true }).click()
+  await expect(page).toHaveURL(editUrl)
+  await expect(
+    header.getByRole("heading", {
+      level: 1,
+      name: "编辑投放策略",
+      exact: true,
+    }),
+  ).toHaveCSS("font-size", "16px")
+  await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1)
+  await expect(main.getByRole("heading", { level: 1 })).toHaveCount(0)
+  await expect(main.locator('[data-presentation="strategy-list"]')).toHaveCount(
+    0,
+  )
+  const editTheme = await readTheme()
+  expect(editTheme.primary).toBe(editTheme.rootPrimary)
+  expect(editTheme.mainPrimary).toBe(editTheme.rootPrimary)
+  expect(editTheme.background).not.toBe(listTheme.background)
+  await page.getByRole("button", { name: "取消", exact: true }).click()
+  await expect(page).toHaveURL(new RegExp(`/tenants/${A}/strategies/?$`))
+  await expect(
+    main.getByRole("heading", { level: 1, name: "投放策略", exact: true }),
+  ).toHaveCSS("font-size", "22px")
+  await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1)
+  await expect(header).toHaveText("投放工作")
+  expect(await readTheme()).toEqual(listTheme)
+  expect(requests.filter((request) => request.method !== "GET")).toHaveLength(0)
+})
 
 test("策略205条列表默认可用、50/100服务端游标与字段对应", async ({ page }) => {
   const { requests } = await boundary(page, { count: 205 })
@@ -941,6 +1040,56 @@ test("策略列表与历史预算去尾零但编辑原文保留", async ({ page 
     budget,
   )
   expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
+})
+
+test("策略固定列完整显示超长预算和ROAS且文字不覆盖相邻单元格", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const api = await boundary(page)
+  const budget = "9007199254740993123456.123400000000"
+  const roas = "9007199254740993123456.123456789012"
+  for (const record of [api.records[0], api.versions[0]]) {
+    record.config.budget = budget
+    record.config.target_roas = roas
+  }
+  await page.goto(`/tenants/${A}/strategies`)
+  for (const name of [
+    "USD 9007199254740993123456.1234 每个 Campaign / 天",
+    `${roas} 倍`,
+  ]) {
+    const cell = page.getByRole("cell", { name, exact: true })
+    await expect(cell).toBeVisible()
+    const bounds = await cell.evaluate((el) => {
+      const box = el.getBoundingClientRect()
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+      const rects: DOMRect[] = []
+      while (walker.nextNode()) {
+        if (!walker.currentNode.textContent?.trim()) continue
+        const range = document.createRange()
+        range.selectNodeContents(walker.currentNode)
+        rects.push(...Array.from(range.getClientRects()))
+      }
+      return {
+        count: rects.length,
+        overflow: Math.max(
+          0,
+          ...rects.flatMap((rect) => [
+            box.left - rect.left,
+            rect.right - box.right,
+          ]),
+        ),
+        width: el.clientWidth,
+        content: el.scrollWidth,
+      }
+    })
+    expect(bounds.count).toBeGreaterThan(1)
+    expect(bounds.overflow).toBeLessThanOrEqual(1)
+    expect(bounds.content).toBeLessThanOrEqual(bounds.width)
+  }
+  expect(
+    api.requests.filter((request) => request.method !== "GET"),
+  ).toHaveLength(0)
 })
 
 for (const selection of [

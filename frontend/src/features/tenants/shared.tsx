@@ -182,6 +182,7 @@ export function ServerTable<T>({
   retry,
   filtered,
   emptyTitle,
+  fixedLayout,
 }: {
   rows: T[]
   columns: ColumnDef<T>[]
@@ -191,6 +192,7 @@ export function ServerTable<T>({
   retry: () => void
   filtered: boolean
   emptyTitle: string
+  fixedLayout?: { fillColumn: string }
 }) {
   const table = useReactTable({
     data: rows,
@@ -214,7 +216,29 @@ export function ServerTable<T>({
           正在更新列表…
         </p>
       )}
-      <Table>
+      <Table
+        style={
+          fixedLayout
+            ? { tableLayout: "fixed", minWidth: table.getTotalSize() }
+            : undefined
+        }
+      >
+        {fixedLayout && (
+          <colgroup>
+            {table.getVisibleLeafColumns().map((column) => (
+              <col
+                key={column.id}
+                // TanStack merges a default size into every resolved column.
+                // Leave the designated column unsized to absorb spare space.
+                style={
+                  column.id === fixedLayout.fillColumn
+                    ? undefined
+                    : { width: column.getSize() }
+                }
+              />
+            ))}
+          </colgroup>
+        )}
         <TableHeader className="sticky top-0 z-10 bg-muted">
           {table.getHeaderGroups().map((group) => (
             <TableRow key={group.id}>

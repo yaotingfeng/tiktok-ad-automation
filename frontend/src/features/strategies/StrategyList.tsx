@@ -1,10 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link, useNavigate } from "@tanstack/react-router"
 import type { ColumnDef } from "@tanstack/react-table"
+import { Plus } from "lucide-react"
 import { useMemo, useState } from "react"
 import { StrategiesService, type StrategyPublic } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -30,6 +32,7 @@ import { handleApiError } from "@/lib/api-feedback"
 import { StrategyError as RequestError } from "./feedback"
 import { strategyKey } from "./queries"
 import { StrategyVersionList } from "./StrategyVersionList"
+import "./strategy-list.css"
 export function StrategyList() {
   const { tenantId, tenant, scope } = useTenantScope(),
     client = useQueryClient(),
@@ -75,9 +78,12 @@ export function StrategyList() {
     () => [
       {
         header: "策略名称",
+        id: "name",
+        minSize: 220,
         cell: ({ row }) => (
           <Link
-            className="font-semibold hover:underline"
+            className="block truncate font-medium hover:underline"
+            title={row.original.name}
             to="/tenants/$tenantId/strategies/$strategyId"
             params={{ tenantId: tenantId!, strategyId: row.original.id }}
             search={{ bc_id: scope?.bcId || undefined }}
@@ -88,6 +94,7 @@ export function StrategyList() {
       },
       {
         header: "当前版本",
+        size: 96,
         cell: ({ row }) => (
           <Button
             size="sm"
@@ -100,20 +107,29 @@ export function StrategyList() {
       },
       {
         header: "Campaign 日预算",
+        size: 168,
         cell: ({ row }) => (
-          <div>
-            {row.original.config.currency}{" "}
-            {normalizeDecimal(row.original.config.budget)}
+          <div className="flex flex-col gap-1 tabular-nums">
+            <span className="wrap-anywhere whitespace-normal">
+              {row.original.config.currency}{" "}
+              {normalizeDecimal(row.original.config.budget)}
+            </span>
             <p className="text-xs text-muted-foreground">每个 Campaign / 天</p>
           </div>
         ),
       },
       {
         header: "目标 ROAS",
-        cell: ({ row }) => `${row.original.config.target_roas} 倍`,
+        size: 112,
+        cell: ({ row }) => (
+          <span className="block wrap-anywhere whitespace-normal tabular-nums">
+            {row.original.config.target_roas} 倍
+          </span>
+        ),
       },
       {
         header: "每组素材",
+        size: 104,
         cell: ({ row }) => (
           <span title="按文件名顺序分组，保留不足整组的尾组">
             {row.original.config.group_size} 条/组
@@ -122,8 +138,9 @@ export function StrategyList() {
       },
       {
         header: "创意数量",
+        size: 108,
         cell: ({ row }) => (
-          <div>
+          <div className="flex flex-col gap-1">
             {row.original.config.creative_count} 条/组
             <p className="text-xs text-muted-foreground">
               SP1～SP{row.original.config.creative_count}
@@ -133,6 +150,7 @@ export function StrategyList() {
       },
       {
         header: "状态",
+        size: 88,
         cell: ({ row }) => (
           <Badge variant={row.original.active ? "secondary" : "outline"}>
             {row.original.active ? "可用" : "已停用"}
@@ -141,8 +159,9 @@ export function StrategyList() {
       },
       {
         header: "更新信息",
+        size: 208,
         cell: ({ row }) => (
-          <div>
+          <div className="flex flex-col gap-1 tabular-nums">
             {displayTime(row.original.created_at)}
             <p
               className="max-w-40 truncate text-xs text-muted-foreground"
@@ -155,8 +174,9 @@ export function StrategyList() {
       },
       {
         header: "操作",
+        size: 324,
         cell: ({ row: { original: r } }) => (
-          <div className="flex gap-1">
+          <div className="flex gap-1 [&_[data-slot=button]]:px-2">
             <Button variant="ghost" size="sm" onClick={() => setHistory(r)}>
               查看版本
             </Button>
@@ -212,10 +232,16 @@ export function StrategyList() {
     [navigate, tenantId, scope?.bcId, write],
   )
   return (
-    <>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex flex-col gap-2">
-          <WorkspacePageTitle>投放策略</WorkspacePageTitle>
+    <section
+      data-presentation="strategy-list"
+      aria-label="投放策略工作区"
+      className="flex min-w-0 flex-col gap-6"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-1">
+          <WorkspacePageTitle placement="content" sectionLabel="投放工作">
+            投放策略
+          </WorkspacePageTitle>
           <p className="text-sm text-muted-foreground">
             当前租户策略 · {tenant?.name} · 不按 BC 筛选
           </p>
@@ -227,71 +253,79 @@ export function StrategyList() {
               params={{ tenantId: tenantId! }}
               search={{ bc_id: scope?.bcId || undefined }}
             >
+              <Plus />
               新建策略
             </Link>
           </Button>
         )}
       </div>
-      <div className="flex min-w-0 flex-col gap-4">
-        <form
-          className="flex flex-wrap items-end gap-3"
-          onSubmit={(e) => {
-            e.preventDefault()
-            setSearch(input.trim())
-            paging.reset()
-          }}
-        >
-          <Field className="w-full sm:w-80">
-            <FieldLabel htmlFor="strategy-search">策略名称</FieldLabel>
-            <Input
-              id="strategy-search"
-              maxLength={255}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="搜索策略名称"
-            />
-          </Field>
-          <FilterSelect
-            label="策略状态"
-            choices={{ active: "可用", inactive: "已停用" }}
-            value={active}
-            onChange={(v) => {
-              setActive(v)
-              paging.reset()
-            }}
-          />
-          <Button variant="outline" type="submit">
-            搜索
-          </Button>
-          <Button
-            variant="ghost"
-            type="button"
-            onClick={() => {
-              setInput("")
-              setSearch("")
-              setActive("all")
+      <Card className="min-w-0 gap-5 py-4 lg:gap-6 lg:py-6">
+        <CardHeader className="px-4 lg:px-6">
+          <form
+            className="flex flex-wrap items-end gap-3"
+            onSubmit={(e) => {
+              e.preventDefault()
+              setSearch(input.trim())
               paging.reset()
             }}
           >
-            清除筛选
-          </Button>
-        </form>
-        <ServerTable
-          rows={data?.items || []}
-          columns={columns}
-          loading={query.isPending && !data}
-          fetching={query.isFetching}
-          error={query.error}
-          retry={() => void query.refetch()}
-          filtered={!!search || active === "inactive"}
-          emptyTitle="还没有投放策略"
-        />
-        <Pager
-          paging={paging}
-          nextCursor={data?.next_cursor}
-          busy={query.isFetching}
-        />
-      </div>
+            <Field className="w-full sm:w-80">
+              <FieldLabel htmlFor="strategy-search">策略名称</FieldLabel>
+              <Input
+                id="strategy-search"
+                maxLength={255}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="搜索策略名称"
+              />
+            </Field>
+            <FilterSelect
+              label="策略状态"
+              choices={{ active: "可用", inactive: "已停用" }}
+              value={active}
+              onChange={(v) => {
+                setActive(v)
+                paging.reset()
+              }}
+            />
+            <Button variant="outline" type="submit">
+              搜索
+            </Button>
+            <Button
+              variant="ghost"
+              type="button"
+              onClick={() => {
+                setInput("")
+                setSearch("")
+                setActive("all")
+                paging.reset()
+              }}
+            >
+              清除筛选
+            </Button>
+          </form>
+        </CardHeader>
+        <CardContent className="strategy-list-table min-w-0 px-4 lg:px-6">
+          <ServerTable
+            fixedLayout={{ fillColumn: "name" }}
+            rows={data?.items || []}
+            columns={columns}
+            loading={query.isPending && !data}
+            fetching={query.isFetching}
+            error={query.error}
+            retry={() => void query.refetch()}
+            filtered={!!search || active === "inactive"}
+            emptyTitle="还没有投放策略"
+          />
+        </CardContent>
+        <CardFooter className="block px-4 lg:px-6">
+          <Pager
+            paging={paging}
+            nextCursor={data?.next_cursor}
+            busy={query.isFetching}
+          />
+        </CardFooter>
+      </Card>
       {history && (
         <StrategyVersionList
           strategyId={history.id}
@@ -350,6 +384,6 @@ export function StrategyList() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </>
+    </section>
   )
 }
