@@ -498,3 +498,82 @@ for (const width of [390, 900]) {
     })
   })
 }
+
+test("legacy batch deep link reads historical status and source after only an explicit session 404", async ({
+  page,
+}) => {
+  const f = await ingestBoundary(page)
+  let legacyReads = 0
+  await page.route(`**/ingest-sessions/${SESSION}`, (route) =>
+    route.fulfill({
+      status: 404,
+      json: { code: "upload_batch_not_found", message: "导入会话不存在" },
+    }),
+  )
+  await page.route(`**/upload-batches/${SESSION}`, (route) => {
+    expect(route.request().method()).toBe("GET")
+    legacyReads++
+    return route.fulfill({
+      json: {
+        batch_id: SESSION,
+        bc_id: "9876543210987654321",
+        status: "available",
+        files: [
+          {
+            material_id: "33333333-3333-4333-8333-000000000000",
+            upload_id: "historical-multipart",
+            file_name: "历史剧目.mp4",
+            byte_size: 8,
+            part_size: 8,
+            part_count: 1,
+            received_bytes: 8,
+            status: "available",
+            latest_advertiser_id: "9999999999999999999",
+            can_retry: true,
+          },
+        ],
+      },
+    })
+  })
+  await page.goto(queueLocation)
+  await expect(
+    page.getByText("历史批次仅供查看", { exact: true }),
+  ).toBeVisible()
+  await expect(page.getByText("历史剧目.mp4", { exact: true })).toBeVisible()
+  await expect(
+    page.getByText("9999999999999999999", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "继续传输 / 核实接收" }),
+  ).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "重试此文件" })).toHaveCount(0)
+  expect(legacyReads).toBe(1)
+  expect(f.calls.filter((call) => call.method !== "GET")).toHaveLength(0)
+})
+
+for (const status of [403, 503])
+  test(`session ${status} never falls back to legacy batch`, async ({
+    page,
+  }) => {
+    await ingestBoundary(page)
+    let legacyReads = 0
+    await page.route(`**/ingest-sessions/${SESSION}`, (route) =>
+      route.fulfill({
+        status,
+        json: {
+          code: status === 403 ? "action_forbidden" : "temporarily_unavailable",
+          message: "新导入读取失败",
+        },
+      }),
+    )
+    await page.route(`**/upload-batches/${SESSION}`, (route) => {
+      legacyReads++
+      return route.fulfill({ status: 404, json: {} })
+    })
+    await page.goto(queueLocation)
+    await expect(page.getByRole("alert").first()).toBeVisible()
+    await expect(
+      page.getByText("历史批次仅供查看", { exact: true }),
+    ).toHaveCount(0)
+    expect(legacyReads).toBe(0)
+  })

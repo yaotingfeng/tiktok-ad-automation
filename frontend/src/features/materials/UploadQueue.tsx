@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
+import { AxiosError } from "axios"
 import { useEffect, useRef, useState } from "react"
 import { type IngestFilePublic, MaterialIngestService } from "@/client"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -22,6 +23,7 @@ import {
   useRetainedData,
 } from "@/features/tenants/shared"
 import { canRestartOriginal } from "./ingest-transfer"
+import { LegacyUploadQueue } from "./LegacyUploadQueue"
 import { bytes, issue, materialKey, Stage } from "./presentation"
 import { useIngestPage } from "./useIngestPage"
 import { type UploadManager, useFileProgress } from "./useUploadManager"
@@ -232,6 +234,20 @@ export function UploadQueue({
       ),
     },
   ]
+  if (
+    summaryQuery.error instanceof AxiosError &&
+    summaryQuery.error.response?.status === 404
+  )
+    return (
+      <LegacyUploadQueue
+        tenantId={tenantId}
+        bcId={bcId}
+        batchId={batchId}
+        onDetails={onDetails}
+        onForbidden={onForbidden}
+        onHistory={onHistory}
+      />
+    )
   if (summaryQuery.error)
     return (
       <RequestError
