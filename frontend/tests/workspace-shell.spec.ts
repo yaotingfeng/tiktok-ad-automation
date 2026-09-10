@@ -95,6 +95,25 @@ async function expectNoOverflow(page: Page) {
   ).toBe(true)
 }
 
+test("dashboard layout keeps one 16px header title as navigation changes", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 2304, height: 1080 })
+  await apiBoundary(page)
+  await page.goto("/")
+  for (const title of ["素材库", "投放策略", "账户与授权"]) {
+    await page.getByRole("link", { name: title, exact: true }).click()
+    const heading = page.getByRole("heading", { level: 1 })
+    await expect(heading).toHaveCount(1)
+    await expect(heading).toHaveText(title)
+    await expect(
+      page.locator("header").getByRole("heading", { level: 1 }),
+    ).toHaveText(title)
+    await expect(heading).toHaveCSS("font-size", "16px")
+    await expectNoOverflow(page)
+  }
+})
+
 test("unauthenticated entry and obsolete signup lead to the Chinese login", async ({
   page,
 }) => {

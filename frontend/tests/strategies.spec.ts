@@ -410,6 +410,130 @@ test("预算大数十进制原文保存，结构和命名示例不进入配置",
   )
   expect(write.body.expected_version).toBe(1)
 })
+test("dashboard layout uses the full 2304px panel with either sidebar state", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 2304, height: 1080 })
+  await boundary(page, { count: 55 })
+  await page.goto(`/tenants/${A}/strategies`)
+  await expect(page.locator("tbody tr")).toHaveCount(50)
+  const sidebar = page.locator('[data-slot="sidebar"]')
+  await expect(sidebar).toHaveAttribute("data-state", "expanded")
+  await expect
+    .poll(
+      async () =>
+        (await page.locator('[data-slot="sidebar-container"]').boundingBox())
+          ?.width,
+    )
+    .toBe(288)
+  let expandedWidth = 0
+  for (const state of ["expanded", "collapsed"] as const) {
+    if (state === "collapsed") {
+      await page.getByRole("button", { name: "切换导航" }).click()
+      await expect(sidebar).toHaveAttribute("data-state", state)
+    }
+    // Measure the visible list against its panel, including the inset margin.
+    // Poll through the sidebar width transition instead of sleeping.
+    await expect
+      .poll(async () =>
+        page.locator('[data-slot="table-container"]').evaluate((el) => {
+          const table = el.getBoundingClientRect()
+          const panel = el
+            .closest('[data-slot="sidebar-inset"]')!
+            .getBoundingClientRect()
+          return Math.max(
+            Math.abs(table.left - panel.left - 25),
+            Math.abs(panel.right - table.right - 25),
+          )
+        }),
+      )
+      .toBeLessThanOrEqual(1)
+    const width = (await page
+      .locator('[data-slot="table-container"]')
+      .boundingBox())!.width
+    expect(width).toBeGreaterThan(1536)
+    if (state === "expanded") expandedWidth = width
+    else
+      await expect
+        .poll(
+          async () =>
+            (await page.locator('[data-slot="table-container"]').boundingBox())!
+              .width,
+        )
+        .toBeGreaterThan(expandedWidth + 150)
+  }
+})
+
+for (const width of [390, 1024, 1440]) {
+  test(`dashboard layout keeps strategy toolbar, table and pager separate at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 })
+    await boundary(page, { count: 55 })
+    await page.goto(`/tenants/${A}/strategies`)
+    await expect(page.locator("tbody tr")).toHaveCount(50)
+    const table = page.locator('[data-slot="table-container"]')
+    const toolbar = page
+      .locator("form")
+      .filter({ has: page.getByLabel("策略名称", { exact: true }) })
+    const next = page.getByRole("button", { name: "下一页", exact: true })
+    const tableBox = (await table.boundingBox())!
+    const toolbarBox = (await toolbar.boundingBox())!
+    const nextBox = (await next.boundingBox())!
+    expect(
+      tableBox.y - (toolbarBox.y + toolbarBox.height),
+    ).toBeGreaterThanOrEqual(8)
+    expect(nextBox.y - (tableBox.y + tableBox.height)).toBeGreaterThanOrEqual(8)
+    // The table gets one enclosure; a second border around toolbar + pager
+    // recreates the nested Card that this layout removes.
+    const enclosures = await table.evaluate((el) => {
+      const bordered: Element[] = []
+      for (
+        let node: Element | null = el;
+        node && node.id !== "workspace-main";
+        node = node.parentElement
+      ) {
+        const style = getComputedStyle(node)
+        if (
+          [
+            style.borderTopWidth,
+            style.borderBottomWidth,
+            style.borderLeftWidth,
+            style.borderRightWidth,
+          ].every((value) => Number.parseFloat(value) > 0)
+        )
+          bordered.push(node)
+      }
+      return {
+        count: bordered.length,
+        containsToolbar: bordered.some((node) => node.querySelector("form")),
+      }
+    })
+    expect(enclosures).toEqual({ count: 1, containsToolbar: false })
+    const scroll = await table.evaluate((el) => {
+      el.scrollLeft = 200
+      return {
+        width: el.clientWidth,
+        content: el.scrollWidth,
+        left: el.scrollLeft,
+      }
+    })
+    await expect(table).toHaveCSS("overflow-x", "auto")
+    if (width <= 1024) {
+      expect(scroll.content).toBeGreaterThan(scroll.width)
+      expect(scroll.left).toBeGreaterThan(0)
+    }
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(width)
+    await next.click()
+    await expect(page.locator("tbody tr")).toHaveCount(5)
+    await expect(
+      page.getByRole("link", { name: "分页策略 51", exact: true }),
+    ).toBeVisible()
+  })
+}
+
 test("策略205条列表默认可用、50/100服务端游标与字段对应", async ({ page }) => {
   const { requests } = await boundary(page, { count: 205 })
   await page.goto(`/tenants/${A}/strategies`)
