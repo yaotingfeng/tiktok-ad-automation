@@ -95,6 +95,14 @@ def acquire_original_use(
             .limit(1)
         ).first()
         if existing:
+            if purpose == "part_put":
+                now = datetime.now(UTC)
+                existing.permission_issued_at = now
+                existing.expires_at = max(
+                    existing.expires_at, now + timedelta(seconds=lifetime_seconds)
+                )
+                existing.revision += 1
+                session.flush()
             return existing
     now = datetime.now(UTC)
     use = OriginalUse(

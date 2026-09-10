@@ -144,3 +144,35 @@ def test_put_requires_reservation_and_receive_state(session, context):
     )
     assert use.status == "active"
     assert release_object_uses(session, object_id=obj.id, purpose="part_put") == 1
+
+
+def test_part_renewal_records_latest_permission_without_changing_upload_revision(
+    session, context
+):
+    _, obj = budget_fixture(session, context)
+    obj.status, obj.reserved_bytes = "receiving", obj.expected_bytes
+    session.flush()
+    operation = uuid4()
+    use = acquire_original_use(
+        session,
+        context=context,
+        object_id=obj.id,
+        purpose="part_put",
+        operation_id=operation,
+        lifetime_seconds=60,
+    )
+    first = use.expires_at
+    revision = obj.revision
+    assert (
+        acquire_original_use(
+            session,
+            context=context,
+            object_id=obj.id,
+            purpose="part_put",
+            operation_id=operation,
+            lifetime_seconds=900,
+        ).id
+        == use.id
+    )
+    assert use.expires_at > first + timedelta(seconds=800)
+    assert obj.revision == revision
