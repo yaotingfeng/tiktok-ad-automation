@@ -131,7 +131,7 @@ class McpBusinessResponse:
 
 `FrozenTikTokRoute` 放 context.py，其余放 common.py；`McpBusinessResponse` 是适配器内部类型，业务层只能获得各业务组的类型。`decode_mcp_result(result: CallToolResult, *, contract: ToolContract) -> McpBusinessResponse` 放 results.py。`RemoteCallError` 不自行触发任何重试，业务任务根据 effect 与原 attempt 决定后续。
 
-- [ ] **Step 1: 编写自然语言成功不能当回执的用例。** 同时覆盖 `is_error=True`、business code 非零、data 类型不符、文本 JSON 与 structured content 冲突、未知字段不进入日志等情况。测试用 ToolContract 明确构造本地合成协议，不能冒充官方已观察字段。
+- [x] **Step 1: 编写自然语言成功不能当回执的用例。** 同时覆盖 `is_error=True`、business code 非零、data 类型不符、文本 JSON 与 structured content 冲突、未知字段不进入日志等情况。测试用 ToolContract 明确构造本地合成协议，不能冒充官方已观察字段。
 
 ```python
 import pytest
@@ -152,8 +152,8 @@ def test_success_text_without_business_receipt_is_unknown():
     assert exc.value.effect == 'UNKNOWN'
 ```
 
-- [ ] **Step 2: 确认测试失败于待实现结果契约。** `uv run pytest tests/integrations/tiktok/test_mcp_results.py -q`。
-- [ ] **Step 3: 实现共享类型与结果解码。** 按上述类型分文件实现。优先验证 structured content；仅当契约明确允许文本 JSON 且恰有一个完整业务 envelope 时解析。检查 `is_error`、已核实 business code、data 类型；提取白名单 ID 字段。禁止依靠消息文字判断是否可以重发。
+- [x] **Step 2: 确认测试失败于待实现结果契约。** `uv run pytest tests/integrations/tiktok/test_mcp_results.py -q`。
+- [x] **Step 3: 实现共享类型与结果解码。** 按上述类型分文件实现。优先验证 structured content；仅当契约明确允许文本 JSON 且恰有一个完整业务 envelope 时解析。检查 `is_error`、已核实 business code、data 类型；提取白名单 ID 字段。禁止依靠消息文字判断是否可以重发。
 
 ```python
 def require_business_success(raw, evidence):
@@ -167,8 +167,8 @@ def require_business_success(raw, evidence):
 
 真实服务 envelope 与此示例不同则以 P0.1 核实的契约进行适配；在该契约内编写同等严格的分支，不能把非零错误一概标为 `REJECTED_NO_EFFECT`。合成测试显式覆盖每种已支持 envelope，不引入宽松的任意 dict 兜底。
 
-- [ ] **Step 4: 回归协议/结果测试。** `uv run pytest tests/integrations/tiktok/test_mcp_protocol.py tests/integrations/tiktok/test_mcp_results.py -q`。期望正常对象/对象数组保持 ID 精度，错误结果保留 UNKNOWN，凭据/素材 URL 不出现在异常字符串。
-- [ ] **Step 5: 明确暂存相关文件并提交。** `mcp: normalize typed call evidence and outcomes`，提交前执行仓库根与暂存差异检查。
+- [x] **Step 4: 回归协议/结果测试。** `uv run pytest tests/integrations/tiktok/test_mcp_protocol.py tests/integrations/tiktok/test_mcp_results.py -q`。期望正常对象/对象数组保持 ID 精度，错误结果保留 UNKNOWN，凭据/素材 URL 不出现在异常字符串。
+- [x] **Step 5: 明确暂存相关文件并提交。** `mcp: normalize typed call evidence and outcomes`，提交前执行仓库根与暂存差异检查。
 
 ## Task P0.3: 官方 MCP 会话与每次调用边界
 
