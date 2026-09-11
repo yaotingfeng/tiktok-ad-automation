@@ -15,7 +15,9 @@ from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.credentials import decrypt_credentials
 from app.core.errors import DomainError
+from app.integrations.tiktok.adapters.mcp_builds import McpBuildOperations
 from app.integrations.tiktok.adapters.mcp_materials import MCPMaterialOperations
+from app.integrations.tiktok.adapters.sdk_builds import ApiBuildOperations
 from app.integrations.tiktok.adapters.sdk_materials import SDKMaterialOperations
 from app.integrations.tiktok.admission import (
     PROTOCOL_OPERATIONS,
@@ -28,6 +30,7 @@ from app.integrations.tiktok.contracts.accounts import (
     AuthorizationFacts,
     RuntimeReadContext,
 )
+from app.integrations.tiktok.contracts.builds import BuildOperations
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.integrations.tiktok.contracts.materials import MaterialOperations
 from app.integrations.tiktok.contracts.scenes import ScenesGateway
@@ -47,7 +50,7 @@ from app.modules.accounts.connection_models import (
 from app.modules.accounts.models import TikTokConnection
 from app.modules.accounts.routing import Capability, verify_route
 
-# 只登记当前实际暴露的账户/场景读操作；不得按前缀把未来写操作默认为 read。
+# 只登记已实现的读取操作；不得按前缀把未来写操作默认为 read。
 _OPERATION_CAPABILITIES: dict[str, Capability] = {
     **dict.fromkeys(PROTOCOL_OPERATIONS, "read"),
     "accounts.authorization_facts": "read",
@@ -66,6 +69,11 @@ _OPERATION_CAPABILITIES: dict[str, Capability] = {
     "materials.get_suggested_covers": "read",
     "materials.get_images": "read",
     "materials.search_images": "read",
+    "build.get_campaigns": "read",
+    "build.get_adgroups": "read",
+    "build.get_ads": "read",
+    "build.get_cta_portfolio": "read",
+    "build.get_regular_adgroups": "read",
 }
 _DIRECTORY_OPERATIONS = frozenset(
     operation
@@ -79,6 +87,7 @@ class TikTokGateway:
     accounts: AccountsGateway
     scenes: ScenesGateway
     materials: MaterialOperations
+    builds: BuildOperations
 
 
 def _capability(advertiser_id: str | None, operation: str) -> Capability:
@@ -316,8 +325,10 @@ def open_tiktok_gateway(
                         client, context=read_context, authorization=facts
                     ),
                     scenes=McpScenesGateway(client, context=read_context),
+                    builds=McpBuildOperations(client),
                     materials=MCPMaterialOperations(
-                        client, preview_allowed_hosts=settings.MATERIAL_REMOTE_MEDIA_HOSTS,
+                        client,
+                        preview_allowed_hosts=settings.MATERIAL_REMOTE_MEDIA_HOSTS,
                     ),
                 )
         else:
@@ -332,8 +343,13 @@ def open_tiktok_gateway(
                         request_scope=request_scope,
                         deadline=task_deadline,
                     ),
+                    builds=ApiBuildOperations(
+                        official, request_scope=request_scope, deadline=task_deadline
+                    ),
                     materials=SDKMaterialOperations(
-                        official, request_scope=request_scope, deadline=task_deadline,
+                        official,
+                        request_scope=request_scope,
+                        deadline=task_deadline,
                         preview_allowed_hosts=settings.MATERIAL_REMOTE_MEDIA_HOSTS,
                     ),
                     scenes=OfficialScenesGateway(
