@@ -628,3 +628,19 @@ test("501 permission receipts recover with 100-row local pages and at most two s
   expect(result.requests.every((size: number) => size <= 2)).toBe(true)
   expect(result.distinct).toBe(501)
 })
+
+test("file selection accepts one GiB and rejects one extra byte without reading the file", async ({
+  page,
+}) => {
+  const issues = await page.evaluate(async () => {
+    const path = "/src/features/materials/UploadPanel.tsx"
+    const { fileIssue } = await import(/* @vite-ignore */ path)
+    // 只模拟 File.size 边界，不在浏览器分配 GiB 缓冲区。
+    return [1024 ** 3 - 1, 1024 ** 3, 1024 ** 3 + 1].map((size) => {
+      const file = new File([], "完整剧名.mp4", { type: "video/mp4" })
+      Object.defineProperty(file, "size", { value: size })
+      return fileIssue(file) ?? null
+    })
+  })
+  expect(issues).toEqual([null, null, "文件超过单文件 1 GiB（1024 MiB）上限"])
+})

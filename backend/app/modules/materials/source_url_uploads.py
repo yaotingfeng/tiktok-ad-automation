@@ -118,9 +118,7 @@ def _proof(
             raise DomainError("material_ingest_disabled", "素材入库暂未启用")
         if obj.status != "verified":
             raise DomainError("original_unavailable", "原件尚未完成可信校验或正在清理")
-        if obj.expected_bytes > getattr(
-            settings, "MATERIAL_URL_MAX_UPLOAD_BYTES", 256 * 1024 * 1024
-        ):
+        if obj.expected_bytes > settings.MATERIAL_URL_MAX_UPLOAD_BYTES:
             raise DomainError(
                 "url_upload_capacity_exceeded", "原件超过当前 URL 入库工程容量限制"
             )

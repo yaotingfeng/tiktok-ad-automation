@@ -24,7 +24,6 @@ def api(upload_owner, monkeypatch):
         **{
             **settings.model_dump(),
             "MATERIAL_INGEST_ENABLED": True,
-            "MATERIAL_URL_MAX_UPLOAD_BYTES": 256 * 1024**2,
         }
     )
     configured.OBJECT_STORAGE_PROVIDER = "r2"
@@ -81,6 +80,26 @@ def create(api, count=1):
     response = client.post(path + "/ingest-sessions", json=session_body(count))
     assert response.status_code == 201, response.text
     return response.json()["session_id"]
+
+
+@pytest.mark.parametrize("size", [1024**3 - 1, 1024**3, 1024**3 + 1])
+def test_single_file_one_gib_boundary(api, size):
+    # 只登记元数据验证边界，不分配 1 GiB 内存或调用真实存储。
+    client, path = api
+    parent = {**session_body(), "total_bytes": size}
+    created = client.post(path + "/ingest-sessions", json=parent)
+    assert created.status_code == 201, created.text
+    url = path + "/ingest-sessions/" + created.json()["session_id"]
+    body = chunk_body()
+    body["files"][0]["size"] = size
+    response = client.post(url + "/chunks", json=body)
+    if size <= 1024**3:
+        assert response.status_code == 201, response.text
+        assert response.json()["items"][0]["size"] == size
+    else:
+        assert response.status_code == 422, response.text
+        assert response.json()["code"] == "invalid_file"
+        assert client.get(url).json()["accepted_count"] == 0
 
 
 def test_chunk_replays_identity_and_rejects_changed_client_index(api):

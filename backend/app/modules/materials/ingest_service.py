@@ -302,7 +302,7 @@ def register_chunk(
     require_ingest_storage()
     if parent.status != "registering":
         raise DomainError("version_conflict", "导入清单已冻结")
-    maximum = getattr(settings, "MATERIAL_URL_MAX_UPLOAD_BYTES", 256 * 1024**2)
+    maximum = settings.MATERIAL_URL_MAX_UPLOAD_BYTES
     if any(
         item.client_index >= parent.expected_files or item.size > maximum
         for item in ordered

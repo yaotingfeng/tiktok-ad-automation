@@ -271,7 +271,7 @@ def claim_source_account(session: Session, *, context: TenantContext,
 ```
 
 - [ ] 固定 SDK 传输契约红测验证 `video_url` 被放入官方方法认可的 multipart 字段，未传 `video_file`，正确透传字符串账户 ID、原名和强摘要；签名 URL 被日志/异常过滤。若固定 SDK 字段行为与示例不一致，按真实本地 SDK 修正 wrapper 和测试，不换实现路线。
-- [ ] 把 URL 入库与 FILE 入库的时限/字节限制分开。初始仍保留 URL 单文件 256 MiB 工程上限；超限在选择时逐项提示。专门用实际授权的 256 MiB 以上文件验证后才调整部署上限，不能把旧 SDK 内存限制说成平台硬上限。
+- [ ] 把 URL 入库与 FILE 入库的时限/字节限制分开。初始 URL 单文件 256 MiB 上限已按 2026-09-11 用户要求调整为 1 GiB；超限在选择时逐项提示。真实大文件联调单独验收，不能把旧 SDK 内存限制说成平台硬上限。
 - [ ] 替换“永远选择排序第一户”：在当前 tenant/BC 有效授权及上传能力账户中，按活跃在途数、最早冷却结束和稳定轮次选择；每文件认领结果落库。每来源初始 1 个并发，后续按真实配额配置，应用/租户/账户共享准入仍生效。
 - [ ] 源任务由Task 2校验完成事务的outbox触发，回执与失投修复沿原dispatch推进。只有摘要已验证、来源已认领、共享准入成功时才签发 R2 GET；URL 不提前随批量入队产生。签名寿命默认 2 小时；业务状态保存 operation 和 object generation，不保存 URL。
 - [ ] 在网络发送前持久化发送意图和 `OriginalUse`。上传返回 VID 后只进入 verifying；账号范围内 info 回读强匹配 MD5、VID、displayable 和业务要求的规格，成功后同事务写源映射与可用 milestone。

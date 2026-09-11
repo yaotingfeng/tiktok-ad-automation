@@ -13,7 +13,7 @@
 | `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | 空 | 仅服务端；限制到本应用所需桶和对象操作，不写入浏览器配置 |
 | `MATERIAL_INGEST_ENABLED` | `False` | 允许新导入受理、Create、签名、Complete；关闭后保留已有发送记录的只读回查 |
 | `MATERIAL_CLEANUP_ENABLED` | `False` | 独立控制新自动删除；已发送删除的核实仍需运行 |
-| `MATERIAL_URL_MAX_UPLOAD_BYTES` | `268435456`（256 MiB） | 本次 URL 上传本地保护上限；不代表 TikTok 官方上限或大文件验收通过 |
+| `MATERIAL_URL_MAX_UPLOAD_BYTES` | `1073741824`（1 GiB / 1024 MiB） | 本次 URL 上传本地保护上限；不代表 TikTok 官方上限或大文件验收通过 |
 | `MATERIAL_STORAGE_GLOBAL_BYTES` | `8589934592`（8 GiB） | 所有租户合计的原件瞬时预留窗口 |
 | `MATERIAL_STORAGE_TENANT_BYTES` | `2147483648`（2 GiB） | 同租户所有 BC 合计窗口，不能按 BC 再获得一份额度 |
 | `MATERIAL_PART_URL_SECONDS` | `900` | 分片签名有效期，60–900 秒 |
@@ -93,7 +93,7 @@ python scripts/check-r2.py --probe
 4. 证明一个已授权目标的分享或授权源 URL 转存及封面回读。先为这批源素材建立可用的后续目标路径，再小范围开启清理。
 5. 等可靠 DELETE/HEAD证据和预算释放后，确认 MaterialFile/AccountMaterial、文件名、来源、VID/MID、摘要仍在。随后使用此前未分发的新目标验证删除原件后的真实路径，确认没有读已删除的 R2原件。
 6. 在相同授权范围演练 API/Worker重启、响应丢失、签名续期、Token更换、限流与取消。已发送未知任务只回查，不切路径重发。验证硬超时、回查队列、清理积压与容量恢复，再逐步增大并发和日量。
-7. 大于256 MiB文件必须有独立官方能力核实和当前部署实测，才能调大本地保护值。10k/20k合成元数据验收不替代真实网络、平台配额、内存或日吞吐验收。
+7. 单文件产品上限为 1 GiB（1073741824 字节），浏览器、后端、Compose 和配置检查脚本使用同一默认值。升级时将已有环境中的 `MATERIAL_URL_MAX_UPLOAD_BYTES` 显式更新为 `1073741824`，否则旧值会覆盖新默认值。旧 FILE SDK 的 256 MiB 内存保护不变，新批量上传及目标账户分发走 URL 路径。1 GiB 真实 R2/TikTok 联调仍需单独记录；边界与合成元数据测试不替代真实网络、平台配额、内存或日吞吐验收。每个并发原件校验任务至少需要容纳 1 GiB 文件的临时磁盘并留余量；租户默认 2 GiB 暂存窗口可容纳两个上限文件，其余等待清理释放容量。
 
 ## 回滚和未知结果
 

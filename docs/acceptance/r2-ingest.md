@@ -56,7 +56,7 @@ run_id：10k为`1b31e9c597204d02ad290f8189eb49b2`，20k为`77f016c8f0b94cbb94772
 | 目标前端origin真实CORS与匿名访问拒绝 | 配置示例；无部署截图/回读 | pending |
 | 当前官方媒体HTTPS精确host allowlist | 不提供未经验证的域名 | pending |
 | 官方SDK URL源上传及VID/md5/来源账户回读 | 需授权小批、当前连接与媒体证据 | pending |
-| >256MiB URL视频 | 默认本地上限256MiB，未调大 | pending |
+| 1 GiB URL视频 | 产品与默认配置上限已调至 1 GiB；真实 R2/TikTok 大文件联调待完成 | pending |
 | 原件删除后新目标分发、封面与搭建 | Task6/7及6条合成完整链已通过；真实授权链路未执行 | live pending |
 | 1000混合故障完整Worker链 | 控制面1,000文件、400次清理已通过；1,000源/目标入库和进程故障未覆盖 | wider load pending |
 | 在途/未知PUT取消的可靠终止与空间释放 | 不能用TTL、Abort响应或一次空页代替证据 | pending |

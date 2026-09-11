@@ -45,9 +45,7 @@ URL = "https://owned.r2.example/test-video?signature=never-store-this-url"
 @pytest.fixture
 def url_env(source_env, monkeypatch):
     monkeypatch.setitem(settings.__dict__, "MATERIAL_INGEST_ENABLED", True)
-    monkeypatch.setitem(
-        settings.__dict__, "MATERIAL_URL_MAX_UPLOAD_BYTES", 256 * 1024 * 1024
-    )
+    monkeypatch.setitem(settings.__dict__, "MATERIAL_URL_MAX_UPLOAD_BYTES", 1024**3)
     with Session(engine) as db, db.begin():
         material = db.get(MaterialFile, source_env["material_id"])
         material.current_object_generation = 1

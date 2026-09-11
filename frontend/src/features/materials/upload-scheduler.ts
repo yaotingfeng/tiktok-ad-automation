@@ -21,7 +21,8 @@ import {
 } from "./upload-store"
 
 export const INITIAL_PART_BYTES = 16 * 1024 * 1024
-export const MAX_BROWSER_FILE_BYTES = 256 * 1024 * 1024 // Application engineering boundary.
+// 单文件上限与后端 R2/URL 上传默认值一致；仍按分片读取，避免整文件占用内存。
+export const MAX_BROWSER_FILE_BYTES = 1024 ** 3
 export type TransferRequest = { scope: UploadScope; record: UploadFileRecord }
 export type MultipartRequest = TransferRequest & { identity: MultipartIdentity }
 export type RemotePart = {

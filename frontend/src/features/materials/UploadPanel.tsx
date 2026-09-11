@@ -15,7 +15,7 @@ export const supportedTypes = new Set([
 export function fileIssue(file: File) {
   if (!file.size) return "文件为空"
   if (file.size > MAX_BROWSER_FILE_BYTES)
-    return "文件超过当前单文件 256 MiB 工程容量"
+    return "文件超过单文件 1 GiB（1024 MiB）上限"
   if (!supportedTypes.has(file.type))
     return "请选择 MP4、MOV、AVI、WebM、MPEG 或 MKV 视频"
   if (
@@ -48,8 +48,8 @@ export function UploadPanel({
         }}
       >
         <p className="text-sm text-muted-foreground">
-          一次最多选择 20000 个视频，每个文件最多 256
-          MiB。刷新后未传完的文件需要重新选择。
+          一次最多选择 20000 个视频，每个文件最多 1 GiB（1024
+          MiB）。刷新后未传完的文件需要重新选择。
         </p>
         <Button
           type="button"

@@ -64,7 +64,8 @@ class Settings(BaseSettings):
     MATERIAL_SDK_UPLOAD_MAX_INFLIGHT: int = Field(default=1, gt=0)
     MATERIAL_INGEST_ENABLED: bool = False
     MATERIAL_CLEANUP_ENABLED: bool = False
-    MATERIAL_URL_MAX_UPLOAD_BYTES: int = Field(default=256 * 1024 * 1024, gt=0)
+    # R2 分片接收和 TikTok URL 转存支持 1 GiB；不放宽旧 SDK 整文件内存保护。
+    MATERIAL_URL_MAX_UPLOAD_BYTES: int = Field(default=1024**3, gt=0)
     MATERIAL_STORAGE_GLOBAL_BYTES: int = Field(default=8 * 1024**3, gt=0)
     MATERIAL_STORAGE_TENANT_BYTES: int = Field(default=2 * 1024**3, gt=0)
     MATERIAL_PART_URL_SECONDS: int = Field(default=900, ge=60, le=900)
@@ -126,7 +127,7 @@ class Settings(BaseSettings):
                 endpoint = urlsplit(self.S3_ENDPOINT_URL)
                 valid_endpoint = (
                     endpoint.scheme == "https"
-                    and bool(endpoint.hostname)
+                    and endpoint.hostname is not None
                     and endpoint.hostname.endswith(".r2.cloudflarestorage.com")
                     and endpoint.hostname != "r2.cloudflarestorage.com"
                     and endpoint.username is None
