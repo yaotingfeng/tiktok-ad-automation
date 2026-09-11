@@ -47,7 +47,7 @@
 - Produces `verify_tool_schema(expected: ToolContract, observed: dict[str, Any]) -> None`；不一致抛 `DomainError('mcp_contract_changed', ...)`。
 - 协议事实包含 endpoint、issuer、resource、authorization/token/registration/revocation endpoint、SDK/协议版本、PKCE 方法、token auth method、refresh semantics、权限证据来源及 schema manifest SHA-256。官方未提供的可选能力为 `None`/明确 `UNVERIFIED`，不能用虚构值填充。
 
-- [ ] **Step 1: 编写协议白名单失败用例。** 样例中的域名只用于离线断言，不进行真实请求；补充缺少 issuer/resource、官方未提供 refresh 重放保证、必需 tool 参数删除的用例。
+- [x] **Step 1: 编写协议白名单失败用例。** 样例中的域名只用于离线断言，不进行真实请求；补充缺少 issuer/resource、官方未提供 refresh 重放保证、必需 tool 参数删除的用例。
 
 ```python
 import pytest
@@ -60,8 +60,8 @@ def test_endpoint_must_be_the_configured_official_service():
     assert exc.value.code == 'mcp_endpoint_invalid'
 ```
 
-- [ ] **Step 2: 运行用例，确认当前因模块不存在失败。** `uv run pytest tests/integrations/tiktok/test_mcp_protocol.py -q`。记录失败原因；不得把测试数据库配置错误算作预期红灯。
-- [ ] **Step 3: 核实依赖与公开文档，生成协议事实。** 仓库根执行 `uv add --package app 'mcp>=2,<3' httpx2`，记录 lock 中精确版本，再 `uv sync --frozen --package app`。本计划使用已查阅的 v2 `Client` API；若解析版本不提供该 API，先调整并验证本计划的导入，不混用 v1 示例。
+- [x] **Step 2: 运行用例，确认当前因模块不存在失败。** `uv run pytest tests/integrations/tiktok/test_mcp_protocol.py -q`。记录失败原因；不得把测试数据库配置错误算作预期红灯。
+- [x] **Step 3: 核实依赖与公开文档，生成协议事实。** 仓库根执行 `uv add --package app 'mcp>=2,<3' httpx2`，记录 lock 中精确版本，再 `uv sync --frozen --package app`。本计划使用已查阅的 v2 `Client` API；若解析版本不提供该 API，先调整并验证本计划的导入，不混用 v1 示例。
 
 ```python
 from urllib.parse import urlsplit
@@ -82,8 +82,8 @@ def require_official_endpoint(value: str) -> str:
 
 `tool-contracts.json` 从官方文档/已提供工具定义整理操作映射，覆盖账户、场景、素材、封面、CTA、三级创建与回读。证据标为 `DOCUMENTED`；P1 使用自身授权后获得的 `tools/list` 才能标记连接级 `OBSERVED`。schema 比较保留 required/type/enum/嵌套结构，排除 description 等纯说明变化。
 
-- [ ] **Step 4: 运行协议测试并检查脱敏。** `uv run pytest tests/integrations/tiktok/test_mcp_protocol.py -q`；期望全部通过，恶意 endpoint、缺少必要授权字段、schema 不兼容均被明确拒绝。检查 JSON 不含 token、注册客户端 secret 或真实账户清单。
-- [ ] **Step 5: 更新版本依据并提交。** 根执行 `git status -sb`、`git rev-parse --show-toplevel`；明确暂存本任务列出的文件、检查暂存差异，提交 `mcp: define verified protocol and tool contracts`。不推送。
+- [x] **Step 4: 运行协议测试并检查脱敏。** `uv run pytest tests/integrations/tiktok/test_mcp_protocol.py -q`；期望全部通过，恶意 endpoint、缺少必要授权字段、schema 不兼容均被明确拒绝。检查 JSON 不含 token、注册客户端 secret 或真实账户清单。
+- [x] **Step 5: 更新版本依据并提交。** 根执行 `git status -sb`、`git rev-parse --show-toplevel`；明确暂存本任务列出的文件、检查暂存差异，提交 `mcp: define verified protocol and tool contracts`。不推送。
 
 ## Task P0.2: 定义共享上下文、证据及严格结果解析
 

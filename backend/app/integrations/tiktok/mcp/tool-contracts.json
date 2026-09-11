@@ -1,0 +1,3174 @@
+{
+  "revision": "2026-09-11.1",
+  "evidence": "DOCUMENTED",
+  "schema_source": "Provided official connector tool declarations, inspected offline on 2026-09-11; not an authenticated TK-ADA tools/list snapshot. Types/required/enums/nesting retained; prose-only restrictions require P1 validation.",
+  "tool_name_evidence": "Connector namespace removed only as candidate mapping; actual remote names require own connection tools/list match.",
+  "response_shape_evidence": "OBJECT is the application-required data shape, not an observed upstream output contract. Output schemas and text JSON acceptance remain unverified.",
+  "contracts": [
+    {
+      "operation": "accounts.authorization_facts",
+      "tool_name": "user_info_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat",
+        "https://business-api.tiktok.com/open_api/v1.3/user/info/"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "accounts.list_bcs",
+      "tool_name": "bc_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "bc_id": {
+            "type": "string"
+          },
+          "page": {
+            "type": "number"
+          },
+          "page_size": {
+            "type": "number"
+          }
+        }
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "accounts.list_bc_assets",
+      "tool_name": "bc_asset_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "asset_type": {
+            "type": "string",
+            "enum": [
+              "ADVERTISER",
+              "CATALOG",
+              "TIKTOK_SHOP",
+              "PIXEL",
+              "LEAD",
+              "TT_ACCOUNT",
+              "MANAGED_BUSINESS_ACCOUNT"
+            ]
+          },
+          "bc_id": {
+            "type": "string"
+          },
+          "filtering": {
+            "type": "object",
+            "properties": {
+              "keyword": {
+                "type": "string"
+              },
+              "user_email": {
+                "type": "string"
+              },
+              "user_id": {
+                "type": "string"
+              }
+            }
+          },
+          "page": {
+            "type": "number"
+          },
+          "page_size": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "asset_type",
+          "bc_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "accounts.list_bc_members",
+      "tool_name": "bc_member_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "bc_id": {
+            "type": "string"
+          },
+          "filtering": {
+            "type": "object",
+            "properties": {
+              "keyword": {
+                "type": "string"
+              },
+              "relation_status": {
+                "type": "string",
+                "enum": [
+                  "BOUND",
+                  "PENDING",
+                  "REJECTED"
+                ]
+              },
+              "user_role": {
+                "type": "string",
+                "enum": [
+                  "ADMIN",
+                  "STANDARD"
+                ]
+              }
+            }
+          },
+          "page": {
+            "type": "number"
+          },
+          "page_size": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "bc_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "accounts.list_asset_members",
+      "tool_name": "bc_asset_member_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "asset_id": {
+            "type": "string"
+          },
+          "asset_type": {
+            "type": "string",
+            "enum": [
+              "ADVERTISER",
+              "CATALOG",
+              "LEAD",
+              "MANAGED_BUSINESS_ACCOUNT"
+            ]
+          },
+          "bc_id": {
+            "type": "string"
+          },
+          "filtering": {
+            "type": "object",
+            "properties": {
+              "keyword": {
+                "type": "string"
+              }
+            }
+          },
+          "page": {
+            "type": "number"
+          },
+          "page_size": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "asset_id",
+          "asset_type",
+          "bc_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "accounts.list_authorized_advertisers",
+      "tool_name": "auth_advertiser_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "accounts.get_advertisers",
+      "tool_name": "advertiser_info_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "telephone_number",
+                "contacter",
+                "currency",
+                "cellphone_number",
+                "timezone",
+                "advertiser_id",
+                "role",
+                "company",
+                "status",
+                "description",
+                "rejection_reason",
+                "address",
+                "name",
+                "language",
+                "industry",
+                "license_no",
+                "email",
+                "license_url",
+                "country",
+                "balance",
+                "create_time",
+                "display_timezone",
+                "owner_bc_id",
+                "company_name_editable",
+                "can_use_custom_identity",
+                "ads_only_mode"
+              ]
+            }
+          }
+        },
+        "required": [
+          "advertiser_ids"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "scene.list_identities",
+      "tool_name": "identity_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "type": "string"
+          },
+          "filtering": {
+            "type": "object",
+            "properties": {
+              "keyword": {
+                "type": "string"
+              }
+            }
+          },
+          "identity_authorized_bc_id": {
+            "type": "string"
+          },
+          "identity_type": {
+            "type": "string",
+            "enum": [
+              "CUSTOMIZED_USER",
+              "AUTH_CODE",
+              "TT_USER",
+              "BC_AUTH_TT"
+            ]
+          },
+          "page": {
+            "type": "number"
+          },
+          "page_size": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "advertiser_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "scene.list_minis",
+      "tool_name": "minis_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "type": "string"
+          },
+          "page": {
+            "type": "number"
+          },
+          "page_size": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "advertiser_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "scene.recommend_ctas",
+      "tool_name": "creative_cta_recommend_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "ad_texts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "advertiser_id": {
+            "type": "string"
+          },
+          "app_id": {
+            "type": "string"
+          },
+          "asset_type": {
+            "type": "string",
+            "enum": [
+              "CTA_NORMAL",
+              "CTA_AUTO_OPTIMIZED"
+            ]
+          },
+          "content_type": {
+            "type": "string",
+            "enum": [
+              "APP_DOWNLOAD",
+              "LANDING_PAGE",
+              "OTHER",
+              "MESSAGE",
+              "SOCIAL_MEDIA_APP_MESSAGE",
+              "PHONE_CALL"
+            ]
+          },
+          "landing_page_url": {
+            "type": "string"
+          },
+          "language": {
+            "type": "string"
+          },
+          "new_version": {
+            "type": "boolean"
+          },
+          "objective_type": {
+            "type": "string"
+          },
+          "optimization_goal": {
+            "type": "string"
+          },
+          "placements": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "PLACEMENT_TIKTOK",
+                "PLACEMENT_PANGLE",
+                "PLACEMENT_GLOBAL_APP_BUNDLE"
+              ]
+            }
+          },
+          "promotion_type": {
+            "type": "string"
+          },
+          "region_codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "advertiser_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "build.create_cta_portfolio",
+      "tool_name": "creative_portfolio_create",
+      "effect": "WRITE",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "type": "string"
+          },
+          "creative_portfolio_type": {
+            "type": "string",
+            "enum": [
+              "CTA",
+              "CARD",
+              "WEB_INFO_CARD",
+              "DOWNLOAD_CARD",
+              "INVENTORY_CARD",
+              "PRODUCT_CARD",
+              "PRODUCT_TILE",
+              "STICKER",
+              "PREMIUM_BADGE",
+              "GESTURE",
+              "SUPER_LIKE"
+            ]
+          },
+          "portfolio_content": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ad_text": {
+                  "type": "string"
+                },
+                "app_id": {
+                  "type": "string"
+                },
+                "asset_content": {
+                  "type": "string"
+                },
+                "asset_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "badge_image_info": {
+                  "type": "object",
+                  "properties": {
+                    "image_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "badge_position": {
+                  "type": "object",
+                  "properties": {
+                    "angle": {
+                      "type": "number"
+                    },
+                    "position_x": {
+                      "type": "number"
+                    },
+                    "position_y": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "badge_show_time": {
+                  "type": "number"
+                },
+                "call_to_action": {
+                  "type": "string"
+                },
+                "call_to_action_text": {
+                  "type": "string"
+                },
+                "card_image_index": {
+                  "type": "number"
+                },
+                "card_show_price": {
+                  "type": "boolean"
+                },
+                "card_tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "BRAND",
+                      "DESC"
+                    ]
+                  }
+                },
+                "card_type": {
+                  "type": "string",
+                  "enum": [
+                    "IMAGE"
+                  ]
+                },
+                "catalog_authorized_bc_id": {
+                  "type": "string"
+                },
+                "catalog_id": {
+                  "type": "string"
+                },
+                "category_label": {
+                  "type": "string"
+                },
+                "country_code": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "description": {
+                  "type": "string"
+                },
+                "dynamic_format": {
+                  "type": "string",
+                  "enum": [
+                    "UNSET",
+                    "DYNAMIC_CREATIVE"
+                  ]
+                },
+                "gesture_type": {
+                  "type": "string",
+                  "enum": [
+                    "CLICK",
+                    "STRAIGHT_SLIDE",
+                    "CURVED_SLIDE"
+                  ]
+                },
+                "identity_authorized_bc_id": {
+                  "type": "string"
+                },
+                "identity_id": {
+                  "type": "string"
+                },
+                "identity_type": {
+                  "type": "string",
+                  "enum": [
+                    "CUSTOMIZED_USER",
+                    "AUTH_CODE",
+                    "TT_USER",
+                    "BC_AUTH_TT"
+                  ]
+                },
+                "image_id": {
+                  "type": "string"
+                },
+                "interactive_music_id": {
+                  "type": "string"
+                },
+                "item_group_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "layouts": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "TYPE_1",
+                      "TYPE_2"
+                    ]
+                  }
+                },
+                "mobile_app_id": {
+                  "type": "string"
+                },
+                "pop_up_window_image_id": {
+                  "type": "string"
+                },
+                "product_set_id": {
+                  "type": "string"
+                },
+                "product_source": {
+                  "type": "string",
+                  "enum": [
+                    "UNSET",
+                    "CATALOG",
+                    "STORE",
+                    "SHOWCASE"
+                  ]
+                },
+                "product_specific_type": {
+                  "type": "string",
+                  "enum": [
+                    "ALL",
+                    "PRODUCT_SET",
+                    "CUSTOMIZED_PRODUCTS"
+                  ]
+                },
+                "profile_image": {
+                  "type": "string"
+                },
+                "selling_points": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "showcase_products": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "catalog_id": {
+                        "type": "string"
+                      },
+                      "item_group_id": {
+                        "type": "string"
+                      },
+                      "store_id": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "sku_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "slide_dimension": {
+                  "type": "object",
+                  "properties": {
+                    "dimension_height": {
+                      "type": "number"
+                    },
+                    "dimension_width": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "slide_length": {
+                  "type": "number"
+                },
+                "sticker_param": {
+                  "type": "object",
+                  "properties": {
+                    "color": {
+                      "type": "string",
+                      "enum": [
+                        "ORANGE",
+                        "BLACK",
+                        "RED",
+                        "BLUE"
+                      ]
+                    },
+                    "cutoff_time": {
+                      "type": "string"
+                    },
+                    "display_angle": {
+                      "type": "number"
+                    },
+                    "giftcode": {
+                      "type": "string"
+                    },
+                    "landing_page_url": {
+                      "type": "string"
+                    },
+                    "live_tiktok_user_id": {
+                      "type": "string"
+                    },
+                    "opacity": {
+                      "type": "string",
+                      "enum": [
+                        "0.7",
+                        "0.8",
+                        "0.9",
+                        "1"
+                      ]
+                    },
+                    "position_x": {
+                      "type": "number"
+                    },
+                    "position_y": {
+                      "type": "number"
+                    },
+                    "predefined_placement": {
+                      "type": "string"
+                    },
+                    "reminder_time": {
+                      "type": "string",
+                      "enum": [
+                        "ONE_MINUTE_EARLIER",
+                        "ONE_HOUR_EARLIER",
+                        "ONE_DAY_EARLIER",
+                        "ONE_MINUTE_AFTER",
+                        "FIVE_MINUTES_AFTER",
+                        "TEN_MINUTES_AFTER"
+                      ]
+                    },
+                    "size": {
+                      "type": "string",
+                      "enum": [
+                        "0.6",
+                        "0.7",
+                        "0.8",
+                        "0.9",
+                        "1",
+                        "1.1"
+                      ]
+                    },
+                    "sticker_type": {
+                      "type": "string",
+                      "enum": [
+                        "COUNTDOWN",
+                        "REMINDER_COUNTDOWN",
+                        "LIVE_REMINDER_COUNTDOWN",
+                        "GIFTCODE"
+                      ]
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "store_authorized_bc_id": {
+                  "type": "string"
+                },
+                "store_id": {
+                  "type": "string"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "CATEGORIES",
+                      "FILESIZE",
+                      "RATING",
+                      "RANKING",
+                      "COMMENT_VOLUME"
+                    ]
+                  }
+                },
+                "title": {
+                  "type": "string"
+                },
+                "vertical_video_strategy": {
+                  "type": "string",
+                  "enum": [
+                    "UNSET",
+                    "SINGLE_VIDEO",
+                    "CATALOG_VIDEOS"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "advertiser_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "build.get_cta_portfolio",
+      "tool_name": "creative_portfolio_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "type": "string"
+          },
+          "creative_portfolio_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "advertiser_id",
+          "creative_portfolio_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "build.list_cta_portfolios",
+      "tool_name": "creative_portfolio_list_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "type": "string"
+          },
+          "filtering": {
+            "type": "object",
+            "properties": {
+              "creative_portfolio_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "creative_portfolio_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "CARD",
+                    "WEB_INFO_CARD",
+                    "DOWNLOAD_CARD",
+                    "INVENTORY_CARD",
+                    "PRODUCT_CARD",
+                    "PRODUCT_TILE",
+                    "COUNTDOWN_STICKER",
+                    "REMINDER_COUNTDOWN_STICKER",
+                    "LIVE_REMINDER_COUNTDOWN_STICKER",
+                    "GIFTCODE_STICKER",
+                    "PREMIUM_BADGE",
+                    "GESTURE",
+                    "SUPER_LIKE"
+                  ]
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "number"
+          },
+          "page_size": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "advertiser_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "scene.list_regions",
+      "tool_name": "tool_region_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "type": "string"
+          },
+          "app_promotion_type": {
+            "type": "string",
+            "enum": [
+              "APP_INSTALL",
+              "APP_RETARGETING",
+              "APP_PREREGISTRATION",
+              "MINIS"
+            ]
+          },
+          "brand_safety_partner": {
+            "type": "string",
+            "enum": [
+              "IAS",
+              "OPEN_SLATE"
+            ]
+          },
+          "brand_safety_type": {
+            "type": "string",
+            "enum": [
+              "NO_BRAND_SAFETY",
+              "EXPANDED_INVENTORY",
+              "STANDARD_INVENTORY",
+              "LIMITED_INVENTORY",
+              "THIRD_PARTY"
+            ]
+          },
+          "language": {
+            "type": "string",
+            "enum": [
+              "af",
+              "am",
+              "ar",
+              "az",
+              "be",
+              "bg",
+              "bn",
+              "bs",
+              "ca",
+              "cs",
+              "da",
+              "de",
+              "el",
+              "en",
+              "es",
+              "et",
+              "eu",
+              "fa",
+              "fi",
+              "fil",
+              "fr",
+              "gl",
+              "gu",
+              "hi",
+              "hr",
+              "hu",
+              "hy",
+              "id",
+              "is",
+              "it",
+              "ja",
+              "ka",
+              "kk",
+              "km",
+              "kn",
+              "ko",
+              "ky",
+              "lo",
+              "lt",
+              "lv",
+              "mk",
+              "ml",
+              "mn",
+              "mr",
+              "ms",
+              "my",
+              "ne",
+              "nl",
+              "no",
+              "pa",
+              "pl",
+              "pt",
+              "pt-BR",
+              "ro",
+              "ru",
+              "si",
+              "sk",
+              "sl",
+              "sq",
+              "sr",
+              "sv",
+              "sw",
+              "ta",
+              "te",
+              "th",
+              "tr",
+              "uk",
+              "ur",
+              "uz",
+              "vi",
+              "zh",
+              "zh-CN",
+              "zh-HK",
+              "zh-TW",
+              "zu"
+            ]
+          },
+          "level_range": {
+            "type": "string",
+            "enum": [
+              "ALL",
+              "TO_COUNTRY",
+              "TO_PROVINCE",
+              "TO_CITY",
+              "TO_DISTRICT"
+            ]
+          },
+          "objective_type": {
+            "type": "string"
+          },
+          "operating_system": {
+            "type": "string",
+            "enum": [
+              "ANDROID",
+              "IOS"
+            ]
+          },
+          "placements": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "promotion_target_type": {
+            "type": "string",
+            "enum": [
+              "INSTANT_PAGE",
+              "EXTERNAL_WEBSITE"
+            ]
+          },
+          "promotion_type": {
+            "type": "string"
+          },
+          "rf_campaign_type": {
+            "type": "string",
+            "enum": [
+              "STANDARD",
+              "PULSE"
+            ]
+          },
+          "shopping_ads_type": {
+            "type": "string",
+            "enum": [
+              "VIDEO",
+              "LIVE",
+              "PRODUCT_SHOPPING_ADS"
+            ]
+          }
+        },
+        "required": [
+          "advertiser_id",
+          "objective_type",
+          "placements"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "scene.check_vbo",
+      "tool_name": "tool_vbo_status_check",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "type": "string"
+          },
+          "app_id": {
+            "type": "string"
+          },
+          "app_promotion_type": {
+            "type": "string",
+            "enum": [
+              "APP_INSTALL",
+              "APP_RETARGETING",
+              "MINIS"
+            ]
+          },
+          "bid_align_type": {
+            "type": "string",
+            "enum": [
+              "SAN",
+              "SKAN"
+            ]
+          },
+          "budget_optimize_on": {
+            "type": "boolean"
+          },
+          "campaign_app_profile_page_state": {
+            "type": "string",
+            "enum": [
+              "ON",
+              "OFF"
+            ]
+          },
+          "campaign_automation_type": {
+            "type": "string",
+            "enum": [
+              "MANUAL",
+              "SMART_PLUS",
+              "UPGRADED_SMART_PLUS"
+            ]
+          },
+          "campaign_type": {
+            "type": "string",
+            "enum": [
+              "REGULAR_CAMPAIGN",
+              "IOS14_CAMPAIGN"
+            ]
+          },
+          "disable_skan_campaign": {
+            "type": "boolean"
+          },
+          "is_advanced_dedicated_campaign": {
+            "type": "boolean"
+          },
+          "objective_type": {
+            "type": "string",
+            "enum": [
+              "APP_PROMOTION",
+              "WEB_CONVERSIONS",
+              "PRODUCT_SALES"
+            ]
+          },
+          "optimization_event": {
+            "type": "string"
+          },
+          "pixel_id": {
+            "type": "string"
+          },
+          "placements": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "PLACEMENT_TIKTOK",
+                "PLACEMENT_PANGLE",
+                "PLACEMENT_GLOBAL_APP_BUNDLE"
+              ]
+            }
+          },
+          "promotion_type": {
+            "type": "string"
+          },
+          "store_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "advertiser_id",
+          "objective_type",
+          "placements",
+          "promotion_type"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "materials.upload_video_url",
+      "tool_name": "file_video_ad_upload",
+      "effect": "WRITE",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "type": "string"
+          },
+          "auto_bind_enabled": {
+            "type": "boolean"
+          },
+          "auto_fix_enabled": {
+            "type": "boolean"
+          },
+          "file_id": {
+            "type": "string"
+          },
+          "file_name": {
+            "type": "string"
+          },
+          "flaw_detect": {
+            "type": "boolean"
+          },
+          "is_third_party": {
+            "type": "boolean"
+          },
+          "upload_type": {
+            "type": "string",
+            "enum": [
+              "UPLOAD_BY_URL",
+              "UPLOAD_BY_FILE_ID",
+              "UPLOAD_BY_VIDEO_ID"
+            ]
+          },
+          "video_id": {
+            "type": "string"
+          },
+          "video_url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "advertiser_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "materials.get_videos",
+      "tool_name": "file_video_ad_info_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "type": "string"
+          },
+          "video_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "advertiser_id",
+          "video_ids"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "materials.search_videos",
+      "tool_name": "file_video_ad_search",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "type": "string"
+          },
+          "filtering": {
+            "type": "object",
+            "properties": {
+              "material_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "video_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "video_material_sources": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "UPLOADED_TO_TIKTOK_ADS_MANAGER",
+                    "UPLOADED_TO_CATALOG",
+                    "CREATIVE_TOOL_SMART_VIDEO",
+                    "CREATIVE_TOOL_QUICK_OPTIMIZATION",
+                    "CREATIVE_TOOL_VIDEO_TEMPLATE",
+                    "CREATIVE_TOOL_SMART_VIDEO_SOUNDTRACK",
+                    "CREATIVE_TOOL_TIKTOK_VIDEO_EDITOR",
+                    "TIKTOK_CREATIVE_EXCHANGE",
+                    "CATALOG_VIDEO_TEMPLATE",
+                    "DYNAMIC_VIDEO_EDITOR",
+                    "CREATIVE_CHALLENGE",
+                    "AUTOMATED_CREATIVE_OPTIMIZATION",
+                    "OTHER",
+                    "QUICK_GENERATION",
+                    "CREATIVE_CENTER_VIDEO_UPLOAD",
+                    "CREATIVE_CENTER_TIKTOK_VIDEO_EDITOR",
+                    "CREATIVE_CENTER_VIDEO_TEMPLATE",
+                    "DYNAMIC_SCENE",
+                    "SMART_OPTIMIZATION_TOOL"
+                  ]
+                }
+              },
+              "video_name": {
+                "type": "string"
+              }
+            }
+          },
+          "page": {
+            "type": "number"
+          },
+          "page_size": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "advertiser_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "materials.get_suggested_covers",
+      "tool_name": "file_video_suggestcover_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "type": "string"
+          },
+          "poster_number": {
+            "type": "number"
+          },
+          "video_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "advertiser_id",
+          "video_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "materials.upload_image_url",
+      "tool_name": "file_image_ad_upload",
+      "effect": "WRITE",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "type": "string"
+          },
+          "file_id": {
+            "type": "string"
+          },
+          "file_name": {
+            "type": "string"
+          },
+          "image_url": {
+            "type": "string"
+          },
+          "upload_type": {
+            "type": "string",
+            "enum": [
+              "UPLOAD_BY_URL",
+              "UPLOAD_BY_FILE_ID"
+            ]
+          }
+        },
+        "required": [
+          "advertiser_id",
+          "upload_type"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "materials.get_images",
+      "tool_name": "file_image_ad_info_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "type": "string"
+          },
+          "image_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "advertiser_id",
+          "image_ids"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "materials.search_images",
+      "tool_name": "file_image_ad_search",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "type": "string"
+          },
+          "filtering": {
+            "type": "object",
+            "properties": {
+              "displayable": {
+                "type": "boolean",
+                "enum": [
+                  true,
+                  false
+                ]
+              },
+              "height": {
+                "type": "number"
+              },
+              "image_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "material_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ratio": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              },
+              "width": {
+                "type": "number"
+              }
+            }
+          },
+          "page": {
+            "type": "number"
+          },
+          "page_size": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "advertiser_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "build.create_campaign",
+      "tool_name": "smart_plus_campaign_create",
+      "effect": "WRITE",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "type": "string"
+          },
+          "app_id": {
+            "type": "string"
+          },
+          "app_promotion_type": {
+            "type": "string",
+            "enum": [
+              "APP_INSTALL",
+              "APP_RETARGETING",
+              "MINIS"
+            ]
+          },
+          "budget": {
+            "type": "number"
+          },
+          "budget_auto_adjust_strategy": {
+            "type": "string",
+            "enum": [
+              "AUTO_BUDGET_INCREASE"
+            ]
+          },
+          "budget_mode": {
+            "type": "string",
+            "enum": [
+              "BUDGET_MODE_DYNAMIC_DAILY_BUDGET",
+              "BUDGET_MODE_TOTAL",
+              "BUDGET_MODE_INFINITE",
+              "BUDGET_MODE_DAY"
+            ]
+          },
+          "budget_optimize_on": {
+            "type": "boolean"
+          },
+          "campaign_app_profile_page_state": {
+            "type": "string",
+            "enum": [
+              "ON",
+              "OFF"
+            ]
+          },
+          "campaign_name": {
+            "type": "string"
+          },
+          "campaign_type": {
+            "type": "string",
+            "enum": [
+              "REGULAR_CAMPAIGN",
+              "IOS14_CAMPAIGN"
+            ]
+          },
+          "catalog_enabled": {
+            "type": "boolean"
+          },
+          "catalog_type": {
+            "type": "string",
+            "enum": [
+              "ECOMMERCE",
+              "TRAVEL_ENTERTAINMENT",
+              "MINI_SERIES"
+            ]
+          },
+          "disable_skan_campaign": {
+            "type": "boolean"
+          },
+          "gaming_ad_compliance_agreement": {
+            "type": "string",
+            "enum": [
+              "ON",
+              "OFF"
+            ]
+          },
+          "is_promotional_campaign": {
+            "type": "boolean"
+          },
+          "objective_type": {
+            "type": "string",
+            "enum": [
+              "APP_PROMOTION",
+              "WEB_CONVERSIONS",
+              "LEAD_GENERATION"
+            ]
+          },
+          "operation_status": {
+            "type": "string",
+            "enum": [
+              "ENABLE",
+              "DISABLE"
+            ]
+          },
+          "po_number": {
+            "type": "string"
+          },
+          "postback_window_mode": {
+            "type": "string",
+            "enum": [
+              "POSTBACK_WINDOW_MODE1",
+              "POSTBACK_WINDOW_MODE2",
+              "POSTBACK_WINDOW_MODE3"
+            ]
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "rta_bid_enabled": {
+            "type": "boolean"
+          },
+          "rta_id": {
+            "type": "string"
+          },
+          "rta_product_selection_enabled": {
+            "type": "boolean"
+          },
+          "sales_destination": {
+            "type": "string",
+            "enum": [
+              "WEBSITE",
+              "APP",
+              "WEB_AND_APP"
+            ]
+          },
+          "special_industries": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "HOUSING",
+                "EMPLOYMENT",
+                "CREDIT"
+              ]
+            }
+          }
+        },
+        "required": [
+          "advertiser_id",
+          "campaign_name",
+          "objective_type",
+          "request_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "build.get_campaigns",
+      "tool_name": "smart_plus_campaign_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "advertiser_id",
+                "app_id",
+                "app_promotion_type",
+                "bid_align_type",
+                "budget",
+                "budget_auto_adjust_strategy",
+                "budget_mode",
+                "budget_optimize_on",
+                "campaign_app_profile_page_state",
+                "campaign_id",
+                "campaign_name",
+                "campaign_type",
+                "catalog_enabled",
+                "catalog_type",
+                "code",
+                "create_time",
+                "current_budget",
+                "data",
+                "disable_skan_campaign",
+                "gaming_ad_compliance_agreement",
+                "is_advanced_dedicated_campaign",
+                "is_promotional_campaign",
+                "list",
+                "message",
+                "modify_time",
+                "objective_type",
+                "operation_status",
+                "page",
+                "page_info",
+                "page_size",
+                "po_number",
+                "postback_window_mode",
+                "request_id",
+                "rta_bid_enabled",
+                "rta_id",
+                "rta_product_selection_enabled",
+                "sales_destination",
+                "secondary_status",
+                "smart_plus_adgroup_mode",
+                "special_industries",
+                "total_number",
+                "total_page"
+              ]
+            }
+          },
+          "filtering": {
+            "type": "object",
+            "properties": {
+              "campaign_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "campaign_name": {
+                "type": "string"
+              },
+              "creation_filter_end_time": {
+                "type": "string"
+              },
+              "creation_filter_start_time": {
+                "type": "string"
+              },
+              "objective_type": {
+                "type": "string"
+              },
+              "primary_status": {
+                "type": "string"
+              },
+              "sales_destination": {
+                "type": "string",
+                "enum": [
+                  "WEBSITE",
+                  "APP",
+                  "WEB_AND_APP"
+                ]
+              },
+              "secondary_status": {
+                "type": "string"
+              }
+            }
+          },
+          "page": {
+            "type": "number"
+          },
+          "page_size": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "advertiser_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "build.create_adgroup",
+      "tool_name": "smart_plus_adgroup_create",
+      "effect": "WRITE",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "adgroup_name": {
+            "type": "string"
+          },
+          "advertiser_id": {
+            "type": "string"
+          },
+          "app_config": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "app_id": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "app_id": {
+            "type": "string"
+          },
+          "attribution_event_count": {
+            "type": "string",
+            "enum": [
+              "UNSET",
+              "EVERY",
+              "ONCE"
+            ]
+          },
+          "bid_price": {
+            "type": "number"
+          },
+          "bid_type": {
+            "type": "string",
+            "enum": [
+              "BID_TYPE_NO_BID",
+              "BID_TYPE_CUSTOM"
+            ]
+          },
+          "billing_event": {
+            "type": "string",
+            "enum": [
+              "OCPM",
+              "CPC"
+            ]
+          },
+          "budget": {
+            "type": "number"
+          },
+          "budget_auto_adjust_strategy": {
+            "type": "string",
+            "enum": [
+              "AUTO_BUDGET_INCREASE",
+              "UNSET"
+            ]
+          },
+          "budget_mode": {
+            "type": "string",
+            "enum": [
+              "BUDGET_MODE_TOTAL",
+              "BUDGET_MODE_DYNAMIC_DAILY_BUDGET"
+            ]
+          },
+          "campaign_id": {
+            "type": "string"
+          },
+          "catalog_authorized_bc_id": {
+            "type": "string"
+          },
+          "catalog_id": {
+            "type": "string"
+          },
+          "click_attribution_window": {
+            "type": "string",
+            "enum": [
+              "OFF",
+              "ONE_DAY",
+              "SEVEN_DAYS",
+              "FOURTEEN_DAYS",
+              "TWENTY_EIGHT_DAYS",
+              "THIRTY_DAYS",
+              "THIRTY_TWO_DAYS",
+              "ONE_HUNDRED_EIGHTY_DAYS"
+            ]
+          },
+          "comment_disabled": {
+            "type": "boolean"
+          },
+          "conversion_bid_price": {
+            "type": "number"
+          },
+          "custom_conversion_id": {
+            "type": "string"
+          },
+          "dayparting": {
+            "type": "string"
+          },
+          "deep_bid_type": {
+            "type": "string",
+            "enum": [
+              "DEFAULT",
+              "AEO",
+              "VO_MIN_ROAS",
+              "VO_HIGHEST_VALUE"
+            ]
+          },
+          "deep_funnel_event_source": {
+            "type": "string",
+            "enum": [
+              "PIXEL",
+              "OFFLINE",
+              "CRM"
+            ]
+          },
+          "deep_funnel_event_source_id": {
+            "type": "string"
+          },
+          "deep_funnel_optimization_event": {
+            "type": "string"
+          },
+          "deep_funnel_optimization_status": {
+            "type": "string",
+            "enum": [
+              "ON",
+              "OFF"
+            ]
+          },
+          "engaged_view_attribution_window": {
+            "type": "string",
+            "enum": [
+              "OFF",
+              "ONE_DAY",
+              "SEVEN_DAYS",
+              "FOURTEEN_DAYS",
+              "TWENTY_EIGHT_DAYS"
+            ]
+          },
+          "gaming_ad_compliance_agreement": {
+            "type": "string",
+            "enum": [
+              "ON",
+              "OFF"
+            ]
+          },
+          "identity_authorized_bc_id": {
+            "type": "string"
+          },
+          "identity_id": {
+            "type": "string"
+          },
+          "identity_type": {
+            "type": "string",
+            "enum": [
+              "TT_USER",
+              "BC_AUTH_TT"
+            ]
+          },
+          "is_hfss": {
+            "type": "boolean"
+          },
+          "is_lhf_compliance": {
+            "type": "boolean"
+          },
+          "message_event_set_id": {
+            "type": "string"
+          },
+          "messaging_app_account_id": {
+            "type": "string"
+          },
+          "messaging_app_type": {
+            "type": "string",
+            "enum": [
+              "MESSENGER",
+              "WHATSAPP",
+              "ZALO",
+              "LINE",
+              "IM_URL"
+            ]
+          },
+          "min_budget": {
+            "type": "number"
+          },
+          "minis_id": {
+            "type": "string"
+          },
+          "movie_premiere_date": {
+            "type": "string"
+          },
+          "native_series_id": {
+            "type": "string"
+          },
+          "operation_status": {
+            "type": "string",
+            "enum": [
+              "ENABLE",
+              "DISABLE"
+            ]
+          },
+          "optimization_event": {
+            "type": "string"
+          },
+          "optimization_goal": {
+            "type": "string",
+            "enum": [
+              "CLICK",
+              "INSTALL",
+              "IN_APP_EVENT",
+              "VALUE",
+              "CONVERT",
+              "TRAFFIC_LANDING_PAGE_VIEW",
+              "CONVERSATION",
+              "LEAD_GENERATION"
+            ]
+          },
+          "phone_info": {
+            "type": "object",
+            "properties": {
+              "phone_number": {
+                "type": "string"
+              },
+              "phone_region_calling_code": {
+                "type": "string"
+              },
+              "phone_region_code": {
+                "type": "string"
+              }
+            }
+          },
+          "pixel_id": {
+            "type": "string"
+          },
+          "placement_type": {
+            "type": "string",
+            "enum": [
+              "PLACEMENT_TYPE_AUTOMATIC",
+              "PLACEMENT_TYPE_NORMAL"
+            ]
+          },
+          "placements": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "PLACEMENT_TIKTOK",
+                "PLACEMENT_PANGLE",
+                "PLACEMENT_GLOBAL_APP_BUNDLE"
+              ]
+            }
+          },
+          "promotion_target_type": {
+            "type": "string",
+            "enum": [
+              "INSTANT_PAGE",
+              "EXTERNAL_WEBSITE"
+            ]
+          },
+          "promotion_type": {
+            "type": "string",
+            "enum": [
+              "APP_ANDROID",
+              "APP_IOS",
+              "WEBSITE",
+              "MINI_APP",
+              "MINI_GAME",
+              "NATIVE_SERIES",
+              "LEAD_GENERATION",
+              "LEAD_GEN_CLICK_TO_TT_DIRECT_MESSAGE",
+              "LEAD_GEN_CLICK_TO_SOCIAL_MEDIA_APP_MESSAGE",
+              "LEAD_GEN_CLICK_TO_CALL"
+            ]
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "roas_bid": {
+            "type": "number"
+          },
+          "schedule_end_time": {
+            "type": "string"
+          },
+          "schedule_start_time": {
+            "type": "string"
+          },
+          "schedule_type": {
+            "type": "string",
+            "enum": [
+              "SCHEDULE_FROM_NOW",
+              "SCHEDULE_START_END"
+            ]
+          },
+          "share_disabled": {
+            "type": "boolean"
+          },
+          "suggestion_audience_enabled": {
+            "type": "boolean"
+          },
+          "targeting_optimization_mode": {
+            "type": "string",
+            "enum": [
+              "AUTOMATIC",
+              "MANUAL"
+            ]
+          },
+          "targeting_spec": {
+            "type": "object",
+            "properties": {
+              "actions": {
+                "type": "array",
+                "items": {}
+              },
+              "age_groups": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "AGE_13_17",
+                    "AGE_18_24",
+                    "AGE_25_34",
+                    "AGE_35_44",
+                    "AGE_45_54",
+                    "AGE_55_100"
+                  ]
+                }
+              },
+              "app_targeting_type": {
+                "type": "string",
+                "enum": [
+                  "PROSPECT",
+                  "RETARGETING"
+                ]
+              },
+              "audience_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "blocked_pangle_app_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "carrier_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "device_model_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "device_price_ranges": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              },
+              "excluded_audience_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "excluded_custom_actions": {
+                "type": "array",
+                "items": {}
+              },
+              "excluded_pangle_audience_package_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "gender": {
+                "type": "string",
+                "enum": [
+                  "GENDER_FEMALE",
+                  "GENDER_MALE",
+                  "GENDER_UNLIMITED"
+                ]
+              },
+              "household_income": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "TOP5",
+                    "TOP10",
+                    "TOP10_25",
+                    "TOP25_50"
+                  ]
+                }
+              },
+              "included_custom_actions": {
+                "type": "array",
+                "items": {}
+              },
+              "included_pangle_audience_package_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "interest_category_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "interest_keyword_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "isp_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "languages": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "location_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "min_android_version": {
+                "type": "string"
+              },
+              "min_ios_version": {
+                "type": "string"
+              },
+              "network_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "operating_systems": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "ANDROID",
+                    "IOS"
+                  ]
+                }
+              },
+              "purchase_intention_keyword_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "saved_audience_id": {
+                "type": "string"
+              },
+              "shopping_ads_retargeting_actions_days": {
+                "type": "number"
+              },
+              "shopping_ads_retargeting_custom_audience_relation": {
+                "type": "string",
+                "enum": [
+                  "OR",
+                  "AND"
+                ]
+              },
+              "shopping_ads_retargeting_type": {
+                "type": "string",
+                "enum": [
+                  "LAB1",
+                  "LAB2",
+                  "LAB3",
+                  "OFF"
+                ]
+              },
+              "smart_audience_enabled": {
+                "type": "boolean"
+              },
+              "smart_interest_behavior_enabled": {
+                "type": "boolean"
+              },
+              "spc_audience_age": {
+                "type": "string",
+                "enum": [
+                  "ALL",
+                  "OVER_EIGHTEEN",
+                  "OVER_TWENTY_FIVE"
+                ]
+              },
+              "spending_power": {
+                "type": "string",
+                "enum": [
+                  "ALL",
+                  "HIGH"
+                ]
+              },
+              "zipcode_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "tiktok_subplacements": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "LEMON8",
+                "PINE_DRAMA"
+              ]
+            }
+          },
+          "vbo_window": {
+            "type": "string",
+            "enum": [
+              "SEVEN_DAYS",
+              "ZERO_DAY"
+            ]
+          },
+          "video_download_disabled": {
+            "type": "boolean"
+          },
+          "view_attribution_window": {
+            "type": "string",
+            "enum": [
+              "OFF",
+              "ONE_DAY",
+              "SEVEN_DAYS"
+            ]
+          },
+          "zalo_id_type": {
+            "type": "string",
+            "enum": [
+              "ZALO_OFFICIAL_ACCOUNT",
+              "ZALO_PHONE_ACCOUNT"
+            ]
+          }
+        },
+        "required": [
+          "adgroup_name",
+          "advertiser_id",
+          "bid_type",
+          "billing_event",
+          "campaign_id",
+          "optimization_goal",
+          "promotion_type",
+          "request_id",
+          "schedule_start_time",
+          "schedule_type",
+          "targeting_spec"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "build.get_adgroups",
+      "tool_name": "smart_plus_adgroup_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "advertiser_id",
+                "campaign_id",
+                "campaign_name",
+                "adgroup_id",
+                "adgroup_name",
+                "catalog_id",
+                "catalog_authorized_bc_id",
+                "promotion_type",
+                "app_id",
+                "gaming_ad_compliance_agreement",
+                "promotion_website_type",
+                "optimization_goal",
+                "pixel_id",
+                "app_config",
+                "minis_id",
+                "optimization_event",
+                "custom_conversion_id",
+                "deep_funnel_optimization_status",
+                "deep_funnel_event_source",
+                "deep_funnel_event_source_id",
+                "deep_funnel_optimization_event",
+                "identity_id",
+                "identity_type",
+                "identity_authorized_bc_id",
+                "native_series_id",
+                "messaging_app_type",
+                "zalo_id_type",
+                "messaging_app_account_id",
+                "message_event_set_id",
+                "phone_info",
+                "bid_type",
+                "bid_price",
+                "conversion_bid_price",
+                "deep_bid_type",
+                "roas_bid",
+                "incentive_offer_type",
+                "vbo_window",
+                "click_attribution_window",
+                "engaged_view_attribution_window",
+                "view_attribution_window",
+                "attribution_event_count",
+                "billing_event",
+                "pacing",
+                "budget_mode",
+                "budget_auto_adjust_strategy",
+                "budget",
+                "current_budget",
+                "min_budget",
+                "schedule_type",
+                "schedule_start_time",
+                "schedule_end_time",
+                "movie_premiere_date",
+                "dayparting",
+                "targeting_optimization_mode",
+                "suggestion_audience_enabled",
+                "targeting_spec",
+                "is_hfss",
+                "is_lhf_compliance",
+                "placement_type",
+                "placements",
+                "tiktok_subplacements",
+                "search_result_enabled",
+                "comment_disabled",
+                "share_disabled",
+                "video_download_disabled",
+                "skip_learning_phase",
+                "create_time",
+                "modify_time"
+              ]
+            }
+          },
+          "filtering": {
+            "type": "object",
+            "properties": {
+              "adgroup_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "adgroup_name": {
+                "type": "string"
+              },
+              "campaign_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "objective_type": {
+                "type": "string",
+                "enum": [
+                  "APP_PROMOTION",
+                  "WEB_CONVERSIONS",
+                  "LEAD_GENERATION"
+                ]
+              },
+              "optimization_goal": {
+                "type": "string",
+                "enum": [
+                  "CLICK",
+                  "INSTALL",
+                  "IN_APP_EVENT",
+                  "VALUE",
+                  "CONVERT",
+                  "TRAFFIC_LANDING_PAGE_VIEW",
+                  "LEAD_GENERATION"
+                ]
+              },
+              "primary_status": {
+                "type": "string"
+              },
+              "promotion_type": {
+                "type": "string",
+                "enum": [
+                  "WEBSITE",
+                  "LEAD_GEN_CLICK_TO_TT_DIRECT_MESSAGE",
+                  "LEAD_GEN_CLICK_TO_SOCIAL_MEDIA_APP_MESSAGE",
+                  "LEAD_GEN_CLICK_TO_CALL",
+                  "APP",
+                  "INSTANT_FORM"
+                ]
+              },
+              "sales_destination": {
+                "type": "string",
+                "enum": [
+                  "WEBSITE",
+                  "APP",
+                  "WEB_AND_APP"
+                ]
+              },
+              "secondary_status": {
+                "type": "string"
+              }
+            }
+          },
+          "page": {
+            "type": "number"
+          },
+          "page_size": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "advertiser_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "build.create_ad",
+      "tool_name": "smart_plus_ad_create",
+      "effect": "WRITE",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "ad_configuration": {
+            "type": "object",
+            "properties": {
+              "auto_disclaimer_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "EMISSION",
+                    "DISCOUNT"
+                  ]
+                }
+              },
+              "call_to_action_id": {
+                "type": "string"
+              },
+              "catalog_creative_info": {
+                "type": "object",
+                "properties": {
+                  "catalog_media_settings": {},
+                  "catalog_template_video_id": {
+                    "type": "string"
+                  }
+                }
+              },
+              "catalog_creative_toggle": {
+                "type": "boolean"
+              },
+              "creative_auto_add_toggle": {
+                "type": "boolean"
+              },
+              "creative_auto_enhancement_strategy_list": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "TRANSLATE_AND_DUB",
+                    "MUSIC_REFRESH",
+                    "VIDEO_QUALITY",
+                    "IMAGE_QUALITY",
+                    "IMAGE_RESIZE"
+                  ]
+                }
+              },
+              "dark_post_status": {
+                "type": "string",
+                "enum": [
+                  "ON",
+                  "OFF"
+                ]
+              },
+              "deeplink_utm_params": {
+                "type": "array",
+                "items": {}
+              },
+              "end_card_cta": {
+                "type": "string",
+                "enum": [
+                  "SEARCH_INVENTORY",
+                  "LEARN_MORE",
+                  "SHOP_NOW",
+                  "SIGN_UP",
+                  "CONTACT_US",
+                  "BOOK_NOW",
+                  "READ_MORE",
+                  "VIEW_MORE",
+                  "ORDER_NOW",
+                  "SEND_MESSAGE"
+                ]
+              },
+              "fallback_type": {
+                "type": "string",
+                "enum": [
+                  "WEBSITE"
+                ]
+              },
+              "identity_authorized_bc_id": {
+                "type": "string"
+              },
+              "identity_id": {
+                "type": "string"
+              },
+              "identity_type": {
+                "type": "string",
+                "enum": [
+                  "CUSTOMIZED_USER",
+                  "TT_USER",
+                  "BC_AUTH_TT"
+                ]
+              },
+              "phone_info": {
+                "type": "object",
+                "properties": {
+                  "phone_number": {
+                    "type": "string"
+                  },
+                  "phone_region_calling_code": {
+                    "type": "string"
+                  },
+                  "phone_region_code": {
+                    "type": "string"
+                  }
+                }
+              },
+              "product_display_field_list": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "DEALER_NAME",
+                    "MAKE",
+                    "MODEL",
+                    "YEAR",
+                    "MILEAGE",
+                    "PRICE",
+                    "SALE_PRICE",
+                    "EXTERIOR_COLOR",
+                    "TRIM",
+                    "ADDRESS_CITY",
+                    "VEHICLE_STATE"
+                  ]
+                }
+              },
+              "product_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "product_info": {
+                "type": "object",
+                "properties": {
+                  "catalog_tag_list": {},
+                  "product_card_type": {},
+                  "product_image_list": {},
+                  "product_titles": {},
+                  "promo_info_list": {},
+                  "selling_points": {}
+                }
+              },
+              "product_info_enabled": {
+                "type": "string",
+                "enum": [
+                  "UNSET",
+                  "NON_CATALOG",
+                  "CATALOG"
+                ]
+              },
+              "product_set_id": {
+                "type": "string"
+              },
+              "product_specific_type": {
+                "type": "string",
+                "enum": [
+                  "ALL",
+                  "PRODUCT_SET",
+                  "CUSTOMIZED_PRODUCTS"
+                ]
+              },
+              "tracking_info": {
+                "type": "object",
+                "properties": {
+                  "app_tracking_info_list": {},
+                  "brand_safety_postbid_partner": {
+                    "type": "string",
+                    "enum": [
+                      "DOUBLE_VERIFY",
+                      "IAS",
+                      "ZEFR"
+                    ]
+                  },
+                  "brand_safety_vast_url": {
+                    "type": "string"
+                  },
+                  "click_tracking_url": {
+                    "type": "string"
+                  },
+                  "impression_tracking_url": {
+                    "type": "string"
+                  },
+                  "tracking_app_id": {
+                    "type": "string"
+                  },
+                  "tracking_message_event_set_id": {
+                    "type": "string"
+                  },
+                  "tracking_offline_event_set_ids": {},
+                  "tracking_pixel_id": {
+                    "type": "string"
+                  },
+                  "viewability_postbid_partner": {
+                    "type": "string",
+                    "enum": [
+                      "DOUBLE_VERIFY",
+                      "IAS",
+                      "ZEFR"
+                    ]
+                  },
+                  "viewability_vast_url": {
+                    "type": "string"
+                  }
+                }
+              },
+              "utm_params": {
+                "type": "array",
+                "items": {}
+              }
+            }
+          },
+          "ad_name": {
+            "type": "string"
+          },
+          "ad_text_list": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ad_text": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "adgroup_id": {
+            "type": "string"
+          },
+          "advertiser_id": {
+            "type": "string"
+          },
+          "auto_message_list": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "auto_message_id": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "call_to_action_list": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "call_to_action": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "creative_list": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "creative_info": {}
+              }
+            }
+          },
+          "custom_product_page_list": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "custom_product_page_url": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "deeplink_list": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "deeplink": {
+                  "type": "string"
+                },
+                "deeplink_type": {
+                  "type": "string",
+                  "enum": [
+                    "DEFERRED_DEEPLINK",
+                    "NORMAL"
+                  ]
+                }
+              }
+            }
+          },
+          "disclaimer": {
+            "type": "object",
+            "properties": {
+              "disclaimer_clickable_texts": {
+                "type": "array",
+                "items": {}
+              },
+              "disclaimer_text": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  }
+                }
+              },
+              "disclaimer_type": {
+                "type": "string",
+                "enum": [
+                  "TEXT_ONLY",
+                  "TEXT_LINK"
+                ]
+              }
+            }
+          },
+          "interactive_add_on_list": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "card_id": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "landing_page_url_list": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "landing_page_url": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "operation_status": {
+            "type": "string",
+            "enum": [
+              "ENABLE",
+              "DISABLE"
+            ]
+          },
+          "page_list": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "page_id": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "playable_list": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "playable_url": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "adgroup_id",
+          "advertiser_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "build.get_ads",
+      "tool_name": "smart_plus_ad_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filtering": {
+            "type": "object",
+            "properties": {
+              "adgroup_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "campaign_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "creation_filter_end_time": {
+                "type": "string"
+              },
+              "creation_filter_start_time": {
+                "type": "string"
+              },
+              "modified_after": {
+                "type": "string"
+              },
+              "objective_type": {
+                "type": "string",
+                "enum": [
+                  "APP_PROMOTION",
+                  "WEB_CONVERSIONS",
+                  "LEAD_GENERATION"
+                ]
+              },
+              "optimization_goal": {
+                "type": "string"
+              },
+              "primary_status": {
+                "type": "string"
+              },
+              "sales_destination": {
+                "type": "string",
+                "enum": [
+                  "WEBSITE",
+                  "APP",
+                  "WEB_AND_APP"
+                ]
+              },
+              "secondary_status": {
+                "type": "string",
+                "enum": [
+                  "AD_STATUS_COLLECTION_TOGGLED_OFF",
+                  "AD_STATUS_DELIVERY_AND_REAUDIT",
+                  "AD_STATUS_DELIVERY_AND_TRANSCODING_FAIL",
+                  "AD_STATUS_PRIVACY_POLICY_AUDIT",
+                  "AD_STATUS_PRIVACY_POLICY_REJECTED",
+                  "AD_STATUS_REVIEW_PARTIALLY_APPROVED"
+                ]
+              },
+              "smart_plus_ad_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "number"
+          },
+          "page_size": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "advertiser_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "build.get_regular_adgroups",
+      "tool_name": "adgroup_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "type": "string"
+          },
+          "exclude_field_types_in_response": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "NULL_FIELD"
+              ]
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filtering": {
+            "type": "object",
+            "properties": {
+              "adgroup_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "adgroup_name": {
+                "type": "string"
+              },
+              "bid_strategy": {
+                "type": "string",
+                "enum": [
+                  "BID_STRATEGY_COST_CAP",
+                  "BID_STRATEGY_BID_CAP",
+                  "BID_STRATEGY_MAX_CONVERSION",
+                  "BID_STRATEGY_LOWEST_COST"
+                ]
+              },
+              "billing_events": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "buying_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "AUCTION",
+                    "RESERVATION_RF",
+                    "RESERVATION_TOP_VIEW"
+                  ]
+                }
+              },
+              "campaign_automation_type": {
+                "type": "string",
+                "enum": [
+                  "MANUAL",
+                  "SMART_PLUS",
+                  "UPGRADED_SMART_PLUS"
+                ]
+              },
+              "campaign_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "campaign_system_origins": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "PROMOTE",
+                    "TT_ADS_PLATFORM"
+                  ]
+                }
+              },
+              "creation_filter_end_time": {
+                "type": "string"
+              },
+              "creation_filter_start_time": {
+                "type": "string"
+              },
+              "creative_material_mode": {
+                "type": "string",
+                "enum": [
+                  "CUSTOM",
+                  "SMART_CREATIVE"
+                ]
+              },
+              "objective_type": {
+                "type": "string"
+              },
+              "optimization_goal": {
+                "type": "string"
+              },
+              "primary_status": {
+                "type": "string"
+              },
+              "promotion_type": {
+                "type": "string",
+                "enum": [
+                  "APP",
+                  "WEBSITE",
+                  "INSTANT_FORM",
+                  "LEAD_GEN_CLICK_TO_TT_DIRECT_MESSAGE",
+                  "LEAD_GEN_CLICK_TO_SOCIAL_MEDIA_APP_MESSAGE",
+                  "LEAD_GEN_CLICK_TO_CALL"
+                ]
+              },
+              "secondary_status": {
+                "type": "string"
+              },
+              "split_test_enabled": {
+                "type": "boolean"
+              }
+            }
+          },
+          "page": {
+            "type": "number"
+          },
+          "page_size": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "advertiser_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    }
+  ]
+}

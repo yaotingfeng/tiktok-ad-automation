@@ -11,3 +11,5 @@
 - SDK video upload requires multipart keyword arguments, unlike JSON-body Smart+ create/share wrappers. Minis-specific scene fields remain P06/P07 validation scope.
 - Docker Compose 5.5.1 parsed both local and explicit staging configurations. Docker daemon is unavailable locally; GitHub CI successfully built the image at 3dcbe1d (run34266735739). Container startup/public deployment remains unverified.
 - Original reference documentation and CLI credentials remain in the source repository; no operational output, token or real account default was imported.
+
+- Official MCP Python SDK: `mcp==2.2.0`, `httpx2==2.12.0`, exactly pinned in backend and root `uv.lock`; verified imports `from mcp import Client`, `from mcp.client.streamable_http import streamable_http_client`. SDK latest protocol `2026-07-28` is not a claim about the TikTok negotiated server version. Public resource/issuer metadata verified via credential-free GET on 2026-09-11; registration, authorization, tools/list and business compatibility remain pending. See [protocol evidence and contracts](integrations/tiktok-mcp-protocol.md).

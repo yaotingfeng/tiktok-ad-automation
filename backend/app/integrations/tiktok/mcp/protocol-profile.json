@@ -1,0 +1,75 @@
+{
+  "revision": "2026-09-11.1",
+  "endpoint": "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat",
+  "issuer": "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat/oauth",
+  "resource": "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat",
+  "authorization_endpoint": "https://business-api.tiktok.com/portal/mcp-tt4b-authorize",
+  "token_endpoint": "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat/oauth/token",
+  "registration_endpoint": "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat/oauth/register",
+  "revocation_endpoint": "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat/oauth/revoke",
+  "authorization_evidence": "PUBLIC_METADATA",
+  "sdk_version": "2.2.0",
+  "httpx_version": "2.12.0",
+  "sdk_protocol_version": "2026-07-28",
+  "server_protocol_version": null,
+  "transport": "STREAMABLE_HTTP",
+  "transport_evidence": "UNVERIFIED",
+  "pkce_methods": [
+    "S256"
+  ],
+  "token_auth_methods": [
+    "none"
+  ],
+  "grant_types": [
+    "authorization_code",
+    "refresh_token"
+  ],
+  "scopes_supported": [
+    "mcp:tt4b"
+  ],
+  "refresh_replay_guaranteed": null,
+  "refresh_semantics_evidence": "UNVERIFIED",
+  "refresh_semantics_source_urls": [],
+  "permission_evidence": {
+    "supported_scope_source": "https://business-api.tiktok.com/.well-known/oauth-protected-resource/open_mcp/tt-ads-mcp-flat",
+    "supported_scope_is_granted_permission": false,
+    "grant_subject_bc_account_roles": "UNVERIFIED",
+    "candidate_tool_names": [
+      "user_info_get",
+      "bc_get",
+      "bc_asset_get",
+      "bc_member_get",
+      "bc_asset_member_get",
+      "auth_advertiser_get"
+    ],
+    "required_p1_evidence": [
+      "Actual granted scope and subject/grant continuity",
+      "Explicit BC selection and complete advertiser ownership pagination",
+      "Current member/asset operation role joined to authenticated subject",
+      "Tools/list schema and readback coverage; tool existence never proves permission"
+    ],
+    "subject_candidate": {
+      "tool_name": "user_info_get",
+      "subject_field": "core_user_id",
+      "evidence": "DOCUMENTED",
+      "connection_verification": "UNVERIFIED"
+    }
+  },
+  "schema_manifest_sha256": "9ac2576299ae5d447fe9df2d4ba26180ca9bef76a56f99601c0cdd5b5d7dbc01",
+  "source_urls": [
+    "https://business-api.tiktok.com/.well-known/oauth-protected-resource/open_mcp/tt-ads-mcp-flat",
+    "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat/oauth/.well-known/openid-configuration",
+    "https://github.com/modelcontextprotocol/python-sdk/tree/v2.2.0",
+    "https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization"
+  ],
+  "unverified": [
+    "Live MCP transport negotiation and server protocol version",
+    "Client registration prerequisites and allowed callback URI policy",
+    "Token expires_in, refresh lifetime/rotation, replay and recovery guarantees",
+    "Revocation isolation and grant identity semantics",
+    "Granted scope, authenticated subject and per-BC/account operation permissions",
+    "Own connection tools/list names, complete input and output schemas, envelope and data shapes",
+    "Upstream side-effect retry/idempotency behavior",
+    "Video content digest evidence, URL ingestion limits and immutable original identity"
+  ]
+}

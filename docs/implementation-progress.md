@@ -1,5 +1,12 @@
 # 实施进度
 
+## 2026-09-11：MCP P0.1 协议与工具契约
+
+- 按用户要求开始分派实施，所有子代理使用 gpt-6-astra/high。固定官方 MCP Python SDK 2.2.0 和 httpx2 2.12.0；公开只读 metadata 核实官方 endpoint、issuer/resource、授权端点与 PKCE，保存公开来源及未核实项。
+- 建立账户、场景、素材、广告操作白名单与 schema 比较。工具声明属于文档证据，尚未使用本产品真实授权观察；正常 token 轮换保证、账户写权限和远端大小上限仍未核实。
+- 独立审查发现并修复 boolean 枚举、JSON boolean/number 比较及依赖字段语义问题；最终协议 39 项、与结果解析组合 107 项通过，相关 mypy/Ruff/语法及摘要检查通过。没有注册、授权或业务写入。
+- 本地提交以 `mcp: define verified protocol and tool contracts` 标识，不推送；后续继续传输、配额与 P1 连接实现。
+
 ## 2026-09-11：TikTok MCP 双通道实施计划
 
 - 用户以“没问题”确认书面设计，继续编写实施计划。[总览与执行顺序](superpowers/plans/2026-09-11-tiktok-mcp-implementation.md) 关联 P0 协议、P1 授权连接、P2 素材及 P3 广告四份计划，共 23 个任务；每份列明文件、公共接口、失败用例、实现要点及验收命令。
