@@ -14,6 +14,7 @@ from sqlmodel import Session, col, select
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
+from app.integrations.tiktok.contracts import materials as material_types
 from app.integrations.tiktok.sdk import (
     AccountAdmissionDeferred,
     admitted_account_call,
@@ -484,7 +485,7 @@ def _save_receipt(
     context: TenantContext,
     job: MaterialCoverJob,
     nonce: UUID,
-    value: api.ImageReceipt,
+    value: material_types.ImageReceipt,
 ) -> None:
     try:
         with Session(database_engine) as session, session.begin():

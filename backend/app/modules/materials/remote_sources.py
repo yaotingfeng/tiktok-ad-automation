@@ -1,6 +1,6 @@
 """Current authorized account evidence and ephemeral official source previews."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -9,10 +9,13 @@ from sqlmodel import Session, col, select
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
-from app.integrations.tiktok.sdk import sdk_client
+from app.integrations.tiktok.bounded_resources import bounded_session
+from app.integrations.tiktok.contracts import materials as material_types
+from app.integrations.tiktok.gateway import open_tiktok_gateway
 from app.jobs.admission import AdmissionPolicy, admission_policy
 from app.modules.accounts.access import resolve_account_access, usable_grants
 from app.modules.accounts.models import BCAccountAccess
+from app.modules.accounts.routing import freeze_route, verify_route
 
 from . import sdk_assets as api
 from .models import AccountMaterial, MaterialFile
@@ -95,17 +98,18 @@ def read_remote_source(
     deadline: datetime,
     hard_limit: int,
     extend_lease: bool = False,
-) -> api.SourcePreview:
-    policy = (
-        source_info_policy(hard_limit=hard_limit)
-        if extend_lease
-        else admission_policy(api.INFO_ENDPOINT)
-    )
-    budget = api.RemoteCallBudget(
-        deadline=deadline, hard_limit_seconds=hard_limit, lease_ms=policy.lease_ms
+) -> material_types.SourcePreview:
+    from .source_uploads import READ_HARD_LIMIT
+
+    # 预览是独立短读取；它不能继承并扩张外层长上传期限或租约。
+    _ = hard_limit, extend_lease  # Task 3 调用方迁完后删除旧兼容参数。
+    deadline = min(deadline, datetime.now(UTC) + timedelta(seconds=READ_HARD_LIMIT - 5))
+    policy = admission_policy("materials.get_videos")
+    budget = material_types.RemoteCallBudget(
+        deadline=deadline, hard_limit_seconds=READ_HARD_LIMIT, lease_ms=policy.lease_ms
     )
     budget.timeout(upload=False)
-    with Session(database_engine) as db:
+    with bounded_session(database_engine, task_deadline=deadline) as db:
         source = resolve_remote_source(
             db,
             context=context,
@@ -131,49 +135,7 @@ def read_remote_source(
             material.byte_size,
         )
         assert md5
-    with api.admitted_asset_call(
-        redis_client,
-        context=context,
-        endpoint=api.INFO_ENDPOINT,
-        advertiser_id=advertiser_id,
-        policy=policy,
-    ):
-        with Session(database_engine) as db:
-            current = resolve_remote_source(
-                db,
-                context=context,
-                bc_id=bc_id,
-                material_id=material_id,
-                source_asset_id=source_asset_id,
-            )
-            if current is None or (current.video_id, current.connection_id) != (
-                video_id,
-                connection_id,
-            ):
-                raise DomainError(
-                    "material_remote_source_unavailable", "来源证据已变化"
-                )
-            resolve_account_access(
-                db,
-                context=context,
-                bc_id=bc_id,
-                advertiser_id=advertiser_id,
-                action="read",
-            )
-            # Exact usable grant was verified above. Resolving a newer preferred
-            # connection never rewrites this mapping's recorded connection.
-            with sdk_client(db, context=context, connection_id=connection_id) as client:
-                db.commit()
-                db.close()
-                preview = api.read_source_preview(
-                    client,
-                    advertiser_id=advertiser_id,
-                    video_id=video_id,
-                    md5=md5,
-                    allowed_hosts=settings.MATERIAL_REMOTE_MEDIA_HOSTS,
-                    budget=budget,
-                )
-    with Session(database_engine) as db:
+    with bounded_session(database_engine, task_deadline=deadline) as db:
         current = resolve_remote_source(
             db,
             context=context,
@@ -181,12 +143,79 @@ def read_remote_source(
             material_id=material_id,
             source_asset_id=source_asset_id,
         )
-        if current is None or (current.video_id, current.connection_id) != (
+        if current is None or (
+            current.advertiser_id,
+            current.video_id,
+            current.connection_id,
+        ) != (
+            advertiser_id,
+            video_id,
+            connection_id,
+        ):
+            raise DomainError("material_remote_source_unavailable", "来源证据已变化")
+        resolve_account_access(
+            db,
+            context=context,
+            bc_id=bc_id,
+            advertiser_id=advertiser_id,
+            action="read",
+            connection_id=connection_id,
+        )
+        route = freeze_route(
+            db, context=context, bc_id=bc_id, connection_id=connection_id
+        )
+    with open_tiktok_gateway(
+        database_engine=database_engine,
+        redis_client=redis_client,
+        context=context,
+        route=route,
+        task_deadline=deadline,
+    ) as gateway:
+        preview = gateway.materials.read_source_preview(
+            advertiser_id=advertiser_id, video_id=video_id, budget=budget
+        )
+    with bounded_session(database_engine, task_deadline=deadline) as db:
+        # 返回临时预览能力前重新核验原授权；凭据轮转不改变冻结授权语义。
+        verify_route(
+            db,
+            context=context,
+            route=route,
+            advertiser_id=advertiser_id,
+            capability="read",
+        )
+        current = resolve_remote_source(
+            db,
+            context=context,
+            bc_id=bc_id,
+            material_id=material_id,
+            source_asset_id=source_asset_id,
+        )
+        if current is None or (
+            current.advertiser_id,
+            current.video_id,
+            current.connection_id,
+        ) != (
+            advertiser_id,
             video_id,
             connection_id,
         ):
             raise DomainError("material_remote_source_unavailable", "来源授权已变化")
-    if preview.size != byte_size or datetime.now(UTC) >= deadline:
+        # HTTP 期间持久内容身份也可能变化；旧快照不能证明当前素材。
+        material = db.get(MaterialFile, material_id)
+        if material is None or (
+            material.tenant_id,
+            material.bc_id,
+            material.video_md5,
+            material.byte_size,
+        ) != (context.tenant_id, bc_id, md5, byte_size):
+            raise DomainError("material_preview_unverified", "持久素材身份已变化")
+        require_remote_material(material)
+    if (preview.advertiser_id, preview.video_id, preview.md5, preview.size) != (
+        advertiser_id,
+        video_id,
+        md5.lower(),
+        byte_size,
+    ) or datetime.now(UTC) >= deadline:
         raise DomainError(
             "material_preview_unverified", "来源视频规格或本次读取期限无法核实"
         )

@@ -14,9 +14,9 @@ from urllib3.exceptions import ReadTimeoutError
 from urllib3.response import HTTPResponse
 
 from app.core.errors import DomainError
+from app.integrations.tiktok.contracts.materials import RemoteCallBudget
 from app.integrations.tiktok.sdk import official_client
 from app.modules.materials.sdk_assets import (
-    RemoteCallBudget,
     parse_upload,
     read_source_preview,
     upload_video_url,

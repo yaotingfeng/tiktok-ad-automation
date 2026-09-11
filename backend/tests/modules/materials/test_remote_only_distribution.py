@@ -120,6 +120,55 @@ def test_relay_target_requires_exact_received_vid_and_strong_media(
 
 
 def test_remote_preview_get_only_reads_and_never_persists_url(remote_env, wire):
+    # P1 当前读授权必须来自真实连接事实，旧 ACTIVE 标志不能代替授权证据。
+    from app.modules.accounts.connection_models import (
+        BCConnectionBinding,
+        BCDefaultRoute,
+        ConnectionAuthorization,
+    )
+    from app.modules.accounts.models import BCAccountAccess, TikTokConnection
+
+    with Session(engine) as db, db.begin():
+        connection = db.get(TikTokConnection, remote_env["connection_id"])
+        connection.adapter_contract_revision = "official-api-v1"
+        db.add(
+            BCConnectionBinding(
+                tenant_id=connection.tenant_id,
+                bc_id=remote_env["bc_id"],
+                connection_id=connection.id,
+                kind="OFFICIAL_API",
+            )
+        )
+        db.flush()
+        db.add(
+            BCDefaultRoute(
+                tenant_id=connection.tenant_id,
+                bc_id=remote_env["bc_id"],
+                connection_id=connection.id,
+            )
+        )
+        db.add(
+            ConnectionAuthorization(
+                tenant_id=connection.tenant_id,
+                connection_id=connection.id,
+                authorization_revision=connection.authorization_revision,
+                source="SYNTHETIC_VERIFIED_EVIDENCE",
+                issuer="https://business-api.tiktok.com",
+                resource="https://business-api.tiktok.com/open_api/v1.3",
+                permission_summary={"read_authorized": True},
+                verified_at=datetime.now(UTC),
+            )
+        )
+        grant = db.get(
+            BCAccountAccess,
+            (
+                connection.tenant_id,
+                remote_env["bc_id"],
+                "actual-account",
+                connection.id,
+            ),
+        )
+        grant.checked_at = datetime.now(UTC)
     from datetime import timedelta
 
     from fastapi import FastAPI

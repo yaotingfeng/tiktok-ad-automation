@@ -70,6 +70,7 @@ ERROR_HTTP_STATUS: dict[str, int] = {
     "gateway_operation_forbidden": 403,
     "gateway_authorization_invalid": 409,
     "gateway_tool_observation_required": 409,
+    "material_channel_unverified": 409,
     "part_permission_expired": 409,
     "part_permission_closed": 409,
     "part_result_unknown": 409,

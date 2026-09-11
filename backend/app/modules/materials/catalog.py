@@ -11,6 +11,7 @@ from sqlmodel import Session, col, select
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.core.pagination import Page
+from app.integrations.tiktok.bounded_resources import bounded_session
 
 from .models import MaterialFile, ObjectUpload, UploadBatch
 from .repository import decode_material_cursor, encode_material_cursor
@@ -33,16 +34,17 @@ def remote_preview(
     bc_id: str,
     material_id: UUID,
 ) -> RemoteMaterialPreview:
-    """Read-only SDK INFO with socket budget; no DNS-wide process deadline claim.
+    """Read-only fixed-source gateway with a bounded child budget.
 
-    This dedicated HTTP control-plane request never changes readiness, queues
-    work or issues an original-use permission. Sources and authority are fresh.
+    This read never changes readiness, queues material work or issues an
+    original-use permission. A short MCP token may queue credential refresh;
+    sources and authority are verified before returning the preview.
     """
     from .remote_sources import read_remote_source, resolve_remote_source
     from .source_uploads import READ_HARD_LIMIT
 
     deadline = datetime.now(UTC) + timedelta(seconds=READ_HARD_LIMIT - 5)
-    with Session(database_engine) as db:
+    with bounded_session(database_engine, task_deadline=deadline) as db:
         require_bc(db, context=context, bc_id=bc_id, action="read")
         source = resolve_remote_source(
             db, context=context, bc_id=bc_id, material_id=material_id

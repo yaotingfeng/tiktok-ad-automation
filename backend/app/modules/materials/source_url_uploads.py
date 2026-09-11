@@ -17,6 +17,7 @@ from sqlmodel import Session, col, select
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
+from app.integrations.tiktok.contracts import materials as material_types
 from app.integrations.tiktok.sdk import SDK_SCOPE_INTERRUPTS, sdk_client
 from app.jobs.admission import admission_policy
 from app.modules.tenants.permissions import require_tenant
@@ -718,7 +719,7 @@ def run_url_source_upload(
             else api.SEARCH_ENDPOINT
         )
         policy = admission_policy(endpoint)
-        budget = api.RemoteCallBudget(
+        budget = material_types.RemoteCallBudget(
             deadline=deadline, hard_limit_seconds=hard_limit, lease_ms=policy.lease_ms
         )
         budget.timeout(upload=kind == "upload")

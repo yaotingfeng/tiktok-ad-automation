@@ -7,8 +7,6 @@ Upload success proves receipt only; a separate account-scoped read verifies use.
 import ipaddress
 import math
 import re
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -22,6 +20,8 @@ from urllib3.exceptions import HTTPError
 
 from app.core.errors import DomainError
 from app.integrations.tiktok.accounts import paged_rows
+from app.integrations.tiktok.contracts import materials as material_types
+from app.integrations.tiktok.contracts.common import CallEvidence, McpBusinessResponse
 from app.integrations.tiktok.sdk import (
     SDK_SCOPE_INTERRUPTS,
     checked_data,
@@ -35,9 +35,7 @@ from app.integrations.tiktok.sdk import (
 
 # Re-export the real Redis-backed request scope, shared by upload and distribution.
 __all__ = [
-    "RemoteCallBudget",
     "SdkAdmissionDeferred",
-    "SourcePreview",
     "admitted_asset_call",
     "read_source_preview",
     "upload_video_url",
@@ -50,59 +48,6 @@ PAGE_SIZE = 100
 # Conservative formats already recognized by the application's upload naming
 # contract; this is not a claim about every format accepted by TikTok.
 _REMOTE_VIDEO_FORMATS = frozenset({"mp4", "mov", "m4v", "avi", "webm", "mpeg", "3gp"})
-
-
-@dataclass(frozen=True)
-class RemoteCallBudget:
-    """Actual worker deadline and admitted endpoint policy, supplied by caller.
-
-    Socket timeouts cannot enforce a whole-task deadline. The caller must run
-    in a process with this hard limit and acquire the corresponding Redis lease.
-    """
-
-    deadline: datetime
-    hard_limit_seconds: int
-    lease_ms: int
-
-    def timeout(self, *, upload: bool) -> tuple[float, float]:
-        if (
-            type(self.hard_limit_seconds) is not int
-            or self.hard_limit_seconds <= 5
-            or type(self.lease_ms) is not int
-            or self.lease_ms <= (self.hard_limit_seconds + 5) * 1000
-            or not isinstance(self.deadline, datetime)
-            or self.deadline.tzinfo is None
-            or self.deadline.utcoffset() is None
-        ):
-            raise DomainError("admission_policy_invalid", "素材调用执行期限或租约无效")
-        available = (
-            min(
-                (self.deadline - datetime.now(UTC)).total_seconds(),
-                self.hard_limit_seconds,
-            )
-            - 5
-        )
-        if available <= 0:
-            raise DomainError("material_deadline", "素材处理已到达本次期限")
-        connect = min(10 if upload else 5, available / 2)
-        return connect, min(300 if upload else 30, available - connect)
-
-
-@dataclass(frozen=True)
-class SourcePreview:
-    """Fresh account-scoped evidence; URL stays only in the current call's memory."""
-
-    advertiser_id: str
-    video_id: str
-    mid: str | None
-    md5: str = field(repr=False)
-    url: str = field(repr=False)
-    width: int
-    height: int
-    size: int
-    duration: float
-    format: str
-    displayable: bool = True
 
 
 def _remote_request_error() -> DomainError:
@@ -189,7 +134,7 @@ def upload_video_url(
     video_url: str,
     remote_name: str,
     md5: str,
-    budget: RemoteCallBudget,
+    budget: material_types.RemoteCallBudget,
 ) -> object:
     """One official URL POST; no download, file body, retry or receipt rewriting.
 
@@ -234,8 +179,8 @@ def read_source_preview(
     video_id: str,
     md5: str,
     allowed_hosts: frozenset[str],
-    budget: RemoteCallBudget,
-) -> SourcePreview:
+    budget: material_types.RemoteCallBudget,
+) -> material_types.SourcePreview:
     """Read exactly one current authorized source VID, never a historical URL.
 
     Caller revalidates tenant/BC/actor/connection/account authorization and
@@ -251,16 +196,13 @@ def read_source_preview(
         or any(not _dns_host(host) for host in allowed_hosts)
     ):
         raise DomainError("material_preview_unverified", "尚无已核实的素材预览域名策略")
-    timeout = budget.timeout(upload=False)
+    budget.timeout(upload=False)
     try:
-        data = checked_data(
-            FileApi(client).ad_video_info(
-                advertiser_id=advertiser_id,
-                video_ids=[video_id],
-                access_token=client.default_headers["Access-Token"],
-                _request_timeout=timeout,
-            )
+        response = _read_video_response(
+            client, advertiser_id=advertiser_id, video_id=video_id, budget=budget
         )
+        data = response.data
+        assert isinstance(data, dict)
     except SDK_SCOPE_INTERRUPTS:
         raise
     except ApiException, sdk_errors.TiktokSDKError, HTTPError:
@@ -269,6 +211,27 @@ def read_source_preview(
         raise
     except Exception:
         raise DomainError("material_response_unknown", "素材请求结果待核实") from None
+    return source_preview(
+        data,
+        advertiser_id=advertiser_id,
+        video_id=video_id,
+        allowed_hosts=allowed_hosts,
+        expected_md5=digest,
+        evidence=response.evidence,
+    )
+
+
+def source_preview(
+    data: dict[str, Any],
+    *,
+    advertiser_id: str,
+    video_id: str,
+    allowed_hosts: frozenset[str],
+    expected_md5: str | None = None,
+    evidence: CallEvidence = CallEvidence(),
+) -> material_types.SourcePreview:
+    if not allowed_hosts or any(not _dns_host(host) for host in allowed_hosts):
+        raise DomainError("material_preview_unverified", "尚无已核实的素材预览域名策略")
     rows = video_rows(data)
     if len(rows) != 1:
         raise _schema_error()
@@ -277,7 +240,11 @@ def read_source_preview(
         row.get("video_id") != video_id
         or row.get("displayable") is not True
         or not isinstance(row.get("signature"), str)
-        or row["signature"].lower() != digest
+        or not re.fullmatch(r"[0-9a-fA-F]{32}", row["signature"])
+        or (
+            expected_md5 is not None
+            and row["signature"].lower() != expected_md5.lower()
+        )
         or ("advertiser_id" in row and row["advertiser_id"] != advertiser_id)
         or ("material_id" in row and not _remote_identifier(row["material_id"]))
         or any(
@@ -293,22 +260,29 @@ def read_source_preview(
         raise _schema_error()
     if _https_host(row.get("preview_url")) not in allowed_hosts:
         raise DomainError("material_preview_unverified", "素材预览地址缺失或未经核实")
-    return SourcePreview(
+    return material_types.SourcePreview(
         advertiser_id=advertiser_id,
         video_id=video_id,
         mid=row.get("material_id"),
-        md5=digest,
+        md5=row["signature"].lower(),
         url=row["preview_url"],
         width=row["width"],
         height=row["height"],
         size=row["size"],
         duration=float(row["duration"]),
         format=row["format"],
+        evidence=evidence,
     )
 
 
 def upload_video(
-    client: Any, *, advertiser_id: str, local_path: str, remote_name: str, md5: str
+    client: Any,
+    *,
+    advertiser_id: str,
+    local_path: str,
+    remote_name: str,
+    md5: str,
+    budget: material_types.RemoteCallBudget | None = None,
 ) -> object:
     return FileApi(client).ad_video_upload(
         access_token=client.default_headers["Access-Token"],
@@ -319,7 +293,39 @@ def upload_video(
         video_signature=md5,
         auto_bind_enabled=False,
         auto_fix_enabled=False,
-        _request_timeout=(10, 300),
+        _request_timeout=budget.timeout(upload=True) if budget else (10, 300),
+    )
+
+
+def _response(response: object) -> McpBusinessResponse:
+    request_id = (
+        response.get("request_id")
+        if isinstance(response, dict)
+        else getattr(response, "request_id", None)
+    )
+    if type(request_id) is not str or not re.fullmatch(
+        r"[A-Za-z0-9_.:-]{1,128}", request_id
+    ):
+        request_id = None
+    return McpBusinessResponse(
+        checked_data(response), CallEvidence(request_id=request_id)
+    )
+
+
+def _read_video_response(
+    client: Any,
+    *,
+    advertiser_id: str,
+    video_id: str,
+    budget: material_types.RemoteCallBudget | None = None,
+) -> McpBusinessResponse:
+    return _response(
+        FileApi(client).ad_video_info(
+            advertiser_id=advertiser_id,
+            video_ids=[video_id],
+            access_token=client.default_headers["Access-Token"],
+            _request_timeout=budget.timeout(upload=False) if budget else (5, 30),
+        )
     )
 
 
@@ -328,14 +334,35 @@ def read_video(
     *,
     advertiser_id: str,
     video_id: str,
-    budget: RemoteCallBudget | None = None,
+    budget: material_types.RemoteCallBudget | None = None,
 ) -> dict[str, Any]:
-    return checked_data(
-        FileApi(client).ad_video_info(
+    # Task 3 迁移旧 raw 调用方后删除此入口；新 adapter 复用唯一的 SDK 传输原语。
+    response = _read_video_response(
+        client, advertiser_id=advertiser_id, video_id=video_id, budget=budget
+    )
+    assert isinstance(response.data, dict)
+    return response.data
+
+
+def _search_videos_response(
+    client: Any,
+    *,
+    advertiser_id: str,
+    page: int,
+    material_ids: list[str] | None = None,
+    budget: material_types.RemoteCallBudget | None = None,
+) -> McpBusinessResponse:
+    kwargs = {}
+    if material_ids:
+        kwargs["filtering"] = FilteringVideoAdSearch(material_ids=material_ids)
+    return _response(
+        FileApi(client).ad_video_search(
             advertiser_id=advertiser_id,
-            video_ids=[video_id],
             access_token=client.default_headers["Access-Token"],
+            page=page,
+            page_size=PAGE_SIZE,
             _request_timeout=budget.timeout(upload=False) if budget else (5, 30),
+            **kwargs,
         )
     )
 
@@ -346,21 +373,17 @@ def search_videos(
     advertiser_id: str,
     page: int,
     material_ids: list[str] | None = None,
-    budget: RemoteCallBudget | None = None,
+    budget: material_types.RemoteCallBudget | None = None,
 ) -> dict[str, Any]:
-    kwargs = {}
-    if material_ids:
-        kwargs["filtering"] = FilteringVideoAdSearch(material_ids=material_ids)
-    return checked_data(
-        FileApi(client).ad_video_search(
-            advertiser_id=advertiser_id,
-            access_token=client.default_headers["Access-Token"],
-            page=page,
-            page_size=PAGE_SIZE,
-            _request_timeout=budget.timeout(upload=False) if budget else (5, 30),
-            **kwargs,
-        )
+    response = _search_videos_response(
+        client,
+        advertiser_id=advertiser_id,
+        page=page,
+        material_ids=material_ids,
+        budget=budget,
     )
+    assert isinstance(response.data, dict)
+    return response.data
 
 
 def _schema_error() -> DomainError:
@@ -500,3 +523,406 @@ def share_video(
             _request_timeout=(5, 30),
         )
     )
+
+
+def video_identity(
+    record: material_types.VideoRecord | None,
+    *,
+    advertiser_id: str,
+    video_id: str,
+    md5: str,
+    expected_size: int,
+) -> dict[str, str] | None:
+    """发布只采用同账户详情的实际摘要，不用请求摘要填补缺失的远端事实。"""
+    if record is None or (record.advertiser_id, record.video_id) != (
+        advertiser_id,
+        video_id,
+    ):
+        return None
+    from dataclasses import asdict
+
+    row = asdict(record)
+    row["signature"], row["material_id"] = row.pop("md5"), row.pop("mid")
+    return verified_video(
+        {"list": [row]},
+        md5=md5,
+        expected_video_id=video_id,
+        expected_size=expected_size,
+    )
+
+
+def _record_fields(
+    row: dict[str, Any], *, advertiser_id: str, identity_key: str
+) -> None:
+    if not _remote_identifier(row.get(identity_key)) or (
+        "advertiser_id" in row and row["advertiser_id"] != advertiser_id
+    ):
+        raise _schema_error()
+    for name in ("width", "height", "size"):
+        if row.get(name) is not None and (type(row[name]) is not int or row[name] <= 0):
+            raise _schema_error()
+    if row.get("duration") is not None and not _positive_duration(row["duration"]):
+        raise _schema_error()
+    for name in ("file_name", "format"):
+        if row.get(name) is not None and type(row[name]) is not str:
+            raise _schema_error()
+    if row.get("displayable") is not None and type(row["displayable"]) is not bool:
+        raise _schema_error()
+    if row.get("signature") is not None and (
+        type(row["signature"]) is not str
+        or not re.fullmatch(r"[0-9a-fA-F]{32}", row["signature"])
+    ):
+        raise _schema_error()
+    if row.get("material_id") is not None and not _remote_identifier(
+        row["material_id"]
+    ):
+        raise _schema_error()
+
+
+def video_record(
+    row: dict[str, Any], *, advertiser_id: str, evidence: CallEvidence
+) -> material_types.VideoRecord:
+    _record_fields(row, advertiser_id=advertiser_id, identity_key="video_id")
+    return material_types.VideoRecord(
+        advertiser_id,
+        row["video_id"],
+        row.get("material_id"),
+        row["signature"].lower() if row.get("signature") is not None else None,
+        row.get("file_name"),
+        row.get("width"),
+        row.get("height"),
+        row.get("size"),
+        float(row["duration"]) if row.get("duration") is not None else None,
+        row.get("format"),
+        row.get("displayable"),
+        evidence,
+    )
+
+
+def image_record(
+    row: dict[str, Any], *, advertiser_id: str, evidence: CallEvidence
+) -> material_types.ImageRecord:
+    _record_fields(row, advertiser_id=advertiser_id, identity_key="image_id")
+    return material_types.ImageRecord(
+        advertiser_id,
+        row["image_id"],
+        row["signature"].lower() if row.get("signature") is not None else None,
+        row.get("file_name"),
+        row.get("width"),
+        row.get("height"),
+        row.get("displayable"),
+        evidence,
+    )
+
+
+class MaterialReadAdapter:
+    """通道共用纯业务解析；_call 由实际 SDK/MCP 适配器提供，不持有数据库或令牌。"""
+
+    def __init__(self, *, preview_allowed_hosts: frozenset[str]):
+        self._preview_allowed_hosts = preview_allowed_hosts
+        self._searches: dict[
+            tuple[str, str, tuple[str, ...]], tuple[int, set[str], int, int | None]
+        ] = {}
+
+    def _call(
+        self,
+        operation: str,
+        advertiser_id: str,
+        arguments: dict[str, Any],
+        budget: material_types.RemoteCallBudget,
+    ) -> McpBusinessResponse:
+        raise NotImplementedError
+
+    def _read(
+        self,
+        operation: str,
+        advertiser_id: str,
+        arguments: dict[str, Any],
+        budget: material_types.RemoteCallBudget,
+    ) -> McpBusinessResponse:
+        if not _remote_identifier(advertiser_id):
+            raise _remote_request_error()
+        budget.timeout(upload=False)
+        response = self._call(
+            operation,
+            advertiser_id,
+            {"advertiser_id": advertiser_id, **arguments},
+            budget,
+        )
+        if type(response.data) is not dict:
+            raise _schema_error()
+        return response
+
+    def _video_response(
+        self,
+        *,
+        advertiser_id: str,
+        video_id: str,
+        budget: material_types.RemoteCallBudget,
+    ) -> McpBusinessResponse:
+        if not _remote_identifier(video_id):
+            raise _remote_request_error()
+        return self._read(
+            "materials.get_videos", advertiser_id, {"video_ids": [video_id]}, budget
+        )
+
+    def read_video(
+        self,
+        *,
+        advertiser_id: str,
+        video_id: str,
+        budget: material_types.RemoteCallBudget,
+    ) -> material_types.VideoRecord | None:
+        response = self._video_response(
+            advertiser_id=advertiser_id, video_id=video_id, budget=budget
+        )
+        assert isinstance(response.data, dict)
+        rows = video_rows(response.data)
+        if not rows:
+            return None
+        if len(rows) != 1 or rows[0].get("video_id") != video_id:
+            raise _schema_error()
+        return video_record(
+            rows[0], advertiser_id=advertiser_id, evidence=response.evidence
+        )
+
+    def read_source_preview(
+        self,
+        *,
+        advertiser_id: str,
+        video_id: str,
+        budget: material_types.RemoteCallBudget,
+    ) -> material_types.SourcePreview:
+        if not self._preview_allowed_hosts or any(
+            not _dns_host(host) for host in self._preview_allowed_hosts
+        ):
+            raise DomainError(
+                "material_preview_unverified", "尚无已核实的素材预览域名策略"
+            )
+        response = self._video_response(
+            advertiser_id=advertiser_id, video_id=video_id, budget=budget
+        )
+        assert isinstance(response.data, dict)
+        return source_preview(
+            response.data,
+            advertiser_id=advertiser_id,
+            video_id=video_id,
+            allowed_hosts=self._preview_allowed_hosts,
+            evidence=response.evidence,
+        )
+
+    def _page(
+        self,
+        response: McpBusinessResponse,
+        *,
+        advertiser_id: str,
+        page: int,
+        images: bool,
+        material_ids: tuple[str, ...] = (),
+    ) -> material_types.MaterialPage[Any]:
+        from app.modules.materials.cover_sdk import image_search_page
+
+        assert isinstance(response.data, dict)
+        rows: tuple[material_types.VideoRecord | material_types.ImageRecord, ...]
+        if images:
+            # 旧列表投影会丢弃未知字段；先核对任何显式账户归属，再做允许字段投影。
+            for item in video_rows(response.data):
+                _record_fields(
+                    item, advertiser_id=advertiser_id, identity_key="image_id"
+                )
+            raw, _, total = image_search_page(response.data, page=page)
+            rows = tuple(
+                image_record(
+                    row, advertiser_id=advertiser_id, evidence=response.evidence
+                )
+                for row in raw
+            )
+        else:
+            try:
+                raw, _ = paged_rows(response.data, page=page, page_size=PAGE_SIZE)
+            except DomainError:
+                raise _schema_error() from None
+            total = response.data["page_info"].get("total_number")
+            rows = tuple(
+                video_record(
+                    row, advertiser_id=advertiser_id, evidence=response.evidence
+                )
+                for row in raw
+            )
+        try:
+            result = material_types.MaterialPage(
+                rows,
+                page,
+                PAGE_SIZE,
+                response.data["page_info"]["total_page"],
+                total,
+                response.evidence,
+            )
+        except TypeError, ValueError, KeyError:
+            raise _schema_error() from None
+        ids = {
+            row.image_id
+            if isinstance(row, material_types.ImageRecord)
+            else row.video_id
+            for row in rows
+        }
+        if len(ids) != len(rows):
+            raise _schema_error()
+        key = ("images" if images else "videos", advertiser_id, material_ids)
+        previous = self._searches.get(key)
+        if page != 1 and previous is not None:
+            previous_page, seen, pages, count = previous
+            if (
+                page != previous_page + 1
+                or seen & ids
+                or (pages, count) != (result.total_pages, result.total_number)
+            ):
+                raise _schema_error()
+            ids = seen | ids
+        self._searches[key] = (page, ids, result.total_pages, result.total_number)
+        return result
+
+    def search_videos(
+        self,
+        *,
+        advertiser_id: str,
+        page: int,
+        material_ids: tuple[str, ...],
+        budget: material_types.RemoteCallBudget,
+    ) -> material_types.MaterialPage[material_types.VideoRecord]:
+        if (
+            type(page) is not int
+            or not 1 <= page <= 1000
+            or type(material_ids) is not tuple
+            or len(material_ids) > 100
+            or any(not _remote_identifier(value) for value in material_ids)
+        ):
+            raise _remote_request_error()
+        args: dict[str, Any] = {"page": page, "page_size": PAGE_SIZE}
+        if material_ids:
+            args["filtering"] = {"material_ids": list(material_ids)}
+        response = self._read("materials.search_videos", advertiser_id, args, budget)
+        return self._page(
+            response,
+            advertiser_id=advertiser_id,
+            page=page,
+            images=False,
+            material_ids=material_ids,
+        )
+
+    def read_video_cover(
+        self,
+        *,
+        advertiser_id: str,
+        video_id: str,
+        md5: str,
+        budget: material_types.RemoteCallBudget,
+    ) -> material_types.VideoCover:
+        from app.modules.materials.cover_sdk import _dimension, _error, _url
+
+        response = self._video_response(
+            advertiser_id=advertiser_id, video_id=video_id, budget=budget
+        )
+        assert isinstance(response.data, dict)
+        rows = video_rows(response.data)
+        if len(rows) != 1:
+            raise _error()
+        row = rows[0]
+        _record_fields(row, advertiser_id=advertiser_id, identity_key="video_id")
+        normalized = {
+            **row,
+            "signature": row["signature"].lower()
+            if row.get("signature") is not None
+            else None,
+        }
+        record = verified_video(
+            {"list": [normalized]}, md5=_trusted_md5(md5), expected_video_id=video_id
+        )
+        if record is None:
+            raise _error()
+        if not _dimension(row.get("width")) or not _dimension(row.get("height")):
+            raise _error()
+        return material_types.VideoCover(
+            _url(row.get("video_cover_url")),
+            row["width"],
+            row["height"],
+            response.evidence,
+        )
+
+    def suggest_cover(
+        self,
+        *,
+        advertiser_id: str,
+        video_id: str,
+        width: int,
+        height: int,
+        budget: material_types.RemoteCallBudget,
+    ) -> material_types.VideoCover | None:
+        from app.modules.materials.cover_sdk import _dimension, _error, _url
+
+        if (
+            not _remote_identifier(video_id)
+            or not _dimension(width)
+            or not _dimension(height)
+        ):
+            raise _remote_request_error()
+        response = self._read(
+            "materials.get_suggested_covers",
+            advertiser_id,
+            {"video_id": video_id, "poster_number": 10},
+            budget,
+        )
+        assert isinstance(response.data, dict)
+        rows = response.data.get("list")
+        if (
+            type(rows) is not list
+            or len(rows) > 10
+            or any(type(row) is not dict for row in rows)
+        ):
+            raise _error()
+        for row in rows:
+            if (
+                _dimension(row.get("width"))
+                and _dimension(row.get("height"))
+                and row["width"] * height == row["height"] * width
+            ):
+                if url := _url(row.get("url")):
+                    return material_types.VideoCover(
+                        url, row["width"], row["height"], response.evidence
+                    )
+        return None
+
+    def read_image(
+        self,
+        *,
+        advertiser_id: str,
+        image_id: str,
+        budget: material_types.RemoteCallBudget,
+    ) -> material_types.ImageRecord | None:
+        if not _remote_identifier(image_id):
+            raise _remote_request_error()
+        response = self._read(
+            "materials.get_images", advertiser_id, {"image_ids": [image_id]}, budget
+        )
+        assert isinstance(response.data, dict)
+        rows = video_rows(response.data)
+        if not rows:
+            return None
+        if len(rows) != 1 or rows[0].get("image_id") != image_id:
+            raise _schema_error()
+        return image_record(
+            rows[0], advertiser_id=advertiser_id, evidence=response.evidence
+        )
+
+    def search_images(
+        self, *, advertiser_id: str, page: int, budget: material_types.RemoteCallBudget
+    ) -> material_types.MaterialPage[material_types.ImageRecord]:
+        if type(page) is not int or not 1 <= page <= 100:
+            raise _remote_request_error()
+        response = self._read(
+            "materials.search_images",
+            advertiser_id,
+            {"page": page, "page_size": PAGE_SIZE},
+            budget,
+        )
+        return self._page(response, advertiser_id=advertiser_id, page=page, images=True)

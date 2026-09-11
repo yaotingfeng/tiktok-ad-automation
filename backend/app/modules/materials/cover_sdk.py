@@ -7,7 +7,6 @@ therefore uses the same pinned official ApiClient generic entrypoint.
 
 import json
 import re
-from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -15,10 +14,11 @@ from business_api_client.api.file_api import FileApi  # type: ignore[import-unty
 
 from app.core.credentials import decrypt_credentials
 from app.core.errors import DomainError
-from app.integrations.tiktok.sdk import checked_data
+from app.integrations.tiktok.contracts import materials as material_types
+from app.integrations.tiktok.contracts.common import McpBusinessResponse
 from app.modules.accounts.models import TikTokConnection
 from app.modules.materials.sdk_assets import INFO_ENDPOINT as VIDEO_INFO_ENDPOINT
-from app.modules.materials.sdk_assets import read_video, verified_video
+from app.modules.materials.sdk_assets import _response, read_video, verified_video
 
 UPLOAD_ENDPOINT = "/open_api/v1.3/file/image/ad/upload/"
 INFO_ENDPOINT = "/open_api/v1.3/file/image/ad/info/"
@@ -33,19 +33,6 @@ _SCOPE_PARENTS = {
     INFO_ENDPOINT: {6, 60, 600},
     SEARCH_ENDPOINT: {6, 60, 600},
 }
-
-
-@dataclass(frozen=True)
-class VideoCover:
-    url: str | None = field(repr=False)
-    width: int
-    height: int
-
-
-@dataclass(frozen=True)
-class ImageReceipt:
-    image_id: str
-    signature: str | None
 
 
 def _error() -> DomainError:
@@ -118,13 +105,14 @@ def require_cover_scopes(connection: TikTokConnection, *, endpoint: str) -> None
         ) from None
 
 
-def _call(
+def _call_response(
     client: Any,
     path: str,
     *,
     body: dict[str, Any] | None = None,
     query: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+    budget: material_types.RemoteCallBudget | None = None,
+) -> McpBusinessResponse:
     method = "POST" if body is not None else "GET"
     headers = {
         "Access-Token": client.default_headers.get("Access-Token", ""),
@@ -143,14 +131,29 @@ def _call(
         auth_settings=[],
         _return_http_data_only=True,
         async_req=True,
-        _request_timeout=(5, 10 if body is not None else 30),
+        _request_timeout=budget.timeout(upload=body is not None)
+        if budget
+        else (5, 10 if body is not None else 30),
     )
-    return checked_data(future.get())
+    return _response(future.get())
+
+
+def _call(
+    client: Any,
+    path: str,
+    *,
+    body: dict[str, Any] | None = None,
+    query: dict[str, Any] | None = None,
+    budget: material_types.RemoteCallBudget | None = None,
+) -> dict[str, Any]:
+    response = _call_response(client, path, body=body, query=query, budget=budget)
+    assert isinstance(response.data, dict)
+    return response.data
 
 
 def read_video_cover(
     client: Any, *, advertiser_id: str, video_id: str, md5: str
-) -> VideoCover:
+) -> material_types.VideoCover:
     data = read_video(client, advertiser_id=advertiser_id, video_id=video_id)
     evidence = verified_video(data, md5=md5)
     if evidence is None or evidence["video_id"] != video_id:
@@ -158,7 +161,9 @@ def read_video_cover(
     row = data["list"][0]
     if not _dimension(row.get("width")) or not _dimension(row.get("height")):
         raise _error()
-    return VideoCover(_url(row.get("video_cover_url")), row["width"], row["height"])
+    return material_types.VideoCover(
+        _url(row.get("video_cover_url")), row["width"], row["height"]
+    )
 
 
 def suggest_cover(
@@ -193,7 +198,7 @@ def suggest_cover(
 
 def upload_cover(
     client: Any, *, advertiser_id: str, url: str, remote_name: str
-) -> ImageReceipt:
+) -> material_types.ImageReceipt:
     if (
         not _url(url)
         or not isinstance(remote_name, str)
@@ -215,18 +220,32 @@ def upload_cover(
     if identity is None:
         raise _error()
     # Optional malformed or missing metadata must not erase a received image ID.
-    return ImageReceipt(identity, _signature(data.get("signature")))
+    return material_types.ImageReceipt(identity, _signature(data.get("signature")))
 
 
-def read_image(client: Any, *, advertiser_id: str, image_id: str) -> dict[str, Any]:
-    return checked_data(
+def _read_image_response(
+    client: Any,
+    *,
+    advertiser_id: str,
+    image_id: str,
+    budget: material_types.RemoteCallBudget | None = None,
+) -> McpBusinessResponse:
+    return _response(
         FileApi(client).file_image_ad_info(
             advertiser_id=advertiser_id,
             image_ids=[image_id],
             access_token=client.default_headers.get("Access-Token", ""),
-            _request_timeout=(5, 30),
+            _request_timeout=budget.timeout(upload=False) if budget else (5, 30),
         )
     )
+
+
+def read_image(client: Any, *, advertiser_id: str, image_id: str) -> dict[str, Any]:
+    response = _read_image_response(
+        client, advertiser_id=advertiser_id, image_id=image_id
+    )
+    assert isinstance(response.data, dict)
+    return response.data
 
 
 def search_images(client: Any, *, advertiser_id: str, page: int) -> dict[str, Any]:

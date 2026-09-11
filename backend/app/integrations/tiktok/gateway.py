@@ -15,6 +15,8 @@ from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.credentials import decrypt_credentials
 from app.core.errors import DomainError
+from app.integrations.tiktok.adapters.mcp_materials import MCPMaterialOperations
+from app.integrations.tiktok.adapters.sdk_materials import SDKMaterialOperations
 from app.integrations.tiktok.admission import (
     PROTOCOL_OPERATIONS,
     admit_tiktok_call,
@@ -27,6 +29,7 @@ from app.integrations.tiktok.contracts.accounts import (
     RuntimeReadContext,
 )
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
+from app.integrations.tiktok.contracts.materials import MaterialOperations
 from app.integrations.tiktok.contracts.scenes import ScenesGateway
 from app.integrations.tiktok.mcp.accounts import McpAccountsGateway
 from app.integrations.tiktok.mcp.protocol import load_mcp_protocol, load_tool_contracts
@@ -58,6 +61,11 @@ _OPERATION_CAPABILITIES: dict[str, Capability] = {
     "scene.recommend_ctas": "read",
     "scene.list_regions": "read",
     "scene.check_vbo": "read",
+    "materials.get_videos": "read",
+    "materials.search_videos": "read",
+    "materials.get_suggested_covers": "read",
+    "materials.get_images": "read",
+    "materials.search_images": "read",
 }
 _DIRECTORY_OPERATIONS = frozenset(
     operation
@@ -70,6 +78,7 @@ _DIRECTORY_OPERATIONS = frozenset(
 class TikTokGateway:
     accounts: AccountsGateway
     scenes: ScenesGateway
+    materials: MaterialOperations
 
 
 def _capability(advertiser_id: str | None, operation: str) -> Capability:
@@ -307,6 +316,9 @@ def open_tiktok_gateway(
                         client, context=read_context, authorization=facts
                     ),
                     scenes=McpScenesGateway(client, context=read_context),
+                    materials=MCPMaterialOperations(
+                        client, preview_allowed_hosts=settings.MATERIAL_REMOTE_MEDIA_HOSTS,
+                    ),
                 )
         else:
             with official_client(access_token=token) as official:
@@ -319,6 +331,10 @@ def open_tiktok_gateway(
                         secret=settings.TIKTOK_APP_SECRET,
                         request_scope=request_scope,
                         deadline=task_deadline,
+                    ),
+                    materials=SDKMaterialOperations(
+                        official, request_scope=request_scope, deadline=task_deadline,
+                        preview_allowed_hosts=settings.MATERIAL_REMOTE_MEDIA_HOSTS,
                     ),
                     scenes=OfficialScenesGateway(
                         official,

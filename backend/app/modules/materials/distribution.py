@@ -11,6 +11,7 @@ from sqlmodel import Session, col, select
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
+from app.integrations.tiktok.contracts import materials as material_types
 from app.integrations.tiktok.sdk import SDK_SCOPE_INTERRUPTS, sdk_client
 from app.jobs.admission import admission_policy
 from app.jobs.models import PendingDispatch
@@ -478,7 +479,7 @@ def _send_relay(
         extend_lease=True,
     )
     policy = admission_policy(api.UPLOAD_ENDPOINT)
-    budget = api.RemoteCallBudget(
+    budget = material_types.RemoteCallBudget(
         deadline=deadline, hard_limit_seconds=hard, lease_ms=policy.lease_ms
     )
     with api.admitted_asset_call(
@@ -928,7 +929,7 @@ def run_distribution(
                                         client,
                                         advertiser_id=work["advertiser_id"],
                                         video_id=work["video_id"],
-                                        budget=api.RemoteCallBudget(
+                                        budget=material_types.RemoteCallBudget(
                                             deadline=deadline,
                                             hard_limit_seconds=hard,
                                             lease_ms=policy.lease_ms,
@@ -947,7 +948,7 @@ def run_distribution(
                                     client,
                                     advertiser_id=work["advertiser_id"],
                                     page=work.get("search_page", 1),
-                                    budget=api.RemoteCallBudget(
+                                    budget=material_types.RemoteCallBudget(
                                         deadline=deadline,
                                         hard_limit_seconds=hard,
                                         lease_ms=policy.lease_ms,
