@@ -9,7 +9,7 @@ ARGS = {
     "provider_pinyin": "jiashu",
     "external_drama_id": "106001",
     "date_text": "20260908",
-    "batch_short_id": "123456789012",
+    "batch_short_id": "A7K2",
     "group_no": 1,
     "creative_no": 2,
     "max_length": 200,
@@ -19,13 +19,13 @@ ARGS = {
 def test_protected_attribution_is_not_interpreted_as_a_template():
     names = render_names(**ARGS, suffix="-{YYYYMMDD}-{batch_short_id}")
     assert names == (
-        "{b30008/s328302/c3}-The Bond-20260908-123456789012",
-        "{b30008/s328302/c3}-The Bond-20260908-123456789012-g01",
-        "{b30008/s328302/c3}-The Bond-20260908-123456789012-g01-sp2",
+        "{b30008/s328302/c3}-The Bond-20260908-A7K2",
+        "{b30008/s328302/c3}-The Bond-20260908-A7K2-g01",
+        "{b30008/s328302/c3}-The Bond-20260908-A7K2-g01-sp2",
     )
     assert (
         render_names(**{**ARGS, "protected_base": ""}, suffix="-{batch_short_id}")[0]
-        == "jiashu-The Bond-106001-123456789012"
+        == "jiashu-The Bond-106001-A7K2"
     )
 
 
@@ -76,11 +76,11 @@ def test_custom_default_template_and_inserted_values_are_literal():
         suffix="-{batch_short_id}",
         template="{YYYYMMDD}-{{literal}}-{drama_id}-{provider_pinyin}-{drama_name}-{random}",
     )
-    assert names[0] == "20260908-{literal}-106001-jiashu-A {random} Story-123456789012"
+    assert names[0] == "20260908-{literal}-106001-jiashu-A {random} Story-A7K2"
     assert names[2] == names[0] + "-g01-sp2"
 
 
 def test_protected_provider_rule_takes_priority_over_default_template():
     assert render_names(
         **ARGS, suffix="-{batch_short_id}", template="{drama_id}-{random}"
-    )[0] == ("{b30008/s328302/c3}-The Bond-123456789012")
+    )[0] == ("{b30008/s328302/c3}-The Bond-A7K2")

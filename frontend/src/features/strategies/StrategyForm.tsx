@@ -682,7 +682,7 @@ export function StrategyForm({
                   "campaign_name_template",
                   nameTemplate,
                   setNameTemplate,
-                  "必须保留剧目 ID 和随机号。剧目 ID 为版权方的剧目 ID，随机号为系统分配的 12 位数字。",
+                  "必须保留剧目 ID 和随机号。剧目 ID 为版权方的剧目 ID，随机号为系统分配的 4 位数字与大写字母组合。",
                 )}
                 {!readonly && (
                   <div className="flex flex-wrap gap-2">
@@ -715,7 +715,7 @@ export function StrategyForm({
                   "campaign_suffix",
                   suffix,
                   setSuffix,
-                  "仅用于网眼等专用归因基础名，必须包含批次号变量（同一 12 位随机号）。广告组和广告分别追加 -g01、-sp1 等编号。",
+                  "仅用于网眼等专用归因基础名，必须包含批次号变量（同一 4 位随机短码）。广告组和广告分别追加 -g01、-sp1 等编号。",
                 )}
                 {!readonly && (
                   <div className="flex flex-wrap gap-2">

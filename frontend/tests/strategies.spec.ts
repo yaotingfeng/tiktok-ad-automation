@@ -820,9 +820,9 @@ test("专用规则修改后缀且三级同步；转义括号不冒充批次变�
   await expect(
     naming.getByRole("region", { name: "网眼 · 专用规则" }).locator("dd"),
   ).toHaveText([
-    "{b30008/s328302/c3}-The Bond-后缀-123456789012",
-    "{b30008/s328302/c3}-The Bond-后缀-123456789012-g01",
-    "{b30008/s328302/c3}-The Bond-后缀-123456789012-g01-sp1",
+    "{b30008/s328302/c3}-The Bond-后缀-A7K2",
+    "{b30008/s328302/c3}-The Bond-后缀-A7K2-g01",
+    "{b30008/s328302/c3}-The Bond-后缀-A7K2-g01-sp1",
   ])
   await expect(page.getByLabel("版权方归因基础名")).toHaveCount(0)
   await page
@@ -1201,7 +1201,7 @@ test("默认命名模板可选变量、校验必填标识并保存为新版本",
   await expect(template).toHaveValue(config.campaign_name_template)
   const generic = page.getByRole("region", { name: "嘉书 · 默认规则" })
   await expect(generic.locator("dd").first()).toHaveText(
-    "jiashu-The Bond-106001-123456789012",
+    "jiashu-The Bond-106001-A7K2",
   )
   await template.fill("{drama_id}-{{random}}")
   await expect(template).toHaveAttribute("aria-invalid", "true")
@@ -1218,13 +1218,13 @@ test("默认命名模板可选变量、校验必填标识并保存为新版本",
   const custom = "{drama_id}-{random}-{provider_pinyin}-{drama_name}"
   await expect(template).toHaveValue(custom)
   await expect(generic.locator("dd")).toHaveText([
-    "106001-123456789012-jiashu-The Bond",
-    "106001-123456789012-jiashu-The Bond-g01",
-    "106001-123456789012-jiashu-The Bond-g01-sp1",
+    "106001-A7K2-jiashu-The Bond",
+    "106001-A7K2-jiashu-The Bond-g01",
+    "106001-A7K2-jiashu-The Bond-g01-sp1",
   ])
   await expect(
     page.getByRole("region", { name: "网眼 · 专用规则" }).locator("dd").first(),
-  ).toHaveText("{b30008/s328302/c3}-The Bond-20260908-123456789012")
+  ).toHaveText("{b30008/s328302/c3}-The Bond-20260908-A7K2")
   await page.getByRole("button", { name: "保存为新版本", exact: true }).click()
   await expect
     .poll(

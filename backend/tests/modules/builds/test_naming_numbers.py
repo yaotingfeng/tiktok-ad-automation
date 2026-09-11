@@ -38,38 +38,38 @@ def test_colliding_numbers_retry_without_losing_outer_transaction(
     session, context, intent, monkeypatch
 ):
     draft_id = create_draft(session, context=context, **intent)
-    numbers = iter(["123456789012", "123456789012", "123456789013"])
+    numbers = iter(["A7K2", "A7K2", "A7K3"])
     monkeypatch.setattr(batch_numbers, "random_batch_number", lambda: next(numbers))
     first = preview_row(context, intent, draft_id)
     second = preview_row(context, intent, draft_id, revision=2)
     batch_numbers.insert_preview_with_number(session, first)
     batch_numbers.insert_preview_with_number(session, second)
-    assert first.batch_short_id == "123456789012"
-    assert second.batch_short_id == "123456789013"
+    assert first.batch_short_id == "A7K2"
+    assert second.batch_short_id == "A7K3"
     assert session.get(BuildPreview, first.id) is first
 
     # 重试耗尽必须明确失败，不能退回 UUID 或接受重复号码。
-    monkeypatch.setattr(batch_numbers, "random_batch_number", lambda: "123456789012")
+    monkeypatch.setattr(batch_numbers, "random_batch_number", lambda: "A7K2")
     with pytest.raises(DomainError) as error:
         batch_numbers.insert_preview_with_number(
             session, preview_row(context, intent, draft_id, 3)
         )
     assert error.value.code == "preview_batch_number_exhausted"
     assert session.get(BuildPreview, second.id) is second
-    monkeypatch.setattr(batch_numbers, "random_batch_number", lambda: "123456789014")
+    monkeypatch.setattr(batch_numbers, "random_batch_number", lambda: "A7K4")
     third = preview_row(context, intent, draft_id, 3)
     batch_numbers.insert_preview_with_number(session, third)
     assert (
         session.exec(select(BuildPreview).where(BuildPreview.id == third.id))
         .one()
         .batch_short_id
-        == "123456789014"
+        == "A7K4"
     )
 
 
 def test_other_integrity_errors_are_not_hidden(session, context, intent, monkeypatch):
     draft_id = create_draft(session, context=context, **intent)
-    monkeypatch.setattr(batch_numbers, "random_batch_number", lambda: "123456789012")
+    monkeypatch.setattr(batch_numbers, "random_batch_number", lambda: "A7K2")
     row = preview_row(context, intent, draft_id)
     row.strategy_version_id = uuid4()
     with pytest.raises(IntegrityError):
@@ -89,7 +89,7 @@ def test_concurrent_number_collisions_commit_distinct_numbers(
 
     def number():
         state.calls += 1
-        return "123456789012" if state.calls == 1 else f"12345678901{state.index + 3}"
+        return "A7K2" if state.calls == 1 else f"A7K{state.index + 3}"
 
     monkeypatch.setattr(batch_numbers, "random_batch_number", number)
 
@@ -130,7 +130,8 @@ def test_default_names_snapshot_provider_ids_and_reuse_number(
             break
     else:
         raise AssertionError("snapshot never finished")
-    assert len(row.batch_short_id) == 12 and row.batch_short_id.isdecimal()
+    assert len(row.batch_short_id) == 4
+    assert set(row.batch_short_id) <= set("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ")
     originals = session.exec(
         select(PreviewDrama).where(PreviewDrama.preview_id == identity)
     ).all()
@@ -164,13 +165,46 @@ def test_default_names_snapshot_provider_ids_and_reuse_number(
         assert str(unit.drama_id) not in frozen.campaign_name
 
 
-def test_old_unfinished_preview_requires_rebuild(session, context, prepared):
+@pytest.mark.parametrize("old_number", ["123456789012", "a" * 32])
+def test_old_unfinished_preview_requires_rebuild(
+    session, context, prepared, old_number
+):
     identity = previews.generate_preview(
         session, context=context, draft_id=prepared, expected_revision=1
     )
     row = session.get(BuildPreview, identity)
-    row.batch_short_id = uuid4().hex
+    row.batch_short_id = old_number
     session.add(row)
     session.flush()
     assert previews.continue_preview(session, context=context, preview_id=identity)
     assert row.status == "FAILED" and row.error_code == "preview_naming_outdated"
+
+
+@pytest.mark.parametrize(
+    "value,valid",
+    [
+        ("A7K2", True),
+        ("0000", True),
+        ("ZZZZ", True),
+        ("1234", True),
+        ("a7k2", False),
+        ("Ａ7K2", False),
+        ("A7K", False),
+        ("A7K22", False),
+        ("A7_2", False),
+        ("123456789012", False),
+    ],
+)
+def test_short_number_accepts_only_four_uppercase_ascii_characters(value, valid):
+    assert batch_numbers.is_current_batch_number(value) is valid
+
+
+def test_random_short_number_uses_all_digits_and_uppercase_letters(monkeypatch):
+    values = iter("A7K2")
+
+    def choose(alphabet):
+        assert alphabet == "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        return next(values)
+
+    monkeypatch.setattr(batch_numbers.secrets, "choice", choose)
+    assert batch_numbers.random_batch_number() == "A7K2"

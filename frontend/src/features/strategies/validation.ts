@@ -62,7 +62,7 @@ export function renderDefaultName(value: string) {
     "{provider_pinyin}": "jiashu",
     "{drama_name}": "The Bond",
     "{drama_id}": "106001",
-    "{random}": "123456789012",
+    "{random}": "A7K2",
     "{YYYYMMDD}": "20260908",
   }
   return value.replace(/\{\{|\}\}|\{[^{}]+\}/g, (token) => values[token]!)
@@ -76,7 +76,7 @@ export function renderSuffix(value: string) {
         "{{": "{",
         "}}": "}",
         "{YYYYMMDD}": "20260908",
-        "{batch_short_id}": "123456789012",
+        "{batch_short_id}": "A7K2",
       })[token]!,
   )
 }

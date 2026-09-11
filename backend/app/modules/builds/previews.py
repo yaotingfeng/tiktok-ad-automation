@@ -1,6 +1,5 @@
 import hashlib
 import json
-import re
 from collections.abc import Callable, Iterable, Iterator
 from datetime import UTC, datetime
 from random import Random
@@ -16,7 +15,10 @@ from app.core.errors import DomainError
 from app.core.pagination import Page
 from app.modules.accounts.access import resolve_account_access
 from app.modules.accounts.resolver import decode_cursor, encode_cursor
-from app.modules.builds.batch_numbers import insert_preview_with_number
+from app.modules.builds.batch_numbers import (
+    insert_preview_with_number,
+    is_current_batch_number,
+)
 from app.modules.builds.drafts import get_draft
 from app.modules.builds.models import (
     DraftAccount,
@@ -687,7 +689,7 @@ def continue_preview(
     preview = _preview(session, context, preview_id, lock=True)
     if preview.status != "BUILDING":
         return True
-    if not re.fullmatch(r"[0-9]{12}", preview.batch_short_id):
+    if not is_current_batch_number(preview.batch_short_id):
         # 旧版未冻结预览不可混用新规则；冻结及已提交名称继续读取原记录。
         preview.status = "FAILED"
         preview.error_code = "preview_naming_outdated"

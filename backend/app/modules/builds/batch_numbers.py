@@ -8,12 +8,22 @@ from sqlmodel import Session
 from app.core.errors import DomainError
 from app.modules.builds.preview_models import BuildPreview
 
-BATCH_NUMBER_DIGITS = 12
+BATCH_NUMBER_LENGTH = 4
+BATCH_NUMBER_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 BATCH_NUMBER_ATTEMPTS = 10
 
 
 def random_batch_number() -> str:
-    return f"{secrets.randbelow(10**BATCH_NUMBER_DIGITS):0{BATCH_NUMBER_DIGITS}d}"
+    # 4 位大写字母/数字共 36**4 种组合，唯一性仍由数据库裁决。
+    return "".join(
+        secrets.choice(BATCH_NUMBER_ALPHABET) for _ in range(BATCH_NUMBER_LENGTH)
+    )
+
+
+def is_current_batch_number(value: str) -> bool:
+    return len(value) == BATCH_NUMBER_LENGTH and all(
+        char in BATCH_NUMBER_ALPHABET for char in value
+    )
 
 
 def insert_preview_with_number(session: Session, row: BuildPreview) -> None:
