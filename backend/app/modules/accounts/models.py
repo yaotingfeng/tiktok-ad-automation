@@ -19,6 +19,8 @@ from app.integrations.tiktok.contracts.context import ChannelKind
 # discovery 的 MCP 复合外键在普通应用进程也需注册，不能依赖 Alembic 导入。
 from app.modules.accounts import connection_models as connection_models
 
+OPERABLE_REMOTE_STATUSES = frozenset({"STATUS_ENABLE", "ENABLE"})
+
 
 class TikTokConnection(SQLModel, table=True):
     __tablename__ = "tiktok_connection"

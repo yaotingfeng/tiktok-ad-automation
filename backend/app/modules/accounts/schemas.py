@@ -107,6 +107,11 @@ class ConnectionUpdate(BaseModel):
     status: Literal["DISABLED"]
 
 
+class DefaultConnectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    connection_id: UUID
+
+
 class AppConfiguration(BaseModel):
     code: str | None = None
     configured: bool

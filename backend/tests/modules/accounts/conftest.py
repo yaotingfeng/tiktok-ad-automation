@@ -9,7 +9,18 @@ from urllib3.response import HTTPResponse
 
 from app.core.config import settings
 from app.jobs.admission import AdmissionPolicy
-from app.modules.accounts.models import AuthorizationAttempt, TikTokConnection
+from app.modules.accounts.connection_models import (
+    BCConnectionBinding,
+    BCDefaultRoute,
+    ConnectionAuthorization,
+)
+from app.modules.accounts.models import (
+    AdvertiserAccount,
+    AuthorizationAttempt,
+    BCAccountAccess,
+    TenantBC,
+    TikTokConnection,
+)
 from app.modules.tenants.models import TenantMembership
 
 
@@ -97,3 +108,64 @@ def sdk_transport(monkeypatch):
 
     monkeypatch.setattr(socket, "getaddrinfo", resolve)
     return calls
+
+
+@pytest.fixture
+def account_access_case(session, context):
+    connection = TikTokConnection(tenant_id=context.tenant_id, status="ACTIVE")
+    bc = TenantBC(tenant_id=context.tenant_id, bc_id="1234567890123456789", name="BC")
+    account = AdvertiserAccount(
+        tenant_id=context.tenant_id,
+        advertiser_id="90071992547409931",
+        name="Upload",
+        currency="USD",
+        timezone="UTC",
+        remote_status="STATUS_ENABLE",
+    )
+    session.add_all([connection, bc, account])
+    session.flush()
+    grant = BCAccountAccess(
+        tenant_id=context.tenant_id,
+        bc_id=bc.bc_id,
+        advertiser_id=account.advertiser_id,
+        connection_id=connection.id,
+        in_bc=True,
+        authorized=True,
+        active=True,
+        can_upload=True,
+        can_build=True,
+        permission_state="VERIFIED",
+        checked_at=datetime.now(UTC),
+    )
+    session.add_all(
+        [
+            grant,
+            BCConnectionBinding(
+                tenant_id=context.tenant_id,
+                bc_id=bc.bc_id,
+                connection_id=connection.id,
+                kind=connection.kind,
+            ),
+            ConnectionAuthorization(
+                tenant_id=context.tenant_id,
+                connection_id=connection.id,
+                authorization_revision=0,
+                scopes=["synthetic-read", "synthetic-upload", "synthetic-build"],
+                permission_summary={
+                    "read_authorized": True,
+                    "upload_authorized": True,
+                    "build_authorized": True,
+                },
+                source="SYNTHETIC_COMPLETE_EVIDENCE",
+                verified_at=datetime.now(UTC),
+            ),
+        ]
+    )
+    session.flush()
+    session.add(
+        BCDefaultRoute(
+            tenant_id=context.tenant_id, bc_id=bc.bc_id, connection_id=connection.id
+        )
+    )
+    session.flush()
+    return context, grant

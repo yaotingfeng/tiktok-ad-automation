@@ -17,9 +17,6 @@ from app.modules.accounts.models import (
 )
 from app.modules.accounts.resolver import encode_cursor
 from app.modules.tenants.models import AuditEvent, TenantMembership
-from tests.modules.accounts.test_access import (
-    account_access_case as account_access_case,
-)
 
 
 def test_connection_bc_details_use_latest_complete_snapshot_and_scoped_cursor(

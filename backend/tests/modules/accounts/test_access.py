@@ -13,37 +13,6 @@ from app.modules.accounts.models import (
 from app.modules.tenants.models import TenantMembership
 
 
-@pytest.fixture
-def account_access_case(session, context):
-    connection = TikTokConnection(tenant_id=context.tenant_id, status="ACTIVE")
-    bc = TenantBC(tenant_id=context.tenant_id, bc_id="1234567890123456789", name="BC")
-    account = AdvertiserAccount(
-        tenant_id=context.tenant_id,
-        advertiser_id="90071992547409931",
-        name="Upload",
-        currency="USD",
-        timezone="UTC",
-        remote_status="STATUS_ENABLE",
-    )
-    session.add_all([connection, bc, account])
-    session.flush()
-    grant = BCAccountAccess(
-        tenant_id=context.tenant_id,
-        bc_id=bc.bc_id,
-        advertiser_id=account.advertiser_id,
-        connection_id=connection.id,
-        in_bc=True,
-        authorized=True,
-        active=True,
-        can_upload=True,
-        can_build=True,
-        permission_state="VERIFIED",
-    )
-    session.add(grant)
-    session.flush()
-    return context, grant
-
-
 @pytest.mark.parametrize("field", ["in_bc", "authorized", "active", "can_upload"])
 def test_upload_requires_all_access_facts(session, account_access_case, field):
     context, grant = account_access_case
@@ -130,7 +99,9 @@ def test_platform_cannot_bypass_conflicts(session, account_access_case, target):
         assign_upload_account(session, context=context, bc_id=grant.bc_id)
 
 
-def test_only_valid_connection_selected_and_not_other_bc(session, account_access_case):
+def test_disabled_default_never_falls_back_to_another_connection(
+    session, account_access_case
+):
     context, grant = account_access_case
     session.get(TikTokConnection, grant.connection_id).status = "DISABLED"
     valid = TikTokConnection(tenant_id=context.tenant_id, status="ACTIVE")
@@ -138,14 +109,15 @@ def test_only_valid_connection_selected_and_not_other_bc(session, account_access
     session.flush()
     session.add(BCAccountAccess(**{**grant.model_dump(), "connection_id": valid.id}))
     session.flush()
-    result = resolve_account_access(
-        session,
-        context=context,
-        bc_id=grant.bc_id,
-        advertiser_id=grant.advertiser_id,
-        action="upload",
-    )
-    assert result.connection_id == valid.id
+    with pytest.raises(DomainError) as error:
+        resolve_account_access(
+            session,
+            context=context,
+            bc_id=grant.bc_id,
+            advertiser_id=grant.advertiser_id,
+            action="upload",
+        )
+    assert error.value.code == "connection_unavailable"
     with pytest.raises(DomainError) as error:
         resolve_account_access(
             session,
@@ -249,10 +221,39 @@ def test_upload_selection_is_bounded_join_not_account_iteration(
     selected = [
         statement for statement in statements if "FROM bc_account_access" in statement
     ]
-    assert len(selected) == 2
-    assert all(
-        "LIMIT" in statement
-        and "JOIN tiktok_connection" in statement
-        and "JOIN advertiser_account" in statement
-        for statement in selected
+    assert len(selected) <= 2
+    joined = [
+        statement for statement in selected if "JOIN advertiser_account" in statement
+    ]
+    assert len(joined) == 1
+    assert "LIMIT" in joined[0] and "JOIN tiktok_connection" in joined[0]
+
+
+def test_explicit_connection_survives_missing_default(session, account_access_case):
+    from app.modules.accounts.connection_models import BCDefaultRoute
+
+    context, grant = account_access_case
+    session.delete(session.get(BCDefaultRoute, (context.tenant_id, grant.bc_id)))
+    session.flush()
+    with pytest.raises(DomainError) as error:
+        resolve_account_access(
+            session,
+            context=context,
+            bc_id=grant.bc_id,
+            advertiser_id=grant.advertiser_id,
+            action="read",
+        )
+    assert error.value.code == "bc_default_connection_required"
+    result = resolve_account_access(
+        session,
+        context=context,
+        bc_id=grant.bc_id,
+        advertiser_id=grant.advertiser_id,
+        action="read",
+        connection_id=grant.connection_id,
     )
+    assert result.connection_id == grant.connection_id
+    source = assign_upload_account(
+        session, context=context, bc_id=grant.bc_id, connection_id=grant.connection_id
+    )
+    assert source.connection_id == grant.connection_id

@@ -1,3 +1,4 @@
+from typing import cast
 from uuid import UUID
 
 from sqlalchemy import and_, func
@@ -7,16 +8,17 @@ from sqlmodel.sql.expression import SelectOfScalar
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.modules.accounts.models import (
+    OPERABLE_REMOTE_STATUSES as OPERABLE_REMOTE_STATUSES,
+)
+from app.modules.accounts.models import (
     AdvertiserAccount,
     BCAccountAccess,
     TenantBC,
     TikTokConnection,
 )
+from app.modules.accounts.routing import Capability, freeze_route, verify_route
 from app.modules.accounts.schemas import AccountAccess
 from app.modules.tenants.permissions import require_tenant
-
-# Fail closed for unknown provider values even if a stale grant claims capability.
-OPERABLE_REMOTE_STATUSES = frozenset({"STATUS_ENABLE", "ENABLE"})
 
 
 def usable_grants(
@@ -78,62 +80,59 @@ def resolve_account_access(
     bc_id: str,
     advertiser_id: str,
     action: str,
+    connection_id: UUID | None = None,
 ) -> AccountAccess:
     if action not in {"read", "build", "upload"}:
         raise DomainError("invalid_account_action", "账户动作无效")
-    require_tenant(
-        session, actor_id=context.actor_id, tenant_id=context.tenant_id, action=action
+    route = freeze_route(
+        session, context=context, bc_id=bc_id, connection_id=connection_id
     )
-    account = session.get(
-        AdvertiserAccount, (context.tenant_id, advertiser_id), populate_existing=True
+    verify_route(
+        session,
+        context=context,
+        route=route,
+        advertiser_id=advertiser_id,
+        capability=cast(Capability, action),
     )
-    bc = session.get(TenantBC, (context.tenant_id, bc_id), populate_existing=True)
-    if not account or not bc:
-        raise DomainError("account_not_in_bc", "账户不在当前租户 BC 目录")
-    if account.ownership_conflict or bc.ownership_conflict:
-        raise DomainError("account_ownership_conflict", "账户或 BC 归属冲突")
-    if not account.currency.strip() or not account.timezone.strip():
-        raise DomainError("account_metadata_incomplete", "账户信息尚未完整")
-    grant = session.exec(
-        usable_grants(tenant_id=context.tenant_id, bc_id=bc_id, action=action)
-        .where(BCAccountAccess.advertiser_id == advertiser_id)
-        .order_by(col(BCAccountAccess.connection_id))
-        .limit(1)
-        .execution_options(populate_existing=True)
-    ).first()
-    if grant is None:
-        raise DomainError("account_access_denied", "当前授权不支持该账户操作")
+    account = session.get(AdvertiserAccount, (context.tenant_id, advertiser_id))
+    assert account is not None
     return AccountAccess(
         advertiser_id=advertiser_id,
         bc_id=bc_id,
-        connection_id=grant.connection_id,
+        connection_id=route.connection_id,
         currency=account.currency,
         timezone=account.timezone,
     )
 
 
 def assign_upload_account(
-    session: Session, *, context: TenantContext, bc_id: str
+    session: Session,
+    *,
+    context: TenantContext,
+    bc_id: str,
+    connection_id: UUID | None = None,
 ) -> AccountAccess:
     require_tenant(
         session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="upload"
     )
+    route = freeze_route(
+        session, context=context, bc_id=bc_id, connection_id=connection_id
+    )
+    # 只在已冻结连接内按账户 ID 确定来源；另一连接可用也不改变任务归属。
     grant = session.exec(
         usable_grants(tenant_id=context.tenant_id, bc_id=bc_id, action="upload")
-        .order_by(
-            col(BCAccountAccess.advertiser_id), col(BCAccountAccess.connection_id)
-        )
+        .where(BCAccountAccess.connection_id == route.connection_id)
+        .order_by(col(BCAccountAccess.advertiser_id))
         .limit(1)
         .execution_options(populate_existing=True)
     ).first()
     if grant is None:
-        raise DomainError("no_upload_account", "当前 BC 没有可上传的授权账户")
-    # Return actual selected source/connection. Upload tasks persist these facts;
-    # this selection does not mutate a permanent material-account preference.
+        raise DomainError("no_upload_account", "当前 BC 默认连接没有可上传的授权账户")
     return resolve_account_access(
         session,
         context=context,
         bc_id=bc_id,
         advertiser_id=grant.advertiser_id,
         action="upload",
+        connection_id=route.connection_id,
     )

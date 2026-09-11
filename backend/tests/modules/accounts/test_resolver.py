@@ -1,8 +1,5 @@
 from app.modules.accounts.resolver import parse_matching_rows, resolve_lines
 from app.modules.accounts.schemas import InputLine
-from tests.modules.accounts.test_access import (
-    account_access_case as account_access_case,
-)
 
 
 def test_ids_names_ambiguity_and_original_lines():

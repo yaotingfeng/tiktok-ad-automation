@@ -18,6 +18,7 @@ from app.integrations.tiktok.auth import (
     _configured_authorization_url,
     start_authorization,
 )
+from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.modules.accounts.access import OPERABLE_REMOTE_STATUSES
 from app.modules.accounts.connections import disable_connection
 from app.modules.accounts.models import (
@@ -34,6 +35,7 @@ from app.modules.accounts.resolver import (
     encode_cursor,
     resolve_lines,
 )
+from app.modules.accounts.routing import set_default_route
 from app.modules.accounts.schemas import (
     AccountPublic,
     AppConfiguration,
@@ -43,6 +45,7 @@ from app.modules.accounts.schemas import (
     BCPublic,
     ConnectionPublic,
     ConnectionUpdate,
+    DefaultConnectionRequest,
     DiscoveryStatus,
     ResolvedLine,
     ResolveRequest,
@@ -509,3 +512,24 @@ def patch_connection(
     result = ConnectionPublic.model_validate(connection)
     session.commit()
     return result
+
+
+@router.put("/bcs/{bc_id}/default-connection", response_model=FrozenTikTokRoute)
+def put_default_connection(
+    tenant_id: UUID,
+    bc_id: str,
+    body: DefaultConnectionRequest,
+    session: SessionDep,
+    user: CurrentUser,
+) -> FrozenTikTokRoute:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="manage"
+    )
+    route = set_default_route(
+        session,
+        context=context,
+        bc_id=bc_id,
+        connection_id=body.connection_id,
+    )
+    session.commit()
+    return route
