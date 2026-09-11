@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 from billiard.process import current_process  # type: ignore[import-untyped]
 from redis import Redis
 from sqlalchemy import bindparam, text
+from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session, select
 
 from app.core.config import settings
@@ -246,7 +247,8 @@ def _detail_ids(session: Session, *, run: DiscoveryRun) -> tuple[str, ...]:
     if not ids:
         return ()
     result = (
-        session.execute(
+        SASession.execute(
+            session,
             text("""
         SELECT item->>'advertiser_id' FROM discovery_staged_page p
         CROSS JOIN LATERAL jsonb_array_elements(p.rows) item

@@ -237,6 +237,13 @@ class _GuardedTransport(httpx2.AsyncBaseTransport):
                             callback_error.retry_after_ms
                         )
                     elif (
+                        isinstance(callback_error, RemoteCallError)
+                        and callback_error.code in ERROR_HTTP_STATUS
+                    ):
+                        # 本地期限检查也使用 DomainError 子类；保留未发送类型，
+                        # 否则调用方会丢失安全结束本次尝试所需的 effect 证据。
+                        bound._callback_error = _error(callback_error.code)
+                    elif (
                         isinstance(callback_error, DomainError)
                         and callback_error.code in ERROR_HTTP_STATUS
                     ):

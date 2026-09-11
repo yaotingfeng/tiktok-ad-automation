@@ -260,13 +260,15 @@ def require_url_upload(policy, *, byte_size):
 
 - [ ] 实现一次 URL upload：业务保存 expected_md5，但 MCP 只发送 P0 合同明确支持的字段；`auto_fix_enabled=False` 也需 schema 支持并按合同设置。缺 auto_bind 字段只能凭官方默认行为/可核实证据建立策略，不能凭省略字段推断。SDK 文件上传仍保留原容量保护；MCP `upload_video_file` 在网络前抛 `material_channel_unverified`，不读文件、不编码上传。
 - [ ] `source_url_uploads.run_url_source_upload` 在现有 armed 提交后调用 `gateway.materials.upload_video_url(request, budget=budget)`；request 的 advertiser_id、file_name、expected_md5、byte_size 来自已保存来源操作/已核实原件代次，url 来自发送前签发的链接。立即保存 VideoReceipt 中实际 ID，再退出 gateway。请求/响应持久化白名单不包含 URL、MCP token 或本机路径；不要把 DTO `asdict()` 全量保存。
-- [ ] 执行 `uv run pytest tests/modules/materials/test_material_channel_policy.py tests/modules/materials/test_url_sdk_contract.py tests/modules/materials/test_url_ingest.py -q`，保持 URL/FILE 两条 API 既有合同通过；添加 MCP transport 捕获断言，不出现未支持的 `video_signature`/`auto_bind_enabled` 键。提交 `materials: gate and execute verified channel uploads`。
+- [ ] 执行 `uv run pytest tests/modules/materials/test_material_channel_policy.py tests/modules/materials/test_url_sdk_contract.py tests/modules/materials/test_url_ingest.py -q`，保持 URL/FILE 两条 API 既有合同通过；添加 MCP transport 捕获断言，不出现未支持的 `video_signature` 键；`auto_bind_enabled`/`auto_fix_enabled` 已出现在当前官方工具声明中，只有连接观察确认支持时才显式发送 false，不能套用 SDK 字段。提交 `materials: gate and execute verified channel uploads`。
 
 ## Task 4: 图片/封面闭环与目标可用性
 
-**Files:** Modify covers.py、cover_sdk.py、cover_tasks.py、readiness.py、adapters/mcp_materials.py、adapters/sdk_materials.py；Test `backend/tests/modules/materials/test_covers.py`、`test_cover_sdk.py`。
+**Files（实际实施）:** Modify covers.py、cover_models.py、cover_sdk.py、sdk_assets.py、adapters/mcp_materials.py、adapters/sdk_materials.py；新增 `test_channel_covers.py`、`test_cover_adapters.py`，更新原封面/素材适配测试。root 集成 gateway/errors 及迁移 `mcp_cover_evidence_freeze_cover_video_digest_and_preserve_.py`、`test_cover_evidence_migration.py`。cover_tasks.py/readiness.py 的现有期限与可用性规则沿用并回归，无需改写。
 
 **Interfaces:** `ensure_cover(session, *, context, bc_id, material_id, advertiser_id, task_key, route: FrozenTikTokRoute) -> AssetPreparation` 继承目标 route；`read_video_cover` 保留 md5 核实；`suggest_cover` 的 width/height 是筛选目标比例，返回 VideoCover 或 None；图片上传回执与详情验证分开。
+
+实施审查补齐原要求的持久证据：新 job 保存不可变 `video_md5`，备用回执保存 `receipt_facts`，明确区分实际无签名与历史 SQL NULL。迟到签名冲突撤下对应可用图片并保留冲突围栏，普通核查不得清除；只读状态也核对原摘要和原连接当前 read 权限。迁移接实际 `mcp_draft_connection`，不回填旧事实。
 
 - [ ] 在 test_covers 的 queue helper 固定 route 并新增测试；沿用 source_env/wire、seed/queue/job_state：
 
@@ -288,7 +290,7 @@ def test_cover_is_frozen_to_actual_target_before_any_call(source_env, wire):
 
 ## Task 5: UNKNOWN、远端拉取与原件清理围栏
 
-**Files:** Modify source_url_uploads.py、object_uses.py、cleanup.py、cleanup_scan.py、cleanup_abandoned.py、cleanup_reconcile.py；Test `test_url_ingest.py`、`test_object_uses.py`、`test_cleanup.py`、`test_cleanup_scan.py`。
+**Files（实际实施）:** Modify source_url_uploads.py 与 `test_url_ingest.py`；新增 `test_unknown_original_fences.py`、`test_source_upload_prefork.py`。object_uses.py、cleanup.py、cleanup_scan.py、cleanup_abandoned.py、cleanup_reconcile.py 的现有用途保护经回归成立，未做无必要改写。实际修复跨 worker 分页总行数/已见 ID 的持久核对；Linux 双 worker 用例另待目标环境执行。
 
 **Interfaces:** 沿用 OriginalUse 的 `purpose='ingest'` 与原 `operation_id`、release_object_uses 和源操作状态。仅实际精确视频回读完成，或在途调用方可证明未发送/官方可证明无副作用终态，才结束原件用途；单独收到远端 VID 不够。
 

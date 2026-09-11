@@ -13,15 +13,16 @@ CONTRACT_REVISION = "official-api-v1"
 def material_authorization(
     material: dict[str, str], *, observed_at: datetime
 ) -> AuthorizationFacts:
+    scopes: set[int]
     try:
         values = json.loads(material["scope"])
-        if (
-            type(values) is not list
-            or len(values) > 1024
-            or any(type(v) is not int or not 0 < v < 2**64 for v in values)
-        ):
+        if type(values) is not list or len(values) > 1024:
             raise ValueError("invalid scope")
-        scopes = set(values)
+        scopes = set()
+        for value in values:
+            if type(value) is not int or not 0 < value < 2**64:
+                raise ValueError("invalid scope")
+            scopes.add(value)
         known = True
     except KeyError, ValueError, TypeError:
         scopes, known = set(), False

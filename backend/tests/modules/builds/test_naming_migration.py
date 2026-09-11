@@ -2,11 +2,11 @@ from uuid import uuid4
 
 import pytest
 from alembic import command
-from sqlalchemy import text
+from sqlalchemy import MetaData, Table, text
 from sqlalchemy.exc import DBAPIError
 from sqlmodel import Session, select
 
-from app.modules.builds.drafts import create_draft
+from app.modules.builds.models import BuildDraft
 from app.modules.builds.preview_models import BuildPreview, PreviewDrama
 from app.modules.providers.models import PromotionLink, ProviderDrama
 from tests.migration_database import historical_database
@@ -20,8 +20,30 @@ def test_migration_preserves_frozen_preview_and_its_immutable_snapshot(monkeypat
         with Session(engine) as session:
             context = create_context(session)
             intent = create_intent(session, context)
-            draft = create_draft(session, context=context, **intent)
-            row = preview_row(context, intent, draft)
+            # 迁移前只能播种当时列；当前 create_draft 会查询后续新增的连接偏好。
+            draft = BuildDraft(
+                tenant_id=context.tenant_id,
+                **{
+                    key: value
+                    for key, value in intent.items()
+                    if key not in {"drama_lines", "account_lines"}
+                },
+                created_by=context.actor_id,
+                request_id=uuid4(),
+                request_digest="d" * 64,
+            )
+            table = Table("build_draft", MetaData(), autoload_with=session.connection())
+            assert "execution_connection_id" not in table.c
+            session.execute(
+                table.insert().values(
+                    **{
+                        key: value
+                        for key, value in draft.model_dump().items()
+                        if key in table.c
+                    }
+                )
+            )
+            row = preview_row(context, intent, draft.id)
             row.batch_short_id = uuid4().hex
             row.config.pop("campaign_name_template")
             row.content_digest = "a" * 64
@@ -63,7 +85,8 @@ def test_migration_preserves_frozen_preview_and_its_immutable_snapshot(monkeypat
             session.add(row)
             session.commit()
             identity, original = row.id, row.model_dump(mode="json")
-        command.upgrade(alembic, "head")
+        # 只核验命名迁移；后续通道迁移对缺历史路由的预览另有明确失效规则。
+        command.upgrade(alembic, "0017_preview_naming")
         with Session(engine) as session:
             assert (
                 session.get(BuildPreview, identity).model_dump(mode="json") == original

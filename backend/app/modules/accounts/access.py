@@ -1,4 +1,3 @@
-from typing import cast
 from uuid import UUID
 
 from sqlalchemy import and_, func
@@ -16,7 +15,7 @@ from app.modules.accounts.models import (
     TenantBC,
     TikTokConnection,
 )
-from app.modules.accounts.routing import Capability, freeze_route, verify_route
+from app.modules.accounts.routing import freeze_route, verify_route
 from app.modules.accounts.schemas import AccountAccess
 from app.modules.tenants.permissions import require_tenant
 
@@ -92,7 +91,7 @@ def resolve_account_access(
         context=context,
         route=route,
         advertiser_id=advertiser_id,
-        capability=cast(Capability, action),
+        capability=action,
     )
     account = session.get(AdvertiserAccount, (context.tenant_id, advertiser_id))
     assert account is not None

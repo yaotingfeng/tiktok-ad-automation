@@ -289,7 +289,7 @@ def open_tiktok_gateway(*, database_engine: Engine, redis_client: Redis,
 
 ### Task 6: 两通道账户读取与完整目录/权限发布
 
-**Files:** Modify Task 2 的 `backend/app/integrations/tiktok/official/accounts.py`、`mcp/accounts.py`；Modify `integrations/tiktok/accounts.py`、`modules/accounts/{tasks,discovery,capabilities,capability_models}.py`；Test `backend/tests/modules/accounts/test_dual_channel_reads.py`、`test_mcp_directory_publish.py`、`test_mcp_permissions.py`。
+**Files:** Create `backend/app/modules/accounts/discovery_models.py` 与新迁移 `mcp_stage_directory_stage_channel_directory_pages.py`、`mcp_capability_routes_freeze_capability_authorization_routes.py`、`mcp_directory_bc_scope_scope_staged_directory_pages_by_bc.py`（依次接实际 head `mcp01`，新增暂存页/明确 BC 分页键及权限任务冻结语义；历史权限任务留空路由并标为 STALE，不补今天授权，不更新 live 目录）；Modify Task 2 的 `backend/app/integrations/tiktok/official/accounts.py`、`mcp/accounts.py`；Modify `integrations/tiktok/accounts.py`、`modules/accounts/{tasks,discovery,capabilities,capability_models}.py`；Test `backend/tests/modules/accounts/test_dual_channel_reads.py`、`test_mcp_directory_publish.py`、`test_mcp_permissions.py`。
 
 **Interfaces:** 消费 Task 2 的 `OfficialAccountsGateway/McpAccountsGateway` 和 Task 3 候选发现任务，输出 `publish_mcp_directory(session:Session,*,context:TenantContext,run_id:UUID)->None`，置于 `modules/accounts/discovery.py`，只有完整证据才能发布；消费 P0 私有 MCP transport、固定工具映射、schema 哈希、错误合同、配额准入。业务目录继续输出现有 `AccountPublic/BCPublic`，授权依据来自 `AuthorizationFacts + AccountRoleFact`，不再由业务层读取 token scope。
 

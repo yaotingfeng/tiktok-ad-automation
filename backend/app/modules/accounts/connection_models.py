@@ -283,7 +283,7 @@ class BCConnectionBinding(SQLModel, table=True):
     tenant_id: UUID = Field(primary_key=True)
     bc_id: str = Field(primary_key=True, max_length=128)
     connection_id: UUID = Field(primary_key=True)
-    kind: ChannelKind = Field(sa_type=String(32))
+    kind: ChannelKind = Field(sa_column=Column(String(32), nullable=False))
 
 
 class BCDefaultRoute(SQLModel, table=True):

@@ -16,6 +16,7 @@ from billiard.process import current_process  # type: ignore[import-untyped]
 from celery import current_task  # type: ignore[import-untyped]
 from sqlalchemy import or_, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
@@ -385,20 +386,22 @@ def _restrict_permissions(
         # UNKNOWN 是本地缺少证明，不能记录成提供方明确撤权。
         changes["permission_state"] = "UNKNOWN"
     if changes:
-        session.execute(
+        SASession.execute(
+            session,
             scope.where(
                 or_(
                     col(BCAccountAccess.can_build).is_(True),
                     col(BCAccountAccess.can_upload).is_(True),
                 )
-            ).values(**changes)
+            ).values(**changes),
         )
     restricted = [identity for identity, role in rows if role == "ANALYST"]
     if restricted:
-        session.execute(
+        SASession.execute(
+            session,
             scope.where(col(BCAccountAccess.advertiser_id).in_(restricted)).values(
                 can_build=False, can_upload=False
-            )
+            ),
         )
 
 
@@ -668,6 +671,8 @@ def process_capability(
             )
             session.flush()
             for aid, role in rows:
+                # 整页已经拒绝未知角色；这里不能把 None 写为有效角色证据。
+                assert role is not None
                 session.add(
                     CapabilityAsset(
                         tenant_id=tenant_id,

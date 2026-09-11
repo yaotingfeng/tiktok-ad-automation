@@ -262,6 +262,8 @@ def authorize_historical_read(
     ids = _known_ids(session, source)
     if len(ids) > 1 or (source.kind == "CTA" and not ids):
         raise DomainError("historical_read_source_changed", "原对象身份存在歧义")
+    # _source 已比对实际请求摘要，审计必须保存该原始非空值。
+    assert source.request_body_digest is not None
     row = BuildHistoricalRead(
         tenant_id=context.tenant_id,
         request_id=request_id,

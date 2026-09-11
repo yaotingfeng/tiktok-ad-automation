@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 from billiard.process import current_process  # type: ignore[import-untyped]
 from redis import Redis
 from sqlalchemy import text
+from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
@@ -120,7 +121,8 @@ def start_discovery(session: Session, *, attempt_id: UUID) -> DiscoveryRun:
 
 
 def _next_bc(session: Session, run: DiscoveryRun, after: str = "") -> str | None:
-    value = session.execute(
+    value = SASession.execute(
+        session,
         text("""SELECT min(item->>'bc_id') FROM discovery_staged_page p
         CROSS JOIN LATERAL jsonb_array_elements(p.rows) item
         WHERE p.run_id=:run_id AND p.stage='BCS' AND p.bc_id='' AND item->>'bc_id'>:after"""),

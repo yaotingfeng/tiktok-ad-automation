@@ -156,6 +156,8 @@ def start_mcp_authorization(
     )
     profile = load_mcp_protocol()
     registration = load_registration(profile)
+    # load_registration 已核实授权协议；保留明确的类型边界，不将缺失值写入候选。
+    assert profile.issuer is not None and profile.resource is not None
     connection = (
         _connection(session, tenant_id=context.tenant_id, connection_id=connection_id)
         if connection_id

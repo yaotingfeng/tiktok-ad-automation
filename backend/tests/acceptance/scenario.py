@@ -36,9 +36,15 @@ from urllib3.response import HTTPResponse
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.credentials import encrypt_credentials
+from app.core.errors import DomainError
 from app.core.security import get_password_hash
 from app.jobs.celery_app import celery_app
 from app.models import User
+from app.modules.accounts.connection_models import (
+    BCConnectionBinding,
+    BCDefaultRoute,
+    ConnectionAuthorization,
+)
 from app.modules.accounts.models import (
     AdvertiserAccount,
     BCAccountAccess,
@@ -47,7 +53,7 @@ from app.modules.accounts.models import (
 )
 from app.modules.builds import drafts, previews, submissions
 from app.modules.builds.models import BuildDraft, DraftPreparation
-from app.modules.builds.preview_models import BuildPreview
+from app.modules.builds.preview_models import BuildPreview, BuildUnit
 from app.modules.materials.models import (
     AccountMaterial,
     MaterialAssetOperation,
@@ -721,10 +727,15 @@ def offline_runtime(wire: Wire, database_engine: Any) -> Iterator[Runtime]:
                         "lease_ms": 60000,
                     },
                     "endpoints": {
-                        "/open_api/v1.3/file/video/ad/upload/": {
+                        # 逻辑操作各自覆盖900秒上传硬期限；不再使用旧SDK URL键。
+                        "materials.upload_video_file": {
                             "lease_ms": 970000,
                             "endpoint_max_inflight": 1,
-                        }
+                        },
+                        "materials.upload_video_url": {
+                            "lease_ms": 970000,
+                            "endpoint_max_inflight": 1,
+                        },
                     },
                 },
             )
@@ -848,6 +859,37 @@ def seed_scope(
         )
         session.add_all([conn, provider])
         session.flush()
+        # 明确的合成授权/BC 选择是初始输入；能力和场景仍由真实 worker 从 HTTP 取证。
+        session.add(
+            BCConnectionBinding(
+                tenant_id=tenant.id,
+                bc_id=bc,
+                connection_id=conn.id,
+                kind=conn.kind,
+            )
+        )
+        session.flush()
+        session.add_all(
+            [
+                BCDefaultRoute(tenant_id=tenant.id, bc_id=bc, connection_id=conn.id),
+                ConnectionAuthorization(
+                    tenant_id=tenant.id,
+                    connection_id=conn.id,
+                    authorization_revision=conn.authorization_revision,
+                    issuer="https://business-api.tiktok.com",
+                    resource="https://business-api.tiktok.com/open_api/v1.3",
+                    scopes=["2", "6"],
+                    source="SYNTHETIC_VERIFIED_EVIDENCE",
+                    permission_summary={
+                        "read_authorized": True,
+                        "build_authorized": True,
+                        "upload_authorized": True,
+                    },
+                    verified_at=datetime.now(UTC),
+                ),
+            ]
+        )
+        session.flush()
         app = ProviderApplication(
             tenant_id=tenant.id,
             connection_id=provider.id,
@@ -915,6 +957,7 @@ def seed_scope(
                     permission_state="UNKNOWN",
                     can_build=False,
                     can_upload=False,
+                    checked_at=datetime.now(UTC),
                 )
             )
         session.flush()
@@ -1042,12 +1085,25 @@ class AcceptanceScenario:
     def submit(self, request_id: UUID | None = None) -> UUID:
         assert self.preview_id
         with Session(self.database_engine) as session, session.begin():
-            receipt = submissions.submit_preview(
-                session,
-                context=self.scope.context,
-                preview_id=self.preview_id,
-                request_id=request_id or uuid4(),
-            )
+            try:
+                receipt = submissions.submit_preview(
+                    session,
+                    context=self.scope.context,
+                    preview_id=self.preview_id,
+                    request_id=request_id or uuid4(),
+                )
+            except DomainError as error:
+                # 失败诊断仅包含本合成租户/预览的有界状态码，不改变异常或提交规则。
+                reasons = session.exec(
+                    select(BuildUnit.readiness, BuildUnit.reason_codes)
+                    .where(
+                        BuildUnit.tenant_id == self.scope.context.tenant_id,
+                        BuildUnit.preview_id == self.preview_id,
+                    )
+                    .limit(20)
+                ).all()
+                error.add_note(f"Synthetic preview readiness/reasons: {reasons!r}")
+                raise
             self.submission_id = receipt.submission_id
         return self.submission_id
 

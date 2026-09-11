@@ -8,7 +8,7 @@ from sqlmodel import Session, select
 from app.modules.builds import catalog
 from app.modules.builds.drafts import create_draft, prepare_draft
 from app.modules.builds.models import DraftDrama
-from tests.modules.builds.test_drafts import create_intent, finish, ready_links
+from tests.modules.builds.test_drafts import account, create_intent, finish, ready_links
 from tests.modules.materials.test_tenant_materials import material
 
 
@@ -18,6 +18,8 @@ def test_preparation_catalog_pages_are_complete_and_sql_read_only(
     engine, context, _ = isolated_strategy_database
     with Session(engine) as session, session.begin():
         intent = create_intent(session, context)
+        # 当前准备入口要求明确的 BC 绑定与默认连接，沿共享合成授权事实播种。
+        account(session, context)
         expected = [
             material(session, context, f"Moon {i:03}.mp4", bc="bc-draft").id
             for i in range(205)

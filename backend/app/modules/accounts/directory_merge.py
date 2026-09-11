@@ -2,6 +2,7 @@
 
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session
 
 from app.core.errors import DomainError
@@ -25,7 +26,8 @@ def merge_directory_bc(
         "bc_id": bc_id,
     }
     # 由已验证暂存表直接批量合并；不逐账户 SQL，且整个授权切换只提交一次。
-    session.execute(
+    SASession.execute(
+        session,
         text("""
         INSERT INTO external_asset_owner (kind, external_id, owner_tenant_id)
         SELECT 'ADVERTISER', item->>'advertiser_id', :tenant_id
@@ -35,7 +37,8 @@ def merge_directory_bc(
     """),
         params,
     )
-    conflict = session.execute(
+    conflict = SASession.execute(
+        session,
         text("""
         SELECT EXISTS (SELECT 1 FROM discovery_staged_page p
         CROSS JOIN LATERAL jsonb_array_elements(p.rows) item
@@ -60,7 +63,8 @@ def merge_directory_bc(
         )
     )
     # 无授权详情只能建立未知的新账户，不能用缺失值覆盖其他连接已观察的共享元数据。
-    session.execute(
+    SASession.execute(
+        session,
         text("""
         WITH assets AS (SELECT item FROM discovery_staged_page p
             CROSS JOIN LATERAL jsonb_array_elements(p.rows) item WHERE p.run_id=:run_id AND p.stage='ASSETS' AND p.bc_id=:bc_id),
@@ -74,7 +78,8 @@ def merge_directory_bc(
     """),
         params,
     )
-    session.execute(
+    SASession.execute(
+        session,
         text("""
         UPDATE advertiser_account x SET name=item->>'name',currency=item->>'currency',
             timezone=item->>'timezone',remote_status=item->>'remote_status',ownership_conflict=false
@@ -84,7 +89,8 @@ def merge_directory_bc(
     """),
         params,
     )
-    session.execute(
+    SASession.execute(
+        session,
         text("""
         WITH assets AS (SELECT item FROM discovery_staged_page p CROSS JOIN LATERAL jsonb_array_elements(p.rows) item
             WHERE p.run_id=:run_id AND p.stage='ASSETS' AND p.bc_id=:bc_id),

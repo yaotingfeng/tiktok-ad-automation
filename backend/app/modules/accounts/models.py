@@ -51,7 +51,10 @@ class TikTokConnection(SQLModel, table=True):
     credential_ciphertext: str | None = Field(default=None, repr=False)
     credential_revision: int = 0
     # 凭据轮换、授权边界和适配契约分别版本化，普通刷新不改变授权语义。
-    kind: ChannelKind = Field(default="OFFICIAL_API", sa_type=String(32))
+    kind: ChannelKind = Field(
+        default="OFFICIAL_API",
+        sa_column=Column(String(32), nullable=False, default="OFFICIAL_API"),
+    )
     display_name: str = Field(default="", max_length=255)
     service_profile: str | None = Field(default=None, max_length=128)
     authorization_revision: int = 0

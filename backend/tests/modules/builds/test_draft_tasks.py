@@ -31,6 +31,7 @@ def test_duplicate_delivery_only_advances_one_local_page(session, context, inten
 def test_revoked_actor_becomes_explicitly_blocked_and_can_prepare_after_restore(
     session, context, intent
 ):
+    account(session, context)
     draft = create_draft(session, context=context, **intent)
     task = prepare_draft(session, context=context, draft_id=draft, request_id=uuid4())
     member = session.exec(
@@ -66,6 +67,7 @@ def test_revoked_actor_becomes_explicitly_blocked_and_can_prepare_after_restore(
 def test_repair_preserves_current_identity_and_unpublished_backoff(
     session, context, intent
 ):
+    account(session, context)
     draft = create_draft(session, context=context, **intent)
     task = prepare_draft(session, context=context, draft_id=draft, request_id=uuid4())
     prep = session.get(DraftPreparation, task)

@@ -16,6 +16,7 @@ from billiard.process import current_process  # type: ignore[import-untyped]
 from celery import current_task  # type: ignore[import-untyped]
 from redis import Redis
 from sqlalchemy import Engine, text
+from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -450,7 +451,8 @@ def _advance(
 ) -> tuple[dict[str, Any], str]:
     def seen_before(ids: tuple[str, ...]) -> bool:
         return bool(
-            session.execute(
+            SASession.execute(
+                session,
                 text("""
             SELECT EXISTS(SELECT 1 FROM step_evidence
             WHERE tenant_id=:tenant AND submission_id=:submission AND step_id=:step

@@ -77,15 +77,15 @@ sudo systemctl enable --now tt-ada-backup.timer
 
 1. 先阅读本文和最新发布记录，确认当前 SHA、镜像 ID、Alembic head、数据库备份及外部开关。核对 80/443 原项目可访问，确认剩余内存和磁盘。审查代码及迁移，不在生产生成迁移。
 2. 相关测试通过后提交、推送，打包新 SHA 到新目录，运行新版本的 `config --quiet` 和 `build prestart`。构建失败不触碰正在运行的版本。
-3. 安排维护窗口，先暂停每日备份 timer，并等待已经启动的备份服务自然结束；禁止迁移与定时备份并行，以免 current 尚未切换时把新数据库误标为旧版本。不要停止正在执行的备份 service。然后停止旧 API 接收写入，再停止 Beat；正常停止三个 Worker 并核实没有正在执行的任务。素材 Worker 等待时间最多 960 秒，禁止用强杀缩短业务任务退出。排队及尚未发布的消息保留，迁移必须兼容其任务名与 payload。
+3. 安排维护窗口，先停止旧 API 接收写入、停止 Beat；正常排空并停止三个 Worker，核实没有正在执行的任务。素材 Worker 等待时间最多 960 秒，禁止用强杀缩短业务任务退出。然后暂停每日备份 timer，等待已经启动的备份服务自然结束；不要停止备份 service。禁止迁移与定时备份并行，以免 current 尚未切换时把新数据库误标为旧版本。排队及尚未发布的消息保留，迁移必须兼容其任务名与 payload。
 
 ```bash
 OLD_COMPOSE=/opt/tt-ada/current/deploy/production-compose.sh
+sudo "$OLD_COMPOSE" stop backend beat
+sudo "$OLD_COMPOSE" stop worker worker-builds worker-control
 sudo systemctl stop tt-ada-backup.timer
 # 若显示 activating/running，等待该次备份完成后再继续，不强行停止。
 sudo systemctl show tt-ada-backup.service -p ActiveState -p SubState
-sudo "$OLD_COMPOSE" stop backend beat
-sudo "$OLD_COMPOSE" stop worker worker-builds worker-control
 sudo /opt/tt-ada/current/deploy/backup-production.sh before-release
 ```
 
@@ -133,3 +133,16 @@ sudo docker compose --project-name tt-ada-build-cache \
 - `config --quiet`、db/redis/backend 健康、三个 Worker `inspect ping` 和各自队列正确、唯一 Beat；用 `jobs.probe` 验证 PostgreSQL outbox → Beat → control Worker 的完成记录。
 - 记录容器内存/CPU、日志无异常重启、备份 timer 和备份完整性；确认原项目 80/443 及原 Docker 容器仍正常。
 - 首次生产主机对 `business-api.tiktok.com:443` 的无凭据连接探测出现超时。正式配置 TikTok 前须重新核验 DNS、TLS、API 和媒体出站访问；基础上线不代表这条网络已解决。
+
+
+## 官方 MCP 双通道发布补充（尚未部署）
+
+本节属于后续发布准备，不改变上文已发布 SHA，也不沿用首发授权代为注册、授权或试投。当前 [双通道离线验收](../validation/2026-09-11-tiktok-dual-channel-offline.md) 已记录本地后端 2203 passed / 9 skipped、前端 348 passed；8 项 Linux prefork 与 [真实联调表](../acceptance/live-mcp.md) 仍未完成；必须另行明确本次目标版本和操作授权。
+
+发布按“冻结新写 → 排空 → 暂停并等待备份 timer → 可恢复备份 → 新迁移 → 同 SHA 服务 → 旧 API/新只读回归 → 按已核实能力开放 MCP → 恢复 timer”执行。双通道候选最终迁移为 `mcp_cover_evidence`，正式版本须核对其唯一 head 和历史冻结证据；禁止仅复制前端或单独升级 Worker。仍使用独立 `tt-ada-production`、`https://manjuad.gzjunbo.net:8000/` 和已发布版本脚本，不影响同机 80/443 项目。
+
+MCP 不要求 API App，独立 callback 为 `https://manjuad.gzjunbo.net:8000/api/integrations/tiktok/mcp/callback`；须先核实官方注册允许的精确 URI，再由 junbo 的租户管理员实际授权并选择骏伯 BC。不能复用星屿 ID、BC 或连接配置，不能借用 Codex 内部授权。本地 API App 缺失的 MCP 测试通过不证明生产注册完成。
+
+发布阻断项包括：默认连接歧义、历史 UNKNOWN 无可证 route、实际主体/scope/权限不明、实际工具 schema 不匹配、MCP 视频五字段 policy 未核实、Linux prefork 终止恢复未验、目标生产数据库的原件/封面持久证据迁移未验、目标环境出站未核实。只读已验不代表可上传或创建。保留被阻断记录与已知远端 ID，不通过切默认、换通道、删记录、清队列或回滚数据库重发来解除。
+
+真实验收逐项记录 tenant/BC/connection/channel、授权审计引用、原 request/attempt、源/目标素材 ID、具体预览名称/预算/ROAS、远端数量和独立回读。日志只存白名单诊断；注册文件、令牌、授权 code/state、URL 和私有备份保持受控，不进入发布包或 Git。

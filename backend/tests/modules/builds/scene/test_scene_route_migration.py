@@ -88,8 +88,20 @@ def test_historical_scene_migration_preserves_ids_and_facts_without_inventing_ro
                 request_id=uuid4(),
                 request_digest="d" * 64,
             )
-            db.add(draft)
-            db.flush()
+            # 旧库没有之后新增的编辑连接偏好，不能用今日 ORM INSERT 播种。
+            draft_table = Table(
+                "build_draft", MetaData(), autoload_with=db.connection()
+            )
+            assert "execution_connection_id" not in draft_table.c
+            db.execute(
+                draft_table.insert().values(
+                    **{
+                        key: value
+                        for key, value in draft.model_dump().items()
+                        if key in draft_table.c
+                    }
+                )
+            )
             prep = DraftPreparation(
                 tenant_id=context.tenant_id,
                 draft_id=draft.id,
@@ -172,7 +184,12 @@ def test_historical_scene_migration_preserves_ids_and_facts_without_inventing_ro
             assert receipt.request_id == "old-request" and receipt.facts == page.facts
             assert receipt.mcp_request_id is receipt.remote_task_id is None
             assert db.get(DraftPreparation, prep_id).status == "BLOCKED"
-            assert db.get(BuildDraft, draft_id).status == "BLOCKED"
+            assert (
+                db.execute(
+                    select(draft_table.c.status).where(draft_table.c.id == draft_id)
+                ).scalar_one()
+                == "BLOCKED"
+            )
             assert (
                 db.get(DraftScenePreparation, (context.tenant_id, prep_id)).frozen_route
                 is None

@@ -8,7 +8,7 @@ from sqlmodel import Session, select
 from app.core.errors import DomainError
 from app.modules.builds.drafts import create_draft, edit_material_groups, prepare_draft
 from app.modules.builds.models import BuildDraft, DraftDrama, DraftPreparation
-from tests.modules.builds.test_drafts import create_intent, finish, ready_links
+from tests.modules.builds.test_drafts import account, create_intent, finish, ready_links
 from tests.modules.materials.test_tenant_materials import material
 
 
@@ -19,6 +19,8 @@ def test_concurrent_draft_requests_have_one_ordered_result(
     engine, context, _ = isolated_strategy_database
     with Session(engine) as session:
         values = create_intent(session, context)
+        # 当前准备入口要求明确的 BC 绑定与默认连接，沿共享合成授权事实播种。
+        account(session, context)
         draft = create_draft(session, context=context, **values)
         prep = prepare_draft(
             session, context=context, draft_id=draft, request_id=uuid4()

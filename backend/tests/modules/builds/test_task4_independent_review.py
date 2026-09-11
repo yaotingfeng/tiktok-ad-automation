@@ -115,6 +115,7 @@ def test_revoked_obsolete_worker_cannot_block_new_draft_revision(
     from app.modules.builds.models import BuildDraft
     from app.modules.tenants.models import TenantMembership
 
+    account(session, context)
     draft_id = create_draft(session, context=context, **intent)
     old_task = prepare_draft(
         session, context=context, draft_id=draft_id, request_id=uuid4()
@@ -260,6 +261,7 @@ def test_refresh_preserves_manual_groups_rebuilds_auto_and_new_provider_config_g
 
     keep = material(session, context, "Moon keep.mp4", bc="bc-draft")
     material(session, context, "Short Drama old.mp4", bc="bc-draft")
+    account(session, context)
     draft_id = create_draft(session, context=context, **intent)
     first = prepare_draft(
         session, context=context, draft_id=draft_id, request_id=uuid4()

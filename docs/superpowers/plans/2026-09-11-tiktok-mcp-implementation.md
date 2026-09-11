@@ -128,7 +128,7 @@ bunx playwright test --project workspace tests/tenants-accounts.spec.ts --report
 
 `frontend/package.json` 的 lint 会写入且带 unsafe，不把它当只读检查使用；使用 `bunx biome check` 加本轮明确文件。新增 Playwright 文件若不在 workspace 的 testMatch 中，必须更新 `frontend/playwright.config.ts` 的匹配和其他项目排除规则，避免落入真实登录 setup。
 
-迁移依次由 root 集成：P1 连接/授权/默认路由 → P3 Task 2 广告父上下文 → P1 Task 7 场景路由 → P2 素材上下文 → P3 Task 4 核查授权。每次生成前以当前 `uv run alembic heads` 确认上游；各计划可指定未占用的语义 revision ID，由 Alembic 从实际单一 head 生成 down_revision，不猜上游 hash、不改旧迁移。生成文件名以命令输出为准并同步计划，不能照抄尚未生成的文件名。验证旧连接归类、唯一默认/复合外键、历史不可变请求不被更新，再运行测试库 upgrade/check 与独立迁移测试。
+迁移实际顺序由 root 集成：P1 连接/授权/默认路由（`mcp01`）→ 目录暂存页（`mcp_stage_directory`）→ 权限任务授权路由（`mcp_capability_routes`）→ 暂存页 BC 范围（`mcp_directory_bc_scope`）→ P3 广告父上下文（`mcp_build_routes`）→ P1 场景路由（`mcp02`）→ 目录语义版本（`mcp_directory_semantics`）→ P2 素材上下文（`mcp_material_routes`）→ P3 核查授权（`mcp_build_recovery`）→ 草稿显式连接选择（`mcp_draft_connection`）→ 封面原摘要与回执事实（`mcp_cover_evidence`）。每次生成前以当前 `uv run alembic heads` 确认上游；由 Alembic 从实际单一 head 生成 down_revision，不猜上游 hash、不改旧迁移。生成文件名以命令输出为准并同步计划。验证旧连接归类、唯一默认/复合外键、历史不可变请求不被更新，再运行测试库 upgrade/check 与独立迁移测试。
 
 本地全量后端、前端和真实 Linux prefork 检查安排在 P3 集成任务；此前每任务执行相关回归，不重复跑无关全量。每个独立测试周期后聚焦提交，明确路径暂存、检查暂存差异、更新 `docs/implementation-progress.md`，不 `git add .`。
 
@@ -157,10 +157,13 @@ bunx playwright test --project workspace tests/tenants-accounts.spec.ts --report
 
 - [x] 用户确认书面设计。
 - [x] 编写分阶段实施计划并完成文档检查。
-- [ ] 执行 P0 协议与公共调用边界。
-- [ ] 完成 P1 授权/账户/场景及 P2/P3 首任务组成的完整只读里程碑。
-- [ ] 完成 P2 素材闭环。
-- [ ] 完成 P3 广告闭环和本地集成验收。
+- [x] 完成 P0 协议模型与公共调用边界的本地实现和验证，未获真实服务证据的能力保持关闭。
+- [x] 完成 P1 授权/账户/场景及 P2/P3 首任务组成的本地只读里程碑。
+- [x] 完成 P2 素材入库、目标分发、封面和未知原件保护的本地实现与定向验证。
+- [x] 完成 P3 广告执行、只读恢复及连接页面的本地实现与定向验证。
+- [x] 完成本机跨阶段后端最终矩阵：2203 项通过、9 项跳过（8 项 Linux、1 项 API 分支不适用），1304.32 秒；前端 workspace 348 项与构建通过。
+- [ ] 在实际 Linux 环境完成 prefork 终止与恢复验收，不能以 macOS 跳过代替。
+- [ ] 核实真实 MCP 注册、授权主体/权限、工具响应及视频服务策略，逐项登记联调证据。
 - [ ] 按具体授权完成目标环境联调/发布，分别记录证据。
 
-本轮交付是实施计划；所有代码、测试数量、真实连接和发布状态只在实际执行后登记。
+代码、审查和提交按 [实施进度](../../implementation-progress.md) 登记；完整矩阵与环境限制见 [离线验收](../../validation/2026-09-11-tiktok-dual-channel-offline.md)。本地实现、真实服务联调和生产发布分别核实，不将本地合成结果记为实际服务成功。

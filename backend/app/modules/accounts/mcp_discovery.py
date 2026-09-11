@@ -8,6 +8,7 @@ from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
@@ -358,7 +359,8 @@ def publish_mcp_directory(
         "connection_id": run.connection_id,
         "run_id": run.id,
     }
-    session.execute(
+    SASession.execute(
+        session,
         text("""
         UPDATE bc_account_access SET in_bc=false,authorized=false,active=false,can_upload=false,can_build=false
         WHERE tenant_id=:tenant_id AND connection_id=:connection_id AND last_seen_run_id IS DISTINCT FROM :run_id

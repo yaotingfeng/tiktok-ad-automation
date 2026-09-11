@@ -411,7 +411,9 @@ def test_concurrent_distinct_account_updates_do_not_lose_increments(directory_en
         assert revision(session, env) == before + 2
 
 
-def test_last_seen_run_is_directory_fact(directory_env):
+def test_last_seen_run_is_observation_but_authorization_remains_directory_fact(
+    directory_env,
+):
     from app.modules.accounts.models import DiscoveryRun
 
     env = directory_env
@@ -429,6 +431,28 @@ def test_last_seen_run_is_directory_fact(directory_env):
                 "UPDATE bc_account_access SET last_seen_run_id=:run WHERE tenant_id=:tenant"
             ),
             {**env, "run": run.id},
+        )
+        # 新目录扫描只更新观察身份，不能让正常凭据轮换使已冻结路由失效。
+        assert revision(session, env) == before
+        assert (
+            session.execute(
+                text(
+                    "SELECT last_seen_run_id FROM bc_account_access "
+                    "WHERE tenant_id=:tenant AND bc_id=:bc "
+                    "AND connection_id=:connection AND advertiser_id=:advertiser"
+                ),
+                env,
+            ).scalar_one()
+            == run.id
+        )
+        # 同一观察中的真实撤权仍必须改变目录版本，不能一起被排除。
+        session.execute(
+            text(
+                "UPDATE bc_account_access SET authorized=false "
+                "WHERE tenant_id=:tenant AND bc_id=:bc "
+                "AND connection_id=:connection AND advertiser_id=:advertiser"
+            ),
+            env,
         )
         assert revision(session, env) == before + 1
 

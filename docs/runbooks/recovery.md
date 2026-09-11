@@ -21,7 +21,7 @@ Redis 暂时不可用时，数据库 outbox 保留未完成投递；准入失败
 
 Worker 异常退出后，已进入请求发送阶段的步骤按 UNKNOWN 核查。尚未发送的步骤可在租约到期后重排；实际请求使用硬期限，额度租约覆盖进程退出，防止旧请求尚未结束就释放并发额度。检查当前版本是否包含对应修复，再等待控制队列的周期修复；不要把 RUNNING 批量改成 PENDING。
 
-连接、成员或租户被停用后，未执行步骤重新检查权限并阻断。已启用的远端广告继续保留原状态。修复连接应从租户授权入口重新授权，再在任务详情核查/重试符合条件的项目。
+连接、成员或租户被停用后，未执行步骤重新检查权限并阻断。已启用的远端广告继续保留原状态。修复连接从租户授权入口处理；正常凭据轮换不改变授权版本，重新授权不会自动接管旧请求。旧授权任务按下述独立历史核查规则处理，不能直接恢复创建。
 
 ## 观察位置
 
@@ -62,3 +62,32 @@ uv run python -m scripts.rehearse_backup --output ../docs/acceptance/backup-rest
 ```
 
 脚本仅创建和删除自己生成的两个合成数据库，使用实际 pg_dump/pg_restore，核对全表行数、迁移版本、合成密钥解密、素材对象元数据和待投递记录。它不启动 Worker、不接触对象存储内容，也不证明业务备份时间窗中的远端写入已恢复。当前实测结果见 [backup-restore.json](../acceptance/backup-restore.json)。
+
+
+## 双通道冻结与重新授权
+
+任务持久化 route 中的 channel、connection_id、authorization_revision 和 adapter_contract_revision 是原执行归属，不能由今日 BC 默认连接替换。来源素材沿 source_route 查实际源账户，目标素材/封面/广告沿父目标 route。远端返回的 VID、MID、image ID 与 Smart+ ID 分别保留，不用来源 ID 或请求账户填回目标事实。
+
+- **凭据轮换**：credential_revision 变化本身不废任务；HTTP 前取得当前有效凭据但仍核实原 route 的授权与合同版本。正常观察刷新也不是新的授权。
+- **刷新等待**：pending 保留原刷新操作及持久 outbox 等待；UNKNOWN 或要求重新授权时保留候选和回执，不重送旧 refresh token。重新授权、停用或失去成员权限优先于迟到 worker 的发布。
+- **广告明确 NOT_SENT**：仅当前原 attempt 和 lease 有明确零发送证据、没有 UNKNOWN/已知 ID/迟到副作用时，才按原 body/request_id/attempt 安全重排。新 nonce 拒绝旧 worker 覆盖。看见任意历史 NOT_SENT 不足以放行。
+- **广告 UNKNOWN**：只读核查原连接，不重新 create 或改通道；空列表、等待时间、网络恢复均不是未发生证明。已知 ID 先保存再关闭客户端，清理报错也不能重新创建。
+- **新授权只读核查**：仅服务端证明同一租户/BC/连接/通道、同一授权主体及 issuer/resource、当前明确读取权限和完整原创建证据时，管理员可显式启动独立审计。审计保存新旧版本，不改原 route、步骤或正文，也不触发继续搭建。
+- **核查回执丢失**：保留原 request UUID 并用 GET 恢复。PENDING/RUNNING、丢回执或 GET 404 不再 POST；已取得并验证原 read_id 的 UNKNOWN/BLOCKED 终态，当前管理权限与服务端资格恢复后，才显示“再次只读核查”供用户明确点击。
+
+历史缺原 route/授权依据时保持 `legacy_route_unverifiable` 或对应缺证据状态，允许查看已有事实，但不可补今日默认或当前授权版本。场景/素材历史 NULL 也不能补写成今日连接。迁移应保存已有请求、摘要、已知 ID 和事件；有非空新证据时拒绝直接降级。
+
+## 原件与封面未知结果
+
+上传 UNKNOWN 是远端副作用未明，不能由 URL 到期、任务/Redis lease 到期、没有 VID、连接失效或等待足够久推断未上传。OriginalUse 持久保护必须持续；已知 VID 但摘要/大小/身份回读不完整也不释放用途。定时清理、孤儿清理、废弃会话和人工清理入口均不得绕开此保护。
+
+来源或目标素材只能经原 route 的实际强回读确认，精确完成只释放当前操作用途；同一原件的其他用途继续阻止删除。迟到完成不得覆盖新 claim 或释放新 owner 的用途，数据库提交失败也不能留下“用途已释放但结果未提交”。
+
+封面保存原请求视频 MD5 和真实图片回执 `receipt_facts`；原 MD5 不随今日素材变化，缺失的历史值不能补写。图片 ID 已知但详情未核实时只读恢复；actual receipt 已提交后即使 HTTP 清理失败也保留，不能从新查询或请求猜造旧回执。原 route、MD5 或唯一回执无法证明时停止发布映射与下游广告，不重复上传。
+
+上述代码边界已有合成 PG/Redis/HTTP 用例，真实 MCP 服务字段、上游重试及 R2 清理仍需按 [真实联调表](../acceptance/live-mcp.md) 单独验证。
+
+
+若升级后素材显示 `admission_policy_invalid`，先核对受控配置中 `TIKTOK_CALL_POLICIES.endpoints` 是否仍使用旧 SDK URL。当前按逻辑 operation 查询；旧视频上传 URL 覆盖须迁到 `materials.upload_video_file`、`materials.upload_video_url`，lease 严格大于 905000ms 才覆盖当前 900 秒任务及清理余量。其他网关操作按发布版 accounts/scene/materials/build/protocol 实际键逐项核对，保留共享 base/额度域；独立 MCP 刷新的 `auth_refresh` 键保持原名。不增加 URL fallback、不缩短硬期限或放宽保护来解除等待；测试用额度不能作为生产官方额度。配置问题解决后沿原消息/attempt 的安全状态恢复，UNKNOWN 仍只读核查。
+
+本轮恢复与证据保护已纳入本地完整矩阵（2203 passed / 9 skipped），具体失败修复经过与版本见 [离线验收](../validation/2026-09-11-tiktok-dual-channel-offline.md)。8 项 Linux prefork 没有执行；本地合成回执和真实 PostgreSQL/Redis 不能代替目标 Linux 的进程终止或生产备份恢复验收。

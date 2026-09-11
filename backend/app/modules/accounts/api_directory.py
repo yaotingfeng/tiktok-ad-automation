@@ -7,6 +7,7 @@ from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session, select
 
 from app.core.context import TenantContext
@@ -154,7 +155,8 @@ def publish_api_directory(
             )
             .on_conflict_do_nothing()
         )
-    session.execute(
+    SASession.execute(
+        session,
         text("""UPDATE bc_account_access SET in_bc=false,authorized=false,active=false,can_upload=false,can_build=false
         WHERE tenant_id=:tenant_id AND connection_id=:connection_id AND last_seen_run_id IS DISTINCT FROM :run_id"""),
         {"tenant_id": run.tenant_id, "connection_id": connection.id, "run_id": run.id},

@@ -7,6 +7,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
+from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
@@ -404,14 +405,16 @@ def publish_runtime_directory(
         "run_id": run.id,
         "job_id": job.id,
     }
-    session.execute(
+    SASession.execute(
+        session,
         text("""UPDATE bc_account_access SET in_bc=false,authorized=false,active=false,can_upload=false,can_build=false
         WHERE tenant_id=:tenant_id AND bc_id=:bc_id AND connection_id=:connection_id AND last_seen_run_id IS DISTINCT FROM :run_id"""),
         params,
     )
     # AUTHORIZED 是连接全局的完整集合：仅单调收紧其他BC旧授权，不刷新其观察时间。
     # 未观察的其他BC不能新增账户/权限，另一连接的独立授权也不受影响。
-    session.execute(
+    SASession.execute(
+        session,
         text("""WITH authorized AS (
             SELECT item->>'advertiser_id' AS id FROM discovery_staged_page p
             CROSS JOIN LATERAL jsonb_array_elements(p.rows) item
@@ -441,19 +444,25 @@ def publish_runtime_directory(
     )
     session.add(previous)
     # 角色页也是此次完整观察的一部分，原job接着发布这些事实，不再重复读取或另建任务。
-    session.execute(
-        text("DELETE FROM account_capability_asset WHERE job_id=:job_id"), params
+    SASession.execute(
+        session,
+        text("DELETE FROM account_capability_asset WHERE job_id=:job_id"),
+        params,
     )
-    session.execute(
-        text("DELETE FROM account_capability_page WHERE job_id=:job_id"), params
+    SASession.execute(
+        session,
+        text("DELETE FROM account_capability_page WHERE job_id=:job_id"),
+        params,
     )
-    session.execute(
+    SASession.execute(
+        session,
         text("""INSERT INTO account_capability_page (job_id,page,tenant_id,bc_id,row_count,observed_at)
         SELECT :job_id,page,tenant_id,bc_id,jsonb_array_length(rows),observed_at FROM discovery_staged_page
         WHERE run_id=:run_id AND bc_id=:bc_id AND stage='ROLES'"""),
         params,
     )
-    session.execute(
+    SASession.execute(
+        session,
         text("""INSERT INTO account_capability_asset (job_id,advertiser_id,tenant_id,bc_id,page,role)
         SELECT :job_id,item->>'advertiser_id',p.tenant_id,p.bc_id,p.page,item->>'role'
         FROM discovery_staged_page p CROSS JOIN LATERAL jsonb_array_elements(p.rows) item

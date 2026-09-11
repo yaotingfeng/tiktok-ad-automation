@@ -253,17 +253,26 @@ def test_expired_or_naive_deadline_cannot_send(bound_client, mcp_wire):
 
 
 def test_deadline_rechecked_after_admission(client_factory, mcp_wire):
+    admissions = []
+
     @contextmanager
     def slow_admit(_advertiser_id, operation):
         if operation == "builds.create_campaign":
             time.sleep(0.2)
-        yield
+        admissions.append(("enter", operation))
+        try:
+            yield
+        finally:
+            admissions.append(("exit", operation))
 
     with client_factory(admit=slow_admit) as client:
         with pytest.raises(RemoteCallError) as exc:
             invoke(client, deadline=datetime.now(UTC) + timedelta(seconds=0.15))
+    assert exc.value.code == "mcp_deadline_exceeded"
     assert exc.value.effect == "NOT_SENT"
     assert not tool_calls(mcp_wire)
+    assert ("enter", "builds.create_campaign") in admissions
+    assert ("exit", "builds.create_campaign") in admissions
 
 
 def test_catalog_pagination_and_repeated_cursor(client_factory, mcp_wire):
