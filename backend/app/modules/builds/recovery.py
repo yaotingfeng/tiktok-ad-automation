@@ -79,6 +79,22 @@ GROUP_READY = """EXISTS (SELECT 1 FROM planned_group g
  WHERE gm.tenant_id=g.tenant_id AND gm.preview_id=g.preview_id AND gm.drama_id=g.drama_id AND gm.group_no=g.group_no
  AND NOT EXISTS (SELECT 1 FROM execution_step ms WHERE ms.tenant_id=s.tenant_id AND ms.submission_id=s.submission_id AND ms.unit_id=s.unit_id AND ms.kind='MATERIAL' AND ms.material_id=gm.material_id AND ms.status='SUCCEEDED')))
 """
+READ_ACCOUNT = """
+AND EXISTS (SELECT 1 FROM bc_account_access a
+ JOIN tiktok_connection c ON c.tenant_id=a.tenant_id AND c.id=a.connection_id
+ JOIN tenant_bc b ON b.tenant_id=a.tenant_id AND b.bc_id=a.bc_id
+ JOIN advertiser_account aa ON aa.tenant_id=a.tenant_id AND aa.advertiser_id=a.advertiser_id
+ JOIN build_route_context r ON r.tenant_id=s.tenant_id AND r.preview_id=s.preview_id AND r.connection_id=a.connection_id
+ JOIN bc_connection_binding binding ON binding.tenant_id=r.tenant_id AND binding.bc_id=r.bc_id AND binding.connection_id=r.connection_id AND binding.kind=r.channel
+ JOIN connection_authorization auth ON auth.tenant_id=r.tenant_id AND auth.connection_id=r.connection_id AND auth.authorization_revision=r.authorization_revision
+ WHERE a.connection_id=u.connection_id AND c.kind=r.channel AND c.authorization_revision=r.authorization_revision AND c.adapter_contract_revision=r.adapter_contract_revision
+ AND auth.source<>'UNKNOWN' AND auth.permission_summary->'read_authorized'='true'::jsonb
+ AND auth.verified_at BETWEEN :cutoff AND :now AND a.checked_at BETWEEN :cutoff AND :now
+ AND a.tenant_id=s.tenant_id AND a.bc_id=s.bc_id AND a.advertiser_id=u.advertiser_id
+ AND a.in_bc AND a.authorized AND a.active
+ AND c.status='ACTIVE' AND NOT b.ownership_conflict AND NOT aa.ownership_conflict
+ AND trim(aa.currency)<>'' AND trim(aa.timezone)<>'')
+"""
 RETRY = f"""
 AND s.status IN ('FAILED','RETRYABLE') AND s.request_body IS NULL AND s.remote_id IS NULL
 AND s.phase<>'REQUEST_ARMED' AND s.kind<>'READBACK' AND coalesce(s.error_code,'') NOT IN ({INTENT_ERRORS})
@@ -134,7 +150,9 @@ def _query(_row: Submission, kind: str, *, account: bool = True) -> str:
     if kind != "RETRY":
         base = base.replace("execution_step s", RECONCILE_CANDIDATES, 1)
     return (
-        base + (RETRY if kind == "RETRY" else RECONCILE) + (ACCOUNT if account else "")
+        base
+        + (RETRY if kind == "RETRY" else RECONCILE)
+        + ((ACCOUNT if kind == "RETRY" else READ_ACCOUNT) if account else "")
     )
 
 
@@ -501,20 +519,26 @@ def _schedule(
         return False
     unit = session.get(BuildUnit, step.unit_id)
     assert unit
-    route = verify_unit_route(session, context=original, unit=unit, capability="build")
-    access = resolve_account_access(
+    route = verify_unit_route(
         session,
         context=original,
-        bc_id=row.bc_id,
-        advertiser_id=unit.advertiser_id,
-        action="build",
-        connection_id=route.connection_id,
+        unit=unit,
+        capability="build" if job.kind == "RETRY" else "read",
     )
-    if access.connection_id != unit.connection_id or (
-        access.currency,
-        access.timezone,
-    ) != (unit.currency, unit.timezone):
-        return False
+    if job.kind == "RETRY":
+        access = resolve_account_access(
+            session,
+            context=original,
+            bc_id=row.bc_id,
+            advertiser_id=unit.advertiser_id,
+            action="build",
+            connection_id=route.connection_id,
+        )
+        if access.connection_id != unit.connection_id or (
+            access.currency,
+            access.timezone,
+        ) != (unit.currency, unit.timezone):
+            return False
     if job.kind == "RECONCILE" and step.kind == "MATERIAL":
         return _material_reconciliation(session, step=step, unit=unit, context=original)
     if job.kind == "RETRY":

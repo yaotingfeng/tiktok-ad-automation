@@ -125,6 +125,7 @@ def test_review_database_commit_failure_preserves_received_cta_id(
                     "data": {
                         "creative_portfolio_id": calls[0][2],
                         "creative_portfolio_type": "CTA",
+                        "advertiser_id": saved_body["advertiser_id"],
                         "portfolio_content": saved_body["portfolio_content"],
                     },
                     "request_id": "recovered",
@@ -170,7 +171,7 @@ def test_review_fairness_redis_outage_defers_unsent_step(executable, monkeypatch
     with Session(db) as session:
         step = session.get(ExecutionStep, ids["CTA"][0])
         assert step.request_body is None and step.remote_id is None
-        assert step.error_code == "admission_unavailable"
+        assert step.error_code == "tiktok_local_resources_unavailable"
         assert step.status == "PENDING"
 
 
@@ -305,7 +306,9 @@ def test_review_pre_arm_commit_rejection_never_reaches_transport(
     with Session(db) as session:
         step = session.get(ExecutionStep, ids["CTA"][0])
         assert step.request_body is None and step.remote_id is None
-        assert step.status == "FAILED"
+        # bounded_session 把提交异常归为本地资源不可用；未 arm、未发送可重排。
+        assert step.status == "PENDING"
+        assert step.error_code == "tiktok_local_resources_unavailable"
 
 
 @pytest.mark.parametrize(
@@ -320,19 +323,15 @@ def test_review_actual_late_sdk_receipt_preserves_new_owner_nonce(
     db, _, ids = executable
     identity, replacement = ids["CTA"][0], uuid4()
     if cleanup_failure:
-        from contextlib import contextmanager
+        import urllib3
 
-        from app.modules.builds import execution
+        original_clear = urllib3.PoolManager.clear
 
-        original_client = execution.sdk_client
-
-        @contextmanager
-        def failing_cleanup(*args, **kwargs):
-            with original_client(*args, **kwargs) as client:
-                yield client
+        def failing_cleanup(pool):
+            original_clear(pool)
             raise RuntimeError("review cleanup failure")
 
-        monkeypatch.setattr(execution, "sdk_client", failing_cleanup)
+        monkeypatch.setattr(urllib3.PoolManager, "clear", failing_cleanup)
     writes = []
 
     def request(_pool, method, _url, **_kwargs):
@@ -386,7 +385,7 @@ def test_review_actual_late_sdk_receipt_preserves_new_owner_nonce(
 @pytest.mark.parametrize("copy", ["", "  \t\n", "a" * 101, "剧" * 101])
 def test_review_ad_copy_application_policy_rejects_blank_or_over_100(copy):
     from app.core.errors import DomainError
-    from app.modules.builds.sdk_requests import ad_assets
+    from app.modules.builds.request_compiler import ad_assets
 
     with pytest.raises(DomainError):
         ad_assets(
@@ -402,7 +401,7 @@ def test_review_ad_copy_application_policy_rejects_blank_or_over_100(copy):
 
 
 def test_review_ad_copy_application_policy_counts_characters_not_bytes():
-    from app.modules.builds.sdk_requests import ad_assets
+    from app.modules.builds.request_compiler import ad_assets
 
     body = ad_assets(
         [{"video_id": "target", "image_id": "cover"}],

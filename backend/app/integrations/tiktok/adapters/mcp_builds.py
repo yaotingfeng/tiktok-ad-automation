@@ -2,6 +2,7 @@
 
 from uuid import UUID
 
+from app.integrations.tiktok.adapters.build_results import created_result
 from app.integrations.tiktok.contracts.builds import (
     AdGroupStatus,
     BuildPage,
@@ -9,10 +10,13 @@ from app.integrations.tiktok.contracts.builds import (
     CreatedObject,
     CreateIntent,
 )
-from app.integrations.tiktok.contracts.common import CallEvidence, RemoteCallError
 from app.integrations.tiktok.mcp.transport import BoundMCPClient
 from app.modules.builds.readback_compare import parse_page, parse_status
-from app.modules.builds.request_compiler import read_arguments, status_arguments
+from app.modules.builds.request_compiler import (
+    create_arguments,
+    read_arguments,
+    status_arguments,
+)
 
 
 class McpBuildOperations:
@@ -20,9 +24,13 @@ class McpBuildOperations:
         self._client = client
 
     def create(self, *, attempt_id: UUID, intent: CreateIntent) -> CreatedObject:
-        raise RemoteCallError(
-            "build_capability_not_enabled", effect="NOT_SENT", evidence=CallEvidence()
+        operation, arguments = create_arguments(
+            attempt_id=attempt_id, intent=intent, channel="OFFICIAL_MCP"
         )
+        response = self._client.call(
+            operation=operation, advertiser_id=intent.advertiser_id, arguments=arguments
+        )
+        return created_result(kind=intent.kind, response=response)
 
     def read_page(self, *, query: BuildReadQuery) -> BuildPage:
         operation, arguments = read_arguments(query)

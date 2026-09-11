@@ -13,6 +13,7 @@ import { canManage, isForbidden, RequestError } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
+import { ExecutionRoute } from "./ExecutionRoute"
 import {
   countObjects,
   SubmissionBadge,
@@ -242,6 +243,14 @@ function Detail({
         </CardContent>
       </Card>
       <SubmissionProgress data={data} />
+      {data.recovery_mode === "REAUTHORIZE_READ" && (
+        <Alert>
+          <AlertDescription>
+            原连接已重新授权。请在“异常与待核实”中查看具体步骤，按新授权只读核查；结果不会触发原任务续建。
+          </AlertDescription>
+        </Alert>
+      )}
+      <ExecutionRoute route={data.execution_route} />
       <Alert>
         <AlertDescription>
           <div className="flex flex-col gap-2">

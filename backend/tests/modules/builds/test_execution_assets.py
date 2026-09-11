@@ -2,16 +2,20 @@
 
 import json
 from copy import deepcopy
+from uuid import uuid4
 
 import pytest
 from urllib3.response import HTTPResponse
 
 from app.core.errors import DomainError
+from app.integrations.tiktok.contracts.common import RemoteCallError
 from app.integrations.tiktok.sdk import official_client
+from app.modules.builds.request_compiler import cta_portfolio, decode_intent
+from tests.integrations.tiktok.build_wire import sdk_build_operations
 
 
 def test_each_sp_uses_complete_target_group_and_one_independent_text():
-    from app.modules.builds.sdk_requests import ad_assets
+    from app.modules.builds.request_compiler import ad_assets
 
     mappings = [
         {"video_id": "target-v1", "image_id": "target-cover-1"},
@@ -58,7 +62,7 @@ def test_each_sp_uses_complete_target_group_and_one_independent_text():
     ],
 )
 def test_unverified_target_mapping_never_compiles(mappings):
-    from app.modules.builds.sdk_requests import ad_assets
+    from app.modules.builds.request_compiler import ad_assets
 
     with pytest.raises(DomainError):
         ad_assets(
@@ -74,7 +78,7 @@ def test_unverified_target_mapping_never_compiles(mappings):
 
 
 def test_identity_cannot_override_creative_assets():
-    from app.modules.builds.sdk_requests import ad_assets
+    from app.modules.builds.request_compiler import ad_assets
 
     with pytest.raises(DomainError):
         ad_assets(
@@ -91,7 +95,6 @@ def test_identity_cannot_override_creative_assets():
 
 
 def test_official_cta_portfolio_wire_uses_actual_recommendation_ids(monkeypatch):
-    from app.modules.builds.sdk_requests import cta_portfolio, invoke_portfolio
 
     calls = []
 
@@ -119,7 +122,9 @@ def test_official_cta_portfolio_wire_uses_actual_recommendation_ids(monkeypatch)
         ),
     )
     with official_client(access_token="fixture-token") as client:
-        result = invoke_portfolio(client, body=body)
+        result = sdk_build_operations(client).create(
+            attempt_id=uuid4(), intent=decode_intent("CTA", body)
+        )
     assert result.remote_id == "portfolio-1"
     assert calls == [
         (
@@ -140,11 +145,6 @@ def test_official_cta_portfolio_wire_uses_actual_recommendation_ids(monkeypatch)
 
 
 def test_portfolio_unknown_response_is_not_retryable_proof(monkeypatch):
-    from app.modules.builds.sdk_requests import (
-        TikTokResponseError,
-        cta_portfolio,
-        invoke_portfolio,
-    )
 
     calls = []
 
@@ -156,14 +156,24 @@ def test_portfolio_unknown_response_is_not_retryable_proof(monkeypatch):
 
     monkeypatch.setattr("urllib3.PoolManager.request", request)
     with official_client(access_token="fixture-token") as client:
-        with pytest.raises(TikTokResponseError) as caught:
-            invoke_portfolio(
-                client,
-                body=cta_portfolio(
-                    advertiser_id="advertiser-1",
-                    assets=(
-                        {"asset_ids": ["actual-cta-1"], "asset_content": "Watch now"},
+        with pytest.raises(RemoteCallError) as caught:
+            sdk_build_operations(client).create(
+                attempt_id=uuid4(),
+                intent=decode_intent(
+                    "CTA",
+                    cta_portfolio(
+                        advertiser_id="advertiser-1",
+                        assets=(
+                            {
+                                "asset_ids": ["actual-cta-1"],
+                                "asset_content": "Watch now",
+                            },
+                        ),
                     ),
                 ),
             )
-    assert caught.value.remote_code == 0 and calls == ["POST"]
+    assert (
+        caught.value.effect == "UNKNOWN"
+        and caught.value.evidence.request_id == "receipt-1"
+        and calls == ["POST"]
+    )

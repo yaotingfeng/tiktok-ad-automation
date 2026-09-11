@@ -359,12 +359,12 @@ def test_expired_armed_attempt_late_receipt_cannot_replace_reader_lease(
 ):
     """Separate committed sessions; late SDK receipt arrives during the new GET."""
     import time
-    from contextlib import ExitStack
+    from datetime import UTC, datetime, timedelta
 
     from redis import Redis
 
     from app.core.config import settings
-    from app.integrations.tiktok.sdk import sdk_client
+    from app.integrations.tiktok.gateway import open_tiktok_gateway
     from app.modules.builds.dispatch import queue_step
     from app.modules.builds.execution import prepare_request
     from app.modules.builds.execution_admission import admitted_build_call
@@ -379,7 +379,7 @@ def test_expired_armed_attempt_late_receipt_cannot_replace_reader_lease(
         preserve_created_receipt,
         record_created,
     )
-    from app.modules.builds.sdk_requests import PORTFOLIO_ENDPOINT, invoke_portfolio
+    from app.modules.builds.request_compiler import decode_intent
 
     scenario = acceptance_scenario
     scenario.prepare()
@@ -409,7 +409,7 @@ def test_expired_armed_attempt_late_receipt_cannot_replace_reader_lease(
     context = scenario.scope.context
     with Session(scenario.database_engine) as session, session.begin():
         claim = submissions.claim_step(
-            session, context=context, step_id=identity, owner=uuid4(), lease_seconds=2
+            session, context=context, step_id=identity, owner=uuid4(), lease_seconds=5
         )
         assert claim
         frozen = submissions.load_execution_unit(
@@ -420,27 +420,29 @@ def test_expired_armed_attempt_late_receipt_cannot_replace_reader_lease(
         ).frozen
         body = prepare_request(session, context=context, claim=claim, frozen=frozen)
         arm_request(session, context=context, claim=claim, body=body)
+    task_deadline = min(
+        datetime.now(UTC) + timedelta(seconds=45), claim.lease_expires_at
+    )
     with Redis.from_url(settings.REDIS_URL, decode_responses=True) as redis_client:
-        with (
-            admitted_build_call(
-                redis_client,
-                context=context,
-                endpoint=PORTFOLIO_ENDPOINT,
-                advertiser_id=claim.advertiser_id,
-            ),
-            ExitStack() as stack,
+        with admitted_build_call(
+            redis_client,
+            context=context,
+            route=claim.route,
+            task_deadline=task_deadline,
         ):
-            with Session(scenario.database_engine) as session:
-                client = stack.enter_context(
-                    sdk_client(
-                        session,
-                        context=context,
-                        connection_id=scenario.scope.connection_id,
-                    )
+            with open_tiktok_gateway(
+                database_engine=scenario.database_engine,
+                redis_client=redis_client,
+                context=context,
+                route=claim.route,
+                task_deadline=task_deadline,
+            ) as gateway:
+                result = gateway.builds.create(
+                    attempt_id=claim.attempt_id,
+                    intent=decode_intent("CTA", body),
                 )
-            result = invoke_portfolio(client, body=body)
     # The remote effect happened; its reply has not been committed locally.
-    time.sleep(2.1)
+    time.sleep(5.1)
     with Session(scenario.database_engine) as session, session.begin():
         step = session.exec(
             select(ExecutionStep).where(ExecutionStep.id == identity).with_for_update()

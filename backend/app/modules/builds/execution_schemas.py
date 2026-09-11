@@ -1,12 +1,14 @@
 """Small execution contracts; credentials and raw evidence are never public DTOs."""
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.modules.builds.preview_schemas import FrozenUnit
+from app.modules.builds.route_schemas import ExecutionRoutePublic
 
 
 class SubmitRequest(BaseModel):
@@ -34,6 +36,9 @@ class Recovery(BaseModel):
 
 
 class SubmissionView(BaseModel):
+    execution_route: ExecutionRoutePublic | None = None
+    recovery_mode: Literal["ORIGINAL_READ", "REAUTHORIZE_READ", "BLOCKED"] = "BLOCKED"
+    error_code: str | None = None
     actor_name: str = ""
     provider_name: str | None = None
     strategy_label: str = ""
@@ -93,6 +98,7 @@ class ExecutionUnit(BaseModel):
 
 
 class StepPublic(BaseModel):
+    can_historical_read: bool = False
     title: str | None = None
     advertiser_id: str | None = None
     group_no: int | None = None

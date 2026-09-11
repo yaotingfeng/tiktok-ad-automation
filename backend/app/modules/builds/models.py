@@ -32,6 +32,15 @@ class BuildDraft(SQLModel, table=True):
             ["tenant_id", "bc_id"], ["tenant_bc.tenant_id", "tenant_bc.bc_id"]
         ),
         ForeignKeyConstraint(
+            ["tenant_id", "bc_id", "execution_connection_id"],
+            [
+                "bc_connection_binding.tenant_id",
+                "bc_connection_binding.bc_id",
+                "bc_connection_binding.connection_id",
+            ],
+            name="fk_build_draft_execution_connection",
+        ),
+        ForeignKeyConstraint(
             ["tenant_id", "strategy_version_id"],
             ["strategy_version.tenant_id", "strategy_version.id"],
         ),
@@ -57,6 +66,8 @@ class BuildDraft(SQLModel, table=True):
     status: str = "DRAFT"
     strategy_version_id: UUID
     provider_connection_id: UUID
+    # 可编辑偏好与后代冻结路由分开；NULL 仅在新准备时解析 BC 默认。
+    execution_connection_id: UUID | None = None
     application_id: str = Field(max_length=255)
     link_config: dict[str, Any] = Field(
         default_factory=dict, sa_column=Column(JSONB, nullable=False)

@@ -4,6 +4,7 @@ import hashlib
 import json
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
+from enum import Enum
 from typing import Any
 from uuid import UUID, uuid4, uuid5
 
@@ -58,6 +59,10 @@ from app.modules.tenants.permissions import require_tenant
 MAX_ACCOUNT_LINES = 100_000
 MAX_INPUT_BYTES = 16 * 1024 * 1024
 PAGE_SIZE = 100
+
+
+class _Unchanged(Enum):
+    VALUE = "unchanged"
 
 
 def material_visible() -> ColumnElement[bool]:
@@ -124,6 +129,7 @@ def _check_intent(
     drama_lines: list[str],
     account_lines: list[str],
     link_config: dict[str, Any],
+    execution_connection_id: UUID | None = None,
 ) -> None:
     _authorize(session, context)
     if (
@@ -138,6 +144,11 @@ def _check_intent(
     bc = session.get(TenantBC, (context.tenant_id, bc_id), populate_existing=True)
     if bc is None or bc.ownership_conflict:
         raise DomainError("account_not_in_bc", "当前租户 BC 不可用")
+    if execution_connection_id is not None:
+        # 保存仅核实当前租户/BC绑定；原授权和契约版本在新准备时冻结。
+        freeze_route(
+            session, context=context, bc_id=bc_id, connection_id=execution_connection_id
+        )
     version = get_version_record(
         session, context=context, version_id=strategy_version_id
     )
@@ -212,6 +223,7 @@ def create_draft(
     account_lines: list[str],
     link_config: dict[str, Any],
     request_id: UUID | None = None,
+    execution_connection_id: UUID | None = None,
 ) -> UUID:
     intent: dict[str, Any] = {
         "bc_id": bc_id,
@@ -223,6 +235,9 @@ def create_draft(
         "link_config": link_config,
     }
     _check_intent(session, context, **intent)
+    # 未指定连接的既有请求摘要保持原文，便于原 request_id 幂等回读。
+    if execution_connection_id is not None:
+        intent["execution_connection_id"] = execution_connection_id
     request_id = request_id or uuid4()
     digest = hashlib.sha256(
         json.dumps(
@@ -249,11 +264,16 @@ def create_draft(
         if prior.request_digest != digest:
             raise DomainError("idempotency_conflict", "同一请求标识已用于不同草稿输入")
         return prior.id
+    if execution_connection_id is not None:
+        freeze_route(
+            session, context=context, bc_id=bc_id, connection_id=execution_connection_id
+        )
     draft = BuildDraft(
         tenant_id=context.tenant_id,
         bc_id=bc_id,
         strategy_version_id=strategy_version_id,
         provider_connection_id=provider_connection_id,
+        execution_connection_id=execution_connection_id,
         application_id=application_id,
         link_config=link_config,
         created_by=context.actor_id,
@@ -303,7 +323,12 @@ def prepare_draft(
         )
         session.flush()
         return existing.id
-    route = freeze_route(session, context=context, bc_id=draft.bc_id)
+    route = freeze_route(
+        session,
+        context=context,
+        bc_id=draft.bc_id,
+        connection_id=draft.execution_connection_id,
+    )
     if existing or draft.status != "DRAFT":
         _bump_revision(session, draft, draft.revision)
     # Every new local preparation starts account resolution afresh. Manual
@@ -1082,6 +1107,7 @@ def update_draft(
     drama_lines: list[str] | None = None,
     account_lines: list[str] | None = None,
     link_config: dict[str, Any] | None = None,
+    execution_connection_id: UUID | None | _Unchanged = _Unchanged.VALUE,
 ) -> int:
     """Input/strategy changes restart preparation; material-only edits use their
     separate endpoint to preserve every other drama's prepared grouping.
@@ -1102,6 +1128,7 @@ def update_draft(
         "bc_id": draft.bc_id,
         "strategy_version_id": draft.strategy_version_id,
         "provider_connection_id": draft.provider_connection_id,
+        "execution_connection_id": draft.execution_connection_id,
         "application_id": draft.application_id,
         "drama_lines": [raw for kind, raw in existing if kind == "drama"],
         "account_lines": [raw for kind, raw in existing if kind == "account"],
@@ -1119,6 +1146,8 @@ def update_draft(
         }.items()
         if value is not None
     }
+    if execution_connection_id is not _Unchanged.VALUE:
+        intent["execution_connection_id"] = execution_connection_id
     _check_intent(session, context, **intent)
     if intent == old_intent:
         return draft.revision
@@ -1133,6 +1162,7 @@ def update_draft(
         )
     draft.strategy_version_id = intent["strategy_version_id"]
     draft.provider_connection_id = intent["provider_connection_id"]
+    draft.execution_connection_id = intent["execution_connection_id"]
     draft.application_id = intent["application_id"]
     draft.link_config = intent["link_config"]
     draft.status = "DRAFT"

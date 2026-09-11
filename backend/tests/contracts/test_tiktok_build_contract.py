@@ -277,12 +277,12 @@ def test_positive_row_count_requires_positive_page_count():
 def test_current_scene_and_legacy_compiler_keep_every_actual_field():
     from types import SimpleNamespace
 
-    from app.modules.builds.scene import _assemble_scene
-    from app.modules.builds.sdk_requests import (
+    from app.modules.builds.request_compiler import (
         ad_assets,
         compile_request,
         cta_portfolio,
     )
+    from app.modules.builds.scene import _assemble_scene
 
     scene = _assemble_scene(
         scope={"access": SimpleNamespace(currency="USD"), "basis": "synthetic"},

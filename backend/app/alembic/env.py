@@ -29,6 +29,7 @@ from app.modules.accounts import discovery_models  # noqa: E402, F401
 from app.modules.builds import execution_models  # noqa: F401
 from app.modules.builds import route_models  # noqa: E402, F401
 from app.modules.builds import recovery_models  # noqa: F401
+from app.modules.builds import recovery_routes  # noqa: E402, F401
 from app.modules.builds import scene_job_models  # noqa: F401
 from app.modules.materials import models as materials_models  # noqa: F401
 from app.modules.materials import cover_models  # noqa: F401

@@ -13,6 +13,7 @@ class CreateDraftRequest(BaseModel):
     bc_id: str = Field(min_length=1, max_length=128)
     strategy_version_id: UUID
     provider_connection_id: UUID
+    execution_connection_id: UUID | None = None
     application_id: str = Field(min_length=1, max_length=255)
     drama_lines: list[InputText] = Field(max_length=1000)
     account_lines: list[InputText] = Field(max_length=100_000)
@@ -25,6 +26,7 @@ class PatchDraftRequest(BaseModel):
     expected_revision: int = Field(gt=0, strict=True)
     strategy_version_id: UUID | None = None
     provider_connection_id: UUID | None = None
+    execution_connection_id: UUID | None = None
     application_id: str | None = Field(default=None, min_length=1, max_length=255)
     drama_lines: list[InputText] | None = Field(default=None, max_length=1000)
     account_lines: list[InputText] | None = Field(default=None, max_length=100_000)
@@ -60,6 +62,7 @@ class DraftSummary(BaseModel):
     status: Literal["DRAFT", "PREPARING", "READY", "BLOCKED"]
     strategy_version_id: UUID
     provider_connection_id: UUID
+    execution_connection_id: UUID | None = None
     application_id: str
     link_config: dict[str, str | int | bool | None]
     input_counts: dict[str, dict[str, int]]

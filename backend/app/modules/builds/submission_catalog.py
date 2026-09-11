@@ -578,6 +578,11 @@ def enrich_steps(
 ) -> None:
     if not items:
         return
+    from app.modules.builds.historical_read import historical_read_eligible_steps
+
+    eligible = historical_read_eligible_steps(
+        session, context=context, step_ids=[item.step_id for item in items]
+    )
     rows = (
         cast(SASession, session)
         .execute(
@@ -598,6 +603,7 @@ def enrich_steps(
     )
     indexed = {r["id"]: r for r in rows}
     for item in items:
+        item.can_historical_read = item.step_id in eligible
         for key in ["title", "advertiser_id", "group_no", "creative_no"]:
             setattr(item, key, indexed[item.step_id][key])
 

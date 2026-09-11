@@ -38,6 +38,17 @@ class RecoveryReceipt(BaseModel):
     reason_code: str | None = None
 
 
+class HistoricalReadReceipt(BaseModel):
+    read_id: UUID
+    request_id: UUID
+    source_step_id: UUID
+    state: Literal["PENDING", "RUNNING", "CONFIRMED", "UNKNOWN", "BLOCKED"]
+    remote_id: str | None = None
+    mismatch: bool = False
+    reason_code: str | None = None
+    requires_new_preparation: Literal[True] = True
+
+
 class SubmissionRecovery(SQLModel, table=True):
     __tablename__ = "submission_recovery"
     __table_args__ = (

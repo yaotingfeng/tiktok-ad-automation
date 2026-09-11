@@ -147,7 +147,8 @@ def build_case(request, monkeypatch):
             contracts = {
                 contract.operation: contract
                 for contract in load_tool_contracts()
-                if contract.operation in wire.operations.values()
+                if contract.operation
+                in {*wire.operations.values(), *wire.create_operations.values()}
             }
             with open_bound_mcp_client(
                 token="synthetic-token",
@@ -200,15 +201,8 @@ def test_real_read_adapters_preserve_complete_intent_and_exact_ids(
     assert (body["advertiser_id"], wire.operations[kind]) in events
 
 
-def test_unknown_cta_id_and_all_creates_are_not_sent(build_case):
+def test_unknown_cta_id_is_not_sent(build_case):
     adapter, wire, _ = build_case
-    for kind, body in build_bodies().items():
-        with pytest.raises(RemoteCallError) as error:
-            adapter.create(attempt_id=uuid4(), intent=decode_intent(kind, body))
-        assert (
-            error.value.effect == "NOT_SENT"
-            and error.value.code == "build_capability_not_enabled"
-        )
     with pytest.raises(RemoteCallError) as error:
         adapter.read_page(
             query=BuildReadQuery(intent=decode_intent("CTA", build_bodies()["CTA"]))
@@ -396,3 +390,95 @@ def test_mcp_build_reads_obey_actual_tool_and_text_envelope_contract(
         )
     assert error.value.effect == ("NOT_SENT" if problem == "schema" else "UNKNOWN")
     assert len(wire.business_calls()) == (0 if problem == "schema" else 1)
+
+
+@pytest.mark.parametrize("kind", ["CAMPAIGN", "ADGROUP", "AD", "CTA"])
+def test_create_uses_exact_frozen_fields_and_real_receipt_without_status_fill(
+    build_case, kind
+):
+    adapter, wire, events = build_case
+    body = build_bodies()[kind]
+    if kind == "ADGROUP":
+        body["roas_bid"] = "1.25"
+    intent = decode_intent(kind, body)
+    wire.enqueue_created(kind, "90071992547409938888")
+    attempt_id = uuid4()
+    result = adapter.create(attempt_id=attempt_id, intent=intent)
+    assert result.kind == kind and result.remote_id == "90071992547409938888"
+    assert result.operation_status is None
+    assert result.evidence.request_id == "synthetic-create-request"
+    calls = wire.business_calls()
+    assert len(calls) == 1
+    expected = dict(body)
+    for key in ("budget", "roas_bid"):
+        if key in expected:
+            expected[key] = float(expected[key])
+    if wire.channel == "OFFICIAL_MCP" and kind in {"CAMPAIGN", "ADGROUP"}:
+        expected["request_id"] = str(attempt_id)
+    assert calls[0]["arguments"] == expected
+    assert (body["advertiser_id"], wire.create_operations[kind]) in events
+
+
+@pytest.mark.parametrize(
+    "problem", ["lost", "code", "boolean_code", "missing_id", "numeric_id", "unsafe_id"]
+)
+def test_sent_create_uncertainty_never_retries_and_retains_safe_evidence(
+    build_case, problem
+):
+    adapter, wire, _ = build_case
+    if problem == "lost":
+        wire.drop_created_response("CTA")
+    else:
+        data = {"creative_portfolio_id": "remote"}
+        code = 0
+        if problem == "code":
+            code = 40002
+        elif problem == "boolean_code":
+            code = False
+        elif problem == "missing_id":
+            data = {}
+        elif problem == "numeric_id":
+            data = {"creative_portfolio_id": 90071992547409938888}
+        else:
+            data = {
+                "creative_portfolio_id": "https://signed.invalid/private?token=synthetic"
+            }
+        wire.enqueue_create_envelope(
+            "CTA",
+            {
+                "code": code,
+                "data": data,
+                "request_id": "safe-create",
+                "message": "synthetic-secret",
+            },
+        )
+    with pytest.raises(RemoteCallError) as caught:
+        adapter.create(
+            attempt_id=uuid4(), intent=decode_intent("CTA", build_bodies()["CTA"])
+        )
+    assert caught.value.effect == "UNKNOWN" and not caught.value.retryable
+    assert "synthetic-secret" not in str(caught.value)
+    assert len(wire.business_calls()) == 1
+    if problem != "lost":
+        assert caught.value.evidence.request_id == "safe-create"
+
+
+def test_unrepresentable_decimal_blocks_before_create(build_case):
+    adapter, wire, _ = build_case
+    with pytest.raises(RemoteCallError) as caught:
+        adapter.create(
+            attempt_id=uuid4(),
+            intent=decode_intent("ADGROUP", build_bodies()["ADGROUP"]),
+        )
+    assert caught.value.effect == "NOT_SENT"
+    assert wire.business_calls() == []
+
+
+def test_create_preserves_explicit_non_enable_remote_status(build_case):
+    adapter, wire, _ = build_case
+    wire.enqueue_created("CAMPAIGN", "remote-campaign", status="DELETED")
+    result = adapter.create(
+        attempt_id=uuid4(), intent=decode_intent("CAMPAIGN", build_bodies()["CAMPAIGN"])
+    )
+    assert result.operation_status == "DELETED"
+    assert len(wire.business_calls()) == 1

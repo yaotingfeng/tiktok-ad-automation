@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -5,7 +7,6 @@ from billiard.exceptions import SoftTimeLimitExceeded
 
 from app.core.config import settings
 from app.core.context import TenantContext
-from app.core.errors import DomainError
 from app.jobs.admission import admission_keys
 
 
@@ -33,10 +34,42 @@ def policy(monkeypatch):
     )
 
 
+@contextmanager
+def admitted_build_call(redis_client, *, context, endpoint, advertiser_id):
+    """组合真实公平层与 P0 准入边界；业务执行层不再重复持有上游额度。"""
+    from app.integrations.tiktok.admission import admit_tiktok_call
+    from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
+    from app.jobs.admission import admission_policy
+    from app.modules.builds.execution_admission import admitted_build_call as fair_turn
+
+    route = FrozenTikTokRoute(
+        tenant_id=context.tenant_id,
+        bc_id="synthetic",
+        connection_id=uuid4(),
+        channel="OFFICIAL_API",
+        authorization_revision=1,
+        adapter_contract_revision="synthetic",
+    )
+    with fair_turn(
+        redis_client,
+        context=context,
+        route=route,
+        task_deadline=datetime.now(UTC) + timedelta(seconds=45),
+    ):
+        with admit_tiktok_call(
+            redis_client,
+            route=route,
+            advertiser_id=advertiser_id,
+            operation=endpoint,
+            scope=settings.TIKTOK_APP_ID,
+            policy=admission_policy(endpoint),
+        ):
+            yield
+
+
 def test_write_quota_covers_call_but_not_fair_turn_and_finally_releases(
     redis_client, monkeypatch
 ):
-    from app.modules.builds.execution_admission import admitted_build_call
     from app.modules.builds.fairness import fair_keys
 
     policy(monkeypatch)
@@ -58,7 +91,6 @@ def test_write_quota_covers_call_but_not_fair_turn_and_finally_releases(
 
 def test_denied_account_releases_fair_turn_for_other_tenant(redis_client, monkeypatch):
     from app.integrations.tiktok.sdk import AccountAdmissionDeferred
-    from app.modules.builds.execution_admission import admitted_build_call
 
     policy(monkeypatch)
     a = TenantContext(tenant_id=uuid4(), actor_id=uuid4(), role="operator")
@@ -77,20 +109,6 @@ def test_denied_account_releases_fair_turn_for_other_tenant(redis_client, monkey
             pass
 
 
-def test_lease_must_outlive_whole_prefork_deadline(redis_client, monkeypatch):
-    from app.modules.builds.execution_admission import admitted_build_call
-
-    policy(monkeypatch)
-    settings.TIKTOK_CALL_POLICIES["base"]["lease_ms"] = 45000
-    context = TenantContext(tenant_id=uuid4(), actor_id=uuid4(), role="operator")
-    with pytest.raises(DomainError) as caught:
-        with admitted_build_call(
-            redis_client, context=context, endpoint="/create/", advertiser_id="a"
-        ):
-            raise AssertionError("unsafe call executed")
-    assert caught.value.code == "admission_policy_invalid"
-
-
 @pytest.mark.parametrize(
     "interrupt", [SystemExit, KeyboardInterrupt, SoftTimeLimitExceeded]
 )
@@ -98,7 +116,6 @@ def test_worker_interrupt_keeps_quota_until_process_deadline(
     redis_client, monkeypatch, interrupt
 ):
     from app.integrations.tiktok.sdk import AccountAdmissionDeferred
-    from app.modules.builds.execution_admission import admitted_build_call
 
     policy(monkeypatch)
     context = TenantContext(tenant_id=uuid4(), actor_id=uuid4(), role="operator")

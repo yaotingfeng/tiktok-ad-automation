@@ -1,9 +1,15 @@
 """纯字段编解码；不读时钟，不填授权/素材，不修改已冻结请求。"""
 
-from typing import Literal
+import json
+from collections.abc import Sequence
+from decimal import Decimal
+from math import isfinite
+from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import Field, ValidationError
 
+from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.builds import (
     AdCreate,
     AdGroupCreate,
@@ -17,6 +23,7 @@ from app.integrations.tiktok.contracts.builds import (
     Id,
 )
 from app.integrations.tiktok.contracts.common import CallEvidence, RemoteCallError
+from app.integrations.tiktok.contracts.context import ChannelKind
 
 
 class _CampaignBody(CampaignCreate):
@@ -266,3 +273,155 @@ def status_arguments(*, advertiser_id: str, adgroup_id: str) -> dict[str, object
         "page": 1,
         "page_size": 100,
     }
+
+
+CREATE_OPERATIONS = {
+    "CAMPAIGN": "build.create_campaign",
+    "ADGROUP": "build.create_adgroup",
+    "AD": "build.create_ad",
+    "CTA": "build.create_cta_portfolio",
+}
+
+
+def create_arguments(
+    *, attempt_id: UUID, intent: CreateIntent, channel: ChannelKind
+) -> tuple[str, dict[str, object]]:
+    """attempt 仅做本地关联；金额必须能由两条官方 JSON 路径无损表达。"""
+    if not isinstance(attempt_id, UUID):
+        raise RemoteCallError(
+            "invalid_build_request", effect="NOT_SENT", evidence=CallEvidence()
+        )
+    body = encode_intent(intent)
+    for field in ("budget", "roas_bid"):
+        if field not in body:
+            continue
+        value = Decimal(str(body[field]))
+        number = float(value)
+        if not isfinite(number) or Decimal(str(number)) != value:
+            raise RemoteCallError(
+                "decimal_serialization_loss", effect="NOT_SENT", evidence=CallEvidence()
+            )
+        body[field] = int(value) if value == value.to_integral() else number
+    if channel == "OFFICIAL_MCP" and intent.kind in {"CAMPAIGN", "ADGROUP"}:
+        body["request_id"] = str(attempt_id)
+    return CREATE_OPERATIONS[intent.kind], body
+
+
+PROTECTED = frozenset(
+    {
+        "advertiser_id",
+        "campaign_id",
+        "adgroup_id",
+        "campaign_name",
+        "adgroup_name",
+        "ad_name",
+        "budget",
+        "budget_optimize_on",
+        "roas_bid",
+        "operation_status",
+    }
+)
+
+APPLICATION_COPY_MAX_CHARACTERS = 100
+
+
+def _nonempty(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def ad_assets(
+    mappings: Sequence[dict[str, str]],
+    *,
+    text: str,
+    url: str,
+    identity: dict[str, str],
+) -> dict[str, Any]:
+    """One SP text, the whole group, and verified target-account video/cover IDs."""
+    if not mappings:
+        raise DomainError("empty_material_group", "素材组不能为空")
+    if (
+        len(mappings) > 50
+        or not _nonempty(text)
+        or not _nonempty(url)
+        or set(identity)
+        != {"identity_type", "identity_id", "identity_authorized_bc_id"}
+        or identity.get("identity_type") != "BC_AUTH_TT"
+        or not all(_nonempty(value) for value in identity.values())
+    ):
+        raise DomainError("invalid_build_request", "创意信息无效")
+    if len(text) > APPLICATION_COPY_MAX_CHARACTERS:
+        raise DomainError("copy_too_long", "应用文案策略最多允许 100 个字符")
+    creatives = []
+    for item in mappings:
+        if not _nonempty(item.get("video_id")) or not _nonempty(item.get("image_id")):
+            raise DomainError("target_asset_incomplete", "目标账户素材尚未核实")
+        creatives.append(
+            {
+                "creative_info": {
+                    **identity,
+                    "ad_format": "SINGLE_VIDEO",
+                    "video_info": {"video_id": item["video_id"]},
+                    "image_info": [{"web_uri": item["image_id"]}],
+                }
+            }
+        )
+    return {
+        "creative_list": creatives,
+        "ad_text_list": [{"ad_text": text}],
+        "landing_page_url_list": [{"landing_page_url": url}],
+    }
+
+
+def cta_portfolio(
+    *, advertiser_id: str, assets: Sequence[dict[str, Any]]
+) -> dict[str, Any]:
+    """Keep the recommended CTA text bound to its actual asset IDs."""
+    if not _nonempty(advertiser_id) or not 1 <= len(assets) <= 50:
+        raise DomainError("cta_unavailable", "缺少当前账户的 CTA 推荐证据")
+    content = []
+    seen: set[str] = set()
+    for asset in assets:
+        ids = asset.get("asset_ids")
+        if (
+            not _nonempty(asset.get("asset_content"))
+            or not isinstance(ids, (tuple, list))
+            or not 1 <= len(ids) <= 50
+            or not all(_nonempty(value) for value in ids)
+        ):
+            raise DomainError("cta_unavailable", "CTA 推荐证据不完整")
+        seen.update(ids)
+        content.append(
+            {"asset_ids": list(ids), "asset_content": asset["asset_content"]}
+        )
+    if len(seen) > 50:
+        raise DomainError("cta_unavailable", "CTA 推荐证据超出支持范围")
+    return {
+        "advertiser_id": advertiser_id,
+        "creative_portfolio_type": "CTA",
+        "portfolio_content": content,
+    }
+
+
+def _json_copy(value: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise DomainError("invalid_build_request", "搭建请求格式无效")
+    try:
+        result: dict[str, Any] = json.loads(json.dumps(value, allow_nan=False))
+    except ValueError, TypeError, RecursionError:
+        raise DomainError("invalid_build_request", "搭建请求格式无效") from None
+    return result
+
+
+def compile_request(
+    kind: str, *, fixed: dict[str, Any], resolved: dict[str, Any]
+) -> dict[str, Any]:
+    if kind not in {"campaign", "adgroup", "ad"}:
+        raise DomainError("invalid_build_kind", "搭建层级无效")
+    if not isinstance(resolved, dict) or PROTECTED.intersection(resolved):
+        raise DomainError("scene_overrides_frozen_fields", "场景不能覆盖已确认字段")
+    body = {**_json_copy(resolved), **_json_copy(fixed), "operation_status": "ENABLE"}
+    if kind == "campaign":
+        body["budget_optimize_on"] = True
+    if kind == "adgroup" and "budget" in body:
+        raise DomainError("adgroup_budget_not_allowed", "广告组不能设置独立预算")
+    return body

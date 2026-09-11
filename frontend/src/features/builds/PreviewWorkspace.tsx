@@ -26,6 +26,7 @@ import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import { buildKey } from "./api"
+import { ExecutionRoute } from "./ExecutionRoute"
 import {
   BuildGuard,
   BuildReason,
@@ -140,6 +141,7 @@ export function BuildPreviewPanel({
         </div>
       </div>
       <BuildSteps step={3} />
+      <ExecutionRoute route={current.execution_route} />
       {summary.error && (
         <RequestError
           error={summary.error}
@@ -327,6 +329,8 @@ export function PreviewSummaryBar({
                   !onSubmit ||
                   unavailable ||
                   pending ||
+                  !preview.execution_route ||
+                  preview.execution_route.bc_id !== preview.bc_id ||
                   preview.status !== "FROZEN" ||
                   preview.campaign_count === 0
                 }

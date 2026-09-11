@@ -2,85 +2,80 @@
 
 from types import SimpleNamespace
 
-import business_api_client as sdk
 import pytest
 
-from app.modules.builds import readback_sdk
+from app.integrations.tiktok.contracts.builds import BuildReadQuery
+from app.integrations.tiktok.contracts.common import (
+    CallEvidence,
+    McpBusinessResponse,
+    RemoteCallError,
+)
+from app.modules.builds import readback_compare
+from app.modules.builds.request_compiler import decode_intent
 from app.modules.builds.routes import save_attempt_context
+from tests.contracts.test_tiktok_build_contract import build_bodies
+from tests.integrations.tiktok.build_wire import BuildWire, sdk_build_operations
 
 
 def test_ad_get_uses_parent_scope_and_never_invents_name_filter(monkeypatch):
-    calls = []
-
-    def transport(_self, path, method, *args, **kwargs):
-        calls.append((path, method, dict(args[1]), kwargs))
-        return SimpleNamespace(
-            get=lambda: sdk.InlineResponse200(
-                code=0,
-                request_id="safe-read",
-                data={
-                    "list": [],
-                    "page_info": {
-                        "page": 2,
-                        "page_size": 100,
-                        "total_number": 100,
-                        "total_page": 1,
-                    },
-                },
-            )
-        )
-
-    monkeypatch.setattr(sdk.ApiClient, "call_api", transport)
     from app.integrations.tiktok.sdk import official_client
 
+    body = build_bodies()["AD"]
+    calls = wire(
+        monkeypatch,
+        [],
+        page_transform=lambda _data: {
+            "list": [],
+            "page_info": {
+                "page": 2,
+                "page_size": 100,
+                "total_number": 100,
+                "total_page": 1,
+            },
+        },
+    )
     with official_client(access_token="offline-secret") as client:
-        with pytest.raises(readback_sdk.ReadbackError):
-            readback_sdk.read_page(
-                client,
-                kind="AD",
-                body={
-                    "advertiser_id": "acct",
-                    "adgroup_id": "parent",
-                    "ad_name": "exact",
-                },
-                remote_id=None,
-                page=2,
+        with pytest.raises(RemoteCallError):
+            sdk_build_operations(client).read_page(
+                query=BuildReadQuery(intent=decode_intent("AD", body), page=2)
             )
-    path, method, query, kwargs = calls[0]
-    assert path == "/open_api/v1.3/smart_plus/ad/get/" and method == "GET"
-    assert query["filtering"] == {"adgroup_ids": ["parent"]}
+    path, query = calls[0]
+    assert path == BuildWire.paths["AD"]
+    assert query["filtering"] == {"adgroup_ids": [body["adgroup_id"]]}
     assert "ad_name" not in query["filtering"]
-    assert kwargs["async_req"] is True and kwargs["_request_timeout"] == (5, 30)
 
 
 def test_field_comparison_requires_target_video_url_copy_and_cta():
     from copy import deepcopy
 
-    expected = {
-        "advertiser_id": "a",
-        "adgroup_id": "g",
-        "ad_name": "n",
-        "creative_list": [
-            {
-                "creative_info": {
-                    "video_info": {"video_id": "target-v"},
-                    "image_info": [{"web_uri": "cover"}],
-                    "identity_id": "identity",
-                }
-            }
-        ],
-        "ad_text_list": [{"ad_text": "copy"}],
-        "landing_page_url_list": [{"landing_page_url": "https://example.test/x"}],
-        "ad_configuration": {"call_to_action_id": "portfolio"},
-    }
-    actual = deepcopy(expected)
-    actual["smart_plus_ad_id"] = "remote"
-    assert readback_sdk.compare_fields("AD", expected, actual) == "MATCH"
+    body = build_bodies()["AD"]
+    query = BuildReadQuery(intent=decode_intent("AD", body), remote_id="remote")
+
+    def compare(actual):
+        record = readback_compare.parse_page(
+            query=query,
+            response=McpBusinessResponse(
+                data={
+                    "list": [actual],
+                    "page_info": {
+                        "page": 1,
+                        "page_size": 100,
+                        "total_number": 1,
+                        "total_page": 1,
+                    },
+                },
+                evidence=CallEvidence(),
+            ),
+        ).rows[0]
+        return readback_compare.compare_record(query=query, record=record)
+
+    actual = {**deepcopy(body), "smart_plus_ad_id": "remote"}
+    assert compare(actual) == "MATCH"
     actual["creative_list"][0]["creative_info"]["video_info"]["video_id"] = "source-v"
-    assert readback_sdk.compare_fields("AD", expected, actual) == "MISMATCH"
-    actual = deepcopy(expected)
+    assert compare(actual) == "MISMATCH"
+    actual = {**deepcopy(body), "smart_plus_ad_id": "remote"}
     del actual["ad_configuration"]
-    assert readback_sdk.compare_fields("AD", expected, actual) == "INCOMPLETE"
+    assert compare(actual) == "INCOMPLETE"
 
 
 @pytest.fixture
@@ -176,7 +171,7 @@ def recon_env(isolated_strategy_database, monkeypatch, redis_client):
     # Unique application scope; rate keys expire, remove only these test keys.
     from app.jobs.admission import admission_keys
 
-    for endpoint in readback_sdk.ENDPOINTS.values():
+    for endpoint in BuildWire.paths.values():
         for advertiser in ("A", "B", "C"):
             redis_client.delete(
                 *admission_keys(
@@ -185,7 +180,7 @@ def recon_env(isolated_strategy_database, monkeypatch, redis_client):
             )
 
 
-def arm(env, kind="CAMPAIGN", *, known=None, readback=False):
+def arm(env, kind="CAMPAIGN", *, known=None, readback=False, mcp_request_id=None):
     import json
     from hashlib import sha256
 
@@ -197,7 +192,9 @@ def arm(env, kind="CAMPAIGN", *, known=None, readback=False):
     with Session(env.engine) as session:
         step = session.get(ExecutionStep, env.ids[kind])
         unit = session.get(BuildUnit, step.unit_id)
-        body = {"advertiser_id": unit.advertiser_id}
+        from tests.contracts.test_tiktok_build_contract import build_bodies
+
+        body = {**build_bodies()[kind], "advertiser_id": unit.advertiser_id}
         if kind == "CAMPAIGN":
             body.update(
                 campaign_name="frozen exact name",
@@ -223,6 +220,9 @@ def arm(env, kind="CAMPAIGN", *, known=None, readback=False):
                             "video_info": {"video_id": "target-vid"},
                             "image_info": [{"web_uri": "target-cover"}],
                             "identity_id": "identity",
+                            "identity_type": "BC_AUTH_TT",
+                            "identity_authorized_bc_id": unit.bc_id,
+                            "ad_format": "SINGLE_VIDEO",
                         }
                     }
                 ],
@@ -239,6 +239,17 @@ def arm(env, kind="CAMPAIGN", *, known=None, readback=False):
                     {"asset_content": "Learn more", "asset_ids": ["asset-actual"]}
                 ],
             )
+        from app.modules.builds.routes import load_preview_route
+
+        route = load_preview_route(
+            session, context=env.context, preview_id=step.preview_id
+        )
+        if route.channel == "OFFICIAL_MCP" and kind in {"CAMPAIGN", "ADGROUP"}:
+            original_attempt = str(save_attempt_context(session, step=step))
+            body["request_id"] = (
+                original_attempt if mcp_request_id is None else mcp_request_id
+            )
+            session.flush()
         step.request_body = body
         step.request_body_digest = sha256(
             json.dumps(
@@ -250,6 +261,15 @@ def arm(env, kind="CAMPAIGN", *, known=None, readback=False):
         )
         step.remote_id = known
         session.add(step)
+        from app.modules.builds.execution_state import evidence
+
+        evidence(
+            session,
+            step=step,
+            claim=None,
+            conclusion="REQUEST_ARMED",
+            summary={"body_digest": step.request_body_digest},
+        )
         identity = step.id
         if readback:
             identity = session.exec(
@@ -268,10 +288,18 @@ def wire(monkeypatch, rows, *, hook=None, page_transform=None, fail=False):
 
     calls = []
 
-    def transport(_self, path, method, *args, **kwargs):
-        assert method == "GET" and path in readback_sdk.ENDPOINTS.values()
-        assert kwargs["async_req"] is True
-        query = dict(args[1])
+    import json
+    from urllib.parse import urlsplit
+
+    from urllib3.response import HTTPResponse
+
+    def transport(_pool, method, url, **kwargs):
+        path = urlsplit(url).path
+        assert method == "GET" and path in BuildWire.paths.values()
+        query = dict(kwargs.get("fields", ()))
+        for key in ("filtering", "fields"):
+            if isinstance(query.get(key), str):
+                query[key] = json.loads(query[key])
         calls.append((path, query))
         if hook:
             hook(path, query)
@@ -293,13 +321,14 @@ def wire(monkeypatch, rows, *, hook=None, page_transform=None, fail=False):
             }
             if page_transform:
                 page_transform(data)
-        return SimpleNamespace(
-            get=lambda: sdk.InlineResponse200(
-                code=0, request_id="offline-read", data=data
-            )
+        return HTTPResponse(
+            body=json.dumps(
+                {"code": 0, "request_id": "offline-read", "data": data}
+            ).encode(),
+            status=200,
         )
 
-    monkeypatch.setattr(sdk.ApiClient, "call_api", transport)
+    monkeypatch.setattr("urllib3.PoolManager.request", transport)
     return calls
 
 
@@ -341,7 +370,7 @@ def test_unknown_campaign_remote_effect_is_recovered_without_create_or_database_
     env = recon_env
     identity, body = arm(env)
 
-    def hook(path, _query):
+    def hook(_path, _query):
         with Session(env.engine) as session:
             step = session.exec(
                 select(ExecutionStep)
@@ -351,7 +380,7 @@ def test_unknown_campaign_remote_effect_is_recovered_without_create_or_database_
             assert step.lease_token and step.status == "UNKNOWN"
             keys = admission_keys(
                 settings.TIKTOK_APP_ID,
-                path,
+                "build.get_campaigns",
                 env.context.tenant_id,
                 body["advertiser_id"],
             )
@@ -363,7 +392,7 @@ def test_unknown_campaign_remote_effect_is_recovered_without_create_or_database_
             {
                 **body,
                 "campaign_id": "created-but-response-lost",
-                "budget": 100.0,
+                "budget": 100,
                 "secondary_status": "CAMPAIGN_STATUS_ENABLE",
             }
         ],
@@ -483,7 +512,7 @@ def test_adgroup_status_is_a_separate_get_and_readback_never_disables(
     def rows(path, _query):
         return (
             [{**smart, "operation_status": "DISABLE"}]
-            if path == readback_sdk.ENDPOINTS["ADGROUP_STATUS"]
+            if path == BuildWire.paths["ADGROUP_STATUS"]
             else [smart]
         )
 
@@ -497,11 +526,12 @@ def test_adgroup_status_is_a_separate_get_and_readback_never_disables(
         source = session.get(ExecutionStep, env.ids["ADGROUP"])
         assert source.status == "SUCCEEDED" and source.remote_id == "actual-group"
         assert (
-            source.operation_status == "DISABLE"
+            source.review_status == "ADGROUP_STATUS_AUDIT"
+            and source.operation_status == "DISABLE"
             and source.mismatch
             and source.checked_at
         )
-    assert calls[1][0] == readback_sdk.ENDPOINTS["ADGROUP_STATUS"]
+    assert calls[1][0] == BuildWire.paths["ADGROUP_STATUS"]
     # 回读可有第二次分页尝试，创建步骤仍是自己的原始计数与 companion。
     from sqlmodel import select
 
@@ -655,7 +685,7 @@ def test_latest_actor_permission_is_checked_after_admission_and_can_recover(
 
     env = recon_env
     identity, body = arm(env)
-    real = reconciliation.admitted_account_call
+    real = reconciliation.admitted_build_call
 
     @contextmanager
     def revoke(*args, **kwargs):
@@ -669,7 +699,7 @@ def test_latest_actor_permission_is_checked_after_admission_and_can_recover(
                 session.commit()
             yield
 
-    monkeypatch.setattr(reconciliation, "admitted_account_call", revoke)
+    monkeypatch.setattr(reconciliation, "admitted_build_call", revoke)
     calls = wire(monkeypatch, [{**body, "campaign_id": "actual"}])
     assert run(env, identity).state == "UNKNOWN" and not calls
     with Session(env.engine) as session:
@@ -681,7 +711,7 @@ def test_latest_actor_permission_is_checked_after_admission_and_can_recover(
         membership.role = "operator"
         session.add(membership)
         session.commit()
-    monkeypatch.setattr(reconciliation, "admitted_account_call", real)
+    monkeypatch.setattr(reconciliation, "admitted_build_call", real)
     assert (
         run(env, identity, next_revision(env, identity)).state == "SUCCEEDED"
         and len(calls) == 1
@@ -759,7 +789,7 @@ def test_redis_denial_never_gets_and_does_not_claim_sending(recon_env, monkeypat
 
     env = recon_env
     identity, body = arm(env)
-    endpoint = readback_sdk.ENDPOINTS["CAMPAIGN"]
+    endpoint = BuildWire.operations["CAMPAIGN"]
     owner = uuid4()
     scope = {
         "app_scope": settings.TIKTOK_APP_ID,
@@ -812,13 +842,12 @@ def test_production_guard_rejects_unbounded_execution(monkeypatch, mode):
 def test_actual_create_effect_loses_response_then_readback_recovers_once(
     recon_env, monkeypatch
 ):
-    from copy import deepcopy
     from uuid import uuid4
 
     from sqlmodel import Session, select
 
     from app.integrations.tiktok.sdk import official_client
-    from app.modules.builds import execution_state, sdk_requests, submissions
+    from app.modules.builds import execution_state, submissions
     from app.modules.builds.execution_models import ExecutionStep
 
     env = recon_env
@@ -839,6 +868,7 @@ def test_actual_create_effect_loses_response_then_readback_recovers_once(
         )
         assert claim
         body = {
+            **build_bodies()["CAMPAIGN"],
             "advertiser_id": claim.advertiser_id,
             "campaign_name": "frozen-lost-response",
             "budget": 100,
@@ -851,35 +881,46 @@ def test_actual_create_effect_loses_response_then_readback_recovers_once(
         session.commit()
     store, calls = [], []
 
-    def transport(_self, path, method, *_args, **kwargs):
+    import json
+    from urllib.parse import urlsplit
+
+    from urllib3.response import HTTPResponse
+
+    def transport(_pool, method, url, **kwargs):
+        path = urlsplit(url).path
         calls.append((path, method))
         if method == "POST":
-            assert path == sdk_requests.CREATE_ENDPOINTS["campaign"] and not store
+            assert path == BuildWire.create_paths["CAMPAIGN"] and not store
             store.append(
-                {**deepcopy(kwargs["body"]), "campaign_id": "effect-committed"}
+                {**json.loads(kwargs["body"]), "campaign_id": "effect-committed"}
             )
             raise TimeoutError("response lost after remote commit")
-        assert method == "GET" and path == readback_sdk.ENDPOINTS["CAMPAIGN"]
-        return SimpleNamespace(
-            get=lambda: sdk.InlineResponse200(
-                code=0,
-                data={
-                    "list": store,
-                    "page_info": {
-                        "page": 1,
-                        "page_size": 100,
-                        "total_number": 1,
-                        "total_page": 1,
+        assert method == "GET" and path == BuildWire.paths["CAMPAIGN"]
+        return HTTPResponse(
+            body=json.dumps(
+                {
+                    "code": 0,
+                    "data": {
+                        "list": store,
+                        "page_info": {
+                            "page": 1,
+                            "page_size": 100,
+                            "total_number": 1,
+                            "total_page": 1,
+                        },
                     },
-                },
-                request_id="read-after-loss",
-            )
+                    "request_id": "read-after-loss",
+                }
+            ).encode(),
+            status=200,
         )
 
-    monkeypatch.setattr(sdk.ApiClient, "call_api", transport)
+    monkeypatch.setattr("urllib3.PoolManager.request", transport)
     with official_client(access_token="offline-private-token") as client:
-        with pytest.raises(sdk_requests.TikTokResponseError):
-            sdk_requests.invoke_create(client, kind="campaign", body=body)
+        with pytest.raises(RemoteCallError):
+            sdk_build_operations(client).create(
+                attempt_id=claim.attempt_id, intent=decode_intent("CAMPAIGN", body)
+            )
     with Session(env.engine) as session:
         execution_state.record_unknown(
             session, claim=claim, code="create_result_unknown"
@@ -918,12 +959,8 @@ def test_pinned_sdk_real_serialization_and_async_cleanup(
 
     from app.integrations.tiktok.sdk import official_client
 
-    body = {
-        "advertiser_id": "actual-account",
-        "campaign_id": "parent-campaign",
-        "adgroup_id": "parent-group",
-    }
-    row = {readback_sdk.ID_KEYS[kind]: "actual-id"}
+    body = {**build_bodies()[kind], "advertiser_id": "actual-account"}
+    row = {**body, BuildWire.id_keys[kind]: "actual-id"}
     data = (
         row
         if kind == "CTA"
@@ -950,19 +987,30 @@ def test_pinned_sdk_real_serialization_and_async_cleanup(
 
     monkeypatch.setattr("urllib3.PoolManager.request", request)
     with official_client(access_token="never-log-this-token") as client:
-        result = readback_sdk.read_page(
-            client, kind=kind, body=body, remote_id="actual-id", status_only=status_only
+        adapter = sdk_build_operations(client)
+        result = (
+            adapter.read_adgroup_status(
+                advertiser_id=body["advertiser_id"], adgroup_id="actual-id"
+            )
+            if status_only
+            else adapter.read_page(
+                query=BuildReadQuery(
+                    intent=decode_intent(kind, body), remote_id="actual-id"
+                )
+            )
         )
-        assert result.rows == (row,) and result.request_id == "official-envelope"
+        assert result.evidence.request_id == "official-envelope"
+        if not status_only:
+            assert result.rows[0].remote_id == "actual-id"
     assert "Access-Token" not in client.default_headers
     assert len(calls) == 1 and calls[0][0] == "GET"
-    endpoint = readback_sdk.ENDPOINTS["ADGROUP_STATUS" if status_only else kind]
+    endpoint = BuildWire.paths["ADGROUP_STATUS" if status_only else kind]
     assert calls[0][1].endswith(endpoint)
     fields = dict(calls[0][2]["fields"])
     assert fields["advertiser_id"] == "actual-account" and "access_token" not in fields
     if kind != "CTA":
         filtering = json.loads(fields["filtering"])
-        assert filtering[readback_sdk.ID_KEYS[kind] + "s"] == ["actual-id"]
+        assert filtering[BuildWire.id_keys[kind] + "s"] == ["actual-id"]
         assert "ad_name" not in filtering
     assert "never-log-this-token" not in caplog.text
 
@@ -1016,28 +1064,26 @@ def test_known_id_budget_difference_keeps_created_count_and_marks_mismatch(
         )
 
 
-def test_unknown_adgroup_cannot_bind_if_roas_changes_in_status_read(
-    recon_env, monkeypatch
-):
+def test_unknown_adgroup_cannot_bind_if_observed_roas_differs(recon_env, monkeypatch):
     from sqlmodel import Session
 
     from app.modules.builds.execution_models import ExecutionStep
 
     env = recon_env
     identity, body = arm(env, "ADGROUP")
-    smart = {**body, "adgroup_id": "candidate-group"}
+    smart = {**body, "adgroup_id": "candidate-group", "roas_bid": 99}
     del smart["operation_status"]
 
     def rows(path, _query):
         return (
             [{**smart, "roas_bid": 99, "operation_status": "ENABLE"}]
-            if path == readback_sdk.ENDPOINTS["ADGROUP_STATUS"]
+            if path == BuildWire.paths["ADGROUP_STATUS"]
             else [smart]
         )
 
-    wire(monkeypatch, rows)
-    assert run(env, identity).needs_more
-    assert run(env, identity, next_revision(env, identity)).state == "UNKNOWN"
+    calls = wire(monkeypatch, rows)
+    assert run(env, identity).state == "UNKNOWN"
+    assert len(calls) == 1
     with Session(env.engine) as session:
         assert session.get(ExecutionStep, identity).remote_id is None
 

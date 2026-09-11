@@ -49,6 +49,7 @@ from app.modules.builds.preview_schemas import (
     Readiness,
 )
 from app.modules.builds.preview_validation import measured, name_reasons, scene_reasons
+from app.modules.builds.route_views import execution_route_view
 from app.modules.builds.routes import load_preview_route, save_preview_route
 from app.modules.builds.scene import read_scene_context
 from app.modules.builds.scene_schemas import SceneContext
@@ -174,7 +175,12 @@ def generate_preview(
         budget=config.budget,
         target_roas=config.target_roas,
     )
-    route = freeze_route(session, context=context, bc_id=draft.bc_id)
+    route = freeze_route(
+        session,
+        context=context,
+        bc_id=draft.bc_id,
+        connection_id=draft.execution_connection_id,
+    )
     insert_preview_with_number(session, row)
     save_preview_route(session, context=context, preview_id=row.id, route=route)
     row.progress = {
@@ -623,7 +629,9 @@ def _expand_unit(
                 bc_id=preview.bc_id,
                 material_ids=list(materials),
                 advertiser_id=unit.advertiser_id,
-                route=load_preview_route(session, context=context, preview_id=preview.id),
+                route=load_preview_route(
+                    session, context=context, preview_id=preview.id
+                ),
             )
             if materials
             else {}
@@ -791,6 +799,9 @@ def get_preview_summary(
         )
     ).one()
     return PreviewSummary(
+        execution_route=execution_route_view(
+            session, context=context, preview_id=preview.id
+        ),
         preview_id=preview.id,
         draft_id=preview.draft_id,
         draft_revision=preview.draft_revision,

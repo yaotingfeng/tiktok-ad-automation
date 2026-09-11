@@ -6,7 +6,7 @@ from sqlmodel import select
 from app.jobs.models import PendingDispatch
 from app.modules.builds.drafts import create_draft
 from app.modules.tenants.models import TenantMembership
-from tests.modules.builds.test_drafts import finish, ready_links
+from tests.modules.builds.test_drafts import account, finish, ready_links
 from tests.modules.materials.test_tenant_materials import material
 from tests.modules.strategies.test_api import headers
 
@@ -118,6 +118,7 @@ def test_prepared_http_reads_shared_groups_without_enqueuing(
     client, session, context, intent
 ):
     base = f"/api/tenants/{context.tenant_id}"
+    account(session, context)
     shared = material(session, context, "Moon Short Drama.mp4", bc="bc-draft")
     draft = create_draft(session, context=context, **intent)
     request = uuid4()
@@ -126,7 +127,7 @@ def test_prepared_http_reads_shared_groups_without_enqueuing(
         json={"request_id": str(request)},
         headers=headers(context),
     )
-    assert response.status_code == 202
+    assert response.status_code == 202, response.json()
     task = response.json()["task_id"]
     ready_links(session, context, UUID(task), intent)
     finish(session, context, UUID(task))

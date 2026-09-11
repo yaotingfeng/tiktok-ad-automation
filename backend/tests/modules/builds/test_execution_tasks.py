@@ -1,12 +1,13 @@
 """Durable outbox -> official SDK -> readback, entirely offline remote transport."""
 
+import json
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
+from urllib.parse import urlsplit
 
-import business_api_client as sdk
 import pytest
 from sqlmodel import Session, col, select
+from urllib3.response import HTTPResponse
 
 from app.jobs.models import PendingDispatch
 from app.modules.builds import reconciliation
@@ -36,7 +37,8 @@ def test_outbox_builds_and_reads_all_layers_without_repeating_any_create(
     monkeypatch.setattr(reconciliation, "require_bounded_worker", lambda: None)
     remote, calls = {}, []
 
-    def transport(_self, path, method, *args, **kwargs):
+    def transport(_pool, method, url, **kwargs):
+        path = urlsplit(url).path
         kind = "cta" if "portfolio" in path else path.split("/")[-3]
         key = {
             "cta": "creative_portfolio_id",
@@ -46,19 +48,23 @@ def test_outbox_builds_and_reads_all_layers_without_repeating_any_create(
         }[kind]
         calls.append((method, path))
         if method == "POST":
-            body = deepcopy(kwargs["body"])
+            body = json.loads(kwargs["body"])
             identity = f"actual-{kind}-{len(remote)}"
             remote[identity] = {**body, key: identity}
+            # 合成服务回读用精确十进制字符串；不把 SDK float 当远端精度证明。
+            for amount in ("budget", "roas_bid"):
+                if amount in remote[identity]:
+                    remote[identity][amount] = str(remote[identity][amount])
             if lose_campaign_receipt and kind == "campaign":
                 raise OSError("remote created before connection loss")
             data = {key: identity, "operation_status": "ENABLE"}
         else:
             assert method == "GET"
-            query = dict(args[1])
+            query = dict(kwargs["fields"])
             if kind == "cta":
                 data = deepcopy(remote[query["creative_portfolio_id"]])
             else:
-                filters = query["filtering"]
+                filters = json.loads(query["filtering"])
                 rows = [
                     deepcopy(r)
                     for r in remote.values()
@@ -81,13 +87,14 @@ def test_outbox_builds_and_reads_all_layers_without_repeating_any_create(
                         "total_page": 1 if rows else 0,
                     },
                 }
-        return SimpleNamespace(
-            get=lambda: sdk.InlineResponse200(
-                code=0, request_id="offline-wire", data=data
-            )
+        return HTTPResponse(
+            body=json.dumps(
+                {"code": 0, "request_id": "offline-wire", "data": data}
+            ).encode(),
+            status=200,
         )
 
-    monkeypatch.setattr(sdk.ApiClient, "call_api", transport)
+    monkeypatch.setattr("urllib3.PoolManager.request", transport)
     for _ in range(150):
         with Session(db) as session, session.begin():
             message = session.exec(

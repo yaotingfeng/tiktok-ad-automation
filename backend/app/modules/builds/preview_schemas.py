@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.modules.builds.route_schemas import ExecutionRoutePublic
+
 Readiness = Literal["READY", "PREPARING", "BLOCKED"]
 
 
@@ -18,6 +20,7 @@ class PreviewRequest(BaseModel):
 
 
 class PreviewSummary(BaseModel):
+    execution_route: ExecutionRoutePublic | None = None
     preview_id: UUID
     draft_id: UUID
     draft_revision: int

@@ -23,6 +23,7 @@ export async function buildsBoundary(
   page: Page,
   options: {
     viewer?: boolean
+    admin?: boolean
     loggedOut?: boolean
     candidate?: "drama" | "account"
     inputCount?: number
@@ -42,9 +43,20 @@ export async function buildsBoundary(
     previewError?: string
     blocked?: boolean
     empty?: boolean
+    channel?: "OFFICIAL_API" | "OFFICIAL_MCP"
+    missingRoute?: boolean
+    executionConnectionId?: string | null
+    historicalRead?: boolean
+    historicalReadLost?: boolean
+    historicalReadState?: "UNKNOWN" | "BLOCKED" | "RUNNING"
+    defaultConnectionId?: string
   } = {},
 ) {
   const submissionId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+  const historicalStepId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+  let historicalRequestId: string | undefined
+  let historicalReadId = S
+  let historicalReadCount = 0
   const mutations = new Map<string, { draft_id: string; revision: number }>()
   const requests: {
       path: string
@@ -66,6 +78,7 @@ export async function buildsBoundary(
     status: "READY",
     strategy_version_id: V,
     provider_connection_id: C,
+    execution_connection_id: options.executionConnectionId ?? null,
     application_id: "app-external-001",
     link_config: {},
     input_counts: {
@@ -81,6 +94,14 @@ export async function buildsBoundary(
     updated_at: "2026-09-09T00:00:00Z",
   }
   const preview = {
+    execution_route: options.missingRoute
+      ? null
+      : {
+          connection_id: C,
+          connection_name: "原搭建连接",
+          channel: options.channel || "OFFICIAL_API",
+          bc_id: BC,
+        },
     preview_id: P,
     draft_id: D,
     draft_revision: 1,
@@ -174,7 +195,11 @@ export async function buildsBoundary(
             id: T,
             name: "搭建租户甲",
             active: true,
-            role: options.viewer ? "viewer" : "operator",
+            role: options.viewer
+              ? "viewer"
+              : options.admin
+                ? "tenant_admin"
+                : "operator",
           },
           { id: T2, name: "搭建租户乙", active: true, role: "operator" },
         ].filter((t) => !query.get("search") || t.id === query.get("search")),
@@ -183,7 +208,11 @@ export async function buildsBoundary(
     if (path.endsWith("/bcs"))
       return reply({
         items: [
-          { bc_id: BC, name: "真实 BC" },
+          {
+            bc_id: BC,
+            name: "真实 BC",
+            default_connection_id: options.defaultConnectionId || C,
+          },
           { bc_id: BC2, name: "备用 BC" },
         ],
         next_cursor: null,
@@ -215,6 +244,29 @@ export async function buildsBoundary(
         created_at: summary.created_at,
         request_id: D,
       })
+    if (path.endsWith("/connections") && !path.includes("/providers/")) {
+      expect([BC, BC2]).toContain(query.get("bc_id"))
+      if (query.get("bc_id") === BC2) return reply(paged([]))
+      return reply(
+        paged([
+          {
+            id: C,
+            kind: "OFFICIAL_API",
+            display_name: "API 搭建连接",
+            status: "ACTIVE",
+            is_default:
+              !options.defaultConnectionId || options.defaultConnectionId === C,
+          },
+          {
+            id: S,
+            kind: "OFFICIAL_MCP",
+            display_name: "MCP 搭建连接",
+            status: "ACTIVE",
+            is_default: options.defaultConnectionId === S,
+          },
+        ]),
+      )
+    }
     if (path.endsWith("/providers/connections"))
       return reply(
         paged([
@@ -244,6 +296,7 @@ export async function buildsBoundary(
         ]),
       )
     if (path.endsWith("/build-drafts") && method === "POST") {
+      summary.execution_connection_id = body.execution_connection_id ?? null
       Object.assign(originals, {
         drama: body.drama_lines,
         account: body.account_lines,
@@ -261,6 +314,7 @@ export async function buildsBoundary(
           return reply({ code: "draft_revision_conflict" }, 409)
         originals.drama = body.drama_lines
         originals.account = body.account_lines
+        summary.execution_connection_id = body.execution_connection_id ?? null
         summary.revision++
         mutations.set(body.request_id, {
           draft_id: D,
@@ -385,17 +439,91 @@ export async function buildsBoundary(
       return options.lookup404
         ? reply({ code: "resource_not_found" }, 404)
         : reply({ submission_id: submissionId, status: "QUEUED" })
+    if (
+      options.historicalRead &&
+      path.endsWith(`/submissions/${submissionId}/steps`)
+    )
+      return reply(
+        paged([
+          {
+            step_id: historicalStepId,
+            unit_id: P,
+            kind: "CAMPAIGN",
+            group_id: null,
+            planned_ad_id: null,
+            material_id: null,
+            status: "UNKNOWN",
+            remote_id: null,
+            error_code: "route_authorization_changed",
+            operation_status: null,
+            review_status: null,
+            mismatch: false,
+            checked_at: null,
+            title: "原任务剧目",
+            advertiser_id: "90071992547409936666",
+            can_historical_read: !!options.admin && !options.viewer,
+          },
+        ]),
+      )
+    if (path.endsWith(`/execution-steps/${historicalStepId}/historical-read`)) {
+      historicalRequestId = body.request_id
+      historicalReadCount += 1
+      historicalReadId = historicalReadCount === 1 ? S : P
+      if (options.historicalReadLost) return route.abort("failed")
+      return reply(
+        {
+          read_id: historicalReadId,
+          request_id: historicalRequestId,
+          source_step_id: historicalStepId,
+          state: "PENDING",
+          requires_new_preparation: true,
+        },
+        202,
+      )
+    }
+    if (path.includes("/historical-build-read-requests/"))
+      return options.lookup404 || path.split("/").pop() !== historicalRequestId
+        ? reply({ code: "resource_not_found" }, 404)
+        : reply({
+            read_id: historicalReadId,
+            request_id: historicalRequestId,
+            source_step_id: historicalStepId,
+            state: "PENDING",
+            requires_new_preparation: true,
+          })
+    if (path.endsWith(`/historical-build-reads/${historicalReadId}`))
+      return reply({
+        read_id: historicalReadId,
+        request_id: historicalRequestId,
+        source_step_id: historicalStepId,
+        state:
+          historicalReadCount === 1
+            ? options.historicalReadState || "CONFIRMED"
+            : "CONFIRMED",
+        remote_id:
+          historicalReadCount === 1 && options.historicalReadState
+            ? null
+            : "existing-remote-id",
+        mismatch: false,
+        requires_new_preparation: true,
+      })
     if (path.endsWith(`/submissions/${submissionId}/units`))
       return reply({ items: [], next_cursor: null })
     if (path.endsWith(`/submissions/${submissionId}`)) {
       const zero = { campaign_count: 0, adgroup_count: 0, ad_count: 0 }
       return reply({
         submission_id: submissionId,
+        execution_route: preview.execution_route,
+        recovery_mode:
+          options.historicalRead && options.admin
+            ? "REAUTHORIZE_READ"
+            : "BLOCKED",
+        error_code: options.missingRoute ? "legacy_route_unverifiable" : null,
         preview_id: P,
         draft_id: D,
         batch_short_id: "batch-real",
         bc_id: BC,
-        status: "QUEUED",
+        status: options.historicalRead ? "NEEDS_REVIEW" : "QUEUED",
         expanded: false,
         currency: "USD",
         daily_budget_sum: "0.00",

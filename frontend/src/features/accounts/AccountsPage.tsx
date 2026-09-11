@@ -1,8 +1,4 @@
-import {
-  useInfiniteQuery,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate, useSearch } from "@tanstack/react-router"
 import type { ColumnDef } from "@tanstack/react-table"
 import { useEffect, useMemo, useState } from "react"
@@ -18,14 +14,6 @@ import {
 } from "@/components/ui/empty"
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ManagementSheet } from "@/features/tenants/ManagementSheet"
 import {
@@ -38,6 +26,7 @@ import {
 } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
+import { BCConnectionPicker, useBCConnections } from "./BCConnectionPicker"
 import { ConnectionsPage } from "./ConnectionsPage"
 import {
   availabilityLabels,
@@ -95,20 +84,7 @@ function AccountDirectory() {
       queryKey: ["tenant", tenantId, "bcs"],
     })
   }, [tenantId, queryClient])
-  const connections = useInfiniteQuery({
-    queryKey: ["tenant", tenantId, "connections", "account-picker", bc?.bc_id],
-    initialPageParam: undefined as string | undefined,
-    enabled: !!bc,
-    queryFn: async ({ signal, pageParam }) =>
-      (
-        await AccountsService.getConnections({
-          path: { tenant_id: tenantId! },
-          query: { bc_id: bc!.bc_id, limit: 50, cursor: pageParam },
-          signal,
-        })
-      ).data,
-    getNextPageParam: (last) => last.next_cursor ?? undefined,
-  })
+  const connections = useBCConnections(tenantId, bc?.bc_id)
   const items = connections.data?.pages.flatMap((page) => page.items) ?? []
   // 只采用服务端明确默认值；没有默认时由用户选择，不能退到列表第一条。
   const connectionId =
@@ -139,58 +115,13 @@ function AccountDirectory() {
     )
   return (
     <div className="flex min-w-0 flex-col gap-4">
-      <Field className="w-full sm:max-w-xl">
-        <FieldLabel htmlFor="account-connection">查看账户的连接</FieldLabel>
-        <Select
-          value={connectionId ?? ""}
-          onValueChange={setSelected}
-          disabled={connections.isPending}
-        >
-          <SelectTrigger id="account-connection" className="w-full">
-            <SelectValue placeholder="请选择连接" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              {connectionId &&
-                !items.some((item) => item.id === connectionId) && (
-                  <SelectItem value={connectionId}>
-                    默认连接 · {connectionId}
-                  </SelectItem>
-                )}
-              {items.map((item) => (
-                <SelectItem key={item.id} value={item.id}>
-                  {item.display_name ||
-                    (item.kind === "OFFICIAL_MCP"
-                      ? "官方 MCP"
-                      : "官方 API")}{" "}
-                  · {item.id}
-                  {item.is_default ? " · 默认" : ""}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-        {connections.hasNextPage && (
-          <Button
-            variant="link"
-            className="self-start"
-            disabled={connections.isFetchingNextPage}
-            onClick={() => {
-              void connections.fetchNextPage()
-            }}
-          >
-            加载更多连接
-          </Button>
-        )}
-      </Field>
-      {connections.error && (
-        <RequestError
-          error={connections.error}
-          retry={() => {
-            void connections.refetch()
-          }}
-        />
-      )}
+      <BCConnectionPicker
+        query={connections}
+        value={connectionId}
+        onChange={setSelected}
+        label="查看账户的连接"
+        id="account-connection"
+      />
       {connectionId && !connections.error ? (
         <AccountRows key={connectionId} connectionId={connectionId} />
       ) : (

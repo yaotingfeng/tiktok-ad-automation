@@ -1,6 +1,6 @@
 """One bounded create or local material dependency per committed attempt."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from math import ceil, isfinite
 from typing import Any
@@ -12,7 +12,11 @@ from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
-from app.integrations.tiktok.sdk import AccountAdmissionDeferred, sdk_client
+from app.integrations.tiktok.bounded_resources import bounded_session
+from app.integrations.tiktok.contracts.builds import CreatedObject
+from app.integrations.tiktok.contracts.common import CallEvidence, RemoteCallError
+from app.integrations.tiktok.gateway import open_tiktok_gateway
+from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.modules.accounts.access import resolve_account_access
 from app.modules.accounts.routing import verify_route
 from app.modules.builds.execution_admission import HARD_LIMIT, admitted_build_call
@@ -25,6 +29,7 @@ from app.modules.builds.execution_state import (
     finish_local,
     preserve_created_receipt,
     record_created,
+    record_not_sent,
     record_unknown,
 )
 from app.modules.builds.preview_models import (
@@ -33,20 +38,16 @@ from app.modules.builds.preview_models import (
     PreviewGroupMaterial,
 )
 from app.modules.builds.preview_schemas import FrozenUnit
+from app.modules.builds.request_compiler import (
+    ad_assets,
+    compile_request,
+    create_arguments,
+    cta_portfolio,
+    decode_intent,
+)
 from app.modules.builds.routes import load_preview_route
 from app.modules.builds.scene import read_scene_context
 from app.modules.builds.scene_jobs import ensure_scene_preparation
-from app.modules.builds.sdk_requests import (
-    CREATE_ENDPOINTS,
-    PORTFOLIO_ENDPOINT,
-    RemoteCreated,
-    TikTokResponseError,
-    ad_assets,
-    compile_request,
-    cta_portfolio,
-    invoke_create,
-    invoke_portfolio,
-)
 from app.modules.builds.submissions import claim_step, load_execution_unit
 from app.modules.materials.distribution import ensure_target_asset
 from app.modules.tenants.permissions import require_tenant
@@ -423,6 +424,7 @@ def process_step(
     revision: int,
 ) -> str:
     """One effect maximum. Any uncertainty after arming is read-only recovery."""
+    task_deadline = datetime.now(UTC) + timedelta(seconds=HARD_LIMIT)
     _require_bounded_worker()
     if type(revision) is not int or revision < 0:
         raise DomainError("dispatch_payload_invalid", "执行代际无效")
@@ -472,7 +474,8 @@ def process_step(
             return step.status
     assert claim
     armed = False
-    result: RemoteCreated | None = None
+    result: CreatedObject | None = None
+    task_deadline = min(task_deadline, claim.lease_expires_at)
     try:
         with Session(database_engine) as session, session.begin():
             frozen = _frozen(session, context, claim)
@@ -549,12 +552,32 @@ def process_step(
                 )
             _current_scene(session, context, frozen)
             try:
-                body = prepare_request(
-                    session, context=context, claim=claim, frozen=frozen
-                )
+                step = session.get(ExecutionStep, claim.step_id)
+                assert step is not None
+                if step.request_body is not None:
+                    body = dict(step.request_body)
+                    local_body = dict(body)
+                    if claim.route.channel == "OFFICIAL_MCP" and claim.kind in {
+                        "CAMPAIGN",
+                        "ADGROUP",
+                    }:
+                        if local_body.pop("request_id", None) != str(claim.attempt_id):
+                            raise DomainError(
+                                "execution_intent_changed", "原请求关联不匹配"
+                            )
+                    intent = decode_intent(claim.kind, local_body)
+                else:
+                    prepared = prepare_request(
+                        session, context=context, claim=claim, frozen=frozen
+                    )
+                    intent = decode_intent(claim.kind, prepared)
+                    _, body = create_arguments(
+                        attempt_id=claim.attempt_id,
+                        intent=intent,
+                        channel=claim.route.channel,
+                    )
             except DomainError as error:
-                # Catch inside the transaction so newly queued material dependencies
-                # and this pending receipt commit together instead of being rolled back.
+                # 素材依赖与等待结果同事务提交，保持已经冻结的目标连接。
                 return finish_local(
                     session,
                     claim=claim,
@@ -562,75 +585,113 @@ def process_step(
                     code=error.code,
                     delay=15,
                 )
-        endpoint = (
-            PORTFOLIO_ENDPOINT
-            if claim.kind == "CTA"
-            else CREATE_ENDPOINTS[claim.kind.lower()]
-        )
+
+        def before_request() -> None:
+            # 握手、tools/list、业务发送各自重查；事务不跨任何网络等待。
+            with (
+                bounded_session(database_engine, task_deadline=task_deadline) as check,
+                check.begin(),
+            ):
+                step = check.exec(
+                    select(ExecutionStep)
+                    .where(
+                        ExecutionStep.id == claim.step_id,
+                        ExecutionStep.tenant_id == claim.tenant_id,
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                ).one()
+                if not active_attempt(
+                    step, claim, phase="REQUEST_ARMED" if armed else "CLAIMED"
+                ):
+                    raise DomainError("execution_lease_lost", "执行租约已变化")
+                current = _frozen(check, context, claim)
+                _current_scene(check, context, current)
+                if armed and claim.kind == "AD":
+                    from app.modules.builds.cover_execution import validate_ad_assets
+                    from app.modules.builds.preview_models import BuildUnit
+
+                    unit = check.get(BuildUnit, claim.unit_id)
+                    assert unit is not None
+                    validate_ad_assets(check, step=step, unit=unit, body=body)
+
         with admitted_build_call(
             redis_client,
             context=context,
-            endpoint=endpoint,
-            advertiser_id=claim.advertiser_id,
+            route=claim.route,
+            task_deadline=task_deadline,
         ):
-            with Session(database_engine) as session:
-                frozen = _frozen(session, context, claim)
-                _current_scene(session, context, frozen)
-                with sdk_client(
-                    session, context=context, connection_id=frozen.connection_id
-                ) as client:
+            with open_tiktok_gateway(
+                database_engine=database_engine,
+                redis_client=redis_client,
+                context=context,
+                route=claim.route,
+                task_deadline=task_deadline,
+                before_request=before_request,
+            ) as gateway:
+                with (
+                    bounded_session(
+                        database_engine, task_deadline=task_deadline
+                    ) as session,
+                    session.begin(),
+                ):
+                    frozen = _frozen(session, context, claim)
+                    _current_scene(session, context, frozen)
                     arm_request(session, context=context, claim=claim, body=body)
-                    session.commit()
-                    session.close()
-                    armed = True
-                    result = (
-                        invoke_portfolio(client, body=body)
-                        if claim.kind == "CTA"
-                        else invoke_create(client, kind=claim.kind.lower(), body=body)
-                    )
-                    # Save the known ID before client cleanup; cleanup failure cannot
-                    # turn a recorded success into a duplicate create.
-                    try:
-                        with Session(database_engine) as receipt, receipt.begin():
-                            outcome = record_created(
-                                receipt, claim=claim, result=result
-                            )
-                    except Exception:
-                        # Cleanup may itself terminate this worker. Preserve the
-                        # received ID before entering that cleanup boundary.
-                        with Session(database_engine) as receipt, receipt.begin():
-                            outcome = preserve_created_receipt(
-                                receipt, claim=claim, result=result
-                            )
+                armed = True
+                result = gateway.builds.create(
+                    attempt_id=claim.attempt_id, intent=intent
+                )
+                # 收到实际 ID 后先提交，再退出拥有的客户端；停用/撤权不抹除在途回执。
+                try:
+                    with Session(database_engine) as receipt, receipt.begin():
+                        outcome = record_created(receipt, claim=claim, result=result)
+                except Exception:
+                    with Session(database_engine) as receipt, receipt.begin():
+                        outcome = preserve_created_receipt(
+                            receipt, claim=claim, result=result
+                        )
             return outcome
-    except AccountAdmissionDeferred as error:
-        return _local_result(
-            database_engine,
-            claim,
-            error,
-            delay=max(1, ceil(error.retry_after_ms / 1000)),
-        )
     except Exception as error:
         if armed:
             with Session(database_engine) as session, session.begin():
                 if result is not None:
-                    # A received ID is useful even when its success transaction
-                    # rolled back. CTA has no unknown-ID list fallback. Append the
-                    # receipt without overwriting any newer owner or claiming a
-                    # failed commit succeeded; subsequent recovery is read-only.
                     return preserve_created_receipt(session, claim=claim, result=result)
+                if isinstance(error, DomainError) and not isinstance(
+                    error, RemoteCallError
+                ):
+                    # 两适配器把已发送异常统一转成 RemoteCallError.UNKNOWN。
+                    # 此处普通 DomainError 只能来自 gateway/P0 的本地发送前检查。
+                    error = RemoteCallError(
+                        error.code, effect="NOT_SENT", evidence=CallEvidence()
+                    )
+                if isinstance(error, RemoteCallError) and error.effect == "NOT_SENT":
+                    return record_not_sent(
+                        session,
+                        claim=claim,
+                        error=error,
+                        retryable=error.code
+                        in {
+                            "admission_deferred",
+                            "admission_unavailable",
+                            "tiktok_local_resources_unavailable",
+                            "gateway_credentials_changed",
+                            "mcp_refresh_pending",
+                        },
+                        delay=15,
+                    )
                 return record_unknown(
                     session,
                     claim=claim,
                     code=error.code
-                    if isinstance(error, TikTokResponseError)
+                    if isinstance(error, RemoteCallError)
                     else "create_result_unknown",
-                    request_id=error.request_id
-                    if isinstance(error, TikTokResponseError)
+                    request_id=error.evidence.request_id
+                    if isinstance(error, RemoteCallError)
                     else None,
-                    remote_code=error.remote_code
-                    if isinstance(error, TikTokResponseError)
-                    else -1,
+                    call_evidence=error.evidence
+                    if isinstance(error, RemoteCallError)
+                    else None,
                 )
         safe = (
             error
@@ -639,4 +700,11 @@ def process_step(
         )
         if safe.code == "scene_refresh_required":
             return _prepare_scene_dependency(database_engine, context, claim)
-        return _local_result(database_engine, claim, safe)
+        return _local_result(
+            database_engine,
+            claim,
+            safe,
+            delay=max(1, ceil(error.retry_after_ms / 1000))
+            if isinstance(error, AccountAdmissionDeferred)
+            else 15,
+        )

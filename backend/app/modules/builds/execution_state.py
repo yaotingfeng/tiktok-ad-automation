@@ -5,16 +5,18 @@ from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any
 
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
+from app.integrations.tiktok.adapters.build_results import safe_identifier
+from app.integrations.tiktok.contracts.builds import CreatedObject
+from app.integrations.tiktok.contracts.common import CallEvidence, RemoteCallError
 from app.modules.accounts.access import resolve_account_access
 from app.modules.builds.execution_models import ExecutionStep, StepEvidence, Submission
 from app.modules.builds.execution_schemas import StepClaim
 from app.modules.builds.preview_models import BuildUnit
 from app.modules.builds.routes import save_attempt_context, verify_unit_route
-from app.modules.builds.sdk_requests import RemoteCreated
 from app.modules.tenants.permissions import require_tenant
 
 
@@ -59,6 +61,7 @@ def evidence(
     conclusion: str,
     request_id: str | None = None,
     summary: dict[str, Any] | None = None,
+    call_evidence: CallEvidence | None = None,
 ) -> None:
     save_attempt_context(
         session,
@@ -66,6 +69,14 @@ def evidence(
         attempt=claim.attempt if claim else step.attempt,
         expected_id=claim.attempt_id if claim else None,
     )
+    safe_summary = dict(summary or {})
+    if claim is not None:
+        safe_summary["attempt_id"] = str(claim.attempt_id)
+    if call_evidence is not None:
+        for name in ("mcp_request_id", "remote_task_id"):
+            value = safe_identifier(getattr(call_evidence, name))
+            if value is not None:
+                safe_summary[name] = value
     session.add(
         StepEvidence(
             tenant_id=step.tenant_id,
@@ -75,7 +86,7 @@ def evidence(
             lease_token=claim.lease_token if claim else step.lease_token,
             request_id=request_id,
             conclusion=conclusion,
-            summary=summary or {},
+            summary=safe_summary,
         )
     )
 
@@ -146,7 +157,7 @@ def arm_request(
     return digest
 
 
-def record_created(session: Session, *, claim: StepClaim, result: RemoteCreated) -> str:
+def record_created(session: Session, *, claim: StepClaim, result: CreatedObject) -> str:
     step = _step(session, claim)
     live = active_attempt(step, claim, phase="REQUEST_ARMED")
     evidence(
@@ -154,7 +165,8 @@ def record_created(session: Session, *, claim: StepClaim, result: RemoteCreated)
         step=step,
         claim=claim,
         conclusion="CREATED" if live else "LATE_CREATED",
-        request_id=result.request_id,
+        request_id=result.evidence.request_id,
+        call_evidence=result.evidence,
         summary={
             "remote_id": result.remote_id,
             "operation_status": result.operation_status,
@@ -177,7 +189,7 @@ def record_created(session: Session, *, claim: StepClaim, result: RemoteCreated)
 
 
 def preserve_created_receipt(
-    session: Session, *, claim: StepClaim, result: RemoteCreated
+    session: Session, *, claim: StepClaim, result: CreatedObject
 ) -> str:
     """Persist a received ID after a failed success transaction, without a replay.
 
@@ -191,7 +203,8 @@ def preserve_created_receipt(
         step=step,
         claim=claim,
         conclusion="LATE_CREATED",
-        request_id=result.request_id,
+        request_id=result.evidence.request_id,
+        call_evidence=result.evidence,
         summary={
             "remote_id": result.remote_id,
             "operation_status": result.operation_status,
@@ -215,6 +228,7 @@ def record_unknown(
     code: str,
     request_id: str | None = None,
     remote_code: int | None = None,
+    call_evidence: CallEvidence | None = None,
 ) -> str:
     step = _step(session, claim)
     evidence(
@@ -223,6 +237,7 @@ def record_unknown(
         claim=claim,
         conclusion="RESULT_UNKNOWN",
         request_id=request_id,
+        call_evidence=call_evidence,
         summary={"reason_code": code, "remote_code": remote_code},
     )
     if step.status != "SUCCEEDED" and not step.remote_id:
@@ -292,3 +307,80 @@ def expire_attempt(session: Session, *, step: ExecutionStep) -> str:
     step.updated_at = datetime.now(UTC)
     session.add(step)
     return action
+
+
+def record_not_sent(
+    session: Session,
+    *,
+    claim: StepClaim,
+    error: RemoteCallError,
+    retryable: bool,
+    delay: int = 15,
+) -> str:
+    """只有传输明确未发送才能退回待调度；保留原不可变正文与 attempt。"""
+    if error.effect != "NOT_SENT":
+        raise ValueError("only NOT_SENT can be locally rescheduled")
+    step = _step(session, claim)
+    if not active_attempt(step, claim, phase="REQUEST_ARMED"):
+        return step.status
+    evidence(
+        session,
+        step=step,
+        claim=claim,
+        conclusion="NOT_SENT",
+        request_id=error.evidence.request_id,
+        call_evidence=error.evidence,
+        summary={"reason_code": error.code, "body_digest": step.request_body_digest},
+    )
+    step.status, step.phase = ("PENDING", "IDLE") if retryable else ("FAILED", "DONE")
+    step.error_code = error.code
+    # 当前 nonce 留在不可变 NOT_SENT 证据中；新 owner 必须验证最后一个尝试结果。
+    step.lease_token = step.lease_expires_at = None
+    step.due_at = datetime.now(UTC) + timedelta(seconds=max(0, delay))
+    step.updated_at = datetime.now(UTC)
+    session.add(step)
+    session.flush()
+    return step.status
+
+
+def safely_unsent_attempt(session: Session, *, step: ExecutionStep) -> bool:
+    """复用正文前核对整个当前 attempt 的逐 nonce 证据，历史 NOT_SENT 不构成通行证。"""
+    if (
+        step.status not in {"PENDING", "QUEUED"}
+        or step.phase != "IDLE"
+        or step.lease_token is not None
+        or step.remote_id
+        or not step.request_body
+        or not step.request_body_digest
+        or step.attempt_id is None
+    ):
+        return False
+    rows = session.exec(
+        select(StepEvidence)
+        .where(
+            StepEvidence.tenant_id == step.tenant_id,
+            StepEvidence.submission_id == step.submission_id,
+            StepEvidence.step_id == step.id,
+            StepEvidence.attempt == step.attempt,
+        )
+        .order_by(col(StepEvidence.observed_at), col(StepEvidence.id))
+        .limit(1001)
+    ).all()
+    if not rows or len(rows) > 1000:
+        return False
+    phases: dict[Any, str] = {}
+    for row in rows:
+        if (
+            row.lease_token is None
+            or row.summary.get("attempt_id") != str(step.attempt_id)
+            or row.summary.get("body_digest") != step.request_body_digest
+        ):
+            return False
+        previous = phases.get(row.lease_token)
+        if (previous, row.conclusion) not in {
+            (None, "REQUEST_ARMED"),
+            ("REQUEST_ARMED", "NOT_SENT"),
+        }:
+            return False
+        phases[row.lease_token] = row.conclusion
+    return all(value == "NOT_SENT" for value in phases.values())

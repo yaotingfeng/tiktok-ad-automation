@@ -74,6 +74,7 @@ def draft_summary(
         status=cast(Literal["DRAFT", "PREPARING", "READY", "BLOCKED"], row.status),
         strategy_version_id=row.strategy_version_id,
         provider_connection_id=row.provider_connection_id,
+        execution_connection_id=row.execution_connection_id,
         application_id=row.application_id,
         link_config=display_config(row.link_config),
         input_counts=counts,

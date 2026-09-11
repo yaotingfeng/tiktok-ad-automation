@@ -32,6 +32,7 @@ from app.modules.builds.execution_schemas import (
 from app.modules.builds.models import BuildDraft
 from app.modules.builds.preview_models import BuildPreview, BuildUnit
 from app.modules.builds.previews import load_frozen_unit
+from app.modules.builds.route_views import execution_route_view
 from app.modules.builds.routes import (
     load_preview_route,
     save_attempt_context,
@@ -506,8 +507,14 @@ def claim_step(
     )
     if access.connection_id != frozen.connection_id:
         raise DomainError("account_access_denied", "冻结账户授权已变更")
+    if step.request_body is not None:
+        from app.modules.builds.execution_state import safely_unsent_attempt
+
+        if not safely_unsent_attempt(session, step=step):
+            raise DomainError("create_result_unknown", "原请求只能核查，不可再次创建")
+    else:
+        step.attempt += 1
     step.status, step.phase = "RUNNING", "CLAIMED"
-    step.attempt += 1
     attempt_id = save_attempt_context(session, step=step)
     step.lease_token, step.lease_expires_at = (
         owner,
@@ -699,10 +706,23 @@ def get_submission(
             for name in fields.values()
         }
     )
+    from app.modules.builds.historical_read import historical_read_available
     from app.modules.builds.recovery import recovery_summary
     from app.modules.builds.submission_catalog import metadata
 
+    recovery = recovery_summary(session, context=context, submission=row)
     return SubmissionView(
+        execution_route=execution_route_view(
+            session, context=context, preview_id=row.preview_id
+        ),
+        recovery_mode=(
+            "ORIGINAL_READ"
+            if recovery.can_reconcile
+            else "REAUTHORIZE_READ"
+            if historical_read_available(session, context=context, submission_id=row.id)
+            else "BLOCKED"
+        ),
+        error_code=row.error_code,
         **metadata(
             session, tenant_id=context.tenant_id, submission_id=row.id
         ).model_dump(),
@@ -719,7 +739,7 @@ def get_submission(
         submitted=submitted,
         excluded=excluded,
         stage_counts=stage_counts,
-        recovery=recovery_summary(session, context=context, submission=row),
+        recovery=recovery,
         excluded_unit_count=scope["excluded_units"],
         drama_count=scope["dramas"],
         account_count=scope["accounts"],

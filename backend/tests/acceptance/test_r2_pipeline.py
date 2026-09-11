@@ -426,7 +426,7 @@ def test_api_to_verified_source_cleanup_target_and_cover(
     cover_run(env, redis_client, cover.task_id, read=True)
     mapping = read(env, env["target"]).mapping
     assert mapping.image_id == "target-image"
-    from app.modules.builds.sdk_requests import ad_assets
+    from app.modules.builds.request_compiler import ad_assets
 
     compiled = ad_assets(
         [mapping.model_dump()],

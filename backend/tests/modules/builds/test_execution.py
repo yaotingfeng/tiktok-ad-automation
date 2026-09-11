@@ -313,20 +313,19 @@ def test_revoked_between_admission_and_arm_prevents_any_sdk_call(
 
 
 def test_known_id_survives_sdk_cleanup_failure(executable, redis_client, monkeypatch):
-    from contextlib import contextmanager
-
-    from app.modules.builds import execution
+    import urllib3
 
     db, _, ids = executable
-    actual = execution.sdk_client
+    actual = urllib3.PoolManager.clear
 
-    @contextmanager
-    def cleanup_failure(*args, **kwargs):
-        with actual(*args, **kwargs) as client:
-            yield client
+    def cleanup_failure(pool):
+        # 客户端关闭的真实资源边界必须先能读取已提交的远端 ID。
+        with Session(db) as check:
+            assert check.get(ExecutionStep, ids["CTA"][0]).remote_id == "known-id"
+        actual(pool)
         raise RuntimeError("synthetic cleanup failure")
 
-    monkeypatch.setattr(execution, "sdk_client", cleanup_failure)
+    monkeypatch.setattr(urllib3.PoolManager, "clear", cleanup_failure)
     calls = []
 
     def request(*_args, **_kwargs):

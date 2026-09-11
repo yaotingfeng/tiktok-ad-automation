@@ -6,8 +6,7 @@ IDs live in per-page evidence; the mutable cursor and candidate remain bounded.
 """
 
 import json
-from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any
@@ -21,24 +20,27 @@ from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
-from app.integrations.tiktok.sdk import (
-    AccountAdmissionDeferred,
-    admitted_account_call,
-    sdk_client,
+from app.integrations.tiktok.bounded_resources import bounded_session
+from app.integrations.tiktok.contracts.builds import (
+    AdGroupStatus,
+    BuildPage,
+    BuildReadQuery,
+    CreateIntent,
 )
-from app.jobs.admission import admission_policy
-from app.modules.accounts.access import resolve_account_access
+from app.integrations.tiktok.contracts.common import CallEvidence, RemoteCallError
+from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
+from app.integrations.tiktok.gateway import open_tiktok_gateway
+from app.integrations.tiktok.sdk import AccountAdmissionDeferred
+from app.modules.builds.execution_admission import admitted_build_call
 from app.modules.builds.execution_models import ExecutionStep, StepEvidence, Submission
 from app.modules.builds.preview_models import BuildUnit
-from app.modules.builds.readback_sdk import (
-    ENDPOINTS,
-    ID_KEYS,
-    NAME_KEYS,
-    ReadPage,
-    compare_fields,
-    nonempty,
-    read_page,
+from app.modules.builds.readback_compare import ID_KEYS
+from app.modules.builds.reconciliation_scan import advance
+from app.modules.builds.reconciliation_scan import (
+    reconciliation_decision as reconciliation_decision,
 )
+from app.modules.builds.request_compiler import decode_intent
+from app.modules.builds.route_models import BuildAttemptContext
 from app.modules.builds.routes import save_attempt_context, verify_unit_route
 from app.modules.tenants.permissions import require_tenant
 
@@ -63,6 +65,15 @@ SAFE_ERRORS = frozenset(
         "admission_unavailable",
         "readback_response_unknown",
         "readback_intent_incomplete",
+        "route_authorization_changed",
+        "route_contract_changed",
+        "route_evidence_stale",
+        "mcp_refresh_pending",
+        "mcp_refresh_unknown",
+        "mcp_refresh_reauth_required",
+        "gateway_credentials_changed",
+        "execution_lease_lost",
+        "legacy_route_unverifiable",
     }
 )
 
@@ -94,6 +105,9 @@ class _Claim:
     body: dict[str, Any]
     digest: str
     progress: dict[str, Any]
+    route: FrozenTikTokRoute
+    intent: CreateIntent
+    lease_expires_at: datetime
 
 
 def require_bounded_worker() -> None:
@@ -169,24 +183,60 @@ def _locked(
     return step, source, unit
 
 
+def nonempty(value: object) -> bool:
+    return type(value) is str and bool(value.strip())
+
+
 def _authorize(
     session: Session, context: TenantContext, unit: BuildUnit, bc_id: str
-) -> UUID:
+) -> FrozenTikTokRoute:
     require_tenant(
         session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="build"
     )
-    route = verify_unit_route(session, context=context, unit=unit, capability="build")
-    access = resolve_account_access(
-        session,
-        context=context,
-        bc_id=bc_id,
-        advertiser_id=unit.advertiser_id,
-        action="build",
-        connection_id=route.connection_id,
-    )
-    if access.connection_id != unit.connection_id:
+    route = verify_unit_route(session, context=context, unit=unit, capability="read")
+    if route.bc_id != bc_id:
         raise DomainError("account_authorization_changed", "冻结账户授权已变化")
-    return access.connection_id
+    return route
+
+
+def original_create_attempt(
+    session: Session, source: ExecutionStep
+) -> tuple[int, UUID]:
+    rows = session.exec(
+        select(BuildAttemptContext.attempt, BuildAttemptContext.attempt_id)
+        .join(
+            StepEvidence,
+            (col(StepEvidence.tenant_id) == col(BuildAttemptContext.tenant_id))
+            & (col(StepEvidence.step_id) == col(BuildAttemptContext.step_id))
+            & (col(StepEvidence.attempt) == col(BuildAttemptContext.attempt)),
+        )
+        .where(
+            BuildAttemptContext.tenant_id == source.tenant_id,
+            BuildAttemptContext.step_id == source.id,
+            StepEvidence.submission_id == source.submission_id,
+            StepEvidence.conclusion == "REQUEST_ARMED",
+            StepEvidence.summary["body_digest"].astext == source.request_body_digest,
+        )
+        .distinct()
+        .limit(2)
+    ).all()
+    if len(rows) != 1:
+        raise DomainError("readback_intent_incomplete", "原创建尝试证据不完整")
+    return rows[0][0], rows[0][1]
+
+
+def source_intent(
+    session: Session, source: ExecutionStep, route: FrozenTikTokRoute
+) -> CreateIntent:
+    body = dict(source.request_body or {})
+    if route.channel == "OFFICIAL_MCP" and source.kind in {"CAMPAIGN", "ADGROUP"}:
+        _, original_id = original_create_attempt(session, source)
+        if body.pop("request_id", None) != str(original_id):
+            raise DomainError("readback_intent_incomplete", "原创建关联标识不匹配")
+    try:
+        return decode_intent(source.kind, body)
+    except TypeError, ValueError:
+        raise DomainError("readback_intent_incomplete", "原创建字段不完整") from None
 
 
 def _known_ids(session: Session, source: ExecutionStep) -> set[str]:
@@ -280,7 +330,8 @@ def _claim(
     elif source.status not in {"UNKNOWN", "SUCCEEDED"}:
         return ReconciliationResult("WAITING")
     try:
-        connection_id = _authorize(session, context, unit, source.bc_id)
+        route = _authorize(session, context, unit, source.bc_id)
+        intent = source_intent(session, source, route)
     except DomainError as error:
         code = (
             error.code
@@ -357,13 +408,16 @@ def _claim(
         source.attempt,
         source.attempt_id,
         source.dispatch_revision,
-        connection_id,
+        route.connection_id,
         unit.advertiser_id,
         source.bc_id,
         source.kind,
         dict(body),
         digest,
         progress,
+        route,
+        intent,
+        now + timedelta(seconds=CLAIM_SECONDS),
     )
 
 
@@ -391,132 +445,39 @@ def _clear(step: ExecutionStep, source: ExecutionStep) -> None:
         row.updated_at = datetime.now(UTC)
 
 
-def _safe_status(row: dict[str, Any], field: str) -> str | None:
-    value = row.get(field)
-    return (
-        value
-        if isinstance(value, str)
-        and 0 < len(value) <= 128
-        and all(ch.isalnum() or ch == "_" for ch in value)
-        else None
-    )
-
-
-def _candidate(claim: _Claim, row: dict[str, Any]) -> dict[str, Any] | None:
-    identity = row.get(ID_KEYS[claim.kind])
-    if not nonempty(identity) or len(identity) > 128:
-        raise DomainError("readback_response_unknown", "对象身份不完整")
-    if claim.kind != "CTA":
-        for field in (
-            "advertiser_id",
-            *({"ADGROUP": ("campaign_id",), "AD": ("adgroup_id",)}.get(claim.kind, ())),
-        ):
-            if row.get(field) != claim.body.get(field):
-                raise DomainError("readback_response_unknown", "返回对象范围不匹配")
-        name_key = NAME_KEYS[claim.kind]
-        if not nonempty(row.get(name_key)):
-            raise DomainError("readback_response_unknown", "返回对象名称不完整")
-        if claim.progress.get("known_id"):
-            if identity != claim.progress["known_id"]:
-                raise DomainError("readback_response_unknown", "返回对象标识不匹配")
-        elif row[name_key] != claim.body.get(name_key):
-            return None
-    elif identity != claim.progress.get("known_id"):
-        raise DomainError("readback_response_unknown", "返回对象标识不匹配")
-    return {
-        "remote_id": identity,
-        "comparison": compare_fields(claim.kind, claim.body, row),
-        "operation_status": _safe_status(row, "operation_status"),
-        "review_status": _safe_status(row, "secondary_status"),
-    }
-
-
 def _advance(
-    session: Session, claim: _Claim, page: ReadPage
+    session: Session, claim: _Claim, page: BuildPage | AdGroupStatus
 ) -> tuple[dict[str, Any], str]:
-    progress = dict(claim.progress)
-    if progress["stage"] == "STATUS":
-        # A fresh standard GET may never confirm an object from a different scope.
-        if len(page.rows) != 1 or page.total_number != 1:
-            return {**progress, "done": True}, "UNKNOWN"
-        row, candidate = page.rows[0], dict(progress["candidate"])
-        for key in ("advertiser_id", "campaign_id", "adgroup_name"):
-            if row.get(key) != claim.body.get(key):
-                return {**progress, "done": True}, "UNKNOWN"
-        if row.get("adgroup_id") != candidate["remote_id"]:
-            return {**progress, "done": True}, "UNKNOWN"
-        core: dict[str, Any] = {
-            key: claim.body[key]
-            for key in ("advertiser_id", "campaign_id", "adgroup_name", "roas_bid")
-            if key in claim.body
-        }
-        comparison = compare_fields("ADGROUP", core, row)
-        if (
-            comparison == "INCOMPLETE"
-            or comparison != "MATCH"
-            and not progress.get("known_id")
-        ):
-            return {**progress, "done": True}, "UNKNOWN"
-        if comparison != "MATCH":
-            candidate["comparison"] = comparison
-        candidate["operation_status"] = _safe_status(row, "operation_status")
-        candidate["review_status"] = _safe_status(row, "secondary_status")
-        return {**progress, "candidate": candidate, "done": True}, "COMPLETE"
-    ids = [row.get(ID_KEYS[claim.kind]) for row in page.rows]
-    if any(not nonempty(identity) or len(identity) > 128 for identity in ids) or len(
-        set(ids)
-    ) != len(ids):
-        return {**progress, "done": True}, "UNKNOWN"
-    if page.page > 1:
-        duplicate = session.execute(  # ty: ignore[deprecated] -- bounded PostgreSQL evidence query
-            text("""
+    def seen_before(ids: tuple[str, ...]) -> bool:
+        return bool(
+            session.execute(
+                text("""
             SELECT EXISTS(SELECT 1 FROM step_evidence
             WHERE tenant_id=:tenant AND submission_id=:submission AND step_id=:step
-              AND conclusion='READBACK_PAGE' AND summary->>'scan_id'=:scan
-              AND (summary->'ids') ?| CAST(:ids AS text[]))
+            AND conclusion='READBACK_PAGE' AND summary->>'scan_id'=:scan
+            AND summary->>'stage'='OBJECT'
+            AND (summary->'ids') ?| CAST(:ids AS text[]))
         """),
-            {
-                "tenant": claim.tenant_id,
-                "submission": claim.submission_id,
-                "step": claim.step_id,
-                "scan": progress["scan_id"],
-                "ids": ids,
-            },
-        ).scalar_one()
-        if (
-            duplicate
-            or progress.get("total") != page.total_number
-            or progress.get("pages") != page.total_pages
-        ):
-            return {**progress, "done": True}, "UNKNOWN"
-    progress.update(
-        total=page.total_number,
-        pages=page.total_pages,
-        seen=progress["seen"] + len(ids),
+                {
+                    "tenant": claim.tenant_id,
+                    "submission": claim.submission_id,
+                    "step": claim.step_id,
+                    "scan": claim.progress["scan_id"],
+                    "ids": list(ids),
+                },
+            ).scalar_one()
+        )
+
+    return advance(
+        query=BuildReadQuery(
+            intent=claim.intent,
+            remote_id=claim.progress.get("known_id"),
+            page=claim.progress["page"],
+        ),
+        progress=claim.progress,
+        page=page,
+        seen_before=seen_before,
     )
-    for row in page.rows:
-        found = _candidate(claim, row)
-        if found is not None:
-            progress["matches"] = min(2, progress["matches"] + 1)
-            if progress["matches"] == 1:
-                progress["candidate"] = found
-    if page.page < page.total_pages:
-        progress["page"] = page.page + 1
-        return progress, "MORE"
-    progress["done"] = True
-    if progress["seen"] != page.total_number or progress["matches"] != 1:
-        return progress, "UNKNOWN"
-    candidate = progress["candidate"]
-    if (
-        candidate["comparison"] == "INCOMPLETE"
-        or candidate["comparison"] != "MATCH"
-        and not progress.get("known_id")
-    ):
-        return progress, "UNKNOWN"
-    if claim.kind == "ADGROUP" and candidate["operation_status"] is None:
-        progress.update(stage="STATUS", page=1, done=False)
-        return progress, "MORE"
-    return progress, "COMPLETE"
 
 
 def _remember(
@@ -538,13 +499,14 @@ def _finish(
     database_engine: Engine,
     context: TenantContext,
     claim: _Claim,
-    page: ReadPage | None,
+    page: BuildPage | AdGroupStatus | None,
     *,
     error: str | None = None,
     delay: int = 0,
+    call_evidence: CallEvidence | None = None,
 ) -> ReconciliationResult:
     with Session(database_engine) as session, session.begin():
-        step, source, _ = _locked(session, context, claim.step_id)
+        step, source, unit = _locked(session, context, claim.step_id)
         live = _active(step, source, claim)
         summary: dict[str, Any] = {
             "scan_id": claim.progress["scan_id"],
@@ -552,16 +514,26 @@ def _finish(
             "stage": claim.progress["stage"],
             "body_digest": claim.digest,
         }
-        if page:
+        actual_evidence = page.evidence if page is not None else call_evidence
+        if actual_evidence is not None:
+            summary["call_evidence"] = asdict(actual_evidence)
+        if page is not None:
             summary.update(
-                ids=[
-                    row.get(ID_KEYS[claim.kind])
-                    for row in page.rows
-                    if nonempty(row.get(ID_KEYS[claim.kind]))
-                    and len(row[ID_KEYS[claim.kind]]) <= 128
-                ][:100],
-                total=page.total_number,
+                ids=[record.remote_id for record in page.rows][:100]
+                if isinstance(page, BuildPage)
+                else [page.adgroup_id],
+                total=page.total_number if isinstance(page, BuildPage) else 1,
             )
+        if live:
+            try:
+                if _authorize(session, context, unit, claim.bc_id) != claim.route:
+                    raise DomainError("route_authorization_changed", "原核查路由已改变")
+            except DomainError as failure:
+                error = (
+                    failure.code
+                    if failure.code in SAFE_ERRORS
+                    else "readback_authorization_unknown"
+                )
         if error:
             summary["reason_code"] = error
         if not live:
@@ -571,7 +543,7 @@ def _finish(
                 claim=claim,
                 conclusion="LATE_READBACK",
                 summary=summary,
-                request_id=page.request_id if page else None,
+                request_id=page.evidence.request_id if page else None,
             )
             return ReconciliationResult("STALE")
         if error or page is None:
@@ -596,7 +568,7 @@ def _finish(
             claim=claim,
             conclusion="READBACK_PAGE",
             summary=summary,
-            request_id=page.request_id,
+            request_id=page.evidence.request_id,
         )
         step.resolved = {**step.resolved, "reconciliation": progress}
         _clear(step, source)
@@ -644,7 +616,7 @@ def _finish(
             claim=claim,
             conclusion="RECONCILED",
             summary={"remote_id": candidate["remote_id"], "mismatch": mismatch},
-            request_id=page.request_id,
+            request_id=page.evidence.request_id,
         )
         return _remember(
             step, ReconciliationResult("MISMATCH" if mismatch else "SUCCEEDED")
@@ -660,54 +632,55 @@ def process_reconciliation(
     revision: int,
 ) -> ReconciliationResult:
     require_bounded_worker()
+    deadline = datetime.now(UTC) + timedelta(seconds=HARD_LIMIT)
     with Session(database_engine) as session, session.begin():
         claimed = _claim(session, context, step_id, revision)
     if isinstance(claimed, ReconciliationResult):
         return claimed
     claim = claimed
-    status_only = claim.progress["stage"] == "STATUS"
-    endpoint = ENDPOINTS["ADGROUP_STATUS" if status_only else claim.kind]
+    deadline = min(deadline, claim.lease_expires_at)
+
+    def before_request() -> None:
+        with bounded_session(database_engine, task_deadline=deadline) as session:
+            step, source, unit = _locked(session, context, step_id)
+            if not _active(step, source, claim):
+                raise DomainError("execution_lease_lost", "原核查claim已失效")
+            if _authorize(session, context, unit, claim.bc_id) != claim.route:
+                raise DomainError("route_authorization_changed", "原核查路由已改变")
+
+    completed = None
     try:
-        policy = admission_policy(endpoint)
-        if policy.lease_ms <= (HARD_LIMIT + 5) * 1000:
-            raise DomainError(
-                "admission_policy_invalid", "调用租约必须覆盖硬期限和清理"
-            )
-        with (
-            admitted_account_call(
-                redis_client,
-                context=context,
-                endpoint=endpoint,
-                advertiser_id=claim.advertiser_id,
-                policy=policy,
-            ),
-            ExitStack() as stack,
+        with admitted_build_call(
+            redis_client, context=context, route=claim.route, task_deadline=deadline
         ):
-            with Session(database_engine) as session, session.begin():
-                step, source, unit = _locked(session, context, step_id)
-                if not _active(step, source, claim):
-                    return ReconciliationResult("STALE")
-                connection_id = _authorize(session, context, unit, claim.bc_id)
-                if connection_id != claim.connection_id:
-                    raise DomainError(
-                        "account_authorization_changed", "冻结账户授权已变化"
+            with open_tiktok_gateway(
+                database_engine=database_engine,
+                redis_client=redis_client,
+                context=context,
+                route=claim.route,
+                task_deadline=deadline,
+                before_request=before_request,
+            ) as gateway:
+                page: BuildPage | AdGroupStatus
+                if claim.progress["stage"] == "STATUS":
+                    page = gateway.builds.read_adgroup_status(
+                        advertiser_id=claim.advertiser_id,
+                        adgroup_id=claim.progress["candidate"]["remote_id"],
                     )
-                client = stack.enter_context(
-                    sdk_client(session, context=context, connection_id=connection_id)
-                )
-            # No database transaction/connection survives the actual request or
-            # SDK thread/client cleanup; the Redis lease covers both.
-            page = read_page(
-                client,
-                kind=claim.kind,
-                body=claim.body,
-                remote_id=claim.progress["candidate"]["remote_id"]
-                if status_only
-                else claim.progress.get("known_id"),
-                page=claim.progress["page"],
-                status_only=status_only,
-            )
+                else:
+                    page = gateway.builds.read_page(
+                        query=BuildReadQuery(
+                            intent=claim.intent,
+                            remote_id=claim.progress.get("known_id"),
+                            page=claim.progress["page"],
+                        )
+                    )
+                # 完整读回结果先提交，客户端清理失败不能抹去已确认的原对象事实。
+                completed = _finish(database_engine, context, claim, page)
+        return completed
     except AccountAdmissionDeferred as error:
+        if completed is not None:
+            return completed
         return _finish(
             database_engine,
             context,
@@ -716,8 +689,14 @@ def process_reconciliation(
             error="admission_deferred",
             delay=max(1, (error.retry_after_ms + 999) // 1000),
         )
-    except DomainError as error:
-        code = error.code if error.code in SAFE_ERRORS else "readback_response_unknown"
+    except Exception as error:
+        if completed is not None:
+            return completed
+        code = (
+            error.code
+            if isinstance(error, DomainError) and error.code in SAFE_ERRORS
+            else "readback_response_unknown"
+        )
         return _finish(
             database_engine,
             context,
@@ -725,7 +704,15 @@ def process_reconciliation(
             None,
             error=code,
             delay=30
-            if code in {"admission_unavailable", "readback_response_unknown"}
+            if code
+            in {
+                "admission_unavailable",
+                "readback_response_unknown",
+                "mcp_refresh_pending",
+                "gateway_credentials_changed",
+            }
             else 0,
+            call_evidence=error.evidence
+            if isinstance(error, RemoteCallError)
+            else None,
         )
-    return _finish(database_engine, context, claim, page)

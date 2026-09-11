@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "@playwright/test"
-import { BC, buildsBoundary, D, DR, P, T } from "./utils/buildsBoundary"
+import { BC, buildsBoundary, C, D, DR, P, T } from "./utils/buildsBoundary"
 import { expectWorkspaceLayout } from "./utils/workspaceLayout"
 
 test.use({ timezoneId: "Asia/Shanghai" })
@@ -30,6 +30,14 @@ async function boundary(
   })
   let newest = false
   const summary = {
+    execution_route: {
+      connection_id: C,
+      connection_name: "原搭建连接",
+      channel: "OFFICIAL_API",
+      bc_id: BC,
+    },
+    recovery_mode: "ORIGINAL_READ",
+    error_code: null,
     submission_id: ID,
     preview_id: P,
     draft_id: D,

@@ -19,7 +19,11 @@ from app.modules.builds.execution_models import (
     Submission,
     SubmissionUnit,
 )
-from app.modules.builds.execution_state import evidence, expire_attempt
+from app.modules.builds.execution_state import (
+    evidence,
+    expire_attempt,
+    safely_unsent_attempt,
+)
 from app.modules.builds.submission_tasks import queue_execution_unit
 from app.modules.builds.submissions import (
     aggregate_status,
@@ -68,7 +72,10 @@ def queue_step(
         raise DomainError("resource_not_found", "执行步骤范围无效")
     if not reconcile and (
         step.remote_id
-        or step.request_body is not None
+        or (
+            step.request_body is not None
+            and not safely_unsent_attempt(session, step=step)
+        )
         or step.status in {"UNKNOWN", "SUCCEEDED"}
     ):
         raise DomainError(

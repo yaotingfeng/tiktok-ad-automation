@@ -1,6 +1,7 @@
 """共享实际 gateway/PG/Redis 与 SDK/MCP HTTP fixture，不依赖测试模块。"""
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from uuid import uuid4
@@ -35,6 +36,22 @@ from tests.integrations.tiktok.mcp_wire import McpWire
 from tests.modules.conftest import create_context
 
 
+def retains_build_history(request, database_engine):
+    """只有本次独占临时库可保留不可变历史，交由其 fixture 删除整个库。"""
+    try:
+        retained = request.getfixturevalue("retain_build_history")
+    except pytest.FixtureLookupError:
+        return False
+    if retained is False:
+        return False
+    assert retained is database_engine
+    assert re.fullmatch(
+        r"strategy_[0-9a-f]{32}_test", database_engine.url.database or ""
+    )
+    assert request.getfixturevalue("isolated_strategy_database")[0] is database_engine
+    return True
+
+
 @pytest.fixture
 def database_engine():
     from app.core.db import engine
@@ -47,6 +64,7 @@ def database_engine():
 
 @pytest.fixture
 def gateway_case(request, database_engine, redis_client, monkeypatch, policy, tmp_path):
+    retain_history = retains_build_history(request, database_engine)
     channel = getattr(request, "param", "OFFICIAL_MCP")
     profile = load_mcp_protocol()
     # 当前工厂核对真实本地注册client绑定；共享fixture必须独立提供合成部署材料。
@@ -181,25 +199,28 @@ def gateway_case(request, database_engine, redis_client, monkeypatch, policy, tm
     try:
         yield case
     finally:
-        with Session(database_engine) as session:
-            for model in (
-                PendingDispatch,
-                DispatchTenantCursor,
-                McpRefreshAttempt,
-                ConnectionToolObservation,
-                ConnectionAuthorization,
-                BCDefaultRoute,
-                BCConnectionBinding,
-                BCAccountAccess,
-                TikTokConnection,
-                AdvertiserAccount,
-                TenantBC,
-                TenantMembership,
-            ):
-                session.exec(delete(model).where(model.tenant_id == context.tenant_id))
-            session.exec(delete(Tenant).where(Tenant.id == context.tenant_id))
-            session.exec(delete(User).where(User.id == context.actor_id))
-            session.commit()
+        if not retain_history:
+            with Session(database_engine) as session:
+                for model in (
+                    PendingDispatch,
+                    DispatchTenantCursor,
+                    McpRefreshAttempt,
+                    ConnectionToolObservation,
+                    ConnectionAuthorization,
+                    BCDefaultRoute,
+                    BCConnectionBinding,
+                    BCAccountAccess,
+                    TikTokConnection,
+                    AdvertiserAccount,
+                    TenantBC,
+                    TenantMembership,
+                ):
+                    session.exec(
+                        delete(model).where(model.tenant_id == context.tenant_id)
+                    )
+                session.exec(delete(Tenant).where(Tenant.id == context.tenant_id))
+                session.exec(delete(User).where(User.id == context.actor_id))
+                session.commit()
         for scope in (
             f"official-mcp:{settings.MCP_SERVICE_QUOTA_SCOPE}",
             settings.TIKTOK_APP_ID,

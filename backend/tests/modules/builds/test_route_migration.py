@@ -1,5 +1,7 @@
 """历史迁移只旁挂 attempt 身份；所有旧路由证据不足时明确阻断。"""
 
+import hashlib
+import json
 from decimal import Decimal
 from uuid import uuid4
 
@@ -9,13 +11,14 @@ from sqlalchemy import MetaData, Table, text
 from sqlmodel import Session
 
 from app.modules.accounts.models import TikTokConnection
-from app.modules.builds.drafts import create_draft
+from app.modules.builds.drafts import _store_inputs, create_draft
 from app.modules.builds.execution_models import (
     ExecutionStep,
     StepEvidence,
     Submission,
     SubmissionUnit,
 )
+from app.modules.builds.models import BuildDraft
 from app.modules.builds.preview_models import BuildPreview, BuildUnit, PreviewDrama
 from app.modules.builds.routes import stable_attempt_id
 from app.modules.providers.models import PromotionLink, ProviderDrama
@@ -24,11 +27,49 @@ from tests.modules.builds.test_drafts import account, create_intent
 from tests.modules.conftest import create_context
 
 
-def historical_rows(session, *, connections=1, context=None, current=False):
+def historical_rows(
+    session, *, connections=1, context=None, current=False, preview_config=None
+):
     """只播种旧 schema 已有事实，无冻结路由、无远端调用或业务 mock。"""
     context = context or create_context(session)
     intent = create_intent(session, context)
-    draft = create_draft(session, context=context, **intent)
+    if current:
+        draft = create_draft(session, context=context, **intent)
+    else:
+        # 真正旧 schema 播种只使用当时已有列，不能用今日 ORM 新列伪造迁移前结构。
+        row = BuildDraft(
+            tenant_id=context.tenant_id,
+            **{
+                key: value
+                for key, value in intent.items()
+                if key not in {"drama_lines", "account_lines"}
+            },
+            created_by=context.actor_id,
+            request_id=uuid4(),
+            request_digest=hashlib.sha256(
+                json.dumps(
+                    intent,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                    ensure_ascii=False,
+                ).encode()
+            ).hexdigest(),
+        )
+        table = Table("build_draft", MetaData(), autoload_with=session.connection())
+        session.execute(
+            table.insert().values(
+                **{
+                    key: value
+                    for key, value in row.model_dump().items()
+                    if key in table.c
+                }
+            )
+        )
+        _store_inputs(session, row, "drama", intent["drama_lines"])
+        _store_inputs(session, row, "account", intent["account_lines"])
+        session.flush()
+        draft = row.id
     if connections:
         account(session, context)
     for _ in range(max(0, connections - 1)):
@@ -42,7 +83,7 @@ def historical_rows(session, *, connections=1, context=None, current=False):
         actor_id=context.actor_id,
         batch_short_id=uuid4().hex[:12],
         local_date="20260911",
-        config={"historical": True},
+        config=preview_config if preview_config is not None else {"historical": True},
         budget=Decimal("100"),
         target_roas=Decimal("1"),
         content_digest="a" * 64,

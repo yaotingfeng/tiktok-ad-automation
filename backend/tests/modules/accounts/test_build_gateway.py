@@ -2,12 +2,9 @@
 
 # ruff: noqa: F811 -- reuse the real account/connection fixture and HTTP boundary
 
-from uuid import uuid4
-
 import pytest
 
 from app.integrations.tiktok.contracts.builds import BuildReadQuery
-from app.integrations.tiktok.contracts.common import RemoteCallError
 from app.integrations.tiktok.mcp.protocol import load_tool_contracts
 from app.modules.builds.readback_compare import compare_record
 from app.modules.builds.request_compiler import decode_intent
@@ -33,7 +30,7 @@ from tests.integrations.tiktok.gateway_support import (  # noqa: F401
         ("CTA", "creative_portfolio_id", "build.get_cta_portfolio"),
     ],
 )
-def test_factory_exposes_scoped_build_read_and_keeps_create_closed(
+def test_factory_exposes_scoped_build_read(
     database_engine, redis_client, gateway_case, gateway_wire, kind, id_key, operation
 ):
     body = {**build_bodies()[kind], "advertiser_id": gateway_case[2]}
@@ -61,9 +58,6 @@ def test_factory_exposes_scoped_build_read_and_keeps_create_closed(
     )
     query = BuildReadQuery(intent=intent, remote_id="remote-1")
     with gateway(database_engine, redis_client, gateway_case) as client:
-        with pytest.raises(RemoteCallError) as error:
-            client.builds.create(attempt_id=uuid4(), intent=intent)
-        assert error.value.effect == "NOT_SENT"
         page = client.builds.read_page(query=query)
         assert compare_record(query=query, record=page.rows[0]) == "MATCH"
     assert len(business_calls(gateway_wire, gateway_case[1].channel)) == 1

@@ -35,12 +35,12 @@ export default defineConfig({
 
   /* Configure projects for major browsers */
   projects: [
-    { name: 'workspace', testMatch: /(workspace-shell|tenants-accounts|providers|strategies|materials|r2-ingest|upload-foundation|build-preparation|build-preview|build-task-pages)\.spec\.ts/, use: { ...devices['Desktop Chrome'], storageState: { cookies: [], origins: [] } } },
+    { name: 'workspace', testMatch: /(workspace-shell|tenants-accounts|providers|strategies|materials|r2-ingest|upload-foundation|build-preparation|build-preview|build-task-pages|build-channels)\.spec\.ts/, use: { ...devices['Desktop Chrome'], storageState: { cookies: [], origins: [] } } },
     { name: 'setup', testMatch: /.*\.setup\.ts/ },
 
     {
       name: 'chromium',
-      testIgnore: /(workspace-shell|tenants-accounts|providers|strategies|materials|r2-ingest|upload-foundation|build-preparation|build-preview|build-task-pages)\.spec\.ts/,
+      testIgnore: /(workspace-shell|tenants-accounts|providers|strategies|materials|r2-ingest|upload-foundation|build-preparation|build-preview|build-task-pages|build-channels)\.spec\.ts/,
       use: {
         ...devices['Desktop Chrome'],
         storageState: 'playwright/.auth/user.json',

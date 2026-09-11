@@ -157,9 +157,10 @@ def test_arm_uses_frozen_semantic_versions_but_accepts_credential_rotation(
 def test_attempt_companion_keeps_original_counter_and_rejects_forged_identity(
     session, context, attempt
 ):
+    from app.integrations.tiktok.contracts.builds import CreatedObject
+    from app.integrations.tiktok.contracts.common import CallEvidence
     from app.modules.builds.execution_state import record_created
     from app.modules.builds.route_models import BuildAttemptContext
-    from app.modules.builds.sdk_requests import RemoteCreated
 
     step, claim = attempt
     saved = session.get(BuildAttemptContext, (context.tenant_id, step.id, step.attempt))
@@ -171,7 +172,16 @@ def test_attempt_companion_keeps_original_counter_and_rejects_forged_identity(
     assert step.attempt == 1
     forged = claim.model_copy(update={"attempt_id": uuid4()})
     with pytest.raises(DomainError):
-        record_created(session, claim=forged, result=RemoteCreated("v", None, "ENABLE"))
+        record_created(
+            session,
+            claim=forged,
+            result=CreatedObject(
+                kind="CAMPAIGN",
+                remote_id="v",
+                operation_status="ENABLE",
+                evidence=CallEvidence(),
+            ),
+        )
 
 
 def test_route_context_database_rejects_rewrite(session, context, attempt):

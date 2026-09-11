@@ -1,4 +1,4 @@
-"""双通道本地 HTTP 边界；P3.1 只提供回读队列，写队列由 P3.3 扩展。"""
+"""双通道本地 HTTP 边界；读取与创建队列均使用真实 SDK/MCP HTTP。"""
 
 import json
 import threading
@@ -26,6 +26,25 @@ class BuildWire:
         "ADGROUP_STATUS": "/open_api/v1.3/adgroup/get/",
     }
 
+    create_operations = {
+        "CAMPAIGN": "build.create_campaign",
+        "ADGROUP": "build.create_adgroup",
+        "AD": "build.create_ad",
+        "CTA": "build.create_cta_portfolio",
+    }
+    create_paths = {
+        "CAMPAIGN": "/open_api/v1.3/smart_plus/campaign/create/",
+        "ADGROUP": "/open_api/v1.3/smart_plus/adgroup/create/",
+        "AD": "/open_api/v1.3/smart_plus/ad/create/",
+        "CTA": "/open_api/v1.3/creative/portfolio/create/",
+    }
+    id_keys = {
+        "CAMPAIGN": "campaign_id",
+        "ADGROUP": "adgroup_id",
+        "AD": "smart_plus_ad_id",
+        "CTA": "creative_portfolio_id",
+    }
+
     def __init__(self, channel):
         self.channel = channel
         self.calls = []
@@ -34,7 +53,8 @@ class BuildWire:
         self.contracts = {
             contract.operation: contract
             for contract in load_tool_contracts()
-            if contract.operation in self.operations.values()
+            if contract.operation
+            in {*self.operations.values(), *self.create_operations.values()}
         }
         self.mcp = None
         if channel == "OFFICIAL_MCP":
@@ -83,6 +103,34 @@ class BuildWire:
             def log_message(self, *args):
                 pass
 
+            def do_POST(self):
+                target = urlsplit(self.path)
+                arguments = json.loads(
+                    self.rfile.read(int(self.headers["Content-Length"]))
+                )
+                wire.calls.append(
+                    {"method": "POST", "path": target.path, "arguments": arguments}
+                )
+                kind = next(
+                    (
+                        kind
+                        for kind, path in wire.create_paths.items()
+                        if path == target.path
+                    ),
+                    None,
+                )
+                envelope = wire.results["CREATE_" + str(kind)].popleft()
+                if envelope is None:
+                    self.connection.shutdown(2)
+                    self.connection.close()
+                    return
+                body = json.dumps(envelope).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
             def do_GET(self):
                 target = urlsplit(self.path)
                 arguments = {}
@@ -120,6 +168,31 @@ class BuildWire:
         self.endpoint = f"http://127.0.0.1:{self.server.server_port}"
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
+
+    def enqueue_created(self, kind, remote_id, *, status=None):
+        data = {self.id_keys[kind]: remote_id}
+        if status is not None:
+            data["operation_status"] = status
+        self.enqueue_create_envelope(
+            kind, {"code": 0, "data": data, "request_id": "synthetic-create-request"}
+        )
+
+    def enqueue_create_envelope(self, kind, envelope):
+        if self.mcp:
+            tool = self.contracts[self.create_operations[kind]].tool_name
+            self.mcp.results[tool].append(
+                {"content": [], "structuredContent": envelope}
+            )
+        else:
+            self.results["CREATE_" + kind].append(envelope)
+
+    def drop_created_response(self, kind):
+        if self.mcp:
+            self.mcp.disconnect_after_accept(
+                self.contracts[self.create_operations[kind]].tool_name
+            )
+        else:
+            self.results["CREATE_" + kind].append(None)
 
     def enqueue_readback(self, kind, rows, page, total):
         data = (
@@ -175,3 +248,21 @@ class BuildWire:
             self.server.shutdown()
             self.server.server_close()
             self.thread.join(timeout=2)
+
+
+def sdk_build_operations(client):
+    """SDK 合同测试的纯适配器入口；授权/准入另由真实 gateway 集成测试覆盖。"""
+    from contextlib import contextmanager
+    from datetime import UTC, datetime, timedelta
+
+    from app.integrations.tiktok.adapters.sdk_builds import ApiBuildOperations
+
+    deadline = datetime.now(UTC) + timedelta(seconds=40)
+
+    @contextmanager
+    def request_scope(advertiser_id, operation, actual_deadline):
+        assert advertiser_id and operation.startswith("build.")
+        assert actual_deadline == deadline
+        yield
+
+    return ApiBuildOperations(client, request_scope=request_scope, deadline=deadline)

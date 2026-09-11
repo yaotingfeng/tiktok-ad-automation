@@ -32,6 +32,7 @@ import {
   RequestError,
   ServerTable,
 } from "@/features/tenants/shared"
+import { HistoricalReadAction } from "./HistoricalReadAction"
 import { BuildReason } from "./presentation"
 import {
   PlatformState,
@@ -742,6 +743,14 @@ export function SubmissionStepsTable({
             </p>
             {selected.remote_id && <Identifier value={selected.remote_id} />}
             <PlatformState step={selected} />
+            <HistoricalReadAction
+              key={selected.step_id}
+              tenantId={tenantId}
+              bcId={bcId}
+              submissionId={submissionId}
+              stepId={selected.step_id}
+              eligible={selected.can_historical_read === true}
+            />
             <SubmissionEventsTable
               {...{ tenantId, bcId, submissionId }}
               stepId={selected.step_id}

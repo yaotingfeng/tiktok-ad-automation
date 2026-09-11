@@ -5,19 +5,18 @@ import os
 import sys
 import threading
 import time
-from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from uuid import uuid4
 
 import pytest
+import urllib3
 from celery import Celery
 from celery.contrib.testing.worker import start_worker
 from redis import Redis
 from sqlmodel import Session
 
 from app.core.config import settings
-from app.integrations.tiktok import sdk as sdk_scope
 from app.jobs.admission import admission_keys
 from app.modules.builds import execution
 from app.modules.builds.execution import (
@@ -25,7 +24,6 @@ from app.modules.builds.execution import (
 )
 from app.modules.builds.execution_models import ExecutionStep
 from app.modules.builds.execution_state import expire_attempt
-from app.modules.builds.sdk_requests import PORTFOLIO_ENDPOINT
 from tests.modules.builds.test_execution import executable as executable
 
 
@@ -57,15 +55,19 @@ def test_hard_kill_cannot_replay_an_armed_official_create(
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    original_client = sdk_scope.official_client
+    original_request = urllib3.PoolManager.request
 
-    @contextmanager
-    def local_sdk(*, access_token=None):
-        with original_client(access_token=access_token) as client:
-            client.configuration.host = f"http://127.0.0.1:{server.server_port}"
-            yield client
+    def local_sdk(pool, method, url, **kwargs):
+        assert url.startswith("https://business-api.tiktok.com/")
+        return original_request(
+            pool,
+            method,
+            f"http://127.0.0.1:{server.server_port}"
+            + url.removeprefix("https://business-api.tiktok.com"),
+            **kwargs,
+        )
 
-    monkeypatch.setattr(sdk_scope, "official_client", local_sdk)
+    monkeypatch.setattr(urllib3.PoolManager, "request", local_sdk)
     monkeypatch.setattr(execution, "_require_bounded_worker", production_worker_guard)
     prefix = f"prefork-test-{uuid4().hex}:"
     queue_name = prefix + "builds"
@@ -102,7 +104,10 @@ def test_hard_kill_cannot_replay_an_armed_official_create(
             client.set(prefix + "returned", "yes", ex=120)
 
     keys = admission_keys(
-        settings.TIKTOK_APP_ID, PORTFOLIO_ENDPOINT, context.tenant_id, "account-A"
+        settings.TIKTOK_APP_ID,
+        "build.create_cta_portfolio",
+        context.tenant_id,
+        "account-A",
     )
     try:
         with start_worker(

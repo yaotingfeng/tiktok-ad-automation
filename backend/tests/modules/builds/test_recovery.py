@@ -84,6 +84,42 @@ def test_request_replay_original_and_read_only_current_progress(executable):
         assert session.get(ExecutionStep, step_id).dispatch_revision == 1
 
 
+def test_read_recovery_does_not_require_new_create_permission(executable):
+    from app.modules.accounts.connection_models import ConnectionAuthorization
+    from app.modules.accounts.models import BCAccountAccess
+
+    db, context, _ = executable
+    submission_id, step_id = setup_failure(executable, status="UNKNOWN")
+    with Session(db) as session, session.begin():
+        for auth in session.exec(
+            select(ConnectionAuthorization).where(
+                ConnectionAuthorization.tenant_id == context.tenant_id
+            )
+        ).all():
+            auth.permission_summary = {
+                "read_authorized": True,
+                "build_authorized": None,
+            }
+            session.add(auth)
+        for grant in session.exec(
+            select(BCAccountAccess).where(
+                BCAccountAccess.tenant_id == context.tenant_id
+            )
+        ).all():
+            grant.can_build = False
+            grant.permission_state = "UNKNOWN"
+            session.add(grant)
+    receipt = request(executable, submission_id, kind="RECONCILE")
+    run(executable, receipt)
+    with Session(db) as session:
+        step = session.get(ExecutionStep, step_id)
+        assert (
+            session.get(PendingDispatch, step.dispatch_id).task_name
+            == "builds.reconcile_step"
+        )
+        assert step.status == "UNKNOWN"
+
+
 @pytest.mark.parametrize(
     "changes",
     [

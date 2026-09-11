@@ -20,10 +20,12 @@ from app.modules.providers.models import (
     ProviderConnection,
     ProviderDrama,
 )
+from tests.integrations.tiktok.gateway_support import retains_build_history
 
 
 @pytest.fixture
-def scene_case(database_engine, gateway_case, monkeypatch):
+def scene_case(request, database_engine, gateway_case, monkeypatch):
+    retain_history = retains_build_history(request, database_engine)
     from app.modules.builds import scene_jobs
 
     # 测试直接调用生产 worker；只免除 Celery 进程宿主检查，保留权限和实际准入。
@@ -129,20 +131,21 @@ def scene_case(database_engine, gateway_case, monkeypatch):
     try:
         yield result
     finally:
-        with Session(database_engine) as db, db.begin():
-            for model in (
-                SceneJobPage,
-                SceneJob,
-                CapabilityRequest,
-                CapabilityAsset,
-                CapabilityPage,
-                CapabilityJob,
-                PromotionLink,
-                ProviderDrama,
-                ProviderApplication,
-                ProviderConnection,
-            ):
-                db.exec(delete(model).where(model.tenant_id == context.tenant_id))
+        if not retain_history:
+            with Session(database_engine) as db, db.begin():
+                for model in (
+                    SceneJobPage,
+                    SceneJob,
+                    CapabilityRequest,
+                    CapabilityAsset,
+                    CapabilityPage,
+                    CapabilityJob,
+                    PromotionLink,
+                    ProviderDrama,
+                    ProviderApplication,
+                    ProviderConnection,
+                ):
+                    db.exec(delete(model).where(model.tenant_id == context.tenant_id))
 
 
 def ensure(database_engine, case):

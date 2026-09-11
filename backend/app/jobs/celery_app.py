@@ -66,6 +66,11 @@ celery_app.conf.update(
             "schedule": 60.0,
             "options": {"queue": "control"},
         },
+        "repair-build-historical-reads": {
+            "task": "builds.repair_historical_reads",
+            "schedule": 60.0,
+            "options": {"queue": "control"},
+        },
         "repair-build-scenes": {
             "task": "builds.repair_scenes",
             "schedule": 60.0,

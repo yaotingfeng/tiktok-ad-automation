@@ -84,6 +84,10 @@ _OPERATION_CAPABILITIES: dict[str, Capability] = {
     "build.get_ads": "read",
     "build.get_cta_portfolio": "read",
     "build.get_regular_adgroups": "read",
+    "build.create_campaign": "build",
+    "build.create_adgroup": "build",
+    "build.create_ad": "build",
+    "build.create_cta_portfolio": "build",
 }
 _DIRECTORY_OPERATIONS = frozenset(
     operation

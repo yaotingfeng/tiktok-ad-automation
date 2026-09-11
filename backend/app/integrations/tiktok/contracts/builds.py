@@ -74,7 +74,7 @@ class CampaignCreate(FrozenModel):
         return value
 
 
-class AdGroupCreate(FrozenModel):
+class AdGroupObservedFacts(FrozenModel):
     kind: Literal["ADGROUP"] = "ADGROUP"
     advertiser_id: Id
     campaign_id: Id
@@ -83,7 +83,6 @@ class AdGroupCreate(FrozenModel):
     roas_bid: Money
     location_ids: tuple[Id, ...] = Field(min_length=1)
     schedule_start_time: Annotated[Id, AfterValidator(_schedule)]
-    operation_status: Literal["ENABLE"] = "ENABLE"
     promotion_type: Literal["MINI_APP"] = "MINI_APP"
     optimization_goal: Literal["VALUE"] = "VALUE"
     optimization_event: Literal["ACTIVE_PAY"] = "ACTIVE_PAY"
@@ -95,6 +94,10 @@ class AdGroupCreate(FrozenModel):
         default=("PLACEMENT_TIKTOK",), min_length=1
     )
     schedule_type: Literal["SCHEDULE_FROM_NOW"] = "SCHEDULE_FROM_NOW"
+
+
+class AdGroupCreate(AdGroupObservedFacts):
+    operation_status: Literal["ENABLE"] = "ENABLE"
 
 
 class CreativeAsset(FrozenModel):
@@ -154,6 +157,8 @@ class BuildRecord(FrozenModel):
     intent: CreateIntent | None
     operation_status: Id | None
     missing_fields: tuple[Id, ...]
+    observed_adgroup: AdGroupObservedFacts | None = None
+    review_status: Id | None = None
 
 
 class BuildReadQuery(FrozenModel):
@@ -176,6 +181,7 @@ class AdGroupStatus(FrozenModel):
     adgroup_id: Id
     operation_status: Id | None
     evidence: CallEvidence
+    review_status: Id | None = None
 
 
 class BuildOperations(Protocol):

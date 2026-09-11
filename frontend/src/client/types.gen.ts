@@ -470,6 +470,10 @@ export type CreateDraftRequest = {
      */
     provider_connection_id: string;
     /**
+     * Execution Connection Id
+     */
+    execution_connection_id?: string | null;
+    /**
      * Application Id
      */
     application_id: string;
@@ -707,6 +711,10 @@ export type DraftSummary = {
      */
     provider_connection_id: string;
     /**
+     * Execution Connection Id
+     */
+    execution_connection_id?: string | null;
+    /**
      * Application Id
      */
     application_id: string;
@@ -770,6 +778,28 @@ export type DramaCandidate = {
      * Language
      */
     language?: string | null;
+};
+
+/**
+ * ExecutionRoutePublic
+ */
+export type ExecutionRoutePublic = {
+    /**
+     * Connection Id
+     */
+    connection_id: string;
+    /**
+     * Connection Name
+     */
+    connection_name: string;
+    /**
+     * Channel
+     */
+    channel: 'OFFICIAL_API' | 'OFFICIAL_MCP';
+    /**
+     * Bc Id
+     */
+    bc_id: string;
 };
 
 /**
@@ -952,6 +982,44 @@ export type HTTPValidationError = {
      * Detail
      */
     detail?: Array<ValidationError>;
+};
+
+/**
+ * HistoricalReadReceipt
+ */
+export type HistoricalReadReceipt = {
+    /**
+     * Read Id
+     */
+    read_id: string;
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Source Step Id
+     */
+    source_step_id: string;
+    /**
+     * State
+     */
+    state: 'PENDING' | 'RUNNING' | 'CONFIRMED' | 'UNKNOWN' | 'BLOCKED';
+    /**
+     * Remote Id
+     */
+    remote_id?: string | null;
+    /**
+     * Mismatch
+     */
+    mismatch?: boolean;
+    /**
+     * Reason Code
+     */
+    reason_code?: string | null;
+    /**
+     * Requires New Preparation
+     */
+    requires_new_preparation?: true;
 };
 
 /**
@@ -2230,6 +2298,10 @@ export type PatchDraftRequest = {
      */
     provider_connection_id?: string | null;
     /**
+     * Execution Connection Id
+     */
+    execution_connection_id?: string | null;
+    /**
      * Application Id
      */
     application_id?: string | null;
@@ -2433,6 +2505,7 @@ export type PreviewRequest = {
  * PreviewSummary
  */
 export type PreviewSummary = {
+    execution_route?: ExecutionRoutePublic | null;
     /**
      * Preview Id
      */
@@ -3006,6 +3079,10 @@ export type SignedPreview = {
  */
 export type StepPublic = {
     /**
+     * Can Historical Read
+     */
+    can_historical_read?: boolean;
+    /**
      * Title
      */
     title?: string | null;
@@ -3478,6 +3555,15 @@ export type SubmissionUnitPublic = {
  * SubmissionView
  */
 export type SubmissionView = {
+    execution_route?: ExecutionRoutePublic | null;
+    /**
+     * Recovery Mode
+     */
+    recovery_mode?: 'ORIGINAL_READ' | 'REAUTHORIZE_READ' | 'BLOCKED';
+    /**
+     * Error Code
+     */
+    error_code?: string | null;
     /**
      * Actor Name
      */
@@ -8547,6 +8633,108 @@ export type buildsGetSubmissionMaterialsResponses = {
 };
 
 export type buildsGetSubmissionMaterialsResponse = buildsGetSubmissionMaterialsResponses[keyof buildsGetSubmissionMaterialsResponses];
+
+export type buildsAuthorizeHistoricalReadData = {
+    body: RecoveryRequestInput;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Step Id
+         */
+        step_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/execution-steps/{step_id}/historical-read';
+};
+
+export type buildsAuthorizeHistoricalReadErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsAuthorizeHistoricalReadError = buildsAuthorizeHistoricalReadErrors[keyof buildsAuthorizeHistoricalReadErrors];
+
+export type buildsAuthorizeHistoricalReadResponses = {
+    /**
+     * Successful Response
+     */
+    202: HistoricalReadReceipt;
+};
+
+export type buildsAuthorizeHistoricalReadResponse = buildsAuthorizeHistoricalReadResponses[keyof buildsAuthorizeHistoricalReadResponses];
+
+export type buildsGetHistoricalReadData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Read Id
+         */
+        read_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/historical-build-reads/{read_id}';
+};
+
+export type buildsGetHistoricalReadErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsGetHistoricalReadError = buildsGetHistoricalReadErrors[keyof buildsGetHistoricalReadErrors];
+
+export type buildsGetHistoricalReadResponses = {
+    /**
+     * Successful Response
+     */
+    200: HistoricalReadReceipt;
+};
+
+export type buildsGetHistoricalReadResponse = buildsGetHistoricalReadResponses[keyof buildsGetHistoricalReadResponses];
+
+export type buildsGetHistoricalReadRequestData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Request Id
+         */
+        request_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/historical-build-read-requests/{request_id}';
+};
+
+export type buildsGetHistoricalReadRequestErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsGetHistoricalReadRequestError = buildsGetHistoricalReadRequestErrors[keyof buildsGetHistoricalReadRequestErrors];
+
+export type buildsGetHistoricalReadRequestResponses = {
+    /**
+     * Successful Response
+     */
+    200: HistoricalReadReceipt;
+};
+
+export type buildsGetHistoricalReadRequestResponse = buildsGetHistoricalReadRequestResponses[keyof buildsGetHistoricalReadRequestResponses];
 
 export type buildsRetrySubmissionData = {
     body: RecoveryRequestInput;

@@ -1,10 +1,13 @@
 """只从实际响应生成回读事实；完整单页不代表找到了对象或全扫描完成。"""
 
+import re
 from typing import Literal, cast
 
 from pydantic import ValidationError
 
 from app.integrations.tiktok.contracts.builds import (
+    AdGroupCreate,
+    AdGroupObservedFacts,
     AdGroupStatus,
     BuildPage,
     BuildReadQuery,
@@ -95,6 +98,25 @@ def _project(shape: object, actual: object, path: str, missing: list[str]) -> ob
     return actual
 
 
+def _safe_status(value: object) -> str | None:
+    return (
+        value
+        if type(value) is str
+        and 0 < len(value) <= 128
+        and all(char.isalnum() or char == "_" for char in value)
+        else None
+    )
+
+
+def safe_remote_id(value: object) -> str | None:
+    # 与创建回执使用同一远端对象 ID 语法；名称/文案的共用 Id 类型不收紧。
+    return (
+        value
+        if type(value) is str and re.fullmatch(r"[A-Za-z0-9_.:-]{1,255}", value)
+        else None
+    )
+
+
 def parse_page(*, query: BuildReadQuery, response: McpBusinessResponse) -> BuildPage:
     kind = query.intent.kind
     if kind == "CTA":
@@ -113,13 +135,8 @@ def parse_page(*, query: BuildReadQuery, response: McpBusinessResponse) -> Build
     seen = set()
     shape = encode_intent(query.intent)
     for row in rows:
-        remote_id = row.get(ID_KEYS[kind])
-        if (
-            type(remote_id) is not str
-            or not remote_id.strip()
-            or len(remote_id) > 255
-            or remote_id in seen
-        ):
+        remote_id = safe_remote_id(row.get(ID_KEYS[kind]))
+        if remote_id is None or remote_id in seen:
             raise readback_error(response.evidence)
         seen.add(remote_id)
         status = row.get("operation_status")
@@ -127,6 +144,23 @@ def parse_page(*, query: BuildReadQuery, response: McpBusinessResponse) -> Build
             status = None
         missing: list[str] = []
         projected = _project(shape, row, "", missing)
+        observed_adgroup = None
+        # Smart+组接口缺status时仅保留其余实际观察到的完整typed字段，不补请求默认值。
+        if (
+            kind == "ADGROUP"
+            and isinstance(projected, dict)
+            and not any(field != "operation_status" for field in missing)
+        ):
+            core = dict(projected)
+            core.pop("operation_status", None)
+            targeting = core.pop("targeting_spec", None)
+            if isinstance(targeting, dict) and "location_ids" in targeting:
+                core["location_ids"] = targeting["location_ids"]
+                core["name"] = core.pop("adgroup_name", None)
+                try:
+                    observed_adgroup = AdGroupObservedFacts.model_validate(core)
+                except ValidationError:
+                    pass
         intent = None
         if not missing and isinstance(projected, dict):
             try:
@@ -142,6 +176,8 @@ def parse_page(*, query: BuildReadQuery, response: McpBusinessResponse) -> Build
                 intent=intent,
                 operation_status=status,
                 missing_fields=tuple(sorted(set(missing))),
+                observed_adgroup=observed_adgroup,
+                review_status=_safe_status(row.get("secondary_status")),
             )
         )
     return BuildPage(
@@ -201,7 +237,12 @@ def parse_status(
     if total != 1 or len(rows) != 1:
         raise readback_error(response.evidence)
     row = rows[0]
-    if row.get("advertiser_id") != advertiser_id or row.get("adgroup_id") != adgroup_id:
+    if (
+        safe_remote_id(row.get("advertiser_id")) is None
+        or safe_remote_id(row.get("adgroup_id")) is None
+        or row.get("advertiser_id") != advertiser_id
+        or row.get("adgroup_id") != adgroup_id
+    ):
         raise readback_error(response.evidence)
     try:
         return AdGroupStatus.model_validate(
@@ -210,7 +251,35 @@ def parse_status(
                 "adgroup_id": row["adgroup_id"],
                 "operation_status": row.get("operation_status"),
                 "evidence": response.evidence,
+                "review_status": _safe_status(row.get("secondary_status")),
             }
         )
     except ValidationError:
         raise readback_error(response.evidence) from None
+
+
+def with_adgroup_status(*, record: BuildRecord, status: AdGroupStatus) -> BuildRecord:
+    """只将同账户/同对象的实际状态与既有强类型观察合并；父级字段从未重填。"""
+    observed = record.observed_adgroup
+    if (
+        observed is None
+        or status.advertiser_id != observed.advertiser_id
+        or status.adgroup_id != record.remote_id
+        or any(field != "operation_status" for field in record.missing_fields)
+    ):
+        raise readback_error(status.evidence)
+    intent = None
+    missing: tuple[str, ...] = ("operation_status",)
+    if status.operation_status == "ENABLE":
+        intent = AdGroupCreate(**observed.model_dump(), operation_status="ENABLE")
+        missing = ()
+    return record.model_copy(
+        update={
+            "intent": intent,
+            "operation_status": status.operation_status,
+            "missing_fields": missing,
+            "review_status": status.review_status
+            if status.review_status is not None
+            else record.review_status,
+        }
+    )

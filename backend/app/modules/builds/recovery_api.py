@@ -6,10 +6,79 @@ from fastapi import APIRouter
 
 from app.api.deps import CurrentUser, SessionDep
 from app.modules.builds import recovery
-from app.modules.builds.recovery_models import RecoveryReceipt, RecoveryRequestInput
+from app.modules.builds.recovery_models import (
+    HistoricalReadReceipt,
+    RecoveryReceipt,
+    RecoveryRequestInput,
+)
 from app.modules.tenants.permissions import require_tenant
 
 router = APIRouter(prefix="/tenants/{tenant_id}", tags=["builds"])
+
+
+@router.post(
+    "/execution-steps/{step_id}/historical-read",
+    response_model=HistoricalReadReceipt,
+    status_code=202,
+    operation_id="builds-authorize_historical_read",
+    description="管理员仅授权以同连接的新授权只读核查原对象；不会续建原提交，仍须重新准备。",
+)
+def authorize_historical_read(
+    tenant_id: UUID,
+    step_id: UUID,
+    body: RecoveryRequestInput,
+    session: SessionDep,
+    user: CurrentUser,
+) -> HistoricalReadReceipt:
+    from app.modules.builds.historical_read import (
+        historical_read_receipt,
+        request_historical_read,
+    )
+
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="manage"
+    )
+    identity = request_historical_read(
+        session, context=context, source_step_id=step_id, request_id=body.request_id
+    )
+    session.commit()
+    return historical_read_receipt(session, context=context, read_id=identity)
+
+
+@router.get(
+    "/historical-build-reads/{read_id}",
+    response_model=HistoricalReadReceipt,
+    operation_id="builds-get_historical_read",
+    description="仅返回独立核查状态与对象 ID，不改变原提交。",
+)
+def get_historical_read(
+    tenant_id: UUID, read_id: UUID, session: SessionDep, user: CurrentUser
+) -> HistoricalReadReceipt:
+    from app.modules.builds.historical_read import historical_read_receipt
+
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    return historical_read_receipt(session, context=context, read_id=read_id)
+
+
+@router.get(
+    "/historical-build-read-requests/{request_id}",
+    response_model=HistoricalReadReceipt,
+    operation_id="builds-get_historical_read_request",
+    description="按原请求 ID 只读查找核查回执；不重新选路或排队。",
+)
+def get_historical_read_request(
+    tenant_id: UUID, request_id: UUID, session: SessionDep, user: CurrentUser
+) -> HistoricalReadReceipt:
+    from app.modules.builds.historical_read import historical_read_request_receipt
+
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    return historical_read_request_receipt(
+        session, context=context, request_id=request_id
+    )
 
 
 @router.post(

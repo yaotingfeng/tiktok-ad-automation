@@ -107,11 +107,15 @@ def update(
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="build"
     )
+    changes = body.model_dump(exclude_none=True)
+    # 显式 null 表示清除草稿偏好；遗漏字段仍表示保持原选择。
+    if "execution_connection_id" in body.model_fields_set:
+        changes["execution_connection_id"] = body.execution_connection_id
     revision = mutations.update_draft(
         session,
         context=context,
         draft_id=draft_id,
-        **body.model_dump(exclude_none=True),
+        **changes,
     )
     session.commit()
     return DraftSaved(draft_id=draft_id, revision=revision)
