@@ -7,7 +7,7 @@
 | 项目 | 当前记录 |
 | --- | --- |
 | 已提交依赖 | P3.3/P3.4/P3.5：fe7a855；P2.3：0485de0；P2.5：b3f9ada；P2.4：2429a22；完整提交归属见实施进度 |
-| 本次完整候选 | 基准 HEAD 2429a22，含本轮未提交修复；第二矩阵前后 767/767 app/tests/config 冻结 SHA256 均一致；本次最终代码提交 SHA 待 root 收口后登记 |
+| 本次完整代码提交 | `10da9fda9ee54c615305502f8da10a1ecab8d34a`；第二矩阵前后 767/767 app/tests/config 冻结 SHA256 均一致，提交字节与被测版本一致；后续仅补记本文和实施进度中的提交编号 |
 | 目标 Alembic head | mcp_cover_evidence；最终 heads/current 均为唯一 head，check 无差异，三个命令退出 0 |
 | 后端首次完整矩阵 | 2149 passed / 36 failed / 9 skipped / 8 errors，1001.76s；退出 1，实际失败与修复经过保留如下 |
 | 后端第二轮完整矩阵 | **2203 passed / 9 skipped，1304.32s（21:44），退出 0**；包含本轮 flow 与双基点迁移 |
