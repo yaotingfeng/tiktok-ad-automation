@@ -205,7 +205,7 @@ if attempt.status != "CANDIDATE_READY":
 
 **Files:** Create `backend/app/integrations/tiktok/mcp_auth/refresh.py`、`backend/app/modules/accounts/refresh_tasks.py`；Modify `backend/app/jobs/tasks.py`、Task 1 refresh 模型（Task 5 工厂消费此接口）；Test `backend/tests/modules/accounts/test_mcp_refresh.py`、`test_mcp_refresh_concurrency.py`。
 
-**Interfaces:** 输出 `ensure_mcp_credentials(*,database_engine:Engine,redis_client:Redis,context:TenantContext,connection_id:UUID,task_deadline:datetime)->None`，只由 gateway/bootstrap 内部调用；它接收调用方冻结的本次 UTC task_deadline（不是静态协议配置），仅在旧 token 可证明覆盖本次有界任务及清理裕量时返回；否则持久化刷新并抛出待重调度错误，不把 token 返回给业务任务。输出 `process_mcp_refresh(*,database_engine:Engine,redis_client:Redis,attempt_id:UUID)->str`；状态为 `PENDING|CLAIMED|REQUEST_ARMED|CANDIDATE_READY|PUBLISHED|OUTCOME_UNKNOWN|REJECTED|SUPERSEDED`。
+**Interfaces:** 输出 `ensure_mcp_credentials(*,database_engine:Engine,redis_client:Redis,context:TenantContext,connection_id:UUID,task_deadline:datetime)->None`，只由 gateway/bootstrap 内部调用；它接收调用方冻结的本次 UTC task_deadline（不是静态协议配置），仅在旧 token 可证明覆盖本次有界任务及清理裕量时返回；否则持久化刷新并抛出待重调度错误，不把 token 返回给业务任务。输出 `process_mcp_refresh(*,database_engine:Engine,redis_client:Redis,context:TenantContext,attempt_id:UUID)->str`；状态为 `PENDING|CLAIMED|REQUEST_ARMED|CANDIDATE_READY|PUBLISHED|OUTCOME_UNKNOWN|REJECTED|SUPERSEDED`。
 
 - [ ] **Step 1: 用真实 PostgreSQL 创建一个 active MCP 连接及固定授权摘要；传输替身返回同 grant 新 token，断言刷新只增凭据修订。** 新建共享 fixture `mcp_refresh_case` 返回 `(context, connection_id, attempt_id)`，造数使用 Task 1 SQLModel、加密工具和合成 token；fixture commit 到测试库以便 worker 独立 Session 可见，结束逐条清理本测试 ID。
 
@@ -215,7 +215,7 @@ def test_rotation_keeps_authorization_revision(database_engine, redis_client, mc
     with Session(database_engine) as session:
         before = session.get(TikTokConnection, connection_id).authorization_revision
     assert process_mcp_refresh(database_engine=database_engine, redis_client=redis_client,
-                               attempt_id=attempt_id) == "PUBLISHED"
+                               context=context, attempt_id=attempt_id) == "PUBLISHED"
     with Session(database_engine) as session:
         assert session.get(TikTokConnection, connection_id).authorization_revision == before
 ```

@@ -16,6 +16,7 @@ celery_app.conf.update(
         "app.jobs.tasks",
         "app.modules.accounts.tasks",
         "app.modules.accounts.capability_tasks",
+        "app.modules.accounts.refresh_tasks",
         "app.modules.providers.tasks",
         "app.modules.materials.tasks",
         "app.modules.materials.cover_tasks",
