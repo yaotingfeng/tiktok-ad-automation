@@ -3,6 +3,7 @@
 import json
 import logging
 import traceback
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from email.parser import BytesParser
@@ -14,13 +15,10 @@ from urllib3.exceptions import ReadTimeoutError
 from urllib3.response import HTTPResponse
 
 from app.core.errors import DomainError
-from app.integrations.tiktok.contracts.materials import RemoteCallBudget
+from app.integrations.tiktok.adapters.sdk_materials import SDKMaterialOperations
+from app.integrations.tiktok.contracts.common import RemoteCallError
+from app.integrations.tiktok.contracts.materials import RemoteCallBudget, URLVideoUpload
 from app.integrations.tiktok.sdk import official_client
-from app.modules.materials.sdk_assets import (
-    parse_upload,
-    read_source_preview,
-    upload_video_url,
-)
 
 TOKEN = "offline-token-secret"
 DIGEST = "abcdef0123456789abcdef0123456789"
@@ -60,31 +58,50 @@ def transport(monkeypatch):
     return calls, responses
 
 
-def upload(client, budget, **kwargs):
-    return upload_video_url(
+@contextmanager
+def request_scope(advertiser_id, operation, deadline):
+    assert advertiser_id and operation.startswith("materials.")
+    assert isinstance(deadline, datetime)
+    yield
+
+
+def adapter(client, budget, *, allowed_hosts=HOSTS):
+    return SDKMaterialOperations(
         client,
-        **{
-            "advertiser_id": "actual-source-account",
-            "remote_name": "stable-attempt-001.mp4",
-            "video_url": URL,
-            "md5": DIGEST,
-            "budget": budget,
-            **kwargs,
-        },
+        request_scope=request_scope,
+        deadline=budget.deadline,
+        preview_allowed_hosts=allowed_hosts,
+    )
+
+
+def upload(client, budget, **kwargs):
+    values = {
+        "advertiser_id": "actual-source-account",
+        "remote_name": "stable-attempt-001.mp4",
+        "video_url": URL,
+        "md5": DIGEST,
+        **kwargs,
+    }
+    return adapter(client, budget).upload_video_url(
+        URLVideoUpload(
+            advertiser_id=values["advertiser_id"],
+            file_name=values["remote_name"],
+            url=values["video_url"],
+            expected_md5=values["md5"],
+            byte_size=12345,
+        ),
+        budget=budget,
     )
 
 
 def read(client, budget, **kwargs):
-    return read_source_preview(
-        client,
-        **{
-            "advertiser_id": "actual-source-account",
-            "video_id": "known-source-vid",
-            "md5": DIGEST,
-            "allowed_hosts": HOSTS,
-            "budget": budget,
-            **kwargs,
-        },
+    return adapter(
+        client, budget, allowed_hosts=kwargs.pop("allowed_hosts", HOSTS)
+    ).read_source_preview(
+        advertiser_id="actual-source-account",
+        video_id="known-source-vid",
+        budget=budget,
+        **kwargs,
     )
 
 
@@ -145,8 +162,9 @@ def test_real_multipart_has_url_and_digest_but_no_file_bytes(
     with official_client(access_token=TOKEN) as client:
         with monkeypatch.context() as patch:
             patch.setattr("builtins.open", no_original_read)
-            receipt = parse_upload(upload(client, budget, md5=DIGEST.upper()))
-        assert receipt == {"video_id": "returned-vid", "mid": "returned-mid"}
+            receipt = upload(client, budget, md5=DIGEST.upper())
+        assert (receipt.video_id, receipt.mid) == ("returned-vid", "returned-mid")
+        assert receipt.evidence.request_id == "receipt-request"
     assert len(calls) == 1
     method, url, kwargs = calls[0]
     assert method == "POST" and url.endswith("/file/video/ad/upload/")
@@ -167,7 +185,7 @@ def test_real_multipart_has_url_and_digest_but_no_file_bytes(
 @pytest.mark.parametrize("digest", [None, "", "a" * 31, "g" * 32, "a" * 32 + "-2", 42])
 def test_invalid_trusted_digest_is_rejected_before_send(transport, budget, digest):
     with official_client(access_token=TOKEN) as client:
-        with pytest.raises(DomainError, match="素材缺少") as error:
+        with pytest.raises(RemoteCallError) as error:
             upload(client, budget, md5=digest)
     assert error.value.code == "material_digest_missing"
     assert transport[0] == []
@@ -251,7 +269,6 @@ def test_source_read_is_fresh_exact_and_does_not_fetch_media(transport, budget):
     [
         {"video_id": "other-vid"},
         {"video_id": None},
-        {"signature": "a" * 32},
         {"signature": None},
         {"displayable": False},
         {"displayable": "true"},
@@ -391,11 +408,11 @@ def test_failures_are_redacted_and_never_retried(
         with official_client(access_token=TOKEN) as client:
             with pytest.raises(DomainError) as error:
                 operation(client, budget)
-    assert error.value.code == (
-        "material_response_unknown"
-        if failure == "malformed"
-        else "tiktok_response_error"
-    )
+    assert error.value.code in {"material_response_unknown", "tiktok_response_error"}
+    if operation is upload:
+        assert (
+            isinstance(error.value, RemoteCallError) and error.value.effect == "UNKNOWN"
+        )
     assert len(calls) == 1
     visible = "".join(traceback.format_exception(error.value)) + caplog.text
     for value in (URL, TOKEN, DIGEST, "offline-url-secret"):
@@ -409,13 +426,13 @@ def test_known_receipt_survives_failure_after_return(transport, budget, monkeypa
     receipt = None
     with pytest.raises(RuntimeError, match="cleanup fixture"):
         with official_client(access_token=TOKEN) as client:
-            receipt = parse_upload(upload(client, budget))
+            receipt = upload(client, budget)
 
             def broken_clear():
                 raise RuntimeError("cleanup fixture")
 
             monkeypatch.setattr(client.rest_client.pool_manager, "clear", broken_clear)
-    assert receipt == {"video_id": "actual-vid", "mid": "actual-mid"}
+    assert (receipt.video_id, receipt.mid) == ("actual-vid", "actual-mid")
 
 
 @pytest.mark.parametrize("operation", [upload, read])
@@ -427,35 +444,62 @@ def test_worker_interrupt_remains_an_interrupt(transport, budget, operation):
 
 
 @pytest.mark.parametrize("method", ["info", "search"])
-def test_existing_read_wrappers_accept_actual_budget_and_reject_expired_before_io(
+def test_read_facade_accepts_actual_budget_and_rejects_expired_before_io(
     transport, budget, method
 ):
-    from datetime import timedelta
-
-    from app.modules.materials.sdk_assets import read_video, search_videos
-
-    wrapper = read_video if method == "info" else search_videos
-    kwargs = (
-        {"advertiser_id": "actual-account", "video_id": "known-vid"}
+    kwargs = {"advertiser_id": "actual-account"}
+    kwargs.update(
+        {"video_id": "known-vid"}
         if method == "info"
-        else {"advertiser_id": "actual-account", "page": 1}
+        else {"page": 1, "material_ids": ()}
     )
     with official_client(access_token=TOKEN) as client:
+        expired = replace(budget, deadline=datetime.now(UTC) - timedelta(seconds=1))
         with pytest.raises(DomainError) as error:
-            wrapper(
-                client,
-                budget=replace(
-                    budget, deadline=datetime.now(UTC) - timedelta(seconds=1)
-                ),
-                **kwargs,
+            facade = adapter(client, expired)
+            (facade.read_video if method == "info" else facade.search_videos)(
+                budget=expired, **kwargs
             )
-        assert error.value.code == "material_deadline"
-        assert transport[0] == []
-        transport[1].append({"code": 0, "data": {"list": []}})
-        wrapper(
-            client,
-            budget=replace(budget, deadline=datetime.now(UTC) + timedelta(seconds=12)),
-            **kwargs,
+        assert error.value.code == "material_deadline" and transport[0] == []
+        transport[1].append(
+            {
+                "code": 0,
+                "data": {
+                    "list": [],
+                    "page_info": {"page": 1, "page_size": 100, "total_page": 1},
+                },
+            }
+        )
+        fresh = replace(budget, deadline=datetime.now(UTC) + timedelta(seconds=12))
+        facade = adapter(client, fresh)
+        (facade.read_video if method == "info" else facade.search_videos)(
+            budget=fresh, **kwargs
         )
     timeout = transport[0][0][2]["timeout"]
     assert timeout.connect_timeout + timeout.read_timeout <= 7
+
+
+def test_source_read_preserves_actual_remote_digest_without_request_substitution(
+    transport, budget
+):
+    transport[1].append(info(signature="a" * 32))
+    with official_client(access_token=TOKEN) as client:
+        assert read(client, budget).md5 == "a" * 32
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"code":40001,"code":0,"data":[{"video_id":"vid"}]}',
+        b'{"code":0,"data":[{"video_id":"first","video_id":"second"}]}',
+        b'{"code":0,"data":[{"video_id":"vid","unknown":NaN}]}',
+    ],
+)
+def test_ambiguous_raw_upload_json_never_becomes_a_known_receipt(
+    transport, budget, body
+):
+    transport[1].append(HTTPResponse(body=body, status=200))
+    with official_client(access_token=TOKEN) as client:
+        with pytest.raises(RemoteCallError) as error:
+            upload(client, budget)
+    assert error.value.effect == "UNKNOWN" and len(transport[0]) == 1

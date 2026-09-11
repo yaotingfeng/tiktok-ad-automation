@@ -1,11 +1,11 @@
-"""One bounded official SDK request per generation-fenced source dispatch.
+"""One bounded channel request per generation-fenced source dispatch.
 
-No original download; signing happens only inside shared request admission.
+No original download; verified channel policy precedes signing and arming.
+Only explicit NOT_SENT releases this attempt's temporary signed use.
 Known receipts survive later client cleanup and permission changes. UNKNOWN
 retains the same source/connection/object/operation and its remote-use claim.
 """
 
-import math
 import re
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -17,12 +17,17 @@ from sqlmodel import Session, col, select
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
+from app.integrations.tiktok.bounded_resources import bounded_session
 from app.integrations.tiktok.contracts import materials as material_types
-from app.integrations.tiktok.sdk import SDK_SCOPE_INTERRUPTS, sdk_client
+from app.integrations.tiktok.contracts.common import RemoteCallError
+from app.integrations.tiktok.gateway import open_tiktok_gateway
+from app.integrations.tiktok.material_upload_evidence import material_upload_policy
+from app.integrations.tiktok.sdk import SDK_SCOPE_INTERRUPTS
 from app.jobs.admission import admission_policy
 from app.modules.tenants.permissions import require_tenant
 
 from . import sdk_assets as api
+from .channel_policy import require_url_upload
 from .ingest_models import (
     IngestSession,
     IngestSessionFile,
@@ -36,7 +41,7 @@ from .models import (
     MaterialFile,
     MaterialUploadAttempt,
 )
-from .routes import require_sdk_route, source_parent_route
+from .routes import load_material_route, source_parent_route
 from .source_selection import claim_source_account, release_source_account, source_file
 from .source_uploads import (
     READ_CLAIM_SECONDS,
@@ -159,7 +164,14 @@ def _new_operation(
         bc_id=material.bc_id,
         generation=obj.generation,
     )
-    require_sdk_route(route)
+    if route.channel == "OFFICIAL_MCP":
+        require_url_upload(
+            material_upload_policy(
+                channel=route.channel,
+                adapter_contract_revision=route.adapter_contract_revision,
+            ),
+            byte_size=obj.expected_bytes,
+        )
     access = claim_source_account(
         db,
         context=context,
@@ -285,32 +297,6 @@ def _release_use(
     release_object_uses(
         db, object_id=obj.id, purpose="ingest", operation_id=operation.id
     )
-
-
-def _verified(
-    data: dict[str, Any], *, video_id: str, md5: str, byte_size: int
-) -> dict[str, str] | None:
-    evidence = api.verified_video(data, md5=md5)
-    if evidence is None or evidence["video_id"] != video_id:
-        return None
-    row = data["list"][0]
-    duration = row.get("duration")
-    if (
-        any(
-            type(row.get(key)) is not int or not 0 < row[key] <= 65536
-            for key in ("width", "height")
-        )
-        or type(row.get("size")) is not int
-        or row["size"] != byte_size
-        or type(duration) not in (int, float)
-        or not 0 < duration < 1e12
-        or not math.isfinite(duration)
-        or not isinstance(row.get("format"), str)
-        or row["format"].lower()
-        not in {"mp4", "mov", "m4v", "avi", "webm", "mpeg", "3gp"}
-    ):
-        return None
-    return evidence
 
 
 def _receipt(
@@ -546,6 +532,9 @@ def _failure(
             attempt.status = operation.status
             _state(db, context, row, operation.status, code)
         elif deferred:
+            # 当前claim持有者得到明确本地NOT_SENT后，才结束这次临时签名用途；字节预留不释放。
+            if kind == "upload" and not post_attempted:
+                _release_use(db, context=context, obj=obj, operation=operation)
             operation.status, attempt.status = "pending", "pending"
         else:
             operation.status, attempt.status = "failed", "blocked"
@@ -725,158 +714,177 @@ def run_url_source_upload(
     post_attempted = False
     evidence: dict[str, str] | tuple[list[dict[str, str]], bool, int] | None
     try:
-        endpoint = (
-            api.UPLOAD_ENDPOINT
-            if kind == "upload"
-            else api.INFO_ENDPOINT
-            if work.get("video_id")
-            else api.SEARCH_ENDPOINT
+        route = load_material_route(
+            work["frozen_route"],
+            context=context,
+            bc_id=work["bc_id"],
+            connection_id=work["connection_id"],
         )
-        policy = admission_policy(endpoint)
+        logical_operation = (
+            "materials.upload_video_url"
+            if kind == "upload"
+            else "materials.get_videos"
+            if work.get("video_id")
+            else "materials.search_videos"
+        )
+        policy = admission_policy(logical_operation)
         budget = material_types.RemoteCallBudget(
             deadline=deadline, hard_limit_seconds=hard_limit, lease_ms=policy.lease_ms
         )
         budget.timeout(upload=kind == "upload")
-        with api.admitted_asset_call(
-            redis_client,
-            context=context,
-            endpoint=endpoint,
-            advertiser_id=work["advertiser_id"],
-            policy=policy,
-        ):
-            with Session(database_engine) as db:
+
+        def check_current() -> None:
+            # 每个物理发送（包括MCP握手）都核查本地claim与代次，关闭短事务后才出网。
+            with (
+                bounded_session(database_engine, task_deadline=deadline) as check,
+                check.begin(),
+            ):
                 material, obj, row = _records(
-                    db,
+                    check,
                     context=context,
                     material_id=material_id,
                     object_id=object_id,
                     generation=generation,
                 )
-                operation = _locked_operation(db, context, operation_id)
+                operation = _locked_operation(check, context, operation_id)
                 if operation.attempt_token != claim:
-                    return
+                    raise DomainError(
+                        "material_claim_changed", "素材操作已由其他任务接管"
+                    )
                 _proof(material, obj, row, upload=kind == "upload")
-                access = _source_access(
-                    db, context=context, work=work, upload=kind == "upload"
+                _source_access(
+                    check, context=context, work=work, upload=kind == "upload"
                 )
-                with sdk_client(
-                    db, context=context, connection_id=access.connection_id
-                ) as client:
-                    db.commit()
-                    db.close()
-                    if kind == "upload":
-                        with Session(database_engine) as arm, arm.begin():
-                            material, obj, row = _records(
-                                arm,
-                                context=context,
-                                material_id=material_id,
-                                object_id=object_id,
-                                generation=generation,
-                            )
-                            operation = _locked_operation(arm, context, operation_id)
-                            if operation.attempt_token != claim:
-                                return
-                            _proof(material, obj, row, upload=True)
-                            _source_access(arm, context=context, work=work)
-                            budget.timeout(upload=True)
-                            operation.status = "sending"
-                            operation.remote_response = {
-                                **operation.remote_response,
-                                "send_armed": True,
-                            }
-                            attempt = _attempt(arm, operation_id)
-                            assert attempt
-                            attempt.status = "uploading"
-                            _state(arm, context, row, "uploading")
-                        url = sign_ingest_url(
-                            database_engine=database_engine,
-                            context=context,
-                            object_id=object_id,
-                            operation_id=operation_id,
-                            s3=s3,
-                        )
-                        with Session(database_engine) as check, check.begin():
-                            material, obj, row = _records(
-                                check,
-                                context=context,
-                                material_id=material_id,
-                                object_id=object_id,
-                                generation=generation,
-                            )
-                            operation = _locked_operation(check, context, operation_id)
-                            if operation.attempt_token != claim:
-                                return
-                            _proof(material, obj, row, upload=True)
-                            _source_access(check, context=context, work=work)
-                            budget.timeout(upload=True)
-                        post_attempted = True
-                        evidence = api.parse_upload(
-                            api.upload_video_url(
-                                client,
-                                advertiser_id=work["advertiser_id"],
-                                video_url=url,
-                                remote_name=work["remote_name"],
-                                md5=work["md5"],
-                                budget=budget,
-                            )
-                        )
-                        # A transient receipt transaction failure gets one fresh
-                        # persistence attempt before SDK cleanup, never a new POST.
-                        for receipt_attempt in range(2):
-                            try:
-                                _receipt(
-                                    database_engine,
-                                    context=context,
-                                    material_id=material_id,
-                                    object_id=object_id,
-                                    generation=generation,
-                                    operation_id=operation_id,
-                                    claim=claim,
-                                    evidence=evidence,
-                                )
-                                break
-                            except SDK_SCOPE_INTERRUPTS:
-                                raise
-                            except Exception:
-                                if receipt_attempt:
-                                    raise
-                    elif work.get("video_id"):
-                        evidence = _verified(
-                            api.read_video(
-                                client,
-                                advertiser_id=work["advertiser_id"],
-                                video_id=work["video_id"],
-                                budget=budget,
+                if kind == "upload" and route.channel == "OFFICIAL_MCP":
+                    require_url_upload(
+                        material_upload_policy(
+                            channel=route.channel,
+                            adapter_contract_revision=route.adapter_contract_revision,
+                        ),
+                        byte_size=work["byte_size"],
+                    )
+                budget.timeout(upload=kind == "upload")
+
+        check_current()
+        with open_tiktok_gateway(
+            database_engine=database_engine,
+            redis_client=redis_client,
+            context=context,
+            route=route,
+            task_deadline=deadline,
+            before_request=check_current,
+        ) as gateway:
+            if kind == "upload":
+                with (
+                    bounded_session(database_engine, task_deadline=deadline) as arm,
+                    arm.begin(),
+                ):
+                    material, obj, row = _records(
+                        arm,
+                        context=context,
+                        material_id=material_id,
+                        object_id=object_id,
+                        generation=generation,
+                    )
+                    operation = _locked_operation(arm, context, operation_id)
+                    if operation.attempt_token != claim:
+                        return
+                    _proof(material, obj, row, upload=True)
+                    _source_access(arm, context=context, work=work)
+                    if route.channel == "OFFICIAL_MCP":
+                        require_url_upload(
+                            material_upload_policy(
+                                channel=route.channel,
+                                adapter_contract_revision=route.adapter_contract_revision,
                             ),
-                            video_id=work["video_id"],
-                            md5=work["md5"],
                             byte_size=work["byte_size"],
                         )
-                    else:
-                        page = work.get("search_page", 1)
-                        data = api.search_videos(
-                            client,
+                    operation.status = "sending"
+                    operation.remote_response = {
+                        **operation.remote_response,
+                        "send_armed": True,
+                    }
+                    attempt = _attempt(arm, operation_id)
+                    assert attempt
+                    attempt.status = "uploading"
+                    _state(arm, context, row, "uploading")
+                url = sign_ingest_url(
+                    database_engine=database_engine,
+                    context=context,
+                    object_id=object_id,
+                    operation_id=operation_id,
+                    s3=s3,
+                )
+                request = material_types.URLVideoUpload(
+                    work["advertiser_id"],
+                    url,
+                    work["remote_name"],
+                    work["md5"],
+                    work["byte_size"],
+                )
+                post_attempted = True
+                receipt = gateway.materials.upload_video_url(request, budget=budget)
+                evidence = api.receipt_evidence(receipt)
+                # 回执只白名单保存ID；先提交后退出gateway，不让清理错误抹掉已知身份。
+                for receipt_attempt in range(2):
+                    try:
+                        _receipt(
+                            database_engine,
+                            context=context,
+                            material_id=material_id,
+                            object_id=object_id,
+                            generation=generation,
+                            operation_id=operation_id,
+                            claim=claim,
+                            evidence=evidence,
+                        )
+                        break
+                    except SDK_SCOPE_INTERRUPTS:
+                        raise
+                    except Exception:
+                        if receipt_attempt:
+                            raise
+            elif work.get("video_id"):
+                record = gateway.materials.read_video(
+                    advertiser_id=work["advertiser_id"],
+                    video_id=work["video_id"],
+                    budget=budget,
+                )
+                evidence = api.video_identity(
+                    record,
+                    advertiser_id=work["advertiser_id"],
+                    video_id=work["video_id"],
+                    md5=work["md5"],
+                    expected_size=work["byte_size"],
+                )
+            else:
+                page = work.get("search_page", 1)
+                result = gateway.materials.search_videos(
+                    advertiser_id=work["advertiser_id"],
+                    page=page,
+                    material_ids=(),
+                    budget=budget,
+                )
+                if (
+                    not 0 <= result.total_pages <= MAX_SEARCH_PAGES
+                    or not 1 <= page <= MAX_SEARCH_PAGES
+                ):
+                    raise DomainError(
+                        "material_reconciliation_bounded", "来源核查超过有界分页范围"
+                    )
+                matches = []
+                for record in result.rows:
+                    if record.file_name == work["remote_name"]:
+                        match = api.video_identity(
+                            record,
                             advertiser_id=work["advertiser_id"],
-                            page=page,
-                            budget=budget,
-                        )
-                        total = data.get("page_info", {}).get("total_page")
-                        if (
-                            type(total) is not int
-                            or not 0 <= total <= MAX_SEARCH_PAGES
-                            or not 1 <= page <= MAX_SEARCH_PAGES
-                        ):
-                            raise DomainError(
-                                "material_reconciliation_bounded",
-                                "来源核查超过有界分页范围",
-                            )
-                        matches, last = api.search_page(
-                            data,
-                            page=page,
-                            remote_name=work["remote_name"],
+                            video_id=record.video_id,
                             md5=work["md5"],
+                            expected_size=work["byte_size"],
                         )
-                        evidence = (matches, last, total)
+                        if match:
+                            matches.append(match)
+                evidence = (matches, page >= result.total_pages, result.total_pages)
         _finish(
             database_engine,
             context=context,
@@ -892,6 +900,10 @@ def run_url_source_upload(
     except SDK_SCOPE_INTERRUPTS:
         raise
     except Exception as error:
+        if isinstance(error, api.SdkAdmissionDeferred) or (
+            isinstance(error, RemoteCallError) and error.effect == "NOT_SENT"
+        ):
+            post_attempted = False
         _failure(
             database_engine,
             context=context,

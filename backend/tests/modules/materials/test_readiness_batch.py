@@ -58,6 +58,15 @@ def test_batch_readiness_is_bounded_read_only_and_does_not_repeat_authority(
 
         event.listen(connection, "before_cursor_execute", record)
         try:
+            readiness.get_material_readiness_batch(
+                session,
+                context=source_env["context"],
+                bc_id=source_env["bc_id"],
+                material_ids=[ids[2]],
+                advertiser_id=account,
+            )
+            single_count = len(statements)
+            statements.clear()
             result = readiness.get_material_readiness_batch(
                 session,
                 context=source_env["context"],
@@ -67,7 +76,8 @@ def test_batch_readiness_is_bounded_read_only_and_does_not_repeat_authority(
             )
         finally:
             event.remove(connection, "before_cursor_execute", record)
-        assert len(statements) <= 24
+        # root核对分类：scope+freeze+build/upload当前安全事实共固定34条；30项不增长。
+        assert len(statements) == single_count and len(statements) <= 34
         assert all(
             statement.lstrip().upper().startswith("SELECT") for statement in statements
         )
@@ -108,4 +118,64 @@ def test_batch_rejects_unbounded_and_missing_materials(source_env, wire):
                 advertiser_id="actual-account",
             )
 
+    assert wire[0] == []
+
+
+def test_thirty_remote_relays_share_the_same_current_upload_authority(
+    source_env, wire, monkeypatch
+):
+    from app.core.config import settings
+
+    monkeypatch.setattr(
+        settings, "MATERIAL_REMOTE_MEDIA_HOSTS", frozenset({"vetted.example"})
+    )
+    with Session(engine) as db, db.begin():
+        account = target(db, source_env)
+        original = db.get(MaterialFile, source_env["material_id"])
+        ids = [original.id]
+        for _ in range(29):
+            identity = uuid4()
+            db.add(
+                MaterialFile(
+                    **(
+                        original.model_dump()
+                        | {"id": identity, "object_key": f"relay/{identity}"}
+                    )
+                )
+            )
+            ids.append(identity)
+        db.flush()
+        for identity in ids:
+            asset(db, {**source_env, "material_id": identity}, "actual-account")
+    counts = []
+    for group in ([ids[0]], ids):
+        statements = []
+        with Session(engine) as db, db.begin():
+            SASession.execute(db, text("SET TRANSACTION READ ONLY"))
+            connection = db.connection()
+
+            def record(_c, _cu, statement, _p, _ct, _many, sink=statements):
+                sink.append(statement)
+
+            event.listen(connection, "before_cursor_execute", record)
+            try:
+                rows = readiness.get_material_readiness_batch(
+                    db,
+                    context=source_env["context"],
+                    bc_id=source_env["bc_id"],
+                    material_ids=group,
+                    advertiser_id=account,
+                )
+            finally:
+                event.remove(connection, "before_cursor_execute", record)
+            assert all(
+                row.state == "preparable" and row.path == "share_source"
+                for row in rows.values()
+            )
+            assert all(
+                statement.lstrip().upper().startswith("SELECT")
+                for statement in statements
+            )
+            counts.append(len(statements))
+    assert counts[0] == counts[1] and counts[1] <= 34
     assert wire[0] == []

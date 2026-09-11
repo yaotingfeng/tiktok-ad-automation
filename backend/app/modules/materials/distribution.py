@@ -11,9 +11,13 @@ from sqlmodel import Session, col, select
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
+from app.integrations.tiktok.bounded_resources import bounded_session
 from app.integrations.tiktok.contracts import materials as material_types
+from app.integrations.tiktok.contracts.common import RemoteCallError
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
-from app.integrations.tiktok.sdk import SDK_SCOPE_INTERRUPTS, sdk_client
+from app.integrations.tiktok.gateway import open_tiktok_gateway
+from app.integrations.tiktok.material_upload_evidence import material_upload_policy
+from app.integrations.tiktok.sdk import SDK_SCOPE_INTERRUPTS
 from app.jobs.admission import admission_policy
 from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit
@@ -24,6 +28,7 @@ from app.modules.accounts.schemas import AccountAccess
 from app.modules.tenants.permissions import require_tenant
 
 from . import sdk_assets as api
+from .channel_policy import require_url_upload
 from .models import (
     AccountMaterial,
     MaterialAssetOperation,
@@ -47,7 +52,6 @@ from .routes import (
     load_material_route,
     require_material_route,
     require_same_route,
-    require_sdk_route,
 )
 from .schemas import AssetPreparation
 from .source_uploads import (
@@ -492,7 +496,23 @@ def _require_relay(
     )
     if source_route.connection_id != source.connection_id:
         raise DomainError("frozen_route_changed", "来源连接已改变")
-    require_execution_config(upload=True, endpoint=api.UPLOAD_ENDPOINT, original=False)
+    target_route = load_material_route(
+        operation.frozen_route, context=context, bc_id=material.bc_id
+    )
+    if target_route.channel == "OFFICIAL_MCP":
+        require_url_upload(
+            material_upload_policy(
+                channel=target_route.channel,
+                adapter_contract_revision=target_route.adapter_contract_revision,
+            ),
+            byte_size=material.byte_size,
+        )
+    require_execution_config(
+        upload=True,
+        endpoint="materials.upload_video_url",
+        original=False,
+        channel=target_route.channel,
+    )
 
 
 def _relay_receipt(
@@ -549,21 +569,15 @@ def _send_relay(
             work["source_route"], context=context, bc_id=work["bc_id"]
         ),
         deadline=deadline,
-        hard_limit=hard,
-        extend_lease=True,
     )
-    policy = admission_policy(api.UPLOAD_ENDPOINT)
-    budget = material_types.RemoteCallBudget(
-        deadline=deadline, hard_limit_seconds=hard, lease_ms=policy.lease_ms
+    route = load_material_route(
+        work["target_route"], context=context, bc_id=work["bc_id"]
     )
-    with api.admitted_asset_call(
-        redis_client,
-        context=context,
-        endpoint=api.UPLOAD_ENDPOINT,
-        advertiser_id=work["advertiser_id"],
-        policy=policy,
-    ):
-        with Session(database_engine) as db:
+    policy = admission_policy("materials.upload_video_url")
+    budget = material_types.RemoteCallBudget(deadline, hard, policy.lease_ms)
+
+    def check_current() -> None:
+        with bounded_session(database_engine, task_deadline=deadline) as db, db.begin():
             dist = _load_distribution(db, context, distribution_id)
             material = load_material(
                 db,
@@ -574,7 +588,7 @@ def _send_relay(
             )
             operation = _locked_operation(db, context, operation_id)
             if operation.attempt_token != claim or dist.operation_id != operation_id:
-                return None
+                raise DomainError("material_claim_changed", "素材操作已由其他任务接管")
             _require_relay(
                 db,
                 context=context,
@@ -584,54 +598,77 @@ def _send_relay(
                     dist.source_route, context=context, bc_id=dist.bc_id
                 ),
             )
-            require_sdk_route(
-                load_material_route(
-                    dist.target_route, context=context, bc_id=dist.bc_id
-                )
+            _target_access(db, context, dist, upload=True)
+            budget.timeout(upload=True)
+
+    check_current()
+    with open_tiktok_gateway(
+        database_engine=database_engine,
+        redis_client=redis_client,
+        context=context,
+        route=route,
+        task_deadline=deadline,
+        before_request=check_current,
+    ) as gateway:
+        with bounded_session(database_engine, task_deadline=deadline) as db, db.begin():
+            dist = _load_distribution(db, context, distribution_id)
+            _locked_material(db, context, dist.material_id)
+            operation = _locked_operation(db, context, operation_id)
+            if operation.attempt_token != claim or dist.operation_id != operation_id:
+                return None
+            _target_access(db, context, dist, upload=True)
+            operation.status, dist.status = "sending", "preparing"
+            operation.remote_response = {
+                **operation.remote_response,
+                "send_armed": True,
+                "upload_connection_id": str(route.connection_id),
+            }
+        try:
+            receipt = gateway.materials.upload_video_url(
+                material_types.URLVideoUpload(
+                    work["advertiser_id"],
+                    preview.url,
+                    work["remote_name"],
+                    work["content_md5"],
+                    work["byte_size"],
+                ),
+                budget=budget,
             )
-            access = _target_access(db, context, dist, upload=True)
-            with sdk_client(
-                db, context=context, connection_id=access.connection_id
-            ) as client:
-                budget.timeout(upload=True)
-                operation.status, dist.status = "sending", "preparing"
-                operation.remote_response = {
-                    **operation.remote_response,
-                    "send_armed": True,
-                    "upload_connection_id": str(access.connection_id),
-                }
-                db.commit()
-                db.close()
-                evidence = api.parse_upload(
-                    api.upload_video_url(
-                        client,
-                        advertiser_id=work["advertiser_id"],
-                        video_url=preview.url,
-                        remote_name=work["remote_name"],
-                        md5=work["content_md5"],
-                        budget=budget,
-                    )
+        except Exception as error:
+            if isinstance(error, api.SdkAdmissionDeferred) or (
+                isinstance(error, RemoteCallError) and error.effect == "NOT_SENT"
+            ):
+                with Session(database_engine) as db, db.begin():
+                    dist = _load_distribution(db, context, distribution_id)
+                    _locked_material(db, context, dist.material_id)
+                    operation = _locked_operation(db, context, operation_id)
+                    if (
+                        operation.attempt_token == claim
+                        and dist.operation_id == operation_id
+                    ):
+                        operation.remote_response = {
+                            **operation.remote_response,
+                            "send_armed": False,
+                        }
+            raise
+        evidence = api.receipt_evidence(receipt)
+        for receipt_attempt in range(2):
+            try:
+                _relay_receipt(
+                    database_engine,
+                    context=context,
+                    distribution_id=distribution_id,
+                    operation_id=operation_id,
+                    claim=claim,
+                    evidence=evidence,
                 )
-                try:
-                    _relay_receipt(
-                        database_engine,
-                        context=context,
-                        distribution_id=distribution_id,
-                        operation_id=operation_id,
-                        claim=claim,
-                        evidence=evidence,
-                    )
-                except Exception:
-                    # One fresh receipt-only transaction tolerates a transient
-                    # commit failure before client cleanup; never repeats POST.
-                    _relay_receipt(
-                        database_engine,
-                        context=context,
-                        distribution_id=distribution_id,
-                        operation_id=operation_id,
-                        claim=claim,
-                        evidence=evidence,
-                    )
+                break
+            except SDK_SCOPE_INTERRUPTS:
+                raise
+            except Exception:
+                if receipt_attempt:
+                    raise
+
     return evidence
 
 
@@ -879,18 +916,20 @@ def run_distribution(
                             dist.target_route, context=context, bc_id=dist.bc_id
                         ),
                     )
-                endpoint = api.UPLOAD_ENDPOINT
             else:
                 if not material.video_md5:
                     raise DomainError(
                         "material_digest_missing", "素材缺少可核实内容摘要"
                     )
-                endpoint = (
-                    api.INFO_ENDPOINT
+                require_execution_config(
+                    upload=False,
+                    endpoint="materials.get_videos"
                     if operation.remote_response.get("video_id")
-                    else api.SEARCH_ENDPOINT
+                    else "materials.search_videos",
+                    channel=load_material_route(
+                        dist.target_route, context=context, bc_id=dist.bc_id
+                    ).channel,
                 )
-                require_execution_config(upload=False, endpoint=endpoint)
         except DomainError as error:
             _blocked(dist, error.code)
             if kind == "prepare":
@@ -970,129 +1009,157 @@ def run_distribution(
                 else nullcontext(None)
             )
             with original_scope as original:
-                policy = admission_policy(endpoint)
-                # Repeat configuration checks after original I/O, before admission.
-                require_execution_config(upload=kind == "prepare", endpoint=endpoint)
-                with api.admitted_asset_call(
-                    redis_client,
-                    context=context,
-                    endpoint=endpoint,
-                    advertiser_id=work["advertiser_id"],
-                    policy=policy,
-                ):
-                    with Session(database_engine) as session:
-                        dist = _load_distribution(session, context, distribution_id)
-                        current_material = load_material(
-                            session,
+                route = load_material_route(
+                    work["target_route"], context=context, bc_id=work["bc_id"]
+                )
+                logical = (
+                    "materials.upload_video_file"
+                    if original
+                    else "materials.get_videos"
+                    if work.get("video_id")
+                    else "materials.search_videos"
+                )
+                policy = admission_policy(logical)
+                budget = material_types.RemoteCallBudget(
+                    deadline, hard, policy.lease_ms
+                )
+                require_execution_config(
+                    upload=kind == "prepare", endpoint=logical, channel=route.channel
+                )
+
+                def check_current() -> None:
+                    with (
+                        bounded_session(database_engine, task_deadline=deadline) as db,
+                        db.begin(),
+                    ):
+                        dist = _load_distribution(db, context, distribution_id)
+                        load_material(
+                            db,
                             context=context,
                             bc_id=dist.bc_id,
                             material_id=dist.material_id,
                             lock=True,
                         )
-                        operation = _locked_operation(session, context, operation_id)
+                        operation = _locked_operation(db, context, operation_id)
                         if (
                             operation.attempt_token != claim
                             or dist.operation_id != operation_id
                         ):
-                            return
-                        require_sdk_route(
-                            load_material_route(
-                                dist.target_route, context=context, bc_id=dist.bc_id
+                            raise DomainError(
+                                "material_claim_changed", "素材操作已由其他任务接管"
                             )
-                        )
-                        access = _target_access(
-                            session,
+                        _target_access(
+                            db,
                             context,
                             dist,
                             upload=kind == "prepare",
                             connection_id=_work_connection(work),
                         )
-                        with sdk_client(
-                            session, context=context, connection_id=access.connection_id
-                        ) as client:
-                            if datetime.now(UTC) >= deadline:
+                        budget.timeout(upload=kind == "prepare")
+
+                check_current()
+                with open_tiktok_gateway(
+                    database_engine=database_engine,
+                    redis_client=redis_client,
+                    context=context,
+                    route=route,
+                    task_deadline=deadline,
+                    before_request=check_current,
+                ) as gateway:
+                    if original:
+                        with (
+                            bounded_session(
+                                database_engine, task_deadline=deadline
+                            ) as db,
+                            db.begin(),
+                        ):
+                            dist = _load_distribution(db, context, distribution_id)
+                            current_material = load_material(
+                                db,
+                                context=context,
+                                bc_id=dist.bc_id,
+                                material_id=dist.material_id,
+                                lock=True,
+                            )
+                            operation = _locked_operation(db, context, operation_id)
+                            if (
+                                operation.attempt_token != claim
+                                or dist.operation_id != operation_id
+                            ):
+                                return
+                            _target_access(db, context, dist, upload=True)
+                            current_material.sha256, current_material.video_md5 = (
+                                original.sha256,
+                                original.md5,
+                            )
+                            content_md5 = original.md5
+                            operation.request_digest = sha256(
+                                f"{work['advertiser_id']}:{work['remote_name']}:{original.sha256}".encode()
+                            ).hexdigest()
+                            operation.status, dist.status = "sending", "preparing"
+                            operation.remote_response = {
+                                **operation.remote_response,
+                                "upload_connection_id": str(route.connection_id),
+                            }
+                        sent = True
+                        receipt = gateway.materials.upload_video_file(
+                            material_types.FileVideoUpload(
+                                work["advertiser_id"],
+                                original.path,
+                                work["remote_name"],
+                                original.md5,
+                                work["byte_size"],
+                            ),
+                            budget=budget,
+                        )
+                        evidence = api.receipt_evidence(receipt)
+                        _relay_receipt(
+                            database_engine,
+                            context=context,
+                            distribution_id=distribution_id,
+                            operation_id=operation_id,
+                            claim=claim,
+                            evidence=evidence,
+                        )
+                    elif work.get("video_id"):
+                        record = gateway.materials.read_video(
+                            advertiser_id=work["advertiser_id"],
+                            video_id=work["video_id"],
+                            budget=budget,
+                        )
+                        evidence = api.verified_video(
+                            {"list": [api.video_record_data(record)] if record else []},
+                            md5=content_md5,
+                            expected_video_id=work["video_id"],
+                            expected_size=work["byte_size"]
+                            if work["strict_video"]
+                            else None,
+                        )
+                    else:
+                        page = gateway.materials.search_videos(
+                            advertiser_id=work["advertiser_id"],
+                            page=work.get("search_page", 1),
+                            material_ids=(),
+                            budget=budget,
+                        )
+                        if work.get("transport") == "url_relay":
+                            total = page.total_pages
+                            if not 0 <= total <= 100 or not 1 <= page.page <= 100:
                                 raise DomainError(
-                                    "material_deadline", "素材处理已到达本次期限"
+                                    "material_reconciliation_bounded",
+                                    "目标核查超过有界分页范围",
                                 )
-                            if original:
-                                current_material.sha256, current_material.video_md5 = (
-                                    original.sha256,
-                                    original.md5,
-                                )
-                                content_md5 = original.md5
-                                operation.request_digest = sha256(
-                                    f"{work['advertiser_id']}:{work['remote_name']}:{original.sha256}".encode()
-                                ).hexdigest()
-                                operation.status, dist.status = "sending", "preparing"
-                                operation.remote_response = {
-                                    **operation.remote_response,
-                                    "upload_connection_id": str(access.connection_id),
-                                }
-                            session.commit()
-                            session.close()
-                            sent = True
-                            if original:
-                                evidence = api.parse_upload(
-                                    api.upload_video(
-                                        client,
-                                        advertiser_id=work["advertiser_id"],
-                                        local_path=original.path,
-                                        remote_name=work["remote_name"],
-                                        md5=original.md5,
-                                    )
-                                )
-                            elif work.get("video_id"):
-                                evidence = api.verified_video(
-                                    api.read_video(
-                                        client,
-                                        advertiser_id=work["advertiser_id"],
-                                        video_id=work["video_id"],
-                                        budget=material_types.RemoteCallBudget(
-                                            deadline=deadline,
-                                            hard_limit_seconds=hard,
-                                            lease_ms=policy.lease_ms,
-                                        ),
-                                    ),
-                                    md5=content_md5,
-                                    expected_video_id=work["video_id"]
-                                    if work["strict_video"]
-                                    else None,
-                                    expected_size=work["byte_size"]
-                                    if work["strict_video"]
-                                    else None,
-                                )
-                            else:
-                                data = api.search_videos(
-                                    client,
-                                    advertiser_id=work["advertiser_id"],
-                                    page=work.get("search_page", 1),
-                                    budget=material_types.RemoteCallBudget(
-                                        deadline=deadline,
-                                        hard_limit_seconds=hard,
-                                        lease_ms=policy.lease_ms,
-                                    ),
-                                )
-                                if work.get("transport") == "url_relay":
-                                    total = data.get("page_info", {}).get("total_page")
-                                    if (
-                                        type(total) is not int
-                                        or not 0 <= total <= 100
-                                        or not 1 <= work.get("search_page", 1) <= 100
-                                    ):
-                                        raise DomainError(
-                                            "material_reconciliation_bounded",
-                                            "目标核查超过有界分页范围",
-                                        )
-                                    work["observed_search_total"] = total
-                                    work["search_changed"] = work.get(
-                                        "search_total"
-                                    ) not in (None, total)
-                                evidence = api.search_page(
-                                    data,
-                                    page=work.get("search_page", 1),
-                                    remote_name=work["remote_name"],
-                                    md5=content_md5,
-                                )
+                            work["observed_search_total"] = total
+                            work["search_changed"] = work.get("search_total") not in (
+                                None,
+                                total,
+                            )
+                        evidence = api.search_page(
+                            api.video_page_data(page),
+                            page=work.get("search_page", 1),
+                            remote_name=work["remote_name"],
+                            md5=content_md5,
+                        )
         with Session(database_engine) as session, session.begin():
             dist = _load_distribution(session, context, distribution_id)
             _locked_material(session, context, dist.material_id)
@@ -1190,6 +1257,10 @@ def run_distribution(
     except SDK_SCOPE_INTERRUPTS:
         raise
     except Exception as error:
+        if isinstance(error, api.SdkAdmissionDeferred) or (
+            isinstance(error, RemoteCallError) and error.effect == "NOT_SENT"
+        ):
+            sent = False
         with Session(database_engine) as session, session.begin():
             dist = _load_distribution(session, context, distribution_id)
             _locked_material(session, context, dist.material_id)

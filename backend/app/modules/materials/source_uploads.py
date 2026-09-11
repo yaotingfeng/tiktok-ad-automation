@@ -16,8 +16,11 @@ from sqlmodel import Session, col, select
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
+from app.integrations.tiktok.bounded_resources import bounded_session
+from app.integrations.tiktok.contracts import materials as material_types
+from app.integrations.tiktok.contracts.common import RemoteCallError
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
-from app.integrations.tiktok.sdk import sdk_client
+from app.integrations.tiktok.gateway import open_tiktok_gateway
 from app.jobs.admission import admission_policy
 from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit
@@ -295,7 +298,6 @@ def _source_access(
         advertiser_id=work["advertiser_id"],
         capability="upload" if upload else "read",
     )
-    require_sdk_route(route)
     return resolve_account_access(
         session,
         context=context,
@@ -717,6 +719,7 @@ def run_source_upload(
             "advertiser_id": operation.advertiser_id,
             "connection_id": attempt.connection_id,
             "remote_name": remote_name(material),
+            "byte_size": material.byte_size,
             **operation.remote_response,
         }
     sent = False
@@ -725,6 +728,15 @@ def run_source_upload(
     try:
         # The original adapter completes its DB work before streaming to disk.
         if kind == "upload":
+            # MCP不支持本地FILE，必须在下载/读取原件前拒绝。
+            require_sdk_route(
+                load_material_route(
+                    work["frozen_route"],
+                    context=context,
+                    bc_id=work["bc_id"],
+                    connection_id=work["connection_id"],
+                )
+            )
             original_scope = open_original(
                 database_engine=database_engine,
                 context=context,
@@ -739,19 +751,24 @@ def run_source_upload(
                 raise DomainError("material_digest_missing", "素材缺少可核实内容摘要")
             original_scope = nullcontext(None)
         with original_scope as original:
+            route = load_material_route(
+                work["frozen_route"],
+                context=context,
+                bc_id=work["bc_id"],
+                connection_id=work["connection_id"],
+            )
             endpoint = (
-                api.UPLOAD_ENDPOINT
+                "materials.upload_video_file"
                 if kind == "upload"
-                else api.INFO_ENDPOINT
+                else "materials.get_videos"
                 if work.get("video_id")
-                else api.SEARCH_ENDPOINT
+                else "materials.search_videos"
             )
             policy = admission_policy(endpoint)
-            if policy.lease_ms <= (hard_limit + 5) * 1000:
-                raise DomainError(
-                    "admission_policy_invalid",
-                    "素材调用租约必须长于工作进程硬限及清理余量",
-                )
+            budget = material_types.RemoteCallBudget(
+                deadline, hard_limit, policy.lease_ms
+            )
+            budget.timeout(upload=kind == "upload")
             if (
                 kind == "upload"
                 and policy.endpoint_max_inflight
@@ -760,87 +777,112 @@ def run_source_upload(
                 raise DomainError(
                     "admission_policy_invalid", "素材上传并发超过配置的内存容量边界"
                 )
-            with api.admitted_asset_call(
-                redis_client,
-                context=context,
-                endpoint=endpoint,
-                advertiser_id=work["advertiser_id"],
-                policy=policy,
-            ):
-                with Session(database_engine) as session:
-                    # Every phase that updates file metadata locks file before
-                    # operation, matching initial claim and duplicate delivery.
-                    sending_material = _material(
-                        session,
+
+            def check_current() -> None:
+                with (
+                    bounded_session(database_engine, task_deadline=deadline) as db,
+                    db.begin(),
+                ):
+                    _material(
+                        db,
                         context,
                         material_id,
                         action="upload" if kind == "upload" else "read",
                         require_stored=False,
                     )
-                    operation = _locked_operation(session, context, operation_id)
-                    if operation.attempt_token != claim:
-                        return
-                    access = _source_access(
-                        session, context=context, work=work, upload=kind == "upload"
+                    op = _locked_operation(db, context, operation_id)
+                    if op.attempt_token != claim:
+                        raise DomainError(
+                            "material_claim_changed", "素材操作已由其他任务接管"
+                        )
+                    _source_access(
+                        db, context=context, work=work, upload=kind == "upload"
                     )
-                    with sdk_client(
-                        session, context=context, connection_id=access.connection_id
-                    ) as client:
-                        if datetime.now(UTC) >= deadline:
-                            raise DomainError(
-                                "material_deadline",
-                                "素材处理已到达本次期限",
-                                retryable=True,
-                            )
-                        if original:
-                            sending_material.sha256, sending_material.video_md5 = (
-                                original.sha256,
-                                original.md5,
-                            )
-                            content_md5 = original.md5
-                            operation.status = "sending"
-                            current_attempt = _attempt(session, operation.id)
-                            assert current_attempt
-                            operation.request_digest = sha256(
-                                f"{work['advertiser_id']}:{work['remote_name']}:{original.sha256}:{original.md5}".encode()
-                            ).hexdigest()
-                            current_attempt.request_digest = operation.request_digest
-                            current_attempt.status = "uploading"
-                            _refresh_batch(session, context.tenant_id, material_id)
-                        session.commit()
-                        session.close()  # no transaction/row lock across SDK I/O
-                        sent = True
-                        if kind == "upload":
-                            assert original
-                            evidence = api.parse_upload(
-                                api.upload_video(
-                                    client,
-                                    advertiser_id=work["advertiser_id"],
-                                    local_path=original.path,
-                                    remote_name=work["remote_name"],
-                                    md5=original.md5,
-                                )
-                            )
-                        elif work.get("video_id"):
-                            evidence = api.verified_video(
-                                api.read_video(
-                                    client,
-                                    advertiser_id=work["advertiser_id"],
-                                    video_id=work["video_id"],
-                                ),
-                                md5=content_md5,
-                            )
-                        else:
-                            evidence = api.search_page(
-                                api.search_videos(
-                                    client,
-                                    advertiser_id=work["advertiser_id"],
-                                    page=work.get("search_page", 1),
-                                ),
-                                page=work.get("search_page", 1),
-                                remote_name=work["remote_name"],
-                                md5=content_md5,
-                            )
+                    budget.timeout(upload=kind == "upload")
+
+            check_current()
+            with open_tiktok_gateway(
+                database_engine=database_engine,
+                redis_client=redis_client,
+                context=context,
+                route=route,
+                task_deadline=deadline,
+                before_request=check_current,
+            ) as gateway:
+                if original:
+                    with (
+                        bounded_session(
+                            database_engine, task_deadline=deadline
+                        ) as session,
+                        session.begin(),
+                    ):
+                        sending_material = _material(
+                            session, context, material_id, require_stored=False
+                        )
+                        operation = _locked_operation(session, context, operation_id)
+                        if operation.attempt_token != claim:
+                            return
+                        _source_access(session, context=context, work=work)
+                        sending_material.sha256, sending_material.video_md5 = (
+                            original.sha256,
+                            original.md5,
+                        )
+                        content_md5 = original.md5
+                        operation.status = "sending"
+                        current_attempt = _attempt(session, operation.id)
+                        assert current_attempt
+                        operation.request_digest = sha256(
+                            f"{work['advertiser_id']}:{work['remote_name']}:{original.sha256}:{original.md5}".encode()
+                        ).hexdigest()
+                        current_attempt.request_digest = operation.request_digest
+                        current_attempt.status = "uploading"
+                        _refresh_batch(session, context.tenant_id, material_id)
+                    sent = True
+                    receipt = gateway.materials.upload_video_file(
+                        material_types.FileVideoUpload(
+                            work["advertiser_id"],
+                            original.path,
+                            work["remote_name"],
+                            original.md5,
+                            work["byte_size"],
+                        ),
+                        budget=budget,
+                    )
+                    evidence = api.receipt_evidence(receipt)
+                    # 已知ID先独立提交；SDK清理/权限变化不抹掉真实上传身份。
+                    with Session(database_engine) as saved, saved.begin():
+                        _locked_material(saved, context, material_id)
+                        operation = _locked_operation(saved, context, operation_id)
+                        attempt = _attempt(saved, operation_id)
+                        assert attempt
+                        operation.remote_response = {
+                            **operation.remote_response,
+                            **evidence,
+                        }
+                        _save_attempt_evidence(attempt, operation, evidence)
+                elif work.get("video_id"):
+                    record = gateway.materials.read_video(
+                        advertiser_id=work["advertiser_id"],
+                        video_id=work["video_id"],
+                        budget=budget,
+                    )
+                    evidence = api.verified_video(
+                        {"list": [api.video_record_data(record)] if record else []},
+                        md5=content_md5,
+                    )
+                else:
+                    page = gateway.materials.search_videos(
+                        advertiser_id=work["advertiser_id"],
+                        page=work.get("search_page", 1),
+                        material_ids=(),
+                        budget=budget,
+                    )
+                    evidence = api.search_page(
+                        api.video_page_data(page),
+                        page=work.get("search_page", 1),
+                        remote_name=work["remote_name"],
+                        md5=content_md5,
+                    )
         with Session(database_engine) as session, session.begin():
             _locked_material(session, context, material_id)
             operation = _locked_operation(session, context, operation_id)
@@ -942,6 +984,10 @@ def run_source_upload(
                     due=datetime.now(UTC) + timedelta(seconds=60),
                 )
     except Exception as error:
+        if isinstance(error, api.SdkAdmissionDeferred) or (
+            isinstance(error, RemoteCallError) and error.effect == "NOT_SENT"
+        ):
+            sent = False
         # Never persist/raise raw SDK exceptions (tokens, URLs and file paths).
         with Session(database_engine) as session, session.begin():
             _locked_material(session, context, material_id)

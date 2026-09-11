@@ -10,21 +10,13 @@ import re
 from typing import Any
 from urllib.parse import urlsplit
 
-import business_api_client.tiktok_business.tiktok_exceptions as sdk_errors  # type: ignore[import-untyped]
-from business_api_client.api.file_api import FileApi  # type: ignore[import-untyped]
-from business_api_client.models.filtering_video_ad_search import (  # type: ignore[import-untyped]
-    FilteringVideoAdSearch,
-)
-from business_api_client.rest import ApiException  # type: ignore[import-untyped]
-from urllib3.exceptions import HTTPError
-
 from app.core.errors import DomainError
 from app.integrations.tiktok.accounts import paged_rows
 from app.integrations.tiktok.contracts import materials as material_types
-from app.integrations.tiktok.contracts.common import CallEvidence, McpBusinessResponse
-from app.integrations.tiktok.sdk import (
-    SDK_SCOPE_INTERRUPTS,
-    checked_data,
+from app.integrations.tiktok.contracts.common import (
+    CallEvidence,
+    McpBusinessResponse,
+    RemoteCallError,
 )
 from app.integrations.tiktok.sdk import (
     AccountAdmissionDeferred as SdkAdmissionDeferred,
@@ -32,18 +24,18 @@ from app.integrations.tiktok.sdk import (
 from app.integrations.tiktok.sdk import (
     admitted_account_call as admitted_asset_call,
 )
+from app.integrations.tiktok.sdk import (
+    checked_data,
+)
 
 # Re-export the real Redis-backed request scope, shared by upload and distribution.
 __all__ = [
     "SdkAdmissionDeferred",
     "admitted_asset_call",
-    "read_source_preview",
-    "upload_video_url",
 ]
 UPLOAD_ENDPOINT = "/open_api/v1.3/file/video/ad/upload/"
 INFO_ENDPOINT = "/open_api/v1.3/file/video/ad/info/"
 SEARCH_ENDPOINT = "/open_api/v1.3/file/video/ad/search/"
-SHARE_ENDPOINT = "/open_api/v1.3/creative/asset/share/"
 PAGE_SIZE = 100
 # Conservative formats already recognized by the application's upload naming
 # contract; this is not a claim about every format accepted by TikTok.
@@ -127,100 +119,6 @@ def _positive_duration(value: object) -> bool:
         return False
 
 
-def upload_video_url(
-    client: Any,
-    *,
-    advertiser_id: str,
-    video_url: str,
-    remote_name: str,
-    md5: str,
-    budget: material_types.RemoteCallBudget,
-) -> object:
-    """One official URL POST; no download, file body, retry or receipt rewriting.
-
-    Only pass a just-issued, authorized object/verified source URL. Parse and
-    save known receipt IDs before leaving caller-owned SDK/admission scopes.
-    Any post-send failure remains unknown until original-path read-back.
-    """
-    digest = _trusted_md5(md5)
-    if (
-        not _remote_identifier(advertiser_id)
-        or not _remote_identifier(remote_name, limit=100)
-        or _https_host(video_url) is None
-    ):
-        raise _remote_request_error()
-    timeout = budget.timeout(upload=True)
-    try:
-        return FileApi(client).ad_video_upload(
-            access_token=client.default_headers["Access-Token"],
-            advertiser_id=advertiser_id,
-            upload_type="UPLOAD_BY_URL",
-            video_url=video_url,
-            file_name=remote_name,
-            video_signature=digest,
-            auto_bind_enabled=False,
-            auto_fix_enabled=False,
-            _request_timeout=timeout,
-        )
-    except SDK_SCOPE_INTERRUPTS:
-        raise
-    except ApiException, sdk_errors.TiktokSDKError, HTTPError:
-        # Same classification as sdk_client; never expose provider body,
-        # Location headers, signed URLs, signatures or tokens via tracebacks.
-        raise DomainError("tiktok_response_error", "TikTok 请求未成功") from None
-    except Exception:
-        raise DomainError("material_response_unknown", "素材请求结果待核实") from None
-
-
-def read_source_preview(
-    client: Any,
-    *,
-    advertiser_id: str,
-    video_id: str,
-    md5: str,
-    allowed_hosts: frozenset[str],
-    budget: material_types.RemoteCallBudget,
-) -> material_types.SourcePreview:
-    """Read exactly one current authorized source VID, never a historical URL.
-
-    Caller revalidates tenant/BC/actor/connection/account authorization and
-    supplies deployment-vetted exact CDN hosts. No permissive CDN defaults,
-    suffix matching, redirect following, or URL persistence occurs here.
-    """
-    digest = _trusted_md5(md5)
-    if not _remote_identifier(advertiser_id) or not _remote_identifier(video_id):
-        raise _remote_request_error()
-    if (
-        not isinstance(allowed_hosts, frozenset)
-        or not allowed_hosts
-        or any(not _dns_host(host) for host in allowed_hosts)
-    ):
-        raise DomainError("material_preview_unverified", "尚无已核实的素材预览域名策略")
-    budget.timeout(upload=False)
-    try:
-        response = _read_video_response(
-            client, advertiser_id=advertiser_id, video_id=video_id, budget=budget
-        )
-        data = response.data
-        assert isinstance(data, dict)
-    except SDK_SCOPE_INTERRUPTS:
-        raise
-    except ApiException, sdk_errors.TiktokSDKError, HTTPError:
-        raise DomainError("tiktok_response_error", "TikTok 请求未成功") from None
-    except DomainError:
-        raise
-    except Exception:
-        raise DomainError("material_response_unknown", "素材请求结果待核实") from None
-    return source_preview(
-        data,
-        advertiser_id=advertiser_id,
-        video_id=video_id,
-        allowed_hosts=allowed_hosts,
-        expected_md5=digest,
-        evidence=response.evidence,
-    )
-
-
 def source_preview(
     data: dict[str, Any],
     *,
@@ -275,28 +173,6 @@ def source_preview(
     )
 
 
-def upload_video(
-    client: Any,
-    *,
-    advertiser_id: str,
-    local_path: str,
-    remote_name: str,
-    md5: str,
-    budget: material_types.RemoteCallBudget | None = None,
-) -> object:
-    return FileApi(client).ad_video_upload(
-        access_token=client.default_headers["Access-Token"],
-        advertiser_id=advertiser_id,
-        upload_type="UPLOAD_BY_FILE",
-        video_file=local_path,
-        file_name=remote_name,
-        video_signature=md5,
-        auto_bind_enabled=False,
-        auto_fix_enabled=False,
-        _request_timeout=budget.timeout(upload=True) if budget else (10, 300),
-    )
-
-
 def _response(response: object) -> McpBusinessResponse:
     request_id = (
         response.get("request_id")
@@ -312,23 +188,6 @@ def _response(response: object) -> McpBusinessResponse:
     )
 
 
-def _read_video_response(
-    client: Any,
-    *,
-    advertiser_id: str,
-    video_id: str,
-    budget: material_types.RemoteCallBudget | None = None,
-) -> McpBusinessResponse:
-    return _response(
-        FileApi(client).ad_video_info(
-            advertiser_id=advertiser_id,
-            video_ids=[video_id],
-            access_token=client.default_headers["Access-Token"],
-            _request_timeout=budget.timeout(upload=False) if budget else (5, 30),
-        )
-    )
-
-
 def read_video(
     client: Any,
     *,
@@ -336,51 +195,11 @@ def read_video(
     video_id: str,
     budget: material_types.RemoteCallBudget | None = None,
 ) -> dict[str, Any]:
-    # Task 3 迁移旧 raw 调用方后删除此入口；新 adapter 复用唯一的 SDK 传输原语。
+    """仅供尚未迁移的封面任务薄委托，P2.4删除；实际SDK请求只有adapter一处。"""
+    from app.integrations.tiktok.adapters.sdk_materials import _read_video_response
+
     response = _read_video_response(
         client, advertiser_id=advertiser_id, video_id=video_id, budget=budget
-    )
-    assert isinstance(response.data, dict)
-    return response.data
-
-
-def _search_videos_response(
-    client: Any,
-    *,
-    advertiser_id: str,
-    page: int,
-    material_ids: list[str] | None = None,
-    budget: material_types.RemoteCallBudget | None = None,
-) -> McpBusinessResponse:
-    kwargs = {}
-    if material_ids:
-        kwargs["filtering"] = FilteringVideoAdSearch(material_ids=material_ids)
-    return _response(
-        FileApi(client).ad_video_search(
-            advertiser_id=advertiser_id,
-            access_token=client.default_headers["Access-Token"],
-            page=page,
-            page_size=PAGE_SIZE,
-            _request_timeout=budget.timeout(upload=False) if budget else (5, 30),
-            **kwargs,
-        )
-    )
-
-
-def search_videos(
-    client: Any,
-    *,
-    advertiser_id: str,
-    page: int,
-    material_ids: list[str] | None = None,
-    budget: material_types.RemoteCallBudget | None = None,
-) -> dict[str, Any]:
-    response = _search_videos_response(
-        client,
-        advertiser_id=advertiser_id,
-        page=page,
-        material_ids=material_ids,
-        budget=budget,
     )
     assert isinstance(response.data, dict)
     return response.data
@@ -408,28 +227,6 @@ def identity(row: dict[str, Any]) -> dict[str, str]:
     if mid := _id(row, "material_id"):
         result["mid"] = mid
     return result
-
-
-def parse_upload(response: object) -> dict[str, str]:
-    # Pinned ApiClient has already checked code; upload data is an array while
-    # checked_data deliberately supports dictionary data for read APIs only.
-    if isinstance(response, dict):
-        if set(response) != {"data", "request_id"}:
-            raise _schema_error()
-        data = response["data"]
-    else:
-        convert = getattr(response, "to_dict", None)
-        raw = convert() if callable(convert) else None
-        if (
-            not isinstance(raw, dict)
-            or type(raw.get("code")) is not int
-            or raw["code"] != 0
-        ):
-            raise _schema_error()
-        data = raw.get("data")
-    if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict):
-        raise _schema_error()
-    return identity(data[0])
 
 
 def video_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -489,40 +286,6 @@ def search_page(
         and _id(row, "video_id")
     ]
     return matches, last
-
-
-def share_video(
-    client: Any,
-    *,
-    source_advertiser_id: str,
-    source_mid: str,
-    target_advertiser_id: str,
-) -> dict[str, Any]:
-    """Generated method only; workflow must first establish capability evidence.
-
-    No production source/target pair has verified share permission/mapping
-    semantics in this deployment yet. Readiness consequently never chooses it.
-    """
-    from business_api_client.api.creative_management_api import (  # type: ignore[import-untyped]
-        CreativeManagementApi,
-    )
-    from business_api_client.models.asset_share_body import (  # type: ignore[import-untyped]
-        AssetShareBody,
-    )
-
-    body = AssetShareBody(
-        advertiser_id=source_advertiser_id,
-        asset_type="VIDEO",
-        material_ids=[source_mid],
-        shared_advertiser_ids=[target_advertiser_id],
-    )
-    return checked_data(
-        CreativeManagementApi(client).creative_asset_share(
-            access_token=client.default_headers["Access-Token"],
-            body=body,
-            _request_timeout=(5, 30),
-        )
-    )
 
 
 def video_identity(
@@ -693,8 +456,10 @@ class MaterialReadAdapter:
         video_id: str,
         budget: material_types.RemoteCallBudget,
     ) -> material_types.SourcePreview:
-        if not self._preview_allowed_hosts or any(
-            not _dns_host(host) for host in self._preview_allowed_hosts
+        if (
+            not isinstance(self._preview_allowed_hosts, frozenset)
+            or not self._preview_allowed_hosts
+            or any(not _dns_host(host) for host in self._preview_allowed_hosts)
         ):
             raise DomainError(
                 "material_preview_unverified", "尚无已核实的素材预览域名策略"
@@ -926,3 +691,83 @@ class MaterialReadAdapter:
             budget,
         )
         return self._page(response, advertiser_id=advertiser_id, page=page, images=True)
+
+
+def validate_video_upload(
+    request: material_types.URLVideoUpload | material_types.FileVideoUpload,
+) -> str:
+    """摘要必须来自持久原件核实；这里只检查格式，不把请求摘要当远端证据。"""
+    digest = _trusted_md5(request.expected_md5)
+    if not _remote_identifier(request.advertiser_id) or not _remote_identifier(
+        request.file_name, limit=100
+    ):
+        raise _remote_request_error()
+    if (
+        isinstance(request, material_types.URLVideoUpload)
+        and _https_host(request.url) is None
+    ):
+        raise _remote_request_error()
+    return digest
+
+
+def video_upload_receipt(
+    response: McpBusinessResponse, *, advertiser_id: str, channel: str
+) -> material_types.VideoReceipt:
+    """API数组与MCP合同对象分别解析；不搜索嵌套ID，不按成功文案补回执。"""
+    data: Any = response.data
+    if channel == "OFFICIAL_API":
+        data = data[0] if isinstance(data, list) and len(data) == 1 else None
+    if (
+        not isinstance(data, dict)
+        or not _remote_identifier(data.get("video_id"))
+        or (
+            "material_id" in data
+            and data["material_id"] is not None
+            and not _remote_identifier(data["material_id"])
+        )
+        or ("advertiser_id" in data and data["advertiser_id"] != advertiser_id)
+    ):
+        raise RemoteCallError(
+            "material_response_unknown", effect="UNKNOWN", evidence=response.evidence
+        )
+    return material_types.VideoReceipt(
+        data["video_id"], data.get("material_id"), response.evidence
+    )
+
+
+def receipt_evidence(receipt: material_types.VideoReceipt) -> dict[str, str]:
+    result = {"video_id": receipt.video_id}
+    if receipt.mid:
+        result["mid"] = receipt.mid
+    for key in ("request_id", "mcp_request_id", "remote_task_id"):
+        value = getattr(receipt.evidence, key)
+        if value:
+            result[key] = value
+    return result
+
+
+def video_record_data(record: material_types.VideoRecord) -> dict[str, Any]:
+    """旧纯核查规则消费DTO实际字段；不补请求摘要、尺寸或状态。"""
+    from dataclasses import asdict
+
+    row = asdict(record)
+    row.pop("evidence")
+    row["signature"] = row.pop("md5")
+    row["material_id"] = row.pop("mid")
+    return row
+
+
+def video_page_data(
+    page: material_types.MaterialPage[material_types.VideoRecord],
+) -> dict[str, Any]:
+    page_info = {
+        "page": page.page,
+        "page_size": page.page_size,
+        "total_page": page.total_pages,
+    }
+    if page.total_number is not None:
+        page_info["total_number"] = page.total_number
+    return {
+        "list": [video_record_data(row) for row in page.rows],
+        "page_info": page_info,
+    }

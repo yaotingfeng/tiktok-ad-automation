@@ -149,7 +149,7 @@ def test_lost_target_message_repairs_same_id_without_new_generation(
         s3=original_s3[0],
         revision=payload["revision"],
     )
-    wire[1].append(info())
+    wire[1].append(info(vid="received"))
     run(source_env, redis_client, dist_id)
     assert state(dist_id)[0].status == "ready"
 
@@ -285,7 +285,7 @@ def test_target_finalization_locks_file_before_operation_and_fk_insert(
         distribution.load_material,
     )
     locked, duplicate_entered = Event(), Event()
-    counts, duplicate_pid, codes = [], [], []
+    duplicate_pid, codes = [], []
 
     def record_error(context):
         codes.append(getattr(context.original_exception, "sqlstate", None))
@@ -300,9 +300,7 @@ def test_target_finalization_locks_file_before_operation_and_fk_insert(
 
     def lock(session, context, operation_id):
         result = lock_operation(session, context, operation_id)
-        if current_thread().name.endswith("_0"):
-            counts.append(1)
-        if current_thread().name.endswith("_0") and len(counts) == 3:
+        if current_thread().name.endswith("_0") and wire[0] and not locked.is_set():
             locked.set()
             assert duplicate_entered.wait(5)
             until = time.monotonic() + 5
@@ -324,7 +322,7 @@ def test_target_finalization_locks_file_before_operation_and_fk_insert(
 
     monkeypatch.setattr(distribution, "load_material", load)
     monkeypatch.setattr(distribution, "_locked_operation", lock)
-    wire[1].append(info(vid="verified-target"))
+    wire[1].append(info(vid="vid-target-account"))
     event.listen(engine, "handle_error", record_error)
     try:
         with ThreadPoolExecutor(max_workers=2, thread_name_prefix="target") as pool:
@@ -337,7 +335,7 @@ def test_target_finalization_locks_file_before_operation_and_fk_insert(
         event.remove(engine, "handle_error", record_error)
     assert "40P01" not in codes and len(wire[0]) == 1
     assert state(dist_id)[0].status == "ready"
-    assert state(dist_id)[2].video_id == "verified-target"
+    assert state(dist_id)[2].video_id == "vid-target-account"
 
 
 def test_revoked_source_read_successor_can_be_rearmed_without_upload_retry(

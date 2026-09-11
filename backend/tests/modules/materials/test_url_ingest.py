@@ -380,18 +380,16 @@ def test_timeout_recovers_same_name_digest_account_without_second_post(
 def test_received_id_is_saved_before_client_cleanup_failure(
     url_env, redis_client, wire, monkeypatch
 ):
-    from app.modules.materials import source_url_uploads
+    import urllib3
 
-    original_scope = source_url_uploads.sdk_client
-    from contextlib import contextmanager
+    original_clear = urllib3.PoolManager.clear
 
-    @contextmanager
-    def fail_after_receipt(*args, **kwargs):
-        with original_scope(*args, **kwargs) as client:
-            yield client
+    def fail_after_receipt(pool):
+        original_clear(pool)
+        assert operation(url_env).remote_response["video_id"] == "actual-source-vid"
         raise RuntimeError("cleanup includes never-store-this-url")
 
-    monkeypatch.setattr(source_url_uploads, "sdk_client", fail_after_receipt)
+    monkeypatch.setattr(urllib3.PoolManager, "clear", fail_after_receipt)
     wire[1].append(
         [{"video_id": "actual-source-vid", "material_id": "actual-source-mid"}]
     )
@@ -494,22 +492,21 @@ def test_unready_original_never_claims_source_or_signs(
     assert wire[0] == []
 
 
-def test_admission_denial_never_signs_and_successor_remains_generation_bound(
+def test_proven_unsent_admission_denial_releases_temporary_use_and_keeps_original(
     url_env, redis_client, wire
 ):
     from app.jobs.admission import admission_policy, admit_call, release_call
-    from app.modules.materials import sdk_assets as api
 
     lease_id = uuid4()
     scope = {
         "app_scope": settings.TIKTOK_APP_ID,
-        "endpoint": api.UPLOAD_ENDPOINT,
+        "endpoint": "materials.upload_video_url",
         "tenant_id": url_env["context"].tenant_id,
         "advertiser_id": "actual-account",
         "lease_id": lease_id,
     }
     assert admit_call(
-        redis_client, **scope, policy=admission_policy(api.UPLOAD_ENDPOINT)
+        redis_client, **scope, policy=admission_policy("materials.upload_video_url")
     ).granted
     try:
         run(url_env, redis_client)
@@ -518,11 +515,13 @@ def test_admission_denial_never_signs_and_successor_remains_generation_bound(
     op = operation(url_env)
     assert op.status == "pending" and not op.remote_response["send_armed"]
     with Session(engine) as db:
-        assert (
-            db.exec(
-                select(OriginalUse).where(OriginalUse.operation_id == op.id)
-            ).first()
-            is None
+        use = db.exec(
+            select(OriginalUse).where(OriginalUse.operation_id == op.id)
+        ).one()
+        assert use.released_at is not None
+        obj = db.get(TemporaryMaterialObject, url_env["object_id"])
+        assert obj.reservation_released_at is None and obj.reserved_bytes == len(
+            CONTENT
         )
         file = db.exec(
             select(IngestSessionFile).where(

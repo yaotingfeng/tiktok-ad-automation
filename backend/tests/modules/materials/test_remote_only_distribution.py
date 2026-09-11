@@ -300,20 +300,21 @@ def test_source_revoked_during_info_prevents_target_post(
 def test_relay_received_id_survives_sdk_cleanup_failure(
     remote_env, redis_client, wire, monkeypatch
 ):
-    from contextlib import contextmanager
+    from urllib3 import PoolManager
 
-    from app.modules.materials import distribution
+    real_clear = PoolManager.clear
+    prepared = queue(remote_env, remote_env["target"])
 
-    real = distribution.sdk_client
-
-    @contextmanager
-    def failing_close(*args, **kwargs):
-        with real(*args, **kwargs) as client:
-            yield client
+    def failing_close(pool):
+        real_clear(pool)
+        if any(call[0] == "POST" for call in wire[0]):
+            assert (
+                state(prepared.task_id)[1].remote_response["video_id"]
+                == "actual-target"
+            )
             raise RuntimeError(PREVIEW)
 
-    monkeypatch.setattr(distribution, "sdk_client", failing_close)
-    prepared = queue(remote_env, remote_env["target"])
+    monkeypatch.setattr(PoolManager, "clear", failing_close)
     wire[1].extend(
         [info(), [{"video_id": "actual-target", "material_id": "actual-target-mid"}]]
     )
@@ -487,7 +488,10 @@ def test_relay_unknown_search_rejects_unbounded_pagination(
     wire[1].extend([info(), ReadTimeoutError(None, PREVIEW, "unknown")])
     run(remote_env, redis_client, prepared.task_id, kind="prepare")
     wire[1].append(
-        {"list": [], "page_info": {"page": 1, "page_size": 100, "total_page": 101}}
+        {
+            "list": [{"video_id": "candidate"}],
+            "page_info": {"page": 1, "page_size": 100, "total_page": 101},
+        }
     )
     run(remote_env, redis_client, prepared.task_id)
     op = state(prepared.task_id)[1]
@@ -783,7 +787,6 @@ def test_remote_preview_expired_budget_has_no_network(remote_env, redis_client, 
             material_id=remote_env["material_id"],
             source_asset_id=remote_env["source_id"],
             deadline=datetime.now(UTC) - timedelta(seconds=1),
-            hard_limit=45,
         )
     assert error.value.code == "material_deadline"
     assert wire[0] == []

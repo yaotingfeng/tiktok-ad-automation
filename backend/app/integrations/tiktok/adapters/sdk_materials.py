@@ -1,12 +1,20 @@
-"""SDK 素材读适配；Task 3/4 删除 legacy raw 入口时一并迁移唯一传输原语。"""
+"""SDK 视频唯一传输入口；每次真实请求共享工厂授权、配额与绝对期限。"""
 
+import json
+import re
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 import business_api_client.tiktok_business.tiktok_exceptions as sdk_errors  # type: ignore[import-untyped]
+from business_api_client.api.file_api import FileApi  # type: ignore[import-untyped]
+from business_api_client.models.filtering_video_ad_search import (  # type: ignore[import-untyped]
+    FilteringVideoAdSearch,
+)
 from business_api_client.rest import ApiException  # type: ignore[import-untyped]
 from urllib3.exceptions import HTTPError
 
+from app.core.config import settings
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts import materials as contracts
 from app.integrations.tiktok.contracts.common import (
@@ -15,7 +23,21 @@ from app.integrations.tiktok.contracts.common import (
     RemoteCallError,
 )
 from app.integrations.tiktok.official.accounts import RequestScope, _strict_sdk_envelope
+from app.integrations.tiktok.sdk import SDK_SCOPE_INTERRUPTS, AccountAdmissionDeferred
 from app.modules.materials import cover_sdk, sdk_assets
+
+
+def _unique_upload_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in fields:
+            raise ValueError("ambiguous upload receipt")
+        fields[key] = value
+    return fields
+
+
+def _reject_json_constant(_value: str) -> None:
+    raise ValueError("invalid JSON constant")
 
 
 class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
@@ -47,14 +69,14 @@ class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
             try:
                 with _strict_sdk_envelope(self._client):
                     if operation == "materials.get_videos":
-                        return sdk_assets._read_video_response(
+                        return _read_video_response(
                             self._client,
                             advertiser_id=advertiser_id,
                             video_id=arguments["video_ids"][0],
                             budget=budget,
                         )
                     if operation == "materials.search_videos":
-                        return sdk_assets._search_videos_response(
+                        return _search_videos_response(
                             self._client,
                             advertiser_id=advertiser_id,
                             page=arguments["page"],
@@ -86,20 +108,114 @@ class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
                     "tiktok_response_error", effect="UNKNOWN", evidence=CallEvidence()
                 ) from None
 
+    def _upload_video(
+        self,
+        request: contracts.URLVideoUpload | contracts.FileVideoUpload,
+        *,
+        budget: contracts.RemoteCallBudget,
+    ) -> contracts.VideoReceipt:
+        sent = False
+        evidence = CallEvidence()
+        try:
+            if budget.deadline != self._deadline:
+                raise DomainError("material_deadline", "素材预算与本次会话期限不一致")
+            digest = sdk_assets.validate_video_upload(request)
+            is_url = isinstance(request, contracts.URLVideoUpload)
+            maximum = (
+                settings.MATERIAL_URL_MAX_UPLOAD_BYTES
+                if is_url
+                else settings.MATERIAL_SDK_MAX_UPLOAD_BYTES
+            )
+            if (
+                type(request.byte_size) is not int
+                or not 0 < request.byte_size <= maximum
+            ):
+                raise DomainError(
+                    "material_channel_capacity"
+                    if is_url
+                    else "sdk_upload_capacity_exceeded",
+                    "文件超过当前上传容量",
+                )
+            operation = (
+                "materials.upload_video_url"
+                if is_url
+                else "materials.upload_video_file"
+            )
+            # API延续既有应用容量与显式参数；不把它们声称为MCP服务能力证明。
+            arguments = (
+                {"video_url": request.url}
+                if isinstance(request, contracts.URLVideoUpload)
+                else {"video_file": request.local_path}
+            )
+            with self._scope(request.advertiser_id, operation, budget.deadline):
+                timeout = budget.timeout(upload=True)
+                sent = True
+                FileApi(self._client).ad_video_upload(
+                    access_token=self._client.default_headers["Access-Token"],
+                    advertiser_id=request.advertiser_id,
+                    upload_type="UPLOAD_BY_URL" if is_url else "UPLOAD_BY_FILE",
+                    file_name=request.file_name,
+                    video_signature=digest,
+                    auto_bind_enabled=False,
+                    auto_fix_enabled=False,
+                    async_req=True,
+                    _request_timeout=timeout,
+                    **arguments,
+                ).get()
+                # async官方入口保留完整原始envelope；严格code后只读取真实回执ID。
+                payload = self._client.last_response.data
+                if len(payload) > 8 * 1024 * 1024:
+                    raise ValueError("oversized upload receipt")
+                raw = json.loads(
+                    payload,
+                    object_pairs_hook=_unique_upload_fields,
+                    parse_constant=_reject_json_constant,
+                    parse_float=Decimal,
+                )
+                request_id = raw.get("request_id") if type(raw) is dict else None
+                evidence = CallEvidence(
+                    request_id=request_id
+                    if isinstance(request_id, str)
+                    and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", request_id)
+                    else None
+                )
+                if (
+                    type(raw) is not dict
+                    or type(raw.get("code")) is not int
+                    or raw["code"] != 0
+                    or not isinstance(raw.get("data"), list)
+                ):
+                    raise RemoteCallError(
+                        "material_response_unknown", effect="UNKNOWN", evidence=evidence
+                    )
+                return sdk_assets.video_upload_receipt(
+                    McpBusinessResponse(raw["data"], evidence),
+                    advertiser_id=request.advertiser_id,
+                    channel="OFFICIAL_API",
+                )
+        except SDK_SCOPE_INTERRUPTS:
+            raise
+        except RemoteCallError, AccountAdmissionDeferred:
+            raise
+        except Exception as error:
+            code = (
+                error.code
+                if isinstance(error, DomainError) and not sent
+                else "material_response_unknown"
+            )
+            raise RemoteCallError(
+                code, effect="UNKNOWN" if sent else "NOT_SENT", evidence=evidence
+            ) from None
+
     def upload_video_url(
         self, request: contracts.URLVideoUpload, *, budget: contracts.RemoteCallBudget
     ) -> contracts.VideoReceipt:
-        # 新 gateway 写入在 Task 3 接入持久 REQUEST_ARMED/回执后开放；现有写任务仍走唯一旧入口。
-        raise RemoteCallError(
-            "material_channel_unverified", effect="NOT_SENT", evidence=CallEvidence()
-        )
+        return self._upload_video(request, budget=budget)
 
     def upload_video_file(
         self, request: contracts.FileVideoUpload, *, budget: contracts.RemoteCallBudget
     ) -> contracts.VideoReceipt:
-        raise RemoteCallError(
-            "material_channel_unverified", effect="NOT_SENT", evidence=CallEvidence()
-        )
+        return self._upload_video(request, budget=budget)
 
     def upload_image_url(
         self, request: contracts.URLImageUpload, *, budget: contracts.RemoteCallBudget
@@ -107,3 +223,43 @@ class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
         raise RemoteCallError(
             "material_channel_unverified", effect="NOT_SENT", evidence=CallEvidence()
         )
+
+
+def _read_video_response(
+    client: Any,
+    *,
+    advertiser_id: str,
+    video_id: str,
+    budget: contracts.RemoteCallBudget | None = None,
+) -> McpBusinessResponse:
+    return sdk_assets._response(
+        FileApi(client).ad_video_info(
+            advertiser_id=advertiser_id,
+            video_ids=[video_id],
+            access_token=client.default_headers["Access-Token"],
+            _request_timeout=budget.timeout(upload=False) if budget else (5, 30),
+        )
+    )
+
+
+def _search_videos_response(
+    client: Any,
+    *,
+    advertiser_id: str,
+    page: int,
+    material_ids: list[str] | None = None,
+    budget: contracts.RemoteCallBudget | None = None,
+) -> McpBusinessResponse:
+    kwargs = {}
+    if material_ids:
+        kwargs["filtering"] = FilteringVideoAdSearch(material_ids=material_ids)
+    return sdk_assets._response(
+        FileApi(client).ad_video_search(
+            advertiser_id=advertiser_id,
+            access_token=client.default_headers["Access-Token"],
+            page=page,
+            page_size=sdk_assets.PAGE_SIZE,
+            _request_timeout=budget.timeout(upload=False) if budget else (5, 30),
+            **kwargs,
+        )
+    )

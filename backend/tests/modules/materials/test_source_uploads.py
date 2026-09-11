@@ -75,7 +75,11 @@ def source_env(monkeypatch, redis_client):
                 "window_ms": 1000,
                 "lease_ms": 60000,
             },
-            "endpoints": {api.UPLOAD_ENDPOINT: {"lease_ms": 970000}},
+            "endpoints": {
+                api.UPLOAD_ENDPOINT: {"lease_ms": 970000},
+                "materials.upload_video_url": {"lease_ms": 970000},
+                "materials.upload_video_file": {"lease_ms": 970000},
+            },
         },
     )
     with Session(engine) as session:
@@ -259,7 +263,7 @@ def seed_operation(env, *, status="verifying", evidence=None):
             request_digest="a" * 64,
             remote_response=evidence
             if evidence is not None
-            else {"video_id": "received-vid", "mid": "received-mid"},
+            else {"video_id": "target-actual-vid", "mid": "received-mid"},
         )
         session.add(op)
         session.flush()
@@ -344,7 +348,7 @@ def test_readback_actual_target_vid_and_repeated_delivery(
     [
         {"list": []},
         info(displayable=False),
-        {"list": [{"video_id": "vid", "displayable": True}]},
+        {"list": [{"video_id": "target-actual-vid", "displayable": True}]},
     ],
 )
 def test_success_not_yet_available_never_reuploads(
@@ -562,9 +566,9 @@ def test_original_to_sdk_once_then_actual_readback(
         dict(calls[0][2]["fields"])["file_name"] == f"{source_env['material_id']}.mp4"
     )
     run(source_env, redis_client, kind="upload", s3=original_s3[0])
-    responses.append(info())
+    responses.append(info(vid="upload-vid"))
     run(source_env, redis_client, operation_id=op_id)
-    assert snapshot(source_env, op_id)[2].video_id == "target-actual-vid"
+    assert snapshot(source_env, op_id)[2].video_id == "upload-vid"
     assert (
         snapshot(source_env, op_id)[1].remote_response["upload_video_id"]
         == "upload-vid"
@@ -1006,7 +1010,7 @@ def test_read_policy_cannot_expire_before_process_hard_deadline(
     op_id = seed_operation(source_env)
     config = {
         **settings.TIKTOK_CALL_POLICIES,
-        "endpoints": {api.INFO_ENDPOINT: {"lease_ms": 49000}},
+        "endpoints": {"materials.get_videos": {"lease_ms": 49000}},
     }
     monkeypatch.setattr(settings, "TIKTOK_CALL_POLICIES", config)
     run(source_env, redis_client, operation_id=op_id)
@@ -1047,3 +1051,46 @@ def test_unpublished_successor_survives_old_watchdog(source_env, redis_client, w
     )
     assert snapshot(source_env, op_id)[2].status == "available"
     assert len(wire[0]) == 2
+
+
+def test_file_receipt_is_durable_before_actual_sdk_pool_cleanup(
+    source_env, redis_client, wire, original_s3, monkeypatch
+):
+    import urllib3
+
+    original_clear = urllib3.PoolManager.clear
+
+    def cleanup_failure(pool):
+        original_clear(pool)
+        raise RuntimeError("synthetic pool cleanup failure")
+
+    wire[1].append([{"video_id": "file-actual-vid", "material_id": "file-actual-mid"}])
+    with monkeypatch.context() as patch:
+        patch.setattr(urllib3.PoolManager, "clear", cleanup_failure)
+        run(source_env, redis_client, kind="upload", s3=original_s3[0])
+    with Session(engine) as db:
+        op = db.exec(
+            select(MaterialAssetOperation).where(
+                MaterialAssetOperation.material_id == source_env["material_id"]
+            )
+        ).one()
+        attempt = db.exec(
+            select(MaterialUploadAttempt).where(
+                MaterialUploadAttempt.operation_id == op.id
+            )
+        ).one()
+        assert op.remote_response.get("video_id") == "file-actual-vid"
+        assert attempt.remote_response.get("upload_video_id") == "file-actual-vid"
+    assert len([call for call in wire[0] if call[0] == "POST"]) == 1
+
+
+def test_readback_different_vid_never_replaces_received_identity(
+    source_env, redis_client, wire
+):
+    op_id = seed_operation(source_env)
+    wire[1].append(info(vid="unexpected-remote-vid"))
+    run(source_env, redis_client, operation_id=op_id)
+    op, _, asset = snapshot(source_env, op_id)
+    assert asset is None and op.status == "result_unknown"
+    assert op.remote_response["video_id"] == "target-actual-vid"
+    assert [call[0] for call in wire[0]] == ["GET"]

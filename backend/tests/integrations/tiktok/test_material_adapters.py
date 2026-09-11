@@ -350,7 +350,7 @@ def test_cover_suggestion_is_not_an_image_receipt(material_case):
     assert not hasattr(cover, "image_id")
 
 
-def test_new_write_facade_is_not_sent_for_every_transport(material_case):
+def test_unverified_writes_remain_not_sent(material_case):
     from app.integrations.tiktok.contracts.common import RemoteCallError
     from app.integrations.tiktok.contracts.materials import (
         FileVideoUpload,
@@ -360,7 +360,7 @@ def test_new_write_facade_is_not_sent_for_every_transport(material_case):
 
     adapter, _, budget, events, calls = material_case
     before = len(calls)
-    for method, request in [
+    writes = [
         (
             adapter.upload_video_url,
             URLVideoUpload(
@@ -375,7 +375,13 @@ def test_new_write_facade_is_not_sent_for_every_transport(material_case):
             adapter.upload_image_url,
             URLImageUpload("123", "https://media.example.com/cover", "fixed.jpg"),
         ),
-    ]:
+    ]
+    from app.integrations.tiktok.adapters.sdk_materials import SDKMaterialOperations
+
+    # P2.3开放原API视频写合同；图片留待P2.4，MCP无服务证据仍全部拒绝。
+    if isinstance(adapter, SDKMaterialOperations):
+        writes = writes[-1:]
+    for method, request in writes:
         with pytest.raises(RemoteCallError) as error:
             method(request, budget=budget)
         assert (

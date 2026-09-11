@@ -13,12 +13,11 @@ from app.integrations.tiktok.bounded_resources import bounded_session
 from app.integrations.tiktok.contracts import materials as material_types
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.integrations.tiktok.gateway import open_tiktok_gateway
-from app.jobs.admission import AdmissionPolicy, admission_policy
+from app.jobs.admission import admission_policy
 from app.modules.accounts.access import resolve_account_access, usable_grants
 from app.modules.accounts.models import BCAccountAccess
 from app.modules.accounts.routing import freeze_route, verify_route
 
-from . import sdk_assets as api
 from .models import AccountMaterial, MaterialFile
 from .repository import require_material_scope
 
@@ -79,15 +78,6 @@ def require_remote_material(material: MaterialFile) -> None:
         raise DomainError("material_preview_unverified", "尚未配置已核实的视频域名")
 
 
-def source_info_policy(*, hard_limit: int) -> AdmissionPolicy:
-    # Validate configured shared policy first. A nested INFO in a longer upload
-    # process keeps every quota/key; only conservative orphan occupancy grows.
-    policy = admission_policy(api.INFO_ENDPOINT)
-    return policy.model_copy(
-        update={"lease_ms": max(policy.lease_ms, (hard_limit + 10) * 1000)}
-    )
-
-
 def read_frozen_remote_source(
     *,
     database_engine: Any,
@@ -98,13 +88,10 @@ def read_frozen_remote_source(
     source_asset_id: UUID,
     route: FrozenTikTokRoute,
     deadline: datetime,
-    hard_limit: int,
-    extend_lease: bool = False,
 ) -> material_types.SourcePreview:
     from .source_uploads import READ_HARD_LIMIT
 
     # 预览是独立短读取；它不能继承并扩张外层长上传期限或租约。
-    _ = hard_limit, extend_lease  # Task 3 调用方迁完后删除旧兼容参数。
     deadline = min(deadline, datetime.now(UTC) + timedelta(seconds=READ_HARD_LIMIT - 5))
     policy = admission_policy("materials.get_videos")
     budget = material_types.RemoteCallBudget(
@@ -243,8 +230,6 @@ def read_remote_source(
     material_id: UUID,
     source_asset_id: UUID,
     deadline: datetime,
-    hard_limit: int,
-    extend_lease: bool = False,
 ) -> material_types.SourcePreview:
     """页面新预览独立冻结；已有任务必须调用 required-route 的内部边界。"""
     from .source_uploads import READ_HARD_LIMIT
@@ -279,6 +264,4 @@ def read_remote_source(
         source_asset_id=source_asset_id,
         route=route,
         deadline=deadline,
-        hard_limit=hard_limit,
-        extend_lease=extend_lease,
     )

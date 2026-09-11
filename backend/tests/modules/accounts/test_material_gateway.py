@@ -123,8 +123,6 @@ def test_frozen_source_compares_actual_remote_identity_to_durable_material(
         "material_id": material_id,
         "source_asset_id": source_id,
         "deadline": datetime.now(UTC) + timedelta(seconds=180),
-        "hard_limit": 200,
-        "extend_lease": True,
     }
     if problem:
         with pytest.raises(DomainError) as error:

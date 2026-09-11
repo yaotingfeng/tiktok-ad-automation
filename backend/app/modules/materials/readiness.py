@@ -9,12 +9,14 @@ from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
+from app.integrations.tiktok.material_upload_evidence import material_upload_policy
 from app.jobs.admission import admission_policy
 from app.jobs.celery_app import celery_app
 from app.modules.accounts.access import resolve_account_access, usable_grants
 from app.modules.accounts.models import BCAccountAccess
+from app.modules.accounts.routing import freeze_route
 
-from . import sdk_assets as api
+from .channel_policy import require_url_upload
 from .models import AccountMaterial, MaterialAssetOperation, MaterialFile
 from .remote_sources import require_remote_material
 from .repository import asset_public, require_material_scope
@@ -137,10 +139,11 @@ def has_legal_source_mid(
 
 
 def require_execution_config(
-    *, upload: bool, endpoint: str, original: bool = True
+    *, upload: bool, endpoint: str, original: bool = True, channel: str = "OFFICIAL_API"
 ) -> None:
     """Detect known deployment failures locally; runtime checks still enforce them."""
-    settings.require_tiktok_app()
+    if channel == "OFFICIAL_API":
+        settings.require_tiktok_app()
     settings.require_connection_encryption()
     if celery_app.conf.task_always_eager or celery_app.conf.worker_pool != "prefork":
         raise DomainError(
@@ -194,7 +197,7 @@ def require_upload_path(
         action="upload",
         connection_id=route.connection_id if route else None,
     )
-    require_execution_config(upload=True, endpoint=api.UPLOAD_ENDPOINT)
+    require_execution_config(upload=True, endpoint="materials.upload_video_file")
 
 
 def get_material_readiness_batch(
@@ -236,22 +239,16 @@ def get_material_readiness_batch(
         )
 
     try:
-        if route is not None:
-            require_material_route(
-                session,
-                context=context,
-                route=route,
-                bc_id=bc_id,
-                advertiser_id=advertiser_id,
-                capability="build",
-            )
-        resolve_account_access(
+        if route is None:
+            # 独立页面的新只读入口冻结一次；已有任务直接核验原持久路线。
+            route = freeze_route(session, context=context, bc_id=bc_id)
+        require_material_route(
             session,
             context=context,
+            route=route,
             bc_id=bc_id,
             advertiser_id=advertiser_id,
-            action="build",
-            connection_id=route.connection_id if route else None,
+            capability="build",
         )
     except DomainError as error:
         return {identity: blocked(error) for identity in identities}
@@ -328,6 +325,28 @@ def get_material_readiness_batch(
     )
     # Deployment policy and the upload permission are identical for this bounded
     # group. Check lazily so existing verified target assets keep their priority.
+    authority_checked = False
+    authority_error: DomainError | None = None
+
+    def require_target_upload() -> None:
+        nonlocal authority_checked, authority_error
+        # 只在这一短事务、同一目标route/账户中共享；来源连接的权限不借用此结果。
+        if not authority_checked:
+            try:
+                require_material_route(
+                    session,
+                    context=context,
+                    route=route,
+                    bc_id=bc_id,
+                    advertiser_id=advertiser_id,
+                    capability="upload",
+                )
+            except DomainError as error:
+                authority_error = error
+            authority_checked = True
+        if authority_error:
+            raise authority_error
+
     upload_checked = False
     upload_error: DomainError | None = None
     result: dict[UUID, MaterialReadiness] = {}
@@ -347,12 +366,14 @@ def get_material_readiness_batch(
                         "material_digest_missing", "素材缺少可核实内容摘要"
                     )
                 endpoint = (
-                    api.INFO_ENDPOINT
+                    "materials.get_videos"
                     if mapping
                     or (operation and operation.remote_response.get("video_id"))
-                    else api.SEARCH_ENDPOINT
+                    else "materials.search_videos"
                 )
-                require_execution_config(upload=False, endpoint=endpoint)
+                require_execution_config(
+                    upload=False, endpoint=endpoint, channel=route.channel
+                )
                 result[material.id] = MaterialReadiness(
                     state="preparable",
                     path="existing_target",
@@ -371,18 +392,24 @@ def get_material_readiness_batch(
                         "url_upload_capacity_exceeded",
                         "素材超过当前URL转存工程容量限制",
                     )
-                resolve_account_access(
-                    session,
-                    context=context,
-                    bc_id=bc_id,
-                    advertiser_id=advertiser_id,
-                    action="upload",
-                    connection_id=route.connection_id if route else None,
+                require_target_upload()
+                if route.channel == "OFFICIAL_MCP":
+                    require_url_upload(
+                        material_upload_policy(
+                            channel=route.channel,
+                            adapter_contract_revision=route.adapter_contract_revision,
+                        ),
+                        byte_size=material.byte_size,
+                    )
+                require_execution_config(
+                    upload=True,
+                    endpoint="materials.upload_video_url",
+                    original=False,
+                    channel=route.channel,
                 )
                 require_execution_config(
-                    upload=True, endpoint=api.UPLOAD_ENDPOINT, original=False
+                    upload=False, endpoint="materials.get_videos", channel=route.channel
                 )
-                require_execution_config(upload=False, endpoint=api.INFO_ENDPOINT)
                 result[material.id] = MaterialReadiness(
                     state="preparable", path="share_source"
                 )
@@ -404,16 +431,10 @@ def get_material_readiness_batch(
                     )
                 if not upload_checked:
                     try:
-                        resolve_account_access(
-                            session,
-                            context=context,
-                            bc_id=bc_id,
-                            advertiser_id=advertiser_id,
-                            action="upload",
-                            connection_id=route.connection_id if route else None,
-                        )
+                        require_sdk_route(route)
+                        require_target_upload()
                         require_execution_config(
-                            upload=True, endpoint=api.UPLOAD_ENDPOINT
+                            upload=True, endpoint="materials.upload_video_file"
                         )
                     except DomainError as error:
                         upload_error = error

@@ -1,19 +1,20 @@
 """Official SDK including serializer/deserializer; only urllib3 transport is doubled."""
 
 import json
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from urllib3.response import HTTPResponse
 
-from app.core.errors import DomainError
+from app.integrations.tiktok.contracts.materials import (
+    FileVideoUpload,
+    RemoteCallBudget,
+)
 from app.integrations.tiktok.sdk import official_client
 from app.modules.materials.sdk_assets import (
-    parse_upload,
-    read_video,
-    search_videos,
-    upload_video,
     verified_video,
 )
+from tests.modules.materials.test_url_sdk_contract import adapter
 
 
 @pytest.fixture
@@ -40,14 +41,22 @@ def test_official_multipart_and_real_success_envelope(transport, tmp_path):
     path = tmp_path / "offline.mp4"
     path.write_bytes(b"fixture only")
     with official_client(access_token="test-only-token") as client:
-        response = upload_video(
-            client,
-            advertiser_id="actual-account",
-            local_path=str(path),
-            remote_name="internal.mp4",
-            md5="a" * 32,
+        budget = RemoteCallBudget(
+            deadline=datetime.now(UTC) + timedelta(seconds=900),
+            hard_limit_seconds=900,
+            lease_ms=970000,
         )
-    assert parse_upload(response) == {"video_id": "returned-vid", "mid": "actual-mid"}
+        receipt = adapter(client, budget).upload_video_file(
+            FileVideoUpload(
+                advertiser_id="actual-account",
+                local_path=str(path),
+                file_name="internal.mp4",
+                expected_md5="a" * 32,
+                byte_size=12,
+            ),
+            budget=budget,
+        )
+    assert (receipt.video_id, receipt.mid) == ("returned-vid", "actual-mid")
     method, url, kwargs = calls[0]
     assert method == "POST" and url.endswith("/file/video/ad/upload/")
     fields = dict(kwargs["fields"])
@@ -75,11 +84,18 @@ def test_info_and_search_use_actual_target_and_pinned_filter(transport):
         ]
     )
     with official_client(access_token="test-only-token") as client:
-        assert read_video(client, advertiser_id="target", video_id="vid") == {
-            "list": []
-        }
-        search_videos(
-            client, advertiser_id="target", page=2, material_ids=["actual-mid"]
+        budget = RemoteCallBudget(
+            deadline=datetime.now(UTC) + timedelta(seconds=50),
+            hard_limit_seconds=50,
+            lease_ms=60000,
+        )
+        facade = adapter(client, budget)
+        assert (
+            facade.read_video(advertiser_id="target", video_id="vid", budget=budget)
+            is None
+        )
+        facade.search_videos(
+            advertiser_id="target", page=2, material_ids=("actual-mid",), budget=budget
         )
     first = dict(calls[0][2]["fields"])
     second = dict(calls[1][2]["fields"])
@@ -87,22 +103,6 @@ def test_info_and_search_use_actual_target_and_pinned_filter(transport):
     assert json.loads(first["video_ids"]) == ["vid"]
     assert json.loads(second["filtering"]) == {"material_ids": ["actual-mid"]}
     assert second["page"] == 2
-
-
-@pytest.mark.parametrize(
-    "response",
-    [
-        {},
-        {"data": []},
-        {"code": 0, "data": []},
-        {"data": {}, "request_id": "x"},
-        {"data": [{"material_id": "mid"}], "request_id": "x"},
-        {"data": [{"video_id": "   "}], "request_id": "x"},
-    ],
-)
-def test_upload_unknown_schema_never_invents_vid(response):
-    with pytest.raises(DomainError):
-        parse_upload(response)
 
 
 def test_verified_identity_is_target_readback_with_hash_and_displayable():
@@ -124,31 +124,3 @@ def test_verified_identity_is_target_readback_with_hash_and_displayable():
     ):
         assert verified_video({"list": [{**row, **override}]}, md5="a" * 32) is None
     assert verified_video({"list": []}, md5="a" * 32) is None
-
-
-def test_share_generated_body_keeps_source_mid_distinct_from_target_advertiser(
-    transport,
-):
-    from app.modules.materials.sdk_assets import share_video
-
-    calls, responses = transport
-    responses.append({"code": 0, "request_id": "offline-share", "data": {}})
-    with official_client(access_token="test-only-token") as client:
-        assert (
-            share_video(
-                client,
-                source_advertiser_id="source-account",
-                source_mid="source-material-id",
-                target_advertiser_id="target-account",
-            )
-            == {}
-        )
-    method, url, kwargs = calls[0]
-    assert method == "POST" and url.endswith("/creative/asset/share/")
-    assert json.loads(kwargs["body"]) == {
-        "advertiser_id": "source-account",
-        "asset_type": "VIDEO",
-        "material_ids": ["source-material-id"],
-        "shared_advertiser_ids": ["target-account"],
-    }
-    assert kwargs["timeout"].read_timeout == 30

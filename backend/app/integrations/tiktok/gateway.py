@@ -34,6 +34,7 @@ from app.integrations.tiktok.contracts.builds import BuildOperations
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.integrations.tiktok.contracts.materials import MaterialOperations
 from app.integrations.tiktok.contracts.scenes import ScenesGateway
+from app.integrations.tiktok.material_upload_evidence import material_upload_policy
 from app.integrations.tiktok.mcp.accounts import McpAccountsGateway
 from app.integrations.tiktok.mcp.authorization import (
     material_authorization as mcp_material_authorization,
@@ -56,7 +57,7 @@ from app.modules.accounts.connection_models import (
 from app.modules.accounts.models import TikTokConnection
 from app.modules.accounts.routing import Capability, verify_route
 
-# 只登记已实现的读取操作；不得按前缀把未来写操作默认为 read。
+# 按精确操作登记所需权限；不得按前缀把未来写操作默认为 read。
 _OPERATION_CAPABILITIES: dict[str, Capability] = {
     **dict.fromkeys(PROTOCOL_OPERATIONS, "read"),
     "accounts.authorization_facts": "read",
@@ -76,6 +77,8 @@ _OPERATION_CAPABILITIES: dict[str, Capability] = {
     "materials.get_suggested_covers": "read",
     "materials.get_images": "read",
     "materials.search_images": "read",
+    "materials.upload_video_url": "upload",
+    "materials.upload_video_file": "upload",
     "build.get_campaigns": "read",
     "build.get_adgroups": "read",
     "build.get_ads": "read",
@@ -348,6 +351,10 @@ def open_tiktok_gateway(
                     materials=MCPMaterialOperations(
                         client,
                         preview_allowed_hosts=settings.MATERIAL_REMOTE_MEDIA_HOSTS,
+                        upload_policy=material_upload_policy(
+                            channel=route.channel,
+                            adapter_contract_revision=route.adapter_contract_revision,
+                        ),
                     ),
                 )
         else:

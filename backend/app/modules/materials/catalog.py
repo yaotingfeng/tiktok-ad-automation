@@ -62,7 +62,6 @@ def remote_preview(
         material_id=material_id,
         source_asset_id=source_id,
         deadline=deadline,
-        hard_limit=READ_HARD_LIMIT,
     )
     return RemoteMaterialPreview(
         url=preview.url,

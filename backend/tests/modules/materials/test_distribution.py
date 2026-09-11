@@ -98,7 +98,7 @@ def test_target_upload_and_readback_use_actual_target_vid_without_changing_sourc
         source.cover_url = "https://source.example.invalid/image"
         source_id = source.id
     prepared = queue(source_env, account)
-    wire[1].append([{"video_id": "received-target", "material_id": "received-mid"}])
+    wire[1].append([{"video_id": "actual-target", "material_id": "received-mid"}])
     run(source_env, redis_client, prepared.task_id, kind="prepare", s3=original_s3[0])
     assert state(prepared.task_id)[0].status == "verifying"
     assert state(prepared.task_id)[2] is None
@@ -147,9 +147,9 @@ def test_expired_target_is_read_again_without_original_upload(
         account = target(session, source_env)
         asset(session, source_env, account, seconds_old=1000)
     prepared = queue(source_env, account)
-    wire[1].append(info(vid="current-target"))
+    wire[1].append(info(vid="vid-target-account"))
     run(source_env, redis_client, prepared.task_id)
-    assert state(prepared.task_id)[2].video_id == "current-target"
+    assert state(prepared.task_id)[2].video_id == "vid-target-account"
     assert [call[0] for call in wire[0]] == ["GET"]
 
 
