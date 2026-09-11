@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useSearch } from "@tanstack/react-router"
+import { useNavigate, useSearch } from "@tanstack/react-router"
 import type { ColumnDef } from "@tanstack/react-table"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { AccountsService, type BCPublic, type ConnectionPublic } from "@/client"
@@ -19,12 +19,15 @@ import {
   useRetainedData,
 } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
+import { McpAuthorizationSheet } from "./McpAuthorizationSheet"
 import {
+  capabilityLabel,
   connectionLabels,
   discoveryLabels,
   displayTime,
   FilterSelect,
   Identifier,
+  refreshLabels,
 } from "./presentation"
 
 function isDiscoveryPending(connection: ConnectionPublic) {
@@ -38,8 +41,28 @@ function isDiscoveryPending(connection: ConnectionPublic) {
   )
 }
 
+function isRefreshPending(connection: ConnectionPublic) {
+  return (
+    connection.status === "ACTIVE" &&
+    ["PENDING", "CLAIMED", "REQUEST_ARMED", "CANDIDATE_READY"].includes(
+      connection.refresh_status ?? "",
+    )
+  )
+}
+
+function isConnectionPending(connection: ConnectionPublic) {
+  return isDiscoveryPending(connection) || isRefreshPending(connection)
+}
+
 export function ConnectionsPage() {
-  const { tenantId, scope, user } = useTenantScope()
+  const { tenantId, scope } = useTenantScope()
+  const navigate = useNavigate()
+  const [chooseChannel, setChooseChannel] = useState(false)
+  const [mcpAction, setMcpAction] = useState<{
+    connectionId?: string
+    attemptId?: string
+  } | null>(null)
+  const shownAttempt = useRef<string | null>(null)
   const search = useSearch({ from: "/_layout/tenants/$tenantId/accounts" })
   const [status, setStatus] = useState("all")
   const [detail, setDetail] = useState<ConnectionPublic | null>(null)
@@ -71,7 +94,9 @@ export function ConnectionsPage() {
         })
       ).data,
     refetchInterval: (state) =>
-      state.state.data?.items.some(isDiscoveryPending) ? 5000 : false,
+      !state.state.error && state.state.data?.items.some(isConnectionPending)
+        ? 5000
+        : false,
   })
   const observedDiscovery = useRef(new Map<string, ConnectionPublic>())
   const visiblePending = useRef(new Set<string>())
@@ -87,12 +112,15 @@ export function ConnectionsPage() {
     )
     visiblePending.current = new Set(
       query.data.items
-        .filter(isDiscoveryPending)
+        .filter(isConnectionPending)
         .map((connection) => connection.id),
     )
     for (const connection of query.data.items) {
       const previous = observedDiscovery.current.get(connection.id)
       if (
+        (previous &&
+          isRefreshPending(previous) &&
+          !isRefreshPending(connection)) ||
         (connection.discovery_status === "COMPLETE" &&
           previous?.discovery_status !== "COMPLETE") ||
         (previous &&
@@ -128,14 +156,47 @@ export function ConnectionsPage() {
     canManage(scope?.role) &&
     !isForbidden(query.error) &&
     !isForbidden(configuration.error)
-  const ready = configuration.data?.configured === true
+  const channels = configuration.data?.channels ?? []
+  const ready =
+    channels.find((item) => item.kind === "OFFICIAL_API")?.configured === true
+  const mcpReady =
+    channels.find((item) => item.kind === "OFFICIAL_MCP")?.configured === true
+  useEffect(() => {
+    if (
+      manage &&
+      search.mcp_authorization === "CANDIDATE_READY" &&
+      search.attempt_id &&
+      shownAttempt.current !== search.attempt_id
+    ) {
+      shownAttempt.current = search.attempt_id
+      setMcpAction({ attemptId: search.attempt_id })
+    }
+  }, [manage, search.mcp_authorization, search.attempt_id])
+  const closeMcp = () => {
+    setMcpAction(null)
+    void navigate({
+      to: "/tenants/$tenantId/accounts",
+      params: { tenantId: tenantId! },
+      search: { bc_id: search.bc_id, tab: "connections" },
+      replace: true,
+    })
+  }
   const columns = useMemo<ColumnDef<ConnectionPublic>[]>(
     () => [
       {
         header: "授权连接",
         cell: ({ row }) => (
           <div className="flex flex-col gap-1">
-            <strong>TikTok 授权连接</strong>
+            <strong>
+              {row.original.display_name ||
+                (row.original.kind === "OFFICIAL_MCP"
+                  ? "官方 MCP"
+                  : "官方 API")}
+            </strong>
+            <span className="text-xs text-muted-foreground">
+              {row.original.kind === "OFFICIAL_MCP" ? "官方 MCP" : "官方 API"}
+              {row.original.is_default ? " · 默认执行连接" : ""}
+            </span>
             <Identifier value={row.original.id} />
           </div>
         ),
@@ -188,12 +249,32 @@ export function ConnectionsPage() {
             </Button>
             {manage && row.original.status !== "DISABLED" && (
               <>
+                {row.original.authorization_attempt_id && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      setMcpAction({
+                        attemptId: row.original.authorization_attempt_id!,
+                      })
+                    }
+                  >
+                    选择 BC
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="ghost"
-                  disabled={!ready}
+                  disabled={
+                    row.original.kind === "OFFICIAL_MCP" ? !mcpReady : !ready
+                  }
                   onClick={() =>
-                    setAction({ kind: "authorize", connection: row.original })
+                    row.original.kind === "OFFICIAL_MCP"
+                      ? setMcpAction({ connectionId: row.original.id })
+                      : setAction({
+                          kind: "authorize",
+                          connection: row.original,
+                        })
                   }
                 >
                   重新授权
@@ -213,7 +294,7 @@ export function ConnectionsPage() {
         ),
       },
     ],
-    [manage, ready],
+    [manage, ready, mcpReady],
   )
   const callback = search.authorization
   return (
@@ -250,30 +331,42 @@ export function ConnectionsPage() {
           }}
         />
       )}
-      {configuration.data && !ready && (
+      {configuration.data && channels.some((item) => !item.configured) && (
         <Alert>
-          <AlertTitle>等待配置开发者应用</AlertTitle>
+          <AlertTitle>接入准备状态</AlertTitle>
           <AlertDescription>
-            {user.is_superuser
-              ? "请在平台部署配置中完成 TikTok 应用及凭据加密配置。此页面不展示密钥。"
-              : "请联系平台管理员完成应用接入配置。"}
-            {configuration.data.code ===
-              "connection_encryption_unconfigured" && (
-              <p>凭据加密配置尚未完成。</p>
-            )}
+            {channels.map((item) => (
+              <p key={item.kind}>
+                {item.kind === "OFFICIAL_MCP" ? "官方 MCP" : "官方 API"}：
+                {item.configured ? "可发起授权" : "等待平台完成接入配置"}
+              </p>
+            ))}
           </AlertDescription>
         </Alert>
       )}
+      {search.mcp_authorization &&
+        search.mcp_authorization !== "CANDIDATE_READY" && (
+          <Alert>
+            <AlertTitle>
+              {search.mcp_authorization === "CANCELLED"
+                ? "已取消 MCP 授权"
+                : "MCP 授权未完成"}
+            </AlertTitle>
+            <AlertDescription>
+              原有可用连接保留，请查看连接状态后重新授权。
+            </AlertDescription>
+          </Alert>
+        )}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           当前租户的全部授权连接，不受顶栏 BC 筛选影响。
         </p>
         {manage && (
           <Button
-            disabled={!ready}
-            onClick={() => setAction({ kind: "authorize" })}
+            disabled={!ready && !mcpReady}
+            onClick={() => setChooseChannel(true)}
           >
-            新增授权
+            新增连接
           </Button>
         )}
       </div>
@@ -322,6 +415,54 @@ export function ConnectionsPage() {
           />
         </CardFooter>
       </Card>
+      {chooseChannel && (
+        <ManagementSheet
+          title="新增连接"
+          description="选择本次授权通道"
+          dirty={false}
+          onClose={() => setChooseChannel(false)}
+        >
+          <div className="flex flex-col gap-3">
+            <Button
+              variant="outline"
+              disabled={!ready}
+              onClick={() => {
+                setChooseChannel(false)
+                setAction({ kind: "authorize" })
+              }}
+            >
+              官方 API
+            </Button>
+            <Button
+              variant="outline"
+              disabled={!mcpReady}
+              onClick={() => {
+                setChooseChannel(false)
+                setMcpAction({})
+              }}
+            >
+              官方 MCP
+            </Button>
+            <p className="text-sm text-muted-foreground">
+              每种通道独立授权。管理员授权后，为 BC 选择默认执行连接。
+            </p>
+          </div>
+        </ManagementSheet>
+      )}
+      {mcpAction && (
+        <McpAuthorizationSheet
+          key={`${tenantId}:${mcpAction.attemptId ?? mcpAction.connectionId ?? "new"}`}
+          {...mcpAction}
+          ready={mcpReady}
+          onClose={closeMcp}
+          onSaved={() => {
+            closeMcp()
+            void queryClient.invalidateQueries({
+              queryKey: ["tenant", tenantId],
+            })
+          }}
+        />
+      )}
       {detail && (
         <ConnectionDetails
           detail={
@@ -446,7 +587,8 @@ function ConnectionDetails({
   detail: ConnectionPublic
   onClose: () => void
 }) {
-  const { tenantId } = useTenantScope()
+  const { tenantId, scope } = useTenantScope()
+  const queryClient = useQueryClient()
   const paging = useCursorPage()
   const query = useQuery({
     queryKey: [
@@ -471,6 +613,19 @@ function ConnectionDetails({
       ).data,
   })
   const data = useRetainedData(query.data, query.error)
+  const defaultMutation = useMutation({
+    mutationFn: async (bcId: string) => {
+      await AccountsService.putDefaultConnection({
+        path: { tenant_id: tenantId!, bc_id: bcId },
+        body: { connection_id: detail.id },
+      })
+      await queryClient.invalidateQueries({ queryKey: ["tenant", tenantId] })
+    },
+  })
+  const manage =
+    canManage(scope?.role) &&
+    !isForbidden(query.error) &&
+    !isForbidden(defaultMutation.error)
   const columns: ColumnDef<BCPublic>[] = [
     {
       header: "关联 BC",
@@ -486,6 +641,28 @@ function ConnectionDetails({
       cell: ({ row }) =>
         row.original.ownership_conflict ? "存在归属冲突" : "当前租户",
     },
+    {
+      header: "默认执行连接",
+      cell: ({ row }) =>
+        row.original.is_default ? (
+          <Badge variant="outline">当前默认</Badge>
+        ) : manage ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={
+              detail.status !== "ACTIVE" ||
+              row.original.ownership_conflict ||
+              defaultMutation.isPending
+            }
+            onClick={() => defaultMutation.mutate(row.original.bc_id)}
+          >
+            设为默认执行连接
+          </Button>
+        ) : (
+          "未设为默认"
+        ),
+    },
   ]
   return (
     <ManagementSheet
@@ -496,6 +673,8 @@ function ConnectionDetails({
     >
       <div className="flex flex-col gap-5">
         <dl className="grid grid-cols-[auto_1fr] gap-4 text-sm">
+          <dt>调用通道</dt>
+          <dd>{detail.kind === "OFFICIAL_MCP" ? "官方 MCP" : "官方 API"}</dd>
           <dt>连接 ID</dt>
           <dd className="overflow-x-auto">
             <Identifier value={detail.id} />
@@ -512,9 +691,38 @@ function ConnectionDetails({
           <dd>{displayTime(detail.last_authorized_at)}</dd>
           <dt>最近发现</dt>
           <dd>{displayTime(detail.last_discovery)}</dd>
+          <dt>读取权限</dt>
+          <dd>{capabilityLabel(detail.read_authorized)}</dd>
+          <dt>素材上传权限</dt>
+          <dd>{capabilityLabel(detail.upload_authorized)}</dd>
+          <dt>广告搭建权限</dt>
+          <dd>{capabilityLabel(detail.build_authorized)}</dd>
+          <dt>权限核验时间</dt>
+          <dd>{displayTime(detail.evidence_checked_at)}</dd>
+          {detail.kind === "OFFICIAL_MCP" && (
+            <>
+              <dt>凭据刷新</dt>
+              <dd>
+                {detail.refresh_status
+                  ? refreshLabels[detail.refresh_status] || "状态待核实"
+                  : "尚无刷新记录"}
+              </dd>
+            </>
+          )}
           <dt>异常状态</dt>
           <dd className="break-all">{detail.error_code || "未记录异常"}</dd>
         </dl>
+        {defaultMutation.error && (
+          <Alert variant="destructive">
+            <AlertTitle>默认连接未更改</AlertTitle>
+            <AlertDescription>
+              {errorMessage(defaultMutation.error)}
+            </AlertDescription>
+          </Alert>
+        )}
+        <p className="text-sm text-muted-foreground">
+          默认连接用于此 BC 后续新建的任务；已准备的任务继续使用其原连接。
+        </p>
         <section className="flex min-w-0 flex-col gap-4">
           <h2 className="font-semibold">关联 BC</h2>
           <ServerTable

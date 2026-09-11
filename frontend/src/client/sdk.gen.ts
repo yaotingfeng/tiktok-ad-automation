@@ -2,7 +2,7 @@
 
 import { type Client, type Options as Options2, type TDataShape, urlSearchParamsBodySerializer } from './client';
 import { client } from './client.gen';
-import type { accountsCapabilityStatusData, accountsCapabilityStatusErrors, accountsCapabilityStatusResponses, accountsGetAccountsData, accountsGetAccountsErrors, accountsGetAccountsResponses, accountsGetBcsData, accountsGetBcsErrors, accountsGetBcsResponses, accountsGetConfigurationData, accountsGetConfigurationErrors, accountsGetConfigurationResponses, accountsGetConnectionsData, accountsGetConnectionsErrors, accountsGetConnectionsResponses, accountsPatchConnectionData, accountsPatchConnectionErrors, accountsPatchConnectionResponses, accountsPostAuthorizationData, accountsPostAuthorizationErrors, accountsPostAuthorizationResponses, accountsPostResolveData, accountsPostResolveErrors, accountsPostResolveResponses, accountsRefreshCapabilitiesData, accountsRefreshCapabilitiesErrors, accountsRefreshCapabilitiesResponses, acknowledgeIngestPartsData, acknowledgeIngestPartsErrors, acknowledgeIngestPartsResponses, buildsCreateData, buildsCreateErrors, buildsCreateResponses, buildsDramasData, buildsDramasErrors, buildsDramasResponses, buildsEditGroupsData, buildsEditGroupsErrors, buildsEditGroupsResponses, buildsFrozenGroupsData, buildsFrozenGroupsErrors, buildsFrozenGroupsResponses, buildsFrozenUnitData, buildsFrozenUnitErrors, buildsFrozenUnitResponses, buildsGeneratePreviewData, buildsGeneratePreviewErrors, buildsGeneratePreviewResponses, buildsGetSubmissionAdsData, buildsGetSubmissionAdsErrors, buildsGetSubmissionAdsResponses, buildsGetSubmissionData, buildsGetSubmissionErrors, buildsGetSubmissionEventsData, buildsGetSubmissionEventsErrors, buildsGetSubmissionEventsResponses, buildsGetSubmissionExcludedData, buildsGetSubmissionExcludedErrors, buildsGetSubmissionExcludedResponses, buildsGetSubmissionGroupsData, buildsGetSubmissionGroupsErrors, buildsGetSubmissionGroupsResponses, buildsGetSubmissionMaterialsData, buildsGetSubmissionMaterialsErrors, buildsGetSubmissionMaterialsResponses, buildsGetSubmissionRecoveryData, buildsGetSubmissionRecoveryErrors, buildsGetSubmissionRecoveryResponses, buildsGetSubmissionResponses, buildsGetSubmissionStepsData, buildsGetSubmissionStepsErrors, buildsGetSubmissionStepsResponses, buildsGetSubmissionUnitsData, buildsGetSubmissionUnitsErrors, buildsGetSubmissionUnitsResponses, buildsInputsData, buildsInputsErrors, buildsInputsResponses, buildsListSubmissionsData, buildsListSubmissionsErrors, buildsListSubmissionsResponses, buildsMaterialsData, buildsMaterialsErrors, buildsMaterialsResponses, buildsPrepareData, buildsPrepareErrors, buildsPrepareResponses, buildsPreviewDramasData, buildsPreviewDramasErrors, buildsPreviewDramasResponses, buildsPreviewInputsData, buildsPreviewInputsErrors, buildsPreviewInputsResponses, buildsPreviewRequestData, buildsPreviewRequestErrors, buildsPreviewRequestResponses, buildsPreviewSummaryData, buildsPreviewSummaryErrors, buildsPreviewSummaryResponses, buildsPreviewUnitsData, buildsPreviewUnitsErrors, buildsPreviewUnitsResponses, buildsReconcileSubmissionData, buildsReconcileSubmissionErrors, buildsReconcileSubmissionResponses, buildsRetrySubmissionData, buildsRetrySubmissionErrors, buildsRetrySubmissionResponses, buildsSavedMutationData, buildsSavedMutationErrors, buildsSavedMutationResponses, buildsSavedPrepareRequestData, buildsSavedPrepareRequestErrors, buildsSavedPrepareRequestResponses, buildsSavedRequestData, buildsSavedRequestErrors, buildsSavedRequestResponses, buildsSavedSubmissionData, buildsSavedSubmissionErrors, buildsSavedSubmissionRecoveryData, buildsSavedSubmissionRecoveryErrors, buildsSavedSubmissionRecoveryResponses, buildsSavedSubmissionResponses, buildsSubmitPreviewData, buildsSubmitPreviewErrors, buildsSubmitPreviewResponses, buildsSummaryData, buildsSummaryErrors, buildsSummaryResponses, buildsUpdateData, buildsUpdateErrors, buildsUpdateResponses, cancelIngestFileData, cancelIngestFileErrors, cancelIngestFileResponses, completeIngestFileData, completeIngestFileErrors, completeIngestFileResponses, createIngestChunkData, createIngestChunkErrors, createIngestChunkResponses, createIngestGenerationData, createIngestGenerationErrors, createIngestGenerationResponses, createIngestSessionData, createIngestSessionErrors, createIngestSessionResponses, integrationsTiktokCallbackData, integrationsTiktokCallbackResponses, listIngestFilesData, listIngestFilesErrors, listIngestFilesResponses, listIngestPartsData, listIngestPartsErrors, listIngestPartsResponses, listIngestSessionsData, listIngestSessionsErrors, listIngestSessionsResponses, loginLoginAccessTokenData, loginLoginAccessTokenErrors, loginLoginAccessTokenResponses, loginTestTokenData, loginTestTokenResponses, materialsGetAssetsData, materialsGetAssetsErrors, materialsGetAssetsResponses, materialsGetAttemptsData, materialsGetAttemptsErrors, materialsGetAttemptsResponses, materialsGetMaterialData, materialsGetMaterialErrors, materialsGetMaterialResponses, materialsGetMaterialsData, materialsGetMaterialsErrors, materialsGetMaterialsResponses, materialsPostCompleteData, materialsPostCompleteErrors, materialsPostCompleteResponses, materialsPostObjectRetryData, materialsPostObjectRetryErrors, materialsPostObjectRetryResponses, materialsPostPartSignatureData, materialsPostPartSignatureErrors, materialsPostPartSignatureResponses, materialsPostUploadBatchData, materialsPostUploadBatchErrors, materialsPostUploadBatchResponses, materialsReadOriginalPreviewData, materialsReadOriginalPreviewErrors, materialsReadOriginalPreviewResponses, materialsReadRemotePreviewData, materialsReadRemotePreviewErrors, materialsReadRemotePreviewResponses, materialsReadUploadBatchData, materialsReadUploadBatchErrors, materialsReadUploadBatchesData, materialsReadUploadBatchesErrors, materialsReadUploadBatchesResponses, materialsReadUploadBatchResponses, materialsReadUploadRequestData, materialsReadUploadRequestErrors, materialsReadUploadRequestResponses, providersGetLinksData, providersGetLinksErrors, providersGetLinksResponses, providersGetPreparationData, providersGetPreparationErrors, providersGetPreparationResponses, providersGetPreparationSummaryData, providersGetPreparationSummaryErrors, providersGetPreparationSummaryResponses, providersLinkDetailsData, providersLinkDetailsErrors, providersLinkDetailsResponses, providersListApplicationsData, providersListApplicationsErrors, providersListApplicationsResponses, providersListConnectionsData, providersListConnectionsErrors, providersListConnectionsResponses, providersPatchConnectionData, providersPatchConnectionErrors, providersPatchConnectionResponses, providersPostCandidateData, providersPostCandidateErrors, providersPostCandidateResponses, providersPostConnectionData, providersPostConnectionErrors, providersPostConnectionResponses, providersPostPreparationData, providersPostPreparationErrors, providersPostPreparationResponses, providersPostVerifyData, providersPostVerifyErrors, providersPostVerifyResponses, readIngestChunkData, readIngestChunkErrors, readIngestChunkResponses, readIngestFileData, readIngestFileErrors, readIngestFileResponses, readIngestPartPermissionsData, readIngestPartPermissionsErrors, readIngestPartPermissionsResponses, readIngestRequestData, readIngestRequestErrors, readIngestRequestResponses, readIngestSummaryData, readIngestSummaryErrors, readIngestSummaryResponses, resumeIngestFileData, resumeIngestFileErrors, resumeIngestFileResponses, sealIngestSessionData, sealIngestSessionErrors, sealIngestSessionResponses, signIngestPartsData, signIngestPartsErrors, signIngestPartsResponses, strategiesAppendData, strategiesAppendErrors, strategiesAppendResponses, strategiesCopyPoolData, strategiesCopyPoolErrors, strategiesCopyPoolResponses, strategiesCreateData, strategiesCreateErrors, strategiesCreateResponses, strategiesGetOneData, strategiesGetOneErrors, strategiesGetOneResponses, strategiesGetStrategiesData, strategiesGetStrategiesErrors, strategiesGetStrategiesResponses, strategiesSavedRequestData, strategiesSavedRequestErrors, strategiesSavedRequestResponses, strategiesSetStateData, strategiesSetStateErrors, strategiesSetStateResponses, strategiesValidateData, strategiesValidateErrors, strategiesValidateResponses, strategiesVersionData, strategiesVersionErrors, strategiesVersionResponses, strategiesVersionsData, strategiesVersionsErrors, strategiesVersionsResponses, tenantsGetMemberCandidatesData, tenantsGetMemberCandidatesErrors, tenantsGetMemberCandidatesResponses, tenantsGetMembersData, tenantsGetMembersErrors, tenantsGetMembersResponses, tenantsGetMyTenantsData, tenantsGetMyTenantsErrors, tenantsGetMyTenantsResponses, tenantsGetPlatformTenantsData, tenantsGetPlatformTenantsErrors, tenantsGetPlatformTenantsResponses, tenantsGetPlatformUserCandidatesData, tenantsGetPlatformUserCandidatesErrors, tenantsGetPlatformUserCandidatesResponses, tenantsPatchTenantData, tenantsPatchTenantErrors, tenantsPatchTenantResponses, tenantsPostTenantData, tenantsPostTenantErrors, tenantsPostTenantResponses, tenantsPutMemberData, tenantsPutMemberErrors, tenantsPutMemberResponses, usersCreateUserData, usersCreateUserErrors, usersCreateUserResponses, usersDeleteUserData, usersDeleteUserErrors, usersDeleteUserMeData, usersDeleteUserMeResponses, usersDeleteUserResponses, usersReadUserByIdData, usersReadUserByIdErrors, usersReadUserByIdResponses, usersReadUserMeData, usersReadUserMeResponses, usersReadUsersData, usersReadUsersErrors, usersReadUsersResponses, usersUpdatePasswordMeData, usersUpdatePasswordMeErrors, usersUpdatePasswordMeResponses, usersUpdateUserData, usersUpdateUserErrors, usersUpdateUserMeData, usersUpdateUserMeErrors, usersUpdateUserMeResponses, usersUpdateUserResponses, utilsHealthCheckData, utilsHealthCheckResponses } from './types.gen';
+import type { accountsAuthorizeData, accountsAuthorizeErrors, accountsAuthorizeResponses, accountsBindingData, accountsBindingErrors, accountsBindingResponses, accountsCandidateBcsData, accountsCandidateBcsErrors, accountsCandidateBcsResponses, accountsCapabilityStatusData, accountsCapabilityStatusErrors, accountsCapabilityStatusResponses, accountsConfigurationData, accountsConfigurationErrors, accountsConfigurationResponses, accountsDisableData, accountsDisableErrors, accountsDisableResponses, accountsGetAccountsData, accountsGetAccountsErrors, accountsGetAccountsResponses, accountsGetBcsData, accountsGetBcsErrors, accountsGetBcsResponses, accountsGetConfigurationData, accountsGetConfigurationErrors, accountsGetConfigurationResponses, accountsGetConnectionsData, accountsGetConnectionsErrors, accountsGetConnectionsResponses, accountsPatchConnectionData, accountsPatchConnectionErrors, accountsPatchConnectionResponses, accountsPostAuthorizationData, accountsPostAuthorizationErrors, accountsPostAuthorizationResponses, accountsPostResolveData, accountsPostResolveErrors, accountsPostResolveResponses, accountsPutDefaultConnectionData, accountsPutDefaultConnectionErrors, accountsPutDefaultConnectionResponses, accountsRefreshCapabilitiesData, accountsRefreshCapabilitiesErrors, accountsRefreshCapabilitiesResponses, accountsRevokeData, accountsRevokeErrors, accountsRevokeResponses, acknowledgeIngestPartsData, acknowledgeIngestPartsErrors, acknowledgeIngestPartsResponses, buildsCreateData, buildsCreateErrors, buildsCreateResponses, buildsDramasData, buildsDramasErrors, buildsDramasResponses, buildsEditGroupsData, buildsEditGroupsErrors, buildsEditGroupsResponses, buildsFrozenGroupsData, buildsFrozenGroupsErrors, buildsFrozenGroupsResponses, buildsFrozenUnitData, buildsFrozenUnitErrors, buildsFrozenUnitResponses, buildsGeneratePreviewData, buildsGeneratePreviewErrors, buildsGeneratePreviewResponses, buildsGetSubmissionAdsData, buildsGetSubmissionAdsErrors, buildsGetSubmissionAdsResponses, buildsGetSubmissionData, buildsGetSubmissionErrors, buildsGetSubmissionEventsData, buildsGetSubmissionEventsErrors, buildsGetSubmissionEventsResponses, buildsGetSubmissionExcludedData, buildsGetSubmissionExcludedErrors, buildsGetSubmissionExcludedResponses, buildsGetSubmissionGroupsData, buildsGetSubmissionGroupsErrors, buildsGetSubmissionGroupsResponses, buildsGetSubmissionMaterialsData, buildsGetSubmissionMaterialsErrors, buildsGetSubmissionMaterialsResponses, buildsGetSubmissionRecoveryData, buildsGetSubmissionRecoveryErrors, buildsGetSubmissionRecoveryResponses, buildsGetSubmissionResponses, buildsGetSubmissionStepsData, buildsGetSubmissionStepsErrors, buildsGetSubmissionStepsResponses, buildsGetSubmissionUnitsData, buildsGetSubmissionUnitsErrors, buildsGetSubmissionUnitsResponses, buildsInputsData, buildsInputsErrors, buildsInputsResponses, buildsListSubmissionsData, buildsListSubmissionsErrors, buildsListSubmissionsResponses, buildsMaterialsData, buildsMaterialsErrors, buildsMaterialsResponses, buildsPrepareData, buildsPrepareErrors, buildsPrepareResponses, buildsPreviewDramasData, buildsPreviewDramasErrors, buildsPreviewDramasResponses, buildsPreviewInputsData, buildsPreviewInputsErrors, buildsPreviewInputsResponses, buildsPreviewRequestData, buildsPreviewRequestErrors, buildsPreviewRequestResponses, buildsPreviewSummaryData, buildsPreviewSummaryErrors, buildsPreviewSummaryResponses, buildsPreviewUnitsData, buildsPreviewUnitsErrors, buildsPreviewUnitsResponses, buildsReconcileSubmissionData, buildsReconcileSubmissionErrors, buildsReconcileSubmissionResponses, buildsRetrySubmissionData, buildsRetrySubmissionErrors, buildsRetrySubmissionResponses, buildsSavedMutationData, buildsSavedMutationErrors, buildsSavedMutationResponses, buildsSavedPrepareRequestData, buildsSavedPrepareRequestErrors, buildsSavedPrepareRequestResponses, buildsSavedRequestData, buildsSavedRequestErrors, buildsSavedRequestResponses, buildsSavedSubmissionData, buildsSavedSubmissionErrors, buildsSavedSubmissionRecoveryData, buildsSavedSubmissionRecoveryErrors, buildsSavedSubmissionRecoveryResponses, buildsSavedSubmissionResponses, buildsSubmitPreviewData, buildsSubmitPreviewErrors, buildsSubmitPreviewResponses, buildsSummaryData, buildsSummaryErrors, buildsSummaryResponses, buildsUpdateData, buildsUpdateErrors, buildsUpdateResponses, cancelIngestFileData, cancelIngestFileErrors, cancelIngestFileResponses, completeIngestFileData, completeIngestFileErrors, completeIngestFileResponses, createIngestChunkData, createIngestChunkErrors, createIngestChunkResponses, createIngestGenerationData, createIngestGenerationErrors, createIngestGenerationResponses, createIngestSessionData, createIngestSessionErrors, createIngestSessionResponses, integrationsCallbackData, integrationsCallbackResponses, integrationsTiktokCallbackData, integrationsTiktokCallbackResponses, listIngestFilesData, listIngestFilesErrors, listIngestFilesResponses, listIngestPartsData, listIngestPartsErrors, listIngestPartsResponses, listIngestSessionsData, listIngestSessionsErrors, listIngestSessionsResponses, loginLoginAccessTokenData, loginLoginAccessTokenErrors, loginLoginAccessTokenResponses, loginTestTokenData, loginTestTokenResponses, materialsGetAssetsData, materialsGetAssetsErrors, materialsGetAssetsResponses, materialsGetAttemptsData, materialsGetAttemptsErrors, materialsGetAttemptsResponses, materialsGetMaterialData, materialsGetMaterialErrors, materialsGetMaterialResponses, materialsGetMaterialsData, materialsGetMaterialsErrors, materialsGetMaterialsResponses, materialsPostCompleteData, materialsPostCompleteErrors, materialsPostCompleteResponses, materialsPostObjectRetryData, materialsPostObjectRetryErrors, materialsPostObjectRetryResponses, materialsPostPartSignatureData, materialsPostPartSignatureErrors, materialsPostPartSignatureResponses, materialsPostUploadBatchData, materialsPostUploadBatchErrors, materialsPostUploadBatchResponses, materialsReadOriginalPreviewData, materialsReadOriginalPreviewErrors, materialsReadOriginalPreviewResponses, materialsReadRemotePreviewData, materialsReadRemotePreviewErrors, materialsReadRemotePreviewResponses, materialsReadUploadBatchData, materialsReadUploadBatchErrors, materialsReadUploadBatchesData, materialsReadUploadBatchesErrors, materialsReadUploadBatchesResponses, materialsReadUploadBatchResponses, materialsReadUploadRequestData, materialsReadUploadRequestErrors, materialsReadUploadRequestResponses, providersGetLinksData, providersGetLinksErrors, providersGetLinksResponses, providersGetPreparationData, providersGetPreparationErrors, providersGetPreparationResponses, providersGetPreparationSummaryData, providersGetPreparationSummaryErrors, providersGetPreparationSummaryResponses, providersLinkDetailsData, providersLinkDetailsErrors, providersLinkDetailsResponses, providersListApplicationsData, providersListApplicationsErrors, providersListApplicationsResponses, providersListConnectionsData, providersListConnectionsErrors, providersListConnectionsResponses, providersPatchConnectionData, providersPatchConnectionErrors, providersPatchConnectionResponses, providersPostCandidateData, providersPostCandidateErrors, providersPostCandidateResponses, providersPostConnectionData, providersPostConnectionErrors, providersPostConnectionResponses, providersPostPreparationData, providersPostPreparationErrors, providersPostPreparationResponses, providersPostVerifyData, providersPostVerifyErrors, providersPostVerifyResponses, readIngestChunkData, readIngestChunkErrors, readIngestChunkResponses, readIngestFileData, readIngestFileErrors, readIngestFileResponses, readIngestPartPermissionsData, readIngestPartPermissionsErrors, readIngestPartPermissionsResponses, readIngestRequestData, readIngestRequestErrors, readIngestRequestResponses, readIngestSummaryData, readIngestSummaryErrors, readIngestSummaryResponses, resumeIngestFileData, resumeIngestFileErrors, resumeIngestFileResponses, sealIngestSessionData, sealIngestSessionErrors, sealIngestSessionResponses, signIngestPartsData, signIngestPartsErrors, signIngestPartsResponses, strategiesAppendData, strategiesAppendErrors, strategiesAppendResponses, strategiesCopyPoolData, strategiesCopyPoolErrors, strategiesCopyPoolResponses, strategiesCreateData, strategiesCreateErrors, strategiesCreateResponses, strategiesGetOneData, strategiesGetOneErrors, strategiesGetOneResponses, strategiesGetStrategiesData, strategiesGetStrategiesErrors, strategiesGetStrategiesResponses, strategiesSavedRequestData, strategiesSavedRequestErrors, strategiesSavedRequestResponses, strategiesSetStateData, strategiesSetStateErrors, strategiesSetStateResponses, strategiesValidateData, strategiesValidateErrors, strategiesValidateResponses, strategiesVersionData, strategiesVersionErrors, strategiesVersionResponses, strategiesVersionsData, strategiesVersionsErrors, strategiesVersionsResponses, tenantsGetMemberCandidatesData, tenantsGetMemberCandidatesErrors, tenantsGetMemberCandidatesResponses, tenantsGetMembersData, tenantsGetMembersErrors, tenantsGetMembersResponses, tenantsGetMyTenantsData, tenantsGetMyTenantsErrors, tenantsGetMyTenantsResponses, tenantsGetPlatformTenantsData, tenantsGetPlatformTenantsErrors, tenantsGetPlatformTenantsResponses, tenantsGetPlatformUserCandidatesData, tenantsGetPlatformUserCandidatesErrors, tenantsGetPlatformUserCandidatesResponses, tenantsPatchTenantData, tenantsPatchTenantErrors, tenantsPatchTenantResponses, tenantsPostTenantData, tenantsPostTenantErrors, tenantsPostTenantResponses, tenantsPutMemberData, tenantsPutMemberErrors, tenantsPutMemberResponses, usersCreateUserData, usersCreateUserErrors, usersCreateUserResponses, usersDeleteUserData, usersDeleteUserErrors, usersDeleteUserMeData, usersDeleteUserMeResponses, usersDeleteUserResponses, usersReadUserByIdData, usersReadUserByIdErrors, usersReadUserByIdResponses, usersReadUserMeData, usersReadUserMeResponses, usersReadUsersData, usersReadUsersErrors, usersReadUsersResponses, usersUpdatePasswordMeData, usersUpdatePasswordMeErrors, usersUpdatePasswordMeResponses, usersUpdateUserData, usersUpdateUserErrors, usersUpdateUserMeData, usersUpdateUserMeErrors, usersUpdateUserMeResponses, usersUpdateUserResponses, utilsHealthCheckData, utilsHealthCheckResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -226,6 +226,17 @@ export class IntegrationsService {
             ...options
         });
     }
+
+    /**
+     * Callback
+     */
+    public static callback<ThrowOnError extends boolean = true>(options?: Options<integrationsCallbackData, ThrowOnError>) {
+        return (options?.client ?? client).get<integrationsCallbackResponses, unknown, ThrowOnError>({
+            responseType: 'json',
+            url: '/api/integrations/tiktok/mcp/callback',
+            ...options
+        });
+    }
 }
 
 export class TenantsService {
@@ -432,6 +443,101 @@ export class AccountsService {
                 'Content-Type': 'application/json',
                 ...options.headers
             }
+        });
+    }
+
+    /**
+     * Put Default Connection
+     */
+    public static putDefaultConnection<ThrowOnError extends boolean = true>(options: Options<accountsPutDefaultConnectionData, ThrowOnError>) {
+        return (options.client ?? client).put<accountsPutDefaultConnectionResponses, accountsPutDefaultConnectionErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/bcs/{bc_id}/default-connection',
+            ...options,
+            headers: {
+                'Content-Type': 'application/json',
+                ...options.headers
+            }
+        });
+    }
+
+    /**
+     * Configuration
+     */
+    public static configuration<ThrowOnError extends boolean = true>(options: Options<accountsConfigurationData, ThrowOnError>) {
+        return (options.client ?? client).get<accountsConfigurationResponses, accountsConfigurationErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/tiktok/mcp/configuration',
+            ...options
+        });
+    }
+
+    /**
+     * Authorize
+     */
+    public static authorize<ThrowOnError extends boolean = true>(options: Options<accountsAuthorizeData, ThrowOnError>) {
+        return (options.client ?? client).post<accountsAuthorizeResponses, accountsAuthorizeErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/tiktok/mcp/authorizations',
+            ...options,
+            headers: {
+                'Content-Type': 'application/json',
+                ...options.headers
+            }
+        });
+    }
+
+    /**
+     * Candidate Bcs
+     */
+    public static candidateBcs<ThrowOnError extends boolean = true>(options: Options<accountsCandidateBcsData, ThrowOnError>) {
+        return (options.client ?? client).get<accountsCandidateBcsResponses, accountsCandidateBcsErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/tiktok/mcp/candidates/{attempt_id}/bcs',
+            ...options
+        });
+    }
+
+    /**
+     * Binding
+     */
+    public static binding<ThrowOnError extends boolean = true>(options: Options<accountsBindingData, ThrowOnError>) {
+        return (options.client ?? client).post<accountsBindingResponses, accountsBindingErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/tiktok/mcp/candidates/{attempt_id}/binding',
+            ...options,
+            headers: {
+                'Content-Type': 'application/json',
+                ...options.headers
+            }
+        });
+    }
+
+    /**
+     * Disable
+     */
+    public static disable<ThrowOnError extends boolean = true>(options: Options<accountsDisableData, ThrowOnError>) {
+        return (options.client ?? client).post<accountsDisableResponses, accountsDisableErrors, ThrowOnError>({
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/tiktok/mcp/connections/{connection_id}/disable',
+            ...options
+        });
+    }
+
+    /**
+     * Revoke
+     */
+    public static revoke<ThrowOnError extends boolean = true>(options: Options<accountsRevokeData, ThrowOnError>) {
+        return (options.client ?? client).post<accountsRevokeResponses, accountsRevokeErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/tiktok/mcp/connections/{connection_id}/revocations',
+            ...options
         });
     }
 

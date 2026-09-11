@@ -26,6 +26,19 @@ export const connectionLabels: Record<ConnectionPublic["status"], string> = {
   ERROR: "连接错误",
   DISABLED: "已停用",
 }
+export const refreshLabels: Record<string, string> = {
+  PENDING: "等待刷新，任务暂候",
+  CLAIMED: "正在刷新，任务暂候",
+  REQUEST_ARMED: "正在等待刷新结果",
+  CANDIDATE_READY: "正在核对刷新结果",
+  PUBLISHED: "刷新完成",
+  OUTCOME_UNKNOWN: "刷新结果未知，需重新授权后继续",
+  REJECTED: "刷新未成功，请检查授权状态",
+  SUPERSEDED: "本次刷新已失效，以当前授权为准",
+}
+export function capabilityLabel(value?: boolean | null) {
+  return value === true ? "已核实" : value === false ? "未授权" : "权限待核实"
+}
 export function displayTime(value?: string | null) {
   if (!value) return "尚无记录"
   const time = new Date(value)

@@ -1,7 +1,6 @@
 """MCP 独立授权入口；回调不依赖当前浏览器租户或 Marketing API App。"""
 
 from datetime import UTC, datetime, timedelta
-from typing import Literal
 from urllib.parse import urlencode
 from uuid import UUID
 
@@ -20,10 +19,10 @@ from app.integrations.tiktok.mcp_auth.bootstrap import candidate_business_center
 from app.integrations.tiktok.mcp_auth.service import (
     accept_mcp_callback,
     cancel_mcp_callback,
-    load_registration,
     start_mcp_authorization,
     state_attempt,
 )
+from app.modules.accounts.channel_configuration import mcp_configuration
 from app.modules.accounts.connections import (
     bind_candidate_bc,
     disable_connection,
@@ -51,18 +50,7 @@ def configuration(
     tenant_id: UUID, session: SessionDep, user: CurrentUser
 ) -> McpConfiguration:
     require_tenant(session, actor_id=user.id, tenant_id=tenant_id, action="read")
-    try:
-        load_registration(load_mcp_protocol())
-    except DomainError as error:
-        status: Literal["CLIENT_UNREGISTERED", "PROTOCOL_UNVERIFIED", "INVALID"] = (
-            "INVALID"
-        )
-        if error.code == "mcp_client_unregistered":
-            status = "CLIENT_UNREGISTERED"
-        elif error.code == "mcp_protocol_unverified":
-            status = "PROTOCOL_UNVERIFIED"
-        return McpConfiguration(configured=False, code=error.code, status=status)
-    return McpConfiguration(configured=True, status="READY")
+    return mcp_configuration()
 
 
 @router.post("/authorizations", response_model=AuthorizationURL)

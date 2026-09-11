@@ -7,6 +7,7 @@ from sqlmodel import select
 
 from app.core.config import settings
 from app.core.security import create_access_token
+from app.modules.accounts.connection_models import BCConnectionBinding, BCDefaultRoute
 from app.modules.accounts.models import (
     AdvertiserAccount,
     AuthorizationAttempt,
@@ -30,6 +31,15 @@ def test_connection_bc_details_use_latest_complete_snapshot_and_scoped_cursor(
                 tenant_id=context.tenant_id, bc_id="unrelated-bc", name="Unrelated"
             ),
         ]
+    )
+    session.flush()
+    session.add(
+        BCConnectionBinding(
+            tenant_id=context.tenant_id,
+            bc_id="empty-bc",
+            connection_id=grant.connection_id,
+            kind="OFFICIAL_API",
+        )
     )
     session.add(
         DiscoveryRun(
@@ -254,6 +264,7 @@ def test_account_cursor_rejects_scope_change_and_tampering(
         "kind": "accounts",
         "tenant_id": str(context.tenant_id),
         "bc_id": grant.bc_id,
+        "connection_id": str(grant.connection_id),
         "query": "",
         "remote_status": None,
         "availability": None,
@@ -275,6 +286,27 @@ def test_account_cursor_rejects_scope_change_and_tampering(
         assert response.status_code == 422
         assert response.json()["code"] == "invalid_cursor"
     session.add(TenantBC(tenant_id=other_context.tenant_id, bc_id=grant.bc_id))
+    other_connection = TikTokConnection(
+        tenant_id=other_context.tenant_id, status="ACTIVE"
+    )
+    session.add(other_connection)
+    session.flush()
+    session.add(
+        BCConnectionBinding(
+            tenant_id=other_context.tenant_id,
+            bc_id=grant.bc_id,
+            connection_id=other_connection.id,
+            kind="OFFICIAL_API",
+        )
+    )
+    session.flush()
+    session.add(
+        BCDefaultRoute(
+            tenant_id=other_context.tenant_id,
+            bc_id=grant.bc_id,
+            connection_id=other_connection.id,
+        )
+    )
     session.flush()
     response = client.get(
         f"/api/tenants/{other_context.tenant_id}/accounts",
@@ -471,13 +503,12 @@ def test_configuration_readiness_never_exposes_values(client, monkeypatch, conte
         monkeypatch.setattr(settings, name, "")
     response = client.get(path, headers=headers(context))
     assert response.status_code == 200
-    assert response.json()["status"] == "NOT_CONFIGURED"
-    assert set(response.json()["missing_fields"]) == {
-        "TIKTOK_APP_ID",
-        "TIKTOK_APP_SECRET",
-        "TIKTOK_REDIRECT_URI",
-        "TIKTOK_AUTHORIZATION_URL",
-    }
+    api = next(
+        row for row in response.json()["channels"] if row["kind"] == "OFFICIAL_API"
+    )
+    assert api["status"] == "NOT_CONFIGURED" and not api["configured"]
+    assert set(api) == {"kind", "configured", "status", "code"}
+    assert "TIKTOK_APP_SECRET" not in response.text
 
 
 def test_readonly_and_cross_tenant_cannot_manage_connections(
@@ -623,12 +654,14 @@ def test_encryption_missing_is_not_reported_as_missing_app(
         headers=headers(context),
     )
     assert response.status_code == 200
-    assert response.json() == {
+    channels = {row["kind"]: row for row in response.json()["channels"]}
+    assert channels["OFFICIAL_API"] == {
+        "kind": "OFFICIAL_API",
         "configured": False,
         "status": "INCOMPLETE",
-        "missing_fields": ["CONNECTION_ENCRYPTION_KEY"],
         "code": "connection_encryption_unconfigured",
     }
+    assert channels["OFFICIAL_MCP"]["code"] == "connection_encryption_unconfigured"
 
 
 def test_declared_permission_preserved_when_grant_has_no_business_capability(

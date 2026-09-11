@@ -1,4 +1,8 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
 import { useNavigate, useSearch } from "@tanstack/react-router"
 import type { ColumnDef } from "@tanstack/react-table"
 import { useEffect, useMemo, useState } from "react"
@@ -14,9 +18,18 @@ import {
 } from "@/components/ui/empty"
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ManagementSheet } from "@/features/tenants/ManagementSheet"
 import {
+  isForbidden,
   Pager,
   RequestError,
   ServerTable,
@@ -34,7 +47,7 @@ import {
 } from "./presentation"
 
 export function AccountsPage() {
-  const { tenantId, tenant } = useTenantScope()
+  const { tenantId, tenant, bc } = useTenantScope()
   const search = useSearch({ from: "/_layout/tenants/$tenantId/accounts" })
   const navigate = useNavigate()
   return (
@@ -64,25 +77,134 @@ export function AccountsPage() {
           <TabsTrigger value="connections">授权连接</TabsTrigger>
         </TabsList>
         <TabsContent value="accounts">
-          <AccountDirectory />
+          <AccountDirectory key={`${tenantId}:${bc?.bc_id ?? "none"}`} />
         </TabsContent>
         <TabsContent value="connections">
-          <ConnectionsPage />
+          <ConnectionsPage key={tenantId} />
         </TabsContent>
       </Tabs>
     </>
   )
 }
 function AccountDirectory() {
-  const { tenantId, scope, bc, bcPending, bcError, retryBC } = useTenantScope()
+  const { tenantId, bc, bcPending, bcError, retryBC } = useTenantScope()
   const queryClient = useQueryClient()
+  const [selected, setSelected] = useState<string | null>(null)
   useEffect(() => {
-    // Discovery can finish while its row is off-page or this tab is closed.
-    // Account entry always rechecks the accepted BC directory, without discovery.
     void queryClient.invalidateQueries({
       queryKey: ["tenant", tenantId, "bcs"],
     })
   }, [tenantId, queryClient])
+  const connections = useInfiniteQuery({
+    queryKey: ["tenant", tenantId, "connections", "account-picker", bc?.bc_id],
+    initialPageParam: undefined as string | undefined,
+    enabled: !!bc,
+    queryFn: async ({ signal, pageParam }) =>
+      (
+        await AccountsService.getConnections({
+          path: { tenant_id: tenantId! },
+          query: { bc_id: bc!.bc_id, limit: 50, cursor: pageParam },
+          signal,
+        })
+      ).data,
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+  })
+  const items = connections.data?.pages.flatMap((page) => page.items) ?? []
+  // 只采用服务端明确默认值；没有默认时由用户选择，不能退到列表第一条。
+  const connectionId =
+    selected ??
+    bc?.default_connection_id ??
+    items.find((item) => item.is_default)?.id
+  if (bcError) return <RequestError error={bcError} retry={retryBC} />
+  if (isForbidden(connections.error))
+    return (
+      <RequestError
+        error={connections.error}
+        retry={() => {
+          void connections.refetch()
+        }}
+      />
+    )
+  if (!bc && !bcPending)
+    return (
+      <Empty>
+        <EmptyHeader>
+          <EmptyTitle>当前没有可用 BC</EmptyTitle>
+          <EmptyDescription>
+            请切换 BC
+            或在“授权连接”查看接入状态。目录不会因打开页面自动发现账户。
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    )
+  return (
+    <div className="flex min-w-0 flex-col gap-4">
+      <Field className="w-full sm:max-w-xl">
+        <FieldLabel htmlFor="account-connection">查看账户的连接</FieldLabel>
+        <Select
+          value={connectionId ?? ""}
+          onValueChange={setSelected}
+          disabled={connections.isPending}
+        >
+          <SelectTrigger id="account-connection" className="w-full">
+            <SelectValue placeholder="请选择连接" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              {connectionId &&
+                !items.some((item) => item.id === connectionId) && (
+                  <SelectItem value={connectionId}>
+                    默认连接 · {connectionId}
+                  </SelectItem>
+                )}
+              {items.map((item) => (
+                <SelectItem key={item.id} value={item.id}>
+                  {item.display_name ||
+                    (item.kind === "OFFICIAL_MCP"
+                      ? "官方 MCP"
+                      : "官方 API")}{" "}
+                  · {item.id}
+                  {item.is_default ? " · 默认" : ""}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        {connections.hasNextPage && (
+          <Button
+            variant="link"
+            className="self-start"
+            disabled={connections.isFetchingNextPage}
+            onClick={() => {
+              void connections.fetchNextPage()
+            }}
+          >
+            加载更多连接
+          </Button>
+        )}
+      </Field>
+      {connections.error && (
+        <RequestError
+          error={connections.error}
+          retry={() => {
+            void connections.refetch()
+          }}
+        />
+      )}
+      {connectionId && !connections.error ? (
+        <AccountRows key={connectionId} connectionId={connectionId} />
+      ) : (
+        <p role="status" className="text-sm text-muted-foreground">
+          {connections.isPending
+            ? "正在读取当前 BC 的连接…"
+            : "请先选择查看账户的连接"}
+        </p>
+      )}
+    </div>
+  )
+}
+function AccountRows({ connectionId }: { connectionId: string }) {
+  const { tenantId, scope, bc, bcPending, bcError, retryBC } = useTenantScope()
   const [input, setInput] = useState("")
   const [search, setSearch] = useState("")
   const [remoteInput, setRemoteInput] = useState("")
@@ -96,6 +218,7 @@ function AccountDirectory() {
       tenantId,
       "accounts",
       scope?.bcId,
+      connectionId,
       search,
       remoteStatus,
       availability,
@@ -109,6 +232,7 @@ function AccountDirectory() {
           path: { tenant_id: tenantId! },
           query: {
             bc_id: bc!.bc_id,
+            connection_id: connectionId,
             query: search,
             remote_status: remoteStatus || undefined,
             availability:

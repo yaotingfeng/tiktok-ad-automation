@@ -4,7 +4,6 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query, Response
 from sqlalchemy import and_, case, func, literal, or_
-from sqlalchemy import cast as sql_cast
 from sqlalchemy import select as sa_select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session as SQLAlchemySession
@@ -15,11 +14,17 @@ from app.core.config import settings
 from app.core.errors import ERROR_HTTP_STATUS, DomainError
 from app.core.pagination import Page
 from app.integrations.tiktok.auth import (
-    _configured_authorization_url,
     start_authorization,
 )
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.modules.accounts.access import OPERABLE_REMOTE_STATUSES
+from app.modules.accounts.channel_configuration import channel_configuration
+from app.modules.accounts.connection_models import (
+    BCConnectionBinding,
+    BCDefaultRoute,
+    ConnectionAuthorization,
+)
+from app.modules.accounts.connection_views import enrich_connections
 from app.modules.accounts.connections import disable_connection
 from app.modules.accounts.models import (
     AdvertiserAccount,
@@ -30,7 +35,6 @@ from app.modules.accounts.models import (
     TikTokConnection,
 )
 from app.modules.accounts.resolver import (
-    bc_directory_scope,
     decode_cursor,
     encode_cursor,
     resolve_lines,
@@ -70,15 +74,29 @@ def get_accounts(
     limit: Limit = 50,
     remote_status: str | None = None,
     availability: Availability | None = None,
+    connection_id: UUID | None = None,
 ) -> Page[AccountPublic]:
     require_tenant(session, actor_id=user.id, tenant_id=tenant_id, action="read")
     bc = session.get(TenantBC, (tenant_id, bc_id), populate_existing=True)
     if bc is None:
         raise DomainError("account_not_in_bc", "当前租户没有该 BC")
+    # 目录浏览也固定一条连接，但允许查看已停用连接的本地历史与权限状态。
+    if connection_id is None:
+        default = session.get(
+            BCDefaultRoute, (tenant_id, bc_id), populate_existing=True
+        )
+        if default is None:
+            raise DomainError(
+                "bc_default_connection_required", "请先选择当前 BC 的连接"
+            )
+        connection_id = default.connection_id
+    if session.get(BCConnectionBinding, (tenant_id, bc_id, connection_id)) is None:
+        raise DomainError("connection_bc_mismatch", "连接未绑定当前 BC")
     scope = {
         "kind": "accounts",
         "tenant_id": str(tenant_id),
         "bc_id": bc_id,
+        "connection_id": str(connection_id),
         "query": query,
         "remote_status": remote_status,
         "availability": availability,
@@ -96,6 +114,7 @@ def get_accounts(
         .where(
             BCAccountAccess.tenant_id == tenant_id,
             BCAccountAccess.bc_id == bc_id,
+            BCAccountAccess.connection_id == connection_id,
             BCAccountAccess.advertiser_id == AdvertiserAccount.advertiser_id,
             col(BCAccountAccess.in_bc).is_(True),
             col(BCAccountAccess.authorized).is_(True),
@@ -116,8 +135,38 @@ def get_accounts(
         ~missing,
         col(AdvertiserAccount.remote_status).in_(OPERABLE_REMOTE_STATUSES),
     )
+    now = datetime.now(UTC)
+    minimum = now - timedelta(seconds=settings.BC_CAPABILITY_MAX_AGE_SECONDS)
+    authorization = (
+        select(ConnectionAuthorization.id)
+        .join(
+            TikTokConnection,
+            (col(TikTokConnection.id) == col(ConnectionAuthorization.connection_id))
+            & (
+                col(TikTokConnection.tenant_id)
+                == col(ConnectionAuthorization.tenant_id)
+            )
+            & (
+                col(TikTokConnection.authorization_revision)
+                == col(ConnectionAuthorization.authorization_revision)
+            ),
+        )
+        .where(
+            ConnectionAuthorization.tenant_id == tenant_id,
+            ConnectionAuthorization.connection_id == connection_id,
+            func.jsonb_array_length(col(ConnectionAuthorization.scopes)) > 0,
+            ConnectionAuthorization.source != "UNKNOWN",
+            ConnectionAuthorization.source != "",
+            col(ConnectionAuthorization.verified_at).between(minimum, now),
+        )
+    )
+    live = live.where(col(BCAccountAccess.checked_at).between(minimum, now))
     build = and_(
         operable,
+        authorization.where(
+            ConnectionAuthorization.permission_summary["build_authorized"]
+            == literal(True, type_=JSONB)
+        ).exists(),
         live.where(
             BCAccountAccess.permission_state == "VERIFIED",
             col(BCAccountAccess.can_build).is_(True),
@@ -125,16 +174,23 @@ def get_accounts(
     )
     upload = and_(
         operable,
+        authorization.where(
+            ConnectionAuthorization.permission_summary["upload_authorized"]
+            == literal(True, type_=JSONB)
+        ).exists(),
         live.where(
             BCAccountAccess.permission_state == "VERIFIED",
             col(BCAccountAccess.can_upload).is_(True),
         ).exists(),
     )
-    verified = live.where(BCAccountAccess.permission_state == "VERIFIED").exists()
+    verified = and_(
+        authorization.exists(),
+        live.where(BCAccountAccess.permission_state == "VERIFIED").exists(),
+    )
     permission = case(
         (missing, "METADATA_INCOMPLETE"), (verified, "VERIFIED"), else_="UNKNOWN"
     )
-    unknown = live.where(BCAccountAccess.permission_state != "VERIFIED").exists()
+    unknown = ~verified
     available = case(
         (conflict, "OWNERSHIP_CONFLICT"),
         (missing, "METADATA_INCOMPLETE"),
@@ -147,6 +203,7 @@ def get_accounts(
         .where(
             BCAccountAccess.tenant_id == tenant_id,
             BCAccountAccess.bc_id == bc_id,
+            BCAccountAccess.connection_id == connection_id,
             BCAccountAccess.advertiser_id == AdvertiserAccount.advertiser_id,
         )
         .scalar_subquery()
@@ -160,7 +217,14 @@ def get_accounts(
         permission.label("permission_state"),
     ).where(
         col(AdvertiserAccount.tenant_id) == tenant_id,
-        bc_directory_scope(tenant_id, bc_id),
+        select(BCAccountAccess.advertiser_id)
+        .where(
+            BCAccountAccess.tenant_id == tenant_id,
+            BCAccountAccess.bc_id == bc_id,
+            BCAccountAccess.connection_id == connection_id,
+            BCAccountAccess.advertiser_id == AdvertiserAccount.advertiser_id,
+        )
+        .exists(),
     )
     if query.strip():
         statement = statement.where(
@@ -249,26 +313,14 @@ def get_bcs(
         ).one_or_none()
         if connection is None:
             raise DomainError("connection_not_found", "当前租户连接不存在")
-        # Keep this in SQL: a large connection snapshot never becomes an API list
-        # or Python IN clause. Empty BCs are present even without any account grants.
-        latest_work = (
-            select(col(DiscoveryRun.work))
-            .where(
-                DiscoveryRun.tenant_id == tenant_id,
-                DiscoveryRun.connection_id == connection_id,
-                DiscoveryRun.status == "COMPLETE",
-            )
-            .order_by(
-                col(DiscoveryRun.completed_at).desc().nulls_last(),
-                col(DiscoveryRun.id).desc(),
-            )
-            .limit(1)
-            .scalar_subquery()
-        )
         statement = statement.where(
-            sql_cast(latest_work, JSONB)["bc_ids"].contains(
-                func.jsonb_build_array(col(TenantBC.bc_id))
+            select(BCConnectionBinding.connection_id)
+            .where(
+                BCConnectionBinding.tenant_id == tenant_id,
+                BCConnectionBinding.connection_id == connection_id,
+                BCConnectionBinding.bc_id == TenantBC.bc_id,
             )
+            .exists()
         )
     if last_id is not None:
         statement = statement.where(TenantBC.bc_id > last_id)
@@ -285,6 +337,21 @@ def get_bcs(
         .execution_options(populate_existing=True)
     ).all()
     items = [BCPublic.model_validate(row) for row in rows[:limit]]
+    if items:
+        default_connections = dict(
+            session.exec(
+                select(BCDefaultRoute.bc_id, BCDefaultRoute.connection_id).where(
+                    BCDefaultRoute.tenant_id == tenant_id,
+                    col(BCDefaultRoute.bc_id).in_([item.bc_id for item in items]),
+                )
+            ).all()
+        )
+        for item in items:
+            item.default_connection_id = default_connections.get(item.bc_id)
+            item.is_default = (
+                connection_id is not None
+                and item.default_connection_id == connection_id
+            )
     return Page(
         items=items,
         next_cursor=encode_cursor(scope=scope, last_id=items[-1].bc_id)
@@ -301,9 +368,17 @@ def get_connections(
     cursor: Cursor = None,
     limit: Limit = 50,
     status: str | None = None,
+    bc_id: BCID | None = None,
 ) -> Page[ConnectionPublic]:
-    require_tenant(session, actor_id=user.id, tenant_id=tenant_id, action="read")
-    scope = {"kind": "connections", "tenant_id": str(tenant_id), "status": status}
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    scope = {
+        "kind": "connections",
+        "tenant_id": str(tenant_id),
+        "status": status,
+        "bc_id": bc_id,
+    }
     last_id = decode_cursor(cursor, scope=scope)
     latest = (
         select(DiscoveryRun)
@@ -380,6 +455,18 @@ def get_connections(
     statement = sa_select(
         TikTokConnection, latest_time, latest_error, authorized_time, progress
     ).where(col(TikTokConnection.tenant_id) == tenant_id)
+    if bc_id is not None:
+        if session.get(TenantBC, (tenant_id, bc_id)) is None:
+            raise DomainError("account_not_in_bc", "当前租户没有该 BC")
+        statement = statement.where(
+            select(BCConnectionBinding.connection_id)
+            .where(
+                BCConnectionBinding.tenant_id == tenant_id,
+                BCConnectionBinding.bc_id == bc_id,
+                BCConnectionBinding.connection_id == TikTokConnection.id,
+            )
+            .exists()
+        )
     if last_id is not None:
         try:
             last_uuid = UUID(last_id)
@@ -414,6 +501,7 @@ def get_connections(
             else None
         )
         items.append(item)
+    enrich_connections(session, context=context, items=items, bc_id=bc_id)
     return Page(
         items=items,
         next_cursor=encode_cursor(scope=scope, last_id=str(items[-1].id))
@@ -427,25 +515,7 @@ def get_configuration(
     tenant_id: UUID, session: SessionDep, user: CurrentUser
 ) -> AppConfiguration:
     require_tenant(session, actor_id=user.id, tenant_id=tenant_id, action="read")
-    missing = settings.tiktok_app_missing_fields.copy()
-    if not settings.TIKTOK_AUTHORIZATION_URL:
-        missing.append("TIKTOK_AUTHORIZATION_URL")
-    try:
-        _configured_authorization_url()
-    except DomainError as error:
-        if error.code == "connection_encryption_unconfigured":
-            missing.append("CONNECTION_ENCRYPTION_KEY")
-        return AppConfiguration(
-            configured=False,
-            status="NOT_CONFIGURED"
-            if len(settings.tiktok_app_missing_fields) == 3
-            else "INCOMPLETE",
-            missing_fields=missing,
-            code=error.code,
-        )
-    return AppConfiguration(
-        configured=True, status="READY", missing_fields=[], code=None
-    )
+    return channel_configuration()
 
 
 @router.post("/tiktok/authorizations", response_model=AuthorizationURL)
@@ -471,6 +541,10 @@ def post_authorization(
         ).one_or_none()
         if connection is None:
             raise DomainError("connection_not_found", "当前租户连接不存在")
+        if connection.kind != "OFFICIAL_API":
+            raise DomainError(
+                "connection_channel_mismatch", "请使用该连接对应的授权通道"
+            )
         if connection.status == "DISABLED":
             raise DomainError(
                 "connection_unavailable", "已停用连接不能重新授权，请创建新连接"

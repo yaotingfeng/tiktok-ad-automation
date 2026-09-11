@@ -113,21 +113,9 @@ export type AccountPublic = {
  */
 export type AppConfiguration = {
     /**
-     * Code
+     * Channels
      */
-    code?: string | null;
-    /**
-     * Configured
-     */
-    configured: boolean;
-    /**
-     * Status
-     */
-    status: 'READY' | 'NOT_CONFIGURED' | 'INCOMPLETE';
-    /**
-     * Missing Fields
-     */
-    missing_fields: Array<string>;
+    channels: Array<ChannelConfiguration>;
 };
 
 /**
@@ -181,6 +169,14 @@ export type BCPublic = {
      * Ownership Conflict
      */
     ownership_conflict: boolean;
+    /**
+     * Is Default
+     */
+    is_default?: boolean;
+    /**
+     * Default Connection Id
+     */
+    default_connection_id?: string | null;
 };
 
 /**
@@ -292,6 +288,28 @@ export type CapabilityRefreshRequest = {
 };
 
 /**
+ * ChannelConfiguration
+ */
+export type ChannelConfiguration = {
+    /**
+     * Kind
+     */
+    kind: 'OFFICIAL_API' | 'OFFICIAL_MCP';
+    /**
+     * Configured
+     */
+    configured: boolean;
+    /**
+     * Status
+     */
+    status: 'READY' | 'NOT_CONFIGURED' | 'INCOMPLETE' | 'CLIENT_UNREGISTERED' | 'PROTOCOL_UNVERIFIED' | 'INVALID';
+    /**
+     * Code
+     */
+    code?: string | null;
+};
+
+/**
  * CompleteUploadRequest
  */
 export type CompleteUploadRequest = {
@@ -319,6 +337,54 @@ export type ConnectionPublic = {
      * Status
      */
     status: 'PENDING_AUTH' | 'DISCOVERING' | 'ACTIVE' | 'REAUTH_REQUIRED' | 'ERROR' | 'DISABLED';
+    /**
+     * Kind
+     */
+    kind: 'OFFICIAL_API' | 'OFFICIAL_MCP';
+    /**
+     * Display Name
+     */
+    display_name?: string;
+    /**
+     * Bound Bc Id
+     */
+    bound_bc_id?: string | null;
+    /**
+     * Binding Count
+     */
+    binding_count?: number;
+    /**
+     * Is Default
+     */
+    is_default?: boolean;
+    /**
+     * Authorization Status
+     */
+    authorization_status?: string | null;
+    /**
+     * Authorization Attempt Id
+     */
+    authorization_attempt_id?: string | null;
+    /**
+     * Refresh Status
+     */
+    refresh_status?: string | null;
+    /**
+     * Read Authorized
+     */
+    read_authorized?: boolean | null;
+    /**
+     * Upload Authorized
+     */
+    upload_authorized?: boolean | null;
+    /**
+     * Build Authorized
+     */
+    build_authorized?: boolean | null;
+    /**
+     * Evidence Checked At
+     */
+    evidence_checked_at?: string | null;
     /**
      * Last Discovery
      */
@@ -436,6 +502,16 @@ export type CreateStrategyRequest = {
      * Request Id
      */
     request_id: string;
+};
+
+/**
+ * DefaultConnectionRequest
+ */
+export type DefaultConnectionRequest = {
+    /**
+     * Connection Id
+     */
+    connection_id: string;
 };
 
 /**
@@ -750,6 +826,38 @@ export type FrozenGroup = {
      * Ads
      */
     ads: Array<FrozenAd>;
+};
+
+/**
+ * FrozenTikTokRoute
+ *
+ * 冻结执行归属与授权语义；凭据轮换不改变已选定连接。
+ */
+export type FrozenTikTokRoute = {
+    /**
+     * Tenant Id
+     */
+    tenant_id: string;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Connection Id
+     */
+    connection_id: string;
+    /**
+     * Channel
+     */
+    channel: 'OFFICIAL_API' | 'OFFICIAL_MCP';
+    /**
+     * Authorization Revision
+     */
+    authorization_revision: number;
+    /**
+     * Adapter Contract Revision
+     */
+    adapter_contract_revision: string;
 };
 
 /**
@@ -1489,6 +1597,88 @@ export type MaterialPublic = {
      * Latest Advertiser Id
      */
     latest_advertiser_id?: string | null;
+};
+
+/**
+ * McpBindingRequest
+ */
+export type McpBindingRequest = {
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+};
+
+/**
+ * McpBindingResult
+ */
+export type McpBindingResult = {
+    /**
+     * Discovery Run Id
+     */
+    discovery_run_id: string;
+    /**
+     * Status
+     */
+    status?: 'DISCOVERING';
+};
+
+/**
+ * McpCandidateBC
+ */
+export type McpCandidateBC = {
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Name
+     */
+    name: string;
+};
+
+/**
+ * McpCandidateBCPage
+ */
+export type McpCandidateBCPage = {
+    /**
+     * Items
+     */
+    items: Array<McpCandidateBC>;
+    /**
+     * Page
+     */
+    page: number;
+    /**
+     * Page Size
+     */
+    page_size: number;
+    /**
+     * Total
+     */
+    total: number;
+};
+
+/**
+ * McpConfiguration
+ */
+export type McpConfiguration = {
+    /**
+     * Configured
+     */
+    configured: boolean;
+    /**
+     * Code
+     */
+    code?: string | null;
+    /**
+     * Status
+     */
+    status: 'READY' | 'CLIENT_UNREGISTERED' | 'PROTOCOL_UNVERIFIED' | 'INVALID';
+    /**
+     * Revocation Supported
+     */
+    revocation_supported?: boolean;
 };
 
 /**
@@ -4531,6 +4721,10 @@ export type accountsGetAccountsData = {
          * Availability
          */
         availability?: 'AVAILABLE' | 'PERMISSION_UNKNOWN' | 'NO_ACCESS' | 'OWNERSHIP_CONFLICT' | 'METADATA_INCOMPLETE' | null;
+        /**
+         * Connection Id
+         */
+        connection_id?: string | null;
     };
     url: '/api/tenants/{tenant_id}/accounts';
 };
@@ -4653,6 +4847,10 @@ export type accountsGetConnectionsData = {
          * Status
          */
         status?: string | null;
+        /**
+         * Bc Id
+         */
+        bc_id?: string | null;
     };
     url: '/api/tenants/{tenant_id}/tiktok/connections';
 };
@@ -4768,6 +4966,263 @@ export type accountsPatchConnectionResponses = {
 };
 
 export type accountsPatchConnectionResponse = accountsPatchConnectionResponses[keyof accountsPatchConnectionResponses];
+
+export type accountsPutDefaultConnectionData = {
+    body: DefaultConnectionRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/bcs/{bc_id}/default-connection';
+};
+
+export type accountsPutDefaultConnectionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type accountsPutDefaultConnectionError = accountsPutDefaultConnectionErrors[keyof accountsPutDefaultConnectionErrors];
+
+export type accountsPutDefaultConnectionResponses = {
+    /**
+     * Successful Response
+     */
+    200: FrozenTikTokRoute;
+};
+
+export type accountsPutDefaultConnectionResponse = accountsPutDefaultConnectionResponses[keyof accountsPutDefaultConnectionResponses];
+
+export type accountsConfigurationData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/tiktok/mcp/configuration';
+};
+
+export type accountsConfigurationErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type accountsConfigurationError = accountsConfigurationErrors[keyof accountsConfigurationErrors];
+
+export type accountsConfigurationResponses = {
+    /**
+     * Successful Response
+     */
+    200: McpConfiguration;
+};
+
+export type accountsConfigurationResponse = accountsConfigurationResponses[keyof accountsConfigurationResponses];
+
+export type accountsAuthorizeData = {
+    body: AuthorizationRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/tiktok/mcp/authorizations';
+};
+
+export type accountsAuthorizeErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type accountsAuthorizeError = accountsAuthorizeErrors[keyof accountsAuthorizeErrors];
+
+export type accountsAuthorizeResponses = {
+    /**
+     * Successful Response
+     */
+    200: AuthorizationURL;
+};
+
+export type accountsAuthorizeResponse = accountsAuthorizeResponses[keyof accountsAuthorizeResponses];
+
+export type accountsCandidateBcsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Attempt Id
+         */
+        attempt_id: string;
+    };
+    query?: {
+        /**
+         * Page
+         */
+        page?: number;
+        /**
+         * Page Size
+         */
+        page_size?: number;
+    };
+    url: '/api/tenants/{tenant_id}/tiktok/mcp/candidates/{attempt_id}/bcs';
+};
+
+export type accountsCandidateBcsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type accountsCandidateBcsError = accountsCandidateBcsErrors[keyof accountsCandidateBcsErrors];
+
+export type accountsCandidateBcsResponses = {
+    /**
+     * Successful Response
+     */
+    200: McpCandidateBCPage;
+};
+
+export type accountsCandidateBcsResponse = accountsCandidateBcsResponses[keyof accountsCandidateBcsResponses];
+
+export type accountsBindingData = {
+    body: McpBindingRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Attempt Id
+         */
+        attempt_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/tiktok/mcp/candidates/{attempt_id}/binding';
+};
+
+export type accountsBindingErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type accountsBindingError = accountsBindingErrors[keyof accountsBindingErrors];
+
+export type accountsBindingResponses = {
+    /**
+     * Successful Response
+     */
+    200: McpBindingResult;
+};
+
+export type accountsBindingResponse = accountsBindingResponses[keyof accountsBindingResponses];
+
+export type accountsDisableData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Connection Id
+         */
+        connection_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/tiktok/mcp/connections/{connection_id}/disable';
+};
+
+export type accountsDisableErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type accountsDisableError = accountsDisableErrors[keyof accountsDisableErrors];
+
+export type accountsDisableResponses = {
+    /**
+     * Successful Response
+     */
+    204: void;
+};
+
+export type accountsDisableResponse = accountsDisableResponses[keyof accountsDisableResponses];
+
+export type accountsRevokeData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Connection Id
+         */
+        connection_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/tiktok/mcp/connections/{connection_id}/revocations';
+};
+
+export type accountsRevokeErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type accountsRevokeError = accountsRevokeErrors[keyof accountsRevokeErrors];
+
+export type accountsRevokeResponses = {
+    /**
+     * Response Accounts-Revoke
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: string;
+    };
+};
+
+export type accountsRevokeResponse = accountsRevokeResponses[keyof accountsRevokeResponses];
+
+export type integrationsCallbackData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/integrations/tiktok/mcp/callback';
+};
+
+export type integrationsCallbackResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
 
 export type accountsRefreshCapabilitiesData = {
     body: CapabilityRefreshRequest;

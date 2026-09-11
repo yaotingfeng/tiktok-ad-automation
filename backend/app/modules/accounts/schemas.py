@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.integrations.tiktok.contracts.context import ChannelKind
+
 ConnectionStatus = Literal[
     "PENDING_AUTH", "DISCOVERING", "ACTIVE", "REAUTH_REQUIRED", "ERROR", "DISABLED"
 ]
@@ -19,6 +21,18 @@ class ConnectionPublic(BaseModel):
     id: UUID
     tenant_id: UUID
     status: ConnectionStatus
+    kind: ChannelKind
+    display_name: str = ""
+    bound_bc_id: str | None = None
+    binding_count: int = 0
+    is_default: bool = False
+    authorization_status: str | None = None
+    authorization_attempt_id: UUID | None = None
+    refresh_status: str | None = None
+    read_authorized: bool | None = None
+    upload_authorized: bool | None = None
+    build_authorized: bool | None = None
+    evidence_checked_at: datetime | None = None
     last_discovery: datetime | None = None
     last_authorized_at: datetime | None = None
     discovery_status: DiscoveryStatus | None = None
@@ -91,6 +105,8 @@ class BCPublic(BaseModel):
     bc_id: str
     name: str
     ownership_conflict: bool
+    is_default: bool = False
+    default_connection_id: UUID | None = None
 
 
 class AuthorizationRequest(BaseModel):
@@ -112,11 +128,22 @@ class DefaultConnectionRequest(BaseModel):
     connection_id: UUID
 
 
-class AppConfiguration(BaseModel):
-    code: str | None = None
+class ChannelConfiguration(BaseModel):
+    kind: ChannelKind
     configured: bool
-    status: Literal["READY", "NOT_CONFIGURED", "INCOMPLETE"]
-    missing_fields: list[str]
+    status: Literal[
+        "READY",
+        "NOT_CONFIGURED",
+        "INCOMPLETE",
+        "CLIENT_UNREGISTERED",
+        "PROTOCOL_UNVERIFIED",
+        "INVALID",
+    ]
+    code: str | None = None
+
+
+class AppConfiguration(BaseModel):
+    channels: tuple[ChannelConfiguration, ...]
 
 
 class McpBindingRequest(BaseModel):
