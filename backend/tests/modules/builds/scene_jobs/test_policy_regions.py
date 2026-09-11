@@ -6,7 +6,8 @@ import business_api_client as sdk
 import pytest
 
 from app.core.errors import DomainError
-from app.modules.builds import scene_constraints, scene_sdk
+from app.integrations.tiktok.read_normalization import parse_page
+from app.modules.builds import scene_constraints
 
 
 def test_unknown_platform_copy_max_does_not_block_application_policy():
@@ -20,29 +21,47 @@ def test_unknown_platform_copy_max_does_not_block_application_policy():
 
 
 def test_country_request_preserves_documented_minis_fields_in_official_sdk(monkeypatch):
+    from contextlib import contextmanager
+    from datetime import UTC, datetime, timedelta
+
+    from urllib3.response import HTTPResponse
+
+    from app.integrations.tiktok.contracts.accounts import RuntimeReadContext
+    from app.integrations.tiktok.official.scenes import OfficialScenesGateway
+
     client = sdk.ApiClient()
     client.default_headers["Access-Token"] = "offline-regions-token"
     captured = {}
 
-    def transport(path, method, *args, **kwargs):
-        captured.update(
-            path=path,
-            method=method,
-            query=dict(args[1]),
-            timeout=kwargs["_request_timeout"],
+    def transport(_pool, method, url, **kwargs):
+        captured.update(method=method, url=url, query=dict(kwargs["fields"]))
+        return HTTPResponse(
+            body=json.dumps(region_response()).encode(),
+            status=200,
+            headers={"Content-Type": "application/json"},
         )
-        return sdk.InlineResponse200(code=0, data={})
 
-    monkeypatch.setattr(client, "call_api", transport)
-    assert "regions" in scene_sdk.ENDPOINTS, "Documented targeting source is missing"
-    scene_sdk.request_page(
-        client,
-        resource="regions",
-        bc_id="offline-bc",
-        advertiser_id="offline-account",
-        page=1,
-    )
-    assert captured["path"] == "/open_api/v1.3/tool/region/"
+    @contextmanager
+    def scope(_advertiser_id, _operation, _deadline):
+        yield "offline-regions-token"
+
+    monkeypatch.setattr("urllib3.PoolManager.request", transport)
+    try:
+        result = OfficialScenesGateway(
+            client,
+            context=RuntimeReadContext(bc_id="offline-bc"),
+            request_scope=scope,
+            deadline=datetime.now(UTC) + timedelta(seconds=20),
+        ).read_page(
+            resource="regions",
+            advertiser_id="offline-account",
+            page=1,
+            minis_id="offline-minis",
+        )
+    finally:
+        client.rest_client.pool_manager.clear()
+    assert result.last and len(result.facts.locations) == 2
+    assert captured["url"].endswith("/open_api/v1.3/tool/region/")
     assert captured["method"] == "GET"
     assert captured["query"] == {
         "advertiser_id": "offline-account",
@@ -53,7 +72,6 @@ def test_country_request_preserves_documented_minis_fields_in_official_sdk(monke
         "level_range": "TO_COUNTRY",
         "language": "en",
     }
-    assert captured["timeout"] == (5, 30)
 
 
 def region_response():
@@ -81,7 +99,7 @@ def region_response():
 
 
 def parse(response):
-    return scene_sdk.parse_page(
+    return parse_page(
         sdk.InlineResponse200(**response),
         resource="regions",
         page=1,
@@ -92,7 +110,6 @@ def parse(response):
 
 
 def test_complete_country_mapping_retains_real_location_ids():
-    assert "regions" in scene_sdk.ENDPOINTS
     facts, complete, request_id = parse(region_response())
     assert facts["locations"] == [
         {"region_code": "CA", "location_id": "6251999"},
@@ -113,7 +130,6 @@ def test_complete_country_mapping_retains_real_location_ids():
     ],
 )
 def test_country_mapping_fails_closed_on_incomplete_or_ambiguous_data(case):
-    assert "regions" in scene_sdk.ENDPOINTS
     response = region_response()
     items = response["data"]["region_info"]
     if case == "duplicate_code":

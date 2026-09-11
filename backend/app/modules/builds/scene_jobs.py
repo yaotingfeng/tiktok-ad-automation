@@ -1,16 +1,20 @@
-"""One official GET per durable task; shared across links to the same app."""
+"""每次持久任务只读一页官方场景事实，同应用链接共享冻结连接下的结果。"""
 
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID, uuid4
 
+from pydantic import ValidationError
 from sqlalchemy.dialects.postgresql import array
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
-from app.integrations.tiktok.sdk import admitted_account_call, sdk_client
+from app.integrations.tiktok.bounded_resources import bounded_session
+from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
+from app.integrations.tiktok.gateway import open_tiktok_gateway
+from app.integrations.tiktok.read_normalization import scene_arguments
 from app.jobs.admission import admission_policy
 from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit
@@ -23,10 +27,10 @@ from app.modules.accounts.capability_models import CapabilityJob
 from app.modules.accounts.models import TikTokConnection
 from app.modules.tenants.permissions import require_tenant
 
-from . import scene_sdk as api
 from .scene import (
     CLAIM_SECONDS,
     HARD_LIMIT,
+    SCENE_CONTRACT_REVISION,
     _application_scope,
     _merge,
     _require_bounded_worker,
@@ -68,6 +72,7 @@ def ensure_scene_preparation(
     bc_id: str,
     advertiser_id: str,
     link_id: UUID,
+    route: FrozenTikTokRoute,
 ) -> ScenePreparation:
     """Local enqueue/reuse only; caller commits. No SDK or credential decryption."""
     require_tenant(
@@ -80,6 +85,7 @@ def ensure_scene_preparation(
             bc_id=bc_id,
             advertiser_id=advertiser_id,
             link_id=link_id,
+            route=route,
             lock=True,
         )
     except DomainError as error:
@@ -122,6 +128,7 @@ def ensure_scene_preparation(
             bc_id=bc_id,
             advertiser_id=advertiser_id,
             link_id=link_id,
+            route=route,
         )
         if result.supported:
             return ScenePreparation(job.id, "ready")
@@ -183,6 +190,7 @@ def ensure_scene_preparation(
         advertiser_id=advertiser_id,
         connection_id=scope["connection"].id,
         credential_revision=scope["connection"].credential_revision,
+        frozen_route=route.model_dump(mode="json"),
         provider_connection_id=scope["provider"].id,
         application_id=scope["application"].external_id,
         minis_id=scope["minis_id"],
@@ -192,6 +200,23 @@ def ensure_scene_preparation(
     session.flush()
     _queue(session, job)
     return ScenePreparation(job.id, "queued")
+
+
+def load_scene_route(job: SceneJob) -> FrozenTikTokRoute:
+    """只读取任务自己的历史；缺失/错配路由不能补成今日默认授权。"""
+    try:
+        route = FrozenTikTokRoute.model_validate(job.frozen_route)
+    except ValidationError:
+        raise DomainError(
+            "scene_route_missing", "场景缺少可核实的冻结连接，请重新准备"
+        ) from None
+    if (route.tenant_id, route.bc_id, route.connection_id) != (
+        job.tenant_id,
+        job.bc_id,
+        job.connection_id,
+    ):
+        raise DomainError("scene_route_missing", "场景冻结连接与任务归属不一致")
+    return route
 
 
 def _scope_for_job(
@@ -207,7 +232,7 @@ def _scope_for_job(
         advertiser_id=job.advertiser_id,
         provider_connection_id=job.provider_connection_id,
         application_id=job.application_id,
-        connection_id=job.connection_id,
+        route=load_scene_route(job),
     )
     if scope["basis"] != job.scope_basis:
         raise DomainError("scene_refresh_stale", "场景授权或应用已更新")
@@ -313,7 +338,11 @@ def process_scene_job(
     identity, revision = _payload(payload)
     context = TenantContext(tenant_id=tenant_id, actor_id=actor_id, role="operator")
     token, now = uuid4(), datetime.now(UTC)
-    with Session(database_engine) as session, session.begin():
+    deadline = now + timedelta(seconds=HARD_LIMIT - 5)
+    with (
+        bounded_session(database_engine, task_deadline=deadline) as session,
+        session.begin(),
+    ):
         job = _lock_job(session, tenant_id, identity)
         if job is None or job.actor_id != actor_id:
             raise DomainError("resource_not_found", "当前场景准备任务不存在")
@@ -338,13 +367,30 @@ def process_scene_job(
             if job.resource == "capabilities":
                 job.resource = "identity"
             resource = cast(SceneResource, job.resource)
-            policy = admission_policy(api.ENDPOINTS[resource])
+            operation, _ = scene_arguments(
+                resource=resource,
+                advertiser_id=job.advertiser_id,
+                bc_id=job.bc_id,
+                page=job.next_page,
+                minis_id=job.minis_id,
+            )
+            policy = admission_policy(operation)
             if policy.lease_ms <= (HARD_LIMIT + 5) * 1000:
                 raise DomainError(
                     "admission_policy_invalid", "场景调用租约短于工作进程硬限"
                 )
         except DomainError as error:
-            job.status = "STALE" if error.code == "scene_refresh_stale" else "BLOCKED"
+            job.status = (
+                "STALE"
+                if error.code
+                in {
+                    "scene_refresh_stale",
+                    "scene_route_missing",
+                    "route_authorization_changed",
+                    "route_contract_changed",
+                }
+                else "BLOCKED"
+            )
             job.error_code = error.code
             return
         job.claim_token, job.claimed_until = (
@@ -360,51 +406,84 @@ def process_scene_job(
             job.bc_id,
             job.connection_id,
         )
-    try:
-        with admitted_account_call(
-            redis_client,
-            context=context,
-            endpoint=api.ENDPOINTS[resource],
-            advertiser_id=advertiser_id,
-            policy=policy,
+
+    def before_request() -> None:
+        # MCP 握手和分页都可能经历权限/claim 变化，每次物理 HTTP 前重验。
+        # 事务仅覆盖本地核实，返回后才允许发出网络请求。
+        with (
+            bounded_session(database_engine, task_deadline=deadline) as session,
+            session.begin(),
         ):
-            with Session(database_engine) as session:
-                current = session.get(SceneJob, identity)
-                assert current
-                _scope_for_job(session, context, current)
-                proof = get_capability_evidence(
-                    session,
-                    context=context,
-                    bc_id=bc_id,
-                    advertiser_id=advertiser_id,
-                    connection_id=connection_id,
+            current = _lock_job(session, tenant_id, identity)
+            if (
+                current is None
+                or current.actor_id != actor_id
+                or current.status != "PENDING"
+                or current.revision != revision
+                or current.claim_token != token
+                or current.claimed_until is None
+                or current.claimed_until <= datetime.now(UTC)
+            ):
+                raise DomainError("scene_refresh_stale", "场景任务领取已失效")
+            _scope_for_job(session, context, current)
+            proof = get_capability_evidence(
+                session,
+                context=context,
+                bc_id=bc_id,
+                advertiser_id=advertiser_id,
+                connection_id=connection_id,
+            )
+            if proof is None or not proof.can_build:
+                raise DomainError(
+                    "account_build_unverified", "账户能力证据需要重新核实"
                 )
-                if proof is None or not proof.can_build:
-                    raise DomainError(
-                        "account_build_unverified", "账户能力证据需要重新核实"
-                    )
-                with sdk_client(
-                    session, context=context, connection_id=connection_id
-                ) as client:
-                    session.close()
-                    observed = datetime.now(UTC)
-                    response = api.request_page(
-                        client,
-                        resource=resource,
-                        bc_id=bc_id,
-                        advertiser_id=advertiser_id,
-                        page=page,
-                    )
-        facts, last, request_id = api.parse_page(
-            response,
-            resource=resource,
-            page=page,
-            advertiser_id=advertiser_id,
-            bc_id=bc_id,
-            minis_id=minis_id,
-        )
+            if current.expires_at and current.expires_at <= datetime.now(UTC):
+                raise DomainError("scene_evidence_expired", "场景证据已过期")
+
+    try:
+        with bounded_session(database_engine, task_deadline=deadline) as session:
+            current = session.get(SceneJob, identity)
+            if (
+                current is None
+                or current.claim_token != token
+                or current.revision != revision
+            ):
+                return
+            _scope_for_job(session, context, current)
+            proof = get_capability_evidence(
+                session,
+                context=context,
+                bc_id=bc_id,
+                advertiser_id=advertiser_id,
+                connection_id=connection_id,
+            )
+            if proof is None or not proof.can_build:
+                raise DomainError(
+                    "account_build_unverified", "账户能力证据需要重新核实"
+                )
+            route = load_scene_route(current)
+        observed = datetime.now(UTC)
+        # 工厂拥有连接/凭据/当前权限和每次物理调用准入；数据库事务已关闭。
+        with open_tiktok_gateway(
+            database_engine=database_engine,
+            redis_client=redis_client,
+            context=context,
+            route=route,
+            task_deadline=deadline,
+            before_request=before_request,
+        ) as gateway:
+            response = gateway.scenes.read_page(
+                resource=resource,
+                advertiser_id=advertiser_id,
+                page=page,
+                minis_id=minis_id,
+            )
+        facts, last = response.facts.model_dump(mode="json"), response.last
         merged = _merge(previous, facts, resource=resource, first=page == 1, last=last)
-        with Session(database_engine) as session, session.begin():
+        with (
+            bounded_session(database_engine, task_deadline=deadline) as session,
+            session.begin(),
+        ):
             current = _lock_job(session, tenant_id, identity)
             if (
                 current is None
@@ -453,9 +532,11 @@ def process_scene_job(
                     job_id=identity,
                     resource=resource,
                     page=page,
-                    endpoint=api.ENDPOINTS[resource],
-                    request_id=request_id,
-                    source_revision=api.CONTRACT_REVISION,
+                    endpoint=operation,
+                    request_id=response.evidence.request_id,
+                    mcp_request_id=response.evidence.mcp_request_id,
+                    remote_task_id=response.evidence.remote_task_id,
+                    source_revision=SCENE_CONTRACT_REVISION,
                     scope_basis=basis,
                     facts=facts,
                     observed_at=observed,
@@ -503,9 +584,23 @@ def process_scene_job(
             "admission_deferred",
             "admission_unavailable",
             "scene_refresh_failed",
+            "scene_route_missing",
+            "route_authorization_changed",
+            "route_contract_changed",
+            "connection_bc_mismatch",
+            "connection_channel_mismatch",
+            "route_evidence_stale",
+            "mcp_refresh_pending",
+            "mcp_refresh_unknown",
+            "mcp_refresh_reauth_required",
+            "tiktok_call_deadline_exceeded",
+            "tiktok_local_resources_unavailable",
         }
         safe = code if code in allowed else "scene_refresh_failed"
-        with Session(database_engine) as session, session.begin():
+        with (
+            bounded_session(database_engine, task_deadline=deadline) as session,
+            session.begin(),
+        ):
             current = _lock_job(session, tenant_id, identity)
             if (
                 current is None
@@ -517,7 +612,13 @@ def process_scene_job(
             current.error_code = safe
             current.failure_count += 1
             current.revision += 1
-            if safe in {"scene_refresh_stale", "scene_evidence_expired"}:
+            if safe in {
+                "scene_refresh_stale",
+                "scene_evidence_expired",
+                "scene_route_missing",
+                "route_authorization_changed",
+                "route_contract_changed",
+            }:
                 current.status = "STALE"
             elif safe in {"scene_response_unverified", "scene_pagination_changed"}:
                 current.status = "FAILED"
@@ -525,6 +626,8 @@ def process_scene_job(
                 "admission_deferred",
                 "admission_unavailable",
                 "scene_refresh_failed",
+                "mcp_refresh_pending",
+                "tiktok_local_resources_unavailable",
             }:
                 current.status = "BLOCKED"
             elif current.failure_count >= 5:

@@ -13,9 +13,10 @@ def require_id(value: str) -> None:
 
 
 def require_page(page: int, page_size: int) -> None:
+    # 本地工程容量：50条/页下保留已支持的100k角色目录；并非官方服务上限。
     if (
         type(page) is not int
-        or not 1 <= page <= 1000
+        or not 1 <= page <= 2000
         or type(page_size) is not int
         or not 1 <= page_size <= 100
     ):
@@ -38,9 +39,9 @@ class AuthorizationFacts:
     def __post_init__(self) -> None:
         for value in (self.issuer, self.resource, self.evidence_source):
             require_id(value)
-        for value in (self.subject_id, self.grant_id):
-            if value is not None:
-                require_id(value)
+        for optional_identity in (self.subject_id, self.grant_id):
+            if optional_identity is not None:
+                require_id(optional_identity)
         if type(self.scopes) is not tuple or len(set(self.scopes)) != len(self.scopes):
             raise ValueError("invalid scopes")
         for scope in self.scopes:
@@ -114,7 +115,7 @@ class DirectoryPage[T]:
 
     def __post_init__(self) -> None:
         require_page(self.page, self.page_size)
-        if type(self.total_pages) is not int or not 0 <= self.total_pages <= 1000:
+        if type(self.total_pages) is not int or not 0 <= self.total_pages <= 2000:
             raise ValueError("invalid total pages")
         if type(self.items) is not tuple or len(self.items) > self.page_size:
             raise ValueError("invalid directory items")

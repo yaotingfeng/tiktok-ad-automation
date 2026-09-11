@@ -17,7 +17,7 @@ from app.modules.accounts.connection_models import (
 )
 from app.modules.accounts.models import BCAccountAccess, TikTokConnection
 from app.modules.tenants.models import TenantMembership
-from tests.modules.accounts.test_gateway_factory import (  # noqa: F401
+from tests.integrations.tiktok.gateway_support import (  # noqa: F401
     business_calls,
     database_engine,
     gateway,

@@ -14,7 +14,9 @@ from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.core.pagination import Page
 from app.modules.accounts.access import resolve_account_access
+from app.modules.accounts.models import BCAccountAccess
 from app.modules.accounts.resolver import decode_cursor, encode_cursor
+from app.modules.accounts.routing import freeze_route, verify_route
 from app.modules.builds.batch_numbers import (
     insert_preview_with_number,
     is_current_batch_number,
@@ -47,6 +49,7 @@ from app.modules.builds.preview_schemas import (
     Readiness,
 )
 from app.modules.builds.preview_validation import measured, name_reasons, scene_reasons
+from app.modules.builds.routes import load_preview_route, save_preview_route
 from app.modules.builds.scene import read_scene_context
 from app.modules.builds.scene_schemas import SceneContext
 from app.modules.materials.readiness import get_material_readiness_batch
@@ -171,7 +174,9 @@ def generate_preview(
         budget=config.budget,
         target_roas=config.target_roas,
     )
+    route = freeze_route(session, context=context, bc_id=draft.bc_id)
     insert_preview_with_number(session, row)
+    save_preview_route(session, context=context, preview_id=row.id, route=route)
     row.progress = {
         "phase": "inputs",
         "kind": "drama",
@@ -180,6 +185,7 @@ def generate_preview(
             "",
             {
                 "preview_id": row.id,
+                "route": route.model_dump(mode="json"),
                 "draft_revision": draft.revision,
                 "config": row.config,
                 "date": row.local_date,
@@ -453,18 +459,40 @@ def _expand_unit(
         if account is None:
             p.update(drama_after=p["current_drama"], current_drama=None)
             return
+        route = load_preview_route(session, context=context, preview_id=preview.id)
+        # 没有原连接的账户关系时不能丢弃输入或借旧连接插入组合；整个预览失败。
+        if (
+            session.get(
+                BCAccountAccess,
+                (
+                    context.tenant_id,
+                    route.bc_id,
+                    account.advertiser_id,
+                    route.connection_id,
+                ),
+                populate_existing=True,
+            )
+            is None
+        ):
+            raise DomainError(
+                "account_not_in_bc", "所选冻结连接不包含该账户，请重新准备草稿"
+            )
         try:
+            verify_route(
+                session,
+                context=context,
+                route=route,
+                advertiser_id=account.advertiser_id,
+                capability="read",
+            )
             current_access = resolve_account_access(
                 session,
                 context=context,
                 bc_id=preview.bc_id,
                 advertiser_id=account.advertiser_id,
                 action="read",
+                connection_id=route.connection_id,
             )
-            if current_access.connection_id != account.connection_id:
-                raise DomainError(
-                    "account_authorization_changed", "账户授权已改变，请重新准备草稿"
-                )
             if (
                 current_access.currency != account.currency
                 or current_access.timezone != account.timezone
@@ -478,6 +506,7 @@ def _expand_unit(
                 bc_id=preview.bc_id,
                 advertiser_id=account.advertiser_id,
                 link_id=drama.link_id,
+                route=route,
             )
         except DomainError as error:
             if error.code not in {
@@ -501,7 +530,7 @@ def _expand_unit(
             **_scope(preview),
             drama_id=drama.drama_id,
             advertiser_id=account.advertiser_id,
-            connection_id=account.connection_id,
+            connection_id=route.connection_id,
             currency=account.currency,
             timezone=account.timezone,
             campaign_name=name,
@@ -701,6 +730,10 @@ def continue_preview(
         session.add(preview)
         session.flush()
         return True
+    route = load_preview_route(session, context=context, preview_id=preview.id)
+    verify_route(
+        session, context=context, route=route, advertiser_id=None, capability="read"
+    )
     config = StrategyConfig.model_validate(preview.config)
     # SQLAlchemy JSON mutations are tracked by replacing the container once.
     preview.progress = dict(preview.progress)

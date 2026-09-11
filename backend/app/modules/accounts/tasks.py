@@ -5,53 +5,41 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from billiard.process import current_process
+from billiard.process import current_process  # type: ignore[import-untyped]
 from redis import Redis
+from sqlalchemy import text
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
 from app.core.context import TenantContext
-from app.core.credentials import decrypt_credentials
 from app.core.db import engine
 from app.core.errors import DomainError
-from app.integrations.tiktok import accounts as api
+from app.integrations.tiktok.bounded_resources import bounded_session
+from app.integrations.tiktok.official.bootstrap import open_api_candidate_accounts
 from app.integrations.tiktok.sdk import (
     AccountAdmissionDeferred,
-    admitted_account_call,
-    official_client,
 )
-from app.jobs.admission import admission_policy
 from app.jobs.celery_app import celery_app
 from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit
 from app.jobs.tasks import register_dispatch_task
 from app.modules.tenants.permissions import require_tenant
 
+from .api_directory import SCHEMA_DIGEST, publish_api_directory
 from .discovery import (
-    claim_external_asset,
-    finalize_directory,
     locked_run,
-    save_directory_page,
     validate_run,
 )
+from .mcp_discovery_tasks import _detail_ids, read_discovery_stage, stage_results
 from .models import (
     AuthorizationAttempt,
     DiscoveryRun,
-    DiscoverySeen,
-    TenantBC,
     TikTokConnection,
 )
 
 register_dispatch_task("accounts.discover", "resources")
 HARD_LIMIT_SECONDS = 45
 RECOVERY_SECONDS = 60
-PAGE_SIZE = 100
-ENDPOINTS = {
-    "AUTHORIZED": "/open_api/v1.3/oauth2/advertiser/get/",
-    "BCS": "/open_api/v1.3/bc/get/",
-    "ASSETS": "/open_api/v1.3/bc/asset/get/",
-    "DETAILS": "/open_api/v1.3/advertiser/info/",
-}
 
 
 def queue_run(
@@ -122,6 +110,7 @@ def start_discovery(session: Session, *, attempt_id: UUID) -> DiscoveryRun:
             connection_id=connection.id,
             candidate_attempt_id=attempt.id,
             credential_revision=attempt.base_credential_revision,
+            work={"stage": "SUBJECT", "page": 1},
         )
         session.add(run)
     validate_run(session, run)
@@ -130,131 +119,52 @@ def start_discovery(session: Session, *, attempt_id: UUID) -> DiscoveryRun:
     return run
 
 
-def _credential(session: Session, run: DiscoveryRun) -> str:
-    connection = validate_run(session, run)
-    if run.candidate_attempt_id:
-        attempt = session.get(AuthorizationAttempt, run.candidate_attempt_id)
-        assert attempt is not None
-        ciphertext = attempt.candidate_ciphertext
-    else:
-        ciphertext = connection.credential_ciphertext
-    if not ciphertext:
-        raise DomainError("credential_invalid", "凭据缺少访问令牌")
-    token = decrypt_credentials(tenant_id=run.tenant_id, ciphertext=ciphertext).get(
-        "access_token"
-    )
-    if not token:
-        raise DomainError("credential_invalid", "凭据缺少访问令牌")
-    return token
+def _next_bc(session: Session, run: DiscoveryRun, after: str = "") -> str | None:
+    value = session.execute(
+        text("""SELECT min(item->>'bc_id') FROM discovery_staged_page p
+        CROSS JOIN LATERAL jsonb_array_elements(p.rows) item
+        WHERE p.run_id=:run_id AND p.stage='BCS' AND p.bc_id='' AND item->>'bc_id'>:after"""),
+        {"run_id": run.id, "after": after},
+    ).scalar_one()
+    return value if isinstance(value, str) else None
 
 
-def _read(client: Any, work: dict) -> dict:
-    stage = work["stage"]
-    if stage == "AUTHORIZED":
-        return api.read_authorized_advertisers(
-            client, app_id=settings.TIKTOK_APP_ID, secret=settings.TIKTOK_APP_SECRET
-        )
-    if stage == "BCS":
-        return api.read_business_centers(client, page=work["page"], page_size=PAGE_SIZE)
-    if stage == "ASSETS":
-        return api.read_bc_assets(
-            client,
-            bc_id=work["bc_ids"][work["bc_index"]],
-            page=work["page"],
-            page_size=PAGE_SIZE,
-        )
-    return api.read_advertiser_details(
-        client,
-        advertiser_ids=[
-            row["advertiser_id"]
-            for row in work["rows"]
-            if row["advertiser_id"] in work["authorized_ids"]
-        ],
-    )
-
-
-def _apply(session: Session, run: DiscoveryRun, data: dict) -> None:
+def _apply(session: Session, run: DiscoveryRun, results: list[dict[str, Any]]) -> None:
+    stage_results(session, run=run, rows=results, schema_digest=SCHEMA_DIGEST)
     work = copy.deepcopy(run.work)
-    stage = work["stage"]
-    if stage == "AUTHORIZED":
-        work["authorized_ids"] = sorted(
-            {api.external_id(row, "advertiser_id") for row in api.object_list(data)}
-        )
+    result = results[-1]
+    stage = result["stage"]
+    if stage == "SUBJECT":
+        work.update(stage="AUTHORIZED", page=1)
+    elif stage == "AUTHORIZED":
         work.update(stage="BCS", page=1)
     elif stage == "BCS":
-        rows, last = api.paged_rows(data, page=work["page"], page_size=PAGE_SIZE)
-        for row in rows:
-            bc_id, name = api.business_center(row)
-            own = claim_external_asset(
-                session, kind="BC", external_id=bc_id, tenant_id=run.tenant_id
-            )
-            bc = session.get(TenantBC, (run.tenant_id, bc_id))
-            if bc is None:
-                bc = TenantBC(tenant_id=run.tenant_id, bc_id=bc_id)
-                session.add(bc)
-            bc.name, bc.ownership_conflict = name, not own
-            if bc_id not in work["bc_ids"]:
-                work["bc_ids"].append(bc_id)
-        session.add(
-            DiscoverySeen(
-                run_id=run.id,
-                bc_id="",
-                page=work["page"],
-                last_page=last,
-                processed_count=len(rows),
-            )
-        )
-        if last:
-            work.update(
-                stage="ASSETS" if work["bc_ids"] else "FINALIZE", page=1, bc_index=0
-            )
+        if result["last_page"]:
+            bc_id = _next_bc(session, run)
+            work.update(stage="ASSETS" if bc_id else "FINALIZE", page=1, bc_id=bc_id)
         else:
             work["page"] += 1
-        run.bc_cursor = None if last else str(work["page"])
     elif stage == "ASSETS":
-        rows, last = api.paged_rows(data, page=work["page"], page_size=PAGE_SIZE)
-        work.update(rows=[api.asset_row(row) for row in rows], last_page=last)
-        if any(row["advertiser_id"] in work["authorized_ids"] for row in work["rows"]):
-            work["stage"] = "DETAILS"
+        work.update(
+            stage="DETAILS",
+            asset_last_page=result["last_page"],
+            asset_total_pages=result["total_pages"],
+        )
+    elif stage == "DETAILS":
+        work.update(
+            stage="ROLES" if result["last_page"] else "ASSETS",
+            page=1 if result["last_page"] else work["page"] + 1,
+        )
+        work.pop("asset_last_page", None)
+        work.pop("asset_total_pages", None)
+    elif stage == "ROLES":
+        if result["last_page"]:
+            bc_id = _next_bc(session, run, after=work["bc_id"])
+            work.update(stage="ASSETS" if bc_id else "FINALIZE", page=1, bc_id=bc_id)
         else:
-            _save_assets(session, run, work, work["rows"])
-    else:
-        rows = [api.detail_row(row) for row in api.object_list(data)]
-        details = {row["advertiser_id"]: row for row in rows}
-        expected = {row["advertiser_id"] for row in work["rows"]}
-        if len(details) != len(rows) or not set(details).issubset(expected):
-            raise api.schema_error()
-        # Missing detail records remain visible with missing metadata, never fabricated.
-        merged = [
-            {**row, **details.get(row["advertiser_id"], {})} for row in work["rows"]
-        ]
-        _save_assets(session, run, work, merged)
+            work["page"] += 1
     run.work = work
-    session.flush()
-    if work["stage"] == "FINALIZE":
-        finalize_directory(session, run_id=run.id)
-
-
-def _save_assets(
-    session: Session, run: DiscoveryRun, work: dict, rows: list[dict]
-) -> None:
-    save_directory_page(
-        session,
-        run_id=run.id,
-        bc_id=work["bc_ids"][work["bc_index"]],
-        page=work["page"],
-        rows=rows,
-        authorized_ids=set(work["authorized_ids"]),
-        last_page=work["last_page"],
-    )
-    if work["last_page"]:
-        work["bc_index"] += 1
-        work["page"] = 1
-    else:
-        work["page"] += 1
-    work["stage"] = "ASSETS" if work["bc_index"] < len(work["bc_ids"]) else "FINALIZE"
-    work.pop("rows", None)
-    work.pop("last_page", None)
+    session.add(run)
 
 
 def process_discovery(
@@ -263,106 +173,106 @@ def process_discovery(
     redis_client: Redis,
     tenant_id: UUID,
     actor_id: UUID,
-    payload: dict,
+    payload: dict[str, Any],
 ) -> None:
-    """Testable worker body. Caller must enforce a hard wallclock process deadline."""
-    if "attempt_id" in payload:
-        with Session(database_engine) as session, session.begin():
+    """一次派发推进一个50条阶段；工厂独占物理请求、当前授权核验与准入。"""
+    context = TenantContext(tenant_id=tenant_id, actor_id=actor_id, role="tenant_admin")
+    deadline = datetime.now(UTC) + timedelta(seconds=30)
+    if set(payload) == {"attempt_id"}:
+        with bounded_session(database_engine, task_deadline=deadline) as session:
             attempt = session.get(AuthorizationAttempt, UUID(payload["attempt_id"]))
-            if not attempt or (attempt.tenant_id, attempt.actor_id) != (
+            if attempt is None or (attempt.tenant_id, attempt.actor_id) != (
                 tenant_id,
                 actor_id,
             ):
                 raise DomainError("tenant_forbidden", "任务上下文不匹配")
             start_discovery(session, attempt_id=attempt.id)
+            session.commit()
         return
+    if set(payload) != {"run_id", "revision"} or type(payload["revision"]) is not int:
+        raise DomainError("dispatch_payload_invalid", "目录任务参数无效")
     run_id = UUID(payload["run_id"])
     claim = uuid4()
-    now = datetime.now(UTC)
-    with Session(database_engine) as session, session.begin():
+    with bounded_session(database_engine, task_deadline=deadline) as session:
         run = locked_run(session, run_id)
         if (run.tenant_id, run.actor_id) != (tenant_id, actor_id):
             raise DomainError("tenant_forbidden", "任务上下文不匹配")
         if (
             run.status not in {"RUNNING", "ADMISSION_WAIT"}
-            or payload.get("revision") != run.revision
+            or run.revision != payload["revision"]
         ):
             return
+        now = datetime.now(UTC)
         if (run.claimed_until and run.claimed_until > now) or (
             run.next_attempt_at and run.next_attempt_at > now
         ):
             return
         try:
-            token = _credential(session, run)
+            connection = validate_run(session, run)
+            if connection.kind != "OFFICIAL_API" or run.candidate_attempt_id is None:
+                raise DomainError(
+                    "discovery_stale", "历史目录任务缺少可核实候选，请重新授权"
+                )
         except DomainError as error:
             run.status, run.error_code = "ERROR", error.code
+            session.add(run)
+            session.commit()
             return
         work = copy.deepcopy(run.work)
-        if work["stage"] == "FINALIZE":
-            finalize_directory(session, run_id=run.id)
-            return
-        context = TenantContext(
-            tenant_id=run.tenant_id, actor_id=run.actor_id, role="tenant_admin"
-        )
+        ids = _detail_ids(session, run=run) if work["stage"] == "DETAILS" else ()
         run.claim_id, run.claimed_until = (
             claim,
             now + timedelta(seconds=RECOVERY_SECONDS),
         )
-        # Durable recovery exists before network or process death.
+        session.add(run)
         queue_run(session, run, suffix=f"recover:{claim}", due=run.claimed_until)
+        session.commit()
     try:
-        endpoint = ENDPOINTS[work["stage"]]
-        policy = admission_policy(endpoint)
-        if policy.lease_ms <= (HARD_LIMIT_SECONDS + 5) * 1000:
-            raise DomainError(
-                "admission_policy_invalid", "调用租约必须长于工作进程硬超时及清理余量"
-            )
-        ids = [
-            row["advertiser_id"]
-            for row in work.get("rows", [])
-            if row["advertiser_id"] in work["authorized_ids"]
-        ]
-        with admitted_account_call(
-            redis_client,
-            context=context,
-            endpoint=endpoint,
-            advertiser_id=ids[0] if len(ids) == 1 else "",
-            policy=policy,
-        ):
-            with Session(database_engine) as session, session.begin():
-                run = locked_run(session, run_id)
-                if run.claim_id != claim:
-                    return
-                validate_run(session, run)
-                run.sent_count += 1
-            with official_client(access_token=token) as client:
-                data = _read(client, work)
-        with Session(database_engine) as session, session.begin():
+        if work["stage"] == "FINALIZE":
+            with bounded_session(database_engine, task_deadline=deadline) as session:
+                publish_api_directory(session, context=context, run_id=run_id)
+                session.commit()
+            return
+        if work["stage"] == "DETAILS" and not ids:
+            results = read_discovery_stage(None, work=work, requested_ids=ids)
+        else:
+            with open_api_candidate_accounts(
+                database_engine=database_engine,
+                redis_client=redis_client,
+                context=context,
+                run_id=run_id,
+                task_deadline=deadline,
+            ) as gateway:
+                results = read_discovery_stage(gateway, work=work, requested_ids=ids)
+        with bounded_session(database_engine, task_deadline=deadline) as session:
             run = locked_run(session, run_id)
-            if run.claim_id != claim:
+            if run.claim_id != claim or run.revision != payload["revision"]:
                 return
             validate_run(session, run)
-            _apply(session, run, data)
-            run.claim_id, run.claimed_until, run.next_attempt_at = None, None, None
+            _apply(session, run, results)
+            run.claim_id = run.claimed_until = run.next_attempt_at = None
             run.revision += 1
-            if run.status != "COMPLETE":
-                run.status = "RUNNING"
-                queue_run(session, run)
+            run.status = "RUNNING"
+            session.add(run)
+            queue_run(session, run)
+            session.commit()
     except Exception as error:
-        # Never persist raw SDK exceptions, auth headers, query URLs or bodies.
-        with Session(database_engine) as session, session.begin():
+        with bounded_session(
+            database_engine, task_deadline=datetime.now(UTC) + timedelta(seconds=5)
+        ) as session:
             run = locked_run(session, run_id)
             if run.claim_id != claim:
                 return
-            run.claim_id, run.claimed_until = None, None
+            run.claim_id = run.claimed_until = None
             run.error_code = (
                 error.code
                 if isinstance(error, DomainError)
                 else "tiktok_response_error"
             )
-            if isinstance(error, AccountAdmissionDeferred) or (
-                isinstance(error, DomainError) and error.code == "admission_unavailable"
-            ):
+            if isinstance(error, AccountAdmissionDeferred) or run.error_code in {
+                "admission_unavailable",
+                "tiktok_local_resources_unavailable",
+            }:
                 delay = (
                     error.retry_after_ms
                     if isinstance(error, AccountAdmissionDeferred)
@@ -376,15 +286,19 @@ def process_discovery(
                 queue_run(session, run, due=run.next_attempt_at)
             else:
                 run.status = "ERROR"
+            session.add(run)
+            session.commit()
 
 
-@celery_app.task(
+@celery_app.task(  # type: ignore[untyped-decorator]
     name="accounts.discover",
     bind=True,
     time_limit=HARD_LIMIT_SECONDS,
     soft_time_limit=40,
 )
-def discover(self: Any, *, tenant_id: str, actor_id: str, payload: dict) -> None:
+def discover(
+    self: Any, *, tenant_id: str, actor_id: str, payload: dict[str, Any]
+) -> None:
     # Celery solo/threads/gevent cannot enforce its prefork hard process limit.
     request_limits = self.request.timelimit or (None, None)
     effective_hard_limit = request_limits[0] or self.time_limit
@@ -393,6 +307,7 @@ def discover(self: Any, *, tenant_id: str, actor_id: str, payload: dict) -> None
         or not current_process().name.startswith("ForkPoolWorker-")
         or self.request.called_directly
         or self.request.is_eager
+        or isinstance(effective_hard_limit, bool)
         or not isinstance(effective_hard_limit, (int, float))
         or not 0 < effective_hard_limit <= HARD_LIMIT_SECONDS
     ):
@@ -407,3 +322,7 @@ def discover(self: Any, *, tenant_id: str, actor_id: str, payload: dict) -> None
             actor_id=UUID(actor_id),
             payload=payload,
         )
+
+
+# Celery 已固定导入本模块；显式加载独立 MCP 候选 handler。
+from .mcp_discovery_tasks import discover_mcp as discover_mcp  # noqa: E402

@@ -1,7 +1,7 @@
 """任务独占双通道会话；业务代码只取得固定 BC 的 typed gateway。"""
 
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -35,11 +35,17 @@ from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.integrations.tiktok.contracts.materials import MaterialOperations
 from app.integrations.tiktok.contracts.scenes import ScenesGateway
 from app.integrations.tiktok.mcp.accounts import McpAccountsGateway
+from app.integrations.tiktok.mcp.authorization import (
+    material_authorization as mcp_material_authorization,
+)
 from app.integrations.tiktok.mcp.protocol import load_mcp_protocol, load_tool_contracts
 from app.integrations.tiktok.mcp.scenes import McpScenesGateway
 from app.integrations.tiktok.mcp.transport import open_bound_mcp_client
 from app.integrations.tiktok.mcp_auth.refresh import ensure_mcp_credentials
 from app.integrations.tiktok.official.accounts import OfficialAccountsGateway
+from app.integrations.tiktok.official.authorization import (
+    material_authorization as api_material_authorization,
+)
 from app.integrations.tiktok.official.scenes import OfficialScenesGateway
 from app.integrations.tiktok.sdk import official_client
 from app.jobs.admission import admission_policy
@@ -54,6 +60,7 @@ from app.modules.accounts.routing import Capability, verify_route
 _OPERATION_CAPABILITIES: dict[str, Capability] = {
     **dict.fromkeys(PROTOCOL_OPERATIONS, "read"),
     "accounts.authorization_facts": "read",
+    "accounts.list_bcs": "read",
     "accounts.list_bc_assets": "read",
     "accounts.list_bc_members": "read",
     "accounts.list_asset_members": "read",
@@ -164,6 +171,7 @@ def open_tiktok_gateway(
     context: TenantContext,
     route: FrozenTikTokRoute,
     task_deadline: datetime,
+    before_request: Callable[[], None] | None = None,
 ) -> Iterator[TikTokGateway]:
     # 打开前与每个物理发送前都检查原 route；整个工厂从不重新读取 BC 默认。
     with bounded_session(database_engine, task_deadline=task_deadline) as session:
@@ -196,6 +204,12 @@ def open_tiktok_gateway(
         credential_revision = connection.credential_revision
         authorization = _authorization(session, route)
         facts = _facts(authorization, route)
+        # 重新观测只携带当前凭据的实际授权声明，不能替换尚未完整核实的持久事实。
+        observation_facts = (
+            mcp_material_authorization
+            if route.channel == "OFFICIAL_MCP"
+            else api_material_authorization
+        )(material, observed_at=datetime.now(UTC))
         observed: dict[str, Any] = {}
         if route.channel == "OFFICIAL_MCP":
             profile = load_mcp_protocol()
@@ -234,6 +248,8 @@ def open_tiktok_gateway(
 
     # 此后不保留 Session；portal 回调各自拥有独立、限时的数据库事务。
     def authorize(advertiser_id: str | None, operation: str) -> None:
+        if before_request is not None:
+            before_request()
         capability = _capability(advertiser_id, operation)
         with bounded_session(database_engine, task_deadline=task_deadline) as session:
             verify_route(
@@ -322,7 +338,10 @@ def open_tiktok_gateway(
             ) as client:
                 yield TikTokGateway(
                     accounts=McpAccountsGateway(
-                        client, context=read_context, authorization=facts
+                        client,
+                        context=read_context,
+                        authorization=facts,
+                        observation_authorization=observation_facts,
                     ),
                     scenes=McpScenesGateway(client, context=read_context),
                     builds=McpBuildOperations(client),
@@ -338,6 +357,7 @@ def open_tiktok_gateway(
                         official,
                         context=read_context,
                         authorization=facts,
+                        observation_authorization=observation_facts,
                         app_id=settings.TIKTOK_APP_ID,
                         secret=settings.TIKTOK_APP_SECRET,
                         request_scope=request_scope,

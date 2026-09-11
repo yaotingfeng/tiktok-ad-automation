@@ -83,9 +83,58 @@ def intent(session, context):
     return create_intent(session, context)
 
 
-def account(session, context, identity="account-A"):
-    connection = TikTokConnection(tenant_id=context.tenant_id, status="ACTIVE")
-    session.add(connection)
+def account(session, context, identity="account-A", *, capability=True):
+    from app.modules.accounts.connection_models import (
+        BCConnectionBinding,
+        BCDefaultRoute,
+        ConnectionAuthorization,
+    )
+
+    default = session.get(BCDefaultRoute, (context.tenant_id, "bc-draft"))
+    if default is None:
+        connection = TikTokConnection(
+            tenant_id=context.tenant_id,
+            status="ACTIVE",
+            credential_ciphertext="offline-fixture-unused",
+        )
+        session.add(connection)
+        session.flush()
+        session.add(
+            BCConnectionBinding(
+                tenant_id=context.tenant_id,
+                bc_id="bc-draft",
+                connection_id=connection.id,
+                kind=connection.kind,
+            )
+        )
+        session.flush()
+        session.add(
+            BCDefaultRoute(
+                tenant_id=context.tenant_id,
+                bc_id="bc-draft",
+                connection_id=connection.id,
+            )
+        )
+        session.add(
+            ConnectionAuthorization(
+                tenant_id=context.tenant_id,
+                connection_id=connection.id,
+                authorization_revision=connection.authorization_revision,
+                issuer="https://business-api.tiktok.com",
+                resource="https://business-api.tiktok.com/open_api/v1.3",
+                scopes=["synthetic-build"],
+                source="SYNTHETIC_VERIFIED_EVIDENCE",
+                permission_summary={
+                    "read_authorized": True,
+                    "build_authorized": True,
+                    "upload_authorized": True,
+                },
+                verified_at=datetime.now(UTC),
+            )
+        )
+    else:
+        connection = session.get(TikTokConnection, default.connection_id)
+        assert connection
     session.add(
         AdvertiserAccount(
             tenant_id=context.tenant_id,
@@ -107,10 +156,14 @@ def account(session, context, identity="account-A"):
             authorized=True,
             active=True,
             can_build=True,
+            can_upload=True,
             permission_state="VERIFIED",
+            checked_at=datetime.now(UTC),
         )
     )
     session.flush()
+    if not capability:
+        return
     # Explicit offline COMPLETE evidence: VERIFIED flags alone no longer establish
     # a current-token role/scope proof. No credentials or remote SDK are needed.
     from app.modules.accounts.capabilities import _directory_basis
@@ -126,6 +179,9 @@ def account(session, context, identity="account-A"):
         connection_id=connection.id,
         actor_id=context.actor_id,
         credential_revision=connection.credential_revision,
+        channel=connection.kind,
+        authorization_revision=connection.authorization_revision,
+        adapter_contract_revision=connection.adapter_contract_revision,
         directory_basis=_directory_basis(session, context, "bc-draft", connection.id),
         status="COMPLETE",
         phase="DONE",
@@ -136,27 +192,38 @@ def account(session, context, identity="account-A"):
     )
     session.add(job)
     session.flush()
-    session.add(
-        CapabilityPage(
-            job_id=job.id,
-            page=1,
-            tenant_id=context.tenant_id,
-            bc_id="bc-draft",
-            row_count=1,
+    accounts = session.exec(
+        select(BCAccountAccess.advertiser_id).where(
+            BCAccountAccess.tenant_id == context.tenant_id,
+            BCAccountAccess.bc_id == "bc-draft",
+            BCAccountAccess.connection_id == connection.id,
         )
-    )
-    session.flush()
-    session.add(
-        CapabilityAsset(
-            job_id=job.id,
-            page=1,
-            tenant_id=context.tenant_id,
-            bc_id="bc-draft",
-            advertiser_id=identity,
-            role="OPERATOR",
+    ).all()
+    for offset in range(0, len(accounts), 50):
+        page = offset // 50 + 1
+        rows = accounts[offset : offset + 50]
+        session.add(
+            CapabilityPage(
+                job_id=job.id,
+                page=page,
+                tenant_id=context.tenant_id,
+                bc_id="bc-draft",
+                row_count=len(rows),
+            )
         )
-    )
-    session.flush()
+        session.flush()
+        for advertiser_id in rows:
+            session.add(
+                CapabilityAsset(
+                    job_id=job.id,
+                    page=page,
+                    tenant_id=context.tenant_id,
+                    bc_id="bc-draft",
+                    advertiser_id=advertiser_id,
+                    role="OPERATOR",
+                )
+            )
+        session.flush()
 
 
 def ready_links(session, context, task_id, intent):
@@ -366,6 +433,7 @@ def test_collect_pages_preserves_every_material_and_rejects_repeated_cursor():
 def test_input_update_obsoletes_old_job_and_preserves_new_raw_input(
     session, context, intent
 ):
+    account(session, context)
     draft_id = create_draft(session, context=context, **intent)
     task_id = prepare_draft(
         session, context=context, draft_id=draft_id, request_id=uuid4()
@@ -429,6 +497,7 @@ def test_account_dedup_spans_processing_pages(session, context, intent):
 def test_manual_materials_reject_cross_bc_and_duplicate_without_revision_bump(
     session, context, intent
 ):
+    account(session, context)
     draft_id = create_draft(session, context=context, **intent)
     task_id = prepare_draft(
         session, context=context, draft_id=draft_id, request_id=uuid4()
@@ -455,6 +524,7 @@ def test_manual_materials_reject_cross_bc_and_duplicate_without_revision_bump(
 def test_prepare_request_aliases_stay_bound_and_refresh_observes_same_provider_task(
     session, context, intent
 ):
+    account(session, context)
     draft_id = create_draft(session, context=context, **intent)
     first = uuid4()
     task = prepare_draft(session, context=context, draft_id=draft_id, request_id=first)

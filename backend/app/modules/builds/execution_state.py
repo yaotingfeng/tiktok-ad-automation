@@ -13,6 +13,7 @@ from app.modules.accounts.access import resolve_account_access
 from app.modules.builds.execution_models import ExecutionStep, StepEvidence, Submission
 from app.modules.builds.execution_schemas import StepClaim
 from app.modules.builds.preview_models import BuildUnit
+from app.modules.builds.routes import save_attempt_context, verify_unit_route
 from app.modules.builds.sdk_requests import RemoteCreated
 from app.modules.tenants.permissions import require_tenant
 
@@ -43,6 +44,7 @@ def active_attempt(step: ExecutionStep, claim: StepClaim, *, phase: str) -> bool
         and step.phase == phase
         and step.lease_token == claim.lease_token
         and step.attempt == claim.attempt
+        and step.attempt_id == claim.attempt_id
         and step.lease_expires_at is not None
         and step.lease_expires_at > datetime.now(UTC)
         and step.dispatch_revision == claim.dispatch_revision
@@ -58,6 +60,12 @@ def evidence(
     request_id: str | None = None,
     summary: dict[str, Any] | None = None,
 ) -> None:
+    save_attempt_context(
+        session,
+        step=step,
+        attempt=claim.attempt if claim else step.attempt,
+        expected_id=claim.attempt_id if claim else None,
+    )
     session.add(
         StepEvidence(
             tenant_id=step.tenant_id,
@@ -86,12 +94,16 @@ def arm_request(
     unit = session.get(BuildUnit, step.unit_id, populate_existing=True)
     if unit is None or unit.tenant_id != context.tenant_id:
         raise DomainError("resource_not_found", "执行组合不存在")
+    route = verify_unit_route(session, context=context, unit=unit, capability="build")
+    if route != claim.route:
+        raise DomainError("frozen_route_changed", "执行尝试的父路线不一致")
     access = resolve_account_access(
         session,
         context=context,
         bc_id=claim.bc_id,
         advertiser_id=unit.advertiser_id,
         action="build",
+        connection_id=route.connection_id,
     )
     if (
         access.connection_id != unit.connection_id

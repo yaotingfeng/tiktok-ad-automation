@@ -14,6 +14,7 @@ from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred, sdk_client
 from app.modules.accounts.access import resolve_account_access
+from app.modules.accounts.routing import verify_route
 from app.modules.builds.execution_admission import HARD_LIMIT, admitted_build_call
 from app.modules.builds.execution_models import ExecutionStep, Submission
 from app.modules.builds.execution_schemas import StepClaim
@@ -32,6 +33,7 @@ from app.modules.builds.preview_models import (
     PreviewGroupMaterial,
 )
 from app.modules.builds.preview_schemas import FrozenUnit
+from app.modules.builds.routes import load_preview_route
 from app.modules.builds.scene import read_scene_context
 from app.modules.builds.scene_jobs import ensure_scene_preparation
 from app.modules.builds.sdk_requests import (
@@ -106,12 +108,23 @@ def _frozen(session: Session, context: TenantContext, claim: StepClaim) -> Froze
     require_tenant(
         session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="build"
     )
+    route = load_preview_route(session, context=context, preview_id=claim.preview_id)
+    if route != claim.route:
+        raise DomainError("frozen_route_changed", "执行尝试路线不一致")
+    verify_route(
+        session,
+        context=context,
+        route=route,
+        advertiser_id=claim.advertiser_id,
+        capability="build",
+    )
     access = resolve_account_access(
         session,
         context=context,
         bc_id=claim.bc_id,
         advertiser_id=claim.advertiser_id,
         action="build",
+        connection_id=route.connection_id,
     )
     if access.connection_id != unit.frozen.connection_id:
         raise DomainError("account_authorization_changed", "冻结账户授权已变化")
@@ -132,6 +145,9 @@ def _current_scene(
         bc_id=frozen.bc_id,
         advertiser_id=frozen.advertiser_id,
         link_id=frozen.link_id,
+        route=load_preview_route(
+            session, context=context, preview_id=frozen.preview_id
+        ),
     )
     if not scene.supported:
         transient = bool(
@@ -375,6 +391,7 @@ def _prepare_scene_dependency(
                 bc_id=frozen.bc_id,
                 advertiser_id=frozen.advertiser_id,
                 link_id=frozen.link_id,
+                route=claim.route,
             )
             return finish_local(
                 session,

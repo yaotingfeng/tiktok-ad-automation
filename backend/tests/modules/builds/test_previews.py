@@ -503,6 +503,7 @@ def test_preview_concurrent_parent_locking(isolated_strategy_database, mode):
     engine, context, _ = isolated_strategy_database
     with Session(engine) as session:
         values = create_intent(session, context)
+        account(session, context)
         draft = create_draft(session, context=context, **values)
         task = prepare_draft(
             session, context=context, draft_id=draft, request_id=uuid4()

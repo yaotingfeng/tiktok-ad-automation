@@ -12,6 +12,7 @@ from app.modules.builds.execution_models import (
     Submission,
     SubmissionRequest,
 )
+from app.modules.builds.routes import save_attempt_context
 from tests.modules.builds.test_previews import drain
 from tests.modules.builds.test_previews import prepared as prepared
 
@@ -498,6 +499,7 @@ def test_database_rejects_scope_changes_and_mutating_evidence(session, context, 
     ):
         pass
     step = session.exec(select(ExecutionStep).where(ExecutionStep.kind == "AD")).first()
+    save_attempt_context(session, step=step, attempt=0)
     evidence = StepEvidence(
         tenant_id=context.tenant_id,
         submission_id=receipt.submission_id,
@@ -627,7 +629,7 @@ def test_503_accounts_submit_only_header_and_expand_at_most_100_facts(
 
     for index in range(500):
         identity = f"capacity-{index:04}"
-        account(session, context, identity)
+        account(session, context, identity, capability=index == 499)
         grant = session.exec(
             select(BCAccountAccess).where(BCAccountAccess.advertiser_id == identity)
         ).one()

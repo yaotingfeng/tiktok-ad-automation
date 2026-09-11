@@ -35,12 +35,21 @@ class CapabilityJob(SQLModel, table=True):
             "tenant_id",
             "bc_id",
             "connection_id",
-            "credential_revision",
+            "channel",
+            "authorization_revision",
+            "adapter_contract_revision",
             "directory_basis",
             unique=True,
             postgresql_where=text("status = 'PENDING'"),
         ),
         Index("ix_capability_repair", "status", "repair_after", "id"),
+        CheckConstraint(
+            "(channel IS NULL AND authorization_revision IS NULL AND adapter_contract_revision IS NULL) OR "
+            "(channel IS NOT NULL AND channel IN ('OFFICIAL_API','OFFICIAL_MCP') AND "
+            "authorization_revision IS NOT NULL AND authorization_revision >= 0 AND "
+            "adapter_contract_revision IS NOT NULL AND length(adapter_contract_revision) > 0)",
+            name="ck_capability_frozen_route",
+        ),
         CheckConstraint(
             "status IN ('PENDING','COMPLETE','BLOCKED','STALE','FAILED')",
             name="ck_capability_status",
@@ -63,6 +72,10 @@ class CapabilityJob(SQLModel, table=True):
     connection_id: UUID
     actor_id: UUID = Field(foreign_key="user.id")
     credential_revision: int
+    # 历史任务没有冻结授权语义，保留空值供审计；新任务必须由 route 填写。
+    channel: str | None = Field(default=None, max_length=32)
+    authorization_revision: int | None = None
+    adapter_contract_revision: str | None = Field(default=None, max_length=128)
     directory_basis: str = Field(max_length=64)
     status: str = Field(default="PENDING", max_length=16)
     phase: str = Field(default="READ", max_length=16)

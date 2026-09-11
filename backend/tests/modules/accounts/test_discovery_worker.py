@@ -17,7 +17,12 @@ from app.jobs.admission import admission_keys
 from app.jobs.models import DispatchTenantCursor, PendingDispatch
 from app.models import User
 from app.modules.accounts import tasks
-from app.modules.accounts.discovery import claim_external_asset, save_directory_page
+from app.modules.accounts.connection_models import (
+    BCConnectionBinding,
+    ConnectionAuthorization,
+)
+from app.modules.accounts.discovery import claim_external_asset, finalize_directory
+from app.modules.accounts.discovery_models import DiscoveryStagedPage
 from app.modules.accounts.models import (
     AdvertiserAccount,
     AuthorizationAttempt,
@@ -29,6 +34,7 @@ from app.modules.accounts.models import (
     TikTokConnection,
 )
 from app.modules.tenants.models import Tenant, TenantMembership
+from tests.modules.accounts.test_discovery import seed_complete
 from tests.modules.conftest import create_context
 
 
@@ -51,10 +57,26 @@ def committed_runs(policy, monkeypatch):
             )
             session.add(connection)
             session.flush()
+            attempt = AuthorizationAttempt(
+                tenant_id=context.tenant_id,
+                actor_id=context.actor_id,
+                connection_id=connection.id,
+                state_hash=uuid4().hex,
+                expires_at=datetime.now(UTC) + timedelta(minutes=10),
+                status="CANDIDATE_READY",
+                candidate_ciphertext=encrypt_credentials(
+                    tenant_id=context.tenant_id,
+                    value={"access_token": "old-token", "scope": "[2,6]"},
+                ),
+            )
+            session.add(attempt)
+            session.flush()
             run = DiscoveryRun(
                 tenant_id=context.tenant_id,
                 actor_id=context.actor_id,
                 connection_id=connection.id,
+                candidate_attempt_id=attempt.id,
+                work={"stage": "SUBJECT", "page": 1},
             )
             session.add(run)
             session.flush()
@@ -67,6 +89,12 @@ def committed_runs(policy, monkeypatch):
             session.exec(
                 delete(BCAccountAccess).where(BCAccountAccess.tenant_id.in_(tenant_ids))
             )
+            for model in (
+                DiscoveryStagedPage,
+                BCConnectionBinding,
+                ConnectionAuthorization,
+            ):
+                session.exec(delete(model).where(model.tenant_id.in_(tenant_ids)))
             session.exec(delete(DiscoverySeen).where(DiscoverySeen.run_id.in_(runs)))
             session.exec(
                 delete(DiscoveryRun).where(DiscoveryRun.tenant_id.in_(tenant_ids))
@@ -111,15 +139,28 @@ def directory_transport(monkeypatch, sdk_transport):  # noqa: ARG001
         elif url.endswith("/bc/get/"):
             data = {
                 "list": [{"bc_info": {"bc_id": bc, "name": "BC"}}],
-                "page_info": {"page": 1, "page_size": 100, "total_page": 1},
+                "page_info": {
+                    "page": 1,
+                    "page_size": 50,
+                    "total_page": 1,
+                    "total_number": 1,
+                },
             }
         elif url.endswith("/bc/asset/get/"):
             data = {
-                "list": [{"asset_id": advertiser, "asset_name": "Account"}],
+                "list": [
+                    {
+                        "asset_id": advertiser,
+                        "asset_name": "Account",
+                        "asset_type": "ADVERTISER",
+                        "advertiser_role": "OPERATOR",
+                    }
+                ],
                 "page_info": {
                     "page": fields["page"],
-                    "page_size": 100,
+                    "page_size": 50,
                     "total_page": 1,
+                    "total_number": 1,
                 },
             }
         else:
@@ -150,6 +191,7 @@ def directory_transport(monkeypatch, sdk_transport):  # noqa: ARG001
 def step(context, run_id, redis_client, revision=None):
     with Session(engine) as session:
         run = session.get(DiscoveryRun, run_id)
+        initial_subject = run.work.get("stage") == "SUBJECT" and revision is None
         payload = {
             "run_id": str(run_id),
             "revision": run.revision if revision is None else revision,
@@ -162,25 +204,34 @@ def step(context, run_id, redis_client, revision=None):
         payload=payload,
     )
 
+    if initial_subject:
+        with Session(engine) as session:
+            run = session.get(DiscoveryRun, run_id)
+            proceed = run.status == "RUNNING" and run.work["stage"] == "AUTHORIZED"
+        if proceed:
+            step(context, run_id, redis_client)
+
 
 def test_full_discovery_and_duplicate_delivery(
     committed_runs, directory_transport, redis_client
 ):
     contexts, runs = committed_runs
     calls, _, bc, advertiser = directory_transport
-    for _ in range(4):
+    for _ in range(6):
         step(contexts[0], runs[0], redis_client)
-    assert len(calls) == 4
+    assert len(calls) == 5
     with Session(engine) as session:
         run = session.get(DiscoveryRun, runs[0])
-        assert run.status == "COMPLETE" and run.sent_count == 4
+        assert run.status == "COMPLETE" and run.sent_count == 5
         assert (
             len(
                 session.exec(
-                    select(DiscoverySeen).where(DiscoverySeen.run_id == run.id)
+                    select(DiscoveryStagedPage).where(
+                        DiscoveryStagedPage.run_id == run.id
+                    )
                 ).all()
             )
-            == 2
+            == 6
         )
         access = session.get(
             BCAccountAccess, (run.tenant_id, bc, advertiser, run.connection_id)
@@ -191,7 +242,7 @@ def test_full_discovery_and_duplicate_delivery(
             and not access.can_build
         )
     step(contexts[0], runs[0], redis_client, revision=0)
-    assert len(calls) == 4
+    assert len(calls) == 5
 
 
 def test_candidate_only_promoted_after_full_scan(
@@ -216,7 +267,7 @@ def test_candidate_only_promoted_after_full_scan(
         session.flush()
         run.candidate_attempt_id = attempt.id
         attempt_id = attempt.id
-    for _ in range(3):
+    for _ in range(5):
         step(contexts[0], runs[0], redis_client)
         with Session(engine) as session:
             run = session.get(DiscoveryRun, runs[0])
@@ -243,7 +294,7 @@ def test_candidate_only_promoted_after_full_scan(
     assert {call[2] for call in calls} == {"candidate-token"}
 
 
-@pytest.mark.parametrize("target", range(4))
+@pytest.mark.parametrize("target", range(5))
 def test_each_call_admission_defer_keeps_same_page_without_send(
     committed_runs, directory_transport, redis_client, target
 ):
@@ -254,8 +305,17 @@ def test_each_call_admission_defer_keeps_same_page_without_send(
     with Session(engine) as session:
         before = session.get(DiscoveryRun, runs[0])
         work = before.work.copy()
+        if work["stage"] == "SUBJECT":
+            work = {"stage": "AUTHORIZED", "page": 1}
         sent = before.sent_count
-        endpoint = tasks.ENDPOINTS[work["stage"]]
+        endpoint = {
+            "SUBJECT": "accounts.list_authorized_advertisers",
+            "AUTHORIZED": "accounts.list_authorized_advertisers",
+            "BCS": "accounts.list_bcs",
+            "ASSETS": "accounts.list_bc_assets",
+            "DETAILS": "accounts.get_advertisers",
+            "ROLES": "accounts.list_bc_assets",
+        }[work["stage"]]
     keys = admission_keys(settings.TIKTOK_APP_ID, endpoint, contexts[0].tenant_id, "")
     redis_client.zadd(
         keys[0],
@@ -375,17 +435,15 @@ def test_two_tenant_asset_claim_is_serialized_and_conflict_retained(committed_ru
             with pytest.raises(TimeoutError):
                 future.result(timeout=0.2)
         assert future.result(timeout=5) is False
-    for context, run_id in zip(contexts, runs, strict=True):
-        with Session(engine) as session, session.begin():
+    for index, (context, run_id) in enumerate(zip(contexts, runs, strict=True)):
+        with Session(engine) as session:
+            run = session.get(DiscoveryRun, run_id)
             bc = f"bc-{context.tenant_id}"
-            session.add(TenantBC(tenant_id=context.tenant_id, bc_id=bc))
-            session.flush()
-            save_directory_page(
+            seed_complete(
                 session,
-                run_id=run_id,
-                bc_id=bc,
-                page=1,
-                rows=[
+                run,
+                bc,
+                [
                     {
                         "advertiser_id": asset,
                         "currency": "USD",
@@ -393,24 +451,23 @@ def test_two_tenant_asset_claim_is_serialized_and_conflict_retained(committed_ru
                         "remote_status": "STATUS_ENABLE",
                     }
                 ],
-                authorized_ids={asset},
-                last_page=True,
             )
+            if index == 0:
+                finalize_directory(session, run_id=run_id)
+                session.commit()
+            else:
+                with pytest.raises(DomainError) as failure:
+                    finalize_directory(session, run_id=run_id)
+                assert failure.value.code == "account_ownership_conflict"
+                session.rollback()
     with Session(engine) as session:
-        first = session.get(AdvertiserAccount, (contexts[0].tenant_id, asset))
-        second = session.get(AdvertiserAccount, (contexts[1].tenant_id, asset))
-        assert (
-            first
-            and second
-            and not first.ownership_conflict
-            and second.ownership_conflict
-        )
-        accesses = session.exec(
+        assert session.get(AdvertiserAccount, (contexts[0].tenant_id, asset))
+        assert session.get(AdvertiserAccount, (contexts[1].tenant_id, asset)) is None
+        assert not session.exec(
             select(BCAccountAccess).where(
                 BCAccountAccess.tenant_id == contexts[1].tenant_id
             )
         ).all()
-        assert len(accesses) == 1 and not accesses[0].active
 
 
 def test_database_enforces_one_active_generation_and_tenant_fks(committed_runs):
@@ -445,7 +502,7 @@ def test_second_page_failure_resumes_same_run_and_does_not_remove_old_access(
 ):
     contexts, runs = committed_runs
     _, _, bc, advertiser = directory_transport
-    # Canonical SDK-envelope transport; two BC pages and two asset pages in each BC.
+    # Canonical SDK-envelope transport; two BCs have independent two-page asset catalogs.
     calls = []
     fail = {"enabled": True}
 
@@ -457,16 +514,40 @@ def test_second_page_failure_resumes_same_run_and_does_not_remove_old_access(
         elif url.endswith("/bc/get/"):
             page = fields["page"]
             data = {
-                "list": [{"bc_info": {"bc_id": f"{bc}-{page}", "name": "BC"}}],
-                "page_info": {"page": page, "page_size": 100, "total_page": 2},
+                "list": [
+                    {"bc_info": {"bc_id": f"{bc}-{n}", "name": "BC"}} for n in (1, 2)
+                ],
+                "page_info": {
+                    "page": page,
+                    "page_size": 50,
+                    "total_page": 1,
+                    "total_number": 2,
+                },
             }
         elif url.endswith("/bc/asset/get/"):
             page = fields["page"]
             if page == 2 and fail["enabled"]:
                 raise RuntimeError("raw-secret")
             data = {
-                "list": [{"asset_id": advertiser, "asset_name": "A"}],
-                "page_info": {"page": page, "page_size": 100, "total_page": 2},
+                "list": [
+                    {
+                        "asset_id": identity,
+                        "asset_name": "A",
+                        "asset_type": "ADVERTISER",
+                        "advertiser_role": "ADMIN",
+                    }
+                    for identity in (
+                        [advertiser] + [f"extra-{i}" for i in range(49)]
+                        if page == 1
+                        else ["last-extra"]
+                    )
+                ],
+                "page_info": {
+                    "page": page,
+                    "page_size": 50,
+                    "total_page": 2,
+                    "total_number": 51,
+                },
             }
         else:
             data = {
@@ -517,7 +598,7 @@ def test_second_page_failure_resumes_same_run_and_does_not_remove_old_access(
         assert (
             run.work["stage"] == "ASSETS"
             and run.work["page"] == 2
-            and run.work["bc_index"] == 0
+            and run.work["bc_id"] == f"{bc}-1"
         )
         old = session.get(
             BCAccountAccess, (run.tenant_id, f"{bc}-1", "old", run.connection_id)
@@ -526,15 +607,17 @@ def test_second_page_failure_resumes_same_run_and_does_not_remove_old_access(
         assert (
             len(
                 session.exec(
-                    select(DiscoverySeen).where(DiscoverySeen.run_id == run.id)
+                    select(DiscoveryStagedPage).where(
+                        DiscoveryStagedPage.run_id == run.id
+                    )
                 ).all()
             )
-            == 3
+            == 5
         )
         run.status = "RUNNING"
         run.revision += 1
     fail["enabled"] = False
-    for _ in range(6):
+    for _ in range(18):
         step(contexts[0], runs[0], redis_client)
     with Session(engine) as session:
         run = session.get(DiscoveryRun, runs[0])
@@ -542,10 +625,12 @@ def test_second_page_failure_resumes_same_run_and_does_not_remove_old_access(
         assert (
             len(
                 session.exec(
-                    select(DiscoverySeen).where(DiscoverySeen.run_id == run.id)
+                    select(DiscoveryStagedPage).where(
+                        DiscoveryStagedPage.run_id == run.id
+                    )
                 ).all()
             )
-            == 6
+            == 15
         )
         assert not session.get(
             BCAccountAccess, (run.tenant_id, f"{bc}-1", "old", run.connection_id)
@@ -646,14 +731,16 @@ def test_redis_unavailable_defers_without_sending(
     def unavailable(*_args, **_kwargs):
         raise ConnectionError("secret-redis-url")
 
-    monkeypatch.setattr(redis_client, "eval", unavailable)
+    from redis import Redis
+
+    monkeypatch.setattr(Redis, "execute_command", unavailable)
     step(contexts[0], runs[0], redis_client)
     assert not calls
     with Session(engine) as session:
         run = session.get(DiscoveryRun, runs[0])
         assert (
             run.status == "ADMISSION_WAIT"
-            and run.error_code == "admission_unavailable"
+            and run.error_code == "tiktok_local_resources_unavailable"
             and run.sent_count == 0
         )
 
@@ -769,3 +856,42 @@ def test_handler_rejects_overridden_long_hard_deadline(monkeypatch):
         assert error.value.code == "discovery_worker_unbounded"
     finally:
         tasks.discover.pop_request()
+
+
+def test_historical_run_without_candidate_does_not_infer_current_route(
+    committed_runs, directory_transport, redis_client
+):
+    contexts, runs = committed_runs
+    with Session(engine) as session, session.begin():
+        run = session.get(DiscoveryRun, runs[0])
+        run.candidate_attempt_id = None
+    step(contexts[0], runs[0], redis_client)
+    assert not directory_transport[0]
+    with Session(engine) as session:
+        run = session.get(DiscoveryRun, runs[0])
+        assert (run.status, run.error_code) == ("ERROR", "discovery_stale")
+
+
+def test_sdk_authorized_response_capacity_is_checked_before_parsing(
+    committed_runs, directory_transport, redis_client, monkeypatch
+):
+    contexts, runs = committed_runs
+    assert not directory_transport[0]
+    body = json.dumps(
+        {"code": 0, "data": {"list": [], "padding": "x" * (8 * 1024 * 1024)}}
+    ).encode()
+    sent = []
+
+    def oversized(_pool, method, url, **_kwargs):
+        sent.append((method, url))
+        return HTTPResponse(
+            body=body, status=200, headers={"Content-Type": "application/json"}
+        )
+
+    monkeypatch.setattr("urllib3.PoolManager.request", oversized)
+    step(contexts[0], runs[0], redis_client)
+    assert len(sent) == 1
+    with Session(engine) as session:
+        run = session.get(DiscoveryRun, runs[0])
+        assert (run.status, run.error_code) == ("ERROR", "tiktok_response_error")
+        assert not session.get(DiscoveryStagedPage, (run.id, "", "AUTHORIZED", 1))

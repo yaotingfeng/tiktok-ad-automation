@@ -63,7 +63,9 @@ def test_claim_and_receipt_are_fenced_across_all_authority_changes(
         from app.modules.accounts.models import TikTokConnection
 
         with Session(engine) as session, session.begin():
-            session.get(TikTokConnection, env["connection_id"]).credential_revision += 1
+            session.get(
+                TikTokConnection, env["connection_id"]
+            ).authorization_revision += 1
         return page(["actual-account"])
 
     wire[1].append(response)

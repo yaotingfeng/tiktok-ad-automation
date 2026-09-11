@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.modules.builds.preview_schemas import FrozenUnit
 
 
@@ -79,6 +80,8 @@ class StepClaim(BaseModel):
     lease_token: UUID
     lease_expires_at: datetime
     attempt: int
+    attempt_id: UUID
+    route: FrozenTikTokRoute
     dispatch_revision: int
 
 

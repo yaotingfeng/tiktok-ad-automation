@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session, select
 
+from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.jobs.models import PendingDispatch
@@ -15,6 +16,7 @@ from app.jobs.outbox import enqueue_after_commit
 from app.jobs.tasks import register_dispatch_task
 from app.modules.accounts.access import resolve_account_access
 from app.modules.accounts.models import TenantBC
+from app.modules.accounts.routing import verify_route
 from app.modules.builds.execution_models import (
     ExecutionStep,
     Submission,
@@ -29,6 +31,7 @@ from app.modules.builds.recovery_models import (
     SubmissionRecovery,
     SubmissionRecoveryRequest,
 )
+from app.modules.builds.routes import load_preview_route, verify_unit_route
 from app.modules.tenants.permissions import require_tenant
 
 TASK_NAME = "builds.recover_submission"
@@ -52,15 +55,21 @@ WHERE s.tenant_id=:tenant AND s.submission_id=:submission AND su.expanded AND su
 AND s.dispatch_id IS NULL AND (s.lease_expires_at IS NULL OR s.lease_expires_at <= :now)
 """
 ACCOUNT = """
-AND u.connection_id=(SELECT a.connection_id FROM bc_account_access a
+AND EXISTS (SELECT 1 FROM bc_account_access a
  JOIN tiktok_connection c ON c.tenant_id=a.tenant_id AND c.id=a.connection_id
  JOIN tenant_bc b ON b.tenant_id=a.tenant_id AND b.bc_id=a.bc_id
  JOIN advertiser_account aa ON aa.tenant_id=a.tenant_id AND aa.advertiser_id=a.advertiser_id
- WHERE a.tenant_id=s.tenant_id AND a.bc_id=s.bc_id AND a.advertiser_id=u.advertiser_id
+ JOIN build_route_context r ON r.tenant_id=s.tenant_id AND r.preview_id=s.preview_id AND r.connection_id=a.connection_id
+ JOIN bc_connection_binding binding ON binding.tenant_id=r.tenant_id AND binding.bc_id=r.bc_id AND binding.connection_id=r.connection_id AND binding.kind=r.channel
+ JOIN connection_authorization auth ON auth.tenant_id=r.tenant_id AND auth.connection_id=r.connection_id AND auth.authorization_revision=r.authorization_revision
+ WHERE a.connection_id=u.connection_id AND c.kind=r.channel AND c.authorization_revision=r.authorization_revision AND c.adapter_contract_revision=r.adapter_contract_revision
+ AND auth.source<>'UNKNOWN' AND auth.permission_summary->'build_authorized'='true'::jsonb AND jsonb_array_length(auth.scopes)>0
+ AND auth.verified_at BETWEEN :cutoff AND :now AND a.checked_at BETWEEN :cutoff AND :now
+ AND a.tenant_id=s.tenant_id AND a.bc_id=s.bc_id AND a.advertiser_id=u.advertiser_id
  AND a.in_bc AND a.authorized AND a.active AND a.can_build AND a.permission_state='VERIFIED'
  AND c.status='ACTIVE' AND NOT b.ownership_conflict AND NOT aa.ownership_conflict
  AND aa.remote_status IN ('ENABLE','STATUS_ENABLE') AND trim(aa.currency)<>'' AND trim(aa.timezone)<>''
- AND aa.currency=u.currency AND aa.timezone=u.timezone ORDER BY a.connection_id LIMIT 1)
+ AND aa.currency=u.currency AND aa.timezone=u.timezone)
 """
 GROUP_READY = """EXISTS (SELECT 1 FROM planned_group g
  WHERE g.tenant_id=s.tenant_id AND g.preview_id=s.preview_id AND g.unit_id=s.unit_id
@@ -111,7 +120,13 @@ AND (s.kind<>'MATERIAL' OR (s.cover_job_id IS NULL AND EXISTS (SELECT 1 FROM mat
 
 
 def _params(row: Submission) -> dict[str, Any]:
-    return {"tenant": row.tenant_id, "submission": row.id, "now": datetime.now(UTC)}
+    now = datetime.now(UTC)
+    return {
+        "tenant": row.tenant_id,
+        "submission": row.id,
+        "now": now,
+        "cutoff": now - timedelta(seconds=settings.BC_CAPABILITY_MAX_AGE_SECONDS),
+    }
 
 
 def _query(_row: Submission, kind: str, *, account: bool = True) -> str:
@@ -146,6 +161,10 @@ def _authority(
     bc = session.get(TenantBC, (row.tenant_id, row.bc_id), populate_existing=True)
     if bc is None or bc.ownership_conflict:
         raise DomainError("account_ownership_conflict", "提交 BC 当前不可操作")
+    route = load_preview_route(session, context=original, preview_id=row.preview_id)
+    verify_route(
+        session, context=original, route=route, advertiser_id=None, capability="read"
+    )
     return original
 
 
@@ -482,12 +501,14 @@ def _schedule(
         return False
     unit = session.get(BuildUnit, step.unit_id)
     assert unit
+    route = verify_unit_route(session, context=original, unit=unit, capability="build")
     access = resolve_account_access(
         session,
         context=original,
         bc_id=row.bc_id,
         advertiser_id=unit.advertiser_id,
         action="build",
+        connection_id=route.connection_id,
     )
     if access.connection_id != unit.connection_id or (
         access.currency,

@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4, uuid5
 
+from pydantic import ValidationError
 from sqlalchemy import and_, delete, or_, text
 from sqlalchemy.orm import Session as SASession
 from sqlalchemy.sql.elements import ColumnElement
@@ -15,14 +16,16 @@ from sqlmodel import Session, col, select
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.core.pagination import Page
-from app.modules.accounts.access import resolve_account_access, usable_grants
+from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
+from app.modules.accounts.access import resolve_account_access
 from app.modules.accounts.capabilities import (
     get_capability_evidence,
     start_capability_refresh,
 )
 from app.modules.accounts.capability_models import CapabilityJob
-from app.modules.accounts.models import BCAccountAccess, TenantBC, TikTokConnection
+from app.modules.accounts.models import TenantBC
 from app.modules.accounts.resolver import resolve_lines
+from app.modules.accounts.routing import freeze_route, verify_route
 from app.modules.accounts.schemas import InputLine
 from app.modules.builds.models import (
     BuildDraft,
@@ -300,6 +303,7 @@ def prepare_draft(
         )
         session.flush()
         return existing.id
+    route = freeze_route(session, context=context, bc_id=draft.bc_id)
     if existing or draft.status != "DRAFT":
         _bump_revision(session, draft, draft.revision)
     # Every new local preparation starts account resolution afresh. Manual
@@ -398,6 +402,15 @@ def prepare_draft(
     draft.status = "PREPARING"
     session.add(draft)
     session.flush()
+    # 草稿启动事务已锁住当前revision；在排队前固定唯一连接，所有分页继承。
+    session.add(
+        DraftScenePreparation(
+            tenant_id=draft.tenant_id,
+            draft_id=draft.id,
+            preparation_id=prep.id,
+            frozen_route=route.model_dump(mode="json"),
+        )
+    )
     session.add(
         DraftPreparationRequest(
             tenant_id=context.tenant_id,
@@ -415,42 +428,37 @@ def _scene_prep(
     session: Session, draft: BuildDraft, prep: DraftPreparation
 ) -> DraftScenePreparation:
     row = session.get(DraftScenePreparation, (draft.tenant_id, prep.id))
-    if row is None:
-        row = DraftScenePreparation(
-            tenant_id=draft.tenant_id, draft_id=draft.id, preparation_id=prep.id
-        )
-        session.add(row)
-        session.flush()
+    if row is None or row.frozen_route is None:
+        raise DomainError("scene_route_missing", "草稿准备缺少冻结连接，请重新准备")
     return row
+
+
+def _preparation_route(
+    session: Session, context: TenantContext, draft: BuildDraft, prep: DraftPreparation
+) -> FrozenTikTokRoute:
+    row = _scene_prep(session, draft, prep)
+    try:
+        route = FrozenTikTokRoute.model_validate(row.frozen_route)
+    except ValidationError:
+        raise DomainError("scene_route_missing", "草稿准备缺少有效冻结连接") from None
+    if (route.tenant_id, route.bc_id) != (draft.tenant_id, draft.bc_id):
+        raise DomainError("scene_route_missing", "草稿冻结连接归属不一致")
+    verify_route(
+        session, context=context, route=route, advertiser_id=None, capability="read"
+    )
+    return route
 
 
 def _capabilities_page(
     session: Session, context: TenantContext, draft: BuildDraft, prep: DraftPreparation
 ) -> bool:
     state = _scene_prep(session, draft, prep)
+    route = _preparation_route(session, context, draft, prep)
     if state.capabilities_complete:
         return True
     if not state.capabilities_queued:
-        grants = usable_grants(
-            tenant_id=context.tenant_id, bc_id=draft.bc_id, action="read"
-        )
-        eligible = (
-            grants.where(BCAccountAccess.connection_id == TikTokConnection.id)
-            .correlate(TikTokConnection)
-            .exists()
-        )
-        query = select(TikTokConnection.id).where(
-            TikTokConnection.tenant_id == context.tenant_id,
-            TikTokConnection.status == "ACTIVE",
-            col(TikTokConnection.credential_ciphertext).is_not(None),
-            TikTokConnection.credential_ciphertext != "",
-            eligible,
-        )
-        if state.connection_after is not None:
-            query = query.where(TikTokConnection.id > state.connection_after)
-        connections = session.exec(
-            query.order_by(col(TikTokConnection.id)).limit(PAGE_SIZE)
-        ).all()
+        # 场景目标沿用启动时冻结的连接；其他连接的能力不能替换它。
+        connections = [route.connection_id]
         for identity in connections:
             job_id = start_capability_refresh(
                 session,
@@ -471,10 +479,8 @@ def _capabilities_page(
             )
         if connections:
             state.connection_after = connections[-1]
-        state.capabilities_queued = len(connections) < PAGE_SIZE
+        state.capabilities_queued = True
         session.flush()
-        if not state.capabilities_queued:
-            return False
     finished = session.exec(
         select(DraftCapabilityDependency, CapabilityJob)
         .join(
@@ -532,6 +538,7 @@ def _scenes_page(
     session: Session, context: TenantContext, draft: BuildDraft, prep: DraftPreparation
 ) -> None:
     state = _scene_prep(session, draft, prep)
+    route = _preparation_route(session, context, draft, prep)
     # One draft has one provider application. Links were all checked in the
     # preceding phase; choosing one reference here never picks a remote identity.
     link_id = session.exec(
@@ -573,6 +580,7 @@ def _scenes_page(
                 bc_id=draft.bc_id,
                 advertiser_id=advertiser_id,
                 link_id=link_id,
+                route=route,
             )
             session.add(
                 DraftSceneDependency(
@@ -632,6 +640,7 @@ def _scenes_page(
             bc_id=draft.bc_id,
             advertiser_id=dependency.advertiser_id,
             link_id=link_id,
+            route=route,
         )
         dependency.job_id = result.job_id
         dependency.status = {
@@ -657,6 +666,7 @@ def _scenes_page(
 def _accounts_page(
     session: Session, context: TenantContext, draft: BuildDraft, prep: DraftPreparation
 ) -> None:
+    route = _preparation_route(session, context, draft, prep)
     rows = session.exec(
         select(DraftInput)
         .where(
@@ -676,6 +686,7 @@ def _accounts_page(
         context=context,
         bc_id=draft.bc_id,
         lines=[InputLine(line_no=row.line_no, raw=row.raw_text) for row in rows],
+        connection_id=route.connection_id,
     )
     # Grant flags alone are not a complete role/scope proof. Before storing any
     # row of this page, wait for a renewed proof if its earlier completed job aged.
@@ -694,6 +705,7 @@ def _accounts_page(
                     bc_id=draft.bc_id,
                     advertiser_id=result.advertiser_id,
                     action="read",
+                    connection_id=route.connection_id,
                 )
             except DomainError:
                 pass
@@ -725,6 +737,7 @@ def _accounts_page(
             bc_id=draft.bc_id,
             advertiser_id=result.advertiser_id,
             action="build",
+            connection_id=route.connection_id,
         )
         proof = get_capability_evidence(
             session,
@@ -779,6 +792,7 @@ def _accounts_page(
                     bc_id=draft.bc_id,
                     advertiser_id=result.advertiser_id,
                     action="build",
+                    connection_id=route.connection_id,
                 )
                 session.add(
                     DraftAccount(

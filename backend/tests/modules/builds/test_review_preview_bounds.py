@@ -25,7 +25,7 @@ def test_503_accounts_expand_every_drama_without_bulk_account_materialization(
 ):
     for i in range(500):
         identity = f"extra-{i:04}"
-        account(session, context, identity)
+        account(session, context, identity, capability=i == 499)
         grant = session.exec(
             select(BCAccountAccess).where(
                 BCAccountAccess.tenant_id == context.tenant_id,

@@ -2,6 +2,7 @@ from uuid import uuid4
 
 from app.modules.builds import submission_catalog, submissions
 from app.modules.builds.preview_models import BuildPreview
+from app.modules.builds.routes import save_attempt_context
 from tests.modules.builds.test_previews import prepared as prepared
 from tests.modules.builds.test_submissions import frozen as frozen
 
@@ -369,6 +370,7 @@ def test_groups_ads_page_scope_and_events_are_whitelisted(
         )
     step = session.exec(select(ExecutionStep).where(ExecutionStep.kind == "AD")).first()
     for i in range(3):
+        save_attempt_context(session, step=step, attempt=i)
         session.add(
             StepEvidence(
                 tenant_id=context.tenant_id,

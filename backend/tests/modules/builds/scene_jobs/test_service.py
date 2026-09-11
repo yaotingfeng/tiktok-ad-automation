@@ -43,6 +43,7 @@ def ensure(env, link_id=None):
             bc_id=env["bc_id"],
             advertiser_id="actual-account",
             link_id=link_id or env["link_id"],
+            route=env["route"],
         )
 
 
@@ -152,6 +153,7 @@ def test_same_app_different_drama_links_share_complete_scene_and_bc_proof(
             bc_id=env["bc_id"],
             advertiser_id="actual-account",
             link_id=other_link,
+            route=env["route"],
         )
         assert result.supported, result.reason_codes
         assert result.adgroup_fields["targeting_spec"]["location_ids"] == (
@@ -184,10 +186,8 @@ def test_complete_scene_reader_is_readonly_no_credentials_or_network(
         raise AssertionError("Pure scene read performed a side effect")
 
     for module, name in [
-        (scene, "decrypt_credentials"),
-        (scene_jobs, "sdk_client"),
+        (scene_jobs, "open_tiktok_gateway"),
         (scene_jobs, "enqueue_after_commit"),
-        (capabilities, "decrypt_credentials"),
     ]:
         monkeypatch.setattr(module, name, forbidden)
     statements = []
@@ -205,6 +205,7 @@ def test_complete_scene_reader_is_readonly_no_credentials_or_network(
                 bc_id=env["bc_id"],
                 advertiser_id="actual-account",
                 link_id=env["link_id"],
+                route=env["route"],
             )
             assert result.supported
     finally:
@@ -224,6 +225,7 @@ def test_partial_scene_never_reports_ready(job_env, wire):
             bc_id=env["bc_id"],
             advertiser_id="actual-account",
             link_id=env["link_id"],
+            route=env["route"],
         )
         assert not result.supported and "scene_evidence_missing" in result.reason_codes
     assert receipt.state == "queued" and not wire[0]

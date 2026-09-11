@@ -75,7 +75,7 @@ def test_two_deliveries_only_one_get_and_no_database_lock_across_transport(
 
 @pytest.mark.parametrize(
     "change",
-    ["nonce", "revision", "credentials", "role", "provider", "application", "grant"],
+    ["nonce", "revision", "authorization", "role", "provider", "application", "grant"],
 )
 def test_stale_transport_receipt_cannot_publish(job_env, wire, redis_client, change):
     from app.modules.tenants.models import TenantMembership
@@ -90,10 +90,10 @@ def test_stale_transport_receipt_cannot_publish(job_env, wire, redis_client, cha
                 current.claim_token = uuid4()
             elif change == "revision":
                 current.revision += 1
-            elif change == "credentials":
+            elif change == "authorization":
                 session.get(
                     TikTokConnection, env["connection_id"]
-                ).credential_revision += 1
+                ).authorization_revision += 1
             elif change in {"provider", "application", "grant"}:
                 from app.modules.accounts.models import BCAccountAccess
                 from app.modules.providers.models import (

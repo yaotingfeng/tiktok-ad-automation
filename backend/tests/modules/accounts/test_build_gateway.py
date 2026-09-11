@@ -12,7 +12,7 @@ from app.integrations.tiktok.mcp.protocol import load_tool_contracts
 from app.modules.builds.readback_compare import compare_record
 from app.modules.builds.request_compiler import decode_intent
 from tests.contracts.test_tiktok_build_contract import build_bodies
-from tests.modules.accounts.test_gateway_factory import (  # noqa: F401
+from tests.integrations.tiktok.gateway_support import (  # noqa: F401
     business_calls,
     database_engine,
     gateway,

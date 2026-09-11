@@ -54,7 +54,13 @@ def test_public_api_commits_original_job_and_get_is_viewer_read_only(
                     TenantMembership.tenant_id == env["context"].tenant_id
                 )
             ).one().role = "viewer"
-            count = len(session.exec(select(PendingDispatch)).all())
+            count = len(
+                session.exec(
+                    select(PendingDispatch).where(
+                        PendingDispatch.tenant_id == env["context"].tenant_id
+                    )
+                ).all()
+            )
         response = client.get(base + "/" + data["job_id"])
         assert response.status_code == 200
         assert response.headers["cache-control"] == "no-store"
@@ -65,5 +71,14 @@ def test_public_api_commits_original_job_and_get_is_viewer_read_only(
         )
         assert response.json()["status"] == "PENDING"
         with Session(engine) as session:
-            assert len(session.exec(select(PendingDispatch)).all()) == count
+            assert (
+                len(
+                    session.exec(
+                        select(PendingDispatch).where(
+                            PendingDispatch.tenant_id == env["context"].tenant_id
+                        )
+                    ).all()
+                )
+                == count
+            )
     assert not wire[0]

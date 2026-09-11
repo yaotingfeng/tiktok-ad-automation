@@ -15,6 +15,7 @@ from app.modules.accounts.models import (
     BCAccountAccess,
     TikTokConnection,
 )
+from tests.modules.accounts.capabilities.conftest import seed_authority
 
 
 def test_capability_service_exists():
@@ -90,9 +91,36 @@ def test_start_is_flush_only_idempotent_and_reuses_active_connection_job(
     assert start(env) == job_id
     assert start({**env, "request_id": uuid4()}) == job_id
     with Session(engine) as session:
-        assert len(session.exec(select(CapabilityJob)).all()) == 1
-        assert len(session.exec(select(CapabilityRequest)).all()) == 2
-        assert len(session.exec(select(PendingDispatch)).all()) == 1
+        assert (
+            len(
+                session.exec(
+                    select(CapabilityJob).where(
+                        CapabilityJob.tenant_id == env["context"].tenant_id
+                    )
+                ).all()
+            )
+            == 1
+        )
+        assert (
+            len(
+                session.exec(
+                    select(CapabilityRequest).where(
+                        CapabilityRequest.tenant_id == env["context"].tenant_id
+                    )
+                ).all()
+            )
+            == 2
+        )
+        assert (
+            len(
+                session.exec(
+                    select(PendingDispatch).where(
+                        PendingDispatch.tenant_id == env["context"].tenant_id
+                    )
+                ).all()
+            )
+            == 1
+        )
     assert not wire[0]
 
 
@@ -131,7 +159,9 @@ def test_205_rows_five_reads_then_three_atomic_publish_pages(
         job = run(env, redis_client, job_id)
         with Session(engine) as session:
             assert not session.exec(
-                select(BCAccountAccess).where(col(BCAccountAccess.can_build).is_(True))
+                select(BCAccountAccess)
+                .where(BCAccountAccess.tenant_id == env["context"].tenant_id)
+                .where(col(BCAccountAccess.can_build).is_(True))
             ).all()
     assert job.phase == "PUBLISH"
     for expected in [100, 200, 205]:
@@ -148,7 +178,11 @@ def test_205_rows_five_reads_then_three_atomic_publish_pages(
             and "filtering" not in fields
         )
     with Session(engine) as session:
-        grants = session.exec(select(BCAccountAccess)).all()
+        grants = session.exec(
+            select(BCAccountAccess).where(
+                BCAccountAccess.tenant_id == env["context"].tenant_id
+            )
+        ).all()
         assert len(grants) == 205 and all(
             g.can_build and g.can_upload and g.permission_state == "VERIFIED"
             for g in grants
@@ -178,13 +212,35 @@ def test_scope_and_actual_user_role_are_both_required(
         conn.credential_ciphertext = encrypt_credentials(
             tenant_id=conn.tenant_id, value=private
         )
+        import json
+
+        from app.modules.accounts.connection_models import ConnectionAuthorization
+
+        authorization = session.exec(
+            select(ConnectionAuthorization)
+            .where(ConnectionAuthorization.tenant_id == env["context"].tenant_id)
+            .where(ConnectionAuthorization.connection_id == conn.id)
+        ).one()
+        values = json.loads(scope) if scope is not None else []
+        authorization.scopes = [str(v) for v in values]
+        authorization.permission_summary = {
+            "read_authorized": True if scope is not None else None,
+            "build_authorized": 2 in values if scope is not None else None,
+            "upload_authorized": bool(set(values) & {6, 61, 611})
+            if scope is not None
+            else None,
+        }
     job_id = start(env)
     wire[1].append(page(["actual-account"], role=role))
     run(env, redis_client, job_id)
     job = run(env, redis_client, job_id)
     assert job.status == "COMPLETE"
     with Session(engine) as session:
-        grant = session.exec(select(BCAccountAccess)).one()
+        grant = session.exec(
+            select(BCAccountAccess).where(
+                BCAccountAccess.tenant_id == env["context"].tenant_id
+            )
+        ).one()
         assert (grant.permission_state, grant.can_build, grant.can_upload) == expected
         assert session.get(TikTokConnection, env["connection_id"]).status == "ACTIVE"
 
@@ -203,7 +259,15 @@ def test_repeated_remote_id_fails_without_grant_publication(
         and result.error_code == "capability_response_unverified"
     )
     with Session(engine) as session:
-        assert not session.exec(select(BCAccountAccess)).one().can_build
+        assert (
+            not session.exec(
+                select(BCAccountAccess).where(
+                    BCAccountAccess.tenant_id == env["context"].tenant_id
+                )
+            )
+            .one()
+            .can_build
+        )
 
 
 def test_concurrent_request_id_cannot_change_connection(capability_env, monkeypatch):
@@ -225,6 +289,7 @@ def test_concurrent_request_id_cannot_change_connection(capability_env, monkeypa
         )
         session.add(second)
         session.flush()
+        seed_authority(session, second, env["bc_id"])
         second_id = second.id
         session.add(
             BCAccountAccess(
@@ -257,8 +322,26 @@ def test_concurrent_request_id_cannot_change_connection(capability_env, monkeypa
         results = list(pool.map(attempt, [env["connection_id"], second_id]))
     assert results.count("request_id_conflict") == 1
     with Session(engine) as session:
-        assert len(session.exec(select(CapabilityJob)).all()) == 1
-        assert len(session.exec(select(PendingDispatch)).all()) == 1
+        assert (
+            len(
+                session.exec(
+                    select(CapabilityJob).where(
+                        CapabilityJob.tenant_id == env["context"].tenant_id
+                    )
+                ).all()
+            )
+            == 1
+        )
+        assert (
+            len(
+                session.exec(
+                    select(PendingDispatch).where(
+                        PendingDispatch.tenant_id == env["context"].tenant_id
+                    )
+                ).all()
+            )
+            == 1
+        )
 
 
 def test_two_connections_publish_only_their_own_role_scope(
@@ -278,6 +361,7 @@ def test_two_connections_publish_only_their_own_role_scope(
         )
         session.add(conn)
         session.flush()
+        seed_authority(session, conn, env["bc_id"], "[611]")
         other_id = conn.id
         session.add(
             BCAccountAccess(
@@ -307,7 +391,11 @@ def test_two_connections_publish_only_their_own_role_scope(
     run(other_env, redis_client, other_job)
     run(other_env, redis_client, other_job)
     with Session(engine) as session:
-        for grant in session.exec(select(BCAccountAccess)):
+        for grant in session.exec(
+            select(BCAccountAccess).where(
+                BCAccountAccess.tenant_id == env["context"].tenant_id
+            )
+        ):
             assert grant.can_build == (grant.connection_id == env["connection_id"])
             assert grant.can_upload == (grant.connection_id == env["connection_id"])
     assert len(wire[0]) == 2
@@ -335,7 +423,15 @@ def test_publish_page_rolls_back_all_grants_and_progress_on_failure(
     assert job.status == "PENDING" and job.published_count == 0
     assert job.error_code == "capability_remote_unavailable"
     with Session(engine) as session:
-        assert not session.exec(select(BCAccountAccess)).one().can_build
+        assert (
+            not session.exec(
+                select(BCAccountAccess).where(
+                    BCAccountAccess.tenant_id == env["context"].tenant_id
+                )
+            )
+            .one()
+            .can_build
+        )
 
 
 def test_start_and_status_preserve_tenant_bc_and_current_role(capability_env):

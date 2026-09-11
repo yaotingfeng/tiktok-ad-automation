@@ -1,102 +1,118 @@
-"""Malformed fixture cases are synthetic, not recordings of customer assets."""
+"""场景字段与真正 worker 宿主约束；合成数据不代表线上能力。"""
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from sqlmodel import Session, select
 
-from app.core.db import engine
 from app.core.errors import DomainError
 from app.modules.builds import scene
-from app.modules.builds.scene_models import SceneEvidence
-from tests.modules.builds.scene.test_scene_concurrency import BOUNDED_GUARD
-from tests.modules.builds.scene.test_scene_reads import (
-    page,
-    refresh,
-    role_page,
-)
-from tests.modules.builds.scene.test_scene_reads import (
-    scene_env as scene_env,
-)
-from tests.modules.builds.scene.test_scene_reads import (
-    source_env as source_env,
-)
-from tests.modules.builds.scene.test_scene_reads import (
-    wire as wire,
-)
+
+BOUNDED_GUARD = scene._require_bounded_worker
 
 
 @pytest.mark.parametrize(
-    "mutate",
+    "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
+)
+@pytest.mark.parametrize(
+    "problem",
     [
-        lambda value: value.pop("page_info"),
-        lambda value: value["page_info"].update(page=True),
-        lambda value: value["page_info"].update(page_size=10),
-        lambda value: value["page_info"].update(total_page=1001),
-        lambda value: value["page_info"].update(total_number=2),
-        lambda value: value["list"][0].pop("advertiser_role"),
-        lambda value: value["list"][0].update(advertiser_role="ROLE_ADVERTISER"),
-        lambda value: value["list"][0].update(asset_type="CATALOG"),
+        "foreign_identity",
+        "duplicate_identity",
+        "missing_total",
+        "wrong_role",
+        "minis_regions",
+        "cta",
+        "vbo",
+        "region",
     ],
 )
-def test_incomplete_role_schema_never_establishes_permission(
-    scene_env, wire, redis_client, mutate
+def test_invalid_remote_scene_facts_fail_at_the_actual_channel_boundary(
+    database_engine, redis_client, scene_case, gateway_wire, problem
 ):
-    from app.modules.accounts.models import BCAccountAccess
+    from app.integrations.tiktok.gateway import open_tiktok_gateway
+    from tests.integrations.tiktok.gateway_support import business_calls
+    from tests.modules.builds.scene.support import enqueue, page, scene_responses
 
-    value = role_page()
-    mutate(value)
-    wire[1].append(value)
-    result = refresh(scene_env, redis_client, "account_roles")
-    assert not result.complete and result.reason_codes == ("scene_response_unverified",)
-    with Session(engine) as session:
-        grant = session.exec(select(BCAccountAccess)).one()
-        assert grant.permission_state == "UNKNOWN" and not grant.can_build
-        assert not session.exec(select(SceneEvidence)).all()
-
-
-def test_changed_pagination_does_not_publish_partial_identity(
-    scene_env, wire, redis_client
-):
-    wire[1].append(page([{"minis_id": f"other-{n}"} for n in range(50)], total=2))
-    first = refresh(scene_env, redis_client, "minis")
-    changed = page([{"minis_id": "last"}], number=2, total=2)
-    changed["page_info"]["total_number"] = 52
-    wire[1].append(changed)
-    result = refresh(scene_env, redis_client, "minis", first.evidence_id)
-    assert result.reason_codes == ("scene_pagination_changed",)
-    with Session(engine) as session:
-        assert len(session.exec(select(SceneEvidence)).all()) == 1
+    case = scene_case
+    resource = "identity"
+    data = scene_responses(case)[resource]
+    if problem == "foreign_identity":
+        data["identity_list"][0]["identity_authorized_bc_id"] = "other-bc"
+    elif problem == "duplicate_identity":
+        data = page(data["identity_list"] * 2, key="identity_list")
+    elif problem == "missing_total":
+        data["page_info"].pop("total_number")
+    elif problem == "wrong_role":
+        resource = "account_roles"
+        data = page(
+            [
+                {
+                    "asset_id": case["advertiser_id"],
+                    "asset_type": "ADVERTISER",
+                    "advertiser_role": "OWNER",
+                }
+            ]
+        )
+    elif problem == "minis_regions":
+        resource = "minis"
+        data = scene_responses(case)[resource]
+        data["list"][0]["region_codes"] = ["U1"]
+    elif problem == "cta":
+        resource, data = "cta", {"recommend_assets": [{"asset_ids": [False]}]}
+    elif problem == "vbo":
+        resource, data = "vbo", {"vo_min_roas": True}
+    else:
+        resource = "regions"
+        data = scene_responses(case)[resource]
+        data["region_info"][0].pop("location_id")
+    enqueue(gateway_wire, resource, data)
+    with open_tiktok_gateway(
+        database_engine=database_engine,
+        redis_client=redis_client,
+        context=case["context"],
+        route=case["route"],
+        task_deadline=datetime.now(UTC) + timedelta(seconds=20),
+    ) as gateway:
+        with pytest.raises(DomainError) as error:
+            gateway.scenes.read_page(
+                resource=resource,
+                advertiser_id=case["advertiser_id"],
+                page=1,
+                minis_id="synthetic-minis",
+            )
+        assert error.value.code == "scene_response_unverified"
+    assert len(business_calls(gateway_wire, case["route"].channel)) == 1
 
 
 @pytest.mark.parametrize(
-    "resource,data",
-    [
-        ("cta", {"recommend_assets": [{"asset_ids": [str(i) for i in range(51)]}]}),
-        ("cta", {"recommend_assets": [{"asset_ids": [False]}]}),
-        ("vbo", {"vo_min_roas": True}),
-        (
-            "minis",
-            page(
-                [
-                    {
-                        "minis_id": "fixture-minis",
-                        "minis_status": "ACTIVE",
-                        "minis_type": "MINI_SERIES",
-                        "region_codes": ["U1"],
-                    }
-                ]
-            ),
-        ),
-    ],
+    "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
 )
-def test_malformed_asset_facts_are_blocked(
-    scene_env, wire, redis_client, resource, data
+def test_scene_page_limit_rejects_before_physical_business_call(
+    database_engine, redis_client, scene_case, gateway_wire
 ):
-    wire[1].append(data)
-    assert refresh(scene_env, redis_client, resource).reason_codes == (
-        "scene_response_unverified",
-    )
+    from app.integrations.tiktok.gateway import open_tiktok_gateway
+    from tests.integrations.tiktok.gateway_support import business_calls
+    from tests.modules.builds.scene.support import enqueue, scene_responses
+
+    case = scene_case
+    enqueue(gateway_wire, "identity", scene_responses(case)["identity"])
+    with open_tiktok_gateway(
+        database_engine=database_engine,
+        redis_client=redis_client,
+        context=case["context"],
+        route=case["route"],
+        task_deadline=datetime.now(UTC) + timedelta(seconds=20),
+    ) as gateway:
+        with pytest.raises(DomainError) as error:
+            gateway.scenes.read_page(
+                resource="identity",
+                advertiser_id=case["advertiser_id"],
+                page=1001,
+                minis_id=None,
+            )
+        assert business_calls(gateway_wire, case["route"].channel) == []
+        assert error.value.code == "scene_request_invalid"
 
 
 @pytest.mark.parametrize(

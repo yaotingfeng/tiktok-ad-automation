@@ -16,6 +16,25 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
+# 与 FrozenTikTokRoute 的六字段一致；COALESCE 防止 JSON null/缺键通过 SQL 三值检查。
+_ROUTE_VALID = """
+jsonb_typeof(frozen_route) = 'object'
+AND frozen_route ?& ARRAY['tenant_id','bc_id','connection_id','channel','authorization_revision','adapter_contract_revision']
+AND frozen_route - ARRAY['tenant_id','bc_id','connection_id','channel','authorization_revision','adapter_contract_revision'] = '{}'::jsonb
+AND jsonb_typeof(frozen_route->'tenant_id') = 'string'
+AND jsonb_typeof(frozen_route->'bc_id') = 'string'
+AND jsonb_typeof(frozen_route->'connection_id') = 'string'
+AND jsonb_typeof(frozen_route->'channel') = 'string'
+AND jsonb_typeof(frozen_route->'authorization_revision') = 'number'
+AND jsonb_typeof(frozen_route->'adapter_contract_revision') = 'string'
+AND frozen_route->>'tenant_id' = tenant_id::text
+AND frozen_route->>'connection_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+AND length(btrim(frozen_route->>'bc_id')) > 0
+AND frozen_route->>'channel' IN ('OFFICIAL_API','OFFICIAL_MCP')
+AND frozen_route->>'authorization_revision' ~ '^[0-9]+$'
+AND length(btrim(frozen_route->>'adapter_contract_revision')) > 0
+"""
+
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
@@ -82,6 +101,13 @@ class SceneJob(SQLModel, table=True):
         CheckConstraint(
             "jsonb_typeof(facts) = 'object'", name="ck_build_scene_job_facts"
         ),
+        CheckConstraint(
+            "frozen_route IS NULL OR COALESCE(("
+            + _ROUTE_VALID
+            + " AND frozen_route->>'bc_id' = bc_id"
+            + " AND frozen_route->>'connection_id' = connection_id::text), false)",
+            name="ck_build_scene_job_frozen_route",
+        ),
         Index(
             "uq_build_scene_job_active_basis",
             "tenant_id",
@@ -101,6 +127,10 @@ class SceneJob(SQLModel, table=True):
     advertiser_id: str = Field(max_length=128)
     connection_id: UUID
     credential_revision: int
+    # 旧任务缺少授权语义证据，空路由只允许保留历史，不能再次发送或发布。
+    frozen_route: dict[str, Any] | None = Field(
+        default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True)
+    )
     provider_connection_id: UUID
     application_id: str = Field(max_length=255)
     minis_id: str = Field(max_length=255)
@@ -166,6 +196,8 @@ class SceneJobPage(SQLModel, table=True):
     page: int
     endpoint: str = Field(max_length=255)
     request_id: str | None = Field(default=None, max_length=128)
+    mcp_request_id: str | None = Field(default=None, max_length=128)
+    remote_task_id: str | None = Field(default=None, max_length=128)
     source_revision: str = Field(max_length=64)
     scope_basis: str = Field(max_length=64)
     facts: dict[str, Any] = Field(
@@ -194,10 +226,17 @@ class DraftScenePreparation(SQLModel, table=True):
             "preparation_id",
             name="uq_draft_scene_preparation_scope",
         ),
+        CheckConstraint(
+            "frozen_route IS NULL OR COALESCE((" + _ROUTE_VALID + "), false)",
+            name="ck_draft_scene_preparation_frozen_route",
+        ),
     )
     tenant_id: UUID = Field(primary_key=True)
     preparation_id: UUID = Field(primary_key=True)
     draft_id: UUID
+    frozen_route: dict[str, Any] | None = Field(
+        default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True)
+    )
     connection_after: UUID | None = None
     capabilities_queued: bool = False
     capabilities_complete: bool = False

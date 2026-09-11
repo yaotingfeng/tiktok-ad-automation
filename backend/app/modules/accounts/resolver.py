@@ -65,7 +65,12 @@ def bc_directory_scope(tenant_id: UUID, bc_id: str) -> Exists:
 
 
 def resolve_lines(
-    session: Session, *, context: TenantContext, bc_id: str, lines: list[InputLine]
+    session: Session,
+    *,
+    context: TenantContext,
+    bc_id: str,
+    lines: list[InputLine],
+    connection_id: UUID | None = None,
 ) -> list[ResolvedLine]:
     require_tenant(
         session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read"
@@ -121,6 +126,7 @@ def resolve_lines(
                     bc_id=bc_id,
                     advertiser_id=line.advertiser_id,
                     action="build",
+                    connection_id=connection_id,
                 )
             except DomainError as error:
                 line.status, line.reason = "BLOCKED", error.code

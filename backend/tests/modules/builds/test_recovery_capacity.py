@@ -11,6 +11,7 @@ from sqlmodel import select
 from app.modules.accounts.models import BCAccountAccess
 from app.modules.builds import recovery, submissions
 from app.modules.builds.execution_models import ExecutionStep, StepEvidence, Submission
+from app.modules.builds.routes import save_attempt_context
 from tests.modules.builds.test_previews import prepared as prepared
 from tests.modules.builds.test_submissions import frozen as frozen
 
@@ -73,6 +74,7 @@ def test_recovery_candidates_equal_legacy(session, context, frozen, case):
     elif case in {"retry", "armed_evidence", "active_lease"}:
         cta.status = "FAILED"
         if case == "armed_evidence":
+            save_attempt_context(session, step=cta, attempt=1)
             session.add(
                 StepEvidence(
                     tenant_id=row.tenant_id,
@@ -161,13 +163,19 @@ def test_generic_reconciliation_plan_uses_sparse_candidates_and_known_parent_ind
     session.execute(text("SET LOCAL plan_cache_mode='force_generic_plan'"))
     sql = "SELECT count(*) " + recovery._query(row, "RECONCILE")
     sql = (
-        sql.replace(":tenant", "$1").replace(":submission", "$2").replace(":now", "$3")
+        sql.replace(":tenant", "$1")
+        .replace(":submission", "$2")
+        .replace(":now", "$3")
+        .replace(":cutoff", "$4")
     )
-    session.execute(text("PREPARE recovery_capacity(uuid,uuid,timestamptz) AS " + sql))
+    session.execute(
+        text("PREPARE recovery_capacity(uuid,uuid,timestamptz,timestamptz) AS " + sql)
+    )
+    params = recovery._params(row)
     try:
         plan = session.execute(
             text(
-                f"EXPLAIN (FORMAT JSON) EXECUTE recovery_capacity('{row.tenant_id}','{row.id}','{datetime.now(UTC).isoformat()}')"
+                f"EXPLAIN (FORMAT JSON) EXECUTE recovery_capacity('{row.tenant_id}','{row.id}','{params['now'].isoformat()}','{params['cutoff'].isoformat()}')"
             )
         ).scalar_one()[0]["Plan"]
         names = {n.get("Index Name") for n in nodes(plan)}

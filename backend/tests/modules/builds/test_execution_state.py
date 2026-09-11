@@ -15,6 +15,7 @@ from app.modules.builds.execution_models import (
 )
 from app.modules.builds.execution_schemas import StepClaim
 from app.modules.builds.previews import generate_preview, get_preview_units
+from app.modules.builds.routes import load_preview_route, save_attempt_context
 from app.modules.builds.sdk_requests import RemoteCreated
 from tests.modules.builds.test_previews import drain
 from tests.modules.builds.test_previews import prepared as prepared
@@ -66,6 +67,7 @@ def attempt(session, context, prepared):
         lease_expires_at=expires,
     )
     session.add(step)
+    attempt_id = save_attempt_context(session, step=step)
     session.flush()
     claim = StepClaim(
         step_id=step.id,
@@ -84,6 +86,8 @@ def attempt(session, context, prepared):
         lease_token=nonce,
         lease_expires_at=expires,
         attempt=1,
+        attempt_id=attempt_id,
+        route=load_preview_route(session, context=context, preview_id=preview),
         dispatch_revision=0,
     )
     return step, claim
@@ -159,6 +163,7 @@ def test_stale_worker_cannot_arm_or_replace_a_new_owner(session, context, attemp
     step, old = attempt
     step.lease_token = uuid4()
     step.attempt = 2
+    save_attempt_context(session, step=step)
     session.flush()
     with pytest.raises(DomainError) as caught:
         arm_request(session, context=context, claim=old, body=body(old))

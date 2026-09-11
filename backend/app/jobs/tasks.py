@@ -42,6 +42,7 @@ def dispatch_queue(name: str) -> str:
 
 register_dispatch_task("jobs.probe", "control")
 register_dispatch_task("accounts.refresh_mcp", "control")
+register_dispatch_task("accounts.runtime_discover", "resources")
 
 
 @celery_app.task(name="jobs.probe")

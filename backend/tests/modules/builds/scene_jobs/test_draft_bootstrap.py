@@ -93,6 +93,35 @@ def tick(env, task_id):
         return continue_draft(session, context=env["context"], task_id=task_id)
 
 
+def test_draft_freezes_before_worker_and_queues_original_connection_without_default(
+    job_env,
+):
+    from app.modules.accounts.connection_models import BCDefaultRoute
+    from app.modules.builds.scene_job_models import (
+        DraftCapabilityDependency,
+        DraftScenePreparation,
+    )
+
+    env = job_env
+    _, task_id = seed_draft(env)
+    with Session(engine) as db, db.begin():
+        state = db.get(DraftScenePreparation, (env["context"].tenant_id, task_id))
+        assert state.frozen_route == env["route"].model_dump(mode="json")
+        db.delete(db.get(BCDefaultRoute, (env["context"].tenant_id, env["bc_id"])))
+    assert not tick(env, task_id)
+    with Session(engine) as db:
+        dependencies = db.exec(
+            select(DraftCapabilityDependency).where(
+                DraftCapabilityDependency.preparation_id == task_id
+            )
+        ).all()
+        assert len(dependencies) == 1
+        assert dependencies[0].connection_id == env["route"].connection_id
+        assert db.get(
+            DraftScenePreparation, (env["context"].tenant_id, task_id)
+        ).frozen_route == env["route"].model_dump(mode="json")
+
+
 def test_unknown_accounts_bootstrap_before_strict_resolution_then_wait_for_shared_scene(
     job_env, wire, redis_client
 ):
@@ -169,6 +198,20 @@ def test_unknown_scope_or_readonly_role_finishes_with_explicit_account_block(
         conn.credential_ciphertext = encrypt_credentials(
             tenant_id=conn.tenant_id, value=credentials
         )
+        if scope is None:
+            from app.modules.accounts.connection_models import ConnectionAuthorization
+
+            authorization = session.exec(
+                select(ConnectionAuthorization).where(
+                    ConnectionAuthorization.connection_id == conn.id
+                )
+            ).one()
+            authorization.scopes = []
+            authorization.permission_summary = {
+                "read_authorized": True,
+                "build_authorized": None,
+                "upload_authorized": None,
+            }
     draft_id, task_id = seed_draft(env)
     tick(env, task_id)
     with Session(engine) as session:

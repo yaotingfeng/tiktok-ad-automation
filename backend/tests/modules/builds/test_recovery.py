@@ -14,6 +14,7 @@ from app.jobs.models import PendingDispatch
 from app.modules.builds import recovery, submissions
 from app.modules.builds.execution_models import ExecutionStep, StepEvidence
 from app.modules.builds.recovery_models import SubmissionRecovery
+from app.modules.builds.routes import save_attempt_context
 from app.modules.tenants.models import TenantMembership
 from tests.modules.builds.test_execution import executable as executable
 
@@ -120,6 +121,9 @@ def test_historical_armed_evidence_also_prevents_retry(executable):
     db, context, _ = executable
     submission_id, step_id = setup_failure(executable)
     with Session(db) as session, session.begin():
+        save_attempt_context(
+            session, step=session.get(ExecutionStep, step_id), attempt=1
+        )
         session.add(
             StepEvidence(
                 tenant_id=context.tenant_id,

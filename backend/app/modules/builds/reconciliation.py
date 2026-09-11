@@ -39,6 +39,7 @@ from app.modules.builds.readback_sdk import (
     nonempty,
     read_page,
 )
+from app.modules.builds.routes import save_attempt_context, verify_unit_route
 from app.modules.tenants.permissions import require_tenant
 
 HARD_LIMIT = 45
@@ -81,8 +82,10 @@ class _Claim:
     submission_id: UUID
     token: UUID
     attempt: int
+    attempt_id: UUID
     revision: int
     source_attempt: int
+    source_attempt_id: UUID | None
     source_revision: int
     connection_id: UUID
     advertiser_id: str
@@ -172,12 +175,14 @@ def _authorize(
     require_tenant(
         session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="build"
     )
+    route = verify_unit_route(session, context=context, unit=unit, capability="build")
     access = resolve_account_access(
         session,
         context=context,
         bc_id=bc_id,
         advertiser_id=unit.advertiser_id,
         action="build",
+        connection_id=route.connection_id,
     )
     if access.connection_id != unit.connection_id:
         raise DomainError("account_authorization_changed", "冻结账户授权已变化")
@@ -214,12 +219,22 @@ def _evidence(
     claim: _Claim | None = None,
     request_id: str | None = None,
 ) -> None:
+    # 回读步骤和被核查的创建步骤具有独立计数，不能把两个 step 的 UUID 串联。
+    count, identity = step.attempt, None
+    if claim is not None:
+        if step.id == claim.step_id:
+            count, identity = claim.attempt, claim.attempt_id
+        elif step.id == claim.source_id:
+            count, identity = claim.source_attempt, claim.source_attempt_id
+        else:
+            raise DomainError("execution_attempt_changed", "证据不属于当前核查步骤")
+    save_attempt_context(session, step=step, attempt=count, expected_id=identity)
     session.add(
         StepEvidence(
             tenant_id=step.tenant_id,
             submission_id=step.submission_id,
             step_id=step.id,
-            attempt=claim.attempt if claim else step.attempt,
+            attempt=count,
             lease_token=claim.token if claim else step.lease_token,
             conclusion=conclusion,
             summary=summary,
@@ -318,6 +333,7 @@ def _claim(
         }
     token = uuid4()
     step.attempt += 1
+    attempt_id = save_attempt_context(session, step=step)
     for row in (source, step):
         row.lease_token, row.lease_expires_at = (
             token,
@@ -336,8 +352,10 @@ def _claim(
         step.submission_id,
         token,
         step.attempt,
+        attempt_id,
         revision,
         source.attempt,
+        source.attempt_id,
         source.dispatch_revision,
         connection_id,
         unit.advertiser_id,
@@ -359,8 +377,10 @@ def _active(step: ExecutionStep, source: ExecutionStep, claim: _Claim) -> bool:
             for row in (step, source)
         )
         and step.attempt == claim.attempt
+        and step.attempt_id == claim.attempt_id
         and step.dispatch_revision == claim.revision
         and source.attempt == claim.source_attempt
+        and source.attempt_id == claim.source_attempt_id
         and source.dispatch_revision == claim.source_revision
     )
 

@@ -283,6 +283,22 @@ class ExecutionStep(SQLModel, table=True):
         CheckConstraint(
             "attempt >= 0 AND dispatch_revision >= 0", name="ck_step_counters"
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "id", "attempt", "attempt_id"],
+            [
+                "build_attempt_context.tenant_id",
+                "build_attempt_context.step_id",
+                "build_attempt_context.attempt",
+                "build_attempt_context.attempt_id",
+            ],
+            name="fk_step_current_attempt",
+            deferrable=True,
+            initially="DEFERRED",
+            use_alter=True,
+        ),
+        CheckConstraint(
+            "attempt = 0 OR attempt_id IS NOT NULL", name="ck_step_attempt_identity"
+        ),
         CheckConstraint(
             "(lease_token IS NULL) = (lease_expires_at IS NULL)", name="ck_step_lease"
         ),
@@ -327,6 +343,7 @@ class ExecutionStep(SQLModel, table=True):
     phase: str = "IDLE"
     remote_id: str | None = None
     attempt: int = 0
+    attempt_id: UUID | None = None
     lease_token: UUID | None = None
     lease_expires_at: datetime | None = Field(
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
@@ -368,6 +385,18 @@ class StepEvidence(SQLModel, table=True):
                 "execution_step.submission_id",
                 "execution_step.id",
             ],
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "submission_id", "step_id", "attempt"],
+            [
+                "build_attempt_context.tenant_id",
+                "build_attempt_context.submission_id",
+                "build_attempt_context.step_id",
+                "build_attempt_context.attempt",
+            ],
+            name="fk_evidence_attempt_context",
+            deferrable=True,
+            initially="DEFERRED",
         ),
         CheckConstraint("attempt >= 0", name="ck_evidence_attempt"),
         Index(

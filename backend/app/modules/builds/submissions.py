@@ -13,6 +13,7 @@ from app.core.errors import DomainError
 from app.core.pagination import Page
 from app.modules.accounts.access import resolve_account_access
 from app.modules.accounts.models import TenantBC
+from app.modules.accounts.routing import verify_route
 from app.modules.builds.execution_models import (
     DraftUnitReservation,
     ExecutionStep,
@@ -31,6 +32,11 @@ from app.modules.builds.execution_schemas import (
 from app.modules.builds.models import BuildDraft
 from app.modules.builds.preview_models import BuildPreview, BuildUnit
 from app.modules.builds.previews import load_frozen_unit
+from app.modules.builds.routes import (
+    load_preview_route,
+    save_attempt_context,
+    verify_unit_route,
+)
 from app.modules.tenants.permissions import require_tenant
 
 
@@ -122,6 +128,10 @@ def submit_preview(
         )
     ).one_or_none()
     if existing is None:
+        route = load_preview_route(session, context=context, preview_id=preview.id)
+        verify_route(
+            session, context=context, route=route, advertiser_id=None, capability="read"
+        )
         bc = session.get(
             TenantBC, (context.tenant_id, preview.bc_id), populate_existing=True
         )
@@ -237,6 +247,10 @@ def expand_submission(
     row = submission_row(session, context, submission_id, lock=True)
     if row.actor_id != context.actor_id:
         raise DomainError("action_forbidden", "提交操作者不匹配")
+    route = load_preview_route(session, context=context, preview_id=row.preview_id)
+    verify_route(
+        session, context=context, route=route, advertiser_id=None, capability="read"
+    )
     if row.expanded:
         return True
     used = 0
@@ -267,6 +281,8 @@ def expand_submission(
                 session.add(row)
                 session.flush()
                 return True
+            if frozen.connection_id != route.connection_id:
+                raise DomainError("frozen_route_changed", "执行组合连接与父预览不一致")
             covered = bool(
                 SQLAlchemySession.execute(
                     session,
@@ -479,17 +495,20 @@ def claim_step(
             BuildUnit.tenant_id == row.tenant_id, BuildUnit.id == step.unit_id
         )
     ).one()
+    route = verify_unit_route(session, context=context, unit=frozen, capability="build")
     access = resolve_account_access(
         session,
         context=context,
         bc_id=row.bc_id,
         advertiser_id=frozen.advertiser_id,
         action="build",
+        connection_id=route.connection_id,
     )
     if access.connection_id != frozen.connection_id:
         raise DomainError("account_access_denied", "冻结账户授权已变更")
     step.status, step.phase = "RUNNING", "CLAIMED"
     step.attempt += 1
+    attempt_id = save_attempt_context(session, step=step)
     step.lease_token, step.lease_expires_at = (
         owner,
         now + timedelta(seconds=lease_seconds),
@@ -514,6 +533,8 @@ def claim_step(
         lease_token=owner,
         lease_expires_at=step.lease_expires_at,
         attempt=step.attempt,
+        attempt_id=attempt_id,
+        route=route,
         dispatch_revision=step.dispatch_revision,
     )
 

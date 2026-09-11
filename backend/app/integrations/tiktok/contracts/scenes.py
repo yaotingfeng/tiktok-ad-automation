@@ -127,7 +127,7 @@ class RegionFacts(FrozenFacts):
 
 
 SceneFacts = RoleFacts | IdentityFacts | MinisFacts | CtaFacts | VboFacts | RegionFacts
-FACT_TYPES = {
+FACT_TYPES: dict[SceneResource, type[SceneFacts]] = {
     "account_roles": RoleFacts,
     "identity": IdentityFacts,
     "minis": MinisFacts,

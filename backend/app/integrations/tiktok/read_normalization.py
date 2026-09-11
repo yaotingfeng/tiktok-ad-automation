@@ -293,6 +293,9 @@ def scene_arguments(
         require_id(advertiser_id)
         require_id(bc_id)
         require_page(page, PAGE_SIZE)
+        # 账户目录允许更大容量；场景分页合同仍固定最多 1000 页，发送前拒绝越界。
+        if page > 1000:
+            raise ValueError("scene page out of bounds")
         if minis_id is not None:
             require_id(minis_id)
     except ValueError:
@@ -425,6 +428,11 @@ class AccountsReadAdapter(ABC):
     ) -> DirectoryPage[BusinessCenterFact]:
         if not isinstance(self._context, CandidateReadContext):
             raise DomainError("read_directory_forbidden", "运行连接不可扩张 BC 目录")
+        return self._business_centers(page=page, page_size=page_size)
+
+    def _business_centers(
+        self, *, page: int, page_size: int
+    ) -> DirectoryPage[BusinessCenterFact]:
         response = self._call("accounts.list_bcs", self._page_args(page, page_size))
         data = object_data(response)
         rows, _ = legacy_accounts.paged_rows(data, page=page, page_size=page_size)

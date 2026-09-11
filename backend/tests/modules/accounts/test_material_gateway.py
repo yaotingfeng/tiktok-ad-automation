@@ -13,16 +13,16 @@ from app.integrations.tiktok.mcp.protocol import load_tool_contracts
 from app.jobs.models import PendingDispatch
 from app.modules.materials.models import AccountMaterial, MaterialFile
 from app.modules.materials.remote_sources import read_remote_source
-from tests.modules.accounts.test_gateway_factory import (
+from tests.integrations.tiktok.gateway_support import (
     business_calls,
 )
-from tests.modules.accounts.test_gateway_factory import (
+from tests.integrations.tiktok.gateway_support import (
     database_engine as database_engine,
 )
-from tests.modules.accounts.test_gateway_factory import (
+from tests.integrations.tiktok.gateway_support import (
     gateway_case as gateway_case,
 )
-from tests.modules.accounts.test_gateway_factory import (
+from tests.integrations.tiktok.gateway_support import (
     gateway_wire as gateway_wire,
 )
 

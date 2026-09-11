@@ -6,24 +6,25 @@ never invented from BC visibility or another connection's token.
 """
 
 import json
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any
 from uuid import UUID, uuid4
 
-import business_api_client as sdk  # type: ignore[import-untyped]
 from billiard.process import current_process  # type: ignore[import-untyped]
-from business_api_client.rest import ApiException  # type: ignore[import-untyped]
 from celery import current_task  # type: ignore[import-untyped]
+from sqlalchemy import or_, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
 from app.core.context import TenantContext
-from app.core.credentials import decrypt_credentials
 from app.core.errors import DomainError
-from app.integrations.tiktok.sdk import admitted_account_call, checked_data, sdk_client
-from app.jobs.admission import admission_policy
+from app.integrations.tiktok.bounded_resources import bounded_session
+from app.integrations.tiktok.contracts.accounts import AuthorizationFacts
+from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
+from app.integrations.tiktok.gateway import open_tiktok_gateway
 from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit
 from app.jobs.tasks import register_dispatch_task
@@ -42,11 +43,12 @@ from app.modules.accounts.models import (
     TenantBC,
     TikTokConnection,
 )
+from app.modules.accounts.routing import freeze_route, verify_route
 from app.modules.tenants.permissions import require_tenant
 
 TASK_NAME = "accounts.refresh_capabilities"
 ENDPOINT = "/open_api/v1.3/bc/asset/get/"
-REVISION = "bc-token-roles-2026-09-09-v2"
+REVISION = "dual-channel-authorization-roles-2026-09-12-v3"
 HARD_LIMIT = 45
 CLAIM_SECONDS = 60
 REPAIR_SECONDS = 120
@@ -142,23 +144,37 @@ def _directory_basis(
     ).hexdigest()
 
 
-def _scope_flags(conn: TikTokConnection) -> tuple[bool, bool, bool]:
-    private = decrypt_credentials(
-        tenant_id=conn.tenant_id, ciphertext=conn.credential_ciphertext or ""
+def _scope_flags(facts: AuthorizationFacts) -> tuple[bool, bool, bool]:
+    # 业务层只消费适配器授权事实，不解密 token，也不把角色/工具存在当作 scope。
+    age = (datetime.now(UTC) - facts.observed_at).total_seconds()
+    known = (
+        0 <= age <= settings.BC_CAPABILITY_MAX_AGE_SECONDS
+        and facts.evidence_source != "UNKNOWN"
+        and facts.upload_authorized is not None
+        and facts.build_authorized is not None
     )
-    try:
-        values = json.loads(private["scope"])
-        if (
-            not isinstance(values, list)
-            or len(values) > 1024
-            or any(type(x) is not int or not 0 < x < 2**64 for x in values)
-        ):
-            return False, False, False
-    except KeyError, ValueError, TypeError:
-        return False, False, False
-    # Official doc1753986142651394: parent 2, creative/video/upload 6/61/611.
-    scopes = set(values)
-    return True, 2 in scopes, bool(scopes & {6, 61, 611})
+    return (
+        known,
+        known and facts.build_authorized is True,
+        known and facts.upload_authorized is True,
+    )
+
+
+def _route(job: CapabilityJob) -> FrozenTikTokRoute:
+    if (
+        job.channel not in {"OFFICIAL_API", "OFFICIAL_MCP"}
+        or job.authorization_revision is None
+        or not job.adapter_contract_revision
+    ):
+        raise DomainError("capability_stale", "历史任务缺少冻结授权依据，请重新重检")
+    return FrozenTikTokRoute(
+        tenant_id=job.tenant_id,
+        bc_id=job.bc_id,
+        connection_id=job.connection_id,
+        channel="OFFICIAL_MCP" if job.channel == "OFFICIAL_MCP" else "OFFICIAL_API",
+        authorization_revision=job.authorization_revision,
+        adapter_contract_revision=job.adapter_contract_revision,
+    )
 
 
 def _queue(session: Session, job: CapabilityJob, *, delay: int = 0) -> None:
@@ -189,6 +205,9 @@ def start_capability_refresh(
     request_id: UUID,
 ) -> UUID:
     conn = _connection(session, context, bc_id, connection_id, lock=True)
+    route = freeze_route(
+        session, context=context, bc_id=bc_id, connection_id=connection_id
+    )
     previous = session.get(CapabilityRequest, (context.tenant_id, bc_id, request_id))
     if previous:
         original = session.get(CapabilityJob, previous.job_id)
@@ -199,6 +218,9 @@ def start_capability_refresh(
     basis = _directory_basis(session, context, bc_id, connection_id)
     if basis is None:
         raise DomainError("capability_unavailable", "当前账户目录缺少可核实版本")
+    from app.modules.accounts.runtime_directory import needs_directory_refresh
+
+    current_facts_fresh = not needs_directory_refresh(session, route)
     now = datetime.now(UTC)
     existing = session.exec(
         select(CapabilityJob)
@@ -206,12 +228,15 @@ def start_capability_refresh(
             CapabilityJob.tenant_id == context.tenant_id,
             CapabilityJob.bc_id == bc_id,
             CapabilityJob.connection_id == connection_id,
-            CapabilityJob.credential_revision == conn.credential_revision,
+            CapabilityJob.authorization_revision == conn.authorization_revision,
+            CapabilityJob.channel == conn.kind,
+            CapabilityJob.adapter_contract_revision == conn.adapter_contract_revision,
             CapabilityJob.directory_basis == basis,
             (col(CapabilityJob.status) == "PENDING")
             | (
                 (col(CapabilityJob.status) == "COMPLETE")
                 & (col(CapabilityJob.expires_at) > now)
+                & current_facts_fresh
             ),
         )
         .order_by(col(CapabilityJob.created_at).desc())
@@ -226,6 +251,9 @@ def start_capability_refresh(
                     connection_id=connection_id,
                     actor_id=context.actor_id,
                     credential_revision=conn.credential_revision,
+                    channel=route.channel,
+                    authorization_revision=route.authorization_revision,
+                    adapter_contract_revision=route.adapter_contract_revision,
                     directory_basis=basis,
                 )
                 session.add(existing)
@@ -281,52 +309,6 @@ def get_capability_job(
     return job
 
 
-def _parse(response: object, page: int) -> tuple[list[tuple[str, str]], int, int]:
-    data = checked_data(response)
-    info, values = data.get("page_info"), data.get("list")
-    invalid = DomainError("capability_response_unverified", "账户角色分页无法完整核实")
-    if not isinstance(info, dict) or not isinstance(values, list) or len(values) > 50:
-        raise invalid
-    if (
-        any(
-            type(info.get(k)) is not int
-            for k in ("page", "page_size", "total_page", "total_number")
-        )
-        or info["page"] != page
-        or info["page_size"] != 50
-        or page < 1
-        or info["total_page"] < 0
-        # Storage bound, not a platform/account-count policy. A 1000-page cap
-        # incorrectly rejects valid 100k-account directories at 50 rows/page.
-        or not 0 <= info["total_number"] <= 2**31 - 1
-        or page > max(1, info["total_page"])
-    ):
-        raise invalid
-    if info["total_page"] != (info["total_number"] + 49) // 50 or len(values) != min(
-        50, max(0, info["total_number"] - (page - 1) * 50)
-    ):
-        raise invalid
-    rows = []
-    seen = set()
-    for item in values:
-        if not isinstance(item, dict):
-            raise invalid
-        aid, role = item.get("asset_id"), item.get("advertiser_role")
-        if (
-            not isinstance(aid, str)
-            or not aid.strip()
-            or len(aid) > 128
-            or aid in seen
-            or item.get("asset_type") != "ADVERTISER"
-            or not isinstance(role, str)
-            or role not in {"ADMIN", "OPERATOR", "ANALYST"}
-        ):
-            raise invalid
-        seen.add(aid)
-        rows.append((aid, role))
-    return rows, info["total_page"], info["total_number"]
-
-
 def _locked_job(
     session: Session, tenant_id: UUID, job_id: UUID
 ) -> CapabilityJob | None:
@@ -352,18 +334,72 @@ def _locked_job(
 
 
 def _validate(
-    session: Session, job: CapabilityJob, context: TenantContext
+    session: Session,
+    job: CapabilityJob,
+    context: TenantContext,
+    *,
+    allow_expired_roles: bool = False,
 ) -> TikTokConnection:
-    if job.expires_at is not None and job.expires_at <= datetime.now(UTC):
+    if (
+        not allow_expired_roles
+        and job.expires_at is not None
+        and job.expires_at <= datetime.now(UTC)
+    ):
         raise DomainError("capability_stale", "账户角色证据已过期，需要重新重检")
     conn = _connection(session, context, job.bc_id, job.connection_id, lock=False)
+    verify_route(
+        session,
+        context=context,
+        route=_route(job),
+        advertiser_id=None,
+        capability="read",
+    )
     if (
-        conn.credential_revision != job.credential_revision
-        or _directory_basis(session, context, job.bc_id, job.connection_id)
+        _directory_basis(session, context, job.bc_id, job.connection_id)
         != job.directory_basis
     ):
         raise DomainError("capability_stale", "授权或账户目录已改变，需要重新重检")
     return conn
+
+
+def _restrict_permissions(
+    session: Session,
+    *,
+    job: CapabilityJob,
+    facts: AuthorizationFacts,
+    rows: Sequence[tuple[str, str | None]],
+) -> None:
+    # 读取尚未完整时只能单调收紧，绝不提前授予、改变目录成员或借用另一连接。
+    known, build, upload = _scope_flags(facts)
+    scope = update(BCAccountAccess).where(
+        col(BCAccountAccess.tenant_id) == job.tenant_id,
+        col(BCAccountAccess.bc_id) == job.bc_id,
+        col(BCAccountAccess.connection_id) == job.connection_id,
+    )
+    changes: dict[str, Any] = {}
+    if not build:
+        changes["can_build"] = False
+    if not upload:
+        changes["can_upload"] = False
+    if not known:
+        # UNKNOWN 是本地缺少证明，不能记录成提供方明确撤权。
+        changes["permission_state"] = "UNKNOWN"
+    if changes:
+        session.execute(
+            scope.where(
+                or_(
+                    col(BCAccountAccess.can_build).is_(True),
+                    col(BCAccountAccess.can_upload).is_(True),
+                )
+            ).values(**changes)
+        )
+    restricted = [identity for identity, role in rows if role == "ANALYST"]
+    if restricted:
+        session.execute(
+            scope.where(col(BCAccountAccess.advertiser_id).in_(restricted)).values(
+                can_build=False, can_upload=False
+            )
+        )
 
 
 def _publish(session: Session, job: CapabilityJob, context: TenantContext) -> None:
@@ -435,7 +471,13 @@ def _fail(session: Session, job: CapabilityJob, error: Exception) -> None:
         if isinstance(error, DomainError)
         else "capability_remote_unavailable"
     )
-    if code == "capability_stale":
+    if code == "unsupported_account_schema":
+        code = "capability_response_unverified"
+    if code in {
+        "capability_stale",
+        "route_authorization_changed",
+        "route_contract_changed",
+    }:
         status = "STALE"
     elif code in {
         "action_forbidden",
@@ -444,6 +486,8 @@ def _fail(session: Session, job: CapabilityJob, error: Exception) -> None:
         "account_not_in_bc",
         "capability_unavailable",
         "credential_invalid",
+        "mcp_refresh_unknown",
+        "mcp_refresh_reauth_required",
     }:
         status = "BLOCKED"
     elif code in {"capability_response_unverified", "tiktok_response_error"}:
@@ -458,6 +502,8 @@ def _fail(session: Session, job: CapabilityJob, error: Exception) -> None:
                 "admission_unavailable",
                 "admission_policy_invalid",
                 "admission_unconfigured",
+                "mcp_refresh_pending",
+                "gateway_credentials_changed",
             }
             else "capability_remote_unavailable"
         )
@@ -506,15 +552,19 @@ def process_capability(
             return
         try:
             with session.begin_nested():
-                _validate(session, job, context)
+                from app.modules.accounts.runtime_directory import (
+                    ensure_runtime_directory,
+                    needs_directory_refresh,
+                )
+
+                refresh_required = needs_directory_refresh(session, _route(job))
+                _validate(session, job, context, allow_expired_roles=refresh_required)
+                if refresh_required:
+                    ensure_runtime_directory(session, job=job, context=context)
+                    return
                 if job.phase == "PUBLISH":
                     _publish(session, job, context)
                     return
-                policy = admission_policy(ENDPOINT)
-                if policy.lease_ms <= (HARD_LIMIT + 5) * 1000:
-                    raise DomainError(
-                        "admission_policy_invalid", "能力任务调用租约短于工作进程硬限"
-                    )
                 job.claim_token = nonce
                 job.claimed_until = now + timedelta(seconds=CLAIM_SECONDS)
                 session.add(job)
@@ -523,43 +573,44 @@ def process_capability(
             _fail(session, job, error)
             return
         page, connection_id, bc_id = job.next_page, job.connection_id, job.bc_id
+        route = _route(job)
+    deadline = datetime.now(UTC) + timedelta(seconds=30)
+
+    def before_request() -> None:
+        # 初始化、协议目录与每次业务HTTP前均重检原操作者和claim，短事务不跨网络。
+        with bounded_session(database_engine, task_deadline=deadline) as session:
+            current = _locked_job(session, tenant_id, job_id)
+            if (
+                current is None
+                or current.actor_id != actor_id
+                or current.status != "PENDING"
+                or current.claim_token != nonce
+                or current.revision != payload["revision"]
+                or current.claimed_until is None
+                or current.claimed_until <= datetime.now(UTC)
+                or _route(current) != route
+            ):
+                raise DomainError("capability_stale", "原能力任务或请求claim已失效")
+            _validate(session, current, context)
+
     try:
-        with admitted_account_call(
-            redis_client,
+        with open_tiktok_gateway(
+            database_engine=database_engine,
+            redis_client=redis_client,
             context=context,
-            endpoint=ENDPOINT,
-            advertiser_id=bc_id,
-            policy=policy,
-        ):
-            with Session(database_engine) as session:
-                job = session.get(CapabilityJob, job_id)
-                assert job
-                _validate(session, job, context)
-                with sdk_client(
-                    session, context=context, connection_id=connection_id
-                ) as client:
-                    session.close()
-                    try:
-                        response = sdk.BCApi(client).bc_asset_get(
-                            bc_id,
-                            "ADVERTISER",
-                            client.default_headers["Access-Token"],
-                            page=page,
-                            page_size=50,
-                            _request_timeout=(5, 30),
-                        )
-                    except ApiException as error:
-                        # Inspect only the structured HTTP status before sdk_client
-                        # sanitizes errors. A throttled GET must release its worker
-                        # and enter the existing durable retry/backoff path.
-                        if error.status == 429:
-                            raise DomainError(
-                                "capability_remote_unavailable",
-                                "账户能力读取暂不可用",
-                                retryable=True,
-                            ) from None
-                        raise
-        rows, total_pages, total_count = _parse(response, page)
+            route=route,
+            task_deadline=deadline,
+            before_request=before_request,
+        ) as gateway:
+            facts = gateway.accounts.authorization_facts()
+            result = gateway.accounts.roles(bc_id=bc_id, page=page, page_size=50)
+        rows = [(item.advertiser_id, item.role) for item in result.items]
+        total_pages, total_count = result.total_pages, result.total_number
+        # 未返回精确总数或未知角色无法构成完整角色证据，旧授权快照保持不变。
+        if total_count is None or any(role is None for _, role in rows):
+            raise DomainError(
+                "capability_response_unverified", "账户角色完整性尚未核实"
+            )
         with Session(database_engine) as session, session.begin():
             job = _locked_job(session, tenant_id, job_id)
             if (
@@ -574,7 +625,7 @@ def process_capability(
                 or job.claimed_until <= datetime.now(UTC)
             ):
                 return
-            conn = _validate(session, job, context)
+            _validate(session, job, context)
             if job.total_pages is not None and (
                 job.total_pages != total_pages or job.total_count != total_count
             ):
@@ -599,6 +650,7 @@ def process_capability(
                 raise DomainError(
                     "capability_response_unverified", "账户角色分页包含重复记录"
                 )
+            _restrict_permissions(session, job=job, facts=facts, rows=rows)
             observed_at = datetime.now(UTC)
             if page == 1:
                 job.expires_at = observed_at + timedelta(
@@ -637,7 +689,7 @@ def process_capability(
                     raise DomainError(
                         "capability_response_unverified", "账户角色分页未完整读取"
                     )
-                job.scope_known, job.scope_build, job.scope_upload = _scope_flags(conn)
+                job.scope_known, job.scope_build, job.scope_upload = _scope_flags(facts)
                 job.phase = "PUBLISH"
             job.revision += 1
             _queue(session, job)
@@ -747,7 +799,10 @@ def get_capability_evidence(
                 CapabilityJob.tenant_id == context.tenant_id,
                 CapabilityJob.bc_id == bc_id,
                 CapabilityJob.connection_id == connection_id,
-                CapabilityJob.credential_revision == conn.credential_revision,
+                CapabilityJob.authorization_revision == conn.authorization_revision,
+                CapabilityJob.channel == conn.kind,
+                CapabilityJob.adapter_contract_revision
+                == conn.adapter_contract_revision,
                 CapabilityJob.status == "COMPLETE",
                 CapabilityJob.phase == "DONE",
                 col(CapabilityJob.expires_at) > now,

@@ -8,6 +8,7 @@ from sqlmodel import Session, select
 from urllib3.response import HTTPResponse
 
 from app.modules.builds.execution_models import ExecutionStep, StepEvidence
+from app.modules.builds.routes import save_attempt_context
 from tests.modules.builds.test_execution import executable as executable
 from tests.modules.builds.test_execution import run
 
@@ -347,6 +348,7 @@ def test_review_actual_late_sdk_receipt_preserves_new_owner_nonce(
             if known_id:
                 step.remote_id, step.phase = "new-actual", "DONE"
             step.attempt = 2
+            save_attempt_context(session, step=step)
             step.lease_token = replacement
             step.lease_expires_at = datetime.now(UTC) + timedelta(seconds=60)
             session.add(step)

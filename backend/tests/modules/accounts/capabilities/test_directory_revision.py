@@ -47,9 +47,7 @@ def test_5000_accounts_complete_and_evidence_uses_only_point_revision_reads(
         raise AssertionError("Evidence reader attempted external work or a write")
 
     for name in [
-        "decrypt_credentials",
-        "sdk_client",
-        "admitted_account_call",
+        "open_tiktok_gateway",
         "enqueue_after_commit",
     ]:
         monkeypatch.setattr(capabilities, name, forbidden)

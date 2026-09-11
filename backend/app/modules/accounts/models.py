@@ -18,6 +18,7 @@ from app.integrations.tiktok.contracts.context import ChannelKind
 
 # discovery 的 MCP 复合外键在普通应用进程也需注册，不能依赖 Alembic 导入。
 from app.modules.accounts import connection_models as connection_models
+from app.modules.accounts import discovery_models as discovery_models
 
 OPERABLE_REMOTE_STATUSES = frozenset({"STATUS_ENABLE", "ENABLE"})
 
@@ -117,6 +118,9 @@ class DiscoveryRun(SQLModel, table=True):
     __tablename__ = "discovery_run"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_discovery_run_tenant_id"),
+        UniqueConstraint(
+            "tenant_id", "connection_id", "id", name="uq_discovery_run_connection"
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "connection_id"],
             ["tiktok_connection.tenant_id", "tiktok_connection.id"],

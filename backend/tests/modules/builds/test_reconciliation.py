@@ -6,6 +6,7 @@ import business_api_client as sdk
 import pytest
 
 from app.modules.builds import readback_sdk
+from app.modules.builds.routes import save_attempt_context
 
 
 def test_ad_get_uses_parent_scope_and_never_invents_name_filter(monkeypatch):
@@ -501,6 +502,26 @@ def test_adgroup_status_is_a_separate_get_and_readback_never_disables(
             and source.checked_at
         )
     assert calls[1][0] == readback_sdk.ENDPOINTS["ADGROUP_STATUS"]
+    # 回读可有第二次分页尝试，创建步骤仍是自己的原始计数与 companion。
+    from sqlmodel import select
+
+    from app.modules.builds.execution_models import StepEvidence
+    from app.modules.builds.route_models import BuildAttemptContext
+
+    with Session(env.engine) as session:
+        readback = session.get(ExecutionStep, identity)
+        source = session.get(ExecutionStep, readback.parent_step_id)
+        event = session.exec(
+            select(StepEvidence).where(
+                StepEvidence.step_id == source.id,
+                StepEvidence.conclusion == "RECONCILED",
+            )
+        ).one()
+        own = session.get(
+            BuildAttemptContext, (source.tenant_id, source.id, event.attempt)
+        )
+        assert event.attempt == source.attempt != readback.attempt
+        assert own.attempt_id == source.attempt_id != readback.attempt_id
 
 
 def test_cta_requires_known_receipt_and_exact_text_id_binding(recon_env, monkeypatch):
@@ -514,6 +535,7 @@ def test_cta_requires_known_receipt_and_exact_text_id_binding(recon_env, monkeyp
     assert run(env, identity).state == "UNKNOWN" and not calls
     with Session(env.engine) as session:
         step = session.get(ExecutionStep, identity)
+        save_attempt_context(session, step=step)
         session.add(
             StepEvidence(
                 tenant_id=step.tenant_id,
@@ -722,8 +744,7 @@ def test_changed_connection_and_foreign_context_never_read_remote(
     assert run(env, identity).state == "UNKNOWN" and not calls
     with Session(env.engine) as session:
         assert (
-            session.get(ExecutionStep, identity).error_code
-            == "account_authorization_changed"
+            session.get(ExecutionStep, identity).error_code == "account_access_denied"
         )
 
 
@@ -955,6 +976,7 @@ def test_conflicting_late_receipts_never_pick_an_arbitrary_id(recon_env, monkeyp
     identity, _ = arm(env)
     with Session(env.engine) as session:
         step = session.get(ExecutionStep, identity)
+        save_attempt_context(session, step=step, attempt=1)
         for remote in ("one", "two"):
             session.add(
                 StepEvidence(

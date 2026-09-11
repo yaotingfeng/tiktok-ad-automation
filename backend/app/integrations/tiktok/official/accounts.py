@@ -18,7 +18,8 @@ from app.integrations.tiktok.contracts.accounts import (
     RuntimeReadContext,
 )
 from app.integrations.tiktok.contracts.common import CallEvidence, McpBusinessResponse
-from app.integrations.tiktok.read_normalization import AccountsReadAdapter
+from app.integrations.tiktok.contracts.discovery import ObservedAuthorization
+from app.integrations.tiktok.discovery_read import DiscoveryReadAdapter
 from app.integrations.tiktok.sdk import checked_data
 
 RequestScope = Callable[[str | None, str, datetime], AbstractContextManager[None]]
@@ -47,6 +48,8 @@ def _strict_sdk_envelope(client: Any) -> Iterator[None]:
 
     def deserialize(response: Any, response_type: Any) -> Any:
         try:
+            if len(response.data) > 8 * 1024 * 1024:
+                raise ValueError("oversized provider response")
             raw = json.loads(response.data)
         except ValueError, TypeError, AttributeError, RecursionError:
             raise DomainError(
@@ -107,7 +110,7 @@ class OfficialReadRequests:
             return McpBusinessResponse(data, CallEvidence(request_id=request_id))
 
 
-class OfficialAccountsGateway(AccountsReadAdapter):
+class OfficialAccountsGateway(DiscoveryReadAdapter):
     def __init__(
         self,
         client: Any,
@@ -118,6 +121,7 @@ class OfficialAccountsGateway(AccountsReadAdapter):
         secret: str,
         request_scope: RequestScope,
         deadline: datetime,
+        observation_authorization: AuthorizationFacts | None = None,
     ):
         super().__init__(context=context, authorization=authorization)
         self._requests = OfficialReadRequests(
@@ -125,6 +129,14 @@ class OfficialAccountsGateway(AccountsReadAdapter):
         )
         self._app_id = app_id
         self._secret = secret
+        self._observation_authorization = observation_authorization
+
+    def observe_authorization(self) -> ObservedAuthorization:
+        # 固定 SDK 未暴露主体读取合同；只保留实际 OAuth scope，主体与grant不臆造。
+        return ObservedAuthorization(
+            facts=self._observation_authorization or self.authorization_facts(),
+            evidence=CallEvidence(),
+        )
 
     def _call(self, operation: str, arguments: dict[str, Any]) -> McpBusinessResponse:
         client = self._requests.client

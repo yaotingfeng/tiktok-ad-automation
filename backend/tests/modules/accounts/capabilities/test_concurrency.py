@@ -25,6 +25,7 @@ def test_network_holds_no_connection_or_job_lock_and_duplicate_has_no_get(
             assert (
                 session.exec(
                     select(CapabilityJob)
+                    .where(CapabilityJob.tenant_id == env["context"].tenant_id)
                     .where(CapabilityJob.id == job_id)
                     .with_for_update(nowait=True)
                 )
@@ -71,7 +72,11 @@ def test_receipt_rejects_authority_or_claim_change(
                     )
                 ).one().role = "viewer"
             elif change == "directory":
-                session.exec(select(BCAccountAccess)).one().authorized = False
+                session.exec(
+                    select(BCAccountAccess).where(
+                        BCAccountAccess.tenant_id == env["context"].tenant_id
+                    )
+                ).one().authorized = False
             elif change == "nonce":
                 job.claim_token = uuid4()
             elif change == "deadline":
@@ -89,8 +94,20 @@ def test_receipt_rejects_authority_or_claim_change(
     result = run(env, redis_client, job_id)
     assert result.phase == "READ"
     with Session(engine) as session:
-        assert not session.exec(select(CapabilityAsset)).all()
-        assert not session.exec(select(BCAccountAccess)).one().can_build
+        assert not session.exec(
+            select(CapabilityAsset).where(
+                CapabilityAsset.tenant_id == env["context"].tenant_id
+            )
+        ).all()
+        assert (
+            not session.exec(
+                select(BCAccountAccess).where(
+                    BCAccountAccess.tenant_id == env["context"].tenant_id
+                )
+            )
+            .one()
+            .can_build
+        )
         if change == "actor":
             from app.models import User
 
