@@ -71,6 +71,7 @@ ERROR_HTTP_STATUS: dict[str, int] = {
     "gateway_authorization_invalid": 409,
     "gateway_tool_observation_required": 409,
     "material_channel_unverified": 409,
+    "material_route_unverified": 409,
     "build_capability_not_enabled": 409,
     "build_readback_unverified": 502,
     "cta_unknown_id": 409,

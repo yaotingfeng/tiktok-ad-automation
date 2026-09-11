@@ -120,12 +120,16 @@ def create_session(
             raise DomainError("idempotency_conflict", "请求标识已绑定另一份导入清单")
         return summary(existing)
     require_ingest_storage()
+    from app.modules.accounts.routing import freeze_route
+
+    route = freeze_route(db, context=context, bc_id=body.bc_id)
     row = IngestSession(
         tenant_id=context.tenant_id,
         bc_id=body.bc_id,
         actor_id=context.actor_id,
         request_id=body.request_id,
         request_digest=request_digest,
+        frozen_route=route.model_dump(mode="json"),
         expected_files=body.file_count,
         expected_bytes=body.total_bytes,
     )

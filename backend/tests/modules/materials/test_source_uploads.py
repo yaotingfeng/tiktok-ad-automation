@@ -3,6 +3,7 @@
 import json
 import socket
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from hashlib import md5, sha256
 from threading import Event
 from uuid import UUID, uuid4
@@ -20,12 +21,18 @@ from app.core.errors import DomainError
 from app.jobs.admission import admission_keys
 from app.jobs.models import PendingDispatch
 from app.models import User
+from app.modules.accounts.connection_models import (
+    BCConnectionBinding,
+    BCDefaultRoute,
+    ConnectionAuthorization,
+)
 from app.modules.accounts.models import (
     AdvertiserAccount,
     BCAccountAccess,
     TenantBC,
     TikTokConnection,
 )
+from app.modules.accounts.routing import freeze_route
 from app.modules.materials import sdk_assets as api
 from app.modules.materials import tasks  # noqa: F401
 from app.modules.materials.models import (
@@ -84,6 +91,37 @@ def source_env(monkeypatch, redis_client):
         )
         session.add_all([bc, connection])
         session.flush()
+        session.add(
+            BCConnectionBinding(
+                tenant_id=context.tenant_id,
+                bc_id=bc.bc_id,
+                connection_id=connection.id,
+                kind="OFFICIAL_API",
+            )
+        )
+        session.flush()
+        session.add(
+            BCDefaultRoute(
+                tenant_id=context.tenant_id, bc_id=bc.bc_id, connection_id=connection.id
+            )
+        )
+        session.add(
+            ConnectionAuthorization(
+                tenant_id=context.tenant_id,
+                connection_id=connection.id,
+                authorization_revision=connection.authorization_revision,
+                scopes=["synthetic-read-upload-build"],
+                source="SYNTHETIC_VERIFIED_EVIDENCE",
+                issuer="https://business-api.tiktok.com",
+                resource="https://business-api.tiktok.com/open_api/v1.3",
+                permission_summary={
+                    "read_authorized": True,
+                    "build_authorized": True,
+                    "upload_authorized": True,
+                },
+                verified_at=datetime.now(UTC),
+            )
+        )
         account = AdvertiserAccount(
             tenant_id=context.tenant_id,
             advertiser_id="actual-account",
@@ -104,6 +142,7 @@ def source_env(monkeypatch, redis_client):
             can_upload=True,
             can_build=True,
             permission_state="VERIFIED",
+            checked_at=datetime.now(UTC),
         )
         material = MaterialFile(
             tenant_id=context.tenant_id,
@@ -124,6 +163,9 @@ def source_env(monkeypatch, redis_client):
             request_id=uuid4(),
             request_digest="a" * 64,
             status="stored",
+            frozen_route=freeze_route(
+                session, context=context, bc_id=bc.bc_id, connection_id=connection.id
+            ).model_dump(mode="json"),
         )
         session.add(batch)
         session.flush()
@@ -207,6 +249,12 @@ def seed_operation(env, *, status="verifying", evidence=None):
             material_id=env["material_id"],
             advertiser_id="actual-account",
             path="upload_original",
+            frozen_route=freeze_route(
+                session,
+                context=env["context"],
+                bc_id=env["bc_id"],
+                connection_id=env["connection_id"],
+            ).model_dump(mode="json"),
             status=status,
             request_digest="a" * 64,
             remote_response=evidence
@@ -407,7 +455,7 @@ def test_stale_attempt_token_cannot_publish_readiness(source_env, redis_client, 
 
 
 def test_revoked_upload_permission_before_request(source_env, redis_client, wire):
-    op_id = seed_operation(source_env)
+    op_id = seed_operation(source_env, status="pending", evidence={})
     calls, _ = wire
     with Session(engine) as session, session.begin():
         session.get(
@@ -415,7 +463,7 @@ def test_revoked_upload_permission_before_request(source_env, redis_client, wire
             (source_env["context"].tenant_id, source_env["context"].actor_id),
         ).role = "viewer"
     with pytest.raises(DomainError) as error:
-        run(source_env, redis_client, operation_id=op_id)
+        run(source_env, redis_client, operation_id=op_id, kind="upload")
     assert error.value.code == "action_forbidden"
     assert not calls
 
@@ -666,7 +714,7 @@ def test_revoke_during_response_prevents_readiness(source_env, redis_client, wir
                     "actual-account",
                     source_env["connection_id"],
                 ),
-            ).can_upload = False
+            ).authorized = False
         return info()
 
     wire[1].append(response)
@@ -740,6 +788,7 @@ def test_explicit_unsent_retry_selects_new_account_and_preserves_history(source_
                 authorized=True,
                 active=True,
                 permission_state="VERIFIED",
+                checked_at=datetime.now(UTC),
             )
         )
     with Session(engine) as session, session.begin():

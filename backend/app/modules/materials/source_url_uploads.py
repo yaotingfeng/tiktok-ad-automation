@@ -36,6 +36,7 @@ from .models import (
     MaterialFile,
     MaterialUploadAttempt,
 )
+from .routes import require_sdk_route, source_parent_route
 from .source_selection import claim_source_account, release_source_account, source_file
 from .source_uploads import (
     READ_CLAIM_SECONDS,
@@ -151,6 +152,14 @@ def _new_operation(
     material: MaterialFile,
     obj: TemporaryMaterialObject,
 ) -> MaterialAssetOperation:
+    route = source_parent_route(
+        db,
+        context=context,
+        material_id=material.id,
+        bc_id=material.bc_id,
+        generation=obj.generation,
+    )
+    require_sdk_route(route)
     access = claim_source_account(
         db,
         context=context,
@@ -159,6 +168,7 @@ def _new_operation(
         # A new operation always charges its own slot. A persisted file tuple
         # can belong to a finished, released operation from an older generation.
         reselect=True,
+        route=route,
     )
     conflicting = db.exec(
         select(MaterialAssetOperation.id).where(
@@ -194,6 +204,7 @@ def _new_operation(
         advertiser_id=access.advertiser_id,
         path="upload_original",
         request_digest=digest,
+        frozen_route=route.model_dump(mode="json"),
         remote_response={
             "object_id": str(obj.id),
             "generation": obj.generation,
@@ -371,7 +382,9 @@ def _finish(
         assert attempt
         if kind == "verify" and work.get("video_id") and evidence:
             _proof(material, obj, row, upload=False)
-            access = _source_access(db, context=context, work=work)
+            access = _source_access(
+                db, context=context, work=work, upload=kind == "upload"
+            )
             if (
                 operation.remote_response.get("conflicting_video_id")
                 or operation.remote_response.get("video_id") != evidence["video_id"]
@@ -702,6 +715,7 @@ def run_url_source_upload(
         )
         work: dict[str, Any] = {
             **operation.remote_response,
+            "frozen_route": operation.frozen_route,
             "bc_id": material.bc_id,
             "advertiser_id": operation.advertiser_id,
             "connection_id": attempt.connection_id,
@@ -742,7 +756,9 @@ def run_url_source_upload(
                 if operation.attempt_token != claim:
                     return
                 _proof(material, obj, row, upload=kind == "upload")
-                access = _source_access(db, context=context, work=work)
+                access = _source_access(
+                    db, context=context, work=work, upload=kind == "upload"
+                )
                 with sdk_client(
                     db, context=context, connection_id=access.connection_id
                 ) as client:

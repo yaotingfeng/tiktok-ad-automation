@@ -394,6 +394,19 @@ def start_upload_batch(
             ensure_ascii=False,
         ).encode()
     ).hexdigest()
+    existing = session.exec(
+        select(UploadBatch).where(
+            UploadBatch.tenant_id == context.tenant_id,
+            UploadBatch.request_id == request_id,
+        )
+    ).one_or_none()
+    if existing is not None:
+        if existing.request_digest != digest or existing.actor_id != context.actor_id:
+            raise DomainError("idempotency_conflict", "同一上传请求的文件清单不一致")
+        return get_upload_batch(session, context=context, batch_id=existing.id)
+    from app.modules.accounts.routing import freeze_route
+
+    route = freeze_route(session, context=context, bc_id=bc_id)
     identity = uuid4()
     result = session.exec(
         insert(UploadBatch)
@@ -404,6 +417,7 @@ def start_upload_batch(
             actor_id=context.actor_id,
             request_id=request_id,
             request_digest=digest,
+            frozen_route=route.model_dump(mode="json"),
             status="receiving",
             created_at=_now(),
         )

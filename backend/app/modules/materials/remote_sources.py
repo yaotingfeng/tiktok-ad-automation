@@ -11,6 +11,7 @@ from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.integrations.tiktok.bounded_resources import bounded_session
 from app.integrations.tiktok.contracts import materials as material_types
+from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.integrations.tiktok.gateway import open_tiktok_gateway
 from app.jobs.admission import AdmissionPolicy, admission_policy
 from app.modules.accounts.access import resolve_account_access, usable_grants
@@ -87,7 +88,7 @@ def source_info_policy(*, hard_limit: int) -> AdmissionPolicy:
     )
 
 
-def read_remote_source(
+def read_frozen_remote_source(
     *,
     database_engine: Any,
     redis_client: Any,
@@ -95,6 +96,7 @@ def read_remote_source(
     bc_id: str,
     material_id: UUID,
     source_asset_id: UUID,
+    route: FrozenTikTokRoute,
     deadline: datetime,
     hard_limit: int,
     extend_lease: bool = False,
@@ -161,8 +163,18 @@ def read_remote_source(
             action="read",
             connection_id=connection_id,
         )
-        route = freeze_route(
-            db, context=context, bc_id=bc_id, connection_id=connection_id
+        if (route.tenant_id, route.bc_id, route.connection_id) != (
+            context.tenant_id,
+            bc_id,
+            connection_id,
+        ):
+            raise DomainError("frozen_route_scope_mismatch", "来源与冻结连接范围不一致")
+        verify_route(
+            db,
+            context=context,
+            route=route,
+            advertiser_id=advertiser_id,
+            capability="read",
         )
     with open_tiktok_gateway(
         database_engine=database_engine,
@@ -220,3 +232,53 @@ def read_remote_source(
             "material_preview_unverified", "来源视频规格或本次读取期限无法核实"
         )
     return preview
+
+
+def read_remote_source(
+    *,
+    database_engine: Any,
+    redis_client: Any,
+    context: TenantContext,
+    bc_id: str,
+    material_id: UUID,
+    source_asset_id: UUID,
+    deadline: datetime,
+    hard_limit: int,
+    extend_lease: bool = False,
+) -> material_types.SourcePreview:
+    """页面新预览独立冻结；已有任务必须调用 required-route 的内部边界。"""
+    from .source_uploads import READ_HARD_LIMIT
+
+    deadline = min(deadline, datetime.now(UTC) + timedelta(seconds=READ_HARD_LIMIT - 5))
+    material_types.RemoteCallBudget(
+        deadline=deadline,
+        hard_limit_seconds=READ_HARD_LIMIT,
+        lease_ms=admission_policy("materials.get_videos").lease_ms,
+    ).timeout(upload=False)
+    with bounded_session(database_engine, task_deadline=deadline) as db:
+        source = resolve_remote_source(
+            db,
+            context=context,
+            bc_id=bc_id,
+            material_id=material_id,
+            source_asset_id=source_asset_id,
+        )
+        if source is None:
+            raise DomainError(
+                "material_remote_source_unavailable", "来源证据或权限已改变"
+            )
+        route = freeze_route(
+            db, context=context, bc_id=bc_id, connection_id=source.connection_id
+        )
+    return read_frozen_remote_source(
+        database_engine=database_engine,
+        redis_client=redis_client,
+        context=context,
+        bc_id=bc_id,
+        material_id=material_id,
+        source_asset_id=source_asset_id,
+        route=route,
+        deadline=deadline,
+        hard_limit=hard_limit,
+        extend_lease=extend_lease,
+    )

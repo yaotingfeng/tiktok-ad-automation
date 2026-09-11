@@ -4,6 +4,7 @@ from sqlmodel import Session, select
 
 from app.modules.builds.execution_models import ExecutionStep
 from app.modules.builds.material_execution import recover_material_results
+from app.modules.builds.routes import load_preview_route
 from app.modules.materials.models import AccountMaterial, MaterialDistribution
 from tests.modules.builds.test_execution import executable as executable
 from tests.modules.builds.test_recovery_materials import unknown_material
@@ -12,6 +13,7 @@ from tests.modules.builds.test_recovery_materials import unknown_material
 def unresolved(db, context, identity, *, status="result_unknown"):
     with Session(db) as session, session.begin():
         step = session.get(ExecutionStep, identity)
+        route = load_preview_route(session, context=context, preview_id=step.preview_id)
         dist = MaterialDistribution(
             tenant_id=context.tenant_id,
             bc_id=step.bc_id,
@@ -19,6 +21,7 @@ def unresolved(db, context, identity, *, status="result_unknown"):
             advertiser_id="account-A",
             actor_id=context.actor_id,
             path="original_upload",
+            target_route=route.model_dump(mode="json"),
             status=status,
         )
         session.add(dist)

@@ -623,6 +623,7 @@ def _expand_unit(
                 bc_id=preview.bc_id,
                 material_ids=list(materials),
                 advertiser_id=unit.advertiser_id,
+                route=load_preview_route(session, context=context, preview_id=preview.id),
             )
             if materials
             else {}

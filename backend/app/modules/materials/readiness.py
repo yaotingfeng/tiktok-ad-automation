@@ -8,6 +8,7 @@ from sqlmodel import Session, col, select
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
+from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.jobs.admission import admission_policy
 from app.jobs.celery_app import celery_app
 from app.modules.accounts.access import resolve_account_access, usable_grants
@@ -17,6 +18,7 @@ from . import sdk_assets as api
 from .models import AccountMaterial, MaterialAssetOperation, MaterialFile
 from .remote_sources import require_remote_material
 from .repository import asset_public, require_material_scope
+from .routes import require_material_route, require_sdk_route
 from .schemas import MaterialReadiness
 from .source_uploads import READ_HARD_LIMIT, UPLOAD_HARD_LIMIT
 
@@ -164,7 +166,18 @@ def require_upload_path(
     context: TenantContext,
     material: MaterialFile,
     advertiser_id: str,
+    route: FrozenTikTokRoute | None = None,
 ) -> None:
+    if route is not None:
+        require_material_route(
+            session,
+            context=context,
+            route=route,
+            bc_id=material.bc_id,
+            advertiser_id=advertiser_id,
+            capability="upload",
+        )
+        require_sdk_route(route)
     if material.current_object_generation is not None:
         raise DomainError("material_result_pending", "请等待来源账户素材核实后继续")
     if material.storage_state != "stored":
@@ -179,6 +192,7 @@ def require_upload_path(
         bc_id=material.bc_id,
         advertiser_id=advertiser_id,
         action="upload",
+        connection_id=route.connection_id if route else None,
     )
     require_execution_config(upload=True, endpoint=api.UPLOAD_ENDPOINT)
 
@@ -190,6 +204,7 @@ def get_material_readiness_batch(
     bc_id: str,
     material_ids: list[UUID],
     advertiser_id: str,
+    route: FrozenTikTokRoute | None = None,
 ) -> dict[UUID, MaterialReadiness]:
     """Read one bounded group with current authority, without cross-call caching.
 
@@ -221,12 +236,22 @@ def get_material_readiness_batch(
         )
 
     try:
+        if route is not None:
+            require_material_route(
+                session,
+                context=context,
+                route=route,
+                bc_id=bc_id,
+                advertiser_id=advertiser_id,
+                capability="build",
+            )
         resolve_account_access(
             session,
             context=context,
             bc_id=bc_id,
             advertiser_id=advertiser_id,
             action="build",
+            connection_id=route.connection_id if route else None,
         )
     except DomainError as error:
         return {identity: blocked(error) for identity in identities}
@@ -352,6 +377,7 @@ def get_material_readiness_batch(
                     bc_id=bc_id,
                     advertiser_id=advertiser_id,
                     action="upload",
+                    connection_id=route.connection_id if route else None,
                 )
                 require_execution_config(
                     upload=True, endpoint=api.UPLOAD_ENDPOINT, original=False
@@ -384,6 +410,7 @@ def get_material_readiness_batch(
                             bc_id=bc_id,
                             advertiser_id=advertiser_id,
                             action="upload",
+                            connection_id=route.connection_id if route else None,
                         )
                         require_execution_config(
                             upload=True, endpoint=api.UPLOAD_ENDPOINT
@@ -424,6 +451,7 @@ def get_material_readiness(
     bc_id: str,
     material_id: UUID,
     advertiser_id: str,
+    route: FrozenTikTokRoute | None = None,
 ) -> MaterialReadiness:
     return get_material_readiness_batch(
         session,
@@ -431,4 +459,5 @@ def get_material_readiness(
         bc_id=bc_id,
         material_ids=[material_id],
         advertiser_id=advertiser_id,
+        route=route,
     )[material_id]

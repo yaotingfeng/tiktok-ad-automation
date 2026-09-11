@@ -87,6 +87,29 @@ def upload_owner(monkeypatch):
     with Session(engine) as session, session.begin():
         context = create_context(session)
         session.add(TenantBC(tenant_id=context.tenant_id, bc_id="bc-a"))
+        from app.modules.accounts.connection_models import (
+            BCConnectionBinding,
+            BCDefaultRoute,
+        )
+        from app.modules.accounts.models import TikTokConnection
+
+        connection = TikTokConnection(tenant_id=context.tenant_id, status="ACTIVE")
+        session.add(connection)
+        session.flush()
+        session.add(
+            BCConnectionBinding(
+                tenant_id=context.tenant_id,
+                bc_id="bc-a",
+                connection_id=connection.id,
+                kind="OFFICIAL_API",
+            )
+        )
+        session.flush()
+        session.add(
+            BCDefaultRoute(
+                tenant_id=context.tenant_id, bc_id="bc-a", connection_id=connection.id
+            )
+        )
     try:
         yield context
     finally:

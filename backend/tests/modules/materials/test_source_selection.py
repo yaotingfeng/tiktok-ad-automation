@@ -10,6 +10,7 @@ from sqlmodel import Session, select
 from app.core.db import engine
 from app.core.errors import DomainError
 from app.modules.accounts.models import AdvertiserAccount, BCAccountAccess
+from app.modules.accounts.routing import freeze_route
 from app.modules.materials.ingest_models import (
     IngestSession,
     IngestSessionFile,
@@ -54,6 +55,7 @@ def add_accounts(db, env, count):
                 can_upload=True,
                 can_build=True,
                 permission_state="VERIFIED",
+                checked_at=datetime.now(UTC),
             )
         )
     old = db.exec(
@@ -73,6 +75,12 @@ def add_files(db, env, count):
         actor_id=env["context"].actor_id,
         request_id=uuid4(),
         request_digest="a" * 64,
+        frozen_route=freeze_route(
+            db,
+            context=env["context"],
+            bc_id=env["bc_id"],
+            connection_id=env["connection_id"],
+        ).model_dump(mode="json"),
         expected_files=count,
         expected_bytes=count * len(CONTENT),
     )
@@ -109,7 +117,16 @@ def claim(db, env, material_id):
     from app.modules.materials.source_selection import claim_source_account
 
     return claim_source_account(
-        db, context=env["context"], bc_id=env["bc_id"], material_id=material_id
+        db,
+        context=env["context"],
+        bc_id=env["bc_id"],
+        material_id=material_id,
+        route=freeze_route(
+            db,
+            context=env["context"],
+            bc_id=env["bc_id"],
+            connection_id=env["connection_id"],
+        ),
     )
 
 

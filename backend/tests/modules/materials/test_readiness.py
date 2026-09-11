@@ -40,6 +40,7 @@ def target(
             can_build=True,
             can_upload=can_upload,
             permission_state=state,
+            checked_at=datetime.now(UTC),
         )
     )
     session.flush()

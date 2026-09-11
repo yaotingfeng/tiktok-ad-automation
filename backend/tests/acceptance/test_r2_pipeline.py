@@ -19,6 +19,7 @@ from app.core.db import engine
 from app.core.errors import DomainError, domain_error_handler
 from app.core.security import create_access_token
 from app.jobs.models import PendingDispatch
+from app.modules.accounts.routing import freeze_route
 from app.modules.materials import storage
 from app.modules.materials.cleanup import run_cleanup
 from app.modules.materials.ingest_models import (
@@ -410,6 +411,12 @@ def test_api_to_verified_source_cleanup_target_and_cover(
             material_id=env["material_id"],
             advertiser_id=env["target"],
             task_key=f"acceptance:{uuid4()}",
+            route=freeze_route(
+                db,
+                context=env["context"],
+                bc_id=env["bc_id"],
+                connection_id=env["connection_id"],
+            ),
         )
     response = video_info(remote, "pipeline-target")
     response["list"][0]["video_cover_url"] = "https://image.example.test/cover"

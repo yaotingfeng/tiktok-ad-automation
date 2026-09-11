@@ -7,6 +7,7 @@ from app.jobs.models import PendingDispatch
 from app.modules.builds import recovery
 from app.modules.builds.execution_models import ExecutionStep
 from app.modules.builds.preview_models import BuildUnit
+from app.modules.builds.routes import load_preview_route
 from app.modules.materials.distribution import run_distribution
 from app.modules.materials.models import (
     MaterialAssetOperation,
@@ -21,6 +22,7 @@ def unknown_material(env, *, source=False):
     db, context, ids = env
     with Session(db) as session, session.begin():
         step = session.get(ExecutionStep, ids["MATERIAL"][0])
+        route = load_preview_route(session, context=context, preview_id=step.preview_id)
         unit = session.get(BuildUnit, step.unit_id)
         op = MaterialAssetOperation(
             tenant_id=context.tenant_id,
@@ -29,6 +31,7 @@ def unknown_material(env, *, source=False):
             advertiser_id=unit.advertiser_id,
             path="upload_original",
             status="result_unknown",
+            frozen_route=route.model_dump(mode="json"),
             request_digest="a" * 64,
         )
         session.add(op)
@@ -42,6 +45,7 @@ def unknown_material(env, *, source=False):
             path="upload_original",
             status="result_unknown",
             operation_id=op.id,
+            target_route=route.model_dump(mode="json"),
         )
         session.add(dist)
         session.flush()

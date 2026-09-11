@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts import materials as material_types
+from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.integrations.tiktok.sdk import (
     AccountAdmissionDeferred,
     admitted_account_call,
@@ -24,14 +25,20 @@ from app.jobs.admission import admission_policy
 from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit
 from app.jobs.tasks import register_dispatch_task
-from app.modules.accounts.access import resolve_account_access, usable_grants
-from app.modules.accounts.models import BCAccountAccess, TikTokConnection
+from app.modules.accounts.access import resolve_account_access
+from app.modules.accounts.models import TikTokConnection
 from app.modules.tenants.permissions import require_tenant
 
 from . import cover_sdk as api
 from .cover_models import MaterialCoverJob, MaterialCoverJobPage, MaterialCoverReceipt
 from .models import AccountMaterial, MaterialFile
 from .repository import asset_public, require_material_scope
+from .routes import (
+    load_material_route,
+    require_material_route,
+    require_same_route,
+    require_sdk_route,
+)
 from .schemas import AssetPreparation
 from .sdk_assets import INFO_ENDPOINT as VIDEO_INFO_ENDPOINT
 
@@ -55,7 +62,6 @@ def _mapping(session: Session, job: MaterialCoverJob) -> AccountMaterial | None:
             asset.bc_id,
             asset.material_id,
             asset.advertiser_id,
-            asset.connection_id,
             asset.video_id,
             asset.status,
         )
@@ -64,7 +70,6 @@ def _mapping(session: Session, job: MaterialCoverJob) -> AccountMaterial | None:
             job.bc_id,
             job.material_id,
             job.advertiser_id,
-            job.connection_id,
             job.video_id,
             "available",
         )
@@ -84,26 +89,20 @@ def _access(
     require_tenant(
         session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="build"
     )
-    action = "upload" if upload else "read"
-    resolve_account_access(
-        session,
+    route = load_material_route(
+        job.frozen_route,
         context=context,
         bc_id=job.bc_id,
-        advertiser_id=job.advertiser_id,
-        action=action,
+        connection_id=job.connection_id,
     )
-    if (
-        session.exec(
-            usable_grants(
-                tenant_id=job.tenant_id, bc_id=job.bc_id, action=action
-            ).where(
-                BCAccountAccess.advertiser_id == job.advertiser_id,
-                BCAccountAccess.connection_id == job.connection_id,
-            )
-        ).first()
-        is None
-    ):
-        raise DomainError("account_access_denied", "原素材连接当前不支持此操作")
+    require_material_route(
+        session,
+        context=context,
+        route=route,
+        bc_id=job.bc_id,
+        advertiser_id=job.advertiser_id,
+        capability="upload" if upload else "read",
+    )
     if _mapping(session, job) is None:
         raise DomainError(
             "cover_video_changed", "目标视频或连接已变化，请重新准备当前素材"
@@ -171,17 +170,19 @@ def ensure_cover(
     material_id: UUID,
     advertiser_id: str,
     task_key: str,
+    route: FrozenTikTokRoute,
 ) -> AssetPreparation:
     # Caller task keys cannot create a second upload identity for the same VID.
     if not task_key or len(task_key) > 255:
         raise DomainError("invalid_asset_task", "封面任务标识无效")
     require_material_scope(session, context=context, bc_id=bc_id)
-    resolve_account_access(
+    require_material_route(
         session,
         context=context,
+        route=route,
         bc_id=bc_id,
         advertiser_id=advertiser_id,
-        action="build",
+        capability="build",
     )
     material = session.exec(
         select(MaterialFile)
@@ -211,17 +212,23 @@ def ensure_cover(
         or not asset.verified_at
     ):
         return AssetPreparation(state="blocked", reason_code="cover_video_not_ready")
-    job = session.exec(
+    jobs = session.exec(
         select(MaterialCoverJob)
         .where(
             MaterialCoverJob.tenant_id == context.tenant_id,
             MaterialCoverJob.asset_id == asset.id,
-            MaterialCoverJob.connection_id == asset.connection_id,
             MaterialCoverJob.video_id == asset.video_id,
         )
         .with_for_update()
-    ).first()
+        .limit(2)
+    ).all()
+    if len(jobs) > 1:
+        raise DomainError("material_route_unverified", "历史素材连接信息需要核实")
+    job = jobs[0] if jobs else None
     if job:
+        require_same_route(
+            load_material_route(job.frozen_route, context=context, bc_id=bc_id), route
+        )
         _access(session, context, job)
         if job.status == "READY" and not _fresh(job):
             _queue(session, job, read=True)
@@ -234,7 +241,8 @@ def ensure_cover(
         material_id=material_id,
         asset_id=asset.id,
         advertiser_id=advertiser_id,
-        connection_id=asset.connection_id,
+        connection_id=route.connection_id,
+        frozen_route=route.model_dump(mode="json"),
         actor_id=context.actor_id,
         video_id=asset.video_id,
         remote_name=f"cover-{identity.hex}.jpg",
@@ -445,6 +453,11 @@ def _call[T](
             if current is None:
                 raise DomainError("cover_claim_lost", "封面任务执行权已变化")
             _access(session, context, current, upload=arm)
+            require_sdk_route(
+                load_material_route(
+                    current.frozen_route, context=context, bc_id=current.bc_id
+                )
+            )
             connection = session.get(TikTokConnection, current.connection_id)
             assert connection
             api.require_cover_scopes(connection, endpoint=endpoint)

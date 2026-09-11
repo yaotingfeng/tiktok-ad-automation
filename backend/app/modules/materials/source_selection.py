@@ -13,6 +13,7 @@ from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
+from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.modules.accounts.access import resolve_account_access, usable_grants
 from app.modules.accounts.models import BCAccountAccess
 from app.modules.accounts.schemas import AccountAccess
@@ -20,6 +21,7 @@ from app.modules.tenants.permissions import require_tenant
 
 from .ingest_models import IngestSessionFile, SourceAccountLoad
 from .models import MaterialAssetOperation, MaterialFile
+from .routes import require_material_route
 
 SOURCE_MAX_INFLIGHT = 1
 CANDIDATE_WINDOW = 100
@@ -75,7 +77,12 @@ def _exact_access(
     connection_id: UUID,
 ) -> AccountAccess:
     access = resolve_account_access(
-        db, context=context, bc_id=bc_id, advertiser_id=advertiser_id, action="upload"
+        db,
+        context=context,
+        bc_id=bc_id,
+        advertiser_id=advertiser_id,
+        action="upload",
+        connection_id=connection_id,
     )
     grant = db.exec(
         usable_grants(tenant_id=context.tenant_id, bc_id=bc_id, action="upload").where(
@@ -95,6 +102,7 @@ def claim_source_account(
     bc_id: str,
     material_id: UUID,
     reselect: bool = False,
+    route: FrozenTikTokRoute,
 ) -> AccountAccess:
     """Persist the exact assignment and slot once; caller creates its operation.
 
@@ -107,6 +115,16 @@ def claim_source_account(
     row = source_file(db, context=context, bc_id=bc_id, material_id=material_id)
     if row.source_advertiser_id and not reselect:
         assert row.connection_id
+        if row.connection_id != route.connection_id:
+            raise DomainError("frozen_route_changed", "来源账户与原上传连接不一致")
+        require_material_route(
+            db,
+            context=context,
+            route=route,
+            bc_id=bc_id,
+            advertiser_id=row.source_advertiser_id,
+            capability="upload",
+        )
         return _exact_access(
             db,
             context=context,
@@ -150,9 +168,11 @@ def claim_source_account(
         .group_by(SourceAccountLoad.advertiser_id)
         .subquery()
     )
-    grants = usable_grants(
-        tenant_id=context.tenant_id, bc_id=bc_id, action="upload"
-    ).subquery()
+    grants = (
+        usable_grants(tenant_id=context.tenant_id, bc_id=bc_id, action="upload")
+        .where(BCAccountAccess.connection_id == route.connection_id)
+        .subquery()
+    )
     candidates = db.exec(
         select(grants.c.advertiser_id, grants.c.connection_id)
         .outerjoin(loads, grants.c.advertiser_id == loads.c.advertiser_id)
@@ -185,6 +205,14 @@ def claim_source_account(
         ).one()
         if occupied[0] >= SOURCE_MAX_INFLIGHT or (occupied[1] and occupied[1] > now):
             continue
+        require_material_route(
+            db,
+            context=context,
+            route=route,
+            bc_id=bc_id,
+            advertiser_id=advertiser_id,
+            capability="upload",
+        )
         access = _exact_access(
             db,
             context=context,
@@ -210,9 +238,9 @@ def claim_source_account(
         db.flush()
         return access
     any_grant = db.exec(
-        usable_grants(tenant_id=context.tenant_id, bc_id=bc_id, action="upload").limit(
-            1
-        )
+        usable_grants(tenant_id=context.tenant_id, bc_id=bc_id, action="upload")
+        .where(BCAccountAccess.connection_id == route.connection_id)
+        .limit(1)
     ).first()
     raise DomainError(
         "source_capacity_pending" if any_grant else "no_upload_account",

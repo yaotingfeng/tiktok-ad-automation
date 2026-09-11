@@ -24,6 +24,7 @@ from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlmodel import Field, Session, SQLModel, col, select
 
 from .models import access_reference, material_reference
+from .routes import route_constraint
 
 
 def utcnow() -> datetime:
@@ -74,6 +75,7 @@ def canonical_object_key(
 class IngestSession(SQLModel, table=True):
     __tablename__ = "ingest_session"
     __table_args__ = (
+        route_constraint("ingest_session", "frozen_route"),
         bc_reference(),
         ForeignKeyConstraint(
             ["tenant_id", "actor_id"],
@@ -104,6 +106,9 @@ class IngestSession(SQLModel, table=True):
     tenant_id: UUID
     bc_id: str = Field(max_length=128)
     actor_id: UUID
+    frozen_route: dict[str, Any] | None = Field(
+        default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True)
+    )
     request_id: UUID
     request_digest: str = Field(max_length=64)
     expected_files: int

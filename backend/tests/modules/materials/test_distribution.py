@@ -7,6 +7,7 @@ from sqlmodel import Session, select
 from app.core.db import engine
 from app.jobs.models import PendingDispatch
 from app.modules.accounts.models import BCAccountAccess
+from app.modules.accounts.routing import freeze_route
 from app.modules.materials.distribution import ensure_target_asset, run_distribution
 from app.modules.materials.models import (
     AccountMaterial,
@@ -37,6 +38,12 @@ def queue(env, account):
             material_id=env["material_id"],
             advertiser_id=account,
             task_key=f"build:{uuid4()}",
+            route=freeze_route(
+                session,
+                context=env["context"],
+                bc_id=env["bc_id"],
+                connection_id=env["connection_id"],
+            ),
         )
 
 
@@ -180,6 +187,12 @@ def test_unknown_share_does_not_assume_source_mid_maps_to_target(
             material_id=source_env["material_id"],
             advertiser_id=account,
             path="share_source",
+            frozen_route=freeze_route(
+                session,
+                context=source_env["context"],
+                bc_id=source_env["bc_id"],
+                connection_id=source_env["connection_id"],
+            ).model_dump(mode="json"),
             status="result_unknown",
             request_digest="a" * 64,
             remote_response={"source_mid": source.mid},
@@ -237,6 +250,12 @@ def test_unsent_share_without_capability_blocks_after_source_revocation(
                 material_id=source_env["material_id"],
                 advertiser_id=account,
                 path="share_source",
+                frozen_route=freeze_route(
+                    session,
+                    context=source_env["context"],
+                    bc_id=source_env["bc_id"],
+                    connection_id=source_env["connection_id"],
+                ).model_dump(mode="json"),
                 status="pending",
                 request_digest="a" * 64,
             )
@@ -283,6 +302,12 @@ def test_unproven_failed_share_cannot_start_upload_on_new_submission(source_env,
                 material_id=source_env["material_id"],
                 advertiser_id=account,
                 path="share_source",
+                frozen_route=freeze_route(
+                    session,
+                    context=source_env["context"],
+                    bc_id=source_env["bc_id"],
+                    connection_id=source_env["connection_id"],
+                ).model_dump(mode="json"),
                 status="failed",
                 request_digest="a" * 64,
                 remote_response={"error_code": "timeout"},

@@ -1,6 +1,7 @@
 """One permanent image-upload identity per actual target video and connection."""
 
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -15,6 +16,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
 from .models import access_reference, material_reference
+from .routes import route_constraint
 
 
 def utcnow() -> datetime:
@@ -24,6 +26,7 @@ def utcnow() -> datetime:
 class MaterialCoverJob(SQLModel, table=True):
     __tablename__ = "material_cover_job"
     __table_args__ = (
+        route_constraint("material_cover_job", "frozen_route", connection=True),
         material_reference(),
         access_reference(),
         ForeignKeyConstraint(
@@ -73,6 +76,9 @@ class MaterialCoverJob(SQLModel, table=True):
     advertiser_id: str = Field(max_length=128)
     connection_id: UUID
     actor_id: UUID = Field(foreign_key="user.id")
+    frozen_route: dict[str, Any] | None = Field(
+        default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True)
+    )
     video_id: str = Field(max_length=255)
     remote_name: str = Field(max_length=128)
     status: str = Field(default="PENDING", max_length=16)

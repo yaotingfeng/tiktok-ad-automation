@@ -295,6 +295,7 @@ def prepare_request(
                 material_id=material_id,
                 advertiser_id=claim.advertiser_id,
                 task_key=f"build:{claim.step_id}:{material_id}",
+                route=claim.route,
             )
             if ready.state == "blocked":
                 raise DomainError(
@@ -312,6 +313,7 @@ def prepare_request(
                 material_id=material_id,
                 advertiser_id=claim.advertiser_id,
                 task_key=f"build-cover:{claim.step_id}:{material_id}",
+                route=claim.route,
             )
             if cover.state == "blocked":
                 raise DomainError(
@@ -483,6 +485,7 @@ def process_step(
                     material_id=claim.material_id,
                     advertiser_id=claim.advertiser_id,
                     task_key=f"build:{claim.step_id}",
+                    route=claim.route,
                 )
                 if ready.state == "ready":
                     from app.modules.materials.covers import ensure_cover
@@ -494,6 +497,7 @@ def process_step(
                         material_id=claim.material_id,
                         advertiser_id=claim.advertiser_id,
                         task_key=f"build-cover:{claim.step_id}",
+                        route=claim.route,
                     )
                     step = session.get(ExecutionStep, claim.step_id)
                     assert step

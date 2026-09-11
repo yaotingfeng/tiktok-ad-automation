@@ -19,6 +19,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import object_session
 from sqlmodel import Field, SQLModel, col
 
+from .routes import route_constraint
+
 if TYPE_CHECKING:
     from .ingest_models import TemporaryMaterialObject
 
@@ -137,7 +139,8 @@ class MaterialFile(SQLModel, table=True):
                 col(TemporaryMaterialObject.tenant_id) == self.tenant_id,
                 col(TemporaryMaterialObject.bc_id) == self.bc_id,
                 col(TemporaryMaterialObject.material_id) == self.id,
-                col(TemporaryMaterialObject.generation) == self.current_object_generation,
+                col(TemporaryMaterialObject.generation)
+                == self.current_object_generation,
             )
             .execution_options(populate_existing=True)
         ).scalar_one_or_none()
@@ -159,6 +162,7 @@ def fold_filename(_mapper: object, _connection: object, target: MaterialFile) ->
 class UploadBatch(SQLModel, table=True):
     __tablename__ = "upload_batch"
     __table_args__ = (
+        route_constraint("upload_batch", "frozen_route"),
         UniqueConstraint("tenant_id", "request_id", name="uq_upload_batch_request"),
         UniqueConstraint("tenant_id", "bc_id", "id", name="uq_upload_batch_scope"),
         ForeignKeyConstraint(
@@ -169,6 +173,9 @@ class UploadBatch(SQLModel, table=True):
     tenant_id: UUID
     bc_id: str = Field(max_length=128)
     actor_id: UUID = Field(foreign_key="user.id")
+    frozen_route: dict[str, Any] | None = Field(
+        default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True)
+    )
     request_id: UUID
     request_digest: str = Field(max_length=64)
     status: str = "receiving"
@@ -217,6 +224,7 @@ class ObjectUpload(SQLModel, table=True):
 class MaterialAssetOperation(SQLModel, table=True):
     __tablename__ = "material_asset_operation"
     __table_args__ = (
+        route_constraint("material_asset_operation", "frozen_route"),
         material_reference(),
         account_reference(),
         CheckConstraint(
@@ -255,6 +263,9 @@ class MaterialAssetOperation(SQLModel, table=True):
     bc_id: str = Field(max_length=128)
     material_id: UUID
     advertiser_id: str = Field(max_length=128)
+    frozen_route: dict[str, Any] | None = Field(
+        default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True)
+    )
     path: str
     status: str = "pending"
     attempt_token: UUID | None = None
@@ -348,6 +359,8 @@ class AccountMaterial(SQLModel, table=True):
 class MaterialDistribution(SQLModel, table=True):
     __tablename__ = "material_distribution"
     __table_args__ = (
+        route_constraint("material_distribution", "target_route"),
+        route_constraint("material_distribution", "source_route"),
         material_reference(),
         account_reference(),
         CheckConstraint(
@@ -392,6 +405,12 @@ class MaterialDistribution(SQLModel, table=True):
     actor_id: UUID = Field(foreign_key="user.id")
     source_asset_id: UUID | None = None
     operation_id: UUID | None = None
+    target_route: dict[str, Any] | None = Field(
+        default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True)
+    )
+    source_route: dict[str, Any] | None = Field(
+        default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True)
+    )
     path: str
     status: str = "queued"
     reason_code: str | None = None

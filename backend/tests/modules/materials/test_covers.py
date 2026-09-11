@@ -5,6 +5,7 @@ from uuid import uuid4
 from sqlmodel import Session, select
 
 from app.core.db import engine
+from app.modules.accounts.routing import freeze_route
 from app.modules.materials import covers
 from app.modules.materials.cover_models import MaterialCoverJob
 from app.modules.materials.models import AccountMaterial
@@ -22,6 +23,12 @@ def queue(env):
             material_id=env["material_id"],
             advertiser_id="actual-account",
             task_key=f"build:{uuid4()}",
+            route=freeze_route(
+                session,
+                context=env["context"],
+                bc_id=env["bc_id"],
+                connection_id=env["connection_id"],
+            ),
         )
 
 

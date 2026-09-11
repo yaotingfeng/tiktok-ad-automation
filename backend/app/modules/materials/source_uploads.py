@@ -16,12 +16,12 @@ from sqlmodel import Session, col, select
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
+from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.integrations.tiktok.sdk import sdk_client
 from app.jobs.admission import admission_policy
 from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit
 from app.modules.accounts.access import (
-    assign_upload_account,
     resolve_account_access,
     usable_grants,
 )
@@ -37,6 +37,13 @@ from .models import (
     MaterialUploadAttempt,
     ObjectUpload,
     UploadBatch,
+)
+from .routes import (
+    load_material_route,
+    require_material_route,
+    require_same_route,
+    require_sdk_route,
+    source_parent_route,
 )
 from .storage import OriginalFile, open_original
 
@@ -100,6 +107,7 @@ def reserve_asset_operation(
     advertiser_id: str,
     path: str,
     action: str = "upload",
+    route: FrozenTikTokRoute,
 ) -> MaterialAssetOperation:
     """Caller transaction owns the file row lock; shared with Task4 writers."""
     if action not in {"upload", "build"}:
@@ -107,12 +115,13 @@ def reserve_asset_operation(
     material = _material(
         session, context, material_id, action=action, require_stored=action == "upload"
     )
-    resolve_account_access(
+    require_material_route(
         session,
         context=context,
+        route=route,
         bc_id=material.bc_id,
         advertiser_id=advertiser_id,
-        action=action,
+        capability="upload" if action == "upload" else "build",
     )
     if path not in {"upload_original", "share_source"}:
         raise DomainError("invalid_asset_path", "素材准备路径无效")
@@ -127,6 +136,12 @@ def reserve_asset_operation(
         .with_for_update()
     ).first()
     if existing:
+        existing_route = load_material_route(
+            existing.frozen_route, context=context, bc_id=material.bc_id
+        )
+        # 已存在源上传仅供目标观察，不能把同一远端身份改成另一次上传。
+        if _attempt(session, existing.id) is None:
+            require_same_route(existing_route, route)
         return existing
     operation = MaterialAssetOperation(
         tenant_id=context.tenant_id,
@@ -134,6 +149,7 @@ def reserve_asset_operation(
         material_id=material.id,
         advertiser_id=advertiser_id,
         path=path,
+        frozen_route=route.model_dump(mode="json"),
         request_digest=sha256(
             f"{context.tenant_id}:{material.id}:{advertiser_id}:{path}".encode()
         ).hexdigest(),
@@ -259,30 +275,35 @@ def _record_unsent_denial(
 
 
 def _source_access(
-    session: Session, *, context: TenantContext, work: dict[str, Any]
+    session: Session,
+    *,
+    context: TenantContext,
+    work: dict[str, Any],
+    upload: bool = True,
 ) -> AccountAccess:
-    access = resolve_account_access(
+    route = load_material_route(
+        work.get("frozen_route"),
+        context=context,
+        bc_id=work["bc_id"],
+        connection_id=UUID(str(work["connection_id"])),
+    )
+    require_material_route(
+        session,
+        context=context,
+        route=route,
+        bc_id=work["bc_id"],
+        advertiser_id=work["advertiser_id"],
+        capability="upload" if upload else "read",
+    )
+    require_sdk_route(route)
+    return resolve_account_access(
         session,
         context=context,
         bc_id=work["bc_id"],
         advertiser_id=work["advertiser_id"],
-        action="upload",
+        action="upload" if upload else "read",
+        connection_id=route.connection_id,
     )
-    # resolve_account_access makes a deterministic default choice. An additional
-    # valid connection must not displace the actual recorded upload connection.
-    exact = session.exec(
-        usable_grants(
-            tenant_id=context.tenant_id, bc_id=work["bc_id"], action="upload"
-        ).where(
-            BCAccountAccess.advertiser_id == work["advertiser_id"],
-            BCAccountAccess.connection_id == work["connection_id"],
-        )
-    ).first()
-    if exact is None:
-        raise DomainError(
-            "upload_connection_changed", "原上传授权连接已不可用，需要恢复授权后核实"
-        )
-    return access.model_copy(update={"connection_id": exact.connection_id})
 
 
 def _has_verified_mapping(
@@ -330,6 +351,45 @@ def _refresh_batch(session: Session, tenant_id: UUID, material_id: UUID) -> None
         refresh_upload_batch(session, tenant_id=tenant_id, batch_id=upload.batch_id)
 
 
+def _assigned_source(
+    session: Session, *, context: TenantContext, material: MaterialFile
+) -> tuple[AccountAccess, FrozenTikTokRoute]:
+    route = source_parent_route(
+        session,
+        context=context,
+        material_id=material.id,
+        bc_id=material.bc_id,
+        generation=material.current_object_generation,
+    )
+    require_sdk_route(route)
+    grant = session.exec(
+        usable_grants(
+            tenant_id=context.tenant_id, bc_id=material.bc_id, action="upload"
+        )
+        .where(BCAccountAccess.connection_id == route.connection_id)
+        .order_by(BCAccountAccess.advertiser_id)
+        .limit(1)
+    ).first()
+    if grant is None:
+        raise DomainError("no_upload_account", "原上传连接没有可上传的授权账户")
+    require_material_route(
+        session,
+        context=context,
+        route=route,
+        bc_id=material.bc_id,
+        advertiser_id=grant.advertiser_id,
+        capability="upload",
+    )
+    return resolve_account_access(
+        session,
+        context=context,
+        bc_id=material.bc_id,
+        advertiser_id=grant.advertiser_id,
+        action="upload",
+        connection_id=route.connection_id,
+    ), route
+
+
 def request_source_retry(
     session: Session, *, context: TenantContext, material_id: UUID
 ) -> UUID:
@@ -358,7 +418,7 @@ def request_source_retry(
     ).first()
     if previous is None:
         # No account was available before any platform attempt was established.
-        access = assign_upload_account(session, context=context, bc_id=material.bc_id)
+        access, route = _assigned_source(session, context=context, material=material)
     else:
         previous_op = _locked_operation(session, context, previous.operation_id)
         if (
@@ -371,7 +431,7 @@ def request_source_retry(
             raise DomainError(
                 "material_retry_not_allowed", "仅允许重试尚未发送的平台失败项"
             )
-        access = assign_upload_account(session, context=context, bc_id=material.bc_id)
+        access, route = _assigned_source(session, context=context, material=material)
     if material.byte_size > settings.MATERIAL_SDK_MAX_UPLOAD_BYTES:
         raise DomainError(
             "sdk_upload_capacity_exceeded", "原文件超过当前平台上传内存容量边界"
@@ -384,6 +444,7 @@ def request_source_retry(
         material_id=material_id,
         advertiser_id=access.advertiser_id,
         path="upload_original",
+        route=route,
     )
     if (
         _attempt(session, operation.id) is not None
@@ -447,8 +508,8 @@ def run_source_upload(
     # Repair dispatches may reference a known operation; its durable metadata
     # supplies the exact generation. An initial new-path message must supply it.
     if object_id is None and operation_id is not None:
-        with Session(database_engine) as route:
-            op = route.exec(
+        with Session(database_engine) as lookup:
+            op = lookup.exec(
                 select(MaterialAssetOperation).where(
                     MaterialAssetOperation.id == operation_id,
                     MaterialAssetOperation.tenant_id == context.tenant_id,
@@ -476,8 +537,8 @@ def run_source_upload(
             recovery_claim_id=recovery_claim_id,
             revision=revision,
         )
-    with Session(database_engine) as route:
-        current = route.exec(
+    with Session(database_engine) as lookup:
+        current = lookup.exec(
             select(MaterialFile.current_object_generation).where(
                 MaterialFile.id == material_id,
                 MaterialFile.tenant_id == context.tenant_id,
@@ -493,7 +554,13 @@ def run_source_upload(
     deadline = datetime.now(UTC) + timedelta(seconds=hard_limit - 5)
     with Session(database_engine) as session, session.begin():
         try:
-            material = _material(session, context, material_id, require_stored=False)
+            material = _material(
+                session,
+                context,
+                material_id,
+                action="upload" if kind == "upload" else "read",
+                require_stored=False,
+            )
         except DomainError as error:
             if (
                 kind == "upload"
@@ -539,8 +606,8 @@ def run_source_upload(
             )
             if operation is None:
                 try:
-                    access = assign_upload_account(
-                        session, context=context, bc_id=material.bc_id
+                    access, route = _assigned_source(
+                        session, context=context, material=material
                     )
                 except DomainError as error:
                     _object_error(session, material, error.code)
@@ -555,6 +622,7 @@ def run_source_upload(
                     material_id=material_id,
                     advertiser_id=access.advertiser_id,
                     path="upload_original",
+                    route=route,
                 )
                 # An existing distribution owns this unresolved operation. Source
                 # delivery must never establish a second send authority.
@@ -644,6 +712,7 @@ def run_source_upload(
         _refresh_batch(session, context.tenant_id, material_id)
         content_md5 = material.video_md5 or ""
         work: dict[str, Any] = {
+            "frozen_route": operation.frozen_route,
             "bc_id": material.bc_id,
             "advertiser_id": operation.advertiser_id,
             "connection_id": attempt.connection_id,
@@ -702,12 +771,18 @@ def run_source_upload(
                     # Every phase that updates file metadata locks file before
                     # operation, matching initial claim and duplicate delivery.
                     sending_material = _material(
-                        session, context, material_id, require_stored=False
+                        session,
+                        context,
+                        material_id,
+                        action="upload" if kind == "upload" else "read",
+                        require_stored=False,
                     )
                     operation = _locked_operation(session, context, operation_id)
                     if operation.attempt_token != claim:
                         return
-                    access = _source_access(session, context=context, work=work)
+                    access = _source_access(
+                        session, context=context, work=work, upload=kind == "upload"
+                    )
                     with sdk_client(
                         session, context=context, connection_id=access.connection_id
                     ) as client:
@@ -781,7 +856,9 @@ def run_source_upload(
                 assert isinstance(evidence, dict)
                 # Fresh authority before readiness. Revocation keeps evidence but
                 # cannot turn stale permission into an available mapping.
-                access = _source_access(session, context=context, work=work)
+                access = _source_access(
+                    session, context=context, work=work, upload=kind == "upload"
+                )
                 asset = session.exec(
                     select(AccountMaterial).where(
                         AccountMaterial.tenant_id == context.tenant_id,

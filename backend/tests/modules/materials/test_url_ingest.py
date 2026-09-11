@@ -12,6 +12,7 @@ from urllib3.exceptions import ReadTimeoutError
 from app.core.config import settings
 from app.core.db import engine
 from app.jobs.models import PendingDispatch
+from app.modules.accounts.routing import freeze_route
 from app.modules.materials.ingest_models import (
     IngestSession,
     IngestSessionFile,
@@ -61,6 +62,12 @@ def url_env(source_env, monkeypatch):
             actor_id=source_env["context"].actor_id,
             request_id=uuid4(),
             request_digest="a" * 64,
+            frozen_route=freeze_route(
+                db,
+                context=source_env["context"],
+                bc_id=source_env["bc_id"],
+                connection_id=source_env["connection_id"],
+            ).model_dump(mode="json"),
             expected_files=1,
             expected_bytes=len(CONTENT),
         )

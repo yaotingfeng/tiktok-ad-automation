@@ -7,6 +7,7 @@ from sqlmodel import Session
 
 from app.core.config import settings
 from app.core.db import engine
+from app.modules.accounts.routing import freeze_route
 from app.modules.materials.ingest_models import TemporaryMaterialObject
 from app.modules.materials.models import MaterialFile
 from tests.modules.builds.test_execution import executable as executable
@@ -21,6 +22,25 @@ from tests.modules.strategies.test_concurrency import (
 )
 
 PREVIEW = "https://media.vetted.example/video?signature=never-persist"
+
+
+def test_target_and_source_routes_are_persisted_before_network(remote_env, wire):
+    from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
+
+    prepared = queue(remote_env, remote_env["target"])
+    assert prepared.state == "queued", prepared
+    dist, op, mapping = state(prepared.task_id)
+    target_route = FrozenTikTokRoute.model_validate(dist.target_route)
+    source_route = FrozenTikTokRoute.model_validate(dist.source_route)
+    assert target_route.connection_id == remote_env["connection_id"]
+    assert source_route.connection_id == remote_env["connection_id"]
+    assert (
+        target_route.tenant_id
+        == source_route.tenant_id
+        == remote_env["context"].tenant_id
+    )
+    assert op is not None and mapping is None and wire[0] == []
+    assert FrozenTikTokRoute.model_validate(op.frozen_route) == target_route
 
 
 @pytest.fixture
@@ -120,55 +140,6 @@ def test_relay_target_requires_exact_received_vid_and_strong_media(
 
 
 def test_remote_preview_get_only_reads_and_never_persists_url(remote_env, wire):
-    # P1 当前读授权必须来自真实连接事实，旧 ACTIVE 标志不能代替授权证据。
-    from app.modules.accounts.connection_models import (
-        BCConnectionBinding,
-        BCDefaultRoute,
-        ConnectionAuthorization,
-    )
-    from app.modules.accounts.models import BCAccountAccess, TikTokConnection
-
-    with Session(engine) as db, db.begin():
-        connection = db.get(TikTokConnection, remote_env["connection_id"])
-        connection.adapter_contract_revision = "official-api-v1"
-        db.add(
-            BCConnectionBinding(
-                tenant_id=connection.tenant_id,
-                bc_id=remote_env["bc_id"],
-                connection_id=connection.id,
-                kind="OFFICIAL_API",
-            )
-        )
-        db.flush()
-        db.add(
-            BCDefaultRoute(
-                tenant_id=connection.tenant_id,
-                bc_id=remote_env["bc_id"],
-                connection_id=connection.id,
-            )
-        )
-        db.add(
-            ConnectionAuthorization(
-                tenant_id=connection.tenant_id,
-                connection_id=connection.id,
-                authorization_revision=connection.authorization_revision,
-                source="SYNTHETIC_VERIFIED_EVIDENCE",
-                issuer="https://business-api.tiktok.com",
-                resource="https://business-api.tiktok.com/open_api/v1.3",
-                permission_summary={"read_authorized": True},
-                verified_at=datetime.now(UTC),
-            )
-        )
-        grant = db.get(
-            BCAccountAccess,
-            (
-                connection.tenant_id,
-                remote_env["bc_id"],
-                "actual-account",
-                connection.id,
-            ),
-        )
-        grant.checked_at = datetime.now(UTC)
     from datetime import timedelta
 
     from fastapi import FastAPI
@@ -422,24 +393,17 @@ def test_receipt_single_database_failure_retries_before_client_cleanup(
     assert state(prepared.task_id)[1].remote_response["video_id"] == "actual-target"
 
 
-def test_nested_source_info_retains_shared_quota_and_only_extends_lease(
+def test_nested_source_info_uses_bounded_read_budget_and_shared_quota(
     remote_env, redis_client, wire
 ):
     from app.jobs.admission import admission_keys, admission_policy
-    from app.modules.materials import sdk_assets as api
-    from app.modules.materials.remote_sources import source_info_policy
-    from app.modules.materials.source_uploads import UPLOAD_HARD_LIMIT
+    from app.modules.materials.source_uploads import READ_HARD_LIMIT, UPLOAD_HARD_LIMIT
 
-    settings.TIKTOK_CALL_POLICIES["endpoints"][api.INFO_ENDPOINT] = {"lease_ms": 50001}
-    base = admission_policy(api.INFO_ENDPOINT)
-    nested = source_info_policy(hard_limit=UPLOAD_HARD_LIMIT)
-    assert nested.model_dump(exclude={"lease_ms"}) == base.model_dump(
-        exclude={"lease_ms"}
-    )
-    assert nested.lease_ms > (UPLOAD_HARD_LIMIT + 5) * 1000
+    operation = "materials.get_videos"
+    policy = admission_policy(operation)
     keys = admission_keys(
         settings.TIKTOK_APP_ID,
-        api.INFO_ENDPOINT,
+        operation,
         remote_env["context"].tenant_id,
         "actual-account",
     )
@@ -448,8 +412,11 @@ def test_nested_source_info_retains_shared_quota_and_only_extends_lease(
         now_ms = datetime.now(UTC).timestamp() * 1000
         for key in keys[2:]:
             rows = redis_client.zrange(key, 0, -1, withscores=True)
+            assert len(rows) == 1
             assert (
-                len(rows) == 1 and rows[0][1] > now_ms + (UPLOAD_HARD_LIMIT + 5) * 1000
+                now_ms + (READ_HARD_LIMIT - 5) * 1000
+                < rows[0][1]
+                < now_ms + UPLOAD_HARD_LIMIT * 1000
             )
         return info()
 
@@ -458,7 +425,7 @@ def test_nested_source_info_retains_shared_quota_and_only_extends_lease(
     run(remote_env, redis_client, prepared.task_id, kind="prepare")
     assert state(prepared.task_id)[0].status == "verifying"
     assert all(redis_client.zcard(key) == 0 for key in keys[2:])
-    assert admission_policy(api.INFO_ENDPOINT).lease_ms == 50001
+    assert admission_policy(operation) == policy
 
 
 def test_source_info_shared_admission_denial_never_reads_or_posts(
@@ -529,52 +496,29 @@ def test_relay_unknown_search_rejects_unbounded_pagination(
 
 
 def test_exact_source_connection_survives_new_preferred_legal_connection(
-    remote_env, redis_client, wire, monkeypatch
+    remote_env, redis_client, wire
 ):
-    from contextlib import contextmanager
-    from uuid import UUID
-
     from app.core.credentials import encrypt_credentials
-    from app.modules.accounts.models import BCAccountAccess, TikTokConnection
-    from app.modules.materials import remote_sources
+    from app.modules.accounts.connection_models import BCDefaultRoute
+    from app.modules.accounts.models import TikTokConnection
+    from tests.modules.materials.route_support import second_connection
 
-    with Session(engine) as db, db.begin():
-        newer = UUID(int=remote_env["connection_id"].int // 2)
-        db.add(
-            TikTokConnection(
-                id=newer,
-                tenant_id=remote_env["context"].tenant_id,
-                status="ACTIVE",
-                credential_ciphertext=encrypt_credentials(
-                    tenant_id=remote_env["context"].tenant_id,
-                    value={"access_token": "alternate-fixture-token"},
-                ),
-            )
-        )
-        db.flush()
-        old = db.get(
-            BCAccountAccess,
-            (
-                remote_env["context"].tenant_id,
-                remote_env["bc_id"],
-                "actual-account",
-                remote_env["connection_id"],
-            ),
-        )
-        db.add(BCAccountAccess(**{**old.model_dump(), "connection_id": newer}))
-    real, used = remote_sources.sdk_client, []
-
-    @contextmanager
-    def observe(*args, **kwargs):
-        used.append(kwargs["connection_id"])
-        with real(*args, **kwargs) as client:
-            yield client
-
-    monkeypatch.setattr(remote_sources, "sdk_client", observe)
     prepared = queue(remote_env, remote_env["target"])
+    with Session(engine) as db, db.begin():
+        newer = second_connection(db, remote_env)
+        db.get(TikTokConnection, newer).credential_ciphertext = encrypt_credentials(
+            tenant_id=remote_env["context"].tenant_id,
+            value={"access_token": "alternate-fixture-token"},
+        )
+        db.get(
+            BCDefaultRoute, (remote_env["context"].tenant_id, remote_env["bc_id"])
+        ).connection_id = newer
     wire[1].extend([info(), [{"video_id": "actual-target"}]])
     run(remote_env, redis_client, prepared.task_id, kind="prepare")
-    assert used == [remote_env["connection_id"]]
+    assert state(prepared.task_id)[0].status == "verifying"
+    assert all(
+        call[2]["headers"]["Access-Token"] == "offline-token-secret" for call in wire[0]
+    )
     assert state(prepared.task_id)[1].remote_response["source_connection_id"] == str(
         remote_env["connection_id"]
     )
@@ -623,6 +567,12 @@ def test_deleted_original_target_cover_stays_independent_and_retry_is_read_only(
             material_id=remote_env["material_id"],
             advertiser_id=remote_env["target"],
             task_key=f"cover:{uuid4()}",
+            route=freeze_route(
+                db,
+                context=remote_env["context"],
+                bc_id=remote_env["bc_id"],
+                connection_id=remote_env["connection_id"],
+            ),
         )
     wire[1].extend(
         [
@@ -880,12 +830,19 @@ def test_new_generation_old_file_dispatch_cannot_open_original(
     with Session(engine) as db, db.begin():
         db.get(MaterialFile, url_env["material_id"]).storage_state = "stored"
         account = target(db, url_env)
+        route = freeze_route(
+            db,
+            context=url_env["context"],
+            bc_id=url_env["bc_id"],
+            connection_id=url_env["connection_id"],
+        )
         op = MaterialAssetOperation(
             tenant_id=url_env["context"].tenant_id,
             bc_id=url_env["bc_id"],
             material_id=url_env["material_id"],
             advertiser_id=account,
             path="upload_original",
+            frozen_route=route.model_dump(mode="json"),
             request_digest="a" * 64,
         )
         db.add(op)
@@ -898,6 +855,7 @@ def test_new_generation_old_file_dispatch_cannot_open_original(
             actor_id=url_env["context"].actor_id,
             operation_id=op.id,
             path="upload_original",
+            target_route=route.model_dump(mode="json"),
         )
         db.add(dist)
         db.flush()

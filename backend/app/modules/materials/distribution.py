@@ -12,13 +12,14 @@ from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts import materials as material_types
+from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.integrations.tiktok.sdk import SDK_SCOPE_INTERRUPTS, sdk_client
 from app.jobs.admission import admission_policy
 from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit
 from app.jobs.tasks import register_dispatch_task
-from app.modules.accounts.access import resolve_account_access, usable_grants
-from app.modules.accounts.models import BCAccountAccess
+from app.modules.accounts.access import resolve_account_access
+from app.modules.accounts.routing import freeze_route
 from app.modules.accounts.schemas import AccountAccess
 from app.modules.tenants.permissions import require_tenant
 
@@ -38,9 +39,15 @@ from .readiness import (
     target_mapping,
 )
 from .remote_sources import (
-    read_remote_source,
+    read_frozen_remote_source,
     require_remote_material,
     resolve_remote_source,
+)
+from .routes import (
+    load_material_route,
+    require_material_route,
+    require_same_route,
+    require_sdk_route,
 )
 from .schemas import AssetPreparation
 from .source_uploads import (
@@ -143,6 +150,7 @@ def _bind_operation(
     bc_id: str,
     advertiser_id: str,
     path: str,
+    route: FrozenTikTokRoute,
 ) -> MaterialAssetOperation:
     operation = reserve_asset_operation(
         session,
@@ -151,6 +159,7 @@ def _bind_operation(
         advertiser_id=advertiser_id,
         path="share_source" if path == "share_source" else "upload_original",
         action="build",
+        route=route,
     )
     if _attempt(session, operation.id) is None and operation.status == "pending":
         if (
@@ -215,10 +224,19 @@ def ensure_target_asset(
     material_id: UUID,
     advertiser_id: str,
     task_key: str,
+    route: FrozenTikTokRoute,
 ) -> AssetPreparation:
     """Internal build-submission boundary. Caller commits; no browser write route."""
     if not isinstance(task_key, str) or not task_key.strip() or len(task_key) > 255:
         raise DomainError("invalid_asset_task", "搭建素材步骤标识无效")
+    require_material_route(
+        session,
+        context=context,
+        route=route,
+        bc_id=bc_id,
+        advertiser_id=advertiser_id,
+        capability="build",
+    )
     # The file lock serializes both two build consumers and source reservation.
     load_material(
         session, context=context, bc_id=bc_id, material_id=material_id, lock=True
@@ -229,6 +247,7 @@ def ensure_target_asset(
         bc_id=bc_id,
         material_id=material_id,
         advertiser_id=advertiser_id,
+        route=route,
     )
     if readiness.state == "ready":
         return AssetPreparation(state="ready", mapping=readiness.mapping)
@@ -249,6 +268,10 @@ def ensure_target_asset(
         .with_for_update()
     ).first()
     if existing:
+        require_same_route(
+            load_material_route(existing.target_route, context=context, bc_id=bc_id),
+            route,
+        )
         return AssetPreparation(state="queued", task_id=existing.id)
     operation = _bind_operation(
         session,
@@ -257,7 +280,55 @@ def ensure_target_asset(
         bc_id=bc_id,
         advertiser_id=advertiser_id,
         path=readiness.path,
+        route=route,
     )
+    source_route = None
+    source_asset_id = operation.remote_response.get("source_asset_id")
+    if source_asset_id:
+        source = resolve_remote_source(
+            session,
+            context=context,
+            bc_id=bc_id,
+            material_id=material_id,
+            source_asset_id=UUID(source_asset_id),
+        )
+        if source is None:
+            raise DomainError(
+                "material_remote_source_unavailable", "来源证据或权限已改变"
+            )
+        previous_dependency = session.exec(
+            select(MaterialDistribution)
+            .where(
+                MaterialDistribution.tenant_id == context.tenant_id,
+                MaterialDistribution.operation_id == operation.id,
+            )
+            .order_by(col(MaterialDistribution.id))
+            .limit(1)
+        ).first()
+        # 同一操作的后续消费者继承原来源依赖，不能借新 distribution 刷新旧授权版本。
+        source_route = (
+            load_material_route(
+                previous_dependency.source_route,
+                context=context,
+                bc_id=bc_id,
+                connection_id=source.connection_id,
+            )
+            if previous_dependency
+            else freeze_route(
+                session,
+                context=context,
+                bc_id=bc_id,
+                connection_id=source.connection_id,
+            )
+        )
+        require_material_route(
+            session,
+            context=context,
+            route=source_route,
+            bc_id=bc_id,
+            advertiser_id=source.advertiser_id,
+            capability="read",
+        )
     dist = MaterialDistribution(
         tenant_id=context.tenant_id,
         bc_id=bc_id,
@@ -265,6 +336,9 @@ def ensure_target_asset(
         advertiser_id=advertiser_id,
         actor_id=context.actor_id,
         operation_id=operation.id,
+        target_route=route.model_dump(mode="json"),
+        source_route=source_route.model_dump(mode="json") if source_route else None,
+        source_asset_id=UUID(source_asset_id) if source_asset_id else None,
         path=operation.path
         if operation.status in {"sending", "result_unknown"}
         else readiness.path,
@@ -308,37 +382,26 @@ def _target_access(
     upload: bool,
     connection_id: UUID | None = None,
 ) -> AccountAccess:
-    build = resolve_account_access(
+    route = load_material_route(dist.target_route, context=context, bc_id=dist.bc_id)
+    if connection_id is not None and connection_id != route.connection_id:
+        raise DomainError("frozen_route_changed", "素材请求连接与原任务不一致")
+    for action in ("build", "upload") if upload else ("build",):
+        require_material_route(
+            session,
+            context=context,
+            route=route,
+            bc_id=dist.bc_id,
+            advertiser_id=dist.advertiser_id,
+            capability=action,
+        )
+    return resolve_account_access(
         session,
         context=context,
         bc_id=dist.bc_id,
         advertiser_id=dist.advertiser_id,
-        action="build",
+        action="upload" if upload else "build",
+        connection_id=route.connection_id,
     )
-    if upload:
-        build = resolve_account_access(
-            session,
-            context=context,
-            bc_id=dist.bc_id,
-            advertiser_id=dist.advertiser_id,
-            action="upload",
-        )
-    if connection_id is not None:
-        for action in ("build", "upload") if upload else ("build",):
-            exact = session.exec(
-                usable_grants(
-                    tenant_id=context.tenant_id, bc_id=dist.bc_id, action=action
-                )
-                .where(
-                    BCAccountAccess.advertiser_id == dist.advertiser_id,
-                    BCAccountAccess.connection_id == connection_id,
-                )
-                .limit(1)
-            ).first()
-            if exact is None:
-                raise DomainError("account_access_denied", "原发送连接的目标权限已改变")
-        return build.model_copy(update={"connection_id": connection_id})
-    return build
 
 
 def _publish_mapping(
@@ -371,8 +434,8 @@ def _publish_mapping(
         session.add(mapping)
     if mapping.video_id != evidence["video_id"]:
         mapping.image_id = mapping.cover_url = None
+        mapping.connection_id = access.connection_id
     mapping.video_id, mapping.mid = evidence["video_id"], evidence.get("mid")
-    mapping.connection_id = access.connection_id
     mapping.status, mapping.verified_at = "available", datetime.now(UTC)
 
 
@@ -380,11 +443,8 @@ def _blocked(dist: MaterialDistribution, code: str) -> None:
     dist.status, dist.reason_code = "blocked", code
 
 
-def _work_connection(work: dict[str, Any]) -> UUID | None:
-    identity = work.get("upload_connection_id") or work.get(
-        "verification_connection_id"
-    )
-    return UUID(identity) if identity else None
+def _work_connection(work: dict[str, Any]) -> UUID:
+    return FrozenTikTokRoute.model_validate(work["target_route"]).connection_id
 
 
 def _require_relay(
@@ -393,6 +453,7 @@ def _require_relay(
     context: TenantContext,
     material: MaterialFile,
     operation: MaterialAssetOperation,
+    source_route: FrozenTikTokRoute,
 ) -> None:
     require_remote_material(material)
     if operation.remote_response.get("transport") != "url_relay":
@@ -421,6 +482,16 @@ def _require_relay(
         or operation.remote_response.get("content_md5") != material.video_md5
     ):
         raise DomainError("material_remote_source_unavailable", "来源证据或权限已改变")
+    require_material_route(
+        session,
+        context=context,
+        route=source_route,
+        bc_id=material.bc_id,
+        advertiser_id=source.advertiser_id,
+        capability="read",
+    )
+    if source_route.connection_id != source.connection_id:
+        raise DomainError("frozen_route_changed", "来源连接已改变")
     require_execution_config(upload=True, endpoint=api.UPLOAD_ENDPOINT, original=False)
 
 
@@ -467,13 +538,16 @@ def _send_relay(
     deadline: datetime,
     hard: int,
 ) -> dict[str, str] | None:
-    preview = read_remote_source(
+    preview = read_frozen_remote_source(
         database_engine=database_engine,
         redis_client=redis_client,
         context=context,
         bc_id=work["bc_id"],
         material_id=work["material_id"],
         source_asset_id=UUID(work["source_asset_id"]),
+        route=load_material_route(
+            work["source_route"], context=context, bc_id=work["bc_id"]
+        ),
         deadline=deadline,
         hard_limit=hard,
         extend_lease=True,
@@ -501,7 +575,20 @@ def _send_relay(
             operation = _locked_operation(db, context, operation_id)
             if operation.attempt_token != claim or dist.operation_id != operation_id:
                 return None
-            _require_relay(db, context=context, material=material, operation=operation)
+            _require_relay(
+                db,
+                context=context,
+                material=material,
+                operation=operation,
+                source_route=load_material_route(
+                    dist.source_route, context=context, bc_id=dist.bc_id
+                ),
+            )
+            require_sdk_route(
+                load_material_route(
+                    dist.target_route, context=context, bc_id=dist.bc_id
+                )
+            )
             access = _target_access(db, context, dist, upload=True)
             with sdk_client(
                 db, context=context, connection_id=access.connection_id
@@ -655,6 +742,9 @@ def run_distribution(
                         context=context,
                         material=material,
                         advertiser_id=dist.advertiser_id,
+                        route=load_material_route(
+                            dist.target_route, context=context, bc_id=dist.bc_id
+                        ),
                     )
                 except DomainError as error:
                     _blocked(dist, error.code)
@@ -666,6 +756,9 @@ def run_distribution(
                     bc_id=dist.bc_id,
                     advertiser_id=dist.advertiser_id,
                     path="upload_original",
+                    route=load_material_route(
+                        dist.target_route, context=context, bc_id=dist.bc_id
+                    ),
                 )
                 dist.operation_id, dist.path = operation.id, "upload_original"
                 queue_distribution(
@@ -681,6 +774,9 @@ def run_distribution(
                     bc_id=dist.bc_id,
                     advertiser_id=dist.advertiser_id,
                     path="existing_target",
+                    route=load_material_route(
+                        dist.target_route, context=context, bc_id=dist.bc_id
+                    ),
                 )
                 dist.operation_id, dist.path = operation.id, "existing_target"
                 queue_distribution(
@@ -723,6 +819,9 @@ def run_distribution(
                     context=context,
                     material=material,
                     advertiser_id=dist.advertiser_id,
+                    route=load_material_route(
+                        dist.target_route, context=context, bc_id=dist.bc_id
+                    ),
                 )
             except DomainError as error:
                 _blocked(dist, error.code)
@@ -734,6 +833,9 @@ def run_distribution(
                 bc_id=dist.bc_id,
                 advertiser_id=dist.advertiser_id,
                 path="upload_original",
+                route=load_material_route(
+                    dist.target_route, context=context, bc_id=dist.bc_id
+                ),
             )
             dist.operation_id, dist.path = operation.id, "upload_original"
             if kind != "prepare":
@@ -759,7 +861,13 @@ def run_distribution(
             if kind == "prepare":
                 if operation.path == "share_source":
                     _require_relay(
-                        session, context=context, material=material, operation=operation
+                        session,
+                        context=context,
+                        material=material,
+                        operation=operation,
+                        source_route=load_material_route(
+                            dist.source_route, context=context, bc_id=dist.bc_id
+                        ),
                     )
                 else:
                     require_upload_path(
@@ -767,6 +875,9 @@ def run_distribution(
                         context=context,
                         material=material,
                         advertiser_id=dist.advertiser_id,
+                        route=load_material_route(
+                            dist.target_route, context=context, bc_id=dist.bc_id
+                        ),
                     )
                 endpoint = api.UPLOAD_ENDPOINT
             else:
@@ -815,6 +926,8 @@ def run_distribution(
         work: dict[str, Any] = {
             **operation.remote_response,
             "bc_id": dist.bc_id,
+            "target_route": dist.target_route,
+            "source_route": dist.source_route,
             "material_id": material.id,
             "advertiser_id": dist.advertiser_id,
             "remote_name": operation.remote_response.get("remote_name")
@@ -882,6 +995,11 @@ def run_distribution(
                             or dist.operation_id != operation_id
                         ):
                             return
+                        require_sdk_route(
+                            load_material_route(
+                                dist.target_route, context=context, bc_id=dist.bc_id
+                            )
+                        )
                         access = _target_access(
                             session,
                             context,

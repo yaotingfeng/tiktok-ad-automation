@@ -55,6 +55,15 @@ def test_concurrent_workers_send_one_target_upload_and_hold_no_db_locks(
     with Session(engine) as session, session.begin():
         account = target(session, source_env)
     dist_id = queue(source_env, account).task_id
+    from app.modules.accounts.connection_models import BCDefaultRoute
+    from tests.modules.materials.route_support import second_connection
+
+    with Session(engine) as session, session.begin():
+        replacement = second_connection(session, source_env)
+        session.get(
+            BCDefaultRoute, (source_env["context"].tenant_id, source_env["bc_id"])
+        ).connection_id = replacement
+
     entered, finish = Event(), Event()
 
     def response():
@@ -361,7 +370,7 @@ def test_revoked_source_read_successor_can_be_rearmed_without_upload_retry(
         dispatch_id = dispatch.id
         session.get(
             TenantMembership, (context.tenant_id, context.actor_id)
-        ).role = "viewer"
+        ).active = False
     with pytest.raises(DomainError):
         source_run(source_env, redis_client, operation_id=op_id, revision=0)
     with Session(engine) as session, session.begin():
@@ -369,7 +378,7 @@ def test_revoked_source_read_successor_can_be_rearmed_without_upload_retry(
         assert session.get(PendingDispatch, dispatch_id).published_at is None
         session.get(
             TenantMembership, (context.tenant_id, context.actor_id)
-        ).role = "operator"
+        ).active = True
     wire[1].append(info())
     source_run(source_env, redis_client, operation_id=op_id, revision=0)
     with Session(engine) as session:

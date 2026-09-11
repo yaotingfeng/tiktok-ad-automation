@@ -8,6 +8,7 @@ from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
+from app.modules.accounts.routing import verify_route
 from app.modules.builds.dispatch import finalize_submission, wake_unit
 from app.modules.builds.execution_models import (
     ExecutionStep,
@@ -16,8 +17,10 @@ from app.modules.builds.execution_models import (
 )
 from app.modules.builds.execution_state import evidence
 from app.modules.builds.preview_models import BuildUnit
+from app.modules.builds.routes import load_preview_route
 from app.modules.materials.models import MaterialAssetOperation, MaterialDistribution
 from app.modules.materials.readiness import get_material_readiness
+from app.modules.materials.routes import load_material_route, require_same_route
 from app.modules.tenants.permissions import require_tenant
 
 
@@ -89,7 +92,24 @@ def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
                 tenant_id=row.tenant_id, actor_id=row.actor_id, role="operator"
             )
             denied = None
+            route = None
             try:
+                route = load_preview_route(
+                    session, context=context, preview_id=step.preview_id
+                )
+                require_same_route(
+                    load_material_route(
+                        dist.target_route, context=context, bc_id=step.bc_id
+                    ),
+                    route,
+                )
+                verify_route(
+                    session,
+                    context=context,
+                    route=route,
+                    advertiser_id=dist.advertiser_id,
+                    capability="build",
+                )
                 require_tenant(
                     session,
                     actor_id=context.actor_id,
@@ -122,11 +142,14 @@ def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
                     bc_id=step.bc_id,
                     material_id=step.material_id,
                     advertiser_id=frozen.advertiser_id,
+                    route=route,
                 )
                 if (
                     readiness.state != "ready"
                     or not readiness.mapping
-                    or readiness.mapping.connection_id != frozen.connection_id
+                    or readiness.mapping.material_id != step.material_id
+                    or readiness.mapping.advertiser_id != frozen.advertiser_id
+                    or not readiness.mapping.video_id.strip()
                 ):
                     # A historic distribution receipt is not proof of a current
                     # target mapping. Keep uncertainty; never call an upload-capable
@@ -141,6 +164,7 @@ def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
                     from app.modules.materials.covers import ensure_cover
 
                     try:
+                        assert route is not None
                         cover = ensure_cover(
                             session,
                             context=context,
@@ -148,6 +172,7 @@ def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
                             material_id=step.material_id,
                             advertiser_id=frozen.advertiser_id,
                             task_key=f"build-cover:{step.id}",
+                            route=route,
                         )
                     except DomainError as error:
                         step.error_code, step.updated_at = error.code, datetime.now(UTC)
