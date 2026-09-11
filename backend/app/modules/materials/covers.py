@@ -14,19 +14,18 @@ from sqlmodel import Session, col, select
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
+from app.integrations.tiktok.bounded_resources import bounded_session
 from app.integrations.tiktok.contracts import materials as material_types
+from app.integrations.tiktok.contracts.common import RemoteCallError
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
+from app.integrations.tiktok.gateway import open_tiktok_gateway
 from app.integrations.tiktok.sdk import (
     AccountAdmissionDeferred,
-    admitted_account_call,
-    sdk_client,
 )
 from app.jobs.admission import admission_policy
 from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit
 from app.jobs.tasks import register_dispatch_task
-from app.modules.accounts.access import resolve_account_access
-from app.modules.accounts.models import TikTokConnection
 from app.modules.tenants.permissions import require_tenant
 
 from . import cover_sdk as api
@@ -37,10 +36,8 @@ from .routes import (
     load_material_route,
     require_material_route,
     require_same_route,
-    require_sdk_route,
 )
 from .schemas import AssetPreparation
-from .sdk_assets import INFO_ENDPOINT as VIDEO_INFO_ENDPOINT
 
 HARD_LIMIT = 45
 SOFT_LIMIT = 40
@@ -101,12 +98,37 @@ def _access(
         route=route,
         bc_id=job.bc_id,
         advertiser_id=job.advertiser_id,
-        capability="upload" if upload else "read",
+        capability="read",
     )
+    if upload:
+        # 上传所用URL来自本账户刚核实的视频；读权与上传权必须同时仍有效。
+        require_material_route(
+            session,
+            context=context,
+            route=route,
+            bc_id=job.bc_id,
+            advertiser_id=job.advertiser_id,
+            capability="upload",
+        )
+    if code := _digest_error(session, job):
+        raise DomainError(code, "原视频摘要缺失或已变化，请核实素材")
     if _mapping(session, job) is None:
         raise DomainError(
             "cover_video_changed", "目标视频或连接已变化，请重新准备当前素材"
         )
+
+
+def _digest_error(session: Session, job: MaterialCoverJob) -> str | None:
+    if job.video_md5 is None:
+        return "cover_video_unverified"
+    material = session.get(MaterialFile, job.material_id, populate_existing=True)
+    if (
+        material is None
+        or (material.tenant_id, material.bc_id) != (job.tenant_id, job.bc_id)
+        or material.video_md5 != job.video_md5
+    ):
+        return "cover_video_changed"
+    return None
 
 
 def _fresh(job: MaterialCoverJob) -> bool:
@@ -116,6 +138,12 @@ def _fresh(job: MaterialCoverJob) -> bool:
 
 
 def _result(session: Session, job: MaterialCoverJob) -> AssetPreparation:
+    if job.error_code == "cover_receipt_ambiguous":
+        return AssetPreparation(
+            state="blocked", task_id=job.id, reason_code="cover_receipt_ambiguous"
+        )
+    if code := _digest_error(session, job):
+        return AssetPreparation(state="blocked", task_id=job.id, reason_code=code)
     mapping = _mapping(session, job)
     if mapping is None:
         return AssetPreparation(
@@ -233,6 +261,21 @@ def ensure_cover(
         if job.status == "READY" and not _fresh(job):
             _queue(session, job, read=True)
         return _result(session, job)
+    if asset.image_id:
+        # 无历史封面job的既有平台图片沿原验证事实复用；不能虚构上传job要求原件摘要。
+        require_material_route(
+            session,
+            context=context,
+            route=route,
+            bc_id=bc_id,
+            advertiser_id=advertiser_id,
+            capability="read",
+        )
+        if asset.verified_at < _now() - timedelta(
+            seconds=settings.MATERIAL_ASSET_MAX_AGE_SECONDS
+        ):
+            return AssetPreparation(state="blocked", reason_code="cover_evidence_stale")
+        return AssetPreparation(state="ready", mapping=asset_public(asset))
     identity = uuid4()
     job = MaterialCoverJob(
         id=identity,
@@ -245,15 +288,9 @@ def ensure_cover(
         frozen_route=route.model_dump(mode="json"),
         actor_id=context.actor_id,
         video_id=asset.video_id,
+        video_md5=material.video_md5,
         remote_name=f"cover-{identity.hex}.jpg",
     )
-    _access(session, context, job)
-    if asset.image_id:
-        if asset.verified_at < _now() - timedelta(
-            seconds=settings.MATERIAL_ASSET_MAX_AGE_SECONDS
-        ):
-            return AssetPreparation(state="blocked", reason_code="cover_evidence_stale")
-        return AssetPreparation(state="ready", mapping=asset_public(asset))
     _access(session, context, job, upload=True)
     session.add(job)
     session.flush()
@@ -287,12 +324,18 @@ def get_cover_status(
         session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read"
     )
     job = _job(session, context, job_id)
-    resolve_account_access(
+    require_material_route(
         session,
         context=context,
+        route=load_material_route(
+            job.frozen_route,
+            context=context,
+            bc_id=job.bc_id,
+            connection_id=job.connection_id,
+        ),
         bc_id=job.bc_id,
         advertiser_id=job.advertiser_id,
-        action="read",
+        capability="read",
     )
     return _result(session, job)
 
@@ -307,6 +350,9 @@ def request_cover_reconciliation(
         TenantContext(tenant_id=job.tenant_id, actor_id=job.actor_id, role="operator"),
         job,
     )
+    if job.error_code == "cover_receipt_ambiguous":
+        # 已观察到互斥回执是持久冲突；普通只读重试不能抹掉这一事实。
+        return _result(session, job)
     if job.status == "READY" and not _fresh(job):
         # A delayed build may resume after its positive image evidence expires.
         # Revalidate the known ID, preserving the original upload identity.
@@ -369,7 +415,8 @@ def _fenced(
 
 def _stop(job: MaterialCoverJob, code: str, *, unknown: bool) -> None:
     job.status = "UNKNOWN" if unknown else "BLOCKED"
-    job.error_code = code
+    if job.error_code != "cover_receipt_ambiguous":
+        job.error_code = code
     job.claim_token = job.claimed_until = job.dispatch_id = None
     job.updated_at = _now()
 
@@ -385,6 +432,9 @@ def _claim(
 ) -> tuple[MaterialCoverJob, UUID] | None:
     with Session(database_engine) as session, session.begin():
         job = _job(session, context, job_id, lock=True)
+        if job.error_code == "cover_receipt_ambiguous":
+            _stop(job, "cover_receipt_ambiguous", unknown=True)
+            return None
         if (
             job.actor_id != context.actor_id
             or job.dispatch_id != dispatch_id
@@ -430,67 +480,149 @@ def _call[T](
     context: TenantContext,
     job: MaterialCoverJob,
     nonce: UUID,
-    endpoint: str,
-    invoke: Callable[[Any], T],
+    operation: str,
+    invoke: Callable[
+        [material_types.MaterialOperations, material_types.RemoteCallBudget], T
+    ],
     *,
+    deadline: datetime,
     arm: bool = False,
     receipt: Callable[[T], None] | None = None,
 ) -> T:
-    policy = admission_policy(endpoint)
-    if policy.lease_ms <= (HARD_LIMIT + 5) * 1000:
-        raise DomainError(
-            "admission_policy_invalid", "封面调用租约必须长于工作进程硬限"
-        )
-    with admitted_account_call(
-        redis_client,
+    policy = admission_policy(operation)
+    budget = material_types.RemoteCallBudget(deadline, HARD_LIMIT, policy.lease_ms)
+    budget.timeout(upload=arm)
+    route = load_material_route(
+        job.frozen_route,
         context=context,
-        endpoint=endpoint,
-        advertiser_id=job.advertiser_id,
-        policy=policy,
-    ):
-        with Session(database_engine) as session:
-            current = _fenced(session, context, job.id, nonce)
+        bc_id=job.bc_id,
+        connection_id=job.connection_id,
+    )
+
+    def check_current() -> None:
+        # 协议、读取与上传的每个物理发送都检查当前claim和原目标；事务结束才出网。
+        with bounded_session(database_engine, task_deadline=deadline) as db, db.begin():
+            current = _fenced(db, context, job.id, nonce)
             if current is None:
                 raise DomainError("cover_claim_lost", "封面任务执行权已变化")
-            _access(session, context, current, upload=arm)
-            require_sdk_route(
-                load_material_route(
-                    current.frozen_route, context=context, bc_id=current.bc_id
-                )
-            )
-            connection = session.get(TikTokConnection, current.connection_id)
-            assert connection
-            api.require_cover_scopes(connection, endpoint=endpoint)
-            with sdk_client(
-                session, context=context, connection_id=current.connection_id
-            ) as client:
-                if arm:
-                    if current.request_armed_at is not None:
-                        raise DomainError("cover_result_unknown", "原上传结果需要核查")
-                    current.request_armed_at = _now()
-                session.commit()
-                session.close()
-                result = invoke(client)
-                if receipt:
-                    receipt(result)  # Identity must survive SDK cleanup failure.
-                return result
+            _access(db, context, current, upload=arm)
+            budget.timeout(upload=arm)
+
+    check_current()
+    with open_tiktok_gateway(
+        database_engine=database_engine,
+        redis_client=redis_client,
+        context=context,
+        route=route,
+        task_deadline=deadline,
+        before_request=check_current,
+    ) as gateway:
+        if arm:
+            with (
+                bounded_session(database_engine, task_deadline=deadline) as db,
+                db.begin(),
+            ):
+                current = _fenced(db, context, job.id, nonce)
+                if current is None:
+                    raise DomainError("cover_claim_lost", "封面任务执行权已变化")
+                _access(db, context, current, upload=True)
+                if current.request_armed_at is not None:
+                    raise DomainError("cover_result_unknown", "原上传结果需要核查")
+                current.request_armed_at = _now()
+        try:
+            result = invoke(gateway.materials, budget)
+        except Exception as error:
+            if arm and (
+                isinstance(error, AccountAdmissionDeferred)
+                or isinstance(error, RemoteCallError)
+                and error.effect == "NOT_SENT"
+            ):
+                # 仅当前发送者得到可靠未发送证据时解除本次armed；旧claim和未知结果不能回退。
+                with (
+                    bounded_session(database_engine, task_deadline=deadline) as db,
+                    db.begin(),
+                ):
+                    current = _fenced(db, context, job.id, nonce)
+                    if current is not None and current.known_image_id is None:
+                        current.request_armed_at = None
+            raise
+        if receipt:
+            receipt(result)  # 实际image_id须先落库，再离开可能失败的HTTP客户端清理。
+        return result
+
+
+def _receipt_conflict(session: Session, job: MaterialCoverJob) -> bool:
+    if job.error_code == "cover_receipt_ambiguous":
+        return True
+    receipts = session.exec(
+        select(MaterialCoverReceipt)
+        .where(MaterialCoverReceipt.job_id == job.id)
+        .limit(2)
+    ).all()
+    if len(receipts) > 1:
+        return True
+    if not receipts:
+        return False
+    receipt = receipts[0]
+    facts = receipt.receipt_facts
+    if facts is None or (job.known_image_id and job.known_image_id != receipt.image_id):
+        return True
+    if job.signature and facts["signature"] and job.signature != facts["signature"]:
+        return True
+    job.known_image_id = receipt.image_id
+    if job.signature is None:
+        job.signature = facts["signature"]
+    return False
+
+
+def _invalidate_receipt(session: Session, job: MaterialCoverJob) -> None:
+    mapping = _mapping(session, job)
+    if mapping and mapping.image_id == job.known_image_id:
+        mapping.image_id = None
+    _stop(job, "cover_receipt_ambiguous", unknown=True)
 
 
 def _preserve_receipt(
-    database_engine: Engine, context: TenantContext, job_id: UUID, image_id: str
+    database_engine: Engine,
+    context: TenantContext,
+    job_id: UUID,
+    value: material_types.ImageReceipt,
 ) -> None:
     with Session(database_engine) as session, session.begin():
+        original = _job(session, context, job_id)
+        session.exec(
+            select(MaterialFile)
+            .where(
+                MaterialFile.tenant_id == context.tenant_id,
+                MaterialFile.id == original.material_id,
+            )
+            .with_for_update()
+        ).one()
+        current = _job(session, context, job_id, lock=True)
+        # 迟到的真实回执不依赖旧actor仍有权限；material→job锁和发布事务同序。
         session.exec(
             insert(MaterialCoverReceipt)
             .values(
                 id=uuid4(),
                 tenant_id=context.tenant_id,
                 job_id=job_id,
-                image_id=image_id,
+                image_id=value.image_id,
+                receipt_facts={"signature": value.signature},
                 observed_at=_now(),
             )
             .on_conflict_do_nothing(index_elements=["job_id", "image_id"])
         )
+        saved = session.exec(
+            select(MaterialCoverReceipt).where(
+                MaterialCoverReceipt.job_id == job_id,
+                MaterialCoverReceipt.image_id == value.image_id,
+            )
+        ).one()
+        if saved.receipt_facts != {"signature": value.signature} or _receipt_conflict(
+            session, current
+        ):
+            # 重复回执只能完全幂等；冲突不改写旧证据，立即撤下冲突图片的可用映射。
+            _invalidate_receipt(session, current)
 
 
 def _save_receipt(
@@ -509,7 +641,7 @@ def _save_receipt(
             current.signature = value.signature
             _queue(session, current, read=True)
     except Exception:
-        _preserve_receipt(database_engine, context, job.id, value.image_id)
+        _preserve_receipt(database_engine, context, job.id, value)
 
 
 def _read_result(
@@ -532,6 +664,16 @@ def _read_result(
         if current is None:
             return
         _access(session, context, current)
+        if _receipt_conflict(session, current):
+            _invalidate_receipt(session, current)
+            return
+        if (
+            evidence is not None
+            and current.signature is not None
+            and current.signature != evidence["signature"]
+        ):
+            _invalidate_receipt(session, current)
+            return
         if evidence is None:
             _stop(current, "cover_result_unknown", unknown=True)
             return
@@ -539,6 +681,7 @@ def _read_result(
         assert mapping
         mapping.image_id = evidence["image_id"]
         current.known_image_id = evidence["image_id"]
+        current.signature = evidence["signature"]
         current.status, current.error_code = "READY", None
         current.claim_token = current.claimed_until = current.dispatch_id = None
         current.updated_at = _now()
@@ -632,48 +775,50 @@ def run_cover(
     revision: int,
     read: bool,
 ) -> None:
+    deadline = _now() + timedelta(seconds=HARD_LIMIT - 5)
     claimed = _claim(database_engine, context, job_id, dispatch_id, revision, read=read)
     if claimed is None:
         return
     job, nonce = claimed
     try:
         if not read:
-            with Session(database_engine) as session:
-                material = session.get(MaterialFile, job.material_id)
-                if not material or not material.video_md5:
-                    raise DomainError("cover_video_unverified", "视频签名尚未核实")
-                md5 = material.video_md5
+            if job.video_md5 is None:
+                raise DomainError("cover_video_unverified", "视频签名尚未核实")
+            md5 = job.video_md5
             video = _call(
                 database_engine,
                 redis_client,
                 context,
                 job,
                 nonce,
-                VIDEO_INFO_ENDPOINT,
-                lambda client: api.read_video_cover(
-                    client,
+                "materials.get_videos",
+                lambda client, budget: client.read_video_cover(
                     advertiser_id=job.advertiser_id,
                     video_id=job.video_id,
                     md5=md5,
+                    budget=budget,
                 ),
+                deadline=deadline,
             )
             url = video.url
             if not url:
-                url = _call(
+                suggestion = _call(
                     database_engine,
                     redis_client,
                     context,
                     job,
                     nonce,
-                    api.SUGGEST_ENDPOINT,
-                    lambda client: api.suggest_cover(
-                        client,
+                    "materials.get_suggested_covers",
+                    lambda client, budget: client.suggest_cover(
                         advertiser_id=job.advertiser_id,
                         video_id=job.video_id,
                         width=video.width,
                         height=video.height,
+                        budget=budget,
                     ),
+                    deadline=deadline,
                 )
+                url = suggestion.url if suggestion else None
             if not url:
                 raise DomainError("cover_unavailable", "平台尚未提供可用的视频封面")
             with Session(database_engine) as session, session.begin():
@@ -687,13 +832,14 @@ def run_cover(
                 context,
                 job,
                 nonce,
-                api.UPLOAD_ENDPOINT,
-                lambda client: api.upload_cover(
-                    client,
-                    advertiser_id=job.advertiser_id,
-                    url=url,
-                    remote_name=job.remote_name,
+                "materials.upload_image_url",
+                lambda client, budget: client.upload_image_url(
+                    material_types.URLImageUpload(
+                        job.advertiser_id, url, job.remote_name
+                    ),
+                    budget=budget,
                 ),
+                deadline=deadline,
                 arm=True,
                 receipt=lambda value: _save_receipt(
                     database_engine, context, job, nonce, value
@@ -701,24 +847,23 @@ def run_cover(
             )
             return
         with Session(database_engine) as session, session.begin():
+            # 与入口、最终发布和迟到回执同序，不能持job锁反向等asset/material。
+            session.exec(
+                select(MaterialFile)
+                .where(
+                    MaterialFile.tenant_id == context.tenant_id,
+                    MaterialFile.id == job.material_id,
+                )
+                .with_for_update()
+            ).one()
             current = _fenced(session, context, job.id, nonce)
             if current is None:
                 return
-            receipts = session.exec(
-                select(MaterialCoverReceipt.image_id)
-                .where(MaterialCoverReceipt.job_id == job.id)
-                .limit(2)
-            ).all()
-            if len(receipts) > 1 or (
-                receipts
-                and current.known_image_id
-                and receipts[0] != current.known_image_id
-            ):
-                _stop(current, "cover_receipt_ambiguous", unknown=True)
+            if _receipt_conflict(session, current):
+                _invalidate_receipt(session, current)
                 return
-            if receipts:
-                current.known_image_id = receipts[0]
             job.known_image_id = current.known_image_id
+            job.signature = current.signature
         if job.known_image_id:
             image_id = job.known_image_id
             data = _call(
@@ -727,13 +872,14 @@ def run_cover(
                 context,
                 job,
                 nonce,
-                api.INFO_ENDPOINT,
-                lambda client: api.read_image(
-                    client, advertiser_id=job.advertiser_id, image_id=image_id
+                "materials.get_images",
+                lambda client, budget: client.read_image(
+                    advertiser_id=job.advertiser_id, image_id=image_id, budget=budget
                 ),
+                deadline=deadline,
             )
             evidence = api.verified_image(
-                data,
+                {"list": [api.image_record_data(data)] if data else []},
                 image_id=image_id,
                 remote_name=job.remote_name,
                 signature=job.signature,
@@ -742,18 +888,21 @@ def run_cover(
             )
             _read_result(database_engine, context, job, nonce, evidence)
         else:
-            data = _call(
+            page_data = _call(
                 database_engine,
                 redis_client,
                 context,
                 job,
                 nonce,
-                api.SEARCH_ENDPOINT,
-                lambda client: api.search_images(
-                    client, advertiser_id=job.advertiser_id, page=job.next_page
+                "materials.search_images",
+                lambda client, budget: client.search_images(
+                    advertiser_id=job.advertiser_id, page=job.next_page, budget=budget
                 ),
+                deadline=deadline,
             )
-            rows, last, total = api.image_search_page(data, page=job.next_page)
+            rows, last, total = api.image_search_page(
+                api.image_page_data(page_data), page=job.next_page
+            )
             _search_result(database_engine, context, job, nonce, rows, last, total)
     except AccountAdmissionDeferred as error:
         with Session(database_engine) as session, session.begin():

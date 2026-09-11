@@ -535,21 +535,17 @@ def test_known_receipt_commits_before_sdk_cleanup_interrupt(
     run(source_env, redis_client, identity)
     assert seen == ["target-image"]
     assert job_state(identity).status == "VERIFYING"
-    # Interrupted SDK scopes retain their leases until process deadline. Move
-    # only this fixture's lease scores into the past; admission runs real Lua.
+    # 完整HTTP与DTO已返回后物理租约正常结束；后续工厂清理中断不抹掉持久ID。
     from app.core.config import settings
     from app.jobs.admission import admission_keys
 
     keys = admission_keys(
         settings.TIKTOK_APP_ID,
-        covers.api.UPLOAD_ENDPOINT,
+        "materials.upload_image_url",
         source_env["context"].tenant_id,
         "actual-account",
     )
-    for key in keys[2:]:
-        members = redis_client.zrange(key, 0, -1)
-        assert members
-        redis_client.zadd(key, dict.fromkeys(members, 0))
+    assert all(redis_client.zcard(key) == 0 for key in keys[2:])
     wire[1].append(image_info(identity))
     run(source_env, redis_client, identity, read=True)
     assert job_state(identity).status == "READY"
@@ -851,15 +847,15 @@ def test_every_sdk_call_releases_db_and_separately_checks_shared_admission(
 
     wire[1].extend(
         [
-            lambda: inspect(covers.VIDEO_INFO_ENDPOINT, video_info()),
+            lambda: inspect("materials.get_videos", video_info()),
             lambda: inspect(
-                covers.api.UPLOAD_ENDPOINT,
+                "materials.upload_image_url",
                 {"image_id": "target-image", "signature": "a" * 32},
             ),
         ]
     )
     run(source_env, redis_client, identity)
-    wire[1].append(lambda: inspect(covers.api.INFO_ENDPOINT, image_info(identity)))
+    wire[1].append(lambda: inspect("materials.get_images", image_info(identity)))
     run(source_env, redis_client, identity, read=True)
     assert job_state(identity).status == "READY"
 

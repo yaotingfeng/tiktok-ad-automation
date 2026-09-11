@@ -79,6 +79,7 @@ _OPERATION_CAPABILITIES: dict[str, Capability] = {
     "materials.search_images": "read",
     "materials.upload_video_url": "upload",
     "materials.upload_video_file": "upload",
+    "materials.upload_image_url": "upload",
     "build.get_campaigns": "read",
     "build.get_adgroups": "read",
     "build.get_ads": "read",
@@ -382,6 +383,10 @@ def open_tiktok_gateway(
                         request_scope=request_scope,
                         deadline=task_deadline,
                         preview_allowed_hosts=settings.MATERIAL_REMOTE_MEDIA_HOSTS,
+                        # 数字 scope 只由官方授权边界解释；封面适配器保留各操作原有叶权限。
+                        api_scope_ids=frozenset(
+                            int(scope) for scope in observation_facts.scopes
+                        ),
                     ),
                     scenes=OfficialScenesGateway(
                         official,

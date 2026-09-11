@@ -188,23 +188,6 @@ def _response(response: object) -> McpBusinessResponse:
     )
 
 
-def read_video(
-    client: Any,
-    *,
-    advertiser_id: str,
-    video_id: str,
-    budget: material_types.RemoteCallBudget | None = None,
-) -> dict[str, Any]:
-    """仅供尚未迁移的封面任务薄委托，P2.4删除；实际SDK请求只有adapter一处。"""
-    from app.integrations.tiktok.adapters.sdk_materials import _read_video_response
-
-    response = _read_video_response(
-        client, advertiser_id=advertiser_id, video_id=video_id, budget=budget
-    )
-    assert isinstance(response.data, dict)
-    return response.data
-
-
 def _schema_error() -> DomainError:
     return DomainError("unsupported_material_schema", "平台素材返回结构尚不支持核实")
 

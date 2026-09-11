@@ -54,18 +54,18 @@ def test_actual_upload_successor_survives_revocation_then_repairs_same_identity(
         successor.published_at = successor.available_at = datetime.now(UTC) - timedelta(
             minutes=3
         )
-        session.get(TenantMembership, (ctx.tenant_id, ctx.actor_id)).role = "viewer"
+        session.get(TenantMembership, (ctx.tenant_id, ctx.actor_id)).active = False
     with pytest.raises(DomainError):
         source_run(source_env, redis_client, operation_id=op_id, revision=revision)
     with Session(engine) as session, session.begin():
         op = session.get(MaterialAssetOperation, op_id)
         assert op.status == "verifying" and op.remote_response["revision"] == revision
-        session.get(TenantMembership, (ctx.tenant_id, ctx.actor_id)).role = "operator"
+        session.get(TenantMembership, (ctx.tenant_id, ctx.actor_id)).active = True
     with Session(engine) as session, session.begin():
         assert repair_material_dispatches(session) == 1
         successor = session.get(PendingDispatch, dispatch_id)
         assert successor.published_at is None and successor.payload == payload
-    wire[1].append(info(vid="readback-actual"))
+    wire[1].append(info(vid="actual-upload-receipt"))
     source_run(source_env, redis_client, operation_id=op_id, revision=revision)
     source_run(source_env, redis_client, operation_id=op_id, revision=revision)
     with Session(engine) as session:
@@ -93,7 +93,8 @@ def test_all_preview_paths_are_sql_read_only_with_external_boundaries_disabled(
     with monkeypatch.context() as m:
         m.setattr("redis.Redis.execute_command", forbidden)
         m.setattr("boto3.client", forbidden)
-        m.setattr("app.modules.materials.sdk_assets.FileApi", forbidden)
+        m.setattr("urllib3.PoolManager.request", forbidden)
+        m.setattr("httpx2.AsyncHTTPTransport.handle_async_request", forbidden)
         m.setattr("app.modules.materials.distribution.enqueue_after_commit", forbidden)
         m.setattr("app.jobs.outbox.enqueue_after_commit", forbidden)
         event.listen(engine, "before_cursor_execute", observe)
@@ -147,6 +148,6 @@ def test_target_old_revision_and_wrong_actor_cannot_claim_current_work(
             kind="verify",
         )
     assert state(dist_id)[1].attempt_token is None and wire[0] == []
-    wire[1].append(info())
+    wire[1].append(info(vid=f"vid-{account}"))
     run(source_env, redis_client, dist_id, operation_id=op_id, revision=3)
     assert state(dist_id)[0].status == "ready" and len(wire[0]) == 1

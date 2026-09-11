@@ -1,4 +1,4 @@
-"""SDK 视频唯一传输入口；每次真实请求共享工厂授权、配额与绝对期限。"""
+"""SDK 素材唯一传输入口；每次真实请求共享工厂授权、配额与绝对期限。"""
 
 import json
 import re
@@ -48,11 +48,13 @@ class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
         request_scope: RequestScope,
         deadline: datetime,
         preview_allowed_hosts: frozenset[str] = frozenset(),
+        api_scope_ids: frozenset[int] | None = None,
     ):
         super().__init__(preview_allowed_hosts=preview_allowed_hosts)
         self._client = client
         self._scope = request_scope
         self._deadline = deadline
+        self._api_scope_ids = api_scope_ids
 
     def _call(
         self,
@@ -63,6 +65,13 @@ class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
     ) -> McpBusinessResponse:
         if budget.deadline != self._deadline:
             raise DomainError("material_deadline", "素材预算与本次会话期限不一致")
+        endpoint = {
+            "materials.get_images": cover_sdk.INFO_ENDPOINT,
+            "materials.search_images": cover_sdk.SEARCH_ENDPOINT,
+            "materials.get_suggested_covers": cover_sdk.SUGGEST_ENDPOINT,
+        }.get(operation)
+        if endpoint:
+            cover_sdk.require_cover_scopes(self._api_scope_ids, endpoint=endpoint)
         # 不再调用旧 App-ID 准入；工厂的 request_scope 是唯一物理请求授权与配额边界。
         with self._scope(advertiser_id, operation, budget.deadline):
             budget.timeout(upload=False)
@@ -86,7 +95,7 @@ class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
                             budget=budget,
                         )
                     if operation == "materials.get_images":
-                        return cover_sdk._read_image_response(
+                        return _read_image_response(
                             self._client,
                             advertiser_id=advertiser_id,
                             image_id=arguments["image_ids"][0],
@@ -100,7 +109,7 @@ class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
                         raise DomainError(
                             "material_request_invalid", "素材读取操作无效"
                         )
-                    return cover_sdk._call_response(
+                    return _call_response(
                         self._client, path, query=arguments, budget=budget
                     )
             except ApiException, sdk_errors.TiktokSDKError, HTTPError:
@@ -163,33 +172,9 @@ class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
                     **arguments,
                 ).get()
                 # async官方入口保留完整原始envelope；严格code后只读取真实回执ID。
-                payload = self._client.last_response.data
-                if len(payload) > 8 * 1024 * 1024:
-                    raise ValueError("oversized upload receipt")
-                raw = json.loads(
-                    payload,
-                    object_pairs_hook=_unique_upload_fields,
-                    parse_constant=_reject_json_constant,
-                    parse_float=Decimal,
-                )
-                request_id = raw.get("request_id") if type(raw) is dict else None
-                evidence = CallEvidence(
-                    request_id=request_id
-                    if isinstance(request_id, str)
-                    and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", request_id)
-                    else None
-                )
-                if (
-                    type(raw) is not dict
-                    or type(raw.get("code")) is not int
-                    or raw["code"] != 0
-                    or not isinstance(raw.get("data"), list)
-                ):
-                    raise RemoteCallError(
-                        "material_response_unknown", effect="UNKNOWN", evidence=evidence
-                    )
+                response = _upload_response(self._client, array=True)
                 return sdk_assets.video_upload_receipt(
-                    McpBusinessResponse(raw["data"], evidence),
+                    response,
                     advertiser_id=request.advertiser_id,
                     channel="OFFICIAL_API",
                 )
@@ -217,12 +202,64 @@ class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
     ) -> contracts.VideoReceipt:
         return self._upload_video(request, budget=budget)
 
+    def read_video_cover(
+        self,
+        *,
+        advertiser_id: str,
+        video_id: str,
+        md5: str,
+        budget: contracts.RemoteCallBudget,
+    ) -> contracts.VideoCover:
+        cover_sdk.require_cover_scopes(
+            self._api_scope_ids, endpoint=cover_sdk.VIDEO_INFO_ENDPOINT
+        )
+        return super().read_video_cover(
+            advertiser_id=advertiser_id, video_id=video_id, md5=md5, budget=budget
+        )
+
     def upload_image_url(
         self, request: contracts.URLImageUpload, *, budget: contracts.RemoteCallBudget
     ) -> contracts.ImageReceipt:
-        raise RemoteCallError(
-            "material_channel_unverified", effect="NOT_SENT", evidence=CallEvidence()
-        )
+        sent = False
+        try:
+            if budget.deadline != self._deadline:
+                raise DomainError("material_deadline", "素材预算与本次会话期限不一致")
+            cover_sdk.require_cover_scopes(
+                self._api_scope_ids, endpoint=cover_sdk.UPLOAD_ENDPOINT
+            )
+            cover_sdk.validate_image_upload(request)
+            with self._scope(
+                request.advertiser_id, "materials.upload_image_url", budget.deadline
+            ):
+                budget.timeout(upload=True)
+                sent = True
+                _call_response(
+                    self._client,
+                    cover_sdk.UPLOAD_ENDPOINT,
+                    body={
+                        "advertiser_id": request.advertiser_id,
+                        "upload_type": "UPLOAD_BY_URL",
+                        "image_url": request.url,
+                        "file_name": request.file_name,
+                    },
+                    budget=budget,
+                )
+                response = _upload_response(self._client, array=False)
+                return cover_sdk.image_receipt(
+                    response, advertiser_id=request.advertiser_id
+                )
+        except SDK_SCOPE_INTERRUPTS:
+            raise
+        except RemoteCallError, AccountAdmissionDeferred:
+            raise
+        except Exception as error:
+            raise RemoteCallError(
+                error.code
+                if isinstance(error, DomainError) and not sent
+                else "cover_response_error",
+                effect="UNKNOWN" if sent else "NOT_SENT",
+                evidence=CallEvidence(),
+            ) from None
 
 
 def _read_video_response(
@@ -230,14 +267,14 @@ def _read_video_response(
     *,
     advertiser_id: str,
     video_id: str,
-    budget: contracts.RemoteCallBudget | None = None,
+    budget: contracts.RemoteCallBudget,
 ) -> McpBusinessResponse:
     return sdk_assets._response(
         FileApi(client).ad_video_info(
             advertiser_id=advertiser_id,
             video_ids=[video_id],
             access_token=client.default_headers["Access-Token"],
-            _request_timeout=budget.timeout(upload=False) if budget else (5, 30),
+            _request_timeout=budget.timeout(upload=False),
         )
     )
 
@@ -248,7 +285,7 @@ def _search_videos_response(
     advertiser_id: str,
     page: int,
     material_ids: list[str] | None = None,
-    budget: contracts.RemoteCallBudget | None = None,
+    budget: contracts.RemoteCallBudget,
 ) -> McpBusinessResponse:
     kwargs = {}
     if material_ids:
@@ -259,7 +296,84 @@ def _search_videos_response(
             access_token=client.default_headers["Access-Token"],
             page=page,
             page_size=sdk_assets.PAGE_SIZE,
-            _request_timeout=budget.timeout(upload=False) if budget else (5, 30),
+            _request_timeout=budget.timeout(upload=False),
             **kwargs,
+        )
+    )
+
+
+def _upload_response(client: Any, *, array: bool) -> McpBusinessResponse:
+    payload = client.last_response.data
+    if len(payload) > 8 * 1024 * 1024:
+        raise ValueError("oversized upload receipt")
+    raw = json.loads(
+        payload,
+        object_pairs_hook=_unique_upload_fields,
+        parse_constant=_reject_json_constant,
+        parse_float=Decimal,
+    )
+    request_id = raw.get("request_id") if type(raw) is dict else None
+    evidence = CallEvidence(
+        request_id=request_id
+        if isinstance(request_id, str)
+        and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", request_id)
+        else None
+    )
+    if (
+        type(raw) is not dict
+        or type(raw.get("code")) is not int
+        or raw["code"] != 0
+        or type(raw.get("data")) is not (list if array else dict)
+    ):
+        raise RemoteCallError(
+            "material_response_unknown", effect="UNKNOWN", evidence=evidence
+        )
+    return McpBusinessResponse(raw["data"], evidence)
+
+
+def _call_response(
+    client: Any,
+    path: str,
+    *,
+    body: dict[str, Any] | None = None,
+    query: dict[str, Any] | None = None,
+    budget: contracts.RemoteCallBudget,
+) -> McpBusinessResponse:
+    method = "POST" if body is not None else "GET"
+    headers = {
+        "Access-Token": client.default_headers.get("Access-Token", ""),
+        "Accept": "application/json",
+    }
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    future = client.call_api(
+        path,
+        method,
+        {},
+        list((query or {}).items()),
+        headers,
+        body=body,
+        response_type="InlineResponse200",
+        auth_settings=[],
+        _return_http_data_only=True,
+        async_req=True,
+        _request_timeout=budget.timeout(upload=body is not None),
+    )
+    return sdk_assets._response(future.get())
+
+
+def _read_image_response(
+    client: Any,
+    *,
+    advertiser_id: str,
+    image_id: str,
+    budget: contracts.RemoteCallBudget,
+) -> McpBusinessResponse:
+    return sdk_assets._response(
+        FileApi(client).file_image_ad_info(
+            advertiser_id=advertiser_id,
+            image_ids=[image_id],
+            access_token=client.default_headers.get("Access-Token", ""),
+            _request_timeout=budget.timeout(upload=False),
         )
     )

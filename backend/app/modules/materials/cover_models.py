@@ -27,6 +27,10 @@ class MaterialCoverJob(SQLModel, table=True):
     __tablename__ = "material_cover_job"
     __table_args__ = (
         route_constraint("material_cover_job", "frozen_route", connection=True),
+        CheckConstraint(
+            "video_md5 IS NULL OR video_md5 ~ '^[0-9a-f]{32}$'",
+            name="ck_material_cover_video_md5",
+        ),
         material_reference(),
         access_reference(),
         ForeignKeyConstraint(
@@ -80,6 +84,7 @@ class MaterialCoverJob(SQLModel, table=True):
         default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True)
     )
     video_id: str = Field(max_length=255)
+    video_md5: str | None = Field(default=None, max_length=32)
     remote_name: str = Field(max_length=128)
     status: str = Field(default="PENDING", max_length=16)
     request_armed_at: datetime | None = Field(
@@ -126,11 +131,23 @@ class MaterialCoverReceipt(SQLModel, table=True):
             ["material_cover_job.tenant_id", "material_cover_job.id"],
         ),
         UniqueConstraint("job_id", "image_id", name="uq_material_cover_receipt_image"),
+        CheckConstraint(
+            "receipt_facts IS NULL OR (jsonb_typeof(receipt_facts) = 'object' "
+            "AND receipt_facts ? 'signature' "
+            "AND receipt_facts - 'signature' = '{}'::jsonb "
+            "AND (receipt_facts->'signature' = 'null'::jsonb OR "
+            "(jsonb_typeof(receipt_facts->'signature') = 'string' "
+            "AND receipt_facts->>'signature' ~ '^[0-9a-f]{32}$')))",
+            name="ck_material_cover_receipt_facts",
+        ),
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     tenant_id: UUID
     job_id: UUID
     image_id: str = Field(max_length=255)
+    receipt_facts: dict[str, Any] | None = Field(
+        default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True)
+    )
     observed_at: datetime = Field(
         default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False),

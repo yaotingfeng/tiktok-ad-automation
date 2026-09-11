@@ -1,14 +1,56 @@
 """Official serialization and strict account-owned cover evidence; offline wire."""
 
 import json
-from uuid import uuid4
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 
 import pytest
-from cryptography.fernet import Fernet
 from urllib3.response import HTTPResponse
 
 from app.core.errors import DomainError
+from app.integrations.tiktok.adapters.sdk_materials import SDKMaterialOperations
+from app.integrations.tiktok.contracts.materials import RemoteCallBudget, URLImageUpload
 from app.integrations.tiktok.sdk import official_client
+
+
+@contextmanager
+def scope(advertiser, operation, deadline):
+    assert advertiser and operation.startswith("materials.") and deadline.tzinfo
+    yield
+
+
+def adapter(client):
+    budget = RemoteCallBudget(datetime.now(UTC) + timedelta(seconds=40), 45, 60000)
+    return SDKMaterialOperations(
+        client,
+        request_scope=scope,
+        deadline=budget.deadline,
+        api_scope_ids=frozenset({6}),
+    ), budget
+
+
+def upload_cover(client, *, advertiser_id, url, remote_name):
+    facade, budget = adapter(client)
+    return facade.upload_image_url(
+        URLImageUpload(advertiser_id, url, remote_name), budget=budget
+    )
+
+
+def read_video_cover(client, **kwargs):
+    facade, budget = adapter(client)
+    return facade.read_video_cover(**kwargs, budget=budget)
+
+
+def suggest_cover(client, **kwargs):
+    facade, budget = adapter(client)
+    return facade.suggest_cover(**kwargs, budget=budget)
+
+
+def search_images(client, **kwargs):
+    from app.modules.materials.cover_sdk import image_page_data
+
+    facade, budget = adapter(client)
+    return image_page_data(facade.search_images(**kwargs, budget=budget))
 
 
 @pytest.fixture
@@ -24,7 +66,6 @@ def wire(monkeypatch):
 
 
 def test_url_upload_uses_official_json_transport_and_typed_receipt(wire):
-    from app.modules.materials.cover_sdk import upload_cover
 
     calls, replies = wire
     replies.append(
@@ -50,7 +91,6 @@ def test_url_upload_uses_official_json_transport_and_typed_receipt(wire):
 
 
 def test_video_cover_url_and_suggestion_id_are_never_image_receipts(wire):
-    from app.modules.materials.cover_sdk import read_video_cover, suggest_cover
 
     calls, replies = wire
     replies.extend(
@@ -98,7 +138,7 @@ def test_video_cover_url_and_suggestion_id_are_never_image_receipts(wire):
         )
     assert video.url == "http://example.com/temporary"
     assert "temporary" not in repr(video)
-    assert suggestion == "https://example.com/suggestion"
+    assert suggestion.url == "https://example.com/suggestion"
     assert all(dict(c[2]["fields"])["advertiser_id"] == "target" for c in calls)
 
 
@@ -113,7 +153,6 @@ def test_video_cover_url_and_suggestion_id_are_never_image_receipts(wire):
     ],
 )
 def test_wrong_video_cannot_supply_cover(wire, changes):
-    from app.modules.materials.cover_sdk import read_video_cover
 
     _, replies = wire
     replies.append(
@@ -174,7 +213,7 @@ def test_info_requires_exact_id_internal_name_and_displayable_geometry():
 
 
 def test_search_is_paged_and_never_retains_temporary_urls(wire):
-    from app.modules.materials.cover_sdk import image_search_page, search_images
+    from app.modules.materials.cover_sdk import image_search_page
 
     calls, replies = wire
     replies.append(
@@ -257,34 +296,17 @@ def test_incomplete_or_duplicate_image_page_cannot_prove_scan(rows, total, pages
         ([True], "UPLOAD_ENDPOINT", False),
     ],
 )
-def test_image_and_video_oauth_leaves_are_checked_separately(
-    monkeypatch, scopes, endpoint, allowed
-):
-    from app.core.config import settings
-    from app.core.credentials import encrypt_credentials
-    from app.modules.accounts.models import TikTokConnection
+def test_image_and_video_oauth_leaves_are_checked_separately(scopes, endpoint, allowed):
     from app.modules.materials import cover_sdk
 
-    monkeypatch.setattr(
-        settings, "CONNECTION_ENCRYPTION_KEY", Fernet.generate_key().decode()
-    )
-    tenant_id = uuid4()
-    connection = TikTokConnection(
-        tenant_id=tenant_id,
-        status="ACTIVE",
-        credential_ciphertext=encrypt_credentials(
-            tenant_id=tenant_id,
-            value={"scope": json.dumps(scopes), "access_token": "synthetic"},
-        ),
-    )
     if allowed:
         cover_sdk.require_cover_scopes(
-            connection, endpoint=getattr(cover_sdk, endpoint)
+            frozenset(scopes), endpoint=getattr(cover_sdk, endpoint)
         )
     else:
         with pytest.raises(
             DomainError, check=lambda e: e.code == "cover_permission_unverified"
         ):
             cover_sdk.require_cover_scopes(
-                connection, endpoint=getattr(cover_sdk, endpoint)
+                frozenset(scopes), endpoint=getattr(cover_sdk, endpoint)
             )

@@ -106,6 +106,7 @@ def material_case(request, monkeypatch):
                         request_scope=scope,
                         deadline=deadline,
                         preview_allowed_hosts=hosts,
+                        api_scope_ids=frozenset({6}),
                     ),
                     enqueue,
                     budget,
@@ -350,11 +351,11 @@ def test_cover_suggestion_is_not_an_image_receipt(material_case):
     assert not hasattr(cover, "image_id")
 
 
-def test_unverified_writes_remain_not_sent(material_case):
+@pytest.mark.parametrize("material_case", ["MCP"], indirect=True)
+def test_mcp_unverified_video_writes_remain_not_sent(material_case):
     from app.integrations.tiktok.contracts.common import RemoteCallError
     from app.integrations.tiktok.contracts.materials import (
         FileVideoUpload,
-        URLImageUpload,
         URLVideoUpload,
     )
 
@@ -371,16 +372,7 @@ def test_unverified_writes_remain_not_sent(material_case):
             adapter.upload_video_file,
             FileVideoUpload("123", "/synthetic/no-file", "fixed.mp4", "a" * 32, 120),
         ),
-        (
-            adapter.upload_image_url,
-            URLImageUpload("123", "https://media.example.com/cover", "fixed.jpg"),
-        ),
     ]
-    from app.integrations.tiktok.adapters.sdk_materials import SDKMaterialOperations
-
-    # P2.3开放原API视频写合同；图片留待P2.4，MCP无服务证据仍全部拒绝。
-    if isinstance(adapter, SDKMaterialOperations):
-        writes = writes[-1:]
     for method, request in writes:
         with pytest.raises(RemoteCallError) as error:
             method(request, budget=budget)

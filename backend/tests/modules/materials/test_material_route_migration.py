@@ -145,7 +145,13 @@ def test_history_is_preserved_and_new_route_evidence_cannot_be_rewritten_or_drop
                 table = Table(
                     row.__tablename__, MetaData(), autoload_with=db.connection()
                 )
-                values = row.model_dump(exclude=set(ROUTES[row.__tablename__]))
+                # 用真实旧 schema 列播种；后续封面摘要等新 ORM 列不属于迁移前证据。
+                assert not set(ROUTES[row.__tablename__]).intersection(table.c.keys())
+                values = {
+                    key: value
+                    for key, value in row.model_dump().items()
+                    if key in table.c
+                }
                 db.execute(table.insert().values(**values))
                 originals[row.__tablename__] = values
             route = {

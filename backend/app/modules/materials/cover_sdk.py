@@ -1,24 +1,16 @@
-"""Official target-account video cover -> image library contract.
+"""封面纯约束与实际回执核实；HTTP统一由SDK/MCP adapter执行。
 
 Signed preview URLs are ephemeral inputs, never persisted as image identities.
-The generated URL upload method hardcodes multipart; this documented JSON mode
-therefore uses the same pinned official ApiClient generic entrypoint.
 """
 
-import json
 import re
 from typing import Any
 from urllib.parse import urlsplit
 
-from business_api_client.api.file_api import FileApi  # type: ignore[import-untyped]
-
-from app.core.credentials import decrypt_credentials
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts import materials as material_types
 from app.integrations.tiktok.contracts.common import McpBusinessResponse
-from app.modules.accounts.models import TikTokConnection
 from app.modules.materials.sdk_assets import INFO_ENDPOINT as VIDEO_INFO_ENDPOINT
-from app.modules.materials.sdk_assets import _response, read_video, verified_video
 
 UPLOAD_ENDPOINT = "/open_api/v1.3/file/image/ad/upload/"
 INFO_ENDPOINT = "/open_api/v1.3/file/image/ad/info/"
@@ -40,9 +32,16 @@ def _error() -> DomainError:
 
 
 def _identifier(value: object) -> str | None:
+    from .sdk_assets import _remote_identifier
+
     return (
         value
-        if isinstance(value, str) and value.strip() and len(value) <= 255
+        if (
+            _remote_identifier(value, limit=255)
+            and isinstance(value, str)
+            and not value.startswith("//")
+            and not re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", value)
+        )
         else None
     )
 
@@ -84,177 +83,47 @@ def _url(value: object) -> str | None:
     return value
 
 
-def require_cover_scopes(connection: TikTokConnection, *, endpoint: str) -> None:
-    """Separate image/video OAuth leaves; a video-upload grant is insufficient."""
-    try:
-        if connection.status != "ACTIVE" or not connection.credential_ciphertext:
-            raise ValueError
-        private = decrypt_credentials(
-            tenant_id=connection.tenant_id, ciphertext=connection.credential_ciphertext
-        )
-        scopes = json.loads(private.get("scope", "null"))
-        if not isinstance(scopes, list) or any(
-            type(scope) is not int for scope in scopes
-        ):
-            raise ValueError
-        if endpoint not in _SCOPE_PARENTS or not set(scopes) & _SCOPE_PARENTS[endpoint]:
-            raise ValueError
-    except ValueError, TypeError, DomainError:
+def require_cover_scopes(scope_ids: frozenset[int] | None, *, endpoint: str) -> None:
+    # 只检查工厂已经严格解释的不可变scope集合；这里不读取或解密凭据。
+    if (
+        type(scope_ids) is not frozenset
+        or any(type(scope) is not int for scope in scope_ids)
+        or endpoint not in _SCOPE_PARENTS
+        or not scope_ids & _SCOPE_PARENTS[endpoint]
+    ):
         raise DomainError(
             "cover_permission_unverified", "当前连接尚无已核实的封面读写权限"
-        ) from None
+        )
 
 
-def _call_response(
-    client: Any,
-    path: str,
-    *,
-    body: dict[str, Any] | None = None,
-    query: dict[str, Any] | None = None,
-    budget: material_types.RemoteCallBudget | None = None,
-) -> McpBusinessResponse:
-    method = "POST" if body is not None else "GET"
-    headers = {
-        "Access-Token": client.default_headers.get("Access-Token", ""),
-        "Accept": "application/json",
-    }
-    if body is not None:
-        headers["Content-Type"] = "application/json"
-    future = client.call_api(
-        path,
-        method,
-        {},
-        list((query or {}).items()),
-        headers,
-        body=body,
-        response_type="InlineResponse200",
-        auth_settings=[],
-        _return_http_data_only=True,
-        async_req=True,
-        _request_timeout=budget.timeout(upload=body is not None)
-        if budget
-        else (5, 10 if body is not None else 30),
-    )
-    return _response(future.get())
+def validate_image_upload(request: material_types.URLImageUpload) -> None:
+    from .sdk_assets import _remote_identifier
 
-
-def _call(
-    client: Any,
-    path: str,
-    *,
-    body: dict[str, Any] | None = None,
-    query: dict[str, Any] | None = None,
-    budget: material_types.RemoteCallBudget | None = None,
-) -> dict[str, Any]:
-    response = _call_response(client, path, body=body, query=query, budget=budget)
-    assert isinstance(response.data, dict)
-    return response.data
-
-
-def read_video_cover(
-    client: Any, *, advertiser_id: str, video_id: str, md5: str
-) -> material_types.VideoCover:
-    data = read_video(client, advertiser_id=advertiser_id, video_id=video_id)
-    evidence = verified_video(data, md5=md5)
-    if evidence is None or evidence["video_id"] != video_id:
-        raise _error()
-    row = data["list"][0]
-    if not _dimension(row.get("width")) or not _dimension(row.get("height")):
-        raise _error()
-    return material_types.VideoCover(
-        _url(row.get("video_cover_url")), row["width"], row["height"]
-    )
-
-
-def suggest_cover(
-    client: Any, *, advertiser_id: str, video_id: str, width: int, height: int
-) -> str | None:
-    data = _call(
-        client,
-        SUGGEST_ENDPOINT,
-        query={
-            "advertiser_id": advertiser_id,
-            "video_id": video_id,
-            "poster_number": 10,
-        },
-    )
-    rows = data.get("list")
     if (
-        not isinstance(rows, list)
-        or len(rows) > 10
-        or any(not isinstance(row, dict) for row in rows)
-    ):
-        raise _error()
-    for row in rows:
-        if (
-            _dimension(row.get("width"))
-            and _dimension(row.get("height"))
-            and row["width"] * height == row["height"] * width
-        ):
-            if url := _url(row.get("url")):
-                return url
-    return None
-
-
-def upload_cover(
-    client: Any, *, advertiser_id: str, url: str, remote_name: str
-) -> material_types.ImageReceipt:
-    if (
-        not _url(url)
-        or not isinstance(remote_name, str)
-        or not 1 <= len(remote_name) <= 100
-        or any(ord(c) < 32 for c in remote_name)
+        not _url(request.url)
+        or not _remote_identifier(request.advertiser_id)
+        or not _remote_identifier(request.file_name, limit=100)
     ):
         raise DomainError("cover_request_invalid", "封面上传参数无效")
-    data = _call(
-        client,
-        UPLOAD_ENDPOINT,
-        body={
-            "advertiser_id": advertiser_id,
-            "upload_type": "UPLOAD_BY_URL",
-            "image_url": url,
-            "file_name": remote_name,
-        },
-    )
-    identity = _identifier(data.get("image_id"))
-    if identity is None:
-        raise _error()
-    # Optional malformed or missing metadata must not erase a received image ID.
-    return material_types.ImageReceipt(identity, _signature(data.get("signature")))
 
 
-def _read_image_response(
-    client: Any,
-    *,
-    advertiser_id: str,
-    image_id: str,
-    budget: material_types.RemoteCallBudget | None = None,
-) -> McpBusinessResponse:
-    return _response(
-        FileApi(client).file_image_ad_info(
-            advertiser_id=advertiser_id,
-            image_ids=[image_id],
-            access_token=client.default_headers.get("Access-Token", ""),
-            _request_timeout=budget.timeout(upload=False) if budget else (5, 30),
+def image_receipt(
+    response: McpBusinessResponse, *, advertiser_id: str
+) -> material_types.ImageReceipt:
+    from app.integrations.tiktok.contracts.common import RemoteCallError
+
+    data = response.data
+    if (
+        type(data) is not dict
+        or _identifier(data.get("image_id")) is None
+        or ("advertiser_id" in data and data["advertiser_id"] != advertiser_id)
+    ):
+        raise RemoteCallError(
+            "cover_schema_unsupported", effect="UNKNOWN", evidence=response.evidence
         )
-    )
-
-
-def read_image(client: Any, *, advertiser_id: str, image_id: str) -> dict[str, Any]:
-    response = _read_image_response(
-        client, advertiser_id=advertiser_id, image_id=image_id
-    )
-    assert isinstance(response.data, dict)
-    return response.data
-
-
-def search_images(client: Any, *, advertiser_id: str, page: int) -> dict[str, Any]:
-    if type(page) is not int or not 1 <= page <= MAX_IMAGES // PAGE_SIZE:
-        raise DomainError("cover_search_incomplete", "封面核查超出可核实的分页范围")
-    return _call(
-        client,
-        SEARCH_ENDPOINT,
-        query={"advertiser_id": advertiser_id, "page": page, "page_size": PAGE_SIZE},
+    # 可选签名缺失或畸形不能丢弃已经收到的真实image_id；可用性另经详情核实。
+    return material_types.ImageReceipt(
+        data["image_id"], _signature(data.get("signature")), response.evidence
     )
 
 
@@ -273,7 +142,8 @@ def verified_image(
     row = rows[0]
     actual_signature = _signature(row.get("signature"))
     if (
-        row.get("image_id") != image_id
+        _identifier(row.get("image_id")) is None
+        or row.get("image_id") != image_id
         or row.get("file_name") != remote_name
         or row.get("displayable") is not True
         or not actual_signature
@@ -325,3 +195,25 @@ def image_search_page(
         page >= pages,
         total,
     )
+
+
+def image_record_data(record: material_types.ImageRecord) -> dict[str, Any]:
+    from dataclasses import asdict
+
+    data = asdict(record)
+    data.pop("evidence")
+    return data
+
+
+def image_page_data(
+    page: material_types.MaterialPage[material_types.ImageRecord],
+) -> dict[str, Any]:
+    return {
+        "list": [image_record_data(row) for row in page.rows],
+        "page_info": {
+            "page": page.page,
+            "page_size": page.page_size,
+            "total_page": page.total_pages,
+            "total_number": page.total_number,
+        },
+    }

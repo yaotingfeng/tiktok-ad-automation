@@ -1,6 +1,7 @@
 """Cover dependencies and recovery preserve the original material/video identity."""
 
 from datetime import UTC, datetime, timedelta
+from hashlib import md5
 
 import pytest
 from sqlalchemy import text
@@ -15,7 +16,7 @@ from app.modules.builds.execution import process_step
 from app.modules.builds.execution_models import ExecutionStep, Submission
 from app.modules.builds.material_execution import recover_material_results
 from app.modules.materials.cover_models import MaterialCoverJob
-from app.modules.materials.models import AccountMaterial
+from app.modules.materials.models import AccountMaterial, MaterialFile
 from app.modules.tenants.models import TenantMembership
 from tests.modules.builds.test_execution import executable as executable
 from tests.modules.builds.test_material_execution import unresolved
@@ -32,6 +33,9 @@ def remove_cover(env):
             )
         ).one()
         asset.image_id = None
+        # 本helper刻意移除既有封面以测试新准备；给该合成已核实视频明确原摘要。
+        file = session.get(MaterialFile, step.material_id)
+        file.video_md5 = md5(b"synthetic previously verified cover video").hexdigest()
         grant = session.exec(
             select(BCAccountAccess).where(
                 BCAccountAccess.tenant_id == step.tenant_id,

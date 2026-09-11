@@ -1,4 +1,4 @@
-"""MCP 素材只读：官方代码客户端拥有准入；未核实写入永不发送。"""
+"""MCP 素材操作：官方代码客户端拥有准入；视频写入保留独立能力门禁。"""
 
 from typing import Any
 
@@ -10,6 +10,7 @@ from app.integrations.tiktok.contracts.common import (
     RemoteCallError,
 )
 from app.integrations.tiktok.mcp.transport import BoundMCPClient
+from app.modules.materials import cover_sdk
 from app.modules.materials.channel_policy import (
     MaterialUploadPolicy,
     require_url_upload,
@@ -88,6 +89,22 @@ class MCPMaterialOperations(MaterialReadAdapter):
     def upload_image_url(
         self, request: contracts.URLImageUpload, *, budget: contracts.RemoteCallBudget
     ) -> contracts.ImageReceipt:
-        raise RemoteCallError(
-            "material_channel_unverified", effect="NOT_SENT", evidence=CallEvidence()
+        try:
+            cover_sdk.validate_image_upload(request)
+            budget.timeout(upload=True)
+        except DomainError as error:
+            raise RemoteCallError(
+                error.code, effect="NOT_SENT", evidence=CallEvidence()
+            ) from None
+        response = self._client.call(
+            operation="materials.upload_image_url",
+            advertiser_id=request.advertiser_id,
+            arguments={
+                "advertiser_id": request.advertiser_id,
+                "upload_type": "UPLOAD_BY_URL",
+                "image_url": request.url,
+                "file_name": request.file_name,
+            },
+            deadline=budget.deadline,
         )
+        return cover_sdk.image_receipt(response, advertiser_id=request.advertiser_id)
