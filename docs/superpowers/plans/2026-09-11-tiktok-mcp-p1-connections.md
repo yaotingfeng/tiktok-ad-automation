@@ -152,7 +152,7 @@ class ScenesGateway(Protocol):
 | `VboFacts` | `vo_status,vo_min_roas,roas_status_day0,roas_status_day7:str|None`，至少一项存在；数值字符串保持精确 |
 | `RegionFacts` | `locations:tuple[RegionLocation,...]`；元素为 `region_code:str,location_id:str` |
 
-- [ ] **Step 1: 写失败用例覆盖授权未知不等于 false/true、19 位账户 ID、错误页数和 resource/facts 不匹配。**
+- [x] **Step 1: 写失败用例覆盖授权未知不等于 false/true、19 位账户 ID、错误页数和 resource/facts 不匹配。**
 
 ```python
 def test_large_advertiser_id_stays_exact():
@@ -161,11 +161,11 @@ def test_large_advertiser_id_stays_exact():
     assert row.authorized is None
 ```
 
-- [ ] **Step 2: 运行 `uv run --frozen pytest tests/modules/accounts/test_read_contracts.py -q`，确认缺模块失败。**
-- [ ] **Step 3: 实现以上类型和验证；business_centers 只供授权目录用途，运行期工厂不得让它扩张绑定范围。** `ScenePage.facts.model_dump(mode='json',exclude_none=True)` 仅在现有证据持久化边界转换，业务逻辑复用原 `SceneContext`；不丢失分页核查字段。
-- [ ] **Step 4: 实现四个纯适配器并运行传输边界合同测试。** `OfficialAccountsGateway/OfficialScenesGateway` 只接收工厂拥有的 SDK client；`McpAccountsGateway/McpScenesGateway` 只接收 P0 `BoundMCPClient`。调用固定 `call(operation=...,advertiser_id=...,arguments=...)`，operation 取 P0 已审查清单，不是 Codex 前缀。API advertiser 页内部核对授权集合/BC assets/details；所有实际调用逐次准入且整体有界，持久化分页由 worker 驱动。将现有 `scene_sdk.parse_page` 纯校验迁到 `read_normalization.py`，两适配器产出相同 ScenePage，不解析自然语言成功。尚未完成授权观察的预期 schema 只用于离线实现，不能令连接写能力就绪。
-- [ ] **Step 5: 运行 `uv run --frozen pytest tests/modules/accounts/test_read_contracts.py tests/modules/accounts/test_dual_channel_reads.py -q` 与 `uv run --frozen ty check app/integrations/tiktok/contracts app/integrations/tiktok/official app/integrations/tiktok/mcp`。** 固定输入验证两通道 DTO 等价、19位ID、精确金额、分页缺字段/重复ID、错误issuer、业务错误及文本JSON不满足合同均失败；将方法签名交接 P2/P3。
-- [ ] **Step 6: 检查仓库状态与根目录，显式暂存本任务文件，提交 `tiktok: define and adapt account and scene reads`。**
+- [x] **Step 2: 运行 `uv run --frozen pytest tests/modules/accounts/test_read_contracts.py -q`，确认缺模块失败。**
+- [x] **Step 3: 实现以上类型和验证；business_centers 只供授权目录用途，运行期工厂不得让它扩张绑定范围。** `ScenePage.facts.model_dump(mode='json',exclude_none=True)` 仅在现有证据持久化边界转换，业务逻辑复用原 `SceneContext`；不丢失分页核查字段。
+- [x] **Step 4: 实现四个纯适配器并运行传输边界合同测试。** `OfficialAccountsGateway/OfficialScenesGateway` 只接收工厂拥有的 SDK client；`McpAccountsGateway/McpScenesGateway` 只接收 P0 `BoundMCPClient`。调用固定 `call(operation=...,advertiser_id=...,arguments=...)`，operation 取 P0 已审查清单，不是 Codex 前缀。API advertiser 页内部核对授权集合/BC assets/details；所有实际调用逐次准入且整体有界，持久化分页由 worker 驱动。将现有 `scene_sdk.parse_page` 纯校验迁到 `read_normalization.py`，两适配器产出相同 ScenePage，不解析自然语言成功。尚未完成授权观察的预期 schema 只用于离线实现，不能令连接写能力就绪。
+- [x] **Step 5: 运行 `uv run --frozen pytest tests/modules/accounts/test_read_contracts.py tests/modules/accounts/test_dual_channel_reads.py -q` 与 `uv run --frozen ty check app/integrations/tiktok/contracts app/integrations/tiktok/official app/integrations/tiktok/mcp`。** 固定输入验证两通道 DTO 等价、19位ID、精确金额、分页缺字段/重复ID、错误issuer、业务错误及文本JSON不满足合同均失败；将方法签名交接 P2/P3。
+- [x] **Step 6: 检查仓库状态与根目录，显式暂存本任务文件，提交 `tiktok: define and adapt account and scene reads`。**
 
 ### Task 3: MCP 独立授权、候选凭据和 BC 绑定
 

@@ -189,10 +189,11 @@ def load_mcp_protocol() -> McpProtocolProfile:
 def load_tool_contracts() -> tuple[ToolContract, ...]:
     load_mcp_protocol()
     raw = json.loads((_DIRECTORY / "tool-contracts.json").read_text())
-    return tuple(
-        ToolContract(**{**item, "source_urls": tuple(item["source_urls"])})
-        for item in raw["contracts"]
-    )
+    contracts = []
+    for item in raw["contracts"]:
+        values: dict[str, Any] = {**item, "source_urls": tuple(item["source_urls"])}
+        contracts.append(ToolContract(**values))
+    return tuple(contracts)
 
 
 # 只移除 JSON Schema 注解；properties/$defs 下同名的业务字段必须保留。
