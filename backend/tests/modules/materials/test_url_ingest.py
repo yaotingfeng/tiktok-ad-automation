@@ -343,7 +343,12 @@ def test_timeout_recovers_same_name_digest_account_without_second_post(
                     "file_name": op.remote_response["remote_name"],
                 },
             ],
-            "page_info": {"page": 1, "page_size": 100, "total_page": 1},
+            "page_info": {
+                "page": 1,
+                "page_size": 100,
+                "total_page": 1,
+                "total_number": 2,
+            },
         }
     )
     run(url_env, redis_client, operation_id=op.id)

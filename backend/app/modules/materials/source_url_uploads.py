@@ -7,9 +7,10 @@ retains the same source/connection/object/operation and its remote-use claim.
 """
 
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 from sqlmodel import Session, col, select
@@ -57,6 +58,91 @@ from .source_uploads import (
 )
 
 MAX_SEARCH_PAGES = 100
+
+MAX_SEARCH_ROWS = MAX_SEARCH_PAGES * 100
+
+
+@dataclass(frozen=True)
+class _SearchPage:
+    page: int
+    total_pages: int
+    total_number: int
+    ids: tuple[str, ...]
+    matches: list[dict[str, str]]
+
+
+def _search_progress(work: dict[str, Any], page: _SearchPage) -> dict[str, Any]:
+    # gateway每页重建，adapter内存中的跨页证明不能代替持久进度。
+    # 只保存有界ID摘要，不保存无关账户字段或远端原文。
+    reset: dict[str, Any] = {
+        "search_page": 1,
+        "search_total": None,
+        "search_count": None,
+        "search_seen": [],
+        "candidates": [],
+        "error_code": "material_result_pending",
+    }
+    previous = work.get("search_seen", [])
+    valid_previous = (
+        type(previous) is list
+        and len(previous) <= MAX_SEARCH_ROWS
+        and all(
+            type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value)
+            for value in previous
+        )
+        and len(set(previous)) == len(previous)
+    )
+    if not valid_previous:
+        return reset
+    previous_ids = cast(list[str], previous)
+    seen: set[str] = set(previous_ids) if page.page > 1 else set()
+    ids = {sha256(identity.encode()).hexdigest() for identity in page.ids}
+    if (
+        page.page != work.get("search_page", 1)
+        or not 1 <= page.page <= MAX_SEARCH_PAGES
+        or not 0 <= page.total_pages <= MAX_SEARCH_PAGES
+        or not 0 <= page.total_number <= MAX_SEARCH_ROWS
+        or len(ids) != len(page.ids)
+        or seen & ids
+        or (
+            page.page > 1
+            and (
+                work.get("search_total") != page.total_pages
+                or work.get("search_count") != page.total_number
+                or len(seen) != (page.page - 1) * 100
+            )
+        )
+    ):
+        return reset
+    seen |= ids
+    last = page.page >= page.total_pages
+    if (
+        len(seen) > MAX_SEARCH_ROWS
+        or (last and len(seen) != page.total_number)
+        or (not last and len(seen) != page.page * 100)
+    ):
+        return reset
+    candidates = {
+        item["video_id"]: item
+        for item in (work.get("candidates", []) if page.page > 1 else [])
+    }
+    candidates.update({item["video_id"]: item for item in page.matches})
+    if len(candidates) > 1:
+        return {
+            **reset,
+            "candidates": list(candidates.values())[:2],
+            "error_code": "material_reconciliation_ambiguous",
+        }
+    if last:
+        return {**reset, **(next(iter(candidates.values())) if candidates else {})}
+    return {
+        "search_page": page.page + 1,
+        "search_total": page.total_pages,
+        "search_count": page.total_number,
+        "search_seen": sorted(seen),
+        "candidates": list(candidates.values()),
+        "error_code": "material_result_pending",
+    }
 
 
 def sign_ingest_url(**kwargs: Any) -> str:
@@ -424,38 +510,10 @@ def _finish(
                 and not work.get("video_id")
                 and not operation.remote_response.get("video_id")
             ):
-                matches, last, total = evidence
-                candidates = {
-                    item["video_id"]: item for item in work.get("candidates", [])
+                operation.remote_response = {
+                    **operation.remote_response,
+                    **_search_progress(work, evidence),
                 }
-                candidates.update({item["video_id"]: item for item in matches})
-                if len(candidates) > 1:
-                    operation.remote_response = {
-                        **operation.remote_response,
-                        "error_code": "material_reconciliation_ambiguous",
-                        "candidates": list(candidates.values())[:2],
-                    }
-                elif work.get("search_total") not in (None, total):
-                    operation.remote_response = {
-                        **operation.remote_response,
-                        "search_page": 1,
-                        "candidates": [],
-                        "search_total": None,
-                        "error_code": "material_result_pending",
-                    }
-                elif last and candidates:
-                    operation.remote_response = {
-                        **operation.remote_response,
-                        **next(iter(candidates.values())),
-                    }
-                else:
-                    operation.remote_response = {
-                        **operation.remote_response,
-                        "search_page": 1 if last else work.get("search_page", 1) + 1,
-                        "search_total": None if last else total,
-                        "candidates": [] if last else list(candidates.values()),
-                        "error_code": "material_result_pending",
-                    }
             operation.status = (
                 "verifying"
                 if operation.remote_response.get("video_id")
@@ -712,7 +770,7 @@ def run_url_source_upload(
             "byte_size": obj.expected_bytes,
         }
     post_attempted = False
-    evidence: dict[str, str] | tuple[list[dict[str, str]], bool, int] | None
+    evidence: dict[str, str] | _SearchPage | None
     try:
         route = load_material_route(
             work["frozen_route"],
@@ -872,6 +930,10 @@ def run_url_source_upload(
                     raise DomainError(
                         "material_reconciliation_bounded", "来源核查超过有界分页范围"
                     )
+                if result.total_number is None:
+                    raise DomainError(
+                        "material_result_pending", "来源核查缺少完整目录数量证明"
+                    )
                 matches = []
                 for record in result.rows:
                     if record.file_name == work["remote_name"]:
@@ -884,7 +946,13 @@ def run_url_source_upload(
                         )
                         if match:
                             matches.append(match)
-                evidence = (matches, page >= result.total_pages, result.total_pages)
+                evidence = _SearchPage(
+                    page=page,
+                    total_pages=result.total_pages,
+                    total_number=result.total_number,
+                    ids=tuple(record.video_id for record in result.rows),
+                    matches=matches,
+                )
         _finish(
             database_engine,
             context=context,
