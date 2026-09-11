@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     TIKTOK_REDIRECT_URI: str = ""
     TIKTOK_AUTHORIZATION_URL: str = ""
     TIKTOK_CALL_POLICIES: dict[str, Any] = Field(default_factory=dict)
+    # MCP 独立使用本环境注册材料；缺少 Marketing API 应用不影响该通道。
+    MCP_CLIENT_REGISTRATION_REF: str = Field(default="", repr=False)
+    MCP_REDIRECT_URI: str = ""
+    # 仅部署方根据上游事实配置；缺省由所有 MCP 连接共用保守配额域。
+    MCP_SERVICE_QUOTA_SCOPE: str | None = None
     CONNECTION_ENCRYPTION_KEY: str = Field(default="", repr=False)
     OBJECT_STORAGE_PROVIDER: Literal["s3", "r2"] = "s3"
     S3_ENDPOINT_URL: str = ""

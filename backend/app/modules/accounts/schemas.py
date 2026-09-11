@@ -112,3 +112,32 @@ class AppConfiguration(BaseModel):
     configured: bool
     status: Literal["READY", "NOT_CONFIGURED", "INCOMPLETE"]
     missing_fields: list[str]
+
+
+class McpBindingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    bc_id: str = Field(min_length=1, max_length=128)
+
+
+class McpBindingResult(BaseModel):
+    discovery_run_id: UUID
+    status: Literal["DISCOVERING"] = "DISCOVERING"
+
+
+class McpCandidateBC(BaseModel):
+    bc_id: str
+    name: str
+
+
+class McpCandidateBCPage(BaseModel):
+    items: list[McpCandidateBC]
+    page: int
+    page_size: int
+    total: int
+
+
+class McpConfiguration(BaseModel):
+    configured: bool
+    code: str | None = None
+    status: Literal["READY", "CLIENT_UNREGISTERED", "PROTOCOL_UNVERIFIED", "INVALID"]
+    revocation_supported: bool = False

@@ -173,7 +173,7 @@ def test_large_advertiser_id_stays_exact():
 
 **Interfaces:** 消费 P0 固定 `McpProtocolProfile`/读取器及其已验证认证传输，Task 1 模型和 Task 2 `AccountsGateway`。输出 `start_mcp_authorization(session,*,context:TenantContext,connection_id:UUID|None)->AuthorizationURL`；`accept_mcp_callback(*,database_engine:Engine,state:str,code:str)->UUID` 返回候选 attempt ID；`bind_candidate_bc(session,*,context:TenantContext,attempt_id:UUID,bc_id:str)->UUID` 返回发现任务 ID。候选读取入口 `open_candidate_accounts(*,database_engine:Engine,redis_client:Redis,context:TenantContext,attempt_id:UUID,task_deadline:datetime)->AbstractContextManager[AccountsGateway]` 不接受任意 connection/token。
 
-- [ ] **Step 1: 添加无 App 配置测试及合成协议 fixture。** 在新测试目录 fixture 中显式覆盖上级 `app_config` 的三字段为空；只注入已固定协议的合成 metadata/HTTP 响应，不 monkeypatch 授权服务函数。
+- [x] **Step 1: 添加无 App 配置测试及合成协议 fixture。** 在新测试目录 fixture 中显式覆盖上级 `app_config` 的三字段为空；只注入已固定协议的合成 metadata/HTTP 响应，不 monkeypatch 授权服务函数。
 
 ```python
 def test_api_app_absence_does_not_block_mcp(session, monkeypatch):
@@ -185,8 +185,8 @@ def test_api_app_absence_does_not_block_mcp(session, monkeypatch):
     assert session.exec(select(McpAuthorizationAttempt)).first().tenant_id == context.tenant_id
 ```
 
-- [ ] **Step 2: 运行 `uv run --frozen pytest tests/modules/accounts/test_mcp_authorization.py -q`，确认缺实现失败。** fixture 的 fixed profile 是 P0 正式 profile 类型，认证 host 限 `auth.example.test`；上线 profile 来自部署固定配置，页面不提交 URL、client secret 或 issuer。
-- [ ] **Step 3: 实现开始与回调状态机。** state 只存摘要、PKCE verifier 加密；认证尝试绑定管理员、tenant、固定 issuer/resource/redirect 和父授权/凭据版本。回调先一次性 claim，再有界换 token；校验回调与 token 语义使用 P0 真实合同。收到凭据先保存加密候选，成功后跳回当前 tenant 的候选选择页面，URL 仅含不敏感 attempt ID/结果码。重放、超时、跨租户、管理员已撤权均拒绝；回调响应 no-store/no-referrer。
+- [x] **Step 2: 运行 `uv run --frozen pytest tests/modules/accounts/test_mcp_authorization.py -q`，确认缺实现失败。** fixture 的 fixed profile 是 P0 正式 profile 类型，认证 host 限 `auth.example.test`；上线 profile 来自部署固定配置，页面不提交 URL、client secret 或 issuer。
+- [x] **Step 3: 实现开始与回调状态机。** state 只存摘要、PKCE verifier 加密；认证尝试绑定管理员、tenant、固定 issuer/resource/redirect 和父授权/凭据版本。回调先一次性 claim，再有界换 token；校验回调与 token 语义使用 P0 真实合同。收到凭据先保存加密候选，成功后跳回当前 tenant 的候选选择页面，URL 仅含不敏感 attempt ID/结果码。重放、超时、跨租户、管理员已撤权均拒绝；回调响应 no-store/no-referrer。
 
 ```python
 # 发布前重新鉴权；不能因为发起时是管理员就沿用旧角色。
@@ -195,11 +195,11 @@ if attempt.status != "CANDIDATE_READY":
     raise DomainError("mcp_candidate_unavailable", "候选授权不可用")
 ```
 
-- [ ] **Step 4: 实现候选 BC 分页和显式绑定。** 提供 tenant 路径下 `/tiktok/mcp/authorizations` POST、`/tiktok/mcp/candidates/{attempt_id}/bcs` GET、`/tiktok/mcp/candidates/{attempt_id}/binding` POST；固定回调 `/integrations/tiktok/mcp/callback`。候选只读工厂每次要求当前租户 manage 权限（仅曾是候选发起人不够），逐调用复核权限；本任务仅保存明确 BC 选择并创建持久化发现任务，不提前设 ACTIVE；Task 6 完整核实后原子发布连接/binding。候选测试使用 Task 2 实际适配器/合成传输，核对发现任务确已排队，不能 mock 绑定服务。失败、取消和部分目录都不覆盖旧 active 授权。第一个可用绑定可建默认，已有默认不变。
+- [x] **Step 4: 实现候选 BC 分页和显式绑定。** 提供 tenant 路径下 `/tiktok/mcp/authorizations` POST、`/tiktok/mcp/candidates/{attempt_id}/bcs` GET、`/tiktok/mcp/candidates/{attempt_id}/binding` POST；固定回调 `/integrations/tiktok/mcp/callback`。候选只读工厂每次要求当前租户 manage 权限（仅曾是候选发起人不够），逐调用复核权限；本任务仅保存明确 BC 选择并创建持久化发现任务，不提前设 ACTIVE；Task 6 完整核实后原子发布连接/binding。候选测试使用 Task 2 实际适配器/合成传输，核对发现任务确已排队，不能 mock 绑定服务。失败、取消和部分目录都不覆盖旧 active 授权。第一个可用绑定可建默认，已有默认不变。
 
 在本任务的 `mcp_auth/bootstrap.py` 实现 `observe_candidate_tools(*,database_engine:Engine,redis_client:Redis,context:TenantContext,attempt_id:UUID,task_deadline:datetime)->UUID`。候选 BC 第一次读取前先经 P0 BoundMCPClient.list_tools 完成所需合同观测；未观察 schema 的会话仅准枚举元数据。逐页按 P0 admit_candidate_call 限流并核实当前管理员权限，返回持久 observation ID；Task 6 消费同一记录完成目录发布，不重复实现。离线测试用合成 tools/list，不能登记真实 OBSERVED 证据。
-- [ ] **Step 5: 实现独立停用/撤销动作并增加 HTTP 边界测试。** `disable_connection(session,*,context:TenantContext,connection_id:UUID,task_deadline:datetime)->None` 立即阻止本系统新调用、取消待派发，保留在途证据；`request_mcp_revocation(session,*,context:TenantContext,connection_id:UUID)->UUID` 生成独立可追踪授权撤销任务，只有明确管理员动作才派发。P0未证实revoke接口则显示不支持，不猜端点；任何迟到结果不得恢复disabled连接。测试回调重放、state 和 tenant 不匹配、未知 BC、第二 BC、候选分页失败、旧连接仍可用、operator 403、客户端未注册与协议未核实分别返回可识别配置状态。部署方通过 `MCP_CLIENT_REGISTRATION_REF` 指向本环境的注册材料，使用固定profile已核实的认证方法读取；public protocol JSON不存client secret，运行时不自动注册。运行 `uv run --frozen pytest tests/modules/accounts/test_mcp_authorization.py tests/modules/accounts/test_mcp_binding.py tests/modules/accounts/test_callback.py -q`。
-- [ ] **Step 6: 状态与仓库根核对后显式暂存并提交 `accounts: authorize MCP connections per tenant`。** 提交前查看 staged diff，确认不含授权码/token/完整回调 URL。
+- [x] **Step 5: 实现独立停用/撤销动作并增加 HTTP 边界测试。** `disable_connection(session,*,context:TenantContext,connection_id:UUID,task_deadline:datetime)->None` 立即阻止本系统新调用、取消待派发，保留在途证据；`request_mcp_revocation(session,*,context:TenantContext,connection_id:UUID)->UUID` 生成独立可追踪授权撤销任务，只有明确管理员动作才派发。P0未证实revoke接口则显示不支持，不猜端点；任何迟到结果不得恢复disabled连接。测试回调重放、state 和 tenant 不匹配、未知 BC、第二 BC、候选分页失败、旧连接仍可用、operator 403、客户端未注册与协议未核实分别返回可识别配置状态。部署方通过 `MCP_CLIENT_REGISTRATION_REF` 指向本环境的注册材料，使用固定profile已核实的认证方法读取；public protocol JSON不存client secret，运行时不自动注册。运行 `uv run --frozen pytest tests/modules/accounts/test_mcp_authorization.py tests/modules/accounts/test_mcp_binding.py tests/modules/accounts/test_callback.py -q`。
+- [x] **Step 6: 状态与仓库根核对后显式暂存并提交 `accounts: authorize MCP connections per tenant`。** 提交前查看 staged diff，确认不含授权码/token/完整回调 URL。
 
 ### Task 4: 自动刷新、轮换未知与迟到结果围栏
 

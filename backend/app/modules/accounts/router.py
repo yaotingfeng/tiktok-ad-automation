@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, cast
 from uuid import UUID
 
@@ -18,6 +19,7 @@ from app.integrations.tiktok.auth import (
     start_authorization,
 )
 from app.modules.accounts.access import OPERABLE_REMOTE_STATUSES
+from app.modules.accounts.connections import disable_connection
 from app.modules.accounts.models import (
     AdvertiserAccount,
     AuthorizationAttempt,
@@ -45,7 +47,6 @@ from app.modules.accounts.schemas import (
     ResolvedLine,
     ResolveRequest,
 )
-from app.modules.tenants.models import AuditEvent
 from app.modules.tenants.permissions import require_tenant
 
 router = APIRouter(prefix="/tenants/{tenant_id}", tags=["accounts"])
@@ -388,7 +389,7 @@ def get_connections(
         session,
         statement.order_by(col(TikTokConnection.id))
         .limit(limit + 1)
-        .execution_options(populate_existing=True)
+        .execution_options(populate_existing=True),
     ).all()
     items = []
     for (
@@ -483,34 +484,28 @@ def post_authorization(
 def patch_connection(
     tenant_id: UUID,
     connection_id: UUID,
-    body: ConnectionUpdate,
+    body: ConnectionUpdate,  # noqa: ARG001 — 保留 HTTP 请求的仅停用状态校验。
     session: SessionDep,
     user: CurrentUser,
 ) -> ConnectionPublic:
-    require_tenant(session, actor_id=user.id, tenant_id=tenant_id, action="manage")
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="manage"
+    )
+    # 两个停用入口共用授权版本与候选清理，避免旧页面留下可继续发布的候选。
+    disable_connection(
+        session,
+        context=context,
+        connection_id=connection_id,
+        task_deadline=datetime.now(UTC) + timedelta(seconds=5),
+    )
     connection = session.exec(
         select(TikTokConnection)
         .where(
             TikTokConnection.tenant_id == tenant_id,
             TikTokConnection.id == connection_id,
         )
-        .with_for_update()
         .execution_options(populate_existing=True)
-    ).one_or_none()
-    if connection is None:
-        raise DomainError("connection_not_found", "当前租户连接不存在")
-    require_tenant(session, actor_id=user.id, tenant_id=tenant_id, action="manage")
-    if connection.status != body.status:
-        connection.status = body.status
-        session.add(connection)
-        session.add(
-            AuditEvent(
-                tenant_id=tenant_id,
-                actor_id=user.id,
-                action="tiktok.connection.disable",
-                target_id=str(connection_id),
-            )
-        )
+    ).one()
     result = ConnectionPublic.model_validate(connection)
     session.commit()
     return result

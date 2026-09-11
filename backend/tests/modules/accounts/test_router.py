@@ -376,6 +376,66 @@ def test_tenant_connections_configuration_and_disable_only(
     assert connection.credential_ciphertext == "never-expose-this"
 
 
+def test_generic_disable_cancels_mcp_candidate_and_unpublished_discovery(
+    client, session, context
+):
+    from app.jobs.models import PendingDispatch
+    from app.modules.accounts.connection_models import McpAuthorizationAttempt
+
+    session.get(
+        TenantMembership, (context.tenant_id, context.actor_id)
+    ).role = "tenant_admin"
+    connection = TikTokConnection(tenant_id=context.tenant_id, kind="OFFICIAL_MCP")
+    session.add(connection)
+    session.flush()
+    attempt = McpAuthorizationAttempt(
+        tenant_id=context.tenant_id,
+        actor_id=context.actor_id,
+        connection_id=connection.id,
+        issuer="https://synthetic.invalid/oauth",
+        resource="https://synthetic.invalid/mcp",
+        redirect_uri="https://synthetic.invalid/callback",
+        state_hash=uuid4().hex,
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        status="CANDIDATE_READY",
+        candidate_ciphertext="synthetic-encrypted-candidate",
+    )
+    session.add(attempt)
+    session.flush()
+    run = DiscoveryRun(
+        tenant_id=context.tenant_id,
+        actor_id=context.actor_id,
+        connection_id=connection.id,
+        mcp_candidate_attempt_id=attempt.id,
+        status="RUNNING",
+    )
+    session.add(run)
+    session.flush()
+    dispatch = PendingDispatch(
+        tenant_id=context.tenant_id,
+        actor_id=context.actor_id,
+        task_name="accounts.mcp_discover",
+        task_key=f"synthetic:{run.id}",
+        payload={"run_id": str(run.id)},
+    )
+    session.add(dispatch)
+    session.flush()
+    revision = connection.authorization_revision
+    response = client.patch(
+        f"/api/tenants/{context.tenant_id}/tiktok/connections/{connection.id}",
+        json={"status": "DISABLED"},
+        headers=headers(context),
+    )
+    assert response.status_code == 200
+    session.refresh(connection)
+    session.refresh(attempt)
+    session.refresh(run)
+    assert connection.authorization_revision == revision + 1
+    assert attempt.status == "CANCELLED" and attempt.candidate_ciphertext is None
+    assert run.status == "CANCELLED"
+    assert session.get(PendingDispatch, dispatch.id) is None
+
+
 def test_authorization_start_commits_state_without_external_exchange(
     client, session, context, sdk_transport
 ):
