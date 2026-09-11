@@ -70,7 +70,7 @@ def make_job(session, env):
         bc_id=env["bc_id"],
         advertiser_id="actual-account",
         connection_id=env["connection_id"],
-        credential_version=0,
+        credential_revision=0,
         provider_connection_id=link.connection_id,
         application_id=app.external_id,
         minis_id=app.tiktok_minis_id,

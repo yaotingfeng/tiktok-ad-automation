@@ -206,7 +206,7 @@ def start_capability_refresh(
             CapabilityJob.tenant_id == context.tenant_id,
             CapabilityJob.bc_id == bc_id,
             CapabilityJob.connection_id == connection_id,
-            CapabilityJob.credential_version == conn.credential_version,
+            CapabilityJob.credential_revision == conn.credential_revision,
             CapabilityJob.directory_basis == basis,
             (col(CapabilityJob.status) == "PENDING")
             | (
@@ -225,7 +225,7 @@ def start_capability_refresh(
                     bc_id=bc_id,
                     connection_id=connection_id,
                     actor_id=context.actor_id,
-                    credential_version=conn.credential_version,
+                    credential_revision=conn.credential_revision,
                     directory_basis=basis,
                 )
                 session.add(existing)
@@ -358,7 +358,7 @@ def _validate(
         raise DomainError("capability_stale", "账户角色证据已过期，需要重新重检")
     conn = _connection(session, context, job.bc_id, job.connection_id, lock=False)
     if (
-        conn.credential_version != job.credential_version
+        conn.credential_revision != job.credential_revision
         or _directory_basis(session, context, job.bc_id, job.connection_id)
         != job.directory_basis
     ):
@@ -747,7 +747,7 @@ def get_capability_evidence(
                 CapabilityJob.tenant_id == context.tenant_id,
                 CapabilityJob.bc_id == bc_id,
                 CapabilityJob.connection_id == connection_id,
-                CapabilityJob.credential_version == conn.credential_version,
+                CapabilityJob.credential_revision == conn.credential_revision,
                 CapabilityJob.status == "COMPLETE",
                 CapabilityJob.phase == "DONE",
                 col(CapabilityJob.expires_at) > now,

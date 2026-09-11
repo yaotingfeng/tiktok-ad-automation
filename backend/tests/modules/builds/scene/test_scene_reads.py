@@ -391,7 +391,7 @@ def test_expired_and_rotated_facts_cannot_be_used(scene_env, wire, redis_client)
     assert "scene_evidence_expired" in read(scene_env).reason_codes
     with Session(engine) as session, session.begin():
         connection = session.get(TikTokConnection, scene_env["connection_id"])
-        connection.credential_version += 1
+        connection.credential_revision += 1
     changed = read(scene_env)
     assert (
         not changed.evidence_ids

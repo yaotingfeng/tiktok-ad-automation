@@ -34,7 +34,7 @@ def test_capability_schema_enforces_tenant_scope_and_unique_remote_rows(
                 bc_id="test-bc",
                 connection_id=conn.id,
                 actor_id=context.actor_id,
-                credential_version=0,
+                credential_revision=0,
                 directory_basis="a" * 64,
             )
         )
@@ -44,7 +44,7 @@ def test_capability_schema_enforces_tenant_scope_and_unique_remote_rows(
         bc_id="test-bc",
         connection_id=conn.id,
         actor_id=context.actor_id,
-        credential_version=0,
+        credential_revision=0,
         directory_basis="a" * 64,
     )
     session.add(job)

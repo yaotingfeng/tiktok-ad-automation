@@ -182,7 +182,7 @@ def ensure_scene_preparation(
         bc_id=bc_id,
         advertiser_id=advertiser_id,
         connection_id=scope["connection"].id,
-        credential_version=scope["connection"].credential_version,
+        credential_revision=scope["connection"].credential_revision,
         provider_connection_id=scope["provider"].id,
         application_id=scope["application"].external_id,
         minis_id=scope["minis_id"],

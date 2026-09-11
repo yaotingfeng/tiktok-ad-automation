@@ -46,7 +46,7 @@ P1 输出的路由和账户/场景合同供 P2/P3 使用。素材及广告读取
 
 **Interfaces:** 消费 P0 `ChannelKind`。输出 `TikTokConnection.kind/display_name/service_profile/credential_revision/authorization_revision/adapter_contract_revision`；输出 `ConnectionAuthorization`、`ConnectionToolObservation`、`McpAuthorizationAttempt`、`McpRefreshAttempt`、`BCConnectionBinding`、`BCDefaultRoute` SQLModel。迁移将 TikTok 的旧 `credential_version` 物理改名为 `credential_revision` 并一次性更新全部 TikTok 引用，不保留双字段/双写 fallback；版权方同名字段保留。场景/任务对授权语义的切换分别由 Task 7 与 P2/P3 完成。
 
-- [ ] **Step 1: 添加模型失败用例。** `test_channel_models.py` 使用真实 Session 和现有 tenant fixture，先验证不同版本能独立变化：
+- [x] **Step 1: 添加模型失败用例。** `test_channel_models.py` 使用真实 Session 和现有 tenant fixture，先验证不同版本能独立变化：
 
 ```python
 def test_token_revision_does_not_change_authority(session, context):
@@ -61,8 +61,8 @@ def test_token_revision_does_not_change_authority(session, context):
     assert (row.credential_revision, row.authorization_revision) == (3, 7)
 ```
 
-- [ ] **Step 2: 从 backend 运行 `uv run --frozen pytest tests/modules/accounts/test_channel_models.py -q`，确认因新增字段/模型缺失失败。**
-- [ ] **Step 3: 实现模型和数据库不变量。** 绑定主键为 `(tenant_id,bc_id,connection_id)`，携带 kind 并通过复合外键与 connection 对应；对 kind 为 MCP 的 binding 建 `(tenant_id,connection_id)` 部分唯一索引。默认主键为 `(tenant_id,bc_id)`，复合外键引用 binding。工具观察记录保存tenant/connection/候选attempt、schema摘要、预期合同版本、完整分页标记、观察时间和非敏感调用证据；授权事实存上游 subject/grant（可空）、issuer/resource/scopes、授权连续关系与权限摘要；缺失上游字段保持空。attempt 存 actor、父连接版本、issuer/resource/redirect/state 摘要、期限、状态与加密候选；refresh 存所用凭据修订、claim/期限、加密候选和结果未知状态。
+- [x] **Step 2: 从 backend 运行 `uv run --frozen pytest tests/modules/accounts/test_channel_models.py -q`，确认因新增字段/模型缺失失败。**
+- [x] **Step 3: 实现模型和数据库不变量。** 绑定主键为 `(tenant_id,bc_id,connection_id)`，携带 kind 并通过复合外键与 connection 对应；对 kind 为 MCP 的 binding 建 `(tenant_id,connection_id)` 部分唯一索引。默认主键为 `(tenant_id,bc_id)`，复合外键引用 binding。工具观察记录保存tenant/connection/候选attempt、schema摘要、预期合同版本、完整分页标记、观察时间和非敏感调用证据；授权事实存上游 subject/grant（可空）、issuer/resource/scopes、授权连续关系与权限摘要；缺失上游字段保持空。attempt 存 actor、父连接版本、issuer/resource/redirect/state 摘要、期限、状态与加密候选；refresh 存所用凭据修订、claim/期限、加密候选和结果未知状态。
 
 ```python
 # SQLModel.__table_args__ 中落实，不能仅由路由层限制。
@@ -73,9 +73,9 @@ ForeignKeyConstraint(["tenant_id", "bc_id", "connection_id"],
      "bc_connection_binding.connection_id"])
 ```
 
-- [ ] **Step 4: 写新增迁移并验证实际前置 head。** 执行 `uv run --frozen alembic heads` 确认只有一个真实 head，再执行 `uv run --frozen alembic revision --rev-id mcp01 --head head -m "TikTok channel connections"`，由 Alembic 生成实际 `down_revision`；预检 `mcp01` 尚未占用，不猜数字序号、不手填旧 head。旧连接回填 `OFFICIAL_API`；凭据修订承接旧版本、授权修订给确定初值。已有 API 多 BC 关系保留；唯一有效旧连接成为默认，多条有效旧连接留空待管理员选择。绝不重写历史请求或远端 ID。
-- [ ] **Step 5: 在迁移测试中创建上一 head 的独立临时 schema，放入一个单连接 BC、一个双连接 BC及历史 remote ID，升级后断言默认分别存在/为空且 ID 原样；再验证跨租户默认外键、MCP 第二 BC、负版本均失败。** 用 Alembic `Config` 和 `command.upgrade`，连接仅使用测试环境。运行 `uv run --frozen pytest tests/modules/accounts/test_channel_models.py tests/modules/accounts/test_channel_migration.py -q` 与 `uv run --frozen alembic check`，期望全部通过/无未生成模型差异。
-- [ ] **Step 6: 提交本任务。** 项目根先 `git status -sb`、`git rev-parse --show-toplevel`，显式暂存上述文件，检查 `git diff --cached`，提交 `accounts: model TikTok channels and BC bindings`；记录实施进度。
+- [x] **Step 4: 写新增迁移并验证实际前置 head。** 执行 `uv run --frozen alembic heads` 确认只有一个真实 head，再执行 `uv run --frozen alembic revision --rev-id mcp01 --head head -m "TikTok channel connections"`，由 Alembic 生成实际 `down_revision`；预检 `mcp01` 尚未占用，不猜数字序号、不手填旧 head。旧连接回填 `OFFICIAL_API`；凭据修订承接旧版本、授权修订给确定初值。已有 API 多 BC 关系保留；唯一有效旧连接成为默认，多条有效旧连接留空待管理员选择。绝不重写历史请求或远端 ID。
+- [x] **Step 5: 在迁移测试中创建上一 head 的独立临时 schema，放入一个单连接 BC、一个双连接 BC及历史 remote ID，升级后断言默认分别存在/为空且 ID 原样；再验证跨租户默认外键、MCP 第二 BC、负版本均失败。** 用 Alembic `Config` 和 `command.upgrade`，连接仅使用测试环境。运行 `uv run --frozen pytest tests/modules/accounts/test_channel_models.py tests/modules/accounts/test_channel_migration.py -q` 与 `uv run --frozen alembic check`，期望全部通过/无未生成模型差异。
+- [x] **Step 6: 提交本任务。** 项目根先 `git status -sb`、`git rev-parse --show-toplevel`，显式暂存上述文件，检查 `git diff --cached`，提交 `accounts: model TikTok channels and BC bindings`；记录实施进度。
 
 ### Task 2: 账户与场景读取合同
 

@@ -47,7 +47,7 @@ def discovery_run(session, context):
         tenant_id=context.tenant_id,
         actor_id=context.actor_id,
         connection_id=connection.id,
-        credential_version=0,
+        credential_revision=0,
         status="RUNNING",
     )
     session.add_all([old, run])
@@ -189,7 +189,7 @@ def test_missing_metadata_retained_blocked(session, discovery_run):
 def test_stale_generation_cannot_write_or_finalize(session, discovery_run):
     run, old = discovery_run
     connection = session.get(TikTokConnection, run.connection_id)
-    connection.credential_version += 1
+    connection.credential_revision += 1
     session.flush()
     for operation in (
         lambda: save_directory_page(

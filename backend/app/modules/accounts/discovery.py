@@ -62,7 +62,7 @@ def validate_run(session: Session, run: DiscoveryRun) -> TikTokConnection:
     ).one_or_none()
     if connection is None or connection.status == "DISABLED":
         raise DomainError("connection_unavailable", "当前租户连接不可用")
-    if connection.credential_version != run.credential_version:
+    if connection.credential_revision != run.credential_revision:
         raise DomainError("discovery_stale", "发现任务凭据版本已过期")
     if run.candidate_attempt_id:
         attempt = session.get(
@@ -74,7 +74,7 @@ def validate_run(session: Session, run: DiscoveryRun) -> TikTokConnection:
             or attempt.connection_id != run.connection_id
             or attempt.actor_id != run.actor_id
             or attempt.status != "CANDIDATE_READY"
-            or attempt.base_credential_version != run.credential_version
+            or attempt.base_credential_revision != run.credential_revision
             or not attempt.candidate_ciphertext
         ):
             raise DomainError("discovery_stale", "候选授权已过期")
@@ -230,7 +230,7 @@ def finalize_directory(session: Session, *, run_id: UUID) -> None:
         attempt = session.get(AuthorizationAttempt, run.candidate_attempt_id)
         assert attempt is not None
         connection.credential_ciphertext = attempt.candidate_ciphertext
-        connection.credential_version += 1
+        connection.credential_revision += 1
         connection.status = "ACTIVE"
         attempt.status = "ACCEPTED"
         attempt.candidate_ciphertext = None

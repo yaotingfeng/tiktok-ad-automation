@@ -35,7 +35,7 @@ class CapabilityJob(SQLModel, table=True):
             "tenant_id",
             "bc_id",
             "connection_id",
-            "credential_version",
+            "credential_revision",
             "directory_basis",
             unique=True,
             postgresql_where=text("status = 'PENDING'"),
@@ -49,7 +49,7 @@ class CapabilityJob(SQLModel, table=True):
             "phase IN ('READ','PUBLISH','DONE')", name="ck_capability_phase"
         ),
         CheckConstraint(
-            "credential_version >= 0 AND revision >= 0 AND next_page > 0 AND seen_count >= 0 AND published_count >= 0 AND failure_count >= 0",
+            "credential_revision >= 0 AND revision >= 0 AND next_page > 0 AND seen_count >= 0 AND published_count >= 0 AND failure_count >= 0",
             name="ck_capability_counters",
         ),
         CheckConstraint(
@@ -62,7 +62,7 @@ class CapabilityJob(SQLModel, table=True):
     bc_id: str = Field(max_length=128)
     connection_id: UUID
     actor_id: UUID = Field(foreign_key="user.id")
-    credential_version: int
+    credential_revision: int
     directory_basis: str = Field(max_length=64)
     status: str = Field(default="PENDING", max_length=16)
     phase: str = Field(default="READ", max_length=16)

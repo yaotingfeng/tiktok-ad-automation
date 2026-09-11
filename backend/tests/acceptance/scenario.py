@@ -825,7 +825,7 @@ def seed_scope(
         conn = TikTokConnection(
             tenant_id=tenant.id,
             status="ACTIVE",
-            credential_version=1,
+            credential_revision=1,
             credential_ciphertext=encrypt_credentials(
                 tenant_id=tenant.id,
                 value={"access_token": "synthetic-" + label, "scope": "[2,6]"},

@@ -324,8 +324,8 @@ def get_connections(
         .where(
             AuthorizationAttempt.tenant_id == tenant_id,
             AuthorizationAttempt.connection_id == TikTokConnection.id,
-            AuthorizationAttempt.base_credential_version
-            == TikTokConnection.credential_version,
+            AuthorizationAttempt.base_credential_revision
+            == TikTokConnection.credential_revision,
             AuthorizationAttempt.status == "CANDIDATE_READY",
         )
         .order_by(

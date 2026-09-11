@@ -92,7 +92,7 @@ def test_evidence_rejects_stale_or_revoked_authority(
                 UTC
             ) - timedelta(seconds=1)
         elif change == "version":
-            session.get(TikTokConnection, env["connection_id"]).credential_version += 1
+            session.get(TikTokConnection, env["connection_id"]).credential_revision += 1
         elif change == "directory":
             session.exec(select(BCAccountAccess)).one().in_bc = False
         else:

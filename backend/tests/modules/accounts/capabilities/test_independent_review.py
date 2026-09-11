@@ -139,7 +139,7 @@ def test_reader_capacity_records_full_scope_aggregate_per_lookup(
             bc_id=env["bc_id"],
             connection_id=env["connection_id"],
             actor_id=env["context"].actor_id,
-            credential_version=0,
+            credential_revision=0,
             directory_basis=basis,
             status="COMPLETE",
             phase="DONE",

@@ -93,7 +93,7 @@ def test_stale_transport_receipt_cannot_publish(job_env, wire, redis_client, cha
             elif change == "credentials":
                 session.get(
                     TikTokConnection, env["connection_id"]
-                ).credential_version += 1
+                ).credential_revision += 1
             elif change in {"provider", "application", "grant"}:
                 from app.modules.accounts.models import BCAccountAccess
                 from app.modules.providers.models import (

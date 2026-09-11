@@ -915,7 +915,7 @@ def test_credentials_reloaded_after_s3_io_and_before_sdk(
                 tenant_id=source_env["context"].tenant_id,
                 value={"access_token": "rotated-after-download"},
             )
-            connection.credential_version += 1
+            connection.credential_revision += 1
 
     original_s3[0].meta.events.register("after-call.s3.GetObject", rotate)
     wire[1].append([{"video_id": "upload-vid"}])

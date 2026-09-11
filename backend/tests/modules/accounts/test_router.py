@@ -162,7 +162,7 @@ def test_active_connection_exposes_candidate_discovery_progress(
         state_hash=uuid4().hex,
         expires_at=datetime.now(UTC),
         status="CANDIDATE_READY",
-        base_credential_version=connection.credential_version,
+        base_credential_revision=connection.credential_revision,
     )
     session.add(attempt)
     session.flush()
@@ -193,7 +193,7 @@ def test_active_connection_exposes_candidate_discovery_progress(
     run.status = "COMPLETE"
     run.completed_at = datetime.now(UTC)
     attempt.status = "ACCEPTED"
-    connection.credential_version += 1
+    connection.credential_revision += 1
     session.flush()
     assert read() == "COMPLETE"
 

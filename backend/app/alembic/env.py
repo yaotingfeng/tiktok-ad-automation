@@ -22,6 +22,7 @@ from app.models import SQLModel  # noqa
 from app.jobs import models as jobs_models  # noqa: F401
 from app.modules.tenants import models as tenants_models  # noqa: F401
 from app.modules.accounts import models as accounts_models  # noqa: F401
+from app.modules.accounts import connection_models  # noqa: E402, F401
 from app.modules.accounts import capability_models  # noqa: F401
 from app.modules.accounts import directory_models  # noqa: F401
 from app.modules.builds import execution_models  # noqa: F401

@@ -94,7 +94,7 @@ def start_authorization(
         tenant_id=context.tenant_id,
         actor_id=context.actor_id,
         connection_id=connection.id,
-        base_credential_version=connection.credential_version,
+        base_credential_revision=connection.credential_revision,
         state_hash=sha256(state.encode()).hexdigest(),
         expires_at=datetime.now(UTC) + timedelta(minutes=10),
     )

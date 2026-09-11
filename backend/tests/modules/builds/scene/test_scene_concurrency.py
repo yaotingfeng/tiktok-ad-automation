@@ -87,7 +87,7 @@ def test_stale_remote_receipt_never_publishes(scene_env, wire, redis_client, cha
         with Session(engine) as other, other.begin():
             if change == "credentials":
                 connection = other.get(TikTokConnection, scene_env["connection_id"])
-                connection.credential_version += 1
+                connection.credential_revision += 1
             elif change == "membership":
                 member = other.exec(
                     select(TenantMembership).where(

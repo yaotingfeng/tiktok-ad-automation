@@ -141,7 +141,7 @@ def _application_scope(
         "bc_id": bc_id,
         "advertiser_id": advertiser_id,
         "connection_id": str(connection.id),
-        "credential_version": connection.credential_version,
+        "credential_revision": connection.credential_revision,
         "grant_run": str(grant.last_seen_run_id),
         "currency": access.currency,
         "timezone": access.timezone,

@@ -121,7 +121,7 @@ def start_discovery(session: Session, *, attempt_id: UUID) -> DiscoveryRun:
             actor_id=attempt.actor_id,
             connection_id=connection.id,
             candidate_attempt_id=attempt.id,
-            credential_version=attempt.base_credential_version,
+            credential_revision=attempt.base_credential_revision,
         )
         session.add(run)
     validate_run(session, run)

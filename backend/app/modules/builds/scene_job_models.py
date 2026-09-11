@@ -68,7 +68,7 @@ class SceneJob(SQLModel, table=True):
             name="ck_build_scene_job_resource",
         ),
         CheckConstraint(
-            "revision >= 0 AND next_page > 0 AND failure_count >= 0 AND credential_version >= 0",
+            "revision >= 0 AND next_page > 0 AND failure_count >= 0 AND credential_revision >= 0",
             name="ck_build_scene_job_counters",
         ),
         CheckConstraint(
@@ -100,7 +100,7 @@ class SceneJob(SQLModel, table=True):
     bc_id: str = Field(max_length=128)
     advertiser_id: str = Field(max_length=128)
     connection_id: UUID
-    credential_version: int
+    credential_revision: int
     provider_connection_id: UUID
     application_id: str = Field(max_length=255)
     minis_id: str = Field(max_length=255)

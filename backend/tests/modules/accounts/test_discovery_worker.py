@@ -221,7 +221,7 @@ def test_candidate_only_promoted_after_full_scan(
         with Session(engine) as session:
             run = session.get(DiscoveryRun, runs[0])
             conn = session.get(TikTokConnection, run.connection_id)
-            assert conn.credential_version == 0
+            assert conn.credential_revision == 0
             assert (
                 decrypt_credentials(
                     tenant_id=run.tenant_id, ciphertext=conn.credential_ciphertext
@@ -232,7 +232,7 @@ def test_candidate_only_promoted_after_full_scan(
     with Session(engine) as session:
         run = session.get(DiscoveryRun, runs[0])
         conn = session.get(TikTokConnection, run.connection_id)
-        assert conn.credential_version == 1
+        assert conn.credential_revision == 1
         assert session.get(AuthorizationAttempt, attempt_id).status == "ACCEPTED"
         assert (
             decrypt_credentials(
@@ -619,7 +619,7 @@ def test_stale_attempt_base_never_promotes(
             state_hash=uuid4().hex,
             expires_at=datetime.now(UTC) + timedelta(minutes=10),
             status="CANDIDATE_READY",
-            base_credential_version=1,
+            base_credential_revision=1,
             candidate_ciphertext=encrypt_credentials(
                 tenant_id=run.tenant_id, value={"access_token": "stale-token"}
             ),
@@ -632,7 +632,7 @@ def test_stale_attempt_base_never_promotes(
     with Session(engine) as session:
         run = session.get(DiscoveryRun, runs[0])
         assert run.status == "ERROR" and run.error_code == "discovery_stale"
-        assert session.get(TikTokConnection, run.connection_id).credential_version == 0
+        assert session.get(TikTokConnection, run.connection_id).credential_revision == 0
 
 
 def test_redis_unavailable_defers_without_sending(

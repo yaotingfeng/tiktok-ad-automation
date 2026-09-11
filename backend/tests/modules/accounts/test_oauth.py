@@ -62,7 +62,7 @@ def test_start_binds_context_stores_digest_and_preserves_old_credentials(
     connection.credential_ciphertext = encrypt_credentials(
         tenant_id=context.tenant_id, value={"access_token": "old"}
     )
-    connection.credential_version = 4
+    connection.credential_revision = 4
     session.flush()
     url = start_authorization(session, context=context, connection_id=connection.id)
     query = parse_qs(urlsplit(url).query)
@@ -80,9 +80,9 @@ def test_start_binds_context_stores_digest_and_preserves_old_credentials(
         context.actor_id,
         connection.id,
     )
-    assert attempt.base_credential_version == 4
+    assert attempt.base_credential_revision == 4
     assert state not in repr(attempt)
-    assert connection.status == "ACTIVE" and connection.credential_version == 4
+    assert connection.status == "ACTIVE" and connection.credential_revision == 4
 
 
 @pytest.mark.parametrize(
@@ -254,7 +254,7 @@ def test_exchange_failure_preserves_old_active_version(
         tenant_id=auth_attempt.tenant_id, value={"access_token": "old-token"}
     )
     connection.credential_ciphertext = encrypted
-    connection.credential_version = 8
+    connection.credential_revision = 8
     session.flush()
 
     def fail(**_kwargs):
@@ -275,7 +275,7 @@ def test_exchange_failure_preserves_old_active_version(
     session.refresh(connection)
     assert (
         connection.status,
-        connection.credential_version,
+        connection.credential_revision,
         connection.credential_ciphertext,
     ) == ("ACTIVE", 8, encrypted)
     assert auth_attempt.status == status and auth_attempt.candidate_ciphertext is None
@@ -298,7 +298,7 @@ def test_reauthorization_success_keeps_active_credentials_until_discovery(
         tenant_id=auth_attempt.tenant_id, value={"access_token": "old-token"}
     )
     connection.credential_ciphertext = encrypted
-    connection.credential_version = 8
+    connection.credential_revision = 8
     session.flush()
     finish_authorization(
         session,
@@ -312,7 +312,7 @@ def test_reauthorization_success_keeps_active_credentials_until_discovery(
     assert len(sdk_transport) == 1
     assert (
         connection.status,
-        connection.credential_version,
+        connection.credential_revision,
         connection.credential_ciphertext,
     ) == ("ACTIVE", 8, encrypted)
 

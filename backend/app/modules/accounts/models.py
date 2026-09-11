@@ -8,27 +8,51 @@ from sqlalchemy import (
     DateTime,
     ForeignKeyConstraint,
     Index,
+    String,
     UniqueConstraint,
     text,
 )
 from sqlmodel import Field, SQLModel
+
+from app.integrations.tiktok.contracts.context import ChannelKind
+
+# discovery 的 MCP 复合外键在普通应用进程也需注册，不能依赖 Alembic 导入。
+from app.modules.accounts import connection_models as connection_models
 
 
 class TikTokConnection(SQLModel, table=True):
     __tablename__ = "tiktok_connection"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_tiktok_connection_tenant_id"),
+        UniqueConstraint(
+            "tenant_id", "id", "kind", name="uq_tiktok_connection_tenant_kind"
+        ),
+        CheckConstraint(
+            "kind IN ('OFFICIAL_API','OFFICIAL_MCP')", name="ck_tiktok_connection_kind"
+        ),
+        CheckConstraint(
+            "authorization_revision >= 0",
+            name="ck_tiktok_connection_authorization_revision",
+        ),
         CheckConstraint(
             "status IN ('PENDING_AUTH','DISCOVERING','ACTIVE','REAUTH_REQUIRED','ERROR','DISABLED')",
             name="ck_tiktok_connection_status",
         ),
-        CheckConstraint("credential_version >= 0", name="ck_tiktok_connection_version"),
+        CheckConstraint(
+            "credential_revision >= 0", name="ck_tiktok_connection_version"
+        ),
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     tenant_id: UUID = Field(foreign_key="tenant.id", index=True)
     status: str = Field(default="PENDING_AUTH", max_length=32)
     credential_ciphertext: str | None = Field(default=None, repr=False)
-    credential_version: int = 0
+    credential_revision: int = 0
+    # 凭据轮换、授权边界和适配契约分别版本化，普通刷新不改变授权语义。
+    kind: ChannelKind = Field(default="OFFICIAL_API", sa_type=String(32))
+    display_name: str = Field(default="", max_length=255)
+    service_profile: str | None = Field(default=None, max_length=128)
+    authorization_revision: int = 0
+    adapter_contract_revision: str = Field(default="official-api-v1", max_length=128)
 
 
 class AuthorizationAttempt(SQLModel, table=True):
@@ -41,7 +65,8 @@ class AuthorizationAttempt(SQLModel, table=True):
             name="fk_authorization_attempt_tenant_connection",
         ),
         CheckConstraint(
-            "base_credential_version >= 0", name="ck_authorization_attempt_base_version"
+            "base_credential_revision >= 0",
+            name="ck_authorization_attempt_base_version",
         ),
         CheckConstraint(
             "status IN ('PENDING','CLAIMED','CANDIDATE_READY','RESULT_UNKNOWN','CANCELLED','FAILED','ACCEPTED')",
@@ -52,7 +77,7 @@ class AuthorizationAttempt(SQLModel, table=True):
     tenant_id: UUID = Field(foreign_key="tenant.id", index=True)
     actor_id: UUID = Field(foreign_key="user.id")
     connection_id: UUID = Field(index=True)
-    base_credential_version: int = 0
+    base_credential_revision: int = 0
     state_hash: str = Field(unique=True, max_length=64, repr=False)
     expires_at: datetime = Field(
         sa_column=Column(DateTime(timezone=True), nullable=False)
@@ -98,6 +123,23 @@ class DiscoveryRun(SQLModel, table=True):
             ["tenant_id", "candidate_attempt_id"],
             ["authorization_attempt.tenant_id", "authorization_attempt.id"],
         ),
+        # MCP 与 API 候选各有独立记录，禁止混填或引用其他连接的候选。
+        ForeignKeyConstraint(
+            ["tenant_id", "connection_id", "mcp_candidate_attempt_id"],
+            [
+                "mcp_authorization_attempt.tenant_id",
+                "mcp_authorization_attempt.connection_id",
+                "mcp_authorization_attempt.id",
+            ],
+            name="fk_discovery_mcp_candidate",
+        ),
+        CheckConstraint(
+            "candidate_attempt_id IS NULL OR mcp_candidate_attempt_id IS NULL",
+            name="ck_discovery_candidate_exclusive",
+        ),
+        CheckConstraint(
+            "credential_revision >= 0", name="ck_discovery_credential_revision"
+        ),
         CheckConstraint(
             "status IN ('RUNNING','ADMISSION_WAIT','ERROR','COMPLETE','CANCELLED')",
             name="ck_discovery_status",
@@ -115,7 +157,8 @@ class DiscoveryRun(SQLModel, table=True):
     actor_id: UUID = Field(foreign_key="user.id")
     connection_id: UUID
     candidate_attempt_id: UUID | None = None
-    credential_version: int = 0
+    mcp_candidate_attempt_id: UUID | None = None
+    credential_revision: int = 0
     status: str = "RUNNING"
     bc_cursor: str | None = None
     next_attempt_at: datetime | None = Field(
