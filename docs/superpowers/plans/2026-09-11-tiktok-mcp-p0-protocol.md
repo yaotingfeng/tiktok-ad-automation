@@ -182,7 +182,7 @@ def require_business_success(raw, evidence):
 - `open_bound_mcp_client(...) -> AbstractContextManager[BoundMCPClient]` 在同步 prefork 任务作用域内管理官方 async 客户端；不得从 ASGI event loop 直接阻塞调用。
 - `mcp_wire.py` 创建仅用于测试的真实 HTTP 协议边界。`McpWire` 提供 `url`、`calls: list[dict[str, Any]]`、`enqueue_result(tool: str, result: CallToolResult)`、`disconnect_after_accept(tool: str)`；handler 覆盖 SDK 的协商/初始化、tools/list、tools/call、会话关闭。业务函数不替换为假的成功结果。
 
-- [ ] **Step 1: 编写发送一次后断线的测试。** fixture `mcp_wire` 和 `bound_client` 定义在本任务新建 `backend/tests/integrations/tiktok/conftest.py`：后者绑定固定截止时间、合成 token、已观察合成 schema 与计数授权/准入回调；scope 为 function，并释放其本地线程/端口。例中调用名只来自 fixture 合同。
+- [x] **Step 1: 编写发送一次后断线的测试。** fixture `mcp_wire` 和 `bound_client` 定义在本任务新建 `backend/tests/integrations/tiktok/conftest.py`：后者绑定固定截止时间、合成 token、已观察合成 schema 与计数授权/准入回调；scope 为 function，并释放其本地线程/端口。例中调用名只来自 fixture 合同。
 
 ```python
 def test_disconnect_after_accept_does_not_replay(bound_client, mcp_wire):
@@ -197,8 +197,8 @@ def test_disconnect_after_accept_does_not_replay(bound_client, mcp_wire):
 
 补充错误 advertiser、schema 不符、第一次/准入后第二次授权撤销均不发送；不同连接不共用会话；deadline 不能延长；客户端关闭失败不丢失此前返回给业务层的回执。测试文件导入 pytest、RemoteCallError 与本任务 fixture。
 
-- [ ] **Step 2: 运行并记录红灯。** `uv run pytest tests/integrations/tiktok/test_mcp_transport.py -q`。HTTP fixture 记录真实 SDK JSON-RPC 消息，测试不能仅 mock `call_tool`。
-- [ ] **Step 3: 用官方 SDK 建会话，显式控制重试和期限。** 经版本核实后使用下列 v2 接入形状，token 不进入默认 repr。
+- [x] **Step 2: 运行并记录红灯。** `uv run pytest tests/integrations/tiktok/test_mcp_transport.py -q`。HTTP fixture 记录真实 SDK JSON-RPC 消息，测试不能仅 mock `call_tool`。
+- [x] **Step 3: 用官方 SDK 建会话，显式控制重试和期限。** 经版本核实后使用下列 v2 接入形状，token 不进入默认 repr。
 
 ```python
 import httpx2
@@ -221,8 +221,8 @@ async def call_verified_tool(endpoint, token, tool_name, arguments):
 
 目录观测沿用同一官方 SDK 会话，通过 `(None, 'protocol.list_tools')` 的授权/准入回调；逐页保存 cursor 与 schema 摘要，拒绝重复 cursor。接收层设置每个完整业务结果/目录页最多 8 MiB 的本地资源预算，流式读取也累计计数；这是本地保护阈值，不声称为 TikTok 服务限制。超限不得把截断数据解析成完整页；写入响应超限仍是 UNKNOWN。
 
-- [ ] **Step 4: 运行传输及协议测试。** `uv run pytest tests/integrations/tiktok/test_mcp_protocol.py tests/integrations/tiktok/test_mcp_results.py tests/integrations/tiktok/test_mcp_transport.py -q`。用日志捕获断言合成 token 和 URL 未出现；真实 SDK 发送次数与会话隔离断言通过。
-- [ ] **Step 5: 提交。** 明确暂存所列文件并提交 `mcp: add bounded official client transport`，记录协议替身不等于真实 TikTok 联调。
+- [x] **Step 4: 运行传输及协议测试。** `uv run pytest tests/integrations/tiktok/test_mcp_protocol.py tests/integrations/tiktok/test_mcp_results.py tests/integrations/tiktok/test_mcp_transport.py -q`。用日志捕获断言合成 token 和 URL 未出现；真实 SDK 发送次数与会话隔离断言通过。
+- [x] **Step 5: 提交。** 明确暂存所列文件并提交 `mcp: add bounded official client transport`，记录协议替身不等于真实 TikTok 联调。
 
 ## Task P0.4: 配额域与只读交接验收
 
@@ -235,7 +235,7 @@ async def call_verified_tool(endpoint, token, tool_name, arguments):
 - 候选尚无 BC route，提供 `admit_candidate_call(redis_client: Redis, *, tenant_id: UUID, attempt_id: UUID, scope: str, operation: str, policy: AdmissionPolicy) -> AbstractContextManager[None]`；复用同一底层桶与租约函数，限定协议/目录只读操作，不伪造 connection/BC。attempt_id 仅做本地关联，不拆分上游配额。
 - P1 连接/候选工厂构造 callback 后调用本函数；P0 不依赖 `modules/accounts/routing.py`。
 
-- [ ] **Step 1: 验证不同连接共用未知上游额度。** 创建下列纯策略用例，以及真实 Redis 中“同服务、不同连接第二个超额调用被拒绝”的用例；Redis fixture 使用现有 `redis_client`，只清理本测试创建的前缀键。
+- [x] **Step 1: 验证不同连接共用未知上游额度。** 创建下列纯策略用例，以及真实 Redis 中“同服务、不同连接第二个超额调用被拒绝”的用例；Redis fixture 使用现有 `redis_client`，只清理本测试创建的前缀键。
 
 ```python
 def test_unknown_mcp_upstream_uses_shared_scope():
@@ -245,8 +245,8 @@ def test_unknown_mcp_upstream_uses_shared_scope():
     assert a == b == 'official-mcp:shared-unverified'
 ```
 
-- [ ] **Step 2: 运行新用例确认缺少实现失败。** `uv run pytest tests/integrations/tiktok/test_channel_admission.py -q`。
-- [ ] **Step 3: 实现范围选择及准入适配。** API 路径要求 app ID，MCP 不读取本产品 App 配置；可信 service scope 只能由部署/已验证协议来源提供，不能接受前端任意字段。复用原 admit/release、nonce 与 lease 语义，不重新实现 Lua。
+- [x] **Step 2: 运行新用例确认缺少实现失败。** `uv run pytest tests/integrations/tiktok/test_channel_admission.py -q`。
+- [x] **Step 3: 实现范围选择及准入适配。** API 路径要求 app ID，MCP 不读取本产品 App 配置；可信 service scope 只能由部署/已验证协议来源提供，不能接受前端任意字段。复用原 admit/release、nonce 与 lease 语义，不重新实现 Lua。
 
 ```python
 def quota_scope(*, channel, app_id, verified_service_scope):
@@ -259,8 +259,8 @@ def quota_scope(*, channel, app_id, verified_service_scope):
 
 账户为空的授权发现/会话请求使用受控 discovery 配额键，不将 `None` 当成真实 advertiser ID。MCP 无可信终止证据的 UNKNOWN 继续由业务持久化围栏阻止竞争写入；释放本地并发租约不表示远端结束。
 
-- [ ] **Step 4: 运行公共层回归。** `uv run pytest tests/integrations/tiktok tests/modules/accounts/test_admission.py tests/jobs/test_admission.py -q`；再执行 `uv run ruff check app/integrations/tiktok tests/integrations/tiktok`。现有 accounts autouse 会填假 App，新增 MCP 无 App 用例须在测试内显式清空三个 App 配置。
-- [ ] **Step 5: 完成 P0 记录并提交。** 记录具体 SDK/协议版本、公开 metadata、工具合同来源、服务端重试可证明范围及 P1 必须核实的权限/schema；提交 `mcp: scope shared admission by upstream service`。真实授权仍进入 P1 的具体授权验证步骤。
+- [x] **Step 4: 运行公共层回归。** `uv run pytest tests/integrations/tiktok tests/modules/accounts/test_admission.py tests/jobs/test_admission.py -q`；再执行 `uv run ruff check app/integrations/tiktok tests/integrations/tiktok`。现有 accounts autouse 会填假 App，新增 MCP 无 App 用例须在测试内显式清空三个 App 配置。
+- [x] **Step 5: 完成 P0 记录并提交。** 记录具体 SDK/协议版本、公开 metadata、工具合同来源、服务端重试可证明范围及 P1 必须核实的权限/schema；提交 `mcp: scope shared admission by upstream service`。真实授权仍进入 P1 的具体授权验证步骤。
 
 ## 本阶段证据与退出条件
 

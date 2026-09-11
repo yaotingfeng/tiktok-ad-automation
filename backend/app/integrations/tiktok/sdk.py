@@ -9,14 +9,13 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any, cast
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import business_api_client  # type: ignore[import-untyped]
 import business_api_client.tiktok_business.tiktok_exceptions as sdk_errors  # type: ignore[import-untyped]
 from billiard.exceptions import SoftTimeLimitExceeded  # type: ignore[import-untyped]
 from business_api_client.rest import ApiException  # type: ignore[import-untyped]
 from redis import Redis
-from redis.exceptions import RedisError
 from sqlmodel import Session
 from urllib3.exceptions import HTTPError
 from urllib3.util.retry import Retry
@@ -25,7 +24,7 @@ from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.credentials import decrypt_credentials
 from app.core.errors import DomainError
-from app.jobs.admission import AdmissionPolicy, admit_call, release_call
+from app.jobs.admission import AdmissionPolicy, admit_call, admitted_scope, release_call
 from app.modules.accounts.models import TikTokConnection
 from app.modules.tenants.permissions import require_tenant
 
@@ -154,40 +153,15 @@ def admitted_account_call(
     policy: AdmissionPolicy,
 ) -> Iterator[None]:
     settings.require_tiktok_app()
-    lease_id = uuid4()
-    app_scope = settings.TIKTOK_APP_ID
-    admission = admit_call(
+    with admitted_scope(
         redis_client,
-        app_scope=app_scope,
+        app_scope=settings.TIKTOK_APP_ID,
         endpoint=endpoint,
         tenant_id=context.tenant_id,
         advertiser_id=advertiser_id,
-        lease_id=lease_id,
         policy=policy,
-    )
-    if not admission.granted:
-        raise AccountAdmissionDeferred(admission.retry_after_ms)
-    interrupted = False
-    try:
+        denied_error=AccountAdmissionDeferred,
+        admit=admit_call,
+        release=release_call,
+    ):
         yield
-    except SDK_SCOPE_INTERRUPTS:
-        interrupted = True
-        raise
-    finally:
-        try:
-            # SIGTERM can unwind Python finally blocks before process exit.
-            # Keep the lease until its deadline instead of admitting overlap.
-            if not interrupted:
-                release_call(
-                    redis_client,
-                    app_scope=app_scope,
-                    endpoint=endpoint,
-                    tenant_id=context.tenant_id,
-                    advertiser_id=advertiser_id,
-                    lease_id=lease_id,
-                )
-        except RedisError, DomainError:
-            logging.getLogger(__name__).warning(
-                "admission_release_failed",
-                extra={"tenant_id": str(context.tenant_id), "lease_id": str(lease_id)},
-            )

@@ -7,11 +7,15 @@ turn it into a blindly retryable request. Configure leases longer than the SDK's
 connect/read timeouts plus processing margin.
 """
 
+import logging
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
+from billiard.exceptions import SoftTimeLimitExceeded  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from redis.exceptions import RedisError
 
@@ -132,3 +136,46 @@ def release_call(
     """Release inflight leases only. RedisError is handled separately by caller."""
     keys = admission_keys(app_scope, endpoint, tenant_id, advertiser_id)[2:]
     redis_client.eval(_RELEASE_SCRIPT, len(keys), *keys, str(lease_id))
+
+
+@contextmanager
+def admitted_scope(
+    redis_client,
+    *,
+    app_scope: str,
+    endpoint: str,
+    tenant_id: UUID,
+    advertiser_id: str,
+    policy: AdmissionPolicy,
+    denied_error: Callable[[int], Exception],
+    admit: Callable[..., Admission] = admit_call,
+    release: Callable[..., None] = release_call,
+) -> Iterator[None]:
+    """两个通道共用租约生命周期；认证和上游配额域由调用边界提供。"""
+    lease_id = uuid4()
+    scope = {
+        "app_scope": app_scope,
+        "endpoint": endpoint,
+        "tenant_id": tenant_id,
+        "advertiser_id": advertiser_id,
+        "lease_id": lease_id,
+    }
+    admission = admit(redis_client, **scope, policy=policy)
+    if not admission.granted:
+        raise denied_error(admission.retry_after_ms)
+    interrupted = False
+    try:
+        yield
+    except SystemExit, KeyboardInterrupt, SoftTimeLimitExceeded:
+        interrupted = True
+        raise
+    finally:
+        # 进程终止不证明远端调用结束，保留原租约至过期；正常释放也不解除业务 UNKNOWN 围栏。
+        if not interrupted:
+            try:
+                release(redis_client, **scope)
+            except RedisError, DomainError:
+                logging.getLogger(__name__).warning(
+                    "admission_release_failed",
+                    extra={"tenant_id": str(tenant_id), "lease_id": str(lease_id)},
+                )

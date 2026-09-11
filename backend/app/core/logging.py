@@ -27,3 +27,26 @@ def log_fields(values: Mapping[str, object]) -> dict[str, str | int | float]:
             if isfinite(value) and value >= 0:
                 result[key] = value
     return result
+
+
+def silence_mcp_wire_logs() -> None:
+    """官方传输可能记录完整 URL、header、SSE 与异常正文；禁用其原始日志。"""
+    import logging
+
+    prefixes = ("mcp", "httpx2", "httpcore", "httpcore2")
+    # mcp 2.2.0 session.py 使用独立的 client logger，不属于 mcp 命名空间。
+    names = (
+        {"client"}
+        | set(prefixes)
+        | {
+            name
+            for name in logging.Logger.manager.loggerDict
+            if any(
+                name == prefix or name.startswith(prefix + ".") for prefix in prefixes
+            )
+        }
+    )
+    for name in names:
+        logger = logging.getLogger(name)
+        logger.setLevel(logging.CRITICAL + 1)
+        logger.disabled = True
