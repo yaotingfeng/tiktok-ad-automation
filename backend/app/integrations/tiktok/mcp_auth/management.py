@@ -60,6 +60,7 @@ def management_connection(
     connection_id: UUID,
     authorization_revision: int | None = None,
     run_id: UUID | None = None,
+    expected_contract_revision: str | None = None,
 ) -> TikTokConnection:
     require_mcp_admin(session, actor_id=context.actor_id, tenant_id=context.tenant_id)
     connection = session.get(TikTokConnection, connection_id, populate_existing=True)
@@ -101,9 +102,10 @@ def management_connection(
             or binding.revision != run.binding_revision
         ):
             raise DomainError("discovery_stale", "BC 绑定已改变")
-    if (
-        connection.adapter_contract_revision
-        != load_mcp_protocol().schema_manifest_sha256
+    # 仅协议重观测可固定旧版本；业务读取和已有任务仍必须匹配当前发布合同。
+    expected = expected_contract_revision or load_mcp_protocol().schema_manifest_sha256
+    if (expected_contract_revision is not None and run_id is not None) or (
+        connection.adapter_contract_revision != expected
     ):
         raise DomainError("route_contract_changed", "当前 MCP 接口契约已更新")
     return connection
@@ -157,7 +159,13 @@ def _management_client(
     authorization_revision: int | None = None,
     run_id: UUID | None = None,
     observe_tools_only: bool = False,
+    expected_contract_revision: str | None = None,
 ) -> Iterator[tuple[BoundMCPClient, dict[str, str], int]]:
+    if expected_contract_revision is not None and not observe_tools_only:
+        raise DomainError(
+            "mcp_management_operation_forbidden", "旧合同只能重检协议目录"
+        )
+
     def validate(session: Session) -> TikTokConnection:
         return management_connection(
             session,
@@ -165,6 +173,7 @@ def _management_client(
             connection_id=connection_id,
             authorization_revision=authorization_revision,
             run_id=run_id,
+            expected_contract_revision=expected_contract_revision,
         )
 
     with bounded_session(database_engine, task_deadline=task_deadline) as session:
@@ -184,8 +193,10 @@ def _management_client(
             ciphertext=connection.credential_ciphertext or "",
         )
         credential_revision = connection.credential_revision
-        observation = current_observation(
-            session, context=context, connection=connection
+        observation = (
+            None
+            if observe_tools_only
+            else current_observation(session, context=context, connection=connection)
         )
         if observation is None and not observe_tools_only:
             raise DomainError(
@@ -319,11 +330,22 @@ def connection_business_centers(
     refresh: bool = False,
 ) -> list[dict[str, Any]]:
     with bounded_session(database_engine, task_deadline=task_deadline) as session:
+        current = session.get(TikTokConnection, connection_id)
+        # 这里只读取版本供后续严格归属/权限校验，不以旧目录推定新接口可用。
+        previous_contract = current.adapter_contract_revision if current else None
         connection = management_connection(
-            session, context=context, connection_id=connection_id
+            session,
+            context=context,
+            connection_id=connection_id,
+            expected_contract_revision=previous_contract,
         )
         revision = connection.authorization_revision
-        existing = current_observation(session, context=context, connection=connection)
+        needs_upgrade = previous_contract != load_mcp_protocol().schema_manifest_sha256
+        existing = (
+            None
+            if needs_upgrade
+            else current_observation(session, context=context, connection=connection)
+        )
         if existing is not None:
             verified_schemas(existing)
         cached = existing is not None and directory_fresh(existing) and not refresh
@@ -344,6 +366,7 @@ def connection_business_centers(
                 task_deadline=task_deadline,
                 authorization_revision=revision,
                 observe_tools_only=True,
+                expected_contract_revision=previous_contract,
             ) as (client, _, _):
                 schemas, unavailable = read_tools(client)
             with bounded_session(
@@ -357,12 +380,19 @@ def connection_business_centers(
                     )
                     .with_for_update()
                 ).one()
-                management_connection(
+                checked_connection = management_connection(
                     session,
                     context=context,
                     connection_id=connection_id,
                     authorization_revision=revision,
+                    expected_contract_revision=previous_contract,
                 )
+                # 完整真实目录校验后原子更新接口版本，保留授权、凭据、BC 绑定代数。
+                # 旧冻结任务继续携带旧版本并自然阻断，不能随连接升级迁移历史意图。
+                checked_connection.adapter_contract_revision = (
+                    load_mcp_protocol().schema_manifest_sha256
+                )
+                session.add(checked_connection)
                 session.add(
                     ConnectionToolObservation(
                         tenant_id=context.tenant_id,
