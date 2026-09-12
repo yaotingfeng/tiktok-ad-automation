@@ -176,6 +176,21 @@ def info(**kwargs):
     }
 
 
+@pytest.fixture
+def interrupted_publication(monkeypatch):
+    from app.modules.materials import source_url_uploads
+
+    original = source_url_uploads._finish
+
+    def fail_upload_publication(*args, **kwargs):
+        # 回执已落库但本地发布中断，恢复任务仍须能够严格核查原操作。
+        if kwargs["kind"] == "upload":
+            raise RuntimeError("synthetic local publication interruption")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(source_url_uploads, "_finish", fail_upload_publication)
+
+
 def test_generation_upload_uses_url_without_legacy_object_upload(
     url_env, redis_client, wire
 ):
@@ -184,39 +199,21 @@ def test_generation_upload_uses_url_without_legacy_object_upload(
     )
     run(url_env, redis_client)
     op = operation(url_env)
-    assert op.status == "verifying"
+    assert op.status == "succeeded"
     assert op.remote_response["video_id"] == "actual-source-vid"
     assert dict(wire[0][0][2]["fields"])["upload_type"] == "UPLOAD_BY_URL"
     assert "video_file" not in dict(wire[0][0][2]["fields"])
 
 
-def test_only_strong_exact_readback_releases_use_and_source_slot(
+def test_success_receipt_releases_use_and_source_slot_without_readback(
     url_env, redis_client, wire
 ):
-    wire[1].extend(
-        [
-            [{"video_id": "actual-source-vid", "material_id": "actual-source-mid"}],
-            info(),
-        ]
+    wire[1].append(
+        [{"video_id": "actual-source-vid", "material_id": "actual-source-mid"}]
     )
     run(url_env, redis_client)
     op_id = operation(url_env).id
-    with Session(engine) as db:
-        assert (
-            db.exec(
-                select(OriginalUse.status).where(OriginalUse.operation_id == op_id)
-            ).one()
-            == "active"
-        )
-        assert (
-            db.exec(
-                select(SourceAccountLoad.in_flight).where(
-                    SourceAccountLoad.tenant_id == url_env["context"].tenant_id
-                )
-            ).one()
-            == 1
-        )
-        assert db.get(IngestSession, url_env["session_id"]).ready_count == 0
+    # 重复投递及原来已排队的恢复消息都不能查询或再次上传已成功素材。
     run(url_env, redis_client, kind="verify", operation_id=op_id)
     run(url_env, redis_client, kind="verify", operation_id=op_id)
     with Session(engine) as db:
@@ -280,7 +277,7 @@ def test_only_strong_exact_readback_releases_use_and_source_slot(
         assert "never-store-this-url" not in evidence + repr(
             [d.payload for d in dispatches]
         )
-    assert [call[0] for call in wire[0]] == ["POST", "GET"]
+    assert [call[0] for call in wire[0]] == ["POST"]
 
 
 @pytest.mark.parametrize(
@@ -296,6 +293,7 @@ def test_only_strong_exact_readback_releases_use_and_source_slot(
         info(format="html"),
     ],
 )
+@pytest.mark.usefixtures("interrupted_publication")
 def test_unusable_readback_never_marks_ready_or_releases_original(
     url_env, redis_client, wire, response
 ):
@@ -401,7 +399,7 @@ def test_received_id_is_saved_before_client_cleanup_failure(
     run(url_env, redis_client)
     op = operation(url_env)
     assert op.remote_response["video_id"] == "actual-source-vid"
-    assert op.status == "verifying"
+    assert op.status == "succeeded"
     with Session(engine) as db:
         attempt = db.exec(
             select(MaterialUploadAttempt).where(
@@ -673,14 +671,14 @@ def test_confirmed_failed_deleted_generation_allows_new_charged_source_operation
         assert len(ops) == 2
         new = next(op for op in ops if op.id != old.id)
         assert new.remote_response["generation"] == 2
-        assert new.remote_response["source_slot_held"] is True
+        assert new.remote_response["source_slot_held"] is False
         assert (
             db.exec(
                 select(SourceAccountLoad.in_flight).where(
                     SourceAccountLoad.tenant_id == url_env["context"].tenant_id
                 )
             ).one()
-            == 1
+            == 0
         )
     assert len(wire[0]) == 1
 
@@ -730,7 +728,7 @@ def test_concurrent_duplicate_dispatch_cannot_send_second_post(
                     SourceAccountLoad.tenant_id == url_env["context"].tenant_id
                 )
             ).one()
-            == 1
+            == 0
         )
 
 
@@ -843,6 +841,7 @@ def test_source_wrapper_accepts_exact_validation_payload(url_env, monkeypatch):
     assert calls[0]["operation_id"] is None
 
 
+@pytest.mark.usefixtures("interrupted_publication")
 def test_conflicting_late_receipt_cannot_become_ready_from_single_id_readback(
     url_env, redis_client, wire
 ):

@@ -1,5 +1,6 @@
 """实际冻结gateway、PG/Redis与URL原件状态机；仅外部HTTP/签名边界替身。"""
 
+import json
 from hashlib import sha256
 from uuid import uuid4
 
@@ -18,6 +19,9 @@ from tests.integrations.tiktok.gateway_support import gateway_wire as gateway_wi
 from tests.modules.accounts.conftest import app_config as app_config
 from tests.modules.accounts.conftest import policy as policy
 from tests.modules.materials.test_source_uploads import CONTENT, MD5
+from tests.modules.materials.test_url_ingest import (
+    interrupted_publication as interrupted_publication,
+)
 from tests.modules.materials.test_url_ingest import operation, run
 from tests.modules.materials.test_url_ingest import url_env as url_env
 
@@ -110,20 +114,30 @@ def enqueue_upload(gateway_case, gateway_wire):
 @pytest.mark.parametrize(
     "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
 )
+@pytest.mark.parametrize("native_text", [False, True])
 def test_url_worker_sends_once_and_preserves_original_route_and_receipt(
     gateway_case,
     gateway_wire,
     url_env,
     redis_client,
     database_engine,
+    native_text,
 ):
     enqueue_upload(gateway_case, gateway_wire)
+    if native_text and gateway_case[1].channel == "OFFICIAL_MCP":
+        response = gateway_wire["wire"].results["file_video_ad_upload"].pop()
+        body = response["structuredContent"]
+        body["data"] = [body["data"]]
+        gateway_wire["wire"].results["file_video_ad_upload"].append(
+            {"content": [{"type": "text", "text": json.dumps(body)}]}
+        )
     run(url_env, redis_client)
     op = operation(url_env)
     assert op.remote_response.get("video_id") == "actual-source-vid"
     assert op.remote_response.get("mid") == "actual-source-mid"
     assert op.frozen_route == gateway_case[1].model_dump(mode="json")
-    assert op.status == "verifying"
+    assert op.status == "succeeded"
+    assert op.remote_response["confirmation_source"] == "upload_receipt"
     run(url_env, redis_client)
     calls = [c for c in gateway_wire["wire"].calls if c["method"] == "tools/call"]
     assert (
@@ -138,7 +152,7 @@ def test_url_worker_sends_once_and_preserves_original_route_and_receipt(
         use = db.exec(
             select(OriginalUse).where(OriginalUse.operation_id == op.id)
         ).one()
-        assert use.released_at is None
+        assert use.released_at is not None
     assert "signature=never-store" not in str(op.remote_response)
 
 
@@ -273,6 +287,7 @@ def test_two_real_workers_share_one_mcp_upload_claim(
 
 @pytest.mark.parametrize("gateway_case", ["OFFICIAL_MCP"], indirect=True)
 @pytest.mark.parametrize("revision", ["credential_revision", "authorization_revision"])
+@pytest.mark.usefixtures("interrupted_publication")
 def test_receipt_readback_uses_frozen_authority_and_current_credentials(
     gateway_case,
     gateway_wire,

@@ -59,7 +59,8 @@ class MCPMaterialOperations(MaterialReadAdapter):
             raise RemoteCallError(
                 error.code, effect="NOT_SENT", evidence=CallEvidence()
             ) from None
-        # 不发送SDK专属video_signature；原件MD5只留在本地供严格实际回读。
+        # MCP 合同不接收 video_signature；本地摘要用于原件身份及未知结果恢复。
+        # 正常业务成功回执中的实际 VID 直接确认上传，不强制再查询一次。
         response = self._client.call(
             operation="materials.upload_video_url",
             advertiser_id=request.advertiser_id,

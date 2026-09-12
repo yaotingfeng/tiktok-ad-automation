@@ -466,7 +466,9 @@ def _finish(
             return
         attempt = _attempt(db, operation_id)
         assert attempt
-        if kind == "verify" and work.get("video_id") and evidence:
+        # 同步上传成功回执已给出实际 VID，直接入库并释放原件用途和来源槽位。
+        # 只有未知发送结果才走查询核实；查询找到候选 ID 后仍需精确比对。
+        if evidence and (kind == "upload" or work.get("video_id")):
             _proof(material, obj, row, upload=False)
             access = _source_access(
                 db, context=context, work=work, upload=kind == "upload"
@@ -502,7 +504,13 @@ def _finish(
             )
             asset.status, asset.verified_at = "available", datetime.now(UTC)
             operation.status, attempt.status = "succeeded", "available"
-            operation.remote_response = {**operation.remote_response, **evidence}
+            operation.remote_response = {
+                **operation.remote_response,
+                **evidence,
+                "confirmation_source": "upload_receipt"
+                if kind == "upload"
+                else "video_readback",
+            }
             db.flush()
             release_source_account(db, context=context, operation=operation)
             _release_use(db, context=context, obj=obj, operation=operation)
@@ -916,6 +924,20 @@ def run_url_source_upload(
                     except Exception:
                         if receipt_attempt:
                             raise
+                # 在关闭客户端前完成本地发布，避免关闭连接的异常把已成功上传变成等待核实。
+                # 回执先独立落库；发布失败/进程中断仍可沿原操作恢复，绝不重传。
+                _finish(
+                    database_engine,
+                    context=context,
+                    material_id=material_id,
+                    object_id=object_id,
+                    generation=generation,
+                    operation_id=operation_id,
+                    claim=claim,
+                    work=work,
+                    kind=kind,
+                    evidence=evidence,
+                )
             elif work.get("video_id"):
                 record = gateway.materials.read_video(
                     advertiser_id=work["advertiser_id"],

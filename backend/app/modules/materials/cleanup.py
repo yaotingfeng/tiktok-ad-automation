@@ -51,6 +51,8 @@ def _file(session: Session, obj: TemporaryMaterialObject) -> IngestSessionFile:
 def _receipt(
     session: Session, obj: TemporaryMaterialObject, source_receipt_id: UUID
 ) -> dict[str, Any]:
+    # 来源成功可由同步上传回执或未知结果的查询恢复确认；本地摘要标识原件，
+    # 不把“必须再查一次 TikTok”作为清理前提。对象代次、账户映射和用途仍须一致。
     operation = session.get(
         MaterialAssetOperation, source_receipt_id, populate_existing=True
     )
