@@ -1,0 +1,32 @@
+{
+  "local": {
+    "file": ".env",
+    "runtime_file": null,
+    "runbook": "docs/runbooks/bootstrap-deployment.md",
+    "overrides": {}
+  },
+  "staging": {
+    "file": ".env.staging",
+    "runtime_file": "/etc/tt-ada-staging/app.env",
+    "runbook": "docs/runbooks/staging-singapore.md",
+    "overrides": {
+      "DATABASE_URL": "",
+      "REDIS_URL": "",
+      "FRONTEND_HOST": "https://tk-ada.137-220-150-31.sslip.io",
+      "OBJECT_STORAGE_PROVIDER": "r2",
+      "S3_REGION": "auto"
+    }
+  },
+  "production": {
+    "file": ".env.production",
+    "runtime_file": "/etc/tt-ada/production.env",
+    "runbook": "docs/runbooks/production-junbo.md",
+    "overrides": {
+      "DATABASE_URL": "",
+      "REDIS_URL": "",
+      "FRONTEND_HOST": "https://manjuad.gzjunbo.net:8000",
+      "OBJECT_STORAGE_PROVIDER": "r2",
+      "S3_REGION": "auto"
+    }
+  }
+}

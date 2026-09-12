@@ -31,6 +31,8 @@ Python uses uv in backend; frontend uses Bun and the official template lockfile.
 - 新功能或重构范围过大时，将设计文档和实施计划拆分为多个职责清晰、可独立验证的阶段，明确依赖关系与验收标准。
 
 ## 环境与发布
+
+- 查找或初始化环境配置先读 `config/README.md`，环境文件位置以 `config/environments.json` 为准；统一模板为 `.env.example`，使用 `scripts/environment.py` 定位/初始化。真实环境文件不进 Git，项目内副本不等于服务器已加载配置。
 - 明确区分本地开发和生产环境，不能将本地验证视为生产验证。
 - 发布必须遵循 `docs/runbooks/deployment.md`；首次部署同时参考 `docs/runbooks/bootstrap-deployment.md`。
 - 每次向测试或生产环境发版（含仅前端、配置或依赖变更，无数据库迁移也适用），必须在变更前备份数据库、Redis 持久状态、当前项目文件及构建产物、私有配置和证书。项目备份必须为独立归档，不能仅以 Git、旧 release 目录或 current 指针代替；具体清单和验证要求见部署手册。首次部署无历史数据时明确记录不适用项。
