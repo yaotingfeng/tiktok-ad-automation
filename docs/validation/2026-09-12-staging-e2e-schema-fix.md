@@ -41,3 +41,10 @@
 - 配置 OBJECT_STORAGE_PROVIDER=r2、S3 endpoint/bucket/region/密钥，启用新导入；租户暂存窗口设为 4 GiB，以容纳本批 2.44 GiB。自动清理保持关闭，等待平台入库与目标分发证据；桶现有公开访问及历史对象未改动，使用用户指定现有桶，不能宣称桶私有性通过。
 - 服务器受控随机对象探测 `c6e3abddb436436faba72c9b05406254`：CreateMultipart、签名 PUT、ListParts、Complete、HEAD、签名 GET、DELETE、HEAD404 全部通过，cleanup=verified。API/Worker/Beat 实际进程的 R2 配置完全一致，三服务和备份 timer active，HTTPS 健康 true。
 - 回到真实 junbo 页面再次选择本批 69 文件，浏览器 `fileChooser.setFiles` 仍返回 Not allowed。素材尚未成功上传，广告尚未创建；此轮通过的是服务器 R2 真实存储链路，不是完整业务端到端。
+
+## 上传队列闪动修复发布
+
+- 代码 `6eded64e30bddc1baf46a3e309d9a7a18147786e`：上传队列静默轮询，去除背景更新提示行，不再因 isFetching 每次变化重新创建单元格或禁用分页。保留初始加载、翻页请求及错误处理；未修改素材发送门禁。
+- 47 项前端素材及 R2 导入回归通过，TypeScript/Vite/Biome 检查通过。完整备份 `/var/backups/tt-ada-staging/20260912T152405Z/`，五份归档校验、独立 PostgreSQL/Redis/项目恢复验证通过，991 个跟踪条目验证一致；前端构建归档 SHA256 5631448ce9e4e0536ffb3630b7c3b082ba30f36a4be4c2ecc65cf8ed75b70af5。
+- 三服务 cwd 同新版本、备份 timer active、HTTPS 健康 true。真实上传队列重新加载后，手动刷新加 10.5 秒轮询观察：更新提示零次、原详情按钮未替换、表格位置偏移零；原来超时的详情按钮现可直接点击。
+- 用户单文件已接收 22,585,602 bytes，原件已校验；来源上传记录为空。服务端 material_channel_unverified 在新操作/选择来源账户前拦截；页面现在明确解释原件保留、无需重新上传。实际回读替代未落地五项服务能力门禁的设计调整等待用户答复；仍未真实上传到 TikTok 或创建广告。

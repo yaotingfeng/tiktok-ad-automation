@@ -21,7 +21,7 @@
 
 ## 当前实例与操作
 
-- 运行提交：`86fafbdaca00115a15c2015b147e09dbdc730c1f`；真实页面测试发现的接口定义修复、完整备份与当前待验项见 [端到端测试修复记录](../validation/2026-09-12-staging-e2e-schema-fix.md)。MCP 多 BC 更新及完整备份见 [多 BC 验收](../validation/2026-09-12-mcp-multiple-bcs.md)。最新 BC 分页修复及 Sun Browser 真实授权/BC 读取见 [分页验收](../validation/2026-09-12-staging-mcp-pagination.md)，此前 MCP 授权后修复见 [发布验收](../validation/2026-09-12-staging-mcp-auth-fix.md)，双通道更新、Linux 验证及客户端登记见 [首次双通道发布](../validation/2026-09-12-staging-mcp-release.md)。数据库 head 为 `mcp_multibc_runtime`，旧版本及发布前备份保留。
+- 运行提交：`6eded64e30bddc1baf46a3e309d9a7a18147786e`；真实页面测试发现的接口定义修复、完整备份与当前待验项见 [端到端测试修复记录](../validation/2026-09-12-staging-e2e-schema-fix.md)。MCP 多 BC 更新及完整备份见 [多 BC 验收](../validation/2026-09-12-mcp-multiple-bcs.md)。最新 BC 分页修复及 Sun Browser 真实授权/BC 读取见 [分页验收](../validation/2026-09-12-staging-mcp-pagination.md)，此前 MCP 授权后修复见 [发布验收](../validation/2026-09-12-staging-mcp-auth-fix.md)，双通道更新、Linux 验证及客户端登记见 [首次双通道发布](../validation/2026-09-12-staging-mcp-release.md)。数据库 head 为 `mcp_multibc_runtime`，旧版本及发布前备份保留。
 - 入口：`https://137.220.150.31`，80 跳转 443。已签发受信任 IP 证书，非自签名证书；无需域名即可访问本次测试入口。真实 TikTok 回调/App 接入另行配置并验收。
 - Python `3.14.2` / uv `0.9.26` / Bun `1.4.2` / PostgreSQL `18.6` / Redis `8.10.1` / Certbot `5.8.0`。另已安装 Nginx、FFmpeg 和基础编译依赖；未安装 Docker。
 - 数据库 `tt_ada_staging`，角色 `tt_ada`；应用角色无 CREATEDB 或超级用户权限。回归测试使用单独测试角色与 `tt_ada_acceptance_test`、Redis DB 14/15，业务使用 Redis DB 0。
