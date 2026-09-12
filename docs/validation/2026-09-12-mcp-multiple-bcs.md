@@ -23,6 +23,14 @@
 
 ## 测试环境验收
 
-待固定提交发布后填写。发布前已保存 1 条授权、1 个绑定、42 个账户的只读基线。必须按部署手册执行完整备份与恢复验证，再迁移、切换同版本服务及 Sun Browser 实际验收。
+- 已提交并推送 `f9d74257d7e74d91dfcf2f55f2006fba3b6af5b0`，发布到新加坡测试环境；服务器冻结安装、TypeScript/Vite 构建通过，983 个跟踪文件与本地固定提交 SHA-256 一致。
+- 发布前完整备份 `/var/backups/tt-ada-staging/20260912T093755Z/`：PostgreSQL、Redis、独立项目源码/构建归档、私有配置和证书。PG 新库恢复、Redis 独立 socket 恢复、项目/配置隔离解压比对及四份归档校验和均通过，`RELEASE_COMPLETE` 已生成。
+- 正常停止 API/Beat 并排空 Worker 后执行两段迁移，唯一 head 为 `mcp_multibc_runtime`，再切换三个服务；三个实际进程的 cwd 和调用策略一致，Worker ping 与备份 timer 恢复通过。未降低停止期限或强制终止执行任务。
+- HTTPS、登录 HTML/资源、平台/租户管理员登录及权限隔离、回调保护、API 404 与 MCP READY 冒烟通过。该项单独不作为真实 MCP 业务验收。
+- 迁移前后只读快照完全相等：1 条 MCP 连接、授权/凭据版本、1 个绑定、默认路由及 42 个活动授权账户全部保留。
+- Sun Browser 刷新后显示“添加 BC”；用现有授权读取和主动刷新官方目录均成功，返回 1 个 BC，标记“已接入”，未重复 OAuth。实际新增 `MANAGEMENT_SCHEMA_OBSERVATION` 与两份 `MANAGEMENT_DIRECTORY`；原授权版本 1、绑定代数 0 保持。
+- 后续 Sun Browser 窗口读取返回 `cgWindowNotFound`；已完成的界面目录验收有效，最后账户同步通过正式 HTTPS 接口与数据库回执验收，不将其写成完整 GUI 操作成功。
+- 当前已接入 BC 通过正式同步接口一次受理后完成：run `2b1de5fb-c7ef-409e-ac67-59f124812051` 为 `COMPLETE`，耗时 20.469 秒。SUBJECT/AUTHORIZED/BCS/ASSETS/DETAILS/ROLES 六阶段各一页，分别核验 1/42/1/42/42/42 条；六页均保存官方业务 `request_id`、操作名与一致 schema 摘要。
+- 42 个账户均在 BC 内、已授权且有效，并更新到本次 run；连接与绑定为 ACTIVE，凭据/授权版本仍为 1，绑定代数仍为 0。正式 GET 回读均 HTTP 200，待同步 BC 数为 0，发布审计恰一条。未新增 OAuth、绑定或切换默认连接；脱敏回执留在服务器私有验收文件。
 
 现有测试授权只有一个已明确接入的真实 BC；多 BC 并发行为由隔离测试验证。素材上传与广告创建仍需各自的实际权限/服务证据，本功能不自动开放写能力。
