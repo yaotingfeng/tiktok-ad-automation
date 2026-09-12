@@ -179,7 +179,7 @@ def test_wrong_video_cannot_supply_cover(wire, changes):
         read_video_cover(client, advertiser_id="a", video_id="v", md5="a" * 32)
 
 
-def test_info_requires_exact_id_internal_name_and_displayable_geometry():
+def test_cover_info_requires_exact_id_receipt_digest_and_geometry():
     from app.modules.materials.cover_sdk import verified_image
 
     image = {
@@ -202,9 +202,22 @@ def test_info_requires_exact_id_internal_name_and_displayable_geometry():
         )
 
     assert verify(image) == {"image_id": "target", "signature": "a" * 32}
+    assert verify({**image, "file_name": "deduplicated.jpg", "displayable": False}) == {
+        "image_id": "target",
+        "signature": "a" * 32,
+    }
+    assert (
+        verified_image(
+            {"list": [{**image, "file_name": "unknown.jpg"}]},
+            image_id="target",
+            remote_name="cover-owned.jpg",
+            width=720,
+            height=1280,
+        )
+        is None
+    )
     for change in (
         {"image_id": "source"},
-        {"file_name": "foreign.jpg"},
         {"displayable": "true"},
         {"width": 1280},
         {"signature": "b" * 32},

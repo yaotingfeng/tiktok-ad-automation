@@ -435,11 +435,9 @@ def test_search_at_official_10000_visibility_cap_is_incomplete(
     assert job_state(identity).error_code == "cover_search_incomplete"
 
 
-def test_known_id_wrong_name_hash_or_geometry_never_ready(
-    source_env, redis_client, wire
-):
+def test_known_id_wrong_hash_or_geometry_never_ready(source_env, redis_client, wire):
     identity = successful_upload(source_env, redis_client, wire)
-    wire[1].append(image_info(identity, file_name="foreign.jpg"))
+    wire[1].append(image_info(identity, file_name="foreign.jpg", signature="b" * 32))
     run(source_env, redis_client, identity, read=True)
     assert job_state(identity).status == "UNKNOWN"
     with Session(engine) as session, session.begin():
@@ -940,3 +938,17 @@ def test_cover_worker_rejects_boolean_revision_and_extra_payload_before_db(
                 payload=payload,
             )
     assert not wire[0]
+
+
+def test_deduplicated_video_cover_with_false_image_displayable_reuses_known_id(
+    source_env, redis_client, wire
+):
+    identity = successful_upload(source_env, redis_client, wire)
+    before = len(wire[0])
+    wire[1].append(
+        image_info(identity, file_name="renamed-by-dedup.jpg", displayable=False)
+    )
+    run(source_env, redis_client, identity, read=True)
+    assert job_state(identity).status == "READY"
+    assert len(wire[0]) == before + 1
+    assert "image/ad/info" in wire[0][-1][1]

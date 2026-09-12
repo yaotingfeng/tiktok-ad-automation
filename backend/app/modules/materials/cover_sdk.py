@@ -144,8 +144,11 @@ def verified_image(
     if (
         _identifier(row.get("image_id")) is None
         or row.get("image_id") != image_id
-        or row.get("file_name") != remote_name
-        or row.get("displayable") is not True
+        # TikTok 可按相同图片摘要复用 ID 并更新名称；已有回执摘要时不以名称定归属。
+        or (signature is None and row.get("file_name") != remote_name)
+        # 官方图片上传成功示例包含 displayable=false；视频封面不等同独立图片广告。
+        # 此处核实已返回 ID、内容摘要和视频比例；最终使用仍由广告创建/回读确认。
+        or type(row.get("displayable")) is not bool
         or not actual_signature
         or (signature is not None and actual_signature != signature.lower())
         or not _dimension(row.get("width"))
