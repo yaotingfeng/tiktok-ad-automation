@@ -1,4 +1,6 @@
+import json
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
 from alembic import command
@@ -8,7 +10,6 @@ from sqlmodel import Session
 from app.modules.accounts.models import (
     AdvertiserAccount,
     BCAccountAccess,
-    DiscoveryRun,
     TenantBC,
     TikTokConnection,
 )
@@ -39,19 +40,29 @@ def test_staging_migration_preserves_live_directory_and_refuses_evidence_loss(
             )
             session.add_all([connection, bc, account])
             session.flush()
-            run = DiscoveryRun(
-                tenant_id=context.tenant_id,
-                actor_id=context.actor_id,
-                connection_id=connection.id,
-                credential_revision=7,
-                status="COMPLETE",
-                work={
-                    "stage": "FINALIZE",
-                    "immutable_remote_id": account.advertiser_id,
+            run_id, connection_id = uuid4(), connection.id
+            # 只写 mcp01 已存在的列，保全测试不依赖当前 ORM 的新增字段。
+            session.execute(
+                text("""
+                INSERT INTO discovery_run
+                (id,tenant_id,actor_id,connection_id,credential_revision,status,work,
+                 revision,sent_count,created_at)
+                VALUES (:id,:tenant,:actor,:connection,7,'COMPLETE',
+                        CAST(:work AS json),0,0,now())
+                """),
+                {
+                    "id": run_id,
+                    "tenant": context.tenant_id,
+                    "actor": context.actor_id,
+                    "connection": connection_id,
+                    "work": json.dumps(
+                        {
+                            "stage": "FINALIZE",
+                            "immutable_remote_id": account.advertiser_id,
+                        }
+                    ),
                 },
             )
-            session.add(run)
-            session.flush()
             session.add(
                 BCAccountAccess(
                     tenant_id=context.tenant_id,
@@ -63,11 +74,10 @@ def test_staging_migration_preserves_live_directory_and_refuses_evidence_loss(
                     active=True,
                     can_build=True,
                     permission_state="VERIFIED",
-                    last_seen_run_id=run.id,
+                    last_seen_run_id=run_id,
                 )
             )
             session.commit()
-            run_id, connection_id = run.id, connection.id
 
         def live_snapshot():
             with engine.connect() as database:

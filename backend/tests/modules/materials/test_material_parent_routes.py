@@ -37,7 +37,11 @@ def test_ingest_acceptance_persists_route_and_replay_ignores_missing_current_def
 
 def test_legacy_upload_acceptance_persists_route_and_replay_ignores_missing_default(
     upload_owner,
+    monkeypatch,
 ):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "OBJECT_STORAGE_PROVIDER", "s3")
     from app.modules.materials.schemas import UploadFileRequest
     from app.modules.materials.uploads import start_upload_batch
 

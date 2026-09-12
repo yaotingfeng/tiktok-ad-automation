@@ -16,6 +16,7 @@ from app.core.errors import ERROR_HTTP_STATUS, DomainError
 from app.integrations.tiktok.bounded_resources import bounded_session
 from app.integrations.tiktok.mcp.protocol import load_mcp_protocol
 from app.integrations.tiktok.mcp_auth.bootstrap import candidate_business_centers
+from app.integrations.tiktok.mcp_auth.management import connection_business_centers
 from app.integrations.tiktok.mcp_auth.service import (
     accept_mcp_callback,
     cancel_mcp_callback,
@@ -24,18 +25,23 @@ from app.integrations.tiktok.mcp_auth.service import (
 )
 from app.modules.accounts.channel_configuration import mcp_configuration
 from app.modules.accounts.connections import (
-    bind_candidate_bc,
+    add_connection_bcs,
+    bind_candidate_bcs,
     disable_connection,
+    disable_connection_bc,
     request_mcp_revocation,
+    sync_connection_bc,
 )
 from app.modules.accounts.schemas import (
     AuthorizationRequest,
     AuthorizationURL,
+    McpBindingItem,
     McpBindingRequest,
     McpBindingResult,
     McpCandidateBC,
     McpCandidateBCPage,
     McpConfiguration,
+    McpSyncResult,
 )
 from app.modules.tenants.permissions import require_tenant
 
@@ -99,7 +105,7 @@ def candidate_bcs(
     response.headers["Cache-Control"] = "no-store"
     return McpCandidateBCPage(
         items=[
-            McpCandidateBC(**item)
+            McpCandidateBC.model_validate(item)
             for item in items[(page - 1) * page_size : page * page_size]
         ],
         page=page,
@@ -119,11 +125,145 @@ def binding(
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="manage"
     )
-    run_id = bind_candidate_bc(
-        session, context=context, attempt_id=attempt_id, bc_id=body.bc_id
+    session.rollback()
+    with Redis.from_url(settings.REDIS_URL, decode_responses=True) as redis_client:
+        connection_id, items = bind_candidate_bcs(
+            database_engine=engine,
+            redis_client=redis_client,
+            context=context,
+            attempt_id=attempt_id,
+            bc_ids=body.bc_ids,
+            task_deadline=datetime.now(UTC) + timedelta(seconds=30),
+        )
+    return McpBindingResult(
+        connection_id=connection_id,
+        items=[McpBindingItem.model_validate(item) for item in items],
+    )
+
+
+@router.get(
+    "/connections/{connection_id}/available-bcs",
+    response_model=McpCandidateBCPage,
+    operation_id="availableBcs",
+)
+def available_bcs(
+    tenant_id: UUID,
+    connection_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    response: Response,
+    page: int = Query(default=1, ge=1, le=100),
+    page_size: int = Query(default=50, ge=1, le=100),
+    refresh: bool = False,
+) -> McpCandidateBCPage:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="manage"
+    )
+    session.rollback()
+    with Redis.from_url(settings.REDIS_URL, decode_responses=True) as redis_client:
+        items = connection_business_centers(
+            database_engine=engine,
+            redis_client=redis_client,
+            context=context,
+            connection_id=connection_id,
+            task_deadline=datetime.now(UTC) + timedelta(seconds=30),
+            refresh=refresh,
+        )
+    response.headers["Cache-Control"] = "no-store"
+    return McpCandidateBCPage(
+        items=[
+            McpCandidateBC.model_validate(item)
+            for item in items[(page - 1) * page_size : page * page_size]
+        ],
+        page=page,
+        page_size=page_size,
+        total=len(items),
+    )
+
+
+@router.post(
+    "/connections/{connection_id}/bindings",
+    response_model=McpBindingResult,
+    operation_id="addBindings",
+)
+def add_bindings(
+    tenant_id: UUID,
+    connection_id: UUID,
+    body: McpBindingRequest,
+    session: SessionDep,
+    user: CurrentUser,
+) -> McpBindingResult:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="manage"
+    )
+    session.rollback()
+    with Redis.from_url(settings.REDIS_URL, decode_responses=True) as redis_client:
+        identity, items = add_connection_bcs(
+            database_engine=engine,
+            redis_client=redis_client,
+            context=context,
+            connection_id=connection_id,
+            bc_ids=body.bc_ids,
+            task_deadline=datetime.now(UTC) + timedelta(seconds=30),
+        )
+    return McpBindingResult(
+        connection_id=identity,
+        items=[McpBindingItem.model_validate(item) for item in items],
+    )
+
+
+@router.post(
+    "/connections/{connection_id}/bcs/{bc_id}/sync",
+    response_model=McpSyncResult,
+    operation_id="syncMcpBc",
+)
+def sync_bc(
+    tenant_id: UUID,
+    connection_id: UUID,
+    bc_id: str,
+    session: SessionDep,
+    user: CurrentUser,
+) -> McpSyncResult:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="manage"
+    )
+    session.rollback()
+    # 同步前更新过期目录/工具证据；网络期间不持有请求事务。
+    with Redis.from_url(settings.REDIS_URL, decode_responses=True) as redis_client:
+        connection_business_centers(
+            database_engine=engine,
+            redis_client=redis_client,
+            context=context,
+            connection_id=connection_id,
+            task_deadline=datetime.now(UTC) + timedelta(seconds=30),
+        )
+    run_id = sync_connection_bc(
+        session, context=context, connection_id=connection_id, bc_id=bc_id
     )
     session.commit()
-    return McpBindingResult(discovery_run_id=run_id)
+    return McpSyncResult(discovery_run_id=run_id)
+
+
+@router.delete(
+    "/connections/{connection_id}/bcs/{bc_id}",
+    status_code=204,
+    operation_id="unbindMcpBc",
+)
+def unbind_bc(
+    tenant_id: UUID,
+    connection_id: UUID,
+    bc_id: str,
+    session: SessionDep,
+    user: CurrentUser,
+) -> Response:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="manage"
+    )
+    disable_connection_bc(
+        session, context=context, connection_id=connection_id, bc_id=bc_id
+    )
+    session.commit()
+    return Response(status_code=204)
 
 
 @router.post("/connections/{connection_id}/disable", status_code=204)

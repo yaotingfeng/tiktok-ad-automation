@@ -11,10 +11,10 @@ from sqlmodel import Session, delete, select
 from app.core.config import settings
 from app.core.db import engine
 from app.modules.accounts.connection_models import ConnectionAuthorization
-from app.modules.accounts.connections import bind_candidate_bc
 from app.modules.accounts.models import DiscoveryRun, TikTokConnection
 from tests.modules.accounts.capabilities.test_service import run, start
 from tests.modules.accounts.test_mcp_authorization import accept, issue
+from tests.modules.accounts.test_mcp_binding import bind_candidate_bc
 from tests.modules.accounts.test_mcp_directory_publish import (
     bc_page,
     enqueue_directory,
@@ -76,6 +76,7 @@ def expired_mcp(directory_context, oauth_wire, catalog_wire, redis_client, monke
                 DiscoveryRun.connection_id == connection_id,
                 DiscoveryRun.candidate_attempt_id.is_(None),
                 DiscoveryRun.mcp_candidate_attempt_id.is_(None),
+                DiscoveryRun.work["mode"].as_string() == "RUNTIME_REFRESH",
             )
         ).one()
         env.update(job_id=job_id, run_id=runtime.id)

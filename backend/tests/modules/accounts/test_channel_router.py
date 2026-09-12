@@ -223,6 +223,7 @@ def test_new_mcp_authorization_clears_prior_refresh_failure_projection(
         state_hash=uuid4().hex,
         expires_at=now + timedelta(minutes=5),
         status="ACCEPTED",
+        completed_at=now,
     )
     session.add(attempt)
     session.flush()

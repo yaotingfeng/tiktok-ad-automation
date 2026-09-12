@@ -18,9 +18,9 @@ def test_draft_connection_migration_preserves_history_and_guards_scope_and_downg
             context, preview, _ = historical_rows(session, connections=0)
             from tests.modules.builds.test_drafts import account
 
-            account(session, context)
+            account(session, context, historical=True)
             other, other_preview, _ = historical_rows(session, connections=0)
-            account(session, other)
+            account(session, other, historical=True)
             draft_id = preview.draft_id
         query = text(
             "SELECT to_jsonb(d) - 'execution_connection_id' FROM build_draft d ORDER BY id"

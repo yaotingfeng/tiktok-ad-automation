@@ -272,18 +272,21 @@ class BCConnectionBinding(SQLModel, table=True):
                 "tiktok_connection.kind",
             ],
         ),
-        Index(
-            "uq_mcp_one_bc",
-            "tenant_id",
-            "connection_id",
-            unique=True,
-            postgresql_where=text("kind = 'OFFICIAL_MCP'"),
+        CheckConstraint(
+            "status IN ('SYNCING','ACTIVE','ERROR','DISABLED') AND "
+            "authorization_revision >= 0 AND revision >= 0",
+            name="ck_bc_binding_lifecycle",
         ),
     )
     tenant_id: UUID = Field(primary_key=True)
     bc_id: str = Field(primary_key=True, max_length=128)
     connection_id: UUID = Field(primary_key=True)
     kind: ChannelKind = Field(sa_column=Column(String(32), nullable=False))
+    status: str = Field(default="ACTIVE", max_length=16)
+    authorization_revision: int = 0
+    # 解绑使旧冻结任务永久失效；例行同步和凭据续期不改变绑定代数。
+    revision: int = 0
+    last_error_code: str | None = Field(default=None, max_length=128)
 
 
 class BCDefaultRoute(SQLModel, table=True):

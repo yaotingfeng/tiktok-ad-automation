@@ -7,7 +7,7 @@ from alembic import command
 from sqlalchemy import inspect, text
 from sqlmodel import Session
 
-from app.modules.accounts.models import DiscoveryRun, TenantBC, TikTokConnection
+from app.modules.accounts.models import TenantBC, TikTokConnection
 from tests.migration_database import historical_database
 from tests.modules.conftest import create_context
 
@@ -89,16 +89,24 @@ def test_directory_bc_scope_keeps_remote_pages_separate(monkeypatch):
             connection = TikTokConnection(tenant_id=context.tenant_id, status="ACTIVE")
             session.add(connection)
             session.flush()
-            run = DiscoveryRun(
-                tenant_id=context.tenant_id,
-                connection_id=connection.id,
-                actor_id=context.actor_id,
-                status="RUNNING",
-                work={"bc_id": "bc-a"},
+            run_id, connection_id = uuid4(), connection.id
+            # 历史 schema 只播种当时已有的字段，避免当前 ORM 写入后续迁移列。
+            session.execute(
+                text("""
+                INSERT INTO discovery_run
+                (id,tenant_id,actor_id,connection_id,credential_revision,status,work,
+                 revision,sent_count,created_at)
+                VALUES (:id,:tenant,:actor,:connection,0,'RUNNING',
+                        '{"bc_id":"bc-a"}'::json,0,0,now())
+                """),
+                {
+                    "id": run_id,
+                    "tenant": context.tenant_id,
+                    "actor": context.actor_id,
+                    "connection": connection_id,
+                },
             )
-            session.add(run)
             session.commit()
-            run_id, connection_id = run.id, connection.id
         with engine.begin() as database:
             database.execute(
                 text("""

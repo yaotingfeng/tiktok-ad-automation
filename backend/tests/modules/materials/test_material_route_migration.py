@@ -9,7 +9,6 @@ from sqlalchemy import MetaData, Table, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
-from app.modules.accounts.connection_models import BCConnectionBinding
 from app.modules.accounts.models import (
     AdvertiserAccount,
     BCAccountAccess,
@@ -58,8 +57,13 @@ def test_history_is_preserved_and_new_route_evidence_cannot_be_rewritten_or_drop
                 ]
             )
             db.flush()
-            db.add(
-                BCConnectionBinding(**scope, connection_id=conn.id, kind="OFFICIAL_API")
+            # 历史绑定仅包含原有归属列，不播种后续多 BC 生命周期字段。
+            db.execute(
+                text("""
+                    INSERT INTO bc_connection_binding (tenant_id,bc_id,connection_id,kind)
+                    VALUES (:tenant_id,:bc_id,:connection_id,'OFFICIAL_API')
+                """),
+                {**scope, "connection_id": conn.id},
             )
             db.add(
                 BCAccountAccess(

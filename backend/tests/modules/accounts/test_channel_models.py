@@ -47,7 +47,7 @@ def test_connection_rejects_negative_revision(session, context, field):
         session.flush()
 
 
-def test_binding_one_bc_for_mcp_but_multiple_for_api(session, context):
+def test_binding_multiple_bcs_for_both_channels(session, context):
     from app.modules.accounts.connection_models import BCConnectionBinding
 
     mcp = connection(session, context)
@@ -73,17 +73,16 @@ def test_binding_one_bc_for_mcp_but_multiple_for_api(session, context):
         )
     )
     session.flush()
-    with pytest.raises(IntegrityError), session.begin_nested():
-        session.add(
-            BCConnectionBinding(
-                tenant_id=context.tenant_id,
-                bc_id="bc-b",
-                connection_id=mcp.id,
-                kind="OFFICIAL_MCP",
-            )
+    session.add(
+        BCConnectionBinding(
+            tenant_id=context.tenant_id,
+            bc_id="bc-b",
+            connection_id=mcp.id,
+            kind="OFFICIAL_MCP",
         )
-        session.flush()
-    # 伪装为 API 不得绕过 MCP 单 BC 约束。
+    )
+    session.flush()
+    # 同一连接的通道不能伪装为 API。
     with pytest.raises(IntegrityError), session.begin_nested():
         session.add(
             BCConnectionBinding(

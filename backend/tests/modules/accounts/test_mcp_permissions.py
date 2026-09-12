@@ -1,12 +1,14 @@
 """可见工具与成功读取均不得扩大当前候选的写权限。"""
 
+import pytest
 from sqlmodel import Session, select
 
 from app.core.db import engine
+from app.core.errors import DomainError
 from app.modules.accounts.connection_models import ConnectionAuthorization
-from app.modules.accounts.connections import bind_candidate_bc
 from app.modules.accounts.models import BCAccountAccess, DiscoveryRun
 from tests.modules.accounts.test_mcp_authorization import accept, issue
+from tests.modules.accounts.test_mcp_binding import bind_candidate_bc
 from tests.modules.accounts.test_mcp_directory_publish import (  # noqa: F401
     app_config,
     bc_page,
@@ -44,34 +46,29 @@ def test_unknown_oauth_scope_remains_unknown_after_complete_reads(
     bc_id = f"bc-{directory_context.tenant_id}"
     bc_page(catalog_wire, bcs=(bc_id,), total_number=1)
     read_bcs(directory_context, candidate, redis_client)
-    with Session(engine) as own:
-        run_id = bind_candidate_bc(
+    # 多 BC 共用活动凭据前必须有可核实的 OAuth 范围；读取成功不能补造范围。
+    with Session(engine) as own, pytest.raises(DomainError) as error:
+        bind_candidate_bc(
             own, context=directory_context, attempt_id=candidate, bc_id=bc_id
         )
-        own.commit()
-    enqueue_directory(catalog_wire, bc_id, (f"ad-{directory_context.tenant_id}",))
-    assert finish(directory_context, run_id, redis_client)[0] == "COMPLETE"
+    assert error.value.code == "mcp_candidate_directory_incomplete"
     with Session(engine) as own:
-        run = own.get(DiscoveryRun, run_id)
-        authorization = own.exec(
-            select(ConnectionAuthorization).where(
-                ConnectionAuthorization.connection_id == run.connection_id
-            )
-        ).one()
-        assert authorization.scopes == []
-        assert authorization.permission_summary == {
-            "read_authorized": None,
-            "upload_authorized": None,
-            "build_authorized": None,
-        }
-        grant = own.exec(
-            select(BCAccountAccess).where(
-                BCAccountAccess.connection_id == run.connection_id
-            )
-        ).one()
-        assert grant.active and grant.authorized
-        assert not grant.can_build and not grant.can_upload
-        assert grant.permission_state == "UNKNOWN"
+        assert (
+            own.exec(
+                select(ConnectionAuthorization).where(
+                    ConnectionAuthorization.tenant_id == directory_context.tenant_id
+                )
+            ).all()
+            == []
+        )
+        assert (
+            own.exec(
+                select(BCAccountAccess).where(
+                    BCAccountAccess.tenant_id == directory_context.tenant_id
+                )
+            ).all()
+            == []
+        )
 
 
 def test_mcp_capability_worker_uses_frozen_connection_and_keeps_write_unknown(

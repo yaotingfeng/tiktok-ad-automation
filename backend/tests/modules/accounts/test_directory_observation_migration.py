@@ -1,6 +1,7 @@
 """升级保留目录与历史观察，只让实际权限或成员变化推进语义围栏。"""
 
 from datetime import UTC, datetime
+from uuid import uuid4
 
 from alembic import command
 from sqlalchemy import text
@@ -9,7 +10,6 @@ from sqlmodel import Session
 from app.modules.accounts.models import (
     AdvertiserAccount,
     BCAccountAccess,
-    DiscoveryRun,
     TenantBC,
     TikTokConnection,
 )
@@ -45,15 +45,24 @@ def test_upgrade_preserves_history_and_separates_observation_from_authority(
                 authorized=True,
                 active=True,
             )
-            run = DiscoveryRun(
-                tenant_id=context.tenant_id,
-                actor_id=context.actor_id,
-                connection_id=connection.id,
-                status="COMPLETE",
+            tenant_id, connection_id, run_id = context.tenant_id, connection.id, uuid4()
+            # 保留历史 schema 的播种形状，不使用包含新增 BC 围栏列的当前 ORM。
+            session.execute(
+                text("""
+                INSERT INTO discovery_run
+                (id,tenant_id,actor_id,connection_id,credential_revision,status,work,
+                 revision,sent_count,created_at)
+                VALUES (:id,:tenant,:actor,:connection,0,'COMPLETE','{}'::json,0,0,now())
+                """),
+                {
+                    "id": run_id,
+                    "tenant": tenant_id,
+                    "actor": context.actor_id,
+                    "connection": connection_id,
+                },
             )
-            session.add_all([grant, run])
+            session.add(grant)
             session.flush()
-            tenant_id, connection_id, run_id = context.tenant_id, connection.id, run.id
         queries = {
             table: text(f"SELECT row_to_json(r)::text FROM {table} r ORDER BY 1")
             for table in (

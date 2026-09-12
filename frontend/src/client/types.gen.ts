@@ -177,6 +177,22 @@ export type BCPublic = {
      * Default Connection Id
      */
     default_connection_id?: string | null;
+    /**
+     * Binding Status
+     */
+    binding_status?: 'SYNCING' | 'ACTIVE' | 'ERROR' | 'DISABLED' | null;
+    /**
+     * Last Discovery
+     */
+    last_discovery?: string | null;
+    /**
+     * Discovery Status
+     */
+    discovery_status?: 'QUEUED' | 'RUNNING' | 'ADMISSION_WAIT' | 'ERROR' | 'COMPLETE' | 'CANCELLED' | null;
+    /**
+     * Error Code
+     */
+    error_code?: string | null;
 };
 
 /**
@@ -353,6 +369,10 @@ export type ConnectionPublic = {
      * Binding Count
      */
     binding_count?: number;
+    /**
+     * Pending Binding Count
+     */
+    pending_binding_count?: number;
     /**
      * Is Default
      */
@@ -888,6 +908,10 @@ export type FrozenTikTokRoute = {
      * Adapter Contract Revision
      */
     adapter_contract_revision: string;
+    /**
+     * Binding Revision
+     */
+    binding_revision?: number;
 };
 
 /**
@@ -1668,19 +1692,13 @@ export type MaterialPublic = {
 };
 
 /**
- * McpBindingRequest
+ * McpBindingItem
  */
-export type McpBindingRequest = {
+export type McpBindingItem = {
     /**
      * Bc Id
      */
     bc_id: string;
-};
-
-/**
- * McpBindingResult
- */
-export type McpBindingResult = {
     /**
      * Discovery Run Id
      */
@@ -1688,7 +1706,31 @@ export type McpBindingResult = {
     /**
      * Status
      */
-    status?: 'DISCOVERING';
+    status: 'QUEUED' | 'RUNNING' | 'ADMISSION_WAIT' | 'ERROR' | 'COMPLETE' | 'CANCELLED';
+};
+
+/**
+ * McpBindingRequest
+ */
+export type McpBindingRequest = {
+    /**
+     * Bc Ids
+     */
+    bc_ids: Array<string>;
+};
+
+/**
+ * McpBindingResult
+ */
+export type McpBindingResult = {
+    /**
+     * Connection Id
+     */
+    connection_id: string;
+    /**
+     * Items
+     */
+    items: Array<McpBindingItem>;
 };
 
 /**
@@ -1703,6 +1745,14 @@ export type McpCandidateBC = {
      * Name
      */
     name: string;
+    /**
+     * Connected
+     */
+    connected?: boolean;
+    /**
+     * Binding Status
+     */
+    binding_status?: 'SYNCING' | 'ACTIVE' | 'ERROR' | 'DISABLED' | null;
 };
 
 /**
@@ -1747,6 +1797,16 @@ export type McpConfiguration = {
      * Revocation Supported
      */
     revocation_supported?: boolean;
+};
+
+/**
+ * McpSyncResult
+ */
+export type McpSyncResult = {
+    /**
+     * Discovery Run Id
+     */
+    discovery_run_id: string;
 };
 
 /**
@@ -5223,6 +5283,163 @@ export type accountsBindingResponses = {
 };
 
 export type accountsBindingResponse = accountsBindingResponses[keyof accountsBindingResponses];
+
+export type availableBcsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Connection Id
+         */
+        connection_id: string;
+    };
+    query?: {
+        /**
+         * Page
+         */
+        page?: number;
+        /**
+         * Page Size
+         */
+        page_size?: number;
+        /**
+         * Refresh
+         */
+        refresh?: boolean;
+    };
+    url: '/api/tenants/{tenant_id}/tiktok/mcp/connections/{connection_id}/available-bcs';
+};
+
+export type availableBcsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type availableBcsError = availableBcsErrors[keyof availableBcsErrors];
+
+export type availableBcsResponses = {
+    /**
+     * Successful Response
+     */
+    200: McpCandidateBCPage;
+};
+
+export type availableBcsResponse = availableBcsResponses[keyof availableBcsResponses];
+
+export type addBindingsData = {
+    body: McpBindingRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Connection Id
+         */
+        connection_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/tiktok/mcp/connections/{connection_id}/bindings';
+};
+
+export type addBindingsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type addBindingsError = addBindingsErrors[keyof addBindingsErrors];
+
+export type addBindingsResponses = {
+    /**
+     * Successful Response
+     */
+    200: McpBindingResult;
+};
+
+export type addBindingsResponse = addBindingsResponses[keyof addBindingsResponses];
+
+export type syncMcpBcData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Connection Id
+         */
+        connection_id: string;
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/tiktok/mcp/connections/{connection_id}/bcs/{bc_id}/sync';
+};
+
+export type syncMcpBcErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type syncMcpBcError = syncMcpBcErrors[keyof syncMcpBcErrors];
+
+export type syncMcpBcResponses = {
+    /**
+     * Successful Response
+     */
+    200: McpSyncResult;
+};
+
+export type syncMcpBcResponse = syncMcpBcResponses[keyof syncMcpBcResponses];
+
+export type unbindMcpBcData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Connection Id
+         */
+        connection_id: string;
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/tiktok/mcp/connections/{connection_id}/bcs/{bc_id}';
+};
+
+export type unbindMcpBcErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type unbindMcpBcError = unbindMcpBcErrors[keyof unbindMcpBcErrors];
+
+export type unbindMcpBcResponses = {
+    /**
+     * Successful Response
+     */
+    204: void;
+};
+
+export type unbindMcpBcResponse = unbindMcpBcResponses[keyof unbindMcpBcResponses];
 
 export type accountsDisableData = {
     body?: never;

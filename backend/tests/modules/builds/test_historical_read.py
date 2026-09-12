@@ -64,7 +64,10 @@ def renewed(env, step_id, *, subject="observed-subject"):
         )
 
 
-def test_new_authorization_read_is_separate_and_idempotent(recon_env, monkeypatch):
+@pytest.mark.parametrize("historical_six_fields", [False, True])
+def test_new_authorization_read_is_separate_and_idempotent(
+    recon_env, monkeypatch, historical_six_fields
+):
     from app.modules.builds.historical_read import (
         authorize_historical_read,
         process_historical_read,
@@ -78,6 +81,19 @@ def test_new_authorization_read_is_separate_and_idempotent(recon_env, monkeypatc
     step_id, body = arm(env)
     route = renewed(env, step_id)
     request_id = uuid4()
+    # 用旧写入形状生成历史证据；读回时不能因新增默认代数0误判来源被改写。
+    if historical_six_fields:
+        from sqlalchemy import event
+
+        def old_shape(_mapper, _connection, target):
+            target.old_route = {
+                k: v for k, v in target.old_route.items() if k != "binding_revision"
+            }
+            target.new_route = {
+                k: v for k, v in target.new_route.items() if k != "binding_revision"
+            }
+
+        event.listen(BuildHistoricalRead, "before_insert", old_shape, once=True)
     with Session(env.engine) as session:
         read_id = authorize_historical_read(
             session,
@@ -233,8 +249,13 @@ def test_recovery_migration_roundtrip_preserves_real_audit(
 
     from alembic import command
     from alembic.config import Config
-    from sqlalchemy import inspect
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy import inspect, text
 
+    from app.alembic.versions import (
+        mcp_build_recovery_audit_reauthorized_read_only_build_ as migration,
+    )
     from app.core.config import settings
     from app.modules.builds.historical_read import authorize_historical_read
 
@@ -256,17 +277,58 @@ def test_recovery_migration_roundtrip_preserves_real_audit(
     monkeypatch.setattr(
         settings, "DATABASE_URL", env.engine.url.render_as_string(hide_password=False)
     )
-    if populated:
-        with pytest.raises(
-            RuntimeError, match="historical build read evidence cannot be downgraded"
-        ):
-            command.downgrade(cfg, "mcp_material_routes")
-        assert "build_historical_read" in inspect(env.engine).get_table_names()
-    else:
-        command.downgrade(cfg, "mcp_material_routes")
-        assert "build_historical_read" not in inspect(env.engine).get_table_names()
-        command.upgrade(cfg, "head")
-        command.check(cfg)
+    with env.engine.connect() as database:
+        original_constraints = inspect(database).get_check_constraints(
+            "build_historical_read"
+        )
+        original_audits = database.execute(
+            text("SELECT to_jsonb(r) FROM build_historical_read r ORDER BY id")
+        ).all()
+        database.rollback()
+        # 只执行被测迁移，不跨越后续多 BC 的独立降级保护。DDL 全部回滚，
+        # 保留当前 schema 的七字段约束，不能用旧 upgrade 覆盖今日表结构。
+        transaction = database.begin()
+        try:
+            with Operations.context(MigrationContext.configure(database)):
+                if populated:
+                    assert original_audits
+                    with pytest.raises(
+                        RuntimeError,
+                        match="historical build read evidence cannot be downgraded",
+                    ):
+                        migration.downgrade()
+                    assert (
+                        database.execute(
+                            text(
+                                "SELECT to_jsonb(r) FROM build_historical_read r ORDER BY id"
+                            )
+                        ).all()
+                        == original_audits
+                    )
+                else:
+                    assert not original_audits
+                    migration.downgrade()
+                    assert (
+                        "build_historical_read"
+                        not in inspect(database).get_table_names()
+                    )
+                    migration.upgrade()
+                    assert (
+                        "build_historical_read" in inspect(database).get_table_names()
+                    )
+        finally:
+            transaction.rollback()
+        assert (
+            inspect(database).get_check_constraints("build_historical_read")
+            == original_constraints
+        )
+        assert (
+            database.execute(
+                text("SELECT to_jsonb(r) FROM build_historical_read r ORDER BY id")
+            ).all()
+            == original_audits
+        )
+    command.check(cfg)
 
 
 def test_main_http_historical_request_is_tenant_scoped_and_replay_never_refreezes(

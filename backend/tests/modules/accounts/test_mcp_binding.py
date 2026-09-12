@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 import httpx2
 import pytest
@@ -21,7 +22,7 @@ from app.modules.accounts.connection_models import (
     McpAuthorizationAttempt,
 )
 from app.modules.accounts.connections import (
-    bind_candidate_bc,
+    _publish_authorization,
     disable_connection,
     request_mcp_revocation,
 )
@@ -39,7 +40,37 @@ from tests.modules.accounts.test_mcp_authorization import (
     oauth_wire as _oauth_wire,
 )
 
-committed_context = _committed_context
+
+@pytest.fixture
+def committed_context():
+    parent = _committed_context.__wrapped__()
+    base_committed_context = next(parent)
+    yield base_committed_context
+    from sqlmodel import delete
+
+    from app.modules.accounts.connection_models import (
+        ConnectionAuthorization,
+        McpRefreshAttempt,
+    )
+    from app.modules.accounts.models import BCAccountAccess
+
+    with Session(engine) as own:
+        for model in (BCAccountAccess, ConnectionAuthorization, McpRefreshAttempt):
+            own.exec(
+                delete(model).where(model.tenant_id == base_committed_context.tenant_id)
+            )
+        own.commit()
+    parent.close()
+
+
+def bind_candidate_bc(session, *, context, attempt_id, bc_id):
+    """单 BC 断言使用同一批量授权发布边界，不保留生产单候选生命周期。"""
+    _, runs = _publish_authorization(
+        session, context=context, attempt_id=attempt_id, selected=[bc_id]
+    )
+    return UUID(next(run["discovery_run_id"] for run in runs if run["bc_id"] == bc_id))
+
+
 oauth_wire = _oauth_wire
 
 
@@ -97,6 +128,17 @@ def catalog_wire(monkeypatch, policy, redis_client):
 
 
 def bc_page(wire, *, page=1, total_pages=1, bcs=("bc-1", "bc-2"), total_number=2):
+    if page == 1:
+        wire.enqueue_result(
+            "user_info_get",
+            CallToolResult(
+                content=[],
+                structuredContent={
+                    "code": 0,
+                    "data": {"core_user_id": "synthetic-subject"},
+                },
+            ),
+        )
     wire.enqueue_result(
         "bc_get",
         CallToolResult(
@@ -154,18 +196,20 @@ def test_complete_catalog_and_bc_selection_enqueue_only(
         own.commit()
         run = own.get(DiscoveryRun, run_id)
         attempt = own.get(McpAuthorizationAttempt, candidate)
-        assert run.mcp_candidate_attempt_id == candidate
+        assert run.mcp_candidate_attempt_id is None
+        assert run.authorization_revision == 1
         assert run.work["bc_id"] == "bc-1"
-        assert run.work["observation_id"] == str(observation.id)
-        assert own.get(TikTokConnection, attempt.connection_id).status == "PENDING_AUTH"
-        assert (
-            own.exec(
-                select(BCConnectionBinding).where(
-                    BCConnectionBinding.tenant_id == committed_context.tenant_id
-                )
-            ).all()
-            == []
+        active_observation = own.get(
+            ConnectionToolObservation, UUID(run.work["observation_id"])
         )
+        assert active_observation.candidate_attempt_id is None
+        assert own.get(TikTokConnection, attempt.connection_id).status == "ACTIVE"
+        assert attempt.status == "ACCEPTED" and attempt.candidate_ciphertext is None
+        binding = own.get(
+            BCConnectionBinding,
+            (committed_context.tenant_id, "bc-1", attempt.connection_id),
+        )
+        assert binding.status == "SYNCING" and binding.authorization_revision == 1
         assert (
             own.exec(
                 select(BCDefaultRoute).where(
@@ -180,7 +224,7 @@ def test_complete_catalog_and_bc_selection_enqueue_only(
             )
         ).one()
         assert dispatch.task_name == "accounts.mcp_discover"
-        assert dispatch.payload == {"run_id": str(run_id)}
+        assert dispatch.payload == {"run_id": str(run_id), "revision": 0}
         assert (
             bind_candidate_bc(
                 own, context=committed_context, attempt_id=candidate, bc_id="bc-1"
@@ -191,7 +235,7 @@ def test_complete_catalog_and_bc_selection_enqueue_only(
             bind_candidate_bc(
                 own, context=committed_context, attempt_id=candidate, bc_id="bc-2"
             )
-        assert error.value.code == "mcp_connection_bc_conflict"
+        assert error.value.code == "mcp_candidate_superseded"
     methods = [c["method"] for c in catalog_wire.calls]
     assert methods.index("tools/list") < methods.index("tools/call")
 
@@ -309,7 +353,7 @@ def test_incomplete_catalog_never_calls_business(
         )
 
 
-def test_bound_existing_connection_rejects_second_bc(
+def test_existing_binding_reauthorizes_all_visible_bcs(
     committed_context, candidate, catalog_wire, redis_client
 ):
     bc_page(catalog_wire)
@@ -327,11 +371,11 @@ def test_bound_existing_connection_rejects_second_bc(
             )
         )
         own.flush()
-        with pytest.raises(DomainError) as error:
-            bind_candidate_bc(
-                own, context=committed_context, attempt_id=candidate, bc_id="bc-2"
-            )
-        assert error.value.code == "mcp_connection_bc_conflict"
+        connection_id, runs = _publish_authorization(
+            own, context=committed_context, attempt_id=candidate, selected=["bc-2"]
+        )
+        assert {run["bc_id"] for run in runs} == {"bc-1", "bc-2"}
+        assert own.get(TikTokConnection, connection_id).authorization_revision == 1
         own.rollback()
 
 
@@ -400,7 +444,11 @@ def test_complete_bc_pagination_uses_same_candidate_and_stable_totals(
         )
         assert own.get(DiscoveryRun, run_id).work["bc_id"] == "bc-last"
         own.rollback()
-    requests = [call for call in catalog_wire.calls if call["method"] == "tools/call"]
+    requests = [
+        call
+        for call in catalog_wire.calls
+        if call["method"] == "tools/call" and call["params"]["name"] == "bc_get"
+    ]
     assert [call["params"]["arguments"]["page"] for call in requests] == [1, 2, 3]
     assert all(call["params"]["arguments"]["page_size"] == 50 for call in requests)
 

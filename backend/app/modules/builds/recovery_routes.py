@@ -17,7 +17,7 @@ from sqlmodel import Field, SQLModel
 
 
 def _route_shape(column: str) -> str:
-    # 固定模型列名；六字段、严格JSON类型与整数修订，不接受额外键或字符串数字。
+    # 固定模型列名；历史六字段、新增绑定代数，均严格校验 JSON 类型与整数修订。
     keys = "ARRAY['tenant_id','bc_id','connection_id','channel','authorization_revision','adapter_contract_revision']"
     strings = (
         "tenant_id",
@@ -30,7 +30,8 @@ def _route_shape(column: str) -> str:
         [
             f"jsonb_typeof({column})='object'",
             f"{column} ?& {keys}",
-            f"{column} - {keys} = '{{}}'::jsonb",
+            f"{column} - {keys} - 'binding_revision' = '{{}}'::jsonb",
+            f"(NOT {column} ? 'binding_revision' OR (jsonb_typeof({column}->'binding_revision')='number' AND {column}->>'binding_revision' ~ '^[0-9]+$'))",
             *(f"jsonb_typeof({column}->'{key}')='string'" for key in strings),
             f"jsonb_typeof({column}->'authorization_revision')='number'",
             f"{column}->>'authorization_revision' ~ '^[0-9]+$'",

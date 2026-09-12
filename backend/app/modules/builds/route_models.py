@@ -37,6 +37,7 @@ class BuildRouteContext(SQLModel, table=True):
     connection_id: UUID
     channel: str = Field(max_length=32)
     authorization_revision: int
+    binding_revision: int = 0
     adapter_contract_revision: str = Field(max_length=128)
 
 

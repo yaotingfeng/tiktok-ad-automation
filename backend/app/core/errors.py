@@ -13,6 +13,8 @@ ERROR_HTTP_STATUS: dict[str, int] = {
     "mcp_candidate_unavailable": 409,
     "mcp_candidate_superseded": 409,
     "mcp_candidate_operation_forbidden": 403,
+    "mcp_management_operation_forbidden": 403,
+    "discovery_stale": 409,
     "mcp_candidate_directory_incomplete": 409,
     "mcp_candidate_bc_unknown": 409,
     "mcp_connection_bc_conflict": 409,
@@ -64,6 +66,7 @@ ERROR_HTTP_STATUS: dict[str, int] = {
     "connection_channel_mismatch": 409,
     "connection_tenant_mismatch": 403,
     "route_authorization_changed": 409,
+    "route_binding_changed": 409,
     "route_contract_changed": 409,
     "route_evidence_stale": 409,
     "gateway_credentials_changed": 409,
@@ -238,6 +241,12 @@ ERROR_HTTP_STATUS: dict[str, int] = {
 # Public messages are application-owned. DomainError.message may contain raw
 # integration details, so it must never become an HTTP response or log field.
 ERROR_PUBLIC_MESSAGES: dict[str, str] = {
+    "mcp_refresh_pending": "授权凭据正在自动续期，请稍后重试",
+    "mcp_refresh_unknown": "授权续期结果暂未确认，请查看连接状态",
+    "mcp_refresh_reauth_required": "授权已失效，请重新授权",
+    "gateway_credentials_changed": "授权凭据已更新，请重试当前读取",
+    "route_binding_changed": "该 BC 的接入关系已变更，请重新创建任务",
+    "discovery_stale": "该账户同步任务已失效，请重新同步",
     "mcp_business_error": "TikTok MCP 拒绝了本次业务请求，请联系管理员核查接口参数或权限",
     "ingest_api_required": "请从新版批量上传入口导入文件",
     "material_remote_source_unavailable": "来源账户素材暂不可读，请恢复授权或重新上传",

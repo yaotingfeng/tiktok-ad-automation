@@ -16,11 +16,12 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
-# 与 FrozenTikTokRoute 的六字段一致；COALESCE 防止 JSON null/缺键通过 SQL 三值检查。
+# 历史不可变路由缺少 binding_revision 时固定为代数 0；新路由显式记录绑定代数。
 _ROUTE_VALID = """
 jsonb_typeof(frozen_route) = 'object'
 AND frozen_route ?& ARRAY['tenant_id','bc_id','connection_id','channel','authorization_revision','adapter_contract_revision']
-AND frozen_route - ARRAY['tenant_id','bc_id','connection_id','channel','authorization_revision','adapter_contract_revision'] = '{}'::jsonb
+AND frozen_route - ARRAY['tenant_id','bc_id','connection_id','channel','authorization_revision','adapter_contract_revision','binding_revision'] = '{}'::jsonb
+AND (NOT frozen_route ? 'binding_revision' OR (jsonb_typeof(frozen_route->'binding_revision') = 'number' AND frozen_route->>'binding_revision' ~ '^[0-9]+$'))
 AND jsonb_typeof(frozen_route->'tenant_id') = 'string'
 AND jsonb_typeof(frozen_route->'bc_id') = 'string'
 AND jsonb_typeof(frozen_route->'connection_id') = 'string'

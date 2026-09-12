@@ -174,6 +174,7 @@ def _route(job: CapabilityJob) -> FrozenTikTokRoute:
         connection_id=job.connection_id,
         channel="OFFICIAL_MCP" if job.channel == "OFFICIAL_MCP" else "OFFICIAL_API",
         authorization_revision=job.authorization_revision,
+        binding_revision=job.binding_revision,
         adapter_contract_revision=job.adapter_contract_revision,
     )
 
@@ -230,6 +231,7 @@ def start_capability_refresh(
             CapabilityJob.bc_id == bc_id,
             CapabilityJob.connection_id == connection_id,
             CapabilityJob.authorization_revision == conn.authorization_revision,
+            CapabilityJob.binding_revision == route.binding_revision,
             CapabilityJob.channel == conn.kind,
             CapabilityJob.adapter_contract_revision == conn.adapter_contract_revision,
             CapabilityJob.directory_basis == basis,
@@ -254,6 +256,7 @@ def start_capability_refresh(
                     credential_revision=conn.credential_revision,
                     channel=route.channel,
                     authorization_revision=route.authorization_revision,
+                    binding_revision=route.binding_revision,
                     adapter_contract_revision=route.adapter_contract_revision,
                     directory_basis=basis,
                 )

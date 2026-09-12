@@ -60,7 +60,7 @@ AND EXISTS (SELECT 1 FROM bc_account_access a
  JOIN tenant_bc b ON b.tenant_id=a.tenant_id AND b.bc_id=a.bc_id
  JOIN advertiser_account aa ON aa.tenant_id=a.tenant_id AND aa.advertiser_id=a.advertiser_id
  JOIN build_route_context r ON r.tenant_id=s.tenant_id AND r.preview_id=s.preview_id AND r.connection_id=a.connection_id
- JOIN bc_connection_binding binding ON binding.tenant_id=r.tenant_id AND binding.bc_id=r.bc_id AND binding.connection_id=r.connection_id AND binding.kind=r.channel
+ JOIN bc_connection_binding binding ON binding.tenant_id=r.tenant_id AND binding.bc_id=r.bc_id AND binding.connection_id=r.connection_id AND binding.kind=r.channel AND binding.status='ACTIVE' AND binding.revision=r.binding_revision
  JOIN connection_authorization auth ON auth.tenant_id=r.tenant_id AND auth.connection_id=r.connection_id AND auth.authorization_revision=r.authorization_revision
  WHERE a.connection_id=u.connection_id AND c.kind=r.channel AND c.authorization_revision=r.authorization_revision AND c.adapter_contract_revision=r.adapter_contract_revision
  AND auth.source<>'UNKNOWN' AND auth.permission_summary->'build_authorized'='true'::jsonb AND jsonb_array_length(auth.scopes)>0
@@ -85,7 +85,7 @@ AND EXISTS (SELECT 1 FROM bc_account_access a
  JOIN tenant_bc b ON b.tenant_id=a.tenant_id AND b.bc_id=a.bc_id
  JOIN advertiser_account aa ON aa.tenant_id=a.tenant_id AND aa.advertiser_id=a.advertiser_id
  JOIN build_route_context r ON r.tenant_id=s.tenant_id AND r.preview_id=s.preview_id AND r.connection_id=a.connection_id
- JOIN bc_connection_binding binding ON binding.tenant_id=r.tenant_id AND binding.bc_id=r.bc_id AND binding.connection_id=r.connection_id AND binding.kind=r.channel
+ JOIN bc_connection_binding binding ON binding.tenant_id=r.tenant_id AND binding.bc_id=r.bc_id AND binding.connection_id=r.connection_id AND binding.kind=r.channel AND binding.status='ACTIVE' AND binding.revision=r.binding_revision
  JOIN connection_authorization auth ON auth.tenant_id=r.tenant_id AND auth.connection_id=r.connection_id AND auth.authorization_revision=r.authorization_revision
  WHERE a.connection_id=u.connection_id AND c.kind=r.channel AND c.authorization_revision=r.authorization_revision AND c.adapter_contract_revision=r.adapter_contract_revision
  AND auth.source<>'UNKNOWN' AND auth.permission_summary->'read_authorized'='true'::jsonb

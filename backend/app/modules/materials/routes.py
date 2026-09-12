@@ -20,7 +20,8 @@ def route_constraint(
     conditions = [
         f"jsonb_typeof({column}) = 'object'",
         f"{column} ?& {keys}",
-        f"{column} - {keys} = '{{}}'::jsonb",
+        f"{column} - {keys} - 'binding_revision' = '{{}}'::jsonb",
+        f"(NOT {column} ? 'binding_revision' OR (jsonb_typeof({column}->'binding_revision') = 'number' AND {column}->>'binding_revision' ~ '^[0-9]+$'))",
         *[
             f"jsonb_typeof({column}->'{key}') = '{kind}'"
             for key, kind in (

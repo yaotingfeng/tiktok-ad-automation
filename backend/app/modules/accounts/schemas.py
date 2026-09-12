@@ -25,6 +25,7 @@ class ConnectionPublic(BaseModel):
     display_name: str = ""
     bound_bc_id: str | None = None
     binding_count: int = 0
+    pending_binding_count: int = 0
     is_default: bool = False
     authorization_status: str | None = None
     authorization_attempt_id: UUID | None = None
@@ -107,6 +108,10 @@ class BCPublic(BaseModel):
     ownership_conflict: bool
     is_default: bool = False
     default_connection_id: UUID | None = None
+    binding_status: Literal["SYNCING", "ACTIVE", "ERROR", "DISABLED"] | None = None
+    last_discovery: datetime | None = None
+    discovery_status: DiscoveryStatus | None = None
+    error_code: str | None = None
 
 
 class AuthorizationRequest(BaseModel):
@@ -148,17 +153,38 @@ class AppConfiguration(BaseModel):
 
 class McpBindingRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    bc_id: str = Field(min_length=1, max_length=128)
+    bc_ids: list[str] = Field(min_length=1, max_length=1000)
+
+    @model_validator(mode="after")
+    def valid_selection(self) -> Self:
+        if len(self.bc_ids) != len(set(self.bc_ids)) or any(
+            not value.strip() or value != value.strip() or len(value) > 128
+            for value in self.bc_ids
+        ):
+            raise ValueError("BC selection must contain unique exact identifiers")
+        return self
+
+
+class McpBindingItem(BaseModel):
+    bc_id: str
+    discovery_run_id: UUID
+    status: DiscoveryStatus
 
 
 class McpBindingResult(BaseModel):
+    connection_id: UUID
+    items: list[McpBindingItem]
+
+
+class McpSyncResult(BaseModel):
     discovery_run_id: UUID
-    status: Literal["DISCOVERING"] = "DISCOVERING"
 
 
 class McpCandidateBC(BaseModel):
     bc_id: str
     name: str
+    connected: bool = False
+    binding_status: Literal["SYNCING", "ACTIVE", "ERROR", "DISABLED"] | None = None
 
 
 class McpCandidateBCPage(BaseModel):

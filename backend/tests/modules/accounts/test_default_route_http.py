@@ -22,6 +22,7 @@ def test_default_connection_http_is_admin_only_and_returns_frozen_route(
         "connection_id": str(connection.id),
         "channel": "OFFICIAL_API",
         "authorization_revision": connection.authorization_revision,
+        "binding_revision": 0,
         "adapter_contract_revision": connection.adapter_contract_revision,
     }
     assert (

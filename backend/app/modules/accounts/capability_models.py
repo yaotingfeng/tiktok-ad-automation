@@ -37,6 +37,7 @@ class CapabilityJob(SQLModel, table=True):
             "connection_id",
             "channel",
             "authorization_revision",
+            "binding_revision",
             "adapter_contract_revision",
             "directory_basis",
             unique=True,
@@ -75,6 +76,7 @@ class CapabilityJob(SQLModel, table=True):
     # 历史任务没有冻结授权语义，保留空值供审计；新任务必须由 route 填写。
     channel: str | None = Field(default=None, max_length=32)
     authorization_revision: int | None = None
+    binding_revision: int = 0
     adapter_contract_revision: str | None = Field(default=None, max_length=128)
     directory_basis: str = Field(max_length=64)
     status: str = Field(default="PENDING", max_length=16)

@@ -1,5 +1,5 @@
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, cast
+from typing import Annotated, Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Query, Response
@@ -161,6 +161,17 @@ def get_accounts(
         )
     )
     live = live.where(col(BCAccountAccess.checked_at).between(minimum, now))
+    # 共享授权可用不代表此 BC 同步/绑定仍有效。
+    live = live.where(
+        select(BCConnectionBinding.connection_id)
+        .where(
+            BCConnectionBinding.tenant_id == tenant_id,
+            BCConnectionBinding.bc_id == bc_id,
+            BCConnectionBinding.connection_id == connection_id,
+            BCConnectionBinding.status == "ACTIVE",
+        )
+        .exists()
+    )
     build = and_(
         operable,
         authorization.where(
@@ -304,6 +315,18 @@ def get_bcs(
     }
     last_id = decode_cursor(cursor, scope=scope)
     statement = select(TenantBC).where(TenantBC.tenant_id == tenant_id)
+    if connection_id is None:
+        # 保留从未接入的目录记录；已有接入全部解绑后，不再作为可切换工作区。
+        bound = select(BCConnectionBinding.connection_id).where(
+            BCConnectionBinding.tenant_id == tenant_id,
+            BCConnectionBinding.bc_id == TenantBC.bc_id,
+        )
+        statement = statement.where(
+            or_(
+                ~bound.exists(),
+                bound.where(BCConnectionBinding.status != "DISABLED").exists(),
+            )
+        )
     if connection_id is not None:
         connection = session.exec(
             select(TikTokConnection).where(
@@ -319,6 +342,7 @@ def get_bcs(
                 BCConnectionBinding.tenant_id == tenant_id,
                 BCConnectionBinding.connection_id == connection_id,
                 BCConnectionBinding.bc_id == TenantBC.bc_id,
+                BCConnectionBinding.status != "DISABLED",
             )
             .exists()
         )
@@ -337,6 +361,52 @@ def get_bcs(
         .execution_options(populate_existing=True)
     ).all()
     items = [BCPublic.model_validate(row) for row in rows[:limit]]
+    if items and connection_id is not None:
+        item_ids = [item.bc_id for item in items]
+        bindings = {
+            row.bc_id: row
+            for row in session.exec(
+                select(BCConnectionBinding).where(
+                    BCConnectionBinding.tenant_id == tenant_id,
+                    BCConnectionBinding.connection_id == connection_id,
+                    col(BCConnectionBinding.bc_id).in_(item_ids),
+                )
+            ).all()
+        }
+        runs = {
+            row.bc_id: row
+            for row in session.exec(
+                select(DiscoveryRun)
+                .where(
+                    DiscoveryRun.tenant_id == tenant_id,
+                    DiscoveryRun.connection_id == connection_id,
+                    col(DiscoveryRun.bc_id).in_(item_ids),
+                )
+                .distinct(col(DiscoveryRun.bc_id))
+                .order_by(
+                    col(DiscoveryRun.bc_id),
+                    col(DiscoveryRun.created_at).desc(),
+                    col(DiscoveryRun.id).desc(),
+                )
+            ).all()
+        }
+        for item in items:
+            binding = bindings.get(item.bc_id)
+            run = runs.get(item.bc_id)
+            if binding is not None:
+                item.binding_status = cast(
+                    Literal["SYNCING", "ACTIVE", "ERROR", "DISABLED"], binding.status
+                )
+                item.error_code = (
+                    binding.last_error_code
+                    if binding.last_error_code in ERROR_HTTP_STATUS
+                    else None
+                )
+            if run is not None:
+                item.last_discovery = run.completed_at or run.created_at
+                item.discovery_status = cast(DiscoveryStatus, run.status)
+                if run.error_code in ERROR_HTTP_STATUS:
+                    item.error_code = run.error_code
     if items:
         default_connections = dict(
             session.exec(
@@ -464,6 +534,7 @@ def get_connections(
                 BCConnectionBinding.tenant_id == tenant_id,
                 BCConnectionBinding.bc_id == bc_id,
                 BCConnectionBinding.connection_id == TikTokConnection.id,
+                BCConnectionBinding.status != "DISABLED",
             )
             .exists()
         )

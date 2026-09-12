@@ -48,7 +48,7 @@ def _connection(
         (context.tenant_id, bc_id, connection_id),
         populate_existing=True,
     )
-    if binding is None or binding.kind != connection.kind:
+    if binding is None or binding.kind != connection.kind or binding.status != "ACTIVE":
         raise DomainError("connection_bc_mismatch", "连接未绑定当前 BC")
     if connection.status != "ACTIVE":
         raise DomainError("connection_unavailable", "连接当前不可用")
@@ -76,6 +76,10 @@ def freeze_route(
             )
         connection_id = default.connection_id
     connection = _connection(session, context, bc_id, connection_id)
+    binding = session.get(
+        BCConnectionBinding, (context.tenant_id, bc_id, connection_id)
+    )
+    assert binding is not None
     return FrozenTikTokRoute(
         tenant_id=context.tenant_id,
         bc_id=bc_id,
@@ -83,6 +87,7 @@ def freeze_route(
         channel=connection.kind,
         authorization_revision=connection.authorization_revision,
         adapter_contract_revision=connection.adapter_contract_revision,
+        binding_revision=binding.revision,
     )
 
 
@@ -119,6 +124,11 @@ def verify_route(
         raise DomainError("account_required", "该操作必须指定广告账户")
     _bc(session, context, route.bc_id)
     connection = _connection(session, context, route.bc_id, route.connection_id)
+    binding = session.get(
+        BCConnectionBinding, (context.tenant_id, route.bc_id, route.connection_id)
+    )
+    if binding is None or binding.revision != route.binding_revision:
+        raise DomainError("route_binding_changed", "原任务的 BC 绑定已失效，请重新准备")
     if connection.kind != route.channel:
         raise DomainError("connection_channel_mismatch", "连接通道已改变")
     if connection.authorization_revision != route.authorization_revision:

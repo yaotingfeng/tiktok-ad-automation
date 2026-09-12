@@ -1,4 +1,4 @@
-"""MCP 候选目录的持久暂存与原子发布；任何页失败均不改旧 live 快照。"""
+"""MCP 每个 BC 独立暂存与原子发布；失败保留该 BC 的旧快照。"""
 
 import hashlib
 import json
@@ -13,7 +13,6 @@ from sqlmodel import Session, col, select
 
 from app.core.config import settings
 from app.core.context import TenantContext
-from app.core.credentials import decrypt_credentials
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.accounts import AuthorizationFacts
 from app.integrations.tiktok.contracts.discovery import AUTHORIZED_LIST_SOURCE
@@ -22,7 +21,6 @@ from app.integrations.tiktok.mcp.protocol import (
     load_tool_contracts,
     verify_tool_schema,
 )
-from app.integrations.tiktok.mcp_auth.bootstrap import candidate_attempt
 from app.integrations.tiktok.mcp_auth.service import require_mcp_admin
 from app.modules.accounts.connection_models import (
     BCConnectionBinding,
@@ -39,7 +37,7 @@ STAGES = ("SUBJECT", "AUTHORIZED", "BCS", "ASSETS", "DETAILS", "ROLES")
 
 
 def incomplete() -> DomainError:
-    return DomainError("discovery_incomplete", "候选目录证据尚未完整核实")
+    return DomainError("discovery_incomplete", "BC 目录证据尚未完整核实")
 
 
 def _fresh(observed_at: datetime) -> bool:
@@ -47,10 +45,13 @@ def _fresh(observed_at: datetime) -> bool:
     return 0 <= age <= settings.BC_CAPABILITY_MAX_AGE_SECONDS
 
 
-def locked_candidate_run(
-    session: Session, *, context: TenantContext, run_id: UUID
+def locked_mcp_run(
+    session: Session, *, context: TenantContext, run_id: UUID, check_admin: bool = True
 ) -> tuple[DiscoveryRun, TikTokConnection]:
-    require_mcp_admin(session, actor_id=context.actor_id, tenant_id=context.tenant_id)
+    if check_admin:
+        require_mcp_admin(
+            session, actor_id=context.actor_id, tenant_id=context.tenant_id
+        )
     run = session.get(DiscoveryRun, run_id, populate_existing=True)
     if (
         run is None
@@ -58,11 +59,22 @@ def locked_candidate_run(
         or run.actor_id != context.actor_id
     ):
         raise DomainError("discovery_not_found", "当前租户发现任务不存在")
+    # 与绑定、解绑和刷新统一锁序；令牌轮换不改变授权或绑定代数。
     connection = session.exec(
         select(TikTokConnection)
         .where(
             TikTokConnection.id == run.connection_id,
             TikTokConnection.tenant_id == context.tenant_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    binding = session.exec(
+        select(BCConnectionBinding)
+        .where(
+            BCConnectionBinding.tenant_id == run.tenant_id,
+            BCConnectionBinding.connection_id == run.connection_id,
+            BCConnectionBinding.bc_id == run.bc_id,
         )
         .with_for_update()
         .execution_options(populate_existing=True)
@@ -76,26 +88,39 @@ def locked_candidate_run(
     if (
         connection is None
         or connection.kind != "OFFICIAL_MCP"
-        or connection.status == "DISABLED"
+        or connection.status != "ACTIVE"
     ):
         raise DomainError("connection_unavailable", "当前租户 MCP 连接不可用")
-    if run.status == "COMPLETE":
-        return run, connection
     if (
-        run.status not in {"RUNNING", "ADMISSION_WAIT"}
-        or run.mcp_candidate_attempt_id is None
+        run.candidate_attempt_id is not None
+        or run.mcp_candidate_attempt_id is not None
+        or not run.bc_id
+        or run.work.get("bc_id") != run.bc_id
+        or run.authorization_revision != connection.authorization_revision
+        or binding is None
+        or binding.kind != "OFFICIAL_MCP"
+        or binding.status == "DISABLED"
+        or binding.authorization_revision != run.authorization_revision
+        or binding.revision != run.binding_revision
+        or run.status not in {"RUNNING", "ADMISSION_WAIT", "COMPLETE"}
     ):
-        raise DomainError("discovery_stale", "候选发现任务已失效")
-    assert run.mcp_candidate_attempt_id is not None
-    attempt = candidate_attempt(
-        session, context=context, attempt_id=run.mcp_candidate_attempt_id
-    )
-    if (
-        attempt.connection_id != connection.id
-        or run.credential_revision != attempt.base_credential_revision
-    ):
-        raise DomainError("discovery_stale", "候选发现凭据版本已变化")
+        raise DomainError("discovery_stale", "BC 发现任务已失效")
     return run, connection
+
+
+def mark_mcp_run_error(session: Session, *, run: DiscoveryRun, code: str) -> None:
+    """调用者已经锁定并核验代数；失败只能影响当前 BC。"""
+    binding = session.get(
+        BCConnectionBinding, (run.tenant_id, run.bc_id, run.connection_id)
+    )
+    assert binding is not None
+    binding.status = "ERROR"
+    binding.last_error_code = code
+    run.status = "ERROR"
+    run.error_code = code
+    run.claim_id = None
+    run.claimed_until = None
+    session.add_all([binding, run])
 
 
 def verified_observation(
@@ -113,7 +138,10 @@ def verified_observation(
         observation is None
         or observation.tenant_id != run.tenant_id
         or observation.connection_id != run.connection_id
-        or observation.candidate_attempt_id != run.mcp_candidate_attempt_id
+        or observation.candidate_attempt_id is not None
+        or type(observation.call_evidence.get("authorization_revision")) is not int
+        or observation.call_evidence.get("authorization_revision")
+        != run.authorization_revision
         or not observation.pagination_complete
         or not _fresh(observation.observed_at)
         or observation.expected_contract_revision != profile.schema_manifest_sha256
@@ -136,6 +164,11 @@ def verified_observation(
         or not bc_id
         or len(bc_id) > 128
         or observation.call_evidence.get("business_centers_complete") is not True
+        or type(observation.call_evidence.get("business_centers")) is not list
+        or any(
+            type(row) is not dict
+            for row in observation.call_evidence.get("business_centers", [])
+        )
         or not any(
             row.get("bc_id") == bc_id
             for row in observation.call_evidence.get("business_centers", [])
@@ -243,11 +276,20 @@ def authorization_from_staging(subject: dict[str, Any]) -> AuthorizationFacts:
 
 
 def publish_mcp_directory(
-    session: Session, *, context: TenantContext, run_id: UUID
+    session: Session,
+    *,
+    context: TenantContext,
+    run_id: UUID,
+    claim_id: UUID | None = None,
+    revision: int | None = None,
 ) -> None:
-    run, connection = locked_candidate_run(session, context=context, run_id=run_id)
+    run, connection = locked_mcp_run(session, context=context, run_id=run_id)
     if run.status == "COMPLETE":
         return
+    if (claim_id is not None and run.claim_id != claim_id) or (
+        revision is not None and run.revision != revision
+    ):
+        raise DomainError("discovery_stale", "发现任务的执行租约已失效")
     if run.work.get("stage") != "FINALIZE":
         raise incomplete()
     observation = verified_observation(session, run=run)
@@ -318,37 +360,24 @@ def publish_mcp_directory(
             for key in ("name", "currency", "timezone", "remote_status")
         ):
             raise incomplete()
-    assert run.mcp_candidate_attempt_id is not None
-    attempt = candidate_attempt(
-        session, context=context, attempt_id=run.mcp_candidate_attempt_id
-    )
-    material = decrypt_credentials(
-        tenant_id=run.tenant_id, ciphertext=attempt.candidate_ciphertext or ""
-    )
-    try:
-        actual_scopes = json.loads(material["scopes"])
-        expires_at = (
-            datetime.fromisoformat(material["expires_at"])
-            if "expires_at" in material
-            else None
+    authorization = session.exec(
+        select(ConnectionAuthorization).where(
+            ConnectionAuthorization.tenant_id == run.tenant_id,
+            ConnectionAuthorization.connection_id == connection.id,
+            ConnectionAuthorization.authorization_revision
+            == run.authorization_revision,
         )
-    except KeyError, TypeError, ValueError:
-        raise incomplete() from None
+    ).one_or_none()
     if (
-        actual_scopes != list(facts.scopes)
-        or material.get("issuer") != facts.issuer
-        or material.get("resource") != facts.resource
-        or (expires_at is not None and expires_at <= datetime.now(UTC))
+        authorization is None
+        or authorization.upstream_subject != facts.subject_id
+        or authorization.issuer != facts.issuer
+        or authorization.resource != facts.resource
+        or set(authorization.scopes) != set(facts.scopes)
     ):
         raise incomplete()
-    binding = session.exec(
-        select(BCConnectionBinding).where(
-            BCConnectionBinding.tenant_id == run.tenant_id,
-            BCConnectionBinding.connection_id == connection.id,
-        )
-    ).first()
-    if binding is not None and binding.bc_id != bc_id:
-        raise DomainError("mcp_connection_bc_conflict", "MCP 连接已有其他 BC 绑定")
+    binding = session.get(BCConnectionBinding, (run.tenant_id, bc_id, connection.id))
+    assert binding is not None
     from .directory_merge import merge_directory_bc
 
     merge_directory_bc(
@@ -358,75 +387,38 @@ def publish_mcp_directory(
         "tenant_id": run.tenant_id,
         "connection_id": run.connection_id,
         "run_id": run.id,
+        "bc_id": bc_id,
     }
     SASession.execute(
         session,
         text("""
         UPDATE bc_account_access SET in_bc=false,authorized=false,active=false,can_upload=false,can_build=false
-        WHERE tenant_id=:tenant_id AND connection_id=:connection_id AND last_seen_run_id IS DISTINCT FROM :run_id
+        WHERE tenant_id=:tenant_id AND connection_id=:connection_id AND bc_id=:bc_id AND last_seen_run_id IS DISTINCT FROM :run_id
     """),
         params,
     )
-    if binding is None:
-        session.add(
-            BCConnectionBinding(
-                tenant_id=run.tenant_id,
-                bc_id=bc_id,
-                connection_id=connection.id,
-                kind="OFFICIAL_MCP",
-            )
-        )
-        session.flush()
+    binding.status = "ACTIVE"
+    binding.last_error_code = None
+    session.add(binding)
     session.exec(
         insert(BCDefaultRoute)
         .values(tenant_id=run.tenant_id, bc_id=bc_id, connection_id=connection.id)
         .on_conflict_do_nothing(index_elements=["tenant_id", "bc_id"])
     )
-    previous = session.exec(
-        select(ConnectionAuthorization).where(
-            ConnectionAuthorization.tenant_id == run.tenant_id,
-            ConnectionAuthorization.connection_id == connection.id,
-            ConnectionAuthorization.authorization_revision
-            == connection.authorization_revision,
-        )
-    ).one_or_none()
-    connection.authorization_revision += 1
-    connection.credential_revision += 1
-    connection.credential_ciphertext = attempt.candidate_ciphertext
-    connection.adapter_contract_revision = profile.schema_manifest_sha256
-    connection.status = "ACTIVE"
-    # 只有实际 scope、主体与完整目录联合证明读取；写权限绝不从角色/读成功推导。
-    read_proven = True if "mcp:tt4b" in facts.scopes else None
-    session.add(
-        ConnectionAuthorization(
-            tenant_id=run.tenant_id,
-            connection_id=connection.id,
-            authorization_revision=connection.authorization_revision,
-            upstream_subject=facts.subject_id,
-            upstream_grant_id=None,
-            issuer=facts.issuer,
-            resource=facts.resource,
-            scopes=list(facts.scopes),
-            permission_summary={
-                "read_authorized": read_proven,
-                "upload_authorized": None,
-                "build_authorized": None,
-            },
-            source=facts.evidence_source,
-            verified_at=datetime.now(UTC),
-            access_token_expires_at=expires_at,
-            previous_authorization_id=previous.id if previous else None,
-            mcp_authorization_attempt_id=attempt.id,
-        )
-    )
-    attempt.status = "ACCEPTED"
-    attempt.candidate_ciphertext = None
+    # 只补充当前授权的读证明，不创建新授权、不提升任何写权限。
+    authorization.permission_summary = {
+        **authorization.permission_summary,
+        "read_authorized": True if "mcp:tt4b" in facts.scopes else None,
+    }
+    authorization.source = facts.evidence_source
+    authorization.verified_at = datetime.now(UTC)
+    session.add(authorization)
     run.status = "COMPLETE"
     run.completed_at = datetime.now(UTC)
     run.error_code = None
     run.claim_id = None
     run.claimed_until = None
-    session.add_all([connection, attempt, run])
+    session.add(run)
     session.add(
         AuditEvent(
             tenant_id=run.tenant_id,

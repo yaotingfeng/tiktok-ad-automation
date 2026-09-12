@@ -19,7 +19,10 @@ from app.integrations.tiktok.contracts.discovery import AUTHORIZED_LIST_SOURCE
 from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit
 from app.modules.accounts.capability_models import CapabilityJob
-from app.modules.accounts.connection_models import ConnectionAuthorization
+from app.modules.accounts.connection_models import (
+    BCConnectionBinding,
+    ConnectionAuthorization,
+)
 from app.modules.accounts.directory_merge import merge_directory_bc
 from app.modules.accounts.mcp_discovery import (
     STAGES,
@@ -70,7 +73,29 @@ def authorization_basis(value: ConnectionAuthorization) -> str:
 
 def needs_directory_refresh(session: Session, route: FrozenTikTokRoute) -> bool:
     facts = current_authorization(session, route)
-    return facts is None or facts.verified_at is None or not _fresh(facts.verified_at)
+    if facts is None or facts.verified_at is None or not _fresh(facts.verified_at):
+        return True
+    if route.channel != "OFFICIAL_MCP":
+        return False
+    # 共享主体可由兄弟 BC 的同步续期，但资产/授权交集/详情必须是此 BC 的完整观察。
+    # 角色重检会更新 grant.checked_at，不能拿该时间替代完整目录的完成证据。
+    completed_at = session.exec(
+        select(DiscoveryRun.completed_at)
+        .where(
+            DiscoveryRun.tenant_id == route.tenant_id,
+            DiscoveryRun.connection_id == route.connection_id,
+            DiscoveryRun.bc_id == route.bc_id,
+            DiscoveryRun.authorization_revision == route.authorization_revision,
+            DiscoveryRun.binding_revision == route.binding_revision,
+            DiscoveryRun.status == "COMPLETE",
+            col(DiscoveryRun.candidate_attempt_id).is_(None),
+            col(DiscoveryRun.mcp_candidate_attempt_id).is_(None),
+            col(DiscoveryRun.completed_at).is_not(None),
+        )
+        .order_by(col(DiscoveryRun.completed_at).desc())
+        .limit(1)
+    ).first()
+    return completed_at is None or not _fresh(completed_at)
 
 
 def queue_runtime(
@@ -111,14 +136,15 @@ def ensure_runtime_directory(
     original_authorization = current_authorization(session, route)
     if original_authorization is None:
         raise DomainError("capability_unavailable", "原连接缺少可比较的授权事实")
-    # 调用者已持连接锁；现有单连接活动run唯一键同时约束候选和运行再观察。
-    active = session.exec(
-        select(DiscoveryRun).where(
-            DiscoveryRun.tenant_id == route.tenant_id,
-            DiscoveryRun.connection_id == route.connection_id,
-            col(DiscoveryRun.status).in_(("RUNNING", "ADMISSION_WAIT")),
-        )
-    ).one_or_none()
+    # 调用者已持连接锁。MCP 每个 BC 可独立再观察，API 仍沿用整连接发现。
+    active_query = select(DiscoveryRun).where(
+        DiscoveryRun.tenant_id == route.tenant_id,
+        DiscoveryRun.connection_id == route.connection_id,
+        col(DiscoveryRun.status).in_(("RUNNING", "ADMISSION_WAIT")),
+    )
+    if route.channel == "OFFICIAL_MCP":
+        active_query = active_query.where(DiscoveryRun.bc_id == route.bc_id)
+    active = session.exec(active_query).one_or_none()
     if active is None:
         previous = session.exec(
             select(DiscoveryRun)
@@ -140,6 +166,9 @@ def ensure_runtime_directory(
             actor_id=job.actor_id,
             connection_id=job.connection_id,
             credential_revision=job.credential_revision,
+            bc_id=route.bc_id if route.channel == "OFFICIAL_MCP" else None,
+            authorization_revision=route.authorization_revision,
+            binding_revision=route.binding_revision,
             work={
                 "mode": MODE,
                 "route": route.model_dump(mode="json"),
@@ -161,7 +190,7 @@ def ensure_runtime_directory(
         session.add(active)
         session.flush()
         queue_runtime(session, active)
-    # 重复派发/已有候选均等待同连接有界发现；不会重读今天默认或抢占别人的run。
+    # 重复派发等待同范围有界发现；不会重读默认连接或抢占兄弟 BC 的任务。
     job.revision += 1
     job.error_code = "route_evidence_stale"
     job.claim_token = job.claimed_until = None
@@ -190,6 +219,16 @@ def locked_runtime_run(
         .where(TikTokConnection.id == identity.connection_id)
         .with_for_update()
     ).one()
+    if identity.bc_id is not None:
+        session.exec(
+            select(BCConnectionBinding)
+            .where(
+                BCConnectionBinding.tenant_id == identity.tenant_id,
+                BCConnectionBinding.connection_id == identity.connection_id,
+                BCConnectionBinding.bc_id == identity.bc_id,
+            )
+            .with_for_update()
+        ).one_or_none()
     run = session.exec(
         select(DiscoveryRun)
         .where(DiscoveryRun.id == run_id)
@@ -214,6 +253,12 @@ def locked_runtime_run(
         run.work.get("bc_id"),
     ):
         raise DomainError("discovery_stale", "运行目录与原路由不匹配")
+    if route.channel == "OFFICIAL_MCP" and (
+        run.bc_id,
+        run.authorization_revision,
+        run.binding_revision,
+    ) != (route.bc_id, route.authorization_revision, route.binding_revision):
+        raise DomainError("discovery_stale", "MCP 运行目录与原绑定代数不匹配")
     job = session.exec(
         select(CapabilityJob)
         .where(CapabilityJob.id == job_id)
@@ -404,6 +449,7 @@ def publish_runtime_directory(
         "bc_id": route.bc_id,
         "run_id": run.id,
         "job_id": job.id,
+        "restrict_bc": route.channel == "OFFICIAL_MCP",
     }
     SASession.execute(
         session,
@@ -411,8 +457,7 @@ def publish_runtime_directory(
         WHERE tenant_id=:tenant_id AND bc_id=:bc_id AND connection_id=:connection_id AND last_seen_run_id IS DISTINCT FROM :run_id"""),
         params,
     )
-    # AUTHORIZED 是连接全局的完整集合：仅单调收紧其他BC旧授权，不刷新其观察时间。
-    # 未观察的其他BC不能新增账户/权限，另一连接的独立授权也不受影响。
+    # API 保留完整授权集合的全连接收紧规则；MCP 每个 BC 独立发布，不改兄弟 BC 证据。
     SASession.execute(
         session,
         text("""WITH authorized AS (
@@ -423,20 +468,21 @@ def publish_runtime_directory(
         UPDATE bc_account_access g
         SET authorized=false,active=false,can_upload=false,can_build=false
         WHERE g.tenant_id=:tenant_id AND g.connection_id=:connection_id
+        AND (NOT :restrict_bc OR g.bc_id=:bc_id)
         AND NOT EXISTS (SELECT 1 FROM authorized a WHERE a.id=g.advertiser_id)
         AND (g.authorized OR g.active OR g.can_upload OR g.can_build)"""),
         params,
     )
     previous.verified_at = observed.observed_at
-    previous.permission_summary = {
-        "read_authorized": True,
-        "upload_authorized": observed.upload_authorized
+    previous.permission_summary = (
+        {
+            "read_authorized": True,
+            "upload_authorized": observed.upload_authorized,
+            "build_authorized": observed.build_authorized,
+        }
         if route.channel == "OFFICIAL_API"
-        else None,
-        "build_authorized": observed.build_authorized
-        if route.channel == "OFFICIAL_API"
-        else None,
-    }
+        else {**previous.permission_summary, "read_authorized": True}
+    )
     previous.source = (
         "OFFICIAL_TOKEN_AND_COMPLETE_DIRECTORY"
         if route.channel == "OFFICIAL_API"

@@ -66,8 +66,13 @@ SCENE_CONTRACT_REVISION = "dual-channel-scene-2026-09-12-v1"
 
 def scene_scope_basis(*, route: FrozenTikTokRoute, business: dict[str, Any]) -> str:
     """只散列冻结授权与稳定业务依据；令牌字节/目录run/观察时间不属于输入。"""
+    route_basis = route.model_dump(mode="json")
+    # 旧六字段冻结路由等价于绑定代数 0；保持其历史摘要，避免令已有场景无故失效。
+    # 这里只规范化哈希输入，不回写历史 JSON；重新接入后的非零代数必须参与摘要。
+    if route.binding_revision == 0:
+        route_basis.pop("binding_revision")
     basis = {
-        "route": route.model_dump(mode="json"),
+        "route": route_basis,
         "scene_contract_revision": SCENE_CONTRACT_REVISION,
         "constraints_revision": limits.REVISION,
         "max_age_seconds": settings.SCENE_MAX_AGE_SECONDS,

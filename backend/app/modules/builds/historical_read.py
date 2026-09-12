@@ -381,7 +381,7 @@ SELECT s.id FROM execution_step s
 JOIN build_unit u ON u.tenant_id=s.tenant_id AND u.preview_id=s.preview_id AND u.id=s.unit_id
 JOIN build_route_context r ON r.tenant_id=s.tenant_id AND r.preview_id=s.preview_id AND r.bc_id=s.bc_id AND r.connection_id=u.connection_id
 JOIN tiktok_connection c ON c.tenant_id=r.tenant_id AND c.id=r.connection_id AND c.kind=r.channel
-JOIN bc_connection_binding b ON b.tenant_id=r.tenant_id AND b.bc_id=r.bc_id AND b.connection_id=r.connection_id AND b.kind=r.channel
+JOIN bc_connection_binding b ON b.tenant_id=r.tenant_id AND b.bc_id=r.bc_id AND b.connection_id=r.connection_id AND b.kind=r.channel AND b.status='ACTIVE'
 JOIN tenant_bc bc ON bc.tenant_id=r.tenant_id AND bc.bc_id=r.bc_id
 JOIN connection_authorization old ON old.tenant_id=r.tenant_id AND old.connection_id=r.connection_id AND old.authorization_revision=r.authorization_revision
 JOIN connection_authorization new ON new.tenant_id=c.tenant_id AND new.connection_id=c.id AND new.authorization_revision=c.authorization_revision
@@ -476,7 +476,7 @@ def _verify(
     source, unit, old = _source(session, context, row.source_step_id)
     route = FrozenTikTokRoute.model_validate(row.new_route)
     if (
-        old.model_dump(mode="json") != row.old_route
+        old != FrozenTikTokRoute.model_validate(row.old_route)
         or source.request_body_digest != row.source_request_digest
         or unit.advertiser_id != row.advertiser_id
         or original_create_attempt(session, source)

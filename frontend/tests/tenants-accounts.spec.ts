@@ -784,6 +784,20 @@ const BC1 = "7000000000000000001"
 const BC2 = "7000000000000000002"
 const BC3 = "7000000000000000003"
 const CONN = "66666666-6666-4666-8666-666666666666"
+const MCP_CONN = "77777777-7777-4777-8777-000000000003"
+type CandidateBCFixture = {
+  bc_id: string
+  name: string
+  connected?: boolean
+  binding_status?: "SYNCING" | "ACTIVE" | "ERROR" | "DISABLED" | null
+}
+type BindingBCFixture = CandidateBCFixture & {
+  ownership_conflict: boolean
+  is_default?: boolean
+  discovery_status?: "RUNNING" | "COMPLETE" | "ERROR" | "CANCELLED"
+  last_discovery?: string | null
+  error_code?: string | null
+}
 async function accountBoundary(
   page: Page,
   options: {
@@ -796,6 +810,10 @@ async function accountBoundary(
     mcpConnection?: boolean
     noDefault?: boolean
     candidateReady?: boolean
+    candidateBCs?: CandidateBCFixture[]
+    availableBCs?: CandidateBCFixture[]
+    refreshedBCs?: CandidateBCFixture[]
+    bindingBCs?: BindingBCFixture[]
     account403?: boolean
     accountFailure?: boolean
     connection403?: boolean
@@ -889,15 +907,60 @@ async function accountBoundary(
           start + limit < items.length ? String(start + limit) : null,
       }
     }
-    if (path.includes("/tiktok/mcp/candidates/") && path.endsWith("/bcs"))
+    if (
+      (path.includes("/tiktok/mcp/candidates/") && path.endsWith("/bcs")) ||
+      path.endsWith("/available-bcs")
+    ) {
+      const items = path.endsWith("/available-bcs")
+        ? ((q.get("refresh") === "true"
+            ? (options.refreshedBCs ?? options.availableBCs)
+            : options.availableBCs) ?? bcs)
+        : (options.candidateBCs ?? bcs)
+      const page = Number(q.get("page") ?? 1)
+      const pageSize = Number(q.get("page_size") ?? 50)
       return reply({
-        items: bcs,
-        page: Number(q.get("page") ?? 1),
-        page_size: 50,
-        total: bcs.length,
+        items: items
+          .slice((page - 1) * pageSize, page * pageSize)
+          .map((item) => ({ connected: false, binding_status: null, ...item })),
+        page,
+        page_size: pageSize,
+        total: items.length,
       })
-    if (path.includes("/tiktok/mcp/candidates/") && path.endsWith("/binding"))
-      return reply({ discovery_run_id: CONN, status: "DISCOVERING" })
+    }
+    if (
+      path.includes("/tiktok/mcp/") &&
+      (path.endsWith("/binding") || path.endsWith("/bindings"))
+    )
+      return reply({
+        connection_id: MCP_CONN,
+        items: body.bc_ids.map((bc_id: string) => ({
+          bc_id,
+          discovery_run_id: CONN,
+          status: "RUNNING",
+        })),
+      })
+    if (path.includes("/tiktok/mcp/connections/") && path.endsWith("/sync")) {
+      const bc = options.bindingBCs?.find(
+        (item) => item.bc_id === path.split("/").at(-2),
+      )
+      if (bc) {
+        bc.binding_status = "ACTIVE"
+        bc.discovery_status = "COMPLETE"
+        bc.error_code = null
+      }
+      return reply({ discovery_run_id: CONN })
+    }
+    if (path.includes("/tiktok/mcp/connections/") && method === "DELETE") {
+      const bc = options.bindingBCs?.find(
+        (item) => item.bc_id === path.split("/").at(-1),
+      )
+      if (bc) {
+        bc.binding_status = "DISABLED"
+        bc.discovery_status = "CANCELLED"
+        bc.is_default = false
+      }
+      return route.fulfill({ status: 204, headers })
+    }
     if (path.endsWith("/default-connection") && method === "PUT") {
       defaultSelections.set(path.split("/").at(-2)!, body.connection_id)
       return reply({
@@ -910,6 +973,8 @@ async function accountBoundary(
       })
     }
     if (path.endsWith("/bcs")) {
+      if (q.get("connection_id") && options.bindingBCs)
+        return reply(paginate(options.bindingBCs))
       if (q.get("connection_id"))
         return reply(
           paginate(
@@ -2154,7 +2219,7 @@ test("connection details switch only the selected BC default", async ({
   expect(writes[0]?.body).toEqual({ connection_id: CONN })
 })
 
-test("MCP candidate binds exactly one explicit BC and returns to connections", async ({
+test("MCP candidate binds selected BCs and returns to connections", async ({
   page,
 }) => {
   const { requests } = await accountBoundary(page, {
@@ -2166,12 +2231,12 @@ test("MCP candidate binds exactly one explicit BC and returns to connections", a
   )
   const sheet = page.getByRole("dialog", { name: "选择授权 BC", exact: true })
   await expect(
-    sheet.getByRole("button", { name: "绑定并发现账户", exact: true }),
+    sheet.getByRole("button", { name: "接入并同步账户", exact: true }),
   ).toBeDisabled()
-  await sheet.getByRole("combobox", { name: "绑定 BC", exact: true }).click()
-  await page.getByRole("option", { name: /业务 BC 二/ }).click()
+  await sheet.getByRole("checkbox", { name: /业务 BC 一/ }).check()
+  await sheet.getByRole("checkbox", { name: /业务 BC 二/ }).check()
   await sheet
-    .getByRole("button", { name: "绑定并发现账户", exact: true })
+    .getByRole("button", { name: "接入并同步账户", exact: true })
     .click()
   await expect(sheet).not.toBeVisible()
   const writes = requests.filter((request) => request.method !== "GET")
@@ -2179,7 +2244,7 @@ test("MCP candidate binds exactly one explicit BC and returns to connections", a
   expect(writes[0]?.path).toBe(
     `/api/tenants/${A}/tiktok/mcp/candidates/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/binding`,
   )
-  expect(writes[0]?.body).toEqual({ bc_id: BC2 })
+  expect(writes[0]?.body).toEqual({ bc_ids: [BC1, BC2] })
   await expect(page).not.toHaveURL(/attempt_id=|mcp_authorization=/)
   await page.reload()
   await expect(page.getByRole("heading", { name: "账户与授权" })).toBeVisible()
@@ -2247,7 +2312,7 @@ test("MCP candidate is cleared when tenant navigation changes", async ({
   )
   const sheet = page.getByRole("dialog", { name: "选择授权 BC", exact: true })
   await expect(
-    sheet.getByRole("combobox", { name: "绑定 BC", exact: true }),
+    sheet.getByRole("checkbox", { name: /业务 BC 一/ }),
   ).toBeVisible()
   await page.keyboard.press("Escape")
   await expect(sheet).not.toBeVisible()
@@ -2348,4 +2413,395 @@ test("connection picker removes retained names after a later page denies access"
     page.getByRole("button", { name: "加载更多连接", exact: true }),
   ).toHaveCount(0)
   await expect(page.getByText(/MCP 业务连接/)).toHaveCount(0)
+})
+
+test("MCP single accessible BC is selected automatically without binding until submitted", async ({
+  page,
+}) => {
+  const { requests } = await accountBoundary(page, {
+    mcpReady: true,
+    candidateBCs: [{ bc_id: BC1, name: "唯一 BC" }],
+  })
+  await page.goto(
+    `/tenants/${A}/accounts?tab=connections&mcp_authorization=CANDIDATE_READY&attempt_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+  )
+  const sheet = page.getByRole("dialog", { name: "选择授权 BC", exact: true })
+  const bc = sheet.getByRole("checkbox", { name: /唯一 BC/ })
+  await expect(bc).toBeChecked()
+  expect(requests.every((request) => request.method === "GET")).toBe(true)
+  await bc.uncheck()
+  await expect(bc).not.toBeChecked()
+  await expect(
+    sheet.getByRole("button", { name: "接入并同步账户" }),
+  ).toBeDisabled()
+  await bc.check()
+  await sheet.getByRole("button", { name: "接入并同步账户" }).click()
+  expect(requests.find((request) => request.method === "POST")?.body).toEqual({
+    bc_ids: [BC1],
+  })
+})
+
+test("MCP selection survives pages and select all covers the complete directory", async ({
+  page,
+}) => {
+  const candidateBCs = Array.from({ length: 101 }, (_, i) => ({
+    bc_id: `bc-${i + 1}`,
+    name: `跨页 BC ${i + 1}`,
+  }))
+  const { requests } = await accountBoundary(page, {
+    mcpReady: true,
+    candidateBCs,
+  })
+  await page.goto(
+    `/tenants/${A}/accounts?tab=connections&mcp_authorization=CANDIDATE_READY&attempt_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+  )
+  const sheet = page.getByRole("dialog", { name: "选择授权 BC", exact: true })
+  await expect(
+    sheet.getByRole("button", { name: "接入并同步账户" }),
+  ).toBeDisabled()
+  await sheet
+    .getByRole("checkbox", { name: "跨页 BC 1 · bc-1", exact: true })
+    .check()
+  await sheet.getByRole("button", { name: "下一页 BC" }).click()
+  await sheet
+    .getByRole("checkbox", { name: "跨页 BC 51 · bc-51", exact: true })
+    .check()
+  await sheet.getByRole("button", { name: "上一页 BC" }).click()
+  await expect(
+    sheet.getByRole("checkbox", { name: "跨页 BC 1 · bc-1", exact: true }),
+  ).toBeChecked()
+  await expect(sheet.getByText(/已选 2 个/)).toBeVisible()
+  await sheet.getByRole("button", { name: "全选可接入 BC" }).click()
+  await expect(sheet.getByText(/已选 101 个/)).toBeVisible()
+  await sheet.getByRole("button", { name: "接入并同步账户" }).click()
+  const writes = requests.filter((request) => request.method !== "GET")
+  expect(writes).toHaveLength(1)
+  expect(writes[0]?.body).toEqual({
+    bc_ids: candidateBCs.map((item) => item.bc_id),
+  })
+  expect(
+    new Set(
+      requests
+        .filter(
+          (request) =>
+            request.path.includes("/candidates/") && request.method === "GET",
+        )
+        .map((request) => request.query.get("page")),
+    ),
+  ).toEqual(new Set(["1", "2", "3"]))
+})
+
+test("MCP existing authorization refreshes accessible BCs and adds only new or unbound BCs", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 900 })
+  const connected = {
+    bc_id: BC1,
+    name: "已接入 BC",
+    connected: true,
+    binding_status: "ACTIVE" as const,
+  }
+  const unbound = {
+    bc_id: BC2,
+    name: "已解绑 BC",
+    connected: false,
+    binding_status: "DISABLED" as const,
+  }
+  const failed = {
+    bc_id: "bc-error",
+    name: "失败 BC",
+    connected: true,
+    binding_status: "ERROR" as const,
+  }
+  const { requests } = await accountBoundary(page, {
+    mcpReady: true,
+    mcpConnection: true,
+    availableBCs: [connected, unbound, failed],
+    refreshedBCs: [
+      connected,
+      unbound,
+      failed,
+      { bc_id: BC3, name: "新增可访问 BC" },
+    ],
+  })
+  await page.goto(`/tenants/${A}/accounts?tab=connections&bc_id=${BC1}`)
+  await page
+    .getByRole("row", { name: new RegExp(MCP_CONN) })
+    .getByRole("button", { name: "添加 BC", exact: true })
+    .click()
+  const sheet = page.getByRole("dialog", { name: "添加 BC", exact: true })
+  await expect(
+    sheet.getByRole("checkbox", { name: /已接入 BC/ }),
+  ).toBeDisabled()
+  await expect(sheet.getByRole("checkbox", { name: /失败 BC/ })).toBeDisabled()
+  await expect(sheet.getByRole("checkbox", { name: /已解绑 BC/ })).toBeChecked()
+  await sheet.getByRole("button", { name: "刷新可访问 BC" }).click()
+  await expect(
+    sheet.getByRole("checkbox", { name: /新增可访问 BC/ }),
+  ).toBeVisible()
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true)
+  await page.screenshot({
+    path: test.info().outputPath("mcp-add-bcs-mobile.png"),
+    animations: "disabled",
+  })
+  await sheet.getByRole("button", { name: "全选可接入 BC" }).click()
+  await sheet.getByRole("button", { name: "接入并同步账户" }).click()
+  const writes = requests.filter((request) => request.method !== "GET")
+  expect(writes).toHaveLength(1)
+  expect(writes[0]?.path).toBe(
+    `/api/tenants/${A}/tiktok/mcp/connections/${MCP_CONN}/bindings`,
+  )
+  expect(writes[0]?.body).toEqual({ bc_ids: [BC2, BC3] })
+  expect(
+    requests.some(
+      (request) =>
+        request.path.endsWith("/available-bcs") &&
+        request.query.get("refresh") === "true",
+    ),
+  ).toBe(true)
+  expect(
+    requests.some((request) => request.path.endsWith("/authorizations")),
+  ).toBe(false)
+  await expect(page).toHaveURL(new RegExp(`bc_id=${BC1}`))
+})
+
+test("MCP per BC retry and unbind preserve the other BC and its default", async ({
+  page,
+}) => {
+  const bindingBCs: BindingBCFixture[] = [
+    {
+      bc_id: BC1,
+      name: "失败待重试 BC",
+      ownership_conflict: false,
+      binding_status: "ERROR",
+      discovery_status: "ERROR",
+      error_code: "discovery_failed",
+    },
+    {
+      bc_id: BC2,
+      name: "保留默认 BC",
+      ownership_conflict: false,
+      binding_status: "ACTIVE",
+      discovery_status: "COMPLETE",
+      is_default: true,
+    },
+  ]
+  const { requests } = await accountBoundary(page, {
+    mcpReady: true,
+    mcpConnection: true,
+    bindingBCs,
+  })
+  await page.goto(`/tenants/${A}/accounts?tab=connections&bc_id=${BC2}`)
+  await page
+    .getByRole("row", { name: new RegExp(MCP_CONN) })
+    .getByRole("button", { name: "查看详情", exact: true })
+    .click()
+  const sheet = page.getByRole("dialog", { name: "连接详情", exact: true })
+  const failed = sheet.getByRole("row", { name: /失败待重试 BC/ })
+  const kept = sheet.getByRole("row", { name: /保留默认 BC/ })
+  await failed.scrollIntoViewIfNeeded()
+  await page.screenshot({
+    path: test.info().outputPath("mcp-binding-details.png"),
+    animations: "disabled",
+  })
+  await failed.getByRole("button", { name: "重试同步" }).click()
+  await expect(failed.getByText("已接入", { exact: true })).toBeVisible()
+  await failed.getByRole("button", { name: "解绑 BC", exact: true }).click()
+  await expect(
+    sheet.getByText("解绑 失败待重试 BC", { exact: true }),
+  ).toBeVisible()
+  expect(
+    requests.filter((request) => request.method === "DELETE"),
+  ).toHaveLength(0)
+  await sheet.getByRole("button", { name: "确认解绑 BC", exact: true }).click()
+  await expect(failed.getByText("已解绑", { exact: true })).toBeVisible()
+  await expect(kept.getByText("已接入", { exact: true })).toBeVisible()
+  await expect(kept.getByText("当前默认", { exact: true })).toBeVisible()
+  expect(
+    requests
+      .filter((request) => request.method !== "GET")
+      .map((request) => [request.method, request.path]),
+  ).toEqual([
+    [
+      "POST",
+      `/api/tenants/${A}/tiktok/mcp/connections/${MCP_CONN}/bcs/${BC1}/sync`,
+    ],
+    [
+      "DELETE",
+      `/api/tenants/${A}/tiktok/mcp/connections/${MCP_CONN}/bcs/${BC1}`,
+    ],
+  ])
+  await expect(page).toHaveURL(new RegExp(`bc_id=${BC2}`))
+})
+
+test("MCP shared connection polls every pending BC and refreshes directories after each completion", async ({
+  page,
+}) => {
+  const { requests } = await accountBoundary(page, {
+    mcpReady: true,
+    singleBC: true,
+  })
+  let pending = 2
+  let connectionReads = 0
+  await page.route("**/api/tenants/*/tiktok/connections?*", (route) => {
+    connectionReads++
+    return route.fulfill({
+      json: {
+        items: [
+          {
+            id: MCP_CONN,
+            tenant_id: A,
+            kind: "OFFICIAL_MCP",
+            status: "ACTIVE",
+            binding_count: 2,
+            pending_binding_count: pending,
+            discovery_status: "COMPLETE",
+            last_discovery: "2026-09-12T10:00:00Z",
+          },
+        ],
+        next_cursor: null,
+      },
+    })
+  })
+  await page.goto(`/tenants/${A}/accounts?tab=connections&bc_id=${BC1}`)
+  await expect(
+    page.getByText("2 个 BC 正在同步", { exact: true }),
+  ).toBeVisible()
+  const firstBCReads = requests.filter((request) =>
+    request.path.endsWith("/bcs"),
+  ).length
+  pending = 1
+  await expect(page.getByText("1 个 BC 正在同步", { exact: true })).toBeVisible(
+    { timeout: 12000 },
+  )
+  await expect
+    .poll(
+      () => requests.filter((request) => request.path.endsWith("/bcs")).length,
+    )
+    .toBeGreaterThan(firstBCReads)
+  const secondBCReads = requests.filter((request) =>
+    request.path.endsWith("/bcs"),
+  ).length
+  pending = 0
+  await expect(page.getByText("1 个 BC 正在同步", { exact: true })).toHaveCount(
+    0,
+    { timeout: 12000 },
+  )
+  await expect
+    .poll(
+      () => requests.filter((request) => request.path.endsWith("/bcs")).length,
+    )
+    .toBeGreaterThan(secondBCReads)
+  const terminalReads = connectionReads
+  await page.waitForTimeout(5500)
+  expect(connectionReads).toBe(terminalReads)
+  expect(requests.every((request) => request.method === "GET")).toBe(true)
+})
+
+test("MCP incomplete BC directory blocks all selection and binding", async ({
+  page,
+}) => {
+  const { requests } = await accountBoundary(page, { mcpReady: true })
+  await page.route("**/api/tenants/*/tiktok/mcp/candidates/*/bcs?*", (route) =>
+    route.fulfill({
+      json: {
+        items: [],
+        total: 2,
+        page: 1,
+        page_size: 50,
+      },
+    }),
+  )
+  await page.goto(
+    `/tenants/${A}/accounts?tab=connections&mcp_authorization=CANDIDATE_READY&attempt_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+  )
+  const sheet = page.getByRole("dialog", { name: "选择授权 BC", exact: true })
+  await expect(
+    sheet.getByText("BC 目录未完整返回，请刷新后重试。", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    sheet.getByRole("button", { name: "接入并同步账户" }),
+  ).toBeDisabled()
+  expect(requests.every((request) => request.method === "GET")).toBe(true)
+})
+
+for (const total of [1001, 5000]) {
+  test(`MCP ${total} accessible BCs allow a single selection and enforce the 1000 selection limit`, async ({
+    page,
+  }) => {
+    const candidateBCs = Array.from({ length: total }, (_, i) => ({
+      bc_id: `limit-bc-${i + 1}`,
+      name: `目录 BC ${i + 1}`,
+    }))
+    const { requests } = await accountBoundary(page, {
+      mcpReady: true,
+      candidateBCs,
+    })
+    await page.goto(
+      `/tenants/${A}/accounts?tab=connections&bc_id=${BC1}&mcp_authorization=CANDIDATE_READY&attempt_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+    )
+    const sheet = page.getByRole("dialog", { name: "选择授权 BC", exact: true })
+    await expect(
+      sheet.getByText(new RegExp(`共 ${total} 个可访问 BC`)),
+    ).toBeVisible({ timeout: 15000 })
+    await sheet.getByRole("button", { name: "全选可接入 BC" }).click()
+    await expect(
+      sheet.getByText("所选 BC 超过单次接入上限", { exact: true }),
+    ).toBeVisible()
+    await expect(
+      sheet.getByText(new RegExp(`当前已选 ${total} 个`)),
+    ).toBeVisible()
+    await expect(
+      sheet.getByRole("button", { name: "接入并同步账户" }),
+    ).toBeDisabled()
+    expect(requests.every((request) => request.method === "GET")).toBe(true)
+    await sheet.getByRole("button", { name: "清空选择" }).click()
+    await sheet
+      .getByRole("checkbox", { name: "目录 BC 1 · limit-bc-1", exact: true })
+      .check()
+    await expect(
+      sheet.getByRole("button", { name: "接入并同步账户" }),
+    ).toBeEnabled()
+    await sheet.getByRole("button", { name: "接入并同步账户" }).click()
+    const writes = requests.filter((request) => request.method !== "GET")
+    expect(writes).toHaveLength(1)
+    expect(writes[0]?.body).toEqual({ bc_ids: ["limit-bc-1"] })
+    expect(
+      new Set(
+        requests
+          .filter(
+            (request) =>
+              request.path.includes("/candidates/") && request.method === "GET",
+          )
+          .map((request) => Number(request.query.get("page"))),
+      ).size,
+    ).toBe(Math.ceil(total / 50))
+  })
+}
+
+test("MCP provider failure callback displays its outcome without restarting OAuth", async ({
+  page,
+}) => {
+  const { requests } = await accountBoundary(page, { mcpReady: true })
+  await page.goto(
+    `/tenants/${A}/accounts?tab=connections&bc_id=${BC1}&mcp_authorization=mcp_candidate_superseded&attempt_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+  )
+  await expect(page.getByText("MCP 授权未完成", { exact: true })).toBeVisible()
+  await expect(
+    page.getByText("原有可用连接保留，请查看连接状态后重新授权。", {
+      exact: true,
+    }),
+  ).toBeVisible()
+  expect(
+    requests.some(
+      (request) =>
+        request.path.includes("/mcp/candidates/") ||
+        request.path.endsWith("/authorizations"),
+    ),
+  ).toBe(false)
+  expect(requests.every((request) => request.method === "GET")).toBe(true)
 })

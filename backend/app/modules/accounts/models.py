@@ -158,7 +158,23 @@ class DiscoveryRun(SQLModel, table=True):
             "tenant_id",
             "connection_id",
             unique=True,
-            postgresql_where=text("status IN ('RUNNING','ADMISSION_WAIT')"),
+            postgresql_where=text(
+                "status IN ('RUNNING','ADMISSION_WAIT') AND bc_id IS NULL"
+            ),
+        ),
+        Index(
+            "uq_discovery_active_bc",
+            "tenant_id",
+            "connection_id",
+            "bc_id",
+            unique=True,
+            postgresql_where=text(
+                "status IN ('RUNNING','ADMISSION_WAIT') AND bc_id IS NOT NULL"
+            ),
+        ),
+        CheckConstraint(
+            "authorization_revision >= 0 AND binding_revision >= 0",
+            name="ck_discovery_binding_revisions",
         ),
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -169,6 +185,9 @@ class DiscoveryRun(SQLModel, table=True):
     mcp_candidate_attempt_id: UUID | None = None
     credential_revision: int = 0
     status: str = "RUNNING"
+    bc_id: str | None = Field(default=None, max_length=128)
+    authorization_revision: int = 0
+    binding_revision: int = 0
     bc_cursor: str | None = None
     next_attempt_at: datetime | None = Field(
         default=None, sa_column=Column(DateTime(timezone=True))

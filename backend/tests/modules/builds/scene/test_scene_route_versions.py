@@ -1,7 +1,9 @@
 """场景固定授权语义；凭据材料和目录观察更新不能改变原任务。"""
 
 import inspect
+import json
 from datetime import UTC, datetime
+from hashlib import sha256
 from uuid import uuid4
 
 import pytest
@@ -9,6 +11,7 @@ from sqlmodel import Session, select
 
 from app.core.errors import DomainError
 from app.modules.accounts.connection_models import (
+    BCConnectionBinding,
     BCDefaultRoute,
     ConnectionAuthorization,
 )
@@ -201,3 +204,79 @@ def test_draft_account_resolution_uses_its_explicit_connection_without_default(
         )
         assert result[0].status == "MATCHED"
         assert result[0].advertiser_id == case["advertiser_id"]
+
+
+@pytest.mark.parametrize(
+    "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
+)
+def test_actual_scene_scope_preserves_legacy_digest_and_distinguishes_rebinding(
+    database_engine, scene_case
+):
+    from app.core.config import settings
+    from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
+    from app.modules.builds import scene, scene_constraints
+
+    case = scene_case
+    current = case["route"]
+    assert current.binding_revision == 0
+    # 精确重建升级前的六字段存储，不使用新版 model_dump 作为旧摘要输入。
+    stored = {
+        "tenant_id": str(current.tenant_id),
+        "bc_id": current.bc_id,
+        "connection_id": str(current.connection_id),
+        "channel": current.channel,
+        "authorization_revision": current.authorization_revision,
+        "adapter_contract_revision": current.adapter_contract_revision,
+    }
+    legacy = FrozenTikTokRoute.model_validate(stored)
+    kwargs = {
+        "context": case["context"],
+        "bc_id": current.bc_id,
+        "advertiser_id": case["advertiser_id"],
+        "link_id": case["link_id"],
+    }
+    with Session(database_engine) as db:
+        scope = _scope(db, route=legacy, **kwargs)
+        provider, application, access = (
+            scope["provider"],
+            scope["application"],
+            scope["access"],
+        )
+        historical = {
+            "route": stored,
+            "scene_contract_revision": scene.SCENE_CONTRACT_REVISION,
+            "constraints_revision": scene_constraints.REVISION,
+            "max_age_seconds": settings.SCENE_MAX_AGE_SECONDS,
+            "business": {
+                "advertiser_id": case["advertiser_id"],
+                "currency": access.currency,
+                "timezone": access.timezone,
+                "provider_id": str(provider.id),
+                "provider_version": provider.credential_version,
+                "provider_verification": str(provider.verification_token),
+                "application_id": application.external_id,
+                "minis_id": application.tiktok_minis_id,
+            },
+        }
+        previous_digest = sha256(
+            json.dumps(historical, sort_keys=True).encode()
+        ).hexdigest()
+        assert scope["basis"] == previous_digest
+        assert _scope(db, route=current, **kwargs)["basis"] == previous_digest
+    # 接入代数改变后，同一业务依据必须产生新摘要，不得重用旧场景证据。
+    digests = {previous_digest}
+    for revision in (1, 2):
+        with Session(database_engine) as db, db.begin():
+            binding = db.get(
+                BCConnectionBinding,
+                (current.tenant_id, current.bc_id, current.connection_id),
+            )
+            binding.revision = revision
+            db.add(binding)
+        rebound = current.model_copy(update={"binding_revision": revision})
+        with Session(database_engine) as db:
+            new_digest = _scope(db, route=rebound, **kwargs)["basis"]
+        assert new_digest not in digests
+        digests.add(new_digest)
+    assert "binding_revision" not in stored
+    assert legacy.binding_revision == current.binding_revision == 0

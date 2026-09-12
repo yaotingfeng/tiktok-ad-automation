@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import MetaData, Table
 from sqlmodel import select
 
 from app.core.errors import DomainError
@@ -83,12 +84,30 @@ def intent(session, context):
     return create_intent(session, context)
 
 
-def account(session, context, identity="account-A", *, capability=True):
+def account(
+    session, context, identity="account-A", *, capability=True, historical=False
+):
     from app.modules.accounts.connection_models import (
         BCConnectionBinding,
         BCDefaultRoute,
         ConnectionAuthorization,
     )
+
+    def add_versioned_row(row):
+        if not historical:
+            session.add(row)
+            return
+        # 历史迁移 fixture 只写当时真实列；日常测试仍使用完整的当前 ORM。
+        table = Table(row.__tablename__, MetaData(), autoload_with=session.connection())
+        session.execute(
+            table.insert().values(
+                **{
+                    key: value
+                    for key, value in row.model_dump().items()
+                    if key in table.c
+                }
+            )
+        )
 
     default = session.get(BCDefaultRoute, (context.tenant_id, "bc-draft"))
     if default is None:
@@ -99,7 +118,7 @@ def account(session, context, identity="account-A", *, capability=True):
         )
         session.add(connection)
         session.flush()
-        session.add(
+        add_versioned_row(
             BCConnectionBinding(
                 tenant_id=context.tenant_id,
                 bc_id="bc-draft",
@@ -190,7 +209,7 @@ def account(session, context, identity="account-A", *, capability=True):
         completed_at=datetime.now(UTC),
         expires_at=datetime.now(UTC) + timedelta(hours=4),
     )
-    session.add(job)
+    add_versioned_row(job)
     session.flush()
     accounts = session.exec(
         select(BCAccountAccess.advertiser_id).where(

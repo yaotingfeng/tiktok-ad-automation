@@ -21,6 +21,7 @@ import {
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { McpAuthorizationSheet } from "./McpAuthorizationSheet"
 import {
+  bindingLabels,
   capabilityLabel,
   connectionLabels,
   discoveryLabels,
@@ -51,7 +52,12 @@ function isRefreshPending(connection: ConnectionPublic) {
 }
 
 function isConnectionPending(connection: ConnectionPublic) {
-  return isDiscoveryPending(connection) || isRefreshPending(connection)
+  return (
+    (connection.status !== "DISABLED" &&
+      (connection.pending_binding_count ?? 0) > 0) ||
+    isDiscoveryPending(connection) ||
+    isRefreshPending(connection)
+  )
 }
 
 export function ConnectionsPage() {
@@ -61,6 +67,7 @@ export function ConnectionsPage() {
   const [mcpAction, setMcpAction] = useState<{
     connectionId?: string
     attemptId?: string
+    addBindings?: boolean
   } | null>(null)
   const shownAttempt = useRef<string | null>(null)
   const search = useSearch({ from: "/_layout/tenants/$tenantId/accounts" })
@@ -118,6 +125,9 @@ export function ConnectionsPage() {
     for (const connection of query.data.items) {
       const previous = observedDiscovery.current.get(connection.id)
       if (
+        (previous &&
+          previous.pending_binding_count !==
+            connection.pending_binding_count) ||
         (previous &&
           isRefreshPending(previous) &&
           !isRefreshPending(connection)) ||
@@ -195,7 +205,7 @@ export function ConnectionsPage() {
             </strong>
             <span className="text-xs text-muted-foreground">
               {row.original.kind === "OFFICIAL_MCP" ? "官方 MCP" : "官方 API"}
-              {row.original.is_default ? " · 默认执行连接" : ""}
+              {row.original.is_default ? " · 已有 BC 设为默认执行连接" : ""}
             </span>
             <Identifier value={row.original.id} />
           </div>
@@ -208,6 +218,11 @@ export function ConnectionsPage() {
             <Badge variant="outline">
               {connectionLabels[row.original.status]}
             </Badge>
+            {(row.original.pending_binding_count ?? 0) > 0 && (
+              <span className="text-xs text-muted-foreground">
+                {row.original.pending_binding_count} 个 BC 正在同步
+              </span>
+            )}
             {row.original.discovery_status && (
               <span className="text-xs text-muted-foreground">
                 发现进度：{discoveryLabels[row.original.discovery_status]}
@@ -224,7 +239,7 @@ export function ConnectionsPage() {
             size="sm"
             onClick={() => setDetail(row.original)}
           >
-            查看关联 BC
+            查看关联 BC（{row.original.binding_count ?? 0}）
           </Button>
         ),
       },
@@ -249,6 +264,22 @@ export function ConnectionsPage() {
             </Button>
             {manage && row.original.status !== "DISABLED" && (
               <>
+                {row.original.kind === "OFFICIAL_MCP" &&
+                  row.original.status === "ACTIVE" && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={!mcpReady}
+                      onClick={() =>
+                        setMcpAction({
+                          connectionId: row.original.id,
+                          addBindings: true,
+                        })
+                      }
+                    >
+                      添加 BC
+                    </Button>
+                  )}
                 {row.original.authorization_attempt_id && (
                   <Button
                     size="sm"
@@ -444,14 +475,15 @@ export function ConnectionsPage() {
               官方 MCP
             </Button>
             <p className="text-sm text-muted-foreground">
-              每种通道独立授权。管理员授权后，为 BC 选择默认执行连接。
+              每种通道独立授权，同一授权可接入多个 BC。管理员分别为各 BC
+              选择默认执行连接。
             </p>
           </div>
         </ManagementSheet>
       )}
       {mcpAction && (
         <McpAuthorizationSheet
-          key={`${tenantId}:${mcpAction.attemptId ?? mcpAction.connectionId ?? "new"}`}
+          key={`${tenantId}:${mcpAction.attemptId ?? mcpAction.connectionId ?? "new"}:${mcpAction.addBindings ?? false}`}
           {...mcpAction}
           ready={mcpReady}
           onClose={closeMcp}
@@ -566,7 +598,7 @@ function ConnectionAction({
         )}
         <p>
           {disable
-            ? "停用后，该连接将不能用于新的系统操作及尚未执行的步骤。历史记录保留，不会停止 TikTok 上已启用的广告。已停用连接不能重新授权，可单独新增授权。"
+            ? "停用后，此授权下全部已接入 BC 均不能再通过该连接执行新的系统操作及尚未执行的步骤。历史记录保留，不会停止 TikTok 上已启用的广告。已停用连接不能重新授权，可单独新增授权。"
             : "将在 TikTok 官方页面完成授权。返回后系统发现账户，完整发现成功后新凭据才正式生效。取消或失败不会替换原有可用连接。"}
         </p>
         {mutation.error && (
@@ -611,8 +643,53 @@ function ConnectionDetails({
           signal,
         })
       ).data,
+    refetchInterval: (state) =>
+      !state.state.error &&
+      ((detail.pending_binding_count ?? 0) > 0 ||
+        state.state.data?.items.some(
+          (item) => item.binding_status === "SYNCING",
+        ))
+        ? 5000
+        : false,
   })
+  const previousBCs = useRef(new Map<string, string>())
+  useEffect(() => {
+    if (!query.data) return
+    let changed = false
+    for (const item of query.data.items) {
+      const signature = `${item.binding_status}:${item.last_discovery}:${item.discovery_status}`
+      const previous = previousBCs.current.get(item.bc_id)
+      if (previous && previous !== signature) changed = true
+      previousBCs.current.set(item.bc_id, signature)
+    }
+    if (changed) {
+      for (const resource of ["bcs", "accounts", "connections"])
+        void queryClient.invalidateQueries({
+          queryKey: ["tenant", tenantId, resource],
+        })
+    }
+  }, [query.data, queryClient, tenantId])
   const data = useRetainedData(query.data, query.error)
+  const [unbind, setUnbind] = useState<BCPublic | null>(null)
+  const bcMutation = useMutation({
+    mutationFn: async ({
+      bcId,
+      kind,
+    }: {
+      bcId: string
+      kind: "sync" | "unbind"
+    }) => {
+      const path = {
+        tenant_id: tenantId!,
+        connection_id: detail.id,
+        bc_id: bcId,
+      }
+      if (kind === "sync") await AccountsService.syncMcpBc({ path })
+      else await AccountsService.unbindMcpBc({ path })
+      setUnbind(null)
+      await queryClient.invalidateQueries({ queryKey: ["tenant", tenantId] })
+    },
+  })
   const defaultMutation = useMutation({
     mutationFn: async (bcId: string) => {
       await AccountsService.putDefaultConnection({
@@ -625,7 +702,8 @@ function ConnectionDetails({
   const manage =
     canManage(scope?.role) &&
     !isForbidden(query.error) &&
-    !isForbidden(defaultMutation.error)
+    !isForbidden(defaultMutation.error) &&
+    !isForbidden(bcMutation.error)
   const columns: ColumnDef<BCPublic>[] = [
     {
       header: "关联 BC",
@@ -652,6 +730,8 @@ function ConnectionDetails({
             variant="outline"
             disabled={
               detail.status !== "ACTIVE" ||
+              (!!row.original.binding_status &&
+                row.original.binding_status !== "ACTIVE") ||
               row.original.ownership_conflict ||
               defaultMutation.isPending
             }
@@ -664,11 +744,72 @@ function ConnectionDetails({
         ),
     },
   ]
+  if (detail.kind === "OFFICIAL_MCP")
+    columns.push(
+      {
+        header: "同步状态",
+        cell: ({ row }) => (
+          <div className="flex flex-col gap-1">
+            <Badge variant="outline">
+              {row.original.binding_status
+                ? bindingLabels[row.original.binding_status]
+                : "尚无同步记录"}
+            </Badge>
+            {row.original.discovery_status && (
+              <span className="text-xs text-muted-foreground">
+                {discoveryLabels[row.original.discovery_status]}
+              </span>
+            )}
+            <span className="text-xs text-muted-foreground">
+              {displayTime(row.original.last_discovery)}
+            </span>
+            {row.original.error_code && (
+              <span className="text-xs">{row.original.error_code}</span>
+            )}
+          </div>
+        ),
+      },
+      {
+        header: "BC 操作",
+        cell: ({ row }) =>
+          manage && row.original.binding_status !== "DISABLED" ? (
+            <div className="flex flex-wrap gap-1">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={
+                  detail.status !== "ACTIVE" ||
+                  row.original.binding_status === "SYNCING" ||
+                  bcMutation.isPending
+                }
+                onClick={() =>
+                  bcMutation.mutate({ bcId: row.original.bc_id, kind: "sync" })
+                }
+              >
+                {row.original.binding_status === "ERROR"
+                  ? "重试同步"
+                  : "同步账户"}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={detail.status === "DISABLED" || bcMutation.isPending}
+                onClick={() => setUnbind(row.original)}
+              >
+                解绑 BC
+              </Button>
+            </div>
+          ) : (
+            "—"
+          ),
+      },
+    )
   return (
     <ManagementSheet
       title="连接详情"
       description="当前租户的授权连接信息，不包含任何凭据"
       dirty={false}
+      pending={bcMutation.isPending || defaultMutation.isPending}
       onClose={onClose}
     >
       <div className="flex flex-col gap-5">
@@ -712,6 +853,44 @@ function ConnectionDetails({
           <dt>异常状态</dt>
           <dd className="break-all">{detail.error_code || "未记录异常"}</dd>
         </dl>
+        {unbind && (
+          <Alert>
+            <AlertTitle>解绑 {unbind.name || "未命名 BC"}</AlertTitle>
+            <AlertDescription>
+              <p>
+                此 BC 将停止使用当前连接；其他 BC 保留接入。历史记录保留，已在
+                TikTok 启用的广告不会停止。
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  disabled={bcMutation.isPending}
+                  onClick={() => setUnbind(null)}
+                >
+                  取消解绑
+                </Button>
+                <Button
+                  disabled={
+                    bcMutation.isPending || isForbidden(bcMutation.error)
+                  }
+                  onClick={() =>
+                    bcMutation.mutate({ bcId: unbind.bc_id, kind: "unbind" })
+                  }
+                >
+                  确认解绑 BC
+                </Button>
+              </div>
+            </AlertDescription>
+          </Alert>
+        )}
+        {bcMutation.error && (
+          <Alert variant="destructive">
+            <AlertTitle>BC 操作未完成</AlertTitle>
+            <AlertDescription>
+              {errorMessage(bcMutation.error)}
+            </AlertDescription>
+          </Alert>
+        )}
         {defaultMutation.error && (
           <Alert variant="destructive">
             <AlertTitle>默认连接未更改</AlertTitle>

@@ -1,4 +1,4 @@
-"""一次派发推进一个有界只读阶段；MCP 候选页仅写 staging。"""
+"""一次派发推进一个有界只读阶段；每个 BC 的 MCP 读取结果仅写 staging。"""
 
 import copy
 import re
@@ -24,7 +24,7 @@ from app.integrations.tiktok.contracts.discovery import (
     DISCOVERY_PAGE_SIZE,
     DiscoveryAccountsGateway,
 )
-from app.integrations.tiktok.mcp_auth.bootstrap import open_candidate_accounts
+from app.integrations.tiktok.mcp_auth.management import open_management_accounts
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.jobs.celery_app import celery_app
 from app.jobs.models import PendingDispatch
@@ -33,7 +33,8 @@ from app.jobs.tasks import register_dispatch_task
 from app.modules.accounts.discovery_models import DiscoveryStagedPage
 from app.modules.accounts.mcp_discovery import (
     incomplete,
-    locked_candidate_run,
+    locked_mcp_run,
+    mark_mcp_run_error,
     publish_mcp_directory,
     verified_observation,
 )
@@ -220,18 +221,22 @@ def _read_stage(
     database_engine: Any,
     redis_client: Redis,
     context: TenantContext,
-    attempt_id: UUID,
+    connection_id: UUID,
+    authorization_revision: int,
+    run_id: UUID,
     deadline: datetime,
     work: dict[str, Any],
     requested_ids: tuple[str, ...],
 ) -> list[dict[str, Any]]:
     if work["stage"] == "DETAILS" and not requested_ids:
         return read_discovery_stage(None, work=work, requested_ids=requested_ids)
-    with open_candidate_accounts(
+    with open_management_accounts(
         database_engine=database_engine,
         redis_client=redis_client,
         context=context,
-        attempt_id=attempt_id,
+        connection_id=connection_id,
+        authorization_revision=authorization_revision,
+        run_id=run_id,
         task_deadline=deadline,
     ) as gateway:
         return read_discovery_stage(gateway, work=work, requested_ids=requested_ids)
@@ -395,7 +400,33 @@ def process_mcp_discovery(
     deadline = datetime.now(UTC) + timedelta(seconds=30)
     claim_id = uuid4()
     with bounded_session(database_engine, task_deadline=deadline) as session:
-        run, _ = locked_candidate_run(session, context=context, run_id=run_id)
+        try:
+            run, _ = locked_mcp_run(session, context=context, run_id=run_id)
+        except DomainError as error:
+            if error.code in {"tenant_forbidden", "action_forbidden"}:
+                # 原管理员在首次派发前撤权也必须留下可重试终态；只写原租户、
+                # 原代数且尚未被其他 claim 占用的任务，不能借拒绝结果跨越解绑围栏。
+                try:
+                    rejected, _ = locked_mcp_run(
+                        session, context=context, run_id=run_id, check_admin=False
+                    )
+                except DomainError:
+                    raise error from None
+                now = datetime.now(UTC)
+                if (
+                    rejected.status in {"RUNNING", "ADMISSION_WAIT"}
+                    and rejected.revision == expected_revision
+                    and (
+                        (rejected.claim_id is None and rejected.claimed_until is None)
+                        or (
+                            rejected.claimed_until is not None
+                            and rejected.claimed_until <= now
+                        )
+                    )
+                ):
+                    mark_mcp_run_error(session, run=rejected, code=error.code)
+                    session.commit()
+            raise
         if run.status == "COMPLETE" or run.revision != expected_revision:
             return
         now = datetime.now(UTC)
@@ -406,13 +437,12 @@ def process_mcp_discovery(
         try:
             verified_observation(session, run=run)
         except DomainError as error:
-            run.status, run.error_code = "ERROR", error.code
-            session.add(run)
+            mark_mcp_run_error(session, run=run, code=error.code)
             session.commit()
             return
         work = copy.deepcopy(run.work)
-        attempt_id = run.mcp_candidate_attempt_id
-        assert attempt_id is not None
+        connection_id = run.connection_id
+        authorization_revision = run.authorization_revision
         requested_ids = (
             _detail_ids(session, run=run) if work["stage"] == "DETAILS" else ()
         )
@@ -426,20 +456,28 @@ def process_mcp_discovery(
     try:
         if work["stage"] == "FINALIZE":
             with bounded_session(database_engine, task_deadline=deadline) as session:
-                publish_mcp_directory(session, context=context, run_id=run_id)
+                publish_mcp_directory(
+                    session,
+                    context=context,
+                    run_id=run_id,
+                    claim_id=claim_id,
+                    revision=expected_revision,
+                )
                 session.commit()
             return
         results = _read_stage(
             database_engine=database_engine,
             redis_client=redis_client,
             context=context,
-            attempt_id=attempt_id,
+            connection_id=connection_id,
+            authorization_revision=authorization_revision,
+            run_id=run_id,
             deadline=deadline,
             work=work,
             requested_ids=requested_ids,
         )
         with bounded_session(database_engine, task_deadline=deadline) as session:
-            run, _ = locked_candidate_run(session, context=context, run_id=run_id)
+            run, _ = locked_mcp_run(session, context=context, run_id=run_id)
             if run.claim_id != claim_id or run.revision != expected_revision:
                 return
             _save_results(session, run=run, rows=results)
@@ -456,19 +494,17 @@ def process_mcp_discovery(
         with bounded_session(
             database_engine, task_deadline=datetime.now(UTC) + timedelta(seconds=5)
         ) as session:
-            # 当前成员可能已撤权；仅允许保存原 claim 的失败，不产生后续远端请求。
-            failed_run = session.exec(
-                select(DiscoveryRun)
-                .where(
-                    DiscoveryRun.id == run_id,
-                    DiscoveryRun.tenant_id == tenant_id,
-                    DiscoveryRun.actor_id == actor_id,
+            # 撤权后仅允许原 claim 留失败审计；解绑或重授权后的迟到结果不回写。
+            try:
+                failed_run, _ = locked_mcp_run(
+                    session, context=context, run_id=run_id, check_admin=False
                 )
-                .with_for_update()
-            ).one_or_none()
+            except DomainError:
+                return
             if (
                 failed_run is None
                 or failed_run.claim_id != claim_id
+                or failed_run.revision != expected_revision
                 or failed_run.status not in {"RUNNING", "ADMISSION_WAIT"}
             ):
                 return
@@ -478,6 +514,9 @@ def process_mcp_discovery(
             if isinstance(error, AccountAdmissionDeferred) or code in {
                 "admission_unavailable",
                 "tiktok_local_resources_unavailable",
+                # 兄弟 BC 轮换共享令牌时只重开读取会话，不让当前任务失效。
+                "gateway_credentials_changed",
+                "mcp_refresh_pending",
             }:
                 failed_run.status = "ADMISSION_WAIT"
                 failed_run.next_attempt_at = datetime.now(UTC) + timedelta(
@@ -491,7 +530,7 @@ def process_mcp_discovery(
                 failed_run.revision += 1
                 _queue(session, run=failed_run, due=failed_run.next_attempt_at)
             else:
-                failed_run.status = "ERROR"
+                mark_mcp_run_error(session, run=failed_run, code=code)
             session.add(failed_run)
             session.commit()
 

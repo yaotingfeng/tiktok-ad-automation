@@ -105,3 +105,10 @@ export const discoveryLabels: Record<
   ERROR: "发现失败",
   CANCELLED: "已取消",
 }
+
+export const bindingLabels: Record<string, string> = {
+  SYNCING: "正在同步",
+  ACTIVE: "已接入",
+  ERROR: "同步失败",
+  DISABLED: "已解绑",
+}

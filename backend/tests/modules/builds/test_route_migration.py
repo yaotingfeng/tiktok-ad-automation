@@ -71,7 +71,7 @@ def historical_rows(
         session.flush()
         draft = row.id
     if connections:
-        account(session, context)
+        account(session, context, historical=not current)
     for _ in range(max(0, connections - 1)):
         session.add(TikTokConnection(tenant_id=context.tenant_id, status="ACTIVE"))
     preview = BuildPreview(
@@ -345,7 +345,8 @@ def test_legacy_submission_cannot_request_recovery_even_with_current_default(
         with Session(engine) as session, session.begin():
             context, preview, step = historical_rows(session)
             preview_id, submission_id = preview.id, step.submission_id
-        command.upgrade(config, "mcp_build_routes")
+        # 当前应用读取使用当前 schema；旧事实仍必须在完整升级后明确阻断。
+        command.upgrade(config, "head")
         with Session(engine) as session:
             with pytest.raises(
                 DomainError,

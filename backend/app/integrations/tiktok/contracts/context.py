@@ -1,7 +1,7 @@
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 ChannelKind = Literal["OFFICIAL_API", "OFFICIAL_MCP"]
 
@@ -17,3 +17,4 @@ class FrozenTikTokRoute(BaseModel):
     channel: ChannelKind
     authorization_revision: int
     adapter_contract_revision: str
+    binding_revision: int = Field(default=0, ge=0, strict=True)

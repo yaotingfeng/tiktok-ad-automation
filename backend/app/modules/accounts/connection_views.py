@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
@@ -15,7 +15,7 @@ from app.modules.accounts.connection_models import (
     McpAuthorizationAttempt,
     McpRefreshAttempt,
 )
-from app.modules.accounts.models import DiscoveryRun, TikTokConnection
+from app.modules.accounts.models import TikTokConnection
 from app.modules.accounts.schemas import ConnectionPublic
 
 
@@ -35,14 +35,19 @@ def enrich_connections(
             BCConnectionBinding.connection_id,
             func.count(),
             func.min(BCConnectionBinding.bc_id),
+            func.sum(case((col(BCConnectionBinding.status) == "SYNCING", 1), else_=0)),
         )
         .where(
             BCConnectionBinding.tenant_id == context.tenant_id,
             col(BCConnectionBinding.connection_id).in_(ids),
+            BCConnectionBinding.status != "DISABLED",
         )
         .group_by(col(BCConnectionBinding.connection_id))
     ).all()
-    bindings = {identity: (count, first) for identity, count, first in binding_rows}
+    bindings = {
+        identity: (count, first, pending)
+        for identity, count, first, pending in binding_rows
+    }
     defaults_query = select(BCDefaultRoute.connection_id).where(
         BCDefaultRoute.tenant_id == context.tenant_id,
         col(BCDefaultRoute.connection_id).in_(ids),
@@ -104,36 +109,26 @@ def enrich_connections(
             )
         ).all()
     }
+    # 授权在选择 BC 时统一发布，完成时间不再依赖某个 BC 的发现任务。
     accepted_times = dict(
         session.exec(
-            select(DiscoveryRun.connection_id, func.max(DiscoveryRun.completed_at))
-            .join(
-                McpAuthorizationAttempt,
-                (
-                    col(McpAuthorizationAttempt.id)
-                    == col(DiscoveryRun.mcp_candidate_attempt_id)
-                )
-                & (
-                    col(McpAuthorizationAttempt.tenant_id)
-                    == col(DiscoveryRun.tenant_id)
-                )
-                & (
-                    col(McpAuthorizationAttempt.connection_id)
-                    == col(DiscoveryRun.connection_id)
-                ),
+            select(
+                McpAuthorizationAttempt.connection_id,
+                func.max(McpAuthorizationAttempt.completed_at),
             )
             .where(
-                DiscoveryRun.tenant_id == context.tenant_id,
-                col(DiscoveryRun.connection_id).in_(ids),
-                DiscoveryRun.status == "COMPLETE",
+                McpAuthorizationAttempt.tenant_id == context.tenant_id,
+                col(McpAuthorizationAttempt.connection_id).in_(ids),
                 McpAuthorizationAttempt.status == "ACCEPTED",
             )
-            .group_by(col(DiscoveryRun.connection_id))
+            .group_by(col(McpAuthorizationAttempt.connection_id))
         ).all()
     )
     now = datetime.now(UTC)
     for item in items:
-        item.binding_count, first = bindings.get(item.id, (0, None))
+        item.binding_count, first, item.pending_binding_count = bindings.get(
+            item.id, (0, None, 0)
+        )
         item.bound_bc_id = first if item.binding_count == 1 else None
         item.is_default = item.id in defaults
         fact = facts.get(item.id)
@@ -161,6 +156,8 @@ def enrich_connections(
                     )
         attempt = attempts.get(item.id)
         if attempt is not None:
+            if attempt.status == "ACCEPTED" and attempt.completed_at is not None:
+                item.last_authorized_at = attempt.completed_at
             item.authorization_status = attempt.status
             # 管理员才获得可继续操作的候选引用；失效候选不会触发浏览器自动读取。
             if (

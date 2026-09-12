@@ -5,6 +5,7 @@ import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -171,6 +172,57 @@ def _candidate_client(
         yield client
 
 
+def read_tools(client: BoundMCPClient) -> tuple[dict[str, Any], dict[str, str]]:
+    """候选与当前授权共用完整 tools/list 核验，保存实际观察的合同。"""
+    required = {
+        c.tool_name: c
+        for c in load_tool_contracts()
+        if c.operation.startswith("accounts.")
+    }
+    reviewed = {c.tool_name: c for c in load_tool_contracts()}
+    schemas = {}
+    unavailable_tools = {}
+    seen = set()
+    cursor = None
+    for _ in range(100):
+        page = client.list_tools(cursor=cursor)
+        for tool in page.tools:
+            if tool.name in seen:
+                raise DomainError("mcp_contract_changed", "MCP 目录包含重复工具")
+            seen.add(tool.name)
+            if len(seen) > 10000:
+                raise DomainError("mcp_contract_changed", "MCP 目录超过核验上限")
+            contract = reviewed.get(tool.name)
+            if contract is not None:
+                observed = tool.model_dump(by_alias=True, exclude_none=True)
+                try:
+                    verify_tool_schema(contract, observed)
+                except DomainError as error:
+                    if tool.name in required or error.code != "mcp_contract_changed":
+                        raise
+                    # 可选写入/素材能力的漂移只使该工具不可用，不能阻断完整账户读取。
+                    unavailable_tools[tool.name] = "mcp_contract_changed"
+                    continue
+                # 从实际观察中保留经核实的 schema 语义，不拿 expected manifest 冒充观察。
+                # 删除 schema 注解和 SDK 扩展，避免保存描述或任意签名 URL。
+                schemas[tool.name] = {
+                    "name": tool.name,
+                    "inputSchema": _semantic_schema(observed["inputSchema"]),
+                }
+                if contract.output_schema is not None:
+                    schemas[tool.name]["outputSchema"] = _semantic_schema(
+                        observed["outputSchema"]
+                    )
+        cursor = page.next_cursor
+        if cursor is None:
+            break
+    else:
+        raise DomainError("mcp_contract_changed", "MCP 目录分页未完成")
+    if not set(required) <= set(schemas):
+        raise DomainError("mcp_contract_changed", "MCP 账户读取合同不完整")
+    return schemas, unavailable_tools
+
+
 def observe_candidate_tools(
     *,
     database_engine: Engine,
@@ -185,15 +237,6 @@ def observe_candidate_tools(
         existing = _observation(session, context=context, attempt_id=attempt_id)
         if existing is not None:
             return existing.id
-    required = {
-        c.tool_name: c
-        for c in load_tool_contracts()
-        if c.operation.startswith("accounts.")
-    }
-    reviewed = {c.tool_name: c for c in load_tool_contracts()}
-    schemas = {}
-    unavailable_tools = {}
-    seen = set()
     with _candidate_client(
         database_engine=database_engine,
         redis_client=redis_client,
@@ -202,46 +245,7 @@ def observe_candidate_tools(
         task_deadline=task_deadline,
         observed_tools={},
     ) as client:
-        cursor = None
-        for _ in range(100):
-            page = client.list_tools(cursor=cursor)
-            for tool in page.tools:
-                if tool.name in seen:
-                    raise DomainError("mcp_contract_changed", "MCP 目录包含重复工具")
-                seen.add(tool.name)
-                if len(seen) > 10000:
-                    raise DomainError("mcp_contract_changed", "MCP 目录超过核验上限")
-                contract = reviewed.get(tool.name)
-                if contract is not None:
-                    observed = tool.model_dump(by_alias=True, exclude_none=True)
-                    try:
-                        verify_tool_schema(contract, observed)
-                    except DomainError as error:
-                        if (
-                            tool.name in required
-                            or error.code != "mcp_contract_changed"
-                        ):
-                            raise
-                        # 可选写入/素材能力的漂移只使该工具不可用，不能阻断完整账户读取。
-                        unavailable_tools[tool.name] = "mcp_contract_changed"
-                        continue
-                    # 从实际观察中保留经核实的 schema 语义，不拿 expected manifest 冒充观察。
-                    # 删除 schema 注解和 SDK 扩展，避免保存描述或任意签名 URL。
-                    schemas[tool.name] = {
-                        "name": tool.name,
-                        "inputSchema": _semantic_schema(observed["inputSchema"]),
-                    }
-                    if contract.output_schema is not None:
-                        schemas[tool.name]["outputSchema"] = _semantic_schema(
-                            observed["outputSchema"]
-                        )
-            cursor = page.next_cursor
-            if cursor is None:
-                break
-        else:
-            raise DomainError("mcp_contract_changed", "MCP 目录分页未完成")
-    if not set(required) <= set(schemas):
-        raise DomainError("mcp_contract_changed", "MCP 账户读取合同不完整")
+        schemas, unavailable_tools = read_tools(client)
     profile = load_mcp_protocol()
     with bounded_session(database_engine, task_deadline=task_deadline) as session:
         candidate_attempt(session, context=context, attempt_id=attempt_id)
@@ -323,6 +327,59 @@ def open_candidate_accounts(
         )
 
 
+DIRECTORY_CACHE_SECONDS = 300
+
+
+def directory_fresh(observation: ConnectionToolObservation) -> bool:
+    try:
+        checked = datetime.fromisoformat(
+            observation.call_evidence["business_centers_checked_at"]
+        )
+        age = (datetime.now(UTC) - checked).total_seconds()
+        return observation.call_evidence.get(
+            "business_centers_complete"
+        ) is True and 0 <= age <= min(
+            DIRECTORY_CACHE_SECONDS, settings.BC_CAPABILITY_MAX_AGE_SECONDS
+        )
+    except KeyError, ValueError, TypeError:
+        return False
+
+
+def read_business_centers(gateway: Any) -> list[dict[str, str]]:
+    items: dict[str, dict[str, str]] = {}
+    totals = None
+    for page_no in range(1, 101):
+        # 官方 bc_get 每页最多 50 条；所有页完整后才发布可选择的目录。
+        page = gateway.business_centers(page=page_no, page_size=50)
+        current_totals = (page.total_pages, page.total_number)
+        if totals is not None and totals != current_totals:
+            raise DomainError(
+                "mcp_candidate_directory_incomplete", "BC 目录在分页期间变化"
+            )
+        totals = current_totals
+        for bc in page.items:
+            if bc.bc_id in items or not bc.bc_id.strip() or len(bc.bc_id) > 128:
+                raise DomainError(
+                    "mcp_candidate_directory_incomplete", "BC 目录重复或无效"
+                )
+            items[bc.bc_id] = {"bc_id": bc.bc_id, "name": bc.name}
+        if page.last:
+            break
+    else:
+        raise DomainError("mcp_candidate_directory_incomplete", "BC 目录分页未完成")
+    if totals is not None and totals[1] is not None and len(items) != totals[1]:
+        raise DomainError("mcp_candidate_directory_incomplete", "BC 目录总数不一致")
+    return list(items.values())
+
+
+def observed_subject(gateway: Any) -> dict[str, Any]:
+    observed = gateway.observe_authorization()
+    facts = asdict(observed.facts)
+    facts["scopes"] = list(observed.facts.scopes)
+    facts["observed_at"] = observed.facts.observed_at.isoformat()
+    return facts
+
+
 def candidate_business_centers(
     *,
     database_engine: Engine,
@@ -330,9 +387,14 @@ def candidate_business_centers(
     context: TenantContext,
     attempt_id: UUID,
     task_deadline: datetime,
+    refresh: bool = False,
 ) -> list[dict[str, str]]:
-    items: dict[str, dict[str, str]] = {}
-    totals = None
+    with bounded_session(database_engine, task_deadline=task_deadline) as session:
+        candidate_attempt(session, context=context, attempt_id=attempt_id)
+        existing = _observation(session, context=context, attempt_id=attempt_id)
+        if not refresh and existing is not None and directory_fresh(existing):
+            if existing.call_evidence.get("authorization_facts", {}).get("subject_id"):
+                return deepcopy(existing.call_evidence["business_centers"])
     with open_candidate_accounts(
         database_engine=database_engine,
         redis_client=redis_client,
@@ -340,31 +402,8 @@ def candidate_business_centers(
         attempt_id=attempt_id,
         task_deadline=task_deadline,
     ) as gateway:
-        for page_no in range(1, 101):
-            # 官方 bc_get 实际限制每页最多 50 条；tools/list 未声明此上限。
-            page = gateway.business_centers(page=page_no, page_size=50)
-            current_totals = (page.total_pages, page.total_number)
-            if totals is not None and totals != current_totals:
-                raise DomainError(
-                    "mcp_candidate_directory_incomplete", "候选 BC 目录在分页期间变化"
-                )
-            totals = current_totals
-            for bc in page.items:
-                if bc.bc_id in items or len(bc.bc_id) > 128:
-                    raise DomainError(
-                        "mcp_candidate_directory_incomplete", "候选 BC 目录重复或无效"
-                    )
-                items[bc.bc_id] = {"bc_id": bc.bc_id, "name": bc.name}
-            if page.last:
-                break
-        else:
-            raise DomainError(
-                "mcp_candidate_directory_incomplete", "候选 BC 目录分页未完成"
-            )
-    if totals is not None and totals[1] is not None and len(items) != totals[1]:
-        raise DomainError(
-            "mcp_candidate_directory_incomplete", "候选 BC 目录总数不一致"
-        )
+        facts = observed_subject(gateway)
+        items = read_business_centers(gateway)
     with bounded_session(database_engine, task_deadline=task_deadline) as session:
         candidate_attempt(session, context=context, attempt_id=attempt_id)
         observation = _observation(session, context=context, attempt_id=attempt_id)
@@ -373,9 +412,10 @@ def candidate_business_centers(
         observation.call_evidence = {
             **observation.call_evidence,
             "business_centers_complete": True,
-            "business_centers": list(items.values()),
+            "business_centers": items,
             "business_centers_checked_at": datetime.now(UTC).isoformat(),
+            "authorization_facts": facts,
         }
         session.add(observation)
         session.commit()
-    return list(items.values())
+    return items

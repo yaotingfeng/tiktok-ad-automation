@@ -12,7 +12,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
-from app.modules.accounts.connection_models import BCConnectionBinding, BCDefaultRoute
+from app.modules.accounts.connection_models import BCDefaultRoute
 from app.modules.accounts.models import TikTokConnection
 from tests.migration_database import historical_database
 from tests.modules.conftest import create_context
@@ -153,25 +153,20 @@ def test_upgrade_preserves_api_bindings_ids_and_only_unambiguous_defaults(monkey
             mcp = TikTokConnection(tenant_id=context.tenant_id, kind="OFFICIAL_MCP")
             session.add(mcp)
             session.flush()
-            session.add(
-                BCConnectionBinding(
-                    tenant_id=context.tenant_id,
-                    bc_id="one",
-                    connection_id=mcp.id,
-                    kind="OFFICIAL_MCP",
-                )
+            # mcp01 的单 BC 约束仍须验证，但不能写入后续生命周期迁移的 ORM 列。
+            binding_insert = text("""
+                INSERT INTO bc_connection_binding (tenant_id,bc_id,connection_id,kind)
+                VALUES (:tenant,:bc,:connection,'OFFICIAL_MCP')
+            """)
+            session.execute(
+                binding_insert,
+                {"tenant": context.tenant_id, "bc": "one", "connection": mcp.id},
             )
-            session.flush()
             with pytest.raises(IntegrityError), session.begin_nested():
-                session.add(
-                    BCConnectionBinding(
-                        tenant_id=context.tenant_id,
-                        bc_id="two",
-                        connection_id=mcp.id,
-                        kind="OFFICIAL_MCP",
-                    )
+                session.execute(
+                    binding_insert,
+                    {"tenant": context.tenant_id, "bc": "two", "connection": mcp.id},
                 )
-                session.flush()
             with pytest.raises(IntegrityError), session.begin_nested():
                 mcp.authorization_revision = -1
                 session.flush()
