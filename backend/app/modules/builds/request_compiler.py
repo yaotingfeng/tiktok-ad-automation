@@ -264,12 +264,11 @@ def read_arguments(query: BuildReadQuery) -> tuple[str, dict[str, object]]:
             filtering["adgroup_ids"] = [query.intent.adgroup_id]
         fields = list(body)
         fields.append(identifiers[kind][:-1])
-        # 固定 Smart+ 广告组 GET 的 fields 不支持 operation_status；另走普通组状态查询。
-        if kind == "ADGROUP":
-            fields.remove("operation_status")
-        arguments.update(
-            filtering=filtering, page=query.page, page_size=100, fields=fields
-        )
+        arguments.update(filtering=filtering, page=query.page, page_size=100)
+        # 原生 Smart+ 广告组的字段筛选会漏掉 targeting_spec 和状态；读取完整对象。
+        # 仍严格校验父级、分页及所有冻结字段，不从请求补造缺失事实。
+        if kind != "ADGROUP":
+            arguments["fields"] = fields
     return READ_OPERATIONS[kind], arguments
 
 

@@ -45,7 +45,7 @@ Minis Campaign 原生读取不返回 catalog_enabled；新模板不发送该冗�
 
 原始远端 JSON 金额使用精确十进制解码；不能先经过 SDK float 舍入再比较，不能以请求值恢复远端精度。历史输入兼容与远端事实解码分开；非有限值、损坏类型或精度不明保持未核实。已明确返回非 ENABLE 时优先记录状态 MISMATCH，即使另有缺项，也不能被 INCOMPLETE 掩盖，更不会发送状态修改。ENABLE 仅是观察到的配置，不代表审核通过、开始投放或产生消耗。
 
-`BuildRecord.intent=None` 与 `missing_fields` 保留缺损事实。Smart+ Ad Group 只缺 operation_status 时，保存其余完整的类型化 observed_adgroup；另一 delivery 经原 route 用实际 ID 读取普通 adgroup 状态，身份/账户/ROAS一致后才能合并实际事实。CTA 仅支持已知 portfolio ID 的读取，不发明未知 ID 搜索；**响应缺 advertiser_id 时仍为 INCOMPLETE，不能从请求账户补值**。已知 CTA ID继续保留，不能宣称完整 MATCH。
+`BuildRecord.intent=None` 与 `missing_fields` 保留缺损事实。Smart+ Ad Group 默认读取完整对象（显式 fields 会漏掉 targeting_spec 和状态）；仅实际响应仍只缺 operation_status 时，保存其余完整的类型化 observed_adgroup；另一 delivery 经原 route 用实际 ID 读取普通 adgroup 状态，身份/账户/ROAS一致后才能合并实际事实。CTA 仅支持已知 portfolio ID 的读取，不发明未知 ID 搜索；**响应缺 advertiser_id 时仍为 INCOMPLETE，不能从请求账户补值**。已知 CTA ID继续保留，不能宣称完整 MATCH。
 
 ## 分页、调度与恢复
 

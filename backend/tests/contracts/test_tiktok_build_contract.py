@@ -428,3 +428,20 @@ def test_iaa_uses_verified_day_zero_and_requires_observed_window():
         query=query, response=McpBusinessResponse(data, CallEvidence())
     ).rows[0]
     assert "vbo_window" in record.missing_fields
+
+
+def test_adgroup_read_keeps_native_targeting_and_status_with_parent_scope():
+    from app.integrations.tiktok.contracts.builds import BuildReadQuery
+    from app.modules.builds.request_compiler import read_arguments
+
+    intent = decode_intent("ADGROUP", build_bodies()["ADGROUP"])
+    operation, arguments = read_arguments(
+        BuildReadQuery(intent=intent, remote_id="remote")
+    )
+    assert operation == "build.get_adgroups"
+    assert "fields" not in arguments
+    assert arguments["filtering"] == {
+        "adgroup_ids": ["remote"],
+        "campaign_ids": [intent.campaign_id],
+    }
+    assert arguments["page_size"] == 100
