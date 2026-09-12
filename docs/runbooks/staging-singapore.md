@@ -19,7 +19,7 @@
 
 ## 当前实例与操作
 
-- 运行提交：`8b59aed363c35bef317f6cd0fc30da48c40c723a`；本次为图标更新，见 [图标发布验收](../validation/2026-09-10-staging-singapore-icon-release.md)。首次部署记录见 [验收记录](../validation/2026-09-10-staging-singapore-release.md)。
+- 运行提交：`0535f050dab73632a2ea4f4bb801dca0871de238`；2026-09-12 双通道更新、Linux 验证及 MCP 客户端登记见 [发布验收](../validation/2026-09-12-staging-mcp-release.md)。数据库 head 为 `mcp_cover_evidence`，旧版本及发布前备份保留。
 - 入口：`https://137.220.150.31`，80 跳转 443。已签发受信任 IP 证书，非自签名证书；无需域名即可访问本次测试入口。真实 TikTok 回调/App 接入另行配置并验收。
 - Python `3.14.2` / uv `0.9.26` / Bun `1.4.2` / PostgreSQL `18.6` / Redis `8.10.1` / Certbot `5.8.0`。另已安装 Nginx、FFmpeg 和基础编译依赖；未安装 Docker。
 - 数据库 `tt_ada_staging`，角色 `tt_ada`；应用角色无 CREATEDB 或超级用户权限。回归测试使用单独测试角色与 `tt_ada_acceptance_test`、Redis DB 14/15，业务使用 Redis DB 0。
@@ -69,3 +69,9 @@ Sites 独立源码在相邻 `server-sites-gateway/` 项目，发布源码 `148a0
 ## 当前初始化账号（2026-09-10）
 
 平台管理员 `admin` 密码已按用户要求更新；已创建租户 `junbo`，租户管理员为 `junbo`（非平台超级用户）。密码仅保存于上述服务器及本地私有凭据文件，不在文档中记录。两个账号重新登录、tenant_admin 成员关系和平台接口 403 隔离均验证通过；账号操作后已执行备份。
+
+## 2026-09-12 MCP 授权前置配置
+
+测试站点已完成官方客户端动态登记（HTTP 201），回调为 `https://tk-ada.137-220-150-31.sslip.io/api/integrations/tiktok/mcp/callback`。私有 app.env 设置 MCP_REDIRECT_URI 与 MCP_CLIENT_REGISTRATION_REF，后者指向 `/etc/tt-ada-staging/mcp-client.json`（root:tt-ada 0640）。备份脚本已包含整个私有配置目录。页面 MCP configuration 为 READY；租户登录授权、BC 绑定、配额/实际协议和素材广告联调尚未完成，READY 不证明这些能力。
+
+服务器新增 `/swapfile-tt-ada-staging` 2 GiB swap。构建不依赖 Node：在 frontend 使用 Bun 执行 `../node_modules/typescript/bin/tsc -p tsconfig.build.json` 和 `../node_modules/vite/bin/vite.js build`。Python 虚拟环境应使用 `/var/lib/tt-ada-staging/python/` 下的共享解释器，避免指向 root 家目录。

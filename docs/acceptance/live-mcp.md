@@ -1,6 +1,6 @@
 # 官方 MCP 真实联调验收表
 
-**状态：未执行。** 本轮仅本地开发与合成传输验证，没有注册真实客户端、发起 OAuth、查询真实 BC、上传 TikTok/R2 素材或创建广告。本文是后续具体授权的记录模板，不是执行授权。本地后端结果为 2203 passed / 9 skipped，前端 348 passed；这些结果不填入下方真实联调记录。离线结果见 [双通道离线验收](../validation/2026-09-11-tiktok-dual-channel-offline.md)。
+**状态：已完成测试站点客户端登记，租户与业务真实联调未执行。** 2026-09-12 官方注册返回 HTTP 201，部署配置与管理员页面 READY 已核实，见 [测试发布记录](../validation/2026-09-12-staging-mcp-release.md)。未发起租户 TikTok 登录同意、查询真实 BC、上传 TikTok/R2 素材或创建广告。原本地后端 2203 passed、前端 348 passed，以及本次 Linux 9 项验收，均不是业务真实联调证据。
 
 ## 执行前证据
 
@@ -8,7 +8,7 @@
 
 | 验证项 | 必须保存的非秘密证据 | 当前状态 |
 | --- | --- | --- |
-| 客户端注册 | 官方注册条件、实际 client_id 审计引用、精确 callback URI、issuer/resource 与固定 profile 一致 | 未执行；公共 metadata 不证明注册成功 |
+| 客户端注册 | 官方注册条件、实际 client_id 审计引用、精确 callback URI、issuer/resource 与固定 profile 一致 | 2026-09-12 测试站点实际 HTTP 201；私有材料与精确 callback 已校验，见发布记录 |
 | OAuth/PKCE | 当前 tenant_admin、state 单次持久 claim、S256、实际同源回调、受控凭据存储和失败清理 | 未执行 |
 | 授权主体与权限 | 实际返回主体、scope、issuer/resource、当前用户及账户角色/权限来源、完整目录分页 | 未执行；mcp:tt4b/工具存在不能证明 write |
 | 连接与 BC | 后台 connection_id/channel、明确 BC binding、默认连接选择、其他 tenant/BC 的拒绝证据 | 未执行 |
@@ -59,6 +59,6 @@
 3. 审阅并提交具体预览；PREPARING 仅在已验证可准备时可提交。目标视频或封面未完成时必须零广告 create；依赖 READY 后逐层直接 ENABLE。
 4. 每个 CTA/广告 attempt 最多一次发送；回执先持久化再清理。逐层独立回读。空页、缺字段、文本成功、HTTP 200 不等于 MATCH。
 5. 在获准的专用测试环境做故障注入，记录接收后断线/worker 终止后 create 数仍为 1，原通道只读恢复。不得在真实投放账户擅自注入故障。
-6. Linux prefork 的真实 PG/Redis hard-kill 套件须另行执行并保存记录。本机 macOS **未执行**；不能把跳过项目计为通过。
+6. Linux prefork 已在 2026-09-12 测试服务器实际执行，8 个原跳过项目及 1 个相关用例通过，见发布记录；使用合成平台传输，不能替代真实 TikTok 故障联调。
 
 任何主体/BC 不符、schema 漂移、未核实写权限、缺少五项服务能力、历史 UNKNOWN 无可证原 route 或重复远端 ID 都停止新写，保留证据后按 [恢复手册](../runbooks/recovery.md)处理。真实联调通过也不自动授权生产发布，发布须遵循目标环境手册。

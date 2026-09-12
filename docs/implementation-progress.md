@@ -6,7 +6,7 @@
 - Linux 专用验收共 9 个不同用例通过：源素材双通道/迟到及硬终止 4 passed（83.22 秒）；广告原连接硬终止恢复 2 passed（81.06 秒）；同轮已通过广告硬期限及原件校验 3 项。真实 PostgreSQL 18/Redis 8、隔离测试 DB14/15；不调用真实 TikTok/R2。
 - 修复测试 Redis 库错配、两个嵌入 worker 共用 Kombu Hub/停止标志、假 HTTP 服务一秒空闲连接复用竞争、模拟回读金额表示，以及恢复测试过早软中断/硬终止。源素材真实硬限仍为 3 秒；广告恢复为 10 秒，仍断言实际到达后进程硬终止、只创建一次、原连接读取和撤权阻断。生产任务期限不变。
 - TikTok 官方动态客户端登记实际返回 HTTP 201；测试站点独立注册材料已保存于服务器受控文件并通过应用用户读取校验，回调为 `https://tk-ada.137-220-150-31.sslip.io/api/integrations/tiktok/mcp/callback`。注册与租户登录授权分开；未使用 Codex token，未完成租户 TikTok 授权或广告/素材真实联调。
-- 既有数据的独立恢复副本已成功演练迁移至 `mcp_cover_evidence`。服务器增加 2 GiB swap；备份脚本覆盖 MCP 注册配置。实际业务库迁移和服务切换结果随后记录在本次发布验收中。
+- 既有数据的独立恢复副本已成功演练迁移至 `mcp_cover_evidence`。服务器增加 2 GiB swap；备份脚本覆盖 MCP 注册配置。实际库迁移、服务切换、备份恢复、双管理员登录与 MCP READY 均已通过，运行提交 `0535f050dab73632a2ea4f4bb801dca0871de238`；见 [发布验收](validation/2026-09-12-staging-mcp-release.md)。
 
 # 实施进度
 
