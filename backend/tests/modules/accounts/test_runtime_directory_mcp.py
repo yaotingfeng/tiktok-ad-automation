@@ -95,7 +95,7 @@ def expired_mcp(directory_context, oauth_wire, catalog_wire, redis_client, monke
     "role,allowed",
     [("ADMIN", True), ("OPERATOR", True), ("ANALYST", False), (None, False)],
 )
-def test_mcp_complete_reobservation_enables_upload_for_actual_admin_role(
+def test_mcp_complete_reobservation_enables_build_and_upload_for_actual_role(
     expired_mcp, catalog_wire, redis_client, role, allowed
 ):
     from app.modules.accounts.models import BCAccountAccess
@@ -116,7 +116,7 @@ def test_mcp_complete_reobservation_enables_upload_for_actual_admin_role(
         assert facts.permission_summary == {
             "read_authorized": True,
             "upload_authorized": True,
-            "build_authorized": None,
+            "build_authorized": True,
         }
         assert facts.verified_at > datetime.now(UTC) - timedelta(minutes=1)
         connection = session.get(TikTokConnection, env["connection_id"])
@@ -129,7 +129,7 @@ def test_mcp_complete_reobservation_enables_upload_for_actual_admin_role(
                 BCAccountAccess.connection_id == connection.id
             )
         ).one()
-        assert not grant.can_build and grant.can_upload is allowed
+        assert grant.can_build is allowed and grant.can_upload is allowed
         route = freeze_route(
             session,
             context=env["context"],
@@ -146,7 +146,22 @@ def test_mcp_complete_reobservation_enables_upload_for_actual_admin_role(
                 advertiser_id=env["advertiser_id"],
                 capability="upload",
             )
+            verify_route(
+                session,
+                context=env["context"],
+                route=route,
+                advertiser_id=env["advertiser_id"],
+                capability="build",
+            )
         else:
+            with pytest.raises(DomainError):
+                verify_route(
+                    session,
+                    context=env["context"],
+                    route=route,
+                    advertiser_id=env["advertiser_id"],
+                    capability="build",
+                )
             with pytest.raises(DomainError):
                 verify_route(
                     session,
@@ -343,3 +358,35 @@ def test_unknown_refresh_outcome_blocks_runtime_without_business_http(
     assert len(catalog_wire.calls) == before
     with Session(engine) as session:
         assert session.get(CapabilityJob, env["job_id"]).status == "BLOCKED"
+
+
+def test_fresh_upload_only_facts_require_reobservation_before_cached_build_permission(
+    expired_mcp, catalog_wire, redis_client
+):
+    from app.modules.accounts.routing import freeze_route
+    from app.modules.accounts.runtime_directory import needs_directory_refresh
+
+    env = expired_mcp
+    enqueue_directory(catalog_wire, env["bc_id"], (env["advertiser_id"],))
+    assert finish_runtime(env, redis_client, env["run_id"]).status == "COMPLETE"
+    assert run(env, redis_client, env["job_id"]).status == "COMPLETE"
+    with Session(engine) as session, session.begin():
+        route = freeze_route(
+            session,
+            context=env["context"],
+            bc_id=env["bc_id"],
+            connection_id=env["connection_id"],
+        )
+        assert not needs_directory_refresh(session, route)
+        facts = session.exec(
+            select(ConnectionAuthorization).where(
+                ConnectionAuthorization.connection_id == env["connection_id"]
+            )
+        ).one()
+        facts.permission_summary = {
+            **facts.permission_summary,
+            "build_authorized": None,
+        }
+        session.flush()
+        assert needs_directory_refresh(session, route)
+    assert start({**env, "request_id": uuid4()}) != env["job_id"]

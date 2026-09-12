@@ -77,11 +77,11 @@ def needs_directory_refresh(session: Session, route: FrozenTikTokRoute) -> bool:
         return True
     if route.channel != "OFFICIAL_MCP":
         return False
-    # 旧版本只发布读取事实。显式重检须补采上传授权，不能复用旧的未知结果；
+    # 旧版本曾只核实读取/上传。新准备或显式重检须补采未知动作，不能复用旧缓存；
     # GET 不入队，也不通过改写授权/绑定代数恢复历史任务。
-    if (
-        "mcp:tt4b" in facts.scopes
-        and facts.permission_summary.get("upload_authorized") is None
+    if "mcp:tt4b" in facts.scopes and any(
+        facts.permission_summary.get(action) is None
+        for action in ("upload_authorized", "build_authorized")
     ):
         return True
     # 共享主体可由兄弟 BC 的同步续期，但资产/授权交集/详情必须是此 BC 的完整观察。
@@ -481,19 +481,12 @@ def publish_runtime_directory(
         params,
     )
     previous.verified_at = observed.observed_at
-    previous.permission_summary = (
-        {
-            "read_authorized": True,
-            "upload_authorized": observed.upload_authorized,
-            "build_authorized": observed.build_authorized,
-        }
-        if route.channel == "OFFICIAL_API"
-        else {
-            **previous.permission_summary,
-            "read_authorized": True,
-            "upload_authorized": observed.upload_authorized,
-        }
-    )
+    # 两通道均发布本轮完整观察的动作范围，不能继续沿用旧的未知搭建权限。
+    previous.permission_summary = {
+        "read_authorized": True,
+        "upload_authorized": observed.upload_authorized,
+        "build_authorized": observed.build_authorized,
+    }
     previous.source = (
         "OFFICIAL_TOKEN_AND_COMPLETE_DIRECTORY"
         if route.channel == "OFFICIAL_API"
