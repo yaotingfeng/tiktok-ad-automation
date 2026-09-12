@@ -341,7 +341,8 @@ def candidate_business_centers(
         task_deadline=task_deadline,
     ) as gateway:
         for page_no in range(1, 101):
-            page = gateway.business_centers(page=page_no, page_size=100)
+            # 官方 bc_get 实际限制每页最多 50 条；tools/list 未声明此上限。
+            page = gateway.business_centers(page=page_no, page_size=50)
             current_totals = (page.total_pages, page.total_number)
             if totals is not None and totals != current_totals:
                 raise DomainError(

@@ -53,6 +53,7 @@ def test_page_validates_items_and_defaults_cursor():
         ("admission_unavailable", 503),
         ("mcp_response_invalid", 502),
         ("mcp_token_response_invalid", 502),
+        ("mcp_business_error", 409),
         ("unexpected_credential_value", 500),
     ],
 )
@@ -73,6 +74,11 @@ def test_domain_error_uses_fixed_status_and_never_echoes_external_text(
     assert "an-arbitrary-credential-value" not in response.text + caplog.text
     assert "unexpected_credential_value" not in response.text + caplog.text
     assert response.json()["retryable"] is True
+    if code == "mcp_business_error":
+        assert (
+            response.json()["message"]
+            == "TikTok MCP 拒绝了本次业务请求，请联系管理员核查接口参数或权限"
+        )
 
 
 def test_fixed_api_prefix_and_oauth_schema(client):

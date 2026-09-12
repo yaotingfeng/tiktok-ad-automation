@@ -107,7 +107,7 @@ def bc_page(wire, *, page=1, total_pages=1, bcs=("bc-1", "bc-2"), total_number=2
                     "list": [{"bc_info": {"bc_id": bc, "name": bc}} for bc in bcs],
                     "page_info": {
                         "page": page,
-                        "page_size": 100,
+                        "page_size": 50,
                         "total_page": total_pages,
                         "total_number": total_number,
                     },
@@ -134,6 +134,12 @@ def test_complete_catalog_and_bc_selection_enqueue_only(
     assert [
         item["bc_id"] for item in read_bcs(committed_context, candidate, redis_client)
     ] == ["bc-1", "bc-2"]
+    bc_calls = [
+        call["params"]
+        for call in catalog_wire.calls
+        if call["method"] == "tools/call" and call["params"]["name"] == "bc_get"
+    ]
+    assert bc_calls[0]["arguments"] == {"page": 1, "page_size": 50}
     with Session(engine) as own:
         observation = own.exec(
             select(ConnectionToolObservation).where(
@@ -204,8 +210,8 @@ def test_unknown_bc_and_partial_pagination_do_not_replace_active(
     bc_page(
         catalog_wire,
         total_pages=2,
-        bcs=tuple(f"bc-{i}" for i in range(100)),
-        total_number=101,
+        bcs=tuple(f"bc-{i}" for i in range(50)),
+        total_number=51,
     )
     catalog_wire.enqueue_result(
         "bc_get",
@@ -270,7 +276,7 @@ def test_candidate_admin_rechecked_between_calls(
         attempt_id=candidate,
         task_deadline=datetime.now(UTC) + timedelta(seconds=30),
     ) as gateway:
-        assert gateway.business_centers(page=1, page_size=100).items
+        assert gateway.business_centers(page=1, page_size=50).items
         with Session(engine) as own:
             member = own.get(
                 TenantMembership,
@@ -280,7 +286,7 @@ def test_candidate_admin_rechecked_between_calls(
             own.add(member)
             own.commit()
         with pytest.raises(DomainError) as error:
-            gateway.business_centers(page=1, page_size=100)
+            gateway.business_centers(page=1, page_size=50)
         assert error.value.code == "action_forbidden"
     assert sum(c["method"] == "tools/call" for c in catalog_wire.calls) == 1
 
@@ -376,9 +382,16 @@ def test_disable_cancels_unsent_dispatch_and_preserves_history(
 def test_complete_bc_pagination_uses_same_candidate_and_stable_totals(
     committed_context, candidate, catalog_wire, redis_client
 ):
-    first_ids = tuple(f"bc-{i}" for i in range(100))
-    bc_page(catalog_wire, total_pages=2, bcs=first_ids, total_number=101)
-    bc_page(catalog_wire, page=2, total_pages=2, bcs=("bc-last",), total_number=101)
+    first_ids = tuple(f"bc-{i}" for i in range(50))
+    bc_page(catalog_wire, total_pages=3, bcs=first_ids, total_number=101)
+    bc_page(
+        catalog_wire,
+        page=2,
+        total_pages=3,
+        bcs=tuple(f"bc-{i}" for i in range(50, 100)),
+        total_number=101,
+    )
+    bc_page(catalog_wire, page=3, total_pages=3, bcs=("bc-last",), total_number=101)
     items = read_bcs(committed_context, candidate, redis_client)
     assert len(items) == 101
     with Session(engine) as own:
@@ -388,7 +401,8 @@ def test_complete_bc_pagination_uses_same_candidate_and_stable_totals(
         assert own.get(DiscoveryRun, run_id).work["bc_id"] == "bc-last"
         own.rollback()
     requests = [call for call in catalog_wire.calls if call["method"] == "tools/call"]
-    assert [call["params"]["arguments"]["page"] for call in requests] == [1, 2]
+    assert [call["params"]["arguments"]["page"] for call in requests] == [1, 2, 3]
+    assert all(call["params"]["arguments"]["page_size"] == 50 for call in requests)
 
 
 @pytest.mark.parametrize(
@@ -474,7 +488,7 @@ def test_superuser_membership_rechecked_before_next_call_and_binding(
             gateway.authorization_facts()
         assert error.value.code == "action_forbidden"
         with pytest.raises(DomainError) as error:
-            gateway.business_centers(page=1, page_size=100)
+            gateway.business_centers(page=1, page_size=50)
         assert error.value.code == "action_forbidden"
         assert len(catalog_wire.calls) == before
     with Session(engine) as own:

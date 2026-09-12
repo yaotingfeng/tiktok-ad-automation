@@ -238,6 +238,7 @@ ERROR_HTTP_STATUS: dict[str, int] = {
 # Public messages are application-owned. DomainError.message may contain raw
 # integration details, so it must never become an HTTP response or log field.
 ERROR_PUBLIC_MESSAGES: dict[str, str] = {
+    "mcp_business_error": "TikTok MCP 拒绝了本次业务请求，请联系管理员核查接口参数或权限",
     "ingest_api_required": "请从新版批量上传入口导入文件",
     "material_remote_source_unavailable": "来源账户素材暂不可读，请恢复授权或重新上传",
     "ingest_disabled": "批量导入尚未启用，请联系平台管理员",
