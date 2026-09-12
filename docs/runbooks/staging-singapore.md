@@ -19,7 +19,7 @@
 
 ## 当前实例与操作
 
-- 运行提交：`87a3b33e822728461dd773ea0b5b841043d5c312`；最新 MCP 授权后修复见 [发布验收](../validation/2026-09-12-staging-mcp-auth-fix.md)，此前双通道更新、Linux 验证及客户端登记见 [首次双通道发布](../validation/2026-09-12-staging-mcp-release.md)。数据库 head 为 `mcp_cover_evidence`，旧版本及发布前备份保留。
+- 运行提交：`e290b1b826cfba2acb17fed58cb93ee04ea90ef5`；最新 BC 分页修复及 Sun Browser 真实授权/BC 读取见 [分页验收](../validation/2026-09-12-staging-mcp-pagination.md)，此前 MCP 授权后修复见 [发布验收](../validation/2026-09-12-staging-mcp-auth-fix.md)，双通道更新、Linux 验证及客户端登记见 [首次双通道发布](../validation/2026-09-12-staging-mcp-release.md)。数据库 head 为 `mcp_cover_evidence`，旧版本及发布前备份保留。
 - 入口：`https://137.220.150.31`，80 跳转 443。已签发受信任 IP 证书，非自签名证书；无需域名即可访问本次测试入口。真实 TikTok 回调/App 接入另行配置并验收。
 - Python `3.14.2` / uv `0.9.26` / Bun `1.4.2` / PostgreSQL `18.6` / Redis `8.10.1` / Certbot `5.8.0`。另已安装 Nginx、FFmpeg 和基础编译依赖；未安装 Docker。
 - 数据库 `tt_ada_staging`，角色 `tt_ada`；应用角色无 CREATEDB 或超级用户权限。回归测试使用单独测试角色与 `tt_ada_acceptance_test`、Redis DB 14/15，业务使用 Redis DB 0。
