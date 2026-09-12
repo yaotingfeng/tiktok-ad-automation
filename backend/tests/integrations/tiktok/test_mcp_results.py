@@ -306,3 +306,19 @@ def test_cyclic_structured_data_is_unknown():
     data = {}
     data["self"] = data
     assert_unknown(receipt({"code": 0, "data": data}))
+
+
+@pytest.mark.parametrize("operation", ["accounts.list_bcs", "accounts.get_advertisers"])
+def test_documented_account_tools_accept_single_text_json_receipt(operation):
+    from app.integrations.tiktok.mcp.protocol import load_tool_contracts
+
+    selected = next(c for c in load_tool_contracts() if c.operation == operation)
+    payload = {"code": 0, "data": {"list": []}, "request_id": "synthetic-read-receipt"}
+    result = decode_mcp_result(receipt(texts=[json.dumps(payload)]), contract=selected)
+    assert result.data == {"list": []}
+    assert result.evidence.request_id == "synthetic-read-receipt"
+    assert_unknown(receipt(texts=["成功"]), selected_contract=selected)
+    assert_unknown(
+        receipt(texts=[json.dumps({**payload, "code": 40000})]),
+        selected_contract=selected,
+    )

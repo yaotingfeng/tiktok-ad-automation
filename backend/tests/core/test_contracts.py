@@ -51,6 +51,8 @@ def test_page_validates_items_and_defaults_cursor():
         ("dispatch_key_conflict", 409),
         ("dispatch_payload_invalid", 422),
         ("admission_unavailable", 503),
+        ("mcp_response_invalid", 502),
+        ("mcp_token_response_invalid", 502),
         ("unexpected_credential_value", 500),
     ],
 )

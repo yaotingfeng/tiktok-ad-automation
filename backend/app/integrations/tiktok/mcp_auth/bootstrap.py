@@ -74,6 +74,9 @@ def _observation(
             ConnectionToolObservation.tenant_id == context.tenant_id,
             ConnectionToolObservation.candidate_attempt_id == attempt_id,
             ConnectionToolObservation.pagination_complete == True,  # noqa: E712
+            # 旧合同观测不能继续用于目录读取和绑定；下次读取会重新发现工具。
+            ConnectionToolObservation.expected_contract_revision
+            == load_mcp_protocol().schema_manifest_sha256,
         )
         .order_by(col(ConnectionToolObservation.observed_at).desc())
     ).first()

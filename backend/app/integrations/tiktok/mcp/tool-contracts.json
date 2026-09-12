@@ -1,9 +1,9 @@
 {
-  "revision": "2026-09-11.1",
+  "revision": "2026-09-12.1",
   "evidence": "DOCUMENTED",
   "schema_source": "Provided official connector tool declarations, inspected offline on 2026-09-11; not an authenticated TK-ADA tools/list snapshot. Types/required/enums/nesting retained; prose-only restrictions require P1 validation.",
   "tool_name_evidence": "Connector namespace removed only as candidate mapping; actual remote names require own connection tools/list match.",
-  "response_shape_evidence": "OBJECT is the application-required data shape, not an observed upstream output contract. Output schemas and text JSON acceptance remain unverified.",
+  "response_shape_evidence": "Account READ tools accept the single JSON TextContent envelope documented by the official custom-agent guide (2026-09-12). Required data shapes remain application contracts; other tools retain their existing response gates.",
   "contracts": [
     {
       "operation": "accounts.authorization_facts",
@@ -17,10 +17,11 @@
       "response_shape": "OBJECT",
       "source_urls": [
         "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat",
-        "https://business-api.tiktok.com/open_api/v1.3/user/info/"
+        "https://business-api.tiktok.com/open_api/v1.3/user/info/",
+        "https://business-api.tiktok.com/portal/docs/how-to-connect-a-custom-agent-to-tiktok-for-business-mcp-server/v1.3"
       ],
       "evidence": "DOCUMENTED",
-      "text_json_envelope": false
+      "text_json_envelope": true
     },
     {
       "operation": "accounts.list_bcs",
@@ -43,10 +44,11 @@
       "output_schema": null,
       "response_shape": "OBJECT",
       "source_urls": [
-        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat",
+        "https://business-api.tiktok.com/portal/docs/how-to-connect-a-custom-agent-to-tiktok-for-business-mcp-server/v1.3"
       ],
       "evidence": "DOCUMENTED",
-      "text_json_envelope": false
+      "text_json_envelope": true
     },
     {
       "operation": "accounts.list_bc_assets",
@@ -99,10 +101,11 @@
       "output_schema": null,
       "response_shape": "OBJECT",
       "source_urls": [
-        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat",
+        "https://business-api.tiktok.com/portal/docs/how-to-connect-a-custom-agent-to-tiktok-for-business-mcp-server/v1.3"
       ],
       "evidence": "DOCUMENTED",
-      "text_json_envelope": false
+      "text_json_envelope": true
     },
     {
       "operation": "accounts.list_bc_members",
@@ -151,10 +154,11 @@
       "output_schema": null,
       "response_shape": "OBJECT",
       "source_urls": [
-        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat",
+        "https://business-api.tiktok.com/portal/docs/how-to-connect-a-custom-agent-to-tiktok-for-business-mcp-server/v1.3"
       ],
       "evidence": "DOCUMENTED",
-      "text_json_envelope": false
+      "text_json_envelope": true
     },
     {
       "operation": "accounts.list_asset_members",
@@ -202,10 +206,11 @@
       "output_schema": null,
       "response_shape": "OBJECT",
       "source_urls": [
-        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat",
+        "https://business-api.tiktok.com/portal/docs/how-to-connect-a-custom-agent-to-tiktok-for-business-mcp-server/v1.3"
       ],
       "evidence": "DOCUMENTED",
-      "text_json_envelope": false
+      "text_json_envelope": true
     },
     {
       "operation": "accounts.list_authorized_advertisers",
@@ -218,10 +223,11 @@
       "output_schema": null,
       "response_shape": "OBJECT",
       "source_urls": [
-        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat",
+        "https://business-api.tiktok.com/portal/docs/how-to-connect-a-custom-agent-to-tiktok-for-business-mcp-server/v1.3"
       ],
       "evidence": "DOCUMENTED",
-      "text_json_envelope": false
+      "text_json_envelope": true
     },
     {
       "operation": "accounts.get_advertisers",
@@ -278,10 +284,11 @@
       "output_schema": null,
       "response_shape": "OBJECT",
       "source_urls": [
-        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat",
+        "https://business-api.tiktok.com/portal/docs/how-to-connect-a-custom-agent-to-tiktok-for-business-mcp-server/v1.3"
       ],
       "evidence": "DOCUMENTED",
-      "text_json_envelope": false
+      "text_json_envelope": true
     },
     {
       "operation": "scene.list_identities",

@@ -512,3 +512,42 @@ def test_superuser_without_membership_cannot_read_another_admin_candidate(
         with Session(engine) as own:
             own.exec(delete(User).where(User.id == actor_id))
             own.commit()
+
+
+def test_manifest_change_reobserves_candidate_before_binding(
+    committed_context, candidate, catalog_wire, redis_client
+):
+    from app.integrations.tiktok.mcp.protocol import load_mcp_protocol
+
+    bc_page(catalog_wire)
+    read_bcs(committed_context, candidate, redis_client)
+    with Session(engine) as own:
+        previous = own.exec(
+            select(ConnectionToolObservation).where(
+                ConnectionToolObservation.candidate_attempt_id == candidate
+            )
+        ).one()
+        old_id = previous.id
+        previous.expected_contract_revision = "0" * 64
+        own.add(previous)
+        own.commit()
+        with pytest.raises(DomainError) as error:
+            bind_candidate_bc(
+                own, context=committed_context, attempt_id=candidate, bc_id="bc-1"
+            )
+        assert error.value.code == "mcp_candidate_directory_incomplete"
+    before = sum(call["method"] == "tools/list" for call in catalog_wire.calls)
+    bc_page(catalog_wire)
+    read_bcs(committed_context, candidate, redis_client)
+    assert sum(call["method"] == "tools/list" for call in catalog_wire.calls) > before
+    with Session(engine) as own:
+        run_id = bind_candidate_bc(
+            own, context=committed_context, attempt_id=candidate, bc_id="bc-1"
+        )
+        run = own.get(DiscoveryRun, run_id)
+        observation = own.get(ConnectionToolObservation, run.work["observation_id"])
+        assert observation.id != old_id
+        assert (
+            observation.expected_contract_revision
+            == load_mcp_protocol().schema_manifest_sha256
+        )

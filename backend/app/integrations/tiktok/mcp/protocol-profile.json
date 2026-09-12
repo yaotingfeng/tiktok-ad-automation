@@ -55,7 +55,7 @@
       "connection_verification": "UNVERIFIED"
     }
   },
-  "schema_manifest_sha256": "9ac2576299ae5d447fe9df2d4ba26180ca9bef76a56f99601c0cdd5b5d7dbc01",
+  "schema_manifest_sha256": "0cfb5ca34df578fef5ca6d7fa54973847d8192d1c7163fbe5cc6d1de947f4f69",
   "source_urls": [
     "https://business-api.tiktok.com/.well-known/oauth-protected-resource/open_mcp/tt-ads-mcp-flat",
     "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat/oauth/.well-known/openid-configuration",
