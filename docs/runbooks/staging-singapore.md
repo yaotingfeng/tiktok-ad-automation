@@ -117,4 +117,4 @@ PYCODE
 
 ## 跨账户分发配置验收
 
-2026-09-13 真实目标场景已读取通过。实际 TikTok 视频响应的 HTTPS 预览主机为 `v16-tt4b.tiktokcdn.com`，公网 DNS 已核实；本轮将 `MATERIAL_REMOTE_MEDIA_HOSTS` 由空集合配置为该精确主机，并在完整备份和恢复验证后重启验证所有进程。HTTP 封面 URL 只回传 TikTok 图片导入服务，不由应用下载，不混入 HTTPS 视频中转白名单。
+2026-09-13 真实目标场景已读取通过。实际 TikTok 视频响应的 HTTPS 预览主机为 `v16-tt4b.tiktokcdn.com` 和 `v19-tt4b.tiktokcdn.com`，均从真实视频返回确认，公网 DNS 已核实；本轮将 `MATERIAL_REMOTE_MEDIA_HOSTS` 由空集合配置为这两个精确主机，并在完整备份和恢复验证后重启验证所有进程。HTTP 封面 URL 只回传 TikTok 图片导入服务，不由应用下载，不混入 HTTPS 视频中转白名单。
