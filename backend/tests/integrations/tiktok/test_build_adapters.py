@@ -382,13 +382,13 @@ def test_mcp_build_reads_obey_actual_tool_and_text_envelope_contract(
                 ),
             }
         )
-    with pytest.raises(RemoteCallError) as error:
-        adapter.read_page(
-            query=BuildReadQuery(
-                intent=decode_intent("CAMPAIGN", build_bodies()["CAMPAIGN"])
-            )
-        )
-    assert error.value.effect == ("NOT_SENT" if problem == "schema" else "UNKNOWN")
+    query = BuildReadQuery(intent=decode_intent("CAMPAIGN", build_bodies()["CAMPAIGN"]))
+    if problem == "text_only":
+        assert adapter.read_page(query=query) is not None
+    else:
+        with pytest.raises(RemoteCallError) as error:
+            adapter.read_page(query=query)
+        assert error.value.effect == ("NOT_SENT" if problem == "schema" else "UNKNOWN")
     assert len(wire.business_calls()) == (0 if problem == "schema" else 1)
 
 

@@ -409,7 +409,9 @@ def test_mcp_rejects_wrong_issuer_before_using_client(channels):
 
 
 @pytest.mark.parametrize("kind", ["business", "text"])
-def test_mcp_business_error_and_text_json_are_not_success(channels, kind):
+def test_mcp_business_error_is_rejected_and_native_text_json_is_accepted(
+    channels, kind
+):
     pair, queue, _, _, _, wire = channels
     queue(
         "tool/vbo_status/",
@@ -439,8 +441,15 @@ def test_mcp_business_error_and_text_json_are_not_success(channels, kind):
             }
         )
     with pair("scenes") as (_, adapter):
-        with pytest.raises(DomainError):
-            adapter.read_page(resource="vbo", advertiser_id=AD, page=1, minis_id=None)
+        if kind == "business":
+            with pytest.raises(DomainError):
+                adapter.read_page(
+                    resource="vbo", advertiser_id=AD, page=1, minis_id=None
+                )
+        else:
+            assert adapter.read_page(
+                resource="vbo", advertiser_id=AD, page=1, minis_id=None
+            )
 
 
 @pytest.mark.parametrize(

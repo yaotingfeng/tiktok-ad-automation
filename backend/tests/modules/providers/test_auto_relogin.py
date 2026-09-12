@@ -15,6 +15,7 @@ from app.core.errors import DomainError
 from app.modules.providers.connections import open_provider_session, verify_connection
 from app.modules.providers.models import (
     LinkPreparationItem,
+    ProviderApplication,
     ProviderConnection,
     ProviderSessionRefresh,
 )
@@ -121,8 +122,14 @@ def resume(context, identity, remote):
 
 def test_expired_session_resumes_without_changing_application_generation(connections):
     contexts, ids = verified(connections)
-    with Session(engine) as s:
+    with Session(engine) as s, s.begin():
         generation = s.get(ProviderConnection, ids[0]).verification_token
+        app = s.exec(
+            select(ProviderApplication).where(
+                ProviderApplication.connection_id == ids[0]
+            )
+        ).one()
+        app.tiktok_minis_id = "mn-configured"
     remote = ExpiringRemote()
     expire(contexts[0], ids[0], remote)
     assert resume(contexts[0], ids[0], remote)["items"] == []
@@ -130,6 +137,16 @@ def test_expired_session_resumes_without_changing_application_generation(connect
     with Session(engine) as s:
         row = s.get(ProviderConnection, ids[0])
         assert row.status == "active" and row.verification_token == generation
+        assert (
+            s.exec(
+                select(ProviderApplication).where(
+                    ProviderApplication.connection_id == ids[0]
+                )
+            )
+            .one()
+            .tiktok_minis_id
+            == "mn-configured"
+        )
         assert s.get(ProviderConnection, ids[1]).status == "active"
 
 

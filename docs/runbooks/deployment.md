@@ -42,6 +42,12 @@ URL 导入的上传及异常恢复查询完整响应保存于 `material_response
 
 排查时按租户、BC、素材、操作和接收时间定位归档，在受控服务环境调用 `app.modules.materials.response_archive.read_material_response`，传入当前管理员的 `TenantContext`、BC、素材及响应 ID；该函数重新验证数据库权限后返回完整正文 bytes。不要直接在普通日志、页面或工单中展开密文解密内容；必要导出只放私有目录。历史未保存的上传正文不可恢复，查询响应不能冒充上传响应。归档失败错误码为 `material_response_archive_failed`；恢复数据库/密钥后核查原 UNKNOWN 操作，不直接重新上传。
 
+## 短剧应用的 Minis 关联
+
+版权方应用 ID 与 TikTok Minis ID 不是同一个标识。应用发现没有返回 Minis ID 时，由租户管理员先通过该租户实际绑定 BC 的目标账户读取 Minis 列表，核对名称及可投放状态，再调用 `PATCH /api/tenants/{tenant_id}/providers/connections/{connection_id}/applications/{application_id}/minis`，正文为 `{"minis_id":"已核对的实际 ID"}`。此操作有租户权限校验及审计；不能照抄其他 BC 的默认 ID。
+
+保存关联后重新准备草稿，系统继续对每个目标账户验证 Minis、身份、地区和 VBO。保存关联本身不视为投放能力通过。版权方重新验证或会话自动续期不会用空值清掉管理员配置；发现阶段返回明确新值时仍更新。此配置保存在数据库，不是环境开关，普通发版及恢复必须保留。
+
 ## 功能开关清单与发布确认
 
 ### 当前开关及影响

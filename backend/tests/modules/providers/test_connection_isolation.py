@@ -14,6 +14,7 @@ from app.models import User
 from app.modules.providers.connections import (
     open_provider_session,
     save_connection,
+    set_application_minis,
     verify_connection,
 )
 from app.modules.providers.models import ProviderApplication, ProviderConnection
@@ -323,3 +324,57 @@ def test_verification_failure_and_disabled_edit_do_not_expose_or_replace_credent
             connection_id=ids[0],
             credentials={"username": "new", "password": "new"},
         )
+
+
+def test_minis_mapping_is_audited_tenant_bound_and_survives_discovery(connections):
+    contexts, ids = connections
+    verify_connection(
+        database_engine=engine,
+        context=contexts[0],
+        connection_id=ids[0],
+        transport=transport(),
+    )
+    kwargs = {
+        "context": contexts[0],
+        "connection_id": ids[0],
+        "application_id": "external-app",
+        "minis_id": "mn-fixture",
+    }
+    with Session(engine) as session, session.begin():
+        set_application_minis(session, **kwargs)
+        set_application_minis(session, **kwargs)
+        assert (
+            len(
+                session.exec(
+                    select(AuditEvent).where(
+                        AuditEvent.tenant_id == contexts[0].tenant_id,
+                        AuditEvent.action == "provider.application.minis.update",
+                    )
+                ).all()
+            )
+            == 1
+        )
+    with Session(engine) as session, pytest.raises(DomainError):
+        set_application_minis(session, **{**kwargs, "context": contexts[1]})
+    with Session(engine) as session, pytest.raises(DomainError):
+        set_application_minis(session, **{**kwargs, "application_id": "missing"})
+    with Session(engine) as session, pytest.raises(DomainError):
+        set_application_minis(session, **{**kwargs, "minis_id": "invalid id"})
+    verify_connection(
+        database_engine=engine,
+        context=contexts[0],
+        connection_id=ids[0],
+        transport=transport(),
+    )
+    with Session(engine) as session, session.begin():
+        app = session.exec(
+            select(ProviderApplication).where(
+                ProviderApplication.connection_id == ids[0]
+            )
+        ).one()
+        assert app.tiktok_minis_id == "mn-fixture"
+        session.get(
+            TenantMembership, (contexts[0].tenant_id, contexts[0].actor_id)
+        ).role = "viewer"
+    with Session(engine) as session, pytest.raises(DomainError):
+        set_application_minis(session, **kwargs)

@@ -223,6 +223,26 @@ def _prepare_preview(database_engine, redis_client, case, wire, monkeypatch):
     monkeypatch.setattr(wangyan, "BASE", "https://synthetic-provider.example")
     monkeypatch.setattr(capabilities, "_require_bounded_worker", lambda: None)
     with Session(database_engine) as db, db.begin():
+        # 与既有合成目录/授权 fixture 配套，记录同 BC 的完整目录观察。
+        # 多 BC 新鲜度不再允许仅凭共享授权时间替代目录完成时间。
+        if route.channel == "OFFICIAL_MCP":
+            from datetime import UTC, datetime
+
+            from app.modules.accounts.models import DiscoveryRun
+
+            db.add(
+                DiscoveryRun(
+                    tenant_id=context.tenant_id,
+                    actor_id=context.actor_id,
+                    connection_id=route.connection_id,
+                    bc_id=route.bc_id,
+                    authorization_revision=route.authorization_revision,
+                    binding_revision=route.binding_revision,
+                    credential_revision=1,
+                    status="COMPLETE",
+                    completed_at=datetime.now(UTC),
+                )
+            )
         provider = db.get(ProviderConnection, case["provider_id"])
         provider.encrypted_credentials = encrypt_credentials(
             tenant_id=context.tenant_id,

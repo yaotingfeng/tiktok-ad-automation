@@ -102,37 +102,10 @@ def test_scene_to_enabled_ads_and_readback_uses_one_channel(
                 MaterialAssetOperation.material_id == material_id
             )
         ).one()
-        assert op.status == "verifying", op.error_code
+        # 正常上传直接由成功回执入库；无需额外查询，也不会保留原件用途。
+        assert op.status == "succeeded", op.remote_response
         assert op.frozen_route == route.model_dump(mode="json")
-        assert (
-            db.exec(select(OriginalUse).where(OriginalUse.operation_id == op.id))
-            .one()
-            .released_at
-            is None
-        )
         op_id = op.id
-    _reply(
-        gateway_wire,
-        "file_video_ad_info_get",
-        {
-            "list": [
-                {
-                    **created,
-                    "signature": md5(remote.content).hexdigest(),
-                    "size": len(remote.content),
-                    "displayable": True,
-                    "width": 160,
-                    "height": 240,
-                    "duration": 0.2,
-                    "format": "mp4",
-                }
-            ]
-        },
-    )
-    run_source_upload(**args, kind="verify", operation_id=op_id)
-    with Session(database_engine) as db:
-        op = db.get(MaterialAssetOperation, op_id)
-        assert op.status == "succeeded", op.error_code
         mapping = db.exec(
             select(AccountMaterial).where(AccountMaterial.material_id == material_id)
         ).one()
@@ -160,14 +133,12 @@ def test_scene_to_enabled_ads_and_readback_uses_one_channel(
         ]
         assert [call["name"] for call in calls] == [
             "file_video_ad_upload",
-            "file_video_ad_info_get",
         ]
         assert all(call["arguments"]["advertiser_id"] == advertiser for call in calls)
     else:
         calls = gateway_wire["sdk_calls"][sdk_start:]
-        assert [call[0] for call in calls] == ["POST", "GET"]
+        assert [call[0] for call in calls] == ["POST"]
         assert calls[0][1].endswith("/file/video/ad/upload/")
-        assert calls[1][1].endswith("/file/video/ad/info/")
     _prepare_target(
         database_engine,
         redis_client,

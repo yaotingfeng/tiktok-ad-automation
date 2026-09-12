@@ -15,7 +15,7 @@ from app.integrations.tiktok.contracts.common import (
     RemoteCallError,
 )
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
-from app.integrations.tiktok.mcp.protocol import ToolContract
+from app.integrations.tiktok.mcp.protocol import ToolContract, load_tool_contracts
 from app.integrations.tiktok.mcp.results import decode_mcp_result
 
 
@@ -326,9 +326,9 @@ def test_documented_account_tools_accept_single_text_json_receipt(operation):
 
 @pytest.mark.parametrize(
     "operation",
-    ["materials.upload_video_url", "materials.get_videos", "materials.search_videos"],
+    [c.operation for c in load_tool_contracts()],
 )
-def test_native_video_text_json_is_decoded_with_request_evidence(operation):
+def test_registered_native_text_json_is_decoded_with_request_evidence(operation):
     from app.integrations.tiktok.mcp.protocol import load_tool_contracts
 
     selected = next(c for c in load_tool_contracts() if c.operation == operation)

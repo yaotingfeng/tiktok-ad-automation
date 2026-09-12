@@ -205,8 +205,9 @@ def verify_connection(
                     **item["channel_config"],
                     "verification_token": str(claim),
                 }
-                # Provider application IDs never masquerade as TikTok Minis IDs.
-                application.tiktok_minis_id = item["tiktok_minis_id"]
+                # 版权方未提供 Minis ID 时保留管理员配置的关联；包名不冒充 Minis ID。
+                if item["tiktok_minis_id"] is not None:
+                    application.tiktok_minis_id = item["tiktok_minis_id"]
             row.encrypted_credentials = encrypt_credentials(
                 tenant_id=context.tenant_id, value=credentials
             )
@@ -337,3 +338,56 @@ def open_provider_session(
             )
             raise failure("provider_session_refreshing", retryable=True) from None
         raise
+
+
+def set_application_minis(
+    session: Session,
+    *,
+    context: TenantContext,
+    connection_id: UUID,
+    application_id: str,
+    minis_id: str,
+) -> ProviderApplication:
+    """保存管理员明确选择的 Minis；能否投放仍由账户场景回查证明。"""
+    require_tenant(
+        session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="manage"
+    )
+    if (
+        not isinstance(minis_id, str)
+        or not minis_id.strip()
+        or len(minis_id) > 128
+        or not all(c.isascii() and (c.isalnum() or c in "_-.") for c in minis_id)
+    ):
+        raise failure("provider_request_invalid")
+    connection = _connection(session, context, connection_id, lock=True)
+    application = session.exec(
+        select(ProviderApplication)
+        .where(
+            ProviderApplication.tenant_id == context.tenant_id,
+            ProviderApplication.connection_id == connection_id,
+            ProviderApplication.external_id == application_id,
+        )
+        .with_for_update()
+    ).one_or_none()
+    if application is None:
+        raise failure("resource_not_found")
+    if (
+        connection.status != "active"
+        or not connection.verification_token
+        or application.channel_config.get("verification_token")
+        != str(connection.verification_token)
+    ):
+        raise failure("connection_unavailable")
+    if application.tiktok_minis_id != minis_id:
+        application.tiktok_minis_id = minis_id
+        session.add(application)
+        session.add(
+            AuditEvent(
+                tenant_id=context.tenant_id,
+                actor_id=context.actor_id,
+                action="provider.application.minis.update",
+                target_id=str(application.id),
+            )
+        )
+    session.flush()
+    return application

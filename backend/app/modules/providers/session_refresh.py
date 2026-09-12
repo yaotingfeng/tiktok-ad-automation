@@ -92,7 +92,10 @@ def _publish(
         if (
             item is None
             or old_config != item["channel_config"]
-            or old.tiktok_minis_id != item["tiktok_minis_id"]
+            or (
+                item["tiktok_minis_id"] is not None
+                and old.tiktok_minis_id != item["tiktok_minis_id"]
+            )
         ):
             changed = True
     verification = uuid4() if changed else row.verification_token
@@ -111,7 +114,8 @@ def _publish(
             **item["channel_config"],
             "verification_token": str(verification),
         }
-        app.tiktok_minis_id = item["tiktok_minis_id"]
+        if item["tiktok_minis_id"] is not None:
+            app.tiktok_minis_id = item["tiktok_minis_id"]
     assert refresh.candidate_ciphertext is not None
     row.encrypted_credentials = refresh.candidate_ciphertext
     row.verification_token = verification

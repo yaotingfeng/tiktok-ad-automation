@@ -15,12 +15,31 @@ from mcp.types import CallToolResult, TextContent
 
 _IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]{1,256}\Z", re.ASCII)
 _INVALID = object()
-# 官方素材工具实际返回单个 JSON TextContent。这里只规范化响应载体，
-# 不改变冻结请求参数/接口版本，也不允许成功文案或任意工具绕过回执校验。
-_VIDEO_TEXT_TOOLS = {
+# 官方已接入业务工具使用 JSON TextContent 承载同一 code/data envelope。
+# 只扩展明确的操作/工具对；结构、错误码、重复键及双载体冲突校验保持不变。
+_NATIVE_TEXT_TOOLS = {
+    ("scene.list_identities", "identity_get"),
+    ("scene.list_minis", "minis_get"),
+    ("scene.recommend_ctas", "creative_cta_recommend_get"),
+    ("build.create_cta_portfolio", "creative_portfolio_create"),
+    ("build.get_cta_portfolio", "creative_portfolio_get"),
+    ("build.list_cta_portfolios", "creative_portfolio_list_get"),
+    ("scene.list_regions", "tool_region_get"),
+    ("scene.check_vbo", "tool_vbo_status_check"),
     ("materials.upload_video_url", "file_video_ad_upload"),
     ("materials.get_videos", "file_video_ad_info_get"),
     ("materials.search_videos", "file_video_ad_search"),
+    ("materials.get_suggested_covers", "file_video_suggestcover_get"),
+    ("materials.upload_image_url", "file_image_ad_upload"),
+    ("materials.get_images", "file_image_ad_info_get"),
+    ("materials.search_images", "file_image_ad_search"),
+    ("build.create_campaign", "smart_plus_campaign_create"),
+    ("build.get_campaigns", "smart_plus_campaign_get"),
+    ("build.create_adgroup", "smart_plus_adgroup_create"),
+    ("build.get_adgroups", "smart_plus_adgroup_get"),
+    ("build.create_ad", "smart_plus_ad_create"),
+    ("build.get_ads", "smart_plus_ad_get"),
+    ("build.get_regular_adgroups", "adgroup_get"),
 }
 
 
@@ -139,7 +158,7 @@ def decode_mcp_result(
     raw = result.structured_content
     text_json_allowed = (
         contract.text_json_envelope
-        or (contract.operation, contract.tool_name) in _VIDEO_TEXT_TOOLS
+        or (contract.operation, contract.tool_name) in _NATIVE_TEXT_TOOLS
     )
     evidence = _evidence(raw)
     text_receipts = []
