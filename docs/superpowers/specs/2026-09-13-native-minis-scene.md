@@ -21,3 +21,11 @@
 实际图片上传已返回 ID/摘要，但图片详情返回 displayable=false；同一账户相同首帧的图片被平台去重复用，后续上传还会改变同 ID 的文件名。此前按文件名及 displayable=true 强制校验，导致正常封面保持 UNKNOWN。
 
 [TikTok 官方图片上传说明](https://business-api.tiktok.com/portal/docs?id=1739067433456642) 将视频缩略图列为使用场景，成功响应示例的 displayable 为 false。因此不能仅凭该字段否定视频封面。修正为：当前账户、已返回图片 ID、实际上传摘要与回读摘要一致、有效尺寸及视频比例；有上传摘要时不把可变名称作为身份依据。缺上传摘要仍要求原内部名称，未知 ID 的搜索仍精确匹配名称；错误 ID、摘要、比例继续阻塞。已有图片只重新读取，不能重传；最终是否可用由本批实际视频广告创建及回读验证。
+
+## 真实广告创建的参数约束
+
+- 官方 Campaign（1843312852800706）和 Ad Group（1843314887930946）文档均要求 request_id 是 int64 十进制字符串。完整 UUID 保留在本地 attempt；wire 标识由低 63 位确定性派生，零映射为 1。原 body 的关联校验同步更新，UNKNOWN 仍不自动 create。
+- 原批次错误回执明确为 40002 / int64 ParseInt 拒绝，已保留私有原始响应和运维修复证据。只有该确定性参数错误才执行一次运维修复；原始冻结 body 不覆盖，新 ID 通过普通回读流程绑定。
+- Minis Campaign 的 native GET（包括显式 fields）不返回 catalog_enabled。移除模板和观察 DTO 中该冗余字段；历史明确 false 仅在输入/快照比较边界移除，未知值和 true 继续拒绝。账户、名称、预算、CBO、目标、Minis 类型与 ENABLE 全部仍须真实观察。
+
+- IAA 场景已核实 Day 0 Min ROAS，广告组明确 vbo_window=ZERO_DAY；官方省略时默认为 SEVEN_DAYS。只在历史输入边界按原能力补齐，远端缺失窗口仍为 INCOMPLETE。

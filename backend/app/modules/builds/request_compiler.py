@@ -105,6 +105,16 @@ def decode_intent(kind: str, body: dict[str, object]) -> CreateIntent:
     if not isinstance(body, dict) or "kind" in body:
         raise _invalid("body", body)
     values = dict(body)
+    # 历史 Minis 模板的 catalog=false 不作为可观察事实；平台不会回传该字段。
+    # 只允许移除明确 false，true/数字或未知值仍由严格 DTO 拒绝。
+    if kind == "CAMPAIGN" and values.get("catalog_enabled") is False:
+        values.pop("catalog_enabled")
+    # 旧 IAA 场景核实的是 Day 0 资格；明确发送 ZERO_DAY，避免平台默认 Day 7。
+    if (
+        kind == "ADGROUP"
+        and values.get("optimization_event") == "IMPRESSION_LEVEL_AD_REVENUE"
+    ):
+        values.setdefault("vbo_window", "ZERO_DAY")
     # 兼容旧冻结 JSON 数值表示，只在输入边界十进制化，不改原记录。
     for field in ("budget", "roas_bid"):
         if type(values.get(field)) is float:
@@ -172,7 +182,7 @@ def decode_observed_intent(kind: str, body: dict[str, object]) -> CreateIntent:
 
 def encode_intent(intent: CreateIntent) -> dict[str, object]:
     """持久请求 JSON 使用精确十进制字符串；发送适配器另行处理 wire 数字。"""
-    body = intent.model_dump(mode="json", exclude={"kind"})
+    body = intent.model_dump(mode="json", exclude={"kind"}, exclude_none=True)
     if isinstance(intent, CampaignCreate):
         body["campaign_name"] = body.pop("name")
     elif isinstance(intent, AdGroupCreate):
@@ -287,6 +297,11 @@ CREATE_OPERATIONS = {
 }
 
 
+def remote_request_id(attempt_id: UUID) -> str:
+    """官方创建接口只接受 int64 字符串；本地 UUID 仍用于完整的 attempt 归属。"""
+    return str((attempt_id.int & ((1 << 63) - 1)) or 1)
+
+
 def create_arguments(
     *, attempt_id: UUID, intent: CreateIntent, channel: ChannelKind
 ) -> tuple[str, dict[str, object]]:
@@ -307,7 +322,7 @@ def create_arguments(
             )
         body[field] = int(value) if value == value.to_integral() else number
     if channel == "OFFICIAL_MCP" and intent.kind in {"CAMPAIGN", "ADGROUP"}:
-        body["request_id"] = str(attempt_id)
+        body["request_id"] = remote_request_id(attempt_id)
     return CREATE_OPERATIONS[intent.kind], body
 
 

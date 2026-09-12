@@ -44,6 +44,7 @@ from app.modules.builds.request_compiler import (
     create_arguments,
     cta_portfolio,
     decode_intent,
+    remote_request_id,
 )
 from app.modules.builds.routes import load_preview_route
 from app.modules.builds.scene import read_scene_context
@@ -166,8 +167,25 @@ def _current_scene(
             retryable=transient,
         )
     snapshot = scene.to_snapshot()
+
     # New evidence IDs alone must not change frozen business intent. New facts do.
-    if any(snapshot.get(key) != frozen.scene_snapshot.get(key) for key in SCENE_FIELDS):
+    def comparable(value: dict[str, Any], key: str) -> object:
+        item = value.get(key)
+        # 旧 Minis 快照的 catalog=false 是冗余参数，移除它不改变投放意图。
+        if key == "campaign_fields" and isinstance(item, dict):
+            item = dict(item)
+            if item.get("catalog_enabled") is False:
+                item.pop("catalog_enabled")
+        if key == "adgroup_fields" and isinstance(item, dict):
+            item = dict(item)
+            if item.get("optimization_event") == "IMPRESSION_LEVEL_AD_REVENUE":
+                item.setdefault("vbo_window", "ZERO_DAY")
+        return item
+
+    if any(
+        comparable(snapshot, key) != comparable(frozen.scene_snapshot, key)
+        for key in SCENE_FIELDS
+    ):
         raise DomainError(
             "scene_intent_changed", "当前投放条件与预览不一致，请重新生成预览"
         )
@@ -561,7 +579,9 @@ def process_step(
                         "CAMPAIGN",
                         "ADGROUP",
                     }:
-                        if local_body.pop("request_id", None) != str(claim.attempt_id):
+                        if local_body.pop("request_id", None) != remote_request_id(
+                            claim.attempt_id
+                        ):
                             raise DomainError(
                                 "execution_intent_changed", "原请求关联不匹配"
                             )

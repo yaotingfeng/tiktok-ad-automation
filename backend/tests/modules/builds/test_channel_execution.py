@@ -14,6 +14,7 @@ from app.modules.builds.execution_models import (
     Submission,
     SubmissionUnit,
 )
+from app.modules.builds.request_compiler import remote_request_id
 from tests.integrations.tiktok.gateway_support import gateway_case as gateway_case
 from tests.integrations.tiktok.gateway_support import gateway_wire as gateway_wire
 from tests.modules.accounts.conftest import app_config as app_config
@@ -162,7 +163,14 @@ def channel_execution(
             timezone="UTC",
             campaign_name="Synthetic frozen campaign",
             campaign_digest="b" * 64,
-            scene_snapshot=scene.to_snapshot(),
+            # 建立旧模板快照，冻结后不再改写，以验证跨版本执行。
+            scene_snapshot={
+                **scene.to_snapshot(),
+                "campaign_fields": {
+                    **scene.to_snapshot()["campaign_fields"],
+                    "catalog_enabled": False,
+                },
+            },
             complete=True,
             group_count=1,
             ad_count=1,
@@ -544,7 +552,7 @@ def test_real_gateway_creates_cta_and_all_enabled_layers_with_distinct_attempts(
         )
         if case["route"].channel == "OFFICIAL_MCP":
             assert all(
-                step.request_body["request_id"] == str(step.attempt_id)
+                step.request_body["request_id"] == remote_request_id(step.attempt_id)
                 for step in steps[1:3]
             )
 
@@ -638,7 +646,7 @@ def test_final_quota_denial_requeues_identical_armed_attempt_without_http(
             step.request_body_digest,
         ) == original
         if route.channel == "OFFICIAL_MCP":
-            assert step.request_body["request_id"] == str(step.attempt_id)
+            assert step.request_body["request_id"] == remote_request_id(step.attempt_id)
     assert len(business_calls(wire, route.channel)) == before_count + 1
 
 

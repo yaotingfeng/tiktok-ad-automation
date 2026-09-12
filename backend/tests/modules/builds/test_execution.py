@@ -46,7 +46,6 @@ def executable(isolated_strategy_database, monkeypatch):
         campaign_fields={
             "objective_type": "APP_PROMOTION",
             "app_promotion_type": "MINIS",
-            "catalog_enabled": False,
             "budget_mode": "BUDGET_MODE_DYNAMIC_DAILY_BUDGET",
         },
         adgroup_fields={

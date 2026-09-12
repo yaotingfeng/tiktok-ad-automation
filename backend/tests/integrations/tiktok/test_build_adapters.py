@@ -15,7 +15,7 @@ from app.integrations.tiktok.mcp.protocol import load_tool_contracts
 from app.integrations.tiktok.mcp.transport import open_bound_mcp_client
 from app.integrations.tiktok.sdk import official_client
 from app.modules.builds.readback_compare import compare_record
-from app.modules.builds.request_compiler import decode_intent
+from app.modules.builds.request_compiler import decode_intent, remote_request_id
 from tests.contracts.test_tiktok_build_contract import build_bodies
 
 
@@ -414,7 +414,7 @@ def test_create_uses_exact_frozen_fields_and_real_receipt_without_status_fill(
         if key in expected:
             expected[key] = float(expected[key])
     if wire.channel == "OFFICIAL_MCP" and kind in {"CAMPAIGN", "ADGROUP"}:
-        expected["request_id"] = str(attempt_id)
+        expected["request_id"] = remote_request_id(attempt_id)
     assert calls[0]["arguments"] == expected
     assert (body["advertiser_id"], wire.create_operations[kind]) in events
 

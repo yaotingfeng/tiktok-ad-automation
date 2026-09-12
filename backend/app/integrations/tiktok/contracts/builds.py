@@ -60,13 +60,12 @@ class CampaignCreate(FrozenModel):
     objective_type: Literal["APP_PROMOTION"] = "APP_PROMOTION"
     app_promotion_type: Literal["MINIS"] = "MINIS"
     campaign_type: Literal["REGULAR_CAMPAIGN"] = "REGULAR_CAMPAIGN"
-    catalog_enabled: Literal[False] = False
     budget_mode: Literal["BUDGET_MODE_DYNAMIC_DAILY_BUDGET"] = (
         "BUDGET_MODE_DYNAMIC_DAILY_BUDGET"
     )
     budget_optimize_on: Literal[True] = True
 
-    @field_validator("catalog_enabled", "budget_optimize_on", mode="before")
+    @field_validator("budget_optimize_on", mode="before")
     @classmethod
     def strict_boolean(cls, value: object) -> object:
         if type(value) is not bool:
@@ -80,6 +79,7 @@ class AdGroupObservedFacts(FrozenModel):
     campaign_id: Id
     name: Id
     minis_id: Id
+    vbo_window: Literal["ZERO_DAY"] | None = None
     roas_bid: Money
     location_ids: tuple[Id, ...] = Field(min_length=1)
     schedule_start_time: Annotated[Id, AfterValidator(_schedule)]

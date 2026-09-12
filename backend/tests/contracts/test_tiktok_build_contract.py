@@ -19,7 +19,6 @@ def build_bodies():
             "objective_type": "APP_PROMOTION",
             "app_promotion_type": "MINIS",
             "campaign_type": "REGULAR_CAMPAIGN",
-            "catalog_enabled": False,
             "budget_mode": "BUDGET_MODE_DYNAMIC_DAILY_BUDGET",
             "budget_optimize_on": True,
             "operation_status": "ENABLE",
@@ -382,3 +381,50 @@ def test_legacy_numeric_input_is_separate_from_remote_money_evidence(kind, field
     for exact in ("100.01", Decimal("100.01"), 100):
         value = decode_observed_intent(kind, {**body, field: exact})
         assert getattr(value, field) == Decimal(str(exact))
+
+
+def test_remote_request_identifier_fits_tiktok_signed_int64():
+    from uuid import UUID
+
+    from app.modules.builds.request_compiler import remote_request_id
+
+    for value in (0, (1 << 128) - 1, int("a5b4201077d05f17b477767a790e8c9a", 16)):
+        attempt = UUID(int=value)
+        wire_id = remote_request_id(attempt)
+        assert wire_id.isascii() and wire_id.isdecimal()
+        assert 0 < int(wire_id) <= (1 << 63) - 1
+        assert remote_request_id(attempt) == wire_id
+
+
+def test_historical_minis_catalog_false_is_not_fabricated_as_observed_fact():
+    body = build_bodies()["CAMPAIGN"]
+    historical = decode_intent("CAMPAIGN", {**body, "catalog_enabled": False})
+    assert "catalog_enabled" not in encode_intent(historical)
+    assert historical == decode_intent("CAMPAIGN", body)
+    with pytest.raises(ValidationError):
+        decode_intent("CAMPAIGN", {**body, "catalog_enabled": True})
+
+
+def test_iaa_uses_verified_day_zero_and_requires_observed_window():
+    from app.integrations.tiktok.contracts.builds import BuildReadQuery
+    from app.integrations.tiktok.contracts.common import (
+        CallEvidence,
+        McpBusinessResponse,
+    )
+    from app.modules.builds.readback_compare import parse_page
+
+    body = {
+        **build_bodies()["ADGROUP"],
+        "optimization_event": "IMPRESSION_LEVEL_AD_REVENUE",
+    }
+    intent = decode_intent("ADGROUP", body)
+    assert encode_intent(intent)["vbo_window"] == "ZERO_DAY"
+    query = BuildReadQuery(intent=intent)
+    data = {
+        "list": [{**body, "adgroup_id": "remote"}],
+        "page_info": {"page": 1, "page_size": 100, "total_number": 1, "total_page": 1},
+    }
+    record = parse_page(
+        query=query, response=McpBusinessResponse(data, CallEvidence())
+    ).rows[0]
+    assert "vbo_window" in record.missing_fields

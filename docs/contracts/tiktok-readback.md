@@ -14,7 +14,7 @@
 
 提交具体预览后，Campaign、Ad Group、Ad 直接按 `ENABLE` 创建，不增加二次激活或账户轮转。已核实可准备的 PREPARING 组合可提交，但实际广告创建必须等待目标视频和封面全部完成并核实；明确 BLOCKED 的依赖不能提交。
 
-CTA 有独立 attempt。每次广告创建先保存精确 wire body、摘要和原 attempt 归属；SDK/MCP 各自序列化，不能保存一种正文却发送另一种。MCP Campaign/Ad Group 的必需 request_id 使用已持久化的 attempt UUID；它只是关联标识，**不是已核实的幂等或安全重放保证**。API 不添加该 MCP 字段。动态时间只在首次 arm 生成，安全重排保留原正文、摘要与 attempt。
+CTA 有独立 attempt。每次广告创建先保存精确 wire body、摘要和原 attempt 归属；SDK/MCP 各自序列化，不能保存一种正文却发送另一种。MCP Campaign/Ad Group 的必需 request_id 从已持久化的 attempt UUID 派生为正的 int64 十进制字符串（低 63 位，零映射为 1），符合官方参数格式。本地仍保留完整 UUID；不会因为 request_id 存在就自动重发 UNKNOWN。API 不添加该 MCP 字段。动态时间只在首次 arm 生成，安全重排保留原正文、摘要与 attempt。
 
 | 结果证据 | 行为 |
 | --- | --- |
@@ -37,7 +37,9 @@ HTTP 200、MCP isError=false、自然语言成功和非零业务码均不能单�
 
 `read_page(query=BuildReadQuery(...))` 返回 `BuildPage`，`read_adgroup_status(...)` 返回 `AdGroupStatus`。共同记录真实 `CallEvidence`。候选工具出现不代表有当前写权限；连接实际 observation 与固定合同均通过后才可准入相应操作。
 
-预期值只来自不可变的 request_body 与正确摘要。MCP Campaign/Ad Group 解码前，必须按原 REQUEST_ARMED 证据找到唯一原创建 attempt，并核实 request_id 与该 UUID 完全相同；随后仅在用于比较的副本中剥离该关联字段。不能用后来核查 attempt、最新草稿或请求字段补造远端事实。
+预期值只来自不可变的 request_body 与正确摘要。MCP Campaign/Ad Group 解码前，必须按原 REQUEST_ARMED 证据找到唯一原创建 attempt，并核实 request_id 与该 UUID 派生的 int64 一致；历史 UUID 格式仅允许只读核查；随后仅在用于比较的副本中剥离该关联字段。不能用后来核查 attempt、最新草稿或请求字段补造远端事实。
+
+Minis Campaign 原生读取不返回 catalog_enabled；新模板不发送该冗余字段，历史模板仅允许移除明确 false，不补造远端 catalog 事实。
 
 回读必须覆盖实际账户、父级、精确名称、Campaign 预算/CBO/目标、Ad Group ROAS/Minis/地区/排期/优化与计费字段，以及 Ad 的目标视频/封面、身份、BC、文案、URL、CTA portfolio。Smart+ Ad ID 保留 `smart_plus_ad_id`，不得用普通 Ad ID 混淆。集合顺序不重要，成员和重复数量仍参与比较。
 

@@ -40,7 +40,7 @@ from app.modules.builds.reconciliation_scan import advance
 from app.modules.builds.reconciliation_scan import (
     reconciliation_decision as reconciliation_decision,
 )
-from app.modules.builds.request_compiler import decode_intent
+from app.modules.builds.request_compiler import decode_intent, remote_request_id
 from app.modules.builds.route_models import BuildAttemptContext
 from app.modules.builds.routes import save_attempt_context, verify_unit_route
 from app.modules.tenants.permissions import require_tenant
@@ -232,7 +232,11 @@ def source_intent(
     body = dict(source.request_body or {})
     if route.channel == "OFFICIAL_MCP" and source.kind in {"CAMPAIGN", "ADGROUP"}:
         _, original_id = original_create_attempt(session, source)
-        if body.pop("request_id", None) != str(original_id):
+        # 历史 UUID 请求仅允许读取核查；新发送一律使用官方 int64 格式。
+        if body.pop("request_id", None) not in {
+            remote_request_id(original_id),
+            str(original_id),
+        }:
             raise DomainError("readback_intent_incomplete", "原创建关联标识不匹配")
     try:
         return decode_intent(source.kind, body)

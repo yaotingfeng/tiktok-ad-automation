@@ -277,7 +277,6 @@ def _assemble_scene(
         "objective_type": "APP_PROMOTION",
         "app_promotion_type": "MINIS",
         "campaign_type": "REGULAR_CAMPAIGN",
-        "catalog_enabled": False,
         "budget_mode": "BUDGET_MODE_DYNAMIC_DAILY_BUDGET",
     }
     group: dict[str, Any] = {}
@@ -349,6 +348,7 @@ def _assemble_scene(
     if vbo.get("vo_min_roas") != "QUALIFIED":
         if vbo.get("vo_iaa_min_roas_zero_day") == "QUALIFIED":
             group["optimization_event"] = "IMPRESSION_LEVEL_AD_REVENUE"
+            group["vbo_window"] = "ZERO_DAY"
         else:
             reasons.append("minis_vbo_unverified")
     revision = sha256(
