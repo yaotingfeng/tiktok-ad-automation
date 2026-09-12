@@ -33,3 +33,11 @@
 - 浏览器扩展拒绝读取本地视频文件，需要用户启用“允许访问文件网址”后继续素材上传。该浏览器权限错误不是系统素材接口的成功或失败证据。
 - 后续：完成 R2 凭据配置及上传开关/容量核验，上传 69 条视频，核对三剧与两户的完整预览、预算、身份、CTA、素材分配，再提交广告并读取实际平台回执。MCP URL 入库仍受独立服务能力证据门禁约束，不因 R2 配好即视为 TikTok 上传可用。不得把本次代码/部署验证称为完整端到端通过。
 - 草稿、取链任务、公开目录快照和部署脚本保存在私有 `.runtime/e2e-20260912/`；凭据、视频和业务回执不进 Git。
+
+## 现有 R2 桶长期凭据配置
+
+- 用户明确要求复用已有桶，不新建桶，并在解释长期凭据方案后明确授权操作。通过 Cloudflare 页面创建 Account API Token，仅现有桶对象读写、TTL 永久；页面回读状态活动。密钥只写入私有运行文件，未进入日志或 Git。
+- 配置变更前完整备份 `/var/backups/tt-ada-staging/20260912T141551Z/`：PostgreSQL、Redis、独立项目及两份配置归档校验通过，独立数据库/Redis/项目恢复验证完成。应用版本仍为 `86fafbd`，没有迁移。
+- 配置 OBJECT_STORAGE_PROVIDER=r2、S3 endpoint/bucket/region/密钥，启用新导入；租户暂存窗口设为 4 GiB，以容纳本批 2.44 GiB。自动清理保持关闭，等待平台入库与目标分发证据；桶现有公开访问及历史对象未改动，使用用户指定现有桶，不能宣称桶私有性通过。
+- 服务器受控随机对象探测 `c6e3abddb436436faba72c9b05406254`：CreateMultipart、签名 PUT、ListParts、Complete、HEAD、签名 GET、DELETE、HEAD404 全部通过，cleanup=verified。API/Worker/Beat 实际进程的 R2 配置完全一致，三服务和备份 timer active，HTTPS 健康 true。
+- 回到真实 junbo 页面再次选择本批 69 文件，浏览器 `fileChooser.setFiles` 仍返回 Not allowed。素材尚未成功上传，广告尚未创建；此轮通过的是服务器 R2 真实存储链路，不是完整业务端到端。
