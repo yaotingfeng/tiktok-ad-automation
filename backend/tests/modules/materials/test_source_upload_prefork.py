@@ -12,6 +12,7 @@ import os
 import sys
 import threading
 import time
+from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from http.server import ThreadingHTTPServer
 from uuid import uuid4
@@ -20,7 +21,8 @@ import httpx2
 import pytest
 import urllib3
 from celery import Celery
-from celery.contrib.testing.worker import start_worker
+from celery.contrib.testing.worker import TestWorkController, start_worker
+from celery.worker import state as worker_state
 from redis import Redis
 from sqlmodel import Session, select
 
@@ -71,6 +73,16 @@ def wait_for(predicate, seconds=15):
     assert predicate(), "有界真实 worker 观察未到达"
 
 
+class ObservedWorker(TestWorkController):
+    """保留嵌入线程身份，让双 worker 在恢复进程全局标志前一起正常退出。"""
+
+    worker_thread: threading.Thread
+
+    def start(self):
+        self.worker_thread = threading.current_thread()
+        return super().start()
+
+
 @pytest.mark.skipif(
     sys.platform != "linux",
     reason="actual two-worker prefork validation requires Linux",
@@ -97,6 +109,7 @@ def test_unknown_remote_pull_survives_two_workers_and_late_result(
     received, release = threading.Event(), threading.Event()
     creates, reads, tokens = [], [], []
     original_handler = gateway_wire["wire"].server.RequestHandlerClass
+    gateway_wire["wire"].close_connections = True
 
     class Handler(original_handler):
         def envelope(self, *, search):
@@ -228,6 +241,9 @@ def test_unknown_remote_pull_survives_two_workers_and_late_result(
     monkeypatch.setattr(object_validation, "make_object_s3", lambda obj: env["s3"])
     prefix = f"source-prefork-{uuid4().hex}:"
     broker = os.environ["TEST_REDIS_URL"]
+    # 生产任务自行读取配置创建 Redis 客户端，必须与断言/隔离 broker 使用同一测试库。
+    # redis_client fixture 已先核实该测试库与原应用配置隔离，再在本用例内覆盖。
+    monkeypatch.setattr(settings, "REDIS_URL", broker)
     app = Celery(prefix, broker=broker, set_as_current=False)
     app.conf.update(
         task_serializer="json",
@@ -323,11 +339,40 @@ def test_unknown_remote_pull_survives_two_workers_and_late_result(
         maintenance.apply_async(args=[action], queue=prefix + "second")
         wait_for(lambda: int(redis_client.get(prefix + action) or 0) > before)
 
+    def observation():
+        # 失败诊断只显示状态/错误码和合成传输方法，绝不输出凭据或签名 URL。
+        op = operation(env)
+        return {
+            "status": op.status,
+            "error_code": op.remote_response.get("error_code"),
+            "send_armed": op.remote_response.get("send_armed"),
+            "mcp_methods": [call["method"] for call in gateway_wire["wire"].calls],
+            "reads": len(reads),
+        }
+
+    previous_termination = worker_state.should_terminate
+    previous_stop = worker_state.should_stop
+
+    def stop_workers(first, second):
+        # 由消费者线程自行进行 warm shutdown，不能从主线程关闭它仍在读取的连接。
+        # 两个 worker 全部退出前始终保留共同停止信号，避免单个上下文提前恢复。
+        worker_state.should_stop = 0
+        deadline = time.monotonic() + 60
+        for worker in (first, second):
+            worker.worker_thread.join(max(0, deadline - time.monotonic()))
+        assert all(not worker.worker_thread.is_alive() for worker in (first, second)), (
+            "双 prefork worker 未在释放 HTTP 后 60 秒内正常退出"
+        )
+
     try:
         with (
             start_worker(
                 app,
                 pool="prefork",
+                # Kombu 的异步 Hub 是进程全局变量；两个嵌入 worker 不能共用它。
+                # 同步消费仍使用真实 prefork 子进程及 Celery 的进程硬超时。
+                use_eventloop=False,
+                WorkController=ObservedWorker,
                 concurrency=1,
                 perform_ping_check=False,
                 shutdown_timeout=15,
@@ -337,17 +382,23 @@ def test_unknown_remote_pull_survives_two_workers_and_late_result(
             start_worker(
                 app,
                 pool="prefork",
+                use_eventloop=False,
+                WorkController=ObservedWorker,
                 concurrency=1,
                 perform_ping_check=False,
                 shutdown_timeout=15,
                 queues=[prefix + "second"],
                 loglevel="ERROR",
             ) as second,
+            ExitStack() as cleanup,
         ):
+            # 先解除 HTTP 阻塞并等待所有消费者退出，再退出各 start_worker 上下文。
+            cleanup.callback(stop_workers, first, second)
+            cleanup.callback(release.set)
             old_pid = first.pool._pool._pool[0].pid
             assert old_pid != second.pool._pool._pool[0].pid
             upload.apply_async(queue=prefix + "first")
-            assert received.wait(10)
+            assert received.wait(10), observation()
             assert int(redis_client.get(prefix + "upload-pid")) == old_pid
             if lost_process:
                 wait_for(
@@ -402,7 +453,7 @@ def test_unknown_remote_pull_survives_two_workers_and_late_result(
             with Session(database_engine) as db:
                 assert_reserved(db, env, op.id)
             dispatch("verify")  # 同原连接按实际ID精确回读，才可完成用途。
-            assert operation(env).status == "succeeded"
+            assert operation(env).status == "succeeded", observation()
             assert len(creates) == 1 and len(reads) == 2
             assert len(set(tokens)) == 1
             release.set()
@@ -411,6 +462,9 @@ def test_unknown_remote_pull_survives_two_workers_and_late_result(
             dispatch("duplicate")
             assert operation(env).status == "succeeded" and len(creates) == 1
     finally:
+        # Celery 的 join 超时异常会跳过自身重置，不能污染后续用例的 ready 等待。
+        worker_state.should_terminate = previous_termination
+        worker_state.should_stop = previous_stop
         release.set()
         server.shutdown()
         server.server_close()

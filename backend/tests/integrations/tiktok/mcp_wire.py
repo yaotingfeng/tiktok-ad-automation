@@ -25,6 +25,7 @@ class McpWire:
         self.status = 200
         self.invalid_json = False
         self.handshake_delay = 0
+        self.close_connections = False
         self.pages = {}
         wire = self
 
@@ -44,6 +45,10 @@ class McpWire:
             def respond(self, status, body=b"", headers=None):
                 self.send_response(status)
                 self.send_header("Content-Length", str(len(body)))
+                if wire.close_connections:
+                    # 多进程验收的本地服务显式结束连接，避免空闲超时与下次发送竞争。
+                    self.send_header("Connection", "close")
+                    self.close_connection = True
                 for name, value in (headers or {}).items():
                     self.send_header(name, value)
                 self.end_headers()

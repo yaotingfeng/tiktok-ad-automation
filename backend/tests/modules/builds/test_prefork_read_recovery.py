@@ -43,6 +43,19 @@ from tests.modules.builds.test_channel_execution import (
 )
 
 
+@pytest.fixture(autouse=True)
+def independent_http_connections(gateway_wire):
+    # 多次数据库鉴权之间不复用测试服务仅保留一秒的空闲连接；MCP 会话仍按原协议验证。
+    gateway_wire["wire"].close_connections = True
+
+
+def read_diagnostic(database_engine, step_id, reads):
+    """只报告本地状态和调用次数，避免超时失败掩盖具体核查原因。"""
+    with Session(database_engine) as db:
+        step = db.get(ExecutionStep, step_id)
+        return step.status, step.error_code, step.phase, len(reads)
+
+
 @pytest.mark.skipif(
     sys.platform != "linux", reason="actual prefork hard-kill validation requires Linux"
 )
@@ -58,7 +71,10 @@ def test_hard_kill_late_effect_is_read_on_original_connection_without_second_cre
     case, wire = channel_execution
     context, route = case["context"], case["route"]
     created(wire, "CTA")
-    assert invoke(database_engine, redis_client, case, "CTA") == "SUCCEEDED"
+    assert invoke(database_engine, redis_client, case, "CTA") == "SUCCEEDED", (
+        read_diagnostic(database_engine, case["ids"]["CTA"], []),
+        [call["method"] for call in wire["wire"].calls],
+    )
     step_id = case["ids"]["CAMPAIGN"]
     received, release = threading.Event(), threading.Event()
     creates, reads, effects = [], [], []
@@ -81,7 +97,14 @@ def test_hard_kill_late_effect_is_read_on_original_connection_without_second_cre
                     step = db.get(ExecutionStep, step_id)
                     assert step.phase == "REQUEST_ARMED" and step.request_body_digest
                 creates.append(arguments)
-                effects.append({**arguments, "campaign_id": "late-original-id"})
+                # 平台回读使用精确金额文本，不能把 SDK 创建 JSON 的 float 回显当作精度证据。
+                effects.append(
+                    {
+                        **arguments,
+                        "budget": str(arguments["budget"]),
+                        "campaign_id": "late-original-id",
+                    }
+                )
                 received.set()
                 release.wait(30)
                 value = {
@@ -199,21 +222,24 @@ def test_hard_kill_late_effect_is_read_on_original_connection_without_second_cre
     @app.task(
         name=prefix + "create",
         shared=False,
-        time_limit=3,
-        soft_time_limit=1,
+        # 为 MCP 握手及逐请求数据库鉴权留出准备时间，再在远端阻塞时实际硬终止。
+        time_limit=10,
+        # 本例验证硬终止后的未知结果；软中断会在发送准备阶段提前结束任务。
+        soft_time_limit=None,
         acks_late=True,
         reject_on_worker_lost=True,
     )
     def create_task():
         database_engine.dispose(close=False)
         with Redis.from_url(broker) as client:
-            execution.process_step(
+            result = execution.process_step(
                 database_engine=database_engine,
                 redis_client=client,
                 context=context,
                 step_id=step_id,
                 revision=0,
             )
+            client.set(prefix + "create-result", result, ex=120)
 
     @app.task(name=prefix + "read", shared=False, time_limit=40, soft_time_limit=35)
     def read_task(revision=0):
@@ -232,6 +258,7 @@ def test_hard_kill_late_effect_is_read_on_original_connection_without_second_cre
         with start_worker(
             app,
             pool="prefork",
+            use_eventloop=False,
             concurrency=1,
             perform_ping_check=False,
             shutdown_timeout=15,
@@ -240,7 +267,16 @@ def test_hard_kill_late_effect_is_read_on_original_connection_without_second_cre
         ) as worker:
             original_pid = worker.pool._pool._pool[0].pid
             create_task.delay()
-            assert received.wait(10)
+            arrived = received.wait(10)
+            with Session(database_engine) as db:
+                observed = db.get(ExecutionStep, step_id)
+                diagnostic = (
+                    redis_client.get(prefix + "create-result"),
+                    observed.status,
+                    observed.error_code,
+                    observed.phase,
+                )
+            assert arrived, diagnostic
             deadline = time.monotonic() + 12
             while (
                 original_pid
@@ -295,7 +331,7 @@ def test_hard_kill_late_effect_is_read_on_original_connection_without_second_cre
             assert redis_client.get(prefix + "read-result") in {
                 b"SUCCEEDED",
                 "SUCCEEDED",
-            }
+            }, read_diagnostic(database_engine, step_id, reads)
             assert len(creates) == 1 and len(reads) == 1 and not release.is_set()
             release.set()  # A late response never authorizes another create.
             create_task.delay()
