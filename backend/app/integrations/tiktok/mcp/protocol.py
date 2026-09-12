@@ -232,6 +232,13 @@ def _semantic_schema(value: Any, *, keyword: str = "") -> Any:
             key: _semantic_schema(item, keyword=key)
             for key, item in value.items()
             if key not in _ANNOTATIONS
+            # 空 properties 不增加约束；仅在 schema 层移除，保留同名业务属性。
+            and not (key == "properties" and item == {})
+            # 官方 MCP 为 number 添加 OpenAPI double 注解；不忽略字符串格式、
+            # 未知格式或数值边界，const/default/enum 中的同名字面量也保持原样。
+            and not (
+                key == "format" and item == "double" and value.get("type") == "number"
+            )
         }
     if isinstance(value, list):
         items = [_semantic_schema(item) for item in value]

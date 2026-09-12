@@ -352,3 +352,61 @@ def test_dependency_maps_ignore_only_schema_prose_and_required_order():
     actual["inputSchema"]["dependencies"]["description"]["required"].reverse()
     actual["inputSchema"]["dependencies"]["description"]["description"] = "new prose"
     verify_tool_schema(expected, actual)
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "auth_advertiser_get",
+        "user_info_get",
+        "bc_get",
+        "bc_asset_get",
+        "bc_member_get",
+        "bc_asset_member_get",
+    ],
+)
+def test_live_account_schema_accepts_equivalent_object_and_numeric_annotations(
+    tool_name,
+):
+    expected = next(c for c in load_tool_contracts() if c.tool_name == tool_name)
+    actual = observed(expected)
+    schema = actual["inputSchema"]
+    if schema.get("properties") == {}:
+        del schema["properties"]
+    for key in ("page", "page_size"):
+        if key in schema.get("properties", {}):
+            schema["properties"][key]["format"] = "double"
+    verify_tool_schema(expected, actual)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "numeric_type",
+        "minimum",
+        "string_format",
+        "literal_format",
+        "business_properties",
+    ],
+)
+def test_schema_equivalence_preserves_constraints_and_literal_keys(change):
+    expected = contract()
+    expected.input_schema["properties"]["page"] = {"type": "number"}
+    expected.input_schema["properties"]["payload"]["const"] = {
+        "format": "double",
+        "properties": {},
+    }
+    expected.input_schema["properties"]["properties"] = {}
+    actual = observed(expected)
+    if change == "numeric_type":
+        actual["inputSchema"]["properties"]["page"]["type"] = "integer"
+    elif change == "minimum":
+        actual["inputSchema"]["properties"]["page"]["minimum"] = 1
+    elif change == "string_format":
+        actual["inputSchema"]["properties"]["advertiser_id"]["format"] = "uuid"
+    elif change == "literal_format":
+        del actual["inputSchema"]["properties"]["payload"]["const"]["format"]
+    else:
+        del actual["inputSchema"]["properties"]["properties"]
+    with pytest.raises(DomainError):
+        verify_tool_schema(expected, actual)

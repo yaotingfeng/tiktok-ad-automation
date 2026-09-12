@@ -80,3 +80,9 @@ Sites 独立源码在相邻 `server-sites-gateway/` 项目，发布源码 `148a0
 测试站点已完成官方客户端动态登记（HTTP 201），回调为 `https://tk-ada.137-220-150-31.sslip.io/api/integrations/tiktok/mcp/callback`。私有 app.env 设置 MCP_REDIRECT_URI 与 MCP_CLIENT_REGISTRATION_REF，后者指向 `/etc/tt-ada-staging/mcp-client.json`（root:tt-ada 0640）。备份脚本已包含整个私有配置目录。页面 MCP configuration 为 READY；租户登录授权、BC 绑定、配额/实际协议和素材广告联调尚未完成，READY 不证明这些能力。
 
 服务器新增 `/swapfile-tt-ada-staging` 2 GiB swap。构建不依赖 Node：在 frontend 使用 Bun 执行 `../node_modules/typescript/bin/tsc -p tsconfig.build.json` 和 `../node_modules/vite/bin/vite.js build`。Python 虚拟环境应使用 `/var/lib/tt-ada-staging/python/` 下的共享解释器，避免指向 root 家目录。
+
+## 2026-09-12 授权后调用限流配置
+
+租户真实授权后须继续验证候选 BC 读取，configuration READY 不检查调用额度。测试环境已配置 TIKTOK_CALL_POLICIES：base 的 app_max_inflight=4、endpoint_max_inflight=2、tenant_max_inflight=4、advertiser_max_inflight=4、app_calls_per_window=10、endpoint_calls_per_window=3、window_ms=1000、lease_ms=960000；endpoints 为空。总量和并发是本地工程限制，并非官方提供的 App 配额；服务主体尚未核实时 MCP_SERVICE_QUOTA_SCOPE 保持未设置，让所有 MCP 连接共用保守配额域。官方工具频控依据 [自定义客户端指南](https://business-api.tiktok.com/portal/docs/how-to-connect-a-custom-agent-to-tiktok-for-business-mcp-server/v1.3)，上线其他环境须重新核实。
+
+本次配置发布已额外生成项目归档并完成恢复校验，备份批次为 `/var/backups/tt-ada-staging/20260912T070256Z/`；日常备份脚本仍不自动打包项目，每次部署必须继续执行前述完整备份步骤。
