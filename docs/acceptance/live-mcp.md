@@ -1,6 +1,6 @@
 # 官方 MCP 真实联调验收表
 
-**状态：已完成测试站点客户端登记，租户与业务真实联调未执行。** 2026-09-12 官方注册返回 HTTP 201，部署配置与管理员页面 READY 已核实，见 [测试发布记录](../validation/2026-09-12-staging-mcp-release.md)。未发起租户 TikTok 登录同意、查询真实 BC、上传 TikTok/R2 素材或创建广告。原本地后端 2203 passed、前端 348 passed，以及本次 Linux 9 项验收，均不是业务真实联调证据。
+**状态：测试站点已完成客户端登记、一次真实 OAuth/PKCE 兑换及工具目录读取；BC 绑定和业务链路尚未完成。** 2026-09-12 官方注册 HTTP 201、真实候选令牌加密保存、tools/list 和 7 个账户 schema 已核实。授权后发现额度配置、schema 表示及响应合同问题，修复已发布，见 [授权后修复记录](../validation/2026-09-12-staging-mcp-auth-fix.md)。上一候选选择窗口已过期，最终 BC 列表读取待用户重新授权复验。未执行真实上传或广告创建；离线测试不能代替这些证据。
 
 ## 执行前证据
 
@@ -9,10 +9,10 @@
 | 验证项 | 必须保存的非秘密证据 | 当前状态 |
 | --- | --- | --- |
 | 客户端注册 | 官方注册条件、实际 client_id 审计引用、精确 callback URI、issuer/resource 与固定 profile 一致 | 2026-09-12 测试站点实际 HTTP 201；私有材料与精确 callback 已校验，见发布记录 |
-| OAuth/PKCE | 当前 tenant_admin、state 单次持久 claim、S256、实际同源回调、受控凭据存储和失败清理 | 未执行 |
+| OAuth/PKCE | 当前 tenant_admin、state 单次持久 claim、S256、实际同源回调、受控凭据存储和失败清理 | 2026-09-12 实际兑换成功并加密保存候选；BC 选择窗口已过期，待重新授权继续 |
 | 授权主体与权限 | 实际返回主体、scope、issuer/resource、当前用户及账户角色/权限来源、完整目录分页 | 未执行；mcp:tt4b/工具存在不能证明 write |
 | 连接与 BC | 后台 connection_id/channel、明确 BC binding、默认连接选择、其他 tenant/BC 的拒绝证据 | 未执行 |
-| 实际 MCP 协议 | 协商版本、完整 tools/list、input/output schema 与固定 revision 匹配、严格 envelope | 未执行；只有离线候选工具声明 |
+| 实际 MCP 协议 | 协商版本、完整 tools/list、input/output schema 与固定 revision 匹配、严格 envelope | 实际 initialize/tools/list、7 个账户 schema 已核实；账户单条文本 JSON 回执按官方文档接入，最终业务读取待复验 |
 | 刷新 | 同一刷新链路 CAS、正常凭据轮换不变授权版本、pending 等待、UNKNOWN 不重送旧 refresh token | 未执行；不假造 grant_id，不声明服务重放保证 |
 | 远端 revoke | 证明 grant 隔离及对其他连接的影响 | 未核实，当前明确不支持远端 revoke；本地 disable 另验 |
 | 当前授权围栏 | 握手后撤权、请求前后失权、claim 被抢时零新业务发送/旧 worker 不回写 | 只有合成离线证据 |

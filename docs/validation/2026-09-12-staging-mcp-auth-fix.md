@@ -21,3 +21,10 @@
 - 28ba66f 代码发布前：`/var/backups/tt-ada-staging/20260912T070835Z/`。两个批次均包含 PostgreSQL、Redis、完整项目归档（含 backend/app/frontend 已构建产物）及私有配置；PG 临时新库、Redis 独立 socket 实例、项目隔离解压和 SHA-256 均验证，RELEASE_COMPLETE 已写入。
 - API/Worker/Beat 同一 current 路径；仅后端及合同修改，前端产物与依赖未变化，固定版本复用已验证前端及原虚拟环境。保留依赖所指向的旧 release，不得清理。
 - 不替用户绑定 BC、设置默认连接、上传素材或创建广告。候选选择窗口过期后需用户重新授权，不能修改数据库过期时间或借用 Codex 凭据绕过。
+
+## 最终发布验收
+
+- 运行版本 `87a3b33e822728461dd773ea0b5b841043d5c312`，分支已推送；最终发布前完整备份 `/var/backups/tt-ada-staging/20260912T071708Z/`，PG/Redis 恢复、项目解压及四项归档 SHA-256 全部通过。
+- 服务器额外复验协议/结果解析 120 passed，固定错误响应 8 passed。970 个跟踪文件逐个 SHA-256 与发布提交一致；API/Worker/Beat 的实际工作目录均为新版本，备份与证书 timer active，数据库仍为唯一 head mcp_cover_evidence，无迁移。
+- 实际 HTTPS 登录、前端资源、管理员/租户权限隔离、MCP 配置 READY、私有回调错误边界与 API 404 通过。既有依赖和前端构建产物复用，旧目录保留。
+- **真实 BC 列表读取仍待最后复验**：上一授权候选已超过十分钟窗口，已请用户重新授权。此次未绕过过期检查，没有把离线回归或 tools/list 成功写成 BC 绑定成功。
