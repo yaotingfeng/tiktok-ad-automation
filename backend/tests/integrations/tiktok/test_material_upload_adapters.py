@@ -25,7 +25,7 @@ from tests.integrations.tiktok.mcp_wire import McpWire
 from tests.modules.materials.test_url_sdk_contract import multipart_fields
 
 # 仅离线测试明确赋予的服务合同，不代表生产API/MCP已核实。
-SYNTHETIC_POLICY = MaterialUploadPolicy(1024, True, True, True, False)
+SYNTHETIC_POLICY = MaterialUploadPolicy(1024)
 REQUEST = URLVideoUpload(
     "123",
     "https://approved-cdn.example/video.mp4?signature=secret",
@@ -149,7 +149,7 @@ def test_url_upload_returns_actual_receipt_and_uses_channel_specific_fields(
 @pytest.mark.parametrize("upload_case", ["MCP"], indirect=True)
 def test_unverified_policy_does_not_send_upload(upload_case):
     _, opened, _, budget, calls, wire, _ = upload_case
-    with opened(MaterialUploadPolicy(None, True, True, True, False)) as adapter:
+    with opened(MaterialUploadPolicy(None)) as adapter:
         with pytest.raises(RemoteCallError) as error:
             adapter.upload_video_url(REQUEST, budget=budget)
     assert error.value.code == "material_channel_unverified"

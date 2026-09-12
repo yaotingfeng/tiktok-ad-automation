@@ -32,9 +32,7 @@ class MCPMaterialOperations(MaterialReadAdapter):
     ):
         super().__init__(preview_allowed_hosts=preview_allowed_hosts)
         self._client = client
-        self._upload_policy = upload_policy or MaterialUploadPolicy(
-            None, False, False, False, True
-        )
+        self._upload_policy = upload_policy or MaterialUploadPolicy(None)
 
     def _call(
         self,

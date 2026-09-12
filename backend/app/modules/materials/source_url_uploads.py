@@ -242,6 +242,7 @@ def _new_operation(
     context: TenantContext,
     material: MaterialFile,
     obj: TemporaryMaterialObject,
+    source_advertiser_id: str | None = None,
 ) -> MaterialAssetOperation:
     route = source_parent_route(
         db,
@@ -267,6 +268,7 @@ def _new_operation(
         # can belong to a finished, released operation from an older generation.
         reselect=True,
         route=route,
+        advertiser_id=source_advertiser_id,
     )
     conflicting = db.exec(
         select(MaterialAssetOperation.id).where(
@@ -290,8 +292,10 @@ def _new_operation(
     stem = re.sub(r"[\x00-\x1f\x7f/\\]", "_", stem).strip() or "video"
     # Keep a recognizable original name with a stable, persisted correlation
     # suffix. Bound UTF-8 bytes as well as characters for the remote field.
-    stem = stem.encode("utf-8")[:100].decode("utf-8", errors="ignore")
-    name = f"{stem}-{material.id}-{obj.generation}-{uuid4().hex[:12]}.mp4"
+    suffix = f"-{material.id}-{obj.generation}-{uuid4().hex[:12]}.mp4"
+    # TikTok 限制的是完整文件名；先给关联后缀留空间，避免正常原名加后缀就超长。
+    stem = stem.encode("utf-8")[: 100 - len(suffix)].decode("utf-8", errors="ignore")
+    name = f"{stem}{suffix}"
     digest = sha256(
         f"{context.tenant_id}:{material.id}:{obj.id}:{obj.generation}:{access.advertiser_id}:{name}:{obj.sha256}:{obj.video_md5}".encode()
     ).hexdigest()
@@ -331,7 +335,11 @@ def _new_operation(
 
 
 def request_url_retry(
-    db: Session, *, context: TenantContext, material_id: UUID
+    db: Session,
+    *,
+    context: TenantContext,
+    material_id: UUID,
+    source_advertiser_id: str | None = None,
 ) -> UUID:
     require_tenant(
         db, tenant_id=context.tenant_id, actor_id=context.actor_id, action="upload"
@@ -354,7 +362,13 @@ def request_url_retry(
         generation=obj.generation,
     )
     _proof(material, obj, row, upload=True)
-    operation = _new_operation(db, context=context, material=material, obj=obj)
+    operation = _new_operation(
+        db,
+        context=context,
+        material=material,
+        obj=obj,
+        source_advertiser_id=source_advertiser_id,
+    )
     _state(db, context, row, "stored")
     return _queue(
         db,

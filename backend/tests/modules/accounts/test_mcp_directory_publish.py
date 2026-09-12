@@ -260,7 +260,7 @@ def remote_page(rows, *, page=1, pages=1, total=None):
     }
 
 
-def enqueue_directory(wire, bc_id, ids):
+def enqueue_directory(wire, bc_id, ids, *, role="ADMIN"):
     response(wire, "user_info_get", {"core_user_id": "synthetic-subject"})
     response(
         wire,
@@ -275,7 +275,7 @@ def enqueue_directory(wire, bc_id, ids):
             "asset_id": identity,
             "asset_name": "Synthetic",
             "asset_type": "ADVERTISER",
-            "advertiser_role": "ADMIN",
+            "advertiser_role": role,
         }
         for identity in ids
     ]
@@ -368,7 +368,7 @@ def test_complete_http_directory_publishes_once_atomically(
         assert authorization.scopes == ["mcp:tt4b"]
         assert authorization.permission_summary == {
             "read_authorized": True,
-            "upload_authorized": None,
+            "upload_authorized": True,
             "build_authorized": None,
         }
         access = own.exec(

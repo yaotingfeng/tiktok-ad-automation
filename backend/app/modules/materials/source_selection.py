@@ -103,6 +103,7 @@ def claim_source_account(
     material_id: UUID,
     reselect: bool = False,
     route: FrozenTikTokRoute,
+    advertiser_id: str | None = None,
 ) -> AccountAccess:
     """Persist the exact assignment and slot once; caller creates its operation.
 
@@ -113,6 +114,22 @@ def claim_source_account(
         db, tenant_id=context.tenant_id, actor_id=context.actor_id, action="upload"
     )
     row = source_file(db, context=context, bc_id=bc_id, material_id=material_id)
+    if advertiser_id is not None:
+        # 指定账户的恢复仍走同一授权、租户和 BC 校验，不能落到其他候选账户。
+        require_material_route(
+            db,
+            context=context,
+            route=route,
+            bc_id=bc_id,
+            advertiser_id=advertiser_id,
+            capability="upload",
+        )
+        if (
+            row.source_advertiser_id
+            and not reselect
+            and row.source_advertiser_id != advertiser_id
+        ):
+            raise DomainError("frozen_route_changed", "已有来源账户不能直接替换")
     if row.source_advertiser_id and not reselect:
         assert row.connection_id
         if row.connection_id != route.connection_id:
@@ -168,11 +185,12 @@ def claim_source_account(
         .group_by(SourceAccountLoad.advertiser_id)
         .subquery()
     )
-    grants = (
-        usable_grants(tenant_id=context.tenant_id, bc_id=bc_id, action="upload")
-        .where(BCAccountAccess.connection_id == route.connection_id)
-        .subquery()
-    )
+    grant_query = usable_grants(
+        tenant_id=context.tenant_id, bc_id=bc_id, action="upload"
+    ).where(BCAccountAccess.connection_id == route.connection_id)
+    if advertiser_id is not None:
+        grant_query = grant_query.where(BCAccountAccess.advertiser_id == advertiser_id)
+    grants = grant_query.subquery()
     candidates = db.exec(
         select(grants.c.advertiser_id, grants.c.connection_id)
         .outerjoin(loads, grants.c.advertiser_id == loads.c.advertiser_id)

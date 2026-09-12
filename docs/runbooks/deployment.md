@@ -135,7 +135,7 @@ Beat 每秒触发一次 outbox 发布。单次发布默认最多 20 个公平轮
 1. 固定审查通过的完整 Git SHA、镜像 digest、迁移路径和唯一目标 head。多 BC 版本 head 为 `mcp_multibc_runtime`；以实际发布版本的 `alembic heads` 为准，不在服务器生成或修改迁移。
 2. 冻结新写入，排空当前执行任务；再停止调度与消费者。保留队列/outbox、原请求和所有 UNKNOWN，不能以清空它们代替排空。暂停备份 timer 并等待已经开始的备份自然结束，随后创建并验证可恢复备份。
 3. 使用新固定版本执行审查后的迁移。确认 current=head、单 head 和历史证据保留；API/prestart/worker/beat 必须同一 SHA。旧路由无法证明时应保持阻断，不用今日默认连接补历史。默认连接有歧义时由管理员明确选择，不能自动择一。
-4. 先验管理员/租户/BC 隔离、连接状态、只读与旧 API 路径，再按已有独立证据开放 MCP 能力。实际 scope、主体或 tools/list/schema 未核实，禁止开启写能力；MCP 视频五字段服务 policy 未齐全时保持关闭。不得把测试 SYNTHETIC 注册或策略复制到部署配置。
+4. 先验管理员/租户/BC 隔离、连接状态、只读与旧 API 路径，再按已有独立证据开放 MCP 能力。实际 scope、主体或 tools/list/schema 未核实，禁止开启写能力；MCP URL 上传按已接入合同、实际账户权限及原件回读校验，见 [2026-09-13 修复记录](../validation/2026-09-13-mcp-material-upload.md)。不得把测试 SYNTHETIC 注册或策略复制到部署配置。
 5. Linux prefork 使用真实 PG/Redis 执行接收后断线/终止及原通道读取恢复，确认总 create 次数为 1。macOS skip 不构成此项通过。读取 CTA 缺实际账户字段时维持 INCOMPLETE，不降低合同来取得绿色结果。
 6. 成功切换或完成中止恢复后恢复备份 timer，记录当前版本、head、服务和验证结果。回退应用前先核实 schema 兼容；持久化的冻结 route、原始摘要和回执不能为降级而删除，优先修复前进。
 
@@ -146,7 +146,7 @@ Beat 每秒触发一次 outbox 发布。单次发布默认最多 20 个公平轮
 
 双通道 gateway 使用逻辑操作键查询 `TIKTOK_CALL_POLICIES.endpoints`，当前操作分组为 `accounts.*`、`scene.*`、`materials.*`、`build.*` 和 `protocol.*`（以发布版本的实际 operation 名称为准）。以上指网关业务/协议键；独立 MCP 刷新仍使用 `auth_refresh`，不将它改名为点分前缀。升级时逐项迁移原 SDK URL 路径覆盖；旧 URL 条目不会命中，也没有兼容回退。共享 base 与配额归属域继续生效，不能通过改键绕过共享额度。
 
-例如旧 `/open_api/v1.3/file/video/ad/upload/` 覆盖需分别配置 `materials.upload_video_file` 与 `materials.upload_video_url`。二者当前 worker hard limit 为 900 秒，lease 必须严格大于 hard limit 加 5 秒，即 **大于 905000ms**；仅保留旧 URL 条目会落到 base，短 lease 会被门禁拒绝。容量/频率/并发值应依据目标环境及实际已核实的通道额度设置，测试里的 970000ms 和宽松 quota 不是官方生产默认。配额配置正确仍不能替代 MCP 视频服务五项能力证据。
+例如旧 `/open_api/v1.3/file/video/ad/upload/` 覆盖需分别配置 `materials.upload_video_file` 与 `materials.upload_video_url`。二者当前 worker hard limit 为 900 秒，lease 必须严格大于 hard limit 加 5 秒，即 **大于 905000ms**；仅保留旧 URL 条目会落到 base，短 lease 会被门禁拒绝。容量/频率/并发值应依据目标环境及实际已核实的通道额度设置，测试里的 970000ms 和宽松 quota 不是官方生产默认。配额配置正确仍不能替代账户权限及实际上传回读验收。
 
 
 ## MCP 多 BC 升级验收

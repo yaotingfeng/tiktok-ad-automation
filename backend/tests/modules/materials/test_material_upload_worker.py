@@ -78,7 +78,7 @@ def synthetic_contract(gateway_case, monkeypatch):
     record = upload_evidence.MaterialUploadEvidence(
         channel=route.channel,
         adapter_contract_revision=route.adapter_contract_revision,
-        policy=MaterialUploadPolicy(1024, True, True, True, False),
+        policy=MaterialUploadPolicy(1024),
         category="SYNTHETIC",
         sources=("local HTTP fixture",),
         notes="No live platform guarantee.",
@@ -114,11 +114,9 @@ def test_url_worker_sends_once_and_preserves_original_route_and_receipt(
     gateway_case,
     gateway_wire,
     url_env,
-    synthetic_contract,
     redis_client,
     database_engine,
 ):
-    assert synthetic_contract.category == "SYNTHETIC"
     enqueue_upload(gateway_case, gateway_wire)
     run(url_env, redis_client)
     op = operation(url_env)
@@ -146,8 +144,10 @@ def test_url_worker_sends_once_and_preserves_original_route_and_receipt(
 
 @pytest.mark.parametrize("gateway_case", ["OFFICIAL_MCP"], indirect=True)
 def test_unknown_mcp_policy_blocks_before_signing_and_arming(
-    gateway_wire, url_env, redis_client, database_engine
+    gateway_wire, url_env, redis_client, database_engine, monkeypatch
 ):
+    monkeypatch.setattr(upload_evidence, "UPLOAD_EVIDENCE", ())
+
     class NoSigning:
         def generate_presigned_url(self, *_args, **_kwargs):
             pytest.fail("未知MCP能力不得签发URL")
@@ -288,7 +288,7 @@ def test_receipt_readback_uses_frozen_authority_and_current_credentials(
     from tests.modules.materials.test_url_ingest import info
 
     assert synthetic_contract.category == "SYNTHETIC"
-    # MCP通道无App配置也能独立完成有合成证据的本地协议回归。
+    # MCP通道无App配置也能独立完成本地协议回归。
     monkeypatch.setattr(settings, "TIKTOK_APP_ID", "")
     monkeypatch.setattr(settings, "TIKTOK_APP_SECRET", "")
     enqueue_upload(gateway_case, gateway_wire)
@@ -345,6 +345,7 @@ def test_mcp_readiness_uses_same_channel_gate_without_requiring_api_app(
     from app.modules.materials.readiness import get_material_readiness
     from tests.modules.materials.test_readiness import asset, target
 
+    monkeypatch.setattr(upload_evidence, "UPLOAD_EVIDENCE", ())
     monkeypatch.setattr(settings, "TIKTOK_APP_ID", "")
     monkeypatch.setattr(settings, "TIKTOK_APP_SECRET", "")
     monkeypatch.setattr(

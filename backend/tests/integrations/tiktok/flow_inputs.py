@@ -100,7 +100,7 @@ def flow_storage(tmp_path, monkeypatch, gateway_case, database_engine):
     evidence = material_upload_evidence.MaterialUploadEvidence(
         channel=route.channel,
         adapter_contract_revision=route.adapter_contract_revision,
-        policy=MaterialUploadPolicy(1024 * 1024, True, True, True, False),
+        policy=MaterialUploadPolicy(1024 * 1024),
         category="SYNTHETIC",
         sources=("P3.6 local HTTP fixture",),
         notes="Not live upload or permission verification.",

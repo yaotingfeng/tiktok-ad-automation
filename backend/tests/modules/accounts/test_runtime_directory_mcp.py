@@ -91,14 +91,18 @@ def expired_mcp(directory_context, oauth_wire, catalog_wire, redis_client, monke
         )
 
 
-def test_mcp_complete_reobservation_restores_reads_but_never_writes(
-    expired_mcp, catalog_wire, redis_client
+@pytest.mark.parametrize(
+    "role,allowed",
+    [("ADMIN", True), ("OPERATOR", True), ("ANALYST", False), (None, False)],
+)
+def test_mcp_complete_reobservation_enables_upload_for_actual_admin_role(
+    expired_mcp, catalog_wire, redis_client, role, allowed
 ):
     from app.modules.accounts.models import BCAccountAccess
     from app.modules.accounts.routing import freeze_route, verify_route
 
     env = expired_mcp
-    enqueue_directory(catalog_wire, env["bc_id"], (env["advertiser_id"],))
+    enqueue_directory(catalog_wire, env["bc_id"], (env["advertiser_id"],), role=role)
     finished = finish_runtime(env, redis_client, env["run_id"])
     assert finished.status == "COMPLETE", finished.error_code
     assert run(env, redis_client, env["job_id"]).status == "COMPLETE"
@@ -111,7 +115,7 @@ def test_mcp_complete_reobservation_restores_reads_but_never_writes(
         assert facts.upstream_subject == "synthetic-subject"
         assert facts.permission_summary == {
             "read_authorized": True,
-            "upload_authorized": None,
+            "upload_authorized": True,
             "build_authorized": None,
         }
         assert facts.verified_at > datetime.now(UTC) - timedelta(minutes=1)
@@ -125,20 +129,32 @@ def test_mcp_complete_reobservation_restores_reads_but_never_writes(
                 BCAccountAccess.connection_id == connection.id
             )
         ).one()
-        assert not grant.can_build and not grant.can_upload
+        assert not grant.can_build and grant.can_upload is allowed
         route = freeze_route(
             session,
             context=env["context"],
             bc_id=env["bc_id"],
             connection_id=connection.id,
         )
-        verify_route(
-            session,
-            context=env["context"],
-            route=route,
-            advertiser_id=env["advertiser_id"],
-            capability="read",
-        )
+        from app.core.errors import DomainError
+
+        if allowed:
+            verify_route(
+                session,
+                context=env["context"],
+                route=route,
+                advertiser_id=env["advertiser_id"],
+                capability="upload",
+            )
+        else:
+            with pytest.raises(DomainError):
+                verify_route(
+                    session,
+                    context=env["context"],
+                    route=route,
+                    advertiser_id=env["advertiser_id"],
+                    capability="upload",
+                )
 
 
 def test_changed_mcp_subject_cannot_refresh_old_facts(

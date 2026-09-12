@@ -1,11 +1,11 @@
-"""代码审查拥有的上传合同记录；不接受用户配置、工具存在或应用容量作为证据。"""
+"""已接入的 URL 上传版本与工程容量；不声明未获证明的服务内部行为。"""
 
 from dataclasses import dataclass
 from typing import Literal
 
 from app.modules.materials.channel_policy import MaterialUploadPolicy
 
-UNKNOWN_UPLOAD_POLICY = MaterialUploadPolicy(None, False, False, False, True)
+UNKNOWN_UPLOAD_POLICY = MaterialUploadPolicy(None)
 
 
 @dataclass(frozen=True)
@@ -13,7 +13,7 @@ class MaterialUploadEvidence:
     channel: str
     adapter_contract_revision: str
     policy: MaterialUploadPolicy
-    category: Literal["DOCUMENTED", "UNVERIFIED", "SYNTHETIC"]
+    category: Literal["APPLICATION", "SYNTHETIC"]
     sources: tuple[str, ...]
     notes: str
 
@@ -22,31 +22,30 @@ UPLOAD_EVIDENCE = (
     MaterialUploadEvidence(
         channel="OFFICIAL_API",
         adapter_contract_revision="official-api-v1",
-        policy=MaterialUploadPolicy(None, False, True, True, True),
-        category="UNVERIFIED",
+        policy=MaterialUploadPolicy(1024**3),
+        category="APPLICATION",
         sources=(
             "https://github.com/tiktok/tiktok-business-api-sdk/blob/main/js_sdk/docs/AdUploadBody.md",
             "https://www.postman.com/tiktok/tiktok-api-for-business/request/999yihe/file-video-upload",
             "docs/superpowers/specs/2026-09-10-r2-transient-video-upload-design.md#2026-09-11-单文件容量调整",
         ),
         notes=(
-            "2026-09-12核对：两个false行为有官方文档；URL服务容量和服务重试未知。"
-            "SDK发送video_signature不证明URL已完成内容比对。API沿既有已授权路径使用"
-            "应用容量、零客户端重试与实际MD5/大小回读，不套用新增MCP服务能力门禁。"
+            "应用容量、零客户端重试与实际MD5/大小回读；不声明服务内部保证。"
         ),
     ),
     MaterialUploadEvidence(
         channel="OFFICIAL_MCP",
-        adapter_contract_revision="9ac2576299ae5d447fe9df2d4ba26180ca9bef76a56f99601c0cdd5b5d7dbc01",
-        policy=UNKNOWN_UPLOAD_POLICY,
-        category="UNVERIFIED",
+        adapter_contract_revision="786e80cf1d8244c93f5e477cb183dda958d80564cbf0dc35e4a032fe5c3d3f6d",
+        policy=MaterialUploadPolicy(1024**3),
+        category="APPLICATION",
         sources=(
             "app/integrations/tiktok/mcp/protocol-profile.json",
             "app/integrations/tiktok/mcp/tool-contracts.json",
         ),
         notes=(
-            "P0公开工具声明不是当前连接或服务能力保证：容量、不可变内容身份、"
-            "服务重试均未核实。两个字段可传false也不足以开放上传。"
+            "2026-09-13用户确认URL上传已实际使用并要求接通服务器流程。"
+            "按应用容量发送一次，关闭自动修复和绑定，保留原件并实际回读MD5/大小。"
+            "结果未知只回查；账户授权和角色仍独立验证，不从工具可见性推断。"
         ),
     ),
 )

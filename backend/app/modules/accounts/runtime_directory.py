@@ -77,6 +77,13 @@ def needs_directory_refresh(session: Session, route: FrozenTikTokRoute) -> bool:
         return True
     if route.channel != "OFFICIAL_MCP":
         return False
+    # 旧版本只发布读取事实。显式重检须补采上传授权，不能复用旧的未知结果；
+    # GET 不入队，也不通过改写授权/绑定代数恢复历史任务。
+    if (
+        "mcp:tt4b" in facts.scopes
+        and facts.permission_summary.get("upload_authorized") is None
+    ):
+        return True
     # 共享主体可由兄弟 BC 的同步续期，但资产/授权交集/详情必须是此 BC 的完整观察。
     # 角色重检会更新 grant.checked_at，不能拿该时间替代完整目录的完成证据。
     completed_at = session.exec(
@@ -481,7 +488,11 @@ def publish_runtime_directory(
             "build_authorized": observed.build_authorized,
         }
         if route.channel == "OFFICIAL_API"
-        else {**previous.permission_summary, "read_authorized": True}
+        else {
+            **previous.permission_summary,
+            "read_authorized": True,
+            "upload_authorized": observed.upload_authorized,
+        }
     )
     previous.source = (
         "OFFICIAL_TOKEN_AND_COMPLETE_DIRECTORY"

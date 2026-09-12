@@ -580,15 +580,19 @@ def test_generation_material_without_exact_pair_never_falls_back_to_file(
     assert wire[0] == []
 
 
+@pytest.mark.parametrize(
+    "original", ["月光 Episode 07.mp4", "a" * 90 + ".mp4", "月光" * 50 + ".mp4"]
+)
 def test_remote_name_preserves_original_name_and_stable_unique_suffix(
-    url_env, redis_client, wire
+    url_env, redis_client, wire, original
 ):
     with Session(engine) as db, db.begin():
-        db.get(MaterialFile, url_env["material_id"]).file_name = "月光 Episode 07.mp4"
+        db.get(MaterialFile, url_env["material_id"]).file_name = original
     wire[1].append([{"video_id": "actual-source-vid"}])
     run(url_env, redis_client)
     name = operation(url_env).remote_response["remote_name"]
-    assert name.startswith("月光 Episode 07-")
+    assert name.startswith(original[:2])
+    assert len(name.encode("utf-8")) <= 100
     assert name.endswith(".mp4")
     assert str(url_env["material_id"]) in name
     assert dict(wire[0][0][2]["fields"])["file_name"] == name

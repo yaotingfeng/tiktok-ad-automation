@@ -267,3 +267,35 @@ def test_cooling_or_revoked_sources_do_not_starve_other_accounts(env):
         with pytest.raises(DomainError) as error:
             claim(db, env, ids[1])
         assert error.value.code == "source_capacity_pending"
+
+
+def test_explicit_source_never_falls_back_to_another_account(env):
+    from app.modules.materials.source_selection import claim_source_account
+
+    with Session(engine) as db, db.begin():
+        add_accounts(db, env, 2)
+        ids = add_files(db, env, 2)
+        route = freeze_route(
+            db,
+            context=env["context"],
+            bc_id=env["bc_id"],
+            connection_id=env["connection_id"],
+        )
+
+        def choose(material_id, account):
+            return claim_source_account(
+                db,
+                context=env["context"],
+                bc_id=env["bc_id"],
+                material_id=material_id,
+                route=route,
+                advertiser_id=account,
+            )
+
+        assert choose(ids[0], "source-001").advertiser_id == "source-001"
+        with pytest.raises(DomainError) as error:
+            choose(ids[1], "source-001")
+        assert error.value.code == "source_capacity_pending"
+        with pytest.raises(DomainError) as error:
+            choose(ids[1], "outside-bc")
+        assert error.value.code == "account_not_in_bc"

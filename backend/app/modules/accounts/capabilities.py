@@ -151,8 +151,8 @@ def _scope_flags(facts: AuthorizationFacts) -> tuple[bool, bool, bool]:
     known = (
         0 <= age <= settings.BC_CAPABILITY_MAX_AGE_SECONDS
         and facts.evidence_source != "UNKNOWN"
-        and facts.upload_authorized is not None
-        and facts.build_authorized is not None
+        # 上传与搭建分别核实，不能因为另一项尚未知而永久封锁已接入的动作。
+        and (facts.upload_authorized is not None or facts.build_authorized is not None)
     )
     return (
         known,

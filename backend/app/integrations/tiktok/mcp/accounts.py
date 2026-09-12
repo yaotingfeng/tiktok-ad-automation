@@ -68,7 +68,9 @@ class McpAccountsGateway(DiscoveryReadAdapter):
             subject_id=subject,
             grant_id=None,
             read_authorized=None,
-            upload_authorized=None,
+            # 实际 token 的 MCP scope 允许请求素材工具；具体账户仍须完整目录与
+            # ADMIN/OPERATOR 角色校验，上游拒绝保留真实错误，不预设上传成功。
+            upload_authorized=True if "mcp:tt4b" in observation.scopes else None,
             build_authorized=None,
             evidence_source="MCP_USER_INFO_AND_TOKEN",
             observed_at=datetime.now(UTC),

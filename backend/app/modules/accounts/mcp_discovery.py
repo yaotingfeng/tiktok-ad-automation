@@ -266,7 +266,7 @@ def authorization_from_staging(subject: dict[str, Any]) -> AuthorizationFacts:
             resource=subject["resource"],
             scopes=tuple(subject["scopes"]),
             read_authorized=None,
-            upload_authorized=None,
+            upload_authorized=subject.get("upload_authorized"),
             build_authorized=None,
             evidence_source="MCP_COMPLETE_DIRECTORY_READ",
             observed_at=datetime.fromisoformat(subject["observed_at"]),
@@ -405,10 +405,11 @@ def publish_mcp_directory(
         .values(tenant_id=run.tenant_id, bc_id=bc_id, connection_id=connection.id)
         .on_conflict_do_nothing(index_elements=["tenant_id", "bc_id"])
     )
-    # 只补充当前授权的读证明，不创建新授权、不提升任何写权限。
+    # 完整目录核验后保存本次观察；账户上传角色由能力任务独立发布。
     authorization.permission_summary = {
         **authorization.permission_summary,
         "read_authorized": True if "mcp:tt4b" in facts.scopes else None,
+        "upload_authorized": facts.upload_authorized,
     }
     authorization.source = facts.evidence_source
     authorization.verified_at = datetime.now(UTC)
