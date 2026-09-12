@@ -1,6 +1,6 @@
 # 官方 MCP 真实联调验收表
 
-**状态：测试站点已完成客户端登记、一次真实 OAuth/PKCE 兑换及工具目录读取；BC 绑定和业务链路尚未完成。** 2026-09-12 官方注册 HTTP 201、真实候选令牌加密保存、tools/list 和 7 个账户 schema 已核实。授权后发现额度配置、schema 表示及响应合同问题，修复已发布，见 [授权后修复记录](../validation/2026-09-12-staging-mcp-auth-fix.md)。上一候选选择窗口已过期，最终 BC 列表读取待用户重新授权复验。未执行真实上传或广告创建；离线测试不能代替这些证据。
+**状态：测试站点已完成客户端登记、真实 OAuth/PKCE 兑换、BC 读取、用户确认绑定和账户发现。** 2026-09-12 在用户指定的 Sun Browser 中重新授权并绑定已确认 BC，连接 ACTIVE、发现 COMPLETE，42 个真实广告账户已显示，币种/时区/平台状态已取得，见 [真实读取验收](../validation/2026-09-12-staging-mcp-pagination.md)。上传及搭建权限仍待核实，未执行真实上传或广告创建，不能由目录成功推定这些能力。
 
 ## 执行前证据
 
@@ -9,10 +9,10 @@
 | 验证项 | 必须保存的非秘密证据 | 当前状态 |
 | --- | --- | --- |
 | 客户端注册 | 官方注册条件、实际 client_id 审计引用、精确 callback URI、issuer/resource 与固定 profile 一致 | 2026-09-12 测试站点实际 HTTP 201；私有材料与精确 callback 已校验，见发布记录 |
-| OAuth/PKCE | 当前 tenant_admin、state 单次持久 claim、S256、实际同源回调、受控凭据存储和失败清理 | 2026-09-12 实际兑换成功并加密保存候选；BC 选择窗口已过期，待重新授权继续 |
-| 授权主体与权限 | 实际返回主体、scope、issuer/resource、当前用户及账户角色/权限来源、完整目录分页 | 未执行；mcp:tt4b/工具存在不能证明 write |
-| 连接与 BC | 后台 connection_id/channel、明确 BC binding、默认连接选择、其他 tenant/BC 的拒绝证据 | 未执行 |
-| 实际 MCP 协议 | 协商版本、完整 tools/list、input/output schema 与固定 revision 匹配、严格 envelope | 实际 initialize/tools/list、7 个账户 schema 已核实；账户单条文本 JSON 回执按官方文档接入，最终业务读取待复验 |
+| OAuth/PKCE | 当前 tenant_admin、state 单次持久 claim、S256、实际同源回调、受控凭据存储和失败清理 | 2026-09-12 Sun Browser 重新授权成功，候选经目录核验正式发布 |
+| 授权主体与权限 | 实际返回主体、scope、issuer/resource、当前用户及账户角色/权限来源、完整目录分页 | SUBJECT/AUTHORIZED/BCS/ASSETS/DETAILS/ROLES 六阶段真实读取及发布通过；上传/搭建权限仍未知 |
+| 连接与 BC | 后台 connection_id/channel、明确 BC binding、默认连接选择、其他 tenant/BC 的拒绝证据 | 用户确认后绑定一个 BC，ACTIVE；无既有默认时自动初始化默认路由，未覆盖已有默认。隔离拒绝保留合成及本地权限测试证据 |
+| 实际 MCP 协议 | 协商版本、完整 tools/list、input/output schema 与固定 revision 匹配、严格 envelope | 实际 initialize/tools/list 及六个目录读取阶段成功；账户文本 JSON 回执通过固定合同解析 |
 | 刷新 | 同一刷新链路 CAS、正常凭据轮换不变授权版本、pending 等待、UNKNOWN 不重送旧 refresh token | 未执行；不假造 grant_id，不声明服务重放保证 |
 | 远端 revoke | 证明 grant 隔离及对其他连接的影响 | 未核实，当前明确不支持远端 revoke；本地 disable 另验 |
 | 当前授权围栏 | 握手后撤权、请求前后失权、claim 被抢时零新业务发送/旧 worker 不回写 | 只有合成离线证据 |
