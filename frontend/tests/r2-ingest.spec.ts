@@ -786,3 +786,37 @@ test("cancelling one file pauses the bounded import and other files resume from 
     release()
   }
 })
+
+test("queue refresh keeps rows mounted and layout stable without an updating message", async ({
+  page,
+}) => {
+  await ingestBoundary(page, { count: 1, role: "viewer" })
+  await page.goto(queueLocation)
+  const details = page.getByRole("button", { name: "查看详情", exact: true })
+  await expect(details).toBeVisible()
+  const originalButton = await details.elementHandle()
+  const originalBox = await details.boundingBox()
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let refreshing = false
+  await page.route("**/ingest-sessions/*/files?*", async (route) => {
+    refreshing = true
+    await gate
+    await route.fallback()
+  })
+  try {
+    await page.getByRole("button", { name: "刷新进度", exact: true }).click()
+    await expect.poll(() => refreshing).toBe(true)
+    await expect(page.getByText("正在更新列表…", { exact: true })).toHaveCount(
+      0,
+    )
+    expect(await originalButton!.evaluate((el) => el.isConnected)).toBe(true)
+    expect((await details.boundingBox())!.y).toBe(originalBox!.y)
+    await expect(page.getByRole("combobox", { name: "每页条数" })).toBeEnabled()
+  } finally {
+    release()
+  }
+  await expect(details).toBeVisible()
+})

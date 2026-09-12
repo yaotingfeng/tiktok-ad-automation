@@ -387,7 +387,9 @@ export function UploadQueue({
             rows={data?.items ?? []}
             columns={columns}
             loading={query.isPending && !data}
-            fetching={query.isFetching}
+            // 后台轮询保留当前行与布局，不订阅 isFetching 反复重建单元格。
+            fetching={query.isPending}
+            showRefreshStatus={false}
             error={query.error}
             retry={() => void query.refetch()}
             filtered={status !== "all"}
@@ -398,7 +400,7 @@ export function UploadQueue({
           <Pager
             paging={paging}
             nextCursor={data?.next_cursor}
-            busy={query.isFetching}
+            busy={query.isPending}
           />
         </CardFooter>
       </Card>

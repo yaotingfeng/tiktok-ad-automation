@@ -183,6 +183,7 @@ export function ServerTable<T>({
   filtered,
   emptyTitle,
   fixedLayout,
+  showRefreshStatus = true,
 }: {
   rows: T[]
   columns: ColumnDef<T>[]
@@ -193,6 +194,7 @@ export function ServerTable<T>({
   filtered: boolean
   emptyTitle: string
   fixedLayout?: { fillColumn: string }
+  showRefreshStatus?: boolean
 }) {
   const table = useReactTable({
     data: rows,
@@ -211,7 +213,7 @@ export function ServerTable<T>({
           <RequestError error={error} retry={retry} />
         </div>
       )}
-      {fetching && !loading && (
+      {showRefreshStatus && fetching && !loading && (
         <p role="status" className="px-4 py-2 text-sm text-muted-foreground">
           正在更新列表…
         </p>

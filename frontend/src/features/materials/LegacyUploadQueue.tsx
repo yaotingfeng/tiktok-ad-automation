@@ -106,7 +106,8 @@ export function LegacyUploadQueue({
           rows={data?.files || []}
           columns={columns}
           loading={query.isPending && !data}
-          fetching={query.isFetching}
+          fetching={query.isPending}
+          showRefreshStatus={false}
           error={query.error}
           retry={() => void query.refetch()}
           filtered={false}

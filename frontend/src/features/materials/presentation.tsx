@@ -67,6 +67,9 @@ export function CopyValue({ value, label }: { value: string; label?: string }) {
   )
 }
 const errors: Record<string, string> = {
+  material_channel_unverified:
+    "当前执行连接的素材入库能力尚未完成核验，原文件已保留，无需重复上传。",
+  capability_scope_unknown: "当前执行连接的上传权限尚未核实，原文件已保留。",
   needs_reselect: "请重新选择未传完的原文件，再继续传输。",
   wrong_file: "文件内容或元数据与原文件不一致，请重新选择。",
   ambiguous_file: "有多个相同元数据的文件，请单独重新选择以核验。",
