@@ -33,6 +33,8 @@ Python uses uv in backend; frontend uses Bun and the official template lockfile.
 ## 环境与发布
 - 明确区分本地开发和生产环境，不能将本地验证视为生产验证。
 - 发布必须遵循 `docs/runbooks/deployment.md`；首次部署同时参考 `docs/runbooks/bootstrap-deployment.md`。
+- 每次向测试或生产环境发版（含仅前端、配置或依赖变更，无数据库迁移也适用），必须在变更前备份数据库、Redis 持久状态、当前项目文件及构建产物、私有配置和证书。项目备份必须为独立归档，不能仅以 Git、旧 release 目录或 current 指针代替；具体清单和验证要求见部署手册。首次部署无历史数据时明确记录不适用项。
+- 发布前核对目标域名/端口、服务用户与目录、数据库/Redis、加密密钥、对象存储、API/MCP 各自授权配置及功能开关；不得输出私密配置。备份须有版本、迁移 head、校验和及恢复验证证据；备份不完整或验证失败不得切换版本。不得把基础健康、MCP READY 或模拟测试报告为真实业务联调成功。
 - 修改服务器、数据库或自动化开关前，先阅读目标环境说明；涉及生产时必须先读生产环境说明，确认目标、影响范围和授权。缺少环境说明时先补齐信息，再执行变更。
 - 骏伯生产环境必须先读 `docs/runbooks/production-junbo.md`，按其中固定版本、独立端口、服务排空、备份、Alembic 迁移、验收和回滚流程发布；禁止对同机其他项目执行停机、覆盖配置或数据操作。
 - 生产入口为 `https://manjuad.gzjunbo.net:8000`，独立 Compose 项目 `tt-ada-production`，版本目录 `/opt/tt-ada/releases/<Git SHA>`。必须使用已发布版本的 `deploy/production-compose.sh`，不混用本地或 staging 配置。

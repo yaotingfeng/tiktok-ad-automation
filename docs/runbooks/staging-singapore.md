@@ -14,7 +14,7 @@
 - PostgreSQL 和 Redis 只监听 loopback；Nginx 提供测试入口，API 仅监听 `127.0.0.1:18000`。域名/TLS 状态以本次验收记录为准。
 - systemd 管理 API、Linux prefork Worker（小内存主机先使用 2 个进程）与唯一 Beat；禁止 API/代理访问日志采集授权参数。Beat 状态保存在 `/var/lib/tt-ada-staging`。
 - 全新空库通过 Alembic 迁移到固定提交的 head，再初始化管理员。缺少 TikTok/R2/版权方配置时保持未配置，素材导入/清理开关关闭。
-- 后续升级先停止接收写入，停止 Beat 并正常排空 Worker，备份数据库与 Redis；迁移成功后切换同版本 API/Worker/Beat。不可通过直接改表或删除数据修复迁移。
+- 后续升级先停止接收写入，停止 Beat 并正常排空 Worker，按通用发布手册备份数据库、Redis、项目文件/构建产物及私有配置（无迁移也必须备份）；迁移成功后切换同版本 API/Worker/Beat。不可通过直接改表或删除数据修复迁移。
 - 验证前端构建、Alembic head、登录和受保护接口、入口检查、Redis/数据库、Worker ping、Beat/outbox；外部真实联调单独验收。
 
 ## 当前实例与操作
@@ -36,12 +36,17 @@ runuser -u tt-ada -- /opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.ce
 
 ## 证书与备份
 
+每次发版还须执行 [通用配置与完整备份规范](deployment.md#每次发版的配置与备份规范)。当前 `/usr/local/sbin/tt-ada-staging-backup` 的范围为数据库、Redis、私有配置/证书和 release 指针，**尚不包含独立项目归档**；脚本的 COMPLETE 只表示该范围完成。2026-09-12 发布保留了旧 release，但未生成独立项目文件归档，不将历史记录追记成已完成。
+
+后续部署者必须在同一发布备份批次另行归档 `readlink -f /opt/tt-ada-staging/current` 对应目录，包含源码、锁文件、迁移和实际 `frontend/dist`；归档根应为真实 release 目录，不能仅打包 current 符号链接。同时核对配置归档是否覆盖本项目所有生效的 Nginx 站点（包括 sslip.io TLS 入口）、systemd 单元及备份脚本。将工具链版本、排除的依赖目录和校验和写入私有批次清单，隔离解压验证后记录完整发布备份结果；在自动脚本补齐前，这些是每次发布必须执行的人工步骤。归档前检查磁盘容量，禁止为腾空间直接删除现用/旧版本或未验收备份。
+
+
 - 证书 `/etc/letsencrypt/live/137.220.150.31/`，Certbot 独立虚拟环境 `/opt/tt-ada-certbot`。IP 证书短期有效，必须保留 `tt-ada-staging-cert-renew.timer`：每小时检查一次，续期成功后通过 deploy hook 校验并 reload Nginx。80 端口的 `/.well-known/acme-challenge/` 必须持续公网可达。
 - IP 证书方式依据 [Let's Encrypt / Certbot 官方说明](https://letsencrypt.org/2026/03/11/shorter-certs-certbot)。续期演练已通过；使用受信任 CA 不等于已完成 TikTok OAuth 验收。
 - `tt-ada-staging-backup.timer` 每日 UTC 19:00（北京时间次日 03:00）加最多 5 分钟随机延迟执行 `/usr/local/sbin/tt-ada-staging-backup`。
 - root 专用目录 `/var/backups/tt-ada-staging/<UTC 时间>/` 保存 PostgreSQL 自定义格式 dump、Redis RDB、私有配置/证书和运行版本指针；仅完整成功的目录有 `COMPLETE` 标记。备份使用独占锁，不复制运行中的 AOF 文件。
-- 首次 PostgreSQL dump 已恢复至新建临时测试库验证，验证后只删除该临时库；Redis RDB 已通过文件完整性校验，未进行 Redis 新实例恢复验收。备份暂留本机，未配置异地复制或自动清理；需要监控磁盘占用，不能把同机备份视为主机损坏保护。
-- 数据库升级前暂停 backup timer，等待已启动的 backup service 自然结束，停止新写入与 Beat、正常排空 Worker后再备份和迁移。完成或中止处理后恢复 timer。首次部署没有旧库或旧任务需要排空。
+- 首次 PostgreSQL dump 已恢复至新建临时测试库验证，验证后只删除该临时库；首次部署时 Redis RDB 仅完成文件完整性校验；2026-09-12 发布已在独立 Redis 实例装载、PING 和读取验证通过，PostgreSQL 亦完成新库恢复，见当日发布验收。备份暂留本机，未配置异地复制或自动清理；需要监控磁盘占用，不能把同机备份视为主机损坏保护。
+- 每次发版前（不限数据库升级）暂停 backup timer，等待已启动的 backup service 自然结束，停止新写入与 Beat、正常排空 Worker后再备份和迁移。完成或中止处理后恢复 timer。首次部署没有旧库或旧任务需要排空。
 - 回滚时先冻结写入并排空服务。只有确认数据库兼容时才切回旧 `current`；需要还原时先用新库/新 Redis 实例验证备份，禁止覆盖仍带旧 AOF 的 Redis 数据目录。首次部署没有上一个应用版本。
 
 验收结束后已将专用测试角色 `tt_ada_test` 设置为 `NOLOGIN NOCREATEDB`，测试配置收紧为 root 0600；后续重跑创建临时库的用例时，由运维按测试范围临时启用，结束后再次收回。
