@@ -141,6 +141,8 @@ sudo docker compose --project-name tt-ada-build-cache \
 
 发布按“冻结新写 → 排空 → 暂停并等待备份 timer → 可恢复备份 → 新迁移 → 同 SHA 服务 → 旧 API/新只读回归 → 按已核实能力开放 MCP → 恢复 timer”执行。双通道候选最终迁移为 `mcp_cover_evidence`，正式版本须核对其唯一 head 和历史冻结证据；禁止仅复制前端或单独升级 Worker。仍使用独立 `tt-ada-production`、`https://manjuad.gzjunbo.net:8000/` 和已发布版本脚本，不影响同机 80/443 项目。
 
+启用 API 或 MCP 前，必须在本环境私有 `/etc/tt-ada/production.env` 配置非空 `TIKTOK_CALL_POLICIES`，并执行 [调用额度配置与交付门槛](deployment.md#调用额度配置与交付门槛)。使用本版本 `deploy/production-compose.sh` 检查实际容器配置来源；按本手册备份、排空及重建受影响服务后确认新配置生效，单纯 `restart` 不能更新 Compose 注入的环境变量。测试服务器的策略不是生产配额证明，不复制其客户端或授权凭据。
+
 MCP 不要求 API App，独立 callback 为 `https://manjuad.gzjunbo.net:8000/api/integrations/tiktok/mcp/callback`；须先核实官方注册允许的精确 URI，再由 junbo 的租户管理员实际授权并选择骏伯 BC。不能复用星屿 ID、BC 或连接配置，不能借用 Codex 内部授权。本地 API App 缺失的 MCP 测试通过不证明生产注册完成。
 
 发布阻断项包括：默认连接歧义、历史 UNKNOWN 无可证 route、实际主体/scope/权限不明、实际工具 schema 不匹配、MCP 视频五字段 policy 未核实、Linux prefork 终止恢复未验、目标生产数据库的原件/封面持久证据迁移未验、目标环境出站未核实。只读已验不代表可上传或创建。保留被阻断记录与已知远端 ID，不通过切默认、换通道、删记录、清队列或回滚数据库重发来解除。

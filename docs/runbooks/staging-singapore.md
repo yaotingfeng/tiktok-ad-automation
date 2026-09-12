@@ -86,3 +86,26 @@ Sites 独立源码在相邻 `server-sites-gateway/` 项目，发布源码 `148a0
 租户真实授权后须继续验证候选 BC 读取，configuration READY 不检查调用额度。测试环境已配置 TIKTOK_CALL_POLICIES：base 的 app_max_inflight=4、endpoint_max_inflight=2、tenant_max_inflight=4、advertiser_max_inflight=4、app_calls_per_window=10、endpoint_calls_per_window=3、window_ms=1000、lease_ms=960000；endpoints 为空。总量和并发是本地工程限制，并非官方提供的 App 配额；服务主体尚未核实时 MCP_SERVICE_QUOTA_SCOPE 保持未设置，让所有 MCP 连接共用保守配额域。官方工具频控依据 [自定义客户端指南](https://business-api.tiktok.com/portal/docs/how-to-connect-a-custom-agent-to-tiktok-for-business-mcp-server/v1.3)，上线其他环境须重新核实。
 
 本次配置发布已额外生成项目归档并完成恢复校验，备份批次为 `/var/backups/tt-ada-staging/20260912T070256Z/`；日常备份脚本仍不自动打包项目，每次部署必须继续执行前述完整备份步骤。
+
+### 每次部署必须执行的限流检查
+
+完整含义、可复制配置及交付要求见 [调用额度配置与交付门槛](deployment.md#调用额度配置与交付门槛)。不要只参考上面的历史配置值；每次发布都核对 `/etc/tt-ada-staging/app.env` 和 API/Worker/Beat 单元的 EnvironmentFile。修改前完成完整备份，修改后按本手册排空并重启受影响服务，不能只改文件而不让进程重新加载。
+
+以下在测试服务器以 root 执行，只校验实际私有配置，不输出配置值、不调用 TikTok：
+
+```bash
+set -a
+. /etc/tt-ada-staging/app.env
+set +a
+cd /opt/tt-ada-staging/current/backend
+runuser -u tt-ada -- /opt/tt-ada-staging/current/.venv/bin/python - <<'PYCODE'
+from app.jobs.admission import admission_policy
+for operation in ("protocol.initialize", "protocol.list_tools", "accounts.list_bcs", "auth_refresh", "materials.upload_video_file", "materials.upload_video_url"):
+    policy = admission_policy(operation)
+    minimum = 905000 if operation.startswith("materials.upload_video_") else 50000
+    assert policy.lease_ms > minimum, "调用租约不足以覆盖请求期限"
+print("PASS: 调用额度配置与租约校验")
+PYCODE
+```
+
+检查通过后还须记录服务重启及配置加载结果；用户授权后验证候选 BC 列表、明确绑定及账户发现。没有用户授权时记录“部署及配置完成，真实读取待验”，不能写“整个 MCP 已可用”。本检查为手册中的人工发布步骤，尚未自动集成到服务器启动脚本。

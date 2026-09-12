@@ -29,7 +29,7 @@
 
 不要启用额外的请求参数或错误上报采集：回调查询包含授权码和 state。API 启动必须使用 `--no-access-log`；当前 Traefik 不开 access log，继承的 Sentry 自动初始化已移除。业务日志使用允许字段列表。`.env`、运行目录、worktree 与登录会话均已从 Git 和 Docker 构建上下文排除。
 
-未取得 TikTok App 时保留相关字段为空；回调返回 `tiktok_app_not_configured`。部分配置返回缺失字段名。Fernet、对象存储与 API 配额在实际业务使用时检查，不用示例值放行真实调用。
+未取得 TikTok App 时保留相关字段为空；回调返回 `tiktok_app_not_configured`。部分配置返回缺失字段名。Fernet、对象存储及调用额度须在开放相应业务前配置并验收，不用示例凭据放行真实调用。即使尚无 API App，只要启用 MCP，也必须提前配置非空 `TIKTOK_CALL_POLICIES`；按照 [调用额度配置与交付门槛](deployment.md#调用额度配置与交付门槛) 完成解析、租约、服务加载及授权后读取检查。基础启动成功不表示外部集成已可用。
 
 ## 宿主机启动
 

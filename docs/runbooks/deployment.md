@@ -32,6 +32,54 @@
 
 验收记录注明备份目录、所有归档与恢复结果、当前版本/head、服务状态及真实联调边界。保留旧版本和本次完整备份直至恢复要求得到满足；未经核实不自动清理。异地复制是否已配置须如实记录，同机副本不能代替异地恢复能力。
 
+## 调用额度配置与交付门槛
+
+`TIKTOK_CALL_POLICIES` 是系统通过 Redis 执行的请求限流和并发策略，不是付费额度或广告余额。API 与 MCP 都依赖它：为空 `{}` 时业务请求会被 `admission_unconfigured`（“请配置应用调用额度”）阻断，格式或租约不合法会产生 `admission_policy_invalid`。**启用任一通道前必须完成配置和校验，不能只部署代码、等用户授权后才补配置。**
+
+配置由部署管理员写入目标环境私有环境文件：测试 systemd 使用 `/etc/tt-ada-staging/app.env`，骏伯生产使用 `/etc/tt-ada/production.env`，其他 Compose 环境按对应手册指定文件。API、所有 Worker 和 Beat 必须加载相同策略及同一业务 Redis；仅修改本地 `.env` 或文件而未重启已有服务不算生效。Compose 的空值默认用于允许基础系统启动，**不代表 TikTok 集成已经配置完成**。
+
+以下为当前测试环境的完整单行写法，不含凭据；其他环境先根据已核实的通道限制和负载制定策略，不直接当作官方默认值：
+
+```dotenv
+TIKTOK_CALL_POLICIES='{"base":{"app_max_inflight":4,"endpoint_max_inflight":2,"tenant_max_inflight":4,"advertiser_max_inflight":4,"app_calls_per_window":10,"endpoint_calls_per_window":3,"window_ms":1000,"lease_ms":960000},"endpoints":{}}'
+```
+
+| 字段 | 含义与测试值 |
+| --- | --- |
+| app_calls_per_window / window_ms | 每共享配额域每 1000 毫秒最多 10 次请求；为本地总量控制 |
+| endpoint_calls_per_window | 每逻辑操作每窗口最多 3 次请求 |
+| app_max_inflight / endpoint_max_inflight | 每共享配额域总并发 4、每逻辑操作并发 2 |
+| tenant_max_inflight / advertiser_max_inflight | 同配额域内每租户/每广告账户各最多 4 个并发请求 |
+| lease_ms | 并发占用租约 960000 毫秒，用于异常退出后的回收，不是请求超时或等待时长 |
+| endpoints | 按实际逻辑操作名覆盖 endpoint_max_inflight、endpoint_calls_per_window、lease_ms，不能覆盖共享总量 |
+
+操作键及上传租约要求见下文“准入配置键迁移”；上传租约必须大于 905000 毫秒，候选目录读取租约也必须覆盖其整个请求时限。未知 MCP 主体时 **MCP_SERVICE_QUOTA_SCOPE 不设置**，代码将所有 MCP 连接合并至保守共享域；不能用租户、BC、connection_id 或 attempt_id 拆分额度，也不要写空字符串。只有核实真实上游配额归属后才设置该项。API 使用真实 App ID 的配额域；没有 API App 不影响 MCP 使用共享域。
+
+在目标服务用户、工作目录、解释器和实际环境变量下执行以下无网络、无业务写入检查（不能用开发机或演示配置的通过结果替代）：
+
+```python
+from app.jobs.admission import admission_policy
+
+operations = (
+    "protocol.initialize", "protocol.list_tools", "accounts.list_bcs",
+    "auth_refresh", "materials.upload_video_file", "materials.upload_video_url",
+)
+for operation in operations:
+    policy = admission_policy(operation)  # 同时验证 base 和所有覆盖项
+    minimum = 905000 if operation.startswith("materials.upload_video_") else 50000
+    assert policy.lease_ms > minimum, "调用租约不足以覆盖请求期限"
+print("PASS: 调用额度配置与租约校验")
+```
+
+交付检查必须按顺序留证：
+
+1. 发布前完成私有配置、策略解析/租约、Redis 可达性、各服务配置来源检查；缺项先修复。配置更新也须执行完整备份、排空和服务重启，按目标环境手册操作。
+2. 发布后确认 API/Worker/Beat 均已重新加载配置、版本一致，执行健康、登录与隔离检查。健康和 MCP configuration READY 不检查完整调用链，不能作为额度已配置的替代证据。
+3. 在用户授权范围内完成 OAuth 换码、实际 initialize/tools/list、候选 BC 列表读取；由用户选择绑定 BC，再验账户发现。需要用户登录/选择时保留待验状态，不代其授权或猜测 BC。
+4. 记录“已配置并生效”“只读已验证”“尚待用户授权/绑定”“素材/广告未验”等实际结果。额度缺失、解析失败或候选读取失败时，不能交付为 MCP 已可用；上传和广告创建仍须独立验收。
+
+本节是部署执行规范，不能假设现有启动脚本已自动检查所有项目；部署者须完成上述步骤并记录结果。
+
 ## 同一 BC 的双通道选择
 
 API（OFFICIAL_API）与 MCP（OFFICIAL_MCP）按独立 connection_id 保存授权，同一租户的同一 BC 可分别绑定两类连接，授权记录不会在系统内互相覆盖。新操作明确指定连接时使用该连接，否则使用租户管理员为该 BC 设置的唯一默认连接；没有默认连接时要求选择，不自动优先 API/MCP，也不采用“最后授权者优先”。

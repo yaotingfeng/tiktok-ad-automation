@@ -35,6 +35,8 @@ Python uses uv in backend; frontend uses Bun and the official template lockfile.
 - 发布必须遵循 `docs/runbooks/deployment.md`；首次部署同时参考 `docs/runbooks/bootstrap-deployment.md`。
 - 每次向测试或生产环境发版（含仅前端、配置或依赖变更，无数据库迁移也适用），必须在变更前备份数据库、Redis 持久状态、当前项目文件及构建产物、私有配置和证书。项目备份必须为独立归档，不能仅以 Git、旧 release 目录或 current 指针代替；具体清单和验证要求见部署手册。首次部署无历史数据时明确记录不适用项。
 - 发布前核对目标域名/端口、服务用户与目录、数据库/Redis、加密密钥、对象存储、API/MCP 各自授权配置及功能开关；不得输出私密配置。备份须有版本、迁移 head、校验和及恢复验证证据；备份不完整或验证失败不得切换版本。不得把基础健康、MCP READY 或模拟测试报告为真实业务联调成功。
+- API/MCP 启用前必须配置非空有效的 `TIKTOK_CALL_POLICIES`，按部署手册核对限流、并发、租约及共享配额域，并验证 API/Worker/Beat 实际加载同一份配置。不得等用户授权后再补额度配置；缺失或校验失败时不得交付为通道可用。
+- MCP 发布验收必须分开记录：注册配置、真实 OAuth 换码、tools/list、候选 BC 读取、用户明确绑定后的账户发现；仅健康/READY/授权成功不能代替后续验收。缺少用户授权时先完成所有无需授权的配置与检查，明确待验项，不宣称整个集成可用。
 - 修改服务器、数据库或自动化开关前，先阅读目标环境说明；涉及生产时必须先读生产环境说明，确认目标、影响范围和授权。缺少环境说明时先补齐信息，再执行变更。
 - 骏伯生产环境必须先读 `docs/runbooks/production-junbo.md`，按其中固定版本、独立端口、服务排空、备份、Alembic 迁移、验收和回滚流程发布；禁止对同机其他项目执行停机、覆盖配置或数据操作。
 - 生产入口为 `https://manjuad.gzjunbo.net:8000`，独立 Compose 项目 `tt-ada-production`，版本目录 `/opt/tt-ada/releases/<Git SHA>`。必须使用已发布版本的 `deploy/production-compose.sh`，不混用本地或 staging 配置。
