@@ -27,3 +27,15 @@
 - 修复原生素材 JSON 文本回执解析（仍严格拒绝非零 code、多份冲突回执、文案成功或畸形数据），接受官方上传单条数组；回查使用合同已支持的 `filtering.video_name`，仍完整分页并严格匹配名称/MD5/大小。保持原冻结接口版本与请求身份，不重传这条已成功的素材。
 
 - 响应解析与恢复回归分组验证：244 项通过、1 项 SDK 不适用的文本回执用例跳过；最终完整素材适配器 68 passed / 1 skipped，SDK 未知上传恢复专项 1 passed。5 个改动源文件严格 mypy、Ruff、编译检查通过。只读观测确认实际远端 MD5 和大小与数据库原件完全相同。
+
+## 最终代码部署
+
+- `b9850420f5fca646048ff1ac7376f50affaa9ea9` 已提交、推送并部署测试环境，当前分支 `feat/platform-implementation`；仓库无本地 main，没有新建分支或强制推送。
+- 第二次完整备份 `/var/backups/tt-ada-staging/20260912T165847Z/`，五份归档 SHA-256、独立 PostgreSQL/Redis 恢复及项目/配置解压检查通过；993 个跟踪文件一致，数据库仍为 `mcp_multibc_runtime`。前端源码未变更，沿用并核对既有构建产物。
+- HTTPS、登录、租户/平台隔离及回调边界通过；API/Worker/Beat 同版本，原授权和绑定代数保留，备份 timer 恢复。后台按原文件名查到已上传 VID，上传尝试仍为 1，后续执行原账户详情回读。
+
+## 真实素材验收通过
+
+- 最终后台原账户详情回读通过：原件 MD5、字节数与实际 VID 一致；同一个上传 attempt 恢复为 available，素材操作 succeeded，账户素材 available。共 1 次上传尝试，未重发视频。
+- 登录后的页面同源接口返回 uploaded_count=1、ready_count=1、failed_count=0；文件 platform_status=available、error_code=null。真实业务 ID 与原始响应仅保留私有运行证据，不进入 Git。
+- 本次完成单个原件到用户指定账户的真实上传与回读；未执行广告创建，其他账户的跨账户分发及完整广告搭建不据此视为通过。

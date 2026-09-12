@@ -1,6 +1,6 @@
 # 官方 MCP 真实联调验收表
 
-**状态：测试站点已完成客户端登记、真实 OAuth/PKCE 兑换、BC 读取、用户确认绑定和账户发现。** 2026-09-12 在用户指定的 Sun Browser 中重新授权并绑定已确认 BC，连接 ACTIVE、发现 COMPLETE，42 个真实广告账户已显示，币种/时区/平台状态已取得，见 [真实读取验收](../validation/2026-09-12-staging-mcp-pagination.md)。上传及搭建权限仍待核实，未执行真实上传或广告创建，不能由目录成功推定这些能力。
+**状态：测试站点已完成客户端登记、真实 OAuth/PKCE 兑换、BC 读取、用户确认绑定和账户发现。** 2026-09-12 在用户指定的 Sun Browser 中重新授权并绑定已确认 BC，连接 ACTIVE、发现 COMPLETE，42 个真实广告账户已显示，币种/时区/平台状态已取得，见 [真实读取验收](../validation/2026-09-12-staging-mcp-pagination.md)。2026-09-13 已完成指定账户的真实 URL 素材上传与原账户回读核验，页面已入库 1、失败 0，见 [素材验收](../validation/2026-09-13-mcp-material-upload.md)。搭建权限及广告创建仍待单独验收。
 
 ## 执行前证据
 
@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | 客户端注册 | 官方注册条件、实际 client_id 审计引用、精确 callback URI、issuer/resource 与固定 profile 一致 | 2026-09-12 测试站点实际 HTTP 201；私有材料与精确 callback 已校验，见发布记录 |
 | OAuth/PKCE | 当前 tenant_admin、state 单次持久 claim、S256、实际同源回调、受控凭据存储和失败清理 | 2026-09-12 Sun Browser 重新授权成功，候选经目录核验正式发布 |
-| 授权主体与权限 | 实际返回主体、scope、issuer/resource、当前用户及账户角色/权限来源、完整目录分页 | SUBJECT/AUTHORIZED/BCS/ASSETS/DETAILS/ROLES 六阶段真实读取及发布通过；上传/搭建权限仍未知 |
+| 授权主体与权限 | 实际返回主体、scope、issuer/resource、当前用户及账户角色/权限来源、完整目录分页 | SUBJECT/AUTHORIZED/BCS/ASSETS/DETAILS/ROLES 六阶段真实读取及发布通过；上传权限经实际 scope 和账户 ADMIN 角色核实；搭建权限仍待验 |
 | 连接与 BC | 后台 connection_id/channel、明确 BC binding、默认连接选择、其他 tenant/BC 的拒绝证据 | 用户确认后绑定一个 BC，ACTIVE；无既有默认时自动初始化默认路由，未覆盖已有默认。隔离拒绝保留合成及本地权限测试证据 |
 | 实际 MCP 协议 | 协商版本、完整 tools/list、input/output schema 与固定 revision 匹配、严格 envelope | 实际 initialize/tools/list 及六个目录读取阶段成功；账户文本 JSON 回执通过固定合同解析 |
 | 刷新 | 同一刷新链路 CAS、正常凭据轮换不变授权版本、pending 等待、UNKNOWN 不重送旧 refresh token | 未执行；不假造 grant_id，不声明服务重放保证 |
