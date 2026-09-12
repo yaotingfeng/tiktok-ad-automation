@@ -8,9 +8,6 @@ from typing import Any
 
 import business_api_client.tiktok_business.tiktok_exceptions as sdk_errors  # type: ignore[import-untyped]
 from business_api_client.api.file_api import FileApi  # type: ignore[import-untyped]
-from business_api_client.models.filtering_video_ad_search import (  # type: ignore[import-untyped]
-    FilteringVideoAdSearch,
-)
 from business_api_client.rest import ApiException  # type: ignore[import-untyped]
 from urllib3.exceptions import HTTPError
 
@@ -92,6 +89,7 @@ class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
                             material_ids=arguments.get("filtering", {}).get(
                                 "material_ids"
                             ),
+                            video_name=arguments.get("filtering", {}).get("video_name"),
                             budget=budget,
                         )
                     if operation == "materials.get_images":
@@ -211,7 +209,7 @@ class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
         budget: contracts.RemoteCallBudget,
     ) -> contracts.VideoCover:
         cover_sdk.require_cover_scopes(
-            self._api_scope_ids, endpoint=cover_sdk.VIDEO_INFO_ENDPOINT
+            self._api_scope_ids, endpoint=sdk_assets.INFO_ENDPOINT
         )
         return super().read_video_cover(
             advertiser_id=advertiser_id, video_id=video_id, md5=md5, budget=budget
@@ -285,11 +283,18 @@ def _search_videos_response(
     advertiser_id: str,
     page: int,
     material_ids: list[str] | None = None,
+    video_name: str | None = None,
     budget: contracts.RemoteCallBudget,
 ) -> McpBusinessResponse:
     kwargs = {}
-    if material_ids:
-        kwargs["filtering"] = FilteringVideoAdSearch(material_ids=material_ids)
+    if material_ids or video_name is not None:
+        # 官方 SDK 会将 dict 规范序列化为 JSON；旧生成模型尚未包含 video_name。
+        filters: dict[str, Any] = {}
+        if material_ids:
+            filters["material_ids"] = material_ids
+        if video_name is not None:
+            filters["video_name"] = video_name
+        kwargs["filtering"] = filters
     return sdk_assets._response(
         FileApi(client).ad_video_search(
             advertiser_id=advertiser_id,

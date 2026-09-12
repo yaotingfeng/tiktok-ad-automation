@@ -936,6 +936,7 @@ def run_url_source_upload(
                     page=page,
                     material_ids=(),
                     budget=budget,
+                    video_name=work["remote_name"],
                 )
                 if (
                     not 0 <= result.total_pages <= MAX_SEARCH_PAGES

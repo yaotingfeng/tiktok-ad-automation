@@ -367,7 +367,8 @@ class MaterialReadAdapter:
     def __init__(self, *, preview_allowed_hosts: frozenset[str]):
         self._preview_allowed_hosts = preview_allowed_hosts
         self._searches: dict[
-            tuple[str, str, tuple[str, ...]], tuple[int, set[str], int, int | None]
+            tuple[str, str, tuple[str, ...], str | None],
+            tuple[int, set[str], int, int | None],
         ] = {}
 
     def _call(
@@ -467,6 +468,7 @@ class MaterialReadAdapter:
         page: int,
         images: bool,
         material_ids: tuple[str, ...] = (),
+        video_name: str | None = None,
     ) -> material_types.MaterialPage[Any]:
         from app.modules.materials.cover_sdk import image_search_page
 
@@ -516,7 +518,12 @@ class MaterialReadAdapter:
         }
         if len(ids) != len(rows):
             raise _schema_error()
-        key = ("images" if images else "videos", advertiser_id, material_ids)
+        key = (
+            "images" if images else "videos",
+            advertiser_id,
+            material_ids,
+            video_name,
+        )
         previous = self._searches.get(key)
         if page != 1 and previous is not None:
             previous_page, seen, pages, count = previous
@@ -537,6 +544,7 @@ class MaterialReadAdapter:
         page: int,
         material_ids: tuple[str, ...],
         budget: material_types.RemoteCallBudget,
+        video_name: str | None = None,
     ) -> material_types.MaterialPage[material_types.VideoRecord]:
         if (
             type(page) is not int
@@ -544,11 +552,17 @@ class MaterialReadAdapter:
             or type(material_ids) is not tuple
             or len(material_ids) > 100
             or any(not _remote_identifier(value) for value in material_ids)
+            or (
+                video_name is not None and not _remote_identifier(video_name, limit=100)
+            )
         ):
             raise _remote_request_error()
         args: dict[str, Any] = {"page": page, "page_size": PAGE_SIZE}
         if material_ids:
             args["filtering"] = {"material_ids": list(material_ids)}
+        if video_name is not None:
+            # 先缩小到本次持久文件名，随后仍核对分页完整性、精确名称和内容摘要。
+            args.setdefault("filtering", {})["video_name"] = video_name
         response = self._read("materials.search_videos", advertiser_id, args, budget)
         return self._page(
             response,
@@ -556,6 +570,7 @@ class MaterialReadAdapter:
             page=page,
             images=False,
             material_ids=material_ids,
+            video_name=video_name,
         )
 
     def read_video_cover(
@@ -696,9 +711,9 @@ def validate_video_upload(
 def video_upload_receipt(
     response: McpBusinessResponse, *, advertiser_id: str, channel: str
 ) -> material_types.VideoReceipt:
-    """API数组与MCP合同对象分别解析；不搜索嵌套ID，不按成功文案补回执。"""
+    """视频单条回执；不搜索嵌套ID，不按成功文案补回执。"""
     data: Any = response.data
-    if channel == "OFFICIAL_API":
+    if channel == "OFFICIAL_API" or isinstance(data, list):
         data = data[0] if isinstance(data, list) and len(data) == 1 else None
     if (
         not isinstance(data, dict)

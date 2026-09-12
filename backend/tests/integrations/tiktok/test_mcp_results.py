@@ -322,3 +322,48 @@ def test_documented_account_tools_accept_single_text_json_receipt(operation):
         receipt(texts=[json.dumps({**payload, "code": 40000})]),
         selected_contract=selected,
     )
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["materials.upload_video_url", "materials.get_videos", "materials.search_videos"],
+)
+def test_native_video_text_json_is_decoded_with_request_evidence(operation):
+    from app.integrations.tiktok.mcp.protocol import load_tool_contracts
+
+    selected = next(c for c in load_tool_contracts() if c.operation == operation)
+    payload = {"code": 0, "data": {"list": []}, "request_id": "actual-shaped-request"}
+    result = decode_mcp_result(receipt(texts=[json.dumps(payload)]), contract=selected)
+    assert result.evidence.request_id == "actual-shaped-request"
+    assert result.data == payload["data"]
+    assert_unknown(receipt(texts=["uploaded successfully"]), selected_contract=selected)
+    assert_unknown(
+        receipt(texts=[json.dumps(payload), json.dumps(payload)]),
+        selected_contract=selected,
+    )
+    assert_unknown(
+        receipt(texts=[json.dumps({**payload, "code": 40001})]),
+        selected_contract=selected,
+    )
+
+
+def test_video_upload_singleton_array_is_not_a_multiple_file_receipt():
+    from app.integrations.tiktok.mcp.protocol import load_tool_contracts
+    from app.modules.materials.sdk_assets import video_upload_receipt
+
+    selected = next(
+        c for c in load_tool_contracts() if c.operation == "materials.upload_video_url"
+    )
+    row = {"video_id": "actual-vid", "material_id": "actual-mid"}
+    payload = {"code": 0, "data": [row], "request_id": "actual-shaped-request"}
+    result = decode_mcp_result(receipt(texts=[json.dumps(payload)]), contract=selected)
+    assert (
+        video_upload_receipt(
+            result, advertiser_id="123", channel="OFFICIAL_MCP"
+        ).video_id
+        == "actual-vid"
+    )
+    assert_unknown(
+        receipt(texts=[json.dumps({**payload, "data": [row, row]})]),
+        selected_contract=selected,
+    )

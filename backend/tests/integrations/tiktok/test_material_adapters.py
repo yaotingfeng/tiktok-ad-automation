@@ -385,13 +385,15 @@ def test_mcp_unverified_video_writes_remain_not_sent(material_case):
     )
 
 
-def test_unverified_mcp_text_json_cannot_become_material_evidence(material_case):
+def test_native_mcp_text_json_preserves_actual_fields_without_inventing_identity(
+    material_case,
+):
     adapter, enqueue, budget, _, _ = material_case
     if enqueue.channel != "MCP":
         pytest.skip("text envelopes are MCP-specific")
     enqueue("materials.get_videos", {"list": [{"video_id": "v"}]}, "TEXT")
-    with pytest.raises(DomainError):
-        adapter.read_video(advertiser_id="123", video_id="v", budget=budget)
+    record = adapter.read_video(advertiser_id="123", video_id="v", budget=budget)
+    assert record.video_id == "v" and record.md5 is None and record.size is None
 
 
 def test_video_cover_requires_actual_digest_and_returns_evidence(material_case):
@@ -419,3 +421,35 @@ def test_expired_budget_has_no_physical_material_call(material_case):
     with pytest.raises(DomainError):
         adapter.read_video(advertiser_id="123", video_id="v", budget=expired)
     assert len(calls) == before
+
+
+def test_unknown_video_lookup_sends_persisted_name_filter(material_case):
+    from urllib.parse import parse_qs, urlsplit
+
+    adapter, enqueue, budget, _, calls = material_case
+    enqueue(
+        "materials.search_videos",
+        {
+            "list": [{"video_id": "v"}],
+            "page_info": {
+                "page": 1,
+                "page_size": 100,
+                "total_page": 1,
+                "total_number": 1,
+            },
+        },
+    )
+    result = adapter.search_videos(
+        advertiser_id="123",
+        page=1,
+        material_ids=(),
+        video_name="persisted-correlation.mp4",
+        budget=budget,
+    )
+    assert result.total_number == 1
+    if enqueue.channel == "MCP":
+        request = next(c for c in calls if c.get("method") == "tools/call")
+        filtering = request["params"]["arguments"]["filtering"]
+    else:
+        filtering = json.loads(parse_qs(urlsplit(calls[-1]).query)["filtering"][0])
+    assert filtering == {"video_name": "persisted-correlation.mp4"}

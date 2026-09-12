@@ -15,6 +15,13 @@ from mcp.types import CallToolResult, TextContent
 
 _IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]{1,256}\Z", re.ASCII)
 _INVALID = object()
+# 官方素材工具实际返回单个 JSON TextContent。这里只规范化响应载体，
+# 不改变冻结请求参数/接口版本，也不允许成功文案或任意工具绕过回执校验。
+_VIDEO_TEXT_TOOLS = {
+    ("materials.upload_video_url", "file_video_ad_upload"),
+    ("materials.get_videos", "file_video_ad_info_get"),
+    ("materials.search_videos", "file_video_ad_search"),
+}
 
 
 def _identifier(value: Any) -> str | None:
@@ -100,6 +107,14 @@ def _require_success(raw: Any, evidence: CallEvidence, contract: ToolContract) -
     data = raw.get("data")
     if contract.response_shape == "OBJECT":
         valid_data = type(data) is dict
+        if (contract.operation, contract.tool_name) == (
+            "materials.upload_video_url",
+            "file_video_ad_upload",
+        ):
+            # 视频上传的官方 API 数据可为单条数组；多条结果不能认作本次文件。
+            valid_data = valid_data or (
+                type(data) is list and len(data) == 1 and type(data[0]) is dict
+            )
     elif contract.response_shape == "OBJECT_LIST":
         valid_data = type(data) is list and all(type(item) is dict for item in data)
     else:
@@ -122,6 +137,10 @@ def decode_mcp_result(
     result: CallToolResult, *, contract: ToolContract
 ) -> McpBusinessResponse:
     raw = result.structured_content
+    text_json_allowed = (
+        contract.text_json_envelope
+        or (contract.operation, contract.tool_name) in _VIDEO_TEXT_TOOLS
+    )
     evidence = _evidence(raw)
     text_receipts = []
     for block in result.content:
@@ -138,7 +157,7 @@ def decode_mcp_result(
     if len(text_receipts) > 1:
         raise _unknown("mcp_response_ambiguous", evidence)
 
-    if raw is None and contract.text_json_envelope and len(text_receipts) == 1:
+    if raw is None and text_json_allowed and len(text_receipts) == 1:
         evidence = _evidence(text_receipts[0])
     if result.is_error or result.result_type != "complete":
         raise _unknown("mcp_tool_error", evidence)
@@ -149,7 +168,7 @@ def decode_mcp_result(
         if text_receipts and not _same_json(raw, text_receipts[0]):
             raise _unknown("mcp_response_ambiguous", evidence)
     else:
-        if not contract.text_json_envelope or len(text_receipts) != 1:
+        if not text_json_allowed or len(text_receipts) != 1:
             raise _unknown("mcp_response_invalid", evidence)
         raw = text_receipts[0]
         evidence = _evidence(raw)

@@ -189,6 +189,7 @@ class MaterialOperations(Protocol):
         page: int,
         material_ids: tuple[str, ...],
         budget: RemoteCallBudget,
+        video_name: str | None = None,
     ) -> MaterialPage[VideoRecord]: ...
     def upload_video_url(
         self, request: URLVideoUpload, *, budget: RemoteCallBudget
