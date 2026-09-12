@@ -42,6 +42,12 @@ URL 导入的上传及异常恢复查询完整响应保存于 `material_response
 
 排查时按租户、BC、素材、操作和接收时间定位归档，在受控服务环境调用 `app.modules.materials.response_archive.read_material_response`，传入当前管理员的 `TenantContext`、BC、素材及响应 ID；该函数重新验证数据库权限后返回完整正文 bytes。不要直接在普通日志、页面或工单中展开密文解密内容；必要导出只放私有目录。历史未保存的上传正文不可恢复，查询响应不能冒充上传响应。归档失败错误码为 `material_response_archive_failed`；恢复数据库/密钥后核查原 UNKNOWN 操作，不直接重新上传。
 
+## 跨账户素材分发前提
+
+首次部署不能只验证来源上传：还须通过该租户实际账户的 `file_video_ad_info_get` 获取有效 VID 的预览 URL，验证精确 HTTPS 媒体主机及公网 DNS，再配置 `MATERIAL_REMOTE_MEDIA_HOSTS`。该值为空时，来源上传可成功，但原件清理后的跨账户分发会被 `material_preview_unverified` 阻塞。禁止填通配符；新 CDN 主机须从实际平台响应确认后追加，发版保留现有值，并验证 API/所有 Worker/Beat 一致。
+
+正常来源上传不增加逐条回查。跨账户分发需要获取当前有效媒体 URL 时才查询来源账户；媒体主机配置不代替来源授权、VID/摘要、规格或目标账户上传权限验证。实际分发和封面准备后才能验收广告创建。
+
 ## 短剧应用的 Minis 关联
 
 版权方应用 ID 与 TikTok Minis ID 不是同一个标识。应用发现没有返回 Minis ID 时，由租户管理员先通过该租户实际绑定 BC 的目标账户读取 Minis 列表，核对名称及可投放状态，再调用 `PATCH /api/tenants/{tenant_id}/providers/connections/{connection_id}/applications/{application_id}/minis`，正文为 `{"minis_id":"已核对的实际 ID"}`。此操作有租户权限校验及审计；不能照抄其他 BC 的默认 ID。
