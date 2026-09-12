@@ -42,6 +42,7 @@ from .models import (
     MaterialFile,
     MaterialUploadAttempt,
 )
+from .response_archive import material_response_observer
 from .routes import load_material_route, source_parent_route
 from .source_selection import claim_source_account, release_source_account, source_file
 from .source_uploads import (
@@ -853,6 +854,15 @@ def run_url_source_upload(
             route=route,
             task_deadline=deadline,
             before_request=check_current,
+            response_observer=material_response_observer(
+                database_engine=database_engine,
+                context=context,
+                route=route,
+                material_id=material_id,
+                operation_id=operation_id,
+                advertiser_id=work["advertiser_id"],
+                task_deadline=deadline,
+            ),
         ) as gateway:
             if kind == "upload":
                 with (

@@ -313,6 +313,56 @@ class MaterialUploadAttempt(SQLModel, table=True):
     )
 
 
+class MaterialResponseArchive(SQLModel, table=True):
+    """完整正文独立加密留档，不能混入页面业务状态或覆盖前一次响应。"""
+
+    __tablename__ = "material_response_archive"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "bc_id", "material_id", "advertiser_id", "operation_id"],
+            [
+                "material_asset_operation.tenant_id",
+                "material_asset_operation.bc_id",
+                "material_asset_operation.material_id",
+                "material_asset_operation.advertiser_id",
+                "material_asset_operation.id",
+            ],
+        ),
+        CheckConstraint("body_bytes >= 0", name="ck_material_response_size"),
+        CheckConstraint(
+            "format IN ('mcp_tool_result_json','sdk_http_body')",
+            name="ck_material_response_format",
+        ),
+        Index(
+            "ix_material_response_lookup",
+            "tenant_id",
+            "bc_id",
+            "material_id",
+            "received_at",
+            "id",
+        ),
+        Index("ix_material_response_operation", "operation_id"),
+    )
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    tenant_id: UUID
+    bc_id: str = Field(max_length=128)
+    material_id: UUID
+    operation_id: UUID
+    advertiser_id: str = Field(max_length=128)
+    connection_id: UUID
+    channel: str = Field(max_length=32)
+    operation: str = Field(max_length=128)
+    format: str = Field(max_length=32)
+    http_status: int | None = None
+    body_bytes: int
+    body_sha256: str = Field(max_length=64)
+    body_ciphertext: str = Field(repr=False)
+    received_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+
 class AccountMaterial(SQLModel, table=True):
     __tablename__ = "account_material"
     __table_args__ = (

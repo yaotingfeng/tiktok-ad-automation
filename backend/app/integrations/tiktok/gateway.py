@@ -48,6 +48,10 @@ from app.integrations.tiktok.official.authorization import (
     material_authorization as api_material_authorization,
 )
 from app.integrations.tiktok.official.scenes import OfficialScenesGateway
+from app.integrations.tiktok.response_capture import (
+    ResponseObserver,
+    capture_sdk_response,
+)
 from app.integrations.tiktok.sdk import official_client
 from app.jobs.admission import admission_policy
 from app.modules.accounts.connection_models import (
@@ -180,6 +184,7 @@ def open_tiktok_gateway(
     route: FrozenTikTokRoute,
     task_deadline: datetime,
     before_request: Callable[[], None] | None = None,
+    response_observer: ResponseObserver | None = None,
 ) -> Iterator[TikTokGateway]:
     # 打开前与每个物理发送前都检查原 route；整个工厂从不重新读取 BC 默认。
     with bounded_session(database_engine, task_deadline=task_deadline) as session:
@@ -326,7 +331,13 @@ def open_tiktok_gateway(
         authorize(advertiser_id, operation)
         with admit(advertiser_id, operation):
             authorize(advertiser_id, operation)
-            yield
+            with capture_sdk_response(
+                official,
+                operation=operation,
+                advertiser_id=advertiser_id,
+                observer=response_observer,
+            ):
+                yield
 
     read_context = RuntimeReadContext(route.bc_id)
     try:
@@ -343,6 +354,7 @@ def open_tiktok_gateway(
                 admit=admit,
                 contracts=contracts,
                 observed_tools=observed,
+                response_observer=response_observer,
             ) as client:
                 yield TikTokGateway(
                     accounts=McpAccountsGateway(

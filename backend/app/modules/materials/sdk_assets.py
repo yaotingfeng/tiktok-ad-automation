@@ -1,7 +1,7 @@
 """Pinned official asset methods. Callers admit each request and bound its process.
 
-Never persist these raw responses: use the allowlisted evidence helpers below.
-Upload success proves receipt only; a separate account-scoped read verifies use.
+业务状态仅保存下列白名单字段；完整正文由独立加密归档保存，不进入页面或日志。
+URL 上传成功回执可直接完成入库；未知发送才通过账户范围查询恢复。
 """
 
 import ipaddress

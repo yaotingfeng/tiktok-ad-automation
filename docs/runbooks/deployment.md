@@ -34,6 +34,14 @@
 
 验收记录注明备份目录、所有归档与恢复结果、当前版本/head、服务状态及真实联调边界。保留旧版本和本次完整备份直至恢复要求得到满足；未经核实不自动清理。异地复制是否已配置须如实记录，同机副本不能代替异地恢复能力。
 
+## 素材响应归档部署与恢复
+
+URL 导入的上传及异常恢复查询完整响应保存于 `material_response_archive`；无需另开开关，也不会恢复正常上传后的逐条回查。首次包含该功能的发布必须迁移到 `mat_response_archive`（后续以实际单 head 为准），不能只替换代码。范围、格式与失败行为见[响应留档设计](../superpowers/specs/2026-09-13-material-response-archive.md)。
+
+沿用该环境 `CONNECTION_ENCRYPTION_KEY`，不要重新生成密钥。完整数据库备份须包含归档表，私有配置备份须包含对应密钥；隔离恢复后验证可解密及摘要一致。原件自动清理不删除响应；当前不自动按时间清理归档，监控 `pg_total_relation_size('material_response_archive')` 和备份增长。回退应用前检查兼容，禁止用迁移 downgrade 删除已有响应。
+
+排查时按租户、BC、素材、操作和接收时间定位归档，在受控服务环境调用 `app.modules.materials.response_archive.read_material_response`，传入当前管理员的 `TenantContext`、BC、素材及响应 ID；该函数重新验证数据库权限后返回完整正文 bytes。不要直接在普通日志、页面或工单中展开密文解密内容；必要导出只放私有目录。历史未保存的上传正文不可恢复，查询响应不能冒充上传响应。归档失败错误码为 `material_response_archive_failed`；恢复数据库/密钥后核查原 UNKNOWN 操作，不直接重新上传。
+
 ## 功能开关清单与发布确认
 
 ### 当前开关及影响

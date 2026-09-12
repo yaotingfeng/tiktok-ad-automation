@@ -183,7 +183,8 @@ class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
         except Exception as error:
             code = (
                 error.code
-                if isinstance(error, DomainError) and not sent
+                if isinstance(error, DomainError)
+                and (not sent or error.code == "material_response_archive_failed")
                 else "material_response_unknown"
             )
             raise RemoteCallError(
@@ -253,7 +254,8 @@ class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
         except Exception as error:
             raise RemoteCallError(
                 error.code
-                if isinstance(error, DomainError) and not sent
+                if isinstance(error, DomainError)
+                and (not sent or error.code == "material_response_archive_failed")
                 else "cover_response_error",
                 effect="UNKNOWN" if sent else "NOT_SENT",
                 evidence=CallEvidence(),

@@ -32,6 +32,11 @@ from app.integrations.tiktok.mcp.protocol import (
     verify_tool_schema,
 )
 from app.integrations.tiktok.mcp.results import decode_mcp_result
+from app.integrations.tiktok.response_capture import (
+    VIDEO_RESPONSE_OPERATIONS,
+    ProviderResponse,
+    ResponseObserver,
+)
 from app.integrations.tiktok.sdk import SDK_SCOPE_INTERRUPTS, AccountAdmissionDeferred
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
@@ -314,8 +319,10 @@ class BoundMCPClient:
         admit: Admit,
         contracts: Mapping[str, ToolContract],
         observed_tools: Mapping[str, dict[str, Any]],
+        response_observer: ResponseObserver | None = None,
     ):
         self._task_deadline = task_deadline
+        self._response_observer = response_observer
         self._authorize = authorize
         self._admit = admit
         self._contracts = deepcopy(dict(contracts))
@@ -408,6 +415,18 @@ class BoundMCPClient:
             if state.tool_name is None:
                 raise _error("mcp_tool_unavailable")
             result = await self._session_client().call_tool(state.tool_name, arguments)
+            if self._response_observer and state.operation in VIDEO_RESPONSE_OPERATIONS:
+                assert state.advertiser_id is not None
+                # 保留完整工具结果及 TextContent 原文，再进行业务成功/结构校验。
+                # 这是工具 SDK 返回对象，不冒充 HTTP/SSE 原始字节流。
+                self._response_observer(
+                    ProviderResponse(
+                        state.operation,
+                        state.advertiser_id,
+                        "mcp_tool_result_json",
+                        result.model_dump_json(by_alias=True).encode("utf-8"),
+                    )
+                )
             return decode_mcp_result(result, contract=self._contracts[state.operation])
 
     def call(
@@ -476,8 +495,11 @@ class BoundMCPClient:
                         effect="UNKNOWN" if sent else exc.effect,
                         evidence=exc.evidence,
                     )
-                elif isinstance(exc, DomainError) and exc.code == "mcp_contract_changed":
-                    # 合同不匹配是确定阻断，保留脱敏错误码，不能伪装成网络失败无限重试。
+                elif isinstance(exc, DomainError) and exc.code in {
+                    "mcp_contract_changed",
+                    "material_response_archive_failed",
+                }:
+                    # 合同或留档失败保留脱敏错误码；是否已发送仍决定 UNKNOWN。
                     failure = _error(exc.code, sent=sent)
                 elif state is not None and state.failure is not None:
                     failure = state.failure
@@ -559,6 +581,7 @@ def open_bound_mcp_client(
     contracts: Mapping[str, ToolContract],
     observed_tools: Mapping[str, dict[str, Any]],
     endpoint: str = OFFICIAL_ENDPOINT,
+    response_observer: ResponseObserver | None = None,
 ) -> Iterator[BoundMCPClient]:
     """同步 prefork 任务入口。token 只传给内存 HTTP header，不进入对象 repr。"""
     _require_sync()
@@ -577,6 +600,7 @@ def open_bound_mcp_client(
         admit=admit,
         contracts=contracts,
         observed_tools=observed_tools,
+        response_observer=response_observer,
     )
     with start_blocking_portal(name="tiktok-mcp-task") as portal:
         bound._portal = portal
