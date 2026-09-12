@@ -162,6 +162,7 @@ def decode_mcp_result(
     )
     evidence = _evidence(raw)
     text_receipts = []
+    receipt_text = None
     for block in result.content:
         if not isinstance(block, TextContent):
             continue
@@ -172,6 +173,7 @@ def decode_mcp_result(
         if parsed is _INVALID:
             raise _unknown("mcp_response_invalid", evidence)
         text_receipts.append(parsed)
+        receipt_text = text
 
     if len(text_receipts) > 1:
         raise _unknown("mcp_response_ambiguous", evidence)
@@ -193,4 +195,40 @@ def decode_mcp_result(
         evidence = _evidence(raw)
         _require_success(raw, evidence, contract)
 
-    return McpBusinessResponse(data=raw["data"], evidence=evidence)
+    data = raw["data"]
+    if (
+        contract.operation in {"build.get_campaigns", "build.get_adgroups"}
+        and receipt_text is not None
+    ):
+        # 金额从已完整校验的原始 JSON 数字重新提取，不能由 float 转回十进制冒充精度。
+        # 仅转换创建回读合同中的金额字段；不改变其他工具或其他字段的数据类型。
+        exact = json.loads(receipt_text, parse_float=str)["data"]
+        if (
+            isinstance(data, dict)
+            and isinstance(exact, dict)
+            and isinstance(exact.get("list"), list)
+        ):
+            rows: list[dict[str, Any]] = []
+            for row in exact["list"]:
+                if not isinstance(row, dict):
+                    rows = []
+                    break
+                rows.append(row)
+            if len(rows) == len(data.get("list", [])):
+                data = {
+                    **data,
+                    "list": [
+                        {
+                            **row,
+                            **{
+                                key: exact_row[key]
+                                for key in ("budget", "roas_bid")
+                                if key in exact_row
+                            },
+                        }
+                        for row, exact_row in zip(
+                            data.get("list", []), rows, strict=True
+                        )
+                    ],
+                }
+    return McpBusinessResponse(data=data, evidence=evidence)

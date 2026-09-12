@@ -367,3 +367,21 @@ def test_video_upload_singleton_array_is_not_a_multiple_file_receipt():
         receipt(texts=[json.dumps({**payload, "data": [row, row]})]),
         selected_contract=selected,
     )
+
+
+@pytest.mark.parametrize(
+    "operation,field",
+    [("build.get_campaigns", "budget"), ("build.get_adgroups", "roas_bid")],
+)
+def test_native_build_read_retains_original_decimal_lexeme(operation, field):
+    selected = next(c for c in load_tool_contracts() if c.operation == operation)
+    text = (
+        '{"code":0,"data":{"list":[{"'
+        + field
+        + '":1.234567890123456789,"other":1.25}]}}'
+    )
+    result = decode_mcp_result(receipt(texts=[text]), contract=selected)
+    assert result.data["list"][0][field] == "1.234567890123456789"
+    assert result.data["list"][0]["other"] == 1.25
+    structured = decode_mcp_result(receipt(raw=json.loads(text)), contract=selected)
+    assert isinstance(structured.data["list"][0][field], float)
