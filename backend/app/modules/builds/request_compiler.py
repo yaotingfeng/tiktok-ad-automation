@@ -21,6 +21,7 @@ from app.integrations.tiktok.contracts.builds import (
     CtaCreate,
     FrozenModel,
     Id,
+    IdentityFields,
 )
 from app.integrations.tiktok.contracts.common import CallEvidence, RemoteCallError
 from app.integrations.tiktok.contracts.context import ChannelKind
@@ -46,10 +47,7 @@ class _Image(FrozenModel):
     web_uri: Id
 
 
-class _CreativeInfo(FrozenModel):
-    identity_type: Literal["BC_AUTH_TT"]
-    identity_id: Id
-    identity_authorized_bc_id: Id
+class _CreativeInfo(IdentityFields):
     ad_format: Literal["SINGLE_VIDEO"]
     video_info: _Video
     image_info: tuple[_Image, ...] = Field(min_length=1, max_length=1)
@@ -191,7 +189,13 @@ def encode_intent(intent: CreateIntent) -> dict[str, object]:
                     "creative_info": {
                         "identity_type": intent.identity_type,
                         "identity_id": intent.identity_id,
-                        "identity_authorized_bc_id": intent.identity_authorized_bc_id,
+                        **(
+                            {
+                                "identity_authorized_bc_id": intent.identity_authorized_bc_id
+                            }
+                            if intent.identity_authorized_bc_id is not None
+                            else {}
+                        ),
                         "ad_format": "SINGLE_VIDEO",
                         "video_info": {"video_id": asset.video_id},
                         "image_info": [{"web_uri": asset.image_id}],
@@ -339,16 +343,12 @@ def ad_assets(
     """One SP text, the whole group, and verified target-account video/cover IDs."""
     if not mappings:
         raise DomainError("empty_material_group", "素材组不能为空")
-    if (
-        len(mappings) > 50
-        or not _nonempty(text)
-        or not _nonempty(url)
-        or set(identity)
-        != {"identity_type", "identity_id", "identity_authorized_bc_id"}
-        or identity.get("identity_type") != "BC_AUTH_TT"
-        or not all(_nonempty(value) for value in identity.values())
-    ):
+    if len(mappings) > 50 or not _nonempty(text) or not _nonempty(url):
         raise DomainError("invalid_build_request", "创意信息无效")
+    try:
+        IdentityFields.model_validate(identity)
+    except ValidationError:
+        raise DomainError("invalid_build_request", "创意身份归属无效") from None
     if len(text) > APPLICATION_COPY_MAX_CHARACTERS:
         raise DomainError("copy_too_long", "应用文案策略最多允许 100 个字符")
     creatives = []

@@ -61,7 +61,7 @@ def _require_bounded_worker() -> None:
         raise DomainError("scene_worker_unbounded", "场景刷新需要有界后台任务")
 
 
-SCENE_CONTRACT_REVISION = "dual-channel-scene-2026-09-12-v1"
+SCENE_CONTRACT_REVISION = "dual-channel-scene-2026-09-13-v2"
 
 
 def scene_scope_basis(*, route: FrozenTikTokRoute, business: dict[str, Any]) -> str:
@@ -321,7 +321,16 @@ def _assemble_scene(
         reasons.append("minis_unavailable")
     identities = facts.get("identity", {}).get("matches", [])
     if len(identities) == 1:
-        creative = {"creative_info": {**identities[0], "ad_format": "SINGLE_VIDEO"}}
+        creative = {
+            "creative_info": {
+                **{
+                    key: value
+                    for key, value in identities[0].items()
+                    if value is not None
+                },
+                "ad_format": "SINGLE_VIDEO",
+            }
+        }
     else:
         reasons.append(
             "identity_selection_required" if identities else "identity_unavailable"
@@ -335,8 +344,13 @@ def _assemble_scene(
         }
     else:
         reasons.append("cta_unavailable")
-    if facts.get("vbo", {}).get("vo_min_roas") != "QUALIFIED":
-        reasons.append("minis_vbo_unverified")
+    vbo = facts.get("vbo", {})
+    # IAA 小程序使用广告收入价值事件；购买价值资格不能代替 IAA 当日 ROAS 资格。
+    if vbo.get("vo_min_roas") != "QUALIFIED":
+        if vbo.get("vo_iaa_min_roas_zero_day") == "QUALIFIED":
+            group["optimization_event"] = "IMPRESSION_LEVEL_AD_REVENUE"
+        else:
+            reasons.append("minis_vbo_unverified")
     revision = sha256(
         (
             scope["basis"] + "".join(sorted(str(value) for value in evidence_ids))

@@ -302,7 +302,7 @@ def test_scene_channels_have_same_typed_facts_and_exact_values(
     if resource in ("identity", "account_roles", "minis"):
         assert actual["seen"] == actual["total_number"] == actual["total_page"] == 1
     if resource == "identity":
-        assert dict(calls[0][1]["fields"])["identity_authorized_bc_id"] == BC
+        assert "identity_authorized_bc_id" not in dict(calls[0][1]["fields"])
 
 
 def test_account_directory_and_intersection_preserve_authorization_unknown(channels):

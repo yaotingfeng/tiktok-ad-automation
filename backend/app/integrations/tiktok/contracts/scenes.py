@@ -15,6 +15,7 @@ from pydantic import (
 from app.modules.builds.scene_schemas import SceneResource
 
 from .accounts import AccountRoleFact
+from .builds import IdentityFields
 from .common import CallEvidence
 
 Text = Annotated[StrictStr, Field(min_length=1, max_length=255)]
@@ -57,10 +58,8 @@ class RoleFacts(PaginatedFacts):
     matches: tuple[AccountRoleFact, ...]
 
 
-class IdentityMatch(FrozenFacts):
-    identity_id: Text
-    identity_type: Literal["BC_AUTH_TT"]
-    identity_authorized_bc_id: Text
+class IdentityMatch(IdentityFields):
+    pass
 
 
 class IdentityFacts(PaginatedFacts):
@@ -89,6 +88,7 @@ class CtaFacts(FrozenFacts):
 
 
 class VboFacts(FrozenFacts):
+    vo_iaa_min_roas_zero_day: Text | None = None
     vo_status: Text | None = None
     vo_min_roas: Text | None = None
     roas_status_day0: Text | None = None
@@ -99,6 +99,7 @@ class VboFacts(FrozenFacts):
         if not any(
             value is not None
             for value in (
+                self.vo_iaa_min_roas_zero_day,
                 self.vo_status,
                 self.vo_min_roas,
                 self.roas_status_day0,

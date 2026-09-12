@@ -68,7 +68,6 @@ def test_country_request_preserves_documented_minis_fields_in_official_sdk(monke
         "placements": json.dumps(["PLACEMENT_TIKTOK"]),
         "objective_type": "APP_PROMOTION",
         "app_promotion_type": "MINIS",
-        "promotion_type": "MINI_APP",
         "level_range": "TO_COUNTRY",
         "language": "en",
     }

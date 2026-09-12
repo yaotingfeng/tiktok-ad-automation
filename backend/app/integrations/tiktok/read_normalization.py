@@ -139,7 +139,13 @@ def parse_page(
         return {"asset_ids": sorted(ids), "recommend_assets": assets}, True, request_id
     if resource == "vbo":
         result: dict[str, Any] = {}
-        for key in ("vo_status", "vo_min_roas", "roas_status_day0", "roas_status_day7"):
+        for key in (
+            "vo_status",
+            "vo_min_roas",
+            "roas_status_day0",
+            "roas_status_day7",
+            "vo_iaa_min_roas_zero_day",
+        ):
             if key in data:
                 result[key] = _string(data[key])
         if not result:
@@ -149,6 +155,23 @@ def parse_page(
         data.get("identity_list" if resource == "identity" else "list"),
         data.get("page_info"),
     )
+    # identity_get 的账户自有 TT_USER 列表是非分页返回，页信息固定为全零。
+    # 仅接受第一页、完整四个零及有界列表；其他不一致分页仍拒绝。
+    if (
+        resource == "identity"
+        and page == 1
+        and isinstance(values, list)
+        and len(values) <= PAGE_SIZE
+        and isinstance(info, dict)
+        and set(info) == {"page", "page_size", "total_page", "total_number"}
+        and all(type(v) is int and v == 0 for v in info.values())
+    ):
+        info = {
+            "page": 1,
+            "page_size": PAGE_SIZE,
+            "total_page": 1 if values else 0,
+            "total_number": len(values),
+        }
     if (
         not isinstance(values, list)
         or len(values) > PAGE_SIZE
@@ -221,11 +244,16 @@ def parse_page(
                     }
                 )
         else:
-            if (
-                item.get("identity_type") != "BC_AUTH_TT"
-                or item.get("identity_authorized_bc_id") != bc_id
-            ):
-                raise _invalid()
+            identity_type = item.get("identity_type")
+            authorized_bc = item.get("identity_authorized_bc_id")
+            if identity_type == "BC_AUTH_TT":
+                if authorized_bc != bc_id:
+                    raise _invalid()
+            elif identity_type == "TT_USER":
+                if authorized_bc is not None:
+                    raise _invalid()
+            else:
+                continue
             if (
                 item.get("available_status") == "AVAILABLE"
                 and item.get("can_push_video") is True
@@ -234,10 +262,15 @@ def parse_page(
                 matches.append(
                     {
                         "identity_id": remote_id,
-                        "identity_type": "BC_AUTH_TT",
-                        "identity_authorized_bc_id": bc_id,
+                        "identity_type": identity_type,
+                        **(
+                            {"identity_authorized_bc_id": authorized_bc}
+                            if authorized_bc is not None
+                            else {}
+                        ),
                     }
                 )
+
     return (
         {
             "matches": matches[:2],
@@ -314,8 +347,6 @@ def scene_arguments(
     args: dict[str, Any] = {"advertiser_id": advertiser_id}
     if resource in ("identity", "minis"):
         args.update(page=page, page_size=PAGE_SIZE)
-        if resource == "identity":
-            args.update(identity_type="BC_AUTH_TT", identity_authorized_bc_id=bc_id)
         return (
             "scene.list_identities" if resource == "identity" else "scene.list_minis"
         ), args
@@ -329,6 +360,8 @@ def scene_arguments(
         return "scene.recommend_ctas", args
     args["app_promotion_type"] = "MINIS"
     if resource == "regions":
+        # 地区工具的 promotion_type 枚举不含 MINI_APP；Minis 由 app_promotion_type 指定。
+        args.pop("promotion_type")
         args.update(level_range="TO_COUNTRY", language="en")
         return "scene.list_regions", args
     args.update(campaign_automation_type="UPGRADED_SMART_PLUS", budget_optimize_on=True)

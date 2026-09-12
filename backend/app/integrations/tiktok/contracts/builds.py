@@ -85,7 +85,9 @@ class AdGroupObservedFacts(FrozenModel):
     schedule_start_time: Annotated[Id, AfterValidator(_schedule)]
     promotion_type: Literal["MINI_APP"] = "MINI_APP"
     optimization_goal: Literal["VALUE"] = "VALUE"
-    optimization_event: Literal["ACTIVE_PAY"] = "ACTIVE_PAY"
+    optimization_event: Literal["ACTIVE_PAY", "IMPRESSION_LEVEL_AD_REVENUE"] = (
+        "ACTIVE_PAY"
+    )
     bid_type: Literal["BID_TYPE_NO_BID"] = "BID_TYPE_NO_BID"
     deep_bid_type: Literal["VO_MIN_ROAS"] = "VO_MIN_ROAS"
     billing_event: Literal["OCPM"] = "OCPM"
@@ -105,14 +107,26 @@ class CreativeAsset(FrozenModel):
     image_id: Id
 
 
-class AdCreate(FrozenModel):
+class IdentityFields(FrozenModel):
+    identity_id: Id
+    identity_type: Literal["BC_AUTH_TT", "TT_USER"]
+    identity_authorized_bc_id: Id | None = None
+
+    @model_validator(mode="after")
+    def validate_identity_scope(self) -> Self:
+        # BC 授权身份必须带实际 BC；账户自有 TT_USER 不伪造 BC 授权字段。
+        if (self.identity_type == "BC_AUTH_TT") != (
+            self.identity_authorized_bc_id is not None
+        ):
+            raise ValueError("identity scope does not match identity type")
+        return self
+
+
+class AdCreate(IdentityFields):
     kind: Literal["AD"] = "AD"
     advertiser_id: Id
     adgroup_id: Id
     name: Id
-    identity_id: Id
-    identity_authorized_bc_id: Id
-    identity_type: Literal["BC_AUTH_TT"] = "BC_AUTH_TT"
     text: Id = Field(max_length=100)
     landing_page_url: Id
     portfolio_id: Id
