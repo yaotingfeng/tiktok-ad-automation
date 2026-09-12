@@ -43,6 +43,8 @@
 
 ## 首次发布
 
+执行前先完成[功能开关清单与发布确认](deployment.md#功能开关清单与发布确认)：列明每项拟定值、作用范围和关闭影响，取得本生产环境的明确选择。首发历史记录中“上传/清理关闭”不是后续环境的固定要求，也不继承测试环境的开启授权。后续新增或改变语义的开关同样先确认；普通升级保留生产既有确认值。
+
 1. 运维端核对 `git status -sb`、`git rev-parse --show-toplevel`、提交差异、测试及远程 SHA。执行 `git archive --format=tar <SHA>`，通过 SSH 传到上述同名版本目录。
    首次创建 `/opt/tt-ada/releases`、`/opt/tt-ada/backups`（0700）、`/etc/tt-ada`（0700）及 `/var/log/nginx`；不要假定宝塔安装已建立系统 Nginx 日志目录。
 2. 私有环境文件由运维安全创建：`PROJECT_NAME=TK-ADA`、`FRONTEND_HOST=https://manjuad.gzjunbo.net:8000`、`TT_ADA_BACKEND_PORT=18000`、独立 `SECRET_KEY`、`CONNECTION_ENCRYPTION_KEY`、`POSTGRES_PASSWORD`，以及用户授权的初始化管理员凭据。不要复用本地密钥。
@@ -76,6 +78,8 @@ sudo systemctl enable --now tt-ada-backup.timer
 ```
 
 ## 后续更新和数据库迁移
+
+每轮先对比目标版本的开关清单与服务器当前生效值，并将逐项前后值及确认依据写入发布记录。新增/拟变更项确认后才进入停写窗口；通过固定发布脚本重建受影响容器，再核对 API、各 Worker、Beat 的实际值和业务结果。不要只 restart 或用新模板覆盖已有配置。
 
 1. 先阅读本文和最新发布记录，确认当前 SHA、镜像 ID、Alembic head、数据库备份及外部开关。核对 80/443 原项目可访问，确认剩余内存和磁盘。审查代码及迁移，不在生产生成迁移。
 2. 相关测试通过后提交、推送，打包新 SHA 到新目录，运行新版本的 `config --quiet` 和 `build prestart`。构建失败不触碰正在运行的版本。

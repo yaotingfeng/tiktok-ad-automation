@@ -28,6 +28,8 @@ python3 scripts/environment.py production path
 
 ## 部署与同步
 
+每次先按[功能开关清单与发布确认](../docs/runbooks/deployment.md#功能开关清单与发布确认)核对当前值与拟定值。首次部署和新增/改变语义的开关须向用户说明并确认；已有明确确认继续有效，普通升级保持原值。`init` 生成的 false 是模板默认值，不是用户的部署选择；确认后在目标环境显式填写两个 `MATERIAL_*_ENABLED` 值，后续新增开关同样处理。
+
 先按对应 runbook 冻结写入、排空任务并完成全部备份与恢复验证，再将项目内所选环境文件受控传输到目标服务器，以受限权限安装至表中固定路径。配置文件中引用的注册材料、证书等文件同时按 runbook 核对。不要直接把模板覆盖到现有服务器。
 
 - 测试环境：[新加坡部署手册](../docs/runbooks/staging-singapore.md)。配置为 root:tt-ada、0640；更新后重启 API、Worker、Beat 并核实实际配置一致。

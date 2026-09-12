@@ -10,6 +10,8 @@
 
 ## 部署方案
 
+- 首次部署、新增开关及普通升级都执行[功能开关清单与发布确认](deployment.md#功能开关清单与发布确认)。首次/新增项先准备具体值和影响请用户确认；已有确认沿用。检查服务器配置及 API/Worker/Beat 实际值，不能由模板 false 重置已启用功能。
+
 - 目录 `/opt/tt-ada-staging/releases/<Git SHA>`；`current` 指向正在运行的版本。
 - 私有配置 `/etc/tt-ada-staging/app.env`；应用服务使用独立 `tt-ada` 系统用户。
 - 安装 Python 3.14 / uv、Bun 1.4.2、PostgreSQL 18、Redis 8、Nginx；依赖按仓库锁文件冻结安装。

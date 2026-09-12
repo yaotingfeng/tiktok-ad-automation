@@ -35,6 +35,7 @@ Python uses uv in backend; frontend uses Bun and the official template lockfile.
 - 查找或初始化环境配置先读 `config/README.md`，环境文件位置以 `config/environments.json` 为准；统一模板为 `.env.example`，使用 `scripts/environment.py` 定位/初始化。真实环境文件不进 Git，项目内副本不等于服务器已加载配置。
 - 明确区分本地开发和生产环境，不能将本地验证视为生产验证。
 - 发布必须遵循 `docs/runbooks/deployment.md`；首次部署同时参考 `docs/runbooks/bootstrap-deployment.md`。
+- 功能开关遵循部署手册“功能开关清单与发布确认”：首次部署、新增或改变语义的开关，先准备具体值、范围、前提及关闭影响并向用户确认；已有明确确认不重复询问，普通发版保留现有值，不被模板默认值覆盖。每轮比较并记录发布前后值，验证 API/所有 Worker/Beat 实际加载及业务结果；新增开关同一提交补齐模板、注入和部署文档，不能静默保持关闭后宣称功能可用。
 - 每次向测试或生产环境发版（含仅前端、配置或依赖变更，无数据库迁移也适用），必须在变更前备份数据库、Redis 持久状态、当前项目文件及构建产物、私有配置和证书。项目备份必须为独立归档，不能仅以 Git、旧 release 目录或 current 指针代替；具体清单和验证要求见部署手册。首次部署无历史数据时明确记录不适用项。
 - 发布前核对目标域名/端口、服务用户与目录、数据库/Redis、加密密钥、对象存储、API/MCP 各自授权配置及功能开关；不得输出私密配置。备份须有版本、迁移 head、校验和及恢复验证证据；备份不完整或验证失败不得切换版本。不得把基础健康、MCP READY 或模拟测试报告为真实业务联调成功。
 - API/MCP 启用前必须配置非空有效的 `TIKTOK_CALL_POLICIES`，按部署手册核对限流、并发、租约及共享配额域，并验证 API/Worker/Beat 实际加载同一份配置。不得等用户授权后再补额度配置；缺失或校验失败时不得交付为通道可用。

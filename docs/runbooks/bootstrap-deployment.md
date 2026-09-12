@@ -23,6 +23,8 @@
 
 ## 配置与依赖
 
+首次部署先准备并请用户确认[完整功能开关清单](deployment.md#功能开关清单与发布确认)，包括拟定值、前提与关闭影响；确认后显式写入目标环境。上文的历史“开关关闭”记录和模板默认值不能替代本次用户选择。后续新增开关也须在部署前确认，已确认的原有开关在普通升级时保持原值。
+
 依赖 Python 3.14、uv、Bun 1.4.2、PostgreSQL 18（本地现有 17.5 已测）、Redis 8；容器方案需要 Docker Engine 与 Compose v2 或更新版本。根目录 `uv.lock`、`bun.lock` 均须冻结安装。
 
 复制 `.env.example` 为 `.env`，填写数据库、Redis、独立随机签名密钥及初始管理员密码。`POSTGRES_PASSWORD` 用于 Compose 数据库，优先使用 URL 安全随机字符。`DATABASE_URL` 用于宿主机运行；Compose 内使用服务名自动生成连接地址。需要不同开发实例时分别提供数据库与 Redis 端口。
