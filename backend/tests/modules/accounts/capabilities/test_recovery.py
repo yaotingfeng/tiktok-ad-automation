@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import pytest
 from sqlmodel import Session
 
 from app.core.db import engine
@@ -8,6 +9,24 @@ from app.jobs.models import PendingDispatch
 from app.modules.accounts import capabilities
 from app.modules.accounts.capability_models import CapabilityJob
 from tests.modules.accounts.capabilities.test_service import page, run, start
+
+
+@pytest.mark.parametrize("code", ["mcp_contract_changed", "mcp_tool_unavailable"])
+def test_contract_failure_blocks_capability_without_retry(
+    capability_env, redis_client, monkeypatch, code
+):
+    from app.integrations.tiktok.contracts.common import CallEvidence, RemoteCallError
+
+    def reject_gateway(**_kwargs):
+        raise RemoteCallError(code, effect="NOT_SENT", evidence=CallEvidence())
+
+    monkeypatch.setattr(capabilities, "open_tiktok_gateway", reject_gateway)
+    job_id = start(capability_env)
+    job = run(capability_env, redis_client, job_id)
+    assert job.status == "BLOCKED"
+    assert job.error_code == code
+    assert job.failure_count == 0
+    assert job.claim_token is None and job.claimed_until is None
 
 
 def test_repair_preserves_unpublished_backoff_and_original_delivery_identity(

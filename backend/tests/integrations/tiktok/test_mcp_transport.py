@@ -150,6 +150,7 @@ def test_observed_schema_mismatch_not_sent(client_factory, mcp_wire):
         with pytest.raises(RemoteCallError) as exc:
             invoke(client)
     assert exc.value.effect == "NOT_SENT"
+    assert exc.value.code == "mcp_contract_changed"
     assert not tool_calls(mcp_wire)
 
 
@@ -159,6 +160,7 @@ def test_live_schema_drift_before_write_not_sent(client_factory, mcp_wire):
         with pytest.raises(RemoteCallError) as exc:
             invoke(client)
     assert exc.value.effect == "NOT_SENT"
+    assert exc.value.code == "mcp_contract_changed"
     assert not tool_calls(mcp_wire)
 
 

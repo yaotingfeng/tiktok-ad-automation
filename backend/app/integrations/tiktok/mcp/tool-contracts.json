@@ -1,8 +1,8 @@
 {
-  "revision": "2026-09-12.1",
+  "revision": "2026-09-12.2",
   "evidence": "DOCUMENTED",
-  "schema_source": "Provided official connector tool declarations, inspected offline on 2026-09-11; not an authenticated TK-ADA tools/list snapshot. Types/required/enums/nesting retained; prose-only restrictions require P1 validation.",
-  "tool_name_evidence": "Connector namespace removed only as candidate mapping; actual remote names require own connection tools/list match.",
+  "schema_source": "Input schemas verified against authenticated TK-ADA staging tools/list on 2026-09-12; types, required fields, enums and nested structures retained. Descriptive annotations are excluded from semantic identity.",
+  "tool_name_evidence": "Remote tool names verified through authenticated TK-ADA staging tools/list on 2026-09-12.",
   "response_shape_evidence": "Account READ tools accept the single JSON TextContent envelope documented by the official custom-agent guide (2026-09-12). Required data shapes remain application contracts; other tools retain their existing response gates.",
   "contracts": [
     {
@@ -466,17 +466,17 @@
           "creative_portfolio_type": {
             "type": "string",
             "enum": [
-              "CTA",
               "CARD",
-              "WEB_INFO_CARD",
+              "CTA",
               "DOWNLOAD_CARD",
+              "GESTURE",
               "INVENTORY_CARD",
+              "PREMIUM_BADGE",
               "PRODUCT_CARD",
               "PRODUCT_TILE",
               "STICKER",
-              "PREMIUM_BADGE",
-              "GESTURE",
-              "SUPER_LIKE"
+              "SUPER_LIKE",
+              "WEB_INFO_CARD"
             ]
           },
           "portfolio_content": {
@@ -522,7 +522,8 @@
                   }
                 },
                 "badge_show_time": {
-                  "type": "number"
+                  "type": "integer",
+                  "format": "int64"
                 },
                 "call_to_action": {
                   "type": "string"
@@ -531,7 +532,8 @@
                   "type": "string"
                 },
                 "card_image_index": {
-                  "type": "number"
+                  "type": "integer",
+                  "format": "int64"
                 },
                 "card_show_price": {
                   "type": "boolean"
@@ -573,16 +575,16 @@
                 "dynamic_format": {
                   "type": "string",
                   "enum": [
-                    "UNSET",
-                    "DYNAMIC_CREATIVE"
+                    "DYNAMIC_CREATIVE",
+                    "UNSET"
                   ]
                 },
                 "gesture_type": {
                   "type": "string",
                   "enum": [
                     "CLICK",
-                    "STRAIGHT_SLIDE",
-                    "CURVED_SLIDE"
+                    "CURVED_SLIDE",
+                    "STRAIGHT_SLIDE"
                   ]
                 },
                 "identity_authorized_bc_id": {
@@ -594,10 +596,10 @@
                 "identity_type": {
                   "type": "string",
                   "enum": [
-                    "CUSTOMIZED_USER",
                     "AUTH_CODE",
-                    "TT_USER",
-                    "BC_AUTH_TT"
+                    "BC_AUTH_TT",
+                    "CUSTOMIZED_USER",
+                    "TT_USER"
                   ]
                 },
                 "image_id": {
@@ -634,18 +636,18 @@
                 "product_source": {
                   "type": "string",
                   "enum": [
-                    "UNSET",
                     "CATALOG",
+                    "SHOWCASE",
                     "STORE",
-                    "SHOWCASE"
+                    "UNSET"
                   ]
                 },
                 "product_specific_type": {
                   "type": "string",
                   "enum": [
                     "ALL",
-                    "PRODUCT_SET",
-                    "CUSTOMIZED_PRODUCTS"
+                    "CUSTOMIZED_PRODUCTS",
+                    "PRODUCT_SET"
                   ]
                 },
                 "profile_image": {
@@ -700,17 +702,18 @@
                     "color": {
                       "type": "string",
                       "enum": [
-                        "ORANGE",
                         "BLACK",
-                        "RED",
-                        "BLUE"
+                        "BLUE",
+                        "ORANGE",
+                        "RED"
                       ]
                     },
                     "cutoff_time": {
                       "type": "string"
                     },
                     "display_angle": {
-                      "type": "number"
+                      "type": "integer",
+                      "format": "int64"
                     },
                     "giftcode": {
                       "type": "string"
@@ -731,10 +734,12 @@
                       ]
                     },
                     "position_x": {
-                      "type": "number"
+                      "type": "integer",
+                      "format": "int64"
                     },
                     "position_y": {
-                      "type": "number"
+                      "type": "integer",
+                      "format": "int64"
                     },
                     "predefined_placement": {
                       "type": "string"
@@ -742,11 +747,11 @@
                     "reminder_time": {
                       "type": "string",
                       "enum": [
-                        "ONE_MINUTE_EARLIER",
-                        "ONE_HOUR_EARLIER",
-                        "ONE_DAY_EARLIER",
-                        "ONE_MINUTE_AFTER",
                         "FIVE_MINUTES_AFTER",
+                        "ONE_DAY_EARLIER",
+                        "ONE_HOUR_EARLIER",
+                        "ONE_MINUTE_AFTER",
+                        "ONE_MINUTE_EARLIER",
                         "TEN_MINUTES_AFTER"
                       ]
                     },
@@ -765,9 +770,9 @@
                       "type": "string",
                       "enum": [
                         "COUNTDOWN",
-                        "REMINDER_COUNTDOWN",
+                        "GIFTCODE",
                         "LIVE_REMINDER_COUNTDOWN",
-                        "GIFTCODE"
+                        "REMINDER_COUNTDOWN"
                       ]
                     },
                     "title": {
@@ -787,10 +792,10 @@
                     "type": "string",
                     "enum": [
                       "CATEGORIES",
+                      "COMMENT_VOLUME",
                       "FILESIZE",
-                      "RATING",
                       "RANKING",
-                      "COMMENT_VOLUME"
+                      "RATING"
                     ]
                   }
                 },
@@ -800,9 +805,9 @@
                 "vertical_video_strategy": {
                   "type": "string",
                   "enum": [
-                    "UNSET",
+                    "CATALOG_VIDEOS",
                     "SINGLE_VIDEO",
-                    "CATALOG_VIDEOS"
+                    "UNSET"
                   ]
                 }
               }
@@ -873,28 +878,30 @@
                   "type": "string",
                   "enum": [
                     "CARD",
-                    "WEB_INFO_CARD",
+                    "COUNTDOWN_STICKER",
                     "DOWNLOAD_CARD",
+                    "GESTURE",
+                    "GIFTCODE_STICKER",
                     "INVENTORY_CARD",
+                    "LIVE_REMINDER_COUNTDOWN_STICKER",
+                    "PREMIUM_BADGE",
                     "PRODUCT_CARD",
                     "PRODUCT_TILE",
-                    "COUNTDOWN_STICKER",
                     "REMINDER_COUNTDOWN_STICKER",
-                    "LIVE_REMINDER_COUNTDOWN_STICKER",
-                    "GIFTCODE_STICKER",
-                    "PREMIUM_BADGE",
-                    "GESTURE",
-                    "SUPER_LIKE"
+                    "SUPER_LIKE",
+                    "WEB_INFO_CARD"
                   ]
                 }
               }
             }
           },
           "page": {
-            "type": "number"
+            "type": "integer",
+            "format": "int64"
           },
           "page_size": {
-            "type": "number"
+            "type": "integer",
+            "format": "int64"
           }
         },
         "required": [
@@ -1766,8 +1773,8 @@
               "sales_destination": {
                 "type": "string",
                 "enum": [
-                  "WEBSITE",
                   "APP",
+                  "WEBSITE",
                   "WEB_AND_APP"
                 ]
               },
@@ -1777,10 +1784,12 @@
             }
           },
           "page": {
-            "type": "number"
+            "type": "integer",
+            "format": "int64"
           },
           "page_size": {
-            "type": "number"
+            "type": "integer",
+            "format": "int64"
           }
         },
         "required": [
@@ -1825,9 +1834,9 @@
           "attribution_event_count": {
             "type": "string",
             "enum": [
-              "UNSET",
               "EVERY",
-              "ONCE"
+              "ONCE",
+              "UNSET"
             ]
           },
           "bid_price": {
@@ -1836,15 +1845,15 @@
           "bid_type": {
             "type": "string",
             "enum": [
-              "BID_TYPE_NO_BID",
-              "BID_TYPE_CUSTOM"
+              "BID_TYPE_CUSTOM",
+              "BID_TYPE_NO_BID"
             ]
           },
           "billing_event": {
             "type": "string",
             "enum": [
-              "OCPM",
-              "CPC"
+              "CPC",
+              "OCPM"
             ]
           },
           "budget": {
@@ -1860,8 +1869,8 @@
           "budget_mode": {
             "type": "string",
             "enum": [
-              "BUDGET_MODE_TOTAL",
-              "BUDGET_MODE_DYNAMIC_DAILY_BUDGET"
+              "BUDGET_MODE_DYNAMIC_DAILY_BUDGET",
+              "BUDGET_MODE_TOTAL"
             ]
           },
           "campaign_id": {
@@ -1876,14 +1885,14 @@
           "click_attribution_window": {
             "type": "string",
             "enum": [
+              "FOURTEEN_DAYS",
               "OFF",
               "ONE_DAY",
+              "ONE_HUNDRED_EIGHTY_DAYS",
               "SEVEN_DAYS",
-              "FOURTEEN_DAYS",
-              "TWENTY_EIGHT_DAYS",
               "THIRTY_DAYS",
               "THIRTY_TWO_DAYS",
-              "ONE_HUNDRED_EIGHTY_DAYS"
+              "TWENTY_EIGHT_DAYS"
             ]
           },
           "comment_disabled": {
@@ -1901,18 +1910,18 @@
           "deep_bid_type": {
             "type": "string",
             "enum": [
-              "DEFAULT",
               "AEO",
-              "VO_MIN_ROAS",
-              "VO_HIGHEST_VALUE"
+              "DEFAULT",
+              "VO_HIGHEST_VALUE",
+              "VO_MIN_ROAS"
             ]
           },
           "deep_funnel_event_source": {
             "type": "string",
             "enum": [
-              "PIXEL",
+              "CRM",
               "OFFLINE",
-              "CRM"
+              "PIXEL"
             ]
           },
           "deep_funnel_event_source_id": {
@@ -1924,25 +1933,25 @@
           "deep_funnel_optimization_status": {
             "type": "string",
             "enum": [
-              "ON",
-              "OFF"
+              "OFF",
+              "ON"
             ]
           },
           "engaged_view_attribution_window": {
             "type": "string",
             "enum": [
+              "FOURTEEN_DAYS",
               "OFF",
               "ONE_DAY",
               "SEVEN_DAYS",
-              "FOURTEEN_DAYS",
               "TWENTY_EIGHT_DAYS"
             ]
           },
           "gaming_ad_compliance_agreement": {
             "type": "string",
             "enum": [
-              "ON",
-              "OFF"
+              "OFF",
+              "ON"
             ]
           },
           "identity_authorized_bc_id": {
@@ -1954,8 +1963,8 @@
           "identity_type": {
             "type": "string",
             "enum": [
-              "TT_USER",
-              "BC_AUTH_TT"
+              "BC_AUTH_TT",
+              "TT_USER"
             ]
           },
           "is_hfss": {
@@ -1973,11 +1982,11 @@
           "messaging_app_type": {
             "type": "string",
             "enum": [
+              "IM_URL",
+              "LINE",
               "MESSENGER",
               "WHATSAPP",
-              "ZALO",
-              "LINE",
-              "IM_URL"
+              "ZALO"
             ]
           },
           "min_budget": {
@@ -1995,8 +2004,8 @@
           "operation_status": {
             "type": "string",
             "enum": [
-              "ENABLE",
-              "DISABLE"
+              "DISABLE",
+              "ENABLE"
             ]
           },
           "optimization_event": {
@@ -2006,13 +2015,13 @@
             "type": "string",
             "enum": [
               "CLICK",
+              "CONVERSATION",
+              "CONVERT",
               "INSTALL",
               "IN_APP_EVENT",
-              "VALUE",
-              "CONVERT",
+              "LEAD_GENERATION",
               "TRAFFIC_LANDING_PAGE_VIEW",
-              "CONVERSATION",
-              "LEAD_GENERATION"
+              "VALUE"
             ]
           },
           "phone_info": {
@@ -2044,17 +2053,17 @@
             "items": {
               "type": "string",
               "enum": [
-                "PLACEMENT_TIKTOK",
+                "PLACEMENT_GLOBAL_APP_BUNDLE",
                 "PLACEMENT_PANGLE",
-                "PLACEMENT_GLOBAL_APP_BUNDLE"
+                "PLACEMENT_TIKTOK"
               ]
             }
           },
           "promotion_target_type": {
             "type": "string",
             "enum": [
-              "INSTANT_PAGE",
-              "EXTERNAL_WEBSITE"
+              "EXTERNAL_WEBSITE",
+              "INSTANT_PAGE"
             ]
           },
           "promotion_type": {
@@ -2062,14 +2071,14 @@
             "enum": [
               "APP_ANDROID",
               "APP_IOS",
-              "WEBSITE",
+              "LEAD_GENERATION",
+              "LEAD_GEN_CLICK_TO_CALL",
+              "LEAD_GEN_CLICK_TO_SOCIAL_MEDIA_APP_MESSAGE",
+              "LEAD_GEN_CLICK_TO_TT_DIRECT_MESSAGE",
               "MINI_APP",
               "MINI_GAME",
               "NATIVE_SERIES",
-              "LEAD_GENERATION",
-              "LEAD_GEN_CLICK_TO_TT_DIRECT_MESSAGE",
-              "LEAD_GEN_CLICK_TO_SOCIAL_MEDIA_APP_MESSAGE",
-              "LEAD_GEN_CLICK_TO_CALL"
+              "WEBSITE"
             ]
           },
           "request_id": {
@@ -2109,7 +2118,48 @@
             "properties": {
               "actions": {
                 "type": "array",
-                "items": {}
+                "items": {
+                  "properties": {
+                    "action_category_ids": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "action_period": {
+                      "enum": [
+                        0,
+                        15,
+                        7
+                      ],
+                      "type": "number"
+                    },
+                    "action_scene": {
+                      "enum": [
+                        "CREATOR_RELATED",
+                        "HASHTAG_RELATED",
+                        "VIDEO_RELATED"
+                      ],
+                      "type": "string"
+                    },
+                    "video_user_actions": {
+                      "items": {
+                        "enum": [
+                          "COMMENTED",
+                          "FOLLOWING",
+                          "LIKED",
+                          "SHARED",
+                          "VIEW_HASHTAG",
+                          "VIEW_HOMEPAGE",
+                          "WATCHED_TO_END"
+                        ],
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
               },
               "age_groups": {
                 "type": "array",
@@ -2170,7 +2220,23 @@
               },
               "excluded_custom_actions": {
                 "type": "array",
-                "items": {}
+                "items": {
+                  "properties": {
+                    "code": {
+                      "enum": [
+                        "ADD_TO_CART",
+                        "PURCHASE",
+                        "VIEW_PRODUCT"
+                      ],
+                      "type": "string"
+                    },
+                    "days": {
+                      "format": "int64",
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                }
               },
               "excluded_pangle_audience_package_ids": {
                 "type": "array",
@@ -2191,16 +2257,32 @@
                 "items": {
                   "type": "string",
                   "enum": [
-                    "TOP5",
                     "TOP10",
                     "TOP10_25",
-                    "TOP25_50"
+                    "TOP25_50",
+                    "TOP5"
                   ]
                 }
               },
               "included_custom_actions": {
                 "type": "array",
-                "items": {}
+                "items": {
+                  "properties": {
+                    "code": {
+                      "enum": [
+                        "ADD_TO_CART",
+                        "PURCHASE",
+                        "VIEW_PRODUCT"
+                      ],
+                      "type": "string"
+                    },
+                    "days": {
+                      "format": "int64",
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                }
               },
               "included_pangle_audience_package_ids": {
                 "type": "array",
@@ -2275,8 +2357,8 @@
               "shopping_ads_retargeting_custom_audience_relation": {
                 "type": "string",
                 "enum": [
-                  "OR",
-                  "AND"
+                  "AND",
+                  "OR"
                 ]
               },
               "shopping_ads_retargeting_type": {
@@ -2560,8 +2642,8 @@
                 "items": {
                   "type": "string",
                   "enum": [
-                    "EMISSION",
-                    "DISCOUNT"
+                    "DISCOUNT",
+                    "EMISSION"
                   ]
                 }
               },
@@ -2571,7 +2653,18 @@
               "catalog_creative_info": {
                 "type": "object",
                 "properties": {
-                  "catalog_media_settings": {},
+                  "catalog_media_settings": {
+                    "items": {
+                      "enum": [
+                        "IMAGE",
+                        "MULTI_SHOW",
+                        "TEMPLATE_VIDEO",
+                        "VIDEO"
+                      ],
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
                   "catalog_template_video_id": {
                     "type": "string"
                   }
@@ -2588,38 +2681,48 @@
                 "items": {
                   "type": "string",
                   "enum": [
-                    "TRANSLATE_AND_DUB",
-                    "MUSIC_REFRESH",
-                    "VIDEO_QUALITY",
                     "IMAGE_QUALITY",
-                    "IMAGE_RESIZE"
+                    "IMAGE_RESIZE",
+                    "MUSIC_REFRESH",
+                    "TRANSLATE_AND_DUB",
+                    "VIDEO_QUALITY"
                   ]
                 }
               },
               "dark_post_status": {
                 "type": "string",
                 "enum": [
-                  "ON",
-                  "OFF"
+                  "OFF",
+                  "ON"
                 ]
               },
               "deeplink_utm_params": {
                 "type": "array",
-                "items": {}
+                "items": {
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
               },
               "end_card_cta": {
                 "type": "string",
                 "enum": [
-                  "SEARCH_INVENTORY",
+                  "BOOK_NOW",
+                  "CONTACT_US",
                   "LEARN_MORE",
+                  "ORDER_NOW",
+                  "READ_MORE",
+                  "SEARCH_INVENTORY",
+                  "SEND_MESSAGE",
                   "SHOP_NOW",
                   "SIGN_UP",
-                  "CONTACT_US",
-                  "BOOK_NOW",
-                  "READ_MORE",
-                  "VIEW_MORE",
-                  "ORDER_NOW",
-                  "SEND_MESSAGE"
+                  "VIEW_MORE"
                 ]
               },
               "fallback_type": {
@@ -2637,9 +2740,9 @@
               "identity_type": {
                 "type": "string",
                 "enum": [
+                  "BC_AUTH_TT",
                   "CUSTOMIZED_USER",
-                  "TT_USER",
-                  "BC_AUTH_TT"
+                  "TT_USER"
                 ]
               },
               "phone_info": {
@@ -2661,17 +2764,17 @@
                 "items": {
                   "type": "string",
                   "enum": [
+                    "ADDRESS_CITY",
                     "DEALER_NAME",
+                    "EXTERIOR_COLOR",
                     "MAKE",
-                    "MODEL",
-                    "YEAR",
                     "MILEAGE",
+                    "MODEL",
                     "PRICE",
                     "SALE_PRICE",
-                    "EXTERIOR_COLOR",
                     "TRIM",
-                    "ADDRESS_CITY",
-                    "VEHICLE_STATE"
+                    "VEHICLE_STATE",
+                    "YEAR"
                   ]
                 }
               },
@@ -2684,20 +2787,246 @@
               "product_info": {
                 "type": "object",
                 "properties": {
-                  "catalog_tag_list": {},
-                  "product_card_type": {},
-                  "product_image_list": {},
-                  "product_titles": {},
-                  "promo_info_list": {},
-                  "selling_points": {}
+                  "catalog_tag_list": {
+                    "items": {
+                      "enum": [
+                        "DISCOUNT",
+                        "FREE_SHIPPING",
+                        "PRICE",
+                        "STRIKETHROUGH_PRICE"
+                      ],
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "product_card_type": {
+                    "items": {
+                      "enum": [
+                        "ANCHOR",
+                        "CAROUSEL_LABEL",
+                        "PRODUCT_CARD",
+                        "PRODUCT_INFO_CARD",
+                        "PRODUCT_SHOWCASE_TILE",
+                        "PRODUCT_TILE"
+                      ],
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "product_image_list": {
+                    "items": {
+                      "properties": {
+                        "web_uri": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "product_titles": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "promo_info_list": {
+                    "items": {
+                      "properties": {
+                        "discount_currency": {
+                          "enum": [
+                            "AED",
+                            "ARS",
+                            "AUD",
+                            "BDT",
+                            "BHD",
+                            "BOB",
+                            "BRL",
+                            "BYN",
+                            "CAD",
+                            "CHF",
+                            "CLP",
+                            "CNY",
+                            "COP",
+                            "CRC",
+                            "CZK",
+                            "DKK",
+                            "DZD",
+                            "EGP",
+                            "EUR",
+                            "GBP",
+                            "GTQ",
+                            "HKD",
+                            "HNL",
+                            "HUF",
+                            "IDR",
+                            "ILS",
+                            "INR",
+                            "IQD",
+                            "ISK",
+                            "JOD",
+                            "JPY",
+                            "KES",
+                            "KHR",
+                            "KRW",
+                            "KWD",
+                            "KZT",
+                            "LBP",
+                            "LKR",
+                            "MAD",
+                            "MOP",
+                            "MXN",
+                            "MYR",
+                            "NGN",
+                            "NIO",
+                            "NOK",
+                            "NZD",
+                            "OMR",
+                            "PEN",
+                            "PHP",
+                            "PKR",
+                            "PLN",
+                            "PYG",
+                            "QAR",
+                            "RON",
+                            "RSD",
+                            "RUB",
+                            "SAR",
+                            "SEK",
+                            "SGD",
+                            "THB",
+                            "TRY",
+                            "TWD",
+                            "UAH",
+                            "USD",
+                            "UYU",
+                            "VEF",
+                            "VND",
+                            "ZAR"
+                          ],
+                          "type": "string"
+                        },
+                        "discount_type": {
+                          "enum": [
+                            "CASH",
+                            "PERCENTAGE"
+                          ],
+                          "type": "string"
+                        },
+                        "discount_value": {
+                          "type": "number"
+                        },
+                        "minimum_purchase_currency": {
+                          "enum": [
+                            "AED",
+                            "ARS",
+                            "AUD",
+                            "BDT",
+                            "BHD",
+                            "BOB",
+                            "BRL",
+                            "BYN",
+                            "CAD",
+                            "CHF",
+                            "CLP",
+                            "CNY",
+                            "COP",
+                            "CRC",
+                            "CZK",
+                            "DKK",
+                            "DZD",
+                            "EGP",
+                            "EUR",
+                            "GBP",
+                            "GTQ",
+                            "HKD",
+                            "HNL",
+                            "HUF",
+                            "IDR",
+                            "ILS",
+                            "INR",
+                            "IQD",
+                            "ISK",
+                            "JOD",
+                            "JPY",
+                            "KES",
+                            "KHR",
+                            "KRW",
+                            "KWD",
+                            "KZT",
+                            "LBP",
+                            "LKR",
+                            "MAD",
+                            "MOP",
+                            "MXN",
+                            "MYR",
+                            "NGN",
+                            "NIO",
+                            "NOK",
+                            "NZD",
+                            "OMR",
+                            "PEN",
+                            "PHP",
+                            "PKR",
+                            "PLN",
+                            "PYG",
+                            "QAR",
+                            "RON",
+                            "RSD",
+                            "RUB",
+                            "SAR",
+                            "SEK",
+                            "SGD",
+                            "THB",
+                            "TRY",
+                            "TWD",
+                            "UAH",
+                            "USD",
+                            "UYU",
+                            "VEF",
+                            "VND",
+                            "ZAR"
+                          ],
+                          "type": "string"
+                        },
+                        "minimum_purchase_type": {
+                          "enum": [
+                            "QUANTITY",
+                            "SUBTOTAL"
+                          ],
+                          "type": "string"
+                        },
+                        "minimum_purchase_value": {
+                          "type": "number"
+                        },
+                        "promo_code": {
+                          "type": "string"
+                        },
+                        "valid_end_time": {
+                          "type": "string"
+                        },
+                        "valid_start_time": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "selling_points": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
                 }
               },
               "product_info_enabled": {
                 "type": "string",
                 "enum": [
-                  "UNSET",
+                  "CATALOG",
                   "NON_CATALOG",
-                  "CATALOG"
+                  "UNSET"
                 ]
               },
               "product_set_id": {
@@ -2707,14 +3036,37 @@
                 "type": "string",
                 "enum": [
                   "ALL",
-                  "PRODUCT_SET",
-                  "CUSTOMIZED_PRODUCTS"
+                  "CUSTOMIZED_PRODUCTS",
+                  "PRODUCT_SET"
                 ]
               },
               "tracking_info": {
                 "type": "object",
                 "properties": {
-                  "app_tracking_info_list": {},
+                  "app_tracking_info_list": {
+                    "items": {
+                      "properties": {
+                        "app_id": {
+                          "type": "string"
+                        },
+                        "app_type": {
+                          "enum": [
+                            "APP_ANDROID",
+                            "APP_IOS"
+                          ],
+                          "type": "string"
+                        },
+                        "click_tracking_url": {
+                          "type": "string"
+                        },
+                        "impression_tracking_url": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
                   "brand_safety_postbid_partner": {
                     "type": "string",
                     "enum": [
@@ -2738,7 +3090,12 @@
                   "tracking_message_event_set_id": {
                     "type": "string"
                   },
-                  "tracking_offline_event_set_ids": {},
+                  "tracking_offline_event_set_ids": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
                   "tracking_pixel_id": {
                     "type": "string"
                   },
@@ -2757,7 +3114,17 @@
               },
               "utm_params": {
                 "type": "array",
-                "items": {}
+                "items": {
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
               }
             }
           },
@@ -2808,7 +3175,73 @@
             "items": {
               "type": "object",
               "properties": {
-                "creative_info": {}
+                "creative_info": {
+                  "properties": {
+                    "ad_format": {
+                      "enum": [
+                        "CAROUSEL_ADS",
+                        "CATALOG_CAROUSEL",
+                        "SINGLE_VIDEO"
+                      ],
+                      "type": "string"
+                    },
+                    "aigc_disclosure_type": {
+                      "enum": [
+                        "NOT_DECLARED",
+                        "SELF_DISCLOSURE"
+                      ],
+                      "type": "string"
+                    },
+                    "identity_authorized_bc_id": {
+                      "type": "string"
+                    },
+                    "identity_id": {
+                      "type": "string"
+                    },
+                    "identity_type": {
+                      "enum": [
+                        "AUTH_CODE",
+                        "BC_AUTH_TT",
+                        "TT_USER"
+                      ],
+                      "type": "string"
+                    },
+                    "image_info": {
+                      "items": {
+                        "properties": {
+                          "web_uri": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "music_info": {
+                      "properties": {
+                        "music_id": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "tiktok_item_id": {
+                      "type": "string"
+                    },
+                    "video_info": {
+                      "properties": {
+                        "file_name": {
+                          "type": "string"
+                        },
+                        "video_id": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                }
               }
             }
           },
@@ -2846,7 +3279,17 @@
             "properties": {
               "disclaimer_clickable_texts": {
                 "type": "array",
-                "items": {}
+                "items": {
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
               },
               "disclaimer_text": {
                 "type": "object",
@@ -2859,8 +3302,8 @@
               "disclaimer_type": {
                 "type": "string",
                 "enum": [
-                  "TEXT_ONLY",
-                  "TEXT_LINK"
+                  "TEXT_LINK",
+                  "TEXT_ONLY"
                 ]
               }
             }
@@ -2890,8 +3333,8 @@
           "operation_status": {
             "type": "string",
             "enum": [
-              "ENABLE",
-              "DISABLE"
+              "DISABLE",
+              "ENABLE"
             ]
           },
           "page_list": {

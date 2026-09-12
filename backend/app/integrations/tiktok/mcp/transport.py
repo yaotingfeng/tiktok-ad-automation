@@ -476,6 +476,9 @@ class BoundMCPClient:
                         effect="UNKNOWN" if sent else exc.effect,
                         evidence=exc.evidence,
                     )
+                elif isinstance(exc, DomainError) and exc.code == "mcp_contract_changed":
+                    # 合同不匹配是确定阻断，保留脱敏错误码，不能伪装成网络失败无限重试。
+                    failure = _error(exc.code, sent=sent)
                 elif state is not None and state.failure is not None:
                     failure = state.failure
                 else:

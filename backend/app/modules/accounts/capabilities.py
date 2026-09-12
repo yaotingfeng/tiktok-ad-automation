@@ -492,6 +492,8 @@ def _fail(session: Session, job: CapabilityJob, error: Exception) -> None:
         "account_not_in_bc",
         "capability_unavailable",
         "credential_invalid",
+        "mcp_contract_changed",
+        "mcp_tool_unavailable",
         "mcp_refresh_unknown",
         "mcp_refresh_reauth_required",
     }:
