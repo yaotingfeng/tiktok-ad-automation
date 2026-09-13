@@ -77,6 +77,21 @@ class DraftSummary(BaseModel):
     updated_at: datetime
 
 
+class DraftListItem(BaseModel):
+    draft_id: UUID
+    bc_id: str
+    revision: int
+    status: Literal["DRAFT", "PREPARING", "READY", "BLOCKED"]
+    drama_titles: list[str]
+    drama_input_count: int
+    account_input_count: int
+    resolved_account_count: int
+    strategy_label: str
+    preview_id: UUID | None
+    preview_status: Literal["BUILDING", "FROZEN", "OBSOLETE", "FAILED"] | None
+    updated_at: datetime
+
+
 class DraftDramaPublic(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     drama_id: UUID

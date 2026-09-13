@@ -51,6 +51,7 @@ export async function buildsBoundary(
     historicalReadLost?: boolean
     historicalReadState?: "UNKNOWN" | "BLOCKED" | "RUNNING"
     defaultConnectionId?: string
+    draftList?: boolean
   } = {},
 ) {
   const submissionId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -297,6 +298,28 @@ export async function buildsBoundary(
           },
         ]),
       )
+    if (path.endsWith("/build-drafts") && method === "GET") {
+      const items =
+        options.draftList && query.get("bc_id") === BC && path.includes(T)
+          ? [
+              {
+                draft_id: D,
+                bc_id: BC,
+                revision: summary.revision,
+                status: summary.status,
+                drama_titles: originals.drama.slice(0, 3),
+                drama_input_count: originals.drama.length,
+                account_input_count: originals.account.length,
+                resolved_account_count: summary.status === "DRAFT" ? 0 : 3,
+                strategy_label: "默认策略 v1",
+                preview_id: null,
+                preview_status: null,
+                updated_at: summary.updated_at,
+              },
+            ]
+          : []
+      return reply(paged(items))
+    }
     if (path.endsWith("/build-drafts") && method === "POST") {
       summary.execution_connection_id = body.execution_connection_id ?? null
       Object.assign(originals, {

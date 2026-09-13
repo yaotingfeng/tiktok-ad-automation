@@ -695,6 +695,60 @@ export type DraftInputPublic = {
 };
 
 /**
+ * DraftListItem
+ */
+export type DraftListItem = {
+    /**
+     * Draft Id
+     */
+    draft_id: string;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Revision
+     */
+    revision: number;
+    /**
+     * Status
+     */
+    status: 'DRAFT' | 'PREPARING' | 'READY' | 'BLOCKED';
+    /**
+     * Drama Titles
+     */
+    drama_titles: Array<string>;
+    /**
+     * Drama Input Count
+     */
+    drama_input_count: number;
+    /**
+     * Account Input Count
+     */
+    account_input_count: number;
+    /**
+     * Resolved Account Count
+     */
+    resolved_account_count: number;
+    /**
+     * Strategy Label
+     */
+    strategy_label: string;
+    /**
+     * Preview Id
+     */
+    preview_id: string | null;
+    /**
+     * Preview Status
+     */
+    preview_status: 'BUILDING' | 'FROZEN' | 'OBSOLETE' | 'FAILED' | null;
+    /**
+     * Updated At
+     */
+    updated_at: string;
+};
+
+/**
  * DraftMaterialPublic
  */
 export type DraftMaterialPublic = {
@@ -2064,6 +2118,20 @@ export type Page_DraftInputPublic_ = {
      * Items
      */
     items: Array<DraftInputPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
+ * Page[DraftListItem]
+ */
+export type Page_DraftListItem_ = {
+    /**
+     * Items
+     */
+    items: Array<DraftListItem>;
     /**
      * Next Cursor
      */
@@ -7672,6 +7740,49 @@ export type strategiesCopyPoolResponses = {
 };
 
 export type strategiesCopyPoolResponse = strategiesCopyPoolResponses[keyof strategiesCopyPoolResponses];
+
+export type buildsListDraftsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/build-drafts';
+};
+
+export type buildsListDraftsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsListDraftsError = buildsListDraftsErrors[keyof buildsListDraftsErrors];
+
+export type buildsListDraftsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_DraftListItem_;
+};
+
+export type buildsListDraftsResponse = buildsListDraftsResponses[keyof buildsListDraftsResponses];
 
 export type buildsCreateData = {
     body: CreateDraftRequest;

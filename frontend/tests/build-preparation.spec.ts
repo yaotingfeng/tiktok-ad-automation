@@ -3,9 +3,183 @@ import {
   BC as bc,
   buildsBoundary,
   D,
+  P,
   pickInputs,
   T as tenant,
 } from "./utils/buildsBoundary"
+
+test("保存的搭建可从未完成入口找回完整输入，刷新列表只读", async ({ page }) => {
+  const api = await buildsBoundary(page, { draftList: true })
+  api.summary.status = "DRAFT"
+  await page.goto(`/tenants/${tenant}/builds/new?bc_id=${bc}`)
+  await pickInputs(page)
+  await page.getByRole("button", { name: "保存草稿", exact: true }).click()
+  await expect(page).toHaveURL(new RegExp(`/build-drafts/${D}`))
+  await page.goto(`/tenants/${tenant}/builds/new?bc_id=${bc}`)
+  await page.getByRole("tab", { name: "未完成搭建" }).click()
+  const row = page.getByRole("row").filter({ hasText: "完整剧名1" })
+  await expect(row).toContainText("已保存")
+  await expect(row).toContainText("已输入 3 行")
+  await expect(row).toContainText("已解析 0 个账户")
+  await page.reload()
+  await row.getByRole("link", { name: "继续搭建" }).click()
+  await expect(page.getByLabel("剧目名称", { exact: true })).toHaveValue(
+    api.originals.drama.join("\n"),
+  )
+  await expect(page.getByLabel("广告账户", { exact: true })).toHaveValue(
+    api.originals.account.join("\n"),
+  )
+  expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(1)
+})
+
+test("切换未完成搭建入口保留未保存输入的离页提醒", async ({ page }) => {
+  await buildsBoundary(page)
+  await page.goto(`/tenants/${tenant}/builds/new?bc_id=${bc}`)
+  await page.getByLabel("剧目名称", { exact: true }).fill("尚未保存的剧名")
+  await page.getByRole("tab", { name: "未完成搭建" }).click()
+  await expect(page.getByRole("dialog")).toBeVisible()
+  await page.getByRole("button", { name: "留在当前页" }).click()
+  await expect(page.getByLabel("剧目名称", { exact: true })).toHaveValue(
+    "尚未保存的剧名",
+  )
+  await page.getByRole("tab", { name: "未完成搭建" }).click()
+  await page.getByRole("button", { name: "丢弃未保存修改" }).click()
+  await expect(page.getByText("暂无未完成搭建")).toBeVisible()
+})
+
+test("准备中的批次继续查看原进度，不重复发起准备", async ({ page }) => {
+  const api = await buildsBoundary(page, { draftList: true })
+  api.summary.status = "PREPARING"
+  await page.goto(`/tenants/${tenant}/builds/new?bc_id=${bc}&view=drafts`)
+  await page.getByRole("link", { name: "继续搭建" }).click()
+  await expect(
+    page.getByRole("heading", { name: "准备与调整", exact: true }),
+  ).toBeVisible()
+  expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
+})
+
+test("当前版本已有预览时继续原预览，不重新创建", async ({ page }) => {
+  const api = await buildsBoundary(page, { draftList: true })
+  await page.route("**/build-drafts?**", async (route) => {
+    await route.fulfill({
+      json: {
+        items: [
+          {
+            ...api.summary,
+            drama_titles: ["预览剧目"],
+            drama_input_count: 1,
+            account_input_count: 3,
+            resolved_account_count: 3,
+            strategy_label: "默认策略 v1",
+            preview_id: P,
+            preview_status: "FROZEN",
+          },
+        ],
+        next_cursor: null,
+      },
+    })
+  })
+  await page.goto(`/tenants/${tenant}/builds/new?bc_id=${bc}&view=drafts`)
+  await expect(
+    page.getByRole("cell", { name: "待提交", exact: true }),
+  ).toBeVisible()
+  await page.getByRole("link", { name: "继续搭建" }).click()
+  await expect(page).toHaveURL(new RegExp(`/build-previews/${P}`))
+  await expect(
+    page.getByRole("heading", { name: "搭建预览", exact: true }),
+  ).toBeVisible()
+  expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
+})
+
+test("只读成员可从未完成入口查看，切BC清除原记录", async ({ page }) => {
+  const api = await buildsBoundary(page, { draftList: true, viewer: true })
+  await page.goto(`/tenants/${tenant}/builds/new?bc_id=${bc}&view=drafts`)
+  await expect(
+    page.getByRole("link", { name: "查看详情", exact: true }),
+  ).toBeVisible()
+  await expect(page.getByRole("link", { name: "继续搭建" })).toHaveCount(0)
+  await page.getByRole("combobox", { name: "当前 BC", exact: true }).click()
+  await page.getByRole("option").filter({ hasText: "备用 BC" }).click()
+  await expect(page.getByText("完整剧名1、完整剧名2")).toHaveCount(0)
+  expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
+})
+
+test("未完成列表服务端分页，刷新回到最近修改的第一页", async ({ page }) => {
+  const api = await buildsBoundary(page)
+  const pages: string[] = []
+  await page.route("**/build-drafts?**", async (route) => {
+    const query = new URL(route.request().url()).searchParams
+    pages.push(query.get("cursor") || "first")
+    expect(query.get("bc_id")).toBe(bc)
+    expect(query.get("limit")).toBe("50")
+    const next = !!query.get("cursor")
+    await route.fulfill({
+      json: {
+        items: [
+          {
+            ...api.summary,
+            drama_titles: [next ? "第二页剧目" : "最新剧目"],
+            drama_input_count: 1,
+            account_input_count: 3,
+            resolved_account_count: 0,
+            strategy_label: "默认策略 v1",
+            preview_id: null,
+            preview_status: null,
+          },
+        ],
+        next_cursor: next ? null : "opaque-page-two",
+      },
+    })
+  })
+  await page.goto(`/tenants/${tenant}/builds/new?bc_id=${bc}&view=drafts`)
+  await expect(page.getByText("最新剧目", { exact: true })).toBeVisible()
+  await page.getByRole("button", { name: "下一页" }).click()
+  await expect(page.getByText("第二页剧目", { exact: true })).toBeVisible()
+  await page.getByRole("button", { name: "刷新列表" }).click()
+  await expect(page.getByText("最新剧目", { exact: true })).toBeVisible()
+  expect(pages).toEqual(["first", "opaque-page-two", "first"])
+})
+
+test("未完成列表刷新被拒绝时隐藏旧记录", async ({ page }) => {
+  await buildsBoundary(page, { draftList: true })
+  await page.goto(`/tenants/${tenant}/builds/new?bc_id=${bc}&view=drafts`)
+  await expect(page.getByText("完整剧名1、完整剧名2")).toBeVisible()
+  await page.route("**/build-drafts?**", (route) =>
+    route.fulfill({ status: 403, json: { code: "action_forbidden" } }),
+  )
+  await page.getByRole("button", { name: "刷新列表" }).click()
+  await expect(page.getByText("无权访问此页面")).toBeVisible()
+  await expect(page.getByText("完整剧名1、完整剧名2")).toHaveCount(0)
+  await expect(page.getByRole("link", { name: "继续搭建" })).toHaveCount(0)
+})
+
+for (const width of [390, 1440]) {
+  test(`未完成搭建列表在${width}宽度保持页内布局`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 })
+    const api = await buildsBoundary(page, { draftList: true })
+    api.originals.drama = [
+      "等待确认的剧目甲",
+      "等待确认的剧目乙",
+      "等待确认的剧目丙",
+    ]
+    api.summary.status = "BLOCKED"
+    await page.goto(`/tenants/${tenant}/builds/new?bc_id=${bc}&view=drafts`)
+    await expect(
+      page.getByRole("cell", { name: "待处理", exact: true }),
+    ).toBeVisible()
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true)
+    await page.screenshot({
+      path: testInfo.outputPath(`draft-list-${width}.png`),
+      fullPage: true,
+    })
+  })
+}
 
 test("输入页保持剧目和账户批量原文，离开守卫取消保留输入", async ({ page }) => {
   await buildsBoundary(page)

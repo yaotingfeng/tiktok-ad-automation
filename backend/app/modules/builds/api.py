@@ -7,7 +7,7 @@ from sqlmodel import select
 from app.api.deps import CurrentUser, SessionDep
 from app.core.errors import DomainError
 from app.core.pagination import Page
-from app.modules.builds import catalog, drafts, mutations, previews
+from app.modules.builds import catalog, draft_catalog, drafts, mutations, previews
 from app.modules.builds.models import (
     BuildDraft,
     DraftPreparation,
@@ -28,6 +28,7 @@ from app.modules.builds.schemas import (
     DraftDramaPublic,
     DraftGroupEditRequest,
     DraftInputPublic,
+    DraftListItem,
     DraftMaterialPublic,
     DraftPrepareAccepted,
     DraftPrepareRequest,
@@ -42,6 +43,23 @@ from .mini_selection import ChooseMiniRequest, DraftMinis, choose_mini, draft_mi
 router = APIRouter(prefix="/tenants/{tenant_id}", tags=["builds"])
 Cursor = Annotated[str | None, Query(max_length=4096)]
 Limit = Annotated[int, Query(ge=1, le=100)]
+
+
+@router.get("/build-drafts", response_model=Page[DraftListItem])
+def list_drafts(
+    tenant_id: UUID,
+    bc_id: Annotated[str, Query(min_length=1, max_length=128)],
+    session: SessionDep,
+    user: CurrentUser,
+    cursor: Cursor = None,
+    limit: Limit = 50,
+) -> Page[DraftListItem]:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    return draft_catalog.list_drafts(
+        session, context=context, bc_id=bc_id, cursor=cursor, limit=limit
+    )
 
 
 @router.post("/build-drafts", response_model=DraftSaved, status_code=201)
