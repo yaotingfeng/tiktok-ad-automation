@@ -22,11 +22,13 @@ from app.modules.builds.models import (
 )
 from app.modules.builds.schemas import (
     DraftDramaPublic,
+    DraftInputPreparation,
     DraftInputPublic,
     DraftMaterialPublic,
     DraftSummary,
 )
 from app.modules.materials.models import MaterialFile
+from app.modules.providers.models import LinkPreparationItem
 from app.modules.providers.schemas import display_config
 
 
@@ -133,8 +135,64 @@ def inputs_page(
     if status is not None:
         query = query.where(DraftInput.status == status)
     rows = session.exec(query.order_by(col(DraftInput.line_no)).limit(limit + 1)).all()
+    items = [DraftInputPublic.model_validate(row) for row in rows[:limit]]
+    if kind == "drama" and items:
+        # 始终以输入行为锚点，空行、重复及失败输入不会因取链完成而消失。
+        # 仅关联当前草稿版本的任务，避免重新编辑后泄漏旧准备结果。
+        prep = session.exec(
+            select(DraftPreparation).where(
+                DraftPreparation.tenant_id == context.tenant_id,
+                DraftPreparation.draft_id == draft_id,
+                DraftPreparation.draft_revision == draft.revision,
+            )
+        ).one_or_none()
+        links = {}
+        if prep and prep.provider_task_id:
+            links = {
+                item.line_no: item
+                for item in session.exec(
+                    select(LinkPreparationItem).where(
+                        LinkPreparationItem.tenant_id == context.tenant_id,
+                        LinkPreparationItem.preparation_id == prep.provider_task_id,
+                        col(LinkPreparationItem.line_no).in_(
+                            [row.line_no for row in items]
+                        ),
+                    )
+                ).all()
+            }
+        dramas = {
+            item.first_line: item
+            for item in session.exec(
+                select(DraftDrama).where(
+                    DraftDrama.tenant_id == context.tenant_id,
+                    DraftDrama.draft_id == draft_id,
+                    col(DraftDrama.first_line).in_([row.line_no for row in items]),
+                )
+            ).all()
+        }
+        for item in items:
+            link = links.get(item.line_no)
+            drama = dramas.get(item.line_no)
+            # 草稿自身的去重和输入校验优先；版权方阶段仅用于展示，不推进任务。
+            terminal_input = item.status in {"empty", "invalid", "duplicate"}
+            item.preparation = DraftInputPreparation(
+                link_status=item.status
+                if terminal_input or link is None
+                else link.status,
+                title=drama.title
+                if drama
+                else link.resolved.get("title")
+                if link
+                else None,
+                reason_code=item.reason_code
+                if terminal_input or link is None
+                else link.resolved.get("error_code"),
+                drama=DraftDramaPublic.model_validate(drama)
+                if drama and not terminal_input
+                else None,
+            )
     return Page(
-        items=[DraftInputPublic.model_validate(row) for row in rows[:limit]],
+        items=items,
         next_cursor=encode_cursor(scope=scope, last_id=str(rows[limit - 1].line_no))
         if len(rows) > limit
         else None,

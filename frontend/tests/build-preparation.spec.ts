@@ -373,18 +373,20 @@ test("后台草稿GET失败不卸载正在编辑的原文，403变为只读并�
 test("准备输入结果按50/100服务端分页", async ({ page }) => {
   const api = await buildsBoundary(page, { inputCount: 151 })
   await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await expect(page.getByRole("button", { name: "查看与调整素材" })).toHaveCount(50)
+  const initialReads = api.requests.filter((r) => r.path.endsWith("/inputs")).length
   await page.getByRole("tab", { name: "剧目输入", exact: true }).click()
   await expect(
     page.getByRole("button", { name: "返回修正", exact: true }),
   ).toHaveCount(50)
-  expect(api.requests.filter((r) => r.path.endsWith("/inputs"))).toHaveLength(1)
+  expect(api.requests.filter((r) => r.path.endsWith("/inputs"))).toHaveLength(initialReads + 1)
   await page.getByRole("button", { name: "下一页", exact: true }).click()
   await expect
     .poll(() => api.requests.filter((r) => r.path.endsWith("/inputs")).length)
-    .toBe(2)
+    .toBe(initialReads + 2)
   expect(
     api.requests
-      .filter((r) => r.path.endsWith("/inputs"))[1]
+      .filter((r) => r.path.endsWith("/inputs"))[initialReads + 1]
       .query.get("cursor"),
   ).toBe("50")
   await page.getByRole("combobox", { name: "每页条数" }).click()
@@ -568,4 +570,172 @@ test("只读成员可看小程序名称但不能选择", async ({ page }) => {
   await expect(
     page.getByRole("button", { name: "选择小程序", exact: true }),
   ).toHaveCount(0)
+})
+
+test("剧目先展示输入，慢速取链与完成状态原位更新，刷新不插入提示或清空表格", async ({
+  page,
+}) => {
+  const api = await buildsBoundary(page)
+  api.summary.status = "DRAFT"
+  api.summary.drama_count = 0
+  let stage: "input" | "link" | "ready" = "input"
+  let hold = false
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  await page.route(`**/build-drafts/${D}/prepare`, async (route) => {
+    api.summary.status = "PREPARING"
+    await route.fulfill({ status: 202, json: { task_id: D, revision: 1 } })
+  })
+  await page.route(`**/build-drafts/${D}/inputs?**`, async (route) => {
+    if (new URL(route.request().url()).searchParams.get("kind") !== "drama")
+      return route.fallback()
+    if (hold) await held
+    await route.fulfill({
+      json: {
+        items: [
+          {
+            id: "stable-input",
+            kind: "drama",
+            line_no: 1,
+            raw_text: "12345",
+            status: stage === "ready" ? "ready" : "pending",
+            reason_code: null,
+            duplicate_of: null,
+            advertiser_id: null,
+            drama_id: null,
+            provider_input_id: null,
+            candidates: [],
+            preparation: {
+              link_status: stage === "ready" ? "ready" : "pending",
+              title: stage === "input" ? null : "确认后的正式剧名",
+              reason_code: null,
+              drama:
+                stage === "ready"
+                  ? {
+                      drama_id: D,
+                      title: "确认后的正式剧名",
+                      first_line: 1,
+                      link_id: D,
+                      matched_count: 12,
+                      material_state: "ready",
+                    }
+                  : null,
+            },
+          },
+        ],
+        next_cursor: null,
+      },
+    })
+  })
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await expect(page.getByText("12345", { exact: true })).toBeVisible()
+  await expect(page.getByText("等待解析", { exact: true })).toBeVisible()
+  const row = page.getByRole("row").nth(1)
+  const originalRow = await row.elementHandle()
+  const top = (await page.getByRole("table").boundingBox())!.y
+  await page.getByRole("button", { name: "解析并准备", exact: true }).click()
+  await expect(page.getByText("正在解析剧目…", { exact: true })).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "准备中…", exact: true }),
+  ).toBeDisabled()
+  await expect(
+    page.getByRole("button", { name: "查询原准备结果" }),
+  ).toHaveCount(0)
+  stage = "link"
+  await expect(page.getByText("正在获取链接…", { exact: true })).toBeVisible()
+  await expect(
+    page.getByText("确认后的正式剧名", { exact: true }),
+  ).toBeVisible()
+  if (process.env.BUILD_SCREENSHOT_DIR) {
+    await page.screenshot({
+      path: `${process.env.BUILD_SCREENSHOT_DIR}/build-link-preparing.png`,
+      fullPage: true,
+      animations: "disabled",
+    })
+  }
+  hold = true
+  stage = "ready"
+  api.summary.status = "READY"
+  api.summary.drama_count = 1
+  const fetchStarted = page.waitForRequest((req) =>
+    req.url().includes(`/build-drafts/${D}/inputs?`),
+  )
+  await page.getByRole("button", { name: "刷新准备结果" }).click()
+  await fetchStarted
+  await expect(
+    page.getByText("确认后的正式剧名", { exact: true }),
+  ).toBeVisible()
+  await expect(page.getByText("正在更新列表…", { exact: true })).toHaveCount(0)
+  await expect(page.locator('table [data-slot="skeleton"]')).toHaveCount(0)
+  expect((await page.getByRole("table").boundingBox())!.y).toBe(top)
+  release()
+  await expect(
+    page.getByRole("button", { name: "已获取", exact: true }),
+  ).toBeVisible()
+  expect(
+    await row.evaluate(
+      (element, previous) => element === previous,
+      originalRow,
+    ),
+  ).toBe(true)
+  await expect(page.getByRole("link", { name: /查看取链/ })).toHaveCount(0)
+  await page.reload()
+  await expect(
+    page.getByRole("button", { name: "已获取", exact: true }),
+  ).toBeVisible()
+  await expect(page.getByText("12345", { exact: true })).toHaveCount(0)
+})
+
+test("取链失败、重复和结果待核实均保留原行，修改草稿后不残留旧剧目", async ({
+  page,
+}) => {
+  const api = await buildsBoundary(page)
+  api.summary.status = "PREPARING"
+  let updated = false
+  await page.route(`**/build-drafts/${D}/inputs?**`, async (route) => {
+    await route.fulfill({
+      json: {
+        items: (updated
+          ? ["pending"]
+          : ["failed", "duplicate", "result_unknown"]
+        ).map((status, i) => ({
+          id: `input-${updated ? "new" : i}`,
+          kind: "drama",
+          line_no: i + 1,
+          raw_text: updated ? "新的输入" : `原始剧目${i + 1}`,
+          status,
+          reason_code: status === "failed" ? "drama_not_found" : null,
+          duplicate_of: status === "duplicate" ? 1 : null,
+          advertiser_id: null,
+          drama_id: null,
+          provider_input_id: null,
+          candidates: [],
+          preparation: {
+            link_status: status,
+            title: null,
+            reason_code: null,
+            drama: null,
+          },
+        })),
+        next_cursor: null,
+      },
+    })
+  })
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await expect(page.getByRole("row")).toHaveCount(4)
+  await expect(page.getByText("未找到完整剧名", { exact: true })).toBeVisible()
+  await expect(page.getByText("合并到第 1 行", { exact: true })).toBeVisible()
+  await expect(page.getByText("结果待核实", { exact: true })).toBeVisible()
+  await expect(page.getByText("尚无已确认剧目", { exact: true })).toHaveCount(0)
+  await page.reload()
+  await expect(page.getByText("结果待核实", { exact: true })).toBeVisible()
+  updated = true
+  api.summary.revision++
+  api.summary.status = "DRAFT"
+  await page.getByRole("button", { name: "刷新准备结果" }).click()
+  await expect(page.getByText("新的输入", { exact: true })).toBeVisible()
+  await expect(page.getByText(/原始剧目/)).toHaveCount(0)
+  await expect(page.getByRole("row")).toHaveCount(2)
 })

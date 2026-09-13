@@ -141,6 +141,8 @@ for (const width of [1440, 900, 390])
     await expect(
       page.getByRole("button", { name: "查看与调整素材" }).first(),
     ).toBeVisible()
+    // 页面变短后鼠标可能停在主按钮上；视觉验收检查默认样式。
+    await page.mouse.move(0, 0)
     await expectWorkspaceLayout(page)
     expect(
       await page.evaluate(

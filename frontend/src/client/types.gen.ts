@@ -609,6 +609,27 @@ export type DraftGroupEditRequest = {
 };
 
 /**
+ * DraftInputPreparation
+ *
+ * 按输入行展示准备进度；未取得链接时不伪造可搭建剧目。
+ */
+export type DraftInputPreparation = {
+    /**
+     * Link Status
+     */
+    link_status: string;
+    /**
+     * Title
+     */
+    title?: string | null;
+    /**
+     * Reason Code
+     */
+    reason_code?: string | null;
+    drama?: DraftDramaPublic | null;
+};
+
+/**
  * DraftInputPublic
  */
 export type DraftInputPublic = {
@@ -658,6 +679,7 @@ export type DraftInputPublic = {
     candidates: Array<{
         [key: string]: unknown;
     }>;
+    preparation?: DraftInputPreparation | null;
 };
 
 /**

@@ -38,6 +38,7 @@ import {
   mutationKey,
   readPendingMutation,
 } from "./api"
+import { BuildDramaTable } from "./BuildDramaTable"
 import { BuildInputPage } from "./BuildInputPage"
 import { BuildLinkSheet } from "./BuildLinkSheet"
 import { DramaMaterialSheet } from "./DramaMaterialSheet"
@@ -484,7 +485,7 @@ function Preparation({
         </Alert>
       )}
       {!!error && <BuildError error={error} />}
-      {pending && (
+      {pending && !busy && (
         <Alert>
           <AlertDescription>
             <p>准备请求结果待核实，请查询原请求；不会重复发起取链。</p>
@@ -506,7 +507,7 @@ function Preparation({
       )}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         {[
-          ["有效剧目", current.drama_count],
+          ["已确认剧目", current.drama_count],
           ["有效账户", current.account_count],
           [
             "剧目输入",
@@ -532,29 +533,19 @@ function Preparation({
         ))}
       </div>
       <p role="status" className="text-sm text-muted-foreground">
-        {current.status === "PREPARING"
-          ? "后台正在解析与准备，可离开后通过本草稿恢复。"
-          : "素材按完整剧名匹配，可在本次草稿中调整。全部有效剧目覆盖同一批全部有效账户。"}
+        已输入 {Object.values(current.input_counts.drama || {}).reduce((a, b) => a + b, 0)} 行
+        · 链接已确认 {current.drama_count} 部 · {current.status === "PREPARING"
+          ? "正在准备…"
+          : current.status === "DRAFT"
+            ? "等待准备"
+            : current.status === "BLOCKED"
+              ? "准备需处理，请查看具体原因"
+              : "准备完成，请核对各项结果"}
       </p>
       {current.error_code && (
         <p role="alert" className="break-all text-sm text-destructive">
           准备异常：{current.error_code}
         </p>
-      )}
-      {current.provider_task_id && (
-        <Button variant="outline" asChild>
-          <Link
-            to="/tenants/$tenantId/providers"
-            params={{ tenantId }}
-            search={{
-              bc_id: bcId,
-              tab: "links",
-              task_id: current.provider_task_id,
-            }}
-          >
-            查看取链核实进度与配置差异
-          </Link>
-        </Button>
       )}
       <Card className="min-w-0">
         <CardHeader className="min-w-0">
@@ -568,16 +559,18 @@ function Preparation({
         </CardHeader>
         <CardContent className="min-w-0">
           {tab === "dramas" ? (
-            <DramaTable
+            <BuildDramaTable
+              key={current.revision}
               tenantId={tenantId}
               bcId={bcId}
               summary={current}
               onMaterial={setMaterial}
               onLink={setLinkId}
+              onInputs={() => setTab("inputs")}
             />
           ) : (
             <InputTable
-              key={tab}
+              key={`${tab}:${current.revision}`}
               tenantId={tenantId}
               bcId={bcId}
               summary={current}
@@ -619,7 +612,7 @@ function Preparation({
                   }
                   onClick={() => void prepare()}
                 >
-                  解析并准备
+                  {current.status === "PREPARING" ? "准备中…" : "解析并准备"}
                 </Button>
                 <Button
                   disabled={
@@ -662,105 +655,6 @@ function Preparation({
     </div>
   )
 }
-function DramaTable({
-  tenantId,
-  bcId,
-  summary,
-  onMaterial,
-  onLink,
-}: {
-  tenantId: string
-  bcId: string
-  summary: DraftSummary
-  onMaterial: (d: DraftDramaPublic) => void
-  onLink: (id: string) => void
-}) {
-  const paging = useCursorPage(),
-    query = useQuery({
-      queryKey: [
-        ...buildKey(tenantId, bcId),
-        summary.draft_id,
-        summary.revision,
-        summary.status,
-        "dramas",
-        paging.cursor,
-        paging.limit,
-      ],
-      queryFn: async ({ signal }) =>
-        (
-          await BuildsService.dramas({
-            path: { tenant_id: tenantId, draft_id: summary.draft_id },
-            query: { cursor: paging.cursor, limit: paging.limit },
-            signal,
-          })
-        ).data,
-      refetchInterval: summary.status === "PREPARING" ? 2000 : false,
-    })
-  return (
-    <div className="flex min-w-0 flex-col gap-4">
-      {query.error ? (
-        <RequestError error={query.error} retry={() => void query.refetch()} />
-      ) : (
-        <ServerTable
-          fetching={query.isFetching}
-          error={query.error}
-          retry={() => void query.refetch()}
-          filtered={false}
-          rows={query.data?.items || []}
-          loading={query.isPending}
-          columns={[
-            {
-              header: "确认剧名 / 输入行",
-              cell: ({ row }) => (
-                <div>
-                  {row.original.title}
-                  <p className="text-xs text-muted-foreground">
-                    第 {row.original.first_line} 行
-                  </p>
-                </div>
-              ),
-            },
-            {
-              header: "推广链接",
-              cell: ({ row }) => (
-                <Button
-                  variant="ghost"
-                  onClick={() => onLink(row.original.link_id)}
-                >
-                  查看推广链接
-                </Button>
-              ),
-            },
-            { header: "匹配素材", accessorKey: "matched_count" },
-            {
-              header: "素材准备",
-              cell: ({ row }) => (
-                <BuildStatus value={row.original.material_state} />
-              ),
-            },
-            {
-              header: "操作",
-              cell: ({ row }) => (
-                <Button
-                  variant="ghost"
-                  onClick={() => onMaterial(row.original)}
-                >
-                  查看与调整素材
-                </Button>
-              ),
-            },
-          ]}
-          emptyTitle="尚无已确认剧目"
-        />
-      )}
-      <Pager
-        paging={paging}
-        nextCursor={query.data?.next_cursor}
-        busy={query.isFetching}
-      />
-    </div>
-  )
-}
 function InputTable({
   tenantId,
   bcId,
@@ -794,7 +688,6 @@ function InputTable({
       ...buildKey(tenantId, bcId),
       summary.draft_id,
       summary.revision,
-      summary.status,
       "inputs",
       kind,
       status,
@@ -816,6 +709,15 @@ function InputTable({
       ).data,
     refetchInterval: summary.status === "PREPARING" ? 2000 : false,
   })
+  // 状态更新后读取最终结果，但保持表格和分页位置。
+  const previousStatus = useRef(summary.status)
+  const refetchInputs = query.refetch
+  useEffect(() => {
+    if (previousStatus.current !== summary.status) {
+      previousStatus.current = summary.status
+      void refetchInputs()
+    }
+  }, [summary.status, refetchInputs])
   const candidateUnknown =
     !!candidate?.provider_input_id &&
     !!sessionStorage.getItem(
@@ -865,6 +767,7 @@ function InputTable({
         ) : (
           <ServerTable
             fetching={query.isFetching}
+            showRefreshStatus={false}
             error={query.error}
             retry={() => void query.refetch()}
             filtered={false}

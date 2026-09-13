@@ -370,6 +370,19 @@ export async function buildsBoundary(
             line_no: i + 1,
             raw_text,
             status: "ready",
+            preparation: kind === "drama" ? {
+              link_status: "ready",
+              title: raw_text,
+              reason_code: null,
+              drama: options.empty ? null : {
+                drama_id: i === 0 ? DR : S,
+                link_id: P,
+                title: raw_text,
+                first_line: i + 1,
+                material_state: "ready",
+                matched_count: i === 0 ? materials.length : 23,
+              },
+            } : null,
             reason_code: null,
             duplicate_of: null,
             advertiser_id:

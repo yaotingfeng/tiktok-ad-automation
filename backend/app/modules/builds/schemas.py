@@ -75,6 +75,25 @@ class DraftSummary(BaseModel):
     updated_at: datetime
 
 
+class DraftDramaPublic(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    drama_id: UUID
+    link_id: UUID
+    title: str
+    first_line: int
+    material_state: str
+    matched_count: int
+
+
+class DraftInputPreparation(BaseModel):
+    """按输入行展示准备进度；未取得链接时不伪造可搭建剧目。"""
+
+    link_status: str
+    title: str | None = None
+    reason_code: str | None = None
+    drama: DraftDramaPublic | None = None
+
+
 class DraftInputPublic(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
@@ -88,16 +107,7 @@ class DraftInputPublic(BaseModel):
     drama_id: UUID | None
     provider_input_id: UUID | None
     candidates: list[dict[str, Any]]
-
-
-class DraftDramaPublic(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    drama_id: UUID
-    link_id: UUID
-    title: str
-    first_line: int
-    material_state: str
-    matched_count: int
+    preparation: DraftInputPreparation | None = None
 
 
 class DraftMaterialPublic(BaseModel):
