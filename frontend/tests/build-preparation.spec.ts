@@ -370,37 +370,35 @@ test("后台草稿GET失败不卸载正在编辑的原文，403变为只读并�
   )
 })
 
-test("准备输入结果按50/100服务端分页", async ({ page }) => {
+test("合并剧目列表按50/100服务端分页", async ({ page }) => {
   const api = await buildsBoundary(page, { inputCount: 151 })
   await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
-  await expect(page.getByRole("button", { name: "查看与调整素材" })).toHaveCount(50)
-  const initialReads = api.requests.filter((r) => r.path.endsWith("/inputs")).length
-  await page.getByRole("tab", { name: "剧目输入", exact: true }).click()
   await expect(
-    page.getByRole("button", { name: "返回修正", exact: true }),
+    page.getByRole("button", { name: "输入详情", exact: true }),
   ).toHaveCount(50)
-  expect(api.requests.filter((r) => r.path.endsWith("/inputs"))).toHaveLength(initialReads + 1)
+  await expect(
+    page.getByRole("tab", { name: "剧目输入", exact: true }),
+  ).toHaveCount(0)
   await page.getByRole("button", { name: "下一页", exact: true }).click()
   await expect
-    .poll(() => api.requests.filter((r) => r.path.endsWith("/inputs")).length)
-    .toBe(initialReads + 2)
-  expect(
-    api.requests
-      .filter((r) => r.path.endsWith("/inputs"))[initialReads + 1]
-      .query.get("cursor"),
-  ).toBe("50")
+    .poll(
+      () =>
+        api.requests.filter(
+          (r) => r.path.endsWith("/inputs") && r.query.get("cursor") === "50",
+        ).length,
+    )
+    .toBe(1)
   await page.getByRole("combobox", { name: "每页条数" }).click()
   await page.getByRole("option", { name: "100 条", exact: true }).click()
   await expect(
-    page.getByRole("button", { name: "返回修正", exact: true }),
+    page.getByRole("button", { name: "输入详情", exact: true }),
   ).toHaveCount(100)
 })
 
 test("版权方候选只提交对应输入ID，并恢复本地准备同步结果", async ({ page }) => {
   const api = await buildsBoundary(page, { candidate: "drama" })
   await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
-  await page.getByRole("tab", { name: "剧目输入", exact: true }).click()
-  await page.getByRole("button", { name: "选择对应剧目", exact: true }).click()
+  await page.getByRole("button", { name: "选择剧目", exact: true }).click()
   await page.getByRole("button").filter({ hasText: "候选正式剧名" }).click()
   await expect
     .poll(
@@ -423,6 +421,16 @@ test("版权方候选只提交对应输入ID，并恢复本地准备同步结果
         ).length,
     )
     .toBe(1)
+  await expect(
+    page.getByRole("button", { name: "选择剧目", exact: true }),
+  ).toHaveCount(0)
+  await page.reload()
+  await expect(
+    page.getByRole("button", { name: "输入详情", exact: true }),
+  ).toHaveCount(2)
+  await expect(
+    page.getByRole("button", { name: "选择剧目", exact: true }),
+  ).toHaveCount(0)
 })
 test("账户歧义展示完整ID并返回原输入修正，不调用版权方候选API", async ({
   page,
@@ -448,20 +456,18 @@ test("未知候选选择关闭重开也不允许重复或改选", async ({ page 
   const api = await buildsBoundary(page, { candidate: "drama" })
   await page.route("**/api/**/candidate", (route) => route.abort("failed"))
   await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
-  await page.getByRole("tab", { name: "剧目输入", exact: true }).click()
-  await page.getByRole("button", { name: "选择对应剧目", exact: true }).click()
+  await page.getByRole("button", { name: "选择剧目", exact: true }).click()
   await page.getByRole("button").filter({ hasText: "候选正式剧名" }).click()
   await expect(
-    page.getByText(
-      "候选选择结果尚待核实，不会重发或改选。请查看原取链任务中的这条输入。",
-      { exact: true },
-    ),
+    page.getByText("选择结果尚待核实，正在刷新状态，请勿重复选择。", {
+      exact: true,
+    }),
   ).toBeVisible()
   await expect(
     page.getByRole("button").filter({ hasText: "候选正式剧名" }),
   ).toBeDisabled()
   await page.keyboard.press("Escape")
-  await page.getByRole("button", { name: "选择对应剧目", exact: true }).click()
+  await page.getByRole("button", { name: "选择剧目", exact: true }).click()
   await expect(
     page.getByRole("button").filter({ hasText: "候选正式剧名" }),
   ).toBeDisabled()
@@ -738,4 +744,53 @@ test("取链失败、重复和结果待核实均保留原行，修改草稿后�
   await expect(page.getByText("新的输入", { exact: true })).toBeVisible()
   await expect(page.getByText(/原始剧目/)).toHaveCount(0)
   await expect(page.getByRole("row")).toHaveCount(2)
+})
+
+test("剧目列表显示版权方ID，原始输入在详情，只有待选择状态出现选择剧目", async ({
+  page,
+}) => {
+  const api = await buildsBoundary(page)
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await expect(
+    page.getByRole("columnheader", { name: "版权方剧目 ID", exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByText("provider-drama-1", { exact: true }),
+  ).toBeVisible()
+  await expect(page.getByRole("table")).not.toContainText(
+    "88888888-8888-4888-8888-888888888888",
+  )
+  await expect(
+    page.getByRole("button", { name: "选择剧目", exact: true }),
+  ).toHaveCount(0)
+  await page
+    .getByRole("button", { name: "输入详情", exact: true })
+    .first()
+    .click()
+  const sheet = page.getByRole("dialog", { name: "输入详情", exact: true })
+  await expect(sheet.getByText("原始输入", { exact: true })).toBeVisible()
+  await expect(
+    sheet.getByText(api.originals.drama[0], { exact: true }),
+  ).toHaveCount(2)
+  await expect(
+    sheet.getByText("provider-drama-1", { exact: true }),
+  ).toBeVisible()
+  expect(api.requests.filter((r) => r.method === "POST")).toHaveLength(0)
+})
+
+test("只读成员可查看剧目详情但不能选择候选", async ({ page }) => {
+  const api = await buildsBoundary(page, { candidate: "drama", viewer: true })
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await expect(
+    page.getByRole("button", { name: "选择剧目", exact: true }),
+  ).toHaveCount(0)
+  await page
+    .getByRole("button", { name: "输入详情", exact: true })
+    .first()
+    .click()
+  await expect(page.getByRole("dialog")).toBeVisible()
+  await expect(
+    page.getByRole("button").filter({ hasText: "候选正式剧名" }),
+  ).toHaveCount(0)
+  expect(api.requests.filter((r) => r.method === "POST")).toHaveLength(0)
 })

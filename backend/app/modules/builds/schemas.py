@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.modules.providers.schemas import DramaCandidate
+
 InputText = Annotated[str, Field(max_length=1000)]
 
 
@@ -89,6 +91,9 @@ class DraftInputPreparation(BaseModel):
     """按输入行展示准备进度；未取得链接时不伪造可搭建剧目。"""
 
     link_status: str
+    external_drama_id: str | None = None
+    provider_input_id: UUID | None = None
+    candidates: list[DramaCandidate] = Field(default_factory=list)
     title: str | None = None
     reason_code: str | None = None
     drama: DraftDramaPublic | None = None

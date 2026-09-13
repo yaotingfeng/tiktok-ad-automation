@@ -619,6 +619,18 @@ export type DraftInputPreparation = {
      */
     link_status: string;
     /**
+     * External Drama Id
+     */
+    external_drama_id?: string | null;
+    /**
+     * Provider Input Id
+     */
+    provider_input_id?: string | null;
+    /**
+     * Candidates
+     */
+    candidates?: Array<DramaCandidate>;
+    /**
      * Title
      */
     title?: string | null;

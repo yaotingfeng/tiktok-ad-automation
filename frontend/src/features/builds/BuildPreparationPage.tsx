@@ -1,12 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { Link, useNavigate, useRouterState } from "@tanstack/react-router"
+import { useNavigate, useRouterState } from "@tanstack/react-router"
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
   BuildsService,
   type DraftDramaPublic,
   type DraftInputPublic,
   type DraftSummary,
-  ProvidersService,
 } from "@/client"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -533,8 +532,13 @@ function Preparation({
         ))}
       </div>
       <p role="status" className="text-sm text-muted-foreground">
-        已输入 {Object.values(current.input_counts.drama || {}).reduce((a, b) => a + b, 0)} 行
-        · 链接已确认 {current.drama_count} 部 · {current.status === "PREPARING"
+        已输入{" "}
+        {Object.values(current.input_counts.drama || {}).reduce(
+          (a, b) => a + b,
+          0,
+        )}{" "}
+        行 · 链接已确认 {current.drama_count} 部 ·{" "}
+        {current.status === "PREPARING"
           ? "正在准备…"
           : current.status === "DRAFT"
             ? "等待准备"
@@ -553,7 +557,6 @@ function Preparation({
             <TabsList>
               <TabsTrigger value="dramas">剧目与素材</TabsTrigger>
               <TabsTrigger value="accounts">账户解析</TabsTrigger>
-              <TabsTrigger value="inputs">剧目输入</TabsTrigger>
             </TabsList>
           </Tabs>
         </CardHeader>
@@ -566,17 +569,17 @@ function Preparation({
               summary={current}
               onMaterial={setMaterial}
               onLink={setLinkId}
-              onInputs={() => setTab("inputs")}
+              write={allowed && !busy && !pending && !pendingMutation}
+              onChanged={() => void prepare()}
+              onEdit={edit}
             />
           ) : (
-            <InputTable
+            <AccountInputTable
               key={`${tab}:${current.revision}`}
               tenantId={tenantId}
               bcId={bcId}
               summary={current}
-              kind={tab === "accounts" ? "account" : "drama"}
               write={allowed}
-              onChanged={() => void prepare()}
               onEdit={edit}
             />
           )}
@@ -655,41 +658,29 @@ function Preparation({
     </div>
   )
 }
-function InputTable({
+function AccountInputTable({
   tenantId,
   bcId,
   summary,
-  kind,
   write,
-  onChanged,
   onEdit,
 }: {
   tenantId: string
   bcId: string
   summary: DraftSummary
-  kind: "drama" | "account"
   write: boolean
-  onChanged: () => void
   onEdit: () => void
 }) {
-  const paging = useCursorPage(),
-    [status, setStatus] = useState("all"),
-    [candidate, setCandidate] = useState<DraftInputPublic | null>(null),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState<unknown>(),
-    ctrl = useRef(new AbortController())
-  useEffect(() => {
-    const controller = new AbortController()
-    ctrl.current = controller
-    return () => controller.abort()
-  }, [])
+  const paging = useCursorPage()
+  const [status, setStatus] = useState("all")
+  const [candidate, setCandidate] = useState<DraftInputPublic | null>(null)
   const query = useQuery({
     queryKey: [
       ...buildKey(tenantId, bcId),
       summary.draft_id,
       summary.revision,
       "inputs",
-      kind,
+      "account",
       status,
       paging.cursor,
       paging.limit,
@@ -699,7 +690,7 @@ function InputTable({
         await BuildsService.inputs({
           path: { tenant_id: tenantId, draft_id: summary.draft_id },
           query: {
-            kind,
+            kind: "account",
             status: status === "all" ? undefined : status,
             cursor: paging.cursor,
             limit: paging.limit,
@@ -709,7 +700,6 @@ function InputTable({
       ).data,
     refetchInterval: summary.status === "PREPARING" ? 2000 : false,
   })
-  // 状态更新后读取最终结果，但保持表格和分页位置。
   const previousStatus = useRef(summary.status)
   const refetchInputs = query.refetch
   useEffect(() => {
@@ -718,36 +708,6 @@ function InputTable({
       void refetchInputs()
     }
   }, [summary.status, refetchInputs])
-  const candidateUnknown =
-    !!candidate?.provider_input_id &&
-    !!sessionStorage.getItem(
-      `build-candidate:${tenantId}:${candidate.provider_input_id}`,
-    )
-  async function choose(externalId: string) {
-    if (!candidate?.provider_input_id || busy || !write || candidateUnknown)
-      return
-    const key = `build-candidate:${tenantId}:${candidate.provider_input_id}`
-    setBusy(true)
-    setError(undefined)
-    try {
-      sessionStorage.setItem(key, externalId)
-      await ProvidersService.postCandidate({
-        path: { tenant_id: tenantId, input_id: candidate.provider_input_id },
-        body: { external_drama_id: externalId },
-        signal: ctrl.current.signal,
-      })
-      sessionStorage.removeItem(key)
-      setCandidate(null)
-      onChanged()
-      void query.refetch()
-    } catch (e) {
-      if (!unknownOutcome(e)) sessionStorage.removeItem(key)
-      reportError(e)
-      setError(e)
-    } finally {
-      setBusy(false)
-    }
-  }
   return (
     <div className="flex min-w-0 flex-col gap-4">
       <FilterSelect
@@ -758,149 +718,93 @@ function InputTable({
           paging.reset()
         }}
         choices={Object.fromEntries(
-          Object.keys(summary.input_counts[kind] || {}).map((k) => [k, k]),
+          Object.keys(summary.input_counts.account || {}).map((k) => [k, k]),
         )}
       />
-      <div className="flex min-w-0 flex-col gap-4">
-        {query.error ? (
-          <RequestError error={query.error} />
-        ) : (
-          <ServerTable
-            fetching={query.isFetching}
-            showRefreshStatus={false}
-            error={query.error}
-            retry={() => void query.refetch()}
-            filtered={false}
-            rows={query.data?.items || []}
-            loading={query.isPending}
-            columns={[
-              { header: "输入行", accessorKey: "line_no" },
-              { header: "原始文本", accessorKey: "raw_text" },
-              {
-                header: "结果",
-                cell: ({ row }) => (
-                  <>
-                    <BuildStatus value={row.original.status} />
-                    <p className="break-all text-xs text-muted-foreground">
-                      <BuildReason code={row.original.reason_code} />
-                      {row.original.duplicate_of != null &&
-                        ` · 合并到第 ${row.original.duplicate_of} 行`}
-                    </p>
-                  </>
-                ),
-              },
-              {
-                header: kind === "account" ? "账户 ID" : "剧目 ID",
-                cell: ({ row }) => (
-                  <span className="break-all font-mono text-xs">
-                    {row.original.advertiser_id ||
-                      row.original.drama_id ||
-                      "尚未解析"}
-                  </span>
-                ),
-              },
-              {
-                header: "操作",
-                cell: ({ row }) =>
-                  write && (
-                    <Button
-                      variant="ghost"
-                      onClick={() =>
-                        row.original.candidates.length
-                          ? setCandidate(row.original)
-                          : onEdit()
-                      }
-                    >
-                      {row.original.candidates.length
-                        ? kind === "account"
-                          ? "查看账户候选"
-                          : "选择对应剧目"
-                        : "返回修正"}
-                    </Button>
-                  ),
-              },
-            ]}
-            emptyTitle="没有符合条件的输入"
-          />
-        )}
-        <Pager
-          paging={paging}
-          nextCursor={query.data?.next_cursor}
-          busy={query.isFetching}
-        />
-      </div>
+      <ServerTable
+        fetching={query.isFetching}
+        showRefreshStatus={false}
+        error={query.error}
+        retry={() => void query.refetch()}
+        filtered={false}
+        rows={query.data?.items || []}
+        loading={query.isPending}
+        columns={[
+          { header: "输入行", accessorKey: "line_no" },
+          { header: "原始文本", accessorKey: "raw_text" },
+          {
+            header: "结果",
+            cell: ({ row }) => (
+              <>
+                <BuildStatus value={row.original.status} />
+                <p className="break-all text-xs text-muted-foreground">
+                  <BuildReason code={row.original.reason_code} />
+                  {row.original.duplicate_of != null &&
+                    ` · 合并到第 ${row.original.duplicate_of} 行`}
+                </p>
+              </>
+            ),
+          },
+          {
+            header: "账户 ID",
+            cell: ({ row }) => (
+              <span className="break-all font-mono text-xs">
+                {row.original.advertiser_id || "尚未解析"}
+              </span>
+            ),
+          },
+          {
+            header: "操作",
+            cell: ({ row }) =>
+              write && (
+                <Button
+                  variant="ghost"
+                  onClick={() =>
+                    row.original.candidates.length
+                      ? setCandidate(row.original)
+                      : onEdit()
+                  }
+                >
+                  {row.original.candidates.length ? "查看账户候选" : "返回修正"}
+                </Button>
+              ),
+          },
+        ]}
+        emptyTitle="没有符合条件的输入"
+      />
+      <Pager
+        paging={paging}
+        nextCursor={query.data?.next_cursor}
+        busy={query.isFetching}
+      />
       <Dialog
         open={!!candidate}
         onOpenChange={(open) => {
-          if (!open && !busy) setCandidate(null)
+          if (!open) setCandidate(null)
         }}
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>
-              {kind === "drama" ? "选择对应剧目" : "账户名称存在歧义"}
-            </DialogTitle>
+            <DialogTitle>账户名称存在歧义</DialogTitle>
             <DialogDescription>
               仅继续处理第 {candidate?.line_no} 行：{candidate?.raw_text}
             </DialogDescription>
           </DialogHeader>
-          {!!error && <BuildError error={error} />}
-          {candidateUnknown && !busy && (
-            <Alert>
-              <AlertDescription>
-                <p>
-                  候选选择结果尚待核实，不会重发或改选。请查看原取链任务中的这条输入。
-                </p>
-                {summary.provider_task_id && (
-                  <Button variant="outline" asChild>
-                    <Link
-                      to="/tenants/$tenantId/providers"
-                      params={{ tenantId }}
-                      search={{
-                        bc_id: bcId,
-                        tab: "links",
-                        task_id: summary.provider_task_id,
-                      }}
-                    >
-                      查看原取链任务
-                    </Link>
-                  </Button>
-                )}
-              </AlertDescription>
-            </Alert>
-          )}
-          <div className="max-h-80 space-y-2 overflow-y-auto">
+          <div className="flex max-h-80 flex-col gap-2 overflow-y-auto">
             {candidate?.candidates.map((item, index) => (
               <Button
-                key={String(item.external_drama_id || index)}
+                key={String(item.advertiser_id || index)}
                 className="h-auto w-full justify-start whitespace-normal text-left"
                 variant="outline"
-                disabled={
-                  busy ||
-                  candidateUnknown ||
-                  (kind === "drama"
-                    ? typeof item.external_drama_id !== "string"
-                    : typeof item.advertiser_id !== "string")
-                }
+                disabled={!write || typeof item.advertiser_id !== "string"}
                 onClick={() => {
-                  if (kind === "drama")
-                    void choose(String(item.external_drama_id))
-                  else {
-                    void navigator.clipboard.writeText(
-                      String(item.advertiser_id),
-                    )
-                    setCandidate(null)
-                    onEdit()
-                  }
+                  void navigator.clipboard.writeText(String(item.advertiser_id))
+                  setCandidate(null)
+                  onEdit()
                 }}
               >
-                {kind === "account"
-                  ? "复制账户 ID 并返回修正"
-                  : String(item.title || "名称待核实")}{" "}
-                ·{" "}
-                {String(
-                  item.external_drama_id || item.advertiser_id || "ID 待核实",
-                )}
+                复制账户 ID 并返回修正 ·{" "}
+                {String(item.advertiser_id || "ID 待核实")}
               </Button>
             ))}
           </div>

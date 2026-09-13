@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import {
   BuildsService,
   type DraftDramaPublic,
@@ -9,6 +9,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Pager, ServerTable, useCursorPage } from "@/features/tenants/shared"
 import { buildKey } from "./api"
+import { canChooseDrama, DramaInputSheet } from "./DramaInputSheet"
 import { BuildReason, BuildStatus } from "./presentation"
 
 function linkLabel(input: DraftInputPublic, status: DraftSummary["status"]) {
@@ -53,16 +54,21 @@ export function BuildDramaTable({
   summary,
   onMaterial,
   onLink,
-  onInputs,
+  write,
+  onChanged,
+  onEdit,
 }: {
   tenantId: string
   bcId: string
   summary: DraftSummary
   onMaterial: (drama: DraftDramaPublic) => void
   onLink: (id: string) => void
-  onInputs: () => void
+  write: boolean
+  onChanged: () => void
+  onEdit: () => void
 }) {
   const paging = useCursorPage()
+  const [detailId, setDetailId] = useState<string | null>(null)
   const query = useQuery({
     // 状态变化仍沿用同一版本的数据，避免 PREPARING → READY 清空表格。
     queryKey: [
@@ -81,7 +87,7 @@ export function BuildDramaTable({
           signal,
         })
       ).data,
-    refetchInterval: summary.status === "PREPARING" ? 2000 : false,
+    refetchInterval: summary.status === "PREPARING" || detailId ? 2000 : false,
   })
   const previousStatus = useRef(summary.status)
   const refetch = query.refetch
@@ -91,6 +97,7 @@ export function BuildDramaTable({
       void refetch()
     }
   }, [summary.status, refetch])
+  const detail = query.data?.items.find((input) => input.id === detailId)
   return (
     <div className="flex min-w-0 flex-col gap-4">
       <ServerTable
@@ -115,6 +122,14 @@ export function BuildDramaTable({
                   第 {row.original.line_no} 行
                 </p>
               </div>
+            ),
+          },
+          {
+            header: "版权方剧目 ID",
+            cell: ({ row }) => (
+              <span className="break-all">
+                {row.original.preparation?.external_drama_id || "—"}
+              </span>
             ),
           },
           {
@@ -174,34 +189,45 @@ export function BuildDramaTable({
             cell: ({ row }) => {
               const input = row.original
               const drama = input.preparation?.drama
-              if (drama)
-                return (
-                  <Button variant="ghost" onClick={() => onMaterial(drama)}>
-                    查看与调整素材
+              return (
+                <div className="flex flex-wrap gap-1">
+                  {drama && (
+                    <Button variant="ghost" onClick={() => onMaterial(drama)}>
+                      查看与调整素材
+                    </Button>
+                  )}
+                  <Button variant="ghost" onClick={() => setDetailId(input.id)}>
+                    {write && canChooseDrama(input) ? "选择剧目" : "输入详情"}
                   </Button>
-                )
-              if (
-                [
-                  "needs_resolution",
-                  "failed",
-                  "invalid",
-                  "not_found",
-                  "config_conflict",
-                  "blocked_auth",
-                ].includes(input.preparation?.link_status || input.status)
-              ) {
-                return (
-                  <Button variant="ghost" onClick={onInputs}>
-                    查看输入问题
-                  </Button>
-                )
-              }
-              return "—"
+                  {write &&
+                    ["failed", "invalid", "not_found"].includes(
+                      input.preparation?.link_status || input.status,
+                    ) && (
+                      <Button variant="ghost" onClick={onEdit}>
+                        返回修正
+                      </Button>
+                    )}
+                </div>
+              )
             },
           },
         ]}
         emptyTitle="尚未输入剧目"
       />
+      {detail && (
+        <DramaInputSheet
+          key={detail.id}
+          tenantId={tenantId}
+          input={detail}
+          write={write}
+          onClose={() => setDetailId(null)}
+          onChanged={() => {
+            void query.refetch()
+            onChanged()
+          }}
+          onRefresh={query.refetch}
+        />
+      )}
       <Pager
         paging={paging}
         nextCursor={query.data?.next_cursor}

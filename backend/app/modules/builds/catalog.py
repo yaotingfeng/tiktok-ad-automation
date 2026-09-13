@@ -28,7 +28,7 @@ from app.modules.builds.schemas import (
     DraftSummary,
 )
 from app.modules.materials.models import MaterialFile
-from app.modules.providers.models import LinkPreparationItem
+from app.modules.providers.models import LinkPreparationItem, ProviderDrama
 from app.modules.providers.schemas import display_config
 
 
@@ -161,9 +161,17 @@ def inputs_page(
                 ).all()
             }
         dramas = {
-            item.first_line: item
-            for item in session.exec(
-                select(DraftDrama).where(
+            item.first_line: (item, external_id)
+            for item, external_id in session.exec(
+                select(DraftDrama, ProviderDrama.external_drama_id)
+                .join(
+                    ProviderDrama,
+                    (col(ProviderDrama.tenant_id) == DraftDrama.tenant_id)
+                    & (col(ProviderDrama.id) == DraftDrama.drama_id),
+                )
+                .where(
+                    ProviderDrama.connection_id == draft.provider_connection_id,
+                    ProviderDrama.application_id == draft.application_id,
                     DraftDrama.tenant_id == context.tenant_id,
                     DraftDrama.draft_id == draft_id,
                     col(DraftDrama.first_line).in_([row.line_no for row in items]),
@@ -172,10 +180,19 @@ def inputs_page(
         }
         for item in items:
             link = links.get(item.line_no)
-            drama = dramas.get(item.line_no)
+            drama, external_id = dramas.get(item.line_no, (None, None))
             # 草稿自身的去重和输入校验优先；版权方阶段仅用于展示，不推进任务。
             terminal_input = item.status in {"empty", "invalid", "duplicate"}
+            # 选择入口以当前版权方任务状态为准，不能用历史候选数组判断。
+            selectable = bool(
+                link and link.status == "needs_resolution" and not terminal_input
+            )
             item.preparation = DraftInputPreparation(
+                external_drama_id=link.resolved.get("external_drama_id")
+                if link
+                else external_id,
+                provider_input_id=link.id if link else None,
+                candidates=link.resolved.get("candidates", []) if selectable else [],
                 link_status=item.status
                 if terminal_input or link is None
                 else link.status,

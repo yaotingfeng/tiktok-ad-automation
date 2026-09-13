@@ -121,6 +121,7 @@ export async function buildsBoundary(
     error_code: options.previewError || null,
     created_at: "2026-09-09T00:00:00Z",
   }
+  let candidateSelected = false
   let materials = Array.from({ length: 23 }, (_, i) => ({
     material_id: `99999999-9999-4999-8999-${String(i + 1).padStart(12, "0")}`,
     file_name: `完整剧名1-${String(i + 1).padStart(2, "0")}.mp4`,
@@ -327,7 +328,10 @@ export async function buildsBoundary(
       }
       return reply(summary)
     }
-    if (path.endsWith("/candidate")) return reply({ task_id: P }, 202)
+    if (path.endsWith("/candidate")) {
+      candidateSelected = true
+      return reply({ task_id: P }, 202)
+    }
     if (path.endsWith(`/build-drafts/${D}/minis`)) {
       if (method === "POST") {
         summary.revision++
@@ -370,19 +374,45 @@ export async function buildsBoundary(
             line_no: i + 1,
             raw_text,
             status: "ready",
-            preparation: kind === "drama" ? {
-              link_status: "ready",
-              title: raw_text,
-              reason_code: null,
-              drama: options.empty ? null : {
-                drama_id: i === 0 ? DR : S,
-                link_id: P,
-                title: raw_text,
-                first_line: i + 1,
-                material_state: "ready",
-                matched_count: i === 0 ? materials.length : 23,
-              },
-            } : null,
+            preparation:
+              kind === "drama"
+                ? {
+                    link_status:
+                      options.candidate === "drama" &&
+                      i === 0 &&
+                      !candidateSelected
+                        ? "needs_resolution"
+                        : "ready",
+                    external_drama_id: `provider-drama-${i + 1}`,
+                    provider_input_id: P,
+                    candidates:
+                      options.candidate === "drama" && i === 0
+                        ? [
+                            {
+                              external_drama_id: "external-drama-01",
+                              title: "候选正式剧名",
+                              language: "en",
+                            },
+                          ]
+                        : [],
+                    title: raw_text,
+                    reason_code: null,
+                    drama:
+                      options.empty ||
+                      (options.candidate === "drama" &&
+                        i === 0 &&
+                        !candidateSelected)
+                        ? null
+                        : {
+                            drama_id: i === 0 ? DR : S,
+                            link_id: P,
+                            title: raw_text,
+                            first_line: i + 1,
+                            material_state: "ready",
+                            matched_count: i === 0 ? materials.length : 23,
+                          },
+                  }
+                : null,
             reason_code: null,
             duplicate_of: null,
             advertiser_id:

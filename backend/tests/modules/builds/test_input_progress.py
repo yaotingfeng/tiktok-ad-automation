@@ -33,7 +33,22 @@ def test_inputs_visible_before_preparation_and_link_status_before_draft_sync(
             LinkPreparationItem.line_no == 1,
         )
     ).one()
-    link.resolved = {**link.resolved, "title": "Moon", "error_code": None}
+    link.resolved = {
+        **link.resolved,
+        "title": "Moon",
+        "external_drama_id": "provider-123",
+        "error_code": None,
+        "candidates": [{"title": "Moon", "external_drama_id": "provider-123"}],
+    }
+    link.status = "needs_resolution"
+    session.flush()
+    candidate = (
+        catalog.inputs_page(session, context=context, draft_id=draft, kind="drama")
+        .items[0]
+        .preparation
+    )
+    assert candidate.provider_input_id == link.id
+    assert candidate.candidates[0].external_drama_id == "provider-123"
     link.status = "creating"
     session.flush()
     page = catalog.inputs_page(
@@ -41,6 +56,8 @@ def test_inputs_visible_before_preparation_and_link_status_before_draft_sync(
     )
     assert [row.id for row in page.items] == identities
     assert page.items[0].preparation.title == "Moon"
+    assert page.items[0].preparation.external_drama_id == "provider-123"
+    assert page.items[0].preparation.candidates == []
     assert page.items[0].preparation.link_status == "creating"
     assert page.items[0].preparation.drama is None
     assert page.next_cursor == cursor
@@ -67,6 +84,8 @@ def test_ready_and_duplicate_inputs_remain_in_order_and_new_input_clears_progres
     )
     assert [row.line_no for row in page.items] == [1, 2]
     assert page.items[0].preparation.drama.title == "Moon"
+    assert page.items[0].preparation.external_drama_id == "1"
+    assert page.items[0].preparation.candidates == []
     assert page.items[1].preparation.link_status == "duplicate"
     assert page.items[1].preparation.drama is None
     assert page.items[1].duplicate_of == 1
@@ -89,6 +108,8 @@ def test_ready_and_duplicate_inputs_remain_in_order_and_new_input_clears_progres
     assert len(updated.items) == 1
     assert updated.items[0].raw_text == "New drama"
     assert updated.items[0].preparation.title is None
+    assert updated.items[0].preparation.external_drama_id is None
+    assert updated.items[0].preparation.candidates == []
     assert updated.items[0].preparation.drama is None
     with pytest.raises(DomainError, match="分页|游标"):
         catalog.inputs_page(
