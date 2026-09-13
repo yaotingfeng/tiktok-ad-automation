@@ -12,7 +12,7 @@ class DraftMutationRequest(SQLModel, table=True):
             ["tenant_id", "draft_id"], ["build_draft.tenant_id", "build_draft.id"]
         ),
         CheckConstraint(
-            "kind IN ('update','groups') AND applied_revision > 0",
+            "kind IN ('update','groups','minis') AND applied_revision > 0",
             name="ck_draft_mutation_result",
         ),
     )

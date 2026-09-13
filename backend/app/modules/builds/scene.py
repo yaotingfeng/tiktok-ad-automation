@@ -61,7 +61,7 @@ def _require_bounded_worker() -> None:
         raise DomainError("scene_worker_unbounded", "场景刷新需要有界后台任务")
 
 
-SCENE_CONTRACT_REVISION = "dual-channel-scene-2026-09-13-v2"
+SCENE_CONTRACT_REVISION = "dual-channel-scene-2026-09-13-v3"
 
 
 def scene_scope_basis(*, route: FrozenTikTokRoute, business: dict[str, Any]) -> str:
@@ -81,14 +81,13 @@ def scene_scope_basis(*, route: FrozenTikTokRoute, business: dict[str, Any]) -> 
     return sha256(json.dumps(basis, sort_keys=True).encode()).hexdigest()
 
 
-def _application_scope(
+def _account_scope(
     session: Session,
     *,
     context: TenantContext,
     bc_id: str,
     advertiser_id: str,
-    provider_connection_id: UUID,
-    application_id: str,
+    minis_id: str | None,
     route: FrozenTikTokRoute,
     lock: bool = False,
 ) -> dict[str, Any]:
@@ -135,37 +134,11 @@ def _application_scope(
             advertiser_id=advertiser_id,
             capability="read",
         )
-    provider = session.get(
-        ProviderConnection, provider_connection_id, populate_existing=True
-    )
-    app = session.exec(
-        select(ProviderApplication)
-        .where(
-            ProviderApplication.tenant_id == context.tenant_id,
-            ProviderApplication.connection_id == provider_connection_id,
-            ProviderApplication.external_id == application_id,
-        )
-        .execution_options(populate_existing=True)
-    ).one_or_none()
-    if (
-        not provider
-        or provider.tenant_id != context.tenant_id
-        or provider.status != "active"
-        or not provider.verification_token
-        or app is None
-        or app.channel_config.get("verification_token")
-        != str(provider.verification_token)
-    ):
-        raise DomainError("scene_link_unavailable", "版权方应用需要重新核实")
     business = {
         "advertiser_id": advertiser_id,
         "currency": access.currency,
         "timezone": access.timezone,
-        "provider_id": str(provider.id),
-        "provider_version": provider.credential_version,
-        "provider_verification": str(provider.verification_token),
-        "application_id": app.external_id,
-        "minis_id": app.tiktok_minis_id,
+        "minis_id": minis_id,
     }
     return {
         "access": AccountAccess(
@@ -177,9 +150,7 @@ def _application_scope(
         ),
         "connection": connection,
         "grant": grant,
-        "provider": provider,
-        "application": app,
-        "minis_id": app.tiktok_minis_id,
+        "minis_id": minis_id,
         "route": route,
         "basis": scene_scope_basis(route=route, business=business),
     }
@@ -212,13 +183,36 @@ def _scope(
         raise DomainError("resource_not_found", "当前租户推广链接不存在")
     if link.status != "ready" or not link.verified_at:
         raise DomainError("scene_link_unavailable", "推广链接需要重新核实")
-    return _application_scope(
+    provider = session.get(
+        ProviderConnection, link.connection_id, populate_existing=True
+    )
+    app = session.exec(
+        select(ProviderApplication)
+        .where(
+            ProviderApplication.tenant_id == context.tenant_id,
+            ProviderApplication.connection_id == link.connection_id,
+            ProviderApplication.external_id == link.application_id,
+        )
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if (
+        not provider
+        or provider.tenant_id != context.tenant_id
+        or provider.status != "active"
+        or not provider.verification_token
+        or app is None
+        or app.channel_config.get("verification_token")
+        != str(provider.verification_token)
+    ):
+        raise DomainError("scene_link_unavailable", "版权方应用需要重新核实")
+    from .mini_targets import link_url, resolved_target
+
+    return _account_scope(
         session,
         context=context,
         bc_id=bc_id,
         advertiser_id=advertiser_id,
-        provider_connection_id=link.connection_id,
-        application_id=link.application_id,
+        minis_id=resolved_target(session, context=context, url=link_url(link)),
         route=route,
         lock=lock,
     )
@@ -256,7 +250,11 @@ def _merge(
     matches = ([] if first else previous.get("matches", [])) + page["matches"]
     # Full-list uniqueness proof stays in bounded per-page evidence, not this
     # compact accumulator or public SceneContext.
-    compact = {key: value for key, value in page.items() if key != "item_id_hashes"}
+    compact = {
+        key: value
+        for key, value in page.items()
+        if key not in {"item_id_hashes", "options"}
+    }
     return {**compact, "seen": seen, "matches": matches[:2]}
 
 
@@ -284,9 +282,12 @@ def _assemble_scene(
     cta: dict[str, Any] = {}
     constraints, missing = limits.constraints_for(scope["access"].currency)
     reasons.extend(missing)
+    if not scope["minis_id"]:
+        reasons.append("minis_selection_required")
     matches = facts.get("minis", {}).get("matches", [])
     if (
-        len(matches) == 1
+        bool(scope["minis_id"])
+        and len(matches) == 1
         and matches[0]["status"] == "ACTIVE"
         and matches[0]["type"] == "MINI_SERIES"
     ):
@@ -412,6 +413,8 @@ def read_scene_context(
         if job is not None:
             if job.status == "COMPLETE" and job.expires_at and job.expires_at > now:
                 facts, evidence_ids = job.facts, (job.id,)
+                if job.facts.get("minis_catalog_job_id"):
+                    evidence_ids += (UUID(job.facts["minis_catalog_job_id"]),)
             else:
                 reasons.append(
                     "scene_evidence_expired"

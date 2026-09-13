@@ -132,9 +132,10 @@ class SceneJob(SQLModel, table=True):
     frozen_route: dict[str, Any] | None = Field(
         default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True)
     )
-    provider_connection_id: UUID
-    application_id: str = Field(max_length=255)
-    minis_id: str = Field(max_length=255)
+    # 仅保留历史场景的来源记录；新场景按账户与 Mini 复用。
+    provider_connection_id: UUID | None = None
+    application_id: str | None = Field(default=None, max_length=255)
+    minis_id: str | None = Field(default=None, max_length=255)
     scope_basis: str = Field(max_length=64)
     capability_job_id: UUID | None = None
     status: str = Field(default="PENDING", max_length=16)

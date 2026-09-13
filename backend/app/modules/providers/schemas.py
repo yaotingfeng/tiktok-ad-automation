@@ -230,8 +230,3 @@ class PreparationAccepted(BaseModel):
 class CandidateSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
     external_drama_id: str = Field(min_length=1, max_length=255)
-
-
-class ProviderMinisUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    minis_id: str = Field(min_length=1, max_length=128)

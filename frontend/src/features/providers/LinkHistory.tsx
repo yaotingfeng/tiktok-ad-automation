@@ -434,10 +434,7 @@ function HistoryDetail({
           <p>
             {row.application_name} · {row.application_id}
           </p>
-          <p>
-            {row.language || "语言待核实"} · Minis：
-            {row.tiktok_minis_id || "待核实"}
-          </p>
+          <p>{row.language || "语言待核实"}</p>
           <p>
             {states[row.status as keyof typeof states] || row.status} · 版本{" "}
             {row.version} · 最近验证：{displayTime(row.verified_at)}

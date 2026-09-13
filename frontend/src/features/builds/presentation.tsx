@@ -96,13 +96,15 @@ export function BuildError({ error }: { error: unknown }) {
             : "操作未完成"}
       </AlertTitle>
       <AlertDescription>
-        {status === 403
-          ? "当前角色无权执行此操作，请联系管理员。"
-          : status === 409
-            ? "本地输入已保留。请先查看最新版本，核对差异后重新应用修改。"
-            : code === "request_not_found"
-              ? "尚未查到原请求，不能据此重新创建。请继续核实。"
-              : "请求未完成，输入已保留。请核实当前状态。"}
+        {typeof code === "string" && reasonLabels[code]
+          ? reasonLabels[code]
+          : status === 403
+            ? "当前角色无权执行此操作，请联系管理员。"
+            : status === 409
+              ? "本地输入已保留。请先查看最新版本，核对差异后重新应用修改。"
+              : code === "request_not_found"
+                ? "尚未查到原请求，不能据此重新创建。请继续核实。"
+                : "请求未完成，输入已保留。请核实当前状态。"}
         {typeof code === "string" && (
           <span className="block break-all text-xs">{code}</span>
         )}
@@ -145,6 +147,12 @@ export function BuildSteps({ step }: { step: 1 | 2 | 3 }) {
 }
 
 export const reasonLabels: Record<string, string> = {
+  minis_selection_required: "请在推广小程序区域按名称选择后继续",
+  minis_catalog_stale: "小程序目录已过期，请更新可用小程序后重新选择",
+  minis_link_conflict: "所选小程序与推广链接指向不一致，请分开搭建",
+  minis_unavailable: "所选小程序不在当前账户的可用目录中",
+  minis_links_unavailable: "请先完成剧目推广链接准备",
+
   recovery_no_candidates: "当前没有需要重试或核查的步骤。",
   currency_mismatch: "账户币种与策略不一致",
   materials_missing: "未匹配到可用素材",

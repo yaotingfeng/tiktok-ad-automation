@@ -207,3 +207,15 @@ def publish_api_directory(
     run.claim_id = run.claimed_until = None
     session.add_all([run, connection])
     session.flush()
+
+    from .directory_capabilities import publish_directory_capabilities
+
+    for bc_id in bcs:
+        publish_directory_capabilities(
+            session,
+            context=context,
+            run=run,
+            connection=connection,
+            bc_id=bc_id,
+            facts=facts,
+        )

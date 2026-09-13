@@ -43,6 +43,12 @@ def test_205_identities_and_minis_are_shared_only_after_ten_complete_pages(
                 ]
             if number == 1:
                 values[0] = selected
+            if resource == "minis" and number == 5:
+                values[-1] = {
+                    **selected,
+                    "minis_id": "last-page-mini",
+                    "minis_name": "Last page",
+                }
             payload = page(values, key=key, number=number, total=5)
             payload["page_info"]["total_number"] = 205
             wire[1].append(payload)
@@ -59,6 +65,13 @@ def test_205_identities_and_minis_are_shared_only_after_ten_complete_pages(
             select(SceneJobPage).where(SceneJobPage.job_id == job.id)
         ).all()
         assert len(pages) == 13
+        from app.modules.builds.mini_selection import catalog_options
+
+        assert catalog_options(session, job, page=5)[0]["name"] == "Last page"
+        assert (
+            catalog_options(session, job, minis_id="last-page-mini")[0]["name"]
+            == "Last page"
+        )
         assert all(len(p.facts.get("item_id_hashes", [])) <= 50 for p in pages)
     assert len(wire[0]) == 14
 

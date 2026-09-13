@@ -68,6 +68,7 @@ class IdentityFacts(PaginatedFacts):
 
 class MinisMatch(FrozenFacts):
     minis_id: Text
+    name: Text | None = None
     status: Literal["ACTIVE", "INACTIVE"]
     type: Literal["MINI_SERIES", "MINI_GAME"]
     regions: tuple[Annotated[StrictStr, Field(pattern=r"^[A-Z]{2}$")], ...]
@@ -75,6 +76,7 @@ class MinisMatch(FrozenFacts):
 
 class MinisFacts(PaginatedFacts):
     matches: tuple[MinisMatch, ...]
+    options: tuple[MinisMatch, ...] = Field(default=(), max_length=50)
 
 
 class CtaRecommendation(FrozenFacts):

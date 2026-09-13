@@ -327,12 +327,13 @@ def finish(context, run_id, redis_client):
     raise AssertionError(f"discovery did not finish: {state}")
 
 
+@pytest.mark.parametrize("account_role", ["ADMIN", "OPERATOR", "ANALYST"])
 def test_complete_http_directory_publishes_once_atomically(
-    discovery_scenario, catalog_wire, redis_client
+    discovery_scenario, catalog_wire, redis_client, account_role
 ):
     context, run_id, bc_id = discovery_scenario
     ids = (f"ad-{context.tenant_id}",)
-    enqueue_directory(catalog_wire, bc_id, ids)
+    enqueue_directory(catalog_wire, bc_id, ids, role=account_role)
     assert step(context, run_id, redis_client, initial=True) == (
         "RUNNING",
         "AUTHORIZED",
@@ -369,7 +370,7 @@ def test_complete_http_directory_publishes_once_atomically(
         assert authorization.permission_summary == {
             "read_authorized": True,
             "upload_authorized": True,
-            "build_authorized": None,
+            "build_authorized": True,
         }
         access = own.exec(
             select(BCAccountAccess).where(
@@ -377,8 +378,19 @@ def test_complete_http_directory_publishes_once_atomically(
             )
         ).one()
         assert access.active and access.authorized and access.in_bc
-        assert not access.can_build and not access.can_upload
-        assert access.permission_state == "UNKNOWN"
+        assert access.can_build == access.can_upload == (account_role != "ANALYST")
+        assert access.permission_state == "VERIFIED"
+        from app.modules.accounts.capabilities import get_capability_evidence
+
+        proof = get_capability_evidence(
+            own,
+            context=context,
+            bc_id=bc_id,
+            advertiser_id=ids[0],
+            connection_id=connection.id,
+        )
+        assert proof is not None and proof.scope_verified
+        assert proof.can_build == proof.can_upload == (account_role != "ANALYST")
         assert own.get(BCConnectionBinding, (context.tenant_id, bc_id, connection.id))
         assert (
             own.get(BCDefaultRoute, (context.tenant_id, bc_id)).connection_id

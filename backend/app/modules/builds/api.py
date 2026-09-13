@@ -37,6 +37,8 @@ from app.modules.builds.schemas import (
 )
 from app.modules.tenants.permissions import require_tenant
 
+from .mini_selection import ChooseMiniRequest, DraftMinis, choose_mini, draft_minis
+
 router = APIRouter(prefix="/tenants/{tenant_id}", tags=["builds"])
 Cursor = Annotated[str | None, Query(max_length=4096)]
 Limit = Annotated[int, Query(ge=1, le=100)]
@@ -409,3 +411,33 @@ def preview_dramas(
     return get_preview_dramas(
         session, context=context, preview_id=preview_id, cursor=cursor, limit=limit
     )
+
+
+@router.get("/build-drafts/{draft_id}/minis", response_model=DraftMinis)
+def minis_options(
+    tenant_id: UUID,
+    draft_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    page: int = Query(default=1, ge=1, le=1000),
+) -> DraftMinis:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    return draft_minis(session, context=context, draft_id=draft_id, page=page)
+
+
+@router.post("/build-drafts/{draft_id}/minis", response_model=DraftSaved)
+def select_mini(
+    tenant_id: UUID,
+    draft_id: UUID,
+    body: ChooseMiniRequest,
+    session: SessionDep,
+    user: CurrentUser,
+) -> DraftSaved:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="build"
+    )
+    revision = choose_mini(session, context=context, draft_id=draft_id, body=body)
+    session.commit()
+    return DraftSaved(draft_id=draft_id, revision=revision)

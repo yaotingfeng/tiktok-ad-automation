@@ -326,6 +326,28 @@ export type ChannelConfiguration = {
 };
 
 /**
+ * ChooseMiniRequest
+ */
+export type ChooseMiniRequest = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+    /**
+     * Catalog Job Id
+     */
+    catalog_job_id: string;
+    /**
+     * Minis Id
+     */
+    minis_id: string;
+};
+
+/**
  * CompleteUploadRequest
  */
 export type CompleteUploadRequest = {
@@ -662,6 +684,33 @@ export type DraftMaterialPublic = {
      * Shared With Other Drama
      */
     shared_with_other_drama: boolean;
+};
+
+/**
+ * DraftMinis
+ */
+export type DraftMinis = {
+    /**
+     * State
+     */
+    state: 'pending' | 'choose' | 'selected' | 'unavailable' | 'conflict';
+    /**
+     * Catalog Job Id
+     */
+    catalog_job_id?: string | null;
+    /**
+     * Advertiser Id
+     */
+    advertiser_id?: string | null;
+    selected?: MiniOption | null;
+    /**
+     * Items
+     */
+    items?: Array<MiniOption>;
+    /**
+     * Next Page
+     */
+    next_page?: number | null;
 };
 
 /**
@@ -1872,6 +1921,20 @@ export type Message = {
 };
 
 /**
+ * MiniOption
+ */
+export type MiniOption = {
+    /**
+     * Minis Id
+     */
+    minis_id: string;
+    /**
+     * Name
+     */
+    name: string;
+};
+
+/**
  * ObjectCounts
  */
 export type ObjectCounts = {
@@ -2860,16 +2923,6 @@ export type ProviderLinkPublic = {
      * Config Display Incomplete
      */
     config_display_incomplete: boolean;
-};
-
-/**
- * ProviderMinisUpdate
- */
-export type ProviderMinisUpdate = {
-    /**
-     * Minis Id
-     */
-    minis_id: string;
 };
 
 /**
@@ -7232,44 +7285,6 @@ export type providersListApplicationsResponses = {
 
 export type providersListApplicationsResponse = providersListApplicationsResponses[keyof providersListApplicationsResponses];
 
-export type providersUpdateApplicationMinisData = {
-    body: ProviderMinisUpdate;
-    path: {
-        /**
-         * Tenant Id
-         */
-        tenant_id: string;
-        /**
-         * Connection Id
-         */
-        connection_id: string;
-        /**
-         * Application Id
-         */
-        application_id: string;
-    };
-    query?: never;
-    url: '/api/tenants/{tenant_id}/providers/connections/{connection_id}/applications/{application_id}/minis';
-};
-
-export type providersUpdateApplicationMinisErrors = {
-    /**
-     * Validation Error
-     */
-    422: HTTPValidationError;
-};
-
-export type providersUpdateApplicationMinisError = providersUpdateApplicationMinisErrors[keyof providersUpdateApplicationMinisErrors];
-
-export type providersUpdateApplicationMinisResponses = {
-    /**
-     * Successful Response
-     */
-    200: ProviderApplicationPublic;
-};
-
-export type providersUpdateApplicationMinisResponse = providersUpdateApplicationMinisResponses[keyof providersUpdateApplicationMinisResponses];
-
 export type strategiesGetStrategiesData = {
     body?: never;
     path: {
@@ -8368,6 +8383,79 @@ export type buildsPreviewDramasResponses = {
 };
 
 export type buildsPreviewDramasResponse = buildsPreviewDramasResponses[keyof buildsPreviewDramasResponses];
+
+export type buildsMinisOptionsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: {
+        /**
+         * Page
+         */
+        page?: number;
+    };
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/minis';
+};
+
+export type buildsMinisOptionsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsMinisOptionsError = buildsMinisOptionsErrors[keyof buildsMinisOptionsErrors];
+
+export type buildsMinisOptionsResponses = {
+    /**
+     * Successful Response
+     */
+    200: DraftMinis;
+};
+
+export type buildsMinisOptionsResponse = buildsMinisOptionsResponses[keyof buildsMinisOptionsResponses];
+
+export type buildsSelectMiniData = {
+    body: ChooseMiniRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/minis';
+};
+
+export type buildsSelectMiniErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsSelectMiniError = buildsSelectMiniErrors[keyof buildsSelectMiniErrors];
+
+export type buildsSelectMiniResponses = {
+    /**
+     * Successful Response
+     */
+    200: DraftSaved;
+};
+
+export type buildsSelectMiniResponse = buildsSelectMiniResponses[keyof buildsSelectMiniResponses];
 
 export type buildsSavedSubmissionData = {
     body?: never;

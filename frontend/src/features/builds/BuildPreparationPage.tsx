@@ -41,6 +41,7 @@ import {
 import { BuildInputPage } from "./BuildInputPage"
 import { BuildLinkSheet } from "./BuildLinkSheet"
 import { DramaMaterialSheet } from "./DramaMaterialSheet"
+import { MiniTargetPicker } from "./MiniTargetPicker"
 import {
   BuildError,
   BuildReason,
@@ -125,6 +126,7 @@ function Preparation({
     refetchInterval: (q) =>
       q.state.data?.status === "PREPARING" ? 2000 : false,
   })
+  const [, refreshMutationState] = useState(0)
   const pendingMutation = readPendingMutation(
     mutationKey(tenantId, bcId, draftId),
   )
@@ -176,6 +178,7 @@ function Preparation({
       return () => clearTimeout(timer)
     }
   }, [search.edit, scoped, restore])
+  const resumePreparation = useRef(false)
   const refetchSummary = summary.refetch
   const prepare = useCallback(
     async (recover = false) => {
@@ -313,6 +316,12 @@ function Preparation({
       setBusy(false)
     }
   }
+  useEffect(() => {
+    if (!busy && resumePreparation.current) {
+      resumePreparation.current = false
+      void prepare()
+    }
+  }, [busy, prepare])
   async function recoverMutation() {
     if (!pendingMutation || busy) return
     setBusy(true)
@@ -325,6 +334,8 @@ function Preparation({
       if (data.draft_id !== draftId) throw new Error("修改结果不属于当前草稿")
       if (!controller.current.signal.aborted) {
         sessionStorage.removeItem(mutationKey(tenantId, bcId, draftId))
+        resumePreparation.current =
+          pendingMutation.kind === "minis" && pendingMutation.prepare
         await summary.refetch()
       }
     } catch (e) {
@@ -578,6 +589,17 @@ function Preparation({
           )}
         </CardContent>
       </Card>
+      <MiniTargetPicker
+        tenantId={tenantId}
+        bcId={bcId}
+        summary={current}
+        write={allowed && !busy && !pending && !pendingMutation}
+        onPrepare={() => prepare()}
+        onRefresh={() => {
+          refreshMutationState((value) => value + 1)
+          void summary.refetch()
+        }}
+      />
       <Card className="sticky bottom-0 min-w-0">
         <CardContent className="flex min-w-0 flex-wrap items-center justify-between gap-3">
           <span className="text-sm">预览将明确列出可搭建范围与排除原因。</span>

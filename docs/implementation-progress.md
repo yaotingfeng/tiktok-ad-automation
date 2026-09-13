@@ -633,3 +633,10 @@
 - 仅调整前端展示，继续使用原 MID 值；API 字段、上传、分发及预览请求保持原合同。
 - 验证：`npx --yes bun run build`、`npx --yes bun x biome check src/features/materials/AssetDetails.tsx tests/materials.spec.ts` 通过；`npx --yes bun x playwright test tests/materials.spec.ts --project=workspace --workers=2 --reporter=line` 17 passed。现有测试同步检查隐藏 VID、素材id 列及远端视频正常预览，均为本地接口替身验证。
 - 本轮聚焦提交：`materials: hide VID and label MID as 素材id`；未推送或发布。
+
+## 2026-09-13 自动授权权限与小程序名称选择
+
+- 用户确认按自动权限、取消版权方强关联的方案优化并延续测试部署授权。完整账户目录发布直接复用授权事实和角色页形成权限缓存；API/MCP 均不要求额外试上传、试建或人工能力评估。实际 Analyst、未知授权、撤销及范围变更仍受真实限制。
+- 新增按租户/精确推广链接保存的 Mini 确认记录和 `automatic_mini_targets` 迁移。已有有效链接保留历史确认关系，新链接不继承版权方配置；旧手填管理接口和页面入口移除。
+- 准备页读取实际账户可用 Mini 名称；明确链接可匹配，否则用户选择批次目标。选择采用草稿版本和原请求幂等记录，未知结果查询后继续准备。账户目录分页缓存可复用，Mini 选择不新增平台请求；后续仍检查每个目标账户可用性。
+- 浏览器相关 50 项通过，包含名称选择、保存后自动准备、未知结果恢复和只读成员边界。前端构建、5 个实现文件 mypy 和改动 Ruff 检查通过。后端复核 215 项通过，追加 API 角色/选择/隔离 25 项通过；真实发布证据另记本次验收；不把合成测试当作新广告创建成功。

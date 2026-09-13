@@ -113,7 +113,11 @@ def test_iaa_roas_selects_ad_revenue_only_with_actual_qualification(qualified):
         }
     }
     result = _assemble_scene(
-        scope={"basis": "synthetic", "access": SimpleNamespace(currency="USD")},
+        scope={
+            "basis": "synthetic",
+            "access": SimpleNamespace(currency="USD"),
+            "minis_id": "synthetic-minis",
+        },
         facts=facts,
         reasons=[],
         evidence_ids=(uuid4(),),

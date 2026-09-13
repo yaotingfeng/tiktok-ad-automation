@@ -34,6 +34,8 @@ def scene_env(source_env, monkeypatch):
         link = promotion(source_env["context"], provider, drama)
         session.add(link)
         session.flush()
+        from app.modules.builds.mini_targets import remember_target
+        remember_target(session, context=source_env["context"], url=link.url, minis_id="fixture-minis", source="USER")
         conn = session.get(TikTokConnection, source_env["connection_id"])
         conn.credential_ciphertext = encrypt_credentials(
             tenant_id=conn.tenant_id,

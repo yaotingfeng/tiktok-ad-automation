@@ -130,9 +130,11 @@ def test_stale_transport_receipt_cannot_publish(job_env, wire, redis_client, cha
     wire[1].append(remote)
     result = run(env, redis_client, job.id)
     with Session(engine) as session:
-        assert not session.exec(
+        pages = session.exec(
             select(SceneJobPage).where(SceneJobPage.job_id == job.id)
         ).all()
+        # 账户资产目录不依赖版权方；消费推广链接时另行验证版权方状态。
+        assert bool(pages) is (change in {"provider", "application"})
     assert result.status != "COMPLETE"
 
 

@@ -237,11 +237,7 @@ def test_actual_scene_scope_preserves_legacy_digest_and_distinguishes_rebinding(
     }
     with Session(database_engine) as db:
         scope = _scope(db, route=legacy, **kwargs)
-        provider, application, access = (
-            scope["provider"],
-            scope["application"],
-            scope["access"],
-        )
+        access = scope["access"]
         historical = {
             "route": stored,
             "scene_contract_revision": scene.SCENE_CONTRACT_REVISION,
@@ -251,11 +247,7 @@ def test_actual_scene_scope_preserves_legacy_digest_and_distinguishes_rebinding(
                 "advertiser_id": case["advertiser_id"],
                 "currency": access.currency,
                 "timezone": access.timezone,
-                "provider_id": str(provider.id),
-                "provider_version": provider.credential_version,
-                "provider_verification": str(provider.verification_token),
-                "application_id": application.external_id,
-                "minis_id": application.tiktok_minis_id,
+                "minis_id": scope["minis_id"],
             },
         }
         previous_digest = sha256(

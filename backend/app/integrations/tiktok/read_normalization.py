@@ -193,6 +193,7 @@ def parse_page(
     if page > max(1, info["total_page"]) or not last and not values:
         raise _invalid()
     matches = []
+    options = []
     id_hashes: set[str] = set()
     id_field = {
         "account_roles": "asset_id",
@@ -217,32 +218,37 @@ def parse_page(
                     {"advertiser_id": remote_id, "role": item["advertiser_role"]}
                 )
         elif resource == "minis":
-            if remote_id == minis_id:
-                regions = item.get("region_codes")
-                if (
-                    not isinstance(regions, list)
-                    or not 1 <= len(regions) <= 300
-                    or any(
-                        not isinstance(region, str)
-                        or len(region) != 2
-                        or not region.isascii()
-                        or not all("A" <= letter <= "Z" for letter in region)
-                        for region in regions
-                    )
-                ):
-                    raise _invalid()
-                if item.get("minis_status") not in {"ACTIVE", "INACTIVE"} or item.get(
-                    "minis_type"
-                ) not in {"MINI_SERIES", "MINI_GAME"}:
-                    raise _invalid()
-                matches.append(
-                    {
-                        "minis_id": remote_id,
-                        "status": item["minis_status"],
-                        "type": item["minis_type"],
-                        "regions": sorted(set(regions)),
-                    }
+            regions = item.get("region_codes")
+            valid_regions = not (
+                not isinstance(regions, list)
+                or not 1 <= len(regions) <= 300
+                or any(
+                    not isinstance(region, str)
+                    or len(region) != 2
+                    or not region.isascii()
+                    or not all("A" <= letter <= "Z" for letter in region)
+                    for region in regions
                 )
+            )
+            valid_kind = item.get("minis_status") in {
+                "ACTIVE",
+                "INACTIVE",
+            } and item.get("minis_type") in {"MINI_SERIES", "MINI_GAME"}
+            if not valid_regions or not valid_kind:
+                # 已选目标必须完整；其他条目只保留分页身份，不展示为可选项。
+                if remote_id == minis_id:
+                    raise _invalid()
+                continue
+            option = {
+                "minis_id": remote_id,
+                "name": item.get("minis_name") or None,
+                "status": item["minis_status"],
+                "type": item["minis_type"],
+                "regions": sorted(set(regions)),
+            }
+            options.append(option)
+            if remote_id == minis_id:
+                matches.append(option)
         else:
             identity_type = item.get("identity_type")
             authorized_bc = item.get("identity_authorized_bc_id")
@@ -274,6 +280,7 @@ def parse_page(
     return (
         {
             "matches": matches[:2],
+            **({"options": options} if resource == "minis" else {}),
             "item_id_hashes": sorted(id_hashes),
             "total_number": info["total_number"],
             "total_page": info["total_page"],

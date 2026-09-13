@@ -21,7 +21,6 @@ from app.modules.providers.catalog import (
 )
 from app.modules.providers.connections import (
     save_connection,
-    set_application_minis,
     verify_connection,
 )
 from app.modules.providers.models import ProviderApplication, ProviderConnection
@@ -38,7 +37,6 @@ from app.modules.providers.schemas import (
     ProviderConnectionUpdate,
     ProviderKind,
     ProviderLinkPublic,
-    ProviderMinisUpdate,
     ResolvedLink,
 )
 from app.modules.providers.service import (
@@ -387,35 +385,3 @@ def list_applications(
         ],
         next_cursor=_cursor(scope, rows[limit - 1].id) if len(rows) > limit else None,
     )
-
-
-@router.patch(
-    "/connections/{connection_id}/applications/{application_id}/minis",
-    response_model=ProviderApplicationPublic,
-)
-def update_application_minis(
-    tenant_id: UUID,
-    connection_id: UUID,
-    application_id: str,
-    body: ProviderMinisUpdate,
-    session: SessionDep,
-    user: CurrentUser,
-) -> ProviderApplicationPublic:
-    context = require_tenant(
-        session, actor_id=user.id, tenant_id=tenant_id, action="manage"
-    )
-    row = set_application_minis(
-        session,
-        context=context,
-        connection_id=connection_id,
-        application_id=application_id,
-        minis_id=body.minis_id,
-    )
-    result = ProviderApplicationPublic(
-        external_id=row.external_id,
-        name=row.name,
-        tiktok_minis_id=row.tiktok_minis_id,
-        available=True,
-    )
-    session.commit()
-    return result

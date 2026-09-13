@@ -13,6 +13,7 @@ from app.modules.accounts.capability_models import (
     CapabilityPage,
     CapabilityRequest,
 )
+from app.modules.builds.mini_targets import MiniTarget
 from app.modules.builds.scene_job_models import SceneJob, SceneJobPage
 from app.modules.providers.models import (
     PromotionLink,
@@ -78,6 +79,11 @@ def scene_case(request, database_engine, gateway_case, monkeypatch):
             status="ready",
         )
         db.add(link)
+        from app.modules.builds.mini_targets import remember_target
+
+        remember_target(
+            db, context=context, url=link.url, minis_id="synthetic-minis", source="USER"
+        )
         proof = CapabilityJob(
             tenant_id=context.tenant_id,
             bc_id=route.bc_id,
@@ -134,6 +140,7 @@ def scene_case(request, database_engine, gateway_case, monkeypatch):
         if not retain_history:
             with Session(database_engine) as db, db.begin():
                 for model in (
+                    MiniTarget,
                     SceneJobPage,
                     SceneJob,
                     CapabilityRequest,

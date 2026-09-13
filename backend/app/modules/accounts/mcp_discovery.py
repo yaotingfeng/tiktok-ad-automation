@@ -267,7 +267,7 @@ def authorization_from_staging(subject: dict[str, Any]) -> AuthorizationFacts:
             scopes=tuple(subject["scopes"]),
             read_authorized=None,
             upload_authorized=subject.get("upload_authorized"),
-            build_authorized=None,
+            build_authorized=subject.get("build_authorized"),
             evidence_source="MCP_COMPLETE_DIRECTORY_READ",
             observed_at=datetime.fromisoformat(subject["observed_at"]),
         )
@@ -410,6 +410,7 @@ def publish_mcp_directory(
         **authorization.permission_summary,
         "read_authorized": True if "mcp:tt4b" in facts.scopes else None,
         "upload_authorized": facts.upload_authorized,
+        "build_authorized": facts.build_authorized,
     }
     authorization.source = facts.evidence_source
     authorization.verified_at = datetime.now(UTC)
@@ -434,3 +435,13 @@ def publish_mcp_directory(
         )
     )
     session.flush()
+    from .directory_capabilities import publish_directory_capabilities
+
+    publish_directory_capabilities(
+        session,
+        context=context,
+        run=run,
+        connection=connection,
+        bc_id=bc_id,
+        facts=facts,
+    )

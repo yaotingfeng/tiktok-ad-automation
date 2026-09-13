@@ -117,7 +117,7 @@ def complete(env, wire, redis_client):
     return job
 
 
-def test_same_app_different_drama_links_share_complete_scene_and_bc_proof(
+def test_confirmed_same_mini_links_share_scene_and_bc_proof(
     job_env, wire, redis_client
 ):
     from app.modules.builds.scene import read_scene_context
@@ -139,6 +139,15 @@ def test_same_app_different_drama_links_share_complete_scene_and_bc_proof(
         session.add(clone)
         session.flush()
         other_link = clone.id
+        from app.modules.builds.mini_targets import remember_target
+
+        remember_target(
+            session,
+            context=env["context"],
+            url=clone.url,
+            minis_id="fixture-minis",
+            source="USER",
+        )
     first = ensure(env)
     second = ensure(env, other_link)
     assert first.job_id == second.job_id and first.state == second.state == "queued"
@@ -229,3 +238,72 @@ def test_partial_scene_never_reports_ready(job_env, wire):
         )
         assert not result.supported and "scene_evidence_missing" in result.reason_codes
     assert receipt.state == "queued" and not wire[0]
+
+
+def test_missing_provider_mapping_still_discovers_named_minis(
+    job_env, wire, redis_client
+):
+    from app.modules.providers.models import ProviderApplication
+
+    with Session(engine) as session, session.begin():
+        link = session.get(PromotionLink, job_env["link_id"])
+        app = session.exec(
+            select(ProviderApplication).where(
+                ProviderApplication.tenant_id == link.tenant_id,
+                ProviderApplication.connection_id == link.connection_id,
+                ProviderApplication.external_id == link.application_id,
+            )
+        ).one()
+        app.tiktok_minis_id = None
+        from app.modules.builds.mini_targets import MiniTarget, url_key
+
+        session.delete(session.get(MiniTarget, (link.tenant_id, url_key(link.url))))
+    prepared = ensure(job_env)
+    assert prepared.state == "queued"
+    job = run(job_env, redis_client, prepared.job_id)
+    wire[1].append(role_page(["actual-account"]))
+    run_capability(job_env, redis_client, job.capability_job_id)
+    run_capability(job_env, redis_client, job.capability_job_id)
+    wire[1].append(
+        page(
+            [
+                {
+                    "minis_id": "real-mini",
+                    "minis_name": "LemonShow",
+                    "minis_status": "ACTIVE",
+                    "minis_type": "MINI_SERIES",
+                    "region_codes": ["US"],
+                }
+            ]
+        )
+    )
+    job = run(job_env, redis_client, prepared.job_id)
+    assert job.status == "COMPLETE", job.error_code
+    with Session(engine) as session:
+        stored = session.exec(
+            select(SceneJobPage).where(SceneJobPage.job_id == job.id)
+        ).one()
+        assert stored.facts["options"][0]["name"] == "LemonShow"
+    assert ensure(job_env).reason_code == "minis_selection_required"
+    assert len(wire[0]) == 2  # 角色与 Mini 目录；不提前读取全部创建资源。
+    # 明确路径必须与真实目录中的 ID 完全一致才可自动匹配；随后复用目录。
+    with Session(engine) as db, db.begin():
+        db.get(
+            PromotionLink, job_env["link_id"]
+        ).url = "https://www.tiktok.com/minis/real-mini"
+    selected = ensure(job_env)
+    assert selected.state == "queued" and selected.job_id != prepared.job_id
+    with Session(engine) as db:
+        selected_job = db.get(SceneJob, selected.job_id)
+        assert selected_job.minis_id == "real-mini"
+        assert selected_job.facts["minis_catalog_job_id"] == str(job.id)
+        assert selected_job.expires_at == job.expires_at
+    wire[1].append(responses(job_env)[0])
+    selected_job = run(job_env, redis_client, selected.job_id)
+    assert selected_job.resource == "cta"  # 无第二次 Mini 目录读取。
+    wire[1].extend(responses(job_env)[2:])
+    for _ in range(3):
+        selected_job = run(job_env, redis_client, selected.job_id)
+    assert selected_job.status == "COMPLETE", selected_job.error_code
+    assert ensure(job_env).state == "ready"
+    assert len(wire[0]) == 6

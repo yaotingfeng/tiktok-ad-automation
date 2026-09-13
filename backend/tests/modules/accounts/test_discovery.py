@@ -60,7 +60,7 @@ def staged(session, run, stage, rows, *, bc_id="", page=1, total_pages=1, last=T
     )
 
 
-def seed_complete(session, run, bc_id, rows):
+def seed_complete(session, run, bc_id, rows, *, role=None):
     facts = asdict(
         material_authorization({"scope": "[2,6]"}, observed_at=datetime.now(UTC))
     )
@@ -104,7 +104,7 @@ def seed_complete(session, run, bc_id, rows):
         session,
         run,
         "ROLES",
-        [{"advertiser_id": r["advertiser_id"], "role": None} for r in rows],
+        [{"advertiser_id": r["advertiser_id"], "role": role} for r in rows],
         bc_id=bc_id,
     )
     run.work = {"stage": "FINALIZE", "bc_id": bc_id, "page": 1}
@@ -266,3 +266,30 @@ def test_page_gap_and_after_last_page_rejected(session, discovery_run):
     staged(session, run, "ASSETS", [], bc_id=old.bc_id)
     with pytest.raises(DomainError):
         staged(session, run, "ASSETS", [], bc_id=old.bc_id, page=2, total_pages=2)
+
+
+@pytest.mark.parametrize("account_role", ["ADMIN", "OPERATOR", "ANALYST", None])
+def test_api_directory_publishes_actual_role_permissions_without_a_second_job(
+    session, discovery_run, context, account_role
+):
+    from app.modules.accounts.capabilities import get_capability_evidence
+
+    run, old = discovery_run
+    seed_complete(session, run, old.bc_id, [ROW], role=account_role)
+    finalize_directory(session, run_id=run.id)
+    session.expire_all()
+    grant = session.get(
+        BCAccountAccess,
+        (run.tenant_id, old.bc_id, ROW["advertiser_id"], run.connection_id),
+    )
+    expected = account_role in {"ADMIN", "OPERATOR"}
+    assert grant.can_build == grant.can_upload == expected
+    proof = get_capability_evidence(
+        session,
+        context=context,
+        bc_id=old.bc_id,
+        advertiser_id=ROW["advertiser_id"],
+        connection_id=run.connection_id,
+    )
+    assert proof is not None
+    assert proof.can_build == proof.can_upload == expected

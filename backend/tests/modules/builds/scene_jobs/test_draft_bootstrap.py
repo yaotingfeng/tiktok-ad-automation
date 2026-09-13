@@ -85,6 +85,15 @@ def seed_draft(env, account_ids=None):
             session, context=env["context"], draft_id=draft_id, request_id=uuid4()
         )
         ready_links(session, env["context"], task_id, intent)
+        from app.modules.builds.mini_targets import remember_target
+
+        remember_target(
+            session,
+            context=env["context"],
+            url="https://example.com/drama",
+            minis_id="fixture-minis",
+            source="USER",
+        )
         return draft_id, task_id
 
 
@@ -338,3 +347,176 @@ def test_205_accounts_use_one_bc_chain_and_bounded_persisted_scene_cursor(
         )
         assert session.get(BuildDraft, draft_id).status == "PREPARING"
     assert len(wire[0]) == 5
+
+
+def selection_draft(env, wire, redis_client):
+    from app.modules.builds.mini_targets import MiniTarget, url_key
+    from tests.modules.builds.scene_jobs.test_service import complete
+
+    catalog = complete(env, wire, redis_client)
+    draft_id, task_id = seed_draft(env)
+    for _ in range(20):
+        if tick(env, task_id):
+            break
+    with Session(engine) as session, session.begin():
+        draft = session.get(BuildDraft, draft_id)
+        assert draft.status == "READY"
+        session.delete(
+            session.get(
+                MiniTarget,
+                (env["context"].tenant_id, url_key("https://example.com/drama")),
+            )
+        )
+        return draft_id, draft.revision, catalog
+
+
+def test_name_choice_persists_exact_links_and_recovers_same_request(
+    job_env, wire, redis_client
+):
+    from app.core.errors import DomainError
+    from app.modules.builds.mini_selection import (
+        ChooseMiniRequest,
+        choose_mini,
+        draft_minis,
+    )
+    from app.modules.builds.mini_targets import MiniTarget, url_key
+    from app.modules.providers.models import ProviderApplication
+
+    env = job_env
+    draft_id, revision, catalog = selection_draft(env, wire, redis_client)
+    with Session(engine) as db, db.begin():
+        db.exec(
+            select(ProviderApplication).where(
+                ProviderApplication.tenant_id == env["context"].tenant_id
+            )
+        ).one().tiktok_minis_id = None
+        options = draft_minis(db, context=env["context"], draft_id=draft_id)
+        assert options.state == "choose" and options.selected is None
+        assert options.items[0].minis_id == "fixture-minis"
+    body = ChooseMiniRequest(
+        request_id=uuid4(),
+        expected_revision=revision,
+        catalog_job_id=catalog.id,
+        minis_id="fixture-minis",
+    )
+    for _ in range(2):
+        with Session(engine) as db, db.begin():
+            assert (
+                choose_mini(db, context=env["context"], draft_id=draft_id, body=body)
+                == revision + 1
+            )
+    with Session(engine) as db:
+        target = db.get(
+            MiniTarget, (env["context"].tenant_id, url_key("https://example.com/drama"))
+        )
+        assert (target.minis_id, target.source, target.actor_id) == (
+            "fixture-minis",
+            "USER",
+            env["context"].actor_id,
+        )
+        assert (
+            draft_minis(db, context=env["context"], draft_id=draft_id).state
+            == "selected"
+        )
+    with pytest.raises(DomainError) as raised, Session(engine) as db, db.begin():
+        choose_mini(
+            db,
+            context=env["context"],
+            draft_id=draft_id,
+            body=body.model_copy(update={"minis_id": "another"}),
+        )
+    assert raised.value.code == "idempotency_conflict"
+    assert len(wire[0]) == 6  # 查看和选择目录均不新增 TikTok 请求。
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["revision", "stale", "unavailable", "link_query", "link_path", "viewer", "tenant"],
+)
+def test_mini_choice_rejects_stale_or_wrong_target_without_saving(
+    job_env, wire, redis_client, failure
+):
+    from datetime import UTC, datetime, timedelta
+
+    from app.core.errors import DomainError
+    from app.modules.builds.mini_selection import ChooseMiniRequest, choose_mini
+    from app.modules.builds.mini_targets import MiniTarget, url_key
+    from app.modules.builds.models import DraftDrama
+    from app.modules.builds.scene_job_models import SceneJobPage
+    from app.modules.tenants.models import TenantMembership
+
+    env = job_env
+    selection_context = env["context"]
+    draft_id, revision, catalog = selection_draft(env, wire, redis_client)
+    body = ChooseMiniRequest(
+        request_id=uuid4(),
+        expected_revision=revision,
+        catalog_job_id=catalog.id,
+        minis_id="fixture-minis",
+    )
+    with Session(engine) as db, db.begin():
+        if failure == "tenant":
+            from tests.modules.conftest import create_context
+
+            selection_context = create_context(db)
+        elif failure == "revision":
+            body.expected_revision += 1
+        elif failure == "stale":
+            db.get(SceneJob, catalog.id).expires_at = datetime.now(UTC) - timedelta(
+                seconds=1
+            )
+        elif failure == "unavailable":
+            body.minis_id = "not-an-account-mini"
+        elif failure.startswith("link_"):
+            row = db.exec(
+                select(DraftDrama).where(DraftDrama.draft_id == draft_id)
+            ).one()
+            db.get(PromotionLink, row.link_id).url = (
+                "https://www.tiktok.com/minis/other-mini"
+                + ("?minis_id=other-mini" if failure == "link_query" else "")
+            )
+            page = db.exec(
+                select(SceneJobPage).where(
+                    SceneJobPage.job_id == catalog.id, SceneJobPage.resource == "minis"
+                )
+            ).one()
+            page.facts = {
+                **page.facts,
+                "options": [
+                    *page.facts["options"],
+                    {
+                        "minis_id": "other-mini",
+                        "name": "Other",
+                        "status": "ACTIVE",
+                        "type": "MINI_SERIES",
+                        "regions": ["US"],
+                    },
+                ],
+            }
+        elif failure == "viewer":
+            db.get(
+                TenantMembership, (env["context"].tenant_id, env["context"].actor_id)
+            ).role = "viewer"
+    with pytest.raises(DomainError) as raised, Session(engine) as db, db.begin():
+        choose_mini(db, context=selection_context, draft_id=draft_id, body=body)
+    assert (
+        raised.value.code
+        == {
+            "revision": "draft_revision_conflict",
+            "stale": "minis_catalog_stale",
+            "unavailable": "minis_unavailable",
+            "link_query": "minis_link_conflict",
+            "link_path": "minis_link_conflict",
+            "viewer": "action_forbidden",
+            "tenant": "draft_not_found",
+        }[failure]
+    )
+    with Session(engine) as db:
+        assert db.get(BuildDraft, draft_id).revision == revision
+        assert (
+            db.get(
+                MiniTarget,
+                (env["context"].tenant_id, url_key("https://example.com/drama")),
+            )
+            is None
+        )

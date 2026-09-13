@@ -58,11 +58,6 @@ export function BuildLinkSheet({
               value={query.data.application_id}
               expanded
             />
-            <CopyField
-              label="Minis ID"
-              value={query.data.tiktok_minis_id}
-              expanded
-            />
             {query.data.config_display_incomplete && (
               <p>部分已有配置尚未核实。</p>
             )}

@@ -31,7 +31,7 @@ from .scene import (
     CLAIM_SECONDS,
     HARD_LIMIT,
     SCENE_CONTRACT_REVISION,
-    _application_scope,
+    _account_scope,
     _merge,
     _require_bounded_worker,
     _scope,
@@ -90,8 +90,6 @@ def ensure_scene_preparation(
         )
     except DomainError as error:
         return ScenePreparation(None, "blocked", error.code)
-    if not scope["minis_id"]:
-        return ScenePreparation(None, "blocked", "minis_unavailable")
     now = datetime.now(UTC)
     job = session.exec(
         select(SceneJob)
@@ -122,6 +120,19 @@ def ensure_scene_preparation(
         and job.expires_at
         and job.expires_at > now
     ):
+        if not scope["minis_id"]:
+            from .mini_selection import match_catalog_link
+
+            if match_catalog_link(session, context=context, link_id=link_id, job=job):
+                return ensure_scene_preparation(
+                    session,
+                    context=context,
+                    bc_id=bc_id,
+                    advertiser_id=advertiser_id,
+                    link_id=link_id,
+                    route=route,
+                )
+            return ScenePreparation(job.id, "blocked", "minis_selection_required")
         result = read_scene_context(
             session,
             context=context,
@@ -191,11 +202,13 @@ def ensure_scene_preparation(
         connection_id=scope["connection"].id,
         credential_revision=scope["connection"].credential_revision,
         frozen_route=route.model_dump(mode="json"),
-        provider_connection_id=scope["provider"].id,
-        application_id=scope["application"].external_id,
+        resource="capabilities" if scope["minis_id"] else "minis",
         minis_id=scope["minis_id"],
         scope_basis=scope["basis"],
     )
+    from .mini_selection import reuse_minis_catalog
+
+    reuse_minis_catalog(session, context=context, job=job, route=route)
     session.add(job)
     session.flush()
     _queue(session, job)
@@ -225,13 +238,12 @@ def _scope_for_job(
     require_tenant(
         session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="build"
     )
-    scope = _application_scope(
+    scope = _account_scope(
         session,
         context=context,
         bc_id=job.bc_id,
         advertiser_id=job.advertiser_id,
-        provider_connection_id=job.provider_connection_id,
-        application_id=job.application_id,
+        minis_id=job.minis_id,
         route=load_scene_route(job),
     )
     if scope["basis"] != job.scope_basis:
@@ -557,8 +569,12 @@ def process_scene_job(
             current.revision += 1
             if not last:
                 current.next_page += 1
-            elif resource != RESOURCES[-1]:
+            elif resource != RESOURCES[-1] and current.minis_id is not None:
                 current.resource = RESOURCES[RESOURCES.index(resource) + 1]
+                if current.resource == "minis" and current.facts.get(
+                    "minis_catalog_job_id"
+                ):
+                    current.resource = "cta"
                 current.next_page = 1
             else:
                 current.status, current.resource, current.completed_at = (

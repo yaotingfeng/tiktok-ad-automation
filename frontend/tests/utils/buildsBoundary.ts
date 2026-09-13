@@ -38,6 +38,7 @@ export async function buildsBoundary(
     conflict?: boolean
     groupUnknown?: boolean
     updateUnknown?: boolean
+    miniUnknown?: boolean
     delayedInput?: boolean
     previewStatus?: string
     previewError?: string
@@ -327,6 +328,23 @@ export async function buildsBoundary(
       return reply(summary)
     }
     if (path.endsWith("/candidate")) return reply({ task_id: P }, 202)
+    if (path.endsWith(`/build-drafts/${D}/minis`)) {
+      if (method === "POST") {
+        summary.revision++
+        const result = { draft_id: D, revision: summary.revision }
+        mutations.set(body.request_id, result)
+        if (options.miniUnknown) return route.abort("failed")
+        return reply(result)
+      }
+      return reply({
+        state: "choose",
+        catalog_job_id: P,
+        advertiser_id: "90071992547409936666",
+        selected: null,
+        items: [{ minis_id: "mini-real-001", name: "LemonShow" }],
+        next_page: null,
+      })
+    }
     if (path.endsWith("/prepare")) {
       if (options.prepareUnknown) return route.abort("failed")
       return reply({ task_id: P, revision: summary.revision }, 202)

@@ -564,8 +564,8 @@ def _scenes_page(
 ) -> None:
     state = _scene_prep(session, draft, prep)
     route = _preparation_route(session, context, draft, prep)
-    # One draft has one provider application. Links were all checked in the
-    # preceding phase; choosing one reference here never picks a remote identity.
+    # 先以首个有素材的链接准备各账户目录。Mini 未确定时停在名称选择；
+    # 用户选择覆盖本批次链接，预览仍逐剧检查各链接真实目标，不能从应用推断。
     link_id = session.exec(
         select(DraftDrama.link_id)
         .join(

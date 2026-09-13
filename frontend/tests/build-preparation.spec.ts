@@ -499,3 +499,73 @@ for (const viewer of [false, true]) {
     ).toHaveLength(0)
   })
 }
+
+test("没有版权方 Mini 配置时按名称选择并自动继续准备", async ({ page }) => {
+  const api = await buildsBoundary(page)
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await page.getByRole("button", { name: "选择小程序", exact: true }).click()
+  const dialog = page.getByRole("dialog", { name: "选择推广小程序" })
+  await expect(dialog.getByText("LemonShow", { exact: true })).toBeVisible()
+  await expect(dialog.getByRole("textbox")).toHaveCount(0)
+  await dialog.getByRole("button", { name: /LemonShow/ }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect
+    .poll(
+      () =>
+        api.requests.filter(
+          (r) => r.path.endsWith("/prepare") && r.method === "POST",
+        ).length,
+    )
+    .toBe(1)
+  const selection = api.requests.find(
+    (r) => r.path.endsWith("/minis") && r.method === "POST",
+  )!
+  expect(selection.body.minis_id).toBe("mini-real-001")
+  expect(selection.body.expected_revision).toBe(1)
+  expect(selection.body.catalog_job_id).toBeTruthy()
+  expect(
+    api.requests.some(
+      (r) => r.path.includes("/applications/") && r.method === "PATCH",
+    ),
+  ).toBe(false)
+  await page.screenshot({ path: "../.runtime/auto-minis/mini-selection.png" })
+})
+
+test("小程序保存响应丢失后查询原请求并继续，不重复保存", async ({ page }) => {
+  const api = await buildsBoundary(page, { miniUnknown: true })
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await page.getByRole("button", { name: "选择小程序", exact: true }).click()
+  await page
+    .getByRole("dialog", { name: "选择推广小程序" })
+    .getByRole("button", { name: /LemonShow/ })
+    .click()
+  await expect(page.getByRole("dialog").getByRole("alert")).toBeVisible()
+  await page.keyboard.press("Escape")
+  await expect(
+    page.getByRole("button", { name: "查询原修改结果" }),
+  ).toBeVisible()
+  await page.reload()
+  await page.getByRole("button", { name: "查询原修改结果" }).click()
+  await expect
+    .poll(
+      () =>
+        api.requests.filter(
+          (r) => r.method === "POST" && r.path.endsWith("/prepare"),
+        ).length,
+    )
+    .toBe(1)
+  expect(
+    api.requests.filter(
+      (r) => r.method === "POST" && r.path.endsWith("/minis"),
+    ),
+  ).toHaveLength(1)
+})
+
+test("只读成员可看小程序名称但不能选择", async ({ page }) => {
+  await buildsBoundary(page, { viewer: true })
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await expect(page.getByText("推广小程序", { exact: true })).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "选择小程序", exact: true }),
+  ).toHaveCount(0)
+})
