@@ -626,3 +626,10 @@
 
 - `b89ad1f` 已推送并经全量备份/隔离恢复及迁移演练部署测试服务器；最终相关后端 493 passed、1 skipped，前端浏览器 22 passed、构建及 12 文件 mypy/Ruff 通过。首轮演练 OS 解释器权限问题在业务迁移前中止并恢复旧服务，改用应用角色恢复库后重新完整发布。
 - 服务器实际工具目录/BC 同步及正常角色重检全部完成；用户给定账户的单条原生共享 ready，目标 VID 已取回，无 URL 上传；原广告批次仍 COMPLETED。API、3 Worker 进程、Beat 同版本同配置，导入/清理仍 true，无新开关。最终备份 `/var/backups/tt-ada-staging/20260913T060649Z/`，数据库 head `material_source_bc`。详见上述验收边界。
+
+### 2026-09-13 素材库隐藏 VID 并统一素材id 文案
+
+- 素材详情的账户资产表移除 VID 标签、值及复制入口；原 MID 列改为“素材id”，缺失时显示“尚无素材id”。账户视频预览移除 VID 展示，保留实际账户和视频信息。
+- 仅调整前端展示，继续使用原 MID 值；API 字段、上传、分发及预览请求保持原合同。
+- 验证：`npx --yes bun run build`、`npx --yes bun x biome check src/features/materials/AssetDetails.tsx tests/materials.spec.ts` 通过；`npx --yes bun x playwright test tests/materials.spec.ts --project=workspace --workers=2 --reporter=line` 17 passed。现有测试同步检查隐藏 VID、素材id 列及远端视频正常预览，均为本地接口替身验证。
+- 本轮聚焦提交：`materials: hide VID and label MID as 素材id`；未推送或发布。

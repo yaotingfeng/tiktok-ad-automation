@@ -170,15 +170,9 @@ export function AssetDetails({
       cell: ({ row }) => <CopyValue value={row.original.advertiser_id} />,
     },
     {
-      header: "VID / MID",
-      cell: ({ row: { original: r } }) => (
-        <div>
-          <p className="text-xs text-muted-foreground">VID</p>
-          <CopyValue value={r.video_id} />
-          <p className="text-xs text-muted-foreground">MID</p>
-          {r.mid ? <CopyValue value={r.mid} /> : "尚无 MID"}
-        </div>
-      ),
+      header: "素材id",
+      cell: ({ row: { original: r } }) =>
+        r.mid ? <CopyValue value={r.mid} /> : "尚无素材id",
     },
     {
       header: "状态与回查",
@@ -269,8 +263,6 @@ export function AssetDetails({
                 <div className="flex flex-col gap-1 text-sm">
                   <span>实际预览账户</span>
                   <CopyValue value={preview.advertiser_id} />
-                  <span>实际预览 VID</span>
-                  <CopyValue value={preview.video_id} />
                   <span className="text-muted-foreground">
                     {preview.width} × {preview.height} · {preview.duration} 秒 ·{" "}
                     {preview.format}

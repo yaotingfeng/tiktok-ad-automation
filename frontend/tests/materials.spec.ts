@@ -263,6 +263,13 @@ test("viewer 可查真实来源历史和资产，不能上传", async ({ page })
   ).toBeVisible()
   await expect(
     sheet.getByText("VID-99999999999999999999", { exact: true }),
+  ).toHaveCount(0)
+  await expect(
+    sheet.getByRole("columnheader", { name: "素材id", exact: true }),
+  ).toBeVisible()
+  await expect(sheet.getByText(/VID|尚无 MID|^MID$/)).toHaveCount(0)
+  await expect(
+    sheet.getByText("MID-88888888888888888888", { exact: true }),
   ).toBeVisible()
   await expect(sheet.getByRole("combobox")).toHaveCount(2)
   expect(
@@ -564,7 +571,9 @@ test("暂存原件清理后按需预览账户素材，不持久化远端 URL 或
   )
   await expect(
     page.getByText("actual-target-video", { exact: true }),
-  ).toBeVisible()
+  ).toHaveCount(0)
+  await expect(page.getByText("实际预览 VID", { exact: true })).toHaveCount(0)
+  await expect(page.getByText("实际预览账户", { exact: true })).toBeVisible()
   expect(
     await page.evaluate(() =>
       JSON.stringify({ local: localStorage, session: sessionStorage }),
