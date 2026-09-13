@@ -121,7 +121,7 @@ def test_copy_pool_and_aggregated_local_validation(client, context):
     pool = client.get(f"{base}/copy-pools/{POOL_VERSION}", headers=headers(context))
     assert pool.status_code == 200
     assert len(pool.json()["entries"]) == 100
-    invalid = config(creative_count=101, campaign_suffix="-{unsafe}").model_dump(
+    invalid = config(creative_count=101, campaign_name_template="-{unsafe}").model_dump(
         mode="json"
     )
     checked = client.post(
@@ -131,7 +131,7 @@ def test_copy_pool_and_aggregated_local_validation(client, context):
     assert checked.json()["valid"] is False
     assert {item["field"] for item in checked.json()["errors"]} == {
         "creative_count",
-        "campaign_suffix",
+        "campaign_name_template",
     }
     assert checked.json()["scene_check_pending"] is True
     rejected = client.post(

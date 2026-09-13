@@ -8,7 +8,7 @@ ARGS = {
     "title": "The Bond",
     "provider_pinyin": "jiashu",
     "external_drama_id": "106001",
-    "date_text": "20260908",
+    "date_text": "20260913",
     "batch_short_id": "A7K2",
     "group_no": 1,
     "creative_no": 2,
@@ -16,71 +16,69 @@ ARGS = {
 }
 
 
-def test_protected_attribution_is_not_interpreted_as_a_template():
-    names = render_names(**ARGS, suffix="-{YYYYMMDD}-{batch_short_id}")
-    assert names == (
-        "{b30008/s328302/c3}-The Bond-20260908-A7K2",
-        "{b30008/s328302/c3}-The Bond-20260908-A7K2-g01",
-        "{b30008/s328302/c3}-The Bond-20260908-A7K2-g01-sp2",
+@pytest.mark.parametrize("protected", ["", ARGS["protected_base"]])
+def test_unified_name_keeps_external_id_and_automatically_appends_batch(protected):
+    base = protected or "jiashu-The Bond"
+    names = render_names(**{**ARGS, "protected_base": protected})
+    campaign = f"{base}-106001-A7K2"
+    assert names == (campaign, campaign + "-g01", campaign + "-g01-sp2")
+
+
+@pytest.mark.parametrize("protected", ["", ARGS["protected_base"]])
+def test_custom_date_order_and_literal_text_apply_to_both_providers(protected):
+    base = protected or "jiashu-The Bond"
+    names = render_names(
+        **{**ARGS, "protected_base": protected},
+        template="{provider_drama}-测试-{YYYYMMDD}-{drama_id}",
     )
-    assert (
-        render_names(**{**ARGS, "protected_base": ""}, suffix="-{batch_short_id}")[0]
-        == "jiashu-The Bond-106001-A7K2"
-    )
-
-
-@pytest.mark.parametrize(
-    "suffix",
-    [
-        "-{protected_base.__class__}",
-        "-{batch_short_id[0]}",
-        "-{batch_short_id!r}",
-        "-{batch_short_id:100}",
-        "-{YYYYMMDD}",
-        "-{",
-        "-{}",
-        "-{batch_short_id}-\n",
-    ],
-)
-def test_unapproved_or_malformed_templates_are_rejected(suffix):
-    with pytest.raises(DomainError, match="invalid_name_template"):
-        render_names(**ARGS, suffix=suffix)
-
-
-def test_names_never_truncate_protected_prefix():
-    with pytest.raises(DomainError, match="name_too_long"):
-        render_names(**{**ARGS, "max_length": 15}, suffix="-{batch_short_id}")
+    assert names[0] == f"{base}-测试-20260913-106001-A7K2"
+    assert names[2] == names[0] + "-g01-sp2"
 
 
 @pytest.mark.parametrize(
     "template",
     [
-        "{drama_name}-{random}",
+        "{YYYYMMDD}-{provider_drama}-{drama_id}",
+        "前缀-{provider_drama}-{drama_id}",
+        "{provider_drama}",
         "{drama_id}",
-        "{{drama_id}}-{random}",
-        "{drama_id}-{random.__class__}",
-        "{drama_id}-{random!r}",
-        "{drama_id}-{random:12}",
-        "{drama_id}-{random}-\n",
-        "{unknown}-{drama_id}-{random}",
+        "{{provider_drama}}-{drama_id}",
+        "{provider_drama}-{drama_id.__class__}",
+        "{provider_drama}-{drama_id[0]}",
+        "{provider_drama}-{drama_id!r}",
+        "{provider_drama}-{drama_id:12}",
+        "{provider_drama}-{drama_id}-\n",
+        "{provider_drama}-{drama_id}-{random}",
+        "{provider_drama}-{drama_id}-{batch_short_id}",
+        "{provider_drama}-{drama_id}-{unknown}",
+        "{provider_drama}-{drama_id}-{drama_id}",
+        "{provider_drama}-{drama_id}-{YYYYMMDD}-{YYYYMMDD}",
+        "-{",
+        "-{}",
     ],
 )
-def test_default_template_requires_identity_and_accepts_only_known_variables(template):
+def test_template_requires_both_fields_and_rejects_manual_batch_or_unsafe_variables(
+    template,
+):
     with pytest.raises(DomainError, match="invalid_name_template"):
-        render_names(**ARGS, suffix="-{batch_short_id}", template=template)
+        render_names(**ARGS, template=template)
 
 
-def test_custom_default_template_and_inserted_values_are_literal():
+def test_names_never_truncate_protected_prefix():
+    with pytest.raises(DomainError, match="name_too_long"):
+        render_names(**{**ARGS, "max_length": 15})
+
+
+def test_inserted_values_are_literal():
     names = render_names(
         **{**ARGS, "protected_base": "", "title": "A {random} Story"},
-        suffix="-{batch_short_id}",
-        template="{YYYYMMDD}-{{literal}}-{drama_id}-{provider_pinyin}-{drama_name}-{random}",
+        template="{provider_drama}-{{literal}}-{drama_id}",
     )
-    assert names[0] == "20260908-{literal}-106001-jiashu-A {random} Story-A7K2"
-    assert names[2] == names[0] + "-g01-sp2"
+    assert names[0] == "jiashu-A {random} Story-{literal}-106001-A7K2"
 
 
-def test_protected_provider_rule_takes_priority_over_default_template():
-    assert render_names(
-        **ARGS, suffix="-{batch_short_id}", template="{drama_id}-{random}"
-    )[0] == ("{b30008/s328302/c3}-The Bond-A7K2")
+@pytest.mark.parametrize("protected", ["", ARGS["protected_base"]])
+def test_attribution_prefix_does_not_replace_external_drama_id(protected):
+    with pytest.raises(DomainError) as error:
+        render_names(**{**ARGS, "protected_base": protected, "external_drama_id": ""})
+    assert error.value.code == "naming_context_missing"

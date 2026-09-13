@@ -20,7 +20,8 @@ from app.modules.strategies.models import (
     Strategy,
     StrategyVersion,
 )
-from app.modules.strategies.naming import validate_name_template, validate_suffix
+from app.modules.strategies.naming import validate_name_template
+from app.modules.strategies.saved_config import read_saved_config
 from app.modules.strategies.schemas import (
     CopyPoolPublic,
     CopyPublic,
@@ -99,18 +100,10 @@ def validate_strategy(
         if error.code != "copy_pool_not_found":
             raise
         errors.append(ValidationIssue(field="copy_pool_version", code=error.code))
-    for field, value, validate in (
-        (
-            "campaign_name_template",
-            config.campaign_name_template,
-            validate_name_template,
-        ),
-        ("campaign_suffix", config.campaign_suffix, validate_suffix),
-    ):
-        try:
-            validate(value)
-        except DomainError as error:
-            errors.append(ValidationIssue(field=field, code=error.code))
+    try:
+        validate_name_template(config.campaign_name_template)
+    except DomainError as error:
+        errors.append(ValidationIssue(field="campaign_name_template", code=error.code))
     if len(set(config.cta_option_ids)) != len(config.cta_option_ids) or any(
         not option.strip() or len(option) > 255 for option in config.cta_option_ids
     ):
@@ -297,7 +290,7 @@ def get_version_record(
         id=row.id,
         strategy_id=row.strategy_id,
         number=row.number,
-        config=StrategyConfig.model_validate(row.config),
+        config=read_saved_config(row.config),
         created_by=row.created_by,
         created_at=row.created_at,
         request_id=row.request_id,
@@ -332,7 +325,7 @@ def _public(row: Strategy, version: StrategyVersion) -> StrategyPublic:
         active=row.active,
         latest_version=row.latest_version,
         version_id=version.id,
-        config=StrategyConfig.model_validate(version.config),
+        config=read_saved_config(version.config),
         created_by=version.created_by,
         created_at=version.created_at,
     )
@@ -450,7 +443,7 @@ def list_versions(
                 id=row.id,
                 strategy_id=row.strategy_id,
                 number=row.number,
-                config=StrategyConfig.model_validate(row.config),
+                config=read_saved_config(row.config),
                 created_by=row.created_by,
                 created_at=row.created_at,
                 request_id=row.request_id,

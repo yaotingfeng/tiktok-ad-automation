@@ -61,11 +61,12 @@ import { StrategyStructureExample } from "./StrategyStructureExample"
 import {
   configFingerprint,
   DEFAULT_NAME_TEMPLATE,
-  DEFAULT_SUFFIX,
   decimalError,
+  displayNameTemplate,
   issueMessages,
+  NAME_LABELS,
   nameTemplateError,
-  suffixError,
+  parseNameTemplate,
 } from "./validation"
 
 const currencies = (
@@ -77,8 +78,7 @@ const fieldNames: Record<string, string> = {
   target_roas: "目标 ROAS",
   group_size: "每组素材数量",
   creative_count: "创意数量",
-  campaign_suffix: "Campaign 后缀模板",
-  campaign_name_template: "默认命名模板",
+  campaign_name_template: "广告名称格式",
   copy_pool_version: "文案池版本",
   cta_option_ids: "CTA 配置",
   name: "策略名称",
@@ -114,7 +114,6 @@ export function StrategyForm({
     [creativeCount, setCreativeCount] = useState(
       initial ? String(initial.creative_count) : "",
     ),
-    [suffix, setSuffix] = useState(initial?.campaign_suffix ?? DEFAULT_SUFFIX),
     [nameTemplate, setNameTemplate] = useState(
       initial?.campaign_name_template ?? DEFAULT_NAME_TEMPLATE,
     )
@@ -153,7 +152,6 @@ export function StrategyForm({
     creative_count: Number(creativeCount),
     copy_pool_version: copyPoolVersion,
     cta_option_ids: ctaIds,
-    campaign_suffix: suffix,
     campaign_name_template: nameTemplate,
   }
   const readonly =
@@ -168,14 +166,12 @@ export function StrategyForm({
       !!roas ||
       !!groupSize ||
       !!creativeCount ||
-      suffix !== DEFAULT_SUFFIX ||
       nameTemplate !== DEFAULT_NAME_TEMPLATE
   const local: Record<string, string> = {}
   if (!name.trim()) local.name = "请填写策略名称。"
   if (name.length > 120) local.name = "名称不能超过 120 个字符。"
   const budgetIssue = decimalError(budget),
     roasIssue = decimalError(roas),
-    nameIssue = suffixError(suffix),
     templateIssue = nameTemplateError(nameTemplate)
   if (budgetIssue) local.budget = budgetIssue
   if (roasIssue) local.target_roas = roasIssue
@@ -194,7 +190,6 @@ export function StrategyForm({
     local.creative_count = "请输入大于 0 的整数。"
   else if (capacity !== undefined && cfg.creative_count > capacity)
     local.creative_count = `创意数量不能超过 ${capacity} 条有效且不重复的英文文案。`
-  if (nameIssue) local.campaign_suffix = nameIssue
   if (templateIssue) local.campaign_name_template = templateIssue
   const errors = { ...local, ...serverErrors },
     firstError = Object.keys(errors)[0]
@@ -673,71 +668,58 @@ export function StrategyForm({
             <CardHeader>
               <CardTitle>广告命名</CardTitle>
               <CardDescription>
-                嘉书等版权方使用默认模板；网眼等已有归因规则的版权方优先使用专用规则。
+                所有版权方共用一个格式；网眼自动将“版权方＋剧名”替换为归因名称。
               </CardDescription>
             </CardHeader>
             <CardContent>
               <FieldGroup>
                 {input(
                   "campaign_name_template",
-                  nameTemplate,
-                  setNameTemplate,
-                  "必须保留剧目 ID 和随机号。剧目 ID 为版权方的剧目 ID，随机号为系统分配的 4 位数字与大写字母组合。",
+                  displayNameTemplate(nameTemplate),
+                  (value) => setNameTemplate(parseNameTemplate(value)),
+                  "版权方＋剧名固定在开头，剧目 ID 必须保留。其后可调整顺序、分隔符和固定文字，日期按需添加。剧目 ID 取对应版权方的剧目 ID。",
                 )}
                 {!readonly && (
                   <div className="flex flex-wrap gap-2">
-                    {[
-                      ["版权方拼音", "{provider_pinyin}"],
-                      ["剧名", "{drama_name}"],
-                      ["剧目 ID", "{drama_id}"],
-                      ["随机号", "{random}"],
-                      ["日期", "{YYYYMMDD}"],
-                    ].map(([label, variable]) => (
+                    {Object.entries(NAME_LABELS).map(([field, label]) => (
                       <Button
-                        key={variable}
+                        key={field}
                         type="button"
                         size="sm"
                         variant="outline"
-                        disabled={pending || !!unknownRequest}
+                        disabled={
+                          pending ||
+                          !!unknownRequest ||
+                          nameTemplate.includes(`{${field}}`)
+                        }
                         onClick={() =>
                           change(
                             "campaign_name_template",
                             setNameTemplate,
-                          )(nameTemplate + variable)
+                          )(
+                            field === "provider_drama"
+                              ? `{${field}}${nameTemplate ? "-" : ""}${nameTemplate}`
+                              : nameTemplate +
+                                  (nameTemplate && !nameTemplate.endsWith("-")
+                                    ? "-"
+                                    : "") +
+                                  `{${field}}`,
+                          )
                         }
                       >
-                        插入{label}变量
+                        添加{label}
                       </Button>
                     ))}
                   </div>
                 )}
-                {input(
-                  "campaign_suffix",
-                  suffix,
-                  setSuffix,
-                  "仅用于网眼等专用归因基础名，必须包含批次号变量（同一 4 位随机短码）。广告组和广告分别追加 -g01、-sp1 等编号。",
-                )}
-                {!readonly && (
-                  <div className="flex flex-wrap gap-2">
-                    {["{YYYYMMDD}", "{batch_short_id}"].map((variable) => (
-                      <Button
-                        key={variable}
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        disabled={pending || !!unknownRequest}
-                        onClick={() =>
-                          change(
-                            "campaign_suffix",
-                            setSuffix,
-                          )(suffix + variable)
-                        }
-                      >
-                        插入 {variable}
-                      </Button>
-                    ))}
-                  </div>
-                )}
+                <div className="flex flex-col gap-2">
+                  <Badge variant="secondary">末尾自动添加：批次编号</Badge>
+                  <p className="text-sm text-muted-foreground">
+                    例如
+                    -A7K2，用于区分多次投放，无需填写。广告组和广告继续自动追加
+                    -g01、-sp1 等编号。
+                  </p>
+                </div>
               </FieldGroup>
             </CardContent>
           </Card>
@@ -764,7 +746,7 @@ export function StrategyForm({
             budget={budgetIssue ? "" : budget}
             currency={currency}
           />
-          <StrategyNamingExample suffix={suffix} nameTemplate={nameTemplate} />
+          <StrategyNamingExample nameTemplate={nameTemplate} />
         </aside>
       </div>
       <div className="sticky bottom-0 flex w-full max-w-7xl flex-wrap items-center justify-between gap-3 border-t bg-background px-4 py-3">
@@ -833,9 +815,18 @@ export function StrategyForm({
                   <div key={key}>
                     <dt className="font-semibold">{label}</dt>
                     <dd className="break-all text-sm">
-                      本地：{String(cfg[key as keyof typeof cfg])}
+                      本地：
+                      {key === "campaign_name_template"
+                        ? displayNameTemplate(nameTemplate)
+                        : String(cfg[key as keyof typeof cfg])}
                       <br />
-                      服务器：{String(conflict.config[key as keyof typeof cfg])}
+                      服务器：
+                      {key === "campaign_name_template"
+                        ? displayNameTemplate(
+                            conflict.config.campaign_name_template ??
+                              DEFAULT_NAME_TEMPLATE,
+                          )
+                        : String(conflict.config[key as keyof typeof cfg])}
                     </dd>
                   </div>
                 ))}

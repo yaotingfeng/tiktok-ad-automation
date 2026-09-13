@@ -15,8 +15,7 @@ const config = {
   creative_count: 2,
   copy_pool_version: POOL,
   cta_option_ids: ["official-existing-id"],
-  campaign_suffix: "-{YYYYMMDD}-{batch_short_id}",
-  campaign_name_template: "{provider_pinyin}-{drama_name}-{drama_id}-{random}",
+  campaign_name_template: "{provider_drama}-{drama_id}",
 }
 const original: StrategyPublic = {
   id: S,
@@ -379,10 +378,10 @@ test("98条有效文案阻止99创意，非法变量定位字段；保留已有C
   ).toBeDisabled()
   await page.getByLabel("创意数量", { exact: true }).fill("3")
   await page
-    .getByLabel("Campaign 后缀模板", { exact: true })
-    .fill("-{bad}-{batch_short_id}")
+    .getByLabel("广告名称格式", { exact: true })
+    .fill("[版权方＋剧名]-[剧目 ID]-[错误字段]")
   await expect(
-    page.getByLabel("Campaign 后缀模板", { exact: true }),
+    page.getByLabel("广告名称格式", { exact: true }),
   ).toHaveAttribute("aria-invalid", "true")
   await expect(
     page.getByText("已有 ID：official-existing-id", { exact: true }),
@@ -810,30 +809,43 @@ test("确定校验失败保留输入并标记字段，不进入未知回查", as
     requests.filter((r) => r.path.includes("/strategy-save-requests/")),
   ).toHaveLength(0)
 })
-test("专用规则修改后缀且三级同步；转义括号不冒充批次变量", async ({ page }) => {
+test("一个格式同时改变嘉书和网眼，批次编号自动追加且剧目 ID 必填", async ({
+  page,
+}) => {
   await boundary(page)
   await page.goto(editUrl)
-  await page
-    .getByLabel("Campaign 后缀模板", { exact: true })
-    .fill("-后缀-{batch_short_id}")
-  const naming = page.getByRole("region", { name: "广告命名示例" })
+  const template = page.getByLabel("广告名称格式", { exact: true })
+  await expect(template).toHaveValue("[版权方＋剧名]-[剧目 ID]")
   await expect(
-    naming.getByRole("region", { name: "网眼 · 专用规则" }).locator("dd"),
-  ).toHaveText([
-    "{b30008/s328302/c3}-The Bond-后缀-A7K2",
-    "{b30008/s328302/c3}-The Bond-后缀-A7K2-g01",
-    "{b30008/s328302/c3}-The Bond-后缀-A7K2-g01-sp1",
-  ])
-  await expect(page.getByLabel("版权方归因基础名")).toHaveCount(0)
-  await page
-    .getByLabel("Campaign 后缀模板", { exact: true })
-    .fill("-{{batch_short_id}}")
+    page.getByLabel("Campaign 后缀模板", { exact: true }),
+  ).toHaveCount(0)
+  await page.getByRole("button", { name: "添加日期", exact: true }).click()
+  await expect(template).toHaveValue("[版权方＋剧名]-[剧目 ID]-[日期]")
+  const naming = page.getByRole("region", { name: "广告命名示例" })
+  for (const [provider, base] of [
+    ["嘉书", "jiashu-The Bond-106001"],
+    ["网眼", "{b30008/s328302/c3}-The Bond-328302"],
+  ]) {
+    const campaign = `${base}-20260913-A7K2`
+    await expect(
+      naming.getByRole("region", { name: provider, exact: true }).locator("dd"),
+    ).toHaveText([campaign, `${campaign}-g01`, `${campaign}-g01-sp1`])
+  }
+  await template.fill("[版权方＋剧名]-固定文字-[剧目 ID]")
+  await expect(
+    naming
+      .getByRole("region", { name: "网眼", exact: true })
+      .locator("dd")
+      .first(),
+  ).toHaveText("{b30008/s328302/c3}-The Bond-固定文字-328302-A7K2")
+  await template.fill("[版权方＋剧名]-[日期]")
+  await expect(template).toHaveAttribute("aria-invalid", "true")
+  await expect(
+    page.getByText("请保留剧目 ID字段。", { exact: true }),
+  ).toBeVisible()
   await expect(
     page.getByRole("button", { name: "保存为新版本", exact: true }),
   ).toBeDisabled()
-  await expect(
-    page.getByLabel("Campaign 后缀模板", { exact: true }),
-  ).toHaveAttribute("aria-invalid", "true")
 })
 test("切租户先保护策略输入，确认后到新租户列表而非旧策略详情", async ({
   page,
@@ -1194,49 +1206,77 @@ test("空白新建策略默认 USD，币种禁止展开且保存仍提交 USD", 
   })
 })
 
-test("默认命名模板可选变量、校验必填标识并保存为新版本", async ({ page }) => {
+test("统一命名使用中文字段并保存，恢复后仍为同一格式", async ({ page }) => {
   const { requests } = await boundary(page)
   await page.goto(editUrl)
-  const template = page.getByLabel("默认命名模板", { exact: true })
-  await expect(template).toHaveValue(config.campaign_name_template)
-  const generic = page.getByRole("region", { name: "嘉书 · 默认规则" })
+  const template = page.getByLabel("广告名称格式", { exact: true })
+  await expect(template).toHaveValue("[版权方＋剧名]-[剧目 ID]")
+  await template.fill("[剧目 ID]")
+  await page
+    .getByRole("button", { name: "添加版权方＋剧名", exact: true })
+    .click()
+  await expect(template).toHaveValue("[版权方＋剧名]-[剧目 ID]")
+  const generic = page.getByRole("region", { name: "嘉书", exact: true })
   await expect(generic.locator("dd").first()).toHaveText(
     "jiashu-The Bond-106001-A7K2",
   )
-  await template.fill("{drama_id}-{{random}}")
+  await template.fill("[版权方＋剧名]-[剧目 ID]-[日期")
+  await expect(template).toHaveAttribute("aria-invalid", "true")
+  await template.fill("[日期]-[版权方＋剧名]-[剧目 ID]")
+  await expect(template).toHaveAttribute("aria-invalid", "true")
+  await template.fill("[版权方＋剧名]-[剧目 ID]-[批次编号]")
   await expect(template).toHaveAttribute("aria-invalid", "true")
   await expect(
     page.getByRole("button", { name: "保存为新版本", exact: true }),
   ).toBeDisabled()
-  await template.fill("{drama_id}-{random}-")
-  await page
-    .getByRole("button", { name: "插入版权方拼音变量", exact: true })
-    .click()
-  await expect(template).toHaveValue("{drama_id}-{random}-{provider_pinyin}")
-  await template.fill("{drama_id}-{random}-{provider_pinyin}-")
-  await page.getByRole("button", { name: "插入剧名变量", exact: true }).click()
-  const custom = "{drama_id}-{random}-{provider_pinyin}-{drama_name}"
-  await expect(template).toHaveValue(custom)
+  await template.fill("[版权方＋剧名]-[剧目 ID]-[剧目 ID]")
+  await expect(template).toHaveAttribute("aria-invalid", "true")
+  await template.fill("[版权方＋剧名]-[日期]-投放-[剧目 ID]")
   await expect(generic.locator("dd")).toHaveText([
-    "106001-A7K2-jiashu-The Bond",
-    "106001-A7K2-jiashu-The Bond-g01",
-    "106001-A7K2-jiashu-The Bond-g01-sp1",
+    "jiashu-The Bond-20260913-投放-106001-A7K2",
+    "jiashu-The Bond-20260913-投放-106001-A7K2-g01",
+    "jiashu-The Bond-20260913-投放-106001-A7K2-g01-sp1",
   ])
   await expect(
-    page.getByRole("region", { name: "网眼 · 专用规则" }).locator("dd").first(),
-  ).toHaveText("{b30008/s328302/c3}-The Bond-20260908-A7K2")
+    page
+      .getByRole("region", { name: "网眼", exact: true })
+      .locator("dd")
+      .first(),
+  ).toHaveText("{b30008/s328302/c3}-The Bond-20260913-投放-328302-A7K2")
   await page.getByRole("button", { name: "保存为新版本", exact: true }).click()
-  await expect
-    .poll(
-      () =>
-        requests.filter(
-          (r) => r.method === "POST" && r.path.endsWith("/versions"),
-        ).length,
-    )
-    .toBe(1)
+  await expect(page.getByText("已保存 v2", { exact: true })).toBeVisible()
   const saved = requests.find(
-    (r) => r.method === "POST" && r.path.endsWith("/versions"),
+    (row) => row.method === "POST" && row.path.endsWith("/versions"),
   )!
-  expect(saved.body.config.campaign_name_template).toBe(custom)
-  expect(saved.body.config.campaign_suffix).toBe(config.campaign_suffix)
+  expect(saved.body.config.campaign_name_template).toBe(
+    "{provider_drama}-{YYYYMMDD}-投放-{drama_id}",
+  )
+  expect(saved.body.config).not.toHaveProperty("campaign_suffix")
+  await page.goto(editUrl)
+  await expect(page.getByLabel("广告名称格式", { exact: true })).toHaveValue(
+    "[版权方＋剧名]-[日期]-投放-[剧目 ID]",
+  )
 })
+
+for (const viewport of [
+  { width: 1440, height: 1050 },
+  { width: 390, height: 844 },
+]) {
+  test(`统一命名布局 ${viewport.width}px`, async ({ page }) => {
+    await page.setViewportSize(viewport)
+    await boundary(page)
+    await page.goto(editUrl)
+    const field = page.getByLabel("广告名称格式", { exact: true })
+    await field.scrollIntoViewIfNeeded()
+    await expect(field).toHaveValue("[版权方＋剧名]-[剧目 ID]")
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true)
+    await page.screenshot({
+      path: `/tmp/tk-ada-unified-naming-${viewport.width}.png`,
+      fullPage: true,
+    })
+  })
+}

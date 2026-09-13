@@ -31,9 +31,6 @@ class StrategyConfig(BaseModel):
     copy_pool_version: UUID
     cta_option_ids: tuple[str, ...] = ()
     campaign_name_template: str = Field(default=DEFAULT_NAME_TEMPLATE, max_length=1000)
-    campaign_suffix: str = Field(
-        default="-{YYYYMMDD}-{batch_short_id}", max_length=1000
-    )
 
 
 class ValidationIssue(BaseModel):

@@ -208,3 +208,31 @@ def test_random_short_number_uses_all_digits_and_uppercase_letters(monkeypatch):
 
     monkeypatch.setattr(batch_numbers.secrets, "choice", choose)
     assert batch_numbers.random_batch_number() == "A7K2"
+
+
+@pytest.mark.parametrize("frozen", [False, True])
+def test_previous_two_template_preview_cannot_mix_naming_rules(
+    session, context, prepared, frozen
+):
+    identity = previews.generate_preview(
+        session, context=context, draft_id=prepared, expected_revision=1
+    )
+    row = session.get(BuildPreview, identity)
+    row.config = row.config | {
+        "campaign_suffix": "-{YYYYMMDD}-{batch_short_id}",
+        "campaign_name_template": "{provider_pinyin}-{drama_name}-{drama_id}-{random}",
+    }
+    if frozen:
+        row.status = "FROZEN"
+        row.content_digest = "a" * 64
+    session.add(row)
+    session.flush()
+    session.refresh(row)
+    original = row.model_dump(mode="json")
+    assert previews.continue_preview(session, context=context, preview_id=identity)
+    session.refresh(row)
+    if frozen:
+        assert row.model_dump(mode="json") == original
+    else:
+        assert row.status == "FAILED" and row.error_code == "preview_naming_outdated"
+        assert row.config == original["config"]

@@ -327,7 +327,7 @@ def test_revision_during_build_keeps_partial_preview_obsolete(
     assert row.status == "OBSOLETE" and row.content_digest is None
 
 
-def test_identical_protected_names_block_both_pairs(session, context, prepared):
+def test_identical_protected_bases_are_distinguished_by_external_drama_id(session, context, prepared):
     from app.modules.providers.models import PromotionLink
 
     dramas = session.exec(
@@ -345,9 +345,9 @@ def test_identical_protected_names_block_both_pairs(session, context, prepared):
     summary = previews.get_preview_summary(
         session, context=context, preview_id=identity
     )
-    assert summary.campaign_count == 0 and summary.blocked_count == 6
+    assert summary.campaign_count == 6 and summary.blocked_count == 0
     assert all(
-        "duplicate_campaign_name" in u.reason_codes
+        "duplicate_campaign_name" not in u.reason_codes
         for u in previews.get_preview_units(
             session, context=context, preview_id=identity
         ).items

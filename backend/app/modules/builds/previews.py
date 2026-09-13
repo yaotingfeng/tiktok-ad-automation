@@ -404,7 +404,6 @@ def _names(
         title=drama.title,
         date_text=preview.local_date,
         batch_short_id=preview.batch_short_id,
-        suffix=config.campaign_suffix,
         group_no=group,
         creative_no=creative,
         max_length=10000,
@@ -551,8 +550,8 @@ def _expand_unit(
                 *name_reasons(name, "campaign", unit.scene_snapshot),
             ],
         )
-        # A protected provider base may collide across distinct dramas. Retain
-        # every combination, explicitly excluding all colliding campaigns.
+        # 完整名称包含外部剧目 ID；仍校验账户内碰撞，防止不同字段拼接出同名。
+        # 保留所有组合，并明确阻断冲突双方。
         collisions = session.exec(
             select(BuildUnit).where(
                 BuildUnit.tenant_id == preview.tenant_id,
@@ -727,7 +726,11 @@ def continue_preview(
     preview = _preview(session, context, preview_id, lock=True)
     if preview.status != "BUILDING":
         return True
-    if not is_current_batch_number(preview.batch_short_id):
+    if (
+        not is_current_batch_number(preview.batch_short_id)
+        or "campaign_suffix" in preview.config
+        or "{provider_drama}" not in preview.config.get("campaign_name_template", "")
+    ):
         # 旧版未冻结预览不可混用新规则；冻结及已提交名称继续读取原记录。
         preview.status = "FAILED"
         preview.error_code = "preview_naming_outdated"

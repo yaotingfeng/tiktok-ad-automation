@@ -5,28 +5,27 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { renderDefaultName, renderSuffix } from "./validation"
+import { renderNameExample } from "./validation"
 export const EXAMPLE_BASE = "{b30008/s328302/c3}-The Bond"
 export function StrategyNamingExample({
-  suffix,
   nameTemplate,
 }: {
-  suffix: string
   nameTemplate: string
 }) {
-  const rendered = renderSuffix(suffix)
   const examples = [
-    { label: "嘉书 · 默认规则", campaign: renderDefaultName(nameTemplate) },
+    { label: "嘉书", campaign: renderNameExample(nameTemplate) },
     {
-      label: "网眼 · 专用规则",
-      campaign: rendered === null ? null : EXAMPLE_BASE + rendered,
+      label: "网眼",
+      campaign: renderNameExample(nameTemplate, EXAMPLE_BASE, "328302"),
     },
   ]
   return (
     <Card role="region" aria-label="广告命名示例">
       <CardHeader>
         <CardTitle>广告命名示例</CardTitle>
-        <CardDescription>专用归因规则优先，其余使用默认模板。</CardDescription>
+        <CardDescription>
+          同一格式，仅“版权方＋剧名”按版权方自动生成。
+        </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-5 text-sm">
         {examples.map(({ label, campaign }) => (
@@ -50,7 +49,7 @@ export function StrategyNamingExample({
                 ))}
               </dl>
             ) : (
-              <p>修正对应模板后显示名称。</p>
+              <p>修正名称格式后显示示例。</p>
             )}
           </section>
         ))}

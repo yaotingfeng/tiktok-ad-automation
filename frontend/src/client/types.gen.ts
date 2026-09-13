@@ -3248,10 +3248,6 @@ export type StrategyConfig_Input = {
      * Campaign Name Template
      */
     campaign_name_template?: string;
-    /**
-     * Campaign Suffix
-     */
-    campaign_suffix?: string;
 };
 
 /**
@@ -3290,10 +3286,6 @@ export type StrategyConfig_Output = {
      * Campaign Name Template
      */
     campaign_name_template?: string;
-    /**
-     * Campaign Suffix
-     */
-    campaign_suffix?: string;
 };
 
 /**

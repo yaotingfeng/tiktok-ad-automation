@@ -17,7 +17,7 @@ export const config = {
   creative_count: 2,
   copy_pool_version: S,
   cta_option_ids: [],
-  campaign_suffix: "-{YYYYMMDD}-{batch_short_id}",
+  campaign_name_template: "{provider_drama}-{drama_id}",
 }
 export async function buildsBoundary(
   page: Page,
