@@ -18,4 +18,11 @@
 
 ## 发布与真实验收
 
-发布前完成独立数据库/Redis、项目/构建和私有配置/证书备份、隔离恢复及新迁移演练。实际版本、备份、开关和单条真实共享结果在完成后补记。
+- 运行版本 `b89ad1f3aa9cb1d94a77d942bf52ace3261baa4d`，已推送 `origin/feat/platform-implementation`；同分支前置策略命名提交随版本包含，本轮不覆盖它。数据库 head `material_source_bc`。本记录后续文档提交不改变服务器代码版本。
+- 最终完整备份 `/var/backups/tt-ada-staging/20260913T060649Z/`：PG、Redis RDB、项目及构建、私有配置/证书五个归档摘要通过；临时 PG 库恢复后以应用角色演练新迁移成功，素材响应可解密且长度/摘要一致，独立 Redis 装载 PING/读取通过，项目/配置隔离解压比对通过。新源码及前端 1100 个文件摘要一致。
+- 第一次演练因 postgres OS 用户不能执行应用解释器而中止，未迁移业务库、未切换版本，旧服务和备份 timer 自动恢复；改为应用角色拥有的独立恢复库演练后，重新备份发布。未扩大解释器目录权限或删除业务数据。
+- API 1 个、Worker 3 个、Beat 1 个进程实际 cwd、数据库/Redis/加密配置/MCP 注册/配额一致。`MATERIAL_INGEST_ENABLED`、`MATERIAL_CLEANUP_ENABLED` 发布前后均 true；原精确媒体主机保持。无新功能开关，沿用既有用户授权。健康、构建登录页、OAuth API 边界检查通过，备份 timer 恢复 active。
+- 使用服务器自身官方 MCP 连接，已有授权重新 tools/list、刷新 BC 目录及绑定 BC 同步完成；随后走正常角色重检任务，目标账户恢复真实 VERIFIED、can_upload/can_build=true。没有修改权限位或授权材料，没有使用本地 TikTok MCP。
+- 骏伯 BC `7678608005688066065`，服务器连接 `90d01aa0-ab41-43e2-ad33-11c44b2da73a`。用户指定目标账户 `7680027514155319304`，从同 BC 已有来源账户 `7680028557046611986` 原生共享一条素材。分发 `9ada1ab9-0d9a-48f9-9732-0490cb400cba` 最终 ready，操作 succeeded，`transport=native_share`、`share_acknowledged=true`，无错误；取得目标 VID `v10033g50000dah81ifog65qua2k56k0`、MID `7683845391322906644`。未走 URL 上传、未新增广告。
+- LemonShow 的现有应用 `com.lemonshow.newdrama.ttminis` → `mnlb1cmig5uuc1nq` 已保留。页面管理员新增入口的保存/刷新经过模拟浏览器验证；本轮未改线上既有映射。
+- 真实业务验收范围是服务器官方 MCP 同 BC 共享。API 同 BC、双通道跨 BC、文件名传参与广告创建回读由真实 PG/Redis 加传输模拟验证，不冒充新的真实广告创建或跨 BC 现场测试；此前成功广告批次保持 COMPLETED。
