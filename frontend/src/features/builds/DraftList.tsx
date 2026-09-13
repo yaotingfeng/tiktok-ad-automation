@@ -4,14 +4,6 @@ import type { ColumnDef } from "@tanstack/react-table"
 import { BuildsService, type DraftListItem } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
 import { displayTime } from "@/features/accounts/presentation"
 import {
   isForbidden,
@@ -37,10 +29,12 @@ export function DraftList({
   tenantId,
   bcId,
   write,
+  onResume,
 }: {
   tenantId: string
   bcId: string
   write: boolean
+  onResume: () => void
 }) {
   const paging = useCursorPage()
   const query = useQuery({
@@ -117,6 +111,7 @@ export function DraftList({
           <Button variant="outline" size="sm" asChild>
             {preview ? (
               <Link
+                onClick={onResume}
                 to="/tenants/$tenantId/build-previews/$previewId"
                 params={{ tenantId, previewId: row.preview_id! }}
                 search={{ bc_id: bcId }}
@@ -125,6 +120,7 @@ export function DraftList({
               </Link>
             ) : (
               <Link
+                onClick={onResume}
                 to="/tenants/$tenantId/build-drafts/$draftId"
                 params={{ tenantId, draftId: row.draft_id }}
                 search={{
@@ -141,17 +137,8 @@ export function DraftList({
     },
   ]
   return (
-    <Card className="min-w-0">
-      <CardHeader className="flex min-w-0 flex-wrap items-start justify-between gap-3 sm:flex-row">
-        <div className="flex min-w-0 flex-col gap-2">
-          <CardTitle>
-            <h2>未完成搭建</h2>
-          </CardTitle>
-          <CardDescription>
-            当前 BC
-            已保存、准备中和待提交的批次，按最近修改排序。已提交批次请到“搭建任务”查看。
-          </CardDescription>
-        </div>
+    <div className="flex min-w-0 flex-col gap-4">
+      <div className="flex justify-end">
         <Button
           variant="outline"
           disabled={query.isFetching}
@@ -162,28 +149,24 @@ export function DraftList({
         >
           刷新列表
         </Button>
-      </CardHeader>
-      <CardContent className="min-w-0">
-        <ServerTable
-          rows={isForbidden(query.error) ? [] : query.data?.items || []}
-          columns={columns}
-          loading={query.isPending}
-          fetching={query.isFetching}
-          error={query.error}
-          retry={() => void query.refetch()}
-          filtered={false}
-          emptyTitle="暂无未完成搭建"
+      </div>
+      <ServerTable
+        rows={isForbidden(query.error) ? [] : query.data?.items || []}
+        columns={columns}
+        loading={query.isPending}
+        fetching={query.isFetching}
+        error={query.error}
+        retry={() => void query.refetch()}
+        filtered={false}
+        emptyTitle="草稿箱为空"
+      />
+      <div className="w-full">
+        <Pager
+          paging={paging}
+          nextCursor={query.data?.next_cursor}
+          busy={query.isFetching}
         />
-      </CardContent>
-      <CardFooter>
-        <div className="w-full">
-          <Pager
-            paging={paging}
-            nextCursor={query.data?.next_cursor}
-            busy={query.isFetching}
-          />
-        </div>
-      </CardFooter>
-    </Card>
+      </div>
+    </div>
   )
 }
