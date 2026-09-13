@@ -386,6 +386,8 @@ def test_mcp_readiness_uses_same_channel_gate_without_requiring_api_app(
         ).all()
     if path == "known":
         assert result.state == "preparable" and result.path == "existing_target"
+    elif path == "relay":
+        assert result.state == "preparable" and result.path == "share_source"
     else:
         assert (
             result.state == "blocked"

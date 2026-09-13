@@ -175,7 +175,19 @@ class URLImageUpload:
     file_name: str
 
 
+@dataclass(frozen=True)
+class AssetShare:
+    advertiser_id: str
+    material_ids: tuple[str, ...]
+    shared_advertiser_ids: tuple[str, ...]
+    asset_type: str = "VIDEO"
+
+
 class MaterialOperations(Protocol):
+    def share_assets(
+        self, request: AssetShare, *, budget: RemoteCallBudget
+    ) -> CallEvidence: ...
+
     def read_video(
         self, *, advertiser_id: str, video_id: str, budget: RemoteCallBudget
     ) -> VideoRecord | None: ...

@@ -2,11 +2,15 @@
 
 import json
 import re
+from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
 import business_api_client.tiktok_business.tiktok_exceptions as sdk_errors  # type: ignore[import-untyped]
+from business_api_client.api.creative_management_api import (  # type: ignore[import-untyped]
+    CreativeManagementApi,  # type: ignore[import-untyped]
+)
 from business_api_client.api.file_api import FileApi  # type: ignore[import-untyped]
 from business_api_client.rest import ApiException  # type: ignore[import-untyped]
 from urllib3.exceptions import HTTPError
@@ -22,6 +26,7 @@ from app.integrations.tiktok.contracts.common import (
 from app.integrations.tiktok.official.accounts import RequestScope, _strict_sdk_envelope
 from app.integrations.tiktok.sdk import SDK_SCOPE_INTERRUPTS, AccountAdmissionDeferred
 from app.modules.materials import cover_sdk, sdk_assets
+from app.modules.materials.sharing import share_arguments
 
 
 def _unique_upload_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -45,10 +50,12 @@ class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
         request_scope: RequestScope,
         deadline: datetime,
         preview_allowed_hosts: frozenset[str] = frozenset(),
+        share_authorize: Callable[[str], None] | None = None,
         api_scope_ids: frozenset[int] | None = None,
     ):
         super().__init__(preview_allowed_hosts=preview_allowed_hosts)
         self._client = client
+        self._share_authorize = share_authorize
         self._scope = request_scope
         self._deadline = deadline
         self._api_scope_ids = api_scope_ids
@@ -189,6 +196,39 @@ class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
             )
             raise RemoteCallError(
                 code, effect="UNKNOWN" if sent else "NOT_SENT", evidence=evidence
+            ) from None
+
+    def share_assets(
+        self, request: contracts.AssetShare, *, budget: contracts.RemoteCallBudget
+    ) -> CallEvidence:
+        sent = False
+        try:
+            arguments = share_arguments(request, authorize=self._share_authorize)
+            if budget.deadline != self._deadline:
+                raise DomainError("material_deadline", "素材预算与本次会话期限不一致")
+            with self._scope(
+                request.advertiser_id, "materials.share_assets", budget.deadline
+            ):
+                timeout = budget.timeout(upload=True)
+                sent = True
+                CreativeManagementApi(self._client).creative_asset_share(
+                    self._client.default_headers["Access-Token"],
+                    body=arguments,
+                    async_req=True,
+                    _request_timeout=timeout,
+                ).get()
+                return _upload_response(self._client, array=False).evidence
+        except SDK_SCOPE_INTERRUPTS:
+            raise
+        except RemoteCallError, AccountAdmissionDeferred:
+            raise
+        except Exception as error:
+            raise RemoteCallError(
+                error.code
+                if isinstance(error, DomainError) and not sent
+                else "material_share_unknown",
+                effect="UNKNOWN" if sent else "NOT_SENT",
+                evidence=CallEvidence(),
             ) from None
 
     def upload_video_url(

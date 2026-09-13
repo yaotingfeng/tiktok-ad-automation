@@ -1,66 +1,40 @@
-# Official TikTok material SDK contract
+# TikTok 素材分发契约
 
-Pinned revision: `f809c396520df2d7b201a9ccc5378d822b728ed3`, `python_sdk`, import `business_api_client`. Evidence below is installed official source inspection and offline transport tests. No real TikTok upload, sharing, S3 write, account permission verification or live response acceptance was performed.
+当前实现以本节为准。官方 Python SDK 固定修订仍为 `f809c396520df2d7b201a9ccc5378d822b728ed3`；MCP 使用本项目服务器的官方代码客户端及真实授权工具目录，不调用开发机的广告 MCP。
 
-## Methods and wire shapes
+## 路径与授权
 
-The installed [FileApi](https://github.com/tiktok/tiktok-business-api-sdk/blob/f809c396520df2d7b201a9ccc5378d822b728ed3/python_sdk/business_api_client/api/file_api.py) defines:
+1. 当前目标账户有新鲜映射时复用。已有 VID 但映射过期时，只核实目标账户。
+2. 同 BC 有合法源库存时调用原生 `/creative/asset/share/`，不走 URL 上传，也不依赖原件或视频 CDN 白名单。源/目标必须由发送授权同时具备操作权限。源资产所有权还由 TikTok 共享接口校验；工具存在不代表每一对账户一定成功。
+3. 跨 BC 仅在同租户可访问且 SHA-256、MD5、文件大小一致的已验证库存间使用 URL 转存；各自冻结实际 BC、账户、连接与授权代数。目标素材库范围保持原样。
+4. 没有可用平台来源的旧原件仍可按既有文件上传流程准备；新 R2 导入先完成源账户入库。已经发送或结果不明的操作绝不改路径重发。
 
-| Method | Endpoint suffix | Contract |
-| --- | --- | --- |
-| `ad_video_upload(access_token, **kwargs)` | `file/video/ad/upload/` | Multipart kwargs: actual `advertiser_id`, `upload_type=UPLOAD_BY_FILE`, local `video_file` path, internal UUID `file_name`, MD5 `video_signature`. JSON `body` is rejected by the generated method. Auto binding/fixing are disabled. |
-| `ad_video_info(advertiser_id, video_ids, access_token, **kwargs)` | `file/video/ad/info/` | Account-scoped GET; SDK permits at most 60 IDs according to its documentation. This worker requests one VID. |
-| `ad_video_search(advertiser_id, access_token, **kwargs)` | `file/video/ad/search/` | Account-scoped paginated GET; page size 100. `FilteringVideoAdSearch` supports `material_ids`, `video_ids`, `displayable`, dimensions and ratio, **not filename** in this revision. Unknown uploads therefore scan complete pages and correlate exact internal UUID name plus MD5 locally. |
+共享调用使用源 MID；名称由 TikTok 复制。先取得源的实际 MID/名称，持久保存恢复线索，再发送共享。成功回执不虚构目标 VID；按目标账户名称和内容摘要查找，采用实际返回的 VID。首次查询立即调度，临时不可见或结果不明时继续有界查询。重名冲突也走目标匹配，不能改为重复上传。API 和 MCP 共享同一业务路径、限流、持久操作和恢复逻辑。
 
-[CreativeManagementApi](https://github.com/tiktok/tiktok-business-api-sdk/blob/f809c396520df2d7b201a9ccc5378d822b728ed3/python_sdk/business_api_client/api/creative_management_api.py) exposes `creative_asset_share(access_token, body=AssetShareBody(...))`. The body contains source `advertiser_id`, `asset_type=VIDEO`, typed `material_ids` (MID), and `shared_advertiser_ids`. Existence of this generated method does not prove shared-asset permissions or support for a particular source/target pair. The generated share wrapper is covered by an offline wire test. No native source/target sharing capability is enabled: target preparation uses fresh verified mappings, target readback, or original-file upload. MID existence alone never enables sharing.
+## 官方调用
 
-The official synchronous [ApiClient](https://github.com/tiktok/tiktok-business-api-sdk/blob/f809c396520df2d7b201a9ccc5378d822b728ed3/python_sdk/business_api_client/api_client.py) checks nonzero codes and returns `{data, request_id}`, removing `code/message`. Upload `data` is normalized as exactly one row in an array; read `data` has `list`, search also has validated `page_info`. A supported generated model envelope must have integer `code=0`. Arbitrary dictionaries, missing fields, boolean success codes and untyped MID-only results fail closed.
+| 操作 | API / MCP |
+| --- | --- |
+| 原生共享 | 官方 `CreativeManagementApi.creative_asset_share` / `creative_asset_share_get`，`advertiser_id` 为源，`material_ids` 为 MID，`shared_advertiser_ids` 为目标；DTO 限 20 个素材、10 个目标 |
+| URL 上传 | 官方 `FileApi.ad_video_upload` / `file_video_ad_upload`；`UPLOAD_BY_URL`、实际目标账户、可识别文件名，关闭自动修复/绑定 |
+| 视频详情 | `file/video/ad/info/` / `file_video_ad_info_get`，实际账户范围 |
+| 视频搜索 | `file/video/ad/search/` / `file_video_ad_search`；共享恢复按源实际名称和摘要匹配，不假定目标 VID 等于源 VID |
 
-Official [video info documentation](https://business-api.tiktok.com/portal/docs?id=1740050161973250) describes `displayable`, `signature`, `video_id`, and `material_id` in the account's returned video list. The implementation requires exactly one row with `displayable is True`, matching original MD5 `signature`, and a nonblank VID before marking an account mapping `available`. MID remains separate. If account readback returns a different VID with matching content evidence, that actual returned VID is persisted. `available` represents verified library availability, not ad policy approval or guaranteed placement support.
+官方生成方法见 [CreativeManagementApi](https://github.com/tiktok/tiktok-business-api-sdk/blob/f809c396520df2d7b201a9ccc5378d822b728ed3/python_sdk/business_api_client/api/creative_management_api.py) 和 [FileApi](https://github.com/tiktok/tiktok-business-api-sdk/blob/f809c396520df2d7b201a9ccc5378d822b728ed3/python_sdk/business_api_client/api/file_api.py)。MCP 名称及输入 schema 已通过测试服务器真实 `tools/list` 读取核对；业务成功必须另看实际共享/查询记录。
 
-Temporary preview/cover signed URLs, arbitrary platform messages, tokens and complete response bodies are not stored as operation evidence. Only validated identifiers and locally generated recovery/error fields are retained. SDK wire loggers are disabled by the shared credential scope; credentials are freshly resolved inside a short-lived `sdk_client`, removed on exit, and never carried in a queued message.
+## 文件名、封面和响应
 
-## Durable execution and bounded resources
+本地 `MaterialFile.file_name` 保留完整原名。新上传/URL 分发使用可识别原名加短关联后缀，完整 UTF-8 名称最多 100 字节，超长从中间压缩保留末尾编号。原生共享按平台规则保留源名称。新广告额外传入 `creative_info.video_info.file_name`；历史冻结请求不重写。
 
-Source upload task `materials.upload_original` has a 900-second prefork hard process deadline (890-second soft limit), 960-second database claim, and upload admission lease strictly greater than 905,000 ms. Read/reconciliation task `materials.verify_original` has a 45-second hard deadline (40-second soft limit), 60-second claim, and admission lease strictly greater than 50,000 ms. Production handlers reject eager/direct/solo/threads execution and unsafe hard-limit overrides before network work. SDK socket timeouts are upload `(10, 300)` and read `(5, 30)`; socket limits alone do not bound whole work units.
+封面沿用已有行为：使用视频封面 URL 上传图片取得目标账户图片 ID；已有目标图片 ID 优先复用。图片 URL 不直接冒充 `image_info.web_uri`。源图片 ID 不直接复制成目标图片 ID。
 
-S3 downloads stream through the real Task 2 `open_original` adapter into a private temporary file; the adapter closes its DB session before I/O and cleans its stream/path on ordinary exit or cancellation. No TikTok admission lease is held while downloading. The upload/download plus SDK serialization, DNS and transfer remain within the same prefork process deadline. A hard-killed process cannot run Python cleanup; operating-system temporary-directory cleanup remains a deployment concern.
+URL 原始导入的上传回执及异常恢复查询完整正文由独立加密归档保存；业务状态只保留必要标识和恢复字段，不公开签名 URL/令牌。正常源 URL 上传成功取得实际 VID 即完成入库，不再统一强制回查；共享需要获取目标实际 VID，不能照搬上传回执流程。
 
-The pinned SDK itself reads a complete file in `files_parameters` and urllib3 constructs multipart data in memory. This integration does **not** claim end-to-end streaming or unlimited upload size. `MATERIAL_SDK_MAX_UPLOAD_BYTES` defaults to 256 MiB and blocks larger TikTok uploads before S3 retrieval while preserving the stored original. This is an engineering memory boundary, not a TikTok platform maximum. `MATERIAL_SDK_UPLOAD_MAX_INFLIGHT` defaults to 1; the upload endpoint's real shared Redis admission policy must not exceed it. Each worker process needs headroom for multiple copies plus SDK/runtime overhead; container memory limits, worker concurrency, large-file capacity tests and operational temp cleanup are P07 deployment verification. No change to the vendor SDK or alternate HTTP upload implementation is made.
+## 部署与验证
 
-Each request uses fresh shared Redis admission keyed by developer App ID + endpoint + tenant + actual advertiser. Denial reschedules with the reported delay without setting `sending`; release happens in `finally`. Explicit configuration is required; there is no production local limiter or fake admission.
+见[部署手册](../runbooks/deployment.md#素材原生共享与应用-mini-配置2026-09-13)。共享没有额外功能开关。新增 `materials.share_assets` 的租约需覆盖 900 秒硬限；连接工具合同更新须用原授权重新核实工具目录。数据库迁移为 `material_source_bc`，源外键/路由与目标分离且保留租户约束。
 
-## Operation and recovery rules
-
-`MaterialAssetOperation` is the common file/account send authority. Its unique unresolved operation and token-fenced claim are shared with target distribution. `MaterialUploadAttempt` preserves the actual account/connection selected for each source attempt. No permanent material account or drama association is written. Upload receipt VID/MID remain in `upload_video_id`/`upload_mid` even if later readback returns different account VID/MID. A pre-existing verified mapping for the same account prevents a new source send.
-
-The worker commits its operation claim plus a delayed recovery outbox record before S3 or TikTok I/O, rechecks account/tenant permissions and fresh credentials immediately before sending, commits `sending`, closes the DB session, and then invokes the generated SDK. Exactly one SDK request occurs per task. Upload receipt commits typed identifiers with `verifying`; a later read task creates the available mapping only after content and permission verification. Stale completion tokens cannot publish results.
-
-Recovery records bind to the precise claim ID and become no-ops once that claim ends. Normal successor records carry a local operation revision that advances only when a worker actually claims work, so delayed watchdogs cannot invalidate unpublished successors or grow parallel recovery chains. Replayed upload messages never resend an unresolved operation or bypass it by changing advertiser.
-
-Expired `sending`, timeouts, unexpected responses and uncertain write failures enter `result_unknown`. Known VID uses account info; no VID uses complete account search by exact internal UUID filename and content MD5, followed by an info call. Empty listings and temporary invisibility are not authoritative absence and never enable a second upload. Multiple matching VIDs remain ambiguous. Account revocation keeps history and prevents readiness; it does not authorize a new-account resend of an unknown result.
-
-`request_source_retry(session, context, material_id)` provides a transactional, explicit retry entrypoint for an unsent `failed` operation (or an initial no-account block). It rechecks current upload authority, records a new actual account/connection attempt and returns the committed-outbox candidate ID; its caller commits. Unknown, verifying, sending and successful operations are rejected with `material_retry_not_allowed`. The material retry API delegates stored-file retries to this platform path; the public queue only offers retry for provably unsent failures. Initial actor revocation is persisted as a recoverable block only for the exact original batch actor and tenant/file with no source attempt; restoring authority permits explicit retry. Existing unknown/receipt-bearing attempts retain their reconciliation state.
-
-`run_source_upload` intentionally consumes an engine rather than a caller-owned Session: transaction ownership must stay within the worker so network calls cannot accidentally retain caller locks. Task 2 enqueues only `{material_id}`; subsequent internal records include scoped operation/revision or recovery claim identifiers. `reserve_asset_operation` lives alongside this worker and accepts action `upload` or `build`. Both callers serialize on the file before the common operation. All send, result and failure transactions follow file → operation ordering, including the AccountMaterial foreign-key insertion phase; no row lock is held during SDK or S3 network work.
-
-## Readiness and target preparation
-
-`get_material_readiness(session, *, context, bc_id, material_id, advertiser_id)` is local and read-only: no SDK, Redis admission request, outbox or persistent mutation. It runs in a PostgreSQL read-only transaction. Current build authority is required even for a cached target mapping. `MATERIAL_ASSET_MAX_AGE_SECONDS` defaults to 900 seconds; this is a configurable local cache policy, not a TikTok validity guarantee. Older known target VIDs return `preparable/existing_target` for readback. A fresh verified target remains reusable even if original upload exceeds the engineering memory cap.
-
-Source evidence is queried over all legitimate same-tenant, same-BC inventory rows with current connection/account access, not the single representative returned in a material candidate. Native sharing is intentionally unavailable until source/target permission and mapping semantics are verified with authorized live evidence. A preserved original can use `upload_original` despite source-account access loss; known capacity, upload permission, SDK credential configuration, prefork or admission-policy failures return explicit blocked reasons before submission. A MID-only source with no original is `material_share_unverified`.
-
-`ensure_target_asset(session, *, context, bc_id, material_id, advertiser_id, task_key)` is internal to a submitted build. Its caller owns the transaction and persists the returned `queued.task_id` in its submitted step. This ID is the durable `MaterialDistribution.id`, not a Celery message ID. Concurrent build consumers share one active file/target distribution and one unresolved `MaterialAssetOperation`. A source-owned operation is observed rather than sent by a second worker; source history is not overwritten. Target `existing_target` verification uses a read-only stage on the same operation schema (`read_only` evidence), without inventing a second send claim.
-
-Target upload task `materials.prepare_target` enforces 900/890 second hard/soft limits and a 960-second claim. `materials.verify_target` enforces 45/40 seconds and a 60-second claim. Both use the same production prefork enforcement and shared Redis admission as source handlers. Each dispatch performs at most one official SDK call. A read recovery that discovers a definitely rejected share schedules the bounded upload handler; it never uploads inside the shorter read handler. The actual target VID/MID from matching-content readback is published only after another current target-permission check. Source image/cover IDs are never copied to a target; an old target cover is cleared when its VID changes.
-
-An unsent native share may select original upload; a failed share needs explicit `definite_no_effect` evidence to take that fallback. A historical failed share without such evidence blocks fresh submission with `material_share_unconfirmed`. Sending/unknown shares retain their original operation/path and use target-account reconciliation. Source MID filtering is not used for unknown-share recovery because cross-account MID mapping has not been verified. Empty target searches remain unknown and never permit blind reupload.
-
-## Material-specific lost-message repair
-
-`materials.repair_dispatches(limit=100)` is a bounded control task. Integration must schedule it on the control queue every 60 seconds. It selects eligible records in SQL before LIMIT with `FOR UPDATE SKIP LOCKED`, then clears only `published_at` on the same outbox identity. It requires published age at least 120 seconds, an already-due record, and the current unresolved operation revision or expired exact claim token. It also covers a stored object's initial source delivery before any attempt and the single source-observation message for an active distribution.
-
-Already-unpublished records, their available time and broker backoff are untouched. Obsolete revisions, active claims and completed business work are excluded. A large backlog of old published revisions therefore cannot starve a current eligible row. Broker acceptance followed by worker loss, including an already-sent source's verification message consumed during temporary actor revocation, remains recoverable after authority returns without enabling an upload retry. Task2 stored files blocked before any send use the explicit safe retry path instead.
+以下为历史离线记录，只说明当时版本的测试覆盖，不代表当前真实账户成功或当前分发路径。
 
 ## Offline validation
 

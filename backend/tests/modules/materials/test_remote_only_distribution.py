@@ -1,6 +1,7 @@
 """Remote-only target preparation after staged originals have been deleted."""
 
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
 from sqlmodel import Session
@@ -54,12 +55,53 @@ def remote_env(url_env, monkeypatch):
         obj.deleted_at = obj.reservation_released_at = datetime.now(UTC)
         material = db.get(MaterialFile, url_env["material_id"])
         material.storage_state = "unavailable"
-        account = target(db, url_env)
         source = asset(db, url_env, "actual-account", mid=None)
         source_id = source.id
+        # URL 转存用例使用真实跨 BC 范围；同 BC 原生共享另有独立回归。
+        from app.modules.accounts.connection_models import (
+            BCConnectionBinding,
+            BCDefaultRoute,
+        )
+        from app.modules.accounts.models import TenantBC
+
+        target_bc = "target-bc"
+        db.add(TenantBC(tenant_id=material.tenant_id, bc_id=target_bc))
+        db.flush()
+        db.add(
+            BCConnectionBinding(
+                tenant_id=material.tenant_id,
+                bc_id=target_bc,
+                connection_id=url_env["connection_id"],
+                kind="OFFICIAL_API",
+            )
+        )
+        db.flush()
+        db.add(
+            BCDefaultRoute(
+                tenant_id=material.tenant_id,
+                bc_id=target_bc,
+                connection_id=url_env["connection_id"],
+            )
+        )
+        target_file = MaterialFile(
+            **(
+                material.model_dump()
+                | {"id": uuid4(), "bc_id": target_bc, "object_key": str(uuid4())}
+            )
+        )
+        db.add(target_file)
+        db.flush()
+        destination = {**url_env, "bc_id": target_bc, "material_id": target_file.id}
+        account = target(db, destination)
     for key in ("S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"):
         monkeypatch.setattr(settings, key, "")
-    return {**url_env, "target": account, "source_id": source_id}
+    return {
+        **destination,
+        "target": account,
+        "source_id": source_id,
+        "source_bc_id": url_env["bc_id"],
+        "source_material_id": url_env["material_id"],
+    }
 
 
 def info(*, vid="vid-actual-account", **changes):
@@ -161,8 +203,8 @@ def test_remote_preview_get_only_reads_and_never_persists_url(remote_env, wire):
             remote_env["context"].actor_id, timedelta(minutes=5)
         )
         response = client.get(
-            f"/api/tenants/{remote_env['context'].tenant_id}/materials/{remote_env['material_id']}/remote-preview",
-            params={"bc_id": remote_env["bc_id"]},
+            f"/api/tenants/{remote_env['context'].tenant_id}/materials/{remote_env['source_material_id']}/remote-preview",
+            params={"bc_id": remote_env["source_bc_id"]},
         )
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
@@ -194,14 +236,19 @@ def test_revoked_representative_does_not_hide_another_legal_source(
     from app.modules.accounts.models import BCAccountAccess
 
     with Session(engine) as db, db.begin():
-        other = target(db, remote_env, advertiser_id="second-source")
-        legal = asset(db, remote_env, other, mid=None)
+        source_env = {
+            **remote_env,
+            "bc_id": remote_env["source_bc_id"],
+            "material_id": remote_env["source_material_id"],
+        }
+        other = target(db, source_env, advertiser_id="second-source")
+        legal = asset(db, source_env, other, mid=None)
         legal_id = legal.id
         db.get(
             BCAccountAccess,
             (
                 remote_env["context"].tenant_id,
-                remote_env["bc_id"],
+                remote_env["source_bc_id"],
                 "actual-account",
                 remote_env["connection_id"],
             ),
@@ -224,7 +271,7 @@ def test_all_sources_revoked_block_without_original_or_external_call(remote_env,
             BCAccountAccess,
             (
                 remote_env["context"].tenant_id,
-                remote_env["bc_id"],
+                remote_env["source_bc_id"],
                 "actual-account",
                 remote_env["connection_id"],
             ),
@@ -281,7 +328,7 @@ def test_source_revoked_during_info_prevents_target_post(
                 BCAccountAccess,
                 (
                     remote_env["context"].tenant_id,
-                    remote_env["bc_id"],
+                    remote_env["source_bc_id"],
                     "actual-account",
                     remote_env["connection_id"],
                 ),
@@ -783,8 +830,8 @@ def test_remote_preview_expired_budget_has_no_network(remote_env, redis_client, 
             database_engine=engine,
             redis_client=redis_client,
             context=remote_env["context"],
-            bc_id=remote_env["bc_id"],
-            material_id=remote_env["material_id"],
+            bc_id=remote_env["source_bc_id"],
+            material_id=remote_env["source_material_id"],
             source_asset_id=remote_env["source_id"],
             deadline=datetime.now(UTC) - timedelta(seconds=1),
         )
@@ -811,8 +858,8 @@ def test_new_generation_without_ready_source_never_selects_legacy_file(
     for key in ("S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"):
         monkeypatch.setattr(settings, key, "offline-fixture")
     with Session(engine) as db, db.begin():
-        db.get(MaterialFile, url_env["material_id"]).storage_state = "stored"
         account = target(db, url_env)
+        db.get(MaterialFile, url_env["material_id"]).storage_state = "stored"
     readiness = read(url_env, account)
     assert (
         readiness.state == "blocked"
@@ -831,8 +878,8 @@ def test_new_generation_old_file_dispatch_cannot_open_original(
     )
 
     with Session(engine) as db, db.begin():
-        db.get(MaterialFile, url_env["material_id"]).storage_state = "stored"
         account = target(db, url_env)
+        db.get(MaterialFile, url_env["material_id"]).storage_state = "stored"
         route = freeze_route(
             db,
             context=url_env["context"],

@@ -1,6 +1,7 @@
+from typing import cast
 from uuid import UUID
 
-from sqlalchemy import and_, func
+from sqlalchemy import SQLColumnExpression, and_, func
 from sqlmodel import Session, col, select
 from sqlmodel.sql.expression import SelectOfScalar
 
@@ -15,13 +16,13 @@ from app.modules.accounts.models import (
     TenantBC,
     TikTokConnection,
 )
-from app.modules.accounts.routing import freeze_route, verify_route
+from app.modules.accounts.routing import Capability, freeze_route, verify_route
 from app.modules.accounts.schemas import AccountAccess
 from app.modules.tenants.permissions import require_tenant
 
 
 def usable_grants(
-    *, tenant_id: UUID, bc_id: str, action: str
+    *, tenant_id: UUID, bc_id: str | SQLColumnExpression[str], action: str
 ) -> SelectOfScalar[BCAccountAccess]:
     """One joined statement, also used for efficient deterministic source choice."""
     statement = (
@@ -91,7 +92,7 @@ def resolve_account_access(
         context=context,
         route=route,
         advertiser_id=advertiser_id,
-        capability=action,
+        capability=cast(Capability, action),
     )
     account = session.get(AdvertiserAccount, (context.tenant_id, advertiser_id))
     assert account is not None

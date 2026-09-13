@@ -18,7 +18,11 @@ def test_each_sp_uses_complete_target_group_and_one_independent_text():
     from app.modules.builds.request_compiler import ad_assets
 
     mappings = [
-        {"video_id": "target-v1", "image_id": "target-cover-1"},
+        {
+            "video_id": "target-v1",
+            "image_id": "target-cover-1",
+            "file_name": "01-The General-CL6-LH-1.mp4",
+        },
         {"video_id": "target-v2", "image_id": "target-cover-2"},
     ]
     identity = {
@@ -47,6 +51,21 @@ def test_each_sp_uses_complete_target_group_and_one_independent_text():
         [{"web_uri": "target-cover-1"}],
         [{"web_uri": "target-cover-2"}],
     ]
+    assert (
+        a["creative_list"][0]["creative_info"]["video_info"]["file_name"]
+        == "01-The General-CL6-LH-1.mp4"
+    )
+    from app.modules.builds.request_compiler import encode_intent
+
+    request = {
+        **a,
+        "advertiser_id": "account",
+        "adgroup_id": "group",
+        "ad_name": "ad",
+        "operation_status": "ENABLE",
+        "ad_configuration": {"call_to_action_id": "cta"},
+    }
+    assert encode_intent(decode_intent("AD", request)) == request
     assert a["ad_text_list"] == [{"ad_text": "Watch an episode."}]
     assert b["ad_text_list"] == [{"ad_text": "Follow the story."}]
     assert (mappings, identity) == before

@@ -410,7 +410,7 @@ class MaterialDistribution(SQLModel, table=True):
     __tablename__ = "material_distribution"
     __table_args__ = (
         route_constraint("material_distribution", "target_route"),
-        route_constraint("material_distribution", "source_route"),
+        route_constraint("material_distribution", "source_route", source=True),
         material_reference(),
         account_reference(),
         CheckConstraint(
@@ -418,13 +418,14 @@ class MaterialDistribution(SQLModel, table=True):
             name="ck_material_distribution_status",
         ),
         ForeignKeyConstraint(
-            ["tenant_id", "bc_id", "material_id", "source_asset_id"],
+            ["tenant_id", "source_bc_id", "source_material_id", "source_asset_id"],
             [
                 "account_material.tenant_id",
                 "account_material.bc_id",
                 "account_material.material_id",
                 "account_material.id",
             ],
+            name="fk_material_distribution_source",
         ),
         ForeignKeyConstraint(
             ["tenant_id", "bc_id", "material_id", "advertiser_id", "operation_id"],
@@ -454,6 +455,8 @@ class MaterialDistribution(SQLModel, table=True):
     advertiser_id: str = Field(max_length=128)
     actor_id: UUID = Field(foreign_key="user.id")
     source_asset_id: UUID | None = None
+    source_bc_id: str | None = Field(default=None, max_length=128)
+    source_material_id: UUID | None = None
     operation_id: UUID | None = None
     target_route: dict[str, Any] | None = Field(
         default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True)

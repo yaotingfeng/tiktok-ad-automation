@@ -7,7 +7,6 @@ source upload and target preparation. Never hold a DB transaction over network.
 from contextlib import AbstractContextManager, nullcontext
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-from pathlib import PurePath
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -33,6 +32,7 @@ from app.modules.accounts.schemas import AccountAccess
 from app.modules.tenants.permissions import require_tenant
 
 from . import sdk_assets as api
+from .file_names import video_file_name
 from .models import (
     AccountMaterial,
     MaterialAssetOperation,
@@ -95,11 +95,7 @@ def _locked_material(
 
 
 def remote_name(material: MaterialFile) -> str:
-    suffix = PurePath(material.file_name).suffix.lower()
-    # Never pass path fragments/user names to the platform correlation name.
-    if suffix not in {".mp4", ".mov", ".m4v", ".avi", ".webm", ".mpeg", ".3gp"}:
-        suffix = ".mp4"
-    return f"{material.id}{suffix}"
+    return video_file_name(material.file_name, correlation=material.id.hex[:8])
 
 
 def reserve_asset_operation(

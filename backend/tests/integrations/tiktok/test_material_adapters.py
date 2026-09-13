@@ -44,6 +44,12 @@ def material_case(request, monkeypatch):
         def log_message(self, *args):
             pass
 
+        def do_POST(self):
+            enqueue.share_bodies.append(
+                json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            )
+            self.do_GET()
+
         def do_GET(self):
             calls.append(self.path)
             data = json.dumps(replies.popleft()).encode()
@@ -71,10 +77,11 @@ def material_case(request, monkeypatch):
         )
 
     enqueue.channel = request.param
+    enqueue.share_bodies = []
 
     def authorize(advertiser, operation):
         events.append((advertiser, operation))
-        assert advertiser in (None, "123")
+        assert advertiser in (None, "123", "456")
 
     @contextmanager
     def admit(_advertiser, _operation):
@@ -103,6 +110,9 @@ def material_case(request, monkeypatch):
                 yield (
                     SDKMaterialOperations(
                         client,
+                        share_authorize=lambda account: authorize(
+                            account, "materials.share_assets"
+                        ),
                         request_scope=scope,
                         deadline=deadline,
                         preview_allowed_hosts=hosts,
@@ -136,7 +146,13 @@ def material_case(request, monkeypatch):
                 observed_tools={t["name"]: t for t in wire.tools},
             ) as client:
                 yield (
-                    MCPMaterialOperations(client, preview_allowed_hosts=hosts),
+                    MCPMaterialOperations(
+                        client,
+                        preview_allowed_hosts=hosts,
+                        share_authorize=lambda account: authorize(
+                            account, "materials.share_assets"
+                        ),
+                    ),
                     enqueue,
                     budget,
                     events,
@@ -453,3 +469,29 @@ def test_unknown_video_lookup_sends_persisted_name_filter(material_case):
     else:
         filtering = json.loads(parse_qs(urlsplit(calls[-1]).query)["filtering"][0])
     assert filtering == {"video_name": "persisted-correlation.mp4"}
+
+
+def test_native_share_uses_mid_and_checks_both_accounts(material_case):
+    from app.integrations.tiktok.contracts.materials import AssetShare
+
+    adapter, enqueue, budget, events, calls = material_case
+    enqueue("materials.share_assets", {})
+    result = adapter.share_assets(
+        AssetShare("123", ("90071992547409939999",), ("456",)), budget=budget
+    )
+    assert result.request_id == "material-request"
+    assert ("123", "materials.share_assets") in events
+    assert ("456", "materials.share_assets") in events
+    body = (
+        enqueue.share_bodies[0]
+        if enqueue.channel == "SDK"
+        else next(
+            c["params"]["arguments"] for c in calls if c["method"] == "tools/call"
+        )
+    )
+    assert body == {
+        "advertiser_id": "123",
+        "material_ids": ["90071992547409939999"],
+        "shared_advertiser_ids": ["456"],
+        "asset_type": "VIDEO",
+    }

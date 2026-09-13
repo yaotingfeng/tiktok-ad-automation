@@ -146,8 +146,8 @@ def test_packaged_manifest_is_documented_and_fail_closed():
     assert len({item.operation for item in contracts}) == len(contracts)
     assert len(profile.schema_manifest_sha256) == 64
     for item in contracts:
-        assert item.evidence == "DOCUMENTED"
-        assert item.text_json_envelope == item.operation.startswith("accounts.")
+        assert item.evidence == ("OBSERVED" if item.operation == "materials.share_assets" else "DOCUMENTED")
+        assert item.text_json_envelope == (item.operation.startswith("accounts.") or item.operation == "materials.share_assets")
         assert item.output_schema is None
         verify_tool_schema(
             item, {"name": item.tool_name, "inputSchema": item.input_schema}

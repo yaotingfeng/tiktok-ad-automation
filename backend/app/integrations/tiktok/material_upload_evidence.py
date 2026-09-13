@@ -35,7 +35,7 @@ UPLOAD_EVIDENCE = (
     ),
     MaterialUploadEvidence(
         channel="OFFICIAL_MCP",
-        adapter_contract_revision="786e80cf1d8244c93f5e477cb183dda958d80564cbf0dc35e4a032fe5c3d3f6d",
+        adapter_contract_revision="c8329fde77d294d3c9bf39fca05c1e640e327928b827aba38fd10321f8c44965",
         policy=MaterialUploadPolicy(1024**3),
         category="APPLICATION",
         sources=(

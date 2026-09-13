@@ -14,7 +14,7 @@ from app.modules.accounts.routing import Capability, verify_route
 
 
 def route_constraint(
-    table: str, column: str, *, connection: bool = False
+    table: str, column: str, *, connection: bool = False, source: bool = False
 ) -> CheckConstraint:
     keys = "ARRAY['tenant_id','bc_id','connection_id','channel','authorization_revision','adapter_contract_revision']"
     conditions = [
@@ -41,6 +41,9 @@ def route_constraint(
         f"{column}->>'authorization_revision' ~ '^[0-9]+$'",
         f"length(btrim({column}->>'adapter_contract_revision')) > 0",
     ]
+    if source:
+        conditions.remove(f"{column}->>'bc_id' = bc_id")
+        conditions.append(f"{column}->>'bc_id' = source_bc_id")
     if connection:
         conditions.append(f"{column}->>'connection_id' = connection_id::text")
     return CheckConstraint(

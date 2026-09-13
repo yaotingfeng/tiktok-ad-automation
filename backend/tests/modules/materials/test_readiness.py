@@ -144,21 +144,21 @@ def test_expired_target_is_preparable_for_readback(source_env, wire):
     assert wire[0] == []
 
 
-def test_source_mid_is_not_proof_of_share_support_and_original_remains_path(
+def test_authorized_same_bc_source_uses_native_share_without_original(
     source_env, wire
 ):
     with Session(engine) as session, session.begin():
         account = target(session, source_env)
         asset(session, source_env, "actual-account")
     result = read(source_env, account)
-    assert (result.state, result.path) == ("preparable", "upload_original")
+    assert (result.state, result.path) == ("preparable", "share_source")
     with Session(engine) as session, session.begin():
         session.get(
             MaterialFile, source_env["material_id"]
         ).storage_state = "unavailable"
     result = read(source_env, account)
     assert (
-        result.state == "blocked" and result.reason_code == "material_share_unverified"
+        result.state == "preparable" and result.path == "share_source"
     )
     assert wire[0] == []
 
@@ -173,7 +173,7 @@ def test_all_sources_are_checked_beyond_first_representative(source_env, wire):
             MaterialFile, source_env["material_id"]
         ).storage_state = "unavailable"
     result = read(source_env, destination)
-    assert result.reason_code == "material_share_unverified"
+    assert result.state == "preparable" and result.path == "share_source"
     assert wire[0] == []
 
 

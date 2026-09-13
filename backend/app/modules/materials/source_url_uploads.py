@@ -29,6 +29,7 @@ from app.modules.tenants.permissions import require_tenant
 
 from . import sdk_assets as api
 from .channel_policy import require_url_upload
+from .file_names import video_file_name
 from .ingest_models import (
     IngestSession,
     IngestSessionFile,
@@ -289,14 +290,7 @@ def _new_operation(
     ).first()
     if conflicting:
         raise DomainError("material_operation_conflict", "该目标账户已有未核实素材操作")
-    stem = material.file_name.rsplit(".", 1)[0]
-    stem = re.sub(r"[\x00-\x1f\x7f/\\]", "_", stem).strip() or "video"
-    # Keep a recognizable original name with a stable, persisted correlation
-    # suffix. Bound UTF-8 bytes as well as characters for the remote field.
-    suffix = f"-{material.id}-{obj.generation}-{uuid4().hex[:12]}.mp4"
-    # TikTok 限制的是完整文件名；先给关联后缀留空间，避免正常原名加后缀就超长。
-    stem = stem.encode("utf-8")[: 100 - len(suffix)].decode("utf-8", errors="ignore")
-    name = f"{stem}{suffix}"
+    name = video_file_name(material.file_name, correlation=uuid4().hex[:8])
     digest = sha256(
         f"{context.tenant_id}:{material.id}:{obj.id}:{obj.generation}:{access.advertiser_id}:{name}:{obj.sha256}:{obj.video_md5}".encode()
     ).hexdigest()

@@ -538,6 +538,14 @@ export function Applications({
   connection: ProviderConnectionPublic
   onSelect?: (application: ProviderApplicationPublic) => void
 }) {
+  const { scope } = useTenantScope()
+  const client = useQueryClient()
+  const [editingMini, setEditingMini] =
+    useState<ProviderApplicationPublic | null>(null)
+  const [minisId, setMinisId] = useState("")
+  const [savingMini, setSavingMini] = useState(false)
+  const [miniError, setMiniError] = useState<unknown>(null)
+  const manageMini = canManage(scope?.role) && connection.status === "active"
   const paging = useCursorPage(),
     query = useQuery(
       applicationsQuery(tenantId, connection.id, paging.cursor, paging.limit),
@@ -556,12 +564,29 @@ export function Applications({
       },
       {
         header: "Minis 关联",
-        cell: ({ row }) =>
-          row.original.tiktok_minis_id ? (
-            <Identifier value={row.original.tiktok_minis_id} />
-          ) : (
-            "待核实"
-          ),
+        cell: ({ row }) => (
+          <div className="flex items-center gap-2">
+            {row.original.tiktok_minis_id ? (
+              <Identifier value={row.original.tiktok_minis_id} />
+            ) : (
+              "未配置"
+            )}
+            {manageMini && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!row.original.available || savingMini}
+                onClick={() => {
+                  setEditingMini(row.original)
+                  setMinisId(row.original.tiktok_minis_id || "")
+                  setMiniError(null)
+                }}
+              >
+                配置 Mini
+              </Button>
+            )}
+          </div>
+        ),
       },
       {
         header: "可用性",
@@ -590,10 +615,83 @@ export function Applications({
           ]
         : []),
     ],
-    [onSelect, connection.status],
+    [onSelect, connection.status, manageMini, savingMini],
   )
   return (
     <section className="flex min-w-0 flex-col gap-4">
+      <Dialog
+        open={!!editingMini}
+        onOpenChange={(open) => {
+          if (!open && !savingMini) setEditingMini(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>配置应用对应的 TikTok Mini</DialogTitle>
+            <DialogDescription>
+              {editingMini?.name}：填写此应用在 TikTok 中的 Mini
+              ID，后续剧目会复用此关联。
+            </DialogDescription>
+          </DialogHeader>
+          <Field>
+            <FieldLabel htmlFor="application-minis-id">
+              TikTok Mini ID
+            </FieldLabel>
+            <Input
+              id="application-minis-id"
+              value={minisId}
+              onChange={(event) => setMinisId(event.target.value)}
+              placeholder="请输入 TikTok Mini ID"
+              disabled={savingMini}
+            />
+            <FieldDescription>
+              在 TikTok
+              广告账户的小程序资产中查看。保存后，搭建时会检查目标账户是否可使用该
+              Mini。
+            </FieldDescription>
+          </Field>
+          {miniError ? <ProviderError error={miniError} /> : null}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={savingMini}
+              onClick={() => setEditingMini(null)}
+            >
+              取消
+            </Button>
+            <Button
+              disabled={
+                savingMini || !/^[A-Za-z0-9_.-]{1,128}$/.test(minisId.trim())
+              }
+              onClick={async () => {
+                if (!editingMini) return
+                setSavingMini(true)
+                setMiniError(null)
+                try {
+                  await ProvidersService.updateApplicationMinis({
+                    path: {
+                      tenant_id: tenantId,
+                      connection_id: connection.id,
+                      application_id: editingMini.external_id,
+                    },
+                    body: { minis_id: minisId.trim() },
+                  })
+                  await client.invalidateQueries({
+                    queryKey: providerKey(tenantId),
+                  })
+                  setEditingMini(null)
+                } catch (error) {
+                  setMiniError(error)
+                } finally {
+                  setSavingMini(false)
+                }
+              }}
+            >
+              {savingMini ? "保存中…" : "保存关联"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <h3 className="font-semibold">已发现应用</h3>
       <ServerTable
         rows={data?.items || []}

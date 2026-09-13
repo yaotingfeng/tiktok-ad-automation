@@ -41,6 +41,7 @@ class _AdGroupBody(AdGroupCreate):
 
 class _Video(FrozenModel):
     video_id: Id
+    file_name: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 class _Image(FrozenModel):
@@ -169,6 +170,7 @@ def decode_observed_intent(kind: str, body: dict[str, object]) -> CreateIntent:
             assets=tuple(
                 CreativeAsset(
                     video_id=item.creative_info.video_info.video_id,
+                    file_name=item.creative_info.video_info.file_name,
                     image_id=item.creative_info.image_info[0].web_uri,
                 )
                 for item in ad.creative_list
@@ -207,7 +209,14 @@ def encode_intent(intent: CreateIntent) -> dict[str, object]:
                             else {}
                         ),
                         "ad_format": "SINGLE_VIDEO",
-                        "video_info": {"video_id": asset.video_id},
+                        "video_info": {
+                            "video_id": asset.video_id,
+                            **(
+                                {"file_name": asset.file_name}
+                                if asset.file_name
+                                else {}
+                            ),
+                        },
                         "image_info": [{"web_uri": asset.image_id}],
                     }
                 }
@@ -374,7 +383,14 @@ def ad_assets(
                 "creative_info": {
                     **identity,
                     "ad_format": "SINGLE_VIDEO",
-                    "video_info": {"video_id": item["video_id"]},
+                    "video_info": {
+                        "video_id": item["video_id"],
+                        **(
+                            {"file_name": item["file_name"]}
+                            if item.get("file_name")
+                            else {}
+                        ),
+                    },
                     "image_info": [{"web_uri": item["image_id"]}],
                 }
             }

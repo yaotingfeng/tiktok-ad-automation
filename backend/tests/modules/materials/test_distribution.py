@@ -77,7 +77,7 @@ def test_two_submissions_share_durable_distribution_not_message_id(source_env, w
     with Session(engine) as session, session.begin():
         account = target(session, source_env)
     first, second = queue(source_env, account), queue(source_env, account)
-    assert first.state == second.state == "queued" and first.task_id == second.task_id
+    assert first.state == second.state == "queued" and first.task_id == second.task_id, first
     with Session(engine) as session:
         messages = session.exec(
             select(PendingDispatch).where(
@@ -88,7 +88,7 @@ def test_two_submissions_share_durable_distribution_not_message_id(source_env, w
     assert wire[0] == []
 
 
-def test_target_upload_and_readback_use_actual_target_vid_without_changing_source(
+def test_target_share_and_readback_use_actual_target_vid_without_changing_source(
     source_env, redis_client, wire, original_s3
 ):
     with Session(engine) as session, session.begin():
@@ -98,20 +98,26 @@ def test_target_upload_and_readback_use_actual_target_vid_without_changing_sourc
         source.cover_url = "https://source.example.invalid/image"
         source_id = source.id
     prepared = queue(source_env, account)
-    wire[1].append([{"video_id": "actual-target", "material_id": "received-mid"}])
+    from tests.modules.materials.test_native_distribution import (
+        search_info,
+        source_info,
+    )
+    wire[1].extend([source_info(), {}])
     run(source_env, redis_client, prepared.task_id, kind="prepare", s3=original_s3[0])
     assert state(prepared.task_id)[0].status == "verifying"
     assert state(prepared.task_id)[2] is None
+    found = search_info()
+    found["list"][0]["video_id"] = "actual-target"
+    wire[1].append(found)
+    run(source_env, redis_client, prepared.task_id)
     wire[1].append(info(vid="actual-target"))
     run(source_env, redis_client, prepared.task_id)
     dist, op, mapping = state(prepared.task_id)
     assert dist.status == "ready" and op.status == "succeeded"
     assert mapping.advertiser_id == account and mapping.video_id == "actual-target"
     assert mapping.image_id is None and mapping.cover_url is None
-    assert [dict(call[2]["fields"])["advertiser_id"] for call in wire[0]] == [
-        account,
-        account,
-    ]
+    assert [call[0] for call in wire[0]] == ["GET", "POST", "GET", "GET"]
+    assert all("/upload/" not in call[1] for call in wire[0])
     with Session(engine) as session:
         assert session.get(AccountMaterial, source_id).video_id == "vid-actual-account"
         assert (
@@ -123,7 +129,7 @@ def test_target_upload_and_readback_use_actual_target_vid_without_changing_sourc
             == []
         )
     run(source_env, redis_client, prepared.task_id, kind="prepare", s3=original_s3[0])
-    assert len(wire[0]) == 2
+    assert len(wire[0]) == 4
 
 
 def test_distribution_waits_on_existing_source_operation_without_second_sender(
@@ -270,7 +276,7 @@ def test_unsent_share_without_capability_blocks_after_source_revocation(
     assert len(wire[0]) == 0
 
 
-def test_definitely_rejected_share_uses_new_upload_operation_preserving_failure(
+def test_definitely_rejected_share_blocks_without_upload_fallback(
     source_env, redis_client, wire, original_s3
 ):
     with Session(engine) as session, session.begin():
@@ -286,10 +292,10 @@ def test_definitely_rejected_share_uses_new_upload_operation_preserving_failure(
         }
     wire[1].append([{"video_id": "new-target-receipt"}])
     run(source_env, redis_client, dist_id, kind="prepare", s3=original_s3[0])
-    assert state(dist_id)[1].id != old_id and state(dist_id)[1].status == "verifying"
+    assert state(dist_id)[1].id == old_id and state(dist_id)[0].status == "blocked"
     with Session(engine) as session:
         assert session.get(MaterialAssetOperation, old_id).status == "failed"
-    assert len(wire[0]) == 1
+    assert len(wire[0]) == 0
 
 
 def test_unproven_failed_share_cannot_start_upload_on_new_submission(source_env, wire):
@@ -347,7 +353,7 @@ def test_target_permission_revoked_during_read_does_not_publish_asset(
     assert state(dist_id)[0].status != "ready"
 
 
-def test_read_recovery_of_definite_failure_queues_write_in_bounded_upload_handler(
+def test_read_recovery_of_failed_share_does_not_queue_upload(
     source_env, redis_client, wire
 ):
     with Session(engine) as session, session.begin():
@@ -359,16 +365,8 @@ def test_read_recovery_of_definite_failure_queues_write_in_bounded_upload_handle
         old.path, old.status = "share_source", "failed"
         old.remote_response = {"definite_no_effect": True}
     run(source_env, redis_client, dist_id, kind="verify")
-    current = state(dist_id)[1]
-    assert current.id != old_id and current.status == "pending"
-    with Session(engine) as session:
-        messages = session.exec(
-            select(PendingDispatch).where(
-                PendingDispatch.tenant_id == source_env["context"].tenant_id,
-                PendingDispatch.task_name == "materials.prepare_target",
-            )
-        ).all()
-        assert any(row.payload["operation_id"] == str(current.id) for row in messages)
+    assert state(dist_id)[1].id == old_id
+    assert state(dist_id)[0].status == "blocked"
     assert wire[0] == []
 
 

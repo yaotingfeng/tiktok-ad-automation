@@ -78,6 +78,7 @@ def source_env(monkeypatch, redis_client):
             "endpoints": {
                 api.UPLOAD_ENDPOINT: {"lease_ms": 970000},
                 "materials.upload_video_url": {"lease_ms": 970000},
+                "materials.share_assets": {"lease_ms": 970000},
                 "materials.upload_video_file": {"lease_ms": 970000},
             },
         },

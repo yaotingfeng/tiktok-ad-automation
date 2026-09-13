@@ -2863,6 +2863,16 @@ export type ProviderLinkPublic = {
 };
 
 /**
+ * ProviderMinisUpdate
+ */
+export type ProviderMinisUpdate = {
+    /**
+     * Minis Id
+     */
+    minis_id: string;
+};
+
+/**
  * Recovery
  */
 export type Recovery = {
@@ -7221,6 +7231,44 @@ export type providersListApplicationsResponses = {
 };
 
 export type providersListApplicationsResponse = providersListApplicationsResponses[keyof providersListApplicationsResponses];
+
+export type providersUpdateApplicationMinisData = {
+    body: ProviderMinisUpdate;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Connection Id
+         */
+        connection_id: string;
+        /**
+         * Application Id
+         */
+        application_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/providers/connections/{connection_id}/applications/{application_id}/minis';
+};
+
+export type providersUpdateApplicationMinisErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type providersUpdateApplicationMinisError = providersUpdateApplicationMinisErrors[keyof providersUpdateApplicationMinisErrors];
+
+export type providersUpdateApplicationMinisResponses = {
+    /**
+     * Successful Response
+     */
+    200: ProviderApplicationPublic;
+};
+
+export type providersUpdateApplicationMinisResponse = providersUpdateApplicationMinisResponses[keyof providersUpdateApplicationMinisResponses];
 
 export type strategiesGetStrategiesData = {
     body?: never;

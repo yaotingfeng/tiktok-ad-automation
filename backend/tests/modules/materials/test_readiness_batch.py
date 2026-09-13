@@ -76,8 +76,8 @@ def test_batch_readiness_is_bounded_read_only_and_does_not_repeat_authority(
             )
         finally:
             event.remove(connection, "before_cursor_execute", record)
-        # root核对分类：scope+freeze+build/upload当前安全事实共固定34条；30项不增长。
-        assert len(statements) == single_count and len(statements) <= 34
+        # root核对分类：scope+freeze+build/upload当前安全事实共固定37条；30项不增长。
+        assert len(statements) == single_count and len(statements) <= 37
         assert all(
             statement.lstrip().upper().startswith("SELECT") for statement in statements
         )
@@ -121,7 +121,7 @@ def test_batch_rejects_unbounded_and_missing_materials(source_env, wire):
     assert wire[0] == []
 
 
-def test_thirty_remote_relays_share_the_same_current_upload_authority(
+def test_thirty_native_shares_use_the_same_current_upload_authority(
     source_env, wire, monkeypatch
 ):
     from app.core.config import settings
@@ -177,5 +177,5 @@ def test_thirty_remote_relays_share_the_same_current_upload_authority(
                 for statement in statements
             )
             counts.append(len(statements))
-    assert counts[0] == counts[1] and counts[1] <= 34
+    assert counts[0] == counts[1] and counts[1] <= 37
     assert wire[0] == []

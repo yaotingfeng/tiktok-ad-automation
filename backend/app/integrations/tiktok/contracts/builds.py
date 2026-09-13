@@ -105,6 +105,7 @@ class AdGroupCreate(AdGroupObservedFacts):
 class CreativeAsset(FrozenModel):
     video_id: Id
     image_id: Id
+    file_name: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 class IdentityFields(FrozenModel):

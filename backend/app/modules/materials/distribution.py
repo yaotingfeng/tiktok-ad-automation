@@ -1,4 +1,4 @@
-"""Submission-only target preparation; source and target share one send authority."""
+"""Submission-only target preparation with independently scoped source and target."""
 
 from contextlib import AbstractContextManager, nullcontext
 from datetime import UTC, datetime, timedelta
@@ -29,6 +29,8 @@ from app.modules.tenants.permissions import require_tenant
 
 from . import sdk_assets as api
 from .channel_policy import require_url_upload
+from .distribution_sources import distribution_sources
+from .file_names import video_file_name
 from .models import (
     AccountMaterial,
     MaterialAssetOperation,
@@ -54,6 +56,7 @@ from .routes import (
     require_same_route,
 )
 from .schemas import AssetPreparation
+from .sharing import distribution_transport
 from .source_uploads import (
     READ_CLAIM_SECONDS,
     READ_HARD_LIMIT,
@@ -174,24 +177,30 @@ def _bind_operation(
             material = load_material(
                 session, context=context, bc_id=bc_id, material_id=material_id
             )
-            source = resolve_remote_source(
+            source = distribution_sources(
                 session,
                 context=context,
-                bc_id=bc_id,
-                material_id=material_id,
-                target_advertiser_id=advertiser_id,
-            )
+                materials=[material],
+                advertiser_id=advertiser_id,
+                route=route,
+            ).get(material_id)
             if source is None:
                 raise DomainError(
                     "material_remote_source_unavailable", "请恢复来源授权或补传原件"
                 )
             operation.remote_response = {
-                "transport": "url_relay",
+                "transport": distribution_transport(
+                    source_bc_id=source.bc_id, target_bc_id=bc_id
+                ),
+                "source_bc_id": source.bc_id,
+                "source_material_id": str(source.material_id),
                 "source_asset_id": str(source.id),
                 "source_advertiser_id": source.advertiser_id,
                 "source_connection_id": str(source.connection_id),
                 "source_video_id": source.video_id,
-                "remote_name": f"{material.id}-{operation.id}.mp4",
+                "remote_name": video_file_name(
+                    material.file_name, correlation=operation.id.hex[:8]
+                ),
                 "content_md5": material.video_md5,
             }
             operation.request_digest = sha256(
@@ -292,8 +301,8 @@ def ensure_target_asset(
         source = resolve_remote_source(
             session,
             context=context,
-            bc_id=bc_id,
-            material_id=material_id,
+            bc_id=operation.remote_response["source_bc_id"],
+            material_id=UUID(operation.remote_response["source_material_id"]),
             source_asset_id=UUID(source_asset_id),
         )
         if source is None:
@@ -314,14 +323,14 @@ def ensure_target_asset(
             load_material_route(
                 previous_dependency.source_route,
                 context=context,
-                bc_id=bc_id,
+                bc_id=source.bc_id,
                 connection_id=source.connection_id,
             )
             if previous_dependency
             else freeze_route(
                 session,
                 context=context,
-                bc_id=bc_id,
+                bc_id=source.bc_id,
                 connection_id=source.connection_id,
             )
         )
@@ -329,7 +338,7 @@ def ensure_target_asset(
             session,
             context=context,
             route=source_route,
-            bc_id=bc_id,
+            bc_id=source.bc_id,
             advertiser_id=source.advertiser_id,
             capability="read",
         )
@@ -343,6 +352,10 @@ def ensure_target_asset(
         target_route=route.model_dump(mode="json"),
         source_route=source_route.model_dump(mode="json") if source_route else None,
         source_asset_id=UUID(source_asset_id) if source_asset_id else None,
+        source_bc_id=operation.remote_response.get("source_bc_id"),
+        source_material_id=UUID(operation.remote_response["source_material_id"])
+        if source_asset_id
+        else None,
         path=operation.path
         if operation.status in {"sending", "result_unknown"}
         else readiness.path,
@@ -451,7 +464,7 @@ def _work_connection(work: dict[str, Any]) -> UUID:
     return FrozenTikTokRoute.model_validate(work["target_route"]).connection_id
 
 
-def _require_relay(
+def _require_distribution_source(
     session: Session,
     *,
     context: TenantContext,
@@ -459,46 +472,79 @@ def _require_relay(
     operation: MaterialAssetOperation,
     source_route: FrozenTikTokRoute,
 ) -> None:
-    require_remote_material(material)
-    if operation.remote_response.get("transport") != "url_relay":
-        raise DomainError(
-            "material_share_unverified", "原生共享能力未经核实，不能发送或自动切换路径"
-        )
-    if material.byte_size > settings.MATERIAL_URL_MAX_UPLOAD_BYTES:
-        raise DomainError(
-            "url_upload_capacity_exceeded", "素材超过当前URL转存工程容量限制"
-        )
+    response = operation.remote_response
+    target_route = load_material_route(
+        operation.frozen_route, context=context, bc_id=material.bc_id
+    )
     source = resolve_remote_source(
         session,
         context=context,
-        bc_id=material.bc_id,
-        material_id=material.id,
-        source_asset_id=UUID(operation.remote_response["source_asset_id"]),
+        bc_id=source_route.bc_id,
+        material_id=UUID(response.get("source_material_id", str(material.id))),
+        source_asset_id=UUID(response["source_asset_id"]),
     )
+    source_file = session.get(MaterialFile, source.material_id) if source else None
     if (
         source is None
+        or source_file is None
         or (source.advertiser_id, str(source.connection_id), source.video_id)
         != (
-            operation.remote_response.get("source_advertiser_id"),
-            operation.remote_response.get("source_connection_id"),
-            operation.remote_response.get("source_video_id"),
+            response.get("source_advertiser_id"),
+            response.get("source_connection_id"),
+            response.get("source_video_id"),
         )
-        or operation.remote_response.get("content_md5") != material.video_md5
+        or response.get("content_md5") != material.video_md5
+        or (source_file.video_md5, source_file.byte_size)
+        != (material.video_md5, material.byte_size)
     ):
         raise DomainError("material_remote_source_unavailable", "来源证据或权限已改变")
+    transport = distribution_transport(
+        source_bc_id=source.bc_id, target_bc_id=material.bc_id
+    )
+    if response.get("transport") != transport:
+        raise DomainError(
+            "material_distribution_route_changed",
+            "分发方式已变化，请重新准备尚未发送的任务",
+        )
+    if source.material_id != material.id and (
+        not material.sha256
+        or not material.digest_verified_at
+        or not source_file.digest_verified_at
+        or source_file.sha256 != material.sha256
+    ):
+        raise DomainError("material_source_digest_changed", "来源内容身份已变化")
     require_material_route(
         session,
         context=context,
         route=source_route,
-        bc_id=material.bc_id,
+        bc_id=source.bc_id,
         advertiser_id=source.advertiser_id,
         capability="read",
     )
     if source_route.connection_id != source.connection_id:
         raise DomainError("frozen_route_changed", "来源连接已改变")
-    target_route = load_material_route(
-        operation.frozen_route, context=context, bc_id=material.bc_id
-    )
+    if transport == "native_share":
+        # 共享接口使用目标通道的一份授权；该授权必须同时能操作源、目标账户。
+        require_material_route(
+            session,
+            context=context,
+            route=target_route,
+            bc_id=source.bc_id,
+            advertiser_id=source.advertiser_id,
+            capability="upload",
+        )
+        require_execution_config(
+            upload=True,
+            endpoint="materials.share_assets",
+            original=False,
+            channel=target_route.channel,
+        )
+        return
+    require_remote_material(material)
+    if material.byte_size > settings.MATERIAL_URL_MAX_UPLOAD_BYTES:
+        raise DomainError(
+            "url_upload_capacity_exceeded", "素材超过当前URL转存工程容量限制"
+        )
     if target_route.channel == "OFFICIAL_MCP":
         require_url_upload(
             material_upload_policy(
@@ -546,7 +592,7 @@ def _relay_receipt(
             operation.status, dist.status = "verifying", "verifying"
 
 
-def _send_relay(
+def _send_remote_asset(
     *,
     database_engine: Any,
     redis_client: Any,
@@ -558,22 +604,71 @@ def _send_relay(
     deadline: datetime,
     hard: int,
 ) -> dict[str, str] | None:
-    preview = read_frozen_remote_source(
-        database_engine=database_engine,
-        redis_client=redis_client,
-        context=context,
-        bc_id=work["bc_id"],
-        material_id=work["material_id"],
-        source_asset_id=UUID(work["source_asset_id"]),
-        route=load_material_route(
-            work["source_route"], context=context, bc_id=work["bc_id"]
-        ),
-        deadline=deadline,
-    )
     route = load_material_route(
         work["target_route"], context=context, bc_id=work["bc_id"]
     )
-    policy = admission_policy("materials.upload_video_url")
+    native = work["transport"] == "native_share"
+    preview = None
+    if native:
+        # 共享使用 MID，且平台复制源名称；保存真实名称才能恢复重名/超时结果。
+        read_deadline = min(
+            deadline, datetime.now(UTC) + timedelta(seconds=READ_HARD_LIMIT - 5)
+        )
+        read_budget = material_types.RemoteCallBudget(
+            read_deadline,
+            READ_HARD_LIMIT,
+            admission_policy("materials.get_videos").lease_ms,
+        )
+        with open_tiktok_gateway(
+            database_engine=database_engine,
+            redis_client=redis_client,
+            context=context,
+            route=route,
+            task_deadline=read_deadline,
+        ) as gateway:
+            record = gateway.materials.read_video(
+                advertiser_id=work["source_advertiser_id"],
+                video_id=work["source_video_id"],
+                budget=read_budget,
+            )
+        if (
+            record is None
+            or record.video_id != work["source_video_id"]
+            or not record.mid
+            or not record.file_name
+            or record.md5 != work["content_md5"]
+        ):
+            raise DomainError(
+                "material_share_source_missing", "来源缺少共享 MID、名称或内容摘要"
+            )
+        work["source_mid"], work["remote_name"] = record.mid, record.file_name
+        with Session(database_engine) as db, db.begin():
+            dist = _load_distribution(db, context, distribution_id)
+            _locked_material(db, context, dist.material_id)
+            operation = _locked_operation(db, context, operation_id)
+            if operation.attempt_token != claim or dist.operation_id != operation_id:
+                return None
+            operation.remote_response = {
+                **operation.remote_response,
+                "source_mid": record.mid,
+                "remote_name": record.file_name,
+            }
+    else:
+        preview = read_frozen_remote_source(
+            database_engine=database_engine,
+            redis_client=redis_client,
+            context=context,
+            bc_id=work["source_bc_id"],
+            material_id=UUID(work["source_material_id"]),
+            source_asset_id=UUID(work["source_asset_id"]),
+            route=load_material_route(
+                work["source_route"], context=context, bc_id=work["source_bc_id"]
+            ),
+            deadline=deadline,
+        )
+    policy = admission_policy(
+        "materials.share_assets" if native else "materials.upload_video_url"
+    )
     budget = material_types.RemoteCallBudget(deadline, hard, policy.lease_ms)
 
     def check_current() -> None:
@@ -589,13 +684,15 @@ def _send_relay(
             operation = _locked_operation(db, context, operation_id)
             if operation.attempt_token != claim or dist.operation_id != operation_id:
                 raise DomainError("material_claim_changed", "素材操作已由其他任务接管")
-            _require_relay(
+            _require_distribution_source(
                 db,
                 context=context,
                 material=material,
                 operation=operation,
                 source_route=load_material_route(
-                    dist.source_route, context=context, bc_id=dist.bc_id
+                    dist.source_route,
+                    context=context,
+                    bc_id=operation.remote_response.get("source_bc_id", dist.bc_id),
                 ),
             )
             _target_access(db, context, dist, upload=True)
@@ -624,6 +721,17 @@ def _send_relay(
                 "upload_connection_id": str(route.connection_id),
             }
         try:
+            if native:
+                gateway.materials.share_assets(
+                    material_types.AssetShare(
+                        advertiser_id=work["source_advertiser_id"],
+                        material_ids=(work["source_mid"],),
+                        shared_advertiser_ids=(work["advertiser_id"],),
+                    ),
+                    budget=budget,
+                )
+                return {}
+            assert preview is not None
             receipt = gateway.materials.upload_video_url(
                 material_types.URLVideoUpload(
                     work["advertiser_id"],
@@ -685,7 +793,7 @@ def run_distribution(
     s3: Any = None,
     read_only: bool = False,
 ) -> None:
-    """One official call at most; production entrypoint enforces a process deadline."""
+    """一次持久发送；来源和恢复读取各自遵守工作进程期限与准入。"""
     if kind not in {"prepare", "verify"} or (read_only and kind != "verify"):
         raise DomainError("invalid_asset_task", "目标素材工作任务无效")
     claim = uuid4()
@@ -847,6 +955,14 @@ def run_distribution(
         if expired_send:
             operation.status, dist.status = "result_unknown", "result_unknown"
         if operation.status == "failed":
+            if operation.path == "share_source":
+                _blocked(
+                    dist,
+                    operation.remote_response.get(
+                        "error_code", "material_share_failed"
+                    ),
+                )
+                return
             if not operation.remote_response.get("definite_no_effect"):
                 _blocked(dist, "material_operation_failed")
                 return
@@ -897,13 +1013,17 @@ def run_distribution(
         try:
             if kind == "prepare":
                 if operation.path == "share_source":
-                    _require_relay(
+                    _require_distribution_source(
                         session,
                         context=context,
                         material=material,
                         operation=operation,
                         source_route=load_material_route(
-                            dist.source_route, context=context, bc_id=dist.bc_id
+                            dist.source_route,
+                            context=context,
+                            bc_id=operation.remote_response.get(
+                                "source_bc_id", dist.bc_id
+                            ),
                         ),
                     )
                 else:
@@ -980,8 +1100,8 @@ def run_distribution(
     evidence: dict[str, str] | tuple[list[dict[str, str]], bool] | None = None
     original_scope: AbstractContextManager[OriginalFile | None]
     try:
-        if kind == "prepare" and work.get("transport") == "url_relay":
-            evidence = _send_relay(
+        if kind == "prepare" and work.get("transport") in {"native_share", "url_relay"}:
+            evidence = _send_remote_asset(
                 database_engine=database_engine,
                 redis_client=redis_client,
                 context=context,
@@ -1137,12 +1257,15 @@ def run_distribution(
                         )
                     else:
                         page = gateway.materials.search_videos(
+                            video_name=work["remote_name"]
+                            if work.get("transport") == "native_share"
+                            else None,
                             advertiser_id=work["advertiser_id"],
                             page=work.get("search_page", 1),
                             material_ids=(),
                             budget=budget,
                         )
-                        if work.get("transport") == "url_relay":
+                        if work.get("transport") in {"native_share", "url_relay"}:
                             total = page.total_pages
                             if not 0 <= total <= 100 or not 1 <= page.page <= 100:
                                 raise DomainError(
@@ -1168,16 +1291,22 @@ def run_distribution(
                 return
             if kind == "prepare":
                 assert isinstance(evidence, dict)
-                if operation.remote_response.get("conflicting_video_id"):
-                    raise DomainError(
-                        "material_reconciliation_ambiguous", "实际目标回执存在歧义"
-                    )
-                operation.remote_response = {
-                    **operation.remote_response,
-                    **evidence,
-                    "upload_video_id": evidence["video_id"],
-                    "upload_mid": evidence.get("mid"),
-                }
+                if work.get("transport") == "native_share":
+                    operation.remote_response = {
+                        **operation.remote_response,
+                        "share_acknowledged": True,
+                    }
+                else:
+                    if operation.remote_response.get("conflicting_video_id"):
+                        raise DomainError(
+                            "material_reconciliation_ambiguous", "实际目标回执存在歧义"
+                        )
+                    operation.remote_response = {
+                        **operation.remote_response,
+                        **evidence,
+                        "upload_video_id": evidence["video_id"],
+                        "upload_mid": evidence.get("mid"),
+                    }
                 operation.status, dist.status = "verifying", "verifying"
             elif work.get("video_id") and evidence:
                 assert isinstance(evidence, dict)
@@ -1201,7 +1330,7 @@ def run_distribution(
                     item["video_id"]: item for item in work.get("candidates", [])
                 }
                 candidates.update({item["video_id"]: item for item in matches})
-                if work.get("transport") == "url_relay":
+                if work.get("transport") in {"native_share", "url_relay"}:
                     operation.remote_response = {
                         **operation.remote_response,
                         "search_total": work["observed_search_total"],
@@ -1252,7 +1381,16 @@ def run_distribution(
                     operation,
                     read_only=read_only,
                     kind="verify",
-                    due=datetime.now(UTC) + timedelta(seconds=60),
+                    due=datetime.now(UTC)
+                    + timedelta(
+                        seconds=0
+                        if work.get("transport") == "native_share"
+                        and (
+                            kind == "prepare"
+                            or operation.remote_response.get("video_id")
+                        )
+                        else 60
+                    ),
                 )
     except SDK_SCOPE_INTERRUPTS:
         raise

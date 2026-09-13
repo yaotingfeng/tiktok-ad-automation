@@ -3619,6 +3619,55 @@
       ],
       "evidence": "DOCUMENTED",
       "text_json_envelope": false
+    },
+    {
+      "operation": "materials.share_assets",
+      "tool_name": "creative_asset_share_get",
+      "effect": "WRITE",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "description": "Operator advertiser ID for the source account that owns the creative assets.",
+            "type": "string"
+          },
+          "asset_type": {
+            "description": "Type of creative assets to share. Allowed values: `VIDEO`, `IMAGE`, `MUSIC`. Defaults to `VIDEO`.",
+            "enum": [
+              "VIDEO",
+              "IMAGE",
+              "MUSIC"
+            ],
+            "type": "string"
+          },
+          "material_ids": {
+            "description": "Material IDs to share. Maximum 20 IDs. After a successful share, the shared advertiser account receives copied names for the shared creative materials. Currently, sharing fails only when the target advertiser account already has a creative material with the same name as a material being shared.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "shared_advertiser_ids": {
+            "description": "Advertiser IDs of the target accounts to share the creative materials with. Maximum 10 IDs.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "advertiser_id",
+          "material_ids",
+          "shared_advertiser_ids"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "OBSERVED",
+      "text_json_envelope": true
     }
   ]
 }

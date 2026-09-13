@@ -17,6 +17,7 @@ from app.modules.accounts.models import BCAccountAccess
 from app.modules.accounts.routing import freeze_route
 
 from .channel_policy import require_url_upload
+from .distribution_sources import distribution_sources
 from .models import AccountMaterial, MaterialAssetOperation, MaterialFile
 from .remote_sources import require_remote_material
 from .repository import asset_public, require_material_scope
@@ -299,30 +300,14 @@ def get_material_readiness_batch(
             .distinct()
         ).all()
     )
-    grant = (
-        usable_grants(tenant_id=context.tenant_id, bc_id=bc_id, action="read")
-        .where(
-            BCAccountAccess.advertiser_id == AccountMaterial.advertiser_id,
-            BCAccountAccess.connection_id == AccountMaterial.connection_id,
-        )
-        .exists()
+    sources = distribution_sources(
+        session,
+        context=context,
+        materials=materials,
+        advertiser_id=advertiser_id,
+        route=route,
     )
-    legal_sources = set(
-        session.exec(
-            select(AccountMaterial.material_id)
-            .where(
-                AccountMaterial.tenant_id == context.tenant_id,
-                AccountMaterial.bc_id == bc_id,
-                col(AccountMaterial.material_id).in_(identities),
-                AccountMaterial.advertiser_id != advertiser_id,
-                AccountMaterial.status == "available",
-                col(AccountMaterial.verified_at).is_not(None),
-                col(AccountMaterial.video_id) != "",
-                grant,
-            )
-            .distinct()
-        ).all()
-    )
+    legal_sources = set(sources)
     # Deployment policy and the upload permission are identical for this bounded
     # group. Check lazily so existing verified target assets keep their priority.
     authority_checked = False
@@ -385,6 +370,24 @@ def get_material_readiness_batch(
                     "material_share_unconfirmed",
                     "共享尚无明确未生效证据，需要先核实结果",
                 )
+            source = sources.get(material.id)
+            if source and source.bc_id == bc_id:
+                require_target_upload()
+                require_execution_config(
+                    upload=True,
+                    endpoint="materials.share_assets",
+                    original=False,
+                    channel=route.channel,
+                )
+                require_execution_config(
+                    upload=False,
+                    endpoint="materials.search_videos",
+                    channel=route.channel,
+                )
+                result[material.id] = MaterialReadiness(
+                    state="preparable", path="share_source"
+                )
+                continue
             if material.id in legal_sources and settings.MATERIAL_REMOTE_MEDIA_HOSTS:
                 require_remote_material(material)
                 if material.byte_size > settings.MATERIAL_URL_MAX_UPLOAD_BYTES:

@@ -592,7 +592,7 @@ def test_remote_name_preserves_original_name_and_stable_unique_suffix(
     assert name.startswith(original[:2])
     assert len(name.encode("utf-8")) <= 100
     assert name.endswith(".mp4")
-    assert str(url_env["material_id"]) in name
+    assert len(name.rsplit("-", 1)[-1].removesuffix(".mp4")) == 8
     assert dict(wire[0][0][2]["fields"])["file_name"] == name
 
 

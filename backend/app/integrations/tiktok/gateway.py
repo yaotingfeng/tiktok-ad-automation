@@ -82,6 +82,7 @@ _OPERATION_CAPABILITIES: dict[str, Capability] = {
     "materials.get_images": "read",
     "materials.search_images": "read",
     "materials.upload_video_url": "upload",
+    "materials.share_assets": "upload",
     "materials.upload_video_file": "upload",
     "materials.upload_image_url": "upload",
     "build.get_campaigns": "read",
@@ -367,6 +368,9 @@ def open_tiktok_gateway(
                     builds=McpBuildOperations(client),
                     materials=MCPMaterialOperations(
                         client,
+                        share_authorize=lambda account: authorize(
+                            account, "materials.share_assets"
+                        ),
                         preview_allowed_hosts=settings.MATERIAL_REMOTE_MEDIA_HOSTS,
                         upload_policy=material_upload_policy(
                             channel=route.channel,
@@ -392,6 +396,9 @@ def open_tiktok_gateway(
                     ),
                     materials=SDKMaterialOperations(
                         official,
+                        share_authorize=lambda account: authorize(
+                            account, "materials.share_assets"
+                        ),
                         request_scope=request_scope,
                         deadline=task_deadline,
                         preview_allowed_hosts=settings.MATERIAL_REMOTE_MEDIA_HOSTS,

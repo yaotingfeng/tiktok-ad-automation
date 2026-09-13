@@ -1,5 +1,6 @@
 """MCP 素材操作：官方代码客户端拥有准入；视频写入保留独立能力门禁。"""
 
+from collections.abc import Callable
 from typing import Any
 
 from app.core.errors import DomainError
@@ -20,6 +21,7 @@ from app.modules.materials.sdk_assets import (
     validate_video_upload,
     video_upload_receipt,
 )
+from app.modules.materials.sharing import share_arguments
 
 
 class MCPMaterialOperations(MaterialReadAdapter):
@@ -28,10 +30,12 @@ class MCPMaterialOperations(MaterialReadAdapter):
         client: BoundMCPClient,
         *,
         preview_allowed_hosts: frozenset[str] = frozenset(),
+        share_authorize: Callable[[str], None] | None = None,
         upload_policy: MaterialUploadPolicy | None = None,
     ):
         super().__init__(preview_allowed_hosts=preview_allowed_hosts)
         self._client = client
+        self._share_authorize = share_authorize
         self._upload_policy = upload_policy or MaterialUploadPolicy(None)
 
     def _call(
@@ -47,6 +51,23 @@ class MCPMaterialOperations(MaterialReadAdapter):
             arguments=arguments,
             deadline=budget.deadline,
         )
+
+    def share_assets(
+        self, request: contracts.AssetShare, *, budget: contracts.RemoteCallBudget
+    ) -> CallEvidence:
+        try:
+            arguments = share_arguments(request, authorize=self._share_authorize)
+            budget.timeout(upload=True)
+        except DomainError as error:
+            raise RemoteCallError(
+                error.code, effect="NOT_SENT", evidence=CallEvidence()
+            ) from None
+        return self._client.call(
+            operation="materials.share_assets",
+            advertiser_id=request.advertiser_id,
+            arguments=arguments,
+            deadline=budget.deadline,
+        ).evidence
 
     def upload_video_url(
         self, request: contracts.URLVideoUpload, *, budget: contracts.RemoteCallBudget

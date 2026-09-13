@@ -4,6 +4,7 @@
 使用同一事实链完成目标分发、封面、预览、创建与独立回读。
 """
 
+import json
 from hashlib import md5
 from uuid import uuid4
 
@@ -553,6 +554,7 @@ def _prepare_target(
                 "advertiser_id": source_advertiser,
                 "video_id": "synthetic-source-vid",
                 "material_id": "synthetic-source-mid",
+                "file_name": "source-file-01.mp4",
                 "signature": md5(remote.content).hexdigest(),
                 "size": len(remote.content),
                 "displayable": True,
@@ -570,11 +572,11 @@ def _prepare_target(
         "material_id": "synthetic-target-mid",
     }
     _reply(wire, "file_video_ad_info_get", details)
-    _reply(wire, "file_video_ad_upload", created)
-    # SDK 同一 worker 内先读取来源再发目标 URL，只在现有 HTTP 边界分配响应。
+    _reply(wire, "creative_asset_share_get", {})
+    # SDK 同一 worker 内读取源 MID/名称，再原生共享，不重新上传。
     offset = len(wire["sdk_calls"])
     wire["before"]["callback"] = lambda: wire["sdk_data"].update(
-        data=details if len(wire["sdk_calls"]) == offset else [created]
+        data=details if len(wire["sdk_calls"]) == offset else {}
     )
     try:
         run_distribution(
@@ -589,10 +591,13 @@ def _prepare_target(
     with Session(database_engine) as db:
         dist = db.get(MaterialDistribution, prepared.task_id)
         op = db.get(MaterialAssetOperation, dist.operation_id)
-        assert dist.status == "verifying", (dist.error_code, op.remote_response)
+        assert dist.status == "verifying", (dist.reason_code, op.remote_response)
         assert dist.source_route == dist.target_route == route.model_dump(mode="json")
-        assert op.remote_response["video_id"] == "synthetic-target-vid"
+        assert op.remote_response["transport"] == "native_share"
+        assert op.remote_response["share_acknowledged"] is True
         assert "signature=synthetic-only" not in repr(op.remote_response)
+    _reply(wire, "file_video_ad_search", {"list": [{**details["list"][0], **created}], "page_info": {"page": 1, "page_size": 100, "total_page": 1, "total_number": 1}})
+    run_distribution(database_engine=database_engine, redis_client=redis_client, context=context, distribution_id=prepared.task_id, kind="verify")
     _reply(
         wire, "file_video_ad_info_get", {"list": [{**details["list"][0], **created}]}
     )
@@ -605,7 +610,7 @@ def _prepare_target(
     )
     with Session(database_engine) as db:
         dist = db.get(MaterialDistribution, prepared.task_id)
-        assert dist.status == "ready", dist.error_code
+        assert dist.status == "ready", dist.reason_code
         mappings = db.exec(
             select(AccountMaterial).where(AccountMaterial.material_id == material_id)
         ).all()
@@ -622,19 +627,19 @@ def _prepare_target(
         ]
         assert [call["name"] for call in calls] == [
             "file_video_ad_info_get",
-            "file_video_ad_upload",
+            "creative_asset_share_get",
+            "file_video_ad_search",
             "file_video_ad_info_get",
         ]
         assert [call["arguments"]["advertiser_id"] for call in calls] == [
+            source_advertiser,
             source_advertiser,
             target_advertiser,
             target_advertiser,
         ]
     else:
         calls = wire["sdk_calls"][offset:]
-        assert [call[0] for call in calls] == ["GET", "POST", "GET"]
-        assert [dict(call[2]["fields"])["advertiser_id"] for call in calls] == [
-            source_advertiser,
-            target_advertiser,
-            target_advertiser,
-        ]
+        assert [call[0] for call in calls] == ["GET", "POST", "GET", "GET"]
+        assert calls[1][1].endswith("/creative/asset/share/")
+        assert json.loads(calls[1][2]["body"])["shared_advertiser_ids"] == [target_advertiser]
+        assert all("/upload/" not in call[1] for call in calls)

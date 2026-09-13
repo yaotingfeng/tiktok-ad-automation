@@ -75,6 +75,7 @@ async function boundary(
           ],
         },
       ]
+  let configuredMini: string | null = null
   const stored = structuredClone(connections)
   await page.addInitScript((value) => {
     localStorage.setItem("access_token", value)
@@ -179,13 +180,22 @@ async function boundary(
       row.status = "active"
       return reply(row)
     }
+    if (path.endsWith("/applications/com.real.external.app/minis")) {
+      configuredMini = route.request().postDataJSON().minis_id
+      return reply({
+        external_id: "com.real.external.app",
+        name: "已核实应用",
+        tiktok_minis_id: configuredMini,
+        available: true,
+      })
+    }
     if (path.endsWith("/applications"))
       return reply({
         items: [
           {
             external_id: "com.real.external.app",
             name: "已核实应用",
-            tiktok_minis_id: null,
+            tiktok_minis_id: configuredMini,
             available: true,
           },
           {
@@ -448,7 +458,7 @@ test("连接停用后不能重新验证或更新认证；应用外部 ID 不冒�
   const sheet = page.getByRole("dialog")
   await expect(
     sheet.getByRole("row").filter({ hasText: "已核实应用" }),
-  ).toContainText("待核实")
+  ).toContainText("未配置")
   await expect(
     sheet.getByRole("row").filter({ hasText: "历史不可用应用" }),
   ).toContainText("不可用")
@@ -813,4 +823,29 @@ test("过期会话显示自动恢复且不会要求用户重新登录", async ({
   expect(requests.filter((request) => request.method === "POST")).toHaveLength(
     0,
   )
+})
+
+test("管理员可以配置应用对应 Mini，操作员没有配置按钮", async ({ page }) => {
+  const { requests } = await boundary(page, { role: "tenant_admin" })
+  await page.goto(`/tenants/${tenantId}/providers`)
+  await page.getByRole("button", { name: "查看已发现应用" }).click()
+  await page
+    .getByRole("row")
+    .filter({ hasText: "已核实应用" })
+    .getByRole("button", { name: "配置 Mini" })
+    .click()
+  await page.getByLabel("TikTok Mini ID").fill("mini-test-123")
+  await page.getByRole("button", { name: "保存关联" }).click()
+  await expect(
+    page.getByRole("heading", { name: "配置应用对应的 TikTok Mini" }),
+  ).toHaveCount(0)
+  expect(requests.find((r) => r.path.endsWith("/minis"))?.body).toEqual({ minis_id: "mini-test-123" })
+  await expect(page.getByText("mini-test-123", { exact: true })).toBeVisible()
+  await page.screenshot({
+    path: "../.runtime/share-fix/provider-mini-config.png",
+  })
+  await boundary(page, { role: "operator" })
+  await page.goto(`/tenants/${tenantId}/providers`)
+  await page.getByRole("button", { name: "查看已发现应用" }).click()
+  await expect(page.getByRole("button", { name: "配置 Mini" })).toHaveCount(0)
 })

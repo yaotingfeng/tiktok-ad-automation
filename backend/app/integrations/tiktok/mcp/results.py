@@ -18,6 +18,7 @@ _INVALID = object()
 # 官方已接入业务工具使用 JSON TextContent 承载同一 code/data envelope。
 # 只扩展明确的操作/工具对；结构、错误码、重复键及双载体冲突校验保持不变。
 _NATIVE_TEXT_TOOLS = {
+    ("materials.share_assets", "creative_asset_share_get"),
     ("scene.list_identities", "identity_get"),
     ("scene.list_minis", "minis_get"),
     ("scene.recommend_ctas", "creative_cta_recommend_get"),
