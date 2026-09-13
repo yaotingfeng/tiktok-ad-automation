@@ -46,13 +46,20 @@ from app.modules.builds.scene_job_models import (
 from app.modules.builds.scene_jobs import ensure_scene_preparation
 from app.modules.materials.models import AccountMaterial, MaterialFile
 from app.modules.materials.service import match_materials
-from app.modules.providers.models import LinkPreparation, PromotionLink
-from app.modules.providers.repository import get_application
+from app.modules.providers.models import (
+    LinkPreparation,
+    LinkPreparationItem,
+    PromotionLink,
+    ProviderConnection,
+)
+from app.modules.providers.repository import get_application, get_connection
 from app.modules.providers.schemas import _validate_json
 from app.modules.providers.service import get_link_results, prepare_links
 from app.modules.strategies.models import Strategy
 from app.modules.strategies.service import get_version, get_version_record
 from app.modules.tenants.permissions import require_tenant
+
+from .manual_links import materialize, resolve_provider, validate_manual_links
 
 # Engineering request bounds, independent of TikTok limits. Account processing
 # remains paged even when the draft contains tens of thousands of pasted lines.
@@ -187,12 +194,28 @@ def _check_intent(
 
 
 def _store_inputs(
-    session: Session, draft: BuildDraft, kind: str, lines: list[str]
+    session: Session,
+    draft: BuildDraft,
+    kind: str,
+    lines: list[str],
+    manual_links: dict[int, dict[str, Any]] | None = None,
 ) -> None:
     seen: dict[str, int] = {}
     for number, raw in enumerate(lines, 1):
         value = raw.strip()
-        duplicate = seen.get(value) if value else None
+        manual = (manual_links or {}).get(number, {})
+        identity = (
+            json.dumps(
+                [
+                    value,
+                    {key: item for key, item in manual.items() if key != "line_no"},
+                ],
+                sort_keys=True,
+            )
+            if manual
+            else value
+        )
+        duplicate = seen.get(identity) if value else None
         status = "empty" if not value else "duplicate" if duplicate else "pending"
         session.add(
             DraftInput(
@@ -201,12 +224,13 @@ def _store_inputs(
                 kind=kind,
                 line_no=number,
                 raw_text=raw,
+                manual_link=manual,
                 status=status,
                 duplicate_of=duplicate,
             )
         )
         if value:
-            seen.setdefault(value, number)
+            seen.setdefault(identity, number)
         if number % 500 == 0:
             session.flush()
 
@@ -217,14 +241,23 @@ def create_draft(
     context: TenantContext,
     bc_id: str,
     strategy_version_id: UUID,
-    provider_connection_id: UUID,
-    application_id: str,
+    provider_connection_id: UUID | None,
+    application_id: str | None,
     drama_lines: list[str],
     account_lines: list[str],
     link_config: dict[str, Any],
+    custom_provider_name: str | None = None,
+    manual_links: list[dict[str, Any]] | None = None,
     request_id: UUID | None = None,
     execution_connection_id: UUID | None = None,
 ) -> UUID:
+    provider_connection_id, application_id = resolve_provider(
+        session, context, provider_connection_id, application_id, custom_provider_name
+    )
+    provider = get_connection(
+        session, context=context, connection_id=provider_connection_id
+    )
+    manual = validate_manual_links(manual_links or [], drama_lines, provider.kind)
     intent: dict[str, Any] = {
         "bc_id": bc_id,
         "strategy_version_id": strategy_version_id,
@@ -235,6 +268,8 @@ def create_draft(
         "link_config": link_config,
     }
     _check_intent(session, context, **intent)
+    if manual:
+        intent["manual_links"] = list(manual.values())
     # 未指定连接的既有请求摘要保持原文，便于原 request_id 幂等回读。
     if execution_connection_id is not None:
         intent["execution_connection_id"] = execution_connection_id
@@ -282,7 +317,7 @@ def create_draft(
     )
     session.add(draft)
     session.flush()
-    _store_inputs(session, draft, "drama", drama_lines)
+    _store_inputs(session, draft, "drama", drama_lines, manual)
     _store_inputs(session, draft, "account", account_lines)
     session.flush()
     return draft.id
@@ -363,8 +398,8 @@ def prepare_draft(
             0,
         )
         session.add(drama)
-    lines = session.exec(
-        select(DraftInput.raw_text)
+    input_rows = session.exec(
+        select(DraftInput)
         .where(
             DraftInput.tenant_id == context.tenant_id,
             DraftInput.draft_id == draft.id,
@@ -372,8 +407,20 @@ def prepare_draft(
         )
         .order_by(col(DraftInput.line_no))
     ).all()
-    if not any(line.strip() for line in lines):
+    if not any(row.raw_text.strip() for row in input_rows):
         raise DomainError("draft_inputs_empty", "至少输入一部剧目后再解析准备")
+    provider = session.get(ProviderConnection, draft.provider_connection_id)
+    assert provider
+    lines = []
+    for row in input_rows:
+        if row.status in {"empty", "duplicate"}:
+            lines.append("")
+        elif row.manual_link or provider.kind == "other":
+            materialize(session, context, draft, row)
+            lines.append("")
+        else:
+            lines.append(row.raw_text)
+    session.flush()
     prep = DraftPreparation(
         tenant_id=context.tenant_id,
         draft_id=draft.id,
@@ -410,18 +457,58 @@ def prepare_draft(
         .order_by(col(DraftPreparation.draft_revision).desc())
         .limit(1)
     ).first()
+    if previous_provider is None and any(line.strip() for line in lines):
+        # 单行补链可继续使用原任务，保留其他剧的已知或未知结果，不重新发送取链。
+        candidate = session.exec(
+            select(LinkPreparation)
+            .join(
+                DraftPreparation,
+                (col(DraftPreparation.tenant_id) == LinkPreparation.tenant_id)
+                & (col(DraftPreparation.provider_task_id) == LinkPreparation.id),
+            )
+            .where(
+                DraftPreparation.tenant_id == context.tenant_id,
+                DraftPreparation.draft_id == draft.id,
+                LinkPreparation.connection_id == draft.provider_connection_id,
+                LinkPreparation.application_id == draft.application_id,
+                col(LinkPreparation.config) == draft.link_config,
+            )
+            .order_by(col(DraftPreparation.draft_revision).desc())
+            .limit(1)
+        ).first()
+        if candidate:
+            old_rows = session.exec(
+                select(LinkPreparationItem).where(
+                    LinkPreparationItem.tenant_id == context.tenant_id,
+                    LinkPreparationItem.preparation_id == candidate.id,
+                )
+            ).all()
+            old_lines = {row.line_no: row.raw_input for row in old_rows}
+            current_lines = {row.line_no: row.raw_text.strip() for row in input_rows}
+            if all(
+                current_lines.get(number) == title
+                for number, title in old_lines.items()
+            ) and all(
+                not value.strip() or old_lines.get(number) == value.strip()
+                for number, value in enumerate(lines, 1)
+            ):
+                previous_provider = candidate.id
     prep.provider_task_id = (
-        previous_provider
-        if previous_provider is not None
-        else prepare_links(
-            session,
-            context=context,
-            connection_id=draft.provider_connection_id,
-            application_id=draft.application_id,
-            lines=list(lines),
-            config=draft.link_config,
-            request_id=uuid5(prep.id, "provider-links"),
+        (
+            previous_provider
+            if previous_provider is not None
+            else prepare_links(
+                session,
+                context=context,
+                connection_id=draft.provider_connection_id,
+                application_id=draft.application_id,
+                lines=list(lines),
+                config=draft.link_config,
+                request_id=uuid5(prep.id, "provider-links"),
+            )
         )
+        if any(line.strip() for line in lines)
+        else None
     )
     session.add(prep)
     draft.status = "PREPARING"
@@ -838,7 +925,9 @@ def _accounts_page(
 def _links_page(
     session: Session, context: TenantContext, draft: BuildDraft, prep: DraftPreparation
 ) -> None:
-    assert prep.provider_task_id
+    if prep.provider_task_id is None:
+        prep.phase = "materials"
+        return
     page = get_link_results(
         session,
         context=context,
@@ -855,6 +944,8 @@ def _links_page(
                 DraftInput.line_no == result.line_no,
             )
         ).one()
+        if row.manual_link:
+            continue  # 已补链输入不接受旧版权方结果覆盖。
         row.status, row.reason_code, row.provider_input_id = (
             result.status,
             result.error_code,
@@ -1107,6 +1198,8 @@ def update_draft(
     drama_lines: list[str] | None = None,
     account_lines: list[str] | None = None,
     link_config: dict[str, Any] | None = None,
+    manual_links: list[dict[str, Any]] | None = None,
+    custom_provider_name: str | None = None,
     execution_connection_id: UUID | None | _Unchanged = _Unchanged.VALUE,
 ) -> int:
     """Input/strategy changes restart preparation; material-only edits use their
@@ -1117,6 +1210,21 @@ def update_draft(
         raise DomainError(
             "draft_revision_conflict", "草稿已更新，请保留当前编辑并读取最新版本"
         )
+    if custom_provider_name is not None:
+        provider_connection_id, application_id = resolve_provider(
+            session, context, None, None, custom_provider_name
+        )
+    old_manual = [
+        row.manual_link
+        for row in session.exec(
+            select(DraftInput).where(
+                DraftInput.tenant_id == context.tenant_id,
+                DraftInput.draft_id == draft.id,
+                DraftInput.kind == "drama",
+            )
+        ).all()
+        if row.manual_link
+    ]
     existing = session.exec(
         select(DraftInput.kind, DraftInput.raw_text)
         .where(
@@ -1148,8 +1256,23 @@ def update_draft(
     }
     if execution_connection_id is not _Unchanged.VALUE:
         intent["execution_connection_id"] = execution_connection_id
+    if (
+        old_manual
+        and manual_links is None
+        and intent["drama_lines"] != old_intent["drama_lines"]
+    ):
+        raise DomainError(
+            "manual_link_mapping_required", "剧名发生变化，请同时提交对应的手动链接行号"
+        )
     _check_intent(session, context, **intent)
-    if intent == old_intent:
+    provider = session.get(ProviderConnection, intent["provider_connection_id"])
+    assert provider
+    manual = validate_manual_links(
+        manual_links if manual_links is not None else old_manual,
+        intent["drama_lines"],
+        provider.kind,
+    )
+    if intent == old_intent and list(manual.values()) == old_manual:
         return draft.revision
     revision = _bump_revision(session, draft, expected_revision)
     for model in (DraftGroupMaterial, DraftDrama, DraftAccount, DraftInput):
@@ -1168,7 +1291,7 @@ def update_draft(
     draft.status = "DRAFT"
     session.add(draft)
     session.flush()
-    _store_inputs(session, draft, "drama", intent["drama_lines"])
+    _store_inputs(session, draft, "drama", intent["drama_lines"], manual)
     _store_inputs(session, draft, "account", intent["account_lines"])
     session.flush()
     return revision

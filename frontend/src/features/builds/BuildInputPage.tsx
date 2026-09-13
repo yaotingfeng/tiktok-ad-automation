@@ -15,6 +15,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import {
   BCConnectionPicker,
@@ -26,6 +27,8 @@ import { DirectoryPicker } from "@/features/tenants/DirectoryPicker"
 import { ApplicationPicker } from "./ApplicationPicker"
 import { mutationKey } from "./api"
 import { DraftConflict } from "./DraftConflict"
+import { ManualLinksDialog } from "./ManualLinksDialog"
+import { linksForLines, type NamedManualLink } from "./manualLinks"
 import {
   BuildError,
   BuildGuard,
@@ -35,6 +38,8 @@ import {
 } from "./presentation"
 
 type Values = {
+  customProvider: string
+  manualLinks: NamedManualLink[]
   drama: string
   account: string
   connection: string
@@ -56,7 +61,11 @@ export function BuildInputPage({
   bcId: string
   write: boolean
   summary?: DraftSummary
-  original?: { drama: string[]; account: string[] }
+  original?: {
+    drama: string[]
+    account: string[]
+    manualLinks?: NamedManualLink[]
+  }
   onSaved?: (prepare: boolean) => void
   onCancel?: () => void
 }) {
@@ -74,20 +83,27 @@ export function BuildInputPage({
   const initial = useRef<Values>({
     drama: original?.drama.join("\n") || "",
     account: original?.account.join("\n") || "",
-    connection: summary?.provider_connection_id || "",
+    connection: summary?.custom_provider_name
+      ? "other"
+      : summary?.provider_connection_id || "",
+    customProvider: summary?.custom_provider_name || "",
+    manualLinks: original?.manualLinks || [],
     executionConnection: summary?.execution_connection_id || "",
     application: summary?.application_id || "",
     version: summary?.strategy_version_id || "",
   })
-  const [values, setValues] = useState<Values>(
-      pending?.values || initial.current,
-    ),
+  const [values, setValues] = useState<Values>({
+      ...initial.current,
+      ...pending?.values,
+    }),
     [labels, setLabels] = useState<Record<string, string>>({}),
     [busy, setBusy] = useState(false),
     [error, setError] = useState<unknown>(),
     [forbidden, setForbidden] = useState(false),
     [leaving, setLeaving] = useState(false),
-    [revision, setRevision] = useState(summary?.revision)
+    [revision, setRevision] = useState(summary?.revision),
+    [manualOpen, setManualOpen] = useState(false),
+    [inputError, setInputError] = useState("")
   const controller = useRef(new AbortController()),
     navigate = useNavigate()
   useEffect(() => {
@@ -150,11 +166,21 @@ export function BuildInputPage({
       disabled ||
       !values.version ||
       !values.connection ||
-      !values.application ||
+      (values.connection === "other"
+        ? !values.customProvider.trim()
+        : !values.application) ||
       !values.drama.trim() ||
       !values.account.trim()
     )
       return
+    let manualLinks: ReturnType<typeof linksForLines>
+    try {
+      manualLinks = linksForLines(values.drama, values.manualLinks)
+      setInputError("")
+    } catch (e) {
+      setInputError(e instanceof Error ? e.message : "请检查剧目与链接")
+      return
+    }
     setBusy(true)
     setError(undefined)
     try {
@@ -178,9 +204,16 @@ export function BuildInputPage({
               request_id: operation.requestId,
               expected_revision: revision!,
               strategy_version_id: values.version,
-              provider_connection_id: values.connection,
+              provider_connection_id:
+                values.connection === "other" ? null : values.connection,
+              custom_provider_name:
+                values.connection === "other"
+                  ? values.customProvider.trim()
+                  : null,
+              manual_links: manualLinks,
               execution_connection_id: values.executionConnection || null,
-              application_id: values.application,
+              application_id:
+                values.connection === "other" ? null : values.application,
               drama_lines: values.drama.split("\n"),
               account_lines: values.account.split("\n"),
             },
@@ -210,9 +243,16 @@ export function BuildInputPage({
               request_id: operation.requestId,
               bc_id: bcId,
               strategy_version_id: values.version,
-              provider_connection_id: values.connection,
+              provider_connection_id:
+                values.connection === "other" ? null : values.connection,
+              custom_provider_name:
+                values.connection === "other"
+                  ? values.customProvider.trim()
+                  : null,
+              manual_links: manualLinks,
               execution_connection_id: values.executionConnection || null,
-              application_id: values.application,
+              application_id:
+                values.connection === "other" ? null : values.application,
               drama_lines: values.drama.split("\n"),
               account_lines: values.account.split("\n"),
               link_config: {},
@@ -245,6 +285,30 @@ export function BuildInputPage({
       <BuildSteps step={1} />
       <BuildGuard dirty={!leaving && (dirty || busy || !!pending)} />
       {!!error && <BuildError error={error} />}
+      {inputError && (
+        <Alert variant="destructive">
+          <AlertDescription>{inputError}</AlertDescription>
+        </Alert>
+      )}
+      {manualOpen && (
+        <ManualLinksDialog
+          links={values.manualLinks}
+          onClose={() => setManualOpen(false)}
+          onSave={(links) => {
+            const lines = values.drama ? values.drama.split("\n") : []
+            for (const link of links) {
+              const matches = lines.filter((line) => line.trim() === link.title)
+              if (matches.length > 1)
+                throw new Error(
+                  `「${link.title}」在剧目输入中重复，请先合并为一行`,
+                )
+              if (!matches.length) lines.push(link.title)
+            }
+            if (lines.length > 1000) throw new Error("剧目总数最多 1000 行")
+            change({ drama: lines.join("\n"), manualLinks: links })
+          }}
+        />
+      )}
       {summary &&
         error instanceof AxiosError &&
         error.response?.status === 409 && (
@@ -308,7 +372,22 @@ export function BuildInputPage({
               <FieldLabel>版权方连接</FieldLabel>
               <DirectoryPicker<ProviderConnectionPublic>
                 label="版权方连接"
-                valueLabel={labels.connection || values.connection}
+                valueLabel={
+                  values.connection === "other"
+                    ? "其他版权方"
+                    : labels.connection || values.connection
+                }
+                extraAction={{
+                  label: "其他版权方",
+                  onSelect: () => {
+                    change({ connection: "other", application: "" })
+                    setLabels((l) => ({
+                      ...l,
+                      connection: "",
+                      application: "",
+                    }))
+                  },
+                }}
                 disabled={disabled}
                 queryKey={["tenant", tenantId, "builds", "provider-picker"]}
                 load={async (query, cursor, limit, signal) =>
@@ -331,22 +410,41 @@ export function BuildInputPage({
                 }}
               />
             </Field>
-            <Field>
-              <FieldLabel>推广应用</FieldLabel>
-              <ApplicationPicker
-                tenantId={tenantId}
-                connectionId={values.connection}
-                value={labels.application || values.application}
-                disabled={disabled || !values.connection}
-                onSelect={(item) => {
-                  change({ application: item.external_id })
-                  setLabels((l) => ({ ...l, application: item.name }))
-                }}
-              />
-              <p className="text-xs text-muted-foreground">
-                仅使用当前连接下的可用推广应用。
-              </p>
-            </Field>
+            {values.connection === "other" ? (
+              <Field>
+                <FieldLabel htmlFor="custom-provider-name">
+                  版权方名称
+                </FieldLabel>
+                <Input
+                  id="custom-provider-name"
+                  value={values.customProvider}
+                  maxLength={100}
+                  disabled={disabled}
+                  onChange={(e) => change({ customProvider: e.target.value })}
+                  placeholder="填写实际版权方名称"
+                />
+                <p className="text-xs text-muted-foreground">
+                  无需连接后台，使用你提供的推广链接。
+                </p>
+              </Field>
+            ) : (
+              <Field>
+                <FieldLabel>推广应用</FieldLabel>
+                <ApplicationPicker
+                  tenantId={tenantId}
+                  connectionId={values.connection}
+                  value={labels.application || values.application}
+                  disabled={disabled || !values.connection}
+                  onSelect={(item) => {
+                    change({ application: item.external_id })
+                    setLabels((l) => ({ ...l, application: item.name }))
+                  }}
+                />
+                <p className="text-xs text-muted-foreground">
+                  仅使用当前连接下的可用推广应用。
+                </p>
+              </Field>
+            )}
             <Field>
               <FieldLabel>投放策略</FieldLabel>
               <DirectoryPicker<StrategyPublic>
@@ -397,6 +495,34 @@ export function BuildInputPage({
                   onChange={(e) => change({ [kind]: e.target.value })}
                 />
               </Field>
+              {kind === "drama" && (
+                <>
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="self-start"
+                    disabled={disabled}
+                    onClick={() => setManualOpen(true)}
+                  >
+                    已有推广链接？批量添加
+                  </Button>
+                  {!!values.manualLinks.length && (
+                    <p className="text-sm">
+                      已添加{" "}
+                      {
+                        values.drama.split("\n").filter((line) => line.trim())
+                          .length
+                      }{" "}
+                      部剧，其中 {values.manualLinks.length} 部已填写推广链接
+                    </p>
+                  )}
+                  {values.connection === "other" && (
+                    <p className="text-xs text-muted-foreground">
+                      其他版权方需提供推广链接，可现在批量添加，也可在第二步补充。
+                    </p>
+                  )}
+                </>
+              )}
               <p className="text-xs text-muted-foreground">
                 {values[kind] ? values[kind].split("\n").length : 0}{" "}
                 行（输入计数，尚未核实） ·{" "}
@@ -447,7 +573,9 @@ export function BuildInputPage({
                   disabled={
                     disabled ||
                     !values.version ||
-                    !values.application ||
+                    (values.connection === "other"
+                      ? !values.customProvider.trim()
+                      : !values.application) ||
                     !values.drama.trim() ||
                     !values.account.trim()
                   }
@@ -459,7 +587,9 @@ export function BuildInputPage({
                   disabled={
                     disabled ||
                     !values.version ||
-                    !values.application ||
+                    (values.connection === "other"
+                      ? !values.customProvider.trim()
+                      : !values.application) ||
                     !values.drama.trim() ||
                     !values.account.trim()
                   }

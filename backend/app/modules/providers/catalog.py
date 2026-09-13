@@ -74,6 +74,7 @@ def _public(
 ) -> ProviderLinkPublic:
     config = display_config(link.config)
     return ProviderLinkPublic(
+        source=link.source,
         link_id=link.id,
         drama_id=drama.id,
         external_drama_id=drama.external_drama_id,

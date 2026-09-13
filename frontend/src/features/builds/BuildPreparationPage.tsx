@@ -99,6 +99,7 @@ function Preparation({
     [restored, setRestored] = useState<{
       drama: string[]
       account: string[]
+      manualLinks?: import("./manualLinks").NamedManualLink[]
     } | null>(null),
     [restoring, setRestoring] = useState(false),
     [progress, setProgress] = useState(0),
@@ -335,7 +336,8 @@ function Preparation({
       if (!controller.current.signal.aborted) {
         sessionStorage.removeItem(mutationKey(tenantId, bcId, draftId))
         resumePreparation.current =
-          pendingMutation.kind === "minis" && pendingMutation.prepare
+          ["minis", "manual_link"].includes(pendingMutation.kind) &&
+          pendingMutation.prepare
         await summary.refetch()
       }
     } catch (e) {

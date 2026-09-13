@@ -3,6 +3,7 @@ import {
   type DraftInputPublic,
   type Page_DraftInputPublic_,
 } from "@/client"
+import type { NamedManualLink } from "./manualLinks"
 export const buildKey = (tenantId: string, bcId: string) =>
   ["tenant", tenantId, "builds", bcId] as const
 export async function loadDraftInputs(
@@ -11,7 +12,12 @@ export async function loadDraftInputs(
   signal: AbortSignal,
   progress: (count: number) => void,
 ) {
-  const output: { drama: string[]; account: string[] } = {
+  const output: {
+    drama: string[]
+    account: string[]
+    manualLinks: NamedManualLink[]
+  } = {
+    manualLinks: [],
     drama: [],
     account: [],
   }
@@ -35,6 +41,15 @@ export async function loadDraftInputs(
       if (cursor && seen.has(cursor)) throw new Error("重复游标，停止恢复")
       if (cursor) seen.add(cursor)
     } while (cursor)
+    if (kind === "drama")
+      output.manualLinks = rows
+        .filter((row) => row.manual_link?.url)
+        .map((row) => ({
+          title: row.raw_text.trim(),
+          url: String(row.manual_link?.url),
+          external_drama_id: String(row.manual_link?.external_drama_id || ""),
+          protected_base: String(row.manual_link?.protected_base || ""),
+        }))
     output[kind] = rows
       .sort((a, b) => a.line_no - b.line_no)
       .map((row) => row.raw_text)

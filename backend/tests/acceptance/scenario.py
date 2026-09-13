@@ -193,7 +193,8 @@ class Wire:
                     {
                         "identity_id": "acceptance-identity",
                         "identity_type": "BC_AUTH_TT",
-                        "identity_authorized_bc_id": query["identity_authorized_bc_id"],
+                        # 返回已由账户及令牌核实的 BC；当前请求不再携带此字段。
+                        "identity_authorized_bc_id": scopes[0].bc_id,
                         "available_status": "AVAILABLE",
                         "can_push_video": True,
                         "is_gpppa": False,
@@ -412,7 +413,7 @@ class Wire:
                 "chapter_index": 1,
                 "promote_platform": "tiktok",
                 "promote_name": body["promote_name"],
-                "tt_minis_link": f"https://www.tiktok.com/minis/acceptance?link_id={identity}",
+                "tt_minis_link": f"https://www.tiktok.com/minis/acceptance?minis_id=acceptance-minis&link_id={identity}",
             }
             rows.append(row)
             if self.wangyan_duplicate_created:
@@ -454,7 +455,7 @@ class Wire:
                     "vid": vid,
                     "drama_num": 1,
                     "charge_level": "1",
-                    "jump_url": f"https://www.tiktok.com/minis/acceptance?channel={channel}&vid={vid}&dramaNum=1&charge_level=1",
+                    "jump_url": f"https://www.tiktok.com/minis/acceptance?minis_id=acceptance-minis&channel={channel}&vid={vid}&dramaNum=1&charge_level=1",
                     "minis_path": "pages/drama",
                 }
             }
@@ -727,6 +728,8 @@ def offline_runtime(wire: Wire, database_engine: Any) -> Iterator[Runtime]:
                         "lease_ms": 60000,
                     },
                     "endpoints": {
+                        # 共享同样经过上传任务，合成额度需覆盖其900秒硬限。
+                        "materials.share_assets": {"lease_ms": 970000},
                         # 逻辑操作各自覆盖900秒上传硬期限；不再使用旧SDK URL键。
                         "materials.upload_video_file": {
                             "lease_ms": 970000,

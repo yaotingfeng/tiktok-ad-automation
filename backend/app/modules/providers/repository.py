@@ -299,6 +299,8 @@ def create_preparation_request(
         application_id=application_id,
     )
     connection = get_connection(session, context=context, connection_id=connection_id)
+    if connection.kind == "other":
+        raise DomainError("provider_request_invalid", "该版权方请手动填写推广链接")
     cleaned = clean_lines(lines)
     if not cleaned or not isinstance(config, dict):
         raise DomainError("provider_request_invalid", "剧名和推广配置不能为空")

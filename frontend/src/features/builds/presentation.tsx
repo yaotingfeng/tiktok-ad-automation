@@ -147,6 +147,11 @@ export function BuildSteps({ step }: { step: 1 | 2 | 3 }) {
 }
 
 export const reasonLabels: Record<string, string> = {
+  manual_link_mapping_required: "剧名已变化，请更新对应的手动链接。",
+  manual_link_required: "请补充推广链接。",
+  manual_link_invalid: "请填写有效的 TikTok Minis 推广链接。",
+  manual_attribution_required: "请补充网眼提供的归因名称。",
+  manual_link_conflict: "同一剧目 ID 对应不同输入，请合并为一行。",
   minis_selection_required: "请在推广小程序区域按名称选择后继续",
   minis_catalog_stale: "小程序目录已过期，请更新可用小程序后重新选择",
   minis_link_conflict: "所选小程序与推广链接指向不一致，请分开搭建",

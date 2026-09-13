@@ -990,7 +990,7 @@ test("剧目列表显示版权方ID，原始输入在详情，只有待选择状
   const api = await buildsBoundary(page)
   await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
   await expect(
-    page.getByRole("columnheader", { name: "版权方剧目 ID", exact: true }),
+    page.getByRole("columnheader", { name: "剧目标识", exact: true }),
   ).toBeVisible()
   await expect(
     page.getByText("provider-drama-1", { exact: true }),
@@ -1031,4 +1031,264 @@ test("只读成员可查看剧目详情但不能选择候选", async ({ page }) 
     page.getByRole("button").filter({ hasText: "候选正式剧名" }),
   ).toHaveCount(0)
   expect(api.requests.filter((r) => r.method === "POST")).toHaveLength(0)
+})
+
+test("其他版权方可批量添加现成链接，第一步不增加剧目表", async ({ page }) => {
+  const api = await buildsBoundary(page)
+  await page.goto(`/tenants/${tenant}/builds/new?bc_id=${bc}`)
+  await pickInputs(page)
+  await page.getByRole("combobox", { name: "版权方连接", exact: true }).click()
+  await page.getByRole("button", { name: "其他版权方", exact: true }).click()
+  await page.getByLabel("版权方名称", { exact: true }).fill("新版权方")
+  await page
+    .getByRole("button", { name: "已有推广链接？批量添加", exact: true })
+    .click()
+  await page
+    .getByLabel("剧名与推广链接", { exact: true })
+    .fill(
+      "新剧甲\thttps://www.tiktok.com/minis/a?channel=x%2By\n新剧乙\thttps://www.tiktok.com/minis/b",
+    )
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 })
+    const dialog = page.getByRole("dialog")
+    const bounds = (await dialog.boundingBox())!
+    expect(bounds.x).toBeGreaterThanOrEqual(0)
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(width)
+    if (process.env.BUILD_SCREENSHOT_DIR) {
+      await page.screenshot({
+        path: `${process.env.BUILD_SCREENSHOT_DIR}/manual-links-import-${width}.png`,
+        fullPage: false,
+        animations: "disabled",
+      })
+    }
+  }
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.getByRole("button", { name: "添加到剧目", exact: true }).click()
+  await expect(page.getByRole("table")).toHaveCount(0)
+  if (process.env.BUILD_SCREENSHOT_DIR) {
+    await page.evaluate(() => window.scrollTo(0, 0))
+    await page.screenshot({
+      path: `${process.env.BUILD_SCREENSHOT_DIR}/manual-links-input.png`,
+      fullPage: true,
+      animations: "disabled",
+    })
+  }
+  await expect(
+    page.getByText("其中 2 部已填写推广链接", { exact: false }),
+  ).toBeVisible()
+  await page.getByRole("button", { name: "保存草稿", exact: true }).click()
+  await expect(page).toHaveURL(new RegExp(`/build-drafts/${D}`))
+  const body = api.requests.find(
+    (r) => r.method === "POST" && r.path.endsWith("/build-drafts"),
+  )!.body
+  expect(body.custom_provider_name).toBe("新版权方")
+  expect(body.provider_connection_id).toBeNull()
+  expect(body.manual_links).toEqual([
+    {
+      line_no: 3,
+      url: "https://www.tiktok.com/minis/a?channel=x%2By",
+      external_drama_id: "",
+      protected_base: "",
+    },
+    {
+      line_no: 4,
+      url: "https://www.tiktok.com/minis/b",
+      external_drama_id: "",
+      protected_base: "",
+    },
+  ])
+})
+
+test("第二步原行补链提交对应输入，随后继续准备", async ({ page }) => {
+  const api = await buildsBoundary(page, { empty: true })
+  let written: any
+  await page.route("**/inputs/*/manual-link", async (route) => {
+    written = route.request().postDataJSON()
+    expect(route.request().method()).toBe("PUT")
+    expect(route.request().url()).toContain("/inputs/input-drama-0/manual-link")
+    await route.fulfill({ json: { draft_id: D, revision: 2 } })
+  })
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await page
+    .getByRole("row")
+    .filter({ hasText: "完整剧名1" })
+    .getByRole("button", { name: "补充推广链接", exact: true })
+    .click()
+  await page
+    .getByLabel("推广链接", { exact: true })
+    .fill("https://www.tiktok.com/minis/a?channel=x%2By")
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 })
+    await expect
+      .poll(async () => {
+        const bounds = (await page.getByRole("dialog").boundingBox())!
+        return bounds.x >= 0 && bounds.x + bounds.width <= width
+      })
+      .toBe(true)
+    if (process.env.BUILD_SCREENSHOT_DIR) {
+      await page.screenshot({
+        path: `${process.env.BUILD_SCREENSHOT_DIR}/manual-link-sheet-${width}.png`,
+        fullPage: false,
+        animations: "disabled",
+      })
+    }
+  }
+  await page
+    .getByRole("button", { name: "保存并继续准备", exact: true })
+    .click()
+  await expect(
+    page.getByRole("dialog", { name: "补充推广链接", exact: true }),
+  ).toHaveCount(0)
+  expect(written.expected_revision).toBe(1)
+  expect(written.link).toEqual({
+    line_no: 1,
+    url: "https://www.tiktok.com/minis/a?channel=x%2By",
+    external_drama_id: "",
+    protected_base: "",
+  })
+  await expect
+    .poll(
+      () =>
+        api.requests.filter(
+          (r) => r.method === "POST" && r.path.endsWith("/prepare"),
+        ).length,
+    )
+    .toBe(1)
+})
+
+test("批量链接校验失败保留输入，取消不改变原剧名", async ({ page }) => {
+  await buildsBoundary(page)
+  await page.goto(`/tenants/${tenant}/builds/new?bc_id=${bc}`)
+  await page.getByLabel("剧目名称", { exact: true }).fill("原剧")
+  await page
+    .getByRole("button", { name: "已有推广链接？批量添加", exact: true })
+    .click()
+  await page
+    .getByLabel("剧名与推广链接")
+    .fill("新剧\thttps://wrong.example/link")
+  await page.getByRole("button", { name: "添加到剧目", exact: true }).click()
+  await expect(page.getByRole("alert")).toContainText("第 1 行")
+  await expect(page.getByLabel("剧名与推广链接")).toHaveValue(
+    "新剧\thttps://wrong.example/link",
+  )
+  await page.getByRole("button", { name: "取消", exact: true }).click()
+  await expect(page.getByLabel("剧目名称", { exact: true })).toHaveValue("原剧")
+})
+
+test("准备中和只读成员不显示补链操作", async ({ page }) => {
+  const api = await buildsBoundary(page)
+  api.summary.status = "PREPARING"
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await expect(
+    page.getByRole("heading", { name: "准备与调整", exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "补充推广链接", exact: true }),
+  ).toHaveCount(0)
+  await buildsBoundary(page, { viewer: true })
+  await page.reload()
+  await expect(
+    page.getByRole("heading", { name: "准备与调整", exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "补充推广链接", exact: true }),
+  ).toHaveCount(0)
+})
+
+test("补链响应丢失后刷新回查原请求并继续准备", async ({ page }) => {
+  const api = await buildsBoundary(page, { empty: true })
+  let writes = 0
+  let requestId = ""
+  await page.route("**/inputs/*/manual-link", async (route) => {
+    writes++
+    requestId = route.request().postDataJSON().request_id
+    await route.abort("failed")
+  })
+  await page.route("**/build-mutation-requests/*", async (route) => {
+    expect(route.request().url()).toContain(requestId)
+    await route.fulfill({ json: { draft_id: D, revision: 2 } })
+  })
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await page
+    .getByRole("button", { name: "补充推广链接", exact: true })
+    .first()
+    .click()
+  await page
+    .getByLabel("推广链接", { exact: true })
+    .fill("https://www.tiktok.com/minis/a")
+  await page
+    .getByRole("button", { name: "保存并继续准备", exact: true })
+    .click()
+  await expect(
+    page.getByRole("button", { name: "查询保存结果", exact: true }),
+  ).toBeVisible()
+  await page.reload()
+  await page
+    .getByRole("button", { name: "查询原修改结果", exact: true })
+    .click()
+  await expect
+    .poll(
+      () =>
+        api.requests.filter(
+          (r) => r.method === "POST" && r.path.endsWith("/prepare"),
+        ).length,
+    )
+    .toBe(1)
+  expect(writes).toBe(1)
+})
+
+test("恢复草稿保留手动链接并随剧名顺序保存", async ({ page }) => {
+  const api = await buildsBoundary(page)
+  api.summary.status = "DRAFT"
+  await page.route("**/build-drafts/*/inputs?**", async (route) => {
+    if (new URL(route.request().url()).searchParams.get("kind") !== "drama")
+      return route.fallback()
+    await route.fulfill({
+      json: {
+        items: api.originals.drama.map((raw_text, index) => ({
+          id: `input-${index}`,
+          kind: "drama",
+          line_no: index + 1,
+          raw_text,
+          status: "pending",
+          reason_code: null,
+          duplicate_of: null,
+          advertiser_id: null,
+          drama_id: null,
+          provider_input_id: null,
+          candidates: [],
+          manual_link:
+            index === 0
+              ? {
+                  line_no: 1,
+                  url: "https://www.tiktok.com/minis/original",
+                  external_drama_id: "123",
+                  protected_base: "",
+                }
+              : {},
+        })),
+        next_cursor: null,
+      },
+    })
+  })
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}&edit=true`)
+  await expect(
+    page.getByText("其中 1 部已填写推广链接", { exact: false }),
+  ).toBeVisible()
+  await page
+    .getByLabel("剧目名称", { exact: true })
+    .fill("完整剧名2\n完整剧名1")
+  await page.getByRole("button", { name: "保存草稿", exact: true }).click()
+  await expect
+    .poll(() => api.requests.filter((r) => r.method === "PATCH").length)
+    .toBe(1)
+  const body = api.requests.find((r) => r.method === "PATCH")!.body
+  expect(body.manual_links).toEqual([
+    {
+      line_no: 2,
+      url: "https://www.tiktok.com/minis/original",
+      external_drama_id: "123",
+      protected_base: "",
+    },
+  ])
 })

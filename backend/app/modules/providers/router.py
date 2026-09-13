@@ -218,7 +218,8 @@ def list_connections(
         scope["status"] = status
     last_id = _after_id(cursor, scope)
     statement = select(ProviderConnection).where(
-        ProviderConnection.tenant_id == tenant_id
+        ProviderConnection.tenant_id == tenant_id,
+        ProviderConnection.kind != "other",
     )
     if query.strip():
         statement = statement.where(

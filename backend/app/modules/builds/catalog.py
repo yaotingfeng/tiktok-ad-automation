@@ -28,7 +28,11 @@ from app.modules.builds.schemas import (
     DraftSummary,
 )
 from app.modules.materials.models import MaterialFile
-from app.modules.providers.models import LinkPreparationItem, ProviderDrama
+from app.modules.providers.models import (
+    LinkPreparationItem,
+    ProviderConnection,
+    ProviderDrama,
+)
 from app.modules.providers.schemas import display_config
 
 
@@ -69,6 +73,7 @@ def draft_summary(
             DraftAccount.draft_id == draft_id,
         )
     ).one()
+    provider = session.get(ProviderConnection, row.provider_connection_id)
     return DraftSummary(
         draft_id=row.id,
         revision=row.revision,
@@ -78,6 +83,10 @@ def draft_summary(
         provider_connection_id=row.provider_connection_id,
         execution_connection_id=row.execution_connection_id,
         application_id=row.application_id,
+        custom_provider_name=provider.display_name
+        if provider and provider.kind == "other"
+        else None,
+        provider_kind=provider.kind if provider else "",
         link_config=display_config(row.link_config),
         input_counts=counts,
         drama_count=drama_count,
@@ -179,7 +188,7 @@ def inputs_page(
             ).all()
         }
         for item in items:
-            link = links.get(item.line_no)
+            link = None if item.manual_link else links.get(item.line_no)
             drama, external_id = dramas.get(item.line_no, (None, None))
             # 草稿自身的去重和输入校验优先；版权方阶段仅用于展示，不推进任务。
             terminal_input = item.status in {"empty", "invalid", "duplicate"}
@@ -192,7 +201,9 @@ def inputs_page(
                 if link
                 else external_id,
                 provider_input_id=link.id if link else None,
-                candidates=link.resolved.get("candidates", []) if selectable else [],
+                candidates=link.resolved.get("candidates", [])
+                if selectable and link is not None
+                else [],
                 link_status=item.status
                 if terminal_input or link is None
                 else link.status,

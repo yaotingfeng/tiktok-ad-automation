@@ -9,14 +9,31 @@ from app.modules.providers.schemas import DramaCandidate
 InputText = Annotated[str, Field(max_length=1000)]
 
 
+class ManualLinkInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    line_no: int = Field(ge=1, le=1000, strict=True)
+    url: str = Field(min_length=1, max_length=8192)
+    external_drama_id: str = Field(default="", max_length=255)
+    protected_base: str = Field(default="", max_length=1000)
+
+
+class ManualLinkPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    expected_revision: int = Field(gt=0, strict=True)
+    link: ManualLinkInput
+
+
 class CreateDraftRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     request_id: UUID
     bc_id: str = Field(min_length=1, max_length=128)
     strategy_version_id: UUID
-    provider_connection_id: UUID
+    provider_connection_id: UUID | None = None
     execution_connection_id: UUID | None = None
-    application_id: str = Field(min_length=1, max_length=255)
+    application_id: str | None = Field(default=None, min_length=1, max_length=255)
+    custom_provider_name: str | None = Field(default=None, min_length=1, max_length=100)
+    manual_links: list[ManualLinkInput] = Field(default_factory=list, max_length=1000)
     drama_lines: list[InputText] = Field(max_length=1000)
     account_lines: list[InputText] = Field(max_length=100_000)
     link_config: dict[str, Any] = Field(default_factory=dict)
@@ -30,6 +47,8 @@ class PatchDraftRequest(BaseModel):
     provider_connection_id: UUID | None = None
     execution_connection_id: UUID | None = None
     application_id: str | None = Field(default=None, min_length=1, max_length=255)
+    custom_provider_name: str | None = Field(default=None, min_length=1, max_length=100)
+    manual_links: list[ManualLinkInput] | None = Field(default=None, max_length=1000)
     drama_lines: list[InputText] | None = Field(default=None, max_length=1000)
     account_lines: list[InputText] | None = Field(default=None, max_length=100_000)
     link_config: dict[str, Any] | None = None
@@ -67,6 +86,8 @@ class DraftSummary(BaseModel):
     execution_connection_id: UUID | None = None
     application_id: str
     link_config: dict[str, str | int | bool | None]
+    custom_provider_name: str | None = None
+    provider_kind: str = ""
     input_counts: dict[str, dict[str, int]]
     drama_count: int
     account_count: int
@@ -120,6 +141,7 @@ class DraftInputPublic(BaseModel):
     kind: str
     line_no: int
     raw_text: str
+    manual_link: dict[str, str | int] = Field(default_factory=dict)
     status: str
     reason_code: str | None
     duplicate_of: int | None

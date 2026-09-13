@@ -307,7 +307,9 @@ def _snapshot_drama(
             drama_id=drama.drama_id,
             link_id=drama.link_id,
             title=drama.title,
-            provider_pinyin=connection.kind,
+            provider_pinyin=connection.display_name
+            if connection.kind == "other"
+            else connection.kind,
             external_drama_id=provider_drama.external_drama_id,
             url=link.url or "",
             protected_base=link.protected_base or "",

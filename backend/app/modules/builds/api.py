@@ -34,6 +34,7 @@ from app.modules.builds.schemas import (
     DraftPrepareRequest,
     DraftSaved,
     DraftSummary,
+    ManualLinkPatch,
     PatchDraftRequest,
 )
 from app.modules.tenants.permissions import require_tenant
@@ -457,5 +458,34 @@ def select_mini(
         session, actor_id=user.id, tenant_id=tenant_id, action="build"
     )
     revision = choose_mini(session, context=context, draft_id=draft_id, body=body)
+    session.commit()
+    return DraftSaved(draft_id=draft_id, revision=revision)
+
+
+@router.put(
+    "/build-drafts/{draft_id}/inputs/{input_id}/manual-link", response_model=DraftSaved
+)
+def put_manual_link(
+    tenant_id: UUID,
+    draft_id: UUID,
+    input_id: UUID,
+    body: ManualLinkPatch,
+    session: SessionDep,
+    user: CurrentUser,
+) -> DraftSaved:
+    from .manual_links import save_manual_link
+
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="build"
+    )
+    revision = save_manual_link(
+        session,
+        context=context,
+        draft_id=draft_id,
+        input_id=input_id,
+        expected_revision=body.expected_revision,
+        request_id=body.request_id,
+        link=body.link.model_dump(),
+    )
     session.commit()
     return DraftSaved(draft_id=draft_id, revision=revision)

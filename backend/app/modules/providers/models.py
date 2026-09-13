@@ -28,10 +28,10 @@ class ProviderConnection(SQLModel, table=True):
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_provider_connection_tenant_id"),
         CheckConstraint(
-            "kind IN ('wangyan','jiashu')", name="ck_provider_connection_kind"
+            "kind IN ('wangyan','jiashu','other')", name="ck_provider_connection_kind"
         ),
         CheckConstraint(
-            "status IN ('pending','verifying','active','reauth_required','error','disabled')",
+            "status IN ('pending','verifying','active','reauth_required','error','disabled','local')",
             name="ck_provider_connection_status",
         ),
         CheckConstraint(
@@ -42,7 +42,7 @@ class ProviderConnection(SQLModel, table=True):
     tenant_id: UUID = Field(foreign_key="tenant.id", index=True)
     kind: str = Field(max_length=32)
     display_name: str = Field(max_length=255)
-    encrypted_credentials: str = Field(repr=False, exclude=True)
+    encrypted_credentials: str | None = Field(default=None, repr=False, exclude=True)
     credential_version: int = 0
     status: str = Field(default="pending", max_length=32)
     verification_token: UUID | None = None
@@ -159,6 +159,9 @@ class PromotionLink(SQLModel, table=True):
         ),
         CheckConstraint("version > 0", name="ck_promotion_link_version"),
         CheckConstraint(
+            "source IN ('provider','manual')", name="ck_promotion_link_source"
+        ),
+        CheckConstraint(
             "status IN ('pending','ready','superseded','invalid','result_unknown','failed')",
             name="ck_promotion_link_status",
         ),
@@ -173,6 +176,7 @@ class PromotionLink(SQLModel, table=True):
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     tenant_id: UUID = Field(foreign_key="tenant.id")
+    source: str = Field(default="provider", max_length=16)
     reuse_key: str = Field(max_length=64)
     drama_id: UUID
     connection_id: UUID

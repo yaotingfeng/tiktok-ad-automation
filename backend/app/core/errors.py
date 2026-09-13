@@ -3,6 +3,11 @@ from fastapi.responses import JSONResponse
 
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
+    "manual_link_mapping_required": 422,
+    "manual_link_invalid": 422,
+    "manual_attribution_required": 422,
+    "manual_link_required": 409,
+    "manual_link_conflict": 409,
     "tiktok_call_deadline_exceeded": 409,
     "tiktok_local_resources_unavailable": 503,
     "mcp_client_unregistered": 503,
@@ -242,6 +247,11 @@ ERROR_HTTP_STATUS: dict[str, int] = {
 # Public messages are application-owned. DomainError.message may contain raw
 # integration details, so it must never become an HTTP response or log field.
 ERROR_PUBLIC_MESSAGES: dict[str, str] = {
+    "manual_link_mapping_required": "剧名发生变化，请同时更新手动链接与剧目的对应关系",
+    "manual_link_invalid": "请检查行号并填写完整的 HTTPS TikTok Minis 推广链接",
+    "manual_attribution_required": "网眼手动链接需要填写版权方提供的归因名称，可在第二步补充",
+    "manual_link_required": "请补充推广链接",
+    "manual_link_conflict": "同一剧目 ID 对应不同输入，请合并为一行",
     "mcp_refresh_pending": "授权凭据正在自动续期，请稍后重试",
     "mcp_refresh_unknown": "授权续期结果暂未确认，请查看连接状态",
     "mcp_refresh_reauth_required": "授权已失效，请重新授权",

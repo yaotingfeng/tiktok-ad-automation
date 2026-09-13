@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button"
 import { Pager, ServerTable, useCursorPage } from "@/features/tenants/shared"
 import { buildKey } from "./api"
 import { canChooseDrama, DramaInputSheet } from "./DramaInputSheet"
+import { ManualLinkSheet } from "./ManualLinkSheet"
 import { BuildReason, BuildStatus } from "./presentation"
 
 function linkLabel(input: DraftInputPublic, status: DraftSummary["status"]) {
@@ -67,6 +68,7 @@ export function BuildDramaTable({
   onChanged: () => void
   onEdit: () => void
 }) {
+  const [manualInput, setManualInput] = useState<DraftInputPublic | null>(null)
   const paging = useCursorPage()
   const [detailId, setDetailId] = useState<string | null>(null)
   const query = useQuery({
@@ -125,10 +127,14 @@ export function BuildDramaTable({
             ),
           },
           {
-            header: "版权方剧目 ID",
+            header: "剧目标识",
             cell: ({ row }) => (
               <span className="break-all">
-                {row.original.preparation?.external_drama_id || "—"}
+                {row.original.preparation?.external_drama_id?.startsWith(
+                  "LOCAL-",
+                )
+                  ? `本地编号 ${row.original.preparation.external_drama_id.slice(6)}`
+                  : row.original.preparation?.external_drama_id || "—"}
               </span>
             ),
           },
@@ -144,7 +150,7 @@ export function BuildDramaTable({
                       variant="ghost"
                       onClick={() => onLink(progress.drama!.link_id)}
                     >
-                      已获取
+                      {input.manual_link?.url ? "已填写" : "已获取"}
                     </Button>
                   ) : (
                     <span>{linkLabel(input, summary.status)}</span>
@@ -191,6 +197,21 @@ export function BuildDramaTable({
               const drama = input.preparation?.drama
               return (
                 <div className="flex flex-wrap gap-1">
+                  {write &&
+                    summary.status !== "PREPARING" &&
+                    input.raw_text.trim() &&
+                    !["empty", "duplicate", "invalid"].includes(
+                      input.status,
+                    ) && (
+                      <Button
+                        variant="ghost"
+                        onClick={() => setManualInput(input)}
+                      >
+                        {input.manual_link?.url
+                          ? "修改推广链接"
+                          : "补充推广链接"}
+                      </Button>
+                    )}
                   {drama && (
                     <Button variant="ghost" onClick={() => onMaterial(drama)}>
                       查看与调整素材
@@ -214,6 +235,15 @@ export function BuildDramaTable({
         ]}
         emptyTitle="尚未输入剧目"
       />
+      {manualInput && (
+        <ManualLinkSheet
+          tenantId={tenantId}
+          summary={summary}
+          input={manualInput}
+          onClose={() => setManualInput(null)}
+          onSaved={onChanged}
+        />
+      )}
       {detail && (
         <DramaInputSheet
           key={detail.id}

@@ -195,7 +195,7 @@ def _scope(
         )
         .execution_options(populate_existing=True)
     ).one_or_none()
-    if (
+    if link.source != "manual" and (
         not provider
         or provider.tenant_id != context.tenant_id
         or provider.status != "active"
@@ -205,6 +205,13 @@ def _scope(
         != str(provider.verification_token)
     ):
         raise DomainError("scene_link_unavailable", "版权方应用需要重新核实")
+    if link.source == "manual" and (
+        not provider
+        or provider.tenant_id != context.tenant_id
+        or provider.status == "disabled"
+        or app is None
+    ):
+        raise DomainError("scene_link_unavailable", "手动链接版权方资料不可用")
     from .mini_targets import link_url, resolved_target
 
     return _account_scope(

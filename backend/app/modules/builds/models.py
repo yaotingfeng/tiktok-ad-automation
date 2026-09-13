@@ -109,6 +109,9 @@ class DraftInput(SQLModel, table=True):
     kind: str = Field(max_length=16)
     line_no: int
     raw_text: str = Field(max_length=1000)
+    manual_link: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
     status: str = Field(default="pending", max_length=32)
     reason_code: str | None = None
     duplicate_of: int | None = None

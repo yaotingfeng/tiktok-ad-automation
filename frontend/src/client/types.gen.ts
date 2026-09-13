@@ -510,7 +510,7 @@ export type CreateDraftRequest = {
     /**
      * Provider Connection Id
      */
-    provider_connection_id: string;
+    provider_connection_id?: string | null;
     /**
      * Execution Connection Id
      */
@@ -518,7 +518,15 @@ export type CreateDraftRequest = {
     /**
      * Application Id
      */
-    application_id: string;
+    application_id?: string | null;
+    /**
+     * Custom Provider Name
+     */
+    custom_provider_name?: string | null;
+    /**
+     * Manual Links
+     */
+    manual_links?: Array<ManualLinkInput>;
     /**
      * Drama Lines
      */
@@ -661,6 +669,12 @@ export type DraftInputPublic = {
      * Raw Text
      */
     raw_text: string;
+    /**
+     * Manual Link
+     */
+    manual_link?: {
+        [key: string]: string | number;
+    };
     /**
      * Status
      */
@@ -881,6 +895,14 @@ export type DraftSummary = {
     link_config: {
         [key: string]: string | number | boolean | null;
     };
+    /**
+     * Custom Provider Name
+     */
+    custom_provider_name?: string | null;
+    /**
+     * Provider Kind
+     */
+    provider_kind?: string;
     /**
      * Input Counts
      */
@@ -1771,6 +1793,43 @@ export type LinkPreparationRequest = {
 };
 
 /**
+ * ManualLinkInput
+ */
+export type ManualLinkInput = {
+    /**
+     * Line No
+     */
+    line_no: number;
+    /**
+     * Url
+     */
+    url: string;
+    /**
+     * External Drama Id
+     */
+    external_drama_id?: string;
+    /**
+     * Protected Base
+     */
+    protected_base?: string;
+};
+
+/**
+ * ManualLinkPatch
+ */
+export type ManualLinkPatch = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+    link: ManualLinkInput;
+};
+
+/**
  * MaterialPublic
  */
 export type MaterialPublic = {
@@ -2531,6 +2590,14 @@ export type PatchDraftRequest = {
      */
     application_id?: string | null;
     /**
+     * Custom Provider Name
+     */
+    custom_provider_name?: string | null;
+    /**
+     * Manual Links
+     */
+    manual_links?: Array<ManualLinkInput> | null;
+    /**
      * Drama Lines
      */
     drama_lines?: Array<string> | null;
@@ -2947,6 +3014,10 @@ export type ProviderConnectionUpdate = {
  * ProviderLinkPublic
  */
 export type ProviderLinkPublic = {
+    /**
+     * Source
+     */
+    source?: string;
     /**
      * Link Id
      */
@@ -8601,6 +8672,44 @@ export type buildsSelectMiniResponses = {
 };
 
 export type buildsSelectMiniResponse = buildsSelectMiniResponses[keyof buildsSelectMiniResponses];
+
+export type buildsPutManualLinkData = {
+    body: ManualLinkPatch;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+        /**
+         * Input Id
+         */
+        input_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/inputs/{input_id}/manual-link';
+};
+
+export type buildsPutManualLinkErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsPutManualLinkError = buildsPutManualLinkErrors[keyof buildsPutManualLinkErrors];
+
+export type buildsPutManualLinkResponses = {
+    /**
+     * Successful Response
+     */
+    200: DraftSaved;
+};
+
+export type buildsPutManualLinkResponse = buildsPutManualLinkResponses[keyof buildsPutManualLinkResponses];
 
 export type buildsSavedSubmissionData = {
     body?: never;

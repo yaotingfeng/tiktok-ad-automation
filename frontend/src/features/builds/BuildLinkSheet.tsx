@@ -47,17 +47,22 @@ export function BuildLinkSheet({
             <p>
               <BuildStatus value={query.data.status} /> · v{query.data.version}
             </p>
+            {query.data.source === "manual" && (
+              <p>用户提供的链接 · 已检查格式，未通过版权方后台核验</p>
+            )}
             <CopyField label="推广链接" value={query.data.url} expanded />
             <CopyField
               label="归因名称"
               value={query.data.protected_base}
               expanded
             />
-            <CopyField
-              label="应用 ID"
-              value={query.data.application_id}
-              expanded
-            />
+            {query.data.provider_kind !== "other" && (
+              <CopyField
+                label="应用 ID"
+                value={query.data.application_id}
+                expanded
+              />
+            )}
             {query.data.config_display_incomplete && (
               <p>部分已有配置尚未核实。</p>
             )}

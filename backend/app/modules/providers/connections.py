@@ -131,7 +131,7 @@ def verify_connection(
             tenant_id=context.tenant_id,
             action="manage",
         )
-        if row.status == "disabled":
+        if row.status == "disabled" or row.kind == "other":
             raise failure("connection_unavailable")
         if (
             row.status == "verifying"
@@ -139,6 +139,8 @@ def verify_connection(
             and row.verifying_started_at > now - timedelta(minutes=5)
         ):
             raise failure("provider_verification_in_progress")
+        if not row.encrypted_credentials:
+            raise failure("connection_unavailable")
         credentials = decrypt_credentials(
             tenant_id=context.tenant_id, ciphertext=row.encrypted_credentials
         )
@@ -298,6 +300,8 @@ def open_provider_session(
             row.verification_token
         ):
             raise failure("provider_application_forbidden")
+        if not row.encrypted_credentials:
+            raise failure("connection_unavailable")
         credentials = decrypt_credentials(
             tenant_id=context.tenant_id, ciphertext=row.encrypted_credentials
         )

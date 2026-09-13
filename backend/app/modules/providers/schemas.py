@@ -159,6 +159,7 @@ class ProviderApplicationPublic(BaseModel):
 
 
 class ProviderLinkPublic(BaseModel):
+    source: str = "provider"
     link_id: UUID
     drama_id: UUID
     external_drama_id: str

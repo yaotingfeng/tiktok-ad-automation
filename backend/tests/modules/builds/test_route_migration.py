@@ -11,14 +11,14 @@ from sqlalchemy import MetaData, Table, text
 from sqlmodel import Session
 
 from app.modules.accounts.models import TikTokConnection
-from app.modules.builds.drafts import _store_inputs, create_draft
+from app.modules.builds.drafts import create_draft
 from app.modules.builds.execution_models import (
     ExecutionStep,
     StepEvidence,
     Submission,
     SubmissionUnit,
 )
-from app.modules.builds.models import BuildDraft
+from app.modules.builds.models import BuildDraft, DraftInput
 from app.modules.builds.preview_models import BuildPreview, BuildUnit, PreviewDrama
 from app.modules.builds.routes import stable_attempt_id
 from app.modules.providers.models import PromotionLink, ProviderDrama
@@ -66,8 +66,36 @@ def historical_rows(
                 }
             )
         )
-        _store_inputs(session, row, "drama", intent["drama_lines"])
-        _store_inputs(session, row, "account", intent["account_lines"])
+        inputs = Table("draft_input", MetaData(), autoload_with=session.connection())
+        for kind in ("drama", "account"):
+            seen = {}
+            for number, raw in enumerate(intent[kind + "_lines"], 1):
+                value = raw.strip()
+                duplicate = seen.get(value) if value else None
+                item = DraftInput(
+                    tenant_id=row.tenant_id,
+                    draft_id=row.id,
+                    kind=kind,
+                    line_no=number,
+                    raw_text=raw,
+                    status="empty"
+                    if not value
+                    else "duplicate"
+                    if duplicate
+                    else "pending",
+                    duplicate_of=duplicate,
+                )
+                session.execute(
+                    inputs.insert().values(
+                        **{
+                            key: value
+                            for key, value in item.model_dump().items()
+                            if key in inputs.c
+                        }
+                    )
+                )
+                if value:
+                    seen.setdefault(value, number)
         session.flush()
         draft = row.id
     if connections:
@@ -111,7 +139,19 @@ def historical_rows(
         drama_id=drama.id,
         reuse_key="b" * 64,
     )
-    session.add(link)
+    if current:
+        session.add(link)
+    else:
+        links = Table("promotion_link", MetaData(), autoload_with=session.connection())
+        session.execute(
+            links.insert().values(
+                **{
+                    key: value
+                    for key, value in link.model_dump().items()
+                    if key in links.c
+                }
+            )
+        )
     session.flush()
     session.add(
         PreviewDrama(
