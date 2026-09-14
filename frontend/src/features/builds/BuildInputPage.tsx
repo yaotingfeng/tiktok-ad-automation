@@ -372,6 +372,7 @@ export function BuildInputPage({
               <FieldLabel>版权方连接</FieldLabel>
               <DirectoryPicker<ProviderConnectionPublic>
                 label="版权方连接"
+                selectedId={values.connection}
                 valueLabel={
                   values.connection === "other"
                     ? "其他版权方"
@@ -379,7 +380,7 @@ export function BuildInputPage({
                 }
                 alternative={{
                   label: "其他版权方",
-                  description: "使用已有推广链接，无需连接版权方后台。",
+                  description: "填写版权方名称，使用已有推广链接。",
                   selected: values.connection === "other",
                   onSelect: () => {
                     change({ connection: "other", application: "" })

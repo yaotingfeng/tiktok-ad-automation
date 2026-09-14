@@ -1044,6 +1044,9 @@ test("其他版权方可批量添加现成链接，第一步不增加剧目表",
     exact: true,
   })
   await expect(otherProvider).toBeVisible()
+  await expect(
+    providerDialog.getByRole("option", { selected: true }),
+  ).toContainText("已验证连接")
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 })
     const bounds = (await otherProvider.boundingBox())!
@@ -1052,13 +1055,51 @@ test("其他版权方可批量添加现成链接，第一步不增加剧目表",
       .boundingBox())!
     expect(bounds.x).toBeGreaterThanOrEqual(0)
     expect(bounds.x + bounds.width).toBeLessThanOrEqual(width)
-    expect(bounds.y + bounds.height).toBeLessThanOrEqual(search.y)
+    expect(bounds.y).toBeGreaterThan(search.y + search.height)
     if (process.env.BUILD_SCREENSHOT_DIR) {
       await page.screenshot({
         path: `${process.env.BUILD_SCREENSHOT_DIR}/provider-dialog-${width}.png`,
         animations: "disabled",
       })
     }
+  }
+  await page.route("**/providers/connections?**", async (route) => {
+    await route.fulfill({
+      json: {
+        items: Array.from({ length: 50 }, (_, index) => ({
+          id: `provider-${index}`,
+          display_name: `版权方 ${index + 1}`,
+          kind: "wangyan",
+          status: "active",
+        })),
+        next_cursor: null,
+      },
+    })
+  })
+  await providerDialog.getByLabel("搜索版权方连接").fill("版权方")
+  await providerDialog
+    .getByRole("button", { name: "搜索", exact: true })
+    .click()
+  await expect(providerDialog.getByRole("option")).toHaveCount(50)
+  await page.setViewportSize({ width: 390, height: 640 })
+  await expect
+    .poll(async () => {
+      const bounds = (await otherProvider.boundingBox())!
+      return bounds.y + bounds.height
+    })
+    .toBeLessThanOrEqual(640)
+  // 视口变化后先等待布局稳定，再比较列表滚动前后的入口位置。
+  await otherProvider.click({ trial: true })
+  const beforeScroll = (await otherProvider.boundingBox())!
+  expect(beforeScroll.y + beforeScroll.height).toBeLessThanOrEqual(640)
+  await providerDialog.getByRole("option").last().scrollIntoViewIfNeeded()
+  const afterScroll = (await otherProvider.boundingBox())!
+  expect(Math.abs(afterScroll.y - beforeScroll.y)).toBeLessThan(1)
+  if (process.env.BUILD_SCREENSHOT_DIR) {
+    await page.screenshot({
+      path: `${process.env.BUILD_SCREENSHOT_DIR}/provider-dialog-long-list.png`,
+      animations: "disabled",
+    })
   }
   await otherProvider.click()
   await expect(providerDialog).toHaveCount(0)

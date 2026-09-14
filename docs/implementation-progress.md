@@ -711,3 +711,9 @@
 - 按用户纠正，版权方统一在选择弹窗操作，移除表单常驻「其他版权方」按钮；弹窗顶部使用整行选项和用途说明，使入口不受搜索或分页隐藏。选择后原选择框回显，名称输入沿用现有流程。
 - 准备页与版权方页面75项回归、TypeScript/Vite构建、3文件Biome及1440/390px截图检查通过。未修改后端、推送或部署。
 - 聚焦提交：`builds: keep other provider selection inside dialog`；以本条替代上轮常驻按钮决定，详见[交互优化验收补充](validation/2026-09-14-build-interaction-refinement.md)。
+
+## 2026-09-14 版权方弹窗视觉统一
+
+- 按用户确认统一已有版权方和其他版权方的整行选项样式，当前选择显示勾选；其他版权方置于弹窗底部分隔线下，列表独立滚动，取消顶部灰底突出设计。
+- 准备页与版权方页面75项分批通过，构建、3文件Biome与1440/390截图检查通过；390×640下50条候选滚动到底，其他版权方仍固定可见。详见[最终视觉验收](validation/2026-09-14-build-interaction-refinement.md)。
+- 聚焦提交：`builds: unify provider options with fixed alternative footer`；未推送或部署。
