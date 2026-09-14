@@ -1,3 +1,9 @@
+## 2026-09-14：统一版权方选择弹窗发布测试环境
+
+- `8c1588f` 与最终版本 `9381270` 已推送现有 `feat/platform-implementation` 并部署新加坡测试服务器，替换 `347ea52`；生产环境未变更。
+- TypeScript/Vite 构建、3 文件 Biome 和准备页/版权方页 75 项浏览器回归重新通过。完整备份 `/var/backups/tt-ada-staging/20260914T040552Z/` 的 PostgreSQL、Redis、项目/前端产物和完整私有配置均完成摘要校验与隔离恢复；数据库 head、功能开关及调用策略未变。
+- API、3 个 Worker 进程、Beat 同版本同配置；HTTPS、管理员登录、受保护 profile、Worker ping、备份/证书 timer 与错误日志验收通过。未调用外部集成或创建广告；详见[发布记录](validation/2026-09-14-build-interaction-refinement.md)。
+
 ## 2026-09-14：广告搭建交互修正发布测试环境
 
 - `347ea52` 已推送现有 `feat/platform-implementation` 并部署新加坡测试服务器，原版本 `7b2ee95`。没有 `main` 分支，未新建分支或强推；生产环境未变更。
