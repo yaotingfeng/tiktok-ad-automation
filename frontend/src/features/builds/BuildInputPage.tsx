@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { AxiosError } from "axios"
-import { Check } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { flushSync } from "react-dom"
 import {
@@ -371,60 +370,47 @@ export function BuildInputPage({
             </div>
             <Field>
               <FieldLabel>版权方连接</FieldLabel>
-              <div className="flex flex-wrap items-start gap-2">
-                <div className="flex min-w-0 flex-1 flex-col">
-                  <DirectoryPicker<ProviderConnectionPublic>
-                    label="版权方连接"
-                    valueLabel={
-                      values.connection === "other"
-                        ? "选择已接入版权方"
-                        : labels.connection || values.connection
-                    }
-                    disabled={disabled}
-                    queryKey={["tenant", tenantId, "builds", "provider-picker"]}
-                    load={async (query, cursor, limit, signal) =>
-                      (
-                        await ProvidersService.listConnections({
-                          path: { tenant_id: tenantId },
-                          query: { query, cursor, limit, status: "active" },
-                          signal,
-                        })
-                      ).data
-                    }
-                    renderItem={(item) => <span>{item.display_name}</span>}
-                    onSelect={(item) => {
-                      change({ connection: item.id, application: "" })
-                      setLabels((l) => ({
-                        ...l,
-                        connection: item.display_name,
-                        application: "",
-                      }))
-                    }}
-                  />
-                </div>
-                <Button
-                  type="button"
-                  variant={
-                    values.connection === "other" ? "secondary" : "outline"
-                  }
-                  aria-pressed={values.connection === "other"}
-                  disabled={disabled}
-                  className="shrink-0"
-                  onClick={() => {
+              <DirectoryPicker<ProviderConnectionPublic>
+                label="版权方连接"
+                valueLabel={
+                  values.connection === "other"
+                    ? "其他版权方"
+                    : labels.connection || values.connection
+                }
+                alternative={{
+                  label: "其他版权方",
+                  description: "使用已有推广链接，无需连接版权方后台。",
+                  selected: values.connection === "other",
+                  onSelect: () => {
                     change({ connection: "other", application: "" })
                     setLabels((l) => ({
                       ...l,
                       connection: "",
                       application: "",
                     }))
-                  }}
-                >
-                  {values.connection === "other" && (
-                    <Check data-icon="inline-start" />
-                  )}
-                  其他版权方
-                </Button>
-              </div>
+                  },
+                }}
+                disabled={disabled}
+                queryKey={["tenant", tenantId, "builds", "provider-picker"]}
+                load={async (query, cursor, limit, signal) =>
+                  (
+                    await ProvidersService.listConnections({
+                      path: { tenant_id: tenantId },
+                      query: { query, cursor, limit, status: "active" },
+                      signal,
+                    })
+                  ).data
+                }
+                renderItem={(item) => <span>{item.display_name}</span>}
+                onSelect={(item) => {
+                  change({ connection: item.id, application: "" })
+                  setLabels((l) => ({
+                    ...l,
+                    connection: item.display_name,
+                    application: "",
+                  }))
+                }}
+              />
             </Field>
             {values.connection === "other" ? (
               <Field>

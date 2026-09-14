@@ -3,7 +3,7 @@ import {
   type QueryKey,
   useQuery,
 } from "@tanstack/react-query"
-import { ChevronsUpDown } from "lucide-react"
+import { Check, ChevronsUpDown } from "lucide-react"
 import { type ReactNode, useId, useState } from "react"
 import { Button } from "@/components/ui/button"
 import {
@@ -30,6 +30,7 @@ export function DirectoryPicker<T extends { id: string }>({
   disabled = false,
   invalid = false,
   describedBy,
+  alternative,
 }: {
   label: string
   valueLabel?: string
@@ -46,6 +47,12 @@ export function DirectoryPicker<T extends { id: string }>({
   disabled?: boolean
   invalid?: boolean
   describedBy?: string
+  alternative?: {
+    label: string
+    description: string
+    selected: boolean
+    onSelect: () => void
+  }
 }) {
   const [open, setOpen] = useState(false)
   const [input, setInput] = useState("")
@@ -83,9 +90,34 @@ export function DirectoryPicker<T extends { id: string }>({
         <DialogHeader>
           <DialogTitle>选择{label}</DialogTitle>
           <DialogDescription>
-            搜索已有记录并选择。名称和完整 ID 用于核对。
+            {alternative
+              ? `选择已有记录，或选择「${alternative.label}」。`
+              : "搜索已有记录并选择。名称和完整 ID 用于核对。"}
           </DialogDescription>
         </DialogHeader>
+        {alternative && (
+          // 特殊选项固定放在搜索区上方，避免被搜索结果和分页隐藏。
+          <Button
+            type="button"
+            variant="secondary"
+            aria-label={alternative.label}
+            aria-pressed={alternative.selected}
+            disabled={disabled}
+            className="h-auto w-full justify-between gap-3 whitespace-normal p-4 text-left"
+            onClick={() => {
+              alternative.onSelect()
+              setOpen(false)
+            }}
+          >
+            <span className="flex min-w-0 flex-col gap-1">
+              <span>{alternative.label}</span>
+              <span className="text-xs font-normal text-muted-foreground">
+                {alternative.description}
+              </span>
+            </span>
+            {alternative.selected && <Check data-icon="inline-end" />}
+          </Button>
+        )}
         <form
           onSubmit={(event) => {
             // Portal events still bubble through the enclosing management form.

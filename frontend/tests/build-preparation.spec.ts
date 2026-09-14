@@ -1036,8 +1036,38 @@ test("其他版权方可批量添加现成链接，第一步不增加剧目表",
   await pickInputs(page)
   await expect(
     page.getByRole("button", { name: "其他版权方", exact: true }),
-  ).toBeVisible()
-  await page.getByRole("button", { name: "其他版权方", exact: true }).click()
+  ).toHaveCount(0)
+  await page.getByRole("combobox", { name: "版权方连接", exact: true }).click()
+  const providerDialog = page.getByRole("dialog", { name: "选择版权方连接" })
+  const otherProvider = providerDialog.getByRole("button", {
+    name: "其他版权方",
+    exact: true,
+  })
+  await expect(otherProvider).toBeVisible()
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 })
+    const bounds = (await otherProvider.boundingBox())!
+    const search = (await providerDialog
+      .getByLabel("搜索版权方连接")
+      .boundingBox())!
+    expect(bounds.x).toBeGreaterThanOrEqual(0)
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(width)
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(search.y)
+    if (process.env.BUILD_SCREENSHOT_DIR) {
+      await page.screenshot({
+        path: `${process.env.BUILD_SCREENSHOT_DIR}/provider-dialog-${width}.png`,
+        animations: "disabled",
+      })
+    }
+  }
+  await otherProvider.click()
+  await expect(providerDialog).toHaveCount(0)
+  await expect(
+    page.getByRole("combobox", { name: "版权方连接", exact: true }),
+  ).toHaveText("其他版权方")
+  await expect(
+    page.getByRole("button", { name: "其他版权方", exact: true }),
+  ).toHaveCount(0)
   await page.getByLabel("版权方名称", { exact: true }).fill("新版权方")
   await page
     .getByRole("button", { name: "已有推广链接？批量添加", exact: true })

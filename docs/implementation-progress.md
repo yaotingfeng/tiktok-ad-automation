@@ -705,3 +705,9 @@
 - 小程序选择与场景校验排队改为同一事务，保留已解析账户/剧目/素材分组，取消前端再次全量准备；页面保留已确认名称，仍校验各目标账户与冻结执行通道。
 - 验证：后端109项、页面117项通过；最后保存取消信号修复后准备页53项再次通过。TypeScript/Vite、Biome、mypy、Ruff/格式/编译和1440/390截图检查通过。尚未测量服务器实际耗时。
 - 聚焦提交：`builds: simplify provider and material editing and mini selection`；无迁移/新开关，未推送或部署。详见[交互优化验收](validation/2026-09-14-build-interaction-refinement.md)。
+
+## 2026-09-14 版权方选择入口纠正
+
+- 按用户纠正，版权方统一在选择弹窗操作，移除表单常驻「其他版权方」按钮；弹窗顶部使用整行选项和用途说明，使入口不受搜索或分页隐藏。选择后原选择框回显，名称输入沿用现有流程。
+- 准备页与版权方页面75项回归、TypeScript/Vite构建、3文件Biome及1440/390px截图检查通过。未修改后端、推送或部署。
+- 聚焦提交：`builds: keep other provider selection inside dialog`；以本条替代上轮常驻按钮决定，详见[交互优化验收补充](validation/2026-09-14-build-interaction-refinement.md)。
