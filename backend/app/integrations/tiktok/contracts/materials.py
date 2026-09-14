@@ -75,6 +75,10 @@ class ImageReceipt:
     image_id: str
     signature: str | None = field(repr=False)
     evidence: CallEvidence = field(default_factory=CallEvidence)
+    # 完整上传回执可直接核实封面；尾部字段保持既有位置参数合同。
+    width: int | None = None
+    height: int | None = None
+    displayable: bool | None = None
 
 
 @dataclass(frozen=True)

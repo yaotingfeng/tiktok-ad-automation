@@ -104,6 +104,8 @@ def validate_ad_assets(
     session: Session, *, step: ExecutionStep, unit: BuildUnit, body: dict[str, Any]
 ) -> None:
     """Pure local final fence, after admission and immediately before AD arming."""
+    from app.modules.materials.covers import verified_cover_image_id
+
     rows = session.exec(
         select(PreviewGroupMaterial.material_id, AccountMaterial, MaterialCoverJob)
         .select_from(PreviewGroupMaterial)
@@ -170,7 +172,9 @@ def validate_ad_assets(
             and (
                 job.status != "READY"
                 or job.updated_at < cutoff
-                or job.known_image_id != image_id
+                # 封面可能来自本次导入，也可能已在目标账户核实后直接复用。
+                # 两者都要求 READY 正证据，不能把尚未核实的候选当作上传回执。
+                or verified_cover_image_id(job) != image_id
             )
         ):
             valid = False

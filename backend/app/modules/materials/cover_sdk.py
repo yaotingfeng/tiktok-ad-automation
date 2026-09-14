@@ -121,9 +121,16 @@ def image_receipt(
         raise RemoteCallError(
             "cover_schema_unsupported", effect="UNKNOWN", evidence=response.evidence
         )
-    # 可选签名缺失或畸形不能丢弃已经收到的真实image_id；可用性另经详情核实。
+    # 可选事实缺失/畸形不能丢弃实际 image_id；仅完整事实可免去后续详情读取。
     return material_types.ImageReceipt(
-        data["image_id"], _signature(data.get("signature")), response.evidence
+        data["image_id"],
+        _signature(data.get("signature")),
+        response.evidence,
+        width=data["width"] if _dimension(data.get("width")) else None,
+        height=data["height"] if _dimension(data.get("height")) else None,
+        displayable=data["displayable"]
+        if type(data.get("displayable")) is bool
+        else None,
     )
 
 

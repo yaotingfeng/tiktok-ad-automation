@@ -137,11 +137,22 @@ def wake_unit(session: Session, *, unit_id: UUID, context: TenantContext) -> Non
     current = (
         session.get(PendingDispatch, unit.dispatch_id) if unit.dispatch_id else None
     )
-    if (
-        current
-        and current.published_at is None
-        and current.available_at <= datetime.now(UTC)
+    if current and (
+        current.tenant_id,
+        current.actor_id,
+        current.task_name,
+        current.task_key,
+        current.payload,
+    ) == (
+        unit.tenant_id,
+        submission.actor_id,
+        UNIT_TASK,
+        f"build-unit:{unit.unit_id}:{unit.dispatch_revision}",
+        {"unit_id": str(unit.unit_id), "revision": unit.dispatch_revision},
     ):
+        # 已发布仍可能排队：同一有效投递合并前置完成的唤醒，并保留 broker 退避。
+        # process_unit 持有同一单元锁并在消费后清空指针；之后的完成才排下一代。
+        # 消息丢失仍由现有 repair 按原 ID 重发，不产生只会被判旧代的重复消息。
         return
     unit.dispatch_revision += 1
     queue_execution_unit(session, submission=submission, unit=unit)

@@ -307,14 +307,21 @@ def test_new_video_ad_requires_verified_cover_without_reopening_completed_steps(
         )
         job.status, job.updated_at, job.dispatch_id = "READY", datetime.now(UTC), None
         session.get(ExecutionStep, ad_id).due_at = datetime.now(UTC)
+        replaced_video = job.video_id
     assert process_step(**args) == "SUCCEEDED"
     assert process_step(**args) == "SUCCEEDED"
     assert len(writes) == 1
     assert len(writes[0]["creative_list"]) == 2
+    # fixture 的 MATERIAL 查询无排序，不能假设被替换的必定是 target-0。
+    # 按明确的合成视频身份校验完整配对，而非只比较图片集合。
+    expected_images = {"target-0": "cover-0", "target-1": "cover-1"}
+    expected_images[replaced_video] = "actual-target-cover"
     assert {
-        row["creative_info"]["image_info"][0]["web_uri"]
+        row["creative_info"]["video_info"]["video_id"]: row["creative_info"][
+            "image_info"
+        ][0]["web_uri"]
         for row in writes[0]["creative_list"]
-    } == {"actual-target-cover", "cover-1"}
+    } == expected_images
     with Session(db) as session:
         job = session.get(MaterialCoverJob, job_id)
         assert job.status == cover_status and job.dispatch_id is None
@@ -371,7 +378,16 @@ def test_ad_checks_current_video_evidence_after_admission(
 
 
 @pytest.mark.parametrize(
-    "changed", ["none", "expired", "wrong_image", "missing", "extra"]
+    "changed",
+    [
+        "none",
+        "reused",
+        "candidate_unverified",
+        "expired",
+        "wrong_image",
+        "missing",
+        "extra",
+    ],
 )
 def test_frozen_custom_cover_keeps_its_final_fence(executable, redis_client, changed):
     from app.core.errors import DomainError
@@ -384,6 +400,14 @@ def test_frozen_custom_cover_keeps_its_final_fence(executable, redis_client, cha
         job = session.get(MaterialCoverJob, job_id)
         if changed != "expired":
             job.updated_at = datetime.now(UTC)
+        if changed in {"reused", "candidate_unverified"}:
+            # 已在目标账户核实的复用封面没有图片上传，不伪造上传回执或发送时间。
+            job.candidate_image_id = job.known_image_id
+            job.known_image_id = job.request_armed_at = None
+            job.signature = "a" * 32
+            job.width, job.height = 720, 1280
+            if changed == "candidate_unverified":
+                job.status = "PREPARING"
         session.add(job)
         session.flush()
         step = session.get(ExecutionStep, ad_id)
@@ -420,7 +444,7 @@ def test_frozen_custom_cover_keeps_its_final_fence(executable, redis_client, cha
             body["creative_list"][0]["creative_info"]["image_info"].append(
                 {"web_uri": "extra"}
             )
-        if changed == "none":
+        if changed in {"none", "reused"}:
             validate_ad_assets(session, step=step, unit=unit, body=body)
         else:
             with pytest.raises(

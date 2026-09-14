@@ -34,6 +34,12 @@ from app.integrations.tiktok.contracts.builds import BuildOperations
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.integrations.tiktok.contracts.materials import MaterialOperations
 from app.integrations.tiktok.contracts.scenes import ScenesGateway
+from app.integrations.tiktok.group_isolation import (
+    FrozenGroupIsolation,
+    group_isolation_contract_revision,
+    isolation_contracts,
+    require_isolation_target,
+)
 from app.integrations.tiktok.material_upload_evidence import material_upload_policy
 from app.integrations.tiktok.mcp.accounts import McpAccountsGateway
 from app.integrations.tiktok.mcp.authorization import (
@@ -94,6 +100,8 @@ _OPERATION_CAPABILITIES: dict[str, Capability] = {
     "build.create_adgroup": "build",
     "build.create_ad": "build",
     "build.create_cta_portfolio": "build",
+    "build.disable_adgroup": "build",
+    "build.list_optimizer_rules": "read",
 }
 _DIRECTORY_OPERATIONS = frozenset(
     operation
@@ -186,7 +194,16 @@ def open_tiktok_gateway(
     task_deadline: datetime,
     before_request: Callable[[], None] | None = None,
     response_observer: ResponseObserver | None = None,
+    group_isolation: FrozenGroupIsolation | None = None,
+    before_isolation_write: Callable[[], None] | None = None,
 ) -> Iterator[TikTokGateway]:
+    if group_isolation is not None and (
+        group_isolation.route != route
+        or group_isolation.contract_revision != group_isolation_contract_revision()
+    ):
+        raise DomainError(
+            "group_isolation_scope_mismatch", "冻结隔离路由或补充合同不匹配"
+        )
     # 打开前与每个物理发送前都检查原 route；整个工厂从不重新读取 BC 默认。
     with bounded_session(database_engine, task_deadline=task_deadline) as session:
         verify_route(
@@ -265,6 +282,17 @@ def open_tiktok_gateway(
         if before_request is not None:
             before_request()
         capability = _capability(advertiser_id, operation)
+        if operation in {"build.disable_adgroup", "build.list_optimizer_rules"}:
+            assert advertiser_id is not None
+            require_isolation_target(group_isolation, advertiser_id=advertiser_id)
+        if group_isolation is not None:
+            if advertiser_id is not None:
+                require_isolation_target(group_isolation, advertiser_id=advertiser_id)
+            # 专用隔离会话不借机创建或修改其他对象；纠正创建使用独立冻结意图。
+            if capability != "read" and operation != "build.disable_adgroup":
+                raise DomainError(
+                    "group_isolation_operation_forbidden", "隔离会话只允许停用原组"
+                )
         with bounded_session(database_engine, task_deadline=task_deadline) as session:
             verify_route(
                 session,
@@ -297,6 +325,14 @@ def open_tiktok_gateway(
                     "访问凭据已更新，请重新打开调用会话",
                     retryable=True,
                 )
+        if operation == "build.disable_adgroup":
+            if before_isolation_write is None:
+                raise DomainError(
+                    "group_isolation_authority_required", "停用前必须核查持久纠正账本"
+                )
+            # 与授权和准入一样在每个物理发送前重复执行；调用方必须幂等核对
+            # ledger_id、冻结 body/digest/route、独占 claim 和截止时间，不得仅传空回调。
+            before_isolation_write()
 
     @contextmanager
     def admit(advertiser_id: str | None, operation: str) -> Iterator[None]:
@@ -348,6 +384,10 @@ def open_tiktok_gateway(
                 for contract in load_tool_contracts()
                 if contract.operation in _OPERATION_CAPABILITIES
             }
+            if group_isolation is not None:
+                contracts.update(
+                    {contract.operation: contract for contract in isolation_contracts()}
+                )
             with open_bound_mcp_client(
                 token=token,
                 task_deadline=task_deadline,
@@ -356,6 +396,7 @@ def open_tiktok_gateway(
                 contracts=contracts,
                 observed_tools=observed,
                 response_observer=response_observer,
+                group_isolation=group_isolation,
             ) as client:
                 yield TikTokGateway(
                     accounts=McpAccountsGateway(
@@ -365,7 +406,7 @@ def open_tiktok_gateway(
                         observation_authorization=observation_facts,
                     ),
                     scenes=McpScenesGateway(client, context=read_context),
-                    builds=McpBuildOperations(client),
+                    builds=McpBuildOperations(client, isolation=group_isolation),
                     materials=MCPMaterialOperations(
                         client,
                         share_authorize=lambda account: authorize(
@@ -392,7 +433,10 @@ def open_tiktok_gateway(
                         deadline=task_deadline,
                     ),
                     builds=ApiBuildOperations(
-                        official, request_scope=request_scope, deadline=task_deadline
+                        official,
+                        request_scope=request_scope,
+                        deadline=task_deadline,
+                        isolation=group_isolation,
                     ),
                     materials=SDKMaterialOperations(
                         official,

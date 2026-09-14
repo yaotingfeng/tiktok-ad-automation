@@ -8,6 +8,7 @@ must enqueue a bounded executable window instead of their entire future graph.
 import json
 import math
 import re
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any, NoReturn, cast
 from uuid import UUID, uuid4
@@ -143,6 +144,38 @@ def enqueue_after_commit(
     return existing.id
 
 
+def _candidate_tenants(
+    session: Session, *, now: datetime, page_size: int
+) -> Iterator[UUID]:
+    due = (
+        select(col(PendingDispatch.id))
+        .where(
+            PendingDispatch.tenant_id == col(DispatchTenantCursor.tenant_id),
+            col(PendingDispatch.published_at).is_(None),
+            col(PendingDispatch.available_at) <= now,
+        )
+        .exists()
+    )
+    checked: set[UUID] = set()
+    # 正常负载只取一页；跳锁后仍有发送预算时才补页。最多 10 页/1000 租户，
+    # 防止竞争下无界扫描；每轮仍由外层限制 100 次实际尝试、每租户 5 条。
+    for _ in range(10):
+        candidates = session.exec(
+            select(DispatchTenantCursor.tenant_id)
+            .where(due, col(DispatchTenantCursor.tenant_id).not_in(checked))
+            .order_by(
+                col(DispatchTenantCursor.last_published_at).asc().nulls_first(),
+                col(DispatchTenantCursor.tenant_id),
+            )
+            .limit(page_size)
+        ).all()
+        for tenant_id in candidates:
+            checked.add(tenant_id)
+            yield tenant_id
+        if len(candidates) < page_size:
+            return
+
+
 def flush_dispatch(limit: int = 100) -> int:
     """One tenant round: at most one expansion, then ordinary FIFO; <=5/tenant.
 
@@ -157,28 +190,16 @@ def flush_dispatch(limit: int = 100) -> int:
     published = 0
     attempted = 0
     with Session(engine) as session, session.begin():
-        due = (
-            select(col(PendingDispatch.id))
-            .where(
-                PendingDispatch.tenant_id == col(DispatchTenantCursor.tenant_id),
-                col(PendingDispatch.published_at).is_(None),
-                col(PendingDispatch.available_at) <= now,
-            )
-            .exists()
-        )
-        cursors = session.exec(
-            select(DispatchTenantCursor)
-            .where(due)
-            .order_by(
-                col(DispatchTenantCursor.last_published_at).asc().nulls_first(),
-                col(DispatchTenantCursor.tenant_id),
-            )
-            .limit(limit)
-            .with_for_update(skip_locked=True)
-        ).all()
-        for cursor in cursors:
-            if attempted >= limit:
-                break
+        # 候选页保留公平顺序；只在实际服务前按主键领取锁，不占住未服务租户。
+        for tenant_id in _candidate_tenants(session, now=now, page_size=limit):
+            cursor = session.exec(
+                select(DispatchTenantCursor)
+                .where(DispatchTenantCursor.tenant_id == tenant_id)
+                .with_for_update(skip_locked=True)
+            ).first()
+            if cursor is None:
+                continue
+            # 候选快照之后其他发布器可能已服务该租户；持锁后重新读取到期任务。
             slots = min(5, limit - attempted)
             pending = (
                 select(PendingDispatch)
@@ -236,4 +257,7 @@ def flush_dispatch(limit: int = 100) -> int:
             if records:
                 # Serviced attempts advance the round even during broker outages.
                 cursor.last_published_at = datetime.now(UTC)
+            if attempted >= limit:
+                # 在请求下一候选前停止，普通满额轮次不能额外查询第二页。
+                break
     return published

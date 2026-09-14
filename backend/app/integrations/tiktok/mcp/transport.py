@@ -27,6 +27,7 @@ from app.integrations.tiktok.contracts.common import (
     McpBusinessResponse,
     RemoteCallError,
 )
+from app.integrations.tiktok.group_isolation import FrozenGroupIsolation
 from app.integrations.tiktok.mcp.protocol import (
     OFFICIAL_ENDPOINT,
     ToolContract,
@@ -215,6 +216,21 @@ class _GuardedTransport(httpx2.AsyncBaseTransport):
                             "mcp_replay_blocked", sent=bool(state and state.sent)
                         )
                     operation, advertiser_id = state.operation, state.advertiser_id
+                    if operation == "build.disable_adgroup":
+                        isolation = bound._group_isolation
+                        # 官方 schema 包含 ENABLE/DELETE；本地纠正授权必须在物理
+                        # 边界单独收窄，私有 raw call 也不能更换原组、增加 ID 或参数。
+                        if (
+                            isolation is None
+                            or advertiser_id != isolation.advertiser_id
+                            or message["params"].get("arguments")
+                            != {
+                                "advertiser_id": isolation.advertiser_id,
+                                "adgroup_ids": [isolation.adgroup_id],
+                                "operation_status": "DISABLE",
+                            }
+                        ):
+                            raise _error("group_isolation_scope_mismatch")
                 else:
                     operation, advertiser_id = _METHOD_OPERATIONS[method], None
                     # 官方 SDK 不得在已发送写入后隐式补取目录。
@@ -344,9 +360,11 @@ class BoundMCPClient:
         contracts: Mapping[str, ToolContract],
         observed_tools: Mapping[str, dict[str, Any]],
         response_observer: ResponseObserver | None = None,
+        group_isolation: FrozenGroupIsolation | None = None,
     ):
         self._task_deadline = task_deadline
         self._response_observer = response_observer
+        self._group_isolation = group_isolation
         self._authorize = authorize
         self._admit = admit
         self._contracts = deepcopy(dict(contracts))
@@ -606,6 +624,7 @@ def open_bound_mcp_client(
     observed_tools: Mapping[str, dict[str, Any]],
     endpoint: str = OFFICIAL_ENDPOINT,
     response_observer: ResponseObserver | None = None,
+    group_isolation: FrozenGroupIsolation | None = None,
 ) -> Iterator[BoundMCPClient]:
     """同步 prefork 任务入口。token 只传给内存 HTTP header，不进入对象 repr。"""
     _require_sync()
@@ -625,6 +644,7 @@ def open_bound_mcp_client(
         contracts=contracts,
         observed_tools=observed_tools,
         response_observer=response_observer,
+        group_isolation=group_isolation,
     )
     with start_blocking_portal(name="tiktok-mcp-task") as portal:
         bound._portal = portal

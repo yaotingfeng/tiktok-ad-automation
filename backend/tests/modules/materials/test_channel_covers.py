@@ -315,9 +315,10 @@ def test_receipt_is_saved_before_actual_client_cleanup_failure(
 )
 @pytest.mark.parametrize("mutation", ["video", "digest", "read", "upload", "claim"])
 def test_target_or_authority_changed_between_reads_and_upload_sends_no_image(
-    cover_env, gateway_wire, database_engine, redis_client, mutation
+    cover_env, gateway_wire, database_engine, redis_client, mutation, monkeypatch
 ):
     from app.modules.accounts.connection_models import ConnectionAuthorization
+    from tests.modules.accounts.test_material_gateway import after_material_http
 
     identity = queue(cover_env, database_engine).task_id
     replacement = uuid4()
@@ -325,10 +326,6 @@ def test_target_or_authority_changed_between_reads_and_upload_sends_no_image(
 
     def mutate():
         if changed:
-            return
-        if cover_env["route"].channel == "OFFICIAL_MCP" and not any(
-            c["method"] == "tools/call" for c in gateway_wire["wire"].calls
-        ):
             return
         with Session(database_engine) as db, db.begin():
             if mutation == "video":
@@ -352,14 +349,10 @@ def test_target_or_authority_changed_between_reads_and_upload_sends_no_image(
                 }
         changed.append(True)
 
-    def api_response():
-        gateway_wire["sdk_data"]["data"] = video_data()
-        mutate()
-
-    gateway_wire["before"]["callback"] = (
-        api_response if cover_env["route"].channel == "OFFICIAL_API" else mutate
-    )
-    enqueue(gateway_wire, "file_video_ad_info_get", video_data())
+    # Session reuse removes the second handshake. Mutate at the actual video
+    # response, before the upload's distinct admission and pre-send checks.
+    after_material_http(monkeypatch, cover_env["route"].channel, mutate)
+    prepare_replies(cover_env, gateway_wire, [("file_video_ad_info_get", video_data())])
     run(cover_env, database_engine, redis_client, identity)
     assert changed and post_count(cover_env, gateway_wire) == 0
     current = job(database_engine, identity)

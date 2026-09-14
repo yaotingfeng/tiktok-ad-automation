@@ -25,6 +25,7 @@ from app.integrations.tiktok.contracts.accounts import (
     AuthorizationFacts,
     CandidateReadContext,
 )
+from app.integrations.tiktok.group_isolation import isolation_contracts
 from app.integrations.tiktok.mcp.protocol import (
     _semantic_schema,
     load_mcp_protocol,
@@ -179,7 +180,11 @@ def read_tools(client: BoundMCPClient) -> tuple[dict[str, Any], dict[str, str]]:
         for c in load_tool_contracts()
         if c.operation.startswith("accounts.")
     }
-    reviewed = {c.tool_name: c for c in load_tool_contracts()}
+    # 固定补充合同也须来自实际完整目录并逐项核验；仅扩大可选观察白名单，
+    # 不改变账户必需能力、主 manifest/hash 或已冻结任务的路由/授权代数。
+    reviewed = {
+        c.tool_name: c for c in (*load_tool_contracts(), *isolation_contracts())
+    }
     schemas = {}
     unavailable_tools = {}
     seen = set()

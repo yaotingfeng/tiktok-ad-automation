@@ -24,6 +24,11 @@ from app.integrations.tiktok.contracts.common import (
     McpBusinessResponse,
     RemoteCallError,
 )
+from app.integrations.tiktok.group_isolation import (
+    FrozenGroupIsolation,
+    optimizer_rule_arguments,
+    require_isolation_target,
+)
 from app.integrations.tiktok.official.accounts import (
     OfficialReadRequests,
     RequestScope,
@@ -38,10 +43,66 @@ from app.modules.builds.request_compiler import (
 
 
 class ApiBuildOperations:
-    def __init__(self, client: Any, *, request_scope: RequestScope, deadline: datetime):
+    def __init__(
+        self,
+        client: Any,
+        *,
+        request_scope: RequestScope,
+        deadline: datetime,
+        isolation: FrozenGroupIsolation | None = None,
+    ):
         self._request_scope, self._deadline = request_scope, deadline
+        self._isolation = isolation
         self._requests = OfficialReadRequests(
             client, request_scope=request_scope, deadline=deadline
+        )
+
+    def disable_adgroup(
+        self, *, advertiser_id: str, adgroup_id: str
+    ) -> McpBusinessResponse:
+        require_isolation_target(
+            self._isolation, advertiser_id=advertiser_id, adgroup_id=adgroup_id
+        )
+        client = self._requests.client
+        sent = False
+        try:
+            remaining(self._deadline)
+            with self._request_scope(
+                advertiser_id, "build.disable_adgroup", self._deadline
+            ):
+                budget = remaining(self._deadline)
+                sent = True
+                sdk.AdgroupApi(client).smart_plus_adgroup_status_update(
+                    client.default_headers["Access-Token"],
+                    body={
+                        "advertiser_id": advertiser_id,
+                        "adgroup_ids": [adgroup_id],
+                        "operation_status": "DISABLE",
+                    },
+                    async_req=True,
+                    _request_timeout=(min(5.0, budget), min(30.0, budget)),
+                ).get()
+                return sdk_creation_envelope(json.loads(client.last_response.data))
+        except RemoteCallError:
+            raise
+        except Exception:
+            if not sent:
+                raise
+            # 停用失败也不能认为未发送；只允许后续读取状态，禁止盲重试。
+            raise RemoteCallError(
+                "group_isolation_result_unknown",
+                effect="UNKNOWN",
+                evidence=CallEvidence(),
+            ) from None
+
+    def list_optimizer_rules(
+        self, *, advertiser_id: str, page: int = 1
+    ) -> McpBusinessResponse:
+        require_isolation_target(self._isolation, advertiser_id=advertiser_id)
+        return self._read(
+            "build.list_optimizer_rules",
+            advertiser_id,
+            optimizer_rule_arguments(advertiser_id=advertiser_id, page=page),
         )
 
     def create(self, *, attempt_id: UUID, intent: CreateIntent) -> CreatedObject:
@@ -96,6 +157,9 @@ class ApiBuildOperations:
                 client
             ).creative_portfolio_get,
             "build.get_regular_adgroups": sdk.AdgroupApi(client).adgroup_get,
+            "build.list_optimizer_rules": sdk.AutomatedRulesApi(
+                client
+            ).optimizer_rule_list,
         }
 
         def send(timeout: tuple[float, float]) -> object:

@@ -16,7 +16,7 @@ from pydantic import (
     model_validator,
 )
 
-from .common import CallEvidence
+from .common import CallEvidence, McpBusinessResponse
 
 
 def _nonblank(value: str) -> str:
@@ -200,6 +200,12 @@ class AdGroupStatus(FrozenModel):
 
 
 class BuildOperations(Protocol):
+    def disable_adgroup(
+        self, *, advertiser_id: str, adgroup_id: str
+    ) -> McpBusinessResponse: ...
+    def list_optimizer_rules(
+        self, *, advertiser_id: str, page: int = 1
+    ) -> McpBusinessResponse: ...
     def create(self, *, attempt_id: UUID, intent: CreateIntent) -> CreatedObject: ...
     def read_page(self, *, query: BuildReadQuery) -> BuildPage: ...
     def read_adgroup_status(
