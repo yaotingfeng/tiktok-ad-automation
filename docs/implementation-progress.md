@@ -691,3 +691,11 @@
 - 完整备份 `/var/backups/tt-ada-staging/20260913T094820Z/`，项目/配置/数据库/Redis校验和、隔离恢复、归档解密及恢复库迁移演练通过；业务 head 为 `manual_promotion_links`。
 - API/全部Worker/Beat同版本、同配置，导入/清理保持true；逐进程Settings与调用额度检查、线上双角色登录/隔离、入口检查及Worker ping通过，备份/续期timer正常。本次未新建真实广告。
 - 完整版本、备份与验收边界见[测试迭代发布](validation/2026-09-13-staging-iteration-release.md)。
+
+## 2026-09-14 版权方入口、素材调整与小程序选择优化
+
+- 「其他版权方」从选择弹窗内移到第一页常驻按钮，选中后填写名称；保留原三步搭建与链接录入流程。
+- 素材侧栏打开即自动加载完整分组并进入编辑，移除二次确认点击；加宽侧栏、文件名换行、组号与短「移除」按钮分开排列。保留未保存修改，后台准备结束后可继续保存，完整读取前禁止覆盖提交。
+- 小程序选择与场景校验排队改为同一事务，保留已解析账户/剧目/素材分组，取消前端再次全量准备；页面保留已确认名称，仍校验各目标账户与冻结执行通道。
+- 验证：后端109项、页面117项通过；最后保存取消信号修复后准备页53项再次通过。TypeScript/Vite、Biome、mypy、Ruff/格式/编译和1440/390截图检查通过。尚未测量服务器实际耗时。
+- 聚焦提交：`builds: simplify provider and material editing and mini selection`；无迁移/新开关，未推送或部署。详见[交互优化验收](validation/2026-09-14-build-interaction-refinement.md)。

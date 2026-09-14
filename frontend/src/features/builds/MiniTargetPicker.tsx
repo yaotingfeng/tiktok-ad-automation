@@ -1,6 +1,6 @@
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
-import { BuildsService, type DraftSummary } from "@/client"
+import { BuildsService, type DraftMinis, type DraftSummary } from "@/client"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import {
@@ -18,29 +18,37 @@ export function MiniTargetPicker({
   bcId,
   summary,
   write,
-  onPrepare,
   onRefresh,
+  onPrepare,
 }: {
   tenantId: string
   bcId: string
   summary: DraftSummary
   write: boolean
-  onPrepare: () => Promise<void>
   onRefresh: () => void
+  onPrepare: () => Promise<void>
 }) {
   const [open, setOpen] = useState(false)
   const [page, setPage] = useState(1)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>()
-  const query = useQuery({
-    queryKey: [
-      ...buildKey(tenantId, bcId),
-      summary.draft_id,
-      summary.revision,
-      summary.status,
-      "minis",
-      page,
-    ],
+  const client = useQueryClient()
+  const queryKey = [
+    ...buildKey(tenantId, bcId),
+    summary.draft_id,
+    summary.revision,
+    summary.status,
+    "minis",
+    page,
+  ]
+  const query = useQuery<DraftMinis>({
+    queryKey,
+    // 同一草稿切换版本/准备状态时保留已确认名称，不闪回空白加载态。
+    placeholderData: (previous, previousQuery) =>
+      JSON.stringify(previousQuery?.queryKey.slice(0, 5)) ===
+      JSON.stringify(queryKey.slice(0, 5))
+        ? previous
+        : undefined,
     queryFn: async ({ signal }) =>
       (
         await BuildsService.minisOptions({
@@ -64,7 +72,7 @@ export function MiniTargetPicker({
     setError(undefined)
     sessionStorage.setItem(
       pendingKey,
-      JSON.stringify({ requestId, kind: "minis", prepare: true }),
+      JSON.stringify({ requestId, kind: "minis", prepare: false }),
     )
     try {
       await BuildsService.selectMini({
@@ -77,9 +85,13 @@ export function MiniTargetPicker({
         },
       })
       sessionStorage.removeItem(pendingKey)
+      client.setQueryData(queryKey, {
+        ...data,
+        selected: data.items?.find((item) => item.minis_id === minisId) ?? null,
+        state: "selected",
+      })
       setOpen(false)
       onRefresh()
-      await onPrepare()
     } catch (e) {
       if (!unknownOutcome(e)) sessionStorage.removeItem(pendingKey)
       setError(e)

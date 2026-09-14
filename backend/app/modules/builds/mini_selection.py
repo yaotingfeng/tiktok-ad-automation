@@ -1,9 +1,9 @@
-"""搭建页面的小程序目录与选择；GET 只读缓存，POST 仅修改本地草稿。"""
+"""小程序目录 GET 只读缓存；选择 POST 保存草稿并原子排队场景校验。"""
 
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlsplit
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
@@ -57,7 +57,7 @@ def catalog_options(
     *,
     page: int | None = None,
     minis_id: str | None = None,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     query = select(SceneJobPage).where(
         SceneJobPage.tenant_id == job.tenant_id,
         SceneJobPage.job_id == job.id,
@@ -81,7 +81,7 @@ def catalog_options(
     ]
 
 
-def option(item: dict) -> MiniOption:
+def option(item: dict[str, Any]) -> MiniOption:
     # 名称缺失仍展示真实标识，不能杜撰一个业务名称。
     return MiniOption(
         minis_id=item["minis_id"], name=item.get("name") or "未命名小程序"
@@ -242,7 +242,7 @@ def draft_minis(
 def choose_mini(
     session: Session, *, context: TenantContext, draft_id: UUID, body: ChooseMiniRequest
 ) -> int:
-    from .drafts import _bump_revision, get_draft
+    from .drafts import _bump_revision, get_draft, prepare_selected_mini
     from .mutations import _apply
 
     def apply() -> int:
@@ -312,7 +312,15 @@ def choose_mini(
             )
         )
         draft.status = "DRAFT"
-        return _bump_revision(session, draft, body.expected_revision)
+        revision = _bump_revision(session, draft, body.expected_revision)
+        # 选择和场景排队同一事务提交，页面无需再发一次全量准备请求。
+        prepare_selected_mini(
+            session,
+            context=context,
+            draft_id=draft.id,
+            request_id=uuid5(body.request_id, "selected-mini-scenes"),
+        )
+        return revision
 
     require_tenant(
         session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="build"

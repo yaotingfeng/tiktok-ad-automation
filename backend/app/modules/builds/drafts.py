@@ -326,8 +326,6 @@ def create_draft(
 def prepare_draft(
     session: Session, *, context: TenantContext, draft_id: UUID, request_id: UUID
 ) -> UUID:
-    from app.modules.builds.draft_tasks import queue_preparation
-
     _authorize(session, context)
     SASession.execute(
         session,
@@ -510,6 +508,53 @@ def prepare_draft(
         if any(line.strip() for line in lines)
         else None
     )
+    return _enqueue_draft_preparation(session, context, draft, prep, route, request_id)
+
+
+def prepare_selected_mini(
+    session: Session, *, context: TenantContext, draft_id: UUID, request_id: UUID
+) -> UUID:
+    """小程序选择只重建场景依赖，保留已解析账户、链接和自动/手动素材分组。"""
+    draft = get_draft(session, context=context, draft_id=draft_id, lock=True)
+    if draft.status != "DRAFT":
+        raise DomainError("draft_not_ready", "草稿状态已变化，请刷新后重新选择")
+    route = freeze_route(
+        session,
+        context=context,
+        bc_id=draft.bc_id,
+        connection_id=draft.execution_connection_id,
+    )
+    previous = session.exec(
+        select(DraftPreparation)
+        .where(
+            DraftPreparation.tenant_id == context.tenant_id,
+            DraftPreparation.draft_id == draft.id,
+        )
+        .order_by(col(DraftPreparation.draft_revision).desc())
+        .limit(1)
+    ).first()
+    prep = DraftPreparation(
+        tenant_id=context.tenant_id,
+        draft_id=draft.id,
+        draft_revision=draft.revision,
+        actor_id=context.actor_id,
+        request_id=request_id,
+        phase="materials",
+        provider_task_id=previous.provider_task_id if previous else None,
+    )
+    return _enqueue_draft_preparation(session, context, draft, prep, route, request_id)
+
+
+def _enqueue_draft_preparation(
+    session: Session,
+    context: TenantContext,
+    draft: BuildDraft,
+    prep: DraftPreparation,
+    route: FrozenTikTokRoute,
+    request_id: UUID,
+) -> UUID:
+    from .draft_tasks import queue_preparation
+
     session.add(prep)
     draft.status = "PREPARING"
     session.add(draft)

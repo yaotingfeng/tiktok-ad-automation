@@ -30,7 +30,6 @@ export function DirectoryPicker<T extends { id: string }>({
   disabled = false,
   invalid = false,
   describedBy,
-  extraAction,
 }: {
   label: string
   valueLabel?: string
@@ -46,7 +45,6 @@ export function DirectoryPicker<T extends { id: string }>({
   requiredSearch?: boolean
   disabled?: boolean
   invalid?: boolean
-  extraAction?: { label: string; onSelect: () => void }
   describedBy?: string
 }) {
   const [open, setOpen] = useState(false)
@@ -88,18 +86,6 @@ export function DirectoryPicker<T extends { id: string }>({
             搜索已有记录并选择。名称和完整 ID 用于核对。
           </DialogDescription>
         </DialogHeader>
-        {extraAction && (
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => {
-              extraAction.onSelect()
-              setOpen(false)
-            }}
-          >
-            {extraAction.label}
-          </Button>
-        )}
         <form
           onSubmit={(event) => {
             // Portal events still bubble through the enclosing management form.

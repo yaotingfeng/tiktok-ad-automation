@@ -122,6 +122,7 @@ export async function buildsBoundary(
     error_code: options.previewError || null,
     created_at: "2026-09-09T00:00:00Z",
   }
+  let selectedMini: { minis_id: string; name: string } | null = null
   let candidateSelected = false
   let materials = Array.from({ length: 23 }, (_, i) => ({
     material_id: `99999999-9999-4999-8999-${String(i + 1).padStart(12, "0")}`,
@@ -358,16 +359,18 @@ export async function buildsBoundary(
     if (path.endsWith(`/build-drafts/${D}/minis`)) {
       if (method === "POST") {
         summary.revision++
+        summary.status = "PREPARING"
+        selectedMini = { minis_id: body.minis_id, name: "LemonShow" }
         const result = { draft_id: D, revision: summary.revision }
         mutations.set(body.request_id, result)
         if (options.miniUnknown) return route.abort("failed")
         return reply(result)
       }
       return reply({
-        state: "choose",
+        state: selectedMini ? "selected" : "choose",
         catalog_job_id: P,
         advertiser_id: "90071992547409936666",
-        selected: null,
+        selected: selectedMini,
         items: [{ minis_id: "mini-real-001", name: "LemonShow" }],
         next_page: null,
       })

@@ -17,6 +17,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
+import { cn } from "@/lib/utils"
 
 // Guards both router transitions (including browser Back) and every Sheet close path.
 export function ManagementSheet({
@@ -24,6 +25,7 @@ export function ManagementSheet({
   description,
   dirty,
   pending = false,
+  wide = false,
   onClose,
   children,
   actions,
@@ -32,6 +34,7 @@ export function ManagementSheet({
   description: string
   dirty: boolean
   pending?: boolean
+  wide?: boolean
   onClose: () => void
   children: ReactNode
   actions?: ReactNode
@@ -62,7 +65,7 @@ export function ManagementSheet({
         }}
       >
         <SheetContent
-          className="w-full sm:max-w-xl"
+          className={cn("w-full", wide ? "sm:max-w-3xl" : "sm:max-w-xl")}
           onOpenAutoFocus={() => {
             opener.current =
               document.activeElement instanceof HTMLElement

@@ -365,7 +365,7 @@ test("取消长输入恢复不暴露空编辑表单，重新恢复读完全部�
   )
   expect(api.requests.filter((r) => r.method === "PATCH")).toHaveLength(0)
 })
-test("分组先分页只读，显式编辑移除尾组保存其余完整素材", async ({ page }) => {
+test("打开素材即可编辑，移除尾组保存其余完整素材", async ({ page }) => {
   const api = await buildsBoundary(page)
   await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
   await page.getByRole("button", { name: "查看与调整素材" }).first().click()
@@ -375,7 +375,6 @@ test("分组先分页只读，显式编辑移除尾组保存其余完整素材",
   await expect(
     page.getByRole("button", { name: "保存素材分组" }),
   ).toBeDisabled()
-  await page.getByRole("button", { name: "开始调整完整分组" }).click()
   for (const n of [21, 22, 23])
     await page
       .getByRole("button", { name: `移除 完整剧名1-${n}.mp4`, exact: true })
@@ -392,7 +391,6 @@ test("素材未保存关闭取消保留组号，确认仅离开不写API", async
   const api = await buildsBoundary(page)
   await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
   await page.getByRole("button", { name: "查看与调整素材" }).first().click()
-  await page.getByRole("button", { name: "开始调整完整分组" }).click()
   await page.getByLabel("组号", { exact: true }).first().fill("5")
   await page.getByRole("button", { name: "取消", exact: true }).click()
   await page.getByRole("button", { name: "留在当前页" }).click()
@@ -564,7 +562,6 @@ test("未知分组修改只查原请求，404保留编辑且阻止再次保存",
   })
   await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
   await page.getByRole("button", { name: "查看与调整素材" }).first().click()
-  await page.getByRole("button", { name: "开始调整完整分组" }).click()
   await page.getByLabel("组号", { exact: true }).first().fill("7")
   await page.getByRole("button", { name: "保存素材分组" }).click()
   await page.getByRole("button", { name: "查询原修改结果" }).click()
@@ -762,7 +759,7 @@ test("没有版权方 Mini 配置时按名称选择并自动继续准备", async
           (r) => r.path.endsWith("/prepare") && r.method === "POST",
         ).length,
     )
-    .toBe(1)
+    .toBe(0)
   const selection = api.requests.find(
     (r) => r.path.endsWith("/minis") && r.method === "POST",
   )!
@@ -799,7 +796,7 @@ test("小程序保存响应丢失后查询原请求并继续，不重复保存",
           (r) => r.method === "POST" && r.path.endsWith("/prepare"),
         ).length,
     )
-    .toBe(1)
+    .toBe(0)
   expect(
     api.requests.filter(
       (r) => r.method === "POST" && r.path.endsWith("/minis"),
@@ -1037,7 +1034,9 @@ test("其他版权方可批量添加现成链接，第一步不增加剧目表",
   const api = await buildsBoundary(page)
   await page.goto(`/tenants/${tenant}/builds/new?bc_id=${bc}`)
   await pickInputs(page)
-  await page.getByRole("combobox", { name: "版权方连接", exact: true }).click()
+  await expect(
+    page.getByRole("button", { name: "其他版权方", exact: true }),
+  ).toBeVisible()
   await page.getByRole("button", { name: "其他版权方", exact: true }).click()
   await page.getByLabel("版权方名称", { exact: true }).fill("新版权方")
   await page
@@ -1291,4 +1290,191 @@ test("恢复草稿保留手动链接并随剧名顺序保存", async ({ page }) 
       protected_base: "",
     },
   ])
+})
+
+for (const width of [1440, 390]) {
+  test(`素材长文件名在 ${width}px 下不挤压组号和移除操作`, async ({ page }) => {
+    await buildsBoundary(page)
+    const fileName = `${"这是一部名称很长的短剧素材".repeat(12)}_20260914_第001集_1080p.mp4`
+    await page.route("**/build-drafts/*/dramas/*/materials?**", (route) =>
+      route.fulfill({
+        json: {
+          items: [
+            {
+              material_id: "material-long-name",
+              file_name: fileName,
+              group_no: 1,
+              position: 1,
+              shared_with_other_drama: false,
+            },
+          ],
+          next_cursor: null,
+        },
+      }),
+    )
+    await page.setViewportSize({ width, height: 900 })
+    await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+    await page.getByRole("button", { name: "查看与调整素材" }).first().click()
+    const dialog = page.getByRole("dialog", { name: /调整素材/ })
+    const input = dialog.getByLabel("组号", { exact: true })
+    const remove = dialog.getByRole("button", {
+      name: `移除 ${fileName}`,
+      exact: true,
+    })
+    await expect(input).toBeEnabled()
+    await expect(remove).toHaveText("移除")
+    await expect(
+      page.getByRole("button", { name: "开始调整完整分组" }),
+    ).toHaveCount(0)
+    await expect
+      .poll(async () => {
+        const a = (await input.boundingBox())!,
+          b = (await remove.boundingBox())!
+        return (
+          a.x >= 0 &&
+          b.x + b.width <= width &&
+          a.x + a.width <= b.x &&
+          Math.abs(a.y - b.y) < 3
+        )
+      })
+      .toBe(true)
+    expect(
+      await dialog.evaluate((node) => node.scrollWidth <= node.clientWidth),
+    ).toBe(true)
+    if (process.env.BUILD_SCREENSHOT_DIR)
+      await page.screenshot({
+        path: `${process.env.BUILD_SCREENSHOT_DIR}/material-edit-${width}.png`,
+        animations: "disabled",
+      })
+  })
+}
+
+test("素材分页未加载完整不能编辑保存，加载后保留全部素材", async ({ page }) => {
+  const api = await buildsBoundary(page)
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let pages = 0
+  await page.route("**/build-drafts/*/dramas/*/materials?**", async (route) => {
+    pages++
+    const second =
+      new URL(route.request().url()).searchParams.get("cursor") === "tail"
+    if (second) await held
+    await route.fulfill({
+      json: {
+        items: [
+          {
+            material_id: second ? "tail-id" : "head-id",
+            file_name: second ? "尾页素材.mp4" : "首页素材.mp4",
+            group_no: 1,
+            position: second ? 2 : 1,
+            shared_with_other_drama: false,
+          },
+        ],
+        next_cursor: second ? null : "tail",
+      },
+    })
+  })
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await page.getByRole("button", { name: "查看与调整素材" }).first().click()
+  await expect(
+    page.getByText("正在读取完整分组，已加载 1 份素材…"),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "保存素材分组" }),
+  ).toBeDisabled()
+  await expect(page.getByLabel("组号", { exact: true })).toHaveCount(0)
+  release()
+  await page.getByLabel("组号", { exact: true }).first().fill("2")
+  await page.getByRole("button", { name: "保存素材分组" }).click()
+  await expect(page.getByRole("dialog", { name: /调整素材/ })).toHaveCount(0)
+  expect(pages).toBe(2)
+  expect(
+    api.requests
+      .find((r) => r.method === "PATCH" && r.path.endsWith("/groups"))!
+      .body.groups.flat()
+      .sort(),
+  ).toEqual(["head-id", "tail-id"])
+})
+
+test("小程序保存后立即保留名称，后台更新不重新全量准备", async ({ page }) => {
+  const api = await buildsBoundary(page)
+  let selected = false,
+    backgroundReads = 0
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  await page.route(`**/build-drafts/${D}/minis**`, async (route) => {
+    if (route.request().method() === "POST") {
+      selected = true
+      return route.fallback()
+    }
+    if (selected) {
+      backgroundReads++
+      await held
+    }
+    return route.fallback()
+  })
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await page.getByRole("button", { name: "选择小程序", exact: true }).click()
+  await page
+    .getByRole("dialog", { name: "选择推广小程序" })
+    .getByRole("button", { name: /LemonShow/ })
+    .click()
+  await expect(
+    page.getByRole("dialog", { name: "选择推广小程序" }),
+  ).toHaveCount(0)
+  await expect.poll(() => backgroundReads).toBeGreaterThan(0)
+  await expect(page.getByText("LemonShow", { exact: true })).toBeVisible()
+  await expect(
+    page.getByText("正在读取可用小程序…", { exact: true }),
+  ).toHaveCount(0)
+  expect(
+    api.requests.filter(
+      (r) => r.method === "POST" && r.path.endsWith("/prepare"),
+    ),
+  ).toHaveLength(0)
+  release()
+})
+
+test("后台准备状态变化保留已调整素材组号且恢复后可保存", async ({ page }) => {
+  const api = await buildsBoundary(page)
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await page.getByRole("button", { name: "查看与调整素材" }).first().click()
+  const input = page.getByLabel("组号", { exact: true }).first()
+  await input.fill("7")
+  api.summary.status = "PREPARING"
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    })
+    window.dispatchEvent(new Event("visibilitychange"))
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    })
+    window.dispatchEvent(new Event("visibilitychange"))
+  })
+  await expect(input).toBeDisabled()
+  api.summary.status = "READY"
+  await expect(input).toBeEnabled()
+  await expect(input).toHaveValue("7")
+  await page.getByRole("button", { name: "保存素材分组" }).click()
+  await expect
+    .poll(
+      () =>
+        api.requests.filter(
+          (r) => r.method === "PATCH" && r.path.endsWith("/groups"),
+        ).length,
+    )
+    .toBe(1)
+  await expect(page.getByRole("dialog", { name: /调整素材/ })).toHaveCount(0)
+  expect(
+    api.requests.filter(
+      (r) => r.method === "GET" && r.path.endsWith("/materials"),
+    ),
+  ).toHaveLength(1)
 })

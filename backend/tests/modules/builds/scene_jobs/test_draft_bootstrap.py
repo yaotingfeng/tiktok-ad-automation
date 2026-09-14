@@ -520,3 +520,60 @@ def test_mini_choice_rejects_stale_or_wrong_target_without_saving(
             )
             is None
         )
+
+
+def test_mini_choice_queues_only_scene_refresh_and_preserves_prepared_inputs(
+    job_env, wire, redis_client
+):
+    from app.modules.builds.mini_selection import ChooseMiniRequest, choose_mini
+    from app.modules.builds.models import DraftDrama, DraftGroupMaterial, DraftInput
+
+    env = job_env
+    draft_id, revision, catalog = selection_draft(env, wire, redis_client)
+    models = (DraftAccount, DraftDrama, DraftGroupMaterial, DraftInput)
+
+    def snapshot(db):
+        return [
+            [
+                row.model_dump()
+                for row in db.exec(
+                    select(model).where(model.draft_id == draft_id)
+                ).all()
+            ]
+            for model in models
+        ]
+
+    with Session(engine) as db:
+        before = snapshot(db)
+        capabilities_before = db.exec(select(CapabilityJob.id)).all()
+    body = ChooseMiniRequest(
+        request_id=uuid4(),
+        expected_revision=revision,
+        catalog_job_id=catalog.id,
+        minis_id="fixture-minis",
+    )
+    for _ in range(2):
+        with Session(engine) as db, db.begin():
+            assert (
+                choose_mini(db, context=env["context"], draft_id=draft_id, body=body)
+                == revision + 1
+            )
+    with Session(engine) as db:
+        assert db.get(BuildDraft, draft_id).status == "PREPARING"
+        assert snapshot(db) == before
+        prep = db.exec(
+            select(DraftPreparation).where(
+                DraftPreparation.draft_id == draft_id,
+                DraftPreparation.draft_revision == revision + 1,
+            )
+        ).one()
+        assert prep.phase == "materials" and prep.status == "PENDING"
+        task_id = prep.id
+    for _ in range(4):
+        if tick(env, task_id):
+            break
+    with Session(engine) as db:
+        assert db.get(BuildDraft, draft_id).status == "READY"
+        assert snapshot(db) == before
+        assert db.exec(select(CapabilityJob.id)).all() == capabilities_before
+    assert len(wire[0]) == 6

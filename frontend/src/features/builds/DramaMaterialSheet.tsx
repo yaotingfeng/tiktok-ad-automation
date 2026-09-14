@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query"
 import { AxiosError } from "axios"
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import {
   BuildsService,
   type DraftDramaPublic,
@@ -11,6 +11,7 @@ import {
 } from "@/client"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { DirectoryPicker } from "@/features/tenants/DirectoryPicker"
@@ -51,10 +52,11 @@ export function DramaMaterialSheet({
   })
   const savedItems =
     pending?.dramaId === drama.drama_id ? pending.items : undefined
+  const loadedItems = useRef(savedItems)
   const [items, setItems] = useState<Item[]>(savedItems || []),
     [initial, setInitial] = useState<Item[] | null>(savedItems || null),
     [forbidden, setForbidden] = useState(false),
-    [loading, setLoading] = useState(false),
+    [loading, setLoading] = useState(write && !savedItems),
     [progress, setProgress] = useState(0),
     [error, setError] = useState<unknown>(),
     [busy, setBusy] = useState(false),
@@ -81,7 +83,7 @@ export function DramaMaterialSheet({
       paging.cursor,
       paging.limit,
     ],
-    enabled: !initial && !loading,
+    enabled: !write && !initial,
     queryFn: async ({ signal }) =>
       (
         await BuildsService.materials({
@@ -95,8 +97,7 @@ export function DramaMaterialSheet({
         })
       ).data,
   })
-  useEffect(() => () => controller.current.abort(), [])
-  async function startEditing() {
+  const startEditing = useCallback(async () => {
     const ctrl = new AbortController()
     controller.current = ctrl
     setLoading(true)
@@ -112,6 +113,7 @@ export function DramaMaterialSheet({
           setProgress,
         )
         if (!ctrl.signal.aborted) {
+          loadedItems.current = all
           setItems(all)
           setInitial(all)
         }
@@ -121,7 +123,18 @@ export function DramaMaterialSheet({
         if (!ctrl.signal.aborted) setLoading(false)
       }
     })()
-  }
+  }, [tenantId, summary.draft_id, drama.drama_id])
+  useEffect(() => {
+    // 打开侧栏即自动读取完整分组；没有全部读完时不允许提交替换。
+    if (write && !loadedItems.current) void startEditing()
+    else setLoading(false)
+    return () => controller.current.abort()
+  }, [write, startEditing])
+  useEffect(() => {
+    setOffset((value) =>
+      Math.min(value, Math.max(0, Math.ceil(items.length / 50) - 1) * 50),
+    )
+  }, [items.length])
   const groups = () => {
     const map = new Map<number, string[]>()
     for (const item of items) {
@@ -134,6 +147,9 @@ export function DramaMaterialSheet({
   async function save() {
     if (!write || forbidden || pending || !dirty || busy || loading || !initial)
       return
+    // 后台准备可能终止过读取请求，保存必须使用本次独立的取消信号。
+    const ctrl = new AbortController()
+    controller.current = ctrl
     setBusy(true)
     setError(undefined)
     try {
@@ -157,9 +173,9 @@ export function DramaMaterialSheet({
           expected_revision: revision,
           groups: groups(),
         },
-        signal: controller.current.signal,
+        signal: ctrl.signal,
       })
-      if (!controller.current.signal.aborted) {
+      if (!ctrl.signal.aborted) {
         sessionStorage.removeItem(key)
         setPending(null)
         onSaved()
@@ -234,7 +250,8 @@ export function DramaMaterialSheet({
   return (
     <ManagementSheet
       title={`调整素材 · ${drama.title}`}
-      description="修改仅作用于本次草稿中的这部剧，并覆盖其全部账户目标。保存后旧预览过期。"
+      wide
+      description="直接修改组号、添加或移除素材。调整仅作用于本次搭建的这部剧，适用于全部目标账户。"
       dirty={dirty}
       pending={busy}
       onClose={onClose}
@@ -251,10 +268,10 @@ export function DramaMaterialSheet({
         ) : undefined
       }
     >
-      <div className="space-y-4">
+      <div className="flex min-w-0 flex-col gap-5">
         {!!error && <BuildError error={error} />}
         {error instanceof AxiosError && error.response?.status === 409 && (
-          <div className="space-y-3">
+          <div className="flex min-w-0 flex-col gap-3">
             <Button
               variant="outline"
               disabled={busy}
@@ -300,18 +317,20 @@ export function DramaMaterialSheet({
             </AlertDescription>
           </Alert>
         )}
-        <Alert>
-          <AlertDescription>
-            同一素材可被多部剧命中。本次修改不会永久归剧，也不会改变其他剧目的分组。
-          </AlertDescription>
-        </Alert>
-        {!initial && !loading && (
-          <div className="space-y-3">
+        {!initial && !loading && write && (
+          <Button variant="outline" onClick={() => void startEditing()}>
+            重新加载素材
+          </Button>
+        )}
+        {!initial && !write && (
+          <div className="flex min-w-0 flex-col gap-3">
             {page.error && <RequestError error={page.error} />}{" "}
             {page.isPending && <p role="status">正在读取素材…</p>}
             {page.data?.items.map((item) => (
               <div key={item.material_id} className="rounded-md border p-3">
-                <p className="break-all text-sm">{item.file_name}</p>
+                <p className="min-w-0 break-words text-sm [overflow-wrap:anywhere]">
+                  {item.file_name}
+                </p>
                 <p className="text-xs text-muted-foreground">
                   第 {item.group_no} 组
                   {item.shared_with_other_drama
@@ -325,17 +344,6 @@ export function DramaMaterialSheet({
               nextCursor={page.data?.next_cursor}
               busy={page.isFetching}
             />
-            {write && (
-              <Button
-                disabled={page.isPending || !!page.error}
-                onClick={() => void startEditing()}
-              >
-                开始调整完整分组
-              </Button>
-            )}
-            <p className="text-xs text-muted-foreground">
-              进入编辑将逐页读取完整分组，加载完成前不能保存，避免覆盖未加载素材。
-            </p>
           </div>
         )}
         {loading ? (
@@ -399,48 +407,51 @@ export function DramaMaterialSheet({
                   }}
                 />
               )}
-              <div className="space-y-2">
+              <ul className="flex min-w-0 flex-col gap-3">
                 {items.slice(offset, offset + 50).map((item) => (
-                  <div
+                  <li
                     key={item.material_id}
-                    className="space-y-2 rounded-md border p-3"
+                    className="flex min-w-0 flex-col gap-3 rounded-lg border p-4"
                   >
-                    <p className="break-all text-sm">{item.file_name}</p>
+                    <p className="min-w-0 break-words text-sm [overflow-wrap:anywhere]">
+                      {item.file_name}
+                    </p>
                     {item.shared_with_other_drama && (
                       <p className="text-xs text-muted-foreground">
                         此素材也匹配了其他剧目
                       </p>
                     )}
-                    <div className="flex items-center gap-2">
-                      <label
-                        className="text-xs"
-                        htmlFor={`group-${item.material_id}`}
-                      >
-                        组号
-                      </label>
-                      <Input
-                        id={`group-${item.material_id}`}
-                        type="number"
-                        min={1}
-                        max={100000}
-                        className="w-24"
-                        disabled={!write || busy || !!pending || forbidden}
-                        value={item.group_no}
-                        onChange={(e) => {
-                          const n = Number(e.target.value)
-                          if (Number.isInteger(n) && n > 0)
-                            setItems((old) =>
-                              old.map((i) =>
-                                i.material_id === item.material_id
-                                  ? { ...i, group_no: n }
-                                  : i,
-                              ),
-                            )
-                        }}
-                      />
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <Field orientation="horizontal" className="w-auto gap-3">
+                        <FieldLabel htmlFor={`group-${item.material_id}`}>
+                          组号
+                        </FieldLabel>
+                        <Input
+                          id={`group-${item.material_id}`}
+                          type="number"
+                          min={1}
+                          max={100000}
+                          className="w-24"
+                          disabled={!write || busy || !!pending || forbidden}
+                          value={item.group_no}
+                          onChange={(e) => {
+                            const n = Number(e.target.value)
+                            if (Number.isInteger(n) && n > 0)
+                              setItems((old) =>
+                                old.map((i) =>
+                                  i.material_id === item.material_id
+                                    ? { ...i, group_no: n }
+                                    : i,
+                                ),
+                              )
+                          }}
+                        />
+                      </Field>
                       {write && (
                         <Button
-                          variant="ghost"
+                          variant="outline"
+                          aria-label={`移除 ${item.file_name}`}
+                          className="shrink-0"
                           disabled={busy || !!pending || forbidden}
                           onClick={() =>
                             setItems((old) =>
@@ -450,13 +461,13 @@ export function DramaMaterialSheet({
                             )
                           }
                         >
-                          移除 {item.file_name}
+                          移除
                         </Button>
                       )}
                     </div>
-                  </div>
+                  </li>
                 ))}
-              </div>
+              </ul>
               <div className="flex items-center justify-between">
                 <Button
                   variant="outline"
