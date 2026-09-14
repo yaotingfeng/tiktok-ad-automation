@@ -127,14 +127,10 @@ export function BuildDramaTable({
             ),
           },
           {
-            header: "剧目标识",
+            header: "版权方剧目 ID",
             cell: ({ row }) => (
               <span className="break-all">
-                {row.original.preparation?.external_drama_id?.startsWith(
-                  "LOCAL-",
-                )
-                  ? `本地编号 ${row.original.preparation.external_drama_id.slice(6)}`
-                  : row.original.preparation?.external_drama_id || "—"}
+                {row.original.preparation?.display_drama_id || "未提供"}
               </span>
             ),
           },
@@ -207,7 +203,7 @@ export function BuildDramaTable({
                         variant="ghost"
                         onClick={() => setManualInput(input)}
                       >
-                        {input.manual_link?.url
+                        {input.manual_link?.url || input.preparation?.url
                           ? "修改推广链接"
                           : "补充推广链接"}
                       </Button>

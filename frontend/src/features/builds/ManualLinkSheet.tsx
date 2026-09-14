@@ -27,9 +27,17 @@ export function ManualLinkSheet({
   onSaved: () => void
 }) {
   const initial = useRef({
-    url: String(input.manual_link?.url || ""),
-    external_drama_id: String(input.manual_link?.external_drama_id || ""),
-    protected_base: String(input.manual_link?.protected_base || ""),
+    url: String(input.manual_link?.url || input.preparation?.url || ""),
+    external_drama_id: String(
+      input.preparation?.display_drama_id ||
+        input.manual_link?.external_drama_id ||
+        "",
+    ),
+    protected_base: String(
+      input.manual_link?.protected_base ||
+        input.preparation?.protected_base ||
+        "",
+    ),
   })
   const [values, setValues] = useState(initial.current)
   const [busy, setBusy] = useState(false)
@@ -104,7 +112,7 @@ export function ManualLinkSheet({
   }
   return (
     <ManagementSheet
-      title="补充推广链接"
+      title={initial.current.url ? "修改推广链接" : "补充推广链接"}
       description={`第 ${input.line_no} 行 · ${input.raw_text}`}
       dirty={JSON.stringify(values) !== JSON.stringify(initial.current)}
       pending={busy}
@@ -155,7 +163,7 @@ export function ManualLinkSheet({
             }
           />
           <p className="text-sm text-muted-foreground">
-            没有剧目 ID 也可搭建，系统会生成本地编号。
+            没有剧目 ID 也可使用已有推广链接搭建。
           </p>
         </Field>
         <Field>

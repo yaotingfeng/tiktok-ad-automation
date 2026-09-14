@@ -52,8 +52,10 @@ def test_different_attribution_names_are_not_silently_deduplicated(
     assert error.value.code == "manual_link_conflict"
 
 
+@pytest.mark.parametrize("numeric_input", [False, True])
 def test_automatic_discovery_insert_race_does_not_fail_manual_preparation(
     isolated_strategy_database,
+    numeric_input,
 ):
     from sqlalchemy import event
     from sqlalchemy.dialects.postgresql import insert
@@ -68,7 +70,9 @@ def test_automatic_discovery_insert_race_does_not_fail_manual_preparation(
         account(session, context)
         intent.update(
             drama_lines=["Manual"],
-            manual_links=[manual(external_drama_id="remote-123")],
+            manual_links=[
+                manual(external_drama_id="31091" if numeric_input else "remote-123")
+            ],
         )
         draft_id = create_draft(session, context=context, **intent)
         session.commit()
@@ -91,6 +95,7 @@ def test_automatic_discovery_insert_race_does_not_fail_manual_preparation(
                     connection_id=intent["provider_connection_id"],
                     application_id=intent["application_id"],
                     external_drama_id="remote-123",
+                    display_drama_id="31091" if numeric_input else None,
                     title="Remote title",
                 )
                 .on_conflict_do_nothing()
@@ -108,6 +113,17 @@ def test_automatic_discovery_insert_race_does_not_fail_manual_preparation(
             ).one()
             assert session.get(PromotionLink, drama.link_id).url == URL
             assert session.get(ProviderDrama, drama.drama_id).title == "Remote title"
+            assert (
+                len(
+                    session.exec(
+                        select(ProviderDrama).where(
+                            ProviderDrama.connection_id
+                            == intent["provider_connection_id"]
+                        )
+                    ).all()
+                )
+                == 1
+            )
             assert raced
     finally:
         event.remove(engine, "before_cursor_execute", competing_insert)

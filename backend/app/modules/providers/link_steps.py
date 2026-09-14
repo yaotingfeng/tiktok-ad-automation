@@ -240,6 +240,7 @@ def _result(
         "application_id": prep.application_id,
         "drama_id": drama.get("id"),
         "external_drama_id": drama.get("external_drama_id"),
+        "display_drama_id": drama.get("display_drama_id"),
         "title": drama.get("title"),
         "language": drama.get("language"),
         "status": status,
@@ -500,7 +501,15 @@ def _resolved_drama(
                 "application_id",
                 "external_drama_id",
             ],
-            set_={"title": candidate["title"], "language": candidate.get("language")},
+            set_={
+                "title": candidate["title"],
+                "language": candidate.get("language"),
+                **(
+                    {"display_drama_id": candidate["display_drama_id"]}
+                    if candidate.get("display_drama_id")
+                    else {}
+                ),
+            },
         )
     )
     row = session.exec(
@@ -555,6 +564,25 @@ def _publish(
         _verified(data, work, prep.config)
     if not data.get("url"):
         raise _error("provider_result_unknown")
+    # 已核实链接的归因也可补齐旧任务未保存的数字编号，技术身份不变。
+    from .drama_identity import display_id
+
+    drama_row = session.exec(
+        select(ProviderDrama).where(
+            ProviderDrama.id == UUID(work["drama"]["id"]),
+            ProviderDrama.tenant_id == context.tenant_id,
+            ProviderDrama.connection_id == prep.connection_id,
+            ProviderDrama.application_id == prep.application_id,
+        )
+    ).one()
+    drama_row.display_drama_id = display_id(
+        connection.kind,
+        drama_row.external_drama_id,
+        drama_row.display_drama_id,
+        data.get("attribution"),
+    )
+    work["drama"]["display_drama_id"] = drama_row.display_drama_id
+    session.add(drama_row)
     key = link_reuse_key(
         context.tenant_id,
         prep.connection_id,

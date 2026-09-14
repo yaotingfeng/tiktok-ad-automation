@@ -151,6 +151,7 @@ class JiashuClient:
         items = [
             {
                 "external_drama_id": external_id(row.get("video_id")),
+                "display_drama_id": external_id(row.get("video_id")),
                 "title": string(row.get("name")),
                 "language": row.get("language")
                 if isinstance(row.get("language"), str)

@@ -631,6 +631,18 @@ export type DraftInputPreparation = {
      */
     external_drama_id?: string | null;
     /**
+     * Display Drama Id
+     */
+    display_drama_id?: string | null;
+    /**
+     * Url
+     */
+    url?: string | null;
+    /**
+     * Protected Base
+     */
+    protected_base?: string | null;
+    /**
      * Provider Input Id
      */
     provider_input_id?: string | null;
@@ -957,6 +969,10 @@ export type DramaCandidate = {
      * Language
      */
     language?: string | null;
+    /**
+     * Display Drama Id
+     */
+    display_drama_id?: string | null;
 };
 
 /**
@@ -3031,6 +3047,10 @@ export type ProviderLinkPublic = {
      */
     external_drama_id: string;
     /**
+     * Display Drama Id
+     */
+    display_drama_id?: string | null;
+    /**
      * Title
      */
     title: string;
@@ -3296,6 +3316,10 @@ export type ResolvedLink = {
      * Language
      */
     language?: string | null;
+    /**
+     * Display Drama Id
+     */
+    display_drama_id?: string | null;
     /**
      * Link Id
      */

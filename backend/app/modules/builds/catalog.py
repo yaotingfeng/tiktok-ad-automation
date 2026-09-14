@@ -30,6 +30,7 @@ from app.modules.builds.schemas import (
 from app.modules.materials.models import MaterialFile
 from app.modules.providers.models import (
     LinkPreparationItem,
+    PromotionLink,
     ProviderConnection,
     ProviderDrama,
 )
@@ -170,13 +171,18 @@ def inputs_page(
                 ).all()
             }
         dramas = {
-            item.first_line: (item, external_id)
-            for item, external_id in session.exec(
-                select(DraftDrama, ProviderDrama.external_drama_id)
+            item.first_line: (item, provider_drama, promotion)
+            for item, provider_drama, promotion in session.exec(
+                select(DraftDrama, ProviderDrama, PromotionLink)
                 .join(
                     ProviderDrama,
                     (col(ProviderDrama.tenant_id) == DraftDrama.tenant_id)
                     & (col(ProviderDrama.id) == DraftDrama.drama_id),
+                )
+                .join(
+                    PromotionLink,
+                    (col(PromotionLink.id) == DraftDrama.link_id)
+                    & (col(PromotionLink.tenant_id) == DraftDrama.tenant_id),
                 )
                 .where(
                     ProviderDrama.connection_id == draft.provider_connection_id,
@@ -187,9 +193,16 @@ def inputs_page(
                 )
             ).all()
         }
+        from app.modules.providers.drama_identity import display_id
+
+        provider = session.get(ProviderConnection, draft.provider_connection_id)
         for item in items:
             link = None if item.manual_link else links.get(item.line_no)
-            drama, external_id = dramas.get(item.line_no, (None, None))
+            drama, provider_drama, promotion = dramas.get(
+                item.line_no, (None, None, None)
+            )
+            external_id = provider_drama.external_drama_id if provider_drama else None
+            resolved = link.resolved if link else {}
             # 草稿自身的去重和输入校验优先；版权方阶段仅用于展示，不推进任务。
             terminal_input = item.status in {"empty", "invalid", "duplicate"}
             # 选择入口以当前版权方任务状态为准，不能用历史候选数组判断。
@@ -197,6 +210,18 @@ def inputs_page(
                 link and link.status == "needs_resolution" and not terminal_input
             )
             item.preparation = DraftInputPreparation(
+                display_drama_id=display_id(
+                    provider.kind if provider else "wangyan",
+                    external_id or resolved.get("external_drama_id"),
+                    provider_drama.display_drama_id
+                    if provider_drama
+                    else resolved.get("display_drama_id"),
+                    promotion.attribution if promotion else None,
+                ),
+                url=promotion.url if promotion else resolved.get("url"),
+                protected_base=promotion.protected_base
+                if promotion
+                else resolved.get("protected_base"),
                 external_drama_id=link.resolved.get("external_drama_id")
                 if link
                 else external_id,

@@ -13,6 +13,7 @@ class ManualLinkInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     line_no: int = Field(ge=1, le=1000, strict=True)
     url: str = Field(min_length=1, max_length=8192)
+    # 用户提供的版权方编号，可按展示 ID 关联已有剧目；不要求用户填写技术 ID。
     external_drama_id: str = Field(default="", max_length=255)
     protected_base: str = Field(default="", max_length=1000)
 
@@ -128,6 +129,9 @@ class DraftInputPreparation(BaseModel):
 
     link_status: str
     external_drama_id: str | None = None
+    display_drama_id: str | None = None
+    url: str | None = None
+    protected_base: str | None = None
     provider_input_id: UUID | None = None
     candidates: list[DramaCandidate] = Field(default_factory=list)
     title: str | None = None

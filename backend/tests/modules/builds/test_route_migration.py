@@ -130,7 +130,19 @@ def historical_rows(
         external_drama_id="old-drama",
         title="Old",
     )
-    session.add(drama)
+    if current:
+        session.add(drama)
+    else:
+        dramas = Table("provider_drama", MetaData(), autoload_with=session.connection())
+        session.execute(
+            dramas.insert().values(
+                **{
+                    key: value
+                    for key, value in drama.model_dump().items()
+                    if key in dramas.c
+                }
+            )
+        )
     session.flush()
     link = PromotionLink(
         tenant_id=context.tenant_id,

@@ -10,6 +10,7 @@ from sqlmodel.sql.expression import Select
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.core.pagination import Page
+from app.modules.providers.drama_identity import display_id
 from app.modules.providers.models import (
     LinkPreparationItem,
     PromotionLink,
@@ -78,6 +79,12 @@ def _public(
         link_id=link.id,
         drama_id=drama.id,
         external_drama_id=drama.external_drama_id,
+        display_drama_id=display_id(
+            connection.kind,
+            drama.external_drama_id,
+            drama.display_drama_id,
+            link.attribution,
+        ),
         title=drama.title,
         language=drama.language,
         provider_kind=connection.kind,

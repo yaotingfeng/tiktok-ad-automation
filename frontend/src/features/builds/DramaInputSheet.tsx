@@ -104,9 +104,7 @@ export function DramaInputSheet({
         </div>
         <div>
           <p className="text-muted-foreground">版权方剧目 ID</p>
-          <p className="break-all">
-            {progress?.external_drama_id || "尚未确定"}
-          </p>
+          <p className="break-all">{progress?.display_drama_id || "未提供"}</p>
         </div>
         <BuildReason code={progress?.reason_code || input.reason_code} />
         {input.duplicate_of != null && (
@@ -133,7 +131,7 @@ export function DramaInputSheet({
               disabled={busy || unknown}
               onClick={() => void choose(candidate.external_drama_id)}
             >
-              {candidate.title} · {candidate.external_drama_id}
+              {candidate.title} · {candidate.display_drama_id || "编号未提供"}
               {candidate.language ? ` · ${candidate.language}` : ""}
             </Button>
           ))}

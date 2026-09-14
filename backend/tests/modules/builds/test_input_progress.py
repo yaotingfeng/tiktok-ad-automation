@@ -13,6 +13,66 @@ from app.modules.providers.models import LinkPreparationItem
 from tests.modules.builds.test_drafts import account, finish, ready_links
 
 
+def test_wangyan_numeric_display_and_edit_preserve_opaque_identity(
+    session, context, intent
+):
+    from app.modules.builds.manual_links import save_manual_link
+    from app.modules.builds.models import DraftDrama
+    from app.modules.providers.models import (
+        PromotionLink,
+        ProviderConnection,
+        ProviderDrama,
+    )
+
+    account(session, context)
+    intent["drama_lines"] = ["Moon"]
+    draft = create_draft(session, context=context, **intent)
+    task = prepare_draft(session, context=context, draft_id=draft, request_id=uuid4())
+    ready_links(session, context, task, intent)
+    finish(session, context, task)
+    dd = session.exec(select(DraftDrama).where(DraftDrama.draft_id == draft)).one()
+    original_id = dd.drama_id
+    drama = session.get(ProviderDrama, original_id)
+    connection = session.get(ProviderConnection, drama.connection_id)
+    connection.kind = "wangyan"
+    drama.external_drama_id = "6a98f85eadb6903f924e6950"
+    old_link = session.get(PromotionLink, dd.link_id)
+    old_link.attribution = {"drama_int_id": 31091}
+    old_link.url = "https://www.tiktok.com/minis/original?x=a%2Bb&x=2"
+    session.flush()
+    row = catalog.inputs_page(
+        session, context=context, draft_id=draft, kind="drama"
+    ).items[0]
+    assert row.preparation.display_drama_id == "31091"
+    assert row.preparation.url == old_link.url
+    assert row.preparation.protected_base == old_link.protected_base
+    # 模拟迁移/新解析已补齐的展示编号，手动修改仍绑定原技术身份。
+    drama.display_drama_id = "31091"
+    session.flush()
+    revision = catalog.draft_summary(session, context=context, draft_id=draft).revision
+    save_manual_link(
+        session,
+        context=context,
+        draft_id=draft,
+        input_id=row.id,
+        expected_revision=revision,
+        request_id=uuid4(),
+        link={
+            "line_no": 1,
+            "url": "https://www.tiktok.com/minis/changed",
+            "external_drama_id": "31091",
+            "protected_base": "new-attribution",
+        },
+    )
+    prepare_draft(session, context=context, draft_id=draft, request_id=uuid4())
+    changed = session.exec(select(DraftDrama).where(DraftDrama.draft_id == draft)).one()
+    assert changed.drama_id == original_id
+    assert drama.external_drama_id == "6a98f85eadb6903f924e6950"
+    assert session.get(PromotionLink, changed.link_id).source == "manual"
+    assert session.get(PromotionLink, changed.link_id).url.endswith("/changed")
+    assert old_link.url.endswith("?x=a%2Bb&x=2")
+
+
 def test_inputs_visible_before_preparation_and_link_status_before_draft_sync(
     session, context, intent
 ):

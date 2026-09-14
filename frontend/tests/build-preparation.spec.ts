@@ -987,11 +987,9 @@ test("剧目列表显示版权方ID，原始输入在详情，只有待选择状
   const api = await buildsBoundary(page)
   await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
   await expect(
-    page.getByRole("columnheader", { name: "剧目标识", exact: true }),
+    page.getByRole("columnheader", { name: "版权方剧目 ID", exact: true }),
   ).toBeVisible()
-  await expect(
-    page.getByText("provider-drama-1", { exact: true }),
-  ).toBeVisible()
+  await expect(page.getByText("31091", { exact: true })).toBeVisible()
   await expect(page.getByRole("table")).not.toContainText(
     "88888888-8888-4888-8888-888888888888",
   )
@@ -1007,9 +1005,7 @@ test("剧目列表显示版权方ID，原始输入在详情，只有待选择状
   await expect(
     sheet.getByText(api.originals.drama[0], { exact: true }),
   ).toHaveCount(2)
-  await expect(
-    sheet.getByText("provider-drama-1", { exact: true }),
-  ).toBeVisible()
+  await expect(sheet.getByText("31091", { exact: true })).toBeVisible()
   expect(api.requests.filter((r) => r.method === "POST")).toHaveLength(0)
 })
 
@@ -1213,7 +1209,7 @@ test("第二步原行补链提交对应输入，随后继续准备", async ({ pa
   expect(written.link).toEqual({
     line_no: 1,
     url: "https://www.tiktok.com/minis/a?channel=x%2By",
-    external_drama_id: "",
+    external_drama_id: "31091",
     protected_base: "",
   })
   await expect
@@ -1548,4 +1544,41 @@ test("后台准备状态变化保留已调整素材组号且恢复后可保存",
       (r) => r.method === "GET" && r.path.endsWith("/materials"),
     ),
   ).toHaveLength(1)
+})
+
+test("自动获取的链接可修改，回填原URL、数字剧目ID与归因名称", async ({
+  page,
+}) => {
+  const api = await buildsBoundary(page)
+  api.summary.provider_kind = "wangyan"
+  let saved: any
+  await page.route("**/inputs/*/manual-link", async (route) => {
+    saved = route.request().postDataJSON()
+    await route.fulfill({ json: { draft_id: D, revision: 2 } })
+  })
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  const row = page.getByRole("row").filter({ hasText: "完整剧名1" })
+  await expect(row).toContainText("31091")
+  await expect(row).not.toContainText("6a98f85eadb6903f924e6950")
+  await expect(row.getByRole("button", { name: "补充推广链接" })).toHaveCount(0)
+  await row.getByRole("button", { name: "修改推广链接", exact: true }).click()
+  const dialog = page.getByRole("dialog", { name: "修改推广链接", exact: true })
+  await expect(dialog.getByLabel("推广链接", { exact: true })).toHaveValue(
+    "https://www.tiktok.com/minis/original?channel=a%2Bb&x=1&x=2",
+  )
+  await expect(dialog.getByLabel("版权方剧目 ID（选填）")).toHaveValue("31091")
+  await expect(dialog.getByLabel("归因名称（必填）")).toHaveValue(
+    "original-attribution",
+  )
+  await dialog
+    .getByLabel("推广链接", { exact: true })
+    .fill("https://www.tiktok.com/minis/new?x=a%2Bb")
+  await dialog.getByRole("button", { name: "保存并继续准备" }).click()
+  await expect(dialog).toHaveCount(0)
+  expect(saved.link).toEqual({
+    line_no: 1,
+    url: "https://www.tiktok.com/minis/new?x=a%2Bb",
+    external_drama_id: "31091",
+    protected_base: "original-attribution",
+  })
 })

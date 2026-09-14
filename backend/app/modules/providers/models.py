@@ -122,6 +122,8 @@ class ProviderDrama(SQLModel, table=True):
     connection_id: UUID
     application_id: str = Field(max_length=255)
     external_drama_id: str = Field(max_length=255)
+    # 对外展示的版权方编号；接口取链仍使用 external_drama_id。
+    display_drama_id: str | None = Field(default=None, max_length=255)
     title: str = Field(max_length=1024)
     language: str | None = Field(default=None, max_length=64)
 

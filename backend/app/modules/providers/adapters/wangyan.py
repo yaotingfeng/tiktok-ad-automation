@@ -192,6 +192,11 @@ class WangyanClient:
         items = [
             {
                 "external_drama_id": external_id(row.get("id")),
+                **(
+                    {"display_drama_id": str(positive(row["int_id"]))}
+                    if row.get("int_id") is not None
+                    else {}
+                ),
                 "title": string(row.get("title")),
                 "language": row.get("lang")
                 if isinstance(row.get("lang"), str)

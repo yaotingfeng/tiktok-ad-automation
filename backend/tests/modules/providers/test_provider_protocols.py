@@ -243,7 +243,12 @@ def test_wangyan_cookie_login_and_search():
         }
         return httpx.Response(
             200,
-            json={"code": 0, "data": [{"id": "drama", "title": "Moon", "lang": "en"}]},
+            json={
+                "code": 0,
+                "data": [
+                    {"id": "drama", "int_id": 31091, "title": "Moon", "lang": "en"}
+                ],
+            },
         )
 
     with httpx.Client(transport=httpx.MockTransport(handle)) as http:
@@ -254,7 +259,12 @@ def test_wangyan_cookie_login_and_search():
             application_id="fixture.app",
         )
         assert client.search("Moon", 1)["items"] == [
-            {"external_drama_id": "drama", "title": "Moon", "language": "en"}
+            {
+                "external_drama_id": "drama",
+                "display_drama_id": "31091",
+                "title": "Moon",
+                "language": "en",
+            }
         ]
     assert len(seen) == 2
 

@@ -409,13 +409,26 @@ export async function buildsBoundary(
                       !candidateSelected
                         ? "needs_resolution"
                         : "ready",
-                    external_drama_id: `provider-drama-${i + 1}`,
+                    external_drama_id:
+                      i === 0
+                        ? "6a98f85eadb6903f924e6950"
+                        : `provider-drama-${i + 1}`,
+                    display_drama_id: String(31091 + i),
+                    url:
+                      options.empty || options.candidate === "drama"
+                        ? null
+                        : "https://www.tiktok.com/minis/original?channel=a%2Bb&x=1&x=2",
+                    protected_base: options.empty
+                      ? null
+                      : "original-attribution",
+
                     provider_input_id: P,
                     candidates:
                       options.candidate === "drama" && i === 0
                         ? [
                             {
                               external_drama_id: "external-drama-01",
+                              display_drama_id: "31091",
                               title: "候选正式剧名",
                               language: "en",
                             },

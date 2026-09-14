@@ -32,6 +32,7 @@ class DramaCandidate(BaseModel):
     external_drama_id: str = Field(min_length=1)
     title: str = Field(min_length=1)
     language: str | None = None
+    display_drama_id: str | None = None
 
 
 class ResolvedLink(BaseModel):
@@ -47,6 +48,7 @@ class ResolvedLink(BaseModel):
     external_drama_id: str | None = None
     title: str | None = None
     language: str | None = None
+    display_drama_id: str | None = None
     link_id: UUID | None = None
     url: str | None = None
     protected_base: str | None = None
@@ -163,6 +165,7 @@ class ProviderLinkPublic(BaseModel):
     link_id: UUID
     drama_id: UUID
     external_drama_id: str
+    display_drama_id: str | None = None
     title: str
     language: str | None
     provider_kind: str

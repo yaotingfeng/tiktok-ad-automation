@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlsplit
 from uuid import UUID, uuid5
 
 from pydantic import ValidationError
-from sqlalchemy import delete, text
+from sqlalchemy import delete, or_, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session, col, select
@@ -167,28 +167,50 @@ def materialize(
             "key": f"manual-scope:{context.tenant_id}:{draft.provider_connection_id}:{draft.application_id}"
         },
     )
+    # 手动表单填写展示编号时复用同范围的剧目，不能覆盖其取链接口标识。
     query = select(ProviderDrama).where(
         ProviderDrama.tenant_id == context.tenant_id,
         ProviderDrama.connection_id == draft.provider_connection_id,
         ProviderDrama.application_id == draft.application_id,
-        ProviderDrama.external_drama_id == external,
+        or_(
+            col(ProviderDrama.external_drama_id) == external,
+            col(ProviderDrama.display_drama_id) == external,
+        ),
     )
-    drama = session.exec(query).one_or_none()
+
+    def matching_drama() -> ProviderDrama | None:
+        matches = session.exec(query.limit(2)).all()
+        if len(matches) > 1:
+            raise DomainError(
+                "manual_link_invalid", "版权方剧目 ID 对应多条记录，请先核对剧目"
+            )
+        return matches[0] if matches else None
+
+    drama = matching_drama()
     if drama is None:
         candidate = ProviderDrama(
             tenant_id=context.tenant_id,
             connection_id=draft.provider_connection_id,
             application_id=draft.application_id,
             external_drama_id=external,
+            display_drama_id=value.get("external_drama_id", "").strip() or None,
             title=row.raw_text.strip(),
         )
-        # 自动发现不会持有本地锁；数据库唯一键处理竞争，不覆盖它已记录的标题。
-        session.exec(
-            insert(ProviderDrama)
-            .values(**candidate.model_dump())
-            .on_conflict_do_nothing(constraint="uq_provider_drama_external")
-        )
-        drama = session.exec(query).one()
+        # 自动发现可能刚以长 ID 保存同一数字编号；撤销本次临时插入后复用它。
+        with session.begin_nested() as insertion:
+            session.exec(
+                insert(ProviderDrama)
+                .values(**candidate.model_dump())
+                .on_conflict_do_nothing(constraint="uq_provider_drama_external")
+            )
+            try:
+                drama = matching_drama()
+            except DomainError:
+                insertion.rollback()
+        if drama is None:
+            drama = matching_drama()
+        if drama is None:
+            raise DomainError("manual_link_invalid", "剧目记录已变化，请重试")
     digest = sha256(
         json.dumps(
             ["manual", str(context.tenant_id), str(row.id), str(drama.id), value],
