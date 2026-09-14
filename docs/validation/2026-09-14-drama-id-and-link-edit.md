@@ -1,4 +1,15 @@
-# 数字剧目 ID 与已获取链接修改：本地验收
+# 数字剧目 ID 与已获取链接修改：测试环境发布验收
+
+## 推送与新加坡测试环境发布
+
+- 用户要求推送本地更新并部署新加坡测试服务器。功能提交 `f17cbe76ad217bfb13a08158f8ae30120733cc2c` 已推送现有 `feat/platform-implementation`，服务器从 `9381270a78099f27c5be3f4d26b6b7a77c79e3a8` 切换到该版本；生产环境未变更。
+- 本轮重新执行后端专项 64 项、准备页 54 项浏览器回归、TypeScript/Vite 生产构建、Biome、16 个 Python 文件 Ruff/格式及 10 个后端文件 mypy，全部通过。Alembic 只有一个 head：`provider_display_drama_id`。
+- 发布前停止 API/Beat、正常停止 Worker 并暂停备份 timer。完整备份 `/var/backups/tt-ada-staging/20260914T080717Z/` 包含 PostgreSQL、Redis、独立项目与实际前端产物、私有配置及证书，五份归档 SHA-256 均通过。
+- PostgreSQL dump 在新临时库恢复，既有素材响应使用原密钥完成解密、长度和摘要验证；先在恢复库实际执行 `manual_promotion_links → provider_display_drama_id` 并核对新列，再迁移业务库。Redis RDB 在独立 Unix socket 实例装载并通过 PING/DBSIZE，项目和配置分别隔离解压比对，`RELEASE_COMPLETE` 已写入。
+- 线上迁移后 `provider_drama` 共 4 条，3 条按唯一可靠历史归因补齐展示编号，剩余记录保持空值，符合不猜测规则。原技术 ID 和历史链接未被迁移覆盖。
+- API 1 个进程、Worker 主进程及两个 prefork 子进程、Beat 1 个进程均在 `f17cbe7` 的 backend 工作目录运行，并加载同一份数据库、Redis、加密密钥、调用策略、MCP 注册引用和媒体主机配置；素材导入与自动清理保持 `true`。
+- HTTPS 健康、构建登录页、OAuth 回调错误边界、API 404、平台管理员登录及受保护 profile、Celery ping、备份和证书 timer 均通过；发布后 error 级别日志无记录，磁盘约 6.2 GiB 可用。
+- 本次未调用 TikTok、版权方或对象存储，没有修改远端推广链接、上传素材或创建广告；部署验收不替代真实业务操作验收。
 
 ## 修复
 
@@ -19,6 +30,6 @@
 - 草稿/API/预览补验27项通过；最后并发修复后的手动链接及输入进度24项通过，包含新增数字 ID 并发场景。
 - 浏览器相关102项分批通过，最终准备页54项通过。覆盖 `31091` 展示且隐藏长 ID、自动链接原文/数字编号/归因回填、保存新链接、缺链接补充、只读边界和响应未知恢复。
 - TypeScript/Vite构建、5文件Biome、10个后端实现文件mypy、16个Python文件Ruff/格式检查通过。桌面准备页截图已检查，数字编号和「修改推广链接」与实际行为一致。
-- 测试使用隔离 PostgreSQL、Redis及SDK/HTTP传输替身；没有调用真实版权方写入或创建广告。新迁移和代码未部署到服务器，不能将本地回归当作线上验收。
+- 测试使用隔离 PostgreSQL、Redis及SDK/HTTP传输替身；没有调用真实版权方写入或创建广告。该句记录功能提交前的本地验收边界，实际部署结果见本文顶部。
 
-本地聚焦提交：`builds: show provider drama numbers and edit acquired links`。没有推送、部署或修改真实业务记录。
+本地聚焦提交：`builds: show provider drama numbers and edit acquired links`。该句记录提交时状态；后续已按本文顶部完成推送、迁移和部署，仍未修改真实推广链接或广告。

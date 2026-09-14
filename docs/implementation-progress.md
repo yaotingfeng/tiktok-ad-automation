@@ -1,3 +1,9 @@
+## 2026-09-14：数字剧目 ID 与链接编辑发布测试环境
+
+- `f17cbe7` 已推送现有 `feat/platform-implementation` 并部署新加坡测试服务器，替换 `9381270`；生产环境未变更。
+- 后端专项 64 项、准备页 54 项、生产构建、Biome、Ruff/格式和 mypy 重新通过。完整备份 `/var/backups/tt-ada-staging/20260914T080717Z/` 完成 PostgreSQL、Redis、项目/前端产物和完整私有配置的摘要校验与隔离恢复。
+- 新迁移先在恢复库演练，再将业务库从 `manual_promotion_links` 升级至 `provider_display_drama_id`；4 条既有剧目中 3 条按唯一可靠归因补齐展示编号。API、3 个 Worker 进程、Beat 同版本同配置，HTTPS、管理员登录、受保护 profile、Worker ping、定时器与错误日志验收通过。未调用外部集成或创建广告；详见[发布记录](validation/2026-09-14-drama-id-and-link-edit.md)。
+
 ## 2026-09-14：统一版权方选择弹窗发布测试环境
 
 - `8c1588f` 与最终版本 `9381270` 已推送现有 `feat/platform-implementation` 并部署新加坡测试服务器，替换 `347ea52`；生产环境未变更。
