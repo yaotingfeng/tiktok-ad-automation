@@ -173,6 +173,81 @@ def refresh_wire(monkeypatch):
     return wire
 
 
+@pytest.mark.parametrize(
+    ("status", "expired", "expected"),
+    [
+        ("PENDING", True, "PUBLISHED"),
+        ("PENDING", False, "SUPERSEDED"),
+        ("CLAIMED", True, "SUPERSEDED"),
+        ("CANDIDATE_READY", True, "SUPERSEDED"),
+        ("RESULT_UNKNOWN", True, "SUPERSEDED"),
+    ],
+)
+def test_abandoned_authorization_only_blocks_refresh_while_pending_is_valid(
+    database_engine,
+    redis_client,
+    mcp_refresh_case,
+    refresh_wire,
+    status,
+    expired,
+    expected,
+):
+    from app.modules.accounts.connection_models import McpAuthorizationAttempt
+
+    context, connection_id, attempt_id = mcp_refresh_case
+    profile = load_mcp_protocol()
+    authorization_id = uuid4()
+    with Session(database_engine) as session:
+        session.add(
+            McpAuthorizationAttempt(
+                id=authorization_id,
+                tenant_id=context.tenant_id,
+                actor_id=context.actor_id,
+                connection_id=connection_id,
+                base_credential_revision=1,
+                base_authorization_revision=1,
+                issuer=profile.issuer,
+                resource=profile.resource,
+                redirect_uri=settings.MCP_REDIRECT_URI,
+                state_hash=uuid4().hex,
+                status=status,
+                expires_at=datetime.now(UTC)
+                + timedelta(minutes=-10 if expired else 10),
+            )
+        )
+        session.commit()
+    try:
+        # 过期且未兑换的登录入口不能永久阻断续期；已发送或待核实的授权仍须围栏。
+        for _ in range(2):
+            assert (
+                process_mcp_refresh(
+                    database_engine=database_engine,
+                    redis_client=redis_client,
+                    context=context,
+                    attempt_id=attempt_id,
+                )
+                == expected
+            )
+        assert len(refresh_wire.calls) == (1 if expected == "PUBLISHED" else 0)
+        with Session(database_engine) as session:
+            connection = session.get(TikTokConnection, connection_id)
+            assert connection.credential_revision == (
+                2 if expected == "PUBLISHED" else 1
+            )
+            assert connection.authorization_revision == 1
+            assert (
+                session.get(McpAuthorizationAttempt, authorization_id).status == status
+            )
+    finally:
+        with Session(database_engine) as session:
+            session.exec(
+                delete(McpAuthorizationAttempt).where(
+                    McpAuthorizationAttempt.id == authorization_id
+                )
+            )
+            session.commit()
+
+
 def test_unknown_rotation_does_not_consume_old_refresh_again(
     database_engine, redis_client, mcp_refresh_case, refresh_wire
 ):

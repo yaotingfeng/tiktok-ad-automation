@@ -71,8 +71,14 @@ def _current(
         select(McpAuthorizationAttempt.id).where(
             McpAuthorizationAttempt.tenant_id == connection.tenant_id,
             McpAuthorizationAttempt.connection_id == connection.id,
-            col(McpAuthorizationAttempt.status).in_(
-                ("PENDING", "CLAIMED", "CANDIDATE_READY", "RESULT_UNKNOWN")
+            # 未兑换的授权入口过期后已不能回调，不应永久阻断原连接续期。
+            # 已兑换、持有候选或结果未知的尝试仍须围栏，不能仅凭时间忽略。
+            or_(
+                (col(McpAuthorizationAttempt.status) == "PENDING")
+                & (col(McpAuthorizationAttempt.expires_at) > datetime.now(UTC)),
+                col(McpAuthorizationAttempt.status).in_(
+                    ("CLAIMED", "CANDIDATE_READY", "RESULT_UNKNOWN")
+                ),
             ),
         )
     ).first()
