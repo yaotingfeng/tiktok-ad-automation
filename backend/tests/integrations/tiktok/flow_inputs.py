@@ -223,6 +223,16 @@ def _prepare_preview(database_engine, redis_client, case, wire, monkeypatch):
     monkeypatch.setattr(wangyan, "BASE", "https://synthetic-provider.example")
     monkeypatch.setattr(capabilities, "_require_bounded_worker", lambda: None)
     with Session(database_engine) as db, db.begin():
+        from app.modules.builds.mini_targets import remember_target
+
+        # 当前流程按实际推广链接记录用户选择，不再从版权方应用继承 Mini。
+        remember_target(
+            db,
+            context=context,
+            url="https://www.tiktok.com/t/synthetic-flow",
+            minis_id="synthetic-minis",
+            source="USER",
+        )
         # 与既有合成目录/授权 fixture 配套，记录同 BC 的完整目录观察。
         # 多 BC 新鲜度不再允许仅凭共享授权时间替代目录完成时间。
         if route.channel == "OFFICIAL_MCP":

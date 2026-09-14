@@ -51,7 +51,9 @@ class _Image(FrozenModel):
 class _CreativeInfo(IdentityFields):
     ad_format: Literal["SINGLE_VIDEO"]
     video_info: _Video
-    image_info: tuple[_Image, ...] = Field(min_length=1, max_length=1)
+    image_info: tuple[_Image, ...] | None = Field(
+        default=None, min_length=1, max_length=1
+    )
 
 
 class _Creative(FrozenModel):
@@ -171,7 +173,9 @@ def decode_observed_intent(kind: str, body: dict[str, object]) -> CreateIntent:
                 CreativeAsset(
                     video_id=item.creative_info.video_info.video_id,
                     file_name=item.creative_info.video_info.file_name,
-                    image_id=item.creative_info.image_info[0].web_uri,
+                    image_id=item.creative_info.image_info[0].web_uri
+                    if item.creative_info.image_info
+                    else None,
                 )
                 for item in ad.creative_list
             ),
@@ -217,7 +221,11 @@ def encode_intent(intent: CreateIntent) -> dict[str, object]:
                                 else {}
                             ),
                         },
-                        "image_info": [{"web_uri": asset.image_id}],
+                        **(
+                            {"image_info": [{"web_uri": asset.image_id}]}
+                            if asset.image_id
+                            else {}
+                        ),
                     }
                 }
                 for asset in intent.assets
@@ -376,7 +384,9 @@ def ad_assets(
         raise DomainError("copy_too_long", "应用文案策略最多允许 100 个字符")
     creatives = []
     for item in mappings:
-        if not _nonempty(item.get("video_id")) or not _nonempty(item.get("image_id")):
+        if not _nonempty(item.get("video_id")) or (
+            item.get("image_id") is not None and not _nonempty(item["image_id"])
+        ):
             raise DomainError("target_asset_incomplete", "目标账户素材尚未核实")
         creatives.append(
             {
@@ -391,7 +401,11 @@ def ad_assets(
                             else {}
                         ),
                     },
-                    "image_info": [{"web_uri": item["image_id"]}],
+                    **(
+                        {"image_info": [{"web_uri": item["image_id"]}]}
+                        if item.get("image_id")
+                        else {}
+                    ),
                 }
             }
         )

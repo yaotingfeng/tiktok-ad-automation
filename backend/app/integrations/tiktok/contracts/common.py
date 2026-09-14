@@ -13,6 +13,16 @@ class CallEvidence:
 
 RemoteEffect = Literal["NOT_SENT", "UNKNOWN", "REJECTED_NO_EFFECT"]
 
+# 只有明确未发送的传输故障可重试；权限、参数、契约变化不属于临时网络错误。
+TRANSIENT_NOT_SENT = frozenset(
+    {
+        "mcp_call_failed",
+        "mcp_request_failed",
+        "mcp_session_open_failed",
+        "mcp_session_unavailable",
+    }
+)
+
 
 class RemoteCallError(DomainError):
     def __init__(self, code: str, *, effect: RemoteEffect, evidence: CallEvidence):

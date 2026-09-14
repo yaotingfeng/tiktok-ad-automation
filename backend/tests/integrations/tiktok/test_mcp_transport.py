@@ -61,6 +61,41 @@ def test_real_handshake_catalog_call_close_each_admitted_once(client_factory, mc
     assert sum(e[2] == "builds.create_campaign" for e in entered) == 1
 
 
+def test_transport_diagnostics_preserve_phase_without_exception_secrets(
+    client_factory, monkeypatch, caplog
+):
+    import httpx2
+
+    from app.integrations.tiktok.mcp import transport
+
+    original = transport._new_http_transport
+    intercepted = []
+
+    class FailedCatalog(original):
+        async def handle_async_request(self, request):
+            import json
+
+            message = json.loads(request.content) if request.method == "POST" else {}
+            if message.get("method") == "tools/list":
+                intercepted.append(True)
+                raise httpx2.ReadTimeout("synthetic-private-token signed-url-secret")
+            return await super().handle_async_request(request)
+
+    monkeypatch.setattr(transport, "_new_http_transport", FailedCatalog)
+    with caplog.at_level(logging.WARNING), client_factory() as client:
+        with pytest.raises(RemoteCallError) as caught:
+            invoke(client)
+    assert caught.value.effect == "NOT_SENT"
+    assert "phase=protocol.list_tools" in caplog.text, (
+        caught.value.code,
+        intercepted,
+        logging.getLogger("app.tiktok.transport").disabled,
+    )
+    assert "category=timeout" in caplog.text
+    assert "synthetic-private-token" not in caplog.text
+    assert "signed-url-secret" not in caplog.text
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [

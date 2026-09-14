@@ -122,3 +122,15 @@ def test_celery_routes_control_and_has_no_result_backend():
         "builds",
         "control",
     }
+
+
+def test_periodic_control_messages_expire_before_next_tick():
+    from app.jobs.celery_app import celery_app
+
+    for entry in celery_app.conf.beat_schedule.values():
+        expiry = entry["options"]["expires"]
+        assert 0 < expiry <= entry["schedule"]
+        message = celery_app.amqp.create_task_message(
+            "synthetic-periodic-id", entry["task"], expires=expiry
+        )
+        assert message.headers["expires"] is not None

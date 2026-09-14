@@ -12,7 +12,7 @@
 
 ## 创建与发送证据
 
-提交具体预览后，Campaign、Ad Group、Ad 直接按 `ENABLE` 创建，不增加二次激活或账户轮转。已核实可准备的 PREPARING 组合可提交，但实际广告创建必须等待目标视频和封面全部完成并核实；明确 BLOCKED 的依赖不能提交。
+提交具体预览后，Campaign、Ad Group、Ad 直接按 `ENABLE` 创建，不增加二次激活或账户轮转。已核实可准备的 PREPARING 组合可提交，但实际广告创建必须等待目标视频核实；明确 BLOCKED 的依赖不能提交。2026-09-14 本地代码允许 SINGLE_VIDEO 不传自定义 `image_info`，不再为未指定图片生成强制封面依赖；旧冻结正文指定的图片仍须核实。此调整尚未部署或取得当前 Minis 视频场景的真实省略封面回执，验收边界见[链路诊断](../validation/2026-09-14-build-chain-latency.md)。
 
 CTA 有独立 attempt。每次广告创建先保存精确 wire body、摘要和原 attempt 归属；SDK/MCP 各自序列化，不能保存一种正文却发送另一种。MCP Campaign/Ad Group 的必需 request_id 从已持久化的 attempt UUID 派生为正的 int64 十进制字符串（低 63 位，零映射为 1），符合官方参数格式。本地仍保留完整 UUID；不会因为 request_id 存在就自动重发 UNKNOWN。API 不添加该 MCP 字段。动态时间只在首次 arm 生成，安全重排保留原正文、摘要与 attempt。
 
@@ -22,6 +22,8 @@ CTA 有独立 attempt。每次广告创建先保存精确 wire body、摘要和�
 | 已发送后断流、超时、进程死亡或无法证明无副作用的业务错误 | UNKNOWN；不再次 create，不换 token/连接/通道补建 |
 | 返回可验证的已知对象 ID | 先持久提交回执，再关闭客户端；清理失败不能丢弃 ID 或重建 |
 | 多个互相冲突的 ID | 保留所有证据，阻断自动择一 |
+
+明确 NOT_SENT 的 MCP 调用/会话传输故障增加有限重试：每个步骤最多 3 次、前两次退避 5/10 秒，跨同一冻结 attempt 的多个 nonce 计数。持续失败仍终止，不能无限重排；UNKNOWN 不重发。此规则不自动改写旧终止步骤，也不绕过原权限和正文证据。
 
 HTTP 200、MCP isError=false、自然语言成功和非零业务码均不能单独证明远端副作用。仅消费已固定并验证的业务 envelope；未知服务端重试语义不转换成安全重放。日志和公开投影仅含白名单 request_id/mcp_request_id/remote_task_id/attempt_id、状态与归属，不包含 token、原始响应或签名 URL。
 
@@ -41,7 +43,7 @@ HTTP 200、MCP isError=false、自然语言成功和非零业务码均不能单�
 
 Minis Campaign 原生读取不返回 catalog_enabled；新模板不发送该冗余字段，历史模板仅允许移除明确 false，不补造远端 catalog 事实。
 
-回读必须覆盖实际账户、父级、精确名称、Campaign 预算/CBO/目标、Ad Group ROAS/Minis/地区/排期/优化与计费字段，以及 Ad 的目标视频/封面、身份、BC、文案、URL、CTA portfolio。Smart+ Ad ID 保留 `smart_plus_ad_id`，不得用普通 Ad ID 混淆。集合顺序不重要，成员和重复数量仍参与比较。
+回读必须覆盖实际账户、父级、精确名称、Campaign 预算/CBO/目标、Ad Group ROAS/Minis/地区/排期/优化与计费字段，以及 Ad 的目标视频、已指定的自定义封面、身份、BC、文案、URL、CTA portfolio。未指定封面时，不把平台额外返回的图片当作请求意图差异，也不据此伪造请求的封面字段。Smart+ Ad ID 保留 `smart_plus_ad_id`，不得用普通 Ad ID 混淆。集合顺序不重要，成员和重复数量仍参与比较。
 
 原始远端 JSON 金额使用精确十进制解码；不能先经过 SDK float 舍入再比较，不能以请求值恢复远端精度。历史输入兼容与远端事实解码分开；非有限值、损坏类型或精度不明保持未核实。已明确返回非 ENABLE 时优先记录状态 MISMATCH，即使另有缺项，也不能被 INCOMPLETE 掩盖，更不会发送状态修改。ENABLE 仅是观察到的配置，不代表审核通过、开始投放或产生消耗。
 

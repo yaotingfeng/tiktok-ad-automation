@@ -95,6 +95,42 @@ def test_campaign_keeps_exact_values_and_direct_enable():
             CampaignCreate(**{**value.model_dump(), **change})
 
 
+def test_video_ad_without_custom_cover_roundtrips_and_accepts_generated_cover():
+    from app.integrations.tiktok.contracts.builds import BuildReadQuery
+    from app.integrations.tiktok.contracts.common import (
+        CallEvidence,
+        McpBusinessResponse,
+    )
+    from app.modules.builds.readback_compare import parse_page
+
+    body = build_bodies()["AD"]
+    body["creative_list"][0]["creative_info"].pop("image_info")
+    intent = decode_intent("AD", body)
+    assert encode_intent(intent) == body
+    actual = deepcopy(body)
+    actual["smart_plus_ad_id"] = "created-ad"
+    actual["creative_list"][0]["creative_info"]["image_info"] = [
+        {"web_uri": "platform-cover"}
+    ]
+    page = parse_page(
+        query=BuildReadQuery(intent=intent, remote_id="created-ad"),
+        response=McpBusinessResponse(
+            data={
+                "list": [actual],
+                "page_info": {
+                    "page": 1,
+                    "page_size": 100,
+                    "total_page": 1,
+                    "total_number": 1,
+                },
+            },
+            evidence=CallEvidence(),
+        ),
+    )
+    assert not page.rows[0].missing_fields
+    assert page.rows[0].intent == intent
+
+
 @pytest.mark.parametrize("kind", ["CAMPAIGN", "ADGROUP", "AD", "CTA"])
 def test_full_actual_request_roundtrip_preserves_fields_without_clock(kind):
     body = build_bodies()[kind]
@@ -284,7 +320,11 @@ def test_current_scene_and_legacy_compiler_keep_every_actual_field():
     from app.modules.builds.scene import _assemble_scene
 
     scene = _assemble_scene(
-        scope={"access": SimpleNamespace(currency="USD"), "basis": "synthetic"},
+        scope={
+            "access": SimpleNamespace(currency="USD"),
+            "basis": "synthetic",
+            "minis_id": "minis-1",
+        },
         facts={
             "minis": {
                 "matches": [

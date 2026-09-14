@@ -142,30 +142,35 @@ def validate_ad_assets(
     cutoff = datetime.now(UTC) - timedelta(
         seconds=settings.MATERIAL_ASSET_MAX_AGE_SECONDS
     )
-    expected = []
-    valid = 1 <= len(rows) <= 50
-    for _, mapping, job in rows:
-        if not mapping_fresh(mapping) or not mapping or not mapping.image_id:
-            valid = False
-            continue
-        if job and (
-            job.status != "READY"
-            or job.updated_at < cutoff
-            or job.known_image_id != mapping.image_id
-        ):
-            valid = False
-        expected.append((mapping.video_id, mapping.image_id))
     try:
         actual = [
             (
                 entry["creative_info"]["video_info"]["video_id"],
-                entry["creative_info"]["image_info"][0]["web_uri"],
+                entry["creative_info"]["image_info"][0]["web_uri"]
+                if entry["creative_info"].get("image_info")
+                else None,
             )
             for entry in body["creative_list"]
         ]
     except KeyError, TypeError, IndexError:
         raise DomainError("invalid_build_request", "创意素材结构无效") from None
-    if not valid or actual != expected:
+    valid = 1 <= len(rows) <= 50 and len(rows) == len(actual)
+    for (_, mapping, job), (video_id, image_id) in zip(rows, actual, strict=False):
+        if not mapping or not mapping_fresh(mapping) or mapping.video_id != video_id:
+            valid = False
+            continue
+        # 只校验冻结请求实际指定的图片；未指定封面的新视频广告不等待历史封面任务。
+        if image_id is not None and (
+            mapping.image_id != image_id
+            or job
+            and (
+                job.status != "READY"
+                or job.updated_at < cutoff
+                or job.known_image_id != image_id
+            )
+        ):
+            valid = False
+    if not valid:
         raise DomainError(
             "material_refresh_required", "目标素材已变化，需要重新核实", retryable=True
         )

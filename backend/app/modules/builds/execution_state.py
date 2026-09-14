@@ -323,6 +323,9 @@ def record_not_sent(
     step = _step(session, claim)
     if not active_attempt(step, claim, phase="REQUEST_ARMED"):
         return step.status
+    retryable, delay, step.resolved = transient_retry(
+        step.resolved, error=error, retryable=retryable, delay=delay
+    )
     evidence(
         session,
         step=step,
@@ -341,6 +344,26 @@ def record_not_sent(
     session.add(step)
     session.flush()
     return step.status
+
+
+def transient_retry(
+    resolved: dict[str, Any], *, error: DomainError, retryable: bool, delay: int
+) -> tuple[bool, int, dict[str, Any]]:
+    """未发送传输异常最多尝试三次；同一 attempt 的多个 nonce 共用计数。"""
+    from app.integrations.tiktok.contracts.common import TRANSIENT_NOT_SENT
+
+    if (
+        isinstance(error, RemoteCallError)
+        and error.effect == "NOT_SENT"
+        and error.code in TRANSIENT_NOT_SENT
+    ):
+        failures = int(resolved.get("transport_failure_count", 0)) + 1
+        return (
+            failures < 3,
+            min(60, 5 * 2 ** min(failures - 1, 4)),
+            {**resolved, "transport_failure_count": failures},
+        )
+    return retryable, delay, resolved
 
 
 def safely_unsent_attempt(session: Session, *, step: ExecutionStep) -> bool:

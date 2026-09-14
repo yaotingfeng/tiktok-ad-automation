@@ -48,27 +48,32 @@ def remove_cover(env):
     return ids["MATERIAL"][0]
 
 
-def pending(env, redis_client):
+def pending(env, _redis_client):
     identity = remove_cover(env)
-    outcome = process_step(
-        database_engine=env[0],
-        redis_client=redis_client,
-        context=env[1],
-        step_id=identity,
-        revision=0,
-    )
-    with Session(env[0]) as session:
+    # 显式构造旧版本已存在的封面依赖，验证发布后仍可核查原上传身份。
+    from app.modules.builds.preview_models import BuildUnit
+    from app.modules.builds.routes import load_preview_route
+    from app.modules.materials.covers import ensure_cover
+
+    with Session(env[0]) as session, session.begin():
         step = session.get(ExecutionStep, identity)
-        assert outcome == "PENDING", step.error_code
-        assert step.error_code == "cover_pending"
-        assert step.cover_job_id is not None and step.distribution_id is None
-        job = session.get(MaterialCoverJob, step.cover_job_id)
-        assert job.video_id.startswith("target-") and job.request_armed_at is None
-        assert (
-            session.get(PendingDispatch, job.dispatch_id).task_name
-            == "materials.prepare_cover"
+        unit = session.get(BuildUnit, step.unit_id)
+        prepared = ensure_cover(
+            session,
+            context=env[1],
+            bc_id=step.bc_id,
+            material_id=step.material_id,
+            advertiser_id=unit.advertiser_id,
+            task_key="historical-cover",
+            route=load_preview_route(
+                session, context=env[1], preview_id=step.preview_id
+            ),
         )
-        return identity, job.id, step.submission_id
+        step.status, step.phase, step.error_code = "PENDING", "IDLE", "cover_pending"
+        step.cover_job_id = prepared.task_id
+        step.dispatch_id = None
+        session.add(step)
+        return identity, prepared.task_id, step.submission_id
 
 
 @pytest.mark.parametrize("revoked", [False, True, "currency"])
@@ -150,7 +155,7 @@ def test_cover_retry_or_reconcile_keeps_job_identity(executable, redis_client, a
         assert len(session.exec(select(MaterialCoverJob)).all()) == 1
 
 
-def test_reconciled_video_without_cover_prepares_only_separate_cover(
+def test_reconciled_video_without_cover_completes_without_image_upload(
     executable, monkeypatch
 ):
     db, context, _ = executable
@@ -168,14 +173,9 @@ def test_reconciled_video_without_cover_prepares_only_separate_cover(
     with Session(db) as session:
         step = session.get(ExecutionStep, identity)
         assert recovered == 1, step.error_code
-        assert step.distribution_id == dist_id and step.cover_job_id is not None
-        assert step.status == "PENDING"
-        job = session.get(MaterialCoverJob, step.cover_job_id)
-        assert job.request_armed_at is None
-        assert (
-            session.get(PendingDispatch, job.dispatch_id).task_name
-            == "materials.prepare_cover"
-        )
+        assert step.distribution_id == dist_id and step.cover_job_id is None
+        assert step.status == "SUCCEEDED"
+        assert not session.exec(select(MaterialCoverJob)).all()
 
 
 def ready_ad_with_cover_job(env, redis_client, *, cover_status="READY"):
@@ -204,14 +204,17 @@ def ready_ad_with_cover_job(env, redis_client, *, cover_status="READY"):
     return ids["AD"][0], material_step, job_id, submission_id
 
 
-def test_ad_rechecks_expired_cover_without_reopening_completed_steps(
-    executable, redis_client, monkeypatch
+@pytest.mark.parametrize("cover_status", ["READY", "UNKNOWN", "BLOCKED"])
+def test_new_video_ad_does_not_wait_for_unused_cover(
+    executable, redis_client, monkeypatch, cover_status
 ):
     import json
 
     from urllib3.response import HTTPResponse
 
-    ad_id, material_id, job_id, _ = ready_ad_with_cover_job(executable, redis_client)
+    ad_id, material_id, job_id, _ = ready_ad_with_cover_job(
+        executable, redis_client, cover_status=cover_status
+    )
     db, context, _ = executable
     writes = []
 
@@ -234,113 +237,22 @@ def test_ad_rechecks_expired_cover_without_reopening_completed_steps(
         "step_id": ad_id,
         "revision": 0,
     }
-    assert process_step(**args) == "PENDING"
-    assert not writes
-    with Session(db) as session, session.begin():
-        job = session.get(MaterialCoverJob, job_id)
-        assert job.status == "VERIFYING" and job.known_image_id == "actual-target-cover"
-        assert (
-            session.get(PendingDispatch, job.dispatch_id).task_name
-            == "materials.verify_cover"
-        )
-        assert session.get(ExecutionStep, material_id).status == "SUCCEEDED"
-        assert session.get(ExecutionStep, ad_id).request_body is None
-        # Simulate the positive dependency receipt; this test covers build-side gating.
-        job.status, job.updated_at, job.dispatch_id = "READY", datetime.now(UTC), None
-        session.get(ExecutionStep, ad_id).due_at = datetime.now(UTC)
-        session.add(job)
     assert process_step(**args) == "SUCCEEDED"
     assert process_step(**args) == "SUCCEEDED"
     assert len(writes) == 1
     assert len(writes[0]["creative_list"]) == 2
-
-
-def test_ad_prepares_a_separate_cover_for_changed_target_video(
-    executable, redis_client, monkeypatch
-):
-    ad_id, material_id, old_job_id, _ = ready_ad_with_cover_job(
-        executable, redis_client
+    assert all(
+        "image_info" not in row["creative_info"] for row in writes[0]["creative_list"]
     )
-    db, context, _ = executable
-    with Session(db) as session, session.begin():
-        old_job = session.get(MaterialCoverJob, old_job_id)
-        mapping = session.get(AccountMaterial, old_job.asset_id)
-        mapping.video_id, mapping.image_id = "new-target-video", None
-        mapping.verified_at = datetime.now(UTC)
-        session.add(mapping)
-
-    def no_write(*_args, **_kwargs):
-        raise AssertionError("AD must wait for its new target cover")
-
-    monkeypatch.setattr("urllib3.PoolManager.request", no_write)
-    assert (
-        process_step(
-            database_engine=db,
-            redis_client=redis_client,
-            context=context,
-            step_id=ad_id,
-            revision=0,
-        )
-        == "PENDING"
-    )
-    with Session(db) as session:
-        jobs = session.exec(
-            select(MaterialCoverJob).order_by(MaterialCoverJob.video_id)
-        ).all()
-        assert len(jobs) == 2
-        new_job = next(job for job in jobs if job.id != old_job_id)
-        assert (
-            new_job.video_id == "new-target-video" and new_job.request_armed_at is None
-        )
-        assert (
-            session.get(PendingDispatch, new_job.dispatch_id).task_name
-            == "materials.prepare_cover"
-        )
-        assert session.get(ExecutionStep, material_id).status == "SUCCEEDED"
-        assert session.get(ExecutionStep, ad_id).request_body is None
-
-
-def test_retry_of_unarmed_ad_reconciles_original_unknown_cover_without_upload(
-    executable, redis_client, monkeypatch
-):
-    ad_id, material_id, job_id, submission_id = ready_ad_with_cover_job(
-        executable, redis_client, cover_status="UNKNOWN"
-    )
-    db, context, _ = executable
-
-    def no_write(*_args, **_kwargs):
-        raise AssertionError("ambiguous cover cannot be uploaded again")
-
-    monkeypatch.setattr("urllib3.PoolManager.request", no_write)
-    args = {
-        "database_engine": db,
-        "redis_client": redis_client,
-        "context": context,
-        "step_id": ad_id,
-        "revision": 0,
-    }
-    assert process_step(**args) == "FAILED"
-    assert process_step(**args) == "FAILED"
-    with Session(db) as session:
-        step = session.get(ExecutionStep, ad_id)
-        assert step.error_code == "cover_result_unknown" and step.request_body is None
-        assert session.get(MaterialCoverJob, job_id).dispatch_id is None
-    receipt = request(executable, submission_id, kind="RETRY")
-    run(executable, receipt)
     with Session(db) as session:
         job = session.get(MaterialCoverJob, job_id)
-        assert job.status == "VERIFYING"
-        assert (
-            session.get(PendingDispatch, job.dispatch_id).task_name
-            == "materials.verify_cover"
-        )
+        assert job.status == cover_status and job.dispatch_id is None
         assert session.get(ExecutionStep, material_id).status == "SUCCEEDED"
         assert len(session.exec(select(MaterialCoverJob)).all()) == 1
 
 
-@pytest.mark.parametrize("changed", ["video", "cover_expired"])
-def test_ad_checks_current_material_evidence_after_admission(
-    executable, redis_client, monkeypatch, changed
+def test_ad_checks_current_video_evidence_after_admission(
+    executable, redis_client, monkeypatch
 ):
     from contextlib import contextmanager
 
@@ -348,8 +260,6 @@ def test_ad_checks_current_material_evidence_after_admission(
 
     ad_id, _, job_id, _ = ready_ad_with_cover_job(executable, redis_client)
     db, context, _ = executable
-    with Session(db) as session, session.begin():
-        session.get(MaterialCoverJob, job_id).updated_at = datetime.now(UTC)
     actual = execution.admitted_build_call
 
     @contextmanager
@@ -357,15 +267,9 @@ def test_ad_checks_current_material_evidence_after_admission(
         with actual(*args, **kwargs):
             with Session(db) as session, session.begin():
                 job = session.get(MaterialCoverJob, job_id)
-                if changed == "video":
-                    mapping = session.get(AccountMaterial, job.asset_id)
-                    mapping.video_id, mapping.image_id = "replaced-after-prepare", None
-                    session.add(mapping)
-                else:
-                    job.updated_at = datetime.now(UTC) - timedelta(
-                        seconds=settings.MATERIAL_ASSET_MAX_AGE_SECONDS + 1
-                    )
-                    session.add(job)
+                mapping = session.get(AccountMaterial, job.asset_id)
+                mapping.video_id, mapping.image_id = "replaced-after-prepare", None
+                session.add(mapping)
             yield
 
     calls = []
@@ -391,3 +295,55 @@ def test_ad_checks_current_material_evidence_after_admission(
         step = session.get(ExecutionStep, ad_id)
         assert step.error_code == "material_refresh_required"
         assert step.request_body is None and step.remote_id is None
+
+
+@pytest.mark.parametrize("changed", ["none", "expired", "wrong_image"])
+def test_frozen_custom_cover_keeps_its_final_fence(executable, redis_client, changed):
+    from app.core.errors import DomainError
+    from app.modules.builds.cover_execution import validate_ad_assets
+    from app.modules.builds.preview_models import BuildUnit, PreviewGroupMaterial
+
+    ad_id, _, job_id, _ = ready_ad_with_cover_job(executable, redis_client)
+    db, _, _ = executable
+    with Session(db) as session, session.begin():
+        job = session.get(MaterialCoverJob, job_id)
+        if changed != "expired":
+            job.updated_at = datetime.now(UTC)
+        session.add(job)
+        session.flush()
+        step = session.get(ExecutionStep, ad_id)
+        unit = session.get(BuildUnit, step.unit_id)
+        mappings = session.exec(
+            select(AccountMaterial)
+            .join(
+                PreviewGroupMaterial,
+                PreviewGroupMaterial.material_id == AccountMaterial.material_id,
+            )
+            .where(PreviewGroupMaterial.preview_id == step.preview_id)
+            .order_by(PreviewGroupMaterial.position)
+        ).all()
+        body = {
+            "creative_list": [
+                {
+                    "creative_info": {
+                        "video_info": {"video_id": mapping.video_id},
+                        "image_info": [
+                            {
+                                "web_uri": "wrong-image"
+                                if changed == "wrong_image"
+                                else mapping.image_id
+                            }
+                        ],
+                    }
+                }
+                for mapping in mappings
+            ]
+        }
+        if changed == "none":
+            validate_ad_assets(session, step=step, unit=unit, body=body)
+        else:
+            with pytest.raises(
+                DomainError,
+                check=lambda error: error.code == "material_refresh_required",
+            ):
+                validate_ad_assets(session, step=step, unit=unit, body=body)

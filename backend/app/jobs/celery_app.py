@@ -118,3 +118,8 @@ celery_app.conf.update(
         },
     },
 )
+
+# 周期消息只负责唤醒持久状态扫描；过期 tick 不应挤占新的业务调度。
+# 业务 outbox 消息不设置 expires，积压或重启后仍必须执行/核查原操作。
+for periodic_entry in celery_app.conf.beat_schedule.values():
+    periodic_entry["options"]["expires"] = periodic_entry["schedule"]

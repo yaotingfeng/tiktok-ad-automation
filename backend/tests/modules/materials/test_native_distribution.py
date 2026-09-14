@@ -71,6 +71,39 @@ def test_transport_uses_bc_not_channel():
     assert distribution_transport(source_bc_id="a", target_bc_id="b") == "url_relay"
 
 
+def test_unique_complete_shared_video_search_finishes_without_second_info_read(
+    native_env, redis_client, wire
+):
+    prepared = queue(native_env, native_env["target"])
+    wire[1].extend([source_info(), {}])
+    run(native_env, redis_client, prepared.task_id, kind="prepare")
+    wire[1].append(search_info())
+    run(native_env, redis_client, prepared.task_id)
+    dist, _, mapping = state(prepared.task_id)
+    assert dist.status == "ready"
+    assert mapping.video_id == "actual-target-vid"
+    assert len(wire[0]) == 3
+
+
+@pytest.mark.parametrize("displayable", [False, None])
+def test_shared_search_without_ready_evidence_still_reads_details(
+    native_env, redis_client, wire, displayable
+):
+    prepared = queue(native_env, native_env["target"])
+    wire[1].extend([source_info(), {}])
+    run(native_env, redis_client, prepared.task_id, kind="prepare")
+    incomplete = search_info()
+    incomplete["list"][0]["displayable"] = displayable
+    wire[1].append(incomplete)
+    run(native_env, redis_client, prepared.task_id)
+    assert state(prepared.task_id)[0].status == "verifying"
+    assert state(prepared.task_id)[2] is None
+    wire[1].append({"list": search_info()["list"]})
+    run(native_env, redis_client, prepared.task_id)
+    assert state(prepared.task_id)[0].status == "ready"
+    assert len(wire[0]) == 4
+
+
 def test_same_bc_shares_without_original_or_preview_url(native_env, redis_client, wire):
     ready = read(native_env, native_env["target"])
     assert (ready.state, ready.path) == ("preparable", "share_source")

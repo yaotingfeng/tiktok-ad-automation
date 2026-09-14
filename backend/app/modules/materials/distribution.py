@@ -1283,6 +1283,33 @@ def run_distribution(
                             remote_name=work["remote_name"],
                             md5=content_md5,
                         )
+                        # 按名称查询的一页完整唯一结果已携带可用状态和摘要时，直接使用
+                        # 这份真实目标证据；不再为相同 VID 另排一次详情请求。
+                        if (
+                            work.get("transport") == "native_share"
+                            and page.page == 1
+                            and page.total_pages == 1
+                        ):
+                            matches, last = evidence
+                            if last and len(matches) == 1:
+                                match_id = matches[0]["video_id"]
+                                record = next(
+                                    (
+                                        row
+                                        for row in page.rows
+                                        if row.video_id == match_id
+                                    ),
+                                    None,
+                                )
+                                if record is not None:
+                                    work["verified_search_match"] = api.verified_video(
+                                        {"list": [api.video_record_data(record)]},
+                                        md5=content_md5,
+                                        expected_video_id=match_id,
+                                        expected_size=work["byte_size"]
+                                        if work["strict_video"]
+                                        else None,
+                                    )
         with Session(database_engine) as session, session.begin():
             dist = _load_distribution(session, context, distribution_id)
             _locked_material(session, context, dist.material_id)
@@ -1360,7 +1387,18 @@ def run_distribution(
                         **next(iter(candidates.values())),
                         "candidates": [],
                     }
-                    operation.status, dist.status = "verifying", "verifying"
+                    verified = work.get("verified_search_match")
+                    if verified and verified["video_id"] in candidates:
+                        _publish_mapping(
+                            session,
+                            context,
+                            dist,
+                            verified,
+                            connection_id=_work_connection(work),
+                        )
+                        operation.status, dist.status = "succeeded", "ready"
+                    else:
+                        operation.status, dist.status = "verifying", "verifying"
                 else:
                     operation.remote_response = {
                         **operation.remote_response,

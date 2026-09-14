@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import os
 import threading
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
@@ -10,6 +11,7 @@ from contextlib import AbstractContextManager, asynccontextmanager, contextmanag
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from time import monotonic
 from typing import Any
 
 import anyio
@@ -195,6 +197,8 @@ class _GuardedTransport(httpx2.AsyncBaseTransport):
         business = False
         lease = None
         entered = False
+        operation = "protocol.unknown"
+        started = monotonic()
         try:
             require_official_endpoint(str(request.url))
             if request.method == "POST":
@@ -288,6 +292,26 @@ class _GuardedTransport(httpx2.AsyncBaseTransport):
             )
             return response
         except BaseException as exc:
+            # 只记录固定分类、阶段与耗时；不输出 URL、异常正文、请求或令牌。
+            category = (
+                "timeout"
+                if isinstance(exc, (TimeoutError, httpx2.TimeoutException))
+                else "network"
+                if isinstance(exc, httpx2.NetworkError)
+                else "domain"
+                if isinstance(exc, DomainError)
+                else "interrupted"
+                if not isinstance(exc, Exception)
+                else "other"
+            )
+            phase = operation if operation in PROTOCOL_OPERATIONS else "business"
+            logging.getLogger("app.tiktok.transport").warning(
+                "MCP transport failure phase=%s category=%s sent=%s duration_ms=%d",
+                phase,
+                category,
+                bool(state and state.sent),
+                int((monotonic() - started) * 1000),
+            )
             if state is not None and isinstance(exc, SDK_SCOPE_INTERRUPTS):
                 state.interruption = exc
             if entered and lease is not None:
