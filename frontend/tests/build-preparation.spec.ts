@@ -1627,3 +1627,149 @@ test("自动获取的链接可修改，回填原URL、数字剧目ID与归因名
     protected_base: "original-attribution",
   })
 })
+
+for (const width of [1440, 390]) {
+  test(`批量添加素材在 ${width}px 支持跨页搜索、去重并统一保存`, async ({
+    page,
+  }) => {
+    const api = await buildsBoundary(page)
+    const material = (n: number) => ({
+      material_id: `99999999-9999-4999-8999-${String(n).padStart(12, "0")}`,
+      file_name: n === 1 ? "完整剧名1-01.mp4" : `补充素材-${n}.mp4`,
+    })
+    await page.route(`**/tenants/${tenant}/materials?**`, (route) => {
+      const params = new URL(route.request().url()).searchParams
+      expect(params.get("bc_id")).toBe(bc)
+      const searching = params.get("query") === "尾页"
+      const tail = params.get("cursor") === "tail"
+      return route.fulfill({
+        json: {
+          items:
+            searching || tail
+              ? [material(26)]
+              : [material(1), material(24), material(25)],
+          next_cursor: searching || tail ? null : "tail",
+        },
+      })
+    })
+    await page.setViewportSize({ width, height: 900 })
+    await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+    await page.getByRole("button", { name: "查看与调整素材" }).first().click()
+    const sheet = page.getByRole("dialog", { name: /调整素材/ })
+    await sheet.getByRole("button", { name: "添加素材", exact: true }).click()
+    const picker = page.getByRole("dialog", { name: "添加素材", exact: true })
+    await expect(
+      picker.getByRole("checkbox", { name: material(1).file_name }),
+    ).toBeDisabled()
+    await picker.getByRole("checkbox", { name: material(24).file_name }).check()
+    await expect(
+      picker.getByRole("checkbox", { name: "全选本页" }),
+    ).toHaveAttribute("aria-checked", "mixed")
+    await picker.getByRole("checkbox", { name: "全选本页" }).check()
+    await expect(picker.getByText("已选 2 条", { exact: true })).toBeVisible()
+    await picker.getByRole("button", { name: "下一页" }).click()
+    await picker.getByRole("checkbox", { name: material(26).file_name }).check()
+    await picker.getByRole("button", { name: "上一页" }).click()
+    await expect(
+      picker.getByRole("checkbox", { name: material(24).file_name }),
+    ).toBeChecked()
+    await picker.getByRole("checkbox", { name: "全选本页" }).uncheck()
+    await expect(picker.getByText("已选 1 条", { exact: true })).toBeVisible()
+    await picker.getByRole("checkbox", { name: "全选本页" }).check()
+    await picker.getByLabel("搜索素材", { exact: true }).fill("尾页")
+    await picker.getByRole("button", { name: "搜索", exact: true }).click()
+    await expect(
+      picker.getByRole("checkbox", { name: material(26).file_name }),
+    ).toBeChecked()
+    await expect(picker.getByText("已选 3 条", { exact: true })).toBeVisible()
+    expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
+    const add = picker.getByRole("button", {
+      name: "添加 3 条素材",
+      exact: true,
+    })
+    await expect(add).toBeInViewport()
+    expect(
+      await picker.evaluate((node) => node.scrollWidth <= node.clientWidth),
+    ).toBe(true)
+    await add.click()
+    await expect(picker).toHaveCount(0)
+    await expect(sheet.getByLabel("组号", { exact: true })).toHaveCount(26)
+    for (const n of [24, 25, 26]) {
+      await expect(
+        sheet
+          .getByRole("listitem")
+          .filter({ hasText: material(n).file_name })
+          .getByLabel("组号", { exact: true }),
+      ).toHaveValue("3")
+    }
+    await sheet.getByRole("button", { name: "保存素材分组" }).click()
+    await expect(sheet).toHaveCount(0)
+    const writes = api.requests.filter(
+      (r) => r.method === "PATCH" && r.path.endsWith("/groups"),
+    )
+    expect(writes).toHaveLength(1)
+    const groups = writes[0].body.groups as string[][]
+    expect(groups.map((group) => group.length)).toEqual([10, 10, 6])
+    expect(new Set(groups.flat()).size).toBe(26)
+    expect(groups[2]).toEqual(
+      [21, 22, 23, 26, 24, 25].map((n) => material(n).material_id),
+    )
+  })
+}
+
+test("批量添加素材取消与清空不修改分组，长列表底部操作保持可见", async ({
+  page,
+}) => {
+  const api = await buildsBoundary(page)
+  const names = Array.from(
+    { length: 50 },
+    (_, n) => `${"超长素材名称".repeat(8)}-${n}.mp4`,
+  )
+  await page.route(`**/tenants/${tenant}/materials?**`, (route) =>
+    route.fulfill({
+      json: {
+        items: names.map((file_name, n) => ({
+          material_id: `new-${n}`,
+          file_name,
+        })),
+        next_cursor: null,
+      },
+    }),
+  )
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await page.getByRole("button", { name: "查看与调整素材" }).first().click()
+  const sheet = page.getByRole("dialog", { name: /调整素材/ })
+  await sheet.getByRole("button", { name: "添加素材", exact: true }).click()
+  const picker = page.getByRole("dialog", { name: "添加素材", exact: true })
+  await picker.getByRole("checkbox", { name: "全选本页" }).check()
+  const add = picker.getByRole("button", {
+    name: "添加 50 条素材",
+    exact: true,
+  })
+  await expect(add).toBeInViewport()
+  expect(
+    await picker.evaluate((node) => node.scrollWidth <= node.clientWidth),
+  ).toBe(true)
+  if (process.env.BUILD_SCREENSHOT_DIR)
+    await page.screenshot({
+      path: `${process.env.BUILD_SCREENSHOT_DIR}/material-batch-390.png`,
+      animations: "disabled",
+    })
+  await picker.getByRole("button", { name: "清空已选" }).click()
+  await expect(
+    picker.getByRole("button", { name: "添加所选素材" }),
+  ).toBeDisabled()
+  await picker.getByRole("checkbox", { name: names[0], exact: true }).check()
+  await picker.getByRole("button", { name: "取消", exact: true }).click()
+  await expect(sheet.getByLabel("组号", { exact: true })).toHaveCount(23)
+  await expect(
+    sheet.getByRole("button", { name: "保存素材分组" }),
+  ).toBeDisabled()
+  await sheet.getByRole("button", { name: "添加素材", exact: true }).click()
+  await expect(picker.getByText("已选 0 条", { exact: true })).toBeVisible()
+  await page.keyboard.press("Escape")
+  await expect(picker).toHaveCount(0)
+  await expect(sheet).toBeVisible()
+  expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
+})

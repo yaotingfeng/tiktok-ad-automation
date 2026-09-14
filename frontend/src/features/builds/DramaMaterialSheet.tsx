@@ -6,18 +6,16 @@ import {
   type DraftDramaPublic,
   type DraftMaterialPublic,
   type DraftSummary,
-  type MaterialPublic,
-  MaterialsService,
 } from "@/client"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { DirectoryPicker } from "@/features/tenants/DirectoryPicker"
 import { ManagementSheet } from "@/features/tenants/ManagementSheet"
 import { Pager, RequestError, useCursorPage } from "@/features/tenants/shared"
 import { loadDraftMaterials, mutationKey } from "./api"
+import { MaterialBatchPicker } from "./MaterialBatchPicker"
 import { BuildError, reportError, unknownOutcome } from "./presentation"
 
 type Item = DraftMaterialPublic
@@ -367,43 +365,33 @@ export function DramaMaterialSheet({
                 组。空组保存时自动移除。
               </p>
               {write && (
-                <DirectoryPicker<MaterialPublic & { id: string }>
-                  label="添加素材"
+                <MaterialBatchPicker
+                  tenantId={tenantId}
+                  bcId={bcId}
+                  existingIds={items.map((item) => item.material_id)}
                   disabled={!!pending || busy || forbidden}
-                  queryKey={[
-                    "tenant",
-                    tenantId,
-                    "builds",
-                    bcId,
-                    "material-picker",
-                  ]}
-                  load={async (query, cursor, limit, signal) => {
-                    const { data } = await MaterialsService.getMaterials({
-                      path: { tenant_id: tenantId },
-                      query: { bc_id: bcId, query, cursor, limit },
-                      signal,
+                  onAdd={(selected) => {
+                    setItems((old) => {
+                      // 批量追加时保留已有顺序与分组，同一素材只添加一次。
+                      const seen = new Set(old.map((item) => item.material_id))
+                      const groupNo = Math.max(
+                        1,
+                        ...old.map((item) => item.group_no),
+                      )
+                      const additions: Item[] = []
+                      for (const item of selected) {
+                        if (seen.has(item.material_id)) continue
+                        seen.add(item.material_id)
+                        additions.push({
+                          material_id: item.material_id,
+                          file_name: item.file_name,
+                          group_no: groupNo,
+                          position: old.length + additions.length + 1,
+                          shared_with_other_drama: false,
+                        })
+                      }
+                      return [...old, ...additions]
                     })
-                    return {
-                      ...data,
-                      items: data.items.map((i) => ({
-                        ...i,
-                        id: i.material_id,
-                      })),
-                    }
-                  }}
-                  renderItem={(item) => <span>{item.file_name}</span>}
-                  onSelect={(item) => {
-                    if (items.some((i) => i.material_id === item.id)) return
-                    setItems((old) => [
-                      ...old,
-                      {
-                        material_id: item.id,
-                        file_name: item.file_name,
-                        group_no: Math.max(1, ...old.map((i) => i.group_no)),
-                        position: old.length + 1,
-                        shared_with_other_drama: false,
-                      },
-                    ])
                   }}
                 />
               )}
