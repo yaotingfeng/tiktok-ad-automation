@@ -16,19 +16,24 @@ from app.core.errors import DomainError
 from app.integrations.tiktok.admission import quota_scope
 from app.integrations.tiktok.bounded_resources import bounded_redis, bounded_session
 from app.integrations.tiktok.mcp.protocol import load_mcp_protocol
-from app.integrations.tiktok.mcp_auth.service import _credentials, load_registration
+from app.integrations.tiktok.mcp_auth.service import (
+    _credentials,
+    load_registration,
+    require_mcp_admin,
+)
 from app.integrations.tiktok.mcp_auth.transport import exchange_token
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.jobs.admission import admission_policy, admitted_scope
 from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit
 from app.modules.accounts.connection_models import (
+    BCConnectionBinding,
     ConnectionAuthorization,
     McpAuthorizationAttempt,
     McpRefreshAttempt,
 )
 from app.modules.accounts.models import TikTokConnection
-from app.modules.tenants.models import Tenant
+from app.modules.tenants.models import AuditEvent, Tenant
 from app.modules.tenants.permissions import require_tenant
 
 CLEANUP_SECONDS = 5
@@ -64,7 +69,11 @@ def _locked(
 
 
 def _current(
-    session: Session, connection: TikTokConnection, attempt: McpRefreshAttempt
+    session: Session,
+    connection: TikTokConnection,
+    attempt: McpRefreshAttempt,
+    *,
+    recovering: bool = False,
 ) -> bool:
     tenant = session.get(Tenant, connection.tenant_id)
     newer_authorization = session.exec(
@@ -98,9 +107,13 @@ def _current(
         and tenant
         and tenant.active
         and connection.kind == "OFFICIAL_MCP"
-        and connection.status == "ACTIVE"
+        and connection.status == ("REAUTH_REQUIRED" if recovering else "ACTIVE")
+        and (not recovering or attempt.error_code == "mcp_refresh_reauth_required")
         and (connection.credential_revision, connection.authorization_revision)
-        == (attempt.base_credential_revision, attempt.base_authorization_revision)
+        == (
+            attempt.base_credential_revision,
+            attempt.base_authorization_revision + int(recovering),
+        )
     )
 
 
@@ -255,13 +268,22 @@ def _publish(
     context: TenantContext,
     attempt_id: UUID,
     task_deadline: datetime,
+    recovering: bool = False,
 ) -> str:
     with bounded_session(database_engine, task_deadline=task_deadline) as session:
         connection, attempt = _locked(session, attempt_id)
         _require_actor(session, context=context, attempt=attempt)
+        if recovering:
+            require_mcp_admin(
+                session, actor_id=context.actor_id, tenant_id=context.tenant_id
+            )
         if attempt.status != "CANDIDATE_READY":
             return attempt.status
-        if not _current(session, connection, attempt):
+        if not _current(session, connection, attempt, recovering=recovering):
+            if recovering:
+                raise DomainError(
+                    "mcp_refresh_unavailable", "原连接或授权已变化，不能恢复此回执"
+                )
             result = _finish(attempt, "SUPERSEDED")
         else:
             profile = load_mcp_protocol()
@@ -279,7 +301,11 @@ def _publish(
                     ConnectionAuthorization.tenant_id == attempt.tenant_id,
                     ConnectionAuthorization.connection_id == connection.id,
                     ConnectionAuthorization.authorization_revision
-                    == connection.authorization_revision,
+                    == (
+                        attempt.base_authorization_revision
+                        if recovering
+                        else connection.authorization_revision
+                    ),
                 )
             ).first()
             invalid = False
@@ -306,41 +332,104 @@ def _publish(
                     "token_type",
                     "scope",
                     "expires_in",
+                    "refresh_token_expires_in",
                     "issuer",
                     "iss",
                     "resource",
                     "aud",
                 }
-                invalid = bool(set(data) - fields) or not (
-                    receipt.get("attempt_id") == str(attempt.id)
-                    and receipt.get("connection_id") == str(connection.id)
-                    and receipt.get("base_credential_revision")
-                    == str(attempt.base_credential_revision)
-                    and receipt.get("base_authorization_revision")
-                    == str(attempt.base_authorization_revision)
-                    and receipt.get("claim_id") == str(attempt.claim_id)
-                    and "expires_at" in candidate
-                    and datetime.fromisoformat(candidate["expires_at"])
-                    > datetime.now(UTC) + timedelta(seconds=CLEANUP_SECONDS)
-                    and authorization
-                    and authorization.issuer == old.get("issuer") == profile.issuer
-                    and authorization.resource
-                    == old.get("resource")
-                    == profile.resource
-                    and sorted(authorization.scopes) == old_scopes == new_scopes
-                    and old.get("client_id")
-                    == receipt["client_id"]
-                    == load_registration(profile).client_id
+                refresh_expiry = data.get("refresh_token_expires_in")
+                # TikTok 的刷新令牌寿命是秒数元数据，不代表授权主体或范围改变。
+                invalid = (
+                    (
+                        "refresh_token_expires_in" in data
+                        and (
+                            type(refresh_expiry) is not int
+                            or not 0 < refresh_expiry <= 10 * 365 * 86400
+                        )
+                    )
+                    or bool(set(data) - fields)
+                    or not (
+                        receipt.get("attempt_id") == str(attempt.id)
+                        and receipt.get("connection_id") == str(connection.id)
+                        and receipt.get("base_credential_revision")
+                        == str(attempt.base_credential_revision)
+                        and receipt.get("base_authorization_revision")
+                        == str(attempt.base_authorization_revision)
+                        and receipt.get("claim_id") == str(attempt.claim_id)
+                        and "expires_at" in candidate
+                        and datetime.fromisoformat(candidate["expires_at"])
+                        > datetime.now(UTC) + timedelta(seconds=CLEANUP_SECONDS)
+                        and authorization
+                        and authorization.issuer == old.get("issuer") == profile.issuer
+                        and authorization.resource
+                        == old.get("resource")
+                        == profile.resource
+                        and sorted(authorization.scopes) == old_scopes == new_scopes
+                        and old.get("client_id")
+                        == receipt["client_id"]
+                        == load_registration(profile).client_id
+                    )
                 )
             except DomainError, KeyError, TypeError, ValueError:
                 invalid = True
             if invalid:
+                if recovering:
+                    raise DomainError(
+                        "mcp_refresh_reauth_required",
+                        "回执未通过完整校验，仍需重新授权",
+                    )
                 # 缩权、未知身份与扩权均即时封闭旧操作；完整候选保留供管理员重新核验。
                 connection.status = "REAUTH_REQUIRED"
                 connection.authorization_revision += 1
                 attempt.error_code = "mcp_refresh_reauth_required"
                 result = "CANDIDATE_READY"
             else:
+                if recovering:
+                    assert authorization is not None
+                    # 管理员显式复核已保存回执；保留已递增的版本，旧冻结任务仍失效。
+                    # 权限事实及观测时间原样继承，新准备仍须通过正常目录时效核对。
+                    authorization = ConnectionAuthorization(
+                        **authorization.model_dump(
+                            exclude={
+                                "id",
+                                "created_at",
+                                "authorization_revision",
+                                "previous_authorization_id",
+                                "source",
+                            }
+                        ),
+                        authorization_revision=connection.authorization_revision,
+                        previous_authorization_id=authorization.id,
+                        source="MCP_REFRESH_RECEIPT_RECOVERY",
+                    )
+                    session.add(authorization)
+                    for binding in session.exec(
+                        select(BCConnectionBinding).where(
+                            BCConnectionBinding.tenant_id == context.tenant_id,
+                            BCConnectionBinding.connection_id == connection.id,
+                            BCConnectionBinding.status == "ACTIVE",
+                            BCConnectionBinding.authorization_revision
+                            == attempt.base_authorization_revision,
+                        )
+                    ).all():
+                        binding.authorization_revision = (
+                            connection.authorization_revision
+                        )
+                        session.add(binding)
+                    connection.status = "ACTIVE"
+                    session.add(
+                        AuditEvent(
+                            tenant_id=context.tenant_id,
+                            actor_id=context.actor_id,
+                            action="mcp_refresh_receipt_recovered",
+                            target_id=str(attempt.id),
+                            details={
+                                "connection_id": str(connection.id),
+                                "authorization_revision": connection.authorization_revision,
+                            },
+                        )
+                    )
                 connection.credential_ciphertext = encrypt_credentials(
                     tenant_id=attempt.tenant_id, value=candidate
                 )
@@ -356,6 +445,22 @@ def _publish(
         session.add_all([connection, attempt])
         session.commit()
         return result
+
+
+def recover_mcp_refresh_receipt(
+    *,
+    database_engine: Engine,
+    context: TenantContext,
+    attempt_id: UUID,
+) -> str:
+    """管理员复核已持久化回执；不发 HTTP，不重放刷新令牌，不恢复旧任务代数。"""
+    return _publish(
+        database_engine=database_engine,
+        context=context,
+        attempt_id=attempt_id,
+        task_deadline=datetime.now(UTC) + timedelta(seconds=WORK_SECONDS),
+        recovering=True,
+    )
 
 
 def process_mcp_refresh(

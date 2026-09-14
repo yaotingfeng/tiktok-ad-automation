@@ -173,6 +173,23 @@ def refresh_wire(monkeypatch):
     return wire
 
 
+@pytest.mark.parametrize("value", [31536000, 1])
+def test_refresh_accepts_documented_refresh_token_lifetime(
+    database_engine, redis_client, mcp_refresh_case, refresh_wire, value
+):
+    refresh_wire.data["refresh_token_expires_in"] = value
+    assert (
+        process_mcp_refresh(
+            database_engine=database_engine,
+            redis_client=redis_client,
+            context=mcp_refresh_case[0],
+            attempt_id=mcp_refresh_case[2],
+        )
+        == "PUBLISHED"
+    )
+    assert len(refresh_wire.calls) == 1
+
+
 @pytest.mark.parametrize(
     ("status", "expired", "expected"),
     [
@@ -372,6 +389,10 @@ def test_rotation_keeps_authorization_revision(
         ("issuer", "https://invalid.test"),
         ("resource", "https://invalid.test"),
         ("permission_summary", {"build": False}),
+        ("refresh_token_expires_in", True),
+        ("refresh_token_expires_in", -1),
+        ("refresh_token_expires_in", "31536000"),
+        ("refresh_token_expires_in", None),
     ],
 )
 def test_changed_authority_retains_candidate_and_fences_operations(
@@ -1003,3 +1024,102 @@ def test_new_actor_recovers_received_candidate_after_original_actor_revoked(
     assert len(refresh_wire.calls) == 1
     with Session(database_engine) as session:
         assert session.get(TikTokConnection, connection_id).credential_revision == 2
+
+
+@pytest.mark.parametrize(
+    "change", ["none", "scope", "expired", "disabled", "version", "operator"]
+)
+def test_admin_rechecks_saved_receipt_without_http_or_revision_rollback(
+    database_engine, redis_client, mcp_refresh_case, refresh_wire, monkeypatch, change
+):
+    from app.integrations.tiktok.mcp_auth import refresh
+    from app.modules.tenants.models import AuditEvent
+
+    context, connection_id, attempt_id = mcp_refresh_case
+    refresh_wire.data["refresh_token_expires_in"] = 31536000
+    # 只拦截落库后的发布，构造旧版本误拒绝回执的持久状态；HTTP回执仍经过真实加密。
+    with monkeypatch.context() as patch:
+        patch.setattr(refresh, "_publish", lambda **_: "CANDIDATE_READY")
+        assert (
+            process_mcp_refresh(
+                database_engine=database_engine,
+                redis_client=redis_client,
+                context=context,
+                attempt_id=attempt_id,
+            )
+            == "CANDIDATE_READY"
+        )
+    with Session(database_engine) as session:
+        connection = session.get(TikTokConnection, connection_id)
+        connection.status = "DISABLED" if change == "disabled" else "REAUTH_REQUIRED"
+        connection.authorization_revision = 3 if change == "version" else 2
+        attempt = session.get(McpRefreshAttempt, attempt_id)
+        attempt.error_code = "mcp_refresh_reauth_required"
+        if change in ("scope", "expired"):
+            receipt = decrypt_credentials(
+                tenant_id=context.tenant_id, ciphertext=attempt.candidate_ciphertext
+            )
+            if change == "scope":
+                data = json.loads(receipt["response"])
+                data["scope"] = ""
+                receipt["response"] = json.dumps(data)
+            else:
+                receipt["received_at"] = (
+                    datetime.now(UTC) - timedelta(days=2)
+                ).isoformat()
+            attempt.candidate_ciphertext = encrypt_credentials(
+                tenant_id=context.tenant_id, value=receipt
+            )
+        if change == "operator":
+            membership = session.get(
+                TenantMembership, (context.tenant_id, context.actor_id)
+            )
+            membership.role = "operator"
+            session.add(membership)
+        session.add_all([connection, attempt])
+        session.commit()
+    try:
+        if change == "none":
+            for _ in range(2):
+                assert (
+                    refresh.recover_mcp_refresh_receipt(
+                        database_engine=database_engine,
+                        context=context,
+                        attempt_id=attempt_id,
+                    )
+                    == "PUBLISHED"
+                )
+        else:
+            with pytest.raises(DomainError):
+                refresh.recover_mcp_refresh_receipt(
+                    database_engine=database_engine,
+                    context=context,
+                    attempt_id=attempt_id,
+                )
+        assert len(refresh_wire.calls) == 1
+        with Session(database_engine) as session:
+            connection = session.get(TikTokConnection, connection_id)
+            assert connection.authorization_revision == (
+                3 if change == "version" else 2
+            )
+            assert connection.credential_revision == (2 if change == "none" else 1)
+            facts = session.exec(
+                select(ConnectionAuthorization)
+                .where(
+                    ConnectionAuthorization.connection_id == connection_id,
+                )
+                .order_by(ConnectionAuthorization.authorization_revision)
+            ).all()
+            assert len(facts) == (2 if change == "none" else 1)
+            if change == "none":
+                assert connection.status == "ACTIVE"
+                assert facts[1].previous_authorization_id == facts[0].id
+                assert facts[1].permission_summary == facts[0].permission_summary
+                assert facts[1].verified_at == facts[0].verified_at
+                assert facts[1].authorization_revision == 2
+    finally:
+        with Session(database_engine) as session:
+            session.exec(
+                delete(AuditEvent).where(AuditEvent.tenant_id == context.tenant_id)
+            )
+            session.commit()
