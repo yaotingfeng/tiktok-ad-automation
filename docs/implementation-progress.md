@@ -1,3 +1,9 @@
+## 2026-09-14：广告搭建交互修正发布测试环境
+
+- `347ea52` 已推送现有 `feat/platform-implementation` 并部署新加坡测试服务器，原版本 `7b2ee95`。没有 `main` 分支，未新建分支或强推；生产环境未变更。
+- 完整备份 `/var/backups/tt-ada-staging/20260914T021951Z/` 的 PostgreSQL、Redis、项目/前端产物和完整私有配置归档均完成摘要校验与隔离恢复；数据库 head 保持 `manual_promotion_links`，导入、自动清理及调用策略保持原值。
+- API、3 个 Worker 进程、Beat 同版本同配置；HTTPS、管理员登录、受保护 profile、Worker ping、备份/证书 timer 与错误日志验收通过。未调用外部集成或创建广告；详见[发布记录](validation/2026-09-14-build-interaction-refinement.md)。
+
 ## 2026-09-13：合并剧目输入与素材列表
 
 - 取消独立“剧目输入”页签，在“剧目与素材”同一列表保留剧名、版权方剧目 ID、取链及素材状态；原始输入在侧栏详情查看，内部 UUID 不作为业务剧目 ID 展示。

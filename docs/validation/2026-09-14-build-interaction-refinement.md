@@ -22,6 +22,18 @@
 - TypeScript/Vite构建、7个前端文件Biome、2个后端实现文件mypy、3个Python文件Ruff/格式/编译检查通过。ty另报既有SQLModel `Session.execute`弃用警告，无新增类型错误。
 - 已目视检查桌面/窄屏版权方入口及素材侧栏。合成截图保留在本地 `/tmp/tkada-ux-visual/`，不含真实业务数据。
 
-## 交付范围
+## 推送与测试环境发布
 
-仅本地代码、测试和文档。没有新增数据库迁移、依赖或功能开关，没有推送、发布或创建真实广告。沿既有功能分支作聚焦提交 `builds: simplify provider and material editing and mini selection`；该分支含其他任务，不自动合并整条分支。
+- 用户明确要求推送并部署新加坡测试服务器。功能提交 `347ea522903d386c370265833595df59fffb6a99` 已推送现有 `feat/platform-implementation`；远端没有 `main`，未新建分支、强推或创建合并请求。
+- 目标为 `137.220.150.31:22211` 的无 Docker 测试实例。原版本 `7b2ee95431816330f08eb594a80d940e30cd77da`，当前运行版本为 `347ea522903d386c370265833595df59fffb6a99`；生产环境未变更。
+- 本次没有新增数据库迁移、依赖或功能开关。数据库 head 保持 `manual_promotion_links`；`MATERIAL_INGEST_ENABLED` 和 `MATERIAL_CLEANUP_ENABLED` 均保持 `true`，API、Worker、Beat 逐进程加载同一份调用策略、密钥、MCP 注册引用和媒体主机配置。
+- 发布前停止 API/Beat 并正常停止 Worker，暂停备份 timer。完整备份 `/var/backups/tt-ada-staging/20260914T021951Z/` 包含 PostgreSQL、Redis、独立项目及前端构建、私有配置与证书，五份归档 SHA-256 均通过。
+- PostgreSQL dump 在新建临时库恢复并验证迁移 head；归档响应使用原加密密钥成功解密且长度、摘要一致。Redis RDB 在独立 Unix socket 实例装载并 PING/DBSIZE 通过，项目与配置归档分别隔离解压比对。批次约 6.6 MB，`RELEASE_COMPLETE` 已写入；旧 release 与备份均保留，备份仍为同机副本。
+- 首次执行发布脚本时，因脚本未切换到上传目录，文件校验在任何停服或备份动作前失败；四个服务当时均保持 active。修正启动目录并重新计算、上传和核对校验和后才执行正式发布。
+
+## 线上验收
+
+- systemd daemon-reload 后重新启动三项应用服务。API 1 个进程、Worker 主进程及两个 prefork 子进程、Beat 1 个进程均以新 release 的 backend 为工作目录；备份与证书续期 timer 均 active。
+- 公网 HTTPS 健康检查、构建后的登录页、OAuth 回调业务错误和 API 404 边界通过；平台管理员真实登录及受保护 profile 回读通过。
+- Celery inspect 返回 1 个节点 pong；数据库、Redis、响应归档表及 24 条既有归档记录可读。发布后服务 error 级别日志无记录，磁盘仍有约 6.4 GiB 可用。
+- 本次未调用 TikTok、版权方或对象存储，没有上传素材或创建广告。MCP READY 与历史真实联调证据未被当作本次重新联调成功。
