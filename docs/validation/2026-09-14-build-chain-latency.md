@@ -14,7 +14,16 @@
 
 首轮完整备份 `/var/backups/tt-ada-staging/20260914T112414Z/`：PG/Redis/项目含前端/私有配置证书五份归档 SHA256 通过，隔离 PG 恢复与迁移通过，24 条加密响应可解密且摘要一致，独立 Redis 装载 PING 通过，项目/前端/配置独立解压 cmp 通过。无异地复制。迁移 CLI 曾因复用虚拟环境的入口加载旧模块而中止，未切版本；改 `python -m alembic` 校验 current=head 后才继续切换。7 个 API/业务 Worker/控制 Worker/Beat 进程的真实 cwd、私有配置、开关 true/true 和调用额度一致；2 个 Worker ping、HTTPS 双角色登录及隔离通过。内存 available 515 MiB，swap 已用 234 MiB，未提高业务并发。
 
-以下为首轮诊断历史，不代表最终实测结论。
+后文“服务器只读诊断”及其后章节保留首轮诊断历史，不代表最终实测结论。
+
+### 最终测试服版本与未完成事项
+
+- 最终运行 `68e18c6ddc87ebf787faaeafa2f397105b37cc58`，已恢复当前构建必需封面；没有迁移、新开关或配置替换。新增安全平台错误码留存，不根据非零码自动重发。
+- 第二轮完整备份 `/var/backups/tt-ada-staging/20260914T114539Z/`：五份归档校验通过；恢复库 `tt_ada_chain_restore_68e18c6d_test` current=head=`provider_display_drama_id`；24条加密响应恢复解密和摘要通过；Redis隔离装载、项目/前端/私有配置独立解压校验通过。旧版本和备份保留，未配置异地复制。
+- API、业务Worker及2子进程、控制Worker及1子进程、Beat共7进程真实工作目录均为最终版本，私有配置一致，导入/清理开关保持true/true，额度及必需封面代码检查通过。HTTPS两角色登录、租户/平台隔离、静态资源和MCP配置READY通过；这部分不等于新广告成功。
+- 两个Worker ping通过，备份/证书timer正常，resources/builds/control三队列均为0；最终内存available 530 MiB、swap已用75 MiB，无当前队列卡死证据。
+- 最终只读复查仍为6条广告SUCCEEDED/ENABLE，2条UNKNOWN；原6条ID和请求摘要与发布前基线一致。CTA/系列/组4/4成功，回读14/16成功。无封面独立诊断未取得广告ID；最终发布没有再次创建广告。浏览器不可用，本次实际验收使用认证API、数据库及平台回执。
+- 原2条UNKNOWN未解决，不把故障定位/代码修复报告为整批完成。后续需要独立明确的新广告补建意图或原平台无副作用裁定；现有系统没有安全改写原UNKNOWN正文的入口。不能承诺90个冷目标素材秒级完成；批量共享仍未实施。
 
 ## 服务器只读诊断
 
