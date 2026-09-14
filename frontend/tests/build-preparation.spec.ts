@@ -1241,17 +1241,23 @@ test("批量链接校验失败保留输入，取消不改变原剧名", async ({
   await expect(page.getByLabel("剧目名称", { exact: true })).toHaveValue("原剧")
 })
 
-test("准备中和只读成员不显示补链操作", async ({ page }) => {
-  const api = await buildsBoundary(page)
+test("准备中保留补链入口但暂不能保存，只读成员不显示补链操作", async ({
+  page,
+}) => {
+  const api = await buildsBoundary(page, { empty: true })
   api.summary.status = "PREPARING"
   await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
   await expect(
     page.getByRole("heading", { name: "准备与调整", exact: true }),
   ).toBeVisible()
+  await page
+    .getByRole("button", { name: "补充推广链接", exact: true })
+    .first()
+    .click()
   await expect(
-    page.getByRole("button", { name: "补充推广链接", exact: true }),
-  ).toHaveCount(0)
-  await buildsBoundary(page, { viewer: true })
+    page.getByRole("button", { name: "保存并继续准备" }),
+  ).toBeDisabled()
+  await buildsBoundary(page, { viewer: true, empty: true })
   await page.reload()
   await expect(
     page.getByRole("heading", { name: "准备与调整", exact: true }),
@@ -1259,6 +1265,45 @@ test("准备中和只读成员不显示补链操作", async ({ page }) => {
   await expect(
     page.getByRole("button", { name: "补充推广链接", exact: true }),
   ).toHaveCount(0)
+})
+
+test("账户核对未完成时显示实际等待阶段，统一链接编辑保留输入并在完成后解锁", async ({
+  page,
+}) => {
+  const api = await buildsBoundary(page, { waitingAccounts: true })
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  const row = page.getByRole("row").filter({ hasText: "完整剧名1" })
+  await expect(row).toContainText("等待账户核对完成")
+  await expect(row.getByText("等待匹配", { exact: true })).toHaveCount(0)
+  await expect(
+    row.getByRole("button", { name: "查看与调整素材" }),
+  ).toBeDisabled()
+  await row.getByRole("button", { name: "修改推广链接", exact: true }).click()
+  const dialog = page.getByRole("dialog", { name: "修改推广链接", exact: true })
+  const url = dialog.getByLabel("推广链接", { exact: true })
+  await expect(url).toHaveValue(
+    "https://www.tiktok.com/minis/original?channel=a%2Bb&x=1&x=2",
+  )
+  await expect(dialog).toContainText("正在核对账户与授权")
+  await url.fill("https://www.tiktok.com/minis/edited-while-waiting")
+  const save = dialog.getByRole("button", { name: "保存并继续准备" })
+  await expect(save).toBeDisabled()
+  expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
+  api.summary.status = "READY"
+  api.summary.preparation_phase = "done"
+  await expect(save).toBeEnabled()
+  await expect(url).toHaveValue(
+    "https://www.tiktok.com/minis/edited-while-waiting",
+  )
+  await save.click()
+  await expect(dialog).toHaveCount(0)
+  const writes = api.requests.filter(
+    (r) => r.method === "PUT" && r.path.endsWith("/manual-link"),
+  )
+  expect(writes).toHaveLength(1)
+  expect(writes[0].body.link.url).toBe(
+    "https://www.tiktok.com/minis/edited-while-waiting",
+  )
 })
 
 test("补链响应丢失后刷新回查原请求并继续准备", async ({ page }) => {

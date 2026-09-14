@@ -11,6 +11,7 @@ import { Pager, ServerTable, useCursorPage } from "@/features/tenants/shared"
 import { buildKey } from "./api"
 import { canChooseDrama, DramaInputSheet } from "./DramaInputSheet"
 import { ManualLinkSheet } from "./ManualLinkSheet"
+import { materialWaitingLabel } from "./preparationProgress"
 import { BuildReason, BuildStatus } from "./presentation"
 
 function linkLabel(input: DraftInputPublic, status: DraftSummary["status"]) {
@@ -181,7 +182,7 @@ export function BuildDramaTable({
             cell: ({ row }) => {
               const drama = row.original.preparation?.drama
               if (!drama || drama.material_state === "pending")
-                return "等待匹配"
+                return materialWaitingLabel(row.original, summary)
               if (drama.material_state === "matching") return "正在匹配…"
               return <BuildStatus value={drama.material_state} />
             },
@@ -194,7 +195,6 @@ export function BuildDramaTable({
               return (
                 <div className="flex flex-wrap gap-1">
                   {write &&
-                    summary.status !== "PREPARING" &&
                     input.raw_text.trim() &&
                     !["empty", "duplicate", "invalid"].includes(
                       input.status,
@@ -208,8 +208,16 @@ export function BuildDramaTable({
                           : "补充推广链接"}
                       </Button>
                     )}
-                  {drama && (
-                    <Button variant="ghost" onClick={() => onMaterial(drama)}>
+                  {(drama ||
+                    (input.raw_text.trim() &&
+                      !["empty", "duplicate", "invalid"].includes(
+                        input.status,
+                      ))) && (
+                    <Button
+                      variant="ghost"
+                      disabled={!drama}
+                      onClick={() => drama && onMaterial(drama)}
+                    >
                       查看与调整素材
                     </Button>
                   )}

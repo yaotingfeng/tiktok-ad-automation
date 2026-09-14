@@ -42,6 +42,7 @@ import { BuildInputPage } from "./BuildInputPage"
 import { BuildLinkSheet } from "./BuildLinkSheet"
 import { DramaMaterialSheet } from "./DramaMaterialSheet"
 import { MiniTargetPicker } from "./MiniTargetPicker"
+import { preparationLabel } from "./preparationProgress"
 import {
   BuildError,
   BuildReason,
@@ -541,7 +542,7 @@ function Preparation({
         )}{" "}
         行 · 链接已确认 {current.drama_count} 部 ·{" "}
         {current.status === "PREPARING"
-          ? "正在准备…"
+          ? preparationLabel(current)
           : current.status === "DRAFT"
             ? "等待准备"
             : current.status === "BLOCKED"

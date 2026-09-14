@@ -4,6 +4,7 @@ import {
   type DraftInputPublic,
   type DraftSummary,
 } from "@/client"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
@@ -11,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { ManagementSheet } from "@/features/tenants/ManagementSheet"
 import { mutationKey } from "./api"
 import { validMinisUrl } from "./manualLinks"
+import { preparationLabel } from "./preparationProgress"
 import { BuildError, reportError, unknownOutcome } from "./presentation"
 
 export function ManualLinkSheet({
@@ -51,8 +53,9 @@ export function ManualLinkSheet({
     return () => c.abort()
   }, [])
   const key = mutationKey(tenantId, summary.bc_id, summary.draft_id)
+  const preparing = summary.status === "PREPARING"
   async function save() {
-    if (busy) return
+    if (busy || (preparing && !unknownId)) return
     if (
       !unknownId &&
       (!validMinisUrl(values.url) ||
@@ -118,12 +121,23 @@ export function ManualLinkSheet({
       pending={busy}
       onClose={onClose}
       actions={
-        <Button disabled={busy} onClick={() => void save()}>
+        <Button
+          disabled={busy || (preparing && !unknownId)}
+          onClick={() => void save()}
+        >
           {unknownId ? "查询保存结果" : busy ? "正在保存…" : "保存并继续准备"}
         </Button>
       }
     >
       <FieldGroup>
+        {preparing && (
+          <Alert>
+            <AlertDescription>
+              {preparationLabel(summary)}
+              可以先查看和编辑链接，当前准备完成后即可保存。
+            </AlertDescription>
+          </Alert>
+        )}
         {!!error && <BuildError error={error} />}
         {unknownId && (
           <p role="status">

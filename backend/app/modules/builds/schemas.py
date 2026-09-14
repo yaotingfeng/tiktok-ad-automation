@@ -95,6 +95,7 @@ class DraftSummary(BaseModel):
     task_id: UUID | None
     provider_task_id: UUID | None
     error_code: str | None
+    preparation_phase: Literal["accounts", "links", "materials", "done"] | None = None
     created_at: datetime
     updated_at: datetime
 

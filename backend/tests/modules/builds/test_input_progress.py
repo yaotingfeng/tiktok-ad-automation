@@ -13,6 +13,48 @@ from app.modules.providers.models import LinkPreparationItem
 from tests.modules.builds.test_drafts import account, finish, ready_links
 
 
+def test_summary_reports_current_preparation_phase_without_advancing_work(
+    session, context, intent
+):
+    account(session, context)
+    draft = create_draft(session, context=context, **intent)
+    assert (
+        catalog.draft_summary(
+            session, context=context, draft_id=draft
+        ).preparation_phase
+        is None
+    )
+    task = prepare_draft(session, context=context, draft_id=draft, request_id=uuid4())
+    prep = session.get(DraftPreparation, task)
+    generation = prep.generation
+    ready_links(session, context, task, intent)
+    summary = catalog.draft_summary(session, context=context, draft_id=draft)
+    assert summary.preparation_phase == "accounts"
+    assert summary.status == "PREPARING"
+    assert summary.drama_count == 0
+    assert prep.generation == generation
+    finish(session, context, task)
+    assert (
+        catalog.draft_summary(
+            session, context=context, draft_id=draft
+        ).preparation_phase
+        == "done"
+    )
+    update_draft(
+        session,
+        context=context,
+        draft_id=draft,
+        expected_revision=summary.revision,
+        drama_lines=["Changed"],
+    )
+    assert (
+        catalog.draft_summary(
+            session, context=context, draft_id=draft
+        ).preparation_phase
+        is None
+    )
+
+
 def test_wangyan_numeric_display_and_edit_preserve_opaque_identity(
     session, context, intent
 ):

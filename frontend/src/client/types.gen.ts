@@ -944,6 +944,10 @@ export type DraftSummary = {
      */
     error_code: string | null;
     /**
+     * Preparation Phase
+     */
+    preparation_phase?: 'accounts' | 'links' | 'materials' | 'done' | null;
+    /**
      * Created At
      */
     created_at: string;

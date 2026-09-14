@@ -44,6 +44,7 @@ export async function buildsBoundary(
     previewError?: string
     blocked?: boolean
     empty?: boolean
+    waitingAccounts?: boolean
     channel?: "OFFICIAL_API" | "OFFICIAL_MCP"
     missingRoute?: boolean
     executionConnectionId?: string | null
@@ -77,7 +78,8 @@ export async function buildsBoundary(
     draft_id: D,
     revision: 1,
     bc_id: BC,
-    status: "READY",
+    status: options.waitingAccounts ? "PREPARING" : "READY",
+    preparation_phase: options.waitingAccounts ? "accounts" : "done",
     strategy_version_id: V,
     provider_connection_id: C,
     execution_connection_id: options.executionConnectionId ?? null,
@@ -438,6 +440,7 @@ export async function buildsBoundary(
                     reason_code: null,
                     drama:
                       options.empty ||
+                      options.waitingAccounts ||
                       (options.candidate === "drama" &&
                         i === 0 &&
                         !candidateSelected)
