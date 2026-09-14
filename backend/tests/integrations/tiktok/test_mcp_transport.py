@@ -12,6 +12,9 @@ from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.common import RemoteCallError
 from app.integrations.tiktok.mcp.transport import MAX_RESPONSE_BYTES
 from app.integrations.tiktok.sdk import SDK_SCOPE_INTERRUPTS, AccountAdmissionDeferred
+from tests.modules.strategies.test_concurrency import (
+    isolated_strategy_database as isolated_strategy_database,
+)
 
 
 def test_disconnect_after_accept_does_not_replay(bound_client, mcp_wire):
@@ -94,6 +97,21 @@ def test_transport_diagnostics_preserve_phase_without_exception_secrets(
     assert "category=timeout" in caplog.text
     assert "synthetic-private-token" not in caplog.text
     assert "signed-url-secret" not in caplog.text
+
+
+def test_migration_preserves_safe_diagnostics_without_enabling_wire_logs(
+    request, monkeypatch
+):
+    from app.core.logging import silence_mcp_wire_logs
+
+    diagnostic = logging.getLogger("app.tiktok.transport")
+    monkeypatch.setattr(diagnostic, "disabled", False)
+    silence_mcp_wire_logs()
+    # 同进程迁移会重配 logging；实际迁移后仍需保留脱敏日志且禁用原始传输日志。
+    request.getfixturevalue("isolated_strategy_database")
+    assert diagnostic.disabled is False
+    for name in ("mcp", "httpx2", "httpcore", "httpcore2", "client"):
+        assert logging.getLogger(name).disabled is True
 
 
 @pytest.mark.parametrize(

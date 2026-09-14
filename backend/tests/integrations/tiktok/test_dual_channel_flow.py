@@ -71,6 +71,17 @@ def test_scene_to_enabled_ads_and_readback_uses_one_channel(
     for resource, data in scene_responses(case).items():
         enqueue(gateway_wire, resource, data)
         job = run(database_engine, redis_client, case, preparation.job_id)
+        # 每次只投递当前资源的合成回执；若未推进就在该阶段报告，避免下一资源
+        # 的回执覆盖尚未消费的数据后才以最终 PENDING 掩盖原始失败。
+        assert job.error_code is None and resource in job.facts, (
+            route.channel,
+            resource,
+            job.status,
+            job.resource,
+            job.next_page,
+            job.error_code,
+            job.failure_count,
+        )
     assert job.status == "COMPLETE", job.error_code
     sdk_start = len(gateway_wire["sdk_calls"])
     mcp_start = len(gateway_wire["wire"].calls)

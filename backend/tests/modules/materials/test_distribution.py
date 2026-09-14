@@ -110,13 +110,11 @@ def test_target_share_and_readback_use_actual_target_vid_without_changing_source
     found["list"][0]["video_id"] = "actual-target"
     wire[1].append(found)
     run(source_env, redis_client, prepared.task_id)
-    wire[1].append(info(vid="actual-target"))
-    run(source_env, redis_client, prepared.task_id)
     dist, op, mapping = state(prepared.task_id)
     assert dist.status == "ready" and op.status == "succeeded"
     assert mapping.advertiser_id == account and mapping.video_id == "actual-target"
     assert mapping.image_id is None and mapping.cover_url is None
-    assert [call[0] for call in wire[0]] == ["GET", "POST", "GET", "GET"]
+    assert [call[0] for call in wire[0]] == ["GET", "POST", "GET"]
     assert all("/upload/" not in call[1] for call in wire[0])
     with Session(engine) as session:
         assert session.get(AccountMaterial, source_id).video_id == "vid-actual-account"
@@ -129,7 +127,7 @@ def test_target_share_and_readback_use_actual_target_vid_without_changing_source
             == []
         )
     run(source_env, redis_client, prepared.task_id, kind="prepare", s3=original_s3[0])
-    assert len(wire[0]) == 4
+    assert len(wire[0]) == 3
 
 
 def test_distribution_waits_on_existing_source_operation_without_second_sender(

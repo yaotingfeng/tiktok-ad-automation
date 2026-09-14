@@ -23,7 +23,11 @@ from app.modules.builds.execution_models import (
     SubmissionUnit,
 )
 from app.modules.builds.execution_schemas import Recovery
-from app.modules.builds.execution_state import evidence
+from app.modules.builds.execution_state import (
+    UNSENT_ATTEMPT,
+    evidence,
+    safely_unsent_attempt,
+)
 from app.modules.builds.preview_models import BuildUnit
 from app.modules.builds.recovery_models import (
     RecoveryKind,
@@ -95,15 +99,21 @@ AND EXISTS (SELECT 1 FROM bc_account_access a
  AND c.status='ACTIVE' AND NOT b.ownership_conflict AND NOT aa.ownership_conflict
  AND trim(aa.currency)<>'' AND trim(aa.timezone)<>'')
 """
-RETRY = f"""
-AND s.status IN ('FAILED','RETRYABLE') AND s.request_body IS NULL AND s.remote_id IS NULL
-AND s.phase<>'REQUEST_ARMED' AND s.kind<>'READBACK' AND coalesce(s.error_code,'') NOT IN ({INTENT_ERRORS})
-AND NOT EXISTS (SELECT 1 FROM step_evidence e WHERE e.tenant_id=s.tenant_id AND e.submission_id=s.submission_id AND e.step_id=s.id
- AND (e.conclusion IN ('REQUEST_ARMED','CREATED','LATE_CREATED') OR e.summary ? 'remote_id'))
-AND (s.kind<>'MATERIAL' OR (s.cover_job_id IS NULL AND s.distribution_id IS NULL) OR {COVER_RETRY})
+DEPENDENCIES_READY = f"""
 AND (s.parent_step_id IS NULL OR EXISTS (SELECT 1 FROM execution_step p WHERE p.tenant_id=s.tenant_id AND p.submission_id=s.submission_id AND p.id=s.parent_step_id AND p.status='SUCCEEDED' AND p.remote_id IS NOT NULL))
 AND (s.kind<>'CAMPAIGN' OR EXISTS (SELECT 1 FROM execution_step cta WHERE cta.tenant_id=s.tenant_id AND cta.submission_id=s.submission_id AND cta.unit_id=s.unit_id AND cta.kind='CTA' AND cta.status='SUCCEEDED' AND cta.remote_id IS NOT NULL))
 AND (s.kind NOT IN ('CAMPAIGN','ADGROUP') OR {GROUP_READY})
+"""
+UNARMED_RETRY = """s.request_body IS NULL
+AND NOT EXISTS (SELECT 1 FROM step_evidence e WHERE e.tenant_id=s.tenant_id AND e.submission_id=s.submission_id AND e.step_id=s.id
+ AND (e.conclusion IN ('REQUEST_ARMED','CREATED','LATE_CREATED','RESULT_UNKNOWN','LEASE_EXPIRED_ARMED') OR e.summary ? 'remote_id'))"""
+RETRY = f"""
+AND s.status IN ('FAILED','RETRYABLE') AND s.remote_id IS NULL
+AND s.phase<>'REQUEST_ARMED' AND s.kind<>'READBACK' AND coalesce(s.error_code,'') NOT IN ({INTENT_ERRORS})
+AND (({UNARMED_RETRY})
+ OR (s.phase='DONE' AND {UNSENT_ATTEMPT}))
+AND (s.kind<>'MATERIAL' OR (s.cover_job_id IS NULL AND s.distribution_id IS NULL) OR {COVER_RETRY})
+{DEPENDENCIES_READY}
 """
 # Two disjoint candidate branches avoid evaluating a correlated parent query
 # against every pending step. Keep these fixed predicates identical to the
@@ -542,7 +552,25 @@ def _schedule(
     if job.kind == "RECONCILE" and step.kind == "MATERIAL":
         return _material_reconciliation(session, step=step, unit=unit, context=original)
     if job.kind == "RETRY":
-        if step.kind == "AD":
+        frozen_retry = step.request_body is not None
+        if frozen_retry and not safely_unsent_attempt(
+            session, step=step, recovery=True
+        ):
+            return False
+        audit: dict[str, Any] = {"recovery_id": str(job.id)}
+        if frozen_retry:
+            audit.update(
+                {
+                    "attempt_id": str(step.attempt_id),
+                    "body_digest": step.request_body_digest,
+                    "transport_failure_count": step.resolved.get(
+                        "transport_failure_count", 0
+                    ),
+                }
+            )
+        # 只有显式新恢复可重置三次传输上限；正文、attempt 与原路线完全保留。
+        step.resolved = {**step.resolved, "transport_failure_count": 0}
+        if step.kind == "AD" and not frozen_retry:
             from app.modules.builds.cover_execution import retry_ad_covers
 
             retry_ad_covers(session, context=original, step=step, unit=unit)
@@ -556,12 +584,13 @@ def _schedule(
             None,
             None,
         )
+        step.status = "PENDING"
         evidence(
             session,
             step=step,
             claim=None,
             conclusion="RETRY_REQUESTED",
-            summary={"recovery_id": str(job.id)},
+            summary=audit,
         )
     else:
         evidence(

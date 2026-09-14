@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, or_, update
+from sqlalchemy import and_, or_, text, update
 from sqlalchemy.orm import Session as SASession
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
@@ -257,6 +257,8 @@ def process_unit(
     payload: dict[str, Any],
     limit: int = 100,
 ) -> int:
+    from app.modules.builds.recovery import DEPENDENCIES_READY, UNARMED_RETRY
+
     identity, revision = payload_identity(payload, "unit_id")
     if type(limit) is not int or not 1 <= limit <= 100:
         raise ValueError("invalid scheduling batch")
@@ -308,6 +310,20 @@ def process_unit(
                 col(ExecutionStep.unit_id) == identity,
                 col(ExecutionStep.due_at) <= now,
                 or_(
+                    and_(
+                        col(ExecutionStep.status) == "FAILED",
+                        col(ExecutionStep.error_code) == "dependency_failed",
+                        text(
+                            "EXISTS (SELECT 1 FROM execution_step s WHERE s.id=execution_step.id "
+                            "AND s.tenant_id=execution_step.tenant_id AND s.phase='DONE' "
+                            "AND s.kind IN ('CAMPAIGN','ADGROUP','AD','READBACK') "
+                            "AND s.dispatch_id IS NULL AND s.lease_token IS NULL "
+                            "AND s.remote_id IS NULL AND NOT s.mismatch AND "
+                            + UNARMED_RETRY
+                            + DEPENDENCIES_READY
+                            + ")"
+                        ),
+                    ),
                     and_(
                         col(ExecutionStep.status).in_(["PENDING", "RETRYABLE"]),
                         or_(
@@ -400,6 +416,15 @@ def process_unit(
                 step.due_at = now + timedelta(seconds=15)
                 session.add(step)
             else:
+                if step.status == "FAILED":
+                    # 只恢复从未发送且依赖已成功的连带失败，复用原提交内的已建对象。
+                    step.status, step.phase, step.error_code = "PENDING", "IDLE", None
+                    evidence(
+                        session,
+                        step=step,
+                        claim=None,
+                        conclusion="DEPENDENCY_RECOVERED",
+                    )
                 queue_step(
                     session,
                     step=step,

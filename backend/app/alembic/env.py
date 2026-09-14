@@ -1,3 +1,4 @@
+from logging import getLogger
 from logging.config import fileConfig
 
 from alembic import context
@@ -10,7 +11,12 @@ config = context.config
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
 assert config.config_file_name is not None
+# 同进程迁移不能关闭业务脱敏诊断；仅保留该安全 logger 的原状态，
+# 不全局启用 existing loggers，以免重新开启 SDK 的原始请求/令牌日志。
+transport_logger = getLogger("app.tiktok.transport")
+transport_logging_disabled = transport_logger.disabled
 fileConfig(config.config_file_name)
+transport_logger.disabled = transport_logging_disabled
 
 # add your model's MetaData object here
 # for 'autogenerate' support

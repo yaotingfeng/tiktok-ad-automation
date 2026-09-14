@@ -610,49 +610,11 @@ def _send_remote_asset(
     native = work["transport"] == "native_share"
     preview = None
     if native:
-        # 共享使用 MID，且平台复制源名称；保存真实名称才能恢复重名/超时结果。
-        read_deadline = min(
+        # 原生共享不传输视频字节；源读取和共享共用一个短期限会话，避免重复握手。
+        # 仍按每个操作独立准入，不能让读取借用上传的长预算或跨任务缓存会话。
+        deadline = min(
             deadline, datetime.now(UTC) + timedelta(seconds=READ_HARD_LIMIT - 5)
         )
-        read_budget = material_types.RemoteCallBudget(
-            read_deadline,
-            READ_HARD_LIMIT,
-            admission_policy("materials.get_videos").lease_ms,
-        )
-        with open_tiktok_gateway(
-            database_engine=database_engine,
-            redis_client=redis_client,
-            context=context,
-            route=route,
-            task_deadline=read_deadline,
-        ) as gateway:
-            record = gateway.materials.read_video(
-                advertiser_id=work["source_advertiser_id"],
-                video_id=work["source_video_id"],
-                budget=read_budget,
-            )
-        if (
-            record is None
-            or record.video_id != work["source_video_id"]
-            or not record.mid
-            or not record.file_name
-            or record.md5 != work["content_md5"]
-        ):
-            raise DomainError(
-                "material_share_source_missing", "来源缺少共享 MID、名称或内容摘要"
-            )
-        work["source_mid"], work["remote_name"] = record.mid, record.file_name
-        with Session(database_engine) as db, db.begin():
-            dist = _load_distribution(db, context, distribution_id)
-            _locked_material(db, context, dist.material_id)
-            operation = _locked_operation(db, context, operation_id)
-            if operation.attempt_token != claim or dist.operation_id != operation_id:
-                return None
-            operation.remote_response = {
-                **operation.remote_response,
-                "source_mid": record.mid,
-                "remote_name": record.file_name,
-            }
     else:
         preview = read_frozen_remote_source(
             database_engine=database_engine,
@@ -707,6 +669,46 @@ def _send_remote_asset(
         task_deadline=deadline,
         before_request=check_current,
     ) as gateway:
+        if native:
+            # 共享使用 MID，且平台复制源名称；保存真实名称才能恢复重名/超时结果。
+            record = gateway.materials.read_video(
+                advertiser_id=work["source_advertiser_id"],
+                video_id=work["source_video_id"],
+                budget=material_types.RemoteCallBudget(
+                    deadline,
+                    READ_HARD_LIMIT,
+                    admission_policy("materials.get_videos").lease_ms,
+                ),
+            )
+            if (
+                record is None
+                or record.video_id != work["source_video_id"]
+                or not record.mid
+                or not record.file_name
+                or record.md5 != work["content_md5"]
+            ):
+                raise DomainError(
+                    "material_share_source_missing", "来源缺少共享 MID、名称或内容摘要"
+                )
+            work["source_mid"], work["remote_name"] = record.mid, record.file_name
+            with (
+                bounded_session(database_engine, task_deadline=deadline) as db,
+                db.begin(),
+            ):
+                dist = _load_distribution(db, context, distribution_id)
+                _locked_material(db, context, dist.material_id)
+                operation = _locked_operation(db, context, operation_id)
+                if (
+                    operation.attempt_token != claim
+                    or dist.operation_id != operation_id
+                ):
+                    return None
+                operation.remote_response = {
+                    **operation.remote_response,
+                    "source_mid": record.mid,
+                    "remote_name": record.file_name,
+                }
+            check_current()
         with bounded_session(database_engine, task_deadline=deadline) as db, db.begin():
             dist = _load_distribution(db, context, distribution_id)
             _locked_material(db, context, dist.material_id)

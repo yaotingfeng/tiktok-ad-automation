@@ -1,0 +1,28 @@
+[Unit]
+Description=TK-ADA Singapore staging control worker
+After=network-online.target postgresql.service redis-server.service
+Wants=network-online.target
+Requires=postgresql.service redis-server.service
+
+[Service]
+Type=simple
+User=tt-ada
+Group=tt-ada
+WorkingDirectory=/opt/tt-ada-staging/current/backend
+EnvironmentFile=/etc/tt-ada-staging/app.env
+Environment=PYTHONUNBUFFERED=1
+# 保留 prefork 硬期限；业务 outbox、恢复和授权续期由专用进程推进。
+ExecStart=/opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.celery_app:celery_app worker -Q control --pool prefork --concurrency 1 --loglevel INFO --hostname control-singapore@%%h
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=960
+KillMode=mixed
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/tt-ada-staging
+
+[Install]
+WantedBy=multi-user.target

@@ -5,7 +5,9 @@ from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any
 
-from sqlmodel import Session, col, select
+from sqlalchemy import text
+from sqlalchemy.orm import Session as SASession
+from sqlmodel import Session, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
@@ -366,44 +368,58 @@ def transient_retry(
     return retryable, delay, resolved
 
 
-def safely_unsent_attempt(session: Session, *, step: ExecutionStep) -> bool:
-    """复用正文前核对整个当前 attempt 的逐 nonce 证据，历史 NOT_SENT 不构成通行证。"""
+# 候选统计、恢复持锁复查与 worker claim 共用这一证明，避免 SQL/Python 放行条件漂移。
+# 每个 nonce 必须严格只有 ARM -> NOT_SENT；恢复审计只允许引用本提交的真实 RETRY。
+UNSENT_ATTEMPT = """(
+s.kind IN ('CTA','CAMPAIGN','ADGROUP','AD')
+AND s.remote_id IS NULL AND NOT s.mismatch AND s.lease_token IS NULL
+AND s.request_body IS NOT NULL AND s.request_body <> '{}'::jsonb
+AND s.request_body_digest IS NOT NULL AND s.request_body_digest <> ''
+AND s.attempt_id IS NOT NULL AND s.attempt > 0
+AND NOT EXISTS (SELECT 1 FROM step_evidence danger
+ WHERE danger.tenant_id=s.tenant_id AND danger.submission_id=s.submission_id AND danger.step_id=s.id
+ AND (danger.summary ? 'remote_id' OR danger.conclusion IN ('CREATED','LATE_CREATED','RESULT_UNKNOWN','LEASE_EXPIRED_ARMED')
+ OR (danger.attempt<>s.attempt AND danger.conclusion IN ('REQUEST_ARMED','NOT_SENT'))))
+AND (WITH proof AS (
+ SELECT e.* FROM step_evidence e
+ WHERE e.tenant_id=s.tenant_id AND e.submission_id=s.submission_id AND e.step_id=s.id AND e.attempt=s.attempt
+ LIMIT 1001
+), nonces AS (
+ SELECT count(*) n, array_agg(conclusion ORDER BY observed_at,id) phases
+ FROM proof WHERE conclusion<>'RETRY_REQUESTED' GROUP BY lease_token
+)
+SELECT (SELECT count(*) BETWEEN 1 AND 1000 FROM proof)
+ AND (SELECT coalesce(bool_and(n=2 AND phases=ARRAY['REQUEST_ARMED','NOT_SENT']::varchar[]),false) FROM nonces)
+ AND (SELECT coalesce(bool_and(coalesce(
+   summary->>'attempt_id'=CAST(s.attempt_id AS text)
+   AND summary->>'body_digest'=s.request_body_digest
+   AND ((conclusion IN ('REQUEST_ARMED','NOT_SENT') AND lease_token IS NOT NULL)
+     OR (conclusion='RETRY_REQUESTED' AND lease_token IS NULL AND EXISTS (
+       SELECT 1 FROM submission_recovery r WHERE r.tenant_id=s.tenant_id
+       AND r.submission_id=s.submission_id AND r.kind='RETRY'
+       AND CAST(r.id AS text)=proof.summary->>'recovery_id'))),false)),false) FROM proof)
+))"""
+
+
+def safely_unsent_attempt(
+    session: Session, *, step: ExecutionStep, recovery: bool = False
+) -> bool:
+    """复用正文前核对逐 nonce 完整证明；只有人工恢复可接纳终止状态。"""
     if (
-        step.status not in {"PENDING", "QUEUED"}
-        or step.phase != "IDLE"
-        or step.lease_token is not None
-        or step.remote_id
-        or not step.request_body
-        or not step.request_body_digest
-        or step.attempt_id is None
+        (step.status not in {"FAILED", "RETRYABLE"} or step.phase != "DONE")
+        if recovery
+        else (step.status not in {"PENDING", "QUEUED"} or step.phase != "IDLE")
     ):
         return False
-    rows = session.exec(
-        select(StepEvidence)
-        .where(
-            StepEvidence.tenant_id == step.tenant_id,
-            StepEvidence.submission_id == step.submission_id,
-            StepEvidence.step_id == step.id,
-            StepEvidence.attempt == step.attempt,
-        )
-        .order_by(col(StepEvidence.observed_at), col(StepEvidence.id))
-        .limit(1001)
-    ).all()
-    if not rows or len(rows) > 1000:
-        return False
-    phases: dict[Any, str] = {}
-    for row in rows:
-        if (
-            row.lease_token is None
-            or row.summary.get("attempt_id") != str(step.attempt_id)
-            or row.summary.get("body_digest") != step.request_body_digest
-        ):
-            return False
-        previous = phases.get(row.lease_token)
-        if (previous, row.conclusion) not in {
-            (None, "REQUEST_ARMED"),
-            ("REQUEST_ARMED", "NOT_SENT"),
-        }:
-            return False
-        phases[row.lease_token] = row.conclusion
-    return all(value == "NOT_SENT" for value in phases.values())
+    session.flush()
+    return bool(
+        SASession.execute(
+            session,
+            text(
+                "SELECT EXISTS(SELECT 1 FROM execution_step s WHERE s.id=:step AND s.tenant_id=:tenant AND "
+                + UNSENT_ATTEMPT
+                + ")"
+            ),
+            {"step": step.id, "tenant": step.tenant_id},
+        ).scalar_one()
+    )
