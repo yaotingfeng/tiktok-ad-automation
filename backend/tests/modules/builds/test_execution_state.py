@@ -429,3 +429,52 @@ def test_not_sent_with_stale_nonce_cannot_release_new_owner(
         == "RUNNING"
     )
     assert step.lease_token == replacement and step.phase == "REQUEST_ARMED"
+
+
+@pytest.mark.parametrize(
+    "explicit_code,expected", [(None, 40002), (0, 0), (40001, 40001)]
+)
+def test_unknown_persists_platform_code_without_authorizing_retry(
+    session, context, resumable_attempt, explicit_code, expected
+):
+    from app.modules.builds.dispatch import queue_step
+    from app.modules.builds.execution_state import arm_request, record_unknown
+    from app.modules.builds.recovery import request_recovery
+
+    step, claim = resumable_attempt
+    request = {"advertiser_id": claim.advertiser_id}
+    digest = arm_request(session, context=context, claim=claim, body=request)
+    assert (
+        record_unknown(
+            session,
+            claim=claim,
+            code="mcp_business_error",
+            remote_code=explicit_code,
+            call_evidence=CallEvidence(
+                request_id="platform-request", remote_code=40002
+            ),
+        )
+        == "UNKNOWN"
+    )
+    row = session.exec(
+        select(StepEvidence).where(
+            StepEvidence.step_id == step.id, StepEvidence.conclusion == "RESULT_UNKNOWN"
+        )
+    ).one()
+    assert row.summary["remote_code"] == expected
+    assert step.request_body == request and step.request_body_digest == digest
+    assert step.remote_id is None
+    with pytest.raises(
+        DomainError, check=lambda e: e.code == "execution_requires_reconciliation"
+    ):
+        queue_step(
+            session, step=step, submission=session.get(Submission, step.submission_id)
+        )
+    with pytest.raises(DomainError, check=lambda e: e.code == "recovery_no_candidates"):
+        request_recovery(
+            session,
+            context=context,
+            submission_id=step.submission_id,
+            request_id=uuid4(),
+            kind="RETRY",
+        )

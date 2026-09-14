@@ -9,6 +9,8 @@ class CallEvidence:
     request_id: str | None = None
     mcp_request_id: str | None = None
     remote_task_id: str | None = None
+    # 仅保存通过业务 envelope 校验的数字错误码，不携带可能含凭据的原始文案。
+    remote_code: int | None = None
 
 
 RemoteEffect = Literal["NOT_SENT", "UNKNOWN", "REJECTED_NO_EFFECT"]

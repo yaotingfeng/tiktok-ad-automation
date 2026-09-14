@@ -233,6 +233,9 @@ def record_unknown(
     call_evidence: CallEvidence | None = None,
 ) -> str:
     step = _step(session, claim)
+    # 保存已验证的原业务码用于诊断；错误码本身不证明无副作用，状态仍为 UNKNOWN。
+    if remote_code is None and call_evidence is not None:
+        remote_code = call_evidence.remote_code
     evidence(
         session,
         step=step,

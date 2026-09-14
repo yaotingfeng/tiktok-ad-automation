@@ -330,10 +330,29 @@ def prepare_request(
             if ready.state != "ready" or not ready.mapping:
                 waiting = True
                 continue
-            # 新视频创意不指定自定义封面，不为未发送的图片字段创建前置任务。
+            # 当前 Smart+ 单视频接口要求恰好一张封面；已有且仍有效的目标图片优先复用。
+            from app.modules.materials.covers import ensure_cover
+
+            cover = ensure_cover(
+                session,
+                context=context,
+                bc_id=claim.bc_id,
+                material_id=material_id,
+                advertiser_id=claim.advertiser_id,
+                task_key=f"build-cover:{claim.step_id}:{material_id}",
+                route=claim.route,
+            )
+            if cover.state == "blocked":
+                raise DomainError(
+                    cover.reason_code or "target_asset_incomplete",
+                    "目标视频封面尚未核实",
+                )
+            if cover.state != "ready" or not cover.mapping:
+                waiting = True
+                continue
             mappings.append(
                 {
-                    "video_id": ready.mapping.video_id,
+                    "video_id": cover.mapping.video_id,
                     "file_name": video_file_name(
                         load_material(
                             session,
@@ -342,6 +361,7 @@ def prepare_request(
                             material_id=material_id,
                         ).file_name
                     ),
+                    "image_id": cover.mapping.image_id or "",
                 }
             )
         if waiting:
@@ -518,6 +538,38 @@ def process_step(
                     task_key=f"build:{claim.step_id}",
                     route=claim.route,
                 )
+                if ready.state == "ready":
+                    from app.modules.materials.covers import ensure_cover
+
+                    # 视频确认后才准备独立封面，不重新上传视频；未知图片结果沿原任务核查。
+                    ready = ensure_cover(
+                        session,
+                        context=context,
+                        bc_id=claim.bc_id,
+                        material_id=claim.material_id,
+                        advertiser_id=claim.advertiser_id,
+                        task_key=f"build-cover:{claim.step_id}",
+                        route=claim.route,
+                    )
+                    step = session.get(ExecutionStep, claim.step_id)
+                    assert step
+                    step.cover_job_id = ready.task_id
+                    session.add(step)
+                    if ready.state == "queued":
+                        return finish_local(
+                            session,
+                            claim=claim,
+                            status="PENDING",
+                            code="cover_pending",
+                            delay=15,
+                        )
+                    if ready.reason_code == "cover_result_unknown":
+                        return finish_local(
+                            session,
+                            claim=claim,
+                            status="UNKNOWN",
+                            code="cover_result_unknown",
+                        )
                 if ready.state == "queued":
                     step = session.get(ExecutionStep, claim.step_id)
                     assert step
@@ -530,7 +582,11 @@ def process_step(
                         code="material_pending",
                         delay=15,
                     )
-                if ready.state == "blocked" or not ready.mapping:
+                if (
+                    ready.state == "blocked"
+                    or not ready.mapping
+                    or not ready.mapping.image_id
+                ):
                     return finish_local(
                         session,
                         claim=claim,

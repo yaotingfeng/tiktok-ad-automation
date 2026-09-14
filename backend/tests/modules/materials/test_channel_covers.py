@@ -224,7 +224,8 @@ def post_count(env, wire):
 @pytest.mark.parametrize(
     "change",
     [
-        {"displayable": False},
+        # 视频封面允许官方图片 displayable=false；缺少明确布尔事实才是不完整回读。
+        {"displayable": None},
         {"signature": "d" * 32},
         {"width": 640, "height": 360},
         {"image_id": "another-image"},

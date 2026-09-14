@@ -3,6 +3,7 @@
 import json
 import math
 import re
+from dataclasses import replace
 from typing import Any
 
 from app.integrations.tiktok.contracts.common import (
@@ -123,7 +124,8 @@ def _require_success(raw: Any, evidence: CallEvidence, contract: ToolContract) -
         raise _unknown("mcp_response_invalid", evidence)
     if raw["code"] != 0:
         # 非零 code 本身不能证明没有产生副作用，后续只能由原 attempt 组织核查。
-        raise _unknown("mcp_business_error", evidence)
+        # 仅保留已通过精确整数校验的错误码；原文不能进入异常、日志或普通状态。
+        raise _unknown("mcp_business_error", replace(evidence, remote_code=raw["code"]))
     data = raw.get("data")
     if contract.response_shape == "OBJECT":
         valid_data = type(data) is dict

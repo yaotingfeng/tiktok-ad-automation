@@ -75,7 +75,6 @@ def test_each_sp_uses_complete_target_group_and_one_independent_text():
     "mappings",
     [
         [],
-        [{"video_id": "source-only"}],
         [{"video_id": "target", "image_id": True}],
         [{"video_id": " ", "image_id": "cover"}],
     ],

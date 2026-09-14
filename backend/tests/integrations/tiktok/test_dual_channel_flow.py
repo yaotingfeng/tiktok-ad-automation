@@ -1,7 +1,7 @@
 """跨阶段真实服务链；所有平台授权和远端响应均为 SYNTHETIC 离线证据。
 
 从生产场景任务和原件入库开始，不播种可用素材或已冻结的广告预览。
-使用同一事实链完成目标分发、预览、无自定义封面的创建与独立回读。
+使用同一事实链完成目标分发、封面准备与核实、预览、创建与独立回读。
 """
 
 import json
@@ -165,18 +165,19 @@ def test_scene_to_enabled_ads_and_readback_uses_one_channel(
     preview_id = _prepare_preview(
         database_engine, redis_client, case, gateway_wire, monkeypatch
     )
-    ids = _submit_with_ready_video(
+    ids = _submit_waiting_for_cover(
         database_engine, redis_client, case, preview_id, gateway_wire, monkeypatch
     )
+    _finish_cover(database_engine, redis_client, case, gateway_wire, remote, ids)
     _create_and_readback(
         database_engine, redis_client, case, gateway_wire, ids, monkeypatch
     )
 
 
-def _submit_with_ready_video(
+def _submit_waiting_for_cover(
     database_engine, redis_client, case, preview_id, wire, monkeypatch
 ):
-    """目标视频已核实后完成本地依赖，不导入或回查未指定的封面。"""
+    """允许可准备组合提交；即使 CTA 完成，缺封面也不能创建 Campaign。"""
     from app.modules.builds import execution
     from app.modules.builds.execution_models import ExecutionStep
     from app.modules.builds.submissions import expand_submission, submit_preview
@@ -222,12 +223,16 @@ def _submit_with_ready_video(
         step_id=ids["MATERIAL"],
         revision=0,
     )
+    execution.process_step(
+        database_engine=database_engine,
+        redis_client=redis_client,
+        context=context,
+        step_id=ids["CAMPAIGN"],
+        revision=0,
+    )
     with Session(database_engine) as db:
         material = db.get(ExecutionStep, ids["MATERIAL"])
-        assert (material.status, material.error_code) == ("SUCCEEDED", None)
-        from app.modules.materials.cover_models import MaterialCoverJob
-
-        assert not db.exec(select(MaterialCoverJob)).all()
+        assert (material.status, material.error_code) == ("PENDING", "cover_pending")
         assert db.get(ExecutionStep, ids["CAMPAIGN"]).request_body is None
         assert all(
             db.get(ExecutionStep, ids[kind]).remote_id is None
@@ -240,6 +245,111 @@ def _submit_with_ready_video(
         if call["method"] == "tools/call"
     ]
     return ids
+
+
+def _finish_cover(database_engine, redis_client, case, wire, remote, ids):
+    from datetime import UTC, datetime, timedelta
+
+    from app.modules.builds.execution import process_step
+    from app.modules.builds.execution_models import ExecutionStep
+    from app.modules.materials.cover_models import MaterialCoverJob
+    from app.modules.materials.covers import run_cover
+
+    context = case["context"]
+    with Session(database_engine) as db, db.begin():
+        job = db.exec(
+            select(MaterialCoverJob).where(
+                MaterialCoverJob.tenant_id == context.tenant_id
+            )
+        ).one()
+        job_id, dispatch_id, revision = job.id, job.dispatch_id, job.revision
+    video = {
+        "list": [
+            {
+                "video_id": "synthetic-target-vid",
+                "signature": md5(remote.content).hexdigest(),
+                "displayable": True,
+                "width": 160,
+                "height": 240,
+                "video_cover_url": "https://cdn.example/target-cover",
+            }
+        ]
+    }
+    receipt = {"image_id": "synthetic-target-image", "signature": "c" * 32}
+    _reply(wire, "file_video_ad_info_get", video)
+    _reply(wire, "file_image_ad_upload", receipt)
+    offset = len(wire["sdk_calls"])
+    wire["before"]["callback"] = lambda: wire["sdk_data"].update(
+        data=video if len(wire["sdk_calls"]) == offset else receipt
+    )
+    try:
+        run_cover(
+            database_engine=database_engine,
+            redis_client=redis_client,
+            context=context,
+            job_id=job_id,
+            dispatch_id=dispatch_id,
+            revision=revision,
+            read=False,
+        )
+    finally:
+        wire["before"]["callback"] = None
+    with Session(database_engine) as db:
+        job = db.get(MaterialCoverJob, job_id)
+        assert job.known_image_id == "synthetic-target-image", job.error_code
+        dispatch_id, revision, name = job.dispatch_id, job.revision, job.remote_name
+        mapping = db.exec(
+            select(AccountMaterial).where(
+                AccountMaterial.tenant_id == context.tenant_id,
+                AccountMaterial.advertiser_id == "90071992547409932",
+            )
+        ).one()
+        assert mapping.image_id is None
+    _reply(
+        wire,
+        "file_image_ad_info_get",
+        {
+            "list": [
+                {
+                    **receipt,
+                    "file_name": name,
+                    "displayable": True,
+                    "width": 160,
+                    "height": 240,
+                }
+            ]
+        },
+    )
+    run_cover(
+        database_engine=database_engine,
+        redis_client=redis_client,
+        context=context,
+        job_id=job_id,
+        dispatch_id=dispatch_id,
+        revision=revision,
+        read=True,
+    )
+    with Session(database_engine) as db, db.begin():
+        mapping = db.exec(
+            select(AccountMaterial).where(
+                AccountMaterial.tenant_id == context.tenant_id,
+                AccountMaterial.advertiser_id == "90071992547409932",
+            )
+        ).one()
+        assert mapping.image_id == "synthetic-target-image"
+        step = db.get(ExecutionStep, ids["MATERIAL"])
+        step.due_at = datetime.now(UTC) - timedelta(seconds=1)
+        revision = step.dispatch_revision
+    assert (
+        process_step(
+            database_engine=database_engine,
+            redis_client=redis_client,
+            context=context,
+            step_id=ids["MATERIAL"],
+            revision=revision,
+        )
+        == "SUCCEEDED"
+    )
 
 
 def _create_and_readback(database_engine, redis_client, case, wire, ids, monkeypatch):
@@ -293,7 +403,7 @@ def _create_and_readback(database_engine, redis_client, case, wire, ids, monkeyp
     )
     creative = observed["AD"]["creative_list"][0]["creative_info"]
     assert creative["video_info"]["video_id"] == "synthetic-target-vid"
-    assert "image_info" not in creative
+    assert creative["image_info"] == [{"web_uri": "synthetic-target-image"}]
     assert all(row["operation_status"] == "ENABLE" for row in observed.values())
     with Session(database_engine) as db:
         original = [

@@ -433,10 +433,7 @@ def test_mcp_exhaustion_manual_retry_then_all_original_children_create(
             session.get(ExecutionStep, case["ids"]["AD"]).request_body["adgroup_id"]
             == "synthetic-adgroup"
         )
-        assert (
-            "image_info"
-            not in session.get(ExecutionStep, case["ids"]["AD"]).request_body[
-                "creative_list"
-            ][0]["creative_info"]
-        )
+        assert session.get(ExecutionStep, case["ids"]["AD"]).request_body[
+            "creative_list"
+        ][0]["creative_info"]["image_info"] == [{"web_uri": "synthetic-cover"}]
     assert len(business_calls(wire, "OFFICIAL_MCP")) == 4

@@ -143,12 +143,15 @@ def validate_ad_assets(
         seconds=settings.MATERIAL_ASSET_MAX_AGE_SECONDS
     )
     try:
+        if any(
+            len(entry["creative_info"]["image_info"]) != 1
+            for entry in body["creative_list"]
+        ):
+            raise DomainError("invalid_build_request", "单视频创意必须指定一张封面")
         actual = [
             (
                 entry["creative_info"]["video_info"]["video_id"],
-                entry["creative_info"]["image_info"][0]["web_uri"]
-                if entry["creative_info"].get("image_info")
-                else None,
+                entry["creative_info"]["image_info"][0]["web_uri"],
             )
             for entry in body["creative_list"]
         ]
@@ -159,9 +162,10 @@ def validate_ad_assets(
         if not mapping or not mapping_fresh(mapping) or mapping.video_id != video_id:
             valid = False
             continue
-        # 只校验冻结请求实际指定的图片；未指定封面的新视频广告不等待历史封面任务。
-        if image_id is not None and (
-            mapping.image_id != image_id
+        # 默认单视频构建必须携带当前目标视频的封面，最终发送前再次核对图片及其验证事实。
+        if (
+            not image_id
+            or mapping.image_id != image_id
             or job
             and (
                 job.status != "READY"

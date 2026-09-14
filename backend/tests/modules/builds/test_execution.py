@@ -178,15 +178,10 @@ def run(env, redis_client, kind):
         )
 
 
-@pytest.mark.parametrize("has_cover", [True, False])
 def test_all_layers_enable_target_assets_and_no_row_locks_during_official_wire(
-    executable, redis_client, monkeypatch, has_cover
+    executable, redis_client, monkeypatch
 ):
     db, context, ids = executable
-    if not has_cover:
-        with Session(db) as session, session.begin():
-            for asset in session.exec(select(AccountMaterial)).all():
-                asset.image_id = None
     calls = []
 
     def request(_pool, method, url, **kwargs):
@@ -239,6 +234,9 @@ def test_all_layers_enable_target_assets_and_no_row_locks_during_official_wire(
     assert {
         c["creative_info"]["video_info"]["video_id"] for c in ads[0]["creative_list"]
     } == {"target-0", "target-1"}
+    assert {
+        c["creative_info"]["image_info"][0]["web_uri"] for c in ads[0]["creative_list"]
+    } == {"cover-0", "cover-1"}
     with Session(db) as session:
         from app.modules.materials.cover_models import MaterialCoverJob
 
