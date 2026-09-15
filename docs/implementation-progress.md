@@ -3,7 +3,7 @@
 - 用户复验反馈布局松散及已完成任务出现连接告警。确认前端误将 `recovery_mode=BLOCKED` 当作授权失效；实际无核查候选的正常完成态也返回该值。删除推断式告警，具体权限阻断仍由恢复原因显示，未知请求及回执不受影响，连接入口移至技术详情。
 - 复用现有 shadcn 卡片，将版权方、策略、预算和三级创建计数收拢为任务概览，压缩空白并统一页头按钮；1920/1440/390px 长名称和计数对齐纳入回归。仅展示层修改，无后端、迁移或广告/授权写入。
 - 验证：任务页、提交配置及双通道页面 87 项通过；TypeScript/Vite 构建、3 文件 Biome 和差异检查通过。桌面及手机截图人工检查完成，均为合成数据。初轮新增链接断言的参数顺序问题已纠正并重跑通过。
-- 聚焦提交主题：`builds: restore compact task overview and remove false connection alarm`；仅本地，未推送、未部署。详见[修正记录](validation/2026-09-15-task-detail-refinement.md)。
+- 聚焦提交 `c604407 builds: restore compact task overview and remove false connection alarm` 已推送并发布新加坡测试环境。完整备份及恢复演练、双管理员登录与权限隔离、三队列 ping、五服务同版本均通过；详见[修正记录](validation/2026-09-15-task-detail-refinement.md)。
 
 ## 2026-09-15：搭建链路封面复用、调度去重与安全纠正
 
