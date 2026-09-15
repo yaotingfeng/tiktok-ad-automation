@@ -10,7 +10,7 @@ from typing import Any
 from uuid import UUID
 
 from redis import Redis
-from sqlalchemy import Engine, or_, text
+from sqlalchemy import Engine, String, and_, cast, func, or_, text
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -112,13 +112,51 @@ def _start_recorded_source(
     db: Session, context: TenantContext, target: MaterialCoverJob
 ) -> bool:
     """旧库存或成功事件尚未消费时，从真实成功上传位置补排源封面。"""
+    remote = col(MaterialAssetOperation.remote_response)
+    receipt_vid_sql = func.nullif(remote["upload_video_id"].as_string(), "")
+    verified_vid_sql = func.nullif(remote["verified_upload_video_id"].as_string(), "")
     operations = db.exec(
         select(MaterialAssetOperation)
+        .join(
+            AccountMaterial,
+            and_(
+                col(AccountMaterial.tenant_id) == col(MaterialAssetOperation.tenant_id),
+                col(AccountMaterial.bc_id) == col(MaterialAssetOperation.bc_id),
+                col(AccountMaterial.material_id)
+                == col(MaterialAssetOperation.material_id),
+                col(AccountMaterial.advertiser_id)
+                == col(MaterialAssetOperation.advertiser_id),
+                col(AccountMaterial.video_id) == remote["video_id"].as_string(),
+                cast(col(AccountMaterial.connection_id), String)
+                == col(MaterialAssetOperation.frozen_route)[
+                    "connection_id"
+                ].as_string(),
+            ),
+        )
         .where(
             MaterialAssetOperation.tenant_id == context.tenant_id,
             MaterialAssetOperation.bc_id == target.bc_id,
             MaterialAssetOperation.material_id == target.material_id,
-            col(MaterialAssetOperation.path).in_(["upload_original", "share_source"]),
+            col(AccountMaterial.status) == "available",
+            col(AccountMaterial.verified_at).is_not(None),
+            func.length(func.trim(col(AccountMaterial.video_id))) > 0,
+            # 先排除不属于当前实际映射的历史及无所有权证据的派生，再限制候选数量。
+            or_(
+                col(MaterialAssetOperation.path) == "upload_original",
+                and_(
+                    col(MaterialAssetOperation.path) == "share_source",
+                    remote["transport"].as_string() == "url_relay",
+                    remote["content_md5"].as_string() == target.video_md5,
+                    func.coalesce(remote["conflicting_video_id"].as_string(), "") == "",
+                    func.coalesce(receipt_vid_sql, verified_vid_sql)
+                    == col(AccountMaterial.video_id),
+                    or_(
+                        receipt_vid_sql.is_(None),
+                        verified_vid_sql.is_(None),
+                        receipt_vid_sql == verified_vid_sql,
+                    ),
+                ),
+            ),
             MaterialAssetOperation.status == "succeeded",
         )
         .order_by(col(MaterialAssetOperation.id))

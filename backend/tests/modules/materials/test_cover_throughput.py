@@ -334,6 +334,95 @@ def test_build_schedules_missing_cover_on_recorded_video_upload_source(
     assert wire[0] == []
 
 
+@pytest.mark.parametrize(
+    "invalid_kind",
+    [
+        "native_share",
+        "old_vid",
+        "missing_owner",
+        "wrong_connection",
+        "conflicting_owner",
+        "wrong_md5",
+    ],
+)
+def test_ineligible_history_cannot_hide_owned_source_at_candidate_limit(
+    source_env, redis_client, wire, invalid_kind
+):
+    from uuid import UUID
+
+    from app.modules.accounts.connection_models import BCConnectionBinding
+    from app.modules.accounts.models import TikTokConnection
+    from app.modules.materials.models import MaterialAssetOperation
+
+    scopes(source_env)
+    base = uuid4().int & ~((1 << 32) - 1)
+    with Session(engine) as db, db.begin():
+        asset(db, source_env, "actual-account")
+        route = freeze_route(
+            db,
+            context=source_env["context"],
+            bc_id=source_env["bc_id"],
+            connection_id=source_env["connection_id"],
+        )
+        other_connection = TikTokConnection(tenant_id=source_env["context"].tenant_id)
+        db.add(other_connection)
+        db.flush()
+        db.add(
+            BCConnectionBinding(
+                tenant_id=source_env["context"].tenant_id,
+                bc_id=source_env["bc_id"],
+                connection_id=other_connection.id,
+                kind="OFFICIAL_API",
+            )
+        )
+        db.flush()
+        for index in range(21):
+            invalid = index < 20
+            evidence = {"video_id": "vid-actual-account"}
+            saved_route = route.model_dump(mode="json")
+            path = "upload_original"
+            if invalid:
+                if invalid_kind == "old_vid":
+                    evidence["video_id"] = "previous-vid"
+                elif invalid_kind == "wrong_connection":
+                    saved_route["connection_id"] = str(other_connection.id)
+                else:
+                    path = "share_source"
+                    evidence.update(transport="url_relay", content_md5=MD5)
+                    if invalid_kind == "native_share":
+                        evidence["transport"] = "native_share"
+                    elif invalid_kind == "conflicting_owner":
+                        evidence.update(
+                            upload_video_id="old-vid",
+                            verified_upload_video_id="vid-actual-account",
+                        )
+                    elif invalid_kind == "wrong_md5":
+                        evidence.update(
+                            upload_video_id="vid-actual-account", content_md5="0" * 32
+                        )
+            db.add(
+                MaterialAssetOperation(
+                    id=UUID(int=base + index),
+                    tenant_id=source_env["context"].tenant_id,
+                    bc_id=source_env["bc_id"],
+                    material_id=source_env["material_id"],
+                    advertiser_id="actual-account",
+                    path=path,
+                    status="succeeded",
+                    request_digest="a" * 64,
+                    frozen_route=saved_route,
+                    remote_response=evidence,
+                )
+            )
+    identity = enqueue(source_env).task_id
+    run(source_env, redis_client, identity)
+    assert (job_state(identity).purpose, job_state(identity).status) == (
+        "SOURCE",
+        "PENDING",
+    )
+    assert wire[0] == []
+
+
 def test_build_on_original_source_promotes_same_job_without_waiting_event(
     source_env, redis_client, wire
 ):
