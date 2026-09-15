@@ -854,4 +854,5 @@
 - 新加坡测试环境只读核实发现，网眼剧目目录的展示编号为 `31091`、`31092`，但最近 Campaign 名仍拼入 `6a98…` 长技术 ID；取链接口身份与广告命名身份发生混用。未调用 TikTok 或版权方接口，未修改测试环境数据、配置或服务。
 - 新预览分别冻结 `external_drama_id` 与 `display_drama_id`：前者继续用于版权方接口，名称模板 `{drama_id}` 只使用后者，效果为类似 `…-32827-…`。缺少可靠展示编号时明确失败，不回退长 ID。
 - 新迁移 `preview_display_drama_id` 仅增加冻结字段，不回填或改写历史预览；已生成广告继续读取原冻结名称，带旧快照的未完成预览须重建，避免一批任务混用两套命名规则。
-- 独立 PostgreSQL/Redis 下相关预览、链接、迁移、命名策略及版权方回归 163 项通过；Alembic 升级到 head 与 `alembic check` 通过；11 文件 Ruff/格式及3个实现文件 mypy通过。当前仅本地修改，未推送或发布。
+- 独立 PostgreSQL/Redis 下相关预览、链接、迁移、命名策略及版权方回归 163 项通过；Alembic 升级到 head 与 `alembic check` 通过；11 文件 Ruff/格式及3个实现文件 mypy通过。
+- `4230f8f` 已推送并发布新加坡测试环境；服务器 Linux 满批/并发4项、MID专项24项和恢复库队列隔离2项通过。完整备份 `/var/backups/tt-ada-staging/20260915T125915Z/` 的五份归档校验、PostgreSQL/Redis/项目/配置隔离恢复及24份加密响应验证通过；线上 head 为 `preview_display_drama_id`，五服务同版本、零重启、开关及调用租约不变。真实目录样例生成 `…-31096-TEST` 且不含长技术 ID；历史广告名称未改写。详见[发布验收](validation/2026-09-15-staging-numeric-drama-id-naming.md)。
