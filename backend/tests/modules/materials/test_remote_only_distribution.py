@@ -399,6 +399,23 @@ def test_unknown_relay_unique_name_digest_search_then_info_can_finish(
     run(remote_env, redis_client, prepared.task_id)
     assert state(prepared.task_id)[0].status == "ready"
     assert [x[0] for x in wire[0]] == ["GET", "POST", "GET", "GET"]
+    # 回查证明实际上传结果，但不得伪造丢失的上传响应。
+    recovered = state(prepared.task_id)[1]
+    assert recovered.remote_response.get("upload_video_id") is None
+    assert recovered.remote_response["verified_upload_video_id"] == "actual-target"
+    from tests.modules.materials.test_cover_throughput import enqueue
+    from tests.modules.materials.test_covers import job_state, scopes
+    from tests.modules.materials.test_covers import run as cover_run
+
+    scopes(remote_env)
+    cover = enqueue(remote_env, account=remote_env["target"])
+    before = len(wire[0])
+    cover_run(remote_env, redis_client, cover.task_id)
+    assert (job_state(cover.task_id).purpose, job_state(cover.task_id).status) == (
+        "SOURCE",
+        "PENDING",
+    )
+    assert len(wire[0]) == before
 
 
 def test_receipt_single_database_failure_retries_before_client_cleanup(
@@ -633,6 +650,13 @@ def test_deleted_original_target_cover_stays_independent_and_retry_is_read_only(
             {"image_id": "target-image", "signature": "a" * 32},
         ]
     )
+    cover_run(remote_env, redis_client, result.task_id)
+    # URL relay 是实际上传所有者；首轮只确认上传回执并转入源封面任务。
+    from app.modules.materials.cover_models import MaterialCoverJob
+
+    with Session(engine) as db:
+        source_job = db.get(MaterialCoverJob, result.task_id)
+        assert (source_job.purpose, source_job.status) == ("SOURCE", "PENDING")
     cover_run(remote_env, redis_client, result.task_id)
     wire[1].append(image_info(result.task_id))
     cover_run(remote_env, redis_client, result.task_id, read=True)

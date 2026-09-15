@@ -21,6 +21,7 @@ celery_app.conf.update(
         "app.modules.providers.tasks",
         "app.modules.materials.tasks",
         "app.modules.materials.cover_tasks",
+        "app.modules.materials.source_cover_tasks",
         "app.modules.materials.validation_tasks",
         "app.modules.materials.cleanup_tasks",
         "app.modules.materials.ingest_tasks",
@@ -36,6 +37,11 @@ celery_app.conf.update(
     task_create_missing_queues=False,
     task_routes={"jobs.flush_dispatch": {"queue": "control"}},
     beat_schedule={
+        "repair-source-cover-starts": {
+            "task": "materials.repair_source_cover_starts",
+            "schedule": 60.0,
+            "options": {"queue": "control"},
+        },
         "scan-abandoned-materials": {
             "task": "materials.scan_abandoned_objects",
             "schedule": 30.0,

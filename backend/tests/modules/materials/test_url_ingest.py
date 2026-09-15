@@ -205,6 +205,33 @@ def test_generation_upload_uses_url_without_legacy_object_upload(
     assert "video_file" not in dict(wire[0][0][2]["fields"])
 
 
+def test_interrupted_source_cover_start_republishes_only_its_stale_event(
+    url_env, redis_client, wire
+):
+    from app.modules.materials.source_cover_service import repair_source_cover_starts
+
+    wire[1].append(
+        [{"video_id": "actual-source-vid", "material_id": "actual-source-mid"}]
+    )
+    run(url_env, redis_client)
+    with Session(engine) as db, db.begin():
+        event = db.exec(
+            select(PendingDispatch).where(
+                PendingDispatch.tenant_id == url_env["context"].tenant_id,
+                PendingDispatch.task_name == "materials.prepare_source_cover",
+            )
+        ).one()
+        event.published_at = datetime.now(UTC) - timedelta(seconds=61)
+        db.flush()
+        assert repair_source_cover_starts(db) == 1
+        assert event.published_at is None
+        assert repair_source_cover_starts(db) == 0
+        event.published_at = datetime.now(UTC)
+        db.flush()
+        assert repair_source_cover_starts(db) == 0
+        assert db.get(IngestSession, url_env["session_id"]).ready_count == 1
+
+
 def test_success_receipt_releases_use_and_source_slot_without_readback(
     url_env, redis_client, wire
 ):
@@ -243,6 +270,16 @@ def test_success_receipt_releases_use_and_source_slot_without_readback(
             == 0
         )
         assert db.get(IngestSession, url_env["session_id"]).ready_count == 1
+        # 视频发布与封面 HTTP 分离；重复视频回调只能留下一项源封面准备事件。
+        source_covers = db.exec(
+            select(PendingDispatch).where(
+                PendingDispatch.tenant_id == url_env["context"].tenant_id,
+                PendingDispatch.task_name == "materials.prepare_source_cover",
+            )
+        ).all()
+        assert len(source_covers) == 1
+        assert source_covers[0].payload == {"operation_id": str(op_id)}
+        assert source_covers[0].task_key == f"source-cover:{op_id}"
         from app.modules.materials.ingest_models import ObjectCleanup
 
         cleanup = db.exec(

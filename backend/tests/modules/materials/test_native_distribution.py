@@ -154,6 +154,34 @@ def test_unknown_share_never_reuploads_or_reshares(native_env, redis_client, wir
     assert all("/upload/" not in call[1] for call in wire[0])
 
 
+def test_explicit_share_failure_is_retained_and_never_reuploaded(
+    native_env, redis_client, wire
+):
+    prepared = queue(native_env, native_env["target"])
+    failed = {native_env["target"]: ["1234567890123456789"]}
+    wire[1].extend([source_info(), {"failed_infos": failed}])
+    run(native_env, redis_client, prepared.task_id, kind="prepare")
+    dist, op, mapping = state(prepared.task_id)
+    assert (dist.status, op.status, mapping) == ("blocked", "failed", None)
+    assert dist.reason_code == "material_share_failed"
+    assert op.remote_response["share_receipt"]["failed_infos"] == failed
+    assert op.remote_response["share_acknowledged"] is False
+    run(native_env, redis_client, prepared.task_id, kind="prepare")
+    run(native_env, redis_client, prepared.task_id)
+    repeated_dist, repeated_op, repeated_mapping = state(prepared.task_id)
+    assert (repeated_dist.status, repeated_op.status, repeated_mapping) == (
+        "blocked",
+        "failed",
+        None,
+    )
+    assert (
+        repeated_op.remote_response["share_receipt"]
+        == op.remote_response["share_receipt"]
+    )
+    assert len(wire[0]) == 2
+    assert all("/upload/" not in call[1] for call in wire[0])
+
+
 def test_source_write_permission_revoked_before_send_blocks(
     native_env, redis_client, wire
 ):

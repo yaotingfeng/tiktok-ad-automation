@@ -132,6 +132,60 @@ def prepare_wire(wire, rows, *, requests=1):
 @pytest.mark.parametrize(
     "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
 )
+def test_partial_share_receipt_blocks_only_reported_target_material_pairs(
+    share_case, database_engine, gateway_wire, redis_client, gateway_case
+):
+    from sqlmodel import select
+
+    from app.modules.materials.batch_models import MaterialShareBatchReceipt
+
+    tasks, rows = seed_rectangle(share_case, database_engine, materials=2, targets=2)
+    names = prepare_wire(gateway_wire, rows)
+    failed = {share_case["target"]: [rows[0]["material_id"]]}
+    gateway_wire["sdk_data"]["data"]["failed_infos"] = failed
+    gateway_wire["wire"].results[names["materials.share_assets"]].clear()
+    gateway_wire["wire"].results[names["materials.share_assets"]].append(
+        {
+            "content": [],
+            "structuredContent": {
+                "code": 0,
+                "request_id": "synthetic-partial-share",
+                "data": {"failed_infos": failed},
+            },
+        }
+    )
+    run(share_case, redis_client, tasks[0], kind="prepare")
+    for task in tasks:
+        dist, op, mapping = state(task)
+        rejected = (
+            dist.advertiser_id == share_case["target"]
+            and op.remote_response["source_mid"] == rows[0]["material_id"]
+        )
+        assert dist.status == ("blocked" if rejected else "verifying")
+        assert op.status == ("failed" if rejected else "verifying")
+        assert op.remote_response["share_acknowledged"] is not rejected
+        assert mapping is None
+        if rejected:
+            assert dist.reason_code == "material_share_failed"
+            run(share_case, redis_client, task, kind="prepare")
+            run(share_case, redis_client, task)
+            repeated_dist, repeated_op, repeated_mapping = state(task)
+            assert (repeated_dist.status, repeated_op.status, repeated_mapping) == (
+                "blocked",
+                "failed",
+                None,
+            )
+            assert repeated_op.remote_response["share_acknowledged"] is False
+    with Session(database_engine) as db:
+        receipt = db.exec(select(MaterialShareBatchReceipt)).one()
+        assert receipt.share_response["failed_infos"] == failed
+        assert receipt.share_response["evidence"]["request_id"]
+    assert len(business_calls(gateway_wire, gateway_case[1].channel)) == 2
+
+
+@pytest.mark.parametrize(
+    "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
+)
 def test_complete_twenty_by_ten_rectangle_sends_once(
     share_case,
     database_engine,
@@ -581,6 +635,7 @@ def test_frozen_batch_members_and_receipts_are_immutable(
         "UPDATE material_share_batch_member SET operation_claim = gen_random_uuid()",
         "UPDATE material_share_batch_member SET source_evidence = '{}'::jsonb",
         "UPDATE material_share_batch_receipt SET effect = 'NOT_SENT'",
+        "UPDATE material_share_batch_receipt SET share_response = '{}'::jsonb",
         "DELETE FROM material_share_batch_receipt",
     ]
     with Session(database_engine) as db:

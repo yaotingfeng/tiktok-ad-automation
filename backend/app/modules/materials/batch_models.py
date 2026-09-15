@@ -141,6 +141,9 @@ class MaterialShareBatchReceipt(SQLModel, table=True):
     batch_id: UUID
     effect: str = Field(max_length=32)
     code: str | None = Field(default=None, max_length=128)
+    share_response: dict[str, Any] | None = Field(
+        default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True)
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC),
         sa_column=Column(DateTime(timezone=True), nullable=False),

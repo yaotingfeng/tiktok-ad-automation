@@ -521,6 +521,9 @@ def _finish(
             from .cleanup import schedule_cleanup
 
             schedule_cleanup(db, object_id=obj.id, source_receipt_id=operation.id)
+            from .source_cover_service import enqueue_source_cover
+
+            enqueue_source_cover(db, context=context, operation=operation)
         else:
             if (
                 kind == "verify"

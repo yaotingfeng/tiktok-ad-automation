@@ -925,6 +925,9 @@ def run_source_upload(
                 )
                 operation.remote_response = {**evidence}
                 operation.status, attempt.status = "succeeded", "available"
+                from .source_cover_service import enqueue_source_cover
+
+                enqueue_source_cover(session, context=context, operation=operation)
             elif not work.get("video_id"):
                 assert isinstance(evidence, tuple)
                 matches, last = evidence

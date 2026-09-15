@@ -342,6 +342,16 @@ def test_readback_actual_target_vid_and_repeated_delivery(
         and asset.mid == "target-actual-mid"
         and asset.verified_at
     )
+    with Session(engine) as db:
+        events = db.exec(
+            select(PendingDispatch).where(
+                PendingDispatch.tenant_id == source_env["context"].tenant_id,
+                PendingDispatch.task_name == "materials.prepare_source_cover",
+            )
+        ).all()
+        assert len(events) == 1
+        assert events[0].task_key == f"source-cover:{op_id}"
+        assert events[0].payload == {"operation_id": str(op_id)}
 
 
 @pytest.mark.parametrize(
@@ -368,7 +378,10 @@ def test_success_not_yet_available_never_reuploads(
 def test_search_unknown_requires_full_scan_then_info(source_env, redis_client, wire):
     op_id = seed_operation(source_env, status="result_unknown", evidence={})
     calls, responses = wire
-    candidate = {**info()["list"][0], "file_name": f"{source_env['material_id']}.mp4"}
+    candidate = {
+        **info()["list"][0],
+        "file_name": f"Moon-{source_env['material_id'].hex[:8]}.mp4",
+    }
     responses.append(
         {
             "list": [candidate],
@@ -564,7 +577,8 @@ def test_original_to_sdk_once_then_actual_readback(
     assert asset is None
     assert dict(calls[0][2]["fields"])["video_file"][1] == CONTENT
     assert (
-        dict(calls[0][2]["fields"])["file_name"] == f"{source_env['material_id']}.mp4"
+        dict(calls[0][2]["fields"])["file_name"]
+        == f"Moon-{source_env['material_id'].hex[:8]}.mp4"
     )
     run(source_env, redis_client, kind="upload", s3=original_s3[0])
     responses.append(info(vid="upload-vid"))

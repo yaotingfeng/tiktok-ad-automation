@@ -1,6 +1,7 @@
 """Submission-only target preparation with independently scoped source and target."""
 
 from contextlib import AbstractContextManager, nullcontext
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any
@@ -736,7 +737,7 @@ def _send_remote_asset(
             }
         try:
             if native:
-                gateway.materials.share_assets(
+                share_receipt = gateway.materials.share_assets(
                     material_types.AssetShare(
                         advertiser_id=work["source_advertiser_id"],
                         material_ids=(work["source_mid"],),
@@ -744,6 +745,34 @@ def _send_remote_asset(
                     ),
                     budget=budget,
                 )
+                with Session(database_engine) as db, db.begin():
+                    dist = _load_distribution(db, context, distribution_id)
+                    _locked_material(db, context, dist.material_id)
+                    operation = _locked_operation(db, context, operation_id)
+                    if (
+                        operation.attempt_token != claim
+                        or dist.operation_id != operation_id
+                    ):
+                        return None
+                    rejected = work["source_mid"] in share_receipt.failed_infos.get(
+                        work["advertiser_id"], ()
+                    )
+                    operation.remote_response = {
+                        **operation.remote_response,
+                        "share_receipt": asdict(share_receipt),
+                        "share_acknowledged": not rejected,
+                    }
+                    if rejected:
+                        # 平台已明确此目标/MID 失败，不能当作待核实成功或转为重传。
+                        operation.status, dist.status = "failed", "blocked"
+                        operation.remote_response = {
+                            **operation.remote_response,
+                            "definite_no_effect": True,
+                            "error_code": "material_share_failed",
+                        }
+                        operation.attempt_token = operation.claimed_until = None
+                        dist.reason_code = "material_share_failed"
+                        return None
                 return {}
             assert preview is not None
             receipt = gateway.materials.upload_video_url(
@@ -1390,6 +1419,13 @@ def run_distribution(
                     connection_id=_work_connection(work),
                 )
                 operation.remote_response = {**operation.remote_response, **evidence}
+                if work.get("transport") == "url_relay":
+                    # 严格名称/摘要搜索后的 VID 详情也能确认实际 URL 上传结果；
+                    # 独立记录核实证据，不伪造可能已经丢失的原上传响应。
+                    operation.remote_response = {
+                        **operation.remote_response,
+                        "verified_upload_video_id": evidence["video_id"],
+                    }
                 operation.status, dist.status = "succeeded", "ready"
             elif not work.get("video_id"):
                 assert isinstance(evidence, tuple)

@@ -1,6 +1,7 @@
 """从已授权的操作矩阵冻结原生共享批次，保留逐项恢复身份。"""
 
 import json
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any
@@ -420,6 +421,7 @@ def _send_batch(
         targets = tuple(batch.advertiser_ids)
     armed = False
     acknowledged = False
+    receipt: types.AssetShareReceipt | None = None
     missing_sources: set[str] = set()
 
     def check_current() -> None:
@@ -588,7 +590,7 @@ def _send_batch(
                     }
                 current.status = "sending"
             armed = True
-            gateway.materials.share_assets(
+            receipt = gateway.materials.share_assets(
                 types.AssetShare(
                     advertiser_id=source,
                     material_ids=tuple(sorted(mids)),
@@ -601,7 +603,14 @@ def _send_batch(
                 ),
             )
             acknowledged = True
-        _finish(database_engine, context, batch_id, effect="ACKNOWLEDGED", code=None)
+            _finish(
+                database_engine,
+                context,
+                batch_id,
+                effect="ACKNOWLEDGED",
+                code=None,
+                receipt=receipt,
+            )
     except SDK_SCOPE_INTERRUPTS:
         raise
     except Exception as error:
@@ -632,6 +641,7 @@ def _send_batch(
             if isinstance(error, DomainError)
             else "material_response_unknown",
             missing_sources=missing_sources,
+            receipt=receipt,
         )
 
 
@@ -645,6 +655,7 @@ def _finish(
     recover_unarmed: bool = False,
     recover_armed: bool = False,
     missing_sources: set[str] | None = None,
+    receipt: types.AssetShareReceipt | None = None,
 ) -> bool:
     from . import distribution as single
 
@@ -680,21 +691,29 @@ def _finish(
             "NOT_SENT": "not_sent",
             "FAILED": "failed",
         }[effect]
+        partial_failure = bool(receipt and any(receipt.failed_infos.values()))
         db.add(
             MaterialShareBatchReceipt(
                 tenant_id=batch.tenant_id,
                 bc_id=batch.bc_id,
                 batch_id=batch.id,
                 effect=effect,
-                code=code,
+                code="material_share_partial_failure" if partial_failure else code,
+                share_response=asdict(receipt) if receipt is not None else None,
             )
         )
         for member, dist, _material, op in _locked_batch_rows(db, context, batch_id):
             if op.attempt_token != member.operation_claim or dist.operation_id != op.id:
                 continue
+            rejected = bool(
+                receipt
+                and member.source_mid
+                in receipt.failed_infos.get(member.advertiser_id, ())
+            )
+            member_code = "material_share_failed" if rejected else code
             member_effect = (
                 "FAILED"
-                if member.source_video_id in (missing_sources or set())
+                if rejected or member.source_video_id in (missing_sources or set())
                 else effect
             )
             member.status = {
@@ -703,6 +722,13 @@ def _finish(
                 "NOT_SENT": "not_sent",
                 "FAILED": "failed",
             }[member_effect]
+            if receipt is not None:
+                # ACKNOWLEDGED 只表示取得合法回执，业务失败必须按目标/MID 分开。
+                op.remote_response = {
+                    **op.remote_response,
+                    "share_acknowledged": not rejected,
+                    "share_request_id": receipt.evidence.request_id,
+                }
             if member_effect == "ACKNOWLEDGED":
                 op.status, dist.status = "verifying", "verifying"
                 op.remote_response = {**op.remote_response, "share_acknowledged": True}
@@ -714,13 +740,13 @@ def _finish(
                 op.remote_response = {
                     **op.remote_response,
                     "definite_no_effect": True,
-                    "error_code": code,
+                    "error_code": member_code,
                 }
             else:
                 op.status, dist.status = "result_unknown", "result_unknown"
-                op.remote_response = {**op.remote_response, "error_code": code}
+                op.remote_response = {**op.remote_response, "error_code": member_code}
             op.attempt_token, op.claimed_until = None, None
-            dist.reason_code = code or "material_result_pending"
+            dist.reason_code = member_code or "material_result_pending"
             if member_effect != "FAILED":
                 single.queue_distribution(
                     db,
