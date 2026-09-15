@@ -21,6 +21,7 @@ class PreviewRequest(BaseModel):
 
 class PreviewSummary(BaseModel):
     execution_route: ExecutionRoutePublic | None = None
+    submission_id: UUID | None
     preview_id: UUID
     draft_id: UUID
     draft_revision: int

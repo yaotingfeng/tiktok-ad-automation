@@ -57,6 +57,7 @@ export function usePreviewSubmission(
       record ||
       forbidden ||
       !write ||
+      preview.submission_id ||
       preview.preview_id !== previewId ||
       preview.bc_id !== bcId ||
       preview.status !== "FROZEN" ||

@@ -2819,6 +2819,10 @@ export type PreviewRequest = {
 export type PreviewSummary = {
     execution_route?: ExecutionRoutePublic | null;
     /**
+     * Submission Id
+     */
+    submission_id: string | null;
+    /**
      * Preview Id
      */
     preview_id: string;
@@ -3703,6 +3707,18 @@ export type SubmissionEventPublic = {
      * Kind
      */
     kind: string;
+    /**
+     * Title
+     */
+    title: string;
+    /**
+     * Advertiser Id
+     */
+    advertiser_id: string;
+    /**
+     * Account Name
+     */
+    account_name: string | null;
 };
 
 /**

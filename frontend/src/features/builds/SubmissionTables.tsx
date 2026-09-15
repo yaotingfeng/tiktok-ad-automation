@@ -41,6 +41,7 @@ import {
   stepKinds,
   stepStates,
 } from "./SubmissionPresentation"
+import { eventConclusion, eventKind } from "./submission-events"
 import { submissionKey, useSubmissionPaging } from "./submission-page"
 
 type Scope = { tenantId: string; bcId: string; submissionId: string }
@@ -110,8 +111,12 @@ export function SubmissionUnitsTable({
                 cell: ({ row: { original: r } }) => (
                   <div className="flex flex-col gap-1">
                     <span className="font-semibold">{r.title}</span>
-                    {r.account_name && <span>{r.account_name}</span>}
-                    <Identifier value={r.advertiser_id} />
+                    <span
+                      className="max-w-60 truncate text-sm text-muted-foreground"
+                      title={r.account_name || r.advertiser_id}
+                    >
+                      {r.account_name || r.advertiser_id}
+                    </span>
                   </div>
                 ),
               },
@@ -128,33 +133,23 @@ export function SubmissionUnitsTable({
                   ),
               },
               {
-                header: "Campaign",
-                cell: ({ row: { original: r } }) => (
-                  <div className="flex flex-col gap-2">
-                    <span>{r.campaign_name}</span>
-                    {r.campaign_step?.remote_id ? (
-                      <Identifier value={r.campaign_step.remote_id} />
-                    ) : (
-                      <span className="text-xs text-muted-foreground">
-                        尚无已知远端 ID
-                      </span>
-                    )}
-                    <PlatformState step={r.campaign_step} />
-                  </div>
-                ),
-              },
-              {
-                header: "Ad Group / Ad",
+                header: "已创建",
                 cell: ({ row: { original: r } }) =>
                   r.disposition === "EXCLUDED" ? (
                     <span>此组合未提交</span>
                   ) : (
-                    <span>
-                      已创建 {r.succeeded_group_count ?? "—"} /{" "}
-                      {r.group_count ?? "—"} 组<br />
-                      已创建 {r.succeeded_ad_count ?? "—"} / {r.ad_count ?? "—"}{" "}
-                      条 Ad
-                    </span>
+                    <div className="flex flex-col gap-1 text-sm tabular-nums">
+                      <span>
+                        广告系列 {r.campaign_step?.remote_id ? 1 : 0} / 1
+                      </span>
+                      <span>
+                        广告组 {r.succeeded_group_count ?? "—"} /{" "}
+                        {r.group_count ?? "—"}
+                      </span>
+                      <span>
+                        广告 {r.succeeded_ad_count ?? "—"} / {r.ad_count ?? "—"}
+                      </span>
+                    </div>
                   ),
               },
               {
@@ -181,7 +176,7 @@ export function SubmissionUnitsTable({
                     data-submission-unit={r.unit_id}
                     onClick={() => setSelected(r)}
                   >
-                    展开素材组
+                    查看明细
                   </Button>
                 ),
               },
@@ -250,12 +245,30 @@ function SubmissionGroupsSheet({
   })
   return (
     <ManagementSheet
-      title={`${unit.title} · 素材组`}
-      description={`${unit.advertiser_id} · 冻结分组与当前创建结果`}
+      title={`${unit.title} · 搭建明细`}
+      description={`${unit.account_name || unit.advertiser_id} · 提交配置与当前创建结果`}
       dirty={false}
       onClose={onClose}
     >
       <div className="flex flex-col gap-4">
+        <section
+          className="flex flex-col gap-2 text-sm"
+          aria-label="广告系列详情"
+        >
+          <h3 className="font-semibold">广告系列</h3>
+          <p className="break-all">{unit.campaign_name}</p>
+          <div>
+            账户 ID
+            <Identifier value={unit.advertiser_id} />
+          </div>
+          {unit.campaign_step?.remote_id && (
+            <div>
+              广告系列 ID
+              <Identifier value={unit.campaign_step.remote_id} />
+            </div>
+          )}
+          <PlatformState step={unit.campaign_step} />
+        </section>
         {query.error && (!query.data || isForbidden(query.error)) ? (
           <RequestError
             error={query.error}
@@ -852,14 +865,44 @@ export function SubmissionEventsTable({
             cell: ({ row: { original: r } }) => displayTime(r.observed_at),
           },
           {
-            header: "对象 / 记录",
+            header: "剧目 / 账户",
+            cell: ({ row: { original: r } }) => (
+              <div className="flex max-w-72 flex-col gap-1 whitespace-normal">
+                <span className="font-medium">
+                  {r.title || "剧目名称待读取"}
+                </span>
+                <span
+                  className="truncate text-sm text-muted-foreground"
+                  title={r.account_name || r.advertiser_id}
+                >
+                  {r.account_name || r.advertiser_id}
+                </span>
+              </div>
+            ),
+          },
+          {
+            header: "操作记录",
             cell: ({ row: { original: r } }) => (
               <div className="flex flex-col gap-1">
                 <span>
-                  {stepKinds[r.kind] || r.kind} · 第 {r.attempt} 次记录
+                  {eventKind(r.kind)} · {eventConclusion(r.conclusion)}
                 </span>
-                <span>{stepStates[r.conclusion] || r.conclusion}</span>
-                <Identifier value={r.step_id} />
+                <details>
+                  <summary className="cursor-pointer text-xs text-muted-foreground">
+                    技术记录
+                  </summary>
+                  <div className="mt-2 flex flex-col gap-1 text-xs">
+                    <span>
+                      {r.conclusion} · 尝试序号 {r.attempt}
+                    </span>
+                    <span>步骤编号</span>
+                    <Identifier value={r.step_id} />
+                    <span>记录编号</span>
+                    <Identifier value={r.evidence_id} />
+                    <span>账户编号</span>
+                    <Identifier value={r.advertiser_id} />
+                  </div>
+                </details>
               </div>
             ),
           },
@@ -1013,7 +1056,7 @@ export function SubmissionFilterBar({
         onAccount(input)
       }}
     >
-      <Field className="min-w-56 flex-1">
+      <Field className="w-full sm:w-72">
         <FieldLabel htmlFor="submission-account-filter">账户筛选</FieldLabel>
         <Input
           id="submission-account-filter"
@@ -1035,7 +1078,7 @@ export function SubmissionFilterBar({
           label="步骤阶段"
           value={kind || "all"}
           onChange={(v) => onKind(v === "all" ? "" : v)}
-          choices={{ all: "全部阶段", ...stepKinds }}
+          choices={stepKinds}
         />
       )}
       {onResult && (
@@ -1044,7 +1087,6 @@ export function SubmissionFilterBar({
           value={result || "all"}
           onChange={(v) => onResult(v === "all" ? "" : v)}
           choices={{
-            all: "全部结果",
             FAILED: "确定失败",
             UNKNOWN: "结果待核实",
             MISMATCH: "结果差异",

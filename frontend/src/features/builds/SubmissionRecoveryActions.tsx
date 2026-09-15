@@ -220,6 +220,20 @@ export function SubmissionRecoveryActions({
   }
   const code =
     error instanceof AxiosError ? error.response?.data?.code : undefined
+  const reasons =
+    recovery?.reasons?.filter(
+      (reason) => reason !== "recovery_no_candidates",
+    ) || []
+  // 无待办时不占页面空间；已保存的未知请求和恢复回执必须继续可见。
+  if (
+    !saved &&
+    !error &&
+    !busy &&
+    !recovery?.can_retry &&
+    !recovery?.can_reconcile &&
+    !reasons.length
+  )
+    return null
   return (
     <section className="flex flex-col gap-3" aria-label="任务恢复操作">
       <BuildGuard
@@ -318,9 +332,9 @@ export function SubmissionRecoveryActions({
           </AlertDescription>
         </Alert>
       )}
-      {!!recovery?.reasons?.length && (
+      {!!reasons.length && (
         <div className="flex flex-col gap-1">
-          {recovery.reasons.map((code) => (
+          {reasons.map((code) => (
             <BuildReason key={code} code={code} />
           ))}
         </div>

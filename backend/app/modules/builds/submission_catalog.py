@@ -491,8 +491,13 @@ def get_submission_events(
     rows = (
         cast(SASession, session)
         .execute(
-            text("""SELECT v.id evidence_id,v.step_id,v.attempt,v.conclusion,v.observed_at,e.unit_id,e.kind
+            # 仅补充业务定位字段；原始请求、响应与授权证据仍不进入公开日志。
+            text("""SELECT v.id evidence_id,v.step_id,v.attempt,v.conclusion,v.observed_at,e.unit_id,e.kind,
+ d.title,u.advertiser_id,ac.name account_name
  FROM step_evidence v JOIN execution_step e ON e.tenant_id=v.tenant_id AND e.submission_id=v.submission_id AND e.id=v.step_id
+ JOIN build_unit u ON u.tenant_id=e.tenant_id AND u.preview_id=e.preview_id AND u.id=e.unit_id
+ JOIN preview_drama d ON d.tenant_id=u.tenant_id AND d.preview_id=u.preview_id AND d.drama_id=u.drama_id
+ LEFT JOIN advertiser_account ac ON ac.tenant_id=u.tenant_id AND ac.advertiser_id=u.advertiser_id
  WHERE v.tenant_id=:tenant AND v.submission_id=:submission AND (CAST(:step AS uuid) IS NULL OR v.step_id=:step)
  AND (CAST(:after_at AS timestamptz) IS NULL OR (v.observed_at,v.id)<(:after_at,CAST(:after_id AS uuid))) ORDER BY v.observed_at DESC,v.id DESC LIMIT :size"""),
             {

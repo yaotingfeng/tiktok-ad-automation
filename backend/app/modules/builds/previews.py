@@ -22,6 +22,7 @@ from app.modules.builds.batch_numbers import (
     is_current_batch_number,
 )
 from app.modules.builds.drafts import get_draft
+from app.modules.builds.execution_models import Submission
 from app.modules.builds.models import (
     DraftAccount,
     DraftDrama,
@@ -804,6 +805,14 @@ def get_preview_summary(
         )
     ).one()
     return PreviewSummary(
+        # 历史配置的只读状态来自持久化任务，跨浏览器也不重新展示创建入口。
+        submission_id=session.exec(
+            select(Submission.id).where(
+                Submission.tenant_id == context.tenant_id,
+                Submission.bc_id == preview.bc_id,
+                Submission.preview_id == preview.id,
+            )
+        ).one_or_none(),
         execution_route=execution_route_view(
             session, context=context, preview_id=preview.id
         ),

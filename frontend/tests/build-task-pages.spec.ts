@@ -151,7 +151,7 @@ async function boundary(
           group_count: 1,
           ad_count: 2,
           succeeded_group_count: 1,
-          succeeded_ad_count: 1,
+          succeeded_ad_count: summary.succeeded.ad_count,
           material_count: 2,
           ready_material_count: 2,
           campaign_step: {
@@ -218,6 +218,9 @@ async function boundary(
           kind: "AD",
           attempt: 1,
           conclusion: "UNKNOWN",
+          title: "真实剧目",
+          advertiser_id: step.advertiser_id,
+          account_name: "真实账户",
           observed_at: "2026-09-09T01:05:00Z",
         },
       ])
@@ -317,7 +320,7 @@ test("任务详情三级对象守恒，按需展开真实素材组和SP正文", 
   await expect(page.getByTestId("count-ad-succeeded")).toHaveText("1")
   await expect(page.getByTestId("count-ad-unknown")).toHaveText("1")
   expect(api.requests.filter((r) => r.path.endsWith("/groups"))).toHaveLength(0)
-  await page.getByRole("button", { name: "展开素材组", exact: true }).click()
+  await page.getByRole("button", { name: "查看明细", exact: true }).click()
   await expect(page.getByText("真实素材组", { exact: true })).toBeVisible()
   expect(api.requests.filter((r) => r.path.endsWith("/ads"))).toHaveLength(0)
   await page.getByRole("button", { name: "查看 SP 创意", exact: true }).click()
@@ -368,16 +371,14 @@ test("任务由进行中到完成时刷新已显示单位详情，不能只更�
   api.summary.status = "RUNNING"
   await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
   await expect(
-    page.getByRole("button", { name: "展开素材组", exact: true }),
+    page.getByRole("button", { name: "查看明细", exact: true }),
   ).toBeVisible()
   const initial = api.requests.filter((r) => r.path.endsWith("/units")).length
   api.summary.status = "COMPLETED"
   api.summary.succeeded = counts(1, 1, 2)
   api.summary.unknown = counts(0, 0, 0)
   api.summary.updated_at = "2026-09-09T01:06:00Z"
-  await expect(
-    page.getByText("本次提交已完成。", { exact: true }),
-  ).toBeVisible()
+  await expect(page.getByText("已完成", { exact: true }).first()).toBeVisible()
   await expect
     .poll(() => api.requests.filter((r) => r.path.endsWith("/units")).length)
     .toBeGreaterThan(initial)
@@ -496,11 +497,16 @@ test("异常定位与操作记录只读按需查询，并保留平台ENABLE的�
   ).toBe(E)
   await page.keyboard.press("Escape")
   await page.getByRole("tab", { name: "搭建明细", exact: true }).click()
+  await page.getByRole("button", { name: "查看明细", exact: true }).click()
   await expect(
-    page.getByText("操作状态：已启用（ENABLE）", { exact: true }),
+    page
+      .getByRole("region", { name: "广告系列详情" })
+      .getByText("操作状态：已启用（ENABLE）", { exact: true }),
   ).toBeVisible()
   await expect(
-    page.getByText("审核/投放状态：PENDING", { exact: true }),
+    page
+      .getByRole("region", { name: "广告系列详情" })
+      .getByText("审核/投放状态：PENDING", { exact: true }),
   ).toBeVisible()
   expect(api.requests.every((r) => r.method === "GET")).toBe(true)
 })
@@ -527,7 +533,7 @@ test("组内素材分页展示实际目标VID，点击原件才请求短期预�
     }),
   )
   await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
-  await page.getByRole("button", { name: "展开素材组", exact: true }).click()
+  await page.getByRole("button", { name: "查看明细", exact: true }).click()
   await page.getByRole("button", { name: "查看素材", exact: true }).click()
   await expect(page.getByText(/目标 VID：target-video-real/)).toBeVisible()
   expect(previews).toBe(0)
@@ -621,14 +627,14 @@ for (const width of [1440, 900, 390])
         () => document.documentElement.scrollWidth <= window.innerWidth,
       ),
     ).toBe(true)
-    await page.getByRole("button", { name: "展开素材组", exact: true }).focus()
+    await page.getByRole("button", { name: "查看明细", exact: true }).focus()
     await page.keyboard.press("Enter")
     await expect(
-      page.getByRole("heading", { name: "真实剧目 · 素材组", exact: true }),
+      page.getByRole("heading", { name: "真实剧目 · 搭建明细", exact: true }),
     ).toBeVisible()
     await page.keyboard.press("Escape")
     await expect(
-      page.getByRole("button", { name: "展开素材组", exact: true }),
+      page.getByRole("button", { name: "查看明细", exact: true }),
     ).toBeFocused()
     if (screenshots) {
       await page.evaluate(() => window.scrollTo(0, 0))
@@ -713,17 +719,17 @@ test("异常深链更改筛选后刷新保留新的结果条件", async ({ page 
 test("Campaign成功但Ad仍未知时组合保持待核实", async ({ page }) => {
   await boundary(page)
   await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
-  const row = page.getByRole("row").filter({ hasText: "真实Campaign" })
+  const row = page.getByRole("row").filter({ hasText: "真实剧目" })
   await expect(row.getByText("待核实", { exact: true })).toBeVisible()
   await expect(row.getByText("已成功", { exact: true })).toHaveCount(0)
   await expect(page.getByTestId("count-ad-unknown")).toHaveText("1")
-  await expect(row.getByText("campaign-real", { exact: true })).toBeVisible()
+  await expect(row.getByText("广告系列 1 / 1", { exact: true })).toBeVisible()
 })
 
 test("刷新失败保留已加载任务结果并标明读取失败", async ({ page }) => {
   await boundary(page)
   await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
-  await expect(page.getByText("真实Campaign", { exact: true })).toBeVisible()
+  await expect(page.getByText("真实剧目", { exact: true })).toBeVisible()
   await page.route("**/api/tenants/*/submissions/**", (route) =>
     route.fulfill({ status: 503, json: { code: "temporarily_unavailable" } }),
   )
@@ -734,7 +740,7 @@ test("刷新失败保留已加载任务结果并标明读取失败", async ({ pa
   await expect(
     page.getByRole("heading", { name: "任务 B0909-01", exact: true }),
   ).toBeVisible()
-  await expect(page.getByText("真实Campaign", { exact: true })).toBeVisible()
+  await expect(page.getByText("真实剧目", { exact: true })).toBeVisible()
   await expect(page.getByTestId("count-ad-succeeded")).toHaveText("1")
 })
 
@@ -781,13 +787,13 @@ test("操作记录独立服务端50/100分页，不预先读取后续证据", as
 test("已读详情刷新403清除受限结果并保留登录", async ({ page }) => {
   await boundary(page)
   await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
-  await expect(page.getByText("真实Campaign", { exact: true })).toBeVisible()
+  await expect(page.getByText("真实剧目", { exact: true })).toBeVisible()
   await page.route("**/api/tenants/*/submissions/**", (route) =>
     route.fulfill({ status: 403, json: { code: "action_forbidden" } }),
   )
   await page.getByRole("button", { name: "刷新任务结果", exact: true }).click()
   await expect(page.getByText("无权访问此页面", { exact: true })).toBeVisible()
-  await expect(page.getByText("真实Campaign", { exact: true })).toHaveCount(0)
+  await expect(page.getByText("真实剧目", { exact: true })).toHaveCount(0)
   expect(await page.evaluate(() => localStorage.getItem("access_token"))).toBe(
     "build-test-token",
   )
@@ -939,7 +945,7 @@ test("恢复403隐藏写入动作且保留已读取结果和登录", async ({ pa
   await expect(
     page.getByRole("button", { name: /核查待核实项|重试失败步骤/ }),
   ).toHaveCount(0)
-  await expect(page.getByText("真实Campaign", { exact: true })).toBeVisible()
+  await expect(page.getByText("真实剧目", { exact: true })).toBeVisible()
   expect(await page.evaluate(() => localStorage.getItem("access_token"))).toBe(
     "build-test-token",
   )
@@ -1008,7 +1014,9 @@ test("失败和未知同时存在，重试仅使用服务端允许的失败步�
   expect(
     api.calls.filter((c) => c.method === "POST").map((c) => c.path),
   ).toEqual([`/api/tenants/${T}/submissions/${ID}/retry`])
+  await page.getByRole("button", { name: "查看明细", exact: true }).click()
   await expect(page.getByText("campaign-real", { exact: true })).toBeVisible()
+  await page.keyboard.press("Escape")
   await expect(page.getByTestId("count-ad-succeeded")).toHaveText("1")
   api.progress.state = "FAILED"
   api.progress.scheduled_count = 2
@@ -1109,7 +1117,7 @@ for (const [code, label] of [
   })
 }
 
-test("完成任务使用中文说明无需恢复并保留预算大数精度", async ({ page }) => {
+test("完成任务不展示空恢复提示并保留预算大数精度", async ({ page }) => {
   const api = await boundary(page)
   api.summary.status = "COMPLETED"
   api.summary.daily_budget_sum = "9007199254740993123456.123400000000"
@@ -1123,14 +1131,77 @@ test("完成任务使用中文说明无需恢复并保留预算大数精度", as
   await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
   await expect(
     page.getByText("当前没有需要重试或核查的步骤。", { exact: true }),
-  ).toBeVisible()
+  ).toHaveCount(0)
   await expect(
     page.getByText("recovery_no_candidates", { exact: true }),
   ).toHaveCount(0)
   await expect(
-    page.getByText(/配置日预算合计 USD 9007199254740993123456\.1234，/),
+    page.getByText(/配置日预算合计 USD 9007199254740993123456\.1234/),
   ).toBeVisible()
   await expect(
     page.getByRole("button", { name: /重试失败步骤|核查待核实项/ }),
   ).toHaveCount(0)
+})
+
+for (const width of [1440, 390]) {
+  test(`完成任务 ${width}px 优先呈现结果与明细，技术信息按需展开`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 })
+    const api = await boundary(page)
+    Object.assign(api.summary, {
+      status: "COMPLETED",
+      succeeded: counts(1, 1, 2),
+      unknown: counts(0, 0, 0),
+      stage_counts: { "MATERIAL:SUCCEEDED": 2 },
+      recovery: {
+        can_retry: false,
+        can_reconcile: false,
+        reasons: ["recovery_no_candidates"],
+      },
+    })
+    await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
+    await expect(page.getByRole("button", { name: "查看明细" })).toBeVisible()
+    await expect(
+      page.getByRole("region", { name: "任务恢复操作" }),
+    ).toHaveCount(0)
+    await expect(page.getByRole("region", { name: "执行连接" })).toHaveCount(0)
+    await expect(page.getByRole("tab", { name: /排除项/ })).toHaveCount(0)
+    await expect(page.getByText("真实Campaign", { exact: true })).toHaveCount(0)
+    await expect(page.getByTestId("count-ad-succeeded")).not.toBeVisible()
+    await expectWorkspaceLayout(page)
+    if (width === 1440) {
+      const box = await page
+        .getByRole("button", { name: "查看明细" })
+        .boundingBox()
+      expect(box!.y + box!.height).toBeLessThan(900)
+    }
+    await page.screenshot({
+      path: testInfo.outputPath(`completed-${width}.png`),
+      fullPage: true,
+    })
+    await page.getByText("完整统计与执行阶段", { exact: true }).click()
+    await expect(page.getByTestId("count-ad-succeeded")).toHaveText("2")
+    await expect(page.getByTestId("count-ad-succeeded")).toBeVisible()
+    await page.getByRole("button", { name: "技术详情", exact: true }).click()
+    await expect(page.getByRole("region", { name: "执行连接" })).toBeVisible()
+    await expect(page.getByText("原搭建连接", { exact: true })).toBeVisible()
+    expect(api.requests.every((r) => r.method === "GET")).toBe(true)
+  })
+}
+
+test("操作记录先呈现中文与业务对象，原始事件和编号可展开", async ({ page }) => {
+  const api = await boundary(page)
+  await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}&tab=events`)
+  await expect(
+    page.getByText("广告 · 结果待核实", { exact: true }),
+  ).toBeVisible()
+  await expect(page.getByText("真实账户", { exact: true })).toBeVisible()
+  await expect(page.getByText("步骤编号", { exact: true })).not.toBeVisible()
+  await page.getByText("技术记录", { exact: true }).click()
+  await expect(page.getByText("步骤编号", { exact: true })).toBeVisible()
+  await expect(
+    page.getByText("UNKNOWN · 尝试序号 1", { exact: true }),
+  ).toBeVisible()
+  expect(api.requests.every((r) => r.method === "GET")).toBe(true)
 })

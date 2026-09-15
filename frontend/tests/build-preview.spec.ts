@@ -2,6 +2,42 @@ import { expect, test } from "@playwright/test"
 import { BC, buildsBoundary, P, T } from "./utils/buildsBoundary"
 import { expectWorkspaceLayout } from "./utils/workspaceLayout"
 
+for (const viewer of [false, true]) {
+  test(`历史提交配置跨会话只读，viewer=${viewer}`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: viewer ? 390 : 1440, height: 900 })
+    const api = await buildsBoundary(page, { viewer, blocked: true })
+    api.preview.submission_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
+    await expect(
+      page.getByRole("heading", { name: "提交配置", exact: true }),
+    ).toBeVisible()
+    await expect(page.getByText(/本次任务提交时的配置 · 只读/)).toBeVisible()
+    await expect(page.getByRole("list", { name: "搭建步骤" })).toHaveCount(0)
+    await expect(
+      page.getByRole("button", { name: /创建并立即启用|返回调整/ }),
+    ).toHaveCount(0)
+    await expectWorkspaceLayout(page)
+    await page.screenshot({
+      path: testInfo.outputPath("submitted-config.png"),
+      fullPage: true,
+    })
+    await page.getByRole("tab", { name: "输入问题", exact: true }).click()
+    await expect(page.getByText("未解析剧名", { exact: true })).toBeVisible()
+    await expect(page.getByRole("button", { name: "返回修正" })).toHaveCount(0)
+    await page.reload()
+    await expect(
+      page.getByRole("heading", { name: "提交配置", exact: true }),
+    ).toBeVisible()
+    await page.getByRole("link", { name: "返回任务详情" }).click()
+    await expect(page).toHaveURL(
+      new RegExp(`/build-tasks/${api.preview.submission_id}`),
+    )
+    expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
+  })
+}
+
 test("冻结预览两剧三账户实际六Campaign，金额使用后端字符串，明细按需读取", async ({
   page,
 }) => {
@@ -279,11 +315,11 @@ test("提交响应丢失后刷新只回查原请求，返回预览不能再次�
         r.path.endsWith(`/submission-requests/${requestId}`),
     ),
   ).toHaveLength(1)
-  await page.getByRole("link", { name: "查看冻结预览" }).click()
+  await page.getByRole("link", { name: "查看提交配置" }).click()
   await expect(
     page.getByRole("button", { name: /创建并立即启用/ }),
-  ).toBeDisabled()
-  await page.getByRole("button", { name: "查看已受理任务" }).click()
+  ).toHaveCount(0)
+  await page.getByRole("link", { name: "返回任务详情" }).click()
   await expect(
     page.getByRole("heading", { name: "任务 batch-real", exact: true }),
   ).toBeVisible()

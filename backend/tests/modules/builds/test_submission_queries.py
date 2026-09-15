@@ -1,17 +1,28 @@
 from uuid import uuid4
 
 from app.modules.builds import submission_catalog, submissions
-from app.modules.builds.preview_models import BuildPreview
+from app.modules.builds.preview_models import BuildPreview, BuildUnit
 from app.modules.builds.routes import save_attempt_context
 from tests.modules.builds.test_previews import prepared as prepared
 from tests.modules.builds.test_submissions import frozen as frozen
 
 
 def test_catalog_counts_match_exact_summary_before_expansion(session, context, frozen):
+    from app.modules.builds.previews import get_preview_summary
+
+    assert (
+        get_preview_summary(session, context=context, preview_id=frozen).submission_id
+        is None
+    )
     receipt = submissions.submit_preview(
         session, context=context, preview_id=frozen, request_id=uuid4()
     )
     preview = session.get(BuildPreview, frozen)
+    # 不依赖提交者会话；数据库受理后，历史预览摘要返回同一任务。
+    assert (
+        get_preview_summary(session, context=context, preview_id=frozen).submission_id
+        == receipt.submission_id
+    )
     result = submission_catalog.list_submissions(
         session, context=context, bc_id=preview.bc_id
     )
@@ -388,6 +399,9 @@ def test_groups_ads_page_scope_and_events_are_whitelisted(
         session, context=context, submission_id=identity, limit=2
     )
     assert [x.attempt for x in events.items] == [2, 1]
+    event_unit = session.get(BuildUnit, step.unit_id)
+    assert events.items[0].advertiser_id == event_unit.advertiser_id
+    assert events.items[0].title and events.items[0].account_name
     tail = submission_catalog.get_submission_events(
         session,
         context=context,
@@ -408,6 +422,9 @@ def test_groups_ads_page_scope_and_events_are_whitelisted(
         "observed_at",
         "unit_id",
         "kind",
+        "title",
+        "advertiser_id",
+        "account_name",
     }
     detail = submissions.get_submission_steps(
         session, context=context, submission_id=identity, kind="AD", limit=1

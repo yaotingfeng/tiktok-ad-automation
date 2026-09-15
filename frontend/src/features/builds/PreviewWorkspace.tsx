@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
-import { useNavigate, useRouterState } from "@tanstack/react-router"
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router"
 import { useState } from "react"
 import {
   BuildsService,
@@ -25,6 +25,7 @@ import {
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
+import { cn } from "@/lib/utils"
 import { buildKey } from "./api"
 import { ExecutionRoute } from "./ExecutionRoute"
 import {
@@ -93,9 +94,13 @@ export function BuildPreviewPanel({
     tenantId,
     bcId,
     previewId,
-    write && !summary.error,
+    write && !summary.error && !summary.data?.submission_id,
   )
   const current = summary.data
+  // 服务端任务关联负责跨会话识别，刚受理的本页回执可立即进入只读态。
+  const submittedId =
+    current?.submission_id || submission.record?.receipt?.submission_id
+  const readOnly = !!submittedId
   if (summary.isPending) return <Skeleton className="h-64 w-full" />
   if (summary.error && !current)
     return (
@@ -125,23 +130,54 @@ export function BuildPreviewPanel({
     <div className="flex min-w-0 flex-col gap-6">
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <WorkspacePageTitle>搭建预览</WorkspacePageTitle>
+          <WorkspacePageTitle>
+            {readOnly ? "提交配置" : "搭建预览"}
+          </WorkspacePageTitle>
           <p className="text-sm text-muted-foreground">
-            草稿 v{current.draft_revision} ·{" "}
-            <BuildStatus value={current.status} />
+            {readOnly ? (
+              `本次任务提交时的配置 · 只读 · 版本 ${current.draft_revision}`
+            ) : (
+              <>
+                草稿 v{current.draft_revision} ·{" "}
+                <BuildStatus value={current.status} />
+              </>
+            )}
           </p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => void summary.refetch()}>
-            刷新预览状态
+            {readOnly ? "刷新配置状态" : "刷新预览状态"}
           </Button>
-          <Button variant="outline" onClick={back}>
-            返回调整
-          </Button>
+          {submittedId ? (
+            <Button variant="outline" asChild>
+              <Link
+                to="/tenants/$tenantId/build-tasks/$submissionId"
+                params={{ tenantId, submissionId: submittedId }}
+                search={{ bc_id: bcId }}
+              >
+                返回任务详情
+              </Link>
+            </Button>
+          ) : (
+            <Button variant="outline" onClick={back}>
+              返回调整
+            </Button>
+          )}
         </div>
       </div>
-      <BuildSteps step={3} />
-      <ExecutionRoute route={current.execution_route} />
+      {!readOnly && <BuildSteps step={3} />}
+      {readOnly ? (
+        <details>
+          <summary className="cursor-pointer text-sm text-muted-foreground">
+            查看提交时的连接
+          </summary>
+          <div className="mt-3">
+            <ExecutionRoute route={current.execution_route} />
+          </div>
+        </details>
+      ) : (
+        <ExecutionRoute route={current.execution_route} />
+      )}
       {summary.error && (
         <RequestError
           error={summary.error}
@@ -149,13 +185,15 @@ export function BuildPreviewPanel({
         />
       )}
       <BuildGuard
-        dirty={submission.busy || submission.unknown}
+        dirty={!readOnly && (submission.busy || submission.unknown)}
         title="提交结果尚待核实"
         description="离开只停止本页等待；已受理的广告任务仍会继续。返回此预览可按原请求核实。"
         leaveLabel="离开并稍后核实"
       />
-      {!!submission.error && <RequestError error={submission.error} />}
-      {submission.unknown && (
+      {!readOnly && !!submission.error && (
+        <RequestError error={submission.error} />
+      )}
+      {!readOnly && submission.unknown && (
         <Alert>
           <AlertDescription>
             <p role="status">
@@ -171,19 +209,7 @@ export function BuildPreviewPanel({
           </AlertDescription>
         </Alert>
       )}
-      {submission.record?.receipt && (
-        <Alert>
-          <AlertDescription>
-            <p>本预览已受理，请查看原任务结果。</p>
-            <Button
-              onClick={() => void submission.go(submission.record!.receipt!)}
-            >
-              查看已受理任务
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
-      {current.status === "OBSOLETE" && (
+      {!readOnly && current.status === "OBSOLETE" && (
         <Alert variant="destructive">
           <AlertDescription>
             草稿已更新，当前预览已过期。返回调整后重新生成预览，原冻结配置不会被修改。
@@ -215,13 +241,17 @@ export function BuildPreviewPanel({
         </Card>
       ) : (
         <>
-          <Alert>
-            <AlertDescription>
-              本次排除 {current.blocked_count} 个阻断组合；另有{" "}
-              {current.input_issue_count}{" "}
-              条输入问题，未形成组合。仅提交可用与提交后可分发范围，排除项不会自动补入。
-            </AlertDescription>
-          </Alert>
+          {(current.blocked_count > 0 || current.input_issue_count > 0) && (
+            <Alert>
+              <AlertDescription>
+                本次排除 {current.blocked_count} 个阻断组合；另有{" "}
+                {current.input_issue_count} 条输入问题，未形成组合。
+                {readOnly
+                  ? "排除项未包含在本次提交中。"
+                  : "仅提交可用与提交后可分发范围，排除项不会自动补入。"}
+              </AlertDescription>
+            </Alert>
+          )}
           <Card className="min-w-0">
             <CardHeader className="min-w-0">
               <Tabs
@@ -255,7 +285,7 @@ export function BuildPreviewPanel({
                   tenantId={tenantId}
                   bcId={bcId}
                   previewId={previewId}
-                  onEdit={back}
+                  onEdit={readOnly ? undefined : back}
                 />
               ) : (
                 <PreviewUnitTable
@@ -272,7 +302,10 @@ export function BuildPreviewPanel({
           </Card>
           <PreviewSummaryBar
             preview={current}
-            write={write && !submission.forbidden && !summary.error}
+            readOnly={readOnly}
+            write={
+              !readOnly && write && !submission.forbidden && !summary.error
+            }
             onSubmit={onSubmit || submission.submit}
             unavailable={!!submission.record || submission.busy}
           />
@@ -294,16 +327,18 @@ export function PreviewSummaryBar({
   write,
   onSubmit,
   unavailable = false,
+  readOnly = false,
 }: {
   preview: PreviewSummary
   write: boolean
   onSubmit?: PreviewSubmit
   unavailable?: boolean
+  readOnly?: boolean
 }) {
   const [pending, setPending] = useState(false),
     [error, setError] = useState<unknown>()
   return (
-    <Card className="sticky bottom-0 min-w-0">
+    <Card className={cn("min-w-0", !readOnly && "sticky bottom-0")}>
       <CardContent className="flex min-w-0 flex-col gap-3">
         {!!error && <RequestError error={error} />}
         <div className="flex flex-wrap items-center justify-between gap-4">
@@ -317,13 +352,17 @@ export function PreviewSummaryBar({
               {normalizeDecimal(preview.daily_budget_sum)}
             </p>
             <p className="text-xs text-muted-foreground">
-              各 Campaign 配置日预算之和，非预计实际消耗。排除{" "}
-              {preview.blocked_count} 个阻断组合，{preview.preparing_count}{" "}
-              个组合将在提交后分发素材。
+              各 Campaign 配置日预算之和，非预计实际消耗。
+              {!readOnly &&
+                preview.blocked_count > 0 &&
+                `排除 ${preview.blocked_count} 个阻断组合。`}
+              {!readOnly &&
+                preview.preparing_count > 0 &&
+                `${preview.preparing_count} 个组合将在提交后分发素材。`}
             </p>
           </div>
-          {write && (
-            <div className="space-y-2">
+          {write && !readOnly && !preview.submission_id && (
+            <div className="flex flex-col gap-2">
               <Button
                 disabled={
                   !onSubmit ||
@@ -490,7 +529,7 @@ function PreviewExclusions({
   tenantId: string
   bcId: string
   previewId: string
-  onEdit: () => void
+  onEdit?: () => void
 }) {
   const [kind, setKind] = useState<"drama" | "account">("drama"),
     paging = useCursorPage(),
@@ -557,11 +596,14 @@ function PreviewExclusions({
             },
             {
               header: "操作",
-              cell: () => (
-                <Button variant="ghost" onClick={onEdit}>
-                  返回修正
-                </Button>
-              ),
+              cell: () =>
+                onEdit ? (
+                  <Button variant="ghost" onClick={onEdit}>
+                    返回修正
+                  </Button>
+                ) : (
+                  <span className="text-muted-foreground">未提交</span>
+                ),
             },
           ]}
         />

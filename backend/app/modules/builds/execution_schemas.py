@@ -206,6 +206,9 @@ class SubmissionAdPublic(BaseModel):
 class SubmissionEventPublic(EvidencePublic):
     unit_id: UUID
     kind: str
+    title: str
+    advertiser_id: str
+    account_name: str | None
 
 
 class SubmissionMaterialPublic(BaseModel):

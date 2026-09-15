@@ -1,6 +1,12 @@
 import type { StepPublic, SubmissionView } from "@/client"
 import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import {
   Table,
   TableBody,
@@ -96,74 +102,142 @@ export function SubmissionProgress({ data }: { data: SubmissionView }) {
         <CardTitle>
           <h2>广告创建结果</h2>
         </CardTitle>
+        <CardDescription>
+          已创建不代表已投放；启用、审核与实际消耗以平台结果为准。
+        </CardDescription>
       </CardHeader>
       <CardContent className="flex min-w-0 flex-col gap-4">
-        <div className="min-w-0 overflow-hidden rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>对象</TableHead>
-                {[
-                  "计划",
-                  "提交",
-                  "已创建",
-                  "失败",
-                  "待核实",
-                  "待处理",
-                  "排除",
-                ].map((x) => (
-                  <TableHead key={x}>{x}</TableHead>
-                ))}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(
-                [
-                  ["campaign_count", "Campaign", "campaign"],
-                  ["adgroup_count", "Ad Group", "group"],
-                  ["ad_count", "Ad", "ad"],
-                ] as const
-              ).map(([field, label, id]) => (
-                <TableRow key={field}>
-                  <TableCell className="font-medium">{label}</TableCell>
+        <dl className="grid grid-cols-3 gap-4" aria-label="创建数量摘要">
+          {(
+            [
+              ["campaign_count", "广告系列"],
+              ["adgroup_count", "广告组"],
+              ["ad_count", "广告"],
+            ] as const
+          ).map(([field, label]) => (
+            <div key={field} className="flex min-w-0 flex-col gap-1">
+              <dt className="text-sm text-muted-foreground">{label}</dt>
+              <dd className="text-2xl font-semibold tabular-nums">
+                {data.succeeded[field]}
+                <span className="ml-1 text-sm font-normal text-muted-foreground">
+                  / {data.submitted[field]}
+                </span>
+              </dd>
+            </div>
+          ))}
+        </dl>
+        {(countObjects(data.failed) > 0 ||
+          countObjects(data.unknown) > 0 ||
+          Object.entries(data.stage_counts).some(
+            ([key, count]) =>
+              /^(MATERIAL|CTA|READBACK):(UNKNOWN|FAILED|RETRYABLE)$/.test(
+                key,
+              ) && count > 0,
+          )) && (
+          <section className="flex flex-wrap gap-2" aria-label="待处理数量">
+            {countObjects(data.failed) > 0 && (
+              <Badge variant="destructive">
+                失败 {countObjects(data.failed)} 个广告对象
+              </Badge>
+            )}
+            {countObjects(data.unknown) > 0 && (
+              <Badge variant="outline">
+                待核实 {countObjects(data.unknown)} 个广告对象
+              </Badge>
+            )}
+            {Object.entries(data.stage_counts)
+              .filter(
+                ([key, count]) =>
+                  /^(MATERIAL|CTA|READBACK):(UNKNOWN|FAILED|RETRYABLE)$/.test(
+                    key,
+                  ) && count > 0,
+              )
+              .map(([key, count]) => {
+                const [kind, status] = key.split(":")
+                return (
+                  <Badge
+                    key={key}
+                    variant={status === "FAILED" ? "destructive" : "outline"}
+                  >
+                    {stepKinds[kind] || kind} · {stepStates[status]} {count}
+                  </Badge>
+                )
+              })}
+          </section>
+        )}
+        <details>
+          <summary className="cursor-pointer text-sm text-muted-foreground">
+            完整统计与执行阶段
+          </summary>
+          <div className="mt-3 flex min-w-0 flex-col gap-3">
+            <div className="min-w-0 overflow-hidden rounded-lg border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>对象</TableHead>
+                    {[
+                      "计划",
+                      "提交",
+                      "已创建",
+                      "失败",
+                      "待核实",
+                      "待处理",
+                      "排除",
+                    ].map((x) => (
+                      <TableHead key={x}>{x}</TableHead>
+                    ))}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {(
                     [
-                      "planned",
-                      "submitted",
-                      "succeeded",
-                      "failed",
-                      "unknown",
-                      "pending",
-                      "excluded",
+                      ["campaign_count", "Campaign", "campaign"],
+                      ["adgroup_count", "Ad Group", "group"],
+                      ["ad_count", "Ad", "ad"],
                     ] as const
-                  ).map((key) => (
-                    <TableCell key={key} data-testid={`count-${id}-${key}`}>
-                      {data[key][field]}
-                    </TableCell>
+                  ).map(([field, label, id]) => (
+                    <TableRow key={field}>
+                      <TableCell className="font-medium">{label}</TableCell>
+                      {(
+                        [
+                          "planned",
+                          "submitted",
+                          "succeeded",
+                          "failed",
+                          "unknown",
+                          "pending",
+                          "excluded",
+                        ] as const
+                      ).map((key) => (
+                        <TableCell key={key} data-testid={`count-${id}-${key}`}>
+                          {data[key][field]}
+                        </TableCell>
+                      ))}
+                    </TableRow>
                   ))}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          已创建事实与结果差异分别记录；素材、CTA
-          与核查步骤不计入上述广告对象数。
-          {(data.corrected_ad_count ?? 0) > 0 &&
-            ` 已创建包含${data.corrected_ad_count}条已核实补建，原尝试保留在明细审计中。`}
-        </p>
-        <div className="flex min-w-0 flex-wrap gap-3 text-xs">
-          {Object.entries(data.stage_counts)
-            .filter(([key]) => /^(MATERIAL|CTA|READBACK):/.test(key))
-            .map(([key, count]) => {
-              const [kind, status] = key.split(":")
-              return (
-                <span key={key}>
-                  {stepKinds[kind]} · {stepStates[status] || status} {count}
-                </span>
-              )
-            })}
-        </div>
+                </TableBody>
+              </Table>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              已创建事实与结果差异分别记录；素材、CTA
+              与核查步骤不计入上述广告对象数。
+              {(data.corrected_ad_count ?? 0) > 0 &&
+                ` 已创建包含${data.corrected_ad_count}条已核实补建，原尝试保留在明细审计中。`}
+            </p>
+            <div className="flex min-w-0 flex-wrap gap-3 text-xs">
+              {Object.entries(data.stage_counts)
+                .filter(([key]) => /^(MATERIAL|CTA|READBACK):/.test(key))
+                .map(([key, count]) => {
+                  const [kind, status] = key.split(":")
+                  return (
+                    <span key={key}>
+                      {stepKinds[kind]} · {stepStates[status] || status} {count}
+                    </span>
+                  )
+                })}
+            </div>
+          </div>
+        </details>
       </CardContent>
     </Card>
   )

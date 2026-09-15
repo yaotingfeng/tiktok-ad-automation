@@ -98,6 +98,7 @@ export async function buildsBoundary(
     updated_at: "2026-09-09T00:00:00Z",
   }
   const preview = {
+    submission_id: null as string | null,
     execution_route: options.missingRoute
       ? null
       : {
@@ -536,12 +537,15 @@ export async function buildsBoundary(
     if (path.endsWith(`/build-previews/${P}/submit`)) {
       if (options.submitDenied) return reply({ code: "action_forbidden" }, 403)
       if (options.submitUnknown) return route.abort("failed")
+      preview.submission_id = submissionId
       return reply({ submission_id: submissionId, status: "QUEUED" }, 202)
     }
-    if (path.includes("/submission-requests/"))
+    if (path.includes("/submission-requests/")) {
+      if (!options.lookup404) preview.submission_id = submissionId
       return options.lookup404
         ? reply({ code: "resource_not_found" }, 404)
         : reply({ submission_id: submissionId, status: "QUEUED" })
+    }
     if (
       options.historicalRead &&
       path.endsWith(`/submissions/${submissionId}/steps`)

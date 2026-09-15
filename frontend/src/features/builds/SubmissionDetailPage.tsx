@@ -2,23 +2,20 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router"
 import { useEffect, useRef, useState } from "react"
 import { BuildsService } from "@/client"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { displayTime, Identifier } from "@/features/accounts/presentation"
 import { normalizeDecimal } from "@/features/strategies/validation"
+import { ManagementSheet } from "@/features/tenants/ManagementSheet"
 import { canManage, isForbidden, RequestError } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import { ExecutionRoute } from "./ExecutionRoute"
-import {
-  countObjects,
-  SubmissionBadge,
-  SubmissionProgress,
-} from "./SubmissionPresentation"
+import { SubmissionBadge, SubmissionProgress } from "./SubmissionPresentation"
 import { SubmissionRecoveryActions } from "./SubmissionRecoveryActions"
 import {
   SubmissionEventsTable,
@@ -52,6 +49,7 @@ export function SubmissionDetailPage() {
       key={`${tenantId}:${scope.bcId}:${id}`}
       tenantId={tenantId}
       tenantName={tenant?.name || tenantId}
+      bcName={bc.name || scope.bcId}
       bcId={scope.bcId}
       submissionId={id}
       write={scope.role !== "viewer"}
@@ -61,17 +59,20 @@ export function SubmissionDetailPage() {
 function Detail({
   tenantId,
   tenantName,
+  bcName,
   bcId,
   submissionId,
   write,
 }: {
   tenantId: string
   tenantName: string
+  bcName: string
   bcId: string
   submissionId: string
   write: boolean
 }) {
   const { scope } = useTenantScope()
+  const [technicalOpen, setTechnicalOpen] = useState(false)
   const navigate = useNavigate(),
     client = useQueryClient(),
     search = useRouterState({
@@ -206,45 +207,44 @@ function Detail({
               correctedAdCount={data.corrected_ad_count}
             />
             <span className="text-sm">
-              {data.drama_count} 剧 · {data.account_count} 户 · 另有{" "}
-              {data.excluded_unit_count} 个排除组合
+              {data.drama_count} 剧 · {data.account_count} 户
+              {data.excluded_unit_count > 0 &&
+                ` · 排除 ${data.excluded_unit_count} 个组合`}
             </span>
           </div>
+          <p className="text-sm text-muted-foreground">
+            {bcName} · {data.actor_name || "暂未获取提交人"} 提交于{" "}
+            {displayTime(data.created_at)}
+          </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={refresh}>
+          <Button variant="ghost" onClick={refresh}>
             刷新任务结果
+          </Button>
+          <Button variant="ghost" onClick={() => setTechnicalOpen(true)}>
+            技术详情
+          </Button>
+          <Button variant="outline" asChild>
+            <Link
+              to="/tenants/$tenantId/build-previews/$previewId"
+              params={{ tenantId, previewId: data.preview_id }}
+              search={{ bc_id: bcId }}
+            >
+              查看提交配置
+            </Link>
           </Button>
           {back}
         </div>
       </div>
-      <Card className="min-w-0">
-        <CardContent className="flex min-w-0 flex-col gap-2 text-sm">
-          <div className="flex flex-wrap gap-4">
-            <span>
-              任务所属：{tenantName} · BC {data.bc_id}
-            </span>
-            <span>提交人：{data.actor_name || "暂未获取"}</span>
-          </div>
-          <div className="flex flex-wrap gap-4">
-            <span>版权方：{data.provider_name || "暂无冻结版权方"}</span>
-            <span>策略：{data.strategy_label || "暂未获取"}</span>
-          </div>
-          <details>
-            <summary className="cursor-pointer text-muted-foreground">
-              完整编号与时间
-            </summary>
-            <div className="mt-2 flex flex-col gap-2">
-              <Identifier value={data.submission_id} />
-              <span>
-                提交于 {displayTime(data.created_at)} · 最近更新{" "}
-                {displayTime(data.updated_at)}
-              </span>
-              <Identifier value={data.preview_id} />
-            </div>
-          </details>
-        </CardContent>
-      </Card>
+      <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-muted-foreground">
+        <span>版权方：{data.provider_name || "暂无冻结版权方"}</span>
+        <span>策略：{data.strategy_label || "暂未获取"}</span>
+        <span title="已提交广告系列配置日预算之和，非预计实际消耗。">
+          配置日预算合计 {data.currency}{" "}
+          {normalizeDecimal(data.daily_budget_sum)}
+          <span className="ml-1">（非实际消耗）</span>
+        </span>
+      </div>
       <SubmissionProgress data={data} />
       {data.recovery_mode === "REAUTHORIZE_READ" && (
         <Alert>
@@ -253,33 +253,46 @@ function Detail({
           </AlertDescription>
         </Alert>
       )}
-      <ExecutionRoute route={data.execution_route} />
-      <Alert>
-        <AlertDescription>
-          <div className="flex flex-col gap-2">
-            <p>
-              {data.status === "COMPLETED"
-                ? "本次提交已完成。"
-                : data.status === "NEEDS_REVIEW"
-                  ? "先确认是否已创建，避免重复创建。"
+      {data.status !== "COMPLETED" && (
+        <Alert>
+          <AlertTitle>
+            {["QUEUED", "RUNNING"].includes(data.status)
+              ? "任务正在处理"
+              : "需要处理"}
+          </AlertTitle>
+          <AlertDescription>
+            <div className="flex flex-col gap-2">
+              <p>
+                {data.status === "NEEDS_REVIEW"
+                  ? "部分结果尚待核实，请查看“异常与待核实”，先确认是否已创建，避免重复创建。"
                   : data.status === "QUEUED"
                     ? "任务已受理，等待执行。"
                     : data.status === "RUNNING"
                       ? "正在准备素材、创建或核查结果，其他可执行组合继续处理。"
                       : "当前任务存在确定失败，请查看原因和可处理范围。"}
-            </p>
-            {countObjects(data.succeeded) > 0 && (
-              <p>已创建部分保持现状；启用状态、审核和实际投放分别核实。</p>
-            )}
-            <p>
-              配置日预算合计 {data.currency}{" "}
-              {normalizeDecimal(data.daily_budget_sum)}，为已提交 Campaign
-              配置之和，非预计实际消耗。
-            </p>
-            {!data.expanded && <p>后台正在展开执行范围，统计将继续更新。</p>}
-          </div>
-        </AlertDescription>
-      </Alert>
+              </p>
+              {!data.expanded && <p>后台正在展开执行范围，统计将继续更新。</p>}
+            </div>
+          </AlertDescription>
+        </Alert>
+      )}
+      {(!data.execution_route || data.recovery_mode === "BLOCKED") && (
+        <Alert variant="destructive">
+          <AlertTitle>任务连接需要检查</AlertTitle>
+          <AlertDescription>
+            <p>当前连接无法支持此任务的后续处理，请查看连接与授权情况。</p>
+            <Button variant="outline" asChild>
+              <Link
+                to="/tenants/$tenantId/accounts"
+                params={{ tenantId }}
+                search={{ bc_id: bcId, tab: "connections" }}
+              >
+                {canManage(scope?.role) ? "前往处理授权" : "查看授权情况"}
+              </Link>
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
       <SubmissionRecoveryActions
         tenantId={tenantId}
         bcId={bcId}
@@ -287,26 +300,6 @@ function Detail({
         recovery={data.recovery}
         write={write}
       />
-      <div className="flex flex-wrap gap-2">
-        <Button variant="outline" asChild>
-          <Link
-            to="/tenants/$tenantId/build-previews/$previewId"
-            params={{ tenantId, previewId: data.preview_id }}
-            search={{ bc_id: bcId }}
-          >
-            查看冻结预览
-          </Link>
-        </Button>
-        <Button variant="outline" asChild>
-          <Link
-            to="/tenants/$tenantId/accounts"
-            params={{ tenantId }}
-            search={{ bc_id: bcId, tab: "connections" }}
-          >
-            账户与授权
-          </Link>
-        </Button>
-      </div>
       <Card className="min-w-0">
         <CardHeader className="min-w-0 gap-4">
           <Tabs
@@ -319,10 +312,14 @@ function Detail({
               })
             }
           >
-            <TabsList>
+            <TabsList className="h-auto flex-wrap">
               <TabsTrigger value="details">搭建明细</TabsTrigger>
               <TabsTrigger value="issues">异常与待核实</TabsTrigger>
-              <TabsTrigger value="excluded">排除项</TabsTrigger>
+              {(data.excluded_unit_count > 0 || tab === "excluded") && (
+                <TabsTrigger value="excluded">
+                  排除项（{data.excluded_unit_count}）
+                </TabsTrigger>
+              )}
               <TabsTrigger value="events">操作记录</TabsTrigger>
             </TabsList>
           </Tabs>
@@ -353,11 +350,11 @@ function Detail({
             />
           ) : (
             <>
-              <p className="text-xs text-muted-foreground">
-                {tab === "excluded"
-                  ? "排除组合未提交，不提供重试；修复后需在新预览明确提交。"
-                  : "已创建表示已有远端对象；ENABLE 表示启用，不表示已投放或已消耗。"}
-              </p>
+              {tab === "excluded" && (
+                <p className="text-xs text-muted-foreground">
+                  排除组合未提交；修复后需在新预览明确提交。
+                </p>
+              )}
               <SubmissionUnitsTable
                 {...{ tenantId, bcId, submissionId }}
                 advertiserId={current.advertiserId}
@@ -368,6 +365,30 @@ function Detail({
           )}
         </CardContent>
       </Card>
+      {technicalOpen && (
+        <ManagementSheet
+          title="技术详情"
+          description="用于定位任务与核对执行连接。"
+          dirty={false}
+          onClose={() => setTechnicalOpen(false)}
+        >
+          <div className="flex flex-col gap-4 text-sm">
+            <p>
+              任务所属：{tenantName} · {bcName}
+            </p>
+            <div>
+              任务编号
+              <Identifier value={data.submission_id} />
+            </div>
+            <div>
+              配置记录编号
+              <Identifier value={data.preview_id} />
+            </div>
+            <p>最近更新 {displayTime(data.updated_at)}</p>
+            <ExecutionRoute route={data.execution_route} />
+          </div>
+        </ManagementSheet>
+      )}
     </div>
   )
 }
