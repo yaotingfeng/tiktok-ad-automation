@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { useEffect, useRef, useState } from "react"
 import { AccountsService, type McpCandidateBC } from "@/client"
+import { PaginationSummary } from "@/components/Common/PaginationSummary"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -349,9 +350,11 @@ export function McpAuthorizationSheet({
                     >
                       上一页 BC
                     </Button>
-                    <span className="text-sm">
-                      共 {candidates.data.total} 条 · 第 {page} 页
-                    </span>
+                    <PaginationSummary
+                      total={candidates.data.total}
+                      page={page}
+                      pageSize={PAGE_SIZE}
+                    />
                     <Button
                       variant="outline"
                       disabled={

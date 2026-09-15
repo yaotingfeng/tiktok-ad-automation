@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react"
 import type { IngestSummary } from "@/client"
+import { PaginationSummary } from "@/components/Common/PaginationSummary"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { FieldGroup } from "@/components/ui/field"
@@ -151,10 +152,11 @@ export function BatchUploadSheet({
             >
               上一页
             </Button>
-            <span className="text-sm text-muted-foreground">
-              共 {files.size} 个 · 第 {currentPage + 1} /{" "}
-              {Math.ceil(files.size / FILE_WINDOW)} 页 · 每页 100 个
-            </span>
+            <PaginationSummary
+              total={files.size}
+              page={currentPage + 1}
+              pageSize={FILE_WINDOW}
+            />
             <Button
               variant="outline"
               disabled={(currentPage + 1) * FILE_WINDOW >= files.size}

@@ -7,6 +7,7 @@ import {
   type DraftMaterialPublic,
   type DraftSummary,
 } from "@/client"
+import { PaginationSummary } from "@/components/Common/PaginationSummary"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Field, FieldLabel } from "@/components/ui/field"
@@ -465,10 +466,12 @@ export function DramaMaterialSheet({
                 >
                   上一页素材
                 </Button>
-                <span className="text-xs">
-                  共 {items.length} 条 · 第 {Math.floor(offset / 50) + 1} 页 ·
-                  每页 50
-                </span>
+                <PaginationSummary
+                  total={items.length}
+                  page={Math.floor(offset / 50) + 1}
+                  pageSize={50}
+                  className="text-xs"
+                />
                 <Button
                   variant="outline"
                   disabled={offset + 50 >= items.length}

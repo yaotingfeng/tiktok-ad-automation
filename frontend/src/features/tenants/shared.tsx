@@ -7,6 +7,7 @@ import {
 import { AxiosError } from "axios"
 import { useEffect, useRef, useState } from "react"
 import type { TenantSummary } from "@/client"
+import { PaginationSummary } from "@/components/Common/PaginationSummary"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -133,10 +134,11 @@ export function Pager({
         </Select>
       </div>
       <div className="flex items-center gap-3">
-        <span className="text-sm text-muted-foreground">
-          {visibleTotal === undefined ? "" : `共 ${visibleTotal} 条 · `}第{" "}
-          {paging.page} 页
-        </span>
+        <PaginationSummary
+          total={visibleTotal}
+          page={paging.page}
+          pageSize={paging.limit}
+        />
         <Button
           variant="outline"
           size="sm"

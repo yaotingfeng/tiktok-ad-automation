@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
 import { BuildsService, type DraftMinis, type DraftSummary } from "@/client"
+import { PaginationSummary } from "@/components/Common/PaginationSummary"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import {
@@ -12,6 +13,8 @@ import {
 } from "@/components/ui/dialog"
 import { buildKey, mutationKey, readPendingMutation } from "./api"
 import { BuildError, reportError, unknownOutcome } from "./presentation"
+
+const PAGE_SIZE = 50
 
 export function MiniTargetPicker({
   tenantId,
@@ -190,9 +193,11 @@ export function MiniTargetPicker({
               >
                 上一页
               </Button>
-              <span className="text-sm">
-                共 {data?.total ?? 0} 条 · 第 {page} 页
-              </span>
+              <PaginationSummary
+                total={data?.total ?? 0}
+                page={page}
+                pageSize={PAGE_SIZE}
+              />
               <Button
                 variant="outline"
                 disabled={busy || !data?.next_page || query.isFetching}

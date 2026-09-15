@@ -288,7 +288,7 @@ test("目录分页保留 literal 搜索日期与 50/100 游标", async ({ page }
   await page.getByLabel("结束日期", { exact: true }).fill("2026-09-09")
   await page.getByRole("button", { name: "搜索", exact: true }).click()
   await page.getByRole("button", { name: "下一页", exact: true }).click()
-  await expect(page.getByText("第 2 页", { exact: true })).toBeVisible()
+  await expect(page.getByText(/第 2(?: \/ \d+)? 页/)).toBeVisible()
   const req = requests.filter((r) => r.path.endsWith("/materials")).pop()!
   expect(req.query.get("query")).toBe("剧%_名")
   expect(req.query.get("cursor")).toBe("50")
@@ -300,7 +300,7 @@ test("目录分页保留 literal 搜索日期与 50/100 游标", async ({ page }
   await expect(
     page
       .getByRole("region", { name: "素材目录" })
-      .getByText("第 1 页", { exact: true }),
+      .getByText(/第 1(?: \/ \d+)? 页/),
   ).toBeVisible()
   expect(
     requests

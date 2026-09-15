@@ -354,7 +354,7 @@ test("切换列表筛选总是回首页，返回曾访问筛选不复用旧页",
     .toBe("50")
   await page.getByRole("tab", { name: "全部", exact: true }).click()
   await page.getByRole("tab", { name: "需要处理", exact: true }).click()
-  await expect(page.getByText("第 1 页", { exact: true })).toBeVisible()
+  await expect(page.getByText(/第 1(?: \/ \d+)? 页/)).toBeVisible()
   expect(
     api.requests
       .filter(
@@ -393,7 +393,7 @@ test("列表进入详情再返回保留已提交筛选和当前页", async ({ pa
   await page.getByLabel("搜索任务", { exact: true }).fill("Moon_%")
   await page.getByRole("button", { name: "搜索", exact: true }).click()
   await page.getByRole("button", { name: "下一页", exact: true }).click()
-  await expect(page.getByText("第 2 页", { exact: true })).toBeVisible()
+  await expect(page.getByText(/第 2(?: \/ \d+)? 页/)).toBeVisible()
   await page
     .getByRole("link", { name: "查看详情", exact: true })
     .first()
@@ -405,7 +405,7 @@ test("列表进入详情再返回保留已提交筛选和当前页", async ({ pa
   await expect(page.getByLabel("搜索任务", { exact: true })).toHaveValue(
     "Moon_%",
   )
-  await expect(page.getByText("第 2 页", { exact: true })).toBeVisible()
+  await expect(page.getByText(/第 2(?: \/ \d+)? 页/)).toBeVisible()
   expect(
     api.requests
       .filter(
@@ -444,7 +444,7 @@ test("列表新任务只提示，不插入正在浏览的第二页", async ({ pa
   const api = await boundary(page, { count: 131 })
   await page.goto(`/tenants/${T}/build-tasks?bc_id=${BC}`)
   await page.getByRole("button", { name: "下一页", exact: true }).click()
-  await expect(page.getByText("第 2 页", { exact: true })).toBeVisible()
+  await expect(page.getByText(/第 2(?: \/ \d+)? 页/)).toBeVisible()
   const first = await page
     .getByRole("link", { name: /B0909-/ })
     .first()
@@ -471,7 +471,7 @@ test("列表新任务只提示，不插入正在浏览的第二页", async ({ pa
       .textContent(),
   ).toBe(first)
   await page.getByRole("button", { name: "刷新至首页" }).click()
-  await expect(page.getByText("第 1 页", { exact: true })).toBeVisible()
+  await expect(page.getByText(/第 1(?: \/ \d+)? 页/)).toBeVisible()
   await expect(
     page.getByRole("link", { name: "最新任务", exact: true }),
   ).toBeVisible()
@@ -778,7 +778,7 @@ test("操作记录独立服务端50/100分页，不预先读取后续证据", as
   expect(reads).toHaveLength(1)
   expect(reads[0].get("limit")).toBe("50")
   await page.getByRole("button", { name: "下一页", exact: true }).click()
-  await expect(page.getByText("第 2 页", { exact: true })).toBeVisible()
+  await expect(page.getByText(/第 2(?: \/ \d+)? 页/)).toBeVisible()
   expect(reads[1].get("cursor")).toBe("50")
   await page.getByRole("combobox", { name: "每页条数" }).click()
   await page.getByRole("option", { name: "100 条", exact: true }).click()

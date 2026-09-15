@@ -28,6 +28,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { PaginationSummary } from "./PaginationSummary"
 
 interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[]
@@ -113,8 +114,6 @@ export function DataTable<TData, TValue>({
                   table.getState().pagination.pageSize,
                 data.length,
               )}{" "}
-              条，共{" "}
-              <span className="font-medium text-foreground">{totalCount}</span>{" "}
               条
             </div>
             <div className="flex items-center gap-x-2">
@@ -142,17 +141,11 @@ export function DataTable<TData, TValue>({
           </div>
 
           <div className="flex items-center gap-x-6">
-            <div className="flex items-center gap-x-1 text-sm text-muted-foreground">
-              <span>第</span>
-              <span className="font-medium text-foreground">
-                {table.getState().pagination.pageIndex + 1}
-              </span>
-              <span>页，共</span>
-              <span className="font-medium text-foreground">
-                {table.getPageCount()}
-              </span>
-              <span>页</span>
-            </div>
+            <PaginationSummary
+              total={totalCount}
+              page={table.getState().pagination.pageIndex + 1}
+              pageSize={table.getState().pagination.pageSize}
+            />
 
             <div className="flex items-center gap-x-1">
               <Button
