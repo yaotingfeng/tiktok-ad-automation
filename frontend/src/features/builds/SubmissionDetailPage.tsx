@@ -200,8 +200,8 @@ function Detail({
       )}
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <WorkspacePageTitle>任务 {data.batch_short_id}</WorkspacePageTitle>
           <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <WorkspacePageTitle>任务 {data.batch_short_id}</WorkspacePageTitle>
             <SubmissionBadge
               status={data.status}
               correctedAdCount={data.corrected_ad_count}
@@ -213,16 +213,13 @@ function Detail({
             </span>
           </div>
           <p className="text-sm text-muted-foreground">
-            {bcName} · {data.actor_name || "暂未获取提交人"} 提交于{" "}
+            {data.actor_name || "暂未获取提交人"} 提交于{" "}
             {displayTime(data.created_at)}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="ghost" onClick={refresh}>
+          <Button variant="outline" onClick={refresh}>
             刷新任务结果
-          </Button>
-          <Button variant="ghost" onClick={() => setTechnicalOpen(true)}>
-            技术详情
           </Button>
           <Button variant="outline" asChild>
             <Link
@@ -236,16 +233,20 @@ function Detail({
           {back}
         </div>
       </div>
-      <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-muted-foreground">
-        <span>版权方：{data.provider_name || "暂无冻结版权方"}</span>
-        <span>策略：{data.strategy_label || "暂未获取"}</span>
-        <span title="已提交广告系列配置日预算之和，非预计实际消耗。">
-          配置日预算合计 {data.currency}{" "}
-          {normalizeDecimal(data.daily_budget_sum)}
-          <span className="ml-1">（非实际消耗）</span>
-        </span>
-      </div>
-      <SubmissionProgress data={data} />
+      <SubmissionProgress
+        data={data}
+        onTechnicalDetails={() => setTechnicalOpen(true)}
+        metadata={
+          <div className="flex min-w-0 flex-wrap gap-x-6 gap-y-2 text-sm text-muted-foreground [&>span]:break-words">
+            <span>版权方：{data.provider_name || "暂无冻结版权方"}</span>
+            <span>策略：{data.strategy_label || "暂未获取"}</span>
+            <span title="已提交广告系列配置日预算之和，非预计实际消耗。">
+              配置日预算合计 {data.currency}{" "}
+              {normalizeDecimal(data.daily_budget_sum)}（非实际消耗）
+            </span>
+          </div>
+        }
+      />
       {data.recovery_mode === "REAUTHORIZE_READ" && (
         <Alert>
           <AlertDescription>
@@ -276,23 +277,8 @@ function Detail({
           </AlertDescription>
         </Alert>
       )}
-      {(!data.execution_route || data.recovery_mode === "BLOCKED") && (
-        <Alert variant="destructive">
-          <AlertTitle>任务连接需要检查</AlertTitle>
-          <AlertDescription>
-            <p>当前连接无法支持此任务的后续处理，请查看连接与授权情况。</p>
-            <Button variant="outline" asChild>
-              <Link
-                to="/tenants/$tenantId/accounts"
-                params={{ tenantId }}
-                search={{ bc_id: bcId, tab: "connections" }}
-              >
-                {canManage(scope?.role) ? "前往处理授权" : "查看授权情况"}
-              </Link>
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
+      {/* BLOCKED 也包含没有核查候选的正常完成态，不能据此诊断连接失效。
+          真实恢复阻断统一由下方 recovery.reasons 展示，避免重复或误报。 */}
       <SubmissionRecoveryActions
         tenantId={tenantId}
         bcId={bcId}
@@ -386,6 +372,15 @@ function Detail({
             </div>
             <p>最近更新 {displayTime(data.updated_at)}</p>
             <ExecutionRoute route={data.execution_route} />
+            <Button variant="outline" asChild>
+              <Link
+                to="/tenants/$tenantId/accounts"
+                params={{ tenantId }}
+                search={{ bc_id: bcId, tab: "connections" }}
+              >
+                查看连接与授权
+              </Link>
+            </Button>
           </div>
         </ManagementSheet>
       )}

@@ -1,5 +1,7 @@
+import type { ReactNode } from "react"
 import type { StepPublic, SubmissionView } from "@/client"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import {
   Card,
   CardContent,
@@ -95,19 +97,33 @@ export function PlatformState({ step }: { step?: StepPublic | null }) {
     </div>
   )
 }
-export function SubmissionProgress({ data }: { data: SubmissionView }) {
+export function SubmissionProgress({
+  data,
+  metadata,
+  onTechnicalDetails,
+}: {
+  data: SubmissionView
+  metadata: ReactNode
+  onTechnicalDetails: () => void
+}) {
   return (
-    <Card className="min-w-0">
+    <Card className="min-w-0 gap-4 py-4 lg:gap-4 lg:py-4">
       <CardHeader className="min-w-0">
-        <CardTitle>
-          <h2>广告创建结果</h2>
-        </CardTitle>
-        <CardDescription>
-          已创建不代表已投放；启用、审核与实际消耗以平台结果为准。
-        </CardDescription>
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle>
+            <h2>任务概览</h2>
+          </CardTitle>
+          <Button variant="ghost" size="sm" onClick={onTechnicalDetails}>
+            技术详情
+          </Button>
+        </div>
+        {metadata}
       </CardHeader>
-      <CardContent className="flex min-w-0 flex-col gap-4">
-        <dl className="grid grid-cols-3 gap-4" aria-label="创建数量摘要">
+      <CardContent className="flex min-w-0 flex-col gap-3">
+        <dl
+          className="grid grid-cols-3 divide-x rounded-lg border bg-muted/30"
+          aria-label="创建数量摘要"
+        >
           {(
             [
               ["campaign_count", "广告系列"],
@@ -115,9 +131,12 @@ export function SubmissionProgress({ data }: { data: SubmissionView }) {
               ["ad_count", "广告"],
             ] as const
           ).map(([field, label]) => (
-            <div key={field} className="flex min-w-0 flex-col gap-1">
+            <div
+              key={field}
+              className="flex min-w-0 flex-col items-start justify-between gap-1 p-3 lg:flex-row lg:items-center lg:gap-4 lg:px-4"
+            >
               <dt className="text-sm text-muted-foreground">{label}</dt>
-              <dd className="text-2xl font-semibold tabular-nums">
+              <dd className="text-xl font-semibold tabular-nums">
                 {data.succeeded[field]}
                 <span className="ml-1 text-sm font-normal text-muted-foreground">
                   / {data.submitted[field]}
@@ -126,6 +145,10 @@ export function SubmissionProgress({ data }: { data: SubmissionView }) {
             </div>
           ))}
         </dl>
+        <CardDescription className="text-xs">
+          数量为已创建 /
+          已提交。已创建不代表已投放；启用、审核与实际消耗以平台结果为准。
+        </CardDescription>
         {(countObjects(data.failed) > 0 ||
           countObjects(data.unknown) > 0 ||
           Object.entries(data.stage_counts).some(

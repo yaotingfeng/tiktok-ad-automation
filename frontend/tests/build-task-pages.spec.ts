@@ -19,6 +19,7 @@ async function boundary(
     count?: number
     denied?: boolean
     delayedUnits?: boolean
+    longLabels?: boolean
   } = {},
 ) {
   await buildsBoundary(page, { viewer: options.viewer })
@@ -142,7 +143,9 @@ async function boundary(
           drama_id: DR,
           title: "真实剧目",
           advertiser_id: step.advertiser_id,
-          account_name: "真实账户",
+          account_name: options.longLabels
+            ? "{LemonShow Minis}-031541-example-TT-p2"
+            : "真实账户",
           campaign_name: "真实Campaign",
           result_status: summary.status,
           disposition: "INCLUDED",
@@ -1120,6 +1123,7 @@ for (const [code, label] of [
 test("完成任务不展示空恢复提示并保留预算大数精度", async ({ page }) => {
   const api = await boundary(page)
   api.summary.status = "COMPLETED"
+  api.summary.recovery_mode = "BLOCKED"
   api.summary.daily_budget_sum = "9007199254740993123456.123400000000"
   api.summary.recovery = {
     can_retry: false,
@@ -1129,6 +1133,9 @@ test("完成任务不展示空恢复提示并保留预算大数精度", async ({
     reasons: ["recovery_no_candidates"],
   }
   await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
+  await expect(page.getByText("任务连接需要检查", { exact: true })).toHaveCount(
+    0,
+  )
   await expect(
     page.getByText("当前没有需要重试或核查的步骤。", { exact: true }),
   ).toHaveCount(0)
@@ -1143,14 +1150,17 @@ test("完成任务不展示空恢复提示并保留预算大数精度", async ({
   ).toHaveCount(0)
 })
 
-for (const width of [1440, 390]) {
+for (const width of [1920, 1440, 390]) {
   test(`完成任务 ${width}px 优先呈现结果与明细，技术信息按需展开`, async ({
     page,
   }, testInfo) => {
     await page.setViewportSize({ width, height: 900 })
-    const api = await boundary(page)
+    const api = await boundary(page, { longLabels: true })
     Object.assign(api.summary, {
       status: "COMPLETED",
+      recovery_mode: "BLOCKED",
+      provider_name: "测试版权方 · 海外短剧素材服务连接",
+      strategy_label: "IAA 目标回收策略 v3",
       succeeded: counts(1, 1, 2),
       unknown: counts(0, 0, 0),
       stage_counts: { "MATERIAL:SUCCEEDED": 2 },
@@ -1163,6 +1173,9 @@ for (const width of [1440, 390]) {
     await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
     await expect(page.getByRole("button", { name: "查看明细" })).toBeVisible()
     await expect(
+      page.getByText("任务连接需要检查", { exact: true }),
+    ).toHaveCount(0)
+    await expect(
       page.getByRole("region", { name: "任务恢复操作" }),
     ).toHaveCount(0)
     await expect(page.getByRole("region", { name: "执行连接" })).toHaveCount(0)
@@ -1170,11 +1183,17 @@ for (const width of [1440, 390]) {
     await expect(page.getByText("真实Campaign", { exact: true })).toHaveCount(0)
     await expect(page.getByTestId("count-ad-succeeded")).not.toBeVisible()
     await expectWorkspaceLayout(page)
-    if (width === 1440) {
+    const metricRows = await page
+      .locator('[aria-label="创建数量摘要"] dd')
+      .evaluateAll((nodes) =>
+        nodes.map((node) => node.getBoundingClientRect().y),
+      )
+    expect(Math.max(...metricRows) - Math.min(...metricRows)).toBeLessThan(1)
+    if (width >= 1440) {
       const box = await page
         .getByRole("button", { name: "查看明细" })
         .boundingBox()
-      expect(box!.y + box!.height).toBeLessThan(900)
+      expect(box!.y + box!.height).toBeLessThan(700)
     }
     await page.screenshot({
       path: testInfo.outputPath(`completed-${width}.png`),
@@ -1189,6 +1208,57 @@ for (const width of [1440, 390]) {
     expect(api.requests.every((r) => r.method === "GET")).toBe(true)
   })
 }
+
+test("无核查能力但可以重试时，不误报授权失效", async ({ page }) => {
+  const api = await boundary(page)
+  api.summary.status = "FAILED"
+  api.summary.recovery_mode = "BLOCKED"
+  api.summary.recovery = {
+    can_retry: true,
+    can_reconcile: false,
+    retryable_step_count: 1,
+    reconcilable_step_count: 0,
+    reasons: [],
+  }
+  await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
+  await expect(
+    page.getByRole("button", { name: "重试失败步骤（1）" }),
+  ).toBeVisible()
+  await expect(page.getByText("任务连接需要检查", { exact: true })).toHaveCount(
+    0,
+  )
+  expect(api.requests.every((r) => r.method === "GET")).toBe(true)
+})
+
+test("真实权限阻断保留具体原因与连接检查入口", async ({ page }) => {
+  const api = await boundary(page)
+  api.summary.recovery_mode = "BLOCKED"
+  api.summary.recovery = {
+    can_retry: false,
+    can_reconcile: false,
+    retryable_step_count: 0,
+    reconcilable_step_count: 0,
+    reasons: ["account_access_denied"],
+  }
+  await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}`)
+  await expect(
+    page.getByText("当前账户缺少搭建权限", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: /重试失败步骤|核查待核实项/ }),
+  ).toHaveCount(0)
+  await page.getByRole("button", { name: "技术详情", exact: true }).click()
+  const authorizationLink = page.getByRole("link", { name: "查看连接与授权" })
+  await expect(authorizationLink).toBeVisible()
+  const target = new URL(
+    (await authorizationLink.getAttribute("href"))!,
+    page.url(),
+  )
+  expect(target.pathname).toBe(`/tenants/${T}/accounts`)
+  expect(target.searchParams.get("bc_id")).toBe(BC)
+  expect(target.searchParams.get("tab")).toBe("connections")
+  expect(api.requests.every((r) => r.method === "GET")).toBe(true)
+})
 
 test("操作记录先呈现中文与业务对象，原始事件和编号可展开", async ({ page }) => {
   const api = await boundary(page)
