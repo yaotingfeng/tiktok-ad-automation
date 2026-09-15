@@ -118,6 +118,7 @@ export function StrategyForm({
       initial?.campaign_name_template ?? DEFAULT_NAME_TEMPLATE,
     )
   const [baseline, setBaseline] = useState(initial),
+    [baselineName, setBaselineName] = useState(strategy?.name || ""),
     [baseNumber, setBaseNumber] = useState(
       version?.number || strategy?.latest_version || 0,
     ),
@@ -159,14 +160,18 @@ export function StrategyForm({
     scope?.role === "viewer" ||
     denied ||
     (!copy && strategy?.active === false)
-  const dirty = strategyId
-    ? !!baseline && configFingerprint(cfg) !== configFingerprint(baseline)
-    : !!name ||
-      !!budget ||
-      !!roas ||
-      !!groupSize ||
-      !!creativeCount ||
-      nameTemplate !== DEFAULT_NAME_TEMPLATE
+  const configDirty = strategyId
+      ? !!baseline && configFingerprint(cfg) !== configFingerprint(baseline)
+      : true,
+    nameDirty = !!strategyId && name.trim() !== baselineName,
+    dirty = strategyId
+      ? configDirty || nameDirty
+      : !!name ||
+        !!budget ||
+        !!roas ||
+        !!groupSize ||
+        !!creativeCount ||
+        nameTemplate !== DEFAULT_NAME_TEMPLATE
   const local: Record<string, string> = {}
   if (!name.trim()) local.name = "请填写策略名称。"
   if (name.length > 120) local.name = "名称不能超过 120 个字符。"
@@ -263,7 +268,7 @@ export function StrategyForm({
       unknownRequest ||
       !dirty ||
       Object.keys(errors).length ||
-      capacity === undefined
+      (configDirty && capacity === undefined)
     )
       return
     inFlight.current = true
@@ -273,23 +278,45 @@ export function StrategyForm({
     requestController.current = new AbortController()
     let attempted = false
     try {
-      const validation = (
-        await StrategiesService.validate({
-          path: { tenant_id: tenantId! },
-          body: cfg,
+      if (configDirty) {
+        const validation = (
+          await StrategiesService.validate({
+            path: { tenant_id: tenantId! },
+            body: cfg,
+            signal: requestController.current.signal,
+          })
+        ).data!
+        if (!validation.valid) {
+          setServerErrors(
+            Object.fromEntries(
+              validation.errors.map((issue) => [
+                issue.field,
+                issueMessages[issue.code] || "该字段未通过策略校验。",
+              ]),
+            ),
+          )
+          return
+        }
+      }
+      if (strategyId && nameDirty && !configDirty) {
+        const normalizedName = name.trim()
+        const { data: renamed } = await StrategiesService.setState({
+          path: { tenant_id: tenantId!, strategy_id: strategyId },
+          body: { name: normalizedName },
           signal: requestController.current.signal,
         })
-      ).data!
-      if (!validation.valid) {
-        setServerErrors(
-          Object.fromEntries(
-            validation.errors.map((issue) => [
-              issue.field,
-              issueMessages[issue.code] || "该字段未通过策略校验。",
-            ]),
-          ),
+        if (!renamed) throw new Error("策略名称更新未返回结果")
+        setName(renamed.name)
+        setBaselineName(renamed.name)
+        client.setQueryData(
+          strategyQuery(tenantId!, strategyId).queryKey,
+          renamed,
         )
-        return
+        void client.invalidateQueries({ queryKey: strategyKey(tenantId!) })
+        if (!configDirty) {
+          toast.success("策略名称已更新")
+          return
+        }
       }
       const requestId = crypto.randomUUID()
       sessionStorage.setItem(requestKey, requestId)
@@ -298,6 +325,7 @@ export function StrategyForm({
         ? await StrategiesService.append({
             path: { tenant_id: tenantId!, strategy_id: strategyId },
             body: {
+              ...(nameDirty ? { name: name.trim() } : {}),
               config: cfg,
               expected_version: baseNumber,
               request_id: requestId,
@@ -312,6 +340,10 @@ export function StrategyForm({
       if (!data || data.request_id !== requestId) {
         setUnknownRequest(requestId)
         return
+      }
+      if (strategyId && nameDirty) {
+        setName(name.trim())
+        setBaselineName(name.trim())
       }
       finish(data)
     } catch (e) {
@@ -376,7 +408,7 @@ export function StrategyForm({
         value={value}
         onChange={(e) => change(key, setter)(e.target.value)}
         disabled={pending || !!unknownRequest}
-        readOnly={readonly || (key === "name" && !!strategyId)}
+        readOnly={readonly}
         aria-invalid={invalid(key)}
         aria-describedby={`strategy-${key}-help`}
         inputMode={
@@ -506,7 +538,7 @@ export function StrategyForm({
                   name,
                   setName,
                   strategyId
-                    ? "已有策略名称只读；版本历史不会被覆盖。"
+                    ? "名称是显示标签；修改后历史草稿和任务列表会显示新名称。"
                     : "填写租户内便于识别的策略名称。",
                 )}
               </FieldGroup>
@@ -755,7 +787,9 @@ export function StrategyForm({
             ? "只读版本，已提交任务继续使用原配置。"
             : !dirty
               ? "没有未保存的修改。"
-              : "保存新版本后，搭建草稿需重新生成预览。"}
+              : configDirty
+                ? "保存新版本后，搭建草稿需重新生成预览。"
+                : "仅更新显示名称，不创建新的配置版本。"}
         </p>
         <div className="flex gap-2">
           <Button
@@ -781,14 +815,20 @@ export function StrategyForm({
                 !!conflict ||
                 !dirty ||
                 !!firstError ||
-                capacity === undefined ||
-                !!pool.error
+                (configDirty && capacity === undefined) ||
+                (configDirty && !!pool.error)
               }
             >
               {pending && (
                 <Loader2 className="animate-spin" data-icon="inline-start" />
               )}
-              {pending ? "正在保存…" : strategyId ? "保存为新版本" : "创建策略"}
+              {pending
+                ? "正在保存…"
+                : strategyId
+                  ? nameDirty && !configDirty
+                    ? "保存名称"
+                    : "保存为新版本"
+                  : "创建策略"}
             </Button>
           )}
         </div>

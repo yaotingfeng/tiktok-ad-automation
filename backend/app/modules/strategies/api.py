@@ -94,8 +94,12 @@ def set_state(
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="strategy_write"
     )
-    result = service.set_active(
-        session, context=context, strategy_id=strategy_id, active=body.active
+    result = service.update_strategy(
+        session,
+        context=context,
+        strategy_id=strategy_id,
+        active=body.active,
+        name=body.name,
     )
     session.commit()
     return result
@@ -119,6 +123,7 @@ def append(
         context=context,
         strategy_id=strategy_id,
         config=body.config,
+        name=body.name,
         request_id=body.request_id,
         expected_version=body.expected_version,
     )

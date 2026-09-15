@@ -1,9 +1,11 @@
 from datetime import timedelta
 from uuid import uuid4
 
+from sqlmodel import select
+
 from app.core.security import create_access_token
 from app.modules.strategies.copy_pool import POOL_VERSION
-from app.modules.tenants.models import TenantMembership
+from app.modules.tenants.models import AuditEvent, TenantMembership
 from tests.modules.strategies.test_versions import config
 
 
@@ -83,7 +85,8 @@ def test_versioned_save_recovery_history_and_local_disable(client, context):
         == "100.25"
     )
     history = client.get(
-        f"{base}/strategies/{initial['strategy_id']}/versions?limit=1", headers=headers(context)
+        f"{base}/strategies/{initial['strategy_id']}/versions?limit=1",
+        headers=headers(context),
     ).json()
     assert history["items"][0]["number"] == 2
     assert (
@@ -114,6 +117,98 @@ def test_versioned_save_recovery_history_and_local_disable(client, context):
         ][0]["id"]
         == initial["strategy_id"]
     )
+
+
+def test_rename_updates_only_strategy_label_without_creating_version(
+    client, session, context
+):
+    base = f"/api/tenants/{context.tenant_id}"
+    created = client.post(
+        f"{base}/strategies",
+        json={
+            "name": "原策略名称",
+            "config": config().model_dump(mode="json"),
+            "request_id": str(uuid4()),
+        },
+        headers=headers(context),
+    ).json()
+
+    renamed = client.patch(
+        f"{base}/strategies/{created['strategy_id']}",
+        json={"name": "  新策略名称  "},
+        headers=headers(context),
+    )
+
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["name"] == "新策略名称"
+    assert renamed.json()["latest_version"] == 1
+    history = client.get(
+        f"{base}/strategies/{created['strategy_id']}/versions",
+        headers=headers(context),
+    ).json()
+    assert [row["number"] for row in history["items"]] == [1]
+    assert (
+        client.get(
+            f"{base}/strategies/{created['strategy_id']}",
+            headers=headers(context),
+        ).json()["name"]
+        == "新策略名称"
+    )
+    audit = session.exec(
+        select(AuditEvent).where(
+            AuditEvent.tenant_id == context.tenant_id,
+            AuditEvent.action == "strategy.rename",
+        )
+    ).one()
+    assert audit.target_id == created["strategy_id"]
+    assert audit.details == {"old_name": "原策略名称", "name": "新策略名称"}
+
+    rejected = client.patch(
+        f"{base}/strategies/{created['strategy_id']}",
+        json={"name": "   "},
+        headers=headers(context),
+    )
+    assert rejected.status_code == 422
+    assert (
+        client.get(
+            f"{base}/strategies/{created['strategy_id']}",
+            headers=headers(context),
+        ).json()["name"]
+        == "新策略名称"
+    )
+
+
+def test_rename_and_config_edit_are_saved_in_one_version_transaction(client, context):
+    base = f"/api/tenants/{context.tenant_id}"
+    created = client.post(
+        f"{base}/strategies",
+        json={
+            "name": "原策略名称",
+            "config": config().model_dump(mode="json"),
+            "request_id": str(uuid4()),
+        },
+        headers=headers(context),
+    ).json()
+
+    revised = client.post(
+        f"{base}/strategies/{created['strategy_id']}/versions",
+        json={
+            "name": "新策略名称",
+            "config": config(budget="200").model_dump(mode="json"),
+            "expected_version": 1,
+            "request_id": str(uuid4()),
+        },
+        headers=headers(context),
+    )
+
+    assert revised.status_code == 201, revised.text
+    assert revised.json()["number"] == 2
+    strategy = client.get(
+        f"{base}/strategies/{created['strategy_id']}",
+        headers=headers(context),
+    ).json()
+    assert strategy["name"] == "新策略名称"
+    assert strategy["config"]["budget"] == "200"
 
 
 def test_copy_pool_and_aggregated_local_validation(client, context):

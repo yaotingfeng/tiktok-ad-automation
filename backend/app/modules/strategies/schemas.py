@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 from app.modules.strategies.naming import DEFAULT_NAME_TEMPLATE
 
@@ -68,6 +68,7 @@ class CreateStrategyRequest(BaseModel):
 
 class AppendVersionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(default=None, min_length=1, max_length=120)
     config: StrategyConfig
     expected_version: int = Field(ge=1, strict=True)
     request_id: UUID
@@ -75,7 +76,14 @@ class AppendVersionRequest(BaseModel):
 
 class StrategyStateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    active: bool = Field(strict=True)
+    active: bool | None = Field(default=None, strict=True)
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+
+    @model_validator(mode="after")
+    def require_change(self) -> StrategyStateRequest:
+        if self.active is None and self.name is None:
+            raise ValueError("At least one strategy field is required")
+        return self
 
 
 class CopyPublic(BaseModel):

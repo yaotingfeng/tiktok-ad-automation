@@ -171,6 +171,33 @@ def _strategy(
     return row
 
 
+def _strategy_name(name: str) -> str:
+    normalized = name.strip()
+    if not normalized or len(normalized) > 120:
+        raise DomainError("invalid_strategy_name", "invalid_strategy_name")
+    return normalized
+
+
+def _rename_strategy(
+    session: Session, context: TenantContext, strategy: Strategy, name: str
+) -> None:
+    # 名称只是当前显示标签；配置版本与已提交任务继续引用原有不可变版本。
+    if strategy.name == name:
+        return
+    old_name = strategy.name
+    strategy.name = name
+    session.add(strategy)
+    session.add(
+        AuditEvent(
+            tenant_id=context.tenant_id,
+            actor_id=context.actor_id,
+            action="strategy.rename",
+            target_id=str(strategy.id),
+            details={"old_name": old_name, "name": name},
+        )
+    )
+
+
 def _insert_version(
     session: Session,
     context: TenantContext,
@@ -222,9 +249,7 @@ def create_strategy(
     request_id: UUID | None = None,
 ) -> UUID:
     _authorize(session, context, write=True)
-    name = name.strip()
-    if not name or len(name) > 120:
-        raise DomainError("invalid_strategy_name", "invalid_strategy_name")
+    name = _strategy_name(name)
     config = _checked_config(session, context, config)
     request_id = request_id or uuid4()
     digest = _digest(
@@ -246,16 +271,20 @@ def append_version(
     context: TenantContext,
     strategy_id: UUID,
     config: StrategyConfig,
+    name: str | None = None,
     expected_version: int | None = None,
     request_id: UUID | None = None,
 ) -> UUID:
     _authorize(session, context, write=True)
     config = _checked_config(session, context, config)
+    if name is not None:
+        name = _strategy_name(name)
     request_id = request_id or uuid4()
     digest = _digest(
         {
             "kind": "append",
             "strategy_id": str(strategy_id),
+            "name": name,
             "config": config.model_dump(mode="json"),
             "expected_version": expected_version,
         }
@@ -269,6 +298,8 @@ def append_version(
         raise DomainError("strategy_not_found", "strategy_not_found")
     if expected_version is not None and row.latest_version != expected_version:
         raise DomainError("version_conflict", "version_conflict")
+    if name is not None:
+        _rename_strategy(session, context, row, name)
     return _insert_version(session, context, row, config, request_id, digest, "append")
 
 
@@ -331,15 +362,24 @@ def _public(row: Strategy, version: StrategyVersion) -> StrategyPublic:
     )
 
 
-def set_active(
-    session: Session, *, context: TenantContext, strategy_id: UUID, active: bool
+def update_strategy(
+    session: Session,
+    *,
+    context: TenantContext,
+    strategy_id: UUID,
+    active: bool | None = None,
+    name: str | None = None,
 ) -> StrategyPublic:
     _authorize(session, context, write=True)
     row = _strategy(session, context, strategy_id, lock=True)
     _authorize(session, context, write=True)
-    if type(active) is not bool:
+    if active is None and name is None:
         raise DomainError("configuration_invalid", "configuration_invalid")
-    if row.active != active:
+    if active is not None and type(active) is not bool:
+        raise DomainError("configuration_invalid", "configuration_invalid")
+    if name is not None:
+        _rename_strategy(session, context, row, _strategy_name(name))
+    if active is not None and row.active != active:
         row.active = active
         session.add(row)
         session.add(
@@ -351,8 +391,19 @@ def set_active(
                 details={"active": active},
             )
         )
-        session.flush()
+    session.flush()
     return get_strategy(session, context=context, strategy_id=row.id)
+
+
+def set_active(
+    session: Session, *, context: TenantContext, strategy_id: UUID, active: bool
+) -> StrategyPublic:
+    return update_strategy(
+        session,
+        context=context,
+        strategy_id=strategy_id,
+        active=active,
+    )
 
 
 def list_strategies(

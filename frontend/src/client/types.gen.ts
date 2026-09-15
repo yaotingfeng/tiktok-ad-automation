@@ -122,6 +122,10 @@ export type AppConfiguration = {
  * AppendVersionRequest
  */
 export type AppendVersionRequest = {
+    /**
+     * Name
+     */
+    name?: string | null;
     config: StrategyConfig_Input;
     /**
      * Expected Version
@@ -3641,7 +3645,11 @@ export type StrategyStateRequest = {
     /**
      * Active
      */
-    active: boolean;
+    active?: boolean | null;
+    /**
+     * Name
+     */
+    name?: string | null;
 };
 
 /**

@@ -190,7 +190,8 @@ async function boundary(
       return reply(records.find((row) => path.endsWith(row.id)) || original)
     if (method === "PATCH") {
       const row = records.find((row) => path.endsWith(row.id))!
-      row.active = body.active
+      if (body.active !== undefined) row.active = body.active
+      if (body.name !== undefined) row.name = body.name.trim()
       return reply(row)
     }
     if (method === "POST") {
@@ -235,6 +236,7 @@ async function boundary(
         })
       else
         Object.assign(records[0], {
+          ...(body.name === undefined ? {} : { name: body.name.trim() }),
           version_id: row.id,
           config: body.config,
           latest_version: 2,
@@ -297,6 +299,50 @@ test("策略无有效改动时不产生重复版本，金额仅格式变化也�
     page.getByRole("button", { name: "保存为新版本", exact: true }),
   ).toBeDisabled()
   expect(requests.filter((r) => r.method !== "GET")).toHaveLength(0)
+})
+
+test("修改已有策略名称只更新显示标签，不创建配置版本", async ({ page }) => {
+  const { requests, records, versions } = await boundary(page)
+  await page.goto(editUrl)
+
+  const name = page.getByLabel("策略名称", { exact: true })
+  await expect(name).toBeEditable()
+  await name.fill("  新策略名称  ")
+  await page.getByRole("button", { name: "保存名称", exact: true }).click()
+
+  await expect(page.getByText("策略名称已更新", { exact: true })).toBeVisible()
+  await expect(name).toHaveValue("新策略名称")
+  expect(records[0].name).toBe("新策略名称")
+  expect(versions).toHaveLength(1)
+  const writes = requests.filter((request) => request.method !== "GET")
+  expect(writes).toHaveLength(1)
+  expect(writes[0]).toMatchObject({
+    method: "PATCH",
+    body: { name: "新策略名称" },
+  })
+})
+
+test("名称和配置同时修改时只发送一次原子版本保存", async ({ page }) => {
+  const { requests, records, versions } = await boundary(page)
+  await page.goto(editUrl)
+
+  await page.getByLabel("策略名称", { exact: true }).fill("新策略名称")
+  await page.getByLabel("Campaign 日预算", { exact: true }).fill("200")
+  await page.getByRole("button", { name: "保存为新版本", exact: true }).click()
+
+  await expect(page.getByText("已保存 v2", { exact: true })).toBeVisible()
+  expect(records[0].name).toBe("新策略名称")
+  expect(versions).toHaveLength(2)
+  const writes = requests.filter(
+    (request) =>
+      request.method !== "GET" &&
+      !request.path.endsWith("/strategies/validate"),
+  )
+  expect(writes).toHaveLength(1)
+  expect(writes[0]).toMatchObject({
+    method: "POST",
+    body: { name: "新策略名称", expected_version: 1 },
+  })
 })
 test("超时保存按 request_id 精确确认，不重复发送版本写入", async ({ page }) => {
   const { requests } = await boundary(page, { mode: "unknown" })
