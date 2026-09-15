@@ -338,11 +338,17 @@ def _ensure_cover(
             and job.share_batch_id is None
         ):
             # 成功事件可能晚于 BUILD 排队；沿用原 job/VID，绝不创建第二个上传身份。
-            # 已发送的原上传只读核查；未发送任务可切为源准备并重置被阻塞的调度。
+            # 已发送上传/已有图片候选均只读核查；没有图片事实才可开始源准备。
             job.purpose = "SOURCE"
             if not job.claimed_until or job.claimed_until <= _now():
                 _queue(
-                    session, job, read=bool(job.request_armed_at or job.known_image_id)
+                    session,
+                    job,
+                    read=bool(
+                        job.request_armed_at
+                        or job.known_image_id
+                        or job.candidate_image_id
+                    ),
                 )
         _access(session, context, job)
         if job.status == "READY" and not _fresh(job):
@@ -1119,14 +1125,57 @@ def _run_claimed_cover(
             ),
             deadline=deadline,
         )
+        source_candidate = job.purpose == "SOURCE" and job.request_armed_at is None
         evidence = api.verified_image(
             {"list": [api.image_record_data(data)] if data else []},
             image_id=image_id,
             remote_name=job.remote_name,
-            signature=job.signature,
+            signature=job.signature
+            or (data.signature if source_candidate and data else None),
             width=job.width,
             height=job.height,
         )
+        if source_candidate:
+            # 详情可读不等于本账户库存持有；既有候选必须另取 MID/内容的账户级正证据。
+            # 同 MID 在两个接口可能返回不同 tos ID，不能以 ID 字面相等判归属。
+            mid = evidence.get("material_id") if evidence else None
+            if not mid or not mid.isascii() or not mid.isdigit():
+                raise DomainError(
+                    "cover_source_inventory_unverified", "源账户图片库存尚未核实"
+                )
+            inventory = _call(
+                database_engine,
+                client,
+                context,
+                job,
+                nonce,
+                "materials.search_images",
+                lambda client, budget: client.search_images(
+                    advertiser_id=job.advertiser_id,
+                    page=1,
+                    material_ids=(mid,),
+                    budget=budget,
+                ),
+                deadline=deadline,
+            )
+            assert evidence is not None and data is not None
+            if not any(
+                row.mid == mid
+                and row.width == data.width
+                and row.height == data.height
+                and api.verified_image(
+                    {"list": [api.image_record_data(row)]},
+                    image_id=row.image_id,
+                    remote_name=job.remote_name,
+                    signature=evidence["signature"],
+                    width=job.width,
+                    height=job.height,
+                )
+                for row in inventory.rows
+            ):
+                raise DomainError(
+                    "cover_source_inventory_unverified", "源账户图片库存尚未核实"
+                )
         _read_result(database_engine, context, job, nonce, evidence)
     else:
         page_data = _call(

@@ -277,6 +277,99 @@ def search_data(rows):
 @pytest.mark.parametrize(
     "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
 )
+@pytest.mark.parametrize(
+    "inventory",
+    ["alias", "absent", "wrong_signature", "wrong_ratio", "wrong_dimensions"],
+)
+def test_source_candidate_requires_account_inventory_without_upload(
+    cover_env, gateway_wire, database_engine, redis_client, inventory
+):
+    with Session(database_engine) as db, db.begin():
+        db.get(AccountMaterial, cover_env["asset_id"]).image_id = "legacy-tos-id"
+    identity = queue(cover_env, database_engine).task_id
+    info = image_data("historical-image.jpg", image_id="legacy-tos-id")
+    row = image_data("renamed.jpg", image_id="account-inventory-tos-id")["list"][0]
+    if inventory == "wrong_signature":
+        row["signature"] = "d" * 32
+    elif inventory == "wrong_ratio":
+        row["height"] = row["width"]
+    elif inventory == "wrong_dimensions":
+        row["width"], row["height"] = 720, 1280
+    prepare_replies(
+        cover_env,
+        gateway_wire,
+        [
+            ("file_video_ad_info_get", video_data()),
+            ("file_image_ad_info_get", info),
+            (
+                "file_image_ad_search",
+                search_data([] if inventory == "absent" else [row]),
+            ),
+        ],
+    )
+    run(cover_env, database_engine, redis_client, identity, read=True)
+    current = job(database_engine, identity)
+    assert current.status == ("READY" if inventory == "alias" else "BLOCKED")
+    assert current.request_armed_at is None
+    assert post_count(cover_env, gateway_wire) == 0
+    if inventory == "alias":
+        assert current.image_mid == "900001"
+        if cover_env["route"].channel == "OFFICIAL_MCP":
+            request = next(
+                c["params"]["arguments"]
+                for c in gateway_wire["wire"].calls
+                if c["method"] == "tools/call"
+                and c["params"]["name"] == "file_image_ad_search"
+            )
+            assert request["filtering"] == {"material_ids": ["900001"]}
+        else:
+            import json
+
+            request = next(
+                dict(c[2]["fields"])
+                for c in gateway_wire["sdk_calls"]
+                if "/file/image/ad/search/" in c[1]
+            )
+            assert json.loads(request["filtering"]) == {"material_ids": ["900001"]}
+    else:
+        assert current.error_code == "cover_source_inventory_unverified"
+
+
+@pytest.mark.parametrize(
+    "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
+)
+def test_legacy_build_candidate_promotion_only_queues_read(
+    cover_env, gateway_wire, database_engine, redis_client
+):
+    identity = build_queue(cover_env, database_engine).task_id
+    with Session(database_engine) as db, db.begin():
+        row = db.get(MaterialCoverJob, identity)
+        row.candidate_image_id, row.signature = "legacy-tos-id", "c" * 32
+        row.width, row.height, row.status = 360, 640, "READY"
+        row.dispatch_id = None
+        db.get(AccountMaterial, row.asset_id).image_id = row.candidate_image_id
+    promoted = queue(cover_env, database_engine)
+    assert promoted.task_id == identity
+    assert job(database_engine, identity).status == "VERIFYING"
+    prepare_replies(
+        cover_env,
+        gateway_wire,
+        [
+            ("file_image_ad_info_get", image_data("old.jpg", image_id="legacy-tos-id")),
+            (
+                "file_image_ad_search",
+                search_data(image_data("renamed.jpg", image_id="alias-id")["list"]),
+            ),
+        ],
+    )
+    run(cover_env, database_engine, redis_client, identity, read=True)
+    assert job(database_engine, identity).status == "READY"
+    assert post_count(cover_env, gateway_wire) == 0
+
+
+@pytest.mark.parametrize(
+    "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
+)
 @pytest.mark.parametrize("already_present", [False, True])
 def test_image_share_uses_real_mid_and_actual_target_id(
     cover_env,

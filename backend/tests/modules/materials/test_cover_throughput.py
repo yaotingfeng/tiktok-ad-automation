@@ -297,12 +297,73 @@ def test_existing_source_image_gets_read_only_mid_job(source_env, redis_client, 
                     }
                 ]
             },
+            {
+                "list": [
+                    {
+                        "image_id": "tos-source-inventory",
+                        "material_id": "900005",
+                        "signature": "a" * 32,
+                        "file_name": "historical-image.jpg",
+                        "width": 720,
+                        "height": 1280,
+                        "displayable": False,
+                    }
+                ],
+                "page_info": {
+                    "page": 1,
+                    "page_size": 100,
+                    "total_page": 1,
+                    "total_number": 1,
+                },
+            },
         ]
     )
     run(source_env, redis_client, result.task_id, read=True)
     assert job_state(result.task_id).status == "READY"
     assert job_state(result.task_id).image_mid == "900005"
     assert not [call for call in wire[0] if call[0] == "POST"]
+
+
+def test_owned_build_candidate_auto_promotion_preserves_read_only_job(
+    source_env, redis_client, wire
+):
+    from tests.modules.materials.test_source_uploads import seed_operation
+
+    scopes(source_env)
+    with Session(engine) as db, db.begin():
+        asset(db, source_env, "actual-account")
+    seed_operation(
+        source_env,
+        status="succeeded",
+        evidence={"video_id": "vid-actual-account", "mid": "900000"},
+    )
+    identity = enqueue(source_env).task_id
+    with Session(engine) as db, db.begin():
+        row = db.get(MaterialCoverJob, identity)
+        row.candidate_image_id = "legacy-tos-id"
+        row.signature, row.width, row.height = "a" * 32, 720, 1280
+    run(source_env, redis_client, identity)
+    assert job_state(identity).purpose == "SOURCE"
+    assert job_state(identity).status == "VERIFYING"
+    assert wire[0] == []
+    info = {
+        "image_id": "legacy-tos-id",
+        "material_id": "900005",
+        "signature": "a" * 32,
+        "width": 720,
+        "height": 1280,
+        "displayable": False,
+    }
+    wire[1].extend(
+        [
+            {"list": [info]},
+            page([{**info, "image_id": "account-inventory-tos-id"}]),
+        ]
+    )
+    run(source_env, redis_client, identity, read=True)
+    assert job_state(identity).status == "READY"
+    assert job_state(identity).request_armed_at is None
+    assert not any(call[0] == "POST" for call in wire[0])
 
 
 def test_build_schedules_missing_cover_on_recorded_video_upload_source(

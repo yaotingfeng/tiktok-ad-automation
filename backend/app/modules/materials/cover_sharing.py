@@ -258,7 +258,17 @@ def _prepare(
             .limit(1)
         ).first()
         if preparing or started:
-            covers._queue(db, anchor, read=False, delay=5)
+            # 自动提升可能沿用持有图片候选的当前 job；续跑不能绕过库存只读核查。
+            covers._queue(
+                db,
+                anchor,
+                read=bool(
+                    anchor.request_armed_at
+                    or anchor.known_image_id
+                    or anchor.candidate_image_id
+                ),
+                delay=5,
+            )
         else:
             covers._stop(anchor, "cover_source_unavailable", unknown=False)
         return None
