@@ -7,7 +7,7 @@ ARGS = {
     "protected_base": "{b30008/s328302/c3}-The Bond",
     "title": "The Bond",
     "provider_pinyin": "jiashu",
-    "external_drama_id": "106001",
+    "display_drama_id": "106001",
     "date_text": "20260913",
     "batch_short_id": "A7K2",
     "group_no": 1,
@@ -17,7 +17,7 @@ ARGS = {
 
 
 @pytest.mark.parametrize("protected", ["", ARGS["protected_base"]])
-def test_unified_name_keeps_external_id_and_automatically_appends_batch(protected):
+def test_unified_name_keeps_display_id_and_automatically_appends_batch(protected):
     base = protected or "jiashu-The Bond"
     names = render_names(**{**ARGS, "protected_base": protected})
     campaign = f"{base}-106001-A7K2"
@@ -78,7 +78,16 @@ def test_inserted_values_are_literal():
 
 
 @pytest.mark.parametrize("protected", ["", ARGS["protected_base"]])
-def test_attribution_prefix_does_not_replace_external_drama_id(protected):
+@pytest.mark.parametrize("drama_id", ["", "0", "-1", "32827A", "３２８２７"])
+def test_attribution_prefix_requires_ascii_numeric_display_drama_id(
+    protected, drama_id
+):
     with pytest.raises(DomainError) as error:
-        render_names(**{**ARGS, "protected_base": protected, "external_drama_id": ""})
+        render_names(
+            **{
+                **ARGS,
+                "protected_base": protected,
+                "display_drama_id": drama_id,
+            }
+        )
     assert error.value.code == "naming_context_missing"

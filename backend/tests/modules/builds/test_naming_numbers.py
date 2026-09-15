@@ -116,6 +116,15 @@ def test_default_names_snapshot_provider_ids_and_reuse_number(
     ).all():
         link.protected_base = ""
         session.add(link)
+    sources = session.exec(
+        select(ProviderDrama)
+        .where(ProviderDrama.tenant_id == context.tenant_id)
+        .order_by(ProviderDrama.title)
+    ).all()
+    for number, source in enumerate(sources, 32827):
+        source.external_drama_id = f"6a98f85eadb6903f924e{number}"
+        source.display_drama_id = str(number)
+        session.add(source)
     session.flush()
     identity = previews.generate_preview(
         session, context=context, draft_id=prepared, expected_revision=1
@@ -136,14 +145,15 @@ def test_default_names_snapshot_provider_ids_and_reuse_number(
         select(PreviewDrama).where(PreviewDrama.preview_id == identity)
     ).all()
     expected = {
-        drama.drama_id: f"jiashu-{drama.title}-{drama.external_drama_id}-{row.batch_short_id}"
+        drama.drama_id: f"jiashu-{drama.title}-{drama.display_drama_id}-{row.batch_short_id}"
         for drama in originals
     }
     for drama in originals:
         assert drama.provider_pinyin == "jiashu"
-        assert drama.external_drama_id in ("1", "2")
+        assert drama.display_drama_id in ("32827", "32828")
         source = session.get(ProviderDrama, drama.drama_id)
         source.external_drama_id = "changed-" + source.external_drama_id
+        source.display_drama_id = "9" + source.display_drama_id
         session.add(source)
     session.flush()
     drain(session, context, identity)
@@ -162,6 +172,7 @@ def test_default_names_snapshot_provider_ids_and_reuse_number(
             session, context=context, unit_id=unit.unit_id
         )
         assert frozen.campaign_name == expected[unit.drama_id]
+        assert "6a98f85eadb6903f924e" not in frozen.campaign_name
         assert str(unit.drama_id) not in frozen.campaign_name
 
 
@@ -176,6 +187,23 @@ def test_old_unfinished_preview_requires_rebuild(
     row.batch_short_id = old_number
     session.add(row)
     session.flush()
+    assert previews.continue_preview(session, context=context, preview_id=identity)
+    assert row.status == "FAILED" and row.error_code == "preview_naming_outdated"
+
+
+def test_unfinished_preview_without_display_id_naming_marker_requires_rebuild(
+    session, context, prepared
+):
+    identity = previews.generate_preview(
+        session, context=context, draft_id=prepared, expected_revision=1
+    )
+    row = session.get(BuildPreview, identity)
+    row.progress = {
+        key: value for key, value in row.progress.items() if key != "naming_drama_id"
+    }
+    session.add(row)
+    session.flush()
+
     assert previews.continue_preview(session, context=context, preview_id=identity)
     assert row.status == "FAILED" and row.error_code == "preview_naming_outdated"
 

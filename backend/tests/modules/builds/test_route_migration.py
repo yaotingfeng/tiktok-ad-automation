@@ -165,18 +165,31 @@ def historical_rows(
             )
         )
     session.flush()
-    session.add(
-        PreviewDrama(
-            tenant_id=context.tenant_id,
-            preview_id=preview.id,
-            bc_id=preview.bc_id,
-            drama_id=drama.id,
-            link_id=link.id,
-            title="Old",
-            url="https://synthetic.invalid/old",
-            protected_base="old",
-        )
+    preview_drama = PreviewDrama(
+        tenant_id=context.tenant_id,
+        preview_id=preview.id,
+        bc_id=preview.bc_id,
+        drama_id=drama.id,
+        link_id=link.id,
+        title="Old",
+        url="https://synthetic.invalid/old",
+        protected_base="old",
     )
+    if current:
+        session.add(preview_drama)
+    else:
+        preview_dramas = Table(
+            "preview_drama", MetaData(), autoload_with=session.connection()
+        )
+        session.execute(
+            preview_dramas.insert().values(
+                **{
+                    key: value
+                    for key, value in preview_drama.model_dump().items()
+                    if key in preview_dramas.c
+                }
+            )
+        )
     session.flush()
     unit = BuildUnit(
         tenant_id=context.tenant_id,

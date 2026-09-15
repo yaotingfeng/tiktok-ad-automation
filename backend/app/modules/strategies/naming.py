@@ -35,7 +35,7 @@ def render_names(
     creative_no: int,
     max_length: int,
     provider_pinyin: str,
-    external_drama_id: str,
+    display_drama_id: str,
     template: str = DEFAULT_NAME_TEMPLATE,
 ) -> tuple[str, str, str]:
     validate_name_template(template)
@@ -44,17 +44,21 @@ def render_names(
         for value in (group_no, creative_no, max_length)
     ):
         raise DomainError("invalid_group_config", "invalid_group_config")
-    if not external_drama_id.strip() or (
-        not protected_base and (not provider_pinyin.strip() or not title.strip())
+    drama_id = display_drama_id.strip()
+    if (
+        not drama_id.isascii()
+        or not drama_id.isdigit()
+        or int(drama_id) < 1
+        or (not protected_base and (not provider_pinyin.strip() or not title.strip()))
     ):
-        raise DomainError("naming_context_missing", "缺少版权方或剧目标识")
+        raise DomainError("naming_context_missing", "缺少有效版权方数字剧目 ID")
     # 网眼仅替换“版权方＋剧名”；剧目 ID、日期及固定文字共用同一模板。
     # 插入值是字面文本，归因花括号不会被再次解析。批次编号由系统统一追加。
     campaign = (
         template.format_map(
             {
                 "provider_drama": protected_base or f"{provider_pinyin}-{title}",
-                "drama_id": external_drama_id,
+                "drama_id": drama_id,
                 "YYYYMMDD": date_text,
             }
         )

@@ -78,6 +78,7 @@ def test_wangyan_numeric_display_and_edit_preserve_opaque_identity(
     connection = session.get(ProviderConnection, drama.connection_id)
     connection.kind = "wangyan"
     drama.external_drama_id = "6a98f85eadb6903f924e6950"
+    drama.display_drama_id = None
     old_link = session.get(PromotionLink, dd.link_id)
     old_link.attribution = {"drama_int_id": 31091}
     old_link.url = "https://www.tiktok.com/minis/original?x=a%2Bb&x=2"

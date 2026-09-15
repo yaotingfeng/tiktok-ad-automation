@@ -257,6 +257,7 @@ def ready_links(session, context, task_id, intent):
             connection_id=intent["provider_connection_id"],
             application_id=intent["application_id"],
             external_drama_id=str(item.line_no),
+            display_drama_id=str(item.line_no),
             title=item.raw_input,
         )
         session.add(drama)

@@ -186,6 +186,8 @@ def generate_preview(
     save_preview_route(session, context=context, preview_id=row.id, route=route)
     row.progress = {
         "phase": "inputs",
+        # 版本标记避免旧的未完成预览在续跑时混用长技术 ID 与展示编号。
+        "naming_drama_id": "display",
         "kind": "drama",
         "after": 0,
         "digest": _hash(
@@ -303,6 +305,9 @@ def _snapshot_drama(
                 ProviderDrama.application_id == link.application_id,
             )
         ).one()
+        display_drama_id = (provider_drama.display_drama_id or "").strip()
+        if not display_drama_id:
+            raise DomainError("naming_context_missing", "缺少版权方剧目 ID")
         frozen = PreviewDrama(
             **_scope(preview),
             drama_id=drama.drama_id,
@@ -312,6 +317,7 @@ def _snapshot_drama(
             if connection.kind == "other"
             else connection.kind,
             external_drama_id=provider_drama.external_drama_id,
+            display_drama_id=display_drama_id,
             url=link.url or "",
             protected_base=link.protected_base or "",
             reason_codes=[]
@@ -411,7 +417,7 @@ def _names(
         creative_no=creative,
         max_length=10000,
         provider_pinyin=drama.provider_pinyin,
-        external_drama_id=drama.external_drama_id,
+        display_drama_id=drama.display_drama_id,
         template=config.campaign_name_template,
     )
 
@@ -553,7 +559,7 @@ def _expand_unit(
                 *name_reasons(name, "campaign", unit.scene_snapshot),
             ],
         )
-        # 完整名称包含外部剧目 ID；仍校验账户内碰撞，防止不同字段拼接出同名。
+        # 完整名称包含版权方展示剧目 ID；仍校验账户内碰撞，防止不同字段拼接出同名。
         # 保留所有组合，并明确阻断冲突双方。
         collisions = session.exec(
             select(BuildUnit).where(
@@ -733,6 +739,7 @@ def continue_preview(
         not is_current_batch_number(preview.batch_short_id)
         or "campaign_suffix" in preview.config
         or "{provider_drama}" not in preview.config.get("campaign_name_template", "")
+        or preview.progress.get("naming_drama_id") != "display"
     ):
         # 旧版未冻结预览不可混用新规则；冻结及已提交名称继续读取原记录。
         preview.status = "FAILED"

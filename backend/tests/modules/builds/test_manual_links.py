@@ -314,7 +314,7 @@ def test_manual_link_uses_real_bc_route_and_freezes_long_provider_name(
         application_id=None,
         custom_provider_name=name,
         drama_lines=["Manual"],
-        manual_links=[manual()],
+        manual_links=[manual(external_drama_id="32827")],
     )
     draft_id = create_draft(session, context=context, **intent)
     prep = session.get(
@@ -358,7 +358,8 @@ def test_manual_link_uses_real_bc_route_and_freezes_long_provider_name(
         select(PreviewDrama).where(PreviewDrama.preview_id == preview_id)
     ).one()
     assert frozen.provider_pinyin == name
-    assert frozen.external_drama_id.startswith("LOCAL-")
+    assert frozen.external_drama_id == "32827"
+    assert frozen.display_drama_id == "32827"
     assert frozen.url == URL
     old_summary = previews.get_preview_summary(
         session, context=context, preview_id=preview_id

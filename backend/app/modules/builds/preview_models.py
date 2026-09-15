@@ -121,6 +121,8 @@ class PreviewDrama(PreviewRow, table=True):
     # 冻结命名输入，后续跨账户展开不再读取可变的版权方资料。
     provider_pinyin: str = Field(default="", max_length=100)
     external_drama_id: str = Field(default="", max_length=255)
+    # 广告命名使用版权方展示编号；与取链接口所需的技术 ID 分开冻结。
+    display_drama_id: str = Field(default="", max_length=255)
     url: str
     protected_base: str
     reason_codes: list[str] = Field(
