@@ -25,7 +25,7 @@
 ## 当前实例与操作
 
 - 2026-09-13 用户授权开启自动原件清理：三服务实际加载 `MATERIAL_CLEANUP_ENABLED=true`；已有 24 个原件完成删除回读，新批次 23 个账户素材均保持可用，详见 [清理验收记录](../validation/2026-09-13-staging-original-cleanup.md)。初始化时关闭开关的说明不代表当前运行配置。
-- 运行提交：`fe759b54ff94356131329d5c0d684fd13c48d82d`；新素材固定租户/BC 主来源、取消单账户单文件门槛，提前准备源封面并分别批量共享 VIDEO/IMAGE，见[素材吞吐发布验收](../validation/2026-09-16-material-throughput.md)。基于上一测试版本 `ca69cc3` 独立发布，未带入并行分页/前端改动；实际前端构建文件不变。已确认权限不按 24 小时失效、租户/全局 R2 原件预算 `0`、入库/清理开启均保留，见[权限与原件验收](../validation/2026-09-15-permissions-storage.md)。数据库 head 为 `material_share_receipts`；完整备份 `20260915T182117Z`、18 表迁移前后历史对比和恢复演练通过。原上传批次仍 477 available/7 failed；本轮仅真实只读图片合同验收，没有上传/共享/广告写入，实际大批量吞吐待下一批观察。广告命名见[数字剧目 ID 验收](../validation/2026-09-15-staging-numeric-drama-id-naming.md)，任务页见[详情验收](../validation/2026-09-15-task-detail-refinement.md)，原批处理见[验收记录](../validation/2026-09-15-build-batching.md)。旧版本及备份保留。
+- 运行提交：`9744ccb628b3a9a77cfe60afadc504969e0de69d`；在素材吞吐快照 `fe759b54ff94356131329d5c0d684fd13c48d82d` 验收完成后切回并发布同内容的规范集成分支，同时纳入所有分页精确总数和全局“共 N 条 · 第 X / Y 页”组件，见[分页发布验收](../validation/2026-09-15-pagination-total-counts.md)。新素材固定租户/BC 主来源、提前准备源封面并分别批量共享 VIDEO/IMAGE 的行为保持不变，见[素材吞吐发布验收](../validation/2026-09-16-material-throughput.md)。已确认权限持续可用、租户/全局 R2 原件预算 `0`、入库/清理开启均保留，数据库 head 为 `material_share_receipts`。最新完整备份 `20260915T183533Z` 的数据库、Redis、项目、配置隔离恢复及 501 份加密响应校验通过；旧版本和备份保留。生产环境未变更。
 - 入口：`https://137.220.150.31`，80 跳转 443。已签发受信任 IP 证书，非自签名证书；无需域名即可访问本次测试入口。真实 TikTok 回调/App 接入另行配置并验收。
 - Python `3.14.2` / uv `0.9.26` / Bun `1.4.2` / PostgreSQL `18.6` / Redis `8.10.1` / Certbot `5.8.0`。另已安装 Nginx、FFmpeg 和基础编译依赖；未安装 Docker。
 - 数据库 `tt_ada_staging`，角色 `tt_ada`；应用角色无 CREATEDB 或超级用户权限。回归测试使用单独测试角色与 `tt_ada_acceptance_test`、Redis DB 14/15，业务使用 Redis DB 0。
