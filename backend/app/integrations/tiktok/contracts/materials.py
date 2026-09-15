@@ -188,6 +188,22 @@ class AssetShare:
 
 
 class MaterialOperations(Protocol):
+    def read_videos(
+        self,
+        *,
+        advertiser_id: str,
+        video_ids: tuple[str, ...],
+        budget: RemoteCallBudget,
+    ) -> tuple[VideoRecord, ...]: ...
+
+    def read_images(
+        self,
+        *,
+        advertiser_id: str,
+        image_ids: tuple[str, ...],
+        budget: RemoteCallBudget,
+    ) -> tuple[ImageRecord, ...]: ...
+
     def share_assets(
         self, request: AssetShare, *, budget: RemoteCallBudget
     ) -> CallEvidence: ...

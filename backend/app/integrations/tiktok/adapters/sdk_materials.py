@@ -85,7 +85,7 @@ class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
                         return _read_video_response(
                             self._client,
                             advertiser_id=advertiser_id,
-                            video_id=arguments["video_ids"][0],
+                            video_ids=arguments["video_ids"],
                             budget=budget,
                         )
                     if operation == "materials.search_videos":
@@ -103,7 +103,7 @@ class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
                         return _read_image_response(
                             self._client,
                             advertiser_id=advertiser_id,
-                            image_id=arguments["image_ids"][0],
+                            image_ids=arguments["image_ids"],
                             budget=budget,
                         )
                     path = {
@@ -306,13 +306,13 @@ def _read_video_response(
     client: Any,
     *,
     advertiser_id: str,
-    video_id: str,
+    video_ids: list[str],
     budget: contracts.RemoteCallBudget,
 ) -> McpBusinessResponse:
     return sdk_assets._response(
         FileApi(client).ad_video_info(
             advertiser_id=advertiser_id,
-            video_ids=[video_id],
+            video_ids=video_ids,
             access_token=client.default_headers["Access-Token"],
             _request_timeout=budget.timeout(upload=False),
         )
@@ -413,13 +413,13 @@ def _read_image_response(
     client: Any,
     *,
     advertiser_id: str,
-    image_id: str,
+    image_ids: list[str],
     budget: contracts.RemoteCallBudget,
 ) -> McpBusinessResponse:
     return sdk_assets._response(
         FileApi(client).file_image_ad_info(
             advertiser_id=advertiser_id,
-            image_ids=[image_id],
+            image_ids=image_ids,
             access_token=client.default_headers.get("Access-Token", ""),
             _request_timeout=budget.timeout(upload=False),
         )

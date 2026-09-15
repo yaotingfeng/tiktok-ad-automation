@@ -234,6 +234,55 @@ async function boundary(
   }
 }
 
+test("核实补建显示完成和新远端对象，保留原尝试审计", async ({ page }) => {
+  const api = await boundary(page)
+  Object.assign(api.summary, {
+    status: "COMPLETED",
+    corrected_ad_count: 2,
+    succeeded: counts(1, 1, 2),
+    unknown: counts(0, 0, 0),
+    stage_counts: { "READBACK:VERIFIED_REPLACEMENT": 2 },
+    recovery: {
+      can_retry: false,
+      can_reconcile: false,
+      retryable_step_count: 0,
+      reconcilable_step_count: 0,
+      reasons: [],
+    },
+  })
+  Object.assign(api.step, {
+    correction: {
+      correction_id: E,
+      status: "VERIFIED_REPLACEMENT",
+      source_step_id: E,
+      remote_id: "replacement-ad",
+      remote_adgroup_id: "replacement-group",
+      original_adgroup_id: "group-real",
+      operation_status: "ENABLE",
+      review_status: "PENDING",
+      checked_at: "2026-09-15T01:00:00Z",
+    },
+  })
+  await page.goto(`/tenants/${T}/build-tasks?bc_id=${BC}`)
+  await expect(
+    page.getByText("已完成（含2条补建）", { exact: true }),
+  ).toBeVisible()
+  await page.goto(`/tenants/${T}/build-tasks/${ID}?bc_id=${BC}&tab=issues`)
+  await expect(
+    page.getByText("已完成（含2条补建）", { exact: true }),
+  ).toBeVisible()
+  await expect(page.getByTestId("count-ad-unknown")).toHaveText("0")
+  await expect(page.getByText("replacement-ad", { exact: true })).toBeVisible()
+  await page.getByRole("button", { name: "查看原因", exact: true }).click()
+  await expect(
+    page.getByText("原尝试结果：结果待核实", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByText("补建已核实，原尝试保留用于审计。", { exact: true }),
+  ).toBeVisible()
+  expect(api.requests.every((request) => request.method === "GET")).toBe(true)
+})
+
 test("任务列表默认50并显示真实提交范围，只有详情操作", async ({ page }) => {
   const api = await boundary(page, { count: 131 })
   await page.goto(`/tenants/${T}/build-tasks?bc_id=${BC}`)

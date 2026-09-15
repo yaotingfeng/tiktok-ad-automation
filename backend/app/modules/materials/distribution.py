@@ -798,6 +798,32 @@ def run_distribution(
     """一次持久发送；来源和恢复读取各自遵守工作进程期限与准入。"""
     if kind not in {"prepare", "verify"} or (read_only and kind != "verify"):
         raise DomainError("invalid_asset_task", "目标素材工作任务无效")
+    if kind == "prepare":
+        from .batch_distribution import try_prepare_batch
+
+        if try_prepare_batch(
+            database_engine=database_engine,
+            redis_client=redis_client,
+            context=context,
+            distribution_id=distribution_id,
+            operation_id=operation_id,
+            revision=revision,
+            recovery_claim_id=recovery_claim_id,
+        ):
+            return
+    elif not read_only:
+        from .batch_verification import try_verify_batch
+
+        if try_verify_batch(
+            database_engine=database_engine,
+            redis_client=redis_client,
+            context=context,
+            distribution_id=distribution_id,
+            operation_id=operation_id,
+            revision=revision,
+            recovery_claim_id=recovery_claim_id,
+        ):
+            return
     claim = uuid4()
     hard = UPLOAD_HARD_LIMIT if kind == "prepare" else READ_HARD_LIMIT
     lease = UPLOAD_CLAIM_SECONDS if kind == "prepare" else READ_CLAIM_SECONDS
@@ -1095,7 +1121,8 @@ def run_distribution(
             or remote_name(material),
             "byte_size": material.byte_size,
             "strict_video": material.current_object_generation is not None
-            or operation.remote_response.get("transport") == "url_relay",
+            or operation.remote_response.get("transport") == "url_relay"
+            or operation.remote_response.get("batch_discovered", False),
         }
         content_md5 = material.video_md5 or ""
     sent = False
@@ -1414,6 +1441,9 @@ def run_distribution(
                 None if dist.status == "ready" else "material_result_pending"
             )
             operation.attempt_token, operation.claimed_until = None, None
+            from .batch_distribution import sync_batch_member
+
+            sync_batch_member(session, operation, dist)
             if dist.status != "ready":
                 queue_distribution(
                     session,

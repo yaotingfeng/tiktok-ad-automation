@@ -420,17 +420,65 @@ class MaterialReadAdapter:
         video_id: str,
         budget: material_types.RemoteCallBudget,
     ) -> material_types.VideoRecord | None:
-        response = self._video_response(
-            advertiser_id=advertiser_id, video_id=video_id, budget=budget
+        rows = self.read_videos(
+            advertiser_id=advertiser_id, video_ids=(video_id,), budget=budget
+        )
+        return rows[0] if rows else None
+
+    def _bulk_response(
+        self,
+        *,
+        advertiser_id: str,
+        identities: tuple[str, ...],
+        images: bool,
+        budget: material_types.RemoteCallBudget,
+    ) -> McpBusinessResponse:
+        # 已知 ID 只在单账户的一次请求内合并；上限与任务批量保持一致。
+        if (
+            type(identities) is not tuple
+            or not 1 <= len(identities) <= 50
+            or any(not _remote_identifier(value) for value in identities)
+            or len(set(identities)) != len(identities)
+        ):
+            raise _remote_request_error()
+        kind = "image" if images else "video"
+        response = self._read(
+            f"materials.get_{kind}s",
+            advertiser_id,
+            {f"{kind}_ids": list(identities)},
+            budget,
         )
         assert isinstance(response.data, dict)
-        rows = video_rows(response.data)
-        if not rows:
-            return None
-        if len(rows) != 1 or rows[0].get("video_id") != video_id:
-            raise _schema_error()
-        return video_record(
-            rows[0], advertiser_id=advertiser_id, evidence=response.evidence
+        seen: set[str] = set()
+        for row in video_rows(response.data):
+            value = row.get(f"{kind}_id")
+            if (
+                not _remote_identifier(value)
+                or value not in identities
+                or value in seen
+            ):
+                raise _schema_error()
+            seen.add(value)
+        return response
+
+    def read_videos(
+        self,
+        *,
+        advertiser_id: str,
+        video_ids: tuple[str, ...],
+        budget: material_types.RemoteCallBudget,
+    ) -> tuple[material_types.VideoRecord, ...]:
+        response = self._bulk_response(
+            advertiser_id=advertiser_id,
+            identities=video_ids,
+            images=False,
+            budget=budget,
+        )
+        assert isinstance(response.data, dict)
+        # 整批解析完成才交付，缺失 ID 不可由相邻行或请求参数补造。
+        return tuple(
+            video_record(row, advertiser_id=advertiser_id, evidence=response.evidence)
+            for row in video_rows(response.data)
         )
 
     def read_source_preview(
@@ -662,19 +710,28 @@ class MaterialReadAdapter:
         image_id: str,
         budget: material_types.RemoteCallBudget,
     ) -> material_types.ImageRecord | None:
-        if not _remote_identifier(image_id):
-            raise _remote_request_error()
-        response = self._read(
-            "materials.get_images", advertiser_id, {"image_ids": [image_id]}, budget
+        rows = self.read_images(
+            advertiser_id=advertiser_id, image_ids=(image_id,), budget=budget
+        )
+        return rows[0] if rows else None
+
+    def read_images(
+        self,
+        *,
+        advertiser_id: str,
+        image_ids: tuple[str, ...],
+        budget: material_types.RemoteCallBudget,
+    ) -> tuple[material_types.ImageRecord, ...]:
+        response = self._bulk_response(
+            advertiser_id=advertiser_id,
+            identities=image_ids,
+            images=True,
+            budget=budget,
         )
         assert isinstance(response.data, dict)
-        rows = video_rows(response.data)
-        if not rows:
-            return None
-        if len(rows) != 1 or rows[0].get("image_id") != image_id:
-            raise _schema_error()
-        return image_record(
-            rows[0], advertiser_id=advertiser_id, evidence=response.evidence
+        return tuple(
+            image_record(row, advertiser_id=advertiser_id, evidence=response.evidence)
+            for row in video_rows(response.data)
         )
 
     def search_images(

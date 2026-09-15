@@ -200,7 +200,10 @@ function List({
       {
         header: "状态",
         cell: ({ row: { original: r } }) => (
-          <SubmissionBadge status={r.status} />
+          <SubmissionBadge
+            status={r.status}
+            correctedAdCount={r.corrected_ad_count}
+          />
         ),
       },
       {

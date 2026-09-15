@@ -1,5 +1,5 @@
 [Unit]
-Description=TK-ADA Singapore staging resource worker
+Description=TK-ADA Singapore staging advertisement build worker
 After=network-online.target postgresql.service redis-server.service
 Wants=network-online.target
 Requires=postgresql.service redis-server.service
@@ -11,8 +11,8 @@ Group=tt-ada
 WorkingDirectory=/opt/tt-ada-staging/current/backend
 EnvironmentFile=/etc/tt-ada-staging/app.env
 Environment=PYTHONUNBUFFERED=1
-# 素材保留两个执行槽；已就绪广告和控制任务由独立消费者处理。
-ExecStart=/opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.celery_app:celery_app worker -Q resources --pool prefork --concurrency 2 --loglevel INFO --hostname resources-singapore@%%h
+# 广告创建独立执行，不会被素材共享/封面的网络等待占满。
+ExecStart=/opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.celery_app:celery_app worker -Q builds --pool prefork --concurrency 1 --loglevel INFO --hostname builds-singapore@%%h
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=960

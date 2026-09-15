@@ -13,6 +13,7 @@ from urllib3.exceptions import ReadTimeoutError
 
 from app.core.config import settings
 from app.core.errors import DomainError
+from app.modules.accounts.connection_models import ConnectionAuthorization
 from app.modules.materials.cleanup import _active_uses, run_cleanup, schedule_cleanup
 from app.modules.materials.cleanup_abandoned import abandon_transport
 from app.modules.materials.cleanup_reconcile import scan_abandoned_objects
@@ -106,6 +107,96 @@ def assert_reserved(db, env, operation_id):
     global_budget = db.get(ObjectBudget, "global")
     assert global_budget.reserved_bytes >= tenant.reserved_bytes
     assert global_budget.stored_bytes >= tenant.stored_bytes
+
+
+def upload_with_unpublished_receipt(
+    env, gateway_case, gateway_wire, database_engine, redis_client, monkeypatch
+):
+    """真实回执后撤销上传权阻止发布；恢复权限后才允许测试回查证据。"""
+    route = gateway_case[1]
+    original_permissions = None
+
+    def revoke_upload():
+        nonlocal original_permissions
+        with Session(database_engine) as db, db.begin():
+            authorization = db.exec(
+                select(ConnectionAuthorization).where(
+                    ConnectionAuthorization.connection_id == route.connection_id
+                )
+            ).one()
+            original_permissions = dict(authorization.permission_summary)
+            authorization.permission_summary = {
+                **original_permissions,
+                "upload_authorized": False,
+            }
+
+    try:
+        with monkeypatch.context() as patch:
+            if route.channel == "OFFICIAL_API":
+                import urllib3
+
+                original = urllib3.PoolManager.request
+
+                def response(pool, method, url, **kwargs):
+                    result = original(pool, method, url, **kwargs)
+                    if method == "POST" and "/file/video/ad/upload/" in url:
+                        revoke_upload()
+                    return result
+
+                patch.setattr(urllib3.PoolManager, "request", response)
+            else:
+                import json
+
+                from app.integrations.tiktok.mcp import transport
+
+                original = transport._new_http_transport
+
+                class ResponseBoundary(original):
+                    async def handle_async_request(self, request):
+                        message = (
+                            json.loads(request.content)
+                            if request.method == "POST"
+                            else {}
+                        )
+                        result = await super().handle_async_request(request)
+                        if (
+                            message.get("method") == "tools/call"
+                            and message.get("params", {}).get("name")
+                            == "file_video_ad_upload"
+                        ):
+                            revoke_upload()
+                        return result
+
+                patch.setattr(transport, "_new_http_transport", ResponseBoundary)
+            run(env, redis_client)
+        assert original_permissions is not None
+        op = operation(env)
+        assert op.status == "verifying"
+        assert op.remote_response["video_id"] == "actual-source-vid"
+        assert len(business_calls(gateway_wire, route.channel)) == 1
+        with Session(database_engine) as db:
+            assert_reserved(db, env, op.id)
+    finally:
+        if original_permissions is not None:
+            with Session(database_engine) as db, db.begin():
+                authorization = db.exec(
+                    select(ConnectionAuthorization).where(
+                        ConnectionAuthorization.connection_id == route.connection_id
+                    )
+                ).one()
+                authorization.permission_summary = original_permissions
+
+
+def assert_one_upload_one_read(gateway_wire, channel):
+    calls = business_calls(gateway_wire, channel)
+    if channel == "OFFICIAL_API":
+        assert [call[0] for call in calls] == ["POST", "GET"]
+        assert "/file/video/ad/info/" in calls[1][1]
+    else:
+        assert [call["params"]["name"] for call in calls] == [
+            "file_video_ad_upload",
+            "file_video_ad_info_get",
+        ]
 
 
 def expire_local_clocks(database_engine, env, operation_id):
@@ -217,12 +308,15 @@ def test_known_vid_with_incomplete_readback_never_releases_original(
     synthetic_contract,
     redis_client,
     database_engine,
+    monkeypatch,
     bad,
 ):
     assert synthetic_contract.category == "SYNTHETIC"
     env = charged_original
     enqueue_upload(gateway_case, gateway_wire)
-    run(env, redis_client)
+    upload_with_unpublished_receipt(
+        env, gateway_case, gateway_wire, database_engine, redis_client, monkeypatch
+    )
     op = operation(env)
     data = (
         {"list": []}
@@ -240,6 +334,7 @@ def test_known_vid_with_incomplete_readback_never_releases_original(
         {"content": [], "structuredContent": {"code": 0, "data": data}}
     )
     run(env, redis_client, kind="verify", operation_id=op.id)
+    assert_one_upload_one_read(gateway_wire, gateway_case[1].channel)
     assert operation(env).status == "verifying"
     with Session(database_engine) as db:
         assert_reserved(db, env, op.id)
@@ -258,11 +353,14 @@ def test_exact_completion_releases_only_its_operation_and_cleanup_waits_for_othe
     synthetic_contract,
     redis_client,
     database_engine,
+    monkeypatch,
 ):
     assert synthetic_contract.category == "SYNTHETIC"
     env = charged_original
     enqueue_upload(gateway_case, gateway_wire)
-    run(env, redis_client)
+    upload_with_unpublished_receipt(
+        env, gateway_case, gateway_wire, database_engine, redis_client, monkeypatch
+    )
     op = operation(env)
     with Session(database_engine) as db, db.begin():
         other = acquire_original_use(
@@ -279,6 +377,7 @@ def test_exact_completion_releases_only_its_operation_and_cleanup_waits_for_othe
         {"content": [], "structuredContent": {"code": 0, "data": info()}}
     )
     run(env, redis_client, kind="verify", operation_id=op.id)
+    assert_one_upload_one_read(gateway_wire, gateway_case[1].channel)
     assert operation(env).status == "succeeded"
     with Session(database_engine) as db:
         assert (
@@ -384,7 +483,9 @@ def test_actual_receipt_survives_http_cleanup_failure_without_releasing_use(
             raise RuntimeError("synthetic cleanup failure")
 
         monkeypatch.setattr(urllib3.PoolManager, "clear", failed_clear)
-    run(env, redis_client)
+    upload_with_unpublished_receipt(
+        env, gateway_case, gateway_wire, database_engine, redis_client, monkeypatch
+    )
     op = operation(env)
     assert (
         op.status == "verifying"
@@ -404,11 +505,14 @@ def test_real_database_completion_failure_rolls_back_use_and_cleanup_together(
     synthetic_contract,
     redis_client,
     database_engine,
+    monkeypatch,
 ):
     assert synthetic_contract.category == "SYNTHETIC"
     env = charged_original
     enqueue_upload(gateway_case, gateway_wire)
-    run(env, redis_client)
+    upload_with_unpublished_receipt(
+        env, gateway_case, gateway_wire, database_engine, redis_client, monkeypatch
+    )
     op = operation(env)
     # 制造实际PG计数冲突，而非mock Session/commit；完成事务仍必须全部回滚。
     with Session(database_engine) as db, db.begin():
@@ -419,6 +523,7 @@ def test_real_database_completion_failure_rolls_back_use_and_cleanup_together(
         {"content": [], "structuredContent": {"code": 0, "data": info()}}
     )
     run(env, redis_client, kind="verify", operation_id=op.id)
+    assert_one_upload_one_read(gateway_wire, gateway_case[1].channel)
     assert operation(env).status == "verifying"
     with Session(database_engine) as db:
         assert_reserved(db, env, op.id)

@@ -3229,6 +3229,48 @@ export type RemoteMaterialPreview = {
 };
 
 /**
+ * ReplacementPublic
+ */
+export type ReplacementPublic = {
+    /**
+     * Correction Id
+     */
+    correction_id: string;
+    /**
+     * Status
+     */
+    status?: 'VERIFIED_REPLACEMENT';
+    /**
+     * Source Step Id
+     */
+    source_step_id: string;
+    /**
+     * Remote Id
+     */
+    remote_id: string;
+    /**
+     * Remote Adgroup Id
+     */
+    remote_adgroup_id: string;
+    /**
+     * Original Adgroup Id
+     */
+    original_adgroup_id: string;
+    /**
+     * Operation Status
+     */
+    operation_status: string;
+    /**
+     * Review Status
+     */
+    review_status?: string | null;
+    /**
+     * Checked At
+     */
+    checked_at: string;
+};
+
+/**
  * ResolveRequest
  */
 export type ResolveRequest = {
@@ -3402,6 +3444,7 @@ export type SignedPreview = {
  * StepPublic
  */
 export type StepPublic = {
+    correction?: ReplacementPublic | null;
     /**
      * Can Historical Read
      */
@@ -3710,6 +3753,10 @@ export type SubmissionListItem = {
      */
     strategy_label: string;
     /**
+     * Corrected Ad Count
+     */
+    corrected_ad_count?: number;
+    /**
      * Submission Id
      */
     submission_id: string;
@@ -3871,6 +3918,10 @@ export type SubmissionUnitPublic = {
  * SubmissionView
  */
 export type SubmissionView = {
+    /**
+     * Corrected Ad Count
+     */
+    corrected_ad_count?: number;
     execution_route?: ExecutionRoutePublic | null;
     /**
      * Recovery Mode

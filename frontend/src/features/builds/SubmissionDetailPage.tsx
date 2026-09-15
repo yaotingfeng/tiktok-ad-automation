@@ -201,7 +201,10 @@ function Detail({
         <div className="flex min-w-0 flex-col gap-1">
           <WorkspacePageTitle>任务 {data.batch_short_id}</WorkspacePageTitle>
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <SubmissionBadge status={data.status} />
+            <SubmissionBadge
+              status={data.status}
+              correctedAdCount={data.corrected_ad_count}
+            />
             <span className="text-sm">
               {data.drama_count} 剧 · {data.account_count} 户 · 另有{" "}
               {data.excluded_unit_count} 个排除组合

@@ -17,6 +17,7 @@ from app.jobs.tasks import register_dispatch_task
 from app.modules.accounts.access import resolve_account_access
 from app.modules.accounts.models import TenantBC
 from app.modules.accounts.routing import verify_route
+from app.modules.builds.corrections import resolved_sql
 from app.modules.builds.execution_models import (
     ExecutionStep,
     Submission,
@@ -133,7 +134,9 @@ RECONCILE_CANDIDATES = """(
  AND child.kind='READBACK' AND child.status<>'SUCCEEDED'
  AND child.status<>'UNKNOWN' AND NOT child.mismatch
 ) candidates JOIN execution_step s ON s.id=candidates.id"""
+RETRY += " AND NOT " + resolved_sql("s")
 RECONCILE = f"""
+AND NOT {resolved_sql("s")}
 AND (s.kind<>'MATERIAL' OR (s.cover_job_id IS NULL AND EXISTS (SELECT 1 FROM material_distribution d JOIN material_asset_operation o
  ON o.id=d.operation_id AND o.tenant_id=d.tenant_id AND o.bc_id=d.bc_id AND o.material_id=d.material_id AND o.advertiser_id=d.advertiser_id
  WHERE d.id=s.distribution_id AND d.tenant_id=s.tenant_id AND d.bc_id=s.bc_id AND d.material_id=s.material_id AND d.advertiser_id=u.advertiser_id

@@ -102,6 +102,12 @@ def _source(
     ).one_or_none()
     if source is None:
         raise DomainError("resource_not_found", "原执行步骤不存在")
+    from app.modules.builds.corrections import is_resolved
+
+    if is_resolved(session, source):
+        raise DomainError(
+            "replacement_already_verified", "原步骤已通过独立补建闭环，请查看补建证据"
+        )
     unit = session.get(BuildUnit, source.unit_id)
     if unit is None or (unit.tenant_id, unit.preview_id, unit.bc_id) != (
         context.tenant_id,
@@ -430,6 +436,8 @@ def historical_read_available(
     submission_id: UUID,
     source_step_id: UUID | None = None,
 ) -> bool:
+    from app.modules.builds.corrections import resolved_sql
+
     params = _eligible_params(session, context)
     if params is None:
         return False
@@ -440,6 +448,8 @@ def historical_read_available(
             text(
                 "SELECT EXISTS("
                 + ELIGIBLE
+                + " AND NOT "
+                + resolved_sql("s")
                 + " AND s.submission_id=:submission AND (CAST(:step AS uuid) IS NULL OR s.id=CAST(:step AS uuid)))"
             ),
             params,
@@ -450,6 +460,8 @@ def historical_read_available(
 def historical_read_eligible_steps(
     session: Session, *, context: TenantContext, step_ids: list[UUID]
 ) -> set[UUID]:
+    from app.modules.builds.corrections import resolved_sql
+
     if len(step_ids) > 100:
         raise ValueError("historical read projection accepts at most 100 steps")
     params = _eligible_params(session, context)
@@ -459,7 +471,12 @@ def historical_read_eligible_steps(
     return set(
         SASession.execute(
             session,
-            text(ELIGIBLE + " AND s.id=ANY(CAST(:steps AS uuid[])) LIMIT 100"),
+            text(
+                ELIGIBLE
+                + " AND NOT "
+                + resolved_sql("s")
+                + " AND s.id=ANY(CAST(:steps AS uuid[])) LIMIT 100"
+            ),
             params,
         ).scalars()
     )

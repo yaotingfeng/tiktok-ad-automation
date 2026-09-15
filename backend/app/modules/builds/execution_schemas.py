@@ -36,6 +36,7 @@ class Recovery(BaseModel):
 
 
 class SubmissionView(BaseModel):
+    corrected_ad_count: int = 0
     execution_route: ExecutionRoutePublic | None = None
     recovery_mode: Literal["ORIGINAL_READ", "REAUTHORIZE_READ", "BLOCKED"] = "BLOCKED"
     error_code: str | None = None
@@ -97,7 +98,20 @@ class ExecutionUnit(BaseModel):
     frozen: FrozenUnit
 
 
+class ReplacementPublic(BaseModel):
+    correction_id: UUID
+    status: Literal["VERIFIED_REPLACEMENT"] = "VERIFIED_REPLACEMENT"
+    source_step_id: UUID
+    remote_id: str
+    remote_adgroup_id: str
+    original_adgroup_id: str
+    operation_status: str
+    review_status: str | None = None
+    checked_at: datetime
+
+
 class StepPublic(BaseModel):
+    correction: ReplacementPublic | None = None
     can_historical_read: bool = False
     title: str | None = None
     advertiser_id: str | None = None
@@ -153,6 +167,7 @@ class SubmissionMetadata(BaseModel):
 
 
 class SubmissionListItem(SubmissionMetadata):
+    corrected_ad_count: int = 0
     submission_id: UUID
     batch_short_id: str
     bc_id: str

@@ -28,6 +28,7 @@ export const stepKinds: Record<string, string> = {
   READBACK: "结果核查",
 }
 export const stepStates: Record<string, string> = {
+  VERIFIED_REPLACEMENT: "补建已核实",
   PENDING: "待处理",
   QUEUED: "排队中",
   RUNNING: "处理中",
@@ -36,7 +37,13 @@ export const stepStates: Record<string, string> = {
   UNKNOWN: "结果待核实",
   FAILED: "确定失败",
 }
-export function SubmissionBadge({ status }: { status: string }) {
+export function SubmissionBadge({
+  status,
+  correctedAdCount = 0,
+}: {
+  status: string
+  correctedAdCount?: number
+}) {
   return (
     <Badge
       variant={
@@ -48,26 +55,36 @@ export function SubmissionBadge({ status }: { status: string }) {
       }
     >
       {submissionStates[status] || stepStates[status] || status}
+      {status === "COMPLETED" &&
+        correctedAdCount > 0 &&
+        `（含${correctedAdCount}条补建）`}
     </Badge>
   )
 }
 export function PlatformState({ step }: { step?: StepPublic | null }) {
+  const state = step?.correction || step
   return (
     <div className="flex flex-col gap-1 text-xs">
       <span>
         操作状态：
-        {step?.operation_status === "ENABLE"
+        {state?.operation_status === "ENABLE"
           ? "已启用（ENABLE）"
-          : step?.operation_status || "暂未获取"}
+          : state?.operation_status || "暂未获取"}
       </span>
-      <span>审核/投放状态：{step?.review_status || "暂未获取"}</span>
-      {step?.checked_at && (
+      <span>审核/投放状态：{state?.review_status || "暂未获取"}</span>
+      {state?.checked_at && (
         <span className="text-muted-foreground">
-          核查于 {displayTime(step.checked_at)}
+          核查于 {displayTime(state.checked_at)}
         </span>
       )}
-      {step?.mismatch && (
+      {step?.mismatch && !step.correction && (
         <span className="font-semibold">存在结果差异，需核实</span>
+      )}
+      {step?.correction && (
+        <span className="text-muted-foreground">
+          补建已核实；原组 {step.correction.original_adgroup_id}{" "}
+          已停用（DISABLE）。
+        </span>
       )}
     </div>
   )
@@ -132,6 +149,8 @@ export function SubmissionProgress({ data }: { data: SubmissionView }) {
         <p className="text-xs text-muted-foreground">
           已创建事实与结果差异分别记录；素材、CTA
           与核查步骤不计入上述广告对象数。
+          {(data.corrected_ad_count ?? 0) > 0 &&
+            ` 已创建包含${data.corrected_ad_count}条已核实补建，原尝试保留在明细审计中。`}
         </p>
         <div className="flex min-w-0 flex-wrap gap-3 text-xs">
           {Object.entries(data.stage_counts)

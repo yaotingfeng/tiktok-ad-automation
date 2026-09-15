@@ -17,7 +17,7 @@
 - 安装 Python 3.14 / uv、Bun 1.4.2、PostgreSQL 18、Redis 8、Nginx；依赖按仓库锁文件冻结安装。
 - PostgreSQL 和 Redis 只监听 loopback；Nginx 提供测试入口，API 仅监听 `127.0.0.1:18000`。域名/TLS 状态以本次验收记录为准。
 - systemd 管理 API、Linux prefork Worker（小内存主机先使用 2 个进程）与唯一 Beat；禁止 API/代理访问日志采集授权参数。Beat 状态保存在 `/var/lib/tt-ada-staging`。
-- 搭建链优化发布使用 `deploy/staging-worker.service`（resources/builds，prefork 2）及 `deploy/staging-control.service`（control，prefork 1），避免长素材任务阻塞 outbox/恢复调度。两 Worker 均使用同一私有配置和版本；正常排空、备份、配置核对、重启及 ping 必须覆盖新增 `tt-ada-staging-control`。发布后检查内存/交换区，不能仅靠提高并发掩盖队列积压。
+- 批处理版本部署使用 `deploy/staging-worker.service`（resources，prefork 2）、`deploy/staging-builds.service`（builds，prefork 1）及 `deploy/staging-control.service`（control，prefork 1），素材等待不再占用广告或调度的执行槽。三个 Worker 加 API、Beat 均使用同一私有配置和版本；正常排空、备份、配置核对、重启及 ping 必须覆盖 `tt-ada-staging-builds`、`tt-ada-staging-control`。新增消费者不扩大共享上游额度，发布后检查内存/交换区，不能仅靠提高并发掩盖队列积压。
 - 全新空库通过 Alembic 迁移到固定提交的 head，再初始化管理员。缺少 TikTok/R2/版权方配置时保持未配置，素材导入/清理开关关闭。
 - 后续升级先停止接收写入，停止 Beat 并正常排空 Worker，按通用发布手册备份数据库、Redis、项目文件/构建产物及私有配置（无迁移也必须备份）；迁移成功后切换同版本 API/Worker/Beat。不可通过直接改表或删除数据修复迁移。
 - 验证前端构建、Alembic head、登录和受保护接口、入口检查、Redis/数据库、Worker ping、Beat/outbox；外部真实联调单独验收。
@@ -30,11 +30,11 @@
 - Python `3.14.2` / uv `0.9.26` / Bun `1.4.2` / PostgreSQL `18.6` / Redis `8.10.1` / Certbot `5.8.0`。另已安装 Nginx、FFmpeg 和基础编译依赖；未安装 Docker。
 - 数据库 `tt_ada_staging`，角色 `tt_ada`；应用角色无 CREATEDB 或超级用户权限。回归测试使用单独测试角色与 `tt_ada_acceptance_test`、Redis DB 14/15，业务使用 Redis DB 0。
 - `/etc/tt-ada-staging/app.env` 为 root:tt-ada、0640；管理员登录信息位于服务器 `/root/tt-ada-staging-login.txt`。本地私有副本 `.runtime/singapore-staging/login.txt` 为 0600，已被 Git 忽略。
-- API/Worker/Beat 单元名依次为 `tt-ada-staging-api`、`tt-ada-staging-worker`、`tt-ada-staging-beat`。服务使用 `ProtectSystem=strict`、独立临时目录及 960 秒正常停止期限。Worker 节点名中 Celery 的 `%h` 在 systemd 文件里必须写为 `%%h`，避免被 systemd 展开为 root 家目录。
+- API、素材 Worker、广告 Worker、控制 Worker、Beat 单元名依次为 `tt-ada-staging-api`、`tt-ada-staging-worker`、`tt-ada-staging-builds`、`tt-ada-staging-control`、`tt-ada-staging-beat`。服务使用 `ProtectSystem=strict`、独立临时目录及 960 秒正常停止期限。Worker 节点名中 Celery 的 `%h` 在 systemd 文件里必须写为 `%%h`，避免被 systemd 展开为 root 家目录。
 - Nginx 独立站点 `/etc/nginx/sites-available/tt-ada-staging`。Redis 开启 AOF，淘汰策略 `noeviction`；PostgreSQL、Redis、API 均仅本机监听。
 
 ```bash
-systemctl status tt-ada-staging-api tt-ada-staging-worker tt-ada-staging-beat
+systemctl status tt-ada-staging-api tt-ada-staging-worker tt-ada-staging-builds tt-ada-staging-control tt-ada-staging-beat
 cd /opt/tt-ada-staging/current/backend
 runuser -u tt-ada -- /opt/tt-ada-staging/current/.venv/bin/python ../scripts/check-bootstrap.py https://137.220.150.31
 runuser -u tt-ada -- /opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.celery_app:celery_app inspect ping --timeout 10

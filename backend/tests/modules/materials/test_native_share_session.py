@@ -334,10 +334,11 @@ def test_native_gateway_is_not_shared_by_independent_distribution_tasks(
     with Session(database_engine) as db, db.begin():
         second_target = target(db, share_case, advertiser_id="90071992547409933")
     first = queue(share_case, share_case["target"])
-    second = queue(share_case, second_target)
     source_result = wire["wire"].results[tools["materials.get_videos"]][0]
     wire["wire"].results[tools["materials.get_videos"]].append(source_result)
     run(share_case, redis_client, first.task_id, kind="prepare")
+    # 第一批完成后到达的任务必须开启独立会话；同时已排队的相同范围任务现在会合批。
+    second = queue(share_case, second_target)
     run(share_case, redis_client, second.task_id, kind="prepare")
     assert (
         state(first.task_id)[0].status == state(second.task_id)[0].status == "verifying"

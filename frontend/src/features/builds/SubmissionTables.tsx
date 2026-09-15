@@ -281,8 +281,14 @@ function SubmissionGroupsSheet({
                         第 {r.group_no} 组 · {r.material_count} 份素材 ·{" "}
                         {r.ad_count} 条创意
                       </span>
-                      {r.step?.remote_id && (
-                        <Identifier value={r.step.remote_id} />
+                      {(r.step?.correction?.remote_id || r.step?.remote_id) && (
+                        <Identifier
+                          value={
+                            r.step?.correction?.remote_id ||
+                            r.step?.remote_id ||
+                            ""
+                          }
+                        />
                       )}
                       <PlatformState step={r.step} />
                     </div>
@@ -406,11 +412,25 @@ function SubmissionAds({
                 <p className="break-all text-xs">
                   CTA ID：{r.cta_option_ids.join("、") || "未记录"}
                 </p>
-                {r.step && <SubmissionBadge status={r.step.status} />}
+                {r.step && (
+                  <SubmissionBadge
+                    status={r.step.correction?.status || r.step.status}
+                  />
+                )}
                 <Reasons
-                  codes={r.step?.error_code ? [r.step.error_code] : []}
+                  codes={
+                    !r.step?.correction && r.step?.error_code
+                      ? [r.step.error_code]
+                      : []
+                  }
                 />
-                {r.step?.remote_id && <Identifier value={r.step.remote_id} />}
+                {(r.step?.correction?.remote_id || r.step?.remote_id) && (
+                  <Identifier
+                    value={
+                      r.step?.correction?.remote_id || r.step?.remote_id || ""
+                    }
+                  />
+                )}
                 <PlatformState step={r.step} />
               </div>
             ),
@@ -670,9 +690,15 @@ export function SubmissionStepsTable({
                 header: "结果 / 原因",
                 cell: ({ row: { original: r } }) => (
                   <div className="flex flex-col gap-2">
-                    <SubmissionBadge status={r.status} />
-                    {r.mismatch && <span>结果差异</span>}
-                    <Reasons codes={r.error_code ? [r.error_code] : []} />
+                    <SubmissionBadge
+                      status={r.correction?.status || r.status}
+                    />
+                    {r.mismatch && !r.correction && <span>结果差异</span>}
+                    <Reasons
+                      codes={
+                        !r.correction && r.error_code ? [r.error_code] : []
+                      }
+                    />
                   </div>
                 ),
               },
@@ -680,8 +706,10 @@ export function SubmissionStepsTable({
                 header: "远端对象 / 状态",
                 cell: ({ row: { original: r } }) => (
                   <div className="flex flex-col gap-2">
-                    {r.remote_id ? (
-                      <Identifier value={r.remote_id} />
+                    {r.correction?.remote_id || r.remote_id ? (
+                      <Identifier
+                        value={r.correction?.remote_id || r.remote_id || ""}
+                      />
                     ) : (
                       <span>尚无已知远端 ID</span>
                     )}
@@ -730,18 +758,32 @@ export function SubmissionStepsTable({
           <div className="flex flex-col gap-4">
             <h3 className="font-semibold">
               {stepKinds[selected.kind] || selected.kind} ·{" "}
-              {stepStates[selected.status] || selected.status}
+              {stepStates[selected.correction?.status || selected.status] ||
+                selected.status}
             </h3>
+            {selected.correction && (
+              <p className="text-sm">
+                原尝试结果：{stepStates[selected.status] || selected.status}
+              </p>
+            )}
             <Reasons codes={selected.error_code ? [selected.error_code] : []} />
             <p className="text-sm">
-              {selected.status === "UNKNOWN" || selected.mismatch
-                ? "先确认是否已创建，避免重复创建。请使用当前任务的核查入口。"
-                : selected.status === "FAILED" ||
-                    selected.status === "RETRYABLE"
-                  ? "已创建部分保持现状。仅在服务端确认可恢复时，使用任务的重试入口；需要修改素材或配置时请生成新预览。"
-                  : "此处展示已记录的创建和核查事实。"}
+              {selected.correction
+                ? "补建已核实，原尝试保留用于审计。"
+                : selected.status === "UNKNOWN" || selected.mismatch
+                  ? "先确认是否已创建，避免重复创建。请使用当前任务的核查入口。"
+                  : selected.status === "FAILED" ||
+                      selected.status === "RETRYABLE"
+                    ? "已创建部分保持现状。仅在服务端确认可恢复时，使用任务的重试入口；需要修改素材或配置时请生成新预览。"
+                    : "此处展示已记录的创建和核查事实。"}
             </p>
-            {selected.remote_id && <Identifier value={selected.remote_id} />}
+            {(selected.correction?.remote_id || selected.remote_id) && (
+              <Identifier
+                value={
+                  selected.correction?.remote_id || selected.remote_id || ""
+                }
+              />
+            )}
             <PlatformState step={selected} />
             <HistoricalReadAction
               key={selected.step_id}

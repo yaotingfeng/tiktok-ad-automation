@@ -33,12 +33,14 @@ from app.modules.accounts import capability_models  # noqa: F401
 from app.modules.accounts import directory_models  # noqa: F401
 from app.modules.accounts import discovery_models  # noqa: E402, F401
 from app.modules.builds import execution_models  # noqa: F401
+from app.modules.builds import correction_models  # noqa: E402, F401
 from app.modules.builds import route_models  # noqa: E402, F401
 from app.modules.builds import recovery_models  # noqa: F401
 from app.modules.builds import recovery_routes  # noqa: E402, F401
 from app.modules.builds import mini_targets  # noqa: E402, F401
 from app.modules.builds import scene_job_models  # noqa: F401
 from app.modules.materials import models as materials_models  # noqa: F401
+from app.modules.materials import batch_models  # noqa: E402, F401
 from app.modules.materials import cover_models  # noqa: F401
 from app.modules.materials import ingest_models  # noqa: E402, F401
 from app.modules.providers import models as provider_models  # noqa: F401

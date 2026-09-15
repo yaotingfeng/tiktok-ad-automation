@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
@@ -71,6 +72,18 @@ class MaterialCoverJob(SQLModel, table=True):
             name="ck_material_cover_receipt",
         ),
         Index("ix_material_cover_repair", "status", "repair_after", "id"),
+        Index(
+            "ix_cover_bulk_candidates",
+            "tenant_id",
+            "bc_id",
+            "actor_id",
+            "advertiser_id",
+            "connection_id",
+            "id",
+            postgresql_where=text(
+                "known_image_id IS NOT NULL AND status = 'VERIFYING'"
+            ),
+        ),
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     tenant_id: UUID

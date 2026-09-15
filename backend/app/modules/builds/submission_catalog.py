@@ -13,6 +13,7 @@ from app.core.errors import DomainError
 from app.core.pagination import Page
 from app.modules.accounts.models import TenantBC
 from app.modules.accounts.resolver import decode_cursor, encode_cursor
+from app.modules.builds.corrections import resolved_sql
 from app.modules.builds.execution_schemas import (
     ObjectCounts,
     StepPublic,
@@ -64,7 +65,8 @@ def metadata(
 
 # Page-level equivalent of the authoritative summary's frozen object partition.
 # MATERIAL/CTA/READBACK are dependency facts, never additional advertising objects.
-COUNTS = """
+COUNTS = (
+    """
 , scope_basis AS (
  SELECT p.id submission_id,u.*, EXISTS (
   SELECT 1 FROM build_submission old JOIN build_unit ou ON ou.tenant_id=old.tenant_id AND ou.preview_id=old.preview_id
@@ -105,6 +107,9 @@ COUNTS = """
  UNION ALL SELECT u.submission_id,u.id,'AD',g.id,a.id FROM scope u JOIN planned_group g ON g.tenant_id=u.tenant_id AND g.preview_id=u.preview_id AND g.unit_id=u.id JOIN planned_ad a ON a.tenant_id=g.tenant_id AND a.preview_id=g.preview_id AND a.group_id=g.id WHERE included
 ), results AS (
  SELECT o.submission_id,o.kind, CASE
+ WHEN """
+    + resolved_sql("s")
+    + """ THEN 'succeeded'
  WHEN nullif(trim(s.remote_id),'') IS NOT NULL THEN 'succeeded'
  WHEN s.status IN ('SUCCEEDED','UNKNOWN') THEN 'unknown'
  WHEN s.status='FAILED' OR fa.cta_failed
@@ -124,6 +129,7 @@ COUNTS = """
  SELECT submission_id,jsonb_object_agg(kind || ':' || outcome,n) values FROM result_counts GROUP BY submission_id
 )
 """
+)
 
 
 def list_submissions(
@@ -195,7 +201,8 @@ def list_submissions(
  """
         + COUNTS
         + """ SELECT p.*,coalesce(t.drama_count,0) drama_count,coalesce(t.account_count,0) account_count,
- coalesce(t.excluded_unit_count,0) excluded_unit_count,coalesce(t.submitted_c,0) submitted_c,coalesce(t.submitted_g,0) submitted_g,coalesce(t.submitted_a,0) submitted_a,coalesce(o.values,'{}'::jsonb) outcomes
+ coalesce(t.excluded_unit_count,0) excluded_unit_count,coalesce(t.submitted_c,0) submitted_c,coalesce(t.submitted_g,0) submitted_g,coalesce(t.submitted_a,0) submitted_a,coalesce(o.values,'{}'::jsonb) outcomes,
+ (SELECT count(*) FROM build_verified_replacement vr WHERE vr.tenant_id=p.tenant_id AND vr.submission_id=p.id) corrected_ad_count
  FROM page p LEFT JOIN totals t ON t.submission_id=p.id LEFT JOIN outcomes o ON o.submission_id=p.id ORDER BY p.created_at DESC,p.id DESC"""
     )
     rows = (
@@ -249,6 +256,7 @@ def list_submissions(
                         "drama_count",
                         "account_count",
                         "excluded_unit_count",
+                        "corrected_ad_count",
                     ]
                 },
                 submission_id=row["id"],
@@ -348,6 +356,12 @@ def get_submission_groups(
         )
         for r in rows[:limit]
     ]
+    enrich_corrections(
+        session,
+        context=context,
+        submission_id=submission_id,
+        items=[item.step for item in items if item.step],
+    )
     return Page(
         items=items,
         next_cursor=encode_cursor(scope=scope, last_id=str(items[-1].group_id))
@@ -429,6 +443,12 @@ def get_submission_ads(
         )
         for r in rows[:limit]
     ]
+    enrich_corrections(
+        session,
+        context=context,
+        submission_id=submission_id,
+        items=[item.step for item in items if item.step],
+    )
     return Page(
         items=items,
         next_cursor=encode_cursor(scope=scope, last_id=str(items[-1].planned_ad_id))
@@ -517,9 +537,15 @@ def enrich_units(
  SELECT u.* FROM build_unit u WHERE u.tenant_id=:tenant AND u.preview_id=:preview AND u.id=ANY(CAST(:ids AS uuid[]))
 ), counts AS (
  SELECT e.unit_id,count(*) FILTER(WHERE e.kind='ADGROUP' AND nullif(trim(e.remote_id),'') IS NOT NULL) succeeded_group_count,
- count(*) FILTER(WHERE e.kind='AD' AND nullif(trim(e.remote_id),'') IS NOT NULL) succeeded_ad_count,
+ count(*) FILTER(WHERE e.kind='AD' AND (nullif(trim(e.remote_id),'') IS NOT NULL OR """
+                + resolved_sql("e")
+                + """)) succeeded_ad_count,
  count(*) FILTER(WHERE e.kind='MATERIAL' AND e.status='SUCCEEDED') ready_material_count,
- array_agg(DISTINCT e.status) states,bool_or(e.mismatch) mismatch,
+ array_agg(DISTINCT CASE WHEN """
+                + resolved_sql("e")
+                + """ THEN 'SUCCEEDED' ELSE e.status END) states,bool_or(e.mismatch AND NOT """
+                + resolved_sql("e")
+                + """) mismatch,
  bool_or(e.kind IN ('CAMPAIGN','ADGROUP','AD') AND e.status='SUCCEEDED' AND nullif(trim(e.remote_id),'') IS NULL) unverified_success
  FROM execution_step e JOIN page u ON e.unit_id=u.id WHERE e.tenant_id=:tenant AND e.submission_id=:submission GROUP BY e.unit_id
 ), materials AS (
@@ -606,6 +632,60 @@ def enrich_steps(
         item.can_historical_read = item.step_id in eligible
         for key in ["title", "advertiser_id", "group_no", "creative_no"]:
             setattr(item, key, indexed[item.step_id][key])
+    enrich_corrections(
+        session, context=context, submission_id=submission_id, items=items
+    )
+
+
+def enrich_corrections(
+    session: Session,
+    *,
+    context: TenantContext,
+    submission_id: UUID,
+    items: list[StepPublic],
+) -> None:
+    if not items:
+        return
+    from app.modules.builds.execution_schemas import ReplacementPublic
+
+    rows = (
+        cast(SASession, session)
+        .execute(
+            text("""SELECT DISTINCT ON (e.id) e.id step_id,e.kind,vr.* FROM execution_step e
+ JOIN build_verified_replacement vr ON vr.tenant_id=e.tenant_id AND vr.submission_id=e.submission_id
+ AND (vr.source_step_id=e.id OR vr.source_group_step_id=e.id OR (e.kind='READBACK' AND e.parent_step_id IN (vr.source_step_id,vr.source_group_step_id)))
+ WHERE e.tenant_id=:tenant AND e.submission_id=:submission AND e.id=ANY(CAST(:ids AS uuid[])) ORDER BY e.id,vr.verified_at,vr.id"""),
+            {
+                "tenant": context.tenant_id,
+                "submission": submission_id,
+                "ids": [item.step_id for item in items],
+            },
+        )
+        .mappings()
+        .all()
+    )
+    indexed = {row["step_id"]: row for row in rows}
+    for item in items:
+        row = indexed.get(item.step_id)
+        if row is None:
+            continue
+        group = (
+            item.kind == "ADGROUP"
+            or item.kind == "READBACK"
+            and item.planned_ad_id is None
+        )
+        facts = row["verification"]["adgroup" if group else "ad"]
+        item.correction = ReplacementPublic(
+            correction_id=row["id"],
+            source_step_id=row["source_step_id"],
+            remote_id=row["remote_adgroup_id"] if group else row["remote_ad_id"],
+            remote_adgroup_id=row["remote_adgroup_id"],
+            original_adgroup_id=row["original_adgroup_id"],
+            operation_status=facts["operation_status"],
+            review_status=facts.get("review_status"),
+            checked_at=row["verified_at"],
+        )
+        item.can_historical_read = False
 
 
 def get_submission_materials(

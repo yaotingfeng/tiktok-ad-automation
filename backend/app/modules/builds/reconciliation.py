@@ -310,6 +310,10 @@ def _claim(
     session: Session, context: TenantContext, step_id: UUID, revision: int
 ) -> _Claim | ReconciliationResult:
     step, source, unit = _locked(session, context, step_id)
+    from app.modules.builds.corrections import is_resolved
+
+    if is_resolved(session, source):
+        return ReconciliationResult("VERIFIED_REPLACEMENT")
     now = datetime.now(UTC)
     if step.dispatch_revision != revision:
         return ReconciliationResult("STALE")

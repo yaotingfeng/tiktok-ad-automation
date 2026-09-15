@@ -7,9 +7,11 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from redis import Redis
-from sqlalchemy import Engine, func, or_
+from sqlalchemy import Engine, func, or_, union_all
 from sqlalchemy.dialects.postgresql import array, insert
+from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
+from sqlmodel.sql.expression import SelectOfScalar
 
 from app.core.config import settings
 from app.core.context import TenantContext
@@ -557,47 +559,63 @@ def _claim(
     read: bool,
 ) -> tuple[MaterialCoverJob, UUID] | None:
     with Session(database_engine) as session, session.begin():
-        job = _job(session, context, job_id, lock=True)
-        if job.error_code == "cover_receipt_ambiguous":
-            _stop(job, "cover_receipt_ambiguous", unknown=True)
-            return None
-        if (
-            job.actor_id != context.actor_id
-            or job.dispatch_id != dispatch_id
-            or job.revision != revision
-            or job.status not in {"PENDING", "PREPARING", "VERIFYING"}
-        ):
-            return None
-        dispatch = session.get(PendingDispatch, dispatch_id)
-        expected_task = "materials.verify_cover" if read else "materials.prepare_cover"
-        if dispatch is None or (
-            dispatch.tenant_id != job.tenant_id
-            or dispatch.actor_id != job.actor_id
-            or dispatch.task_name != expected_task
-            or dispatch.task_key != f"cover:{job.id}:{job.revision}"
-            or dispatch.payload != {"job_id": str(job.id), "revision": job.revision}
-        ):
-            return None
-        if job.claimed_until and job.claimed_until > _now():
-            return None
-        if job.request_armed_at is not None and not read:
-            _queue(session, job, read=True)
-            return None
-        try:
-            _access(session, context, job, upload=not read)
-        except DomainError as error:
-            _stop(job, error.code, unknown=bool(job.request_armed_at))
-            return None
-        nonce = uuid4()
-        job.claim_token, job.claimed_until = (
-            nonce,
-            _now() + timedelta(seconds=CLAIM_SECONDS),
+        claimed = _claim_in_session(
+            session, context, job_id, dispatch_id, revision, read=read
         )
-        job.status = "VERIFYING" if read else "PREPARING"
-        job.repair_after = job.claimed_until
         session.flush()
-        session.expunge(job)
-        return job, nonce
+        if claimed:
+            session.expunge(claimed[0])
+        return claimed
+
+
+def _claim_in_session(
+    session: Session,
+    context: TenantContext,
+    job_id: UUID,
+    dispatch_id: UUID,
+    revision: int,
+    *,
+    read: bool,
+) -> tuple[MaterialCoverJob, UUID] | None:
+    job = _job(session, context, job_id, lock=True)
+    if job.error_code == "cover_receipt_ambiguous":
+        _stop(job, "cover_receipt_ambiguous", unknown=True)
+        return None
+    if (
+        job.actor_id != context.actor_id
+        or job.dispatch_id != dispatch_id
+        or job.revision != revision
+        or job.status not in {"PENDING", "PREPARING", "VERIFYING"}
+    ):
+        return None
+    dispatch = session.get(PendingDispatch, dispatch_id)
+    expected_task = "materials.verify_cover" if read else "materials.prepare_cover"
+    if dispatch is None or (
+        dispatch.tenant_id != job.tenant_id
+        or dispatch.actor_id != job.actor_id
+        or dispatch.task_name != expected_task
+        or dispatch.task_key != f"cover:{job.id}:{job.revision}"
+        or dispatch.payload != {"job_id": str(job.id), "revision": job.revision}
+    ):
+        return None
+    if job.claimed_until and job.claimed_until > _now():
+        return None
+    if job.request_armed_at is not None and not read:
+        _queue(session, job, read=True)
+        return None
+    try:
+        _access(session, context, job, upload=not read)
+    except DomainError as error:
+        _stop(job, error.code, unknown=bool(job.request_armed_at))
+        return None
+    nonce = uuid4()
+    job.claim_token, job.claimed_until = (
+        nonce,
+        _now() + timedelta(seconds=CLAIM_SECONDS),
+    )
+    job.status = "VERIFYING" if read else "PREPARING"
+    job.repair_after = job.claimed_until
+    return job, nonce
 
 
 def _check_current(
@@ -818,18 +836,54 @@ def _read_result(
     evidence: dict[str, str] | None,
 ) -> None:
     with Session(database_engine) as session, session.begin():
-        session.exec(
-            select(MaterialFile)
-            .where(
-                MaterialFile.tenant_id == context.tenant_id,
-                MaterialFile.id == job.material_id,
-            )
-            .with_for_update()
-        ).one()
-        current = _fenced(session, context, job.id, nonce)
-        if current is None:
-            return
-        _publish_result(session, context, current, evidence)
+        _read_result_in_session(session, context, job, nonce, evidence)
+
+
+def _read_result_in_session(
+    session: Session,
+    context: TenantContext,
+    job: MaterialCoverJob,
+    nonce: UUID,
+    evidence: dict[str, str] | None,
+) -> None:
+    session.exec(
+        select(MaterialFile)
+        .where(
+            MaterialFile.tenant_id == context.tenant_id,
+            MaterialFile.id == job.material_id,
+        )
+        .with_for_update()
+    ).one()
+    current = _fenced(session, context, job.id, nonce)
+    if current is None:
+        return
+    _check_read_identity(current, job)
+    _publish_result(session, context, current, evidence)
+
+
+def _check_read_identity(current: MaterialCoverJob, expected: MaterialCoverJob) -> None:
+    # 读取响应只属于发出该请求时的具体 VID/摘要/图片/路线，不能发布给中途替换的身份。
+    for field in (
+        "tenant_id",
+        "bc_id",
+        "actor_id",
+        "advertiser_id",
+        "connection_id",
+        "frozen_route",
+        "asset_id",
+        "material_id",
+        "video_id",
+        "video_md5",
+        "known_image_id",
+        "candidate_image_id",
+        "signature",
+        "width",
+        "height",
+        "remote_name",
+        "request_armed_at",
+    ):
+        if getattr(current, field) != getattr(expected, field):
+            raise DomainError("cover_video_changed", "封面读取身份已变化")
 
 
 def _publish_result(
@@ -1238,6 +1292,14 @@ def run_cover(
             database_engine, context, job, nonce, deadline=deadline
         ):
             return
+        if (
+            read
+            and job.known_image_id
+            and _run_known_cover_group(
+                database_engine, redis_client, context, job, nonce, deadline=deadline
+            )
+        ):
+            return
         route = load_material_route(
             job.frozen_route,
             context=context,
@@ -1328,6 +1390,314 @@ def run_cover(
                 )
             else:
                 _stop(current, code, unknown=bool(current.request_armed_at))
+
+
+def _read_failure(
+    database_engine: Engine,
+    context: TenantContext,
+    job: MaterialCoverJob,
+    nonce: UUID,
+    error: Exception,
+) -> None:
+    """批量只读失败仍按每项原 claim 恢复，绝不切回上传阶段。"""
+    with Session(database_engine) as session, session.begin():
+        current = _fenced(session, context, job.id, nonce)
+        if current is None:
+            return
+        if isinstance(error, AccountAdmissionDeferred):
+            _queue(
+                session,
+                current,
+                read=True,
+                delay=max(1, ceil(error.retry_after_ms / 1000)),
+            )
+            return
+        current.failure_count += 1
+        code = error.code if isinstance(error, DomainError) else "cover_response_error"
+        if (
+            isinstance(error, RemoteCallError)
+            and error.code in TRANSIENT_NOT_SENT
+            and current.failure_count < 3
+        ):
+            current.error_code = code
+            _queue(
+                session, current, read=True, delay=5 * 2 ** (current.failure_count - 1)
+            )
+        else:
+            _stop(current, code, unknown=bool(current.request_armed_at))
+
+
+def _known_cover_candidates(
+    first: MaterialCoverJob,
+) -> SelectOfScalar[MaterialCoverJob]:
+    """索引支持按固定授权取下一小组，不能每轮加载或排序全部待核查素材。"""
+    scoped = (
+        select(MaterialCoverJob)
+        .join(PendingDispatch, col(PendingDispatch.id) == MaterialCoverJob.dispatch_id)
+        .where(
+            MaterialCoverJob.tenant_id == first.tenant_id,
+            MaterialCoverJob.bc_id == first.bc_id,
+            MaterialCoverJob.actor_id == first.actor_id,
+            MaterialCoverJob.advertiser_id == first.advertiser_id,
+            MaterialCoverJob.connection_id == first.connection_id,
+            MaterialCoverJob.frozen_route == first.frozen_route,
+            MaterialCoverJob.status == "VERIFYING",
+            col(MaterialCoverJob.known_image_id).is_not(None),
+            or_(
+                col(MaterialCoverJob.claimed_until).is_(None),
+                col(MaterialCoverJob.claimed_until) <= _now(),
+            ),
+            PendingDispatch.available_at <= _now(),
+        )
+    )
+    # 任意单项 dispatch 都可作为游标；按主键范围读取，避免反复过滤前段已完成任务。
+    # 两个分支分别有界，UNION ALL 外层仍只收49项，低位任务不会因此丢失。
+    after = (
+        scoped.where(col(MaterialCoverJob.id) > first.id)
+        .order_by(col(MaterialCoverJob.id))
+        .limit(49)
+    )
+    before = (
+        scoped.where(col(MaterialCoverJob.id) < first.id)
+        .order_by(col(MaterialCoverJob.id))
+        .limit(49)
+    )
+    candidates = aliased(MaterialCoverJob, union_all(after, before).subquery())
+    return select(candidates).limit(49)
+
+
+def _run_known_cover_group(
+    database_engine: Engine,
+    redis_client: Redis,
+    context: TenantContext,
+    first: MaterialCoverJob,
+    first_nonce: UUID,
+    *,
+    deadline: datetime,
+) -> bool:
+    """从既有只读 outbox 合并同授权任务，保留每项永久身份与独立 claim。"""
+    from .readiness import mapping_fresh
+
+    members = [(first, first_nonce)]
+    with bounded_session(database_engine, task_deadline=deadline) as db, db.begin():
+        candidates = db.exec(_known_cover_candidates(first)).all()
+        # 批量 claim 与回执检查仍按 material→job 固定锁序，共用本组一个短会话。
+        if candidates:
+            db.exec(
+                select(MaterialFile)
+                .where(
+                    MaterialFile.tenant_id == context.tenant_id,
+                    col(MaterialFile.id).in_([row.material_id for row in candidates]),
+                )
+                .order_by(col(MaterialFile.id))
+                .with_for_update()
+            ).all()
+        for candidate in candidates:
+            candidate_id, candidate_dispatch, candidate_revision = (
+                candidate.id,
+                candidate.dispatch_id,
+                candidate.revision,
+            )
+            current = _job(db, context, candidate_id, lock=True)
+            dispatch = (
+                db.get(PendingDispatch, candidate_dispatch, populate_existing=True)
+                if candidate_dispatch
+                else None
+            )
+            # 候选查询不锁任务；进入批次前必须在锁下再次匹配范围、阶段和到期时间。
+            if (
+                any(
+                    getattr(current, field) != getattr(first, field)
+                    for field in (
+                        "tenant_id",
+                        "bc_id",
+                        "actor_id",
+                        "advertiser_id",
+                        "connection_id",
+                        "frozen_route",
+                    )
+                )
+                or current.status != "VERIFYING"
+                or not current.known_image_id
+                or dispatch is None
+                or dispatch.available_at > _now()
+            ):
+                continue
+            assert candidate_dispatch is not None
+            claimed = _claim_in_session(
+                db,
+                context,
+                candidate_id,
+                candidate_dispatch,
+                candidate_revision,
+                read=True,
+            )
+            if claimed:
+                job, nonce = claimed
+                if _receipt_conflict(db, job):
+                    _invalidate_receipt(db, job)
+                else:
+                    members.append(claimed)
+        db.flush()
+        for job, _ in members[1:]:
+            db.expunge(job)
+    if len(members) == 1:
+        with bounded_session(database_engine, task_deadline=deadline) as db:
+            if mapping_fresh(_mapping(db, first)):
+                return False
+
+    active = list(members)
+
+    def check_members() -> None:
+        # 工厂会在每一次真实 HTTP 前调用，连同凭据/账户权限重新检查。
+        # 同一回调共享短事务，避免逐项新建连接阻塞 MCP 流；不跨请求缓存权限。
+        with bounded_session(database_engine, task_deadline=deadline) as db, db.begin():
+            for job, nonce in active:
+                current = _fenced(db, context, job.id, nonce)
+                if current is None:
+                    raise DomainError("cover_claim_lost", "封面任务执行权已变化")
+                _check_read_identity(current, job)
+                _access(db, context, current)
+                _check_reuse(db, context, current)
+
+    def budget(operation: str) -> material_types.RemoteCallBudget:
+        return material_types.RemoteCallBudget(
+            deadline, HARD_LIMIT, admission_policy(operation).lease_ms
+        )
+
+    try:
+        route = load_material_route(
+            first.frozen_route,
+            context=context,
+            bc_id=first.bc_id,
+            connection_id=first.connection_id,
+        )
+        with open_tiktok_gateway(
+            database_engine=database_engine,
+            redis_client=redis_client,
+            context=context,
+            route=route,
+            task_deadline=deadline,
+            before_request=check_members,
+        ) as gateway:
+            from .sdk_assets import verified_video, video_record_data
+
+            stale = []
+            with bounded_session(database_engine, task_deadline=deadline) as db:
+                for job, nonce in active:
+                    if not mapping_fresh(_mapping(db, job)):
+                        stale.append((job, nonce))
+            if stale:
+                check_members()
+                videos = gateway.materials.read_videos(
+                    advertiser_id=first.advertiser_id,
+                    video_ids=tuple(dict.fromkeys(job.video_id for job, _ in stale)),
+                    budget=budget("materials.get_videos"),
+                )
+                by_video = {row.video_id: row for row in videos}
+                rejected = []
+                video_failures = []
+                with (
+                    bounded_session(database_engine, task_deadline=deadline) as db,
+                    db.begin(),
+                ):
+                    db.exec(
+                        select(MaterialFile)
+                        .where(
+                            MaterialFile.tenant_id == context.tenant_id,
+                            col(MaterialFile.id).in_(
+                                [job.material_id for job, _ in stale]
+                            ),
+                        )
+                        .order_by(col(MaterialFile.id))
+                        .with_for_update()
+                    ).all()
+                    for job, nonce in stale:
+                        try:
+                            with db.begin_nested():
+                                assert job.video_md5 is not None
+                                row = by_video.get(job.video_id)
+                                evidence = verified_video(
+                                    {"list": [video_record_data(row)] if row else []},
+                                    md5=job.video_md5,
+                                    expected_video_id=job.video_id,
+                                )
+                                if evidence is None:
+                                    _read_result_in_session(
+                                        db, context, job, nonce, None
+                                    )
+                                else:
+                                    read_current = _fenced(db, context, job.id, nonce)
+                                    if read_current is None:
+                                        raise DomainError(
+                                            "cover_claim_lost", "封面任务执行权已变化"
+                                        )
+                                    _check_read_identity(read_current, job)
+                                    _access(db, context, read_current)
+                                    mapping = _mapping(db, read_current)
+                                    assert mapping
+                                    mapping.verified_at = _now()
+                            if evidence is None:
+                                rejected.append((job, nonce))
+                        except Exception as error:
+                            rejected.append((job, nonce))
+                            video_failures.append((job, nonce, error))
+                # 事务提交后才调整本次请求成员；异常回滚不会漏掉需要恢复的原claim。
+                for rejected_member in rejected:
+                    active.remove(rejected_member)
+                for job, nonce, member_error in video_failures:
+                    _read_failure(database_engine, context, job, nonce, member_error)
+            if not active:
+                return True
+            check_members()
+            images = gateway.materials.read_images(
+                advertiser_id=first.advertiser_id,
+                image_ids=tuple(
+                    dict.fromkeys(
+                        job.known_image_id for job, _ in active if job.known_image_id
+                    )
+                ),
+                budget=budget("materials.get_images"),
+            )
+            by_image = {row.image_id: row for row in images}
+            failures = []
+            with (
+                bounded_session(database_engine, task_deadline=deadline) as db,
+                db.begin(),
+            ):
+                db.exec(
+                    select(MaterialFile)
+                    .where(
+                        MaterialFile.tenant_id == context.tenant_id,
+                        col(MaterialFile.id).in_(
+                            [job.material_id for job, _ in active]
+                        ),
+                    )
+                    .order_by(col(MaterialFile.id))
+                    .with_for_update()
+                ).all()
+                for job, nonce in active:
+                    try:
+                        with db.begin_nested():
+                            assert job.known_image_id is not None
+                            data = by_image.get(job.known_image_id)
+                            evidence = api.verified_image(
+                                {"list": [api.image_record_data(data)] if data else []},
+                                image_id=job.known_image_id,
+                                remote_name=job.remote_name,
+                                signature=job.signature,
+                                width=job.width,
+                                height=job.height,
+                            )
+                            _read_result_in_session(db, context, job, nonce, evidence)
+                    except Exception as error:
+                        failures.append((job, nonce, error))
+            for job, nonce, member_error in failures:
+                _read_failure(database_engine, context, job, nonce, member_error)
+    except Exception as error:
+        for job, nonce in active:
+            _read_failure(database_engine, context, job, nonce, error)
+    return True
 
 
 def repair_cover_dispatches(session: Session, *, limit: int = 100) -> int:

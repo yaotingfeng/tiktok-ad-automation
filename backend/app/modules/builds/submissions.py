@@ -574,6 +574,7 @@ SCOPE_CTE = (
 def get_submission(
     session: Session, *, context: TenantContext, submission_id: UUID
 ) -> SubmissionView:
+    from app.modules.builds.corrections import resolved_sql
     from app.modules.builds.execution_schemas import ObjectCounts, SubmissionView
 
     authorize(session, context)
@@ -625,6 +626,9 @@ def get_submission(
  UNION ALL SELECT u.id,'AD',g.id,a.id FROM scope u JOIN planned_group g ON g.tenant_id=u.tenant_id AND g.preview_id=u.preview_id AND g.unit_id=u.id JOIN planned_ad a ON a.tenant_id=g.tenant_id AND a.preview_id=g.preview_id AND a.group_id=g.id WHERE included),
  results AS (
  SELECT o.kind, CASE
+ WHEN """
+                + resolved_sql("s")
+                + """ THEN 'succeeded'
  WHEN nullif(trim(s.remote_id),'') IS NOT NULL THEN 'succeeded'
  WHEN s.status IN ('SUCCEEDED','UNKNOWN') THEN 'unknown'
  WHEN s.status='FAILED' OR fa.cta_failed
@@ -659,7 +663,13 @@ def get_submission(
         SQLAlchemySession.execute(
             session,
             text(
-                "SELECT kind,status,count(*) n,bool_or(mismatch) mismatch FROM execution_step WHERE tenant_id=:tenant AND submission_id=:submission GROUP BY kind,status"
+                "SELECT kind,CASE WHEN "
+                + resolved_sql("s")
+                + " THEN 'VERIFIED_REPLACEMENT' ELSE status END status,count(*) n,bool_or(mismatch AND NOT "
+                + resolved_sql("s")
+                + ") mismatch FROM execution_step s WHERE tenant_id=:tenant AND submission_id=:submission GROUP BY kind,CASE WHEN "
+                + resolved_sql("s")
+                + " THEN 'VERIFIED_REPLACEMENT' ELSE status END"
             ),
             params(row),
         )
@@ -667,7 +677,10 @@ def get_submission(
         .all()
     )
     stage_counts = {f"{r['kind']}:{r['status']}": r["n"] for r in stage}
-    states = {r["status"] for r in stage}
+    states = {
+        "SUCCEEDED" if r["status"] == "VERIFIED_REPLACEMENT" else r["status"]
+        for r in stage
+    }
     if any(r["mismatch"] for r in stage):
         states.add("MISMATCH")
     if not row.expanded:
@@ -712,6 +725,7 @@ def get_submission(
 
     recovery = recovery_summary(session, context=context, submission=row)
     return SubmissionView(
+        corrected_ad_count=stage_counts.get("AD:VERIFIED_REPLACEMENT", 0),
         execution_route=execution_route_view(
             session, context=context, preview_id=row.preview_id
         ),
@@ -943,9 +957,22 @@ def get_submission_steps(
     if kind:
         stmt = stmt.where(ExecutionStep.kind == kind)
     if result == "MISMATCH":
-        stmt = stmt.where(col(ExecutionStep.mismatch).is_(True))
+        from app.modules.builds.corrections import resolved_sql
+
+        stmt = stmt.where(
+            col(ExecutionStep.mismatch).is_(True),
+            text("NOT " + resolved_sql("execution_step")),
+        )
     elif result:
-        stmt = stmt.where(ExecutionStep.status == result)
+        from app.modules.builds.corrections import resolved_sql
+
+        resolved = resolved_sql("execution_step")
+        if result == "SUCCEEDED":
+            stmt = stmt.where(
+                text("(execution_step.status='SUCCEEDED' OR " + resolved + ")")
+            )
+        else:
+            stmt = stmt.where(ExecutionStep.status == result, text("NOT " + resolved))
     rows = session.exec(stmt.order_by(col(ExecutionStep.id)).limit(limit + 1)).all()
     items = [
         StepPublic(

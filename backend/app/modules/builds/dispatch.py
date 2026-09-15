@@ -14,6 +14,7 @@ from app.core.errors import DomainError
 from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit
 from app.jobs.tasks import register_dispatch_task
+from app.modules.builds.corrections import resolved_sql
 from app.modules.builds.execution_models import (
     ExecutionStep,
     Submission,
@@ -355,6 +356,7 @@ def process_unit(
                     ),
                 ),
             )
+            .where(text("NOT " + resolved_sql("execution_step")))
             .order_by(col(ExecutionStep.due_at), col(ExecutionStep.id))
             .limit(limit + 1)
         )
@@ -541,6 +543,7 @@ def repair_execution(*, database_engine: Any, limit: int = 100) -> int:
                     ),
                 )
             )
+            .where(text("NOT " + resolved_sql("execution_step")))
             .order_by(col(ExecutionStep.due_at), col(ExecutionStep.id))
             .limit(limit)
             .with_for_update(skip_locked=True)
