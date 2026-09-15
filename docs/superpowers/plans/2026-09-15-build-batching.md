@@ -12,7 +12,7 @@
 
 ## 执行检查点
 
-2026-09-15：Task 1–4 代码与专项回归完成、独立审查闭环。Task 5 迁移及本地验收完成，根集成复测/固定提交发布进行中。实际测试文件为 `test_material_bulk_reads.py`、`test_cover_bulk_verification.py`、`test_batch_distribution.py`、`test_shared_mid_discovery.py`、`test_verified_replacements.py`；目标任务入口无需新增 Celery task，在已有 distribution 入口拼批。新增 MID 查询解决共享后目标 VID 未知仍逐项搜索的热点。详细计数及未验边界见 `docs/validation/2026-09-15-build-batching.md`。
+2026-09-15：Task 1–5完成。首次Linux门禁发现重复鉴权热点，每callback SELECT由885降至252，未放宽生产期限；第二轮Linux满批/并发4项、MID24项、队列2项通过后，固定提交`c79465c`已发布新加坡测试服。最终备份为`/var/backups/tt-ada-staging/20260915T053221Z/`；真实只读核实补建并追加关联，实际任务页8成功0待核实、含2条补建，原历史保留。实际测试文件为 `test_material_bulk_reads.py`、`test_cover_bulk_verification.py`、`test_batch_distribution.py`、`test_shared_mid_discovery.py`、`test_verified_replacements.py`；目标任务入口无需新增 Celery task，在已有 distribution 入口拼批。新增 MID 查询解决共享后目标 VID 未知仍逐项搜索的热点。详细计数及未验边界见 `docs/validation/2026-09-15-build-batching.md`。
 
 ## Global Constraints
 
@@ -73,8 +73,8 @@ def read_images(*, advertiser_id: str, image_ids: tuple[str, ...], budget: Remot
 
 - [x] 读取Agent实际模型，写迁移RED：从现有head升至新head，旧步骤/摘要/队列/UNKNOWN不变，新约束拒绝跨scope和重复替代。
 - [x] GREEN：审查后的Alembic增加新表/约束/索引，不修改历史迁移；新库完整upgrade及旧head升级回归通过。
-- [ ] 根集成共享/封面/创建/恢复/聚合及前端测试；逐文件检查、Ruff/mypy/构建和diff-check。检查暂存范围后聚焦提交。
-- [ ] 固定提交归档、实际前端构建；停止新写入与Beat，正常排空全部消费者，完整备份和隔离PG/Redis恢复、迁移演练、归档摘要/解密验证。
-- [ ] 正式升级测试库并切版本，保留开关和授权；验证所有进程同SHA/配置、无异常重启、HTTPS/登录/队列。
-- [ ] 使用内部真实只读验证服务导入此前两条纠正：原组DISABLE、新组/两AD MATCH、原六条不变；认证任务API及页面显示已完成/补建2，原历史留存。
-- [ ] 更新验收报告、实施进度并聚焦提交文档；不推送，不创建额外真实广告。
+- [x] 根集成共享/封面/创建/恢复/聚合及前端测试；逐文件检查、Ruff/mypy/构建和diff-check。检查暂存范围后聚焦提交。
+- [x] 固定提交归档、实际前端构建；停止新写入与Beat，正常排空全部消费者，完整备份和隔离PG/Redis恢复、迁移演练、归档摘要/解密验证。
+- [x] 正式升级测试库并切版本，保留开关和授权；验证所有进程同SHA/配置、无异常重启、HTTPS/登录/队列。
+- [x] 使用内部真实只读验证服务导入此前两条纠正：原组DISABLE、新组/两AD MATCH、原六条不变；认证任务API及页面显示已完成/补建2，原历史留存。
+- [x] 更新验收报告、实施进度并聚焦提交文档；不推送，不创建额外真实广告。
