@@ -28,6 +28,7 @@ from app.modules.accounts.schemas import AccountAccess
 from app.modules.tenants.permissions import require_tenant
 
 from . import sdk_assets as api
+from .batch_validation import BatchSourceVerifier
 from .channel_policy import require_url_upload
 from .distribution_sources import distribution_sources
 from .file_names import video_file_name
@@ -471,19 +472,30 @@ def _require_distribution_source(
     material: MaterialFile,
     operation: MaterialAssetOperation,
     source_route: FrozenTikTokRoute,
+    verifier: BatchSourceVerifier | None = None,
 ) -> None:
     response = operation.remote_response
     target_route = load_material_route(
         operation.frozen_route, context=context, bc_id=material.bc_id
     )
-    source = resolve_remote_source(
+    resolve_source = verifier.source if verifier is not None else resolve_remote_source
+    require_route = (
+        verifier.require_route if verifier is not None else require_material_route
+    )
+    source = resolve_source(
         session,
         context=context,
         bc_id=source_route.bc_id,
         material_id=UUID(response.get("source_material_id", str(material.id))),
         source_asset_id=UUID(response["source_asset_id"]),
     )
-    source_file = session.get(MaterialFile, source.material_id) if source else None
+    source_file = (
+        verifier.materials.get(source.material_id)
+        if source is not None and verifier is not None
+        else session.get(MaterialFile, source.material_id)
+        if source
+        else None
+    )
     if (
         source is None
         or source_file is None
@@ -513,7 +525,7 @@ def _require_distribution_source(
         or source_file.sha256 != material.sha256
     ):
         raise DomainError("material_source_digest_changed", "来源内容身份已变化")
-    require_material_route(
+    require_route(
         session,
         context=context,
         route=source_route,
@@ -525,7 +537,7 @@ def _require_distribution_source(
         raise DomainError("frozen_route_changed", "来源连接已改变")
     if transport == "native_share":
         # 共享接口使用目标通道的一份授权；该授权必须同时能操作源、目标账户。
-        require_material_route(
+        require_route(
             session,
             context=context,
             route=target_route,

@@ -246,6 +246,9 @@ def gateway_wire(monkeypatch, gateway_case, database_engine):
     # 本地服务的 1 秒空闲超时可能撞上连接池选中旧 TCP 后的调度间隙。
     # 显式关闭 HTTP 连接消除该竞争；MCP session 仍复用，专门传输测试保留 keepalive。
     wire.close_connections = True
+    # 小内存 Linux 的同步鉴权会暂占 SDK 事件循环；已接受的协议连接不能
+    # 被替身一秒请求读取期限提前切断。业务40秒总预算及真实发送门禁不变。
+    wire.request_timeout = 30
     tokens = []
     before = {"callback": None}
 

@@ -23,6 +23,7 @@ from .batch_models import (
     MaterialShareBatchMember,
     MaterialShareBatchReceipt,
 )
+from .batch_validation import BatchSourceVerifier
 from .models import MaterialAssetOperation, MaterialDistribution, MaterialFile
 from .routes import load_material_route
 from .source_uploads import (
@@ -428,7 +429,20 @@ def _send_batch(
                 raise DomainError("material_claim_changed", "共享批次已结束")
             seen_sources: set[UUID] = set()
             seen_targets: set[str] = set()
-            for member, dist, material, op in _locked_batch_rows(db, context, batch_id):
+            rows = _locked_batch_rows(db, context, batch_id)
+            source_route = load_material_route(
+                current.source_route, context=context, bc_id=current.bc_id
+            )
+            verifier = BatchSourceVerifier(
+                db,
+                context=context,
+                source_bc_id=source_route.bc_id,
+                source_asset_ids={
+                    UUID(row[0].source_evidence["source_asset_id"]) for row in rows
+                },
+                materials=(row[2] for row in rows),
+            )
+            for member, dist, material, op in rows:
                 if (
                     dist.operation_id != op.id
                     or op.attempt_token != member.operation_claim
@@ -453,11 +467,8 @@ def _send_batch(
                             context=context,
                             material=material,
                             operation=op,
-                            source_route=load_material_route(
-                                current.source_route,
-                                context=context,
-                                bc_id=current.bc_id,
-                            ),
+                            source_route=source_route,
+                            verifier=verifier,
                         )
                     except DomainError as error:
                         if (
@@ -476,8 +487,17 @@ def _send_batch(
                         "material_source_digest_changed", "共享成员摘要已改变"
                     )
                 if dist.advertiser_id not in seen_targets:
-                    single._target_access(db, context, dist, upload=True)
+                    for capability in ("build", "upload"):
+                        verifier.require_route(
+                            db,
+                            context=context,
+                            route=route,
+                            bc_id=dist.bc_id,
+                            advertiser_id=dist.advertiser_id,
+                            capability=capability,
+                        )
                     seen_targets.add(dist.advertiser_id)
+            verifier.recheck_freshness()
 
     try:
         check_current()

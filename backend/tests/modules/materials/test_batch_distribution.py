@@ -142,23 +142,41 @@ def test_complete_twenty_by_ten_rectangle_sends_once(
 ):
     from time import monotonic
 
-    from sqlalchemy import event
+    from sqlalchemy import Engine, event
 
     tasks, rows = seed_rectangle(share_case, database_engine, materials=20, targets=10)
     names = prepare_wire(gateway_wire, rows)
     selects = []
+    scoped_queries = {}
+    scoped_started = {}
+    scoped_elapsed = {}
 
     def statement(_conn, _cursor, statement, _parameters, _context, _many):
+        if _conn.engine.url.database != database_engine.url.database:
+            return
         if statement.lstrip().startswith("SELECT"):
             selects.append(statement)
+            scoped_queries.setdefault(_conn.engine, []).append(statement)
+            scoped_started.setdefault(_conn.engine, monotonic())
+            scoped_elapsed[_conn.engine] = monotonic() - scoped_started[_conn.engine]
 
-    event.listen(database_engine, "before_cursor_execute", statement)
+    # bounded_session 每次创建独立 NullPool engine；仅监听应用 engine 会漏掉核心鉴权成本。
+    event.listen(Engine, "before_cursor_execute", statement)
     started = monotonic()
-    run(share_case, redis_client, tasks[0], kind="prepare")
-    elapsed = monotonic() - started
-    event.remove(database_engine, "before_cursor_execute", statement)
+    try:
+        run(share_case, redis_client, tasks[0], kind="prepare")
+    finally:
+        elapsed = monotonic() - started
+        event.remove(Engine, "before_cursor_execute", statement)
+    callbacks = [
+        (len(queries), round(scoped_elapsed[engine], 3))
+        for engine, queries in scoped_queries.items()
+        if engine is not database_engine
+        and any("FROM material_share_batch_member" in query for query in queries)
+    ]
     record_property("batch_worker_seconds", elapsed)
     record_property("batch_worker_selects", len(selects))
+    record_property("batch_callback_queries_seconds", callbacks)
     assert [state(task)[0].status for task in tasks] == ["verifying"] * 200, state(
         tasks[0]
     )[1].remote_response
@@ -175,6 +193,8 @@ def test_complete_twenty_by_ten_rectangle_sends_once(
     assert len(shares) == 1
     assert len(shares[0]["material_ids"]) == 20
     assert len(shares[0]["shared_advertiser_ids"]) == 10
+    # 每个短事务仍核验全体200成员，但同来源的20份素材不能重复加载同一账户权限。
+    assert callbacks and max(count for count, _ in callbacks) <= 300, callbacks
     for task in tasks:
         run(share_case, redis_client, task, kind="prepare")
     assert len(business_calls(gateway_wire, channel)) == 2
@@ -280,7 +300,19 @@ def test_unknown_batch_never_resends_any_member(
         assert [r.effect for r in receipts] == ["UNKNOWN"]
 
 
-@pytest.mark.parametrize("change", ["target_upload", "claim", "digest", "expiry"])
+@pytest.mark.parametrize(
+    "change",
+    [
+        "target_upload",
+        "claim",
+        "digest",
+        "expiry",
+        "source_read",
+        "source_upload",
+        "source_vid",
+        "source_material_identity",
+    ],
+)
 @pytest.mark.parametrize(
     "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
 )
@@ -295,6 +327,7 @@ def test_batch_rechecks_every_member_before_share(
 ):
     from app.modules.accounts.models import BCAccountAccess
     from app.modules.materials.models import (
+        AccountMaterial,
         MaterialAssetOperation,
         MaterialDistribution,
     )
@@ -316,6 +349,31 @@ def test_batch_rechecks_every_member_before_share(
                 op.claimed_until = datetime.now(UTC) - timedelta(seconds=1)
             elif change == "digest":
                 db.get(MaterialFile, dist.material_id).video_md5 = "b" * 32
+            elif change in {"source_read", "source_upload"}:
+                grant = db.get(
+                    BCAccountAccess,
+                    (
+                        dist.tenant_id,
+                        dist.bc_id,
+                        share_case["source"],
+                        share_case["connection_id"],
+                    ),
+                )
+                if change == "source_read":
+                    grant.active = False
+                else:
+                    grant.can_upload = False
+            elif change == "source_vid":
+                from uuid import UUID
+
+                db.get(
+                    AccountMaterial, UUID(op.remote_response["source_asset_id"])
+                ).video_id = "changed-source-video"
+            elif change == "source_material_identity":
+                op.remote_response = {
+                    **op.remote_response,
+                    "source_material_id": str(uuid4()),
+                }
             else:
                 db.get(
                     BCAccountAccess,
@@ -342,6 +400,107 @@ def test_batch_rechecks_every_member_before_share(
         ]
     if change == "expiry":
         assert [state(task)[0].status for task in tasks] == ["queued"] * 4
+
+
+def test_transaction_local_source_verifier_cannot_reuse_other_bc_authority(
+    database_engine,
+    gateway_case,
+):
+    from app.core.errors import DomainError
+    from app.modules.materials.batch_validation import BatchSourceVerifier
+
+    context, route, source = gateway_case
+    with Session(database_engine) as db, db.begin():
+        verifier = BatchSourceVerifier(
+            db,
+            context=context,
+            source_bc_id=route.bc_id,
+            source_asset_ids=set(),
+            materials=[],
+        )
+        verifier.require_route(
+            db,
+            context=context,
+            route=route,
+            bc_id=route.bc_id,
+            advertiser_id=source,
+            capability="read",
+        )
+        with pytest.raises(DomainError) as caught:
+            verifier.require_route(
+                db,
+                context=context,
+                route=route,
+                bc_id="unrequested-other-bc",
+                advertiser_id=source,
+                capability="read",
+            )
+        assert caught.value.code == "frozen_route_scope_mismatch"
+
+
+@pytest.mark.parametrize("changed", ["byte_size", "video_md5", "sha256"])
+@pytest.mark.parametrize(
+    "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
+)
+def test_batched_alias_source_file_identity_is_rechecked_after_http(
+    share_case,
+    database_engine,
+    gateway_wire,
+    redis_client,
+    gateway_case,
+    monkeypatch,
+    changed,
+):
+    from datetime import UTC, datetime
+
+    from tests.modules.accounts.test_material_gateway import after_material_http
+
+    # 目标素材是内容相同的独立行；源文件不能误用已经锁住的目标行代替读取。
+    with Session(database_engine) as db, db.begin():
+        original = db.get(MaterialFile, share_case["material_id"])
+        original.sha256 = "a" * 64
+        original.digest_verified_at = datetime.now(UTC)
+        copied = MaterialFile(
+            **(
+                original.model_dump()
+                | {"id": uuid4(), "object_key": f"synthetic/{uuid4()}"}
+            )
+        )
+        db.add(copied)
+        db.flush()
+        copied_env = {**share_case, "material_id": copied.id}
+        another = target(db, share_case, advertiser_id="90071992547600001")
+    tasks = [
+        queue(copied_env, advertiser).task_id
+        for advertiser in (share_case["target"], another)
+    ]
+    prepare_wire(
+        gateway_wire,
+        [
+            {
+                "video_id": f"vid-{share_case['source']}",
+                "material_id": "1234567890123456789",
+                "file_name": "shared.mp4",
+                "signature": "a" * 32,
+                "displayable": True,
+            }
+        ],
+    )
+
+    def mutate():
+        with Session(database_engine) as db, db.begin():
+            original = db.get(MaterialFile, share_case["material_id"])
+            setattr(
+                original,
+                changed,
+                {"byte_size": 121, "video_md5": "b" * 32, "sha256": "b" * 64}[changed],
+            )
+
+    after_material_http(monkeypatch, gateway_case[1].channel, mutate)
+    run(copied_env, redis_client, tasks[0], kind="prepare")
+    assert len(business_calls(gateway_wire, gateway_case[1].channel)) == 1
+    assert [state(task)[0].status for task in tasks] == ["blocked", "blocked"]
+    assert all(not state(task)[1].remote_response.get("send_armed") for task in tasks)
 
 
 def test_whole_batch_not_sent_receipt_allows_one_fresh_batch(

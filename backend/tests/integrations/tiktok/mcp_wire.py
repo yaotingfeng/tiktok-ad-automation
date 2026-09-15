@@ -26,6 +26,7 @@ class McpWire:
         self.invalid_json = False
         self.handshake_delay = 0
         self.close_connections = False
+        self.request_timeout = 1
         self.pages = {}
         wire = self
 
@@ -33,7 +34,7 @@ class McpWire:
             protocol_version = "HTTP/1.1"
 
             def handle(self):
-                self.connection.settimeout(1)
+                self.connection.settimeout(wire.request_timeout)
                 try:
                     super().handle()
                 except ConnectionResetError, BrokenPipeError:

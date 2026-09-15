@@ -40,3 +40,24 @@
 - 内存 1967 MiB，总可用 469 MiB，swap 已用 109 MiB；系统盘可用 5.7 GiB。拟增加独立广告 prefork 1，资源保留 2，发布后检查余量与异常重启。
 - 保留 `MATERIAL_INGEST_ENABLED=true`、`MATERIAL_CLEANUP_ENABLED=true`。共享总并发 4、单操作并发 2、每秒总调用 10/单操作 3、租约 960000ms 均不变；MCP 主体未核实，不拆配额域。
 - 只改测试环境，不改骏伯生产，不推送，不做真实压力广告。
+
+## 测试服发布过程
+
+- 固定代码提交 `5ec1c69daac3707b8cc8f8e7b46ad6081b35a913`；源码归档 SHA-256 `367ccff0036e93a2551c398a23f65ae93b419e28c515090fd855592a2cfb62a5`，前端归档同上。
+- UTC 04:57:09 开始排空，备份 `/var/backups/tt-ada-staging/20260915T045722Z/`。数据库、Redis、配置、独立源码含前端、完整运行配置五份归档校验通过；项目/前端/私有配置隔离解压逐文件核对，Redis 独立实例恢复 PONG，PG 独立恢复并升级至 `build_batching`，24 份加密响应全部解密/摘要验证通过。尚未配置异地副本。
+- 真实 Linux 队列隔离两项通过（线程和 prefork，6.19 秒）；满批/并发和 MID 回读验收进行中，通过后才迁移在线库与切换。
+
+### 首次 Linux 门禁拦截（未切版）
+
+满批门禁 2 通过、2 失败、27 未选择（225.85 秒）：SDK 单满批及同素材跨目标核查通过；MCP 单满批和 SDK 双满批回到 queued、未发送。发布脚本停止在隔离测试阶段，在线库仍为旧 head、current 仍为 `0cd8355`；测试角色已收回 LOGIN/CREATEDB、timer 恢复，原四服务恢复且 HTTPS 健康。
+
+正在补取结果码。已确认重复路径：每个账户 authorize 与 MCP 协议边界都会执行完整批次 callback，不能仅统计主 Engine 而漏掉 bounded_session 的临时 Engine SQL。后续优化须保留每次发送前全成员身份和当前权限核实，不以放宽超时或跳过核验掩盖重复工作。
+
+### 实机根因与第二轮修复
+
+- Linux 单项复现：MCP worker 25.994 秒后 NOT_SENT/mcp_call_failed，协议 tools/list 为 network 类别；gateway fixture 已关闭 keepalive，但同步鉴权仍会阻塞协议事件循环，测试 HTTP server 已接受请求的 1 秒读取上限提前断流。仅将测试 server 读取上限调为 30 秒后，网络错误消失，真实业务仍在 worker 41.813 秒处被 40 秒任务预算拒绝（NOT_SENT/tiktok_call_deadline_exceeded，未共享）。SDK 双满批同样产生两个 NOT_SENT/material_deadline，不是平台共享或测试 Barrier 问题。
+- 全 Engine 实测每次短 callback 为 885 次 SELECT。本轮通过事务内合法来源批读、按完整冻结路由/BC/账户/能力核验一次，将每 callback 降至 252 次（减少 71.5%）。每个 HTTP callback 新建验证器，逐成员 nonce/digest/路由/VID/内容证据仍检查，能力分别核验，结束前检查时效；不跨事务/请求缓存。
+- 本地满200 worker：SDK 2.546 秒/全部5860 SELECT，MCP 4.156 秒/全部9756 SELECT；以上完整统计包含临时 Engine，原仅主 Engine 数字不再用作全链路指标。新增查询预算先两项 RED（885超过300），修复后两通道 GREEN；同事务错 BC 参数另取 RED 并修复 cache key。
+- HTTP 替身新增可配置读取上限，通用传输测试默认仍 1 秒、应用 gateway 测试使用 30 秒；不是生产请求超时。该边界修改后根代理官方 MCP 传输/素材适配器 123 项通过、1 项跳过（82.14 秒）。生产 40 秒请求/75 秒claim/5 秒数据库预算全部不变。
+- 后续重型 Linux 隔离测试移到停写之前；失败保持旧站点服务，通过后才正常排空、完整备份恢复、实际迁移和切换。
+- 第二轮代码冻结前批次专项 **46 项通过**（40 项147.67秒 + 6 项异素材源文件大小/MD5/SHA负向；后者连同错BC项再验7项17.79秒）。根代理三份生产变更 mypy、六份变更 Ruff 及差异检查通过，独立只读审查未发现新的范围/权限遗漏。原分发与 MID 合跑72项继续复验，发布仍须以 Linux 通过为准。
