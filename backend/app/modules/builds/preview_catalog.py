@@ -24,6 +24,15 @@ def get_preview_dramas(
 ) -> Page[PreviewDramaPublic]:
     preview = _preview(session, context, preview_id)
     scope, after = _page_scope(context, preview_id, "preview_dramas", limit, cursor)
+    total = int(
+        cast(SQLAlchemySession, session).execute(
+            text(
+                "SELECT count(*) FROM preview_drama "
+                "WHERE tenant_id=:tenant AND preview_id=:preview"
+            ),
+            {"tenant": context.tenant_id, "preview": preview_id},
+        ).scalar_one()
+    )
     rows = (
         cast(SQLAlchemySession, session)
         .execute(
@@ -68,4 +77,5 @@ def get_preview_dramas(
         next_cursor=encode_cursor(scope=scope, last_id=str(rows[limit - 1]["drama_id"]))
         if len(rows) > limit
         else None,
+        total=total,
     )

@@ -190,7 +190,9 @@ export function MiniTargetPicker({
               >
                 上一页
               </Button>
-              <span className="text-sm">第 {page} 页</span>
+              <span className="text-sm">
+                共 {data?.total ?? 0} 条 · 第 {page} 页
+              </span>
               <Button
                 variant="outline"
                 disabled={busy || !data?.next_page || query.isFetching}

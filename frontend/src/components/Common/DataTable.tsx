@@ -32,11 +32,13 @@ import {
 interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[]
   data: TData[]
+  totalCount?: number
 }
 
 export function DataTable<TData, TValue>({
   columns,
   data,
+  totalCount = data.length,
 }: DataTableProps<TData, TValue>) {
   const table = useReactTable({
     data,
@@ -101,22 +103,22 @@ export function DataTable<TData, TValue>({
         <CardFooter className="flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
           <div className="flex flex-col sm:flex-row sm:items-center gap-4">
             <div className="text-sm text-muted-foreground">
-              Showing{" "}
+              显示第{" "}
               {table.getState().pagination.pageIndex *
                 table.getState().pagination.pageSize +
                 1}{" "}
-              to{" "}
+              至{" "}
               {Math.min(
                 (table.getState().pagination.pageIndex + 1) *
                   table.getState().pagination.pageSize,
                 data.length,
               )}{" "}
-              of{" "}
-              <span className="font-medium text-foreground">{data.length}</span>{" "}
-              entries
+              条，共{" "}
+              <span className="font-medium text-foreground">{totalCount}</span>{" "}
+              条
             </div>
             <div className="flex items-center gap-x-2">
-              <p className="text-sm text-muted-foreground">Rows per page</p>
+              <p className="text-sm text-muted-foreground">每页条数</p>
               <Select
                 value={`${table.getState().pagination.pageSize}`}
                 onValueChange={(value) => {
@@ -141,14 +143,15 @@ export function DataTable<TData, TValue>({
 
           <div className="flex items-center gap-x-6">
             <div className="flex items-center gap-x-1 text-sm text-muted-foreground">
-              <span>Page</span>
+              <span>第</span>
               <span className="font-medium text-foreground">
                 {table.getState().pagination.pageIndex + 1}
               </span>
-              <span>of</span>
+              <span>页，共</span>
               <span className="font-medium text-foreground">
                 {table.getPageCount()}
               </span>
+              <span>页</span>
             </div>
 
             <div className="flex items-center gap-x-1">

@@ -94,6 +94,7 @@ def test_preparation_summary_counts_all_rows_without_loading_them(session, conte
     first_page = get_link_results(
         session, context=context, task_id=prep.id, exceptions_only=True
     )
+    assert first_page.total == 101
     assert len(first_page.items) == 100 and first_page.next_cursor
     assert first_page.items[0].existing_config == {"episode": 1}
     assert first_page.items[0].requested_config == {"episode": 2}
@@ -106,6 +107,7 @@ def test_preparation_summary_counts_all_rows_without_loading_them(session, conte
         exceptions_only=True,
         cursor=first_page.next_cursor,
     )
+    assert second.total == 101
     assert len(second.items) == 1 and second.items[0].line_no == 101
     with pytest.raises(DomainError) as mismatch:
         get_link_results(

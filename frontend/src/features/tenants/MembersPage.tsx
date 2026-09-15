@@ -245,6 +245,7 @@ export function MembersPage() {
           <Pager
             paging={paging}
             nextCursor={data?.next_cursor}
+            total={data?.total}
             busy={query.isFetching || !!query.error}
           />
         </CardFooter>

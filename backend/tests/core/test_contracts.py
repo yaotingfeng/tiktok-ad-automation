@@ -35,12 +35,13 @@ def test_logs_drop_untrusted_values_even_under_allowed_keys():
 
 
 def test_page_validates_items_and_defaults_cursor():
-    assert Page[int](items=[1, 2]).model_dump() == {
+    assert Page[int](items=[1, 2], total=2).model_dump() == {
         "items": [1, 2],
         "next_cursor": None,
+        "total": 2,
     }
     with pytest.raises(ValidationError):
-        Page[int](items=["invalid"])
+        Page[int](items=["invalid"], total=1)
 
 
 @pytest.mark.parametrize(

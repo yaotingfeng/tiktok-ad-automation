@@ -84,6 +84,7 @@ def test_preparation_catalog_pages_are_complete_and_sql_read_only(
                     if not cursor:
                         break
                 assert sizes == [100, 100, 6]
+                assert page.total == 206
                 assert len({row.material_id for row in found}) == 206
                 assert {row.material_id for row in found} == {*expected, shared}
                 assert [
@@ -92,6 +93,8 @@ def test_preparation_catalog_pages_are_complete_and_sql_read_only(
                 assert not session.new and not session.dirty and not session.deleted
         finally:
             event.remove(engine, "before_cursor_execute", observe)
-    assert {query.split()[0].upper() for query in statements} <= {"SELECT", "SET"}
-    material_queries = [q for q in statements if "JOIN material_file" in q]
-    assert len(material_queries) == 3 and all("LIMIT" in q for q in material_queries)
+        assert {query.split()[0].upper() for query in statements} <= {"SELECT", "SET"}
+        material_queries = [q for q in statements if "JOIN material_file" in q]
+        page_queries = [q for q in material_queries if "LIMIT" in q]
+        count_queries = [q for q in material_queries if "count(*)" in q.lower()]
+        assert len(page_queries) == len(count_queries) == 3

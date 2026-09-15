@@ -10,7 +10,7 @@ from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
-from app.core.pagination import Page
+from app.core.pagination import Page, count_rows
 from app.modules.accounts.resolver import decode_cursor, encode_cursor
 from app.modules.builds.drafts import get_draft
 from app.modules.builds.models import (
@@ -145,10 +145,11 @@ def inputs_page(
         DraftInput.tenant_id == context.tenant_id,
         DraftInput.draft_id == draft_id,
         DraftInput.kind == kind,
-        DraftInput.line_no > number,
     )
     if status is not None:
         query = query.where(DraftInput.status == status)
+    total = count_rows(session, query)
+    query = query.where(DraftInput.line_no > number)
     rows = session.exec(query.order_by(col(DraftInput.line_no)).limit(limit + 1)).all()
     items = [DraftInputPublic.model_validate(row) for row in rows[:limit]]
     if kind == "drama" and items:
@@ -254,6 +255,7 @@ def inputs_page(
         next_cursor=encode_cursor(scope=scope, last_id=str(rows[limit - 1].line_no))
         if len(rows) > limit
         else None,
+        total=total,
     )
 
 
@@ -277,13 +279,13 @@ def dramas_page(
         identity = UUID(after) if after else UUID(int=0)
     except ValueError:
         raise DomainError("invalid_cursor", "分页游标无效") from None
+    query = select(DraftDrama).where(
+        DraftDrama.tenant_id == context.tenant_id,
+        DraftDrama.draft_id == draft_id,
+    )
+    total = count_rows(session, query)
     rows = session.exec(
-        select(DraftDrama)
-        .where(
-            DraftDrama.tenant_id == context.tenant_id,
-            DraftDrama.draft_id == draft_id,
-            DraftDrama.drama_id > identity,
-        )
+        query.where(DraftDrama.drama_id > identity)
         .order_by(col(DraftDrama.drama_id))
         .limit(limit + 1)
     ).all()
@@ -292,6 +294,7 @@ def dramas_page(
         next_cursor=encode_cursor(scope=scope, last_id=str(rows[limit - 1].drama_id))
         if len(rows) > limit
         else None,
+        total=total,
     )
 
 
@@ -346,12 +349,15 @@ def materials_page(
             DraftGroupMaterial.tenant_id == context.tenant_id,
             DraftGroupMaterial.draft_id == draft_id,
             DraftGroupMaterial.drama_id == drama_id,
-            or_(
-                col(DraftGroupMaterial.group_no) > group,
-                and_(
-                    col(DraftGroupMaterial.group_no) == group,
-                    col(DraftGroupMaterial.position) > position,
-                ),
+        )
+    )
+    total = count_rows(session, query)
+    query = query.where(
+        or_(
+            col(DraftGroupMaterial.group_no) > group,
+            and_(
+                col(DraftGroupMaterial.group_no) == group,
+                col(DraftGroupMaterial.position) > position,
             ),
         )
     )
@@ -377,4 +383,5 @@ def materials_page(
         )
         if len(rows) > limit
         else None,
+        total=total,
     )

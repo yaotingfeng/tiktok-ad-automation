@@ -319,6 +319,7 @@ export function StrategyList() {
           <Pager
             paging={paging}
             nextCursor={data?.next_cursor}
+            total={data?.total}
             busy={query.isFetching}
           />
         </CardFooter>

@@ -11,7 +11,7 @@ from sqlmodel import Session, col, select
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
-from app.core.pagination import Page
+from app.core.pagination import Page, count_rows
 from app.modules.accounts.models import TenantBC
 from app.modules.materials.models import AccountMaterial, MaterialFile
 from app.modules.materials.schemas import AccountAsset, MaterialCandidate
@@ -110,6 +110,7 @@ def matching_page(
         col(MaterialFile.file_name_folded).contains(needle, autoescape=True),
     )
     name_order = col(MaterialFile.file_name).collate("C")
+    total = count_rows(session, statement)
     if cursor is not None:
         name, identity = decode_material_cursor(cursor, scope=scope)
         statement = statement.where(
@@ -175,4 +176,5 @@ def matching_page(
         )
         if len(rows) > 100
         else None,
+        total=total,
     )

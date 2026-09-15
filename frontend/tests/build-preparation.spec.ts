@@ -749,6 +749,7 @@ test("没有版权方 Mini 配置时按名称选择并自动继续准备", async
   await page.getByRole("button", { name: "选择小程序", exact: true }).click()
   const dialog = page.getByRole("dialog", { name: "选择推广小程序" })
   await expect(dialog.getByText("LemonShow", { exact: true })).toBeVisible()
+  await expect(dialog.getByText("共 1 条 · 第 1 页")).toBeVisible()
   await expect(dialog.getByRole("textbox")).toHaveCount(0)
   await dialog.getByRole("button", { name: /LemonShow/ }).click()
   await expect(dialog).toHaveCount(0)

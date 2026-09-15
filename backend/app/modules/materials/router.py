@@ -12,7 +12,7 @@ from app.api.deps import CurrentUser, SessionDep
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.db import engine
-from app.core.pagination import Page
+from app.core.pagination import Page, count_rows
 from app.modules.materials import catalog
 from app.modules.materials.models import (
     AccountMaterial,
@@ -346,6 +346,7 @@ def get_materials(
     if created_to:
         statement = statement.where(MaterialFile.created_at <= created_to)
     name_order = col(MaterialFile.file_name).collate("C")
+    total = count_rows(session, statement)
     if cursor:
         name, identity = decode_material_cursor(cursor, scope=scope)
         statement = statement.where(
@@ -369,7 +370,9 @@ def get_materials(
         else None
     )
     return Page(
-        items=[_material_public(row) for row in rows[:limit]], next_cursor=next_cursor
+        items=[_material_public(row) for row in rows[:limit]],
+        next_cursor=next_cursor,
+        total=total,
     )
 
 
@@ -427,6 +430,7 @@ def get_assets(
         AccountMaterial.bc_id == bc_id,
         AccountMaterial.material_id == material_id,
     )
+    total = count_rows(session, statement)
     if cursor:
         _, identity = decode_material_cursor(cursor, scope=scope)
         statement = statement.where(AccountMaterial.id > identity)
@@ -442,6 +446,7 @@ def get_assets(
         )
         if len(rows) > limit
         else None,
+        total=total,
     )
 
 
@@ -470,6 +475,7 @@ def get_attempts(
         MaterialUploadAttempt.bc_id == bc_id,
         MaterialUploadAttempt.material_id == material_id,
     )
+    total = count_rows(session, statement)
     if cursor:
         _, identity = decode_material_cursor(cursor, scope=scope)
         statement = statement.where(MaterialUploadAttempt.id > identity)
@@ -507,6 +513,7 @@ def get_attempts(
         )
         if len(rows) > limit
         else None,
+        total=total,
     )
 
 

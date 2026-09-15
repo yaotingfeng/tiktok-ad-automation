@@ -352,6 +352,7 @@ def test_all_read_routes_keep_tenant_scope_even_for_member_of_both(
         assert empty.status_code == 200 and empty.json() == {
             "items": [],
             "next_cursor": None,
+            "total": 0,
         }
         assert outbox_count() == before
     finally:

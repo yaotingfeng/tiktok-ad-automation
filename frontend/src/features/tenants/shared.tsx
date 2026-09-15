@@ -5,7 +5,7 @@ import {
   useReactTable,
 } from "@tanstack/react-table"
 import { AxiosError } from "axios"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { TenantSummary } from "@/client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -101,12 +101,17 @@ export function useCursorPage() {
 export function Pager({
   paging,
   nextCursor,
+  total,
   busy,
 }: {
   paging: ReturnType<typeof useCursorPage>
   nextCursor?: string | null
+  total: number | undefined
   busy: boolean
 }) {
+  const lastTotal = useRef<number | undefined>(undefined)
+  if (total !== undefined) lastTotal.current = total
+  const visibleTotal = total ?? lastTotal.current
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -129,7 +134,8 @@ export function Pager({
       </div>
       <div className="flex items-center gap-3">
         <span className="text-sm text-muted-foreground">
-          第 {paging.page} 页
+          {visibleTotal === undefined ? "" : `共 ${visibleTotal} 条 · `}第{" "}
+          {paging.page} 页
         </span>
         <Button
           variant="outline"

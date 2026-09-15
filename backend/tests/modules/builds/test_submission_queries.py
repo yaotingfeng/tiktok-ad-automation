@@ -186,6 +186,7 @@ def test_list_stable_tie_pagination_literal_query_and_status(session, context, f
     third = submission_catalog.list_submissions(
         session, context=context, bc_id="bc-draft", limit=2, cursor=second.next_cursor
     )
+    assert first.total == second.total == third.total == len(rows)
     assert [
         x.submission_id for x in first.items + second.items + third.items
     ] == sorted([r.id for r in rows], reverse=True)

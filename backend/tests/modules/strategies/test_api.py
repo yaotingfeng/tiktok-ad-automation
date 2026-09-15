@@ -88,6 +88,7 @@ def test_versioned_save_recovery_history_and_local_disable(client, context):
         f"{base}/strategies/{initial['strategy_id']}/versions?limit=1",
         headers=headers(context),
     ).json()
+    assert history["total"] == 2
     assert history["items"][0]["number"] == 2
     assert (
         client.get(

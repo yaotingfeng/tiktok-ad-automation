@@ -400,6 +400,7 @@ export function UploadQueue({
           <Pager
             paging={paging}
             nextCursor={data?.next_cursor}
+            total={data?.total}
             busy={query.isPending}
           />
         </CardFooter>

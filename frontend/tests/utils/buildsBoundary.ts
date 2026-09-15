@@ -376,6 +376,7 @@ export async function buildsBoundary(
         selected: selectedMini,
         items: [{ minis_id: "mini-real-001", name: "LemonShow" }],
         next_page: null,
+        total: 1,
       })
     }
     if (path.endsWith("/prepare")) {

@@ -82,6 +82,36 @@ def create(api, count=1):
     return response.json()["session_id"]
 
 
+def test_empty_seek_page_keeps_filtered_total(api):
+    from uuid import UUID
+
+    from app.modules.materials.repository import encode_material_cursor
+
+    client, path = api
+    session_id = create(api)
+    url = f"{path}/ingest-sessions/{session_id}"
+    assert client.post(url + "/chunks", json=chunk_body()).status_code == 201
+    item = client.get(url + "/files").json()["items"][0]
+    tenant_id = path.split("/")[3]
+    cursor = encode_material_cursor(
+        scope={
+            "tenant": tenant_id,
+            "bc": "bc-a",
+            "session": session_id,
+            "status": "",
+            "kind": "ingest_files",
+        },
+        name=str(item["client_index"]),
+        identity=UUID(item["material_id"]),
+    )
+
+    page = client.get(url + "/files", params={"cursor": cursor})
+
+    assert page.status_code == 200
+    assert page.json()["items"] == []
+    assert page.json()["total"] == 1
+
+
 @pytest.mark.parametrize("size", [1024**3 - 1, 1024**3, 1024**3 + 1])
 def test_single_file_one_gib_boundary(api, size):
     # 只登记元数据验证边界，不分配 1 GiB 内存或调用真实存储。
@@ -186,11 +216,9 @@ def test_bounded_chunks_and_seek_pages_do_not_scale_summary_queries(api, count):
     assert "files" not in result.json()
     assert len(result.content) < 1500
     assert len(page.json()["items"]) == 100
+    assert page.json()["total"] == count
     assert len(statements) <= 20
     assert sum("FROM ingest_session_file" in sql for sql in statements) == 1
-    assert not any(
-        "COUNT(" in value.upper() or "SUM(" in value.upper() for value in statements
-    )
     seen, cursor = [], None
     while True:
         response = client.get(

@@ -12,7 +12,7 @@ from sqlmodel import col, select
 
 from app.api.deps import CurrentUser, SessionDep
 from app.core.errors import ERROR_HTTP_STATUS, DomainError
-from app.core.pagination import Page
+from app.core.pagination import Page, count_rows
 from app.modules.providers.catalog import (
     LinkStatus,
     get_link,
@@ -231,6 +231,7 @@ def list_connections(
         statement = statement.where(ProviderConnection.kind == kind)
     if status:
         statement = statement.where(ProviderConnection.status == status)
+    total = count_rows(session, statement)
     if last_id is not None:
         statement = statement.where(col(ProviderConnection.id) > last_id)
     rows = session.exec(
@@ -239,6 +240,7 @@ def list_connections(
     return Page(
         items=[_public(row) for row in rows[:limit]],
         next_cursor=_cursor(scope, rows[limit - 1].id) if len(rows) > limit else None,
+        total=total,
     )
 
 
@@ -366,6 +368,7 @@ def list_applications(
         ProviderApplication.tenant_id == tenant_id,
         ProviderApplication.connection_id == connection_id,
     )
+    total = count_rows(session, statement)
     if last_id is not None:
         statement = statement.where(col(ProviderApplication.id) > last_id)
     rows = session.exec(
@@ -385,4 +388,5 @@ def list_applications(
             for row in rows[:limit]
         ],
         next_cursor=_cursor(scope, rows[limit - 1].id) if len(rows) > limit else None,
+        total=total,
     )

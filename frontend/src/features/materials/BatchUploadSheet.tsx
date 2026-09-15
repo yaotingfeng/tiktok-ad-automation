@@ -152,8 +152,8 @@ export function BatchUploadSheet({
               上一页
             </Button>
             <span className="text-sm text-muted-foreground">
-              第 {currentPage + 1} / {Math.ceil(files.size / FILE_WINDOW)} 页 ·
-              每页 100 个
+              共 {files.size} 个 · 第 {currentPage + 1} /{" "}
+              {Math.ceil(files.size / FILE_WINDOW)} 页 · 每页 100 个
             </span>
             <Button
               variant="outline"

@@ -41,6 +41,7 @@ class DraftMinis(BaseModel):
     selected: MiniOption | None = None
     items: list[MiniOption] = Field(default_factory=list)
     next_page: int | None = None
+    total: int = Field(default=0, ge=0)
 
 
 class ChooseMiniRequest(BaseModel):
@@ -222,7 +223,9 @@ def draft_minis(
         catalog_options(session, job, minis_id=selected_id) if selected_id else []
     )
     items = [option(item) for item in catalog_options(session, job, page=page)]
-    pages = job.facts.get("minis", {}).get("total_page", 0)
+    catalog = job.facts.get("minis", {})
+    pages = catalog.get("total_page", 0)
+    total = catalog.get("total_number", 0)
     return DraftMinis(
         state="selected"
         if selected
@@ -236,6 +239,7 @@ def draft_minis(
         selected=option(selected[0]) if selected else None,
         items=items,
         next_page=page + 1 if page < pages else None,
+        total=total,
     )
 
 

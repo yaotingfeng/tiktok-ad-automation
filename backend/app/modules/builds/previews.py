@@ -12,7 +12,7 @@ from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
-from app.core.pagination import Page
+from app.core.pagination import Page, count_rows
 from app.modules.accounts.access import resolve_account_access
 from app.modules.accounts.models import BCAccountAccess
 from app.modules.accounts.resolver import decode_cursor, encode_cursor
@@ -904,6 +904,7 @@ def get_preview_units(
         query = query.where(BuildUnit.readiness == readiness)
     if drama_id:
         query = query.where(BuildUnit.drama_id == drama_id)
+    total = count_rows(session, query)
     if after:
         query = query.where(BuildUnit.id > UUID(after))
     rows = session.exec(query.order_by(col(BuildUnit.id)).limit(limit + 1)).all()
@@ -927,6 +928,7 @@ def get_preview_units(
         next_cursor=encode_cursor(scope=scope, last_id=str(rows[limit - 1][0].id))
         if len(rows) > limit
         else None,
+        total=total,
     )
 
 
@@ -989,6 +991,7 @@ def get_frozen_groups(
     query = select(PlannedGroup).where(
         PlannedGroup.tenant_id == context.tenant_id, PlannedGroup.unit_id == unit_id
     )
+    total = count_rows(session, query)
     if after:
         query = query.where(PlannedGroup.group_no > int(after))
     rows = session.exec(
@@ -1045,6 +1048,7 @@ def get_frozen_groups(
         next_cursor=encode_cursor(scope=scope, last_id=str(rows[limit - 1].group_no))
         if len(rows) > limit
         else None,
+        total=total,
     )
 
 
@@ -1081,6 +1085,7 @@ def get_preview_inputs(
         query = query.where(col(PreviewInput.status).not_in(["matched", "ready"]))
     if status:
         query = query.where(PreviewInput.status == status)
+    total = count_rows(session, query)
     if after:
         query = query.where(PreviewInput.line_no > int(after))
     rows = session.exec(
@@ -1091,4 +1096,5 @@ def get_preview_inputs(
         next_cursor=encode_cursor(scope=scope, last_id=str(rows[limit - 1].line_no))
         if len(rows) > limit
         else None,
+        total=total,
     )

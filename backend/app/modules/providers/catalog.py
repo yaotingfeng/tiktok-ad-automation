@@ -9,7 +9,7 @@ from sqlmodel.sql.expression import Select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
-from app.core.pagination import Page
+from app.core.pagination import Page, count_rows
 from app.modules.providers.drama_identity import display_id
 from app.modules.providers.models import (
     LinkPreparationItem,
@@ -144,6 +144,7 @@ def list_links(
                 col(ProviderDrama.external_drama_id) == query.strip(),
             )
         )
+    total = count_rows(session, statement)
     if after:
         statement = statement.where(PromotionLink.id > after)
     rows = session.exec(
@@ -156,6 +157,7 @@ def list_links(
         next_cursor=_cursor(scope, rows[limit - 1][0].id)
         if len(rows) > limit
         else None,
+        total=total,
     )
 
 

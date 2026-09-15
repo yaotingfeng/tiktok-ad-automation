@@ -349,7 +349,9 @@ export function McpAuthorizationSheet({
                     >
                       上一页 BC
                     </Button>
-                    <span className="text-sm">第 {page} 页</span>
+                    <span className="text-sm">
+                      共 {candidates.data.total} 条 · 第 {page} 页
+                    </span>
                     <Button
                       variant="outline"
                       disabled={

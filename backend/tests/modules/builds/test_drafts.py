@@ -440,14 +440,18 @@ def test_collect_pages_preserves_every_material_and_rejects_repeated_cursor():
     )
     second = SimpleNamespace(material_id=UUID(int=2), file_name="Short Drama - 02.mp4")
     pages = {
-        None: Page(items=[first], next_cursor="page2"),
-        "page2": Page(items=[second]),
+        None: Page(items=[first], next_cursor="page2", total=2),
+        "page2": Page(items=[second], total=2),
     }
     assert list(collect_pages(lambda cursor: pages[cursor])) == [first, second]
     with pytest.raises(
         DomainError, check=lambda error: error.code == "repeated_cursor"
     ):
-        list(collect_pages(lambda cursor: Page(items=[first], next_cursor="again")))
+        list(
+            collect_pages(
+                lambda cursor: Page(items=[first], next_cursor="again", total=1)
+            )
+        )
 
 
 def test_input_update_obsoletes_old_job_and_preserves_new_raw_input(

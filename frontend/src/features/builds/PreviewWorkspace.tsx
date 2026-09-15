@@ -515,6 +515,7 @@ export function PreviewUnitTable({
       <Pager
         paging={paging}
         nextCursor={query.data?.next_cursor}
+        total={query.data?.total}
         busy={query.isFetching}
       />
     </div>
@@ -610,6 +611,7 @@ function PreviewExclusions({
         <Pager
           paging={paging}
           nextCursor={query.data?.next_cursor}
+          total={query.data?.total}
           busy={query.isFetching}
         />
       </div>
@@ -700,6 +702,7 @@ function FrozenUnitSheet({
             <Pager
               paging={paging}
               nextCursor={groups.data?.next_cursor}
+              total={groups.data?.total}
               busy={groups.isFetching}
             />
           </>
@@ -819,6 +822,7 @@ function PreviewDramaTable({
       <Pager
         paging={paging}
         nextCursor={query.data?.next_cursor}
+        total={query.data?.total}
         busy={query.isFetching}
       />
     </div>

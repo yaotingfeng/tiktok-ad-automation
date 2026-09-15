@@ -198,11 +198,13 @@ def test_seek_pagination_and_literal_search(client, session):
         params={"limit": 2, "after_id": first["next_cursor"]},
         headers=auth,
     ).json()
+    assert first["total"] == second["total"] == 3
     assert len(second["items"]) == 1 and second["next_cursor"] is None
     filtered = client.get(
         "/api/me/tenants", params={"search": "scope_"}, headers=auth
     ).json()
     assert len(filtered["items"]) == 2
+    assert filtered["total"] == 2
     assert (
         client.get("/api/me/tenants", params={"search": "%"}, headers=auth).json()[
             "items"
@@ -256,6 +258,7 @@ def test_members_list_filters_seek_and_excludes_secrets(client, session):
         params={"role": "viewer", "limit": 2, "after_id": first["next_cursor"]},
         headers=auth,
     ).json()
+    assert first["total"] == second["total"] == 3
     assert len(first["items"]) == 2 and len(second["items"]) == 1
     assert len({member["user_id"] for member in first["items"] + second["items"]}) == 3
     assert second["next_cursor"] is None

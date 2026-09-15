@@ -43,6 +43,17 @@ def list_drafts(
                 raise ValueError
         except ValueError, TypeError:
             raise DomainError("invalid_cursor", "分页游标无效") from None
+    total = int(
+        cast(SASession, session).execute(
+            text("""
+SELECT count(*) FROM build_draft d
+WHERE d.tenant_id=:tenant AND d.bc_id=:bc
+AND NOT EXISTS (SELECT 1 FROM build_submission s
+  WHERE s.tenant_id=d.tenant_id AND s.draft_id=d.id)
+"""),
+            {"tenant": context.tenant_id, "bc": bc_id},
+        ).scalar_one()
+    )
     # 已提交批次统一从搭建任务继续；先分页，再统计该页输入，避免展开剧目×账户。
     rows = (
         cast(SASession, session)
@@ -97,4 +108,5 @@ ORDER BY d.updated_at DESC,d.id DESC
         )
         if len(rows) > limit
         else None,
+        total=total,
     )

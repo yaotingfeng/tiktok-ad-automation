@@ -10,7 +10,7 @@ from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
-from app.core.pagination import Page
+from app.core.pagination import Page, count_rows
 from app.integrations.tiktok.bounded_resources import bounded_session
 
 from .models import MaterialFile, ObjectUpload, UploadBatch
@@ -106,6 +106,7 @@ def upload_batches_page(
         UploadBatch.tenant_id == context.tenant_id,
         UploadBatch.bc_id == bc_id,
     )
+    total = count_rows(session, query)
     if cursor:
         value, identity = decode_material_cursor(cursor, scope=scope)
         try:
@@ -162,6 +163,7 @@ def upload_batches_page(
         )
         if len(rows) > limit
         else None,
+        total=total,
     )
 
 

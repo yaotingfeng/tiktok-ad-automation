@@ -829,6 +829,10 @@ export type DraftMinis = {
      * Next Page
      */
     next_page?: number | null;
+    /**
+     * Total
+     */
+    total?: number;
 };
 
 /**
@@ -2135,6 +2139,10 @@ export type Page_AccountAsset_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2149,6 +2157,10 @@ export type Page_AccountPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2163,6 +2175,10 @@ export type Page_BCPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2177,6 +2193,10 @@ export type Page_ConnectionPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2191,6 +2211,10 @@ export type Page_DraftDramaPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2205,6 +2229,10 @@ export type Page_DraftInputPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2219,6 +2247,10 @@ export type Page_DraftListItem_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2233,6 +2265,10 @@ export type Page_DraftMaterialPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2247,6 +2283,10 @@ export type Page_FrozenGroup_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2261,6 +2301,10 @@ export type Page_IngestFilePublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2275,6 +2319,10 @@ export type Page_IngestSummary_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2289,6 +2337,10 @@ export type Page_MaterialPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2303,6 +2355,10 @@ export type Page_MemberPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2317,6 +2373,10 @@ export type Page_PreviewDramaPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2331,6 +2391,10 @@ export type Page_PreviewInputPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2345,6 +2409,10 @@ export type Page_PreviewUnit_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2359,6 +2427,10 @@ export type Page_ProviderApplicationPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2373,6 +2445,10 @@ export type Page_ProviderConnectionPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2387,6 +2463,10 @@ export type Page_ProviderLinkPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2401,6 +2481,10 @@ export type Page_ResolvedLink_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2415,6 +2499,10 @@ export type Page_StepPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2429,6 +2517,10 @@ export type Page_StrategyPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2443,6 +2535,10 @@ export type Page_SubmissionAdPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2457,6 +2553,10 @@ export type Page_SubmissionEventPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2471,6 +2571,10 @@ export type Page_SubmissionGroupPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2485,6 +2589,10 @@ export type Page_SubmissionListItem_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2499,6 +2607,10 @@ export type Page_SubmissionMaterialPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2513,6 +2625,10 @@ export type Page_SubmissionUnitPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2527,6 +2643,10 @@ export type Page_TenantSummary_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2541,6 +2661,10 @@ export type Page_UploadAttemptPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2555,6 +2679,10 @@ export type Page_UploadBatchSummary_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2569,6 +2697,10 @@ export type Page_UserCandidate_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -2583,6 +2715,10 @@ export type Page_VersionPublic_ = {
      * Next Cursor
      */
     next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**

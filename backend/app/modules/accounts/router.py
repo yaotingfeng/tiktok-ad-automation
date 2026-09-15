@@ -12,7 +12,7 @@ from sqlmodel import col, select
 from app.api.deps import CurrentUser, SessionDep
 from app.core.config import settings
 from app.core.errors import ERROR_HTTP_STATUS, DomainError
-from app.core.pagination import Page
+from app.core.pagination import Page, count_rows
 from app.integrations.tiktok.auth import (
     start_authorization,
 )
@@ -244,14 +244,15 @@ def get_accounts(
                 col(AdvertiserAccount.advertiser_id) == query.strip(),
             )
         )
-    if last_id is not None:
-        statement = statement.where(col(AdvertiserAccount.advertiser_id) > last_id)
     if remote_status is not None:
         statement = statement.where(
             col(AdvertiserAccount.remote_status) == remote_status
         )
     if availability is not None:
         statement = statement.where(available == availability)
+    total = count_rows(session, statement)
+    if last_id is not None:
+        statement = statement.where(col(AdvertiserAccount.advertiser_id) > last_id)
     rows = SQLAlchemySession.execute(
         session,
         statement.order_by(col(AdvertiserAccount.advertiser_id))
@@ -283,6 +284,7 @@ def get_accounts(
         next_cursor=encode_cursor(scope=scope, last_id=items[-1].advertiser_id)
         if len(rows) > limit
         else None,
+        total=total,
     )
 
 
@@ -346,8 +348,6 @@ def get_bcs(
             )
             .exists()
         )
-    if last_id is not None:
-        statement = statement.where(TenantBC.bc_id > last_id)
     if query.strip():
         statement = statement.where(
             or_(
@@ -355,6 +355,9 @@ def get_bcs(
                 col(TenantBC.bc_id) == query.strip(),
             )
         )
+    total = count_rows(session, statement)
+    if last_id is not None:
+        statement = statement.where(TenantBC.bc_id > last_id)
     rows = session.exec(
         statement.order_by(col(TenantBC.bc_id))
         .limit(limit + 1)
@@ -427,6 +430,7 @@ def get_bcs(
         next_cursor=encode_cursor(scope=scope, last_id=items[-1].bc_id)
         if len(rows) > limit
         else None,
+        total=total,
     )
 
 
@@ -538,14 +542,15 @@ def get_connections(
             )
             .exists()
         )
+    if status is not None:
+        statement = statement.where(col(TikTokConnection.status) == status)
+    total = count_rows(session, statement)
     if last_id is not None:
         try:
             last_uuid = UUID(last_id)
         except ValueError:
             raise DomainError("invalid_cursor", "连接游标无效") from None
         statement = statement.where(col(TikTokConnection.id) > last_uuid)
-    if status is not None:
-        statement = statement.where(col(TikTokConnection.status) == status)
     rows = SQLAlchemySession.execute(
         session,
         statement.order_by(col(TikTokConnection.id))
@@ -578,6 +583,7 @@ def get_connections(
         next_cursor=encode_cursor(scope=scope, last_id=str(items[-1].id))
         if len(rows) > limit
         else None,
+        total=total,
     )
 
 

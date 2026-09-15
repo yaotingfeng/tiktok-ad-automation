@@ -33,6 +33,12 @@ from app.modules.builds.submissions import (
 )
 
 StatusGroup = Literal["all", "active", "attention", "completed"]
+
+
+def _scalar_count(session: Session, query: str, params: dict[str, Any]) -> int:
+    return int(cast(SASession, session).execute(text(query), params).scalar_one())
+
+
 METADATA = """
 SELECT s.id submission_id,coalesce(nullif(actor.full_name,''),actor.username) actor_name,
  st.name || ' v' || sv.number::text strategy_label,
@@ -205,22 +211,41 @@ def list_submissions(
  (SELECT count(*) FROM build_verified_replacement vr WHERE vr.tenant_id=p.tenant_id AND vr.submission_id=p.id) corrected_ad_count
  FROM page p LEFT JOIN totals t ON t.submission_id=p.id LEFT JOIN outcomes o ON o.submission_id=p.id ORDER BY p.created_at DESC,p.id DESC"""
     )
+    query_params = {
+        "tenant": context.tenant_id,
+        "bc": bc_id,
+        "q": q,
+        "status": status_group,
+        "from": created_from,
+        "to": created_to,
+        "provider": provider_connection_id,
+        "after_at": at,
+        "after_id": aid,
+        "size": limit + 1,
+    }
+    total = _scalar_count(
+        session,
+        "WITH metadata AS ("
+        + METADATA
+        + """ WHERE s.tenant_id=:tenant)
+SELECT count(*) FROM build_submission s
+JOIN build_preview p ON p.tenant_id=s.tenant_id AND p.id=s.preview_id
+JOIN metadata m ON m.submission_id=s.id
+WHERE s.tenant_id=:tenant AND s.bc_id=:bc
+AND (CAST(:from AS timestamptz) IS NULL OR s.created_at>=:from)
+AND (CAST(:to AS timestamptz) IS NULL OR s.created_at<:to)
+AND (:status='all' OR (:status='active' AND s.status IN ('QUEUED','RUNNING')) OR (:status='attention' AND s.status IN ('PARTIAL','FAILED','NEEDS_REVIEW')) OR (:status='completed' AND s.status='COMPLETED'))
+AND (CAST(:provider AS uuid) IS NULL OR EXISTS (SELECT 1 FROM preview_drama d JOIN promotion_link l ON l.tenant_id=d.tenant_id AND l.id=d.link_id WHERE d.tenant_id=s.tenant_id AND d.preview_id=s.preview_id AND l.connection_id=:provider))
+AND (CAST(:q AS text) IS NULL OR strpos(lower(p.batch_short_id),lower(:q))>0 OR strpos(s.id::text,:q)>0 OR strpos(lower(m.actor_name),lower(:q))>0 OR strpos(lower(m.strategy_label),lower(:q))>0 OR strpos(lower(coalesce(m.provider_name,'')),lower(:q))>0
+OR EXISTS (SELECT 1 FROM preview_drama d WHERE d.tenant_id=s.tenant_id AND d.preview_id=s.preview_id AND strpos(lower(d.title),lower(:q))>0)
+OR EXISTS (SELECT 1 FROM build_unit u WHERE u.tenant_id=s.tenant_id AND u.preview_id=s.preview_id AND u.advertiser_id=:q))""",
+        query_params,
+    )
     rows = (
         cast(SASession, session)
         .execute(
             text(query),
-            {
-                "tenant": context.tenant_id,
-                "bc": bc_id,
-                "q": q,
-                "status": status_group,
-                "from": created_from,
-                "to": created_to,
-                "provider": provider_connection_id,
-                "after_at": at,
-                "after_id": aid,
-                "size": limit + 1,
-            },
+            query_params,
         )
         .mappings()
         .all()
@@ -278,6 +303,7 @@ def list_submissions(
         )
         if len(rows) > limit
         else None,
+        total=total,
     )
 
 
@@ -322,6 +348,12 @@ def get_submission_groups(
     )
     if not unit:
         raise DomainError("resource_not_found", "组合不存在")
+    total = _scalar_count(
+        session,
+        "SELECT count(*) FROM planned_group WHERE tenant_id=:tenant "
+        "AND preview_id=:preview AND unit_id=:unit",
+        params,
+    )
     rows = (
         cast(SASession, session)
         .execute(
@@ -367,6 +399,7 @@ def get_submission_groups(
         next_cursor=encode_cursor(scope=scope, last_id=str(items[-1].group_id))
         if len(rows) > limit
         else None,
+        total=total,
     )
 
 
@@ -411,6 +444,12 @@ def get_submission_ads(
     )
     if not group:
         raise DomainError("resource_not_found", "素材组不存在")
+    total = _scalar_count(
+        session,
+        "SELECT count(*) FROM planned_ad WHERE tenant_id=:tenant "
+        "AND preview_id=:preview AND group_id=:group",
+        params,
+    )
     rows = (
         cast(SASession, session)
         .execute(
@@ -454,6 +493,7 @@ def get_submission_ads(
         next_cursor=encode_cursor(scope=scope, last_id=str(items[-1].planned_ad_id))
         if len(rows) > limit
         else None,
+        total=total,
     )
 
 
@@ -488,6 +528,17 @@ def get_submission_events(
                 raise ValueError
         except ValueError, TypeError:
             raise DomainError("invalid_cursor", "分页游标无效") from None
+    total = _scalar_count(
+        session,
+        "SELECT count(*) FROM step_evidence WHERE tenant_id=:tenant "
+        "AND submission_id=:submission "
+        "AND (CAST(:step AS uuid) IS NULL OR step_id=:step)",
+        {
+            "tenant": context.tenant_id,
+            "submission": submission_id,
+            "step": step_id,
+        },
+    )
     rows = (
         cast(SASession, session)
         .execute(
@@ -521,6 +572,7 @@ def get_submission_events(
         )
         if len(rows) > limit
         else None,
+        total=total,
     )
 
 
@@ -742,6 +794,16 @@ def get_submission_materials(
     )
     if not group:
         raise DomainError("resource_not_found", "素材组不存在")
+    total = _scalar_count(
+        session,
+        """SELECT count(*) FROM planned_group g
+JOIN preview_group_material m ON m.tenant_id=g.tenant_id
+AND m.preview_id=g.preview_id AND m.drama_id=g.drama_id
+AND m.group_no=g.group_no
+WHERE g.tenant_id=:tenant AND g.preview_id=:preview
+AND g.unit_id=:unit AND g.id=:group""",
+        params,
+    )
     rows = (
         cast(SASession, session)
         .execute(
@@ -784,4 +846,5 @@ def get_submission_materials(
         next_cursor=encode_cursor(scope=scope, last_id=str(items[-1].position))
         if len(rows) > limit
         else None,
+        total=total,
     )

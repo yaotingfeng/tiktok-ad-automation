@@ -479,6 +479,7 @@ function List({
               <Pager
                 paging={paging}
                 nextCursor={query.data?.next_cursor}
+                total={query.data?.total}
                 busy={query.isFetching}
               />
             </>

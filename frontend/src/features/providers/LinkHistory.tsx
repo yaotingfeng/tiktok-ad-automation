@@ -272,6 +272,7 @@ export function LinkHistory({
           <Pager
             paging={paging}
             nextCursor={data?.next_cursor}
+            total={data?.total}
             busy={query.isFetching}
           />
         </CardFooter>
@@ -386,6 +387,7 @@ function ApplicationFilter({
         <Pager
           paging={paging}
           nextCursor={query.data?.next_cursor}
+          total={query.data?.total}
           busy={query.isFetching}
         />
       </DialogContent>

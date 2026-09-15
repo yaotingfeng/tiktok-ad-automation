@@ -10,14 +10,14 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, delete, or_, update
+from sqlalchemy import and_, delete, func, or_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
-from app.core.pagination import Page
+from app.core.pagination import Page, count_rows
 from app.modules.materials.ingest_models import (
     IngestChunk,
     IngestMilestone,
@@ -525,6 +525,12 @@ def files_page(
     statement = file_statement(context, session_id)
     if status:
         statement = statement.where(col(IngestSessionFile.status) == status)
+    count_statement = statement
+    # 这个目录可能有两万行；把精确总数作为标量子查询并入当前页读取，
+    # 保持一次有界往返，同时让总数不受游标影响。
+    total_column = (
+        select(func.count()).select_from(statement.subquery()).scalar_subquery()
+    )
     if cursor:
         marker, identity = decode_material_cursor(cursor, scope=scope)
         try:
@@ -543,10 +549,11 @@ def files_page(
             )
         )
     rows = db.exec(
-        statement.order_by(
+        statement.add_columns(total_column.label("page_total")).order_by(
             col(IngestSessionFile.client_index), col(IngestSessionFile.material_id)
         ).limit(limit + 1)
     ).all()
+    total = int(rows[0][-1]) if rows else count_rows(db, count_statement)
     next_cursor = None
     if len(rows) > limit:
         last = rows[limit - 1][0]
@@ -554,7 +561,9 @@ def files_page(
             scope=scope, name=str(last.client_index), identity=last.material_id
         )
     return Page(
-        items=[file_public(*row) for row in rows[:limit]], next_cursor=next_cursor
+        items=[file_public(*row[:3]) for row in rows[:limit]],
+        next_cursor=next_cursor,
+        total=total,
     )
 
 
@@ -572,6 +581,7 @@ def sessions_page(
         col(IngestSession.tenant_id) == context.tenant_id,
         col(IngestSession.bc_id) == bc_id,
     )
+    total = count_rows(db, statement)
     if cursor:
         marker, identity = decode_material_cursor(cursor, scope=scope)
         try:
@@ -603,4 +613,8 @@ def sessions_page(
         if len(rows) > limit
         else None
     )
-    return Page(items=[summary(row) for row in rows[:limit]], next_cursor=next_cursor)
+    return Page(
+        items=[summary(row) for row in rows[:limit]],
+        next_cursor=next_cursor,
+        total=total,
+    )

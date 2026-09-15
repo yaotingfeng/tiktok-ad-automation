@@ -71,6 +71,7 @@ def test_connection_bc_details_use_latest_complete_snapshot_and_scoped_cursor(
     second = client.get(
         path, params={**params, "cursor": cursor}, headers=headers(context)
     )
+    assert first.json()["total"] == second.json()["total"] == 2
     assert second.json()["next_cursor"] is None
     assert {row["bc_id"] for row in first.json()["items"] + second.json()["items"]} == {
         grant.bc_id,
@@ -618,6 +619,7 @@ def test_bc_and_connection_pages_bind_filters(client, session, account_access_ca
             params={"limit": 2, "cursor": first["next_cursor"]},
             headers=headers(context),
         ).json()
+        assert first["total"] == second["total"] == 4
         assert len(first["items"]) == 2 and len(second["items"]) == 2
         assert second["next_cursor"] is None
         assert len({item[identity] for item in first["items"] + second["items"]}) == 4

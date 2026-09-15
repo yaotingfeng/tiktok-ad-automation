@@ -316,6 +316,7 @@ export function AssetDetails({
           <Pager
             paging={attemptPage}
             nextCursor={h?.next_cursor}
+            total={h?.total}
             busy={attempts.isFetching}
           />
         </section>
@@ -334,6 +335,7 @@ export function AssetDetails({
           <Pager
             paging={assetPage}
             nextCursor={a?.next_cursor}
+            total={a?.total}
             busy={assets.isFetching}
           />
         </section>

@@ -44,7 +44,7 @@ export function DirectoryPicker<T extends { id: string }>({
     cursor: string | null,
     limit: number,
     signal: AbortSignal,
-  ) => Promise<{ items: T[]; next_cursor?: string | null }>
+  ) => Promise<{ items: T[]; next_cursor?: string | null; total: number }>
   renderItem: (item: T) => ReactNode
   onSelect: (item: T) => void
   requiredSearch?: boolean
@@ -216,6 +216,7 @@ export function DirectoryPicker<T extends { id: string }>({
           <Pager
             paging={paging}
             nextCursor={query.data?.next_cursor}
+            total={query.data?.total}
             busy={query.isFetching}
           />
         )}

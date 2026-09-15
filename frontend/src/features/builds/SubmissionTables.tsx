@@ -185,6 +185,7 @@ export function SubmissionUnitsTable({
           <Pager
             paging={paging}
             nextCursor={query.data?.next_cursor}
+            total={query.data?.total}
             busy={query.isFetching}
           />
         </>
@@ -337,6 +338,7 @@ function SubmissionGroupsSheet({
             <Pager
               paging={paging}
               nextCursor={query.data?.next_cursor}
+              total={query.data?.total}
               busy={query.isFetching}
             />
           </>
@@ -453,6 +455,7 @@ function SubmissionAds({
       <Pager
         paging={paging}
         nextCursor={query.data?.next_cursor}
+        total={query.data?.total}
         busy={query.isFetching}
       />
     </>
@@ -537,6 +540,7 @@ function SubmissionMaterials({
           <Pager
             paging={paging}
             nextCursor={query.data?.next_cursor}
+            total={query.data?.total}
             busy={query.isFetching}
           />
         </>
@@ -747,6 +751,7 @@ export function SubmissionStepsTable({
           <Pager
             paging={paging}
             nextCursor={query.data?.next_cursor}
+            total={query.data?.total}
             busy={query.isFetching}
           />
         </>
@@ -911,6 +916,7 @@ export function SubmissionEventsTable({
       <Pager
         paging={paging}
         nextCursor={query.data?.next_cursor}
+        total={query.data?.total}
         busy={query.isFetching}
       />
     </>
@@ -1012,6 +1018,7 @@ export function SubmissionDramaPicker({
               <Pager
                 paging={paging}
                 nextCursor={query.data?.next_cursor}
+                total={query.data?.total}
                 busy={query.isFetching}
               />
             </>

@@ -7,7 +7,7 @@ from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
-from app.core.pagination import Page
+from app.core.pagination import Page, count_rows
 from app.models import User
 from app.modules.tenants.models import AuditEvent, Tenant, TenantMembership
 from app.modules.tenants.permissions import Role, require_tenant
@@ -206,8 +206,6 @@ def list_tenants(
         )
     if active is not None:
         statement = statement.where(Tenant.active == active)
-    if after_id is not None:
-        statement = statement.where(Tenant.id > after_id)
     if search.strip():
         term = search.strip()
         statement = statement.where(
@@ -216,6 +214,9 @@ def list_tenants(
                 sql_cast(Tenant.id, String) == term,
             )
         )
+    total = count_rows(session, statement)
+    if after_id is not None:
+        statement = statement.where(Tenant.id > after_id)
     rows = session.exec(
         statement.order_by(col(Tenant.id))
         .limit(limit + 1)
@@ -231,7 +232,9 @@ def list_tenants(
         for tenant, role in rows[:limit]
     ]
     return Page(
-        items=items, next_cursor=str(items[-1].id) if len(rows) > limit else None
+        items=items,
+        next_cursor=str(items[-1].id) if len(rows) > limit else None,
+        total=total,
     )
 
 
@@ -266,8 +269,6 @@ def list_members(
         .join(User, col(User.id) == TenantMembership.user_id)
         .where(TenantMembership.tenant_id == context.tenant_id)
     )
-    if after_id is not None:
-        statement = statement.where(TenantMembership.user_id > after_id)
     if active is not None:
         statement = statement.where(TenantMembership.active == active)
     if role is not None:
@@ -281,6 +282,9 @@ def list_members(
                 sql_cast(User.id, String) == term,
             )
         )
+    total = count_rows(session, statement)
+    if after_id is not None:
+        statement = statement.where(TenantMembership.user_id > after_id)
     rows = session.exec(
         statement.order_by(col(TenantMembership.user_id))
         .limit(limit + 1)
@@ -288,7 +292,9 @@ def list_members(
     ).all()
     items = [member_public(member, user) for member, user in rows[:limit]]
     return Page(
-        items=items, next_cursor=str(items[-1].user_id) if len(rows) > limit else None
+        items=items,
+        next_cursor=str(items[-1].user_id) if len(rows) > limit else None,
+        total=total,
     )
 
 
@@ -317,6 +323,7 @@ def search_user_candidates(
             sql_cast(User.id, String) == term,
         ),
     )
+    total = count_rows(session, statement)
     if after_id is not None:
         statement = statement.where(User.id > after_id)
     rows = session.exec(statement.order_by(col(User.id)).limit(limit + 1)).all()
@@ -325,5 +332,7 @@ def search_user_candidates(
         for user in rows[:limit]
     ]
     return Page(
-        items=items, next_cursor=str(items[-1].id) if len(rows) > limit else None
+        items=items,
+        next_cursor=str(items[-1].id) if len(rows) > limit else None,
+        total=total,
     )

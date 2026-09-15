@@ -340,6 +340,7 @@ export function DramaMaterialSheet({
             <Pager
               paging={paging}
               nextCursor={page.data?.next_cursor}
+              total={page.data?.total}
               busy={page.isFetching}
             />
           </div>
@@ -465,7 +466,8 @@ export function DramaMaterialSheet({
                   上一页素材
                 </Button>
                 <span className="text-xs">
-                  第 {Math.floor(offset / 50) + 1} 页 · 每页 50
+                  共 {items.length} 条 · 第 {Math.floor(offset / 50) + 1} 页 ·
+                  每页 50
                 </span>
                 <Button
                   variant="outline"

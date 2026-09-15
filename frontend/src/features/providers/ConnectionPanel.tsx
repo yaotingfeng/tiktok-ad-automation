@@ -273,6 +273,7 @@ export function ConnectionPanel({
           <Pager
             paging={paging}
             nextCursor={data?.next_cursor}
+            total={data?.total}
             busy={query.isFetching}
           />
         </CardFooter>
@@ -605,6 +606,7 @@ export function Applications({
       <Pager
         paging={paging}
         nextCursor={data?.next_cursor}
+        total={data?.total}
         busy={query.isFetching}
       />
     </section>

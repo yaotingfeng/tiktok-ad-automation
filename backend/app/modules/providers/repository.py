@@ -16,7 +16,7 @@ from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
-from app.core.pagination import Page
+from app.core.pagination import Page, count_rows
 from app.modules.providers.models import (
     LinkPreparation,
     PromotionLink,
@@ -135,6 +135,7 @@ def list_dramas(
     )
     if title is not None:
         statement = statement.where(ProviderDrama.title == title)
+    total = count_rows(session, statement)
     if after_id is not None:
         statement = statement.where(col(ProviderDrama.id) > after_id)
     rows = list(
@@ -147,6 +148,7 @@ def list_dramas(
     return Page[ProviderDrama](
         items=rows[:limit],
         next_cursor=_cursor(scope, rows[limit - 1].id) if len(rows) > limit else None,
+        total=total,
     )
 
 
@@ -419,6 +421,7 @@ def read_preparation_results(
         statement = statement.where(
             col(LinkPreparationItem.status).not_in(PENDING_STATUSES | {"ready"})
         )
+    total = count_rows(session, statement)
     if cursor is not None:
         try:
             if len(cursor) > 4096:
@@ -479,7 +482,9 @@ def read_preparation_results(
             )
             result.requested_config = display_config(prep.config)
         results.append(result)
-    return Page[ResolvedLink](items=results, next_cursor=next_cursor)
+    return Page[ResolvedLink](
+        items=results, next_cursor=next_cursor, total=total
+    )
 
 
 def select_preparation_candidate(

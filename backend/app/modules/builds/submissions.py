@@ -823,6 +823,27 @@ def get_submission_units(
             "excluded": str(excluded_only),
         },
     )
+    page_params = dict(
+        params(row),
+        after=str(after) if after else None,
+        advertiser=advertiser_id,
+        drama=str(drama_id) if drama_id else None,
+        excluded=excluded_only,
+        limit=limit + 1,
+    )
+    total = int(
+        SQLAlchemySession.execute(
+            session,
+            text(
+                SCOPE_CTE
+                + """SELECT count(*) FROM scope u
+WHERE (CAST(:advertiser AS text) IS NULL OR u.advertiser_id=:advertiser)
+AND (CAST(:drama AS uuid) IS NULL OR u.drama_id=CAST(:drama AS uuid))
+AND (NOT :excluded OR NOT u.included)"""
+            ),
+            page_params,
+        ).scalar_one()
+    )
     results = (
         SQLAlchemySession.execute(
             session,
@@ -837,14 +858,7 @@ def get_submission_units(
  AND (CAST(:drama AS uuid) IS NULL OR u.drama_id=CAST(:drama AS uuid))
  AND (NOT :excluded OR NOT u.included) ORDER BY u.id LIMIT :limit"""
             ),
-            dict(
-                params(row),
-                after=str(after) if after else None,
-                advertiser=advertiser_id,
-                drama=str(drama_id) if drama_id else None,
-                excluded=excluded_only,
-                limit=limit + 1,
-            ),
+            page_params,
         )
         .mappings()
         .all()
@@ -882,6 +896,7 @@ def get_submission_units(
         next_cursor=encode_cursor(scope=scope, last_id=str(items[-1].unit_id))
         if len(results) > limit
         else None,
+        total=total,
     )
 
 
@@ -897,7 +912,7 @@ def get_submission_steps(
     kind: str | None = None,
     result: str | None = None,
 ) -> Page[StepPublic]:
-    from app.core.pagination import Page
+    from app.core.pagination import Page, count_rows
     from app.modules.accounts.resolver import encode_cursor
     from app.modules.builds.execution_schemas import StepPublic
 
@@ -948,8 +963,6 @@ def get_submission_steps(
             ExecutionStep.submission_id == row.id,
         )
     )
-    if after:
-        stmt = stmt.where(ExecutionStep.id > after)
     if advertiser_id:
         stmt = stmt.where(BuildUnit.advertiser_id == advertiser_id)
     if drama_id:
@@ -973,6 +986,9 @@ def get_submission_steps(
             )
         else:
             stmt = stmt.where(ExecutionStep.status == result, text("NOT " + resolved))
+    total = count_rows(session, stmt)
+    if after:
+        stmt = stmt.where(ExecutionStep.id > after)
     rows = session.exec(stmt.order_by(col(ExecutionStep.id)).limit(limit + 1)).all()
     items = [
         StepPublic(
@@ -1000,6 +1016,7 @@ def get_submission_steps(
         next_cursor=encode_cursor(scope=scope, last_id=str(items[-1].step_id))
         if len(rows) > limit
         else None,
+        total=total,
     )
 
 

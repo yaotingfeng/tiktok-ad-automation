@@ -142,16 +142,18 @@ async function boundary(
     const paginate = <T extends { id?: string; user_id?: string }>(
       rows: T[],
     ) => {
-      const ordered = [...rows]
-        .sort((a, b) => (a.id ?? a.user_id!).localeCompare(b.id ?? b.user_id!))
-        .filter(
-          (row) =>
-            !q.get("after_id") || (row.id ?? row.user_id!) > q.get("after_id")!,
-        )
+      const matching = [...rows].sort((a, b) =>
+        (a.id ?? a.user_id!).localeCompare(b.id ?? b.user_id!),
+      )
+      const ordered = matching.filter(
+        (row) =>
+          !q.get("after_id") || (row.id ?? row.user_id!) > q.get("after_id")!,
+      )
       const size = Number(q.get("limit") ?? 50)
       const items = ordered.slice(0, size)
       return {
         items,
+        total: matching.length,
         next_cursor:
           ordered.length > size
             ? (items[items.length - 1]?.id ?? items[items.length - 1]?.user_id)
@@ -389,16 +391,18 @@ test("tenant list uses seek pagination at 50/100 and resets cursor on server fil
   const { requests } = await boundary(page, { count: 101 })
   await page.goto("/platform/tenants")
   await expect(page.locator("tbody tr")).toHaveCount(50)
+  await expect(page.getByText("共 101 条 · 第 1 页")).toBeVisible()
   await page.getByRole("button", { name: "下一页", exact: true }).click()
-  await expect(page.getByText("第 2 页")).toBeVisible()
+  await expect(page.getByText("共 101 条 · 第 2 页")).toBeVisible()
   await expect(page.locator("tbody tr")).toHaveCount(50)
   await page.getByRole("combobox", { name: "每页条数" }).click()
   await page.getByRole("option", { name: "100 条", exact: true }).click()
-  await expect(page.getByText("第 1 页")).toBeVisible()
+  await expect(page.getByText("共 101 条 · 第 1 页")).toBeVisible()
   await expect(page.locator("tbody tr")).toHaveCount(100)
   await page.getByLabel("搜索租户名称或 ID").fill("租户乙")
   await page.getByRole("button", { name: "搜索", exact: true }).click()
   await expect(page.locator("tbody tr")).toHaveCount(1)
+  await expect(page.getByText("共 1 条 · 第 1 页")).toBeVisible()
   const last = requests
     .filter((request) => request.path === "/api/platform/tenants")
     .slice(-1)[0]!
@@ -2463,6 +2467,7 @@ test("MCP selection survives pages and select all covers the complete directory"
     .getByRole("checkbox", { name: "跨页 BC 1 · bc-1", exact: true })
     .check()
   await sheet.getByRole("button", { name: "下一页 BC" }).click()
+  await expect(sheet.getByText("共 101 条 · 第 2 页")).toBeVisible()
   await sheet
     .getByRole("checkbox", { name: "跨页 BC 51 · bc-51", exact: true })
     .check()

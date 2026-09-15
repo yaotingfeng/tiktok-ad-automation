@@ -218,6 +218,7 @@ export function MaterialBatchPicker({
           <Pager
             paging={paging}
             nextCursor={query.data?.next_cursor}
+            total={query.data?.total}
             busy={locked}
           />
           <div className="flex flex-wrap items-center justify-between gap-2">

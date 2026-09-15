@@ -11,7 +11,7 @@ from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
-from app.core.pagination import Page
+from app.core.pagination import Page, count_rows
 from app.modules.accounts.resolver import decode_cursor, encode_cursor
 from app.modules.strategies.copy_pool import CopyChoice
 from app.modules.strategies.models import (
@@ -443,6 +443,7 @@ def list_strategies(
         )
     if active is not None:
         statement = statement.where(Strategy.active == active)
+    total = count_rows(session, statement)
     if after:
         statement = statement.where(Strategy.id > UUID(after))
     rows = session.exec(
@@ -455,6 +456,7 @@ def list_strategies(
         next_cursor=encode_cursor(scope=scope, last_id=str(rows[limit - 1][0].id))
         if len(rows) > limit
         else None,
+        total=total,
     )
 
 
@@ -480,6 +482,7 @@ def list_versions(
         StrategyVersion.tenant_id == context.tenant_id,
         StrategyVersion.strategy_id == strategy_id,
     )
+    total = count_rows(session, statement)
     if after:
         try:
             statement = statement.where(StrategyVersion.number < int(after))
@@ -504,6 +507,7 @@ def list_versions(
         next_cursor=encode_cursor(scope=scope, last_id=str(rows[limit - 1].number))
         if len(rows) > limit
         else None,
+        total=total,
     )
 
 
