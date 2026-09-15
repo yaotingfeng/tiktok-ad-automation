@@ -101,6 +101,8 @@ class TenantBC(SQLModel, table=True):
     bc_id: str = Field(primary_key=True, max_length=128)
     name: str = ""
     ownership_conflict: bool = False
+    # 只固定新原件的集中来源；每次发送仍验证账户归属及冻结通道授权。
+    material_advertiser_id: str | None = Field(default=None, max_length=128)
 
 
 class AdvertiserAccount(SQLModel, table=True):

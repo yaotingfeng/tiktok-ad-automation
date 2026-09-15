@@ -1,4 +1,4 @@
-"""Real PostgreSQL source claims: fairness, immutable assignments and capacity."""
+"""真实 PostgreSQL：集中来源、不同文件并发、已有发送身份不变。"""
 
 from collections import Counter
 from datetime import UTC, datetime, timedelta
@@ -150,7 +150,7 @@ def test_concurrent_accounts_are_charged_once_across_files(env):
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(worker, ids))
-    assert sorted(result for result in results if result) == ["source-000"]
+    assert results == ["source-000", "source-000"]
     with Session(engine) as db:
         assert (
             db.exec(
@@ -158,7 +158,7 @@ def test_concurrent_accounts_are_charged_once_across_files(env):
                     SourceAccountLoad.tenant_id == env["context"].tenant_id
                 )
             ).one()
-            == 1
+            == 2
         )
 
 
@@ -184,7 +184,7 @@ def release(db, env, material_id, access):
     assert not release_source_account(db, context=env["context"], operation=operation)
 
 
-def test_claim_is_persisted_once_and_full_account_does_not_take_second_file(env):
+def test_claim_is_persisted_once_and_different_files_share_primary(env):
     with Session(engine) as db, db.begin():
         add_accounts(db, env, 2)
         ids = add_files(db, env, 3)
@@ -192,10 +192,8 @@ def test_claim_is_persisted_once_and_full_account_does_not_take_second_file(env)
         same = claim(db, env, ids[0])
         second = claim(db, env, ids[1])
         assert first == same
-        assert first.advertiser_id != second.advertiser_id
-        with pytest.raises(DomainError) as error:
-            claim(db, env, ids[2])
-        assert error.value.code == "source_capacity_pending"
+        assert first.advertiser_id == second.advertiser_id == "source-000"
+        assert claim(db, env, ids[2]).advertiser_id == "source-000"
         assert (
             sum(
                 db.exec(
@@ -204,7 +202,7 @@ def test_claim_is_persisted_once_and_full_account_does_not_take_second_file(env)
                     )
                 ).all()
             )
-            == 2
+            == 3
         )
         row = db.exec(
             select(IngestSessionFile).where(IngestSessionFile.material_id == ids[0])
@@ -215,7 +213,7 @@ def test_claim_is_persisted_once_and_full_account_does_not_take_second_file(env)
         )
 
 
-def test_twenty_sources_and_two_thousand_jobs_rotate_without_first_account_flood(env):
+def test_twenty_sources_and_two_thousand_jobs_remain_concentrated(env):
     with Session(engine) as db, db.begin():
         add_accounts(db, env, 20)
         ids = add_files(db, env, 2000)
@@ -225,11 +223,11 @@ def test_twenty_sources_and_two_thousand_jobs_rotate_without_first_account_flood
                 (identity, claim(db, env, identity))
                 for identity in ids[offset : offset + 20]
             ]
-            assert len({access.advertiser_id for _, access in assignments}) == 20
+            assert {access.advertiser_id for _, access in assignments} == {"source-000"}
             for identity, access in assignments:
                 counts[access.advertiser_id] += 1
                 release(db, env, identity, access)
-        assert set(counts.values()) == {100}
+        assert counts == {"source-000": 2000}
         assert (
             sum(
                 db.exec(
@@ -264,9 +262,7 @@ def test_cooling_or_revoked_sources_do_not_starve_other_accounts(env):
         grant.authorized = False
         db.flush()
         assert claim(db, env, ids[0]).advertiser_id == "source-002"
-        with pytest.raises(DomainError) as error:
-            claim(db, env, ids[1])
-        assert error.value.code == "source_capacity_pending"
+        assert claim(db, env, ids[1]).advertiser_id == "source-002"
 
 
 def test_explicit_source_never_falls_back_to_another_account(env):
@@ -293,9 +289,66 @@ def test_explicit_source_never_falls_back_to_another_account(env):
             )
 
         assert choose(ids[0], "source-001").advertiser_id == "source-001"
-        with pytest.raises(DomainError) as error:
-            choose(ids[1], "source-001")
-        assert error.value.code == "source_capacity_pending"
+        assert choose(ids[1], "source-001").advertiser_id == "source-001"
         with pytest.raises(DomainError) as error:
             choose(ids[1], "outside-bc")
         assert error.value.code == "account_not_in_bc"
+
+
+def test_primary_stays_fixed_during_cooldown_and_new_account_discovery(env):
+    from app.modules.accounts.models import TenantBC
+
+    with Session(engine) as db, db.begin():
+        add_accounts(db, env, 2)
+        ids = add_files(db, env, 3)
+        first = claim(db, env, ids[0])
+        bc = db.get(TenantBC, (env["context"].tenant_id, env["bc_id"]))
+        assert bc.material_advertiser_id == first.advertiser_id == "source-000"
+        # 一个排序更靠前的新账户不能改变已经选好的集中来源。
+        old = db.exec(
+            select(BCAccountAccess).where(
+                BCAccountAccess.tenant_id == env["context"].tenant_id,
+                BCAccountAccess.advertiser_id == "actual-account",
+            )
+        ).one()
+        old.can_upload = True
+        assert claim(db, env, ids[1]).advertiser_id == "source-000"
+        load = db.get(
+            SourceAccountLoad,
+            (
+                env["context"].tenant_id,
+                env["bc_id"],
+                "source-000",
+                env["connection_id"],
+            ),
+        )
+        load.cooldown_until = datetime.now(UTC) + timedelta(minutes=1)
+        db.flush()
+        with pytest.raises(DomainError, match="冷却"):
+            claim(db, env, ids[2])
+        assert bc.material_advertiser_id == "source-000"
+        load.cooldown_until = datetime.now(UTC) - timedelta(seconds=1)
+        assert claim(db, env, ids[2]).advertiser_id == "source-000"
+
+
+def test_revoked_primary_never_silently_uploads_to_another_account(env):
+    with Session(engine) as db, db.begin():
+        add_accounts(db, env, 2)
+        ids = add_files(db, env, 2)
+        assert claim(db, env, ids[0]).advertiser_id == "source-000"
+        grant = db.exec(
+            select(BCAccountAccess).where(
+                BCAccountAccess.tenant_id == env["context"].tenant_id,
+                BCAccountAccess.advertiser_id == "source-000",
+            )
+        ).one()
+        grant.can_upload = False
+        db.flush()
+        with pytest.raises(DomainError):
+            claim(db, env, ids[1])
+        row = db.exec(
+            select(IngestSessionFile).where(
+                IngestSessionFile.material_id == ids[1],
+            )
+        ).one()
+        assert row.source_advertiser_id is None

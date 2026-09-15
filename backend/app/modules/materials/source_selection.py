@@ -1,4 +1,4 @@
-"""Short PostgreSQL transactions choose actual source accounts fairly.
+"""短事务固定主素材账户，不按不同文件的在途数量轮转或串行。
 
 Slots count accepted source operations through final read-back, including UNKNOWN.
 They are never reclaimed merely because a worker or HTTP lease expired.
@@ -15,7 +15,7 @@ from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.modules.accounts.access import resolve_account_access, usable_grants
-from app.modules.accounts.models import BCAccountAccess
+from app.modules.accounts.models import BCAccountAccess, TenantBC
 from app.modules.accounts.schemas import AccountAccess
 from app.modules.tenants.permissions import require_tenant
 
@@ -23,17 +23,15 @@ from .ingest_models import IngestSessionFile, SourceAccountLoad
 from .models import MaterialAssetOperation, MaterialFile
 from .routes import require_material_route
 
-SOURCE_MAX_INFLIGHT = 1
-CANDIDATE_WINDOW = 100
 
-
-def _account_lock(db: Session, *, tenant_id: UUID, advertiser_id: str) -> bool:
+def _account_lock(db: Session, *, tenant_id: UUID, advertiser_id: str) -> None:
     key = int.from_bytes(
         sha256(f"source:{tenant_id}:{advertiser_id}".encode()).digest()[:8],
         "big",
         signed=True,
     )
-    return bool(db.exec(select(func.pg_try_advisory_xact_lock(key))).one())
+    # 仅等待短账本事务，不持锁执行 HTTP；锁竞争不能把文件分散到其他源账户。
+    db.exec(select(func.pg_advisory_xact_lock(key))).one()
 
 
 def source_file(
@@ -172,14 +170,11 @@ def claim_source_account(
                 "material_retry_not_allowed", "已有源操作尚未证实无远端效果"
             )
     now = datetime.now(UTC)
-    # Aggregate by advertiser across connection revisions. Refreshing OAuth must
-    # not create a second slot for an account whose previous result is unknown.
+    # 冷却按实际账户聚合；换授权连接不绕开已观察到的上游限制。
     loads = (
         select(
             col(SourceAccountLoad.advertiser_id),
-            func.sum(SourceAccountLoad.in_flight).label("in_flight"),
             func.max(SourceAccountLoad.cooldown_until).label("cooldown"),
-            func.max(SourceAccountLoad.last_assigned_at).label("last_assigned"),
         )
         .where(SourceAccountLoad.tenant_id == context.tenant_id)
         .group_by(SourceAccountLoad.advertiser_id)
@@ -188,83 +183,79 @@ def claim_source_account(
     grant_query = usable_grants(
         tenant_id=context.tenant_id, bc_id=bc_id, action="upload"
     ).where(BCAccountAccess.connection_id == route.connection_id)
-    if advertiser_id is not None:
-        grant_query = grant_query.where(BCAccountAccess.advertiser_id == advertiser_id)
-    grants = grant_query.subquery()
-    candidates = db.exec(
-        select(grants.c.advertiser_id, grants.c.connection_id)
-        .outerjoin(loads, grants.c.advertiser_id == loads.c.advertiser_id)
-        .where(
-            func.coalesce(loads.c.in_flight, 0) < SOURCE_MAX_INFLIGHT,
-            (loads.c.cooldown.is_(None)) | (loads.c.cooldown <= now),
-        )
-        .order_by(
-            func.coalesce(loads.c.in_flight, 0),
-            loads.c.last_assigned.asc().nulls_first(),
-            loads.c.cooldown.asc().nulls_first(),
-            grants.c.advertiser_id,
-            grants.c.connection_id,
-        )
-        .limit(CANDIDATE_WINDOW)
-    ).all()
-    for advertiser_id, connection_id in candidates:
-        if not _account_lock(
-            db, tenant_id=context.tenant_id, advertiser_id=advertiser_id
-        ):
-            continue
-        occupied = db.exec(
-            select(
-                func.coalesce(func.sum(SourceAccountLoad.in_flight), 0),
-                func.max(SourceAccountLoad.cooldown_until),
-            ).where(
-                SourceAccountLoad.tenant_id == context.tenant_id,
-                SourceAccountLoad.advertiser_id == advertiser_id,
-            )
+    if advertiser_id is None:
+        # NO KEY UPDATE 保护首次选择且不阻塞其他素材的 BC 外键检查。
+        bc = db.exec(
+            select(TenantBC)
+            .where(TenantBC.tenant_id == context.tenant_id, TenantBC.bc_id == bc_id)
+            .with_for_update(key_share=True)
+            .execution_options(populate_existing=True)
         ).one()
-        if occupied[0] >= SOURCE_MAX_INFLIGHT or (occupied[1] and occupied[1] > now):
-            continue
-        require_material_route(
-            db,
-            context=context,
-            route=route,
-            bc_id=bc_id,
-            advertiser_id=advertiser_id,
-            capability="upload",
-        )
-        access = _exact_access(
-            db,
-            context=context,
-            bc_id=bc_id,
-            advertiser_id=advertiser_id,
-            connection_id=connection_id,
-        )
-        load = db.get(
-            SourceAccountLoad, (context.tenant_id, bc_id, advertiser_id, connection_id)
-        )
-        if load is None:
-            load = SourceAccountLoad(
-                tenant_id=context.tenant_id,
-                bc_id=bc_id,
-                advertiser_id=advertiser_id,
-                connection_id=connection_id,
-            )
-            db.add(load)
-        load.in_flight += 1
-        load.revision += 1
-        load.last_assigned_at = now
-        row.source_advertiser_id, row.connection_id = advertiser_id, connection_id
-        db.flush()
-        return access
-    any_grant = db.exec(
-        usable_grants(tenant_id=context.tenant_id, bc_id=bc_id, action="upload")
-        .where(BCAccountAccess.connection_id == route.connection_id)
-        .limit(1)
-    ).first()
-    raise DomainError(
-        "source_capacity_pending" if any_grant else "no_upload_account",
-        "当前合法来源暂满或处于冷却期" if any_grant else "当前 BC 没有可上传的授权账户",
-        retryable=any_grant is not None,
+        advertiser_id = bc.material_advertiser_id
+        if advertiser_id is None:
+            grants = grant_query.subquery()
+            advertiser_id = db.exec(
+                select(grants.c.advertiser_id)
+                .outerjoin(loads, grants.c.advertiser_id == loads.c.advertiser_id)
+                .where((loads.c.cooldown.is_(None)) | (loads.c.cooldown <= now))
+                .order_by(grants.c.advertiser_id)
+                .limit(1)
+            ).first()
+            if advertiser_id is None:
+                any_grant = db.exec(grant_query.limit(1)).first()
+                raise DomainError(
+                    "source_capacity_pending" if any_grant else "no_upload_account",
+                    "合法来源处于冷却期"
+                    if any_grant
+                    else "当前 BC 没有可上传的授权账户",
+                    retryable=any_grant is not None,
+                )
+            bc.material_advertiser_id = advertiser_id
+    require_material_route(
+        db,
+        context=context,
+        route=route,
+        bc_id=bc_id,
+        advertiser_id=advertiser_id,
+        capability="upload",
     )
+    access = _exact_access(
+        db,
+        context=context,
+        bc_id=bc_id,
+        advertiser_id=advertiser_id,
+        connection_id=route.connection_id,
+    )
+    _account_lock(db, tenant_id=context.tenant_id, advertiser_id=advertiser_id)
+    cooldown = db.exec(
+        select(func.max(SourceAccountLoad.cooldown_until)).where(
+            SourceAccountLoad.tenant_id == context.tenant_id,
+            SourceAccountLoad.advertiser_id == advertiser_id,
+        )
+    ).one()
+    if cooldown and cooldown > now:
+        raise DomainError(
+            "source_capacity_pending", "主素材账户处于冷却期", retryable=True
+        )
+    load = db.get(
+        SourceAccountLoad,
+        (context.tenant_id, bc_id, advertiser_id, route.connection_id),
+    )
+    if load is None:
+        load = SourceAccountLoad(
+            tenant_id=context.tenant_id,
+            bc_id=bc_id,
+            advertiser_id=advertiser_id,
+            connection_id=route.connection_id,
+        )
+        db.add(load)
+    # 只记真实未结束操作的数量，不再把统计值用作单账户串行门槛。
+    load.in_flight += 1
+    load.revision += 1
+    load.last_assigned_at = now
+    row.source_advertiser_id, row.connection_id = advertiser_id, route.connection_id
+    db.flush()
+    return access
 
 
 def release_source_account(
@@ -296,10 +287,7 @@ def release_source_account(
         raise DomainError(
             "material_result_pending", "源操作结果未核实，不能释放来源占用"
         )
-    if not _account_lock(
-        db, tenant_id=context.tenant_id, advertiser_id=locked.advertiser_id
-    ):
-        raise DomainError("source_capacity_pending", "来源占用正在更新", retryable=True)
+    _account_lock(db, tenant_id=context.tenant_id, advertiser_id=locked.advertiser_id)
     load = db.get(
         SourceAccountLoad,
         (
