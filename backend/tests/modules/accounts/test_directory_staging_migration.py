@@ -10,10 +10,9 @@ from sqlmodel import Session
 from app.modules.accounts.models import (
     AdvertiserAccount,
     BCAccountAccess,
-    TenantBC,
     TikTokConnection,
 )
-from tests.migration_database import historical_database
+from tests.migration_database import historical_database, insert_historical_bc
 from tests.modules.conftest import create_context
 
 
@@ -29,7 +28,9 @@ def test_staging_migration_preserves_live_directory_and_refuses_evidence_loss(
                 status="ACTIVE",
                 credential_revision=7,
             )
-            bc = TenantBC(tenant_id=context.tenant_id, bc_id="historical-bc")
+            insert_historical_bc(
+                session, tenant_id=context.tenant_id, bc_id="historical-bc"
+            )
             account = AdvertiserAccount(
                 tenant_id=context.tenant_id,
                 advertiser_id="0009007199254740993101234567",
@@ -38,7 +39,7 @@ def test_staging_migration_preserves_live_directory_and_refuses_evidence_loss(
                 timezone="UTC",
                 remote_status="ENABLE",
             )
-            session.add_all([connection, bc, account])
+            session.add_all([connection, account])
             session.flush()
             run_id, connection_id = uuid4(), connection.id
             # 只写 mcp01 已存在的列，保全测试不依赖当前 ORM 的新增字段。
@@ -66,7 +67,7 @@ def test_staging_migration_preserves_live_directory_and_refuses_evidence_loss(
             session.add(
                 BCAccountAccess(
                     tenant_id=context.tenant_id,
-                    bc_id=bc.bc_id,
+                    bc_id="historical-bc",
                     advertiser_id=account.advertiser_id,
                     connection_id=connection.id,
                     in_bc=True,

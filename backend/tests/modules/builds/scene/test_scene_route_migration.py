@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
-from app.modules.accounts.models import AdvertiserAccount, TenantBC, TikTokConnection
+from app.modules.accounts.models import AdvertiserAccount, TikTokConnection
 from app.modules.builds.models import BuildDraft, DraftPreparation
 from app.modules.builds.scene_job_models import (
     DraftScenePreparation,
@@ -22,7 +22,7 @@ from app.modules.strategies.copy_pool import POOL_VERSION
 from app.modules.strategies.models import StrategyVersion
 from app.modules.strategies.schemas import StrategyConfig
 from app.modules.strategies.service import create_strategy
-from tests.migration_database import historical_database
+from tests.migration_database import historical_database, insert_historical_bc
 from tests.modules.conftest import create_context
 
 
@@ -32,6 +32,7 @@ def test_historical_scene_migration_preserves_ids_and_facts_without_inventing_ro
     with historical_database(monkeypatch, "mcp_build_routes") as (engine, config):
         with Session(engine) as db, db.begin():
             context = create_context(db)
+            insert_historical_bc(db, tenant_id=context.tenant_id, bc_id="old-bc")
             conn = TikTokConnection(tenant_id=context.tenant_id, status="ACTIVE")
             provider = ProviderConnection(
                 tenant_id=context.tenant_id,
@@ -43,7 +44,6 @@ def test_historical_scene_migration_preserves_ids_and_facts_without_inventing_ro
                 [
                     conn,
                     provider,
-                    TenantBC(tenant_id=context.tenant_id, bc_id="old-bc"),
                     AdvertiserAccount(
                         tenant_id=context.tenant_id, advertiser_id="old-advertiser"
                     ),

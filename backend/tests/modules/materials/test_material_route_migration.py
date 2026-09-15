@@ -12,7 +12,6 @@ from sqlmodel import Session
 from app.modules.accounts.models import (
     AdvertiserAccount,
     BCAccountAccess,
-    TenantBC,
     TikTokConnection,
 )
 from app.modules.materials.cover_models import MaterialCoverJob
@@ -24,7 +23,7 @@ from app.modules.materials.models import (
     MaterialFile,
     UploadBatch,
 )
-from tests.migration_database import historical_database
+from tests.migration_database import historical_database, insert_historical_bc
 from tests.modules.conftest import create_context
 
 ROUTES = {
@@ -47,10 +46,10 @@ def test_history_is_preserved_and_new_route_evidence_cannot_be_rewritten_or_drop
             context = create_context(db)
             conn = TikTokConnection(tenant_id=context.tenant_id, status="ACTIVE")
             scope = {"tenant_id": context.tenant_id, "bc_id": "historical-material-bc"}
+            insert_historical_bc(db, **scope)
             db.add_all(
                 [
                     conn,
-                    TenantBC(**scope),
                     AdvertiserAccount(
                         tenant_id=context.tenant_id, advertiser_id="actual-source"
                     ),

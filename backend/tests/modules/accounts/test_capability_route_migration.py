@@ -7,8 +7,8 @@ from alembic import command
 from sqlalchemy import inspect, text
 from sqlmodel import Session
 
-from app.modules.accounts.models import TenantBC, TikTokConnection
-from tests.migration_database import historical_database
+from app.modules.accounts.models import TikTokConnection
+from tests.migration_database import historical_database, insert_historical_bc
 from tests.modules.conftest import create_context
 
 
@@ -17,9 +17,8 @@ def test_old_capability_facts_are_retained_without_inventing_authority(monkeypat
         with Session(engine) as session:
             context = create_context(session)
             connection = TikTokConnection(tenant_id=context.tenant_id, status="ACTIVE")
-            session.add_all(
-                [connection, TenantBC(tenant_id=context.tenant_id, bc_id="bc")]
-            )
+            session.add(connection)
+            insert_historical_bc(session, tenant_id=context.tenant_id, bc_id="bc")
             session.commit()
             connection_id = connection.id
         identity = uuid4()

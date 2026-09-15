@@ -10,10 +10,9 @@ from sqlmodel import Session
 from app.modules.accounts.models import (
     AdvertiserAccount,
     BCAccountAccess,
-    TenantBC,
     TikTokConnection,
 )
-from tests.migration_database import historical_database
+from tests.migration_database import historical_database, insert_historical_bc
 from tests.modules.conftest import create_context
 
 
@@ -25,7 +24,9 @@ def test_upgrade_preserves_history_and_separates_observation_from_authority(
             context = create_context(session)
             connection = TikTokConnection(tenant_id=context.tenant_id, status="ACTIVE")
             session.add(connection)
-            session.add(TenantBC(tenant_id=context.tenant_id, bc_id="observed-bc"))
+            insert_historical_bc(
+                session, tenant_id=context.tenant_id, bc_id="observed-bc"
+            )
             session.add(
                 AdvertiserAccount(
                     tenant_id=context.tenant_id,

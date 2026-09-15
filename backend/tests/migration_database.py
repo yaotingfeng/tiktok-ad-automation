@@ -8,11 +8,22 @@ import psycopg
 from alembic import command
 from alembic.config import Config
 from psycopg import sql
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
 from app.core.config import settings
 from tests.database import require_test_database
+
+
+def insert_historical_bc(session, *, tenant_id, bc_id):
+    """播种旧版四列 BC，避免当前 ORM 将新主账户字段写入历史 schema。"""
+    session.execute(
+        text(
+            "INSERT INTO tenant_bc (tenant_id,bc_id,name,ownership_conflict) "
+            "VALUES (:tenant_id,:bc_id,'',false)"
+        ),
+        {"tenant_id": tenant_id, "bc_id": bc_id},
+    )
 
 
 @contextmanager
