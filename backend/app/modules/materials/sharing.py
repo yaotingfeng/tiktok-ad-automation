@@ -4,7 +4,37 @@ from collections.abc import Callable
 from typing import Any
 
 from app.core.errors import DomainError
-from app.integrations.tiktok.contracts.materials import AssetShare
+from app.integrations.tiktok.contracts.common import (
+    McpBusinessResponse,
+    RemoteCallError,
+)
+from app.integrations.tiktok.contracts.materials import AssetShare, AssetShareReceipt
+
+
+def share_receipt(
+    response: McpBusinessResponse, request: AssetShare
+) -> AssetShareReceipt:
+    """成功 envelope 仍可能包含逐目标失败，不能丢弃或接受请求以外的身份。"""
+    failed = (
+        response.data.get("failed_infos", {})
+        if isinstance(response.data, dict)
+        else None
+    )
+    if not isinstance(failed, dict) or any(
+        target not in request.shared_advertiser_ids
+        or not isinstance(mids, list)
+        or any(
+            not isinstance(mid, str) or mid not in request.material_ids for mid in mids
+        )
+        or len(set(mids)) != len(mids)
+        for target, mids in failed.items()
+    ):
+        raise RemoteCallError(
+            "material_share_schema", effect="UNKNOWN", evidence=response.evidence
+        )
+    return AssetShareReceipt(
+        response.evidence, {target: tuple(mids) for target, mids in failed.items()}
+    )
 
 
 def distribution_transport(*, source_bc_id: str, target_bc_id: str) -> str:

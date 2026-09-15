@@ -1,4 +1,4 @@
-"""One permanent image-upload identity per actual target video and connection."""
+"""One permanent cover identity per actual video/connection, plus IMAGE batches."""
 
 from datetime import UTC, datetime
 from typing import Any
@@ -56,6 +56,9 @@ class MaterialCoverJob(SQLModel, table=True):
             name="ck_material_cover_status",
         ),
         CheckConstraint(
+            "purpose IN ('SOURCE','BUILD')", name="ck_material_cover_purpose"
+        ),
+        CheckConstraint(
             "revision >= 0 AND next_page > 0 AND failure_count >= 0",
             name="ck_material_cover_counters",
         ),
@@ -72,6 +75,7 @@ class MaterialCoverJob(SQLModel, table=True):
             name="ck_material_cover_receipt",
         ),
         Index("ix_material_cover_repair", "status", "repair_after", "id"),
+        Index("ix_cover_share_jobs", "share_batch_id", "id"),
         Index(
             "ix_cover_bulk_candidates",
             "tenant_id",
@@ -100,6 +104,11 @@ class MaterialCoverJob(SQLModel, table=True):
     video_md5: str | None = Field(default=None, max_length=32)
     remote_name: str = Field(max_length=128)
     status: str = Field(default="PENDING", max_length=16)
+    purpose: str = Field(default="BUILD", max_length=16)
+    image_mid: str | None = Field(default=None, max_length=128)
+    share_batch_id: UUID | None = Field(
+        default=None, foreign_key="material_cover_share_batch.id"
+    )
     request_armed_at: datetime | None = Field(
         default=None, sa_column=Column(DateTime(timezone=True))
     )
@@ -193,3 +202,44 @@ class MaterialCoverJobPage(SQLModel, table=True):
     image_ids: list[str] = Field(
         default_factory=list, sa_column=Column(JSONB, nullable=False)
     )
+
+
+class MaterialCoverShareBatch(SQLModel, table=True):
+    """IMAGE 独立发送账本；成员保存冻结源/目标身份，绝不套用 VIDEO 操作。"""
+
+    __tablename__ = "material_cover_share_batch"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "bc_id"], ["tenant_bc.tenant_id", "tenant_bc.bc_id"]
+        ),
+        CheckConstraint(
+            "status IN ('PREPARING','SENDING','VERIFYING','UNKNOWN','READY','BLOCKED')",
+            name="ck_cover_share_status",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(members) = 'array' AND jsonb_array_length(members) BETWEEN 1 AND 200",
+            name="ck_cover_share_members",
+        ),
+    )
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    tenant_id: UUID
+    bc_id: str = Field(max_length=128)
+    actor_id: UUID = Field(foreign_key="user.id")
+    source_advertiser_id: str = Field(max_length=128)
+    source_route: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
+    target_route: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
+    members: list[dict[str, Any]] = Field(sa_column=Column(JSONB, nullable=False))
+    scan_state: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
+    wake_job_id: UUID
+    status: str = Field(default="PREPARING", max_length=16)
+    armed_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True))
+    )
+    request_digest: str | None = Field(default=None, max_length=64)
+    failed_infos: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
+    request_id: str | None = Field(default=None, max_length=255)
+    error_code: str | None = Field(default=None, max_length=128)

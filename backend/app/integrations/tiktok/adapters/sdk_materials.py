@@ -26,7 +26,7 @@ from app.integrations.tiktok.contracts.common import (
 from app.integrations.tiktok.official.accounts import RequestScope, _strict_sdk_envelope
 from app.integrations.tiktok.sdk import SDK_SCOPE_INTERRUPTS, AccountAdmissionDeferred
 from app.modules.materials import cover_sdk, sdk_assets
-from app.modules.materials.sharing import share_arguments
+from app.modules.materials.sharing import share_arguments, share_receipt
 
 
 def _unique_upload_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -200,7 +200,7 @@ class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
 
     def share_assets(
         self, request: contracts.AssetShare, *, budget: contracts.RemoteCallBudget
-    ) -> CallEvidence:
+    ) -> contracts.AssetShareReceipt:
         sent = False
         try:
             arguments = share_arguments(request, authorize=self._share_authorize)
@@ -217,7 +217,9 @@ class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
                     async_req=True,
                     _request_timeout=timeout,
                 ).get()
-                return _upload_response(self._client, array=False).evidence
+                return share_receipt(
+                    _upload_response(self._client, array=False), request
+                )
         except SDK_SCOPE_INTERRUPTS:
             raise
         except RemoteCallError, AccountAdmissionDeferred:
@@ -397,7 +399,10 @@ def _call_response(
         path,
         method,
         {},
-        list((query or {}).items()),
+        [
+            (key, json.dumps(value) if isinstance(value, (dict, list)) else value)
+            for key, value in (query or {}).items()
+        ],
         headers,
         body=body,
         response_type="InlineResponse200",

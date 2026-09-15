@@ -14,9 +14,9 @@ from tests.modules.materials.test_source_uploads import source_env as source_env
 from tests.modules.materials.test_source_uploads import wire as wire
 
 
-def queue(env):
+def queue(env, *, source=True):
     with Session(engine) as session, session.begin():
-        return covers.ensure_cover(
+        return (covers.ensure_source_cover if source else covers.ensure_cover)(
             session,
             context=env["context"],
             bc_id=env["bc_id"],
@@ -56,7 +56,7 @@ def test_existing_image_is_ready_without_enqueue_or_source_copy(source_env, wire
     identity = seed(source_env)
     with Session(engine) as session, session.begin():
         session.get(AccountMaterial, identity).image_id = "verified-target-image"
-    result = queue(source_env)
+    result = queue(source_env, source=False)
     assert result.state == "ready"
     assert result.mapping.image_id == "verified-target-image"
     assert result.task_id is None and not wire[0]
@@ -117,6 +117,7 @@ def image_info(identity, **changes):
         "list": [
             {
                 "image_id": "target-image",
+                "material_id": "900001",
                 "file_name": job_state(identity).remote_name,
                 "displayable": True,
                 "signature": "a" * 32,

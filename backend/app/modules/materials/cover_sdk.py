@@ -167,7 +167,10 @@ def verified_image(
             return None
         if row["width"] * height != row["height"] * width:
             return None
-    return {"image_id": image_id, "signature": actual_signature}
+    result = {"image_id": image_id, "signature": actual_signature}
+    if mid := _identifier(row.get("material_id")):
+        result["material_id"] = mid
+    return result
 
 
 def image_search_page(
@@ -199,7 +202,15 @@ def image_search_page(
     identities = [_identifier(row.get("image_id")) for row in rows]
     if None in identities or len(set(identities)) != len(identities):
         raise _error()
-    allowed = {"image_id", "file_name", "displayable", "signature", "width", "height"}
+    allowed = {
+        "image_id",
+        "material_id",
+        "file_name",
+        "displayable",
+        "signature",
+        "width",
+        "height",
+    }
     return (
         [{key: value for key, value in row.items() if key in allowed} for row in rows],
         page >= pages,
@@ -212,6 +223,7 @@ def image_record_data(record: material_types.ImageRecord) -> dict[str, Any]:
 
     data = asdict(record)
     data.pop("evidence")
+    data["material_id"] = data.pop("mid")
     return data
 
 

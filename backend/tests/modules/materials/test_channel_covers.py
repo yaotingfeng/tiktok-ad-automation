@@ -15,6 +15,7 @@ from app.modules.materials.cover_models import (
     MaterialCoverJob,
     MaterialCoverJobPage,
     MaterialCoverReceipt,
+    MaterialCoverShareBatch,
 )
 from app.modules.materials.models import AccountMaterial, MaterialFile
 from tests.integrations.tiktok.gateway_support import database_engine as database_engine
@@ -81,15 +82,16 @@ def cover_env(gateway_case, gateway_wire, database_engine, monkeypatch):
                 MaterialCoverJobPage,
                 MaterialCoverReceipt,
                 MaterialCoverJob,
+                MaterialCoverShareBatch,
                 AccountMaterial,
                 MaterialFile,
             ):
                 db.execute(delete(model).where(model.tenant_id == context.tenant_id))
 
 
-def queue(env, database_engine):
+def queue(env, database_engine, *, source=True):
     with Session(database_engine) as db, db.begin():
-        return covers.ensure_cover(
+        return (covers.ensure_source_cover if source else covers.ensure_cover)(
             db,
             context=env["context"],
             bc_id=env["route"].bc_id,
@@ -141,6 +143,7 @@ def image_data(name, **changes):
         "list": [
             {
                 "image_id": "actual-image-id",
+                "material_id": "900001",
                 "signature": "c" * 32,
                 "displayable": True,
                 "file_name": name,
@@ -944,9 +947,9 @@ def test_preverified_external_cover_without_job_does_not_require_original_digest
         route = route.model_copy(update={"connection_id": uuid4()})
     if case in {"read_revoked", "wrong_route", "historical_job"}:
         with pytest.raises(DomainError):
-            queue({**cover_env, "route": route}, database_engine)
+            queue({**cover_env, "route": route}, database_engine, source=False)
     else:
-        result = queue(cover_env, database_engine)
+        result = queue(cover_env, database_engine, source=False)
         assert result.state == ("ready" if case == "fresh" else "blocked")
         if case == "fresh":
             assert (

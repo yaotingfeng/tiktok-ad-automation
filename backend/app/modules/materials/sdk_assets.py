@@ -358,6 +358,7 @@ def image_record(
         row.get("height"),
         row.get("displayable"),
         evidence,
+        mid=row.get("material_id"),
     )
 
 
@@ -735,17 +736,49 @@ class MaterialReadAdapter:
         )
 
     def search_images(
-        self, *, advertiser_id: str, page: int, budget: material_types.RemoteCallBudget
+        self,
+        *,
+        advertiser_id: str,
+        page: int,
+        budget: material_types.RemoteCallBudget,
+        material_ids: tuple[str, ...] = (),
+        image_ids: tuple[str, ...] = (),
     ) -> material_types.MaterialPage[material_types.ImageRecord]:
         if type(page) is not int or not 1 <= page <= 100:
             raise _remote_request_error()
+        for values in (material_ids, image_ids):
+            if (
+                type(values) is not tuple
+                or len(values) > 100
+                or any(not _remote_identifier(value) for value in values)
+                or len(set(values)) != len(values)
+            ):
+                raise _remote_request_error()
+        if material_ids and image_ids:
+            raise _remote_request_error()
+        filtering = {}
+        if material_ids:
+            filtering["material_ids"] = list(material_ids)
+        if image_ids:
+            filtering["image_ids"] = list(image_ids)
         response = self._read(
             "materials.search_images",
             advertiser_id,
-            {"page": page, "page_size": PAGE_SIZE},
+            {
+                "page": page,
+                "page_size": PAGE_SIZE,
+                **({"filtering": filtering} if filtering else {}),
+            },
             budget,
         )
-        return self._page(response, advertiser_id=advertiser_id, page=page, images=True)
+        return self._page(
+            response,
+            advertiser_id=advertiser_id,
+            page=page,
+            images=True,
+            material_ids=material_ids,
+            video_name=repr(image_ids) if image_ids else None,
+        )
 
 
 def validate_video_upload(

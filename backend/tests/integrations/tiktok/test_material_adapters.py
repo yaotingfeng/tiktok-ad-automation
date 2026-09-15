@@ -479,7 +479,7 @@ def test_native_share_uses_mid_and_checks_both_accounts(material_case):
     result = adapter.share_assets(
         AssetShare("123", ("90071992547409939999",), ("456",)), budget=budget
     )
-    assert result.request_id == "material-request"
+    assert result.evidence.request_id == "material-request"
     assert ("123", "materials.share_assets") in events
     assert ("456", "materials.share_assets") in events
     body = (

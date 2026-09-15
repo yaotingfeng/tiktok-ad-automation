@@ -11,14 +11,25 @@ from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session
 
 from app.modules.materials.cover_models import MaterialCoverJob, MaterialCoverReceipt
-from tests.migration_database import historical_database
+from app.modules.materials.models import MaterialFile
+from tests.migration_database import historical_database, insert_historical_bc
 from tests.modules.conftest import create_context
-from tests.modules.materials.test_tenant_materials import mapping, material
+from tests.modules.materials.test_tenant_materials import mapping
 
 
 def _history(db):
     context = create_context(db)
-    file = material(db, context, "original-cover.mp4")
+    insert_historical_bc(db, tenant_id=context.tenant_id, bc_id="bc-a")
+    file = MaterialFile(
+        tenant_id=context.tenant_id,
+        bc_id="bc-a",
+        file_name="original-cover.mp4",
+        object_key=f"historical/{uuid4()}",
+        byte_size=4000000000,
+        storage_state="stored",
+    )
+    db.add(file)
+    db.flush()
     asset = mapping(db, context, file)
     row = MaterialCoverJob(
         tenant_id=context.tenant_id,
@@ -43,7 +54,9 @@ def _history(db):
         "material_cover_receipt", tables, autoload_with=db.connection()
     )
     # 反射 JSONB 不保留 none_as_null 配置；省略旧路由列才能生成 SQL NULL。
-    values = row.model_dump(exclude={"video_md5", "frozen_route"})
+    values = row.model_dump(
+        exclude={"video_md5", "frozen_route", "purpose", "image_mid", "share_batch_id"}
+    )
     SASession.execute(db, job_table.insert().values(values))
     SASession.execute(
         db, receipt_table.insert().values(receipt.model_dump(exclude={"receipt_facts"}))

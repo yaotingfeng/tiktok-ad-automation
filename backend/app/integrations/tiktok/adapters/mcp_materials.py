@@ -21,7 +21,7 @@ from app.modules.materials.sdk_assets import (
     validate_video_upload,
     video_upload_receipt,
 )
-from app.modules.materials.sharing import share_arguments
+from app.modules.materials.sharing import share_arguments, share_receipt
 
 
 class MCPMaterialOperations(MaterialReadAdapter):
@@ -54,7 +54,7 @@ class MCPMaterialOperations(MaterialReadAdapter):
 
     def share_assets(
         self, request: contracts.AssetShare, *, budget: contracts.RemoteCallBudget
-    ) -> CallEvidence:
+    ) -> contracts.AssetShareReceipt:
         try:
             arguments = share_arguments(request, authorize=self._share_authorize)
             budget.timeout(upload=True)
@@ -62,12 +62,13 @@ class MCPMaterialOperations(MaterialReadAdapter):
             raise RemoteCallError(
                 error.code, effect="NOT_SENT", evidence=CallEvidence()
             ) from None
-        return self._client.call(
+        response = self._client.call(
             operation="materials.share_assets",
             advertiser_id=request.advertiser_id,
             arguments=arguments,
             deadline=budget.deadline,
-        ).evidence
+        )
+        return share_receipt(response, request)
 
     def upload_video_url(
         self, request: contracts.URLVideoUpload, *, budget: contracts.RemoteCallBudget

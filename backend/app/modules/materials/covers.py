@@ -1,4 +1,4 @@
-"""Permanent target-cover upload identities with bounded, read-only recovery."""
+"""Permanent source/build cover identities with bounded, read-only recovery."""
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -31,7 +31,12 @@ from app.jobs.tasks import register_dispatch_task
 from app.modules.tenants.permissions import require_tenant
 
 from . import cover_sdk as api
-from .cover_models import MaterialCoverJob, MaterialCoverJobPage, MaterialCoverReceipt
+from .cover_models import (
+    MaterialCoverJob,
+    MaterialCoverJobPage,
+    MaterialCoverReceipt,
+    MaterialCoverShareBatch,
+)
 from .models import AccountMaterial, MaterialFile
 from .repository import asset_public, require_material_scope
 from .routes import (
@@ -88,7 +93,10 @@ def _access(
     upload: bool = False,
 ) -> None:
     require_tenant(
-        session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="build"
+        session,
+        actor_id=context.actor_id,
+        tenant_id=context.tenant_id,
+        action="upload" if job.purpose == "SOURCE" else "build",
     )
     route = load_material_route(
         job.frozen_route,
@@ -158,104 +166,6 @@ def verified_cover_image_id(job: MaterialCoverJob) -> str | None:
     return api._identifier(job.known_image_id or job.candidate_image_id)
 
 
-def _reuse_source(
-    session: Session, context: TenantContext, target: MaterialCoverJob
-) -> MaterialCoverJob | None:
-    # Historical READY is only an ID/content hint. Today's target GET supplies
-    # fresh evidence; the target VID mapping may never borrow source freshness.
-    from .readiness import mapping_fresh
-
-    mapping = _mapping(session, target)
-    if not mapping_fresh(mapping) or (
-        mapping and mapping.image_id and mapping.image_id != target.candidate_image_id
-    ):
-        return None
-    statement = (
-        select(MaterialCoverJob)
-        .join(
-            AccountMaterial,
-            (col(AccountMaterial.tenant_id) == MaterialCoverJob.tenant_id)
-            & (col(AccountMaterial.id) == MaterialCoverJob.asset_id)
-            & (col(AccountMaterial.connection_id) == MaterialCoverJob.connection_id)
-            & (col(AccountMaterial.video_id) == MaterialCoverJob.video_id),
-        )
-        .where(
-            AccountMaterial.tenant_id == target.tenant_id,
-            AccountMaterial.bc_id == target.bc_id,
-            AccountMaterial.material_id == target.material_id,
-            AccountMaterial.status == "available",
-            col(AccountMaterial.image_id).is_not(None),
-            MaterialCoverJob.tenant_id == target.tenant_id,
-            MaterialCoverJob.bc_id == target.bc_id,
-            MaterialCoverJob.material_id == target.material_id,
-            MaterialCoverJob.advertiser_id != target.advertiser_id,
-            MaterialCoverJob.status == "READY",
-            MaterialCoverJob.video_md5 == target.video_md5,
-            col(MaterialCoverJob.signature).op("~")("^[0-9a-fA-F]{32}$"),
-            col(MaterialCoverJob.width).between(1, 65536),
-            col(MaterialCoverJob.height).between(1, 65536),
-            col(MaterialCoverJob.search_ambiguous).is_(False),
-            col(MaterialCoverJob.error_code).is_distinct_from(
-                "cover_receipt_ambiguous"
-            ),
-            func.coalesce(
-                MaterialCoverJob.known_image_id, MaterialCoverJob.candidate_image_id
-            )
-            == AccountMaterial.image_id,
-            or_(
-                col(MaterialCoverJob.known_image_id).is_(None),
-                col(MaterialCoverJob.candidate_image_id).is_(None),
-                col(MaterialCoverJob.known_image_id)
-                == MaterialCoverJob.candidate_image_id,
-            ),
-        )
-        .order_by(col(MaterialCoverJob.updated_at).desc(), col(MaterialCoverJob.id))
-    )
-    if target.candidate_image_id:
-        # A durable candidate must not disappear behind 20 newer, different IDs.
-        statement = statement.where(
-            AccountMaterial.image_id == target.candidate_image_id,
-            MaterialCoverJob.signature == target.signature,
-            MaterialCoverJob.width == target.width,
-            MaterialCoverJob.height == target.height,
-        )
-    candidates = session.exec(statement.limit(20)).all()
-    for source in candidates:
-        image_id = verified_cover_image_id(source)
-        if (
-            image_id is None
-            or api._signature(source.signature) is None
-            or not api._dimension(source.width)
-            or not api._dimension(source.height)
-            or (
-                target.candidate_image_id
-                and (
-                    image_id != target.candidate_image_id
-                    or source.signature != target.signature
-                    or source.width != target.width
-                    or source.height != target.height
-                )
-            )
-        ):
-            continue
-        try:
-            _access(session, context, source)
-        except DomainError:
-            continue
-        source_mapping = _mapping(session, source)
-        if source_mapping and source_mapping.image_id == image_id:
-            return source
-    return None
-
-
-def _check_reuse(
-    session: Session, context: TenantContext, job: MaterialCoverJob
-) -> None:
-    if job.request_armed_at is None and job.candidate_image_id:
-        if _reuse_source(session, context, job) is None:
-            raise DomainError("cover_video_changed", "复用封面来源或目标证据已变化")
-
-
 def _result(session: Session, job: MaterialCoverJob) -> AssetPreparation:
     if job.error_code == "cover_receipt_ambiguous":
         return AssetPreparation(
@@ -319,6 +229,52 @@ def ensure_cover(
     task_key: str,
     route: FrozenTikTokRoute,
 ) -> AssetPreparation:
+    return _ensure_cover(
+        session,
+        context=context,
+        bc_id=bc_id,
+        material_id=material_id,
+        advertiser_id=advertiser_id,
+        task_key=task_key,
+        route=route,
+        purpose="BUILD",
+    )
+
+
+def ensure_source_cover(
+    session: Session,
+    *,
+    context: TenantContext,
+    bc_id: str,
+    material_id: UUID,
+    advertiser_id: str,
+    task_key: str,
+    route: FrozenTikTokRoute,
+) -> AssetPreparation:
+    """上传成功的异步事件入口；素材账户无需广告创建权限。"""
+    return _ensure_cover(
+        session,
+        context=context,
+        bc_id=bc_id,
+        material_id=material_id,
+        advertiser_id=advertiser_id,
+        task_key=task_key,
+        route=route,
+        purpose="SOURCE",
+    )
+
+
+def _ensure_cover(
+    session: Session,
+    *,
+    context: TenantContext,
+    bc_id: str,
+    material_id: UUID,
+    advertiser_id: str,
+    task_key: str,
+    route: FrozenTikTokRoute,
+    purpose: str,
+) -> AssetPreparation:
     # Caller task keys cannot create a second upload identity for the same VID.
     if not task_key or len(task_key) > 255:
         raise DomainError("invalid_asset_task", "封面任务标识无效")
@@ -329,7 +285,7 @@ def ensure_cover(
         route=route,
         bc_id=bc_id,
         advertiser_id=advertiser_id,
-        capability="build",
+        capability="upload" if purpose == "SOURCE" else "build",
     )
     material = session.exec(
         select(MaterialFile)
@@ -376,11 +332,23 @@ def ensure_cover(
         require_same_route(
             load_material_route(job.frozen_route, context=context, bc_id=bc_id), route
         )
+        if (
+            purpose == "SOURCE"
+            and job.purpose == "BUILD"
+            and job.share_batch_id is None
+        ):
+            # 成功事件可能晚于 BUILD 排队；沿用原 job/VID，绝不创建第二个上传身份。
+            # 已发送的原上传只读核查；未发送任务可切为源准备并重置被阻塞的调度。
+            job.purpose = "SOURCE"
+            if not job.claimed_until or job.claimed_until <= _now():
+                _queue(
+                    session, job, read=bool(job.request_armed_at or job.known_image_id)
+                )
         _access(session, context, job)
         if job.status == "READY" and not _fresh(job):
             _queue(session, job, read=True)
         return _result(session, job)
-    if asset.image_id:
+    if asset.image_id and purpose == "BUILD":
         # 无历史封面job的既有平台图片沿原验证事实复用；不能虚构上传job要求原件摘要。
         require_material_route(
             session,
@@ -409,11 +377,13 @@ def ensure_cover(
         video_id=asset.video_id,
         video_md5=material.video_md5,
         remote_name=f"cover-{identity.hex}.jpg",
+        purpose=purpose,
+        candidate_image_id=asset.image_id if purpose == "SOURCE" else None,
     )
     _access(session, context, job, upload=True)
     session.add(job)
     session.flush()
-    _queue(session, job, read=False)
+    _queue(session, job, read=bool(job.candidate_image_id))
     return _result(session, job)
 
 
@@ -633,7 +603,6 @@ def _check_current(
         if current is None:
             raise DomainError("cover_claim_lost", "封面任务执行权已变化")
         _access(db, context, current, upload=upload)
-        _check_reuse(db, context, current)
 
 
 def _call[T](
@@ -819,7 +788,7 @@ def _save_receipt(
                 if value.signature is not None
                 else None
             )
-            if evidence is None:
+            if evidence is None or current.purpose == "SOURCE":
                 _queue(session, current, read=True)
             else:
                 _access(session, context, current, upload=True)
@@ -906,129 +875,23 @@ def _publish_result(
     if evidence is None:
         _stop(current, "cover_result_unknown", unknown=True)
         return
+    if current.purpose == "SOURCE" and not evidence.get("material_id"):
+        _stop(current, "cover_source_mid_missing", unknown=True)
+        return
     mapping = _mapping(session, current)
     assert mapping
     mapping.image_id = evidence["image_id"]
-    current.known_image_id = evidence["image_id"]
+    if current.request_armed_at:
+        current.known_image_id = evidence["image_id"]
+    else:
+        current.candidate_image_id = evidence["image_id"]
     current.signature = evidence["signature"]
+    current.image_mid = evidence.get("material_id")
     current.status, current.error_code = "READY", None
     # 已取得新正证据后结束本轮连续故障；翌日核查拥有独立的有界恢复机会。
     current.failure_count = 0
     current.claim_token = current.claimed_until = current.dispatch_id = None
     current.updated_at = _now()
-
-
-def _read_reused_cover(
-    database_engine: Engine,
-    client: material_types.MaterialOperations,
-    context: TenantContext,
-    job: MaterialCoverJob,
-    nonce: UUID,
-    *,
-    deadline: datetime,
-    allow_missing_fallback: bool,
-) -> bool:
-    image_id = job.candidate_image_id
-    assert image_id and job.signature
-    data = _call(
-        database_engine,
-        client,
-        context,
-        job,
-        nonce,
-        "materials.get_images",
-        lambda client, budget: client.read_image(
-            advertiser_id=job.advertiser_id, image_id=image_id, budget=budget
-        ),
-        deadline=deadline,
-    )
-    evidence = api.verified_image(
-        {"list": [api.image_record_data(data)] if data else []},
-        image_id=image_id,
-        remote_name=job.remote_name,
-        signature=job.signature,
-        width=job.width,
-        height=job.height,
-    )
-    with bounded_session(database_engine, task_deadline=deadline) as db, db.begin():
-        db.exec(
-            select(MaterialFile)
-            .where(MaterialFile.id == job.material_id)
-            .with_for_update()
-        ).one()
-        current = _fenced(db, context, job.id, nonce)
-        if current is None:
-            return True
-        _access(db, context, current)
-        _check_reuse(db, context, current)
-        if (
-            current.request_armed_at is not None
-            or current.known_image_id is not None
-            or (
-                current.candidate_image_id,
-                current.signature,
-                current.width,
-                current.height,
-            )
-            != (image_id, job.signature, job.width, job.height)
-        ):
-            raise DomainError("cover_video_changed", "封面候选证据已变化")
-        if data is None and allow_missing_fallback:
-            # Only a schema-validated empty target result permits ordinary upload.
-            current.candidate_image_id = current.signature = None
-            current.width = current.height = None
-            job.candidate_image_id = job.signature = None
-            job.width = job.height = None
-            return False
-        if evidence is None:
-            _stop(current, "cover_result_unknown", unknown=True)
-            return True
-        mapping = _mapping(db, current)
-        assert mapping
-        mapping.image_id = image_id
-        current.status, current.error_code = "READY", None
-        current.failure_count = 0
-        current.claim_token = current.claimed_until = current.dispatch_id = None
-        current.updated_at = _now()
-        return True
-
-
-def _try_reused_cover(
-    database_engine: Engine,
-    client: material_types.MaterialOperations,
-    context: TenantContext,
-    job: MaterialCoverJob,
-    nonce: UUID,
-    *,
-    deadline: datetime,
-) -> bool:
-    with bounded_session(database_engine, task_deadline=deadline) as db, db.begin():
-        current = _fenced(db, context, job.id, nonce)
-        if current is None:
-            return True
-        _access(db, context, current)
-        source = _reuse_source(db, context, current)
-        if source is None:
-            if current.candidate_image_id:
-                raise DomainError("cover_video_changed", "原复用候选须继续只读核实")
-            return False
-        current.candidate_image_id = verified_cover_image_id(source)
-        current.signature = source.signature
-        current.width, current.height = source.width, source.height
-        job.candidate_image_id, job.signature = (
-            current.candidate_image_id,
-            current.signature,
-        )
-        job.width, job.height = current.width, current.height
-    return _read_reused_cover(
-        database_engine,
-        client,
-        context,
-        job,
-        nonce,
-        deadline=deadline,
-        allow_missing_fallback=True,
-    )
 
 
 def _search_result(
@@ -1153,10 +1016,8 @@ def _run_claimed_cover(
     read: bool,
 ) -> None:
     if not read:
-        if _try_reused_cover(
-            database_engine, client, context, job, nonce, deadline=deadline
-        ):
-            return
+        if job.purpose != "SOURCE":
+            raise DomainError("cover_source_required", "目标封面必须使用源图片共享")
         if job.video_md5 is None:
             raise DomainError("cover_video_unverified", "视频签名尚未核实")
         md5 = job.video_md5
@@ -1219,19 +1080,33 @@ def _run_claimed_cover(
             ),
         )
         return
-    if job.candidate_image_id and job.request_armed_at is None:
-        _read_reused_cover(
-            database_engine,
-            client,
-            context,
-            job,
-            nonce,
-            deadline=deadline,
-            allow_missing_fallback=False,
-        )
-        return
-    if job.known_image_id:
-        image_id = job.known_image_id
+    if job.known_image_id or (job.candidate_image_id and job.request_armed_at is None):
+        image_id = job.known_image_id or job.candidate_image_id
+        assert image_id
+        if job.purpose == "SOURCE" and (job.width is None or job.height is None):
+            assert job.video_md5 is not None
+            md5 = job.video_md5
+            video = _call(
+                database_engine,
+                client,
+                context,
+                job,
+                nonce,
+                "materials.get_videos",
+                lambda client, budget: client.read_video_cover(
+                    advertiser_id=job.advertiser_id,
+                    video_id=job.video_id,
+                    md5=md5,
+                    budget=budget,
+                ),
+                deadline=deadline,
+            )
+            with Session(database_engine) as db, db.begin():
+                current = _fenced(db, context, job.id, nonce)
+                if current is None:
+                    return
+                current.width, current.height = video.width, video.height
+            job.width, job.height = video.width, video.height
         data = _call(
             database_engine,
             client,
@@ -1288,6 +1163,15 @@ def run_cover(
         return
     job, nonce = claimed
     try:
+        if job.purpose == "BUILD" and (
+            job.share_batch_id or (not job.request_armed_at and not job.known_image_id)
+        ):
+            from .cover_sharing import run_shared_cover
+
+            run_shared_cover(
+                database_engine, redis_client, context, job, nonce, deadline=deadline
+            )
+            return
         if read and not _prepare_read(
             database_engine, context, job, nonce, deadline=deadline
         ):
@@ -1558,7 +1442,6 @@ def _run_known_cover_group(
                     raise DomainError("cover_claim_lost", "封面任务执行权已变化")
                 _check_read_identity(current, job)
                 _access(db, context, current)
-                _check_reuse(db, context, current)
 
     def budget(operation: str) -> material_types.RemoteCallBudget:
         return material_types.RemoteCallBudget(
@@ -1707,6 +1590,13 @@ def repair_cover_dispatches(session: Session, *, limit: int = 100) -> int:
         select(MaterialCoverJob)
         .where(
             col(MaterialCoverJob.status).in_(["PENDING", "PREPARING", "VERIFYING"]),
+            or_(
+                col(MaterialCoverJob.share_batch_id).is_(None),
+                col(MaterialCoverJob.dispatch_id).is_not(None),
+                col(MaterialCoverJob.id).in_(
+                    select(MaterialCoverShareBatch.wake_job_id)
+                ),
+            ),
             MaterialCoverJob.repair_after <= _now(),
             or_(
                 col(MaterialCoverJob.claimed_until).is_(None),

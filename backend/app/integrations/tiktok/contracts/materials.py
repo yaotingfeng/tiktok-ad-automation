@@ -107,6 +107,7 @@ class ImageRecord:
     height: int | None
     displayable: bool | None
     evidence: CallEvidence
+    mid: str | None = None
 
 
 @dataclass(frozen=True)
@@ -187,6 +188,12 @@ class AssetShare:
     asset_type: str = "VIDEO"
 
 
+@dataclass(frozen=True)
+class AssetShareReceipt:
+    evidence: CallEvidence
+    failed_infos: dict[str, tuple[str, ...]]
+
+
 class MaterialOperations(Protocol):
     def read_videos(
         self,
@@ -206,7 +213,7 @@ class MaterialOperations(Protocol):
 
     def share_assets(
         self, request: AssetShare, *, budget: RemoteCallBudget
-    ) -> CallEvidence: ...
+    ) -> AssetShareReceipt: ...
 
     def read_video(
         self, *, advertiser_id: str, video_id: str, budget: RemoteCallBudget
@@ -248,5 +255,11 @@ class MaterialOperations(Protocol):
         self, *, advertiser_id: str, image_id: str, budget: RemoteCallBudget
     ) -> ImageRecord | None: ...
     def search_images(
-        self, *, advertiser_id: str, page: int, budget: RemoteCallBudget
+        self,
+        *,
+        advertiser_id: str,
+        page: int,
+        budget: RemoteCallBudget,
+        material_ids: tuple[str, ...] = (),
+        image_ids: tuple[str, ...] = (),
     ) -> MaterialPage[ImageRecord]: ...
