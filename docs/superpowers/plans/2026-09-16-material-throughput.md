@@ -48,7 +48,7 @@ Files: deployment configuration/scripts only after measurement; focused throughp
 - [x] 记录当前 Worker 槽、并发与频率、短/长请求负载；真实 PG/Redis + 传输边界计数验证同源、并发与慢接口耗时。
 - [x] 无固定租户均分；保留任务释放与准入逻辑，当前 2 个资源槽不被更小的共享门槛挡住；不盲改 Worker/QPS，不将本地测试说成真实平台吞吐。
 - [x] Ruff/mypy/相关回归；最终根整合 272 passed/549.47s，图片历史候选专项 15 passed；记录基线既有故障及测试环境缺项，不伪称全库通过。审查与记录实际待验项。
-- [ ] 如测试环境可安全发布，排空、完整备份、隔离恢复、迁移演练、同版本配置核实后部署；正在上传批次和生产不改。
+- [x] 排空、完整备份 `20260915T182117Z`、隔离恢复、迁移演练及 18 表历史比较后发布 `fe759b54`；9 进程配置/版本、3 Worker、登录/权限/真实图片读取验收通过。生产和原批次不改；真实大批量吞吐待下一批观察。
 
 ## Progress
 
@@ -56,4 +56,4 @@ Files: deployment configuration/scripts only after measurement; focused throughp
 - 源封面事件与 URL 上传、来源选择、UNKNOWN 围栏及 Redis 准入组合：110 项通过（122.15 秒）；包含旧 VID 延迟事件、BUILD 先创建、处理确认与事务回滚。源事件已处理标记与封面创建同事务，避免将“已有任意封面任务”误认成源准备已处理。
 - 主账户历史保留及受影响历史 schema 夹具共 8 项迁移测试通过。仅测试夹具显式播种旧列，生产代码不增加 schema/行为兼容路径。
 - 图片共享已完成持久分页与独立批次唤醒，慢接口专项超过 45 秒总时长但单任务小于 40 秒且仅一次 POST。集中回归 221 passed/1 skipped，后续合同快路径 64 passed；原子继续、保留已复用成员、来源所有权和 MID 漂移问题已修复。详见[验证记录](../../validation/2026-09-16-material-throughput.md)。
-- 新加坡只读测量：资源 Worker prefork 2；主机约 1,967 MiB 内存，后次读数可用 326 MiB、swap 已用 996 MiB。每接口并发 2、应用/租户/账户并发 4 不额外限制现有两个资源槽；本轮不盲增 Worker 或将本地 QPS 当官方配额。线上尚未切换版本。
+- 新加坡资源 Worker prefork 2；主机约 1,967 MiB 内存，发布前可用 326 MiB、swap 已用 996 MiB。每接口并发 2、应用/租户/账户并发 4 不额外限制现有两个资源槽；本轮不盲增 Worker 或将本地 QPS 当官方配额。最终源码快照 84 passed/1 deselected；发布与真实只读结果见验证记录。
