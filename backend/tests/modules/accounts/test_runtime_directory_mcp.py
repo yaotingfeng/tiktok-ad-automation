@@ -60,7 +60,8 @@ def expired_mcp(directory_context, oauth_wire, catalog_wire, redis_client, monke
                 ConnectionAuthorization.connection_id == connection_id
             )
         ).one()
-        facts.verified_at = datetime.now(UTC) - timedelta(hours=5)
+        # 覆盖缺失首次确认的恢复，不再用已确认记录年龄触发同步。
+        facts.verified_at = None
     env = {
         "context": directory_context,
         "connection_id": connection_id,
@@ -190,7 +191,7 @@ def test_changed_mcp_subject_cannot_refresh_old_facts(
             )
         ).one()
         assert facts.upstream_subject == "synthetic-subject"
-        assert facts.verified_at < datetime.now(UTC) - timedelta(hours=4)
+        assert facts.verified_at is None
 
 
 def test_build_permission_removed_during_mcp_initialize_blocks_business_http(

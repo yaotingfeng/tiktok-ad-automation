@@ -6,7 +6,6 @@ from uuid import UUID
 
 from sqlmodel import Session, select
 
-from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
@@ -91,11 +90,11 @@ def freeze_route(
     )
 
 
-def _fresh(observed_at: datetime | None, now: datetime) -> bool:
+def observed_authorization(observed_at: datetime | None, now: datetime) -> bool:
+    """已确认授权持续有效；时间仅用于识别缺失或无效记录，不设置使用期限。"""
     if observed_at is None or observed_at.tzinfo is None:
         return False
-    age = (now - observed_at).total_seconds()
-    return 0 <= age <= settings.BC_CAPABILITY_MAX_AGE_SECONDS
+    return observed_at <= now
 
 
 def verify_route(
@@ -170,10 +169,10 @@ def verify_route(
     now = datetime.now(UTC)
     if (
         authorization is None
-        or not _fresh(authorization.verified_at, now)
-        or not _fresh(grant.checked_at, now)
+        or not observed_authorization(authorization.verified_at, now)
+        or not observed_authorization(grant.checked_at, now)
     ):
-        raise DomainError("route_evidence_stale", "账户授权证据需要重新检查")
+        raise DomainError("account_access_denied", "缺少已确认的账户授权")
     if (
         not authorization.source
         or authorization.source == "UNKNOWN"

@@ -73,7 +73,7 @@ def authorization_basis(value: ConnectionAuthorization) -> str:
 
 def needs_directory_refresh(session: Session, route: FrozenTikTokRoute) -> bool:
     facts = current_authorization(session, route)
-    if facts is None or facts.verified_at is None or not _fresh(facts.verified_at):
+    if facts is None or facts.verified_at is None:
         return True
     if route.channel != "OFFICIAL_MCP":
         return False
@@ -102,7 +102,8 @@ def needs_directory_refresh(session: Session, route: FrozenTikTokRoute) -> bool:
         .order_by(col(DiscoveryRun.completed_at).desc())
         .limit(1)
     ).first()
-    return completed_at is None or not _fresh(completed_at)
+    # 完整目录沿原授权和 BC 绑定持续复用，不按日期强制重新核实权限。
+    return completed_at is None
 
 
 def queue_runtime(

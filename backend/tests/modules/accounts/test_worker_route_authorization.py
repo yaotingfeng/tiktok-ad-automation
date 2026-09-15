@@ -39,7 +39,6 @@ from tests.integrations.tiktok.gateway_support import (  # noqa: F401
         ("contract", "route_contract_changed"),
         ("scope", "account_access_denied"),
         ("grant", "account_access_denied"),
-        ("stale", "route_evidence_stale"),
         ("credential", "gateway_credentials_changed"),
     ],
 )
@@ -83,8 +82,6 @@ def test_current_authority_fences_next_request(
                 session.add(row)
             elif change == "grant":
                 grant.authorized = False
-            elif change == "stale":
-                grant.checked_at = datetime.now(UTC) - timedelta(days=1)
             session.add_all([connection, grant])
             session.commit()
         with pytest.raises(DomainError) as failure:
@@ -119,13 +116,13 @@ def test_default_and_identical_evidence_refresh_do_not_change_task(
                 BCAccountAccess,
                 (context.tenant_id, route.bc_id, advertiser, route.connection_id),
             )
-            grant.checked_at = datetime.now(UTC)
+            grant.checked_at = datetime.now(UTC) - timedelta(days=365)
             row = session.exec(
                 select(ConnectionAuthorization).where(
                     ConnectionAuthorization.connection_id == route.connection_id
                 )
             ).one()
-            row.verified_at = datetime.now(UTC)
+            row.verified_at = datetime.now(UTC) - timedelta(days=365)
             session.add_all([grant, row])
             session.commit()
         read_vbo(client, gateway_case)
@@ -188,7 +185,7 @@ def test_missing_account_evidence_allows_only_bc_role_recheck(
         )
         with pytest.raises(DomainError) as failure:
             read_vbo(client, gateway_case)
-        assert failure.value.code == "route_evidence_stale"
+        assert failure.value.code == "account_access_denied"
     assert len(business_calls(gateway_wire, route.channel)) == 1
 
 

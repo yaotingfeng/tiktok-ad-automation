@@ -12,7 +12,6 @@ from sqlalchemy.dialects.postgresql import array
 from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session, col, select
 
-from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.integrations.tiktok.bounded_resources import bounded_session
@@ -400,14 +399,14 @@ AND s.request_body->>'advertiser_id'=u.advertiser_id
 AND c.status='ACTIVE' AND c.authorization_revision>r.authorization_revision
 AND NOT bc.ownership_conflict AND NOT aa.ownership_conflict
 AND trim(aa.currency)<>'' AND trim(aa.timezone)<>''
-AND a.in_bc AND a.authorized AND a.active AND a.checked_at BETWEEN :cutoff AND :now
+AND a.in_bc AND a.authorized AND a.active AND a.checked_at <= :now
 AND old.source<>'UNKNOWN' AND new.source<>'UNKNOWN'
 AND old.source<>'' AND new.source<>'' AND old.verified_at IS NOT NULL
 AND trim(old.upstream_subject)<>'' AND new.upstream_subject=old.upstream_subject
 AND trim(old.issuer)<>'' AND new.issuer=old.issuer
 AND trim(old.resource)<>'' AND new.resource=old.resource
 AND jsonb_array_length(new.scopes)>0 AND new.permission_summary->'read_authorized'='true'::jsonb
-AND new.verified_at BETWEEN :cutoff AND :now
+AND new.verified_at <= :now
 AND (s.kind<>'CTA' OR s.remote_id IS NOT NULL)
 AND (SELECT count(DISTINCT attempt.attempt_id) FROM step_evidence e
  JOIN build_attempt_context attempt ON attempt.tenant_id=e.tenant_id AND attempt.step_id=e.step_id AND attempt.attempt=e.attempt
@@ -425,7 +424,6 @@ def _eligible_params(session: Session, context: TenantContext) -> dict[str, Any]
     return {
         "tenant": context.tenant_id,
         "now": now,
-        "cutoff": now - timedelta(seconds=settings.BC_CAPABILITY_MAX_AGE_SECONDS),
     }
 
 

@@ -8,7 +8,6 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session, select
 
-from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.jobs.models import PendingDispatch
@@ -69,7 +68,7 @@ AND EXISTS (SELECT 1 FROM bc_account_access a
  JOIN connection_authorization auth ON auth.tenant_id=r.tenant_id AND auth.connection_id=r.connection_id AND auth.authorization_revision=r.authorization_revision
  WHERE a.connection_id=u.connection_id AND c.kind=r.channel AND c.authorization_revision=r.authorization_revision AND c.adapter_contract_revision=r.adapter_contract_revision
  AND auth.source<>'UNKNOWN' AND auth.permission_summary->'build_authorized'='true'::jsonb AND jsonb_array_length(auth.scopes)>0
- AND auth.verified_at BETWEEN :cutoff AND :now AND a.checked_at BETWEEN :cutoff AND :now
+ AND auth.verified_at <= :now AND a.checked_at <= :now
  AND a.tenant_id=s.tenant_id AND a.bc_id=s.bc_id AND a.advertiser_id=u.advertiser_id
  AND a.in_bc AND a.authorized AND a.active AND a.can_build AND a.permission_state='VERIFIED'
  AND c.status='ACTIVE' AND NOT b.ownership_conflict AND NOT aa.ownership_conflict
@@ -94,7 +93,7 @@ AND EXISTS (SELECT 1 FROM bc_account_access a
  JOIN connection_authorization auth ON auth.tenant_id=r.tenant_id AND auth.connection_id=r.connection_id AND auth.authorization_revision=r.authorization_revision
  WHERE a.connection_id=u.connection_id AND c.kind=r.channel AND c.authorization_revision=r.authorization_revision AND c.adapter_contract_revision=r.adapter_contract_revision
  AND auth.source<>'UNKNOWN' AND auth.permission_summary->'read_authorized'='true'::jsonb
- AND auth.verified_at BETWEEN :cutoff AND :now AND a.checked_at BETWEEN :cutoff AND :now
+ AND auth.verified_at <= :now AND a.checked_at <= :now
  AND a.tenant_id=s.tenant_id AND a.bc_id=s.bc_id AND a.advertiser_id=u.advertiser_id
  AND a.in_bc AND a.authorized AND a.active
  AND c.status='ACTIVE' AND NOT b.ownership_conflict AND NOT aa.ownership_conflict
@@ -154,7 +153,6 @@ def _params(row: Submission) -> dict[str, Any]:
         "tenant": row.tenant_id,
         "submission": row.id,
         "now": now,
-        "cutoff": now - timedelta(seconds=settings.BC_CAPABILITY_MAX_AGE_SECONDS),
     }
 
 

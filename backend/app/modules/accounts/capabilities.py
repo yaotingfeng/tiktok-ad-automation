@@ -149,7 +149,7 @@ def _scope_flags(facts: AuthorizationFacts) -> tuple[bool, bool, bool]:
     # 业务层只消费适配器授权事实，不解密 token，也不把角色/工具存在当作 scope。
     age = (datetime.now(UTC) - facts.observed_at).total_seconds()
     known = (
-        0 <= age <= settings.BC_CAPABILITY_MAX_AGE_SECONDS
+        age >= 0
         and facts.evidence_source != "UNKNOWN"
         # 上传与搭建分别核实，不能因为另一项尚未知而永久封锁已接入的动作。
         and (facts.upload_authorized is not None or facts.build_authorized is not None)
@@ -223,7 +223,6 @@ def start_capability_refresh(
     from app.modules.accounts.runtime_directory import needs_directory_refresh
 
     current_facts_fresh = not needs_directory_refresh(session, route)
-    now = datetime.now(UTC)
     existing = session.exec(
         select(CapabilityJob)
         .where(
@@ -236,11 +235,7 @@ def start_capability_refresh(
             CapabilityJob.adapter_contract_revision == conn.adapter_contract_revision,
             CapabilityJob.directory_basis == basis,
             (col(CapabilityJob.status) == "PENDING")
-            | (
-                (col(CapabilityJob.status) == "COMPLETE")
-                & (col(CapabilityJob.expires_at) > now)
-                & current_facts_fresh
-            ),
+            | ((col(CapabilityJob.status) == "COMPLETE") & current_facts_fresh),
         )
         .order_by(col(CapabilityJob.created_at).desc())
         .limit(1)
@@ -345,7 +340,8 @@ def _validate(
     allow_expired_roles: bool = False,
 ) -> TikTokConnection:
     if (
-        not allow_expired_roles
+        job.status != "COMPLETE"
+        and not allow_expired_roles
         and job.expires_at is not None
         and job.expires_at <= datetime.now(UTC)
     ):
@@ -797,7 +793,6 @@ def get_capability_evidence(
         ).first()
         if grant is None:
             return None
-        now = datetime.now(UTC)
         statement = (
             select(CapabilityJob, CapabilityAsset.page, CapabilityAsset.role)
             .outerjoin(
@@ -815,7 +810,6 @@ def get_capability_evidence(
                 == conn.adapter_contract_revision,
                 CapabilityJob.status == "COMPLETE",
                 CapabilityJob.phase == "DONE",
-                col(CapabilityJob.expires_at) > now,
             )
             .order_by(col(CapabilityJob.completed_at).desc())
             .limit(1)

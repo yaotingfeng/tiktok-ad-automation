@@ -174,7 +174,9 @@ def test_credential_rotation_and_identical_evidence_keep_route(session, route_ca
 
 
 @pytest.mark.parametrize("kind", ["grant", "authorization"])
-def test_expired_evidence_blocks_accounts_but_not_bc_recheck(session, route_case, kind):
+def test_authorized_accounts_remain_usable_after_evidence_ages(
+    session, route_case, kind
+):
     context, _, grant, authorization = route_case
     route = frozen(session, route_case)
     stale = datetime.now(UTC) - timedelta(
@@ -185,18 +187,25 @@ def test_expired_evidence_blocks_accounts_but_not_bc_recheck(session, route_case
     else:
         authorization.verified_at = stale
     session.flush()
-    with pytest.raises(DomainError) as error:
+    for capability in ("read", "upload", "build"):
         verify_route(
             session,
             context=context,
             route=route,
             advertiser_id=grant.advertiser_id,
-            capability="read",
+            capability=capability,
         )
-    assert error.value.code == "route_evidence_stale"
     verify_route(
         session, context=context, route=route, advertiser_id=None, capability="read"
     )
+    from app.models import User
+    from app.modules.accounts.router import get_accounts
+
+    result = get_accounts(
+        context.tenant_id, session, session.get(User, context.actor_id), grant.bc_id
+    )
+    assert result.items[0].availability == "AVAILABLE"
+    assert result.items[0].can_upload and result.items[0].can_build
 
 
 @pytest.mark.parametrize("kind", ["scope", "role", "membership", "account", "missing"])

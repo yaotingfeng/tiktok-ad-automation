@@ -106,7 +106,9 @@ def test_evidence_rejects_stale_or_revoked_authority(
                 )
             ).one().can_build = False
     result = evidence(env)
-    if change == "grant":
+    if change == "expired":
+        assert result is not None and result.can_build and result.can_upload
+    elif change == "grant":
         assert result is not None and not result.can_build
     else:
         assert result is None

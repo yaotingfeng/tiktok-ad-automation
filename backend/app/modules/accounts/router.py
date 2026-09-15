@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session as SQLAlchemySession
 from sqlmodel import col, select
 
 from app.api.deps import CurrentUser, SessionDep
-from app.core.config import settings
 from app.core.errors import ERROR_HTTP_STATUS, DomainError
 from app.core.pagination import Page, count_rows
 from app.integrations.tiktok.auth import (
@@ -136,7 +135,6 @@ def get_accounts(
         col(AdvertiserAccount.remote_status).in_(OPERABLE_REMOTE_STATUSES),
     )
     now = datetime.now(UTC)
-    minimum = now - timedelta(seconds=settings.BC_CAPABILITY_MAX_AGE_SECONDS)
     authorization = (
         select(ConnectionAuthorization.id)
         .join(
@@ -157,10 +155,11 @@ def get_accounts(
             func.jsonb_array_length(col(ConnectionAuthorization.scopes)) > 0,
             ConnectionAuthorization.source != "UNKNOWN",
             ConnectionAuthorization.source != "",
-            col(ConnectionAuthorization.verified_at).between(minimum, now),
+            col(ConnectionAuthorization.verified_at) <= now,
         )
     )
-    live = live.where(col(BCAccountAccess.checked_at).between(minimum, now))
+    # 与执行入口一致：已核实账户不因经过 24 小时变为不可用。
+    live = live.where(col(BCAccountAccess.checked_at) <= now)
     # 共享授权可用不代表此 BC 同步/绑定仍有效。
     live = live.where(
         select(BCConnectionBinding.connection_id)

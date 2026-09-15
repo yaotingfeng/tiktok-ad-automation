@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 from sqlalchemy import case, func
 from sqlmodel import Session, col, select
 
-from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import ERROR_HTTP_STATUS
 from app.modules.accounts.connection_models import (
@@ -141,9 +140,7 @@ def enrich_connections(
                 item.status == "ACTIVE"
                 and bool(fact.scopes)
                 and fact.verified_at is not None
-                and 0
-                <= (now - fact.verified_at).total_seconds()
-                <= settings.BC_CAPABILITY_MAX_AGE_SECONDS
+                and fact.verified_at <= now
                 and fact.source
                 and fact.source != "UNKNOWN"
             ):

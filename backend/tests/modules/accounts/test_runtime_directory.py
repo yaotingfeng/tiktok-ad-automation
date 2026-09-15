@@ -29,7 +29,8 @@ def expired_env(capability_env, monkeypatch):
             )
         ).one()
         facts.upstream_subject = None
-        facts.verified_at = datetime.now(UTC) - timedelta(hours=5)
+        # 缺失首次确认仍需补齐；已确认记录不再按年龄失效。
+        facts.verified_at = None
     yield env
     with Session(engine) as session, session.begin():
         session.exec(
@@ -431,7 +432,7 @@ def test_current_authority_or_claim_change_after_http_blocks_stage_publication(
                 ConnectionAuthorization.connection_id == env["connection_id"]
             )
         ).one()
-        assert facts.verified_at < datetime.now(UTC) - timedelta(hours=4)
+        assert facts.verified_at is None
     assert len(wire[0]) == 1
 
 
@@ -468,7 +469,7 @@ def test_runtime_task_loader_and_queue_are_registered():
     assert task.acks_late and task.reject_on_worker_lost
 
 
-def test_completed_role_job_is_not_reused_when_authorization_facts_expire(
+def test_completed_role_job_is_reused_when_authorization_facts_age(
     capability_env, redis_client, wire, monkeypatch
 ):
     from uuid import uuid4
@@ -490,15 +491,7 @@ def test_completed_role_job_is_not_reused_when_authorization_facts_expire(
         ).one()
         facts.upstream_subject = None
         facts.verified_at = datetime.now(UTC) - timedelta(hours=5)
-    new_job = start({**env, "request_id": uuid4()})
-    assert new_job != old_job
-    run(env, redis_client, new_job)
-    with Session(engine) as session:
-        assert session.exec(
-            select(DiscoveryRun).where(
-                DiscoveryRun.connection_id == env["connection_id"]
-            )
-        ).one().work["capability_job_id"] == str(new_job)
+    assert start({**env, "request_id": uuid4()}) == old_job
 
 
 def test_recovery_reclaims_expired_claim_and_duplicate_delivery_does_not_create_run(
@@ -751,7 +744,7 @@ def test_missing_exact_role_total_does_not_publish_fresh_authorization(
                 ConnectionAuthorization.connection_id == env["connection_id"]
             )
         ).one()
-        assert facts.verified_at < datetime.now(UTC) - timedelta(hours=4)
+        assert facts.verified_at is None
 
 
 def test_complete_authorized_set_restricts_other_bc_only_on_same_connection(

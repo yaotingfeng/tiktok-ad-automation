@@ -142,9 +142,12 @@ def reserve_object(
         return True
     global_budget, tenant_budget = _budgets(session, obj.tenant_id)
     if (
-        global_budget.reserved_bytes + byte_size
+        settings.MATERIAL_STORAGE_GLOBAL_BYTES > 0
+        and global_budget.reserved_bytes + byte_size
         > settings.MATERIAL_STORAGE_GLOBAL_BYTES
-        or tenant_budget.reserved_bytes + byte_size
+    ) or (
+        settings.MATERIAL_STORAGE_TENANT_BYTES > 0
+        and tenant_budget.reserved_bytes + byte_size
         > settings.MATERIAL_STORAGE_TENANT_BYTES
     ):
         return False

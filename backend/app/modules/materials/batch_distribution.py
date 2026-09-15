@@ -497,7 +497,7 @@ def _send_batch(
                             capability=capability,
                         )
                     seen_targets.add(dist.advertiser_id)
-            verifier.recheck_freshness()
+            verifier.recheck_transaction()
 
     try:
         check_current()

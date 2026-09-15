@@ -79,7 +79,7 @@ def complete(session, context, route, *, age=0, **changes):
     return run
 
 
-def test_other_bc_completion_does_not_make_stale_bc_directory_fresh(
+def test_each_completed_bc_directory_remains_usable_without_age_limit(
     session, freshness_case
 ):
     context, _, _, routes = freshness_case
@@ -88,7 +88,7 @@ def test_other_bc_completion_does_not_make_stale_bc_directory_fresh(
         session, context, routes["bc-b"], age=settings.BC_CAPABILITY_MAX_AGE_SECONDS + 1
     )
     assert not needs_directory_refresh(session, routes["bc-a"])
-    assert needs_directory_refresh(session, routes["bc-b"])
+    assert not needs_directory_refresh(session, routes["bc-b"])
 
 
 @pytest.mark.parametrize(
@@ -133,7 +133,7 @@ def test_empty_complete_bc_and_normal_token_rotation_keep_directory_fresh(
     assert not needs_directory_refresh(session, routes["bc-a"])
 
 
-def test_expired_shared_subject_still_requires_observation(session, freshness_case):
+def test_aged_shared_subject_does_not_require_observation(session, freshness_case):
     context, _, facts, routes = freshness_case
     complete(session, context, routes["bc-a"])
     facts.verified_at = datetime.now(UTC) - timedelta(
@@ -141,7 +141,7 @@ def test_expired_shared_subject_still_requires_observation(session, freshness_ca
     )
     session.add(facts)
     session.flush()
-    assert needs_directory_refresh(session, routes["bc-a"])
+    assert not needs_directory_refresh(session, routes["bc-a"])
 
 
 def test_api_freshness_keeps_existing_authorization_semantics(session):
@@ -173,4 +173,4 @@ def test_api_freshness_keeps_existing_authorization_semantics(session):
     )
     session.add(facts)
     session.flush()
-    assert needs_directory_refresh(session, route)
+    assert not needs_directory_refresh(session, route)

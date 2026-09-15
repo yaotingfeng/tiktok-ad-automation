@@ -35,6 +35,20 @@ def budget_fixture(session, context):
     return batch, obj
 
 
+def test_unlimited_storage_still_accounts_for_originals(session, context, monkeypatch):
+    batch, obj = budget_fixture(session, context)
+    monkeypatch.setattr(settings, "MATERIAL_STORAGE_GLOBAL_BYTES", 0)
+    monkeypatch.setattr(settings, "MATERIAL_STORAGE_TENANT_BYTES", 0)
+    assert reserve_object(
+        session, context=context, object_id=obj.id, byte_size=obj.expected_bytes
+    )
+    mark_object_stored(
+        session, context=context, object_id=obj.id, actual_bytes=obj.expected_bytes
+    )
+    session.refresh(batch)
+    assert batch.reserved_bytes == batch.stored_bytes == obj.expected_bytes
+
+
 def test_reservation_is_idempotent_and_stored_is_subset(session, context, monkeypatch):
     batch, obj = budget_fixture(session, context)
     monkeypatch.setattr(settings, "MATERIAL_STORAGE_GLOBAL_BYTES", 8_000_000_000)

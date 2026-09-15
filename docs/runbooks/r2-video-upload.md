@@ -16,8 +16,8 @@
 | `MATERIAL_INGEST_ENABLED` | `False` | 允许新导入受理、Create、签名、Complete；关闭后保留已有发送记录的只读回查 |
 | `MATERIAL_CLEANUP_ENABLED` | `False` | 独立控制新自动删除；已发送删除的核实仍需运行 |
 | `MATERIAL_URL_MAX_UPLOAD_BYTES` | `1073741824`（1 GiB / 1024 MiB） | 本次 URL 上传本地保护上限；不代表 TikTok 官方上限或大文件验收通过 |
-| `MATERIAL_STORAGE_GLOBAL_BYTES` | `8589934592`（8 GiB） | 所有租户合计的原件瞬时预留窗口 |
-| `MATERIAL_STORAGE_TENANT_BYTES` | `2147483648`（2 GiB） | 同租户所有 BC 合计窗口，不能按 BC 再获得一份额度 |
+| `MATERIAL_STORAGE_GLOBAL_BYTES` | `0`（不限制） | 所有租户合计原件窗口；正数可显式设置字节上限 |
+| `MATERIAL_STORAGE_TENANT_BYTES` | `0`（不限制） | 同租户所有 BC 合计原件窗口；正数可显式设置字节上限 |
 | `MATERIAL_PART_URL_SECONDS` | `900` | 分片签名有效期，60–900 秒 |
 | `MATERIAL_INGEST_URL_SECONDS` | `7200` | 平台读取原件 GET 签名有效期，60–7200 秒；不是远端任务终止证明 |
 | `MATERIAL_VALIDATION_SECONDS` | `300` | 原件读取/摘要/媒体校验时间界限，30–600 秒 |
@@ -27,6 +27,8 @@
 | `MATERIAL_SDK_UPLOAD_MAX_INFLIGHT` | `1` | 既有文件 SDK 的进程内上限；不等于整机/全租户吞吐保证 |
 
 `reserved_bytes` 是整个已准入文件的占用，直到删除/分片关闭得到可靠证据后释放；`stored_bytes` 是其中已完整接收的子集，不能把二者相加计算配额。等待容量的已受理文件保留名称、大小、client_index 等元数据，但不发 Create 或签名。关闭弹窗/刷新不代表可以释放额度。
+
+`0` 取消应用对 R2 临时原件总量的拦截，仍保留计数、并发上传限制和正常清理。它不是无限服务器磁盘或对象存储套餐承诺。已有环境须显式把全局及租户两项都改为 `0` 并重载全部服务，旧正数不会被默认值覆盖；浏览器仍须为未接收文件提供原文件。
 
 每代原件固定 provider、endpoint、bucket、tenant、BC、material、generation 和对象键。更换部署桶或账户不能使旧原件自动改用新桶清理。历史 namespace 未知对象需显式归属与摘要验证，不能凭迁移把它们变成可删除对象。
 

@@ -107,9 +107,9 @@ def test_connection_directory_exposes_scoped_default_and_current_facts(
     later = client.get(
         path, params={"bc_id": grant.bc_id}, headers=headers(context)
     ).json()["items"][0]
-    assert later["read_authorized"] is None
-    assert later["upload_authorized"] is None
-    assert later["build_authorized"] is None
+    assert later["read_authorized"] is True
+    assert later["upload_authorized"] == item["upload_authorized"]
+    assert later["build_authorized"] == item["build_authorized"]
 
 
 def test_account_directory_does_not_borrow_other_connection_permissions(
