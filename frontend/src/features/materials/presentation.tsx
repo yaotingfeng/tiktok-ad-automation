@@ -67,6 +67,12 @@ export function CopyValue({ value, label }: { value: string; label?: string }) {
   )
 }
 const errors: Record<string, string> = {
+  bc_default_connection_required:
+    "请先到“账户与授权 → 广告账户”为当前 BC 设置使用授权。",
+  connection_unavailable:
+    "当前授权不可用，请到“账户与授权”检查授权状态；已有上传任务保留原授权。",
+  connection_bc_mismatch:
+    "此授权尚未完成当前 BC 的接入，请到“账户与授权 → 授权管理”检查同步状态。",
   material_channel_unverified:
     "当前执行连接的素材入库能力尚未完成核验，原文件已保留，无需重复上传。",
   capability_scope_unknown: "当前执行连接的上传权限尚未核实，原文件已保留。",

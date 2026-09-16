@@ -26,6 +26,7 @@ export function ManagementSheet({
   dirty,
   pending = false,
   wide = false,
+  className,
   onClose,
   children,
   actions,
@@ -35,6 +36,7 @@ export function ManagementSheet({
   dirty: boolean
   pending?: boolean
   wide?: boolean
+  className?: string
   onClose: () => void
   children: ReactNode
   actions?: ReactNode
@@ -65,7 +67,11 @@ export function ManagementSheet({
         }}
       >
         <SheetContent
-          className={cn("w-full", wide ? "sm:max-w-3xl" : "sm:max-w-xl")}
+          className={cn(
+            "w-full",
+            wide ? "sm:max-w-3xl" : "sm:max-w-xl",
+            className,
+          )}
           onOpenAutoFocus={() => {
             opener.current =
               document.activeElement instanceof HTMLElement

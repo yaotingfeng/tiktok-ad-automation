@@ -205,7 +205,7 @@ export function ConnectionsPage() {
             </strong>
             <span className="text-xs text-muted-foreground">
               {row.original.kind === "OFFICIAL_MCP" ? "官方 MCP" : "官方 API"}
-              {row.original.is_default ? " · 已有 BC 设为默认执行连接" : ""}
+              {row.original.is_default ? " · 已有 BC 使用此授权" : ""}
             </span>
             <Identifier value={row.original.id} />
           </div>
@@ -476,8 +476,8 @@ export function ConnectionsPage() {
               官方 MCP
             </Button>
             <p className="text-sm text-muted-foreground">
-              每种通道独立授权，同一授权可接入多个 BC。管理员分别为各 BC
-              选择默认执行连接。
+              每种通道独立授权，同一授权可接入多个 BC。管理员在“广告账户”页为各
+              BC 设置使用授权。
             </p>
           </div>
         </ManagementSheet>
@@ -691,25 +691,15 @@ function ConnectionDetails({
       await queryClient.invalidateQueries({ queryKey: ["tenant", tenantId] })
     },
   })
-  const defaultMutation = useMutation({
-    mutationFn: async (bcId: string) => {
-      await AccountsService.putDefaultConnection({
-        path: { tenant_id: tenantId!, bc_id: bcId },
-        body: { connection_id: detail.id },
-      })
-      await queryClient.invalidateQueries({ queryKey: ["tenant", tenantId] })
-    },
-  })
   const manage =
     canManage(scope?.role) &&
     !isForbidden(query.error) &&
-    !isForbidden(defaultMutation.error) &&
     !isForbidden(bcMutation.error)
   const columns: ColumnDef<BCPublic>[] = [
     {
       header: "关联 BC",
       cell: ({ row }) => (
-        <div>
+        <div className="min-w-48 max-w-64 whitespace-normal wrap-anywhere">
           {row.original.name || "未命名 BC"}
           <Identifier value={row.original.bc_id} />
         </div>
@@ -721,27 +711,12 @@ function ConnectionDetails({
         row.original.ownership_conflict ? "存在归属冲突" : "当前租户",
     },
     {
-      header: "默认执行连接",
+      header: "BC 使用授权",
       cell: ({ row }) =>
         row.original.is_default ? (
-          <Badge variant="outline">当前默认</Badge>
-        ) : manage ? (
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={
-              detail.status !== "ACTIVE" ||
-              (!!row.original.binding_status &&
-                row.original.binding_status !== "ACTIVE") ||
-              row.original.ownership_conflict ||
-              defaultMutation.isPending
-            }
-            onClick={() => defaultMutation.mutate(row.original.bc_id)}
-          >
-            设为默认执行连接
-          </Button>
+          <Badge variant="outline">当前使用</Badge>
         ) : (
-          "未设为默认"
+          "未使用此授权"
         ),
     },
   ]
@@ -809,8 +784,9 @@ function ConnectionDetails({
     <ManagementSheet
       title="连接详情"
       description="当前租户的授权连接信息，不包含任何凭据"
+      className="sm:max-w-5xl"
       dirty={false}
-      pending={bcMutation.isPending || defaultMutation.isPending}
+      pending={bcMutation.isPending}
       onClose={onClose}
     >
       <div className="flex flex-col gap-5">
@@ -892,19 +868,15 @@ function ConnectionDetails({
             </AlertDescription>
           </Alert>
         )}
-        {defaultMutation.error && (
-          <Alert variant="destructive">
-            <AlertTitle>默认连接未更改</AlertTitle>
-            <AlertDescription>
-              {errorMessage(defaultMutation.error)}
-            </AlertDescription>
-          </Alert>
-        )}
         <p className="text-sm text-muted-foreground">
-          默认连接用于此 BC 后续新建的任务；已准备的任务继续使用其原连接。
+          如需更换 BC 使用的授权，请切换到该
+          BC，在“广告账户”页统一设置。已准备的任务继续使用其原授权。
         </p>
         <section className="flex min-w-0 flex-col gap-4">
           <h2 className="font-semibold">关联 BC</h2>
+          <p className="text-xs text-muted-foreground sm:hidden">
+            可左右滑动表格查看全部内容与 BC 操作。
+          </p>
           <ServerTable
             rows={data?.items ?? []}
             columns={columns}

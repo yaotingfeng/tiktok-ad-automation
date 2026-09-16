@@ -147,6 +147,12 @@ export function BuildSteps({ step }: { step: 1 | 2 | 3 }) {
 }
 
 export const reasonLabels: Record<string, string> = {
+  bc_default_connection_required:
+    "请先到“账户与授权 → 广告账户”为当前 BC 设置使用授权。",
+  connection_unavailable:
+    "当前授权不可用，请到“账户与授权”检查授权状态。已准备的任务仍保留原授权。",
+  connection_bc_mismatch:
+    "此授权尚未完成当前 BC 的接入，请到“账户与授权 → 授权管理”检查同步状态。",
   manual_link_mapping_required: "剧名已变化，请更新对应的手动链接。",
   manual_link_required: "请补充推广链接。",
   manual_link_invalid: "请填写有效的 TikTok Minis 推广链接。",

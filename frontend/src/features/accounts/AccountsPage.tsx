@@ -17,7 +17,6 @@ import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ManagementSheet } from "@/features/tenants/ManagementSheet"
 import {
-  isForbidden,
   Pager,
   RequestError,
   ServerTable,
@@ -26,7 +25,7 @@ import {
 } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
-import { BCConnectionPicker, useBCConnections } from "./BCConnectionPicker"
+import { BCAuthorization } from "./BCAuthorization"
 import { ConnectionsPage } from "./ConnectionsPage"
 import {
   availabilityLabels,
@@ -62,8 +61,8 @@ export function AccountsPage() {
         }}
       >
         <TabsList>
-          <TabsTrigger value="accounts">账户</TabsTrigger>
-          <TabsTrigger value="connections">授权连接</TabsTrigger>
+          <TabsTrigger value="accounts">广告账户</TabsTrigger>
+          <TabsTrigger value="connections">授权管理</TabsTrigger>
         </TabsList>
         <TabsContent value="accounts">
           <AccountDirectory key={`${tenantId}:${bc?.bc_id ?? "none"}`} />
@@ -78,29 +77,14 @@ export function AccountsPage() {
 function AccountDirectory() {
   const { tenantId, bc, bcPending, bcError, retryBC } = useTenantScope()
   const queryClient = useQueryClient()
-  const [selected, setSelected] = useState<string | null>(null)
   useEffect(() => {
     void queryClient.invalidateQueries({
       queryKey: ["tenant", tenantId, "bcs"],
     })
   }, [tenantId, queryClient])
-  const connections = useBCConnections(tenantId, bc?.bc_id)
-  const items = connections.data?.pages.flatMap((page) => page.items) ?? []
-  // 只采用服务端明确默认值；没有默认时由用户选择，不能退到列表第一条。
-  const connectionId =
-    selected ??
-    bc?.default_connection_id ??
-    items.find((item) => item.is_default)?.id
+  // 账户查询与新上传、搭建共用 BC 配置，不再保留页面临时选择。
+  const connectionId = bc?.default_connection_id
   if (bcError) return <RequestError error={bcError} retry={retryBC} />
-  if (isForbidden(connections.error))
-    return (
-      <RequestError
-        error={connections.error}
-        retry={() => {
-          void connections.refetch()
-        }}
-      />
-    )
   if (!bc && !bcPending)
     return (
       <Empty>
@@ -108,27 +92,19 @@ function AccountDirectory() {
           <EmptyTitle>当前没有可用 BC</EmptyTitle>
           <EmptyDescription>
             请切换 BC
-            或在“授权连接”查看接入状态。目录不会因打开页面自动发现账户。
+            或在“授权管理”查看接入状态。目录不会因打开页面自动发现账户。
           </EmptyDescription>
         </EmptyHeader>
       </Empty>
     )
   return (
     <div className="flex min-w-0 flex-col gap-4">
-      <BCConnectionPicker
-        query={connections}
-        value={connectionId}
-        onChange={setSelected}
-        label="查看账户的连接"
-        id="account-connection"
-      />
-      {connectionId && !connections.error ? (
+      {bc && <BCAuthorization />}
+      {connectionId ? (
         <AccountRows key={connectionId} connectionId={connectionId} />
       ) : (
         <p role="status" className="text-sm text-muted-foreground">
-          {connections.isPending
-            ? "正在读取当前 BC 的连接…"
-            : "请先选择查看账户的连接"}
+          {bcPending ? "正在读取当前 BC…" : "设置使用授权后即可查看广告账户"}
         </p>
       )}
     </div>

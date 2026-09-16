@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
-import { useNavigate } from "@tanstack/react-router"
+import { Link, useNavigate } from "@tanstack/react-router"
 import { AxiosError } from "axios"
 import { useEffect, useRef, useState } from "react"
 import { flushSync } from "react-dom"
@@ -17,10 +17,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import {
-  BCConnectionPicker,
-  useBCConnections,
-} from "@/features/accounts/BCConnectionPicker"
 import { versionQuery } from "@/features/strategies/queries"
 import { normalizeDecimal } from "@/features/strategies/validation"
 import { DirectoryPicker } from "@/features/tenants/DirectoryPicker"
@@ -43,7 +39,6 @@ type Values = {
   drama: string
   account: string
   connection: string
-  executionConnection: string
   application: string
   version: string
 }
@@ -88,7 +83,6 @@ export function BuildInputPage({
       : summary?.provider_connection_id || "",
     customProvider: summary?.custom_provider_name || "",
     manualLinks: original?.manualLinks || [],
-    executionConnection: summary?.execution_connection_id || "",
     application: summary?.application_id || "",
     version: summary?.strategy_version_id || "",
   })
@@ -115,7 +109,6 @@ export function BuildInputPage({
     ...versionQuery(tenantId, values.version),
     enabled: !!values.version,
   })
-  const executionConnections = useBCConnections(tenantId, bcId, true)
   const dirty = JSON.stringify(values) !== JSON.stringify(initial.current)
   const disabled = busy || !!pending || !write || forbidden
   const change = (patch: Partial<Values>) =>
@@ -185,7 +178,8 @@ export function BuildInputPage({
     setError(undefined)
     try {
       if (summary) {
-        if (!dirty) {
+        // 编辑旧草稿后统一使用 BC 配置；原预览和已执行任务的冻结授权不变。
+        if (!dirty && !summary.execution_connection_id) {
           onSaved?.(prepare)
           return
         }
@@ -211,7 +205,7 @@ export function BuildInputPage({
                   ? values.customProvider.trim()
                   : null,
               manual_links: manualLinks,
-              execution_connection_id: values.executionConnection || null,
+              execution_connection_id: null,
               application_id:
                 values.connection === "other" ? null : values.application,
               drama_lines: values.drama.split("\n"),
@@ -250,7 +244,7 @@ export function BuildInputPage({
                   ? values.customProvider.trim()
                   : null,
               manual_links: manualLinks,
-              execution_connection_id: values.executionConnection || null,
+              execution_connection_id: null,
               application_id:
                 values.connection === "other" ? null : values.application,
               drama_lines: values.drama.split("\n"),
@@ -339,35 +333,18 @@ export function BuildInputPage({
       <Card className="min-w-0">
         <CardContent>
           <FieldGroup className="grid min-w-0 gap-6 md:grid-cols-3">
-            <div className="flex flex-col gap-2 md:col-span-3">
-              <BCConnectionPicker
-                key={`${tenantId}:${bcId}`}
-                query={executionConnections}
-                value={values.executionConnection}
-                onChange={(id) => change({ executionConnection: id || "" })}
-                label="执行连接"
-                id="build-execution-connection"
-                disabled={disabled}
-                allowDefault
-              />
-              {values.executionConnection && (
-                <Button
-                  type="button"
-                  variant="link"
-                  className="self-start"
-                  disabled={disabled}
-                  onClick={() => {
-                    change({ executionConnection: "" })
-                    setLabels((l) => ({ ...l, executionConnection: "" }))
-                  }}
-                >
-                  使用 BC 默认连接
-                </Button>
-              )}
-              <p className="text-xs text-muted-foreground">
-                连接会在开始准备时固定，并显示在预览中。改变选择只影响新的准备。
-              </p>
-            </div>
+            <p className="text-sm text-muted-foreground md:col-span-3">
+              使用当前 BC 设置的授权，在开始准备时固定。如需更换，请前往
+              <Link
+                className="underline underline-offset-4"
+                to="/tenants/$tenantId/accounts"
+                params={{ tenantId }}
+                search={{ bc_id: bcId, tab: "accounts" }}
+              >
+                账户与授权
+              </Link>
+              。
+            </p>
             <Field>
               <FieldLabel>版权方连接</FieldLabel>
               <DirectoryPicker<ProviderConnectionPublic>

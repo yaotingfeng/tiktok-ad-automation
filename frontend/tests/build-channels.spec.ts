@@ -169,12 +169,13 @@ test("仍在运行的独立核查不能再次排队", async ({ page }) => {
   expect(api.requests.filter((r) => r.method === "POST")).toHaveLength(1)
 })
 
-test("新草稿可选择当前 BC 的 MCP 连接并随原输入保存", async ({ page }) => {
+test("新草稿统一使用 BC 配置，不提供执行连接选择", async ({ page }) => {
   const api = await buildsBoundary(page)
   await page.goto(`/tenants/${T}/builds/new?bc_id=${BC}`)
   await pickInputs(page)
-  await page.getByRole("combobox", { name: "执行连接", exact: true }).click()
-  await page.getByRole("option").filter({ hasText: "MCP 搭建连接" }).click()
+  await expect(
+    page.getByRole("combobox", { name: "执行连接", exact: true }),
+  ).toHaveCount(0)
   await page.getByRole("button", { name: "保存草稿", exact: true }).click()
   await expect
     .poll(
@@ -183,23 +184,20 @@ test("新草稿可选择当前 BC 的 MCP 连接并随原输入保存", async ({
           (r) => r.method === "POST" && r.path.endsWith("/build-drafts"),
         )?.body.execution_connection_id,
     )
-    .toBe(S)
+    .toBe(null)
   expect(
     api.requests.filter(
       (r) => r.path.endsWith("/connections") && !r.path.includes("/providers/"),
     ),
-  ).toHaveLength(1)
+  ).toHaveLength(0)
 })
 
-test("编辑草稿可清除指定连接并明确发送默认偏好", async ({ page }) => {
+test("编辑旧草稿保存时清除单独指定的授权", async ({ page }) => {
   const api = await buildsBoundary(page, { executionConnectionId: S })
   await page.goto(`/tenants/${T}/build-drafts/${D}?bc_id=${BC}&edit=true`)
   await expect(
     page.getByRole("combobox", { name: "执行连接", exact: true }),
-  ).toContainText(S)
-  await page
-    .getByRole("button", { name: "使用 BC 默认连接", exact: true })
-    .click()
+  ).toHaveCount(0)
   await page.getByRole("button", { name: "保存草稿", exact: true }).click()
   await expect
     .poll(
