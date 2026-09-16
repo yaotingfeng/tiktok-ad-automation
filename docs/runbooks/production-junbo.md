@@ -35,7 +35,7 @@
 
 - 2026-09-10 产品显示名称更新为 `TK-ADA`。既有 `/opt/tt-ada` 路径、`tt-ada-production` 项目名、镜像前缀、备份服务和持久卷继续使用原技术标识，避免因名称变更创建新的数据库/队列。仅同步私有配置 `PROJECT_NAME`，不重置账号或密钥。
 
-- 截至首发，仓库只有已发布的默认分支 `feat/platform-implementation`，没有 `main`；本次按现有分支提交和推送，不擅自创建分支。以后若用户建立 main，应先核对祖先关系和测试记录，再按仓库默认规则发布 main。
+- 后续统一从 `main` 选择已推送、验证通过的固定提交发布。2026-09-16 已将本地历史集成分支 `feat/platform-implementation` 原位更名为 `main`，代码基线与原分支一致；远端切换状态见[分支整理记录](../validation/2026-09-16-branch-cleanup.md)。首发使用旧分支的记录仅作为历史证据。
 - 每次发布以完整 40 位 Git SHA 为单位。只打包已提交、已推送并通过相关检查的源代码；禁止把整个本地目录、`.env`、`.runtime`、`.worktrees`、会话、上传视频或本地数据库复制到生产。
 - 生产源码：`/opt/tt-ada/releases/<SHA>`，发布后不可原地编辑；应用镜像 `tt-ada:<SHA>` 不覆盖旧 tag。数据库、Redis 及环境配置独立于版本目录。
 - `/opt/tt-ada/current` 仅在新版本启动及验收通过后切换。备份在 `/opt/tt-ada/backups`，目录 0700、文件 0600，仅 root 可读。

@@ -1,5 +1,11 @@
 # 发布与部署
 
+## 发布主分支
+
+`main` 是唯一长期维护和服务器发布的主分支。功能与修复完成相关验证后合并到 `main`，推送仍需用户明确授权；发布选择已经推送、验证通过的 `main` 完整 40 位提交 SHA，按目标环境手册执行备份、迁移、切换和验收。合并、推送或清理分支本身不触发服务器发布。
+
+历史集成分支 `feat/platform-implementation` 于 2026-09-16 在本地原位更名为 `main`，业务代码基线保持 `4f571406cab2690d04a2be16d18df042ef70ffe7`。远端主分支切换及旧分支清理状态见[整理记录](../validation/2026-09-16-branch-cleanup.md)。
+
 新加坡独立测试服务器使用无 Docker 的 systemd 部署，操作遵循 [staging-singapore.md](staging-singapore.md)。
 
 骏伯生产环境使用独立 8000 HTTPS 入口，发布与数据库操作必须遵循 [production-junbo.md](production-junbo.md)，不执行下面的通用 staging 命令。首次生产验收见 [发布记录](../validation/2026-09-10-production-release.md)。真实 TikTok 联调仍需单独完成。
