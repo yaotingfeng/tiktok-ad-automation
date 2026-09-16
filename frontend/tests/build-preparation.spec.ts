@@ -1637,10 +1637,12 @@ for (const width of [1440, 390]) {
     const material = (n: number) => ({
       material_id: `99999999-9999-4999-8999-${String(n).padStart(12, "0")}`,
       file_name: n === 1 ? "完整剧名1-01.mp4" : `补充素材-${n}.mp4`,
+      content_key: `material:99999999-9999-4999-8999-${String(n).padStart(12, "0")}`,
+      bc_id: "origin-bc",
     })
     await page.route(`**/tenants/${tenant}/materials?**`, (route) => {
       const params = new URL(route.request().url()).searchParams
-      expect(params.get("bc_id")).toBe(bc)
+      expect(params.get("bc_id")).toBeNull()
       const searching = params.get("query") === "尾页"
       const tail = params.get("cursor") === "tail"
       return route.fulfill({
@@ -1731,6 +1733,8 @@ test("批量添加素材取消与清空不修改分组，长列表底部操作�
       json: {
         items: names.map((file_name, n) => ({
           material_id: `new-${n}`,
+          content_key: `material:new-${n}`,
+          bc_id: "origin-bc",
           file_name,
         })),
         next_cursor: null,
@@ -1773,4 +1777,44 @@ test("批量添加素材取消与清空不修改分组，长列表底部操作�
   await expect(picker).toHaveCount(0)
   await expect(sheet).toBeVisible()
   expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
+})
+
+test("tenant picker treats historical filename aliases as one selection across searches", async ({
+  page,
+}) => {
+  await buildsBoundary(page)
+  await page.route(`**/tenants/${tenant}/materials?**`, (route) => {
+    const search = new URL(route.request().url()).searchParams.get("query")
+    return route.fulfill({
+      json: {
+        items: [
+          {
+            material_id: search ? "alias-b" : "alias-a",
+            file_name: search ? "历史别名B.mp4" : "历史别名A.mp4",
+            bc_id: "origin-bc",
+            content_key: "sha256:verified-content",
+          },
+        ],
+        next_cursor: null,
+        total: 1,
+      },
+    })
+  })
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await page.getByRole("button", { name: "查看与调整素材" }).first().click()
+  await page.getByRole("button", { name: "添加素材", exact: true }).click()
+  const picker = page.getByRole("dialog", { name: "添加素材", exact: true })
+  await picker
+    .getByRole("checkbox", { name: "历史别名A.mp4", exact: true })
+    .check()
+  await picker.getByLabel("搜索素材", { exact: true }).fill("别名")
+  await picker.getByRole("button", { name: "搜索", exact: true }).click()
+  await expect(
+    picker.getByRole("checkbox", { name: "历史别名B.mp4", exact: true }),
+  ).toBeChecked()
+  await expect(picker.getByText("已选 1 条", { exact: true })).toBeVisible()
+  await picker
+    .getByRole("checkbox", { name: "历史别名B.mp4", exact: true })
+    .uncheck()
+  await expect(picker.getByText("已选 0 条", { exact: true })).toBeVisible()
 })

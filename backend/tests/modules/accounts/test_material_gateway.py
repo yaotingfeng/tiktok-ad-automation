@@ -280,7 +280,6 @@ def test_preview_revalidates_frozen_authority_after_actual_http(
         "database_engine": database_engine,
         "redis_client": redis_client,
         "context": context,
-        "bc_id": route.bc_id,
         "material_id": material_id,
     }
     if change == "credential":
@@ -329,7 +328,6 @@ def test_initial_preview_source_selection_has_the_same_absolute_deadline(
                 database_engine=database_engine,
                 redis_client=redis_client,
                 context=context,
-                bc_id=route.bc_id,
                 material_id=source_material[0],
             )
             try:
@@ -368,7 +366,6 @@ def test_short_mcp_token_queues_only_credential_refresh_not_material_work(
             database_engine=database_engine,
             redis_client=redis_client,
             context=context,
-            bc_id=route.bc_id,
             material_id=source_material[0],
         )
     assert error.value.code == "mcp_refresh_pending"
@@ -380,3 +377,65 @@ def test_short_mcp_token_queues_only_credential_refresh_not_material_work(
             )
         ).all()
         assert tasks == ["accounts.refresh_mcp"]
+
+
+@pytest.mark.parametrize(
+    "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
+)
+def test_tenant_preview_uses_authorized_actual_bc_when_origin_has_no_source(
+    database_engine, redis_client, gateway_case, gateway_wire, source_material
+):
+    from app.modules.accounts.models import TenantBC
+    from app.modules.materials.catalog import remote_preview
+
+    context, route, advertiser = gateway_case
+    material_id, _ = source_material
+    with Session(database_engine) as db, db.begin():
+        db.add(TenantBC(tenant_id=context.tenant_id, bc_id="historical-origin"))
+        db.flush()
+        db.get(MaterialFile, material_id).bc_id = "historical-origin"
+    data = {
+        "list": [
+            {
+                "advertiser_id": advertiser,
+                "video_id": "source-video",
+                "signature": "a" * 32,
+                "size": 120,
+                "width": 1080,
+                "height": 1920,
+                "duration": 4.5,
+                "format": "mp4",
+                "displayable": True,
+                "preview_url": "https://media.example.com/video?signature=private",
+            }
+        ]
+    }
+    gateway_wire["sdk_data"]["data"] = data
+    tool = next(
+        contract.tool_name
+        for contract in load_tool_contracts()
+        if contract.operation == "materials.get_videos"
+    )
+    gateway_wire["wire"].results[tool].append(
+        {"content": [], "structuredContent": {"code": 0, "data": data}}
+    )
+    preview = remote_preview(
+        database_engine=database_engine,
+        redis_client=redis_client,
+        context=context,
+        material_id=material_id,
+    )
+    assert preview.bc_id == route.bc_id
+    assert preview.advertiser_id == advertiser
+    assert preview.video_id == "source-video"
+    assert len(business_calls(gateway_wire, route.channel)) == 1
+    with Session(database_engine) as db:
+        assert db.get(MaterialFile, material_id).bc_id == "historical-origin"
+        assert (
+            db.exec(
+                select(PendingDispatch).where(
+                    PendingDispatch.tenant_id == context.tenant_id
+                )
+            ).all()
+            == []
+        )

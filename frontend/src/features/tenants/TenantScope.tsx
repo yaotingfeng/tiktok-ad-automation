@@ -59,6 +59,7 @@ export function TenantScopeProvider({
     select: (state) =>
       state.location.search as {
         bc_id?: string
+        batch_id?: string
         tab?: "accounts" | "connections"
       },
   })
@@ -127,6 +128,9 @@ export function TenantScopeProvider({
       search: {
         bc_id: target.bc_id,
         ...(searchParams.tab ? { tab: searchParams.tab } : {}),
+        ...(pathname.endsWith("/materials") && searchParams.batch_id
+          ? { batch_id: searchParams.batch_id }
+          : {}),
       },
     })
   }

@@ -66,7 +66,7 @@ def test_lost_create_response_lookup_returns_original_batch_without_writes(
         )
 
 
-def test_batch_directory_pages_205_batches_with_sql_counts_and_scope_cursor(
+def test_batch_directory_pages_all_bcs_with_sql_counts_and_scope_cursor(
     api, upload_owner, monkeypatch
 ):
     client, s3, path = api
@@ -108,8 +108,7 @@ def test_batch_directory_pages_205_batches_with_sql_counts_and_scope_cursor(
                         expected_size=10,
                     )
                 )
-            if index < 205:
-                expected.append((batch.created_at, batch.id, 1 + index % 3))
+            expected.append((batch.created_at, batch.id, 1 + index % 3))
         session.get(
             TenantMembership, (upload_owner.tenant_id, upload_owner.actor_id)
         ).role = "viewer"
@@ -146,11 +145,11 @@ def test_batch_directory_pages_205_batches_with_sql_counts_and_scope_cursor(
                     path + "/upload-batches",
                     params={"bc_id": "bc-other", "cursor": cursor},
                 ).status_code
-                == 422
+                == 200
             )
     finally:
         event.remove(engine, "before_cursor_execute", observe)
-    assert sizes == [100, 100, 5]
+    assert sizes == [100, 100, 6]
     expected.sort(reverse=True)
     assert [(row["batch_id"], row["file_count"]) for row in found] == [
         (str(identity), count) for _, identity, count in expected
@@ -257,12 +256,7 @@ def test_preview_enforces_bc_permission_and_safe_configuration_errors(
     identity = mark_stored(client, path)
     with Session(engine) as session, session.begin():
         session.add(TenantBC(tenant_id=upload_owner.tenant_id, bc_id="bc-other"))
-    assert (
-        client.get(
-            f"{path}/{identity}/preview", params={"bc_id": "bc-other"}
-        ).status_code
-        == 404
-    )
+    assert client.get(f"{path}/{identity}/preview").status_code == 200
     assert (
         client.get(f"{path}/{uuid4()}/preview", params={"bc_id": "bc-a"}).status_code
         == 404

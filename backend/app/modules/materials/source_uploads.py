@@ -114,11 +114,12 @@ def reserve_asset_operation(
     material = _material(
         session, context, material_id, action=action, require_stored=action == "upload"
     )
+    operation_bc = material.bc_id if action == "upload" else route.bc_id
     require_material_route(
         session,
         context=context,
         route=route,
-        bc_id=material.bc_id,
+        bc_id=operation_bc,
         advertiser_id=advertiser_id,
         capability="upload" if action == "upload" else "build",
     )
@@ -128,6 +129,7 @@ def reserve_asset_operation(
         select(MaterialAssetOperation)
         .where(
             MaterialAssetOperation.tenant_id == context.tenant_id,
+            MaterialAssetOperation.bc_id == operation_bc,
             MaterialAssetOperation.material_id == material_id,
             MaterialAssetOperation.advertiser_id == advertiser_id,
             col(MaterialAssetOperation.status).in_(UNRESOLVED),
@@ -136,7 +138,7 @@ def reserve_asset_operation(
     ).first()
     if existing:
         existing_route = load_material_route(
-            existing.frozen_route, context=context, bc_id=material.bc_id
+            existing.frozen_route, context=context, bc_id=operation_bc
         )
         # 已存在源上传仅供目标观察，不能把同一远端身份改成另一次上传。
         if _attempt(session, existing.id) is None:
@@ -144,7 +146,7 @@ def reserve_asset_operation(
         return existing
     operation = MaterialAssetOperation(
         tenant_id=context.tenant_id,
-        bc_id=material.bc_id,
+        bc_id=operation_bc,
         material_id=material.id,
         advertiser_id=advertiser_id,
         path=path,
@@ -305,11 +307,16 @@ def _source_access(
 
 
 def _has_verified_mapping(
-    session: Session, context: TenantContext, material_id: UUID, advertiser_id: str
+    session: Session,
+    context: TenantContext,
+    material_id: UUID,
+    advertiser_id: str,
+    bc_id: str,
 ) -> bool:
     asset = session.exec(
         select(AccountMaterial).where(
             AccountMaterial.tenant_id == context.tenant_id,
+            AccountMaterial.bc_id == bc_id,
             AccountMaterial.material_id == material_id,
             AccountMaterial.advertiser_id == advertiser_id,
             AccountMaterial.status == "available",
@@ -434,7 +441,9 @@ def request_source_retry(
         raise DomainError(
             "sdk_upload_capacity_exceeded", "原文件超过当前平台上传内存容量边界"
         )
-    if _has_verified_mapping(session, context, material_id, access.advertiser_id):
+    if _has_verified_mapping(
+        session, context, material_id, access.advertiser_id, material.bc_id
+    ):
         raise DomainError("material_retry_not_allowed", "该账户素材已经核实可用")
     operation = reserve_asset_operation(
         session,
@@ -611,7 +620,7 @@ def run_source_upload(
                     _object_error(session, material, error.code)
                     return
                 if _has_verified_mapping(
-                    session, context, material_id, access.advertiser_id
+                    session, context, material_id, access.advertiser_id, material.bc_id
                 ):
                     return
                 operation = reserve_asset_operation(
@@ -900,6 +909,7 @@ def run_source_upload(
                 asset = session.exec(
                     select(AccountMaterial).where(
                         AccountMaterial.tenant_id == context.tenant_id,
+                        AccountMaterial.bc_id == work["bc_id"],
                         AccountMaterial.material_id == material_id,
                         AccountMaterial.advertiser_id == work["advertiser_id"],
                     )

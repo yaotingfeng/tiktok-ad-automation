@@ -136,7 +136,7 @@ def _digest_error(session: Session, job: MaterialCoverJob) -> str | None:
     material = session.get(MaterialFile, job.material_id, populate_existing=True)
     if (
         material is None
-        or (material.tenant_id, material.bc_id) != (job.tenant_id, job.bc_id)
+        or material.tenant_id != job.tenant_id
         or material.video_md5 != job.video_md5
     ):
         return "cover_video_changed"
@@ -287,17 +287,17 @@ def _ensure_cover(
         advertiser_id=advertiser_id,
         capability="upload" if purpose == "SOURCE" else "build",
     )
+    # 内容属于租户；原上传 BC 不限制实际账户副本的封面，目标授权仍按 bc_id 核实。
     material = session.exec(
         select(MaterialFile)
         .where(
             MaterialFile.tenant_id == context.tenant_id,
-            MaterialFile.bc_id == bc_id,
             MaterialFile.id == material_id,
         )
         .with_for_update()
     ).first()
     if material is None:
-        raise DomainError("material_not_found", "未找到当前租户 BC 素材")
+        raise DomainError("material_not_found", "未找到当前租户素材")
     asset = session.exec(
         select(AccountMaterial)
         .where(

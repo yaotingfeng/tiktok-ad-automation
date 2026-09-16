@@ -16,7 +16,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
-from .models import access_reference, material_reference
+from .models import access_reference, tenant_material_reference
 from .routes import route_constraint
 
 
@@ -32,7 +32,7 @@ class MaterialCoverJob(SQLModel, table=True):
             "video_md5 IS NULL OR video_md5 ~ '^[0-9a-f]{32}$'",
             name="ck_material_cover_video_md5",
         ),
-        material_reference(),
+        tenant_material_reference(),
         access_reference(),
         ForeignKeyConstraint(
             ["tenant_id", "bc_id", "material_id", "asset_id"],

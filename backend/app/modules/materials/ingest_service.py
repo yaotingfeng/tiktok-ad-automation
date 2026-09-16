@@ -42,6 +42,7 @@ from app.modules.materials.repository import (
 )
 from app.modules.materials.storage import part_layout
 from app.modules.materials.uploads import public_error, require_bc
+from app.modules.tenants.permissions import require_tenant
 
 
 def require_ingest_storage(*, reconciliation: bool = False) -> None:
@@ -549,9 +550,11 @@ def files_page(
             )
         )
     rows = db.exec(
-        statement.add_columns(total_column.label("page_total")).order_by(
+        statement.add_columns(total_column.label("page_total"))
+        .order_by(
             col(IngestSessionFile.client_index), col(IngestSessionFile.material_id)
-        ).limit(limit + 1)
+        )
+        .limit(limit + 1)
     ).all()
     total = int(rows[0][-1]) if rows else count_rows(db, count_statement)
     next_cursor = None
@@ -571,15 +574,15 @@ def sessions_page(
     db: Session,
     *,
     context: TenantContext,
-    bc_id: str,
     cursor: str | None = None,
     limit: int = 50,
 ) -> Page[IngestSummary]:
-    require_bc(db, context=context, bc_id=bc_id, action="read")
-    scope = {"tenant": str(context.tenant_id), "bc": bc_id, "kind": "ingest_sessions"}
+    require_tenant(
+        db, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read"
+    )
+    scope = {"tenant": str(context.tenant_id), "kind": "ingest_sessions"}
     statement = select(IngestSession).where(
         col(IngestSession.tenant_id) == context.tenant_id,
-        col(IngestSession.bc_id) == bc_id,
     )
     total = count_rows(db, statement)
     if cursor:

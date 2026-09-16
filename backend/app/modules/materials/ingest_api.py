@@ -27,6 +27,7 @@ from app.modules.materials.ingest_schemas import (
     IngestSessionCreate,
     IngestSummary,
 )
+from app.modules.materials.uploads import require_bc
 from app.modules.tenants.permissions import require_tenant
 
 router = APIRouter(prefix="/tenants/{tenant_id}/materials", tags=["material-ingest"])
@@ -67,7 +68,7 @@ def read_ingest_request(
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="read"
     )
-    service.require_bc(session, context=context, bc_id=bc_id, action="read")
+    require_bc(session, context=context, bc_id=bc_id, action="read")
     row = session.exec(
         select(IngestSession).where(
             IngestSession.tenant_id == tenant_id,
@@ -87,7 +88,6 @@ def read_ingest_request(
 )
 def list_ingest_sessions(
     tenant_id: UUID,
-    bc_id: BCID,
     session: SessionDep,
     user: CurrentUser,
     cursor: Cursor = None,
@@ -96,9 +96,7 @@ def list_ingest_sessions(
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="read"
     )
-    return service.sessions_page(
-        session, context=context, bc_id=bc_id, cursor=cursor, limit=limit
-    )
+    return service.sessions_page(session, context=context, cursor=cursor, limit=limit)
 
 
 @router.get(

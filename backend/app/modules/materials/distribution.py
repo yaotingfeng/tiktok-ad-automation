@@ -160,6 +160,7 @@ def _bind_operation(
     advertiser_id: str,
     path: str,
     route: FrozenTikTokRoute,
+    source: AccountMaterial | None = None,
 ) -> MaterialAssetOperation:
     operation = reserve_asset_operation(
         session,
@@ -179,7 +180,7 @@ def _bind_operation(
             material = load_material(
                 session, context=context, bc_id=bc_id, material_id=material_id
             )
-            source = distribution_sources(
+            source = source or distribution_sources(
                 session,
                 context=context,
                 materials=[material],
@@ -240,6 +241,7 @@ def ensure_target_asset(
     advertiser_id: str,
     task_key: str,
     route: FrozenTikTokRoute,
+    _seed_owner: bool = False,
 ) -> AssetPreparation:
     """Internal build-submission boundary. Caller commits; no browser write route."""
     if not isinstance(task_key, str) or not task_key.strip() or len(task_key) > 255:
@@ -253,7 +255,7 @@ def ensure_target_asset(
         capability="build",
     )
     # The file lock serializes both two build consumers and source reservation.
-    load_material(
+    material = load_material(
         session, context=context, bc_id=bc_id, material_id=material_id, lock=True
     )
     readiness = get_material_readiness(
@@ -264,6 +266,23 @@ def ensure_target_asset(
         advertiser_id=advertiser_id,
         route=route,
     )
+    if (
+        readiness.path == "existing_target"
+        and readiness.mapping is not None
+        and readiness.mapping.material_id != material_id
+    ):
+        from .repository import asset_public
+
+        # 同内容别名仅建立消费引用；实际 VID、图片和验证时间来自同目标账户。
+        actual = session.get(AccountMaterial, readiness.mapping.asset_id)
+        assert actual
+        alias = AccountMaterial(
+            **(actual.model_dump() | {"id": uuid4(), "material_id": material_id})
+        )
+        session.add(alias)
+        session.flush()
+        if mapping_fresh(alias):
+            return AssetPreparation(state="ready", mapping=asset_public(alias))
     if readiness.state == "ready":
         return AssetPreparation(state="ready", mapping=readiness.mapping)
     if readiness.state == "blocked":
@@ -276,6 +295,7 @@ def ensure_target_asset(
         select(MaterialDistribution)
         .where(
             MaterialDistribution.tenant_id == context.tenant_id,
+            MaterialDistribution.bc_id == bc_id,
             MaterialDistribution.material_id == material_id,
             MaterialDistribution.advertiser_id == advertiser_id,
             col(MaterialDistribution.status).in_(ACTIVE_DISTRIBUTIONS),
@@ -288,6 +308,49 @@ def ensure_target_asset(
             route,
         )
         return AssetPreparation(state="queued", task_id=existing.id)
+    if not _seed_owner and readiness.path == "share_source":
+        candidate = distribution_sources(
+            session,
+            context=context,
+            materials=[material],
+            advertiser_id=advertiser_id,
+            route=route,
+        ).get(material_id)
+        if candidate is not None and candidate.bc_id != bc_id:
+            from .bc_seeding import ensure_bc_seed
+
+            seed = ensure_bc_seed(
+                session, context=context, material=material, route=route
+            )
+            if seed.advertiser_id == advertiser_id and seed.material_id == material_id:
+                return AssetPreparation(state="queued", task_id=seed.distribution_id)
+            operation = reserve_asset_operation(
+                session,
+                context=context,
+                material_id=material_id,
+                advertiser_id=advertiser_id,
+                path="share_source",
+                action="build",
+                route=route,
+            )
+            dist = MaterialDistribution(
+                tenant_id=context.tenant_id,
+                bc_id=bc_id,
+                material_id=material_id,
+                advertiser_id=advertiser_id,
+                actor_id=context.actor_id,
+                operation_id=operation.id,
+                seed_id=seed.id,
+                source_bc_id=bc_id,
+                source_material_id=seed.material_id,
+                source_route=route.model_dump(mode="json"),
+                target_route=route.model_dump(mode="json"),
+                path="share_source",
+            )
+            session.add(dist)
+            session.flush()
+            queue_distribution(session, dist, operation, kind="prepare")
+            return AssetPreparation(state="queued", task_id=dist.id)
     operation = _bind_operation(
         session,
         context=context,
@@ -477,7 +540,7 @@ def _require_distribution_source(
 ) -> None:
     response = operation.remote_response
     target_route = load_material_route(
-        operation.frozen_route, context=context, bc_id=material.bc_id
+        operation.frozen_route, context=context, bc_id=operation.bc_id
     )
     resolve_source = verifier.source if verifier is not None else resolve_remote_source
     require_route = (
@@ -512,7 +575,7 @@ def _require_distribution_source(
     ):
         raise DomainError("material_remote_source_unavailable", "来源证据或权限已改变")
     transport = distribution_transport(
-        source_bc_id=source.bc_id, target_bc_id=material.bc_id
+        source_bc_id=source.bc_id, target_bc_id=operation.bc_id
     )
     if response.get("transport") != transport:
         raise DomainError(
@@ -839,6 +902,38 @@ def run_distribution(
     """一次持久发送；来源和恢复读取各自遵守工作进程期限与准入。"""
     if kind not in {"prepare", "verify"} or (read_only and kind != "verify"):
         raise DomainError("invalid_asset_task", "目标素材工作任务无效")
+    if kind == "prepare" and not read_only:
+        from .bc_seeding import resume_seed_dependency
+
+        with Session(database_engine) as session, session.begin():
+            dependency = _load_distribution(session, context, distribution_id)
+            if (
+                dependency.seed_id is not None
+                and dependency.status in ACTIVE_DISTRIBUTIONS
+            ):
+                _locked_material(session, context, dependency.material_id)
+                assert dependency.operation_id is not None
+                pending = _locked_operation(session, context, dependency.operation_id)
+                if operation_id is not None and pending.id != operation_id:
+                    return
+                if revision is not None and revision != pending.remote_response.get(
+                    "revision", 0
+                ):
+                    return
+                try:
+                    if resume_seed_dependency(
+                        session, context=context, dist=dependency, operation=pending
+                    ):
+                        return
+                except DomainError as error:
+                    dependency.status, dependency.reason_code = "blocked", error.code
+                    pending.status = "failed"
+                    pending.remote_response = {
+                        **pending.remote_response,
+                        "definite_no_effect": True,
+                        "error_code": error.code,
+                    }
+                    return
     if kind == "prepare":
         from .batch_distribution import try_prepare_batch
 

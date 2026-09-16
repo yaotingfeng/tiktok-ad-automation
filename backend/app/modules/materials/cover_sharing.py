@@ -12,6 +12,7 @@ from uuid import UUID
 from redis import Redis
 from sqlalchemy import Engine, String, and_, cast, func, or_, text
 from sqlmodel import Session, col, select
+from sqlmodel.sql.expression import SelectOfScalar
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
@@ -25,9 +26,27 @@ from app.jobs.admission import admission_policy
 from . import cover_sdk as api
 from . import covers
 from .batch_distribution import rectangle
+from .content_identity import content_key, material_content_key_expression
 from .cover_models import MaterialCoverJob, MaterialCoverShareBatch
 from .models import AccountMaterial, MaterialAssetOperation, MaterialFile
 from .routes import load_material_route, require_material_route
+
+
+def _content_material_ids(
+    db: Session, context: TenantContext, target: MaterialCoverJob
+) -> SelectOfScalar[UUID]:
+    material = db.get(MaterialFile, target.material_id, populate_existing=True)
+    if (
+        material is None
+        or material.tenant_id != context.tenant_id
+        or material.video_md5 != target.video_md5
+    ):
+        raise DomainError("cover_video_changed", "目标视频内容身份已变化")
+    # 只合并已核实的 SHA/MD5/大小；未知摘要仍按素材 ID 独立，不能按名字猜来源。
+    return select(MaterialFile.id).where(
+        MaterialFile.tenant_id == context.tenant_id,
+        material_content_key_expression() == content_key(material),
+    )
 
 
 def _source(
@@ -39,9 +58,11 @@ def _source(
         .where(
             MaterialCoverJob.tenant_id == target.tenant_id,
             MaterialCoverJob.bc_id == target.bc_id,
-            MaterialCoverJob.material_id == target.material_id,
+            col(MaterialCoverJob.material_id).in_(
+                _content_material_ids(db, context, target)
+            ),
             MaterialCoverJob.video_md5 == target.video_md5,
-            MaterialCoverJob.advertiser_id != target.advertiser_id,
+            MaterialCoverJob.id != target.id,
             MaterialCoverJob.status == "READY",
             or_(
                 col(MaterialCoverJob.request_armed_at).is_not(None),
@@ -136,7 +157,9 @@ def _start_recorded_source(
         .where(
             MaterialAssetOperation.tenant_id == context.tenant_id,
             MaterialAssetOperation.bc_id == target.bc_id,
-            MaterialAssetOperation.material_id == target.material_id,
+            col(MaterialAssetOperation.material_id).in_(
+                _content_material_ids(db, context, target)
+            ),
             col(AccountMaterial.status) == "available",
             col(AccountMaterial.verified_at).is_not(None),
             func.length(func.trim(col(AccountMaterial.video_id))) > 0,
@@ -182,7 +205,7 @@ def _start_recorded_source(
             select(AccountMaterial).where(
                 AccountMaterial.tenant_id == context.tenant_id,
                 AccountMaterial.bc_id == target.bc_id,
-                AccountMaterial.material_id == target.material_id,
+                AccountMaterial.material_id == operation.material_id,
                 AccountMaterial.advertiser_id == operation.advertiser_id,
                 AccountMaterial.video_id == operation.remote_response.get("video_id"),
                 AccountMaterial.status == "available",
@@ -199,7 +222,7 @@ def _start_recorded_source(
             db,
             context=context,
             bc_id=target.bc_id,
-            material_id=target.material_id,
+            material_id=operation.material_id,
             advertiser_id=asset.advertiser_id,
             task_key=f"cover-source:{operation.id}",
             route=route,
@@ -237,10 +260,11 @@ def _prepare(
             select(MaterialFile)
             .where(
                 MaterialFile.tenant_id == context.tenant_id,
-                MaterialFile.id == anchor.material_id,
+                col(MaterialFile.id).in_(_content_material_ids(db, context, anchor)),
             )
+            .order_by(col(MaterialFile.id))
             .with_for_update()
-        ).one()
+        ).all()
         locked_anchor = covers._fenced(db, context, first.id, nonce)
         if locked_anchor is None:
             raise DomainError("cover_claim_lost", "封面执行权已变化")
@@ -251,7 +275,9 @@ def _prepare(
             .where(
                 MaterialCoverJob.tenant_id == first.tenant_id,
                 MaterialCoverJob.bc_id == first.bc_id,
-                MaterialCoverJob.material_id == first.material_id,
+                col(MaterialCoverJob.material_id).in_(
+                    _content_material_ids(db, context, first)
+                ),
                 MaterialCoverJob.purpose == "SOURCE",
                 col(MaterialCoverJob.status).in_(["PENDING", "PREPARING", "VERIFYING"]),
             )
@@ -308,7 +334,9 @@ def _prepare(
         select(MaterialFile)
         .where(
             MaterialFile.tenant_id == context.tenant_id,
-            col(MaterialFile.id).in_([pairs[pair][0].material_id for pair in selected]),
+            col(MaterialFile.id).in_(
+                {job.material_id for pair in selected for job in pairs[pair]}
+            ),
         )
         .order_by(col(MaterialFile.id))
         .with_for_update()
@@ -477,11 +505,11 @@ def _check(
             .execution_options(populate_existing=True)
         ).all()
     }
+    # 批次 BC 约束实际视频/图片位置；共享内容可来自租户内任意原上传 BC。
     materials = db.exec(
         select(MaterialFile)
         .where(
             MaterialFile.tenant_id == context.tenant_id,
-            MaterialFile.bc_id == batch.bc_id,
             col(MaterialFile.id).in_({job.material_id for job in jobs.values()}),
         )
         .execution_options(populate_existing=True)
@@ -562,7 +590,6 @@ def _check(
         source = sources.get(UUID(member["source_job_id"]))
         if source is None or (
             source.bc_id,
-            source.material_id,
             source.advertiser_id,
             source.video_id,
             source.video_md5,
@@ -573,7 +600,6 @@ def _check(
             source.height,
         ) != (
             batch.bc_id,
-            job.material_id,
             batch.source_advertiser_id,
             member["source_video_id"],
             member["video_md5"],
@@ -586,6 +612,11 @@ def _check(
             raise DomainError("cover_source_changed", "源封面证据已变化")
         if mapping(source).image_id != member["source_image_id"]:
             raise DomainError("cover_source_changed", "源图片映射已变化")
+        # source_job_id 保留真实来源身份；别名仅共享内容，绝不改写来源 job/operation。
+        if content_key(verifier.materials[source.material_id]) != content_key(
+            verifier.materials[job.material_id]
+        ):
+            raise DomainError("cover_source_changed", "源与目标的可信内容身份已变化")
         if member.get("source_mid") and source.image_mid != member["source_mid"]:
             raise DomainError("cover_source_changed", "源图片 MID 已变化")
         verifier.require_route(
@@ -691,8 +722,18 @@ def _publish(
         select(MaterialFile)
         .where(
             MaterialFile.tenant_id == context.tenant_id,
-            col(MaterialFile.id).in_(
-                {UUID(member["material_id"]) for member in batch.members}
+            or_(
+                col(MaterialFile.id).in_(
+                    {UUID(member["material_id"]) for member in batch.members}
+                ),
+                col(MaterialFile.id).in_(
+                    select(MaterialCoverJob.material_id).where(
+                        MaterialCoverJob.tenant_id == context.tenant_id,
+                        col(MaterialCoverJob.id).in_(
+                            {UUID(member["source_job_id"]) for member in batch.members}
+                        ),
+                    )
+                ),
             ),
         )
         .order_by(col(MaterialFile.id))
@@ -856,6 +897,14 @@ def run_shared_cover(
             pending = [
                 member for member in batch.members if UUID(member["job_id"]) in claims
             ]
+            # 主账户本身使用内容别名时只能读回现有图片；库存未证实不能发 self share。
+            if any(
+                member["advertiser_id"] == batch.source_advertiser_id
+                for member in pending
+            ):
+                raise DomainError(
+                    "cover_source_inventory_unverified", "主账户源图片库存尚未核实"
+                )
             pairs = {
                 (member["source_mid"], member["advertiser_id"]) for member in pending
             }

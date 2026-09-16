@@ -44,6 +44,10 @@ from app.modules.builds.scene_job_models import (
     SceneJob,
 )
 from app.modules.builds.scene_jobs import ensure_scene_preparation
+from app.modules.materials.content_identity import (
+    content_key,
+    material_content_key_expression,
+)
 from app.modules.materials.models import AccountMaterial, MaterialFile
 from app.modules.materials.service import match_materials
 from app.modules.providers.models import (
@@ -77,7 +81,6 @@ def material_visible() -> ColumnElement[bool]:
         select(AccountMaterial.id)
         .where(
             AccountMaterial.tenant_id == MaterialFile.tenant_id,
-            AccountMaterial.bc_id == MaterialFile.bc_id,
             AccountMaterial.material_id == MaterialFile.id,
             AccountMaterial.status == "available",
             col(AccountMaterial.verified_at).is_not(None),
@@ -1071,14 +1074,20 @@ def _materials_page(
     )
     config = get_version(session, context=context, version_id=draft.strategy_version_id)
     for item in page.items:
-        # The shared library may gain a file between pages. The unique reference
-        # keeps retries idempotent; final preview freezes only persisted rows.
+        # 库在分页期间可能新增同内容别名或切换可见代表；按内容核对已选项，
+        # 保留最初冻结的文件 ID，不让同一视频重复进入不同广告组。
         exists = session.exec(
-            select(DraftGroupMaterial.material_id).where(
+            select(DraftGroupMaterial.material_id)
+            .join(
+                MaterialFile,
+                (col(MaterialFile.tenant_id) == DraftGroupMaterial.tenant_id)
+                & (col(MaterialFile.id) == DraftGroupMaterial.material_id),
+            )
+            .where(
                 col(DraftGroupMaterial.tenant_id) == context.tenant_id,
                 col(DraftGroupMaterial.draft_id) == draft.id,
                 col(DraftGroupMaterial.drama_id) == drama.drama_id,
-                DraftGroupMaterial.material_id == item.material_id,
+                material_content_key_expression() == item.content_key,
             )
         ).first()
         if exists is not None:
@@ -1185,18 +1194,26 @@ def edit_material_groups(
         or len(set(identities)) != len(identities)
     ):
         raise DomainError("draft_groups_invalid", "同一剧目不能重复使用同一素材")
+    content_keys: set[str] = set()
     for offset in range(0, len(identities), PAGE_SIZE):
         chunk = identities[offset : offset + PAGE_SIZE]
         actual = session.exec(
-            select(MaterialFile.id).where(
+            select(MaterialFile).where(
                 MaterialFile.tenant_id == context.tenant_id,
-                MaterialFile.bc_id == draft.bc_id,
                 col(MaterialFile.id).in_(chunk),
                 material_visible(),
             )
         ).all()
-        if set(actual) != set(chunk):
-            raise DomainError("material_not_found", "素材不在当前租户 BC 可用素材库")
+        if {row.id for row in actual} != set(chunk):
+            raise DomainError("material_not_found", "素材不在当前租户可用素材库")
+        # 相同文件在多个 BC 的上传记录仍保留，但同一剧目不能重复选入相同内容。
+        for row in actual:
+            key = content_key(row)
+            if key in content_keys:
+                raise DomainError(
+                    "draft_groups_invalid", "同一剧目不能重复使用相同内容的素材"
+                )
+            content_keys.add(key)
     revision = _bump_revision(session, draft, expected_revision)
     SASession.execute(
         session,

@@ -124,6 +124,13 @@ def read_frozen_remote_source(
             material.byte_size,
         )
         assert md5
+        # 文件原上传来源与实际平台副本分开冻结；跨 BC 消费不能改写原始来源。
+        content_identity = (
+            material.tenant_id,
+            material.bc_id,
+            material.video_md5,
+            material.byte_size,
+        )
     with bounded_session(database_engine, task_deadline=deadline) as db:
         current = resolve_remote_source(
             db,
@@ -201,12 +208,16 @@ def read_frozen_remote_source(
             raise DomainError("material_remote_source_unavailable", "来源授权已变化")
         # HTTP 期间持久内容身份也可能变化；旧快照不能证明当前素材。
         material = db.get(MaterialFile, material_id)
-        if material is None or (
-            material.tenant_id,
-            material.bc_id,
-            material.video_md5,
-            material.byte_size,
-        ) != (context.tenant_id, bc_id, md5, byte_size):
+        if (
+            material is None
+            or (
+                material.tenant_id,
+                material.bc_id,
+                material.video_md5,
+                material.byte_size,
+            )
+            != content_identity
+        ):
             raise DomainError("material_preview_unverified", "持久素材身份已变化")
         require_remote_material(material)
     if (preview.advertiser_id, preview.video_id, preview.md5, preview.size) != (

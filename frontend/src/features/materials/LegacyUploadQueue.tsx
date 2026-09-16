@@ -10,7 +10,7 @@ import {
   ServerTable,
   useRetainedData,
 } from "@/features/tenants/shared"
-import { bytes, issue, materialKey, Stage } from "./presentation"
+import { bytes, issue, Stage, uploadKey } from "./presentation"
 
 /** Historical <=200-file batches are readable, but never resume via old writes. */
 export function LegacyUploadQueue({
@@ -29,7 +29,8 @@ export function LegacyUploadQueue({
   onHistory: () => void
 }) {
   const query = useQuery({
-    queryKey: [...materialKey(tenantId, bcId), "legacy-batch", batchId],
+    staleTime: 30_000,
+    queryKey: [...uploadKey(tenantId, bcId), "legacy-batch", batchId],
     queryFn: async ({ signal }) => {
       const result = (
         await MaterialsService.readUploadBatch({

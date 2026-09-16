@@ -64,13 +64,13 @@ def prepare_source_cover(
         context=context,
         bc_id=operation.bc_id,
     )
-    # 事件可能晚于重传完成；按封面状态机相同的锁序读取，不能用旧事件启动新 VID。
+    # 事件可能晚于重传完成；内容按租户读取，实际位置由 operation 和 asset 核实。
+    # 按封面状态机相同的锁序读取，不能用旧事件启动新 VID。
     material = session.exec(
         select(MaterialFile)
         .where(
             MaterialFile.id == operation.material_id,
             MaterialFile.tenant_id == context.tenant_id,
-            MaterialFile.bc_id == operation.bc_id,
         )
         .with_for_update()
     ).first()

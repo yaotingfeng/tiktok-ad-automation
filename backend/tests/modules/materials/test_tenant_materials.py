@@ -82,14 +82,14 @@ def mapping(session, context, file, *, account="account-a"):
     return row
 
 
-def test_full_material_pagination_uses_stable_names_ids_and_tenant_bc(
+def test_full_material_pagination_uses_stable_names_ids_across_tenant_bcs(
     session, context, other_context
 ):
     expected = [
         material(session, context, f"Moon_{index // 3:03}.mp4") for index in range(205)
     ]
     material(session, other_context, "Moon.mp4")
-    material(session, context, "Moon.mp4", bc="bc-b")
+    expected.append(material(session, context, "Moon.mp4", bc="bc-b"))
     material(session, context, "Moon_receiving.mp4", state="receiving")
     material(session, context, "Moon_lost.mp4", state="unavailable")
     cursor = None
@@ -103,12 +103,12 @@ def test_full_material_pagination_uses_stable_names_ids_and_tenant_bc(
         cursor = page.next_cursor
         if not cursor:
             break
-    assert sizes == [100, 100, 5]
+    assert sizes == [100, 100, 6]
     assert seen == [
         row.id
         for row in sorted(expected, key=lambda row: (row.file_name.encode(), row.id))
     ]
-    assert len(set(seen)) == 205
+    assert len(set(seen)) == 206
 
 
 @pytest.mark.parametrize("title", ["Moon 100%", "Moon_", "Moon\\", "Straße"])

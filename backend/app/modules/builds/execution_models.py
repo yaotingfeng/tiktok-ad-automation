@@ -254,8 +254,8 @@ class ExecutionStep(SQLModel, table=True):
             ["planned_ad.tenant_id", "planned_ad.preview_id", "planned_ad.id"],
         ),
         ForeignKeyConstraint(
-            ["tenant_id", "bc_id", "material_id"],
-            ["material_file.tenant_id", "material_file.bc_id", "material_file.id"],
+            ["tenant_id", "material_id"],
+            ["material_file.tenant_id", "material_file.id"],
         ),
         ForeignKeyConstraint(
             ["tenant_id", "submission_id", "parent_step_id"],

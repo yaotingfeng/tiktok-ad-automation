@@ -1,5 +1,6 @@
 """分发来源只取同租户授权库存；跨 BC 按可信内容身份匹配，不按名字猜素材。"""
 
+from collections.abc import Sequence
 from uuid import UUID
 
 from sqlalchemy import and_, or_
@@ -17,7 +18,7 @@ def distribution_sources(
     session: Session,
     *,
     context: TenantContext,
-    materials: list[MaterialFile],
+    materials: Sequence[MaterialFile],
     advertiser_id: str,
     route: FrozenTikTokRoute,
 ) -> dict[UUID, AccountMaterial]:
@@ -48,6 +49,7 @@ def distribution_sources(
         select(MaterialUploadAttempt.id)
         .where(
             MaterialUploadAttempt.tenant_id == AccountMaterial.tenant_id,
+            MaterialUploadAttempt.bc_id == AccountMaterial.bc_id,
             MaterialUploadAttempt.material_id == AccountMaterial.material_id,
             MaterialUploadAttempt.advertiser_id == AccountMaterial.advertiser_id,
         )
@@ -60,12 +62,14 @@ def distribution_sources(
             and_(
                 col(AccountMaterial.material_id) == MaterialFile.id,
                 col(AccountMaterial.tenant_id) == MaterialFile.tenant_id,
-                col(AccountMaterial.bc_id) == MaterialFile.bc_id,
             ),
         )
         .where(
             AccountMaterial.tenant_id == context.tenant_id,
-            AccountMaterial.advertiser_id != advertiser_id,
+            or_(
+                col(AccountMaterial.advertiser_id) != advertiser_id,
+                col(AccountMaterial.bc_id) != route.bc_id,
+            ),
             AccountMaterial.status == "available",
             col(AccountMaterial.verified_at).is_not(None),
             col(AccountMaterial.video_id) != "",

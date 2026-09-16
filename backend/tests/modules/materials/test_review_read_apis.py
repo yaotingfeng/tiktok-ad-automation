@@ -120,9 +120,7 @@ def test_default_fifty_pagination_handles_exact_timestamp_ties_and_empty_aggrega
     with Session(engine) as session, session.begin():
         session.execute(text("SET TRANSACTION READ ONLY"))
         while True:
-            page = upload_batches_page(
-                session, context=upload_owner, bc_id="bc-a", cursor=cursor
-            )
+            page = upload_batches_page(session, context=upload_owner, cursor=cursor)
             sizes.append(len(page.items))
             found.extend(row.batch_id for row in page.items)
             assert all(row.file_count == 0 for row in page.items)
@@ -163,9 +161,7 @@ def test_signed_preview_dto_does_not_expose_capability_in_repr(
     monkeypatch.setattr(settings, "S3_ENDPOINT_URL", "https://offline-review.invalid")
     with Session(engine) as session, session.begin():
         session.execute(text("SET TRANSACTION READ ONLY"))
-        preview = original_preview(
-            session, context=upload_owner, bc_id="bc-a", material_id=identity
-        )
+        preview = original_preview(session, context=upload_owner, material_id=identity)
     assert "X-Amz-Signature=" in preview.url and "X-Amz-Signature=" not in repr(preview)
 
 

@@ -50,7 +50,7 @@ export function BatchUploadSheet({
   return (
     <ManagementSheet
       title="批量上传素材"
-      description="系统自动安排合法上传账户。原文件仅临时中转，平台确认入库后自动清理。"
+      description={`上传目标 BC：${manager.control.bcId}。系统自动安排合法上传账户，提交后固定此目标。原文件仅临时中转。`}
       dirty={files.size > 0 && !manager.pending}
       pending={manager.creating}
       onClose={onClose}

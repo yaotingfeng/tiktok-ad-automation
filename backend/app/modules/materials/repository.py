@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import json
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import and_, func, or_
@@ -13,6 +14,10 @@ from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.core.pagination import Page, count_rows
 from app.modules.accounts.models import TenantBC
+from app.modules.materials.content_identity import (
+    content_key,
+    material_content_key_expression,
+)
 from app.modules.materials.models import AccountMaterial, MaterialFile
 from app.modules.materials.schemas import AccountAsset, MaterialCandidate
 from app.modules.tenants.permissions import require_tenant
@@ -72,6 +77,25 @@ def decode_material_cursor(cursor: str, *, scope: dict[str, str]) -> tuple[str, 
         raise DomainError("invalid_cursor", "素材游标无效或不属于当前查询") from None
 
 
+def deduplicate_material_statement(statement: Any) -> Any:
+    """先保留符合筛选的历史名称，再选每种内容的确定性代表；total 与分页共享此范围。"""
+    ranked = statement.with_only_columns(
+        col(MaterialFile.id),
+        func.row_number()
+        .over(
+            partition_by=material_content_key_expression(),
+            order_by=(col(MaterialFile.file_name).collate("C"), col(MaterialFile.id)),
+        )
+        .label("content_position"),
+        maintain_column_froms=True,
+    ).subquery()
+    return statement.where(
+        col(MaterialFile.id).in_(
+            sa_select(ranked.c.id).where(ranked.c.content_position == 1)
+        )
+    )
+
+
 def matching_page(
     session: Session,
     *,
@@ -95,7 +119,6 @@ def matching_page(
         select(AccountMaterial.id)
         .where(
             AccountMaterial.tenant_id == context.tenant_id,
-            AccountMaterial.bc_id == bc_id,
             AccountMaterial.material_id == MaterialFile.id,
             AccountMaterial.status == "available",
             col(AccountMaterial.verified_at).is_not(None),
@@ -104,11 +127,11 @@ def matching_page(
     )
     statement = select(MaterialFile).where(
         MaterialFile.tenant_id == context.tenant_id,
-        MaterialFile.bc_id == bc_id,
         MaterialFile.storage_state != "receiving",
         or_(col(MaterialFile.storage_state) == "stored", verified_asset),
         col(MaterialFile.file_name_folded).contains(needle, autoescape=True),
     )
+    statement = deduplicate_material_statement(statement)
     name_order = col(MaterialFile.file_name).collate("C")
     total = count_rows(session, statement)
     if cursor is not None:
@@ -145,7 +168,6 @@ def matching_page(
             )
             .where(
                 col(AccountMaterial.tenant_id) == context.tenant_id,
-                col(AccountMaterial.bc_id) == bc_id,
                 col(AccountMaterial.material_id).in_([row.id for row in materials]),
                 col(AccountMaterial.status) == "available",
                 col(AccountMaterial.verified_at).is_not(None),
@@ -162,6 +184,7 @@ def matching_page(
     items = [
         MaterialCandidate(
             material_id=row.id,
+            content_key=content_key(row),
             file_name=row.file_name,
             bc_id=row.bc_id,
             original_available=row.storage_state == "stored",

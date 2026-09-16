@@ -17,13 +17,11 @@ import {
 import { bytes, CopyValue, materialKey, Stage, stages } from "./presentation"
 export function MaterialTable({
   tenantId,
-  bcId,
   onDetails,
   onForbidden,
   enabled,
 }: {
   tenantId: string
-  bcId: string
   onDetails: (id: string) => void
   onForbidden?: () => void
   enabled: boolean
@@ -38,7 +36,7 @@ export function MaterialTable({
   const query = useQuery({
     enabled,
     queryKey: [
-      ...materialKey(tenantId, bcId),
+      ...materialKey(tenantId),
       "library",
       search,
       status,
@@ -51,7 +49,6 @@ export function MaterialTable({
         await MaterialsService.getMaterials({
           path: { tenant_id: tenantId },
           query: {
-            bc_id: bcId,
             query: search,
             status: status === "all" ? undefined : status,
             created_from: dates.from
@@ -92,6 +89,11 @@ export function MaterialTable({
       ),
     },
     {
+      header: "上传来源 BC",
+      size: 220,
+      cell: ({ row }) => <CopyValue value={row.original.bc_id} />,
+    },
+    {
       header: "文件信息",
       size: 200,
       cell: ({ row: { original: r } }) => (
@@ -115,7 +117,14 @@ export function MaterialTable({
       size: 240,
       cell: ({ row: { original: r } }) =>
         r.latest_advertiser_id ? (
-          <CopyValue value={r.latest_advertiser_id} />
+          <div>
+            <CopyValue value={r.latest_advertiser_id} />
+            {r.latest_bc_id && (
+              <span className="text-xs text-muted-foreground">
+                BC {r.latest_bc_id}
+              </span>
+            )}
+          </div>
         ) : (
           <span className="text-xs text-muted-foreground">
             尚未开始平台上传

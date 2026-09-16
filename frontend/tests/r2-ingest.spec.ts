@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test"
 import {
+  BC,
+  BC_B,
   ingestBoundary,
   location,
   queueLocation,
@@ -173,7 +175,7 @@ test("signing permission loss stops transfer and retains login without more PUT 
   )
 })
 
-for (const target of ["tenant", "bc"] as const) {
+for (const target of ["tenant"] as const) {
   test(`switching ${target} aborts in-flight direct uploads after the scope guard`, async ({
     page,
   }) => {
@@ -819,4 +821,106 @@ test("queue refresh keeps rows mounted and layout stable without an updating mes
     release()
   }
   await expect(details).toBeVisible()
+})
+
+test("switching BC preserves in-flight batch source and next upload targets the selected BC", async ({
+  page,
+}) => {
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const f = await ingestBoundary(page, { putGate: () => gate })
+  await begin(page, 2)
+  await expect.poll(() => f.puts.length).toBe(4)
+  await page.getByRole("combobox", { name: "当前 BC", exact: true }).click()
+  await page.getByRole("option", { name: /素材 BC 乙/ }).click()
+  await expect(page).toHaveURL(
+    (url) =>
+      url.searchParams.get("bc_id") === BC_B &&
+      url.searchParams.get("batch_id") === SESSION,
+  )
+  await expect(
+    page.getByRole("dialog", { name: "暂停本地传输并离开？" }),
+  ).toHaveCount(0)
+  expect(
+    f.calls
+      .filter(
+        (call) =>
+          call.method === "POST" && call.path.endsWith("/ingest-sessions"),
+      )
+      .map((call) => call.body.bc_id),
+  ).toEqual([BC])
+  release()
+  await expect.poll(() => f.summary.uploaded_count).toBe(2)
+  await expect(
+    page.getByRole("button", { name: "批量上传", exact: true }),
+  ).toBeEnabled()
+  await page.getByRole("button", { name: "批量上传", exact: true }).click()
+  await expect(
+    page.getByRole("dialog", { name: "批量上传素材", exact: true }),
+  ).toContainText(`上传目标 BC：${BC_B}`)
+  let nextTarget: string | undefined
+  await page.route("**/ingest-sessions", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback()
+    nextTarget = route.request().postDataJSON().bc_id
+    return route.fulfill({
+      status: 409,
+      json: {
+        code: "synthetic_target_unavailable",
+        message: "测试目标暂不可用",
+      },
+    })
+  })
+  const sheet = page.getByRole("dialog", { name: "批量上传素材", exact: true })
+  await sheet.getByLabel("选择本地素材").setInputFiles(video(5))
+  await sheet.getByRole("button", { name: "开始上传 1 个文件" }).click()
+  await expect.poll(() => nextTarget).toBe(BC_B)
+})
+
+test("historical session opens under another selected BC using its frozen source", async ({
+  page,
+}) => {
+  const f = await ingestBoundary(page, { count: 2, role: "viewer" })
+  await page.goto(queueLocation.replace(BC, BC_B))
+  await expect(
+    page.getByRole("button", { name: "查看详情", exact: true }),
+  ).toHaveCount(2)
+  expect(f.calls.filter((call) => call.method === "POST")).toHaveLength(0)
+})
+
+test("restored pending import stays bound while topbar BC changes before recovery resolves", async ({
+  page,
+}) => {
+  const f = await ingestBoundary(page, { lostCreate: true })
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const recoverScopes: string[] = []
+  await page.route("**/ingest-requests/**", async (route) => {
+    recoverScopes.push(
+      new URL(route.request().url()).searchParams.get("bc_id")!,
+    )
+    await gate
+    await route.fallback().catch(() => {})
+  })
+  await begin(page)
+  await expect.poll(() => recoverScopes.length).toBe(1)
+  await page.reload()
+  await expect.poll(() => recoverScopes.length).toBe(2)
+  await page.getByRole("combobox", { name: "当前 BC", exact: true }).click()
+  await page.getByRole("option", { name: /素材 BC 乙/ }).click()
+  await expect(page).toHaveURL((url) => url.searchParams.get("bc_id") === BC_B)
+  release()
+  await expect(page).toHaveURL(
+    (url) => url.searchParams.get("batch_id") === SESSION,
+  )
+  expect(recoverScopes).toEqual([BC, BC])
+  expect(
+    f.calls.filter(
+      (call) =>
+        call.method === "POST" && call.path.endsWith("/ingest-sessions"),
+    ),
+  ).toHaveLength(1)
 })

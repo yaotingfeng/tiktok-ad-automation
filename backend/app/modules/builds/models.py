@@ -277,8 +277,8 @@ class DraftGroupMaterial(SQLModel, table=True):
             ],
         ),
         ForeignKeyConstraint(
-            ["tenant_id", "bc_id", "material_id"],
-            ["material_file.tenant_id", "material_file.bc_id", "material_file.id"],
+            ["tenant_id", "material_id"],
+            ["material_file.tenant_id", "material_file.id"],
         ),
         UniqueConstraint(
             "tenant_id",

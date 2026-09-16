@@ -518,8 +518,8 @@ def test_account_dedup_spans_processing_pages(session, context, intent):
     ]
 
 
-def test_manual_materials_reject_cross_bc_and_duplicate_without_revision_bump(
-    session, context, intent
+def test_manual_materials_reject_cross_tenant_and_duplicate_without_revision_bump(
+    session, context, other_context, intent
 ):
     account(session, context)
     draft_id = create_draft(session, context=context, **intent)
@@ -531,7 +531,7 @@ def test_manual_materials_reject_cross_bc_and_duplicate_without_revision_bump(
     drama = session.exec(
         select(DraftDrama).where(DraftDrama.draft_id == draft_id)
     ).first()
-    foreign = material(session, context, "Moon.mp4", bc="bc-other")
+    foreign = material(session, other_context, "Moon.mp4", bc="bc-other")
     for group in ([[foreign.id]], [[foreign.id, foreign.id]]):
         with pytest.raises(DomainError):
             edit_material_groups(

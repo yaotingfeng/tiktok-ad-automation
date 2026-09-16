@@ -170,8 +170,8 @@ class PreviewGroupMaterial(PreviewRow, table=True):
         preview_fk(),
         drama_group_fk(),
         ForeignKeyConstraint(
-            ["tenant_id", "bc_id", "material_id"],
-            ["material_file.tenant_id", "material_file.bc_id", "material_file.id"],
+            ["tenant_id", "material_id"],
+            ["material_file.tenant_id", "material_file.id"],
         ),
         UniqueConstraint(
             "tenant_id",

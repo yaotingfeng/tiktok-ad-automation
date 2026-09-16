@@ -16,6 +16,7 @@ const url = `/tenants/${A}/materials?bc_id=${BC}`
 
 const original: MaterialPublic = {
   material_id: M,
+  content_key: `material:${M}`,
   bc_id: BC,
   file_name: "完整剧名_01.mp4",
   byte_size: 10,
@@ -161,6 +162,7 @@ async function boundary(
             (advertiser_id, i) => ({
               attempt_id: `attempt-${i}`,
               material_id: M,
+              bc_id: BC,
               advertiser_id,
               connection_id: U,
               status: i ? "available" : "blocked",
@@ -227,7 +229,7 @@ test("批量上传不要求剧目或素材账户配置，选择文件不立即�
   expect(requests.filter((r) => r.method === "POST")).toHaveLength(0)
 })
 
-test("目录显示真实账户并使用 BC 长字符串查询", async ({ page }) => {
+test("目录显示真实来源账户并按租户查询", async ({ page }) => {
   const { requests } = await boundary(page)
   await page.goto(url)
   await expect(
@@ -238,7 +240,7 @@ test("目录显示真实账户并使用 BC 长字符串查询", async ({ page })
   ).toBeVisible()
   expect(
     requests.find((r) => r.path.endsWith("/materials"))?.query.get("bc_id"),
-  ).toBe(BC)
+  ).toBeNull()
 })
 
 test("viewer 可查真实来源历史和资产，不能上传", async ({ page }) => {
@@ -275,7 +277,7 @@ test("viewer 可查真实来源历史和资产，不能上传", async ({ page })
   expect(
     requests
       .filter((r) => r.path.endsWith("/assets") || r.path.endsWith("/attempts"))
-      .every((r) => r.query.get("bc_id") === BC),
+      .every((r) => !r.query.has("bc_id")),
   ).toBe(true)
   expect(requests.filter((r) => r.method !== "GET")).toHaveLength(0)
 })
@@ -340,7 +342,7 @@ test("批次历史真实计数与服务端分页，按需预览且 URL 不缓存
   await expect(page.locator("video")).toHaveAttribute("src", /original-preview/)
   expect(
     requests.find((r) => r.path.endsWith("/preview"))?.query.get("bc_id"),
-  ).toBe(BC)
+  ).toBeNull()
   expect(
     await page.evaluate(() => JSON.stringify(sessionStorage)),
   ).not.toContain("secret-preview")
@@ -438,11 +440,11 @@ test("无有效 BC 不开放上传，空库与读取失败分开显示", async (
   )
   await page.goto(`/tenants/${A}/materials`)
   await expect(
-    page.getByText("请先选择有效的 BC", { exact: true }),
+    page.getByText("请选择有效的目标 BC 后上传素材。", { exact: true }),
   ).toBeVisible()
   await expect(
     page.getByRole("button", { name: "批量上传", exact: true }),
-  ).toHaveCount(0)
+  ).toBeDisabled()
 })
 
 test("会话 401 回登录且保留合法素材批次返回路径", async ({ page }) => {
@@ -531,17 +533,18 @@ test("暂存原件清理后按需预览账户素材，不持久化远端 URL 或
   page,
 }) => {
   const { requests } = await boundary(page, { role: "viewer" })
-  await page.route(`**/materials/${M}?**`, (route) =>
+  await page.route(`**/materials/${M}{,?*}`, (route) =>
     route.fulfill({ json: { ...original, original_available: false } }),
   )
   let reads = 0
-  await page.route("**/remote-preview?**", (route) => {
+  await page.route("**/remote-preview{,?*}", (route) => {
     expect(route.request().method()).toBe("GET")
-    expect(new URL(route.request().url()).searchParams.get("bc_id")).toBe(BC)
+    expect(new URL(route.request().url()).searchParams.get("bc_id")).toBeNull()
     reads++
     return route.fulfill({
       headers: { "Cache-Control": "no-store" },
       json: {
+        bc_id: BC,
         url: "https://video.test/preview?signature=remote-preview-secret",
         advertiser_id: "7777777777777777777",
         video_id: "actual-target-video",
@@ -592,7 +595,7 @@ test("远端预览读取失败只显示暂无法预览，关闭后迟到回复�
   page,
 }) => {
   await boundary(page, { role: "viewer" })
-  await page.route("**/remote-preview?**", (route) =>
+  await page.route("**/remote-preview{,?*}", (route) =>
     route.fulfill({
       status: 409,
       json: { code: "material_preview_unavailable", message: "暂无法预览" },
@@ -614,7 +617,7 @@ test("远端预览读取失败只显示暂无法预览，关闭后迟到回复�
     release = resolve
   })
   let called = false
-  await page.route("**/remote-preview?**", async (route) => {
+  await page.route("**/remote-preview{,?*}", async (route) => {
     called = true
     await pending
     await route
@@ -645,7 +648,7 @@ test("远端预览读取失败只显示暂无法预览，关闭后迟到回复�
 test("账户预览随当前登录失效立即清除，不能继续请求预览", async ({ page }) => {
   await boundary(page, { role: "viewer" })
   let reads = 0
-  await page.route("**/remote-preview?**", (route) => {
+  await page.route("**/remote-preview{,?*}", (route) => {
     reads++
     return route.fulfill({
       json: {
@@ -680,4 +683,47 @@ test("账户预览随当前登录失效立即清除，不能继续请求预览",
     page.getByRole("button", { name: "预览账户素材", exact: true }),
   ).toBeDisabled()
   expect(reads).toBe(1)
+})
+
+test("tenant directory preserves search across BC changes and reads origin details", async ({
+  page,
+}) => {
+  const { requests } = await boundary(page)
+  await page.goto(url)
+  await page.getByLabel("素材文件名").fill("完整剧名")
+  await page.getByRole("button", { name: "搜索", exact: true }).click()
+  await page.getByRole("combobox", { name: "当前 BC" }).click()
+  await page.getByRole("option", { name: /素材 BC 乙/ }).click()
+  await expect(page.getByLabel("素材文件名")).toHaveValue("完整剧名")
+  await page
+    .getByRole("button", { name: original.file_name, exact: true })
+    .click()
+  await expect(
+    page.getByRole("dialog", { name: "文件与账户记录" }),
+  ).toBeVisible()
+  expect(
+    requests
+      .filter(
+        (r) =>
+          r.path.endsWith("/materials") || r.path.includes(`/materials/${M}`),
+      )
+      .every((r) => !r.query.has("bc_id")),
+  ).toBe(true)
+  expect(requests.filter((r) => r.method === "POST")).toHaveLength(0)
+})
+
+test("tenant directory remains readable without a target BC", async ({
+  page,
+}) => {
+  await boundary(page)
+  await page.route("**/bcs?**", (route) =>
+    route.fulfill({ json: { items: [], next_cursor: null } }),
+  )
+  await page.goto(`/tenants/${A}/materials`)
+  await expect(
+    page.getByRole("button", { name: original.file_name, exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "批量上传", exact: true }),
+  ).toBeDisabled()
 })

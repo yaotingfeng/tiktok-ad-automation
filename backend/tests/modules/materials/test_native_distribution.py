@@ -252,23 +252,31 @@ def cross_env(source_env, monkeypatch):
 
 
 def test_cross_bc_uses_url_and_separately_freezes_source(cross_env, redis_client, wire):
+    from app.modules.materials.seed_models import MaterialBCSeed
     from tests.modules.materials.test_remote_only_distribution import PREVIEW, info
 
     prepared = queue(cross_env, cross_env["target"])
-    dist, op, _ = state(prepared.task_id)
+    waiter, _, _ = state(prepared.task_id)
+    with Session(engine) as db:
+        seed = db.get(MaterialBCSeed, waiter.seed_id)
+        seed_id, primary = seed.distribution_id, seed.advertiser_id
+    dist, op, _ = state(seed_id)
     assert dist.source_route["bc_id"] == "other-bc"
     assert dist.target_route["bc_id"] == cross_env["bc_id"]
     assert op.remote_response["transport"] == "url_relay"
-    wire[1].extend([info(vid="vid-cross-account"), [{"video_id": "cross-target"}]])
-    run(cross_env, redis_client, prepared.task_id, kind="prepare")
-    assert state(prepared.task_id)[0].status == "verifying"
+    assert primary == "actual-account" and prepared.task_id != seed_id
+    wire[1].extend([info(vid="vid-cross-account"), [{"video_id": "cross-primary"}]])
+    run(cross_env, redis_client, seed_id, kind="prepare")
+    assert state(seed_id)[0].status == "verifying"
     fields = dict(wire[0][1][2]["fields"])
     assert fields["video_url"] == PREVIEW and fields["upload_type"] == "UPLOAD_BY_URL"
+    assert fields["advertiser_id"] == primary
     assert fields["file_name"].startswith("Moon-")
     assert all("/share/" not in call[1] for call in wire[0])
-    wire[1].append(info(vid="cross-target"))
-    run(cross_env, redis_client, prepared.task_id)
-    assert state(prepared.task_id)[2].video_id == "cross-target"
+    wire[1].append(info(vid="cross-primary"))
+    run(cross_env, redis_client, seed_id)
+    assert state(seed_id)[2].video_id == "cross-primary"
+    assert state(prepared.task_id)[2] is None
 
 
 def test_cross_bc_requires_trusted_identical_content(cross_env, wire):

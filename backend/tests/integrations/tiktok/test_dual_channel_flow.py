@@ -56,7 +56,9 @@ def _reply(wire, tool, data):
 @pytest.mark.parametrize(
     "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
 )
+@pytest.mark.parametrize("cross_bc", [False, True], ids=["same-bc", "cross-bc"])
 def test_scene_to_enabled_ads_and_readback_uses_one_channel(
+    cross_bc,
     database_engine,
     redis_client,
     scene_case,
@@ -85,13 +87,18 @@ def test_scene_to_enabled_ads_and_readback_uses_one_channel(
     assert job.status == "COMPLETE", job.error_code
     sdk_start = len(gateway_wire["sdk_calls"])
     mcp_start = len(gateway_wire["wire"].calls)
+    source_route, source_advertiser = route, advertiser
+    if cross_bc:
+        source_route, source_advertiser = _add_upload_bc(
+            database_engine, context, route, advertiser
+        )
     parent_id, material_id, object_id, generation = _store(
-        database_engine, context, route, remote
+        database_engine, context, source_route, remote
     )
     created = {
         "video_id": "synthetic-source-vid",
         "material_id": "synthetic-source-mid",
-        "advertiser_id": advertiser,
+        "advertiser_id": source_advertiser,
     }
     _reply(
         gateway_wire,
@@ -116,13 +123,13 @@ def test_scene_to_enabled_ads_and_readback_uses_one_channel(
         ).one()
         # 正常上传直接由成功回执入库；无需额外查询，也不会保留原件用途。
         assert op.status == "succeeded", op.remote_response
-        assert op.frozen_route == route.model_dump(mode="json")
+        assert op.frozen_route == source_route.model_dump(mode="json")
         op_id = op.id
         mapping = db.exec(
             select(AccountMaterial).where(AccountMaterial.material_id == material_id)
         ).one()
         assert (mapping.advertiser_id, mapping.video_id, mapping.mid) == (
-            advertiser,
+            source_advertiser,
             "synthetic-source-vid",
             "synthetic-source-mid",
         )
@@ -146,7 +153,9 @@ def test_scene_to_enabled_ads_and_readback_uses_one_channel(
         assert [call["name"] for call in calls] == [
             "file_video_ad_upload",
         ]
-        assert all(call["arguments"]["advertiser_id"] == advertiser for call in calls)
+        assert all(
+            call["arguments"]["advertiser_id"] == source_advertiser for call in calls
+        )
     else:
         calls = gateway_wire["sdk_calls"][sdk_start:]
         assert [call[0] for call in calls] == ["POST"]
@@ -157,10 +166,11 @@ def test_scene_to_enabled_ads_and_readback_uses_one_channel(
         context,
         route,
         material_id,
-        advertiser,
+        source_advertiser,
         remote,
         gateway_wire,
         monkeypatch,
+        source_route=source_route,
     )
     preview_id = _prepare_preview(
         database_engine, redis_client, case, gateway_wire, monkeypatch
@@ -172,6 +182,69 @@ def test_scene_to_enabled_ads_and_readback_uses_one_channel(
     _create_and_readback(
         database_engine, redis_client, case, gateway_wire, ids, monkeypatch
     )
+    from app.modules.materials.ingest_models import IngestSessionFile
+    from app.modules.materials.models import MaterialFile
+
+    with Session(database_engine) as db:
+        assert db.get(MaterialFile, material_id).bc_id == source_route.bc_id
+        parent = db.get(IngestSession, parent_id)
+        assert parent.bc_id == source_route.bc_id
+        assert parent.frozen_route == source_route.model_dump(mode="json")
+        uploaded = db.exec(
+            select(IngestSessionFile).where(
+                IngestSessionFile.material_id == material_id
+            )
+        ).one()
+        assert (uploaded.bc_id, uploaded.source_advertiser_id) == (
+            source_route.bc_id,
+            source_advertiser,
+        )
+
+
+def _add_upload_bc(database_engine, context, target_route, primary_advertiser):
+    """上传入口绑定独立 A；共享连接的 B 仍固定原有主账户。"""
+    from app.modules.accounts.connection_models import (
+        BCConnectionBinding,
+        BCDefaultRoute,
+    )
+    from app.modules.accounts.models import TenantBC
+    from app.modules.accounts.routing import freeze_route
+    from tests.modules.materials.test_readiness import target
+
+    source_bc, source_advertiser = "1234567890123456790", "90071992547409933"
+    with Session(database_engine) as db, db.begin():
+        db.add(TenantBC(tenant_id=context.tenant_id, bc_id=source_bc))
+        db.flush()
+        db.add(
+            BCConnectionBinding(
+                tenant_id=context.tenant_id,
+                bc_id=source_bc,
+                connection_id=target_route.connection_id,
+                kind=target_route.channel,
+            )
+        )
+        db.flush()
+        db.add(
+            BCDefaultRoute(
+                tenant_id=context.tenant_id,
+                bc_id=source_bc,
+                connection_id=target_route.connection_id,
+            )
+        )
+        target(
+            db,
+            {
+                "context": context,
+                "bc_id": source_bc,
+                "connection_id": target_route.connection_id,
+            },
+            advertiser_id=source_advertiser,
+        )
+        db.get(
+            TenantBC, (context.tenant_id, target_route.bc_id)
+        ).material_advertiser_id = primary_advertiser
+        source_route = freeze_route(db, context=context, bc_id=source_bc)
+    return source_route, source_advertiser
 
 
 def _submit_waiting_for_cover(
@@ -248,6 +321,7 @@ def _submit_waiting_for_cover(
 
 
 def _finish_cover(database_engine, redis_client, case, wire, remote, ids):
+    """实际 SOURCE 图片上传→IMAGE 共享→目标图片核实，禁止目标直接重传。"""
     from datetime import UTC, datetime, timedelta
 
     from app.modules.builds.execution import process_step
@@ -256,17 +330,59 @@ def _finish_cover(database_engine, redis_client, case, wire, remote, ids):
     from app.modules.materials.covers import run_cover
 
     context = case["context"]
-    with Session(database_engine) as db, db.begin():
-        job = db.exec(
+    with Session(database_engine) as db:
+        target_job = db.exec(
             select(MaterialCoverJob).where(
-                MaterialCoverJob.tenant_id == context.tenant_id
+                MaterialCoverJob.tenant_id == context.tenant_id,
+                MaterialCoverJob.advertiser_id == "90071992547409932",
             )
         ).one()
-        job_id, dispatch_id, revision = job.id, job.dispatch_id, job.revision
+        job_id = target_job.id
+
+    def advance(identity, read=False):
+        with Session(database_engine) as db:
+            job = db.get(MaterialCoverJob, identity)
+            dispatch_id, revision = job.dispatch_id, job.revision
+        run_cover(
+            database_engine=database_engine,
+            redis_client=redis_client,
+            context=context,
+            job_id=identity,
+            dispatch_id=dispatch_id,
+            revision=revision,
+            read=read,
+        )
+        with Session(database_engine) as db:
+            return db.get(MaterialCoverJob, identity).model_copy()
+
+    # 仅处理真实等待依赖，来源 job 必须由成功视频上传账本推导。
+    advance(job_id)
+    with Session(database_engine) as db:
+        source = db.exec(
+            select(MaterialCoverJob).where(
+                MaterialCoverJob.tenant_id == context.tenant_id,
+                MaterialCoverJob.bc_id == case["route"].bc_id,
+                MaterialCoverJob.purpose == "SOURCE",
+            )
+        ).one()
+        source_id, source_vid, source_name = (
+            source.id,
+            source.video_id,
+            source.remote_name,
+        )
+    image = {
+        "image_id": "synthetic-source-image",
+        "material_id": "900000",
+        "signature": "c" * 32,
+        "width": 160,
+        "height": 240,
+        "displayable": True,
+        "file_name": source_name,
+    }
     video = {
         "list": [
             {
-                "video_id": "synthetic-target-vid",
+                "video_id": source_vid,
                 "signature": md5(remote.content).hexdigest(),
                 "displayable": True,
                 "width": 160,
@@ -275,64 +391,61 @@ def _finish_cover(database_engine, redis_client, case, wire, remote, ids):
             }
         ]
     }
-    receipt = {"image_id": "synthetic-target-image", "signature": "c" * 32}
     _reply(wire, "file_video_ad_info_get", video)
-    _reply(wire, "file_image_ad_upload", receipt)
+    _reply(wire, "file_image_ad_upload", image)
     offset = len(wire["sdk_calls"])
     wire["before"]["callback"] = lambda: wire["sdk_data"].update(
-        data=video if len(wire["sdk_calls"]) == offset else receipt
+        data=video if len(wire["sdk_calls"]) == offset else image
     )
     try:
-        run_cover(
-            database_engine=database_engine,
-            redis_client=redis_client,
-            context=context,
-            job_id=job_id,
-            dispatch_id=dispatch_id,
-            revision=revision,
-            read=False,
-        )
+        advance(source_id)
     finally:
         wire["before"]["callback"] = None
-    with Session(database_engine) as db:
-        job = db.get(MaterialCoverJob, job_id)
-        assert job.known_image_id == "synthetic-target-image", job.error_code
-        dispatch_id, revision, name = job.dispatch_id, job.revision, job.remote_name
-        mapping = db.exec(
-            select(AccountMaterial).where(
-                AccountMaterial.tenant_id == context.tenant_id,
-                AccountMaterial.advertiser_id == "90071992547409932",
-            )
-        ).one()
-        assert mapping.image_id is None
+    _reply(wire, "file_image_ad_info_get", {"list": [image]})
+    assert advance(source_id, read=True).status == "READY"
+
+    def page(rows):
+        return {
+            "list": rows,
+            "page_info": {
+                "page": 1,
+                "page_size": 100,
+                "total_page": 1,
+                "total_number": len(rows),
+            },
+        }
+
+    _reply(wire, "file_image_ad_info_get", {"list": [image]})
+    _reply(wire, "file_image_ad_search", page([]))
+    _reply(wire, "creative_asset_share_get", {"failed_infos": {}})
+    offset = len(wire["sdk_calls"])
+    replies = [{"list": [image]}, page([]), {"failed_infos": {}}]
+    wire["before"]["callback"] = lambda: wire["sdk_data"].update(
+        data=replies[min(len(wire["sdk_calls"]) - offset, len(replies) - 1)]
+    )
+    try:
+        for _ in range(5):
+            job = advance(job_id)
+            if job.status not in {"PENDING", "PREPARING"}:
+                break
+        assert job.status == "VERIFYING", job.error_code
+    finally:
+        wire["before"]["callback"] = None
     _reply(
         wire,
-        "file_image_ad_info_get",
-        {
-            "list": [
-                {
-                    **receipt,
-                    "file_name": name,
-                    "displayable": True,
-                    "width": 160,
-                    "height": 240,
-                }
-            ]
-        },
+        "file_image_ad_search",
+        page([{**image, "image_id": "synthetic-target-image"}]),
     )
-    run_cover(
-        database_engine=database_engine,
-        redis_client=redis_client,
-        context=context,
-        job_id=job_id,
-        dispatch_id=dispatch_id,
-        revision=revision,
-        read=True,
-    )
+    for _ in range(5):
+        job = advance(job_id, read=True)
+        if job.status != "VERIFYING":
+            break
+    assert job.status == "READY", job.error_code
     with Session(database_engine) as db, db.begin():
         mapping = db.exec(
             select(AccountMaterial).where(
                 AccountMaterial.tenant_id == context.tenant_id,
+                AccountMaterial.bc_id == case["route"].bc_id,
                 AccountMaterial.advertiser_id == "90071992547409932",
             )
         ).one()
@@ -518,6 +631,108 @@ def _create_and_readback(database_engine, redis_client, case, wire, ids, monkeyp
         assert result.execution_route.channel == route.channel
 
 
+def _finish_bc_seed(
+    database_engine,
+    redis_client,
+    context,
+    route,
+    source_route,
+    material_id,
+    target_task_id,
+    details,
+    wire,
+):
+    """消费真实 BC seed；一次 URL 上传仅送到 B 主账户，未冒充目标 ready。"""
+    from app.modules.materials.distribution import run_distribution
+    from app.modules.materials.models import MaterialDistribution
+    from app.modules.materials.seed_models import MaterialBCSeed
+
+    with Session(database_engine) as db:
+        waiter = db.get(MaterialDistribution, target_task_id)
+        seed = db.get(MaterialBCSeed, waiter.seed_id)
+        seed_id, primary = seed.distribution_id, seed.advertiser_id
+        assert seed_id != target_task_id
+        assert primary == "90071992547409931"
+        owner = db.get(MaterialDistribution, seed_id)
+        assert owner.source_route == source_route.model_dump(mode="json")
+        assert owner.target_route == route.model_dump(mode="json")
+        assert owner.material_id == material_id
+    arguments = {
+        "database_engine": database_engine,
+        "redis_client": redis_client,
+        "context": context,
+    }
+    sdk_start, mcp_start = len(wire["sdk_calls"]), len(wire["wire"].calls)
+    # 未完成的 seed 只增加等待代数，不读取 A 或向目标上传。
+    run_distribution(**arguments, distribution_id=target_task_id, kind="prepare")
+    assert len(wire["sdk_calls"]) == sdk_start
+    assert len(wire["wire"].calls) == mcp_start
+    receipt = {
+        "advertiser_id": primary,
+        "video_id": "synthetic-primary-vid",
+        "material_id": "synthetic-primary-mid",
+    }
+    upload_reply = [receipt] if route.channel == "OFFICIAL_API" else receipt
+    _reply(wire, "file_video_ad_info_get", details)
+    _reply(wire, "file_video_ad_upload", upload_reply)
+    wire["before"]["callback"] = lambda: wire["sdk_data"].update(
+        data=details if len(wire["sdk_calls"]) == sdk_start else upload_reply
+    )
+    try:
+        run_distribution(**arguments, distribution_id=seed_id, kind="prepare")
+    finally:
+        wire["before"]["callback"] = None
+    with Session(database_engine) as db:
+        owner = db.get(MaterialDistribution, seed_id)
+        operation = db.get(MaterialAssetOperation, owner.operation_id)
+        assert owner.status == "verifying", (
+            owner.reason_code,
+            operation.remote_response,
+        )
+        assert operation.remote_response["transport"] == "url_relay"
+    primary_details = {
+        "list": [
+            {**details["list"][0], **receipt, "file_name": "bc-primary-source.mp4"}
+        ]
+    }
+    _reply(wire, "file_video_ad_info_get", primary_details)
+    run_distribution(**arguments, distribution_id=seed_id, kind="verify")
+    # 重复 prepare 使用既有确定结果；不能再次发 URL 上传。
+    run_distribution(**arguments, distribution_id=seed_id, kind="prepare")
+    with Session(database_engine) as db:
+        assert db.get(MaterialDistribution, seed_id).status == "ready"
+        assert db.get(MaterialDistribution, target_task_id).status != "ready"
+    if route.channel == "OFFICIAL_API":
+        calls = wire["sdk_calls"][sdk_start:]
+        assert [call[0] for call in calls] == ["GET", "POST", "GET"]
+        uploads = [
+            dict(call[2]["fields"])
+            for call in calls
+            if call[1].endswith("/file/video/ad/upload/")
+        ]
+    else:
+        calls = [
+            call["params"]
+            for call in wire["wire"].calls[mcp_start:]
+            if call["method"] == "tools/call"
+        ]
+        assert [call["name"] for call in calls] == [
+            "file_video_ad_info_get",
+            "file_video_ad_upload",
+            "file_video_ad_info_get",
+        ]
+        uploads = [
+            call["arguments"]
+            for call in calls
+            if call["name"] == "file_video_ad_upload"
+        ]
+    assert len(uploads) == 1
+    assert uploads[0]["advertiser_id"] == primary
+    assert uploads[0]["upload_type"] == "UPLOAD_BY_URL"
+    assert uploads[0]["video_url"] == details["list"][0]["preview_url"]
+    return primary_details
+
+
 def _prepare_target(
     database_engine,
     redis_client,
@@ -528,6 +743,8 @@ def _prepare_target(
     remote,
     wire,
     monkeypatch,
+    *,
+    source_route,
 ):
     """沿同一路由真实分发到另一账户；来源、目标 VID 不得互相覆盖。"""
     from app.modules.materials.distribution import ensure_target_asset, run_distribution
@@ -577,6 +794,29 @@ def _prepare_target(
             }
         ]
     }
+    source_expected = (
+        source_advertiser,
+        "synthetic-source-vid",
+        "synthetic-source-mid",
+    )
+    seed_expected = set()
+    if source_route.bc_id != route.bc_id:
+        details = _finish_bc_seed(
+            database_engine,
+            redis_client,
+            context,
+            route,
+            source_route,
+            material_id,
+            prepared.task_id,
+            details,
+            wire,
+        )
+        source_advertiser = details["list"][0]["advertiser_id"]
+        seed_expected.add(
+            (source_advertiser, "synthetic-primary-vid", "synthetic-primary-mid")
+        )
+        mcp_start = len(wire["wire"].calls)
     created = {
         "advertiser_id": target_advertiser,
         "video_id": "synthetic-target-vid",
@@ -634,9 +874,13 @@ def _prepare_target(
             select(AccountMaterial).where(AccountMaterial.material_id == material_id)
         ).all()
         assert {(row.advertiser_id, row.video_id, row.mid) for row in mappings} == {
-            (source_advertiser, "synthetic-source-vid", "synthetic-source-mid"),
+            source_expected,
             (target_advertiser, "synthetic-target-vid", "synthetic-target-mid"),
-        }
+        } | seed_expected
+        assert {(row.bc_id, row.advertiser_id) for row in mappings} == {
+            (source_route.bc_id, source_expected[0]),
+            (route.bc_id, target_advertiser),
+        } | ({(route.bc_id, source_advertiser)} if seed_expected else set())
         assert all(row.image_id is None for row in mappings)
     if route.channel == "OFFICIAL_MCP":
         calls = [

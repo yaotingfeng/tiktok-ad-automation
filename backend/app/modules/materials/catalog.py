@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, case, func, or_
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
@@ -12,8 +12,9 @@ from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.core.pagination import Page, count_rows
 from app.integrations.tiktok.bounded_resources import bounded_session
+from app.modules.tenants.permissions import require_tenant
 
-from .models import MaterialFile, ObjectUpload, UploadBatch
+from .models import AccountMaterial, MaterialFile, ObjectUpload, UploadBatch
 from .repository import decode_material_cursor, encode_material_cursor
 from .schemas import (
     RemoteMaterialPreview,
@@ -31,7 +32,6 @@ def remote_preview(
     database_engine: Any,
     redis_client: Any,
     context: TenantContext,
-    bc_id: str,
     material_id: UUID,
 ) -> RemoteMaterialPreview:
     """Read-only fixed-source gateway with a bounded child budget.
@@ -40,20 +40,61 @@ def remote_preview(
     original-use permission. A short MCP token may queue credential refresh;
     sources and authority are verified before returning the preview.
     """
-    from .remote_sources import read_remote_source, resolve_remote_source
+    from app.modules.accounts.access import usable_grants
+    from app.modules.accounts.models import BCAccountAccess
+
+    from .remote_sources import read_remote_source
     from .source_uploads import READ_HARD_LIMIT
 
     deadline = datetime.now(UTC) + timedelta(seconds=READ_HARD_LIMIT - 5)
     with bounded_session(database_engine, task_deadline=deadline) as db:
-        require_bc(db, context=context, bc_id=bc_id, action="read")
-        source = resolve_remote_source(
-            db, context=context, bc_id=bc_id, material_id=material_id
+        require_tenant(
+            db, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read"
         )
+        material = db.exec(
+            select(MaterialFile).where(
+                MaterialFile.tenant_id == context.tenant_id,
+                MaterialFile.id == material_id,
+            )
+        ).one_or_none()
+        if material is None:
+            raise storage_error("material_not_found")
+        # 先取原上传 BC 的合法来源，再取其他真实副本；授权与实际 BC 在 SQL 中关联。
+        grant = (
+            usable_grants(
+                tenant_id=context.tenant_id,
+                bc_id=col(AccountMaterial.bc_id),
+                action="read",
+            )
+            .where(
+                BCAccountAccess.advertiser_id == AccountMaterial.advertiser_id,
+                BCAccountAccess.connection_id == AccountMaterial.connection_id,
+            )
+            .exists()
+        )
+        source = db.exec(
+            select(AccountMaterial)
+            .where(
+                AccountMaterial.tenant_id == context.tenant_id,
+                AccountMaterial.material_id == material_id,
+                AccountMaterial.status == "available",
+                col(AccountMaterial.verified_at).is_not(None),
+                AccountMaterial.video_id != "",
+                grant,
+            )
+            .order_by(
+                case((col(AccountMaterial.bc_id) == material.bc_id, 0), else_=1),
+                col(AccountMaterial.verified_at).desc(),
+                col(AccountMaterial.id),
+            )
+            .limit(1)
+        ).first()
         if source is None:
             raise DomainError(
                 "material_remote_source_unavailable", "暂无法预览，请恢复来源授权或补传"
             )
         source_id = source.id
+        bc_id = source.bc_id
     preview = read_remote_source(
         database_engine=database_engine,
         redis_client=redis_client,
@@ -64,6 +105,7 @@ def remote_preview(
         deadline=deadline,
     )
     return RemoteMaterialPreview(
+        bc_id=bc_id,
         url=preview.url,
         advertiser_id=preview.advertiser_id,
         video_id=preview.video_id,
@@ -94,17 +136,17 @@ def upload_batches_page(
     session: Session,
     *,
     context: TenantContext,
-    bc_id: str,
     cursor: str | None = None,
     limit: int = 50,
 ) -> Page[UploadBatchSummary]:
-    require_bc(session, context=context, bc_id=bc_id, action="read")
+    require_tenant(
+        session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read"
+    )
     if type(limit) is not int or limit not in {50, 100}:
         raise storage_error("invalid_page_size")
-    scope = {"kind": "upload-batches", "tenant": str(context.tenant_id), "bc": bc_id}
+    scope = {"kind": "upload-batches", "tenant": str(context.tenant_id)}
     query = select(UploadBatch).where(
         UploadBatch.tenant_id == context.tenant_id,
-        UploadBatch.bc_id == bc_id,
     )
     total = count_rows(session, query)
     if cursor:
@@ -168,20 +210,22 @@ def upload_batches_page(
 
 
 def original_preview(
-    session: Session, *, context: TenantContext, bc_id: str, material_id: UUID
+    session: Session, *, context: TenantContext, material_id: UUID
 ) -> SignedPreview:
-    require_bc(session, context=context, bc_id=bc_id, action="read")
+    require_tenant(
+        session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read"
+    )
     file = session.exec(
         select(MaterialFile)
         .where(
             MaterialFile.tenant_id == context.tenant_id,
-            MaterialFile.bc_id == bc_id,
             MaterialFile.id == material_id,
         )
         .execution_options(populate_existing=True)
     ).one_or_none()
     if file is None:
         raise storage_error("material_not_found")
+    require_bc(session, context=context, bc_id=file.bc_id, action="read")
     if file.storage_state != "stored":
         raise storage_error("upload_not_ready")
     if file.object_key != object_key_for(context.tenant_id, file.id):

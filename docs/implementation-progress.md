@@ -897,3 +897,13 @@
 - 授权管理保留接入、同步、重新授权和解绑，详情表移除重复的默认授权设置按钮。关联 BC 详情桌面最大宽度增至 1024px，900/1440px 的同步按钮无须横向滚动，390px 增加滑动提示并防止编号被纵向挤压。
 - 验证：最终独立运行账户/授权、搭建通道、搭建准备及素材页面 195 项全部通过；轮询专项连续三次通过，布局专项7项通过，TypeScript/Vite 生产构建、修改文件 Biome 和 `git diff --check` 通过。截图已目视检查，均为 HTTP 边界合成数据。
 - 聚焦提交主题：`accounts: centralize BC authorization settings and widen details`。仅本地修改与提交，未推送、未部署；无数据库迁移、新开关或真实平台写入。详细约定见[本轮验收](validation/2026-09-16-bc-authorization-ui.md)。
+
+## 2026-09-16 租户统一素材库与 BC 集中转存
+
+- 按用户要求先使用 Superpowers 完成[设计文档](superpowers/specs/2026-09-16-tenant-material-library-design.md)与[六阶段实施计划](superpowers/plans/2026-09-16-tenant-material-library.md)，先行提交 `76ca073`，再实施并完成独立复审。
+- 素材目录、详情、历史记录及自动/手动选材改为租户范围；顶栏 BC 决定新上传与搭建目标。进行中、历史和刷新恢复的上传固定原 BC，切换不重定向。可信内容重复上传在分页前去重，历史文件名与冻结 ID 保留。
+- 搭建提交时先复用目标或 B 内来源；否则按租户/内容/B 的唯一持久 seed 向 B 主素材账户转存一次，再原生共享给各目标。并发、多别名及后续新账户复用同一来源；UNKNOWN 不换账户、不重发。封面保留实际 SOURCE 身份并按真实目标回读，同内容别名和主账户自身目标均覆盖。
+- 新迁移 `tenant_material_library → material_bc_seed → material_target_scope` 接原 `material_share_receipts`：消费引用按租户，原上传约束不变，实际目标 BC 和操作唯一性继续受约束；旧记录升级保留，不兼容降级拒绝。无新开关。
+- 最终根回归46、目录81、网关22、分发广泛191/最终28、封面专项20/原回归176分组通过；API/MCP×同/跨 BC四条完整链路通过。页面四组145通过，最后上传恢复修复相关5通过；Ruff44文件、mypy26模块、前端构建、Biome与 Alembic check 通过。不同组存在重叠，不能相加作为全仓用例总数。
+- 独立复审发现的别名 SOURCE 封面与部分勾选后全选问题已补回归关闭；最终没有可确定的未修 P1/P2。验证使用真实本地 PostgreSQL/Redis和HTTP传输替身，详见[本轮验收](validation/2026-09-16-tenant-material-library.md)。
+- 实现聚焦提交主题：`materials: unify tenant library and seed each BC once`。仅本地代码、迁移演练和提交，未推送、未发布、未创建真实广告；服务器界面仍需后续授权发布才能生效。

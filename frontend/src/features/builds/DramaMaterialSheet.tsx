@@ -331,6 +331,9 @@ export function DramaMaterialSheet({
                   {item.file_name}
                 </p>
                 <p className="text-xs text-muted-foreground">
+                  上传来源 BC：{item.source_bc_id}
+                </p>
+                <p className="text-xs text-muted-foreground">
                   第 {item.group_no} 组
                   {item.shared_with_other_drama
                     ? " · 此素材也匹配了其他剧目"
@@ -369,8 +372,8 @@ export function DramaMaterialSheet({
               {write && (
                 <MaterialBatchPicker
                   tenantId={tenantId}
-                  bcId={bcId}
                   existingIds={items.map((item) => item.material_id)}
+                  existingContentKeys={items.map((item) => item.content_key)}
                   disabled={!!pending || busy || forbidden}
                   onAdd={(selected) => {
                     setItems((old) => {
@@ -386,6 +389,8 @@ export function DramaMaterialSheet({
                         seen.add(item.material_id)
                         additions.push({
                           material_id: item.material_id,
+                          source_bc_id: item.bc_id,
+                          content_key: item.content_key,
                           file_name: item.file_name,
                           group_no: groupNo,
                           position: old.length + additions.length + 1,
@@ -405,6 +410,9 @@ export function DramaMaterialSheet({
                   >
                     <p className="min-w-0 break-words text-sm [overflow-wrap:anywhere]">
                       {item.file_name}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      上传来源 BC：{item.source_bc_id}
                     </p>
                     {item.shared_with_other_drama && (
                       <p className="text-xs text-muted-foreground">

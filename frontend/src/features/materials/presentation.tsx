@@ -124,5 +124,7 @@ export const isUnknown = (e: unknown) =>
   !e.response ||
   e.response.status >= 500 ||
   e.response.status === 408
-export const materialKey = (tenantId: string, bcId: string) =>
-  ["tenant", tenantId, "materials", bcId] as const
+export const materialKey = (tenantId: string) =>
+  ["tenant", tenantId, "materials"] as const
+export const uploadKey = (tenantId: string, bcId: string) =>
+  [...materialKey(tenantId), "uploads", bcId] as const

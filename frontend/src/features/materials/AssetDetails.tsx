@@ -29,13 +29,11 @@ type Preview =
 
 export function AssetDetails({
   tenantId,
-  bcId,
   materialId,
   onClose,
   onForbidden,
 }: {
   tenantId: string
-  bcId: string
   materialId: string
   onClose: () => void
   onForbidden: () => void
@@ -69,14 +67,13 @@ export function AssetDetails({
     }
   }, [queryClient, sessionToken])
   const path = { tenant_id: tenantId, material_id: materialId },
-    key = [...materialKey(tenantId, bcId), "details", materialId]
+    key = [...materialKey(tenantId), "details", materialId]
   const detail = useQuery({
       queryKey: key,
       queryFn: async ({ signal }) =>
         (
           await MaterialsService.getMaterial({
             path,
-            query: { bc_id: bcId },
             signal,
           })
         ).data,
@@ -90,7 +87,6 @@ export function AssetDetails({
           await MaterialsService.getAssets({
             path,
             query: {
-              bc_id: bcId,
               cursor: assetPage.cursor,
               limit: assetPage.limit,
             },
@@ -105,7 +101,6 @@ export function AssetDetails({
           await MaterialsService.getAttempts({
             path,
             query: {
-              bc_id: bcId,
               cursor: attemptPage.cursor,
               limit: attemptPage.limit,
             },
@@ -135,7 +130,6 @@ export function AssetDetails({
     try {
       const request = {
         path,
-        query: { bc_id: bcId },
         signal: controller.signal,
       }
       const result: Preview =
@@ -166,6 +160,10 @@ export function AssetDetails({
   }
   const ac: ColumnDef<AccountAsset>[] = [
     {
+      header: "实际 BC",
+      cell: ({ row }) => <CopyValue value={row.original.bc_id} />,
+    },
+    {
       header: "实际账户",
       cell: ({ row }) => <CopyValue value={row.original.advertiser_id} />,
     },
@@ -187,6 +185,10 @@ export function AssetDetails({
     },
   ]
   const hc: ColumnDef<UploadAttemptPublic>[] = [
+    {
+      header: "上传来源 BC",
+      cell: ({ row }) => <CopyValue value={row.original.bc_id} />,
+    },
     {
       header: "实际上传账户",
       cell: ({ row }) => <CopyValue value={row.original.advertiser_id} />,
@@ -210,7 +212,7 @@ export function AssetDetails({
   return (
     <ManagementSheet
       title="文件与账户记录"
-      description={`当前租户 · BC ${bcId}。每次实际来源账户均保留记录，账户资产不代表全部目标账户可用。`}
+      description="当前租户素材的上传来源与实际账户记录。账户资产不代表全部目标账户可用。"
       dirty={false}
       onClose={onClose}
     >
@@ -230,6 +232,7 @@ export function AssetDetails({
             >
               <h2 className="font-semibold">原始文件</h2>
               <CopyValue label="文件名" value={detail.data.file_name} />
+              <p className="text-sm">原始上传 BC：{detail.data.bc_id}</p>
               <p className="text-sm">
                 {bytes(detail.data.byte_size)} · {detail.data.mime_type}
               </p>
@@ -261,6 +264,7 @@ export function AssetDetails({
               </div>
               {preview?.kind === "remote" && (
                 <div className="flex flex-col gap-1 text-sm">
+                  <span>实际预览 BC：{preview.bc_id}</span>
                   <span>实际预览账户</span>
                   <CopyValue value={preview.advertiser_id} />
                   <span className="text-muted-foreground">

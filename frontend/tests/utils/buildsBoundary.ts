@@ -130,6 +130,8 @@ export async function buildsBoundary(
   let materials = Array.from({ length: 23 }, (_, i) => ({
     material_id: `99999999-9999-4999-8999-${String(i + 1).padStart(12, "0")}`,
     file_name: `完整剧名1-${String(i + 1).padStart(2, "0")}.mp4`,
+    source_bc_id: BC,
+    content_key: `material:99999999-9999-4999-8999-${String(i + 1).padStart(12, "0")}`,
     group_no: Math.floor(i / 10) + 1,
     position: (i % 10) + 1,
     shared_with_other_drama: i === 0,

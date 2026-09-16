@@ -791,6 +791,14 @@ export type DraftMaterialPublic = {
      */
     file_name: string;
     /**
+     * Source Bc Id
+     */
+    source_bc_id: string;
+    /**
+     * Content Key
+     */
+    content_key: string;
+    /**
      * Group No
      */
     group_no: number;
@@ -1866,6 +1874,10 @@ export type MaterialPublic = {
      */
     material_id: string;
     /**
+     * Content Key
+     */
+    content_key: string;
+    /**
      * Bc Id
      */
     bc_id: string;
@@ -1913,6 +1925,10 @@ export type MaterialPublic = {
      * Latest Advertiser Id
      */
     latest_advertiser_id?: string | null;
+    /**
+     * Latest Bc Id
+     */
+    latest_bc_id?: string | null;
 };
 
 /**
@@ -3343,6 +3359,10 @@ export type RecoveryRequestInput = {
  */
 export type RemoteMaterialPreview = {
     /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
      * Url
      */
     url: string;
@@ -4289,6 +4309,10 @@ export type UploadAttemptPublic = {
      * Attempt Id
      */
     attempt_id: string;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
     /**
      * Material Id
      */
@@ -6074,11 +6098,7 @@ export type listIngestSessionsData = {
          */
         tenant_id: string;
     };
-    query: {
-        /**
-         * Bc Id
-         */
-        bc_id: string;
+    query?: {
         /**
          * Cursor
          */
@@ -6753,11 +6773,7 @@ export type materialsReadUploadBatchesData = {
          */
         tenant_id: string;
     };
-    query: {
-        /**
-         * Bc Id
-         */
-        bc_id: string;
+    query?: {
         /**
          * Cursor
          */
@@ -6869,12 +6885,7 @@ export type materialsReadOriginalPreviewData = {
          */
         material_id: string;
     };
-    query: {
-        /**
-         * Bc Id
-         */
-        bc_id: string;
-    };
+    query?: never;
     url: '/api/tenants/{tenant_id}/materials/{material_id}/preview';
 };
 
@@ -6908,12 +6919,7 @@ export type materialsReadRemotePreviewData = {
          */
         material_id: string;
     };
-    query: {
-        /**
-         * Bc Id
-         */
-        bc_id: string;
-    };
+    query?: never;
     url: '/api/tenants/{tenant_id}/materials/{material_id}/remote-preview';
 };
 
@@ -7049,11 +7055,7 @@ export type materialsGetMaterialsData = {
          */
         tenant_id: string;
     };
-    query: {
-        /**
-         * Bc Id
-         */
-        bc_id: string;
+    query?: {
         /**
          * Query
          */
@@ -7112,12 +7114,7 @@ export type materialsGetMaterialData = {
          */
         material_id: string;
     };
-    query: {
-        /**
-         * Bc Id
-         */
-        bc_id: string;
-    };
+    query?: never;
     url: '/api/tenants/{tenant_id}/materials/{material_id}';
 };
 
@@ -7151,11 +7148,7 @@ export type materialsGetAssetsData = {
          */
         material_id: string;
     };
-    query: {
-        /**
-         * Bc Id
-         */
-        bc_id: string;
+    query?: {
         /**
          * Cursor
          */
@@ -7198,11 +7191,7 @@ export type materialsGetAttemptsData = {
          */
         material_id: string;
     };
-    query: {
-        /**
-         * Bc Id
-         */
-        bc_id: string;
+    query?: {
         /**
          * Cursor
          */

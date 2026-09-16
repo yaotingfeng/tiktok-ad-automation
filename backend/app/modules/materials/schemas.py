@@ -29,6 +29,7 @@ class AccountAsset(BaseModel):
 
 class MaterialCandidate(BaseModel):
     material_id: UUID
+    content_key: str
     file_name: str
     bc_id: str
     original_available: bool
@@ -170,6 +171,7 @@ class UploadCompleted(BaseModel):
 
 class MaterialPublic(BaseModel):
     material_id: UUID
+    content_key: str
     bc_id: str
     file_name: str
     byte_size: int
@@ -182,10 +184,12 @@ class MaterialPublic(BaseModel):
     status: UploadStage
     available_account_count: int
     latest_advertiser_id: str | None = None
+    latest_bc_id: str | None = None
 
 
 class UploadAttemptPublic(BaseModel):
     attempt_id: UUID
+    bc_id: str
     material_id: UUID
     advertiser_id: str
     connection_id: UUID
@@ -209,6 +213,8 @@ class SignedPreview(BaseModel):
 
 class RemoteMaterialPreview(BaseModel):
     """Current response-only URL; platform expiry is not assumed."""
+
+    bc_id: str
 
     url: str = Field(repr=False)
     advertiser_id: str

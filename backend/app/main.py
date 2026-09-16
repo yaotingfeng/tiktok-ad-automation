@@ -7,6 +7,7 @@ from starlette.middleware.cors import CORSMiddleware
 from app.api.main import api_router
 from app.core.config import settings
 from app.core.errors import DomainError, domain_error_handler
+from app.modules.materials import seed_models  # noqa: F401
 
 FRONTEND_DIR = Path(__file__).parent / "frontend"
 

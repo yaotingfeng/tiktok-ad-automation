@@ -160,6 +160,8 @@ class DraftInputPublic(BaseModel):
 class DraftMaterialPublic(BaseModel):
     material_id: UUID
     file_name: str
+    source_bc_id: str
+    content_key: str
     group_no: int
     position: int
     shared_with_other_drama: bool

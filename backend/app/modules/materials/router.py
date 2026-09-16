@@ -14,6 +14,7 @@ from app.core.context import TenantContext
 from app.core.db import engine
 from app.core.pagination import Page, count_rows
 from app.modules.materials import catalog
+from app.modules.materials.content_identity import content_key
 from app.modules.materials.models import (
     AccountMaterial,
     MaterialFile,
@@ -23,6 +24,7 @@ from app.modules.materials.models import (
 from app.modules.materials.repository import (
     asset_public,
     decode_material_cursor,
+    deduplicate_material_statement,
     encode_material_cursor,
 )
 from app.modules.materials.schemas import (
@@ -46,7 +48,6 @@ from app.modules.materials.uploads import (
     get_upload_batch,
     get_upload_file_result,
     public_error,
-    require_bc,
     retry_object_upload,
     sign_upload_part,
     start_upload_batch,
@@ -96,7 +97,6 @@ def read_upload_request(
 @router.get("/upload-batches", response_model=Page[UploadBatchSummary])
 def read_upload_batches(
     tenant_id: UUID,
-    bc_id: BCID,
     session: SessionDep,
     user: CurrentUser,
     cursor: Cursor = None,
@@ -106,7 +106,7 @@ def read_upload_batches(
         session, actor_id=user.id, tenant_id=tenant_id, action="read"
     )
     return catalog.upload_batches_page(
-        session, context=context, bc_id=bc_id, cursor=cursor, limit=limit
+        session, context=context, cursor=cursor, limit=limit
     )
 
 
@@ -114,7 +114,6 @@ def read_upload_batches(
 def read_original_preview(
     tenant_id: UUID,
     material_id: UUID,
-    bc_id: BCID,
     response: Response,
     session: SessionDep,
     user: CurrentUser,
@@ -122,9 +121,7 @@ def read_original_preview(
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="read"
     )
-    result = catalog.original_preview(
-        session, context=context, bc_id=bc_id, material_id=material_id
-    )
+    result = catalog.original_preview(session, context=context, material_id=material_id)
     response.headers["Cache-Control"] = "no-store"
     return result
 
@@ -133,7 +130,6 @@ def read_original_preview(
 def read_remote_preview(
     tenant_id: UUID,
     material_id: UUID,
-    bc_id: BCID,
     response: Response,
     session: SessionDep,
     user: CurrentUser,
@@ -149,7 +145,6 @@ def read_remote_preview(
             database_engine=engine,
             redis_client=redis_client,
             context=context,
-            bc_id=bc_id,
             material_id=material_id,
         )
     response.headers["Cache-Control"] = "no-store"
@@ -211,12 +206,11 @@ def post_complete(
     return UploadCompleted(task_id=task_id)
 
 
-def _catalog_statement(context: TenantContext, bc_id: str) -> tuple[Any, Any]:
+def _catalog_statement(context: TenantContext) -> tuple[Any, Any]:
     count = (
         select(func.count(col(AccountMaterial.id)))
         .where(
             AccountMaterial.tenant_id == context.tenant_id,
-            AccountMaterial.bc_id == bc_id,
             AccountMaterial.material_id == MaterialFile.id,
             AccountMaterial.status == "available",
         )
@@ -227,7 +221,6 @@ def _catalog_statement(context: TenantContext, bc_id: str) -> tuple[Any, Any]:
         select(MaterialUploadAttempt.status)
         .where(
             MaterialUploadAttempt.tenant_id == context.tenant_id,
-            MaterialUploadAttempt.bc_id == bc_id,
             MaterialUploadAttempt.material_id == MaterialFile.id,
         )
         .order_by(
@@ -242,7 +235,20 @@ def _catalog_statement(context: TenantContext, bc_id: str) -> tuple[Any, Any]:
         select(MaterialUploadAttempt.advertiser_id)
         .where(
             MaterialUploadAttempt.tenant_id == context.tenant_id,
-            MaterialUploadAttempt.bc_id == bc_id,
+            MaterialUploadAttempt.material_id == MaterialFile.id,
+        )
+        .order_by(
+            col(MaterialUploadAttempt.created_at).desc(),
+            col(MaterialUploadAttempt.id).desc(),
+        )
+        .limit(1)
+        .correlate(MaterialFile)
+        .scalar_subquery()
+    )
+    latest_bc = (
+        select(MaterialUploadAttempt.bc_id)
+        .where(
+            MaterialUploadAttempt.tenant_id == context.tenant_id,
             MaterialUploadAttempt.material_id == MaterialFile.id,
         )
         .order_by(
@@ -274,15 +280,16 @@ def _catalog_statement(context: TenantContext, bc_id: str) -> tuple[Any, Any]:
         (col(MaterialFile.storage_state) == "stored", "stored"),
         else_="receiving",
     )
-    return select(MaterialFile, stage, count, advertiser).where(
-        MaterialFile.tenant_id == context.tenant_id, MaterialFile.bc_id == bc_id
+    return select(MaterialFile, stage, count, advertiser).add_columns(latest_bc).where(
+        col(MaterialFile.tenant_id) == context.tenant_id
     ), stage
 
 
 def _material_public(record: Any) -> MaterialPublic:
-    file, stage, count, advertiser = record
+    file, stage, count, advertiser, latest_bc = record
     return MaterialPublic(
         material_id=file.id,
+        content_key=content_key(file),
         bc_id=file.bc_id,
         file_name=file.file_name,
         byte_size=file.byte_size,
@@ -295,6 +302,7 @@ def _material_public(record: Any) -> MaterialPublic:
         status=stage,
         available_account_count=count,
         latest_advertiser_id=advertiser,
+        latest_bc_id=latest_bc,
     )
 
 
@@ -303,7 +311,6 @@ def get_materials(
     tenant_id: UUID,
     session: SessionDep,
     user: CurrentUser,
-    bc_id: BCID,
     query: Annotated[str, Query(max_length=1000)] = "",
     status: Annotated[
         str | None,
@@ -319,7 +326,6 @@ def get_materials(
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="read"
     )
-    require_bc(session, context=context, bc_id=bc_id, action="read")
     if any(value and value.tzinfo is None for value in (created_from, created_to)) or (
         created_from and created_to and created_from > created_to
     ):
@@ -328,13 +334,12 @@ def get_materials(
     scope = {
         "kind": "material-directory",
         "tenant": str(tenant_id),
-        "bc": bc_id,
         "query": hashlib.sha256(query.encode()).hexdigest(),
         "status": status or "",
         "from": created_from.isoformat() if created_from else "",
         "to": created_to.isoformat() if created_to else "",
     }
-    statement, stage = _catalog_statement(context, bc_id)
+    statement, stage = _catalog_statement(context)
     if query:
         statement = statement.where(
             col(MaterialFile.file_name_folded).contains(query, autoescape=True)
@@ -345,6 +350,8 @@ def get_materials(
         statement = statement.where(MaterialFile.created_at >= created_from)
     if created_to:
         statement = statement.where(MaterialFile.created_at <= created_to)
+    # 内容别名先按筛选保留名称，再在 SQL 分页前选稳定代表。
+    statement = deduplicate_material_statement(statement)
     name_order = col(MaterialFile.file_name).collate("C")
     total = count_rows(session, statement)
     if cursor:
@@ -377,10 +384,9 @@ def get_materials(
 
 
 def _detail(
-    session: Session, context: TenantContext, bc_id: str, material_id: UUID
+    session: Session, context: TenantContext, material_id: UUID
 ) -> MaterialPublic:
-    require_bc(session, context=context, bc_id=bc_id, action="read")
-    statement, _ = _catalog_statement(context, bc_id)
+    statement, _ = _catalog_statement(context)
     row = session.exec(
         statement.where(MaterialFile.id == material_id).execution_options(
             populate_existing=True
@@ -397,12 +403,11 @@ def get_material(
     material_id: UUID,
     session: SessionDep,
     user: CurrentUser,
-    bc_id: BCID,
 ) -> MaterialPublic:
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="read"
     )
-    return _detail(session, context, bc_id, material_id)
+    return _detail(session, context, material_id)
 
 
 @router.get("/{material_id}/assets", response_model=Page[AccountAsset])
@@ -411,23 +416,20 @@ def get_assets(
     material_id: UUID,
     session: SessionDep,
     user: CurrentUser,
-    bc_id: BCID,
     cursor: Cursor = None,
     limit: Limit = 50,
 ) -> Page[AccountAsset]:
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="read"
     )
-    _detail(session, context, bc_id, material_id)
+    _detail(session, context, material_id)
     scope = {
         "kind": "material-assets",
         "tenant": str(tenant_id),
-        "bc": bc_id,
         "material": str(material_id),
     }
     statement = select(AccountMaterial).where(
         AccountMaterial.tenant_id == tenant_id,
-        AccountMaterial.bc_id == bc_id,
         AccountMaterial.material_id == material_id,
     )
     total = count_rows(session, statement)
@@ -456,23 +458,20 @@ def get_attempts(
     material_id: UUID,
     session: SessionDep,
     user: CurrentUser,
-    bc_id: BCID,
     cursor: Cursor = None,
     limit: Limit = 50,
 ) -> Page[UploadAttemptPublic]:
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="read"
     )
-    _detail(session, context, bc_id, material_id)
+    _detail(session, context, material_id)
     scope = {
         "kind": "material-attempts",
         "tenant": str(tenant_id),
-        "bc": bc_id,
         "material": str(material_id),
     }
     statement = select(MaterialUploadAttempt).where(
         MaterialUploadAttempt.tenant_id == tenant_id,
-        MaterialUploadAttempt.bc_id == bc_id,
         MaterialUploadAttempt.material_id == material_id,
     )
     total = count_rows(session, statement)
@@ -489,6 +488,7 @@ def get_attempts(
             UploadAttemptPublic(
                 attempt_id=row.id,
                 material_id=row.material_id,
+                bc_id=row.bc_id,
                 advertiser_id=row.advertiser_id,
                 connection_id=row.connection_id,
                 status=row.status

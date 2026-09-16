@@ -27,6 +27,7 @@ from app.modules.builds.schemas import (
     DraftMaterialPublic,
     DraftSummary,
 )
+from app.modules.materials.content_identity import content_key
 from app.modules.materials.models import MaterialFile
 from app.modules.providers.models import (
     LinkPreparationItem,
@@ -336,12 +337,11 @@ def materials_page(
         .exists()
     )
     query = (
-        select(DraftGroupMaterial, MaterialFile.file_name, shared)
+        select(DraftGroupMaterial, MaterialFile, shared)
         .join(
             MaterialFile,
             and_(
                 col(MaterialFile.tenant_id) == DraftGroupMaterial.tenant_id,
-                col(MaterialFile.bc_id) == DraftGroupMaterial.bc_id,
                 col(MaterialFile.id) == DraftGroupMaterial.material_id,
             ),
         )
@@ -370,12 +370,14 @@ def materials_page(
         items=[
             DraftMaterialPublic(
                 material_id=row.material_id,
-                file_name=name,
+                file_name=file.file_name,
+                source_bc_id=file.bc_id,
+                content_key=content_key(file),
                 group_no=row.group_no,
                 position=row.position,
                 shared_with_other_drama=bool(is_shared),
             )
-            for row, name, is_shared in rows[:limit]
+            for row, file, is_shared in rows[:limit]
         ],
         next_cursor=encode_cursor(
             scope=scope,

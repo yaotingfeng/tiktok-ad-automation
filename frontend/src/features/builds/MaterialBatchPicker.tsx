@@ -20,14 +20,14 @@ import { cn } from "@/lib/utils"
 
 export function MaterialBatchPicker({
   tenantId,
-  bcId,
   existingIds,
+  existingContentKeys,
   disabled,
   onAdd,
 }: {
   tenantId: string
-  bcId: string
   existingIds: string[]
+  existingContentKeys: string[]
   disabled: boolean
   onAdd: (items: MaterialPublic[]) => void
 }) {
@@ -39,15 +39,18 @@ export function MaterialBatchPicker({
   const [selected, setSelected] = useState(new Map<string, MaterialPublic>())
   const paging = useCursorPage()
   const existing = new Set(existingIds)
-  const chosen = [...selected.values()].filter(
-    (item) => !existing.has(item.material_id),
+  const existingContent = new Set(existingContentKeys)
+  const selectedContent = new Set(
+    [...selected.values()].map((item) => item.content_key),
   )
+  const alreadyAdded = (item: MaterialPublic) =>
+    existing.has(item.material_id) || existingContent.has(item.content_key)
+  const chosen = [...selected.values()].filter((item) => !alreadyAdded(item))
   const query = useQuery({
     queryKey: [
       "tenant",
       tenantId,
       "builds",
-      bcId,
       "material-picker",
       search,
       paging.cursor,
@@ -60,7 +63,6 @@ export function MaterialBatchPicker({
         await MaterialsService.getMaterials({
           path: { tenant_id: tenantId },
           query: {
-            bc_id: bcId,
             query: search,
             cursor: paging.cursor,
             limit: paging.limit,
@@ -70,10 +72,10 @@ export function MaterialBatchPicker({
       ).data,
   })
   const available = (query.data?.items || []).filter(
-    (item) => !existing.has(item.material_id),
+    (item) => !alreadyAdded(item),
   )
   const selectedOnPage = available.filter((item) =>
-    selected.has(item.material_id),
+    selectedContent.has(item.content_key),
   ).length
   const locked = disabled || query.isFetching || !!query.error
   function changeOpen(value: boolean) {
@@ -88,9 +90,19 @@ export function MaterialBatchPicker({
     setSelected((old) => {
       const next = new Map(old)
       for (const item of rows) {
-        if (existing.has(item.material_id)) continue
-        if (checked) next.set(item.material_id, item)
-        else next.delete(item.material_id)
+        if (alreadyAdded(item)) continue
+        if (checked) {
+          // 全选本页保留已选项；不同历史文件名代表同一内容时只加入一次。
+          if (
+            ![...next.values()].some(
+              (value) => value.content_key === item.content_key,
+            )
+          )
+            next.set(item.material_id, item)
+        } else {
+          for (const [key, value] of next)
+            if (value.content_key === item.content_key) next.delete(key)
+        }
       }
       return next
     })
@@ -176,8 +188,8 @@ export function MaterialBatchPicker({
           )}
           <ul aria-label="可添加的素材" className="flex flex-col gap-2">
             {query.data?.items.map((item) => {
-              const added = existing.has(item.material_id)
-              const checked = added || selected.has(item.material_id)
+              const added = alreadyAdded(item)
+              const checked = added || selectedContent.has(item.content_key)
               return (
                 <li key={item.material_id}>
                   <FieldLabel
@@ -202,6 +214,9 @@ export function MaterialBatchPicker({
                     />
                     <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
                       {item.file_name}
+                      <span className="block text-xs text-muted-foreground">
+                        上传来源 BC：{item.bc_id}
+                      </span>
                     </span>
                     {added && (
                       <Badge variant="secondary" className="shrink-0">

@@ -1,5 +1,6 @@
 """Local preview evidence only: no SDK calls, admission leases, or queued work."""
 
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -17,6 +18,7 @@ from app.modules.accounts.models import BCAccountAccess
 from app.modules.accounts.routing import freeze_route
 
 from .channel_policy import require_url_upload
+from .content_identity import content_key, material_content_key_expression
 from .distribution_sources import distribution_sources
 from .models import AccountMaterial, MaterialAssetOperation, MaterialFile
 from .remote_sources import require_remote_material
@@ -57,7 +59,6 @@ def load_material(
         select(MaterialFile)
         .where(
             MaterialFile.tenant_id == context.tenant_id,
-            MaterialFile.bc_id == bc_id,
             MaterialFile.id == material_id,
         )
         .execution_options(populate_existing=True)
@@ -88,6 +89,53 @@ def target_mapping(
         )
         .execution_options(populate_existing=True)
     ).first()
+
+
+def matching_target_assets(
+    session: Session,
+    *,
+    context: TenantContext,
+    materials: Sequence[MaterialFile],
+    advertiser_id: str,
+    route: FrozenTikTokRoute,
+) -> dict[str, AccountMaterial]:
+    """只读查询同内容、同实际账户及当前连接的合法副本，供提交复用。"""
+    keys = {
+        content_key(material) for material in materials if material.digest_verified_at
+    }
+    if not keys:
+        return {}
+    readable = (
+        usable_grants(tenant_id=context.tenant_id, bc_id=route.bc_id, action="read")
+        .where(
+            BCAccountAccess.advertiser_id == AccountMaterial.advertiser_id,
+            BCAccountAccess.connection_id == AccountMaterial.connection_id,
+        )
+        .exists()
+    )
+    rows = session.exec(
+        select(AccountMaterial, MaterialFile)
+        .join(
+            MaterialFile,
+            (col(AccountMaterial.material_id) == MaterialFile.id)
+            & (col(AccountMaterial.tenant_id) == MaterialFile.tenant_id),
+        )
+        .where(
+            AccountMaterial.tenant_id == context.tenant_id,
+            AccountMaterial.bc_id == route.bc_id,
+            AccountMaterial.advertiser_id == advertiser_id,
+            AccountMaterial.connection_id == route.connection_id,
+            AccountMaterial.status == "available",
+            col(AccountMaterial.verified_at).is_not(None),
+            material_content_key_expression().in_(keys),
+            readable,
+        )
+        .order_by(col(AccountMaterial.verified_at).desc(), col(AccountMaterial.id))
+    ).all()
+    result: dict[str, AccountMaterial] = {}
+    for asset, material in rows:
+        result.setdefault(content_key(material), asset)
+    return result
 
 
 def mapping_fresh(asset: AccountMaterial | None) -> bool:
@@ -126,7 +174,7 @@ def has_legal_source_mid(
                 AccountMaterial.tenant_id == context.tenant_id,
                 AccountMaterial.bc_id == bc_id,
                 AccountMaterial.material_id == material_id,
-                AccountMaterial.advertiser_id != advertiser_id,
+                col(AccountMaterial.advertiser_id) != advertiser_id,
                 AccountMaterial.status == "available",
                 col(AccountMaterial.verified_at).is_not(None),
                 col(AccountMaterial.mid).is_not(None),
@@ -172,6 +220,10 @@ def require_upload_path(
     advertiser_id: str,
     route: FrozenTikTokRoute | None = None,
 ) -> None:
+    if route is not None and route.bc_id != material.bc_id:
+        raise DomainError(
+            "material_remote_source_unavailable", "原文件只能由原始上传 BC 处理"
+        )
     if route is not None:
         require_material_route(
             session,
@@ -223,7 +275,6 @@ def get_material_readiness_batch(
         select(MaterialFile)
         .where(
             MaterialFile.tenant_id == context.tenant_id,
-            MaterialFile.bc_id == bc_id,
             col(MaterialFile.id).in_(identities),
         )
         .execution_options(populate_existing=True)
@@ -334,11 +385,34 @@ def get_material_readiness_batch(
 
     upload_checked = False
     upload_error: DomainError | None = None
+    aliases = matching_target_assets(
+        session,
+        context=context,
+        materials=materials,
+        advertiser_id=advertiser_id,
+        route=route,
+    )
     result: dict[UUID, MaterialReadiness] = {}
     for material in materials:
         mapping = mappings.get(material.id)
         operation = operations.get(material.id)
         try:
+            if mapping is None and operation is None:
+                alias = aliases.get(content_key(material))
+                if alias is not None:
+                    if not mapping_fresh(alias):
+                        require_execution_config(
+                            upload=False,
+                            endpoint="materials.get_videos",
+                            channel=route.channel,
+                        )
+                    # 预览保留真实资产身份且不写库；提交才建立当前素材的消费引用。
+                    result[material.id] = MaterialReadiness(
+                        state="preparable",
+                        path="existing_target",
+                        mapping=asset_public(alias),
+                    )
+                    continue
             if mapping_fresh(mapping):
                 assert mapping
                 result[material.id] = MaterialReadiness(
@@ -396,6 +470,22 @@ def get_material_readiness_batch(
                         "素材超过当前URL转存工程容量限制",
                     )
                 require_target_upload()
+                from .source_selection import resolve_primary_account
+
+                primary = resolve_primary_account(
+                    session,
+                    context=context,
+                    bc_id=bc_id,
+                    route=route,
+                )
+                require_material_route(
+                    session,
+                    context=context,
+                    route=route,
+                    bc_id=bc_id,
+                    advertiser_id=primary.advertiser_id,
+                    capability="build",
+                )
                 if route.channel == "OFFICIAL_MCP":
                     require_url_upload(
                         material_upload_policy(
@@ -417,6 +507,11 @@ def get_material_readiness_batch(
                     state="preparable", path="share_source"
                 )
                 continue
+            if material.bc_id != bc_id:
+                raise DomainError(
+                    "material_remote_source_unavailable",
+                    "没有可用来源，请恢复账户授权或重新上传原文件",
+                )
             if material.storage_state == "stored":
                 if material.current_object_generation is not None:
                     raise DomainError(

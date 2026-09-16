@@ -577,7 +577,6 @@ function MaterialPreview({
       (
         await MaterialsService.readOriginalPreview({
           path: { tenant_id: tenantId, material_id: material.material_id },
-          query: { bc_id: bcId },
           signal,
         })
       ).data,

@@ -15,13 +15,11 @@ import { materialKey, Stage } from "./presentation"
 import { useIngestPage } from "./useIngestPage"
 export function BatchHistory({
   tenantId,
-  bcId,
   onOpen,
   enabled,
   onForbidden,
 }: {
   tenantId: string
-  bcId: string
   onOpen: (id: string) => void
   enabled: boolean
   onForbidden: () => void
@@ -30,7 +28,7 @@ export function BatchHistory({
     query = useQuery({
       enabled,
       queryKey: [
-        ...materialKey(tenantId, bcId),
+        ...materialKey(tenantId),
         "ingest-sessions",
         paging.cursor,
         paging.limit,
@@ -39,7 +37,7 @@ export function BatchHistory({
         (
           await MaterialIngestService.listIngestSessions({
             path: { tenant_id: tenantId },
-            query: { bc_id: bcId, cursor: paging.cursor, limit: paging.limit },
+            query: { cursor: paging.cursor, limit: paging.limit },
             signal,
           })
         ).data,
@@ -64,6 +62,11 @@ export function BatchHistory({
           </span>
         </Button>
       ),
+    },
+    {
+      header: "上传目标 BC",
+      size: 220,
+      cell: ({ row }) => <span className="text-xs">{row.original.bc_id}</span>,
     },
     {
       header: "文件数量",

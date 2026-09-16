@@ -1,4 +1,9 @@
-import { createFileRoute, Outlet, redirect } from "@tanstack/react-router"
+import {
+  createFileRoute,
+  Outlet,
+  redirect,
+  useRouterState,
+} from "@tanstack/react-router"
 import {
   Clapperboard,
   FileVideo,
@@ -50,6 +55,9 @@ function Layout() {
   )
 }
 function ScopedLayout() {
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  })
   const { scope, tenant, tenantId, user, platform, bc } = useTenantScope()
   const prefix = `/tenants/${tenantId}`
   const workItems = tenantId
@@ -98,7 +106,10 @@ function ScopedLayout() {
     >
       <ApiFeedback />
       <TenantAccessGate>
-        <Outlet key={`${tenantId ?? "global"}:${scope?.bcId ?? ""}`} />
+        {/* 素材目录只随租户切换；上传管理器单独保存批次 BC。 */}
+        <Outlet
+          key={`${tenantId ?? "global"}:${pathname.endsWith("/materials") ? "materials" : (scope?.bcId ?? "")}`}
+        />
       </TenantAccessGate>
     </WorkspaceShell>
   )

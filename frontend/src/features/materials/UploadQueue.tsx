@@ -25,7 +25,7 @@ import {
 } from "@/features/tenants/shared"
 import { canRestartOriginal } from "./ingest-transfer"
 import { LegacyUploadQueue } from "./LegacyUploadQueue"
-import { bytes, issue, materialKey, Stage } from "./presentation"
+import { bytes, issue, Stage, uploadKey } from "./presentation"
 import { useIngestPage } from "./useIngestPage"
 import { type UploadManager, useFileProgress } from "./useUploadManager"
 
@@ -80,7 +80,7 @@ export function UploadQueue({
   const single = useRef<HTMLInputElement>(null)
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
   const summaryQuery = useQuery({
-    queryKey: [...materialKey(tenantId, bcId), "ingest-summary", batchId],
+    queryKey: [...uploadKey(tenantId, bcId), "ingest-summary", batchId],
     queryFn: async ({ signal }) => {
       const summary = (
         await MaterialIngestService.readIngestSummary({
@@ -97,7 +97,7 @@ export function UploadQueue({
   const query = useQuery({
     enabled: !!summaryQuery.data && !summaryQuery.error,
     queryKey: [
-      ...materialKey(tenantId, bcId),
+      ...uploadKey(tenantId, bcId),
       "ingest-files",
       batchId,
       status,

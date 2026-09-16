@@ -53,6 +53,14 @@ def material_reference() -> ForeignKeyConstraint:
     )
 
 
+def tenant_material_reference() -> ForeignKeyConstraint:
+    """消费素材按租户身份关联；所在 BC 由真实账户/操作外键另行约束。"""
+    return ForeignKeyConstraint(
+        ["tenant_id", "material_id"],
+        ["material_file.tenant_id", "material_file.id"],
+    )
+
+
 def account_reference() -> ForeignKeyConstraint:
     return ForeignKeyConstraint(
         ["tenant_id", "advertiser_id"],
@@ -92,6 +100,7 @@ class MaterialFile(SQLModel, table=True):
             "file_name",
             "id",
         ),
+        Index("ix_material_tenant_name_id", "tenant_id", "file_name", "id"),
         Index(
             "ix_material_folded_trgm",
             "file_name_folded",
@@ -101,6 +110,7 @@ class MaterialFile(SQLModel, table=True):
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     tenant_id: UUID
+    # 原始上传 BC，仅作来源审计；素材目录及消费范围属于租户。
     bc_id: str = Field(max_length=128)
     file_name: str = Field(
         max_length=1000, sa_column=Column(String(1000, collation="C"), nullable=False)
@@ -225,7 +235,12 @@ class MaterialAssetOperation(SQLModel, table=True):
     __tablename__ = "material_asset_operation"
     __table_args__ = (
         route_constraint("material_asset_operation", "frozen_route"),
-        material_reference(),
+        tenant_material_reference(),
+        ForeignKeyConstraint(
+            ["tenant_id", "bc_id"],
+            ["tenant_bc.tenant_id", "tenant_bc.bc_id"],
+            name="fk_material_asset_operation_tenant_bc",
+        ),
         account_reference(),
         CheckConstraint(
             "status IN ('pending','sending','result_unknown','verifying','confirmed_absent','succeeded','failed')",
@@ -250,6 +265,7 @@ class MaterialAssetOperation(SQLModel, table=True):
         Index(
             "uq_material_unverified_operation",
             "tenant_id",
+            "bc_id",
             "material_id",
             "advertiser_id",
             unique=True,
@@ -366,10 +382,11 @@ class MaterialResponseArchive(SQLModel, table=True):
 class AccountMaterial(SQLModel, table=True):
     __tablename__ = "account_material"
     __table_args__ = (
-        material_reference(),
+        tenant_material_reference(),
         access_reference(),
         UniqueConstraint(
             "tenant_id",
+            "bc_id",
             "material_id",
             "advertiser_id",
             name="uq_account_material_target",
@@ -411,8 +428,33 @@ class MaterialDistribution(SQLModel, table=True):
     __table_args__ = (
         route_constraint("material_distribution", "target_route"),
         route_constraint("material_distribution", "source_route", source=True),
-        material_reference(),
+        tenant_material_reference(),
+        ForeignKeyConstraint(
+            ["tenant_id", "bc_id"],
+            ["tenant_bc.tenant_id", "tenant_bc.bc_id"],
+            name="fk_material_distribution_tenant_bc",
+        ),
         account_reference(),
+        UniqueConstraint(
+            "tenant_id",
+            "bc_id",
+            "material_id",
+            "advertiser_id",
+            "id",
+            name="uq_material_distribution_identity",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "bc_id", "seed_id"],
+            [
+                "material_bc_seed.tenant_id",
+                "material_bc_seed.bc_id",
+                "material_bc_seed.id",
+            ],
+            name="fk_material_distribution_seed",
+            use_alter=True,
+            deferrable=True,
+            initially="DEFERRED",
+        ),
         CheckConstraint(
             "status IN ('queued','preparing','verifying','ready','blocked','result_unknown')",
             name="ck_material_distribution_status",
@@ -440,6 +482,7 @@ class MaterialDistribution(SQLModel, table=True):
         Index(
             "uq_material_pending_distribution",
             "tenant_id",
+            "bc_id",
             "material_id",
             "advertiser_id",
             unique=True,
@@ -454,6 +497,7 @@ class MaterialDistribution(SQLModel, table=True):
     material_id: UUID
     advertiser_id: str = Field(max_length=128)
     actor_id: UUID = Field(foreign_key="user.id")
+    seed_id: UUID | None = None
     source_asset_id: UUID | None = None
     source_bc_id: str | None = Field(default=None, max_length=128)
     source_material_id: UUID | None = None
