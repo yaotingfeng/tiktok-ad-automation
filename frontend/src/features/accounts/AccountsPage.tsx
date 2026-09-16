@@ -67,7 +67,11 @@ export function AccountsPage() {
         <TabsContent value="accounts">
           <AccountDirectory key={`${tenantId}:${bc?.bc_id ?? "none"}`} />
         </TabsContent>
-        <TabsContent value="connections">
+        <TabsContent
+          value="connections"
+          className="flex min-w-0 flex-col gap-4"
+        >
+          <BCAuthorization key={`${tenantId}:${bc?.bc_id ?? "none"}`} />
           <ConnectionsPage key={tenantId} />
         </TabsContent>
       </Tabs>
@@ -99,12 +103,13 @@ function AccountDirectory() {
     )
   return (
     <div className="flex min-w-0 flex-col gap-4">
-      {bc && <BCAuthorization />}
       {connectionId ? (
         <AccountRows key={connectionId} connectionId={connectionId} />
       ) : (
         <p role="status" className="text-sm text-muted-foreground">
-          {bcPending ? "正在读取当前 BC…" : "设置使用授权后即可查看广告账户"}
+          {bcPending
+            ? "正在读取当前 BC…"
+            : "请到“授权管理”设置当前 BC 的使用授权后查看广告账户"}
         </p>
       )}
     </div>

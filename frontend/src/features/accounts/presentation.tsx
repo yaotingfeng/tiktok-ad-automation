@@ -10,6 +10,15 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 
+// 授权可关联多个 BC；缺少名称时使用稳定编号区分，不把 BC 名称当成授权人。
+export function authorizationName(item: ConnectionPublic) {
+  const channel = item.kind === "OFFICIAL_MCP" ? "官方 MCP" : "官方 API"
+  const name = item.display_name?.trim()
+  return name
+    ? `${name} · ${channel}`
+    : `${channel} 授权 · ${item.id.slice(-8)}`
+}
+
 export const availabilityLabels: Record<AccountPublic["availability"], string> =
   {
     AVAILABLE: "可用",

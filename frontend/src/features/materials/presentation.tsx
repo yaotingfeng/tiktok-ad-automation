@@ -68,7 +68,7 @@ export function CopyValue({ value, label }: { value: string; label?: string }) {
 }
 const errors: Record<string, string> = {
   bc_default_connection_required:
-    "请先到“账户与授权 → 广告账户”为当前 BC 设置使用授权。",
+    "请先到“账户与授权 → 授权管理”为当前 BC 设置使用授权。",
   connection_unavailable:
     "当前授权不可用，请到“账户与授权”检查授权状态；已有上传任务保留原授权。",
   connection_bc_mismatch:

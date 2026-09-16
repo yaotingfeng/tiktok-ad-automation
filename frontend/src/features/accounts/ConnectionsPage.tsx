@@ -21,6 +21,7 @@ import {
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { McpAuthorizationSheet } from "./McpAuthorizationSheet"
 import {
+  authorizationName,
   bindingLabels,
   capabilityLabel,
   connectionLabels,
@@ -143,6 +144,10 @@ export function ConnectionsPage() {
       observedDiscovery.current.set(connection.id, connection)
     }
     if (!changed) return
+    // 列表发现授权状态变化时，同步更新上方当前 BC 的授权卡片。
+    void queryClient.invalidateQueries({
+      queryKey: ["tenant", tenantId, "connections", "bc-authorization"],
+    })
     // Discovery commits alter all local directory projections, not only the
     // connection row. Invalidate this tenant only, including inactive pages.
     for (const resource of ["bcs", "accounts", "connection-bcs"]) {
@@ -197,12 +202,7 @@ export function ConnectionsPage() {
         header: "授权连接",
         cell: ({ row }) => (
           <div className="flex flex-col gap-1">
-            <strong>
-              {row.original.display_name ||
-                (row.original.kind === "OFFICIAL_MCP"
-                  ? "官方 MCP"
-                  : "官方 API")}
-            </strong>
+            <strong>{authorizationName(row.original)}</strong>
             <span className="text-xs text-muted-foreground">
               {row.original.kind === "OFFICIAL_MCP" ? "官方 MCP" : "官方 API"}
               {row.original.is_default ? " · 已有 BC 使用此授权" : ""}
@@ -476,8 +476,8 @@ export function ConnectionsPage() {
               官方 MCP
             </Button>
             <p className="text-sm text-muted-foreground">
-              每种通道独立授权，同一授权可接入多个 BC。管理员在“广告账户”页为各
-              BC 设置使用授权。
+              每种通道独立授权，同一授权可接入多个
+              BC。管理员在“授权管理”页上方为各 BC 设置使用授权。
             </p>
           </div>
         </ManagementSheet>
@@ -870,7 +870,7 @@ function ConnectionDetails({
         )}
         <p className="text-sm text-muted-foreground">
           如需更换 BC 使用的授权，请切换到该
-          BC，在“广告账户”页统一设置。已准备的任务继续使用其原授权。
+          BC，在“授权管理”页上方统一设置。已准备的任务继续使用其原授权。
         </p>
         <section className="flex min-w-0 flex-col gap-4">
           <h2 className="font-semibold">关联 BC</h2>

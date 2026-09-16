@@ -148,7 +148,7 @@ export function BuildSteps({ step }: { step: 1 | 2 | 3 }) {
 
 export const reasonLabels: Record<string, string> = {
   bc_default_connection_required:
-    "请先到“账户与授权 → 广告账户”为当前 BC 设置使用授权。",
+    "请先到“账户与授权 → 授权管理”为当前 BC 设置使用授权。",
   connection_unavailable:
     "当前授权不可用，请到“账户与授权”检查授权状态。已准备的任务仍保留原授权。",
   connection_bc_mismatch:

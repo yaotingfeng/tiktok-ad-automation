@@ -793,14 +793,41 @@ const BC3 = "7000000000000000003"
 const CONN = "66666666-6666-4666-8666-666666666666"
 const MCP_CONN = "77777777-7777-4777-8777-000000000003"
 
+test("authorization settings live only in their tab and unnamed connections remain distinguishable", async ({
+  page,
+}) => {
+  const { requests } = await accountBoundary(page, { connectionCount: 4 })
+  await page.goto(`/tenants/${A}/accounts?bc_id=${BC1}`)
+  await expect(page.getByRole("row", { name: /第一BC账户 2 / })).toBeVisible()
+  await expect(page.getByText(/^使用授权：/)).toHaveCount(0)
+  await expect(
+    page.getByRole("button", { name: "更换授权", exact: true }),
+  ).toHaveCount(0)
+  await page.getByRole("tab", { name: "授权管理", exact: true }).click()
+  await expect(
+    page.getByText("使用授权：官方 API 授权 · 66666666", { exact: true }),
+  ).toBeVisible()
+  await expect(page.getByRole("row", { name: new RegExp(CONN) })).toContainText(
+    "官方 API 授权 · 66666666",
+  )
+  await expect(
+    page.getByRole("row", { name: new RegExp(MCP_CONN) }),
+  ).toContainText("官方 API 授权 · 00000003")
+  await expect(page.getByText(/未命名授权/)).toHaveCount(0)
+  await expect(
+    page.getByRole("link", { name: "管理授权", exact: true }),
+  ).toHaveCount(0)
+  expect(requests.every((request) => request.method === "GET")).toBe(true)
+})
+
 for (const role of ["operator", "viewer"] as const) {
   test(`${role} can view BC authorization but cannot change it`, async ({
     page,
   }) => {
     const { requests } = await accountBoundary(page, { role, singleBC: true })
-    await page.goto(`/tenants/${A}/accounts?bc_id=${BC1}`)
+    await page.goto(`/tenants/${A}/accounts?bc_id=${BC1}&tab=connections`)
     await expect(
-      page.getByText("使用授权：未命名授权 · 官方 API", { exact: true }),
+      page.getByText("使用授权：官方 API 授权 · 66666666", { exact: true }),
     ).toBeVisible()
     await expect(page.getByRole("button", { name: "更换授权" })).toHaveCount(0)
     await expect(
@@ -814,7 +841,8 @@ test("BC authorization change is staged until save and cancel preserves original
   page,
 }) => {
   const { requests } = await accountBoundary(page, { mcpConnection: true })
-  await page.goto(`/tenants/${A}/accounts?bc_id=${BC1}`)
+  await page.goto(`/tenants/${A}/accounts?bc_id=${BC1}&tab=connections`)
+  await page.getByRole("tab", { name: "授权管理", exact: true }).click()
   await page.getByRole("button", { name: "更换授权", exact: true }).click()
   await expect(
     page.locator('[id="authorization-77777777-7777-4777-8777-000000000001"]'),
@@ -828,7 +856,7 @@ test("BC authorization change is staged until save and cancel preserves original
     .getByRole("button", { name: "丢弃未保存修改", exact: true })
     .click()
   await expect(
-    page.getByText("使用授权：未命名授权 · 官方 API", { exact: true }),
+    page.getByText("使用授权：官方 API 授权 · 66666666", { exact: true }),
   ).toBeVisible()
   expect(requests.every((request) => request.method === "GET")).toBe(true)
 })
@@ -843,7 +871,8 @@ test("BC authorization setting handles a rejected save without changing the acco
       json: { code: "action_forbidden", message: "当前角色不能执行此操作" },
     }),
   )
-  await page.goto(`/tenants/${A}/accounts?bc_id=${BC1}`)
+  await page.goto(`/tenants/${A}/accounts?bc_id=${BC1}&tab=connections`)
+  await page.getByRole("tab", { name: "授权管理", exact: true }).click()
   await page.getByRole("button", { name: "更换授权", exact: true }).click()
   await page.getByRole("radio", { name: /MCP 业务连接/ }).click()
   await page.getByRole("button", { name: "保存", exact: true }).click()
@@ -866,9 +895,9 @@ test("BC authorization finds the persisted default beyond the first page", async
   const { requests } = await accountBoundary(page, {
     defaultConnectionId: "77777777-7777-4777-8777-000000000100",
   })
-  await page.goto(`/tenants/${A}/accounts?bc_id=${BC1}`)
+  await page.goto(`/tenants/${A}/accounts?bc_id=${BC1}&tab=connections`)
   await expect(
-    page.getByText("使用授权：未命名授权 · 官方 API", { exact: true }),
+    page.getByText("使用授权：官方 API 授权 · 00000100", { exact: true }),
   ).toBeVisible()
   expect(
     requests.some(
@@ -893,7 +922,7 @@ test("single BC authorization still requires an explicit initial save", async ({
     noDefault: true,
     connectionCount: 1,
   })
-  await page.goto(`/tenants/${A}/accounts?bc_id=${BC1}`)
+  await page.goto(`/tenants/${A}/accounts?bc_id=${BC1}&tab=connections`)
   await page.getByRole("button", { name: "设置使用授权", exact: true }).click()
   await expect(page.getByText(/当前 BC 只有一个可用授权/)).toBeVisible()
   await expect(
@@ -901,6 +930,7 @@ test("single BC authorization still requires an explicit initial save", async ({
   ).toBeDisabled()
   await page.getByRole("radio").click()
   await page.getByRole("button", { name: "保存", exact: true }).click()
+  await page.getByRole("tab", { name: "广告账户", exact: true }).click()
   await expect(page.getByRole("row", { name: /第一BC账户 2 / })).toBeVisible()
   expect(requests.filter((request) => request.method === "PUT")).toHaveLength(1)
 })
@@ -911,14 +941,15 @@ for (const width of [1440, 390]) {
   }) => {
     await page.setViewportSize({ width, height: 900 })
     await accountBoundary(page, { mcpConnection: true, connectionCount: 4 })
-    await page.goto(`/tenants/${A}/accounts?bc_id=${BC1}`)
+    await page.goto(`/tenants/${A}/accounts?bc_id=${BC1}&tab=connections`)
     await expect(
-      page.getByText("使用授权：未命名授权 · 官方 API", { exact: true }),
+      page.getByText("使用授权：官方 API 授权 · 66666666", { exact: true }),
     ).toBeVisible()
     await page.screenshot({
       path: test.info().outputPath(`bc-authorization-${width}.png`),
       animations: "disabled",
     })
+    await page.getByRole("tab", { name: "授权管理", exact: true }).click()
     await page.getByRole("button", { name: "更换授权", exact: true }).click()
     await page.getByRole("radio", { name: /MCP 业务连接/ }).click()
     await expect(
@@ -1913,8 +1944,8 @@ test("completed first discovery refreshes the empty BC directory without reloadi
   completed = true
   await expect.poll(() => bcReads, { timeout: 12000 }).toBeGreaterThan(1)
   await expect(page).toHaveURL(new RegExp(`bc_id=${BC1}`))
-  await page.getByRole("tab", { name: "广告账户", exact: true }).click()
   // 新授权发现 BC 后，仍需在统一入口保存使用授权。
+  await page.getByRole("tab", { name: "授权管理", exact: true }).click()
   await expect(
     page.getByText("使用授权：尚未设置", { exact: true }),
   ).toBeVisible()
@@ -2313,7 +2344,6 @@ for (const width of [1440, 390])
   })
 
 for (const destination of [
-  "materials",
   "build-tasks",
   `build-drafts/${U}`,
   `build-previews/${U}`,
@@ -2339,7 +2369,7 @@ for (const role of ["viewer", "operator"] as const)
     page,
   }) => {
     await boundary(page, { platform: false, role })
-    await page.goto(`/tenants/${A}/materials`)
+    await page.goto(`/tenants/${A}/build-tasks`)
     const main = page.getByRole("main")
     await expect(
       main.getByRole("link", { name: "成员管理", exact: true }),
@@ -2378,9 +2408,12 @@ test("BC authorization setting persists and keeps unknown MCP permissions separa
   await expect(page.getByRole("row", { name: /第一BC账户 2 / })).toContainText(
     "可搭建",
   )
+  await page.getByRole("tab", { name: "授权管理", exact: true }).click()
   await page.getByRole("button", { name: "更换授权", exact: true }).click()
   await page.getByRole("radio", { name: /MCP 业务连接/ }).click()
   await page.getByRole("button", { name: "保存", exact: true }).click()
+  await expect(page.getByRole("dialog")).toHaveCount(0)
+  await page.getByRole("tab", { name: "广告账户", exact: true }).click()
   await expect(page.getByRole("row", { name: /第一BC账户 2 / })).toContainText(
     "权限待核实",
   )
@@ -2398,12 +2431,14 @@ test("BC authorization setting persists and keeps unknown MCP permissions separa
     `/api/tenants/${A}/bcs/${BC1}/default-connection`,
   )
   expect(writes[0]?.body).toEqual({ connection_id: MCP_CONN })
+  await page.getByRole("tab", { name: "授权管理", exact: true }).click()
   await page.reload()
   await expect(
     page.getByText("使用授权：MCP 业务连接 · 官方 MCP", { exact: true }),
   ).toBeVisible()
   await page.getByRole("combobox", { name: "当前 BC", exact: true }).click()
   await page.getByRole("option", { name: /业务 BC 二/ }).click()
+  await page.getByRole("tab", { name: "广告账户", exact: true }).click()
   await expect(page.getByRole("row", { name: /第二BC账户 2 / })).toContainText(
     "可搭建",
   )
@@ -2417,6 +2452,7 @@ test("an account directory without a default waits for the BC authorization sett
     singleBC: true,
   })
   await page.goto(`/tenants/${A}/accounts`)
+  await page.getByRole("tab", { name: "授权管理", exact: true }).click()
   await expect(
     page.getByText("使用授权：尚未设置", { exact: true }),
   ).toBeVisible()
@@ -2426,6 +2462,8 @@ test("an account directory without a default waits for the BC authorization sett
   await page.getByRole("button", { name: "设置使用授权", exact: true }).click()
   await page.locator(`[id="authorization-${CONN}"]`).click()
   await page.getByRole("button", { name: "保存", exact: true }).click()
+  await expect(page.getByRole("dialog")).toHaveCount(0)
+  await page.getByRole("tab", { name: "广告账户", exact: true }).click()
   await expect(page.getByRole("row", { name: /第一BC账户 2 / })).toBeVisible()
 })
 
@@ -2439,7 +2477,7 @@ test("connection details direct authorization changes to the unified setting", a
     .getByRole("button", { name: "查看详情", exact: true })
     .click()
   const detail = page.getByRole("dialog", { name: "连接详情", exact: true })
-  await expect(detail.getByText(/在“广告账户”页统一设置/)).toBeVisible()
+  await expect(detail.getByText(/在“授权管理”页上方统一设置/)).toBeVisible()
   await expect(
     detail.getByRole("button", { name: "设为默认执行连接" }),
   ).toHaveCount(0)
@@ -2565,7 +2603,7 @@ for (const terminal of ["PUBLISHED", "OUTCOME_UNKNOWN"] as const) {
     let reads = 0
     let completed = false
     await page.route("**/api/tenants/*/tiktok/connections*", (route) => {
-      reads++
+      if (!new URL(route.request().url()).searchParams.has("bc_id")) reads++
       return route.fulfill({
         json: {
           items: [
@@ -2631,6 +2669,7 @@ test("authorization setting removes retained names after a later page denies acc
   )
   await page.goto(`/tenants/${A}/accounts?bc_id=${BC1}`)
   await expect(page.getByRole("row", { name: /第一BC账户 2 / })).toBeVisible()
+  await page.getByRole("tab", { name: "授权管理", exact: true }).click()
   await page.getByRole("button", { name: "更换授权", exact: true }).click()
   forbidden = true
   await page.getByRole("button", { name: "加载更多授权", exact: true }).click()
@@ -2641,7 +2680,8 @@ test("authorization setting removes retained names after a later page denies acc
   await expect(
     page.getByRole("button", { name: "加载更多授权", exact: true }),
   ).toHaveCount(0)
-  await expect(page.getByText(/MCP 业务连接/)).toHaveCount(0)
+  await expect(page.getByRole("radio", { name: /MCP 业务连接/ })).toHaveCount(0)
+  await expect(page.getByRole("dialog")).toHaveCount(0)
 })
 
 test("MCP single accessible BC is selected automatically without binding until submitted", async ({

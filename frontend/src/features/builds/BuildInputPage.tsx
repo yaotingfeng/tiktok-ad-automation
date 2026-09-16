@@ -339,7 +339,7 @@ export function BuildInputPage({
                 className="underline underline-offset-4"
                 to="/tenants/$tenantId/accounts"
                 params={{ tenantId }}
-                search={{ bc_id: bcId, tab: "accounts" }}
+                search={{ bc_id: bcId, tab: "connections" }}
               >
                 账户与授权
               </Link>

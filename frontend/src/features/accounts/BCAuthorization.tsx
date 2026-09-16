@@ -3,9 +3,8 @@ import {
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query"
-import { Link } from "@tanstack/react-router"
 import { useEffect, useState } from "react"
-import { AccountsService, type ConnectionPublic } from "@/client"
+import { AccountsService } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -27,12 +26,11 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { ManagementSheet } from "@/features/tenants/ManagementSheet"
 import { canManage, isForbidden, RequestError } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
-import { connectionLabels, displayTime } from "./presentation"
-
-function authorizationName(item: ConnectionPublic) {
-  const channel = item.kind === "OFFICIAL_MCP" ? "官方 MCP" : "官方 API"
-  return `${item.display_name || "未命名授权"} · ${channel}`
-}
+import {
+  authorizationName,
+  connectionLabels,
+  displayTime,
+} from "./presentation"
 
 export function BCAuthorization() {
   const { tenantId, bc, scope } = useTenantScope()
@@ -150,15 +148,6 @@ export function BCAuthorization() {
               {bc.default_connection_id ? "更换授权" : "设置使用授权"}
             </Button>
           )}
-          <Button variant="link" asChild>
-            <Link
-              to="/tenants/$tenantId/accounts"
-              params={{ tenantId: tenantId! }}
-              search={{ bc_id: bc.bc_id, tab: "connections" }}
-            >
-              管理授权
-            </Link>
-          </Button>
           {!manage && (
             <p className="text-sm text-muted-foreground">
               需要更换时请联系租户管理员。
@@ -244,7 +233,9 @@ export function BCAuthorization() {
               ))}
             </RadioGroup>
             {exhausted && !items.length && (
-              <p role="status">当前 BC 暂无关联授权，请先前往授权管理接入。</p>
+              <p role="status">
+                当前 BC 暂无关联授权，请在下方新增连接或关联 BC。
+              </p>
             )}
             {query.hasNextPage && (
               <Button
