@@ -17,6 +17,7 @@ from redis import Redis
 from sqlmodel import Session
 
 from app.core.config import settings
+from app.integrations.tiktok.admission import quota_scope
 from app.jobs.admission import admission_keys
 from app.modules.builds import execution
 from app.modules.builds.execution import (
@@ -86,8 +87,9 @@ def test_hard_kill_cannot_replay_an_armed_official_create(
     @test_app.task(
         name=prefix + "create",
         shared=False,
-        time_limit=3,
-        soft_time_limit=1,
+        # 先完成真实数据库鉴权，再在 HTTP 阻塞期间硬终止；1 秒软中断会提前结束准备。
+        time_limit=10,
+        soft_time_limit=None,
         acks_late=True,
         reject_on_worker_lost=True,
     )
@@ -104,7 +106,11 @@ def test_hard_kill_cannot_replay_an_armed_official_create(
             client.set(prefix + "returned", "yes", ex=120)
 
     keys = admission_keys(
-        settings.TIKTOK_APP_ID,
+        quota_scope(
+            channel="OFFICIAL_API",
+            app_id=settings.TIKTOK_APP_ID,
+            verified_service_scope=None,
+        ),
         "build.create_cta_portfolio",
         context.tenant_id,
         "account-A",
@@ -113,6 +119,7 @@ def test_hard_kill_cannot_replay_an_armed_official_create(
         with start_worker(
             test_app,
             pool="prefork",
+            use_eventloop=False,
             concurrency=1,
             perform_ping_check=False,
             shutdown_timeout=15,
@@ -122,7 +129,11 @@ def test_hard_kill_cannot_replay_an_armed_official_create(
             original_pid = worker.pool._pool._pool[0].pid
             started = time.monotonic()
             stalled_create.delay()
-            assert received.wait(10), "official SDK did not reach the local transport"
+            arrived = received.wait(10)
+            with Session(db) as session:
+                observed = session.get(ExecutionStep, step_id)
+                diagnostic = (observed.status, observed.phase, observed.error_code)
+            assert arrived, diagnostic
             assert requests[0][1] == "REQUEST_ARMED" and requests[0][2]
             deadline = time.monotonic() + 12
             replacement = []
