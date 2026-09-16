@@ -44,8 +44,13 @@ from tests.modules.materials.test_tenant_materials import material
 from tests.modules.strategies.test_versions import config
 
 
-def create_intent(session, context):
-    session.add(TenantBC(tenant_id=context.tenant_id, bc_id="bc-draft"))
+def create_intent(session, context, *, historical=False):
+    if historical:
+        from tests.migration_database import insert_historical_bc
+
+        insert_historical_bc(session, tenant_id=context.tenant_id, bc_id="bc-draft")
+    else:
+        session.add(TenantBC(tenant_id=context.tenant_id, bc_id="bc-draft"))
     connection = ProviderConnection(
         tenant_id=context.tenant_id,
         kind="jiashu",

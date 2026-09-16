@@ -21,10 +21,10 @@ from app.modules.builds.preview_models import (
     PlannedGroup,
     PreviewGroupMaterial,
 )
+from app.modules.builds.routes import verify_unit_route
 from app.modules.materials.cover_models import MaterialCoverJob
 from app.modules.materials.models import AccountMaterial
 from app.modules.materials.readiness import mapping_fresh
-from app.modules.tenants.permissions import require_tenant
 
 
 def cover_matches_step(
@@ -185,7 +185,10 @@ def validate_ad_assets(
 
 
 def recover_cover_results(*, database_engine: Any, limit: int = 100) -> int:
-    from app.modules.materials.covers import get_cover_status
+    from app.modules.materials.covers import (
+        get_cover_status,
+        request_cover_reconciliation,
+    )
 
     if type(limit) is not int or not 1 <= limit <= 100:
         raise ValueError("invalid cover recovery page")
@@ -244,11 +247,9 @@ def recover_cover_results(*, database_engine: Any, limit: int = 100) -> int:
                 tenant_id=row.tenant_id, actor_id=row.actor_id, role="operator"
             )
             try:
-                require_tenant(
-                    session,
-                    actor_id=context.actor_id,
-                    tenant_id=context.tenant_id,
-                    action="build",
+                # 封面回执沿原预览核实；默认连接变化不能阻断原任务，也不能绕过重绑代数。
+                route = verify_unit_route(
+                    session, context=context, unit=unit, capability="build"
                 )
                 access = resolve_account_access(
                     session,
@@ -256,6 +257,7 @@ def recover_cover_results(*, database_engine: Any, limit: int = 100) -> int:
                     bc_id=step.bc_id,
                     advertiser_id=unit.advertiser_id,
                     action="build",
+                    connection_id=route.connection_id,
                 )
                 if (access.connection_id, access.currency, access.timezone) != (
                     unit.connection_id,
@@ -264,6 +266,11 @@ def recover_cover_results(*, database_engine: Any, limit: int = 100) -> int:
                 ):
                     raise DomainError("new_preview_required", "账户与冻结预览不一致")
                 result = get_cover_status(session, context=context, job_id=job.id)
+                if result.reason_code == "cover_evidence_stale":
+                    # 延迟恢复只补同一封面的只读核实；VERIFYING 会退出候选，避免重复排队。
+                    result = request_cover_reconciliation(
+                        session, context=context, job_id=job.id
+                    )
             except DomainError as error:
                 step.error_code, step.updated_at = error.code, datetime.now(UTC)
                 session.add(step)

@@ -4,10 +4,11 @@ import json
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import text
+from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -162,7 +163,9 @@ def try_prepare_batch(
         lock_key = int.from_bytes(
             sha256(repr(identity).encode()).digest()[:8], "big", signed=True
         )
-        db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
+        cast(SASession, db).execute(
+            text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key}
+        )
         db.refresh(anchor)
         db.refresh(anchor_op)
         if (
@@ -238,8 +241,8 @@ def try_prepare_batch(
             bc_id=anchor.bc_id,
             actor_id=context.actor_id,
             source_advertiser_id=identity[-1],
-            target_route=anchor.target_route,
-            source_route=anchor.source_route,
+            target_route=cast(dict[str, Any], anchor.target_route),
+            source_route=cast(dict[str, Any], anchor.source_route),
             claim_id=claim,
             request_digest=sha256(
                 json.dumps(frozen, sort_keys=True).encode()

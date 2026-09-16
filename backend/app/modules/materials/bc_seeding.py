@@ -5,7 +5,7 @@ from hashlib import sha256
 from uuid import UUID, uuid4
 
 from sqlalchemy import func
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
@@ -30,7 +30,7 @@ def ensure_bc_seed(
     material: MaterialFile,
     route: FrozenTikTokRoute,
 ) -> MaterialBCSeed:
-    """内容键短事务串行首次登记；FAILED/UNKNOWN 也必须保留原登记。"""
+    """内容键串行登记；新准备只接替已明确无效果的终态，历史依赖不改写。"""
     from .distribution import ensure_target_asset
 
     key = content_key(material)
@@ -43,22 +43,45 @@ def ensure_bc_seed(
     )
     db.exec(select(func.pg_advisory_xact_lock(lock))).one()
     seed = db.exec(
-        select(MaterialBCSeed).where(
+        select(MaterialBCSeed)
+        .where(
             MaterialBCSeed.tenant_id == context.tenant_id,
             MaterialBCSeed.bc_id == route.bc_id,
             MaterialBCSeed.content_key == key,
         )
+        .order_by(col(MaterialBCSeed.generation).desc())
     ).first()
     if seed:
         dist = db.get(MaterialDistribution, seed.distribution_id)
         assert dist
-        require_same_route(
-            load_material_route(dist.target_route, context=context, bc_id=route.bc_id),
-            route,
+        operation = db.get(MaterialAssetOperation, dist.operation_id)
+        assert operation
+        # 明确无效果的失败可由用户再次提交准备；不能把超时、已发送或待核实
+        # 当成失败重传。即使平台明确拒绝时留下 armed，终态无效果证据仍有效。
+        replaceable = (
+            dist.status == "blocked"
+            and operation.status == "failed"
+            and operation.remote_response.get("definite_no_effect") is True
+            and operation.attempt_token is None
+            and operation.claimed_until is None
+            and not operation.remote_response.get("video_id")
+            and not operation.remote_response.get("upload_video_id")
         )
-        return seed
+        if not replaceable:
+            require_same_route(
+                load_material_route(
+                    dist.target_route, context=context, bc_id=route.bc_id
+                ),
+                route,
+            )
+            return seed
     primary = resolve_primary_account(
-        db, context=context, bc_id=route.bc_id, route=route, persist=True
+        db,
+        context=context,
+        bc_id=route.bc_id,
+        route=route,
+        advertiser_id=seed.advertiser_id if seed else None,
+        persist=True,
     )
     prepared = ensure_target_asset(
         db,
@@ -82,6 +105,7 @@ def ensure_bc_seed(
         advertiser_id=primary.advertiser_id,
         distribution_id=prepared.task_id,
         content_key=key,
+        generation=seed.generation + 1 if seed else 1,
     )
     db.add(seed)
     db.flush()
@@ -97,7 +121,7 @@ def resume_seed_dependency(
 ) -> bool:
     """返回 True 表示仍等待或已终结；False 才允许正常原生共享发送。"""
     from .distribution import _bind_operation, queue_distribution
-    from .readiness import target_mapping
+    from .readiness import mapping_fresh, target_mapping
     from .remote_sources import resolve_remote_source
 
     if (
@@ -198,21 +222,30 @@ def resume_seed_dependency(
             advertiser_id=dist.advertiser_id,
         )
         if mapping is None:
-            mapping = AccountMaterial(
-                **(
-                    primary.model_dump()
-                    | {
-                        "id": uuid4(),
-                        "material_id": dist.material_id,
-                    }
-                )
-            )
+            values = primary.model_dump()
+            values.update(id=uuid4(), material_id=dist.material_id)
+            mapping = AccountMaterial(**values)
             db.add(mapping)
         else:
             mapping.connection_id = primary.connection_id
             mapping.video_id, mapping.mid = primary.video_id, primary.mid
             mapping.image_id, mapping.cover_url = primary.image_id, primary.cover_url
             mapping.status, mapping.verified_at = primary.status, primary.verified_at
+        if not mapping_fresh(mapping):
+            # 延迟等待者只能复用真实 VID，过期证据必须沿既有只读路径重新核实。
+            operation = _bind_operation(
+                db,
+                context=context,
+                material_id=dist.material_id,
+                bc_id=dist.bc_id,
+                advertiser_id=dist.advertiser_id,
+                path="existing_target",
+                route=route,
+            )
+            dist.operation_id, dist.path = operation.id, "existing_target"
+            dist.status, dist.reason_code = "verifying", None
+            queue_distribution(db, dist, operation, kind="verify")
+            return True
         operation.status, dist.status, dist.reason_code = "succeeded", "ready", None
         operation.remote_response = {
             **operation.remote_response,

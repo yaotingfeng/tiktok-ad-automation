@@ -194,7 +194,7 @@ def test_repair_does_not_redeliver_live_claim_or_invalid_identity(job_env, wire)
     assert not wire[0]
 
 
-def test_expired_bc_proof_refreshes_without_repeating_shared_scene_gets(
+def test_completed_bc_proof_does_not_expire_or_repeat_shared_scene_gets(
     job_env, wire, redis_client
 ):
     env = job_env
@@ -202,17 +202,11 @@ def test_expired_bc_proof_refreshes_without_repeating_shared_scene_gets(
     with Session(engine) as session, session.begin():
         cap = session.get(CapabilityJob, job.capability_job_id)
         cap.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    before = len(wire[0])
     result = ensure(env)
-    assert result.state == "queued" and result.job_id == job.id
-    with Session(engine) as session:
-        cap = session.exec(
-            select(CapabilityJob).where(CapabilityJob.status == "PENDING")
-        ).one()
-    wire[1].append(role_page(["actual-account"]))
-    run_capability(env, redis_client, cap.id)
-    run_capability(env, redis_client, cap.id)
-    assert ensure(env).state == "ready"
-    assert len(wire[0]) == 7
+    # 已完成权限事实不按时间过期；期限仅约束尚未完成的目录读取任务。
+    assert result.state == "ready" and result.job_id == job.id
+    assert len(wire[0]) == before
 
 
 @pytest.mark.parametrize("expired_proof", [False, True])
@@ -240,17 +234,12 @@ def test_restored_actor_can_resume_with_new_job_and_old_receipt_stays_fenced(
             ) - timedelta(seconds=1)
     renewed = ensure(env)
     assert renewed.state == "queued" and renewed.job_id != job.id
-    if expired_proof:
-        waiting = run(env, redis_client, renewed.job_id)
-        wire[1].append(role_page(["actual-account"]))
-        run_capability(env, redis_client, waiting.capability_job_id)
-        run_capability(env, redis_client, waiting.capability_job_id)
     wire[1].extend(responses(env))
     for _ in range(5):
         result = run(env, redis_client, renewed.job_id)
     assert result.status == "COMPLETE"
     assert run(env, redis_client, job.id).status == "BLOCKED"
-    assert len(wire[0]) == (7 if expired_proof else 6)
+    assert len(wire[0]) == 6
 
 
 def test_restored_authority_bootstraps_again_when_previous_capability_worker_was_blocked(

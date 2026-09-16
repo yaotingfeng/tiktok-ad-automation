@@ -235,3 +235,81 @@ def test_seed_upgrade_starts_empty_and_preserves_previous_distribution(monkeypat
                 ).scalar_one()
                 == before
             )
+
+
+@pytest.mark.parametrize("next_generation", [False, True])
+def test_seed_generation_upgrade_preserves_old_jobs_and_guards_downgrade(
+    monkeypatch, next_generation
+):
+    from uuid import uuid4
+
+    from alembic import command
+    from sqlalchemy import text
+    from sqlmodel import Session
+
+    from tests.migration_database import historical_database
+    from tests.modules.conftest import create_context
+
+    with historical_database(monkeypatch, "material_target_scope") as (engine, config):
+        with Session(engine) as db, db.begin():
+            owner = create_context(db)
+            file = material(db, owner, "old-seed.mp4")
+            asset = mapping(db, owner, file)
+            distribution_id, seed_id = uuid4(), uuid4()
+            values = {
+                "id": distribution_id,
+                "tenant": owner.tenant_id,
+                "bc": file.bc_id,
+                "material": file.id,
+                "account": asset.advertiser_id,
+                "actor": owner.actor_id,
+            }
+            db.execute(
+                text(
+                    "INSERT INTO material_distribution (id,tenant_id,bc_id,material_id,advertiser_id,actor_id,path,status) VALUES (:id,:tenant,:bc,:material,:account,:actor,'share_source','blocked')"
+                ),
+                values,
+            )
+            seed_values = {
+                **values,
+                "id": seed_id,
+                "distribution": distribution_id,
+                "content": f"material:{file.id}",
+            }
+            db.execute(
+                text(
+                    "INSERT INTO material_bc_seed (id,tenant_id,bc_id,material_id,advertiser_id,distribution_id,content_key) VALUES (:id,:tenant,:bc,:material,:account,:distribution,:content)"
+                ),
+                seed_values,
+            )
+            before = db.execute(
+                text("SELECT to_jsonb(s) FROM material_bc_seed s WHERE id=:id"),
+                {"id": seed_id},
+            ).scalar_one()
+        command.upgrade(config, "material_seed_generations")
+        with Session(engine) as db, db.begin():
+            after = db.execute(
+                text("SELECT to_jsonb(s) FROM material_bc_seed s WHERE id=:id"),
+                {"id": seed_id},
+            ).scalar_one()
+            assert after == {**before, "generation": 1}
+            if next_generation:
+                db.execute(
+                    text(
+                        "INSERT INTO material_bc_seed (id,tenant_id,bc_id,material_id,advertiser_id,distribution_id,content_key,generation) VALUES (:id,:tenant,:bc,:material,:account,:distribution,:content,2)"
+                    ),
+                    {**seed_values, "id": uuid4()},
+                )
+        if next_generation:
+            with pytest.raises(RuntimeError, match="generation"):
+                command.downgrade(config, "material_target_scope")
+        else:
+            command.downgrade(config, "material_target_scope")
+            with Session(engine) as db:
+                assert (
+                    db.execute(
+                        text("SELECT to_jsonb(s) FROM material_bc_seed s WHERE id=:id"),
+                        {"id": seed_id},
+                    ).scalar_one()
+                    == before
+                )

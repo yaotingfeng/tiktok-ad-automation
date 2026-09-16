@@ -7,6 +7,8 @@ from uuid import UUID
 
 from sqlalchemy import and_, func, or_
 from sqlalchemy import select as sa_select
+from sqlalchemy.orm import aliased
+from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
@@ -77,6 +79,42 @@ def decode_material_cursor(cursor: str, *, scope: dict[str, str]) -> tuple[str, 
         raise DomainError("invalid_cursor", "素材游标无效或不属于当前查询") from None
 
 
+def own_verified_asset() -> ColumnElement[bool]:
+    return (
+        select(AccountMaterial.id)
+        .where(
+            AccountMaterial.tenant_id == MaterialFile.tenant_id,
+            AccountMaterial.material_id == MaterialFile.id,
+            AccountMaterial.status == "available",
+            col(AccountMaterial.verified_at).is_not(None),
+        )
+        .exists()
+    )
+
+
+def material_visible(*, tenant_id: UUID) -> ColumnElement[bool]:
+    """选材按内容核对库存；旧名称可借同租户可信别名，不改写原文件身份。"""
+    source = aliased(MaterialFile)
+    # 固定租户让 PostgreSQL 一次计算可用内容集合，避免每条候选重新扫描全租户库存。
+    available_content = (
+        select(material_content_key_expression(source))
+        .join(
+            AccountMaterial,
+            (col(AccountMaterial.tenant_id) == source.tenant_id)
+            & (col(AccountMaterial.material_id) == source.id),
+        )
+        .where(
+            source.tenant_id == tenant_id,
+            AccountMaterial.status == "available",
+            col(AccountMaterial.verified_at).is_not(None),
+        )
+    )
+    return (col(MaterialFile.storage_state) != "receiving") & or_(
+        col(MaterialFile.storage_state) == "stored",
+        material_content_key_expression().in_(available_content),
+    )
+
+
 def deduplicate_material_statement(statement: Any) -> Any:
     """先保留符合筛选的历史名称，再选每种内容的确定性代表；total 与分页共享此范围。"""
     ranked = statement.with_only_columns(
@@ -84,7 +122,13 @@ def deduplicate_material_statement(statement: Any) -> Any:
         func.row_number()
         .over(
             partition_by=material_content_key_expression(),
-            order_by=(col(MaterialFile.file_name).collate("C"), col(MaterialFile.id)),
+            # 先显示有真实库存或原件的记录；文件名只决定同等可用性的稳定顺序。
+            order_by=(
+                own_verified_asset().desc(),
+                (col(MaterialFile.storage_state) == "stored").desc(),
+                col(MaterialFile.file_name).collate("C"),
+                col(MaterialFile.id),
+            ),
         )
         .label("content_position"),
         maintain_column_froms=True,
@@ -115,20 +159,9 @@ def matching_page(
         "bc": bc_id,
         "title": hashlib.sha256(needle.encode()).hexdigest(),
     }
-    verified_asset = (
-        select(AccountMaterial.id)
-        .where(
-            AccountMaterial.tenant_id == context.tenant_id,
-            AccountMaterial.material_id == MaterialFile.id,
-            AccountMaterial.status == "available",
-            col(AccountMaterial.verified_at).is_not(None),
-        )
-        .exists()
-    )
     statement = select(MaterialFile).where(
         MaterialFile.tenant_id == context.tenant_id,
-        MaterialFile.storage_state != "receiving",
-        or_(col(MaterialFile.storage_state) == "stored", verified_asset),
+        material_visible(tenant_id=context.tenant_id),
         col(MaterialFile.file_name_folded).contains(needle, autoescape=True),
     )
     statement = deduplicate_material_statement(statement)

@@ -1,4 +1,3 @@
-from typing import cast
 from uuid import UUID
 
 from sqlalchemy import SQLColumnExpression, and_, func
@@ -79,7 +78,7 @@ def resolve_account_access(
     context: TenantContext,
     bc_id: str,
     advertiser_id: str,
-    action: str,
+    action: Capability,
     connection_id: UUID | None = None,
 ) -> AccountAccess:
     if action not in {"read", "build", "upload"}:
@@ -92,7 +91,7 @@ def resolve_account_access(
         context=context,
         route=route,
         advertiser_id=advertiser_id,
-        capability=cast(Capability, action),
+        capability=action,
     )
     account = session.get(AdvertiserAccount, (context.tenant_id, advertiser_id))
     assert account is not None

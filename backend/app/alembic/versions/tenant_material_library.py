@@ -1,5 +1,7 @@
 """租户素材消费与原始上传来源分离，不改写任何历史事实。"""
 
+from typing import cast
+
 import sqlalchemy as sa
 from alembic import op
 
@@ -29,7 +31,7 @@ def _material_keys(*, tenant_only: bool) -> None:
         ]
         if len(keys) != 1:
             raise RuntimeError(f"Unexpected material reference in {table}")
-        op.drop_constraint(keys[0]["name"], table, type_="foreignkey")
+        op.drop_constraint(cast(str, keys[0]["name"]), table, type_="foreignkey")
         columns = (
             ["tenant_id", "material_id"]
             if tenant_only

@@ -9,9 +9,8 @@ from typing import Any
 from uuid import UUID, uuid4, uuid5
 
 from pydantic import ValidationError
-from sqlalchemy import and_, delete, or_, text
+from sqlalchemy import and_, delete, text
 from sqlalchemy.orm import Session as SASession
-from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -48,7 +47,8 @@ from app.modules.materials.content_identity import (
     content_key,
     material_content_key_expression,
 )
-from app.modules.materials.models import AccountMaterial, MaterialFile
+from app.modules.materials.models import MaterialFile
+from app.modules.materials.repository import material_visible
 from app.modules.materials.service import match_materials
 from app.modules.providers.models import (
     LinkPreparation,
@@ -74,22 +74,6 @@ PAGE_SIZE = 100
 
 class _Unchanged(Enum):
     VALUE = "unchanged"
-
-
-def material_visible() -> ColumnElement[bool]:
-    asset = (
-        select(AccountMaterial.id)
-        .where(
-            AccountMaterial.tenant_id == MaterialFile.tenant_id,
-            AccountMaterial.material_id == MaterialFile.id,
-            AccountMaterial.status == "available",
-            col(AccountMaterial.verified_at).is_not(None),
-        )
-        .exists()
-    )
-    return (col(MaterialFile.storage_state) != "receiving") & or_(
-        col(MaterialFile.storage_state) == "stored", asset
-    )
 
 
 def collect_pages[T](fetch: Callable[[str | None], Page[T]]) -> Iterator[T]:
@@ -1201,7 +1185,7 @@ def edit_material_groups(
             select(MaterialFile).where(
                 MaterialFile.tenant_id == context.tenant_id,
                 col(MaterialFile.id).in_(chunk),
-                material_visible(),
+                material_visible(tenant_id=context.tenant_id),
             )
         ).all()
         if {row.id for row in actual} != set(chunk):

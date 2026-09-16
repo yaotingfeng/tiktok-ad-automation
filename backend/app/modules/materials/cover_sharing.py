@@ -7,10 +7,12 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from hashlib import sha256
 from typing import Any
+from typing import cast as type_cast
 from uuid import UUID
 
 from redis import Redis
 from sqlalchemy import Engine, String, and_, cast, func, or_, text
+from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session, col, select
 from sqlmodel.sql.expression import SelectOfScalar
 
@@ -246,7 +248,9 @@ def _prepare(
         "big",
         signed=True,
     )
-    db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock})
+    type_cast(SASession, db).execute(
+        text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock}
+    )
     anchor = covers._job(db, context, first.id)
     if (
         anchor.claim_token != nonce
@@ -363,8 +367,8 @@ def _prepare(
         bc_id=first.bc_id,
         actor_id=first.actor_id,
         source_advertiser_id=source.advertiser_id,
-        source_route=source.frozen_route,
-        target_route=first.frozen_route,
+        source_route=type_cast(dict[str, Any], source.frozen_route),
+        target_route=type_cast(dict[str, Any], first.frozen_route),
         members=members,
         wake_job_id=first.id,
     )

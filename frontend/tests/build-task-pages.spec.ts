@@ -519,9 +519,9 @@ test("组内素材分页展示实际目标VID，点击原件才请求短期预�
 }) => {
   const api = await boundary(page)
   let previews = 0
-  await page.route(`**/api/tenants/${T}/materials/${E}/preview?*`, (route) => {
+  await page.route(`**/api/tenants/${T}/materials/${E}/preview`, (route) => {
     previews++
-    expect(new URL(route.request().url()).searchParams.get("bc_id")).toBe(BC)
+    expect(new URL(route.request().url()).searchParams.has("bc_id")).toBe(false)
     return route.fulfill({
       json: {
         url: "https://storage.example.com/task-preview.mp4",

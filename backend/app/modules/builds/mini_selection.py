@@ -1,13 +1,14 @@
 """小程序目录 GET 只读缓存；选择 POST 保存草稿并原子排队场景校验。"""
 
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 from uuid import UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -270,7 +271,8 @@ def choose_mini(
             {urlsplit(link_url(link)).path.rstrip("/").split("/")[-1] for link in links}
         )
         available = set(
-            session.execute(
+            cast(SASession, session)
+            .execute(
                 text("""
             SELECT DISTINCT item->>'minis_id' FROM build_scene_job_page p
             CROSS JOIN LATERAL jsonb_array_elements(p.facts->'options') item
@@ -282,7 +284,8 @@ def choose_mini(
                     "job_id": job.id,
                     "candidates": candidates,
                 },
-            ).scalars()
+            )
+            .scalars()
         )
         for link in links:
             direct = explicit_mini_id(link_url(link)) or matching_link_id(

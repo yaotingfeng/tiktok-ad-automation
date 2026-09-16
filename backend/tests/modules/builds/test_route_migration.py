@@ -32,7 +32,7 @@ def historical_rows(
 ):
     """只播种旧 schema 已有事实，无冻结路由、无远端调用或业务 mock。"""
     context = context or create_context(session)
-    intent = create_intent(session, context)
+    intent = create_intent(session, context, historical=not current)
     if current:
         draft = create_draft(session, context=context, **intent)
     else:

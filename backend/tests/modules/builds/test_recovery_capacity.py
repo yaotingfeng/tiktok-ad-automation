@@ -163,19 +163,14 @@ def test_generic_reconciliation_plan_uses_sparse_candidates_and_known_parent_ind
     session.execute(text("SET LOCAL plan_cache_mode='force_generic_plan'"))
     sql = "SELECT count(*) " + recovery._query(row, "RECONCILE")
     sql = (
-        sql.replace(":tenant", "$1")
-        .replace(":submission", "$2")
-        .replace(":now", "$3")
-        .replace(":cutoff", "$4")
+        sql.replace(":tenant", "$1").replace(":submission", "$2").replace(":now", "$3")
     )
-    session.execute(
-        text("PREPARE recovery_capacity(uuid,uuid,timestamptz,timestamptz) AS " + sql)
-    )
+    session.execute(text("PREPARE recovery_capacity(uuid,uuid,timestamptz) AS " + sql))
     params = recovery._params(row)
     try:
         plan = session.execute(
             text(
-                f"EXPLAIN (FORMAT JSON) EXECUTE recovery_capacity('{row.tenant_id}','{row.id}','{params['now'].isoformat()}','{params['cutoff'].isoformat()}')"
+                f"EXPLAIN (FORMAT JSON) EXECUTE recovery_capacity('{row.tenant_id}','{row.id}','{params['now'].isoformat()}')"
             )
         ).scalar_one()[0]["Plan"]
         names = {n.get("Index Name") for n in nodes(plan)}

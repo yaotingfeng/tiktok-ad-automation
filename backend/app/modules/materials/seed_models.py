@@ -2,7 +2,7 @@
 
 from uuid import UUID, uuid4
 
-from sqlalchemy import ForeignKeyConstraint, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKeyConstraint, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 from .models import tenant_material_reference
@@ -13,8 +13,13 @@ class MaterialBCSeed(SQLModel, table=True):
     __table_args__ = (
         tenant_material_reference(),
         UniqueConstraint(
-            "tenant_id", "bc_id", "content_key", name="uq_material_bc_seed_content"
+            "tenant_id",
+            "bc_id",
+            "content_key",
+            "generation",
+            name="uq_material_bc_seed_content",
         ),
+        CheckConstraint("generation >= 1", name="ck_material_bc_seed_generation"),
         UniqueConstraint(
             "tenant_id", "bc_id", "id", name="uq_material_bc_seed_identity"
         ),
@@ -39,3 +44,4 @@ class MaterialBCSeed(SQLModel, table=True):
     advertiser_id: str = Field(max_length=128)
     distribution_id: UUID
     content_key: str = Field(max_length=256)
+    generation: int = Field(default=1)

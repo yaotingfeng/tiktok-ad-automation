@@ -276,9 +276,9 @@ def ensure_target_asset(
         # 同内容别名仅建立消费引用；实际 VID、图片和验证时间来自同目标账户。
         actual = session.get(AccountMaterial, readiness.mapping.asset_id)
         assert actual
-        alias = AccountMaterial(
-            **(actual.model_dump() | {"id": uuid4(), "material_id": material_id})
-        )
+        values = actual.model_dump()
+        values.update(id=uuid4(), material_id=material_id)
+        alias = AccountMaterial(**values)
         session.add(alias)
         session.flush()
         if mapping_fresh(alias):
@@ -986,6 +986,30 @@ def run_distribution(
             )
             _target_access(session, context, dist, upload=False)
         except DomainError as error:
+            if kind == "prepare" and not read_only and dist.operation_id is not None:
+                # 目标撤权/绑定换代发生在发送前时，释放明确未发送的旧操作；
+                # 新提交可冻结新授权，已 armed 或在途操作继续保留原核实身份。
+                # 租户权限可能先于 load_material 失败，记账仍遵守素材→操作锁序。
+                _locked_material(session, context, dist.material_id)
+                operation = _locked_operation(session, context, dist.operation_id)
+                if (
+                    (operation_id is None or operation_id == operation.id)
+                    and (
+                        revision is None
+                        or revision == operation.remote_response.get("revision", 0)
+                    )
+                    and operation.status == "pending"
+                    and operation.attempt_token is None
+                    and operation.claimed_until is None
+                    and not operation.remote_response.get("send_armed")
+                    and _attempt(session, operation.id) is None
+                ):
+                    operation.status = "failed"
+                    operation.remote_response = {
+                        **operation.remote_response,
+                        "definite_no_effect": True,
+                        "error_code": error.code,
+                    }
             _blocked(dist, error.code)
             return
         assert dist.operation_id

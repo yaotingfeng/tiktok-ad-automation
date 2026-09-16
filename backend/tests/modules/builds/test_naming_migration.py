@@ -7,7 +7,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlmodel import Session, select
 
 from app.modules.builds.models import BuildDraft
-from app.modules.builds.preview_models import BuildPreview, PreviewDrama
+from app.modules.builds.preview_models import BuildPreview
 from app.modules.providers.models import PromotionLink, ProviderDrama
 from tests.migration_database import historical_database
 from tests.modules.builds.test_drafts import create_intent
@@ -19,7 +19,7 @@ def test_migration_preserves_frozen_preview_and_its_immutable_snapshot(monkeypat
     with historical_database(monkeypatch, "r2_part_receipts") as (engine, alembic):
         with Session(engine) as session:
             context = create_context(session)
-            intent = create_intent(session, context)
+            intent = create_intent(session, context, historical=True)
             # 迁移前只能播种当时列；当前 create_draft 会查询后续新增的连接偏好。
             draft = BuildDraft(
                 tenant_id=context.tenant_id,
@@ -56,8 +56,18 @@ def test_migration_preserves_frozen_preview_and_its_immutable_snapshot(monkeypat
                 external_drama_id="101",
                 title="Historic title",
             )
-            session.add(drama)
-            session.flush()
+            drama_table = Table(
+                "provider_drama", MetaData(), autoload_with=session.connection()
+            )
+            session.execute(
+                drama_table.insert().values(
+                    **{
+                        key: value
+                        for key, value in drama.model_dump().items()
+                        if key in drama_table.c
+                    }
+                )
+            )
             link = PromotionLink(
                 tenant_id=context.tenant_id,
                 connection_id=intent["provider_connection_id"],
@@ -66,8 +76,18 @@ def test_migration_preserves_frozen_preview_and_its_immutable_snapshot(monkeypat
                 reuse_key="historic-link",
                 config={},
             )
-            session.add(link)
-            session.flush()
+            link_table = Table(
+                "promotion_link", MetaData(), autoload_with=session.connection()
+            )
+            session.execute(
+                link_table.insert().values(
+                    **{
+                        key: value
+                        for key, value in link.model_dump().items()
+                        if key in link_table.c
+                    }
+                )
+            )
             session.execute(
                 text("""
                 INSERT INTO preview_drama (tenant_id, preview_id, bc_id, drama_id, link_id, title, url, protected_base, reason_codes)
@@ -91,8 +111,12 @@ def test_migration_preserves_frozen_preview_and_its_immutable_snapshot(monkeypat
             assert (
                 session.get(BuildPreview, identity).model_dump(mode="json") == original
             )
-            frozen = session.exec(
-                select(PreviewDrama).where(PreviewDrama.preview_id == identity)
+            # 只读该历史 head 的实际列，避免当前 ORM 引入后续展示编号字段。
+            preview_drama = Table(
+                "preview_drama", MetaData(), autoload_with=session.connection()
+            )
+            frozen = session.execute(
+                select(preview_drama).where(preview_drama.c.preview_id == identity)
             ).one()
             assert (
                 frozen.title == "Historic title"

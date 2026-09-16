@@ -112,3 +112,86 @@ def test_matching_continuation_does_not_repeat_content_when_representative_chang
     ).all()
     assert [row.material_id for row in chosen] == [a.id]
     assert drama.matched_count == 1
+
+
+def test_catalogue_keeps_usable_alias_and_old_name_can_still_be_selected(
+    session, context
+):
+    from app.models import User
+    from app.modules.materials.repository import matching_page
+    from app.modules.materials.router import get_materials
+    from tests.modules.materials.test_tenant_materials import mapping
+
+    draft, drama = prepared(session, context)
+    a = material(session, context, "Shared-a.mp4", bc="bc-a", state="unavailable")
+    b = material(session, context, "Shared-b.mp4", bc="bc-b", state="unavailable")
+    for row in (a, b):
+        row.sha256, row.video_md5 = "a" * 64, "b" * 32
+        row.digest_verified_at = datetime.now(UTC)
+        session.add(row)
+    mapping(session, context, b)
+    session.flush()
+    user = session.get(User, context.actor_id)
+    page = get_materials(context.tenant_id, session, user, query="Shared")
+    assert page.total == 1
+    assert [row.material_id for row in page.items] == [b.id]
+    # 原文件名仍可检索；经可信内容找到另一个真实来源，无需改写原始素材 ID。
+    old_name = matching_page(
+        session, context=context, bc_id="bc-draft", title="Shared-a"
+    )
+    assert [row.material_id for row in old_name.items] == [a.id]
+    revision = session.get(BuildDraft, draft).revision
+    edit_material_groups(
+        session,
+        context=context,
+        draft_id=draft,
+        drama_id=drama,
+        expected_revision=revision,
+        groups=[[a.id]],
+    )
+    selected = materials_page(session, context=context, draft_id=draft, drama_id=drama)
+    assert [row.material_id for row in selected.items] == [a.id]
+
+
+def test_alias_availability_never_borrows_unverified_content_or_other_tenant(
+    session, context, other_context
+):
+    from app.modules.materials.repository import matching_page
+    from tests.modules.materials.test_tenant_materials import mapping
+
+    a = material(session, context, "Unique-alias.mp4", state="unavailable")
+    foreign = material(session, other_context, "Foreign.mp4", state="unavailable")
+    local = material(session, context, "Local.mp4", state="unavailable")
+    for row in (a, foreign, local):
+        row.sha256, row.video_md5 = "a" * 64, "b" * 32
+        row.digest_verified_at = datetime.now(UTC)
+        session.add(row)
+    mapping(session, other_context, foreign)
+    mapping(session, context, local)
+    local.digest_verified_at = None
+    session.flush()
+    page = matching_page(session, context=context, bc_id="bc-a", title="Unique-alias")
+    assert page.items == []
+
+
+@pytest.mark.parametrize("identity", ["different_size", "unverified"])
+def test_content_availability_does_not_merge_distinct_source_identity(
+    session, context, identity
+):
+    from app.modules.materials.repository import matching_page
+    from tests.modules.materials.test_tenant_materials import mapping
+
+    target = material(session, context, "Do-not-match.mp4", state="unavailable")
+    source = material(session, context, "Existing-source.mp4", state="unavailable")
+    for row in (target, source):
+        row.sha256, row.video_md5 = "a" * 64, "b" * 32
+        row.digest_verified_at = (
+            datetime.now(UTC) if identity == "different_size" else None
+        )
+        session.add(row)
+    if identity == "different_size":
+        source.byte_size += 1
+    mapping(session, context, source)
+    session.flush()
+    page = matching_page(session, context=context, bc_id="bc-a", title="Do-not-match")
+    assert page.items == []

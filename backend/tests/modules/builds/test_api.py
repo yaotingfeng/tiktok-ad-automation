@@ -146,6 +146,8 @@ def test_prepared_http_reads_shared_groups_without_enqueuing(
             {
                 "material_id": str(shared.id),
                 "file_name": "Moon Short Drama.mp4",
+                "source_bc_id": "bc-draft",
+                "content_key": f"material:{shared.id}",
                 "group_no": 1,
                 "position": 1,
                 "shared_with_other_drama": True,
