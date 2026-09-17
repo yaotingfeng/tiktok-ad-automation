@@ -7,7 +7,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from redis import Redis
-from sqlalchemy import Engine, func, or_, union_all
+from sqlalchemy import Engine, and_, func, or_, union_all
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
@@ -1476,7 +1476,9 @@ def _read_failure(
             _stop(current, code, unknown=bool(current.request_armed_at))
 
 
-def _completed_cover_batches(first: MaterialCoverJob) -> SelectOfScalar[UUID]:
+def _completed_cover_batches(
+    first: MaterialCoverJob | type[MaterialCoverJob],
+) -> SelectOfScalar[UUID]:
     # 已完成共享保留原账本，只刷新目标真实ID。未完成批次仍需要自己的
     # wake成员接续未知结果，不能被详情批读领取后遗留无唤醒的成员。
     member = aliased(MaterialCoverJob)
@@ -1823,6 +1825,18 @@ def repair_cover_dispatches(session: Session, *, limit: int = 100) -> int:
                 col(MaterialCoverJob.dispatch_id).is_not(None),
                 col(MaterialCoverJob.id).in_(
                     select(MaterialCoverShareBatch.wake_job_id)
+                ),
+                # 全部成员已有目标ID后可独立批读；旧wake可能先完成。
+                # 过期领取且无投递的其余成员必须由正式repair接续，
+                # 未完整识别批次仍保持单wake，不能放大未知库存扫描。
+                and_(
+                    col(MaterialCoverJob.known_image_id).is_not(None),
+                    _completed_cover_batches(MaterialCoverJob)
+                    .where(
+                        MaterialCoverShareBatch.id == MaterialCoverJob.share_batch_id
+                    )
+                    .correlate(MaterialCoverJob)
+                    .exists(),
                 ),
             ),
             MaterialCoverJob.repair_after <= _now(),

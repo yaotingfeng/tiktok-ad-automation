@@ -118,3 +118,50 @@ def test_partial_shared_batch_is_not_claimed_as_complete_bulk_refresh(
         }
         assert identities[1] not in selected
         assert db.get(MaterialCoverJob, identities[1]).dispatch_id is not None
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_repair_recovers_identified_peers_after_shared_wake_is_ready(
+    source_env, redis_client, wire, partial
+):
+    identities = matrix(source_env, 3, 1)
+    wire[1].extend(
+        [
+            {"list": [image(i) for i in range(3)]},
+            page([]),
+            {"failed_infos": {}},
+        ]
+    )
+    drive(source_env, redis_client, identities[0])
+    wire[1].append(page([image(i, target_id=True) for i in range(3)]))
+    drive(source_env, redis_client, identities[0], read=True)
+    with Session(engine) as db, db.begin():
+        batch = db.get(MaterialCoverShareBatch, job_state(identities[0]).share_batch_id)
+        batch.status = "UNKNOWN"
+        original_batch = batch.model_dump()
+        for identity in identities[1:]:
+            current = db.get(MaterialCoverJob, identity)
+            current.status = "VERIFYING"
+            current.dispatch_id = None
+            current.claim_token = identity
+            current.claimed_until = covers._now() - timedelta(minutes=1)
+            current.repair_after = covers._now() - timedelta(minutes=1)
+        if partial:
+            db.get(MaterialCoverJob, identities[-1]).known_image_id = None
+    with Session(engine) as db, db.begin():
+        assert covers.repair_cover_dispatches(db) == (0 if partial else 2)
+    if partial:
+        assert all(job_state(identity).dispatch_id is None for identity in identities)
+        return
+    assert all(job_state(identity).dispatch_id for identity in identities[1:])
+    before = len(wire[0])
+    wire[1].append({"list": [image(i, target_id=True) for i in (1, 2)]})
+    run(source_env, redis_client, identities[1], read=True)
+    assert all(job_state(identity).status == "READY" for identity in identities)
+    assert len(wire[0]) == before + 1
+    assert wire[0][-1][0] == "GET" and "/info/" in wire[0][-1][1]
+    with Session(engine) as db:
+        assert (
+            db.get(MaterialCoverShareBatch, original_batch["id"]).model_dump()
+            == original_batch
+        )
