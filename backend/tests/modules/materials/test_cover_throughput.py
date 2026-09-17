@@ -770,6 +770,66 @@ def test_target_waits_for_source_cover_without_polling_outbox(
     assert wire[0] == []
 
 
+@pytest.mark.parametrize("stabilizes", [True, False])
+@pytest.mark.parametrize("armed", [False, True])
+def test_inventory_change_restarts_bounded_census_without_sending(
+    source_env, redis_client, wire, stabilizes, armed
+):
+    identity = matrix(source_env, 1, 1)[0]
+
+    def inventory(page_number, total):
+        indices = range(1, 101) if page_number == 1 else range(101, total + 1)
+        return {
+            "list": [image(index, target_id=True) for index in indices],
+            "page_info": {
+                "page": page_number,
+                "page_size": 100,
+                "total_page": 2,
+                "total_number": total,
+            },
+        }
+
+    if armed:
+        wire[1].extend([{"list": [image(0)]}, page([]), {"failed_infos": {}}])
+        drive(source_env, redis_client, identity)
+        assert job_state(identity).request_armed_at is not None
+    else:
+        wire[1].append({"list": [image(0)]})
+    wire[1].extend([inventory(1, 102), inventory(2, 103)])
+    run(source_env, redis_client, identity, read=armed)
+    run(source_env, redis_client, identity, read=armed)
+    assert job_state(identity).status == ("VERIFYING" if armed else "PENDING")
+    assert sum(call[0] == "POST" for call in wire[0]) == int(armed)
+    if stabilizes:
+        if armed:
+            found_page = inventory(1, 103)
+            found_page["list"][0] = image(0, target_id=True)
+            wire[1].append(found_page)
+        else:
+            wire[1].extend([inventory(1, 103), inventory(2, 103), {"failed_infos": {}}])
+    else:
+        wire[1].extend(
+            [
+                inventory(1, 103),
+                inventory(2, 104),
+                inventory(1, 104),
+                inventory(2, 105),
+            ]
+        )
+    drive(source_env, redis_client, identity, read=armed)
+    job = job_state(identity)
+    assert job.status == (
+        ("READY" if armed else "VERIFYING")
+        if stabilizes
+        else ("UNKNOWN" if armed else "BLOCKED")
+    )
+    assert sum(call[0] == "POST" for call in wire[0]) == int(armed or stabilizes)
+    if not stabilizes:
+        assert job.error_code == "cover_search_incomplete"
+        assert (job.request_armed_at is not None) == armed
+        assert job.dispatch_id is None
+
+
 def test_retry_after_inventory_changed_starts_new_census_before_share(
     source_env, redis_client, wire
 ):
@@ -795,6 +855,15 @@ def test_retry_after_inventory_changed_starts_new_census_before_share(
     )
     run(source_env, redis_client, identity)
     run(source_env, redis_client, identity)
+    wire[1].extend(
+        [
+            inventory(range(1, 101), 1, 103),
+            inventory([101, 102, 103, 104], 2, 104),
+            inventory(range(1, 101), 1, 104),
+            inventory([101, 102, 103, 104, 105], 2, 105),
+        ]
+    )
+    drive(source_env, redis_client, identity)
     assert job_state(identity).status == "BLOCKED"
     assert not any(call[0] == "POST" for call in wire[0])
     with Session(engine) as db, db.begin():

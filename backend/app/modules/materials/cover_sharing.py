@@ -717,11 +717,22 @@ def _scan(
             )
             ids = [row.image_id for row in result.rows]
             repeated = set(ids).intersection(progress["seen"])
-            if (
-                (repeated and result.total_number is None)
-                or len(set(ids)) != len(ids)
-                or ("total" in progress and progress["total"] != result.total_number)
-            ):
+            if "total" in progress and progress["total"] != result.total_number:
+                # 并发共享会改变库存；废弃该目标旧分页证据，从首页重新完整
+                # 核查，不能拼接不同总数后推断不存在。最多两次重新开始，
+                # 持续变化仍明确阻断；已发送批次始终只读，绝不因此重发。
+                restarts = progress.get("restarts", 0)
+                if restarts >= 2:
+                    raise DomainError("cover_search_incomplete", "图片分页范围持续变化")
+                state[target] = {
+                    "page": 1,
+                    "seen": [],
+                    "found": {},
+                    "done": False,
+                    "restarts": restarts + 1,
+                }
+                break
+            if (repeated and result.total_number is None) or len(set(ids)) != len(ids):
                 raise DomainError("cover_search_incomplete", "图片分页范围已变化")
             # 平台按修改时间排序，同总数的相邻页也可能重叠。只累计唯一ID，
             # 达到完整库存计数才允许形成“尚未找到”的结论；不把重复行算成新素材。
