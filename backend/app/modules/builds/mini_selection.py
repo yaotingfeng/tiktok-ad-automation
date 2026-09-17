@@ -203,20 +203,9 @@ def draft_minis(
     if job is None:
         return DraftMinis(state="pending", advertiser_id=account)
     links = _links(session, context, draft)
-    keys = [url_key(link_url(link)) for link in links]
-    saved = {
-        row.url_digest: row.minis_id
-        for row in session.exec(
-            select(MiniTarget).where(
-                MiniTarget.tenant_id == context.tenant_id,
-                col(MiniTarget.url_digest).in_(keys),
-            )
-        ).all()
-    }
-    values = {
-        explicit_mini_id(link_url(link)) or saved.get(url_key(link_url(link)))
-        for link in links
-    }
+    for link in links:
+        link_url(link)
+    values = _target_ids(session, context, links)
     selected_id = (
         next(iter(values)) if len(values) == 1 and None not in values else None
     )
@@ -242,6 +231,42 @@ def draft_minis(
         next_page=page + 1 if page < pages else None,
         total=total,
     )
+
+
+def _target_ids(
+    session: Session, context: TenantContext, links: list[PromotionLink]
+) -> set[str | None]:
+    # 一次读取全部已确认目标；预览入口与小程序选择器使用相同的解析规则。
+    urls = [link.url or "" for link in links]
+    keys = [url_key(url) for url in urls]
+    saved = {
+        row.url_digest: row.minis_id
+        for row in session.exec(
+            select(MiniTarget).where(
+                MiniTarget.tenant_id == context.tenant_id,
+                col(MiniTarget.url_digest).in_(keys),
+            )
+        ).all()
+    }
+    return {explicit_mini_id(url) or saved.get(url_key(url)) for url in urls}
+
+
+def require_preview_mini(
+    session: Session, *, context: TenantContext, draft: BuildDraft
+) -> None:
+    links = _links(session, context, draft)
+    if not links or len(links) > 1000:
+        raise DomainError("minis_links_unavailable", "请先完成剧目推广链接准备")
+    # 此处只拦截缺少/冲突的必填目标；链接失效仍在预览中按剧目隔离排除。
+    values = _target_ids(session, context, links)
+    if None in values:
+        raise DomainError(
+            "minis_selection_required", "请先选择本批次推广小程序，再生成预览"
+        )
+    if len(values) != 1:
+        raise DomainError(
+            "minis_link_conflict", "剧目指向不同小程序，请核对目标或分开搭建"
+        )
 
 
 def choose_mini(

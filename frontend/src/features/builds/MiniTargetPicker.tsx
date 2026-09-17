@@ -1,6 +1,6 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQueryClient } from "@tanstack/react-query"
 import { useState } from "react"
-import { BuildsService, type DraftMinis, type DraftSummary } from "@/client"
+import { BuildsService, type DraftSummary } from "@/client"
 import { PaginationSummary } from "@/components/Common/PaginationSummary"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog"
 import { buildKey, mutationKey, readPendingMutation } from "./api"
 import { BuildError, reportError, unknownOutcome } from "./presentation"
+import { useDraftMinis } from "./useDraftMinis"
 
 const PAGE_SIZE = 50
 
@@ -35,34 +36,12 @@ export function MiniTargetPicker({
   const [page, setPage] = useState(1)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>()
+  const [confirmedMini, setConfirmedMini] = useState<{
+    revision: number
+    name?: string
+  }>()
   const client = useQueryClient()
-  const queryKey = [
-    ...buildKey(tenantId, bcId),
-    summary.draft_id,
-    summary.revision,
-    summary.status,
-    "minis",
-    page,
-  ]
-  const query = useQuery<DraftMinis>({
-    queryKey,
-    // 同一草稿切换版本/准备状态时保留已确认名称，不闪回空白加载态。
-    placeholderData: (previous, previousQuery) =>
-      JSON.stringify(previousQuery?.queryKey.slice(0, 5)) ===
-      JSON.stringify(queryKey.slice(0, 5))
-        ? previous
-        : undefined,
-    queryFn: async ({ signal }) =>
-      (
-        await BuildsService.minisOptions({
-          path: { tenant_id: tenantId, draft_id: summary.draft_id },
-          query: { page },
-          signal,
-        })
-      ).data,
-    enabled: summary.account_count > 0 && summary.drama_count > 0,
-    refetchInterval: summary.status === "PREPARING" ? 2000 : false,
-  })
+  const query = useDraftMinis(tenantId, bcId, summary, page)
   const data = query.data
   if (!summary.account_count || !summary.drama_count) return null
   const pendingKey = mutationKey(tenantId, bcId, summary.draft_id)
@@ -78,7 +57,7 @@ export function MiniTargetPicker({
       JSON.stringify({ requestId, kind: "minis", prepare: false }),
     )
     try {
-      await BuildsService.selectMini({
+      const { data: saved } = await BuildsService.selectMini({
         path: { tenant_id: tenantId, draft_id: summary.draft_id },
         body: {
           request_id: requestId,
@@ -88,12 +67,15 @@ export function MiniTargetPicker({
         },
       })
       sessionStorage.removeItem(pendingKey)
-      client.setQueryData(queryKey, {
-        ...data,
-        selected: data.items?.find((item) => item.minis_id === minisId) ?? null,
-        state: "selected",
+      setConfirmedMini({
+        revision: saved.revision,
+        name: data.items?.find((item) => item.minis_id === minisId)?.name,
       })
       setOpen(false)
+      // 保存后必须读取新的准备状态，不用乐观的 selected 提前开放预览入口。
+      await client.invalidateQueries({
+        queryKey: [...buildKey(tenantId, bcId), summary.draft_id, "summary"],
+      })
       onRefresh()
     } catch (e) {
       if (!unknownOutcome(e)) sessionStorage.removeItem(pendingKey)
@@ -112,6 +94,9 @@ export function MiniTargetPicker({
             <p className="font-medium">推广小程序</p>
             <p className="text-sm text-muted-foreground">
               {data?.selected?.name ||
+                (confirmedMini?.revision === summary.revision &&
+                  (!data || data.state === "pending") &&
+                  confirmedMini.name) ||
                 (summary.status === "PREPARING" || query.isPending
                   ? "正在读取可用小程序…"
                   : data?.state === "conflict"

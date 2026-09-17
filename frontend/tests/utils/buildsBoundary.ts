@@ -53,6 +53,7 @@ export async function buildsBoundary(
     historicalReadState?: "UNKNOWN" | "BLOCKED" | "RUNNING"
     defaultConnectionId?: string
     draftList?: boolean
+    miniSelected?: boolean
   } = {},
 ) {
   const submissionId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -125,7 +126,10 @@ export async function buildsBoundary(
     error_code: options.previewError || null,
     created_at: "2026-09-09T00:00:00Z",
   }
-  let selectedMini: { minis_id: string; name: string } | null = null
+  let selectedMini: { minis_id: string; name: string } | null =
+    options.miniSelected
+      ? { minis_id: "mini-real-001", name: "LemonShow" }
+      : null
   let candidateSelected = false
   let materials = Array.from({ length: 23 }, (_, i) => ({
     material_id: `99999999-9999-4999-8999-${String(i + 1).padStart(12, "0")}`,

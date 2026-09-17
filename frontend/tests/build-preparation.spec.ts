@@ -8,6 +8,51 @@ import {
   T as tenant,
 } from "./utils/buildsBoundary"
 
+test("未选小程序禁用预览，选择后必须等准备完成", async ({ page }) => {
+  const api = await buildsBoundary(page)
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  const preview = page.getByRole("button", {
+    name: "生成搭建预览",
+    exact: true,
+  })
+  await expect(preview).toBeDisabled()
+  await expect(
+    page.getByText("请先选择本批次推广小程序，再生成预览。"),
+  ).toBeVisible()
+  await page.getByRole("button", { name: "选择小程序", exact: true }).click()
+  await page.getByRole("button", { name: /LemonShow.*选择并继续/ }).click()
+  await expect(preview).toBeDisabled()
+  api.summary.status = "READY"
+  await expect(preview).toBeEnabled()
+  await preview.click()
+  await expect(page).toHaveURL(new RegExp(`/build-previews/${P}`))
+})
+
+for (const state of [
+  "pending",
+  "unavailable",
+  "conflict",
+  "error",
+  "loading",
+]) {
+  test(`小程序${state}时不能生成预览`, async ({ page }) => {
+    const api = await buildsBoundary(page)
+    await page.route(`**/build-drafts/${D}/minis**`, async (route) => {
+      if (state === "loading") return
+      await route.fulfill(
+        state === "error"
+          ? { status: 403, json: { code: "action_forbidden" } }
+          : { json: { state, items: [], selected: null, total: 0 } },
+      )
+    })
+    await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+    await expect(
+      page.getByRole("button", { name: "生成搭建预览", exact: true }),
+    ).toBeDisabled()
+    expect(api.requests.filter((r) => r.method === "POST")).toHaveLength(0)
+  })
+}
+
 test("保存的搭建可从草稿箱找回完整输入，刷新后默认回到新建", async ({
   page,
 }) => {

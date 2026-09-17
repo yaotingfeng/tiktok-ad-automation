@@ -162,6 +162,10 @@ def generate_preview(
         return existing.id
     if draft.status != "READY":
         raise DomainError("draft_not_ready", "草稿尚未准备完成")
+    from app.modules.builds.mini_selection import require_preview_mini
+
+    # 必填目标在排队前检查，避免展开全部剧目×账户后才发现整批无法搭建。
+    require_preview_mini(session, context=context, draft=draft)
     config = get_version(session, context=context, version_id=draft.strategy_version_id)
     row = BuildPreview(
         tenant_id=context.tenant_id,

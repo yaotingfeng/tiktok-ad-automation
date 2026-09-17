@@ -25,6 +25,97 @@ from tests.modules.strategies.test_concurrency import (
 PREVIEW = "https://media.vetted.example/video?signature=never-persist"
 
 
+def test_cross_bc_preview_checks_primary_once_per_group(remote_env, wire):
+    from time import perf_counter
+
+    from sqlalchemy import event, text
+
+    from app.modules.materials.readiness import get_material_readiness_batch
+
+    with Session(engine) as db, db.begin():
+        original = db.get(MaterialFile, remote_env["material_id"])
+        ids = [original.id]
+        for _ in range(24):
+            identity = uuid4()
+            db.add(
+                MaterialFile(
+                    **(
+                        original.model_dump()
+                        | {
+                            "id": identity,
+                            "object_key": f"preview-batch/{identity}",
+                        }
+                    )
+                )
+            )
+            ids.append(identity)
+    counts, durations = [], []
+    for group in ([ids[0]], ids):
+        statements = []
+        with Session(engine) as db, db.begin():
+            db.execute(text("SET TRANSACTION READ ONLY"))
+            connection = db.connection()
+
+            def record(_c, _cu, statement, _p, _ct, _many, sink=statements):
+                sink.append(statement)
+
+            event.listen(connection, "before_cursor_execute", record)
+            started = perf_counter()
+            try:
+                rows = get_material_readiness_batch(
+                    db,
+                    context=remote_env["context"],
+                    bc_id=remote_env["bc_id"],
+                    material_ids=group,
+                    advertiser_id=remote_env["target"],
+                )
+            finally:
+                event.remove(connection, "before_cursor_execute", record)
+            durations.append(perf_counter() - started)
+            counts.append(len(statements))
+            assert all(row.state == "preparable" for row in rows.values())
+            assert all(s.lstrip().upper().startswith("SELECT") for s in statements)
+    print(f"cross_bc_preview: queries={counts}, seconds={durations}")  # noqa: T201
+    assert counts[0] == counts[1]
+    assert wire[0] == []
+
+
+def test_cross_bc_preview_rechecks_primary_permission_on_next_call(remote_env, wire):
+    from app.modules.accounts.models import BCAccountAccess, TenantBC
+    from app.modules.materials.readiness import get_material_readiness_batch
+
+    with Session(engine) as db, db.begin():
+        destination = target(db, remote_env, advertiser_id="second-target")
+        db.get(
+            TenantBC, (remote_env["context"].tenant_id, remote_env["bc_id"])
+        ).material_advertiser_id = remote_env["target"]
+    for allowed in (False, True):
+        with Session(engine) as db, db.begin():
+            grant = db.get(
+                BCAccountAccess,
+                (
+                    remote_env["context"].tenant_id,
+                    remote_env["bc_id"],
+                    remote_env["target"],
+                    remote_env["connection_id"],
+                ),
+            )
+            grant.can_build = allowed
+        with Session(engine) as db:
+            rows = get_material_readiness_batch(
+                db,
+                context=remote_env["context"],
+                bc_id=remote_env["bc_id"],
+                material_ids=[remote_env["material_id"]],
+                advertiser_id=destination,
+            )
+            row = rows[remote_env["material_id"]]
+            assert row.state == ("preparable" if allowed else "blocked")
+            if not allowed:
+                assert row.reason_code == "account_access_denied"
+    assert wire[0] == []
+
+
 def test_target_and_source_routes_are_persisted_before_network(remote_env, wire):
     from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 

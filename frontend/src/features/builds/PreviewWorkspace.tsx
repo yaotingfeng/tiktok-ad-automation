@@ -232,7 +232,7 @@ export function BuildPreviewPanel({
             <p role="status">
               {current.status === "FAILED"
                 ? "尚未生成完整冻结预览，请返回调整并核实原因。"
-                : "正在生成冻结预览，可离开后通过本页恢复。"}
+                : `正在生成搭建预览，已完成 ${current.total_unit_count} 个剧目与账户组合。`}
             </p>
             <p className="text-sm text-muted-foreground">
               统计尚未完成，暂不展示最终提交数量与预算。

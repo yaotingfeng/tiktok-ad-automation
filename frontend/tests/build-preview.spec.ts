@@ -96,6 +96,18 @@ test("过期预览不可执行创建，保留返回调整", async ({ page }) => 
     page.getByRole("button", { name: "返回调整", exact: true }),
   ).toBeEnabled()
 })
+test("预览生成期间显示服务端已完成组合数", async ({ page }) => {
+  const api = await buildsBoundary(page, { previewStatus: "BUILDING" })
+  api.preview.total_unit_count = 175
+  await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
+  await expect(
+    page.getByText("正在生成搭建预览，已完成 175 个剧目与账户组合。"),
+  ).toBeVisible()
+  api.preview.total_unit_count = 190
+  await expect(
+    page.getByText("正在生成搭建预览，已完成 190 个剧目与账户组合。"),
+  ).toBeVisible()
+})
 for (const width of [1440, 900, 390])
   test(`预览 ${width}px 不产生页面横向溢出`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 })
@@ -113,7 +125,10 @@ for (const width of [1440, 900, 390])
   })
 test("未知生成预览只查同草稿同revision", async ({ page }) => {
   const { D } = await import("./utils/buildsBoundary"),
-    api = await buildsBoundary(page, { previewUnknown: true })
+    api = await buildsBoundary(page, {
+      previewUnknown: true,
+      miniSelected: true,
+    })
   await page.goto(`/tenants/${T}/build-drafts/${D}?bc_id=${BC}`)
   await page.getByRole("button", { name: "生成搭建预览", exact: true }).click()
   await page.getByRole("button", { name: "查询原预览结果" }).click()
@@ -152,7 +167,7 @@ for (const width of [1440, 900, 390])
   test(`三步搭建 ${width}px 浏览器验收`, async ({ page }) => {
     const { pickInputs } = await import("./utils/buildsBoundary")
     await page.setViewportSize({ width, height: 900 })
-    await buildsBoundary(page)
+    await buildsBoundary(page, { miniSelected: true })
     await page.goto(`/tenants/${T}/builds/new?bc_id=${BC}`)
     await pickInputs(page)
     await expect(page.locator('[data-slot="dialog-overlay"]')).toHaveCount(0)

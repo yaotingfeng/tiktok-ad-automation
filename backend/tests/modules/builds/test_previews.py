@@ -64,6 +64,15 @@ def prepared(session, context, intent, monkeypatch):
     task = prepare_draft(session, context=context, draft_id=draft, request_id=uuid4())
     ready_links(session, context, task, intent)
     finish(session, context, task)
+    from app.modules.builds.mini_targets import remember_target
+
+    remember_target(
+        session,
+        context=context,
+        url="https://example.com/drama",
+        minis_id="fixture-mini",
+        source="USER",
+    )
     scene = SceneContext(
         supported=True,
         reason_codes=(),
@@ -107,6 +116,84 @@ def drain(session, context, identity):
         if previews.continue_preview(session, context=context, preview_id=identity):
             return
     raise AssertionError("preview never finished")
+
+
+def test_missing_mini_rejected_before_any_preview_or_dispatch(
+    session, context, prepared
+):
+    from app.core.errors import DomainError
+    from app.jobs.models import PendingDispatch
+    from app.modules.builds.mini_targets import MiniTarget, url_key
+    from app.modules.builds.preview_models import BuildPreview
+
+    session.delete(
+        session.get(
+            MiniTarget, (context.tenant_id, url_key("https://example.com/drama"))
+        )
+    )
+    session.flush()
+    before = len(session.exec(select(PendingDispatch)).all())
+    with pytest.raises(DomainError) as error:
+        previews.generate_preview(
+            session, context=context, draft_id=prepared, expected_revision=1
+        )
+    assert error.value.code == "minis_selection_required"
+    assert (
+        session.exec(
+            select(BuildPreview).where(BuildPreview.draft_id == prepared)
+        ).all()
+        == []
+    )
+    assert len(session.exec(select(PendingDispatch)).all()) == before
+
+
+def test_existing_preview_recovery_does_not_require_new_mini_selection(
+    session, context, prepared
+):
+    from app.modules.builds.mini_targets import MiniTarget, url_key
+
+    identity = previews.generate_preview(
+        session, context=context, draft_id=prepared, expected_revision=1
+    )
+    session.delete(
+        session.get(
+            MiniTarget, (context.tenant_id, url_key("https://example.com/drama"))
+        )
+    )
+    session.flush()
+    assert (
+        previews.generate_preview(
+            session, context=context, draft_id=prepared, expected_revision=1
+        )
+        == identity
+    )
+
+
+def test_partially_selected_or_conflicting_links_cannot_generate_preview(
+    session, context, prepared
+):
+    from app.core.errors import DomainError
+    from app.modules.providers.models import PromotionLink
+
+    drama = session.exec(
+        select(DraftDrama).where(DraftDrama.draft_id == prepared)
+    ).first()
+    link = session.get(PromotionLink, drama.link_id)
+    for url, code in [
+        ("https://example.com/unselected", "minis_selection_required"),
+        (
+            "https://www.tiktok.com/minis/play?minis_id=other-mini",
+            "minis_link_conflict",
+        ),
+    ]:
+        link.url = url
+        session.add(link)
+        session.flush()
+        with pytest.raises(DomainError) as error:
+            previews.generate_preview(
+                session, context=context, draft_id=prepared, expected_revision=1
+            )
+        assert error.value.code == code
 
 
 def test_frozen_full_product_budget_and_shared_copy(session, context, prepared):
@@ -327,7 +414,9 @@ def test_revision_during_build_keeps_partial_preview_obsolete(
     assert row.status == "OBSOLETE" and row.content_digest is None
 
 
-def test_identical_protected_bases_are_distinguished_by_external_drama_id(session, context, prepared):
+def test_identical_protected_bases_are_distinguished_by_external_drama_id(
+    session, context, prepared
+):
     from app.modules.providers.models import PromotionLink
 
     dramas = session.exec(
@@ -510,6 +599,15 @@ def test_preview_concurrent_parent_locking(isolated_strategy_database, mode):
         )
         ready_links(session, context, task, values)
         finish(session, context, task)
+        from app.modules.builds.mini_targets import remember_target
+
+        remember_target(
+            session,
+            context=context,
+            url="https://example.com/drama",
+            minis_id="fixture-mini",
+            source="USER",
+        )
         drama = (
             session.exec(select(DraftDrama).where(DraftDrama.draft_id == draft))
             .first()

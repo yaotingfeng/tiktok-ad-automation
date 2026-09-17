@@ -8,6 +8,24 @@ from tests.modules.builds.test_previews import prepared as prepared
 from tests.modules.strategies.test_api import headers
 
 
+def test_preview_api_rejects_missing_mini_selection(client, session, context, prepared):
+    from app.modules.builds.mini_targets import MiniTarget, url_key
+
+    session.delete(
+        session.get(
+            MiniTarget, (context.tenant_id, url_key("https://example.com/drama"))
+        )
+    )
+    session.flush()
+    response = client.post(
+        f"/api/tenants/{context.tenant_id}/build-drafts/{prepared}/previews",
+        json={"expected_revision": 1},
+        headers=headers(context),
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "minis_selection_required"
+
+
 def test_mutation_request_recovers_original_revision_after_later_edit(
     client, session, context, intent
 ):
@@ -84,8 +102,7 @@ def test_preview_drama_groups_and_unit_filters_are_server_scoped(
         u["drama_id"] == drama["drama_id"] for u in units["items"]
     )
     assert all(
-        u["currency"] == "USD" and Decimal(u["budget"]) == 100
-        for u in units["items"]
+        u["currency"] == "USD" and Decimal(u["budget"]) == 100 for u in units["items"]
     )
     assert (
         client.get(

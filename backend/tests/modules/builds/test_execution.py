@@ -140,6 +140,15 @@ def executable(isolated_strategy_database, monkeypatch):
         )
         ready_links(session, context, task, intent)
         finish(session, context, task)
+        from app.modules.builds.mini_targets import remember_target
+
+        remember_target(
+            session,
+            context=context,
+            url="https://example.com/drama",
+            minis_id="minis-1",
+            source="USER",
+        )
         preview = previews.generate_preview(
             session, context=context, draft_id=draft, expected_revision=1
         )

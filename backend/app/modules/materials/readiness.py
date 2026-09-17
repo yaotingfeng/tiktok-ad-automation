@@ -385,6 +385,43 @@ def get_material_readiness_batch(
 
     upload_checked = False
     upload_error: DomainError | None = None
+    primary_checked = False
+    primary_error: DomainError | None = None
+
+    def require_cross_bc_upload() -> None:
+        nonlocal primary_checked, primary_error
+        # 同一有界批次的目标 BC、连接及主账户相同，不为每条视频重复查询。
+        # 成功和失败仅在本次调用内复用，下次调用重新核验权限与冷却状态。
+        if not primary_checked:
+            try:
+                from .source_selection import resolve_primary_account
+
+                primary = resolve_primary_account(
+                    session, context=context, bc_id=bc_id, route=route
+                )
+                require_material_route(
+                    session,
+                    context=context,
+                    route=route,
+                    bc_id=bc_id,
+                    advertiser_id=primary.advertiser_id,
+                    capability="build",
+                )
+                require_execution_config(
+                    upload=True,
+                    endpoint="materials.upload_video_url",
+                    original=False,
+                    channel=route.channel,
+                )
+                require_execution_config(
+                    upload=False, endpoint="materials.get_videos", channel=route.channel
+                )
+            except DomainError as error:
+                primary_error = error
+            primary_checked = True
+        if primary_error:
+            raise primary_error
+
     aliases = matching_target_assets(
         session,
         context=context,
@@ -470,22 +507,7 @@ def get_material_readiness_batch(
                         "素材超过当前URL转存工程容量限制",
                     )
                 require_target_upload()
-                from .source_selection import resolve_primary_account
-
-                primary = resolve_primary_account(
-                    session,
-                    context=context,
-                    bc_id=bc_id,
-                    route=route,
-                )
-                require_material_route(
-                    session,
-                    context=context,
-                    route=route,
-                    bc_id=bc_id,
-                    advertiser_id=primary.advertiser_id,
-                    capability="build",
-                )
+                require_cross_bc_upload()
                 if route.channel == "OFFICIAL_MCP":
                     require_url_upload(
                         material_upload_policy(
@@ -494,15 +516,6 @@ def get_material_readiness_batch(
                         ),
                         byte_size=material.byte_size,
                     )
-                require_execution_config(
-                    upload=True,
-                    endpoint="materials.upload_video_url",
-                    original=False,
-                    channel=route.channel,
-                )
-                require_execution_config(
-                    upload=False, endpoint="materials.get_videos", channel=route.channel
-                )
                 result[material.id] = MaterialReadiness(
                     state="preparable", path="share_source"
                 )

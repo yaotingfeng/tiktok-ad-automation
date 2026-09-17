@@ -3,6 +3,9 @@ from fastapi.responses import JSONResponse
 
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
+    "minis_selection_required": 409,
+    "minis_link_conflict": 409,
+    "minis_links_unavailable": 409,
     "manual_link_mapping_required": 422,
     "manual_link_invalid": 422,
     "manual_attribution_required": 422,
@@ -247,6 +250,9 @@ ERROR_HTTP_STATUS: dict[str, int] = {
 # Public messages are application-owned. DomainError.message may contain raw
 # integration details, so it must never become an HTTP response or log field.
 ERROR_PUBLIC_MESSAGES: dict[str, str] = {
+    "minis_selection_required": "请先选择本批次推广小程序，再生成预览",
+    "minis_link_conflict": "剧目指向不同小程序，请核对目标或分开搭建",
+    "minis_links_unavailable": "请先完成剧目推广链接准备",
     "manual_link_mapping_required": "剧名发生变化，请同时更新手动链接与剧目的对应关系",
     "manual_link_invalid": "请检查行号并填写完整的 HTTPS TikTok Minis 推广链接",
     "manual_attribution_required": "网眼手动链接需要填写版权方提供的归因名称，可在第二步补充",

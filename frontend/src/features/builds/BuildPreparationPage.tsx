@@ -51,6 +51,7 @@ import {
   reportError,
   unknownOutcome,
 } from "./presentation"
+import { useDraftMinis } from "./useDraftMinis"
 export function BuildPreparationPage() {
   const { tenantId, scope, bc } = useTenantScope(),
     pathname = useRouterState({ select: (s) => s.location.pathname })
@@ -135,6 +136,31 @@ function Preparation({
   const current = summary.data,
     scoped = current?.bc_id === bcId,
     allowed = write && !forbidden && !isForbidden(summary.error)
+  const minis = useDraftMinis(tenantId, bcId, current)
+  const previewReady =
+    current?.status === "READY" &&
+    !summary.isFetching &&
+    !summary.isError &&
+    minis.isSuccess &&
+    !minis.isFetching &&
+    minis.data.state === "selected"
+  const previewHint = summary.isFetching
+    ? "正在核对准备状态…"
+    : current?.status !== "READY"
+      ? "请先完成剧目和账户准备，再生成预览。"
+      : minis.isError
+        ? "小程序信息读取失败，请刷新重试。"
+        : minis.isPending || minis.isFetching
+          ? "正在核对推广小程序…"
+          : minis.data?.state === "pending"
+            ? "请先更新可用小程序并完成选择。"
+            : minis.data?.state === "unavailable"
+              ? "当前没有可用小程序，请检查账户授权。"
+              : minis.data?.state === "conflict"
+                ? "剧目指向不同小程序，请先核对推广目标。"
+                : !previewReady
+                  ? "请先选择本批次推广小程序，再生成预览。"
+                  : "预览将明确列出可搭建范围与排除原因。"
   useEffect(() => {
     const ctrl = new AbortController()
     controller.current = ctrl
@@ -274,6 +300,8 @@ function Preparation({
   ])
   async function preview(recover = false) {
     if (!current || busy || !allowed || !scoped || pendingMutation) return
+    // 原请求结果查询仍可恢复；只有新建预览必须满足当前必填条件。
+    if (!recover && previewRevision === null && !previewReady) return
     setBusy(true)
     setError(undefined)
     const revision = previewRevision ?? current.revision
@@ -601,7 +629,9 @@ function Preparation({
       />
       <Card className="sticky bottom-0 min-w-0">
         <CardContent className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-          <span className="text-sm">预览将明确列出可搭建范围与排除原因。</span>
+          <span className="text-sm" role="status">
+            {previewHint}
+          </span>
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" disabled={busy} onClick={edit}>
               {allowed ? "返回输入" : "查看原输入"}
@@ -626,7 +656,7 @@ function Preparation({
                     !!pending ||
                     previewRevision !== null ||
                     !!pendingMutation ||
-                    current.status === "PREPARING"
+                    !previewReady
                   }
                   onClick={() => void preview()}
                 >

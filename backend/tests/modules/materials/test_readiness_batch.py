@@ -84,7 +84,9 @@ def test_batch_readiness_is_bounded_read_only_and_does_not_repeat_authority(
         assert not session.new and not session.dirty
         assert result[ids[0]].state == "ready"
         for number, identity in enumerate(ids[1:]):
-            assert result[identity].state == ("preparable" if number % 2 else "blocked")
+            assert result[identity].state == (
+                "preparable" if number % 2 else "blocked"
+            ), result[identity].reason_code
         for identity in ids:
             assert (
                 readiness.get_material_readiness(
