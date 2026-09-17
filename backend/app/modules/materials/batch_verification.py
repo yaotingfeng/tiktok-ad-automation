@@ -54,6 +54,13 @@ def try_verify_batch(
         )
         if not discover and not anchor_op.remote_response.get("video_id"):
             return False
+        # 已有VID的刷新分发初始是queued，但其操作已进入verifying。
+        # 它们同样可以合并只读核验；无VID的共享发现仍只接收已发送状态。
+        candidate_states = (
+            ("verifying", "result_unknown")
+            if discover
+            else ("queued", "verifying", "result_unknown")
+        )
         endpoint = "materials.search_videos" if discover else "materials.get_videos"
         if operation_id is not None and anchor_op.id != operation_id:
             return False
@@ -79,7 +86,7 @@ def try_verify_batch(
                 MaterialDistribution.bc_id == anchor.bc_id,
                 MaterialDistribution.actor_id == context.actor_id,
                 MaterialDistribution.advertiser_id == anchor.advertiser_id,
-                col(MaterialDistribution.status).in_(["verifying", "result_unknown"]),
+                col(MaterialDistribution.status).in_(candidate_states),
                 col(MaterialAssetOperation.status).in_(["verifying", "result_unknown"]),
                 col(MaterialDistribution.target_route) == anchor.target_route,
                 col(MaterialAssetOperation.frozen_route) == anchor.target_route,
@@ -138,7 +145,7 @@ def try_verify_batch(
             op = _locked_operation(db, context, operation.id)
             if (
                 op.status not in {"verifying", "result_unknown"}
-                or dist.status not in {"verifying", "result_unknown"}
+                or dist.status not in candidate_states
                 or dist.operation_id != op.id
                 or (op.claimed_until and op.claimed_until > now)
             ):

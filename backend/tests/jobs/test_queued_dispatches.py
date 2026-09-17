@@ -118,6 +118,30 @@ def test_missing_message_is_republished_with_same_identity(outbox_db, context, b
     assert redis.rpop(prefix + "control") == original
 
 
+def test_snapshot_indexes_result_queue_after_one_second_of_earlier_work(
+    broker, monkeypatch
+):
+    from app.jobs import queued_dispatches as queued
+
+    redis, prefix = broker
+    first = broker_message("jobs.probe", str(uuid4()), {})
+    result_id = str(uuid4())
+    result = broker_message("materials.verify_target", result_id, {})
+    redis.lpush(prefix + "builds", first)
+    redis.lpush(prefix + "resource-results", result)
+    clock = iter([0.0, 0.5, 1.5])
+    monkeypatch.setattr(queued, "monotonic", lambda: next(clock))
+    snapshot = queued.QueuedDispatches(
+        redis,
+        {prefix + "builds": "builds", prefix + "resource-results": "resource-results"},
+    )
+    snapshot.scan()
+    assert (
+        "resource-results",
+        *queued._identity("materials.verify_target", result_id, {}),
+    ) in snapshot.entries
+
+
 @pytest.mark.parametrize("different", ["tenant", "actor", "payload", "task", "queue"])
 @pytest.mark.parametrize("snapshot_seconds", [0, 1])
 def test_wrong_envelope_never_suppresses_original(

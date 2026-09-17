@@ -300,12 +300,14 @@ def test_sparse_rectangle_does_not_share_unrequested_target():
 @pytest.mark.parametrize(
     "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
 )
+@pytest.mark.parametrize("distribution_status", ["verifying", "queued"])
 def test_known_target_ids_are_verified_together_and_missing_peer_alone_retries(
     share_case,
     database_engine,
     gateway_wire,
     redis_client,
     gateway_case,
+    distribution_status,
 ):
     from app.modules.materials.models import (
         MaterialAssetOperation,
@@ -317,7 +319,7 @@ def test_known_target_ids_are_verified_together_and_missing_peer_alone_retries(
         for index, task in enumerate(tasks):
             dist = db.get(MaterialDistribution, task)
             op = db.get(MaterialAssetOperation, dist.operation_id)
-            dist.status = "verifying"
+            dist.status = distribution_status
             op.status = "verifying"
             op.remote_response = {
                 **op.remote_response,
@@ -1136,8 +1138,9 @@ def test_shared_video_discovery_pages_twenty_mids_without_repeating_share(
 
 
 @pytest.mark.parametrize("gateway_case", ["OFFICIAL_MCP"], indirect=True)
+@pytest.mark.parametrize("distribution_status", ["verifying", "queued"])
 def test_fifty_video_guard_does_not_repeat_common_account_queries(
-    share_case, database_engine, gateway_wire, redis_client
+    share_case, database_engine, gateway_wire, redis_client, distribution_status
 ):
     """50 条成员核实应在短事务预算内完成，共同账户授权不能每条重查。"""
     from collections import Counter
@@ -1155,7 +1158,8 @@ def test_fifty_video_guard_does_not_repeat_common_account_queries(
         for index, task in enumerate(tasks):
             dist = db.get(MaterialDistribution, task)
             op = db.get(MaterialAssetOperation, dist.operation_id)
-            dist.status = op.status = "verifying"
+            dist.status = distribution_status
+            op.status = "verifying"
             op.remote_response = {
                 **op.remote_response,
                 "video_id": rows[index]["video_id"],
