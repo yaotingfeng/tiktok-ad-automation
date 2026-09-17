@@ -49,7 +49,8 @@ INTENT_ERRORS = "'scene_intent_changed','scene_no_longer_supported','new_preview
 COVER_SCOPE = """c.id=s.cover_job_id AND c.tenant_id=s.tenant_id AND c.bc_id=s.bc_id
 AND c.material_id=s.material_id AND c.advertiser_id=u.advertiser_id AND c.connection_id=u.connection_id"""
 COVER_RETRY = f"""EXISTS (SELECT 1 FROM material_cover_job c WHERE {COVER_SCOPE}
-AND c.status='BLOCKED' AND c.request_armed_at IS NULL AND c.known_image_id IS NULL
+AND (c.status='BLOCKED' OR (s.status='FAILED' AND c.status='PENDING'))
+AND c.request_armed_at IS NULL AND c.known_image_id IS NULL
 AND c.dispatch_id IS NULL AND (c.claimed_until IS NULL OR c.claimed_until <= :now)
 AND NOT EXISTS (SELECT 1 FROM material_cover_receipt cr WHERE cr.tenant_id=c.tenant_id AND cr.job_id=c.id))"""
 BASE = """

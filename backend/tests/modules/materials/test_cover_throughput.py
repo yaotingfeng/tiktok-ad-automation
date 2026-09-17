@@ -678,18 +678,71 @@ def test_image_inventory_scan_persists_progress_with_one_batch_wakeup(
 
 
 @pytest.mark.parametrize("eventually_complete", [True, False])
+@pytest.mark.parametrize("armed", [False, True])
+def test_changed_page_boundary_completes_census_without_repeating_shared_write(
+    source_env, redis_client, wire, eventually_complete, armed
+):
+    """固定100条边界漏项时，换边界补齐；不完整和已发送都不能重发。"""
+    identity = matrix(source_env, 1, 1)[0]
+
+    def inventory(indices, number, size):
+        return {
+            "list": [image(i, target_id=True) for i in indices],
+            "page_info": {
+                "page": number,
+                "page_size": size,
+                "total_page": (156 + size - 1) // size,
+                "total_number": 156,
+            },
+        }
+
+    if armed:
+        wire[1].extend([{"list": [image(0)]}, page([]), {"failed_infos": {}}])
+        drive(source_env, redis_client, identity)
+    else:
+        wire[1].append({"list": [image(0)]})
+    wire[1].extend(
+        [inventory(range(1, 101), 1, 100), inventory(range(98, 154), 2, 100)]
+    )
+    run(source_env, redis_client, identity, read=armed)
+    run(source_env, redis_client, identity, read=armed)
+    assert sum(call[0] == "POST" for call in wire[0]) == int(armed)
+    wire[1].extend(
+        [
+            inventory(range(1, 72), 1, 71),
+            inventory(range(86, 157) if eventually_complete else range(83, 154), 2, 71),
+        ]
+    )
+    if eventually_complete and not armed:
+        wire[1].append({"failed_infos": {}})
+    run(source_env, redis_client, identity, read=armed)
+    run(source_env, redis_client, identity, read=armed)
+    job = job_state(identity)
+    assert job.status == (
+        ("UNKNOWN" if armed else "VERIFYING")
+        if eventually_complete
+        else ("VERIFYING" if armed else "PENDING")
+    )
+    assert sum(call[0] == "POST" for call in wire[0]) == int(
+        armed or eventually_complete
+    )
+    searches = [call for call in wire[0] if "/file/image/ad/search/" in call[1]]
+    assert len(searches) == (5 if armed else 4)
+
+
+@pytest.mark.parametrize("eventually_complete", [True, False])
 def test_overlapping_inventory_pages_require_complete_unique_census_before_share(
     source_env, redis_client, wire, eventually_complete
 ):
     """平台同总数分页会重叠；最多三轮补齐唯一库存，缺项时绝不发送。"""
     identity = matrix(source_env, 1, 1)[0]
 
-    def inventory(indices, page_number):
+    def inventory(indices, page_number, page_size=100):
         return {
             "list": [image(index, target_id=True) for index in indices],
             "page_info": {
                 "page": page_number,
-                "page_size": 100,
+                "page_size": page_size,
                 "total_page": 2,
                 "total_number": 102,
             },
@@ -709,14 +762,19 @@ def test_overlapping_inventory_pages_require_complete_unique_census_before_share
     if eventually_complete:
         wire[1].extend(
             [
-                inventory(range(1, 101), 1),
-                inventory([101, 102], 2),
+                inventory(range(1, 72), 1, 71),
+                inventory(range(72, 103), 2, 71),
                 {"failed_infos": {}},
             ]
         )
     else:
-        for _ in range(2):
-            wire[1].extend([inventory(range(1, 101), 1), inventory([100, 101], 2)])
+        for size in (71, 53):
+            wire[1].extend(
+                [
+                    inventory(range(1, size + 1), 1, size),
+                    inventory(range(size, 102), 2, size),
+                ]
+            )
     drive(source_env, redis_client, identity)
     current = job_state(identity)
     assert current.status == ("VERIFYING" if eventually_complete else "BLOCKED")

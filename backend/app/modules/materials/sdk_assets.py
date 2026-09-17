@@ -518,6 +518,7 @@ class MaterialReadAdapter:
         images: bool,
         material_ids: tuple[str, ...] = (),
         video_name: str | None = None,
+        page_size: int = PAGE_SIZE,
     ) -> material_types.MaterialPage[Any]:
         from app.modules.materials.cover_sdk import image_search_page
 
@@ -529,7 +530,9 @@ class MaterialReadAdapter:
                 _record_fields(
                     item, advertiser_id=advertiser_id, identity_key="image_id"
                 )
-            raw, _, total = image_search_page(response.data, page=page)
+            raw, _, total = image_search_page(
+                response.data, page=page, page_size=page_size
+            )
             rows = tuple(
                 image_record(
                     row, advertiser_id=advertiser_id, evidence=response.evidence
@@ -552,7 +555,7 @@ class MaterialReadAdapter:
             result = material_types.MaterialPage(
                 rows,
                 page,
-                PAGE_SIZE,
+                page_size,
                 response.data["page_info"]["total_page"],
                 total,
                 response.evidence,
@@ -743,8 +746,15 @@ class MaterialReadAdapter:
         budget: material_types.RemoteCallBudget,
         material_ids: tuple[str, ...] = (),
         image_ids: tuple[str, ...] = (),
+        page_size: int = PAGE_SIZE,
     ) -> material_types.MaterialPage[material_types.ImageRecord]:
-        if type(page) is not int or not 1 <= page <= 100:
+        if (
+            type(page_size) is not int
+            or not 1 <= page_size <= PAGE_SIZE
+            or type(page) is not int
+            or page < 1
+            or (page - 1) * page_size >= 10000
+        ):
             raise _remote_request_error()
         for values in (material_ids, image_ids):
             if (
@@ -766,7 +776,7 @@ class MaterialReadAdapter:
             advertiser_id,
             {
                 "page": page,
-                "page_size": PAGE_SIZE,
+                "page_size": page_size,
                 **({"filtering": filtering} if filtering else {}),
             },
             budget,
@@ -777,7 +787,8 @@ class MaterialReadAdapter:
             page=page,
             images=True,
             material_ids=material_ids,
-            video_name=repr(image_ids) if image_ids else None,
+            video_name=repr((image_ids, page_size)),
+            page_size=page_size,
         )
 
 

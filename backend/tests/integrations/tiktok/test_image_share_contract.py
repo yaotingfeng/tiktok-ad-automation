@@ -55,6 +55,35 @@ def test_image_share_preserves_partial_failure(material_case):
     assert receipt.evidence.request_id == "material-request"
 
 
+@pytest.mark.parametrize("returned_size", [71, 100])
+def test_image_census_page_size_is_explicit_and_response_must_match(
+    material_case, returned_size
+):
+    adapter, enqueue, budget, _, _ = material_case
+    enqueue(
+        "materials.search_images",
+        {
+            "list": [{"image_id": "target-image", "material_id": "12345"}],
+            "page_info": {
+                "page": 1,
+                "page_size": returned_size,
+                "total_number": 1,
+                "total_page": 1,
+            },
+        },
+    )
+    if returned_size != 71:
+        with pytest.raises(DomainError):
+            adapter.search_images(
+                advertiser_id="456", page=1, page_size=71, budget=budget
+            )
+    else:
+        result = adapter.search_images(
+            advertiser_id="456", page=1, page_size=71, budget=budget
+        )
+        assert result.page_size == 71 and result.rows[0].image_id == "target-image"
+
+
 def test_unknown_partial_failure_identity_is_not_acknowledged(material_case):
     adapter, enqueue, budget, _, _ = material_case
     enqueue(

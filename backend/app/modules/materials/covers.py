@@ -529,7 +529,7 @@ def request_cover_retry(
         is not None
     )
     if (
-        job.status != "BLOCKED"
+        job.status not in {"BLOCKED", "PENDING"}
         or job.request_armed_at is not None
         or job.known_image_id is not None
         or has_receipt
@@ -537,6 +537,10 @@ def request_cover_retry(
         or (job.claimed_until and job.claimed_until > _now())
     ):
         raise DomainError("cover_retry_forbidden", "已发送或正在处理的封面任务只能核查")
+    if job.status == "PENDING":
+        # 共享依赖已恢复而搭建步骤仍失败时，只接回原等待链。
+        # 保留原批次及唯一wake，由正式repair唤醒，不能重复投递成员。
+        return _result(session, job)
     job.error_code = None
     job.failure_count = 0
     _queue(session, job, read=bool(job.candidate_image_id))

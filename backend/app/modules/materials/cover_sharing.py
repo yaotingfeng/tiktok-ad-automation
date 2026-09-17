@@ -666,10 +666,12 @@ def _scan(
         )
         if not progress["done"]:
             page_number = progress["page"]
+            page_size = progress.get("page_size", 100)
             result = client.search_images(
                 advertiser_id=target,
                 page=page_number,
                 budget=budget("materials.search_images"),
+                page_size=page_size,
             )
             ids = [row.image_id for row in result.rows]
             repeated = set(ids).intersection(progress["seen"])
@@ -717,6 +719,13 @@ def _scan(
             progress["done"] = all(
                 member["job_id"] in progress["found"] for member in members
             )
+            # 同总数跨轮累计达到唯一库存数即已完整；补查轮无需再读尾页。
+            if (
+                result.total_number is not None
+                and result.total_number < 10000
+                and len(progress["seen"]) == result.total_number
+            ):
+                progress["done"] = True
             if not progress["done"] and page_number >= result.total_pages:
                 if result.total_number is not None and result.total_number >= 10000:
                     raise DomainError(
@@ -733,9 +742,13 @@ def _scan(
                             "cover_search_incomplete", "图片库存分页仍不完整"
                         )
                     progress["round"], progress["page"] = rounds + 1, 1
+                    # modify_time相同的行在固定分页边界可永久重叠；只重复
+                    # 100条页不能补齐。用不同合法页大小移开边界，仍要求
+                    # 唯一ID总数完整，最多三轮；不能降低未知结果保护。
+                    progress["page_size"] = 71 if rounds == 1 else 53
                     break
                 progress["done"] = True
-            if not progress["done"] and page_number >= 100:
+            if not progress["done"] and page_number * page_size >= 10000:
                 raise DomainError(
                     "cover_search_incomplete", "目标图片超过平台可完整搜索范围"
                 )

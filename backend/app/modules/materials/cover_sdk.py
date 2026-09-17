@@ -174,11 +174,13 @@ def verified_image(
 
 
 def image_search_page(
-    data: dict[str, Any], *, page: int
+    data: dict[str, Any], *, page: int, page_size: int = PAGE_SIZE
 ) -> tuple[list[dict[str, Any]], bool, int]:
     rows, info = data.get("list"), data.get("page_info")
     if (
-        not isinstance(rows, list)
+        type(page_size) is not int
+        or not 1 <= page_size <= PAGE_SIZE
+        or not isinstance(rows, list)
         or not isinstance(info, dict)
         or any(not isinstance(row, dict) for row in rows)
     ):
@@ -189,14 +191,14 @@ def image_search_page(
         or not 0 <= total <= MAX_IMAGES
         or type(pages) is not int
         or pages
-        not in ({0, 1} if total == 0 else {(total + PAGE_SIZE - 1) // PAGE_SIZE})
+        not in ({0, 1} if total == 0 else {(total + page_size - 1) // page_size})
         or type(info.get("page")) is not int
         or info["page"] != page
         or type(info.get("page_size")) is not int
-        or info["page_size"] != PAGE_SIZE
+        or info["page_size"] != page_size
         or page < 1
         or page > max(1, pages)
-        or len(rows) != min(PAGE_SIZE, max(0, total - (page - 1) * PAGE_SIZE))
+        or len(rows) != min(page_size, max(0, total - (page - 1) * page_size))
     ):
         raise _error()
     identities = [_identifier(row.get("image_id")) for row in rows]

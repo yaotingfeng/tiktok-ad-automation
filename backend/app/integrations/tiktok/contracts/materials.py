@@ -262,4 +262,5 @@ class MaterialOperations(Protocol):
         budget: RemoteCallBudget,
         material_ids: tuple[str, ...] = (),
         image_ids: tuple[str, ...] = (),
+        page_size: int = 100,
     ) -> MaterialPage[ImageRecord]: ...

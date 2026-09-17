@@ -70,6 +70,79 @@ def test_batch_retry_finds_blocked_cover_before_waiting_step_fails(
         assert db.get(MaterialCoverJob, job_id).dispatch_id == first_dispatch
 
 
+@pytest.mark.parametrize("guard", ["unsent", "armed", "claimed", "dispatched"])
+def test_failed_step_resumes_already_pending_cover_without_duplicate_dispatch(
+    executable, redis_client, guard
+):
+    from datetime import timedelta
+    from uuid import uuid4
+
+    from app.core.errors import DomainError
+    from app.jobs.models import PendingDispatch
+    from app.modules.builds import recovery
+    from app.modules.builds.execution_window import material_unit_admitted
+    from tests.modules.builds.test_recovery import request, run
+
+    identity, job_id, submission_id = pending(executable, redis_client)
+    database, context, _ = executable
+    with Session(database) as db, db.begin():
+        job = db.get(MaterialCoverJob, job_id)
+        job.status, job.error_code = "PENDING", "tiktok_call_deadline_exceeded"
+        if guard != "dispatched":
+            job.dispatch_id = None
+        if guard == "armed":
+            job.request_armed_at = datetime.now(UTC)
+        if guard == "claimed":
+            job.claim_token = uuid4()
+            job.claimed_until = datetime.now(UTC) + timedelta(minutes=1)
+        step = db.get(ExecutionStep, identity)
+        step.status, step.phase, step.error_code = (
+            "FAILED",
+            "DONE",
+            "tiktok_call_deadline_exceeded",
+        )
+        before = len(
+            db.exec(
+                select(PendingDispatch).where(
+                    PendingDispatch.task_name == "materials.prepare_cover"
+                )
+            ).all()
+        )
+    if guard != "unsent":
+        with pytest.raises(
+            DomainError, check=lambda e: e.code == "recovery_no_candidates"
+        ):
+            request(executable, submission_id)
+        return
+    receipt = request(executable, submission_id)
+    run(executable, receipt)
+    with Session(database) as db:
+        progress = recovery.get_recovery(
+            db, context=context, recovery_id=receipt.recovery_id
+        )
+        assert progress.state == "COMPLETED" and progress.scheduled_count == 1
+        step, job = db.get(ExecutionStep, identity), db.get(MaterialCoverJob, job_id)
+        assert step.status == "QUEUED" and step.dispatch_id is not None
+        assert job.status == "PENDING" and job.dispatch_id is None
+        assert job.request_armed_at is None
+        assert (
+            len(
+                db.exec(
+                    select(PendingDispatch).where(
+                        PendingDispatch.task_name == "materials.prepare_cover"
+                    )
+                ).all()
+            )
+            == before
+        )
+        assert material_unit_admitted(
+            db,
+            tenant_id=step.tenant_id,
+            submission_id=step.submission_id,
+            unit_id=step.unit_id,
+        )
+
+
 @pytest.mark.parametrize("change", ["default", "binding", "build_permission"])
 def test_cover_recovery_preserves_original_route(executable, redis_client, change):
     identity, job_id, _ = pending(executable, redis_client)
