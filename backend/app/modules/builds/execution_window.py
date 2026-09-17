@@ -166,15 +166,21 @@ def cover_task_admission_condition():
 
 
 def cover_job_admitted(session: Session, *, tenant_id: UUID, job_id: UUID) -> bool:
+    return job_id in cover_jobs_admitted(session, tenant_id=tenant_id, job_ids={job_id})
+
+
+def cover_jobs_admitted(
+    session: Session, *, tenant_id: UUID, job_ids: set[UUID]
+) -> set[UUID]:
+    """同一领取事务批量复核原窗口条件，避免每成员重算整个执行图。"""
     from app.modules.materials.cover_models import MaterialCoverJob
 
-    return (
+    return set(
         session.exec(
             select(MaterialCoverJob.id).where(
                 MaterialCoverJob.tenant_id == tenant_id,
-                MaterialCoverJob.id == job_id,
+                col(MaterialCoverJob.id).in_(job_ids),
                 cover_task_admission_condition(),
             )
-        ).first()
-        is not None
+        ).all()
     )

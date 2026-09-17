@@ -102,13 +102,14 @@ def test_ten_thousand_units_only_dispatch_active_window(executable, monkeypatch)
                 BuildUnit,
                 SubmissionUnit,
                 AccountMaterial,
+                PendingDispatch,
                 MaterialCoverJob,
                 ExecutionStep,
             )
         }
         for index in range(10000):
             identity = uuid4()
-            asset_id, cover_id = uuid4(), uuid4()
+            asset_id, cover_id, cover_dispatch_id = uuid4(), uuid4(), uuid4()
             advertiser = f"capacity-{index}"
             models[AdvertiserAccount].append(
                 {**account.model_dump(), "advertiser_id": advertiser}
@@ -138,6 +139,18 @@ def test_ten_thousand_units_only_dispatch_active_window(executable, monkeypatch)
             models[AccountMaterial].append(
                 {**asset.model_dump(), "id": asset_id, "advertiser_id": advertiser}
             )
+            # 候选必须具备可领取的持久投递；容量夹具也包含真实消息身份，
+            # 不能用一万条缺失dispatch的等待任务替代已排队候选。
+            models[PendingDispatch].append(
+                PendingDispatch(
+                    id=cover_dispatch_id,
+                    tenant_id=context.tenant_id,
+                    actor_id=context.actor_id,
+                    task_name="materials.prepare_cover",
+                    task_key=f"cover:{cover_id}:1",
+                    payload={"job_id": str(cover_id), "revision": 1},
+                ).model_dump()
+            )
             models[MaterialCoverJob].append(
                 MaterialCoverJob(
                     id=cover_id,
@@ -151,6 +164,8 @@ def test_ten_thousand_units_only_dispatch_active_window(executable, monkeypatch)
                     frozen_route=route.model_dump(mode="json"),
                     video_id=asset.video_id,
                     remote_name=f"capacity-{index}.jpg",
+                    dispatch_id=cover_dispatch_id,
+                    revision=1,
                 ).model_dump()
             )
             models[ExecutionStep].append(

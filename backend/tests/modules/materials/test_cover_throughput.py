@@ -264,7 +264,7 @@ def test_cover_planning_checks_only_one_twenty_by_ten_window(source_env, wire):
 
     identities = matrix(source_env, count=31, targets=10)
     first = job_state(identities[-1])
-    source_queries, authorization_queries = [], []
+    source_queries, authorization_queries, admission_queries = [], [], []
 
     def observe(_connection, _cursor, statement, parameters, *_):
         # 只统计来源封面读取；窗口准入也读取同表，但不是来源查询。
@@ -276,6 +276,8 @@ def test_cover_planning_checks_only_one_twenty_by_ten_window(source_env, wire):
             source_queries.append(statement)
         if "bc_connection_binding" in statement:
             authorization_queries.append(statement)
+        if "admitted_cover_tasks AS MATERIALIZED" in statement:
+            admission_queries.append(statement)
 
     event.listen(Engine, "before_cursor_execute", observe)
     try:
@@ -305,6 +307,8 @@ def test_cover_planning_checks_only_one_twenty_by_ten_window(source_env, wire):
     assert wire[0] == []
     assert len(source_queries) <= 20, len(source_queries)
     assert len(authorization_queries) <= 150, len(authorization_queries)
+    # 200成员只应集体复核窗口，不得每次领取重新计算整个搭建图。
+    assert len(admission_queries) <= 2, len(admission_queries)
 
 
 @pytest.mark.parametrize("count,targets", [(2, 2), (20, 10)])

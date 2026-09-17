@@ -157,8 +157,12 @@ def test_cover_authorization_reuse_cannot_escape_its_transaction(
         with db.begin():
             checks = covers._CoverAccessChecks(db, cover_env["context"])
             covers._access(db, cover_env["context"], current, checks=checks)
+            checks.preload_admission([current])
+            assert checks.admitted(db, cover_env["context"], current)
         with db.begin(), pytest.raises(DomainError, match="封面授权核查事务已变化"):
             covers._access(db, cover_env["context"], current, checks=checks)
+        with db.begin(), pytest.raises(DomainError, match="封面授权核查事务已变化"):
+            checks.admitted(db, cover_env["context"], current)
 
 
 @pytest.mark.parametrize(

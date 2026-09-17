@@ -668,6 +668,21 @@ def process_step(
                 assert step is not None
                 if step.request_body is not None:
                     body = dict(step.request_body)
+                    if claim.kind == "AD":
+                        # 明确未发送的重试保留原正文，但不能跳过素材准备；
+                        # 否则过期后只会反复最终校验，永远没有刷新任务。
+                        refreshed = prepare_request(
+                            session, context=context, claim=claim, frozen=frozen
+                        )
+                        _, refreshed_body = create_arguments(
+                            attempt_id=claim.attempt_id,
+                            intent=decode_intent(claim.kind, refreshed),
+                            channel=claim.route.channel,
+                        )
+                        if refreshed_body != body:
+                            raise DomainError(
+                                "execution_intent_changed", "原广告素材身份已变化"
+                            )
                     local_body = dict(body)
                     if claim.route.channel == "OFFICIAL_MCP" and claim.kind in {
                         "CAMPAIGN",

@@ -92,6 +92,42 @@ class _CoverAccessChecks:
         self.session, self.context = session, context
         self.transaction = session.get_transaction()
         self.checked: set[tuple[str, str, str, bool]] = set()
+        self.admission: dict[UUID, bool] = {}
+
+    def _require_transaction(self, session: Session, context: TenantContext) -> None:
+        if (
+            session is not self.session
+            or context != self.context
+            or self.transaction is None
+            or session.get_transaction() is not self.transaction
+            or not self.transaction.is_active
+        ):
+            raise DomainError("cover_claim_lost", "封面授权核查事务已变化")
+
+    def preload_admission(self, jobs: list[MaterialCoverJob]) -> None:
+        from app.modules.builds.execution_window import cover_jobs_admitted
+
+        self._require_transaction(self.session, self.context)
+        identities = {job.id for job in jobs}
+        admitted = cover_jobs_admitted(
+            self.session, tenant_id=self.context.tenant_id, job_ids=identities
+        )
+        # 只缓存本次持锁领取候选；不跨事务/HTTP复用窗口判断。
+        self.admission.update(
+            {identity: identity in admitted for identity in identities}
+        )
+
+    def admitted(
+        self, session: Session, context: TenantContext, job: MaterialCoverJob
+    ) -> bool:
+        from app.modules.builds.execution_window import cover_job_admitted
+
+        self._require_transaction(session, context)
+        if job.id not in self.admission:
+            self.admission[job.id] = cover_job_admitted(
+                session, tenant_id=job.tenant_id, job_id=job.id
+            )
+        return self.admission[job.id]
 
     def check(
         self,
@@ -101,14 +137,7 @@ class _CoverAccessChecks:
         *,
         upload: bool,
     ) -> None:
-        if (
-            session is not self.session
-            or context != self.context
-            or self.transaction is None
-            or session.get_transaction() is not self.transaction
-            or not self.transaction.is_active
-        ):
-            raise DomainError("cover_claim_lost", "封面授权核查事务已变化")
+        self._require_transaction(session, context)
         route = load_material_route(
             job.frozen_route,
             context=context,
@@ -619,9 +648,9 @@ def _claim_in_session(
     if job.claimed_until and job.claimed_until > _now():
         return None
     if not read and job.purpose == "BUILD" and job.request_armed_at is None:
-        from app.modules.builds.execution_window import cover_job_admitted
-
-        if not cover_job_admitted(session, tenant_id=job.tenant_id, job_id=job.id):
+        if not (checks or _CoverAccessChecks(session, context)).admitted(
+            session, context, job
+        ):
             # 已排队的未来封面也必须遵守正式搭建窗口。只暂停未发送准备；
             # 来源封面和已发送/显式只读核查始终保留原恢复路径。
             job.status, job.error_code = "PENDING", "cover_window_wait"

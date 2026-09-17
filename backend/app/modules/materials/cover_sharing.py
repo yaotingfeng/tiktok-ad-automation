@@ -349,6 +349,7 @@ def _prepare(
     ).all()
     if covers._fenced(db, context, first.id, nonce) is None:
         raise DomainError("cover_claim_lost", "封面执行权已变化")
+    checks.preload_admission([pairs[pair][0] for pair in selected])
     claims = {first.id: nonce}
     members = []
     for pair in sorted(selected):

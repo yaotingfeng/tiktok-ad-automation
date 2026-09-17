@@ -451,6 +451,9 @@ def test_future_unarmed_cover_waits_for_its_build_window(executable, redis_clien
         step.cover_job_id = prepared.task_id
         job = session.get(MaterialCoverJob, prepared.task_id)
         identity, dispatch_id, revision = job.id, job.dispatch_id, job.revision
+        checks = covers._CoverAccessChecks(session, context)
+        checks.preload_admission([job])
+        assert not checks.admitted(session, context, job)
     covers.run_cover(
         database_engine=db,
         redis_client=redis_client,

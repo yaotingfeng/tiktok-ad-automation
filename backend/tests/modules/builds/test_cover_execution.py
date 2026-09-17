@@ -329,6 +329,97 @@ def test_new_video_ad_requires_verified_cover_without_reopening_completed_steps(
         assert len(session.exec(select(MaterialCoverJob)).all()) == 1
 
 
+@pytest.mark.parametrize("expired", ["cover", "video", "changed_identity"])
+def test_saved_unsent_ad_refreshes_expired_dependencies_without_changing_body(
+    executable, redis_client, monkeypatch, expired
+):
+    from uuid import uuid4
+
+    from app.integrations.tiktok.contracts.common import CallEvidence, RemoteCallError
+    from app.modules.builds.execution import _frozen, prepare_request
+    from app.modules.builds.execution_state import arm_request, record_not_sent
+    from app.modules.builds.request_compiler import create_arguments, decode_intent
+    from app.modules.builds.submissions import claim_step
+    from app.modules.materials.models import MaterialDistribution
+
+    ad_id, material_id, job_id, _ = ready_ad_with_cover_job(executable, redis_client)
+    db, context, _ = executable
+    with Session(db) as session, session.begin():
+        job = session.get(MaterialCoverJob, job_id)
+        job.updated_at = datetime.now(UTC)
+        claim = claim_step(session, context=context, step_id=ad_id, owner=uuid4())
+        prepared = prepare_request(
+            session,
+            context=context,
+            claim=claim,
+            frozen=_frozen(session, context, claim),
+        )
+        _, body = create_arguments(
+            attempt_id=claim.attempt_id,
+            intent=decode_intent("AD", prepared),
+            channel=claim.route.channel,
+        )
+        digest = arm_request(session, context=context, claim=claim, body=body)
+        record_not_sent(
+            session,
+            claim=claim,
+            error=RemoteCallError(
+                "admission_deferred", effect="NOT_SENT", evidence=CallEvidence()
+            ),
+            retryable=True,
+            delay=0,
+        )
+        stale = datetime.now(UTC) - timedelta(
+            seconds=settings.MATERIAL_ASSET_MAX_AGE_SECONDS + 1
+        )
+        if expired == "cover":
+            job.updated_at = stale
+        elif expired == "changed_identity":
+            job.known_image_id = "replacement-cover"
+            session.get(AccountMaterial, job.asset_id).image_id = "replacement-cover"
+        else:
+            session.get(AccountMaterial, job.asset_id).verified_at = stale
+
+    def no_call(*_args, **_kwargs):
+        raise AssertionError("expired dependency must be queued before HTTP")
+
+    monkeypatch.setattr("urllib3.PoolManager.request", no_call)
+    assert process_step(
+        database_engine=db,
+        redis_client=redis_client,
+        context=context,
+        step_id=ad_id,
+        revision=0,
+    ) == ("FAILED" if expired == "changed_identity" else "PENDING")
+    with Session(db) as session:
+        step = session.get(ExecutionStep, ad_id)
+        assert step.request_body == body and step.request_body_digest == digest
+        assert step.remote_id is None and step.error_code == (
+            "execution_intent_changed"
+            if expired == "changed_identity"
+            else "material_refresh_required"
+        )
+        assert session.get(ExecutionStep, material_id).status == "SUCCEEDED"
+        job = session.get(MaterialCoverJob, job_id)
+        if expired == "cover":
+            assert job.status == "VERIFYING" and job.dispatch_id is not None
+            assert (
+                session.get(PendingDispatch, job.dispatch_id).task_name
+                == "materials.verify_cover"
+            )
+        elif expired == "video":
+            assert (
+                session.exec(
+                    select(MaterialDistribution).where(
+                        MaterialDistribution.material_id == job.material_id,
+                        MaterialDistribution.advertiser_id == job.advertiser_id,
+                        MaterialDistribution.status.in_(["queued", "verifying"]),
+                    )
+                ).first()
+                is not None
+            )
+
+
 def test_ad_checks_current_video_evidence_after_admission(
     executable, redis_client, monkeypatch
 ):
