@@ -216,6 +216,62 @@ def test_unknown_upload_never_switches_path_or_reuploads(
     assert [call[0] for call in wire[0]] == ["POST", "GET"]
 
 
+@pytest.mark.parametrize("pages", [1, 2])
+def test_empty_unknown_census_stops_until_explicit_read_only_reconciliation(
+    source_env, redis_client, wire, original_s3, pages
+):
+    from datetime import UTC, datetime, timedelta
+
+    from urllib3.exceptions import ReadTimeoutError
+
+    from app.modules.materials.distribution import (
+        queue_distribution,
+        repair_material_dispatches,
+    )
+
+    with Session(engine) as session, session.begin():
+        account = target(session, source_env)
+    dist_id = queue(source_env, account).task_id
+    wire[1].append(ReadTimeoutError(None, "https://offline.invalid", "timeout"))
+    run(source_env, redis_client, dist_id, kind="prepare", s3=original_s3[0])
+    empty = {"list": [], "page_info": {"page": 1, "page_size": 100, "total_page": 0}}
+    for page in range(1, pages + 1):
+        wire[1].append(
+            {
+                "list": [{"video_id": "unrelated-video", "file_name": "unrelated.mp4"}]
+                if page < pages
+                else [],
+                "page_info": {"page": page, "page_size": 100, "total_page": pages},
+            }
+        )
+        run(source_env, redis_client, dist_id)
+        if page < pages:
+            assert not state(dist_id)[1].remote_response.get("reconciliation_complete")
+    dist, op, mapping = state(dist_id)
+    assert dist.status == op.status == "result_unknown" and mapping is None
+    assert op.remote_response.get("reconciliation_complete") is True
+    with Session(engine) as session, session.begin():
+        for message in session.exec(select(PendingDispatch)).all():
+            message.published_at = datetime.now(UTC) - timedelta(minutes=10)
+            message.available_at = message.published_at
+        session.flush()
+        assert repair_material_dispatches(session) == 0
+    # 旧消息重放不能重开整库扫描，也不能再次上传。
+    run(source_env, redis_client, dist_id)
+    run(source_env, redis_client, dist_id, kind="prepare", s3=original_s3[0])
+    assert [call[0] for call in wire[0]] == ["POST"] + ["GET"] * pages
+    with Session(engine) as session, session.begin():
+        current = session.get(MaterialDistribution, dist_id)
+        operation = session.get(MaterialAssetOperation, current.operation_id)
+        queue_distribution(
+            session, current, operation, kind="verify", observe=True, read_only=True
+        )
+    wire[1].append(empty)
+    run(source_env, redis_client, dist_id, read_only=True)
+    assert [call[0] for call in wire[0]] == ["POST"] + ["GET"] * (pages + 1)
+    assert state(dist_id)[1].remote_response.get("reconciliation_complete") is True
+
+
 def test_unknown_share_does_not_assume_source_mid_maps_to_target(
     source_env, redis_client, wire
 ):

@@ -52,6 +52,8 @@ def try_verify_batch(
         anchor_op = db.get(MaterialAssetOperation, anchor.operation_id)
         if anchor_op is None or anchor_op.status not in {"verifying", "result_unknown"}:
             return False
+        if anchor_op.remote_response.get("reconciliation_complete"):
+            return False
         discover = (
             not anchor_op.remote_response.get("video_id")
             and anchor_op.remote_response.get("transport") == "native_share"
@@ -94,6 +96,9 @@ def try_verify_batch(
                 MaterialDistribution.advertiser_id == anchor.advertiser_id,
                 col(MaterialDistribution.status).in_(candidate_states),
                 col(MaterialAssetOperation.status).in_(["verifying", "result_unknown"]),
+                col(MaterialAssetOperation.remote_response)[
+                    "reconciliation_complete"
+                ].astext.is_distinct_from("true"),
                 col(MaterialDistribution.target_route) == anchor.target_route,
                 col(MaterialAssetOperation.frozen_route) == anchor.target_route,
                 col(MaterialAssetOperation.remote_response)[
@@ -151,6 +156,7 @@ def try_verify_batch(
             op = _locked_operation(db, context, operation.id)
             if (
                 op.status not in {"verifying", "result_unknown"}
+                or op.remote_response.get("reconciliation_complete")
                 or dist.status not in candidate_states
                 or dist.operation_id != op.id
                 or (op.claimed_until and op.claimed_until > now)

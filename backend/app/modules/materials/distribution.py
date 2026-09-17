@@ -97,6 +97,19 @@ def queue_distribution(
 ) -> None:
     if read_only and kind != "verify":
         raise DomainError("invalid_asset_task", "只读核实不能安排上传")
+    if operation.remote_response.get("reconciliation_complete"):
+        if not (observe and read_only):
+            return
+        # 完整空查不是未发送证明。只允许显式只读核查开始新一轮，
+        # 自动补偿和旧消息均不能重开无限整库扫描，更不能重新上传。
+        operation.remote_response = {
+            **operation.remote_response,
+            "reconciliation_complete": False,
+            "search_page": 1,
+            "search_total": None,
+            "candidates": [],
+            "revision": operation.remote_response.get("revision", 0) + 1,
+        }
     payload: dict[str, Any] = {
         "distribution_id": str(dist.id),
         "operation_id": str(operation.id),
@@ -464,7 +477,8 @@ def _delivery_matches(
     recovery_claim_id: UUID | None,
 ) -> bool:
     return (
-        (operation_id is None or operation.id == operation_id)
+        not operation.remote_response.get("reconciliation_complete")
+        and (operation_id is None or operation.id == operation_id)
         and (
             revision is None or revision == operation.remote_response.get("revision", 0)
         )
@@ -1633,6 +1647,7 @@ def run_distribution(
                         **operation.remote_response,
                         "search_page": 1 if last else work.get("search_page", 1) + 1,
                         "candidates": [] if last else list(candidates.values()),
+                        "reconciliation_complete": last,
                     }
                     operation.status, dist.status = "result_unknown", "result_unknown"
             else:
@@ -1838,6 +1853,7 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
             col(PendingDispatch.task_name).in_(
                 ["materials.prepare_target", "materials.verify_target"]
             ),
+            remote["reconciliation_complete"].astext.is_distinct_from("true"),
             or_(
                 col(MaterialDistribution.status).in_(ACTIVE_DISTRIBUTIONS),
                 and_(
