@@ -25,13 +25,15 @@ def get_preview_dramas(
     preview = _preview(session, context, preview_id)
     scope, after = _page_scope(context, preview_id, "preview_dramas", limit, cursor)
     total = int(
-        cast(SQLAlchemySession, session).execute(
+        cast(SQLAlchemySession, session)
+        .execute(
             text(
                 "SELECT count(*) FROM preview_drama "
                 "WHERE tenant_id=:tenant AND preview_id=:preview"
             ),
             {"tenant": context.tenant_id, "preview": preview_id},
-        ).scalar_one()
+        )
+        .scalar_one()
     )
     rows = (
         cast(SQLAlchemySession, session)
@@ -42,6 +44,9 @@ def get_preview_dramas(
           AND (CAST(:after AS uuid) IS NULL OR drama_id > CAST(:after AS uuid)) ORDER BY drama_id LIMIT :page_size
       )
       SELECT p.drama_id,p.title,
+        (SELECT count(DISTINCT s.material_id) FROM preview_skipped_material s
+          JOIN build_unit b ON b.tenant_id=s.tenant_id AND b.id=s.unit_id
+          WHERE b.tenant_id=:tenant AND b.preview_id=:preview AND b.drama_id=p.drama_id) AS skipped_material_count,
         (SELECT count(*) FROM preview_drama_group g WHERE g.tenant_id=:tenant AND g.preview_id=:preview AND g.drama_id=p.drama_id) AS material_group_count,
         (SELECT count(*) FROM preview_group_material m WHERE m.tenant_id=:tenant AND m.preview_id=:preview AND m.drama_id=p.drama_id) AS material_count,
         u.*

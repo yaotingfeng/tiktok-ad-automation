@@ -101,6 +101,8 @@ COUNTS = (
  JOIN planned_group g ON g.tenant_id=p.tenant_id AND g.preview_id=p.preview_id AND g.unit_id=ms.unit_id
  JOIN preview_group_material m ON m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id
  AND m.drama_id=g.drama_id AND m.group_no=g.group_no AND m.material_id=ms.material_id
+ AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped
+ WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=g.unit_id AND skipped.material_id=m.material_id)
  WHERE ms.kind='MATERIAL' AND ms.status='FAILED'
 ), material_failed_units AS MATERIALIZED (
  SELECT mg.submission_id,mg.unit_id FROM material_failed_groups mg
@@ -360,7 +362,8 @@ def get_submission_groups(
             text(
                 """WITH page AS (SELECT g.* FROM planned_group g WHERE g.tenant_id=:tenant AND g.preview_id=:preview AND g.unit_id=:unit AND (CAST(:after AS uuid) IS NULL OR g.id>:after) ORDER BY g.id LIMIT :size)
  SELECT g.id group_id,g.unit_id,g.group_no,g.name,
- (SELECT count(*) FROM preview_group_material m WHERE m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id AND m.drama_id=g.drama_id AND m.group_no=g.group_no) material_count,
+ (SELECT count(*) FROM preview_group_material m WHERE m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id AND m.drama_id=g.drama_id AND m.group_no=g.group_no
+ AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=g.unit_id AND skipped.material_id=m.material_id)) material_count,
  (SELECT count(*) FROM planned_ad a WHERE a.tenant_id=g.tenant_id AND a.preview_id=g.preview_id AND a.group_id=g.id) ad_count,
  """
                 + STEP_JSON
@@ -606,7 +609,8 @@ def enrich_units(
  bool_or(e.kind IN ('CAMPAIGN','ADGROUP','AD') AND e.status='SUCCEEDED' AND nullif(trim(e.remote_id),'') IS NULL) unverified_success
  FROM execution_step e JOIN page u ON e.unit_id=u.id WHERE e.tenant_id=:tenant AND e.submission_id=:submission GROUP BY e.unit_id
 ), materials AS (
- SELECT u.id unit_id,count(m.material_id) material_count FROM page u LEFT JOIN preview_group_material m ON m.tenant_id=u.tenant_id AND m.preview_id=u.preview_id AND m.drama_id=u.drama_id GROUP BY u.id
+ SELECT u.id unit_id,count(m.material_id) material_count FROM page u LEFT JOIN preview_group_material m ON m.tenant_id=u.tenant_id AND m.preview_id=u.preview_id AND m.drama_id=u.drama_id
+ AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=u.id AND skipped.material_id=m.material_id) GROUP BY u.id
 )
  SELECT u.id,ac.name account_name,u.group_count,u.ad_count,coalesce(c.succeeded_group_count,0) succeeded_group_count,coalesce(c.succeeded_ad_count,0) succeeded_ad_count,
  coalesce(c.ready_material_count,0) ready_material_count,m.material_count,c.states,c.mismatch,c.unverified_success,"""
@@ -800,6 +804,8 @@ def get_submission_materials(
 JOIN preview_group_material m ON m.tenant_id=g.tenant_id
 AND m.preview_id=g.preview_id AND m.drama_id=g.drama_id
 AND m.group_no=g.group_no
+AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped
+ WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=g.unit_id AND skipped.material_id=m.material_id)
 WHERE g.tenant_id=:tenant AND g.preview_id=:preview
 AND g.unit_id=:unit AND g.id=:group""",
         params,
@@ -810,6 +816,7 @@ AND g.unit_id=:unit AND g.id=:group""",
             text(
                 """WITH page AS (
  SELECT m.* FROM planned_group g JOIN preview_group_material m ON m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id AND m.drama_id=g.drama_id AND m.group_no=g.group_no
+ AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=g.unit_id AND skipped.material_id=m.material_id)
  WHERE g.tenant_id=:tenant AND g.preview_id=:preview AND g.unit_id=:unit AND g.id=:group AND m.position>:after ORDER BY m.position LIMIT :size)
  SELECT m.material_id,m.position,f.file_name,f.storage_state='stored' preview_available,
  CASE WHEN e.status='SUCCEEDED' THEN e.resolved->'mapping'->>'video_id' ELSE NULL END video_id,

@@ -2504,6 +2504,24 @@ export type Page_ResolvedLink_ = {
 };
 
 /**
+ * Page[SkippedMaterialPublic]
+ */
+export type Page_SkippedMaterialPublic_ = {
+    /**
+     * Items
+     */
+    items: Array<SkippedMaterialPublic>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
+};
+
+/**
  * Page[StepPublic]
  */
 export type Page_StepPublic_ = {
@@ -2880,6 +2898,10 @@ export type PreviewAccepted = {
  */
 export type PreviewDramaPublic = {
     /**
+     * Skipped Material Count
+     */
+    skipped_material_count?: number;
+    /**
      * Drama Id
      */
     drama_id: string;
@@ -2995,6 +3017,10 @@ export type PreviewRequest = {
  * PreviewSummary
  */
 export type PreviewSummary = {
+    /**
+     * Skipped Material Count
+     */
+    skipped_material_count?: number;
     generation_progress: PreviewGenerationProgress;
     execution_route?: ExecutionRoutePublic | null;
     /**
@@ -3075,6 +3101,10 @@ export type PreviewSummary = {
  * PreviewUnit
  */
 export type PreviewUnit = {
+    /**
+     * Skipped Material Count
+     */
+    skipped_material_count?: number;
     /**
      * Unit Id
      */
@@ -3625,6 +3655,24 @@ export type SignedPreview = {
      * Expires In
      */
     expires_in?: number;
+};
+
+/**
+ * SkippedMaterialPublic
+ */
+export type SkippedMaterialPublic = {
+    /**
+     * Material Id
+     */
+    material_id: string;
+    /**
+     * File Name
+     */
+    file_name: string;
+    /**
+     * Reason Code
+     */
+    reason_code: string;
 };
 
 /**
@@ -8773,6 +8821,49 @@ export type buildsFrozenGroupsResponses = {
 };
 
 export type buildsFrozenGroupsResponse = buildsFrozenGroupsResponses[keyof buildsFrozenGroupsResponses];
+
+export type buildsSkippedMaterialsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Unit Id
+         */
+        unit_id: string;
+    };
+    query?: {
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/build-units/{unit_id}/skipped-materials';
+};
+
+export type buildsSkippedMaterialsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsSkippedMaterialsError = buildsSkippedMaterialsErrors[keyof buildsSkippedMaterialsErrors];
+
+export type buildsSkippedMaterialsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_SkippedMaterialPublic_;
+};
+
+export type buildsSkippedMaterialsResponse = buildsSkippedMaterialsResponses[keyof buildsSkippedMaterialsResponses];
 
 export type buildsSavedMutationData = {
     body?: never;

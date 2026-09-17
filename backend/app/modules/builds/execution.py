@@ -36,6 +36,7 @@ from app.modules.builds.execution_state import (
     record_unknown,
     transient_retry,
 )
+from app.modules.builds.preview_materials import material_not_skipped
 from app.modules.builds.preview_models import (
     PlannedAd,
     PlannedGroup,
@@ -302,6 +303,11 @@ def prepare_request(
                 PreviewGroupMaterial.preview_id == step.preview_id,
                 PreviewGroupMaterial.drama_id == frozen.drama_id,
                 PreviewGroupMaterial.group_no == group.group_no,
+                material_not_skipped(
+                    tenant_id=step.tenant_id,
+                    unit_id=step.unit_id,
+                    material_id=col(PreviewGroupMaterial.material_id),
+                ),
             )
             .order_by(col(PreviewGroupMaterial.position))
             .limit(51)

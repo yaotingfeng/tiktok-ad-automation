@@ -31,6 +31,10 @@ from app.modules.builds.models import (
     DraftGroupMaterial,
     DraftInput,
 )
+from app.modules.builds.preview_materials import (
+    SKIPPABLE_MATERIAL_REASONS,
+    material_not_skipped,
+)
 from app.modules.builds.preview_models import (
     BuildPreview,
     BuildUnit,
@@ -41,6 +45,7 @@ from app.modules.builds.preview_models import (
     PreviewDramaGroup,
     PreviewGroupMaterial,
     PreviewInput,
+    PreviewSkippedMaterial,
 )
 from app.modules.builds.preview_schemas import (
     FrozenAd,
@@ -51,12 +56,14 @@ from app.modules.builds.preview_schemas import (
     PreviewSummary,
     PreviewUnit,
     Readiness,
+    SkippedMaterialPublic,
 )
 from app.modules.builds.preview_validation import measured, name_reasons, scene_reasons
 from app.modules.builds.route_views import execution_route_view
 from app.modules.builds.routes import load_preview_route, save_preview_route
 from app.modules.builds.scene import read_scene_context
 from app.modules.builds.scene_schemas import SceneContext
+from app.modules.materials.models import MaterialFile
 from app.modules.materials.readiness import get_material_readiness_batch
 from app.modules.providers.models import (
     PromotionLink,
@@ -638,13 +645,13 @@ def _expand_unit(
         )
     ).one()
     maximum = unit.scene_snapshot["creative_limit"]
-    if not maximum or count > maximum:
+    if not maximum or count > 50:
         _block(
             unit,
             ["material_group_limit_exceeded" if maximum else "field_limits_unverified"],
         )
     else:
-        # Only scene-validated bounded groups reach asset readiness checks.
+        # 本地读取仍限 50 条；平台数量限制按排除不可用素材后的实际组校验。
         materials = session.exec(
             select(PreviewGroupMaterial.material_id)
             .where(
@@ -667,11 +674,48 @@ def _expand_unit(
             if materials
             else {}
         )
-        for result in readiness.values():
+        skipped_ids = [
+            identity
+            for identity, result in readiness.items()
+            if result.state == "blocked"
+            and result.reason_code in SKIPPABLE_MATERIAL_REASONS
+        ]
+        # 文件名及原因随预览冻结，分页展示；不会因为以后补传成功而改变本次内容。
+        if skipped_ids:
+            names = dict(
+                session.exec(
+                    select(MaterialFile.id, MaterialFile.file_name).where(
+                        MaterialFile.tenant_id == preview.tenant_id,
+                        col(MaterialFile.id).in_(skipped_ids),
+                    )
+                ).all()
+            )
+            for identity in skipped_ids:
+                skipped = PreviewSkippedMaterial(
+                    tenant_id=preview.tenant_id,
+                    unit_id=unit.id,
+                    material_id=identity,
+                    preview_id=preview.id,
+                    bc_id=preview.bc_id,
+                    file_name=names[identity],
+                    reason_code=readiness[identity].reason_code
+                    or "material_unavailable",
+                )
+                session.add(skipped)
+                _record(preview, skipped.model_dump(mode="json"))
+        for identity, result in readiness.items():
             if result.state == "blocked":
-                _block(unit, [result.reason_code or "material_unavailable"])
+                if identity not in skipped_ids:
+                    _block(unit, [result.reason_code or "material_unavailable"])
             elif result.state == "preparable" and unit.readiness != "BLOCKED":
                 unit.readiness = "PREPARING"
+        if materials and len(skipped_ids) == len(materials):
+            # 空组不创建 Ad Group/Ad；其他组继续，整部无有效组才在收尾阻断。
+            session.add(unit)
+            p["group_after"] = group.group_no
+            return
+        if len(materials) - len(skipped_ids) > maximum:
+            _block(unit, ["material_group_limit_exceeded"])
     names = _names(preview, drama, config, group.group_no, 1)
     planned = PlannedGroup(
         **_scope(preview),
@@ -838,6 +882,18 @@ def get_preview_summary(
         )
     ).one()
     return PreviewSummary(
+        skipped_material_count=session.exec(
+            select(func.count(func.distinct(PreviewSkippedMaterial.material_id)))
+            .join(
+                BuildUnit,
+                (col(BuildUnit.tenant_id) == PreviewSkippedMaterial.tenant_id)
+                & (col(BuildUnit.id) == PreviewSkippedMaterial.unit_id),
+            )
+            .where(
+                BuildUnit.tenant_id == context.tenant_id,
+                BuildUnit.preview_id == preview_id,
+            )
+        ).one(),
         generation_progress=PreviewGenerationProgress(
             phase="complete"
             if preview.status == "FROZEN"
@@ -947,9 +1003,22 @@ def get_preview_units(
     if after:
         query = query.where(BuildUnit.id > UUID(after))
     rows = session.exec(query.order_by(col(BuildUnit.id)).limit(limit + 1)).all()
+    skipped_counts = dict(
+        session.exec(
+            select(PreviewSkippedMaterial.unit_id, func.count())
+            .where(
+                PreviewSkippedMaterial.tenant_id == context.tenant_id,
+                col(PreviewSkippedMaterial.unit_id).in_(
+                    [u.id for u, _ in rows[:limit]]
+                ),
+            )
+            .group_by(col(PreviewSkippedMaterial.unit_id))
+        ).all()
+    )
     return Page(
         items=[
             PreviewUnit(
+                skipped_material_count=skipped_counts.get(u.id, 0),
                 unit_id=u.id,
                 drama_id=u.drama_id,
                 title=d.title,
@@ -1045,6 +1114,11 @@ def get_frozen_groups(
                 PreviewGroupMaterial.preview_id == preview.id,
                 PreviewGroupMaterial.drama_id == unit.drama_id,
                 PreviewGroupMaterial.group_no == group.group_no,
+                material_not_skipped(
+                    tenant_id=context.tenant_id,
+                    unit_id=unit_id,
+                    material_id=col(PreviewGroupMaterial.material_id),
+                ),
             )
             .order_by(col(PreviewGroupMaterial.position))
             .limit(101)
@@ -1085,6 +1159,35 @@ def get_frozen_groups(
     return Page(
         items=items,
         next_cursor=encode_cursor(scope=scope, last_id=str(rows[limit - 1].group_no))
+        if len(rows) > limit
+        else None,
+        total=total,
+    )
+
+
+def get_skipped_materials(
+    session: Session,
+    *,
+    context: TenantContext,
+    unit_id: UUID,
+    cursor: str | None = None,
+    limit: int = 50,
+) -> Page[SkippedMaterialPublic]:
+    _unit(session, context, unit_id)
+    scope, after = _page_scope(context, unit_id, "skipped_materials", limit, cursor)
+    query = select(PreviewSkippedMaterial).where(
+        PreviewSkippedMaterial.tenant_id == context.tenant_id,
+        PreviewSkippedMaterial.unit_id == unit_id,
+    )
+    total = count_rows(session, query)
+    if after:
+        query = query.where(PreviewSkippedMaterial.material_id > UUID(after))
+    rows = session.exec(
+        query.order_by(col(PreviewSkippedMaterial.material_id)).limit(limit + 1)
+    ).all()
+    return Page(
+        items=[SkippedMaterialPublic(**r.model_dump()) for r in rows[:limit]],
+        next_cursor=encode_cursor(scope=scope, last_id=str(rows[limit - 1].material_id))
         if len(rows) > limit
         else None,
         total=total,

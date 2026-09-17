@@ -267,6 +267,35 @@ class BuildUnit(SQLModel, table=True):
     complete: bool = False
 
 
+class PreviewSkippedMaterial(SQLModel, table=True):
+    """按账户冻结素材排除证据；后续恢复可用也不能混入已确认的广告内容。"""
+
+    __tablename__ = "preview_skipped_material"
+    __table_args__ = (
+        preview_fk(),
+        ForeignKeyConstraint(
+            ["tenant_id", "unit_id", "preview_id", "bc_id"],
+            [
+                "build_unit.tenant_id",
+                "build_unit.id",
+                "build_unit.preview_id",
+                "build_unit.bc_id",
+            ],
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "material_id"],
+            ["material_file.tenant_id", "material_file.id"],
+        ),
+    )
+    tenant_id: UUID = Field(primary_key=True)
+    unit_id: UUID = Field(primary_key=True)
+    material_id: UUID = Field(primary_key=True)
+    preview_id: UUID
+    bc_id: str = Field(max_length=128)
+    file_name: str = Field(max_length=1000)
+    reason_code: str = Field(max_length=128)
+
+
 class PlannedGroup(PreviewRow, table=True):
     __tablename__ = "planned_group"
     __table_args__ = (

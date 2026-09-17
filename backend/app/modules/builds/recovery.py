@@ -75,12 +75,15 @@ AND EXISTS (SELECT 1 FROM bc_account_access a
  AND aa.remote_status IN ('ENABLE','STATUS_ENABLE') AND trim(aa.currency)<>'' AND trim(aa.timezone)<>''
  AND aa.currency=u.currency AND aa.timezone=u.timezone)
 """
+# 恢复也只等待该账户实际保留的素材；已排除素材不再是冻结组的依赖。
 GROUP_READY = """EXISTS (SELECT 1 FROM planned_group g
  WHERE g.tenant_id=s.tenant_id AND g.preview_id=s.preview_id AND g.unit_id=s.unit_id
  AND (s.kind='CAMPAIGN' OR g.id=s.group_id)
- AND EXISTS (SELECT 1 FROM preview_group_material gm WHERE gm.tenant_id=g.tenant_id AND gm.preview_id=g.preview_id AND gm.drama_id=g.drama_id AND gm.group_no=g.group_no)
+ AND EXISTS (SELECT 1 FROM preview_group_material gm WHERE gm.tenant_id=g.tenant_id AND gm.preview_id=g.preview_id AND gm.drama_id=g.drama_id AND gm.group_no=g.group_no
+ AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped WHERE skipped.tenant_id=gm.tenant_id AND skipped.unit_id=g.unit_id AND skipped.material_id=gm.material_id))
  AND NOT EXISTS (SELECT 1 FROM preview_group_material gm
  WHERE gm.tenant_id=g.tenant_id AND gm.preview_id=g.preview_id AND gm.drama_id=g.drama_id AND gm.group_no=g.group_no
+ AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped WHERE skipped.tenant_id=gm.tenant_id AND skipped.unit_id=g.unit_id AND skipped.material_id=gm.material_id)
  AND NOT EXISTS (SELECT 1 FROM execution_step ms WHERE ms.tenant_id=s.tenant_id AND ms.submission_id=s.submission_id AND ms.unit_id=s.unit_id AND ms.kind='MATERIAL' AND ms.material_id=gm.material_id AND ms.status='SUCCEEDED')))
 """
 READ_ACCOUNT = """

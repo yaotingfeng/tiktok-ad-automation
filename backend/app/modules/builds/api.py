@@ -22,6 +22,7 @@ from app.modules.builds.preview_schemas import (
     PreviewRequest,
     PreviewSummary,
     PreviewUnit,
+    SkippedMaterialPublic,
 )
 from app.modules.builds.schemas import (
     CreateDraftRequest,
@@ -397,6 +398,26 @@ def frozen_groups(
         session, actor_id=user.id, tenant_id=tenant_id, action="read"
     )
     return previews.get_frozen_groups(
+        session, context=context, unit_id=unit_id, cursor=cursor, limit=limit
+    )
+
+
+@router.get(
+    "/build-units/{unit_id}/skipped-materials",
+    response_model=Page[SkippedMaterialPublic],
+)
+def skipped_materials(
+    tenant_id: UUID,
+    unit_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    cursor: Cursor = None,
+    limit: Limit = 50,
+) -> Page[SkippedMaterialPublic]:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    return previews.get_skipped_materials(
         session, context=context, unit_id=unit_id, cursor=cursor, limit=limit
     )
 

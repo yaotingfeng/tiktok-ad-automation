@@ -16,6 +16,7 @@ from app.modules.builds.execution_models import (
     SubmissionUnit,
 )
 from app.modules.builds.execution_state import evidence
+from app.modules.builds.preview_materials import material_not_skipped
 from app.modules.builds.preview_models import (
     BuildUnit,
     PlannedGroup,
@@ -89,6 +90,11 @@ def retry_ad_covers(
             PlannedGroup.preview_id == step.preview_id,
             PlannedGroup.unit_id == step.unit_id,
             PlannedGroup.id == step.group_id,
+            material_not_skipped(
+                tenant_id=context.tenant_id,
+                unit_id=unit.id,
+                material_id=col(PreviewGroupMaterial.material_id),
+            ),
         )
         .order_by(col(MaterialCoverJob.id))
         .limit(50)
@@ -136,6 +142,11 @@ def validate_ad_assets(
             PlannedGroup.preview_id == step.preview_id,
             PlannedGroup.unit_id == step.unit_id,
             PlannedGroup.id == step.group_id,
+            material_not_skipped(
+                tenant_id=step.tenant_id,
+                unit_id=unit.id,
+                material_id=col(PreviewGroupMaterial.material_id),
+            ),
         )
         .order_by(col(PreviewGroupMaterial.position))
         .limit(51)

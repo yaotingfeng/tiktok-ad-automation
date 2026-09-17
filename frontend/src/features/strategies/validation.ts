@@ -82,7 +82,23 @@ export function renderNameExample(
   return `${value.replace(/\{\{|\}\}|\{[^{}]+\}/g, (token) => values[token]!)}-A7K2`
 }
 export function normalizeDecimal(value: string) {
-  const [whole, fraction = ""] = value.split(".")
+  let plainValue = value
+  const exponential = /^(\d+)(?:\.(\d+))?[eE]([+-]?\d+)$/.exec(value)
+  if (exponential) {
+    const [, whole, fraction = "", exponent] = exponential
+    const digits = whole + fraction
+    if (!/[1-9]/.test(digits)) return "0"
+    // API 的 Decimal 可能使用指数形式；仅移动小数点，金额本身不转 Number，避免精度丢失。
+    const decimalPosition = whole.length + Number(exponent)
+    if (decimalPosition <= 0) {
+      plainValue = `0.${"0".repeat(-decimalPosition)}${digits}`
+    } else if (decimalPosition >= digits.length) {
+      plainValue = digits + "0".repeat(decimalPosition - digits.length)
+    } else {
+      plainValue = `${digits.slice(0, decimalPosition)}.${digits.slice(decimalPosition)}`
+    }
+  }
+  const [whole, fraction = ""] = plainValue.split(".")
   return `${whole.replace(/^0+(?=\d)/, "") || "0"}${fraction.replace(/0+$/, "") ? `.${fraction.replace(/0+$/, "")}` : ""}`
 }
 export function decimalError(value: string) {

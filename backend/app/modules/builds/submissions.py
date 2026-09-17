@@ -210,6 +210,7 @@ def submit_preview(
 # Preserve correlation even before freshly generated plan tables are analyzed.
 # Without these optimizer boundaries PostgreSQL can repeatedly join every ad to
 # every group in the preview, or materialize all steps in a large submission.
+# 所有素材依赖均按账户的冻结排除证据展开；不能因素材后来恢复而重新加入。
 BLUEPRINTS = """
 WITH unit_groups AS MATERIALIZED (
  SELECT id FROM planned_group WHERE tenant_id=:tenant AND preview_id=:preview AND unit_id=:unit
@@ -217,6 +218,8 @@ WITH unit_groups AS MATERIALIZED (
  SELECT 0 priority, 'MATERIAL:'||m.material_id k, NULL::text parent,
  'MATERIAL' kind, NULL::uuid group_id, NULL::uuid ad_id, m.material_id
  FROM preview_group_material m WHERE m.tenant_id=:tenant AND m.preview_id=:preview AND m.drama_id=:drama
+ AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped
+ WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=:unit AND skipped.material_id=m.material_id)
  UNION ALL SELECT 1,'CTA',NULL,'CTA',NULL,NULL,NULL
  UNION ALL SELECT 2,'CAMPAIGN',NULL,'CAMPAIGN',NULL,NULL,NULL
  UNION ALL SELECT 3,'READBACK:CAMPAIGN','CAMPAIGN','READBACK',NULL,NULL,NULL
@@ -615,6 +618,8 @@ def get_submission(
  ON g.tenant_id=ms.tenant_id AND g.preview_id=:preview AND g.unit_id=ms.unit_id
  JOIN preview_group_material m ON m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id
  AND m.drama_id=g.drama_id AND m.group_no=g.group_no AND m.material_id=ms.material_id
+ AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped
+ WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=g.unit_id AND skipped.material_id=m.material_id)
  WHERE ms.tenant_id=:tenant AND ms.submission_id=:submission AND ms.kind='MATERIAL' AND ms.status='FAILED'),
  material_failed_units AS MATERIALIZED (
  SELECT mg.unit_id FROM material_failed_groups mg GROUP BY mg.unit_id
@@ -1020,12 +1025,15 @@ def get_submission_steps(
     )
 
 
+# 与展开及最终 AD 围栏使用同一保留集合，避免等待根本不会创建的素材步骤。
 GROUP_MATERIAL_SQL = """
 SELECT g.id group_id,g.unit_id,
  count(m.material_id)>0 AND coalesce(bool_and(ms.status='SUCCEEDED'),false) AND count(m.material_id)=count(ms.id) ready,
  coalesce(bool_or(ms.status='FAILED'),false) failed
 FROM planned_group g
 LEFT JOIN preview_group_material m ON m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id AND m.drama_id=g.drama_id AND m.group_no=g.group_no
+AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped
+ WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=g.unit_id AND skipped.material_id=m.material_id)
 LEFT JOIN execution_step ms ON ms.tenant_id=g.tenant_id AND ms.submission_id=:submission AND ms.unit_id=g.unit_id AND ms.kind='MATERIAL' AND ms.material_id=m.material_id
 WHERE g.tenant_id=:tenant AND g.preview_id=:preview AND (CAST(:unit AS uuid) IS NULL OR g.unit_id=CAST(:unit AS uuid))
 GROUP BY g.id,g.unit_id

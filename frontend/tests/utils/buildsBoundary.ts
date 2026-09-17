@@ -54,6 +54,7 @@ export async function buildsBoundary(
     defaultConnectionId?: string
     draftList?: boolean
     miniSelected?: boolean
+    skippedMaterials?: boolean
   } = {},
 ) {
   const submissionId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -99,6 +100,7 @@ export async function buildsBoundary(
     updated_at: "2026-09-09T00:00:00Z",
   }
   const preview = {
+    skipped_material_count: options.skippedMaterials ? 1 : 0,
     submission_id: null as string | null,
     execution_route: options.missingRoute
       ? null
@@ -152,6 +154,7 @@ export async function buildsBoundary(
   let releaseInput: () => void = () => {}
   const waitInput = new Promise<void>((resolve) => (releaseInput = resolve))
   const units = Array.from({ length: options.unitCount || 6 }, (_, i) => ({
+    skipped_material_count: options.skippedMaterials ? 1 : 0,
     budget: "100.00",
     currency: "USD",
     unit_id: `aaaaaaaa-aaaa-4aaa-8aaa-${String(i + 1).padStart(12, "0")}`,
@@ -684,6 +687,7 @@ export async function buildsBoundary(
             preparing_count: 0,
             blocked_count: options.blocked ? 1 : 0,
             material_count: 23,
+            skipped_material_count: options.skippedMaterials ? 1 : 0,
             material_group_count: 3,
             eligible_campaign_count: options.blocked ? 2 : 3,
             eligible_adgroup_count: options.blocked ? 6 : 9,
@@ -721,6 +725,20 @@ export async function buildsBoundary(
             : [],
         ),
       )
+    if (path.includes("/build-units/") && path.endsWith("/skipped-materials"))
+      return reply(
+        paged(
+          options.skippedMaterials
+            ? [
+                {
+                  material_id: "99999999-9999-4999-8999-000000000001",
+                  file_name: "冻结失败视频-CL6-6.mp4",
+                  reason_code: "material_remote_source_unavailable",
+                },
+              ]
+            : [],
+        ),
+      )
     if (path.includes("/build-units/") && path.endsWith("/groups"))
       return reply(
         paged(
@@ -729,7 +747,11 @@ export async function buildsBoundary(
             group_no: i + 1,
             name: `冻结广告组${i + 1}`,
             material_ids: materials
-              .filter((m) => m.group_no === i + 1)
+              .filter(
+                (m) =>
+                  m.group_no === i + 1 &&
+                  (!options.skippedMaterials || m.position !== 1 || i !== 0),
+              )
               .map((m) => m.material_id),
             ads: [1, 2].map((n) => ({
               ad_id: `ad-${i}-${n}`,

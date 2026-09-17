@@ -7,7 +7,7 @@ import {
   type PreviewSummary,
   type PreviewUnit,
 } from "@/client"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -345,6 +345,16 @@ export function PreviewSummaryBar({
     <Card className={cn("min-w-0", !readOnly && "sticky bottom-0")}>
       <CardContent className="flex min-w-0 flex-col gap-3">
         {!!error && <RequestError error={error} />}
+        {!!preview.skipped_material_count && (
+          <Alert>
+            <AlertTitle>部分素材未纳入本次搭建</AlertTitle>
+            <AlertDescription>
+              {preview.campaign_count > 0
+                ? `已跳过 ${preview.skipped_material_count} 条不可用素材，其余素材继续搭建。`
+                : `已跳过 ${preview.skipped_material_count} 条不可用素材；当前没有可提交组合，请补充可用素材或处理其他阻断问题。`}
+            </AlertDescription>
+          </Alert>
+        )}
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <p className="font-semibold">
@@ -484,6 +494,12 @@ export function PreviewUnitTable({
                     <BuildReason key={code} code={code} />
                   ))}
                 </p>
+                {!!row.original.skipped_material_count && (
+                  <p className="text-xs text-muted-foreground">
+                    已跳过 {row.original.skipped_material_count}{" "}
+                    条素材，详情可查看原因
+                  </p>
+                )}
               </>
             ),
           },
@@ -698,6 +714,13 @@ function FrozenUnitSheet({
               </pre>
             </details>
             <h3 className="font-semibold">冻结分组与 SP 创意</h3>
+            {!!unit.skipped_material_count && (
+              <SkippedMaterials
+                tenantId={tenantId}
+                bcId={bcId}
+                unitId={unit.unit_id}
+              />
+            )}
             {groups.error && <RequestError error={groups.error} />}{" "}
             {groups.isPending && <Skeleton className="h-32" />}
             {groups.data?.items.map((group) => (
@@ -715,6 +738,68 @@ function FrozenUnitSheet({
     </ManagementSheet>
   )
 }
+function SkippedMaterials({
+  tenantId,
+  bcId,
+  unitId,
+}: {
+  tenantId: string
+  bcId: string
+  unitId: string
+}) {
+  const paging = useCursorPage()
+  const query = useQuery({
+    queryKey: [
+      ...buildKey(tenantId, bcId),
+      "unit",
+      unitId,
+      "skipped-materials",
+      paging.cursor,
+      paging.limit,
+    ],
+    queryFn: async ({ signal }) =>
+      (
+        await BuildsService.skippedMaterials({
+          path: { tenant_id: tenantId, unit_id: unitId },
+          query: { cursor: paging.cursor, limit: paging.limit },
+          signal,
+        })
+      ).data,
+  })
+  return (
+    <section className="flex flex-col gap-3" aria-label="已跳过的素材">
+      <Alert>
+        <AlertTitle>已跳过的素材</AlertTitle>
+        <AlertDescription>
+          这些素材不会进入本次提交；保留的素材见下方冻结分组。全部素材不可用的账户组合仍不可搭建。
+        </AlertDescription>
+      </Alert>
+      <ServerTable
+        rows={query.data?.items || []}
+        columns={[
+          { header: "文件名", accessorKey: "file_name" },
+          {
+            header: "跳过原因",
+            cell: ({ row }) => <BuildReason code={row.original.reason_code} />,
+          },
+        ]}
+        loading={query.isPending}
+        fetching={query.isFetching}
+        error={query.error}
+        retry={() => void query.refetch()}
+        filtered={false}
+        emptyTitle="没有跳过的素材"
+      />
+      <Pager
+        paging={paging}
+        nextCursor={query.data?.next_cursor}
+        total={query.data?.total}
+        busy={query.isFetching}
+      />
+    </section>
+  )
+}
+
 function GroupDetail({ group }: { group: FrozenGroup }) {
   const [open, setOpen] = useState(false)
   return (
@@ -785,9 +870,19 @@ function PreviewDramaTable({
         columns={[
           { header: "剧目", accessorKey: "title" },
           {
-            header: "素材 / 分组",
-            cell: ({ row }) =>
-              `${row.original.material_count} / ${row.original.material_group_count}`,
+            header: "选中素材 / 原分组",
+            cell: ({ row }) => (
+              <div>
+                {row.original.material_count} /{" "}
+                {row.original.material_group_count}
+                {!!row.original.skipped_material_count && (
+                  <p className="text-xs text-muted-foreground">
+                    {row.original.skipped_material_count}{" "}
+                    条素材在部分或全部账户被跳过
+                  </p>
+                )}
+              </div>
+            ),
           },
           {
             header: "提交户 / 总户",

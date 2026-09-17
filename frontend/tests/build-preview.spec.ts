@@ -1,6 +1,94 @@
 import { expect, test } from "@playwright/test"
+import {
+  decimalError,
+  normalizeDecimal,
+} from "../src/features/strategies/validation"
 import { BC, buildsBoundary, P, T } from "./utils/buildsBoundary"
 import { expectWorkspaceLayout } from "./utils/workspaceLayout"
+
+test("Decimal 指数格式精确展开且保留十进制输入校验规则", () => {
+  for (const [value, expected] of [
+    ["0E-12", "0"],
+    ["0.000E+12", "0"],
+    ["1E+3", "1000"],
+    ["1.2300e+2", "123"],
+    ["1.23E-10", "0.000000000123"],
+    ["9.0071992547409931234561234E+21", "9007199254740993123456.1234"],
+    ["9007199254740993123456.123400000000", "9007199254740993123456.1234"],
+    ["000100.0000", "100"],
+  ]) {
+    expect(normalizeDecimal(value)).toBe(expected)
+  }
+  for (const value of ["0", "0E-12", "1E3", "1e-12", "-1", "0.0000000000001"]) {
+    expect(decimalError(value)).toBeDefined()
+  }
+  for (const value of [
+    "0.000000000001",
+    "9007199254740993123456.123400000000",
+  ]) {
+    expect(decimalError(value)).toBeUndefined()
+  }
+})
+
+for (const [budget, expected] of [
+  ["0E-12", "0"],
+  ["9.0071992547409931234561234E+21", "9007199254740993123456.1234"],
+  ["1.23E-10", "0.000000000123"],
+]) {
+  test(`预览预算将 Decimal ${budget} 显示为精确十进制金额`, async ({
+    page,
+  }) => {
+    const api = await buildsBoundary(page)
+    api.preview.daily_budget_sum = budget
+    await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
+    await expect(
+      page.getByText(`配置日预算合计 USD ${expected}`, { exact: true }),
+    ).toBeVisible()
+  })
+}
+
+test("部分素材被跳过仍可搭建，详情显示冻结文件及原因", async ({ page }) => {
+  const api = await buildsBoundary(page, { skippedMaterials: true })
+  await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
+  await expect(
+    page.getByText("已跳过 1 条不可用素材，其余素材继续搭建。", {
+      exact: true,
+    }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "创建并立即启用" }),
+  ).toBeEnabled()
+  await page.getByRole("tab", { name: "账户组合", exact: true }).click()
+  await page.getByRole("button", { name: "查看冻结详情" }).first().click()
+  await expect(
+    page.getByText("冻结失败视频-CL6-6.mp4", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByText("来源账户没有当前可用的视频副本", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByText("第 1 组 · 9 份素材 · 2 条 SP 创意", { exact: true }),
+  ).toBeVisible()
+  expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
+})
+
+test("全部素材不可用时不提示其余素材继续搭建", async ({ page }) => {
+  const api = await buildsBoundary(page, { skippedMaterials: true })
+  api.preview.campaign_count = 0
+  api.preview.adgroup_count = 0
+  api.preview.ad_count = 0
+  api.preview.daily_budget_sum = "0E-12"
+  await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
+  await expect(
+    page.getByText(
+      "已跳过 1 条不可用素材；当前没有可提交组合，请补充可用素材或处理其他阻断问题。",
+      { exact: true },
+    ),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "创建并立即启用" }),
+  ).toBeDisabled()
+})
 
 for (const viewer of [false, true]) {
   test(`历史提交配置跨会话只读，viewer=${viewer}`, async ({

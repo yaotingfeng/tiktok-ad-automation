@@ -27,6 +27,7 @@ class PreviewGenerationProgress(BaseModel):
 
 
 class PreviewSummary(BaseModel):
+    skipped_material_count: int = 0
     generation_progress: PreviewGenerationProgress
     execution_route: ExecutionRoutePublic | None = None
     submission_id: UUID | None
@@ -50,6 +51,7 @@ class PreviewSummary(BaseModel):
 
 
 class PreviewUnit(BaseModel):
+    skipped_material_count: int = 0
     unit_id: UUID
     drama_id: UUID
     title: str
@@ -115,6 +117,7 @@ class PreviewInputPublic(BaseModel):
 
 
 class PreviewDramaPublic(BaseModel):
+    skipped_material_count: int = 0
     drama_id: UUID
     title: str
     account_count: int
@@ -127,3 +130,9 @@ class PreviewDramaPublic(BaseModel):
     eligible_adgroup_count: int
     eligible_ad_count: int
     daily_budget_sum: Decimal
+
+
+class SkippedMaterialPublic(BaseModel):
+    material_id: UUID
+    file_name: str
+    reason_code: str
