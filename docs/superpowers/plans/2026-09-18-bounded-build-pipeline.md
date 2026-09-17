@@ -159,3 +159,8 @@ Files: docs/implementation-progress.md、docs/runbooks/staging-singapore.md、do
 - 21:32只读证据：当前窗口17个已知ID封面VERIFYING但dispatch为空、领取已过期；批次wake已经READY且无投递。批读优化漏掉旧单wake到独立核验的交接，repair原限定仅wake可补投，导致其余成员永久等待。所见四批均全部成员有ID，原成员/关联/已知计数一致（5/6/7/12）。
 - repair增加同范围且全成员已识别的只读接续分支，复用详情路由同一判定；保留过期领取/到期/100条上限，不改账本、不直接投队列，不完整批次仍单wake。新例首先因夹具claim字段不成对失败，纠正后正常复现0而应2；修复后含真实一次GET完成两成员与不完整批次不补投的8项17.33秒通过。扩展回归中。
 - e846后截至21:33:38UTC20/180完整、AD40/360、素材齐29。核验211614Z和212745Z归档/副本/零会话后清理9dc/e846两恢复测试库及KxM6mNkA/XfE5ZZrL副本，正式备份及release保留，可重建。
+
+## Task 22：封面处理中与结果未知的消费状态分离
+
+- 原17项均真实READY，但其关联16条AD在核验期间因旧cover_result_unknown错误码被标FAILED。_result历史码覆盖VERIFYING状态，repair接续本身并不代表失败。只按当前UNKNOWN/BLOCKED阻断，VERIFYING仍queued；回执冲突、摘要、映射错误保留前置阻断，不返回未核实的ready。
+- 增加repair后消费者queued断言先失败；修复后执行扩展回归。通过正式RETRY恢复16条确定未发送AD，创建仍沿原消费者和冻结意图。

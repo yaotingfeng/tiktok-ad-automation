@@ -154,6 +154,15 @@ def test_repair_recovers_identified_peers_after_shared_wake_is_ready(
         assert all(job_state(identity).dispatch_id is None for identity in identities)
         return
     assert all(job_state(identity).dispatch_id for identity in identities[1:])
+    with Session(engine) as db:
+        # 正式接续正在核验，消费者必须等待，不能因旧错误码把广告永久标失败。
+        assert all(
+            covers.get_cover_status(
+                db, context=source_env["context"], job_id=identity
+            ).state
+            == "queued"
+            for identity in identities[1:]
+        )
     before = len(wire[0])
     wire[1].append({"list": [image(i, target_id=True) for i in (1, 2)]})
     run(source_env, redis_client, identities[1], read=True)

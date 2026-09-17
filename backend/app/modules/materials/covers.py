@@ -221,7 +221,9 @@ def _result(session: Session, job: MaterialCoverJob) -> AssetPreparation:
         return AssetPreparation(
             state="ready", mapping=asset_public(mapping), task_id=job.id
         )
-    if job.status in {"UNKNOWN", "BLOCKED"} or job.error_code == "cover_result_unknown":
+    # 错误码保留历史诊断，不代替当前状态。正式只读接续已是VERIFYING时
+    # 消费者应等待核验，不能因旧unknown码把尚未发送的广告永久标失败。
+    if job.status in {"UNKNOWN", "BLOCKED"}:
         return AssetPreparation(
             state="blocked",
             task_id=job.id,
