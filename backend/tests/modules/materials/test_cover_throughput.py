@@ -222,6 +222,40 @@ def drive(env, redis_client, identity, *, read=False):
     pytest.fail("bounded batch continuation did not finish")
 
 
+def test_shared_planning_excludes_peer_without_dispatch_until_repaired(source_env):
+    """来源等待尚未重新投递的同伴不能毒化可领取的共享批次。"""
+    from app.modules.materials.cover_sharing import _prepare
+
+    identities = matrix(source_env, 1, 2)
+    with Session(engine) as db, db.begin():
+        waiting = db.get(MaterialCoverJob, identities[1])
+        waiting.dispatch_id = None
+        waiting.error_code = "cover_source_pending"
+    first = job_state(identities[0])
+    claimed = covers._claim(
+        engine,
+        source_env["context"],
+        first.id,
+        first.dispatch_id,
+        first.revision,
+        read=False,
+    )
+    assert claimed is not None
+    with Session(engine) as db, db.begin():
+        prepared = _prepare(db, source_env["context"], *claimed)
+        assert prepared is not None
+        batch, claims = prepared
+        assert set(claims) == {identities[0]}
+        assert len(batch.members) == 1
+    waiting = job_state(identities[1])
+    assert waiting.status == "PENDING" and waiting.dispatch_id is None
+    assert waiting.request_armed_at is None and waiting.share_batch_id is None
+    with Session(engine) as db, db.begin():
+        db.get(MaterialCoverJob, waiting.id).repair_after = datetime.now(UTC)
+        covers.repair_cover_dispatches(db)
+    assert job_state(waiting.id).dispatch_id is not None
+
+
 def test_cover_planning_checks_only_one_twenty_by_ten_window(source_env, wire):
     """队列超过一组时不能扫描所有来源或按200个成员重复检查共同账户。"""
     from sqlalchemy import Engine, event
