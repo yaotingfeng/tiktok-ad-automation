@@ -177,7 +177,7 @@ class MaterialCoverReceipt(SQLModel, table=True):
 
 
 class MaterialCoverJobPage(SQLModel, table=True):
-    """At most one 100-ID search page per task; no raw SDK payloads or URLs."""
+    """每任务至多100个ID；page为核查读取序号，跨补齐轮保持唯一，无原始正文。"""
 
     __tablename__ = "material_cover_job_page"
     __table_args__ = (

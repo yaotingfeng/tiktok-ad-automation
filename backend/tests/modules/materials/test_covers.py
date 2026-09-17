@@ -318,14 +318,14 @@ def unknown(env, redis_client, wire):
     return identity
 
 
-def search_page(rows, *, page=1, total=None):
+def search_page(rows, *, page=1, total=None, page_size=100):
     total = len(rows) if total is None else total
     return {
         "list": rows,
         "page_info": {
             "page": page,
-            "page_size": 100,
-            "total_page": (total + 99) // 100,
+            "page_size": page_size,
+            "total_page": (total + page_size - 1) // page_size,
             "total_number": total,
         },
     }
@@ -396,6 +396,17 @@ def test_duplicate_cross_page_id_and_changed_total_stop_incomplete_scan(
     run(source_env, redis_client, identity, read=True)
     wire[1].append(search_page([rows[0]], page=2, total=101))
     run(source_env, redis_client, identity, read=True)
+    assert job_state(identity).status == "VERIFYING"
+    # 跨页重复允许有界补齐；三轮仍只有100个唯一项不能冒充101项完整。
+    for size in (71, 53):
+        wire[1].extend(
+            [
+                search_page(rows[:size], total=101, page_size=size),
+                search_page(rows[size - 1 :], page=2, total=101, page_size=size),
+            ]
+        )
+        run(source_env, redis_client, identity, read=True)
+        run(source_env, redis_client, identity, read=True)
     assert job_state(identity).status == "UNKNOWN"
     assert job_state(identity).error_code == "cover_search_incomplete"
     with Session(engine) as session, session.begin():

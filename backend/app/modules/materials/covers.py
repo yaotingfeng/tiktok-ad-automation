@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 
 from redis import Redis
 from sqlalchemy import Engine, func, or_, union_all
-from sqlalchemy.dialects.postgresql import array, insert
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 from sqlmodel.sql.expression import SelectOfScalar
@@ -955,6 +955,22 @@ def _publish_result(
     current.updated_at = _now()
 
 
+def _search_position(job: MaterialCoverJob) -> tuple[int, int, int]:
+    """持久next_page是本次核查的读取序号，最多100/71/53三轮。
+
+    第一轮与已有100条分页的序号一致；补齐轮移动边界，不覆写旧页证据。
+    """
+    remaining = job.next_page
+    if job.search_total is None:
+        return 1, remaining, 100
+    for phase, size in enumerate((100, 71, 53), start=1):
+        pages = max(1, ceil(job.search_total / size))
+        if remaining <= pages:
+            return phase, remaining, size
+        remaining -= pages
+    raise DomainError("cover_search_incomplete", "图片库存分页仍不完整")
+
+
 def _search_result(
     database_engine: Engine,
     context: TenantContext,
@@ -969,19 +985,8 @@ def _search_result(
         if current is None:
             return
         ids = [row["image_id"] for row in rows]
-        prior = (
-            select(MaterialCoverJobPage.id)
-            .where(
-                MaterialCoverJobPage.job_id == current.id,
-                MaterialCoverJobPage.search_round == current.search_round,
-                col(MaterialCoverJobPage.image_ids).op("?|")(array(ids)),
-            )
-            .exists()
-        )
-        repeated = bool(session.scalar(select(prior))) if ids else False
         if (
             len(ids) != len(set(ids))
-            or repeated
             or len(ids) > 100
             or total >= 10000
             or (current.search_total is not None and current.search_total != total)
@@ -1007,26 +1012,33 @@ def _search_result(
                 ):
                     current.search_ambiguous = True
                 current.candidate_image_id = row["image_id"]
-        if not last:
-            current.next_page += 1
-            _queue(session, current, read=True)
-            return
         session.flush()
-        observed = session.exec(
+        # 跨页重复不是新增图片；只按同一总数、同一次核查的唯一ID计数。
+        # 不因平台重叠页截断后续候选，也不将重复计数冒充完整库存。
+        seen = (
             select(
-                func.coalesce(
-                    func.sum(func.jsonb_array_length(MaterialCoverJobPage.image_ids)), 0
+                func.jsonb_array_elements_text(MaterialCoverJobPage.image_ids).label(
+                    "image_id"
                 )
-            ).where(
+            )
+            .where(
                 MaterialCoverJobPage.job_id == current.id,
                 MaterialCoverJobPage.search_round == current.search_round,
             )
+            .subquery()
+        )
+        observed = session.exec(
+            select(func.count(func.distinct(seen.c.image_id)))
         ).one()
-        if (
-            observed != total
-            or not current.candidate_image_id
-            or current.search_ambiguous
-        ):
+        phase, _, _ = _search_position(current)
+        if observed > total or (last and phase == 3 and observed < total):
+            _stop(current, "cover_search_incomplete", unknown=True)
+            return
+        if observed < total:
+            current.next_page += 1
+            _queue(session, current, read=True)
+            return
+        if not current.candidate_image_id or current.search_ambiguous:
             _stop(current, "cover_result_unknown", unknown=True)
             return
         current.known_image_id = current.candidate_image_id
@@ -1233,6 +1245,7 @@ def _run_claimed_cover(
                 )
         _read_result(database_engine, context, job, nonce, evidence)
     else:
+        _, page_number, page_size = _search_position(job)
         page_data = _call(
             database_engine,
             client,
@@ -1241,12 +1254,15 @@ def _run_claimed_cover(
             nonce,
             "materials.search_images",
             lambda client, budget: client.search_images(
-                advertiser_id=job.advertiser_id, page=job.next_page, budget=budget
+                advertiser_id=job.advertiser_id,
+                page=page_number,
+                page_size=page_size,
+                budget=budget,
             ),
             deadline=deadline,
         )
         rows, last, total = api.image_search_page(
-            api.image_page_data(page_data), page=job.next_page
+            api.image_page_data(page_data), page=page_number, page_size=page_size
         )
         _search_result(database_engine, context, job, nonce, rows, last, total)
 
