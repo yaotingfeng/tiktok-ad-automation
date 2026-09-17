@@ -11,7 +11,7 @@ from time import monotonic
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlmodel import Session, col, or_, select
+from sqlmodel import Session, and_, col, or_, select
 
 from app.core.config import settings
 from app.core.context import TenantContext
@@ -35,6 +35,15 @@ from .storage import make_object_s3, storage_error
 register_dispatch_task("materials.validate_original", "resources")
 register_dispatch_task("materials.upload_original", "resources")
 VALIDATION_HARD_LIMIT = 660
+# 原件内容不随重读修复；只有明确环境/存储瞬断可自动重试，且共享原投递预算。
+VALIDATION_RETRY_ERRORS = frozenset(
+    {
+        "object_storage_unavailable",
+        "material_deadline",
+        "material_validator_unavailable",
+    }
+)
+MAX_VALIDATION_DELIVERIES = 3
 
 
 def _ingest_file(session: Session, obj: TemporaryMaterialObject) -> IngestSessionFile:
@@ -265,6 +274,20 @@ def validate_original(
             return
         if obj.next_attempt_at > now or (obj.claimed_until and obj.claimed_until > now):
             return
+        if (
+            row.status == "failed"
+            and obj.error_code
+            and (
+                obj.error_code not in VALIDATION_RETRY_ERRORS
+                or dispatch.attempts > MAX_VALIDATION_DELIVERIES
+            )
+        ):
+            # 历史失败消息也必须在下载前收口，不能反复读取无效视频挤占准备槽。
+            # 保留原件与错误；用户通过原有重传入口创建新代数，不清队列或伪造成功。
+            obj.status = "stored"
+            obj.claim_token = obj.claimed_until = None
+            row.dispatch_id = None
+            return
         obj.status = "validating"
         obj.claim_token, obj.claimed_until = (
             owner,
@@ -322,11 +345,19 @@ def validate_original(
                 error_code=error_code,
             )
             dispatch = session.get(PendingDispatch, row.dispatch_id)
-            if dispatch:
+            row.error_code = error_code
+            if (
+                dispatch
+                and error_code in VALIDATION_RETRY_ERRORS
+                and dispatch.attempts < MAX_VALIDATION_DELIVERIES
+            ):
                 dispatch.available_at, dispatch.published_at = (
                     current.next_attempt_at,
                     None,
                 )
+            else:
+                # 确定性坏内容或瞬断预算耗尽都是可见失败，不再自动投递。
+                row.dispatch_id = None
             return
         sha256, md5, media = hashes
         current.sha256, current.video_md5 = sha256, md5
@@ -403,6 +434,16 @@ def repair_validations(session: Session, *, limit: int = 100) -> int:
                 ("stored", "validating", "verified")
             ),
             col(TemporaryMaterialObject.next_attempt_at) <= now,
+            or_(
+                col(PendingDispatch.task_name) != "materials.validate_original",
+                col(TemporaryMaterialObject.error_code).is_(None),
+                and_(
+                    col(TemporaryMaterialObject.error_code).in_(
+                        VALIDATION_RETRY_ERRORS
+                    ),
+                    col(PendingDispatch.attempts) < MAX_VALIDATION_DELIVERIES,
+                ),
+            ),
         )
         .order_by(
             col(TemporaryMaterialObject.next_attempt_at),
