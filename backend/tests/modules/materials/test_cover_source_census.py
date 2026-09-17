@@ -66,3 +66,75 @@ def test_source_unknown_census_moves_page_boundary_without_reupload(
         assert job_state(identity).error_code == "cover_search_incomplete"
         assert job_state(identity).dispatch_id is None
     assert sum(call[0] == "POST" for call in wire[0]) == 1
+
+
+@pytest.mark.parametrize("stable", [True, False])
+def test_source_inventory_change_restarts_bounded_read_only_round(
+    source_env, redis_client, wire, stable
+):
+    identity = unknown(source_env, redis_client, wire)
+    initial_round = job_state(identity).search_round
+
+    def inventory(total, page, rows):
+        return {
+            "list": rows,
+            "page_info": {
+                "page": page,
+                "page_size": 100,
+                "total_number": total,
+                "total_page": (total + 99) // 100,
+            },
+        }
+
+    first = [
+        {"image_id": f"other-{i}", "file_name": "unrelated.jpg"} for i in range(100)
+    ]
+    wire[1].extend(
+        [
+            inventory(101, 1, first),
+            inventory(
+                102,
+                2,
+                [
+                    image_info(identity)["list"][0],
+                    {"image_id": "extra", "file_name": "other.jpg"},
+                ],
+            ),
+        ]
+    )
+    run(source_env, redis_client, identity, read=True)
+    run(source_env, redis_client, identity, read=True)
+    current = job_state(identity)
+    assert current.status == "VERIFYING" and current.next_page == 1
+    assert current.search_round != initial_round
+    assert current.search_total is None and current.candidate_image_id is None
+    assert current.known_image_id is None
+    wire[1].extend(
+        [
+            inventory(102, 1, first),
+            inventory(
+                102 if stable else 103,
+                2,
+                [
+                    image_info(identity)["list"][0],
+                    {"image_id": "extra", "file_name": "other.jpg"},
+                ]
+                + (
+                    []
+                    if stable
+                    else [{"image_id": "changed", "file_name": "changed.jpg"}]
+                ),
+            ),
+        ]
+    )
+    run(source_env, redis_client, identity, read=True)
+    run(source_env, redis_client, identity, read=True)
+    if stable:
+        assert job_state(identity).known_image_id == "target-image"
+        wire[1].append(image_info(identity))
+        run(source_env, redis_client, identity, read=True)
+        assert job_state(identity).status == "READY"
+    else:
+        assert job_state(identity).status == "UNKNOWN"
+        assert job_state(identity).dispatch_id is None
+    assert sum(call[0] == "POST" for call in wire[0]) == 1

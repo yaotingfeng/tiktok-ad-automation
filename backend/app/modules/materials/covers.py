@@ -985,13 +985,24 @@ def _search_result(
         if current is None:
             return
         ids = [row["image_id"] for row in rows]
-        if (
-            len(ids) != len(set(ids))
-            or len(ids) > 100
-            or total >= 10000
-            or (current.search_total is not None and current.search_total != total)
-        ):
+        if len(ids) != len(set(ids)) or len(ids) > 100 or total >= 10000:
             _stop(current, "cover_search_incomplete", unknown=True)
+            return
+        if current.search_total is not None and current.search_total != total:
+            # 同账户并发入库会改变分页总数；旧轮证据保留但不能与新轮拼接。
+            # 共用连续故障预算，最多三次后停止，绝不因重查重复发送图片。
+            current.failure_count += 1
+            if current.failure_count >= 3:
+                _stop(current, "cover_search_incomplete", unknown=True)
+                return
+            current.search_round, current.next_page, current.search_total = (
+                uuid4(),
+                1,
+                None,
+            )
+            current.candidate_image_id, current.search_ambiguous = None, False
+            current.error_code = "cover_search_incomplete"
+            _queue(session, current, read=True)
             return
         current.search_total = total
         session.add(

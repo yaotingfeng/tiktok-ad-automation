@@ -385,7 +385,7 @@ def test_search_ambiguity_after_first_page_match_never_marks_ready(
     assert job_state(identity).dispatch_id is None
 
 
-def test_duplicate_cross_page_id_and_changed_total_stop_incomplete_scan(
+def test_duplicate_cross_page_id_and_persistent_total_change_stop_incomplete_scan(
     source_env, redis_client, wire
 ):
     identity = unknown(source_env, redis_client, wire)
@@ -426,6 +426,22 @@ def test_duplicate_cross_page_id_and_changed_total_stop_incomplete_scan(
         )
     )
     run(source_env, redis_client, identity, read=True)
+    assert job_state(identity).status == "VERIFYING"
+    # 显式核查有独立预算；库存持续变化三次才停止，不能拼接不同轮证据。
+    for total in (102, 103):
+        wire[1].append(search_page(rows, total=total))
+        run(source_env, redis_client, identity, read=True)
+        wire[1].append(
+            search_page(
+                [
+                    {"image_id": f"changed-{i}", "file_name": "new.jpg"}
+                    for i in range(total + 1 - 100)
+                ],
+                page=2,
+                total=total + 1,
+            )
+        )
+        run(source_env, redis_client, identity, read=True)
     assert job_state(identity).status == "UNKNOWN"
     assert job_state(identity).error_code == "cover_search_incomplete"
 
