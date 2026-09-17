@@ -314,8 +314,9 @@ def prepare_request(
         ).all()
         if not 1 <= len(material_ids) <= 50:
             raise DomainError("invalid_material_group", "冻结素材组无效")
+        from app.modules.materials.cover_models import MaterialCoverJob
         from app.modules.materials.file_names import video_file_name
-        from app.modules.materials.models import MaterialFile
+        from app.modules.materials.models import AccountMaterial, MaterialFile
         from app.modules.materials.readiness import load_material
 
         # 批量素材核验按 ID 加锁。广告仍按冻结的创意顺序编译，但必须先按
@@ -328,6 +329,27 @@ def prepare_request(
             )
             .order_by(col(MaterialFile.id))
             .with_for_update()
+        ).all()
+        # 素材锁顺序不能代替封面锁顺序：创意排列与job.id无关。
+        # 先统一锁住当前目标VID的既有封面，再按原顺序编译；与批读及
+        # 广告刷新同序，且不锁历史VID、其他账户或其他租户的封面。
+        session.exec(
+            select(MaterialCoverJob)
+            .join(
+                AccountMaterial,
+                (col(AccountMaterial.id) == MaterialCoverJob.asset_id)
+                & (col(AccountMaterial.tenant_id) == MaterialCoverJob.tenant_id)
+                & (col(AccountMaterial.video_id) == MaterialCoverJob.video_id),
+            )
+            .where(
+                MaterialCoverJob.tenant_id == context.tenant_id,
+                MaterialCoverJob.bc_id == claim.bc_id,
+                MaterialCoverJob.advertiser_id == claim.advertiser_id,
+                MaterialCoverJob.connection_id == claim.route.connection_id,
+                col(MaterialCoverJob.material_id).in_(material_ids),
+            )
+            .order_by(col(MaterialCoverJob.id))
+            .with_for_update(of=MaterialCoverJob)
         ).all()
         mappings = []
         waiting = False
