@@ -1384,6 +1384,14 @@ def run_cover(
             if current.request_armed_at and not read:
                 current.error_code = "cover_result_unknown"
                 _queue(session, current, read=True)
+            elif read and _local_read_retryable(error) and current.failure_count < 3:
+                current.error_code = code
+                _queue(
+                    session,
+                    current,
+                    read=True,
+                    delay=5 * 2 ** (current.failure_count - 1),
+                )
             elif (
                 isinstance(error, RemoteCallError)
                 and error.code in TRANSIENT_NOT_SENT
@@ -1423,6 +1431,16 @@ def run_cover(
                 _stop(current, code, unknown=bool(current.request_armed_at))
 
 
+def _local_read_retryable(error: Exception) -> bool:
+    # 本地短事务死锁/缓存瞬断没有远端发送结论，只能重试只读核验；
+    # 非瞬断合同错误与发送阶段不适用，且仍共用每job三次故障上限。
+    return (
+        isinstance(error, DomainError)
+        and error.code == "tiktok_local_resources_unavailable"
+        and error.retryable
+    )
+
+
 def _read_failure(
     database_engine: Engine,
     context: TenantContext,
@@ -1448,8 +1466,8 @@ def _read_failure(
         if (
             isinstance(error, RemoteCallError)
             and error.code in TRANSIENT_NOT_SENT
-            and current.failure_count < 3
-        ):
+            or _local_read_retryable(error)
+        ) and current.failure_count < 3:
             current.error_code = code
             _queue(
                 session, current, read=True, delay=5 * 2 ** (current.failure_count - 1)
@@ -1627,7 +1645,9 @@ def _run_known_cover_group(
             if mapping_fresh(_mapping(db, first)):
                 return False
 
-    active = list(members)
+    # 首个消费消息不一定是最小ID。广告刷新按job.id持锁，后续所有批量
+    # HTTP前检查及结果发布也须同序，不能先锁首消息再回头锁较小ID。
+    active = sorted(members, key=lambda member: member[0].id)
 
     def check_members() -> None:
         # 工厂会在每一次真实 HTTP 前调用，连同凭据/账户权限重新检查。
