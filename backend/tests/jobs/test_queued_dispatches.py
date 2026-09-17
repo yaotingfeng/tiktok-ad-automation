@@ -66,6 +66,34 @@ def test_repeated_watchdog_keeps_one_queued_message(outbox_db, context, broker):
         assert db.get(PendingDispatch, identity).published_at is not None
 
 
+@pytest.mark.parametrize("backlog,want", [(3000, 3001), (20_000, 20_001)])
+def test_exhausted_snapshot_budget_does_not_duplicate_deep_queued_message(
+    outbox_db, context, broker, monkeypatch, backlog, want
+):
+    from app.jobs import queued_dispatches as queued
+
+    redis, prefix = broker
+    monkeypatch.setattr(queued, "_SCAN_SECONDS", 0)
+    monkeypatch.setattr(queued, "_cache", None)
+    with Session(outbox_db) as db, db.begin():
+        identity = enqueue(db, context, item_id="deep")
+    assert flush_dispatch() == 1
+    original = redis.lindex(prefix + "control", -1)
+    redis.lpush(
+        prefix + "control",
+        *(broker_message("jobs.probe", str(uuid4()), {}) for _ in range(backlog)),
+    )
+    request_redelivery(outbox_db, identity)
+    assert flush_dispatch() == 1
+    assert redis.llen(prefix + "control") == want
+    # 即使缓存已命中，真实消息被领取/丢失后也不能吞掉合法补投。
+    assert redis.lrem(prefix + "control", 1, original) == 1
+    request_redelivery(outbox_db, identity)
+    assert flush_dispatch() == 1
+    assert redis.llen(prefix + "control") == want
+    assert redis.lindex(prefix + "control", 0) == original
+
+
 def test_missing_message_is_republished_with_same_identity(outbox_db, context, broker):
     from app.jobs.queued_dispatches import queued_dispatches
 
@@ -91,9 +119,14 @@ def test_missing_message_is_republished_with_same_identity(outbox_db, context, b
 
 
 @pytest.mark.parametrize("different", ["tenant", "actor", "payload", "task", "queue"])
+@pytest.mark.parametrize("snapshot_seconds", [0, 1])
 def test_wrong_envelope_never_suppresses_original(
-    outbox_db, context, broker, different
+    outbox_db, context, broker, different, snapshot_seconds, monkeypatch
 ):
+    from app.jobs import queued_dispatches as queued
+
+    monkeypatch.setattr(queued, "_SCAN_SECONDS", snapshot_seconds)
+    monkeypatch.setattr(queued, "_cache", None)
     redis, prefix = broker
     with Session(outbox_db) as db, db.begin():
         identity = enqueue(db, context, item_id="correct")

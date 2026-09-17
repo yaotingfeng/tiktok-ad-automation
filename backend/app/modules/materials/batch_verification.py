@@ -50,7 +50,6 @@ def try_verify_batch(
             not anchor_op.remote_response.get("video_id")
             and anchor_op.remote_response.get("transport") == "native_share"
             and bool(anchor_op.remote_response.get("source_mid"))
-            and bool(anchor_op.remote_response.get("share_batch_id"))
             and not anchor_op.remote_response.get("batch_discovery_incomplete")
         )
         if not discover and not anchor_op.remote_response.get("video_id"):
@@ -94,9 +93,6 @@ def try_verify_batch(
                     col(MaterialAssetOperation.remote_response)["transport"].astext
                     == "native_share",
                     col(MaterialAssetOperation.remote_response)[
-                        "share_batch_id"
-                    ].astext.is_not(None),
-                    col(MaterialAssetOperation.remote_response)[
                         "batch_discovery_incomplete"
                     ].astext.is_(None),
                 )
@@ -124,7 +120,13 @@ def try_verify_batch(
             # 平台固定返回 40002，原任务会一直验证失败且无法发布目标映射。
             .limit(20 if discover else 50)
         ).all()
-        if len(selected) < (1 if discover else 2) or not any(
+        # 单项共享同样留下冻结 MID，多个结果可安全合并读取；不能要求它们
+        # 必须来自批量发送账本，否则 seed 等待者逐项共享后永远逐项核实。
+        # 仅一个非批量成员时仍沿原单项分页路径，不改变既有单条恢复语义。
+        minimum = (
+            1 if discover and anchor_op.remote_response.get("share_batch_id") else 2
+        )
+        if len(selected) < minimum or not any(
             dist.id == anchor.id for dist, _ in selected
         ):
             return False

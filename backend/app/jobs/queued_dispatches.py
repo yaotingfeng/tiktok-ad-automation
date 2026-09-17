@@ -16,6 +16,28 @@ _QUEUES = ("control", "builds", "resources", "resource-results")
 _CACHE_SECONDS = 5.0
 _SCAN_SECONDS = 1.0
 _MAX_MESSAGES = 40_000
+_FIND_BYTES = 64 * 1024 * 1024
+
+# 快照有时间上限，大积压时可能还没扫描到结果队列。按任务 ID 在 Redis
+# 内有界筛选候选，避免每次补投都把同一深处消息重新加入队列。这里不是
+# 去重依据：返回后仍校验完整 tenant/actor/payload，并用 LPOS 实时确认。
+_FIND_TASK = """
+local found = {}
+local bytes = 0
+local count = math.min(redis.call('LLEN', KEYS[1]), tonumber(ARGV[2]))
+for offset = 0, count - 1, 64 do
+  local rows = redis.call('LRANGE', KEYS[1], offset, math.min(offset + 63, count - 1))
+  for _, raw in ipairs(rows) do
+    bytes = bytes + string.len(raw)
+    if bytes > tonumber(ARGV[3]) then return found end
+    if string.len(raw) <= 65536 and string.find(raw, ARGV[1], 1, true) then
+      table.insert(found, raw)
+      if #found >= 32 then return found end
+    end
+  end
+end
+return found
+"""
 
 
 def _identity(name: str, task_id: str, kwargs: dict[str, Any]) -> tuple[str, str]:
@@ -93,6 +115,23 @@ class QueuedDispatches:
                                 key, cast(list[bytes], self.redis.lrange(key, 0, 15))
                             )
                     found = self.entries.get((actual, *identity))
+                if found is None:
+                    for key, logical in self.keys.items():
+                        if logical != actual:
+                            continue
+                        candidates = self.redis.execute_command(
+                            "EVAL",
+                            _FIND_TASK,
+                            1,
+                            key,
+                            task_id,
+                            _MAX_MESSAGES,
+                            _FIND_BYTES,
+                        )
+                        self._index(key, cast(list[bytes | str], candidates))
+                        found = self.entries.get((actual, *identity))
+                        if found is not None:
+                            break
                 if found is not None:
                     key, raw = found
                     # 索引可能过期。缓存命中不能吞掉 broker 中已经丢失的消息。

@@ -7,7 +7,11 @@ import pytest
 from sqlmodel import Session, select
 
 from app.modules.materials.batch_models import MaterialShareBatchReceipt
-from app.modules.materials.models import AccountMaterial, MaterialUploadAttempt
+from app.modules.materials.models import (
+    AccountMaterial,
+    MaterialAssetOperation,
+    MaterialUploadAttempt,
+)
 from tests.integrations.tiktok.gateway_support import business_calls
 from tests.integrations.tiktok.gateway_support import gateway_case as gateway_case
 from tests.integrations.tiktok.gateway_support import gateway_wire as gateway_wire
@@ -86,6 +90,49 @@ def assert_single_share(database_engine):
         receipts = db.exec(select(MaterialShareBatchReceipt)).all()
         assert len(receipts) == 1 and receipts[0].effect == "ACKNOWLEDGED"
         assert db.exec(select(MaterialUploadAttempt)).all() == []
+
+
+@pytest.mark.parametrize(
+    "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
+)
+def test_individually_shared_mids_use_one_scoped_read_without_batch_ledger(
+    share_case, database_engine, gateway_wire, redis_client, gateway_case
+):
+    # 首次转存的等待者逐个解除依赖后，合法的单项共享没有 share_batch_id。
+    # 核实应按冻结目标范围合并，不能依赖是否曾使用批量发送账本。
+    tasks, rows = seed_rectangle(share_case, database_engine, materials=3, targets=1)
+    from app.modules.materials.models import MaterialDistribution
+
+    with Session(database_engine) as db, db.begin():
+        for task, row in zip(tasks, rows, strict=True):
+            dist = db.get(MaterialDistribution, task)
+            op = db.get(MaterialAssetOperation, dist.operation_id)
+            dist.status = op.status = "verifying"
+            op.remote_response = {
+                **op.remote_response,
+                "source_mid": row["material_id"],
+                "remote_name": row["file_name"],
+                "share_acknowledged": True,
+                "revision": 1,
+            }
+            assert "share_batch_id" not in op.remote_response
+    names = prepare_wire(gateway_wire, [])
+    target_rows = target_records(rows)
+    search_wire(gateway_wire, names, target_rows)
+    run(share_case, redis_client, tasks[0])
+    assert [state(task)[0].status for task in tasks] == ["ready"] * 3
+    assert [state(task)[2].video_id for task in tasks] == [
+        row["video_id"] for row in target_rows
+    ]
+    calls = search_calls(gateway_wire, gateway_case[1].channel, names)
+    assert len(calls) == 1
+    assert set(calls[0]["filtering"]["material_ids"]) == {
+        row["material_id"] for row in rows
+    }
+    assert len(business_calls(gateway_wire, gateway_case[1].channel)) == 1
+    with Session(database_engine) as db:
+        assert db.exec(select(MaterialUploadAttempt)).all() == []
+        assert db.exec(select(MaterialShareBatchReceipt)).all() == []
 
 
 @pytest.mark.parametrize(
