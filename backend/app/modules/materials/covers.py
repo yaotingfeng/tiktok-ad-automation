@@ -1294,8 +1294,24 @@ def run_cover(
         return
     job, nonce = claimed
     try:
-        if job.purpose == "BUILD" and (
-            job.share_batch_id or (not job.request_armed_at and not job.known_image_id)
+        completed_shared_read = False
+        if read and job.known_image_id and job.share_batch_id:
+            with bounded_session(database_engine, task_deadline=deadline) as db:
+                completed_shared_read = (
+                    db.exec(
+                        _completed_cover_batches(job).where(
+                            MaterialCoverShareBatch.id == job.share_batch_id
+                        )
+                    ).first()
+                    is not None
+                )
+        if (
+            job.purpose == "BUILD"
+            and (
+                job.share_batch_id
+                or (not job.request_armed_at and not job.known_image_id)
+            )
+            and not completed_shared_read
         ):
             from .cover_sharing import run_shared_cover
 
@@ -1442,6 +1458,34 @@ def _read_failure(
             _stop(current, code, unknown=bool(current.request_armed_at))
 
 
+def _completed_cover_batches(first: MaterialCoverJob) -> SelectOfScalar[UUID]:
+    # 已完成共享保留原账本，只刷新目标真实ID。未完成批次仍需要自己的
+    # wake成员接续未知结果，不能被详情批读领取后遗留无唤醒的成员。
+    member = aliased(MaterialCoverJob)
+    identified = (
+        select(func.count(col(member.id)))
+        .where(
+            member.share_batch_id == MaterialCoverShareBatch.id,
+            member.tenant_id == MaterialCoverShareBatch.tenant_id,
+            member.bc_id == MaterialCoverShareBatch.bc_id,
+            member.actor_id == MaterialCoverShareBatch.actor_id,
+            member.frozen_route == MaterialCoverShareBatch.target_route,
+            col(member.known_image_id).is_not(None),
+        )
+        .correlate(MaterialCoverShareBatch)
+        .scalar_subquery()
+    )
+    return select(MaterialCoverShareBatch.id).where(
+        MaterialCoverShareBatch.tenant_id == first.tenant_id,
+        MaterialCoverShareBatch.bc_id == first.bc_id,
+        MaterialCoverShareBatch.actor_id == first.actor_id,
+        MaterialCoverShareBatch.target_route == first.frozen_route,
+        # 历史刷新失败可把账本标为UNKNOWN，但不能抹掉全部成员的已知ID。
+        # 必须覆盖原成员总数；未发送成员被拆到另一批次时也不得误判完整。
+        identified == func.jsonb_array_length(MaterialCoverShareBatch.members),
+    )
+
+
 def _known_cover_candidates(
     first: MaterialCoverJob,
 ) -> SelectOfScalar[MaterialCoverJob]:
@@ -1458,6 +1502,13 @@ def _known_cover_candidates(
             MaterialCoverJob.frozen_route == first.frozen_route,
             MaterialCoverJob.status == "VERIFYING",
             col(MaterialCoverJob.known_image_id).is_not(None),
+            or_(
+                col(MaterialCoverJob.share_batch_id).is_(None),
+                _completed_cover_batches(first)
+                .where(MaterialCoverShareBatch.id == MaterialCoverJob.share_batch_id)
+                .correlate(MaterialCoverJob)
+                .exists(),
+            ),
             or_(
                 col(MaterialCoverJob.claimed_until).is_(None),
                 col(MaterialCoverJob.claimed_until) <= _now(),
@@ -1497,6 +1548,15 @@ def _run_known_cover_group(
     with bounded_session(database_engine, task_deadline=deadline) as db, db.begin():
         checks = _CoverAccessChecks(db, context)
         candidates = db.exec(_known_cover_candidates(first)).all()
+        completed_batches = set(
+            db.exec(
+                _completed_cover_batches(first).where(
+                    col(MaterialCoverShareBatch.id).in_(
+                        {row.share_batch_id for row in candidates if row.share_batch_id}
+                    )
+                )
+            ).all()
+        )
         # 批量 claim 与回执检查仍按 material→job 固定锁序，共用本组一个短会话。
         if candidates:
             db.exec(
@@ -1535,6 +1595,10 @@ def _run_known_cover_group(
                 )
                 or current.status != "VERIFYING"
                 or not current.known_image_id
+                or (
+                    current.share_batch_id is not None
+                    and current.share_batch_id not in completed_batches
+                )
                 or dispatch is None
                 or dispatch.available_at > _now()
             ):
