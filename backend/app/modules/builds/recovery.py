@@ -111,13 +111,19 @@ UNARMED_RETRY = """s.request_body IS NULL
 AND NOT EXISTS (SELECT 1 FROM step_evidence e WHERE e.tenant_id=s.tenant_id AND e.submission_id=s.submission_id AND e.step_id=s.id
  AND (e.conclusion IN ('REQUEST_ARMED','CREATED','LATE_CREATED','RESULT_UNKNOWN','LEASE_EXPIRED_ARMED') OR e.summary ? 'remote_id'))"""
 RETRY = f"""
-AND s.status IN ('FAILED','RETRYABLE') AND s.remote_id IS NULL
+AND (s.status IN ('FAILED','RETRYABLE') OR (
+ s.status='PENDING' AND s.kind='MATERIAL'
+ AND s.error_code IN ('cover_pending','material_pending','execution_window_wait')
+ AND {COVER_RETRY})) AND s.remote_id IS NULL
 AND s.phase<>'REQUEST_ARMED' AND s.kind<>'READBACK' AND coalesce(s.error_code,'') NOT IN ({INTENT_ERRORS})
 AND (({UNARMED_RETRY})
  OR (s.phase='DONE' AND {UNSENT_ATTEMPT}))
 AND (s.kind<>'MATERIAL' OR (s.cover_job_id IS NULL AND s.distribution_id IS NULL) OR {COVER_RETRY})
 {DEPENDENCIES_READY}
 """
+# 持久等待步骤不必先消耗一次执行才能暴露依赖失败；显式批次重试可直接
+# 恢复其确定未发送的封面。仍复用全部原权限、活动投递和外部效果栅栏，
+# 不能把一般PENDING、已发送封面或未知视频扩展成新的上传许可。
 # Two disjoint candidate branches avoid evaluating a correlated parent query
 # against every pending step. Keep these fixed predicates identical to the
 # partial indexes, including for PostgreSQL generic prepared plans.

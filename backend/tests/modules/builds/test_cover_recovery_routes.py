@@ -21,6 +21,55 @@ from tests.modules.builds.test_execution import executable as executable
 from tests.modules.builds.test_frozen_routes import replacement_default
 
 
+@pytest.mark.parametrize(
+    "waiting_code", ["cover_pending", "material_pending", "execution_window_wait"]
+)
+@pytest.mark.parametrize("armed", [False, True])
+def test_batch_retry_finds_blocked_cover_before_waiting_step_fails(
+    executable, redis_client, waiting_code, armed
+):
+    from app.core.errors import DomainError
+    from app.jobs.models import PendingDispatch
+    from app.modules.builds import recovery
+    from tests.modules.builds.test_recovery import request, run
+
+    identity, job_id, submission_id = pending(executable, redis_client)
+    database, context, _ = executable
+    with Session(database) as db, db.begin():
+        job = db.get(MaterialCoverJob, job_id)
+        job.status, job.error_code, job.dispatch_id = (
+            "BLOCKED",
+            "cover_search_incomplete",
+            None,
+        )
+        job.request_armed_at = datetime.now(UTC) if armed else None
+        step = db.get(ExecutionStep, identity)
+        step.error_code = waiting_code
+        original_route = job.frozen_route
+    if armed:
+        with pytest.raises(
+            DomainError, check=lambda e: e.code == "recovery_no_candidates"
+        ):
+            request(executable, submission_id)
+        return
+    receipt = request(executable, submission_id)
+    run(executable, receipt)
+    with Session(database) as db:
+        progress = recovery.get_recovery(
+            db, context=context, recovery_id=receipt.recovery_id
+        )
+        assert progress.state == "COMPLETED" and progress.scheduled_count == 1
+        job = db.get(MaterialCoverJob, job_id)
+        assert job.request_armed_at is None and job.frozen_route == original_route
+        dispatch = db.get(PendingDispatch, job.dispatch_id)
+        assert dispatch.task_name == "materials.prepare_cover"
+        assert dispatch.payload == {"job_id": str(job_id), "revision": job.revision}
+        first_dispatch = job.dispatch_id
+    run(executable, receipt)
+    with Session(database) as db:
+        assert db.get(MaterialCoverJob, job_id).dispatch_id == first_dispatch
+
+
 @pytest.mark.parametrize("change", ["default", "binding", "build_permission"])
 def test_cover_recovery_preserves_original_route(executable, redis_client, change):
     identity, job_id, _ = pending(executable, redis_client)
