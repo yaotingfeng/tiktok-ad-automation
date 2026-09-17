@@ -1,6 +1,7 @@
 """Local-only preparation; no external calls occur while holding draft locks."""
 
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from typing import Any
 from uuid import UUID
 
@@ -13,11 +14,28 @@ from app.jobs.celery_app import celery_app
 from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit
 from app.jobs.tasks import register_dispatch_task
-from app.modules.builds.models import BuildDraft, DraftPreparation
+from app.modules.builds.models import BuildDraft, DraftDrama, DraftPreparation
 
 TASK_NAME = "builds.prepare_draft"
 register_dispatch_task(TASK_NAME, "builds")
 REPAIR_SECONDS = 120
+MATERIAL_PAGES_PER_TURN = 5
+MATERIAL_TURN_SECONDS = 1.0
+
+
+def _has_pending_materials(session: Session, prep: DraftPreparation) -> bool:
+    return (
+        session.exec(
+            select(DraftDrama.drama_id)
+            .where(
+                DraftDrama.tenant_id == prep.tenant_id,
+                DraftDrama.draft_id == prep.draft_id,
+                col(DraftDrama.material_state).in_(["pending", "matching"]),
+            )
+            .limit(1)
+        ).first()
+        is not None
+    )
 
 
 def queue_preparation(session: Session, prep: DraftPreparation, *, delay: int) -> None:
@@ -88,7 +106,26 @@ def process_preparation(
             return
         try:
             with session.begin_nested():
-                done = continue_draft(session, context=context, task_id=identity)
+                started = monotonic()
+                material_progress = False
+                pending_materials = (
+                    prep.phase == "materials" and _has_pending_materials(session, prep)
+                )
+                # 仅批处理本地选材；每轮最多五页或一秒，保留断点并及时释放草稿锁。
+                # 单页不可中断，时间预算只决定是否继续下一页。
+                for _ in range(MATERIAL_PAGES_PER_TURN):
+                    material_progress = material_progress or pending_materials
+                    done = continue_draft(session, context=context, task_id=identity)
+                    pending_materials = (
+                        not done
+                        and prep.phase == "materials"
+                        and _has_pending_materials(session, prep)
+                    )
+                    if (
+                        not pending_materials
+                        or monotonic() - started >= MATERIAL_TURN_SECONDS
+                    ):
+                        break
         except DomainError as error:
             prep.status, prep.error_code, draft.status = (
                 "BLOCKED",
@@ -103,7 +140,9 @@ def process_preparation(
                 session,
                 prep,
                 delay=5
-                if prep.phase in {"accounts", "materials"}
+                if prep.phase == "accounts"
+                or prep.phase == "materials"
+                and not (material_progress or pending_materials)
                 or prep.phase == "links"
                 and prep.link_cursor is None
                 else 0,
