@@ -16,7 +16,13 @@ from app.integrations.tiktok.sdk import SDK_SCOPE_INTERRUPTS
 from app.jobs.admission import admission_policy
 
 from . import sdk_assets as api
-from .models import MaterialAssetOperation, MaterialDistribution, MaterialUploadAttempt
+from .batch_models import MaterialShareBatch
+from .models import (
+    MaterialAssetOperation,
+    MaterialDistribution,
+    MaterialFile,
+    MaterialUploadAttempt,
+)
 from .readiness import require_execution_config
 from .routes import load_material_route
 from .source_uploads import (
@@ -280,6 +286,43 @@ def try_verify_batch(
             incomplete_discovery = True
     by_id = {record.video_id: record for record in records}
     with Session(database_engine) as db, db.begin():
+        # 一个核验窗口可能跨多个物理共享批次。先锁齐素材、操作，再按批次 ID
+        # 锁齐账本；不能在逐素材落账时交错获取批次锁，否则不同账户会形成锁环。
+        db.exec(
+            select(MaterialFile)
+            .where(
+                MaterialFile.tenant_id == context.tenant_id,
+                col(MaterialFile.id).in_({item["material"] for item in work}),
+            )
+            .order_by(col(MaterialFile.id))
+            .with_for_update()
+        ).all()
+        operations = db.exec(
+            select(MaterialAssetOperation)
+            .where(
+                MaterialAssetOperation.tenant_id == context.tenant_id,
+                col(MaterialAssetOperation.id).in_(
+                    {item["operation"] for item in work}
+                ),
+            )
+            .order_by(col(MaterialAssetOperation.id))
+            .with_for_update()
+        ).all()
+        batch_ids = {
+            UUID(op.remote_response["share_batch_id"])
+            for op in operations
+            if op.remote_response.get("share_batch_id")
+        }
+        if batch_ids:
+            db.exec(
+                select(MaterialShareBatch)
+                .where(
+                    MaterialShareBatch.tenant_id == context.tenant_id,
+                    col(MaterialShareBatch.id).in_(batch_ids),
+                )
+                .order_by(col(MaterialShareBatch.id))
+                .with_for_update()
+            ).all()
         for item in sorted(
             work, key=lambda item: (item["material"], item["operation"])
         ):

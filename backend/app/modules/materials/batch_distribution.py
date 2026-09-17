@@ -663,6 +663,9 @@ def _finish(
     from . import distribution as single
 
     with Session(database_engine) as db, db.begin():
+        # 与逐项/批量核验统一为全部素材 -> 全部操作 -> 批次，避免账本收口
+        # 持有批次锁等待素材时，与已经持有素材的核验互相等待。
+        rows = _locked_batch_rows(db, context, batch_id)
         batch = db.exec(
             select(MaterialShareBatch)
             .where(
@@ -705,7 +708,7 @@ def _finish(
                 share_response=asdict(receipt) if receipt is not None else None,
             )
         )
-        for member, dist, _material, op in _locked_batch_rows(db, context, batch_id):
+        for member, dist, _material, op in rows:
             if op.attempt_token != member.operation_claim or dist.operation_id != op.id:
                 continue
             rejected = bool(
