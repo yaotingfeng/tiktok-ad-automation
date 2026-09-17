@@ -284,6 +284,31 @@ def test_missing_images_share_one_rectangle_and_publish_actual_target_ids(
     )
 
 
+@pytest.mark.parametrize("probe_found", [True, False])
+def test_armed_image_batch_uses_mid_positive_probe_without_negative_inference(
+    source_env, redis_client, wire, probe_found
+):
+    identities = matrix(source_env, 2, 1)
+    wire[1].extend([{"list": [image(0), image(1)]}, page([]), {"failed_infos": {}}])
+    drive(source_env, redis_client, identities[0])
+    wire[1].append(
+        page(
+            [image(0, target_id=True), image(1, target_id=True)] if probe_found else []
+        )
+    )
+    run(source_env, redis_client, identities[0], read=True)
+    query = dict(wire[0][-1][2]["fields"])
+    assert json.loads(query["filtering"]) == {"material_ids": ["900000", "900001"]}
+    assert job_state(identities[0]).status == ("READY" if probe_found else "VERIFYING")
+    assert sum(call[0] == "POST" for call in wire[0]) == 1
+    if not probe_found:
+        # 空筛选不能断定其它MID的同内容不存在；原完整核查继续且不再发送。
+        wire[1].append(page([image(0, target_id=True), image(1, target_id=True)]))
+        drive(source_env, redis_client, identities[0], read=True)
+    assert all(job_state(identity).status == "READY" for identity in identities)
+    assert sum(call[0] == "POST" for call in wire[0]) == 1
+
+
 def test_unknown_share_only_reads_and_never_uploads_target(
     source_env, redis_client, wire
 ):
@@ -699,6 +724,9 @@ def test_changed_page_boundary_completes_census_without_repeating_shared_write(
     if armed:
         wire[1].extend([{"list": [image(0)]}, page([]), {"failed_infos": {}}])
         drive(source_env, redis_client, identity)
+        # MID 精确查询为空不能证明不存在，仍须完成后面的全量分页核查。
+        wire[1].append(page([]))
+        run(source_env, redis_client, identity, read=True)
     else:
         wire[1].append({"list": [image(0)]})
     wire[1].extend(
@@ -727,7 +755,7 @@ def test_changed_page_boundary_completes_census_without_repeating_shared_write(
         armed or eventually_complete
     )
     searches = [call for call in wire[0] if "/file/image/ad/search/" in call[1]]
-    assert len(searches) == (5 if armed else 4)
+    assert len(searches) == (6 if armed else 4)
 
 
 @pytest.mark.parametrize("eventually_complete", [True, False])
@@ -856,6 +884,8 @@ def test_inventory_change_restarts_bounded_census_without_sending(
         wire[1].extend([{"list": [image(0)]}, page([]), {"failed_infos": {}}])
         drive(source_env, redis_client, identity)
         assert job_state(identity).request_armed_at is not None
+        wire[1].append(page([]))
+        run(source_env, redis_client, identity, read=True)
     else:
         wire[1].append({"list": [image(0)]})
     wire[1].extend([inventory(1, 102), inventory(2, 103)])
@@ -1331,6 +1361,7 @@ def test_partial_share_failure_is_persisted_and_only_matching_images_publish(
     wire[1].extend(
         [
             page([image(0, target_id=True)]),
+            page([{**image(0, target_id=True), "signature": "f" * 32}]),
             page([{**image(0, target_id=True), "signature": "f" * 32}]),
         ]
     )

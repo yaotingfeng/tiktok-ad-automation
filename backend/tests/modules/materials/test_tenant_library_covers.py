@@ -244,7 +244,12 @@ def test_primary_alias_reuses_its_owned_cover_without_self_share(
     wire[1].append({"list": [image(0)]})
     run(env, redis_client, source_identity, read=True)
     wire[1].extend([{"list": [image(0)]}, page([image(0)] if present else [])])
+    if not present:
+        wire[1].append(page([]))
     drive(env, redis_client, identity)
+    searches = [call for call in wire[0] if "image/ad/search" in call[1]]
+    query = dict(searches[0][2]["fields"])
+    assert json.loads(query["filtering"]) == {"material_ids": ["900000"]}
     assert job_state(identity).status == ("READY" if present else "BLOCKED")
     assert job_state(identity).purpose == "BUILD"
     posts = [call for call in wire[0] if call[0] == "POST"]

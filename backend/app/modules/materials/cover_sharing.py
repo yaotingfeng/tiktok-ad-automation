@@ -648,6 +648,28 @@ def _check(
     verifier.recheck_transaction()
 
 
+def _matching_images(
+    members: list[dict[str, Any]], rows: tuple[types.ImageRecord, ...]
+) -> dict[str, dict[str, str]]:
+    found = {}
+    for member in members:
+        for row in rows:
+            if row.signature != member["signature"]:
+                continue
+            evidence = api.verified_image(
+                {"list": [api.image_record_data(row)]},
+                image_id=row.image_id,
+                remote_name=member["file_name"],
+                signature=member["signature"],
+                width=member["width"],
+                height=member["height"],
+            )
+            if evidence:
+                found[member["job_id"]] = evidence
+                break
+    return found
+
+
 def _scan(
     client: types.MaterialOperations,
     batch: MaterialCoverShareBatch,
@@ -665,6 +687,29 @@ def _scan(
             target, {"page": 1, "seen": [], "found": {}, "done": False}
         )
         if not progress["done"]:
+            # 真实上传所在账户、或已发送共享，可先按原MID取得少量目标
+            # 正证据。空/缺项不代表内容不存在，保持完整核查且绝不重发。
+            mids = [member.get("source_mid") for member in members]
+            if (
+                (batch.armed_at is not None or target == batch.source_advertiser_id)
+                and not progress.get("mid_probe_done")
+                and all(
+                    isinstance(mid, str) and re.fullmatch(r"[0-9]+", mid)
+                    for mid in mids
+                )
+            ):
+                result = client.search_images(
+                    advertiser_id=target,
+                    page=1,
+                    material_ids=tuple(sorted(set(type_cast(list[str], mids)))),
+                    budget=budget("materials.search_images"),
+                )
+                progress["mid_probe_done"] = True
+                progress["found"].update(_matching_images(members, result.rows))
+                progress["done"] = all(
+                    member["job_id"] in progress["found"] for member in members
+                )
+                break
             page_number = progress["page"]
             page_size = progress.get("page_size", 100)
             result = client.search_images(
@@ -688,6 +733,7 @@ def _scan(
                     "found": {},
                     "done": False,
                     "restarts": restarts + 1,
+                    "mid_probe_done": progress.get("mid_probe_done", False),
                 }
                 break
             if (repeated and result.total_number is None) or len(set(ids)) != len(ids):
@@ -701,21 +747,7 @@ def _scan(
                 and len(progress["seen"]) > result.total_number
             ):
                 raise DomainError("cover_search_incomplete", "图片分页范围已变化")
-            for member in members:
-                for row in result.rows:
-                    if row.signature != member["signature"]:
-                        continue
-                    evidence = api.verified_image(
-                        {"list": [api.image_record_data(row)]},
-                        image_id=row.image_id,
-                        remote_name=member["file_name"],
-                        signature=member["signature"],
-                        width=member["width"],
-                        height=member["height"],
-                    )
-                    if evidence:
-                        progress["found"][member["job_id"]] = evidence
-                        break
+            progress["found"].update(_matching_images(members, result.rows))
             progress["done"] = all(
                 member["job_id"] in progress["found"] for member in members
             )
