@@ -39,6 +39,33 @@ def reply(rows, total=None):
     )
 
 
+@pytest.mark.parametrize("padding", ["\t", " \r\n", "\u00a0\u3000", ""])
+def test_search_trims_boundary_whitespace_without_changing_drama_identity(padding):
+    title = "Moon  and Stars: Part II"
+    api = client(
+        lambda request: reply(
+            [
+                {
+                    "id": "opaque-drama",
+                    "int_id": 501,
+                    "title": padding + title + padding,
+                    "lang": "en",
+                }
+            ]
+        )
+    )
+    result = api.search(title, 1)
+    assert result["items"] == [
+        {
+            "external_drama_id": "opaque-drama",
+            "display_drama_id": "501",
+            "title": title,
+            "language": "en",
+        }
+    ]
+    assert result["next_cursor"] == "2"
+
+
 def test_full_history_cursor_preserves_dates_total_and_every_observed_identity():
     requests = []
 

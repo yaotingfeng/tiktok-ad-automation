@@ -41,6 +41,7 @@ def remote_link(identity, *, episode=1, name="historical", url=True):
 
 @dataclass
 class Remote:
+    title: str = "Moon"
     rows: list = field(default_factory=list)
     calls: list = field(default_factory=list)
     omit_id: bool = False
@@ -62,7 +63,7 @@ class Remote:
                 200,
                 json={
                     "code": 0,
-                    "data": [{"id": "opaque-drama", "title": "Moon", "lang": "en"}]
+                    "data": [{"id": "opaque-drama", "title": self.title, "lang": "en"}]
                     if query["page"] == "1"
                     else [],
                 },
@@ -185,7 +186,9 @@ def writes(env):
     return [r for r in env[-1].calls if r[0] == "POST"]
 
 
-def test_reuses_minimum_valid_remote_id_after_all_history_pages(workflow):
+@pytest.mark.parametrize("title", ["Moon", "\t Moon\t\r\n"])
+def test_reuses_minimum_valid_remote_id_after_all_history_pages(workflow, title):
+    workflow[-1].title = title
     workflow[-1].rows = [remote_link(i, episode=2) for i in range(100, 120)] + [
         remote_link(27),
         remote_link(8),

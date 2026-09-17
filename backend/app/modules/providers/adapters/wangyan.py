@@ -197,7 +197,9 @@ class WangyanClient:
                     if row.get("int_id") is not None
                     else {}
                 ),
-                "title": string(row.get("title")),
+                # 网眼标题可能带首尾制表符；在接口边界清理，避免精确匹配漏剧。
+                # 保留内部空白、大小写和标点，不能把不同剧名合并。
+                "title": string(row.get("title")).strip(),
                 "language": row.get("lang")
                 if isinstance(row.get("lang"), str)
                 else None,
