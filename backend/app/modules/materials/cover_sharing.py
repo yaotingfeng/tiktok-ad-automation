@@ -413,6 +413,8 @@ def _resume(
     if batch.status == "READY":
         # 过期 READY 的显式复核必须重新读取，不能重放上轮已缓存的正向证据。
         batch.scan_state = {}
+        # 只在新复核开始时清一次；后续分页不能因仍标READY而每次重置。
+        batch.status = "VERIFYING"
     claims = {first.id: nonce}
     for member in batch.members:
         identity = UUID(member["job_id"])
@@ -451,11 +453,12 @@ def _continue(
         job = covers._fenced(db, context, identity, claim)
         if job is None:
             raise DomainError("cover_claim_lost", "共享续跑执行权已变化")
+        read = bool(current.armed_at or job.request_armed_at or job.known_image_id)
         if identity == wake:
-            covers._queue(db, job, read=bool(current.armed_at), delay=delay)
+            covers._queue(db, job, read=read, delay=delay)
         else:
             job.claim_token = job.claimed_until = job.dispatch_id = None
-            job.status = "VERIFYING" if current.armed_at else "PENDING"
+            job.status = "VERIFYING" if read else "PENDING"
             job.repair_after = covers._now() + timedelta(
                 seconds=covers.CLAIM_SECONDS + delay
             )
@@ -677,6 +680,8 @@ def _scan(
     batch: MaterialCoverShareBatch,
     claims: dict[UUID, UUID],
     budget: Callable[[str], types.RemoteCallBudget],
+    *,
+    read_only_ids: set[UUID],
 ) -> tuple[dict[UUID, dict[str, str]], bool]:
     """每轮至多读一页；持久游标跨任务推进，避免大账户永远超时重头扫描。"""
     targets: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -688,17 +693,17 @@ def _scan(
         progress = state.setdefault(
             target, {"page": 1, "seen": [], "found": {}, "done": False}
         )
-        if not progress["done"]:
-            # 真实上传所在账户、或已发送共享，可先按原MID取得少量目标
-            # 正证据。空/缺项不代表内容不存在，保持完整核查且绝不重发。
+        first_share = (
+            batch.armed_at is None
+            and target != batch.source_advertiser_id
+            and not any(UUID(member["job_id"]) in read_only_ids for member in members)
+        )
+        if not progress["done"] or (first_share and not progress.get("mid_probe_done")):
+            # 查询只限定本次冻结源MID，不把不断变化的整座图库当成首次共享
+            # 的前置依赖。已发送未知及来源自身仍只能从这里接受正证据。
             mids = [member.get("source_mid") for member in members]
-            if (
-                (batch.armed_at is not None or target == batch.source_advertiser_id)
-                and not progress.get("mid_probe_done")
-                and all(
-                    isinstance(mid, str) and re.fullmatch(r"[0-9]+", mid)
-                    for mid in mids
-                )
+            if not progress.get("mid_probe_done") and all(
+                isinstance(mid, str) and re.fullmatch(r"[0-9]+", mid) for mid in mids
             ):
                 result = client.search_images(
                     advertiser_id=target,
@@ -711,6 +716,17 @@ def _scan(
                 progress["done"] = all(
                     member["job_id"] in progress["found"] for member in members
                 )
+                scoped_complete = (
+                    result.total_pages <= 1
+                    and result.total_number == len(result.rows)
+                    and len(result.rows) <= len(set(mids))
+                    and {row.image_id for row in result.rows}
+                    <= {value["image_id"] for value in progress["found"].values()}
+                )
+                if first_share and scoped_complete:
+                    # 缺项只允许原未armed账本的首次共享；不能将此结论用于
+                    # UNKNOWN重发，也不能将同名拒绝直接发布为READY。
+                    progress["done"] = True
                 break
             page_number = progress["page"]
             page_size = progress.get("page_size", 100)
@@ -789,7 +805,18 @@ def _scan(
             progress["page"] = page_number + 1
             break
     batch.scan_state = state
-    done = all(state.get(target, {}).get("done", False) for target in targets)
+    done = all(
+        state.get(target, {}).get("done", False)
+        and (
+            batch.armed_at is not None
+            or any(
+                UUID(member["job_id"]) in read_only_ids for member in targets[target]
+            )
+            or target == batch.source_advertiser_id
+            or state.get(target, {}).get("mid_probe_done", False)
+        )
+        for target in targets
+    )
     found = {
         UUID(identity): evidence
         for progress in state.values()
@@ -845,6 +872,7 @@ def _scan_slice(
     budget: Callable[[str], types.RemoteCallBudget],
     *,
     deadline: datetime,
+    read_only_ids: set[UUID],
 ) -> tuple[dict[UUID, dict[str, str]], bool]:
     """同一账户连续读取至多4页，减少会话重建及排队期间库存变化。"""
     targets = sorted(
@@ -859,7 +887,7 @@ def _scan_slice(
         None,
     )
     for _ in range(SCAN_PAGES_PER_SLICE):
-        found, done = _scan(client, batch, claims, budget)
+        found, done = _scan(client, batch, claims, budget, read_only_ids=read_only_ids)
         progress = batch.scan_state.get(target, {}) if target is not None else {}
         # 精确探测、总数变化重启和账户切换都让出执行权；大账户跨任务
         # 保留游标。预留20秒，不靠提高Worker期限或并发消化积压。
@@ -892,6 +920,21 @@ def run_shared_cover(
                 _resume(db, context, first, nonce)
                 if first.share_batch_id
                 else _prepare(db, context, first, nonce)
+            )
+            read_only_ids = (
+                set(
+                    db.exec(
+                        select(MaterialCoverJob.id).where(
+                            col(MaterialCoverJob.id).in_(prepared[1]),
+                            or_(
+                                col(MaterialCoverJob.request_armed_at).is_not(None),
+                                col(MaterialCoverJob.known_image_id).is_not(None),
+                            ),
+                        )
+                    ).all()
+                )
+                if prepared
+                else set()
             )
         if prepared is None:
             return
@@ -971,7 +1014,12 @@ def run_shared_cover(
                         ).image_mid = member["source_mid"]
                 batch.members = members
             found, done = _scan_slice(
-                gateway.materials, batch, claims, budget, deadline=deadline
+                gateway.materials,
+                batch,
+                claims,
+                budget,
+                deadline=deadline,
+                read_only_ids=read_only_ids,
             )
             # 完整读完但预算不足时，持久保存证据后下一次正式任务再发送。
             yield_for_write = (
@@ -1017,6 +1065,30 @@ def run_shared_cover(
                         ("BLOCKED" if set(claims) <= rejected else "UNKNOWN"),
                         {},
                     )
+                elif read_only_ids.intersection(claims):
+                    # 先前复用成功的图片即使批次没有POST也只能核查。
+                    # 缺失者保持UNKNOWN，其余真正未发送成员另行正式续跑。
+                    for identity in read_only_ids.intersection(claims):
+                        job = covers._fenced(
+                            db, context, identity, claims.pop(identity)
+                        )
+                        if job:
+                            covers._stop(job, "cover_result_unknown", unknown=True)
+                    # 仅拆回确实未发送的剩余成员，让原批次保留缺失复用证据；
+                    # 否则下一次_resume又会把UNKNOWN成员领回，形成永久循环。
+                    for identity, claim in claims.items():
+                        job = covers._fenced(db, context, identity, claim)
+                        if job:
+                            job.share_batch_id = None
+                            covers._queue(db, job, read=False)
+                    current.members = [
+                        member
+                        for member in current.members
+                        if UUID(member["job_id"]) not in claims
+                    ]
+                    claims = {}
+                    current.status, current.scan_state = "UNKNOWN", {}
+                    yield_for_write = True
                 else:
                     current.wake_job_id = (
                         current.wake_job_id

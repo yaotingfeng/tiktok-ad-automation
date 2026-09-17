@@ -5,7 +5,11 @@ from datetime import timedelta
 import pytest
 
 from app.modules.materials import cover_sharing, covers
-from tests.modules.materials.test_cover_throughput import image, matrix
+from tests.modules.materials.test_cover_throughput import (
+    image,
+    incomplete_mid_page,
+    matrix,
+)
 from tests.modules.materials.test_covers import job_state, run
 from tests.modules.materials.test_source_uploads import source_env as source_env
 from tests.modules.materials.test_source_uploads import wire as wire
@@ -23,13 +27,20 @@ def inventory(indices, number, size=100, total=156):
     }
 
 
+def prepare_full_scan(source_env, redis_client, wire, identity):
+    wire[1].extend([{"list": [image(0)]}, incomplete_mid_page()])
+    run(source_env, redis_client, identity)
+    assert job_state(identity).status == "PENDING"
+    assert not [call for call in wire[0] if call[0] == "POST"]
+
+
 def test_contiguous_account_scan_repairs_overlap_in_one_bounded_session(
     source_env, redis_client, wire
 ):
     identity = matrix(source_env, 1, 1)[0]
+    prepare_full_scan(source_env, redis_client, wire, identity)
     wire[1].extend(
         [
-            {"list": [image(0)]},
             inventory(range(1, 101), 1),
             inventory(range(98, 154), 2),
             inventory(range(1, 72), 1, 71),
@@ -41,14 +52,14 @@ def test_contiguous_account_scan_repairs_overlap_in_one_bounded_session(
     assert job_state(identity).status == "VERIFYING"
     assert sum(call[0] == "POST" for call in wire[0]) == 1
     searches = [call for call in wire[0] if "image/ad/search" in call[1]]
-    assert len(searches) == 4
+    assert len(searches) == 5  # 一次不完整MID探测，随后同会话连续四页。
 
 
 def test_scan_slice_stops_after_four_pages_with_durable_cursor(
     source_env, redis_client, wire
 ):
     identity = matrix(source_env, 1, 1)[0]
-    wire[1].append({"list": [image(0)]})
+    prepare_full_scan(source_env, redis_client, wire, identity)
     for number in range(1, 5):
         wire[1].append(
             inventory(
@@ -74,6 +85,7 @@ def test_scan_slice_yields_before_budget_exhaustion_without_sending(
     source_env, redis_client, wire, monkeypatch, remaining
 ):
     identity = matrix(source_env, 1, 1)[0]
+    prepare_full_scan(source_env, redis_client, wire, identity)
     original = covers._now
 
     def late_page():
@@ -82,10 +94,10 @@ def test_scan_slice_yields_before_budget_exhaustion_without_sending(
         monkeypatch.setattr(cover_sharing.covers, "_now", lambda: instant)
         return inventory(range(1, 101), 1)
 
-    wire[1].extend([{"list": [image(0)]}, late_page])
+    wire[1].append(late_page)
     run(source_env, redis_client, identity)
     assert job_state(identity).status == "PENDING"
-    assert len([call for call in wire[0] if "image/ad/search" in call[1]]) == 1
+    assert len([call for call in wire[0] if "image/ad/search" in call[1]]) == 2
     assert not [call for call in wire[0] if call[0] == "POST"]
 
 
@@ -93,6 +105,7 @@ def test_complete_census_defers_write_when_budget_is_low_then_sends_once(
     source_env, redis_client, wire, monkeypatch
 ):
     identity = matrix(source_env, 1, 1)[0]
+    prepare_full_scan(source_env, redis_client, wire, identity)
     original = covers._now
 
     def late_complete_page():
@@ -100,7 +113,7 @@ def test_complete_census_defers_write_when_budget_is_low_then_sends_once(
         monkeypatch.setattr(cover_sharing.covers, "_now", lambda: instant)
         return inventory(range(1, 101), 1, total=100)
 
-    wire[1].extend([{"list": [image(0)]}, late_complete_page])
+    wire[1].append(late_complete_page)
     run(source_env, redis_client, identity)
     assert job_state(identity).status == "PENDING"
     assert not [call for call in wire[0] if call[0] == "POST"]
@@ -109,4 +122,4 @@ def test_complete_census_defers_write_when_budget_is_low_then_sends_once(
     run(source_env, redis_client, identity)
     assert job_state(identity).status == "VERIFYING"
     assert sum(call[0] == "POST" for call in wire[0]) == 1
-    assert len([call for call in wire[0] if "image/ad/search" in call[1]]) == 1
+    assert len([call for call in wire[0] if "image/ad/search" in call[1]]) == 2

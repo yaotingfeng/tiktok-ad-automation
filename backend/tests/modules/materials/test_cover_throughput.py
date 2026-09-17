@@ -188,6 +188,19 @@ def matrix(env, count=2, targets=2):
     return ids
 
 
+def incomplete_mid_page():
+    """异常筛选返回未完整集合，必须继续完整核查，不能据缺项发送。"""
+    return {
+        "list": [image(index, target_id=True) for index in range(1, 101)],
+        "page_info": {
+            "page": 1,
+            "page_size": 100,
+            "total_page": 2,
+            "total_number": 101,
+        },
+    }
+
+
 def drive(env, redis_client, identity, *, read=False):
     for _ in range(1000):
         job = job_state(identity)
@@ -738,7 +751,8 @@ def test_changed_page_boundary_completes_census_without_repeating_shared_write(
         wire[1].append(page([]))
         run(source_env, redis_client, identity, read=True)
     else:
-        wire[1].append({"list": [image(0)]})
+        wire[1].extend([{"list": [image(0)]}, incomplete_mid_page()])
+        run(source_env, redis_client, identity)
     wire[1].extend(
         [inventory(range(1, 101), 1, 100), inventory(range(98, 154), 2, 100)]
     )
@@ -765,7 +779,7 @@ def test_changed_page_boundary_completes_census_without_repeating_shared_write(
         armed or eventually_complete
     )
     searches = [call for call in wire[0] if "/file/image/ad/search/" in call[1]]
-    assert len(searches) == (6 if armed else 4)
+    assert len(searches) == (6 if armed else 5)
 
 
 @pytest.mark.parametrize("eventually_complete", [True, False])
@@ -775,6 +789,8 @@ def test_overlapping_inventory_pages_require_complete_unique_census_before_share
 ):
     """平台同总数分页会重叠；最多三轮补齐唯一库存，缺项时绝不发送。"""
     identity = matrix(source_env, 1, 1)[0]
+    wire[1].extend([{"list": [image(0)]}, incomplete_mid_page()])
+    run(source_env, redis_client, identity)
 
     def inventory(indices, page_number, page_size=100):
         return {
@@ -789,7 +805,6 @@ def test_overlapping_inventory_pages_require_complete_unique_census_before_share
 
     wire[1].extend(
         [
-            {"list": [image(0)]},
             inventory(range(1, 101), 1),
             inventory([100, 101], 2),
         ]
@@ -899,7 +914,8 @@ def test_inventory_change_restarts_bounded_census_without_sending(
         wire[1].append(page([]))
         run(source_env, redis_client, identity, read=True)
     else:
-        wire[1].append({"list": [image(0)]})
+        wire[1].extend([{"list": [image(0)]}, incomplete_mid_page()])
+        run(source_env, redis_client, identity)
     wire[1].extend([inventory(1, 102), inventory(2, 103)])
     run(source_env, redis_client, identity, read=armed)
     run(source_env, redis_client, identity, read=armed)
@@ -935,10 +951,13 @@ def test_inventory_change_restarts_bounded_census_without_sending(
         assert job.dispatch_id is None
 
 
+@pytest.mark.usefixtures("single_page_checkpoints")
 def test_retry_after_inventory_changed_starts_new_census_before_share(
     source_env, redis_client, wire
 ):
     identity = matrix(source_env, 1, 1)[0]
+    wire[1].extend([{"list": [image(0)]}, incomplete_mid_page()])
+    run(source_env, redis_client, identity)
 
     def inventory(indices, page_number, total):
         return {
@@ -953,7 +972,6 @@ def test_retry_after_inventory_changed_starts_new_census_before_share(
 
     wire[1].extend(
         [
-            {"list": [image(0)]},
             inventory(range(1, 101), 1, 102),
             inventory([101, 102, 103], 2, 103),
         ]
@@ -973,6 +991,8 @@ def test_retry_after_inventory_changed_starts_new_census_before_share(
     assert not any(call[0] == "POST" for call in wire[0])
     with Session(engine) as db, db.begin():
         covers.request_cover_retry(db, context=source_env["context"], job_id=identity)
+    wire[1].append(incomplete_mid_page())
+    run(source_env, redis_client, identity)
     wire[1].extend(
         [
             inventory(range(1, 101), 1, 103),
