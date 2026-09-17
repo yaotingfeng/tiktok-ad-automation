@@ -85,43 +85,78 @@ def _mapping(session: Session, job: MaterialCoverJob) -> AccountMaterial | None:
     return None
 
 
-def _access(
-    session: Session,
-    context: TenantContext,
-    job: MaterialCoverJob,
-    *,
-    upload: bool = False,
-) -> None:
-    require_tenant(
-        session,
-        actor_id=context.actor_id,
-        tenant_id=context.tenant_id,
-        action="upload" if job.purpose == "SOURCE" else "build",
-    )
-    route = load_material_route(
-        job.frozen_route,
-        context=context,
-        bc_id=job.bc_id,
-        connection_id=job.connection_id,
-    )
-    require_material_route(
-        session,
-        context=context,
-        route=route,
-        bc_id=job.bc_id,
-        advertiser_id=job.advertiser_id,
-        capability="read",
-    )
-    if upload:
-        # 上传所用URL来自本账户刚核实的视频；读权与上传权必须同时仍有效。
+class _CoverAccessChecks:
+    """同一短事务复用共同授权；逐项内容仍检查，不跨 HTTP 保留权限结论。"""
+
+    def __init__(self, session: Session, context: TenantContext):
+        self.session, self.context = session, context
+        self.transaction = session.get_transaction()
+        self.checked: set[tuple[str, str, str, bool]] = set()
+
+    def check(
+        self,
+        session: Session,
+        context: TenantContext,
+        job: MaterialCoverJob,
+        *,
+        upload: bool,
+    ) -> None:
+        if (
+            session is not self.session
+            or context != self.context
+            or self.transaction is None
+            or session.get_transaction() is not self.transaction
+            or not self.transaction.is_active
+        ):
+            raise DomainError("cover_claim_lost", "封面授权核查事务已变化")
+        route = load_material_route(
+            job.frozen_route,
+            context=context,
+            bc_id=job.bc_id,
+            connection_id=job.connection_id,
+        )
+        action = "upload" if job.purpose == "SOURCE" else "build"
+        key = (route.model_dump_json(), job.advertiser_id, action, upload)
+        if key in self.checked:
+            return
+        require_tenant(
+            session,
+            actor_id=context.actor_id,
+            tenant_id=context.tenant_id,
+            action=action,
+        )
         require_material_route(
             session,
             context=context,
             route=route,
             bc_id=job.bc_id,
             advertiser_id=job.advertiser_id,
-            capability="upload",
+            capability="read",
         )
+        if upload:
+            require_material_route(
+                session,
+                context=context,
+                route=route,
+                bc_id=job.bc_id,
+                advertiser_id=job.advertiser_id,
+                capability="upload",
+            )
+        self.checked.add(key)
+
+
+def _access(
+    session: Session,
+    context: TenantContext,
+    job: MaterialCoverJob,
+    *,
+    upload: bool = False,
+    checks: _CoverAccessChecks | None = None,
+) -> None:
+    # 未显式传入时仍逐次核查；批量只复用共同权限，不缓存映射和摘要。
+    (checks or _CoverAccessChecks(session, context)).check(
+        session, context, job, upload=upload
+    )
     if code := _digest_error(session, job):
         raise DomainError(code, "原视频摘要缺失或已变化，请核实素材")
     if _mapping(session, job) is None:
@@ -552,6 +587,7 @@ def _claim_in_session(
     revision: int,
     *,
     read: bool,
+    checks: _CoverAccessChecks | None = None,
 ) -> tuple[MaterialCoverJob, UUID] | None:
     job = _job(session, context, job_id, lock=True)
     if job.error_code == "cover_receipt_ambiguous":
@@ -580,7 +616,7 @@ def _claim_in_session(
         _queue(session, job, read=True)
         return None
     try:
-        _access(session, context, job, upload=not read)
+        _access(session, context, job, upload=not read, checks=checks)
     except DomainError as error:
         _stop(job, error.code, unknown=bool(job.request_armed_at))
         return None
@@ -820,6 +856,8 @@ def _read_result_in_session(
     job: MaterialCoverJob,
     nonce: UUID,
     evidence: dict[str, str] | None,
+    *,
+    checks: _CoverAccessChecks | None = None,
 ) -> None:
     session.exec(
         select(MaterialFile)
@@ -833,7 +871,7 @@ def _read_result_in_session(
     if current is None:
         return
     _check_read_identity(current, job)
-    _publish_result(session, context, current, evidence)
+    _publish_result(session, context, current, evidence, checks=checks)
 
 
 def _check_read_identity(current: MaterialCoverJob, expected: MaterialCoverJob) -> None:
@@ -866,8 +904,10 @@ def _publish_result(
     context: TenantContext,
     current: MaterialCoverJob,
     evidence: dict[str, str] | None,
+    *,
+    checks: _CoverAccessChecks | None = None,
 ) -> None:
-    _access(session, context, current)
+    _access(session, context, current, checks=checks)
     if _receipt_conflict(session, current):
         _invalidate_receipt(session, current)
         return
@@ -1413,6 +1453,7 @@ def _run_known_cover_group(
 
     members = [(first, first_nonce)]
     with bounded_session(database_engine, task_deadline=deadline) as db, db.begin():
+        checks = _CoverAccessChecks(db, context)
         candidates = db.exec(_known_cover_candidates(first)).all()
         # 批量 claim 与回执检查仍按 material→job 固定锁序，共用本组一个短会话。
         if candidates:
@@ -1464,6 +1505,7 @@ def _run_known_cover_group(
                 candidate_dispatch,
                 candidate_revision,
                 read=True,
+                checks=checks,
             )
             if claimed:
                 job, nonce = claimed
@@ -1485,12 +1527,13 @@ def _run_known_cover_group(
         # 工厂会在每一次真实 HTTP 前调用，连同凭据/账户权限重新检查。
         # 同一回调共享短事务，避免逐项新建连接阻塞 MCP 流；不跨请求缓存权限。
         with bounded_session(database_engine, task_deadline=deadline) as db, db.begin():
+            checks = _CoverAccessChecks(db, context)
             for job, nonce in active:
                 current = _fenced(db, context, job.id, nonce)
                 if current is None:
                     raise DomainError("cover_claim_lost", "封面任务执行权已变化")
                 _check_read_identity(current, job)
-                _access(db, context, current)
+                _access(db, context, current, checks=checks)
 
     def budget(operation: str) -> material_types.RemoteCallBudget:
         return material_types.RemoteCallBudget(
@@ -1533,6 +1576,7 @@ def _run_known_cover_group(
                     bounded_session(database_engine, task_deadline=deadline) as db,
                     db.begin(),
                 ):
+                    checks = _CoverAccessChecks(db, context)
                     db.exec(
                         select(MaterialFile)
                         .where(
@@ -1556,7 +1600,7 @@ def _run_known_cover_group(
                                 )
                                 if evidence is None:
                                     _read_result_in_session(
-                                        db, context, job, nonce, None
+                                        db, context, job, nonce, None, checks=checks
                                     )
                                 else:
                                     read_current = _fenced(db, context, job.id, nonce)
@@ -1565,7 +1609,7 @@ def _run_known_cover_group(
                                             "cover_claim_lost", "封面任务执行权已变化"
                                         )
                                     _check_read_identity(read_current, job)
-                                    _access(db, context, read_current)
+                                    _access(db, context, read_current, checks=checks)
                                     mapping = _mapping(db, read_current)
                                     assert mapping
                                     mapping.verified_at = _now()
@@ -1597,6 +1641,7 @@ def _run_known_cover_group(
                 bounded_session(database_engine, task_deadline=deadline) as db,
                 db.begin(),
             ):
+                checks = _CoverAccessChecks(db, context)
                 db.exec(
                     select(MaterialFile)
                     .where(
@@ -1621,7 +1666,9 @@ def _run_known_cover_group(
                                 width=job.width,
                                 height=job.height,
                             )
-                            _read_result_in_session(db, context, job, nonce, evidence)
+                            _read_result_in_session(
+                                db, context, job, nonce, evidence, checks=checks
+                            )
                     except Exception as error:
                         failures.append((job, nonce, error))
             for job, nonce, member_error in failures:

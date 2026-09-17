@@ -117,6 +117,53 @@ def physical_calls(env, wire):
 @pytest.mark.parametrize(
     "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
 )
+def test_fifty_known_covers_do_not_repeat_account_authorization_per_member(
+    cover_env, gateway_wire, database_engine, redis_client
+):
+    """逐成员重复共同授权会耗尽线上45秒预算；内容/claim仍逐项检查。"""
+    from sqlalchemy import Engine, event
+
+    identities = known_jobs(cover_env, database_engine, 50)
+    replies(cover_env, gateway_wire, database_engine, identities)
+    authorization_queries = []
+
+    def observed(_connection, _cursor, statement, _parameters, *_):
+        if "bc_connection_binding" in statement:
+            authorization_queries.append(statement)
+
+    event.listen(Engine, "before_cursor_execute", observed)
+    try:
+        run(cover_env, database_engine, redis_client, identities[0], read=True)
+    finally:
+        event.remove(Engine, "before_cursor_execute", observed)
+    assert all(
+        job(database_engine, identity).status == "READY" for identity in identities
+    )
+    assert len(physical_calls(cover_env, gateway_wire)) == 2
+    assert post_count(cover_env, gateway_wire) == 0
+    # MCP 的协议握手/逐 HTTP 重新授权仍执行；不能把这些必要检查算作重复成员。
+    assert len(authorization_queries) <= 120, len(authorization_queries)
+
+
+@pytest.mark.parametrize("gateway_case", ["OFFICIAL_API"], indirect=True)
+def test_cover_authorization_reuse_cannot_escape_its_transaction(
+    cover_env, database_engine
+):
+    from app.core.errors import DomainError
+
+    identities = known_jobs(cover_env, database_engine, 1)
+    current = job(database_engine, identities[0])
+    with Session(database_engine) as db:
+        with db.begin():
+            checks = covers._CoverAccessChecks(db, cover_env["context"])
+            covers._access(db, cover_env["context"], current, checks=checks)
+        with db.begin(), pytest.raises(DomainError, match="封面授权核查事务已变化"):
+            covers._access(db, cover_env["context"], current, checks=checks)
+
+
+@pytest.mark.parametrize(
+    "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
+)
 def test_23_known_covers_run_via_production_task_with_two_calls_and_duplicate_delivery_noops(
     cover_env,
     gateway_wire,
@@ -444,6 +491,65 @@ def test_changed_member_after_bulk_video_read_prevents_image_send(
             assert db.get(AccountMaterial, current.asset_id).verified_at < datetime.now(
                 UTC
             ) - timedelta(minutes=15)
+    assert post_count(cover_env, gateway_wire) == 0
+
+
+@pytest.mark.parametrize(
+    "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
+)
+def test_authorization_revoked_after_image_response_prevents_cover_publication(
+    cover_env, gateway_wire, database_engine, redis_client, monkeypatch
+):
+    from sqlmodel import select
+
+    from app.modules.accounts.connection_models import ConnectionAuthorization
+    from tests.modules.accounts.test_material_gateway import after_material_http
+
+    identities = known_jobs(cover_env, database_engine, 3)
+    calls = []
+
+    def revoke_after_image():
+        calls.append(True)
+        if len(calls) != 2:
+            return
+        with Session(database_engine) as db, db.begin():
+            authorization = db.exec(
+                select(ConnectionAuthorization).where(
+                    ConnectionAuthorization.connection_id
+                    == cover_env["route"].connection_id
+                )
+            ).one()
+            authorization.permission_summary = {
+                **authorization.permission_summary,
+                "read_authorized": False,
+            }
+
+    if cover_env["route"].channel == "OFFICIAL_API":
+        import urllib3
+
+        original = urllib3.PoolManager.request
+
+        def response(pool, method, url, **kwargs):
+            result = original(pool, method, url, **kwargs)
+            if "/file/video/ad/info/" in url or "/file/image/ad/info/" in url:
+                revoke_after_image()
+            return result
+
+        monkeypatch.setattr(urllib3.PoolManager, "request", response)
+    else:
+        after_material_http(monkeypatch, cover_env["route"].channel, revoke_after_image)
+    replies(cover_env, gateway_wire, database_engine, identities)
+    run(cover_env, database_engine, redis_client, identities[0], read=True)
+    assert len(calls) == 2
+    assert all(
+        job(database_engine, identity).status != "READY" for identity in identities
+    )
+    with Session(database_engine) as db:
+        assert all(
+            db.get(AccountMaterial, job(database_engine, identity).asset_id).image_id
+            is None
+            for identity in identities
+        )
     assert post_count(cover_env, gateway_wire) == 0
 
 
