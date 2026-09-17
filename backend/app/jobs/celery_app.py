@@ -38,7 +38,7 @@ celery_app.conf.update(
         Queue("builds"),
         Queue("control"),
     ),
-    # 同一资源 Worker 交替取准备与结果队列，不额外增加进程或外部调用额度。
+    # 消费者按部署角色隔离准备与结果；多队列角色仍公平轮询，不扩大外部额度。
     broker_transport_options={"queue_order_strategy": "round_robin"},
     task_default_queue="control",
     task_create_missing_queues=False,

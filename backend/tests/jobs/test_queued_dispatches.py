@@ -204,17 +204,17 @@ def test_stopped_queue_move_preserves_bytes_duplicates_and_order(broker, decode)
     upload = broker_message("materials.prepare_target", "upload", {})
     redis.lpush(prefix + "resources", first, upload, first, last, "invalid")
     result = move_result_messages(redis, prefix=prefix)
-    assert result == {"moved": 3, "messages_before": 5, "messages_after": 5}
+    assert result == {"moved": 2, "messages_before": 5, "messages_after": 5}
 
     def value(raw):
         return raw if decode else raw.encode()
 
     assert redis.lrange(prefix + "resources", 0, -1) == [
         value("invalid"),
+        value(last),
         value(upload),
     ]
     assert redis.lrange(prefix + "resource-results", 0, -1) == [
-        value(last),
         value(first),
         value(first),
     ]

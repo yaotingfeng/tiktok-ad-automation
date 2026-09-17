@@ -27,10 +27,12 @@ from tests.modules.strategies.test_versions import config
 
 @pytest.fixture
 def executable(isolated_strategy_database, monkeypatch, request):
-    from app.modules.builds import execution
+    from app.modules.builds import execution, execution_window
     from app.modules.builds.drafts import create_draft, prepare_draft
 
     db, context, _ = isolated_strategy_database
+    # 故障/接续基础用例使用一个槽以强制跨窗口；并行用例显式验证默认十槽。
+    monkeypatch.setattr(execution_window, "MAX_ACTIVE_UNITS", 1)
     policy(monkeypatch)
     monkeypatch.setattr(
         settings, "CONNECTION_ENCRYPTION_KEY", Fernet.generate_key().decode()

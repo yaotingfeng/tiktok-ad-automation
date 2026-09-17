@@ -17,12 +17,14 @@
 - 安装 Python 3.14 / uv、Bun 1.4.2、PostgreSQL 18、Redis 8、Nginx；依赖按仓库锁文件冻结安装。
 - PostgreSQL 和 Redis 只监听 loopback；Nginx 提供测试入口，API 仅监听 `127.0.0.1:18000`。域名/TLS 状态以本次验收记录为准。
 - systemd 管理 API、Linux prefork Worker（小内存主机先使用 2 个进程）与唯一 Beat；禁止 API/代理访问日志采集授权参数。Beat 状态保存在 `/var/lib/tt-ada-staging`。
-- 批处理版本部署使用 `deploy/staging-worker.service`（resources + resource-results，prefork 2）、`deploy/staging-builds.service`（builds，prefork 1）及 `deploy/staging-control.service`（control，prefork 1）。结果与封面独立排队，由同一资源 Worker 交替消费；首次升级须在完整备份、五服务停止后调用 `app.jobs.result_queue_migration.move_result_messages` 搬移旧结果消息并验证消息摘要多重集合不变。三个 Worker 加 API、Beat 均使用同一私有配置和版本；正常排空、备份、配置核对、重启及 ping 必须覆盖 `tt-ada-staging-builds`、`tt-ada-staging-control`。新增队列不扩大共享上游额度，发布后检查内存/交换区，不能仅靠提高并发掩盖队列积压。
+- 有界流水线版本使用 `deploy/staging-worker.service`（resources，prefork 1）、`deploy/staging-results.service`（resource-results，prefork 1）、`deploy/staging-builds.service`（builds，prefork 1）及 `deploy/staging-control.service`（control，prefork 1）。准备与结果有各自保留的执行槽，素材活跃槽合计仍为2；四个 Worker 加 API、Beat 共六服务十进程，必须统一版本/私有配置并全部覆盖排空、备份、恢复、启动和 ping。首次安装 results 单元前先按旧五服务正常排空。旧队列中的 prepare_cover 由正式消费者按原 ID/参数重试到 resources，不执行运维队列搬移。单提交最多10个合格组合活跃，完成或明确阻断自动补位；不扩大共享上游额度。发布后核对内存/交换区，并分别验准备、核验和广告回读。
 - 全新空库通过 Alembic 迁移到固定提交的 head，再初始化管理员。缺少 TikTok/R2/版权方配置时保持未配置，素材导入/清理开关关闭。
 - 后续升级先停止接收写入，停止 Beat 并正常排空 Worker，按通用发布手册备份数据库、Redis、项目文件/构建产物及私有配置（无迁移也必须备份）；迁移成功后切换同版本 API/Worker/Beat。不可通过直接改表或删除数据修复迁移。
 - 验证前端构建、Alembic head、登录和受保护接口、入口检查、Redis/数据库、Worker ping、Beat/outbox；外部真实联调单独验收。
 
 ## 当前实例与操作
+
+- 2026-09-18 最新运行 `6fd9c5e2897e11dab8078e830ad816856d54c0d7`：变化封面图库最多两次从首页重新核查，持续变化仍阻断且不重发已发送批次。完整备份 `20260917T162520Z` 五归档/1252 文件/21 表/950 历史独立恢复；五服务九进程、三 Worker、双身份隔离和服务器 7 项回归通过。配置、额度、并发、head 和前端不变；16:26 UTC 整批仍 2/180，持续验收未完成。以下为历史记录。
 
 - 2026-09-18 最新运行 `2467c7f8dd5a3b371c55fd05b37372f3b9ed9961`：来源封面持久等待和未来未发送封面准入。完整备份 `20260917T161519Z` 五归档/1251 文件/21 表/950 历史独立恢复一致；五服务九进程、三 Worker、服务器隔离 22 项回归通过。配置、额度、head、并发及前端不变；16:18 UTC 完整仍 2/180，继续业务验收，不能当成整批完成。以下为历史记录。
 

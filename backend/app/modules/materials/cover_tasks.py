@@ -11,6 +11,7 @@ from app.core.context import TenantContext
 from app.core.db import engine
 from app.core.errors import DomainError
 from app.jobs.celery_app import celery_app
+from app.jobs.task_routes import ensure_dispatch_queue
 
 from .covers import HARD_LIMIT, SOFT_LIMIT, repair_cover_dispatches, run_cover
 from .tasks import require_bounded_worker
@@ -33,6 +34,7 @@ def _run(
         identity, dispatch = UUID(payload["job_id"]), UUID(task.request.id)
     except ValueError, TypeError, KeyError, AttributeError:
         raise DomainError("invalid_asset_task", "封面任务参数无效") from None
+    ensure_dispatch_queue(task)
     with Redis.from_url(settings.REDIS_URL) as redis_client:
         run_cover(
             database_engine=engine,

@@ -18,7 +18,6 @@ _RESOURCE_RESULTS = frozenset(
     {
         "materials.verify_target",
         "materials.verify_original",
-        "materials.prepare_cover",
         "materials.verify_cover",
     }
 )
@@ -34,7 +33,7 @@ def register_dispatch_task(name: str, queue: str) -> None:
         or name == "jobs.flush_dispatch"
     ):
         raise ValueError("Invalid business dispatch task name")
-    # 已上传资源的核实和封面不能排在整批初始上传后；重复注册仍归一到同一队列。
+    # 结果核实独立于准备；封面准备可能发生慢上传，不能占用结果专用执行槽。
     if queue == "resources" and name in _RESOURCE_RESULTS:
         queue = "resource-results"
     if queue not in _ALLOWED_QUEUES:

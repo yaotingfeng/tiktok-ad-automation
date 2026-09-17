@@ -178,7 +178,9 @@ def test_scene_to_enabled_ads_and_readback_uses_one_channel(
     ids = _submit_waiting_for_cover(
         database_engine, redis_client, case, preview_id, gateway_wire, monkeypatch
     )
-    _finish_cover(database_engine, redis_client, case, gateway_wire, remote, ids)
+    _finish_cover(
+        database_engine, redis_client, case, gateway_wire, remote, ids, monkeypatch
+    )
     _create_and_readback(
         database_engine, redis_client, case, gateway_wire, ids, monkeypatch
     )
@@ -320,7 +322,7 @@ def _submit_waiting_for_cover(
     return ids
 
 
-def _finish_cover(database_engine, redis_client, case, wire, remote, ids):
+def _finish_cover(database_engine, redis_client, case, wire, remote, ids, monkeypatch):
     """实际 SOURCE 图片上传→IMAGE 共享→目标图片核实，禁止目标直接重传。"""
     from datetime import UTC, datetime, timedelta
 
@@ -403,6 +405,19 @@ def _finish_cover(database_engine, redis_client, case, wire, remote, ids):
         wire["before"]["callback"] = None
     _reply(wire, "file_image_ad_info_get", {"list": [image]})
     assert advance(source_id, read=True).status == "READY"
+    # 来源等待已经落到持久依赖，不能用空dispatch_id直接执行目标。
+    # 推进测试时钟到修复期限，走正式Beat修复函数生成原目标的下一投递。
+    from app.modules.materials import covers
+
+    with Session(database_engine) as db, db.begin():
+        waiting = db.get(MaterialCoverJob, job_id)
+        assert waiting.dispatch_id is None
+        assert waiting.error_code == "cover_source_pending"
+        due = waiting.repair_after + timedelta(seconds=1)
+        with monkeypatch.context() as patch:
+            patch.setattr(covers, "_now", lambda: due)
+            assert covers.repair_cover_dispatches(db) >= 1
+        assert waiting.dispatch_id is not None
 
     def page(rows):
         return {

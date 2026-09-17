@@ -29,7 +29,7 @@ def ready(**_kwargs):
 def blocked_material():
     with Redis.from_url(broker) as redis:
         redis.lpush(prefix + "started", "material")
-        redis.blpop(prefix + "release", timeout=20)
+        redis.blpop(prefix + "release", timeout=60)
 
 
 @app.task(name="test.isolation.ad")

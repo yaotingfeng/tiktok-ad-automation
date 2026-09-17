@@ -29,7 +29,13 @@ from tests.modules.builds.test_execution import executable as executable
 
 @pytest.mark.parametrize(
     "executable, lose_campaign_receipt, remote_match",
-    [(1, False, True), (1, True, True), (1, True, False), (2, False, True)],
+    [
+        (1, False, True),
+        (1, True, True),
+        (1, True, False),
+        (2, False, True),
+        (12, False, True),
+    ],
     indirect=["executable"],
 )
 def test_outbox_builds_and_reads_all_layers_without_repeating_any_create(
@@ -38,6 +44,10 @@ def test_outbox_builds_and_reads_all_layers_without_repeating_any_create(
     db, context, _ = executable
     with Session(db) as session:
         unit_count = len(session.exec(select(SubmissionUnit)).all())
+    if unit_count > 2:
+        from app.modules.builds import execution_window
+
+        monkeypatch.setattr(execution_window, "MAX_ACTIVE_UNITS", 10)
     monkeypatch.setattr(reconciliation, "require_bounded_worker", lambda: None)
     remote, calls = {}, []
 
@@ -99,7 +109,7 @@ def test_outbox_builds_and_reads_all_layers_without_repeating_any_create(
         )
 
     monkeypatch.setattr("urllib3.PoolManager.request", transport)
-    for _ in range(150):
+    for _ in range(max(150, unit_count * 40)):
         with Session(db) as session, session.begin():
             message = session.exec(
                 select(PendingDispatch)
@@ -138,6 +148,32 @@ def test_outbox_builds_and_reads_all_layers_without_repeating_any_create(
                 continue
             if repair_execution(database_engine=db):
                 continue
+            if unit_count > 2:
+                from time import sleep
+
+                with Session(db) as session:
+                    next_due = session.exec(
+                        select(PendingDispatch.available_at)
+                        .where(
+                            col(PendingDispatch.task_name).in_(
+                                [UNIT_TASK, STEP_TASK, READ_TASK]
+                            ),
+                            col(PendingDispatch.published_at).is_(None),
+                            PendingDispatch.available_at > datetime.now(UTC),
+                        )
+                        .order_by(PendingDispatch.available_at)
+                        .limit(1)
+                    ).first()
+                if next_due is not None:
+                    # 大于测试额度窗口的调用必须等待真实Redis退避，不能把
+                    # 尚未到期误当成图已收敛，也不删除限流键来伪造吞吐。
+                    sleep(
+                        min(
+                            15,
+                            max(0.05, (next_due - datetime.now(UTC)).total_seconds()),
+                        )
+                    )
+                    continue
             break
         if name == UNIT_TASK:
             process_unit(database_engine=db, context=context, payload=payload)
@@ -439,6 +475,106 @@ def test_future_unarmed_cover_waits_for_its_build_window(executable, redis_clien
         first.status, first.phase = "UNKNOWN", "DONE"
         covers.repair_cover_dispatches(session)
         assert job.dispatch_id is not None and job.request_armed_at is None
+
+
+@pytest.mark.parametrize("executable", [3], indirect=True)
+def test_cover_planner_does_not_pull_future_queued_jobs_into_current_batch(executable):
+    from app.modules.builds.preview_models import BuildUnit
+    from app.modules.builds.routes import load_preview_route
+    from app.modules.materials import cover_sharing, covers
+    from app.modules.materials.cover_models import MaterialCoverJob
+    from app.modules.materials.models import AccountMaterial, MaterialFile
+
+    database, context, _ = executable
+    with Session(database) as db, db.begin():
+        units = db.exec(select(SubmissionUnit).order_by(SubmissionUnit.unit_id)).all()
+        first_step = db.exec(
+            select(ExecutionStep).where(
+                ExecutionStep.unit_id == units[0].unit_id,
+                ExecutionStep.kind == "MATERIAL",
+            )
+        ).first()
+        material = db.get(MaterialFile, first_step.material_id)
+        material.video_md5 = "a" * 32
+        route = load_preview_route(
+            db, context=context, preview_id=first_step.preview_id
+        )
+        jobs = []
+        for index, unit in enumerate(units):
+            frozen = db.get(BuildUnit, unit.unit_id)
+            asset = db.exec(
+                select(AccountMaterial).where(
+                    AccountMaterial.material_id == material.id,
+                    AccountMaterial.advertiser_id == frozen.advertiser_id,
+                )
+            ).one()
+            asset.image_id = None
+            method = covers.ensure_source_cover if index == 2 else covers.ensure_cover
+            result = method(
+                db,
+                context=context,
+                bc_id=first_step.bc_id,
+                material_id=material.id,
+                advertiser_id=frozen.advertiser_id,
+                task_key=f"window-plan-{index}",
+                route=route,
+            )
+            job = db.get(MaterialCoverJob, result.task_id)
+            jobs.append(job)
+            if index < 2:
+                step = db.exec(
+                    select(ExecutionStep).where(
+                        ExecutionStep.unit_id == unit.unit_id,
+                        ExecutionStep.kind == "MATERIAL",
+                        ExecutionStep.material_id == material.id,
+                    )
+                ).one()
+                step.cover_job_id = job.id
+            else:
+                job.status, job.request_armed_at = "READY", datetime.now(UTC)
+                job.known_image_id, job.signature = "tos-source-window", "b" * 32
+                job.candidate_image_id = None
+                job.width, job.height, job.image_mid = 720, 1280, "900000"
+                job.dispatch_id = None
+                asset.image_id = job.known_image_id
+        first, future, _ = jobs
+        claimed = covers._claim_in_session(
+            db, context, first.id, first.dispatch_id, first.revision, read=False
+        )
+        assert claimed is not None
+        prepared = cover_sharing._prepare(db, context, *claimed)
+        assert prepared is not None
+        batch, _ = prepared
+        assert {member["job_id"] for member in batch.members} == {str(first.id)}
+        db.refresh(future)
+        assert future.share_batch_id is None and future.request_armed_at is None
+
+
+@pytest.mark.parametrize("executable", [12], indirect=True)
+def test_parallel_window_is_bounded_and_replaces_blocked_unit(executable, monkeypatch):
+    from app.modules.builds import execution_window
+
+    monkeypatch.setattr(execution_window, "MAX_ACTIVE_UNITS", 10, raising=False)
+    database, context, _ = executable
+    with Session(database) as db, db.begin():
+        admitted = db.exec(execution_window.window_units()).all()
+        assert len(admitted) == 10
+        assert all(
+            execution_window.material_unit_admitted(
+                db, tenant_id=context.tenant_id, submission_id=row[1], unit_id=row[2]
+            )
+            for row in admitted
+        )
+        blocked = admitted[0][2]
+        step = db.exec(
+            select(ExecutionStep).where(
+                ExecutionStep.unit_id == blocked, ExecutionStep.kind == "MATERIAL"
+            )
+        ).first()
+        step.status, step.phase = "UNKNOWN", "DONE"
+        after = db.exec(execution_window.window_units()).all()
+        assert len(after) == 10 and blocked not in {row[2] for row in after}
+        assert len({row[2] for row in after} - {row[2] for row in admitted}) == 1
 
 
 def test_readback_receipt_lost_before_continuation_keeps_read_delivery(executable):

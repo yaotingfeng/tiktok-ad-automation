@@ -315,6 +315,8 @@ def _prepare(
         else:
             covers._stop(anchor, "cover_source_unavailable", unknown=False)
         return None
+    from app.modules.builds.execution_window import cover_admission_condition
+
     conditions = (
         MaterialCoverJob.tenant_id == first.tenant_id,
         MaterialCoverJob.bc_id == first.bc_id,
@@ -323,6 +325,7 @@ def _prepare(
         MaterialCoverJob.frozen_route == first.frozen_route,
         MaterialCoverJob.purpose == "BUILD",
         MaterialCoverJob.status == "PENDING",
+        cover_admission_condition(),
         col(MaterialCoverJob.error_code).is_distinct_from("cover_window_wait"),
         col(MaterialCoverJob.share_batch_id).is_(None),
         col(MaterialCoverJob.request_armed_at).is_(None),
