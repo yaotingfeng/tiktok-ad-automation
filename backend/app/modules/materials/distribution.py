@@ -1701,14 +1701,32 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
     message after a grace period; never manufacture revisions or touch pending
     broker backoff. Eligibility is filtered in SQL before applying the row limit.
     """
-    from sqlalchemy import String, and_, cast, func, or_
+    from sqlalchemy import String, and_, case, cast, func, or_, text
+    from sqlalchemy.dialects.postgresql import UUID as SQLUUID
 
     from .models import MaterialFile, MaterialUploadAttempt, ObjectUpload
 
     if type(limit) is not int or not 0 < limit <= 100:
         raise DomainError("invalid_asset_task", "素材恢复批量上限为 100")
+    # Worker 硬终止不会立即取消服务器上的长 SQL；数据库自身必须先超时。
+    session.connection().execute(text("SET LOCAL statement_timeout = '10s'"))
+    session.connection().execute(text("SET LOCAL lock_timeout = '2s'"))
+    # 短周期恢复只取 100 条，避免复杂 EXISTS 触发的 JIT 编译挤占本轮预算。
+    session.connection().execute(text("SET LOCAL jit = off"))
     now = datetime.now(UTC)
     payload = col(PendingDispatch.payload)
+
+    def payload_uuid(key: str):
+        value = payload[key].astext
+        # 转换消息引用而非已索引的主键；非法旧消息只是不匹配，不能炸掉整轮。
+        return case(
+            (
+                value.op("~")("^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$"),
+                cast(value, SQLUUID),
+            ),
+            else_=None,
+        )
+
     remote = col(MaterialAssetOperation.remote_response)
     op_owner = (
         select(MaterialUploadAttempt.id)
@@ -1734,8 +1752,7 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
         select(MaterialAssetOperation.id)
         .where(
             MaterialAssetOperation.tenant_id == PendingDispatch.tenant_id,
-            payload["operation_id"].astext
-            == cast(col(MaterialAssetOperation.id), String),
+            payload_uuid("operation_id") == MaterialAssetOperation.id,
             col(PendingDispatch.task_name).in_(
                 ["materials.upload_original", "materials.verify_original"]
             ),
@@ -1783,10 +1800,8 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
         )
         .where(
             MaterialDistribution.tenant_id == PendingDispatch.tenant_id,
-            payload["distribution_id"].astext
-            == cast(col(MaterialDistribution.id), String),
-            payload["operation_id"].astext
-            == cast(col(MaterialAssetOperation.id), String),
+            payload_uuid("distribution_id") == MaterialDistribution.id,
+            payload_uuid("operation_id") == MaterialAssetOperation.id,
             col(PendingDispatch.task_name).in_(
                 ["materials.prepare_target", "materials.verify_target"]
             ),
@@ -1812,6 +1827,14 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
     rows = session.exec(
         select(PendingDispatch)
         .where(
+            col(PendingDispatch.task_name).in_(
+                [
+                    "materials.upload_original",
+                    "materials.verify_original",
+                    "materials.prepare_target",
+                    "materials.verify_target",
+                ]
+            ),
             col(PendingDispatch.published_at) <= now - timedelta(seconds=120),
             PendingDispatch.available_at <= now,
             or_(source_work, original_work, target_work),
