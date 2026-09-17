@@ -1032,3 +1032,104 @@ def test_foreign_tenant_or_actor_cannot_claim_existing_batch_candidates(
             )
     assert [state(task)[0].status for task in tasks] == ["queued"] * 4
     assert not gateway_wire["wire"].calls
+
+
+@pytest.mark.parametrize("gateway_case", ["OFFICIAL_MCP"], indirect=True)
+def test_shared_video_discovery_pages_twenty_mids_without_repeating_share(
+    share_case, database_engine, gateway_wire, redis_client, monkeypatch
+):
+    """平台最多接收 20 个 MID；21 个已共享成员必须分批核实并全部落账。"""
+    import httpx2
+
+    from app.integrations.tiktok.mcp import transport
+    from app.modules.materials.models import (
+        MaterialAssetOperation,
+        MaterialDistribution,
+    )
+
+    tasks, rows = seed_rectangle(share_case, database_engine, materials=21, targets=1)
+    names = prepare_wire(gateway_wire, rows)
+    with Session(database_engine) as db, db.begin():
+        by_mid = {}
+        for index, task in enumerate(tasks):
+            dist = db.get(MaterialDistribution, task)
+            op = db.get(MaterialAssetOperation, dist.operation_id)
+            # 模拟已持久化的共享成功状态，验证过程不得再发共享写请求。
+            dist.status = op.status = "verifying"
+            op.remote_response = {
+                **op.remote_response,
+                "transport": "native_share",
+                "source_mid": rows[index]["material_id"],
+                "share_batch_id": str(uuid4()),
+                "remote_name": rows[index]["file_name"],
+            }
+            by_mid[op.remote_response["source_mid"]] = {
+                **rows[index],
+                "video_id": f"target-video-{index}",
+                "file_name": op.remote_response["remote_name"],
+                "size": 120,
+                "width": 720,
+                "height": 1280,
+                "duration": 10,
+                "format": "mp4",
+            }
+    original_transport = transport._new_http_transport
+    search_sizes = []
+
+    class SearchLimitTransport(httpx2.AsyncBaseTransport):
+        def __init__(self):
+            self.inner = original_transport()
+
+        async def handle_async_request(self, request):
+            body = json.loads(request.content) if request.content else {}
+            if (
+                body.get("method") == "tools/call"
+                and body["params"]["name"] == names["materials.search_videos"]
+            ):
+                mids = body["params"]["arguments"]["filtering"]["material_ids"]
+                search_sizes.append(len(mids))
+                data = {
+                    "list": [by_mid[mid] for mid in mids],
+                    "page_info": {
+                        "page": 1,
+                        "page_size": 100,
+                        "total_page": 1,
+                        "total_number": len(mids),
+                    },
+                }
+                result = (
+                    {"code": 40002, "data": {}}
+                    if len(mids) > 20
+                    else {"code": 0, "data": data}
+                )
+                return httpx2.Response(
+                    200,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": {"content": [], "structuredContent": result},
+                    },
+                )
+            return await self.inner.handle_async_request(request)
+
+        async def aclose(self):
+            await self.inner.aclose()
+
+    monkeypatch.setattr(transport, "_new_http_transport", SearchLimitTransport)
+    for _ in range(2):
+        pending = [task for task in tasks if state(task)[0].status != "ready"]
+        assert pending
+        run(share_case, redis_client, pending[0])
+        if len(search_sizes) == 1:
+            assert sum(state(task)[0].status == "ready" for task in tasks) == 20, [
+                (state(task)[0].status, state(task)[0].reason_code) for task in tasks
+            ]
+    assert search_sizes == [20, 1]
+    assert [state(task)[0].status for task in tasks] == ["ready"] * 21
+    shares = [
+        call
+        for call in gateway_wire["wire"].calls
+        if call.get("method") == "tools/call"
+        and call["params"]["name"] == names["materials.share_assets"]
+    ]
+    assert shares == []

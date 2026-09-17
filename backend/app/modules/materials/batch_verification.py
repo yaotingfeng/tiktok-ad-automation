@@ -120,7 +120,9 @@ def try_verify_batch(
                 case((col(MaterialDistribution.id) == anchor.id, 0), else_=1),
                 col(MaterialDistribution.material_id),
             )
-            .limit(50)
+            # 搜索的 material_ids 上限是 20，不是详情批读的 50；超过后
+            # 平台固定返回 40002，原任务会一直验证失败且无法发布目标映射。
+            .limit(20 if discover else 50)
         ).all()
         if len(selected) < (1 if discover else 2) or not any(
             dist.id == anchor.id for dist, _ in selected
