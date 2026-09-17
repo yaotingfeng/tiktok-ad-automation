@@ -612,6 +612,22 @@ def _claim_in_session(
         return None
     if job.claimed_until and job.claimed_until > _now():
         return None
+    if (
+        not read
+        and job.purpose == "BUILD"
+        and job.request_armed_at is None
+        and job.share_batch_id is None
+    ):
+        from app.modules.builds.execution_window import cover_job_admitted
+
+        if not cover_job_admitted(session, tenant_id=job.tenant_id, job_id=job.id):
+            # 已排队的未来封面也必须遵守正式搭建窗口。只暂停未发送准备；
+            # 来源封面和已发送/显式只读核查始终保留原恢复路径。
+            job.status, job.error_code = "PENDING", "cover_window_wait"
+            job.claim_token = job.claimed_until = job.dispatch_id = None
+            job.updated_at = _now()
+            job.repair_after = _now() + timedelta(seconds=CLAIM_SECONDS)
+            return None
     if job.request_armed_at is not None and not read:
         _queue(session, job, read=True)
         return None
@@ -1680,12 +1696,18 @@ def _run_known_cover_group(
 
 
 def repair_cover_dispatches(session: Session, *, limit: int = 100) -> int:
+    from app.modules.builds.execution_window import active_cover_job_ids
+
     if type(limit) is not int or not 1 <= limit <= 100:
         raise ValueError("Cover repair limit must be between 1 and 100")
     jobs = session.exec(
         select(MaterialCoverJob)
         .where(
             col(MaterialCoverJob.status).in_(["PENDING", "PREPARING", "VERIFYING"]),
+            or_(
+                col(MaterialCoverJob.error_code).is_distinct_from("cover_window_wait"),
+                col(MaterialCoverJob.id).in_(active_cover_job_ids()),
+            ),
             or_(
                 col(MaterialCoverJob.share_batch_id).is_(None),
                 col(MaterialCoverJob.dispatch_id).is_not(None),
@@ -1706,6 +1728,54 @@ def repair_cover_dispatches(session: Session, *, limit: int = 100) -> int:
     count = 0
     now = _now()
     for job in jobs:
+        if job.error_code == "cover_window_wait":
+            job.error_code = None
+        if (
+            job.status == "PENDING"
+            and job.error_code == "cover_source_pending"
+            and job.dispatch_id is None
+        ):
+            from .cover_sharing import _content_material_ids, _source
+
+            context = TenantContext(
+                tenant_id=job.tenant_id, actor_id=job.actor_id, role="operator"
+            )
+            try:
+                source = _source(session, context, job)
+                preparing = session.exec(
+                    select(MaterialCoverJob.id)
+                    .where(
+                        MaterialCoverJob.tenant_id == job.tenant_id,
+                        MaterialCoverJob.bc_id == job.bc_id,
+                        col(MaterialCoverJob.material_id).in_(
+                            _content_material_ids(session, context, job)
+                        ),
+                        MaterialCoverJob.purpose == "SOURCE",
+                        col(MaterialCoverJob.status).in_(
+                            ["PENDING", "PREPARING", "VERIFYING"]
+                        ),
+                    )
+                    .limit(1)
+                ).first()
+                if source is None and preparing is not None:
+                    job.repair_after = now + timedelta(seconds=CLAIM_SECONDS)
+                    continue
+                # 来源已就绪或已落定失败：重新走原执行器的权限/来源检查，
+                # 不把观察到的状态当成共享成功，也不重发已发送的来源上传。
+                job.error_code = None
+                _queue(
+                    session,
+                    job,
+                    read=bool(
+                        job.request_armed_at
+                        or job.known_image_id
+                        or job.candidate_image_id
+                    ),
+                )
+            except DomainError as error:
+                _stop(job, error.code, unknown=bool(job.request_armed_at))
+            count += 1
+            continue
         dispatch = session.exec(
             select(PendingDispatch)
             .where(PendingDispatch.id == job.dispatch_id)

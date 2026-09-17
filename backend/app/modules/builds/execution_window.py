@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, tuple_
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
@@ -64,3 +64,39 @@ def material_unit_admitted(
         )
     ).first()
     return selected is not None and selected[2] == unit_id
+
+
+def active_cover_job_ids():
+    return select(ExecutionStep.cover_job_id).where(
+        col(ExecutionStep.cover_job_id).is_not(None),
+        tuple_(
+            col(ExecutionStep.tenant_id),
+            col(ExecutionStep.submission_id),
+            col(ExecutionStep.unit_id),
+        ).in_(window_units()),
+    )
+
+
+def cover_job_admitted(session: Session, *, tenant_id: UUID, job_id: UUID) -> bool:
+    dependent = session.exec(
+        select(ExecutionStep.id)
+        .where(
+            ExecutionStep.tenant_id == tenant_id,
+            ExecutionStep.cover_job_id == job_id,
+        )
+        .limit(1)
+    ).first()
+    # 未绑定搭建步骤的素材库操作不受搭建窗口限制；共享依赖任一当前
+    # 组合即准入，不根据某一个历史消费者擅自阻断其他使用者。
+    return (
+        dependent is None
+        or session.exec(
+            active_cover_job_ids()
+            .where(
+                ExecutionStep.tenant_id == tenant_id,
+                ExecutionStep.cover_job_id == job_id,
+            )
+            .limit(1)
+        ).first()
+        is not None
+    )

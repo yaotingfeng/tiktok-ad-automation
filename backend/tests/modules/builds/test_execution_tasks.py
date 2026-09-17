@@ -372,6 +372,75 @@ def test_cover_result_after_video_expiry_runs_refresh_before_success(
         assert step.distribution_id and step.dispatch_id is None
 
 
+@pytest.mark.parametrize("executable", [2], indirect=True)
+def test_future_unarmed_cover_waits_for_its_build_window(executable, redis_client):
+    from app.modules.builds.preview_models import BuildUnit
+    from app.modules.builds.routes import load_preview_route
+    from app.modules.materials import covers
+    from app.modules.materials.cover_models import MaterialCoverJob
+    from app.modules.materials.models import AccountMaterial, MaterialFile
+
+    db, context, _ = executable
+    with Session(db) as session, session.begin():
+        units = session.exec(
+            select(SubmissionUnit).order_by(SubmissionUnit.unit_id)
+        ).all()
+        first_unit_id = units[0].unit_id
+        step = session.exec(
+            select(ExecutionStep).where(
+                ExecutionStep.unit_id == units[1].unit_id,
+                ExecutionStep.kind == "MATERIAL",
+            )
+        ).first()
+        frozen = session.get(BuildUnit, step.unit_id)
+        session.get(MaterialFile, step.material_id).video_md5 = "a" * 32
+        asset = session.exec(
+            select(AccountMaterial).where(
+                AccountMaterial.material_id == step.material_id,
+                AccountMaterial.advertiser_id == frozen.advertiser_id,
+            )
+        ).one()
+        asset.image_id = None
+        prepared = covers.ensure_cover(
+            session,
+            context=context,
+            bc_id=step.bc_id,
+            material_id=step.material_id,
+            advertiser_id=frozen.advertiser_id,
+            task_key="future-window-cover",
+            route=load_preview_route(
+                session, context=context, preview_id=step.preview_id
+            ),
+        )
+        step.cover_job_id = prepared.task_id
+        job = session.get(MaterialCoverJob, prepared.task_id)
+        identity, dispatch_id, revision = job.id, job.dispatch_id, job.revision
+    covers.run_cover(
+        database_engine=db,
+        redis_client=redis_client,
+        context=context,
+        job_id=identity,
+        dispatch_id=dispatch_id,
+        revision=revision,
+        read=False,
+    )
+    with Session(db) as session, session.begin():
+        job = session.get(MaterialCoverJob, identity)
+        assert job.status == "PENDING" and job.error_code == "cover_window_wait"
+        assert job.dispatch_id is None and job.request_armed_at is None
+        job.repair_after = datetime.now(UTC) - timedelta(seconds=1)
+        covers.repair_cover_dispatches(session)
+        assert job.dispatch_id is None
+        first = session.exec(
+            select(ExecutionStep).where(
+                ExecutionStep.unit_id == first_unit_id, ExecutionStep.kind == "MATERIAL"
+            )
+        ).first()
+        first.status, first.phase = "UNKNOWN", "DONE"
+        covers.repair_cover_dispatches(session)
+        assert job.dispatch_id is not None and job.request_armed_at is None
+
+
 def test_readback_receipt_lost_before_continuation_keeps_read_delivery(executable):
     from app.modules.builds.dispatch import queue_step
 

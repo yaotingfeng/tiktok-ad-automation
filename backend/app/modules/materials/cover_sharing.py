@@ -293,16 +293,25 @@ def _prepare(
         ).first()
         if preparing or started:
             # 自动提升可能沿用持有图片候选的当前 job；续跑不能绕过库存只读核查。
-            covers._queue(
-                db,
-                anchor,
-                read=bool(
-                    anchor.request_armed_at
-                    or anchor.known_image_id
-                    or anchor.candidate_image_id
-                ),
-                delay=5,
-            )
+            if anchor.purpose == "SOURCE":
+                covers._queue(
+                    db,
+                    anchor,
+                    read=bool(
+                        anchor.request_armed_at
+                        or anchor.known_image_id
+                        or anchor.candidate_image_id
+                    ),
+                )
+            else:
+                # 目标等待来源时不再次投递自己，否则同队列中的来源核验会
+                # 被大量目标轮询挤压。来源落定后由持久恢复检查唤醒原任务。
+                anchor.status, anchor.error_code = "PENDING", "cover_source_pending"
+                anchor.claim_token = anchor.claimed_until = anchor.dispatch_id = None
+                anchor.updated_at = covers._now()
+                anchor.repair_after = covers._now() + timedelta(
+                    seconds=covers.CLAIM_SECONDS
+                )
         else:
             covers._stop(anchor, "cover_source_unavailable", unknown=False)
         return None
@@ -314,6 +323,7 @@ def _prepare(
         MaterialCoverJob.frozen_route == first.frozen_route,
         MaterialCoverJob.purpose == "BUILD",
         MaterialCoverJob.status == "PENDING",
+        col(MaterialCoverJob.error_code).is_distinct_from("cover_window_wait"),
         col(MaterialCoverJob.share_batch_id).is_(None),
         col(MaterialCoverJob.request_armed_at).is_(None),
         col(MaterialCoverJob.known_image_id).is_(None),

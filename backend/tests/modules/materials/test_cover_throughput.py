@@ -181,6 +181,13 @@ def matrix(env, count=2, targets=2):
 
 def drive(env, redis_client, identity, *, read=False):
     for _ in range(1000):
+        job = job_state(identity)
+        if job.dispatch_id is None and job.error_code == "cover_source_pending":
+            # 持久等待没有可消费消息；模拟下一轮正式恢复检查，不直接重跑空投递。
+            with Session(engine) as db, db.begin():
+                db.get(MaterialCoverJob, identity).repair_after = datetime.now(UTC)
+                covers.repair_cover_dispatches(db)
+            assert job_state(identity).dispatch_id is not None
         run(env, redis_client, identity, read=read)
         job = job_state(identity)
         if job.share_batch_id:
@@ -712,6 +719,96 @@ def test_overlapping_inventory_pages_require_complete_unique_census_before_share
     if not eventually_complete:
         assert current.error_code == "cover_search_incomplete"
         assert current.dispatch_id is None and current.request_armed_at is None
+
+
+def test_target_waits_for_source_cover_without_polling_outbox(
+    source_env, redis_client, wire
+):
+    from datetime import timedelta
+
+    from app.jobs.models import PendingDispatch
+
+    identity = matrix(source_env, 1, 1)[0]
+    with Session(engine) as db, db.begin():
+        source = db.exec(
+            select(MaterialCoverJob).where(
+                MaterialCoverJob.material_id == source_env["material_id"],
+                MaterialCoverJob.purpose == "SOURCE",
+            )
+        ).one()
+        source.status = "VERIFYING"
+        source_id = source.id
+    run(source_env, redis_client, identity)
+    current = job_state(identity)
+    assert current.status == "PENDING" and current.dispatch_id is None
+    assert current.error_code == "cover_source_pending"
+    with Session(engine) as db:
+        original = {
+            row.id
+            for row in db.exec(select(PendingDispatch)).all()
+            if row.payload.get("job_id") == str(identity)
+        }
+    for _ in range(3):
+        with Session(engine) as db, db.begin():
+            db.get(MaterialCoverJob, identity).repair_after = datetime.now(
+                UTC
+            ) - timedelta(seconds=1)
+            covers.repair_cover_dispatches(db)
+    assert job_state(identity).dispatch_id is None
+    with Session(engine) as db, db.begin():
+        assert {
+            row.id
+            for row in db.exec(select(PendingDispatch)).all()
+            if row.payload.get("job_id") == str(identity)
+        } == original
+        db.get(MaterialCoverJob, source_id).status = "READY"
+        db.get(MaterialCoverJob, identity).repair_after = datetime.now(UTC) - timedelta(
+            seconds=1
+        )
+        covers.repair_cover_dispatches(db)
+    assert job_state(identity).dispatch_id is not None
+    assert wire[0] == []
+
+
+def test_retry_after_inventory_changed_starts_new_census_before_share(
+    source_env, redis_client, wire
+):
+    identity = matrix(source_env, 1, 1)[0]
+
+    def inventory(indices, page_number, total):
+        return {
+            "list": [image(index, target_id=True) for index in indices],
+            "page_info": {
+                "page": page_number,
+                "page_size": 100,
+                "total_page": 2,
+                "total_number": total,
+            },
+        }
+
+    wire[1].extend(
+        [
+            {"list": [image(0)]},
+            inventory(range(1, 101), 1, 102),
+            inventory([101, 102, 103], 2, 103),
+        ]
+    )
+    run(source_env, redis_client, identity)
+    run(source_env, redis_client, identity)
+    assert job_state(identity).status == "BLOCKED"
+    assert not any(call[0] == "POST" for call in wire[0])
+    with Session(engine) as db, db.begin():
+        covers.request_cover_retry(db, context=source_env["context"], job_id=identity)
+    wire[1].extend(
+        [
+            inventory(range(1, 101), 1, 103),
+            inventory([101, 102, 103], 2, 103),
+            {"failed_infos": {}},
+        ]
+    )
+    drive(source_env, redis_client, identity)
+    assert job_state(identity).status == "VERIFYING"
+    assert sum(call[0] == "POST" for call in wire[0]) == 1
 
 
 def test_source_mid_change_between_pages_stops_before_share(
