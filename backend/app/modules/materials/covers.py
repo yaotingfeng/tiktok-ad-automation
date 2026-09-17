@@ -7,7 +7,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from redis import Redis
-from sqlalchemy import Engine, and_, func, or_, union_all
+from sqlalchemy import Engine, and_, func, or_, tuple_, union_all
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
@@ -1814,7 +1814,7 @@ def repair_cover_dispatches(session: Session, *, limit: int = 100) -> int:
 
     if type(limit) is not int or not 1 <= limit <= 100:
         raise ValueError("Cover repair limit must be between 1 and 100")
-    jobs = session.exec(
+    candidates_query = (
         select(MaterialCoverJob)
         .where(
             col(MaterialCoverJob.status).in_(["PENDING", "PREPARING", "VERIFYING"]),
@@ -1849,6 +1849,31 @@ def repair_cover_dispatches(session: Session, *, limit: int = 100) -> int:
         )
         .order_by(col(MaterialCoverJob.repair_after), col(MaterialCoverJob.id))
         .limit(limit)
+    )
+    candidates = session.exec(candidates_query).all()
+    if not candidates:
+        return 0
+    # 多次UPDATE投递身份时，外键检查也会隐式取得素材KEY SHARE锁。
+    # 必须先按统一material→job顺序领取；忙碌素材留给下一轮，不能先锁
+    # 住封面再阻塞视频批读。候选和所有锁均限制在本轮最多100项范围内。
+    material_ids = session.exec(
+        select(MaterialFile.id)
+        .where(
+            tuple_(col(MaterialFile.tenant_id), col(MaterialFile.id)).in_(
+                {(job.tenant_id, job.material_id) for job in candidates}
+            )
+        )
+        .order_by(col(MaterialFile.id))
+        .with_for_update(skip_locked=True)
+    ).all()
+    if not material_ids:
+        return 0
+    jobs = session.exec(
+        candidates_query.where(
+            col(MaterialCoverJob.id).in_({job.id for job in candidates}),
+            col(MaterialCoverJob.material_id).in_(material_ids),
+        )
+        .execution_options(populate_existing=True)
         .with_for_update(skip_locked=True)
     ).all()
     count = 0

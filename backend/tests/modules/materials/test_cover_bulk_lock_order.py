@@ -32,6 +32,47 @@ from tests.modules.materials.test_cover_bulk_verification import (
 
 
 @pytest.mark.parametrize("gateway_case", ["OFFICIAL_API"], indirect=True)
+@pytest.mark.parametrize("count", [1, 2])
+def test_repair_skips_material_locked_by_video_verification(
+    cover_env, database_engine, count
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import timedelta
+
+    from sqlalchemy import text
+    from sqlmodel import select
+
+    from app.modules.materials import covers
+    from app.modules.materials.models import MaterialFile
+
+    identities = known_jobs(cover_env, database_engine, count)
+    with Session(database_engine) as db, db.begin():
+        for identity in identities:
+            current = db.get(MaterialCoverJob, identity)
+            current.dispatch_id = None
+            current.repair_after = covers._now() - timedelta(minutes=1)
+        material_id = db.get(MaterialCoverJob, identities[0]).material_id
+
+    def repair():
+        with Session(database_engine) as db, db.begin():
+            db.execute(text("SET LOCAL statement_timeout='2s'"))
+            return covers.repair_cover_dispatches(db)
+
+    # 视频发布先锁素材；修复不能反持封面再等待它，否则批量核验会形成锁环。
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with Session(database_engine) as holder, holder.begin():
+            holder.exec(
+                select(MaterialFile)
+                .where(MaterialFile.id == material_id)
+                .with_for_update()
+            ).one()
+            assert pool.submit(repair).result(timeout=5) == count - 1
+    with Session(database_engine) as db, db.begin():
+        assert covers.repair_cover_dispatches(db) == 1
+    assert all(job(database_engine, identity).dispatch_id for identity in identities)
+
+
+@pytest.mark.parametrize("gateway_case", ["OFFICIAL_API"], indirect=True)
 def test_every_bulk_transaction_locks_cover_ids_in_same_order_as_ad_refresh(
     cover_env, gateway_wire, database_engine, redis_client
 ):
