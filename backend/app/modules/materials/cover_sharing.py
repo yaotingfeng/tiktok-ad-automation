@@ -52,7 +52,11 @@ def _content_material_ids(
 
 
 def _source(
-    db: Session, context: TenantContext, target: MaterialCoverJob
+    db: Session,
+    context: TenantContext,
+    target: MaterialCoverJob,
+    *,
+    checks: covers._CoverAccessChecks | None = None,
 ) -> MaterialCoverJob | None:
     # 历史实际上传的 READY 图片也属于有效源；共享得到的目标图片不冒充所有者。
     rows = db.exec(
@@ -88,7 +92,7 @@ def _source(
         ):
             continue
         try:
-            covers._access(db, context, source)
+            covers._access(db, context, source, checks=checks)
             route = load_material_route(
                 target.frozen_route, context=context, bc_id=target.bc_id
             )
@@ -302,31 +306,61 @@ def _prepare(
         else:
             covers._stop(anchor, "cover_source_unavailable", unknown=False)
         return None
+    conditions = (
+        MaterialCoverJob.tenant_id == first.tenant_id,
+        MaterialCoverJob.bc_id == first.bc_id,
+        MaterialCoverJob.actor_id == first.actor_id,
+        MaterialCoverJob.connection_id == first.connection_id,
+        MaterialCoverJob.frozen_route == first.frozen_route,
+        MaterialCoverJob.purpose == "BUILD",
+        MaterialCoverJob.status == "PENDING",
+        col(MaterialCoverJob.share_batch_id).is_(None),
+        col(MaterialCoverJob.request_armed_at).is_(None),
+        col(MaterialCoverJob.known_image_id).is_(None),
+    )
+    # 一次远端共享最多20项×10账户。只检查包含当前锚点的一组候选；
+    # 其余任务保留原投递，避免积压越大、每次领取的本地SQL越多而永远超时。
+    material_ids = (
+        select(MaterialCoverJob.material_id)
+        .where(*conditions)
+        .where(MaterialCoverJob.material_id != anchor.material_id)
+        .distinct()
+        .order_by(col(MaterialCoverJob.material_id))
+        .limit(19)
+    )
+    advertisers = (
+        select(MaterialCoverJob.advertiser_id)
+        .where(*conditions)
+        .where(MaterialCoverJob.advertiser_id != anchor.advertiser_id)
+        .distinct()
+        .order_by(col(MaterialCoverJob.advertiser_id))
+        .limit(9)
+    )
     rows = db.exec(
         select(MaterialCoverJob)
+        .where(*conditions)
         .where(
-            MaterialCoverJob.tenant_id == first.tenant_id,
-            MaterialCoverJob.bc_id == first.bc_id,
-            MaterialCoverJob.actor_id == first.actor_id,
-            MaterialCoverJob.connection_id == first.connection_id,
-            MaterialCoverJob.frozen_route == first.frozen_route,
-            MaterialCoverJob.purpose == "BUILD",
-            MaterialCoverJob.status == "PENDING",
-            col(MaterialCoverJob.share_batch_id).is_(None),
-            col(MaterialCoverJob.request_armed_at).is_(None),
-            col(MaterialCoverJob.known_image_id).is_(None),
+            or_(
+                col(MaterialCoverJob.material_id) == anchor.material_id,
+                col(MaterialCoverJob.material_id).in_(material_ids),
+            ),
+            or_(
+                col(MaterialCoverJob.advertiser_id) == anchor.advertiser_id,
+                col(MaterialCoverJob.advertiser_id).in_(advertisers),
+            ),
         )
         .order_by(
             col(MaterialCoverJob.material_id), col(MaterialCoverJob.advertiser_id)
         )
-        .limit(10000)
+        .limit(200)
     ).all()
+    checks = covers._CoverAccessChecks(db, context)
     # 同一平台图片可属于多个本地视频；矩形领取按本地素材保留全部目标 job。
     pairs = {(str(anchor.material_id), anchor.advertiser_id): (anchor, source)}
     sources: dict[UUID, MaterialCoverJob | None] = {anchor.material_id: source}
     for job in rows:
         if job.material_id not in sources:
-            sources[job.material_id] = _source(db, context, job)
+            sources[job.material_id] = _source(db, context, job, checks=checks)
         candidate = sources[job.material_id]
         if candidate and (candidate.advertiser_id, candidate.frozen_route) == (
             source.advertiser_id,
@@ -355,7 +389,13 @@ def _prepare(
             if not job.dispatch_id:
                 raise DomainError("cover_claim_lost", "封面任务缺少调度身份")
             claimed = covers._claim_in_session(
-                db, context, job.id, job.dispatch_id, job.revision, read=False
+                db,
+                context,
+                job.id,
+                job.dispatch_id,
+                job.revision,
+                read=False,
+                checks=checks,
             )
             if claimed is None:
                 # 事务回滚后重新领取，不能发送缺成员的原矩形。
@@ -666,14 +706,22 @@ def _scan(
                 budget=budget("materials.search_images"),
             )
             ids = [row.image_id for row in result.rows]
+            repeated = set(ids).intersection(progress["seen"])
             if (
-                set(ids).intersection(progress["seen"])
+                (repeated and result.total_number is None)
                 or len(set(ids)) != len(ids)
                 or ("total" in progress and progress["total"] != result.total_number)
             ):
                 raise DomainError("cover_search_incomplete", "图片分页范围已变化")
-            progress["seen"].extend(ids)
+            # 平台按修改时间排序，同总数的相邻页也可能重叠。只累计唯一ID，
+            # 达到完整库存计数才允许形成“尚未找到”的结论；不把重复行算成新素材。
+            progress["seen"] = sorted(set(progress["seen"]).union(ids))
             progress["total"] = result.total_number
+            if (
+                result.total_number is not None
+                and len(progress["seen"]) > result.total_number
+            ):
+                raise DomainError("cover_search_incomplete", "图片分页范围已变化")
             for member in members:
                 for row in result.rows:
                     if row.signature != member["signature"]:
@@ -697,6 +745,18 @@ def _scan(
                     raise DomainError(
                         "cover_search_incomplete", "目标图片超过平台可完整搜索范围"
                     )
+                if (
+                    result.total_number is not None
+                    and len(progress["seen"]) < result.total_number
+                ):
+                    # 最多三轮补齐缺失ID，仍不完整就保留阻断，绝不反复自动共享。
+                    rounds = progress.get("round", 1)
+                    if rounds >= 3:
+                        raise DomainError(
+                            "cover_search_incomplete", "图片库存分页仍不完整"
+                        )
+                    progress["round"], progress["page"] = rounds + 1, 1
+                    break
                 progress["done"] = True
             if not progress["done"] and page_number >= 100:
                 raise DomainError(
@@ -744,13 +804,14 @@ def _publish(
         .with_for_update()
     ).all()
     _check(db, context, batch, claims)
+    checks = covers._CoverAccessChecks(db, context)
     for identity, evidence in found.items():
         job = covers._fenced(db, context, identity, claims[identity])
         if job is None:
             raise DomainError("cover_claim_lost", "图片核实发布执行权已变化")
         # 目标图片来自当前账户搜索；此时间表示批次确认，绝不伪造目标图片上传。
         job.request_armed_at = batch.armed_at or covers._now()
-        covers._publish_result(db, context, job, evidence)
+        covers._publish_result(db, context, job, evidence, checks=checks)
 
 
 def run_shared_cover(

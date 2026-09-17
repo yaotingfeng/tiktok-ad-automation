@@ -193,6 +193,52 @@ def drive(env, redis_client, identity, *, read=False):
     pytest.fail("bounded batch continuation did not finish")
 
 
+def test_cover_planning_checks_only_one_twenty_by_ten_window(source_env, wire):
+    """队列超过一组时不能扫描所有来源或按200个成员重复检查共同账户。"""
+    from sqlalchemy import Engine, event
+
+    from app.modules.materials.cover_sharing import _prepare
+
+    identities = matrix(source_env, count=31, targets=10)
+    first = job_state(identities[-1])
+    source_queries, authorization_queries = [], []
+
+    def observe(_connection, _cursor, statement, parameters, *_):
+        if "FROM material_cover_job" in statement and "READY" in parameters.values():
+            source_queries.append(statement)
+        if "bc_connection_binding" in statement:
+            authorization_queries.append(statement)
+
+    event.listen(Engine, "before_cursor_execute", observe)
+    try:
+        with Session(engine) as db:
+            transaction = db.begin()
+            try:
+                claimed = covers._claim_in_session(
+                    db,
+                    source_env["context"],
+                    first.id,
+                    first.dispatch_id,
+                    first.revision,
+                    read=False,
+                )
+                assert claimed is not None
+                prepared = _prepare(db, source_env["context"], *claimed)
+                assert prepared is not None
+                batch, claims = prepared
+                assert first.id in claims
+                assert len(claims) == 200
+                assert len({member["material_id"] for member in batch.members}) == 20
+                assert len({member["advertiser_id"] for member in batch.members}) == 10
+            finally:
+                transaction.rollback()
+    finally:
+        event.remove(Engine, "before_cursor_execute", observe)
+    assert wire[0] == []
+    assert len(source_queries) <= 20, len(source_queries)
+    assert len(authorization_queries) <= 150, len(authorization_queries)
+
+
 @pytest.mark.parametrize("count,targets", [(2, 2), (20, 10)])
 def test_missing_images_share_one_rectangle_and_publish_actual_target_ids(
     source_env, redis_client, wire, count, targets
@@ -617,6 +663,55 @@ def test_image_inventory_scan_persists_progress_with_one_batch_wakeup(
     run(source_env, redis_client, identities[0])
     assert job_state(identities[0]).status == "VERIFYING"
     assert len([call for call in wire[0] if "/file/image/ad/info/" in call[1]]) == 1
+
+
+@pytest.mark.parametrize("eventually_complete", [True, False])
+def test_overlapping_inventory_pages_require_complete_unique_census_before_share(
+    source_env, redis_client, wire, eventually_complete
+):
+    """平台同总数分页会重叠；最多三轮补齐唯一库存，缺项时绝不发送。"""
+    identity = matrix(source_env, 1, 1)[0]
+
+    def inventory(indices, page_number):
+        return {
+            "list": [image(index, target_id=True) for index in indices],
+            "page_info": {
+                "page": page_number,
+                "page_size": 100,
+                "total_page": 2,
+                "total_number": 102,
+            },
+        }
+
+    wire[1].extend(
+        [
+            {"list": [image(0)]},
+            inventory(range(1, 101), 1),
+            inventory([100, 101], 2),
+        ]
+    )
+    run(source_env, redis_client, identity)
+    run(source_env, redis_client, identity)
+    assert job_state(identity).status == "PENDING"
+    assert sum(call[0] == "POST" for call in wire[0]) == 0
+    if eventually_complete:
+        wire[1].extend(
+            [
+                inventory(range(1, 101), 1),
+                inventory([101, 102], 2),
+                {"failed_infos": {}},
+            ]
+        )
+    else:
+        for _ in range(2):
+            wire[1].extend([inventory(range(1, 101), 1), inventory([100, 101], 2)])
+    drive(source_env, redis_client, identity)
+    current = job_state(identity)
+    assert current.status == ("VERIFYING" if eventually_complete else "BLOCKED")
+    assert sum(call[0] == "POST" for call in wire[0]) == int(eventually_complete)
+    if not eventually_complete:
+        assert current.error_code == "cover_search_incomplete"
+        assert current.dispatch_id is None and current.request_armed_at is None
 
 
 def test_source_mid_change_between_pages_stops_before_share(
