@@ -42,7 +42,7 @@ services:
     logging: *production-logging
   worker:
     image: *release-image
-    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, resources, --concurrency=1, '--hostname=resources@%h', --loglevel=INFO]
+    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, 'resources,resource-results', --concurrency=1, '--hostname=resources@%h', --loglevel=INFO]
     cpus: 1.0
     mem_limit: 2048m
     # 素材任务硬截止最长 900 秒，升级时先正常排空再替换镜像。

@@ -32,7 +32,14 @@ celery_app.conf.update(
         "app.modules.builds.scene_tasks",
         "app.modules.builds.recovery_tasks",
     ),
-    task_queues=(Queue("resources"), Queue("builds"), Queue("control")),
+    task_queues=(
+        Queue("resources"),
+        Queue("resource-results"),
+        Queue("builds"),
+        Queue("control"),
+    ),
+    # 同一资源 Worker 交替取准备与结果队列，不额外增加进程或外部调用额度。
+    broker_transport_options={"queue_order_strategy": "round_robin"},
     task_default_queue="control",
     task_create_missing_queues=False,
     task_routes={"jobs.flush_dispatch": {"queue": "control"}},

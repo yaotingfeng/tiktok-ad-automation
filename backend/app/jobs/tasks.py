@@ -13,7 +13,15 @@ from app.core.config import settings
 from app.core.errors import DomainError
 from app.jobs.celery_app import celery_app
 
-_ALLOWED_QUEUES = frozenset({"control", "resources", "builds"})
+_ALLOWED_QUEUES = frozenset({"control", "resources", "resource-results", "builds"})
+_RESOURCE_RESULTS = frozenset(
+    {
+        "materials.verify_target",
+        "materials.verify_original",
+        "materials.prepare_cover",
+        "materials.verify_cover",
+    }
+)
 _DISPATCH_TASKS: dict[str, str] = {}
 
 
@@ -26,6 +34,9 @@ def register_dispatch_task(name: str, queue: str) -> None:
         or name == "jobs.flush_dispatch"
     ):
         raise ValueError("Invalid business dispatch task name")
+    # 已上传资源的核实和封面不能排在整批初始上传后；重复注册仍归一到同一队列。
+    if queue == "resources" and name in _RESOURCE_RESULTS:
+        queue = "resource-results"
     if queue not in _ALLOWED_QUEUES:
         raise ValueError("Unknown dispatch queue")
     if name in _DISPATCH_TASKS and _DISPATCH_TASKS[name] != queue:

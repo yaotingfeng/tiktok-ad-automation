@@ -17,7 +17,7 @@
 - 安装 Python 3.14 / uv、Bun 1.4.2、PostgreSQL 18、Redis 8、Nginx；依赖按仓库锁文件冻结安装。
 - PostgreSQL 和 Redis 只监听 loopback；Nginx 提供测试入口，API 仅监听 `127.0.0.1:18000`。域名/TLS 状态以本次验收记录为准。
 - systemd 管理 API、Linux prefork Worker（小内存主机先使用 2 个进程）与唯一 Beat；禁止 API/代理访问日志采集授权参数。Beat 状态保存在 `/var/lib/tt-ada-staging`。
-- 批处理版本部署使用 `deploy/staging-worker.service`（resources，prefork 2）、`deploy/staging-builds.service`（builds，prefork 1）及 `deploy/staging-control.service`（control，prefork 1），素材等待不再占用广告或调度的执行槽。三个 Worker 加 API、Beat 均使用同一私有配置和版本；正常排空、备份、配置核对、重启及 ping 必须覆盖 `tt-ada-staging-builds`、`tt-ada-staging-control`。新增消费者不扩大共享上游额度，发布后检查内存/交换区，不能仅靠提高并发掩盖队列积压。
+- 批处理版本部署使用 `deploy/staging-worker.service`（resources + resource-results，prefork 2）、`deploy/staging-builds.service`（builds，prefork 1）及 `deploy/staging-control.service`（control，prefork 1）。结果与封面独立排队，由同一资源 Worker 交替消费；首次升级须在完整备份、五服务停止后调用 `app.jobs.result_queue_migration.move_result_messages` 搬移旧结果消息并验证消息摘要多重集合不变。三个 Worker 加 API、Beat 均使用同一私有配置和版本；正常排空、备份、配置核对、重启及 ping 必须覆盖 `tt-ada-staging-builds`、`tt-ada-staging-control`。新增队列不扩大共享上游额度，发布后检查内存/交换区，不能仅靠提高并发掩盖队列积压。
 - 全新空库通过 Alembic 迁移到固定提交的 head，再初始化管理员。缺少 TikTok/R2/版权方配置时保持未配置，素材导入/清理开关关闭。
 - 后续升级先停止接收写入，停止 Beat 并正常排空 Worker，按通用发布手册备份数据库、Redis、项目文件/构建产物及私有配置（无迁移也必须备份）；迁移成功后切换同版本 API/Worker/Beat。不可通过直接改表或删除数据修复迁移。
 - 验证前端构建、Alembic head、登录和受保护接口、入口检查、Redis/数据库、Worker ping、Beat/outbox；外部真实联调单独验收。

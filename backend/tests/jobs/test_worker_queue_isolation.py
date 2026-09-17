@@ -105,3 +105,73 @@ def test_ready_ad_executes_while_all_material_slots_are_blocked(redis_client, po
         owned = list(redis_client.scan_iter(match=prefix + "*"))
         if owned:
             redis_client.delete(*owned)
+
+
+def test_material_results_are_not_behind_entire_preparation_backlog(redis_client):
+    """实际部署模板的资源消费者必须在积压前交替消费核实/封面队列。"""
+    from app.jobs.celery_app import celery_app
+    from app.jobs.tasks import dispatch_queue
+
+    celery_app.loader.import_default_modules()
+    queues, count = deployment_workers()[0]
+    prefix = f"worker-results-{uuid4().hex}:"
+    app = Celery(prefix, broker=os.environ["TEST_REDIS_URL"], set_as_current=False)
+    app.conf.broker_transport_options = {"global_keyprefix": prefix}
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "celery",
+            "-A",
+            "tests.jobs.queue_isolation_worker:app",
+            "worker",
+            "-Q",
+            ",".join(prefix + name for name in queues),
+            "--pool",
+            "threads",
+            "--concurrency",
+            str(count),
+            "--hostname",
+            "results@localhost",
+            "--loglevel",
+            "ERROR",
+            "--without-gossip",
+            "--without-mingle",
+        ],
+        env={**os.environ, "QUEUE_ISOLATION_PREFIX": prefix},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        assert redis_client.blpop(prefix + "worker-ready", timeout=15)
+        for _ in range(count):
+            app.send_task("test.isolation.material", queue=prefix + "resources")
+        for _ in range(count):
+            assert redis_client.blpop(prefix + "started", timeout=10)
+        for _ in range(20):
+            app.send_task("test.isolation.ad", queue=prefix + "resources")
+        app.send_task(
+            "test.isolation.material_result",
+            queue=prefix + dispatch_queue("materials.verify_target"),
+        )
+        for _ in range(count):
+            redis_client.lpush(prefix + "release", "release")
+        result = redis_client.blpop(prefix + "result-complete", timeout=10)
+        assert result is not None
+        assert int(result[1]) <= 4, "结果任务排在全部准备积压之后"
+        assert dispatch_queue("materials.prepare_cover") == dispatch_queue(
+            "materials.verify_target"
+        )
+    finally:
+        for _ in range(count):
+            redis_client.lpush(prefix + "release", "release")
+        process.terminate()
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+        app.close()
+        owned = list(redis_client.scan_iter(prefix + "*"))
+        if owned:
+            redis_client.delete(*owned)

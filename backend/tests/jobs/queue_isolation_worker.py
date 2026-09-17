@@ -36,3 +36,9 @@ def blocked_material():
 def ready_ad():
     with Redis.from_url(broker) as redis:
         redis.lpush(prefix + "ad-complete", "ad")
+
+
+@app.task(name="test.isolation.material_result")
+def material_result():
+    with Redis.from_url(broker) as redis:
+        redis.lpush(prefix + "result-complete", redis.llen(prefix + "ad-complete"))

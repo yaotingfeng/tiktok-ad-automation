@@ -186,6 +186,10 @@ def flush_dispatch(limit: int = 100) -> int:
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
         raise ValueError("Dispatch limit must be a positive integer")
     limit = min(limit, 100)
+    from app.jobs.queued_dispatches import queued_dispatches
+
+    # 批量 broker 读取在数据库事务之外；命中后仍逐条实时确认原消息存在。
+    queued = queued_dispatches()
     now = datetime.now(UTC)
     published = 0
     attempted = 0
@@ -232,26 +236,34 @@ def flush_dispatch(limit: int = 100) -> int:
                 )
             for record in records:
                 attempted += 1
-                record.attempts += 1
                 try:
                     queue = dispatch_queue(record.task_name)
                     payload = validate_dispatch_payload(record.payload)
-                    celery_app.send_task(
-                        record.task_name,
-                        kwargs={
-                            "tenant_id": str(record.tenant_id),
-                            "actor_id": str(record.actor_id),
-                            "payload": payload,
-                        },
-                        task_id=str(record.id),
+                    kwargs = {
+                        "tenant_id": str(record.tenant_id),
+                        "actor_id": str(record.actor_id),
+                        "payload": payload,
+                    }
+                    if not queued.contains(
                         queue=queue,
-                    )
+                        name=record.task_name,
+                        task_id=str(record.id),
+                        kwargs=kwargs,
+                    ):
+                        record.attempts += 1
+                        celery_app.send_task(
+                            record.task_name,
+                            kwargs=kwargs,
+                            task_id=str(record.id),
+                            queue=queue,
+                        )
                 except Exception:
                     # Do not persist broker exceptions: they can contain secrets.
                     record.available_at = datetime.now(UTC) + timedelta(
                         seconds=min(300, 2 ** min(record.attempts, 8))
                     )
                 else:
+                    # 确认 broker 已持有相同投递也完成本轮 outbox；不新增队列副本。
                     record.published_at = datetime.now(UTC)
                     published += 1
             if records:

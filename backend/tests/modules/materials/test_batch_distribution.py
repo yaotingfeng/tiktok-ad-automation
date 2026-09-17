@@ -1133,3 +1133,47 @@ def test_shared_video_discovery_pages_twenty_mids_without_repeating_share(
         and call["params"]["name"] == names["materials.share_assets"]
     ]
     assert shares == []
+
+
+@pytest.mark.parametrize("gateway_case", ["OFFICIAL_MCP"], indirect=True)
+def test_fifty_video_guard_does_not_repeat_common_account_queries(
+    share_case, database_engine, gateway_wire, redis_client
+):
+    """50 条成员核实应在短事务预算内完成，共同账户授权不能每条重查。"""
+    from collections import Counter
+
+    from sqlalchemy import Engine, event
+    from sqlalchemy.pool import NullPool
+
+    from app.modules.materials.models import (
+        MaterialAssetOperation,
+        MaterialDistribution,
+    )
+
+    tasks, rows = seed_rectangle(share_case, database_engine, materials=50, targets=1)
+    with Session(database_engine) as db, db.begin():
+        for index, task in enumerate(tasks):
+            dist = db.get(MaterialDistribution, task)
+            op = db.get(MaterialAssetOperation, dist.operation_id)
+            dist.status = op.status = "verifying"
+            op.remote_response = {
+                **op.remote_response,
+                "video_id": rows[index]["video_id"],
+            }
+    prepare_wire(gateway_wire, rows)
+    queries = Counter()
+
+    def count_query(connection, _cursor, statement, *_args):
+        if isinstance(
+            connection.engine.pool, NullPool
+        ) and statement.lstrip().upper().startswith("SELECT"):
+            queries[connection] += 1
+
+    event.listen(Engine, "before_cursor_execute", count_query)
+    try:
+        run(share_case, redis_client, tasks[0])
+    finally:
+        event.remove(Engine, "before_cursor_execute", count_query)
+    assert queries
+    assert max(queries.values()) <= 220
+    assert [state(task)[0].status for task in tasks] == ["ready"] * 50

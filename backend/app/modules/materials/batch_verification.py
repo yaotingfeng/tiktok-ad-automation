@@ -190,7 +190,10 @@ def try_verify_batch(
                 material = _locked_material(db, context, dist.material_id)
                 op = _locked_operation(db, context, item["operation"])
                 if (
-                    op.attempt_token != item["claim"]
+                    dist.bc_id != route.bc_id
+                    or dist.advertiser_id != advertiser_id
+                    or dist.material_id != item["material"]
+                    or op.attempt_token != item["claim"]
                     or dist.operation_id != op.id
                     or op.request_digest != item["digest"]
                     or op.remote_response.get("video_id") != item["video_id"]
@@ -210,9 +213,11 @@ def try_verify_batch(
                     or op.claimed_until <= datetime.now(UTC)
                 ):
                     raise DomainError("material_claim_changed", "目标核实成员已变化")
-                single._target_access(
-                    db, context, dist, upload=False, connection_id=route.connection_id
-                )
+            # 成员逐一锁定并校验冻结边界；同一账户授权每次物理请求只查一次，
+            # 不在请求之间缓存，权限撤销仍会在发送前阻断整批。
+            single._target_access(
+                db, context, dist, upload=False, connection_id=route.connection_id
+            )
 
     error_code = None
     records: tuple[VideoRecord, ...] = ()

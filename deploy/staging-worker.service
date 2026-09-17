@@ -12,7 +12,7 @@ WorkingDirectory=/opt/tt-ada-staging/current/backend
 EnvironmentFile=/etc/tt-ada-staging/app.env
 Environment=PYTHONUNBUFFERED=1
 # 素材保留两个执行槽；已就绪广告和控制任务由独立消费者处理。
-ExecStart=/opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.celery_app:celery_app worker -Q resources --pool prefork --concurrency 2 --loglevel INFO --hostname resources-singapore@%%h
+ExecStart=/opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.celery_app:celery_app worker -Q resources,resource-results --pool prefork --concurrency 2 --loglevel INFO --hostname resources-singapore@%%h
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=960
