@@ -55,6 +55,28 @@ def test_image_share_preserves_partial_failure(material_case):
     assert receipt.evidence.request_id == "material-request"
 
 
+def test_image_pages_preserve_overlap_for_persistent_census(material_case):
+    adapter, enqueue, budget, _, _ = material_case
+    for number, start in [(1, 0), (2, 99)]:
+        enqueue(
+            "materials.search_images",
+            {
+                "list": [{"image_id": f"tos-{i}"} for i in range(start, start + 100)],
+                "page_info": {
+                    "page": number,
+                    "page_size": 100,
+                    "total_number": 200,
+                    "total_page": 2,
+                },
+            },
+        )
+    first = adapter.search_images(advertiser_id="456", page=1, budget=budget)
+    second = adapter.search_images(advertiser_id="456", page=2, budget=budget)
+    # 传输保留平台实际返回值；199个唯一项不是200项，是否完整由扫描器判断。
+    assert first.rows[-1].image_id == second.rows[0].image_id
+    assert len({row.image_id for row in (*first.rows, *second.rows)}) == 199
+
+
 @pytest.mark.parametrize("returned_size", [71, 100])
 def test_image_census_page_size_is_explicit_and_response_must_match(
     material_case, returned_size

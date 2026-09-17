@@ -33,6 +33,8 @@ from .cover_models import MaterialCoverJob, MaterialCoverShareBatch
 from .models import AccountMaterial, MaterialAssetOperation, MaterialFile
 from .routes import load_material_route, require_material_route
 
+SCAN_PAGES_PER_SLICE = 4
+
 
 def _content_material_ids(
     db: Session, context: TenantContext, target: MaterialCoverJob
@@ -836,6 +838,41 @@ def _publish(
         covers._publish_result(db, context, job, evidence, checks=checks)
 
 
+def _scan_slice(
+    client: types.MaterialOperations,
+    batch: MaterialCoverShareBatch,
+    claims: dict[UUID, UUID],
+    budget: Callable[[str], types.RemoteCallBudget],
+    *,
+    deadline: datetime,
+) -> tuple[dict[UUID, dict[str, str]], bool]:
+    """同一账户连续读取至多4页，减少会话重建及排队期间库存变化。"""
+    targets = sorted(
+        {
+            member["advertiser_id"]
+            for member in batch.members
+            if UUID(member["job_id"]) in claims
+        }
+    )
+    target = next(
+        (name for name in targets if not batch.scan_state.get(name, {}).get("done")),
+        None,
+    )
+    for _ in range(SCAN_PAGES_PER_SLICE):
+        found, done = _scan(client, batch, claims, budget)
+        progress = batch.scan_state.get(target, {}) if target is not None else {}
+        # 精确探测、总数变化重启和账户切换都让出执行权；大账户跨任务
+        # 保留游标。预留20秒，不靠提高Worker期限或并发消化积压。
+        if (
+            done
+            or progress.get("done")
+            or (progress.get("page", 1) == 1 and not progress.get("round"))
+            or (deadline - covers._now()).total_seconds() < 20
+        ):
+            break
+    return found, done
+
+
 def run_shared_cover(
     database_engine: Engine,
     redis_client: Redis,
@@ -933,7 +970,15 @@ def run_shared_cover(
                             db, MaterialCoverJob, UUID(member["source_job_id"])
                         ).image_mid = member["source_mid"]
                 batch.members = members
-            found, done = _scan(gateway.materials, batch, claims, budget)
+            found, done = _scan_slice(
+                gateway.materials, batch, claims, budget, deadline=deadline
+            )
+            # 完整读完但预算不足时，持久保存证据后下一次正式任务再发送。
+            yield_for_write = (
+                done
+                and batch.armed_at is None
+                and (deadline - covers._now()).total_seconds() < 15
+            )
             with (
                 bounded_session(database_engine, task_deadline=deadline) as db,
                 db.begin(),
@@ -949,7 +994,7 @@ def run_shared_cover(
                 # 发布与恢复身份必须同一提交：任何崩溃点都保留一个可修复的 wake。
                 if not claims:
                     current.status, current.scan_state = "READY", {}
-                elif not done:
+                elif not done or yield_for_write:
                     _continue(db, context, batch, claims)
                 elif batch.armed_at is not None:
                     rejected = {
@@ -978,7 +1023,7 @@ def run_shared_cover(
                         if current.wake_job_id in claims
                         else sorted(claims, key=str)[0]
                     )
-            if not claims or not done or batch.armed_at is not None:
+            if not claims or not done or yield_for_write or batch.armed_at is not None:
                 return
             # 已存在目标会使原矩形变稀疏；只发送剩余授权组合中的一个矩形。
             pending = [

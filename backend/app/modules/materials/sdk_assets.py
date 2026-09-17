@@ -570,8 +570,13 @@ class MaterialReadAdapter:
         }
         if len(ids) != len(rows):
             raise _schema_error()
+        if images:
+            # 图片modify_time分页可稳定跨页重叠；完整性由持久封面扫描器
+            # 以唯一ID及总数核对，不能在会话内提前拒绝它的补齐轮次。
+            # 此处仍严格验证单页身份、行数、页大小和页数，不生成不存在结论。
+            return result
         key = (
-            "images" if images else "videos",
+            "videos",
             advertiser_id,
             material_ids,
             video_name,

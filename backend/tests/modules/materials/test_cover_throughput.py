@@ -26,6 +26,15 @@ from tests.modules.materials.test_source_uploads import (
 )
 
 
+@pytest.fixture
+def single_page_checkpoints(monkeypatch):
+    # 这些用例逐页检查跨任务恢复，缩小同会话页数而不替换执行器。
+    # 默认4页的完整执行、上限及预算在test_cover_scan_slice独立覆盖。
+    from app.modules.materials import cover_sharing
+
+    monkeypatch.setattr(cover_sharing, "SCAN_PAGES_PER_SLICE", 1)
+
+
 def enqueue(env, *, source=False, account="actual-account"):
     with Session(engine) as db, db.begin():
         method = (
@@ -704,6 +713,7 @@ def test_image_inventory_scan_persists_progress_with_one_batch_wakeup(
 
 @pytest.mark.parametrize("eventually_complete", [True, False])
 @pytest.mark.parametrize("armed", [False, True])
+@pytest.mark.usefixtures("single_page_checkpoints")
 def test_changed_page_boundary_completes_census_without_repeating_shared_write(
     source_env, redis_client, wire, eventually_complete, armed
 ):
@@ -759,6 +769,7 @@ def test_changed_page_boundary_completes_census_without_repeating_shared_write(
 
 
 @pytest.mark.parametrize("eventually_complete", [True, False])
+@pytest.mark.usefixtures("single_page_checkpoints")
 def test_overlapping_inventory_pages_require_complete_unique_census_before_share(
     source_env, redis_client, wire, eventually_complete
 ):
@@ -863,6 +874,7 @@ def test_target_waits_for_source_cover_without_polling_outbox(
 
 @pytest.mark.parametrize("stabilizes", [True, False])
 @pytest.mark.parametrize("armed", [False, True])
+@pytest.mark.usefixtures("single_page_checkpoints")
 def test_inventory_change_restarts_bounded_census_without_sending(
     source_env, redis_client, wire, stabilizes, armed
 ):
