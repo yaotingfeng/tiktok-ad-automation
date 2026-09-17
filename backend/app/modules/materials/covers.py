@@ -612,12 +612,7 @@ def _claim_in_session(
         return None
     if job.claimed_until and job.claimed_until > _now():
         return None
-    if (
-        not read
-        and job.purpose == "BUILD"
-        and job.request_armed_at is None
-        and job.share_batch_id is None
-    ):
+    if not read and job.purpose == "BUILD" and job.request_armed_at is None:
         from app.modules.builds.execution_window import cover_job_admitted
 
         if not cover_job_admitted(session, tenant_id=job.tenant_id, job_id=job.id):
@@ -1696,7 +1691,7 @@ def _run_known_cover_group(
 
 
 def repair_cover_dispatches(session: Session, *, limit: int = 100) -> int:
-    from app.modules.builds.execution_window import active_cover_job_ids
+    from app.modules.builds.execution_window import cover_task_admission_condition
 
     if type(limit) is not int or not 1 <= limit <= 100:
         raise ValueError("Cover repair limit must be between 1 and 100")
@@ -1706,7 +1701,7 @@ def repair_cover_dispatches(session: Session, *, limit: int = 100) -> int:
             col(MaterialCoverJob.status).in_(["PENDING", "PREPARING", "VERIFYING"]),
             or_(
                 col(MaterialCoverJob.error_code).is_distinct_from("cover_window_wait"),
-                col(MaterialCoverJob.id).in_(active_cover_job_ids()),
+                cover_task_admission_condition(),
             ),
             or_(
                 col(MaterialCoverJob.share_batch_id).is_(None),

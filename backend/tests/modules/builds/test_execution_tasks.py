@@ -577,6 +577,99 @@ def test_parallel_window_is_bounded_and_replaces_blocked_unit(executable, monkey
         assert len({row[2] for row in after} - {row[2] for row in admitted}) == 1
 
 
+@pytest.mark.parametrize("executable", [3], indirect=True)
+@pytest.mark.parametrize("case", ["future", "mixed", "armed"])
+def test_existing_cover_batch_respects_window_without_stranding_members(
+    executable, case, monkeypatch
+):
+    from datetime import timedelta
+
+    from app.modules.builds.preview_models import BuildUnit
+    from app.modules.builds.routes import load_preview_route
+    from app.modules.materials import covers
+    from app.modules.materials.cover_models import (
+        MaterialCoverJob,
+        MaterialCoverShareBatch,
+    )
+    from app.modules.materials.models import AccountMaterial, MaterialFile
+
+    database, context, _ = executable
+    with Session(database) as db, db.begin():
+        units = db.exec(select(SubmissionUnit).order_by(SubmissionUnit.unit_id)).all()
+        jobs = []
+        for index, unit in enumerate(units):
+            step = db.exec(
+                select(ExecutionStep).where(
+                    ExecutionStep.unit_id == unit.unit_id,
+                    ExecutionStep.kind == "MATERIAL",
+                )
+            ).first()
+            material = db.get(MaterialFile, step.material_id)
+            material.video_md5 = "a" * 32
+            frozen = db.get(BuildUnit, unit.unit_id)
+            asset = db.exec(
+                select(AccountMaterial).where(
+                    AccountMaterial.material_id == material.id,
+                    AccountMaterial.advertiser_id == frozen.advertiser_id,
+                )
+            ).one()
+            asset.image_id = None
+            route = load_preview_route(db, context=context, preview_id=step.preview_id)
+            result = covers.ensure_cover(
+                db,
+                context=context,
+                bc_id=step.bc_id,
+                material_id=material.id,
+                advertiser_id=frozen.advertiser_id,
+                task_key=f"existing-batch-{index}",
+                route=route,
+            )
+            job = db.get(MaterialCoverJob, result.task_id)
+            step.cover_job_id = job.id
+            jobs.append(job)
+        members = [jobs[2], jobs[0] if case == "mixed" else jobs[1]]
+        batch = MaterialCoverShareBatch(
+            tenant_id=context.tenant_id,
+            actor_id=context.actor_id,
+            bc_id=jobs[1].bc_id,
+            source_advertiser_id=jobs[0].advertiser_id,
+            source_route=jobs[0].frozen_route,
+            target_route=jobs[1].frozen_route,
+            members=[{"job_id": str(job.id)} for job in members],
+            wake_job_id=jobs[2].id,
+            armed_at=datetime.now(UTC) if case == "armed" else None,
+        )
+        db.add(batch)
+        db.flush()
+        for job in members:
+            job.share_batch_id = batch.id
+            if case == "armed":
+                job.request_armed_at = batch.armed_at
+        anchor = jobs[2]
+        claimed = covers._claim_in_session(
+            db, context, anchor.id, anchor.dispatch_id, anchor.revision, read=False
+        )
+        if case == "mixed":
+            assert claimed is not None
+        elif case == "armed":
+            assert claimed is None and anchor.status == "VERIFYING"
+        else:
+            assert claimed is None, "未来已分批任务仍占用准备执行槽"
+            assert (
+                anchor.error_code == "cover_window_wait" and anchor.dispatch_id is None
+            )
+            # 当前组合完成后，原批次的wake任务必须由正式repair重新接续。
+            for step in db.exec(
+                select(ExecutionStep).where(ExecutionStep.unit_id == units[0].unit_id)
+            ).all():
+                step.status = "SUCCEEDED"
+            due = anchor.repair_after + timedelta(seconds=1)
+            with monkeypatch.context() as patch:
+                patch.setattr(covers, "_now", lambda: due)
+                assert covers.repair_cover_dispatches(db) >= 1
+            assert anchor.dispatch_id is not None and anchor.share_batch_id == batch.id
+
+
 def test_readback_receipt_lost_before_continuation_keeps_read_delivery(executable):
     from app.modules.builds.dispatch import queue_step
 

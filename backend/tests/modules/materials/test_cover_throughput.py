@@ -211,7 +211,12 @@ def test_cover_planning_checks_only_one_twenty_by_ten_window(source_env, wire):
     source_queries, authorization_queries = [], []
 
     def observe(_connection, _cursor, statement, parameters, *_):
-        if "FROM material_cover_job" in statement and "READY" in parameters.values():
+        # 只统计来源封面读取；窗口准入也读取同表，但不是来源查询。
+        if (
+            "FROM material_cover_job" in statement
+            and "READY" in parameters.values()
+            and "SOURCE" in parameters.values()
+        ):
             source_queries.append(statement)
         if "bc_connection_binding" in statement:
             authorization_queries.append(statement)

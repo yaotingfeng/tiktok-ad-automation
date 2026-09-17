@@ -136,6 +136,35 @@ def cover_admission_condition():
     )
 
 
+def cover_task_admission_condition():
+    from app.modules.materials.cover_models import (
+        MaterialCoverJob,
+        MaterialCoverShareBatch,
+    )
+
+    # 历史未发送批次只在任一未完成成员准入时接续；不拆改原成员或发送账本。
+    # wake成员自身可能在未来窗口，因此领取与repair必须检查整个批次。
+    eligible = (
+        select(MaterialCoverJob.id, MaterialCoverJob.share_batch_id)
+        .where(col(MaterialCoverJob.status) != "READY", cover_admission_condition())
+        .cte("admitted_cover_tasks")
+        .prefix_with("MATERIALIZED", dialect="postgresql")
+    )
+    return or_(
+        col(MaterialCoverJob.id).in_(select(eligible.c.id)),
+        col(MaterialCoverJob.share_batch_id).in_(
+            select(eligible.c.share_batch_id).where(
+                eligible.c.share_batch_id.is_not(None)
+            )
+        ),
+        col(MaterialCoverJob.share_batch_id).in_(
+            select(MaterialCoverShareBatch.id).where(
+                col(MaterialCoverShareBatch.armed_at).is_not(None)
+            )
+        ),
+    )
+
+
 def cover_job_admitted(session: Session, *, tenant_id: UUID, job_id: UUID) -> bool:
     from app.modules.materials.cover_models import MaterialCoverJob
 
@@ -144,7 +173,7 @@ def cover_job_admitted(session: Session, *, tenant_id: UUID, job_id: UUID) -> bo
             select(MaterialCoverJob.id).where(
                 MaterialCoverJob.tenant_id == tenant_id,
                 MaterialCoverJob.id == job_id,
-                cover_admission_condition(),
+                cover_task_admission_condition(),
             )
         ).first()
         is not None
