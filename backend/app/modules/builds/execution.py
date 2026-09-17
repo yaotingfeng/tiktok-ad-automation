@@ -315,8 +315,20 @@ def prepare_request(
         if not 1 <= len(material_ids) <= 50:
             raise DomainError("invalid_material_group", "冻结素材组无效")
         from app.modules.materials.file_names import video_file_name
+        from app.modules.materials.models import MaterialFile
         from app.modules.materials.readiness import load_material
 
+        # 批量素材核验按 ID 加锁。广告仍按冻结的创意顺序编译，但必须先按
+        # 同一 ID 顺序取得整组素材锁，避免逐项准备与核验形成相反锁序的死锁。
+        session.exec(
+            select(MaterialFile)
+            .where(
+                MaterialFile.tenant_id == context.tenant_id,
+                col(MaterialFile.id).in_(material_ids),
+            )
+            .order_by(col(MaterialFile.id))
+            .with_for_update()
+        ).all()
         mappings = []
         waiting = False
         for material_id in material_ids:
