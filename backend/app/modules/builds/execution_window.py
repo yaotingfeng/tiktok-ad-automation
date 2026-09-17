@@ -119,19 +119,21 @@ def active_cover_job_ids():
 def cover_admission_condition():
     from app.modules.materials.cover_models import MaterialCoverJob
 
-    dependent = (
-        select(ExecutionStep.id)
-        .where(
-            ExecutionStep.tenant_id == MaterialCoverJob.tenant_id,
-            ExecutionStep.cover_job_id == MaterialCoverJob.id,
-        )
-        .correlate(MaterialCoverJob)
-        .exists()
+    # 集合反连接只扫描依赖一次。逐候选相关EXISTS虽然可执行得快，却使
+    # 大库规划成本被放大并触发数秒JIT，耗尽短事务期限。排除NULL保证
+    # NOT IN不会把没有绑定步骤的素材库操作错误拦下。
+    dependent = select(ExecutionStep.tenant_id, ExecutionStep.cover_job_id).where(
+        col(ExecutionStep.cover_job_id).is_not(None)
     )
     # 未绑定搭建步骤的素材库操作不受搭建窗口限制；共享依赖任一当前
     # 组合即准入。批量规划和单任务领取必须复用同一条件，不能先选入
     # 未来成员，再在领取时拒绝它并把当前矩形误判为执行权丢失。
-    return or_(~dependent, col(MaterialCoverJob.id).in_(active_cover_job_ids()))
+    return or_(
+        tuple_(col(MaterialCoverJob.tenant_id), col(MaterialCoverJob.id)).not_in(
+            dependent
+        ),
+        col(MaterialCoverJob.id).in_(active_cover_job_ids()),
+    )
 
 
 def cover_job_admitted(session: Session, *, tenant_id: UUID, job_id: UUID) -> bool:

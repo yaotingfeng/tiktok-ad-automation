@@ -315,58 +315,11 @@ def _prepare(
         else:
             covers._stop(anchor, "cover_source_unavailable", unknown=False)
         return None
-    from app.modules.builds.execution_window import cover_admission_condition
+    from .cover_candidates import candidate_query
 
-    conditions = (
-        MaterialCoverJob.tenant_id == first.tenant_id,
-        MaterialCoverJob.bc_id == first.bc_id,
-        MaterialCoverJob.actor_id == first.actor_id,
-        MaterialCoverJob.connection_id == first.connection_id,
-        MaterialCoverJob.frozen_route == first.frozen_route,
-        MaterialCoverJob.purpose == "BUILD",
-        MaterialCoverJob.status == "PENDING",
-        cover_admission_condition(),
-        col(MaterialCoverJob.error_code).is_distinct_from("cover_window_wait"),
-        col(MaterialCoverJob.share_batch_id).is_(None),
-        col(MaterialCoverJob.request_armed_at).is_(None),
-        col(MaterialCoverJob.known_image_id).is_(None),
-    )
     # 一次远端共享最多20项×10账户。只检查包含当前锚点的一组候选；
     # 其余任务保留原投递，避免积压越大、每次领取的本地SQL越多而永远超时。
-    material_ids = (
-        select(MaterialCoverJob.material_id)
-        .where(*conditions)
-        .where(MaterialCoverJob.material_id != anchor.material_id)
-        .distinct()
-        .order_by(col(MaterialCoverJob.material_id))
-        .limit(19)
-    )
-    advertisers = (
-        select(MaterialCoverJob.advertiser_id)
-        .where(*conditions)
-        .where(MaterialCoverJob.advertiser_id != anchor.advertiser_id)
-        .distinct()
-        .order_by(col(MaterialCoverJob.advertiser_id))
-        .limit(9)
-    )
-    rows = db.exec(
-        select(MaterialCoverJob)
-        .where(*conditions)
-        .where(
-            or_(
-                col(MaterialCoverJob.material_id) == anchor.material_id,
-                col(MaterialCoverJob.material_id).in_(material_ids),
-            ),
-            or_(
-                col(MaterialCoverJob.advertiser_id) == anchor.advertiser_id,
-                col(MaterialCoverJob.advertiser_id).in_(advertisers),
-            ),
-        )
-        .order_by(
-            col(MaterialCoverJob.material_id), col(MaterialCoverJob.advertiser_id)
-        )
-        .limit(200)
-    ).all()
+    rows = db.exec(candidate_query(first)).all()
     checks = covers._CoverAccessChecks(db, context)
     # 同一平台图片可属于多个本地视频；矩形领取按本地素材保留全部目标 job。
     pairs = {(str(anchor.material_id), anchor.advertiser_id): (anchor, source)}

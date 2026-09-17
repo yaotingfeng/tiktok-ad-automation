@@ -23,6 +23,10 @@ from app.modules.builds.preview_models import (
     PreviewDramaGroup,
     PreviewGroupMaterial,
 )
+from app.modules.builds.routes import load_preview_route
+from app.modules.materials.cover_candidates import candidate_query
+from app.modules.materials.cover_models import MaterialCoverJob
+from app.modules.materials.models import AccountMaterial
 from tests.modules.builds.test_execution import executable as executable
 
 
@@ -42,6 +46,12 @@ def test_ten_thousand_units_only_dispatch_active_window(executable, monkeypatch)
         steps = db.exec(
             select(ExecutionStep).where(ExecutionStep.kind == "MATERIAL")
         ).all()
+        asset = db.exec(
+            select(AccountMaterial).where(
+                AccountMaterial.material_id == steps[0].material_id
+            )
+        ).one()
+        route = load_preview_route(db, context=context, preview_id=unit.preview_id)
         # 容量数据在新的BUILDING快照内构造后冻结，不关闭不可变触发器，
         # 也不向既有冻结预览补写伪造组合。
         preview_id, submission_id = uuid4(), uuid4()
@@ -91,11 +101,14 @@ def test_ten_thousand_units_only_dispatch_active_window(executable, monkeypatch)
                 BCAccountAccess,
                 BuildUnit,
                 SubmissionUnit,
+                AccountMaterial,
+                MaterialCoverJob,
                 ExecutionStep,
             )
         }
         for index in range(10000):
             identity = uuid4()
+            asset_id, cover_id = uuid4(), uuid4()
             advertiser = f"capacity-{index}"
             models[AdvertiserAccount].append(
                 {**account.model_dump(), "advertiser_id": advertiser}
@@ -122,6 +135,24 @@ def test_ten_thousand_units_only_dispatch_active_window(executable, monkeypatch)
                     "submission_id": submission_id,
                 }
             )
+            models[AccountMaterial].append(
+                {**asset.model_dump(), "id": asset_id, "advertiser_id": advertiser}
+            )
+            models[MaterialCoverJob].append(
+                MaterialCoverJob(
+                    id=cover_id,
+                    tenant_id=context.tenant_id,
+                    actor_id=context.actor_id,
+                    bc_id=unit.bc_id,
+                    material_id=steps[0].material_id,
+                    asset_id=asset_id,
+                    advertiser_id=advertiser,
+                    connection_id=unit.connection_id,
+                    frozen_route=route.model_dump(mode="json"),
+                    video_id=asset.video_id,
+                    remote_name=f"capacity-{index}.jpg",
+                ).model_dump()
+            )
             models[ExecutionStep].append(
                 {
                     **steps[0].model_dump(),
@@ -132,12 +163,18 @@ def test_ten_thousand_units_only_dispatch_active_window(executable, monkeypatch)
                     "step_key": f"capacity:{identity}",
                     "dispatch_id": None,
                     "error_code": "execution_window_wait",
+                    "cover_job_id": cover_id,
                 }
             )
         for model, rows in models.items():
             db.execute(insert(model), rows)
         preview.status = "FROZEN"
-        for table in ("build_unit", "submission_unit", "execution_step"):
+        for table in (
+            "build_unit",
+            "submission_unit",
+            "execution_step",
+            "material_cover_job",
+        ):
             db.execute(text("ANALYZE " + table))
     with Session(database) as db:
         started = perf_counter()
@@ -158,6 +195,16 @@ def test_ten_thousand_units_only_dispatch_active_window(executable, monkeypatch)
             ).all()
         )
         before = len(db.exec(select(PendingDispatch.id)).all())
+        anchor = db.exec(
+            select(MaterialCoverJob)
+            .join(ExecutionStep, ExecutionStep.cover_job_id == MaterialCoverJob.id)
+            .where(col(ExecutionStep.unit_id).in_(active))
+        ).first()
+        db.execute(text("SET LOCAL statement_timeout='4000ms'"))
+        started = perf_counter()
+        candidates = db.exec(candidate_query(anchor)).all()
+        candidate_seconds = perf_counter() - started
+        assert len(candidates) == 10 and candidate_seconds < 3
     scheduled = wake_material_dependencies(database_engine=database)
     assert scheduled == expected and scheduled <= 20
     assert wake_material_dependencies(database_engine=database) == 0
@@ -177,6 +224,7 @@ def test_ten_thousand_units_only_dispatch_active_window(executable, monkeypatch)
                 "active_units": 10,
                 "window_seconds": round(elapsed, 4),
                 "scheduled": scheduled,
+                "candidate_seconds": round(candidate_seconds, 4),
             }
         ),
         flush=True,
