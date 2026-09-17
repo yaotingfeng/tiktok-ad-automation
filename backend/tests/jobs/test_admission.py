@@ -127,6 +127,45 @@ def test_lost_worker_recovers_on_lease_expiry(redis_client, scope, policy):
     assert call(redis_client, scope, policy).granted
 
 
+@pytest.mark.parametrize(
+    "capacity",
+    [
+        "app_max_inflight",
+        "endpoint_max_inflight",
+        "tenant_max_inflight",
+        "advertiser_max_inflight",
+    ],
+)
+def test_inflight_wait_rechecks_before_long_safety_lease_expires(
+    redis_client, scope, policy, capacity
+):
+    # 安全租约不是调用耗时；槽释放后应立即可准入，不能让等候者睡满16分钟。
+    setattr(policy, capacity, 1)
+    policy.lease_ms = 960000
+    lease = uuid4()
+    assert admit_call(redis_client, **scope, lease_id=lease, policy=policy).granted
+    denied = call(redis_client, scope, policy)
+    assert not denied.granted and 0 < denied.retry_after_ms <= 1000
+    assert not call(redis_client, scope, policy).granted
+    assert redis_client.pttl(admission_keys(**scope)[2]) > 950000
+    release_call(redis_client, **scope, lease_id=lease)
+    assert call(redis_client, scope, policy).granted
+
+
+def test_rate_wait_is_not_shortened_by_inflight_recheck(redis_client, scope, policy):
+    policy.app_max_inflight = 1
+    policy.app_calls_per_window = 1
+    policy.window_ms = 60000
+    policy.lease_ms = 960000
+    lease = uuid4()
+    assert admit_call(redis_client, **scope, lease_id=lease, policy=policy).granted
+    denied = call(redis_client, scope, policy)
+    assert not denied.granted and 50000 < denied.retry_after_ms <= 60000
+    release_call(redis_client, **scope, lease_id=lease)
+    after_release = call(redis_client, scope, policy)
+    assert not after_release.granted and after_release.retry_after_ms > 50000
+
+
 def test_short_lease_preserves_existing_long_lease_ttl(redis_client, scope, policy):
     assert call(redis_client, scope, policy).granted
     policy.lease_ms = 50

@@ -18,7 +18,13 @@ for i = 1, 6 do
     if redis.call('ZCARD', KEYS[i]) >= capacity then
         local first = redis.call('ZRANGE', KEYS[i], 0, 0, 'WITHSCORES')
         local remaining = tonumber(first[2]) - now
-        if i <= 2 then remaining = remaining + window end
+        if i <= 2 then
+            remaining = remaining + window
+        else
+            -- 并发租约是崩溃兜底期限，不是最早可用时间；正常调用可提前释放。
+            -- 仅短间隔重新原子准入，不提前删租约、不占额度、不在Worker内睡眠。
+            remaining = math.min(remaining, 1000)
+        end
         wait = math.max(wait, remaining)
     end
 end
