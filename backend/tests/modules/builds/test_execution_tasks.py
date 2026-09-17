@@ -28,12 +28,16 @@ from tests.modules.builds.test_execution import executable as executable
 
 
 @pytest.mark.parametrize(
-    "lose_campaign_receipt, remote_match", [(False, True), (True, True), (True, False)]
+    "executable, lose_campaign_receipt, remote_match",
+    [(1, False, True), (1, True, True), (1, True, False), (2, False, True)],
+    indirect=["executable"],
 )
 def test_outbox_builds_and_reads_all_layers_without_repeating_any_create(
     executable, redis_client, monkeypatch, lose_campaign_receipt, remote_match
 ):
     db, context, _ = executable
+    with Session(db) as session:
+        unit_count = len(session.exec(select(SubmissionUnit)).all())
     monkeypatch.setattr(reconciliation, "require_bounded_worker", lambda: None)
     remote, calls = {}, []
 
@@ -132,6 +136,8 @@ def test_outbox_builds_and_reads_all_layers_without_repeating_any_create(
             if uncertain:
                 repair_execution(database_engine=db)
                 continue
+            if repair_execution(database_engine=db):
+                continue
             break
         if name == UNIT_TASK:
             process_unit(database_engine=db, context=context, payload=payload)
@@ -160,9 +166,12 @@ def test_outbox_builds_and_reads_all_layers_without_repeating_any_create(
         ]
         assert all(not s.mismatch for s in steps)
         assert session.exec(select(Submission)).one().status == "COMPLETED"
-        assert session.exec(select(SubmissionUnit)).one().dispatch_id is None
-    assert sum(m == "POST" for m, _ in calls) == 5
-    assert sum(m == "GET" for m, _ in calls) >= 4
+        assert all(
+            unit.dispatch_id is None
+            for unit in session.exec(select(SubmissionUnit)).all()
+        )
+    assert sum(m == "POST" for m, _ in calls) == 5 * unit_count
+    assert sum(m == "GET" for m, _ in calls) >= 4 * unit_count
 
 
 def test_successful_receipt_lost_before_continuation_is_repaired(executable):
@@ -199,6 +208,168 @@ def test_successful_receipt_lost_before_continuation_is_repaired(executable):
     )
     with Session(db) as session:
         assert session.exec(select(SubmissionUnit)).one().dispatch_id == next_dispatch
+
+
+def test_pending_cover_waits_without_repeated_step_or_unit_messages(
+    executable, redis_client
+):
+    from app.modules.builds.dispatch import queue_step
+    from app.modules.materials.cover_models import MaterialCoverJob
+    from tests.modules.builds.test_cover_execution import pending
+
+    identity, job_id, _ = pending(executable, redis_client)
+    db, context, _ = executable
+    with Session(db) as session, session.begin():
+        step = session.get(ExecutionStep, identity)
+        row = session.get(Submission, step.submission_id)
+        queue_step(session, step=step, submission=row)
+        step.status = "PENDING"
+        revision = step.dispatch_revision
+    finish_delivery(
+        database_engine=db, context=context, step_id=identity, revision=revision
+    )
+    with Session(db) as session:
+        step = session.get(ExecutionStep, identity)
+        assert step.status == "PENDING" and step.dispatch_id is None
+        unit = session.exec(select(SubmissionUnit)).one()
+        waiting_messages = select(PendingDispatch.id).where(
+            (col(PendingDispatch.payload)["step_id"].astext == str(identity))
+            | (col(PendingDispatch.payload)["unit_id"].astext == str(unit.unit_id))
+        )
+        before = set(session.exec(waiting_messages).all())
+        payload = {"unit_id": str(unit.unit_id), "revision": unit.dispatch_revision}
+    process_unit(database_engine=db, context=context, payload=payload)
+    for _ in range(3):
+        repair_execution(database_engine=db)
+    with Session(db) as session:
+        step = session.get(ExecutionStep, identity)
+        assert step.dispatch_id is None and step.dispatch_revision == revision
+        assert set(session.exec(waiting_messages).all()) == before
+    with Session(db) as session, session.begin():
+        job = session.get(MaterialCoverJob, job_id)
+        job.status = "READY"
+        job.known_image_id = "verified-cover"
+        job.request_armed_at = datetime.now(UTC)
+        job.dispatch_id = None
+    repair_execution(database_engine=db)
+    with Session(db) as session:
+        step = session.get(ExecutionStep, identity)
+        assert step.status == "QUEUED" and step.dispatch_revision == revision + 1
+        dispatch_id = step.dispatch_id
+        assert dispatch_id
+    repair_execution(database_engine=db)
+    with Session(db) as session:
+        assert session.get(ExecutionStep, identity).dispatch_id == dispatch_id
+
+
+@pytest.mark.parametrize("executable", [2], indirect=True)
+def test_submission_admits_one_material_unit_and_preserves_other_intent(executable):
+    db, context, _ = executable
+    with Session(db) as session:
+        units = session.exec(
+            select(SubmissionUnit).order_by(SubmissionUnit.unit_id)
+        ).all()
+        payloads = [
+            {"unit_id": str(unit.unit_id), "revision": unit.dispatch_revision}
+            for unit in units
+        ]
+    for payload in payloads:
+        process_unit(database_engine=db, context=context, payload=payload)
+    with Session(db) as session:
+        materials = session.exec(
+            select(ExecutionStep).where(ExecutionStep.kind == "MATERIAL")
+        ).all()
+        assert len({s.unit_id for s in materials if s.status == "QUEUED"}) == 1
+        waiting = [s for s in materials if s.unit_id == units[1].unit_id]
+        assert len(waiting) == 2
+        assert all(
+            s.status == "PENDING"
+            and s.error_code == "execution_window_wait"
+            and s.dispatch_id is None
+            for s in waiting
+        )
+
+
+@pytest.mark.parametrize("executable", [2], indirect=True)
+def test_old_queued_future_material_parks_and_unknown_unit_yields_window(
+    executable, redis_client
+):
+    from app.modules.builds.dispatch import queue_step
+
+    db, context, _ = executable
+    with Session(db) as session, session.begin():
+        units = session.exec(
+            select(SubmissionUnit).order_by(SubmissionUnit.unit_id)
+        ).all()
+        first_unit_id = units[0].unit_id
+        future = session.exec(
+            select(ExecutionStep).where(
+                ExecutionStep.unit_id == units[1].unit_id,
+                ExecutionStep.kind == "MATERIAL",
+            )
+        ).first()
+        row = session.get(Submission, future.submission_id)
+        queue_step(session, step=future, submission=row)
+        identity, revision = future.id, future.dispatch_revision
+    deliver_step(
+        database_engine=db,
+        redis_client=redis_client,
+        context=context,
+        payload={"step_id": str(identity), "revision": revision},
+    )
+    with Session(db) as session, session.begin():
+        parked = session.get(ExecutionStep, identity)
+        assert parked.status == "PENDING" and parked.dispatch_id is None
+        assert parked.error_code == "execution_window_wait"
+        first = session.exec(
+            select(ExecutionStep).where(
+                ExecutionStep.unit_id == first_unit_id,
+                ExecutionStep.kind == "MATERIAL",
+            )
+        ).first()
+        first.status, first.phase, first.error_code = (
+            "UNKNOWN",
+            "DONE",
+            "material_result_unknown",
+        )
+        first_id = first.id
+    assert repair_execution(database_engine=db) >= 1
+    with Session(db) as session:
+        assert session.get(ExecutionStep, identity).status == "QUEUED"
+        assert session.get(ExecutionStep, first_id).status == "UNKNOWN"
+
+
+def test_cover_result_after_video_expiry_runs_refresh_before_success(
+    executable, redis_client
+):
+    from app.modules.materials.cover_models import MaterialCoverJob
+    from app.modules.materials.models import AccountMaterial
+    from tests.modules.builds.test_cover_execution import pending
+
+    identity, job_id, _ = pending(executable, redis_client)
+    db, context, _ = executable
+    with Session(db) as session, session.begin():
+        job = session.get(MaterialCoverJob, job_id)
+        job.status, job.known_image_id, job.dispatch_id = (
+            "READY",
+            "verified-cover",
+            None,
+        )
+        job.request_armed_at = job.updated_at = datetime.now(UTC)
+        asset = session.get(AccountMaterial, job.asset_id)
+        asset.image_id = job.known_image_id
+        asset.verified_at = datetime.now(UTC) - timedelta(hours=1)
+    repair_execution(database_engine=db)
+    with Session(db) as session:
+        step = session.get(ExecutionStep, identity)
+        payload = {"step_id": str(identity), "revision": step.dispatch_revision}
+    deliver_step(
+        database_engine=db, redis_client=redis_client, context=context, payload=payload
+    )
+    with Session(db) as session:
+        step = session.get(ExecutionStep, identity)
+        assert step.status == "PENDING" and step.error_code == "material_pending"
+        assert step.distribution_id and step.dispatch_id is None
 
 
 def test_readback_receipt_lost_before_continuation_keeps_read_delivery(executable):

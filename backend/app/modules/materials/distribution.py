@@ -456,6 +456,22 @@ def _load_distribution(
     return dist
 
 
+def _delivery_matches(
+    operation: MaterialAssetOperation,
+    *,
+    operation_id: UUID | None,
+    revision: int | None,
+    recovery_claim_id: UUID | None,
+) -> bool:
+    return (
+        (operation_id is None or operation.id == operation_id)
+        and (
+            revision is None or revision == operation.remote_response.get("revision", 0)
+        )
+        and (recovery_claim_id is None or operation.attempt_token == recovery_claim_id)
+    )
+
+
 def _target_access(
     session: Session,
     context: TenantContext,
@@ -902,6 +918,27 @@ def run_distribution(
     """一次持久发送；来源和恢复读取各自遵守工作进程期限与准入。"""
     if kind not in {"prepare", "verify"} or (read_only and kind != "verify"):
         raise DomainError("invalid_asset_task", "目标素材工作任务无效")
+    # 旧队列消息必须在授权查询、素材锁及恢复分支之前退出；否则来源已完成
+    # 而缓存过期时，旧观察消息会错误建立新一代读取并持续放大队列。
+    with Session(database_engine) as session:
+        current = _load_distribution(session, context, distribution_id)
+        if current.status not in ACTIVE_DISTRIBUTIONS and not (
+            read_only and current.status in {"ready", "blocked"}
+        ):
+            return
+        pending = session.exec(
+            select(MaterialAssetOperation).where(
+                MaterialAssetOperation.tenant_id == context.tenant_id,
+                MaterialAssetOperation.id == current.operation_id,
+            )
+        ).one_or_none()
+        if pending is None or not _delivery_matches(
+            pending,
+            operation_id=operation_id,
+            revision=revision,
+            recovery_claim_id=recovery_claim_id,
+        ):
+            return
     if kind == "prepare" and not read_only:
         from .bc_seeding import resume_seed_dependency
 
@@ -1016,10 +1053,12 @@ def run_distribution(
         if operation_id is not None and operation_id != dist.operation_id:
             return
         operation = _locked_operation(session, context, dist.operation_id)
-        if (
-            read_only
-            and revision is not None
-            and revision != operation.remote_response.get("revision", 0)
+        # 快速检查后可能发生并发换代，持锁后再次核对，且早于所有来源分支。
+        if not _delivery_matches(
+            operation,
+            operation_id=operation_id,
+            revision=revision,
+            recovery_claim_id=recovery_claim_id,
         ):
             return
         source = _attempt(session, operation.id)
@@ -1130,12 +1169,6 @@ def run_distribution(
                     observe=True,
                     due=datetime.now(UTC) + timedelta(seconds=60),
                 )
-            return
-        if recovery_claim_id and operation.attempt_token != recovery_claim_id:
-            return
-        if revision is not None and revision != operation.remote_response.get(
-            "revision", 0
-        ):
             return
         if operation.claimed_until and operation.claimed_until > datetime.now(UTC):
             return

@@ -2,6 +2,7 @@
 
 from uuid import uuid4
 
+import pytest
 from sqlmodel import Session, select
 
 from app.core.db import engine
@@ -77,7 +78,9 @@ def test_two_submissions_share_durable_distribution_not_message_id(source_env, w
     with Session(engine) as session, session.begin():
         account = target(session, source_env)
     first, second = queue(source_env, account), queue(source_env, account)
-    assert first.state == second.state == "queued" and first.task_id == second.task_id, first
+    assert (
+        first.state == second.state == "queued" and first.task_id == second.task_id
+    ), first
     with Session(engine) as session:
         messages = session.exec(
             select(PendingDispatch).where(
@@ -102,6 +105,7 @@ def test_target_share_and_readback_use_actual_target_vid_without_changing_source
         search_info,
         source_info,
     )
+
     wire[1].extend([source_info(), {}])
     run(source_env, redis_client, prepared.task_id, kind="prepare", s3=original_s3[0])
     assert state(prepared.task_id)[0].status == "verifying"
@@ -155,6 +159,39 @@ def test_expired_target_is_read_again_without_original_upload(
     run(source_env, redis_client, prepared.task_id)
     assert state(prepared.task_id)[2].video_id == "vid-target-account"
     assert [call[0] for call in wire[0]] == ["GET"]
+
+
+@pytest.mark.parametrize("fence", ["revision", "recovery_claim_id"])
+def test_obsolete_source_observer_cannot_replace_completed_operation(
+    source_env, redis_client, wire, fence
+):
+    from datetime import UTC, datetime, timedelta
+
+    op_id = seed_operation(source_env)
+    dist_id = queue(source_env, "actual-account").task_id
+    wire[1].append(info())
+    run_source(source_env, redis_client, operation_id=op_id)
+    with Session(engine) as session, session.begin():
+        mapping = session.exec(
+            select(AccountMaterial).where(
+                AccountMaterial.material_id == source_env["material_id"]
+            )
+        ).one()
+        mapping.verified_at = datetime.now(UTC) - timedelta(hours=1)
+        operation = session.get(MaterialAssetOperation, op_id)
+        operation.remote_response = {**operation.remote_response, "revision": 2}
+        before = set(session.exec(select(PendingDispatch.id)).all())
+    run(
+        source_env,
+        redis_client,
+        dist_id,
+        operation_id=op_id,
+        **{fence: 1 if fence == "revision" else uuid4()},
+    )
+    assert state(dist_id)[0].operation_id == op_id
+    with Session(engine) as session:
+        assert set(session.exec(select(PendingDispatch.id)).all()) == before
+    assert len(wire[0]) == 1
 
 
 def test_unknown_upload_never_switches_path_or_reuploads(

@@ -517,6 +517,29 @@ def process_step(
             return step.status
         if step.kind == "READBACK":
             raise DomainError("invalid_build_kind", "回读步骤需要只读执行器")
+        if step.kind == "MATERIAL" and step.status in {
+            "PENDING",
+            "QUEUED",
+            "RETRYABLE",
+        }:
+            from app.modules.builds.execution_window import material_unit_admitted
+
+            if not material_unit_admitted(
+                session,
+                tenant_id=step.tenant_id,
+                submission_id=step.submission_id,
+                unit_id=step.unit_id,
+            ):
+                # 旧版本已发布的未来组合消息也沿正式执行器自然转入等待，
+                # 不删除队列、不刷新尚未获准组合的素材。
+                step.status, step.phase, step.error_code = (
+                    "PENDING",
+                    "IDLE",
+                    "execution_window_wait",
+                )
+                step.updated_at = datetime.now(UTC)
+                session.add(step)
+                return "PENDING"
         try:
             claim = claim_step(
                 session,

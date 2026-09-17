@@ -13,6 +13,7 @@ from app.core.context import TenantContext
 from app.core.db import engine
 from app.core.errors import DomainError
 from app.jobs.celery_app import celery_app
+from app.modules.builds.dependency_waits import waiting_dependency
 from app.modules.builds.dispatch import (
     READ_TASK,
     STEP_TASK,
@@ -128,6 +129,12 @@ def finish_delivery(
                     evidence(
                         session, step=step, claim=None, conclusion="MATERIAL_UNKNOWN"
                     )
+            if waiting_dependency(step):
+                step.dispatch_id = None
+                step.updated_at = datetime.now(UTC)
+                session.add(step)
+                # 依赖尚未落定，既不轮询步骤也不空唤醒下游组合。
+                return
             if step.status in {"PENDING", "RETRYABLE", "QUEUED"}:
                 delay = max(0, ceil((step.due_at - datetime.now(UTC)).total_seconds()))
                 queue_step(session, step=step, submission=row, delay=delay)

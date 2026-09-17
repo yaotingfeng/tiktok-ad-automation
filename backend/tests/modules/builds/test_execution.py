@@ -26,7 +26,7 @@ from tests.modules.strategies.test_versions import config
 
 
 @pytest.fixture
-def executable(isolated_strategy_database, monkeypatch):
+def executable(isolated_strategy_database, monkeypatch, request):
     from app.modules.builds import execution
     from app.modules.builds.drafts import create_draft, prepare_draft
 
@@ -98,6 +98,9 @@ def executable(isolated_strategy_database, monkeypatch):
     with Session(db) as session:
         intent = create_intent(session, context)
         version = session.get(StrategyVersion, intent["strategy_version_id"])
+        accounts = [
+            f"account-{chr(65 + i)}" for i in range(getattr(request, "param", 1))
+        ]
         intent.update(
             strategy_version_id=append_version(
                 session,
@@ -106,9 +109,10 @@ def executable(isolated_strategy_database, monkeypatch):
                 config=config(group_size=2),
             ),
             drama_lines=["Moon"],
-            account_lines=["account-A"],
+            account_lines=accounts,
         )
-        account(session, context)
+        for identity in accounts:
+            account(session, context, identity)
         connection = session.exec(
             select(TikTokConnection).where(
                 TikTokConnection.tenant_id == context.tenant_id
@@ -120,19 +124,20 @@ def executable(isolated_strategy_database, monkeypatch):
         )
         for i in range(2):
             file = material(session, context, f"Moon-{i}.mp4", bc="bc-draft")
-            session.add(
-                AccountMaterial(
-                    tenant_id=context.tenant_id,
-                    bc_id="bc-draft",
-                    material_id=file.id,
-                    advertiser_id="account-A",
-                    connection_id=connection.id,
-                    video_id=f"target-{i}",
-                    image_id=f"cover-{i}",
-                    status="available",
-                    verified_at=datetime.now(UTC),
+            for identity in accounts:
+                session.add(
+                    AccountMaterial(
+                        tenant_id=context.tenant_id,
+                        bc_id="bc-draft",
+                        material_id=file.id,
+                        advertiser_id=identity,
+                        connection_id=connection.id,
+                        video_id=f"target-{i}",
+                        image_id=f"cover-{i}",
+                        status="available",
+                        verified_at=datetime.now(UTC),
+                    )
                 )
-            )
         session.flush()
         draft = create_draft(session, context=context, **intent)
         task = prepare_draft(

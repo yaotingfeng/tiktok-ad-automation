@@ -269,6 +269,7 @@ def process_unit(
     payload: dict[str, Any],
     limit: int = 100,
 ) -> int:
+    from app.modules.builds.execution_window import material_unit_admitted
     from app.modules.builds.recovery import DEPENDENCIES_READY, UNARMED_RETRY
 
     identity, revision = payload_identity(payload, "unit_id")
@@ -357,6 +358,14 @@ def process_unit(
                 ),
             )
             .where(text("NOT " + resolved_sql("execution_step")))
+            .where(
+                text(
+                    "NOT (kind='MATERIAL' AND status='PENDING' AND ("
+                    "(COALESCE(error_code='material_pending',false) AND distribution_id IS NOT NULL) OR "
+                    "(COALESCE(error_code='cover_pending',false) AND cover_job_id IS NOT NULL) OR "
+                    "COALESCE(error_code='execution_window_wait',false)))"
+                )
+            )
             .order_by(col(ExecutionStep.due_at), col(ExecutionStep.id))
             .limit(limit + 1)
         )
@@ -385,6 +394,9 @@ def process_unit(
                 .limit(limit + 1)
             )
         candidates = session.exec(stmt.with_for_update(skip_locked=True)).all()
+        admitted = material_unit_admitted(
+            session, tenant_id=context.tenant_id, submission_id=row.id, unit_id=identity
+        )
         dependency_failed = False
         for step in candidates[:limit]:
             if permission_error:
@@ -409,6 +421,15 @@ def process_unit(
                 attention = True
                 queue_step(session, step=step, submission=row, reconcile=True)
                 count += 1
+                continue
+            if step.kind == "MATERIAL" and not admitted:
+                step.status, step.phase, step.error_code = (
+                    "PENDING",
+                    "IDLE",
+                    "execution_window_wait",
+                )
+                step.dispatch_id = None
+                session.add(step)
                 continue
             dependency = _dependency(session, context, step)
             if dependency == "FAILED":
@@ -595,9 +616,11 @@ def repair_execution(*, database_engine: Any, limit: int = 100) -> int:
             session.add(unit)
             count += 1
     from app.modules.builds.cover_execution import recover_cover_results
+    from app.modules.builds.dependency_waits import wake_material_dependencies
 
     return (
         count
         + recover_material_results(database_engine=database_engine, limit=limit)
         + recover_cover_results(database_engine=database_engine, limit=limit)
+        + wake_material_dependencies(database_engine=database_engine, limit=limit)
     )
