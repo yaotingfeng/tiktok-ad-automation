@@ -196,10 +196,38 @@ def test_partially_selected_or_conflicting_links_cannot_generate_preview(
         assert error.value.code == code
 
 
+def test_one_batch_loads_the_frozen_route_once(session, context, prepared):
+    from sqlalchemy import event
+
+    identity = previews.generate_preview(
+        session, context=context, draft_id=prepared, expected_revision=1
+    )
+    statements = []
+
+    def counted(_c, _cu, sql, _p, _ct, _many):
+        statements.append(sql)
+
+    conn = session.connection()
+    event.listen(conn, "before_cursor_execute", counted)
+    try:
+        assert previews.continue_preview(session, context=context, preview_id=identity)
+        assert (
+            len([sql for sql in statements if "FROM build_route_context" in sql]) == 1
+        )
+    finally:
+        event.remove(conn, "before_cursor_execute", counted)
+
+
 def test_frozen_full_product_budget_and_shared_copy(session, context, prepared):
     identity = previews.generate_preview(
         session, context=context, draft_id=prepared, expected_revision=1
     )
+    initial = previews.get_preview_summary(
+        session, context=context, preview_id=identity
+    )
+    assert initial.generation_progress.phase == "inputs"
+    assert initial.generation_progress.total_units == 6
+    assert initial.generation_progress.completed_units == 0
     assert (
         previews.generate_preview(
             session, context=context, draft_id=prepared, expected_revision=1
@@ -211,6 +239,12 @@ def test_frozen_full_product_budget_and_shared_copy(session, context, prepared):
         session, context=context, preview_id=identity
     )
     assert summary.status == "FROZEN"
+    assert summary.generation_progress.phase == "complete"
+    assert summary.generation_progress.total_units == 6
+    assert summary.generation_progress.completed_units == 6
+    assert (
+        summary.generation_progress.updated_at >= initial.generation_progress.updated_at
+    )
     assert (summary.campaign_count, summary.adgroup_count, summary.ad_count) == (
         6,
         18,

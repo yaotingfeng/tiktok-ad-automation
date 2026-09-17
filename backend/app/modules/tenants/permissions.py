@@ -5,6 +5,7 @@ from sqlmodel import Session
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
+from app.core.local_read_batch import reuse_local_read
 from app.models import User
 from app.modules.tenants.models import Tenant, TenantMembership
 
@@ -23,6 +24,7 @@ PERMISSIONS = {
 }
 
 
+@reuse_local_read
 def require_tenant(
     session: Session, *, actor_id: UUID, tenant_id: UUID, action: str
 ) -> TenantContext:

@@ -19,7 +19,15 @@ class PreviewRequest(BaseModel):
     expected_revision: int = Field(gt=0, strict=True)
 
 
+class PreviewGenerationProgress(BaseModel):
+    phase: Literal["inputs", "dramas", "units", "digest", "complete"]
+    completed_units: int
+    total_units: int | None
+    updated_at: datetime
+
+
 class PreviewSummary(BaseModel):
+    generation_progress: PreviewGenerationProgress
     execution_route: ExecutionRoutePublic | None = None
     submission_id: UUID | None
     preview_id: UUID

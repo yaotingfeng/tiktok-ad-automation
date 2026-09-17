@@ -96,17 +96,196 @@ test("过期预览不可执行创建，保留返回调整", async ({ page }) => 
     page.getByRole("button", { name: "返回调整", exact: true }),
   ).toBeEnabled()
 })
-test("预览生成期间显示服务端已完成组合数", async ({ page }) => {
+test("预览生成进度随服务端组合推进，冻结后移除转圈并展示最终统计", async ({
+  page,
+}, testInfo) => {
   const api = await buildsBoundary(page, { previewStatus: "BUILDING" })
-  api.preview.total_unit_count = 175
+  api.preview.created_at = new Date(Date.now() - 90_000).toISOString()
+  api.preview.generation_progress = {
+    phase: "units",
+    completed_units: 175,
+    total_units: 200,
+    updated_at: new Date().toISOString(),
+  }
   await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
   await expect(
-    page.getByText("正在生成搭建预览，已完成 175 个剧目与账户组合。"),
+    page.getByRole("status", { name: "正在生成搭建预览" }),
   ).toBeVisible()
-  api.preview.total_unit_count = 190
   await expect(
-    page.getByText("正在生成搭建预览，已完成 190 个剧目与账户组合。"),
+    page.getByText("正在检查剧目与账户组合", { exact: true }),
   ).toBeVisible()
+  await expect(
+    page.getByText("175 / 200 个组合", { exact: true }),
+  ).toBeVisible()
+  await expect(page.getByRole("progressbar")).toHaveAttribute(
+    "aria-valuenow",
+    "87.5",
+  )
+  await expect(
+    page.getByRole("button", { name: /创建并立即启用/ }),
+  ).toHaveCount(0)
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 })
+    await expectWorkspaceLayout(page)
+    await page.screenshot({
+      path: testInfo.outputPath(`preview-progress-${width}.png`),
+      fullPage: true,
+    })
+  }
+  api.preview.generation_progress.completed_units = 190
+  await expect(
+    page.getByText("190 / 200 个组合", { exact: true }),
+  ).toBeVisible()
+  await expect(page.getByRole("progressbar")).toHaveAttribute(
+    "aria-valuenow",
+    "95",
+  )
+  api.preview.status = "FROZEN"
+  api.preview.generation_progress.phase = "complete"
+  api.preview.generation_progress.completed_units = 200
+  await expect(
+    page.getByText("6 Campaign · 18 Ad Group · 36 Ad", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("status", { name: "正在生成搭建预览" }),
+  ).toHaveCount(0)
+  await expect(page.getByRole("progressbar")).toHaveCount(0)
+})
+
+test("预览总数未知时仅显示阶段和真实已处理数，耗时持续更新", async ({
+  page,
+}) => {
+  const api = await buildsBoundary(page, { previewStatus: "BUILDING" })
+  const now = new Date("2026-09-17T02:00:00Z")
+  await page.clock.install({ time: now })
+  api.preview.created_at = "2026-09-17T01:59:50Z"
+  api.preview.generation_progress = {
+    phase: "dramas",
+    completed_units: 12,
+    total_units: null,
+    updated_at: now.toISOString(),
+  }
+  await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
+  await expect(
+    page.getByRole("status", { name: "正在生成搭建预览" }),
+  ).toBeVisible()
+  await expect(
+    page.getByText("正在整理剧目与素材", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByText("已处理 12 个组合 · 总数待确认", { exact: true }),
+  ).toBeVisible()
+  await expect(page.getByRole("progressbar")).toHaveCount(0)
+  await expect(page.getByText("已用时 10 秒", { exact: true })).toBeVisible()
+  await page.clock.runFor(1000)
+  await expect(page.getByText("已用时 11 秒", { exact: true })).toBeVisible()
+})
+
+test("组合处理完仍在汇总时不显示100%或允许提交", async ({ page }) => {
+  const api = await buildsBoundary(page, { previewStatus: "BUILDING" })
+  api.preview.generation_progress.phase = "digest"
+  api.preview.generation_progress.completed_units = 6
+  await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
+  await expect(
+    page.getByText("正在汇总并冻结预览", { exact: true }),
+  ).toBeVisible()
+  await expect(page.getByText("6 / 6 个组合", { exact: true })).toBeVisible()
+  await expect(
+    page.getByRole("status", { name: "正在生成搭建预览" }),
+  ).toBeVisible()
+  await expect(page.getByRole("progressbar")).toHaveCount(0)
+  await expect(page.getByText("100%", { exact: true })).toHaveCount(0)
+  await expect(
+    page.getByRole("button", { name: /创建并立即启用/ }),
+  ).toHaveCount(0)
+})
+
+test("预览长期未推进提示核实，刷新仅查询同一预览并清除恢复后的提示", async ({
+  page,
+}) => {
+  const api = await buildsBoundary(page, { previewStatus: "BUILDING" })
+  const now = new Date("2026-09-17T02:00:00Z")
+  await page.clock.install({ time: now })
+  api.preview.created_at = "2026-09-17T01:59:00Z"
+  api.preview.generation_progress.updated_at = "2026-09-17T01:59:31Z"
+  await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
+  await expect(
+    page.getByRole("status", { name: "正在生成搭建预览" }),
+  ).toBeVisible()
+  await expect(page.getByText("进度暂未更新", { exact: true })).toHaveCount(0)
+  await page.clock.runFor(2000)
+  await expect(page.getByText("进度暂未更新", { exact: true })).toBeVisible()
+  api.preview.generation_progress.updated_at = "2026-09-17T02:00:02Z"
+  api.preview.generation_progress.completed_units = 1
+  await page.getByRole("button", { name: "重新查询进度", exact: true }).click()
+  await expect(page.getByText("进度暂未更新", { exact: true })).toHaveCount(0)
+  await expect(page.getByText("1 / 6 个组合", { exact: true })).toBeVisible()
+  expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
+})
+
+test("预览网络失败保留最后进度并提供查询恢复，不误报生成失败", async ({
+  page,
+}) => {
+  const api = await buildsBoundary(page, { previewStatus: "BUILDING" })
+  api.preview.generation_progress.phase = "units"
+  api.preview.generation_progress.completed_units = 2
+  await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
+  await expect(page.getByText("2 / 6 个组合", { exact: true })).toBeVisible()
+  let offline = true
+  await page.route(`**/api/tenants/${T}/build-previews/${P}`, (route) =>
+    offline ? route.abort("failed") : route.fallback(),
+  )
+  await page.getByRole("button", { name: "刷新预览状态" }).click()
+  await expect(
+    page.getByText("暂时无法获取最新进度", { exact: true }),
+  ).toBeVisible({ timeout: 10000 })
+  await expect(page.getByText("2 / 6 个组合", { exact: true })).toBeVisible()
+  await expect(page.getByText(/预览未完成：/)).toHaveCount(0)
+  offline = false
+  api.preview.generation_progress.completed_units = 3
+  await page.getByRole("button", { name: "重新查询进度", exact: true }).click()
+  await expect(page.getByText("3 / 6 个组合", { exact: true })).toBeVisible()
+  await expect(
+    page.getByText("暂时无法获取最新进度", { exact: true }),
+  ).toHaveCount(0)
+  expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
+})
+
+test("零组合汇总仍保持生成中，失败后停止转圈并展示原因", async ({ page }) => {
+  const api = await buildsBoundary(page, { previewStatus: "BUILDING" })
+  api.preview.generation_progress.phase = "digest"
+  api.preview.generation_progress.total_units = 0
+  await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
+  await expect(page.getByText("0 / 0 个组合", { exact: true })).toBeVisible()
+  await expect(page.getByRole("progressbar")).toHaveCount(0)
+  api.preview.status = "FAILED"
+  api.preview.error_code = "preview_naming_outdated"
+  await expect(
+    page.getByText(/命名规则已更新，请修改草稿后重新生成预览/),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("status", { name: "正在生成搭建预览" }),
+  ).toHaveCount(0)
+  await expect(
+    page.getByRole("button", { name: /创建并立即启用/ }),
+  ).toHaveCount(0)
+})
+test("生成期间权限失效显示权限提示，不误报网络故障", async ({ page }) => {
+  const api = await buildsBoundary(page, { previewStatus: "BUILDING" })
+  await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
+  await expect(
+    page.getByRole("status", { name: "正在生成搭建预览" }),
+  ).toBeVisible()
+  await page.route(`**/api/tenants/${T}/build-previews/${P}`, (route) =>
+    route.fulfill({ status: 403, json: { code: "action_forbidden" } }),
+  )
+  await page.getByRole("button", { name: "刷新预览状态" }).click()
+  await expect(page.getByText("无权访问此页面", { exact: true })).toBeVisible()
+  await expect(page.getByText(/请检查网络/)).toHaveCount(0)
+  await expect(
+    page.getByRole("button", { name: /创建并立即启用/ }),
+  ).toHaveCount(0)
+  expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
 })
 for (const width of [1440, 900, 390])
   test(`预览 ${width}px 不产生页面横向溢出`, async ({ page }) => {

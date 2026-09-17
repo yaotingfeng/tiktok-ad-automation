@@ -328,7 +328,11 @@ def test_new_default_missing_draft_account_terminates_preview(
         DomainError, check=lambda error: error.code == "account_not_in_bc"
     ):
         previews._expand_unit(
-            session, context, row, StrategyConfig.model_validate(config())
+            session,
+            context,
+            row,
+            StrategyConfig.model_validate(config()),
+            previews.load_preview_route(session, context=context, preview_id=row.id),
         )
     assert row.status != "FROZEN"
     assert session.exec(

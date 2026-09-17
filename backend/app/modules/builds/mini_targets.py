@@ -62,7 +62,10 @@ def resolved_target(
     direct = explicit_mini_id(url)
     if direct:
         return direct
-    saved = session.get(MiniTarget, (context.tenant_id, url_key(url)))
+    # 长事务可能已持有旧 ORM 对象；复核必须看见其他会话确认的新目标。
+    saved = session.get(
+        MiniTarget, (context.tenant_id, url_key(url)), populate_existing=True
+    )
     return saved.minis_id if saved else None
 
 

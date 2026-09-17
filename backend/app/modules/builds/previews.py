@@ -12,7 +12,9 @@ from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
+from app.core.local_read_batch import local_read_batch
 from app.core.pagination import Page, count_rows
+from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.modules.accounts.access import resolve_account_access
 from app.modules.accounts.models import BCAccountAccess
 from app.modules.accounts.resolver import decode_cursor, encode_cursor
@@ -44,6 +46,7 @@ from app.modules.builds.preview_schemas import (
     FrozenAd,
     FrozenGroup,
     FrozenUnit,
+    PreviewGenerationProgress,
     PreviewInputPublic,
     PreviewSummary,
     PreviewUnit,
@@ -190,6 +193,24 @@ def generate_preview(
     save_preview_route(session, context=context, preview_id=row.id, route=route)
     row.progress = {
         "phase": "inputs",
+        # 在父草稿锁下固定分母；不使用后续可能已修改的草稿推算历史进度。
+        "total_units": session.exec(
+            select(func.count())
+            .select_from(DraftDrama)
+            .where(
+                DraftDrama.tenant_id == context.tenant_id,
+                DraftDrama.draft_id == draft_id,
+            )
+        ).one()
+        * session.exec(
+            select(func.count())
+            .select_from(DraftAccount)
+            .where(
+                DraftAccount.tenant_id == context.tenant_id,
+                DraftAccount.draft_id == draft_id,
+            )
+        ).one(),
+        "updated_at": datetime.now(UTC).isoformat(),
         # 版本标记避免旧的未完成预览在续跑时混用长技术 ID 与展示编号。
         "naming_drama_id": "display",
         "kind": "drama",
@@ -437,6 +458,7 @@ def _expand_unit(
     context: TenantContext,
     preview: BuildPreview,
     config: StrategyConfig,
+    route: FrozenTikTokRoute,
 ) -> None:
     p = preview.progress
     if not p["current_drama"]:
@@ -477,7 +499,6 @@ def _expand_unit(
         if account is None:
             p.update(drama_after=p["current_drama"], current_drama=None)
             return
-        route = load_preview_route(session, context=context, preview_id=preview.id)
         # 没有原连接的账户关系时不能丢弃输入或借旧连接插入组合；整个预览失败。
         if (
             session.get(
@@ -641,9 +662,7 @@ def _expand_unit(
                 bc_id=preview.bc_id,
                 material_ids=list(materials),
                 advertiser_id=unit.advertiser_id,
-                route=load_preview_route(
-                    session, context=context, preview_id=preview.id
-                ),
+                route=route,
             )
             if materials
             else {}
@@ -757,26 +776,29 @@ def continue_preview(
         session.flush()
         return True
     route = load_preview_route(session, context=context, preview_id=preview.id)
-    verify_route(
-        session, context=context, route=route, advertiser_id=None, capability="read"
-    )
     config = StrategyConfig.model_validate(preview.config)
     # SQLAlchemy JSON mutations are tracked by replacing the container once.
     preview.progress = dict(preview.progress)
-    deadline = monotonic() + 20
-    for _ in range(step_limit):
-        phase = preview.progress["phase"]
-        if phase == "inputs":
-            _snapshot_inputs(session, preview)
-        elif phase == "dramas":
-            _snapshot_drama(session, context, preview, config)
-        elif phase == "units":
-            _expand_unit(session, context, preview, config)
-        elif _digest_units(session, preview):
-            break
-        session.flush()
-        if monotonic() >= deadline:
-            break
+    # 短批次及时提交真实进度；仅本地计算复用授权，退出时全量重验后才保存。
+    deadline = monotonic() + 3
+    with local_read_batch(session):
+        verify_route(
+            session, context=context, route=route, advertiser_id=None, capability="read"
+        )
+        for _ in range(step_limit):
+            phase = preview.progress["phase"]
+            if phase == "inputs":
+                _snapshot_inputs(session, preview)
+            elif phase == "dramas":
+                _snapshot_drama(session, context, preview, config)
+            elif phase == "units":
+                _expand_unit(session, context, preview, config, route)
+            elif _digest_units(session, preview):
+                break
+            session.flush()
+            if monotonic() >= deadline:
+                break
+    preview.progress["updated_at"] = datetime.now(UTC).isoformat()
     from sqlalchemy.orm.attributes import flag_modified
 
     flag_modified(preview, "progress")
@@ -816,6 +838,19 @@ def get_preview_summary(
         )
     ).one()
     return PreviewSummary(
+        generation_progress=PreviewGenerationProgress(
+            phase="complete"
+            if preview.status == "FROZEN"
+            else preview.progress["phase"],
+            completed_units=sum(x[0] for x in counts.values()),
+            total_units=preview.progress.get(
+                "total_units",
+                sum(x[0] for x in counts.values())
+                if preview.status == "FROZEN"
+                else None,
+            ),
+            updated_at=preview.progress.get("updated_at", preview.created_at),
+        ),
         # 历史配置的只读状态来自持久化任务，跨浏览器也不重新展示创建入口。
         submission_id=session.exec(
             select(Submission.id).where(

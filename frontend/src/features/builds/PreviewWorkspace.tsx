@@ -28,6 +28,7 @@ import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import { cn } from "@/lib/utils"
 import { buildKey } from "./api"
 import { ExecutionRoute } from "./ExecutionRoute"
+import { PreviewGenerationProgress } from "./PreviewGenerationProgress"
 import {
   BuildGuard,
   BuildReason,
@@ -178,7 +179,7 @@ export function BuildPreviewPanel({
       ) : (
         <ExecutionRoute route={current.execution_route} />
       )}
-      {summary.error && (
+      {summary.error && current.status !== "BUILDING" && (
         <RequestError
           error={summary.error}
           retry={() => void summary.refetch()}
@@ -226,14 +227,17 @@ export function BuildPreviewPanel({
           </AlertDescription>
         </Alert>
       )}
-      {current.status === "BUILDING" || current.status === "FAILED" ? (
+      {current.status === "BUILDING" ? (
+        <PreviewGenerationProgress
+          preview={current}
+          error={summary.error}
+          refreshing={summary.isFetching}
+          onRefresh={() => void summary.refetch()}
+        />
+      ) : current.status === "FAILED" ? (
         <Card>
           <CardContent className="flex min-w-0 flex-col gap-2">
-            <p role="status">
-              {current.status === "FAILED"
-                ? "尚未生成完整冻结预览，请返回调整并核实原因。"
-                : `正在生成搭建预览，已完成 ${current.total_unit_count} 个剧目与账户组合。`}
-            </p>
+            <p role="status">尚未生成完整冻结预览，请返回调整并核实原因。</p>
             <p className="text-sm text-muted-foreground">
               统计尚未完成，暂不展示最终提交数量与预算。
             </p>

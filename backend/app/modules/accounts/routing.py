@@ -8,6 +8,7 @@ from sqlmodel import Session, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
+from app.core.local_read_batch import reuse_local_read
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.modules.accounts.connection_models import (
     BCConnectionBinding,
@@ -54,6 +55,7 @@ def _connection(
     return connection
 
 
+@reuse_local_read
 def freeze_route(
     session: Session,
     *,
@@ -97,6 +99,7 @@ def observed_authorization(observed_at: datetime | None, now: datetime) -> bool:
     return observed_at <= now
 
 
+@reuse_local_read
 def verify_route(
     session: Session,
     *,

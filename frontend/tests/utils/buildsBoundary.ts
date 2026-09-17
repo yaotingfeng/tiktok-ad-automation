@@ -121,6 +121,15 @@ export async function buildsBoundary(
     preparing_count: 0,
     input_issue_count: options.blocked ? 1 : 0,
     total_unit_count: 6,
+    generation_progress: {
+      phase:
+        options.previewStatus && options.previewStatus !== "FROZEN"
+          ? "inputs"
+          : "complete",
+      completed_units: options.previewStatus === "BUILDING" ? 0 : 6,
+      total_units: 6 as number | null,
+      updated_at: new Date().toISOString(),
+    },
     daily_budget_sum: options.blocked ? "400.00" : "600.00",
     content_digest: "frozen-digest",
     error_code: options.previewError || null,

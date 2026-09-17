@@ -2930,6 +2930,28 @@ export type PreviewDramaPublic = {
 };
 
 /**
+ * PreviewGenerationProgress
+ */
+export type PreviewGenerationProgress = {
+    /**
+     * Phase
+     */
+    phase: 'inputs' | 'dramas' | 'units' | 'digest' | 'complete';
+    /**
+     * Completed Units
+     */
+    completed_units: number;
+    /**
+     * Total Units
+     */
+    total_units: number | null;
+    /**
+     * Updated At
+     */
+    updated_at: string;
+};
+
+/**
  * PreviewInputPublic
  */
 export type PreviewInputPublic = {
@@ -2973,6 +2995,7 @@ export type PreviewRequest = {
  * PreviewSummary
  */
 export type PreviewSummary = {
+    generation_progress: PreviewGenerationProgress;
     execution_route?: ExecutionRoutePublic | null;
     /**
      * Submission Id

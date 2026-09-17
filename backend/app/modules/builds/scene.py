@@ -13,6 +13,7 @@ from sqlmodel import Session, col, select
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
+from app.core.local_read_batch import local_read_batch_active, reuse_local_read
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.modules.accounts.access import resolve_account_access, usable_grants
 from app.modules.accounts.models import BCAccountAccess, TikTokConnection
@@ -156,16 +157,13 @@ def _account_scope(
     }
 
 
-def _scope(
+@reuse_local_read
+def _link_target(
     session: Session,
     *,
     context: TenantContext,
-    bc_id: str,
-    advertiser_id: str,
     link_id: UUID,
-    route: FrozenTikTokRoute,
-    lock: bool = False,
-) -> dict[str, Any]:
+) -> str | None:
     # Link checks happen on every consumer request; its URL/version are not input
     # parameters to the reusable account/application GETs.
     require_tenant(
@@ -214,12 +212,25 @@ def _scope(
         raise DomainError("scene_link_unavailable", "手动链接版权方资料不可用")
     from .mini_targets import link_url, resolved_target
 
+    return resolved_target(session, context=context, url=link_url(link))
+
+
+def _scope(
+    session: Session,
+    *,
+    context: TenantContext,
+    bc_id: str,
+    advertiser_id: str,
+    link_id: UUID,
+    route: FrozenTikTokRoute,
+    lock: bool = False,
+) -> dict[str, Any]:
     return _account_scope(
         session,
         context=context,
         bc_id=bc_id,
         advertiser_id=advertiser_id,
-        minis_id=resolved_target(session, context=context, url=link_url(link)),
+        minis_id=_link_target(session, context=context, link_id=link_id),
         route=route,
         lock=lock,
     )
@@ -380,27 +391,29 @@ def _assemble_scene(
     )
 
 
-def read_scene_context(
+@reuse_local_read
+def _read_account_scene(
     session: Session,
     *,
     context: TenantContext,
     bc_id: str,
     advertiser_id: str,
-    link_id: UUID,
+    link_id: UUID | None,
+    minis_id: str | None,
     route: FrozenTikTokRoute,
-) -> SceneContext:
-    """Pure local facts. Link remains validated even when assets are shared."""
+) -> SceneContext | None:
+    """同账户/Mini 的共享场景只组装一次，批次结束重新读取并比较。"""
     from app.modules.accounts.capabilities import get_capability_evidence
 
     from .scene_job_models import SceneJob
 
     with session.no_autoflush:
-        scope = _scope(
+        scope = _account_scope(
             session,
             context=context,
             bc_id=bc_id,
             advertiser_id=advertiser_id,
-            link_id=link_id,
+            minis_id=minis_id,
             route=route,
         )
         now = datetime.now(UTC)
@@ -431,6 +444,8 @@ def read_scene_context(
                 if job.error_code:
                     reasons.append(job.error_code)
         else:
+            if link_id is None:
+                return None
             # Legacy direct refresh remains readable for diagnostics, but cannot
             # establish current build permission without the shared BC proof.
             states = session.exec(
@@ -492,3 +507,35 @@ def read_scene_context(
             capability=capability,
             locally_operable=locally_operable,
         )
+
+
+def read_scene_context(
+    session: Session,
+    *,
+    context: TenantContext,
+    bc_id: str,
+    advertiser_id: str,
+    link_id: UUID,
+    route: FrozenTikTokRoute,
+) -> SceneContext:
+    # 每个链接独立核验版权方与 Mini，不借别的剧目链接取得权限。
+    # 只有同账户、同 Mini、同冻结路由的场景事实可在本地短批次复用。
+    with session.no_autoflush:
+        minis_id = _link_target(session, context=context, link_id=link_id)
+        arguments = {
+            "context": context,
+            "bc_id": bc_id,
+            "advertiser_id": advertiser_id,
+            "minis_id": minis_id,
+            "route": route,
+        }
+        result = _read_account_scene(
+            session,
+            link_id=None if local_read_batch_active(session) else link_id,
+            **arguments,
+        )
+        if result is None:
+            # 历史直接刷新证据仍逐链接读取，不跨剧目借用旧证据。
+            result = _read_account_scene(session, link_id=link_id, **arguments)
+        assert result is not None
+        return result

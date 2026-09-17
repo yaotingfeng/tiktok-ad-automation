@@ -394,9 +394,9 @@ def get_material_readiness_batch(
         # 成功和失败仅在本次调用内复用，下次调用重新核验权限与冷却状态。
         if not primary_checked:
             try:
-                from .source_selection import resolve_primary_account
+                from .source_selection import read_primary_advertiser
 
-                primary = resolve_primary_account(
+                primary = read_primary_advertiser(
                     session, context=context, bc_id=bc_id, route=route
                 )
                 require_material_route(
@@ -404,7 +404,7 @@ def get_material_readiness_batch(
                     context=context,
                     route=route,
                     bc_id=bc_id,
-                    advertiser_id=primary.advertiser_id,
+                    advertiser_id=primary,
                     capability="build",
                 )
                 require_execution_config(

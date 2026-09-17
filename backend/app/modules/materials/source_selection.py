@@ -13,6 +13,7 @@ from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
+from app.core.local_read_batch import reuse_local_read
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.modules.accounts.access import resolve_account_access, usable_grants
 from app.modules.accounts.models import BCAccountAccess, TenantBC
@@ -176,6 +177,20 @@ def resolve_primary_account(
             "source_capacity_pending", "主素材账户处于冷却期", retryable=True
         )
     return access
+
+
+@reuse_local_read
+def read_primary_advertiser(
+    db: Session,
+    *,
+    context: TenantContext,
+    bc_id: str,
+    route: FrozenTikTokRoute,
+) -> str:
+    # 与持久选择入口分开：预览可复用只读选择，提交/上传永远实时加锁并核验。
+    return resolve_primary_account(
+        db, context=context, bc_id=bc_id, route=route
+    ).advertiser_id
 
 
 def claim_source_account(
