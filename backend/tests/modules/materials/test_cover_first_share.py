@@ -3,12 +3,16 @@
 import json
 from datetime import timedelta
 
+import pytest
 from sqlmodel import Session
 
 from app.core.db import engine
 from app.modules.materials import covers
 from app.modules.materials.cover_models import MaterialCoverJob, MaterialCoverShareBatch
 from tests.modules.materials.test_cover_throughput import drive, image, matrix, page
+from tests.modules.materials.test_cover_throughput import (
+    single_page_checkpoints as single_page_checkpoints,
+)
 from tests.modules.materials.test_covers import job_state, run
 from tests.modules.materials.test_source_uploads import source_env as source_env
 from tests.modules.materials.test_source_uploads import wire as wire
@@ -81,6 +85,7 @@ def test_reused_cover_with_no_batch_post_never_becomes_first_share(
     assert not [call for call in wire[0] if call[0] == "POST"]
 
 
+@pytest.mark.usefixtures("single_page_checkpoints")
 def test_legacy_complete_scan_still_probes_each_target_before_first_share(
     source_env, redis_client, wire
 ):

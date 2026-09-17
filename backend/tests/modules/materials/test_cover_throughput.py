@@ -691,6 +691,7 @@ def test_reconciled_relay_owner_requires_consistent_readback_evidence(
     assert wire[0] == []
 
 
+@pytest.mark.usefixtures("single_page_checkpoints")
 def test_image_inventory_scan_persists_progress_with_one_batch_wakeup(
     source_env, redis_client, wire
 ):
@@ -1073,6 +1074,7 @@ def test_found_target_publishes_without_waiting_other_inventory(
     assert job_state(identities[1]).status == "VERIFYING"
 
 
+@pytest.mark.usefixtures("single_page_checkpoints")
 def test_member_repair_preserves_one_batch_wakeup(source_env, redis_client, wire):
     from datetime import timedelta
 

@@ -874,7 +874,7 @@ def _scan_slice(
     deadline: datetime,
     read_only_ids: set[UUID],
 ) -> tuple[dict[UUID, dict[str, str]], bool]:
-    """同一账户连续读取至多4页，减少会话重建及排队期间库存变化。"""
+    """至多4次读取；完整MID探测可接下一账户，完整库存仍有界续页。"""
     targets = sorted(
         {
             member["advertiser_id"]
@@ -882,20 +882,36 @@ def _scan_slice(
             if UUID(member["job_id"]) in claims
         }
     )
-    target = next(
-        (name for name in targets if not batch.scan_state.get(name, {}).get("done")),
-        None,
-    )
     for _ in range(SCAN_PAGES_PER_SLICE):
+        target = next(
+            (
+                name
+                for name in targets
+                if not batch.scan_state.get(name, {}).get("done")
+            ),
+            None,
+        )
+        probed = {
+            name
+            for name, state in batch.scan_state.items()
+            if state.get("mid_probe_done")
+        }
         found, done = _scan(client, batch, claims, budget, read_only_ids=read_only_ids)
+        if done or found or (deadline - covers._now()).total_seconds() < 20:
+            # 已读到的正证据立即持久发布，不让下一账户的错误抹掉本次成果。
+            break
+        if any(
+            name not in probed and state.get("mid_probe_done") and state.get("done")
+            for name, state in batch.scan_state.items()
+        ):
+            # 精确定向查询已完整落定目标，余量足够时复用会话处理下一账户；
+            # 每次请求仍重新检查授权，四次总上限不变，未知空结果不能进入此分支。
+            continue
         progress = batch.scan_state.get(target, {}) if target is not None else {}
-        # 精确探测、总数变化重启和账户切换都让出执行权；大账户跨任务
-        # 保留游标。预留20秒，不靠提高Worker期限或并发消化积压。
-        if (
-            done
-            or progress.get("done")
-            or (progress.get("page", 1) == 1 and not progress.get("round"))
-            or (deadline - covers._now()).total_seconds() < 20
+        # 不完整探测或总数变化仍让出；全库存读取保留同账户连续分页，
+        # 不靠提高Worker期限或并发消化积压。
+        if progress.get("done") or (
+            progress.get("page", 1) == 1 and not progress.get("round")
         ):
             break
     return found, done
