@@ -1,6 +1,6 @@
 # 本地运行与回调入口部署
 
-2026-09-10 生产环境已建立，目标为 `https://manjuad.gzjunbo.net:8000`。该环境的部署、更新、备份和数据库迁移以 [骏伯生产规则](production-junbo.md) 为准；下列本地/staging 命令不用于该生产主机。基础验收与尚未完成的外部联调分别见 [生产发布记录](../validation/2026-09-10-production-release.md)。
+截至 2026-09-19，生产服务器尚未提供，生产环境未建立。当前唯一远程部署是新加坡测试服务器；下列本地或测试环境说明不得解释为生产发布。未来生产建环境须先按[生产筹备规则](production-junbo.md)确认新服务器与授权，旧地址和旧“生产验收”不再有效。
 
 ## 当前验证状态（2026-09-09）
 
@@ -8,7 +8,7 @@
 
 本地真实 PostgreSQL 17.5 / Redis 8 已验证迁移、管理员登录、受保护用户接口、静态页面、回调业务响应以及后台投递。应用功能、两版权方完整离线搭建、浏览器和大量账户验收见[功能与页面交付](../acceptance/functional-delivery.md)、[离线记录](../acceptance/offline.md)和[容量记录](../acceptance/capacity.md)。
 
-本地 origin 为 `http://127.0.0.1:8011`；它没有公网或 HTTPS 含义。此前 Compose 两套配置已校验，GitHub CI 已实际构建镜像。上述本地验证当时未涉及生产主机；当前生产地址与验收见本页顶部链接。真实 OAuth 与真实广告创建仍按[外部联调清单](../acceptance/live-sdk.md)执行。
+本地 origin 为 `http://127.0.0.1:8011`；它没有公网或 HTTPS 含义。此前 Compose 配置校验和 CI 镜像构建只证明部署资产可构建，不代表存在生产主机。真实 OAuth 与真实广告创建仍按[外部联调清单](../acceptance/live-sdk.md)单独授权和验收。
 
 当前应用根目录为 `/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/projects/tiktok-ad-automation/`。2026-09-09 迁移时保留了独立 Git 历史、worktree、私有配置及 PostgreSQL / Redis / Beat 数据；重建主虚拟环境并从新目录重启了服务。不要继续使用旧的同级目录启动命令。
 

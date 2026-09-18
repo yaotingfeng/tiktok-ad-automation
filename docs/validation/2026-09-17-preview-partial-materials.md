@@ -30,7 +30,7 @@
 
 ## 发布与旧预览
 
-用户随后明确授权推送并部署，已将 `06bd724b15bddf62f96e5a8a81d658a52b7f8046` 推送至 origin/main 并发布新加坡测试服；旧运行版本 `219f51e054789ecbff0e2078b3c9fb84a85c5fa4` 保留。生产环境未变更。
+用户随后明确授权推送并部署，已将 `06bd724b15bddf62f96e5a8a81d658a52b7f8046` 推送至 origin/main 并发布新加坡测试服；旧运行版本 `219f51e054789ecbff0e2078b3c9fb84a85c5fa4` 保留。仅涉及测试环境；生产服务器尚未建立。
 
 - 完整备份 `/var/backups/tt-ada-staging/20260917T062358Z/`：PostgreSQL、Redis、独立项目/前端产物、私有配置/证书/systemd/Nginx，五项归档 SHA-256 校验通过，具有 `RELEASE_COMPLETE` 与恢复清单；未配置异地复制。
 - 停写、正常排空后完成独立恢复：项目 1,317 个文件一致；Redis 独立实例装载和读取通过；隔离库 `tt_ada_tenant_library_06bd724b_test` 恢复、迁移演练及 Alembic check 通过。18 张业务表及 920 份可解密响应归档在恢复、迁移前后一致。

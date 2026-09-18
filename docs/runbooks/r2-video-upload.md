@@ -45,7 +45,7 @@ celery -A app.jobs.celery_app:celery_app beat --schedule=/var/run/celery/celeryb
 
 模块 imports 必须包含 `app.modules.materials.ingest_tasks`、`validation_tasks`、`cleanup_tasks` 和既有素材任务。确认 control 有 `materials.repair_ingest_transports`（建议30秒、每轮≤100）及对应校验/清理恢复任务；`materials.reconcile_ingest_transport` 投递 resources。具体任务 hard/soft limits 由代码配置，不能通过 eager、线程池或 Mac solo 声称完成了生产硬超时验证。API 控制面 boto connect/read timeout 也不是 DNS 或整个请求的硬时限。
 
-当前生产 Dockerfile 已安装 ffmpeg，校验使用 ffprobe；部署镜像仍应执行 `ffprobe -version` 并核对镜像摘要。摘要校验 Worker 会有界读取 R2 原件并使用可清理临时文件，API 不转发视频字节。监控资源 Worker RSS、临时磁盘、超时与退出后临时文件清理；不能宣称整个服务从不读取视频。
+候选生产 Dockerfile 已安装 ffmpeg，校验使用 ffprobe；当前尚无生产服务器。未来部署镜像仍应执行 `ffprobe -version` 并核对镜像摘要。摘要校验 Worker 会有界读取 R2 原件并使用可清理临时文件，API 不转发视频字节。监控资源 Worker RSS、临时磁盘、超时与退出后临时文件清理；不能宣称整个服务从不读取视频。
 
 `materials.scan_abandoned_objects` 每30秒在control扫描至多100个对象。游标在数据库提交后由Redis持有者校验写入，空页重新开始；扫描锁75秒、任务硬限45秒，旧进程不能覆盖新游标。关闭自动清理开关也停止新放弃对象扫描。依据最近实际活动时间、所有权和消费者证据判断资格，发现UNKNOWN不会按年龄删除。重复同一异常证据只记一次审计。
 

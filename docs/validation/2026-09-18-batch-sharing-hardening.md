@@ -2,7 +2,7 @@
 
 ## 结果
 
-- 代码提交 `6f610779d9cb4c6d16e03683b667fcc3c8081013` 已推送至 `origin/main`，并作为固定版本部署到新加坡测试环境；生产环境未变更。
+- 代码提交 `6f610779d9cb4c6d16e03683b667fcc3c8081013` 已推送至 `origin/main`，并作为固定版本部署到新加坡测试环境；生产服务器尚未建立。
 - 数据库由 `ad_same_group_reissue` 升级到单一 head `outbox_payload_compaction`。新增批量共享候选部分索引和已结算 Outbox 压缩字段/部分索引，迁移后 `alembic check` 无新增操作。
 - 原批次 `454cfb90-d81d-4c81-b94c-9abbd5e00b42` 的业务投影实测为 `COMPLETED`，Campaign / Ad Group / Ad 成功数为 180 / 180 / 360，失败及未知业务对象均为 0。
 

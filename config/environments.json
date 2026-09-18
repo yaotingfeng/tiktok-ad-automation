@@ -19,12 +19,12 @@
   },
   "production": {
     "file": ".env.production",
-    "runtime_file": "/etc/tt-ada/production.env",
+    "runtime_file": null,
     "runbook": "docs/runbooks/production-junbo.md",
     "overrides": {
       "DATABASE_URL": "",
       "REDIS_URL": "",
-      "FRONTEND_HOST": "https://manjuad.gzjunbo.net:8000",
+      "FRONTEND_HOST": "",
       "OBJECT_STORAGE_PROVIDER": "r2",
       "S3_REGION": "auto"
     }

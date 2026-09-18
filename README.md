@@ -6,10 +6,10 @@ TK-ADA 是多租户 TikTok 短剧广告自动投放工具。后端为 FastAPI、
 
 当前本地代码位于 `/Users/yaotingfeng/Documents/ytf/ytf-os-ad-skill/projects/tiktok-ad-automation/`，是资料工作区内的独立 Git 仓库。2026-09-09 已从原同级目录迁入，保留 Git 历史与本地数据；下列命令均从这个应用根目录开始。
 
-- [环境配置统一入口：本地、测试、生产](config/README.md)
+- [环境配置统一入口：本地、测试、待建生产](config/README.md)
 - [本地运行与 HTTPS 部署](docs/runbooks/bootstrap-deployment.md)
-- [骏伯生产部署、更新和数据库发布规则](docs/runbooks/production-junbo.md)
-- [2026-09-10 生产发布验收](docs/validation/2026-09-10-production-release.md)
+- [生产环境筹备与发布规则（生产服务器尚未建立）](docs/runbooks/production-junbo.md)
+- [旧生产发布口径更正](docs/validation/2026-09-10-production-release.md)
 - [工程版本基线](docs/engineering-baseline.md)
 - [整体设计](docs/superpowers/specs/2026-09-08-tiktok-00-overall-design.md)
 - [功能、页面与实际验收截图](docs/acceptance/functional-delivery.md)

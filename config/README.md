@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | local | `.env` | 在 `backend/` 启动后端，Settings 读取 `../.env`；进程环境变量优先 |
 | staging | `.env.staging` | 部署到测试服务器 `/etc/tt-ada-staging/app.env`，systemd 向 API、Worker、Beat 注入 |
-| production | `.env.production` | 部署到生产服务器 `/etc/tt-ada/production.env`，固定 `deploy/production-compose.sh` 通过 `--env-file` 读取并注入容器 |
+| production | `.env.production` | 预留模板；当前没有生产服务器或生效路径，须在未来生产环境确认后重新登记 |
 
 `.env.staging` 和 `.env.production` 是部署准备文件，创建后不会自动加载或切换运行环境。部署成功后，服务器固定路径中的配置是该实例的生效来源；本地副本不代表已部署。前端只有公开构建参数，使用 `frontend/.env.example`；禁止放入存储或平台密钥。
 
@@ -33,7 +33,7 @@ python3 scripts/environment.py production path
 先按对应 runbook 冻结写入、排空任务并完成全部备份与恢复验证，再将项目内所选环境文件受控传输到目标服务器，以受限权限安装至表中固定路径。配置文件中引用的注册材料、证书等文件同时按 runbook 核对。不要直接把模板覆盖到现有服务器。
 
 - 测试环境：[新加坡部署手册](../docs/runbooks/staging-singapore.md)。配置为 root:tt-ada、0640；更新后重启 API、Worker、Beat 并核实实际配置一致。
-- 生产环境：[骏伯生产手册](../docs/runbooks/production-junbo.md)。使用固定发布脚本重建受影响容器；单纯 restart 不会更新 Compose 注入的值。
+- 生产环境：[生产筹备手册](../docs/runbooks/production-junbo.md)。当前尚未建立，不得使用旧地址或直接套用测试环境配置；服务器确认后再补实际加载路径与发布命令。
 - 本地环境：[本地启动手册](../docs/runbooks/bootstrap-deployment.md)。编辑 `.env` 后重启相应进程。
 
 服务器固定路径独立于 `/releases/<SHA>`，因此更新、回退项目版本不会丢失环境配置。若在服务器直接修改配置，须同步更新该环境的受控副本并记录部署验证；不要以过期本地副本覆盖服务器。

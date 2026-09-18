@@ -2,7 +2,7 @@
 
 ## 推送与新加坡测试环境发布
 
-- 用户要求推送本地更新并部署新加坡测试服务器。功能提交 `f17cbe76ad217bfb13a08158f8ae30120733cc2c` 已推送现有 `feat/platform-implementation`，服务器从 `9381270a78099f27c5be3f4d26b6b7a77c79e3a8` 切换到该版本；生产环境未变更。
+- 用户要求推送本地更新并部署新加坡测试服务器。功能提交 `f17cbe76ad217bfb13a08158f8ae30120733cc2c` 已推送现有 `feat/platform-implementation`，服务器从 `9381270a78099f27c5be3f4d26b6b7a77c79e3a8` 切换到该版本；生产服务器尚未建立。
 - 本轮重新执行后端专项 64 项、准备页 54 项浏览器回归、TypeScript/Vite 生产构建、Biome、16 个 Python 文件 Ruff/格式及 10 个后端文件 mypy，全部通过。Alembic 只有一个 head：`provider_display_drama_id`。
 - 发布前停止 API/Beat、正常停止 Worker 并暂停备份 timer。完整备份 `/var/backups/tt-ada-staging/20260914T080717Z/` 包含 PostgreSQL、Redis、独立项目与实际前端产物、私有配置及证书，五份归档 SHA-256 均通过。
 - PostgreSQL dump 在新临时库恢复，既有素材响应使用原密钥完成解密、长度和摘要验证；先在恢复库实际执行 `manual_promotion_links → provider_display_drama_id` 并核对新列，再迁移业务库。Redis RDB 在独立 Unix socket 实例装载并通过 PING/DBSIZE，项目和配置分别隔离解压比对，`RELEASE_COMPLETE` 已写入。

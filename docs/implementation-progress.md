@@ -377,19 +377,19 @@
 
 ## 2026-09-14：数字剧目 ID 与链接编辑发布测试环境
 
-- `f17cbe7` 已推送现有 `feat/platform-implementation` 并部署新加坡测试服务器，替换 `9381270`；生产环境未变更。
+- `f17cbe7` 已推送现有 `feat/platform-implementation` 并部署新加坡测试服务器，替换 `9381270`；生产服务器尚未建立。
 - 后端专项 64 项、准备页 54 项、生产构建、Biome、Ruff/格式和 mypy 重新通过。完整备份 `/var/backups/tt-ada-staging/20260914T080717Z/` 完成 PostgreSQL、Redis、项目/前端产物和完整私有配置的摘要校验与隔离恢复。
 - 新迁移先在恢复库演练，再将业务库从 `manual_promotion_links` 升级至 `provider_display_drama_id`；4 条既有剧目中 3 条按唯一可靠归因补齐展示编号。API、3 个 Worker 进程、Beat 同版本同配置，HTTPS、管理员登录、受保护 profile、Worker ping、定时器与错误日志验收通过。未调用外部集成或创建广告；详见[发布记录](validation/2026-09-14-drama-id-and-link-edit.md)。
 
 ## 2026-09-14：统一版权方选择弹窗发布测试环境
 
-- `8c1588f` 与最终版本 `9381270` 已推送现有 `feat/platform-implementation` 并部署新加坡测试服务器，替换 `347ea52`；生产环境未变更。
+- `8c1588f` 与最终版本 `9381270` 已推送现有 `feat/platform-implementation` 并部署新加坡测试服务器，替换 `347ea52`；生产服务器尚未建立。
 - TypeScript/Vite 构建、3 文件 Biome 和准备页/版权方页 75 项浏览器回归重新通过。完整备份 `/var/backups/tt-ada-staging/20260914T040552Z/` 的 PostgreSQL、Redis、项目/前端产物和完整私有配置均完成摘要校验与隔离恢复；数据库 head、功能开关及调用策略未变。
 - API、3 个 Worker 进程、Beat 同版本同配置；HTTPS、管理员登录、受保护 profile、Worker ping、备份/证书 timer 与错误日志验收通过。未调用外部集成或创建广告；详见[发布记录](validation/2026-09-14-build-interaction-refinement.md)。
 
 ## 2026-09-14：广告搭建交互修正发布测试环境
 
-- `347ea52` 已推送现有 `feat/platform-implementation` 并部署新加坡测试服务器，原版本 `7b2ee95`。没有 `main` 分支，未新建分支或强推；生产环境未变更。
+- `347ea52` 已推送现有 `feat/platform-implementation` 并部署新加坡测试服务器，原版本 `7b2ee95`。没有 `main` 分支，未新建分支或强推；生产服务器尚未建立。
 - 完整备份 `/var/backups/tt-ada-staging/20260914T021951Z/` 的 PostgreSQL、Redis、项目/前端产物和完整私有配置归档均完成摘要校验与隔离恢复；数据库 head 保持 `manual_promotion_links`，导入、自动清理及调用策略保持原值。
 - API、3 个 Worker 进程、Beat 同版本同配置；HTTPS、管理员登录、受保护 profile、Worker ping、备份/证书 timer 与错误日志验收通过。未调用外部集成或创建广告；详见[发布记录](validation/2026-09-14-build-interaction-refinement.md)。
 
@@ -673,7 +673,7 @@
 
 - 使用用户确认的黑白 A/播放符号图标，统一登录页、桌面侧栏和移动导航；保留 18px 品牌名及 11px 副标题。补齐 32px favicon、180px Apple 主屏幕图标、192/512px manifest 图标和开发者平台上传原图。
 - 删除未使用的 FastAPI Logo 组件、模板图标和旧品牌样式；不新增离线缓存或服务工作线程。
-- TypeScript/Vite 构建、22 项 workspace-shell 浏览器回归、改动组件与 manifest 的 Biome 检查、git diff --check 通过。代码提交 `8b59aed`；已发布新加坡测试环境，线上图标字节/尺寸、manifest、入口边界、管理员登录与 Worker ping 通过，备份 timer 已恢复。服务器编译因内存限制退出 137，改用相同提交的本地已验证产物；未修改生产环境。[发布记录](validation/2026-09-10-staging-singapore-icon-release.md)。
+- TypeScript/Vite 构建、22 项 workspace-shell 浏览器回归、改动组件与 manifest 的 Biome 检查、git diff --check 通过。代码提交 `8b59aed`；已发布新加坡测试环境，线上图标字节/尺寸、manifest、入口边界、管理员登录与 Worker ping 通过，备份 timer 已恢复。服务器编译因内存限制退出 137，改用相同提交的本地已验证产物；生产服务器尚未建立。[发布记录](validation/2026-09-10-staging-singapore-icon-release.md)。
 
 ## 2026-09-10：新加坡测试账号与租户初始化
 
@@ -706,17 +706,14 @@
 
 - 按用户要求统一实际页面、浏览器标签、默认配置与 README 的产品名为 `TK-ADA`。左上角共享品牌主标题从14px增至18px，副标题为11px的“广告投放工具”；登录按钮只显示“登录”，移除箭头，保留加载状态。其余页面字号、颜色、卡片和间距不调整。
 - 同步既有登录及移动导航测试定位器。TypeScript/Vite生产构建、33个改动TS/TSX文件的Biome检查、22项workspace-shell浏览器回归和本地实际登录页尺寸核对通过。
-- 无数据库迁移或业务逻辑变化。生产仍使用原目录、Compose项目、持久卷及备份服务标识，避免名称变更创建新数据环境；发布时只同步私有 PROJECT_NAME，按生产规则备份、换版并只读验收。
-- 代码 `d09c070` 已提交、推送并发布；生产只读浏览器18项、两环境bootstrap、实际18px/11px品牌及登录按钮检查通过。发布前备份完成，数据库head和用户/租户/策略数量保持一致，定时备份已恢复。[生产发布记录](validation/2026-09-10-tk-ada-brand-release.md)包含版本、回退入口与验证边界。
+- 无数据库迁移或业务逻辑变化。代码 `d09c070` 已提交、推送；TypeScript/Vite、Biome、workspace-shell 22项和本地品牌尺寸核对通过。旧记录中远程环境被称为“生产”的口径已撤销，不能据此认定生产服务器存在，见[更正后的验证记录](validation/2026-09-10-tk-ada-brand-release.md)。
 
-## 2026-09-10：骏伯生产发布与基础验收
+## 2026-09-10：历史“生产发布”记录（口径已于 2026-09-19 撤销）
 
-- 已按用户授权提交并推送现有代码，生产运行 SHA `016217f65a39330b4b715ab043fe866eea87810c`。入口 `https://manjuad.gzjunbo.net:8000/`，HTTP 自动跳转；原站 80/443 和 8 个原有容器保持正常。
-- 生产独立 PostgreSQL/Redis，Alembic head 为 `r2_part_receipts`，API、3 个 Linux prefork Worker 与唯一 Beat 同镜像。平台管理员 admin、租户 junbo、租户管理员 junbo 已建立，密码未写入仓库。
-- 真实 API 登录/隔离/策略版本测试、19 项完整生产浏览器检查、18 项重启后只读复验、outbox→Beat→Worker no-op、备份及临时库恢复通过。每日备份定时器已启用并实际试跑成功。
-- 专用生产 Compose、Nginx、版本入口脚本、备份脚本与 systemd 单元已提交。构建镜像源调整保留锁定版本/hash，受限 GitHub 下载使用同一官方 SDK commit 的已验证 Git 缓存。后续文档提交记录首发事实，不表示运行镜像自动更新。
-- [生产部署/更新/数据库规则](runbooks/production-junbo.md) 已登记在 AGENTS.md，[本次发布验收](validation/2026-09-10-production-release.md) 记录具体版本、证据与限制。相关实现提交：`7c11176`、`f39292d`、`5e1ecda`、`016217f`。
-- TikTok API 出站探测两次连接超时，需在真实授权前处理；App、BC、R2 和版权方仍未配置，未执行真实上传或广告操作。该限制与基础上线通过分别记录。以下原有“未推送/未部署”描述是当时阶段记录，不代表当前状态。
+- 2026-09-19 用户确认当前没有生产服务器，原“骏伯生产发布与基础验收”不能继续作为生产环境事实、连接目标或发布依据。下列内容仅保留历史审计语境；当前唯一远程部署是新加坡测试环境，未来生产环境须重新确认服务器及授权。
+
+- 当时完成并推送了部署资产相关提交 `7c11176`、`f39292d`、`5e1ecda`、`016217f`，包含 Compose、Nginx、备份和服务模板；这些资产保留为候选模板，不证明生产服务器存在或已经部署。
+- 原文件中的服务器、入口、数据库、账号、容器、备份和浏览器验收均已从现行口径撤销，详见[生产口径更正](validation/2026-09-10-production-release.md)。
 
 ## 2026-09-10：产品统一命名为 TT ADA
 

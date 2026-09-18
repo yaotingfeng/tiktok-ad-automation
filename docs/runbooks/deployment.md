@@ -6,9 +6,9 @@
 
 历史集成分支 `feat/platform-implementation` 于 2026-09-16 在本地原位更名为 `main`，业务代码基线保持 `4f571406cab2690d04a2be16d18df042ef70ffe7`。远端主分支切换及旧分支清理状态见[整理记录](../validation/2026-09-16-branch-cleanup.md)。
 
-新加坡独立测试服务器使用无 Docker 的 systemd 部署，操作遵循 [staging-singapore.md](staging-singapore.md)。
+新加坡独立测试服务器使用无 Docker 的 systemd 部署，操作遵循 [staging-singapore.md](staging-singapore.md)。这是当前唯一已部署的远程环境，始终按测试环境管理。
 
-骏伯生产环境使用独立 8000 HTTPS 入口，发布与数据库操作必须遵循 [production-junbo.md](production-junbo.md)，不执行下面的通用 staging 命令。首次生产验收见 [发布记录](../validation/2026-09-10-production-release.md)。真实 TikTok 联调仍需单独完成。
+截至 2026-09-19，生产服务器尚未提供，生产环境未建立。[production-junbo.md](production-junbo.md) 仅记录未来建环境的前置条件和发布原则；旧地址与旧“生产验收”均不代表现网。未取得用户明确提供的新服务器与授权清单前，不得执行任何生产连接或发布。
 
 其他环境的首次配置和宿主机命令见 [bootstrap-deployment.md](bootstrap-deployment.md)。下文为通用 staging 方案，补充版本、素材存储和升级顺序。
 
@@ -99,8 +99,8 @@ URL 导入的上传及异常恢复查询完整响应保存于 `material_response
 ### 每次部署的执行与留证
 
 1. 对比目标版本的 Settings、`.env.example`、Compose/启动注入和服务器实际配置，列出新增、缺失、删除及语义变化项。每个开关记录“当前生效值 → 本次拟定值 → 用户确认依据”；首次部署的当前值记为未部署，无法核实的记为待核实，不能套用其他环境的值。
-2. 完成上节确认后，按完整备份和排空流程变更。部署私有环境文件显式写出已确认的每个开关值，不依赖代码或 Compose 默认值。测试配置位于 `/etc/tt-ada-staging/app.env`，生产位于 `/etc/tt-ada/production.env`；同步受控副本，禁止模板覆盖真实配置。
-3. 测试环境重启 API、所有 Worker、唯一 Beat；生产使用固定版本 `deploy/production-compose.sh` 重建受影响服务容器，单纯 restart 不会更新 Compose 环境。分别核对所有运行进程/容器的实际值、版本和同一份配置来源，不能只检查磁盘文件。
+2. 完成上节确认后，按完整备份和排空流程变更。部署私有环境文件显式写出已确认的每个开关值，不依赖代码或 Compose 默认值。测试配置位于 `/etc/tt-ada-staging/app.env`；未来生产配置路径须在服务器确认后登记。同步受控副本，禁止模板覆盖真实配置。
+3. 测试环境重启 API、所有 Worker、唯一 Beat；未来生产环境按其获批的专用手册重建受影响服务。分别核对所有运行进程或容器的实际值、版本和同一份配置来源，不能只检查磁盘文件。
 4. 在各服务实际环境、用户和工作目录中核验 Settings 的最终布尔值；日志只输出开关白名单和一致性结论，不输出整个环境或展开后的 Compose 配置。上述步骤尚为人工发布要求，现有启动脚本不会自动代替用户确认。
 5. 按清单中的业务路径验收。开关 true、服务健康、MCP READY 分别只证明各自状态，不能代替真实业务完成；外部操作超出已有授权时记录待验范围。若用户选择保持关闭，交付时明确列出不可用功能、积压/容量影响及后续开启步骤。
 6. 发布记录保存目标环境/版本、每项发布前后值、确认依据、备份批次、各服务生效检查和实际业务结果。更新环境手册与实施进度；回退时重新核对配置含义与数据库兼容性，不因切换旧代码静默重置已确认开关。
@@ -123,7 +123,7 @@ URL 导入的上传及异常恢复查询完整响应保存于 `material_response
 
 `TIKTOK_CALL_POLICIES` 是系统通过 Redis 执行的请求限流和并发策略，不是付费额度或广告余额。API 与 MCP 都依赖它：为空 `{}` 时业务请求会被 `admission_unconfigured`（“请配置应用调用额度”）阻断，格式或租约不合法会产生 `admission_policy_invalid`。**启用任一通道前必须完成配置和校验，不能只部署代码、等用户授权后才补配置。**
 
-配置由部署管理员写入目标环境私有环境文件：测试 systemd 使用 `/etc/tt-ada-staging/app.env`，骏伯生产使用 `/etc/tt-ada/production.env`，其他 Compose 环境按对应手册指定文件。API、所有 Worker 和 Beat 必须加载相同策略及同一业务 Redis；仅修改本地 `.env` 或文件而未重启已有服务不算生效。Compose 的空值默认用于允许基础系统启动，**不代表 TikTok 集成已经配置完成**。
+配置由部署管理员写入目标环境私有环境文件：测试 systemd 使用 `/etc/tt-ada-staging/app.env`；未来生产环境按其尚待确认的专用手册指定路径。API、所有 Worker 和 Beat 必须加载相同策略及同一业务 Redis；仅修改本地 `.env` 或文件而未重启已有服务不算生效。Compose 的空值默认用于允许基础系统启动，**不代表 TikTok 集成已经配置完成**。
 
 以下为当前测试环境的完整单行写法，不含凭据；其他环境先根据已核实的通道限制和负载制定策略，不直接当作官方默认值：
 
@@ -226,7 +226,7 @@ Beat 每秒触发一次 outbox 发布。单次发布默认最多 20 个公平轮
 5. Linux prefork 使用真实 PG/Redis 执行接收后断线/终止及原通道读取恢复，确认总 create 次数为 1。macOS skip 不构成此项通过。读取 CTA 缺实际账户字段时维持 INCOMPLETE，不降低合同来取得绿色结果。
 6. 成功切换或完成中止恢复后恢复备份 timer，记录当前版本、head、服务和验证结果。回退应用前先核实 schema 兼容；持久化的冻结 route、原始摘要和回执不能为降级而删除，优先修复前进。
 
-具体命令与停止顺序以目标环境手册为准；骏伯只能使用该版本 `deploy/production-compose.sh`，不要运行上面的通用 staging Compose 命令。
+具体命令与停止顺序以目标环境手册为准。当前只有新加坡测试环境具备可执行手册；未来生产服务器确认后必须先补齐专用命令，不能直接运行通用 staging 命令或把候选 `deploy/production-compose.sh` 当作已获批方案。
 
 
 ## 准入配置键迁移

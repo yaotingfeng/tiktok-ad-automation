@@ -2,7 +2,7 @@
 
 ## 版权方弹窗最终版本发布
 
-- 用户要求推送本地更新并部署新加坡测试服务器。`8c1588f` 与最终视觉提交 `9381270a78099f27c5be3f4d26b6b7a77c79e3a8` 已推送现有 `feat/platform-implementation`；服务器从 `347ea522903d386c370265833595df59fffb6a99` 切换到 `9381270`，生产环境未变更。
+- 用户要求推送本地更新并部署新加坡测试服务器。`8c1588f` 与最终视觉提交 `9381270a78099f27c5be3f4d26b6b7a77c79e3a8` 已推送现有 `feat/platform-implementation`；服务器从 `347ea522903d386c370265833595df59fffb6a99` 切换到 `9381270`。仅涉及测试环境；生产服务器尚未建立。
 - 本轮重新执行 TypeScript/Vite 生产构建、3 个改动文件 Biome 和准备页/版权方页 75 项浏览器回归，全部通过。没有后端、迁移、依赖或功能开关变化。
 - 发布前停止 API/Beat、正常停止 Worker 并暂停备份 timer。完整备份 `/var/backups/tt-ada-staging/20260914T040552Z/` 包含 PostgreSQL、Redis、独立项目与实际前端产物、私有配置及证书，五份归档 SHA-256 均通过。
 - PostgreSQL dump 在新临时库恢复，迁移 head 保持 `manual_promotion_links`；既有素材响应使用原密钥完成解密、长度和摘要验证。Redis RDB 在独立 Unix socket 实例装载并通过 PING/DBSIZE；项目和配置分别隔离解压比对，`RELEASE_COMPLETE` 已写入。备份约 6.6 MB，旧 release 和备份保留，仍为同机副本。
@@ -47,7 +47,7 @@
 ## 推送与测试环境发布
 
 - 用户明确要求推送并部署新加坡测试服务器。功能提交 `347ea522903d386c370265833595df59fffb6a99` 已推送现有 `feat/platform-implementation`；远端没有 `main`，未新建分支、强推或创建合并请求。
-- 目标为 `137.220.150.31:22211` 的无 Docker 测试实例。原版本 `7b2ee95431816330f08eb594a80d940e30cd77da`，当前运行版本为 `347ea522903d386c370265833595df59fffb6a99`；生产环境未变更。
+- 目标为 `137.220.150.31:22211` 的无 Docker 测试实例。原版本 `7b2ee95431816330f08eb594a80d940e30cd77da`，当前运行版本为 `347ea522903d386c370265833595df59fffb6a99`；生产服务器尚未建立。
 - 本次没有新增数据库迁移、依赖或功能开关。数据库 head 保持 `manual_promotion_links`；`MATERIAL_INGEST_ENABLED` 和 `MATERIAL_CLEANUP_ENABLED` 均保持 `true`，API、Worker、Beat 逐进程加载同一份调用策略、密钥、MCP 注册引用和媒体主机配置。
 - 发布前停止 API/Beat 并正常停止 Worker，暂停备份 timer。完整备份 `/var/backups/tt-ada-staging/20260914T021951Z/` 包含 PostgreSQL、Redis、独立项目及前端构建、私有配置与证书，五份归档 SHA-256 均通过。
 - PostgreSQL dump 在新建临时库恢复并验证迁移 head；归档响应使用原加密密钥成功解密且长度、摘要一致。Redis RDB 在独立 Unix socket 实例装载并 PING/DBSIZE 通过，项目与配置归档分别隔离解压比对。批次约 6.6 MB，`RELEASE_COMPLETE` 已写入；旧 release 与备份均保留，备份仍为同机副本。

@@ -2,7 +2,7 @@
 
 ## 范围与版本
 
-- 用户要求推送并发布新加坡测试环境。功能提交 `4230f8f12871890a6b8d3e567bbd23f74896d665` 已推送 `feat/platform-implementation`，服务器从 `c6044077e63e7a4c117c6aea9b4c1723788fba54` 切换到该版本；生产环境未变更。
+- 用户要求推送并发布新加坡测试环境。功能提交 `4230f8f12871890a6b8d3e567bbd23f74896d665` 已推送 `feat/platform-implementation`，服务器从 `c6044077e63e7a4c117c6aea9b4c1723788fba54` 切换到该版本；生产服务器尚未建立。
 - 广告名称模板 `{drama_id}` 改用版权方展示数字编号；版权方取链接口继续使用原长技术 ID。缺少正 ASCII 数字编号时不生成预览，不回退内部 UUID、长 ID 或本地占位 ID。
 - 新迁移 `preview_display_drama_id` 只增加新预览的冻结字段，不回填历史快照或改写历史 Campaign 名。功能开关、私有配置、systemd 单元和依赖均无语义变化。
 

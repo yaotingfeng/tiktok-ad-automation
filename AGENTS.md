@@ -41,8 +41,8 @@ Python uses uv in backend; frontend uses Bun and the official template lockfile.
 - API/MCP 启用前必须配置非空有效的 `TIKTOK_CALL_POLICIES`，按部署手册核对限流、并发、租约及共享配额域，并验证 API/Worker/Beat 实际加载同一份配置。不得等用户授权后再补额度配置；缺失或校验失败时不得交付为通道可用。
 - MCP 发布验收必须分开记录：注册配置、真实 OAuth 换码、tools/list、候选 BC 读取、用户明确绑定后的账户发现；仅健康/READY/授权成功不能代替后续验收。缺少用户授权时先完成所有无需授权的配置与检查，明确待验项，不宣称整个集成可用。
 - 修改服务器、数据库或自动化开关前，先阅读目标环境说明；涉及生产时必须先读生产环境说明，确认目标、影响范围和授权。缺少环境说明时先补齐信息，再执行变更。
-- 骏伯生产环境必须先读 `docs/runbooks/production-junbo.md`，按其中固定版本、独立端口、服务排空、备份、Alembic 迁移、验收和回滚流程发布；禁止对同机其他项目执行停机、覆盖配置或数据操作。
-- 生产入口为 `https://manjuad.gzjunbo.net:8000`，独立 Compose 项目 `tt-ada-production`，版本目录 `/opt/tt-ada/releases/<Git SHA>`。必须使用已发布版本的 `deploy/production-compose.sh`，不混用本地或 staging 配置。
+- 截至 2026-09-19，生产服务器尚未提供，生产环境未建立。新加坡服务器仅为测试环境，不能改称或当作生产使用。
+- 任何生产发布必须先读 `docs/runbooks/production-junbo.md`，取得用户明确提供并确认的新服务器、域名、端口、拓扑和授权范围，再补齐具体环境手册。不得使用旧文档中的历史地址推断生产入口，也不得把 staging 配置、密钥、数据库或授权复制到未来生产环境。
 - 数据库变更必须通过审查后的 Alembic 迁移；迁移前冻结写入、正常排空在执行任务并完成可恢复备份。禁止直接修改生产表结构、改写历史迁移、清空队列/持久卷或未经兼容性核实直接回退数据库。所有环境凭据、备份、会话均不进 Git。
 - 首发基础验收与真实 TikTok/R2/版权方联调分别记录；用户尚未配置的外部集成不得通过演示凭据或开启自动化绕过。
 - 发布验收记录位于 `docs/validation/2026-09-10-production-release.md`，后续每次发版新增对应日期记录并更新实施进度。迁移期间暂停备份 timer，等待已启动的备份自然结束；发布或中止恢复处理结束后恢复 timer。Redis RDB 恢复先在新实例/卷验证，禁止覆盖仍带旧 AOF 的生产卷。
