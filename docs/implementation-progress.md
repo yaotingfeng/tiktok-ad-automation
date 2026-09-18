@@ -1334,7 +1334,7 @@
 - 73 项后端回归、1 项 Playwright、Ruff、TypeScript/Vite、迁移降级/升级往返及差异检查通过。与嘉书租户备注修改合并验证共 104 项通过；无新开关、无真实平台写入。
 - `9fd1f01fb9b275429eb2783e485a659be6a136da` 已推送并部署新加坡测试服。`154726Z` 五份归档、1,399 个项目文件、22 张表、1,891 份加密响应及 PostgreSQL/Redis 独立恢复和迁移演练通过；正式 head 为 `draft_scene_phase`。六项服务、4 个 Worker、HTTPS、真实管理员登录与原开关通过，发布后 error 日志为 0。详见[验证记录](validation/2026-09-18-mini-selection-scene-reuse.md)。
 
-## 2026-09-19 构建依赖落定与 Worker 容量优化（本地完成，未发布）
+## 2026-09-19 构建依赖落定与 Worker 容量优化（已部署）
 
 - 明确 `ready/blocked` 的视频分发及 `READY/BLOCKED` 封面由原恢复器复用租户权限、冻结路由、目标账户和当前映射校验后直接落定 MATERIAL 步骤，不再先生成一条 `builds.execute_step` 做重复本地确认。`result_unknown/UNKNOWN`、armed、候选 ID、映射不一致及远端效果不明继续走原未知保护。
 - 通用依赖唤醒器只接管真正未知结果和窗口规划；`wake_unit` 仅提前未来到期的依赖行，已到期行不再被同批前置完成反复 UPDATE，现有 Unit 消息合并和丢消息 repair 保持。
@@ -1343,4 +1343,5 @@
 - 服务器只读容量证据：2 核、约 2 GiB RAM、采样时可用约 210 MiB，2 GiB swap 已用约 1.56 GiB；当前 `Resource=2、Result=1、Build=1、Control=1、Beat=1` 不上调。部署手册新增内存/CPU/数据库连接/上游额度四重边界、逐槽代表性批次压测和回退标准，未来生产不得复制测试值。
 - 新提交 R627 的一个 ADGROUP 在请求正文落库前遇到 `tiktok_call_deadline_exceeded`：无 `REQUEST_ARMED`、无请求正文且仅有本地失败证据，确认没有进入 TikTok 创建发送边界。原代码只对 armed 后的明确未发送异常应用三次预算，准备阶段同类超时被直接判为永久失败。现在准备阶段以“确定未发送”接入同一 5/10 秒、最多三次预算，但不生成 `REQUEST_ARMED/NOT_SENT` 证据；四个已 armed 且只回读到同组兄弟广告的 UNKNOWN 仍禁止自动补建，须另行明确接受重复广告风险。
 - 新增准备阶段截止时间回归先以缺少 `definitely_not_sent` 边界失败，修复后执行状态 17 项通过；与安全未发送恢复、租户管理员建号共 53 项真实 PostgreSQL/Redis 回归通过，租户与授权页面 106 项及 TypeScript/Vite 正式构建通过。没有触发产品 RETRY、RECONCILE 或 TikTok 写入。
-- Ruff 全量检查、改动文件格式、ty app、compileall 和最终差异检查通过。全仓格式检查另报告 10 个本轮未改文件的既有格式差异，未混入本提交。本轮无迁移、无新开关、无 TikTok 调用、未推送、未替换服务器 release 或重启服务。
+- Ruff 全量检查、改动文件格式、ty app、compileall 和最终差异检查通过。全仓格式检查另报告 10 个本轮未改文件的既有格式差异，未混入本提交。本轮无迁移、无新开关、无 TikTok 调用。
+- `815161166f956e6775cb1543224cfa8f80d64493` 已推送并部署新加坡测试服。`191556Z` 五份归档、1,316 个项目/前端文件、22 张表、2,060 份加密响应及 PostgreSQL/Redis/项目/私有配置独立恢复通过；head、锁文件、开关、调用策略和并发均不变。服务器专项 7 项、bootstrap、4 Worker ping、六服务零重启和零 warning/error 通过，测试角色恢复 `NOLOGIN NOCREATEDB`。发布后四队列为 0，未新增构建证据或自动 RETRY；原失败/UNKNOWN 保持，详见[发布验收](validation/2026-09-19-build-dependency-efficiency-release.md)。
