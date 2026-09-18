@@ -47,6 +47,7 @@ from app.modules.tenants.permissions import require_tenant
 
 HARD_LIMIT = 45
 CLAIM_SECONDS = 60
+EMPTY_READBACK_DELAYS = (15, 30, 60)
 SAFE_ERRORS = frozenset(
     {
         "action_forbidden",
@@ -505,6 +506,60 @@ def _remember(
     return result
 
 
+def _empty_readback_delay(
+    step: ExecutionStep,
+    source: ExecutionStep,
+    claim: _Claim,
+    page: BuildPage | AdGroupStatus,
+    progress: dict[str, Any],
+    known: set[str],
+) -> int:
+    """仅已成功创建的精确ID空回读可短暂等索引；未知创建不获得新恢复权限。"""
+    identity = claim.progress.get("known_id")
+    if (
+        step.kind != "READBACK"
+        or source.status != "SUCCEEDED"
+        or not nonempty(identity)
+        or source.remote_id != identity
+        or known != {identity}
+        or not isinstance(page, BuildPage)
+        or not page.complete
+        or page.page != 1
+        or page.rows
+        or page.total_number != 0
+        or page.total_pages not in {0, 1}
+        or claim.progress.get("stage") != "OBJECT"
+        or progress.get("total") != 0
+        or progress.get("seen") != 0
+        or progress.get("matches") != 0
+    ):
+        return 0
+    budget = step.resolved.get("readback_empty_retry")
+    if budget is None:
+        retries = 0
+    elif (
+        isinstance(budget, dict)
+        and budget.get("known_id") == identity
+        and budget.get("body_digest") == claim.digest
+        and type(budget.get("retries")) is int
+    ):
+        retries = budget["retries"]
+    else:
+        return 0
+    if not 0 <= retries < len(EMPTY_READBACK_DELAYS):
+        return 0
+    # 与分页游标分开持久保存：新scan、消息重投、进程重启都不能刷新自动预算。
+    step.resolved = {
+        **step.resolved,
+        "readback_empty_retry": {
+            "known_id": identity,
+            "body_digest": claim.digest,
+            "retries": retries + 1,
+        },
+    }
+    return EMPTY_READBACK_DELAYS[retries]
+
+
 def _finish(
     database_engine: Engine,
     context: TenantContext,
@@ -571,7 +626,17 @@ def _finish(
             progress, result = {**claim.progress, "done": True}, "UNKNOWN"
         if len(known) > 1 or known and known != {claim.progress.get("known_id")}:
             progress, result = {**progress, "done": True}, "UNKNOWN"
+        retry_delay = (
+            _empty_readback_delay(step, source, claim, page, progress, known)
+            if result == "UNKNOWN"
+            else 0
+        )
         summary.update(candidate=progress.get("candidate"), result=result)
+        if retry_delay:
+            summary.update(
+                empty_retry=step.resolved["readback_empty_retry"]["retries"],
+                retry_after_seconds=retry_delay,
+            )
         _evidence(
             session,
             step,
@@ -586,6 +651,10 @@ def _finish(
             _unknown(step, "readback_in_progress")
             session.add_all([step, source])
             return _remember(step, ReconciliationResult("PENDING", True, 0))
+        if retry_delay:
+            _unknown(step, "readback_in_progress")
+            session.add_all([step, source])
+            return _remember(step, ReconciliationResult("PENDING", True, retry_delay))
         candidate_value = progress.get("candidate")
         candidate: dict[str, Any] = (
             candidate_value if isinstance(candidate_value, dict) else {}
