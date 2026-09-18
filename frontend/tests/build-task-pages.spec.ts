@@ -477,6 +477,25 @@ test("列表新任务只提示，不插入正在浏览的第二页", async ({ pa
   ).toBeVisible()
 })
 
+test("素材核查预算耗尽明确停止自动重试，不提示重复上传", async ({ page }) => {
+  const api = await boundary(page)
+  api.step.kind = "MATERIAL"
+  api.step.error_code = "material_reconciliation_budget_exhausted"
+  await page.goto(
+    `/tenants/${T}/build-tasks/${ID}?bc_id=${BC}&tab=issues&result=UNKNOWN`,
+  )
+  await page.getByRole("button", { name: "查看原因", exact: true }).click()
+  await expect(
+    page
+      .getByRole("dialog", { name: "结果与处理建议" })
+      .getByText(
+        "本轮素材核查已停止自动重试，结果仍未知；请核查原任务，勿重复上传。",
+        { exact: true },
+      ),
+  ).toBeVisible()
+  expect(api.requests.every((r) => r.method === "GET")).toBe(true)
+})
+
 test("异常定位与操作记录只读按需查询，并保留平台ENABLE的真实含义", async ({
   page,
 }) => {

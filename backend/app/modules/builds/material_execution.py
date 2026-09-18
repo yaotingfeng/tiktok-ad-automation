@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import tuple_
+from sqlalchemy import and_, or_, tuple_
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -244,7 +244,17 @@ def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
                 ExecutionStep.kind == "MATERIAL",
                 ExecutionStep.status == "UNKNOWN",
                 col(ExecutionStep.cover_job_id).is_(None),
-                col(MaterialDistribution.status).in_(["ready", "blocked"]),
+                or_(
+                    col(MaterialDistribution.status).in_(["ready", "blocked"]),
+                    and_(
+                        col(MaterialDistribution.status) == "result_unknown",
+                        col(MaterialDistribution.reason_code)
+                        == "material_reconciliation_budget_exhausted",
+                        col(ExecutionStep.resolved)[
+                            "reconciliation_reason"
+                        ].astext.is_distinct_from(MaterialDistribution.reason_code),
+                    ),
+                ),
             )
             .order_by(col(ExecutionStep.updated_at), col(ExecutionStep.id))
             .limit(limit)
@@ -288,7 +298,14 @@ def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
                     step.material_id,
                     frozen.advertiser_id if frozen else None,
                 )
-                or dist.status not in {"ready", "blocked"}
+                or (
+                    dist.status not in {"ready", "blocked"}
+                    and not (
+                        dist.status == "result_unknown"
+                        and dist.reason_code
+                        == "material_reconciliation_budget_exhausted"
+                    )
+                )
             ):
                 continue
             row = session.get(Submission, step.submission_id)
@@ -323,6 +340,23 @@ def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
                 )
             except DomainError as error:
                 denied = error.code
+            if dist.status == "result_unknown":
+                # 核查预算耗尽只同步原因，不把未知结果改成失败或重新派发上传。
+                reason = denied or dist.reason_code
+                if (
+                    step.error_code != reason
+                    or step.resolved.get("reconciliation_reason") != dist.reason_code
+                ):
+                    step.error_code = reason
+                    # 观察标记独立于权限错误，避免撤权任务永久占据恢复分页。
+                    step.resolved = {
+                        **step.resolved,
+                        "reconciliation_reason": dist.reason_code,
+                    }
+                    step.updated_at = datetime.now(UTC)
+                    session.add(step)
+                    changed += 1
+                continue
             operation = (
                 session.get(MaterialAssetOperation, dist.operation_id)
                 if dist.operation_id

@@ -172,6 +172,8 @@ export const reasonLabels: Record<string, string> = {
   original_unavailable: "原文件及可用来源副本均不可用",
   material_digest_missing: "素材缺少可信内容摘要",
   material_result_pending: "素材上传结果尚未核实",
+  material_reconciliation_budget_exhausted:
+    "本轮素材核查已停止自动重试，结果仍未知；请核查原任务，勿重复上传。",
   material_share_unconfirmed: "素材共享结果尚未核实",
   material_share_unverified: "素材共享路径尚未核实",
   material_preview_unverified: "素材来源预览尚未通过核实",

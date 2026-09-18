@@ -77,6 +77,63 @@ from .storage import OriginalFile, open_original
 register_dispatch_task("materials.prepare_target", "resources")
 register_dispatch_task("materials.verify_target", "resources")
 ACTIVE_DISTRIBUTIONS = ("queued", "preparing", "verifying", "result_unknown")
+RECONCILIATION_MAX_CLAIMS = 120
+RECONCILIATION_SECONDS = 15 * 60
+RECONCILIATION_MAX_NO_PROGRESS = 3
+
+
+def _reconciliation_exhausted(operation: MaterialAssetOperation) -> bool:
+    budget = operation.remote_response.get("reconciliation_budget")
+    if not budget:
+        return False
+    return (
+        budget["claims"] >= RECONCILIATION_MAX_CLAIMS
+        or budget["no_progress"] >= RECONCILIATION_MAX_NO_PROGRESS
+        or datetime.now(UTC) - datetime.fromisoformat(budget["started_at"])
+        >= timedelta(seconds=RECONCILIATION_SECONDS)
+    )
+
+
+def _stop_reconciliation(
+    dist: MaterialDistribution, operation: MaterialAssetOperation
+) -> None:
+    # 停止自动读取不是未上传证明；原请求、回执及内容身份全部保留。
+    operation.remote_response = {
+        **operation.remote_response,
+        "reconciliation_stopped": True,
+        "error_code": "material_reconciliation_budget_exhausted",
+    }
+    dist.status = operation.status = "result_unknown"
+    dist.reason_code = "material_reconciliation_budget_exhausted"
+    operation.attempt_token, operation.claimed_until = None, None
+
+
+def _claim_reconciliation(operation: MaterialAssetOperation) -> None:
+    budget: dict[str, Any] = operation.remote_response.get("reconciliation_budget") or {
+        "started_at": datetime.now(UTC).isoformat(),
+        "claims": 0,
+        "no_progress": 0,
+    }
+    operation.remote_response = {
+        **operation.remote_response,
+        "reconciliation_budget": {**budget, "claims": budget["claims"] + 1},
+    }
+
+
+def _reconciliation_progress(
+    operation: MaterialAssetOperation, *, progress: bool
+) -> None:
+    budget = operation.remote_response["reconciliation_budget"]
+    response = {
+        **operation.remote_response,
+        "reconciliation_budget": {
+            **budget,
+            "no_progress": 0 if progress else budget["no_progress"] + 1,
+        },
+    }
+    if progress:
+        response.pop("error_code", None)
+    operation.remote_response = response
 
 
 def _context(dist: MaterialDistribution) -> TenantContext:
@@ -98,19 +155,41 @@ def queue_distribution(
 ) -> None:
     if read_only and kind != "verify":
         raise DomainError("invalid_asset_task", "只读核实不能安排上传")
-    if operation.remote_response.get("reconciliation_complete"):
+    if operation.remote_response.get(
+        "reconciliation_complete"
+    ) or operation.remote_response.get("reconciliation_stopped"):
         if not (observe and read_only):
             return
-        # 完整空查不是未发送证明。只允许显式只读核查开始新一轮，
-        # 自动补偿和旧消息均不能重开无限整库扫描，更不能重新上传。
+        # 完整空查/预算耗尽不是未发送证明。仅显式只读核查重开已结束轮次；
+        # 进行中的重复点击不刷新预算，自动补偿和旧消息不能续命或重新上传。
         operation.remote_response = {
             **operation.remote_response,
             "reconciliation_complete": False,
+            "reconciliation_stopped": False,
             "search_page": 1,
             "search_total": None,
             "candidates": [],
             "revision": operation.remote_response.get("revision", 0) + 1,
         }
+        operation.remote_response = {
+            key: value
+            for key, value in operation.remote_response.items()
+            if key not in {"reconciliation_budget", "error_code"}
+        }
+    elif observe and read_only and operation.status == "succeeded":
+        # 成功回执的再次复核沿用既有消息身份；旧轮预算不能阻止新的显式读取。
+        operation.remote_response = {
+            key: value
+            for key, value in operation.remote_response.items()
+            if key not in {"reconciliation_budget", "error_code"}
+        }
+    if (
+        kind == "verify"
+        and operation.attempt_token is None
+        and _reconciliation_exhausted(operation)
+    ):
+        _stop_reconciliation(dist, operation)
+        return
     payload: dict[str, Any] = {
         "distribution_id": str(dist.id),
         "operation_id": str(operation.id),
@@ -558,6 +637,7 @@ def _delivery_matches(
 ) -> bool:
     return (
         not operation.remote_response.get("reconciliation_complete")
+        and not operation.remote_response.get("reconciliation_stopped")
         and (operation_id is None or operation.id == operation_id)
         and (
             revision is None or revision == operation.remote_response.get("revision", 0)
@@ -1297,6 +1377,9 @@ def run_distribution(
             return
         if operation.claimed_until and operation.claimed_until > datetime.now(UTC):
             return
+        if kind == "verify" and _reconciliation_exhausted(operation):
+            _stop_reconciliation(dist, operation)
+            return
         expired_send = operation.status == "sending"
         if expired_send:
             operation.status, dist.status = "result_unknown", "result_unknown"
@@ -1408,6 +1491,8 @@ def run_distribution(
             return
         if read_only:
             dist.status = "verifying"
+        if kind == "verify":
+            _claim_reconciliation(operation)
         previous_status = operation.status
         current_revision = operation.remote_response.get("revision", 0) + 1
         operation.remote_response = {
@@ -1775,6 +1860,20 @@ def run_distribution(
             else:
                 operation.status, dist.status = "verifying", "verifying"
                 _invalidate_mapping(session, context, dist, work)
+            progress = dist.status == "ready" or (
+                kind == "verify"
+                and not work.get("video_id")
+                and not work.get("search_changed")
+                and len(candidates) <= 1
+            )
+            if kind == "verify":
+                _reconciliation_progress(operation, progress=progress)
+            else:
+                operation.remote_response = {
+                    key: value
+                    for key, value in operation.remote_response.items()
+                    if key != "error_code"
+                }
             dist.reason_code = (
                 None if dist.status == "ready" else "material_result_pending"
             )
@@ -1792,10 +1891,10 @@ def run_distribution(
                     due=datetime.now(UTC)
                     + timedelta(
                         seconds=0
-                        if work.get("transport") == "native_share"
-                        and (
-                            kind == "prepare"
-                            or operation.remote_response.get("video_id")
+                        if progress
+                        or (
+                            work.get("transport") == "native_share"
+                            and kind == "prepare"
                         )
                         else 60
                     ),
@@ -1844,6 +1943,8 @@ def run_distribution(
                 "error_code": code,
             }
             operation.attempt_token, operation.claimed_until = None, None
+            if kind == "verify" and not isinstance(error, api.SdkAdmissionDeferred):
+                _reconciliation_progress(operation, progress=False)
             dist.status = (
                 "queued"
                 if deferred
@@ -1982,6 +2083,7 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
                 ["materials.prepare_target", "materials.verify_target"]
             ),
             remote["reconciliation_complete"].astext.is_distinct_from("true"),
+            remote["reconciliation_stopped"].astext.is_distinct_from("true"),
             seed_dependency_settled(),
             or_(
                 col(MaterialDistribution.status).in_(ACTIVE_DISTRIBUTIONS),

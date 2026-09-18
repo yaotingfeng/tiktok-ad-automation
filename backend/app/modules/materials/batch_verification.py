@@ -52,7 +52,9 @@ def try_verify_batch(
         anchor_op = db.get(MaterialAssetOperation, anchor.operation_id)
         if anchor_op is None or anchor_op.status not in {"verifying", "result_unknown"}:
             return False
-        if anchor_op.remote_response.get("reconciliation_complete"):
+        if anchor_op.remote_response.get(
+            "reconciliation_complete"
+        ) or anchor_op.remote_response.get("reconciliation_stopped"):
             return False
         discover = (
             not anchor_op.remote_response.get("video_id")
@@ -98,6 +100,9 @@ def try_verify_batch(
                 col(MaterialAssetOperation.status).in_(["verifying", "result_unknown"]),
                 col(MaterialAssetOperation.remote_response)[
                     "reconciliation_complete"
+                ].astext.is_distinct_from("true"),
+                col(MaterialAssetOperation.remote_response)[
+                    "reconciliation_stopped"
                 ].astext.is_distinct_from("true"),
                 col(MaterialDistribution.target_route) == anchor.target_route,
                 col(MaterialAssetOperation.frozen_route) == anchor.target_route,
@@ -151,17 +156,36 @@ def try_verify_batch(
         for material_id in sorted({dist.material_id for dist, _ in selected}):
             _locked_material(db, context, material_id)
         work: list[dict[str, Any]] = []
+        eligible = []
         for dist, operation in selected:
             db.refresh(dist)
             op = _locked_operation(db, context, operation.id)
             if (
                 op.status not in {"verifying", "result_unknown"}
                 or op.remote_response.get("reconciliation_complete")
+                or op.remote_response.get("reconciliation_stopped")
                 or dist.status not in candidate_states
                 or dist.operation_id != op.id
                 or (op.claimed_until and op.claimed_until > now)
             ):
                 return False
+            if dist.id == anchor.id and not single._delivery_matches(
+                op,
+                operation_id=operation_id,
+                revision=revision,
+                recovery_claim_id=recovery_claim_id,
+            ):
+                return False
+            # 批量入口不能绕过逐项预算；锁内停止耗尽成员，其他成员保留独立身份。
+            if single._reconciliation_exhausted(op):
+                single._stop_reconciliation(dist, op)
+                continue
+            eligible.append((dist, op))
+        selected = eligible
+        if len(selected) < minimum or not any(
+            dist.id == anchor.id for dist, _ in selected
+        ):
+            return False
         route = load_material_route(
             anchor.target_route, context=context, bc_id=anchor.bc_id
         )
@@ -170,6 +194,7 @@ def try_verify_batch(
             material = _locked_material(db, context, dist.material_id)
             op.attempt_token = uuid4()
             op.claimed_until = now + timedelta(seconds=READ_CLAIM_SECONDS)
+            single._claim_reconciliation(op)
             op.remote_response = {
                 **op.remote_response,
                 "revision": op.remote_response.get("revision", 0) + 1,
@@ -241,6 +266,7 @@ def try_verify_batch(
             )
 
     error_code = None
+    admission_deferred = False
     records: tuple[VideoRecord, ...] = ()
     incomplete_discovery = False
     try:
@@ -283,6 +309,7 @@ def try_verify_batch(
     except SDK_SCOPE_INTERRUPTS:
         raise
     except Exception as error:
+        admission_deferred = isinstance(error, api.SdkAdmissionDeferred)
         error_code = (
             error.code
             if isinstance(error, DomainError)
@@ -389,6 +416,17 @@ def try_verify_batch(
                     op.status, dist.status = "succeeded", "ready"
                 else:
                     op.status, dist.status = "verifying", "verifying"
+                    if not discover and error_code is None:
+                        # 与单项详情共用负证据规则；网络/准入错误不推翻已有正回执。
+                        single._invalidate_mapping(
+                            db,
+                            context,
+                            dist,
+                            {
+                                "video_id": item["video_id"],
+                                "target_route": item["route"],
+                            },
+                        )
                     if discover and candidate_identity and record is not None:
                         # 仅缺可用状态/尺寸时保留真实 VID，后续详情读取必须继续核对尺寸。
                         op.remote_response = {
@@ -404,6 +442,13 @@ def try_verify_batch(
             except DomainError as error:
                 code = error.code
                 op.status, dist.status = "result_unknown", "blocked"
+            progress = dist.status == "ready" or (
+                discover and candidate_identity and not ambiguous and code is None
+            )
+            if code:
+                op.remote_response = {**op.remote_response, "error_code": code}
+            if not admission_deferred:
+                single._reconciliation_progress(op, progress=progress)
             op.attempt_token, op.claimed_until = None, None
             dist.reason_code = (
                 None if dist.status == "ready" else code or "material_result_pending"
@@ -417,6 +462,6 @@ def try_verify_batch(
                     dist,
                     op,
                     kind="verify",
-                    due=datetime.now(UTC) + timedelta(seconds=60),
+                    due=datetime.now(UTC) + timedelta(seconds=0 if progress else 60),
                 )
     return True

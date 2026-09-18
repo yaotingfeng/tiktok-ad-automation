@@ -1,5 +1,6 @@
 from sqlmodel import Session, select
 
+from app.core.errors import DomainError
 from app.modules.builds.execution_models import ExecutionStep
 from app.modules.builds.material_execution import recover_material_results
 from app.modules.builds.routes import load_preview_route
@@ -105,3 +106,51 @@ def test_blocked_distribution_does_not_erase_ambiguous_original_upload(executabl
     with Session(db) as session:
         step = session.get(ExecutionStep, step_id)
         assert step.status == "UNKNOWN" and step.dispatch_id is None
+
+
+def test_exhausted_reconciliation_updates_unknown_reason_without_restarting(executable):
+    db, context, ids = executable
+    identity = ids["MATERIAL"][0]
+    dist_id = unresolved(db, context, identity)
+    with Session(db) as session, session.begin():
+        dist = session.get(MaterialDistribution, dist_id)
+        dist.reason_code = "material_reconciliation_budget_exhausted"
+        session.add(dist)
+        original = session.get(ExecutionStep, identity).request_body
+    assert recover_material_results(database_engine=db) == 1
+    assert recover_material_results(database_engine=db) == 0
+    with Session(db) as session:
+        step = session.get(ExecutionStep, identity)
+        assert (step.status, step.phase) == ("UNKNOWN", "DONE")
+        assert step.error_code == "material_reconciliation_budget_exhausted"
+        assert step.dispatch_id is None
+        assert step.request_body == original
+
+
+def test_denied_budget_result_does_not_starve_next_recovery_page(
+    executable, monkeypatch
+):
+    db, context, ids = executable
+    for identity in ids["MATERIAL"][:2]:
+        dist_id = unresolved(db, context, identity)
+        with Session(db) as session, session.begin():
+            dist = session.get(MaterialDistribution, dist_id)
+            dist.reason_code = "material_reconciliation_budget_exhausted"
+            session.add(dist)
+
+            step = session.get(ExecutionStep, identity)
+            step.error_code = "account_access_denied"
+            session.add(step)
+
+    def denied(*_args, **_kwargs):
+        raise DomainError("account_access_denied", "denied")
+
+    monkeypatch.setattr("app.modules.builds.material_execution.require_tenant", denied)
+    assert recover_material_results(database_engine=db, limit=1) == 1
+    assert recover_material_results(database_engine=db, limit=1) == 1
+    assert recover_material_results(database_engine=db, limit=1) == 0
+    with Session(db) as session:
+        for identity in ids["MATERIAL"][:2]:
+            step = session.get(ExecutionStep, identity)
+            assert step.status == "UNKNOWN"
+            assert step.error_code == "account_access_denied"
