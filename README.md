@@ -28,7 +28,7 @@ uv run python app/initial_data.py
 uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-access-log
 ```
 
-默认管理账号由 `.env` 的 `FIRST_SUPERUSER` 和 `FIRST_SUPERUSER_PASSWORD` 初始化。没有公开注册入口。首次创建后改动环境变量不会自动重置已有用户密码。
+默认管理账号由 `.env` 的 `FIRST_SUPERUSER` 和 `FIRST_SUPERUSER_PASSWORD` 初始化。没有公开注册入口；平台管理员可在用户管理中创建账号，租户管理员可在成员管理中直接创建普通账号并同时绑定当前租户。首次创建后改动环境变量不会自动重置已有用户密码。
 
 登录和新建用户使用普通账号、密码，不需要邮箱。网眼、嘉书由各租户保存独立加密凭据，Python适配器自动重新登录并继续原任务；运行时不调用CLI或共享其本地账号文件。R2作为视频临时中转，源广告账户入库强回读成功后安排删除，保留文件名、摘要和实际账户VID；后续目标使用已授权TikTok素材路径。新导入和自动清理为两个独立部署开关，默认关闭，待私有桶和真实跨账户联调通过后开启。
 

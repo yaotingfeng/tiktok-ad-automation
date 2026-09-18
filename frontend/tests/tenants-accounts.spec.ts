@@ -269,6 +269,22 @@ async function boundary(
       ]
       return reply(row)
     }
+    const createdScope = /^\/api\/tenants\/([^/]+)\/members\/users$/.exec(
+      path,
+    )?.[1]
+    if (createdScope && method === "POST") {
+      const row = {
+        tenant_id: createdScope,
+        user_id: "66666666-6666-4666-8666-666666666666",
+        username: body.username,
+        full_name: body.full_name ?? null,
+        role: body.role,
+        active: true,
+        user_active: true,
+      }
+      members[createdScope] = [...(members[createdScope] ?? []), row]
+      return reply(row, 201)
+    }
     return reply({ message: "Unexpected API boundary request" }, 404)
   })
   return { requests, tenants, members }
@@ -425,6 +441,7 @@ test("members can be added by tenant administrators through scoped candidate sea
   await expect(page.getByRole("row", { name: /甲管理员/ })).toBeVisible()
   await page.getByRole("button", { name: "添加成员" }).click()
   const sheet = page.getByRole("dialog", { name: "添加成员", exact: true })
+  await sheet.getByRole("tab", { name: "选择已有用户" }).click()
   await sheet.getByRole("combobox", { name: "已有用户" }).click()
   const picker = page.getByRole("dialog", { name: "选择已有用户" })
   await picker.getByLabel("搜索已有用户").fill("候选")
@@ -443,6 +460,53 @@ test("members can be added by tenant administrators through scoped candidate sea
     body: { user_id: V, role: "viewer", active: true },
   })
   expect(requests.some((request) => request.path === "/api/users/")).toBe(false)
+})
+
+test("tenant administrator creates a login and binds it to the current tenant", async ({
+  page,
+}) => {
+  const { requests } = await boundary(page, {
+    platform: false,
+    role: "tenant_admin",
+  })
+  await page.goto(`/tenants/${A}/members`)
+  await page.getByRole("button", { name: "添加成员" }).click()
+  const sheet = page.getByRole("dialog", { name: "添加成员", exact: true })
+
+  await expect(sheet.getByRole("tab", { name: "新建用户" })).toHaveAttribute(
+    "data-state",
+    "active",
+  )
+  await sheet.getByLabel("登录账号").fill("new-operator")
+  await sheet.getByLabel("姓名（选填）").fill("新投手")
+  await sheet.getByLabel("初始密码", { exact: true }).fill("initial-password")
+  await sheet.getByLabel("确认密码").fill("different-password")
+  await sheet.getByRole("button", { name: "创建并添加" }).click()
+  await expect(sheet.getByText("两次输入的密码不一致")).toBeVisible()
+  expect(
+    requests.filter((request) => request.path.endsWith("/members/users")),
+  ).toHaveLength(0)
+
+  await sheet.getByLabel("确认密码").fill("initial-password")
+  await sheet.getByLabel("租户角色").click()
+  await page.getByRole("option", { name: "投手", exact: true }).click()
+  await sheet.getByRole("button", { name: "创建并添加" }).click()
+
+  await expect(sheet).not.toBeVisible()
+  await expect(page.getByRole("row", { name: /新投手/ })).toContainText("投手")
+  const request = requests.find((item) => item.path.endsWith("/members/users"))
+  expect(request).toMatchObject({
+    method: "POST",
+    path: `/api/tenants/${A}/members/users`,
+    body: {
+      username: "new-operator",
+      full_name: "新投手",
+      password: "initial-password",
+      role: "operator",
+    },
+  })
+  expect(request?.body).not.toHaveProperty("confirm_password")
+  expect(request?.body).not.toHaveProperty("is_superuser")
 })
 
 test("last administrator rejection stays inside the editor and preserves changed role", async ({
@@ -504,6 +568,24 @@ test("browser navigation with an unsaved member form can cancel or discard witho
   await expect(page).toHaveURL(`/tenants/${A}/members`)
   await expect(sheet).not.toBeVisible()
   await expect(page.getByRole("row", { name: /甲管理员/ })).toBeVisible()
+  expect(requests.filter((request) => request.method !== "GET")).toHaveLength(0)
+})
+
+test("member creation draft stays guarded after switching to the existing-user tab", async ({
+  page,
+}) => {
+  const { requests } = await boundary(page)
+  await page.goto(`/tenants/${A}/members`)
+  await chooseTenant(page, "租户乙")
+  await page.getByRole("button", { name: "添加成员" }).click()
+  const sheet = page.getByRole("dialog", { name: "添加成员", exact: true })
+  await sheet.getByLabel("登录账号").fill("unfinished-user")
+  await sheet.getByRole("tab", { name: "选择已有用户" }).click()
+
+  await page.goBack()
+  await expect(page.getByRole("button", { name: "留在当前页" })).toBeVisible()
+  await page.getByRole("button", { name: "留在当前页" }).click()
+  await expect(sheet).toBeVisible()
   expect(requests.filter((request) => request.method !== "GET")).toHaveLength(0)
 })
 
@@ -699,6 +781,7 @@ for (const kind of ["tenant", "member"] as const)
       await page.getByRole("button", { name: title }).click()
       const sheet = page.getByRole("dialog", { name: title, exact: true })
       if (tenant) await sheet.getByLabel("租户名称").fill("未提交租户")
+      else await sheet.getByRole("tab", { name: "选择已有用户" }).click()
       await sheet.getByRole("combobox", { name: label }).click()
       const picker = page.getByRole("dialog", { name: `选择${label}` })
       await picker.getByLabel(`搜索${label}`).fill("候选")

@@ -3,11 +3,13 @@ from uuid import UUID
 
 from sqlalchemy import String, and_, func, or_
 from sqlalchemy import cast as sql_cast
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.core.pagination import Page, count_rows
+from app.core.security import get_password_hash
 from app.models import User
 from app.modules.tenants.models import AuditEvent, Tenant, TenantMembership
 from app.modules.tenants.permissions import Role, require_tenant
@@ -170,6 +172,60 @@ def set_member(
     )
     session.flush()
     return member
+
+
+def create_member_user(
+    session: Session,
+    *,
+    context: TenantContext,
+    username: str,
+    password: str,
+    role: Role,
+    full_name: str | None = None,
+) -> tuple[TenantMembership, User]:
+    """创建普通登录账号并在同一事务内绑定当前租户。"""
+    require_tenant(
+        session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="manage"
+    )
+    if session.exec(select(User.id).where(User.username == username)).first():
+        raise DomainError("username_exists", "该账号已存在，请选择已有用户添加")
+
+    target = User(
+        username=username,
+        full_name=full_name,
+        hashed_password=get_password_hash(password),
+        is_active=True,
+        is_superuser=False,
+    )
+    try:
+        # 唯一索引处理并发同名创建；SAVEPOINT 只撤销账号写入，保留外层事务可返回业务错误。
+        with session.begin_nested():
+            session.add(target)
+            session.flush()
+    except IntegrityError as error:
+        if (
+            getattr(getattr(error.orig, "diag", None), "constraint_name", None)
+            == "ix_user_username"
+        ):
+            raise DomainError(
+                "username_exists", "该账号已存在，请选择已有用户添加"
+            ) from None
+        raise
+
+    member = set_member(
+        session, context=context, user_id=target.id, role=role, active=True
+    )
+    session.add(
+        AuditEvent(
+            tenant_id=context.tenant_id,
+            actor_id=context.actor_id,
+            action="user.create",
+            target_id=str(target.id),
+            details={"username": target.username},
+        )
+    )
+    session.flush()
+    return member, target
 
 
 def _page_limit(limit: int) -> None:

@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import update
 from sqlmodel import Session, select
 
+from app import crud
 from app.core.context import TenantContext
 from app.core.db import engine
 from app.core.errors import DomainError
@@ -155,6 +156,122 @@ def test_member_endpoint_scopes_permission_and_audit(
             TenantMembership, (other_context.tenant_id, other_context.actor_id)
         ).role
         == "operator"
+    )
+
+
+def test_tenant_admin_creates_login_and_member_in_one_request(client, session, context):
+    membership = session.get(TenantMembership, (context.tenant_id, context.actor_id))
+    assert membership is not None
+    membership.role = "tenant_admin"
+    session.flush()
+
+    response = client.post(
+        f"/api/tenants/{context.tenant_id}/members/users",
+        headers=headers(context.actor_id),
+        json={
+            "username": " New.Operator ",
+            "full_name": "新投手",
+            "password": "initial-password",
+            "role": "operator",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json() == {
+        "tenant_id": str(context.tenant_id),
+        "user_id": response.json()["user_id"],
+        "role": "operator",
+        "active": True,
+        "username": "new.operator",
+        "full_name": "新投手",
+        "user_active": True,
+    }
+    created = crud.authenticate(
+        session=session, username="new.operator", password="initial-password"
+    )
+    assert created is not None
+    assert created.is_active is True
+    assert created.is_superuser is False
+    assert (
+        session.get(TenantMembership, (context.tenant_id, created.id)).role
+        == "operator"
+    )
+    events = session.exec(
+        select(AuditEvent)
+        .where(
+            AuditEvent.tenant_id == context.tenant_id,
+            AuditEvent.target_id == str(created.id),
+        )
+        .order_by(AuditEvent.action)
+    ).all()
+    assert [(event.action, event.actor_id) for event in events] == [
+        ("member.set", context.actor_id),
+        ("user.create", context.actor_id),
+    ]
+    assert "password" not in response.text
+    assert "hashed_password" not in response.text
+
+
+def test_operator_cannot_create_tenant_login(client, session, context):
+    response = client.post(
+        f"/api/tenants/{context.tenant_id}/members/users",
+        headers=headers(context.actor_id),
+        json={
+            "username": "blocked.operator",
+            "password": "initial-password",
+            "role": "viewer",
+        },
+    )
+
+    assert response.status_code == 403
+    assert (
+        crud.get_user_by_username(session=session, username="blocked.operator") is None
+    )
+
+
+def test_existing_username_is_not_silently_bound_as_member(client, session, context):
+    membership = session.get(TenantMembership, (context.tenant_id, context.actor_id))
+    assert membership is not None
+    membership.role = "tenant_admin"
+    existing = user(session)
+    existing.username = "already-used"
+    session.flush()
+
+    response = client.post(
+        f"/api/tenants/{context.tenant_id}/members/users",
+        headers=headers(context.actor_id),
+        json={
+            "username": " ALREADY-USED ",
+            "password": "initial-password",
+            "role": "viewer",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "username_exists"
+    assert session.get(TenantMembership, (context.tenant_id, existing.id)) is None
+
+
+def test_member_login_creation_rejects_platform_fields(client, session, context):
+    membership = session.get(TenantMembership, (context.tenant_id, context.actor_id))
+    assert membership is not None
+    membership.role = "tenant_admin"
+
+    response = client.post(
+        f"/api/tenants/{context.tenant_id}/members/users",
+        headers=headers(context.actor_id),
+        json={
+            "username": "no-platform-escalation",
+            "password": "initial-password",
+            "role": "tenant_admin",
+            "is_superuser": True,
+        },
+    )
+
+    assert response.status_code == 422
+    assert (
+        crud.get_user_by_username(session=session, username="no-platform-escalation")
+        is None
     )
 
 

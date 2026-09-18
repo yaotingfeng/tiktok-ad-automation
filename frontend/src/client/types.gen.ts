@@ -1932,6 +1932,66 @@ export type MaterialPublic = {
 };
 
 /**
+ * MaterialReissueInput
+ */
+export type MaterialReissueInput = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Kind
+     */
+    kind: 'VIDEO' | 'COVER';
+    /**
+     * Old Id
+     */
+    old_id: string;
+    /**
+     * Accepted Duplicate Materials
+     */
+    accepted_duplicate_materials: boolean;
+};
+
+/**
+ * MaterialReissueReceipt
+ */
+export type MaterialReissueReceipt = {
+    /**
+     * Authorization Id
+     */
+    authorization_id: string;
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Submission Id
+     */
+    submission_id: string;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Kind
+     */
+    kind: 'VIDEO' | 'COVER';
+    /**
+     * Old Id
+     */
+    old_id: string;
+    /**
+     * Replacement Id
+     */
+    replacement_id: string;
+    /**
+     * Accepted Duplicate Materials
+     */
+    accepted_duplicate_materials?: true;
+};
+
+/**
  * McpBindingItem
  */
 export type McpBindingItem = {
@@ -2099,6 +2159,30 @@ export type MemberSet = {
      * Active
      */
     active: boolean;
+};
+
+/**
+ * MemberUserCreate
+ *
+ * 租户管理员只能创建当前租户的普通登录账号。
+ */
+export type MemberUserCreate = {
+    /**
+     * Username
+     */
+    username: string;
+    /**
+     * Full Name
+     */
+    full_name?: string | null;
+    /**
+     * Password
+     */
+    password: string;
+    /**
+     * Role
+     */
+    role: 'tenant_admin' | 'operator' | 'viewer';
 };
 
 /**
@@ -5396,6 +5480,36 @@ export type tenantsPutMemberResponses = {
 
 export type tenantsPutMemberResponse = tenantsPutMemberResponses[keyof tenantsPutMemberResponses];
 
+export type tenantsPostMemberUserData = {
+    body: MemberUserCreate;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/members/users';
+};
+
+export type tenantsPostMemberUserErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type tenantsPostMemberUserError = tenantsPostMemberUserErrors[keyof tenantsPostMemberUserErrors];
+
+export type tenantsPostMemberUserResponses = {
+    /**
+     * Successful Response
+     */
+    201: MemberPublic;
+};
+
+export type tenantsPostMemberUserResponse = tenantsPostMemberUserResponses[keyof tenantsPostMemberUserResponses];
+
 export type accountsGetAccountsData = {
     body?: never;
     path: {
@@ -7326,6 +7440,40 @@ export type materialsPostObjectRetryResponses = {
 };
 
 export type materialsPostObjectRetryResponse = materialsPostObjectRetryResponses[keyof materialsPostObjectRetryResponses];
+
+export type materialsAuthorizeReissueData = {
+    body: MaterialReissueInput;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Submission Id
+         */
+        submission_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/submissions/{submission_id}/material-reissues';
+};
+
+export type materialsAuthorizeReissueErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialsAuthorizeReissueError = materialsAuthorizeReissueErrors[keyof materialsAuthorizeReissueErrors];
+
+export type materialsAuthorizeReissueResponses = {
+    /**
+     * Successful Response
+     */
+    202: MaterialReissueReceipt;
+};
+
+export type materialsAuthorizeReissueResponse = materialsAuthorizeReissueResponses[keyof materialsAuthorizeReissueResponses];
 
 export type providersPostPreparationData = {
     body: LinkPreparationRequest;

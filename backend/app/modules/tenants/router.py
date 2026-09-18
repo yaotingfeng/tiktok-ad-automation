@@ -13,6 +13,7 @@ from app.modules.tenants.schemas import (
     MemberPublic,
     MemberRole,
     MemberSet,
+    MemberUserCreate,
     TenantCreate,
     TenantSummary,
     TenantUpdate,
@@ -157,5 +158,24 @@ def put_member(
     target = session.get(User, result.user_id)
     assert target is not None
     response = service.member_public(result, target)
+    session.commit()
+    return response
+
+
+@router.post(
+    "/tenants/{tenant_id}/members/users",
+    response_model=MemberPublic,
+    status_code=201,
+)
+def post_member_user(
+    tenant_id: UUID, body: MemberUserCreate, session: SessionDep, user: CurrentUser
+) -> MemberPublic:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="manage"
+    )
+    member, target = service.create_member_user(
+        session, context=context, **body.model_dump()
+    )
+    response = service.member_public(member, target)
     session.commit()
     return response

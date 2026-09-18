@@ -31,6 +31,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import { DirectoryPicker } from "./DirectoryPicker"
 import { ManagementSheet } from "./ManagementSheet"
@@ -273,6 +274,7 @@ function MemberEditor({
   tenantName: string
   onClose: () => void
 }) {
+  const [mode, setMode] = useState<"create" | "existing">("create")
   const [user, setUser] = useState<UserCandidate | null>(
     member
       ? {
@@ -286,18 +288,39 @@ function MemberEditor({
     member?.role ?? "operator",
   )
   const [active, setActive] = useState(member?.active ?? true)
+  const [username, setUsername] = useState("")
+  const [fullName, setFullName] = useState("")
+  const [password, setPassword] = useState("")
+  const [confirmation, setConfirmation] = useState("")
   const [submitted, setSubmitted] = useState(false)
   const queryClient = useQueryClient()
+  const creating = !member && mode === "create"
+  const normalizedUsername = username.trim().toLowerCase()
   const mutation = useMutation({
-    mutationFn: async () =>
-      (
+    mutationFn: async () => {
+      if (creating)
+        return (
+          await TenantsService.postMemberUser({
+            path: { tenant_id: tenantId },
+            body: {
+              username: normalizedUsername,
+              full_name: fullName.trim() || null,
+              password,
+              role,
+            },
+          })
+        ).data
+      return (
         await TenantsService.putMember({
           path: { tenant_id: tenantId },
           body: { user_id: user!.id, role, active },
         })
-      ).data,
+      ).data
+    },
     onSuccess: async () => {
-      toast.success(member ? "成员已更新" : "成员已添加")
+      toast.success(
+        member ? "成员已更新" : creating ? "用户已创建并添加" : "成员已添加",
+      )
       onClose()
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["tenant", tenantId] }),
@@ -305,19 +328,47 @@ function MemberEditor({
       ])
     },
   })
-  const dirty =
-    (!!user &&
-      (!member ||
-        user.id !== member.user_id ||
-        role !== member.role ||
-        active !== member.active)) ||
-    role !== (member?.role ?? "operator") ||
-    active !== (member?.active ?? true)
-  const userError = submitted && !user ? "请选择已有用户" : undefined
+  const dirty = member
+    ? (!!user &&
+        (!member ||
+          user.id !== member.user_id ||
+          role !== member.role ||
+          active !== member.active)) ||
+      role !== (member?.role ?? "operator") ||
+      active !== (member?.active ?? true)
+    : !!username ||
+      !!fullName ||
+      !!password ||
+      !!confirmation ||
+      !!user ||
+      role !== "operator" ||
+      !active
+  const userError =
+    submitted && !creating && !user ? "请选择已有用户" : undefined
+  const usernameInvalid =
+    creating && !/^[a-z0-9_.-]{3,64}$/.test(normalizedUsername)
+  const passwordInvalid =
+    creating && (password.length < 8 || password.length > 128)
+  const confirmationInvalid = creating && password !== confirmation
+  const usernameError =
+    submitted && usernameInvalid
+      ? "账号须为 3 至 64 位小写字母、数字、点、下划线或连字符"
+      : undefined
+  const passwordError =
+    submitted && passwordInvalid ? "密码须为 8 至 128 个字符" : undefined
+  const confirmationError =
+    submitted && confirmationInvalid ? "两次输入的密码不一致" : undefined
+  const valid = creating
+    ? !usernameInvalid && !passwordInvalid && !confirmationInvalid
+    : !!user
   return (
     <ManagementSheet
       title={member ? "编辑成员" : "添加成员"}
-      description={`${tenantName} · 修改仅影响该租户的成员关系。`}
+      description={
+        member
+          ? `${tenantName} · 修改仅影响该租户的成员关系。`
+          : `${tenantName} · 新账号会直接创建并绑定到当前租户。`
+      }
       dirty={dirty}
       pending={mutation.isPending}
       onClose={onClose}
@@ -327,7 +378,11 @@ function MemberEditor({
           type="submit"
           disabled={mutation.isPending || isForbidden(mutation.error)}
         >
-          {mutation.isPending ? "正在保存…" : "保存成员"}
+          {mutation.isPending
+            ? "正在保存…"
+            : creating
+              ? "创建并添加"
+              : "保存成员"}
         </Button>
       }
     >
@@ -338,60 +393,103 @@ function MemberEditor({
           event.preventDefault()
           if (mutation.isPending || isForbidden(mutation.error)) return
           setSubmitted(true)
-          if (user) mutation.mutate()
+          if (valid) mutation.mutate()
         }}
         className="flex flex-col gap-5"
       >
         {mutation.error && <RequestError error={mutation.error} />}
         <FieldGroup>
-          <Field data-invalid={!!userError}>
-            <FieldLabel>已有用户</FieldLabel>
-            {member ? (
-              <p className="break-all text-sm">
-                {member.full_name || member.username} · {member.username}
-              </p>
-            ) : (
-              <DirectoryPicker<UserCandidate>
-                label="已有用户"
-                valueLabel={
-                  user
-                    ? `${user.full_name || user.username} · ${user.username}`
-                    : undefined
-                }
-                queryKey={["tenant", tenantId, "member-candidates"]}
-                requiredSearch
-                invalid={!!userError}
-                describedBy={userError ? "member-user-error" : undefined}
-                disabled={mutation.isPending}
-                load={async (query, cursor, limit, signal) =>
-                  (
-                    await TenantsService.getMemberCandidates({
-                      path: { tenant_id: tenantId },
-                      query: { query, after_id: cursor, limit },
-                      signal,
-                    })
-                  ).data
-                }
-                renderItem={(candidate) => (
-                  <>
-                    <span>{candidate.full_name || candidate.username}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {candidate.username}
-                    </span>
-                  </>
-                )}
-                onSelect={setUser}
-              />
-            )}
-            {user && (
-              <p className="break-all font-mono text-xs text-muted-foreground">
-                {user.id}
-              </p>
-            )}
-            {userError && (
-              <FieldError id="member-user-error">{userError}</FieldError>
-            )}
-          </Field>
+          {member ? (
+            <ExistingUserField
+              member={member}
+              tenantId={tenantId}
+              user={user}
+              setUser={setUser}
+              userError={userError}
+              disabled={mutation.isPending}
+            />
+          ) : (
+            <Tabs
+              value={mode}
+              onValueChange={(value) => {
+                setMode(value as "create" | "existing")
+                setSubmitted(false)
+                mutation.reset()
+              }}
+            >
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="create">新建用户</TabsTrigger>
+                <TabsTrigger value="existing">选择已有用户</TabsTrigger>
+              </TabsList>
+              <TabsContent value="create" className="flex flex-col gap-5 pt-3">
+                <Field data-invalid={!!usernameError}>
+                  <FieldLabel htmlFor="member-username">登录账号</FieldLabel>
+                  <Input
+                    id="member-username"
+                    value={username}
+                    maxLength={64}
+                    autoComplete="off"
+                    disabled={mutation.isPending}
+                    onChange={(event) => setUsername(event.target.value)}
+                  />
+                  {usernameError && <FieldError>{usernameError}</FieldError>}
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="member-full-name">
+                    姓名（选填）
+                  </FieldLabel>
+                  <Input
+                    id="member-full-name"
+                    value={fullName}
+                    maxLength={255}
+                    disabled={mutation.isPending}
+                    onChange={(event) => setFullName(event.target.value)}
+                  />
+                </Field>
+                <Field data-invalid={!!passwordError}>
+                  <FieldLabel htmlFor="member-password">初始密码</FieldLabel>
+                  <Input
+                    id="member-password"
+                    type="password"
+                    value={password}
+                    minLength={8}
+                    maxLength={128}
+                    autoComplete="new-password"
+                    disabled={mutation.isPending}
+                    onChange={(event) => setPassword(event.target.value)}
+                  />
+                  {passwordError && <FieldError>{passwordError}</FieldError>}
+                </Field>
+                <Field data-invalid={!!confirmationError}>
+                  <FieldLabel htmlFor="member-password-confirmation">
+                    确认密码
+                  </FieldLabel>
+                  <Input
+                    id="member-password-confirmation"
+                    type="password"
+                    value={confirmation}
+                    minLength={8}
+                    maxLength={128}
+                    autoComplete="new-password"
+                    disabled={mutation.isPending}
+                    onChange={(event) => setConfirmation(event.target.value)}
+                  />
+                  {confirmationError && (
+                    <FieldError>{confirmationError}</FieldError>
+                  )}
+                </Field>
+              </TabsContent>
+              <TabsContent value="existing" className="pt-3">
+                <ExistingUserField
+                  tenantId={tenantId}
+                  user={user}
+                  setUser={setUser}
+                  userError={userError}
+                  disabled={mutation.isPending}
+                />
+              </TabsContent>
+            </Tabs>
+          )}
           <Field>
             <FieldLabel htmlFor="member-role">租户角色</FieldLabel>
             <Select
@@ -413,29 +511,96 @@ function MemberEditor({
               </SelectContent>
             </Select>
           </Field>
-          <Field>
-            <FieldLabel htmlFor="member-status">成员状态</FieldLabel>
-            <Select
-              value={active ? "active" : "inactive"}
-              onValueChange={(value) => setActive(value === "active")}
-              disabled={mutation.isPending}
-            >
-              <SelectTrigger id="member-status">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value="active">正常</SelectItem>
-                  <SelectItem value="inactive">停用</SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              停用后不可访问本租户，其他租户权限保持不变。
-            </p>
-          </Field>
+          {!creating && (
+            <Field>
+              <FieldLabel htmlFor="member-status">成员状态</FieldLabel>
+              <Select
+                value={active ? "active" : "inactive"}
+                onValueChange={(value) => setActive(value === "active")}
+                disabled={mutation.isPending}
+              >
+                <SelectTrigger id="member-status">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value="active">正常</SelectItem>
+                    <SelectItem value="inactive">停用</SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                停用后不可访问本租户，其他租户权限保持不变。
+              </p>
+            </Field>
+          )}
         </FieldGroup>
       </form>
     </ManagementSheet>
+  )
+}
+
+function ExistingUserField({
+  member,
+  tenantId,
+  user,
+  setUser,
+  userError,
+  disabled,
+}: {
+  member?: MemberPublic
+  tenantId: string
+  user: UserCandidate | null
+  setUser: (user: UserCandidate) => void
+  userError?: string
+  disabled: boolean
+}) {
+  return (
+    <Field data-invalid={!!userError}>
+      <FieldLabel>已有用户</FieldLabel>
+      {member ? (
+        <p className="break-all text-sm">
+          {member.full_name || member.username} · {member.username}
+        </p>
+      ) : (
+        <DirectoryPicker<UserCandidate>
+          label="已有用户"
+          valueLabel={
+            user
+              ? `${user.full_name || user.username} · ${user.username}`
+              : undefined
+          }
+          queryKey={["tenant", tenantId, "member-candidates"]}
+          requiredSearch
+          invalid={!!userError}
+          describedBy={userError ? "member-user-error" : undefined}
+          disabled={disabled}
+          load={async (query, cursor, limit, signal) =>
+            (
+              await TenantsService.getMemberCandidates({
+                path: { tenant_id: tenantId },
+                query: { query, after_id: cursor, limit },
+                signal,
+              })
+            ).data
+          }
+          renderItem={(candidate) => (
+            <>
+              <span>{candidate.full_name || candidate.username}</span>
+              <span className="text-xs text-muted-foreground">
+                {candidate.username}
+              </span>
+            </>
+          )}
+          onSelect={setUser}
+        />
+      )}
+      {user && (
+        <p className="break-all font-mono text-xs text-muted-foreground">
+          {user.id}
+        </p>
+      )}
+      {userError && <FieldError id="member-user-error">{userError}</FieldError>}
+    </Field>
   )
 }
