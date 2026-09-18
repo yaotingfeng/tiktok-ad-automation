@@ -3,7 +3,7 @@
 from uuid import UUID, uuid4
 
 import pytest
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from app.core.errors import DomainError
 from app.modules.builds.execution_models import ExecutionStep
@@ -405,11 +405,15 @@ def test_cross_bc_seed_replacement_rebinds_only_original_waiters_and_shares(
         )
         db.flush()
         steps = db.exec(
-            select(ExecutionStep).where(
+            select(ExecutionStep)
+            .join(BuildUnit, ExecutionStep.unit_id == BuildUnit.id)
+            .where(
                 ExecutionStep.submission_id == submission_id,
                 ExecutionStep.kind == "MATERIAL",
                 ExecutionStep.material_id == material.id,
             )
+            # 故意让 B 先被补发，覆盖查询顺序不等于固定账户 A 的边界。
+            .order_by(col(BuildUnit.advertiser_id).desc())
         ).all()
         assert len(steps) == 2
         consumer_ids = []
@@ -553,6 +557,8 @@ def test_cross_bc_seed_replacement_rebinds_only_original_waiters_and_shares(
         kind="prepare",
     )
     unknown_consumer = None
+    candidate_advertiser = "account-A"
+    unacknowledged_advertiser = None
     if reissue_consumer:
         unknown_consumer = consumer_ids[0]
         run_distribution(
@@ -564,6 +570,15 @@ def test_cross_bc_seed_replacement_rebinds_only_original_waiters_and_shares(
         )
         with Session(database) as db, db.begin():
             old_consumer = db.get(MaterialDistribution, unknown_consumer)
+            candidate_advertiser = old_consumer.advertiser_id
+            unacknowledged = db.get(MaterialDistribution, consumer_ids[1])
+            unacknowledged_advertiser = unacknowledged.advertiser_id
+            assert (
+                db.get(
+                    MaterialAssetOperation, unacknowledged.operation_id
+                ).remote_response.get("share_acknowledged")
+                is not True
+            )
             old_consumer_op = db.get(MaterialAssetOperation, old_consumer.operation_id)
             assert old_consumer.status == old_consumer_op.status == "result_unknown"
             retained_seed_id = old_consumer.seed_id
@@ -680,5 +695,10 @@ def test_cross_bc_seed_replacement_rebinds_only_original_waiters_and_shares(
             == "target-account-A"
         )
     assert sum("/upload/" in url for _, url in calls) == 1
-    assert ("account-A", ["primary-vid"], False) in target_reads
-    assert ("account-A", [], True) in target_reads
+    # 超时影响原整批；只有实际获得补发 ACK 的成员可以查询来源 VID 候选。
+    # 未获 ACK 的另一个原成员仍可凭旧名称搜索的真实目标证据恢复。
+    assert (candidate_advertiser, ["primary-vid"], False) in target_reads
+    assert (candidate_advertiser, [], True) in target_reads
+    if unacknowledged_advertiser is not None:
+        assert (unacknowledged_advertiser, ["primary-vid"], False) not in target_reads
+        assert (unacknowledged_advertiser, [], True) in target_reads
