@@ -1,5 +1,7 @@
 # 新加坡测试环境（无 Docker）
 
+- 2026-09-18 最新运行 `e9b0001a704975a1507852b0a4931005bc3a65d8`：准备2槽公平消费resources/resource-results，专用结果1槽保留，素材总3槽/六服务11进程不变；封面续跑400/406→3/10 SQL并统一批次/成员锁序。Linux19项通过198.44秒，064018Z五归档/1385文件/22表/1451响应独立恢复及实际队列订阅/私有配置/前端/HTTPS通过。原开关、额度、head不变；06:45UTC完整103/180、AD215/360，非整批完成。见[本轮验收](../validation/2026-09-18-work-conserving-material-workers.md)。下述旧版“当前/最新”均为历史记录。
+
 - 2026-09-18 最新运行 `5d16f4b7edf8641ea9e4f9e3df6050066fb789ce`：已ACK视频优先目标VID核实、历史补偿查询有界化、20×10封面批量领取减少N+1、已成功创建空回读有界延后。060724Z五归档/1380文件/22表/1449响应独立恢复通过，六服务11进程、配置/前端/HTTPS及双身份隔离通过，head/额度/并发不变。之前`85104c2`已完成17项明确授权补发；本版仅接续下游只读核查及正式未发送失败恢复，原未知AD不动，仍非整批完成。见[本轮验收](../validation/2026-09-18-material-throughput-followup.md)。以下旧版“当前”措辞均为当次发布时历史记录。
 
 配置文件的统一命名、初始化与定位见 [环境配置入口](../../config/README.md)。项目内私有准备文件为 `.env.staging`，服务器仍加载 `/etc/tt-ada-staging/app.env`；复制文件不代表进程已重载。
@@ -25,7 +27,7 @@
 - 安装 Python 3.14 / uv、Bun 1.4.2、PostgreSQL 18、Redis 8、Nginx；依赖按仓库锁文件冻结安装。
 - PostgreSQL 和 Redis 只监听 loopback；Nginx 提供测试入口，API 仅监听 `127.0.0.1:18000`。域名/TLS 状态以本次验收记录为准。
 - systemd 管理 API、Linux prefork Worker（小内存主机先使用 2 个进程）与唯一 Beat；禁止 API/代理访问日志采集授权参数。Beat 状态保存在 `/var/lib/tt-ada-staging`。
-- 有界流水线版本使用 `deploy/staging-worker.service`（resources，prefork 1）、`deploy/staging-results.service`（resource-results，prefork 1）、`deploy/staging-builds.service`（builds，prefork 1）及 `deploy/staging-control.service`（control，prefork 1）。准备与结果有各自保留的执行槽，素材活跃槽合计仍为2；四个 Worker 加 API、Beat 共六服务十进程，必须统一版本/私有配置并全部覆盖排空、备份、恢复、启动和 ping。首次安装 results 单元前先按旧五服务正常排空。旧队列中的 prepare_cover 由正式消费者按原 ID/参数重试到 resources，不执行运维队列搬移。单提交最多10个合格组合活跃，完成或明确阻断自动补位；不扩大共享上游额度。发布后核对内存/交换区，并分别验准备、核验和广告回读。
+- 当前有界流水线使用 `deploy/staging-worker.service`（resources,resource-results，prefork 2）、`deploy/staging-results.service`（resource-results，prefork 1）、`deploy/staging-builds.service`（builds，prefork 1）及 `deploy/staging-control.service`（control，prefork 1）。共享池沿Redis round_robin与prefetch=1公平消费，专用结果槽保留，素材活跃槽合计3；四个 Worker 加 API、Beat 共六服务11进程，必须统一版本/私有配置并全部覆盖排空、备份、恢复、启动和实际队列订阅核验。旧队列中的 prepare_cover 由正式消费者按原 ID/参数重试到 resources，不执行运维队列搬移。单提交最多10个合格组合活跃，完成或明确阻断自动补位；不扩大共享上游额度。发布后核对内存/交换区，并分别验准备、核验和广告回读。
 - 全新空库通过 Alembic 迁移到固定提交的 head，再初始化管理员。缺少 TikTok/R2/版权方配置时保持未配置，素材导入/清理开关关闭。
 - 后续升级先停止接收写入，停止 Beat 并正常排空 Worker，按通用发布手册备份数据库、Redis、项目文件/构建产物及私有配置（无迁移也必须备份）；迁移成功后切换同版本 API/Worker/Beat。不可通过直接改表或删除数据修复迁移。
 - 验证前端构建、Alembic head、登录和受保护接口、入口检查、Redis/数据库、Worker ping、Beat/outbox；外部真实联调单独验收。
