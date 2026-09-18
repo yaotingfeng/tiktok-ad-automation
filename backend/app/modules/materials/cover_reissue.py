@@ -143,6 +143,14 @@ def create_cover_replacement(
         and rejected_member.get("source_mid")
         in rejected_batch.failed_infos.get(old.advertiser_id, [])
     )
+    authorized_unknown_build = bool(
+        old.purpose == "BUILD"
+        and old.status == "UNKNOWN"
+        and old.error_code in {"cover_result_unknown", "cover_search_incomplete"}
+        and rejected_batch is not None
+        and rejected_member
+        and rejected_member.get("share_requested") is True
+    )
     unknown_source = bool(
         old.purpose == "SOURCE"
         and old.status == "UNKNOWN"
@@ -150,7 +158,7 @@ def create_cover_replacement(
         and old.image_mid is None
     )
     if (
-        not (unknown_source or explicitly_rejected_build)
+        not (unknown_source or explicitly_rejected_build or authorized_unknown_build)
         or old.request_armed_at is None
         or old.known_image_id is not None
         or old.candidate_image_id is not None
@@ -190,7 +198,11 @@ def create_cover_replacement(
         remote_name=f"cover-{identity.hex}.jpg",
         # 明确共享拒绝说明目标没有收到图片；新代直接复用 SOURCE 上传器，
         # 从目标视频取封面并使用上传回执 ID，避免再次选择同一坏源 MID。
-        purpose="SOURCE" if explicitly_rejected_build else old.purpose,
+        purpose=(
+            "SOURCE"
+            if explicitly_rejected_build or authorized_unknown_build
+            else old.purpose
+        ),
     )
     session.add(new)
     session.flush()
