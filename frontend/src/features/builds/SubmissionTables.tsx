@@ -249,6 +249,7 @@ function SubmissionGroupsSheet({
       title={`${unit.title} · 搭建明细`}
       description={`${unit.account_name || unit.advertiser_id} · 提交配置与当前创建结果`}
       dirty={false}
+      className="sm:max-w-5xl"
       onClose={onClose}
     >
       <div className="flex flex-col gap-4">
@@ -760,6 +761,7 @@ export function SubmissionStepsTable({
           title="结果与处理建议"
           description={`${selected.title || selected.unit_id} · ${selected.advertiser_id || ""}`}
           dirty={false}
+          className="sm:max-w-5xl"
           onClose={() => {
             const id = selected.step_id
             setSelected(null)

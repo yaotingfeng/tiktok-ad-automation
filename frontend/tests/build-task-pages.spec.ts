@@ -511,6 +511,10 @@ test("异常定位与操作记录只读按需查询，并保留平台ENABLE的�
   expect(req.query.get("limit")).toBe("50")
   expect(api.requests.filter((r) => r.path.endsWith("/events"))).toHaveLength(0)
   await page.getByRole("button", { name: "查看原因", exact: true }).click()
+  await expect(page.getByRole("dialog", { name: "结果与处理建议" })).toHaveCSS(
+    "max-width",
+    "1024px",
+  )
   await expect(
     page.getByRole("heading", { name: "结果与处理建议" }),
   ).toBeVisible()
@@ -520,6 +524,10 @@ test("异常定位与操作记录只读按需查询，并保留平台ENABLE的�
   await page.keyboard.press("Escape")
   await page.getByRole("tab", { name: "搭建明细", exact: true }).click()
   await page.getByRole("button", { name: "查看明细", exact: true }).click()
+  await expect(page.getByRole("dialog", { name: /搭建明细$/ })).toHaveCSS(
+    "max-width",
+    "1024px",
+  )
   await expect(
     page
       .getByRole("region", { name: "广告系列详情" })
