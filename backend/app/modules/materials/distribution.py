@@ -1231,7 +1231,7 @@ def run_distribution(
             recovery_claim_id=recovery_claim_id,
         ):
             return
-    elif not read_only:
+    else:
         from .batch_verification import try_verify_batch
 
         if try_verify_batch(
@@ -1242,6 +1242,7 @@ def run_distribution(
             operation_id=operation_id,
             revision=revision,
             recovery_claim_id=recovery_claim_id,
+            read_only=read_only,
         ):
             return
     claim = uuid4()
@@ -2057,8 +2058,8 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
     message after a grace period; never manufacture revisions or touch pending
     broker backoff. Eligibility is filtered in SQL before applying the row limit.
     """
-    from sqlalchemy import String, and_, case, cast, func, or_, text
-    from sqlalchemy.dialects.postgresql import UUID as SQLUUID
+    from sqlalchemy import String, and_, cast, func, or_, text, union
+    from sqlalchemy import select as sa_select
 
     from .models import MaterialFile, MaterialUploadAttempt, ObjectUpload
 
@@ -2072,52 +2073,72 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
     now = datetime.now(UTC)
     payload = col(PendingDispatch.payload)
 
-    def payload_uuid(key: str):
-        value = payload[key].astext
-        # 转换消息引用而非已索引的主键；非法旧消息只是不匹配，不能炸掉整轮。
-        return case(
-            (
-                value.op("~")("^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$"),
-                cast(value, SQLUUID),
+    remote = col(MaterialAssetOperation.remote_response)
+    upload_owners = (
+        select(MaterialUploadAttempt.tenant_id, MaterialUploadAttempt.operation_id)
+        .distinct()
+        .cte("repair_upload_owners")
+        .prefix_with("MATERIALIZED")
+    )
+    # 先按业务身份物化当前事实，再与历史消息哈希连接。旧 OR EXISTS 会对每条
+    # 已完成消息重新查库存，并在 LIMIT 前扫描/排序全部历史；短周期恢复不能
+    # 随某个身份过去投递过多少次而反复执行相同的主键查找。
+    source_identities = (
+        sa_select(
+            col(MaterialAssetOperation.id),
+            col(MaterialAssetOperation.tenant_id),
+            col(MaterialAssetOperation.attempt_token),
+            col(MaterialAssetOperation.claimed_until),
+            func.coalesce(remote["revision"].astext, "0").label("revision"),
+        )
+        .join(
+            upload_owners,
+            and_(
+                upload_owners.c.tenant_id == MaterialAssetOperation.tenant_id,
+                upload_owners.c.operation_id == MaterialAssetOperation.id,
             ),
-            else_=None,
+        )
+        .where(
+            col(MaterialAssetOperation.superseded_by_id).is_(None),
+            col(MaterialAssetOperation.status).in_(UNRESOLVED),
+        )
+        .cte("repair_source_identities")
+        .prefix_with("MATERIALIZED")
+    )
+
+    def live_message(identity: Any):
+        return or_(
+            and_(
+                identity.c.attempt_token.is_not(None),
+                payload["claim_id"].astext == cast(identity.c.attempt_token, String),
+                identity.c.claimed_until <= now,
+            ),
+            and_(
+                identity.c.attempt_token.is_(None),
+                payload["revision"].astext == identity.c.revision,
+            ),
         )
 
-    remote = col(MaterialAssetOperation.remote_response)
-    op_owner = (
-        select(MaterialUploadAttempt.id)
-        .where(
-            MaterialUploadAttempt.operation_id == MaterialAssetOperation.id,
-            MaterialUploadAttempt.tenant_id == MaterialAssetOperation.tenant_id,
+    due = (
+        col(PendingDispatch.published_at) <= now - timedelta(seconds=120),
+        PendingDispatch.available_at <= now,
+    )
+    source_candidates = (
+        select(PendingDispatch.id)
+        .join(
+            source_identities,
+            and_(
+                source_identities.c.tenant_id == PendingDispatch.tenant_id,
+                cast(source_identities.c.id, String) == payload["operation_id"].astext,
+            ),
         )
-        .exists()
-    )
-    live_message = or_(
-        and_(
-            col(MaterialAssetOperation.attempt_token).is_not(None),
-            payload["claim_id"].astext
-            == cast(col(MaterialAssetOperation.attempt_token), String),
-            col(MaterialAssetOperation.claimed_until) <= now,
-        ),
-        and_(
-            col(MaterialAssetOperation.attempt_token).is_(None),
-            payload["revision"].astext == func.coalesce(remote["revision"].astext, "0"),
-        ),
-    )
-    source_work = (
-        select(MaterialAssetOperation.id)
         .where(
-            MaterialAssetOperation.tenant_id == PendingDispatch.tenant_id,
-            col(MaterialAssetOperation.superseded_by_id).is_(None),
-            payload_uuid("operation_id") == MaterialAssetOperation.id,
+            *due,
             col(PendingDispatch.task_name).in_(
                 ["materials.upload_original", "materials.verify_original"]
             ),
-            col(MaterialAssetOperation.status).in_(UNRESOLVED),
-            op_owner,
-            live_message,
+            live_message(source_identities),
         )
-        .exists()
     )
     source_started = (
         select(MaterialUploadAttempt.id)
@@ -2148,8 +2169,18 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
     )
     from .bc_seeding import seed_dependency_settled
 
-    target_work = (
-        select(MaterialDistribution.id)
+    target_identities = (
+        sa_select(
+            col(MaterialDistribution.id),
+            col(MaterialDistribution.tenant_id),
+            col(MaterialDistribution.status),
+            col(MaterialAssetOperation.id).label("operation_id"),
+            col(MaterialAssetOperation.status).label("operation_status"),
+            col(MaterialAssetOperation.attempt_token),
+            col(MaterialAssetOperation.claimed_until),
+            func.coalesce(remote["revision"].astext, "0").label("revision"),
+            upload_owners.c.operation_id.is_not(None).label("source_owned"),
+        )
         .join(
             MaterialAssetOperation,
             and_(
@@ -2157,55 +2188,84 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
                 col(MaterialDistribution.tenant_id) == MaterialAssetOperation.tenant_id,
             ),
         )
+        .outerjoin(
+            upload_owners,
+            and_(
+                upload_owners.c.tenant_id == MaterialAssetOperation.tenant_id,
+                upload_owners.c.operation_id == MaterialAssetOperation.id,
+            ),
+        )
         .where(
-            MaterialDistribution.tenant_id == PendingDispatch.tenant_id,
             col(MaterialDistribution.superseded_by_id).is_(None),
             col(MaterialAssetOperation.superseded_by_id).is_(None),
-            payload_uuid("distribution_id") == MaterialDistribution.id,
-            payload_uuid("operation_id") == MaterialAssetOperation.id,
-            col(PendingDispatch.task_name).in_(
-                ["materials.prepare_target", "materials.verify_target"]
-            ),
             remote["reconciliation_complete"].astext.is_distinct_from("true"),
             remote["reconciliation_stopped"].astext.is_distinct_from("true"),
             seed_dependency_settled(),
+        )
+        .cte("repair_target_identities")
+        .prefix_with("MATERIALIZED")
+    )
+    target_candidates = (
+        select(PendingDispatch.id)
+        .join(
+            target_identities,
+            and_(
+                target_identities.c.tenant_id == PendingDispatch.tenant_id,
+                # 身份UUID的规范字符串严格匹配原小写UUID范围，非法消息只不匹配；
+                # 不再逐历史消息正则/CAST，也不把大remote_response带入物化库存。
+                cast(target_identities.c.id, String)
+                == payload["distribution_id"].astext,
+                cast(target_identities.c.operation_id, String)
+                == payload["operation_id"].astext,
+            ),
+        )
+        .where(
+            *due,
+            col(PendingDispatch.task_name).in_(
+                ["materials.prepare_target", "materials.verify_target"]
+            ),
             or_(
-                col(MaterialDistribution.status).in_(ACTIVE_DISTRIBUTIONS),
+                target_identities.c.status.in_(ACTIVE_DISTRIBUTIONS),
                 and_(
                     payload["read_only"].astext == "true",
-                    col(MaterialDistribution.status).in_(["ready", "blocked"]),
+                    target_identities.c.status.in_(["ready", "blocked"]),
                 ),
             ),
             or_(
-                and_(payload["read_only"].astext == "true", live_message),
+                and_(
+                    payload["read_only"].astext == "true",
+                    live_message(target_identities),
+                ),
                 and_(
                     payload["observe"].astext == "true",
                     payload["read_only"].astext.is_distinct_from("true"),
-                    op_owner,
+                    target_identities.c.source_owned,
                 ),
-                and_(col(MaterialAssetOperation.status).in_(UNRESOLVED), live_message),
+                and_(
+                    target_identities.c.operation_status.in_(UNRESOLVED),
+                    live_message(target_identities),
+                ),
             ),
         )
-        .exists()
+    )
+    # 三种来源独立求值并去重；不能先截取历史100条再过滤，否则活任务会饥饿。
+    candidates = (
+        union(
+            source_candidates,
+            select(PendingDispatch.id).where(*due, original_work),
+            target_candidates,
+        )
+        .cte("repair_material_candidates")
+        .prefix_with("MATERIALIZED")
     )
     rows = session.exec(
         select(PendingDispatch)
-        .where(
-            col(PendingDispatch.task_name).in_(
-                [
-                    "materials.upload_original",
-                    "materials.verify_original",
-                    "materials.prepare_target",
-                    "materials.verify_target",
-                ]
-            ),
-            col(PendingDispatch.published_at) <= now - timedelta(seconds=120),
-            PendingDispatch.available_at <= now,
-            or_(source_work, original_work, target_work),
-        )
+        .join(candidates, candidates.c.id == PendingDispatch.id)
+        # CTE快照之后消息可能已被其他worker更新；行锁EPQ必须重验实际到期时间。
+        .where(*due)
         .order_by(col(PendingDispatch.published_at), col(PendingDispatch.id))
         .limit(limit)
-        .with_for_update(skip_locked=True)
+        .with_for_update(of=PendingDispatch, skip_locked=True)
     ).all()
     for dispatch in rows:
         dispatch.published_at = None

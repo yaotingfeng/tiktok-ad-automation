@@ -42,6 +42,7 @@ def try_verify_batch(
     operation_id: UUID | None,
     revision: int | None,
     recovery_claim_id: UUID | None,
+    read_only: bool = False,
 ) -> bool:
     from . import distribution as single
 
@@ -67,6 +68,8 @@ def try_verify_batch(
             and bool(anchor_op.remote_response.get("source_mid"))
             and not anchor_op.remote_response.get("batch_discovery_incomplete")
         )
+        if read_only and not discover:
+            return False
         if not discover and not anchor_op.remote_response.get("video_id"):
             return False
         # 已有VID的刷新分发初始是queued，但其操作已进入verifying。
@@ -103,6 +106,7 @@ def try_verify_batch(
                 MaterialDistribution.bc_id == anchor.bc_id,
                 MaterialDistribution.actor_id == context.actor_id,
                 MaterialDistribution.advertiser_id == anchor.advertiser_id,
+                MaterialDistribution.id == anchor.id if read_only else true(),
                 col(MaterialDistribution.status).in_(candidate_states),
                 col(MaterialAssetOperation.status).in_(["verifying", "result_unknown"]),
                 col(MaterialAssetOperation.remote_response)[
@@ -152,9 +156,18 @@ def try_verify_batch(
         ).all()
         # 单项共享同样留下冻结 MID，多个结果可安全合并读取；不能要求它们
         # 必须来自批量发送账本，否则 seed 等待者逐项共享后永远逐项核实。
-        # 仅一个非批量成员时仍沿原单项分页路径，不改变既有单条恢复语义。
+        # 单个已 ACK 原生共享也需先做目标 VID 实证；未 ACK 单项保留原分页语义。
         minimum = (
-            1 if discover and anchor_op.remote_response.get("share_batch_id") else 2
+            1
+            if read_only
+            or (discover and anchor_op.remote_response.get("share_batch_id"))
+            or (
+                discover
+                and anchor_op.remote_response.get("share_acknowledged") is True
+                and anchor_op.remote_response.get("source_video_id")
+                and anchor_op.remote_response.get("source_bc_id") == anchor.bc_id
+            )
+            else 2
         )
         if len(selected) < minimum or not any(
             dist.id == anchor.id for dist, _ in selected
@@ -218,6 +231,10 @@ def try_verify_batch(
                     "digest": op.request_digest,
                     "video_id": op.remote_response.get("video_id"),
                     "source_mid": op.remote_response.get("source_mid"),
+                    "source_video_id": op.remote_response.get("source_video_id"),
+                    "source_bc_id": op.remote_response.get("source_bc_id"),
+                    "transport": op.remote_response.get("transport"),
+                    "share_acknowledged": op.remote_response.get("share_acknowledged"),
                     "remote_name": op.remote_response.get("remote_name"),
                     "md5": material.video_md5,
                     "size": material.byte_size,
@@ -233,8 +250,15 @@ def try_verify_batch(
                 kind="verify",
                 due=op.claimed_until,
                 claim_id=op.attempt_token,
+                read_only=read_only,
             )
         advertiser_id = anchor.advertiser_id
+        # 新增的单项 VID 候选读取不得把原名称分页恢复改成 MID 批量发现。
+        name_fallback = (
+            discover
+            and len(work) == 1
+            and (read_only or not anchor_op.remote_response.get("share_batch_id"))
+        )
 
     def check_current() -> None:
         with bounded_session(database_engine, task_deadline=deadline) as db, db.begin():
@@ -252,6 +276,17 @@ def try_verify_batch(
                     or dist.operation_id != op.id
                     or op.request_digest != item["digest"]
                     or op.remote_response.get("video_id") != item["video_id"]
+                    or any(
+                        op.remote_response.get(key) != item[key]
+                        for key in (
+                            "transport",
+                            "source_video_id",
+                            "source_bc_id",
+                            "share_acknowledged",
+                        )
+                    )
+                    or op.superseded_by_id is not None
+                    or dist.superseded_by_id is not None
                     or (
                         discover
                         and op.remote_response.get("source_mid") != item["source_mid"]
@@ -277,6 +312,8 @@ def try_verify_batch(
     error_code = None
     admission_deferred = False
     records: tuple[VideoRecord, ...] = ()
+    direct_evidence: dict[UUID, dict[str, str]] = {}
+    name_matches: set[str] = set()
     incomplete_discovery = False
     try:
         check_current()
@@ -292,23 +329,95 @@ def try_verify_batch(
                 deadline, READ_HARD_LIMIT, admission_policy(endpoint).lease_ms
             )
             if discover:
-                mids = tuple(dict.fromkeys(item["source_mid"] for item in work))
-                page = gateway.materials.search_videos(
-                    advertiser_id=advertiser_id,
-                    material_ids=mids,
-                    page=1,
-                    video_name=None,
-                    budget=budget,
-                )
-                # 一页完整枚举才可按 MID 排除同名/重复；其余沿原逐项只读分页恢复。
-                incomplete_discovery = (
-                    page.page != 1
-                    or page.total_pages > 1
-                    or page.total_number != len(page.rows)
-                    or any(row.mid not in mids for row in page.rows)
-                )
-                if not incomplete_discovery:
-                    records = page.rows
+                candidates = [
+                    item
+                    for item in work
+                    if item["share_acknowledged"] is True
+                    and item["source_bc_id"] == route.bc_id
+                    and isinstance(item["source_video_id"], str)
+                    and item["source_video_id"]
+                ]
+                if candidates:
+                    # 原生共享 ACK 不等于目标可用；仅把源 VID 当查询候选，
+                    # 必须由冻结目标账户详情回读证明身份、内容、尺寸和可用性。
+                    require_execution_config(
+                        upload=False,
+                        endpoint="materials.get_videos",
+                        channel=route.channel,
+                    )
+                    target_records = gateway.materials.read_videos(
+                        advertiser_id=advertiser_id,
+                        video_ids=tuple(
+                            dict.fromkeys(
+                                item["source_video_id"] for item in candidates
+                            )
+                        ),
+                        budget=RemoteCallBudget(
+                            deadline,
+                            READ_HARD_LIMIT,
+                            admission_policy("materials.get_videos").lease_ms,
+                        ),
+                    )
+                    for item in candidates:
+                        matches = [
+                            row
+                            for row in target_records
+                            if row.video_id == item["source_video_id"]
+                            and row.advertiser_id == advertiser_id
+                        ]
+                        record = matches[0] if len(matches) == 1 else None
+                        evidence = (
+                            api.video_identity(
+                                record,
+                                advertiser_id=advertiser_id,
+                                video_id=item["source_video_id"],
+                                md5=item["md5"] or "",
+                                expected_size=item["size"],
+                            )
+                            if record is not None and record.displayable is True
+                            else None
+                        )
+                        if evidence:
+                            direct_evidence[item["operation"]] = evidence
+                remaining = [
+                    item for item in work if item["operation"] not in direct_evidence
+                ]
+                if remaining:
+                    mids = tuple(
+                        dict.fromkeys(item["source_mid"] for item in remaining)
+                    )
+                    page = gateway.materials.search_videos(
+                        advertiser_id=advertiser_id,
+                        material_ids=() if name_fallback else mids,
+                        page=1,
+                        video_name=remaining[0]["remote_name"]
+                        if name_fallback
+                        else None,
+                        budget=budget,
+                    )
+                    if name_fallback:
+                        identities, _ = api.search_page(
+                            api.video_page_data(page),
+                            page=1,
+                            remote_name=remaining[0]["remote_name"],
+                            md5=remaining[0]["md5"] or "",
+                        )
+                        name_matches = {identity["video_id"] for identity in identities}
+                    # 一页完整枚举才可按 MID 排除同名/重复；其余沿原逐项只读分页恢复。
+                    incomplete_discovery = (
+                        page.page != 1
+                        or page.total_pages > 1
+                        or (
+                            page.total_number != len(page.rows)
+                            and (not name_fallback or page.total_number is not None)
+                        )
+                        or (
+                            not name_fallback
+                            and any(row.mid not in mids for row in page.rows)
+                        )
+                    )
+                    if not incomplete_discovery:
+                        records = page.rows
             else:
                 records = gateway.materials.read_videos(
                     advertiser_id=advertiser_id,
@@ -378,6 +487,15 @@ def try_verify_batch(
                 or dist.operation_id != op.id
                 or op.request_digest != item["digest"]
                 or op.remote_response.get("video_id") != item["video_id"]
+                or any(
+                    op.remote_response.get(key) != item[key]
+                    for key in (
+                        "transport",
+                        "source_video_id",
+                        "source_bc_id",
+                        "share_acknowledged",
+                    )
+                )
                 or (
                     discover
                     and op.remote_response.get("source_mid") != item["source_mid"]
@@ -398,7 +516,11 @@ def try_verify_batch(
             ambiguous = incomplete_discovery
             candidate_identity = False
             if discover:
-                matches = [row for row in records if row.mid == item["source_mid"]]
+                if name_fallback:
+                    # 共用原单项名称/摘要匹配，不自建第二套名称身份规则。
+                    matches = [row for row in records if row.video_id in name_matches]
+                else:
+                    matches = [row for row in records if row.mid == item["source_mid"]]
                 ambiguous = ambiguous or len(matches) > 1
                 record = matches[0] if len(matches) == 1 else None
                 candidate_identity = bool(
@@ -409,15 +531,17 @@ def try_verify_batch(
                 )
                 if not candidate_identity:
                     record = None
-            evidence = api.verified_video(
+            evidence = direct_evidence.get(item["operation"]) or api.verified_video(
                 {"list": [api.video_record_data(record)] if record else []},
                 md5=item["md5"] or "",
                 expected_video_id=record.video_id
                 if discover and record
                 else item["video_id"] or "",
-                expected_size=item["size"] if discover or item["strict"] else None,
+                expected_size=item["size"]
+                if (discover and not name_fallback) or item["strict"]
+                else None,
             )
-            code = error_code
+            code = None if evidence else error_code
             try:
                 if evidence:
                     single._publish_mapping(
@@ -443,7 +567,7 @@ def try_verify_batch(
                         op.remote_response = {
                             **op.remote_response,
                             "video_id": record.video_id,
-                            "batch_discovered": True,
+                            "batch_discovered": not name_fallback or item["strict"],
                         }
                     elif discover and ambiguous:
                         op.remote_response = {
@@ -474,5 +598,6 @@ def try_verify_batch(
                     op,
                     kind="verify",
                     due=datetime.now(UTC) + timedelta(seconds=0 if progress else 60),
+                    read_only=read_only,
                 )
     return True

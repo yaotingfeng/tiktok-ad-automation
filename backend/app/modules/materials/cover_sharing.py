@@ -3,12 +3,12 @@
 import json
 import re
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta
 from hashlib import sha256
 from typing import Any
 from typing import cast as type_cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from redis import Redis
 from sqlalchemy import Engine, String, and_, cast, func, or_, text
@@ -24,6 +24,7 @@ from app.integrations.tiktok.contracts.common import TRANSIENT_NOT_SENT, RemoteC
 from app.integrations.tiktok.gateway import open_tiktok_gateway
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.jobs.admission import admission_policy
+from app.jobs.models import PendingDispatch
 
 from . import cover_sdk as api
 from . import covers
@@ -34,6 +35,31 @@ from .models import AccountMaterial, MaterialAssetOperation, MaterialFile
 from .routes import load_material_route, require_material_route
 
 SCAN_PAGES_PER_SLICE = 4
+
+
+class _PlanningAccessChecks(covers._CoverAccessChecks):
+    """来源上传权限按固定路由与账户复用，生命周期仍限于当前规划事务。"""
+
+    def __init__(self, session: Session, context: TenantContext):
+        super().__init__(session, context)
+        self.source_uploads: set[tuple[str, str, str]] = set()
+
+    def source_upload(self, target: MaterialCoverJob, source: MaterialCoverJob) -> None:
+        self._require_transaction(self.session, self.context)
+        route = load_material_route(
+            target.frozen_route, context=self.context, bc_id=target.bc_id
+        )
+        key = (route.model_dump_json(), target.bc_id, source.advertiser_id)
+        if key not in self.source_uploads:
+            require_material_route(
+                self.session,
+                context=self.context,
+                route=route,
+                bc_id=target.bc_id,
+                advertiser_id=source.advertiser_id,
+                capability="upload",
+            )
+            self.source_uploads.add(key)
 
 
 def _content_material_ids(
@@ -58,7 +84,7 @@ def _source(
     context: TenantContext,
     target: MaterialCoverJob,
     *,
-    checks: covers._CoverAccessChecks | None = None,
+    checks: _PlanningAccessChecks | None = None,
 ) -> MaterialCoverJob | None:
     # 历史实际上传的 READY 图片也属于有效源；共享得到的目标图片不冒充所有者。
     rows = db.exec(
@@ -96,17 +122,7 @@ def _source(
             continue
         try:
             covers._access(db, context, source, checks=checks)
-            route = load_material_route(
-                target.frozen_route, context=context, bc_id=target.bc_id
-            )
-            require_material_route(
-                db,
-                context=context,
-                route=route,
-                bc_id=target.bc_id,
-                advertiser_id=source.advertiser_id,
-                capability="upload",
-            )
+            (checks or _PlanningAccessChecks(db, context)).source_upload(target, source)
         except DomainError:
             continue
         return source
@@ -265,7 +281,8 @@ def _prepare(
         or anchor.claimed_until <= covers._now()
     ):
         raise DomainError("cover_claim_lost", "封面执行权已变化")
-    source = _source(db, context, anchor)
+    checks = _PlanningAccessChecks(db, context)
+    source = _source(db, context, anchor, checks=checks)
     if source is None:
         db.exec(
             select(MaterialFile)
@@ -324,7 +341,6 @@ def _prepare(
     # 一次远端共享最多20项×10账户。只检查包含当前锚点的一组候选；
     # 其余任务保留原投递，避免积压越大、每次领取的本地SQL越多而永远超时。
     rows = db.exec(candidate_query(first)).all()
-    checks = covers._CoverAccessChecks(db, context)
     # 同一平台图片可属于多个本地视频；矩形领取按本地素材保留全部目标 job。
     pairs = {(str(anchor.material_id), anchor.advertiser_id): (anchor, source)}
     sources: dict[UUID, MaterialCoverJob | None] = {anchor.material_id: source}
@@ -338,7 +354,7 @@ def _prepare(
         ):
             pairs[(str(job.material_id), job.advertiser_id)] = (job, candidate)
     selected = rectangle(set(pairs), (str(anchor.material_id), anchor.advertiser_id))
-    db.exec(
+    materials = db.exec(
         select(MaterialFile)
         .where(
             MaterialFile.tenant_id == context.tenant_id,
@@ -348,30 +364,22 @@ def _prepare(
         )
         .order_by(col(MaterialFile.id))
         .with_for_update()
+        .execution_options(populate_existing=True)
     ).all()
     if covers._fenced(db, context, first.id, nonce) is None:
         raise DomainError("cover_claim_lost", "封面执行权已变化")
-    checks.preload_admission([pairs[pair][0] for pair in selected])
-    claims = {first.id: nonce}
+    claims = _claim_members(
+        db,
+        context,
+        first.id,
+        nonce,
+        [pairs[pair][0] for pair in sorted(selected)],
+        materials,
+        checks,
+    )
     members = []
     for pair in sorted(selected):
         job, selected_source = pairs[pair]
-        if job.id != first.id:
-            if not job.dispatch_id:
-                raise DomainError("cover_claim_lost", "封面任务缺少调度身份")
-            claimed = covers._claim_in_session(
-                db,
-                context,
-                job.id,
-                job.dispatch_id,
-                job.revision,
-                read=False,
-                checks=checks,
-            )
-            if claimed is None:
-                # 事务回滚后重新领取，不能发送缺成员的原矩形。
-                raise DomainError("cover_claim_lost", "封面成员已被领取")
-            claims[job.id] = claimed[1]
         members.append(_snapshot(job, selected_source))
     batch = MaterialCoverShareBatch(
         tenant_id=first.tenant_id,
@@ -398,6 +406,138 @@ def _prepare(
     db.flush()
     db.expunge(batch)
     return batch, claims
+
+
+def _claim_members(
+    db: Session,
+    context: TenantContext,
+    anchor_id: UUID,
+    anchor_nonce: UUID,
+    jobs: list[MaterialCoverJob],
+    materials: Sequence[MaterialFile],
+    checks: covers._CoverAccessChecks,
+) -> dict[UUID, UUID]:
+    """短事务批读领取；任一成员失效即回滚整个矩形，不生成部分共享。"""
+    # 先保存候选消息身份：populate_existing 会原地刷新同一个 ORM 对象。
+    expected = {job.id: (job.dispatch_id, job.revision) for job in jobs}
+    locked = db.exec(
+        select(MaterialCoverJob)
+        .where(
+            MaterialCoverJob.tenant_id == context.tenant_id,
+            col(MaterialCoverJob.id).in_(expected),
+        )
+        .order_by(col(MaterialCoverJob.id))
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).all()
+    if len(locked) != len(expected):
+        raise DomainError("cover_claim_lost", "封面成员已被领取")
+    # 保持 material → anchor → 同伴的持锁顺序；共同权限/窗口仅在本事务复用。
+    dispatches = {
+        dispatch.id: dispatch
+        for dispatch in db.exec(
+            select(PendingDispatch)
+            .where(
+                PendingDispatch.tenant_id == context.tenant_id,
+                col(PendingDispatch.id).in_(
+                    {
+                        value[0]
+                        for identity, value in expected.items()
+                        if identity != anchor_id and value[0] is not None
+                    }
+                ),
+            )
+            .execution_options(populate_existing=True)
+        ).all()
+    }
+    assets = {
+        asset.id: asset
+        for asset in db.exec(
+            select(AccountMaterial)
+            .where(
+                AccountMaterial.tenant_id == context.tenant_id,
+                col(AccountMaterial.id).in_({job.asset_id for job in locked}),
+            )
+            .execution_options(populate_existing=True)
+        ).all()
+    }
+    material_by_id = {material.id: material for material in materials}
+    checks.preload_admission(list(locked))
+    claims = {anchor_id: anchor_nonce}
+    for job in locked:
+        if job.id == anchor_id:
+            if (
+                job.superseded_by_id is not None
+                or job.claim_token != anchor_nonce
+                or not job.claimed_until
+                or job.claimed_until <= covers._now()
+            ):
+                raise DomainError("cover_claim_lost", "封面执行权已变化")
+            continue
+        dispatch_id, revision = expected[job.id]
+        dispatch = dispatches.get(dispatch_id) if dispatch_id else None
+        if (
+            job.superseded_by_id is not None
+            or job.error_code == "cover_receipt_ambiguous"
+            or job.actor_id != context.actor_id
+            or job.dispatch_id != dispatch_id
+            or job.revision != revision
+            or job.status not in {"PENDING", "PREPARING", "VERIFYING"}
+            or dispatch is None
+            or dispatch.actor_id != job.actor_id
+            or dispatch.task_name != "materials.prepare_cover"
+            or dispatch.task_key != f"cover:{job.id}:{job.revision}"
+            or dispatch.payload != {"job_id": str(job.id), "revision": job.revision}
+            or (job.claimed_until and job.claimed_until > covers._now())
+            or job.request_armed_at is not None
+            or (job.purpose == "BUILD" and not checks.admitted(db, context, job))
+        ):
+            raise DomainError("cover_claim_lost", "封面成员已被领取")
+        try:
+            checks.check(db, context, job, upload=True)
+        except DomainError:
+            # 单成员领取会_stop后返回None；调用方随后抛错，整个事务回滚。
+            raise DomainError("cover_claim_lost", "封面成员已被领取") from None
+        material = material_by_id.get(job.material_id)
+        asset = assets.get(job.asset_id)
+        # 与普通领取的_digest_error/_mapping保持相同内容身份要求，不能按缓存VID猜测。
+        if (
+            not job.video_md5
+            or material is None
+            or material.tenant_id != job.tenant_id
+            or material.video_md5 != job.video_md5
+            or asset is None
+            or not asset.verified_at
+            or (
+                asset.tenant_id,
+                asset.bc_id,
+                asset.material_id,
+                asset.advertiser_id,
+                asset.connection_id,
+                asset.video_id,
+                asset.status,
+            )
+            != (
+                job.tenant_id,
+                job.bc_id,
+                job.material_id,
+                job.advertiser_id,
+                job.connection_id,
+                job.video_id,
+                "available",
+            )
+        ):
+            raise DomainError("cover_claim_lost", "封面成员已被领取")
+    # 所有读验完成再修改ORM，避免后续账户权限查询触发逐成员autoflush。
+    for job in locked:
+        if job.id == anchor_id:
+            continue
+        claim = uuid4()
+        job.claim_token = claim
+        job.claimed_until = covers._now() + timedelta(seconds=covers.CLAIM_SECONDS)
+        job.status, job.repair_after = "PREPARING", job.claimed_until
+        claims[job.id] = claim
+    return claims
 
 
 def _resume(

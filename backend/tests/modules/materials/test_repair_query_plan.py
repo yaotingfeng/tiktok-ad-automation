@@ -1,4 +1,4 @@
-"""真实 PostgreSQL 计划：恢复查找必须按 UUID 主键，而非逐条扫描租户库存。"""
+"""真实 PostgreSQL 计划：候选去重后按消息 UUID 加锁，不逐条重查历史库存。"""
 
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -17,7 +17,7 @@ from tests.modules.materials.test_source_uploads import source_env as source_env
 from tests.modules.materials.test_source_uploads import wire as wire
 
 
-def test_repair_uses_material_primary_key_in_actual_postgres_plan(source_env, wire):
+def test_repair_locks_candidate_dispatch_by_primary_key(source_env, wire):
     with Session(engine) as db, db.begin():
         account = target(db, source_env)
         asset(db, source_env, account, status="result_unknown")
@@ -26,7 +26,7 @@ def test_repair_uses_material_primary_key_in_actual_postgres_plan(source_env, wi
     captured = []
 
     def capture(_connection, _cursor, statement, parameters, *_rest):
-        if statement.startswith("SELECT pending_dispatch.id") and "EXISTS" in statement:
+        if "FOR UPDATE" in statement and "pending_dispatch" in statement:
             captured.append((statement, parameters))
 
     with Session(engine) as db, db.begin():
@@ -62,10 +62,9 @@ def test_repair_uses_material_primary_key_in_actual_postgres_plan(source_env, wi
         indexed = [
             node
             for node in nodes(plan)
-            if node.get("Relation Name") == "material_distribution"
-            and "Index Cond" in node
+            if node.get("Relation Name") == "pending_dispatch" and "Index Cond" in node
         ]
-        assert any("id = CASE" in node["Index Cond"] for node in indexed), indexed
+        assert any("id =" in node["Index Cond"] for node in indexed), indexed
         assert db.execute(text("SHOW statement_timeout")).scalar_one() == "10s"
         assert db.execute(text("SHOW jit")).scalar_one() == "off"
     assert wire[0] == []

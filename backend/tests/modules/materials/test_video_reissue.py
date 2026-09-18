@@ -298,7 +298,7 @@ def test_replacement_runs_native_share_and_continues_original_material_step(
             .video_id
             == "verified-target"
         )
-    assert [method for method, _ in calls] == ["GET", "POST", "GET"]
+    assert [method for method, _ in calls] == ["GET", "POST", "GET", "GET"]
 
 
 @pytest.mark.parametrize("executable", [2], indirect=True)
@@ -475,6 +475,7 @@ def test_cross_bc_seed_replacement_rebinds_only_original_waiters_and_shares(
         )
     calls = []
     fail_share = [reissue_consumer]
+    target_reads = []
 
     def transport(_pool, method, url, **kwargs):
         calls.append((method, url))
@@ -529,6 +530,16 @@ def test_cross_bc_seed_replacement_rebinds_only_original_waiters_and_shares(
                     "total_number": 1,
                 },
             }
+            # 详情接口只返回请求的 VID；目标已有另一 VID 时先报候选未找到，
+            # 再让真实列表发现原目标映射，不能用无关 VID 伪造详情命中。
+            requested_videos = json.loads(
+                query.get(
+                    "video_ids", [dict(kwargs.get("fields", [])).get("video_ids", "[]")]
+                )[0]
+            )
+            target_reads.append((advertiser, requested_videos, "/search/" in url))
+            if requested_videos and video not in requested_videos:
+                data["list"] = []
         return HTTPResponse(
             body=json.dumps({"code": 0, "data": data}).encode(), status=200
         )
@@ -631,7 +642,13 @@ def test_cross_bc_seed_replacement_rebinds_only_original_waiters_and_shares(
         assert all(
             db.get(MaterialDistribution, value).status == "ready"
             for value in consumer_ids
-        )
+        ), [
+            (
+                db.get(MaterialDistribution, value).status,
+                db.get(MaterialDistribution, value).reason_code,
+            )
+            for value in consumer_ids
+        ]
         if unknown_consumer:
             original_consumer = db.get(MaterialDistribution, unknown_consumer)
             assert original_consumer.status == "result_unknown"
@@ -663,3 +680,5 @@ def test_cross_bc_seed_replacement_rebinds_only_original_waiters_and_shares(
             == "target-account-A"
         )
     assert sum("/upload/" in url for _, url in calls) == 1
+    assert ("account-A", ["primary-vid"], False) in target_reads
+    assert ("account-A", [], True) in target_reads
