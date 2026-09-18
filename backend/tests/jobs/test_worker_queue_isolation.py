@@ -121,7 +121,7 @@ def test_ready_ad_executes_while_all_material_slots_are_blocked(
 
 
 def test_material_results_have_a_reserved_slot_without_increasing_total_slots():
-    """准备与结果物理分槽；慢封面准备不能进入结果专用队列。"""
+    """保留专用结果槽，其余两个槽共享消费；慢准备仍不能进入结果专用队列。"""
     from app.jobs.celery_app import celery_app
     from app.jobs.tasks import dispatch_queue
 
@@ -132,7 +132,10 @@ def test_material_results_have_a_reserved_slot_without_increasing_total_slots():
         for queues, count in workers
         if set(queues) & {"resources", "resource-results"}
     ]
-    assert sorted(material_workers) == [(["resource-results"], 1), (["resources"], 1)]
+    assert sorted(material_workers) == [
+        (["resource-results"], 1),
+        (["resources", "resource-results"], 2),
+    ]
     assert dispatch_queue("materials.prepare_cover") == "resources"
     assert dispatch_queue("materials.verify_cover") == "resource-results"
     assert dispatch_queue("materials.verify_target") == "resource-results"

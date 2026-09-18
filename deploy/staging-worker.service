@@ -11,8 +11,8 @@ Group=tt-ada
 WorkingDirectory=/opt/tt-ada-staging/current/backend
 EnvironmentFile=/etc/tt-ada-staging/app.env
 Environment=PYTHONUNBUFFERED=1
-# 准备池两个槽；结果池独立保留一个槽，慢上传不能占用结果处理能力。
-ExecStart=/opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.celery_app:celery_app worker -Q resources --pool prefork --concurrency 2 --max-memory-per-child 262144 --max-tasks-per-child 100 --loglevel INFO --hostname resources-singapore@%%h
+# 两个准备槽公平轮询准备/结果，空闲时帮助核验；另有独立结果槽保底，总槽数不变。
+ExecStart=/opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.celery_app:celery_app worker -Q resources,resource-results --pool prefork --concurrency 2 --max-memory-per-child 262144 --max-tasks-per-child 100 --loglevel INFO --hostname resources-singapore@%%h
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=960

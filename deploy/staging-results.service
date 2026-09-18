@@ -11,7 +11,7 @@ Group=tt-ada
 WorkingDirectory=/opt/tt-ada-staging/current/backend
 EnvironmentFile=/etc/tt-ada-staging/app.env
 Environment=PYTHONUNBUFFERED=1
-# 仅核验结果；与准备消费者合计两个活跃素材槽，外部额度保持原值。
+# 专用结果槽保底；另两个共享准备/核验槽可协助，总素材槽数为三，外部额度不变。
 ExecStart=/opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.celery_app:celery_app worker -Q resource-results --pool prefork --concurrency 1 --loglevel INFO --hostname results-singapore@%%h
 Restart=on-failure
 RestartSec=5

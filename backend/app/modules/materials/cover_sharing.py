@@ -553,27 +553,82 @@ def _resume(
         )
         .with_for_update()
     ).one()
+    members = {UUID(member["job_id"]): member for member in batch.members}
+    # 前置_claim已独立提交；这里保持批次→按ID锁成员的次序，不反向获取素材锁。
+    # 锁齐并校验后才集中改ORM，避免每个db.get触发上一成员的autoflush。
+    jobs = db.exec(
+        select(MaterialCoverJob)
+        .where(
+            MaterialCoverJob.tenant_id == context.tenant_id,
+            col(MaterialCoverJob.id).in_(members),
+        )
+        .order_by(col(MaterialCoverJob.id))
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).all()
+    if len(jobs) != len(members) or first.id not in members:
+        raise DomainError("cover_claim_lost", "共享核查成员范围已变化")
+    now = covers._now()
+    pending = []
+    for job in jobs:
+        if job.status == "READY" and job.id != first.id:
+            continue
+        if (
+            job.superseded_by_id is not None
+            or job.bc_id != batch.bc_id
+            or job.actor_id != context.actor_id
+            or job.share_batch_id != batch.id
+            or job.advertiser_id != members[job.id]["advertiser_id"]
+            or job.frozen_route != batch.target_route
+        ):
+            raise DomainError("cover_claim_lost", "共享核查成员范围已变化")
+        if job.id == first.id:
+            if (
+                job.claim_token != nonce
+                or not job.claimed_until
+                or job.claimed_until <= now
+                or job.dispatch_id != first.dispatch_id
+                or job.revision != first.revision
+            ):
+                raise DomainError("cover_claim_lost", "共享核查执行权已变化")
+            continue
+        if job.claimed_until and job.claimed_until > now:
+            raise DomainError("cover_claim_lost", "共享核查成员正在执行")
+        pending.append(job)
     if batch.status == "READY":
         # 过期 READY 的显式复核必须重新读取，不能重放上轮已缓存的正向证据。
         batch.scan_state = {}
-        # 只在新复核开始时清一次；后续分页不能因仍标READY而每次重置。
         batch.status = "VERIFYING"
     claims = {first.id: nonce}
-    for member in batch.members:
-        identity = UUID(member["job_id"])
-        job = db.get(MaterialCoverJob, identity)
-        if job is None or job.status == "READY" or identity == first.id:
-            continue
-        if job.claimed_until and job.claimed_until > covers._now():
-            raise DomainError("cover_claim_lost", "共享核查成员正在执行")
+    for job in pending:
         job.claim_token = nonce
-        job.claimed_until = covers._now() + timedelta(seconds=covers.CLAIM_SECONDS)
+        job.claimed_until = now + timedelta(seconds=covers.CLAIM_SECONDS)
         job.repair_after = job.claimed_until
         job.status = "VERIFYING" if batch.armed_at else "PREPARING"
-        claims[identity] = nonce
+        claims[job.id] = nonce
     db.flush()
     db.expunge(batch)
     return batch, claims
+
+
+def _locked_batch(
+    db: Session, context: TenantContext, batch: MaterialCoverShareBatch
+) -> MaterialCoverShareBatch:
+    # 修改既有批次统一先锁batch再锁job；正常autoflush保留调用方刚取得的回执/游标。
+    current = db.exec(
+        select(MaterialCoverShareBatch)
+        .where(
+            MaterialCoverShareBatch.id == batch.id,
+            MaterialCoverShareBatch.tenant_id == context.tenant_id,
+            MaterialCoverShareBatch.bc_id == batch.bc_id,
+            MaterialCoverShareBatch.actor_id == context.actor_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if current is None:
+        raise DomainError("cover_claim_lost", "共享续跑范围已变化")
+    return current
 
 
 def _continue(
@@ -585,19 +640,50 @@ def _continue(
     delay: int = 0,
 ) -> None:
     """一个批次仅一条续跑 outbox；成员不独立重扫，也不由 repair 放大调度。"""
-    current = _required(db, MaterialCoverShareBatch, batch.id)
+    current = _locked_batch(db, context, batch)
+    members = {UUID(member["job_id"]): member for member in current.members}
+    if (
+        not claims
+        or current.tenant_id != context.tenant_id
+        or current.bc_id != batch.bc_id
+        or current.actor_id != context.actor_id
+        or not set(claims) <= members.keys()
+    ):
+        raise DomainError("cover_claim_lost", "共享续跑范围已变化")
+    # 一次按序批锁替代逐_fenced读取；其租户/当前代/nonce/到期围栏逐项保留。
+    jobs = db.exec(
+        select(MaterialCoverJob)
+        .where(
+            MaterialCoverJob.tenant_id == context.tenant_id,
+            col(MaterialCoverJob.id).in_(claims),
+        )
+        .order_by(col(MaterialCoverJob.id))
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).all()
+    now = covers._now()
+    if len(jobs) != len(claims) or any(
+        job.superseded_by_id is not None
+        or job.bc_id != current.bc_id
+        or job.actor_id != context.actor_id
+        or job.share_batch_id != current.id
+        or job.advertiser_id != members[job.id]["advertiser_id"]
+        or job.frozen_route != current.target_route
+        or job.claim_token != claims[job.id]
+        or job.claimed_until is None
+        or job.claimed_until <= now
+        for job in jobs
+    ):
+        raise DomainError("cover_claim_lost", "共享续跑执行权已变化")
     wake = (
         current.wake_job_id
         if current.wake_job_id in claims
         else sorted(claims, key=str)[0]
     )
     current.wake_job_id = wake
-    for identity, claim in claims.items():
-        job = covers._fenced(db, context, identity, claim)
-        if job is None:
-            raise DomainError("cover_claim_lost", "共享续跑执行权已变化")
+    for job in jobs:
         read = bool(current.armed_at or job.request_armed_at or job.known_image_id)
-        if identity == wake:
+        if job.id == wake:
             covers._queue(db, job, read=read, delay=delay)
         else:
             job.claim_token = job.claimed_until = job.dispatch_id = None
@@ -997,6 +1083,8 @@ def _publish(
         .order_by(col(MaterialFile.id))
         .with_for_update()
     ).all()
+    # 与单项发布保持素材→batch→job次序；_resume仅锁batch→job，不反向拿素材锁。
+    _locked_batch(db, context, batch)
     _check(db, context, batch, claims)
     checks = covers._CoverAccessChecks(db, context)
     for identity, evidence in found.items():
@@ -1165,8 +1253,9 @@ def run_shared_cover(
                     bounded_session(database_engine, task_deadline=deadline) as db,
                     db.begin(),
                 ):
+                    current = _locked_batch(db, context, batch)
                     _check(db, context, batch, claims)
-                    _required(db, MaterialCoverShareBatch, batch.id).members = members
+                    current.members = members
                     for member in members:
                         _required(
                             db, MaterialCoverJob, UUID(member["source_job_id"])
@@ -1287,13 +1376,13 @@ def run_shared_cover(
                 bounded_session(database_engine, task_deadline=deadline) as db,
                 db.begin(),
             ):
+                current = _locked_batch(db, context, batch)
                 _check(db, context, batch, claims, upload=True)
                 for member in pending:
                     if member not in selected:
                         job = _required(db, MaterialCoverJob, UUID(member["job_id"]))
                         job.share_batch_id = None
                         covers._queue(db, job, read=False)
-                current = _required(db, MaterialCoverShareBatch, batch.id)
                 # 已复用 READY 的 job 仍属于真实来源批次，保留只读成员以便过期核查。
                 retained = [
                     {**member, "share_requested": member in selected}
@@ -1338,7 +1427,7 @@ def run_shared_cover(
                 request, budget=budget("materials.share_assets")
             )
             with Session(database_engine) as db, db.begin():
-                current = _required(db, MaterialCoverShareBatch, batch.id)
+                current = _locked_batch(db, context, batch)
                 current.failed_infos = {
                     target: list(mids) for target, mids in receipt.failed_infos.items()
                 }
@@ -1348,9 +1437,7 @@ def run_shared_cover(
     except Exception as error:
         # 即使清理客户端失败也不能重发已 armed 的批次；先保存读回调度。
         with Session(database_engine) as db, db.begin():
-            current = (
-                _required(db, MaterialCoverShareBatch, batch.id) if batch else None
-            )
+            current = _locked_batch(db, context, batch) if batch else None
             unknown = bool(current and current.armed_at)
             code = (
                 error.code if isinstance(error, DomainError) else "cover_share_unknown"

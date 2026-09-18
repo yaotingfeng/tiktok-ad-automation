@@ -13,6 +13,9 @@
 
 ## 验证与发布
 
+- 已部署`5d16f4b7edf8641ea9e4f9e3df6050066fb789ce`，完整备份`/var/backups/tt-ada-staging/20260918T060724Z/`：五归档SHA、1380项目文件、PG恢复22表及1449加密响应、独立Redis和私有配置恢复通过，head仍material_approved_reissue。启动后首次进程检查仅8个（prefork尚未完成）未通过；等待后六服务11进程全部版本/私有配置匹配，前端字节、HTTPS、双身份隔离、计时器和额度通过。无新增flag/配额/并发/依赖修改。
+- 原授权下游40项已ACK VIDEO、15项已成功父READBACK和两项已ACK BUILD封面，通过原`_material_reconciliation`/`queue_step(reconcile=True)`精确排只读恢复；原UNKNOWN AD全行摘要前后不变。正式HTTP RETRY请求`d0f0b357-90d3-549d-8210-934ebfece720`受理202，恢复`26dc3544-2323-4adb-aba3-e781248a27fd`；受理时QUEUED/0，不冒称业务成功。06:08后首轮日志无Traceback/死锁/statement timeout/worker lost/OOM，实际业务结果继续监控。
+- 最终候选`5d16f4b7edf8641ea9e4f9e3df6050066fb789ce`已推送、服务器源字节1217文件及原配置预检通过。服务器增量验收：原素材38项通过；补偿查询/封面15项249.84秒通过（含20×10原5秒预算及4ms/SQL压力）；最终版新增回读8项+两个跨BC参数共10项104.33秒通过，全部测试角色及bootstrap库恢复。根代理跨BC修正2项8.95秒通过。开始完整备份/恢复后部署，不将此前一次失败算作通过。
 - 素材修复已提交推送`0a5a8b797680061ccdc3e43cd1b6fef9d5cd5d86`。整合首次39通过1失败、native4失败6通过，发现单项候选MISS被错误带入批MID发现，已修为复用原api.search_page单项名称规则，批MID严格完整规则不变。最终视频44项通过，根代理独立五文件54项通过128.81秒，Ruff/ty/diff通过；测试服务器隔离54项验收进行中。
 - 服务器首轮38通过1失败546.72秒：跨BC补发保留seed的业务READY、单次转存、旧代证据断言全部通过，但新增断言强制account-A必须发生候选VID读取不成立，实际account-B候选后正常列表、account-A直接列表成功。暂不将此轮计为全通过，继续核实非确定领取顺序与断言范围；独立测试角色/临时bootstrap库已恢复。
 - 已确定性复现上述RED：无ORDER BY使实际获得补发ACK者可能是B；旧A没有ACK，正确行为是不使用源VID候选而只读列表。测试固定B先并验证实际ACK者候选+列表、未ACK者无候选但允许列表；保留所有旧代/seed/单次URL/业务READY断言。生产不变，两参数最终2项通过8.85秒，Ruff/ty/diff绿。
