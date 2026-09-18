@@ -17,7 +17,11 @@ from app.modules.builds.preview_models import BuildUnit, PreviewGroupMaterial
 from app.modules.tenants.permissions import require_tenant
 
 from . import covers
-from .cover_models import MaterialCoverJob, MaterialCoverReceipt
+from .cover_models import (
+    MaterialCoverJob,
+    MaterialCoverReceipt,
+    MaterialCoverShareBatch,
+)
 from .models import MaterialFile
 
 
@@ -111,14 +115,45 @@ def create_cover_replacement(
         ).first()
         is not None
     )
+    rejected_batch = (
+        session.get(MaterialCoverShareBatch, old.share_batch_id)
+        if old.share_batch_id is not None
+        else None
+    )
+    rejected_member = (
+        next(
+            (
+                member
+                for member in rejected_batch.members
+                if member.get("job_id") == str(old.id)
+            ),
+            None,
+        )
+        if rejected_batch is not None
+        else None
+    )
+    explicitly_rejected_build = bool(
+        old.purpose == "BUILD"
+        and old.status == "BLOCKED"
+        and old.error_code == "cover_share_rejected"
+        and rejected_batch is not None
+        and rejected_batch.request_id
+        and rejected_member
+        and rejected_member.get("share_requested") is True
+        and rejected_member.get("source_mid")
+        in rejected_batch.failed_infos.get(old.advertiser_id, [])
+    )
+    unknown_source = bool(
+        old.purpose == "SOURCE"
+        and old.status == "UNKNOWN"
+        and old.share_batch_id is None
+        and old.image_mid is None
+    )
     if (
-        old.purpose != "SOURCE"
-        or old.status != "UNKNOWN"
+        not (unknown_source or explicitly_rejected_build)
         or old.request_armed_at is None
-        or old.share_batch_id is not None
         or old.known_image_id is not None
         or old.candidate_image_id is not None
-        or old.image_mid is not None
         or has_receipt
         or old.claim_token is not None
         or old.claimed_until is not None
@@ -153,7 +188,7 @@ def create_cover_replacement(
         video_id=old.video_id,
         video_md5=old.video_md5,
         remote_name=f"cover-{identity.hex}.jpg",
-        purpose="SOURCE",
+        purpose=old.purpose,
     )
     session.add(new)
     session.flush()
@@ -178,7 +213,11 @@ def create_cover_replacement(
         if unit is None or not cover_matches_step(new, step, unit):
             continue
         step.cover_job_id = new.id
-        step.status, step.phase, step.error_code = "UNKNOWN", "DONE", "cover_pending"
+        step.status, step.phase, step.error_code = (
+            ("PENDING", "IDLE", "cover_pending")
+            if old.purpose == "BUILD"
+            else ("UNKNOWN", "DONE", "cover_pending")
+        )
         step.dispatch_id = step.lease_token = step.lease_expires_at = None
         step.updated_at = covers._now()
         evidence(
@@ -228,7 +267,7 @@ def create_cover_replacement(
         )
         .order_by(col(MaterialCoverJob.id))
         .with_for_update()
-    ).all()
+    ).all() if old.purpose == "SOURCE" else []
     resumed = []
     for job in waiting:
         covers.request_cover_retry(session, context=context, job_id=job.id)

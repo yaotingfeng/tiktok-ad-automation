@@ -11,7 +11,11 @@ from sqlmodel import Session, select
 from app.core.errors import DomainError
 from app.modules.builds.execution_models import ExecutionStep, StepEvidence
 from app.modules.materials import covers
-from app.modules.materials.cover_models import MaterialCoverJob, MaterialCoverReceipt
+from app.modules.materials.cover_models import (
+    MaterialCoverJob,
+    MaterialCoverReceipt,
+    MaterialCoverShareBatch,
+)
 from app.modules.materials.cover_reissue import create_cover_replacement
 from app.modules.materials.models import AccountMaterial
 from tests.modules.builds.test_cover_execution import pending
@@ -67,6 +71,74 @@ def replace(env, job_id, submission_id):
                 )
             )
         return result
+
+
+def rejected_build(env, redis_client):
+    step_id, job_id, submission_id = pending(env, redis_client)
+    with Session(env[0]) as db, db.begin():
+        job = db.get(MaterialCoverJob, job_id)
+        member = {
+            "job_id": str(job.id),
+            "source_job_id": str(job.id),
+            "material_id": str(job.material_id),
+            "advertiser_id": job.advertiser_id,
+            "source_mid": "rejected-source-mid",
+            "signature": "a" * 32,
+            "width": 100,
+            "height": 100,
+            "share_requested": True,
+        }
+        batch = MaterialCoverShareBatch(
+            tenant_id=job.tenant_id,
+            bc_id=job.bc_id,
+            actor_id=job.actor_id,
+            source_advertiser_id="source-account",
+            source_route=dict(job.frozen_route),
+            target_route=dict(job.frozen_route),
+            members=[member],
+            wake_job_id=job.id,
+            status="BLOCKED",
+            armed_at=datetime.now(UTC),
+            request_digest="a" * 64,
+            request_id="rejected-share-request",
+            failed_infos={job.advertiser_id: ["rejected-source-mid"]},
+        )
+        db.add(batch)
+        db.flush()
+        job.status, job.error_code = "BLOCKED", "cover_share_rejected"
+        job.request_armed_at = batch.armed_at
+        job.share_batch_id = batch.id
+        job.dispatch_id = None
+        step = db.get(ExecutionStep, step_id)
+        step.status, step.phase, step.error_code = (
+            "FAILED",
+            "DONE",
+            "cover_share_rejected",
+        )
+        step.dispatch_id = None
+    return step_id, job_id, submission_id
+
+
+def test_explicitly_rejected_build_share_gets_new_generation_without_reusing_attempt(
+    executable, redis_client
+):
+    step_id, old_id, submission_id = rejected_build(executable, redis_client)
+    result = replace(executable, old_id, submission_id)
+    new_id = UUID(result["new_cover_job_id"])
+    with Session(executable[0]) as db:
+        old = db.get(MaterialCoverJob, old_id)
+        new = db.get(MaterialCoverJob, new_id)
+        step = db.get(ExecutionStep, step_id)
+        assert old.superseded_by_id == new_id
+        assert old.status == "BLOCKED" and old.share_batch_id is not None
+        assert new.purpose == "BUILD" and new.status == "PENDING"
+        assert new.share_batch_id is None and new.request_armed_at is None
+        assert step.cover_job_id == new_id
+        assert (step.status, step.phase, step.error_code) == (
+            "PENDING",
+            "IDLE",
+            "cover_pending",
+        )
 
 
 def test_reissue_keeps_old_history_and_unknown_ad_and_is_idempotent(
