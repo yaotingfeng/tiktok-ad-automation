@@ -53,6 +53,7 @@ from .remote_sources import (
     require_remote_material,
     resolve_remote_source,
 )
+from .response_archive import material_response_observer
 from .routes import (
     load_material_route,
     require_material_route,
@@ -959,6 +960,18 @@ def _send_remote_asset(
         route=route,
         task_deadline=deadline,
         before_request=check_current,
+        # 原生共享会读取源账户；只有 URL 转存会话完全属于本次目标操作。
+        response_observer=None
+        if native
+        else material_response_observer(
+            database_engine=database_engine,
+            context=context,
+            route=route,
+            material_id=work["material_id"],
+            operation_id=operation_id,
+            advertiser_id=work["advertiser_id"],
+            task_deadline=deadline,
+        ),
     ) as gateway:
         if native:
             # 共享使用 MID，且平台复制源名称；保存真实名称才能恢复重名/超时结果。
@@ -1617,6 +1630,16 @@ def run_distribution(
                     route=route,
                     task_deadline=deadline,
                     before_request=check_current,
+                    # 目标详情与搜索分别留档，不能把核验响应当作原上传回执。
+                    response_observer=material_response_observer(
+                        database_engine=database_engine,
+                        context=context,
+                        route=route,
+                        material_id=work["material_id"],
+                        operation_id=operation_id,
+                        advertiser_id=work["advertiser_id"],
+                        task_deadline=deadline,
+                    ),
                 ) as gateway:
                     if original:
                         with (

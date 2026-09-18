@@ -1,4 +1,4 @@
-"""Tenant-bound compressed response archives for the existing source upload flow."""
+"""Tenant-bound compressed response archives for source uploads and target relays."""
 
 import base64
 import gzip

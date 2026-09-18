@@ -48,6 +48,8 @@
 
 URL 导入的上传及异常恢复查询完整响应保存于 `material_response_archive`；无需另开开关，也不会恢复正常上传后的逐条回查。首次包含该功能的发布必须迁移到 `mat_response_archive`（后续以实际单 head 为准），不能只替换代码。范围、格式与失败行为见[响应留档设计](../superpowers/specs/2026-09-13-material-response-archive.md)。
 
+2026-09-18 起，目标账户 URL 转存及目标详情/库存核验也接入同一归档器，按目标冻结路由与操作独立保存，不复用来源账户的上传归档冒充目标回执。原生共享会话中的源账户读取不绑定目标归档器；图片与共享接口不在本轮新增归档范围。此调整无需迁移或新开关，不增加成功转存后的逐条回查。历史缺失正文仍无法追溯补回，也不改变 UNKNOWN 的重复发送限制。
+
 沿用该环境 `CONNECTION_ENCRYPTION_KEY`，不要重新生成密钥。完整数据库备份须包含归档表，私有配置备份须包含对应密钥；隔离恢复后验证可解密及摘要一致。原件自动清理不删除响应；当前不自动按时间清理归档，监控 `pg_total_relation_size('material_response_archive')` 和备份增长。回退应用前检查兼容，禁止用迁移 downgrade 删除已有响应。
 
 排查时按租户、BC、素材、操作和接收时间定位归档，在受控服务环境调用 `app.modules.materials.response_archive.read_material_response`，传入当前管理员的 `TenantContext`、BC、素材及响应 ID；该函数重新验证数据库权限后返回完整正文 bytes。不要直接在普通日志、页面或工单中展开密文解密内容；必要导出只放私有目录。历史未保存的上传正文不可恢复，查询响应不能冒充上传响应。归档失败错误码为 `material_response_archive_failed`；恢复数据库/密钥后核查原 UNKNOWN 操作，不直接重新上传。
