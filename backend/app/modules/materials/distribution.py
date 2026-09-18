@@ -154,6 +154,9 @@ def queue_distribution(
     observe: bool = False,
     read_only: bool = False,
 ) -> None:
+    # 显式接替后旧未知只保留历史，不再安排核实或准备消息。
+    if dist.superseded_by_id is not None or operation.superseded_by_id is not None:
+        return
     if read_only and kind != "verify":
         raise DomainError("invalid_asset_task", "只读核实不能安排上传")
     if operation.remote_response.get(
@@ -471,6 +474,7 @@ def _ensure_target_asset(
             MaterialDistribution.bc_id == bc_id,
             MaterialDistribution.material_id == material_id,
             MaterialDistribution.advertiser_id == advertiser_id,
+            col(MaterialDistribution.superseded_by_id).is_(None),
             col(MaterialDistribution.status).in_(ACTIVE_DISTRIBUTIONS),
         )
         .with_for_update()
@@ -637,7 +641,8 @@ def _delivery_matches(
     recovery_claim_id: UUID | None,
 ) -> bool:
     return (
-        not operation.remote_response.get("reconciliation_complete")
+        operation.superseded_by_id is None
+        and not operation.remote_response.get("reconciliation_complete")
         and not operation.remote_response.get("reconciliation_stopped")
         and (operation_id is None or operation.id == operation_id)
         and (
@@ -685,6 +690,9 @@ def _publish_mapping(
     *,
     connection_id: UUID | None = None,
 ) -> None:
+    # 迟到旧回执不能覆盖新代 VID 或清空新封面；响应正文仍独立留档。
+    if dist.superseded_by_id is not None:
+        return
     access = _target_access(
         session, context, dist, upload=False, connection_id=connection_id
     )
@@ -725,6 +733,8 @@ def _invalidate_mapping(
     dist: MaterialDistribution,
     work: dict[str, Any],
 ) -> None:
+    if dist.superseded_by_id is not None:
+        return
     # 真实详情不再支持正证据时，保留同一 VID 进入只读核查；不影响新身份或新连接。
     mapping = target_mapping(
         session,
@@ -866,6 +876,9 @@ def _relay_receipt(
         dist = _load_distribution(db, context, distribution_id)
         _locked_material(db, context, dist.material_id)
         operation = _locked_operation(db, context, operation_id)
+        # 网关回执可迟于显式接替到达；完整正文由 observer 留档，旧业务证据不可改写。
+        if dist.superseded_by_id is not None or operation.superseded_by_id is not None:
+            return
         existing = operation.remote_response.get("video_id")
         if existing and existing != evidence["video_id"]:
             operation.remote_response = {
@@ -936,7 +949,12 @@ def _send_remote_asset(
                 lock=True,
             )
             operation = _locked_operation(db, context, operation_id)
-            if operation.attempt_token != claim or dist.operation_id != operation_id:
+            if (
+                operation.superseded_by_id is not None
+                or dist.superseded_by_id is not None
+                or operation.attempt_token != claim
+                or dist.operation_id != operation_id
+            ):
                 raise DomainError("material_claim_changed", "素材操作已由其他任务接管")
             _require_distribution_source(
                 db,
@@ -1003,7 +1021,9 @@ def _send_remote_asset(
                 _locked_material(db, context, dist.material_id)
                 operation = _locked_operation(db, context, operation_id)
                 if (
-                    operation.attempt_token != claim
+                    operation.superseded_by_id is not None
+                    or dist.superseded_by_id is not None
+                    or operation.attempt_token != claim
                     or dist.operation_id != operation_id
                 ):
                     return None
@@ -1017,7 +1037,12 @@ def _send_remote_asset(
             dist = _load_distribution(db, context, distribution_id)
             _locked_material(db, context, dist.material_id)
             operation = _locked_operation(db, context, operation_id)
-            if operation.attempt_token != claim or dist.operation_id != operation_id:
+            if (
+                operation.superseded_by_id is not None
+                or dist.superseded_by_id is not None
+                or operation.attempt_token != claim
+                or dist.operation_id != operation_id
+            ):
                 return None
             _target_access(db, context, dist, upload=True)
             operation.status, dist.status = "sending", "preparing"
@@ -1041,7 +1066,9 @@ def _send_remote_asset(
                     _locked_material(db, context, dist.material_id)
                     operation = _locked_operation(db, context, operation_id)
                     if (
-                        operation.attempt_token != claim
+                        operation.superseded_by_id is not None
+                        or dist.superseded_by_id is not None
+                        or operation.attempt_token != claim
                         or dist.operation_id != operation_id
                     ):
                         return None
@@ -1134,6 +1161,8 @@ def run_distribution(
     # 而缓存过期时，旧观察消息会错误建立新一代读取并持续放大队列。
     with Session(database_engine) as session:
         current = _load_distribution(session, context, distribution_id)
+        if current.superseded_by_id is not None:
+            return
         if current.status not in ACTIVE_DISTRIBUTIONS and not (
             read_only and current.status in {"ready", "blocked"}
         ):
@@ -1221,6 +1250,8 @@ def run_distribution(
     deadline = datetime.now(UTC) + timedelta(seconds=hard - 5)
     with Session(database_engine) as session, session.begin():
         dist = _load_distribution(session, context, distribution_id)
+        if dist.superseded_by_id is not None:
+            return
         if dist.status not in ACTIVE_DISTRIBUTIONS and not (
             read_only and dist.status in {"ready", "blocked"}
         ):
@@ -1239,16 +1270,29 @@ def run_distribution(
                 material_id=dist.material_id,
                 lock=True,
             )
+            # 获取素材锁前可能已有授权接替提交；刷新旧分发，不能用陈旧身份继续。
+            session.refresh(dist)
+            if dist.superseded_by_id is not None:
+                return
             _target_access(session, context, dist, upload=False)
         except DomainError as error:
-            if kind == "prepare" and not read_only and dist.operation_id is not None:
+            if dist.operation_id is not None:
                 # 目标撤权/绑定换代发生在发送前时，释放明确未发送的旧操作；
                 # 新提交可冻结新授权，已 armed 或在途操作继续保留原核实身份。
                 # 租户权限可能先于 load_material 失败，记账仍遵守素材→操作锁序。
                 _locked_material(session, context, dist.material_id)
+                session.refresh(dist)
                 operation = _locked_operation(session, context, dist.operation_id)
+                # 准备和核实的拒权分支都必须受当前头约束，迟到旧消息不能改历史状态。
                 if (
-                    (operation_id is None or operation_id == operation.id)
+                    dist.superseded_by_id is not None
+                    or operation.superseded_by_id is not None
+                ):
+                    return
+                if (
+                    kind == "prepare"
+                    and not read_only
+                    and (operation_id is None or operation_id == operation.id)
                     and (
                         revision is None
                         or revision == operation.remote_response.get("revision", 0)
@@ -1607,7 +1651,9 @@ def run_distribution(
                         )
                         operation = _locked_operation(db, context, operation_id)
                         if (
-                            operation.attempt_token != claim
+                            operation.superseded_by_id is not None
+                            or dist.superseded_by_id is not None
+                            or operation.attempt_token != claim
                             or dist.operation_id != operation_id
                         ):
                             raise DomainError(
@@ -1658,7 +1704,9 @@ def run_distribution(
                             )
                             operation = _locked_operation(db, context, operation_id)
                             if (
-                                operation.attempt_token != claim
+                                operation.superseded_by_id is not None
+                                or dist.superseded_by_id is not None
+                                or operation.attempt_token != claim
                                 or dist.operation_id != operation_id
                             ):
                                 return
@@ -1769,7 +1817,12 @@ def run_distribution(
             dist = _load_distribution(session, context, distribution_id)
             _locked_material(session, context, dist.material_id)
             operation = _locked_operation(session, context, operation_id)
-            if operation.attempt_token != claim or dist.operation_id != operation_id:
+            if (
+                operation.superseded_by_id is not None
+                or dist.superseded_by_id is not None
+                or operation.attempt_token != claim
+                or dist.operation_id != operation_id
+            ):
                 return
             if kind == "prepare":
                 assert isinstance(evidence, dict)
@@ -1933,7 +1986,12 @@ def run_distribution(
             dist = _load_distribution(session, context, distribution_id)
             _locked_material(session, context, dist.material_id)
             operation = _locked_operation(session, context, operation_id)
-            if operation.attempt_token != claim or dist.operation_id != operation_id:
+            if (
+                operation.superseded_by_id is not None
+                or dist.superseded_by_id is not None
+                or operation.attempt_token != claim
+                or dist.operation_id != operation_id
+            ):
                 return
             code = (
                 error.code
@@ -2050,6 +2108,7 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
         select(MaterialAssetOperation.id)
         .where(
             MaterialAssetOperation.tenant_id == PendingDispatch.tenant_id,
+            col(MaterialAssetOperation.superseded_by_id).is_(None),
             payload_uuid("operation_id") == MaterialAssetOperation.id,
             col(PendingDispatch.task_name).in_(
                 ["materials.upload_original", "materials.verify_original"]
@@ -2100,6 +2159,8 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
         )
         .where(
             MaterialDistribution.tenant_id == PendingDispatch.tenant_id,
+            col(MaterialDistribution.superseded_by_id).is_(None),
+            col(MaterialAssetOperation.superseded_by_id).is_(None),
             payload_uuid("distribution_id") == MaterialDistribution.id,
             payload_uuid("operation_id") == MaterialAssetOperation.id,
             col(PendingDispatch.task_name).in_(

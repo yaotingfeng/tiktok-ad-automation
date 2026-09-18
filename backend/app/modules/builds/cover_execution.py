@@ -50,8 +50,8 @@ def retry_ad_covers(
 ) -> None:
     """An explicit retry of an unsent AD resumes its bounded cover dependencies.
 
-    Completed MATERIAL steps remain historical facts. An uncertain image upload
-    always keeps its original identity and receives read-only reconciliation.
+    Completed MATERIAL steps remain historical facts. Ordinary retries reconcile
+    the current uncertain image identity; only explicit reissue creates a successor.
     """
     from app.modules.materials.covers import (
         request_cover_reconciliation,
@@ -86,6 +86,7 @@ def retry_ad_covers(
             MaterialCoverJob.bc_id == step.bc_id,
             MaterialCoverJob.advertiser_id == unit.advertiser_id,
             MaterialCoverJob.connection_id == unit.connection_id,
+            col(MaterialCoverJob.superseded_by_id).is_(None),
             PlannedGroup.preview_id == step.preview_id,
             PlannedGroup.unit_id == step.unit_id,
             PlannedGroup.id == step.group_id,
@@ -137,7 +138,9 @@ def validate_ad_assets(
             (col(MaterialCoverJob.tenant_id) == AccountMaterial.tenant_id)
             & (col(MaterialCoverJob.asset_id) == AccountMaterial.id)
             & (col(MaterialCoverJob.connection_id) == AccountMaterial.connection_id)
-            & (col(MaterialCoverJob.video_id) == AccountMaterial.video_id),
+            & (col(MaterialCoverJob.video_id) == AccountMaterial.video_id)
+            # 一个视频保留多代历史，但最终创意只能使用当前代正证据。
+            & col(MaterialCoverJob.superseded_by_id).is_(None),
         )
         .where(
             PlannedGroup.tenant_id == step.tenant_id,
@@ -210,6 +213,7 @@ def recover_cover_results(*, database_engine: Any, limit: int = 100) -> int:
                 ExecutionStep.kind == "MATERIAL",
                 ExecutionStep.status == "UNKNOWN",
                 col(MaterialCoverJob.status).in_(["READY", "BLOCKED"]),
+                col(MaterialCoverJob.superseded_by_id).is_(None),
             )
             .order_by(col(ExecutionStep.updated_at), col(ExecutionStep.id))
             .limit(limit)
@@ -245,7 +249,12 @@ def recover_cover_results(*, database_engine: Any, limit: int = 100) -> int:
                 session.get(MaterialCoverJob, step.cover_job_id),
                 session.get(BuildUnit, step.unit_id),
             )
-            if job is None or unit is None or not cover_matches_step(job, step, unit):
+            if (
+                job is None
+                or job.superseded_by_id is not None
+                or unit is None
+                or not cover_matches_step(job, step, unit)
+            ):
                 continue
             row = session.get(Submission, step.submission_id)
             assert row

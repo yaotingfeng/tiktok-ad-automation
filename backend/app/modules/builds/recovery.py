@@ -46,7 +46,7 @@ REPAIR_SECONDS = 120
 
 # These are repairs of frozen input, not retryable transport failures.
 INTENT_ERRORS = "'scene_intent_changed','scene_no_longer_supported','new_preview_required','copy_too_long','blank_copy','invalid_copy'"
-COVER_SCOPE = """c.id=s.cover_job_id AND c.tenant_id=s.tenant_id AND c.bc_id=s.bc_id
+COVER_SCOPE = """c.id=s.cover_job_id AND c.tenant_id=s.tenant_id AND c.bc_id=s.bc_id AND c.superseded_by_id IS NULL
 AND c.material_id=s.material_id AND c.advertiser_id=u.advertiser_id AND c.connection_id=u.connection_id"""
 COVER_RETRY = f"""EXISTS (SELECT 1 FROM material_cover_job c WHERE {COVER_SCOPE}
 AND (c.status='BLOCKED' OR (s.status='FAILED' AND c.status='PENDING'))
@@ -119,6 +119,7 @@ MATERIAL_RETRY = """(s.cover_job_id IS NULL AND NOT s.resolved ? 'mapping' AND E
  AND o.material_id=d.material_id AND o.advertiser_id=d.advertiser_id
  JOIN material_file f ON f.id=d.material_id AND f.tenant_id=d.tenant_id
  WHERE d.id=s.distribution_id AND d.tenant_id=s.tenant_id AND d.bc_id=s.bc_id
+ AND d.superseded_by_id IS NULL AND o.superseded_by_id IS NULL
  AND d.material_id=s.material_id AND d.advertiser_id=u.advertiser_id
  AND d.status='blocked' AND o.status='failed' AND d.path=o.path
  AND d.target_route=o.frozen_route AND d.target_route->>'connection_id'=u.connection_id::text
@@ -149,10 +150,10 @@ MATERIAL_RETRY = """(s.cover_job_id IS NULL AND NOT s.resolved ? 'mapping' AND E
   AND a.material_id=d.material_id AND a.advertiser_id=d.advertiser_id AND trim(a.video_id)<>'')
  AND NOT EXISTS (SELECT 1 FROM material_asset_operation other WHERE other.tenant_id=o.tenant_id
   AND other.bc_id=o.bc_id AND other.material_id=o.material_id AND other.advertiser_id=o.advertiser_id
-  AND other.id<>o.id AND other.status<>'failed')
+  AND other.id<>o.id AND other.status<>'failed' AND other.superseded_by_id IS NULL)
  AND NOT EXISTS (SELECT 1 FROM material_distribution other WHERE other.tenant_id=d.tenant_id
   AND other.bc_id=d.bc_id AND other.material_id=d.material_id AND other.advertiser_id=d.advertiser_id
-  AND other.id<>d.id AND other.status<>'blocked')
+  AND other.id<>d.id AND other.status<>'blocked' AND other.superseded_by_id IS NULL)
  AND NOT EXISTS (SELECT 1 FROM pending_dispatch pd WHERE pd.tenant_id=d.tenant_id AND pd.published_at IS NULL
   AND (pd.payload->>'distribution_id'=d.id::text OR pd.payload->>'operation_id'=o.id::text))
 ))"""
@@ -194,6 +195,7 @@ AND NOT {resolved_sql("s")}
 AND (s.kind<>'MATERIAL' OR (s.cover_job_id IS NULL AND EXISTS (SELECT 1 FROM material_distribution d JOIN material_asset_operation o
  ON o.id=d.operation_id AND o.tenant_id=d.tenant_id AND o.bc_id=d.bc_id AND o.material_id=d.material_id AND o.advertiser_id=d.advertiser_id
  WHERE d.id=s.distribution_id AND d.tenant_id=s.tenant_id AND d.bc_id=s.bc_id AND d.material_id=s.material_id AND d.advertiser_id=u.advertiser_id
+ AND d.superseded_by_id IS NULL AND o.superseded_by_id IS NULL
  AND d.status IN ('result_unknown','verifying','preparing','ready','blocked') AND o.status IN ('sending','result_unknown','verifying','succeeded')))
  OR EXISTS (SELECT 1 FROM material_cover_job c WHERE {COVER_SCOPE}
  AND c.dispatch_id IS NULL AND (c.claimed_until IS NULL OR c.claimed_until <= :now)
@@ -460,7 +462,11 @@ def _material_reconciliation(
         from app.modules.materials.covers import request_cover_reconciliation
 
         cover = session.get(MaterialCoverJob, step.cover_job_id)
-        if cover is None or not cover_matches_step(cover, step, unit):
+        if (
+            cover is None
+            or cover.superseded_by_id
+            or not cover_matches_step(cover, step, unit)
+        ):
             return False
         request_cover_reconciliation(session, context=context, job_id=cover.id)
         step.status, step.phase, step.error_code = (
@@ -486,12 +492,17 @@ def _material_reconciliation(
     )
 
     dist = session.get(MaterialDistribution, step.distribution_id)
-    if dist is None or (
-        dist.tenant_id,
-        dist.bc_id,
-        dist.material_id,
-        dist.advertiser_id,
-    ) != (step.tenant_id, step.bc_id, step.material_id, unit.advertiser_id):
+    if (
+        dist is None
+        or dist.superseded_by_id
+        or (
+            dist.tenant_id,
+            dist.bc_id,
+            dist.material_id,
+            dist.advertiser_id,
+        )
+        != (step.tenant_id, step.bc_id, step.material_id, unit.advertiser_id)
+    ):
         return False
     require_tenant(
         session, actor_id=dist.actor_id, tenant_id=step.tenant_id, action="build"
@@ -504,12 +515,17 @@ def _material_reconciliation(
         )
         .with_for_update()
     ).one_or_none()
-    if operation is None or operation.status not in {
-        "sending",
-        "result_unknown",
-        "verifying",
-        "succeeded",
-    }:
+    if (
+        operation is None
+        or operation.superseded_by_id
+        or operation.status
+        not in {
+            "sending",
+            "result_unknown",
+            "verifying",
+            "succeeded",
+        }
+    ):
         return False
     queue_distribution(
         session, dist, operation, kind="verify", observe=True, read_only=True

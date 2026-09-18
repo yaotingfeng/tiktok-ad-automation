@@ -55,7 +55,14 @@ def _history(db):
     )
     # 反射 JSONB 不保留 none_as_null 配置；省略旧路由列才能生成 SQL NULL。
     values = row.model_dump(
-        exclude={"video_md5", "frozen_route", "purpose", "image_mid", "share_batch_id"}
+        exclude={
+            "video_md5",
+            "frozen_route",
+            "purpose",
+            "image_mid",
+            "share_batch_id",
+            "superseded_by_id",
+        }
     )
     SASession.execute(db, job_table.insert().values(values))
     SASession.execute(

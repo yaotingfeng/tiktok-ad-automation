@@ -116,6 +116,8 @@ def try_prepare_batch(
             )
             can_recover = (
                 original is not None
+                and original.superseded_by_id is None
+                and recovering.superseded_by_id is None
                 and original.status in {"pending", "sending"}
                 and prior_id
                 and original.attempt_token == recovery_claim_id
@@ -148,6 +150,8 @@ def try_prepare_batch(
         anchor_op = db.get(MaterialAssetOperation, anchor.operation_id)
         if (
             anchor_op is None
+            or anchor.superseded_by_id is not None
+            or anchor_op.superseded_by_id is not None
             or anchor.status != "queued"
             or anchor_op.status != "pending"
         ):
@@ -197,6 +201,8 @@ def try_prepare_batch(
                 MaterialDistribution.bc_id == anchor.bc_id,
                 MaterialDistribution.actor_id == context.actor_id,
                 MaterialDistribution.status == "queued",
+                col(MaterialDistribution.superseded_by_id).is_(None),
+                col(MaterialAssetOperation.superseded_by_id).is_(None),
                 MaterialAssetOperation.status == "pending",
                 MaterialAssetOperation.path == "share_source",
                 # 先限定冻结来源和可领取状态再分页；其他路由/在途任务不能
@@ -266,6 +272,8 @@ def try_prepare_batch(
             current = _locked_operation(db, context, op.id)
             if (
                 dist.operation_id != current.id
+                or dist.superseded_by_id is not None
+                or current.superseded_by_id is not None
                 or dist.status != "queued"
                 or current.status != "pending"
                 or current.remote_response.get("send_armed")
@@ -494,6 +502,8 @@ def _send_batch(
             for member, dist, material, op in rows:
                 if (
                     dist.operation_id != op.id
+                    or dist.superseded_by_id is not None
+                    or op.superseded_by_id is not None
                     or op.attempt_token != member.operation_claim
                     or op.claimed_until is None
                     or op.request_digest != member.operation_digest
@@ -753,7 +763,12 @@ def _finish(
             )
         )
         for member, dist, _material, op in rows:
-            if op.attempt_token != member.operation_claim or dist.operation_id != op.id:
+            if (
+                op.superseded_by_id is not None
+                or dist.superseded_by_id is not None
+                or op.attempt_token != member.operation_claim
+                or dist.operation_id != op.id
+            ):
                 continue
             rejected = bool(
                 receipt

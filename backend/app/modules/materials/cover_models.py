@@ -44,12 +44,25 @@ class MaterialCoverJob(SQLModel, table=True):
             ],
         ),
         UniqueConstraint("tenant_id", "id", name="uq_material_cover_scope"),
-        UniqueConstraint(
+        ForeignKeyConstraint(
+            ["tenant_id", "superseded_by_id"],
+            ["material_cover_job.tenant_id", "material_cover_job.id"],
+            name="fk_material_cover_superseded",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        CheckConstraint(
+            "superseded_by_id IS NULL OR superseded_by_id != id",
+            name="ck_material_cover_no_self",
+        ),
+        Index(
+            "uq_material_cover_video",
             "tenant_id",
             "asset_id",
             "connection_id",
             "video_id",
-            name="uq_material_cover_video",
+            unique=True,
+            postgresql_where=text("superseded_by_id IS NULL"),
         ),
         CheckConstraint(
             "status IN ('PENDING','PREPARING','VERIFYING','READY','UNKNOWN','BLOCKED')",
@@ -104,6 +117,7 @@ class MaterialCoverJob(SQLModel, table=True):
     video_md5: str | None = Field(default=None, max_length=32)
     remote_name: str = Field(max_length=128)
     status: str = Field(default="PENDING", max_length=16)
+    superseded_by_id: UUID | None = None
     purpose: str = Field(default="BUILD", max_length=16)
     image_mid: str | None = Field(default=None, max_length=128)
     share_batch_id: UUID | None = Field(

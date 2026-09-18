@@ -37,6 +37,7 @@ def seed_dependency_settled():
         .where(
             MaterialBCSeed.id == MaterialDistribution.seed_id,
             MaterialBCSeed.tenant_id == MaterialDistribution.tenant_id,
+            col(owner.superseded_by_id).is_(None),
             or_(
                 col(owner.status).in_(["ready", "blocked"]),
                 and_(
@@ -60,6 +61,9 @@ def wake_seed_dependents(
     """成功回执与原消费者消息唤醒一起提交，不创建新的轮询代数。"""
     from app.jobs.models import PendingDispatch
 
+    if owner.superseded_by_id is not None:
+        return
+
     consumers = db.exec(
         select(MaterialDistribution, MaterialAssetOperation)
         .join(MaterialBCSeed, col(MaterialBCSeed.id) == MaterialDistribution.seed_id)
@@ -70,6 +74,8 @@ def wake_seed_dependents(
         .where(
             MaterialBCSeed.tenant_id == context.tenant_id,
             MaterialBCSeed.distribution_id == owner.id,
+            col(MaterialDistribution.superseded_by_id).is_(None),
+            col(MaterialAssetOperation.superseded_by_id).is_(None),
             MaterialAssetOperation.status == "pending",
             col(MaterialAssetOperation.remote_response)["transport"].astext.is_(None),
         )
@@ -120,6 +126,9 @@ def resume_ready_seed_dependents(
             .join(owner, col(owner.id) == MaterialBCSeed.distribution_id)
             .where(
                 MaterialDistribution.tenant_id == context.tenant_id,
+                col(MaterialDistribution.superseded_by_id).is_(None),
+                col(MaterialAssetOperation.superseded_by_id).is_(None),
+                col(owner.superseded_by_id).is_(None),
                 MaterialDistribution.bc_id == anchor.bc_id,
                 MaterialDistribution.actor_id == context.actor_id,
                 MaterialDistribution.target_route == anchor.target_route,
@@ -362,6 +371,8 @@ def resume_seed_dependency(
     from .readiness import mapping_fresh, target_mapping
     from .remote_sources import resolve_remote_source
 
+    if dist.superseded_by_id is not None or operation.superseded_by_id is not None:
+        return True
     if (
         dist.seed_id is None
         or operation.remote_response.get("transport")
@@ -384,6 +395,9 @@ def resume_seed_dependency(
         raise DomainError("material_content_changed", "首次转存内容身份已改变")
     owner = db.get(MaterialDistribution, seed.distribution_id)
     assert owner
+    # 未列入显式授权的旧依赖停留原未知；不能自动跟随另一批次的新代。
+    if owner.superseded_by_id is not None:
+        return True
     route = load_material_route(dist.target_route, context=context, bc_id=dist.bc_id)
     seed_route = load_material_route(
         owner.target_route, context=context, bc_id=dist.bc_id

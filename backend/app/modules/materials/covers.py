@@ -1,4 +1,4 @@
-"""Permanent source/build cover identities with bounded, read-only recovery."""
+"""Current source/build covers and preserved history with bounded read-only recovery."""
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -181,6 +181,8 @@ def _access(
     upload: bool = False,
     checks: _CoverAccessChecks | None = None,
 ) -> None:
+    if job.superseded_by_id is not None:
+        raise DomainError("cover_superseded", "此封面任务已有明确授权的新代任务")
     # 未显式传入时仍逐次核查；批量只复用共同权限，不缓存映射和摘要。
     (checks or _CoverAccessChecks(session, context)).check(
         session, context, job, upload=upload
@@ -209,7 +211,8 @@ def _digest_error(session: Session, job: MaterialCoverJob) -> str | None:
 def verified_cover_image_id(job: MaterialCoverJob) -> str | None:
     """Only READY evidence is usable; candidate reuse never impersonates an upload."""
     if (
-        job.status != "READY"
+        job.superseded_by_id is not None
+        or job.status != "READY"
         or job.search_ambiguous
         or job.error_code == "cover_receipt_ambiguous"
     ):
@@ -224,6 +227,10 @@ def verified_cover_image_id(job: MaterialCoverJob) -> str | None:
 
 
 def _result(session: Session, job: MaterialCoverJob) -> AssetPreparation:
+    if job.superseded_by_id is not None:
+        return AssetPreparation(
+            state="blocked", task_id=job.id, reason_code="cover_superseded"
+        )
     if job.error_code == "cover_receipt_ambiguous":
         return AssetPreparation(
             state="blocked", task_id=job.id, reason_code="cover_receipt_ambiguous"
@@ -255,6 +262,8 @@ def _result(session: Session, job: MaterialCoverJob) -> AssetPreparation:
 def _queue(
     session: Session, job: MaterialCoverJob, *, read: bool, delay: int = 0
 ) -> None:
+    if job.superseded_by_id is not None:
+        raise DomainError("cover_superseded", "历史封面任务不能重新排队")
     job.revision += 1
     job.claim_token = job.claimed_until = None
     job.status = "VERIFYING" if read else "PENDING"
@@ -330,7 +339,7 @@ def _ensure_cover(
     route: FrozenTikTokRoute,
     purpose: str,
 ) -> AssetPreparation:
-    # Caller task keys cannot create a second upload identity for the same VID.
+    # 普通调用方 task key 不能新增发送代；仅显式授权入口可替换 current。
     if not task_key or len(task_key) > 255:
         raise DomainError("invalid_asset_task", "封面任务标识无效")
     require_material_scope(session, context=context, bc_id=bc_id)
@@ -376,6 +385,7 @@ def _ensure_cover(
             MaterialCoverJob.tenant_id == context.tenant_id,
             MaterialCoverJob.asset_id == asset.id,
             MaterialCoverJob.video_id == asset.video_id,
+            col(MaterialCoverJob.superseded_by_id).is_(None),
         )
         .with_for_update()
         .limit(2)
@@ -564,7 +574,12 @@ def _fenced(
     session: Session, context: TenantContext, identity: UUID, nonce: UUID
 ) -> MaterialCoverJob | None:
     job = _job(session, context, identity, lock=True)
-    if job.claim_token != nonce or not job.claimed_until or job.claimed_until <= _now():
+    if (
+        job.superseded_by_id is not None
+        or job.claim_token != nonce
+        or not job.claimed_until
+        or job.claimed_until <= _now()
+    ):
         return None
     return job
 
@@ -607,6 +622,9 @@ def _claim_in_session(
     checks: _CoverAccessChecks | None = None,
 ) -> tuple[MaterialCoverJob, UUID] | None:
     job = _job(session, context, job_id, lock=True)
+    # 旧消息和看门狗不能将已获准替换的历史代重新领取或改写状态。
+    if job.superseded_by_id is not None:
+        return None
     if job.error_code == "cover_receipt_ambiguous":
         _stop(job, "cover_receipt_ambiguous", unknown=True)
         return None
@@ -762,6 +780,8 @@ def _receipt_conflict(session: Session, job: MaterialCoverJob) -> bool:
 
 
 def _invalidate_receipt(session: Session, job: MaterialCoverJob) -> None:
+    if job.superseded_by_id is not None:
+        return
     mapping = _mapping(session, job)
     if mapping and mapping.image_id == job.known_image_id:
         mapping.image_id = None
@@ -804,6 +824,9 @@ def _preserve_receipt(
                 MaterialCoverReceipt.image_id == value.image_id,
             )
         ).one()
+        if current.superseded_by_id is not None:
+            # 迟到回执仍按原发送身份留档，不能污染新代图片或改写旧代结论。
+            return
         if saved.receipt_facts != {"signature": value.signature} or _receipt_conflict(
             session, current
         ):
@@ -938,6 +961,8 @@ def _publish_result(
     *,
     checks: _CoverAccessChecks | None = None,
 ) -> None:
+    if current.superseded_by_id is not None:
+        return
     _access(session, context, current, checks=checks)
     if _receipt_conflict(session, current):
         _invalidate_receipt(session, current)
@@ -1537,6 +1562,7 @@ def _known_cover_candidates(
             MaterialCoverJob.connection_id == first.connection_id,
             MaterialCoverJob.frozen_route == first.frozen_route,
             MaterialCoverJob.status == "VERIFYING",
+            col(MaterialCoverJob.superseded_by_id).is_(None),
             col(MaterialCoverJob.known_image_id).is_not(None),
             or_(
                 col(MaterialCoverJob.share_batch_id).is_(None),
@@ -1759,6 +1785,7 @@ def repair_cover_dispatches(session: Session, *, limit: int = 100) -> int:
         select(MaterialCoverJob)
         .where(
             col(MaterialCoverJob.status).in_(["PENDING", "PREPARING", "VERIFYING"]),
+            col(MaterialCoverJob.superseded_by_id).is_(None),
             or_(
                 col(MaterialCoverJob.error_code).is_distinct_from("cover_window_wait"),
                 cover_task_admission_condition(),
@@ -1843,6 +1870,7 @@ def repair_cover_dispatches(session: Session, *, limit: int = 100) -> int:
                             _content_material_ids(session, context, job)
                         ),
                         MaterialCoverJob.purpose == "SOURCE",
+                        col(MaterialCoverJob.superseded_by_id).is_(None),
                         col(MaterialCoverJob.status).in_(
                             ["PENDING", "PREPARING", "VERIFYING"]
                         ),

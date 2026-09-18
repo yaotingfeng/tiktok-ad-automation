@@ -17,6 +17,7 @@ def candidate_query(first: MaterialCoverJob):
         MaterialCoverJob.frozen_route == first.frozen_route,
         MaterialCoverJob.purpose == "BUILD",
         MaterialCoverJob.status == "PENDING",
+        col(MaterialCoverJob.superseded_by_id).is_(None),
         # 来源等待会保留PENDING但撤销投递；须等正式repair重新投递后才能
         # 加入共享矩形，否则缺少领取身份会连带阻断已有投递的正常锚点。
         col(MaterialCoverJob.dispatch_id).is_not(None),

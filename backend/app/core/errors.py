@@ -3,6 +3,13 @@ from fastapi.responses import JSONResponse
 
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
+    "material_reissue_busy": 409,
+    "material_reissue_conflict": 409,
+    "material_reissue_not_allowed": 409,
+    "material_reissue_scope_changed": 409,
+    "material_reissue_scope_mismatch": 409,
+    "cover_reissue_forbidden": 409,
+    "cover_superseded": 409,
     "minis_selection_required": 409,
     "minis_link_conflict": 409,
     "minis_links_unavailable": 409,
@@ -250,6 +257,9 @@ ERROR_HTTP_STATUS: dict[str, int] = {
 # Public messages are application-owned. DomainError.message may contain raw
 # integration details, so it must never become an HTTP response or log field.
 ERROR_PUBLIC_MESSAGES: dict[str, str] = {
+    "material_reissue_busy": "该素材补发授权正在登记，请用原请求标识查询或重试",
+    "material_reissue_conflict": "该素材已有不同范围的补发授权，不能再次补发",
+    "material_reissue_not_allowed": "该项不满足明确授权补发的条件，请核查当前回执或在途请求",
     "minis_selection_required": "请先选择本批次推广小程序，再生成预览",
     "minis_link_conflict": "剧目指向不同小程序，请核对目标或分开搭建",
     "minis_links_unavailable": "请先完成剧目推广链接准备",

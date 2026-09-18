@@ -136,11 +136,14 @@ def cover_admission_condition():
     # 未绑定搭建步骤的素材库操作不受搭建窗口限制；共享依赖任一当前
     # 组合即准入。批量规划和单任务领取必须复用同一条件，不能先选入
     # 未来成员，再在领取时拒绝它并把当前矩形误判为执行权丢失。
-    return or_(
-        tuple_(col(MaterialCoverJob.tenant_id), col(MaterialCoverJob.id)).not_in(
-            dependent
+    return and_(
+        col(MaterialCoverJob.superseded_by_id).is_(None),
+        or_(
+            tuple_(col(MaterialCoverJob.tenant_id), col(MaterialCoverJob.id)).not_in(
+                dependent
+            ),
+            col(MaterialCoverJob.id).in_(active_cover_job_ids()),
         ),
-        col(MaterialCoverJob.id).in_(active_cover_job_ids()),
     )
 
 
@@ -158,17 +161,20 @@ def cover_task_admission_condition():
         .cte("admitted_cover_tasks")
         .prefix_with("MATERIALIZED", dialect="postgresql")
     )
-    return or_(
-        col(MaterialCoverJob.id).in_(select(eligible.c.id)),
-        col(MaterialCoverJob.share_batch_id).in_(
-            select(eligible.c.share_batch_id).where(
-                eligible.c.share_batch_id.is_not(None)
-            )
-        ),
-        col(MaterialCoverJob.share_batch_id).in_(
-            select(MaterialCoverShareBatch.id).where(
-                col(MaterialCoverShareBatch.armed_at).is_not(None)
-            )
+    return and_(
+        col(MaterialCoverJob.superseded_by_id).is_(None),
+        or_(
+            col(MaterialCoverJob.id).in_(select(eligible.c.id)),
+            col(MaterialCoverJob.share_batch_id).in_(
+                select(eligible.c.share_batch_id).where(
+                    eligible.c.share_batch_id.is_not(None)
+                )
+            ),
+            col(MaterialCoverJob.share_batch_id).in_(
+                select(MaterialCoverShareBatch.id).where(
+                    col(MaterialCoverShareBatch.armed_at).is_not(None)
+                )
+            ),
         ),
     )
 

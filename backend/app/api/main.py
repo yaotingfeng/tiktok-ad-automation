@@ -12,6 +12,7 @@ from app.modules.builds.submission_catalog_api import (
     router as submission_catalog_router,
 )
 from app.modules.materials.ingest_api import router as ingest_router
+from app.modules.materials.reissue_api import router as material_reissue_router
 from app.modules.materials.router import router as materials_router
 from app.modules.providers.router import router as providers_router
 from app.modules.strategies.api import router as strategies_router
@@ -29,6 +30,7 @@ api_router.include_router(mcp_callback_router)
 api_router.include_router(capability_router)
 api_router.include_router(ingest_router)
 api_router.include_router(materials_router)
+api_router.include_router(material_reissue_router)
 api_router.include_router(providers_router)
 api_router.include_router(strategies_router)
 api_router.include_router(builds_router)

@@ -50,7 +50,12 @@ def try_verify_batch(
     with Session(database_engine) as db, db.begin():
         anchor = single._load_distribution(db, context, distribution_id)
         anchor_op = db.get(MaterialAssetOperation, anchor.operation_id)
-        if anchor_op is None or anchor_op.status not in {"verifying", "result_unknown"}:
+        if (
+            anchor_op is None
+            or anchor.superseded_by_id is not None
+            or anchor_op.superseded_by_id is not None
+            or anchor_op.status not in {"verifying", "result_unknown"}
+        ):
             return False
         if anchor_op.remote_response.get(
             "reconciliation_complete"
@@ -93,6 +98,8 @@ def try_verify_batch(
             )
             .where(
                 MaterialDistribution.tenant_id == context.tenant_id,
+                col(MaterialDistribution.superseded_by_id).is_(None),
+                col(MaterialAssetOperation.superseded_by_id).is_(None),
                 MaterialDistribution.bc_id == anchor.bc_id,
                 MaterialDistribution.actor_id == context.actor_id,
                 MaterialDistribution.advertiser_id == anchor.advertiser_id,
@@ -162,6 +169,8 @@ def try_verify_batch(
             op = _locked_operation(db, context, operation.id)
             if (
                 op.status not in {"verifying", "result_unknown"}
+                or op.superseded_by_id is not None
+                or dist.superseded_by_id is not None
                 or op.remote_response.get("reconciliation_complete")
                 or op.remote_response.get("reconciliation_stopped")
                 or dist.status not in candidate_states
@@ -364,6 +373,8 @@ def try_verify_batch(
             op = _locked_operation(db, context, item["operation"])
             if (
                 op.attempt_token != item["claim"]
+                or op.superseded_by_id is not None
+                or dist.superseded_by_id is not None
                 or dist.operation_id != op.id
                 or op.request_digest != item["digest"]
                 or op.remote_response.get("video_id") != item["video_id"]

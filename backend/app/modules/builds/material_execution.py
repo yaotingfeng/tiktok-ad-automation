@@ -243,6 +243,7 @@ def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
             .where(
                 ExecutionStep.kind == "MATERIAL",
                 ExecutionStep.status == "UNKNOWN",
+                col(MaterialDistribution.superseded_by_id).is_(None),
                 col(ExecutionStep.cover_job_id).is_(None),
                 or_(
                     col(MaterialDistribution.status).in_(["ready", "blocked"]),
@@ -291,6 +292,7 @@ def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
             frozen = session.get(BuildUnit, step.unit_id)
             if (
                 dist is None
+                or dist.superseded_by_id is not None
                 or (dist.tenant_id, dist.bc_id, dist.material_id, dist.advertiser_id)
                 != (
                     step.tenant_id,

@@ -132,6 +132,7 @@ def reserve_asset_operation(
             MaterialAssetOperation.bc_id == operation_bc,
             MaterialAssetOperation.material_id == material_id,
             MaterialAssetOperation.advertiser_id == advertiser_id,
+            col(MaterialAssetOperation.superseded_by_id).is_(None),
             col(MaterialAssetOperation.status).in_(UNRESOLVED),
         )
         .with_for_update()

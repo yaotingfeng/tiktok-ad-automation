@@ -262,6 +262,20 @@ class MaterialAssetOperation(SQLModel, table=True):
             "id",
             name="uq_asset_operation_identity",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "bc_id", "material_id", "advertiser_id", "superseded_by_id"],
+            [
+                f"material_asset_operation.{key}"
+                for key in ("tenant_id", "bc_id", "material_id", "advertiser_id", "id")
+            ],
+            name="fk_material_operation_superseded",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        CheckConstraint(
+            "superseded_by_id IS NULL OR superseded_by_id != id",
+            name="ck_material_operation_no_self",
+        ),
         Index(
             "uq_material_unverified_operation",
             "tenant_id",
@@ -270,7 +284,8 @@ class MaterialAssetOperation(SQLModel, table=True):
             "advertiser_id",
             unique=True,
             postgresql_where=text(
-                "status IN ('pending','sending','result_unknown','verifying','confirmed_absent')"
+                "status IN ('pending','sending','result_unknown','verifying','confirmed_absent') "
+                "AND superseded_by_id IS NULL"
             ),
         ),
     )
@@ -284,6 +299,8 @@ class MaterialAssetOperation(SQLModel, table=True):
     )
     path: str
     status: str = "pending"
+    # 授权补发仅旁挂下一代，原 UNKNOWN 状态及远端回执保持原样。
+    superseded_by_id: UUID | None = None
     attempt_token: UUID | None = None
     claimed_until: datetime | None = Field(
         default=None, sa_column=Column(DateTime(timezone=True))
@@ -443,6 +460,21 @@ class MaterialDistribution(SQLModel, table=True):
             "id",
             name="uq_material_distribution_identity",
         ),
+        UniqueConstraint("tenant_id", "id", name="uq_material_distribution_tenant"),
+        ForeignKeyConstraint(
+            ["tenant_id", "bc_id", "material_id", "advertiser_id", "superseded_by_id"],
+            [
+                f"material_distribution.{key}"
+                for key in ("tenant_id", "bc_id", "material_id", "advertiser_id", "id")
+            ],
+            name="fk_material_distribution_superseded",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        CheckConstraint(
+            "superseded_by_id IS NULL OR superseded_by_id != id",
+            name="ck_material_distribution_no_self",
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "bc_id", "seed_id"],
             [
@@ -487,7 +519,8 @@ class MaterialDistribution(SQLModel, table=True):
             "advertiser_id",
             unique=True,
             postgresql_where=text(
-                "status IN ('queued','preparing','verifying','result_unknown')"
+                "status IN ('queued','preparing','verifying','result_unknown') "
+                "AND superseded_by_id IS NULL"
             ),
         ),
     )
@@ -510,4 +543,5 @@ class MaterialDistribution(SQLModel, table=True):
     )
     path: str
     status: str = "queued"
+    superseded_by_id: UUID | None = None
     reason_code: str | None = None

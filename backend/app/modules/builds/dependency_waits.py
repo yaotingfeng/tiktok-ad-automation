@@ -60,6 +60,7 @@ def wake_material_dependencies(*, database_engine: Any, limit: int = 100) -> int
                 col(ExecutionStep.unit_id),
             ).in_(select(admitted)),
             col(MaterialDistribution.status).in_(["queued", "preparing", "verifying"]),
+            col(MaterialDistribution.superseded_by_id).is_(None),
         )
         .group_by(col(ExecutionStep.tenant_id), col(ExecutionStep.submission_id))
         .having(func.count(col(ExecutionStep.material_id).distinct()) >= 20)
@@ -108,6 +109,7 @@ def wake_material_dependencies(*, database_engine: Any, limit: int = 100) -> int
                     and_(
                         col(MaterialDistribution.id) == ExecutionStep.distribution_id,
                         col(MaterialDistribution.tenant_id) == ExecutionStep.tenant_id,
+                        col(MaterialDistribution.superseded_by_id).is_(None),
                     ),
                 )
                 .outerjoin(
@@ -115,6 +117,7 @@ def wake_material_dependencies(*, database_engine: Any, limit: int = 100) -> int
                     and_(
                         col(MaterialCoverJob.id) == ExecutionStep.cover_job_id,
                         col(MaterialCoverJob.tenant_id) == ExecutionStep.tenant_id,
+                        col(MaterialCoverJob.superseded_by_id).is_(None),
                     ),
                 )
                 .where(
@@ -231,6 +234,7 @@ def wake_material_dependencies(*, database_engine: Any, limit: int = 100) -> int
             frozen = session.get(BuildUnit, unit_id)
             if (
                 dependency is None
+                or dependency.superseded_by_id is not None
                 or frozen is None
                 or (
                     dependency.tenant_id,

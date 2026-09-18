@@ -72,6 +72,7 @@ def _source(
             MaterialCoverJob.video_md5 == target.video_md5,
             MaterialCoverJob.id != target.id,
             MaterialCoverJob.status == "READY",
+            col(MaterialCoverJob.superseded_by_id).is_(None),
             or_(
                 col(MaterialCoverJob.request_armed_at).is_not(None),
                 col(MaterialCoverJob.purpose) == "SOURCE",
@@ -289,6 +290,7 @@ def _prepare(
                     _content_material_ids(db, context, first)
                 ),
                 MaterialCoverJob.purpose == "SOURCE",
+                col(MaterialCoverJob.superseded_by_id).is_(None),
                 col(MaterialCoverJob.status).in_(["PENDING", "PREPARING", "VERIFYING"]),
             )
             .limit(1)

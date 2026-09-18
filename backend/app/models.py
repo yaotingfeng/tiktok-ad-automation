@@ -148,3 +148,6 @@ class Token(SQLModel):
 # Contents of JWT token
 class TokenPayload(SQLModel):
     sub: str | None = None
+
+
+from app.modules.materials import reissue_models  # noqa: E402, F401

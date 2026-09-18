@@ -325,6 +325,7 @@ def get_material_readiness_batch(
                 MaterialAssetOperation.bc_id == bc_id,
                 col(MaterialAssetOperation.material_id).in_(identities),
                 MaterialAssetOperation.advertiser_id == advertiser_id,
+                col(MaterialAssetOperation.superseded_by_id).is_(None),
                 col(MaterialAssetOperation.status).in_(
                     ["sending", "verifying", "result_unknown"]
                 ),
@@ -341,6 +342,7 @@ def get_material_readiness_batch(
                 col(MaterialAssetOperation.material_id).in_(identities),
                 MaterialAssetOperation.advertiser_id == advertiser_id,
                 MaterialAssetOperation.path == "share_source",
+                col(MaterialAssetOperation.superseded_by_id).is_(None),
                 MaterialAssetOperation.status == "failed",
                 col(MaterialAssetOperation.remote_response)[
                     "definite_no_effect"
