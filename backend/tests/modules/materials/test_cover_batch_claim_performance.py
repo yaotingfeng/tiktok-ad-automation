@@ -118,6 +118,7 @@ def test_selected_member_changes_roll_back_whole_rectangle(
         else:
             with Session(engine) as db, db.begin():
                 job = db.get(MaterialCoverJob, peer.id)
+                assert job is not None
                 if change == "revoke":
                     grant = db.get(
                         BCAccountAccess,
@@ -128,22 +129,29 @@ def test_selected_member_changes_roll_back_whole_rectangle(
                             job.connection_id,
                         ),
                     )
+                    assert grant is not None
                     grant.can_upload = False
                 elif change == "dispatch":
-                    db.get(
-                        PendingDispatch, job.dispatch_id
-                    ).task_key = "stale-cover-key"
+                    dispatch = db.get(PendingDispatch, job.dispatch_id)
+                    assert dispatch is not None
+                    dispatch.task_key = "stale-cover-key"
                 elif change == "payload":
-                    db.get(PendingDispatch, job.dispatch_id).payload = {
+                    dispatch = db.get(PendingDispatch, job.dispatch_id)
+                    assert dispatch is not None
+                    dispatch.payload = {
                         "job_id": str(uuid4()),
                         "revision": job.revision,
                     }
                 elif change == "revision":
                     job.revision += 1
                 elif change == "md5":
-                    db.get(MaterialFile, job.material_id).video_md5 = "f" * 32
+                    material = db.get(MaterialFile, job.material_id)
+                    assert material is not None
+                    material.video_md5 = "f" * 32
                 elif change == "mapping":
-                    db.get(AccountMaterial, job.asset_id).video_id = "changed-vid"
+                    asset = db.get(AccountMaterial, job.asset_id)
+                    assert asset is not None
+                    asset.video_id = "changed-vid"
         return selected
 
     monkeypatch.setattr(cover_sharing, "rectangle", change_after_selection)
@@ -161,6 +169,57 @@ def test_selected_member_changes_roll_back_whole_rectangle(
     assert job_state(identities[1]).status == "PENDING"
     if competitor_claims:
         assert job_state(peer.id).claim_token == competitor_claims[0]
+
+
+def test_peer_claim_contention_requeues_anchor_without_remote_send(
+    source_env, redis_client, monkeypatch, wire
+):
+    identities = matrix(source_env, 2, 2)
+    first, peer = job_state(identities[0]), job_state(identities[-1])
+    claimed = covers._claim(
+        engine,
+        source_env["context"],
+        first.id,
+        first.dispatch_id,
+        first.revision,
+        read=False,
+    )
+    assert claimed is not None
+    rectangle = cover_sharing.rectangle
+    competitor_claims = []
+
+    def claim_peer_after_selection(*args):
+        selected = rectangle(*args)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            other = pool.submit(
+                covers._claim,
+                engine,
+                source_env["context"],
+                peer.id,
+                peer.dispatch_id,
+                peer.revision,
+                read=False,
+            ).result(timeout=5)
+        assert other is not None
+        competitor_claims.append(other[1])
+        return selected
+
+    monkeypatch.setattr(cover_sharing, "rectangle", claim_peer_after_selection)
+    cover_sharing.run_shared_cover(
+        engine,
+        redis_client,
+        source_env["context"],
+        *claimed,
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+    )
+
+    anchor = job_state(first.id)
+    assert anchor.status == "PENDING"
+    assert anchor.error_code is None
+    assert anchor.dispatch_id is not None
+    assert anchor.request_armed_at is None and anchor.share_batch_id is None
+    assert job_state(peer.id).claim_token == competitor_claims[0]
+    assert wire[0] == []
 
 
 def test_old_anchor_claim_never_plans_batch(source_env, wire):

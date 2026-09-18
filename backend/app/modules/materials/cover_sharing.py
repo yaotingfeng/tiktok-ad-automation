@@ -480,6 +480,10 @@ def _claim_members(
             continue
         dispatch_id, revision = expected[job.id]
         dispatch = dispatches.get(dispatch_id) if dispatch_id else None
+        if job.claimed_until and job.claimed_until > covers._now():
+            # 候选读取后另一个 worker 合法领取了同伴，是正常竞争且尚未发送；
+            # 整个矩形回滚后让锚点稍后重排，不能把无辜锚点终态判失败。
+            raise DomainError("cover_claim_lost", "封面成员已被领取", retryable=True)
         if (
             job.superseded_by_id is not None
             or job.error_code == "cover_receipt_ambiguous"
@@ -492,7 +496,6 @@ def _claim_members(
             or dispatch.task_name != "materials.prepare_cover"
             or dispatch.task_key != f"cover:{job.id}:{job.revision}"
             or dispatch.payload != {"job_id": str(job.id), "revision": job.revision}
-            or (job.claimed_until and job.claimed_until > covers._now())
             or job.request_armed_at is not None
             or (job.purpose == "BUILD" and not checks.admitted(db, context, job))
         ):
@@ -1458,11 +1461,15 @@ def run_shared_cover(
                     if not isinstance(error, AccountAdmissionDeferred):
                         job.failure_count += 1
                     active[identity] = job
-            retry = isinstance(error, AccountAdmissionDeferred) or (
-                isinstance(error, RemoteCallError)
-                and error.code in TRANSIENT_NOT_SENT
-                and all(job.failure_count < 3 for job in active.values())
-                and (unknown or error.effect == "NOT_SENT")
+            retry = (
+                isinstance(error, AccountAdmissionDeferred)
+                or (isinstance(error, DomainError) and error.retryable and not unknown)
+                or (
+                    isinstance(error, RemoteCallError)
+                    and error.code in TRANSIENT_NOT_SENT
+                    and all(job.failure_count < 3 for job in active.values())
+                    and (unknown or error.effect == "NOT_SENT")
+                )
             )
             if current and active and (armed_this_turn or retry):
                 current.status = "UNKNOWN" if unknown else "PREPARING"

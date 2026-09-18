@@ -22,6 +22,9 @@ TRANSIENT_NOT_SENT = frozenset(
         "mcp_request_failed",
         "mcp_session_open_failed",
         "mcp_session_unavailable",
+        # 本地总期限在真实请求发送前耗尽，有持久 NOT_SENT 证据时与连接瞬断
+        # 使用同一三次预算；已发送或结果未知仍不会进入此集合。
+        "tiktok_call_deadline_exceeded",
     }
 )
 

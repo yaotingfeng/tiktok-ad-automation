@@ -310,6 +310,28 @@ def test_proven_not_sent_keeps_exact_armed_body_and_can_schedule_once(
     assert step.lease_token is None
 
 
+def test_local_deadline_not_sent_uses_the_bounded_transport_retry_budget():
+    from app.integrations.tiktok.contracts.common import CallEvidence, RemoteCallError
+    from app.modules.builds.execution_state import transient_retry
+
+    resolved = {}
+    outcomes = []
+    for _ in range(3):
+        retryable, delay, resolved = transient_retry(
+            resolved,
+            error=RemoteCallError(
+                "tiktok_call_deadline_exceeded",
+                effect="NOT_SENT",
+                evidence=CallEvidence(),
+            ),
+            retryable=False,
+            delay=15,
+        )
+        outcomes.append((retryable, delay, resolved.get("transport_failure_count")))
+
+    assert outcomes == [(True, 5, 1), (True, 10, 2), (False, 20, 3)]
+
+
 @pytest.fixture
 def resumable_attempt(session, attempt):
     original, claim = attempt
