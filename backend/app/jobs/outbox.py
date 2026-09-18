@@ -10,10 +10,11 @@ import math
 import re
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from typing import Any, NoReturn, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import literal
+from sqlalchemy import and_, literal, or_
 from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session, col, select
 
@@ -27,6 +28,7 @@ from app.jobs.tasks import dispatch_queue
 # One expansion slot keeps a generated successor ahead of its own unit fanout.
 # Other expansion messages never consume ordinary FIFO slots in this round.
 _EXPANSION_TASK = "builds.expand_submission"
+_COMPACTABLE_TASKS = frozenset({"builds.execute_step", "builds.execute_unit"})
 
 _SECRET_NAMES = {
     "token",
@@ -94,6 +96,17 @@ def validate_dispatch_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return cast(dict[str, Any], json.loads(encoded))
 
 
+def _payload_digest(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        payload,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    return sha256(encoded).hexdigest()
+
+
 def enqueue_after_commit(
     session: Session,
     *,
@@ -105,6 +118,7 @@ def enqueue_after_commit(
     """Write in the caller's transaction. Never commit or publish here."""
     dispatch_queue(task_name)
     payload = validate_dispatch_payload(payload)
+    payload_digest = _payload_digest(payload)
     if not isinstance(task_key, str) or not task_key.strip() or len(task_key) > 255:
         raise DomainError("dispatch_payload_invalid", "任务标识无效")
     record_id = uuid4()
@@ -122,6 +136,7 @@ def enqueue_after_commit(
             task_name=task_name,
             task_key=task_key,
             payload=payload,
+            payload_digest=payload_digest,
         )
         .on_conflict_do_nothing(index_elements=["tenant_id", "task_key"])
         .returning(col(PendingDispatch.id))
@@ -137,11 +152,63 @@ def enqueue_after_commit(
     if (existing.task_name, existing.actor_id) != (
         task_name,
         context.actor_id,
-    ) or json.dumps(existing.payload, sort_keys=True) != json.dumps(
-        payload, sort_keys=True
-    ):
+    ) or (
+        existing.payload_digest or _payload_digest(existing.payload)
+    ) != payload_digest:
         raise DomainError("dispatch_key_conflict", "同一任务标识的配置不一致")
     return existing.id
+
+
+def compact_published_dispatches(
+    session: Session, *, limit: int = 1000, retention_days: int = 7
+) -> int:
+    """压缩已结算且没有活跃业务所有者的构建投递，保留幂等和审计身份。"""
+    if type(limit) is not int or not 1 <= limit <= 5000:
+        raise ValueError("Dispatch compaction limit must be between 1 and 5000")
+    if type(retention_days) is not int or retention_days < 7:
+        raise ValueError("Dispatch retention must be at least seven days")
+    # 延迟导入避免 outbox 与构建模型在应用启动时形成环；只有会在结算后清空
+    # dispatch_id 的两类高频消息可压缩，素材核查消息仍保留完整恢复参数。
+    from app.modules.builds.execution_models import ExecutionStep, SubmissionUnit
+
+    step_owned = (
+        select(ExecutionStep.id)
+        .where(ExecutionStep.dispatch_id == PendingDispatch.id)
+        .exists()
+    )
+    unit_owned = (
+        select(SubmissionUnit.unit_id)
+        .where(SubmissionUnit.dispatch_id == PendingDispatch.id)
+        .exists()
+    )
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+    rows = session.exec(
+        select(PendingDispatch)
+        .where(
+            col(PendingDispatch.published_at).is_not(None),
+            col(PendingDispatch.published_at) <= cutoff,
+            col(PendingDispatch.compacted_at).is_(None),
+            col(PendingDispatch.task_name).in_(_COMPACTABLE_TASKS),
+            or_(
+                and_(
+                    col(PendingDispatch.task_name) == "builds.execute_step", ~step_owned
+                ),
+                and_(
+                    col(PendingDispatch.task_name) == "builds.execute_unit", ~unit_owned
+                ),
+            ),
+        )
+        .order_by(col(PendingDispatch.published_at), col(PendingDispatch.id))
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    ).all()
+    now = datetime.now(UTC)
+    for row in rows:
+        row.payload_digest = row.payload_digest or _payload_digest(row.payload)
+        row.payload = {}
+        row.compacted_at = now
+    session.flush()
+    return len(rows)
 
 
 def _candidate_tenants(

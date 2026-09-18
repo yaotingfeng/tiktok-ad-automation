@@ -10,6 +10,7 @@ from time import monotonic
 from uuid import UUID
 
 from app.core.config import settings
+from app.core.db import engine
 from app.core.errors import DomainError
 from app.jobs.celery_app import celery_app
 
@@ -88,3 +89,14 @@ def drain_dispatch(limit: int = 100) -> int:
 @celery_app.task(name="jobs.flush_dispatch", time_limit=30, soft_time_limit=25)
 def flush_dispatch_task(limit: int = 100) -> int:
     return drain_dispatch(limit=limit)
+
+
+@celery_app.task(name="jobs.compact_dispatches", time_limit=45, soft_time_limit=40)
+def compact_dispatches_task(limit: int = 1000) -> int:
+    """分批压缩已结算构建消息；保留七天完整正文供恢复与排障。"""
+    from sqlmodel import Session
+
+    from app.jobs.outbox import compact_published_dispatches
+
+    with Session(engine) as session, session.begin():
+        return compact_published_dispatches(session, limit=limit)

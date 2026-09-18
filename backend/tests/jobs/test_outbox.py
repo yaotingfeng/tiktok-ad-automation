@@ -11,7 +11,11 @@ from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.jobs.celery_app import celery_app
 from app.jobs.models import DispatchTenantCursor, PendingDispatch
-from app.jobs.outbox import enqueue_after_commit, flush_dispatch
+from app.jobs.outbox import (
+    compact_published_dispatches,
+    enqueue_after_commit,
+    flush_dispatch,
+)
 from app.jobs.tasks import dispatch_queue, register_dispatch_task
 
 
@@ -85,6 +89,75 @@ def test_committed_dispatch_and_deduplication(outbox_db, context, sent):
     with Session(outbox_db) as session:
         assert session.get(PendingDispatch, first).published_at is not None
         assert enqueue(session, context, **payload) == first
+
+
+def test_compaction_keeps_dedup_identity_without_revivable_payload(outbox_db, context):
+    register_dispatch_task("builds.execute_step", "builds")
+    payload = {"step_id": str(uuid4()), "revision": 7}
+    with Session(outbox_db) as session:
+        identity = enqueue_after_commit(
+            session,
+            context=context,
+            task_name="builds.execute_step",
+            task_key="settled-step:7",
+            payload=payload,
+        )
+        row = session.get(PendingDispatch, identity)
+        row.published_at = datetime.now(UTC) - timedelta(days=8)
+        session.commit()
+    with Session(outbox_db) as session, session.begin():
+        assert compact_published_dispatches(session, limit=10) == 1
+    with Session(outbox_db) as session:
+        row = session.get(PendingDispatch, identity)
+        assert row.payload == {}
+        assert row.payload_digest and row.compacted_at
+        assert (
+            enqueue_after_commit(
+                session,
+                context=context,
+                task_name="builds.execute_step",
+                task_key="settled-step:7",
+                payload=payload,
+            )
+            == identity
+        )
+        with pytest.raises(DomainError) as failure:
+            enqueue_after_commit(
+                session,
+                context=context,
+                task_name="builds.execute_step",
+                task_key="settled-step:7",
+                payload=payload | {"revision": 8},
+            )
+        assert failure.value.code == "dispatch_key_conflict"
+
+
+def test_compaction_skips_pending_recent_and_non_terminal_task_types(
+    outbox_db, context
+):
+    register_dispatch_task("builds.execute_step", "builds")
+    with Session(outbox_db) as session:
+        pending = enqueue(session, context, key="pending")
+        recent = enqueue_after_commit(
+            session,
+            context=context,
+            task_name="builds.execute_step",
+            task_key="recent",
+            payload={"step_id": str(uuid4()), "revision": 1},
+        )
+        probe = enqueue(session, context, key="old-probe")
+        session.get(PendingDispatch, recent).published_at = datetime.now(UTC)
+        session.get(PendingDispatch, probe).published_at = datetime.now(
+            UTC
+        ) - timedelta(days=8)
+        session.commit()
+    with Session(outbox_db) as session, session.begin():
+        assert compact_published_dispatches(session, limit=10) == 0
+    with Session(outbox_db) as session:
+        assert all(
+            session.get(PendingDispatch, identity).compacted_at is None
+            for identity in (pending, recent, probe)
+        )
 
 
 @pytest.mark.parametrize("change", ["actor", "payload", "task"])

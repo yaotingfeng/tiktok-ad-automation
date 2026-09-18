@@ -141,8 +141,7 @@ def test_ten_thousand_preceding_rows_cannot_split_legal_anchor_rectangle(
     def counted(connection, cursor, statement, _parameters, _context, _many):
         if (
             connection.engine.url.database == database_engine.url.database
-            and "FROM material_distribution JOIN material_asset_operation" in statement
-            and "LIMIT" in statement
+            and "batch_rectangle_candidates" in statement
         ):
             candidates.append(cursor.rowcount)
 
@@ -172,7 +171,7 @@ def test_ten_thousand_preceding_rows_cannot_split_legal_anchor_rectangle(
             == 10001
         )
     assert len(business_calls(gateway_wire, gateway_case[1].channel)) == 2
-    assert candidates == ([10000] if eligible_decoys else [2]), candidates
+    assert candidates == [2], candidates
 
 
 def test_contended_batch_claim_exits_without_send_and_original_dispatch_recovers(

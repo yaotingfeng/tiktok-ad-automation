@@ -274,7 +274,7 @@ def test_historical_receipt_projection_keeps_180_unit_queries_bounded(
             assert page.total == 1 and page.items[0].status == "COMPLETED"
         finally:
             event.remove(connection, "before_cursor_execute", capture)
-        assert len(statements) == 2
+        assert len(statements) == 1
         window = window_units().compile(
             dialect=connection.dialect, compile_kwargs={"literal_binds": True}
         )

@@ -171,6 +171,45 @@ def try_prepare_batch(
         if anchor_op.remote_response.get("transport") != "native_share":
             return False
         identity = _identity(anchor, anchor_op)
+        source_video_id = col(MaterialAssetOperation.remote_response)[
+            "source_video_id"
+        ].astext
+        eligible = (
+            MaterialDistribution.tenant_id == context.tenant_id,
+            MaterialDistribution.bc_id == anchor.bc_id,
+            MaterialDistribution.actor_id == context.actor_id,
+            MaterialDistribution.status == "queued",
+            col(MaterialDistribution.superseded_by_id).is_(None),
+            col(MaterialAssetOperation.superseded_by_id).is_(None),
+            MaterialAssetOperation.status == "pending",
+            MaterialAssetOperation.path == "share_source",
+            col(MaterialDistribution.target_route) == anchor.target_route,
+            col(MaterialDistribution.source_route) == anchor.source_route,
+            col(MaterialAssetOperation.remote_response)["source_advertiser_id"].astext
+            == identity[-1],
+            col(MaterialAssetOperation.remote_response)["transport"].astext
+            == "native_share",
+            func.jsonb_typeof(
+                col(MaterialAssetOperation.remote_response)["source_video_id"]
+            )
+            == "string",
+            or_(
+                col(MaterialAssetOperation.remote_response)["send_armed"].astext.is_(
+                    None
+                ),
+                col(MaterialAssetOperation.remote_response).contains(
+                    {"send_armed": False}
+                ),
+            ),
+            or_(
+                col(MaterialAssetOperation.claimed_until).is_(None),
+                col(MaterialAssetOperation.claimed_until) <= now,
+            ),
+        )
+        joined = select(MaterialDistribution, MaterialAssetOperation).join(
+            MaterialAssetOperation,
+            col(MaterialDistribution.operation_id) == col(MaterialAssetOperation.id),
+        )
         # 只串行化同一冻结范围的短领取事务；事务提交后各批远端请求可独立并发。
         # 这样第二个 worker 在第一批领取后重新选矩形，不会吃掉尚未领取的旧消息。
         lock_key = int.from_bytes(
@@ -181,60 +220,93 @@ def try_prepare_batch(
         )
         db.refresh(anchor)
         db.refresh(anchor_op)
-        if (
-            anchor.status != "queued"
-            or anchor_op.status != "pending"
-            or (anchor_op.claimed_until and anchor_op.claimed_until > datetime.now(UTC))
-        ):
-            return True
         if _identity(anchor, anchor_op) != identity:
             return False
-        rows = db.exec(
-            select(MaterialDistribution, MaterialAssetOperation)
-            .join(
-                MaterialAssetOperation,
-                col(MaterialDistribution.operation_id)
-                == col(MaterialAssetOperation.id),
-            )
-            .where(
-                MaterialDistribution.tenant_id == context.tenant_id,
-                MaterialDistribution.bc_id == anchor.bc_id,
-                MaterialDistribution.actor_id == context.actor_id,
-                MaterialDistribution.status == "queued",
-                col(MaterialDistribution.superseded_by_id).is_(None),
-                col(MaterialAssetOperation.superseded_by_id).is_(None),
-                MaterialAssetOperation.status == "pending",
-                MaterialAssetOperation.path == "share_source",
-                # 先限定冻结来源和可领取状态再分页；其他路由/在途任务不能
-                # 挤掉合法矩形，否则批量入口会错误退化为逐项发送。
-                col(MaterialDistribution.target_route) == anchor.target_route,
-                col(MaterialDistribution.source_route) == anchor.source_route,
-                col(MaterialAssetOperation.remote_response)[
-                    "source_advertiser_id"
-                ].astext
-                == identity[-1],
-                col(MaterialAssetOperation.remote_response)["transport"].astext
-                == "native_share",
-                func.jsonb_typeof(
-                    col(MaterialAssetOperation.remote_response)["source_video_id"]
+        if anchor.status != "queued" or anchor_op.status != "pending":
+            return True
+        if anchor_op.claimed_until and anchor_op.claimed_until > datetime.now(UTC):
+            # 两个 worker 同时看到可领取锚点时，第一个事务可能正好把第二个
+            # 锚点收入自己的批次。第二个已经通过旧状态校验，可在同一冻结
+            # 范围帮助领取下一批；迟到的旧消息会在加锁前直接退出，不扩批。
+            replacement = db.exec(
+                joined.where(*eligible)
+                .order_by(
+                    col(MaterialDistribution.material_id),
+                    col(MaterialDistribution.advertiser_id),
                 )
-                == "string",
-                or_(
-                    col(MaterialAssetOperation.remote_response)[
-                        "send_armed"
-                    ].astext.is_(None),
-                    col(MaterialAssetOperation.remote_response).contains(
-                        {"send_armed": False}
+                .limit(1)
+            ).first()
+            if replacement is None:
+                return True
+            anchor, anchor_op = replacement
+            if _identity(anchor, anchor_op) != identity:
+                return False
+        anchor_pair = (
+            str(anchor_op.remote_response.get("source_video_id")),
+            anchor.advertiser_id,
+        )
+        # 任意包含锚点的完整矩形，其素材必然出现在“锚点账户”上，账户也
+        # 必然拥有“锚点素材”。先从这两条边各取协议上限，再查交集，候选
+        # 最多 20×10；同范围即使有数万条排队，也不再加载一万 ORM 对象。
+        source_rows = list(
+            db.exec(
+                select(MaterialDistribution.material_id, source_video_id)
+                .join(
+                    MaterialDistribution,
+                    col(MaterialDistribution.operation_id)
+                    == col(MaterialAssetOperation.id),
+                )
+                .where(
+                    *eligible,
+                    MaterialDistribution.advertiser_id == anchor.advertiser_id,
+                )
+                .order_by(
+                    case(
+                        (
+                            col(MaterialDistribution.material_id) == anchor.material_id,
+                            0,
+                        ),
+                        else_=1,
                     ),
-                ),
-                or_(
-                    col(MaterialAssetOperation.claimed_until).is_(None),
-                    col(MaterialAssetOperation.claimed_until) <= now,
-                ),
+                    col(MaterialDistribution.material_id),
+                )
+                .limit(20)
+            ).all()
+        )
+        source_material_ids = [row[0] for row in source_rows]
+        target_ids = list(
+            db.exec(
+                select(MaterialDistribution.advertiser_id)
+                .join(
+                    MaterialAssetOperation,
+                    col(MaterialDistribution.operation_id)
+                    == col(MaterialAssetOperation.id),
+                )
+                .where(
+                    *eligible, MaterialDistribution.material_id == anchor.material_id
+                )
+                .group_by(MaterialDistribution.advertiser_id)
+                .order_by(
+                    case(
+                        (
+                            col(MaterialDistribution.advertiser_id)
+                            == anchor.advertiser_id,
+                            0,
+                        ),
+                        else_=1,
+                    ),
+                    MaterialDistribution.advertiser_id,
+                )
+                .limit(10)
+            ).all()
+        )
+        rows = db.exec(
+            joined.where(
+                *eligible,
+                col(MaterialDistribution.material_id).in_(source_material_ids),
+                col(MaterialDistribution.advertiser_id).in_(target_ids),
             )
             .order_by(
-                # 同范围大库也必须保留本次锚点和它已登记的其他账户；仍只
-                # 从已有授权候选取矩形，不新增需求或扩大一次发送上限。
                 case((col(MaterialDistribution.id) == anchor.id, 0), else_=1),
                 case(
                     (col(MaterialDistribution.material_id) == anchor.material_id, 0),
@@ -243,7 +315,8 @@ def try_prepare_batch(
                 col(MaterialDistribution.material_id),
                 col(MaterialDistribution.advertiser_id),
             )
-            .limit(10000)
+            .limit(200)
+            .prefix_with("/* batch_rectangle_candidates */")
         ).all()
         candidates = {
             (str(op.remote_response["source_video_id"]), dist.advertiser_id): (dist, op)
@@ -254,10 +327,6 @@ def try_prepare_batch(
             and not op.remote_response.get("send_armed")
             and (op.claimed_until is None or op.claimed_until <= now)
         }
-        anchor_pair = (
-            str(anchor_op.remote_response.get("source_video_id")),
-            anchor.advertiser_id,
-        )
         if anchor_pair not in candidates:
             return False
         chosen = rectangle(set(candidates), anchor_pair)

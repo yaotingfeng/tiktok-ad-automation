@@ -636,7 +636,8 @@ def test_authorized_source_upload_and_readback_resume_original_build_cover(
     with Session(engine) as db:
         assert db.get(MaterialCoverJob, source_id).status == "READY"
         assert db.get(MaterialCoverJob, old_id).status == "UNKNOWN"
-    wire[1].extend([{"list": [source_image]}, page([]), {"failed_infos": {}}])
+    # SOURCE 已由恢复任务回填 MID，BUILD 直接查目标账户后共享，不再重复回读来源。
+    wire[1].extend([page([]), {"failed_infos": {}}])
     drive(target_id)
     with Session(engine) as db:
         job = db.get(MaterialCoverJob, target_id)

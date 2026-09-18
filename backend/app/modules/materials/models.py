@@ -523,6 +523,15 @@ class MaterialDistribution(SQLModel, table=True):
                 "AND superseded_by_id IS NULL"
             ),
         ),
+        Index(
+            "ix_material_distribution_batch_target",
+            "tenant_id",
+            "bc_id",
+            "actor_id",
+            "advertiser_id",
+            "material_id",
+            postgresql_where=text("status = 'queued' AND superseded_by_id IS NULL"),
+        ),
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     tenant_id: UUID

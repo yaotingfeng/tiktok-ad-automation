@@ -237,7 +237,7 @@ def list_submissions(
         + CATALOG_SUBMISSIONS
         + """, metadata AS ("""
         + METADATA
-        + """ WHERE s.tenant_id=:tenant), page AS (
+        + """ WHERE s.tenant_id=:tenant), filtered AS (
  SELECT s.*,p.batch_short_id,m.actor_name,m.provider_name,m.strategy_label
  FROM catalog_submissions s JOIN build_preview p ON p.tenant_id=s.tenant_id AND p.id=s.preview_id JOIN metadata m ON m.submission_id=s.id
  WHERE s.tenant_id=:tenant AND s.bc_id=:bc
@@ -247,14 +247,17 @@ def list_submissions(
  AND (CAST(:q AS text) IS NULL OR strpos(lower(p.batch_short_id),lower(:q))>0 OR strpos(s.id::text,:q)>0 OR strpos(lower(m.actor_name),lower(:q))>0 OR strpos(lower(m.strategy_label),lower(:q))>0 OR strpos(lower(coalesce(m.provider_name,'')),lower(:q))>0
  OR EXISTS (SELECT 1 FROM preview_drama d WHERE d.tenant_id=s.tenant_id AND d.preview_id=s.preview_id AND strpos(lower(d.title),lower(:q))>0)
  OR EXISTS (SELECT 1 FROM build_unit u WHERE u.tenant_id=s.tenant_id AND u.preview_id=s.preview_id AND u.advertiser_id=:q))
- AND (CAST(:after_at AS timestamptz) IS NULL OR (s.created_at,s.id)<(:after_at,CAST(:after_id AS uuid)))
- ORDER BY s.created_at DESC,s.id DESC LIMIT :size)
+), page AS (
+ SELECT s.* FROM filtered s
+ WHERE (CAST(:after_at AS timestamptz) IS NULL OR (s.created_at,s.id)<(:after_at,CAST(:after_id AS uuid)))
+ ORDER BY s.created_at DESC,s.id DESC LIMIT :size), filtered_total AS (
+ SELECT count(*) total_count FROM filtered)
  """
         + COUNTS
-        + """ SELECT p.*,coalesce(t.drama_count,0) drama_count,coalesce(t.account_count,0) account_count,
+        + """ SELECT p.*,ft.total_count,coalesce(t.drama_count,0) drama_count,coalesce(t.account_count,0) account_count,
  coalesce(t.excluded_unit_count,0) excluded_unit_count,coalesce(t.submitted_c,0) submitted_c,coalesce(t.submitted_g,0) submitted_g,coalesce(t.submitted_a,0) submitted_a,coalesce(o.values,'{}'::jsonb) outcomes,
  (SELECT count(*) FROM build_verified_replacement vr WHERE vr.tenant_id=p.tenant_id AND vr.submission_id=p.id) corrected_ad_count
- FROM page p LEFT JOIN totals t ON t.submission_id=p.id LEFT JOIN outcomes o ON o.submission_id=p.id ORDER BY p.created_at DESC,p.id DESC"""
+ FROM filtered_total ft LEFT JOIN page p ON true LEFT JOIN totals t ON t.submission_id=p.id LEFT JOIN outcomes o ON o.submission_id=p.id ORDER BY p.created_at DESC,p.id DESC"""
     )
     query_params = {
         "tenant": context.tenant_id,
@@ -268,26 +271,6 @@ def list_submissions(
         "after_id": aid,
         "size": limit + 1,
     }
-    total = _scalar_count(
-        session,
-        "WITH "
-        + CATALOG_SUBMISSIONS
-        + ", metadata AS ("
-        + METADATA
-        + """ WHERE s.tenant_id=:tenant)
-SELECT count(*) FROM catalog_submissions s
-JOIN build_preview p ON p.tenant_id=s.tenant_id AND p.id=s.preview_id
-JOIN metadata m ON m.submission_id=s.id
-WHERE s.tenant_id=:tenant AND s.bc_id=:bc
-AND (CAST(:from AS timestamptz) IS NULL OR s.created_at>=:from)
-AND (CAST(:to AS timestamptz) IS NULL OR s.created_at<:to)
-AND (:status='all' OR (:status='active' AND s.visible_status IN ('QUEUED','RUNNING')) OR (:status='attention' AND s.visible_status IN ('PARTIAL','FAILED','NEEDS_REVIEW')) OR (:status='completed' AND s.visible_status='COMPLETED'))
-AND (CAST(:provider AS uuid) IS NULL OR EXISTS (SELECT 1 FROM preview_drama d JOIN promotion_link l ON l.tenant_id=d.tenant_id AND l.id=d.link_id WHERE d.tenant_id=s.tenant_id AND d.preview_id=s.preview_id AND l.connection_id=:provider))
-AND (CAST(:q AS text) IS NULL OR strpos(lower(p.batch_short_id),lower(:q))>0 OR strpos(s.id::text,:q)>0 OR strpos(lower(m.actor_name),lower(:q))>0 OR strpos(lower(m.strategy_label),lower(:q))>0 OR strpos(lower(coalesce(m.provider_name,'')),lower(:q))>0
-OR EXISTS (SELECT 1 FROM preview_drama d WHERE d.tenant_id=s.tenant_id AND d.preview_id=s.preview_id AND strpos(lower(d.title),lower(:q))>0)
-OR EXISTS (SELECT 1 FROM build_unit u WHERE u.tenant_id=s.tenant_id AND u.preview_id=s.preview_id AND u.advertiser_id=:q))""",
-        query_params,
-    )
     rows = (
         cast(SASession, session)
         .execute(
@@ -297,8 +280,11 @@ OR EXISTS (SELECT 1 FROM build_unit u WHERE u.tenant_id=s.tenant_id AND u.previe
         .mappings()
         .all()
     )
+    # 总数和当前页由同一条 SQL 返回；LEFT JOIN 保证越过末页时仍有总数行。
+    total = int(rows[0]["total_count"])
+    page_rows = [row for row in rows if row["id"] is not None]
     items = []
-    for row in rows[:limit]:
+    for row in page_rows[:limit]:
         outcomes = {
             key: ObjectCounts(
                 **{
@@ -348,7 +334,7 @@ OR EXISTS (SELECT 1 FROM build_unit u WHERE u.tenant_id=s.tenant_id AND u.previe
             scope=scope,
             last_id=f"{items[-1].created_at.isoformat()}|{items[-1].submission_id}",
         )
-        if len(rows) > limit
+        if len(page_rows) > limit
         else None,
         total=total,
     )

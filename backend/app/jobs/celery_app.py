@@ -42,8 +42,16 @@ celery_app.conf.update(
     broker_transport_options={"queue_order_strategy": "round_robin"},
     task_default_queue="control",
     task_create_missing_queues=False,
-    task_routes={"jobs.flush_dispatch": {"queue": "control"}},
+    task_routes={
+        "jobs.flush_dispatch": {"queue": "control"},
+        "jobs.compact_dispatches": {"queue": "control"},
+    },
     beat_schedule={
+        "compact-published-dispatches": {
+            "task": "jobs.compact_dispatches",
+            "schedule": 3600.0,
+            "options": {"queue": "control"},
+        },
         "repair-source-cover-starts": {
             "task": "materials.repair_source_cover_starts",
             "schedule": 60.0,

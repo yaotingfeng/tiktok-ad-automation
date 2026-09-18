@@ -33,6 +33,15 @@ class PendingDispatch(SQLModel, table=True):
                 "published_at IS NULL AND task_name = 'builds.expand_submission'"
             ),
         ),
+        Index(
+            "ix_dispatch_compaction",
+            "published_at",
+            "id",
+            postgresql_where=text(
+                "published_at IS NOT NULL AND compacted_at IS NULL "
+                "AND task_name IN ('builds.execute_step','builds.execute_unit')"
+            ),
+        ),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -41,6 +50,11 @@ class PendingDispatch(SQLModel, table=True):
     task_name: str = Field(max_length=255)
     task_key: str = Field(max_length=255)
     payload: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
+    # 已结算消息可清空可重放正文，但摘要和 task_key 永久保留幂等语义。
+    payload_digest: str | None = Field(default=None, max_length=64)
+    compacted_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
     available_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC),
         sa_column=Column(
