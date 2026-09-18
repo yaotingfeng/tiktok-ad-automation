@@ -1315,8 +1315,9 @@
 - 验证：受影响共享、万级候选、并发领取、Outbox、历史回执及提交目录 112 项通过；封面/视频补发、BC seed 恢复及核实替换 54 项通过。修改文件 Ruff、格式、ty 和 `git diff --check` 通过；全新 PostgreSQL 从空库升级到 `outbox_payload_compaction` 且 `alembic check` 无新增操作。无新功能开关或真实 TikTok 写入。
 - `6f610779d9cb4c6d16e03683b667fcc3c8081013` 已推送并部署新加坡测试环境。`144836Z` 五份归档校验、1,396 个项目文件、22 张业务表、1,845 份加密响应及隔离 PostgreSQL/Redis 恢复和迁移演练通过；六服务零重启、4 Worker、HTTPS、批次业务投影与原配置通过。观察期无重试/重新发布，到期 Outbox 为 0；原批次投影继续为 COMPLETED、180/180/360。按用户要求删除旧备份和恢复临时副本，仅保留 `20260918T144836Z`。详见[发布验收](validation/2026-09-18-batch-sharing-hardening.md)。
 
-## 2026-09-18 小程序选择阶段与场景复用（未部署）
+## 2026-09-18 小程序选择阶段与场景复用（已部署）
 
 - 测试服只读证据确认最近一次 5 账户小程序选择耗时约 66 秒，但未完成剧目数为 0；实际重复读取 identity、CTA、VBO、regions 共 20 次。选择不会重新解析剧目或匹配素材，原 `materials` 阶段及文案造成了误解。
 - 新增独立 `scenes` 准备阶段；选择后直接校验账户场景，保留全部剧目、账户、链接和素材。更换小程序时复用同账户/冻结路由下仍新鲜且合同一致的四类 Mini 无关事实，并保留目录与共同场景来源证据；无可复用事实时继续真实校验，不降低安全边界。
-- 73 项后端回归、1 项 Playwright、Ruff、TypeScript/Vite、迁移降级/升级往返及差异检查通过。新增迁移 head `draft_scene_phase`，无新开关、无真实平台写入；尚未发布服务器。详见[验证记录](validation/2026-09-18-mini-selection-scene-reuse.md)。
+- 73 项后端回归、1 项 Playwright、Ruff、TypeScript/Vite、迁移降级/升级往返及差异检查通过。与嘉书租户备注修改合并验证共 104 项通过；无新开关、无真实平台写入。
+- `9fd1f01fb9b275429eb2783e485a659be6a136da` 已推送并部署新加坡测试服。`154726Z` 五份归档、1,399 个项目文件、22 张表、1,891 份加密响应及 PostgreSQL/Redis 独立恢复和迁移演练通过；正式 head 为 `draft_scene_phase`。六项服务、4 个 Worker、HTTPS、真实管理员登录与原开关通过，发布后 error 日志为 0。详见[验证记录](validation/2026-09-18-mini-selection-scene-reuse.md)。

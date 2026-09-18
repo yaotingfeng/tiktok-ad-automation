@@ -20,4 +20,13 @@
 - 场景任务、草稿引导、输入进度与准备任务共 73 项通过，真实本地 PostgreSQL/Redis，TikTok 传输为边界替身。
 - 新前端阶段文案 Playwright 1 项通过；TypeScript 与 Vite 生产构建通过。
 - Ruff 通过；迁移在专用测试库执行 `draft_scene_phase → outbox_payload_compaction → draft_scene_phase` 往返通过，最终为单一 head `draft_scene_phase`；`git diff --check` 通过。
-- 本轮未部署、未调用真实 TikTok 写接口、未创建广告，也未修改测试服业务数据。
+- 本轮验证未调用真实 TikTok 写接口、未创建广告，也未修改测试服广告业务数据。
+
+## 新加坡测试服发布
+
+- `9fd1f01fb9b275429eb2783e485a659be6a136da` 已推送至 `origin/main` 并作为固定版本部署；同版还包含嘉书渠道备注增加租户名的本地既有提交。
+- 发布前本地组合回归 104 项通过，Ruff 与格式检查通过；服务器候选代码编译、依赖锁一致及单一迁移 head `draft_scene_phase` 通过。
+- 完整备份为 `/var/backups/tt-ada-staging/20260918T154726Z/`。PostgreSQL、Redis、应用配置、当前项目与私有运行配置五份归档均通过 SHA-256；项目 1,399 个文件逐字节恢复、Redis 独立实例读取、22 张业务表与 1,891 份加密响应的 PostgreSQL 独立恢复及迁移演练通过。
+- 正式数据库由 `outbox_payload_compaction` 升级至 `draft_scene_phase`，`alembic check` 无待执行操作，阶段约束已包含 `scenes`。
+- API、四个 Worker 与 Beat 均在新 release 目录运行，四个 Celery 节点 ping 成功；HTTPS 健康、构建登录页、接口边界及真实管理员登录/资料读取通过。发布后六项服务 error 日志均为 0，备份 timer 已恢复。
+- 素材导入与自动清理开关发布前后均保持开启；未改私有配置、调用策略或广告状态，未执行真实 TikTok 写操作。
