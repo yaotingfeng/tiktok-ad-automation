@@ -97,7 +97,7 @@ def draft_summary(
         provider_task_id=prep.provider_task_id if prep else None,
         # 返回实际阶段，不能让尚未开始的素材匹配掩盖账户核对中的等待。
         preparation_phase=cast(
-            Literal["accounts", "links", "materials", "done"] | None,
+            Literal["accounts", "links", "materials", "scenes", "done"] | None,
             prep.phase if prep and prep.draft_revision == row.revision else None,
         ),
         error_code=prep.error_code

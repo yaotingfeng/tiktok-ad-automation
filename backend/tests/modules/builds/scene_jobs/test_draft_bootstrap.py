@@ -567,7 +567,7 @@ def test_mini_choice_queues_only_scene_refresh_and_preserves_prepared_inputs(
                 DraftPreparation.draft_revision == revision + 1,
             )
         ).one()
-        assert prep.phase == "materials" and prep.status == "PENDING"
+        assert prep.phase == "scenes" and prep.status == "PENDING"
         task_id = prep.id
     for _ in range(4):
         if tick(env, task_id):

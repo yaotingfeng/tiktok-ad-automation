@@ -183,6 +183,59 @@ def test_confirmed_same_mini_links_share_scene_and_bc_proof(
         )
 
 
+def test_changed_mini_reuses_fresh_mini_independent_scene_facts(
+    job_env, wire, redis_client
+):
+    from app.modules.builds.mini_targets import remember_target
+
+    env = job_env
+    original = complete(env, wire, redis_client)
+    with Session(engine) as session, session.begin():
+        page_row = session.exec(
+            select(SceneJobPage).where(
+                SceneJobPage.job_id == original.id,
+                SceneJobPage.resource == "minis",
+            )
+        ).one()
+        page_row.facts = {
+            **page_row.facts,
+            "options": [
+                *page_row.facts["options"],
+                {
+                    "minis_id": "alternate-minis",
+                    "name": "Alternate",
+                    "status": "ACTIVE",
+                    "type": "MINI_SERIES",
+                    "regions": ["US", "CA"],
+                },
+            ],
+        }
+        link = session.get(PromotionLink, env["link_id"])
+        remember_target(
+            session,
+            context=env["context"],
+            url=link.url,
+            minis_id="alternate-minis",
+            source="USER",
+        )
+
+    prepared = ensure(env)
+    assert prepared.state == "ready"
+    assert prepared.job_id != original.id
+    with Session(engine) as session:
+        reused = session.get(SceneJob, prepared.job_id)
+        assert reused.status == "COMPLETE" and reused.resource == "done"
+        assert reused.facts["reused_scene_job_id"] == str(original.id)
+        assert set(reused.facts) >= {
+            "identity",
+            "minis",
+            "cta",
+            "vbo",
+            "regions",
+        }
+    assert len(wire[0]) == 6
+
+
 def test_complete_scene_reader_is_readonly_no_credentials_or_network(
     job_env, wire, redis_client, monkeypatch
 ):

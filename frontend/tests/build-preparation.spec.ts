@@ -1292,10 +1292,14 @@ test("准备中保留补链入口但暂不能保存，只读成员不显示补�
 }) => {
   const api = await buildsBoundary(page, { empty: true })
   api.summary.status = "PREPARING"
+  api.summary.preparation_phase = "scenes"
   await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
   await expect(
     page.getByRole("heading", { name: "准备与调整", exact: true }),
   ).toBeVisible()
+  await expect(page.getByRole("status").first()).toContainText(
+    "正在核对所选小程序与账户投放条件…",
+  )
   await page
     .getByRole("button", { name: "补充推广链接", exact: true })
     .first()

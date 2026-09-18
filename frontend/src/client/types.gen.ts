@@ -962,7 +962,7 @@ export type DraftSummary = {
     /**
      * Preparation Phase
      */
-    preparation_phase?: 'accounts' | 'links' | 'materials' | 'done' | null;
+    preparation_phase?: 'accounts' | 'links' | 'materials' | 'scenes' | 'done' | null;
     /**
      * Created At
      */

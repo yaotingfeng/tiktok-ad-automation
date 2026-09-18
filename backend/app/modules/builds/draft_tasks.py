@@ -143,6 +143,7 @@ def process_preparation(
                 if prep.phase == "accounts"
                 or prep.phase == "materials"
                 and not (material_progress or pending_materials)
+                or prep.phase == "scenes"
                 or prep.phase == "links"
                 and prep.link_cursor is None
                 else 0,

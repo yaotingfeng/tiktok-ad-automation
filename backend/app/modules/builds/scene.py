@@ -435,6 +435,8 @@ def _read_account_scene(
                 facts, evidence_ids = job.facts, (job.id,)
                 if job.facts.get("minis_catalog_job_id"):
                     evidence_ids += (UUID(job.facts["minis_catalog_job_id"]),)
+                if job.facts.get("reused_scene_job_id"):
+                    evidence_ids += (UUID(job.facts["reused_scene_job_id"]),)
             else:
                 reasons.append(
                     "scene_evidence_expired"

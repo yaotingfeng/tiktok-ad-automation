@@ -211,6 +211,8 @@ def ensure_scene_preparation(
     reuse_minis_catalog(session, context=context, job=job, route=route)
     session.add(job)
     session.flush()
+    if job.status == "COMPLETE":
+        return ScenePreparation(job.id, "ready")
     _queue(session, job)
     return ScenePreparation(job.id, "queued")
 

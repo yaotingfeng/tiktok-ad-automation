@@ -152,7 +152,7 @@ class DraftPreparation(SQLModel, table=True):
             name="ck_draft_preparation_status",
         ),
         CheckConstraint(
-            "phase IN ('accounts','links','materials','done')",
+            "phase IN ('accounts','links','materials','scenes','done')",
             name="ck_draft_preparation_phase",
         ),
         Index("ix_draft_preparation_repair", "status", "repair_after", "id"),

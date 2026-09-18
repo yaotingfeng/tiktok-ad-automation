@@ -29,6 +29,8 @@ from .mini_targets import (
 from .models import BuildDraft, DraftAccount, DraftDrama
 from .scene_job_models import SceneJob, SceneJobPage
 
+MINI_INDEPENDENT_FACTS = ("identity", "cta", "vbo", "regions")
+
 
 class MiniOption(BaseModel):
     minis_id: str
@@ -381,10 +383,76 @@ def reuse_minis_catalog(
     selected = catalog_options(session, source, minis_id=job.minis_id)
     if len(selected) != 1:
         return
+    common = _fresh_mini_independent_scene(
+        session, context=context, account=job.advertiser_id, route=route
+    )
     # 原请求是账户全量目录，指定 Mini 的筛选只发生在本地，复用原观察期限和来源任务。
     job.facts = {
+        **(
+            {key: common.facts[key] for key in MINI_INDEPENDENT_FACTS} if common else {}
+        ),
         "minis": {**source.facts["minis"], "matches": selected},
         "minis_catalog_job_id": str(source.id),
+        **({"reused_scene_job_id": str(common.id)} if common else {}),
     }
-    job.first_observed_at = source.first_observed_at
-    job.expires_at = source.expires_at
+    observations = [
+        value
+        for value in (
+            source.first_observed_at,
+            common.first_observed_at if common else None,
+        )
+        if value is not None
+    ]
+    expirations = [
+        value
+        for value in (source.expires_at, common.expires_at if common else None)
+        if value is not None
+    ]
+    job.first_observed_at = min(observations) if observations else None
+    job.expires_at = min(expirations) if expirations else None
+    if common:
+        # 四类请求参数均不包含 Mini；冻结路由、账户事实与合同仍逐项核实后才复用。
+        job.status, job.resource, job.completed_at = (
+            "COMPLETE",
+            "done",
+            datetime.now(UTC),
+        )
+
+
+def _fresh_mini_independent_scene(
+    session: Session,
+    *,
+    context: TenantContext,
+    account: str,
+    route: FrozenTikTokRoute,
+) -> SceneJob | None:
+    from .scene import _account_scope
+
+    candidates = session.exec(
+        select(SceneJob)
+        .where(
+            SceneJob.tenant_id == context.tenant_id,
+            SceneJob.bc_id == route.bc_id,
+            SceneJob.advertiser_id == account,
+            SceneJob.connection_id == route.connection_id,
+            SceneJob.status == "COMPLETE",
+            col(SceneJob.expires_at) > datetime.now(UTC),
+            SceneJob.frozen_route == route.model_dump(mode="json"),
+        )
+        .order_by(col(SceneJob.created_at).desc())
+        .limit(20)
+    ).all()
+    for candidate in candidates:
+        if not all(key in candidate.facts for key in MINI_INDEPENDENT_FACTS):
+            continue
+        scope = _account_scope(
+            session,
+            context=context,
+            bc_id=route.bc_id,
+            advertiser_id=account,
+            minis_id=candidate.minis_id,
+            route=route,
+        )
+        if scope["basis"] == candidate.scope_basis:
+            return candidate
+    return None

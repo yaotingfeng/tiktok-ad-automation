@@ -7,7 +7,9 @@ export function preparationLabel(summary: DraftSummary) {
     case "links":
       return "正在确认剧目与推广链接…"
     case "materials":
-      return "正在准备素材与推广小程序…"
+      return "正在匹配素材并读取可用小程序…"
+    case "scenes":
+      return "正在核对所选小程序与账户投放条件…"
     default:
       return "正在准备…"
   }

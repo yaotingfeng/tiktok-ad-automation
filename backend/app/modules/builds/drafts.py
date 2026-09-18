@@ -526,7 +526,8 @@ def prepare_selected_mini(
         draft_revision=draft.revision,
         actor_id=context.actor_id,
         request_id=request_id,
-        phase="materials",
+        # 剧目、账户、链接和素材都沿用上一版本；直接进入账户场景校验。
+        phase="scenes",
         provider_task_id=previous.provider_task_id if previous else None,
     )
     return _enqueue_draft_preparation(session, context, draft, prep, route, request_id)
@@ -1125,6 +1126,8 @@ def continue_draft(session: Session, *, context: TenantContext, task_id: UUID) -
         _links_page(session, context, draft, prep)
     elif prep.phase == "materials":
         _materials_page(session, context, draft, prep)
+    elif prep.phase == "scenes":
+        _scenes_page(session, context, draft, prep)
     draft.updated_at = datetime.now(UTC)
     session.add_all([prep, draft])
     session.flush()
