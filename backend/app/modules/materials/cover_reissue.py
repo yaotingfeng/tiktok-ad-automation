@@ -188,7 +188,9 @@ def create_cover_replacement(
         video_id=old.video_id,
         video_md5=old.video_md5,
         remote_name=f"cover-{identity.hex}.jpg",
-        purpose=old.purpose,
+        # 明确共享拒绝说明目标没有收到图片；新代直接复用 SOURCE 上传器，
+        # 从目标视频取封面并使用上传回执 ID，避免再次选择同一坏源 MID。
+        purpose="SOURCE" if explicitly_rejected_build else old.purpose,
     )
     session.add(new)
     session.flush()

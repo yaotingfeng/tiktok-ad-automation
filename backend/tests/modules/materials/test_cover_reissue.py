@@ -131,7 +131,9 @@ def test_explicitly_rejected_build_share_gets_new_generation_without_reusing_att
         step = db.get(ExecutionStep, step_id)
         assert old.superseded_by_id == new_id
         assert old.status == "BLOCKED" and old.share_batch_id is not None
-        assert new.purpose == "BUILD" and new.status == "PENDING"
+        # 平台已明确拒绝这个 source MID 后，新代直接使用目标视频的封面
+        # 上传器；继续 BUILD 只会再次选择同一个唯一来源并重复被拒绝。
+        assert new.purpose == "SOURCE" and new.status == "PENDING"
         assert new.share_batch_id is None and new.request_armed_at is None
         assert step.cover_job_id == new_id
         assert (step.status, step.phase, step.error_code) == (
