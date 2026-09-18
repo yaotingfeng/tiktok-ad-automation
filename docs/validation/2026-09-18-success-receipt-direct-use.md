@@ -22,3 +22,20 @@
 - 现场仍为e9b0001：07:09:28 UTC完整106/180、实际AD222/360、素材齐118，1条AD运行中、8条排队；13个READBACK未知不等于未创建。任务持续推进但仍有封面未知/明确失败，不宣称整体正常或全部完成。
 - 07:31:53 UTC旧版完整119/180、AD251/360，近3分钟12广告和55素材成功；07:10之后六服务NRestarts=0，未发现Traceback/死锁/SQL超时/WorkerLost/OOM。内存约1.68GiB、swap约1.25GiB，不增加执行池伪称无限并发。
 - 发布空间仅删除逐字节匹配已安装Bun的临时重复二进制（79,500,640字节）；安装依赖未动，本地保留已校验可恢复安装包。业务库、正式备份、所有release保留。
+
+## 服务器候选验收
+
+- 候选`bbe3c97d841e3310c76c23ad4518ed26d27e2f22`已推送；服务器1225个跟踪文件逐字节一致，原依赖、迁移及配置检查通过，前端复用原产物。此时current仍为e9b0001，不把候选目录当作已部署。
+- 候选代码对真实业务库只读完整EXPLAIN：窗口364.838ms（planning172.062ms），共享候选150.685ms（planning56.461ms，19行），封面repair完整候选168.988ms（planning49.094ms），三者均无JIT。无运行repair或修改业务行。
+- 07:37UTC候选只读投影完整125/180、实际AD252/360，可省略历史READBACK517；公开详情仍NEEDS_REVIEW，存在6个正式RETRY候选。原UNKNOWN AD整行摘要保持`c8eeef9758a98470404af8cfd5435842`。投影完成数不可与旧定义直接比较，也不是新增广告数。
+- Linux首轮15项通过后，180组合容量用例运行过久主动中断（总452.81秒，exit2；不算容量通过）；测试进程正常退出，测试角色恢复NOLOGIN/NOCREATEDB、私有bootstrap库删除。观察到测试连接持续执行短SELECT，无锁等待；不能将中断解释为通过。剩余13项视频/封面关键回归另跑，本地容量与线上完整只读EXPLAIN证据独立保留。
+- Linux剩余13项全部通过141.29秒，角色及私有bootstrap库恢复；两轮共28个关键用例通过，容量中断项单独保留为未完成。
+
+## 部署与业务检查
+
+- `bbe3c97d841e3310c76c23ad4518ed26d27e2f22`已部署。完整备份`/var/backups/tt-ada-staging/20260918T074829Z/`五归档校验、1388项目文件、Redis独立实例、22表与1486加密响应独立恢复通过；迁移head仍`material_approved_reissue`，配置/额度/并发/前端不变。
+- 首次运行检查早于Worker全部fork完成（8进程），随后六服务11进程逐一同版本同私有环境通过；四Worker实际队列、两个timer、前端字节、HTTPS和双身份隔离通过，不能把首次早检失败算成通过。
+- 正式RETRY请求`0c393427-46b6-539c-93a3-a3ca62367fbf`，恢复`ebc710d7-ac91-4a9a-a88d-7a09c8f8d579`实际COMPLETED/10；未触发RECONCILE或额外UNKNOWN补发。07:51UTC完整128/180、AD257/360，14条AD排队，素材3993成功/15未知/2明确失败，retry候选0，原UNKNOWN AD整行保持不变。
+- 发布后短窗口六服务零重启，未发现Traceback、死锁、SQL超时、WorkerLost或OOM。新消费者已完成73个build步骤、20个unit任务，不能将消息完成数当广告创建数；持续业务验收仍需实证新增远端ID。
+- 再次验证完整归档及22表历史后，仅删除本次无活动会话的恢复测试库`tt_ada_tenant_library_bbe3c97d_test`和解压副本`/root/tt-ada-tenant-library-restore.CRrqnCd8`；业务库、正式备份和所有release保留，可重建，余1,143,520KiB。
+- 第二轮正式RETRY请求`33dc3ab3-2684-5164-935c-96136fc1e4fc`，恢复`951be9f1-98a6-42cd-a095-ffe812eb36cc`实际COMPLETED/6。07:57UTC完整133/180、AD268/360，另4排队/1运行；当前retry候选0。剩15项UNKNOWN封面均无known/candidate image_id，2项明确`cover_share_rejected`也无目标ID；不能按“成功ID直接使用”规则凭空创建，且未启动用户要求移除的额外RECONCILE核查。原UNKNOWN AD整行仍保持不变。
