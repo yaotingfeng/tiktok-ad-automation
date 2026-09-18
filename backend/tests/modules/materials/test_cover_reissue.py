@@ -180,6 +180,43 @@ def test_authorized_unknown_build_share_uses_target_upload_generation(
         )
 
 
+@pytest.mark.parametrize("has_request_id", [False, True])
+def test_authorized_claim_lost_build_uses_target_upload_generation(
+    executable, redis_client, has_request_id
+):
+    step_id, old_id, submission_id = rejected_build(executable, redis_client)
+    with Session(executable[0]) as db, db.begin():
+        old = db.get(MaterialCoverJob, old_id)
+        batch = db.get(MaterialCoverShareBatch, old.share_batch_id)
+        old.error_code = "cover_claim_lost"
+        batch.status, batch.error_code = "BLOCKED", "cover_claim_lost"
+        batch.failed_infos = {}
+        batch.request_id = "claim-lost-request" if has_request_id else None
+        step = db.get(ExecutionStep, step_id)
+        step.status, step.phase, step.error_code = (
+            "UNKNOWN",
+            "DONE",
+            "cover_claim_lost",
+        )
+
+    result = replace(executable, old_id, submission_id)
+    new_id = UUID(result["new_cover_job_id"])
+    with Session(executable[0]) as db:
+        old = db.get(MaterialCoverJob, old_id)
+        new = db.get(MaterialCoverJob, new_id)
+        step = db.get(ExecutionStep, step_id)
+        assert old.superseded_by_id == new_id
+        assert old.status == "BLOCKED" and old.error_code == "cover_claim_lost"
+        assert new.purpose == "SOURCE" and new.status == "PENDING"
+        assert new.share_batch_id is None and new.request_armed_at is None
+        assert step.cover_job_id == new_id
+        assert (step.status, step.phase, step.error_code) == (
+            "PENDING",
+            "IDLE",
+            "cover_pending",
+        )
+
+
 def test_reissue_keeps_old_history_and_unknown_ad_and_is_idempotent(
     executable, redis_client
 ):

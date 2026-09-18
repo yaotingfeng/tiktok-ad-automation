@@ -143,10 +143,16 @@ def create_cover_replacement(
         and rejected_member.get("source_mid")
         in rejected_batch.failed_infos.get(old.advertiser_id, [])
     )
-    authorized_unknown_build = bool(
+    authorized_unresolved_build = bool(
         old.purpose == "BUILD"
-        and old.status == "UNKNOWN"
-        and old.error_code in {"cover_result_unknown", "cover_search_incomplete"}
+        and (
+            (
+                old.status == "UNKNOWN"
+                and old.error_code
+                in {"cover_result_unknown", "cover_search_incomplete"}
+            )
+            or (old.status == "BLOCKED" and old.error_code == "cover_claim_lost")
+        )
         and rejected_batch is not None
         and rejected_member
         and rejected_member.get("share_requested") is True
@@ -158,7 +164,7 @@ def create_cover_replacement(
         and old.image_mid is None
     )
     if (
-        not (unknown_source or explicitly_rejected_build or authorized_unknown_build)
+        not (unknown_source or explicitly_rejected_build or authorized_unresolved_build)
         or old.request_armed_at is None
         or old.known_image_id is not None
         or old.candidate_image_id is not None
@@ -200,7 +206,7 @@ def create_cover_replacement(
         # 从目标视频取封面并使用上传回执 ID，避免再次选择同一坏源 MID。
         purpose=(
             "SOURCE"
-            if explicitly_rejected_build or authorized_unknown_build
+            if explicitly_rejected_build or authorized_unresolved_build
             else old.purpose
         ),
     )
