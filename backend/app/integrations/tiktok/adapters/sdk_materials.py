@@ -9,7 +9,7 @@ from typing import Any
 
 import business_api_client.tiktok_business.tiktok_exceptions as sdk_errors  # type: ignore[import-untyped]
 from business_api_client.api.creative_management_api import (  # type: ignore[import-untyped]
-    CreativeManagementApi,  # type: ignore[import-untyped]
+    CreativeManagementApi,
 )
 from business_api_client.api.file_api import FileApi  # type: ignore[import-untyped]
 from business_api_client.rest import ApiException  # type: ignore[import-untyped]
@@ -274,7 +274,7 @@ class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
             ):
                 budget.timeout(upload=True)
                 sent = True
-                _call_response(
+                response = _call_response(
                     self._client,
                     cover_sdk.UPLOAD_ENDPOINT,
                     body={
@@ -285,7 +285,6 @@ class SDKMaterialOperations(sdk_assets.MaterialReadAdapter):
                     },
                     budget=budget,
                 )
-                response = _upload_response(self._client, array=False)
                 return cover_sdk.image_receipt(
                     response, advertiser_id=request.advertiser_id
                 )
@@ -362,11 +361,14 @@ def _upload_response(client: Any, *, array: bool) -> McpBusinessResponse:
         parse_float=Decimal,
     )
     request_id = raw.get("request_id") if type(raw) is dict else None
+    code = raw.get("code") if type(raw) is dict else None
     evidence = CallEvidence(
         request_id=request_id
         if isinstance(request_id, str)
         and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", request_id)
-        else None
+        else None,
+        # 数字错误码仅用于关联和诊断，不证明请求没有副作用。
+        remote_code=code if type(code) is int and code != 0 else None,
     )
     if (
         type(raw) is not dict
@@ -411,7 +413,11 @@ def _call_response(
         async_req=True,
         _request_timeout=budget.timeout(upload=body is not None),
     )
-    return sdk_assets._response(future.get())
+    response = future.get()
+    if body is not None:
+        # 写入先解析原始回执；通用读取解码器会提前抛错并丢失平台错误证据。
+        return _upload_response(client, array=False)
+    return sdk_assets._response(response)
 
 
 def _read_image_response(

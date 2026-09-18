@@ -1,7 +1,8 @@
 """同内容在目标 BC 仅转存一次；消费者始终保留自己的目标分发身份。"""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
+from itertools import groupby
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -11,6 +12,8 @@ from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
+from app.core.local_read_batch import local_read_batch
+from app.integrations.tiktok.bounded_resources import bounded_session
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 
 from .content_identity import content_key
@@ -97,9 +100,15 @@ def resume_ready_seed_dependents(
     已发送、已绑定来源及不同冻结路由的历史消费者不改写。
     """
     from .distribution import _load_distribution
-    from .source_uploads import _locked_material, _locked_operation
+    from .source_uploads import READ_HARD_LIMIT
 
-    with Session(database_engine) as db, db.begin():
+    with (
+        bounded_session(
+            database_engine,
+            task_deadline=datetime.now(UTC) + timedelta(seconds=READ_HARD_LIMIT - 5),
+        ) as db,
+        db.begin(),
+    ):
         anchor = _load_distribution(db, context, distribution_id)
         if anchor.seed_id is None:
             return 0
@@ -152,32 +161,85 @@ def resume_ready_seed_dependents(
             )
             .limit(200)
         ).all()
-        for identity in sorted({dist.material_id for dist, _ in rows}):
-            _locked_material(db, context, identity)
-        for _, operation in sorted(rows, key=lambda pair: pair[1].id):
-            _locked_operation(db, context, operation.id)
+        if not rows:
+            # 两次候选读取之间可能已由另一消费者完成，按幂等空操作退出。
+            return 0
+        # 与共享发送保持素材→操作的统一锁序；一次锁取整片，避免每个关系
+        # 再独立锁取并刷新三次。保留素材引用使同内容读取复用当前事务身份。
+        locked_materials = db.exec(
+            select(MaterialFile)
+            .where(
+                MaterialFile.tenant_id == context.tenant_id,
+                col(MaterialFile.id).in_({dist.material_id for dist, _ in rows}),
+            )
+            .order_by(col(MaterialFile.id))
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).all()
+        locked_operations = db.exec(
+            select(MaterialAssetOperation)
+            .where(
+                MaterialAssetOperation.tenant_id == context.tenant_id,
+                col(MaterialAssetOperation.id).in_({op.id for _, op in rows}),
+            )
+            .order_by(col(MaterialAssetOperation.id))
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).all()
+        assert locked_materials and locked_operations
+        # 取得锁后重新检查完整候选条件；并发消费者已绑定的行不再改写。
+        rows = db.exec(
+            candidates.where(
+                col(MaterialDistribution.id).in_({dist.id for dist, _ in rows})
+            ).execution_options(populate_existing=True)
+        ).all()
         changed = 0
-        for dist, operation in rows:
-            db.refresh(dist)
-            db.refresh(operation)
-            if operation.status != "pending" or operation.remote_response.get(
-                "transport"
-            ):
-                continue
+        ordered = sorted(
+            rows, key=lambda pair: (pair[0].advertiser_id, pair[0].material_id)
+        )
+        for _, grouped in groupby(ordered, key=lambda pair: pair[0].advertiser_id):
+            group = list(grouped)
+            prepared = 0
             try:
-                if not resume_seed_dependency(
-                    db, context=context, dist=dist, operation=operation
-                ):
-                    changed += 1
+                # 同账户最多20素材的本地登记复用共同权限；保存点退出前重验。
+                # 这里只绑定依赖，不调用平台；发送时仍逐请求重新鉴权。
+                with db.begin_nested(), local_read_batch(db):
+                    for dist, operation in group:
+                        try:
+                            if not resume_seed_dependency(
+                                db, context=context, dist=dist, operation=operation
+                            ):
+                                prepared += 1
+                        except DomainError as error:
+                            if error.code in {
+                                "tiktok_call_deadline_exceeded",
+                                "tiktok_local_resources_unavailable",
+                            }:
+                                raise
+                            dist.status, dist.reason_code = "blocked", error.code
+                            operation.status = "failed"
+                            operation.remote_response = {
+                                **operation.remote_response,
+                                "definite_no_effect": True,
+                                "error_code": error.code,
+                            }
             except DomainError as error:
-                # 一个失效授权只阻断该消费者，不回滚其它合法目标的本地登记。
-                dist.status, dist.reason_code = "blocked", error.code
-                operation.status = "failed"
-                operation.remote_response = {
-                    **operation.remote_response,
-                    "definite_no_effect": True,
-                    "error_code": error.code,
-                }
+                if error.code in {
+                    "tiktok_call_deadline_exceeded",
+                    "tiktok_local_resources_unavailable",
+                }:
+                    raise
+                # 最终复核失效时回滚该账户的整片；其它账户继续正常绑定。
+                for dist, operation in group:
+                    dist.status, dist.reason_code = "blocked", error.code
+                    operation.status = "failed"
+                    operation.remote_response = {
+                        **operation.remote_response,
+                        "definite_no_effect": True,
+                        "error_code": error.code,
+                    }
+            else:
+                changed += prepared
         return changed
 
 

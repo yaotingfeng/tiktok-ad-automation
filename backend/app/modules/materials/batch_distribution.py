@@ -7,7 +7,7 @@ from hashlib import sha256
 from typing import Any, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import text
+from sqlalchemy import case, func, or_, text
 from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session, col, select
 
@@ -134,7 +134,16 @@ def try_prepare_batch(
             recover_armed=armed_recovery,
         ):
             return True
-    with Session(database_engine) as db, db.begin():
+    # 领取只做本地登记，同样受已有短事务资源期限保护。锁/SQL超时向上
+    # 返回可重试错误并整体回滚，由原outbox修复接续，不能返回False绕过锁
+    # 进入单条发送，也不能把尚未发送的任务改成UNKNOWN。
+    with (
+        bounded_session(
+            database_engine,
+            task_deadline=now + timedelta(seconds=READ_HARD_LIMIT - 5),
+        ) as db,
+        db.begin(),
+    ):
         anchor = single._load_distribution(db, context, distribution_id)
         anchor_op = db.get(MaterialAssetOperation, anchor.operation_id)
         if (
@@ -190,8 +199,41 @@ def try_prepare_batch(
                 MaterialDistribution.status == "queued",
                 MaterialAssetOperation.status == "pending",
                 MaterialAssetOperation.path == "share_source",
+                # 先限定冻结来源和可领取状态再分页；其他路由/在途任务不能
+                # 挤掉合法矩形，否则批量入口会错误退化为逐项发送。
+                col(MaterialDistribution.target_route) == anchor.target_route,
+                col(MaterialDistribution.source_route) == anchor.source_route,
+                col(MaterialAssetOperation.remote_response)[
+                    "source_advertiser_id"
+                ].astext
+                == identity[-1],
+                col(MaterialAssetOperation.remote_response)["transport"].astext
+                == "native_share",
+                func.jsonb_typeof(
+                    col(MaterialAssetOperation.remote_response)["source_video_id"]
+                )
+                == "string",
+                or_(
+                    col(MaterialAssetOperation.remote_response)[
+                        "send_armed"
+                    ].astext.is_(None),
+                    col(MaterialAssetOperation.remote_response).contains(
+                        {"send_armed": False}
+                    ),
+                ),
+                or_(
+                    col(MaterialAssetOperation.claimed_until).is_(None),
+                    col(MaterialAssetOperation.claimed_until) <= now,
+                ),
             )
             .order_by(
+                # 同范围大库也必须保留本次锚点和它已登记的其他账户；仍只
+                # 从已有授权候选取矩形，不新增需求或扩大一次发送上限。
+                case((col(MaterialDistribution.id) == anchor.id, 0), else_=1),
+                case(
+                    (col(MaterialDistribution.material_id) == anchor.material_id, 0),
+                    else_=1,
+                ),
                 col(MaterialDistribution.material_id),
                 col(MaterialDistribution.advertiser_id),
             )
@@ -231,6 +273,8 @@ def try_prepare_batch(
                 or _identity(dist, current) != identity
             ):
                 return False
+        # 租约从取得全部素材/操作锁后开始，不把领取前的等待计入执行时间。
+        now = datetime.now(UTC)
         claim = uuid4()
         frozen = [
             (str(op.id), op.request_digest, op.remote_response.get("revision", 0))

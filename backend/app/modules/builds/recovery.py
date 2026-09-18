@@ -111,6 +111,51 @@ AND (s.kind NOT IN ('CAMPAIGN','ADGROUP') OR {GROUP_READY})
 UNARMED_RETRY = """s.request_body IS NULL
 AND NOT EXISTS (SELECT 1 FROM step_evidence e WHERE e.tenant_id=s.tenant_id AND e.submission_id=s.submission_id AND e.step_id=s.id
  AND (e.conclusion IN ('REQUEST_ARMED','CREATED','LATE_CREATED','RESULT_UNKNOWN','LEASE_EXPIRED_ARMED') OR e.summary ? 'remote_id'))"""
+# 只有原目标已确定未生效且依赖已结束，显式重试才可创建新的准备代数。
+# failed_infos 是按目标/MID 的负证据；批次 ACK 本身既不是成功也不是失败。
+MATERIAL_RETRY = """(s.cover_job_id IS NULL AND NOT s.resolved ? 'mapping' AND EXISTS (
+ SELECT 1 FROM material_distribution d JOIN material_asset_operation o
+ ON o.id=d.operation_id AND o.tenant_id=d.tenant_id AND o.bc_id=d.bc_id
+ AND o.material_id=d.material_id AND o.advertiser_id=d.advertiser_id
+ JOIN material_file f ON f.id=d.material_id AND f.tenant_id=d.tenant_id
+ WHERE d.id=s.distribution_id AND d.tenant_id=s.tenant_id AND d.bc_id=s.bc_id
+ AND d.material_id=s.material_id AND d.advertiser_id=u.advertiser_id
+ AND d.status='blocked' AND o.status='failed' AND d.path=o.path
+ AND d.target_route=o.frozen_route AND d.target_route->>'connection_id'=u.connection_id::text
+ AND o.remote_response->'definite_no_effect'='true'::jsonb
+ AND o.attempt_token IS NULL AND (o.claimed_until IS NULL OR o.claimed_until<=:now)
+ AND NOT o.remote_response ?| ARRAY['video_id','mid','upload_video_id','verified_upload_video_id','conflicting_video_id']
+ AND coalesce(o.remote_response->'candidates','[]'::jsonb)='[]'::jsonb
+ AND o.remote_response->'read_only' IS DISTINCT FROM 'true'::jsonb
+ AND o.remote_response->'share_acknowledged' IS DISTINCT FROM 'true'::jsonb
+ AND o.remote_response->>'content_md5'=f.video_md5 AND length(f.video_md5)=32
+ AND (NOT o.remote_response ? 'share_receipt' OR
+      coalesce(o.remote_response->'share_receipt'->'failed_infos'->u.advertiser_id ? (o.remote_response->>'source_mid'),false))
+ AND (o.remote_response->'send_armed' IS DISTINCT FROM 'true'::jsonb OR
+      coalesce(o.remote_response->'share_receipt'->'failed_infos'->u.advertiser_id ? (o.remote_response->>'source_mid'),false) OR
+      EXISTS (SELECT 1 FROM material_share_batch_member bm JOIN material_share_batch_receipt br
+       ON br.tenant_id=bm.tenant_id AND br.bc_id=bm.bc_id AND br.batch_id=bm.batch_id
+       WHERE bm.tenant_id=o.tenant_id AND bm.operation_id=o.id AND bm.distribution_id=d.id
+       AND bm.status='failed' AND br.effect='ACKNOWLEDGED'
+       AND br.share_response->'failed_infos'->u.advertiser_id ? bm.source_mid))
+ AND NOT EXISTS (SELECT 1 FROM material_share_batch_member bm
+  WHERE bm.tenant_id=o.tenant_id AND bm.operation_id=o.id
+  AND (bm.distribution_id<>d.id OR bm.status NOT IN ('failed','not_sent') OR EXISTS (
+   SELECT 1 FROM material_share_batch_receipt br WHERE br.tenant_id=bm.tenant_id AND br.batch_id=bm.batch_id
+   AND NOT (br.effect IN ('FAILED','NOT_SENT') OR (br.effect='ACKNOWLEDGED'
+    AND coalesce(br.share_response->'failed_infos'->u.advertiser_id ? bm.source_mid,false))))))
+ AND NOT EXISTS (SELECT 1 FROM material_upload_attempt a WHERE a.tenant_id=o.tenant_id AND a.operation_id=o.id)
+ AND NOT EXISTS (SELECT 1 FROM account_material a WHERE a.tenant_id=d.tenant_id AND a.bc_id=d.bc_id
+  AND a.material_id=d.material_id AND a.advertiser_id=d.advertiser_id AND trim(a.video_id)<>'')
+ AND NOT EXISTS (SELECT 1 FROM material_asset_operation other WHERE other.tenant_id=o.tenant_id
+  AND other.bc_id=o.bc_id AND other.material_id=o.material_id AND other.advertiser_id=o.advertiser_id
+  AND other.id<>o.id AND other.status<>'failed')
+ AND NOT EXISTS (SELECT 1 FROM material_distribution other WHERE other.tenant_id=d.tenant_id
+  AND other.bc_id=d.bc_id AND other.material_id=d.material_id AND other.advertiser_id=d.advertiser_id
+  AND other.id<>d.id AND other.status<>'blocked')
+ AND NOT EXISTS (SELECT 1 FROM pending_dispatch pd WHERE pd.tenant_id=d.tenant_id AND pd.published_at IS NULL
+  AND (pd.payload->>'distribution_id'=d.id::text OR pd.payload->>'operation_id'=o.id::text))
+))"""
 RETRY = f"""
 AND (s.status IN ('FAILED','RETRYABLE') OR (
  s.status='PENDING' AND s.kind='MATERIAL'
@@ -119,7 +164,7 @@ AND (s.status IN ('FAILED','RETRYABLE') OR (
 AND s.phase<>'REQUEST_ARMED' AND s.kind<>'READBACK' AND coalesce(s.error_code,'') NOT IN ({INTENT_ERRORS})
 AND (({UNARMED_RETRY})
  OR (s.phase='DONE' AND {UNSENT_ATTEMPT}))
-AND (s.kind<>'MATERIAL' OR (s.cover_job_id IS NULL AND s.distribution_id IS NULL) OR {COVER_RETRY})
+AND (s.kind<>'MATERIAL' OR (s.cover_job_id IS NULL AND s.distribution_id IS NULL) OR {COVER_RETRY} OR {MATERIAL_RETRY})
 {DEPENDENCIES_READY}
 """
 # 持久等待步骤不必先消耗一次执行才能暴露依赖失败；显式批次重试可直接
@@ -486,6 +531,132 @@ def _material_reconciliation(
     return True
 
 
+def _retry_material(
+    session: Session,
+    *,
+    step: ExecutionStep,
+    unit: BuildUnit,
+    row: Submission,
+    context: TenantContext,
+) -> dict[str, str] | None:
+    from app.modules.materials.distribution import ensure_target_asset
+    from app.modules.materials.models import (
+        MaterialAssetOperation,
+        MaterialDistribution,
+    )
+    from app.modules.materials.readiness import load_material
+    from app.modules.materials.routes import (
+        load_material_route,
+        require_material_route,
+        require_same_route,
+    )
+
+    assert step.material_id and step.distribution_id
+    # 与现有准备/回执处理保持素材→操作锁顺序；执行步骤已由恢复事务持锁。
+    load_material(
+        session,
+        context=context,
+        bc_id=step.bc_id,
+        material_id=step.material_id,
+        lock=True,
+    )
+    old = session.get(
+        MaterialDistribution, step.distribution_id, populate_existing=True
+    )
+    assert old and old.operation_id
+    old_operation = session.exec(
+        select(MaterialAssetOperation)
+        .where(
+            MaterialAssetOperation.id == old.operation_id,
+            MaterialAssetOperation.tenant_id == step.tenant_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one()
+    # 持有发送方同一把锁后再次检查负证据，防止摘要与执行之间有迟到回执。
+    if not SASession.execute(
+        session,
+        text("SELECT EXISTS(SELECT 1 " + _query(row, "RETRY") + " AND s.id=:step)"),
+        {**_params(row), "step": step.id},
+    ).scalar_one():
+        return None
+    route = verify_unit_route(session, context=context, unit=unit, capability="build")
+    require_same_route(
+        load_material_route(old.target_route, context=context, bc_id=step.bc_id), route
+    )
+    require_tenant(
+        session, actor_id=old.actor_id, tenant_id=step.tenant_id, action="build"
+    )
+    if old.source_route is not None:
+        from app.modules.materials.models import AccountMaterial
+
+        source = session.get(AccountMaterial, old.source_asset_id)
+        if source is None or source.video_id != old_operation.remote_response.get(
+            "source_video_id"
+        ):
+            raise DomainError(
+                "material_remote_source_unavailable", "原素材来源已不可用"
+            )
+        require_material_route(
+            session,
+            context=context,
+            route=load_material_route(
+                old.source_route, context=context, bc_id=source.bc_id
+            ),
+            bc_id=source.bc_id,
+            advertiser_id=source.advertiser_id,
+            capability="read",
+        )
+    prepared = ensure_target_asset(
+        session,
+        context=context,
+        bc_id=step.bc_id,
+        material_id=step.material_id,
+        advertiser_id=unit.advertiser_id,
+        task_key=f"build:{step.id}",
+        route=route,
+    )
+    new = (
+        session.get(MaterialDistribution, prepared.task_id)
+        if prepared.task_id
+        else None
+    )
+    # 新准备仍走唯一入口；选源、路径或授权变更整笔回滚，不能把共享失败降级为上传。
+    if (
+        new is None
+        or new.id == old.id
+        or new.operation_id == old.operation_id
+        or (
+            new.tenant_id,
+            new.bc_id,
+            new.material_id,
+            new.advertiser_id,
+            new.path,
+            new.target_route,
+            new.source_route,
+            new.source_asset_id,
+        )
+        != (
+            old.tenant_id,
+            old.bc_id,
+            old.material_id,
+            old.advertiser_id,
+            old.path,
+            old.target_route,
+            old.source_route,
+            old.source_asset_id,
+        )
+    ):
+        raise DomainError("material_retry_dependency_changed", "原素材准备依赖已改变")
+    step.distribution_id = new.id
+    return {
+        "old_distribution_id": str(old.id),
+        "new_distribution_id": str(new.id),
+        "old_operation_id": str(old.operation_id),
+        "new_operation_id": str(new.operation_id),
+    }
+
+
 def _schedule(
     session: Session,
     *,
@@ -569,6 +740,13 @@ def _schedule(
         ):
             return False
         audit: dict[str, Any] = {"recovery_id": str(job.id)}
+        if step.kind == "MATERIAL" and step.distribution_id and not step.cover_job_id:
+            material_audit = _retry_material(
+                session, step=step, unit=unit, row=row, context=original
+            )
+            if material_audit is None:
+                return False
+            audit.update(material_audit)
         if frozen_retry:
             audit.update(
                 {

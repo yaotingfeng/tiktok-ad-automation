@@ -52,7 +52,7 @@ MD5 = md5(CONTENT).hexdigest()
 
 
 @pytest.fixture
-def source_env(monkeypatch, redis_client):
+def source_env(monkeypatch, redis_client, request):
     monkeypatch.setattr(settings, "TIKTOK_APP_ID", f"test-material-{uuid4()}")
     monkeypatch.setattr(settings, "TIKTOK_APP_SECRET", "offline-secret")
     monkeypatch.setattr(
@@ -205,15 +205,21 @@ def source_env(monkeypatch, redis_client):
                     "actual-account",
                 )
             )
-        with Session(engine) as cleanup:
-            for table in reversed(SQLModel.metadata.sorted_tables):
-                if "tenant_id" in table.c:
-                    cleanup.execute(
-                        delete(table).where(table.c.tenant_id == context.tenant_id)
-                    )
-            cleanup.execute(delete(Tenant).where(Tenant.id == context.tenant_id))
-            cleanup.execute(delete(User).where(User.id == context.actor_id))
-            cleanup.commit()
+        # 产生不可变共享账本的集成用例使用独立临时库，统一由库级夹具销毁，
+        # 不能禁用业务触发器或逐行删除不可变发送历史。
+        if "retain_build_history" in request.fixturenames:
+            assert request.getfixturevalue("retain_build_history") is engine
+            assert engine.url.database.startswith("strategy_")
+        else:
+            with Session(engine) as cleanup:
+                for table in reversed(SQLModel.metadata.sorted_tables):
+                    if "tenant_id" in table.c:
+                        cleanup.execute(
+                            delete(table).where(table.c.tenant_id == context.tenant_id)
+                        )
+                cleanup.execute(delete(Tenant).where(Tenant.id == context.tenant_id))
+                cleanup.execute(delete(User).where(User.id == context.actor_id))
+                cleanup.commit()
 
 
 @pytest.fixture

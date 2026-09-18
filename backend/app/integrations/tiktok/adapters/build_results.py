@@ -46,8 +46,13 @@ def created_result(*, kind: BuildKind, response: McpBusinessResponse) -> Created
 
 
 def sdk_creation_envelope(raw: object) -> McpBusinessResponse:
+    code = raw.get("code") if isinstance(raw, dict) else None
     evidence = (
-        CallEvidence(request_id=safe_identifier(raw.get("request_id")))
+        CallEvidence(
+            request_id=safe_identifier(raw.get("request_id")),
+            # 只保留严格整数错误码；非零回执仍需按 UNKNOWN 核查，不能重发。
+            remote_code=code if type(code) is int and code != 0 else None,
+        )
         if isinstance(raw, dict)
         else CallEvidence()
     )
