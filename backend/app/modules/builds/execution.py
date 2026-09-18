@@ -447,7 +447,11 @@ def _local_result(
         if not active_attempt(step, claim, phase="CLAIMED"):
             return step.status
         retryable, delay, resolved = transient_retry(
-            step.resolved, error=error, retryable=error.retryable, delay=delay
+            step.resolved,
+            error=error,
+            retryable=error.retryable,
+            delay=delay,
+            definitely_not_sent=True,
         )
         return finish_local(
             session,

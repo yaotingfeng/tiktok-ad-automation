@@ -332,6 +332,26 @@ def test_local_deadline_not_sent_uses_the_bounded_transport_retry_budget():
     assert outcomes == [(True, 5, 1), (True, 10, 2), (False, 20, 3)]
 
 
+def test_pre_arm_deadline_uses_the_same_bounded_transport_retry_budget():
+    from app.modules.builds.execution_state import transient_retry
+
+    resolved = {}
+    outcomes = []
+    for _ in range(3):
+        retryable, delay, resolved = transient_retry(
+            resolved,
+            error=DomainError(
+                "tiktok_call_deadline_exceeded", "TikTok 调用超过本地硬截止时间"
+            ),
+            retryable=False,
+            delay=15,
+            definitely_not_sent=True,
+        )
+        outcomes.append((retryable, delay, resolved.get("transport_failure_count")))
+
+    assert outcomes == [(True, 5, 1), (True, 10, 2), (False, 20, 3)]
+
+
 @pytest.fixture
 def resumable_attempt(session, attempt):
     original, claim = attempt

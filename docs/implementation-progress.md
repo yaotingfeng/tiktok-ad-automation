@@ -1341,4 +1341,6 @@
 - 复审补充 PENDING 权限/映射暂时拒绝保护：等待错误码不被覆盖，拒绝原因写入 `resolved.dependency_recovery_error`，条件恢复后仍可被同一恢复器领取，避免优化形成新卡死。两项回归先失败后通过。
 - 新加坡隔离真实 PostgreSQL/Redis：相关五文件 60 passed / 1 deselected / 246.63 秒；排除项 `test_wake_waiting_for_consumer_lock_schedules_followup` 已在当前未修改 `f0e089d` 基线独立复现同样失败，不计本轮回归。最终权限边界修改后素材/封面 33 passed / 88.80 秒，观察字段终态清理再定向 2 passed / 6.09 秒。临时库/目录已删除，测试角色恢复 `NOLOGIN NOCREATEDB` 并撤销 `pg_signal_backend`；六服务 active、`NRestarts=0`。
 - 服务器只读容量证据：2 核、约 2 GiB RAM、采样时可用约 210 MiB，2 GiB swap 已用约 1.56 GiB；当前 `Resource=2、Result=1、Build=1、Control=1、Beat=1` 不上调。部署手册新增内存/CPU/数据库连接/上游额度四重边界、逐槽代表性批次压测和回退标准，未来生产不得复制测试值。
+- 新提交 R627 的一个 ADGROUP 在请求正文落库前遇到 `tiktok_call_deadline_exceeded`：无 `REQUEST_ARMED`、无请求正文且仅有本地失败证据，确认没有进入 TikTok 创建发送边界。原代码只对 armed 后的明确未发送异常应用三次预算，准备阶段同类超时被直接判为永久失败。现在准备阶段以“确定未发送”接入同一 5/10 秒、最多三次预算，但不生成 `REQUEST_ARMED/NOT_SENT` 证据；四个已 armed 且只回读到同组兄弟广告的 UNKNOWN 仍禁止自动补建，须另行明确接受重复广告风险。
+- 新增准备阶段截止时间回归先以缺少 `definitely_not_sent` 边界失败，修复后执行状态 17 项通过；与安全未发送恢复、租户管理员建号共 53 项真实 PostgreSQL/Redis 回归通过，租户与授权页面 106 项及 TypeScript/Vite 正式构建通过。没有触发产品 RETRY、RECONCILE 或 TikTok 写入。
 - Ruff 全量检查、改动文件格式、ty app、compileall 和最终差异检查通过。全仓格式检查另报告 10 个本轮未改文件的既有格式差异，未混入本提交。本轮无迁移、无新开关、无 TikTok 调用、未推送、未替换服务器 release 或重启服务。
