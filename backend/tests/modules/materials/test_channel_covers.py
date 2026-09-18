@@ -950,13 +950,8 @@ def test_preverified_external_cover_without_job_does_not_require_original_digest
             queue({**cover_env, "route": route}, database_engine, source=False)
     else:
         result = queue(cover_env, database_engine, source=False)
-        assert result.state == ("ready" if case == "fresh" else "blocked")
-        if case == "fresh":
-            assert (
-                result.mapping.image_id == "actual-image-id" and result.task_id is None
-            )
-        else:
-            assert result.reason_code == "cover_evidence_stale"
+        assert result.state == "ready"
+        assert result.mapping.image_id == "actual-image-id" and result.task_id is None
     with Session(database_engine) as db:
         jobs = db.exec(
             select(MaterialCoverJob).where(

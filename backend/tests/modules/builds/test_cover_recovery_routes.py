@@ -204,12 +204,10 @@ def test_cover_recovery_preserves_original_route(executable, redis_client, chang
 
 
 @pytest.mark.parametrize("armed", [False, True])
-def test_delayed_ready_cover_recovery_queues_one_read_before_completing(
+def test_delayed_ready_cover_recovery_reuses_successful_receipt_without_age_reads(
     executable, redis_client, armed
 ):
     from datetime import timedelta
-
-    from app.jobs.models import PendingDispatch
 
     identity, job_id, _ = pending(executable, redis_client)
     db, context, _ = executable
@@ -225,21 +223,9 @@ def test_delayed_ready_cover_recovery_queues_one_read_before_completing(
         step = session.get(ExecutionStep, identity)
         step.status, step.phase = "UNKNOWN", "DONE"
         session.add_all([job, asset, step])
-    assert recover_cover_results(database_engine=db) == 0
-    with Session(db) as session:
-        job = session.get(MaterialCoverJob, job_id)
-        assert job.status == "VERIFYING"
-        dispatch = session.get(PendingDispatch, job.dispatch_id)
-        assert dispatch.task_name == "materials.verify_cover"
-        dispatch_id = job.dispatch_id
-        assert session.get(ExecutionStep, identity).status == "UNKNOWN"
-    assert recover_cover_results(database_engine=db) == 0
-    with Session(db) as session, session.begin():
-        job = session.get(MaterialCoverJob, job_id)
-        assert job.dispatch_id == dispatch_id
-        # 既有只读执行器回读同一个实际图片，恢复器随后才能完成原步骤。
-        job.status, job.dispatch_id, job.updated_at = "READY", None, datetime.now(UTC)
-        session.add(job)
     assert recover_cover_results(database_engine=db) == 1
     with Session(db) as session:
+        job = session.get(MaterialCoverJob, job_id)
+        assert job.status == "READY" and job.dispatch_id is None
         assert session.get(ExecutionStep, identity).status == "SUCCEEDED"
+    assert recover_cover_results(database_engine=db) == 0

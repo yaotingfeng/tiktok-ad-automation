@@ -31,7 +31,6 @@ from tests.modules.materials.test_channel_covers import (
     prepare_replies,
     queue,
     run,
-    video_data,
 )
 from tests.modules.materials.test_channel_covers import (
     policy as policy,
@@ -87,11 +86,13 @@ def known_jobs(env, engine, count, *, stale=True):
 
 
 def replies(env, wire, engine, identities, *, missing_image=None, missing_video=None):
-    videos, images = [], []
+    images = []
     for identity in identities:
         current = job(engine, identity)
-        if current.video_id != missing_video:
-            videos.extend(video_data(video_id=current.video_id)["list"])
+        if current.video_id == missing_video:
+            # 视频已被正式核查标为未知时，封面必须先阻断；不靠时间过期模拟失效。
+            with Session(engine) as db, db.begin():
+                db.get(AccountMaterial, current.asset_id).status = "result_unknown"
         if current.known_image_id != missing_image:
             images.extend(
                 image_data(current.remote_name, image_id=current.known_image_id)["list"]
@@ -100,7 +101,6 @@ def replies(env, wire, engine, identities, *, missing_image=None, missing_video=
         env,
         wire,
         [
-            ("file_video_ad_info_get", {"list": videos}),
             ("file_image_ad_info_get", {"list": images}),
         ],
     )
@@ -112,6 +112,25 @@ def physical_calls(env, wire):
         if env["route"].channel == "OFFICIAL_API"
         else [c for c in wire["wire"].calls if c["method"] == "tools/call"]
     )
+
+
+def after_image_http(monkeypatch, env, mutate):
+    from tests.modules.accounts.test_material_gateway import after_material_http
+
+    if env["route"].channel == "OFFICIAL_MCP":
+        after_material_http(monkeypatch, env["route"].channel, mutate)
+        return
+    import urllib3
+
+    original = urllib3.PoolManager.request
+
+    def response(pool, method, url, **kwargs):
+        result = original(pool, method, url, **kwargs)
+        if "/file/image/ad/info/" in url:
+            mutate()
+        return result
+
+    monkeypatch.setattr(urllib3.PoolManager, "request", response)
 
 
 @pytest.mark.parametrize(
@@ -139,7 +158,7 @@ def test_fifty_known_covers_do_not_repeat_account_authorization_per_member(
     assert all(
         job(database_engine, identity).status == "READY" for identity in identities
     )
-    assert len(physical_calls(cover_env, gateway_wire)) == 2
+    assert len(physical_calls(cover_env, gateway_wire)) == 1
     assert post_count(cover_env, gateway_wire) == 0
     # MCP 的协议握手/逐 HTTP 重新授权仍执行；不能把这些必要检查算作重复成员。
     assert len(authorization_queries) <= 120, len(authorization_queries)
@@ -168,7 +187,7 @@ def test_cover_authorization_reuse_cannot_escape_its_transaction(
 @pytest.mark.parametrize(
     "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
 )
-def test_23_known_covers_run_via_production_task_with_two_calls_and_duplicate_delivery_noops(
+def test_23_known_covers_run_via_production_task_with_one_call_and_duplicate_delivery_noops(
     cover_env,
     gateway_wire,
     database_engine,
@@ -181,7 +200,7 @@ def test_23_known_covers_run_via_production_task_with_two_calls_and_duplicate_de
     assert [job(database_engine, identity).status for identity in identities] == [
         "READY"
     ] * 23
-    assert len(physical_calls(cover_env, gateway_wire)) == 2
+    assert len(physical_calls(cover_env, gateway_wire)) == 1
     assert post_count(cover_env, gateway_wire) == 0
     for original in delivered:
         covers.run_cover(
@@ -193,7 +212,7 @@ def test_23_known_covers_run_via_production_task_with_two_calls_and_duplicate_de
             revision=original.revision,
             read=True,
         )
-    assert len(physical_calls(cover_env, gateway_wire)) == 2
+    assert len(physical_calls(cover_env, gateway_wire)) == 1
 
 
 @pytest.mark.parametrize(
@@ -344,7 +363,7 @@ def test_bulk_task_does_not_open_one_database_session_per_member(
 @pytest.mark.parametrize(
     "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
 )
-def test_last_expired_cover_refreshes_video_before_image_without_extending_validity(
+def test_last_old_cover_only_reads_image_without_refreshing_confirmed_video(
     cover_env,
     gateway_wire,
     database_engine,
@@ -354,13 +373,13 @@ def test_last_expired_cover_refreshes_video_before_image_without_extending_valid
     replies(cover_env, gateway_wire, database_engine, identities)
     run(cover_env, database_engine, redis_client, identities[0], read=True)
     assert job(database_engine, identities[0]).status == "READY"
-    assert len(physical_calls(cover_env, gateway_wire)) == 2
+    assert len(physical_calls(cover_env, gateway_wire)) == 1
 
 
 @pytest.mark.parametrize(
     "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
 )
-def test_missing_video_stays_unknown_while_other_images_become_ready(
+def test_unavailable_video_stays_unknown_while_other_images_become_ready(
     cover_env,
     gateway_wire,
     database_engine,
@@ -417,7 +436,7 @@ def test_fresh_target_mappings_only_require_one_bulk_image_read(
 @pytest.mark.parametrize(
     "mutation", ["claim", "authority", "video", "job_identity", "mapped_identity"]
 )
-def test_changed_member_after_bulk_video_read_prevents_image_send(
+def test_changed_member_after_bulk_image_read_prevents_publication(
     cover_env,
     gateway_wire,
     database_engine,
@@ -428,7 +447,6 @@ def test_changed_member_after_bulk_video_read_prevents_image_send(
     from sqlmodel import select
 
     from app.modules.accounts.connection_models import ConnectionAuthorization
-    from tests.modules.accounts.test_material_gateway import after_material_http
 
     identities = known_jobs(cover_env, database_engine, 3)
     changed = []
@@ -461,15 +479,13 @@ def test_changed_member_after_bulk_video_read_prevents_image_send(
                 db.get(AccountMaterial, current.asset_id).video_id = "replacement-video"
         changed.append(True)
 
-    after_material_http(monkeypatch, cover_env["route"].channel, mutate)
+    after_image_http(monkeypatch, cover_env, mutate)
     replies(
         cover_env, gateway_wire, database_engine, identities, missing_image="image-1"
     )
     run(cover_env, database_engine, redis_client, identities[0], read=True)
     assert changed
-    assert len(physical_calls(cover_env, gateway_wire)) == (
-        1 if mutation == "authority" else 2
-    )
+    assert len(physical_calls(cover_env, gateway_wire)) == 1
     if mutation == "authority":
         assert all(
             job(database_engine, identity).status != "READY" for identity in identities
@@ -486,7 +502,7 @@ def test_changed_member_after_bulk_video_read_prevents_image_send(
             if cover_env["route"].channel == "OFFICIAL_API"
             else last_call["params"]["arguments"]["image_ids"]
         )
-        assert set(requested) == {"image-0", "image-2"}
+        assert set(requested) == {"image-0", "image-1", "image-2"}
     if mutation == "claim":
         assert job(database_engine, identities[1]).claim_token == replacement
     if mutation == "mapped_identity":
@@ -507,14 +523,13 @@ def test_authorization_revoked_after_image_response_prevents_cover_publication(
     from sqlmodel import select
 
     from app.modules.accounts.connection_models import ConnectionAuthorization
-    from tests.modules.accounts.test_material_gateway import after_material_http
 
     identities = known_jobs(cover_env, database_engine, 3)
     calls = []
 
     def revoke_after_image():
         calls.append(True)
-        if len(calls) != 2:
+        if len(calls) != 1:
             return
         with Session(database_engine) as db, db.begin():
             authorization = db.exec(
@@ -528,23 +543,10 @@ def test_authorization_revoked_after_image_response_prevents_cover_publication(
                 "read_authorized": False,
             }
 
-    if cover_env["route"].channel == "OFFICIAL_API":
-        import urllib3
-
-        original = urllib3.PoolManager.request
-
-        def response(pool, method, url, **kwargs):
-            result = original(pool, method, url, **kwargs)
-            if "/file/video/ad/info/" in url or "/file/image/ad/info/" in url:
-                revoke_after_image()
-            return result
-
-        monkeypatch.setattr(urllib3.PoolManager, "request", response)
-    else:
-        after_material_http(monkeypatch, cover_env["route"].channel, revoke_after_image)
+    after_image_http(monkeypatch, cover_env, revoke_after_image)
     replies(cover_env, gateway_wire, database_engine, identities)
     run(cover_env, database_engine, redis_client, identities[0], read=True)
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert all(
         job(database_engine, identity).status != "READY" for identity in identities
     )

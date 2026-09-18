@@ -267,13 +267,12 @@ def test_cross_bc_uses_url_and_separately_freezes_source(cross_env, redis_client
     assert primary == "actual-account" and prepared.task_id != seed_id
     wire[1].extend([info(vid="vid-cross-account"), [{"video_id": "cross-primary"}]])
     run(cross_env, redis_client, seed_id, kind="prepare")
-    assert state(seed_id)[0].status == "verifying"
+    assert state(seed_id)[0].status == "ready"
     fields = dict(wire[0][1][2]["fields"])
     assert fields["video_url"] == PREVIEW and fields["upload_type"] == "UPLOAD_BY_URL"
     assert fields["advertiser_id"] == primary
     assert fields["file_name"].startswith("Moon-")
     assert all("/share/" not in call[1] for call in wire[0])
-    wire[1].append(info(vid="cross-primary"))
     run(cross_env, redis_client, seed_id)
     assert state(seed_id)[2].video_id == "cross-primary"
     assert state(prepared.task_id)[2] is None

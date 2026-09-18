@@ -43,6 +43,7 @@ def complete_receipt(env):
     return {
         "advertiser_id": env["advertiser"],
         "image_id": "actual-image-id",
+        "material_id": "1234567890123456789",
         "signature": "c" * 32,
         "width": 360,
         "height": 640,
@@ -71,11 +72,12 @@ def test_cover_upload_uses_one_session_and_publishes_only_complete_receipt(
     )
     run(cover_env, database_engine, redis_client, identity)
     current = job(database_engine, identity)
-    assert current.status == "VERIFYING"
+    assert current.status == ("READY" if complete else "VERIFYING")
     assert current.known_image_id == "actual-image-id"
     with Session(database_engine) as db:
         mapping = db.get(AccountMaterial, cover_env["asset_id"])
-        assert mapping.image_id is None
+        assert mapping.image_id == ("actual-image-id" if complete else None)
+    assert current.image_mid == ("1234567890123456789" if complete else None)
     if cover_env["route"].channel == "OFFICIAL_MCP":
         calls = gateway_wire["wire"].calls
         assert sum(c["method"] == "initialize" for c in calls) == 1
@@ -166,6 +168,7 @@ def shared_cover(cover_env, database_engine):
         ("displayable", "false"),
         ("signature", "bad"),
         ("height", 360),
+        ("material_id", None),
     ],
 )
 def test_incomplete_or_malformed_upload_receipt_keeps_real_id_for_readback(

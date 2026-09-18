@@ -394,7 +394,7 @@ def test_cover_result_after_video_expiry_runs_refresh_before_success(
         job.request_armed_at = job.updated_at = datetime.now(UTC)
         asset = session.get(AccountMaterial, job.asset_id)
         asset.image_id = job.known_image_id
-        asset.verified_at = datetime.now(UTC) - timedelta(hours=1)
+        asset.status = "result_unknown"
     repair_execution(database_engine=db)
     with Session(db) as session:
         step = session.get(ExecutionStep, identity)

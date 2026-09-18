@@ -32,7 +32,6 @@ def test_successful_original_operation_can_only_revalidate_known_vid(
     prepared = queue(source_env, account)
     wire[1].append([{"video_id": "target-actual", "material_id": "mid-actual"}])
     run(source_env, redis_client, prepared.task_id, kind="prepare", s3=original_s3[0])
-    wire[1].append(info(vid="target-actual"))
     run(source_env, redis_client, prepared.task_id)
     dist, op, mapping = state(prepared.task_id)
     assert dist.status == "ready" and op.status == "succeeded"
@@ -75,7 +74,7 @@ def test_successful_original_operation_can_only_revalidate_known_vid(
     actual_dist, actual_op, actual_mapping = state(dist.id)
     assert actual_dist.operation_id == op.id and actual_op.status == "succeeded"
     assert actual_mapping.verified_at > datetime.now(UTC) - timedelta(seconds=30)
-    assert len(wire[0]) == 3
+    assert len(wire[0]) == 2
     assert sum(call[0] == "POST" for call in wire[0]) == 1
     # A stale duplicate cannot use its former revision to refresh again.
     run(
@@ -87,7 +86,7 @@ def test_successful_original_operation_can_only_revalidate_known_vid(
         operation_id=op.id,
         revision=revision,
     )
-    assert len(wire[0]) == 3
+    assert len(wire[0]) == 2
     with Session(engine) as session:
         pending = session.exec(
             select(PendingDispatch).where(

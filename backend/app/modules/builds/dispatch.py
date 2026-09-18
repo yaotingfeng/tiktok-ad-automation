@@ -275,6 +275,19 @@ def process_unit(
     identity, revision = payload_identity(payload, "unit_id")
     if type(limit) is not int or not 1 <= limit <= 100:
         raise ValueError("invalid scheduling batch")
+    from app.modules.builds.material_execution import plan_material_slice
+
+    # 整片需求必须在任何一个单元发布素材执行之前登记，不能在单元锁中锁同伴。
+    try:
+        plan_material_slice(
+            database_engine=database_engine,
+            context=context,
+            unit_id=identity,
+            unit_revision=revision,
+        )
+    except DomainError:
+        # 沿原调度器落定当前单元的权限/冻结错误，不绕过正式失败记录。
+        pass
     count = 0
     attention = False
     with Session(database_engine) as session, session.begin():
@@ -422,7 +435,11 @@ def process_unit(
                 queue_step(session, step=step, submission=row, reconcile=True)
                 count += 1
                 continue
-            if step.kind == "MATERIAL" and not admitted:
+            from app.modules.builds.material_execution import material_needs_planning
+
+            if step.kind == "MATERIAL" and (
+                not admitted or material_needs_planning(session, context, step)
+            ):
                 step.status, step.phase, step.error_code = (
                     "PENDING",
                     "IDLE",

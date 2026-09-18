@@ -10,14 +10,14 @@ from app.modules.materials import covers
 from app.modules.materials.cover_models import MaterialCoverJob, MaterialCoverShareBatch
 from app.modules.materials.models import AccountMaterial
 from tests.modules.materials.test_cover_throughput import drive, image, matrix, page
-from tests.modules.materials.test_covers import job_state, run, video_info
+from tests.modules.materials.test_covers import job_state, run
 from tests.modules.materials.test_source_uploads import source_env as source_env
 from tests.modules.materials.test_source_uploads import wire as wire
 
 
 @pytest.mark.parametrize("missing_image", [None, 1])
 @pytest.mark.parametrize("batch_status", ["READY", "UNKNOWN"])
-def test_shared_known_images_refresh_video_and_image_in_two_reads_without_rescan(
+def test_shared_known_images_explicitly_refresh_in_one_read_without_video_rescan(
     source_env, redis_client, wire, missing_image, batch_status
 ):
     identities = matrix(source_env, 3, 1)
@@ -42,19 +42,16 @@ def test_shared_known_images_refresh_video_and_image_in_two_reads_without_rescan
         # 历史刷新失败不抹掉已核实的目标ID，也不能强迫重新搜索已知图片。
         batch.status = batch_status
         original_batch = batch.model_dump()
-        videos = []
         for identity in identities:
             job = db.get(MaterialCoverJob, identity)
             job.updated_at = covers._now() - timedelta(hours=1)
             db.get(AccountMaterial, job.asset_id).verified_at = job.updated_at
-            videos.append({**video_info()["list"][0], "video_id": job.video_id})
             covers.request_cover_reconciliation(
                 db, context=source_env["context"], job_id=identity
             )
     before = len(wire[0])
     wire[1].extend(
         [
-            {"list": videos},
             {
                 "list": [
                     image(i, target_id=True) for i in range(3) if i != missing_image
@@ -66,7 +63,7 @@ def test_shared_known_images_refresh_video_and_image_in_two_reads_without_rescan
     assert [job_state(identity).status for identity in identities] == [
         "UNKNOWN" if i == missing_image else "READY" for i in range(3)
     ]
-    assert len(wire[0]) - before == 2
+    assert len(wire[0]) - before == 1
     assert all(call[0] == "GET" and "/info/" in call[1] for call in wire[0][before:])
     with Session(engine) as db:
         assert (
@@ -75,7 +72,7 @@ def test_shared_known_images_refresh_video_and_image_in_two_reads_without_rescan
         )
         assert all(
             db.get(AccountMaterial, job_state(identity).asset_id).verified_at
-            > covers._now() - timedelta(seconds=30)
+            < covers._now() - timedelta(minutes=59)
             for identity in identities
         )
     assert sum(call[0] == "POST" for call in wire[0]) == 1

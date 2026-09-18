@@ -1,11 +1,10 @@
 """Publish verified cover results to the original frozen MATERIAL steps."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlmodel import Session, col, select
 
-from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.modules.accounts.access import resolve_account_access
@@ -100,6 +99,9 @@ def retry_ad_covers(
         .limit(50)
     ).all()
     for job in jobs:
+        if job.status == "READY":
+            # 广告重试只接续未完成封面；成功映射不因重试或本地年龄再次核查。
+            continue
         if job.status == "BLOCKED" and job.request_armed_at is None:
             request_cover_retry(session, context=context, job_id=job.id)
         else:
@@ -152,9 +154,6 @@ def validate_ad_assets(
         .limit(51)
         .execution_options(populate_existing=True)
     ).all()
-    cutoff = datetime.now(UTC) - timedelta(
-        seconds=settings.MATERIAL_ASSET_MAX_AGE_SECONDS
-    )
     try:
         if any(
             len(entry["creative_info"]["image_info"]) != 1
@@ -182,7 +181,6 @@ def validate_ad_assets(
             or job
             and (
                 job.status != "READY"
-                or job.updated_at < cutoff
                 # 封面可能来自本次导入，也可能已在目标账户核实后直接复用。
                 # 两者都要求 READY 正证据，不能把尚未核实的候选当作上传回执。
                 or verified_cover_image_id(job) != image_id
@@ -196,10 +194,7 @@ def validate_ad_assets(
 
 
 def recover_cover_results(*, database_engine: Any, limit: int = 100) -> int:
-    from app.modules.materials.covers import (
-        get_cover_status,
-        request_cover_reconciliation,
-    )
+    from app.modules.materials.covers import get_cover_status
 
     if type(limit) is not int or not 1 <= limit <= 100:
         raise ValueError("invalid cover recovery page")
@@ -277,11 +272,6 @@ def recover_cover_results(*, database_engine: Any, limit: int = 100) -> int:
                 ):
                     raise DomainError("new_preview_required", "账户与冻结预览不一致")
                 result = get_cover_status(session, context=context, job_id=job.id)
-                if result.reason_code == "cover_evidence_stale":
-                    # 延迟恢复只补同一封面的只读核实；VERIFYING 会退出候选，避免重复排队。
-                    result = request_cover_reconciliation(
-                        session, context=context, job_id=job.id
-                    )
             except DomainError as error:
                 step.error_code, step.updated_at = error.code, datetime.now(UTC)
                 session.add(step)

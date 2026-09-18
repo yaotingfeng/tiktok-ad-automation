@@ -80,7 +80,6 @@ class Settings(BaseSettings):
     MATERIAL_ABANDON_SECONDS: int = Field(default=86400, ge=3600)
     # Exact platform media hosts must be verified for the deployment before relay.
     MATERIAL_REMOTE_MEDIA_HOSTS: frozenset[str] = Field(default_factory=frozenset)
-    MATERIAL_ASSET_MAX_AGE_SECONDS: int = Field(default=900, gt=0)
     # 仅限制尚未完成的目录分页同步，不再作为已授权账户的使用期限。
     BC_CAPABILITY_MAX_AGE_SECONDS: int = Field(default=86400, ge=60, le=86400)
     # Engineering observation age for shared scene facts, not a platform quota.

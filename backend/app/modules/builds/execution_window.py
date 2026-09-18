@@ -6,7 +6,11 @@ from sqlalchemy import and_, func, or_, tuple_
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
-from app.modules.builds.execution_models import ExecutionStep, SubmissionUnit
+from app.modules.builds.execution_models import (
+    ExecutionStep,
+    Submission,
+    SubmissionUnit,
+)
 from app.modules.builds.preview_models import BuildUnit
 
 # 与共享接口的账户矩形上限一致；限制活跃图而不提高远端额度/执行槽。
@@ -61,6 +65,10 @@ def window_units():
         )
         .where(
             SubmissionUnit.expanded,
+            # 展开尚未完成时看不到完整账户集合，提前发送会退化成1×1共享。
+            col(SubmissionUnit.submission_id).in_(
+                select(Submission.id).where(Submission.expanded)
+            ),
             SubmissionUnit.disposition == "INCLUDED",
             unfinished,
             ~blocked,

@@ -1,7 +1,6 @@
 """Local preview evidence only: no SDK calls, admission leases, or queued work."""
 
 from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlmodel import Session, col, select
@@ -139,14 +138,13 @@ def matching_target_assets(
 
 
 def mapping_fresh(asset: AccountMaterial | None) -> bool:
+    # 平台正向回执持续有效；权限、内容和实际 VID 由消费路径独立核对。
+    # 本地经过 900 秒不代表远端素材失效，也不能触发重复准备。
     return bool(
         asset
         and asset.status == "available"
         and asset.video_id.strip()
         and asset.verified_at
-        and asset.verified_at
-        >= datetime.now(UTC)
-        - timedelta(seconds=settings.MATERIAL_ASSET_MAX_AGE_SECONDS)
     )
 
 

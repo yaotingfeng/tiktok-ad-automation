@@ -41,6 +41,7 @@ from .models import (
 )
 from .readiness import (
     get_material_readiness,
+    get_material_readiness_batch,
     load_material,
     mapping_fresh,
     require_execution_config,
@@ -57,7 +58,7 @@ from .routes import (
     require_material_route,
     require_same_route,
 )
-from .schemas import AssetPreparation
+from .schemas import AssetPreparation, MaterialReadiness
 from .sharing import distribution_transport
 from .source_uploads import (
     READ_CLAIM_SECONDS,
@@ -279,6 +280,85 @@ def ensure_target_asset(
         advertiser_id=advertiser_id,
         route=route,
     )
+    return _ensure_target_asset(
+        session,
+        context=context,
+        bc_id=bc_id,
+        material=material,
+        advertiser_id=advertiser_id,
+        route=route,
+        readiness=readiness,
+        seed_owner=_seed_owner,
+    )
+
+
+def ensure_target_assets(
+    session: Session,
+    *,
+    context: TenantContext,
+    bc_id: str,
+    material_ids: list[UUID],
+    advertiser_id: str,
+    route: FrozenTikTokRoute,
+) -> dict[UUID, AssetPreparation]:
+    """同一短事务准备一个账户的至多20条素材，复用单条准备实现与批读权限。"""
+    if not 1 <= len(material_ids) <= 20 or len(set(material_ids)) != len(material_ids):
+        raise ValueError("invalid material preparation slice")
+    require_material_route(
+        session,
+        context=context,
+        route=route,
+        bc_id=bc_id,
+        advertiser_id=advertiser_id,
+        capability="build",
+    )
+    materials = session.exec(
+        select(MaterialFile)
+        .where(
+            MaterialFile.tenant_id == context.tenant_id,
+            col(MaterialFile.id).in_(material_ids),
+        )
+        .order_by(col(MaterialFile.id))
+        .with_for_update()
+    ).all()
+    if len(materials) != len(material_ids):
+        raise DomainError("material_not_found", "素材切片范围不完整")
+    readiness = get_material_readiness_batch(
+        session,
+        context=context,
+        bc_id=bc_id,
+        material_ids=material_ids,
+        advertiser_id=advertiser_id,
+        route=route,
+    )
+    return {
+        material.id: _ensure_target_asset(
+            session,
+            context=context,
+            bc_id=bc_id,
+            material=material,
+            advertiser_id=advertiser_id,
+            route=route,
+            readiness=readiness[material.id],
+            seed_owner=False,
+        )
+        for material in materials
+    }
+
+
+def _ensure_target_asset(
+    session: Session,
+    *,
+    context: TenantContext,
+    bc_id: str,
+    material: MaterialFile,
+    advertiser_id: str,
+    route: FrozenTikTokRoute,
+    readiness: MaterialReadiness,
+    seed_owner: bool,
+) -> AssetPreparation:
+    # 两个入口均已在当前事务核验权限并锁定素材；后续选源/去重/seed只有一份。
+    material_id = material.id
     if (
         readiness.path == "existing_target"
         and readiness.mapping is not None
@@ -321,7 +401,7 @@ def ensure_target_asset(
             route,
         )
         return AssetPreparation(state="queued", task_id=existing.id)
-    if not _seed_owner and readiness.path == "share_source":
+    if not seed_owner and readiness.path == "share_source":
         candidate = distribution_sources(
             session,
             context=context,
@@ -549,10 +629,35 @@ def _publish_mapping(
         mapping.connection_id = access.connection_id
     mapping.video_id, mapping.mid = evidence["video_id"], evidence.get("mid")
     mapping.status, mapping.verified_at = "available", datetime.now(UTC)
+    from .bc_seeding import wake_seed_dependents
+
+    wake_seed_dependents(session, context, dist)
 
 
 def _blocked(dist: MaterialDistribution, code: str) -> None:
     dist.status, dist.reason_code = "blocked", code
+
+
+def _invalidate_mapping(
+    session: Session,
+    context: TenantContext,
+    dist: MaterialDistribution,
+    work: dict[str, Any],
+) -> None:
+    # 真实详情不再支持正证据时，保留同一 VID 进入只读核查；不影响新身份或新连接。
+    mapping = target_mapping(
+        session,
+        context=context,
+        bc_id=dist.bc_id,
+        material_id=dist.material_id,
+        advertiser_id=dist.advertiser_id,
+    )
+    if (
+        mapping is not None
+        and mapping.video_id == work.get("video_id")
+        and mapping.connection_id == _work_connection(work)
+    ):
+        mapping.status = "result_unknown"
 
 
 def _work_connection(work: dict[str, Any]) -> UUID:
@@ -954,7 +1059,13 @@ def run_distribution(
         ):
             return
     if kind == "prepare" and not read_only:
-        from .bc_seeding import resume_seed_dependency
+        from .bc_seeding import resume_ready_seed_dependents, resume_seed_dependency
+
+        resume_ready_seed_dependents(
+            database_engine=database_engine,
+            context=context,
+            distribution_id=distribution_id,
+        )
 
         with Session(database_engine) as session, session.begin():
             dependency = _load_distribution(session, context, distribution_id)
@@ -1559,6 +1670,8 @@ def run_distribution(
                         **operation.remote_response,
                         "share_acknowledged": True,
                     }
+                    # 共享 ACK 没有目标 VID，仍须发现目标库存的真实身份。
+                    operation.status, dist.status = "verifying", "verifying"
                 else:
                     if operation.remote_response.get("conflicting_video_id"):
                         raise DomainError(
@@ -1569,8 +1682,17 @@ def run_distribution(
                         **evidence,
                         "upload_video_id": evidence["video_id"],
                         "upload_mid": evidence.get("mid"),
+                        "confirmation_source": "upload_receipt",
                     }
-                operation.status, dist.status = "verifying", "verifying"
+                    # 成功上传回执与来源 URL 导入使用同一语义；不伪造摘要或可用状态。
+                    _publish_mapping(
+                        session,
+                        context,
+                        dist,
+                        evidence,
+                        connection_id=_work_connection(work),
+                    )
+                    operation.status, dist.status = "succeeded", "ready"
             elif work.get("video_id") and evidence:
                 assert isinstance(evidence, dict)
                 if operation.remote_response.get("conflicting_video_id"):
@@ -1652,6 +1774,7 @@ def run_distribution(
                     operation.status, dist.status = "result_unknown", "result_unknown"
             else:
                 operation.status, dist.status = "verifying", "verifying"
+                _invalidate_mapping(session, context, dist, work)
             dist.reason_code = (
                 None if dist.status == "ready" else "material_result_pending"
             )
@@ -1695,6 +1818,9 @@ def run_distribution(
                 if isinstance(error, DomainError)
                 else "material_response_unknown"
             )
+            if kind == "verify" and code == "unsupported_material_schema":
+                # 返回非请求 VID 等结构冲突属于已观察到的不一致；传输超时不冒充负证据。
+                _invalidate_mapping(session, context, dist, work)
             deferred = (
                 isinstance(error, api.SdkAdmissionDeferred)
                 or code == "admission_unavailable"
@@ -1837,6 +1963,8 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
         )
         .exists()
     )
+    from .bc_seeding import seed_dependency_settled
+
     target_work = (
         select(MaterialDistribution.id)
         .join(
@@ -1854,6 +1982,7 @@ def repair_material_dispatches(session: Session, *, limit: int = 100) -> int:
                 ["materials.prepare_target", "materials.verify_target"]
             ),
             remote["reconciliation_complete"].astext.is_distinct_from("true"),
+            seed_dependency_settled(),
             or_(
                 col(MaterialDistribution.status).in_(ACTIVE_DISTRIBUTIONS),
                 and_(

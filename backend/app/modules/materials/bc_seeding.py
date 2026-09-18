@@ -1,10 +1,12 @@
 """同内容在目标 BC 仅转存一次；消费者始终保留自己的目标分发身份。"""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from hashlib import sha256
+from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_, update
+from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -21,6 +23,162 @@ from .models import (
 from .routes import load_material_route, require_material_route, require_same_route
 from .seed_models import MaterialBCSeed
 from .source_selection import resolve_primary_account
+
+
+def seed_dependency_settled():
+    """补偿只唤醒已落定的种子，不把等待本身变成每120秒一次的消息。"""
+    owner = aliased(MaterialDistribution)
+    settled = (
+        select(MaterialBCSeed.id)
+        .join(owner, col(owner.id) == MaterialBCSeed.distribution_id)
+        .where(
+            MaterialBCSeed.id == MaterialDistribution.seed_id,
+            MaterialBCSeed.tenant_id == MaterialDistribution.tenant_id,
+            or_(
+                col(owner.status).in_(["ready", "blocked"]),
+                and_(
+                    col(owner.status) == "result_unknown",
+                    col(MaterialDistribution.status) != "result_unknown",
+                ),
+            ),
+        )
+        .exists()
+    )
+    return or_(
+        col(MaterialDistribution.seed_id).is_(None),
+        col(MaterialAssetOperation.remote_response)["transport"].astext.is_not(None),
+        settled,
+    )
+
+
+def wake_seed_dependents(
+    db: Session, context: TenantContext, owner: MaterialDistribution
+) -> None:
+    """成功回执与原消费者消息唤醒一起提交，不创建新的轮询代数。"""
+    from app.jobs.models import PendingDispatch
+
+    consumers = db.exec(
+        select(MaterialDistribution, MaterialAssetOperation)
+        .join(MaterialBCSeed, col(MaterialBCSeed.id) == MaterialDistribution.seed_id)
+        .join(
+            MaterialAssetOperation,
+            col(MaterialAssetOperation.id) == MaterialDistribution.operation_id,
+        )
+        .where(
+            MaterialBCSeed.tenant_id == context.tenant_id,
+            MaterialBCSeed.distribution_id == owner.id,
+            MaterialAssetOperation.status == "pending",
+            col(MaterialAssetOperation.remote_response)["transport"].astext.is_(None),
+        )
+        .limit(200)
+    ).all()
+    keys = [
+        f"material-target:{dist.id}:{op.id}:{op.remote_response.get('revision', 0)}:prepare"
+        for dist, op in consumers
+    ]
+    if keys:
+        db.exec(
+            update(PendingDispatch)
+            .where(
+                col(PendingDispatch.tenant_id) == context.tenant_id,
+                col(PendingDispatch.task_key).in_(keys),
+                col(PendingDispatch.published_at).is_not(None),
+            )
+            .values(published_at=None, available_at=datetime.now(UTC))
+        )
+
+
+def resume_ready_seed_dependents(
+    *, database_engine: Any, context: TenantContext, distribution_id: UUID
+) -> int:
+    """一个短事务先绑定就绪种子的目标集合，再交给公共原生共享器。
+
+    不在单个素材回执锁内遍历其他素材；锁序与共享批次保持一致。
+    已发送、已绑定来源及不同冻结路由的历史消费者不改写。
+    """
+    from .distribution import _load_distribution
+    from .source_uploads import _locked_material, _locked_operation
+
+    with Session(database_engine) as db, db.begin():
+        anchor = _load_distribution(db, context, distribution_id)
+        if anchor.seed_id is None:
+            return 0
+        owner = aliased(MaterialDistribution)
+        candidates = (
+            select(MaterialDistribution, MaterialAssetOperation)
+            .join(
+                MaterialAssetOperation,
+                col(MaterialAssetOperation.id) == MaterialDistribution.operation_id,
+            )
+            .join(
+                MaterialBCSeed, col(MaterialBCSeed.id) == MaterialDistribution.seed_id
+            )
+            .join(owner, col(owner.id) == MaterialBCSeed.distribution_id)
+            .where(
+                MaterialDistribution.tenant_id == context.tenant_id,
+                MaterialDistribution.bc_id == anchor.bc_id,
+                MaterialDistribution.actor_id == context.actor_id,
+                MaterialDistribution.target_route == anchor.target_route,
+                col(MaterialDistribution.status).in_(["queued", "result_unknown"]),
+                MaterialAssetOperation.status == "pending",
+                col(MaterialAssetOperation.attempt_token).is_(None),
+                col(MaterialAssetOperation.remote_response)["transport"].astext.is_(
+                    None
+                ),
+                col(MaterialAssetOperation.remote_response)[
+                    "send_armed"
+                ].astext.is_distinct_from("true"),
+                owner.status == "ready",
+            )
+        )
+        materials = (
+            db.connection()
+            .execute(
+                candidates.with_only_columns(col(MaterialDistribution.material_id))
+                .distinct()
+                .order_by(col(MaterialDistribution.material_id))
+                .limit(20)
+            )
+            .scalars()
+            .all()
+        )
+        if not materials:
+            return 0
+        rows = db.exec(
+            candidates.where(col(MaterialDistribution.material_id).in_(materials))
+            .order_by(
+                col(MaterialDistribution.material_id),
+                col(MaterialDistribution.advertiser_id),
+            )
+            .limit(200)
+        ).all()
+        for identity in sorted({dist.material_id for dist, _ in rows}):
+            _locked_material(db, context, identity)
+        for _, operation in sorted(rows, key=lambda pair: pair[1].id):
+            _locked_operation(db, context, operation.id)
+        changed = 0
+        for dist, operation in rows:
+            db.refresh(dist)
+            db.refresh(operation)
+            if operation.status != "pending" or operation.remote_response.get(
+                "transport"
+            ):
+                continue
+            try:
+                if not resume_seed_dependency(
+                    db, context=context, dist=dist, operation=operation
+                ):
+                    changed += 1
+            except DomainError as error:
+                # 一个失效授权只阻断该消费者，不回滚其它合法目标的本地登记。
+                dist.status, dist.reason_code = "blocked", error.code
+                operation.status = "failed"
+                operation.remote_response = {
+                    **operation.remote_response,
+                    "definite_no_effect": True,
+                    "error_code": error.code,
+                }
+        return changed
 
 
 def ensure_bc_seed(
@@ -171,18 +329,7 @@ def resume_seed_dependency(
     if owner.status != "ready":
         dist.status = "result_unknown" if owner.status == "result_unknown" else "queued"
         dist.reason_code = "material_seed_pending"
-        # 只增加等待消息代数，不改变 seed 发送代数；旧消息无法重复安排发送。
-        operation.remote_response = {
-            **operation.remote_response,
-            "revision": operation.remote_response.get("revision", 0) + 1,
-        }
-        queue_distribution(
-            db,
-            dist,
-            operation,
-            kind="prepare",
-            due=datetime.now(UTC) + timedelta(seconds=30),
-        )
+        # 等待不重复投递。成功回执原子唤醒旧消息；异常落定由正式修复器接续。
         return True
     primary = target_mapping(
         db,

@@ -9,7 +9,7 @@ from sqlmodel import Session, col, select
 from app.core.context import TenantContext
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.modules.accounts.access import usable_grants
-from app.modules.accounts.models import BCAccountAccess
+from app.modules.accounts.models import BCAccountAccess, TenantBC
 
 from .models import AccountMaterial, MaterialFile, MaterialUploadAttempt
 
@@ -55,6 +55,11 @@ def distribution_sources(
         )
         .exists()
     )
+    primary = (
+        select(TenantBC.material_advertiser_id)
+        .where(TenantBC.tenant_id == context.tenant_id, TenantBC.bc_id == route.bc_id)
+        .scalar_subquery()
+    )
     rows = session.exec(
         select(AccountMaterial, MaterialFile)
         .join(
@@ -85,8 +90,11 @@ def distribution_sources(
         )
         .order_by(
             (col(AccountMaterial.bc_id) == route.bc_id).desc(),
+            # 转存后和原生同 BC 素材采用同一来源选择。优先固定主账户，
+            # 不因某个下游副本刚回读完成就换来源、拆散共享矩形。
+            (col(AccountMaterial.advertiser_id) == primary).desc().nulls_last(),
             owned.desc(),
-            col(AccountMaterial.verified_at).desc(),
+            col(AccountMaterial.advertiser_id),
             col(AccountMaterial.id),
         )
     ).all()

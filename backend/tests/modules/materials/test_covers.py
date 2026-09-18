@@ -261,30 +261,27 @@ def test_unknown_upload_empty_search_stops_until_explicit_read_only_reconcile(
     assert [call[0] for call in wire[0]].count("POST") == 1
 
 
-def test_expired_ready_cover_get_does_not_refresh_or_enqueue_but_ensure_queues_info(
+def test_old_ready_cover_get_and_ensure_reuse_without_readback(
     source_env, redis_client, wire
 ):
     from datetime import timedelta
-
-    from app.core.config import settings
 
     identity = successful_upload(source_env, redis_client, wire)
     wire[1].append(image_info(identity))
     run(source_env, redis_client, identity, read=True)
     with Session(engine) as session, session.begin():
         job = session.get(MaterialCoverJob, identity)
-        job.updated_at -= timedelta(seconds=settings.MATERIAL_ASSET_MAX_AGE_SECONDS + 1)
+        job.updated_at -= timedelta(days=1)
     with Session(engine) as session, session.begin():
         result = covers.get_cover_status(
             session, context=source_env["context"], job_id=identity
         )
-        assert result.state != "ready"
+        assert result.state == "ready"
     assert job_state(identity).dispatch_id is None
-    assert queue(source_env).state == "queued"
-    wire[1].append(image_info(identity))
-    run(source_env, redis_client, identity, read=True)
+    assert queue(source_env).state == "ready"
     assert job_state(identity).status == "READY"
     assert [call[0] for call in wire[0]].count("POST") == 1
+    assert len(wire[0]) == 3
 
 
 def test_unarmed_permission_failure_can_explicitly_retry_same_identity(

@@ -135,18 +135,16 @@ def test_preview_is_read_only_and_fresh_target_requires_current_permission(
         )
 
 
-def test_expired_target_is_preparable_for_readback(source_env, wire):
+def test_old_confirmed_target_remains_ready(source_env, wire):
     with Session(engine) as session, session.begin():
         account = target(session, source_env)
         asset(session, source_env, account, seconds_old=901)
     result = read(source_env, account)
-    assert (result.state, result.path) == ("preparable", "existing_target")
+    assert (result.state, result.path) == ("ready", "existing_target")
     assert wire[0] == []
 
 
-def test_authorized_same_bc_source_uses_native_share_without_original(
-    source_env, wire
-):
+def test_authorized_same_bc_source_uses_native_share_without_original(source_env, wire):
     with Session(engine) as session, session.begin():
         account = target(session, source_env)
         asset(session, source_env, "actual-account")
@@ -157,9 +155,7 @@ def test_authorized_same_bc_source_uses_native_share_without_original(
             MaterialFile, source_env["material_id"]
         ).storage_state = "unavailable"
     result = read(source_env, account)
-    assert (
-        result.state == "preparable" and result.path == "share_source"
-    )
+    assert result.state == "preparable" and result.path == "share_source"
     assert wire[0] == []
 
 
@@ -218,18 +214,12 @@ def test_preparable_preview_runs_in_postgresql_read_only_transaction(source_env,
     assert wire[0] == []
 
 
-def test_cache_window_is_configured_and_ready_assets_do_not_need_upload_capacity(
-    source_env, wire, monkeypatch
-):
+def test_old_ready_assets_do_not_need_upload_capacity(source_env, wire):
     with Session(engine) as session, session.begin():
         account = target(session, source_env)
-        asset(session, source_env, account, seconds_old=120)
+        asset(session, source_env, account, seconds_old=86400)
         session.get(MaterialFile, source_env["material_id"]).byte_size = (
             settings.MATERIAL_SDK_MAX_UPLOAD_BYTES + 1
         )
-    monkeypatch.setattr(settings, "MATERIAL_ASSET_MAX_AGE_SECONDS", 180)
     assert read(source_env, account).state == "ready"
-    monkeypatch.setattr(settings, "MATERIAL_ASSET_MAX_AGE_SECONDS", 60)
-    result = read(source_env, account)
-    assert (result.state, result.path) == ("preparable", "existing_target")
     assert wire[0] == []

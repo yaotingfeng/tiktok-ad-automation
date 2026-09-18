@@ -516,6 +516,26 @@ def process_step(
     _require_bounded_worker()
     if type(revision) is not int or revision < 0:
         raise DomainError("dispatch_payload_invalid", "执行代际无效")
+    from app.modules.builds.material_execution import (
+        material_needs_planning,
+        plan_material_slice,
+    )
+
+    with Session(database_engine) as session:
+        candidate = session.get(ExecutionStep, step_id)
+        unit_to_plan = (
+            candidate.unit_id
+            if candidate
+            and candidate.tenant_id == context.tenant_id
+            and candidate.dispatch_revision == revision
+            and candidate.status in {"PENDING", "QUEUED", "RETRYABLE"}
+            and material_needs_planning(session, context, candidate)
+            else None
+        )
+    if unit_to_plan is not None:
+        plan_material_slice(
+            database_engine=database_engine, context=context, unit_id=unit_to_plan
+        )
     with Session(database_engine) as session, session.begin():
         step = session.exec(
             select(ExecutionStep)
@@ -546,7 +566,9 @@ def process_step(
         }:
             from app.modules.builds.execution_window import material_unit_admitted
 
-            if not material_unit_admitted(
+            if material_needs_planning(
+                session, context, step
+            ) or not material_unit_admitted(
                 session,
                 tenant_id=step.tenant_id,
                 submission_id=step.submission_id,

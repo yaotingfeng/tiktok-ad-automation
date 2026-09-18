@@ -131,6 +131,7 @@ def image_receipt(
         displayable=data["displayable"]
         if type(data.get("displayable")) is bool
         else None,
+        mid=_identifier(data.get("material_id")),
     )
 
 

@@ -2,9 +2,12 @@
 
 from typing import Any
 
-from sqlalchemy import and_, or_, tuple_
+from sqlalchemy import and_, func, or_, tuple_
+from sqlalchemy import select as sa_select
 from sqlmodel import Session, col, select
 
+from app.core.context import TenantContext
+from app.core.errors import DomainError
 from app.modules.builds.execution_models import (
     ExecutionStep,
     Submission,
@@ -13,7 +16,7 @@ from app.modules.builds.execution_models import (
 from app.modules.builds.execution_window import material_unit_admitted, window_units
 from app.modules.builds.preview_models import BuildUnit
 from app.modules.materials.cover_models import MaterialCoverJob
-from app.modules.materials.models import MaterialDistribution
+from app.modules.materials.models import AccountMaterial, MaterialDistribution
 
 
 def waiting_dependency(step: ExecutionStep) -> bool:
@@ -33,56 +36,151 @@ def waiting_dependency(step: ExecutionStep) -> bool:
 
 def wake_material_dependencies(*, database_engine: Any, limit: int = 100) -> int:
     from app.modules.builds.dispatch import queue_step
+    from app.modules.builds.material_execution import (
+        material_needs_planning,
+        plan_material_slice,
+    )
 
     if type(limit) is not int or not 1 <= limit <= 100:
         raise ValueError("invalid dependency recovery page")
+    admitted = window_units().cte("wake_admitted_units")
+    active_slices = (
+        select(ExecutionStep.tenant_id, ExecutionStep.submission_id)
+        .join(
+            MaterialDistribution,
+            and_(
+                col(MaterialDistribution.tenant_id) == ExecutionStep.tenant_id,
+                col(MaterialDistribution.id) == ExecutionStep.distribution_id,
+            ),
+        )
+        .where(
+            tuple_(
+                col(ExecutionStep.tenant_id),
+                col(ExecutionStep.submission_id),
+                col(ExecutionStep.unit_id),
+            ).in_(select(admitted)),
+            col(MaterialDistribution.status).in_(["queued", "preparing", "verifying"]),
+        )
+        .group_by(col(ExecutionStep.tenant_id), col(ExecutionStep.submission_id))
+        .having(func.count(col(ExecutionStep.material_id).distinct()) >= 20)
+    )
+    mapped = (
+        select(AccountMaterial.id)
+        .where(
+            AccountMaterial.tenant_id == ExecutionStep.tenant_id,
+            AccountMaterial.bc_id == ExecutionStep.bc_id,
+            AccountMaterial.material_id == ExecutionStep.material_id,
+            AccountMaterial.advertiser_id == BuildUnit.advertiser_id,
+            AccountMaterial.connection_id == BuildUnit.connection_id,
+            AccountMaterial.status == "available",
+            col(AccountMaterial.verified_at).is_not(None),
+        )
+        .exists()
+    )
     with Session(database_engine) as session:
-        candidates = session.exec(
-            select(ExecutionStep.tenant_id, ExecutionStep.unit_id, ExecutionStep.id)
-            .outerjoin(
-                MaterialDistribution,
-                and_(
-                    col(MaterialDistribution.id) == ExecutionStep.distribution_id,
-                    col(MaterialDistribution.tenant_id) == ExecutionStep.tenant_id,
-                ),
-            )
-            .outerjoin(
-                MaterialCoverJob,
-                and_(
-                    col(MaterialCoverJob.id) == ExecutionStep.cover_job_id,
-                    col(MaterialCoverJob.tenant_id) == ExecutionStep.tenant_id,
-                ),
-            )
-            .where(
-                ExecutionStep.kind == "MATERIAL",
-                ExecutionStep.status == "PENDING",
-                col(ExecutionStep.dispatch_id).is_(None),
-                tuple_(
+        candidates = (
+            session.connection()
+            .execute(
+                sa_select(
                     col(ExecutionStep.tenant_id),
-                    col(ExecutionStep.submission_id),
                     col(ExecutionStep.unit_id),
-                ).in_(window_units()),
-                or_(
-                    col(ExecutionStep.error_code) == "execution_window_wait",
+                    col(ExecutionStep.id),
+                    col(ExecutionStep.submission_id),
+                    col(Submission.actor_id),
+                    col(ExecutionStep.error_code),
+                )
+                .join(
+                    Submission,
                     and_(
-                        col(ExecutionStep.error_code) == "material_pending",
-                        col(MaterialDistribution.status).in_(
-                            ["ready", "blocked", "result_unknown"]
+                        col(Submission.tenant_id) == ExecutionStep.tenant_id,
+                        col(Submission.id) == ExecutionStep.submission_id,
+                    ),
+                )
+                .join(
+                    BuildUnit,
+                    and_(
+                        col(BuildUnit.tenant_id) == ExecutionStep.tenant_id,
+                        col(BuildUnit.id) == ExecutionStep.unit_id,
+                    ),
+                )
+                .outerjoin(
+                    MaterialDistribution,
+                    and_(
+                        col(MaterialDistribution.id) == ExecutionStep.distribution_id,
+                        col(MaterialDistribution.tenant_id) == ExecutionStep.tenant_id,
+                    ),
+                )
+                .outerjoin(
+                    MaterialCoverJob,
+                    and_(
+                        col(MaterialCoverJob.id) == ExecutionStep.cover_job_id,
+                        col(MaterialCoverJob.tenant_id) == ExecutionStep.tenant_id,
+                    ),
+                )
+                .where(
+                    col(ExecutionStep.kind) == "MATERIAL",
+                    col(ExecutionStep.status) == "PENDING",
+                    col(ExecutionStep.dispatch_id).is_(None),
+                    tuple_(
+                        col(ExecutionStep.tenant_id),
+                        col(ExecutionStep.submission_id),
+                        col(ExecutionStep.unit_id),
+                    ).in_(select(admitted)),
+                    or_(
+                        and_(
+                            col(ExecutionStep.error_code) == "execution_window_wait",
+                            # 先在SQL中过滤未来片，不能占走有界页后再逐条丢弃，
+                            # 否则已落定依赖会被更旧的等待行持续饿死。
+                            or_(
+                                tuple_(
+                                    col(ExecutionStep.tenant_id),
+                                    col(ExecutionStep.submission_id),
+                                ).not_in(active_slices),
+                                col(ExecutionStep.distribution_id).is_not(None),
+                                col(ExecutionStep.cover_job_id).is_not(None),
+                                mapped,
+                            ),
+                        ),
+                        and_(
+                            col(ExecutionStep.error_code) == "material_pending",
+                            col(MaterialDistribution.status).in_(
+                                ["ready", "blocked", "result_unknown"]
+                            ),
+                        ),
+                        and_(
+                            col(ExecutionStep.error_code) == "cover_pending",
+                            col(MaterialCoverJob.status).in_(
+                                ["READY", "BLOCKED", "UNKNOWN"]
+                            ),
                         ),
                     ),
-                    and_(
-                        col(ExecutionStep.error_code) == "cover_pending",
-                        col(MaterialCoverJob.status).in_(
-                            ["READY", "BLOCKED", "UNKNOWN"]
-                        ),
-                    ),
-                ),
+                )
+                .order_by(col(ExecutionStep.updated_at), col(ExecutionStep.id))
+                .limit(limit)
             )
-            .order_by(col(ExecutionStep.updated_at), col(ExecutionStep.id))
-            .limit(limit)
-        ).all()
+            .all()
+        )
+    # 规划需按统一顺序锁整个账户窗口，因此必须在下方单元/步骤锁外执行。
+    # 同一提交一轮仅尝试一次；领取冲突或仍有活动片时保留等待，不制造消息。
+    planned = set()
+    for tenant_id, unit_id, _, submission_id, actor_id, error_code in candidates:
+        identity = (tenant_id, submission_id)
+        if error_code != "execution_window_wait" or identity in planned:
+            continue
+        planned.add(identity)
+        try:
+            plan_material_slice(
+                database_engine=database_engine,
+                context=TenantContext(
+                    tenant_id=tenant_id, actor_id=actor_id, role="operator"
+                ),
+                unit_id=unit_id,
+            )
+        except DomainError:
+            # 原执行器仍负责记录权限/冻结错误；本轮不能吞掉正式失败路径。
+            pass
     count = 0
-    for tenant_id, unit_id, step_id in candidates:
+    for tenant_id, unit_id, step_id, _, _, _ in candidates:
         with Session(database_engine) as session, session.begin():
             unit = session.exec(
                 select(SubmissionUnit)
@@ -114,6 +212,14 @@ def wake_material_dependencies(*, database_engine: Any, limit: int = 100) -> int
             row = session.get(Submission, step.submission_id)
             assert row
             if step.error_code == "execution_window_wait":
+                if material_needs_planning(
+                    session,
+                    TenantContext(
+                        tenant_id=tenant_id, actor_id=row.actor_id, role="operator"
+                    ),
+                    step,
+                ):
+                    continue
                 queue_step(session, step=step, submission=row)
                 count += 1
                 continue

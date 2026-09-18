@@ -79,6 +79,8 @@ class ImageReceipt:
     width: int | None = None
     height: int | None = None
     displayable: bool | None = None
+    # 源图片原生共享只使用平台实际返回的素材 MID；缺失时保留已知图片 ID 回查。
+    mid: str | None = None
 
 
 @dataclass(frozen=True)

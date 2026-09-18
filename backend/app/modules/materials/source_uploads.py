@@ -895,11 +895,7 @@ def run_source_upload(
                 return
             attempt = _attempt(session, operation.id)
             assert attempt
-            if kind == "upload":
-                assert isinstance(evidence, dict)
-                operation.remote_response = {**evidence}
-                operation.status, attempt.status = "verifying", "verifying"
-            elif work.get("video_id") and evidence:
+            if evidence and (kind == "upload" or work.get("video_id")):
                 assert isinstance(evidence, dict)
                 # Fresh authority before readiness. Revocation keeps evidence but
                 # cannot turn stale permission into an available mapping.
@@ -933,7 +929,13 @@ def run_source_upload(
                     "available",
                     datetime.now(UTC),
                 )
-                operation.remote_response = {**evidence}
+                # 同步成功回执已提供实际上传身份；与 URL 导入一致，不再强制详情回读。
+                operation.remote_response = {
+                    **evidence,
+                    "confirmation_source": "upload_receipt"
+                    if kind == "upload"
+                    else "video_readback",
+                }
                 operation.status, attempt.status = "succeeded", "available"
                 from .source_cover_service import enqueue_source_cover
 

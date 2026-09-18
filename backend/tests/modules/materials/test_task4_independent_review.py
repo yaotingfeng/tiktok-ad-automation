@@ -32,7 +32,13 @@ def test_actual_upload_successor_survives_revocation_then_repairs_same_identity(
     source_env, redis_client, wire, original_s3
 ):
     ctx = source_env["context"]
-    wire[1].append([{"video_id": "actual-upload-receipt"}])
+
+    def receipt_after_revocation():
+        with Session(engine) as session, session.begin():
+            session.get(TenantMembership, (ctx.tenant_id, ctx.actor_id)).active = False
+        return [{"video_id": "actual-upload-receipt"}]
+
+    wire[1].append(receipt_after_revocation)
     source_run(source_env, redis_client, kind="upload", s3=original_s3[0])
     with Session(engine) as session, session.begin():
         op = session.exec(
@@ -40,7 +46,7 @@ def test_actual_upload_successor_survives_revocation_then_repairs_same_identity(
                 MaterialAssetOperation.tenant_id == ctx.tenant_id
             )
         ).one()
-        assert op.status == "verifying"
+        assert op.status == "result_unknown"
         op_id, revision = op.id, op.remote_response["revision"]
         successor = session.exec(
             select(PendingDispatch).where(
@@ -59,7 +65,9 @@ def test_actual_upload_successor_survives_revocation_then_repairs_same_identity(
         source_run(source_env, redis_client, operation_id=op_id, revision=revision)
     with Session(engine) as session, session.begin():
         op = session.get(MaterialAssetOperation, op_id)
-        assert op.status == "verifying" and op.remote_response["revision"] == revision
+        assert (
+            op.status == "result_unknown" and op.remote_response["revision"] == revision
+        )
         session.get(TenantMembership, (ctx.tenant_id, ctx.actor_id)).active = True
     with Session(engine) as session, session.begin():
         assert repair_material_dispatches(session) == 1
@@ -81,7 +89,7 @@ def test_all_preview_paths_are_sql_read_only_with_external_boundaries_disabled(
             target(session, source_env, advertiser_id=f"review-{i}") for i in range(3)
         ]
         asset(session, source_env, accounts[0])
-        asset(session, source_env, accounts[1], seconds_old=1000)
+        asset(session, source_env, accounts[1], status="result_unknown")
     statements = []
 
     def observe(_conn, _cursor, statement, _params, _context, _many):
@@ -114,7 +122,7 @@ def test_all_preview_paths_are_sql_read_only_with_external_boundaries_disabled(
                 assert [(r.state, r.path) for r in result] == [
                     ("ready", "existing_target"),
                     ("preparable", "existing_target"),
-                    ("preparable", "upload_original"),
+                    ("preparable", "share_source"),
                 ]
                 assert not session.dirty and not session.new and not session.deleted
         finally:
@@ -127,7 +135,7 @@ def test_target_old_revision_and_wrong_actor_cannot_claim_current_work(
 ):
     with Session(engine) as session, session.begin():
         account = target(session, source_env)
-        asset(session, source_env, account, seconds_old=1000)
+        asset(session, source_env, account, status="result_unknown")
     dist_id = queue(source_env, account).task_id
     op_id = state(dist_id)[1].id
     with Session(engine) as session, session.begin():

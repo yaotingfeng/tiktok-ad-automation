@@ -148,17 +148,14 @@ def test_distribution_waits_on_existing_source_operation_without_second_sender(
     assert state(prepared.task_id)[0].status == "ready" and len(wire[0]) == 1
 
 
-def test_expired_target_is_read_again_without_original_upload(
-    source_env, redis_client, wire
-):
+def test_old_confirmed_target_is_reused_without_platform_call(source_env, wire):
     with Session(engine) as session, session.begin():
         account = target(session, source_env)
         asset(session, source_env, account, seconds_old=1000)
     prepared = queue(source_env, account)
-    wire[1].append(info(vid="vid-target-account"))
-    run(source_env, redis_client, prepared.task_id)
-    assert state(prepared.task_id)[2].video_id == "vid-target-account"
-    assert [call[0] for call in wire[0]] == ["GET"]
+    assert prepared.state == "ready" and prepared.task_id is None
+    assert prepared.mapping.video_id == "vid-target-account"
+    assert wire[0] == []
 
 
 @pytest.mark.parametrize("fence", ["revision", "recovery_claim_id"])
@@ -422,7 +419,7 @@ def test_target_permission_revoked_during_read_does_not_publish_asset(
 ):
     with Session(engine) as session, session.begin():
         account = target(session, source_env)
-        asset(session, source_env, account, seconds_old=1000)
+        asset(session, source_env, account, status="result_unknown")
     dist_id = queue(source_env, account).task_id
 
     def response():

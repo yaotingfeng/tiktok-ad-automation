@@ -543,7 +543,7 @@ def original_s3(source_env, monkeypatch):
     client.close()
 
 
-def test_original_to_sdk_once_then_actual_readback(
+def test_original_to_sdk_once_uses_actual_receipt_without_readback(
     source_env, redis_client, wire, original_s3, caplog
 ):
     import logging
@@ -570,18 +570,17 @@ def test_original_to_sdk_once_then_actual_readback(
         op_id = op.id
     op, attempt, asset = snapshot(source_env, op_id)
     assert (
-        op.status == "verifying"
+        op.status == "succeeded"
         and attempt.advertiser_id == "actual-account"
         and attempt.connection_id == source_env["connection_id"]
     )
-    assert asset is None
+    assert asset.video_id == "upload-vid" and asset.mid == "upload-mid"
     assert dict(calls[0][2]["fields"])["video_file"][1] == CONTENT
     assert (
         dict(calls[0][2]["fields"])["file_name"]
         == f"Moon-{source_env['material_id'].hex[:8]}.mp4"
     )
     run(source_env, redis_client, kind="upload", s3=original_s3[0])
-    responses.append(info(vid="upload-vid"))
     run(source_env, redis_client, operation_id=op_id)
     assert snapshot(source_env, op_id)[2].video_id == "upload-vid"
     assert (
@@ -589,7 +588,7 @@ def test_original_to_sdk_once_then_actual_readback(
         == "upload-vid"
     )
     assert snapshot(source_env, op_id)[1].remote_response["upload_mid"] == "upload-mid"
-    assert [row[0] for row in calls] == ["POST", "GET"]
+    assert [row[0] for row in calls] == ["POST"]
     with Session(engine) as session:
         assert session.get(UploadBatch, source_env["batch_id"]).status == "available"
     assert "offline-token-secret" not in caplog.text

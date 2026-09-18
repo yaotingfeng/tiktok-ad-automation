@@ -95,7 +95,7 @@ def test_concurrent_workers_send_one_target_upload_and_hold_no_db_locks(
         second.result(5)
         finish.set()
         first.result(5)
-    assert len(wire[0]) == 1 and state(dist_id)[1].status == "verifying"
+    assert len(wire[0]) == 1 and state(dist_id)[1].status == "succeeded"
 
 
 def test_old_target_completion_cannot_publish_after_fence_changes(
@@ -105,7 +105,7 @@ def test_old_target_completion_cannot_publish_after_fence_changes(
 
     with Session(engine) as session, session.begin():
         account = target(session, source_env)
-        asset(session, source_env, account, seconds_old=1000)
+        asset(session, source_env, account, status="result_unknown")
     dist_id = queue(source_env, account).task_id
 
     def response():
@@ -274,7 +274,7 @@ def test_target_finalization_locks_file_before_operation_and_fk_insert(
 
     with Session(engine) as session, session.begin():
         account = target(session, source_env)
-        asset(session, source_env, account, seconds_old=1000)
+        asset(session, source_env, account, status="result_unknown")
     dist_id = queue(source_env, account).task_id
     with Session(engine) as session, session.begin():
         # Require a new AccountMaterial FK insertion at finalization.
@@ -406,4 +406,4 @@ def test_source_upload_and_same_target_distribution_race_share_send_authority(
         first.result(10)
         second.result(10)
     assert len(wire[0]) == 1 and wire[0][0][0] == "POST"
-    assert state(dist_id)[1].status == "verifying"
+    assert state(dist_id)[1].status == "succeeded"

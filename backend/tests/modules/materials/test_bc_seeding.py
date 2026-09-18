@@ -47,7 +47,6 @@ def test_foreign_material_waits_for_primary_then_native_target(
         [info(), [{"video_id": "primary-vid", "material_id": "primary-mid"}]]
     )
     run(seed_env, redis_client, seed_id, kind="prepare")
-    wire[1].append(info(vid="primary-vid", material_id="primary-mid"))
     run(seed_env, redis_client, seed_id)
     assert state(seed_id)[0].status == "ready"
     wire[1].extend(
@@ -350,7 +349,6 @@ def test_primary_alias_waiter_reuses_real_video_and_cover_after_seed(
         [info(), [{"video_id": "primary-vid", "material_id": "primary-mid"}]]
     )
     run(seed_env, redis_client, seed_id, kind="prepare")
-    wire[1].append(info(vid="primary-vid", material_id="primary-mid"))
     run(seed_env, redis_client, seed_id)
     with Session(engine) as db, db.begin():
         db.exec(
@@ -368,4 +366,4 @@ def test_primary_alias_waiter_reuses_real_video_and_cover_after_seed(
         mapping.video_id == "primary-vid" and mapping.image_id == "actual-primary-cover"
     )
     assert "upload_video_id" not in operation.remote_response
-    assert len(wire[0]) == 3
+    assert len(wire[0]) == 2

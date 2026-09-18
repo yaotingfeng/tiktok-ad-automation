@@ -368,7 +368,7 @@ def test_mcp_readiness_uses_same_channel_gate_without_requiring_api_app(
     )
     with Session(database_engine) as db, db.begin():
         if path == "known":
-            asset(db, source_env, gateway_case[2], seconds_old=1000)
+            asset(db, source_env, gateway_case[2], status="result_unknown")
         elif path == "relay":
             other = target(db, source_env, advertiser_id="other-source")
             asset(db, source_env, other)

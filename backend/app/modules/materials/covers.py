@@ -13,7 +13,6 @@ from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 from sqlmodel.sql.expression import SelectOfScalar
 
-from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.integrations.tiktok.bounded_resources import bounded_session
@@ -207,12 +206,6 @@ def _digest_error(session: Session, job: MaterialCoverJob) -> str | None:
     return None
 
 
-def _fresh(job: MaterialCoverJob) -> bool:
-    return job.updated_at >= _now() - timedelta(
-        seconds=settings.MATERIAL_ASSET_MAX_AGE_SECONDS
-    )
-
-
 def verified_cover_image_id(job: MaterialCoverJob) -> str | None:
     """Only READY evidence is usable; candidate reuse never impersonates an upload."""
     if (
@@ -241,10 +234,6 @@ def _result(session: Session, job: MaterialCoverJob) -> AssetPreparation:
     if mapping is None:
         return AssetPreparation(
             state="blocked", task_id=job.id, reason_code="cover_video_changed"
-        )
-    if job.status == "READY" and not _fresh(job):
-        return AssetPreparation(
-            state="blocked", task_id=job.id, reason_code="cover_evidence_stale"
         )
     if (image_id := verified_cover_image_id(job)) and mapping.image_id == image_id:
         return AssetPreparation(
@@ -417,8 +406,6 @@ def _ensure_cover(
                     ),
                 )
         _access(session, context, job)
-        if job.status == "READY" and not _fresh(job):
-            _queue(session, job, read=True)
         return _result(session, job)
     if asset.image_id and purpose == "BUILD":
         # 无历史封面job的既有平台图片沿原验证事实复用；不能虚构上传job要求原件摘要。
@@ -430,10 +417,6 @@ def _ensure_cover(
             advertiser_id=advertiser_id,
             capability="read",
         )
-        if asset.verified_at < _now() - timedelta(
-            seconds=settings.MATERIAL_ASSET_MAX_AGE_SECONDS
-        ):
-            return AssetPreparation(state="blocked", reason_code="cover_evidence_stale")
         return AssetPreparation(state="ready", mapping=asset_public(asset))
     identity = uuid4()
     job = MaterialCoverJob(
@@ -514,9 +497,8 @@ def request_cover_reconciliation(
     if job.error_code == "cover_receipt_ambiguous":
         # 已观察到互斥回执是持久冲突；普通只读重试不能抹掉这一事实。
         return _result(session, job)
-    if job.status == "READY" and not _fresh(job):
-        # A delayed build may resume after its positive image evidence expires.
-        # Revalidate the known ID, preserving the original upload identity.
+    if job.status == "READY":
+        # 只有调用方明确请求核查时才重新读取；已确认映射不按本地时间自动过期。
         _queue(session, job, read=True)
         return _result(session, job)
     if (
@@ -864,6 +846,7 @@ def _save_receipt(
                                 "width": value.width,
                                 "height": value.height,
                                 "displayable": value.displayable,
+                                "material_id": value.mid,
                             }
                         ]
                     },
@@ -876,7 +859,9 @@ def _save_receipt(
                 if value.signature is not None
                 else None
             )
-            if evidence is None or current.purpose == "SOURCE":
+            if evidence is None or (
+                current.purpose == "SOURCE" and not evidence.get("material_id")
+            ):
                 _queue(session, current, read=True)
             else:
                 _access(session, context, current, upload=True)
@@ -1593,8 +1578,6 @@ def _run_known_cover_group(
     deadline: datetime,
 ) -> bool:
     """从既有只读 outbox 合并同授权任务，保留每项永久身份与独立 claim。"""
-    from .readiness import mapping_fresh
-
     members = [(first, first_nonce)]
     with bounded_session(database_engine, task_deadline=deadline) as db, db.begin():
         checks = _CoverAccessChecks(db, context)
@@ -1674,9 +1657,7 @@ def _run_known_cover_group(
         for job, _ in members[1:]:
             db.expunge(job)
     if len(members) == 1:
-        with bounded_session(database_engine, task_deadline=deadline) as db:
-            if mapping_fresh(_mapping(db, first)):
-                return False
+        return False
 
     # 首个消费消息不一定是最小ID。广告刷新按job.id持锁，后续所有批量
     # HTTP前检查及结果发布也须同序，不能先锁首消息再回头锁较小ID。
@@ -1714,76 +1695,7 @@ def _run_known_cover_group(
             task_deadline=deadline,
             before_request=check_members,
         ) as gateway:
-            from .sdk_assets import verified_video, video_record_data
-
-            stale = []
-            with bounded_session(database_engine, task_deadline=deadline) as db:
-                for job, nonce in active:
-                    if not mapping_fresh(_mapping(db, job)):
-                        stale.append((job, nonce))
-            if stale:
-                check_members()
-                videos = gateway.materials.read_videos(
-                    advertiser_id=first.advertiser_id,
-                    video_ids=tuple(dict.fromkeys(job.video_id for job, _ in stale)),
-                    budget=budget("materials.get_videos"),
-                )
-                by_video = {row.video_id: row for row in videos}
-                rejected = []
-                video_failures = []
-                with (
-                    bounded_session(database_engine, task_deadline=deadline) as db,
-                    db.begin(),
-                ):
-                    checks = _CoverAccessChecks(db, context)
-                    db.exec(
-                        select(MaterialFile)
-                        .where(
-                            MaterialFile.tenant_id == context.tenant_id,
-                            col(MaterialFile.id).in_(
-                                [job.material_id for job, _ in stale]
-                            ),
-                        )
-                        .order_by(col(MaterialFile.id))
-                        .with_for_update()
-                    ).all()
-                    for job, nonce in stale:
-                        try:
-                            with db.begin_nested():
-                                assert job.video_md5 is not None
-                                row = by_video.get(job.video_id)
-                                evidence = verified_video(
-                                    {"list": [video_record_data(row)] if row else []},
-                                    md5=job.video_md5,
-                                    expected_video_id=job.video_id,
-                                )
-                                if evidence is None:
-                                    _read_result_in_session(
-                                        db, context, job, nonce, None, checks=checks
-                                    )
-                                else:
-                                    read_current = _fenced(db, context, job.id, nonce)
-                                    if read_current is None:
-                                        raise DomainError(
-                                            "cover_claim_lost", "封面任务执行权已变化"
-                                        )
-                                    _check_read_identity(read_current, job)
-                                    _access(db, context, read_current, checks=checks)
-                                    mapping = _mapping(db, read_current)
-                                    assert mapping
-                                    mapping.verified_at = _now()
-                            if evidence is None:
-                                rejected.append((job, nonce))
-                        except Exception as error:
-                            rejected.append((job, nonce))
-                            video_failures.append((job, nonce, error))
-                # 事务提交后才调整本次请求成员；异常回滚不会漏掉需要恢复的原claim。
-                for rejected_member in rejected:
-                    active.remove(rejected_member)
-                for job, nonce, member_error in video_failures:
-                    _read_failure(database_engine, context, job, nonce, member_error)
-            if not active:
-                return True
+            # 视频正证据已由 _access 按身份和状态核对，不再因年龄先回读整组视频。
             check_members()
             images = gateway.materials.read_images(
                 advertiser_id=first.advertiser_id,

@@ -56,7 +56,6 @@ def complete_seed(env, redis_client, wire, seed):
         [info(), [{"video_id": "primary-vid", "material_id": "primary-mid"}]]
     )
     run(env, redis_client, seed.distribution_id, kind="prepare")
-    wire[1].append(info(vid="primary-vid", material_id="primary-mid"))
     run(env, redis_client, seed.distribution_id)
     assert state(seed.distribution_id)[0].status == "ready"
 
@@ -218,7 +217,7 @@ def test_unknown_or_unsettled_seed_evidence_never_starts_another_generation(
     assert wire[0] == []
 
 
-def test_delayed_primary_alias_waiter_verifies_stale_video_before_ready(
+def test_delayed_primary_alias_waiter_reuses_old_confirmed_video_without_readback(
     seed_env, redis_client, wire
 ):
     queue(seed_env, seed_env["target"])
@@ -243,11 +242,7 @@ def test_delayed_primary_alias_waiter_verifies_stale_video_before_ready(
         primary.verified_at = datetime.now(UTC) - timedelta(minutes=20)
         primary.image_id = "real-primary-cover"
     run(seed_env, redis_client, waiter.task_id, kind="prepare")
-    assert state(waiter.task_id)[0].status == "verifying", (
-        "Expired evidence cannot complete a waiting alias"
-    )
-    assert read(alias_env, seed_env["primary"]).state != "ready"
-    wire[1].append(info(vid="primary-vid", material_id="primary-mid"))
+    assert state(waiter.task_id)[0].status == "ready"
     run(seed_env, redis_client, waiter.task_id)
     dist, operation, mapping = state(waiter.task_id)
     assert dist.status == "ready" and operation.status == "succeeded"
@@ -255,4 +250,4 @@ def test_delayed_primary_alias_waiter_verifies_stale_video_before_ready(
         mapping.video_id == "primary-vid" and mapping.image_id == "real-primary-cover"
     )
     assert read(alias_env, seed_env["primary"]).state == "ready"
-    assert [call[0] for call in wire[0]] == ["GET", "POST", "GET", "GET"]
+    assert [call[0] for call in wire[0]] == ["GET", "POST"]

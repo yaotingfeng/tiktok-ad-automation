@@ -67,7 +67,7 @@ def test_default_switch_during_source_get_keeps_both_original_routes(
     wire[1].extend([switch_default, [{"video_id": "actual-target"}]])
     run(remote_env, redis_client, prepared.task_id, kind="prepare")
     dist, op, mapping = state(prepared.task_id)
-    assert dist.status == "verifying" and mapping is None
+    assert dist.status == "ready" and mapping.video_id == "actual-target"
     assert dist.target_route["connection_id"] == str(remote_env["connection_id"])
     assert dist.source_route["connection_id"] == str(remote_env["connection_id"])
     assert op.remote_response["upload_connection_id"] == str(
@@ -121,7 +121,7 @@ def test_credential_only_rotation_keeps_queued_target_usable(
         )
     wire[1].extend([info(), [{"video_id": "actual-target"}]])
     run(remote_env, redis_client, prepared.task_id, kind="prepare")
-    assert state(prepared.task_id)[0].status == "verifying"
+    assert state(prepared.task_id)[0].status == "ready"
     assert [item[0] for item in wire[0]] == ["GET", "POST"]
 
 
@@ -151,23 +151,6 @@ def test_cover_inherits_target_route_without_relabeling_uploaded_video(
             bc_id=source_env["bc_id"],
             connection_id=second,
         )
-        result = ensure_cover(
-            db,
-            context=source_env["context"],
-            bc_id=source_env["bc_id"],
-            material_id=source_env["material_id"],
-            advertiser_id="actual-account",
-            task_key=f"new:{uuid4()}",
-            route=route,
-        )
-        assert result.state == "queued"
-    with Session(engine) as db, db.begin():
-        old_route = freeze_route(
-            db,
-            context=source_env["context"],
-            bc_id=source_env["bc_id"],
-            connection_id=source_env["connection_id"],
-        )
         with pytest.raises(DomainError) as error:
             ensure_cover(
                 db,
@@ -176,7 +159,36 @@ def test_cover_inherits_target_route_without_relabeling_uploaded_video(
                 material_id=source_env["material_id"],
                 advertiser_id="actual-account",
                 task_key=f"new:{uuid4()}",
-                route=old_route,
+                route=route,
+            )
+        assert error.value.code == "cover_video_changed"
+        assert not db.exec(select(MaterialCoverJob)).all()
+    with Session(engine) as db, db.begin():
+        old_route = freeze_route(
+            db,
+            context=source_env["context"],
+            bc_id=source_env["bc_id"],
+            connection_id=source_env["connection_id"],
+        )
+        result = ensure_cover(
+            db,
+            context=source_env["context"],
+            bc_id=source_env["bc_id"],
+            material_id=source_env["material_id"],
+            advertiser_id="actual-account",
+            task_key=f"new:{uuid4()}",
+            route=old_route,
+        )
+        assert result.state == "queued"
+        with pytest.raises(DomainError) as error:
+            ensure_cover(
+                db,
+                context=source_env["context"],
+                bc_id=source_env["bc_id"],
+                material_id=source_env["material_id"],
+                advertiser_id="actual-account",
+                task_key=f"new:{uuid4()}",
+                route=route,
             )
         assert error.value.code == "frozen_route_changed"
         assert (
@@ -186,7 +198,7 @@ def test_cover_inherits_target_route_without_relabeling_uploaded_video(
         jobs = db.exec(
             select(MaterialCoverJob).where(MaterialCoverJob.asset_id == identity)
         ).all()
-        assert len(jobs) == 1 and jobs[0].connection_id == second
+        assert len(jobs) == 1 and jobs[0].connection_id == source_env["connection_id"]
     assert wire[0] == []
 
 
@@ -207,7 +219,7 @@ def test_ingest_default_switch_before_first_delivery_uses_accepted_route(
     wire[1].append([{"video_id": "first-source-vid"}])
     run(url_env, redis_client)
     op = operation(url_env)
-    assert op.status == "verifying"
+    assert op.status == "succeeded"
     assert op.frozen_route["connection_id"] == str(url_env["connection_id"])
     assert op.remote_response["connection_id"] == str(url_env["connection_id"])
     assert len(wire[0]) == 1 and wire[0][0][0] == "POST"

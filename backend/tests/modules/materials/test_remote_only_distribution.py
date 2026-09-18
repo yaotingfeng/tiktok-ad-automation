@@ -232,20 +232,19 @@ def test_remote_relay_uses_actual_source_and_target_vid_without_storage(
     )
     run(remote_env, redis_client, prepared.task_id, kind="prepare")
     dist, op, mapping = state(prepared.task_id)
-    assert dist.status == "verifying" and mapping is None
+    assert dist.status == "ready" and mapping.video_id == "actual-target"
     assert op.path == "share_source" and op.remote_response["transport"] == "url_relay"
     assert op.remote_response["source_asset_id"] == str(remote_env["source_id"])
     fields = dict(wire[0][1][2]["fields"])
     assert fields["upload_type"] == "UPLOAD_BY_URL"
     assert fields["video_url"] == PREVIEW and "video_file" not in fields
     assert fields["advertiser_id"] == remote_env["target"]
-    wire[1].append(info(vid="actual-target", material_id="actual-target-mid"))
     run(remote_env, redis_client, prepared.task_id)
     dist, op, mapping = state(prepared.task_id)
     assert dist.status == "ready" and op.status == "succeeded"
     assert mapping.video_id == "actual-target" and mapping.mid == "actual-target-mid"
     assert PREVIEW not in repr(op.remote_response)
-    assert [item[0] for item in wire[0]] == ["GET", "POST", "GET"]
+    assert [item[0] for item in wire[0]] == ["GET", "POST"]
 
 
 @pytest.mark.parametrize(
@@ -266,10 +265,12 @@ def test_relay_target_requires_exact_received_vid_and_strong_media(
     response = info(vid="actual-target")
     response["list"][0].update(mutation)
     wire[1].append(response)
-    run(remote_env, redis_client, prepared.task_id)
+    run(remote_env, redis_client, prepared.task_id, read_only=True)
     dist, op, mapping = state(prepared.task_id)
-    assert dist.status != "ready" and mapping is None
+    assert dist.status != "ready" and mapping.video_id == "actual-target"
+    assert mapping.status != "available"
     assert op.remote_response["video_id"] == "actual-target"
+    assert read(remote_env, remote_env["target"]).state != "ready"
 
 
 def test_remote_preview_get_only_reads_and_never_persists_url(remote_env, wire):
@@ -579,7 +580,7 @@ def test_nested_source_info_uses_bounded_read_budget_and_shared_quota(
     prepared = queue(remote_env, remote_env["target"])
     wire[1].extend([inside_info, [{"video_id": "actual-target"}]])
     run(remote_env, redis_client, prepared.task_id, kind="prepare")
-    assert state(prepared.task_id)[0].status == "verifying"
+    assert state(prepared.task_id)[0].status == "ready"
     assert all(redis_client.zcard(key) == 0 for key in keys[2:])
     assert admission_policy(operation) == policy
 
@@ -674,7 +675,7 @@ def test_exact_source_connection_survives_new_preferred_legal_connection(
         ).connection_id = newer
     wire[1].extend([info(), [{"video_id": "actual-target"}]])
     run(remote_env, redis_client, prepared.task_id, kind="prepare")
-    assert state(prepared.task_id)[0].status == "verifying"
+    assert state(prepared.task_id)[0].status == "ready"
     assert all(
         call[2]["headers"]["Access-Token"] == "offline-token-secret" for call in wire[0]
     )
@@ -715,7 +716,7 @@ def test_deleted_original_target_cover_stays_independent_and_retry_is_read_only(
 
     scopes(remote_env)
     prepared = queue(remote_env, remote_env["target"])
-    wire[1].extend([info(), [{"video_id": "actual-target"}], info(vid="actual-target")])
+    wire[1].extend([info(), [{"video_id": "actual-target"}]])
     run(remote_env, redis_client, prepared.task_id, kind="prepare")
     run(remote_env, redis_client, prepared.task_id)
     with Session(engine) as db, db.begin():
@@ -958,7 +959,13 @@ def test_cleaned_generation_known_target_recheck_still_requires_exact_vid(
     remote_env, redis_client, wire
 ):
     with Session(engine) as db, db.begin():
-        asset(db, remote_env, remote_env["target"], seconds_old=1000)
+        asset(
+            db,
+            remote_env,
+            remote_env["target"],
+            seconds_old=1000,
+            status="result_unknown",
+        )
     prepared = queue(remote_env, remote_env["target"])
     wire[1].append(info(vid="another-video-with-same-content"))
     run(remote_env, redis_client, prepared.task_id)

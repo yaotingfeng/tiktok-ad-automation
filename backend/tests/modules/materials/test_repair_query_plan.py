@@ -20,7 +20,7 @@ from tests.modules.materials.test_source_uploads import wire as wire
 def test_repair_uses_material_primary_key_in_actual_postgres_plan(source_env, wire):
     with Session(engine) as db, db.begin():
         account = target(db, source_env)
-        asset(db, source_env, account, seconds_old=1000)
+        asset(db, source_env, account, status="result_unknown")
     queued = queue(source_env, account)
     assert queued.task_id is not None, queued
     captured = []

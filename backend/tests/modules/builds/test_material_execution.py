@@ -1,5 +1,3 @@
-from datetime import UTC, datetime, timedelta
-
 from sqlmodel import Session, select
 
 from app.modules.builds.execution_models import ExecutionStep
@@ -68,7 +66,7 @@ def test_blocked_material_is_local_failure_and_unrelated_unknown_stays_unknown(
         assert second.status == "UNKNOWN" and second.dispatch_id is None
 
 
-def test_historic_ready_distribution_cannot_trigger_upload_when_mapping_is_stale(
+def test_historic_ready_distribution_cannot_trigger_upload_when_mapping_is_unknown(
     executable, monkeypatch
 ):
     db, context, ids = executable
@@ -80,7 +78,7 @@ def test_historic_ready_distribution_cannot_trigger_upload_when_mapping_is_stale
                 AccountMaterial.material_id == step.material_id
             )
         ).one()
-        asset.verified_at = datetime.now(UTC) - timedelta(hours=1)
+        asset.status = "result_unknown"
         session.add(asset)
 
     def no_effect(*_args, **_kwargs):
