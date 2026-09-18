@@ -232,17 +232,25 @@ def import_verified_replacement(
             source_intent(session, group, route),
         )
         attempt, attempt_id = original_create_attempt(session, source)
+        same_group = replacement_adgroup_id == group.remote_id
         if (
             not isinstance(old_ad, AdCreate)
             or not isinstance(old_group, AdGroupCreate)
             or old_ad.adgroup_id != group.remote_id
-            or replacement_adgroup_id == group.remote_id
             or ad_intent.adgroup_id != replacement_adgroup_id
             or ad_intent.advertiser_id != unit.advertiser_id
             or adgroup_intent.advertiser_id != unit.advertiser_id
-            or not _compatible(old_ad, ad_intent, allowed={"name", "adgroup_id"})
             or not _compatible(
-                old_group, adgroup_intent, allowed={"name", "schedule_start_time"}
+                old_ad,
+                ad_intent,
+                allowed={"name"} if same_group else {"name", "adgroup_id"},
+            )
+            or not _compatible(
+                old_group,
+                adgroup_intent,
+                allowed=set()
+                if same_group
+                else {"name", "schedule_start_time"},
             )
         ):
             raise _invalid("replacement_intent_mismatch")
@@ -275,13 +283,15 @@ def import_verified_replacement(
             for link in group_links
         ):
             raise _invalid("replacement_ownership_conflict")
-        # 停用旧组不能掩盖同组已知成功广告，也不能借用其他任务已有远端对象。
+        # 新组替代必须保证旧组没有成功广告；同组单广告补建则必须保留成功兄弟，
+        # 只禁止借用其他任务已有的远端广告或广告组。
         occupied = SASession.execute(
             session,
             text("""SELECT 1 FROM execution_step e JOIN build_unit u ON u.id=e.unit_id AND u.tenant_id=e.tenant_id
  WHERE e.tenant_id=:tenant AND e.bc_id=:bc AND u.advertiser_id=:advertiser AND
- ((e.kind='AD' AND e.parent_step_id=:group_id AND e.remote_id IS NOT NULL)
- OR (e.kind='AD' AND e.remote_id=:ad) OR (e.kind='ADGROUP' AND e.remote_id=:new_group)) LIMIT 1"""),
+ (((NOT :same_group) AND e.kind='AD' AND e.parent_step_id=:group_id AND e.remote_id IS NOT NULL)
+ OR (e.kind='AD' AND e.remote_id=:ad)
+ OR (e.kind='ADGROUP' AND e.remote_id=:new_group AND e.id<>:group_id)) LIMIT 1"""),
             {
                 "tenant": context.tenant_id,
                 "bc": source.bc_id,
@@ -289,6 +299,7 @@ def import_verified_replacement(
                 "group_id": group.id,
                 "ad": replacement_ad_id,
                 "new_group": replacement_adgroup_id,
+                "same_group": same_group,
             },
         ).first()
         if occupied:
@@ -301,6 +312,7 @@ def import_verified_replacement(
             route=route,
             task_deadline=task_deadline,
         ) as gateway:
+            replacement_group_status = None
             for label, intent, remote_id in (
                 ("ad", ad_intent, replacement_ad_id),
                 ("adgroup", adgroup_intent, replacement_adgroup_id),
@@ -326,6 +338,7 @@ def import_verified_replacement(
                         or status.advertiser_id != unit.advertiser_id
                     ):
                         raise _invalid()
+                    replacement_group_status = status
                     if record.intent is None:
                         record = with_adgroup_status(record=record, status=status)
                     verification["adgroup_status_read"] = asdict(status.evidence)
@@ -335,11 +348,16 @@ def import_verified_replacement(
                 ):
                     raise _invalid()
                 verification[label] = record.model_dump(mode="json")
-            old_status = gateway.builds.read_adgroup_status(
-                advertiser_id=unit.advertiser_id, adgroup_id=group.remote_id
+            assert replacement_group_status is not None
+            old_status = (
+                replacement_group_status
+                if same_group
+                else gateway.builds.read_adgroup_status(
+                    advertiser_id=unit.advertiser_id, adgroup_id=group.remote_id
+                )
             )
             if (
-                old_status.operation_status != "DISABLE"
+                old_status.operation_status != ("ENABLE" if same_group else "DISABLE")
                 or old_status.adgroup_id != group.remote_id
                 or old_status.advertiser_id != unit.advertiser_id
             ):

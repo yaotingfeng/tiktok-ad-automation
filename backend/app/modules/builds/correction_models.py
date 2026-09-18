@@ -64,7 +64,7 @@ class VerifiedReplacement(SQLModel, table=True):
             name="ck_replacement_digests",
         ),
         CheckConstraint(
-            "length(trim(remote_ad_id))>0 AND length(trim(remote_adgroup_id))>0 AND length(trim(original_adgroup_id))>0 AND remote_adgroup_id<>original_adgroup_id",
+            "length(trim(remote_ad_id))>0 AND length(trim(remote_adgroup_id))>0 AND length(trim(original_adgroup_id))>0",
             name="ck_replacement_remote_ids",
         ),
         Index(

@@ -73,10 +73,12 @@ def replacement_env(recon_env):
         session.add(child)
         env.readback_id = child.id
         session.commit()
-    env.ad = decode_intent("AD", ad_body).model_copy(
+    env.original_ad = decode_intent("AD", ad_body)
+    env.original_group = decode_intent("ADGROUP", group_body)
+    env.ad = env.original_ad.model_copy(
         update={"adgroup_id": "replacement-group", "name": "replacement ad"}
     )
-    env.group = decode_intent("ADGROUP", group_body).model_copy(
+    env.group = env.original_group.model_copy(
         update={
             "name": "replacement group",
             "schedule_start_time": "2026-09-15 10:00:00",
@@ -135,6 +137,73 @@ def responses(env, *, ad_status="ENABLE", old_status="DISABLE", mismatch=False):
         raise AssertionError(path)
 
     return rows
+
+
+def test_verified_same_group_reissue_keeps_successful_sibling_and_resolves_source(
+    replacement_env, monkeypatch
+):
+    """Removing the same-group branch must make an approved one-ad reissue fail."""
+    from app.modules.builds.correction_models import VerifiedReplacement
+    from app.modules.builds.submissions import get_submission
+
+    env = replacement_env
+    env.ad = env.original_ad.model_copy(update={"name": "approved reissue ad"})
+    env.group = env.original_group
+    with Session(env.engine) as session:
+        sibling = session.get(ExecutionStep, env.sibling_id)
+        sibling.status, sibling.phase = "SUCCEEDED", "DONE"
+        sibling.remote_id = "successful-sibling-ad"
+        session.add(sibling)
+        session.commit()
+
+    def rows(path, _query):
+        if path.endswith("/smart_plus/ad/get/"):
+            return [
+                {
+                    **encode_intent(env.ad),
+                    "smart_plus_ad_id": "replacement-ad",
+                    "operation_status": "ENABLE",
+                }
+            ]
+        if path.endswith("/smart_plus/adgroup/get/"):
+            return [
+                {
+                    **encode_intent(env.group),
+                    "adgroup_id": "group-parent",
+                }
+            ]
+        if path.endswith("/adgroup/get/"):
+            return [
+                {
+                    "advertiser_id": env.ad.advertiser_id,
+                    "adgroup_id": "group-parent",
+                    "operation_status": "ENABLE",
+                }
+            ]
+        raise AssertionError(path)
+
+    calls = wire(monkeypatch, rows)
+    identity = invoke(
+        env,
+        replacement_adgroup_id="group-parent",
+        ad_intent=env.ad,
+        adgroup_intent=env.group,
+    )
+
+    with Session(env.engine) as session:
+        source = session.get(ExecutionStep, env.ids["AD"])
+        sibling = session.get(ExecutionStep, env.sibling_id)
+        link = session.get(VerifiedReplacement, identity)
+        summary = get_submission(
+            session, context=env.context, submission_id=env.submission_id
+        )
+        assert source.status == "UNKNOWN" and source.remote_id is None
+        assert sibling.status == "SUCCEEDED" and sibling.remote_id is not None
+        assert link.original_adgroup_id == link.remote_adgroup_id == "group-parent"
+        assert link.verification["original_group_status"]["operation_status"] == "ENABLE"
+        assert summary.corrected_ad_count == 1
+        assert summary.unknown.ad_count == 0
+    assert len(calls) == 3
 
 
 def test_verified_replacement_resolves_business_result_and_preserves_attempt(
