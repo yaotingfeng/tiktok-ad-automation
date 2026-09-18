@@ -94,7 +94,7 @@ def wake_seed_dependents(
 def resume_ready_seed_dependents(
     *, database_engine: Any, context: TenantContext, distribution_id: UUID
 ) -> int:
-    """一个短事务先绑定就绪种子的目标集合，再交给公共原生共享器。
+    """逐账户短事务绑定就绪种子的目标集合，再交给公共原生共享器。
 
     不在单个素材回执锁内遍历其他素材；锁序与共享批次保持一致。
     已发送、已绑定来源及不同冻结路由的历史消费者不改写。
@@ -102,13 +102,8 @@ def resume_ready_seed_dependents(
     from .distribution import _load_distribution
     from .source_uploads import READ_HARD_LIMIT
 
-    with (
-        bounded_session(
-            database_engine,
-            task_deadline=datetime.now(UTC) + timedelta(seconds=READ_HARD_LIMIT - 5),
-        ) as db,
-        db.begin(),
-    ):
+    deadline = datetime.now(UTC) + timedelta(seconds=READ_HARD_LIMIT - 5)
+    with bounded_session(database_engine, task_deadline=deadline) as db, db.begin():
         anchor = _load_distribution(db, context, distribution_id)
         if anchor.seed_id is None:
             return 0
@@ -164,83 +159,106 @@ def resume_ready_seed_dependents(
         if not rows:
             # 两次候选读取之间可能已由另一消费者完成，按幂等空操作退出。
             return 0
-        # 与共享发送保持素材→操作的统一锁序；一次锁取整片，避免每个关系
-        # 再独立锁取并刷新三次。保留素材引用使同内容读取复用当前事务身份。
-        locked_materials = db.exec(
-            select(MaterialFile)
-            .where(
-                MaterialFile.tenant_id == context.tenant_id,
-                col(MaterialFile.id).in_({dist.material_id for dist, _ in rows}),
+        # 事务间只传稳定ID与已冻结查询范围，不传ORM对象或权限缓存。
+        groups: dict[str, list[UUID]] = {}
+        for dist, _ in rows:
+            groups.setdefault(dist.advertiser_id, []).append(dist.id)
+    changed = 0
+    # 200关系不挤进一个5秒资源事务；每账户最多20关系，且共享同一入口期限。
+    for advertiser_id in sorted(groups)[:10]:
+        with bounded_session(database_engine, task_deadline=deadline) as db, db.begin():
+            changed += _resume_ready_seed_account(
+                db,
+                context=context,
+                candidates=candidates,
+                identities=groups[advertiser_id],
             )
-            .order_by(col(MaterialFile.id))
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        ).all()
-        locked_operations = db.exec(
-            select(MaterialAssetOperation)
-            .where(
-                MaterialAssetOperation.tenant_id == context.tenant_id,
-                col(MaterialAssetOperation.id).in_({op.id for _, op in rows}),
-            )
-            .order_by(col(MaterialAssetOperation.id))
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        ).all()
-        assert locked_materials and locked_operations
-        # 取得锁后重新检查完整候选条件；并发消费者已绑定的行不再改写。
-        rows = db.exec(
-            candidates.where(
-                col(MaterialDistribution.id).in_({dist.id for dist, _ in rows})
-            ).execution_options(populate_existing=True)
-        ).all()
-        changed = 0
-        ordered = sorted(
-            rows, key=lambda pair: (pair[0].advertiser_id, pair[0].material_id)
+    return changed
+
+
+def _resume_ready_seed_account(
+    db: Session, *, context: TenantContext, candidates: Any, identities: list[UUID]
+) -> int:
+    rows = db.exec(candidates.where(col(MaterialDistribution.id).in_(identities))).all()
+    if not rows:
+        return 0
+    # 与共享发送保持素材→操作的统一锁序；一次锁取整片，避免每个关系
+    # 再独立锁取并刷新三次。保留素材引用使同内容读取复用当前事务身份。
+    locked_materials = db.exec(
+        select(MaterialFile)
+        .where(
+            MaterialFile.tenant_id == context.tenant_id,
+            col(MaterialFile.id).in_({dist.material_id for dist, _ in rows}),
         )
-        for _, grouped in groupby(ordered, key=lambda pair: pair[0].advertiser_id):
-            group = list(grouped)
-            prepared = 0
-            try:
-                # 同账户最多20素材的本地登记复用共同权限；保存点退出前重验。
-                # 这里只绑定依赖，不调用平台；发送时仍逐请求重新鉴权。
-                with db.begin_nested(), local_read_batch(db):
-                    for dist, operation in group:
-                        try:
-                            if not resume_seed_dependency(
-                                db, context=context, dist=dist, operation=operation
-                            ):
-                                prepared += 1
-                        except DomainError as error:
-                            if error.code in {
-                                "tiktok_call_deadline_exceeded",
-                                "tiktok_local_resources_unavailable",
-                            }:
-                                raise
-                            dist.status, dist.reason_code = "blocked", error.code
-                            operation.status = "failed"
-                            operation.remote_response = {
-                                **operation.remote_response,
-                                "definite_no_effect": True,
-                                "error_code": error.code,
-                            }
-            except DomainError as error:
-                if error.code in {
-                    "tiktok_call_deadline_exceeded",
-                    "tiktok_local_resources_unavailable",
-                }:
-                    raise
-                # 最终复核失效时回滚该账户的整片；其它账户继续正常绑定。
+        .order_by(col(MaterialFile.id))
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).all()
+    locked_operations = db.exec(
+        select(MaterialAssetOperation)
+        .where(
+            MaterialAssetOperation.tenant_id == context.tenant_id,
+            col(MaterialAssetOperation.id).in_({op.id for _, op in rows}),
+        )
+        .order_by(col(MaterialAssetOperation.id))
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).all()
+    assert locked_materials and locked_operations
+    # 取得锁后重新检查完整候选条件；并发消费者已绑定的行不再改写。
+    rows = db.exec(
+        candidates.where(
+            col(MaterialDistribution.id).in_({dist.id for dist, _ in rows})
+        ).execution_options(populate_existing=True)
+    ).all()
+    changed = 0
+    ordered = sorted(
+        rows, key=lambda pair: (pair[0].advertiser_id, pair[0].material_id)
+    )
+    for _, grouped in groupby(ordered, key=lambda pair: pair[0].advertiser_id):
+        group = list(grouped)
+        prepared = 0
+        try:
+            # 同账户最多20素材的本地登记复用共同权限；保存点退出前重验。
+            # 这里只绑定依赖，不调用平台；发送时仍逐请求重新鉴权。
+            with db.begin_nested(), local_read_batch(db):
                 for dist, operation in group:
-                    dist.status, dist.reason_code = "blocked", error.code
-                    operation.status = "failed"
-                    operation.remote_response = {
-                        **operation.remote_response,
-                        "definite_no_effect": True,
-                        "error_code": error.code,
-                    }
-            else:
-                changed += prepared
-        return changed
+                    try:
+                        if not resume_seed_dependency(
+                            db, context=context, dist=dist, operation=operation
+                        ):
+                            prepared += 1
+                    except DomainError as error:
+                        if error.code in {
+                            "tiktok_call_deadline_exceeded",
+                            "tiktok_local_resources_unavailable",
+                        }:
+                            raise
+                        dist.status, dist.reason_code = "blocked", error.code
+                        operation.status = "failed"
+                        operation.remote_response = {
+                            **operation.remote_response,
+                            "definite_no_effect": True,
+                            "error_code": error.code,
+                        }
+        except DomainError as error:
+            if error.code in {
+                "tiktok_call_deadline_exceeded",
+                "tiktok_local_resources_unavailable",
+            }:
+                raise
+            # 最终复核失效时回滚该账户的整片；其它账户继续正常绑定。
+            for dist, operation in group:
+                dist.status, dist.reason_code = "blocked", error.code
+                operation.status = "failed"
+                operation.remote_response = {
+                    **operation.remote_response,
+                    "definite_no_effect": True,
+                    "error_code": error.code,
+                }
+        else:
+            changed += prepared
+    return changed
 
 
 def ensure_bc_seed(

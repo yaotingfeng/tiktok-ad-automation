@@ -239,11 +239,12 @@ def test_concurrent_seed_binding_claims_each_relationship_once(
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [pool.submit(resume) for _ in range(2)]
         results = [future.result(timeout=20) for future in futures]
-    assert sorted(results) == [0, 200]
+    assert sum(results) == 200 and all(value >= 0 for value in results)
 
 
 def test_peer_finishes_between_candidate_queries_is_noop(seed_env, redis_client, wire):
-    consumers = ready_matrix(seed_env, redis_client, wire)
+    consumers = [queue(seed_env, seed_env["target"]).task_id]
+    complete_seed(seed_env, redis_client, wire)
     finished = []
 
     def finish_peer(conn, _cursor, statement, _params, _context, _many):
@@ -260,7 +261,7 @@ def test_peer_finishes_between_candidate_queries_is_noop(seed_env, redis_client,
                 context=seed_env["context"],
                 distribution_id=consumers[0],
             )
-            == 200
+            == 1
         )
 
     event.listen(Engine, "after_cursor_execute", finish_peer)
@@ -314,9 +315,13 @@ def test_revoked_target_does_not_poison_other_nine_accounts(
 
 
 def test_ready_matrix_reaches_one_common_share_request(seed_env, redis_client, wire):
+    consumers = ready_matrix(seed_env, redis_client, wire)
+    finish_matrix_share(seed_env, redis_client, wire, consumers)
+
+
+def finish_matrix_share(seed_env, redis_client, wire, consumers):
     import json
 
-    consumers = ready_matrix(seed_env, redis_client, wire)
     with Session(engine) as db:
         sources = db.exec(
             select(AccountMaterial, MaterialFile)
@@ -428,3 +433,66 @@ def test_seed_row_lock_exits_within_budget_and_same_dependencies_resume(
             == 200
         )
     assert len(wire[0]) == before
+
+
+def test_seed_binding_commits_each_account_in_its_own_bounded_transaction(
+    seed_env, redis_client, wire
+):
+    consumers = ready_matrix(seed_env, redis_client, wire)
+    connections = set()
+
+    def record(conn, _cursor, statement, _params, _context, _many):
+        if conn.engine.url.database == engine.url.database and statement.startswith(
+            "UPDATE material_asset_operation"
+        ):
+            connections.add(conn)
+
+    event.listen(Engine, "before_cursor_execute", record)
+    try:
+        assert (
+            bc_seeding.resume_ready_seed_dependents(
+                database_engine=engine,
+                context=seed_env["context"],
+                distribution_id=consumers[0],
+            )
+            == 200
+        )
+    finally:
+        event.remove(Engine, "before_cursor_execute", record)
+    assert len(connections) == 10, "每账户最多20关系，不能200关系共用5秒资源事务"
+
+
+def test_later_account_lock_preserves_progress_then_original_prepare_shares_once(
+    seed_env, redis_client, wire
+):
+    consumers = ready_matrix(seed_env, redis_client, wire)
+    before = len(wire[0])
+    with Session(engine) as blocker, blocker.begin():
+        second = blocker.exec(
+            select(MaterialDistribution).where(
+                MaterialDistribution.id.in_(consumers),
+                MaterialDistribution.advertiser_id == "capacity-1",
+            )
+        ).first()
+        blocker.exec(
+            select(MaterialAssetOperation)
+            .where(
+                MaterialAssetOperation.id == second.operation_id,
+            )
+            .with_for_update()
+        ).one()
+        with pytest.raises(DomainError) as caught:
+            bc_seeding.resume_ready_seed_dependents(
+                database_engine=engine,
+                context=seed_env["context"],
+                distribution_id=consumers[0],
+            )
+        assert caught.value.code == "tiktok_local_resources_unavailable"
+    for identity in consumers:
+        dist, op, _ = state(identity)
+        assert dist.status == "queued" and op.status == "pending"
+        assert (op.remote_response.get("transport") == "native_share") == (
+            dist.advertiser_id == "capacity-0"
+        )
+    assert len(wire[0]) == before
+    finish_matrix_share(seed_env, redis_client, wire, consumers)
