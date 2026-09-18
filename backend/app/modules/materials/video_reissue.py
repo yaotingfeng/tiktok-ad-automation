@@ -114,8 +114,16 @@ def create_video_replacement(
             "new_distribution_id": str(new.id),
             "old_operation_id": str(old.operation_id),
             "new_operation_id": str(new.operation_id),
-            "old_seed_id": str(old_seed.id) if old_seed else None,
-            "new_seed_id": str(lookup_seed.id) if lookup_seed else None,
+            "old_seed_id": str(old_seed.id)
+            if old_seed
+            else str(old.seed_id)
+            if old.seed_id
+            else None,
+            "new_seed_id": str(lookup_seed.id)
+            if lookup_seed
+            else str(new.seed_id)
+            if new.seed_id
+            else None,
             "rebound_consumer_ids": [],
             "rebound_step_ids": [],
         }
@@ -126,6 +134,13 @@ def create_video_replacement(
             MaterialDistribution.id != old.id,
         )
     ).all()
+    # 原分发可能已从成功种子绑定为原生共享；它不是另一个种子 owner。
+    retained_seed = session.get(MaterialBCSeed, old.seed_id) if old.seed_id else None
+    if old.seed_id and (
+        retained_seed is None
+        or (retained_seed.tenant_id, retained_seed.bc_id) != (tenant_id, old.bc_id)
+    ):
+        _reject()
     # 与发送器使用相同素材→操作锁序；将所有别名素材按固定顺序一次锁取。
     materials = session.exec(
         select(MaterialFile)
@@ -133,6 +148,7 @@ def create_video_replacement(
             MaterialFile.tenant_id == tenant_id,
             col(MaterialFile.id).in_(
                 {old.material_id, *(dist.material_id for dist in consumers)}
+                | ({retained_seed.material_id} if retained_seed else set())
             ),
         )
         .order_by(col(MaterialFile.id))
@@ -170,7 +186,6 @@ def create_video_replacement(
         or operation.claimed_until is not None
         or any(operation.remote_response.get(key) for key in positive_keys)
         or operation.remote_response.get("candidates")
-        or old.seed_id is not None
         or old.source_route is None
         or old.source_bc_id is None
         or old.target_route != operation.frozen_route
@@ -217,6 +232,65 @@ def create_video_replacement(
             old.source_route, context=context, bc_id=old.source_bc_id
         ),
     )
+    if retained_seed:
+        # 只允许已绑定且来源仍是该成功 seed 的真实 primary 副本。
+        # 未绑定等待者没有 transport/source VID，不能借补发入口变成 URL 转存。
+        owner = session.get(
+            MaterialDistribution, retained_seed.distribution_id, populate_existing=True
+        )
+        primary = session.get(
+            AccountMaterial, old.source_asset_id, populate_existing=True
+        )
+        seed_material = next(
+            row for row in materials if row.id == retained_seed.material_id
+        )
+        owner_operation = (
+            session.get(
+                MaterialAssetOperation, owner.operation_id, populate_existing=True
+            )
+            if owner
+            else None
+        )
+        if (
+            operation.remote_response.get("transport") != "native_share"
+            or old_seed is not None
+            or owner is None
+            or primary is None
+            or owner_operation is None
+            or owner.status != "ready"
+            or owner.superseded_by_id is not None
+            or owner_operation.status != "succeeded"
+            or owner_operation.superseded_by_id is not None
+            or (owner.tenant_id, owner.bc_id, owner.material_id, owner.advertiser_id)
+            != (
+                tenant_id,
+                old.bc_id,
+                retained_seed.material_id,
+                retained_seed.advertiser_id,
+            )
+            or owner.target_route != old.target_route
+            or owner.target_route != old.source_route
+            or owner_operation.frozen_route != owner.target_route
+            or content_key(material) != retained_seed.content_key
+            or content_key(seed_material) != retained_seed.content_key
+            or (
+                primary.tenant_id,
+                primary.bc_id,
+                primary.material_id,
+                primary.advertiser_id,
+            )
+            != (
+                tenant_id,
+                old.bc_id,
+                retained_seed.material_id,
+                retained_seed.advertiser_id,
+            )
+            or primary.status != "available"
+            or primary.verified_at is None
+            or primary.video_id != operation.remote_response.get("source_video_id")
+            or primary.video_id != owner_operation.remote_response.get("video_id")
+        ):
+            _reject()
     for step in steps:
         unit = session.get(BuildUnit, step.unit_id)
         dependency = (
@@ -371,8 +445,16 @@ def create_video_replacement(
         "new_distribution_id": str(new.id),
         "old_operation_id": str(operation.id),
         "new_operation_id": str(new_operation.id),
-        "old_seed_id": str(old_seed.id) if old_seed else None,
-        "new_seed_id": str(new_seed.id) if new_seed else None,
+        "old_seed_id": str(old_seed.id)
+        if old_seed
+        else str(old.seed_id)
+        if old.seed_id
+        else None,
+        "new_seed_id": str(new_seed.id)
+        if new_seed
+        else str(new.seed_id)
+        if new.seed_id
+        else None,
         "rebound_consumer_ids": [str(dist.id) for dist in consumers],
         "rebound_step_ids": [str(step.id) for step in steps],
     }

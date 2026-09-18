@@ -302,8 +302,9 @@ def test_replacement_runs_native_share_and_continues_original_material_step(
 
 
 @pytest.mark.parametrize("executable", [2], indirect=True)
+@pytest.mark.parametrize("reissue_consumer", [False, True])
 def test_cross_bc_seed_replacement_rebinds_only_original_waiters_and_shares(
-    executable, redis_client, monkeypatch
+    executable, redis_client, monkeypatch, reissue_consumer
 ):
     import json
     from datetime import UTC, datetime
@@ -473,6 +474,7 @@ def test_cross_bc_seed_replacement_rebinds_only_original_waiters_and_shares(
             is None
         )
     calls = []
+    fail_share = [reissue_consumer]
 
     def transport(_pool, method, url, **kwargs):
         calls.append((method, url))
@@ -486,6 +488,13 @@ def test_cross_bc_seed_replacement_rebinds_only_original_waiters_and_shares(
             assert fields["upload_type"] == "UPLOAD_BY_URL"
             data = [{"video_id": "primary-vid", "material_id": "primary-mid"}]
         elif "/share/" in url:
+            if fail_share[0]:
+                from urllib3.exceptions import ReadTimeoutError
+
+                fail_share[0] = False
+                raise ReadTimeoutError(
+                    None, url, "fixture: native share result unknown"
+                )
             data = {}
         else:
             video = (
@@ -532,6 +541,68 @@ def test_cross_bc_seed_replacement_rebinds_only_original_waiters_and_shares(
         distribution_id=new_id,
         kind="prepare",
     )
+    unknown_consumer = None
+    if reissue_consumer:
+        unknown_consumer = consumer_ids[0]
+        run_distribution(
+            database_engine=database,
+            redis_client=redis_client,
+            context=context,
+            distribution_id=unknown_consumer,
+            kind="prepare",
+        )
+        with Session(database) as db, db.begin():
+            old_consumer = db.get(MaterialDistribution, unknown_consumer)
+            old_consumer_op = db.get(MaterialAssetOperation, old_consumer.operation_id)
+            assert old_consumer.status == old_consumer_op.status == "result_unknown"
+            retained_seed_id = old_consumer.seed_id
+            consumer_before = dict(old_consumer_op.remote_response)
+            # 来源失效、内容身份改变和未绑定等待者都不能获得此独立共享补发。
+            for invalid in (
+                "owner_unready",
+                "source_video_changed",
+                "seed_content_changed",
+                "unbound",
+            ):
+                with pytest.raises(DomainError), db.begin_nested():
+                    retained = db.get(MaterialBCSeed, retained_seed_id)
+                    if invalid == "owner_unready":
+                        db.get(
+                            MaterialDistribution, retained.distribution_id
+                        ).status = "verifying"
+                    elif invalid == "source_video_changed":
+                        db.get(
+                            AccountMaterial, old_consumer.source_asset_id
+                        ).video_id = "changed-primary-video"
+                    elif invalid == "seed_content_changed":
+                        retained.content_key = "changed-content-key"
+                    else:
+                        old_consumer_op.remote_response = {}
+                        old_consumer.source_asset_id = None
+                    db.flush()
+                    replace(
+                        db,
+                        executable,
+                        (None, submission_id, unknown_consumer, consumer_before),
+                    )
+            consumer_result = replace(
+                db, executable, (None, submission_id, unknown_consumer, consumer_before)
+            )
+            replacement_id = UUID(consumer_result["new_distribution_id"])
+            replacement = db.get(MaterialDistribution, replacement_id)
+            replacement_op = db.get(MaterialAssetOperation, replacement.operation_id)
+            assert replacement.seed_id == retained_seed_id
+            assert (
+                consumer_result["old_seed_id"]
+                == consumer_result["new_seed_id"]
+                == str(retained_seed_id)
+            )
+            assert replacement_op.remote_response["transport"] == "native_share"
+            assert replacement_op.remote_response["source_video_id"] == "primary-vid"
+            assert db.exec(
+                select(MaterialBCSeed.generation).order_by(MaterialBCSeed.generation)
+            ).all() == [1, 2]
+        consumer_ids[0] = replacement_id
     for consumer_id in consumer_ids:
         for kind in ("prepare", "verify"):
             run_distribution(
@@ -561,6 +632,15 @@ def test_cross_bc_seed_replacement_rebinds_only_original_waiters_and_shares(
             db.get(MaterialDistribution, value).status == "ready"
             for value in consumer_ids
         )
+        if unknown_consumer:
+            original_consumer = db.get(MaterialDistribution, unknown_consumer)
+            assert original_consumer.status == "result_unknown"
+            assert (
+                db.get(
+                    MaterialAssetOperation, original_consumer.operation_id
+                ).remote_response
+                == consumer_before
+            )
         assert db.get(MaterialDistribution, outsider).seed_id == old_seed_id
         old = db.get(MaterialDistribution, old_id)
         assert old.status == "result_unknown"
