@@ -25,6 +25,7 @@ from app.modules.builds.execution_schemas import (
     SubmissionMetadata,
     SubmissionUnitPublic,
 )
+from app.modules.builds.receipt_completion import obsolete_readback_sql
 from app.modules.builds.submissions import (
     _page_scope,
     aggregate_status,
@@ -140,6 +141,46 @@ COUNTS = (
 )
 
 
+# 历史任务的缓存状态可能只因自动核查而停在 NEEDS_REVIEW。只投影受影响
+# 的任务，保留所有步骤原状态；列表、筛选和总数必须使用同一可见结果。
+CATALOG_SUBMISSIONS = (
+    """catalog_submissions AS (
+ SELECT original.*,CASE WHEN original.expanded AND EXISTS (
+ SELECT 1 FROM execution_step s WHERE s.tenant_id=original.tenant_id
+ AND s.submission_id=original.id AND """
+    + obsolete_readback_sql("s")
+    + """) THEN (WITH page AS (SELECT original.*) """
+    + COUNTS
+    + """
+ SELECT CASE
+ WHEN bool_or((e.status='UNKNOWN' OR e.mismatch OR
+ (e.kind IN ('CAMPAIGN','ADGROUP','AD') AND e.status='SUCCEEDED' AND nullif(trim(e.remote_id),'') IS NULL)) AND NOT """
+    + resolved_sql("e")
+    + """) THEN 'NEEDS_REVIEW'
+ WHEN EXISTS (SELECT 1 FROM result_counts WHERE outcome='failed')
+ AND NOT EXISTS (SELECT 1 FROM result_counts WHERE outcome='pending')
+ THEN CASE WHEN EXISTS (SELECT 1 FROM result_counts WHERE outcome='succeeded')
+ THEN 'PARTIAL' ELSE 'FAILED' END
+ WHEN bool_or(e.status IN ('PENDING','RUNNING','RETRYABLE') AND NOT """
+    + resolved_sql("e")
+    + """) THEN 'RUNNING'
+ WHEN bool_and(e.status='SUCCEEDED' OR """
+    + resolved_sql("e")
+    + """) THEN 'COMPLETED'
+ WHEN bool_or(e.status='SUCCEEDED' OR """
+    + resolved_sql("e")
+    + """) AND bool_or(e.status='FAILED' AND NOT """
+    + resolved_sql("e")
+    + """) THEN 'PARTIAL'
+ WHEN bool_and(e.status='FAILED') THEN 'FAILED' ELSE 'QUEUED' END
+ FROM execution_step e WHERE e.tenant_id=original.tenant_id
+ AND e.submission_id=original.id AND NOT """
+    + obsolete_readback_sql("e")
+    + """) ELSE original.status END visible_status
+ FROM build_submission original WHERE original.tenant_id=:tenant)"""
+)
+
+
 def list_submissions(
     session: Session,
     *,
@@ -192,14 +233,16 @@ def list_submissions(
         except ValueError, TypeError:
             raise DomainError("invalid_cursor", "分页游标无效") from None
     query = (
-        """WITH metadata AS ("""
+        "WITH "
+        + CATALOG_SUBMISSIONS
+        + """, metadata AS ("""
         + METADATA
         + """ WHERE s.tenant_id=:tenant), page AS (
  SELECT s.*,p.batch_short_id,m.actor_name,m.provider_name,m.strategy_label
- FROM build_submission s JOIN build_preview p ON p.tenant_id=s.tenant_id AND p.id=s.preview_id JOIN metadata m ON m.submission_id=s.id
+ FROM catalog_submissions s JOIN build_preview p ON p.tenant_id=s.tenant_id AND p.id=s.preview_id JOIN metadata m ON m.submission_id=s.id
  WHERE s.tenant_id=:tenant AND s.bc_id=:bc
  AND (CAST(:from AS timestamptz) IS NULL OR s.created_at>=:from) AND (CAST(:to AS timestamptz) IS NULL OR s.created_at<:to)
- AND (:status='all' OR (:status='active' AND s.status IN ('QUEUED','RUNNING')) OR (:status='attention' AND s.status IN ('PARTIAL','FAILED','NEEDS_REVIEW')) OR (:status='completed' AND s.status='COMPLETED'))
+ AND (:status='all' OR (:status='active' AND s.visible_status IN ('QUEUED','RUNNING')) OR (:status='attention' AND s.visible_status IN ('PARTIAL','FAILED','NEEDS_REVIEW')) OR (:status='completed' AND s.visible_status='COMPLETED'))
  AND (CAST(:provider AS uuid) IS NULL OR EXISTS (SELECT 1 FROM preview_drama d JOIN promotion_link l ON l.tenant_id=d.tenant_id AND l.id=d.link_id WHERE d.tenant_id=s.tenant_id AND d.preview_id=s.preview_id AND l.connection_id=:provider))
  AND (CAST(:q AS text) IS NULL OR strpos(lower(p.batch_short_id),lower(:q))>0 OR strpos(s.id::text,:q)>0 OR strpos(lower(m.actor_name),lower(:q))>0 OR strpos(lower(m.strategy_label),lower(:q))>0 OR strpos(lower(coalesce(m.provider_name,'')),lower(:q))>0
  OR EXISTS (SELECT 1 FROM preview_drama d WHERE d.tenant_id=s.tenant_id AND d.preview_id=s.preview_id AND strpos(lower(d.title),lower(:q))>0)
@@ -227,16 +270,18 @@ def list_submissions(
     }
     total = _scalar_count(
         session,
-        "WITH metadata AS ("
+        "WITH "
+        + CATALOG_SUBMISSIONS
+        + ", metadata AS ("
         + METADATA
         + """ WHERE s.tenant_id=:tenant)
-SELECT count(*) FROM build_submission s
+SELECT count(*) FROM catalog_submissions s
 JOIN build_preview p ON p.tenant_id=s.tenant_id AND p.id=s.preview_id
 JOIN metadata m ON m.submission_id=s.id
 WHERE s.tenant_id=:tenant AND s.bc_id=:bc
 AND (CAST(:from AS timestamptz) IS NULL OR s.created_at>=:from)
 AND (CAST(:to AS timestamptz) IS NULL OR s.created_at<:to)
-AND (:status='all' OR (:status='active' AND s.status IN ('QUEUED','RUNNING')) OR (:status='attention' AND s.status IN ('PARTIAL','FAILED','NEEDS_REVIEW')) OR (:status='completed' AND s.status='COMPLETED'))
+AND (:status='all' OR (:status='active' AND s.visible_status IN ('QUEUED','RUNNING')) OR (:status='attention' AND s.visible_status IN ('PARTIAL','FAILED','NEEDS_REVIEW')) OR (:status='completed' AND s.visible_status='COMPLETED'))
 AND (CAST(:provider AS uuid) IS NULL OR EXISTS (SELECT 1 FROM preview_drama d JOIN promotion_link l ON l.tenant_id=d.tenant_id AND l.id=d.link_id WHERE d.tenant_id=s.tenant_id AND d.preview_id=s.preview_id AND l.connection_id=:provider))
 AND (CAST(:q AS text) IS NULL OR strpos(lower(p.batch_short_id),lower(:q))>0 OR strpos(s.id::text,:q)>0 OR strpos(lower(m.actor_name),lower(:q))>0 OR strpos(lower(m.strategy_label),lower(:q))>0 OR strpos(lower(coalesce(m.provider_name,'')),lower(:q))>0
 OR EXISTS (SELECT 1 FROM preview_drama d WHERE d.tenant_id=s.tenant_id AND d.preview_id=s.preview_id AND strpos(lower(d.title),lower(:q))>0)
@@ -269,12 +314,12 @@ OR EXISTS (SELECT 1 FROM build_unit u WHERE u.tenant_id=s.tenant_id AND u.previe
         }
         items.append(
             SubmissionListItem(
+                status=row["visible_status"],
                 **{
                     k: row[k]
                     for k in [
                         "batch_short_id",
                         "bc_id",
-                        "status",
                         "created_at",
                         "updated_at",
                         "actor_name",
@@ -607,7 +652,9 @@ def enrich_units(
                 + resolved_sql("e")
                 + """) mismatch,
  bool_or(e.kind IN ('CAMPAIGN','ADGROUP','AD') AND e.status='SUCCEEDED' AND nullif(trim(e.remote_id),'') IS NULL) unverified_success
- FROM execution_step e JOIN page u ON e.unit_id=u.id WHERE e.tenant_id=:tenant AND e.submission_id=:submission GROUP BY e.unit_id
+ FROM execution_step e JOIN page u ON e.unit_id=u.id WHERE e.tenant_id=:tenant AND e.submission_id=:submission AND NOT """
+                + obsolete_readback_sql("e")
+                + """ GROUP BY e.unit_id
 ), materials AS (
  SELECT u.id unit_id,count(m.material_id) material_count FROM page u LEFT JOIN preview_group_material m ON m.tenant_id=u.tenant_id AND m.preview_id=u.preview_id AND m.drama_id=u.drama_id
  AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=u.id AND skipped.material_id=m.material_id) GROUP BY u.id

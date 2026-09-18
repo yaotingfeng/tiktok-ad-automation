@@ -140,6 +140,10 @@ def _snapshot(job: MaterialCoverJob, source: MaterialCoverJob) -> dict[str, Any]
         "source_job_id": str(source.id),
         "source_video_id": source.video_id,
         "source_image_id": covers.verified_cover_image_id(source),
+        # 已保存的真实源 MID 随图片身份冻结；仅缺失或非法时再请求平台详情。
+        "source_mid": source.image_mid
+        if source.image_mid and re.fullmatch(r"[0-9]+", source.image_mid)
+        else None,
         "signature": source.signature,
         "width": source.width,
         "height": source.height,

@@ -147,6 +147,9 @@ def recon_env(isolated_strategy_database, monkeypatch, redis_client):
             session, context=context, submission_id=receipt.submission_id
         ):
             pass
+        from tests.modules.builds.legacy_readbacks import add_legacy_readbacks
+
+        add_legacy_readbacks(session, receipt.submission_id)
         for connection in session.exec(
             select(TikTokConnection).where(
                 TikTokConnection.tenant_id == context.tenant_id

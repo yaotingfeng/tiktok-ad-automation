@@ -24,6 +24,9 @@ def expanded(session, context, frozen):
         session, context=context, submission_id=identity
     ):
         pass
+    from tests.modules.builds.legacy_readbacks import add_legacy_readbacks
+
+    add_legacy_readbacks(session, identity)
     return session.get(Submission, identity), list(
         session.exec(
             select(ExecutionStep)

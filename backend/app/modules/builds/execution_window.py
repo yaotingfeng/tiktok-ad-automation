@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_, tuple_
+from sqlalchemy import and_, func, or_, text, tuple_
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
@@ -12,17 +12,19 @@ from app.modules.builds.execution_models import (
     SubmissionUnit,
 )
 from app.modules.builds.preview_models import BuildUnit
+from app.modules.builds.receipt_completion import obsolete_readback_sql
 
 # 与共享接口的账户矩形上限一致；限制活跃图而不提高远端额度/执行槽。
 MAX_ACTIVE_UNITS = 10
 
 
 def window_units():
-    step = aliased(ExecutionStep)
+    step = aliased(ExecutionStep, name="window_step")
     scope = and_(
         col(step.tenant_id) == SubmissionUnit.tenant_id,
         col(step.submission_id) == SubmissionUnit.submission_id,
         col(step.unit_id) == SubmissionUnit.unit_id,
+        text("NOT " + obsolete_readback_sql("window_step")),
     )
     unfinished = select(step.id).where(scope, col(step.status) != "SUCCEEDED").exists()
     blocked = (

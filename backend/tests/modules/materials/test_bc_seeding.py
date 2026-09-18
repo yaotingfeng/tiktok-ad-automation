@@ -56,6 +56,7 @@ def test_foreign_material_waits_for_primary_then_native_target(
         ]
     )
     run(seed_env, redis_client, prepared.task_id, kind="prepare")
+    wire[1].append({"list": []})  # 源VID候选在目标MISS，再取得实际目标ID。
     wire[1].append(
         {
             **info(vid="target-vid", material_id="target-mid", file_name="primary.mp4"),

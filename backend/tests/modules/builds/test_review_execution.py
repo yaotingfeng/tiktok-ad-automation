@@ -447,15 +447,10 @@ def test_review_actual_ad_execution_body_passes_strict_readback(
     for kind in ("MATERIAL", "CTA", "CAMPAIGN", "ADGROUP", "AD"):
         run(executable, redis_client, kind)
     with Session(db) as session:
-        readback = session.exec(
-            select(ExecutionStep).where(
-                ExecutionStep.kind == "READBACK",
-                ExecutionStep.parent_step_id == ids["AD"][0],
-            )
-        ).one()
-        readback_id = readback.id
         source = session.get(ExecutionStep, ids["AD"][0])
         expected, actual_id = source.request_body, source.remote_id
+        # 显式核实原创建仍受同样字段契约保护，不依赖新图中已移除的核查节点。
+        readback_id = source.id
     bounded_readback(monkeypatch)
     reads = []
 

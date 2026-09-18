@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.core.db import engine
 from app.modules.accounts.routing import freeze_route
 from app.modules.materials.ingest_models import TemporaryMaterialObject
-from app.modules.materials.models import MaterialFile
+from app.modules.materials.models import AccountMaterial, MaterialFile
 from tests.modules.builds.test_execution import executable as executable
 from tests.modules.materials.test_distribution import queue, run, state
 from tests.modules.materials.test_readiness import asset, read, target
@@ -256,12 +256,15 @@ def test_remote_relay_uses_actual_source_and_target_vid_without_storage(
         {"displayable": False},
     ],
 )
-def test_relay_target_requires_exact_received_vid_and_strong_media(
+def test_invalidated_relay_target_requires_exact_received_vid_and_strong_media(
     remote_env, redis_client, wire, mutation
 ):
     prepared = queue(remote_env, remote_env["target"])
     wire[1].extend([info(), [{"video_id": "actual-target"}]])
     run(remote_env, redis_client, prepared.task_id, kind="prepare")
+    # 普通成功回执不再追加核查；只有实际映射已失效的恢复才读取平台。
+    with Session(engine) as db, db.begin():
+        db.get(AccountMaterial, state(prepared.task_id)[2].id).status = "unavailable"
     response = info(vid="actual-target")
     response["list"][0].update(mutation)
     wire[1].append(response)

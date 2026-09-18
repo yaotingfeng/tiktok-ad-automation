@@ -188,11 +188,10 @@ def test_remote_commit_lost_reply_uses_get_without_recreating(
 
     def settled():
         # NEEDS_REVIEW has deliberate precedence while unrelated units still run.
-        # Wait for their actual readbacks and the ambiguous create's GET, rather
-        # than interpreting the aggregate label as a worker completion signal.
+        # 等待其余创建的实际回执和丢回执对象的 GET，聚合标签本身不代表结束。
         if not ambiguous:
             return scenario.view().status == "COMPLETED"
-        if wire.calls[get_endpoint] < expected_creates:
+        if wire.calls[get_endpoint] < 1:
             return False
         with Session(scenario.database_engine) as session:
             verified = session.exec(
@@ -200,7 +199,7 @@ def test_remote_commit_lost_reply_uses_get_without_recreating(
                 .select_from(ExecutionStep)
                 .where(
                     ExecutionStep.submission_id == scenario.submission_id,
-                    ExecutionStep.kind == "READBACK",
+                    ExecutionStep.kind.in_(["CAMPAIGN", "ADGROUP", "AD"]),
                     ExecutionStep.status == "SUCCEEDED",
                 )
             ).one()
@@ -211,7 +210,7 @@ def test_remote_commit_lost_reply_uses_get_without_recreating(
     assert wire.calls[create_endpoint] == expected_creates, (
         scenario.runtime.diagnostics()
     )
-    assert wire.calls[get_endpoint] >= expected_creates
+    assert wire.calls[get_endpoint] == 1
     if ambiguous:
         assert view.status == "NEEDS_REVIEW"
         with Session(scenario.database_engine) as session:

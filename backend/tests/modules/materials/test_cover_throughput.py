@@ -81,7 +81,7 @@ def test_source_cover_requires_upload_without_build_and_is_idempotent(source_env
     assert wire[0] == []
 
 
-def test_source_image_mid_comes_from_readback_even_with_complete_upload_receipt(
+def test_source_image_upload_is_ready_before_optional_share_mid_is_needed(
     source_env, redis_client, wire
 ):
     scopes(source_env)
@@ -101,24 +101,13 @@ def test_source_image_mid_comes_from_readback_even_with_complete_upload_receipt(
         ]
     )
     run(source_env, redis_client, identity)
-    assert job_state(identity).status == "VERIFYING"
-    wire[1].append(
-        {
-            "list": [
-                {
-                    "image_id": "tos-source",
-                    "material_id": "900001",
-                    "signature": "a" * 32,
-                    "width": 720,
-                    "height": 1280,
-                    "displayable": False,
-                }
-            ]
-        }
-    )
-    run(source_env, redis_client, identity, read=True)
     job = job_state(identity)
-    assert (job.status, job.image_mid) == ("READY", "900001")
+    assert (job.status, job.known_image_id, job.image_mid) == (
+        "READY",
+        "tos-source",
+        None,
+    )
+    assert len(wire[0]) == 2
 
 
 def page(rows):
@@ -179,7 +168,8 @@ def matrix(env, count=2, targets=2):
                 image(n)["image_id"],
                 image(n)["signature"],
             )
-            job.width, job.height, job.image_mid = 720, 1280, image(n)["material_id"]
+            # 此矩阵覆盖历史源图片缺 MID 的发现路径；回执 MID 复用另有专门回归。
+            job.width, job.height = 720, 1280
             job.dispatch_id = None
             db.get(AccountMaterial, job.asset_id).image_id = job.known_image_id
         ids.extend(
@@ -1152,7 +1142,7 @@ def test_two_materials_with_same_source_image_keep_both_target_jobs(
             job.signature = image(0)["signature"]
             job.image_mid = image(0)["material_id"]
             db.get(AccountMaterial, job.asset_id).image_id = job.known_image_id
-    wire[1].extend([{"list": [image(0)]}, page([]), page([]), {"failed_infos": {}}])
+    wire[1].extend([page([]), page([]), {"failed_infos": {}}])
     drive(source_env, redis_client, identities[0])
     wire[1].extend([page([image(0, target_id=True)])] * 2)
     drive(source_env, redis_client, identities[0], read=True)

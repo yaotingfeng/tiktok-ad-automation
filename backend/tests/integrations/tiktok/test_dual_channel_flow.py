@@ -1,7 +1,7 @@
 """跨阶段真实服务链；所有平台授权和远端响应均为 SYNTHETIC 离线证据。
 
 从生产场景任务和原件入库开始，不播种可用素材或已冻结的广告预览。
-使用同一事实链完成目标分发、封面准备与核实、预览、创建与独立回读。
+使用同一事实链完成目标分发、缺失目标ID获取、封面准备、预览和回执直接创建。
 """
 
 import json
@@ -57,7 +57,7 @@ def _reply(wire, tool, data):
     "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
 )
 @pytest.mark.parametrize("cross_bc", [False, True], ids=["same-bc", "cross-bc"])
-def test_scene_to_enabled_ads_and_readback_uses_one_channel(
+def test_scene_to_enabled_ads_uses_creation_receipts_on_one_channel(
     cross_bc,
     database_engine,
     redis_client,
@@ -181,9 +181,7 @@ def test_scene_to_enabled_ads_and_readback_uses_one_channel(
     _finish_cover(
         database_engine, redis_client, case, gateway_wire, remote, ids, monkeypatch
     )
-    _create_and_readback(
-        database_engine, redis_client, case, gateway_wire, ids, monkeypatch
-    )
+    _create_from_receipts(database_engine, redis_client, case, gateway_wire, ids)
     from app.modules.materials.ingest_models import IngestSessionFile
     from app.modules.materials.models import MaterialFile
 
@@ -403,8 +401,10 @@ def _finish_cover(database_engine, redis_client, case, wire, remote, ids, monkey
         advance(source_id)
     finally:
         wire["before"]["callback"] = None
-    _reply(wire, "file_image_ad_info_get", {"list": [image]})
-    assert advance(source_id, read=True).status == "READY"
+    with Session(database_engine) as db:
+        saved_source = db.get(MaterialCoverJob, source_id)
+        assert saved_source.status == "READY"
+        assert saved_source.image_mid == image["material_id"]
     # 来源等待已经落到持久依赖，不能用空dispatch_id直接执行目标。
     # 推进测试时钟到修复期限，走正式Beat修复函数生成原目标的下一投递。
     from app.modules.materials import covers
@@ -430,11 +430,11 @@ def _finish_cover(database_engine, redis_client, case, wire, remote, ids, monkey
             },
         }
 
-    _reply(wire, "file_image_ad_info_get", {"list": [image]})
     _reply(wire, "file_image_ad_search", page([]))
     _reply(wire, "creative_asset_share_get", {"failed_infos": {}})
     offset = len(wire["sdk_calls"])
-    replies = [{"list": [image]}, page([]), {"failed_infos": {}}]
+    # 源上传已保存 MID，共享不重复读取源图片。
+    replies = [page([]), {"failed_infos": {}}]
     wire["before"]["callback"] = lambda: wire["sdk_data"].update(
         data=replies[min(len(wire["sdk_calls"]) - offset, len(replies) - 1)]
     )
@@ -480,12 +480,10 @@ def _finish_cover(database_engine, redis_client, case, wire, remote, ids, monkey
     )
 
 
-def _create_and_readback(database_engine, redis_client, case, wire, ids, monkeypatch):
+def _create_from_receipts(database_engine, redis_client, case, wire, ids):
     import json
     from decimal import Decimal
 
-    from app.integrations.tiktok.mcp.protocol import load_tool_contracts
-    from app.modules.builds import reconciliation
     from app.modules.builds.execution import process_step
     from app.modules.builds.execution_models import ExecutionStep
     from app.modules.builds.route_models import BuildAttemptContext
@@ -494,7 +492,7 @@ def _create_and_readback(database_engine, redis_client, case, wire, ids, monkeyp
     from tests.modules.builds.test_channel_execution import created
 
     context, route = case["context"], case["route"]
-    monkeypatch.setattr(reconciliation, "require_bounded_worker", lambda: None)
+    sdk_start, mcp_start = len(wire["sdk_calls"]), len(wire["wire"].calls)
     observed = {}
     for kind in ("CAMPAIGN", "ADGROUP", "AD"):
         created(wire, kind)
@@ -548,93 +546,27 @@ def _create_and_readback(database_engine, redis_client, case, wire, ids, monkeyp
                 BuildAttemptContext, (context.tenant_id, step.id, step.attempt)
             )
             assert attempt.attempt_id == step.attempt_id
-        reads = {
-            db.get(ExecutionStep, step.parent_step_id).kind: step.id
-            for step in db.exec(
-                select(ExecutionStep).where(
-                    ExecutionStep.submission_id == original[0].submission_id,
-                    ExecutionStep.kind == "READBACK",
-                )
-            ).all()
-        }
-    sdk_start, mcp_start = len(wire["sdk_calls"]), len(wire["wire"].calls)
-    for kind, row in observed.items():
-        tool = next(
-            contract.tool_name
-            for contract in load_tool_contracts()
-            if contract.operation == BuildWire.operations[kind]
+        assert all(
+            step.status == "SUCCEEDED" and step.checked_at is None for step in original
         )
-        _reply(
-            wire,
-            tool,
-            {
-                "list": [row],
-                "page_info": {
-                    "page": 1,
-                    "page_size": 100,
-                    "total_page": 1,
-                    "total_number": 1,
-                },
-            },
-        )
-        result = reconciliation.process_reconciliation(
-            database_engine=database_engine,
-            redis_client=redis_client,
-            context=context,
-            step_id=reads[kind],
-            revision=0,
-        )
-        with Session(database_engine) as db:
-            step = db.get(ExecutionStep, reads[kind])
-            source = db.get(ExecutionStep, ids[kind])
-            assert step.status == "SUCCEEDED", (kind, result, step.error_code)
-            assert not source.mismatch and source.operation_status == "ENABLE"
-    assert all(call[0] == "GET" for call in wire["sdk_calls"][sdk_start:])
-    mcp_reads = [
+        assert not db.exec(
+            select(ExecutionStep).where(
+                ExecutionStep.submission_id == original[0].submission_id,
+                ExecutionStep.kind == "READBACK",
+            )
+        ).all()
+    assert all(call[0] == "POST" for call in wire["sdk_calls"][sdk_start:])
+    mcp_creates = [
         call["params"]["name"]
         for call in wire["wire"].calls[mcp_start:]
         if call["method"] == "tools/call"
     ]
-    assert all(name.endswith("_get") for name in mcp_reads)
-    assert len(mcp_reads) == (3 if route.channel == "OFFICIAL_MCP" else 0)
+    assert all(name.endswith("_create") for name in mcp_creates)
+    assert len(mcp_creates) == (3 if route.channel == "OFFICIAL_MCP" else 0)
     assert len(wire["sdk_calls"][sdk_start:]) == (
         3 if route.channel == "OFFICIAL_API" else 0
     )
 
-    # 当前CTA详情缺实际advertiser事实时只能保持不完整，不能借请求账户伪造MATCH。
-    from datetime import UTC, datetime, timedelta
-
-    from app.integrations.tiktok.contracts.builds import BuildReadQuery
-    from app.integrations.tiktok.gateway import open_tiktok_gateway
-
-    with Session(database_engine) as db:
-        cta = db.get(ExecutionStep, ids["CTA"])
-        intent = reconciliation.source_intent(db, cta, route)
-    _reply(
-        wire,
-        "creative_portfolio_get",
-        {
-            "creative_portfolio_id": "synthetic-portfolio",
-            "creative_portfolio_type": "CTA",
-            "portfolio_content": [
-                {"asset_ids": ["cta-watch"], "asset_content": "Watch now"}
-            ],
-        },
-    )
-    with open_tiktok_gateway(
-        database_engine=database_engine,
-        redis_client=redis_client,
-        context=context,
-        route=route,
-        task_deadline=datetime.now(UTC) + timedelta(seconds=30),
-    ) as gateway:
-        page = gateway.builds.read_page(
-            query=BuildReadQuery(intent=intent, remote_id="synthetic-portfolio")
-        )
-    assert page.rows[0].remote_id == "synthetic-portfolio"
-    assert (
-        page.rows[0].intent is None and "advertiser_id" in page.rows[0].missing_fields
-    )
     from app.modules.builds.submissions import get_submission
 
     with Session(database_engine) as db:
@@ -700,7 +632,7 @@ def _finish_bc_seed(
     with Session(database_engine) as db:
         owner = db.get(MaterialDistribution, seed_id)
         operation = db.get(MaterialAssetOperation, owner.operation_id)
-        assert owner.status == "verifying", (
+        assert owner.status == "ready", (
             owner.reason_code,
             operation.remote_response,
         )
@@ -719,7 +651,7 @@ def _finish_bc_seed(
         assert db.get(MaterialDistribution, target_task_id).status != "ready"
     if route.channel == "OFFICIAL_API":
         calls = wire["sdk_calls"][sdk_start:]
-        assert [call[0] for call in calls] == ["GET", "POST", "GET"]
+        assert [call[0] for call in calls] == ["GET", "POST"]
         uploads = [
             dict(call[2]["fields"])
             for call in calls
@@ -734,7 +666,6 @@ def _finish_bc_seed(
         assert [call["name"] for call in calls] == [
             "file_video_ad_info_get",
             "file_video_ad_upload",
-            "file_video_ad_info_get",
         ]
         uploads = [
             call["arguments"]
@@ -862,26 +793,37 @@ def _prepare_target(
         assert op.remote_response["transport"] == "native_share"
         assert op.remote_response["share_acknowledged"] is True
         assert "signature=synthetic-only" not in repr(op.remote_response)
+    # 已ACK共享先尝试源VID在目标账户的实际详情；这里目标VID不同，
+    # 明确MISS后再按素材内容发现，不把源VID当作目标ID。
+    _reply(wire, "file_video_ad_info_get", {"list": []})
+    target_details = {
+        "list": [{**details["list"][0], **created}],
+        "page_info": {
+            "page": 1,
+            "page_size": 100,
+            "total_page": 1,
+            "total_number": 1,
+        },
+    }
     _reply(
         wire,
         "file_video_ad_search",
-        {
-            "list": [{**details["list"][0], **created}],
-            "page_info": {
-                "page": 1,
-                "page_size": 100,
-                "total_page": 1,
-                "total_number": 1,
-            },
-        },
+        target_details,
     )
-    run_distribution(
-        database_engine=database_engine,
-        redis_client=redis_client,
-        context=context,
-        distribution_id=prepared.task_id,
-        kind="verify",
+    verify_offset = len(wire["sdk_calls"])
+    wire["before"]["callback"] = lambda: wire["sdk_data"].update(
+        data={"list": []} if len(wire["sdk_calls"]) == verify_offset else target_details
     )
+    try:
+        run_distribution(
+            database_engine=database_engine,
+            redis_client=redis_client,
+            context=context,
+            distribution_id=prepared.task_id,
+            kind="verify",
+        )
+    finally:
+        wire["before"]["callback"] = None
     with Session(database_engine) as db:
         dist = db.get(MaterialDistribution, prepared.task_id)
         assert dist.status == "ready", dist.reason_code
@@ -906,16 +848,18 @@ def _prepare_target(
         assert [call["name"] for call in calls] == [
             "file_video_ad_info_get",
             "creative_asset_share_get",
+            "file_video_ad_info_get",
             "file_video_ad_search",
         ]
         assert [call["arguments"]["advertiser_id"] for call in calls] == [
             source_advertiser,
             source_advertiser,
             target_advertiser,
+            target_advertiser,
         ]
     else:
         calls = wire["sdk_calls"][offset:]
-        assert [call[0] for call in calls] == ["GET", "POST", "GET"]
+        assert [call[0] for call in calls] == ["GET", "POST", "GET", "GET"]
         assert calls[1][1].endswith("/creative/asset/share/")
         assert json.loads(calls[1][2]["body"])["shared_advertiser_ids"] == [
             target_advertiser

@@ -168,7 +168,6 @@ def shared_cover(cover_env, database_engine):
         ("displayable", "false"),
         ("signature", "bad"),
         ("height", 360),
-        ("material_id", None),
     ],
 )
 def test_incomplete_or_malformed_upload_receipt_keeps_real_id_for_readback(

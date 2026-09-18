@@ -882,9 +882,7 @@ def _save_receipt(
                 if value.signature is not None
                 else None
             )
-            if evidence is None or (
-                current.purpose == "SOURCE" and not evidence.get("material_id")
-            ):
+            if evidence is None:
                 _queue(session, current, read=True)
             else:
                 _access(session, context, current, upload=True)
@@ -977,9 +975,7 @@ def _publish_result(
     if evidence is None:
         _stop(current, "cover_result_unknown", unknown=True)
         return
-    if current.purpose == "SOURCE" and not evidence.get("material_id"):
-        _stop(current, "cover_source_mid_missing", unknown=True)
-        return
+    # 成功上传已确认该账户的 image_id；MID 只在跨账户共享时需要，缺失时再发现。
     mapping = _mapping(session, current)
     assert mapping
     mapping.image_id = evidence["image_id"]

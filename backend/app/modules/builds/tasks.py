@@ -32,6 +32,7 @@ from app.modules.builds.execution_models import (
     SubmissionUnit,
 )
 from app.modules.builds.execution_state import evidence
+from app.modules.builds.receipt_completion import is_obsolete_readback
 from app.modules.builds.reconciliation import process_reconciliation
 from app.modules.materials.models import MaterialDistribution
 
@@ -145,7 +146,9 @@ def finish_delivery(
         step.updated_at = datetime.now(UTC)
         session.add(step)
         submission_id = step.submission_id
-        attention = step.status == "UNKNOWN" or step.mismatch
+        attention = (
+            step.status == "UNKNOWN" or step.mismatch
+        ) and not is_obsolete_readback(session, step)
         # Continuation and receipt acknowledgment commit atomically. A crash
         # cannot leave a successful step with no way to wake its dependents.
         wake_unit(session, unit_id=step.unit_id, context=context)

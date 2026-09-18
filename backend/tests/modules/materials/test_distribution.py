@@ -112,13 +112,15 @@ def test_target_share_and_readback_use_actual_target_vid_without_changing_source
     assert state(prepared.task_id)[2] is None
     found = search_info()
     found["list"][0]["video_id"] = "actual-target"
-    wire[1].append(found)
+    # 共享ACK后先按源VID候选取目标详情；本例故意使用不同目标VID，
+    # 候选MISS后通过目标库存取得真实ID，不能把源ID直接当成目标映射。
+    wire[1].extend([{"list": []}, found])
     run(source_env, redis_client, prepared.task_id)
     dist, op, mapping = state(prepared.task_id)
     assert dist.status == "ready" and op.status == "succeeded"
     assert mapping.advertiser_id == account and mapping.video_id == "actual-target"
     assert mapping.image_id is None and mapping.cover_url is None
-    assert [call[0] for call in wire[0]] == ["GET", "POST", "GET"]
+    assert [call[0] for call in wire[0]] == ["GET", "POST", "GET", "GET"]
     assert all("/upload/" not in call[1] for call in wire[0])
     with Session(engine) as session:
         assert session.get(AccountMaterial, source_id).video_id == "vid-actual-account"
@@ -131,7 +133,7 @@ def test_target_share_and_readback_use_actual_target_vid_without_changing_source
             == []
         )
     run(source_env, redis_client, prepared.task_id, kind="prepare", s3=original_s3[0])
-    assert len(wire[0]) == 3
+    assert len(wire[0]) == 4
 
 
 def test_distribution_waits_on_existing_source_operation_without_second_sender(

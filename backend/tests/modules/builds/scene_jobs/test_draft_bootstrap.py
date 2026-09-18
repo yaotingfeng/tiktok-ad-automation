@@ -28,7 +28,7 @@ from tests.modules.strategies.test_versions import config
 
 
 @pytest.fixture
-def source_env(monkeypatch, redis_client, isolated_strategy_database):
+def source_env(monkeypatch, redis_client, isolated_strategy_database, request):
     # Immutable strategy history lives in a disposable DB, never disabled in app code.
     import sys
 
@@ -46,7 +46,7 @@ def source_env(monkeypatch, redis_client, isolated_strategy_database):
         sys.modules[__name__],
     ):
         monkeypatch.setattr(module, "engine", database_engine)
-    generator = source_test.source_env.__wrapped__(monkeypatch, redis_client)
+    generator = source_test.source_env.__wrapped__(monkeypatch, redis_client, request)
     env = next(generator)
     try:
         yield env

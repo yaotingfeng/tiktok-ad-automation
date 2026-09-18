@@ -82,7 +82,7 @@ def test_one_delivery_commits_multiple_bounded_pages(submitted):
         remove()
     done, count, revision, dispatch, error = snapshot(case)
     assert done, "one delivery must continue beyond its first 100-step page"
-    assert count == 264 and revision == 0 and dispatch == identity and error is None
+    assert count == 204 and revision == 0 and dispatch == identity and error is None
     progress = sorted({p[1] for p in pages if p[1]})
     assert len(progress) >= 3
     assert all(b - a <= 100 for a, b in zip([0, *progress[:-1]], progress, strict=True))
@@ -107,7 +107,7 @@ def test_committed_page_survives_worker_loss_and_original_delivery_replay(submit
     assert 0 < first[1] <= 100 and not first[0]
     assert first[2:4] == (0, identity)
     deliver(case)
-    assert snapshot(case)[:4] == (True, 264, 0, identity)
+    assert snapshot(case)[:4] == (True, 204, 0, identity)
 
 
 def test_permission_is_rechecked_after_each_committed_page(submitted):

@@ -171,7 +171,7 @@ def test_dependency_failed_chain_wakes_after_predecessor_success(executable):
         unit_id = cta.unit_id
         for identity in ids["MATERIAL"]:
             session.get(ExecutionStep, identity).status = "SUCCEEDED"
-        for kind in ("CAMPAIGN", "ADGROUP", "AD", "READBACK"):
+        for kind in ("CAMPAIGN", "ADGROUP", "AD"):
             for identity in ids[kind]:
                 step = session.get(ExecutionStep, identity)
                 step.status, step.phase, step.error_code = (
@@ -193,10 +193,7 @@ def test_dependency_failed_chain_wakes_after_predecessor_success(executable):
                 step.dispatch_id = None
     tick(executable, unit_id)
     with Session(db) as session:
-        assert all(
-            session.get(ExecutionStep, identity).status == "QUEUED"
-            for identity in ids["READBACK"]
-        )
+        assert not ids["READBACK"]
         assert session.get(ExecutionStep, ids["CTA"][0]).remote_id == "existing-cta"
 
 

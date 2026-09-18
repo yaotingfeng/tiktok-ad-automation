@@ -32,31 +32,31 @@ def test_bounded_expansion_inserts_one_statement_per_page_and_rolls_back(
     try:
         with pytest.raises(RuntimeError, match="lost page"), session.begin_nested():
             submissions.expand_submission(
-                session, context=context, submission_id=receipt.submission_id, limit=35
+                session, context=context, submission_id=receipt.submission_id, limit=30
             )
             assert (
                 session.exec(select(func.count()).select_from(ExecutionStep)).one()
-                == 35
+                == 30
             )
             raise RuntimeError("lost page")
         assert session.exec(select(func.count()).select_from(ExecutionStep)).one() == 0
         assert len(statements) == 1
         statements.clear()
         submissions.expand_submission(
-            session, context=context, submission_id=receipt.submission_id, limit=35
+            session, context=context, submission_id=receipt.submission_id, limit=30
         )
         assert len(statements) == 1
-        assert session.exec(select(func.count()).select_from(ExecutionStep)).one() == 35
+        assert session.exec(select(func.count()).select_from(ExecutionStep)).one() == 30
     finally:
         event.remove(connection, "before_cursor_execute", record)
-    # Remaining pages cross group/ad/readback parent boundaries. PostgreSQL checks
+    # Remaining pages cross group/ad parent boundaries. PostgreSQL checks
     # self-reference FKs for every actual insert; a replay cannot duplicate steps.
     while not submissions.expand_submission(
         session, context=context, submission_id=receipt.submission_id
     ):
         pass
     before = session.exec(select(func.count()).select_from(ExecutionStep)).one()
-    assert before == 264
+    assert before == 204
     assert submissions.expand_submission(
         session, context=context, submission_id=receipt.submission_id
     )
@@ -80,7 +80,7 @@ def test_step_pages_reuse_compiled_insert_instead_of_rebuilding_all_parameters(
     try:
         for _ in range(4):
             submissions.expand_submission(
-                session, context=context, submission_id=receipt.submission_id, limit=10
+                session, context=context, submission_id=receipt.submission_id, limit=8
             )
     finally:
         event.remove(connection, "before_cursor_execute", record)

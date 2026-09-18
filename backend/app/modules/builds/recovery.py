@@ -29,6 +29,7 @@ from app.modules.builds.execution_state import (
     safely_unsent_attempt,
 )
 from app.modules.builds.preview_models import BuildUnit
+from app.modules.builds.receipt_completion import obsolete_readback_sql
 from app.modules.builds.recovery_models import (
     RecoveryKind,
     RecoveryReceipt,
@@ -192,6 +193,7 @@ RECONCILE_CANDIDATES = """(
 RETRY += " AND NOT " + resolved_sql("s")
 RECONCILE = f"""
 AND NOT {resolved_sql("s")}
+AND NOT {obsolete_readback_sql("s")}
 AND (s.kind<>'MATERIAL' OR (s.cover_job_id IS NULL AND EXISTS (SELECT 1 FROM material_distribution d JOIN material_asset_operation o
  ON o.id=d.operation_id AND o.tenant_id=d.tenant_id AND o.bc_id=d.bc_id AND o.material_id=d.material_id AND o.advertiser_id=d.advertiser_id
  WHERE d.id=s.distribution_id AND d.tenant_id=s.tenant_id AND d.bc_id=s.bc_id AND d.material_id=s.material_id AND d.advertiser_id=u.advertiser_id

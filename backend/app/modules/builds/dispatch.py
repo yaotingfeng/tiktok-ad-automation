@@ -25,6 +25,7 @@ from app.modules.builds.execution_state import (
     expire_attempt,
     safely_unsent_attempt,
 )
+from app.modules.builds.receipt_completion import obsolete_readback_sql
 from app.modules.builds.submission_tasks import queue_execution_unit
 from app.modules.builds.submissions import (
     aggregate_status,
@@ -231,6 +232,7 @@ def finalize_submission(
                 col(ExecutionStep.tenant_id) == row.tenant_id,
                 ExecutionStep.submission_id == row.id,
                 col(ExecutionStep.status).in_(["QUEUED", "RUNNING"]),
+                text("NOT " + obsolete_readback_sql("execution_step")),
             )
             .limit(1)
         ).first()
@@ -247,6 +249,7 @@ def finalize_submission(
                     .where(
                         col(ExecutionStep.tenant_id) == row.tenant_id,
                         ExecutionStep.submission_id == row.id,
+                        text("NOT " + obsolete_readback_sql("execution_step")),
                     )
                     .group_by(col(ExecutionStep.status), col(ExecutionStep.mismatch))
                 ).all()
@@ -371,6 +374,7 @@ def process_unit(
                 ),
             )
             .where(text("NOT " + resolved_sql("execution_step")))
+            .where(text("NOT " + obsolete_readback_sql("execution_step")))
             .where(
                 text(
                     "NOT (kind='MATERIAL' AND status='PENDING' AND ("
@@ -402,6 +406,7 @@ def process_unit(
                     ),
                     col(ExecutionStep.request_body).is_(None),
                     col(ExecutionStep.remote_id).is_(None),
+                    text("NOT " + obsolete_readback_sql("execution_step")),
                 )
                 .order_by(col(ExecutionStep.id))
                 .limit(limit + 1)
@@ -582,6 +587,7 @@ def repair_execution(*, database_engine: Any, limit: int = 100) -> int:
                 )
             )
             .where(text("NOT " + resolved_sql("execution_step")))
+            .where(text("NOT " + obsolete_readback_sql("execution_step")))
             .order_by(col(ExecutionStep.due_at), col(ExecutionStep.id))
             .limit(limit)
             .with_for_update(skip_locked=True)

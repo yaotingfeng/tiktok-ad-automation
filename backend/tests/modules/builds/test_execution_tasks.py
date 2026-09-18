@@ -1,4 +1,4 @@
-"""Durable outbox -> official SDK -> readback, entirely offline remote transport."""
+"""Durable outbox -> official SDK receipts, offline ambiguous-result recovery."""
 
 import json
 from copy import deepcopy
@@ -38,7 +38,7 @@ from tests.modules.builds.test_execution import executable as executable
     ],
     indirect=["executable"],
 )
-def test_outbox_builds_and_reads_all_layers_without_repeating_any_create(
+def test_outbox_builds_all_layers_and_only_reads_ambiguous_creates(
     executable, redis_client, monkeypatch, lose_campaign_receipt, remote_match
 ):
     db, context, _ = executable
@@ -207,7 +207,9 @@ def test_outbox_builds_and_reads_all_layers_without_repeating_any_create(
             for unit in session.exec(select(SubmissionUnit)).all()
         )
     assert sum(m == "POST" for m, _ in calls) == 5 * unit_count
-    assert sum(m == "GET" for m, _ in calls) >= 4 * unit_count
+    assert sum(m == "GET" for m, _ in calls) == (
+        unit_count if lose_campaign_receipt else 0
+    )
 
 
 def test_successful_receipt_lost_before_continuation_is_repaired(executable):

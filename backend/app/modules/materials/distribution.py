@@ -1357,6 +1357,26 @@ def run_distribution(
             )
             if not isinstance(known_id, str) or not known_id.strip():
                 return
+            # 成功回执与当前目标映射一致时，遗留核查投递只消费，不重新
+            # GET 或降级为 verifying；平台暂时空读不能推翻已完成的上传。
+            # 实际负证据、换代/换账户和冲突仍走各自处理，不复活失效映射。
+            if (
+                mapping_fresh(mapping)
+                and mapping is not None
+                and mapping.video_id == known_id
+                and mapping.connection_id
+                == load_material_route(
+                    dist.target_route, context=context, bc_id=dist.bc_id
+                ).connection_id
+                and not operation.remote_response.get("conflicting_video_id")
+            ):
+                dist.status, dist.reason_code = "ready", None
+                # 已消费的旧核查消息不再作为补偿器的当前投递，避免空转。
+                operation.remote_response = {
+                    **operation.remote_response,
+                    "revision": operation.remote_response.get("revision", 0) + 1,
+                }
+                return
             # Revalidate the actual receipt in the same fenced operation. This
             # never reserves a fresh upload or changes source-account history.
             operation.remote_response = {

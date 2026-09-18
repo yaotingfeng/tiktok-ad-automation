@@ -83,7 +83,6 @@ def test_expansion_is_bounded_idempotent_and_snapshot_scoped(session, context, f
         "CAMPAIGN": 6,
         "ADGROUP": 18,
         "AD": 36,
-        "READBACK": 60,
     }
 
 

@@ -312,6 +312,7 @@ def _claim(
 ) -> _Claim | ReconciliationResult:
     step, source, unit = _locked(session, context, step_id)
     from app.modules.builds.corrections import is_resolved
+    from app.modules.builds.receipt_completion import is_obsolete_readback
 
     if is_resolved(session, source):
         return ReconciliationResult("VERIFIED_REPLACEMENT")
@@ -319,6 +320,13 @@ def _claim(
     if step.dispatch_revision != revision:
         return ReconciliationResult("STALE")
     delivered = step.resolved.get("reconciliation_delivery")
+    if is_obsolete_readback(session, step) and not (
+        step.status == "SUCCEEDED"
+        and isinstance(delivered, dict)
+        and delivered.get("revision") == revision
+    ):
+        # 旧消息只结束投递；不写 SUCCEEDED、checked_at 或远端核实证据。
+        return ReconciliationResult("NOT_REQUIRED")
     if isinstance(delivered, dict) and delivered.get("revision") == revision:
         return ReconciliationResult(
             delivered["state"],

@@ -222,16 +222,9 @@ WITH unit_groups AS MATERIALIZED (
  WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=:unit AND skipped.material_id=m.material_id)
  UNION ALL SELECT 1,'CTA',NULL,'CTA',NULL,NULL,NULL
  UNION ALL SELECT 2,'CAMPAIGN',NULL,'CAMPAIGN',NULL,NULL,NULL
- UNION ALL SELECT 3,'READBACK:CAMPAIGN','CAMPAIGN','READBACK',NULL,NULL,NULL
  UNION ALL SELECT 4,'ADGROUP:'||g.id,'CAMPAIGN','ADGROUP',g.id,NULL,NULL
  FROM unit_groups g
- UNION ALL SELECT 5,'READBACK:ADGROUP:'||g.id,'ADGROUP:'||g.id,'READBACK',g.id,NULL,NULL
- FROM unit_groups g
  UNION ALL SELECT 6,'AD:'||a.id,'ADGROUP:'||g.id,'AD',g.id,a.id,NULL
- FROM unit_groups g JOIN LATERAL (
- SELECT id FROM planned_ad WHERE tenant_id=:tenant AND preview_id=:preview AND group_id=g.id OFFSET 0
- ) a ON true
- UNION ALL SELECT 7,'READBACK:AD:'||a.id,'AD:'||a.id,'READBACK',g.id,a.id,NULL
  FROM unit_groups g JOIN LATERAL (
  SELECT id FROM planned_ad WHERE tenant_id=:tenant AND preview_id=:preview AND group_id=g.id OFFSET 0
  ) a ON true)
@@ -579,6 +572,7 @@ def get_submission(
 ) -> SubmissionView:
     from app.modules.builds.corrections import resolved_sql
     from app.modules.builds.execution_schemas import ObjectCounts, SubmissionView
+    from app.modules.builds.receipt_completion import obsolete_readback_sql
 
     authorize(session, context)
     row = submission_row(session, context, submission_id)
@@ -672,7 +666,9 @@ def get_submission(
                 + resolved_sql("s")
                 + " THEN 'VERIFIED_REPLACEMENT' ELSE status END status,count(*) n,bool_or(mismatch AND NOT "
                 + resolved_sql("s")
-                + ") mismatch FROM execution_step s WHERE tenant_id=:tenant AND submission_id=:submission GROUP BY kind,CASE WHEN "
+                + ") mismatch FROM execution_step s WHERE tenant_id=:tenant AND submission_id=:submission AND NOT "
+                + obsolete_readback_sql("s")
+                + " GROUP BY kind,CASE WHEN "
                 + resolved_sql("s")
                 + " THEN 'VERIFIED_REPLACEMENT' ELSE status END"
             ),
@@ -920,6 +916,7 @@ def get_submission_steps(
     from app.core.pagination import Page, count_rows
     from app.modules.accounts.resolver import encode_cursor
     from app.modules.builds.execution_schemas import StepPublic
+    from app.modules.builds.receipt_completion import obsolete_readback_sql
 
     authorize(session, context)
     row = submission_row(session, context, submission_id)
@@ -966,6 +963,7 @@ def get_submission_steps(
         .where(
             ExecutionStep.tenant_id == row.tenant_id,
             ExecutionStep.submission_id == row.id,
+            text("NOT " + obsolete_readback_sql("execution_step")),
         )
     )
     if advertiser_id:
