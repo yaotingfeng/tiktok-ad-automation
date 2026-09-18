@@ -146,15 +146,11 @@ def wake_material_dependencies(*, database_engine: Any, limit: int = 100) -> int
                         ),
                         and_(
                             col(ExecutionStep.error_code) == "material_pending",
-                            col(MaterialDistribution.status).in_(
-                                ["ready", "blocked", "result_unknown"]
-                            ),
+                            col(MaterialDistribution.status) == "result_unknown",
                         ),
                         and_(
                             col(ExecutionStep.error_code) == "cover_pending",
-                            col(MaterialCoverJob.status).in_(
-                                ["READY", "BLOCKED", "UNKNOWN"]
-                            ),
+                            col(MaterialCoverJob.status) == "UNKNOWN",
                         ),
                     ),
                 )
@@ -254,8 +250,8 @@ def wake_material_dependencies(*, database_engine: Any, limit: int = 100) -> int
                 "UNKNOWN",
             }:
                 continue
-            # 这里只恢复投递，不把依赖回执冒充步骤成功。权限、冻结路由、
-            # 视频/封面新鲜度及 UNKNOWN 禁止重传仍由原执行器完整验证。
+            # 明确终态由对应恢复器完整核验并直接落定；这里只恢复真正 UNKNOWN
+            # 的投递，仍由原执行器执行禁止重传与未知结果保护。
             queue_step(session, step=step, submission=row)
             count += 1
     return count

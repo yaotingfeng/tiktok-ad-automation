@@ -38,6 +38,8 @@
 - PostgreSQL 和 Redis 只监听 loopback；Nginx 提供测试入口，API 仅监听 `127.0.0.1:18000`。域名/TLS 状态以本次验收记录为准。
 - systemd 管理 API、Linux prefork Worker（小内存主机先使用 2 个进程）与唯一 Beat；禁止 API/代理访问日志采集授权参数。Beat 状态保存在 `/var/lib/tt-ada-staging`。
 - 当前有界流水线使用 `deploy/staging-worker.service`（resources,resource-results，prefork 2）、`deploy/staging-results.service`（resource-results，prefork 1）、`deploy/staging-builds.service`（builds，prefork 1）及 `deploy/staging-control.service`（control，prefork 1）。共享池沿Redis round_robin与prefetch=1公平消费，专用结果槽保留，素材活跃槽合计3；四个 Worker 加 API、Beat 共六服务11进程，必须统一版本/私有配置并全部覆盖排空、备份、恢复、启动和实际队列订阅核验。旧队列中的 prepare_cover 由正式消费者按原 ID/参数重试到 resources，不执行运维队列搬移。单提交最多10个合格组合活跃，完成或明确阻断自动补位；不扩大共享上游额度。发布后核对内存/交换区，并分别验准备、核验和广告回读。
+- 上述 `Resource=2、Result=1、Build=1、Control=1、Beat=1` 是本低配置测试机的保守专用值。扩容本机或建立未来生产环境时按[首次部署容量评估](deployment.md#首次部署的-worker-容量评估)重新采集 CPU、内存/峰值、数据库连接、队列吞吐和上游额度，逐类加槽并记录回退值；禁止直接复制，也不因队列积压同时提高所有 Worker。
+- 2026-09-19 只读复核：主机 2 核、约 2 GiB RAM，当时可用约 210 MiB，2 GiB swap 已使用约 1.56 GiB；API / Resource / Result / Build / Control 的 `MemoryPeak` 约为 213 / 551 / 310 / 375 / 304 MiB，服务 `NRestarts=0`。该证据说明当前机器没有安全的整体加槽空间，保持现值并优先减少无效调度；未来生产须在自身代表性批次重新测量，不能用这些峰值直接计算。
 - 全新空库通过 Alembic 迁移到固定提交的 head，再初始化管理员。缺少 TikTok/R2/版权方配置时保持未配置，素材导入/清理开关关闭。
 - 后续升级先停止接收写入，停止 Beat 并正常排空 Worker，按通用发布手册备份数据库、Redis、项目文件/构建产物及私有配置（无迁移也必须备份）；迁移成功后切换同版本 API/Worker/Beat。不可通过直接改表或删除数据修复迁移。
 - 验证前端构建、Alembic head、登录和受保护接口、入口检查、Redis/数据库、Worker ping、Beat/outbox；外部真实联调单独验收。

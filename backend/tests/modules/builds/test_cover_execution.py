@@ -11,6 +11,7 @@ from app.jobs.models import PendingDispatch
 from app.modules.accounts.models import AdvertiserAccount, BCAccountAccess
 from app.modules.builds import recovery
 from app.modules.builds.cover_execution import recover_cover_results
+from app.modules.builds.dependency_waits import wake_material_dependencies
 from app.modules.builds.execution import process_step
 from app.modules.builds.execution_models import ExecutionStep, Submission
 from app.modules.builds.material_execution import recover_material_results
@@ -140,6 +141,83 @@ def test_verified_cover_wakes_original_step_only_with_current_actor(
         if not revoked:
             assert step.resolved["mapping"]["image_id"] == "actual-target-cover"
             assert step.resolved["mapping"]["video_id"].startswith("target-")
+
+
+@pytest.mark.parametrize(
+    ("cover_status", "expected_status"),
+    [("READY", "SUCCEEDED"), ("BLOCKED", "FAILED")],
+)
+def test_pending_cover_terminal_result_settles_without_step_delivery(
+    executable, redis_client, cover_status, expected_status
+):
+    identity, job_id, _ = pending(executable, redis_client)
+    db, _, _ = executable
+    with Session(db) as session, session.begin():
+        job = session.get(MaterialCoverJob, job_id)
+        job.status, job.dispatch_id = cover_status, None
+        if cover_status == "READY":
+            job.request_armed_at = datetime.now(UTC)
+            job.known_image_id = "direct-terminal-cover"
+            asset = session.get(AccountMaterial, job.asset_id)
+            asset.image_id = job.known_image_id
+            session.add(asset)
+        session.add(job)
+
+    # READY/BLOCKED 由恢复器完整核验，不能先制造一次本地 Step 投递。
+    assert wake_material_dependencies(database_engine=db) == 0
+    assert recover_cover_results(database_engine=db) == 1
+    with Session(db) as session:
+        step = session.get(ExecutionStep, identity)
+        assert (step.status, step.dispatch_id) == (expected_status, None)
+
+
+def test_pending_cover_permission_denial_keeps_recovery_identity(
+    executable, redis_client
+):
+    identity, job_id, _ = pending(executable, redis_client)
+    db, context, _ = executable
+    with Session(db) as session, session.begin():
+        job = session.get(MaterialCoverJob, job_id)
+        job.status, job.dispatch_id = "READY", None
+        job.request_armed_at = datetime.now(UTC)
+        job.known_image_id = "permission-restorable-cover"
+        asset = session.get(AccountMaterial, job.asset_id)
+        asset.image_id = job.known_image_id
+        member = session.exec(
+            select(TenantMembership).where(
+                TenantMembership.tenant_id == context.tenant_id,
+                TenantMembership.user_id == context.actor_id,
+            )
+        ).one()
+        original_role = member.role
+        member.role = "viewer"
+        session.add_all([job, asset, member])
+
+    assert recover_cover_results(database_engine=db) == 0
+    assert recover_cover_results(database_engine=db) == 0
+    with Session(db) as session:
+        step = session.get(ExecutionStep, identity)
+        assert (step.status, step.error_code, step.dispatch_id) == (
+            "PENDING",
+            "cover_pending",
+            None,
+        )
+        assert step.resolved["dependency_recovery_error"] == "action_forbidden"
+
+    with Session(db) as session, session.begin():
+        member = session.exec(
+            select(TenantMembership).where(
+                TenantMembership.tenant_id == context.tenant_id,
+                TenantMembership.user_id == context.actor_id,
+            )
+        ).one()
+        member.role = original_role
+        session.add(member)
+    assert recover_cover_results(database_engine=db) == 1
+    with Session(db) as session:
+        step = session.get(ExecutionStep, identity)
+        assert step.status == "SUCCEEDED"
+        assert "dependency_recovery_error" not in step.resolved
 
 
 @pytest.mark.parametrize("armed", [False, True])

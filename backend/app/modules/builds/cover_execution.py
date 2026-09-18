@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import and_, or_
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -43,6 +44,15 @@ def cover_matches_step(
         unit.advertiser_id,
         unit.connection_id,
     )
+
+
+def _record_cover_recovery_error(step: ExecutionStep, code: str) -> None:
+    """记录本轮拒绝，但不能破坏 PENDING 依赖下一轮仍可领取的身份。"""
+    if step.status == "PENDING":
+        step.resolved = {**step.resolved, "dependency_recovery_error": code}
+    else:
+        step.error_code = code
+    step.updated_at = datetime.now(UTC)
 
 
 def retry_ad_covers(
@@ -211,7 +221,13 @@ def recover_cover_results(*, database_engine: Any, limit: int = 100) -> int:
             )
             .where(
                 ExecutionStep.kind == "MATERIAL",
-                ExecutionStep.status == "UNKNOWN",
+                or_(
+                    col(ExecutionStep.status) == "UNKNOWN",
+                    and_(
+                        col(ExecutionStep.status) == "PENDING",
+                        col(ExecutionStep.error_code) == "cover_pending",
+                    ),
+                ),
                 col(MaterialCoverJob.status).in_(["READY", "BLOCKED"]),
                 col(MaterialCoverJob.superseded_by_id).is_(None),
             )
@@ -240,7 +256,10 @@ def recover_cover_results(*, database_engine: Any, limit: int = 100) -> int:
                 .with_for_update()
             ).one()
             if (
-                step.status != "UNKNOWN"
+                not (
+                    step.status == "UNKNOWN"
+                    or (step.status == "PENDING" and step.error_code == "cover_pending")
+                )
                 or step.kind != "MATERIAL"
                 or step.cover_job_id is None
             ):
@@ -282,7 +301,7 @@ def recover_cover_results(*, database_engine: Any, limit: int = 100) -> int:
                     raise DomainError("new_preview_required", "账户与冻结预览不一致")
                 result = get_cover_status(session, context=context, job_id=job.id)
             except DomainError as error:
-                step.error_code, step.updated_at = error.code, datetime.now(UTC)
+                _record_cover_recovery_error(step, error.code)
                 session.add(step)
                 continue
             if (
@@ -310,12 +329,16 @@ def recover_cover_results(*, database_engine: Any, limit: int = 100) -> int:
                 )
                 conclusion = "MATERIAL_COVER_BLOCKED"
             else:
-                step.error_code, step.updated_at = (
-                    result.reason_code or "cover_result_unknown",
-                    datetime.now(UTC),
+                _record_cover_recovery_error(
+                    step, result.reason_code or "cover_result_unknown"
                 )
                 session.add(step)
                 continue
+            step.resolved = {
+                key: value
+                for key, value in step.resolved.items()
+                if key != "dependency_recovery_error"
+            }
             step.dispatch_id = step.lease_token = step.lease_expires_at = None
             step.updated_at = datetime.now(UTC)
             session.add(step)

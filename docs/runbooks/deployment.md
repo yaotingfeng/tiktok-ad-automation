@@ -40,6 +40,32 @@
 
 验收记录注明备份目录、所有归档与恢复结果、当前版本/head、服务状态及真实联调边界。保留旧版本和本次完整备份直至恢复要求得到满足；未经核实不自动清理。异地复制是否已配置须如实记录，同机副本不能代替异地恢复能力。
 
+## 首次部署的 Worker 容量评估
+
+首次部署不能直接复制另一台服务器的 Celery `--concurrency`。先记录实际 CPU 核数、可用内存、swap、磁盘余量、PostgreSQL/Redis 是否同机、API 进程数和数据库连接预算，再核对 `TIKTOK_CALL_POLICIES` 的共享额度域、请求速率与最大并发。Beat 固定只能 1 个，Control Worker 从 1 槽开始；Resource、Result、Build 分开评估，不能只看总 Worker 数。
+
+在目标 Linux 主机采集基线，命令输出不得包含私有环境变量：
+
+```bash
+nproc
+free -h
+swapon --show
+df -h / /opt /var/lib/postgresql /var/lib/redis
+systemctl show tt-ada-<env>-api tt-ada-<env>-worker tt-ada-<env>-results tt-ada-<env>-builds tt-ada-<env>-control \
+  -p MemoryCurrent -p MemoryPeak -p TasksCurrent -p NRestarts
+```
+
+并发上限取以下四项中的最小值：
+
+1. **内存**：先为操作系统、PostgreSQL、Redis、API 预留实际稳态用量，再额外保留至少 25% 主机内存安全余量；可分给某类 Worker 的内存除以代表性批次测得的单槽 `MemoryPeak`，向下取整。不能用空闲启动时内存代替峰值。
+2. **CPU**：视频探测、摘要和本地编译等 CPU 工作的并行数不超过可用核心；网络等待任务只有在内存、数据库和上游边界都有余量时才允许高于核心数。
+3. **数据库**：API 最大连接、所有 Worker 槽、Beat/运维连接总预算低于 PostgreSQL `max_connections`，并保留至少 20% 运维和恢复余量；连接池等待或锁等待持续增长即停止加槽。
+4. **上游额度**：同一共享额度域的有效槽不超过 `app_max_inflight`，单操作不超过 `endpoint_max_inflight`，请求速率不超过窗口限制。超过额度的进程不会提升有效吞吐，只会增加等待、租约和重试。
+
+用与预计业务相当的代表性批次从保守值开始，每次只给一种 Worker 增加 1 槽，至少观察一个完整批次。记录每阶段完成数/分钟、队列长度斜率、P50/P95、超时/限流/重试、PostgreSQL 活跃连接与锁等待、各服务 `MemoryPeak`、swap 和 `NRestarts`。吞吐继续提高且没有持续 swap、OOM、连接逼近预算、锁等待或限流上升时才保留；任一指标恶化即回退一级。最终值、测量批次、策略上限和回退值写入该环境专用手册。
+
+测试环境当前 `Resource=2、Result=1、Build=1、Control=1、Beat=1` 是低配置新加坡测试机的保守结果，不是推荐生产默认值。未来生产服务器提供后，必须按上述过程重新测量；不得因测试值稳定就复制到生产，也不得只增加 Builds 并发掩盖依赖重复投递。
+
 ## 预览单条素材隔离升级
 
 包含单条素材隔离功能的版本需执行 `preview_skipped_materials` 迁移。新表保存按账户冻结的排除素材、文件名及原因，旧预览不回填、不改摘要；上线后需由用户修改草稿生成新预览才应用筛选规则。完整备份/隔离恢复须包含此表。存在排除记录时禁止降级删除，也不能只切回不识别排除集合的旧程序，避免旧素材重新进入已确认广告；优先前向修复，必要恢复须停写并使用一致备份。API、Worker 与恢复进程必须同时更新。无需新增开关，现有值保持。验证范围见[单条素材隔离记录](../validation/2026-09-17-preview-partial-materials.md)。

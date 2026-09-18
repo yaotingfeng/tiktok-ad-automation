@@ -1333,3 +1333,12 @@
 - 新增独立 `scenes` 准备阶段；选择后直接校验账户场景，保留全部剧目、账户、链接和素材。更换小程序时复用同账户/冻结路由下仍新鲜且合同一致的四类 Mini 无关事实，并保留目录与共同场景来源证据；无可复用事实时继续真实校验，不降低安全边界。
 - 73 项后端回归、1 项 Playwright、Ruff、TypeScript/Vite、迁移降级/升级往返及差异检查通过。与嘉书租户备注修改合并验证共 104 项通过；无新开关、无真实平台写入。
 - `9fd1f01fb9b275429eb2783e485a659be6a136da` 已推送并部署新加坡测试服。`154726Z` 五份归档、1,399 个项目文件、22 张表、1,891 份加密响应及 PostgreSQL/Redis 独立恢复和迁移演练通过；正式 head 为 `draft_scene_phase`。六项服务、4 个 Worker、HTTPS、真实管理员登录与原开关通过，发布后 error 日志为 0。详见[验证记录](validation/2026-09-18-mini-selection-scene-reuse.md)。
+
+## 2026-09-19 构建依赖落定与 Worker 容量优化（本地完成，未发布）
+
+- 明确 `ready/blocked` 的视频分发及 `READY/BLOCKED` 封面由原恢复器复用租户权限、冻结路由、目标账户和当前映射校验后直接落定 MATERIAL 步骤，不再先生成一条 `builds.execute_step` 做重复本地确认。`result_unknown/UNKNOWN`、armed、候选 ID、映射不一致及远端效果不明继续走原未知保护。
+- 通用依赖唤醒器只接管真正未知结果和窗口规划；`wake_unit` 仅提前未来到期的依赖行，已到期行不再被同批前置完成反复 UPDATE，现有 Unit 消息合并和丢消息 repair 保持。
+- 复审补充 PENDING 权限/映射暂时拒绝保护：等待错误码不被覆盖，拒绝原因写入 `resolved.dependency_recovery_error`，条件恢复后仍可被同一恢复器领取，避免优化形成新卡死。两项回归先失败后通过。
+- 新加坡隔离真实 PostgreSQL/Redis：相关五文件 60 passed / 1 deselected / 246.63 秒；排除项 `test_wake_waiting_for_consumer_lock_schedules_followup` 已在当前未修改 `f0e089d` 基线独立复现同样失败，不计本轮回归。最终权限边界修改后素材/封面 33 passed / 88.80 秒，观察字段终态清理再定向 2 passed / 6.09 秒。临时库/目录已删除，测试角色恢复 `NOLOGIN NOCREATEDB` 并撤销 `pg_signal_backend`；六服务 active、`NRestarts=0`。
+- 服务器只读容量证据：2 核、约 2 GiB RAM、采样时可用约 210 MiB，2 GiB swap 已用约 1.56 GiB；当前 `Resource=2、Result=1、Build=1、Control=1、Beat=1` 不上调。部署手册新增内存/CPU/数据库连接/上游额度四重边界、逐槽代表性批次压测和回退标准，未来生产不得复制测试值。
+- Ruff 全量检查、改动文件格式、ty app、compileall 和最终差异检查通过。全仓格式检查另报告 10 个本轮未改文件的既有格式差异，未混入本提交。本轮无迁移、无新开关、无 TikTok 调用、未推送、未替换服务器 release 或重启服务。

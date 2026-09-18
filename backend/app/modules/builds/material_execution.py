@@ -51,6 +51,15 @@ def material_needs_planning(
         return False
 
 
+def _record_material_recovery_error(step: ExecutionStep, code: str) -> None:
+    """保留 PENDING 的领取键；权限或映射恢复后仍由同一依赖继续推进。"""
+    if step.status == "PENDING":
+        step.resolved = {**step.resolved, "dependency_recovery_error": code}
+    else:
+        step.error_code = code
+    step.updated_at = datetime.now(UTC)
+
+
 def plan_material_slice(
     *,
     database_engine: Any,
@@ -242,18 +251,29 @@ def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
             )
             .where(
                 ExecutionStep.kind == "MATERIAL",
-                ExecutionStep.status == "UNKNOWN",
                 col(MaterialDistribution.superseded_by_id).is_(None),
                 col(ExecutionStep.cover_job_id).is_(None),
                 or_(
-                    col(MaterialDistribution.status).in_(["ready", "blocked"]),
                     and_(
-                        col(MaterialDistribution.status) == "result_unknown",
-                        col(MaterialDistribution.reason_code)
-                        == "material_reconciliation_budget_exhausted",
-                        col(ExecutionStep.resolved)[
-                            "reconciliation_reason"
-                        ].astext.is_distinct_from(MaterialDistribution.reason_code),
+                        col(ExecutionStep.status) == "UNKNOWN",
+                        or_(
+                            col(MaterialDistribution.status).in_(["ready", "blocked"]),
+                            and_(
+                                col(MaterialDistribution.status) == "result_unknown",
+                                col(MaterialDistribution.reason_code)
+                                == "material_reconciliation_budget_exhausted",
+                                col(ExecutionStep.resolved)[
+                                    "reconciliation_reason"
+                                ].astext.is_distinct_from(
+                                    MaterialDistribution.reason_code
+                                ),
+                            ),
+                        ),
+                    ),
+                    and_(
+                        col(ExecutionStep.status) == "PENDING",
+                        col(ExecutionStep.error_code) == "material_pending",
+                        col(MaterialDistribution.status).in_(["ready", "blocked"]),
                     ),
                 ),
             )
@@ -283,7 +303,13 @@ def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
             ).one()
             if (
                 step.kind != "MATERIAL"
-                or step.status != "UNKNOWN"
+                or not (
+                    step.status == "UNKNOWN"
+                    or (
+                        step.status == "PENDING"
+                        and step.error_code == "material_pending"
+                    )
+                )
                 or step.distribution_id is None
                 or step.cover_job_id is not None
             ):
@@ -369,10 +395,9 @@ def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
                 and operation
                 and operation.status in {"sending", "result_unknown", "verifying"}
             ):
-                step.error_code = (
-                    denied or dist.reason_code or "material_result_unknown"
+                _record_material_recovery_error(
+                    step, denied or dist.reason_code or "material_result_unknown"
                 )
-                step.updated_at = datetime.now(UTC)
                 session.add(step)
                 continue
             if dist.status == "ready" and denied is None:
@@ -395,8 +420,9 @@ def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
                     # A historic distribution receipt is not proof of a current
                     # target mapping. Keep uncertainty; never call an upload-capable
                     # ensure helper to recover an ambiguous upload.
-                    step.error_code = "target_asset_requires_reconciliation"
-                    step.updated_at = datetime.now(UTC)
+                    _record_material_recovery_error(
+                        step, "target_asset_requires_reconciliation"
+                    )
                     session.add(step)
                     continue
                 step.status, step.phase, step.error_code = "SUCCEEDED", "DONE", None
@@ -411,6 +437,11 @@ def recover_material_results(*, database_engine: Any, limit: int = 100) -> int:
                 step.error_code = denied or dist.reason_code or "material_blocked"
                 step.dispatch_id = None
                 conclusion = "MATERIAL_BLOCKED"
+            step.resolved = {
+                key: value
+                for key, value in step.resolved.items()
+                if key != "dependency_recovery_error"
+            }
             step.lease_token = step.lease_expires_at = None
             step.updated_at = datetime.now(UTC)
             session.add(step)

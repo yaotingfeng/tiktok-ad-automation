@@ -1,6 +1,7 @@
 from sqlmodel import Session, select
 
 from app.core.errors import DomainError
+from app.modules.builds.dependency_waits import wake_material_dependencies
 from app.modules.builds.execution_models import ExecutionStep
 from app.modules.builds.material_execution import recover_material_results
 from app.modules.builds.routes import load_preview_route
@@ -28,6 +29,62 @@ def unresolved(db, context, identity, *, status="result_unknown"):
         step.status, step.phase, step.distribution_id = "UNKNOWN", "DONE", dist.id
         session.add(step)
         return dist.id
+
+
+def waiting(db, context, identity, *, status):
+    dist_id = unresolved(db, context, identity, status=status)
+    with Session(db) as session, session.begin():
+        step = session.get(ExecutionStep, identity)
+        step.status, step.phase, step.error_code = "PENDING", "IDLE", "material_pending"
+        step.dispatch_id = None
+        session.add(step)
+    return dist_id
+
+
+def test_pending_material_terminal_result_settles_without_step_delivery(executable):
+    db, context, ids = executable
+    ready, blocked = ids["MATERIAL"][:2]
+    waiting(db, context, ready, status="ready")
+    waiting(db, context, blocked, status="blocked")
+
+    # 通用唤醒不再把明确终态绕回 Builds Worker；恢复器在同一轮直接落定。
+    assert wake_material_dependencies(database_engine=db) == 0
+    assert recover_material_results(database_engine=db) == 2
+    with Session(db) as session:
+        ready_step = session.get(ExecutionStep, ready)
+        blocked_step = session.get(ExecutionStep, blocked)
+        assert (ready_step.status, ready_step.dispatch_id) == ("SUCCEEDED", None)
+        assert (blocked_step.status, blocked_step.dispatch_id) == ("FAILED", None)
+
+
+def test_pending_material_permission_denial_keeps_recovery_identity(
+    executable, monkeypatch
+):
+    db, context, ids = executable
+    identity = ids["MATERIAL"][0]
+    waiting(db, context, identity, status="ready")
+
+    def denied(*_args, **_kwargs):
+        raise DomainError("account_access_denied", "denied")
+
+    monkeypatch.setattr("app.modules.builds.material_execution.require_tenant", denied)
+    assert recover_material_results(database_engine=db) == 0
+    assert recover_material_results(database_engine=db) == 0
+    with Session(db) as session:
+        step = session.get(ExecutionStep, identity)
+        assert (step.status, step.error_code, step.dispatch_id) == (
+            "PENDING",
+            "material_pending",
+            None,
+        )
+        assert step.resolved["dependency_recovery_error"] == "account_access_denied"
+
+    monkeypatch.undo()
+    assert recover_material_results(database_engine=db) == 1
+    with Session(db) as session:
+        step = session.get(ExecutionStep, identity)
+        assert step.status == "SUCCEEDED"
+        assert "dependency_recovery_error" not in step.resolved
 
 
 def test_unknown_material_resumes_only_after_verified_target_result(

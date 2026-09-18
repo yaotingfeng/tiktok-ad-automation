@@ -8,7 +8,10 @@ from sqlmodel import Session, col, select
 from app.jobs.models import PendingDispatch
 from app.modules.builds.dependency_waits import wake_material_dependencies
 from app.modules.builds.execution_models import ExecutionStep
-from app.modules.builds.material_execution import plan_material_slice
+from app.modules.builds.material_execution import (
+    plan_material_slice,
+    recover_material_results,
+)
 from app.modules.materials.models import MaterialDistribution
 from tests.modules.builds.test_material_matrix_planning import (
     executable as executable,
@@ -119,7 +122,7 @@ def test_settled_slice_registers_next_slice_before_any_future_step_delivery(matr
 
 @pytest.mark.parametrize("executable", [10], indirect=True)
 @pytest.mark.parametrize("material_count", [22], indirect=True)
-def test_active_slice_waiters_do_not_starve_settled_dependencies_at_page_limit(matrix):
+def test_active_slice_waiters_do_not_starve_direct_settlement_at_page_limit(matrix):
     database, context, _, _ = matrix
     park_future(matrix)
     with Session(database) as db, db.begin():
@@ -133,10 +136,12 @@ def test_active_slice_waiters_do_not_starve_settled_dependencies_at_page_limit(m
         distribution = db.get(MaterialDistribution, step.distribution_id)
         distribution.status = "blocked"
         distribution.reason_code = "fixture_definite_no_effect"
-    assert wake_material_dependencies(database_engine=database, limit=1) == 1
+    # 明确终态在通用等待分页之前由恢复器领取，不再排一条 Builds 消息。
+    assert recover_material_results(database_engine=database, limit=1) == 1
+    assert wake_material_dependencies(database_engine=database, limit=1) == 0
     with Session(database) as db:
-        assert db.get(ExecutionStep, identity).status == "QUEUED"
-        assert db.get(ExecutionStep, identity).dispatch_id is not None
+        assert db.get(ExecutionStep, identity).status == "FAILED"
+        assert db.get(ExecutionStep, identity).dispatch_id is None
 
 
 @pytest.mark.parametrize("executable", [10], indirect=True)

@@ -123,6 +123,7 @@ def wake_unit(session: Session, *, unit_id: UUID, context: TenantContext) -> Non
         raise DomainError("action_forbidden", "提交操作者不匹配")
     # A predecessor just changed. Make dependent local checks eligible again,
     # leaving transport backoff and in-flight steps untouched.
+    now = datetime.now(UTC)
     SASession.execute(
         session,
         update(ExecutionStep)
@@ -133,8 +134,10 @@ def wake_unit(session: Session, *, unit_id: UUID, context: TenantContext) -> Non
             col(ExecutionStep.error_code).in_(
                 ["dependency_pending", "dependency_unknown"]
             ),
+            # 同一批前置会连续完成；已到期的行无需反复改写和争锁。
+            col(ExecutionStep.due_at) > now,
         )
-        .values(due_at=datetime.now(UTC)),
+        .values(due_at=now),
     )
     current = (
         session.get(PendingDispatch, unit.dispatch_id) if unit.dispatch_id else None

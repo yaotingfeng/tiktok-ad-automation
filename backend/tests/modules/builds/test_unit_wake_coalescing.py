@@ -18,7 +18,7 @@ from app.modules.builds.dispatch import (
     repair_execution,
     wake_unit,
 )
-from app.modules.builds.execution_models import SubmissionUnit
+from app.modules.builds.execution_models import ExecutionStep, SubmissionUnit
 from tests.modules.builds.test_execution import executable as executable
 
 
@@ -95,6 +95,38 @@ def test_unit_wake_preserves_existing_broker_backoff(executable):
         row = session.get(PendingDispatch, unit.dispatch_id)
         assert (unit.dispatch_id, unit.dispatch_revision) == (identity, revision)
         assert (row.available_at, row.attempts) == (future, 3)
+
+
+def test_unit_wake_only_accelerates_future_dependency_rows(executable):
+    db, context, ids = executable
+    past = datetime.now(UTC) - timedelta(minutes=2)
+    future = datetime.now(UTC) + timedelta(minutes=2)
+    with Session(db) as session, session.begin():
+        unit = session.exec(select(SubmissionUnit)).one()
+        unit_id = unit.unit_id
+        past_step = session.get(ExecutionStep, ids["ADGROUP"][0])
+        future_step = session.get(ExecutionStep, ids["AD"][0])
+        past_id, future_id = past_step.id, future_step.id
+        for step, due_at in [(past_step, past), (future_step, future)]:
+            step.status, step.error_code, step.due_at = (
+                "PENDING",
+                "dependency_pending",
+                due_at,
+            )
+            session.add(step)
+
+    with Session(db) as session, session.begin():
+        wake_unit(session, unit_id=unit_id, context=context)
+    with Session(db) as session:
+        assert session.get(ExecutionStep, past_id).due_at == past
+        accelerated = session.get(ExecutionStep, future_id).due_at
+        assert past < accelerated < future
+
+    with Session(db) as session, session.begin():
+        wake_unit(session, unit_id=unit_id, context=context)
+    with Session(db) as session:
+        assert session.get(ExecutionStep, past_id).due_at == past
+        assert session.get(ExecutionStep, future_id).due_at == accelerated
 
 
 @pytest.mark.parametrize("changed", ["tenant", "actor", "unit", "revision"])
