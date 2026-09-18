@@ -35,6 +35,7 @@ from app.modules.providers.repository import (
     get_or_create_effect,
 )
 from app.modules.providers.schemas import DramaCandidate, ResolvedLink, link_reuse_key
+from app.modules.tenants.models import Tenant
 from app.modules.tenants.permissions import require_tenant
 
 CLAIM_SECONDS = 60
@@ -750,6 +751,12 @@ def run_link_item(
         kind = connection.kind
         _authority(session, context, connection, work)
         stage = work["stage"]
+        tenant_name = ""
+        if kind == "jiashu" and stage == "create":
+            tenant = session.get(Tenant, context.tenant_id, populate_existing=True)
+            if tenant is None:
+                raise _error("tenant_forbidden")
+            tenant_name = tenant.name
         # Close snapshot transaction before the factory/HTTP call; no database
         # row lock spans network I/O. Factory rechecks live tenant/app authority.
         connection_id, application_id, kind, raw_input, config = (
@@ -929,7 +936,11 @@ def run_link_item(
                         "vid": work["drama"]["external_drama_id"],
                     }
                     if stage == "create":
-                        payload["remark"] = work["drama"]["title"]
+                        # 嘉书备注用于后台人工追溯；渠道匹配仍只依赖渠道前缀和剧目 ID。
+                        payload["remark"] = (
+                            f"{work['drama']['external_drama_id']}-"
+                            f"{work['drama']['title']}-{tenant_name}"
+                        )
                     else:
                         payload.update(
                             drama_num=_positive(config.get("episode", 1)),

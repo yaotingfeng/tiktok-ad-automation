@@ -74,6 +74,7 @@ class SimulatedCrash(BaseException):
 class RemoteFixture:
     def __init__(self):
         self.calls = []
+        self.requests = []
         self.channel_exists = False
         self.saved = {}
         self.fail = None
@@ -87,6 +88,7 @@ class RemoteFixture:
         payload = json.loads(request.content)
         path = request.url.path.rsplit("/", 1)[-1]
         self.calls.append(path)
+        self.requests.append((path, payload))
         if path == "getVideoList":
             data = {"data": self.drama_rows, "count": len(self.drama_rows)}
         elif path == "getChannelList":
@@ -268,6 +270,12 @@ def test_entire_jiashu_chain_commits_four_independent_effects(workflow):
         "getGuideUrl",
     ]
     with Session(engine) as session:
+        tenant = session.get(Tenant, workflow[0].tenant_id)
+        assert tenant is not None
+        create_payload = next(
+            payload for path, payload in workflow[2].requests if path == "create"
+        )
+        assert create_payload["remark"] == f"101-Moon-{tenant.name}"
         effects = session.exec(
             select(ProviderEffect).where(
                 ProviderEffect.tenant_id == workflow[0].tenant_id
