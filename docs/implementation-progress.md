@@ -1294,3 +1294,10 @@
 
 - 搭建任务的「查看明细」与「查看原因」侧栏在桌面端由默认 576px 提升到 1024px，小屏继续使用全宽；仅调整这两个承载列表的侧栏，不影响其他管理表单。
 - 定向 Playwright 用例覆盖两个侧栏的实际计算宽度并通过；TypeScript 与 Biome 检查通过。未发布到服务器。
+
+## 2026-09-18 新骏伯 UNKNOWN 广告同组补建闭环
+
+- 根因不是素材或封面：原 `sp2` 请求已发送但 TikTok 返回业务码 40002 且无广告 ID；四次完整回读只有同组成功 `sp1`。用户明确接受重复广告风险并要求重建后，增加同组单条补建核实分支：原 UNKNOWN、attempt、请求摘要和兄弟广告永久保留，新广告只允许改名，原组配置必须完全一致且保持 ENABLE。
+- 红测先因 `replacement_intent_mismatch` 失败；实现后补建专项 14 项通过，Ruff、ty、单一 Alembic head 通过。较宽组合为 57 passed / 1 个既有 `test_list_uses_one_page_aggregate_not_per_task_queries` 失败；该断言在独立运行也复现，与本轮 correction/migration 无数据流交集，未把它报告为全绿。
+- `d391dec` 已推送并部署到新加坡测试服。`132252Z` 完整备份、1,395 项目文件、Redis、22 表和 1,767 份加密响应独立恢复，恢复库迁移与生产迁移均通过；实际 head 为 `ad_same_group_reissue`，六服务、4 Worker 节点、HTTPS 和原私有配置通过。用户要求只保留最新备份，已删除其余 115 份旧备份，当前仅 `20260918T132252Z`。
+- 补建请求先按原冻结连接精确回读，确认原名与补建名均不存在，再创建 `{b32823/s362977/c1}-Um Bebê Fora dos Planos-32823-20260917-sys-CF8H-g01-sp2-rebuild1`；平台返回广告 ID `1876676311288962`，应用真实回读广告、原组和 ENABLE 状态后写入不可变补建台账。最终批次 `COMPLETED`，Campaign 180/180、Ad Group 180/180、Ad 360/360，素材 4770/4770，业务恢复候选 0，四个队列均为 0。详见[验收记录](validation/2026-09-18-same-group-ad-reissue.md)。
