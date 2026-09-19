@@ -351,6 +351,57 @@ def record_not_sent(
     return step.status
 
 
+_BUSINESS_REJECTION_RETRIES = {40002: 1, 51002: 2}
+
+
+def record_rejected(
+    session: Session,
+    *,
+    claim: StepClaim,
+    error: RemoteCallError,
+) -> str:
+    """持久化明确无副作用的远端拒绝，并按业务码执行有限重试。"""
+    if error.effect != "REJECTED_NO_EFFECT":
+        raise ValueError("only REJECTED_NO_EFFECT can use the rejection retry budget")
+    remote_code = error.evidence.remote_code
+    if remote_code not in _BUSINESS_REJECTION_RETRIES:
+        raise ValueError("business rejection code is not retryable")
+    step = _step(session, claim)
+    if not active_attempt(step, claim, phase="REQUEST_ARMED"):
+        return step.status
+    raw_counts = step.resolved.get("business_rejection_counts", {})
+    counts = dict(raw_counts) if isinstance(raw_counts, dict) else {}
+    key = str(remote_code)
+    previous = counts.get(key, 0)
+    count = previous + 1 if type(previous) is int and previous >= 0 else 1
+    counts[key] = count
+    retryable = count <= _BUSINESS_REJECTION_RETRIES[remote_code]
+    delay = min(30, 5 * 2 ** (count - 1))
+    step.resolved = {**step.resolved, "business_rejection_counts": counts}
+    evidence(
+        session,
+        step=step,
+        claim=claim,
+        conclusion="REMOTE_REJECTED",
+        request_id=error.evidence.request_id,
+        call_evidence=error.evidence,
+        summary={
+            "reason_code": error.code,
+            "remote_code": remote_code,
+            "body_digest": step.request_body_digest,
+            "rejection_count": count,
+        },
+    )
+    step.status, step.phase = ("PENDING", "IDLE") if retryable else ("FAILED", "DONE")
+    step.error_code = error.code
+    step.lease_token = step.lease_expires_at = None
+    step.due_at = datetime.now(UTC) + timedelta(seconds=delay)
+    step.updated_at = datetime.now(UTC)
+    session.add(step)
+    session.flush()
+    return step.status
+
+
 def transient_retry(
     resolved: dict[str, Any],
     *,
@@ -408,6 +459,23 @@ SELECT (SELECT count(*) BETWEEN 1 AND 1000 FROM proof)
        AND CAST(r.id AS text)=proof.summary->>'recovery_id'))),false)),false) FROM proof)
 ))"""
 
+# 自动重试可以混合“明确未发送”和“明确拒绝且无副作用”的 nonce；仍要求每个
+# nonce 都有严格的 ARM -> terminal 两条证据，任何未知结果或创建回执都会封死重放。
+AUTOMATIC_RETRY_ATTEMPT = (
+    UNSENT_ATTEMPT.replace(
+        "danger.conclusion IN ('REQUEST_ARMED','NOT_SENT')",
+        "danger.conclusion IN ('REQUEST_ARMED','NOT_SENT','REMOTE_REJECTED')",
+    )
+    .replace(
+        "phases=ARRAY['REQUEST_ARMED','NOT_SENT']::varchar[]",
+        "phases IN (ARRAY['REQUEST_ARMED','NOT_SENT']::varchar[], ARRAY['REQUEST_ARMED','REMOTE_REJECTED']::varchar[])",
+    )
+    .replace(
+        "conclusion IN ('REQUEST_ARMED','NOT_SENT')",
+        "conclusion IN ('REQUEST_ARMED','NOT_SENT','REMOTE_REJECTED')",
+    )
+)
+
 
 def safely_unsent_attempt(
     session: Session, *, step: ExecutionStep, recovery: bool = False
@@ -426,6 +494,24 @@ def safely_unsent_attempt(
             text(
                 "SELECT EXISTS(SELECT 1 FROM execution_step s WHERE s.id=:step AND s.tenant_id=:tenant AND "
                 + UNSENT_ATTEMPT
+                + ")"
+            ),
+            {"step": step.id, "tenant": step.tenant_id},
+        ).scalar_one()
+    )
+
+
+def safely_retryable_attempt(session: Session, *, step: ExecutionStep) -> bool:
+    """核对自动重试的完整逐 nonce 证据，不扩大人工恢复边界。"""
+    if step.status not in {"PENDING", "QUEUED"} or step.phase != "IDLE":
+        return False
+    session.flush()
+    return bool(
+        SASession.execute(
+            session,
+            text(
+                "SELECT EXISTS(SELECT 1 FROM execution_step s WHERE s.id=:step AND s.tenant_id=:tenant AND "
+                + AUTOMATIC_RETRY_ATTEMPT
                 + ")"
             ),
             {"step": step.id, "tenant": step.tenant_id},

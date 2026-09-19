@@ -436,6 +436,53 @@ def test_initialize_rechecks_current_build_permission_and_claim(
             assert (step.status, step.error_code) == ("FAILED", "action_forbidden")
 
 
+@pytest.mark.parametrize("gateway_case", ["OFFICIAL_MCP"], indirect=True)
+def test_mcp_known_ad_rejection_retries_same_frozen_request_once(
+    database_engine, redis_client, channel_execution
+):
+    from tests.integrations.tiktok.gateway_support import business_calls
+
+    case, wire = channel_execution
+    assert case["route"].channel == "OFFICIAL_MCP"
+    with Session(database_engine) as db, db.begin():
+        for kind in ("CTA", "CAMPAIGN", "ADGROUP"):
+            step = db.get(ExecutionStep, case["ids"][kind])
+            step.status, step.phase = "SUCCEEDED", "DONE"
+            step.remote_id = "existing-" + kind.lower()
+    wire["wire"].results["smart_plus_ad_create"].append(
+        {
+            "content": [],
+            "structuredContent": {
+                "code": 40002,
+                "data": {},
+                "request_id": "explicit-rejection",
+                "message": "synthetic private detail",
+            },
+        }
+    )
+    assert invoke(database_engine, redis_client, case, "AD") == "PENDING"
+    with Session(database_engine) as db:
+        step = db.get(ExecutionStep, case["ids"]["AD"])
+        frozen = (step.request_body, step.request_body_digest, step.attempt_id)
+        event = db.exec(
+            select(StepEvidence).where(
+                StepEvidence.step_id == step.id,
+                StepEvidence.conclusion == "REMOTE_REJECTED",
+            )
+        ).one()
+        assert event.summary["remote_code"] == 40002
+        assert "synthetic private detail" not in str(event.summary)
+    with Session(database_engine) as db, db.begin():
+        db.get(ExecutionStep, case["ids"]["AD"]).due_at = datetime.now(UTC)
+    created(wire, "AD")
+    assert invoke(database_engine, redis_client, case, "AD") == "SUCCEEDED"
+    with Session(database_engine) as db:
+        step = db.get(ExecutionStep, case["ids"]["AD"])
+        assert (step.request_body, step.request_body_digest, step.attempt_id) == frozen
+        assert step.remote_id == "synthetic-ad"
+    assert len(business_calls(wire, "OFFICIAL_MCP")) == 2
+
+
 @pytest.mark.parametrize(
     "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
 )

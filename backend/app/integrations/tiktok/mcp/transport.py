@@ -532,9 +532,15 @@ class BoundMCPClient:
                 if self._callback_error is not None and not sent:
                     failure = self._callback_error
                 elif isinstance(exc, RemoteCallError):
+                    # 已发送通常必须收敛为 UNKNOWN；但解码器白名单中的
+                    # REJECTED_NO_EFFECT 来自完整业务回执，本身就是无副作用证明。
                     failure = RemoteCallError(
                         exc.code,
-                        effect="UNKNOWN" if sent else exc.effect,
+                        effect=(
+                            exc.effect
+                            if not sent or exc.effect == "REJECTED_NO_EFFECT"
+                            else "UNKNOWN"
+                        ),
                         evidence=exc.evidence,
                     )
                 elif isinstance(exc, DomainError) and exc.code in {

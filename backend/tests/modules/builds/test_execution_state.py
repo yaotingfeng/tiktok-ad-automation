@@ -310,6 +310,55 @@ def test_proven_not_sent_keeps_exact_armed_body_and_can_schedule_once(
     assert step.lease_token is None
 
 
+@pytest.mark.parametrize(
+    "remote_code,retries",
+    [(40002, 1), (51002, 2)],
+)
+def test_known_ad_rejection_has_a_code_specific_bounded_retry_budget(
+    session, context, attempt, remote_code, retries
+):
+    from app.integrations.tiktok.contracts.common import RemoteCallError
+    from app.modules.builds.execution_state import arm_request, record_rejected
+
+    step, claim = attempt
+    arm_request(session, context=context, claim=claim, body=body(claim))
+    for rejection in range(1, retries + 2):
+        result = record_rejected(
+            session,
+            claim=claim,
+            error=RemoteCallError(
+                "mcp_business_error",
+                effect="REJECTED_NO_EFFECT",
+                evidence=CallEvidence(
+                    request_id=f"request-{rejection}", remote_code=remote_code
+                ),
+            ),
+        )
+        assert result == ("PENDING" if rejection <= retries else "FAILED")
+        assert step.resolved["business_rejection_counts"][str(remote_code)] == rejection
+        if rejection <= retries:
+            nonce = uuid4()
+            expires = datetime.now(UTC) + timedelta(seconds=60)
+            step.status, step.phase = "RUNNING", "REQUEST_ARMED"
+            step.lease_token, step.lease_expires_at = nonce, expires
+            claim = claim.model_copy(
+                update={"lease_token": nonce, "lease_expires_at": expires}
+            )
+
+    events = session.exec(
+        select(StepEvidence).where(
+            StepEvidence.step_id == step.id,
+            StepEvidence.conclusion == "REMOTE_REJECTED",
+        )
+    ).all()
+    assert [event.summary["remote_code"] for event in events] == [remote_code] * (
+        retries + 1
+    )
+    assert all(
+        event.summary["body_digest"] == step.request_body_digest for event in events
+    )
+
+
 def test_local_deadline_not_sent_uses_the_bounded_transport_retry_budget():
     from app.integrations.tiktok.contracts.common import CallEvidence, RemoteCallError
     from app.modules.builds.execution_state import transient_retry
@@ -408,6 +457,79 @@ def test_not_sent_reclaim_keeps_original_attempt_and_wire_digest(
     assert new.lease_token != old.lease_token
     assert arm_request(session, context=context, claim=new, body=request) == digest
     assert step.request_body == request
+
+
+def test_explicit_rejection_reclaim_keeps_frozen_attempt_and_body(
+    session, context, resumable_attempt
+):
+    from app.integrations.tiktok.contracts.common import RemoteCallError
+    from app.modules.builds.dispatch import queue_step
+    from app.modules.builds.execution_state import arm_request, record_rejected
+    from app.modules.builds.submissions import claim_step
+
+    step, old = resumable_attempt
+    request = {
+        "advertiser_id": old.advertiser_id,
+        "creative_portfolio_type": "CTA",
+        "portfolio_content": [{"asset_ids": ["synthetic"], "asset_content": "Watch"}],
+    }
+    digest = arm_request(session, context=context, claim=old, body=request)
+    assert (
+        record_rejected(
+            session,
+            claim=old,
+            error=RemoteCallError(
+                "mcp_business_error",
+                effect="REJECTED_NO_EFFECT",
+                evidence=CallEvidence(request_id="rejected", remote_code=40002),
+            ),
+        )
+        == "PENDING"
+    )
+    queue_step(
+        session, step=step, submission=session.get(Submission, step.submission_id)
+    )
+    new = claim_step(session, context=context, step_id=step.id, owner=uuid4())
+    assert new is not None
+    assert (new.attempt, new.attempt_id) == (old.attempt, old.attempt_id)
+    assert arm_request(session, context=context, claim=new, body=request) == digest
+
+
+def test_effect_evidence_blocks_an_explicit_rejection_retry(
+    session, context, resumable_attempt
+):
+    from app.integrations.tiktok.contracts.common import RemoteCallError
+    from app.modules.builds.dispatch import queue_step
+    from app.modules.builds.execution_state import (
+        arm_request,
+        evidence,
+        record_rejected,
+    )
+
+    step, claim = resumable_attempt
+    arm_request(
+        session,
+        context=context,
+        claim=claim,
+        body={"advertiser_id": claim.advertiser_id},
+    )
+    record_rejected(
+        session,
+        claim=claim,
+        error=RemoteCallError(
+            "mcp_business_error",
+            effect="REJECTED_NO_EFFECT",
+            evidence=CallEvidence(remote_code=40002),
+        ),
+    )
+    evidence(session, step=step, claim=claim, conclusion="RESULT_UNKNOWN")
+    with pytest.raises(
+        DomainError,
+        check=lambda error: error.code == "execution_requires_reconciliation",
+    ):
+        queue_step(
+            session, step=step, submission=session.get(Submission, step.submission_id)
+        )
 
 
 @pytest.mark.parametrize("terminal", ["RESULT_UNKNOWN", "LATE_CREATED"])

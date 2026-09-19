@@ -105,23 +105,44 @@ def test_business_rejection_does_not_prove_no_effect(raw):
 
 
 @pytest.mark.parametrize("text", [False, True])
-def test_ad_cover_rejection_keeps_numeric_code_without_raw_message(text, caplog):
+@pytest.mark.parametrize("remote_code", [40002, 51002])
+def test_ad_known_no_effect_rejection_is_typed_for_bounded_retry(
+    text, remote_code, caplog
+):
     selected = next(
         c for c in load_tool_contracts() if c.operation == "build.create_ad"
     )
     message = (
         "Invalid param(s): video material should have 1 image_info as the video cover."
     )
-    raw = {"code": 40002, "message": message, "request_id": "synthetic-cover-request"}
+    raw = {
+        "code": remote_code,
+        "message": message,
+        "request_id": "synthetic-cover-request",
+    }
     result = receipt(texts=[json.dumps(raw)]) if text else receipt(raw)
-    error = assert_unknown(
-        result, selected_contract=selected, code="mcp_business_error"
-    )
+    with pytest.raises(RemoteCallError) as exc:
+        decode_mcp_result(result, contract=selected)
+    error = exc.value
+    assert error.effect == "REJECTED_NO_EFFECT"
+    assert error.code == "mcp_business_error"
     assert error.evidence == CallEvidence(
-        request_id="synthetic-cover-request", remote_code=40002
+        request_id="synthetic-cover-request", remote_code=remote_code
     )
     for output in (str(error), repr(error), repr(vars(error)), caplog.text):
         assert message not in output
+
+
+def test_ad_unlisted_business_rejection_stays_unknown():
+    selected = next(
+        c for c in load_tool_contracts() if c.operation == "build.create_ad"
+    )
+    error = assert_unknown(
+        receipt({"code": 40003, "message": "synthetic"}),
+        selected_contract=selected,
+        code="mcp_business_error",
+    )
+    assert error.evidence.remote_code == 40003
 
 
 @pytest.mark.parametrize("value", [True, 40002.0, "40002", None])

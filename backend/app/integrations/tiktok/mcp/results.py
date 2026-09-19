@@ -44,6 +44,12 @@ _NATIVE_TEXT_TOOLS = {
     ("build.get_regular_adgroups", "adgroup_get"),
 }
 
+# 只允许真实事故中已验证为“接口明确拒绝、没有创建对象”的广告创建业务码。
+# 其他操作和其他非零码仍按 UNKNOWN 处理，不能仅凭非零 code 推断无副作用。
+_NO_EFFECT_REJECTIONS = {
+    ("build.create_ad", "smart_plus_ad_create"): frozenset({40002, 51002}),
+}
+
 
 def _identifier(value: Any) -> str | None:
     # 不把浮点 ID 转为字符串；精度一旦丢失便不能作为关联证据。
@@ -123,9 +129,17 @@ def _require_success(raw: Any, evidence: CallEvidence, contract: ToolContract) -
     ):
         raise _unknown("mcp_response_invalid", evidence)
     if raw["code"] != 0:
-        # 非零 code 本身不能证明没有产生副作用，后续只能由原 attempt 组织核查。
-        # 仅保留已通过精确整数校验的错误码；原文不能进入异常、日志或普通状态。
-        raise _unknown("mcp_business_error", replace(evidence, remote_code=raw["code"]))
+        # 仅保留已通过精确整数校验的错误码；原文可能含凭据，不能进入异常或日志。
+        rejected = replace(evidence, remote_code=raw["code"])
+        if raw["code"] in _NO_EFFECT_REJECTIONS.get(
+            (contract.operation, contract.tool_name), ()
+        ):
+            raise RemoteCallError(
+                "mcp_business_error",
+                effect="REJECTED_NO_EFFECT",
+                evidence=rejected,
+            )
+        raise _unknown("mcp_business_error", rejected)
     data = raw.get("data")
     if contract.response_shape == "OBJECT":
         valid_data = type(data) is dict

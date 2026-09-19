@@ -33,6 +33,7 @@ from app.modules.builds.execution_state import (
     preserve_created_receipt,
     record_created,
     record_not_sent,
+    record_rejected,
     record_unknown,
     transient_retry,
 )
@@ -835,6 +836,11 @@ def process_step(
                         },
                         delay=15,
                     )
+                if (
+                    isinstance(error, RemoteCallError)
+                    and error.effect == "REJECTED_NO_EFFECT"
+                ):
+                    return record_rejected(session, claim=claim, error=error)
                 return record_unknown(
                     session,
                     claim=claim,

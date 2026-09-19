@@ -504,9 +504,9 @@ def claim_step(
     if access.connection_id != frozen.connection_id:
         raise DomainError("account_access_denied", "冻结账户授权已变更")
     if step.request_body is not None:
-        from app.modules.builds.execution_state import safely_unsent_attempt
+        from app.modules.builds.execution_state import safely_retryable_attempt
 
-        if not safely_unsent_attempt(session, step=step):
+        if not safely_retryable_attempt(session, step=step):
             raise DomainError("create_result_unknown", "原请求只能核查，不可再次创建")
     else:
         step.attempt += 1

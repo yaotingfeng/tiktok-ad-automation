@@ -23,7 +23,7 @@ from app.modules.builds.execution_models import (
 from app.modules.builds.execution_state import (
     evidence,
     expire_attempt,
-    safely_unsent_attempt,
+    safely_retryable_attempt,
 )
 from app.modules.builds.receipt_completion import obsolete_readback_sql
 from app.modules.builds.submission_tasks import queue_execution_unit
@@ -76,7 +76,7 @@ def queue_step(
         step.remote_id
         or (
             step.request_body is not None
-            and not safely_unsent_attempt(session, step=step)
+            and not safely_retryable_attempt(session, step=step)
         )
         or step.status in {"UNKNOWN", "SUCCEEDED"}
     ):
