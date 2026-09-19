@@ -1345,3 +1345,4 @@
 - 新增准备阶段截止时间回归先以缺少 `definitely_not_sent` 边界失败，修复后执行状态 17 项通过；与安全未发送恢复、租户管理员建号共 53 项真实 PostgreSQL/Redis 回归通过，租户与授权页面 106 项及 TypeScript/Vite 正式构建通过。没有触发产品 RETRY、RECONCILE 或 TikTok 写入。
 - Ruff 全量检查、改动文件格式、ty app、compileall 和最终差异检查通过。全仓格式检查另报告 10 个本轮未改文件的既有格式差异，未混入本提交。本轮无迁移、无新开关、无 TikTok 调用。
 - `815161166f956e6775cb1543224cfa8f80d64493` 已推送并部署新加坡测试服。`191556Z` 五份归档、1,316 个项目/前端文件、22 张表、2,060 份加密响应及 PostgreSQL/Redis/项目/私有配置独立恢复通过；head、锁文件、开关、调用策略和并发均不变。服务器专项 7 项、bootstrap、4 Worker ping、六服务零重启和零 warning/error 通过，测试角色恢复 `NOLOGIN NOCREATEDB`。发布后四队列为 0，未新增构建证据或自动 RETRY；原失败/UNKNOWN 保持，详见[发布验收](validation/2026-09-19-build-dependency-efficiency-release.md)。
+- 用户随后授权处理新批次失败：R627 唯一安全未发送 ADGROUP 经正式 RETRY 成功，两个依赖广告自动接续，三项均为 ENABLE；两批各 2 条已 armed UNKNOWN 经正式只读 RECONCILE 后仍只命中同组兄弟广告，未补建。旧批次实测 Build 单槽约 85.6% 占用，封面准备/核验累计约 3.1 小时 Worker 时间；当前低配机不加槽，下一新批验证本次直接落定优化，未来生产按 4 核/8 GiB 起逐槽压测。详细 ID、耗时和独立旧素材循环见同一[发布验收](validation/2026-09-19-build-dependency-efficiency-release.md)。

@@ -25,3 +25,12 @@
 - 服务器：新超时边界、素材终态直接落定、封面终态直接落定、权限暂拒保护和只提前未来依赖共 7 项通过。首次专项命令因应用角色按设计没有 `CREATEDB` 而出现 6 个 fixture setup error、1 项通过；按运行手册临时启用专用测试角色后 7 项全部通过，随后恢复 `tt_ada_test NOLOGIN NOCREATEDB`，应用角色继续 `LOGIN NOCREATEDB`。恢复库和临时目录已删除。
 - `check-bootstrap.py` 通过健康、构建登录页、回调业务错误和 API 边界；四个 Celery Worker 节点均 pong。数据库 head、功能开关、调用策略、备份校验再次通过；发布后 journal warning/error 为 0。
 - 截止最终快照，两提交仍为 `NEEDS_REVIEW`：R627 保留 `1 ADGROUP deadline + 2 AD dependency_failed + 2 AD UNKNOWN`，6X3F 保留 `2 AD UNKNOWN`。这是有意保留真实失败事实；新代码只会作用于未来或经明确授权重新安排的安全未发送执行，不把部署本身冒充为业务恢复。
+
+## 发布后用户授权恢复与效率复核
+
+- 用户随后明确要求处理两个新批次的失败。产品恢复摘要确认 R627 仅 1 条可安全重试、2 条可只读核查；6X3F 无可安全重试项、2 条可只读核查。正式 RETRY `db34e957-d083-4f1a-ba8b-ad90e2142885` 只调度原未 armed 的 ADGROUP，创建 `1876727818108546`（ENABLE）；两个原 `dependency_failed` 广告沿父依赖自动恢复并创建 `1876727832860801`、`1876727848094754`（均 ENABLE）。从恢复受理到三项完成约 41 秒，未补建 UNKNOWN 广告。
+- 两批正式 RECONCILE `8ae18313-819f-4299-a2ca-c3a806e5a30a`、`8853d973-8aa5-4033-944c-9c2a3f9912c8` 各只读调度 2 项并完成。四条广告仍为 `readback_inconclusive`：每个完整单页仍只返回 1 个同组兄弟广告 ID，目标名称没有候选；原请求均已有 `REQUEST_ARMED → RESULT_UNKNOWN`，因此不能以负向列表证明未创建。R627、6X3F 各保留 2 条 UNKNOWN，补建仍须用户明确接受重复广告风险。
+- 两批各 65 账户、1,470 MATERIAL、65 Campaign、65 Ad Group、130 Ad。6X3F 从提交到除 2 条 UNKNOWN 外完成约 173.5 分钟；R627 在原安全失败恢复前的主体流水线同样约 165～170 分钟。15:00～18:30 UTC 的构建 Worker 单槽执行 `execute_step` 7,079 次、累计 10,779 秒，约占窗口 85.6%，P50 0.424 秒、P95 11.029 秒；资源侧 `prepare_cover` 3,243 次/7,237 秒、`verify_cover` 473 次/4,029 秒，是主要远端等待。大量短本地依赖任务正是本次直接落定/减少唤醒优化的对象，发布后的新批次才能量化实际降幅。
+- 当前 2 核/2 GiB 主机仅约 372 MiB available、swap 已用约 1.35 GiB；Build 单服务当前/峰值约 278/281 MiB，直接增加第二 Build 子进程风险过高，继续保持 `2/1/1/1`。未来生产应先用至少 4 核/8 GiB 起步，再在现有 app 4、endpoint 2 的调用边界内逐槽压测 Build 2→4、Resource 4、Result 2，而不是整组同步放大。
+- 另发现一条 2026-09-17 的独立素材原上传 UNKNOWN 每 60 秒进行一次只读核查，近 70 分钟 124 个任务、累计 245 秒；约一半是领取过期保护的快速 no-op，真实核查约 4 秒/分钟。它未被两个新批次引用，不是本轮三小时主瓶颈，但 MCP 列表缺少完整总数证明使其无法自动得出负向结论，后续应将无新证据的自动核查设为有界暂停并保留人工 RECONCILE。
+- 恢复后四队列为 0，六服务 active，03:00 UTC 后 journal warning/error 为 0；未修改配置、并发、代码或数据库结构。
