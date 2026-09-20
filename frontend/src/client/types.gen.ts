@@ -330,6 +330,36 @@ export type ChannelConfiguration = {
 };
 
 /**
+ * ChooseIdentityRequest
+ */
+export type ChooseIdentityRequest = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+    /**
+     * Catalog Job Id
+     */
+    catalog_job_id: string;
+    /**
+     * Identity Id
+     */
+    identity_id: string;
+    /**
+     * Identity Type
+     */
+    identity_type: 'TT_USER' | 'BC_AUTH_TT';
+    /**
+     * Identity Authorized Bc Id
+     */
+    identity_authorized_bc_id?: string | null;
+};
+
+/**
  * ChooseMiniRequest
  */
 export type ChooseMiniRequest = {
@@ -618,6 +648,33 @@ export type DraftGroupEditRequest = {
      * Groups
      */
     groups: Array<Array<string>>;
+};
+
+/**
+ * DraftIdentities
+ */
+export type DraftIdentities = {
+    /**
+     * State
+     */
+    state: 'pending' | 'choose' | 'selected' | 'unavailable' | 'stale';
+    /**
+     * Catalog Job Id
+     */
+    catalog_job_id?: string | null;
+    /**
+     * Advertiser Id
+     */
+    advertiser_id?: string | null;
+    selected?: IdentityOption | null;
+    /**
+     * Items
+     */
+    items?: Array<IdentityOption>;
+    /**
+     * Total
+     */
+    total?: number;
 };
 
 /**
@@ -1239,6 +1296,36 @@ export type HistoricalReadReceipt = {
      * Requires New Preparation
      */
     requires_new_preparation?: true;
+};
+
+/**
+ * IdentityOption
+ */
+export type IdentityOption = {
+    /**
+     * Identity Id
+     */
+    identity_id: string;
+    /**
+     * Identity Type
+     */
+    identity_type: 'TT_USER' | 'BC_AUTH_TT';
+    /**
+     * Identity Authorized Bc Id
+     */
+    identity_authorized_bc_id?: string | null;
+    /**
+     * Display Name
+     */
+    display_name?: string | null;
+    /**
+     * Username
+     */
+    username?: string | null;
+    /**
+     * Profile Image
+     */
+    profile_image?: string | null;
 };
 
 /**
@@ -9162,6 +9249,74 @@ export type buildsSelectMiniResponses = {
 };
 
 export type buildsSelectMiniResponse = buildsSelectMiniResponses[keyof buildsSelectMiniResponses];
+
+export type buildsIdentityOptionsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/identities';
+};
+
+export type buildsIdentityOptionsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsIdentityOptionsError = buildsIdentityOptionsErrors[keyof buildsIdentityOptionsErrors];
+
+export type buildsIdentityOptionsResponses = {
+    /**
+     * Successful Response
+     */
+    200: DraftIdentities;
+};
+
+export type buildsIdentityOptionsResponse = buildsIdentityOptionsResponses[keyof buildsIdentityOptionsResponses];
+
+export type buildsSelectIdentityData = {
+    body: ChooseIdentityRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/identities';
+};
+
+export type buildsSelectIdentityErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsSelectIdentityError = buildsSelectIdentityErrors[keyof buildsSelectIdentityErrors];
+
+export type buildsSelectIdentityResponses = {
+    /**
+     * Successful Response
+     */
+    200: DraftSaved;
+};
+
+export type buildsSelectIdentityResponse = buildsSelectIdentityResponses[keyof buildsSelectIdentityResponses];
 
 export type buildsPutManualLinkData = {
     body: ManualLinkPatch;

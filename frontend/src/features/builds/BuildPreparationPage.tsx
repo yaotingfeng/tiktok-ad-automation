@@ -41,6 +41,7 @@ import { BuildDramaTable } from "./BuildDramaTable"
 import { BuildInputPage } from "./BuildInputPage"
 import { BuildLinkSheet } from "./BuildLinkSheet"
 import { DramaMaterialSheet } from "./DramaMaterialSheet"
+import { IdentityTargetPicker } from "./IdentityTargetPicker"
 import { MiniTargetPicker } from "./MiniTargetPicker"
 import { preparationLabel } from "./preparationProgress"
 import {
@@ -51,6 +52,7 @@ import {
   reportError,
   unknownOutcome,
 } from "./presentation"
+import { useDraftIdentities } from "./useDraftIdentities"
 import { useDraftMinis } from "./useDraftMinis"
 export function BuildPreparationPage() {
   const { tenantId, scope, bc } = useTenantScope(),
@@ -137,13 +139,17 @@ function Preparation({
     scoped = current?.bc_id === bcId,
     allowed = write && !forbidden && !isForbidden(summary.error)
   const minis = useDraftMinis(tenantId, bcId, current)
+  const identities = useDraftIdentities(tenantId, bcId, current)
   const previewReady =
     current?.status === "READY" &&
     !summary.isFetching &&
     !summary.isError &&
     minis.isSuccess &&
     !minis.isFetching &&
-    minis.data.state === "selected"
+    minis.data.state === "selected" &&
+    identities.isSuccess &&
+    !identities.isFetching &&
+    identities.data.state === "selected"
   const previewHint = summary.isFetching
     ? "正在核对准备状态…"
     : current?.status !== "READY"
@@ -158,9 +164,21 @@ function Preparation({
               ? "当前没有可用小程序，请检查账户授权。"
               : minis.data?.state === "conflict"
                 ? "剧目指向不同小程序，请先核对推广目标。"
-                : !previewReady
-                  ? "请先选择本批次推广小程序，再生成预览。"
-                  : "预览将明确列出可搭建范围与排除原因。"
+                : identities.isError
+                  ? "投放身份读取失败，请刷新重试。"
+                  : identities.isPending || identities.isFetching
+                    ? "正在核对投放身份…"
+                    : identities.data?.state === "pending"
+                      ? "请先更新可用投放身份。"
+                      : identities.data?.state === "unavailable"
+                        ? "当前没有可用投放身份，请检查账户授权。"
+                        : identities.data?.state === "stale"
+                          ? "原投放身份已不可用，请重新选择。"
+                          : identities.data?.state !== "selected"
+                            ? "请先选择本批次投放身份，再生成预览。"
+                            : !previewReady
+                              ? "请先选择本批次推广小程序，再生成预览。"
+                              : "预览将明确列出可搭建范围与排除原因。"
   useEffect(() => {
     const ctrl = new AbortController()
     controller.current = ctrl
@@ -617,6 +635,17 @@ function Preparation({
         </CardContent>
       </Card>
       <MiniTargetPicker
+        tenantId={tenantId}
+        bcId={bcId}
+        summary={current}
+        write={allowed && !busy && !pending && !pendingMutation}
+        onPrepare={() => prepare()}
+        onRefresh={() => {
+          refreshMutationState((value) => value + 1)
+          void summary.refetch()
+        }}
+      />
+      <IdentityTargetPicker
         tenantId={tenantId}
         bcId={bcId}
         summary={current}

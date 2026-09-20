@@ -62,7 +62,7 @@ def _require_bounded_worker() -> None:
         raise DomainError("scene_worker_unbounded", "场景刷新需要有界后台任务")
 
 
-SCENE_CONTRACT_REVISION = "dual-channel-scene-2026-09-20-v4"
+SCENE_CONTRACT_REVISION = "dual-channel-scene-2026-09-21-v5"
 
 
 def scene_scope_basis(*, route: FrozenTikTokRoute, business: dict[str, Any]) -> str:
@@ -271,9 +271,15 @@ def _merge(
     compact = {
         key: value
         for key, value in page.items()
-        if key not in {"item_id_hashes", "options"}
+        if key != "item_id_hashes" and (key != "options" or resource == "identity")
     }
-    return {**compact, "seen": seen, "matches": matches[:2]}
+    options = ([] if first else previous.get("options", [])) + page.get("options", [])
+    return {
+        **compact,
+        **({"options": options} if resource == "identity" else {}),
+        "seen": seen,
+        "matches": matches[:2],
+    }
 
 
 def _assemble_scene(
@@ -284,6 +290,7 @@ def _assemble_scene(
     evidence_ids: tuple[UUID, ...],
     capability: Any,
     locally_operable: bool,
+    selected_identity: dict[str, Any] | None = None,
 ) -> SceneContext:
     if capability is None or not capability.scope_verified:
         reasons.append("account_scope_unverified")
@@ -337,21 +344,44 @@ def _assemble_scene(
             reasons.append("scene_targeting_unavailable")
     else:
         reasons.append("minis_unavailable")
-    identities = facts.get("identity", {}).get("matches", [])
+    identity_facts = facts.get("identity", {})
+    identities = identity_facts.get("options") or identity_facts.get("matches", [])
+    if selected_identity is not None:
+        identities = [
+            item
+            for item in identities
+            if all(item.get(key) == value for key, value in selected_identity.items())
+            and all(
+                selected_identity.get(key) == item.get(key)
+                for key in (
+                    "identity_id",
+                    "identity_type",
+                    "identity_authorized_bc_id",
+                )
+            )
+        ]
     if len(identities) == 1:
         creative = {
             "creative_info": {
                 **{
                     key: value
                     for key, value in identities[0].items()
-                    if value is not None
+                    if key
+                    in {
+                        "identity_id",
+                        "identity_type",
+                        "identity_authorized_bc_id",
+                    }
+                    and value is not None
                 },
                 "ad_format": "SINGLE_VIDEO",
             }
         }
     else:
         reasons.append(
-            "identity_selection_required" if identities else "identity_unavailable"
+            "identity_selection_required"
+            if selected_identity is None and identities
+            else "identity_unavailable"
         )
     dynamic = facts.get("cta", {})
     if dynamic.get("asset_ids") and dynamic.get("recommend_assets"):
@@ -401,6 +431,7 @@ def _read_account_scene(
     link_id: UUID | None,
     minis_id: str | None,
     route: FrozenTikTokRoute,
+    selected_identity: dict[str, Any] | None = None,
 ) -> SceneContext | None:
     """同账户/Mini 的共享场景只组装一次，批次结束重新读取并比较。"""
     from app.modules.accounts.capabilities import get_capability_evidence
@@ -508,6 +539,7 @@ def _read_account_scene(
             evidence_ids=evidence_ids,
             capability=capability,
             locally_operable=locally_operable,
+            selected_identity=selected_identity,
         )
 
 
@@ -519,25 +551,33 @@ def read_scene_context(
     advertiser_id: str,
     link_id: UUID,
     route: FrozenTikTokRoute,
+    selected_identity: dict[str, Any] | None = None,
 ) -> SceneContext:
     # 每个链接独立核验版权方与 Mini，不借别的剧目链接取得权限。
     # 只有同账户、同 Mini、同冻结路由的场景事实可在本地短批次复用。
     with session.no_autoflush:
         minis_id = _link_target(session, context=context, link_id=link_id)
-        arguments = {
-            "context": context,
-            "bc_id": bc_id,
-            "advertiser_id": advertiser_id,
-            "minis_id": minis_id,
-            "route": route,
-        }
         result = _read_account_scene(
             session,
+            context=context,
+            bc_id=bc_id,
+            advertiser_id=advertiser_id,
             link_id=None if local_read_batch_active(session) else link_id,
-            **arguments,
+            minis_id=minis_id,
+            route=route,
+            selected_identity=selected_identity,
         )
         if result is None:
             # 历史直接刷新证据仍逐链接读取，不跨剧目借用旧证据。
-            result = _read_account_scene(session, link_id=link_id, **arguments)
+            result = _read_account_scene(
+                session,
+                context=context,
+                bc_id=bc_id,
+                advertiser_id=advertiser_id,
+                link_id=link_id,
+                minis_id=minis_id,
+                route=route,
+                selected_identity=selected_identity,
+            )
         assert result is not None
         return result

@@ -147,6 +147,18 @@ def _frozen(session: Session, context: TenantContext, claim: StepClaim) -> Froze
 def _current_scene(
     session: Session, context: TenantContext, frozen: FrozenUnit
 ) -> None:
+    creative_info = frozen.scene_snapshot.get("creative_fields", {}).get(
+        "creative_info", {}
+    )
+    selected_identity = {
+        key: creative_info[key]
+        for key in (
+            "identity_id",
+            "identity_type",
+            "identity_authorized_bc_id",
+        )
+        if creative_info.get(key) is not None
+    }
     scene = read_scene_context(
         session,
         context=context,
@@ -156,6 +168,7 @@ def _current_scene(
         route=load_preview_route(
             session, context=context, preview_id=frozen.preview_id
         ),
+        selected_identity=selected_identity or None,
     )
     if not scene.supported:
         transient = bool(
@@ -488,6 +501,19 @@ def _prepare_scene_dependency(
                 advertiser_id=frozen.advertiser_id,
                 link_id=frozen.link_id,
                 route=claim.route,
+                selected_identity={
+                    key: frozen.scene_snapshot["creative_fields"]["creative_info"][key]
+                    for key in (
+                        "identity_id",
+                        "identity_type",
+                        "identity_authorized_bc_id",
+                    )
+                    if frozen.scene_snapshot.get("creative_fields", {})
+                    .get("creative_info", {})
+                    .get(key)
+                    is not None
+                }
+                or None,
             )
             return finish_local(
                 session,

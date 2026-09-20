@@ -32,8 +32,8 @@ def _invalid() -> DomainError:
     return DomainError("scene_response_unverified", "场景返回缺少可核实信息")
 
 
-def _string(value: Any) -> str:
-    if not isinstance(value, str) or not value.strip() or len(value) > 255:
+def _string(value: Any, *, max_length: int = 255) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value) > max_length:
         raise _invalid()
     return value
 
@@ -266,22 +266,30 @@ def parse_page(
                 and item.get("can_push_video") is True
                 and item.get("is_gpppa") is False
             ):
-                matches.append(
-                    {
-                        "identity_id": remote_id,
-                        "identity_type": identity_type,
-                        **(
-                            {"identity_authorized_bc_id": authorized_bc}
-                            if authorized_bc is not None
-                            else {}
-                        ),
-                    }
-                )
+                candidate = {
+                    "identity_id": remote_id,
+                    "identity_type": identity_type,
+                    **(
+                        {"identity_authorized_bc_id": authorized_bc}
+                        if authorized_bc is not None
+                        else {}
+                    ),
+                    **{
+                        key: _string(
+                            item[key],
+                            max_length=2048 if key == "profile_image" else 255,
+                        )
+                        for key in ("display_name", "username", "profile_image")
+                        if item.get(key) is not None
+                    },
+                }
+                matches.append(candidate)
+                options.append(candidate)
 
     return (
         {
             "matches": matches[:2],
-            **({"options": options} if resource == "minis" else {}),
+            **({"options": options} if resource in {"identity", "minis"} else {}),
             "item_id_hashes": sorted(id_hashes),
             "total_number": info["total_number"],
             "total_page": info["total_page"],

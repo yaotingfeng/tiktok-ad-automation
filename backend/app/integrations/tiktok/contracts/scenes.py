@@ -19,6 +19,7 @@ from .builds import IdentityFields
 from .common import CallEvidence
 
 Text = Annotated[StrictStr, Field(min_length=1, max_length=255)]
+LongText = Annotated[StrictStr, Field(min_length=1, max_length=2048)]
 Count = Annotated[StrictInt, Field(ge=0)]
 
 
@@ -59,12 +60,15 @@ class RoleFacts(PaginatedFacts):
 
 
 class IdentityMatch(IdentityFields):
-    pass
+    display_name: Text | None = None
+    username: Text | None = None
+    profile_image: LongText | None = None
 
 
 class IdentityFacts(PaginatedFacts):
     seen: Count
     matches: tuple[IdentityMatch, ...]
+    options: tuple[IdentityMatch, ...] = ()
 
     @model_validator(mode="after")
     def validate_unpaginated_counts(self) -> Self:

@@ -43,6 +43,8 @@ def test_preview_readiness_requires_scene_currency_and_every_material_path():
 
 @pytest.fixture
 def prepared(session, context, intent, monkeypatch):
+    from app.modules.builds import identity_selection
+
     version = session.get(StrategyVersion, intent["strategy_version_id"])
     intent = dict(
         intent,
@@ -101,6 +103,14 @@ def prepared(session, context, intent, monkeypatch):
     )
     monkeypatch.setattr(previews, "read_scene_context", lambda *a, **kw: scene)
     monkeypatch.setattr(
+        identity_selection,
+        "require_preview_identity",
+        lambda *a, **kw: {
+            "identity_id": "fixture-identity",
+            "identity_type": "TT_USER",
+        },
+    )
+    monkeypatch.setattr(
         previews,
         "get_material_readiness_batch",
         lambda *a, **kw: {
@@ -116,6 +126,72 @@ def drain(session, context, identity):
         if previews.continue_preview(session, context=context, preview_id=identity):
             return
     raise AssertionError("preview never finished")
+
+
+def test_identity_picker_keeps_same_named_authorizations_separate_and_saves_choice(
+    session, context, prepared, monkeypatch
+):
+    from app.modules.builds import identity_selection
+    from app.modules.builds.identity_selection import ChooseIdentityRequest
+    from app.modules.builds.models import BuildDraft
+
+    catalog_id = uuid4()
+    job = SimpleNamespace(
+        id=catalog_id,
+        facts={
+            "identity": {
+                "options": [
+                    {
+                        "identity_id": "tt-user-id",
+                        "identity_type": "TT_USER",
+                        "display_name": "star_isle_drama",
+                        "username": "star_isle_drama",
+                    },
+                    {
+                        "identity_id": "bc-auth-id",
+                        "identity_type": "BC_AUTH_TT",
+                        "identity_authorized_bc_id": "bc-draft",
+                        "display_name": "star_isle_drama",
+                        "username": "star_isle_drama",
+                    },
+                ]
+            }
+        },
+    )
+    monkeypatch.setattr(identity_selection, "_catalog", lambda *a, **kw: ("A", job))
+
+    catalog = identity_selection.draft_identities(
+        session, context=context, draft_id=prepared
+    )
+    assert catalog.state == "choose"
+    assert [item.identity_type for item in catalog.items] == [
+        "TT_USER",
+        "BC_AUTH_TT",
+    ]
+
+    revision = identity_selection.choose_identity(
+        session,
+        context=context,
+        draft_id=prepared,
+        body=ChooseIdentityRequest(
+            request_id=uuid4(),
+            expected_revision=1,
+            catalog_job_id=catalog_id,
+            identity_id="bc-auth-id",
+            identity_type="BC_AUTH_TT",
+            identity_authorized_bc_id="bc-draft",
+        ),
+    )
+    draft = session.get(BuildDraft, prepared, populate_existing=True)
+    assert revision == 2
+    assert draft is not None
+    assert draft.status == "PREPARING"
+    assert (
+        draft.identity_id,
+        draft.identity_type,
+        draft.identity_authorized_bc_id,
+        draft.identity_display_name,
+    ) == ("bc-auth-id", "BC_AUTH_TT", "bc-draft", "star_isle_drama")
 
 
 def test_missing_mini_rejected_before_any_preview_or_dispatch(
@@ -614,16 +690,27 @@ def test_http_preview_request_and_readonly_pages(
 
 
 @pytest.mark.parametrize("mode", ["generate", "continue", "edit"])
-def test_preview_concurrent_parent_locking(isolated_strategy_database, mode):
+def test_preview_concurrent_parent_locking(
+    isolated_strategy_database, mode, monkeypatch
+):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
 
     from sqlmodel import Session
 
+    from app.modules.builds import identity_selection
     from app.modules.builds.preview_models import BuildPreview
     from tests.modules.builds.test_drafts import create_intent
 
     engine, context, _ = isolated_strategy_database
+    monkeypatch.setattr(
+        identity_selection,
+        "require_preview_identity",
+        lambda *a, **kw: {
+            "identity_id": "fixture-identity",
+            "identity_type": "TT_USER",
+        },
+    )
     with Session(engine) as session:
         values = create_intent(session, context)
         account(session, context)

@@ -57,6 +57,13 @@ class BuildDraft(SQLModel, table=True):
             "status IN ('DRAFT','PREPARING','READY','BLOCKED')",
             name="ck_build_draft_status",
         ),
+        CheckConstraint(
+            "(identity_id IS NULL AND identity_type IS NULL AND identity_authorized_bc_id IS NULL) "
+            "OR (identity_id IS NOT NULL AND identity_type IN ('TT_USER','BC_AUTH_TT') "
+            "AND ((identity_type='TT_USER' AND identity_authorized_bc_id IS NULL) "
+            "OR (identity_type='BC_AUTH_TT' AND identity_authorized_bc_id IS NOT NULL)))",
+            name="ck_build_draft_identity",
+        ),
         Index("ix_build_draft_tenant_page", "tenant_id", "bc_id", "created_at", "id"),
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -72,6 +79,11 @@ class BuildDraft(SQLModel, table=True):
     link_config: dict[str, Any] = Field(
         default_factory=dict, sa_column=Column(JSONB, nullable=False)
     )
+    identity_id: str | None = Field(default=None, max_length=255)
+    identity_type: str | None = Field(default=None, max_length=32)
+    identity_authorized_bc_id: str | None = Field(default=None, max_length=255)
+    identity_display_name: str | None = Field(default=None, max_length=255)
+    identity_username: str | None = Field(default=None, max_length=255)
     created_by: UUID = Field(foreign_key="user.id")
     request_id: UUID
     request_digest: str = Field(max_length=64)

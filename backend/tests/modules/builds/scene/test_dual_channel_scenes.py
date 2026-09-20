@@ -153,6 +153,63 @@ def test_one_frozen_job_completes_on_both_channels_without_api_app_for_mcp(
             assert all(page.mcp_request_id for page in pages)
 
 
+@pytest.mark.parametrize("gateway_case", ["OFFICIAL_MCP"], indirect=True)
+def test_selected_identity_is_validated_against_each_account_catalog(
+    database_engine, redis_client, scene_case, gateway_wire
+):
+    case = scene_case
+    receipt = ensure(database_engine, case)
+    responses = scene_responses(case)
+    responses["identity"]["identity_list"].append(
+        {
+            "identity_id": "second-identity",
+            "identity_type": "TT_USER",
+            "available_status": "AVAILABLE",
+            "can_push_video": True,
+            "is_gpppa": False,
+            "display_name": "Same visible name",
+            "username": "same_name",
+        }
+    )
+    responses["identity"]["page_info"]["total_number"] = 2
+    for resource, data in responses.items():
+        enqueue(gateway_wire, resource, data)
+        run(database_engine, redis_client, case, receipt.job_id)
+
+    with Session(database_engine) as db:
+        selected = read_scene_context(
+            db,
+            context=case["context"],
+            bc_id=case["route"].bc_id,
+            advertiser_id=case["advertiser_id"],
+            link_id=case["link_id"],
+            route=case["route"],
+            selected_identity={
+                "identity_id": "second-identity",
+                "identity_type": "TT_USER",
+            },
+        )
+        assert selected.supported, selected.reason_codes
+        assert (
+            selected.creative_fields["creative_info"]["identity_id"]
+            == "second-identity"
+        )
+        unavailable = read_scene_context(
+            db,
+            context=case["context"],
+            bc_id=case["route"].bc_id,
+            advertiser_id=case["advertiser_id"],
+            link_id=case["link_id"],
+            route=case["route"],
+            selected_identity={
+                "identity_id": "not-authorized-here",
+                "identity_type": "TT_USER",
+            },
+        )
+        assert not unavailable.supported
+        assert "identity_unavailable" in unavailable.reason_codes
+
+
 @pytest.mark.parametrize(
     "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
 )

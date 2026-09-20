@@ -172,10 +172,12 @@ def generate_preview(
         return existing.id
     if draft.status != "READY":
         raise DomainError("draft_not_ready", "草稿尚未准备完成")
+    from app.modules.builds.identity_selection import require_preview_identity
     from app.modules.builds.mini_selection import require_preview_mini
 
     # 必填目标在排队前检查，避免展开全部剧目×账户后才发现整批无法搭建。
     require_preview_mini(session, context=context, draft=draft)
+    chosen_identity = require_preview_identity(session, context=context, draft=draft)
     config = get_version(session, context=context, version_id=draft.strategy_version_id)
     row = BuildPreview(
         tenant_id=context.tenant_id,
@@ -200,6 +202,7 @@ def generate_preview(
     save_preview_route(session, context=context, preview_id=row.id, route=route)
     row.progress = {
         "phase": "inputs",
+        "selected_identity": chosen_identity,
         # 在父草稿锁下固定分母；不使用后续可能已修改的草稿推算历史进度。
         "total_units": session.exec(
             select(func.count())
@@ -553,6 +556,7 @@ def _expand_unit(
                 advertiser_id=account.advertiser_id,
                 link_id=drama.link_id,
                 route=route,
+                selected_identity=p.get("selected_identity"),
             )
         except DomainError as error:
             if error.code not in {
@@ -682,7 +686,7 @@ def _expand_unit(
         ]
         # 文件名及原因随预览冻结，分页展示；不会因为以后补传成功而改变本次内容。
         if skipped_ids:
-            names = dict(
+            material_names = dict(
                 session.exec(
                     select(MaterialFile.id, MaterialFile.file_name).where(
                         MaterialFile.tenant_id == preview.tenant_id,
@@ -697,7 +701,7 @@ def _expand_unit(
                     material_id=identity,
                     preview_id=preview.id,
                     bc_id=preview.bc_id,
-                    file_name=names[identity],
+                    file_name=material_names[identity],
                     reason_code=readiness[identity].reason_code
                     or "material_unavailable",
                 )

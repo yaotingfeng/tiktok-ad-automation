@@ -40,6 +40,12 @@ from app.modules.builds.schemas import (
 )
 from app.modules.tenants.permissions import require_tenant
 
+from .identity_selection import (
+    ChooseIdentityRequest,
+    DraftIdentities,
+    choose_identity,
+    draft_identities,
+)
 from .mini_selection import ChooseMiniRequest, DraftMinis, choose_mini, draft_minis
 
 router = APIRouter(prefix="/tenants/{tenant_id}", tags=["builds"])
@@ -479,6 +485,35 @@ def select_mini(
         session, actor_id=user.id, tenant_id=tenant_id, action="build"
     )
     revision = choose_mini(session, context=context, draft_id=draft_id, body=body)
+    session.commit()
+    return DraftSaved(draft_id=draft_id, revision=revision)
+
+
+@router.get("/build-drafts/{draft_id}/identities", response_model=DraftIdentities)
+def identity_options(
+    tenant_id: UUID,
+    draft_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+) -> DraftIdentities:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    return draft_identities(session, context=context, draft_id=draft_id)
+
+
+@router.post("/build-drafts/{draft_id}/identities", response_model=DraftSaved)
+def select_identity(
+    tenant_id: UUID,
+    draft_id: UUID,
+    body: ChooseIdentityRequest,
+    session: SessionDep,
+    user: CurrentUser,
+) -> DraftSaved:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="build"
+    )
+    revision = choose_identity(session, context=context, draft_id=draft_id, body=body)
     session.commit()
     return DraftSaved(draft_id=draft_id, revision=revision)
 

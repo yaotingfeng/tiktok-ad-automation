@@ -130,7 +130,14 @@ def test_unpaginated_identity_response_accepts_more_than_page_size(
     # identity_get 是非分页接口；其四个分页值固定为零，不能用分页大小 50
     # 限制完整身份列表。线上已观察到单账户返回 58 条。
     data["identity_list"] = [
-        {**template, "identity_id": f"identity-{index}"} for index in range(58)
+        {
+            **template,
+            "identity_id": f"identity-{index}",
+            "display_name": f"Identity {index}",
+            "username": f"identity_{index}",
+            "profile_image": f"https://example.test/{index}.png",
+        }
+        for index in range(58)
     ]
     data["page_info"] = {
         "page": 0,
@@ -157,6 +164,10 @@ def test_unpaginated_identity_response_accepts_more_than_page_size(
     assert result.last is True
     assert result.facts.seen == 58
     assert result.facts.total_number == 58
+    assert len(result.facts.options) == 58
+    assert result.facts.options[57].display_name == "Identity 57"
+    assert result.facts.options[57].username == "identity_57"
+    assert result.facts.options[57].profile_image == "https://example.test/57.png"
 
 
 @pytest.mark.parametrize(

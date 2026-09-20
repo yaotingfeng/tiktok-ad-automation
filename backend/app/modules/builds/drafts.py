@@ -682,8 +682,11 @@ def _capabilities_page(
 def _scenes_page(
     session: Session, context: TenantContext, draft: BuildDraft, prep: DraftPreparation
 ) -> None:
+    from .identity_selection import selected_identity
+
     state = _scene_prep(session, draft, prep)
     route = _preparation_route(session, context, draft, prep)
+    identity = selected_identity(draft)
     # 先以首个有素材的链接准备各账户目录。Mini 未确定时停在名称选择；
     # 用户选择覆盖本批次链接，预览仍逐剧检查各链接真实目标，不能从应用推断。
     link_id = session.exec(
@@ -726,6 +729,7 @@ def _scenes_page(
                 advertiser_id=advertiser_id,
                 link_id=link_id,
                 route=route,
+                selected_identity=identity,
             )
             session.add(
                 DraftSceneDependency(
@@ -786,6 +790,7 @@ def _scenes_page(
             advertiser_id=dependency.advertiser_id,
             link_id=link_id,
             route=route,
+            selected_identity=identity,
         )
         dependency.job_id = result.job_id
         dependency.status = {

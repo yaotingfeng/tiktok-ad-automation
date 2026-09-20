@@ -73,6 +73,7 @@ def ensure_scene_preparation(
     advertiser_id: str,
     link_id: UUID,
     route: FrozenTikTokRoute,
+    selected_identity: dict[str, Any] | None = None,
 ) -> ScenePreparation:
     """Local enqueue/reuse only; caller commits. No SDK or credential decryption."""
     require_tenant(
@@ -131,6 +132,7 @@ def ensure_scene_preparation(
                     advertiser_id=advertiser_id,
                     link_id=link_id,
                     route=route,
+                    selected_identity=selected_identity,
                 )
             return ScenePreparation(job.id, "blocked", "minis_selection_required")
         result = read_scene_context(
@@ -140,6 +142,7 @@ def ensure_scene_preparation(
             advertiser_id=advertiser_id,
             link_id=link_id,
             route=route,
+            selected_identity=selected_identity,
         )
         if result.supported:
             return ScenePreparation(job.id, "ready")
