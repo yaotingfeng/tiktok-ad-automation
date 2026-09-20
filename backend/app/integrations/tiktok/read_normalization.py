@@ -156,16 +156,17 @@ def parse_page(
         data.get("page_info"),
     )
     # identity_get 的账户自有 TT_USER 列表是非分页返回，页信息固定为全零。
-    # 仅接受第一页、完整四个零及有界列表；其他不一致分页仍拒绝。
-    if (
+    # 它不受其他列表接口的单页 50 条限制；响应字节总量仍由传输层限制，
+    # 每条记录和完整计数仍由下方 DTO 严格校验。
+    unpaginated_identity = (
         resource == "identity"
         and page == 1
         and isinstance(values, list)
-        and len(values) <= PAGE_SIZE
         and isinstance(info, dict)
         and set(info) == {"page", "page_size", "total_page", "total_number"}
         and all(type(v) is int and v == 0 for v in info.values())
-    ):
+    )
+    if unpaginated_identity:
         info = {
             "page": 1,
             "page_size": PAGE_SIZE,
@@ -174,7 +175,7 @@ def parse_page(
         }
     if (
         not isinstance(values, list)
-        or len(values) > PAGE_SIZE
+        or (not unpaginated_identity and len(values) > PAGE_SIZE)
         or not isinstance(info, dict)
     ):
         raise _invalid()

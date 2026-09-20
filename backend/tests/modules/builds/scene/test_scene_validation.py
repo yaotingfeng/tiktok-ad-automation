@@ -116,6 +116,50 @@ def test_scene_page_limit_rejects_before_physical_business_call(
 
 
 @pytest.mark.parametrize(
+    "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
+)
+def test_unpaginated_identity_response_accepts_more_than_page_size(
+    database_engine, redis_client, scene_case, gateway_wire
+):
+    from app.integrations.tiktok.gateway import open_tiktok_gateway
+    from tests.modules.builds.scene.support import enqueue, scene_responses
+
+    case = scene_case
+    data = scene_responses(case)["identity"]
+    template = data["identity_list"][0]
+    # identity_get 是非分页接口；其四个分页值固定为零，不能用分页大小 50
+    # 限制完整身份列表。线上已观察到单账户返回 58 条。
+    data["identity_list"] = [
+        {**template, "identity_id": f"identity-{index}"} for index in range(58)
+    ]
+    data["page_info"] = {
+        "page": 0,
+        "page_size": 0,
+        "total_page": 0,
+        "total_number": 0,
+    }
+    enqueue(gateway_wire, "identity", data)
+
+    with open_tiktok_gateway(
+        database_engine=database_engine,
+        redis_client=redis_client,
+        context=case["context"],
+        route=case["route"],
+        task_deadline=datetime.now(UTC) + timedelta(seconds=20),
+    ) as gateway:
+        result = gateway.scenes.read_page(
+            resource="identity",
+            advertiser_id=case["advertiser_id"],
+            page=1,
+            minis_id="synthetic-minis",
+        )
+
+    assert result.last is True
+    assert result.facts.seen == 58
+    assert result.facts.total_number == 58
+
+
+@pytest.mark.parametrize(
     "daemon,name,eager,direct,hard",
     [
         (False, "ForkPoolWorker-1", False, False, 45),

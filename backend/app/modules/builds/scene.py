@@ -62,7 +62,7 @@ def _require_bounded_worker() -> None:
         raise DomainError("scene_worker_unbounded", "场景刷新需要有界后台任务")
 
 
-SCENE_CONTRACT_REVISION = "dual-channel-scene-2026-09-13-v3"
+SCENE_CONTRACT_REVISION = "dual-channel-scene-2026-09-20-v4"
 
 
 def scene_scope_basis(*, route: FrozenTikTokRoute, business: dict[str, Any]) -> str:

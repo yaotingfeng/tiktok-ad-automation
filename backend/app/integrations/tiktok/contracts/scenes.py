@@ -63,7 +63,14 @@ class IdentityMatch(IdentityFields):
 
 
 class IdentityFacts(PaginatedFacts):
+    seen: Count
     matches: tuple[IdentityMatch, ...]
+
+    @model_validator(mode="after")
+    def validate_unpaginated_counts(self) -> Self:
+        if self.total_number != self.seen or self.total_page != (1 if self.seen else 0):
+            raise ValueError("incomplete identity count")
+        return self
 
 
 class MinisMatch(FrozenFacts):
@@ -158,7 +165,10 @@ class ScenePage(FrozenFacts):
     def validate_resource(self) -> Self:
         if type(self.facts) is not FACT_TYPES[self.resource]:
             raise ValueError("scene resource/facts mismatch")
-        if isinstance(self.facts, PaginatedFacts):
+        if isinstance(self.facts, IdentityFacts):
+            if self.page != 1 or not self.last:
+                raise ValueError("unpaged identity resource")
+        elif isinstance(self.facts, PaginatedFacts):
             if self.page > max(1, self.facts.total_page) or self.last != (
                 self.page == max(1, self.facts.total_page)
             ):
