@@ -1366,4 +1366,5 @@
 - 投放身份目录与小程序保持同一参考账户规则：按广告账户 ID 排序取第一个账户读取目录；保留 TikTok 返回的名称、用户名、头像、身份类型、身份 ID 和授权 BC，同名的 `TT_USER` 与 `BC_AUTH_TT` 不合并。
 - 一个批次只保存一个精确身份三元组。只有一个候选时自动采用；多候选由用户选择。选择后直接进入 `scenes` 阶段，逐个广告账户验证同一身份；缺失时标记 `identity_unavailable`，不回退到第一条或其他身份。
 - 场景事实保存完整身份选项，不再只保留前两条匹配；非分页 `identity_get` 的 58 条线上形态继续完整计数。预览冻结所选身份，执行前按冻结身份重新核验，旧预览不改写。
-- 新增 `draft_identity_selection` 迁移和身份 GET/POST 接口；前端增加身份卡片与选择弹窗。隔离 PostgreSQL 从空库升级成功，API/MCP 非分页目录、同名授权分离、持久选择、逐账户验证及相关场景/预览/小程序回归 68 项通过；Ruff、Mypy、TypeScript/Vite 构建和差异检查通过。尚待正式切换新加坡测试环境。
+- 新增 `draft_identity_selection` 迁移和身份 GET/POST 接口；前端增加身份卡片与选择弹窗。隔离 PostgreSQL 从空库升级成功，API/MCP 非分页目录、同名授权分离、持久选择、逐账户验证及相关场景/预览/小程序回归 68 项通过；Ruff、Mypy、TypeScript/Vite 构建和差异检查通过。
+- `c05760d08019cb4a9c0660a163f3fc29673128fa` 已部署新加坡测试服。备份 `20260920T163956Z` 四份核心归档校验通过，旧项目共 1,787 个归档条目；PostgreSQL 独立恢复 107/107 张表、Redis 独立启动 PONG、项目/私有配置/证书恢复验证通过。固定候选版本 4 项服务器回归通过，正式 head 为 `draft_identity_selection`；六服务实际 cwd 均为新版本、`NRestarts=0`，4 个 Worker、HTTPS、前端、OpenAPI 身份端点和 bootstrap 检查通过。测试角色已恢复 `NOLOGIN NOCREATEDB`，临时库与测试副本已清理；未触发 TikTok 广告写入。
