@@ -1376,4 +1376,4 @@
 - 两个选择器新增与 BC 选择器一致的显式搜索。身份按名称、用户名、身份 ID、类型和授权 BC ID 搜索；小程序在 PostgreSQL 已缓存的全部分页中按名称/ID 搜索。搜索大小写不敏感，`%`、`_` 按普通字符处理，不产生 TikTok 请求。
 - 准备尚未完成但目录已经就绪时，用户可提前打开、浏览和搜索；选择项保持禁用，直到草稿 READY 才允许保存。搜索和翻页保留上一批结果，草稿修订/状态变化不沿用旧目录，避免保存后名称闪烁。
 - 后端相关真实 PostgreSQL/Redis 链路 39 项通过；准备页 Playwright 67 项通过；Ruff、Biome、TypeScript/Vite 构建及差异检查通过。完整 builds 基线另有 597 通过、3 跳过、6 失败、207 error：207 项集中为上一轮身份选择后旧合成预览 fixture 未持久化身份目录，另 4 项为既有分页/迁移/执行计划断言；已保留日志并未把该套件报告为全绿，本次目录/预览相关套件独立通过。
-- 新加坡测试环境发布记录见[选择器提前可用与搜索验收](validation/2026-09-21-selector-readiness-search-staging.md)。本轮无数据库迁移、无新功能开关、无 TikTok 或广告写入。
+- `bec5de51d79fc3b5bfc17f1fe89e34d7e4c81884` 已部署新加坡测试环境。完整备份 `20260921T022141Z` 的 PostgreSQL、Redis、旧项目和私有配置/证书归档及 SHA-256 通过；隔离恢复核对 107 张表、5,133 份加密响应、Redis keyspace、1,626 个项目文件与私有配置。正式 head 仍为 `draft_identity_selection`；六服务实际 cwd 均为新版本且 `NRestarts=0`，4 个 Worker、Bootstrap、线上 OpenAPI、生产前端和星屿旧草稿只读缓存搜索通过，备份 timer 已恢复，四队列为空且发布后无 warning/error。详见[选择器提前可用与搜索验收](validation/2026-09-21-selector-readiness-search-staging.md)。本轮无数据库迁移、无新功能开关、无 TikTok 或广告写入。
