@@ -466,11 +466,14 @@ def minis_options(
     session: SessionDep,
     user: CurrentUser,
     page: int = Query(default=1, ge=1, le=1000),
+    query: str | None = Query(default=None, max_length=255),
 ) -> DraftMinis:
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="read"
     )
-    return draft_minis(session, context=context, draft_id=draft_id, page=page)
+    return draft_minis(
+        session, context=context, draft_id=draft_id, page=page, query=query
+    )
 
 
 @router.post("/build-drafts/{draft_id}/minis", response_model=DraftSaved)
@@ -495,11 +498,14 @@ def identity_options(
     draft_id: UUID,
     session: SessionDep,
     user: CurrentUser,
+    query: str | None = Query(default=None, max_length=255),
 ) -> DraftIdentities:
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="read"
     )
-    return draft_identities(session, context=context, draft_id=draft_id)
+    return draft_identities(
+        session, context=context, draft_id=draft_id, query=query
+    )
 
 
 @router.post("/build-drafts/{draft_id}/identities", response_model=DraftSaved)

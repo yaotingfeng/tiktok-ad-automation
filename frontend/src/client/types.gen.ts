@@ -9194,6 +9194,10 @@ export type buildsMinisOptionsData = {
          * Page
          */
         page?: number;
+        /**
+         * Query
+         */
+        query?: string | null;
     };
     url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/minis';
 };
@@ -9262,7 +9266,12 @@ export type buildsIdentityOptionsData = {
          */
         draft_id: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Query
+         */
+        query?: string | null;
+    };
     url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/identities';
 };
 

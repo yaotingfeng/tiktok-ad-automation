@@ -370,6 +370,197 @@ def selection_draft(env, wire, redis_client):
         return draft_id, draft.revision, catalog
 
 
+def test_identity_catalog_available_before_scene_complete(
+    job_env, wire, redis_client
+):
+    from app.modules.builds.identity_selection import draft_identities
+    from app.modules.builds.scene_job_models import SceneJobPage
+
+    env = job_env
+    draft_id, _, catalog = selection_draft(env, wire, redis_client)
+    with Session(engine) as db, db.begin():
+        job = db.get(SceneJob, catalog.id)
+        job.status, job.resource, job.completed_at = "PENDING", "minis", None
+        for row in db.exec(
+            select(SceneJobPage).where(
+                SceneJobPage.job_id == catalog.id,
+                SceneJobPage.resource != "identity",
+            )
+        ).all():
+            db.delete(row)
+        job.facts = {"identity": job.facts["identity"]}
+    with Session(engine) as db:
+        result = draft_identities(db, context=env["context"], draft_id=draft_id)
+        assert result.state == "selected"
+        assert result.catalog_job_id == catalog.id
+        assert len(result.items) == 1
+
+
+def test_minis_catalog_available_before_scene_complete(job_env, wire, redis_client):
+    from app.modules.builds.mini_selection import draft_minis
+    from app.modules.builds.scene_job_models import SceneJobPage
+
+    env = job_env
+    draft_id, _, catalog = selection_draft(env, wire, redis_client)
+    with Session(engine) as db, db.begin():
+        job = db.get(SceneJob, catalog.id)
+        job.status, job.resource, job.completed_at = "PENDING", "cta", None
+        for row in db.exec(
+            select(SceneJobPage).where(
+                SceneJobPage.job_id == catalog.id,
+                SceneJobPage.resource.notin_(("identity", "minis")),
+            )
+        ).all():
+            db.delete(row)
+        job.facts = {
+            key: job.facts[key] for key in ("identity", "minis")
+        }
+    with Session(engine) as db:
+        result = draft_minis(db, context=env["context"], draft_id=draft_id)
+        assert result.state == "choose"
+        assert result.catalog_job_id == catalog.id
+        assert [item.minis_id for item in result.items] == ["fixture-minis"]
+
+
+def test_partial_minis_catalog_remains_pending(job_env, wire, redis_client):
+    from app.modules.builds.mini_selection import draft_minis
+    from app.modules.builds.scene_job_models import SceneJobPage
+
+    env = job_env
+    draft_id, _, catalog = selection_draft(env, wire, redis_client)
+    with Session(engine) as db, db.begin():
+        job = db.get(SceneJob, catalog.id)
+        job.status, job.resource, job.completed_at = "PENDING", "minis", None
+        for row in db.exec(
+            select(SceneJobPage).where(
+                SceneJobPage.job_id == catalog.id,
+                SceneJobPage.resource.notin_(("identity", "minis")),
+            )
+        ).all():
+            db.delete(row)
+        job.facts = {
+            "identity": job.facts["identity"],
+            "minis": {**job.facts["minis"], "total_page": 2},
+        }
+    with Session(engine) as db:
+        result = draft_minis(db, context=env["context"], draft_id=draft_id)
+        assert result.state == "pending"
+        assert result.catalog_job_id is None
+
+
+def test_identity_selector_search_matches_name_username_and_literal_id(
+    job_env, wire, redis_client
+):
+    from app.modules.builds.identity_selection import draft_identities
+
+    env = job_env
+    draft_id, _, catalog = selection_draft(env, wire, redis_client)
+    options = [
+        {
+            "identity_id": "identity-literal_%",
+            "identity_type": "BC_AUTH_TT",
+            "identity_authorized_bc_id": env["bc_id"],
+            "display_name": "Haunted Studio",
+            "username": "ghost_owner",
+        },
+        {
+            "identity_id": "identity-other",
+            "identity_type": "TT_USER",
+            "display_name": "Other Studio",
+            "username": "other_owner",
+        },
+    ]
+    with Session(engine) as db, db.begin():
+        job = db.get(SceneJob, catalog.id)
+        job.facts = {
+            **job.facts,
+            "identity": {**job.facts["identity"], "options": options},
+        }
+        draft = db.get(BuildDraft, draft_id)
+        draft.identity_id = options[0]["identity_id"]
+        draft.identity_type = options[0]["identity_type"]
+        draft.identity_authorized_bc_id = options[0]["identity_authorized_bc_id"]
+    calls = len(wire[0])
+    with Session(engine) as db:
+        by_name = draft_identities(
+            db, context=env["context"], draft_id=draft_id, query=" hAuNtEd "
+        )
+        by_username = draft_identities(
+            db, context=env["context"], draft_id=draft_id, query="GHOST_OWNER"
+        )
+        by_literal = draft_identities(
+            db, context=env["context"], draft_id=draft_id, query="_%"
+        )
+        missing = draft_identities(
+            db, context=env["context"], draft_id=draft_id, query="missing"
+        )
+    assert [item.identity_id for item in by_name.items] == ["identity-literal_%"]
+    assert [item.identity_id for item in by_username.items] == ["identity-literal_%"]
+    assert [item.identity_id for item in by_literal.items] == ["identity-literal_%"]
+    assert missing.items == [] and missing.total == 0
+    assert missing.state == "selected"
+    assert missing.selected and missing.selected.identity_id == "identity-literal_%"
+    assert len(wire[0]) == calls
+
+
+def test_minis_selector_search_spans_cached_pages_and_uses_filtered_pagination(
+    job_env, wire, redis_client
+):
+    from app.modules.builds.mini_selection import draft_minis
+    from app.modules.builds.scene_job_models import SceneJobPage
+
+    env = job_env
+    draft_id, _, catalog = selection_draft(env, wire, redis_client)
+    searched = {
+        "minis_id": "mini-literal_%",
+        "name": "Haunted by a Jealous Ghost",
+        "status": "ACTIVE",
+        "type": "MINI_SERIES",
+        "regions": ["US"],
+    }
+    with Session(engine) as db, db.begin():
+        job = db.get(SceneJob, catalog.id)
+        first = db.exec(
+            select(SceneJobPage).where(
+                SceneJobPage.job_id == catalog.id,
+                SceneJobPage.resource == "minis",
+            )
+        ).one()
+        values = first.model_dump(exclude={"id"})
+        values.update(page=2, facts={"options": [searched]})
+        db.add(SceneJobPage(**values))
+        job.facts = {
+            **job.facts,
+            "minis": {
+                **job.facts["minis"],
+                "total_number": 51,
+                "total_page": 2,
+            },
+        }
+    calls = len(wire[0])
+    with Session(engine) as db:
+        by_name = draft_minis(
+            db,
+            context=env["context"],
+            draft_id=draft_id,
+            query=" jealous GHOST ",
+        )
+        by_literal = draft_minis(
+            db,
+            context=env["context"],
+            draft_id=draft_id,
+            query="_%",
+        )
+        missing = draft_minis(
+            db, context=env["context"], draft_id=draft_id, query="missing"
+        )
+    assert [item.minis_id for item in by_name.items] == ["mini-literal_%"]
+    assert by_name.total == 1 and by_name.next_page is None
+    assert [item.minis_id for item in by_literal.items] == ["mini-literal_%"]
+    assert missing.items == [] and missing.total == 0 and missing.next_page is None
+    assert len(wire[0]) == calls
+
+
 def test_name_choice_persists_exact_links_and_recovers_same_request(
     job_env, wire, redis_client
 ):

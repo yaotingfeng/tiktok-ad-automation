@@ -11,6 +11,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Field, FieldLabel } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
 import { buildKey, mutationKey, readPendingMutation } from "./api"
 import { BuildError, reportError, unknownOutcome } from "./presentation"
 import { useDraftMinis } from "./useDraftMinis"
@@ -34,6 +36,8 @@ export function MiniTargetPicker({
 }) {
   const [open, setOpen] = useState(false)
   const [page, setPage] = useState(1)
+  const [input, setInput] = useState("")
+  const [search, setSearch] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>()
   const [confirmedMini, setConfirmedMini] = useState<{
@@ -41,7 +45,7 @@ export function MiniTargetPicker({
     name?: string
   }>()
   const client = useQueryClient()
-  const query = useDraftMinis(tenantId, bcId, summary, page)
+  const query = useDraftMinis(tenantId, bcId, summary, page, search)
   const data = query.data
   if (!summary.account_count || !summary.drama_count) return null
   const pendingKey = mutationKey(tenantId, bcId, summary.draft_id)
@@ -97,7 +101,7 @@ export function MiniTargetPicker({
                 (confirmedMini?.revision === summary.revision &&
                   (!data || data.state === "pending") &&
                   confirmedMini.name) ||
-                (summary.status === "PREPARING" || query.isPending
+                (query.isPending || data?.state === "pending"
                   ? "正在读取可用小程序…"
                   : data?.state === "conflict"
                     ? "剧目已有不同推广目标，请核对后选择"
@@ -109,9 +113,11 @@ export function MiniTargetPicker({
           {write && (
             <Button
               variant="outline"
-              disabled={!selectable || busy || !data?.catalog_job_id}
+              disabled={busy || !data?.catalog_job_id}
               onClick={() => {
                 setPage(1)
+                setInput("")
+                setSearch("")
                 setOpen(true)
               }}
             >
@@ -146,6 +152,36 @@ export function MiniTargetPicker({
               </DialogDescription>
             </DialogHeader>
             {error ? <BuildError error={error} /> : null}
+            <form
+              className="flex items-end gap-2"
+              onSubmit={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                setPage(1)
+                setSearch(input.trim())
+              }}
+            >
+              <Field>
+                <FieldLabel htmlFor="mini-selector-search">
+                  搜索小程序
+                </FieldLabel>
+                <Input
+                  id="mini-selector-search"
+                  maxLength={255}
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  placeholder="输入小程序名称或完整 ID"
+                />
+              </Field>
+              <Button type="submit" disabled={busy}>
+                搜索
+              </Button>
+            </form>
+            {query.isFetching && !query.isPending ? (
+              <p role="status" className="text-sm text-muted-foreground">
+                正在更新搜索结果…
+              </p>
+            ) : null}
             <div className="max-h-80 space-y-2 overflow-y-auto">
               {data?.items?.map((item) => (
                 <Button
@@ -166,7 +202,9 @@ export function MiniTargetPicker({
               ))}
               {!query.isFetching && !data?.items?.length && (
                 <p className="text-sm text-muted-foreground">
-                  本页没有可选的短剧小程序。
+                  {search
+                    ? "没有符合条件的小程序，请调整关键词。"
+                    : "本页没有可选的短剧小程序。"}
                 </p>
               )}
             </div>

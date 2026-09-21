@@ -795,7 +795,9 @@ test("没有版权方 Mini 配置时按名称选择并自动继续准备", async
   const dialog = page.getByRole("dialog", { name: "选择推广小程序" })
   await expect(dialog.getByText("LemonShow", { exact: true })).toBeVisible()
   await expect(dialog.getByText("共 1 条 · 第 1 / 1 页")).toBeVisible()
-  await expect(dialog.getByRole("textbox")).toHaveCount(0)
+  await expect(
+    dialog.getByRole("textbox", { name: "搜索小程序" }),
+  ).toBeVisible()
   await dialog.getByRole("button", { name: /LemonShow/ }).click()
   await expect(dialog).toHaveCount(0)
   await expect
@@ -818,6 +820,181 @@ test("没有版权方 Mini 配置时按名称选择并自动继续准备", async
     ),
   ).toBe(false)
   await page.screenshot({ path: "../.runtime/auto-minis/mini-selection.png" })
+})
+
+test("小程序和投放身份搜索缓存目录并保留刷新前结果", async ({ page }) => {
+  await buildsBoundary(page)
+  let releaseMiniSearch: () => void = () => {}
+  const heldMiniSearch = new Promise<void>((resolve) => {
+    releaseMiniSearch = resolve
+  })
+  await page.route(`**/build-drafts/${D}/minis**`, async (route) => {
+    if (route.request().method() !== "GET") return route.fallback()
+    const query = new URL(route.request().url()).searchParams
+    if (query.get("query") === "ghost") {
+      await heldMiniSearch
+      return route.fulfill({
+        json: {
+          state: "choose",
+          catalog_job_id: P,
+          advertiser_id: "account-1",
+          selected: null,
+          items: [{ minis_id: "mini-ghost", name: "Haunted Ghost" }],
+          next_page: null,
+          total: 1,
+        },
+      })
+    }
+    const second = query.get("page") === "2"
+    return route.fulfill({
+      json: {
+        state: "choose",
+        catalog_job_id: P,
+        advertiser_id: "account-1",
+        selected: null,
+        items: [
+          {
+            minis_id: second ? "mini-second" : "mini-first",
+            name: second ? "Second Page Mini" : "First Page Mini",
+          },
+        ],
+        next_page: second ? null : 2,
+        total: 51,
+      },
+    })
+  })
+  await page.route(`**/build-drafts/${D}/identities**`, async (route) => {
+    const query = new URL(route.request().url()).searchParams.get("query")
+    const items = query
+      ? [
+          {
+            identity_id: "identity-ghost",
+            identity_type: "BC_AUTH_TT",
+            identity_authorized_bc_id: bc,
+            display_name: "Ghost Studio",
+            username: "ghost_owner",
+            profile_image: null,
+          },
+        ]
+      : [
+          {
+            identity_id: "identity-first",
+            identity_type: "TT_USER",
+            identity_authorized_bc_id: null,
+            display_name: "First Identity",
+            username: "first_owner",
+            profile_image: null,
+          },
+          {
+            identity_id: "identity-ghost",
+            identity_type: "BC_AUTH_TT",
+            identity_authorized_bc_id: bc,
+            display_name: "Ghost Studio",
+            username: "ghost_owner",
+            profile_image: null,
+          },
+        ]
+    return route.fulfill({
+      json: {
+        state: "choose",
+        catalog_job_id: P,
+        advertiser_id: "account-1",
+        selected: null,
+        items,
+        total: items.length,
+      },
+    })
+  })
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+
+  await page.getByRole("button", { name: "选择小程序", exact: true }).click()
+  const miniDialog = page.getByRole("dialog", { name: "选择推广小程序" })
+  await miniDialog.getByRole("button", { name: "下一页" }).click()
+  await expect(miniDialog.getByText("Second Page Mini")).toBeVisible()
+  await miniDialog.getByRole("textbox", { name: "搜索小程序" }).fill(" ghost ")
+  const miniRequestPromise = page.waitForRequest(
+    (request) =>
+      request.url().includes(`/build-drafts/${D}/minis`) &&
+      new URL(request.url()).searchParams.get("query") === "ghost",
+  )
+  await miniDialog.getByRole("button", { name: "搜索", exact: true }).click()
+  await expect(miniDialog.getByText("Second Page Mini")).toBeVisible()
+  await expect(miniDialog.getByText("正在更新搜索结果…")).toBeVisible()
+  releaseMiniSearch()
+  await expect(miniDialog.getByText("Haunted Ghost")).toBeVisible()
+  const miniRequest = await miniRequestPromise
+  expect(new URL(miniRequest.url()).searchParams.get("page")).toBe("1")
+  await page.keyboard.press("Escape")
+
+  await page.getByRole("button", { name: "选择投放身份", exact: true }).click()
+  const identityDialog = page.getByRole("dialog", { name: "选择投放身份" })
+  await identityDialog
+    .getByRole("textbox", { name: "搜索投放身份" })
+    .fill("ghost_owner")
+  await identityDialog
+    .getByRole("button", { name: "搜索", exact: true })
+    .click()
+  await expect(identityDialog.getByText("Ghost Studio")).toBeVisible()
+  await expect(identityDialog.getByText("First Identity")).toHaveCount(0)
+})
+
+test("准备未结束时已完成的目录可以查看搜索但不能保存", async ({ page }) => {
+  const api = await buildsBoundary(page)
+  api.summary.status = "PREPARING"
+  api.summary.preparation_phase = "scenes"
+  await page.route(`**/build-drafts/${D}/identities**`, (route) =>
+    route.fulfill({
+      json: {
+        state: "choose",
+        catalog_job_id: P,
+        advertiser_id: "account-1",
+        selected: null,
+        items: [
+          {
+            identity_id: "identity-ready",
+            identity_type: "TT_USER",
+            identity_authorized_bc_id: null,
+            display_name: "Ready Identity",
+            username: "ready_owner",
+            profile_image: null,
+          },
+        ],
+        total: 1,
+      },
+    }),
+  )
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await expect(page.getByText("正在读取可用小程序…")).toHaveCount(0)
+  await expect(page.getByText("正在读取可用投放身份…")).toHaveCount(0)
+
+  const miniButton = page.getByRole("button", {
+    name: "选择小程序",
+    exact: true,
+  })
+  await expect(miniButton).toBeEnabled()
+  await miniButton.click()
+  const miniDialog = page.getByRole("dialog", { name: "选择推广小程序" })
+  await expect(
+    miniDialog.getByRole("textbox", { name: "搜索小程序" }),
+  ).toBeVisible()
+  await expect(
+    miniDialog.getByRole("button", { name: /LemonShow/ }),
+  ).toBeDisabled()
+  await page.keyboard.press("Escape")
+
+  const identityButton = page.getByRole("button", {
+    name: "选择投放身份",
+    exact: true,
+  })
+  await expect(identityButton).toBeEnabled()
+  await identityButton.click()
+  const identityDialog = page.getByRole("dialog", { name: "选择投放身份" })
+  await expect(
+    identityDialog.getByRole("textbox", { name: "搜索投放身份" }),
+  ).toBeVisible()
+  await expect(
+    identityDialog.getByRole("button", { name: /Ready Identity/ }),
+  ).toBeDisabled()
 })
 
 test("小程序保存响应丢失后查询原请求并继续，不重复保存", async ({ page }) => {

@@ -74,20 +74,47 @@ def selected_identity(draft: BuildDraft) -> dict[str, Any] | None:
 
 
 def draft_identities(
-    session: Session, *, context: TenantContext, draft_id: UUID
+    session: Session,
+    *,
+    context: TenantContext,
+    draft_id: UUID,
+    query: str | None = None,
 ) -> DraftIdentities:
     from .drafts import get_draft
 
     draft = get_draft(session, context=context, draft_id=draft_id)
-    account, job = _catalog(session, context, draft)
+    account, job = _catalog(session, context, draft, resource="identity")
     if job is None:
         return DraftIdentities(state="pending", advertiser_id=account)
-    items = _options(job)
+    catalog_items = _options(job)
     chosen = selected_identity(draft)
-    selected = next((item for item in items if chosen and _same(item, chosen)), None)
+    selected = next(
+        (item for item in catalog_items if chosen and _same(item, chosen)), None
+    )
     # 单一身份无需用户再点一次；真正生成预览时会在草稿锁内固化。
-    if chosen is None and len(items) == 1:
-        selected = items[0]
+    if chosen is None and len(catalog_items) == 1:
+        selected = catalog_items[0]
+    search = (query or "").strip().casefold()
+    items = (
+        [
+            item
+            for item in catalog_items
+            if search
+            in " ".join(
+                value
+                for value in (
+                    item.display_name,
+                    item.username,
+                    item.identity_id,
+                    item.identity_type,
+                    item.identity_authorized_bc_id,
+                )
+                if value
+            ).casefold()
+        ]
+        if search
+        else catalog_items
+    )
     return DraftIdentities(
         state="selected"
         if selected
@@ -107,7 +134,7 @@ def draft_identities(
 def require_preview_identity(
     session: Session, *, context: TenantContext, draft: BuildDraft
 ) -> dict[str, Any]:
-    account, job = _catalog(session, context, draft)
+    account, job = _catalog(session, context, draft, resource="identity")
     if job is None:
         raise DomainError("identity_catalog_unavailable", "请先更新可用投放身份")
     options = _options(job)
@@ -149,7 +176,7 @@ def choose_identity(
             raise DomainError("draft_revision_conflict", "草稿已更新，请刷新后重新选择")
         if draft.status != "READY":
             raise DomainError("draft_not_ready", "请等待当前账户和剧目准备完成")
-        _, job = _catalog(session, context, draft)
+        _, job = _catalog(session, context, draft, resource="identity")
         if job is None or job.id != body.catalog_job_id:
             raise DomainError(
                 "identity_catalog_stale", "投放身份目录已更新或过期，请重新准备"

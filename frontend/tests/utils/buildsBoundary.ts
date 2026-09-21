@@ -397,6 +397,31 @@ export async function buildsBoundary(
         total: 1,
       })
     }
+    if (path.endsWith(`/build-drafts/${D}/identities`))
+      return reply({
+        state: "selected",
+        catalog_job_id: P,
+        advertiser_id: "90071992547409936666",
+        selected: {
+          identity_id: "identity-ready",
+          identity_type: "TT_USER",
+          identity_authorized_bc_id: null,
+          display_name: "默认投放身份",
+          username: "ready_owner",
+          profile_image: null,
+        },
+        items: [
+          {
+            identity_id: "identity-ready",
+            identity_type: "TT_USER",
+            identity_authorized_bc_id: null,
+            display_name: "默认投放身份",
+            username: "ready_owner",
+            profile_image: null,
+          },
+        ],
+        total: 1,
+      })
     if (path.endsWith("/prepare")) {
       if (options.prepareUnknown) return route.abort("failed")
       return reply({ task_id: P, revision: summary.revision }, 202)

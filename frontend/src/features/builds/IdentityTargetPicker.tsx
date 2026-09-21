@@ -12,6 +12,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Field, FieldLabel } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
 import { buildKey, mutationKey, readPendingMutation } from "./api"
 import { BuildError, reportError, unknownOutcome } from "./presentation"
 import { useDraftIdentities } from "./useDraftIdentities"
@@ -40,10 +42,12 @@ export function IdentityTargetPicker({
   onRefresh: () => void
 }) {
   const [open, setOpen] = useState(false)
+  const [input, setInput] = useState("")
+  const [search, setSearch] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>()
   const client = useQueryClient()
-  const query = useDraftIdentities(tenantId, bcId, summary)
+  const query = useDraftIdentities(tenantId, bcId, summary, search)
   const data = query.data
   if (!summary.account_count || !summary.drama_count) return null
   const pendingKey = mutationKey(tenantId, bcId, summary.draft_id)
@@ -96,7 +100,7 @@ export function IdentityTargetPicker({
             <p className="text-sm text-muted-foreground">
               {data?.selected
                 ? `${identityName(data.selected)}${data.selected.username ? ` · @${data.selected.username}` : ""}`
-                : summary.status === "PREPARING" || query.isPending
+                : query.isPending || data?.state === "pending"
                   ? "正在读取可用投放身份…"
                   : data?.state === "unavailable"
                     ? "参考账户暂无可用投放身份"
@@ -108,13 +112,12 @@ export function IdentityTargetPicker({
           {write && (
             <Button
               variant="outline"
-              disabled={
-                !selectable ||
-                busy ||
-                !data?.catalog_job_id ||
-                !data?.items?.length
-              }
-              onClick={() => setOpen(true)}
+              disabled={busy || !data?.catalog_job_id || !data?.items?.length}
+              onClick={() => {
+                setInput("")
+                setSearch("")
+                setOpen(true)
+              }}
             >
               {data?.selected ? "更换投放身份" : "选择投放身份"}
             </Button>
@@ -142,6 +145,35 @@ export function IdentityTargetPicker({
               </DialogDescription>
             </DialogHeader>
             {error ? <BuildError error={error} /> : null}
+            <form
+              className="flex items-end gap-2"
+              onSubmit={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                setSearch(input.trim())
+              }}
+            >
+              <Field>
+                <FieldLabel htmlFor="identity-selector-search">
+                  搜索投放身份
+                </FieldLabel>
+                <Input
+                  id="identity-selector-search"
+                  maxLength={255}
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  placeholder="输入名称、用户名或完整 ID"
+                />
+              </Field>
+              <Button type="submit" disabled={busy}>
+                搜索
+              </Button>
+            </form>
+            {query.isFetching && !query.isPending ? (
+              <p role="status" className="text-sm text-muted-foreground">
+                正在更新搜索结果…
+              </p>
+            ) : null}
             <div className="max-h-96 space-y-2 overflow-y-auto">
               {data?.items?.map((item) => (
                 <Button
@@ -173,6 +205,13 @@ export function IdentityTargetPicker({
                   </span>
                 </Button>
               ))}
+              {!query.isFetching && !data?.items?.length ? (
+                <p className="text-sm text-muted-foreground">
+                  {search
+                    ? "没有符合条件的投放身份，请调整关键词。"
+                    : "当前没有可选的投放身份。"}
+                </p>
+              ) : null}
             </div>
           </DialogContent>
         </Dialog>

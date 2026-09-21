@@ -30,6 +30,7 @@ from .models import BuildDraft, DraftAccount, DraftDrama
 from .scene_job_models import SceneJob, SceneJobPage
 
 MINI_INDEPENDENT_FACTS = ("identity", "cta", "vbo", "regions")
+SELECTOR_PAGE_SIZE = 50
 
 
 class MiniOption(BaseModel):
@@ -92,6 +93,49 @@ def option(item: dict[str, Any]) -> MiniOption:
     )
 
 
+def search_catalog_options(
+    session: Session, job: SceneJob, *, query: str, page: int
+) -> tuple[list[dict[str, Any]], int]:
+    """在已持久化分页中搜索；strpos 把 `%`/`_` 当普通字符。"""
+    parameters = {
+        "tenant_id": job.tenant_id,
+        "job_id": job.id,
+        "query": query.casefold(),
+        "limit": SELECTOR_PAGE_SIZE,
+        "offset": (page - 1) * SELECTOR_PAGE_SIZE,
+    }
+    source = """
+        FROM build_scene_job_page p
+        CROSS JOIN LATERAL jsonb_array_elements(p.facts->'options')
+            WITH ORDINALITY AS value(item, position)
+        WHERE p.tenant_id=:tenant_id AND p.job_id=:job_id AND p.resource='minis'
+          AND value.item->>'status'='ACTIVE'
+          AND value.item->>'type'='MINI_SERIES'
+          AND jsonb_array_length(COALESCE(value.item->'regions', '[]'::jsonb)) > 0
+          AND strpos(
+              lower(concat_ws(' ', value.item->>'name', value.item->>'minis_id')),
+              :query
+          ) > 0
+    """
+    total = cast(SASession, session).execute(
+        text("SELECT count(*) " + source), parameters
+    ).scalar_one()
+    rows = (
+        cast(SASession, session)
+        .execute(
+            text(
+                "SELECT value.item "
+                + source
+                + " ORDER BY p.page, value.position LIMIT :limit OFFSET :offset"
+            ),
+            parameters,
+        )
+        .scalars()
+        .all()
+    )
+    return [cast(dict[str, Any], row) for row in rows], total
+
+
 def match_catalog_link(
     session: Session, *, context: TenantContext, link_id: UUID, job: SceneJob
 ) -> bool:
@@ -134,7 +178,11 @@ def _links(
 
 
 def _catalog(
-    session: Session, context: TenantContext, draft: BuildDraft
+    session: Session,
+    context: TenantContext,
+    draft: BuildDraft,
+    *,
+    resource: Literal["identity", "minis"] = "minis",
 ) -> tuple[str | None, SceneJob | None]:
     account = session.exec(
         select(DraftAccount.advertiser_id)
@@ -154,15 +202,26 @@ def _catalog(
         connection_id=draft.execution_connection_id,
     )
     return account, account_catalog(
-        session, context=context, account=account, route=route
+        session, context=context, account=account, route=route, resource=resource
     )
 
 
 def account_catalog(
-    session: Session, *, context: TenantContext, account: str, route: FrozenTikTokRoute
+    session: Session,
+    *,
+    context: TenantContext,
+    account: str,
+    route: FrozenTikTokRoute,
+    resource: Literal["identity", "minis"] = "minis",
 ) -> SceneJob | None:
     from .scene import _account_scope
 
+    # 目录资源完成后即可供选择器读取；CTA/VBO/地区仍在后台继续，并在预览时校验。
+    ready_resources = (
+        ("minis", "cta", "vbo", "regions", "done")
+        if resource == "identity"
+        else ("cta", "vbo", "regions", "done")
+    )
     job = session.exec(
         select(SceneJob)
         .where(
@@ -170,9 +229,12 @@ def account_catalog(
             SceneJob.bc_id == route.bc_id,
             SceneJob.advertiser_id == account,
             SceneJob.connection_id == route.connection_id,
-            SceneJob.status == "COMPLETE",
+            col(SceneJob.resource).in_(ready_resources),
             select(SceneJobPage.id)
-            .where(SceneJobPage.job_id == SceneJob.id, SceneJobPage.resource == "minis")
+            .where(
+                SceneJobPage.job_id == SceneJob.id,
+                SceneJobPage.resource == resource,
+            )
             .exists(),
             col(SceneJob.expires_at) > datetime.now(UTC),
             SceneJob.frozen_route == route.model_dump(mode="json"),
@@ -194,7 +256,12 @@ def account_catalog(
 
 
 def draft_minis(
-    session: Session, *, context: TenantContext, draft_id: UUID, page: int = 1
+    session: Session,
+    *,
+    context: TenantContext,
+    draft_id: UUID,
+    page: int = 1,
+    query: str | None = None,
 ) -> DraftMinis:
     from .drafts import get_draft
 
@@ -214,10 +281,17 @@ def draft_minis(
     selected = (
         catalog_options(session, job, minis_id=selected_id) if selected_id else []
     )
-    items = [option(item) for item in catalog_options(session, job, page=page)]
+    search = (query or "").strip()
+    if search:
+        found, filtered_total = search_catalog_options(
+            session, job, query=search, page=page
+        )
+        items = [option(item) for item in found]
+    else:
+        items = [option(item) for item in catalog_options(session, job, page=page)]
     catalog = job.facts.get("minis", {})
     pages = catalog.get("total_page", 0)
-    total = catalog.get("total_number", 0)
+    total = filtered_total if search else catalog.get("total_number", 0)
     return DraftMinis(
         state="selected"
         if selected
@@ -230,7 +304,11 @@ def draft_minis(
         advertiser_id=account,
         selected=option(selected[0]) if selected else None,
         items=items,
-        next_page=page + 1 if page < pages else None,
+        next_page=(
+            page + 1
+            if (page * SELECTOR_PAGE_SIZE < total if search else page < pages)
+            else None
+        ),
         total=total,
     )
 
