@@ -865,35 +865,38 @@ test("小程序和投放身份搜索缓存目录并保留刷新前结果", async
   })
   await page.route(`**/build-drafts/${D}/identities**`, async (route) => {
     const query = new URL(route.request().url()).searchParams.get("query")
-    const items = query
-      ? [
-          {
-            identity_id: "identity-ghost",
-            identity_type: "BC_AUTH_TT",
-            identity_authorized_bc_id: bc,
-            display_name: "Ghost Studio",
-            username: "ghost_owner",
-            profile_image: null,
-          },
-        ]
-      : [
-          {
-            identity_id: "identity-first",
-            identity_type: "TT_USER",
-            identity_authorized_bc_id: null,
-            display_name: "First Identity",
-            username: "first_owner",
-            profile_image: null,
-          },
-          {
-            identity_id: "identity-ghost",
-            identity_type: "BC_AUTH_TT",
-            identity_authorized_bc_id: bc,
-            display_name: "Ghost Studio",
-            username: "ghost_owner",
-            profile_image: null,
-          },
-        ]
+    const items =
+      query === "missing"
+        ? []
+        : query
+          ? [
+              {
+                identity_id: "identity-ghost",
+                identity_type: "BC_AUTH_TT",
+                identity_authorized_bc_id: bc,
+                display_name: "Ghost Studio",
+                username: "ghost_owner",
+                profile_image: null,
+              },
+            ]
+          : [
+              {
+                identity_id: "identity-first",
+                identity_type: "TT_USER",
+                identity_authorized_bc_id: null,
+                display_name: "First Identity",
+                username: "first_owner",
+                profile_image: null,
+              },
+              {
+                identity_id: "identity-ghost",
+                identity_type: "BC_AUTH_TT",
+                identity_authorized_bc_id: bc,
+                display_name: "Ghost Studio",
+                username: "ghost_owner",
+                profile_image: null,
+              },
+            ]
     return route.fulfill({
       json: {
         state: "choose",
@@ -936,6 +939,27 @@ test("小程序和投放身份搜索缓存目录并保留刷新前结果", async
     .click()
   await expect(identityDialog.getByText("Ghost Studio")).toBeVisible()
   await expect(identityDialog.getByText("First Identity")).toHaveCount(0)
+  await identityDialog
+    .getByRole("textbox", { name: "搜索投放身份" })
+    .fill("missing")
+  await identityDialog
+    .getByRole("button", { name: "搜索", exact: true })
+    .click()
+  await expect(
+    identityDialog.getByText("没有符合条件的投放身份，请调整关键词。"),
+  ).toBeVisible()
+  await page.keyboard.press("Escape")
+  const identityButton = page.getByRole("button", {
+    name: "选择投放身份",
+    exact: true,
+  })
+  await expect(identityButton).toBeEnabled()
+  await identityButton.click()
+  await expect(
+    page
+      .getByRole("dialog", { name: "选择投放身份" })
+      .getByText("First Identity"),
+  ).toBeVisible()
 })
 
 test("准备未结束时已完成的目录可以查看搜索但不能保存", async ({ page }) => {

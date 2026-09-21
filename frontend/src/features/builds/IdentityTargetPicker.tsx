@@ -112,7 +112,7 @@ export function IdentityTargetPicker({
           {write && (
             <Button
               variant="outline"
-              disabled={busy || !data?.catalog_job_id || !data?.items?.length}
+              disabled={busy || !data?.catalog_job_id}
               onClick={() => {
                 setInput("")
                 setSearch("")

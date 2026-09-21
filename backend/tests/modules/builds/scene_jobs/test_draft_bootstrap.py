@@ -500,6 +500,17 @@ def test_identity_selector_search_matches_name_username_and_literal_id(
     assert missing.items == [] and missing.total == 0
     assert missing.state == "selected"
     assert missing.selected and missing.selected.identity_id == "identity-literal_%"
+    with Session(engine) as db, db.begin():
+        draft = db.get(BuildDraft, draft_id)
+        draft.identity_id = None
+        draft.identity_type = None
+        draft.identity_authorized_bc_id = None
+    with Session(engine) as db:
+        unselected_missing = draft_identities(
+            db, context=env["context"], draft_id=draft_id, query="missing"
+        )
+    assert unselected_missing.items == [] and unselected_missing.total == 0
+    assert unselected_missing.state == "choose"
     assert len(wire[0]) == calls
 
 

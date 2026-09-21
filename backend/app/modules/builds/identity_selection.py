@@ -121,7 +121,7 @@ def draft_identities(
         else "stale"
         if chosen
         else "choose"
-        if items
+        if catalog_items
         else "unavailable",
         catalog_job_id=job.id,
         advertiser_id=account,
