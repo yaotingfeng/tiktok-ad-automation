@@ -155,7 +155,7 @@ test("账户筛选和全选使用同一条件，窄屏可操作且取消中止�
   await page.getByRole("button", { name: "选择账户", exact: true }).click()
   const dialog = page.getByRole("dialog", { name: "选择账户", exact: true })
   await dialog.getByLabel("搜索账户", { exact: true }).fill("P1")
-  await dialog.getByLabel("平台状态", { exact: true }).fill("STATUS_ENABLE")
+  await expect(dialog.getByLabel("平台状态", { exact: true })).toHaveCount(0)
   await dialog.getByRole("button", { name: "搜索", exact: true }).click()
   await dialog.getByRole("combobox", { name: "可用性", exact: true }).click()
   await page.getByRole("option", { name: "可用", exact: true }).click()
@@ -168,13 +168,30 @@ test("账户筛选和全选使用同一条件，窄屏可操作且取消中止�
   await expect(
     dialog.getByRole("button", { name: "确定添加" }),
   ).toBeInViewport()
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 844 })
+    const pageSelect = dialog.locator("label").filter({ hasText: "全选本页" })
+    const allSelect = dialog.getByRole("button", {
+      name: "全选筛选结果",
+      exact: true,
+    })
+    await expect
+      .poll(async () => {
+        const left = await pageSelect.boundingBox()
+        const right = await allSelect.boundingBox()
+        return Math.abs(
+          left!.y + left!.height / 2 - right!.y - right!.height / 2,
+        )
+      })
+      .toBeLessThanOrEqual(1)
+  }
   await dialog
     .getByRole("button", { name: "全选筛选结果", exact: true })
     .click()
   await expect.poll(() => !!release).toBe(true)
   const all = requests.findLast((query) => query.get("limit") === "100")!
   expect(all.get("query")).toBe("P1")
-  expect(all.get("remote_status")).toBe("STATUS_ENABLE")
+  expect(all.has("remote_status")).toBe(false)
   expect(all.get("availability")).toBe("AVAILABLE")
   await dialog.getByRole("button", { name: "取消", exact: true }).click()
   release!()

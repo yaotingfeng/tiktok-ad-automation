@@ -60,8 +60,6 @@ function AccountSelection({
   const id = useId()
   const [input, setInput] = useState("")
   const [search, setSearch] = useState("")
-  const [statusInput, setStatusInput] = useState("")
-  const [status, setStatus] = useState("")
   const [availability, setAvailability] = useState("all")
   const [selected, setSelected] = useState(new Set<string>())
   const [bulkBusy, setBulkBusy] = useState(false)
@@ -110,7 +108,6 @@ function AccountSelection({
         query: {
           bc_id: bcId,
           query: search,
-          remote_status: status || undefined,
           availability:
             availability === "all"
               ? undefined
@@ -128,7 +125,6 @@ function AccountSelection({
       "account-picker",
       bcId,
       search,
-      status,
       availability,
       paging.cursor,
       paging.limit,
@@ -215,13 +211,12 @@ function AccountSelection({
           event.stopPropagation()
           if (bulkBusy) return
           setSearch(input.trim())
-          setStatus(statusInput.trim())
           paging.reset()
           setBulkError(undefined)
         }}
       >
-        <FieldGroup className="gap-3">
-          <Field>
+        <FieldGroup className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+          <Field className="min-w-0">
             <FieldLabel htmlFor={`${id}-search`}>搜索账户</FieldLabel>
             <div className="flex gap-2">
               <Input
@@ -237,18 +232,8 @@ function AccountSelection({
               </Button>
             </div>
           </Field>
-          <div className="flex items-end gap-2">
-            <Field>
-              <FieldLabel htmlFor={`${id}-status`}>平台状态</FieldLabel>
-              <Input
-                id={`${id}-status`}
-                placeholder="输入平台原始状态"
-                maxLength={64}
-                value={statusInput}
-                disabled={bulkBusy}
-                onChange={(event) => setStatusInput(event.target.value)}
-              />
-            </Field>
+          <Field>
+            <FieldLabel>可用性</FieldLabel>
             <fieldset disabled={bulkBusy}>
               <FilterSelect
                 label="可用性"
@@ -263,11 +248,12 @@ function AccountSelection({
                 }}
               />
             </fieldset>
-          </div>
+          </Field>
         </FieldGroup>
       </form>
-      <div className="flex shrink-0 flex-wrap items-center gap-3">
-        <Field orientation="horizontal" className="w-auto">
+      {/* 全选工具栏与列表左边距一致，两个操作共用同一高度和垂直中线。 */}
+      <div className="flex shrink-0 items-center justify-between gap-2 px-3">
+        <Field orientation="horizontal" className="h-8 w-auto shrink-0 gap-2">
           <Checkbox
             id={`${id}-all`}
             disabled={locked || !available.length}
