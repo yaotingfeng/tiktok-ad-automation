@@ -155,7 +155,7 @@ def parse_page(*, query: BuildReadQuery, response: McpBusinessResponse) -> Build
             core.pop("operation_status", None)
             targeting = core.pop("targeting_spec", None)
             if isinstance(targeting, dict) and "location_ids" in targeting:
-                core["location_ids"] = targeting["location_ids"]
+                core.update(targeting)
                 core["name"] = core.pop("adgroup_name", None)
                 try:
                     observed_adgroup = AdGroupObservedFacts.model_validate(core)

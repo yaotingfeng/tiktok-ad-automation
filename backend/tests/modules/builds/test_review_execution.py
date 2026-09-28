@@ -183,6 +183,15 @@ def test_review_real_scene_checks_provider_and_missing_evidence(
 
     db, _, ids = executable
     calls = success_wire(monkeypatch)
+    # 预览现在必须有目录证据；本例显式使证据过期，验证执行前必须重核。
+    from datetime import UTC, datetime, timedelta
+
+    from app.modules.builds.scene_job_models import SceneJob
+
+    with Session(db) as session, session.begin():
+        for job in session.exec(select(SceneJob)).all():
+            job.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            session.add(job)
     if provider_verified:
         from uuid import uuid4
 

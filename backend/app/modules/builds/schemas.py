@@ -4,6 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.modules.builds.targeting_schemas import AudienceTargeting
 from app.modules.providers.schemas import DramaCandidate
 
 InputText = Annotated[str, Field(max_length=1000)]
@@ -78,6 +79,8 @@ class DraftGroupEditRequest(BaseModel):
 
 
 class DraftSummary(BaseModel):
+    targeting: AudienceTargeting = Field(default_factory=AudienceTargeting)
+    targeting_override: AudienceTargeting | None = None
     draft_id: UUID
     revision: int
     bc_id: str

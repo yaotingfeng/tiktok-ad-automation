@@ -63,6 +63,9 @@ from app.modules.builds.route_views import execution_route_view
 from app.modules.builds.routes import load_preview_route, save_preview_route
 from app.modules.builds.scene import read_scene_context
 from app.modules.builds.scene_schemas import SceneContext
+from app.modules.builds.targeting import apply_targeting
+from app.modules.builds.targeting_directory import draft_directory
+from app.modules.builds.targeting_service import effective_targeting
 from app.modules.materials.models import MaterialFile
 from app.modules.materials.readiness import get_material_readiness_batch
 from app.modules.providers.models import (
@@ -179,6 +182,18 @@ def generate_preview(
     require_preview_mini(session, context=context, draft=draft)
     chosen_identity = require_preview_identity(session, context=context, draft=draft)
     config = get_version(session, context=context, version_id=draft.strategy_version_id)
+    targeting = effective_targeting(session, context, draft)
+    directory = draft_directory(session, context=context, draft_id=draft.id)
+    if directory.state != "READY":
+        raise DomainError(
+            "targeting_regions_unverified",
+            "共同可投国家尚未核实或没有交集，请重新准备或调整账户",
+        )
+    if directory.unavailable_region_codes:
+        raise DomainError(
+            "targeting_regions_unavailable", "所选国家不在本批共同可投范围，请调整定向"
+        )
+    config = config.model_copy(update={"targeting": targeting})
     row = BuildPreview(
         tenant_id=context.tenant_id,
         bc_id=draft.bc_id,
@@ -203,6 +218,7 @@ def generate_preview(
     row.progress = {
         "phase": "inputs",
         "selected_identity": chosen_identity,
+        "targeting_region_codes": directory.region_codes,
         # 在父草稿锁下固定分母；不使用后续可能已修改的草稿推算历史进度。
         "total_units": session.exec(
             select(func.count())
@@ -575,6 +591,9 @@ def _expand_unit(
                 reason_codes=(error.code,),
                 capability_revision="unavailable",
             )
+        scene = apply_targeting(
+            scene, config.targeting, p.get("targeting_region_codes", [])
+        )
         name = _names(preview, drama, config, 1, 1)[0]
         unit = BuildUnit(
             **_scope(preview),
@@ -823,6 +842,16 @@ def continue_preview(
         session.add(preview)
         session.flush()
         return True
+    if (
+        "targeting" not in preview.config
+        or "targeting_region_codes" not in preview.progress
+    ):
+        # 未完成的旧预览必须重新生成，不能混合新旧定向规则；历史冻结任务不改写。
+        preview.status = "FAILED"
+        preview.error_code = "preview_targeting_outdated"
+        session.add(preview)
+        session.flush()
+        return True
     route = load_preview_route(session, context=context, preview_id=preview.id)
     config = StrategyConfig.model_validate(preview.config)
     # SQLAlchemy JSON mutations are tracked by replacing the container once.
@@ -886,6 +915,8 @@ def get_preview_summary(
         )
     ).one()
     return PreviewSummary(
+        targeting=preview.config.get("targeting"),
+        targeting_region_codes=preview.progress.get("targeting_region_codes", []),
         skipped_material_count=session.exec(
             select(func.count(func.distinct(PreviewSkippedMaterial.material_id)))
             .join(
@@ -1087,6 +1118,12 @@ def load_frozen_unit(
         readiness=cast(Readiness, unit.readiness),
         reason_codes=tuple(unit.reason_codes),
         scene_snapshot=unit.scene_snapshot,
+        targeting=unit.scene_snapshot.get("field_constraints", {}).get(
+            "audience_targeting"
+        ),
+        targeting_region_codes=unit.scene_snapshot.get("field_constraints", {}).get(
+            "selected_region_codes", []
+        ),
     )
 
 

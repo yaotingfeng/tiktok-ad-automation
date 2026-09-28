@@ -41,6 +41,82 @@ def test_preview_readiness_requires_scene_currency_and_every_material_path():
     assert unit_readiness("USD", "USD", [], []) == "BLOCKED"
 
 
+def seed_targeting_directory(session, context, advertisers, minis_id="fixture-mini"):
+    # 持久化离线目录，预览/执行继续使用合成场景，绝不调用真实 TikTok。
+    from datetime import UTC, datetime, timedelta
+
+    from app.modules.accounts.routing import freeze_route
+    from app.modules.builds.scene import scene_scope_basis
+    from app.modules.builds.scene_job_models import SceneJob, SceneJobPage
+
+    route = freeze_route(session, context=context, bc_id="bc-draft")
+    for advertiser in advertisers:
+        basis = scene_scope_basis(
+            route=route,
+            business={
+                "advertiser_id": advertiser,
+                "currency": "USD",
+                "timezone": "UTC",
+                "minis_id": minis_id,
+            },
+        )
+        job = SceneJob(
+            tenant_id=context.tenant_id,
+            actor_id=context.actor_id,
+            bc_id=route.bc_id,
+            advertiser_id=advertiser,
+            connection_id=route.connection_id,
+            credential_revision=0,
+            frozen_route=route.model_dump(mode="json"),
+            minis_id=minis_id,
+            scope_basis=basis,
+            status="COMPLETE",
+            resource="done",
+            first_observed_at=datetime.now(UTC),
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+            facts={
+                "identity": {
+                    "options": [
+                        {
+                            "identity_id": "identity-1",
+                            "identity_type": "BC_AUTH_TT",
+                            "identity_authorized_bc_id": "bc-draft",
+                        }
+                    ]
+                },
+                "minis": {
+                    "matches": [
+                        {
+                            "minis_id": minis_id,
+                            "status": "ACTIVE",
+                            "type": "MINI_SERIES",
+                            "regions": ["US"],
+                        }
+                    ]
+                },
+                "regions": {
+                    "locations": [{"region_code": "US", "location_id": "6252001"}]
+                },
+            },
+        )
+        session.add(job)
+        session.flush()
+        session.add(
+            SceneJobPage(
+                tenant_id=context.tenant_id,
+                job_id=job.id,
+                resource="identity",
+                page=1,
+                endpoint="offline",
+                source_revision="offline",
+                scope_basis=basis,
+                facts=job.facts["identity"],
+                observed_at=datetime.now(UTC),
+            )
+        )
+    session.flush()
+
+
 @pytest.fixture
 def prepared(session, context, intent, monkeypatch):
     from app.modules.builds import identity_selection
@@ -75,6 +151,7 @@ def prepared(session, context, intent, monkeypatch):
         minis_id="fixture-mini",
         source="USER",
     )
+    seed_targeting_directory(session, context, intent["account_lines"])
     scene = SceneContext(
         supported=True,
         reason_codes=(),
@@ -83,6 +160,7 @@ def prepared(session, context, intent, monkeypatch):
         creative_limit=50,
         copy_length_limit=100,
         field_constraints={
+            "target_regions": [{"region_code": "US", "location_id": "6252001"}],
             "name_limits": {"campaign": 512, "adgroup": 512, "ad": 512},
             "name_measurement": {
                 "campaign": "cjk_weighted",
@@ -729,6 +807,7 @@ def test_preview_concurrent_parent_locking(
             minis_id="fixture-mini",
             source="USER",
         )
+        seed_targeting_directory(session, context, ["account-A"])
         drama = (
             session.exec(select(DraftDrama).where(DraftDrama.draft_id == draft))
             .first()

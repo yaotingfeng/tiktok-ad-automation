@@ -7,6 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.builds.route_schemas import ExecutionRoutePublic
 
+from .targeting_schemas import AudienceTargeting
+
 Readiness = Literal["READY", "PREPARING", "BLOCKED"]
 
 
@@ -27,6 +29,8 @@ class PreviewGenerationProgress(BaseModel):
 
 
 class PreviewSummary(BaseModel):
+    targeting: AudienceTargeting | None = None
+    targeting_region_codes: list[str] = Field(default_factory=list)
     skipped_material_count: int = 0
     generation_progress: PreviewGenerationProgress
     execution_route: ExecutionRoutePublic | None = None
@@ -66,6 +70,8 @@ class PreviewUnit(BaseModel):
 
 
 class FrozenUnit(BaseModel):
+    targeting: AudienceTargeting | None = None
+    targeting_region_codes: list[str] = Field(default_factory=list)
     model_config = ConfigDict(frozen=True)
     unit_id: UUID
     preview_id: UUID

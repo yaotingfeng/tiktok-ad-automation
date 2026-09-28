@@ -167,3 +167,13 @@
 策略表单、搭建定向卡片、搜索多选、账户差异、预览摘要、客户端再生成。
 
 验收：前端真实交互测试覆盖保存、恢复、国家失效和只读角色；后端行为测试覆盖上述合同；类型检查、前端构建、格式和差异检查通过。模拟通过不报告为真实 TikTok 业务验收。
+
+## 2026-09-28 合同核实与实施落点
+
+- [官方 Upgraded Smart+ Ad Group 创建合同](https://business-api.tiktok.com/portal/docs/create-an-upgraded-smart-ad-group/v1.3)明确：`MANUAL` 支持 location、languages、age_groups、gender；默认 `AUTOMATIC` 会忽略部分不兼容定向字段且不报错。本实现新预览显式发送 `targeting_optimization_mode=MANUAL`，不发送仅适用于 AUTOMATIC 的 `suggestion_audience_enabled`。
+- `AGE_13_17` 仅适用于 APP_INSTALL/APP_RETARGETING；本工具 Minis 仅提供五档成年年龄。语言使用[官方 Language Code 枚举](https://business-api.tiktok.com/portal/docs?id=1737174886619138#item-link-Language%20Code)的 41 项代码。语言/年龄不选时省略对应字段，性别默认 GENDER_UNLIMITED；平台自身限制仍生效。
+- 策略国家参考目录从当前明确 BC 的默认连接内、当前授权代数和绑定代数下的未过期完整场景聚合；搭建使用该草稿固定连接、所选小程序及全部所选账户交集。地区 ID 逐账户解析。参考目录不代表某个具体 Minis 在全部账户均可投，最终以预览核实为准。
+- 授权证明缺失、未来时间戳、撤权、过期场景或最新场景未完成不计作已核实，保留批次全部账户分母；已核实但没有交集返回不可用。目录读取仅访问本地证据，重新核实复用已有后台准备流程。
+- 旧策略 JSON 不回写，读取时按新的明确默认配置解析；旧冻结预览及已提交请求不改写。升级时仍在 BUILDING 且缺少定向冻结信息的预览明确失败，须重新生成。
+- 执行前把当前场景按**冻结选择**重新投影后比较，新增可投国家不会扩展冻结国家范围；缺少所选国家阻止发送。SDK/MCP 编译和回读共用同一定向合同。
+- 本次为本地实现与离线传输边界验证；未创建真实广告，未验证具体账户实际投放结果，未部署服务器。

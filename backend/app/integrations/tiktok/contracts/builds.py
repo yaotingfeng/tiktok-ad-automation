@@ -16,6 +16,8 @@ from pydantic import (
     model_validator,
 )
 
+from app.modules.builds.targeting_schemas import AgeGroup, Gender, Language
+
 from .common import CallEvidence, McpBusinessResponse
 
 
@@ -82,6 +84,27 @@ class AdGroupObservedFacts(FrozenModel):
     vbo_window: Literal["ZERO_DAY"] | None = None
     roas_bid: Money
     location_ids: tuple[Id, ...] = Field(min_length=1)
+    # None 只用于表达历史请求没有该字段，不为新预览补造远端观测值。
+    languages: tuple[Language, ...] | None = Field(default=None, min_length=1)
+    age_groups: tuple[AgeGroup, ...] | None = Field(default=None, min_length=1)
+    gender: Gender | None = None
+    targeting_optimization_mode: Literal["MANUAL", "AUTOMATIC"] | None = None
+
+    @field_validator("languages", "age_groups")
+    @classmethod
+    def canonical_targeting(
+        cls, value: tuple[str, ...] | None
+    ) -> tuple[str, ...] | None:
+        return tuple(sorted(set(value))) if value is not None else None
+
+    @model_validator(mode="after")
+    def canonical_manual_regions(self) -> Self:
+        if self.targeting_optimization_mode == "MANUAL":
+            object.__setattr__(
+                self, "location_ids", tuple(sorted(set(self.location_ids)))
+            )
+        return self
+
     schedule_start_time: Annotated[Id, AfterValidator(_schedule)]
     promotion_type: Literal["MINI_APP"] = "MINI_APP"
     optimization_goal: Literal["VALUE"] = "VALUE"
@@ -100,6 +123,18 @@ class AdGroupObservedFacts(FrozenModel):
 
 class AdGroupCreate(AdGroupObservedFacts):
     operation_status: Literal["ENABLE"] = "ENABLE"
+
+    @model_validator(mode="after")
+    def require_strict_targeting(self) -> Self:
+        if (
+            any(
+                value is not None
+                for value in (self.languages, self.age_groups, self.gender)
+            )
+            and self.targeting_optimization_mode != "MANUAL"
+        ):
+            raise ValueError("自定义定向必须显式使用 MANUAL，避免平台忽略用户选择")
+        return self
 
 
 class CreativeAsset(FrozenModel):

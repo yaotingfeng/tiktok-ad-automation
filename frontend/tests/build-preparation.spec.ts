@@ -2243,3 +2243,110 @@ test("tenant picker treats historical filename aliases as one selection across s
     .uncheck()
   await expect(picker.getByText("已选 0 条", { exact: true })).toBeVisible()
 })
+
+test("本次定向选择共同国家并保存，可恢复策略默认", async ({ page }) => {
+  const api = await buildsBoundary(page, { miniSelected: true })
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await page.getByRole("button", { name: "修改本次定向", exact: true }).click()
+  await page.getByRole("combobox", { name: "国家范围" }).click()
+  await page.getByRole("option", { name: "指定国家", exact: true }).click()
+  await expect(
+    page.getByRole("checkbox", { name: "英国", exact: true }),
+  ).toHaveCount(0)
+  await page.getByRole("checkbox", { name: "美国", exact: true }).check()
+  await page.getByRole("checkbox", { name: "25–34 岁", exact: true }).check()
+  await page.getByRole("button", { name: "保存本次定向", exact: true }).click()
+  await expect(page.getByText("本次已修改", { exact: true })).toBeVisible()
+  const saved = api.requests.find(
+    (r) => r.method === "PATCH" && r.path.endsWith("/targeting"),
+  )
+  expect(saved?.body.targeting_override.region_codes).toEqual(["US"])
+  expect(saved?.body.targeting_override.age_groups).toEqual(["AGE_25_34"])
+  await page.getByRole("button", { name: "恢复策略默认", exact: true }).click()
+  await expect(page.getByText("策略默认", { exact: true })).toBeVisible()
+  expect(
+    api.requests
+      .filter((r) => r.method === "PATCH" && r.path.endsWith("/targeting"))
+      .at(-1)?.body.targeting_override,
+  ).toBeNull()
+})
+
+test("失效国家保留显示且不允许保存或生成预览", async ({ page }) => {
+  const api = await buildsBoundary(page, { miniSelected: true })
+  api.summary.targeting = {
+    region_mode: "SELECTED",
+    region_codes: ["GB"],
+    languages: [],
+    age_groups: [],
+    gender: "GENDER_UNLIMITED",
+  }
+  await page.route(`**/build-drafts/${D}/targeting`, (route) =>
+    route.fulfill({
+      json: {
+        region_codes: ["US"],
+        unavailable_region_codes: ["GB"],
+        state: "READY",
+        revision: 1,
+        account_count: 3,
+        verified_account_count: 3,
+      },
+    }),
+  )
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await expect(page.getByText(/已选国家不可用或待核实：英国/)).toBeVisible()
+  await page.getByRole("button", { name: "修改本次定向", exact: true }).click()
+  await expect(page.getByRole("checkbox", { name: /英国/ })).toBeChecked()
+  await expect(
+    page.getByRole("button", { name: "保存本次定向", exact: true }),
+  ).toBeDisabled()
+  await page.getByRole("checkbox", { name: /英国/ }).click()
+  await page.getByRole("checkbox", { name: "美国", exact: true }).check()
+  await expect(
+    page.getByRole("button", { name: "保存本次定向", exact: true }),
+  ).toBeEnabled()
+})
+
+test("只读成员可查看定向与账户差异，但不能修改", async ({ page }) => {
+  const api = await buildsBoundary(page, { viewer: true, miniSelected: true })
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await expect(
+    page.getByText("受众定向", { exact: false }).first(),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "修改本次定向", exact: true }),
+  ).toHaveCount(0)
+  await expect(
+    page.getByRole("button", { name: "恢复策略默认", exact: true }),
+  ).toHaveCount(0)
+  await page
+    .getByRole("button", { name: "查看账户地区差异", exact: true })
+    .click()
+  await expect(page.getByRole("dialog", { name: "账户地区差异" })).toBeVisible()
+  expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
+})
+
+test("预览展示冻结定向，而非当前策略配置", async ({ page }) => {
+  const api = await buildsBoundary(page, { miniSelected: true })
+  await page.route(`**/build-previews/${P}`, (route) =>
+    route.fulfill({
+      json: {
+        ...api.preview,
+        targeting: {
+          region_mode: "SELECTED",
+          region_codes: ["US"],
+          languages: ["en"],
+          age_groups: ["AGE_25_34"],
+          gender: "GENDER_FEMALE",
+        },
+        targeting_region_codes: ["US"],
+      },
+    }),
+  )
+  await page.goto(`/tenants/${tenant}/build-previews/${P}?bc_id=${bc}`)
+  await expect(
+    page.getByText("受众定向 · 严格限制", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByText(/国家：美国.*语言：英语.*年龄：25–34 岁.*性别：女性/),
+  ).toBeVisible()
+})

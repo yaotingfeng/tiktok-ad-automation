@@ -14,6 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { CopyField } from "@/features/providers/presentation"
 import { normalizeDecimal } from "@/features/strategies/validation"
+import { TargetingSummary } from "@/features/targeting/TargetingForm"
 import { ManagementSheet } from "@/features/tenants/ManagementSheet"
 import {
   canManage,
@@ -184,6 +185,17 @@ export function BuildPreviewPanel({
           error={summary.error}
           retry={() => void summary.refetch()}
         />
+      )}
+      {current?.targeting && (
+        <Card>
+          <CardContent className="flex flex-col gap-2">
+            <p className="font-medium">受众定向 · 严格限制</p>
+            <TargetingSummary
+              value={current.targeting}
+              countries={current.targeting_region_codes}
+            />
+          </CardContent>
+        </Card>
       )}
       <BuildGuard
         dirty={!readOnly && (submission.busy || submission.unknown)}
@@ -705,6 +717,17 @@ function FrozenUnitSheet({
             <p className="break-all text-xs text-muted-foreground">
               策略版本 {detail.data.strategy_version_id}
             </p>
+            {detail.data.targeting && (
+              <div className="rounded-md border p-3">
+                <p className="mb-2 text-sm font-medium">
+                  本账户冻结定向 · 严格限制
+                </p>
+                <TargetingSummary
+                  value={detail.data.targeting}
+                  countries={detail.data.targeting_region_codes}
+                />
+              </div>
+            )}
             <details className="rounded-md border p-3">
               <summary className="cursor-pointer text-sm">
                 Minis、Identity 与场景能力快照

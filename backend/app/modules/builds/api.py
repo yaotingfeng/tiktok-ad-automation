@@ -47,6 +47,7 @@ from .identity_selection import (
     draft_identities,
 )
 from .mini_selection import ChooseMiniRequest, DraftMinis, choose_mini, draft_minis
+from .targeting_schemas import TargetingAccount, TargetingChange, TargetingDirectory
 
 router = APIRouter(prefix="/tenants/{tenant_id}", tags=["builds"])
 Cursor = Annotated[str | None, Query(max_length=4096)]
@@ -503,9 +504,7 @@ def identity_options(
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="read"
     )
-    return draft_identities(
-        session, context=context, draft_id=draft_id, query=query
-    )
+    return draft_identities(session, context=context, draft_id=draft_id, query=query)
 
 
 @router.post("/build-drafts/{draft_id}/identities", response_model=DraftSaved)
@@ -549,5 +548,74 @@ def put_manual_link(
         request_id=body.request_id,
         link=body.link.model_dump(),
     )
+    session.commit()
+    return DraftSaved(draft_id=draft_id, revision=revision)
+
+
+@router.get("/targeting/regions", response_model=TargetingDirectory)
+def targeting_regions(
+    tenant_id: UUID,
+    bc_id: Annotated[str, Query(min_length=1, max_length=128)],
+    session: SessionDep,
+    user: CurrentUser,
+) -> TargetingDirectory:
+    from app.modules.accounts.routing import freeze_route
+
+    from .targeting_directory import region_directory
+
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    route = freeze_route(session, context=context, bc_id=bc_id)
+    return region_directory(session, context=context, route=route)
+
+
+@router.get("/build-drafts/{draft_id}/targeting", response_model=TargetingDirectory)
+def targeting_options(
+    tenant_id: UUID, draft_id: UUID, session: SessionDep, user: CurrentUser
+) -> TargetingDirectory:
+    from .targeting_directory import draft_directory
+
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    return draft_directory(session, context=context, draft_id=draft_id)
+
+
+@router.get(
+    "/build-drafts/{draft_id}/targeting/accounts", response_model=Page[TargetingAccount]
+)
+def targeting_accounts(
+    tenant_id: UUID,
+    draft_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    cursor: Annotated[str, Query(max_length=128)] = "",
+    limit: Limit = 50,
+) -> Page[TargetingAccount]:
+    from .targeting_directory import account_regions
+
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    return account_regions(
+        session, context=context, draft_id=draft_id, after=cursor, limit=limit
+    )
+
+
+@router.patch("/build-drafts/{draft_id}/targeting", response_model=DraftSaved)
+def update_targeting(
+    tenant_id: UUID,
+    draft_id: UUID,
+    body: TargetingChange,
+    session: SessionDep,
+    user: CurrentUser,
+) -> DraftSaved:
+    from .targeting_service import save_targeting
+
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="build"
+    )
+    revision = save_targeting(session, context=context, draft_id=draft_id, body=body)
     session.commit()
     return DraftSaved(draft_id=draft_id, revision=revision)

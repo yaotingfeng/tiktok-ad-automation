@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
+from app.modules.builds.targeting_schemas import AudienceTargeting
 from app.modules.strategies.naming import DEFAULT_NAME_TEMPLATE
 
 
@@ -26,6 +27,7 @@ class StrategyConfig(BaseModel):
     budget: Money
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     target_roas: Money
+    targeting: AudienceTargeting = Field(default_factory=AudienceTargeting)
     group_size: int = Field(gt=0, strict=True)
     creative_count: int = Field(gt=0, strict=True)
     copy_pool_version: UUID

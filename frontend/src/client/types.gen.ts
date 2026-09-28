@@ -138,6 +138,32 @@ export type AppendVersionRequest = {
 };
 
 /**
+ * AudienceTargeting
+ */
+export type AudienceTargeting = {
+    /**
+     * Region Mode
+     */
+    region_mode?: 'ALL_AVAILABLE' | 'SELECTED';
+    /**
+     * Region Codes
+     */
+    region_codes?: Array<string>;
+    /**
+     * Languages
+     */
+    languages?: Array<'ar' | 'as' | 'bgc' | 'bh' | 'bn' | 'cs' | 'de' | 'el' | 'en' | 'es' | 'fi' | 'fr' | 'gu' | 'he' | 'hi' | 'hu' | 'id' | 'it' | 'ja' | 'kn' | 'ko' | 'ml' | 'mr' | 'ms' | 'nl' | 'or' | 'pa' | 'pl' | 'pt' | 'raj' | 'ro' | 'ru' | 'sv' | 'ta' | 'te' | 'th' | 'tr' | 'uk' | 'vi' | 'zh' | 'zh-Hant'>;
+    /**
+     * Age Groups
+     */
+    age_groups?: Array<'AGE_18_24' | 'AGE_25_34' | 'AGE_35_44' | 'AGE_45_54' | 'AGE_55_100'>;
+    /**
+     * Gender
+     */
+    gender?: 'GENDER_UNLIMITED' | 'GENDER_MALE' | 'GENDER_FEMALE';
+};
+
+/**
  * AuthorizationRequest
  */
 export type AuthorizationRequest = {
@@ -942,6 +968,8 @@ export type DraftSaved = {
  * DraftSummary
  */
 export type DraftSummary = {
+    targeting?: AudienceTargeting;
+    targeting_override?: AudienceTargeting | null;
     /**
      * Draft Id
      */
@@ -1170,6 +1198,11 @@ export type FrozenTikTokRoute = {
  * FrozenUnit
  */
 export type FrozenUnit = {
+    targeting?: AudienceTargeting | null;
+    /**
+     * Targeting Region Codes
+     */
+    targeting_region_codes?: Array<string>;
     /**
      * Unit Id
      */
@@ -2837,6 +2870,24 @@ export type Page_SubmissionUnitPublic_ = {
 };
 
 /**
+ * Page[TargetingAccount]
+ */
+export type Page_TargetingAccount_ = {
+    /**
+     * Items
+     */
+    items: Array<TargetingAccount>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
+};
+
+/**
  * Page[TenantSummary]
  */
 export type Page_TenantSummary_ = {
@@ -3188,6 +3239,11 @@ export type PreviewRequest = {
  * PreviewSummary
  */
 export type PreviewSummary = {
+    targeting?: AudienceTargeting | null;
+    /**
+     * Targeting Region Codes
+     */
+    targeting_region_codes?: Array<string>;
     /**
      * Skipped Material Count
      */
@@ -3941,6 +3997,7 @@ export type StrategyConfig_Input = {
      * Target Roas
      */
     target_roas: number | string;
+    targeting?: AudienceTargeting;
     /**
      * Group Size
      */
@@ -3979,6 +4036,7 @@ export type StrategyConfig_Output = {
      * Target Roas
      */
     target_roas: string;
+    targeting?: AudienceTargeting;
     /**
      * Group Size
      */
@@ -4445,6 +4503,69 @@ export type SubmitRequest = {
      * Request Id
      */
     request_id: string;
+};
+
+/**
+ * TargetingAccount
+ */
+export type TargetingAccount = {
+    /**
+     * Advertiser Id
+     */
+    advertiser_id: string;
+    /**
+     * Region Codes
+     */
+    region_codes: Array<string>;
+    /**
+     * Reason Codes
+     */
+    reason_codes: Array<string>;
+};
+
+/**
+ * TargetingChange
+ */
+export type TargetingChange = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+    targeting_override: AudienceTargeting | null;
+};
+
+/**
+ * TargetingDirectory
+ */
+export type TargetingDirectory = {
+    /**
+     * Region Codes
+     */
+    region_codes?: Array<string>;
+    /**
+     * Account Count
+     */
+    account_count?: number;
+    /**
+     * Verified Account Count
+     */
+    verified_account_count?: number;
+    /**
+     * Unavailable Region Codes
+     */
+    unavailable_region_codes?: Array<string>;
+    /**
+     * State
+     */
+    state?: 'READY' | 'PENDING' | 'UNAVAILABLE';
+    /**
+     * Revision
+     */
+    revision?: number | null;
 };
 
 /**
@@ -9364,6 +9485,152 @@ export type buildsPutManualLinkResponses = {
 };
 
 export type buildsPutManualLinkResponse = buildsPutManualLinkResponses[keyof buildsPutManualLinkResponses];
+
+export type buildsTargetingRegionsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/targeting/regions';
+};
+
+export type buildsTargetingRegionsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsTargetingRegionsError = buildsTargetingRegionsErrors[keyof buildsTargetingRegionsErrors];
+
+export type buildsTargetingRegionsResponses = {
+    /**
+     * Successful Response
+     */
+    200: TargetingDirectory;
+};
+
+export type buildsTargetingRegionsResponse = buildsTargetingRegionsResponses[keyof buildsTargetingRegionsResponses];
+
+export type buildsTargetingOptionsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/targeting';
+};
+
+export type buildsTargetingOptionsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsTargetingOptionsError = buildsTargetingOptionsErrors[keyof buildsTargetingOptionsErrors];
+
+export type buildsTargetingOptionsResponses = {
+    /**
+     * Successful Response
+     */
+    200: TargetingDirectory;
+};
+
+export type buildsTargetingOptionsResponse = buildsTargetingOptionsResponses[keyof buildsTargetingOptionsResponses];
+
+export type buildsUpdateTargetingData = {
+    body: TargetingChange;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/targeting';
+};
+
+export type buildsUpdateTargetingErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsUpdateTargetingError = buildsUpdateTargetingErrors[keyof buildsUpdateTargetingErrors];
+
+export type buildsUpdateTargetingResponses = {
+    /**
+     * Successful Response
+     */
+    200: DraftSaved;
+};
+
+export type buildsUpdateTargetingResponse = buildsUpdateTargetingResponses[keyof buildsUpdateTargetingResponses];
+
+export type buildsTargetingAccountsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: {
+        /**
+         * Cursor
+         */
+        cursor?: string;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/targeting/accounts';
+};
+
+export type buildsTargetingAccountsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsTargetingAccountsError = buildsTargetingAccountsErrors[keyof buildsTargetingAccountsErrors];
+
+export type buildsTargetingAccountsResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_TargetingAccount_;
+};
+
+export type buildsTargetingAccountsResponse = buildsTargetingAccountsResponses[keyof buildsTargetingAccountsResponses];
 
 export type buildsSavedSubmissionData = {
     body?: never;

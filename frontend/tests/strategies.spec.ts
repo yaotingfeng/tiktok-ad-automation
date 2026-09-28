@@ -452,7 +452,7 @@ test("预算大数十进制原文保存，结构和命名示例不进入配置",
   expect(write.body.config.target_roas).toBe("1.08")
   expect(write.body.config.cta_option_ids).toEqual(["official-existing-id"])
   expect(Object.keys(write.body.config).sort()).toEqual(
-    Object.keys(config).sort(),
+    [...Object.keys(config), "targeting"].sort(),
   )
   expect(write.body.expected_version).toBe(1)
 })
@@ -1326,3 +1326,31 @@ for (const viewport of [
     })
   })
 }
+
+test("策略定向保存成年年龄、语言和性别，无BC不提供全球国家目录", async ({
+  page,
+}) => {
+  const api = await boundary(page)
+  await page.goto(editUrl)
+  await expect(page.getByText("受众定向", { exact: true })).toBeVisible()
+  await expect(
+    page.getByText("请选择 BC 并同步账户和小程序地区后再选择国家。"),
+  ).toBeVisible()
+  await page.getByRole("checkbox", { name: "25–34 岁", exact: true }).check()
+  await page.getByRole("checkbox", { name: "英语", exact: true }).check()
+  await page.getByRole("combobox", { name: "性别", exact: true }).click()
+  await page.getByRole("option", { name: "女性", exact: true }).click()
+  await expect(page.getByRole("checkbox", { name: /13.*17/ })).toHaveCount(0)
+  await page.getByRole("button", { name: "保存为新版本", exact: true }).click()
+  await expect(page.getByText("已保存 v2", { exact: true })).toBeVisible()
+  const saved = api.requests.find(
+    (r) => r.method === "POST" && r.path.endsWith("/versions"),
+  )
+  expect(saved?.body.config.targeting).toEqual({
+    region_mode: "ALL_AVAILABLE",
+    region_codes: [],
+    languages: ["en"],
+    age_groups: ["AGE_25_34"],
+    gender: "GENDER_FEMALE",
+  })
+})

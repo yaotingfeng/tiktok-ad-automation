@@ -36,6 +36,7 @@ from app.modules.providers.models import (
     ProviderDrama,
 )
 from app.modules.providers.schemas import display_config
+from app.modules.strategies.service import get_version
 
 
 def draft_summary(
@@ -77,6 +78,11 @@ def draft_summary(
     ).one()
     provider = session.get(ProviderConnection, row.provider_connection_id)
     return DraftSummary(
+        targeting=row.targeting_override
+        or get_version(
+            session, context=context, version_id=row.strategy_version_id
+        ).targeting,
+        targeting_override=row.targeting_override,
         draft_id=row.id,
         revision=row.revision,
         bc_id=row.bc_id,

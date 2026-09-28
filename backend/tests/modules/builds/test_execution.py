@@ -20,7 +20,7 @@ from app.modules.strategies.models import StrategyVersion
 from app.modules.strategies.service import append_version
 from tests.modules.builds.test_drafts import account, create_intent, finish, ready_links
 from tests.modules.builds.test_execution_admission import policy
-from tests.modules.builds.test_previews import drain
+from tests.modules.builds.test_previews import drain, seed_targeting_directory
 from tests.modules.materials.test_tenant_materials import material
 from tests.modules.strategies.test_versions import config
 
@@ -78,6 +78,9 @@ def executable(isolated_strategy_database, monkeypatch, request):
             "requires_portfolio_creation": True,
         },
         field_constraints={
+            "target_regions": [
+                {"region_code": "US", "location_id": "fixture-location"}
+            ],
             "name_limits": {"campaign": 512, "adgroup": 512, "ad": 512},
             "name_measurement": {
                 "campaign": "characters",
@@ -156,6 +159,7 @@ def executable(isolated_strategy_database, monkeypatch, request):
             minis_id="minis-1",
             source="USER",
         )
+        seed_targeting_directory(session, context, accounts, minis_id="minis-1")
         preview = previews.generate_preview(
             session, context=context, draft_id=draft, expected_revision=1
         )
@@ -241,6 +245,11 @@ def test_all_layers_enable_target_assets_and_no_row_locks_during_official_wire(
     )
     group = next(b for u, b in calls if "/adgroup/" in u)
     assert "budget" not in group and group["roas_bid"] == 1.08
+    assert group["targeting_optimization_mode"] == "MANUAL"
+    assert group["targeting_spec"] == {
+        "location_ids": ["fixture-location"],
+        "gender": "GENDER_UNLIMITED",
+    }
     ads = [b for u, b in calls if "/ad/create/" in u]
     assert ads[0]["creative_list"] == ads[1]["creative_list"]
     assert (

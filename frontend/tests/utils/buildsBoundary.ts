@@ -77,6 +77,14 @@ export async function buildsBoundary(
       account: ["90071992547409936666", "广告户乙", "广告户丙"],
     }
   const summary = {
+    targeting: {
+      region_mode: "ALL_AVAILABLE",
+      region_codes: [],
+      languages: [],
+      age_groups: [],
+      gender: "GENDER_UNLIMITED",
+    } as any,
+    targeting_override: null as any,
     draft_id: D,
     revision: 1,
     bc_id: BC,
@@ -377,6 +385,43 @@ export async function buildsBoundary(
       candidateSelected = true
       return reply({ task_id: P }, 202)
     }
+    if (path.endsWith(`/build-drafts/${D}/targeting`)) {
+      if (method === "PATCH") {
+        summary.targeting_override = body.targeting_override
+        summary.targeting = body.targeting_override || {
+          region_mode: "ALL_AVAILABLE",
+          region_codes: [],
+          languages: [],
+          age_groups: [],
+          gender: "GENDER_UNLIMITED",
+        }
+        summary.revision++
+        preview.status = "OBSOLETE"
+        const result = { draft_id: D, revision: summary.revision }
+        mutations.set(body.request_id, result)
+        return reply(result)
+      }
+      return reply({
+        region_codes: ["US", "CA"],
+        state: "READY",
+        account_count: 3,
+        verified_account_count: 3,
+        unavailable_region_codes: [],
+        revision: summary.revision,
+      })
+    }
+    if (path.endsWith(`/build-drafts/${D}/targeting/accounts`))
+      return reply({
+        items: [
+          {
+            advertiser_id: "90071992547409936666",
+            region_codes: ["US", "CA"],
+            reason_codes: [],
+          },
+        ],
+        next_cursor: null,
+        total: 1,
+      })
     if (path.endsWith(`/build-drafts/${D}/minis`)) {
       if (method === "POST") {
         summary.revision++

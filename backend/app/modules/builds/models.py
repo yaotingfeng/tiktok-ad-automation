@@ -54,6 +54,10 @@ class BuildDraft(SQLModel, table=True):
         ),
         CheckConstraint("revision > 0", name="ck_build_draft_revision"),
         CheckConstraint(
+            "targeting_override IS NULL OR jsonb_typeof(targeting_override) = 'object'",
+            name="ck_build_draft_targeting_object",
+        ),
+        CheckConstraint(
             "status IN ('DRAFT','PREPARING','READY','BLOCKED')",
             name="ck_build_draft_status",
         ),
@@ -78,6 +82,9 @@ class BuildDraft(SQLModel, table=True):
     application_id: str = Field(max_length=255)
     link_config: dict[str, Any] = Field(
         default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
+    targeting_override: dict[str, Any] | None = Field(
+        default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True)
     )
     identity_id: str | None = Field(default=None, max_length=255)
     identity_type: str | None = Field(default=None, max_length=32)

@@ -44,6 +44,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  normalizedTargeting,
+  TargetingForm,
+  targetingError,
+} from "@/features/targeting/TargetingForm"
+import { useTargetingDirectory } from "@/features/targeting/useTargetingDirectory"
 import { ManagementSheet } from "@/features/tenants/ManagementSheet"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
@@ -82,6 +88,7 @@ const fieldNames: Record<string, string> = {
   copy_pool_version: "文案池版本",
   cta_option_ids: "CTA 配置",
   name: "策略名称",
+  targeting: "受众定向",
 }
 export function StrategyForm({
   strategy,
@@ -94,7 +101,7 @@ export function StrategyForm({
   copy?: boolean
   forceReadonly?: boolean
 }) {
-  const { tenantId: currentTenantId, scope } = useTenantScope(),
+  const { tenantId: currentTenantId, scope, bc } = useTenantScope(),
     client = useQueryClient(),
     navigate = useNavigate()
   const [tenantId] = useState(currentTenantId!)
@@ -117,6 +124,10 @@ export function StrategyForm({
     [nameTemplate, setNameTemplate] = useState(
       initial?.campaign_name_template ?? DEFAULT_NAME_TEMPLATE,
     )
+  const [targeting, setTargeting] = useState(() =>
+    normalizedTargeting(initial?.targeting),
+  )
+  const targetingDirectory = useTargetingDirectory(tenantId, bc?.bc_id)
   const [baseline, setBaseline] = useState(initial),
     [baselineName, setBaselineName] = useState(strategy?.name || ""),
     [baseNumber, setBaseNumber] = useState(
@@ -154,6 +165,7 @@ export function StrategyForm({
     copy_pool_version: copyPoolVersion,
     cta_option_ids: ctaIds,
     campaign_name_template: nameTemplate,
+    targeting,
   }
   const readonly =
     forceReadonly ||
@@ -171,8 +183,11 @@ export function StrategyForm({
         !!roas ||
         !!groupSize ||
         !!creativeCount ||
-        nameTemplate !== DEFAULT_NAME_TEMPLATE
+        nameTemplate !== DEFAULT_NAME_TEMPLATE ||
+        JSON.stringify(targeting) !== JSON.stringify(normalizedTargeting())
   const local: Record<string, string> = {}
+  const targetingIssue = targetingError(targeting)
+  if (targetingIssue) local.targeting = targetingIssue
   if (!name.trim()) local.name = "请填写策略名称。"
   if (name.length > 120) local.name = "名称不能超过 120 个字符。"
   const budgetIssue = decimalError(budget),
@@ -600,6 +615,34 @@ export function StrategyForm({
                   "目标倍率，例如 1.08 倍；不表示百分比。",
                 )}
               </FieldGroup>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>受众定向</CardTitle>
+              <CardDescription>
+                策略保存常用设置，搭建时可仅修改本次批次。
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              {(!bc || !targetingDirectory.data?.region_codes?.length) && (
+                <p className="text-sm text-muted-foreground">
+                  请选择 BC 并同步账户和小程序地区后再选择国家。
+                </p>
+              )}
+              {targetingDirectory.error && (
+                <RequestError error={targetingDirectory.error} />
+              )}
+              <TargetingForm
+                value={targeting}
+                onChange={(v) => {
+                  setTargeting(v)
+                  setServerErrors({})
+                }}
+                countries={targetingDirectory.data?.region_codes || []}
+                disabled={readonly || pending || !!unknownRequest}
+                reference
+              />
             </CardContent>
           </Card>
           <Card>

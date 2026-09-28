@@ -1392,3 +1392,14 @@
 - 设计明确多账户共同国家、草稿完整覆盖/恢复策略默认、过期与未知不等于无限制、仅定向修改保留手动素材组、预览冻结及集合回读验证，并分成模型/核验、平台链路、页面三个实施段。
 - 用户已确认年龄/语言/性别采用严格限制；国家选项限官方接口有效返回的开放范围，不使用全球国家全集。策略参考目录按明确 BC 内有效场景并集展示，搭建按所选账户和小程序交集校验；无目录不跨 BC 回退。当前 Minis 场景的具体模式支持与语言代码语义仍需官方合同核实，不能由通用字段存在推断。
 - 本轮只修改文档，检查引用路径和差异；未执行应用测试、数据库迁移、服务器部署或真实广告操作。代码实施尚未开始。
+
+
+## 2026-09-28 受众定向与共同可投国家（本地完成，未部署）
+
+- 策略可预设国家、语言、成年年龄和性别；搭建可覆盖本次定向、恢复策略默认，并查看账户地区差异。国家来自当前明确 BC 默认/草稿冻结连接内的真实本地场景证据，不使用全球国家全集；本批按所选账户与 Minis 求交集，未核实账户不从分母移除。
+- 新预览显式冻结严格 `MANUAL` 定向及逐账户 location ID，SDK/MCP 共用编译与回读合同。执行重核应用冻结选择，缺字段保留未核实，差异阻止自动放宽。历史冻结请求不改写；缺少新定向信息的未完成旧预览须重新生成。
+- 新迁移 `audience_targeting` 增加草稿 JSONB 覆盖与幂等动作类型；恢复默认使用 null。保存沿用 revision/幂等保护并仅重核场景，保留手动素材组，旧预览失效。含定向数据时迁移拒绝破坏性降级。
+- 官方合同核实见[设计补充](superpowers/specs/2026-09-28-audience-targeting-design.md)；AGE_13_17 不适用 Minis，提供五档成年年龄及官方 41 种语言代码。未选择语言/年龄表示工具不主动限制，平台自身约束继续适用。
+- 验证：独立本地 PostgreSQL `tkada_targeting_20260928_test`、独立动态策略测试库及 Redis DB14。`pytest tests/modules/builds/{test_targeting,test_targeting_directory,test_previews,test_execution,test_review_execution,test_sdk_contract}.py tests/modules/strategies` 173 passed；追加跨 BC 隔离 1 passed。`playwright test --project=workspace strategies.spec.ts build-preparation.spec.ts` 113 passed，追加只读定向及冻结摘要 2 passed，共 174 项后端、115 项页面。
+- 修改文件 Ruff/ty/Biome、客户端生成、前端 TypeScript/Vite、`git diff --check` 通过；全新测试库已应用 Alembic，`alembic check` 无新增操作。独立审查 3 项问题均修复并复审通过。执行测试使用真实 SDK 序列化加离线传输替身，没有远端广告写入。
+- 本轮提交主题 `builds: 支持严格受众定向与共同可投国家选择`；仅本地提交，未推送、未部署，真实 TikTok 投放验收不在本次结果内。部署时需按发布手册备份并应用迁移，不新增功能开关。

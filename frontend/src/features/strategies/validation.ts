@@ -1,4 +1,5 @@
 import type { StrategyConfig_Output } from "@/client"
+import { normalizedTargeting } from "@/features/targeting/TargetingForm"
 export const DEFAULT_NAME_TEMPLATE = "{provider_drama}-{drama_id}"
 export const NAME_LABELS: Record<string, string> = {
   provider_drama: "版权方＋剧名",
@@ -115,6 +116,7 @@ export function decimalError(value: string) {
 }
 export const configFingerprint = (config: StrategyConfig_Output) =>
   JSON.stringify({
+    targeting: normalizedTargeting(config.targeting),
     currency: config.currency,
     group_size: config.group_size,
     creative_count: config.creative_count,

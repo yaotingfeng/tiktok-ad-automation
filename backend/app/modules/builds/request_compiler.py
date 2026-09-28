@@ -25,14 +25,21 @@ from app.integrations.tiktok.contracts.builds import (
 )
 from app.integrations.tiktok.contracts.common import CallEvidence, RemoteCallError
 from app.integrations.tiktok.contracts.context import ChannelKind
+from app.modules.builds.targeting_schemas import AgeGroup, Gender, Language
 
 
 class _CampaignBody(CampaignCreate):
     name: Id = Field(alias="campaign_name")
 
 
+TARGETING_FIELDS = ("location_ids", "languages", "age_groups", "gender")
+
+
 class _Targeting(FrozenModel):
     location_ids: tuple[Id, ...] = Field(min_length=1)
+    languages: tuple[Language, ...] | None = Field(default=None, min_length=1)
+    age_groups: tuple[AgeGroup, ...] | None = Field(default=None, min_length=1)
+    gender: Gender | None = None
 
 
 class _AdGroupBody(AdGroupCreate):
@@ -134,10 +141,10 @@ def decode_observed_intent(kind: str, body: dict[str, object]) -> CreateIntent:
         parsed = _CampaignBody.model_validate(values)
         return CampaignCreate.model_validate(parsed.model_dump())
     if kind == "ADGROUP":
-        if "location_ids" in values:
-            raise _invalid("location_ids", values["location_ids"])
+        if any(field in values for field in TARGETING_FIELDS):
+            raise _invalid("targeting_spec", values)
         targeting = _Targeting.model_validate(values.pop("targeting_spec", None))
-        values["location_ids"] = targeting.location_ids
+        values.update(targeting.model_dump(exclude_none=True))
         parsed_group = _AdGroupBody.model_validate(values)
         return AdGroupCreate.model_validate(parsed_group.model_dump())
     if kind == "AD":
@@ -193,7 +200,9 @@ def encode_intent(intent: CreateIntent) -> dict[str, object]:
         body["campaign_name"] = body.pop("name")
     elif isinstance(intent, AdGroupCreate):
         body["adgroup_name"] = body.pop("name")
-        body["targeting_spec"] = {"location_ids": body.pop("location_ids")}
+        body["targeting_spec"] = {
+            field: body.pop(field) for field in TARGETING_FIELDS if field in body
+        }
     elif isinstance(intent, AdCreate):
         return {
             "advertiser_id": intent.advertiser_id,

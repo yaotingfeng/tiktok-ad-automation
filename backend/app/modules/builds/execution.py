@@ -170,6 +170,19 @@ def _current_scene(
         ),
         selected_identity=selected_identity or None,
     )
+    targeting = frozen.scene_snapshot.get("field_constraints", {}).get(
+        "audience_targeting"
+    )
+    if targeting is not None:
+        from .targeting import apply_targeting
+        from .targeting_schemas import AudienceTargeting
+
+        # 执行重核只应用已冻结意图，不读取后来修改的策略或扩展国家集合。
+        scene = apply_targeting(
+            scene,
+            AudienceTargeting.model_validate(targeting),
+            list(frozen.scene_snapshot["field_constraints"]["selected_region_codes"]),
+        )
     if not scene.supported:
         transient = bool(
             set(scene.reason_codes)
