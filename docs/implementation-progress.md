@@ -1403,3 +1403,11 @@
 - 验证：独立本地 PostgreSQL `tkada_targeting_20260928_test`、独立动态策略测试库及 Redis DB14。`pytest tests/modules/builds/{test_targeting,test_targeting_directory,test_previews,test_execution,test_review_execution,test_sdk_contract}.py tests/modules/strategies` 173 passed；追加跨 BC 隔离 1 passed。`playwright test --project=workspace strategies.spec.ts build-preparation.spec.ts` 113 passed，追加只读定向及冻结摘要 2 passed，共 174 项后端、115 项页面。
 - 修改文件 Ruff/ty/Biome、客户端生成、前端 TypeScript/Vite、`git diff --check` 通过；全新测试库已应用 Alembic，`alembic check` 无新增操作。独立审查 3 项问题均修复并复审通过。执行测试使用真实 SDK 序列化加离线传输替身，没有远端广告写入。
 - 本轮提交主题 `builds: 支持严格受众定向与共同可投国家选择`；仅本地提交，未推送、未部署，真实 TikTok 投放验收不在本次结果内。部署时需按发布手册备份并应用迁移，不新增功能开关。
+
+
+## 2026-09-28 累计改动推送与测试环境发布（已完成）
+
+- 按用户授权将 12 个本地提交推送 `origin/main`，测试服从 `1cfc603` 更新为 `ec45538eedd7aeee7f43156525555f5921c538d9`；数据库 head 为 `audience_targeting`。账户搜索与严格定向已纳入；首次无场景数据时不能指定国家的已知限制未在本轮修改。
+- 发布前追加 66 项场景/目录回归及前端构建通过。完整备份 `20260928T101508Z` 五份归档校验、1,330 个项目文件、22 张业务表、10,484 份加密响应、Redis 独立恢复和迁移演练通过；旧版本与正式备份保留。
+- 六服务、11 进程、四个 Worker 池、HTTPS/登录/权限隔离及定向本地读取通过；原配置、调用额度和素材开关保持，队列为 0，备份 timer 恢复。没有实际广告或版权方写入，详见[发布记录](validation/2026-09-28-targeting-staging-release.md)。
+- 用户要求保存 SSH 信息：本机私有 `.runtime/singapore-staging/ssh.json` 为 0600，辅助入口已登记测试环境手册。密码未进入 Git、日志输出或源码归档。
