@@ -6,19 +6,12 @@ import {
 import { Check, ChevronsUpDown } from "lucide-react"
 import { type ReactNode, useId, useState } from "react"
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog"
+import { Dialog, DialogTrigger } from "@/components/ui/dialog"
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
-import { cn } from "@/lib/utils"
+import { PickerDialogContent } from "./PickerDialogContent"
 import { Pager, RequestError, useCursorPage } from "./shared"
 
 export function DirectoryPicker<T extends { id: string }>({
@@ -90,21 +83,16 @@ export function DirectoryPicker<T extends { id: string }>({
           <ChevronsUpDown data-icon="inline-end" />
         </Button>
       </DialogTrigger>
-      <DialogContent
+      <PickerDialogContent
         id={id}
-        className={cn(
-          "max-h-[90svh]",
-          alternative ? "flex flex-col overflow-hidden" : "overflow-y-auto",
-        )}
+        title={`选择${label}`}
+        contained={!!alternative}
+        description={
+          alternative
+            ? `选择已有记录，或选择「${alternative.label}」。`
+            : "搜索已有记录并选择。名称和完整 ID 用于核对。"
+        }
       >
-        <DialogHeader className="shrink-0">
-          <DialogTitle>选择{label}</DialogTitle>
-          <DialogDescription>
-            {alternative
-              ? `选择已有记录，或选择「${alternative.label}」。`
-              : "搜索已有记录并选择。名称和完整 ID 用于核对。"}
-          </DialogDescription>
-        </DialogHeader>
         <form
           onSubmit={(event) => {
             // Portal events still bubble through the enclosing management form.
@@ -246,7 +234,7 @@ export function DirectoryPicker<T extends { id: string }>({
             </Button>
           </div>
         )}
-      </DialogContent>
+      </PickerDialogContent>
     </Dialog>
   )
 }

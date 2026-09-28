@@ -8,6 +8,181 @@ import {
   T as tenant,
 } from "./utils/buildsBoundary"
 
+test("账户选择跨页全选、名称去重并追加 ID，取消保留输入", async ({ page }) => {
+  await buildsBoundary(page)
+  const account = (n: number, canBuild = true) => ({
+    advertiser_id: `700000000000000${n}`,
+    bc_id: bc,
+    name: `P1-${n}`,
+    can_build: canBuild,
+    availability: "AVAILABLE",
+    remote_status: "STATUS_ENABLE",
+  })
+  const requests: URLSearchParams[] = []
+  await page.route(`**/api/tenants/${tenant}/accounts?**`, async (route) => {
+    const query = new URL(route.request().url()).searchParams
+    requests.push(query)
+    expect(query.get("bc_id")).toBe(bc)
+    await route.fulfill({
+      json: {
+        items: query.get("cursor")
+          ? [account(3)]
+          : [account(1), account(2), account(4, false)],
+        total: 4,
+        next_cursor: query.get("cursor") ? null : "second",
+      },
+    })
+  })
+  await page.route(
+    `**/api/tenants/${tenant}/accounts/resolve`,
+    async (route) => {
+      const body = route.request().postDataJSON()
+      expect(body.bc_id).toBe(bc)
+      await route.fulfill({
+        json: body.lines.map((line: { line_no: number; raw: string }) => ({
+          ...line,
+          status: "MATCHED",
+          advertiser_id: "7000000000000001",
+        })),
+      })
+    },
+  )
+  await page.goto(`/tenants/${tenant}/builds/new?bc_id=${bc}`)
+  const input = page.getByLabel("广告账户", { exact: true })
+  await input.fill("P1-1\n7000000000000001")
+  await page.getByRole("button", { name: "选择账户", exact: true }).click()
+  const dialog = page.getByRole("dialog", { name: "选择账户", exact: true })
+  await expect(dialog.getByRole("checkbox", { name: /P1-1/ })).toBeChecked()
+  await expect(dialog.getByRole("checkbox", { name: /P1-4/ })).toBeDisabled()
+  await dialog.getByLabel("搜索账户", { exact: true }).fill("P1")
+  await dialog.getByRole("button", { name: "搜索", exact: true }).click()
+  await dialog
+    .getByRole("button", { name: "全选筛选结果", exact: true })
+    .click()
+  await expect(dialog.getByText("已选 2 个账户", { exact: true })).toBeVisible()
+  expect(
+    requests.some(
+      (query) =>
+        query.get("cursor") === "second" && query.get("query") === "P1",
+    ),
+  ).toBe(true)
+  await dialog.getByRole("button", { name: "确定添加" }).click()
+  await expect(input).toHaveValue("P1-1\n7000000000000002\n7000000000000003")
+  await page.getByRole("button", { name: "选择账户", exact: true }).click()
+  await dialog.getByRole("button", { name: "取消", exact: true }).click()
+  await expect(input).toHaveValue("P1-1\n7000000000000002\n7000000000000003")
+})
+
+test("账户全选中途失败不加入半批，单选翻页保留且取消后重置", async ({
+  page,
+}) => {
+  await buildsBoundary(page)
+  let fail = false
+  await page.route(`**/api/tenants/${tenant}/accounts?**`, async (route) => {
+    const query = new URL(route.request().url()).searchParams
+    if (fail && query.get("cursor"))
+      return route.fulfill({ status: 400, json: { message: "读取失败" } })
+    const n = query.get("cursor") ? 2 : 1
+    await route.fulfill({
+      json: {
+        items: [
+          {
+            advertiser_id: String(n),
+            name: `P1-${n}`,
+            can_build: true,
+            availability: "AVAILABLE",
+            remote_status: "STATUS_ENABLE",
+          },
+        ],
+        total: 2,
+        next_cursor: n === 1 ? "second" : null,
+      },
+    })
+  })
+  await page.goto(`/tenants/${tenant}/builds/new?bc_id=${bc}`)
+  await page.getByRole("button", { name: "选择账户", exact: true }).click()
+  const dialog = page.getByRole("dialog", { name: "选择账户", exact: true })
+  await dialog.getByRole("checkbox", { name: /P1-1/ }).check()
+  await dialog.getByRole("button", { name: "下一页" }).click()
+  await dialog.getByRole("checkbox", { name: /P1-2/ }).check()
+  await dialog.getByRole("button", { name: "上一页" }).click()
+  await expect(dialog.getByRole("checkbox", { name: /P1-1/ })).toBeChecked()
+  await dialog.getByRole("button", { name: "清空勾选" }).click()
+  fail = true
+  await dialog
+    .getByRole("button", { name: "全选筛选结果", exact: true })
+    .click()
+  await expect(dialog.getByText("读取失败", { exact: true })).toBeVisible()
+  await expect(dialog.getByText("已选 0 个账户", { exact: true })).toBeVisible()
+  await dialog.getByRole("checkbox", { name: /P1-1/ }).check()
+  await dialog.getByRole("button", { name: "取消", exact: true }).click()
+  await expect(page.getByLabel("广告账户", { exact: true })).toHaveValue("")
+  await page.getByRole("button", { name: "选择账户", exact: true }).click()
+  await expect(dialog.getByText("已选 0 个账户", { exact: true })).toBeVisible()
+})
+
+test("账户筛选和全选使用同一条件，窄屏可操作且取消中止回填", async ({
+  page,
+}) => {
+  await buildsBoundary(page)
+  await page.setViewportSize({ width: 390, height: 844 })
+  const requests: URLSearchParams[] = []
+  let release: (() => void) | undefined
+  await page.route(`**/api/tenants/${tenant}/accounts?**`, async (route) => {
+    const query = new URL(route.request().url()).searchParams
+    requests.push(query)
+    if (query.get("limit") === "100")
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+    await route.fulfill({
+      json: {
+        items: [
+          {
+            advertiser_id: "77",
+            name: "P1-测试账户",
+            can_build: true,
+            availability: "AVAILABLE",
+            remote_status: "STATUS_ENABLE",
+          },
+        ],
+        total: 1,
+        next_cursor: null,
+      },
+    })
+  })
+  await page.goto(`/tenants/${tenant}/builds/new?bc_id=${bc}`)
+  await page.getByRole("button", { name: "选择账户", exact: true }).click()
+  const dialog = page.getByRole("dialog", { name: "选择账户", exact: true })
+  await dialog.getByLabel("搜索账户", { exact: true }).fill("P1")
+  await dialog.getByLabel("平台状态", { exact: true }).fill("STATUS_ENABLE")
+  await dialog.getByRole("button", { name: "搜索", exact: true }).click()
+  await dialog.getByRole("combobox", { name: "可用性", exact: true }).click()
+  await page.getByRole("option", { name: "可用", exact: true }).click()
+  await expect(
+    dialog.getByRole("checkbox", { name: /P1-测试账户/ }),
+  ).toBeEnabled()
+  const box = await dialog.boundingBox()
+  expect(box!.width).toBeLessThanOrEqual(390)
+  expect(box!.y + box!.height).toBeLessThanOrEqual(844)
+  await expect(
+    dialog.getByRole("button", { name: "确定添加" }),
+  ).toBeInViewport()
+  await dialog
+    .getByRole("button", { name: "全选筛选结果", exact: true })
+    .click()
+  await expect.poll(() => !!release).toBe(true)
+  const all = requests.findLast((query) => query.get("limit") === "100")!
+  expect(all.get("query")).toBe("P1")
+  expect(all.get("remote_status")).toBe("STATUS_ENABLE")
+  expect(all.get("availability")).toBe("AVAILABLE")
+  await dialog.getByRole("button", { name: "取消", exact: true }).click()
+  release!()
+  await expect(page.getByLabel("广告账户", { exact: true })).toHaveValue("")
+  await page.getByRole("button", { name: "选择账户", exact: true }).click()
+  await expect(dialog.getByText("已选 0 个账户", { exact: true })).toBeVisible()
+})
+
 test("未选小程序禁用预览，选择后必须等准备完成", async ({ page }) => {
   const api = await buildsBoundary(page)
   await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)

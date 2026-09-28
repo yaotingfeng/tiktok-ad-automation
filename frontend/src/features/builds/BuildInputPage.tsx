@@ -17,6 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
+import { AccountPicker } from "@/features/accounts/AccountPicker"
 import { versionQuery } from "@/features/strategies/queries"
 import { normalizeDecimal } from "@/features/strategies/validation"
 import { DirectoryPicker } from "@/features/tenants/DirectoryPicker"
@@ -466,6 +467,17 @@ export function BuildInputPage({
                 <FieldLabel htmlFor={`build-${kind}`}>
                   {kind === "drama" ? "剧目名称" : "广告账户"}
                 </FieldLabel>
+                {kind === "account" && (
+                  <div className="self-start">
+                    <AccountPicker
+                      tenantId={tenantId}
+                      bcId={bcId}
+                      value={values.account}
+                      disabled={disabled}
+                      onChange={(account) => change({ account })}
+                    />
+                  </div>
+                )}
                 <Textarea
                   id={`build-${kind}`}
                   className="min-h-44 resize-y font-mono"

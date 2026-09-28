@@ -1,3 +1,10 @@
+## 2026-09-28：广告搭建增加账户选择弹窗（本地完成）
+
+- 广告账户输入旁增加「选择账户」，沿用版权方连接、投放策略的紧凑弹窗，通过 `PickerDialogContent` 复用外壳，原有单选行为保持不变。账户列表仅查询当前租户 / BC 的默认授权目录，支持名称关键词 / 完整 ID 搜索、平台状态 / 可用性筛选、单项勾选、全选本页和跨页全选筛选结果。
+- 已选项跨搜索和翻页保留，不可搭建账户禁选；原输入通过现有解析接口分批解析，每批最多 500 行，按实际账户 ID 去重后保留原文并追加新选 ID。取消不回填，卸载中止请求；全选取齐分页才更新选择，中途失败不留下半批结果。
+- 验证：`bun run build`、变更文件 Biome、`git diff --check` 通过；Playwright workspace 的 build-preparation / providers / strategies 共 131 项通过，后补账户筛选 / 390px 窄屏 / 请求取消测试 1 项通过，合计 132 项。当前 shell 无全局 Bun，实际命令使用 `npx --yes --package bun bun ...` / `bunx ...` 运行。所有浏览器测试使用接口替身，无真实广告或授权写入。
+- 本轮作为聚焦提交 `builds: add searchable account selection dialog` 保存；未推送、未部署。
+
 ## 2026-09-20：非分页身份目录取消 50 条误限（测试服已发布）
 
 - 星屿租户搭建 `Haunted by a Jealous Ghost` 时，五个账户均可匹配网眼剧目、推广链接、素材和所选 LemonShow 小程序；阻塞发生在场景身份读取。真实 MCP 响应返回 58 条 `identity_list`，且该接口按协议以四个零的 `page_info` 表示非分页，旧本地合同却沿用其他目录的单页 50 条上限，因而误报 `scene_response_unverified`，页面再投影成“小程序不在当前账户可用目录”。
