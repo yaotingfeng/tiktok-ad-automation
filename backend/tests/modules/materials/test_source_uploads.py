@@ -386,7 +386,7 @@ def test_search_unknown_requires_full_scan_then_info(source_env, redis_client, w
     calls, responses = wire
     candidate = {
         **info()["list"][0],
-        "file_name": f"Moon-{source_env['material_id'].hex[:8]}.mp4",
+        "file_name": "Moon.mp4",
     }
     responses.append(
         {
@@ -582,10 +582,7 @@ def test_original_to_sdk_once_uses_actual_receipt_without_readback(
     )
     assert asset.video_id == "upload-vid" and asset.mid == "upload-mid"
     assert dict(calls[0][2]["fields"])["video_file"][1] == CONTENT
-    assert (
-        dict(calls[0][2]["fields"])["file_name"]
-        == f"Moon-{source_env['material_id'].hex[:8]}.mp4"
-    )
+    assert dict(calls[0][2]["fields"])["file_name"] == "Moon.mp4"
     run(source_env, redis_client, kind="upload", s3=original_s3[0])
     run(source_env, redis_client, operation_id=op_id)
     assert snapshot(source_env, op_id)[2].video_id == "upload-vid"

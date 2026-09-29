@@ -3,6 +3,7 @@
 import json
 from collections import deque
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import httpx2
@@ -117,20 +118,27 @@ def upload_case(request, monkeypatch):
         wire.close()
 
 
+@pytest.mark.parametrize(
+    "file_name", ["stable.mp4", "月光 Episode 07.MOV", "素材无扩展名"]
+)
 def test_url_upload_returns_actual_receipt_and_uses_channel_specific_fields(
     upload_case,
+    file_name,
 ):
     channel, opened, enqueue, budget, calls, wire, admissions = upload_case
     row = {"video_id": "actual-vid", "material_id": "actual-mid"}
     enqueue([row] if channel == "SDK" else row)
     with opened() as adapter:
-        receipt = adapter.upload_video_url(REQUEST, budget=budget)
+        receipt = adapter.upload_video_url(
+            replace(REQUEST, file_name=file_name), budget=budget
+        )
         assert (receipt.video_id, receipt.mid) == ("actual-vid", "actual-mid")
         assert receipt.evidence.request_id == "upload-request"
     assert ("123", "materials.upload_video_url") in admissions
     if channel == "SDK":
         assert len(calls) == 1
         fields = multipart_fields(calls[0])
+        assert fields["file_name"] == file_name
         assert fields["video_signature"] == "a" * 32
         assert fields["auto_fix_enabled"] == fields["auto_bind_enabled"] == "False"
     else:
@@ -138,7 +146,7 @@ def test_url_upload_returns_actual_receipt_and_uses_channel_specific_fields(
         assert len(business) == 1
         assert business[0]["params"]["arguments"] == {
             "advertiser_id": "123",
-            "file_name": "stable.mp4",
+            "file_name": file_name,
             "upload_type": "UPLOAD_BY_URL",
             "video_url": REQUEST.url,
             "auto_fix_enabled": False,

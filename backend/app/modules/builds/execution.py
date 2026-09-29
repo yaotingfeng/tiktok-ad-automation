@@ -342,7 +342,6 @@ def prepare_request(
         if not 1 <= len(material_ids) <= 50:
             raise DomainError("invalid_material_group", "冻结素材组无效")
         from app.modules.materials.cover_models import MaterialCoverJob
-        from app.modules.materials.file_names import video_file_name
         from app.modules.materials.models import AccountMaterial, MaterialFile
         from app.modules.materials.readiness import load_material
 
@@ -420,14 +419,12 @@ def prepare_request(
             mappings.append(
                 {
                     "video_id": cover.mapping.video_id,
-                    "file_name": video_file_name(
-                        load_material(
-                            session,
-                            context=context,
-                            bc_id=claim.bc_id,
-                            material_id=material_id,
-                        ).file_name
-                    ),
+                    "file_name": load_material(
+                        session,
+                        context=context,
+                        bc_id=claim.bc_id,
+                        material_id=material_id,
+                    ).file_name,
                     "image_id": cover.mapping.image_id or "",
                 }
             )

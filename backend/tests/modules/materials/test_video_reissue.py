@@ -7,7 +7,11 @@ from sqlmodel import Session, col, select
 
 from app.core.errors import DomainError
 from app.modules.builds.execution_models import ExecutionStep
-from app.modules.materials.models import MaterialAssetOperation, MaterialDistribution
+from app.modules.materials.models import (
+    MaterialAssetOperation,
+    MaterialDistribution,
+    MaterialFile,
+)
 from tests.modules.builds.test_definite_material_recovery import (
     executable as executable,
 )
@@ -92,6 +96,10 @@ def test_authorized_unknown_replacement_preserves_evidence_and_original_ad(
             old.source_asset_id,
         )
         assert op.status == "pending" and not op.remote_response.get("send_armed")
+        assert (
+            op.remote_response["remote_name"]
+            == db.get(MaterialFile, new.material_id).file_name
+        )
         assert "share_receipt" not in op.remote_response
         assert db.get(ExecutionStep, unknown_video[0]).distribution_id == new.id
         assert db.get(ExecutionStep, ids["AD"][0]).model_dump() == ad_before

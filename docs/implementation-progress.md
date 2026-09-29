@@ -1423,3 +1423,11 @@
 - 发布前追加 66 项场景/目录回归及前端构建通过。完整备份 `20260928T101508Z` 五份归档校验、1,330 个项目文件、22 张业务表、10,484 份加密响应、Redis 独立恢复和迁移演练通过；旧版本与正式备份保留。
 - 六服务、11 进程、四个 Worker 池、HTTPS/登录/权限隔离及定向本地读取通过；原配置、调用额度和素材开关保持，队列为 0，备份 timer 恢复。没有实际广告或版权方写入，详见[发布记录](validation/2026-09-28-targeting-staging-release.md)。
 - 用户要求保存 SSH 信息：本机私有 `.runtime/singapore-staging/ssh.json` 为 0600，辅助入口已登记测试环境手册。密码未进入 Git、日志输出或源码归档。
+
+## 2026-09-29 素材上传完整保留原名（本地完成，未发布）
+
+- 用户要求文件名原样保存并作为 TikTok 上传名称，不追加后缀。首次 FILE/URL 上传、跨 BC URL 转存、显式重新上传和搭建素材参数均直接使用 `MaterialFile.file_name`；删除旧的追加后缀、截断、字符替换及补扩展名工具。现有平台请求校验不通过时明确失败，不自动改名。
+- 已冻结操作的 `remote_name` 仍用于原操作核实；未修改数据库历史名称、VID 或在途任务。重投沿用操作 ID、内容摘要和实际 VID；同名不同内容不会错误命中，同名同内容出现多个 VID 时保留未知状态，不自动选择或重新发送。
+- 在独立本地 PostgreSQL `tkada_original_names_20260929_test` 和 Redis DB14 验证，TikTok/R2 使用离线传输替身。首轮 `test_url_ingest.py test_source_uploads.py test_native_distribution.py test_material_upload_adapters.py` 共 104 passed；补充原名、异常名称、歧义和历史冻结名称用例后，`test_url_ingest.py test_video_reissue.py test_material_upload_adapters.py tests/modules/builds/test_execution.py` 共 87 passed（两轮包含重叠用例）。修改文件 Ruff、格式检查、ty、Python 编译及 `git diff --check` 通过。
+- 本轮提交主题 `materials: 上传到 TikTok 时完整保留素材原名`；未推送、未部署，没有真实 TikTok/R2 写入，无迁移、无新增配置。
+- 外部推送接口仍处于方案讨论，本轮未实现：已确认直接使用素材工具已有 R2 链接，不复制第二份。租户可由请求中的 `tenant_id` 标识，无须额外团队映射；服务端仍验证接入方身份和允许的租户范围，运营无需管理凭证。现有默认连接按 `(tenant_id, bc_id)` 保存，可直接复用，但多个 BC 时不能仅凭默认连接唯一确定目标 BC；该选择尚待接口设计明确。

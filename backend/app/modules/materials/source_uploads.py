@@ -32,7 +32,6 @@ from app.modules.accounts.schemas import AccountAccess
 from app.modules.tenants.permissions import require_tenant
 
 from . import sdk_assets as api
-from .file_names import video_file_name
 from .models import (
     AccountMaterial,
     MaterialAssetOperation,
@@ -95,7 +94,8 @@ def _locked_material(
 
 
 def remote_name(material: MaterialFile) -> str:
-    return video_file_name(material.file_name, correlation=material.id.hex[:8])
+    # 平台名称与素材原名一致；任务关联使用操作 ID 和内容摘要，不改写名称。
+    return material.file_name
 
 
 def reserve_asset_operation(

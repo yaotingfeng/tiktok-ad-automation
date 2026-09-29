@@ -29,7 +29,6 @@ from app.modules.tenants.permissions import require_tenant
 
 from . import sdk_assets as api
 from .channel_policy import require_url_upload
-from .file_names import video_file_name
 from .ingest_models import (
     IngestSession,
     IngestSessionFile,
@@ -290,7 +289,8 @@ def _new_operation(
     ).first()
     if conflicting:
         raise DomainError("material_operation_conflict", "该目标账户已有未核实素材操作")
-    name = video_file_name(material.file_name, correlation=uuid4().hex[:8])
+    # 原名随操作冻结；未知结果继续核实该名称及摘要，不追加任务后缀。
+    name = material.file_name
     digest = sha256(
         f"{context.tenant_id}:{material.id}:{obj.id}:{obj.generation}:{access.advertiser_id}:{name}:{obj.sha256}:{obj.video_md5}".encode()
     ).hexdigest()

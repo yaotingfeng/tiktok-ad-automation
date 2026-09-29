@@ -32,7 +32,6 @@ from . import sdk_assets as api
 from .batch_validation import BatchSourceVerifier
 from .channel_policy import require_url_upload
 from .distribution_sources import distribution_sources
-from .file_names import video_file_name
 from .models import (
     AccountMaterial,
     MaterialAssetOperation,
@@ -298,9 +297,7 @@ def _bind_operation(
                 "source_advertiser_id": source.advertiser_id,
                 "source_connection_id": str(source.connection_id),
                 "source_video_id": source.video_id,
-                "remote_name": video_file_name(
-                    material.file_name, correlation=operation.id.hex[:8]
-                ),
+                "remote_name": material.file_name,
                 "content_md5": material.video_md5,
             }
             operation.request_digest = sha256(

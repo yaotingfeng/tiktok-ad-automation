@@ -616,21 +616,113 @@ def test_generation_material_without_exact_pair_never_falls_back_to_file(
 
 
 @pytest.mark.parametrize(
-    "original", ["月光 Episode 07.mp4", "a" * 90 + ".mp4", "月光" * 50 + ".mp4"]
+    "original",
+    [
+        "月光 Episode 07.mp4",
+        "01-The General's Wrath-CL6-JUNBO-LH-1.mp4",
+        "a" * 96 + ".mp4",
+        "月光" * 48 + ".mp4",
+        "原名_版本A.MOV",
+        "素材无扩展名",
+        "Cafe\u0301_原名.mp4",
+    ],
 )
-def test_remote_name_preserves_original_name_and_stable_unique_suffix(
-    url_env, redis_client, wire, original
-):
+def test_url_upload_sends_exact_original_name(url_env, redis_client, wire, original):
     with Session(engine) as db, db.begin():
         db.get(MaterialFile, url_env["material_id"]).file_name = original
     wire[1].append([{"video_id": "actual-source-vid"}])
     run(url_env, redis_client)
     name = operation(url_env).remote_response["remote_name"]
-    assert name.startswith(original[:2])
-    assert len(name.encode("utf-8")) <= 100
-    assert name.endswith(".mp4")
-    assert len(name.rsplit("-", 1)[-1].removesuffix(".mp4")) == 8
-    assert dict(wire[0][0][2]["fields"])["file_name"] == name
+    assert name == original
+    assert dict(wire[0][0][2]["fields"])["file_name"] == original
+    with Session(engine) as db:
+        assert db.get(MaterialFile, url_env["material_id"]).file_name == original
+
+
+@pytest.mark.parametrize(
+    "original", ["月光" * 50 + ".mp4", " leading.mp4", "bad\nname.mp4"]
+)
+def test_invalid_platform_name_is_rejected_without_renaming(
+    url_env, redis_client, wire, original
+):
+    with Session(engine) as db, db.begin():
+        db.get(MaterialFile, url_env["material_id"]).file_name = original
+    run(url_env, redis_client)
+    op = operation(url_env)
+    assert op.status == "failed"
+    assert op.remote_response["remote_name"] == original
+    assert op.remote_response["error_code"] == "material_request_invalid"
+    assert wire[0] == []
+    with Session(engine) as db:
+        assert db.get(MaterialFile, url_env["material_id"]).file_name == original
+
+
+def test_same_name_and_content_with_multiple_vids_remains_unknown(
+    url_env, redis_client, wire
+):
+    wire[1].append(ReadTimeoutError(None, URL, "synthetic timeout"))
+    run(url_env, redis_client)
+    op = operation(url_env)
+    assert op.remote_response["remote_name"] == "Moon.mp4"
+    candidate = info(file_name="Moon.mp4")["list"][0]
+    wire[1].append(
+        {
+            "list": [candidate, {**candidate, "video_id": "another-identical-video"}],
+            "page_info": {
+                "page": 1,
+                "page_size": 100,
+                "total_page": 1,
+                "total_number": 2,
+            },
+        }
+    )
+    run(url_env, redis_client, kind="verify", operation_id=op.id)
+    assert operation(url_env).status == "result_unknown"
+    assert (
+        operation(url_env).remote_response["error_code"]
+        == "material_reconciliation_ambiguous"
+    )
+    run(url_env, redis_client, kind="upload", operation_id=op.id)
+    assert [call[0] for call in wire[0]] == ["POST", "GET"]
+    with Session(engine) as db:
+        assert (
+            db.exec(
+                select(AccountMaterial).where(
+                    AccountMaterial.material_id == url_env["material_id"]
+                )
+            ).first()
+            is None
+        )
+
+
+def test_recovery_uses_frozen_platform_name_for_existing_operation(
+    url_env, redis_client, wire
+):
+    wire[1].append(ReadTimeoutError(None, URL, "synthetic timeout"))
+    run(url_env, redis_client)
+    op = operation(url_env)
+    frozen_name = "Moon-12345678.mp4"
+    with Session(engine) as db, db.begin():
+        saved = db.get(MaterialAssetOperation, op.id)
+        saved.remote_response = {**saved.remote_response, "remote_name": frozen_name}
+    wire[1].append(
+        {
+            "list": [info(file_name=frozen_name)["list"][0]],
+            "page_info": {
+                "page": 1,
+                "page_size": 100,
+                "total_page": 1,
+                "total_number": 1,
+            },
+        }
+    )
+    run(url_env, redis_client, kind="verify", operation_id=op.id)
+    assert operation(url_env).status == "verifying"
+    assert operation(url_env).remote_response["remote_name"] == frozen_name
+    wire[1].append(info())
+    run(url_env, redis_client, kind="verify", operation_id=op.id)
+    assert operation(url_env).status == "succeeded"
+    assert [call[0] for call in wire[0]] == ["POST", "GET", "GET"]
 
 
 def advance_generation(env):

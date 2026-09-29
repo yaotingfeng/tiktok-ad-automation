@@ -18,7 +18,6 @@ from app.modules.tenants.permissions import require_tenant
 
 from .content_identity import content_key
 from .distribution import _require_distribution_source, queue_distribution
-from .file_names import video_file_name
 from .models import (
     AccountMaterial,
     MaterialAssetOperation,
@@ -397,9 +396,8 @@ def create_video_replacement(
         for key in source_keys
         if key in operation.remote_response
     }
-    response["remote_name"] = video_file_name(
-        material.file_name, correlation=new_operation_id.hex[:8]
-    )
+    # 新代数由 operation_id 区分，重新上传也保持原始文件名。
+    response["remote_name"] = material.file_name
     new_operation = MaterialAssetOperation(
         id=new_operation_id,
         tenant_id=tenant_id,
