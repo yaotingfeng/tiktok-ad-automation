@@ -177,7 +177,12 @@ def inspect_video(path: Path, *, remaining: float) -> dict[str, Any]:
             or duration <= 0
         ):
             raise ValueError
-        return {"width": width, "height": height, "duration": duration}
+        return {
+            "width": width,
+            "height": height,
+            "duration": duration,
+            "format_name": data["format"].get("format_name", ""),
+        }
     except FileNotFoundError:
         raise storage_error("material_validator_unavailable") from None
     except ValueError, KeyError, TypeError, StopIteration, subprocess.SubprocessError:
@@ -500,6 +505,20 @@ def issue_ingest_url(
         or operation.attempt_token is None
     ):
         raise storage_error("object_use_invalid")
+    if obj.storage_provider == "external":
+        from .push_worker import external_source_url
+
+        # 外部对象由素材工具持有，只提供其已校验来源地址，不签发自有 R2 权限。
+        url = external_source_url(session, context=context, material_id=obj.material_id)
+        acquire_original_use(
+            session,
+            context=context,
+            object_id=obj.id,
+            purpose="ingest",
+            operation_id=operation_id,
+            lifetime_seconds=settings.MATERIAL_INGEST_URL_SECONDS,
+        )
+        return url
     if (
         not obj.storage_bucket
         or not obj.storage_provider

@@ -117,6 +117,26 @@ def material_visible(*, tenant_id: UUID) -> ColumnElement[bool]:
 
 def deduplicate_material_statement(statement: Any) -> Any:
     """先保留符合筛选的历史名称，再选每种内容的确定性代表；total 与分页共享此范围。"""
+    # 外部推送同 ID 只在目录/自动选材展示当前版本，历史 ID 仍供既有投放读取。
+    from .push_models import ExternalMaterialSource, PushedMaterial
+
+    external = (
+        select(ExternalMaterialSource.material_id)
+        .where(
+            ExternalMaterialSource.tenant_id == MaterialFile.tenant_id,
+            ExternalMaterialSource.material_id == MaterialFile.id,
+        )
+        .exists()
+    )
+    current = (
+        select(PushedMaterial.external_id)
+        .where(
+            PushedMaterial.tenant_id == MaterialFile.tenant_id,
+            PushedMaterial.current_material_id == MaterialFile.id,
+        )
+        .exists()
+    )
+    statement = statement.where((~external) | current)
     ranked = statement.with_only_columns(
         col(MaterialFile.id),
         func.row_number()

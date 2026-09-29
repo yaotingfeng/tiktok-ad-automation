@@ -1,3 +1,4 @@
+from hashlib import sha256
 from typing import cast
 from uuid import UUID
 
@@ -35,6 +36,19 @@ def _valid_name(name: str) -> str:
     return name
 
 
+def _unique_name(session: Session, name: str, *, exclude: UUID | None = None) -> None:
+    # 同名创建/改名串行检查，数据库唯一约束作为最终防线。
+    key = int.from_bytes(
+        sha256(f"tenant-name:{name}".encode()).digest()[:8], "big", signed=True
+    )
+    session.exec(select(func.pg_advisory_xact_lock(key))).one()
+    statement = select(Tenant.id).where(Tenant.name == name)
+    if exclude is not None:
+        statement = statement.where(Tenant.id != exclude)
+    if session.exec(statement.limit(1)).first() is not None:
+        raise DomainError("tenant_name_conflict", "租户名称已存在，请使用唯一名称")
+
+
 def create_tenant(
     session: Session, *, actor_id: UUID, name: str, administrator_id: UUID
 ) -> Tenant:
@@ -42,7 +56,9 @@ def create_tenant(
     admin = session.get(User, administrator_id, populate_existing=True)
     if not admin or not admin.is_active:
         raise DomainError("invalid_tenant", "初始管理员必须是有效用户")
-    tenant = Tenant(name=_valid_name(name))
+    name = _valid_name(name)
+    _unique_name(session, name)
+    tenant = Tenant(name=name)
     session.add(tenant)
     session.flush()
     session.add(
@@ -73,8 +89,10 @@ def update_tenant(
     require_platform(session, actor_id=actor_id)
     if (
         not changes
-        or set(changes) - {"name", "active"}
-        or any(value is None for value in changes.values())
+        or set(changes) - {"name", "active", "default_bc_id"}
+        or any(
+            value is None for key, value in changes.items() if key != "default_bc_id"
+        )
     ):
         raise DomainError("invalid_tenant", "请提供有效的租户修改字段")
     tenant = session.exec(
@@ -92,7 +110,9 @@ def update_tenant(
         name = changes["name"]
         if not isinstance(name, str):
             raise DomainError("invalid_tenant", "租户名称无效")
-        tenant.name = _valid_name(name)
+        name = _valid_name(name)
+        _unique_name(session, name, exclude=tenant.id)
+        tenant.name = name
         details["name"] = tenant.name
     if "active" in changes:
         active = changes["active"]
@@ -100,6 +120,16 @@ def update_tenant(
             raise DomainError("invalid_tenant", "租户状态无效")
         tenant.active = active
         details["active"] = active
+    if "default_bc_id" in changes:
+        from app.modules.accounts.models import TenantBC
+
+        bc_id = changes["default_bc_id"]
+        if bc_id is not None and (
+            not isinstance(bc_id, str) or not session.get(TenantBC, (tenant.id, bc_id))
+        ):
+            raise DomainError("invalid_tenant", "默认 BC 必须属于当前租户")
+        tenant.default_bc_id = bc_id
+        details["default_bc_id"] = bc_id or ""
     session.add(tenant)
     session.add(
         AuditEvent(
@@ -283,6 +313,7 @@ def list_tenants(
             id=tenant.id,
             name=tenant.name,
             active=tenant.active,
+            default_bc_id=tenant.default_bc_id,
             role="platform_admin" if actor.is_superuser else cast(Role, role),
         )
         for tenant, role in rows[:limit]

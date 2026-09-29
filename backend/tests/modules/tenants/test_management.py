@@ -43,6 +43,7 @@ def test_platform_creates_tenant_and_keeps_actor(session):
         select(AuditEvent).where(AuditEvent.tenant_id == tenant.id)
     ).one()
     assert event.actor_id == platform.id
+
     assert event.action == "tenant.create"
     with Session(engine) as external:
         assert external.get(Tenant, tenant.id) is None
@@ -54,6 +55,71 @@ def test_platform_creates_tenant_and_keeps_actor(session):
             session, context=context, user_id=admin.id, role="viewer", active=True
         )
     assert caught.value.code == "last_tenant_admin"
+
+
+def test_tenant_names_are_unique_for_create_and_rename(session):
+    from app.modules.tenants.service import update_tenant
+
+    platform, admin = user(session, platform=True), user(session)
+    first = create_tenant(
+        session, actor_id=platform.id, name="唯一名称", administrator_id=admin.id
+    )
+    with pytest.raises(DomainError) as caught:
+        create_tenant(
+            session, actor_id=platform.id, name="唯一名称", administrator_id=admin.id
+        )
+    assert caught.value.code == "tenant_name_conflict"
+    second = create_tenant(
+        session, actor_id=platform.id, name="其他名称", administrator_id=admin.id
+    )
+    with pytest.raises(DomainError) as caught:
+        update_tenant(
+            session,
+            actor_id=platform.id,
+            tenant_id=second.id,
+            changes={"name": first.name},
+        )
+    assert caught.value.code == "tenant_name_conflict"
+
+
+def test_default_bc_configuration_is_scoped_and_nullable(
+    client, session, context, other_context
+):
+    from app.modules.accounts.models import TenantBC
+
+    session.add_all(
+        [
+            TenantBC(tenant_id=context.tenant_id, bc_id="own-bc"),
+            TenantBC(tenant_id=other_context.tenant_id, bc_id="foreign-bc"),
+        ]
+    )
+    session.flush()
+    platform = user(session, platform=True)
+    path, auth = f"/api/platform/tenants/{context.tenant_id}", headers(platform.id)
+    assert (
+        client.patch(
+            path, headers=auth, json={"default_bc_id": "foreign-bc"}
+        ).status_code
+        == 422
+    )
+    saved = client.patch(path, headers=auth, json={"default_bc_id": "own-bc"})
+    assert saved.status_code == 200 and saved.json()["default_bc_id"] == "own-bc"
+    listed = client.get("/api/me/tenants", headers=headers(context.actor_id)).json()[
+        "items"
+    ]
+    assert listed[0]["default_bc_id"] == "own-bc"
+    assert (
+        client.patch(
+            path, headers=headers(context.actor_id), json={"default_bc_id": None}
+        ).status_code
+        == 403
+    )
+    assert (
+        client.patch(path, headers=auth, json={"default_bc_id": None}).json()[
+            "default_bc_id"
+        ]
+        is None
+    )
 
 
 def test_service_does_not_trust_old_platform_flags(session):
@@ -125,7 +191,7 @@ def test_tenant_api_permissions_and_safe_response(client, session, context):
         "/api/platform/tenants", json=body, headers=headers(platform.id)
     )
     assert result.status_code == 201
-    assert set(result.json()) == {"id", "name", "active"}
+    assert set(result.json()) == {"id", "name", "active", "default_bc_id"}
     assert "hashed_password" not in result.text
     tenant_id = result.json()["id"]
     members = client.get(f"/api/tenants/{tenant_id}/members", headers=headers(admin.id))

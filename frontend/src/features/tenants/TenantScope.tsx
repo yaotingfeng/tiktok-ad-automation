@@ -116,7 +116,7 @@ export function TenantScopeProvider({
   // Scope identity comes only from a committed URL transition. Query results
   // validate that selection; they must never remount an unsaved editor first.
   const bcId = requestedBC ?? null
-  const defaultBC = bcQuery.data?.items[0]
+  const defaultBCId = tenant?.default_bc_id ?? bcQuery.data?.items[0]?.bc_id
   const switchBC = (target: BCPublic) => {
     if (target.bc_id === bcId) return
     void navigate({
@@ -135,13 +135,13 @@ export function TenantScopeProvider({
     })
   }
   useEffect(() => {
-    if (!defaultBC || requestedBC) return
+    if (!defaultBCId || requestedBC) return
     void navigate({
       to: pathname,
-      search: { ...searchParams, bc_id: defaultBC.bc_id },
+      search: { ...searchParams, bc_id: defaultBCId },
       replace: true,
     })
-  }, [defaultBC, requestedBC, pathname, navigate, searchParams])
+  }, [defaultBCId, requestedBC, pathname, navigate, searchParams])
   useEffect(() => {
     if (!tenantId || !bcId) return
     return () => {

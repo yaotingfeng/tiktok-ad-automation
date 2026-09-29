@@ -228,6 +228,13 @@ def original_preview(
     require_bc(session, context=context, bc_id=file.bc_id, action="read")
     if file.storage_state != "stored":
         raise storage_error("upload_not_ready")
+    original = file.current_object
+    if original and original.storage_provider == "external":
+        from .push_worker import external_source_url
+
+        return SignedPreview(
+            url=external_source_url(session, context=context, material_id=file.id)
+        )
     if file.object_key != object_key_for(context.tenant_id, file.id):
         raise storage_error("object_identity_unverified")
     return SignedPreview(

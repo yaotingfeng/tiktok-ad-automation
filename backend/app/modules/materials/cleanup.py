@@ -137,8 +137,10 @@ def _queue(
 
 def schedule_cleanup(
     session: Session, *, object_id: UUID, source_receipt_id: UUID
-) -> UUID:
+) -> UUID | None:
     obj = locked_object(session, object_id=object_id)
+    if obj.storage_provider == "external":
+        return None
     evidence = _receipt(session, obj, source_receipt_id)
     cleanup = session.exec(
         select(ObjectCleanup).where(
@@ -326,6 +328,9 @@ def run_cleanup(
         if identity is None:
             return
         obj = locked_object(session, object_id=identity)
+        if obj.storage_provider == "external":
+            # 即使误投清理消息，也绝不修改外部原件或发出删除请求。
+            return
         session.refresh(cleanup)
         if (
             cleanup.status == "deleted"

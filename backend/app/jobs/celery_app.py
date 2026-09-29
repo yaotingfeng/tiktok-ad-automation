@@ -25,6 +25,7 @@ celery_app.conf.update(
         "app.modules.materials.validation_tasks",
         "app.modules.materials.cleanup_tasks",
         "app.modules.materials.ingest_tasks",
+        "app.modules.materials.push_tasks",
         "app.modules.builds.draft_tasks",
         "app.modules.builds.preview_tasks",
         "app.modules.builds.submission_tasks",
@@ -47,6 +48,11 @@ celery_app.conf.update(
         "jobs.compact_dispatches": {"queue": "control"},
     },
     beat_schedule={
+        "repair-external-imports": {
+            "task": "materials.repair_external_imports",
+            "schedule": 60.0,
+            "options": {"queue": "control"},
+        },
         "compact-published-dispatches": {
             "task": "jobs.compact_dispatches",
             "schedule": 3600.0,

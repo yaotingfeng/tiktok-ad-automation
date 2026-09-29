@@ -44,6 +44,7 @@ from app.modules.materials import seed_models  # noqa: E402, F401
 from app.modules.materials import batch_models  # noqa: E402, F401
 from app.modules.materials import cover_models  # noqa: F401
 from app.modules.materials import ingest_models  # noqa: E402, F401
+from app.modules.materials import push_models  # noqa: E402, F401
 from app.modules.providers import models as provider_models  # noqa: F401
 from app.modules.strategies import models as strategy_models  # noqa: F401
 from app.modules.builds import models as builds_models  # noqa: F401

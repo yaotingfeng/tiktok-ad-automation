@@ -127,6 +127,11 @@ def _locked(
     ).one_or_none()
     if obj is None or row is None or (parent and parent.bc_id != file.bc_id):
         raise DomainError("material_not_found", "素材代次不存在或不可见")
+    if obj.storage_provider == "external":
+        raise DomainError(
+            "push_external_read_only",
+            "外部素材请通过推送接口更新，不能操作上传分片或删除原件",
+        )
     if (
         file.current_object_generation != identity.generation
         or row.current_generation != identity.generation

@@ -9,6 +9,8 @@ import type { ColumnDef } from "@tanstack/react-table"
 import { useState } from "react"
 import { toast } from "sonner"
 import {
+  AccountsService,
+  type BCPublic,
   type TenantSummary,
   TenantsService,
   type UserCandidate,
@@ -18,6 +20,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card"
 import {
   Field,
+  FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
@@ -273,6 +276,10 @@ function TenantEditor({
 }) {
   const original = editor.mode === "create" ? null : editor.tenant
   const [name, setName] = useState(original?.name ?? "")
+  const [defaultBCId, setDefaultBCId] = useState(
+    original?.default_bc_id ?? null,
+  )
+  const [defaultBCName, setDefaultBCName] = useState<string | null>(null)
   const [administrator, setAdministrator] = useState<UserCandidate | null>(null)
   const [submitted, setSubmitted] = useState(false)
   const queryClient = useQueryClient()
@@ -295,7 +302,12 @@ function TenantEditor({
               path: { tenant_id: original!.id },
               body: isStatus
                 ? { active: !original!.active }
-                : { name: name.trim() },
+                : {
+                    name: name.trim(),
+                    ...(defaultBCId !== (original?.default_bc_id ?? null)
+                      ? { default_bc_id: defaultBCId }
+                      : {}),
+                  },
             })
           ).data,
     onSuccess: async () => {
@@ -309,7 +321,11 @@ function TenantEditor({
     },
   })
   const dirty =
-    !isView && !isStatus && (name !== (original?.name ?? "") || !!administrator)
+    !isView &&
+    !isStatus &&
+    (name !== (original?.name ?? "") ||
+      !!administrator ||
+      defaultBCId !== (original?.default_bc_id ?? null))
   const title = isCreate
     ? "新建租户"
     : isView
@@ -431,6 +447,60 @@ function TenantEditor({
                 <p className="text-xs text-muted-foreground">
                   从已有启用用户中选择。新账号由平台用户管理开通。
                 </p>
+              </Field>
+            )}
+            {!isCreate && original && (
+              <Field data-disabled={mutation.isPending}>
+                <FieldLabel>默认 BC</FieldLabel>
+                <DirectoryPicker<BCPublic & { id: string }>
+                  label="默认 BC"
+                  selectedId={defaultBCId ?? undefined}
+                  valueLabel={
+                    defaultBCId ? (defaultBCName ?? defaultBCId) : undefined
+                  }
+                  queryKey={["tenant", original.id, "default-bc-options"]}
+                  disabled={mutation.isPending}
+                  load={async (query, cursor, limit, signal) => {
+                    const { data } = await AccountsService.getBcs({
+                      path: { tenant_id: original.id },
+                      query: { query, cursor, limit },
+                      signal,
+                    })
+                    return {
+                      ...data,
+                      items: data.items.map((item) => ({
+                        ...item,
+                        id: item.bc_id,
+                      })),
+                    }
+                  }}
+                  renderItem={(item) => (
+                    <span>
+                      {item.name || item.bc_id} · {item.bc_id}
+                    </span>
+                  )}
+                  onSelect={(item) => {
+                    setDefaultBCId(item.bc_id)
+                    setDefaultBCName(item.name || item.bc_id)
+                  }}
+                />
+                {defaultBCId && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    disabled={mutation.isPending}
+                    onClick={() => {
+                      setDefaultBCId(null)
+                      setDefaultBCName(null)
+                    }}
+                  >
+                    清除默认 BC
+                  </Button>
+                )}
+                <FieldDescription>
+                  用于外部素材推送和首次进入租户。未设置时，使用 BC
+                  列表中的第一个。
+                </FieldDescription>
               </Field>
             )}
           </FieldGroup>

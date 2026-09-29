@@ -14,6 +14,7 @@ class TenantSummary(BaseModel):
     name: str
     active: bool
     role: Role
+    default_bc_id: str | None = None
 
 
 class TenantCreate(BaseModel):
@@ -26,6 +27,7 @@ class TenantUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str | None = Field(default=None, min_length=1, max_length=120)
     active: bool | None = None
+    default_bc_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class MemberSet(BaseModel):

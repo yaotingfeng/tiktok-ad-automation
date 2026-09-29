@@ -2,17 +2,34 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, Column, DateTime, Index
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKeyConstraint,
+    Index,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
 
 class Tenant(SQLModel, table=True):
     __tablename__ = "tenant"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_tenant_name"),
+        ForeignKeyConstraint(
+            ["id", "default_bc_id"],
+            ["tenant_bc.tenant_id", "tenant_bc.bc_id"],
+            name="fk_tenant_default_bc",
+            use_alter=True,
+        ),
+    )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     name: str = Field(max_length=120)
     active: bool = True
+    default_bc_id: str | None = Field(default=None, max_length=128)
 
 
 class TenantMembership(SQLModel, table=True):

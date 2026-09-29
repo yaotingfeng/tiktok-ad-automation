@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     MATERIAL_SDK_MAX_UPLOAD_BYTES: int = Field(default=256 * 1024 * 1024, gt=0)
     MATERIAL_SDK_UPLOAD_MAX_INFLIGHT: int = Field(default=1, gt=0)
     MATERIAL_INGEST_ENABLED: bool = False
+    # 系统间接入配置：key_id -> secret/actor_id/tenant_ids/allowed_hosts；不发给浏览器。
+    MATERIAL_PUSH_CLIENTS: dict[str, dict[str, Any]] = Field(
+        default_factory=dict, repr=False
+    )
     MATERIAL_CLEANUP_ENABLED: bool = False
     # R2 分片接收和 TikTok URL 转存支持 1 GiB；不放宽旧 SDK 整文件内存保护。
     MATERIAL_URL_MAX_UPLOAD_BYTES: int = Field(default=1024**3, gt=0)

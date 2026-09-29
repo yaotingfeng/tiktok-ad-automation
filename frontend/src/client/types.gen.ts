@@ -3563,6 +3563,82 @@ export type ProviderLinkPublic = {
 };
 
 /**
+ * PushBatchPublic
+ */
+export type PushBatchPublic = {
+    /**
+     * Batch Id
+     */
+    batch_id: string;
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Tenant Name
+     */
+    tenant_name: string;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Accepted Count
+     */
+    accepted_count: number;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Materials
+     */
+    materials: Array<PushItemPublic>;
+};
+
+/**
+ * PushItemPublic
+ */
+export type PushItemPublic = {
+    /**
+     * Material Id
+     */
+    material_id: string;
+    /**
+     * Revision
+     */
+    revision: number;
+    /**
+     * File Name
+     */
+    file_name: string;
+    /**
+     * Library Material Id
+     */
+    library_material_id: string | null;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Error Code
+     */
+    error_code?: string | null;
+    /**
+     * Advertiser Id
+     */
+    advertiser_id?: string | null;
+    /**
+     * Video Id
+     */
+    video_id?: string | null;
+};
+
+/**
  * Recovery
  */
 export type Recovery = {
@@ -4584,6 +4660,10 @@ export type Tenant = {
      * Active
      */
     active?: boolean;
+    /**
+     * Default Bc Id
+     */
+    default_bc_id?: string | null;
 };
 
 /**
@@ -4620,6 +4700,10 @@ export type TenantSummary = {
      * Role
      */
     role: 'platform_admin' | 'tenant_admin' | 'operator' | 'viewer';
+    /**
+     * Default Bc Id
+     */
+    default_bc_id?: string | null;
 };
 
 /**
@@ -4634,6 +4718,10 @@ export type TenantUpdate = {
      * Active
      */
     active?: boolean | null;
+    /**
+     * Default Bc Id
+     */
+    default_bc_id?: string | null;
 };
 
 /**
@@ -7648,6 +7736,113 @@ export type materialsPostObjectRetryResponses = {
 };
 
 export type materialsPostObjectRetryResponse = materialsPostObjectRetryResponses[keyof materialsPostObjectRetryResponses];
+
+export type materialPushPostMaterialBatchData = {
+    /**
+     * PushBatchInput
+     */
+    body: {
+        /**
+         * Tenant Name
+         */
+        tenant_name: string;
+        /**
+         * Materials
+         */
+        materials: Array<{
+            /**
+             * Material Id
+             */
+            material_id: string;
+            /**
+             * File Name
+             */
+            file_name: string;
+            /**
+             * Url
+             */
+            url: string;
+        }>;
+    };
+    headers: {
+        /**
+         * 管理员分配的系统接入标识
+         */
+        'X-Key-Id': string;
+        /**
+         * Unix 秒，允许时钟偏差 300 秒
+         */
+        'X-Timestamp': string;
+        /**
+         * 小写标准 UUID；POST 重试使用原请求标识
+         */
+        'X-Request-Id': string;
+        /**
+         * sha256=HMAC-SHA256 小写十六进制；详见接入文档
+         */
+        'X-Signature': string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/integrations/materials/batches';
+};
+
+export type materialPushPostMaterialBatchResponses = {
+    /**
+     * Successful Response
+     */
+    202: PushBatchPublic;
+};
+
+export type materialPushPostMaterialBatchResponse = materialPushPostMaterialBatchResponses[keyof materialPushPostMaterialBatchResponses];
+
+export type materialPushGetMaterialBatchData = {
+    body?: never;
+    headers: {
+        /**
+         * 管理员分配的系统接入标识
+         */
+        'X-Key-Id': string;
+        /**
+         * Unix 秒，允许时钟偏差 300 秒
+         */
+        'X-Timestamp': string;
+        /**
+         * 小写标准 UUID；POST 重试使用原请求标识
+         */
+        'X-Request-Id': string;
+        /**
+         * sha256=HMAC-SHA256 小写十六进制；详见接入文档
+         */
+        'X-Signature': string;
+    };
+    path: {
+        /**
+         * Batch Id
+         */
+        batch_id: string;
+    };
+    query?: never;
+    url: '/api/integrations/materials/batches/{batch_id}';
+};
+
+export type materialPushGetMaterialBatchErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialPushGetMaterialBatchError = materialPushGetMaterialBatchErrors[keyof materialPushGetMaterialBatchErrors];
+
+export type materialPushGetMaterialBatchResponses = {
+    /**
+     * Successful Response
+     */
+    200: PushBatchPublic;
+};
+
+export type materialPushGetMaterialBatchResponse = materialPushGetMaterialBatchResponses[keyof materialPushGetMaterialBatchResponses];
 
 export type materialsAuthorizeReissueData = {
     body: MaterialReissueInput;

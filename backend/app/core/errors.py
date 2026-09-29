@@ -3,6 +3,17 @@ from fastapi.responses import JSONResponse
 
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
+    "tenant_name_conflict": 409,
+    "push_unauthorized": 401,
+    "push_forbidden": 403,
+    "push_invalid": 422,
+    "push_too_large": 413,
+    "push_tenant_invalid": 422,
+    "push_bc_missing": 409,
+    "push_batch_not_found": 404,
+    "push_url_invalid": 422,
+    "push_external_read_only": 409,
+    "push_source_missing": 409,
     "material_reissue_busy": 409,
     "material_reissue_conflict": 409,
     "material_reissue_not_allowed": 409,
@@ -258,6 +269,17 @@ ERROR_HTTP_STATUS: dict[str, int] = {
 # Public messages are application-owned. DomainError.message may contain raw
 # integration details, so it must never become an HTTP response or log field.
 ERROR_PUBLIC_MESSAGES: dict[str, str] = {
+    "tenant_name_conflict": "租户名称已存在，请使用唯一名称",
+    "push_unauthorized": "接口签名无效、已过期或接入凭证已停用",
+    "push_forbidden": "接入方或执行用户没有该租户的推送权限",
+    "push_invalid": "批次字段无效，请核对租户名称、素材数组及必填字段",
+    "push_too_large": "请求体超过 2 MiB，请拆分批次",
+    "push_tenant_invalid": "租户不存在、已停用或名称不唯一",
+    "push_bc_missing": "该租户尚未配置 BC",
+    "push_batch_not_found": "推送批次不存在或不可见",
+    "push_url_invalid": "素材地址必须来自已配置的 HTTPS 来源主机",
+    "push_external_read_only": "外部原件由素材工具管理，请通过推送接口更新",
+    "push_source_missing": "外部素材来源不存在",
     "material_reissue_busy": "该素材补发授权正在登记，请用原请求标识查询或重试",
     "material_reissue_conflict": "该素材已有不同范围的补发授权，不能再次补发",
     "material_reissue_not_allowed": "该项不满足明确授权补发的条件，请核查当前回执或在途请求",
@@ -339,9 +361,11 @@ ERROR_PUBLIC_MESSAGES: dict[str, str] = {
     "admission_deferred": "调用额度暂不可用，请稍后重试",
 }
 _STATUS_MESSAGES = {
+    401: "接口签名无效或已过期",
     403: "当前操作无权限",
     404: "资源不存在或不可见",
     409: "资源版本或请求标识冲突",
+    413: "请求体超过大小限制",
     422: "配置或输入无效",
     429: "调用额度暂不可用",
     502: "外部服务返回异常，请联系管理员",

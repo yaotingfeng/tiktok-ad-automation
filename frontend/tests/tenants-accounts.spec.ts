@@ -10,7 +10,13 @@ const U = "44444444-4444-4444-8444-444444444444"
 const V = "55555555-5555-4555-8555-555555555555"
 const token = "tenant-browser-test-token"
 type Role = "platform_admin" | "tenant_admin" | "operator" | "viewer"
-type Tenant = { id: string; name: string; active: boolean; role: Role }
+type Tenant = {
+  id: string
+  name: string
+  active: boolean
+  role: Role
+  default_bc_id?: string | null
+}
 type Member = {
   tenant_id: string
   user_id: string
@@ -38,6 +44,8 @@ async function boundary(
     members403?: boolean
     delayedA?: Promise<void>
     listFailure?: boolean
+    defaultBC?: string
+    bcs?: { bc_id: string; name: string }[]
   } = {},
 ) {
   const tenants: Tenant[] = [
@@ -46,6 +54,7 @@ async function boundary(
       name: "租户甲",
       active: true,
       role: options.role ?? "platform_admin",
+      default_bc_id: options.defaultBC,
     },
     {
       id: B,
@@ -129,7 +138,12 @@ async function boundary(
     })
     const reply = (json: unknown, status = 200) =>
       route.fulfill({ json, status, headers })
-    if (path.endsWith("/bcs")) return reply({ items: [], next_cursor: null })
+    if (path.endsWith("/bcs"))
+      return reply({
+        items: options.bcs ?? [],
+        total: options.bcs?.length ?? 0,
+        next_cursor: null,
+      })
     const denied = () =>
       reply(
         {
@@ -341,6 +355,60 @@ test("platform tenant creation searches active user candidates and submits selec
   expect(
     requests.some((request) => /invite|\/users\/signup/.test(request.path)),
   ).toBe(false)
+})
+
+test("platform administrator can select and clear tenant default BC", async ({
+  page,
+}) => {
+  const { requests } = await boundary(page, {
+    bcs: [
+      { bc_id: "bc-first", name: "第一 BC" },
+      { bc_id: "bc-second", name: "默认目标" },
+    ],
+  })
+  await page.goto("/platform/tenants")
+  const row = page.getByRole("row", { name: new RegExp(A) })
+  await row.getByRole("button", { name: "编辑", exact: true }).click()
+  let sheet = page.getByRole("dialog", { name: "编辑租户", exact: true })
+  await sheet.getByRole("combobox", { name: "默认 BC" }).click()
+  await page
+    .getByRole("dialog", { name: "选择默认 BC" })
+    .getByRole("option", { name: /默认目标/ })
+    .click()
+  await sheet.getByRole("button", { name: "保存修改" }).click()
+  await expect(sheet).not.toBeVisible()
+  expect(requests.filter((r) => r.method === "PATCH")[0]?.body).toEqual({
+    name: "租户甲",
+    default_bc_id: "bc-second",
+  })
+  await row.getByRole("button", { name: "编辑", exact: true }).click()
+  sheet = page.getByRole("dialog", { name: "编辑租户", exact: true })
+  await expect(sheet.getByRole("combobox", { name: "默认 BC" })).toContainText(
+    "bc-second",
+  )
+  await sheet.getByRole("button", { name: "清除默认 BC" }).click()
+  await sheet.getByRole("button", { name: "保存修改" }).click()
+  await expect(sheet).not.toBeVisible()
+  expect(requests.filter((r) => r.method === "PATCH")[1]?.body).toEqual({
+    name: "租户甲",
+    default_bc_id: null,
+  })
+})
+
+test("initial tenant navigation honors configured BC, then first BC when unset", async ({
+  page,
+}) => {
+  await boundary(page, {
+    defaultBC: "2002",
+    bcs: [
+      { bc_id: "1001", name: "第一 BC" },
+      { bc_id: "2002", name: "默认目标" },
+    ],
+  })
+  await page.goto(`/tenants/${A}/accounts`)
+  await expect(page).toHaveURL(/bc_id=2002/)
+  await page.goto(`/tenants/${B}/accounts`)
+  await expect(page).toHaveURL(/bc_id=1001/)
 })
 
 test("unsaved Sheet close can retain text or discard without sending any mutation", async ({
