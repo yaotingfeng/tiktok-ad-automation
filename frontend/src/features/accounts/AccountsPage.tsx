@@ -264,7 +264,7 @@ function AccountRows({ connectionId }: { connectionId: string }) {
                 maxLength={255}
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
-                placeholder="搜索账户名称或完整 ID"
+                placeholder="名称关键词（空格分隔）或完整 ID"
               />
             </Field>
             <Field className="w-44">

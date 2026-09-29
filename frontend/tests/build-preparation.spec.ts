@@ -54,7 +54,7 @@ test("账户选择跨页全选、名称去重并追加 ID，取消保留输入",
   const dialog = page.getByRole("dialog", { name: "选择账户", exact: true })
   await expect(dialog.getByRole("checkbox", { name: /P1-1/ })).toBeChecked()
   await expect(dialog.getByRole("checkbox", { name: /P1-4/ })).toBeDisabled()
-  await dialog.getByLabel("搜索账户", { exact: true }).fill("P1")
+  await dialog.getByLabel("搜索账户", { exact: true }).fill("MAX P1")
   await dialog.getByRole("button", { name: "搜索", exact: true }).click()
   await dialog
     .getByRole("button", { name: "全选筛选结果", exact: true })
@@ -63,7 +63,7 @@ test("账户选择跨页全选、名称去重并追加 ID，取消保留输入",
   expect(
     requests.some(
       (query) =>
-        query.get("cursor") === "second" && query.get("query") === "P1",
+        query.get("cursor") === "second" && query.get("query") === "MAX P1",
     ),
   ).toBe(true)
   await dialog.getByRole("button", { name: "确定添加" }).click()

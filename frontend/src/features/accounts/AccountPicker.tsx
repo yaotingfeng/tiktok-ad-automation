@@ -221,7 +221,7 @@ function AccountSelection({
             <div className="flex gap-2">
               <Input
                 id={`${id}-search`}
-                placeholder="输入名称关键词（如 P1）或完整 ID"
+                placeholder="关键词（如 MAX P1）或完整 ID"
                 maxLength={255}
                 value={input}
                 disabled={bulkBusy}
@@ -250,6 +250,9 @@ function AccountSelection({
             </fieldset>
           </Field>
         </FieldGroup>
+        <p className="mt-2 text-xs text-muted-foreground">
+          多个关键词用空格分隔，名称须同时包含，顺序和大小写不限。
+        </p>
       </form>
       {/* 全选工具栏与列表左边距一致，两个操作共用同一高度和垂直中线。 */}
       <div className="flex shrink-0 items-center justify-between gap-2 px-3">

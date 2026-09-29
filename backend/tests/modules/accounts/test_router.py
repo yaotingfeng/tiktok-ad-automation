@@ -541,6 +541,60 @@ def test_readonly_and_cross_tenant_cannot_manage_connections(
     )
 
 
+def test_account_keywords_match_all_words_and_keep_pagination_and_literal_id(
+    client, session, account_access_case
+):
+    context, grant = account_access_case
+    names = ["MAX-其他-P1", "p1-x-mAx", "MAX-P2", "MIN-P1", "MAX%_ P1", "MAXxx P1"]
+    for index, name in enumerate(names):
+        account_id = f"keyword-{index}"
+        session.add(
+            AdvertiserAccount(
+                tenant_id=context.tenant_id,
+                advertiser_id=account_id,
+                name=name,
+                currency="USD",
+                timezone="UTC",
+                remote_status="STATUS_ENABLE",
+            )
+        )
+        session.add(
+            BCAccountAccess(
+                tenant_id=context.tenant_id,
+                bc_id=grant.bc_id,
+                advertiser_id=account_id,
+                connection_id=grant.connection_id,
+                in_bc=True,
+                authorized=True,
+                active=True,
+            )
+        )
+    session.flush()
+    path = f"/api/tenants/{context.tenant_id}/accounts"
+    for query, indices in [
+        ("MAX P1", [0, 1, 4, 5]),
+        (" p1\t  max\u3000", [0, 1, 4, 5]),
+        ("MAX%_ P1", [4]),
+        ("P2 max", [2]),
+        ("MAX P9", []),
+        ("keyword-3", [3]),
+        ("keyword-", []),
+    ]:
+        params = {"bc_id": grant.bc_id, "query": query, "limit": 1}
+        observed = []
+        while True:
+            response = client.get(path, params=params, headers=headers(context))
+            assert response.status_code == 200
+            page = response.json()
+            assert page["total"] == len(indices)
+            observed.extend(item["advertiser_id"] for item in page["items"])
+            if not page["next_cursor"]:
+                break
+            params["cursor"] = page["next_cursor"]
+            assert len(observed) <= len(indices)
+        assert observed == [f"keyword-{index}" for index in indices]
+
+
 def test_10001_directory_accounts_page_exactly_once(
     client, session, account_access_case
 ):

@@ -237,9 +237,16 @@ def get_accounts(
         .exists(),
     )
     if query.strip():
+        # 空白分隔的关键词须同时出现在名称中，顺序不限；完整 ID 仍精确匹配。
+        # 每词按字面转义，避免 % / _ 被当作 SQL 通配符扩大账户选择范围。
         statement = statement.where(
             or_(
-                col(AdvertiserAccount.name).icontains(query.strip(), autoescape=True),
+                and_(
+                    *(
+                        col(AdvertiserAccount.name).icontains(word, autoescape=True)
+                        for word in query.split()
+                    )
+                ),
                 col(AdvertiserAccount.advertiser_id) == query.strip(),
             )
         )
