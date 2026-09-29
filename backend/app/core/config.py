@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     MATERIAL_SDK_MAX_UPLOAD_BYTES: int = Field(default=256 * 1024 * 1024, gt=0)
     MATERIAL_SDK_UPLOAD_MAX_INFLIGHT: int = Field(default=1, gt=0)
     MATERIAL_INGEST_ENABLED: bool = False
-    # 系统间接入配置：key_id -> secret/actor_id/tenant_ids/allowed_hosts；不发给浏览器。
+    # 系统间全租户接入配置：key_id -> secret/actor_id；不发给浏览器。
     MATERIAL_PUSH_CLIENTS: dict[str, dict[str, Any]] = Field(
         default_factory=dict, repr=False
     )

@@ -167,7 +167,7 @@ def register_batch(
     tenant = tenants[0]
     context = require_push_tenant(session, identity.client, tenant.id)
     for item in body.materials:
-        validate_url(item.url, identity.client.allowed_hosts)
+        validate_url(item.url)
     bc_id = select_push_bc(session, tenant)
     route = freeze_route(session, context=context, bc_id=bc_id)
     resolve_primary_account(

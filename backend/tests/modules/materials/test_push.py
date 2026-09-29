@@ -67,8 +67,6 @@ def push_env(source_env, monkeypatch):
             "test-tool": {
                 "secret": SECRET,
                 "actor_id": str(source_env["context"].actor_id),
-                "tenant_ids": [str(source_env["context"].tenant_id)],
-                "allowed_hosts": ["materials.example.test"],
             }
         },
     )
@@ -134,6 +132,30 @@ def test_batch_accepts_names_three_fields_and_signed_status(client, push_env):
         assert task.payload == {"item_id": str(saved.id)}
 
 
+def test_public_source_host_needs_no_configuration(client, push_env):
+    body = payload(push_env)
+    body["materials"][0]["url"] = "https://another-r2.example/video.mp4"
+    result = post(client, push_env, body)
+    assert result.status_code == 202, result.text
+
+
+def test_global_client_can_enter_new_tenant_without_membership_configuration(push_env):
+    from app.modules.materials.push_auth import get_client, require_push_tenant
+    from app.modules.tenants.models import TenantMembership
+
+    with Session(engine) as db:
+        tenant = Tenant(name=f"new-push-{uuid4()}")
+        db.add(tenant)
+        db.flush()
+        context = require_push_tenant(db, get_client("test-tool"), tenant.id)
+        assert context.tenant_id == tenant.id
+        assert context.actor_id == push_env["context"].actor_id
+        member = db.get(TenantMembership, (tenant.id, context.actor_id))
+        assert member.active and member.role == "operator"
+        assert require_push_tenant(db, get_client("test-tool"), tenant.id) == context
+        db.rollback()
+
+
 @pytest.mark.parametrize(
     "mutation", ["tamper", "expired", "future", "missing", "wrong-path", "wrong-method"]
 )
@@ -190,7 +212,7 @@ def test_duplicate_request_does_not_update_latest_revision(client, push_env):
         "duplicate",
         "unknown-field",
         "no-extension",
-        "bad-host",
+        "http-url",
         "private-ip",
         "too-many",
     ],
@@ -207,8 +229,8 @@ def test_invalid_batch_is_atomic_and_never_echoes_url(client, push_env, mutation
         body["materials"][1]["secret"] = "no"
     if mutation == "no-extension":
         body["materials"][1]["file_name"] = "no_extension"
-    if mutation == "bad-host":
-        body["materials"][1]["url"] = "https://evil.example/video.mp4"
+    if mutation == "http-url":
+        body["materials"][1]["url"] = "http://materials.example/video.mp4"
     if mutation == "private-ip":
         body["materials"][1]["url"] = "https://127.0.0.1/video.mp4"
     if mutation == "too-many":
@@ -224,10 +246,10 @@ def test_invalid_batch_is_atomic_and_never_echoes_url(client, push_env, mutation
         ).all()
 
 
-def test_forbidden_tenant_and_oversized_body(client, push_env, monkeypatch):
-    config = settings.MATERIAL_PUSH_CLIENTS["test-tool"]
-    monkeypatch.setitem(config, "tenant_ids", [str(uuid4())])
-    assert post(client, push_env).status_code == 403
+def test_inactive_tenant_and_oversized_body(client, push_env):
+    with Session(engine) as db, db.begin():
+        db.get(Tenant, push_env["context"].tenant_id).active = False
+    assert post(client, push_env).status_code == 422
     raw = b" " * (2 * 1024 * 1024 + 1)
     assert client.post(PATH, content=raw, headers=signed(raw)).status_code == 413
 
@@ -470,7 +492,7 @@ def test_two_workers_only_download_once(client, push_env, external_http, monkeyp
 
 
 def test_failed_item_does_not_rollback_sibling_and_permissions_rechecked(
-    client, push_env, external_http, monkeypatch
+    client, push_env, external_http
 ):
     assert external_http[0]
     body = payload(push_env)
@@ -483,14 +505,19 @@ def test_failed_item_does_not_rollback_sibling_and_permissions_rechecked(
     bad, good = items(batch["batch_id"])
     assert (bad.status, bad.error_code) == ("failed", "invalid_video")
     assert good.status == "imported"
-    config = settings.MATERIAL_PUSH_CLIENTS["test-tool"]
-    monkeypatch.setitem(config, "tenant_ids", [str(uuid4())])
+    from app.modules.tenants.models import TenantMembership
+
+    with Session(engine) as db, db.begin():
+        db.get(
+            TenantMembership,
+            (push_env["context"].tenant_id, push_env["context"].actor_id),
+        ).active = False
     path = f"{PATH}/{batch['batch_id']}"
     assert client.get(path, headers=signed(method="GET", path=path)).status_code == 403
     from app.core.errors import DomainError
     from app.modules.materials.push_worker import external_source_url
 
-    with Session(engine) as db, pytest.raises(DomainError, match="推送权限"):
+    with Session(engine) as db, pytest.raises(DomainError):
         external_source_url(
             db, context=push_env["context"], material_id=good.material_id
         )
@@ -536,7 +563,8 @@ def test_completed_same_content_reuses_material_version(
         "https://materials.example.test:444/a.mp4",
         "https://materials.example.test/a.mp4#fragment",
         "https://u:p@materials.example.test/a.mp4",
-        "https://materials.example.test.evil.test/a.mp4",
+        "https://169.254.169.254/a.mp4",
+        "https://[::1]/a.mp4",
         "https://127.0.0.1/a.mp4",
         "https://materials.example.test/a\n.mp4",
     ],
@@ -546,7 +574,7 @@ def test_url_security_boundary(target):
     from app.modules.materials.push_transport import validate_url
 
     with pytest.raises(DomainError) as caught:
-        validate_url(target, {"materials.example.test", "127.0.0.1"})
+        validate_url(target)
     assert caught.value.code == "push_url_invalid"
 
 
@@ -647,14 +675,14 @@ def test_stream_rejects_unsafe_or_incomplete_response(
         ),
     )
     with pytest.raises(DomainError) as caught:
-        inspect_external(URL, {"materials.example.test"}, "original.mp4")
+        inspect_external(URL, "original.mp4")
     assert caught.value.code == code
 
 
 def test_transport_pins_ip_preserves_host_and_disables_redirects(external_http):
     from app.modules.materials.push_transport import inspect_external
 
-    facts = inspect_external(URL, {"materials.example.test"}, "original.mp4")
+    facts = inspect_external(URL, "original.mp4")
     host, method, target, kwargs = external_http[1][0]
     assert host == "93.184.216.34" and method == "GET"
     assert target.startswith("/video.mp4?")

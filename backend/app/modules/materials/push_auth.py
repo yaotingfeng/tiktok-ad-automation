@@ -9,12 +9,14 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session
 
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
-from app.modules.tenants.models import TenantMembership
+from app.models import User
+from app.modules.tenants.models import Tenant, TenantMembership
 from app.modules.tenants.permissions import require_tenant
 
 
@@ -22,8 +24,6 @@ class PushClient(BaseModel):
     model_config = {"extra": "forbid"}
     secret: str = Field(min_length=32, repr=False)
     actor_id: UUID
-    tenant_ids: set[UUID] = Field(min_length=1)
-    allowed_hosts: set[str] = Field(min_length=1)
 
 
 @dataclass(frozen=True)
@@ -81,12 +81,23 @@ def authenticate(
 def require_push_tenant(
     session: Session, client: PushClient, tenant_id: UUID
 ) -> TenantContext:
-    if tenant_id not in client.tenant_ids:
-        raise DomainError("push_forbidden", "接入方没有该租户的推送权限")
+    user = session.get(User, client.actor_id, populate_existing=True)
+    tenant = session.get(Tenant, tenant_id, populate_existing=True)
+    if not user or not user.is_active or not tenant or not tenant.active:
+        raise DomainError("push_forbidden", "推送执行用户或租户已停用")
+    # 系统接入凭证允许所有有效租户；按需建立最小执行成员，供审计和冻结任务外键使用。
+    # 不覆盖已有停用/只读成员，避免后台恢复时重新打开管理员明确撤销的权限。
+    session.connection().execute(
+        insert(TenantMembership)
+        .values(
+            tenant_id=tenant_id, user_id=client.actor_id, role="operator", active=True
+        )
+        .on_conflict_do_nothing(index_elements=["tenant_id", "user_id"])
+    )
     context = require_tenant(
         session, actor_id=client.actor_id, tenant_id=tenant_id, action="upload"
     )
-    # 入库与原件用途外键要求实际成员，平台管理员身份也不能隐式代替成员绑定。
+    # 全局 key 不代表业务数据混用；仍重建当前租户权限，所有记录沿用租户外键隔离。
     member = session.get(
         TenantMembership, (tenant_id, client.actor_id), populate_existing=True
     )

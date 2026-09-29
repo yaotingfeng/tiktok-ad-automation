@@ -277,7 +277,7 @@ ERROR_PUBLIC_MESSAGES: dict[str, str] = {
     "push_tenant_invalid": "租户不存在、已停用或名称不唯一",
     "push_bc_missing": "该租户尚未配置 BC",
     "push_batch_not_found": "推送批次不存在或不可见",
-    "push_url_invalid": "素材地址必须来自已配置的 HTTPS 来源主机",
+    "push_url_invalid": "素材地址必须是有效的公网 HTTPS 链接",
     "push_external_read_only": "外部原件由素材工具管理，请通过推送接口更新",
     "push_source_missing": "外部素材来源不存在",
     "material_reissue_busy": "该素材补发授权正在登记，请用原请求标识查询或重试",

@@ -52,7 +52,7 @@ def external_source_url(
     url = decrypt_credentials(
         tenant_id=context.tenant_id, ciphertext=item.url_ciphertext
     )["url"]
-    validate_url(url, client.allowed_hosts)
+    validate_url(url)
     return url
 
 
@@ -266,7 +266,7 @@ def process_item(
         if not settings.MATERIAL_INGEST_ENABLED:
             raise DomainError("material_ingest_disabled", "素材入库暂未启用")
         url = decrypt_credentials(tenant_id=tenant_id, ciphertext=ciphertext)["url"]
-        facts = inspect_external(url, client.allowed_hosts, file_name)
+        facts = inspect_external(url, file_name)
     except Exception as exc:
         error = exc.code if isinstance(exc, DomainError) else "push_validation_failed"
     with Session(database_engine) as db, db.begin():

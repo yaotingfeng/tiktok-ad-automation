@@ -31,7 +31,7 @@ class ExternalFacts:
     etag: str | None
 
 
-def validate_url(url: str, allowed_hosts: set[str]) -> SplitResult:
+def validate_url(url: str) -> SplitResult:
     try:
         parsed = urlsplit(url)
         hostname = parsed.hostname
@@ -39,7 +39,6 @@ def validate_url(url: str, allowed_hosts: set[str]) -> SplitResult:
             parsed.scheme != "https"
             or not hostname
             or hostname != hostname.lower()
-            or hostname not in allowed_hosts
             or parsed.username is not None
             or parsed.password is not None
             or parsed.fragment
@@ -63,7 +62,7 @@ def validate_url(url: str, allowed_hosts: set[str]) -> SplitResult:
                 raise ValueError
     except ValueError, TypeError:
         raise DomainError(
-            "push_url_invalid", "素材地址必须来自已配置的 HTTPS 来源主机"
+            "push_url_invalid", "素材地址必须是有效的公网 HTTPS 链接"
         ) from None
     return parsed
 
@@ -85,10 +84,8 @@ def public_address(hostname: str) -> str:
         ) from None
 
 
-def inspect_external(
-    url: str, allowed_hosts: set[str], file_name: str
-) -> ExternalFacts:
-    parsed = validate_url(url, allowed_hosts)
+def inspect_external(url: str, file_name: str) -> ExternalFacts:
+    parsed = validate_url(url)
     assert parsed.hostname
     address = public_address(parsed.hostname)
     deadline = monotonic() + settings.MATERIAL_VALIDATION_SECONDS
