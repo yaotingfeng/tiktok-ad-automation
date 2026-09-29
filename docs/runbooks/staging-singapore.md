@@ -1,6 +1,6 @@
 # 新加坡测试环境（无 Docker）
 
-> **环境口径（2026-09-28）**：本服务器是测试服务器，也是当前唯一已部署的远程环境；它不是生产环境。当前运行代码为 `f0317c89151f2019cfe1b82cb24a22baed50041e`，数据库 head 为 `audience_targeting`，最新发布证据见[账户选择弹窗布局验收](../validation/2026-09-28-account-picker-layout-release.md)，此前受众定向发布见[定向验收](../validation/2026-09-28-targeting-staging-release.md)。以下按日期保留的其他“当前运行”表述均为历史快照。
+> **环境口径（2026-09-29）**：本服务器是测试服务器，也是当前唯一已部署的远程环境；它不是生产环境。当前运行代码为 `6ef4661e58cf99d212ce051f5c3b37324fd8ea14`，数据库 head 为 `audience_targeting`，最新发布证据见[账户多关键词搜索验收](../validation/2026-09-29-account-keywords-release.md)，此前发布见[账户弹窗布局](../validation/2026-09-28-account-picker-layout-release.md)和[受众定向](../validation/2026-09-28-targeting-staging-release.md)。以下按日期保留的其他“当前运行”表述均为历史快照。
 
 - 2026-09-20 当前运行 `e2ef7d5f3c5abbd47b88912eb91675ba5bc403d7`：TikTok 非分页 identity 目录不再误用其他目录的 50 条分页上限，严格字段、唯一性、计数及 8 MiB 传输上限保持；场景合同升至 v4 以便重新准备时避开旧终态失败。完整备份 `20260920T112946Z` 的 PostgreSQL、Redis、1,322 个项目/前端文件和私有配置/证书均通过校验及隔离恢复；22 张表、4,309 份加密响应、六服务、四个 Worker、HTTPS/API 边界及配置一致。星屿原失败账户真实只读解析 58/58 条身份成功；未调用 TikTok 写接口，旧冻结预览未改写，需重新准备并生成新预览。以下版本记录均为历史。
 
