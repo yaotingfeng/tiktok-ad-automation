@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
@@ -23,7 +24,7 @@ from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.integrations.tiktok.contracts.reporting import ReportPage, ReportRow
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.accounts.routing import verify_route
-from app.modules.ads.models import CampaignNameProjection
+from app.modules.ads.models import AdObject, CampaignNameProjection
 from app.modules.reporting.contracts import (
     decode_query,
     report_buckets,
@@ -452,6 +453,64 @@ def _row_records(
     return records
 
 
+def _observation_membership(
+    session: Session,
+    *,
+    run: ReportSyncRun,
+    subjects: set[tuple[str, ...]],
+) -> tuple[str, int, int] | None:
+    """Return a digest of the complete published campaign directory.
+
+    A report row is only a usable historical observation when its campaign
+    identity is present in the published directory and has a corresponding
+    name/grouping projection.  Missing directory or projection evidence is an
+    incomplete snapshot, so callers must leave the observation absent.
+    """
+    directory = tuple(session.exec(
+        select(AdObject).where(
+            AdObject.tenant_id == run.tenant_id,
+            AdObject.advertiser_id == run.advertiser_id,
+            AdObject.kind == "campaign",
+        )
+    ).all())
+    projections = tuple(session.exec(
+        select(CampaignNameProjection).where(
+            CampaignNameProjection.tenant_id == run.tenant_id,
+            CampaignNameProjection.advertiser_id == run.advertiser_id,
+        )
+    ).all())
+    latest: dict[str, CampaignNameProjection] = {}
+    for projection in projections:
+        prior = latest.get(projection.campaign_remote_id)
+        if prior is None or (
+            projection.grouping_revision,
+            projection.name_revision,
+            projection.observed_at,
+        ) > (prior.grouping_revision, prior.name_revision, prior.observed_at):
+            latest[projection.campaign_remote_id] = projection
+    directory_ids = {row.remote_id for row in directory}
+    observed_campaigns = {subject[-1] for subject in subjects if subject[0] == "campaign"}
+    if not observed_campaigns.issubset(directory_ids):
+        return None
+    if any(remote_id not in latest for remote_id in directory_ids):
+        return None
+    members = sorted(
+        (
+            row.remote_id,
+            latest[row.remote_id].status,
+            latest[row.remote_id].provider_label or "",
+            latest[row.remote_id].drama_name or "",
+            latest[row.remote_id].grouping_revision,
+        )
+        for row in directory
+    )
+    digest = sha256(json.dumps(members, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+    target_projections = [latest[subject[-1]] for subject in subjects if subject[0] == "campaign"]
+    return digest, max((item.name_revision for item in target_projections), default=0), max(
+        (item.grouping_revision for item in target_projections), default=0
+    )
+
+
 def _append_observations(session: Session, *, run: ReportSyncRun,
                          records: list[dict[str, Any]], version: int,
                          query: Any) -> None:
@@ -463,18 +522,11 @@ def _append_observations(session: Session, *, run: ReportSyncRun,
         subject = tuple(record["subject_key"])
         if subject and subject[0] in {"account", "campaign"}:
             groups.setdefault(subject, []).append(record)
-    projections = {
-        row.campaign_remote_id: row
-        for row in session.exec(
-            select(CampaignNameProjection).where(
-                CampaignNameProjection.tenant_id == run.tenant_id,
-                CampaignNameProjection.advertiser_id == run.advertiser_id,
-            )
-        ).all()
-    }
+    membership = _observation_membership(session, run=run, subjects=set(groups))
+    if membership is None:
+        return
+    membership_digest, name_revision, grouping_revision = membership
     for subject, items in groups.items():
-        latest_projection = projections.get(subject[-1]) if subject[0] == "campaign" else None
-        digest = sha256("|".join(sorted(":".join(subject) for _ in items)).encode()).hexdigest()
         values: dict[str, str | None] = {}
         availability: dict[str, str] = {}
         for item in items:
@@ -508,9 +560,9 @@ def _append_observations(session: Session, *, run: ReportSyncRun,
             values=values,
             availability=availability,
             observed_at=datetime.now(UTC),
-            membership_digest=digest,
-            name_revision=latest_projection.name_revision if latest_projection else 0,
-            grouping_revision=latest_projection.grouping_revision if latest_projection else 0,
+            membership_digest=membership_digest,
+            name_revision=name_revision,
+            grouping_revision=grouping_revision,
             published_version=version,
         ))
 

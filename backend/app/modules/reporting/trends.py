@@ -14,11 +14,14 @@ from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 from typing import Literal, cast
+from zoneinfo import ZoneInfo
 
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
-from app.modules.ads.models import CampaignNameProjection
+from app.modules.accounts.models import AdvertiserAccount
+from app.modules.ads.models import AdObject, CampaignNameProjection
+from app.modules.reporting.aggregation import _entity_matches
 from app.modules.reporting.filters import authorized_grants, compile_filter
 from app.modules.reporting.models import ReportFact, ReportObservation
 from app.modules.reporting.schemas import (
@@ -30,10 +33,16 @@ from app.modules.reporting.schemas import (
 from app.modules.tenants.permissions import require_tenant
 
 
-def _period(filters: ReportingFilter) -> tuple[datetime, datetime]:
-    start = datetime.combine(filters.start_date, time.min, tzinfo=UTC)
-    end = datetime.combine(filters.end_date + timedelta(days=1), time.min, tzinfo=UTC)
+def _period(filters: ReportingFilter, timezone: str) -> tuple[datetime, datetime]:
+    zone = ZoneInfo(timezone)
+    start = datetime.combine(filters.start_date, time.min, tzinfo=zone).astimezone(UTC)
+    end = datetime.combine(filters.end_date + timedelta(days=1), time.min, tzinfo=zone).astimezone(UTC)
     return start, end
+
+
+def _in_period(observation: ReportObservation, filters: ReportingFilter) -> bool:
+    start, end = _period(filters, observation.timezone)
+    return start <= observation.bucket_start < observation.bucket_end <= end
 
 
 def _decimal(value: str | None) -> Decimal | None:
@@ -54,11 +63,44 @@ def _observation_kind(dimension: str) -> str | None:
     return None
 
 
-def _matches_filter(observation: ReportObservation, filters: ReportingFilter) -> bool:
+def _matches_filter(
+    observation: ReportObservation,
+    filters: ReportingFilter,
+    *,
+    entity: AdObject | None,
+    projection: CampaignNameProjection | None,
+    account_name: str | None,
+) -> bool:
     if filters.ids:
         subject_id = observation.subject_key[-1] if observation.subject_key else ""
         if subject_id not in filters.ids and ":".join(observation.subject_key) not in filters.ids:
             return False
+    text = " ".join(
+        value for value in (
+            observation.subject_key[-1] if observation.subject_key else "",
+            entity.name if entity else None,
+            projection.provider_label if projection else None,
+            projection.drama_name if projection else None,
+            account_name,
+        ) if value
+    ).casefold()
+    if filters.query and any(word.casefold() not in text for word in filters.query.split()):
+        return False
+    if not _entity_matches(entity, projection, filters, observation.timezone):
+        return False
+    spend_state = observation.availability.get("spend")
+    spend = _decimal(observation.values.get("spend")) if spend_state == "AVAILABLE" else None
+    revenue_state = observation.availability.get("native_growth_ad_revenue_value_d0")
+    revenue = _decimal(observation.values.get("native_growth_ad_revenue_value_d0")) if revenue_state == "AVAILABLE" else None
+    if filters.min_spend is not None and (spend is None or spend < filters.min_spend):
+        return False
+    if filters.max_spend is not None and (spend is None or spend > filters.max_spend):
+        return False
+    roas = revenue / spend if spend and revenue is not None else None
+    if filters.min_d0_roas is not None and (roas is None or roas < filters.min_d0_roas):
+        return False
+    if filters.max_d0_roas is not None and (roas is None or roas > filters.max_d0_roas):
+        return False
     return True
 
 
@@ -163,8 +205,8 @@ def _drama_series(
 
     # A publish version is the membership snapshot.  Grouping by it retains a
     # newer same-bucket correction as a separate point instead of dropping it.
-    grouped: dict[tuple[str, datetime, datetime, int], list[ReportObservation]] = defaultdict(list)
-    group_keys: dict[tuple[str, datetime, datetime, int], tuple[str, ...]] = {}
+    grouped: dict[tuple[str, str, str, str, str, str, datetime, datetime, int], list[ReportObservation]] = defaultdict(list)
+    group_keys: dict[tuple[str, str, str, str, str, str, datetime, datetime, int], tuple[str, ...]] = {}
     for item in observations:
         campaign_id = item.subject_key[-1] if item.subject_key else ""
         latest_projection = latest.get((item.advertiser_id, campaign_id))
@@ -174,14 +216,24 @@ def _drama_series(
         else:
             group_id = f"{bc_id}:external:{item.advertiser_id}:{campaign_id}"
             subject_key = (group_id,)
-        bucket_key = (group_id, item.bucket_start, item.bucket_end, item.published_version)
+        bucket_key = (
+            group_id,
+            item.timezone,
+            item.currency,
+            item.attribution,
+            item.report_contract,
+            item.metric_family,
+            item.bucket_start,
+            item.bucket_end,
+            item.published_version,
+        )
         grouped[bucket_key].append(item)
         group_keys[bucket_key] = subject_key
 
     availability_rank = {"AVAILABLE": 0, "MISSING": 1, "UNAVAILABLE": 2, "UNSUPPORTED": 3, "FAILED": 4}
     result: list[_Series] = []
     for bucket_key, members in grouped.items():
-        _group_id, bucket_start, bucket_end, _version = bucket_key
+        _group_id, _timezone, _currency, _attribution, _contract, _family, bucket_start, bucket_end, _version = bucket_key
         metric_names = sorted({name for member in members for name in member.values})
         values: dict[str, str | None] = {}
         availability: dict[str, str] = {}
@@ -257,7 +309,11 @@ def build_trend(
         advertiser_ids=filters.advertiser_ids,
     )
     advertiser_ids = tuple(sorted({grant.advertiser_id for grant in grants}))
-    start, end = _period(filters)
+    # Use a UTC envelope only to bound the database read; each observation is
+    # subsequently checked against its own account-local timezone window.
+    start, end = _period(filters, "UTC")
+    start -= timedelta(days=1)
+    end += timedelta(days=1)
     kind = _observation_kind(filters.dimension)
     if kind is None:
         return TrendPublic(
@@ -290,9 +346,49 @@ def build_trend(
             )
         ).all()
     )
+    entities = {
+        (row.advertiser_id, row.kind, row.remote_id): row
+        for row in session.exec(
+            select(AdObject).where(
+                AdObject.tenant_id == context.tenant_id,
+                col(AdObject.advertiser_id).in_(advertiser_ids),
+            )
+        ).all()
+    }
+    account_names = {
+        row.advertiser_id: row.name
+        for row in session.exec(
+            select(AdvertiserAccount).where(
+                AdvertiserAccount.tenant_id == context.tenant_id,
+                col(AdvertiserAccount.advertiser_id).in_(advertiser_ids),
+            )
+        ).all()
+    }
+    projection_rows = tuple(session.exec(
+        select(CampaignNameProjection).where(
+            CampaignNameProjection.tenant_id == context.tenant_id,
+            col(CampaignNameProjection.advertiser_id).in_(advertiser_ids),
+        )
+    ).all())
+    projections: dict[tuple[str, str], CampaignNameProjection] = {}
+    for row in projection_rows:
+        key = (row.advertiser_id, row.campaign_remote_id)
+        prior = projections.get(key)
+        if prior is None or (row.grouping_revision, row.name_revision, row.observed_at) > (
+            prior.grouping_revision, prior.name_revision, prior.observed_at
+        ):
+            projections[key] = row
     observations = tuple(
         item for item in observations
-        if _matches_filter(item, filters) and _fact_for_observation(session, item)
+        if _in_period(item, filters)
+        and _matches_filter(
+            item,
+            filters,
+            entity=entities.get((item.advertiser_id, "campaign", item.subject_key[-1] if item.subject_key else "")),
+            projection=projections.get((item.advertiser_id, item.subject_key[-1] if item.subject_key else "")),
+            account_name=account_names.get(item.advertiser_id),
+        )
+        and _fact_for_observation(session, item)
     )
     if grain in {"day", "hour"}:
         expected_granularity = "DAY" if grain == "day" else "HOUR"
@@ -321,13 +417,13 @@ def build_trend(
     # Retain same-bucket observations so platform corrections remain visible.
     ordered = sorted(series, key=lambda item: (item.advertiser_id, item.subject_key, item.bucket_start, item.observed_at))
     points: list[TrendPoint] = []
-    previous_by_subject: dict[tuple[str, tuple[str, ...]], _Series] = {}
+    previous_by_subject: dict[tuple[str, tuple[str, ...], str], _Series] = {}
     overall_reason: Literal["SCOPE_CHANGED", "DATE_CHANGED"] | None = None
     intervals: list[int] = []
     for item in ordered:
         reason: Literal["SCOPE_CHANGED", "DATE_CHANGED"] | None = None
         delta: dict[str, Decimal] | None = None
-        subject_key = (item.advertiser_id, item.subject_key)
+        subject_key = (item.advertiser_id, item.subject_key, item.timezone)
         previous = previous_by_subject.get(subject_key)
         if previous is not None:
             if (

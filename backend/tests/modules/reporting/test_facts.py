@@ -7,6 +7,7 @@ from sqlmodel import select
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.common import CallEvidence
 from app.integrations.tiktok.contracts.reporting import ReportPage, ReportRow
+from app.modules.ads.models import AdObject, CampaignNameProjection
 from app.modules.reporting.contracts import (
     METRIC_DEFINITIONS,
     REPORT_CONTRACTS,
@@ -16,6 +17,7 @@ from app.modules.reporting.contracts import (
     validate_query,
 )
 from app.modules.reporting.facts import (
+    _observation_membership,
     observation_delta,
     publish_report,
     stage_report_page,
@@ -171,6 +173,75 @@ def test_observation_delta_preserves_negative_corrections_and_fences_context(
         "impressions": Decimal("0"),
     }
     assert observation_delta(observations.previous, observations.next_day) is None
+
+
+def test_observation_membership_digest_uses_complete_directory_group(session, reporting_seed):
+    run = _run(session, reporting_seed)
+    session.add(
+        AdObject(
+            tenant_id=run.tenant_id,
+            advertiser_id=run.advertiser_id,
+            kind="campaign",
+            remote_id="campaign-1",
+            ad_type="REGULAR",
+            name="Provider · Drama",
+            observed_at=datetime.now(UTC),
+            published_version=1,
+        )
+    )
+    session.add(
+        CampaignNameProjection(
+            tenant_id=run.tenant_id,
+            advertiser_id=run.advertiser_id,
+            campaign_remote_id="campaign-1",
+            name_revision=1,
+            raw_name="Provider · Drama",
+            provider_label="Provider",
+            drama_name="Drama",
+            status="VALID",
+            parser_revision=1,
+            grouping_revision=1,
+            observed_at=datetime.now(UTC),
+        )
+    )
+    session.flush()
+    first = _observation_membership(
+        session, run=run, subjects={("campaign", "campaign-1")}
+    )
+    assert first is not None
+    session.add(
+        AdObject(
+            tenant_id=run.tenant_id,
+            advertiser_id=run.advertiser_id,
+            kind="campaign",
+            remote_id="campaign-2",
+            ad_type="REGULAR",
+            name="Provider · Other",
+            observed_at=datetime.now(UTC),
+            published_version=1,
+        )
+    )
+    session.add(
+        CampaignNameProjection(
+            tenant_id=run.tenant_id,
+            advertiser_id=run.advertiser_id,
+            campaign_remote_id="campaign-2",
+            name_revision=1,
+            raw_name="Provider · Other",
+            provider_label="Provider",
+            drama_name="Other",
+            status="VALID",
+            parser_revision=1,
+            grouping_revision=1,
+            observed_at=datetime.now(UTC),
+        )
+    )
+    session.flush()
+    second = _observation_membership(
+        session, run=run, subjects={("campaign", "campaign-1")}
+    )
+    assert second is not None
+    assert second[0] != first[0]
 
 
 def test_publish_replaces_complete_partition_without_erasing_other_metric_group(

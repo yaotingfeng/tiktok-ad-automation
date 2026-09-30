@@ -107,6 +107,51 @@ def test_material_usage_not_double_counted():
     assert {item.ad_ref.remote_id for item in rows[0].material_uses} == {"ad-3", "ad-7"}
 
 
+def test_material_partial_ad_proof_never_claims_complete_spend():
+    tenant_id = uuid4()
+    start = datetime(2026, 9, 30, tzinfo=UTC)
+    material = AdMaterialReference(
+        tenant_id=tenant_id,
+        advertiser_id="account-a",
+        ad_remote_id="ad-3",
+        platform_material_id="vid-shared",
+        material_type="VIDEO",
+        complete=True,
+        published_version=1,
+    )
+    facts = (
+        ReportFact(
+            tenant_id=tenant_id,
+            advertiser_id="account-a",
+            subject_key=["material", "campaign_id", "campaign", "vid-shared", "VIDEO"],
+            bucket_start=start,
+            bucket_end=start + timedelta(days=1),
+            granularity="RANGE",
+            report_contract="material_overview",
+            metric_family="material",
+            currency="USD",
+            timezone="UTC",
+            attribution="default",
+            metric_name="spend",
+            value=Decimal(amount),
+            availability="AVAILABLE",
+            attributes=attributes,
+            published_version=1,
+            request_sequence=1,
+            source_partition_key="material-partial",
+        )
+        for amount, attributes in (("3", {"ad_id": "ad-3"}), ("7", {}))
+    )
+    rows = _build_material_rows(
+        facts,
+        (material,),
+        ReportingFilter(dimension="material", start_date=start.date(), end_date=start.date()),
+    )
+    assert rows[0].coverage["status"] == "INCOMPLETE"
+    assert rows[0].refs == ()
+    assert rows[0].metric_buckets[0].values["spend"] is None
+
+
 def test_mixed_currency_or_timezone_is_rejected():
     with pytest.raises(ValueError, match="incompatible"):
         aggregate_metrics(

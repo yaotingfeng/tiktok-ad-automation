@@ -38,3 +38,15 @@ uv run --frozen ruff check app/modules/reporting/trends.py app/modules/reporting
 
 - `ReportObservation` 仅接受 account/campaign subject；adgroup/ad/material 趋势仍返回明确 unsupported/incomplete，而不是从事实临时拼历史点。
 - 观测 membership digest 保持同一发布桶可比较；最新名称投影的 grouping revision 变化会阻止错误增量并标记 scope 变化。
+
+## 复审修复轮 2
+
+- 素材证明现在要求每个事实/指标行都有唯一 typed ad identity，并与唯一完整
+  `AdMaterialReference.use_ref`（含存在时的 `ad_material_id`）匹配；部分映射的事实
+  只保留显式 INCOMPLETE/UNSUPPORTED 覆盖，不返回 use_ref 或 COMPLETE 金额。
+- 生产观测的 digest 改为当前账户完整目录及 provider/剧名投影成员集合的稳定排序摘要。
+  目录或投影不完整时不追加可用观测；成功发布仍在原事务内幂等追加。
+- 趋势日期窗口按每条 observation 的本地时区计算，mixed timezone 与 DAY/HOUR 粒度分开；
+  query、ID、目录状态/命名、预算/创建/目标 ROAS 和 spend/D0 ROAS 过滤统一应用。
+- 本轮专用环境新增 material 部分证明、目录成员 digest、非 UTC 日期和趋势共享筛选回归；
+  reporting + adapter 全集最终结果记录在提交前验证中。

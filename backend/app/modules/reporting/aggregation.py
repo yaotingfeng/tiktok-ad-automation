@@ -376,17 +376,44 @@ def _build_material_rows(facts: Sequence[ReportFact], materials: Sequence[AdMate
         grouped[(fact.advertiser_id, *fact.subject_key[1:])].append(fact)
     result = []
     for (adv, dimension, grouping, main_id, main_type), items in grouped.items():
-        # 只有广告分组本身可证明金额属于该广告。单个 VID 候选绝不是广告用量证明。
-        candidates = [m for m in materials if m.advertiser_id == adv
-                      and (m.main_material_id == main_id or m.platform_material_id == main_id)
-                      and (m.main_material_type == main_type or m.material_type == main_type)
-                      and m.complete]
-        # The grouping value scopes the report row; ad identity must come from
-        # the actual fact attributes/use_ref, never from grouping or VID.
-        ad_ids = {str(item.attributes.get("ad_id")) for item in items if item.attributes.get("ad_id")}
-        if ad_ids:
-            candidates = [m for m in candidates if m.ad_remote_id in ad_ids]
-        proven = bool(ad_ids) and len(candidates) == len(ad_ids)
+        # Every metric fact must carry exactly one typed ad identity. A single
+        # mapped row cannot prove another row's parent spend belongs to it.
+        candidates_by_item: list[AdMaterialReference] = []
+        proof_complete = True
+        for item in items:
+            identity_fields = [
+                (field, str(item.attributes[field]))
+                for field in ("ad_id", "ad_id_v2", "smart_plus_ad_id")
+                if item.attributes.get(field)
+            ]
+            if len(identity_fields) != 1:
+                proof_complete = False
+                continue
+            _identity_type, ad_id = identity_fields[0]
+            ad_material_id = item.attributes.get("ad_material_id")
+            if "ad_material_id" in item.attributes and not isinstance(ad_material_id, str):
+                proof_complete = False
+                continue
+            matches = [
+                material for material in materials
+                if material.advertiser_id == adv
+                and material.ad_remote_id == ad_id
+                and (material.main_material_id == main_id or material.platform_material_id == main_id)
+                and (material.main_material_type == main_type or material.material_type == main_type)
+                and material.complete
+                and ("ad_material_id" not in item.attributes or material.ad_material_id == ad_material_id)
+            ]
+            if len(matches) != 1:
+                proof_complete = False
+                continue
+            candidates_by_item.append(matches[0])
+        candidates_by_id = {
+            (candidate.ad_remote_id, candidate.platform_material_id,
+             candidate.ad_material_id, candidate.material_type): candidate
+            for candidate in candidates_by_item
+        }
+        proven = proof_complete and len(candidates_by_item) == len(items) and bool(candidates_by_id)
+        ad_ids = {candidate.ad_remote_id for candidate in candidates_by_item}
         entity = directory.get((adv, "ad", next(iter(ad_ids), grouping))) if proven else None
         if not _entity_matches(entity, None, filters, items[0].timezone):
             continue
@@ -394,12 +421,13 @@ def _build_material_rows(facts: Sequence[ReportFact], materials: Sequence[AdMate
         if not proven:
             vectors = tuple(v.model_copy(update={"values": dict.fromkeys(v.values),
                                                 "availability": dict.fromkeys(v.availability, "UNSUPPORTED")}) for v in vectors)
+        status = "COMPLETE" if proven else ("INCOMPLETE" if candidates_by_item else "UNSUPPORTED")
         row = ReportRow(row_key=json.dumps([adv, "material", dimension, grouping, main_id, main_type]),
-                        display={"name": candidates[0].name if proven else main_id, "main_material_id": main_id,
+                        display={"name": next(iter(candidates_by_id.values())).name if proven else main_id, "main_material_id": main_id,
                                  "grouping_id": grouping, "material_type": main_type},
-                        refs=tuple(item.use_ref.ad_ref for item in candidates) if proven else (),
-                        material_uses=tuple(item.use_ref for item in candidates) if proven else (),
-                        metric_buckets=vectors, coverage={"status": "COMPLETE" if proven else "UNSUPPORTED",
+                        refs=tuple(item.use_ref.ad_ref for item in candidates_by_id.values()) if proven else (),
+                        material_uses=tuple(item.use_ref for item in candidates_by_id.values()) if proven else (),
+                        metric_buckets=vectors, coverage={"status": status,
                                                         "reason": "material_coverage_verified" if proven else "ad_usage_unproven"})
         if _passes_filter(row, filters):
             result.append(row)
