@@ -67,7 +67,6 @@ register_dispatch_task("accounts.runtime_discover", "resources")
 register_dispatch_task("builds.historical_read_step", "resources")
 # 导出只消费本地冻结快照，和报表同步共用 ads-reporting worker 隔离。
 register_dispatch_task("reporting.export", "ads-reporting")
-register_dispatch_task("reporting.cleanup_exports", "ads-reporting")
 
 
 @celery_app.task(name="jobs.probe")

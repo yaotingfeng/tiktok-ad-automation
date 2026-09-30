@@ -1,6 +1,6 @@
 # B4 复审修复
 
-- 导出创建在同一数据库事务写入 `PendingDispatch`，任务键按导出 ID 幂等；事务回滚不会留下孤儿队列消息。新增 `reporting.cleanup_exports` 清理任务并加入 ads-reporting Beat。
+- 导出创建在同一数据库事务写入 `PendingDispatch`，任务键按导出 ID 幂等；事务回滚不会留下孤儿队列消息。新增 `reporting.cleanup_exports` 清理任务并加入 ads-reporting Beat（不注册为 outbox dispatch，避免错误的统一 kwargs 合同）。
 - 导出 worker 遵循 outbox 的 `tenant_id`/`actor_id`/`payload` handler 合同，重新校验任务作用域后才生成。
 - 下载只接受当前租户/BC/导出 ID 计算出的对象键；过期清理删除专属对象并清空 `object_key`，失败生成不会写出可见对象。
 - 已访问而被标记 `EXPIRED` 但仍带对象键的记录仍进入清理扫描；授权重建失败的队列任务转为 `FAILED`，不会永久保持 `QUEUED`。
