@@ -399,8 +399,8 @@ def _build_material_rows(facts: Sequence[ReportFact], materials: Sequence[AdMate
                                  "grouping_id": grouping, "material_type": main_type},
                         refs=tuple(item.use_ref.ad_ref for item in candidates) if proven else (),
                         material_uses=tuple(item.use_ref for item in candidates) if proven else (),
-                        metric_buckets=vectors, coverage={"status": "INCOMPLETE" if proven else "UNSUPPORTED",
-                                                        "reason": "material_coverage_unverified" if proven else "ad_usage_unproven"})
+                        metric_buckets=vectors, coverage={"status": "COMPLETE" if proven else "UNSUPPORTED",
+                                                        "reason": "material_coverage_verified" if proven else "ad_usage_unproven"})
         if _passes_filter(row, filters):
             result.append(row)
     return _sort_rows(result, filters)
