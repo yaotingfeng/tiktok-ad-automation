@@ -1,10 +1,13 @@
-from datetime import date
+from dataclasses import replace
+from datetime import UTC, date, datetime, timedelta
 
 import business_api_client as sdk
 import pytest
 
 from app.core.errors import DomainError
+from app.integrations.tiktok.adapters import sdk_reporting
 from app.integrations.tiktok.adapters.sdk_reporting import (
+    SdkReportingOperations,
     _async_payload,
     _page,
     _payload,
@@ -147,3 +150,77 @@ def test_malformed_row_is_bounded_domain_error(report_query):
     }
     with pytest.raises(DomainError):
         _page(report_query, response, set())
+
+
+@pytest.mark.parametrize(
+    "page_info",
+    [
+        {"page": 2, "page_size": 1000, "total_page": 1, "total_number": 1},
+        {"page": 1, "page_size": 1000, "total_page": 2, "total_number": 1},
+    ],
+)
+def test_page_rejects_out_of_range_or_inconsistent_totals(report_query, page_info):
+    query = replace(report_query, page=page_info["page"])
+    response = {
+        "data": {"list": [], "page_info": page_info},
+        "request_id": "offline",
+    }
+    seen = set()
+    with pytest.raises(DomainError) as failure:
+        _page(query, response, seen)
+    assert failure.value.code == "report_response_invalid"
+    assert seen == set()
+
+
+def test_expired_download_never_opens_signed_url(monkeypatch):
+    opened = False
+
+    def forbidden_open(*_args, **_kwargs):
+        nonlocal opened
+        opened = True
+        raise AssertionError("expired download must not open the URL")
+
+    monkeypatch.setattr(sdk_reporting.urllib.request, "urlopen", forbidden_open)
+    with pytest.raises(DomainError) as failure:
+        SdkReportingOperations._fetch_file(
+            "https://example.invalid/report.csv",
+            datetime.now(UTC) - timedelta(seconds=1),
+        )
+    assert failure.value.code == "read_deadline_exceeded"
+    assert opened is False
+
+
+def test_download_stream_checks_deadline_after_each_read(monkeypatch):
+    base = datetime(2026, 9, 30, tzinfo=UTC)
+    deadline = base + timedelta(seconds=1)
+
+    class FakeClock:
+        _times = iter((base, base, base + timedelta(seconds=2)))
+
+        @classmethod
+        def now(cls, _tz):
+            return next(cls._times)
+
+    class FakeResponse:
+        headers = {"Content-Length": "3"}
+
+        def __init__(self):
+            self.reads = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _size):
+            self.reads += 1
+            return b"abc"
+
+    response = FakeResponse()
+    monkeypatch.setattr(sdk_reporting, "datetime", FakeClock)
+    monkeypatch.setattr(sdk_reporting.urllib.request, "urlopen", lambda *_args, **_kwargs: response)
+    with pytest.raises(DomainError) as failure:
+        SdkReportingOperations._fetch_file("https://example.invalid/report.csv", deadline)
+    assert failure.value.code == "read_deadline_exceeded"
+    assert response.reads == 1

@@ -194,13 +194,15 @@ def _page(query: ReportQuery, response: Any, seen: set[int]) -> ReportPage:
     total_number = cast(int, total_number)
     if page != query.page or page in seen or page < 1 or page_size < 1 or total_page < 0 or total_number < 0:
         raise _error("report_page_repeated", "报表页号重复或与请求不一致")
-    seen.add(page)
     expected_pages = max(1, (total_number + page_size - 1) // page_size)
     expected_rows = 0 if total_number == 0 else min(page_size, max(0, total_number - (page - 1) * page_size))
-    if total_page not in ({0, 1} if total_number == 0 else {expected_pages}) or len(rows) != expected_rows:
+    # Provider 返回的页号必须落在其声明的总页数内。否则一个越界空页会
+    # 被误当作终页，导致截断数据以 complete 状态发布。
+    if page > expected_pages or total_page not in ({0, 1} if total_number == 0 else {expected_pages}) or len(rows) != expected_rows:
         raise _error("report_response_invalid")
     next_page = page + 1 if page < expected_pages else None
     parsed = tuple(_row(query, row) for row in rows)
+    seen.add(page)
     return ReportPage(parsed, next_page, next_page is None, evidence, page=page)
 
 
@@ -451,7 +453,15 @@ class SdkReportingOperations(ReportOperations):
 
     @staticmethod
     def _fetch_file(url: str, deadline: datetime) -> bytes:
-        remaining = max(0.1, (deadline - datetime.now(UTC)).total_seconds())
+        def remaining_budget() -> float:
+            remaining = (deadline - datetime.now(UTC)).total_seconds()
+            if remaining <= 0:
+                raise _error("read_deadline_exceeded", "报表文件下载期限已到")
+            return remaining
+
+        # 硬截止时间已到时不得再发起签名 URL 请求；授权/额度门禁仍由
+        # 调用方 scope 保留，物理传输在这里做最后一道时间围栏。
+        remaining = remaining_budget()
         request = urllib.request.Request(url, method="GET")
         chunks: list[bytes] = []
         total = 0
@@ -462,7 +472,9 @@ class SdkReportingOperations(ReportOperations):
                 if expected_length is None:
                     raise _error("report_file_integrity_missing", "报表文件缺少完整性长度证据")
                 while True:
+                    remaining_budget()
                     chunk = response.read(64 * 1024)
+                    remaining_budget()
                     if not chunk:
                         break
                     total += len(chunk)
