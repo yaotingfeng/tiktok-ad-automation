@@ -49,4 +49,5 @@ uv run --frozen ruff check app/modules/reporting/trends.py app/modules/reporting
 - 趋势日期窗口按每条 observation 的本地时区计算，mixed timezone 与 DAY/HOUR 粒度分开；
   query、ID、目录状态/命名、预算/创建/目标 ROAS 和 spend/D0 ROAS 过滤统一应用。
 - 本轮专用环境新增 material 部分证明、目录成员 digest、非 UTC 日期和趋势共享筛选回归；
-  reporting + adapter 全集最终结果记录在提交前验证中。
+  reporting + adapter 全集 `uv run --frozen pytest tests/modules/reporting tests/integrations/tiktok/test_reporting_adapters.py -q`
+  通过 76 项；Ruff 与 `git diff --check` 通过。
