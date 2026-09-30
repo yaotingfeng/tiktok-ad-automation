@@ -5,7 +5,7 @@
 - 事实读取继续通过 B1 `require_tenant()`、选定 BC 的 `authorized_grants()`，并在每条查询中显式绑定 tenant 与 advertiser 列；未因目录状态过滤历史事实，暂停/删除账户仍保留历史投放金额。
 - 六维聚合只在相同币种、账户本地时区、归因和指标可用性桶内以 `Decimal` 求和。DAY/RANGE/HOUR 先按兼容粒度和请求版本选择不重叠桶；`ReportCoverage.COMPLETE_EMPTY` 只覆盖其明确目标，缺失、FAILED、部分覆盖分别保留状态，不伪造零。D0 ROAS 使用汇总 D0 收入除以汇总 spend，零或不可用 spend 返回空值并保留对应状态。
 - drama 行和趋势均使用 `BC + provider + 第二段剧名` 作为有效系列身份；同 BC、同 provider、同剧名的授权账户合并并保留全部 campaign refs，不同 provider 分开；无效/缺失投影的外部 campaign 仍可见。
-- 趋势保留同一桶的新旧观测，按同日相邻桶或同桶修正计算 Decimal 差值，保留负修正；成员摘要、归组/指标口径不兼容时返回 `SCOPE_CHANGED`，日期或桶不连续时返回 `DATE_CHANGED`。drama 趋势先读取当前授权范围内最新 `CampaignNameProjection`，再将 campaign 观测重投影和聚合。
+- 趋势保留同一桶的新旧观测，按同日相邻桶或同桶修正计算 Decimal 差值，保留负修正；day/hour 请求只消费对应 DAY/HOUR 粒度，避免混合粒度重复点。成员摘要、归组/指标口径不兼容时返回 `SCOPE_CHANGED`，日期或桶不连续时返回 `DATE_CHANGED`。drama 趋势先读取当前授权范围内最新 `CampaignNameProjection`，再将 campaign 观测重投影和聚合。
 - A1 素材 subject 已统一为五段 `(material, grouping_dimension, grouping_value, main_material_id, main_material_type)`；SDK 适配器、facts 校验和发布链不再接受四段回退。素材聚合只使用实际 `AdMaterialReference.use_ref` 与事实明确广告身份证明，无法证明时显式 `UNSUPPORTED`，不按 VID/name 合并或复制父广告金额。素材合同没有 D0 收入时，公开向量仍显式返回 D0=`UNSUPPORTED`。
 - 成功的 account/campaign facts 发布在同一事务追加 `ReportObservation`；完整空结果不写零观测，失败/不完整发布不写可用观测，重复发布按租户、账户、subject、桶和版本幂等。预算模式、`roas_bid`/目标 ROAS、`create_time` 和 D0 ROAS 筛选由聚合层明确应用；`ad_types`、命名状态、ID/搜索、spend 和排序不会静默失效。
 
