@@ -116,6 +116,20 @@ def test_staging_is_idempotent_and_conflicts_are_rejected(session, directory_see
     assert len(session.exec(select(AdDirectoryPage)).all()) == 1
 
 
+def test_staging_rejects_pages_after_terminal_page(session, directory_seed):
+    run = _run(session, directory_seed)
+    stage_directory_page(
+        session, run_id=run.id, page=_page(directory_seed), claim_generation=1
+    )
+    with pytest.raises(DomainError):
+        stage_directory_page(
+            session,
+            run_id=run.id,
+            page=_page(directory_seed, page=2),
+            claim_generation=1,
+        )
+
+
 def test_publish_requires_terminal_page_and_projects_name(session, directory_seed):
     _authority(session, directory_seed)
     run = _run(session, directory_seed)
@@ -170,3 +184,18 @@ def test_missing_parent_queues_targeted_follow_up(session, directory_seed):
     ).one()
     assert target.requested_coverage["reason"] == "missing_parent"
     assert target.requested_coverage["directory_targets"][0]["ad_type"] == "SMART_PLUS"
+
+
+def test_late_older_run_is_fenced_after_newer_run_publishes(session, directory_seed):
+    _authority(session, directory_seed)
+    older = _run(session, directory_seed)
+    newer = _run(session, directory_seed)
+    stage_directory_page(
+        session, run_id=newer.id, page=_page(directory_seed), claim_generation=1
+    )
+    publish_directory(session, run_id=newer.id, claim_generation=1)
+    stage_directory_page(
+        session, run_id=older.id, page=_page(directory_seed), claim_generation=1
+    )
+    with pytest.raises(DomainError):
+        publish_directory(session, run_id=older.id, claim_generation=1)

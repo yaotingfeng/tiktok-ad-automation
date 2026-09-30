@@ -22,6 +22,7 @@ from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.ads import DirectoryPage, EntityRef
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
+from app.modules.accounts.models import TenantBC
 from app.modules.accounts.routing import verify_route
 from app.modules.ads.directory import append_campaign_name_projection
 from app.modules.ads.models import AdMaterialReference, AdObject
@@ -145,9 +146,21 @@ def stage_directory_page(
     """暂存一页；相同页重试幂等，冲突内容永远不能覆盖证据。"""
     if type(claim_generation) is not int or claim_generation < 1:
         raise _domain("directory_claim_invalid", "目录 claim 代数无效")
-    run = session.get(AdDirectoryRun, run_id, populate_existing=True)
+    # 先锁运行行，再检查代数并写页；claim 替换无法插入旧代数的页。
+    run = session.exec(
+        select(AdDirectoryRun)
+        .where(AdDirectoryRun.id == run_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one_or_none()
     if run is None:
         raise _domain("directory_run_not_found", "目录同步运行不存在")
+    if run.published_version is not None or run.status in {
+        "COMPLETE",
+        "CANCELLED",
+        "STALE",
+    }:
+        raise _domain("directory_run_closed", "目录同步运行已经结束")
     if page.page < 1:
         raise _domain("directory_page_invalid", "目录页码无效")
     if claim_generation > run.claim_generation:
@@ -192,6 +205,13 @@ def stage_directory_page(
         ):
             return
         raise _domain("directory_page_conflict", "同一目录页已有不同暂存证据")
+    terminal = session.exec(
+        select(AdDirectoryPage)
+        .where(AdDirectoryPage.run_id == run_id, AdDirectoryPage.complete.is_(True))
+        .with_for_update()
+    ).first()
+    if terminal is not None:
+        raise _domain("directory_run_terminal", "目录运行已暂存末页")
 
     session.add(
         AdDirectoryPage(
@@ -532,6 +552,21 @@ def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) 
             return run.published_version
         if run.claim_generation != claim_generation:
             raise _domain("directory_claim_lost", "目录同步 claim 已被替换")
+        if run.request_sequence is not None:
+            newer_published = session.exec(
+                select(AdDirectoryRun.id)
+                .where(
+                    AdDirectoryRun.tenant_id == run.tenant_id,
+                    AdDirectoryRun.advertiser_id == run.advertiser_id,
+                    AdDirectoryRun.kind == run.kind,
+                    AdDirectoryRun.ad_type == run.ad_type,
+                    AdDirectoryRun.request_sequence > run.request_sequence,
+                    AdDirectoryRun.published_version.is_not(None),
+                )
+                .limit(1)
+            ).first()
+            if newer_published is not None:
+                raise _domain("directory_run_stale", "较早目录运行不能晚于新运行发布")
         route = _route_for_run(run)
         _ensure_route_authority(session, run, route)
         pages = session.exec(
@@ -541,6 +576,15 @@ def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) 
             .with_for_update()
         ).all()
         ordered = _complete_chain(pages)
+        # Tenant 行是现有模型中的稳定锁点；先串行化版本分配，再读取最大值，
+        # 避免两个账户同步同时取得同一个 published_version。
+        tenant = session.exec(
+            select(TenantBC)
+            .where(TenantBC.tenant_id == run.tenant_id, TenantBC.bc_id == run.bc_id)
+            .with_for_update()
+        ).one_or_none()
+        if tenant is None:
+            raise _domain("account_not_in_bc", "目录运行的 BC 不存在")
         # PostgreSQL greatest/NULL 的行为会随空表变化；分别读取更清晰，也兼容测试数据库。
         object_max = (
             session.exec(select(func.max(AdObject.published_version))).one() or 0
