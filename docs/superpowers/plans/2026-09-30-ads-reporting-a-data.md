@@ -76,7 +76,7 @@ assert parse_campaign_name('嘉书-Cafe\u0301-备注') == parse_campaign_name('�
 - Produces `locate(session:Session,*,context:TenantContext,bc_id:str,ref:EntityRef)->AdObject`；`list_objects(session:Session,*,context:TenantContext,bc_id:str,advertiser_ids:tuple[str,...],kind:str,parent:EntityRef|None=None)->tuple[AdObject,...]`。
 - Produces A4/A5/A7 下列字段合同规定的全部持久模型：`AdDirectoryRun/AdDirectoryPage/ReportFact/ReportCoverage/ReportObservation/ReportSyncRun/ReportStagedPage/SyncSchedule`，以及 A3 的 `AccountBalanceObservation`（含 balance_scope/scope_id，区分独占账户与共享 Portfolio）；包括运行唯一键、冻结路由、领取代数、分页与异步 task_id、版本、覆盖和错误字段。模型创建集中此任务，采集行为分后续任务实现。
 
-- [ ] **RED：** 真实数据库 fixture `directory_seed` 暴露授权 context/bc/ref；新增 RF2、跨 BC 拒绝、外部素材无本地记录仍可读和迁移唯一约束测试。
+- [x] **RED：** 真实数据库 fixture `directory_seed` 暴露授权 context/bc/ref；新增 RF2、跨 BC 拒绝、外部素材无本地记录仍可读和迁移唯一约束测试。
 ```python
 row = locate(session, context=directory_seed.context, bc_id=directory_seed.bc_id, ref=directory_seed.ref)
 assert row.remote_id == directory_seed.ref.remote_id
@@ -84,10 +84,10 @@ assert row.published_version == 1
 with pytest.raises(DomainError):
     locate(session, context=directory_seed.other_context, bc_id=directory_seed.bc_id, ref=directory_seed.ref)
 ```
-- [ ] **Run RED：** `uv run --frozen pytest tests/modules/ads/test_directory.py tests/modules/ads/test_directory_migration.py -q`，预期新模型/读取接口缺失失败。
-- [ ] **Implement：** 添加全部 A 表的租户/账户复合约束、发布键及索引；源连接仅为证据，不进对象唯一键。保留普通/Smart+ 类型、三类状态和广告内素材身份。访问从当前成员及 BC grant 开始，绝不按 `MaterialFile.bc_id` 过滤投放素材；`list_objects` 只供已界定账户/父级集合的内部展开，B 的大列表另用服务端分页查询。
-- [ ] **GREEN：** 重跑两文件；同对象双通道 upsert 只一行、异账户/异 kind 不碰撞；迁移测试沿用 `tests/migration_database.py` 的独立库流程且不改历史迁移。
-- [ ] **Commit：** 明确暂存本任务列出路径及进度记录，提交 `ads: persist scoped remote directory and material references`。
+- [x] **Run RED：** `uv run --frozen pytest tests/modules/ads/test_directory.py tests/modules/ads/test_directory_migration.py -q`，预期新模型/读取接口缺失失败。
+- [x] **Implement：** 添加全部 A 表的租户/账户复合约束、发布键及索引；源连接仅为证据，不进对象唯一键。保留普通/Smart+ 类型、三类状态和广告内素材身份。访问从当前成员及 BC grant 开始，绝不按 `MaterialFile.bc_id` 过滤投放素材；`list_objects` 只供已界定账户/父级集合的内部展开，B 的大列表另用服务端分页查询。
+- [x] **GREEN：** 重跑两文件；同对象双通道 upsert 只一行、异账户/异 kind 不碰撞；迁移测试沿用 `tests/migration_database.py` 的独立库流程且不改历史迁移。
+- [x] **Commit：** 明确暂存本任务列出路径及进度记录，提交 `ads: persist scoped remote directory and material references`。
 
 ### Task 3 (A3): 普通与 Smart+ 目录双通道及余额观测
 
@@ -112,6 +112,10 @@ assert ads_transport.gateway.ads.read_balance('account-test').amount is None
 - [ ] **Implement：** 注册每个物理端点的精确只读操作并经现有额度/路由门禁，统一业务 Protocol 不等于多个工具共用一个发送键；manifest 变更同步摘要，保留原 schema 校验；普通 `*/get/`、Smart+ `smart_plus/*/get/` 分别调用。自动创意补读 `/ad/get/`，不可得则材料完整性为 false；余额接口是 BC 财务分页读取，需独立 BC 财务证据并按当前账户权限过滤，不由广告 read/build 权限推断；缺证据显示不可用，不降级伪零。
 - [ ] **GREEN：** 重跑；每次分页发送前验证冻结代数，检查 SDK 实际 method/path/参数；未授权 API 和无工具旧类型返回明确能力状态，绝不借 build 权限或另一通道兜底。
 - [ ] **Commit：** 明确暂存本任务列出路径及进度记录，提交 `ads: add scoped API and MCP directory readers`。
+
+**A3 实施补充（根代理协调）：** 共享解析使用 `adapters/ads_read.py`，余额持久化使用 `modules/ads/balances.py`；补齐 `admission.py` 财务读范围、`official/accounts.py` 可选精确数字解析、`core/errors.py` 明确错误分类。复用已有同物理端点的 read 操作键，避免重复配额桶。`mcp/transport.py` 完整采集目录后按本次工具核验完整 schema；已完成的 READ 业务拒绝仅在无其他错误时保留会话，写入/不明/中断规则保持。相应隔离测试更新缺失工具错误码，保留未发送断言。
+
+`DirectoryPage` 增加 `materials_complete/material_missing_reason`，与主目录分页完整性分开；`AdMaterialUsage` 携带 A2 的名称、显式原生主素材身份和创意 IDs。帖子素材用真实 `tiktok_item_id` 与内部 `TIKTOK_POST` 类型保存，不推断视频库/报表身份；A4 允许 Smart+ 广告页附带真实 creative 子实体，后续 B/C 继续按类型验证能力。
 
 ### Task 4 (A4): 完整目录暂存、发布及名称迁组
 

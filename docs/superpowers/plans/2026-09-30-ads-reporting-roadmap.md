@@ -69,17 +69,17 @@ A 的平台 `ReportRow` 与 B 的界面 `ReportRow` 位于不同模块，不可�
 
 ## 3. 本地执行和验证前置
 
-- [ ] 读取 `AGENTS.md`、`config/README.md`、`config/environments.json` 和本计划/阶段计划；运行 `git status -sb`、`git rev-parse --show-toplevel`，确认独立仓库且只处理本任务文件。
-- [ ] 使用受控测试环境配置 `DATABASE_URL` 与 `TEST_REDIS_URL`；测试数据库名含独立 `test` 段，Redis为与应用不同的非零库。用现有 guard 验证，不输出 DSN或读取私密配置给模型。
+- [x] 读取 `AGENTS.md`、`config/README.md`、`config/environments.json` 和本计划/阶段计划；运行 `git status -sb`、`git rev-parse --show-toplevel`，确认独立仓库且只处理本任务文件。
+- [x] 使用受控测试环境配置 `DATABASE_URL` 与 `TEST_REDIS_URL`；测试数据库名含独立 `test` 段，Redis为与应用不同的非零库。用现有 guard 验证，不输出 DSN或读取私密配置给模型。
 
 ```bash
 # backend/；只校验当前测试进程的配置，不连接外部平台
 uv run --frozen python -c 'import os; from app.core.config import settings; from tests.database import require_test_database, require_test_redis; require_test_database(str(settings.DATABASE_URL)); require_test_redis(os.environ.get("TEST_REDIS_URL", ""), settings.REDIS_URL); print("test environment validated")'
 ```
 
-- [ ] 确认可用 `uv` 和仓库要求的 Bun。优先现有 Bun 或仓库 `.tools/node_modules/.bin/bun`；可执行文件定位不改变依赖版本，不重新生成锁文件。禁止用 `scripts/test-local.sh`，该脚本含 `docker-compose down -v`，不适合共享工作区验证。
-- [ ] A1 纯合同测试使用 `--confcutdir=tests/contracts`；数据库任务沿用根 conftest 的真实迁移/session/context/redis_client。并发任务使用真实多连接/进程或线程屏障，替身只在 TikTok 网络传输边界。
-- [ ] 已知全仓失败记录在 `docs/implementation-progress.md` 的 2026-09-29 条目；实施中如遇相关失败，应在原基线确认归属。不要将环境错误计为 RED，也不要宣称未跑或已有失败的全仓通过。
+- [x] 确认可用 `uv` 和仓库要求的 Bun。优先现有 Bun 或仓库 `.tools/node_modules/.bin/bun`；可执行文件定位不改变依赖版本，不重新生成锁文件。禁止用 `scripts/test-local.sh`，该脚本含 `docker-compose down -v`，不适合共享工作区验证。
+- [x] A1 纯合同测试使用 `--confcutdir=tests/contracts`；数据库任务沿用根 conftest 的真实迁移/session/context/redis_client。并发任务使用真实多连接/进程或线程屏障，替身只在 TikTok 网络传输边界。
+- [x] 已知全仓失败记录在 `docs/implementation-progress.md` 的 2026-09-29 条目；实施中如遇相关失败，应在原基线确认归属。不要将环境错误计为 RED，也不要宣称未跑或已有失败的全仓通过。
 
 ## 4. 执行、提交与集成验收
 
