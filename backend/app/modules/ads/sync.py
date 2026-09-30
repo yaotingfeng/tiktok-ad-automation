@@ -181,6 +181,11 @@ def stage_directory_page(
             or item.ref.advertiser_id != run.advertiser_id
         ):
             raise _domain("directory_scope_mismatch", "目录对象不属于冻结账户")
+        if item.ad_type != run.ad_type:
+            # 自动化类型决定物理读取端点；错误类型不能混入冻结分区。
+            raise _domain(
+                "directory_type_mismatch", "目录对象自动化类型与冻结分区不一致"
+            )
         if item.ref.kind != run.kind and not (
             run.kind == "ad"
             and run.ad_type == "SMART_PLUS"

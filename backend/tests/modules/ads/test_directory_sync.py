@@ -56,7 +56,7 @@ def _authority(session, seed):
     session.flush()
 
 
-def _run(session, seed, *, kind="campaign"):
+def _run(session, seed, *, kind="campaign", ad_type="REGULAR"):
     run = AdDirectoryRun(
         tenant_id=seed.context.tenant_id,
         advertiser_id=seed.ref.advertiser_id,
@@ -69,21 +69,29 @@ def _run(session, seed, *, kind="campaign"):
         query={"page_size": 100},
         claim_generation=1,
         kind=kind,
-        ad_type="REGULAR",
+        ad_type=ad_type,
     )
     session.add(run)
     session.flush()
     return run
 
 
-def _page(seed, *, page=1, complete=True, next_page=None, name="版权方-剧名-备注"):
+def _page(
+    seed,
+    *,
+    page=1,
+    complete=True,
+    next_page=None,
+    name="版权方-剧名-备注",
+    ad_type="REGULAR",
+):
     ref = EntityRef(
         seed.context.tenant_id, seed.ref.advertiser_id, "campaign", "campaign-1"
     )
     entity = AdEntity(
         ref=ref,
         parent_ref=None,
-        ad_type="REGULAR",
+        ad_type=ad_type,
         name=name,
         configuration={"budget": "1.2"},
         operation_status="ENABLE",
@@ -130,6 +138,17 @@ def test_staging_rejects_pages_after_terminal_page(session, directory_seed):
         )
 
 
+def test_staging_rejects_wrong_automation_type(session, directory_seed):
+    run = _run(session, directory_seed, kind="campaign")
+    with pytest.raises(DomainError):
+        stage_directory_page(
+            session,
+            run_id=run.id,
+            page=_page(directory_seed, ad_type="SMART_PLUS"),
+            claim_generation=1,
+        )
+
+
 def test_publish_requires_terminal_page_and_projects_name(session, directory_seed):
     _authority(session, directory_seed)
     run = _run(session, directory_seed)
@@ -155,7 +174,7 @@ def test_publish_requires_terminal_page_and_projects_name(session, directory_see
 
 def test_missing_parent_queues_targeted_follow_up(session, directory_seed):
     _authority(session, directory_seed)
-    run = _run(session, directory_seed, kind="ad")
+    run = _run(session, directory_seed, kind="ad", ad_type="SMART_PLUS")
     parent = EntityRef(
         directory_seed.context.tenant_id, "account-a", "adgroup", "missing-group"
     )
