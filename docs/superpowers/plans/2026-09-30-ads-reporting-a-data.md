@@ -165,16 +165,16 @@ assert observation_delta(observations.previous, observations.next_day) is None
 - Consumes A1 ReportOperations 与 A5 发布状态；Produces `TikTokGateway.reports` 及双通道实现，`plan_report_shards(query:ReportQuery,*,entity_ids:tuple[str,...],max_ids:int)->tuple[ReportQuery,...]`。
 - Produces `collect_report_step(session,*,run_id:UUID,claim_generation:int,gateway:TikTokGateway)->str`，返回 `CONTINUE/WAIT/READY/FAILED`；一次调用只做有界物理请求，异步任务号与 query/route 固定绑定。
 
-- [ ] **RED：** RF3 测试超过 20,000 广告、100 IDs 分片、重复页、异步未 READY/下载半文件及较旧发布；fixture `report_query` 和 `report_sync` 放所属 conftest。
+- [x] **RED：** RF3 测试超过 20,000 广告、100 IDs 分片、重复页、异步未 READY/下载半文件及较旧发布；fixture `report_query` 和 `report_sync` 放所属 conftest。
 ```python
 shards = plan_report_shards(report_query, entity_ids=tuple(str(i) for i in range(20001)), max_ids=100)
 assert len(shards) == 201
 assert sum(len(shard.filter_ids) for shard in shards) == 20001
 assert collect_report_step(session, run_id=report_sync.id, claim_generation=1, gateway=report_sync.pending_gateway) == 'WAIT'
 ```
-- [ ] **Run RED：** `uv run --frozen pytest tests/integrations/tiktok/test_reporting_adapters.py tests/modules/reporting/test_report_sync.py -q`，预期新适配/采集接口缺失失败。
-- [ ] **Implement：** 映射 integrated、Smart+ overview/breakdown、task create/check/download；overview 拒绝时间拆分，异步使用完整生成文件语义和有界流式解析，不伪造平台分页；SDK async_req 不是 report task。同步超过对象上限必须拆过滤器，不仅翻页；未知截断不能发布完整覆盖。
-- [ ] **GREEN：** 重跑；权限/schema/维度不支持不静默降级，素材 D0 不平均分摊；每个 HTTP/MCP 发送仍走相同额度/冻结路由门禁，超时创建异步报告不得在紧循环重建任务。
+- [x] **Run RED：** `uv run --frozen pytest tests/integrations/tiktok/test_reporting_adapters.py tests/modules/reporting/test_report_sync.py -q`，预期新适配/采集接口缺失失败。
+- [x] **Implement：** 映射 integrated、Smart+ overview/breakdown、task create/check/download；overview 拒绝时间拆分，异步使用完整生成文件语义和有界流式解析，不伪造平台分页；SDK async_req 不是 report task。同步超过对象上限必须拆过滤器，不仅翻页；未知截断不能发布完整覆盖。
+- [x] **GREEN：** 重跑；权限/schema/维度不支持不静默降级，素材 D0 不平均分摊；每个 HTTP/MCP 发送仍走相同额度/冻结路由门禁，超时创建异步报告不得在紧循环重建任务。
 - [ ] **Commit：** 明确暂存本任务列出路径及进度记录，提交 `reporting: collect partitioned sync and asynchronous reports`。
 
 ### Task 7 (A7): 持久计划、回补与刷新合并
