@@ -16,6 +16,7 @@ from app.modules.materials.push_api import router as material_push_router
 from app.modules.materials.reissue_api import router as material_reissue_router
 from app.modules.materials.router import router as materials_router
 from app.modules.providers.router import router as providers_router
+from app.modules.reporting.api import router as reporting_router
 from app.modules.strategies.api import router as strategies_router
 from app.modules.tenants.router import router as tenants_router
 
@@ -34,6 +35,7 @@ api_router.include_router(materials_router)
 api_router.include_router(material_push_router)
 api_router.include_router(material_reissue_router)
 api_router.include_router(providers_router)
+api_router.include_router(reporting_router)
 api_router.include_router(strategies_router)
 api_router.include_router(builds_router)
 api_router.include_router(submission_router)
