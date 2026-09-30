@@ -97,7 +97,7 @@ with pytest.raises(DomainError):
 - Consumes A1 `DirectoryQuery/Page`；Produces `SdkAdsReadOperations`/`McpAdsReadOperations`、`TikTokGateway.ads:AdsReadOperations`。
 - Adds `read_balance(advertiser_id:str)->AccountBalance(amount:Decimal|None,currency:str,availability:str,observed_at:datetime,evidence:CallEvidence)`，持久化 `AccountBalanceObservation`，不混入 period facts。
 
-- [ ] **RED：** 参数化两个通道传输替身 `ads_transport`；固定普通三级、Smart+ 三级及自动创意读回映射，覆盖拒权、工具 schema 漂移、缺余额。
+- [x] **RED：** 参数化两个通道传输替身 `ads_transport`；固定普通三级、Smart+ 三级及自动创意读回映射，覆盖拒权、工具 schema 漂移、缺余额。
 ```python
 page = ads_transport.gateway.ads.read_page(query=ads_transport.smart_ad_query)
 assert page.items[0].ref.kind == 'ad'
@@ -108,10 +108,10 @@ assert regular.materials[0].use_ref.ad_material_id is None
 assert regular.materials[0].use_ref.platform_material_id == 'video-11'
 assert ads_transport.gateway.ads.read_balance('account-test').amount is None
 ```
-- [ ] **Run RED：** `uv run --frozen pytest tests/integrations/tiktok/test_ads_read_adapters.py -q`，预期 `gateway.ads` 缺失；SDK surface 使用 `--confcutdir=tests/contracts` 单独验证。
-- [ ] **Implement：** 注册每个物理端点的精确只读操作并经现有额度/路由门禁，统一业务 Protocol 不等于多个工具共用一个发送键；manifest 变更同步摘要，保留原 schema 校验；普通 `*/get/`、Smart+ `smart_plus/*/get/` 分别调用。自动创意补读 `/ad/get/`，不可得则材料完整性为 false；余额接口是 BC 财务分页读取，需独立 BC 财务证据并按当前账户权限过滤，不由广告 read/build 权限推断；缺证据显示不可用，不降级伪零。
-- [ ] **GREEN：** 重跑；每次分页发送前验证冻结代数，检查 SDK 实际 method/path/参数；未授权 API 和无工具旧类型返回明确能力状态，绝不借 build 权限或另一通道兜底。
-- [ ] **Commit：** 明确暂存本任务列出路径及进度记录，提交 `ads: add scoped API and MCP directory readers`。
+- [x] **Run RED：** `uv run --frozen pytest tests/integrations/tiktok/test_ads_read_adapters.py -q`，预期 `gateway.ads` 缺失；SDK surface 使用 `--confcutdir=tests/contracts` 单独验证。
+- [x] **Implement：** 注册每个物理端点的精确只读操作并经现有额度/路由门禁，统一业务 Protocol 不等于多个工具共用一个发送键；manifest 变更同步摘要，保留原 schema 校验；普通 `*/get/`、Smart+ `smart_plus/*/get/` 分别调用。自动创意补读 `/ad/get/`，不可得则材料完整性为 false；余额接口是 BC 财务分页读取，需独立 BC 财务证据并按当前账户权限过滤，不由广告 read/build 权限推断；缺证据显示不可用，不降级伪零。
+- [x] **GREEN：** 重跑；每次分页发送前验证冻结代数，检查 SDK 实际 method/path/参数；未授权 API 和无工具旧类型返回明确能力状态，绝不借 build 权限或另一通道兜底。
+- [x] **Commit：** 明确暂存本任务列出路径及进度记录，提交 `ads: add scoped API and MCP directory readers`。
 
 **A3 实施补充（根代理协调）：** 共享解析使用 `adapters/ads_read.py`，余额持久化使用 `modules/ads/balances.py`；补齐 `admission.py` 财务读范围、`official/accounts.py` 可选精确数字解析、`core/errors.py` 明确错误分类。复用已有同物理端点的 read 操作键，避免重复配额桶。`mcp/transport.py` 完整采集目录后按本次工具核验完整 schema；已完成的 READ 业务拒绝仅在无其他错误时保留会话，写入/不明/中断规则保持。相应隔离测试更新缺失工具错误码，保留未发送断言。
 
