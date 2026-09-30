@@ -323,6 +323,8 @@ def _csv_rows(payload: bytes, query: ReportQuery) -> ReportPage:
         raise _error("report_file_invalid", "报表文件编码不受支持") from exc
     except csv.Error as exc:
         raise _error("report_file_invalid") from exc
+    except ValueError as exc:
+        raise _error("report_file_invalid") from exc
 
 
 class SdkReportingOperations(ReportOperations):
