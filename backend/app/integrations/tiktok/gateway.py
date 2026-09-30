@@ -217,6 +217,7 @@ def open_tiktok_gateway(
     context: TenantContext,
     route: FrozenTikTokRoute,
     task_deadline: datetime,
+    ad_type: str | None = None,
     before_request: Callable[[], None] | None = None,
     response_observer: ResponseObserver | None = None,
     group_isolation: FrozenGroupIsolation | None = None,
@@ -430,6 +431,19 @@ def open_tiktok_gateway(
             ):
                 yield
 
+    @contextmanager
+    def report_download_scope(
+        advertiser_id: str, deadline: datetime
+    ) -> Iterator[None]:
+        # MCP 签名文件虽不使用 tools/call，但仍是本次冻结任务的物理发送；
+        # 在发送前复用同一授权、绑定和共享额度门禁。
+        if deadline != task_deadline:
+            raise DomainError("read_deadline_invalid", "调用期限与任务不一致")
+        authorize(advertiser_id, "reports.task_download")
+        with admit(advertiser_id, "reports.task_download"):
+            authorize(advertiser_id, "reports.task_download")
+            yield
+
     read_context = RuntimeReadContext(route.bc_id)
     try:
         if route.channel == "OFFICIAL_MCP":
@@ -463,6 +477,9 @@ def open_tiktok_gateway(
                     reports=McpReportingOperations(
                         client,
                         route=route,
+                        ad_type=ad_type,
+                        deadline=task_deadline,
+                        download_gate=report_download_scope,
                     ),
                     accounts=McpAccountsGateway(
                         client,
@@ -501,6 +518,7 @@ def open_tiktok_gateway(
                         route=route,
                         request_scope=request_scope,
                         deadline=task_deadline,
+                        ad_type=ad_type,
                     ),
                     accounts=OfficialAccountsGateway(
                         official,

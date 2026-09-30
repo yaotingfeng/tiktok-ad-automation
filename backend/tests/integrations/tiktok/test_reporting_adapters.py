@@ -1,9 +1,15 @@
 from datetime import date
 
+import business_api_client as sdk
 import pytest
 
 from app.core.errors import DomainError
-from app.integrations.tiktok.adapters.sdk_reporting import _page, plan_report_shards
+from app.integrations.tiktok.adapters.sdk_reporting import (
+    _async_payload,
+    _page,
+    _payload,
+    plan_report_shards,
+)
 from app.integrations.tiktok.contracts.reporting import ReportQuery
 
 
@@ -54,3 +60,90 @@ def test_sync_page_preserves_missing_metric_and_rejects_repeat(report_query):
     assert page.rows[0].availability["clicks"] == "MISSING"
     with pytest.raises(DomainError):
         _page(report_query, response, seen)
+
+
+def test_async_payload_matches_generated_task_model(report_query):
+    payload = _async_payload(report_query)
+    assert "page" not in payload
+    assert "page_size" not in payload
+    assert payload["enable_report_title_translation"] is False
+    sdk.ReportTaskCreateBody(**payload)
+    with pytest.raises(TypeError):
+        sdk.ReportTaskCreateBody(**_payload(report_query))
+
+
+def test_ad_type_is_a_real_outbound_filter():
+    query = ReportQuery(
+        advertiser_id="report-account",
+        report_contract="basic_ad",
+        metric_family="delivery",
+        dimensions=("ad_id", "stat_time_day"),
+        metrics=("spend",),
+        start_date=date(2026, 9, 1),
+        end_date=date(2026, 9, 1),
+        granularity="DAY",
+        currency="USD",
+        timezone="UTC",
+        attribution="default",
+        filter_ids=("ad-1",),
+        page=1,
+    )
+    regular = _payload(query, ad_type="REGULAR")
+    legacy = _payload(query, ad_type="LEGACY_SMART_PLUS")
+    assert regular["filtering"] != legacy["filtering"]
+
+
+def test_material_day_accepts_date_only_and_rejects_short_totals():
+    query = ReportQuery(
+        advertiser_id="report-account",
+        report_contract="material_breakdown",
+        metric_family="material",
+        dimensions=("main_material_id", "main_material_type", "stat_time_day"),
+        metrics=("spend",),
+        start_date=date(2026, 9, 24),
+        end_date=date(2026, 9, 24),
+        granularity="DAY",
+        currency="USD",
+        timezone="UTC",
+        attribution="default",
+        filter_ids=(),
+        page=1,
+    )
+    response = {
+        "data": {
+            "list": [
+                {
+                    "dimensions": {
+                        "main_material_id": "m-1",
+                        "main_material_type": "VIDEO_NON_SPARK_ADS",
+                        "stat_time_day": "2026-09-24",
+                    },
+                    "metrics": {"spend": "1.00"},
+                }
+            ],
+            "page_info": {"page": 1, "page_size": 100, "total_page": 1, "total_number": 2},
+        },
+        "request_id": "offline",
+    }
+    with pytest.raises(DomainError):
+        _page(query, response, set())
+    response["data"]["page_info"]["total_number"] = 1
+    page = _page(query, response, set())
+    assert page.rows[0].subject_key == (
+        "material",
+        "main_material_id",
+        "m-1",
+        "VIDEO_NON_SPARK_ADS",
+    )
+
+
+def test_malformed_row_is_bounded_domain_error(report_query):
+    response = {
+        "data": {
+            "list": [None],
+            "page_info": {"page": 1, "page_size": 1, "total_page": 1, "total_number": 1},
+        },
+        "request_id": "offline",
+    }
+    with pytest.raises(DomainError):
+        _page(report_query, response, set())

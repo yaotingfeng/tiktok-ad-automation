@@ -1,5 +1,6 @@
 """报表采集步骤：每次只执行一个有界物理请求并持久化进度。"""
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast
 from uuid import UUID
@@ -46,6 +47,10 @@ def _failed(run: ReportSyncRun, error: DomainError) -> str:
     return "FAILED"
 
 
+def _fenced(error: DomainError) -> bool:
+    return error.code in {"report_claim_lost", "report_run_not_found", "report_superseded"}
+
+
 def collect_report_step(
     session: Session,
     *,
@@ -62,11 +67,15 @@ def collect_report_step(
         raise DomainError("report_claim_invalid", "报表 claim 代数无效")
     run = _run(session, run_id)
     if run.claim_generation != claim_generation:
-        return _failed(run, DomainError("report_claim_lost", "报表同步 claim 已被替换"))
+        # 旧 worker 只能安全停止；绝不能把新 generation 的持久运行改成 FAILED。
+        return "FAILED"
     if run.status in {"COMPLETE", "FAILED", "CANCELLED", "STALE"}:
         return "FAILED" if run.status == "FAILED" else "READY"
     try:
         query = decode_query(run.query)
+        persisted_page = getattr(run, "next_page", 1)
+        if persisted_page > 1:
+            query = replace(query, page=persisted_page)
     except (TypeError, ValueError, KeyError):
         return _failed(run, DomainError("report_query_invalid", "报表查询合同无效"))
     reports = getattr(gateway, "reports", None)
@@ -113,13 +122,21 @@ def collect_report_step(
         if page.complete:
             publish_report(session, run_id=run.id, claim_generation=claim_generation)
             return "READY"
-        run.next_page = page.next_page or run.next_page
+        # 页号推进与页暂存必须处于同一个 DB 事务；先由 stage 再次核验
+        # generation，随后才写 next_page，避免旧 worker 预先污染新 claim。
+        if page.next_page is not None:
+            run.next_page = page.next_page
         run.status = "RUNNING"
         run.coverage = "PENDING"
         run.observed_at = datetime.now(UTC)
         return "CONTINUE"
     except DomainError as error:
         # 旧发布、权限/契约变化、重复页和半文件都不能静默发布完整覆盖。
+        if _fenced(error):
+            rollback = getattr(session, "rollback", None)
+            if callable(rollback):
+                rollback()
+            return "FAILED"
         return _failed(run, error)
     finally:
         session.flush()

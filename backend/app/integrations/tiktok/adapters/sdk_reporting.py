@@ -71,15 +71,12 @@ def _data(response: Any) -> tuple[dict[str, Any], CallEvidence]:
     if isinstance(response, McpBusinessResponse):
         value, evidence = response.data, response.evidence
     elif isinstance(response, dict):
-        if set(response) == {"data", "request_id"} and isinstance(response["data"], dict):
-            value = response["data"]
-            evidence = CallEvidence(request_id=response.get("request_id"))
-        elif isinstance(response.get("data"), dict):
-            value = response["data"]
-            evidence = CallEvidence(request_id=response.get("request_id"))
-        else:
-            value = response
-            evidence = CallEvidence()
+        if set(response) != {"data", "request_id"} or not isinstance(response["data"], dict):
+            raise _error("report_response_invalid")
+        if response["request_id"] is not None and type(response["request_id"]) is not str:
+            raise _error("report_response_invalid")
+        value = response["data"]
+        evidence = CallEvidence(request_id=response.get("request_id"))
     else:
         raw = response.to_dict() if callable(getattr(response, "to_dict", None)) else None
         if not isinstance(raw, dict) or not isinstance(raw.get("data"), dict):
@@ -126,7 +123,8 @@ def _bucket(query: ReportQuery, dimensions: dict[str, Any]) -> tuple[datetime, d
             return buckets[0]
         raise _error("report_row_invalid", "报表行缺少时间维度")
     try:
-        parsed = datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").replace(
+        format_string = "%Y-%m-%d" if query.granularity == "DAY" and len(raw) == 10 else "%Y-%m-%d %H:%M:%S"
+        parsed = datetime.strptime(raw, format_string).replace(
             tzinfo=ZoneInfo(query.timezone)
         ).astimezone(UTC)
     except (TypeError, ValueError) as exc:
@@ -182,7 +180,7 @@ def _page(query: ReportQuery, response: Any, seen: set[int]) -> ReportPage:
     data, evidence = _data(response)
     rows = data.get("list")
     info = data.get("page_info")
-    if type(rows) is not list or type(info) is not dict:
+    if type(rows) is not list or type(info) is not dict or any(type(row) is not dict for row in rows):
         raise _error("report_response_invalid")
     page = info.get("page", query.page)
     page_size = info.get("page_size")
@@ -198,7 +196,8 @@ def _page(query: ReportQuery, response: Any, seen: set[int]) -> ReportPage:
         raise _error("report_page_repeated", "报表页号重复或与请求不一致")
     seen.add(page)
     expected_pages = max(1, (total_number + page_size - 1) // page_size)
-    if total_page not in ({0, 1} if total_number == 0 else {expected_pages}) or len(rows) > page_size:
+    expected_rows = 0 if total_number == 0 else min(page_size, max(0, total_number - (page - 1) * page_size))
+    if total_page not in ({0, 1} if total_number == 0 else {expected_pages}) or len(rows) != expected_rows:
         raise _error("report_response_invalid")
     next_page = page + 1 if page < expected_pages else None
     parsed = tuple(_row(query, row) for row in rows)
@@ -215,7 +214,9 @@ def _filter(query: ReportQuery) -> list[dict[str, str]] | None:
     return [{"field_name": field, "filter_type": "IN", "filter_value": json.dumps(list(query.filter_ids))}]
 
 
-def _payload(query: ReportQuery, *, page_size: int = 1000) -> dict[str, Any]:
+def _payload(
+    query: ReportQuery, *, page_size: int = 1000, ad_type: str | None = None
+) -> dict[str, Any]:
     if query.report_contract == "material_overview":
         if any(dim in _TIME_DIMENSIONS for dim in query.dimensions):
             raise _error("report_query_invalid", "素材 overview 不支持时间拆分")
@@ -240,7 +241,7 @@ def _payload(query: ReportQuery, *, page_size: int = 1000) -> dict[str, Any]:
             "page_size": min(page_size, 100),
         }
     identity = query.dimensions[0]
-    return {
+    payload = {
         "report_type": "BASIC",
         "service_type": "AUCTION",
         "advertiser_id": query.advertiser_id,
@@ -253,6 +254,41 @@ def _payload(query: ReportQuery, *, page_size: int = 1000) -> dict[str, Any]:
         "page_size": min(page_size, 1000),
         **({"filtering": _filter(query)} if _filter(query) else {}),
     }
+    if ad_type is not None:
+        type_filter = {
+            "REGULAR": "MANUAL",
+            "LEGACY_SMART_PLUS": "SMART_PLUS",
+            "SMART_PLUS": "UPGRADED_SMART_PLUS",
+        }.get(ad_type)
+        if type_filter is None:
+            raise _error("report_query_invalid", "广告类型未核验")
+        if query.report_contract == "basic_smart_plus_creative":
+            type_filter = "UPGRADED_SMART_PLUS_CREATIVE"
+        filters_value = payload.setdefault("filtering", [])
+        filters: list[dict[str, str]]
+        if isinstance(filters_value, list):
+            filters = cast(list[dict[str, str]], filters_value)
+        else:
+            filters = []
+            payload["filtering"] = filters
+        filters.append(
+            {
+                "field_name": "campaign_automation_type",
+                "filter_type": "IN",
+                "filter_value": json.dumps([type_filter]),
+            }
+        )
+    return payload
+
+
+def _async_payload(query: ReportQuery, *, ad_type: str | None = None) -> dict[str, Any]:
+    payload = _payload(query, ad_type=ad_type)
+    # 平台 task/create 没有同步 page/page_size；保留完整 query 口径，其余字段由
+    # 任务合同决定，避免把本地分页参数发送到生成 SDK/MCP schema。
+    payload.pop("page", None)
+    payload.pop("page_size", None)
+    payload["enable_report_title_translation"] = False
+    return payload
 
 
 def _material_filter(query: ReportQuery) -> dict[str, list[str]] | None:
@@ -338,9 +374,12 @@ class SdkReportingOperations(ReportOperations):
 
     def read_page(self, query: ReportQuery) -> ReportPage:
         self._validate(query)
-        key = (query.advertiser_id, query.report_contract, query.filter_ids, query.page)
+        key = (query.advertiser_id, query.report_contract, query.filter_ids, query.page,
+               query.dimensions, query.metrics, query.start_date, query.end_date,
+               query.granularity, query.currency, query.timezone, query.attribution,
+               self._ad_type)
         seen = self._seen.setdefault(key[:-1], set())
-        args = _payload(query)
+        args = _payload(query, ad_type=self._ad_type)
         operation = {"material_overview": "reports.material_overview", "material_breakdown": "reports.material_breakdown"}.get(query.report_contract, "reports.integrated")
         return _page(query, self._call(operation, args), seen)
 
@@ -348,7 +387,7 @@ class SdkReportingOperations(ReportOperations):
         self._validate(query)
         if query.report_contract.startswith("material_"):
             raise _error("report_async_unsupported", "素材报表异步维度未核验")
-        body = _payload(query, page_size=1000)
+        body = _async_payload(query, ad_type=self._ad_type)
         body.update({"report_type": "BASIC", "output_format": "CSV_DOWNLOAD"})
         # SDK body models intentionally remain at this transport boundary; no async_req.
         model = sdk.ReportTaskCreateBody(**body)
@@ -378,7 +417,8 @@ class SdkReportingOperations(ReportOperations):
         result = self._requests.invoke("reports.task_download", task.advertiser_id, lambda timeout: self._download_metadata(api, token, task, timeout), exact_numbers=True)
         data, evidence = _data(result)
         if isinstance(data.get("rows"), list):
-            response = {"data": {"list": data["rows"], "page_info": {"page": 1, "page_size": len(data["rows"]), "total_page": 1, "total_number": len(data["rows"])}}, "request_id": evidence.request_id}
+            row_count = len(data["rows"])
+            response = {"data": {"list": data["rows"], "page_info": {"page": 1, "page_size": max(1, row_count), "total_page": 1, "total_number": row_count}}, "request_id": evidence.request_id}
             return _page(task.query, response, set())
         url = data.get("download_url")
         output_format = data.get("output_format")
@@ -409,6 +449,8 @@ class SdkReportingOperations(ReportOperations):
             with urllib.request.urlopen(request, timeout=min(30.0, remaining)) as response:
                 expected = response.headers.get("Content-Length")
                 expected_length = int(expected) if expected and expected.isdigit() else None
+                if expected_length is None:
+                    raise _error("report_file_integrity_missing", "报表文件缺少完整性长度证据")
                 while True:
                     chunk = response.read(64 * 1024)
                     if not chunk:
