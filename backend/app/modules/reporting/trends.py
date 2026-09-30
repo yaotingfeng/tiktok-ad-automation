@@ -294,6 +294,11 @@ def build_trend(
         item for item in observations
         if _matches_filter(item, filters) and _fact_for_observation(session, item)
     )
+    if grain in {"day", "hour"}:
+        expected_granularity = "DAY" if grain == "day" else "HOUR"
+        observations = tuple(
+            item for item in observations if item.granularity == expected_granularity
+        )
     if not observations:
         return TrendPublic(
             coverage={"status": "INCOMPLETE", "reason": "observations_unavailable"},
