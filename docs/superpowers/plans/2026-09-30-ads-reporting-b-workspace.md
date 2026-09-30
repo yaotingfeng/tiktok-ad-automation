@@ -95,11 +95,11 @@
 
 显式刷新消费 A 的 `request_sync(session,*,context,request:SyncRequest)->UUID`；先使用既有 `accounts.routing.freeze_route(session,*,context,bc_id,connection_id=None)` 固定当前通道，服务端核对账户后构造 SyncRequest。HTTP 在 `/api/tenants/{tenant_id}` 下增加 POST/GET `ad-sync-runs`、GET `ad-sync-runs/{run_id}`、POST/GET `report-exports`、GET `report-exports/{export_id}` 与其 `/download`、POST/GET `report-views` 和 PATCH/DELETE `report-views/{view_id}`，均限定当前用户和 BC。
 
-- [ ] **RED：** `test_export_reuses_snapshot_and_checks_current_access` 种 51 行后创建导出，再插入新行，断言 CSV 仍 51 条；撤销 BC 访问后请求产物断言 403。参数化 `'=1+1','+SUM(A1)','-cmd','@x','\t=1'` 文本，断言 `csv_safe_text` 输出以单引号保护；金额类型的 `Decimal('-2')` 仍按数字 -2 导出。
-- [ ] **运行 RED：** `uv run --frozen pytest tests/modules/reporting/test_exports.py tests/modules/reporting/test_api.py -q`。
-- [ ] **实现：** 每个用户私有保存筛选/列，租户或 BC 变化不能泄漏偏好目标。CSV 含表头、币种/时区/覆盖/抓取时间；生成及下载复核权限，超过 24 小时返回过期，清理只操作专属导出产物。导出用本地后台 `ads-reporting` 队列，不调用 TikTok。显式刷新/超出历史覆盖的请求转交 A 的 `request_sync`，返回 run_id；GET 轮询只读本地，普通查询不隐式触发平台请求。
-- [ ] **GREEN：** 测试重复导出/刷新幂等、产物过期、个人视图不可互读、不支持的列拒绝、失败导出不暴露半文件；当前日期窗口一致，多币种分桶写入。
-- [ ] **提交：** `git commit -m 'reports: add private views exports and scoped refresh'`。
+- [x] **RED：** `test_export_reuses_snapshot_and_checks_current_access` 种 51 行后创建导出，再插入新行，断言 CSV 仍 51 条；撤销 BC 访问后请求产物断言 403。参数化 `'=1+1','+SUM(A1)','-cmd','@x','\t=1'` 文本，断言 `csv_safe_text` 输出以单引号保护；金额类型的 `Decimal('-2')` 仍按数字 -2 导出。
+- [x] **运行 RED：** `uv run --frozen pytest tests/modules/reporting/test_exports.py tests/modules/reporting/test_api.py -q`。
+- [x] **实现：** 每个用户私有保存筛选/列，租户或 BC 变化不能泄漏偏好目标。CSV 含表头、币种/时区/覆盖/抓取时间；生成及下载复核权限，超过 24 小时返回过期，清理只操作专属导出产物。导出用本地后台 `ads-reporting` 队列，不调用 TikTok。显式刷新/超出历史覆盖的请求转交 A 的 `request_sync`，返回 run_id；GET 轮询只读本地，普通查询不隐式触发平台请求。
+- [x] **GREEN：** 测试重复导出/刷新幂等、产物过期、个人视图不可互读、不支持的列拒绝、失败导出不暴露半文件；当前日期窗口一致，多币种分桶写入；导出/API 9 项、reporting 83 项通过。
+- [x] **提交：** `61b20d7`、`940d53f`、`688d869`；最终独立复审 `task-4-rereview-2.md`/`task-4-rereview-3.md` 均 APPROVED。
 
 ## Task 5 (B5)：六维工作台、趋势、详情与状态体验
 

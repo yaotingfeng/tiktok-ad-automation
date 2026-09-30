@@ -1521,3 +1521,9 @@
 - 查询使用 B1 `snapshot_transaction` 的 REPEATABLE READ 短事务，快照、游标和 selection 持久化并绑定租户、操作者、BC、筛选摘要和授权账户；账户/剧系列引用在快照创建时批量冻结，素材保留具体 `MaterialUseRef`。
 - 详情读取真实租户范围内 `AuditEvent` 历史，展示父级限制和外部素材；publication/naming 版本摘要按冻结范围保存。真实 Engine Session 的跨请求 GET→cursor→POST selection 已覆盖。
 - 最终复审记录为 `task-3-rereview-1.md`，Verdict APPROVED；14 项 B3 聚焦测试、77 项 reporting 回归、Ruff、compileall、diff-check 通过。已知 `transaction already deassociated` 仅为测试夹具 teardown 警告；未调用真实 TikTok/MCP、未写广告或部署。
+
+## 2026-10-01：B4 个人视图、导出与显式刷新已完成
+
+- B4 最终提交链为 `61b20d7`、`940d53f`、`688d869`：个人视图按 actor/tenant/BC 隔离，导出复制快照内容并使用幂等键，生成通过本地 `ads-reporting` outbox/worker，刷新使用 A 的冻结路由与 `request_sync`。
+- 导出下载复核当前授权和租户/BC/export 对象前缀；撤权、迟到任务、过期对象只清理本导出的预期对象；CSV 保护公式前缀并保留 Decimal 数字，失败不留下半文件。cleanup 由 Beat 调用，不注册为不匹配的 outbox handler。
+- 最终复审 `task-4-rereview-2.md` 与 `task-4-rereview-3.md` 均 APPROVED；9 项导出/API 与 83 项 reporting 测试通过，Ruff、changed-file ty、compileall、diff-check 通过。全量 reporting ty 的 34 条诊断属于 B3 既有范围；未调用真实 TikTok/MCP、未部署。
