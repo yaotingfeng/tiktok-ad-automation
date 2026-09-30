@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python >=3.14、uv、FastAPI、SQLModel、Alembic、PostgreSQL、Redis、Celery、官方 TikTok Python SDK/官方 MCP、React、TanStack、shadcn/ui、Bun、Playwright。
 
-**Spec:** [广告管理与报表一体化设计](../specs/2026-09-30-ads-management-reporting-design.md)，用户已于 2026-09-30 明确确认。当前状态：实施计划待用户审阅和选择执行方式，尚未实施。
+**Spec:** [广告管理与报表一体化设计](../specs/2026-09-30-ads-management-reporting-design.md)，用户已于 2026-09-30 明确确认。当前状态：用户已批准实施计划并选择逐任务分工与复核；所有子 Agent 使用 GPT-6-Astra、high，正在实施。
 
 ## Global Constraints
 
@@ -128,4 +128,4 @@ bun run build
 - **逐任务分工与复核（推荐）**：按 subagent-driven-development 逐项实施和独立检查，根端负责共享接口、迁移和整合。21项任务涉及真实投放写入、后台恢复及多层数据口径，逐项检查有助于尽早发现跨阶段偏差。
 - **主代理连续实施**：按 executing-plans 由主代理执行全部任务，完成后统一独立复核；上下文切换较少，独立检查集中在末尾。
 
-本轮只编写和检查文档。设计确认不代表尚未审阅的实施计划已获执行批准；保留用户随后选定的执行方式，实施时不重复询问。
+用户已明确选择逐任务分工与复核，并指定所有子 Agent 使用 GPT-6-Astra、high。按该方式连续执行全部阶段，任务间不重复请求确认；推送、部署和真实平台操作另按具体授权范围执行。

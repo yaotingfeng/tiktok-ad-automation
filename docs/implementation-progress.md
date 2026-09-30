@@ -1,4 +1,11 @@
-## 2026-09-30：广告管理与报表实施计划（待审阅，尚未实现）
+## 2026-09-30：广告管理与报表实施启动（A1 已实现，独立复核中）
+
+- A1 已提交 `1b00899`：严格对象/素材引用、目录及报表 DTO、命名前两段解析；新增 120 项合同测试，相关回归共 182 项通过，Ruff/Mypy/格式/语法检查通过。独立复核正在进行，未标记整阶段完成。
+- 用户已批准执行全部三阶段计划，选择逐任务实施与独立复核，指定所有子 Agent 使用 GPT-6-Astra、high。沿用当前 main 工作区、聚焦本地提交，不自动推送或部署。
+- 已建立计划专属进度账本并完成跨任务合同/文件交接检查；A1 开始固定对象、素材引用、报告和命名合同。共享合同、迁移链、任务注册与最终集成由根代理协调。
+- 本地独立 PostgreSQL `tkada_ads_reporting_20260930_test` 与独立 Redis 6387/DB1 已验证；当前迁移 head 为 `material_push`。既有 gateway 基线测试 10 项通过，未调用真实 TikTok。
+
+## 2026-09-30：广告管理与报表实施计划（已确认，执行见上节）
 
 - 用户已确认书面设计，按 writing-plans 整理 [总路线与共享合同](superpowers/plans/2026-09-30-ads-reporting-roadmap.md)，拆为 [A 目录、双通道与采集](superpowers/plans/2026-09-30-ads-reporting-a-data.md)、[B 六维工作台](superpowers/plans/2026-09-30-ads-reporting-b-workspace.md)、[C 批量管理](superpowers/plans/2026-09-30-ads-reporting-c-management.md)，共 21 项可独立验证的任务。设计基线提交 `f8e4eb8`。
 - 计划固定跨阶段对象/素材引用、冻结选择与刷新接口，以及 `ads-directory`、`ads-reporting`、`ad-management` 三个队列和消费者。静态核实当前迁移 head `material_push`，新迁移按数据、查询、管理顺序衔接，实施前再次检查基线。

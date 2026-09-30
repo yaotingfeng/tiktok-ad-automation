@@ -51,7 +51,7 @@
 
 查询快照包含有序结果行及其必要指标、对象选择投影、已聚合趋势和版本，存 PostgreSQL；默认 15 分钟有效。快照过期返回 `409 query_snapshot_expired`，不能用新数据续旧游标。已导出/提交的任务持有自己的冻结副本，不随快照清理失去目标。整个新查询在短事务的一致读视图中生成快照，不跨浏览器请求保留数据库事务。趋势 GET 读取快照中的分桶趋势，不再查询较新的事实覆盖旧图。
 
-## Task B1：统一筛选、查询快照模型与读取隔离
+## Task 1 (B1)：统一筛选、查询快照模型与读取隔离
 
 **Files:** Create `schemas.py`、`filters.py`、`query_models.py`、`test_filters.py`；Modify A 已创建的 `tests/modules/reporting/conftest.py`、`app/alembic/env.py`；Create 上述迁移。路径均相对 `backend/` 的相应模块根。
 
@@ -63,7 +63,7 @@
 - [ ] **GREEN：** 上述 pytest 通过，增加 `other_context` 读取快照 404、viewer 读取允许、非法数值 422 断言；专用库运行 `uv run --frozen alembic check` 无新增差异。
 - [ ] **提交：** 仅本任务文件，`git commit -m 'reports: define scoped filters and query snapshots'`；按总计划执行显式暂存和提交前检查。
 
-## Task B2：指标、六维聚合和观测趋势
+## Task 2 (B2)：指标、六维聚合和观测趋势
 
 **Files:** Create `aggregation.py`、`trends.py`、`test_aggregation.py`、`test_trends.py`。
 
@@ -75,7 +75,7 @@
 - [ ] **GREEN：** 上述 pytest 通过，并测试暂停/删除金额仍在、同名不同版权方分开、空结果与缺页状态不同、混币种拆桶、负差值保留、缺失素材 D0 返回 UNSUPPORTED、无剧 ID 的外部系列正常归组。
 - [ ] **提交：** `git commit -m 'reports: aggregate six dimensions with explicit metric coverage'`。
 
-## Task B3：快照查询、跨页选择、详情与本地 API
+## Task 3 (B3)：快照查询、跨页选择、详情与本地 API
 
 **Files:** Create `queries.py`、`selection.py`、`detail.py`、`api.py`、`test_queries.py`、`test_selection.py`、`test_detail.py`、`test_api.py`；Modify `app/api/main.py`。
 
@@ -87,7 +87,7 @@
 - [ ] **GREEN：** 测试无额外 TikTok 请求，伪造其他 BC 游标/快照/ID 404，15 分钟过期 409；改名后旧快照不变、新查询按新名归组；详情显示父停用/审核/排期原因，展示外部素材及历史操作但不要求本地素材映射。
 - [ ] **提交：** `git commit -m 'reports: add consistent queries and frozen cross-page selections'`。
 
-## Task B4：个人视图、异步导出与手动刷新
+## Task 4 (B4)：个人视图、异步导出与手动刷新
 
 **Files:** Create `preferences.py`、`exports.py`、`export_tasks.py`、`test_exports.py`；Modify `api.py`、`test_api.py`、`app/jobs/celery_app.py`、`app/jobs/tasks.py`；新增导出对象存储前缀由既有存储客户端配置提供，不复制真实配置。
 
@@ -101,7 +101,7 @@
 - [ ] **GREEN：** 测试重复导出/刷新幂等、产物过期、个人视图不可互读、不支持的列拒绝、失败导出不暴露半文件；当前日期窗口一致，多币种分桶写入。
 - [ ] **提交：** `git commit -m 'reports: add private views exports and scoped refresh'`。
 
-## Task B5：六维工作台、趋势、详情与状态体验
+## Task 5 (B5)：六维工作台、趋势、详情与状态体验
 
 **Files:** Create 前述 `frontend/src/features/ads/`、路由及 `tests/utils/adsBoundary.ts`、`tests/ads-workspace.spec.ts`、`tests/ads-reporting.spec.ts`；Modify `src/routes/_layout.tsx`、`playwright.config.ts`；由脚本生成客户端及路由树。
 
@@ -113,7 +113,7 @@
 - [ ] **GREEN：** 上述浏览器测试通过，新增 390/1024/1440 宽度、并列排序、过期快照重查、viewer 只读、混时区趋势分组、命名异常行保留、财务指标不存在断言；运行 `bun run build` 和 `bunx biome check src/features/ads tests/ads-workspace.spec.ts tests/ads-reporting.spec.ts tests/utils/adsBoundary.ts`。
 - [ ] **提交：** `git commit -m 'ads: add six-dimension reporting workspace'`，显式暂存生成产物和本任务文件。
 
-## Task B6：阶段验收与查询容量证据
+## Task 6 (B6)：阶段验收与查询容量证据
 
 **Files:** Create `backend/tests/acceptance/test_reporting_workspace.py`、`docs/validation/2026-09-30-ads-reporting-workspace.md`（实施日如变化，用实际日期）；Modify `docs/implementation-progress.md`。
 

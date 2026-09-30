@@ -43,7 +43,7 @@
 - 新测试 fixture 在所属测试目录 `conftest.py` 定义并复用根 `session/context/other_context/redis_client`；目录 seed 必须创建真实租户成员、BC 访问关系，外部替身只放传输边界。
 - 阶段 A 只有 `backend/app/alembic/versions/ads_reporting_data.py` 一个迁移，`revision='ads_reporting_data'`、`down_revision='material_push'`；A2 创建全部表并测试，后续任务消费已有结构，不重写已执行迁移。总路线图统一后续链 `ads_reporting_data -> reporting_queries -> ad_management`。
 
-### Task A1: 固定名称、对象与只读传输合同
+### Task 1 (A1): 固定名称、对象与只读传输合同
 
 **Files:** Create `backend/app/integrations/tiktok/contracts/ads.py`、`backend/app/integrations/tiktok/contracts/reporting.py`、`backend/app/modules/ads/naming.py`；Test `backend/tests/contracts/test_ads_reporting_contracts.py`。
 
@@ -51,11 +51,11 @@
 - Produces `EntityRef(tenant_id:UUID,advertiser_id:str,kind:Literal['campaign','adgroup','ad','creative'],remote_id:str)`、`MaterialUseRef(ad_ref:EntityRef,platform_material_id:str,ad_material_id:str|None,material_type:str)`。普通广告素材没有广告内 ID 时仍可读取；只有 ID 存在且能力支持才可供 C 独立素材启停，不得用 VID 替代。
 - Produces `CampaignIdentity(provider_label:str|None,drama_name:str|None,status:Literal['VALID','INVALID'])`；`parse_campaign_name(name:str)->CampaignIdentity`。
 - Produces `AdEntity(ref,parent_ref:EntityRef|None,ad_type:str,name:str,configuration:dict,operation_status:str|None,review_status:str|None,delivery_status:str|None,observed_at:datetime)`；`AdMaterialUsage(use_ref:MaterialUseRef,local_material_id:UUID|None,operation_status:str|None,complete:bool)`；`CallEvidence` 复用 `contracts/common.py`，不新建替代类型。
-- Produces `DirectoryQuery(advertiser_id:str,kind:str,ad_type:str,page:int,page_size:int,ids:tuple[str,...],parent_ids:tuple[str,...],include_deleted:bool)`；`DirectoryPage(items:tuple[AdEntity,...],materials:tuple[AdMaterialUsage,...],next_page:int|None,complete:bool,evidence:CallEvidence)`，与账户目录同名类型不互换。
+- Produces `DirectoryQuery(advertiser_id:str,kind:str,ad_type:str,page:int,page_size:int,ids:tuple[str,...],parent_ids:tuple[str,...],include_deleted:bool)`；`DirectoryPage(items:tuple[AdEntity,...],materials:tuple[AdMaterialUsage,...],next_page:int|None,complete:bool,evidence:CallEvidence,page:int=1)`，与账户目录同名类型不互换。
 - Produces `ReportQuery(advertiser_id,report_contract,metric_family,dimensions:tuple[str,...],metrics:tuple[str,...],start_date:date,end_date:date,granularity:str,currency,timezone,attribution,filter_ids:tuple[str,...],page:int)`；字符串字段均为 `str`。
-- Produces `ReportRow(subject_key:tuple[str,...],bucket_start:datetime,bucket_end:datetime,values:dict[str,Decimal|None],availability:dict[str,str])`、`ReportPage(rows:tuple[ReportRow,...],next_page:int|None,complete:bool,evidence:CallEvidence)`、`ReportTask(task_id,advertiser_id,status:Literal['PENDING','RUNNING','READY','FAILED'],query:ReportQuery)`。
+- Produces `ReportRow(subject_key:tuple[str,...],bucket_start:datetime,bucket_end:datetime,values:dict[str,Decimal|None],availability:dict[str,str])`、`ReportPage(rows:tuple[ReportRow,...],next_page:int|None,complete:bool,evidence:CallEvidence,page:int=1)`、`ReportTask(task_id,advertiser_id,status:Literal['PENDING','RUNNING','READY','FAILED'],query:ReportQuery)`。
 
-- [ ] **RED：** 添加 RF1 及身份校验测试，非空 ID、时区日期、完整标记/后续页冲突均须拒绝。
+- [ ] **RED：** 添加 RF1 及身份校验测试，非空 ID、时区日期、完整标记/后续页冲突均须拒绝。响应携带实际请求 page（正整数，next_page 必须更大），不从游标推测页号；完整异步文件使用 page=1。
 ```python
 assert parse_campaign_name(' 嘉书 - 总裁归来 -账户2').drama_name == '总裁归来'
 assert parse_campaign_name('嘉书--测试').status == 'INVALID'
@@ -67,7 +67,7 @@ assert parse_campaign_name('嘉书-Cafe\u0301-备注') == parse_campaign_name('�
 - [ ] **GREEN：** 重跑上述命令，全部通过；下载合同明确仅 `READY` 且整个文件成功解析才 `complete=True`，不模拟平台分页。
 - [ ] **Commit：** 明确暂存本任务列出的四个文件、新包 init 和进度记录，提交 `ads: define directory and reporting read contracts`。
 
-### Task A2: 目录持久身份、素材使用关系与授权读取
+### Task 2 (A2): 目录持久身份、素材使用关系与授权读取
 
 **Files:** Create `backend/app/modules/ads/models.py`、`backend/app/modules/ads/directory.py`、`backend/app/modules/ads/sync_models.py`、`backend/app/modules/reporting/models.py`、`backend/app/modules/reporting/sync_models.py`、`backend/app/alembic/versions/ads_reporting_data.py`、`backend/tests/modules/ads/conftest.py`；Modify `backend/app/alembic/env.py`；Test `backend/tests/modules/ads/test_directory.py`、`backend/tests/modules/ads/test_directory_migration.py`。
 
@@ -89,7 +89,7 @@ with pytest.raises(DomainError):
 - [ ] **GREEN：** 重跑两文件；同对象双通道 upsert 只一行、异账户/异 kind 不碰撞；迁移测试沿用 `tests/migration_database.py` 的独立库流程且不改历史迁移。
 - [ ] **Commit：** 明确暂存本任务列出路径及进度记录，提交 `ads: persist scoped remote directory and material references`。
 
-### Task A3: 普通与 Smart+ 目录双通道及余额观测
+### Task 3 (A3): 普通与 Smart+ 目录双通道及余额观测
 
 **Files:** Create `backend/app/integrations/tiktok/adapters/sdk_ads.py`、`backend/app/integrations/tiktok/adapters/mcp_ads.py`；Modify `backend/app/integrations/tiktok/gateway.py`、`backend/app/integrations/tiktok/mcp/tool-contracts.json`、A1 `contracts/ads.py`、A2 `models.py`；Test `backend/tests/integrations/tiktok/test_ads_read_adapters.py`、`backend/tests/contracts/test_tiktok_sdk_surface.py`。
 
@@ -113,7 +113,7 @@ assert ads_transport.gateway.ads.read_balance('account-test').amount is None
 - [ ] **GREEN：** 重跑；每次分页发送前验证冻结代数，检查 SDK 实际 method/path/参数；未授权 API 和无工具旧类型返回明确能力状态，绝不借 build 权限或另一通道兜底。
 - [ ] **Commit：** 明确暂存本任务列出路径及进度记录，提交 `ads: add scoped API and MCP directory readers`。
 
-### Task A4: 完整目录暂存、发布及名称迁组
+### Task 4 (A4): 完整目录暂存、发布及名称迁组
 
 **Files:** Create `backend/app/modules/ads/sync.py`；Consume A2 `backend/app/modules/ads/sync_models.py`；Test `backend/tests/modules/ads/test_directory_sync.py`。
 
@@ -133,7 +133,7 @@ assert locate(session, context=directory_run.context, bc_id=directory_run.bc_id,
 - [ ] **GREEN：** 重跑；断点续接不重复对象，缺父系列安排定向补齐，命名不规范保留目录；素材使用关系不依赖本地上传或创建记录。
 - [ ] **Commit：** 明确暂存本任务列出路径及进度记录，提交 `ads: publish complete directory snapshots and naming projections`。
 
-### Task A5: 指标合同与不可混写的事实发布边界
+### Task 5 (A5): 指标合同与不可混写的事实发布边界
 
 **Files:** Create `backend/app/modules/reporting/contracts.py`、`backend/app/modules/reporting/facts.py`、`backend/tests/modules/reporting/conftest.py`；Consume A2 reporting models/sync_models；Test `backend/tests/modules/reporting/test_facts.py`。
 
@@ -153,7 +153,7 @@ assert observation_delta(observations.previous, observations.next_day) is None
 - [ ] **GREEN：** 重跑；补充币种/时区/归因/成员集合差异都返回 None、只改备注仍可比较、真实零与未提供分开、父子事实不互加、分母零不由存储层填比率。
 - [ ] **Commit：** 明确暂存本任务列出路径及进度记录，提交 `reporting: persist metric contracts and atomic fact versions`。
 
-### Task A6: 同步分片及平台异步报告双通道
+### Task 6 (A6): 同步分片及平台异步报告双通道
 
 **Files:** Create `backend/app/integrations/tiktok/adapters/sdk_reporting.py`、`backend/app/integrations/tiktok/adapters/mcp_reporting.py`、`backend/app/modules/reporting/sync.py`；Modify `backend/app/integrations/tiktok/gateway.py`、`backend/app/integrations/tiktok/mcp/tool-contracts.json`；Test `backend/tests/integrations/tiktok/test_reporting_adapters.py`、`backend/tests/modules/reporting/test_report_sync.py`。
 
@@ -173,7 +173,7 @@ assert collect_report_step(session, run_id=report_sync.id, claim_generation=1, g
 - [ ] **GREEN：** 重跑；权限/schema/维度不支持不静默降级，素材 D0 不平均分摊；每个 HTTP/MCP 发送仍走相同额度/冻结路由门禁，超时创建异步报告不得在紧循环重建任务。
 - [ ] **Commit：** 明确暂存本任务列出路径及进度记录，提交 `reporting: collect partitioned sync and asynchronous reports`。
 
-### Task A7: 持久计划、回补与刷新合并
+### Task 7 (A7): 持久计划、回补与刷新合并
 
 **Files:** Create `backend/app/modules/reporting/scheduling.py`、`backend/app/modules/ads/tasks.py`、`backend/app/modules/reporting/tasks.py`；Consume A2 两域 `sync_models.py`；Test `backend/tests/modules/reporting/test_scheduling.py`。
 
@@ -193,7 +193,7 @@ assert sync_seed.planned_window(kind='unknown_attribution').days == 35
 - [ ] **GREEN：** 重跑；配置集合为启用或近7日有消耗，余额失败不阻断报告；新绑定账户能建立初始计划，解绑停止后续调度；后台身份权限重新读取；观测保留系列粒度，跨日/改名不生成伪半小时流量。
 - [ ] **Commit：** 明确暂存本任务列出路径及进度记录，提交 `reporting: schedule resumable refresh and attribution backfill`。
 
-### Task A8: 队列公平性、冻结权限与恢复验收
+### Task 8 (A8): 队列公平性、冻结权限与恢复验收
 
 **Files:** Modify `backend/app/jobs/celery_app.py`、`backend/app/jobs/tasks.py`、`backend/app/core/config.py`、`.env.example`、`compose.yml`、`compose.production.yml`、`docs/runbooks/deployment.md`、`docs/runbooks/staging-singapore.md`、A7 两域 `tasks.py`；Create `deploy/staging-ads-directory.service`、`deploy/staging-ads-reporting.service`、`docs/validation/2026-09-30-ads-reporting-data.md`；Test `backend/tests/jobs/test_ads_reporting_queues.py`、`backend/tests/modules/reporting/test_sync_recovery.py`。
 
