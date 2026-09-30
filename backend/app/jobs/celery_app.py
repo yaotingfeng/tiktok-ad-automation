@@ -36,6 +36,7 @@ celery_app.conf.update(
         # starts, so a recovery message can never hit an unknown task/queue.
         "app.modules.ads.tasks",
         "app.modules.reporting.tasks",
+        "app.modules.reporting.export_tasks",
     ),
     task_queues=(
         Queue("resources"),
@@ -56,6 +57,8 @@ celery_app.conf.update(
         "reporting.scan_due": {"queue": "control"},
         "ads.sync_step": {"queue": "ads-directory"},
         "reporting.sync_step": {"queue": "ads-reporting"},
+        "reporting.export": {"queue": "ads-reporting"},
+        "reporting.cleanup_exports": {"queue": "ads-reporting"},
     },
     beat_schedule={
         "repair-external-imports": {
@@ -159,6 +162,11 @@ celery_app.conf.update(
             "task": "reporting.scan_due",
             "schedule": 30.0,
             "options": {"queue": "control"},
+        },
+        "cleanup-report-exports": {
+            "task": "reporting.cleanup_exports",
+            "schedule": 3600.0,
+            "options": {"queue": "ads-reporting"},
         },
     },
 )

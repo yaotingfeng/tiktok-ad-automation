@@ -204,3 +204,79 @@ class FrozenSelection(BaseModel):
     material_uses: tuple[MaterialUseRef, ...] = ()
     membership_digest: str
     expires_at: datetime
+
+
+class SavedViewPublic(BaseModel):
+    """当前操作者在一个租户/BC 下保存的私有筛选视图。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: UUID
+    name: str
+    filters: ReportingFilter
+    columns: tuple[str, ...] = ()
+    created_at: datetime
+
+
+class SavedViewCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(min_length=1, max_length=128)
+    filters: ReportingFilter
+    columns: tuple[str, ...] = ()
+
+
+class SavedViewPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    filters: ReportingFilter | None = None
+    columns: tuple[str, ...] | None = None
+
+
+class ExportPublic(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: UUID
+    status: Literal["QUEUED", "RUNNING", "COMPLETE", "FAILED", "EXPIRED"]
+    coverage: dict[str, object] = Field(default_factory=dict)
+    expires_at: datetime
+
+
+class ExportCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    snapshot_id: UUID
+    idempotency_key: str = Field(min_length=1, max_length=128)
+
+
+class SyncRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    advertiser_ids: tuple[str, ...] = Field(min_length=1)
+    scope: Literal["directory", "active", "report", "history", "targeted"] = "report"
+    start_date: date | None = None
+    end_date: date | None = None
+    refs: tuple[EntityRef, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_dates(self) -> SyncRunRequest:
+        if (self.start_date is None) != (self.end_date is None):
+            raise ValueError("start_date and end_date must be supplied together")
+        if self.start_date and self.end_date and self.start_date > self.end_date:
+            raise ValueError("start_date must be on or before end_date")
+        if len(set(self.advertiser_ids)) != len(self.advertiser_ids):
+            raise ValueError("advertiser_ids must be unique")
+        return self
+
+
+class SyncRunPublic(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: UUID
+    request_id: UUID
+    status: str
+    coverage: str
+    error_code: str | None = None
+    observed_at: datetime | None = None
+    completed_at: datetime | None = None

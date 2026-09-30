@@ -342,7 +342,10 @@ def query_ads(
     """查询本地快照，分页游标始终绑定租户、BC、用户和筛选摘要。"""
     if not 1 <= limit <= 100:
         raise HTTPException(422, detail="invalid_snapshot_page")
-    compile_filter(filters)
+    try:
+        compile_filter(filters)
+    except ValueError as exc:
+        raise HTTPException(422, detail="invalid_reporting_filter") from exc
     require_tenant(session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read")
     if snapshot_id is None:
         if cursor is not None:
