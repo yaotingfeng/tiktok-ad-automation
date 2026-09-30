@@ -45,6 +45,12 @@ _NATIVE_TEXT_TOOLS = {
     ("build.create_ad", "smart_plus_ad_create"),
     ("build.get_ads", "smart_plus_ad_get"),
     ("build.get_regular_adgroups", "adgroup_get"),
+    ("reports.integrated", "report_integrated_get"),
+    ("reports.material_overview", "smart_plus_material_report_overview_run"),
+    ("reports.material_breakdown", "smart_plus_material_report_breakdown_run"),
+    ("reports.task_create", "report_task_create"),
+    ("reports.task_check", "report_task_check"),
+    ("reports.task_download", "report_task_download"),
 }
 
 # 只允许真实事故中已验证为“接口明确拒绝、没有创建对象”的广告创建业务码。

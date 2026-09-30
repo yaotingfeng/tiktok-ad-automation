@@ -23,9 +23,11 @@ from app.integrations.tiktok.adapters.ads_read import (
 from app.integrations.tiktok.adapters.mcp_ads import McpAdsReadOperations
 from app.integrations.tiktok.adapters.mcp_builds import McpBuildOperations
 from app.integrations.tiktok.adapters.mcp_materials import MCPMaterialOperations
+from app.integrations.tiktok.adapters.mcp_reporting import McpReportingOperations
 from app.integrations.tiktok.adapters.sdk_ads import SdkAdsReadOperations
 from app.integrations.tiktok.adapters.sdk_builds import ApiBuildOperations
 from app.integrations.tiktok.adapters.sdk_materials import SDKMaterialOperations
+from app.integrations.tiktok.adapters.sdk_reporting import SdkReportingOperations
 from app.integrations.tiktok.admission import (
     PROTOCOL_OPERATIONS,
     admit_tiktok_call,
@@ -41,6 +43,7 @@ from app.integrations.tiktok.contracts.ads import AdsReadOperations
 from app.integrations.tiktok.contracts.builds import BuildOperations
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.integrations.tiktok.contracts.materials import MaterialOperations
+from app.integrations.tiktok.contracts.reporting import ReportOperations
 from app.integrations.tiktok.contracts.scenes import ScenesGateway
 from app.integrations.tiktok.group_isolation import (
     FrozenGroupIsolation,
@@ -112,6 +115,14 @@ _OPERATION_CAPABILITIES: dict[str, Capability] = {
     "build.create_cta_portfolio": "build",
     "build.disable_adgroup": "build",
     "build.list_optimizer_rules": "read",
+    # 报表端点按独立操作登记，确保每个同步页、异步任务状态和下载请求
+    # 都重新通过同一冻结路由与共享额度门禁。
+    "reports.integrated": "read",
+    "reports.material_overview": "read",
+    "reports.material_breakdown": "read",
+    "reports.task_create": "read",
+    "reports.task_check": "read",
+    "reports.task_download": "read",
 }
 _DIRECTORY_OPERATIONS = frozenset(
     operation
@@ -127,6 +138,7 @@ class TikTokGateway:
     materials: MaterialOperations
     builds: BuildOperations
     ads: AdsReadOperations
+    reports: ReportOperations
 
 
 def _capability(advertiser_id: str | None, operation: str) -> Capability:
@@ -448,6 +460,10 @@ def open_tiktok_gateway(
                         subject_id=facts.subject_id,
                         finance=finance,
                     ),
+                    reports=McpReportingOperations(
+                        client,
+                        route=route,
+                    ),
                     accounts=McpAccountsGateway(
                         client,
                         context=read_context,
@@ -477,6 +493,12 @@ def open_tiktok_gateway(
                         check_account=check_account,
                         subject_id=facts.subject_id,
                         finance=finance,
+                        request_scope=request_scope,
+                        deadline=task_deadline,
+                    ),
+                    reports=SdkReportingOperations(
+                        official,
+                        route=route,
                         request_scope=request_scope,
                         deadline=task_deadline,
                     ),

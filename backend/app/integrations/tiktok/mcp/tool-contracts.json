@@ -4130,6 +4130,651 @@
       ],
       "evidence": "DOCUMENTED",
       "text_json_envelope": false
+    },
+    {
+      "operation": "reports.integrated",
+      "tool_name": "report_integrated_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "description": "Pass either `advertiser_id`/`advertiser_ids` or `bc_id`. When `report_type` is `BASIC` or `AUDIENCE`, pass `advertiser_id` or `advertiser_ids`; if both are provided, `advertiser_id` is ignored. When `report_type` is `PLAYABLE_MATERIAL`, `CATALOG`, or `TT_SHOP`, pass `advertiser_id`. When `report_type` is `BC`, pass `bc_id` instead. Advertiser ID.",
+            "type": "string"
+          },
+          "advertiser_ids": {
+            "description": "Valid only when `report_type` is `BASIC` or `AUDIENCE`. You must pass either `advertiser_id` or `advertiser_ids`; if both are provided, `advertiser_id` is ignored. List of advertiser IDs, maximum size 5. When `advertiser_ids` is used, the response can include up to 20,000 IDs; cutoff is based on campaign, ad group, or ad creation time in descending order, and IDs may not be evenly distributed across advertisers. Returned `metrics` will include `currency`, `timezone`, and `advertiser_id`. Because advertisers can use different time zones, use `multi_adv_report_in_utc_time=true` to return all advertisers in UTC+0; otherwise data is returned in each advertiser's local time zone. Because advertisers can use different currencies, returned metric values use each advertiser's currency and are presented without a decimal point. To get total aggregated metrics across all advertiser IDs, enable `enable_total_metrics`; returned `total_metrics` will include `currency`, `timezone`, and `advertiser_id`, all set to `-`. If you use `advertiser_ids` but do not include any ID dimensions in `dimensions`, the response returns `0` for `currency`, `timezone`, and `advertiser_id`, and `-` for cost-related metrics such as `spend`. All advertisers in `advertiser_ids` must belong to the same TikTok for Business user or the request fails.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "bc_id": {
+            "description": "Pass either `advertiser_id`/`advertiser_ids` or `bc_id`. When `report_type` is `BC`, pass `bc_id`. When `report_type` is `BASIC` or `AUDIENCE`, use `advertiser_id` or `advertiser_ids` instead. When `report_type` is `PLAYABLE_MATERIAL`, `CATALOG`, or `TT_SHOP`, use `advertiser_id`. ID of a Business Center you have access to.",
+            "type": "string"
+          },
+          "data_level": {
+            "description": "Data level to query. Not supported when `report_type` is `BC`. Required when `report_type` is `BASIC`, `AUDIENCE`, or `CATALOG`. If set to `AUCTION_ADVERTISER`, data for all Auction Ads and Reservation Ads under the advertiser is returned. When `report_type` is `BASIC`, `AUDIENCE`, or `CATALOG`: `AUCTION_CAMPAIGN` returns data for all ads under undeleted auction campaigns because the default `campaign_status` filter is `STATUS_NOT_DELETE`; `AUCTION_ADGROUP` returns data for all ads under undeleted auction ad groups because the default `adgroup_status` filter is `STATUS_NOT_DELETE`; `AUCTION_AD` returns only undeleted ads under all auction campaigns because the default `ad_status` filter is `STATUS_NOT_DELETE`. To get data for all ads under all auction campaigns, set the `ad_status` filter to `STATUS_ALL` in `filtering`. When `report_type` is `TT_SHOP`, only `AUCTION_ADVERTISER` and `AUCTION_CAMPAIGN` are allowed.",
+            "enum": [
+              "AUCTION_AD",
+              "AUCTION_ADGROUP",
+              "AUCTION_CAMPAIGN",
+              "AUCTION_ADVERTISER"
+            ],
+            "type": "string"
+          },
+          "dimensions": {
+            "description": "Grouping dimensions, for example `[\"campaign_id\", \"stat_time_day\"]`. Supported dimensions vary by `report_type`. If `report_type` is not `BC` and `dimensions` contains `stat_time_day`, the query time range cannot exceed 30 days. If `dimensions` contains `stat_time_hour`, the query time range cannot exceed 1 day. If `dimensions` contains more than `xx_id` and there is no ads reporting within the time range, an empty list is returned.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "enable_total_metrics": {
+            "description": "Whether to return total aggregated values for the requested metrics. When enabled, aggregate data across all pages is returned, so you only need to specify this field on the first page request. Because of the 20,000 truncation limit, totals are provided for up to 20,000 IDs. Supported only for auction basic reports and GMV max ads reports. Valid only when `dimensions` contains one ID dimension and optionally `stat_time_day`, for example `[\"campaign_id\"]` or `[\"campaign_id\", \"stat_time_day\"]`. Not supported in the sandbox environment.",
+            "type": "boolean"
+          },
+          "end_date": {
+            "description": "Required when `query_lifetime` is `false` or omitted. Query end date in `YYYY-MM-DD`, using the ad account time zone. When `query_lifetime=true`, this field is ignored. If `report_type` is not `BC` and `dimensions` does not include `stat_time_day`, the maximum range between `start_date` and `end_date` is 365 days. If `report_type` is not `BC` and `dimensions` includes `stat_time_day`, the maximum range is 30 days. If `report_type` is `BC`, the maximum range is 365 days.",
+            "type": "string"
+          },
+          "filtering": {
+            "description": "Filtering conditions. Supported when `report_type` is `BASIC`, `AUDIENCE`, `PLAYABLE_MATERIAL`, `CATALOG`, or `BC`; not supported when `report_type` is `TT_SHOP`. Supported filters vary by `service_type` and `data_level`. When you provide `filtering`, each object in the list must include `field_name`, `filter_type`, and `filter_value` together. If you want to use `country_code` as a grouping filter, you must also include `country_code` in `dimensions`. `country_code` works with basic report (sync and async), audience report (sync and async), playable ad report (sync only), and Business Center report (sync only).",
+            "items": {
+              "properties": {
+                "field_name": {
+                  "description": "Filter field name.",
+                  "type": "string"
+                },
+                "filter_type": {
+                  "description": "Filter operator. When `filter_type` is `IN`, `CONTAIN_ANY_OF`, or `NOT_IN`, `filter_value` must be a valid JSON array string. When `filter_type` is `BETWEEN`, `filter_value` must be a valid JSON array string containing exactly two string values.",
+                  "enum": [
+                    "IN",
+                    "CONTAIN_ANY_OF",
+                    "MATCH",
+                    "NOT_IN",
+                    "GREATER_EQUAL",
+                    "GREATER_THAN",
+                    "LOWER_EQUAL",
+                    "LOWER_THAN",
+                    "BETWEEN"
+                  ],
+                  "type": "string"
+                },
+                "filter_value": {
+                  "description": "Value to filter by. When `filter_type` is `IN`, `CONTAIN_ANY_OF`, or `NOT_IN`, this must be a valid JSON array string.",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "metrics": {
+            "description": "Metrics to query. Supported metrics vary by `report_type`. Default is `[\"spend\", \"impressions\"]` when `report_type` is `BASIC`, `AUDIENCE`, `PLAYABLE_MATERIAL`, or `CATALOG`; all metrics supported by the selected `dimensions` when `report_type` is `BC`; and `[\"spend\", \"billed_cost\"]` when `report_type` is `TT_SHOP`. Currency metrics are based on the advertiser account currency.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "multi_adv_report_in_utc_time": {
+            "description": "Supported only when `advertiser_ids` is used. Default is `false`. If `true`, returned metrics for all advertisers use UTC+0. If `false`, returned metrics use each advertiser's local time zone.",
+            "type": "boolean"
+          },
+          "order_field": {
+            "description": "Sorting field. All supported metrics except attribute metrics can be used for sorting. By default, results are not sorted.",
+            "type": "string"
+          },
+          "order_type": {
+            "description": "Sorting order. Default is `DESC`.",
+            "enum": [
+              "ASC",
+              "DESC"
+            ],
+            "type": "string"
+          },
+          "page": {
+            "description": "Current page number. Default is `1`.",
+            "format": "double",
+            "type": "number"
+          },
+          "page_size": {
+            "description": "Pagination size. Range: 1-1000. Default is `10`.",
+            "format": "double",
+            "type": "number"
+          },
+          "query_lifetime": {
+            "description": "Whether to request lifetime metrics. Supported only when `report_type` is `BASIC` or `PLAYABLE_MATERIAL`. Default is `false`. If `true`, `start_date` and `end_date` are ignored, and lifetime metrics use the same metric names as normal metrics. Breakdown by time, audience, or location code `country_code` is not supported for lifetime queries. Audience reports, DSA reports, Business Center reports, and GMV max ads reports do not support lifetime metrics.",
+            "type": "boolean"
+          },
+          "report_type": {
+            "description": "Report type. When `service_type` is `AUCTION`, `BASIC`, `AUDIENCE`, `PLAYABLE_MATERIAL`, `CATALOG`, and `TT_SHOP` are supported. When `report_type` is `BC`, do not pass `service_type`. `BASIC` and `AUDIENCE` require `advertiser_id` or `advertiser_ids`; `PLAYABLE_MATERIAL`, `CATALOG`, and `TT_SHOP` use `advertiser_id`; `BC` uses `bc_id`.",
+            "enum": [
+              "BASIC",
+              "AUDIENCE",
+              "PLAYABLE_MATERIAL",
+              "CATALOG",
+              "BC",
+              "TT_SHOP"
+            ],
+            "type": "string"
+          },
+          "service_type": {
+            "description": "Ad service type. Not supported when `report_type` is `BC`. Default is `AUCTION` when `report_type` is not `BC`. To retrieve TopView reporting data, use basic or audience reports and set the `buying_type` filter to `RESERVATION_TOP_VIEW`.",
+            "enum": [
+              "AUCTION"
+            ],
+            "type": "string"
+          },
+          "start_date": {
+            "description": "Required when `query_lifetime` is `false` or omitted. Query start date in `YYYY-MM-DD`, using the ad account time zone. When `query_lifetime=true`, this field is ignored. If `report_type` is not `BC` and `dimensions` does not include `stat_time_day`, the maximum range between `start_date` and `end_date` is 365 days. If `report_type` is not `BC` and `dimensions` includes `stat_time_day`, the maximum range is 30 days. If `report_type` is `BC`, the maximum range is 365 days.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "report_type",
+          "dimensions"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/portal/docs/available-tools-in-tiktok-for-business-mcp-server/v1.3"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "reports.material_overview",
+      "tool_name": "smart_plus_material_report_overview_run",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "description": "Advertiser ID.",
+            "type": "string"
+          },
+          "dimensions": {
+            "description": "Dimension grouping conditions. For example, `[\"campaign_id\", \"main_material_id\"]` groups by both `campaign_id` and `main_material_id`. Use only supported dimensions and supported dimension groupings.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "end_date": {
+            "description": "Required when `query_lifetime` is `false` or not specified. Query end date, inclusive, in `YYYY-MM-DD` format. The date uses the ad account time zone. The difference between `start_date` and `end_date` must be 365 days or less.",
+            "type": "string"
+          },
+          "filtering": {
+            "description": "Filtering conditions for the report.",
+            "properties": {
+              "ad_text_entity_ids": {
+                "description": "List of ad text entity IDs. This is a system-generated unique identifier for an ad text. When you use this filter, you can specify up to 400 IDs in total across `main_material_ids`, `ad_text_entity_ids`, `call_to_action_entity_ids`, and `interactive_add_on_entity_ids`. This filter can be combined only with the dimensions `advertiser_id`, `campaign_id`, `adgroup_id`, and `smart_plus_ad_id`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "adgroup_ids": {
+                "description": "List of ad group IDs. Maximum 200 IDs. You cannot combine `adgroup_ids` with `campaign_ids` or `smart_plus_ad_ids`. This filter can be combined only with the dimensions `advertiser_id`, `adgroup_id`, and `smart_plus_ad_id`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "call_to_action_entity_ids": {
+                "description": "List of call-to-action entity IDs. This is a system-generated unique identifier for a call to action. When you use this filter, you can specify up to 400 IDs in total across `main_material_ids`, `ad_text_entity_ids`, `call_to_action_entity_ids`, and `interactive_add_on_entity_ids`. This filter can be combined only with the dimensions `advertiser_id`, `campaign_id`, `adgroup_id`, and `smart_plus_ad_id`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "campaign_ids": {
+                "description": "List of campaign IDs. Maximum 200 IDs. You cannot combine `campaign_ids` with `adgroup_ids` or `smart_plus_ad_ids`. This filter can be combined only with the dimensions `advertiser_id`, `campaign_id`, `adgroup_id`, and `smart_plus_ad_id`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "interactive_add_on_entity_ids": {
+                "description": "List of interactive add-on entity IDs. This is a system-generated unique identifier for an interactive add-on. When you use this filter, you can specify up to 400 IDs in total across `main_material_ids`, `ad_text_entity_ids`, `call_to_action_entity_ids`, and `interactive_add_on_entity_ids`. This filter can be combined only with the dimensions `advertiser_id`, `campaign_id`, `adgroup_id`, and `smart_plus_ad_id`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "main_material_ids": {
+                "description": "List of main creative IDs. When you use this filter, you can specify up to 400 IDs in total across `main_material_ids`, `ad_text_entity_ids`, `call_to_action_entity_ids`, and `interactive_add_on_entity_ids`. This filter can be combined only with the dimensions `advertiser_id`, `campaign_id`, `adgroup_id`, and `smart_plus_ad_id`. When you use `main_material_ids`, you must also specify `main_material_types` and filter only one material type.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "main_material_types": {
+                "description": "List of main creative types. This filter can be used alone. It can be combined only with the dimensions `advertiser_id`, `campaign_id`, `adgroup_id`, and `smart_plus_ad_id`.",
+                "items": {
+                  "enum": [
+                    "VIDEO_NON_SPARK_ADS",
+                    "VIDEO_SPARK_ADS",
+                    "CAROUSEL_NON_SPARK_ADS",
+                    "CAROUSEL_SPARK_ADS",
+                    "SINGLE_IMAGE_NON_SPARK_ADS",
+                    "CATALOG_VIDEO",
+                    "CATALOG_VIDEO_TEMPLATE",
+                    "CATALOG_CAROUSEL",
+                    "CATALOG_MULTI_SHOW"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "smart_plus_ad_ids": {
+                "description": "List of ad IDs. Maximum 200 IDs. You cannot combine `smart_plus_ad_ids` with `campaign_ids` or `adgroup_ids`. This filter can be combined only with the dimensions `advertiser_id` and `smart_plus_ad_id`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "metrics": {
+            "description": "Metrics to query. Default value: `[\"spend\", \"impressions\"]`. Currency metrics are returned in the currency of the ad account identified by `advertiser_id`. All supported metrics except attribute metrics can be used for sorting.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "page": {
+            "description": "Current page number. Must be greater than or equal to 1. Default value: 1.",
+            "format": "double",
+            "type": "number"
+          },
+          "page_size": {
+            "description": "Page size. Range: 1 to 100. Default value: 10.",
+            "format": "double",
+            "type": "number"
+          },
+          "query_lifetime": {
+            "description": "Whether to request lifetime metrics. Supported values: `true` or `false`. Default value: `false`. If `query_lifetime` is `true`, `start_date` and `end_date` are ignored.",
+            "type": "boolean"
+          },
+          "sort_field": {
+            "description": "Sorting field. Default is `spend`. You can sort by supported metrics only; attribute metrics do not support sorting.",
+            "type": "string"
+          },
+          "sort_type": {
+            "description": "Sorting order. Default value: `DESC`.",
+            "enum": [
+              "ASC",
+              "DESC"
+            ],
+            "type": "string"
+          },
+          "start_date": {
+            "description": "Required when `query_lifetime` is `false` or not specified. Query start date, inclusive, in `YYYY-MM-DD` format. The date uses the ad account time zone.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "advertiser_id",
+          "dimensions"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/portal/docs/available-tools-in-tiktok-for-business-mcp-server/v1.3"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "reports.material_breakdown",
+      "tool_name": "smart_plus_material_report_breakdown_run",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "description": "Advertiser ID.",
+            "type": "string"
+          },
+          "dimensions": {
+            "description": "Dimension grouping conditions. For example, `[\"main_material_id\",\"stat_time_day\"]` groups by both `main_material_id` and `stat_time_day`. Available dimensions and supported dimension groupings are documented in Supported dimensions.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "end_date": {
+            "description": "Query end date, inclusive, in `YYYY-MM-DD` format. The date is based on the ad account time zone. The difference between `start_date` and `end_date` must be 365 days or less. If `dimensions` contains `stat_time_hour`, the difference must be 7 days or less.",
+            "type": "string"
+          },
+          "filtering": {
+            "description": "Filtering conditions.",
+            "properties": {
+              "ad_text_entity_ids": {
+                "description": "List of ad text entity IDs. Each ID is a system-generated unique identifier for an ad text. When you use this filter, you can specify up to 400 IDs in total across `main_material_ids`, `ad_text_entity_ids`, `call_to_action_entity_ids`, and `interactive_add_on_entity_ids`. This filter can be combined only with the dimensions `advertiser_id`, `campaign_id`, `adgroup_id`, and `smart_plus_ad_id`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "adgroup_ids": {
+                "description": "List of ad group IDs. Max size: 200. To obtain ad group IDs, use `/smart_plus/adgroup/get/`. You cannot combine `adgroup_ids` with `campaign_ids` or `smart_plus_ad_ids`. This filter can be combined only with the dimensions `advertiser_id`, `campaign_id`, `adgroup_id`, and `smart_plus_ad_id`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "call_to_action_entity_ids": {
+                "description": "List of call-to-action entity IDs. Each ID is a system-generated unique identifier for a call-to-action. When you use this filter, you can specify up to 400 IDs in total across `main_material_ids`, `ad_text_entity_ids`, `call_to_action_entity_ids`, and `interactive_add_on_entity_ids`. This filter can be combined only with the dimensions `advertiser_id`, `campaign_id`, `adgroup_id`, and `smart_plus_ad_id`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "campaign_ids": {
+                "description": "List of campaign IDs. Max size: 200. To obtain campaign IDs, use `/smart_plus/campaign/get/`. You cannot combine `campaign_ids` with `adgroup_ids` or `smart_plus_ad_ids`. This filter can be combined only with the dimensions `advertiser_id`, `campaign_id`, `adgroup_id`, and `smart_plus_ad_id`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "interactive_add_on_entity_ids": {
+                "description": "List of interactive add-on entity IDs. Each ID is a system-generated unique identifier for an interactive add-on. When you use this filter, you can specify up to 400 IDs in total across `main_material_ids`, `ad_text_entity_ids`, `call_to_action_entity_ids`, and `interactive_add_on_entity_ids`. This filter can be combined only with the dimensions `advertiser_id`, `campaign_id`, `adgroup_id`, and `smart_plus_ad_id`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "main_material_ids": {
+                "description": "List of main creative IDs. When you use this filter, you can specify up to 400 IDs in total across `main_material_ids`, `ad_text_entity_ids`, `call_to_action_entity_ids`, and `interactive_add_on_entity_ids`. This filter can be combined only with the dimensions `advertiser_id`, `campaign_id`, `adgroup_id`, and `smart_plus_ad_id`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "main_material_types": {
+                "description": "List of main creative types. This filter can be used alone. It can be combined only with the dimensions `advertiser_id`, `campaign_id`, `adgroup_id`, and `smart_plus_ad_id`.",
+                "items": {
+                  "enum": [
+                    "VIDEO_NON_SPARK_ADS",
+                    "VIDEO_SPARK_ADS",
+                    "CAROUSEL_NON_SPARK_ADS",
+                    "CAROUSEL_SPARK_ADS",
+                    "SINGLE_IMAGE_NON_SPARK_ADS",
+                    "CATALOG_VIDEO",
+                    "CATALOG_VIDEO_TEMPLATE",
+                    "CATALOG_CAROUSEL",
+                    "CATALOG_MULTI_SHOW"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "smart_plus_ad_ids": {
+                "description": "List of ad IDs. Max size: 200. To obtain ad IDs, use `/smart_plus/ad/get/`. You cannot combine `smart_plus_ad_ids` with `campaign_ids` or `adgroup_ids`. This filter can be combined only with the dimensions `advertiser_id` and `smart_plus_ad_id`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "metrics": {
+            "description": "Metrics to query. Default value: `[\"spend\", \"impressions\"]`. Currency metric amounts use the currency of the ad account identified by `advertiser_id`. Supported ad-level metrics are documented separately.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "page": {
+            "description": "Current page number. Value range: greater than or equal to 1. Default value: 1.",
+            "format": "double",
+            "type": "number"
+          },
+          "page_size": {
+            "description": "Page size. Value range: 1-100. Default value: 10.",
+            "format": "double",
+            "type": "number"
+          },
+          "sort_field": {
+            "description": "Sorting field. Default sorting field: `spend`. All supported metrics except attribute metrics can be used for sorting.",
+            "type": "string"
+          },
+          "sort_type": {
+            "description": "Sorting order. Default value: `DESC`.",
+            "enum": [
+              "ASC",
+              "DESC"
+            ],
+            "type": "string"
+          },
+          "start_date": {
+            "description": "Query start date, inclusive, in `YYYY-MM-DD` format. The date is based on the ad account time zone.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "advertiser_id",
+          "dimensions",
+          "start_date",
+          "end_date"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/portal/docs/available-tools-in-tiktok-for-business-mcp-server/v1.3"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "reports.task_create",
+      "tool_name": "report_task_create",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "description": "Advertiser ID. Either `advertiser_id` or `advertiser_ids` must be set. If both `advertiser_id` and `advertiser_ids` are provided, `advertiser_id` is ignored.",
+            "type": "string"
+          },
+          "advertiser_ids": {
+            "description": "List of advertiser IDs. Either `advertiser_id` or `advertiser_ids` must be set. If both are provided, `advertiser_id` is ignored. Max size: 5. Valid only when `report_type` is `BASIC` or `AUDIENCE`. All advertisers in `advertiser_ids` must belong to the same TikTok for Business user or an error occurs. If `start_date` and `end_date` are specified, data is pulled according to each ad account's timezone. When passing multiple advertiser IDs, you can specify up to two ID dimensions in `dimensions` (`advertiser_id` plus one other ID dimension). Many metrics do not support the `advertiser_id` dimension. It is recommended to include `currency` in `metrics` because ad accounts may use different currencies.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "data_level": {
+            "description": "Report aggregation level. Required when `report_type` is `BASIC`, `AUDIENCE`, or `CATALOG`.",
+            "enum": [
+              "AUCTION_AD",
+              "AUCTION_ADGROUP",
+              "AUCTION_CAMPAIGN",
+              "AUCTION_ADVERTISER"
+            ],
+            "type": "string"
+          },
+          "dimensions": {
+            "description": "Grouping dimensions, for example `[\"campaign_id\", \"stat_time_day\"]`. Supported dimensions vary by `report_type`. If `country_code` is used as a grouping filter in `filtering`, you must also include `country_code` in `dimensions`. If your `dimensions` contain more than `xx_id` and there is no ads reporting in the query time range, an empty list is returned. Dimension/metric combinations supported in synchronous reports may not be supported in asynchronous reports. The dimension `ad_id_v2` is available only when `report_type` is `BASIC`, `AUDIENCE`, or `CATALOG`; it cannot be used together with the dimension `ad_id` or the filter `ad_ids`. `ad_id_v2` can return ad-level data for Manual Ads, Smart+ Campaigns, and Upgraded Smart+ Ads.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "enable_report_title_translation": {
+            "description": "Whether to translate the title row of the asynchronous report, including dimension and metric names. Default is `true`. Valid only when `report_type` is `BASIC` or `AUDIENCE`. If set to `false`, titles remain untranslated, for example `ad_id` instead of `AD ID`. Starting November 15th, 2024, translations of certain metrics in async report title rows will change. This does not affect metric field names. TikTok strongly recommends setting this field to `false` to avoid code dependencies on translations that may change over time.",
+            "type": "boolean"
+          },
+          "end_date": {
+            "description": "Query end date in `YYYY-MM-DD` format, based on the ad account time zone. Required when `query_lifetime` is `false` or omitted. If `query_lifetime` is `true`, this field is ignored. Asynchronous reports have no time range limitations.",
+            "type": "string"
+          },
+          "file_name": {
+            "description": "Custom download file name. Optional when `output_format` is `CSV_DOWNLOAD` or `XLSX_DOWNLOAD`. Maximum length is 255 characters. Must not contain any of these characters: `/`, `\\t`, `\\b`, `@`, `#`, `$`, `%`, `^`, `&`, `*`, `(`, `)`, `[`, `]`.",
+            "type": "string"
+          },
+          "filtering": {
+            "description": "Filtering conditions. Supported filters vary by `service_type` and `data_level`. When you include `filtering`, each object in the list must include `field_name`, `filter_type`, and `filter_value` together. If you want to use `country_code` as a grouping filter, you must also include `country_code` in `dimensions`. In asynchronous mode, for basic, audience, and DSA reports, the only supported filter fields are `campaign_ids`, `adgroup_ids`, and `ad_ids`.",
+            "items": {
+              "properties": {
+                "field_name": {
+                  "description": "Filter field name. If `field_name` is `ad_id_v2`, you cannot use it together with the dimension `ad_id` or the filter `ad_ids`. For `ad_id_v2`, you must set `data_level` to `AUCTION_AD` and include `ad_id_v2` in `dimensions`. `ad_id_v2` can filter Manual Ad IDs, Smart+ Campaign ad IDs, and Upgraded Smart+ Ad IDs. You can specify up to 100 values when using `ad_id_v2`.",
+                  "type": "string"
+                },
+                "filter_type": {
+                  "description": "Filter operator. When `filter_type` is `IN`, `filter_value` must be a valid JSON array string. When `filter_type` is `BETWEEN`, `filter_value` must be a valid JSON array string containing 2 string elements. When `field_name` is `ad_id_v2`, `filter_type` must be `IN`.",
+                  "enum": [
+                    "IN",
+                    "MATCH",
+                    "GREATER_EQUAL",
+                    "GREATER_THAN",
+                    "LOWER_EQUAL",
+                    "LOWER_THAN",
+                    "BETWEEN"
+                  ],
+                  "type": "string"
+                },
+                "filter_value": {
+                  "description": "Filter value. When `filter_type` is `IN`, `filter_value` must be a valid JSON array string. When `filter_type` is `BETWEEN`, it must be a valid JSON array string of 2 string elements.",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "metrics": {
+            "description": "Metrics to query. Supported metrics vary by `report_type`. Default is `[\"spend\", \"impressions\"]`. In async reports, UV metrics cannot be queried together with audience dimensions. Supported dimension/metric combinations may differ from synchronous reports.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "order_field": {
+            "description": "Field to sort by. All supported metrics except attribute metrics support sorting. By default, no sorting is applied.",
+            "type": "string"
+          },
+          "order_type": {
+            "description": "Sort order. Default is `DESC`.",
+            "enum": [
+              "ASC",
+              "DESC"
+            ],
+            "type": "string"
+          },
+          "output_format": {
+            "description": "Output format. Default is `CSV_STRING`. If `output_format` is `CSV_DOWNLOAD` or `XLSX_DOWNLOAD`, you may optionally provide `file_name`.",
+            "enum": [
+              "CSV_STRING",
+              "CSV_DOWNLOAD",
+              "XLSX_DOWNLOAD"
+            ],
+            "type": "string"
+          },
+          "query_lifetime": {
+            "description": "Whether to request lifetime metrics. Default is `false`. If `true`, `start_date` and `end_date` are ignored. Lifetime metric names are the same as the normal metric names. Breakdown by time, audience, or location code (`country_code`) is not supported for lifetime metrics. DSA reports do not support lifetime metrics. Audience reports do not support lifetime metrics at this time.",
+            "type": "boolean"
+          },
+          "report_type": {
+            "description": "Report type. When `service_type` is `AUCTION`, supported values are `BASIC`, `AUDIENCE`, `PLAYABLE_MATERIAL`, and `CATALOG`. `data_level` is required when `report_type` is `BASIC`, `AUDIENCE`, or `CATALOG`. `advertiser_ids` is valid only when `report_type` is `BASIC` or `AUDIENCE`. `enable_report_title_translation` is valid only when `report_type` is `BASIC` or `AUDIENCE`. You can retrieve creative-level data for Upgraded Smart+ Ads when `report_type` is `BASIC`, `AUDIENCE`, or `CATALOG`.",
+            "enum": [
+              "BASIC",
+              "AUDIENCE",
+              "PLAYABLE_MATERIAL",
+              "CATALOG"
+            ],
+            "type": "string"
+          },
+          "service_type": {
+            "description": "Ad service type. Default is `AUCTION`. To retrieve TopView ad reporting data, use basic or audience reports and set the `buying_type` filter to `RESERVATION_TOP_VIEW`.",
+            "enum": [
+              "AUCTION"
+            ],
+            "type": "string"
+          },
+          "start_date": {
+            "description": "Query start date in `YYYY-MM-DD` format, based on the ad account time zone. Required when `query_lifetime` is `false` or omitted. If `query_lifetime` is `true`, this field is ignored. Asynchronous reports have no time range limitations.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "report_type",
+          "dimensions"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/portal/docs/available-tools-in-tiktok-for-business-mcp-server/v1.3"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "reports.task_check",
+      "tool_name": "report_task_check",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "description": "Advertiser ID. If you used `advertiser_ids` when calling /report/task/create/ (POST), this field must be set to one of the advertiser IDs included in that `advertiser_ids` list.",
+            "type": "string"
+          },
+          "task_id": {
+            "description": "ID of the asynchronous report task. Obtain this value from the response of /report/task/create/.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "advertiser_id",
+          "task_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/portal/docs/available-tools-in-tiktok-for-business-mcp-server/v1.3"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "reports.task_download",
+      "tool_name": "report_task_download",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "description": "Advertiser ID. If you used `advertiser_ids` when calling /report/task/create/ (POST), this must be set to one of the advertiser IDs included in that `advertiser_ids` list.",
+            "type": "string"
+          },
+          "task_id": {
+            "description": "ID of the asynchronous report task to download.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "advertiser_id",
+          "task_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/portal/docs/available-tools-in-tiktok-for-business-mcp-server/v1.3"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
     }
   ]
 }
