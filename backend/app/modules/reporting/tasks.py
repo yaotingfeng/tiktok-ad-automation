@@ -265,19 +265,21 @@ def scan_due_runs(*, database_engine: Any, now: datetime | None = None) -> int:
         request_ids = enqueue_due_syncs(session, now=now)
         # Include every shard of each request, not just the first ID returned by
         # request_sync; report requests commonly fan out into several contracts.
+        # 与 worker 领取使用同一行锁；跳过活跃事务，避免扫描旧快照后覆盖
+        # 另一会话刚提交的 lease，或两个 scanner 同时恢复同一代数。
         directory_rows = session.exec(
             select(AdDirectoryRun).where(
                 col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
                 col(AdDirectoryRun.next_attempt_at).is_(None)
                 | (col(AdDirectoryRun.next_attempt_at) <= now),
-            )
+            ).with_for_update(skip_locked=True)
         ).all()
         report_rows = session.exec(
             select(ReportSyncRun).where(
                 col(ReportSyncRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
                 col(ReportSyncRun.next_attempt_at).is_(None)
                 | (col(ReportSyncRun.next_attempt_at) <= now),
-            )
+            ).with_for_update(skip_locked=True)
         ).all()
         # Short current-day shards are served before the long historical
         # backfill.  The two queues still have independent one-slot consumers,

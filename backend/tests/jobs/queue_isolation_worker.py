@@ -1,6 +1,7 @@
 """隔离子进程中的真实 Redis worker；不导入业务任务或调用外部服务。"""
 
 import os
+import time
 
 from celery import Celery
 from celery.signals import worker_ready
@@ -42,3 +43,12 @@ def ready_ad():
 def material_result():
     with Redis.from_url(broker) as redis:
         redis.lpush(prefix + "result-complete", redis.llen(prefix + "ad-complete"))
+
+
+@app.task(name="test.isolation.queue_probe")
+def queue_probe(label, delay=0.0):
+    """独立队列积压探针：只记录真实 Redis worker 的执行时序。"""
+    if delay:
+        time.sleep(float(delay))
+    with Redis.from_url(broker) as redis:
+        redis.lpush(prefix + f"probe:{label}", "done")

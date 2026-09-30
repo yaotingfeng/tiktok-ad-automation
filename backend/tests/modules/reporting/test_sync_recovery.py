@@ -8,6 +8,7 @@ from sqlmodel import Session, select
 
 from app.core.context import TenantContext
 from app.core.db import engine
+from app.integrations.tiktok.contracts.ads import CallEvidence, DirectoryPage
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.jobs import outbox
 from app.jobs.admission import AdmissionPolicy, admission_keys, admit_call, release_call
@@ -315,3 +316,261 @@ def test_rebound_route_stops_before_gateway(
     session.refresh(recovery_run)
     assert recovery_run.frozen_route == frozen
     assert recovery_run.claimed_until is None
+
+
+@pytest.fixture
+def committed_recovery():
+    """独立提交的租户夹具，使不同物理连接真实竞争同一运行行。"""
+    from sqlmodel import SQLModel
+
+    from app.modules.accounts.models import AdvertiserAccount
+    from app.modules.ads import tasks as directory_tasks
+    from app.modules.ads.sync_models import AdDirectoryRun
+    from tests.modules.conftest import create_context
+    from tests.modules.reporting.conftest import reporting_seed as seed_fixture
+
+    assert directory_tasks.TASK_NAME == "ads.sync_step"
+
+    with Session(engine) as db:
+        context = create_context(db)
+        db.add(AdvertiserAccount(
+            tenant_id=context.tenant_id, advertiser_id="report-account",
+            currency="USD", timezone="UTC",
+        ))
+        db.flush()
+        seed = seed_fixture.__wrapped__(db, context, None)
+        report = recovery_run.__wrapped__(db, seed)
+        report.task_id = "persisted-async-task"
+        report.task_status = "RUNNING"
+        directory = AdDirectoryRun(
+            tenant_id=context.tenant_id, advertiser_id=report.advertiser_id,
+            bc_id=report.bc_id, actor_id=context.actor_id,
+            connection_id=report.connection_id, channel=report.channel,
+            frozen_route=dict(report.frozen_route), partition_key="b" * 64,
+            kind="campaign", ad_type="REGULAR", claim_generation=1,
+            status="STALE", query={
+                "advertiser_id": report.advertiser_id,
+                "kind": "campaign", "ad_type": "REGULAR", "page_size": 100,
+                "ids": [], "parent_ids": [], "include_deleted": False,
+            },
+        )
+        db.add(directory)
+        db.flush()
+        result = SimpleNamespace(
+            context=context, report_id=report.id, directory_id=directory.id,
+            route=dict(report.frozen_route),
+        )
+        db.commit()
+    try:
+        yield result
+    finally:
+        # 只清除该测试随机租户的已提交事实，不能 rollback 其他连接的事务。
+        with Session(engine) as db:
+            for table in reversed(SQLModel.metadata.sorted_tables):
+                if "tenant_id" in table.c:
+                    db.execute(table.delete().where(table.c.tenant_id == context.tenant_id))
+            tenant = SQLModel.metadata.tables["tenant"]
+            user = SQLModel.metadata.tables["user"]
+            db.execute(tenant.delete().where(tenant.c.id == context.tenant_id))
+            db.execute(user.delete().where(user.c.id == context.actor_id))
+            db.commit()
+
+
+def _worker_args(seed, redis_client, *, directory=False, generation=2):
+    return {
+        "database_engine": engine,
+        "redis_client": redis_client,
+        "context": seed.context,
+        "run_id": seed.directory_id if directory else seed.report_id,
+        "claim_generation": generation,
+    }
+
+
+def test_two_workers_claim_once_and_commit_one_wait_successor(
+    committed_recovery, redis_client, redis_key_prefix, monkeypatch
+):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.modules.reporting import tasks
+
+    seed = committed_recovery
+    entered, resume, calls = [f"{redis_key_prefix}:{name}" for name in ("entered", "resume", "calls")]
+
+    class Reports:
+        def check_task(self, task):
+            redis_client.incr(calls)
+            return task
+
+    @contextmanager
+    def gateway(**kwargs):
+        assert kwargs["route"].model_dump(mode="json") == seed.route
+        redis_client.lpush(entered, "claimed")
+        assert redis_client.blpop(resume, timeout=10) is not None
+        yield SimpleNamespace(reports=Reports())
+
+    monkeypatch.setattr(tasks, "open_tiktok_gateway", gateway)
+    args = _worker_args(seed, redis_client)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(tasks.run_report_step, **args)
+            try:
+                assert redis_client.blpop(entered, timeout=10) is not None
+                # 第一连接已提交领取、尚未进入 provider；第二连接必须被 lease 拦住。
+                second = pool.submit(tasks.run_report_step, **args)
+                assert second.result(timeout=5) == "WAIT"
+                with Session(engine) as observer:
+                    row = observer.get(ReportSyncRun, seed.report_id)
+                    assert row.claim_token is not None
+                    assert row.claimed_until > datetime.now(UTC)
+                    assert observer.exec(select(PendingDispatch).where(
+                        PendingDispatch.tenant_id == seed.context.tenant_id
+                    )).all() == []
+            finally:
+                redis_client.lpush(resume, "continue")
+            assert first.result(timeout=10) == "WAIT"
+        # 独立会话同时读到 WAIT 与唯一 successor；重投不能生成第二条。
+        assert tasks.run_report_step(**args) == "WAIT"
+        with Session(engine) as observer:
+            row = observer.get(ReportSyncRun, seed.report_id)
+            successor = observer.exec(select(PendingDispatch).where(
+                PendingDispatch.tenant_id == seed.context.tenant_id
+            )).one()
+            assert row.status == "WAITING_REMOTE"
+            assert row.claim_token is None and row.claimed_until is None
+            assert successor.available_at == row.next_attempt_at
+            assert successor.payload == {"run_id": str(row.id), "claim_generation": 2}
+            assert row.frozen_route == seed.route
+        assert redis_client.get(calls) == "1"
+    finally:
+        redis_client.delete(entered, resume, calls)
+
+
+@pytest.mark.parametrize("directory", [False, True], ids=["report", "directory"])
+def test_expired_scanner_takes_new_generation_and_fences_old_worker(
+    committed_recovery, redis_client, monkeypatch, directory
+):
+    """真实 scanner 接管过期 lease；旧消息不能触发 provider 或写发布事实。"""
+
+    from app.modules.ads import tasks as directory_tasks
+    from app.modules.ads.sync_models import AdDirectoryRun
+    from app.modules.reporting import tasks
+
+    seed = committed_recovery
+    model = AdDirectoryRun if directory else ReportSyncRun
+    run_id = seed.directory_id if directory else seed.report_id
+    old_generation = 1 if directory else 2
+    monkeypatch.setattr(tasks.settings, "ADS_SYNC_ENABLED", True)
+    with Session(engine) as db:
+        row = db.get(model, run_id)
+        row.status = "RUNNING"
+        row.claim_generation = old_generation
+        row.claim_token = uuid4()
+        row.claimed_until = datetime.now(UTC) - timedelta(seconds=1)
+        row.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
+        db.commit()
+
+    assert tasks.scan_due_runs(database_engine=engine) >= 1
+    with Session(engine) as db:
+        row = db.get(model, run_id)
+        assert row.claim_generation == old_generation + 1
+        assert row.claim_token is None
+        dispatches = db.exec(select(PendingDispatch).where(
+            PendingDispatch.tenant_id == seed.context.tenant_id
+        )).all()
+        assert any(item.payload.get("run_id") == str(run_id) for item in dispatches)
+        new_generation = row.claim_generation
+
+    calls = []
+    if directory:
+        def forbidden_directory(**_kwargs):
+            calls.append("directory")
+            raise AssertionError("stale directory worker must not call provider")
+
+        monkeypatch.setattr(directory_tasks, "open_tiktok_gateway", forbidden_directory)
+        result = directory_tasks.run_directory_step(
+            database_engine=engine, redis_client=redis_client,
+            context=seed.context, run_id=run_id,
+            claim_generation=old_generation,
+        )
+    else:
+        def forbidden_report(**_kwargs):
+            calls.append("report")
+            raise AssertionError("stale report worker must not call provider")
+
+        monkeypatch.setattr(tasks, "open_tiktok_gateway", forbidden_report)
+        result = tasks.run_report_step(
+            database_engine=engine, redis_client=redis_client,
+            context=seed.context, run_id=run_id,
+            claim_generation=old_generation,
+        )
+    assert result == "FAILED"
+    assert calls == []
+    with Session(engine) as db:
+        row = db.get(model, run_id)
+        assert row.claim_generation == new_generation
+        assert row.published_version is None
+
+    if directory:
+        @contextmanager
+        def gateway(**_kwargs):
+            class Ads:
+                def read_page(self, _query):
+                    return DirectoryPage(
+                        items=(), materials=(), next_page=None, complete=True,
+                        evidence=CallEvidence(request_id="directory-recovery"),
+                    )
+
+            yield SimpleNamespace(ads=Ads())
+
+        monkeypatch.setattr(directory_tasks, "open_tiktok_gateway", gateway)
+        assert directory_tasks.run_directory_step(
+            database_engine=engine, redis_client=redis_client,
+            context=seed.context, run_id=run_id,
+            claim_generation=new_generation,
+        ) == "READY"
+        with Session(engine) as db:
+            assert db.get(AdDirectoryRun, run_id).published_version is not None
+
+
+@pytest.mark.parametrize("directory", [False, True], ids=["report", "directory"])
+def test_scanner_does_not_overwrite_another_sessions_locked_claim(
+    committed_recovery, monkeypatch, directory
+):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.modules.ads.sync_models import AdDirectoryRun
+    from app.modules.reporting import tasks
+
+    seed = committed_recovery
+    model = AdDirectoryRun if directory else ReportSyncRun
+    run_id = seed.directory_id if directory else seed.report_id
+    monkeypatch.setattr(tasks.settings, "ADS_SYNC_ENABLED", True)
+    with Session(engine) as db:
+        report = db.get(ReportSyncRun, seed.report_id)
+        report.status = "STALE" if directory else "RUNNING"
+        row = db.get(model, run_id)
+        row.status = "RUNNING"
+        row.claim_token = uuid4()
+        row.claimed_until = datetime.now(UTC) - timedelta(seconds=1)
+        db.commit()
+    with ThreadPoolExecutor(max_workers=1) as pool, Session(engine) as owner:
+        row = owner.exec(select(model).where(model.id == run_id).with_for_update()).one()
+        generation = row.claim_generation
+        token = uuid4()
+        row.claim_token = token
+        row.claimed_until = datetime.now(UTC) + timedelta(seconds=90)
+        owner.flush()
+        scan = pool.submit(tasks.scan_due_runs, database_engine=engine)
+        try:
+            # scanner 不能等待后用旧快照清除已续期的领取；被锁的行应跳过。
+            scan.result(timeout=2)
+        finally:
+            owner.commit()
+        scan.result(timeout=5)
+    with Session(engine) as observer:
+        row = observer.get(model, run_id)
+        assert row.claim_generation == generation
+        assert row.claim_token == token
+        assert observer.exec(select(PendingDispatch).where(
+            PendingDispatch.tenant_id == seed.context.tenant_id
+        )).all() == []

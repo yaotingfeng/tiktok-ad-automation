@@ -1498,3 +1498,4 @@
 - 报表 `WAIT` 续接在同一事务把 `next_attempt_at` 传播到 Outbox `available_at`，worker 领取前再次执行持久化到期门禁；旧 broker 消息不能提前建立 gateway 或消耗异步检查额度。
 - Worker 与 Beat 共用稳定 successor key，终态、旧 generation 和路由重绑定安全短路；真实 PostgreSQL/Redis 回归覆盖到期前后 claim、事务续接和冻结路由。报告见 `superpowers/sdd/2026-09-30-ads-reporting-a-data/task-8-fix-report.md`。
 - 聚焦 A8/jobs 回归 71 passed；reporting/ads/worker authorization 回归 44 passed、2 skipped；Ruff、ty、compileall 通过。未部署、未启用开关、无 TikTok/MCP 调用。
+- 复审补强使用独立 PostgreSQL sessions 与真实 Redis：重复领取互斥、scanner 过期接管并递增 generation、旧目录/报表 worker 不调用 provider/发布，新目录 generation 完成一次发布；两个真实单槽 Celery worker 在目录积压时仍执行报表探针。新增聚焦回归 14 passed，changed-file ty 通过；全 app 既有 28 条诊断未纳入本轮。
