@@ -141,6 +141,30 @@ class ReportRow(BaseModel):
     membership_digest: str = ""
 
 
+class TrendPoint(BaseModel):
+    """趋势分桶及其可比较的差值；缺失值保持 ``None``。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    bucket_start: datetime
+    bucket_end: datetime
+    values: dict[str, Decimal | None] = Field(default_factory=dict)
+    availability: dict[str, Availability] = Field(default_factory=dict)
+    delta: dict[str, Decimal] | None = None
+    delta_reason: Literal["SCOPE_CHANGED", "DATE_CHANGED"] | None = None
+
+
+class TrendPublic(BaseModel):
+    """B2 对外趋势 DTO；coverage 显式区分完整、空结果和不完整。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    points: tuple[TrendPoint, ...] = ()
+    coverage: dict[str, object] = Field(default_factory=dict)
+    actual_interval_minutes: int | None = None
+    delta_reason: Literal["SCOPE_CHANGED", "DATE_CHANGED"] | None = None
+
+
 class QuerySnapshotPublic(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
