@@ -290,13 +290,31 @@ def test_rebound_route_stops_before_gateway(
 ):
     from app.core.errors import DomainError
     from app.modules.accounts.connection_models import BCConnectionBinding
+    from app.modules.accounts.models import TikTokConnection
     from app.modules.reporting import tasks
 
     binding = session.exec(select(BCConnectionBinding).where(
         BCConnectionBinding.tenant_id == reporting_seed.context.tenant_id,
         BCConnectionBinding.bc_id == "bc-report",
     )).one()
-    binding.revision += 1
+    # 模拟 BC 默认连接/通道被重新绑定；运行的 frozen route 仍指向原连接。
+    replacement = TikTokConnection(
+        tenant_id=reporting_seed.context.tenant_id,
+        status="ACTIVE", kind="OFFICIAL_MCP", authorization_revision=0,
+        adapter_contract_revision="mcp-v1",
+    )
+    session.add(replacement)
+    session.flush()
+    session.delete(binding)
+    session.flush()
+    session.add(
+        BCConnectionBinding(
+            tenant_id=reporting_seed.context.tenant_id,
+            bc_id="bc-report", connection_id=replacement.id,
+            kind="OFFICIAL_MCP", status="ACTIVE", authorization_revision=0,
+            revision=1,
+        )
+    )
     session.flush()
     frozen = dict(recovery_run.frozen_route)
 
