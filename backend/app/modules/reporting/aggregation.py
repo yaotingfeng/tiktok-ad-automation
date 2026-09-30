@@ -419,8 +419,11 @@ def _build_material_rows(facts: Sequence[ReportFact], materials: Sequence[AdMate
             continue
         vectors = _aggregate_fact_vectors(items)
         if not proven:
-            vectors = tuple(v.model_copy(update={"values": dict.fromkeys(v.values),
-                                                "availability": dict.fromkeys(v.availability, "UNSUPPORTED")}) for v in vectors)
+            # Keep the provider's numeric facts visible, but make their
+            # unproven attribution explicit on every metric and expose no use_ref.
+            vectors = tuple(v.model_copy(update={
+                "availability": dict.fromkeys(v.availability, "UNSUPPORTED")
+            }) for v in vectors)
         status = "COMPLETE" if proven else ("INCOMPLETE" if candidates_by_item else "UNSUPPORTED")
         row = ReportRow(row_key=json.dumps([adv, "material", dimension, grouping, main_id, main_type]),
                         display={"name": next(iter(candidates_by_id.values())).name if proven else main_id, "main_material_id": main_id,

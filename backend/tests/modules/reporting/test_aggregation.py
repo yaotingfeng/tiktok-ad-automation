@@ -149,7 +149,8 @@ def test_material_partial_ad_proof_never_claims_complete_spend():
     )
     assert rows[0].coverage["status"] == "INCOMPLETE"
     assert rows[0].refs == ()
-    assert rows[0].metric_buckets[0].values["spend"] is None
+    assert rows[0].metric_buckets[0].values["spend"] == Decimal("10")
+    assert rows[0].metric_buckets[0].availability["spend"] == "UNSUPPORTED"
 
 
 def test_mixed_currency_or_timezone_is_rejected():
