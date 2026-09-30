@@ -337,13 +337,14 @@ def _validated_query(run: ReportSyncRun):
         query = decode_query(run.query)
         if query.advertiser_id != run.advertiser_id:
             raise ValueError("query advertiser differs from run")
-        if report_partition_key(query) != run.partition_key:
-            raise ValueError("partition key does not match query")
+        ad_type = run.query.get("ad_type")
         contract = validate_query(
             query,
             channel=run.channel,
-            ad_type=run.query.get("ad_type"),
+            ad_type=ad_type,
         )
+        if report_partition_key(query, ad_type=ad_type) != run.partition_key:
+            raise ValueError("partition key does not match query")
     except (TypeError, ValueError, KeyError) as exc:
         raise _domain("report_query_invalid", "报表查询合同无效") from exc
     return query, contract

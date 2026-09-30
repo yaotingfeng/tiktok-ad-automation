@@ -148,6 +148,10 @@ def test_restricted_contracts_require_ad_type_and_reject_basic_alias():
         channel="OFFICIAL_API",
         ad_type="REGULAR",
     ).key == "basic_ad"
+    decoded = decode_query(query)
+    assert report_partition_key(decoded, ad_type="REGULAR") != report_partition_key(
+        decoded, ad_type="LEGACY_SMART_PLUS"
+    )
     with pytest.raises(ValueError):
         validate_query(
             decode_query(query | {"report_contract": "basic"}),

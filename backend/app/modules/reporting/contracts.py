@@ -232,8 +232,8 @@ def validate_query(
     return contract
 
 
-def query_payload(query: ReportQuery) -> dict:
-    return {
+def query_payload(query: ReportQuery, *, ad_type: str | None = None) -> dict:
+    payload = {
         "advertiser_id": query.advertiser_id,
         "report_contract": query.report_contract,
         "metric_family": query.metric_family,
@@ -248,6 +248,11 @@ def query_payload(query: ReportQuery) -> dict:
         "filter_ids": sorted(query.filter_ids),
         "page": query.page,
     }
+    if ad_type is not None:
+        if type(ad_type) is not str or not ad_type.strip():
+            raise ValueError("invalid persisted advertising type")
+        payload["ad_type"] = ad_type.strip().upper()
+    return payload
 
 
 def decode_query(value: dict) -> ReportQuery:
@@ -271,8 +276,8 @@ def decode_query(value: dict) -> ReportQuery:
     return ReportQuery(**data)
 
 
-def report_partition_key(query: ReportQuery) -> str:
-    payload = query_payload(query)
+def report_partition_key(query: ReportQuery, *, ad_type: str | None = None) -> str:
+    payload = query_payload(query, ad_type=ad_type)
     payload.pop("page")
     return sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
