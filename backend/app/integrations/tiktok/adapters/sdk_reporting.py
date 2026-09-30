@@ -282,6 +282,14 @@ def _payload(
 
 
 def _async_payload(query: ReportQuery, *, ad_type: str | None = None) -> dict[str, Any]:
+    if ad_type is not None and query.report_contract in {
+        "basic_ad",
+        "basic_smart_plus_ad",
+        "basic_smart_plus_creative",
+    }:
+        # 异步 allowlist 没有已核验的 campaign_automation_type 过滤器；
+        # 拒绝混合类型任务，不能把不同广告类型塞进同一事实分区。
+        raise _error("report_async_ad_type_unsupported", "异步报表无法安全隔离广告类型")
     payload = _payload(query, ad_type=ad_type)
     # 平台 task/create 没有同步 page/page_size；保留完整 query 口径，其余字段由
     # 任务合同决定，避免把本地分页参数发送到生成 SDK/MCP schema。
