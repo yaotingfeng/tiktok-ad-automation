@@ -3668,6 +3668,468 @@
       ],
       "evidence": "OBSERVED",
       "text_json_envelope": true
+    },
+    {
+      "operation": "ads.get_campaigns",
+      "tool_name": "campaign_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "description": "Advertiser ID.",
+            "type": "string"
+          },
+          "exclude_field_types_in_response": {
+            "description": "Types of fields to omit from the response.",
+            "items": {
+              "enum": [
+                "NULL_FIELD"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "fields": {
+            "description": "Fields to return. If omitted, all fields are returned by default. Allowed values are the field names under the response `list` object.",
+            "items": {
+              "enum": [
+                "advertiser_id",
+                "app_id",
+                "app_promotion_type",
+                "bid_align_type",
+                "bid_type",
+                "budget",
+                "budget_mode",
+                "budget_optimize_on",
+                "campaign_app_profile_page_state",
+                "campaign_automation_type",
+                "campaign_id",
+                "campaign_name",
+                "campaign_product_source",
+                "campaign_system_origin",
+                "campaign_type",
+                "catalog_enabled",
+                "code",
+                "create_time",
+                "data",
+                "deep_bid_type",
+                "disable_skan_campaign",
+                "is_advanced_dedicated_campaign",
+                "is_new_structure",
+                "is_search_campaign",
+                "is_smart_performance_campaign",
+                "list",
+                "message",
+                "modify_time",
+                "objective",
+                "objective_type",
+                "operation_status",
+                "optimization_goal",
+                "page",
+                "page_info",
+                "page_size",
+                "po_number",
+                "postback_window_mode",
+                "request_id",
+                "rf_campaign_type",
+                "roas_bid",
+                "rta_bid_enabled",
+                "rta_id",
+                "rta_product_selection_enabled",
+                "sales_destination",
+                "secondary_status",
+                "special_industries",
+                "total_number",
+                "total_page",
+                "virtual_objective_type"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "filtering": {
+            "description": "Filters applied to the campaign list. Example: `filtering={\"campaign_automation_type\":\"UPGRADED_SMART_PLUS\"}`.",
+            "properties": {
+              "buying_types": {
+                "description": "Filter by buying type. Default value: `[\"AUCTION\", \"RESERVATION_RF\"]`. `RESERVATION_TOP_VIEW` cannot be combined with other values; to filter TopView campaigns, set this field to `[\"RESERVATION_TOP_VIEW\"]`.",
+                "items": {
+                  "enum": [
+                    "AUCTION",
+                    "RESERVATION_RF",
+                    "RESERVATION_TOP_VIEW"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "campaign_automation_type": {
+                "description": "Campaign automation type.",
+                "enum": [
+                  "MANUAL",
+                  "SMART_PLUS",
+                  "UPGRADED_SMART_PLUS"
+                ],
+                "type": "string"
+              },
+              "campaign_ids": {
+                "description": "Filter by campaign IDs. Maximum 100 IDs.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "campaign_name": {
+                "description": "Filter by campaign name. Fuzzy match is supported.",
+                "type": "string"
+              },
+              "campaign_product_source": {
+                "description": "Filter by product source. If this field is provided, only campaigns with `objective_type=PRODUCT_SALES` are returned; if `objective_type` is also specified, it must be `PRODUCT_SALES`.",
+                "enum": [
+                  "CATALOG",
+                  "STORE"
+                ],
+                "type": "string"
+              },
+              "campaign_system_origins": {
+                "description": "Filter by campaign origin. Default value: `[\"TT_ADS_PLATFORM\"]`. If you include `PROMOTE`, Promote campaigns can be returned, but only these fields are retrievable for a Promote campaign: `advertiser_id`, `campaign_id`, `create_time`, `campaign_name`, `operation_status`, and `secondary_status`.",
+                "items": {
+                  "enum": [
+                    "PROMOTE",
+                    "TT_ADS_PLATFORM"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "campaign_type": {
+                "description": "Filter by regular campaign or iOS 14 campaign.",
+                "enum": [
+                  "REGULAR_CAMPAIGN",
+                  "IOS14_CAMPAIGN"
+                ],
+                "type": "string"
+              },
+              "creation_filter_end_time": {
+                "description": "Upper bound of campaign creation time in `YYYY-MM-DD HH:MM:SS` (UTC). Returns campaigns created earlier than this time. A time range within 6 months is suggested to avoid affecting task success and speed.",
+                "type": "string"
+              },
+              "creation_filter_start_time": {
+                "description": "Lower bound of campaign creation time in `YYYY-MM-DD HH:MM:SS` (UTC). Returns campaigns created later than this time. A time range within 6 months is suggested to avoid affecting task success and speed.",
+                "type": "string"
+              },
+              "creative_campaign_type": {
+                "description": "Filter by whether the campaign is a Smart+, Search Ads, or neither. If omitted, all campaigns are returned.",
+                "items": {
+                  "enum": [
+                    "SPC",
+                    "SEARCH_CAMPAIGN",
+                    "OTHER"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "is_smart_performance_campaign": {
+                "description": "Filter by whether the campaign is an automated campaign type. `true` returns Smart+ Campaigns or Smart Performance Web Campaigns. `false` returns standard campaign types. If omitted, all campaigns are returned.",
+                "type": "boolean"
+              },
+              "objective_type": {
+                "description": "Filter by advertising objective. If `campaign_product_source` is provided, this filter can only be `PRODUCT_SALES`.",
+                "type": "string"
+              },
+              "optimization_goal": {
+                "description": "Optimization goal.",
+                "type": "string"
+              },
+              "primary_status": {
+                "description": "Primary status filter. To query deleted campaigns, set this field to `STATUS_DELETE`.",
+                "type": "string"
+              },
+              "sales_destination": {
+                "description": "Sales destination, the destination where you want to drive sales.",
+                "enum": [
+                  "TIKTOK_SHOP",
+                  "WEBSITE",
+                  "APP",
+                  "WEB_AND_APP"
+                ],
+                "type": "string"
+              },
+              "secondary_status": {
+                "description": "Secondary campaign status filter. To query deleted campaigns, set this field to `CAMPAIGN_STATUS_DELETE`. This field is not returned in the sandbox environment because campaigns are not actually delivered. Valid values depend on the `primary_status` you specify.",
+                "type": "string"
+              },
+              "split_test_enabled": {
+                "description": "Filter by whether split test is enabled. `true` returns only campaigns with split test enabled; `false` returns only campaigns without it. If omitted, all campaigns are returned.",
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "page": {
+            "description": "Current page number. Default value: `1`. Must be greater than or equal to 1.",
+            "format": "double",
+            "type": "number"
+          },
+          "page_size": {
+            "description": "Page size. Default value: `10`. Valid range: 1 to 1,000.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "advertiser_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "ads.get_ads",
+      "tool_name": "ad_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "advertiser_id": {
+            "description": "Advertiser ID.",
+            "type": "string"
+          },
+          "exclude_field_types_in_response": {
+            "description": "Field types to exclude from the response.",
+            "items": {
+              "enum": [
+                "NULL_FIELD"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "fields": {
+            "description": "Fields to return. Use field names from the response `list` object. If omitted, all fields are returned by default.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "filtering": {
+            "description": "Filters for the query. Example: `filtering={\"campaign_automation_type\":\"UPGRADED_SMART_PLUS\"}`.",
+            "properties": {
+              "ad_ids": {
+                "description": "List of ad IDs. Max size: 100.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "ad_ids_v2": {
+                "description": "List of v2 ad IDs. Supports Manual Ad IDs and Upgraded Smart+ Ad IDs. Max size: 100. When filtering by Upgraded Smart+ Ad IDs, the response includes only `advertiser_id`, `campaign_id`, `campaign_name`, `adgroup_id`, `adgroup_name`, `ad_id_v2`, `ad_name`, and `campaign_automation_type`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "adgroup_ids": {
+                "description": "List of ad group IDs. Max size: 100.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "buying_types": {
+                "description": "Buying types to filter by. Default: `[\"AUCTION\", \"RESERVATION_RF\"]`. `RESERVATION_TOP_VIEW` cannot be combined with other values; to filter TopView ads, set this field to `[\"RESERVATION_TOP_VIEW\"]`.",
+                "items": {
+                  "enum": [
+                    "AUCTION",
+                    "RESERVATION_RF",
+                    "RESERVATION_TOP_VIEW"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "campaign_automation_type": {
+                "description": "Campaign automation type.",
+                "enum": [
+                  "MANUAL",
+                  "SMART_PLUS",
+                  "UPGRADED_SMART_PLUS"
+                ],
+                "type": "string"
+              },
+              "campaign_ids": {
+                "description": "List of campaign IDs. Max size: 100.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "campaign_system_origins": {
+                "description": "Origins of the campaigns the ads belong to. Default: `[\"TT_ADS_PLATFORM\"]`. If set to `PROMOTE`, only `advertiser_id`, `campaign_id`, `campaign_name`, `adgroup_id`, `adgroup_name`, `ad_id`, `ad_name`, `create_time`, `operation_status`, and `secondary_status` can be retrieved for those ads.",
+                "items": {
+                  "enum": [
+                    "PROMOTE",
+                    "TT_ADS_PLATFORM"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "creation_filter_end_time": {
+                "description": "Return ads created earlier than this UTC timestamp in `YYYY-MM-DD HH:MM:SS` format. For performance and reliability, keep the creation-time filter within a six-month range.",
+                "type": "string"
+              },
+              "creation_filter_start_time": {
+                "description": "Return ads created later than this UTC timestamp in `YYYY-MM-DD HH:MM:SS` format. For performance and reliability, keep the creation-time filter within a six-month range.",
+                "type": "string"
+              },
+              "creative_material_mode": {
+                "description": "Creative delivery strategy.",
+                "enum": [
+                  "CUSTOM",
+                  "DYNAMIC",
+                  "SMART_CREATIVE"
+                ],
+                "type": "string"
+              },
+              "destination": {
+                "description": "Destination page type to filter by. `APP` applies when the ad group's `promotion_type` is `APP_ANDROID` or `APP_IOS`. `TIKTOK_INSTANT_PAGE` applies when the ad specifies a TikTok Instant Page `page_id`. `WEBSITE` applies when the ad specifies `landing_page_url`. If you also specify `objective_type`, only destination values supported for that objective are valid.",
+                "enum": [
+                  "APP",
+                  "TIKTOK_INSTANT_PAGE",
+                  "WEBSITE",
+                  "SOCIAL_MEDIA_APP",
+                  "PHONE_CALL"
+                ],
+                "type": "string"
+              },
+              "modified_after": {
+                "description": "Return ads modified after this UTC timestamp in `YYYY-MM-DD HH:MM:SS` format. For performance and reliability, keep the modification-time filter within a six-month range.",
+                "type": "string"
+              },
+              "objective_type": {
+                "description": "Advertising objective. If you filter by either `WEB_CONVERSIONS` or `CONVERSIONS`, the response returns ads for both `WEB_CONVERSIONS` and `CONVERSIONS`.",
+                "type": "string"
+              },
+              "optimization_goal": {
+                "description": "Optimization goal.",
+                "type": "string"
+              },
+              "primary_status": {
+                "description": "Primary ad status.",
+                "type": "string"
+              },
+              "secondary_status": {
+                "description": "Ad secondary status. Not returned in the sandbox environment because ads are not actually delivered. Valid values depend on the `primary_status` you specify.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "page": {
+            "description": "Current page number. Default: `1`. Value range: `>= 1`.",
+            "format": "double",
+            "type": "number"
+          },
+          "page_size": {
+            "description": "Page size. Default: `10`. Value range: `1-1000`.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "advertiser_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/open_mcp/tt-ads-mcp-flat"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
+    },
+    {
+      "operation": "finance.get_advertiser_balances",
+      "tool_name": "advertiser_balance_get",
+      "effect": "READ",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "bc_id": {
+            "description": "Business Center ID.",
+            "type": "string"
+          },
+          "fields": {
+            "description": "List of additional response fields to return. Supported values: `budget_remaining`, `budget_frequency_restriction`, `budget_amount_restriction`, `min_transferable_amount`, `max_transferable_amount`, and `balance_info`. If omitted, all standard information is returned by default except `budget_remaining`, `budget_frequency_restriction`, `min_transferable_amount`, `max_transferable_amount`, and `balance_info`. To retrieve these additional fields together with other fields, set `fields` to `[\"budget_remaining\", \"budget_frequency_restriction\", \"budget_amount_restriction\", \"min_transferable_amount\", \"max_transferable_amount\", \"balance_info\"]` and set `page_size` to `1`.",
+            "items": {
+              "enum": [
+                "budget_remaining",
+                "budget_frequency_restriction",
+                "budget_amount_restriction",
+                "min_transferable_amount",
+                "max_transferable_amount",
+                "balance_info"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "filtering": {
+            "description": "Filtering conditions.",
+            "properties": {
+              "advertiser_status": {
+                "description": "Filter by ad account display status.",
+                "items": {
+                  "enum": [
+                    "SHOW_ACCOUNT_STATUS_NOT_APPROVED",
+                    "SHOW_ACCOUNT_STATUS_APPROVED",
+                    "SHOW_ACCOUNT_STATUS_IN_REVIEW",
+                    "SHOW_ACCOUNT_STATUS_PUNISHED"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "keyword": {
+                "description": "Keyword used to search by ad account name or ad account ID.",
+                "type": "string"
+              },
+              "payment_portfolio_id": {
+                "description": "Valid only when the multiple Payment Portfolios feature is enabled. Filters results by Payment Portfolio ID. This feature is allowlist-only. If specified, the balance information in the response is for the ad account linked to this `payment_portfolio_id`.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "page": {
+            "description": "Page number. Default is `1`. Must be greater than or equal to `1`.",
+            "format": "double",
+            "type": "number"
+          },
+          "page_size": {
+            "description": "Page size. Default is `10`. Supported range: `1` to `50`. Set `page_size` to `1` when requesting the additional fields `budget_remaining`, `budget_frequency_restriction`, `budget_amount_restriction`, `min_transferable_amount`, `max_transferable_amount`, and `balance_info` together with other fields.",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "bc_id"
+        ]
+      },
+      "output_schema": null,
+      "response_shape": "OBJECT",
+      "source_urls": [
+        "https://business-api.tiktok.com/portal/docs/get-the-balance-and-budget-of-ad-accounts/v1.3"
+      ],
+      "evidence": "DOCUMENTED",
+      "text_json_envelope": false
     }
   ]
 }

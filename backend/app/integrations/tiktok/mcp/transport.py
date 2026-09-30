@@ -375,6 +375,7 @@ class BoundMCPClient:
         self._lock = threading.Lock()
         self._pid = os.getpid()
         self._catalog_ready = False
+        self._current_tools: dict[str, dict[str, Any]] = {}
         self._cursors: set[str] = set()
         self._visited_cursors: set[str | None] = set()
         self._closed = False
@@ -445,8 +446,9 @@ class BoundMCPClient:
             cursor = page.next_cursor
             if cursor is None:
                 break
-        for contract in self._contracts.values():
-            verify_tool_schema(contract, observed.get(contract.tool_name, {}))
+        # 完整分页仍拒绝重复工具；只核对本次实际使用的完整 schema，
+        # 缺少另一种广告/财务工具不能阻断已核实的读取能力。
+        self._current_tools = observed
         self._catalog_ready = True
 
     async def _perform(
@@ -456,6 +458,10 @@ class BoundMCPClient:
             await self._preload_catalog()
             if state.tool_name is None:
                 raise _error("mcp_tool_unavailable")
+            current = self._current_tools.get(state.tool_name)
+            if current is None:
+                raise _error("mcp_tool_unavailable")
+            verify_tool_schema(self._contracts[state.operation], current)
             result = await self._session_client().call_tool(state.tool_name, arguments)
             if self._response_observer and state.operation in VIDEO_RESPONSE_OPERATIONS:
                 assert state.advertiser_id is not None
@@ -481,6 +487,7 @@ class BoundMCPClient:
     ) -> McpBusinessResponse:
         self._acquire()
         state = None
+        contract = None
         future: Future[McpBusinessResponse] | None = None
         self._callback_error = None
         try:
@@ -497,7 +504,9 @@ class BoundMCPClient:
                     or not self._observed
                 ):
                     raise _error("mcp_tool_unavailable")
-                verify_tool_schema(contract, self._observed.get(contract.tool_name, {}))
+                if contract.tool_name not in self._observed:
+                    raise _error("mcp_tool_unavailable")
+                verify_tool_schema(contract, self._observed[contract.tool_name])
                 if type(arguments) is not dict:
                     raise _error("mcp_arguments_invalid")
                 snapshot = json.loads(json.dumps(arguments, allow_nan=False))
@@ -521,8 +530,23 @@ class BoundMCPClient:
                         sent = state.sent
                 else:
                     sent = False
-                if (
+                # 完整的只读业务拒绝不会留下远端副作用或悬挂传输；
+                # 只保留会话复用，不改变该次调用的 UNKNOWN 证据或退役状态。
+                completed_read_rejection = (
                     sent
+                    and contract is not None
+                    and contract.effect == "READ"
+                    and isinstance(exc, RemoteCallError)
+                    and exc.code == "mcp_business_error"
+                    and future is not None
+                    and future.done()
+                    and self._callback_error is None
+                    and state is not None
+                    and state.failure is None
+                    and state.interruption is None
+                )
+                if (
+                    (sent and not completed_read_rejection)
                     or isinstance(exc, SDK_SCOPE_INTERRUPTS)
                     or (future is not None and not future.done())
                 ):

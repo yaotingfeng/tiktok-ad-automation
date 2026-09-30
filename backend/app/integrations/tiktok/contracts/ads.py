@@ -3,6 +3,7 @@
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Literal, Protocol
 from uuid import UUID
 
@@ -131,6 +132,10 @@ class AdMaterialUsage:
     local_material_id: UUID | None
     operation_status: str | None
     complete: bool
+    name: str = ""
+    main_material_id: str | None = None
+    main_material_type: str | None = None
+    creative_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.use_ref, MaterialUseRef):
@@ -142,6 +147,15 @@ class AdMaterialUsage:
         require_optional_status(self.operation_status)
         if type(self.complete) is not bool:
             raise ValueError("invalid material completeness")
+        if type(self.name) is not str:
+            raise ValueError("invalid material name")
+        if (self.main_material_id is None) != (self.main_material_type is None):
+            raise ValueError("main material requires typed identity")
+        if self.main_material_id is not None:
+            require_id(self.main_material_id)
+            assert self.main_material_type is not None
+            require_text(self.main_material_type)
+        require_strings(self.creative_ids)
 
 
 @dataclass(frozen=True)
@@ -176,6 +190,8 @@ class DirectoryPage:
     complete: bool
     evidence: CallEvidence
     page: int = 1
+    materials_complete: bool = True
+    material_missing_reason: str | None = None
 
     def __post_init__(self) -> None:
         if type(self.items) is not tuple or any(
@@ -187,7 +203,53 @@ class DirectoryPage:
         ):
             raise ValueError("invalid material usage items")
         require_page_state(self.page, self.next_page, self.complete, self.evidence)
+        if type(self.materials_complete) is not bool:
+            raise ValueError("invalid materials coverage")
+        require_optional_status(self.material_missing_reason)
+        if self.materials_complete != (self.material_missing_reason is None):
+            raise ValueError("complete materials cannot have missing reason")
+
+
+@dataclass(frozen=True)
+class AccountBalance:
+    amount: Decimal | None
+    currency: str
+    availability: str
+    observed_at: datetime
+    evidence: CallEvidence
+    balance_scope: Literal["ADVERTISER", "PORTFOLIO", "UNKNOWN"] = "UNKNOWN"
+    scope_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.amount is not None and (
+            not isinstance(self.amount, Decimal) or not self.amount.is_finite()
+        ):
+            raise ValueError("balance requires exact finite decimal")
+        if type(self.currency) is not str:
+            raise ValueError("invalid currency")
+        require_text(self.availability)
+        require_aware(self.observed_at)
+        if not isinstance(self.evidence, CallEvidence):
+            raise ValueError("invalid balance evidence")
+        if self.balance_scope not in {"ADVERTISER", "PORTFOLIO", "UNKNOWN"}:
+            raise ValueError("invalid balance scope")
+        if self.scope_id is not None:
+            require_id(self.scope_id)
+        if self.balance_scope != "UNKNOWN" and self.scope_id is None:
+            raise ValueError("account balance requires scope identity")
+        if self.availability == "AVAILABLE" and (
+            self.amount is None or not self.currency or self.balance_scope == "UNKNOWN"
+        ):
+            raise ValueError("available balance requires amount, currency and scope")
+        if self.amount is not None and self.availability != "AVAILABLE":
+            raise ValueError("unavailable balance cannot publish amount")
+        if self.balance_scope == "UNKNOWN" and (
+            self.amount is not None or self.scope_id is not None
+        ):
+            raise ValueError("unknown scope cannot publish balance")
 
 
 class AdsReadOperations(Protocol):
     def read_page(self, query: DirectoryQuery) -> DirectoryPage: ...
+
+    def read_balance(self, advertiser_id: str) -> AccountBalance: ...

@@ -274,7 +274,9 @@ def test_supplemental_schema_must_match_both_saved_and_live_catalog(
             client.builds.disable_adgroup(
                 advertiser_id=scope.advertiser_id, adgroup_id=scope.adgroup_id
             )
-    assert error.value.code == "mcp_contract_changed"
+    assert error.value.code == (
+        "mcp_tool_unavailable" if changed == "missing" else "mcp_contract_changed"
+    )
     assert business_calls(gateway_wire, gateway_case[1].channel) == []
 
 

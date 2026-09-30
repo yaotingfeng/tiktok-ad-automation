@@ -39,7 +39,9 @@ def remaining(deadline: datetime) -> float:
 
 
 @contextmanager
-def _strict_sdk_envelope(client: Any) -> Iterator[None]:
+def _strict_sdk_envelope(
+    client: Any, *, exact: dict[str, Any] | None = None
+) -> Iterator[None]:
     # 固定 SDK 会把 code 经 int() 转换，再丢掉 code/message；必须在其
     # deserialize 入口检查原始 JSON，不能把已经转换的模型当原始证据。
     original = client.deserialize
@@ -61,6 +63,9 @@ def _strict_sdk_envelope(client: Any) -> Iterator[None]:
             or (raw["code"] == 0 and type(raw.get("data")) is not dict)
         ):
             raise DomainError("tiktok_response_error", "TikTok 返回不支持的数据结构")
+        if exact is not None and raw["code"] == 0:
+            # 只对显式选择精确数值的读取保留原始十进制文本，不能从 SDK float 反推。
+            exact["data"] = json.loads(response.data, parse_float=str)["data"]
         # 整数非零业务码仍交由原 SDK 抛错，再由 invoke 的既有分支脱敏。
         return original(response, response_type)
 
@@ -87,12 +92,17 @@ class OfficialReadRequests:
         operation: str,
         advertiser_id: str | None,
         send: Callable[[tuple[float, float]], object],
+        *,
+        exact_numbers: bool = False,
     ) -> McpBusinessResponse:
         remaining(self._deadline)
         with self._scope(advertiser_id, operation, self._deadline):
             budget = remaining(self._deadline)
             try:
-                with _strict_sdk_envelope(self.client):
+                exact: dict[str, Any] = {}
+                with _strict_sdk_envelope(
+                    self.client, exact=exact if exact_numbers else None
+                ):
                     response = send((min(5.0, budget), min(30.0, budget)))
             except ApiException, TiktokSDKError, HTTPError:
                 raise DomainError(
@@ -100,6 +110,10 @@ class OfficialReadRequests:
                 ) from None
             remaining(self._deadline)
             data = checked_data(response)
+            if exact_numbers:
+                if "data" not in exact:
+                    raise DomainError("tiktok_response_error", "缺少原始数值回执")
+                data = exact["data"]
             request_id = (
                 response.get("request_id")
                 if isinstance(response, dict)

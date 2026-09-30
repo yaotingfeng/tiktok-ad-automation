@@ -19,6 +19,9 @@ _INVALID = object()
 # 官方已接入业务工具使用 JSON TextContent 承载同一 code/data envelope。
 # 只扩展明确的操作/工具对；结构、错误码、重复键及双载体冲突校验保持不变。
 _NATIVE_TEXT_TOOLS = {
+    ("ads.get_campaigns", "campaign_get"),
+    ("ads.get_ads", "ad_get"),
+    ("finance.get_advertiser_balances", "advertiser_balance_get"),
     ("materials.share_assets", "creative_asset_share_get"),
     ("scene.list_identities", "identity_get"),
     ("scene.list_minis", "minis_get"),
@@ -214,7 +217,19 @@ def decode_mcp_result(
 
     data = raw["data"]
     if (
-        contract.operation in {"build.get_campaigns", "build.get_adgroups"}
+        contract.operation
+        in {
+            "ads.get_campaigns",
+            "ads.get_ads",
+            "finance.get_advertiser_balances",
+        }
+        and receipt_text is not None
+    ):
+        # 先完成双载体一致性与业务 envelope 校验，再从原文保留十进制数字。
+        data = json.loads(receipt_text, parse_float=str)["data"]
+    if (
+        contract.operation
+        in {"build.get_campaigns", "build.get_adgroups", "build.get_regular_adgroups"}
         and receipt_text is not None
     ):
         # 金额从已完整校验的原始 JSON 数字重新提取，不能由 float 转回十进制冒充精度。
@@ -239,7 +254,14 @@ def decode_mcp_result(
                             **row,
                             **{
                                 key: exact_row[key]
-                                for key in ("budget", "roas_bid")
+                                for key in (
+                                    "budget",
+                                    "roas_bid",
+                                    "current_budget",
+                                    "min_budget",
+                                    "bid_price",
+                                    "conversion_bid_price",
+                                )
                                 if key in exact_row
                             },
                         }

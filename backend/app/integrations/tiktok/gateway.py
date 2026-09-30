@@ -15,8 +15,15 @@ from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.credentials import decrypt_credentials
 from app.core.errors import DomainError
+from app.integrations.tiktok.adapters.ads_read import (
+    ADS_OPERATIONS,
+    FINANCE_OPERATION,
+    FinanceReadState,
+)
+from app.integrations.tiktok.adapters.mcp_ads import McpAdsReadOperations
 from app.integrations.tiktok.adapters.mcp_builds import McpBuildOperations
 from app.integrations.tiktok.adapters.mcp_materials import MCPMaterialOperations
+from app.integrations.tiktok.adapters.sdk_ads import SdkAdsReadOperations
 from app.integrations.tiktok.adapters.sdk_builds import ApiBuildOperations
 from app.integrations.tiktok.adapters.sdk_materials import SDKMaterialOperations
 from app.integrations.tiktok.admission import (
@@ -30,6 +37,7 @@ from app.integrations.tiktok.contracts.accounts import (
     AuthorizationFacts,
     RuntimeReadContext,
 )
+from app.integrations.tiktok.contracts.ads import AdsReadOperations
 from app.integrations.tiktok.contracts.builds import BuildOperations
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.integrations.tiktok.contracts.materials import MaterialOperations
@@ -64,12 +72,14 @@ from app.modules.accounts.connection_models import (
     ConnectionAuthorization,
     ConnectionToolObservation,
 )
-from app.modules.accounts.models import TikTokConnection
+from app.modules.accounts.models import AdvertiserAccount, TikTokConnection
 from app.modules.accounts.routing import Capability, verify_route
 
 # 按精确操作登记所需权限；不得按前缀把未来写操作默认为 read。
 _OPERATION_CAPABILITIES: dict[str, Capability] = {
     **dict.fromkeys(PROTOCOL_OPERATIONS, "read"),
+    **dict.fromkeys(ADS_OPERATIONS.values(), "read"),
+    FINANCE_OPERATION: "read",
     "accounts.authorization_facts": "read",
     "accounts.list_bcs": "read",
     "accounts.list_bc_assets": "read",
@@ -116,6 +126,7 @@ class TikTokGateway:
     scenes: ScenesGateway
     materials: MaterialOperations
     builds: BuildOperations
+    ads: AdsReadOperations
 
 
 def _capability(advertiser_id: str | None, operation: str) -> Capability:
@@ -124,12 +135,14 @@ def _capability(advertiser_id: str | None, operation: str) -> Capability:
         raise DomainError("gateway_operation_forbidden", "本次会话不支持该操作")
     if (
         advertiser_id is None
-        and operation not in PROTOCOL_OPERATIONS | _DIRECTORY_OPERATIONS
+        and operation
+        not in PROTOCOL_OPERATIONS | _DIRECTORY_OPERATIONS | {FINANCE_OPERATION}
     ):
         raise DomainError("account_required", "该操作必须指定广告账户")
     if (
         advertiser_id is not None
-        and operation in PROTOCOL_OPERATIONS | _DIRECTORY_OPERATIONS
+        and operation
+        in PROTOCOL_OPERATIONS | _DIRECTORY_OPERATIONS | {FINANCE_OPERATION}
     ):
         raise DomainError("gateway_operation_forbidden", "目录操作归属参数无效")
     return capability
@@ -277,6 +290,24 @@ def open_tiktok_gateway(
                 )
             observed = json.loads(json.dumps(observation.tool_schemas))
 
+    finance = FinanceReadState()
+
+    def check_account(advertiser_id: str) -> str:
+        # 本地权限读独立事务；既用于未知财务证据，也用于完整分页后再次过滤权限。
+        if group_isolation is not None:
+            require_isolation_target(group_isolation, advertiser_id=advertiser_id)
+        with bounded_session(database_engine, task_deadline=task_deadline) as session:
+            verify_route(
+                session,
+                context=context,
+                route=route,
+                advertiser_id=advertiser_id,
+                capability="read",
+            )
+            account = session.get(AdvertiserAccount, (route.tenant_id, advertiser_id))
+            assert account is not None
+            return account.currency
+
     # 此后不保留 Session；portal 回调各自拥有独立、限时的数据库事务。
     def authorize(advertiser_id: str | None, operation: str) -> None:
         if before_request is not None:
@@ -317,6 +348,17 @@ def open_tiktok_gateway(
                 advertiser_id=advertiser_id,
                 capability=capability,
             )
+            if operation == FINANCE_OPERATION:
+                current = _authorization(session, route)
+                subject = current.upstream_subject if current else None
+                target = finance.require(subject)
+                verify_route(
+                    session,
+                    context=context,
+                    route=route,
+                    advertiser_id=target,
+                    capability="read",
+                )
             row = session.get(TikTokConnection, route.connection_id)
             if row is None or row.credential_revision != credential_revision:
                 # 当前会话内存 header 已冻结；发送前退出后可按同一 route 新建会话，不重放已发调用。
@@ -399,6 +441,13 @@ def open_tiktok_gateway(
                 group_isolation=group_isolation,
             ) as client:
                 yield TikTokGateway(
+                    ads=McpAdsReadOperations(
+                        client,
+                        route=route,
+                        check_account=check_account,
+                        subject_id=facts.subject_id,
+                        finance=finance,
+                    ),
                     accounts=McpAccountsGateway(
                         client,
                         context=read_context,
@@ -422,6 +471,15 @@ def open_tiktok_gateway(
         else:
             with official_client(access_token=token) as official:
                 yield TikTokGateway(
+                    ads=SdkAdsReadOperations(
+                        official,
+                        route=route,
+                        check_account=check_account,
+                        subject_id=facts.subject_id,
+                        finance=finance,
+                        request_scope=request_scope,
+                        deadline=task_deadline,
+                    ),
                     accounts=OfficialAccountsGateway(
                         official,
                         context=read_context,

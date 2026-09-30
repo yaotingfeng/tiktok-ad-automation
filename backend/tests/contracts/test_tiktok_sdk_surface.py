@@ -148,3 +148,57 @@ def test_upload_rejects_json_body_before_dispatch(intercepted_client):
         )
 
     call_api.assert_not_called()
+
+
+ADS_READ_METHODS = [
+    (
+        api,
+        ("smart_plus_" if smart else "") + kind + "_get",
+        "/open_api/v1.3/" + ("smart_plus/" if smart else "") + kind + "/get/",
+    )
+    for api, kind in (
+        (sdk.CampaignCreationApi, "campaign"),
+        (sdk.AdgroupApi, "adgroup"),
+        (sdk.AdApi, "ad"),
+    )
+    for smart in (False, True)
+]
+
+
+@pytest.mark.parametrize("api,method,path", ADS_READ_METHODS)
+def test_ads_directory_sdk_get_path_filters_and_pagination(
+    intercepted_client, api, method, path
+):
+    client, call = intercepted_client
+    filtering = {"primary_status": "STATUS_ALL", "campaign_ids": ["90071992547409931"]}
+    getattr(api(client), method)(
+        access_token="synthetic-token",
+        advertiser_id="account-1",
+        filtering=filtering,
+        page=3,
+        page_size=17,
+    )
+    args, kwargs = call.call_args
+    assert args[:2] == (path, "GET")
+    assert dict(args[3]) == {
+        "advertiser_id": "account-1",
+        "filtering": filtering,
+        "page": 3,
+        "page_size": 17,
+    }
+    assert args[4]["Access-Token"] == "synthetic-token"
+    assert kwargs["body"] is None
+
+
+def test_finance_generated_method_uses_bc_and_rejects_fields(intercepted_client):
+    client, call = intercepted_client
+    sdk.BCApi(client).advertiser_balance_get(
+        bc_id="bc-1", access_token="synthetic-token", page=2, page_size=1
+    )
+    args, _ = call.call_args
+    assert args[:2] == ("/open_api/v1.3/advertiser/balance/get/", "GET")
+    assert dict(args[3]) == {"bc_id": "bc-1", "page": 2, "page_size": 1}
+    with pytest.raises(TypeError, match="fields"):
+        sdk.BCApi(client).advertiser_balance_get(
+            bc_id="bc-1", access_token="synthetic-token", fields=["balance_info"]
+        )

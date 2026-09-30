@@ -3,6 +3,9 @@ from fastapi.responses import JSONResponse
 
 # Register exact business codes here; never infer status from provider text.
 ERROR_HTTP_STATUS: dict[str, int] = {
+    "ads_type_unavailable": 409,
+    "ads_query_invalid": 422,
+    "ads_response_invalid": 502,
     "tenant_name_conflict": 409,
     "push_unauthorized": 401,
     "push_forbidden": 403,
