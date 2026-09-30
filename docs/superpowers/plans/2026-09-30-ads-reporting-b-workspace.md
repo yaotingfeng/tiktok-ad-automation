@@ -44,7 +44,7 @@
 `schemas.py` 固定以下 Pydantic 合同，日期为 `date`、时点为带时区 `datetime`、金额为 `Decimal`（JSON 使用字符串）：
 
 - `ReportingFilter`：`dimension: Literal['account','campaign','adgroup','ad','material','drama']`、`start_date/end_date`、`advertiser_ids/ids: tuple[str,...]`、`query`、`ad_types/operation_statuses/review_statuses/budget_modes`、`created_from/to`、`naming_status`、`min/max_spend`、`min/max_d0_roas`、`min/max_target_roas`、`sort_by`、`sort_direction`。端点和保存视图共用此类型。
-- `MetricVector`：`currency`、`timezone`、`attribution`、`optimization_goal`、`values: dict[str,Decimal|None]`、`availability: dict[str,Literal['VALUE','MISSING','UNSUPPORTED','FAILED']]`；B2 按这些口径分桶后聚合。
+- `MetricVector`：`currency`、`timezone`、`attribution`、`optimization_goal`（当前必须为 `None`）、`values: dict[str,Decimal|None]`、`availability: dict[str,Literal['AVAILABLE','MISSING','UNAVAILABLE','UNSUPPORTED','FAILED']]`；指标键沿用 A 的 canonical 名称（例如 `native_growth_ad_revenue_value_d0`），B2 按这些口径分桶后聚合。
 - `ReportRow`：`row_key`、显示字段、`refs: tuple[EntityRef,...]`、`material_uses: tuple[MaterialUseRef,...]`、`metric_buckets`、`capabilities`、`directory_versions`、`membership_digest`；使用 A 的 EntityRef/MaterialUseRef，不重新定义。
 - `QuerySnapshotPublic(snapshot_id, expires_at, filters, publication_versions)`；`AdsQueryPage(snapshot, items, total, summary, coverage, next_cursor)`。
 - `SelectionRequest(snapshot_id, mode: Literal['EXPLICIT','ALL_MATCHING'], row_keys: tuple[str,...], excluded_row_keys: tuple[str,...])`；`FrozenSelection(selection_id, snapshot_id, refs, material_uses, membership_digest, expires_at)` 供 C 消费。
@@ -57,11 +57,11 @@
 
 **Interfaces:** 消费 A 的 AdObject/ReportFact/ReportCoverage。产生 `compile_filter(filters:ReportingFilter)->CompiledFilter`；`QuerySnapshot`、`QuerySnapshotRow`、`FrozenSelectionRecord`、`SavedReportView`、`ReportExport` 五个持久模型。所有快照保存 tenant/BC/actor、筛选摘要、报告与命名版本，快照行唯一键为 snapshot＋row_key。
 
-- [ ] **RED：** 写 `test_filter_literals_and_scope`，创建含名称 `MAX_% 甲` 和其他租户同名对象，断言 `compile_filter(ReportingFilter(dimension='campaign', start_date=date(2026,9,30), end_date=date(2026,9,30), query='MAX_% 甲')).keywords == ('MAX_%','甲')`，SQL 参数转义 `%/_/反斜杠`；通过 SQL 执行结果断言只命中当前 BC 的完整关键词对象。`conftest.py` 创建 `report_case` fixture，提供 `session/context/other_context/bc_id/headers/other_headers` 及 `seed_campaign(name,advertiser_id,spend,d0_revenue,status='ENABLE') -> EntityRef`，默认事实日期 2026-09-30、币种 USD、时区 UTC。
-- [ ] **运行 RED：** `uv run --frozen pytest tests/modules/reporting/test_filters.py -q`（backend）；预期新模型/筛选能力缺失失败，不以环境连接失败充当 RED。
-- [ ] **实现：** 使用现有 require_tenant 和 BCAccountAccess 限定账户，SQL 参数化；名称多词 AND，ID 集合精确 IN；日期倒置、未知排序字段、NaN/Infinity 阈值拒绝。索引覆盖快照所有者/到期、row_key及稳定序号；迁移不修改 A 的实体主键。
-- [ ] **GREEN：** 上述 pytest 通过，增加 `other_context` 读取快照 404、viewer 读取允许、非法数值 422 断言；专用库运行 `uv run --frozen alembic check` 无新增差异。
-- [ ] **提交：** 仅本任务文件，`git commit -m 'reports: define scoped filters and query snapshots'`；按总计划执行显式暂存和提交前检查。
+- [x] **RED：** 写 `test_filter_literals_and_scope`，创建含名称 `MAX_% 甲` 和其他租户同名对象，断言 `compile_filter(ReportingFilter(dimension='campaign', start_date=date(2026,9,30), end_date=date(2026,9,30), query='MAX_% 甲')).keywords == ('MAX_%','甲')`，SQL 参数转义 `%/_/反斜杠`；通过 SQL 执行结果断言只命中当前 BC 的完整关键词对象。`conftest.py` 创建 `report_case` fixture，提供 `session/context/other_context/bc_id/headers/other_headers` 及 `seed_campaign(name,advertiser_id,spend,d0_revenue,status='ENABLE') -> EntityRef`，默认事实日期 2026-09-30、币种 USD、时区 UTC。
+- [x] **运行 RED：** `uv run --frozen pytest tests/modules/reporting/test_filters.py -q`（backend）；预期新模型/筛选能力缺失失败，不以环境连接失败充当 RED。
+- [x] **实现：** 使用现有 require_tenant 和 BCAccountAccess 限定账户，SQL 参数化；名称多词 AND，ID 集合精确 IN；日期倒置、未知排序字段、NaN/Infinity 阈值拒绝。索引覆盖快照所有者/到期、row_key及稳定序号；迁移不修改 A 的实体主键。
+- [x] **GREEN：** 上述 pytest 通过，增加 `other_context` 读取快照 404、viewer 读取允许、非法数值 422 断言；专用库运行 `uv run --frozen alembic check` 无新增差异。
+- [x] **提交：** 仅本任务文件，`git commit -m 'reports: define scoped filters and query snapshots'`；按总计划执行显式暂存和提交前检查。
 
 ## Task 2 (B2)：指标、六维聚合和观测趋势
 
