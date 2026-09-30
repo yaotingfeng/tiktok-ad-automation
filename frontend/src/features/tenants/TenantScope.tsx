@@ -5,7 +5,13 @@ import {
   useNavigate,
   useRouterState,
 } from "@tanstack/react-router"
-import { createContext, type ReactNode, useContext, useEffect } from "react"
+import {
+  createContext,
+  type ReactNode,
+  useContext,
+  useEffect,
+  useState,
+} from "react"
 import {
   AccountsService,
   type BCPublic,
@@ -64,6 +70,9 @@ export function TenantScopeProvider({
       },
   })
   const requestedBC = searchParams.bc_id
+  const [selectedBCId, setSelectedBCId] = useState<string | undefined>(
+    requestedBC,
+  )
   const tenantId = /^\/tenants\/([^/]+)/.exec(pathname)?.[1] ?? null
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -93,8 +102,10 @@ export function TenantScopeProvider({
         })
       ).data,
   })
+  const defaultBCId = tenant?.default_bc_id ?? bcQuery.data?.items[0]?.bc_id
+  const activeBCId = selectedBCId ?? requestedBC ?? defaultBCId
   const initialBC = bcQuery.data?.items.find(
-    (item) => item.bc_id === requestedBC,
+    (item) => item.bc_id === activeBCId,
   )
   const exactBC = useQuery({
     queryKey: ["tenant", tenantId, "bcs", "exact", requestedBC],
@@ -108,17 +119,17 @@ export function TenantScopeProvider({
         })
       ).data,
   })
-  const bc = requestedBC
+  const bc = activeBCId
     ? (initialBC ??
-      exactBC.data?.items.find((item) => item.bc_id === requestedBC) ??
+      exactBC.data?.items.find((item) => item.bc_id === activeBCId) ??
       null)
     : null
   // Scope identity comes only from a committed URL transition. Query results
   // validate that selection; they must never remount an unsaved editor first.
-  const bcId = requestedBC ?? null
-  const defaultBCId = tenant?.default_bc_id ?? bcQuery.data?.items[0]?.bc_id
+  const bcId = activeBCId ?? null
   const switchBC = (target: BCPublic) => {
     if (target.bc_id === bcId) return
+    setSelectedBCId(target.bc_id)
     void navigate({
       to: /\/build-tasks\//.test(pathname)
         ? `/tenants/${tenantId}/build-tasks`
@@ -142,6 +153,11 @@ export function TenantScopeProvider({
       replace: true,
     })
   }, [defaultBCId, requestedBC, pathname, navigate, searchParams])
+  useEffect(() => {
+    // 租户切换时重新绑定默认 BC；同租户手动切换不会被此 effect 覆盖。
+    if (requestedBC) setSelectedBCId(requestedBC)
+    else if (defaultBCId) setSelectedBCId(defaultBCId)
+  }, [tenantId, defaultBCId, requestedBC])
   useEffect(() => {
     if (!tenantId || !bcId) return
     return () => {

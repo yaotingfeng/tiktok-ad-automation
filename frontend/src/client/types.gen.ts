@@ -109,6 +109,79 @@ export type AccountPublic = {
 };
 
 /**
+ * AdDetailPublic
+ */
+export type AdDetailPublic = {
+    ref: EntityRef;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Ad Type
+     */
+    ad_type: string;
+    /**
+     * Configuration
+     */
+    configuration?: {
+        [key: string]: unknown;
+    };
+    /**
+     * Statuses
+     */
+    statuses?: {
+        [key: string]: string | null;
+    };
+    parent?: ParentRestrictionPublic | null;
+    /**
+     * Materials
+     */
+    materials?: Array<MaterialUsePublic>;
+    /**
+     * Operation History
+     */
+    operation_history?: Array<{
+        [key: string]: unknown;
+    }>;
+    /**
+     * Observed At
+     */
+    observed_at: string;
+};
+
+/**
+ * AdsQueryPage
+ */
+export type AdsQueryPage = {
+    snapshot: QuerySnapshotPublic;
+    /**
+     * Items
+     */
+    items?: Array<ReportRow>;
+    /**
+     * Total
+     */
+    total?: number;
+    /**
+     * Summary
+     */
+    summary?: {
+        [key: string]: unknown;
+    };
+    /**
+     * Coverage
+     */
+    coverage?: {
+        [key: string]: unknown;
+    };
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+};
+
+/**
  * AppConfiguration
  */
 export type AppConfiguration = {
@@ -1081,6 +1154,28 @@ export type DramaCandidate = {
 };
 
 /**
+ * EntityRef
+ */
+export type EntityRef = {
+    /**
+     * Tenant Id
+     */
+    tenant_id: string;
+    /**
+     * Advertiser Id
+     */
+    advertiser_id: string;
+    /**
+     * Kind
+     */
+    kind: 'campaign' | 'adgroup' | 'ad' | 'creative';
+    /**
+     * Remote Id
+     */
+    remote_id: string;
+};
+
+/**
  * ExecutionRoutePublic
  */
 export type ExecutionRoutePublic = {
@@ -1100,6 +1195,44 @@ export type ExecutionRoutePublic = {
      * Bc Id
      */
     bc_id: string;
+};
+
+/**
+ * ExportCreate
+ */
+export type ExportCreate = {
+    /**
+     * Snapshot Id
+     */
+    snapshot_id: string;
+    /**
+     * Idempotency Key
+     */
+    idempotency_key: string;
+};
+
+/**
+ * ExportPublic
+ */
+export type ExportPublic = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Status
+     */
+    status: 'QUEUED' | 'RUNNING' | 'COMPLETE' | 'FAILED' | 'EXPIRED';
+    /**
+     * Coverage
+     */
+    coverage?: {
+        [key: string]: unknown;
+    };
+    /**
+     * Expires At
+     */
+    expires_at: string;
 };
 
 /**
@@ -1156,6 +1289,36 @@ export type FrozenGroup = {
      * Ads
      */
     ads: Array<FrozenAd>;
+};
+
+/**
+ * FrozenSelection
+ */
+export type FrozenSelection = {
+    /**
+     * Selection Id
+     */
+    selection_id: string;
+    /**
+     * Snapshot Id
+     */
+    snapshot_id: string;
+    /**
+     * Refs
+     */
+    refs?: Array<EntityRef>;
+    /**
+     * Material Uses
+     */
+    material_uses?: Array<MaterialUseRef>;
+    /**
+     * Membership Digest
+     */
+    membership_digest: string;
+    /**
+     * Expires At
+     */
+    expires_at: string;
 };
 
 /**
@@ -2112,6 +2275,52 @@ export type MaterialReissueReceipt = {
 };
 
 /**
+ * MaterialUsePublic
+ */
+export type MaterialUsePublic = {
+    use_ref: MaterialUseRef;
+    /**
+     * Name
+     */
+    name?: string;
+    /**
+     * Local Material Id
+     */
+    local_material_id?: string | null;
+    /**
+     * Operation Status
+     */
+    operation_status?: string | null;
+    /**
+     * Complete
+     */
+    complete?: boolean;
+    /**
+     * External
+     */
+    external?: boolean;
+};
+
+/**
+ * MaterialUseRef
+ */
+export type MaterialUseRef = {
+    ad_ref: EntityRef;
+    /**
+     * Platform Material Id
+     */
+    platform_material_id: string;
+    /**
+     * Ad Material Id
+     */
+    ad_material_id: string | null;
+    /**
+     * Material Type
+     */
+    material_type: string;
+};
+
+/**
  * McpBindingItem
  */
 export type McpBindingItem = {
@@ -2313,6 +2522,40 @@ export type Message = {
      * Message
      */
     message: string;
+};
+
+/**
+ * MetricVector
+ */
+export type MetricVector = {
+    /**
+     * Currency
+     */
+    currency: string;
+    /**
+     * Timezone
+     */
+    timezone: string;
+    /**
+     * Attribution
+     */
+    attribution: string;
+    /**
+     * Optimization Goal
+     */
+    optimization_goal?: string | null;
+    /**
+     * Values
+     */
+    values?: {
+        [key: string]: string | null;
+    };
+    /**
+     * Availability
+     */
+    availability?: {
+        [key: string]: 'AVAILABLE' | 'MISSING' | 'UNAVAILABLE' | 'UNSUPPORTED' | 'FAILED';
+    };
 };
 
 /**
@@ -2978,6 +3221,29 @@ export type Page_VersionPublic_ = {
 };
 
 /**
+ * ParentRestrictionPublic
+ */
+export type ParentRestrictionPublic = {
+    ref: EntityRef;
+    /**
+     * Operation Status
+     */
+    operation_status?: string | null;
+    /**
+     * Review Status
+     */
+    review_status?: string | null;
+    /**
+     * Delivery Status
+     */
+    delivery_status?: string | null;
+    /**
+     * Reasons
+     */
+    reasons?: Array<string>;
+};
+
+/**
  * PatchDraftRequest
  */
 export type PatchDraftRequest = {
@@ -3639,6 +3905,27 @@ export type PushItemPublic = {
 };
 
 /**
+ * QuerySnapshotPublic
+ */
+export type QuerySnapshotPublic = {
+    /**
+     * Snapshot Id
+     */
+    snapshot_id: string;
+    /**
+     * Expires At
+     */
+    expires_at: string;
+    filters: ReportingFilter_Output;
+    /**
+     * Publication Versions
+     */
+    publication_versions?: {
+        [key: string]: number;
+    };
+};
+
+/**
  * Recovery
  */
 export type Recovery = {
@@ -3791,6 +4078,236 @@ export type ReplacementPublic = {
 };
 
 /**
+ * ReportRow
+ */
+export type ReportRow = {
+    /**
+     * Row Key
+     */
+    row_key: string;
+    /**
+     * Display
+     */
+    display?: {
+        [key: string]: string | null;
+    };
+    /**
+     * Refs
+     */
+    refs?: Array<EntityRef>;
+    /**
+     * Material Uses
+     */
+    material_uses?: Array<MaterialUseRef>;
+    /**
+     * Metric Buckets
+     */
+    metric_buckets?: Array<MetricVector>;
+    /**
+     * Capabilities
+     */
+    capabilities?: {
+        [key: string]: boolean;
+    };
+    /**
+     * Directory Versions
+     */
+    directory_versions?: {
+        [key: string]: number;
+    };
+    /**
+     * Membership Digest
+     */
+    membership_digest?: string;
+    /**
+     * Coverage
+     */
+    coverage?: {
+        [key: string]: unknown;
+    };
+};
+
+/**
+ * ReportingFilter
+ */
+export type ReportingFilter_Input = {
+    /**
+     * Dimension
+     */
+    dimension: 'account' | 'campaign' | 'adgroup' | 'ad' | 'material' | 'drama';
+    /**
+     * Start Date
+     */
+    start_date: string;
+    /**
+     * End Date
+     */
+    end_date: string;
+    /**
+     * Advertiser Ids
+     */
+    advertiser_ids?: Array<string>;
+    /**
+     * Ids
+     */
+    ids?: Array<string>;
+    /**
+     * Query
+     */
+    query?: string | null;
+    /**
+     * Ad Types
+     */
+    ad_types?: Array<string>;
+    /**
+     * Operation Statuses
+     */
+    operation_statuses?: Array<string>;
+    /**
+     * Review Statuses
+     */
+    review_statuses?: Array<string>;
+    /**
+     * Budget Modes
+     */
+    budget_modes?: Array<string>;
+    /**
+     * Created From
+     */
+    created_from?: string | null;
+    /**
+     * Created To
+     */
+    created_to?: string | null;
+    /**
+     * Naming Status
+     */
+    naming_status?: string | null;
+    /**
+     * Min Spend
+     */
+    min_spend?: number | string | null;
+    /**
+     * Max Spend
+     */
+    max_spend?: number | string | null;
+    /**
+     * Min D0 Roas
+     */
+    min_d0_roas?: number | string | null;
+    /**
+     * Max D0 Roas
+     */
+    max_d0_roas?: number | string | null;
+    /**
+     * Min Target Roas
+     */
+    min_target_roas?: number | string | null;
+    /**
+     * Max Target Roas
+     */
+    max_target_roas?: number | string | null;
+    /**
+     * Sort By
+     */
+    sort_by?: string;
+    /**
+     * Sort Direction
+     */
+    sort_direction?: 'asc' | 'desc';
+};
+
+/**
+ * ReportingFilter
+ */
+export type ReportingFilter_Output = {
+    /**
+     * Dimension
+     */
+    dimension: 'account' | 'campaign' | 'adgroup' | 'ad' | 'material' | 'drama';
+    /**
+     * Start Date
+     */
+    start_date: string;
+    /**
+     * End Date
+     */
+    end_date: string;
+    /**
+     * Advertiser Ids
+     */
+    advertiser_ids?: Array<string>;
+    /**
+     * Ids
+     */
+    ids?: Array<string>;
+    /**
+     * Query
+     */
+    query?: string | null;
+    /**
+     * Ad Types
+     */
+    ad_types?: Array<string>;
+    /**
+     * Operation Statuses
+     */
+    operation_statuses?: Array<string>;
+    /**
+     * Review Statuses
+     */
+    review_statuses?: Array<string>;
+    /**
+     * Budget Modes
+     */
+    budget_modes?: Array<string>;
+    /**
+     * Created From
+     */
+    created_from?: string | null;
+    /**
+     * Created To
+     */
+    created_to?: string | null;
+    /**
+     * Naming Status
+     */
+    naming_status?: string | null;
+    /**
+     * Min Spend
+     */
+    min_spend?: string | null;
+    /**
+     * Max Spend
+     */
+    max_spend?: string | null;
+    /**
+     * Min D0 Roas
+     */
+    min_d0_roas?: string | null;
+    /**
+     * Max D0 Roas
+     */
+    max_d0_roas?: string | null;
+    /**
+     * Min Target Roas
+     */
+    min_target_roas?: string | null;
+    /**
+     * Max Target Roas
+     */
+    max_target_roas?: string | null;
+    /**
+     * Sort By
+     */
+    sort_by?: string;
+    /**
+     * Sort Direction
+     */
+    sort_direction?: 'asc' | 'desc';
+};
+
+/**
  * ResolveRequest
  */
 export type ResolveRequest = {
@@ -3930,6 +4447,83 @@ export type ResolvedLink = {
     requested_config?: {
         [key: string]: string | number | boolean | null;
     } | null;
+};
+
+/**
+ * SavedViewCreate
+ */
+export type SavedViewCreate = {
+    /**
+     * Name
+     */
+    name: string;
+    filters: ReportingFilter_Input;
+    /**
+     * Columns
+     */
+    columns?: Array<string>;
+};
+
+/**
+ * SavedViewPatch
+ */
+export type SavedViewPatch = {
+    /**
+     * Name
+     */
+    name?: string | null;
+    filters?: ReportingFilter_Input | null;
+    /**
+     * Columns
+     */
+    columns?: Array<string> | null;
+};
+
+/**
+ * SavedViewPublic
+ *
+ * 当前操作者在一个租户/BC 下保存的私有筛选视图。
+ */
+export type SavedViewPublic = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Name
+     */
+    name: string;
+    filters: ReportingFilter_Output;
+    /**
+     * Columns
+     */
+    columns?: Array<string>;
+    /**
+     * Created At
+     */
+    created_at: string;
+};
+
+/**
+ * SelectionRequest
+ */
+export type SelectionRequest = {
+    /**
+     * Snapshot Id
+     */
+    snapshot_id: string;
+    /**
+     * Mode
+     */
+    mode: 'EXPLICIT' | 'ALL_MATCHING';
+    /**
+     * Row Keys
+     */
+    row_keys?: Array<string>;
+    /**
+     * Excluded Row Keys
+     */
+    excluded_row_keys?: Array<string>;
 };
 
 /**
@@ -4582,6 +5176,66 @@ export type SubmitRequest = {
 };
 
 /**
+ * SyncRunPublic
+ */
+export type SyncRunPublic = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Coverage
+     */
+    coverage: string;
+    /**
+     * Error Code
+     */
+    error_code?: string | null;
+    /**
+     * Observed At
+     */
+    observed_at?: string | null;
+    /**
+     * Completed At
+     */
+    completed_at?: string | null;
+};
+
+/**
+ * SyncRunRequest
+ */
+export type SyncRunRequest = {
+    /**
+     * Advertiser Ids
+     */
+    advertiser_ids: Array<string>;
+    /**
+     * Scope
+     */
+    scope?: 'directory' | 'active' | 'report' | 'history' | 'targeted';
+    /**
+     * Start Date
+     */
+    start_date?: string | null;
+    /**
+     * End Date
+     */
+    end_date?: string | null;
+    /**
+     * Refs
+     */
+    refs?: Array<EntityRef>;
+};
+
+/**
  * TargetingAccount
  */
 export type TargetingAccount = {
@@ -4736,6 +5390,70 @@ export type Token = {
      * Token Type
      */
     token_type?: string;
+};
+
+/**
+ * TrendPoint
+ *
+ * 趋势分桶及其可比较的差值；缺失值保持 ``None``。
+ */
+export type TrendPoint = {
+    /**
+     * Bucket Start
+     */
+    bucket_start: string;
+    /**
+     * Bucket End
+     */
+    bucket_end: string;
+    /**
+     * Values
+     */
+    values?: {
+        [key: string]: string | null;
+    };
+    /**
+     * Availability
+     */
+    availability?: {
+        [key: string]: 'AVAILABLE' | 'MISSING' | 'UNAVAILABLE' | 'UNSUPPORTED' | 'FAILED';
+    };
+    /**
+     * Delta
+     */
+    delta?: {
+        [key: string]: string;
+    } | null;
+    /**
+     * Delta Reason
+     */
+    delta_reason?: 'SCOPE_CHANGED' | 'DATE_CHANGED' | null;
+};
+
+/**
+ * TrendPublic
+ *
+ * B2 对外趋势 DTO；coverage 显式区分完整、空结果和不完整。
+ */
+export type TrendPublic = {
+    /**
+     * Points
+     */
+    points?: Array<TrendPoint>;
+    /**
+     * Coverage
+     */
+    coverage?: {
+        [key: string]: unknown;
+    };
+    /**
+     * Actual Interval Minutes
+     */
+    actual_interval_minutes?: number | null;
+    /**
+     * Delta Reason
+     */
+    delta_reason?: 'SCOPE_CHANGED' | 'DATE_CHANGED' | null;
 };
 
 /**
@@ -8307,6 +9025,727 @@ export type providersListApplicationsResponses = {
 };
 
 export type providersListApplicationsResponse = providersListApplicationsResponses[keyof providersListApplicationsResponses];
+
+export type adsReportingQueryAdsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+        /**
+         * Dimension
+         */
+        dimension?: 'account' | 'campaign' | 'adgroup' | 'ad' | 'material' | 'drama';
+        /**
+         * Start Date
+         */
+        start_date?: string;
+        /**
+         * End Date
+         */
+        end_date?: string;
+        /**
+         * Advertiser Id
+         */
+        advertiser_id?: string | null;
+        /**
+         * Ids
+         */
+        ids?: string | null;
+        /**
+         * Query
+         */
+        query?: string | null;
+        /**
+         * Ad Types
+         */
+        ad_types?: string | null;
+        /**
+         * Operation Statuses
+         */
+        operation_statuses?: string | null;
+        /**
+         * Review Statuses
+         */
+        review_statuses?: string | null;
+        /**
+         * Budget Modes
+         */
+        budget_modes?: string | null;
+        /**
+         * Naming Status
+         */
+        naming_status?: string | null;
+        /**
+         * Min Spend
+         */
+        min_spend?: number | string | null;
+        /**
+         * Max Spend
+         */
+        max_spend?: number | string | null;
+        /**
+         * Min D0 Roas
+         */
+        min_d0_roas?: number | string | null;
+        /**
+         * Max D0 Roas
+         */
+        max_d0_roas?: number | string | null;
+        /**
+         * Min Target Roas
+         */
+        min_target_roas?: number | string | null;
+        /**
+         * Max Target Roas
+         */
+        max_target_roas?: number | string | null;
+        /**
+         * Created From
+         */
+        created_from?: string | null;
+        /**
+         * Created To
+         */
+        created_to?: string | null;
+        /**
+         * Sort By
+         */
+        sort_by?: string;
+        /**
+         * Sort Direction
+         */
+        sort_direction?: 'asc' | 'desc';
+        /**
+         * Snapshot Id
+         */
+        snapshot_id?: string | null;
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/ads';
+};
+
+export type adsReportingQueryAdsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adsReportingQueryAdsError = adsReportingQueryAdsErrors[keyof adsReportingQueryAdsErrors];
+
+export type adsReportingQueryAdsResponses = {
+    /**
+     * Successful Response
+     */
+    200: AdsQueryPage;
+};
+
+export type adsReportingQueryAdsResponse = adsReportingQueryAdsResponses[keyof adsReportingQueryAdsResponses];
+
+export type adsReportingAdDetailData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Kind
+         */
+        kind: 'campaign' | 'adgroup' | 'ad' | 'creative';
+        /**
+         * Remote Id
+         */
+        remote_id: string;
+    };
+    query: {
+        /**
+         * Advertiser Id
+         */
+        advertiser_id: string;
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/ads/{kind}/{remote_id}';
+};
+
+export type adsReportingAdDetailErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adsReportingAdDetailError = adsReportingAdDetailErrors[keyof adsReportingAdDetailErrors];
+
+export type adsReportingAdDetailResponses = {
+    /**
+     * Successful Response
+     */
+    200: AdDetailPublic;
+};
+
+export type adsReportingAdDetailResponse = adsReportingAdDetailResponses[keyof adsReportingAdDetailResponses];
+
+export type adsReportingReportTrendData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+        /**
+         * Dimension
+         */
+        dimension?: 'account' | 'campaign' | 'adgroup' | 'ad' | 'material' | 'drama';
+        /**
+         * Start Date
+         */
+        start_date?: string;
+        /**
+         * End Date
+         */
+        end_date?: string;
+        /**
+         * Advertiser Id
+         */
+        advertiser_id?: string | null;
+        /**
+         * Ids
+         */
+        ids?: string | null;
+        /**
+         * Query
+         */
+        query?: string | null;
+        /**
+         * Min Spend
+         */
+        min_spend?: number | string | null;
+        /**
+         * Max Spend
+         */
+        max_spend?: number | string | null;
+        /**
+         * Min D0 Roas
+         */
+        min_d0_roas?: number | string | null;
+        /**
+         * Max D0 Roas
+         */
+        max_d0_roas?: number | string | null;
+        /**
+         * Min Target Roas
+         */
+        min_target_roas?: number | string | null;
+        /**
+         * Max Target Roas
+         */
+        max_target_roas?: number | string | null;
+        /**
+         * Created From
+         */
+        created_from?: string | null;
+        /**
+         * Created To
+         */
+        created_to?: string | null;
+        /**
+         * Snapshot Id
+         */
+        snapshot_id?: string | null;
+    };
+    url: '/api/tenants/{tenant_id}/reports/trend';
+};
+
+export type adsReportingReportTrendErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adsReportingReportTrendError = adsReportingReportTrendErrors[keyof adsReportingReportTrendErrors];
+
+export type adsReportingReportTrendResponses = {
+    /**
+     * Successful Response
+     */
+    200: TrendPublic;
+};
+
+export type adsReportingReportTrendResponse = adsReportingReportTrendResponses[keyof adsReportingReportTrendResponses];
+
+export type adsReportingFreezeAdSelectionData = {
+    body: SelectionRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/ad-selections';
+};
+
+export type adsReportingFreezeAdSelectionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adsReportingFreezeAdSelectionError = adsReportingFreezeAdSelectionErrors[keyof adsReportingFreezeAdSelectionErrors];
+
+export type adsReportingFreezeAdSelectionResponses = {
+    /**
+     * Successful Response
+     */
+    200: FrozenSelection;
+};
+
+export type adsReportingFreezeAdSelectionResponse = adsReportingFreezeAdSelectionResponses[keyof adsReportingFreezeAdSelectionResponses];
+
+export type adsReportingListReportViewsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/report-views';
+};
+
+export type adsReportingListReportViewsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adsReportingListReportViewsError = adsReportingListReportViewsErrors[keyof adsReportingListReportViewsErrors];
+
+export type adsReportingListReportViewsResponses = {
+    /**
+     * Response Ads Reporting-List Report Views
+     *
+     * Successful Response
+     */
+    200: Array<SavedViewPublic>;
+};
+
+export type adsReportingListReportViewsResponse = adsReportingListReportViewsResponses[keyof adsReportingListReportViewsResponses];
+
+export type adsReportingCreateReportViewData = {
+    body: SavedViewCreate;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/report-views';
+};
+
+export type adsReportingCreateReportViewErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adsReportingCreateReportViewError = adsReportingCreateReportViewErrors[keyof adsReportingCreateReportViewErrors];
+
+export type adsReportingCreateReportViewResponses = {
+    /**
+     * Successful Response
+     */
+    200: SavedViewPublic;
+};
+
+export type adsReportingCreateReportViewResponse = adsReportingCreateReportViewResponses[keyof adsReportingCreateReportViewResponses];
+
+export type adsReportingDeleteReportViewData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * View Id
+         */
+        view_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/report-views/{view_id}';
+};
+
+export type adsReportingDeleteReportViewErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adsReportingDeleteReportViewError = adsReportingDeleteReportViewErrors[keyof adsReportingDeleteReportViewErrors];
+
+export type adsReportingDeleteReportViewResponses = {
+    /**
+     * Response Ads Reporting-Delete Report View
+     *
+     * Successful Response
+     */
+    200: {
+        [key: string]: boolean;
+    };
+};
+
+export type adsReportingDeleteReportViewResponse = adsReportingDeleteReportViewResponses[keyof adsReportingDeleteReportViewResponses];
+
+export type adsReportingUpdateReportViewData = {
+    body: SavedViewPatch;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * View Id
+         */
+        view_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/report-views/{view_id}';
+};
+
+export type adsReportingUpdateReportViewErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adsReportingUpdateReportViewError = adsReportingUpdateReportViewErrors[keyof adsReportingUpdateReportViewErrors];
+
+export type adsReportingUpdateReportViewResponses = {
+    /**
+     * Successful Response
+     */
+    200: SavedViewPublic;
+};
+
+export type adsReportingUpdateReportViewResponse = adsReportingUpdateReportViewResponses[keyof adsReportingUpdateReportViewResponses];
+
+export type adsReportingListReportExportsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/report-exports';
+};
+
+export type adsReportingListReportExportsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adsReportingListReportExportsError = adsReportingListReportExportsErrors[keyof adsReportingListReportExportsErrors];
+
+export type adsReportingListReportExportsResponses = {
+    /**
+     * Response Ads Reporting-List Report Exports
+     *
+     * Successful Response
+     */
+    200: Array<ExportPublic>;
+};
+
+export type adsReportingListReportExportsResponse = adsReportingListReportExportsResponses[keyof adsReportingListReportExportsResponses];
+
+export type adsReportingCreateReportExportData = {
+    body: ExportCreate;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/report-exports';
+};
+
+export type adsReportingCreateReportExportErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adsReportingCreateReportExportError = adsReportingCreateReportExportErrors[keyof adsReportingCreateReportExportErrors];
+
+export type adsReportingCreateReportExportResponses = {
+    /**
+     * Successful Response
+     */
+    200: ExportPublic;
+};
+
+export type adsReportingCreateReportExportResponse = adsReportingCreateReportExportResponses[keyof adsReportingCreateReportExportResponses];
+
+export type adsReportingGetReportExportData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Export Id
+         */
+        export_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/report-exports/{export_id}';
+};
+
+export type adsReportingGetReportExportErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adsReportingGetReportExportError = adsReportingGetReportExportErrors[keyof adsReportingGetReportExportErrors];
+
+export type adsReportingGetReportExportResponses = {
+    /**
+     * Successful Response
+     */
+    200: ExportPublic;
+};
+
+export type adsReportingGetReportExportResponse = adsReportingGetReportExportResponses[keyof adsReportingGetReportExportResponses];
+
+export type adsReportingDownloadReportExportData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Export Id
+         */
+        export_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/report-exports/{export_id}/download';
+};
+
+export type adsReportingDownloadReportExportErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adsReportingDownloadReportExportError = adsReportingDownloadReportExportErrors[keyof adsReportingDownloadReportExportErrors];
+
+export type adsReportingDownloadReportExportResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type adsReportingListAdSyncRunsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/ad-sync-runs';
+};
+
+export type adsReportingListAdSyncRunsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adsReportingListAdSyncRunsError = adsReportingListAdSyncRunsErrors[keyof adsReportingListAdSyncRunsErrors];
+
+export type adsReportingListAdSyncRunsResponses = {
+    /**
+     * Response Ads Reporting-List Ad Sync Runs
+     *
+     * Successful Response
+     */
+    200: Array<SyncRunPublic>;
+};
+
+export type adsReportingListAdSyncRunsResponse = adsReportingListAdSyncRunsResponses[keyof adsReportingListAdSyncRunsResponses];
+
+export type adsReportingRequestAdSyncData = {
+    body: SyncRunRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/ad-sync-runs';
+};
+
+export type adsReportingRequestAdSyncErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adsReportingRequestAdSyncError = adsReportingRequestAdSyncErrors[keyof adsReportingRequestAdSyncErrors];
+
+export type adsReportingRequestAdSyncResponses = {
+    /**
+     * Successful Response
+     */
+    200: SyncRunPublic;
+};
+
+export type adsReportingRequestAdSyncResponse = adsReportingRequestAdSyncResponses[keyof adsReportingRequestAdSyncResponses];
+
+export type adsReportingGetAdSyncRunData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Run Id
+         */
+        run_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/ad-sync-runs/{run_id}';
+};
+
+export type adsReportingGetAdSyncRunErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adsReportingGetAdSyncRunError = adsReportingGetAdSyncRunErrors[keyof adsReportingGetAdSyncRunErrors];
+
+export type adsReportingGetAdSyncRunResponses = {
+    /**
+     * Successful Response
+     */
+    200: SyncRunPublic;
+};
+
+export type adsReportingGetAdSyncRunResponse = adsReportingGetAdSyncRunResponses[keyof adsReportingGetAdSyncRunResponses];
 
 export type strategiesGetStrategiesData = {
     body?: never;

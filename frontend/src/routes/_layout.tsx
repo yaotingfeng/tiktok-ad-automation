@@ -5,6 +5,7 @@ import {
   useRouterState,
 } from "@tanstack/react-router"
 import {
+  BarChart3,
   Clapperboard,
   FileVideo,
   Link2,
@@ -64,6 +65,7 @@ function ScopedLayout() {
     ? [
         { icon: Clapperboard, title: "广告搭建", path: `${prefix}/builds/new` },
         { icon: ListTodo, title: "搭建任务", path: `${prefix}/build-tasks` },
+        { icon: BarChart3, title: "广告报表", path: `${prefix}/ads` },
         { icon: FileVideo, title: "素材库", path: `${prefix}/materials` },
         {
           icon: SlidersHorizontal,

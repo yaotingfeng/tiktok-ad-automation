@@ -2,7 +2,7 @@
 
 import { type Client, type Options as Options2, type TDataShape, urlSearchParamsBodySerializer } from './client';
 import { client } from './client.gen';
-import type { accountsAuthorizeData, accountsAuthorizeErrors, accountsAuthorizeResponses, accountsBindingData, accountsBindingErrors, accountsBindingResponses, accountsCandidateBcsData, accountsCandidateBcsErrors, accountsCandidateBcsResponses, accountsCapabilityStatusData, accountsCapabilityStatusErrors, accountsCapabilityStatusResponses, accountsConfigurationData, accountsConfigurationErrors, accountsConfigurationResponses, accountsDisableData, accountsDisableErrors, accountsDisableResponses, accountsGetAccountsData, accountsGetAccountsErrors, accountsGetAccountsResponses, accountsGetBcsData, accountsGetBcsErrors, accountsGetBcsResponses, accountsGetConfigurationData, accountsGetConfigurationErrors, accountsGetConfigurationResponses, accountsGetConnectionsData, accountsGetConnectionsErrors, accountsGetConnectionsResponses, accountsPatchConnectionData, accountsPatchConnectionErrors, accountsPatchConnectionResponses, accountsPostAuthorizationData, accountsPostAuthorizationErrors, accountsPostAuthorizationResponses, accountsPostResolveData, accountsPostResolveErrors, accountsPostResolveResponses, accountsPutDefaultConnectionData, accountsPutDefaultConnectionErrors, accountsPutDefaultConnectionResponses, accountsRefreshCapabilitiesData, accountsRefreshCapabilitiesErrors, accountsRefreshCapabilitiesResponses, accountsRevokeData, accountsRevokeErrors, accountsRevokeResponses, acknowledgeIngestPartsData, acknowledgeIngestPartsErrors, acknowledgeIngestPartsResponses, addBindingsData, addBindingsErrors, addBindingsResponses, availableBcsData, availableBcsErrors, availableBcsResponses, buildsAuthorizeHistoricalReadData, buildsAuthorizeHistoricalReadErrors, buildsAuthorizeHistoricalReadResponses, buildsCreateData, buildsCreateErrors, buildsCreateResponses, buildsDramasData, buildsDramasErrors, buildsDramasResponses, buildsEditGroupsData, buildsEditGroupsErrors, buildsEditGroupsResponses, buildsFrozenGroupsData, buildsFrozenGroupsErrors, buildsFrozenGroupsResponses, buildsFrozenUnitData, buildsFrozenUnitErrors, buildsFrozenUnitResponses, buildsGeneratePreviewData, buildsGeneratePreviewErrors, buildsGeneratePreviewResponses, buildsGetHistoricalReadData, buildsGetHistoricalReadErrors, buildsGetHistoricalReadRequestData, buildsGetHistoricalReadRequestErrors, buildsGetHistoricalReadRequestResponses, buildsGetHistoricalReadResponses, buildsGetSubmissionAdsData, buildsGetSubmissionAdsErrors, buildsGetSubmissionAdsResponses, buildsGetSubmissionData, buildsGetSubmissionErrors, buildsGetSubmissionEventsData, buildsGetSubmissionEventsErrors, buildsGetSubmissionEventsResponses, buildsGetSubmissionExcludedData, buildsGetSubmissionExcludedErrors, buildsGetSubmissionExcludedResponses, buildsGetSubmissionGroupsData, buildsGetSubmissionGroupsErrors, buildsGetSubmissionGroupsResponses, buildsGetSubmissionMaterialsData, buildsGetSubmissionMaterialsErrors, buildsGetSubmissionMaterialsResponses, buildsGetSubmissionRecoveryData, buildsGetSubmissionRecoveryErrors, buildsGetSubmissionRecoveryResponses, buildsGetSubmissionResponses, buildsGetSubmissionStepsData, buildsGetSubmissionStepsErrors, buildsGetSubmissionStepsResponses, buildsGetSubmissionUnitsData, buildsGetSubmissionUnitsErrors, buildsGetSubmissionUnitsResponses, buildsIdentityOptionsData, buildsIdentityOptionsErrors, buildsIdentityOptionsResponses, buildsInputsData, buildsInputsErrors, buildsInputsResponses, buildsListDraftsData, buildsListDraftsErrors, buildsListDraftsResponses, buildsListSubmissionsData, buildsListSubmissionsErrors, buildsListSubmissionsResponses, buildsMaterialsData, buildsMaterialsErrors, buildsMaterialsResponses, buildsMinisOptionsData, buildsMinisOptionsErrors, buildsMinisOptionsResponses, buildsPrepareData, buildsPrepareErrors, buildsPrepareResponses, buildsPreviewDramasData, buildsPreviewDramasErrors, buildsPreviewDramasResponses, buildsPreviewInputsData, buildsPreviewInputsErrors, buildsPreviewInputsResponses, buildsPreviewRequestData, buildsPreviewRequestErrors, buildsPreviewRequestResponses, buildsPreviewSummaryData, buildsPreviewSummaryErrors, buildsPreviewSummaryResponses, buildsPreviewUnitsData, buildsPreviewUnitsErrors, buildsPreviewUnitsResponses, buildsPutManualLinkData, buildsPutManualLinkErrors, buildsPutManualLinkResponses, buildsReconcileSubmissionData, buildsReconcileSubmissionErrors, buildsReconcileSubmissionResponses, buildsRetrySubmissionData, buildsRetrySubmissionErrors, buildsRetrySubmissionResponses, buildsSavedMutationData, buildsSavedMutationErrors, buildsSavedMutationResponses, buildsSavedPrepareRequestData, buildsSavedPrepareRequestErrors, buildsSavedPrepareRequestResponses, buildsSavedRequestData, buildsSavedRequestErrors, buildsSavedRequestResponses, buildsSavedSubmissionData, buildsSavedSubmissionErrors, buildsSavedSubmissionRecoveryData, buildsSavedSubmissionRecoveryErrors, buildsSavedSubmissionRecoveryResponses, buildsSavedSubmissionResponses, buildsSelectIdentityData, buildsSelectIdentityErrors, buildsSelectIdentityResponses, buildsSelectMiniData, buildsSelectMiniErrors, buildsSelectMiniResponses, buildsSkippedMaterialsData, buildsSkippedMaterialsErrors, buildsSkippedMaterialsResponses, buildsSubmitPreviewData, buildsSubmitPreviewErrors, buildsSubmitPreviewResponses, buildsSummaryData, buildsSummaryErrors, buildsSummaryResponses, buildsTargetingAccountsData, buildsTargetingAccountsErrors, buildsTargetingAccountsResponses, buildsTargetingOptionsData, buildsTargetingOptionsErrors, buildsTargetingOptionsResponses, buildsTargetingRegionsData, buildsTargetingRegionsErrors, buildsTargetingRegionsResponses, buildsUpdateData, buildsUpdateErrors, buildsUpdateResponses, buildsUpdateTargetingData, buildsUpdateTargetingErrors, buildsUpdateTargetingResponses, cancelIngestFileData, cancelIngestFileErrors, cancelIngestFileResponses, completeIngestFileData, completeIngestFileErrors, completeIngestFileResponses, createIngestChunkData, createIngestChunkErrors, createIngestChunkResponses, createIngestGenerationData, createIngestGenerationErrors, createIngestGenerationResponses, createIngestSessionData, createIngestSessionErrors, createIngestSessionResponses, integrationsCallbackData, integrationsCallbackResponses, integrationsTiktokCallbackData, integrationsTiktokCallbackResponses, listIngestFilesData, listIngestFilesErrors, listIngestFilesResponses, listIngestPartsData, listIngestPartsErrors, listIngestPartsResponses, listIngestSessionsData, listIngestSessionsErrors, listIngestSessionsResponses, loginLoginAccessTokenData, loginLoginAccessTokenErrors, loginLoginAccessTokenResponses, loginTestTokenData, loginTestTokenResponses, materialPushGetMaterialBatchData, materialPushGetMaterialBatchErrors, materialPushGetMaterialBatchResponses, materialPushPostMaterialBatchData, materialPushPostMaterialBatchResponses, materialsAuthorizeReissueData, materialsAuthorizeReissueErrors, materialsAuthorizeReissueResponses, materialsGetAssetsData, materialsGetAssetsErrors, materialsGetAssetsResponses, materialsGetAttemptsData, materialsGetAttemptsErrors, materialsGetAttemptsResponses, materialsGetMaterialData, materialsGetMaterialErrors, materialsGetMaterialResponses, materialsGetMaterialsData, materialsGetMaterialsErrors, materialsGetMaterialsResponses, materialsPostCompleteData, materialsPostCompleteErrors, materialsPostCompleteResponses, materialsPostObjectRetryData, materialsPostObjectRetryErrors, materialsPostObjectRetryResponses, materialsPostPartSignatureData, materialsPostPartSignatureErrors, materialsPostPartSignatureResponses, materialsPostUploadBatchData, materialsPostUploadBatchErrors, materialsPostUploadBatchResponses, materialsReadOriginalPreviewData, materialsReadOriginalPreviewErrors, materialsReadOriginalPreviewResponses, materialsReadRemotePreviewData, materialsReadRemotePreviewErrors, materialsReadRemotePreviewResponses, materialsReadUploadBatchData, materialsReadUploadBatchErrors, materialsReadUploadBatchesData, materialsReadUploadBatchesErrors, materialsReadUploadBatchesResponses, materialsReadUploadBatchResponses, materialsReadUploadRequestData, materialsReadUploadRequestErrors, materialsReadUploadRequestResponses, providersGetLinksData, providersGetLinksErrors, providersGetLinksResponses, providersGetPreparationData, providersGetPreparationErrors, providersGetPreparationResponses, providersGetPreparationSummaryData, providersGetPreparationSummaryErrors, providersGetPreparationSummaryResponses, providersLinkDetailsData, providersLinkDetailsErrors, providersLinkDetailsResponses, providersListApplicationsData, providersListApplicationsErrors, providersListApplicationsResponses, providersListConnectionsData, providersListConnectionsErrors, providersListConnectionsResponses, providersPatchConnectionData, providersPatchConnectionErrors, providersPatchConnectionResponses, providersPostCandidateData, providersPostCandidateErrors, providersPostCandidateResponses, providersPostConnectionData, providersPostConnectionErrors, providersPostConnectionResponses, providersPostPreparationData, providersPostPreparationErrors, providersPostPreparationResponses, providersPostVerifyData, providersPostVerifyErrors, providersPostVerifyResponses, readIngestChunkData, readIngestChunkErrors, readIngestChunkResponses, readIngestFileData, readIngestFileErrors, readIngestFileResponses, readIngestPartPermissionsData, readIngestPartPermissionsErrors, readIngestPartPermissionsResponses, readIngestRequestData, readIngestRequestErrors, readIngestRequestResponses, readIngestSummaryData, readIngestSummaryErrors, readIngestSummaryResponses, resumeIngestFileData, resumeIngestFileErrors, resumeIngestFileResponses, sealIngestSessionData, sealIngestSessionErrors, sealIngestSessionResponses, signIngestPartsData, signIngestPartsErrors, signIngestPartsResponses, strategiesAppendData, strategiesAppendErrors, strategiesAppendResponses, strategiesCopyPoolData, strategiesCopyPoolErrors, strategiesCopyPoolResponses, strategiesCreateData, strategiesCreateErrors, strategiesCreateResponses, strategiesGetOneData, strategiesGetOneErrors, strategiesGetOneResponses, strategiesGetStrategiesData, strategiesGetStrategiesErrors, strategiesGetStrategiesResponses, strategiesSavedRequestData, strategiesSavedRequestErrors, strategiesSavedRequestResponses, strategiesSetStateData, strategiesSetStateErrors, strategiesSetStateResponses, strategiesValidateData, strategiesValidateErrors, strategiesValidateResponses, strategiesVersionData, strategiesVersionErrors, strategiesVersionResponses, strategiesVersionsData, strategiesVersionsErrors, strategiesVersionsResponses, syncMcpBcData, syncMcpBcErrors, syncMcpBcResponses, tenantsGetMemberCandidatesData, tenantsGetMemberCandidatesErrors, tenantsGetMemberCandidatesResponses, tenantsGetMembersData, tenantsGetMembersErrors, tenantsGetMembersResponses, tenantsGetMyTenantsData, tenantsGetMyTenantsErrors, tenantsGetMyTenantsResponses, tenantsGetPlatformTenantsData, tenantsGetPlatformTenantsErrors, tenantsGetPlatformTenantsResponses, tenantsGetPlatformUserCandidatesData, tenantsGetPlatformUserCandidatesErrors, tenantsGetPlatformUserCandidatesResponses, tenantsPatchTenantData, tenantsPatchTenantErrors, tenantsPatchTenantResponses, tenantsPostMemberUserData, tenantsPostMemberUserErrors, tenantsPostMemberUserResponses, tenantsPostTenantData, tenantsPostTenantErrors, tenantsPostTenantResponses, tenantsPutMemberData, tenantsPutMemberErrors, tenantsPutMemberResponses, unbindMcpBcData, unbindMcpBcErrors, unbindMcpBcResponses, usersCreateUserData, usersCreateUserErrors, usersCreateUserResponses, usersDeleteUserData, usersDeleteUserErrors, usersDeleteUserMeData, usersDeleteUserMeResponses, usersDeleteUserResponses, usersReadUserByIdData, usersReadUserByIdErrors, usersReadUserByIdResponses, usersReadUserMeData, usersReadUserMeResponses, usersReadUsersData, usersReadUsersErrors, usersReadUsersResponses, usersUpdatePasswordMeData, usersUpdatePasswordMeErrors, usersUpdatePasswordMeResponses, usersUpdateUserData, usersUpdateUserErrors, usersUpdateUserMeData, usersUpdateUserMeErrors, usersUpdateUserMeResponses, usersUpdateUserResponses, utilsHealthCheckData, utilsHealthCheckResponses } from './types.gen';
+import type { accountsAuthorizeData, accountsAuthorizeErrors, accountsAuthorizeResponses, accountsBindingData, accountsBindingErrors, accountsBindingResponses, accountsCandidateBcsData, accountsCandidateBcsErrors, accountsCandidateBcsResponses, accountsCapabilityStatusData, accountsCapabilityStatusErrors, accountsCapabilityStatusResponses, accountsConfigurationData, accountsConfigurationErrors, accountsConfigurationResponses, accountsDisableData, accountsDisableErrors, accountsDisableResponses, accountsGetAccountsData, accountsGetAccountsErrors, accountsGetAccountsResponses, accountsGetBcsData, accountsGetBcsErrors, accountsGetBcsResponses, accountsGetConfigurationData, accountsGetConfigurationErrors, accountsGetConfigurationResponses, accountsGetConnectionsData, accountsGetConnectionsErrors, accountsGetConnectionsResponses, accountsPatchConnectionData, accountsPatchConnectionErrors, accountsPatchConnectionResponses, accountsPostAuthorizationData, accountsPostAuthorizationErrors, accountsPostAuthorizationResponses, accountsPostResolveData, accountsPostResolveErrors, accountsPostResolveResponses, accountsPutDefaultConnectionData, accountsPutDefaultConnectionErrors, accountsPutDefaultConnectionResponses, accountsRefreshCapabilitiesData, accountsRefreshCapabilitiesErrors, accountsRefreshCapabilitiesResponses, accountsRevokeData, accountsRevokeErrors, accountsRevokeResponses, acknowledgeIngestPartsData, acknowledgeIngestPartsErrors, acknowledgeIngestPartsResponses, addBindingsData, addBindingsErrors, addBindingsResponses, adsReportingAdDetailData, adsReportingAdDetailErrors, adsReportingAdDetailResponses, adsReportingCreateReportExportData, adsReportingCreateReportExportErrors, adsReportingCreateReportExportResponses, adsReportingCreateReportViewData, adsReportingCreateReportViewErrors, adsReportingCreateReportViewResponses, adsReportingDeleteReportViewData, adsReportingDeleteReportViewErrors, adsReportingDeleteReportViewResponses, adsReportingDownloadReportExportData, adsReportingDownloadReportExportErrors, adsReportingDownloadReportExportResponses, adsReportingFreezeAdSelectionData, adsReportingFreezeAdSelectionErrors, adsReportingFreezeAdSelectionResponses, adsReportingGetAdSyncRunData, adsReportingGetAdSyncRunErrors, adsReportingGetAdSyncRunResponses, adsReportingGetReportExportData, adsReportingGetReportExportErrors, adsReportingGetReportExportResponses, adsReportingListAdSyncRunsData, adsReportingListAdSyncRunsErrors, adsReportingListAdSyncRunsResponses, adsReportingListReportExportsData, adsReportingListReportExportsErrors, adsReportingListReportExportsResponses, adsReportingListReportViewsData, adsReportingListReportViewsErrors, adsReportingListReportViewsResponses, adsReportingQueryAdsData, adsReportingQueryAdsErrors, adsReportingQueryAdsResponses, adsReportingReportTrendData, adsReportingReportTrendErrors, adsReportingReportTrendResponses, adsReportingRequestAdSyncData, adsReportingRequestAdSyncErrors, adsReportingRequestAdSyncResponses, adsReportingUpdateReportViewData, adsReportingUpdateReportViewErrors, adsReportingUpdateReportViewResponses, availableBcsData, availableBcsErrors, availableBcsResponses, buildsAuthorizeHistoricalReadData, buildsAuthorizeHistoricalReadErrors, buildsAuthorizeHistoricalReadResponses, buildsCreateData, buildsCreateErrors, buildsCreateResponses, buildsDramasData, buildsDramasErrors, buildsDramasResponses, buildsEditGroupsData, buildsEditGroupsErrors, buildsEditGroupsResponses, buildsFrozenGroupsData, buildsFrozenGroupsErrors, buildsFrozenGroupsResponses, buildsFrozenUnitData, buildsFrozenUnitErrors, buildsFrozenUnitResponses, buildsGeneratePreviewData, buildsGeneratePreviewErrors, buildsGeneratePreviewResponses, buildsGetHistoricalReadData, buildsGetHistoricalReadErrors, buildsGetHistoricalReadRequestData, buildsGetHistoricalReadRequestErrors, buildsGetHistoricalReadRequestResponses, buildsGetHistoricalReadResponses, buildsGetSubmissionAdsData, buildsGetSubmissionAdsErrors, buildsGetSubmissionAdsResponses, buildsGetSubmissionData, buildsGetSubmissionErrors, buildsGetSubmissionEventsData, buildsGetSubmissionEventsErrors, buildsGetSubmissionEventsResponses, buildsGetSubmissionExcludedData, buildsGetSubmissionExcludedErrors, buildsGetSubmissionExcludedResponses, buildsGetSubmissionGroupsData, buildsGetSubmissionGroupsErrors, buildsGetSubmissionGroupsResponses, buildsGetSubmissionMaterialsData, buildsGetSubmissionMaterialsErrors, buildsGetSubmissionMaterialsResponses, buildsGetSubmissionRecoveryData, buildsGetSubmissionRecoveryErrors, buildsGetSubmissionRecoveryResponses, buildsGetSubmissionResponses, buildsGetSubmissionStepsData, buildsGetSubmissionStepsErrors, buildsGetSubmissionStepsResponses, buildsGetSubmissionUnitsData, buildsGetSubmissionUnitsErrors, buildsGetSubmissionUnitsResponses, buildsIdentityOptionsData, buildsIdentityOptionsErrors, buildsIdentityOptionsResponses, buildsInputsData, buildsInputsErrors, buildsInputsResponses, buildsListDraftsData, buildsListDraftsErrors, buildsListDraftsResponses, buildsListSubmissionsData, buildsListSubmissionsErrors, buildsListSubmissionsResponses, buildsMaterialsData, buildsMaterialsErrors, buildsMaterialsResponses, buildsMinisOptionsData, buildsMinisOptionsErrors, buildsMinisOptionsResponses, buildsPrepareData, buildsPrepareErrors, buildsPrepareResponses, buildsPreviewDramasData, buildsPreviewDramasErrors, buildsPreviewDramasResponses, buildsPreviewInputsData, buildsPreviewInputsErrors, buildsPreviewInputsResponses, buildsPreviewRequestData, buildsPreviewRequestErrors, buildsPreviewRequestResponses, buildsPreviewSummaryData, buildsPreviewSummaryErrors, buildsPreviewSummaryResponses, buildsPreviewUnitsData, buildsPreviewUnitsErrors, buildsPreviewUnitsResponses, buildsPutManualLinkData, buildsPutManualLinkErrors, buildsPutManualLinkResponses, buildsReconcileSubmissionData, buildsReconcileSubmissionErrors, buildsReconcileSubmissionResponses, buildsRetrySubmissionData, buildsRetrySubmissionErrors, buildsRetrySubmissionResponses, buildsSavedMutationData, buildsSavedMutationErrors, buildsSavedMutationResponses, buildsSavedPrepareRequestData, buildsSavedPrepareRequestErrors, buildsSavedPrepareRequestResponses, buildsSavedRequestData, buildsSavedRequestErrors, buildsSavedRequestResponses, buildsSavedSubmissionData, buildsSavedSubmissionErrors, buildsSavedSubmissionRecoveryData, buildsSavedSubmissionRecoveryErrors, buildsSavedSubmissionRecoveryResponses, buildsSavedSubmissionResponses, buildsSelectIdentityData, buildsSelectIdentityErrors, buildsSelectIdentityResponses, buildsSelectMiniData, buildsSelectMiniErrors, buildsSelectMiniResponses, buildsSkippedMaterialsData, buildsSkippedMaterialsErrors, buildsSkippedMaterialsResponses, buildsSubmitPreviewData, buildsSubmitPreviewErrors, buildsSubmitPreviewResponses, buildsSummaryData, buildsSummaryErrors, buildsSummaryResponses, buildsTargetingAccountsData, buildsTargetingAccountsErrors, buildsTargetingAccountsResponses, buildsTargetingOptionsData, buildsTargetingOptionsErrors, buildsTargetingOptionsResponses, buildsTargetingRegionsData, buildsTargetingRegionsErrors, buildsTargetingRegionsResponses, buildsUpdateData, buildsUpdateErrors, buildsUpdateResponses, buildsUpdateTargetingData, buildsUpdateTargetingErrors, buildsUpdateTargetingResponses, cancelIngestFileData, cancelIngestFileErrors, cancelIngestFileResponses, completeIngestFileData, completeIngestFileErrors, completeIngestFileResponses, createIngestChunkData, createIngestChunkErrors, createIngestChunkResponses, createIngestGenerationData, createIngestGenerationErrors, createIngestGenerationResponses, createIngestSessionData, createIngestSessionErrors, createIngestSessionResponses, integrationsCallbackData, integrationsCallbackResponses, integrationsTiktokCallbackData, integrationsTiktokCallbackResponses, listIngestFilesData, listIngestFilesErrors, listIngestFilesResponses, listIngestPartsData, listIngestPartsErrors, listIngestPartsResponses, listIngestSessionsData, listIngestSessionsErrors, listIngestSessionsResponses, loginLoginAccessTokenData, loginLoginAccessTokenErrors, loginLoginAccessTokenResponses, loginTestTokenData, loginTestTokenResponses, materialPushGetMaterialBatchData, materialPushGetMaterialBatchErrors, materialPushGetMaterialBatchResponses, materialPushPostMaterialBatchData, materialPushPostMaterialBatchResponses, materialsAuthorizeReissueData, materialsAuthorizeReissueErrors, materialsAuthorizeReissueResponses, materialsGetAssetsData, materialsGetAssetsErrors, materialsGetAssetsResponses, materialsGetAttemptsData, materialsGetAttemptsErrors, materialsGetAttemptsResponses, materialsGetMaterialData, materialsGetMaterialErrors, materialsGetMaterialResponses, materialsGetMaterialsData, materialsGetMaterialsErrors, materialsGetMaterialsResponses, materialsPostCompleteData, materialsPostCompleteErrors, materialsPostCompleteResponses, materialsPostObjectRetryData, materialsPostObjectRetryErrors, materialsPostObjectRetryResponses, materialsPostPartSignatureData, materialsPostPartSignatureErrors, materialsPostPartSignatureResponses, materialsPostUploadBatchData, materialsPostUploadBatchErrors, materialsPostUploadBatchResponses, materialsReadOriginalPreviewData, materialsReadOriginalPreviewErrors, materialsReadOriginalPreviewResponses, materialsReadRemotePreviewData, materialsReadRemotePreviewErrors, materialsReadRemotePreviewResponses, materialsReadUploadBatchData, materialsReadUploadBatchErrors, materialsReadUploadBatchesData, materialsReadUploadBatchesErrors, materialsReadUploadBatchesResponses, materialsReadUploadBatchResponses, materialsReadUploadRequestData, materialsReadUploadRequestErrors, materialsReadUploadRequestResponses, providersGetLinksData, providersGetLinksErrors, providersGetLinksResponses, providersGetPreparationData, providersGetPreparationErrors, providersGetPreparationResponses, providersGetPreparationSummaryData, providersGetPreparationSummaryErrors, providersGetPreparationSummaryResponses, providersLinkDetailsData, providersLinkDetailsErrors, providersLinkDetailsResponses, providersListApplicationsData, providersListApplicationsErrors, providersListApplicationsResponses, providersListConnectionsData, providersListConnectionsErrors, providersListConnectionsResponses, providersPatchConnectionData, providersPatchConnectionErrors, providersPatchConnectionResponses, providersPostCandidateData, providersPostCandidateErrors, providersPostCandidateResponses, providersPostConnectionData, providersPostConnectionErrors, providersPostConnectionResponses, providersPostPreparationData, providersPostPreparationErrors, providersPostPreparationResponses, providersPostVerifyData, providersPostVerifyErrors, providersPostVerifyResponses, readIngestChunkData, readIngestChunkErrors, readIngestChunkResponses, readIngestFileData, readIngestFileErrors, readIngestFileResponses, readIngestPartPermissionsData, readIngestPartPermissionsErrors, readIngestPartPermissionsResponses, readIngestRequestData, readIngestRequestErrors, readIngestRequestResponses, readIngestSummaryData, readIngestSummaryErrors, readIngestSummaryResponses, resumeIngestFileData, resumeIngestFileErrors, resumeIngestFileResponses, sealIngestSessionData, sealIngestSessionErrors, sealIngestSessionResponses, signIngestPartsData, signIngestPartsErrors, signIngestPartsResponses, strategiesAppendData, strategiesAppendErrors, strategiesAppendResponses, strategiesCopyPoolData, strategiesCopyPoolErrors, strategiesCopyPoolResponses, strategiesCreateData, strategiesCreateErrors, strategiesCreateResponses, strategiesGetOneData, strategiesGetOneErrors, strategiesGetOneResponses, strategiesGetStrategiesData, strategiesGetStrategiesErrors, strategiesGetStrategiesResponses, strategiesSavedRequestData, strategiesSavedRequestErrors, strategiesSavedRequestResponses, strategiesSetStateData, strategiesSetStateErrors, strategiesSetStateResponses, strategiesValidateData, strategiesValidateErrors, strategiesValidateResponses, strategiesVersionData, strategiesVersionErrors, strategiesVersionResponses, strategiesVersionsData, strategiesVersionsErrors, strategiesVersionsResponses, syncMcpBcData, syncMcpBcErrors, syncMcpBcResponses, tenantsGetMemberCandidatesData, tenantsGetMemberCandidatesErrors, tenantsGetMemberCandidatesResponses, tenantsGetMembersData, tenantsGetMembersErrors, tenantsGetMembersResponses, tenantsGetMyTenantsData, tenantsGetMyTenantsErrors, tenantsGetMyTenantsResponses, tenantsGetPlatformTenantsData, tenantsGetPlatformTenantsErrors, tenantsGetPlatformTenantsResponses, tenantsGetPlatformUserCandidatesData, tenantsGetPlatformUserCandidatesErrors, tenantsGetPlatformUserCandidatesResponses, tenantsPatchTenantData, tenantsPatchTenantErrors, tenantsPatchTenantResponses, tenantsPostMemberUserData, tenantsPostMemberUserErrors, tenantsPostMemberUserResponses, tenantsPostTenantData, tenantsPostTenantErrors, tenantsPostTenantResponses, tenantsPutMemberData, tenantsPutMemberErrors, tenantsPutMemberResponses, unbindMcpBcData, unbindMcpBcErrors, unbindMcpBcResponses, usersCreateUserData, usersCreateUserErrors, usersCreateUserResponses, usersDeleteUserData, usersDeleteUserErrors, usersDeleteUserMeData, usersDeleteUserMeResponses, usersDeleteUserResponses, usersReadUserByIdData, usersReadUserByIdErrors, usersReadUserByIdResponses, usersReadUserMeData, usersReadUserMeResponses, usersReadUsersData, usersReadUsersErrors, usersReadUsersResponses, usersUpdatePasswordMeData, usersUpdatePasswordMeErrors, usersUpdatePasswordMeResponses, usersUpdateUserData, usersUpdateUserErrors, usersUpdateUserMeData, usersUpdateUserMeErrors, usersUpdateUserMeResponses, usersUpdateUserResponses, utilsHealthCheckData, utilsHealthCheckResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -1232,6 +1232,208 @@ export class ProvidersService {
             responseType: 'json',
             security: [{ scheme: 'bearer', type: 'http' }],
             url: '/api/tenants/{tenant_id}/providers/connections/{connection_id}/applications',
+            ...options
+        });
+    }
+}
+
+export class AdsReportingService {
+    /**
+     * Query Ads
+     */
+    public static queryAds<ThrowOnError extends boolean = true>(options: Options<adsReportingQueryAdsData, ThrowOnError>) {
+        return (options.client ?? client).get<adsReportingQueryAdsResponses, adsReportingQueryAdsErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/ads',
+            ...options
+        });
+    }
+
+    /**
+     * Ad Detail
+     */
+    public static adDetail<ThrowOnError extends boolean = true>(options: Options<adsReportingAdDetailData, ThrowOnError>) {
+        return (options.client ?? client).get<adsReportingAdDetailResponses, adsReportingAdDetailErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/ads/{kind}/{remote_id}',
+            ...options
+        });
+    }
+
+    /**
+     * Report Trend
+     */
+    public static reportTrend<ThrowOnError extends boolean = true>(options: Options<adsReportingReportTrendData, ThrowOnError>) {
+        return (options.client ?? client).get<adsReportingReportTrendResponses, adsReportingReportTrendErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/reports/trend',
+            ...options
+        });
+    }
+
+    /**
+     * Freeze Ad Selection
+     */
+    public static freezeAdSelection<ThrowOnError extends boolean = true>(options: Options<adsReportingFreezeAdSelectionData, ThrowOnError>) {
+        return (options.client ?? client).post<adsReportingFreezeAdSelectionResponses, adsReportingFreezeAdSelectionErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/ad-selections',
+            ...options,
+            headers: {
+                'Content-Type': 'application/json',
+                ...options.headers
+            }
+        });
+    }
+
+    /**
+     * List Report Views
+     */
+    public static listReportViews<ThrowOnError extends boolean = true>(options: Options<adsReportingListReportViewsData, ThrowOnError>) {
+        return (options.client ?? client).get<adsReportingListReportViewsResponses, adsReportingListReportViewsErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/report-views',
+            ...options
+        });
+    }
+
+    /**
+     * Create Report View
+     */
+    public static createReportView<ThrowOnError extends boolean = true>(options: Options<adsReportingCreateReportViewData, ThrowOnError>) {
+        return (options.client ?? client).post<adsReportingCreateReportViewResponses, adsReportingCreateReportViewErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/report-views',
+            ...options,
+            headers: {
+                'Content-Type': 'application/json',
+                ...options.headers
+            }
+        });
+    }
+
+    /**
+     * Delete Report View
+     */
+    public static deleteReportView<ThrowOnError extends boolean = true>(options: Options<adsReportingDeleteReportViewData, ThrowOnError>) {
+        return (options.client ?? client).delete<adsReportingDeleteReportViewResponses, adsReportingDeleteReportViewErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/report-views/{view_id}',
+            ...options
+        });
+    }
+
+    /**
+     * Update Report View
+     */
+    public static updateReportView<ThrowOnError extends boolean = true>(options: Options<adsReportingUpdateReportViewData, ThrowOnError>) {
+        return (options.client ?? client).patch<adsReportingUpdateReportViewResponses, adsReportingUpdateReportViewErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/report-views/{view_id}',
+            ...options,
+            headers: {
+                'Content-Type': 'application/json',
+                ...options.headers
+            }
+        });
+    }
+
+    /**
+     * List Report Exports
+     */
+    public static listReportExports<ThrowOnError extends boolean = true>(options: Options<adsReportingListReportExportsData, ThrowOnError>) {
+        return (options.client ?? client).get<adsReportingListReportExportsResponses, adsReportingListReportExportsErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/report-exports',
+            ...options
+        });
+    }
+
+    /**
+     * Create Report Export
+     */
+    public static createReportExport<ThrowOnError extends boolean = true>(options: Options<adsReportingCreateReportExportData, ThrowOnError>) {
+        return (options.client ?? client).post<adsReportingCreateReportExportResponses, adsReportingCreateReportExportErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/report-exports',
+            ...options,
+            headers: {
+                'Content-Type': 'application/json',
+                ...options.headers
+            }
+        });
+    }
+
+    /**
+     * Get Report Export
+     */
+    public static getReportExport<ThrowOnError extends boolean = true>(options: Options<adsReportingGetReportExportData, ThrowOnError>) {
+        return (options.client ?? client).get<adsReportingGetReportExportResponses, adsReportingGetReportExportErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/report-exports/{export_id}',
+            ...options
+        });
+    }
+
+    /**
+     * Download Report Export
+     */
+    public static downloadReportExport<ThrowOnError extends boolean = true>(options: Options<adsReportingDownloadReportExportData, ThrowOnError>) {
+        return (options.client ?? client).get<adsReportingDownloadReportExportResponses, adsReportingDownloadReportExportErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/report-exports/{export_id}/download',
+            ...options
+        });
+    }
+
+    /**
+     * List Ad Sync Runs
+     */
+    public static listAdSyncRuns<ThrowOnError extends boolean = true>(options: Options<adsReportingListAdSyncRunsData, ThrowOnError>) {
+        return (options.client ?? client).get<adsReportingListAdSyncRunsResponses, adsReportingListAdSyncRunsErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/ad-sync-runs',
+            ...options
+        });
+    }
+
+    /**
+     * Request Ad Sync
+     */
+    public static requestAdSync<ThrowOnError extends boolean = true>(options: Options<adsReportingRequestAdSyncData, ThrowOnError>) {
+        return (options.client ?? client).post<adsReportingRequestAdSyncResponses, adsReportingRequestAdSyncErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/ad-sync-runs',
+            ...options,
+            headers: {
+                'Content-Type': 'application/json',
+                ...options.headers
+            }
+        });
+    }
+
+    /**
+     * Get Ad Sync Run
+     */
+    public static getAdSyncRun<ThrowOnError extends boolean = true>(options: Options<adsReportingGetAdSyncRunData, ThrowOnError>) {
+        return (options.client ?? client).get<adsReportingGetAdSyncRunResponses, adsReportingGetAdSyncRunErrors, ThrowOnError>({
+            responseType: 'json',
+            security: [{ scheme: 'bearer', type: 'http' }],
+            url: '/api/tenants/{tenant_id}/ad-sync-runs/{run_id}',
             ...options
         });
     }
