@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.ads.models import AdMaterialReference
+from app.modules.ads.models import AdMaterialReference, CampaignNameProjection
 from app.modules.reporting.aggregation import (
     _build_material_rows,
     aggregate_metrics,
@@ -68,6 +68,7 @@ def test_material_usage_not_double_counted():
             ad_remote_id=ad_id,
             platform_material_id="vid-shared",
             material_type="VIDEO",
+            complete=True,
             published_version=1,
         )
         for ad_id in ("ad-3", "ad-7")
@@ -101,6 +102,8 @@ def test_material_usage_not_double_counted():
         ReportingFilter(dimension="material", start_date=start.date(), end_date=start.date()),
     )
     assert rows[0].metric_buckets[0].values["spend"] == Decimal("10")
+    assert rows[0].metric_buckets[0].values["native_growth_ad_revenue_value_d0"] is None
+    assert rows[0].metric_buckets[0].availability["native_growth_ad_revenue_value_d0"] == "UNSUPPORTED"
     assert {item.ad_ref.remote_id for item in rows[0].material_uses} == {"ad-3", "ad-7"}
 
 
@@ -133,5 +136,37 @@ def test_dimension_rows_keep_external_campaign_visible(report_case):
         ),
     )
     assert rows
-    assert all(row.row_key.startswith("report-account:") for row in rows)
+    assert all(row.row_key.startswith("bc-report-case:") for row in rows)
     assert any(":external:" in row.row_key for row in rows)
+
+
+def test_dimension_rows_group_valid_campaign_by_provider_and_drama(report_case):
+    ref = report_case.seed_campaign("Provider · My Drama · note", "report-account", "3", "7")
+    report_case.session.add(
+        CampaignNameProjection(
+            tenant_id=ref.tenant_id,
+            advertiser_id=ref.advertiser_id,
+            campaign_remote_id=ref.remote_id,
+            name_revision=1,
+            raw_name="Provider · My Drama · note",
+            provider_label="Provider",
+            drama_name="My Drama",
+            status="VALID",
+            parser_revision=1,
+            grouping_revision=1,
+            observed_at=datetime.now(UTC),
+        )
+    )
+    report_case.session.flush()
+    rows = build_dimension_rows(
+        report_case.session,
+        context=report_case.context,
+        bc_id=report_case.bc_id,
+        filters=ReportingFilter(
+            dimension="drama",
+            start_date=report_case.fact_date,
+            end_date=report_case.fact_date,
+        ),
+    )
+    assert [row.row_key for row in rows] == ["bc-report-case:drama:Provider:My Drama"]
+    assert rows[0].refs[0].remote_id == ref.remote_id

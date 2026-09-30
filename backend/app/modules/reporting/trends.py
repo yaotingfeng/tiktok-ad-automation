@@ -7,15 +7,18 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
+from hashlib import sha256
 from typing import Literal, cast
 
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
-from app.modules.reporting.facts import observation_delta
+from app.modules.ads.models import CampaignNameProjection
 from app.modules.reporting.filters import authorized_grants, compile_filter
 from app.modules.reporting.models import ReportFact, ReportObservation
 from app.modules.reporting.schemas import (
@@ -102,6 +105,137 @@ def _fact_for_observation(
     return session.exec(statement).first() is not None
 
 
+@dataclass(frozen=True)
+class _Series:
+    """A comparable point after optional drama re-projection."""
+
+    advertiser_id: str
+    subject_key: tuple[str, ...]
+    bucket_start: datetime
+    bucket_end: datetime
+    values: dict[str, str | None]
+    availability: dict[str, str]
+    observed_at: datetime
+    membership_digest: str
+    grouping_revision: int
+    currency: str
+    timezone: str
+    attribution: str
+    report_contract: str
+    metric_family: str
+
+
+def _series_from_observation(item: ReportObservation) -> _Series:
+    return _Series(
+        advertiser_id=item.advertiser_id,
+        subject_key=tuple(item.subject_key),
+        bucket_start=item.bucket_start,
+        bucket_end=item.bucket_end,
+        values=item.values,
+        availability=item.availability,
+        observed_at=item.observed_at,
+        membership_digest=item.membership_digest,
+        grouping_revision=item.grouping_revision,
+        currency=item.currency,
+        timezone=item.timezone,
+        attribution=item.attribution,
+        report_contract=item.report_contract,
+        metric_family=item.metric_family,
+    )
+
+
+def _drama_series(
+    observations: Sequence[ReportObservation],
+    projections: Sequence[CampaignNameProjection],
+    *,
+    bc_id: str,
+) -> tuple[_Series, ...]:
+    latest: dict[tuple[str, str], CampaignNameProjection] = {}
+    for projection in projections:
+        key = (projection.advertiser_id, projection.campaign_remote_id)
+        prior = latest.get(key)
+        if prior is None or (
+            projection.grouping_revision,
+            projection.name_revision,
+            projection.observed_at,
+        ) > (prior.grouping_revision, prior.name_revision, prior.observed_at):
+            latest[key] = projection
+
+    # A publish version is the membership snapshot.  Grouping by it retains a
+    # newer same-bucket correction as a separate point instead of dropping it.
+    grouped: dict[tuple[str, datetime, datetime, int], list[ReportObservation]] = defaultdict(list)
+    group_keys: dict[tuple[str, datetime, datetime, int], tuple[str, ...]] = {}
+    for item in observations:
+        campaign_id = item.subject_key[-1] if item.subject_key else ""
+        latest_projection = latest.get((item.advertiser_id, campaign_id))
+        if latest_projection is not None and latest_projection.status == "VALID":
+            group_id = f"{bc_id}:drama:{latest_projection.provider_label}:{latest_projection.drama_name}"
+            subject_key = (group_id,)
+        else:
+            group_id = f"{bc_id}:external:{item.advertiser_id}:{campaign_id}"
+            subject_key = (group_id,)
+        bucket_key = (group_id, item.bucket_start, item.bucket_end, item.published_version)
+        grouped[bucket_key].append(item)
+        group_keys[bucket_key] = subject_key
+
+    availability_rank = {"AVAILABLE": 0, "MISSING": 1, "UNAVAILABLE": 2, "UNSUPPORTED": 3, "FAILED": 4}
+    result: list[_Series] = []
+    for bucket_key, members in grouped.items():
+        _group_id, bucket_start, bucket_end, _version = bucket_key
+        metric_names = sorted({name for member in members for name in member.values})
+        values: dict[str, str | None] = {}
+        availability: dict[str, str] = {}
+        for name in metric_names:
+            states = [member.availability.get(name, "MISSING") for member in members]
+            state = max(states, key=lambda value: availability_rank.get(value, 4))
+            availability[name] = state
+            if state != "AVAILABLE" or any(member.availability.get(name) != "AVAILABLE" for member in members):
+                values[name] = None
+                continue
+            numbers = [_decimal(member.values.get(name)) for member in members]
+            values[name] = str(sum((number for number in numbers if number is not None), Decimal(0)))
+        digest_input = "|".join(sorted(f"{member.advertiser_id}:{member.membership_digest}" for member in members))
+        first = members[0]
+        result.append(_Series(
+            advertiser_id="__drama__",
+            subject_key=group_keys[bucket_key],
+            bucket_start=bucket_start,
+            bucket_end=bucket_end,
+            values=values,
+            availability=availability,
+            observed_at=max(member.observed_at for member in members),
+            membership_digest=sha256(digest_input.encode()).hexdigest(),
+            grouping_revision=max(member.grouping_revision for member in members),
+            currency=first.currency,
+            timezone=first.timezone,
+            attribution=first.attribution,
+            report_contract=first.report_contract,
+            metric_family=first.metric_family,
+        ))
+    return tuple(result)
+
+
+def _series_delta(previous: _Series, current: _Series) -> dict[str, Decimal] | None:
+    if (
+        previous.membership_digest != current.membership_digest
+        or previous.grouping_revision != current.grouping_revision
+        or previous.currency != current.currency
+        or previous.timezone != current.timezone
+        or previous.attribution != current.attribution
+        or previous.report_contract != current.report_contract
+        or previous.metric_family != current.metric_family
+    ):
+        return None
+    result: dict[str, Decimal] = {}
+    for name in set(previous.values) & set(current.values):
+        if previous.availability.get(name) != "AVAILABLE" or current.availability.get(name) != "AVAILABLE":
+            continue
+        old, new = _decimal(previous.values[name]), _decimal(current.values[name])
+        if old is not None and new is not None:
+            result[name] = new - old
+    return result
+
+
 def build_trend(
     session: Session,
     *,
@@ -166,22 +300,29 @@ def build_trend(
             delta_reason=None,
         )
 
-    # Keep the newest observation per subject/bucket. Replays can leave more
-    # than one history row and must not duplicate a trend point.
-    newest: dict[tuple[str, str, datetime], ReportObservation] = {}
-    for item in observations:
-        key = (item.advertiser_id, ":".join(item.subject_key), item.bucket_start)
-        if key not in newest or item.observed_at > newest[key].observed_at:
-            newest[key] = item
-    ordered = sorted(newest.values(), key=lambda item: (item.bucket_start, item.advertiser_id, item.subject_key))
+    if filters.dimension == "drama":
+        projections = tuple(
+            session.exec(
+                select(CampaignNameProjection).where(
+                    CampaignNameProjection.tenant_id == context.tenant_id,
+                    col(CampaignNameProjection.advertiser_id).in_(advertiser_ids),
+                )
+            ).all()
+        )
+        series = _drama_series(observations, projections, bc_id=bc_id)
+    else:
+        series = tuple(_series_from_observation(item) for item in observations)
+
+    # Retain same-bucket observations so platform corrections remain visible.
+    ordered = sorted(series, key=lambda item: (item.advertiser_id, item.subject_key, item.bucket_start, item.observed_at))
     points: list[TrendPoint] = []
-    previous_by_subject: dict[tuple[str, tuple[str, ...]], ReportObservation] = {}
+    previous_by_subject: dict[tuple[str, tuple[str, ...]], _Series] = {}
     overall_reason: Literal["SCOPE_CHANGED", "DATE_CHANGED"] | None = None
     intervals: list[int] = []
     for item in ordered:
         reason: Literal["SCOPE_CHANGED", "DATE_CHANGED"] | None = None
         delta: dict[str, Decimal] | None = None
-        subject_key = (item.advertiser_id, tuple(item.subject_key))
+        subject_key = (item.advertiser_id, item.subject_key)
         previous = previous_by_subject.get(subject_key)
         if previous is not None:
             if (
@@ -190,10 +331,15 @@ def build_trend(
                 or previous.subject_key != item.subject_key
             ):
                 reason = "SCOPE_CHANGED"
-            elif previous.bucket_end != item.bucket_start:
+            elif (
+                previous.bucket_start != item.bucket_start
+                and previous.bucket_end != item.bucket_start
+            ):
+                reason = "DATE_CHANGED"
+            elif previous.bucket_start.date() != item.bucket_start.date():
                 reason = "DATE_CHANGED"
             else:
-                delta = observation_delta(previous, item)
+                delta = _series_delta(previous, item)
             intervals.append(int((item.bucket_start - previous.bucket_start).total_seconds() // 60))
             if reason is not None and overall_reason is None:
                 overall_reason = reason

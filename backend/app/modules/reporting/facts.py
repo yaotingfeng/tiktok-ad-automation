@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
+from hashlib import sha256
 from typing import Any
 from uuid import UUID
 
@@ -22,6 +23,7 @@ from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.integrations.tiktok.contracts.reporting import ReportPage, ReportRow
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.accounts.routing import verify_route
+from app.modules.ads.models import CampaignNameProjection
 from app.modules.reporting.contracts import (
     decode_query,
     report_buckets,
@@ -380,15 +382,16 @@ def _valid_subject(subject: Any, query: Any, contract: Any) -> bool:
         )
     if query.report_contract == "material_overview":
         return (
-            len(subject) == 4
+            len(subject) == 5
             and subject[:2] == ["material", query.dimensions[0]]
             and all(subject[2:])
             and (not query.filter_ids or subject[2] in query.filter_ids)
         )
     return (
-        len(subject) == 4
+        len(subject) == 5
         and subject[:2] == ["material", "main_material_id"]
         and all(subject[2:])
+        and subject[2] == subject[3]
         and (not query.filter_ids or subject[2] in query.filter_ids)
     )
 
@@ -447,6 +450,69 @@ def _row_records(
                 # 带行但只有未知/不适用指标不是“完整空结果”；否则发布会误删旧事实。
                 raise _domain("report_metrics_invalid", "报表行没有可发布的请求指标")
     return records
+
+
+def _append_observations(session: Session, *, run: ReportSyncRun,
+                         records: list[dict[str, Any]], version: int,
+                         query: Any) -> None:
+    """在同一发布事务追加账户/campaign 观测；空结果不伪造零。"""
+    if not records:
+        return
+    groups: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+    for record in records:
+        subject = tuple(record["subject_key"])
+        if subject and subject[0] in {"account", "campaign"}:
+            groups.setdefault(subject, []).append(record)
+    projections = {
+        row.campaign_remote_id: row
+        for row in session.exec(
+            select(CampaignNameProjection).where(
+                CampaignNameProjection.tenant_id == run.tenant_id,
+                CampaignNameProjection.advertiser_id == run.advertiser_id,
+            )
+        ).all()
+    }
+    for subject, items in groups.items():
+        latest_projection = projections.get(subject[-1]) if subject[0] == "campaign" else None
+        digest = sha256("|".join(sorted(":".join(subject) for _ in items)).encode()).hexdigest()
+        values: dict[str, str | None] = {}
+        availability: dict[str, str] = {}
+        for item in items:
+            values[item["metric_name"]] = None if item["value"] is None else str(item["value"])
+            availability[item["metric_name"]] = item["availability"]
+        existing = session.exec(
+            select(ReportObservation).where(
+                ReportObservation.tenant_id == run.tenant_id,
+                ReportObservation.advertiser_id == run.advertiser_id,
+                ReportObservation.subject_key == list(subject),
+                ReportObservation.bucket_start == items[0]["bucket_start"],
+                ReportObservation.bucket_end == items[0]["bucket_end"],
+                ReportObservation.published_version >= version,
+            )
+        ).first()
+        if existing is not None:
+            continue
+        session.add(ReportObservation(
+            tenant_id=run.tenant_id,
+            advertiser_id=run.advertiser_id,
+            subject_kind=subject[0],
+            subject_key=list(subject),
+            bucket_start=items[0]["bucket_start"],
+            bucket_end=items[0]["bucket_end"],
+            granularity=query.granularity,
+            report_contract=query.report_contract,
+            metric_family=query.metric_family,
+            currency=query.currency,
+            timezone=query.timezone,
+            attribution=query.attribution,
+            values=values,
+            availability=availability,
+            observed_at=datetime.now(UTC),
+            membership_digest=digest,
+            name_revision=latest_projection.name_revision if latest_projection else 0,
+            grouping_revision=latest_projection.grouping_revision if latest_projection else 0,
+            published_version=version,
+        ))
 
 
 def publish_report(session: Session, *, run_id: UUID, claim_generation: int) -> int:
@@ -606,6 +672,7 @@ def publish_report(session: Session, *, run_id: UUID, claim_generation: int) -> 
             coverage.published_version = version
             coverage.request_sequence = run.request_sequence
             coverage.source_run_id = run.id
+    _append_observations(session, run=run, records=records, version=version, query=query)
     run.status = "COMPLETE"
     run.coverage = "COMPLETE_EMPTY" if not records else "COMPLETE"
     run.observed_at = datetime.now(UTC)

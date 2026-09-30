@@ -1,8 +1,8 @@
 """报表查询边界 DTO。
 
-这些 DTO 只描述已发布的本地报表合同。平台尚未提供的预算、目标 ROAS
-和创建时间字段保留为显式输入，以便 API 返回可解释的“不支持”，而不是
-把不存在的事实列伪装成可过滤数据。
+这些 DTO 只描述已发布的本地报表合同。预算模式、目标 ROAS 和创建时间来自
+目录配置，D0 ROAS 来自已发布事实聚合；它们由查询层显式应用，不能伪装成
+独立的经济事实列。
 """
 
 from datetime import date, datetime
@@ -49,7 +49,7 @@ class ReportingFilter(BaseModel):
     ad_types: tuple[str, ...] = ()
     operation_statuses: tuple[str, ...] = ()
     review_statuses: tuple[str, ...] = ()
-    # A 暂无预算模式事实；非空值由 compile_filter 明确拒绝。
+    # Directory configuration, applied by the aggregation layer.
     budget_modes: tuple[str, ...] = ()
     created_from: date | None = None
     created_to: date | None = None
@@ -139,6 +139,7 @@ class ReportRow(BaseModel):
     capabilities: dict[str, bool] = Field(default_factory=dict)
     directory_versions: dict[str, int] = Field(default_factory=dict)
     membership_digest: str = ""
+    coverage: dict[str, object] = Field(default_factory=dict)
 
 
 class TrendPoint(BaseModel):

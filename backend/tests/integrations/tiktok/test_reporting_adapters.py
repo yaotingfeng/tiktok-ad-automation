@@ -160,6 +160,7 @@ def test_material_day_accepts_date_only_and_rejects_short_totals():
         "material",
         "main_material_id",
         "m-1",
+        "m-1",
         "VIDEO_NON_SPARK_ADS",
     )
 

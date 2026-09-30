@@ -1,475 +1,406 @@
-"""B2 报表聚合。
-
-本模块只消费已经发布的 ``ReportFact`` 和目录身份。事实查询先重建租户权限，
-再用所选 BC 的授权账户谓词收窄；BC 不存在于事实主键中，不能从 source run
-或目录行反推。素材报表没有广告级使用身份时始终返回 UNSUPPORTED，避免把
-父广告金额复制给多个 VID。
-"""
-
+"""本地六维报表：授权范围、非重叠时间桶与指标覆盖共同决定可相加事实。"""
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from collections.abc import Sequence
-from datetime import UTC, datetime, time, timedelta
-from decimal import Decimal
+from datetime import UTC, date, datetime, time, timedelta
+from decimal import Decimal, InvalidOperation
+from hashlib import sha256
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
-from app.integrations.tiktok.contracts.ads import EntityRef, MaterialUseRef
+from app.integrations.tiktok.contracts.ads import EntityRef
+from app.modules.accounts.models import AdvertiserAccount
 from app.modules.ads.models import AdMaterialReference, AdObject, CampaignNameProjection
-from app.modules.reporting.filters import authorized_grants, compile_filter
-from app.modules.reporting.models import ReportFact
+from app.modules.reporting.contracts import CORE_METRICS, supports_metric
+from app.modules.reporting.filters import apply_authorized_scope, compile_filter
+from app.modules.reporting.models import ReportCoverage, ReportFact
 from app.modules.reporting.schemas import (
     Availability,
     MetricVector,
     ReportingFilter,
     ReportRow,
 )
-from app.modules.tenants.permissions import require_tenant
 
-CORE_METRICS = (
-    "spend",
-    "native_growth_ad_revenue_value_d0",
-    "native_growth_total_ad_impression_value",
-    "impressions",
-    "clicks",
-)
-
-_STATUS_RANK = {
-    "MISSING": 1,
-    "UNAVAILABLE": 2,
-    "UNSUPPORTED": 3,
-    "FAILED": 4,
-}
-_DIMENSION_CONTRACTS = {
-    "account": ("account", "basic_account"),
-    "campaign": ("campaign", "basic_campaign"),
-    "adgroup": ("adgroup", "basic_adgroup"),
-    "ad": ("ad", "basic_ad", "basic_smart_plus_ad"),
-    "material": ("material", "material_overview", "material_breakdown"),
+D0 = "native_growth_ad_revenue_value_d0"
+CONTRACTS = {
+    "account": ("basic_account",), "campaign": ("basic_campaign",),
+    "drama": ("basic_campaign",), "adgroup": ("basic_adgroup",),
+    "ad": ("basic_ad", "basic_smart_plus_ad"),
+    "material": ("material_overview", "material_breakdown"),
 }
 
 
-def _status(statuses: Sequence[str]) -> Availability:
-    if not statuses:
-        return "MISSING"
-    if all(item == "AVAILABLE" for item in statuses):
-        return "AVAILABLE"
-    return cast(Availability, max(statuses, key=lambda item: _STATUS_RANK.get(item, 0)))
+def scoped_rows(session: Session, model: Any, *, context: TenantContext, bc_id: str,
+                filters: ReportingFilter) -> list[Any]:
+    """每次读取显式传入行的 tenant 列，并使用 B1 的当前 BC grant 子查询。"""
+    statement = apply_authorized_scope(
+        session, select(model), context=context, bc_id=bc_id,
+        tenant_column=cast(Any, col(model.tenant_id)), advertiser_column=cast(Any, col(model.advertiser_id)),
+    )
+    if filters.advertiser_ids:
+        statement = statement.where(col(model.advertiser_id).in_(filters.advertiser_ids))
+    return list(session.exec(statement).all())
 
 
-def _safe_decimal(value: Decimal | None) -> Decimal | None:
-    if value is None:
-        return None
-    return Decimal(value)
+def period(filters: ReportingFilter, timezone: str) -> tuple[datetime, datetime]:
+    zone = ZoneInfo(timezone)
+    return (datetime.combine(filters.start_date, time.min, zone).astimezone(UTC),
+            datetime.combine(filters.end_date + timedelta(days=1), time.min, zone).astimezone(UTC))
+
+
+def bucket_key(vector: MetricVector) -> tuple[Any, ...]:
+    return (vector.currency, vector.timezone, vector.attribution,
+            tuple(sorted((name, state) for name, state in vector.availability.items() if name != "d0_roas")))
 
 
 def aggregate_metrics(rows: Sequence[MetricVector]) -> MetricVector:
-    """在完全相同口径和可用性桶内求和，并从汇总值计算 D0 ROAS。
-
-    缺失/失败行不会被当成零。调用方若需要同时展示完整与缺失覆盖，应按
-    availability signature 分别调用本函数；混合口径直接拒绝。
-    """
-
+    """仅同口径/覆盖相加；ROAS 为收入总和/消耗总和，零分母仍为空。"""
     if not rows:
         raise ValueError("cannot aggregate empty metric rows")
-    first = rows[0]
-    first_signature = tuple(sorted(first.availability.items()))
-    for row in rows[1:]:
-        if (
-            row.currency != first.currency
-            or row.timezone != first.timezone
-            or row.attribution != first.attribution
-            or row.optimization_goal != first.optimization_goal
-        ):
-            raise ValueError("metric rows have incompatible coordinates")
-        if tuple(sorted(row.availability.items())) != first_signature:
-            raise ValueError("metric rows have incompatible availability buckets")
-
-    names = set().union(*(row.values for row in rows))
+    if any(bucket_key(row) != bucket_key(rows[0]) for row in rows[1:]):
+        raise ValueError("incompatible coordinates or availability buckets")
     values: dict[str, Decimal | None] = {}
-    availability: dict[str, Availability] = {}
-    for name in sorted(names):
-        amounts: list[Decimal] = []
-        states: list[str] = []
-        for row in rows:
-            if name not in row.values:
-                states.append("MISSING")
-                continue
-            state = row.availability.get(name, "MISSING")
-            amount = row.values.get(name)
-            if state == "AVAILABLE" and amount is None:
-                # MetricVector accepts the shape for transport convenience, but
-                # an AVAILABLE metric without a value is not evidence of zero.
-                states.append("MISSING")
-            else:
-                states.append(state)
-            if state == "AVAILABLE" and amount is not None:
-                amounts.append(_safe_decimal(amount) or Decimal("0"))
-        state = _status(states)
-        availability[name] = state
-        values[name] = sum(amounts, Decimal("0")) if state == "AVAILABLE" else None
-
-    # ROAS is a ratio of totals, never an average of row ratios.
-    if "spend" in values and "native_growth_ad_revenue_value_d0" in values:
-        spend_state = availability["spend"]
-        revenue_state = availability["native_growth_ad_revenue_value_d0"]
-        if spend_state == revenue_state == "AVAILABLE":
-            spend = values["spend"]
-            revenue = values["native_growth_ad_revenue_value_d0"]
-            values["d0_roas"] = None if not spend else revenue / spend  # type: ignore[operator]
-            availability["d0_roas"] = "AVAILABLE"
+    states = dict(rows[0].availability)
+    states.pop("d0_roas", None)
+    for name, state in states.items():
+        amounts = [row.values.get(name) for row in rows]
+        if state == "AVAILABLE" and all(value is not None for value in amounts):
+            if any(not cast(Decimal, value).is_finite() for value in amounts):
+                raise ValueError("metrics require finite decimals")
+            values[name] = sum((cast(Decimal, value) for value in amounts), Decimal(0))
         else:
-            values["d0_roas"] = None
-            availability["d0_roas"] = _status((spend_state, revenue_state))
-
-    return MetricVector(
-        currency=first.currency,
-        timezone=first.timezone,
-        attribution=first.attribution,
-        optimization_goal=first.optimization_goal,
-        values=values,
-        availability=availability,
-    )
-
-
-def _period(filters: ReportingFilter) -> tuple[datetime, datetime]:
-    # ReportFact 时间都带时区；UTC 半开区间避免日期末尾精度问题。
-    start = datetime.combine(filters.start_date, time.min, tzinfo=UTC)
-    end = datetime.combine(filters.end_date + timedelta(days=1), time.min, tzinfo=UTC)
-    return start, end
-
-
-def _fact_rows(
-    session: Session,
-    *,
-    context: TenantContext,
-    bc_id: str,
-    filters: ReportingFilter,
-) -> tuple[ReportFact, ...]:
-    require_tenant(session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read")
-    grants = authorized_grants(
-        session,
-        context=context,
-        bc_id=bc_id,
-        advertiser_ids=filters.advertiser_ids,
-    )
-    advertiser_ids = tuple(sorted({grant.advertiser_id for grant in grants}))
-    if not advertiser_ids:
-        return ()
-    start, end = _period(filters)
-    statement = select(ReportFact).where(
-        ReportFact.tenant_id == context.tenant_id,
-        col(ReportFact.advertiser_id).in_(advertiser_ids),
-        ReportFact.bucket_start < end,
-        ReportFact.bucket_end > start,
-    )
-    return tuple(session.exec(statement).all())
-
-
-def _vector_from_fact(fact: ReportFact) -> MetricVector:
-    state = fact.availability
-    if state not in {"AVAILABLE", "MISSING", "UNAVAILABLE", "UNSUPPORTED", "FAILED"}:
-        state = "FAILED"
-    typed_state = cast(Availability, state)
-    return MetricVector(
-        currency=fact.currency,
-        timezone=fact.timezone,
-        attribution=fact.attribution,
-        values={fact.metric_name: _safe_decimal(fact.value) if typed_state == "AVAILABLE" else None},
-        availability={fact.metric_name: typed_state},
-    )
-
-
-def _row_key(advertiser_id: str, kind: str, remote_id: str) -> str:
-    return f"{advertiser_id}:{kind}:{remote_id}"
-
-
-def _latest_projections(
-    session: Session, *, tenant_id: Any, advertiser_ids: Sequence[str]
-) -> dict[tuple[str, str], CampaignNameProjection]:
-    if not advertiser_ids:
-        return {}
-    rows = session.exec(
-        select(CampaignNameProjection).where(
-            CampaignNameProjection.tenant_id == tenant_id,
-            col(CampaignNameProjection.advertiser_id).in_(advertiser_ids),
+            values[name] = None
+            if state == "AVAILABLE":
+                states[name] = "MISSING"
+    spend, revenue = values.get("spend"), values.get(D0)
+    values["d0_roas"] = revenue / spend if spend and revenue is not None else None
+    if values["d0_roas"] is not None:
+        states["d0_roas"] = "AVAILABLE"
+    else:
+        unavailable = {states.get("spend"), states.get(D0)}
+        states["d0_roas"] = next(
+            (state for state in ("FAILED", "UNSUPPORTED", "UNAVAILABLE", "MISSING") if state in unavailable),
+            "MISSING",
         )
-    ).all()
+    return MetricVector(currency=rows[0].currency, timezone=rows[0].timezone,
+                        attribution=rows[0].attribution, values=values, availability=states)
+
+
+def _coverage_matches(coverage: ReportCoverage, fact: ReportFact) -> bool:
+    subject_id = fact.subject_key[2] if fact.subject_key[0] == "material" else fact.subject_key[1]
+    return (coverage.advertiser_id == fact.advertiser_id
+            and coverage.report_contract == fact.report_contract
+            and coverage.currency == fact.currency and coverage.timezone == fact.timezone
+            and coverage.attribution == fact.attribution
+            and coverage.bucket_start <= fact.bucket_start and coverage.bucket_end >= fact.bucket_end
+            and (not coverage.filter_ids or subject_id in coverage.filter_ids)
+            and fact.metric_name in coverage.requested_metrics)
+
+
+def select_facts(facts: Sequence[ReportFact], coverages: Sequence[ReportCoverage],
+                 filters: ReportingFilter, *, grain: str | None = None) -> tuple[ReportFact, ...]:
+    """日期须完整包含桶，绝不按比例拆 RANGE。每个 subject 选择一种非重叠粒度。
+
+    DAY 优先，随后完整 RANGE，再 HOUR；同粒度重叠时新发布覆盖旧发布。
+    新 COMPLETE_EMPTY 覆盖同一目标/指标时屏蔽旧事实，缺页/失败保留旧值但覆盖标缺。
+    """
+    candidates: dict[tuple[Any, ...], list[ReportFact]] = defaultdict(list)
+    for fact in facts:
+        if fact.report_contract not in CONTRACTS[filters.dimension]:
+            continue
+        if fact.subject_key[0] == "material" and len(fact.subject_key) != 5:
+            raise ValueError("material subject requires five typed parts")
+        start, end = period(filters, fact.timezone)
+        if not start <= fact.bucket_start < fact.bucket_end <= end:
+            continue
+        if grain and fact.granularity != grain:
+            continue
+        empty = any(c.status == "COMPLETE_EMPTY" and c.request_sequence >= fact.request_sequence
+                    and _coverage_matches(c, fact) for c in coverages)
+        if empty:
+            continue
+        key = (fact.advertiser_id, tuple(fact.subject_key), fact.report_contract,
+               fact.currency, fact.timezone, fact.attribution)
+        candidates[key].append(fact)
+    selected: list[ReportFact] = []
+    for rows in candidates.values():
+        selected_grain = grain or min((r.granularity for r in rows), key={"DAY": 0, "RANGE": 1, "HOUR": 2}.__getitem__)
+        # 整个 subject 使用同一粒度，防止 spend 是 DAY、收入却是 HOUR 的伪 ROAS。
+        by_bucket: dict[tuple[datetime, datetime], list[ReportFact]] = defaultdict(list)
+        for row in rows:
+            if row.granularity == selected_grain:
+                by_bucket[(row.bucket_start, row.bucket_end)].append(row)
+        occupied: list[tuple[datetime, datetime]] = []
+        for bounds, items in sorted(by_bucket.items(), key=lambda item: (-max(r.request_sequence for r in item[1]), item[0])):
+            if any(bounds[0] < end and start < bounds[1] for start, end in occupied):
+                continue
+            occupied.append(bounds)
+            latest: dict[str, ReportFact] = {}
+            for item in items:
+                if item.metric_name not in latest or item.request_sequence > latest[item.metric_name].request_sequence:
+                    latest[item.metric_name] = item
+            selected.extend(latest.values())
+    return tuple(selected)
+
+
+def _aggregate_fact_vectors(facts: Sequence[ReportFact]) -> tuple[MetricVector, ...]:
+    # 先重组每个 subject/日期的完整指标向量，缺失收入不能借另一 subject 的收入补齐。
+    subjects: dict[tuple[Any, ...], list[ReportFact]] = defaultdict(list)
+    for fact in facts:
+        subjects[(fact.advertiser_id, tuple(fact.subject_key), fact.bucket_start, fact.bucket_end,
+                  fact.report_contract, fact.currency, fact.timezone, fact.attribution)].append(fact)
+    buckets: dict[tuple[Any, ...], list[MetricVector]] = defaultdict(list)
+    for items in subjects.values():
+        first = items[0]
+        values = dict.fromkeys(CORE_METRICS)
+        states: dict[str, Availability] = {name: "MISSING" if supports_metric(report_contract=first.report_contract, metric_name=name)
+                                          else "UNSUPPORTED" for name in CORE_METRICS}
+        for item in items:
+            if item.metric_name not in values:
+                raise ValueError("unknown canonical metric")
+            state = cast(Availability, item.availability)
+            if state == "AVAILABLE" and item.value is not None:
+                values[item.metric_name] = (values[item.metric_name] or Decimal(0)) + item.value
+                states[item.metric_name] = "AVAILABLE"
+            else:
+                values[item.metric_name] = None
+                states[item.metric_name] = state if state != "AVAILABLE" else "MISSING"
+        vector = MetricVector(currency=first.currency, timezone=first.timezone, attribution=first.attribution,
+                              values=values, availability=states)
+        buckets[bucket_key(vector)].append(vector)
+    return tuple(aggregate_metrics(rows) for _, rows in sorted(buckets.items()))
+
+
+def latest_projections(rows: Sequence[CampaignNameProjection]) -> dict[tuple[str, str], CampaignNameProjection]:
     result: dict[tuple[str, str], CampaignNameProjection] = {}
     for row in rows:
         key = (row.advertiser_id, row.campaign_remote_id)
-        if key not in result or row.name_revision > result[key].name_revision:
+        if key not in result or (
+            row.grouping_revision,
+            row.name_revision,
+            row.observed_at,
+        ) > (
+            result[key].grouping_revision,
+            result[key].name_revision,
+            result[key].observed_at,
+        ):
             result[key] = row
     return result
 
 
-def _directory(
-    session: Session,
-    *,
-    tenant_id: Any,
-    advertiser_ids: Sequence[str],
-) -> tuple[dict[tuple[str, str, str], AdObject], tuple[AdMaterialReference, ...]]:
-    objects = session.exec(
-        select(AdObject).where(
-            AdObject.tenant_id == tenant_id,
-            col(AdObject.advertiser_id).in_(advertiser_ids),
-        )
-    ).all()
-    by_key = {(row.advertiser_id, row.kind, row.remote_id): row for row in objects}
-    materials = tuple(
-        session.exec(
-            select(AdMaterialReference).where(
-                AdMaterialReference.tenant_id == tenant_id,
-                col(AdMaterialReference.advertiser_id).in_(advertiser_ids),
-            )
-        ).all()
-    )
-    return by_key, materials
+def drama_key(bc_id: str, advertiser_id: str, campaign_id: str,
+              projection: CampaignNameProjection | None) -> str:
+    if projection and projection.status == "VALID":
+        # JSON 元组编码避免名称内 ':' 产生碰撞；账户不参与有效剧的 BC 范围身份。
+        return f"{bc_id}:drama:{projection.provider_label}:{projection.drama_name}"
+    return f"{bc_id}:external:{advertiser_id}:{campaign_id}"
 
 
-def _material_identity(fact: ReportFact) -> tuple[str, str] | None:
-    subject = fact.subject_key
-    if not isinstance(subject, list) or len(subject) < 4 or subject[0] != "material":
+def _created(value: Any, timezone: str) -> date | None:
+    try:
+        if isinstance(value, (int, float)) or (isinstance(value, str) and value.isdigit()):
+            return datetime.fromtimestamp(float(value), ZoneInfo(timezone)).date()
+        if isinstance(value, str):
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return (parsed.replace(tzinfo=ZoneInfo(timezone)) if parsed.tzinfo is None else parsed.astimezone(ZoneInfo(timezone))).date()
+    except (ValueError, OverflowError, OSError):
+        pass
+    return None
+
+
+def _number(value: Any) -> Decimal | None:
+    try:
+        result = Decimal(str(value))
+        return result if result.is_finite() else None
+    except (ValueError, InvalidOperation):
         return None
-    # A1's five-part subject and the pre-A1 four-part fixture are both read
-    # defensively; neither shape proves an ad-level usage on its own.
-    return (str(subject[-2]), str(subject[-1]))
 
 
-def _unsupported_vector(*, currency: str, timezone: str, attribution: str) -> MetricVector:
-    return MetricVector(
-        currency=currency,
-        timezone=timezone,
-        attribution=attribution,
-        values=dict.fromkeys(CORE_METRICS),
-        availability=dict.fromkeys(CORE_METRICS, "UNSUPPORTED"),
-    )
+def _entity_matches(entity: AdObject | None, projection: CampaignNameProjection | None,
+                    filters: ReportingFilter, timezone: str) -> bool:
+    for allowed, value in ((filters.ad_types, entity.ad_type if entity else None),
+                           (filters.operation_statuses, entity.operation_status if entity else None),
+                           (filters.review_statuses, entity.review_status if entity else None)):
+        if allowed and value not in allowed:
+            return False
+    if filters.naming_status and (projection.status if projection else "INVALID") != filters.naming_status:
+        return False
+    config = entity.configuration if entity else {}
+    if filters.budget_modes and config.get("budget_mode") not in filters.budget_modes:
+        return False
+    created = _created(config.get("create_time"), timezone)
+    if filters.created_from and (created is None or created < filters.created_from):
+        return False
+    if filters.created_to and (created is None or created > filters.created_to):
+        return False
+    target = _number(config.get("roas_bid"))
+    for bound, lower in ((filters.min_target_roas, True), (filters.max_target_roas, False)):
+        if bound is not None and (target is None or (target < bound if lower else target > bound)):
+            return False
+    return True
 
 
 def _passes_filter(row: ReportRow, filters: ReportingFilter) -> bool:
-    if filters.ids and row.row_key.split(":")[-1] not in filters.ids and row.row_key not in filters.ids:
+    ids = {row.row_key, *(ref.remote_id for ref in row.refs)}
+    ids.update(value for key, value in row.display.items() if key.endswith("_id") and value)
+    if filters.ids and not ids.intersection(filters.ids):
         return False
-    if filters.query:
-        haystack = " ".join(value or "" for value in row.display.values()).casefold()
-        if any(word.casefold() not in haystack for word in filters.query.split()):
-            return False
-    if filters.operation_statuses:
-        status = row.display.get("operation_status")
-        if status not in filters.operation_statuses:
-            return False
-    if filters.review_statuses:
-        status = row.display.get("review_status")
-        if status not in filters.review_statuses:
-            return False
-    for vector in row.metric_buckets:
-        spend = vector.values.get("spend")
-        if filters.min_spend is not None and (spend is None or spend < filters.min_spend):
-            continue
-        if filters.max_spend is not None and (spend is None or spend > filters.max_spend):
-            continue
-        return True
-    return not (filters.min_spend is not None or filters.max_spend is not None)
+    text = " ".join([row.row_key, *sorted(ids), *(value for value in row.display.values() if value)]).casefold()
+    if filters.query and any(word.casefold() not in text for word in filters.query.split()):
+        return False
+    bounds = (("spend", filters.min_spend, filters.max_spend),
+              ("d0_roas", filters.min_d0_roas, filters.max_d0_roas))
+    if any(low is not None or high is not None for _, low, high in bounds):
+        return any(all((low is None or (v.values.get(name) is not None and cast(Decimal, v.values[name]) >= low))
+                       and (high is None or (v.values.get(name) is not None and cast(Decimal, v.values[name]) <= high))
+                       for name, low, high in bounds) for v in row.metric_buckets)
+    return True
 
 
-def _aggregate_fact_vectors(facts: Sequence[ReportFact]) -> tuple[MetricVector, ...]:
-    groups: dict[tuple[str, str, str], list[MetricVector]] = defaultdict(list)
-    for fact in facts:
-        groups[(fact.currency, fact.timezone, fact.attribution)].append(_vector_from_fact(fact))
-    result: list[MetricVector] = []
-    for _key, vectors in sorted(groups.items()):
-        # ReportFact stores one metric per row. Reassemble the metric vector
-        # first, otherwise spend and native D0 revenue would look like two
-        # incompatible buckets and ROAS could never be derived.
-        values: dict[str, Decimal | None] = {}
-        availability: dict[str, Availability] = {}
-        by_metric: dict[str, list[MetricVector]] = defaultdict(list)
-        for vector in vectors:
-            for name in vector.values:
-                by_metric[name].append(vector)
-        for name, metric_rows in by_metric.items():
-            states = [row.availability[name] for row in metric_rows]
-            state = _status(states)
-            availability[name] = state
-            amounts = [
-                cast(Decimal, row.values[name])
-                for row in metric_rows
-                if row.availability[name] == "AVAILABLE" and row.values[name] is not None
-            ]
-            values[name] = sum(amounts, Decimal("0")) if state == "AVAILABLE" else None
-        if values:
-            result.append(
-                aggregate_metrics(
-                    [
-                        MetricVector(
-                            currency=_key[0],
-                            timezone=_key[1],
-                            attribution=_key[2],
-                            values=values,
-                            availability=availability,
-                        )
-                    ]
-                )
-            )
-    return tuple(result)
+def _sort_rows(rows: Sequence[ReportRow], filters: ReportingFilter) -> tuple[ReportRow, ...]:
+    ordered = sorted(rows, key=lambda row: row.row_key)
+    if filters.sort_by == "spend":
+        # 混币种行没有可排序的合计金额，明确拒绝而非取 max 或偷偷换汇。
+        if any(len(row.metric_buckets) > 1 for row in rows):
+            raise ValueError("spend sorting requires one compatible metric bucket per row")
+        currencies = {v.currency for row in rows for v in row.metric_buckets}
+        if len(currencies) > 1:
+            raise ValueError("spend sorting requires one currency")
+        def spend_key(row: ReportRow) -> tuple[bool, Decimal]:
+            value = row.metric_buckets[0].values.get("spend") if row.metric_buckets else None
+            amount = cast(Decimal, value) if value is not None else Decimal(0)
+            # Missing values remain at the end for both directions.
+            return (value is None, -amount if filters.sort_direction == "desc" else amount)
+
+        return tuple(sorted(ordered, key=spend_key))
+    return tuple(sorted(ordered, key=lambda row: (row.display.get("name") or "") if filters.sort_by == "name" else row.row_key,
+                        reverse=filters.sort_direction == "desc"))
 
 
-def build_dimension_rows(
-    session: Session,
-    *,
-    context: TenantContext,
-    bc_id: str,
-    filters: ReportingFilter,
-) -> tuple[ReportRow, ...]:
-    """构造六维行；目录缺失的报表身份仍保留，授权范围始终由 BC grant 决定。"""
+def _row_coverage(items: Sequence[ReportFact], coverages: Sequence[ReportCoverage],
+                  advertiser_id: str, remote_id: str, filters: ReportingFilter) -> dict[str, object]:
+    rows = [c for c in coverages if c.advertiser_id == advertiser_id and c.report_contract in CONTRACTS[filters.dimension]
+            and (not c.filter_ids or remote_id in c.filter_ids)
+            and period(filters, c.timezone)[0] <= c.bucket_start < c.bucket_end <= period(filters, c.timezone)[1]]
+    if not rows:
+        return {"status": "MISSING", "reason": "coverage_unavailable"}
+    latest: dict[tuple[Any, ...], ReportCoverage] = {}
+    for row in rows:
+        key = (row.bucket_start, row.bucket_end, row.report_contract, row.currency, row.timezone, tuple(sorted(row.requested_metrics)))
+        if key not in latest or row.request_sequence > latest[key].request_sequence:
+            latest[key] = row
+    statuses = sorted({row.status for row in latest.values()})
+    complete = all(state in {"COMPLETE", "COMPLETE_EMPTY"} for state in statuses)
+    intervals = sorted({(row.bucket_start, row.bucket_end) for row in latest.values()})
+    # 只有已证实连续覆盖整个所选日期窗口才标 COMPLETE。
+    start, end = period(filters, rows[0].timezone)
+    cursor = start
+    for left, right in intervals:
+        if left > cursor:
+            complete = False
+        cursor = max(cursor, right)
+    complete = complete and cursor >= end
+    status = ("COMPLETE_EMPTY" if not items and statuses == ["COMPLETE_EMPTY"] else "COMPLETE") if complete else "INCOMPLETE"
+    if statuses == ["FAILED"]:
+        status = "FAILED"
+    return {"status": status, "source_statuses": statuses,
+            "published_versions": sorted({row.published_version for row in latest.values()})}
 
+
+def build_dimension_rows(session: Session, *, context: TenantContext, bc_id: str,
+                         filters: ReportingFilter) -> tuple[ReportRow, ...]:
     compile_filter(filters)
-    facts = _fact_rows(session, context=context, bc_id=bc_id, filters=filters)
-    grants = authorized_grants(session, context=context, bc_id=bc_id, advertiser_ids=filters.advertiser_ids)
-    advertiser_ids = tuple(sorted({grant.advertiser_id for grant in grants}))
-    directory, materials = _directory(
-        session, tenant_id=context.tenant_id, advertiser_ids=advertiser_ids
-    )
-    projections = _latest_projections(
-        session, tenant_id=context.tenant_id, advertiser_ids=advertiser_ids
-    )
-    dimension = filters.dimension
-    if dimension == "drama":
-        return _build_drama_rows(facts, directory, projections, filters)
-    if dimension == "material":
-        return _build_material_rows(facts, materials, filters)
-    expected = _DIMENSION_CONTRACTS[dimension][0]
-    contracts = set(_DIMENSION_CONTRACTS[dimension][1:])
-    grouped: dict[str, list[ReportFact]] = defaultdict(list)
-    for fact in facts:
-        if fact.report_contract not in contracts or not fact.subject_key:
+    accounts = {row.advertiser_id: row for row in scoped_rows(session, AdvertiserAccount, context=context, bc_id=bc_id, filters=filters)}
+    objects = {(row.advertiser_id, row.kind, row.remote_id): row for row in scoped_rows(session, AdObject, context=context, bc_id=bc_id, filters=filters)}
+    projections = latest_projections(scoped_rows(session, CampaignNameProjection, context=context, bc_id=bc_id, filters=filters))
+    coverages = scoped_rows(session, ReportCoverage, context=context, bc_id=bc_id, filters=filters)
+    facts = select_facts(scoped_rows(session, ReportFact, context=context, bc_id=bc_id, filters=filters), coverages, filters)
+    if filters.dimension == "material":
+        return _build_material_rows(facts, scoped_rows(session, AdMaterialReference, context=context, bc_id=bc_id, filters=filters), filters,
+                                    directory=objects, projections=projections)
+    kind = "campaign" if filters.dimension == "drama" else filters.dimension
+    identities = {(fact.advertiser_id, fact.subject_key[1]) for fact in facts if fact.subject_key[0] == kind}
+    identities.update((adv, rid) for adv, obj_kind, rid in objects if obj_kind == kind)
+    if kind == "account":
+        identities.update((adv, adv) for adv in accounts)
+    grouped: dict[str, list[ReportRow]] = defaultdict(list)
+    for adv, rid in sorted(identities):
+        entity = objects.get((adv, kind, rid))
+        projection = projections.get((adv, rid)) if kind == "campaign" else None
+        if not _entity_matches(entity, projection, filters, accounts[adv].timezone):
             continue
-        if fact.subject_key[0] != expected or len(fact.subject_key) < 2:
-            continue
-        grouped[_row_key(fact.advertiser_id, expected, fact.subject_key[1])].append(fact)
-    rows: list[ReportRow] = []
-    for key, items in grouped.items():
-        advertiser_id, kind, remote_id = key.split(":", 2)
-        entity = directory.get((advertiser_id, kind, remote_id))
-        display = {
-            "name": entity.name if entity else None,
-            "operation_status": entity.operation_status if entity else None,
-            "review_status": entity.review_status if entity else None,
-            "ad_type": entity.ad_type if entity else None,
-        }
-        refs = (entity.ref,) if entity else ()
-        row = ReportRow(
-            row_key=key,
-            display=display,
-            refs=refs,
+        items = [f for f in facts if f.advertiser_id == adv and f.subject_key == [kind, rid]]
+        key = drama_key(bc_id, adv, rid, projection) if filters.dimension == "drama" else f"{adv}:{kind}:{rid}"
+        refs: tuple[EntityRef, ...] = () if kind == "account" else (EntityRef(context.tenant_id, adv, cast(Any, kind), rid),)
+        name = (projection.drama_name if projection and projection.status == "VALID" else rid) if filters.dimension == "drama" else entity.name if entity else rid
+        row = ReportRow(row_key=key, refs=refs,
+            display={"name": name, "remote_id": rid, "provider": projection.provider_label if projection else None,
+                     "naming_status": projection.status if projection else "INVALID",
+                     "ad_type": entity.ad_type if entity else None, "operation_status": entity.operation_status if entity else None,
+                     "review_status": entity.review_status if entity else None},
             metric_buckets=_aggregate_fact_vectors(items),
-            directory_versions={"published_version": entity.published_version} if entity else {},
-        )
-        if _passes_filter(row, filters):
-            rows.append(row)
-    return tuple(sorted(rows, key=lambda item: item.row_key))
+            coverage=_row_coverage(items, coverages, adv, rid, filters),
+            directory_versions={f"{adv}:{rid}": entity.published_version} if entity else {})
+        grouped[key].append(row)
+    result: list[ReportRow] = []
+    for key, rows in grouped.items():
+        vectors: dict[tuple[Any, ...], list[MetricVector]] = defaultdict(list)
+        for row in rows:
+            for vector in row.metric_buckets:
+                vectors[bucket_key(vector)].append(vector)
+        refs = tuple(ref for row in rows for ref in row.refs)
+        statuses = {row.coverage["status"] for row in rows}
+        result_row = rows[0].model_copy(update={"refs": refs,
+            "metric_buckets": tuple(aggregate_metrics(v) for _, v in sorted(vectors.items())),
+            "coverage": {"status": next(iter(statuses)) if len(statuses) == 1 else "INCOMPLETE", "members": [row.coverage for row in rows]},
+            "membership_digest": sha256(json.dumps(sorted((str(ref.tenant_id), ref.advertiser_id, ref.kind, ref.remote_id) for ref in refs)).encode()).hexdigest(),
+            "directory_versions": {key: value for row in rows for key, value in row.directory_versions.items()}})
+        if _passes_filter(result_row, filters):
+            result.append(result_row)
+    return _sort_rows(result, filters)
 
 
-def _build_drama_rows(
-    facts: Sequence[ReportFact],
-    directory: dict[tuple[str, str, str], AdObject],
-    projections: dict[tuple[str, str], CampaignNameProjection],
-    filters: ReportingFilter,
-) -> tuple[ReportRow, ...]:
-    grouped: dict[str, list[ReportFact]] = defaultdict(list)
-    displays: dict[str, dict[str, str | None]] = {}
-    refs: dict[str, list[EntityRef]] = defaultdict(list)
+def _build_material_rows(facts: Sequence[ReportFact], materials: Sequence[AdMaterialReference], filters: ReportingFilter,
+                         *, directory: dict[tuple[str, str, str], AdObject] | None = None,
+                         projections: dict[tuple[str, str], CampaignNameProjection] | None = None) -> tuple[ReportRow, ...]:
+    directory, projections = directory or {}, projections or {}
+    grouped: dict[tuple[str, ...], list[ReportFact]] = defaultdict(list)
     for fact in facts:
-        if fact.report_contract != "basic_campaign" or len(fact.subject_key) < 2:
+        if len(fact.subject_key) != 5 or fact.subject_key[0] != "material":
+            raise ValueError("material subject requires five typed parts")
+        grouped[(fact.advertiser_id, *fact.subject_key[1:])].append(fact)
+    result = []
+    for (adv, dimension, grouping, main_id, main_type), items in grouped.items():
+        # 只有广告分组本身可证明金额属于该广告。单个 VID 候选绝不是广告用量证明。
+        candidates = [m for m in materials if m.advertiser_id == adv
+                      and (m.main_material_id == main_id or m.platform_material_id == main_id)
+                      and (m.main_material_type == main_type or m.material_type == main_type)
+                      and m.complete]
+        # The grouping value scopes the report row; ad identity must come from
+        # the actual fact attributes/use_ref, never from grouping or VID.
+        ad_ids = {str(item.attributes.get("ad_id")) for item in items if item.attributes.get("ad_id")}
+        if ad_ids:
+            candidates = [m for m in candidates if m.ad_remote_id in ad_ids]
+        proven = bool(ad_ids) and len(candidates) == len(ad_ids)
+        entity = directory.get((adv, "ad", next(iter(ad_ids), grouping))) if proven else None
+        if not _entity_matches(entity, None, filters, items[0].timezone):
             continue
-        campaign_id = fact.subject_key[1]
-        projection = projections.get((fact.advertiser_id, campaign_id))
-        if projection and projection.status == "VALID":
-            key = f"{fact.advertiser_id}:drama:{projection.provider_label}:{projection.drama_name}"
-            display = {"provider": projection.provider_label, "drama_name": projection.drama_name}
-        else:
-            # Invalid/missing naming is an externally visible campaign, never
-            # silently dropped from the drama view.
-            key = f"{fact.advertiser_id}:external:{campaign_id}"
-            display = {"provider": None, "drama_name": None, "external_campaign_id": campaign_id}
-        grouped[key].append(fact)
-        displays[key] = display
-        entity = directory.get((fact.advertiser_id, "campaign", campaign_id))
-        if entity and entity.ref not in refs[key]:
-            refs[key].append(entity.ref)
-    rows = []
-    for key, items in grouped.items():
-        row = ReportRow(
-            row_key=key,
-            display=displays[key],
-            refs=tuple(refs[key]),
-            metric_buckets=_aggregate_fact_vectors(items),
-        )
-        if _passes_filter(row, filters):
-            rows.append(row)
-    return tuple(sorted(rows, key=lambda item: item.row_key))
-
-
-def _build_material_rows(
-    facts: Sequence[ReportFact], materials: Sequence[AdMaterialReference], filters: ReportingFilter
-) -> tuple[ReportRow, ...]:
-    by_identity: dict[tuple[str, str, str], list[ReportFact]] = defaultdict(list)
-    uses: dict[tuple[str, str, str], list[AdMaterialReference]] = defaultdict(list)
-    for material in materials:
-        uses[(material.advertiser_id, material.platform_material_id, material.material_type)].append(material)
-    for fact in facts:
-        if fact.report_contract not in {"material_overview", "material_breakdown"}:
-            continue
-        identity = _material_identity(fact)
-        if identity is None:
-            continue
-        by_identity[(fact.advertiser_id, identity[0], identity[1])].append(fact)
-    rows: list[ReportRow] = []
-    for key, items in by_identity.items():
-        advertiser_id, platform_id, material_type = key
-        candidates = uses.get(key, [])
-        proven_items: list[ReportFact] = []
-        proven_refs: list[AdMaterialReference] = []
-        for fact in items:
-            attrs = fact.attributes or {}
-            ad_id = attrs.get("ad_id")
-            ad_material_id = attrs.get("ad_material_id")
-            matches = candidates
-            if isinstance(ad_id, str):
-                matches = [item for item in matches if item.ad_remote_id == ad_id]
-            if isinstance(ad_material_id, str):
-                matches = [item for item in matches if item.ad_material_id == ad_material_id]
-            if len(matches) == 1:
-                proven_items.append(fact)
-                if matches[0] not in proven_refs:
-                    proven_refs.append(matches[0])
-        # A fact without an unambiguous ad-level use is not additive. Keep an
-        # explicit unsupported row so callers can explain why spend is absent.
-        proven = len(proven_items) == len(items) and bool(proven_items)
-        vectors: tuple[MetricVector, ...]
+        vectors = _aggregate_fact_vectors(items)
         if not proven:
-            vectors = (
-                _unsupported_vector(
-                    currency=items[0].currency,
-                    timezone=items[0].timezone,
-                    attribution=items[0].attribution,
-                ),
-            )
-            row_uses: tuple[MaterialUseRef, ...] = tuple(item.use_ref for item in candidates)
-            row_refs = tuple(item.use_ref.ad_ref for item in candidates)
-        else:
-            vectors = _aggregate_fact_vectors(proven_items)
-            row_uses = tuple(item.use_ref for item in proven_refs)
-            row_refs = tuple(item.use_ref.ad_ref for item in proven_refs)
-        row = ReportRow(
-            row_key=f"{advertiser_id}:material:{platform_id}:{material_type}",
-            display={"name": candidates[0].name if candidates else None, "material_type": material_type},
-            refs=row_refs,
-            material_uses=row_uses,
-            metric_buckets=vectors,
-        )
+            vectors = tuple(v.model_copy(update={"values": dict.fromkeys(v.values),
+                                                "availability": dict.fromkeys(v.availability, "UNSUPPORTED")}) for v in vectors)
+        row = ReportRow(row_key=json.dumps([adv, "material", dimension, grouping, main_id, main_type]),
+                        display={"name": candidates[0].name if proven else main_id, "main_material_id": main_id,
+                                 "grouping_id": grouping, "material_type": main_type},
+                        refs=tuple(item.use_ref.ad_ref for item in candidates) if proven else (),
+                        material_uses=tuple(item.use_ref for item in candidates) if proven else (),
+                        metric_buckets=vectors, coverage={"status": "INCOMPLETE" if proven else "UNSUPPORTED",
+                                                        "reason": "material_coverage_unverified" if proven else "ad_usage_unproven"})
         if _passes_filter(row, filters):
-            rows.append(row)
-    return tuple(sorted(rows, key=lambda item: item.row_key))
+            result.append(row)
+    return _sort_rows(result, filters)

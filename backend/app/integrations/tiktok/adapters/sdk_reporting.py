@@ -144,15 +144,16 @@ def _row(query: ReportQuery, raw: dict[str, Any]) -> ReportRow:
         first = query.dimensions[0]
         material_id = _identifier(dimensions.get("main_material_id"))
         material_type = _identifier(dimensions.get("main_material_type"))
-        # A5 将 typed 素材身份固定为 (material, grouping dimension,
-        # main_material_id, main_material_type)，不能把素材 ID 重复填入 type 槽。
-        subject = ("material", first, material_id, material_type)
+        grouping_value = _identifier(dimensions.get(first))
+        # A1 的持久化身份必须同时保留分组维度和值、typed 主素材身份；
+        # 不能把分组值藏进 attributes，也不能以四段旧 subject 静默兼容。
+        subject = ("material", first, grouping_value, material_id, material_type)
         attributes: dict[str, Any] = {
             "main_material_id": material_id,
             "main_material_type": material_type,
         }
         if first != "main_material_id":
-            attributes[first] = _identifier(dimensions.get(first))
+            attributes[first] = grouping_value
     else:
         identity = query.dimensions[0]
         subject = ("account" if identity == "advertiser_id" else "campaign" if identity == "campaign_id" else "adgroup" if identity == "adgroup_id" else "creative" if contract == "basic_smart_plus_creative" else "ad", _identifier(dimensions.get(identity)))

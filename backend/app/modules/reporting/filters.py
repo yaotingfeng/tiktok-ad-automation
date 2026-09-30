@@ -19,14 +19,6 @@ from app.modules.reporting.schemas import ReportingFilter
 from app.modules.tenants.permissions import require_tenant
 
 SUPPORTED_SORT_FIELDS = frozenset({"row_key", "name", "spend"})
-UNSUPPORTED_FIELDS = {
-    "budget_modes",
-    "created_from",
-    "created_to",
-    "min_target_roas",
-    "max_target_roas",
-}
-
 
 def _like_literal(value: str) -> str:
     """Escape SQL LIKE metacharacters while retaining parameter binding."""
@@ -107,14 +99,9 @@ def compile_filter(filters: ReportingFilter) -> CompiledFilter:
         raise ValueError("unsupported sort field")
     if filters.sort_direction not in {"asc", "desc"}:
         raise ValueError("unsupported sort direction")
-    # These fields have no A fact/directory coordinate. Rejecting them keeps a
-    # future API caller from silently querying fabricated economics.
-    for field in UNSUPPORTED_FIELDS:
-        value = getattr(filters, field)
-        if value not in (None, (), ""):
-            raise ValueError(f"unsupported report filter: {field}")
-    if filters.min_d0_roas is not None or filters.max_d0_roas is not None:
-        raise ValueError("d0 ROAS filtering is not supported by the published facts")
+    # Directory configuration and D0 ROAS predicates are applied by the
+    # aggregation layer.  Keep compilation side-effect free so callers cannot
+    # accidentally turn an accepted filter into a silent no-op.
     query = filters.query or ""
     keywords = tuple(query.split())
     return CompiledFilter(

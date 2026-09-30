@@ -62,6 +62,23 @@ def test_filter_rejects_invalid_ranges_values_and_sort(kwargs):
         compile_filter(ReportingFilter(**(base | kwargs)))
 
 
+def test_filter_compiles_directory_configuration_and_d0_thresholds():
+    compiled = compile_filter(
+        ReportingFilter(
+            dimension="campaign",
+            start_date=date(2026, 9, 30),
+            end_date=date(2026, 9, 30),
+            budget_modes=("BUDGET_MODE_DYNAMIC",),
+            created_from=date(2026, 9, 1),
+            created_to=date(2026, 9, 30),
+            min_target_roas=Decimal("1.2"),
+            max_target_roas=Decimal("3.0"),
+            min_d0_roas=Decimal("1.0"),
+        )
+    )
+    assert compiled.dimension == "campaign"
+
+
 @pytest.mark.parametrize(
     "metric_kwargs",
     [

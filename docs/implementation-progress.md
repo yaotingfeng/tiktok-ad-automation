@@ -1,3 +1,9 @@
+## 2026-09-30：B2 聚合与趋势复审修复
+
+- B2 复审修复已完成：按 BC/provider/剧名合并 drama，选择账户本地时区的非重叠事实桶并读取 coverage，五段素材 subject 与真实 use_ref 证明固定，素材 D0 明确 UNSUPPORTED。
+- 趋势保留同桶修正、比较同日相邻桶并区分 scope/date 变化；成功 account/campaign 发布在同一事务追加幂等 ReportObservation，drama 趋势按最新 CampaignNameProjection 重投影。预算模式、目标 ROAS、create_time 和 D0 ROAS 筛选由聚合层明确处理。
+- 专用 PostgreSQL/Redis 测试环境中 reporting + adapter 回归 72 项通过，新增聚合/趋势/筛选回归；未调用 TikTok/MCP、未写广告、未部署。
+
 ## 2026-09-30：广告管理与报表实施中（A1–A8 已复核，B1 开始）
 
 - A1 已提交 `1b00899`：严格对象/素材引用、目录及报表 DTO、命名前两段解析；新增 120 项合同测试，相关回归共 182 项通过，Ruff/Mypy/格式/语法检查通过，独立复核通过且无发现。
