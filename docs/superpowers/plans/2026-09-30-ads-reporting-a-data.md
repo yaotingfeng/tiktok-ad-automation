@@ -125,17 +125,17 @@ assert ads_transport.gateway.ads.read_balance('account-test').amount is None
 - Consumes A2 对象及 A3 gateway；Produces `AdDirectoryRun`、`AdDirectoryPage`（冻结 route/账户/类型/页、claim_generation、observed_at、coverage、发布版本）。
 - Produces `stage_directory_page(session,*,run_id:UUID,page:DirectoryPage,claim_generation:int)->None`、`publish_directory(session,*,run_id:UUID,claim_generation:int)->int`；所有发布版本为单调整数。
 
-- [ ] **RED：** fixture `directory_run` 创建真实 staging/live 数据；RF1/RF3 覆盖失败中页、重复页、末页缺失、原名备注修改、未见≠删除。
+- [x] **RED：** fixture `directory_run` 创建真实 staging/live 数据；RF1/RF3 覆盖失败中页、重复页、末页缺失、原名备注修改、未见≠删除。
 ```python
 stage_directory_page(session, run_id=directory_run.id, page=directory_run.first_page, claim_generation=1)
 with pytest.raises(DomainError):
     publish_directory(session, run_id=directory_run.id, claim_generation=1)
 assert locate(session, context=directory_run.context, bc_id=directory_run.bc_id, ref=directory_run.ref).published_version == 1
 ```
-- [ ] **Run RED：** `uv run --frozen pytest tests/modules/ads/test_directory_sync.py -q`，预期新发布接口缺失失败。
-- [ ] **Implement：** 完整分页后事务发布；旧版本晚到拒绝；缺失对象只标本次未见，明确远端删除才能改删除状态。名称首两段变更递增 name_revision，备注变更不迁组；历史事实不改写为剧合计。
-- [ ] **GREEN：** 重跑；断点续接不重复对象，缺父系列安排定向补齐，命名不规范保留目录；素材使用关系不依赖本地上传或创建记录。
-- [ ] **Commit：** 明确暂存本任务列出路径及进度记录，提交 `ads: publish complete directory snapshots and naming projections`。
+- [x] **Run RED：** `uv run --frozen pytest tests/modules/ads/test_directory_sync.py -q`，预期新发布接口缺失失败。
+- [x] **Implement：** 完整分页后事务发布；旧版本晚到拒绝；缺失对象只标本次未见，明确远端删除才能改删除状态。名称首两段变更递增 name_revision，备注变更不迁组；历史事实不改写为剧合计。
+- [x] **GREEN：** 重跑；断点续接不重复对象，缺父系列安排定向补齐，命名不规范保留目录；素材使用关系不依赖本地上传或创建记录。
+- [x] **Commit：** `348dc04` 初始实现，随后以 `8f5d929`、`3b7d657`、`4596c97`、`9252b8a`、`6b1008b`、`be2dd10` 完成修复与复核；最终提交标题为目录完整发布与名称投影。
 
 ### Task 5 (A5): 指标合同与不可混写的事实发布边界
 
