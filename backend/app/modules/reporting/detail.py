@@ -17,6 +17,7 @@ from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.ads import EntityRef, MaterialUseRef
 from app.modules.ads import directory
 from app.modules.ads.models import AdMaterialReference, AdObject
+from app.modules.tenants.models import AuditEvent
 
 
 class ParentRestrictionPublic(BaseModel):
@@ -133,14 +134,23 @@ def get_ad_detail(
         )
         for row in material_rows
     )
-    history = (
+    # AuditEvent is the only persisted operation history currently shared by A.
+    # Do not synthesize a history event from the current directory snapshot.
+    history_rows = session.exec(
+        select(AuditEvent).where(
+            AuditEvent.tenant_id == context.tenant_id,
+            AuditEvent.target_id.in_((ref.remote_id, str(ref))),
+        ).order_by(col(AuditEvent.created_at).desc())
+    ).all()
+    history = tuple(
         {
-            "observed_at": entity.observed_at.isoformat(),
-            "published_version": entity.published_version,
-            "operation_status": entity.operation_status,
-            "review_status": entity.review_status,
-            "delivery_status": entity.delivery_status,
-        },
+            "id": str(row.id),
+            "action": row.action,
+            "details": row.details,
+            "created_at": row.created_at.isoformat(),
+        }
+        for row in history_rows
+        if row.details.get("bc_id") == bc_id
     )
     return AdDetailPublic(
         ref=entity.ref,

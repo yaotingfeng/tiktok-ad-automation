@@ -16,14 +16,17 @@ from fastapi import HTTPException
 from sqlmodel import Session, select
 
 from app.core.context import TenantContext
-from app.modules.ads.models import AdObject
+from app.core.db import engine
+from app.modules.ads.models import AdObject, CampaignNameProjection
 from app.modules.reporting.aggregation import aggregate_metrics, build_dimension_rows
 from app.modules.reporting.filters import authorized_grants, compile_filter
+from app.modules.reporting.models import ReportFact
 from app.modules.reporting.query_models import (
     QuerySnapshot,
     QuerySnapshotRow,
     read_snapshot,
     read_snapshot_rows,
+    snapshot_transaction,
 )
 from app.modules.reporting.schemas import (
     AdsQueryPage,
@@ -33,6 +36,7 @@ from app.modules.reporting.schemas import (
     ReportRow,
     TrendPublic,
 )
+from app.modules.reporting.sync_models import ReportSyncRun
 from app.modules.reporting.trends import build_trend
 from app.modules.tenants.permissions import require_tenant
 
@@ -154,25 +158,43 @@ def _new_snapshot(
     )
     if filters.advertiser_ids and {item.advertiser_id for item in grants} != set(filters.advertiser_ids):
         raise HTTPException(403, detail="report_scope_forbidden")
+    allowed_ids = {item.advertiser_id for item in grants}
+    connection_ids = {item.connection_id for item in grants}
     now = datetime.now(UTC)
     statuses = [row.coverage.get("status") for row in rows]
-    publication_versions = {
-        str(version): int(version)
-        for version in {
-            int(value)
-            for row in rows
-            for value in row.coverage.get("published_versions", [])
-            if str(value).isdigit()
-        }
-    }
-    publication_versions.setdefault("reporting", 1)
-    naming_versions = {
-        key: int(value)
+    publication_versions = {"reporting": 1}
+    facts = session.exec(
+        select(ReportFact.published_version).where(
+            ReportFact.tenant_id == context.tenant_id,
+            ReportFact.advertiser_id.in_(allowed_ids),
+            ReportSyncRun.bc_id == bc_id,
+            ReportSyncRun.connection_id.in_(connection_ids),
+        )
+        .join(
+            ReportSyncRun,
+            (ReportSyncRun.tenant_id == ReportFact.tenant_id)
+            & (ReportSyncRun.id == ReportFact.source_run_id),
+        )
+    ).all()
+    if facts:
+        publication_versions["max"] = max(int(value) for value in facts)
+    naming_versions = {"directory": 1}
+    campaigns = {
+        (ref.advertiser_id, ref.remote_id)
         for row in rows
-        for key, value in row.directory_versions.items()
-        if isinstance(value, int)
+        for ref in row.refs
+        if ref.kind == "campaign"
     }
-    naming_versions.setdefault("directory", 1)
+    if campaigns:
+        projections = session.exec(
+            select(CampaignNameProjection).where(
+                CampaignNameProjection.tenant_id == context.tenant_id,
+                CampaignNameProjection.advertiser_id.in_({item[0] for item in campaigns}),
+                CampaignNameProjection.campaign_remote_id.in_({item[1] for item in campaigns}),
+            )
+        ).all()
+        for projection in projections:
+            naming_versions[f"{projection.advertiser_id}:{projection.campaign_remote_id}"] = projection.name_revision
     snapshot = QuerySnapshot(
         id=uuid4(),
         tenant_id=context.tenant_id,
@@ -259,6 +281,54 @@ def _read_page(
     )
 
 
+def _build_snapshot(
+    session: Session,
+    *,
+    context: TenantContext,
+    bc_id: str,
+    filters: ReportingFilter,
+) -> QuerySnapshot:
+    rows = build_dimension_rows(session, context=context, bc_id=bc_id, filters=filters)
+    # Account rows are report aggregates, but management selection must retain
+    # the exact campaign refs visible at snapshot creation time. The query's
+    # authorized account set is fixed once, and one batch query avoids N+1 reads.
+    frozen_rows: list[ReportRow] = []
+    if filters.dimension == "account":
+        grants = authorized_grants(
+            session, context=context, bc_id=bc_id, advertiser_ids=filters.advertiser_ids
+        )
+        allowed_ids = {item.advertiser_id for item in grants}
+        connection_ids = {item.connection_id for item in grants}
+        campaigns = session.exec(
+            select(AdObject).where(
+                AdObject.tenant_id == context.tenant_id,
+                AdObject.advertiser_id.in_(allowed_ids),
+                AdObject.source_connection_id.in_(connection_ids),
+                AdObject.kind == "campaign",
+            ).order_by(AdObject.advertiser_id, AdObject.remote_id)
+        ).all()
+        by_account: dict[str, list[AdObject]] = {}
+        for campaign in campaigns:
+            by_account.setdefault(campaign.advertiser_id, []).append(campaign)
+        for row in rows:
+            advertiser_id = row.display.get("remote_id")
+            frozen_rows.append(
+                row.model_copy(
+                    update={"refs": tuple(item.ref for item in by_account.get(advertiser_id, []))}
+                )
+            )
+        rows = tuple(frozen_rows)
+    snapshot = _new_snapshot(session, context=context, bc_id=bc_id, filters=filters, rows=rows)
+    try:
+        snapshot.trends = build_trend(
+            session, context=context, bc_id=bc_id, filters=filters, grain="day"
+        ).model_dump(mode="json")
+    except (ValueError, RuntimeError):
+        snapshot.trends = TrendPublic(coverage={"status": "UNAVAILABLE"}).model_dump(mode="json")
+    session.flush()
+    return snapshot
+
+
 def query_ads(
     session: Session,
     *,
@@ -277,33 +347,16 @@ def query_ads(
     if snapshot_id is None:
         if cursor is not None:
             raise HTTPException(404, detail="query_cursor_not_found")
-        rows = build_dimension_rows(session, context=context, bc_id=bc_id, filters=filters)
-        # Account rows are report aggregates, but management selection must retain
-        # the exact campaign refs visible at snapshot creation time.
-        frozen_rows: list[ReportRow] = []
-        for row in rows:
-            if filters.dimension == "account":
-                advertiser_id = row.display.get("remote_id")
-                campaigns = session.exec(
-                    select(AdObject).where(
-                        AdObject.tenant_id == context.tenant_id,
-                        AdObject.advertiser_id == advertiser_id,
-                        AdObject.kind == "campaign",
-                    ).order_by(AdObject.remote_id)
-                ).all()
-                row = row.model_copy(update={"refs": tuple(item.ref for item in campaigns)})
-            frozen_rows.append(row)
-        rows = tuple(frozen_rows)
-        snapshot = _new_snapshot(session, context=context, bc_id=bc_id, filters=filters, rows=rows)
-        # Trends are best-effort local data. A missing observation is represented in
-        # the stored snapshot and never triggers a provider request.
-        try:
-            snapshot.trends = build_trend(
-                session, context=context, bc_id=bc_id, filters=filters, grain="day"
-            ).model_dump(mode="json")
-        except (ValueError, RuntimeError):
-            snapshot.trends = TrendPublic(coverage={"status": "UNAVAILABLE"}).model_dump(mode="json")
-        session.flush()
+        if session.get_bind() is engine:
+            with snapshot_transaction(engine) as snapshot_session:
+                snapshot = _build_snapshot(
+                    snapshot_session, context=context, bc_id=bc_id, filters=filters
+                )
+        else:
+            snapshot = _build_snapshot(
+                session, context=context, bc_id=bc_id, filters=filters
+            )
+        snapshot = read_snapshot(session, context=context, bc_id=bc_id, snapshot_id=snapshot.id)
     else:
         snapshot = read_snapshot(session, context=context, bc_id=bc_id, snapshot_id=snapshot_id)
         if snapshot.actor_id != context.actor_id:
