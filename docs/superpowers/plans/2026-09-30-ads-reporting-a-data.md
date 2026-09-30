@@ -205,7 +205,7 @@ assert sync_seed.planned_window(kind='unknown_attribution').days == 35
 - Consumes A7 持久调度、现有 `enqueue_after_commit/register_dispatch_task/admit_tiktok_call/verify_route`；Produces 注册 `ads.sync_step`、`reporting.sync_step`、`reporting.scan_due`，业务任务签名沿用 `(*,tenant_id:str,actor_id:str,payload:dict)->None`。
 - Adds `ads-directory`、`ads-reporting` 独立队列，管理队列由 C 注册；配置 `ADS_SYNC_ENABLED` 默认 false、`ADS_DIRECTORY_WORKER_CONCURRENCY=1`、`ADS_REPORTING_WORKER_CONCURRENCY=1`，真实启用及部署值须按现有部署确认流程验证，不在本任务开启。
 
-- [ ] **RED：** RF5 用两真实 DB session 和真实 Redis：重复领取只一个有效代数、旧代不得发布、解绑后不再调用替身、默认通道变更不改冻结 route；跨队列积压仍保留后台最低执行份额。
+- [x] **RED：** RF5 用两真实 DB session 和真实 Redis：重复领取只一个有效代数、旧代不得发布、解绑后不再调用替身、默认通道变更不改冻结 route；跨队列积压仍保留后台最低执行份额。
 ```python
 assert sync_recovery.deliver_twice().published_versions == 1
 sync_recovery.rebind_bc()
@@ -213,7 +213,7 @@ sync_recovery.resume_old_claim()
 assert sync_recovery.transport_call_count == 0
 assert sync_recovery.run.route.channel == sync_recovery.original_route.channel
 ```
-- [ ] **Run RED：** `uv run --frozen pytest tests/jobs/test_ads_reporting_queues.py tests/modules/reporting/test_sync_recovery.py -q`，预期任务注册/恢复规则缺失失败。
-- [ ] **Implement：** Beat 仅扫描到期计划；Outbox 投递有界分片，领取代数与发布事务核验，重启续页/异步 task_id。参照现有 `deploy/staging-control.service` 增加两个独立消费者模板，Compose 同样明确消费者及变量注入；更新非空 `TIKTOK_CALL_POLICIES` 对新增精确操作的校验与示例。当前报告优先、历史最后，用独立槽保证公平，不增加上游共享配额。
-- [ ] **GREEN：** 重跑本阶段新增测试、现有 `tests/jobs/test_outbox.py`、`tests/jobs/test_task_routes.py`、`tests/modules/accounts/test_worker_route_authorization.py`；`uv run --frozen ruff check app/modules/ads app/modules/reporting app/integrations/tiktok` 与 `uv run --frozen python -m compileall -q app/modules/ads app/modules/reporting` 通过。队列测试覆盖 Beat 开关、任务到消费者映射、模板变量注入及缺少调用策略时拒绝发送。
-- [ ] **Commit：** 明确暂存本任务列出路径及进度记录，提交 `reporting: verify queue fairness and frozen sync recovery`；验收文档分列离线合同、真实 PostgreSQL/Redis、模拟容量和未完成的 MCP/API 真实联调，不把预计规模或采集30min写成已验证承诺。
+- [x] **Run RED：** `uv run --frozen pytest tests/jobs/test_ads_reporting_queues.py tests/modules/reporting/test_sync_recovery.py -q`，预期任务注册/恢复规则缺失失败。
+- [x] **Implement：** Beat 仅扫描到期计划；Outbox 投递有界分片，领取代数与发布事务核验，重启续页/异步 task_id。参照现有 `deploy/staging-control.service` 增加两个独立消费者模板，Compose 同样明确消费者及变量注入；更新非空 `TIKTOK_CALL_POLICIES` 对新增精确操作的校验与示例。当前报告优先、历史最后，用独立槽保证公平，不增加上游共享配额。
+- [x] **GREEN：** 重跑本阶段新增测试、现有 `tests/jobs/test_outbox.py`、`tests/jobs/test_task_routes.py`、`tests/modules/accounts/test_worker_route_authorization.py`；`uv run --frozen ruff check app/modules/ads app/modules/reporting app/integrations/tiktok` 与 `uv run --frozen python -m compileall -q app/modules/ads app/modules/reporting` 通过。队列测试覆盖 Beat 开关、任务到消费者映射、模板变量注入及缺少调用策略时拒绝发送。
+- [x] **Commit：** 明确暂存本任务列出路径及进度记录，提交 `reporting: verify queue fairness and frozen sync recovery`；验收文档分列离线合同、真实 PostgreSQL/Redis、模拟容量和未完成的 MCP/API 真实联调，不把预计规模或采集30min写成已验证承诺。
