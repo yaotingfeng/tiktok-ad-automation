@@ -146,16 +146,16 @@ assert locate(session, context=directory_run.context, bc_id=directory_run.bc_id,
 - Produces `ReportCoverage`（同发布分片键、status、missing_reason、采集时间/版本）、`ReportSyncRun/ReportStagedPage`（route、claim_generation、query、页、异步 task_id、状态）；`ReportObservation` 保存账户/系列 subject、日期/口径/values、observed_at、membership_digest、name_revision、grouping_revision，不持久化剧合计。差值兼容性比较 grouping_revision，不能把仅备注变化当成迁组。
 - Produces `publish_report(session,*,run_id:UUID,claim_generation:int)->int`；`observation_delta(previous:ReportObservation,current:ReportObservation)->dict[str,Decimal]|None`，B 消费事实和此比较函数，不在此实现六维查询。
 
-- [ ] **RED：** RF4 fixture `observations` 给负修正/跨日/改名记录；真实库覆盖指标组不互抹、空结果、缺指标不补零。
+- [x] **RED：** RF4 fixture `observations` 给负修正/跨日/改名记录；真实库覆盖指标组不互抹、空结果、缺指标不补零。
 ```python
 assert observation_delta(observations.previous, observations.corrected)['spend'] == Decimal('-1.25')
 assert observation_delta(observations.previous, observations.renamed) is None
 assert observation_delta(observations.previous, observations.next_day) is None
 ```
-- [ ] **Run RED：** `uv run --frozen pytest tests/modules/reporting/test_facts.py -q`，预期新事实及比较函数缺失失败。
-- [ ] **Implement：** 登记 spend、`native_growth_ad_revenue_value_d0`、`native_growth_total_ad_impression_value` 及流量/效果原始量；维度/通道/类型逐合同开放，素材 Minis 收入未验证则不可用。分区发布锁以完整指标组为边界，完整空结果按合同替换，旧任务不覆盖新版本。
-- [ ] **GREEN：** 重跑；补充币种/时区/归因/成员集合差异都返回 None、只改备注仍可比较、真实零与未提供分开、父子事实不互加、分母零不由存储层填比率。
-- [ ] **Commit：** 明确暂存本任务列出路径及进度记录，提交 `reporting: persist metric contracts and atomic fact versions`。
+- [x] **Run RED：** `uv run --frozen pytest tests/modules/reporting/test_facts.py -q`，实现前 RED 未被本轮捕获；未伪造失败结果。
+- [x] **Implement：** 登记 spend、`native_growth_ad_revenue_value_d0`、`native_growth_total_ad_impression_value` 及流量/效果原始量；维度/通道/类型逐合同开放，素材 Minis 收入未验证则不可用。分区发布锁以完整指标组为边界，完整空结果按合同替换，旧任务不覆盖新版本。
+- [x] **GREEN：** 重跑；补充币种/时区/归因/成员集合差异都返回 None、只改备注仍可比较、真实零与未提供分开、父子事实不互加、分母零不由存储层填比率。
+- [x] **Commit：** `fc12e60` 初始实现，`589e0a7` 完成分片/合同/属性修复，`940412e` 收紧公开合同与未知行，`33801a4` 将 `ad_type` 纳入规范分片身份；最终复审通过。
 
 ### Task 6 (A6): 同步分片及平台异步报告双通道
 
