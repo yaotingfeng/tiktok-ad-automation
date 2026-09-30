@@ -25,6 +25,7 @@ from app.integrations.tiktok.contracts.reporting import ReportPage, ReportRow
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.accounts.routing import verify_route
 from app.modules.ads.models import AdObject, CampaignNameProjection
+from app.modules.ads.sync_models import AdDirectoryRun
 from app.modules.reporting.contracts import (
     decode_query,
     report_buckets,
@@ -466,17 +467,42 @@ def _observation_membership(
     name/grouping projection.  Missing directory or projection evidence is an
     incomplete snapshot, so callers must leave the observation absent.
     """
+    directory_run = session.exec(
+        select(AdDirectoryRun)
+        .where(
+            AdDirectoryRun.tenant_id == run.tenant_id,
+            AdDirectoryRun.advertiser_id == run.advertiser_id,
+            AdDirectoryRun.bc_id == run.bc_id,
+            AdDirectoryRun.connection_id == run.connection_id,
+            AdDirectoryRun.channel == run.channel,
+            AdDirectoryRun.kind == "campaign",
+            AdDirectoryRun.status == "COMPLETE",
+            AdDirectoryRun.coverage == "COMPLETE",
+            AdDirectoryRun.published_version.is_not(None),
+            AdDirectoryRun.completed_at.is_not(None),
+            AdDirectoryRun.completed_at <= run.created_at,
+        )
+        .order_by(AdDirectoryRun.published_version.desc())
+    ).first()
+    if directory_run is None or directory_run.published_version is None or directory_run.completed_at is None:
+        return None
     directory = tuple(session.exec(
         select(AdObject).where(
             AdObject.tenant_id == run.tenant_id,
             AdObject.advertiser_id == run.advertiser_id,
             AdObject.kind == "campaign",
+            AdObject.source_connection_id == run.connection_id,
+            AdObject.source_channel == run.channel,
+            AdObject.published_version <= directory_run.published_version,
         )
     ).all())
+    if not directory:
+        return None
     projections = tuple(session.exec(
         select(CampaignNameProjection).where(
             CampaignNameProjection.tenant_id == run.tenant_id,
             CampaignNameProjection.advertiser_id == run.advertiser_id,
+            CampaignNameProjection.observed_at <= directory_run.completed_at,
         )
     ).all())
     latest: dict[str, CampaignNameProjection] = {}

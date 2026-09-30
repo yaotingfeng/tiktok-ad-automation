@@ -70,8 +70,10 @@ def _matches_filter(
     entity: AdObject | None,
     projection: CampaignNameProjection | None,
     account_name: str | None,
+    apply_identity: bool = True,
+    apply_metrics: bool = True,
 ) -> bool:
-    if filters.ids:
+    if apply_identity and filters.ids:
         subject_id = observation.subject_key[-1] if observation.subject_key else ""
         if subject_id not in filters.ids and ":".join(observation.subject_key) not in filters.ids:
             return False
@@ -84,10 +86,12 @@ def _matches_filter(
             account_name,
         ) if value
     ).casefold()
-    if filters.query and any(word.casefold() not in text for word in filters.query.split()):
+    if apply_identity and filters.query and any(word.casefold() not in text for word in filters.query.split()):
         return False
     if not _entity_matches(entity, projection, filters, observation.timezone):
         return False
+    if not apply_metrics:
+        return True
     spend_state = observation.availability.get("spend")
     spend = _decimal(observation.values.get("spend")) if spend_state == "AVAILABLE" else None
     revenue_state = observation.availability.get("native_growth_ad_revenue_value_d0")
@@ -104,13 +108,23 @@ def _matches_filter(
     return True
 
 
-def _bucket_start(value: datetime, grain: Literal["hour", "day", "observation"]) -> datetime:
+def _bucket_start(
+    value: datetime,
+    grain: Literal["hour", "day", "observation"],
+    timezone: str,
+) -> datetime:
     if grain == "observation":
         return value
-    value = value.astimezone(UTC)
+    value = value.astimezone(ZoneInfo(timezone))
     if grain == "hour":
         return value.replace(minute=0, second=0, microsecond=0)
     return value.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _bucket_end(value: datetime, grain: Literal["hour", "day", "observation"], timezone: str) -> datetime:
+    if grain == "observation":
+        return value
+    return value.astimezone(ZoneInfo(timezone))
 
 
 def _has_production_facts(
@@ -165,6 +179,7 @@ class _Series:
     attribution: str
     report_contract: str
     metric_family: str
+    member_ids: tuple[str, ...] = ()
 
 
 def _series_from_observation(item: ReportObservation) -> _Series:
@@ -183,6 +198,7 @@ def _series_from_observation(item: ReportObservation) -> _Series:
         attribution=item.attribution,
         report_contract=item.report_contract,
         metric_family=item.metric_family,
+        member_ids=(item.subject_key[-1],) if item.subject_key else (),
     )
 
 
@@ -263,6 +279,7 @@ def _drama_series(
             attribution=first.attribution,
             report_contract=first.report_contract,
             metric_family=first.metric_family,
+            member_ids=tuple(sorted({member.subject_key[-1] for member in members if member.subject_key})),
         ))
     return tuple(result)
 
@@ -286,6 +303,27 @@ def _series_delta(previous: _Series, current: _Series) -> dict[str, Decimal] | N
         if old is not None and new is not None:
             result[name] = new - old
     return result
+
+
+def _series_matches_filter(item: _Series, filters: ReportingFilter) -> bool:
+    ids = set(item.member_ids) | set(item.subject_key)
+    if filters.ids and not ids.intersection(filters.ids):
+        return False
+    text = " ".join((item.subject_key[0] if item.subject_key else "", *item.member_ids)).casefold()
+    if filters.query and any(word.casefold() not in text for word in filters.query.split()):
+        return False
+    spend = _decimal(item.values.get("spend")) if item.availability.get("spend") == "AVAILABLE" else None
+    revenue = _decimal(item.values.get("native_growth_ad_revenue_value_d0")) if item.availability.get("native_growth_ad_revenue_value_d0") == "AVAILABLE" else None
+    if filters.min_spend is not None and (spend is None or spend < filters.min_spend):
+        return False
+    if filters.max_spend is not None and (spend is None or spend > filters.max_spend):
+        return False
+    roas = revenue / spend if spend and revenue is not None else None
+    if filters.min_d0_roas is not None and (roas is None or roas < filters.min_d0_roas):
+        return False
+    if filters.max_d0_roas is not None and (roas is None or roas > filters.max_d0_roas):
+        return False
+    return True
 
 
 def build_trend(
@@ -331,6 +369,16 @@ def build_trend(
             coverage={"status": "UNSUPPORTED", "reason": "production_facts_unavailable"},
             delta_reason=None,
         )
+    observation_filters = filters
+    if filters.dimension == "drama":
+        observation_filters = filters.model_copy(update={
+            "ids": (),
+            "query": None,
+            "min_spend": None,
+            "max_spend": None,
+            "min_d0_roas": None,
+            "max_d0_roas": None,
+        })
     observations = tuple(
         session.exec(
             select(ReportObservation).where(
@@ -383,7 +431,7 @@ def build_trend(
         if _in_period(item, filters)
         and _matches_filter(
             item,
-            filters,
+            observation_filters,
             entity=entities.get((item.advertiser_id, "campaign", item.subject_key[-1] if item.subject_key else "")),
             projection=projections.get((item.advertiser_id, item.subject_key[-1] if item.subject_key else "")),
             account_name=account_names.get(item.advertiser_id),
@@ -402,17 +450,15 @@ def build_trend(
         )
 
     if filters.dimension == "drama":
-        projections = tuple(
-            session.exec(
-                select(CampaignNameProjection).where(
-                    CampaignNameProjection.tenant_id == context.tenant_id,
-                    col(CampaignNameProjection.advertiser_id).in_(advertiser_ids),
-                )
-            ).all()
-        )
-        series = _drama_series(observations, projections, bc_id=bc_id)
+        series = _drama_series(observations, projection_rows, bc_id=bc_id)
+        series = tuple(item for item in series if _series_matches_filter(item, filters))
     else:
         series = tuple(_series_from_observation(item) for item in observations)
+    if not series:
+        return TrendPublic(
+            coverage={"status": "INCOMPLETE", "reason": "observations_filtered"},
+            delta_reason=None,
+        )
 
     # Retain same-bucket observations so platform corrections remain visible.
     ordered = sorted(series, key=lambda item: (item.advertiser_id, item.subject_key, item.bucket_start, item.observed_at))
@@ -437,7 +483,10 @@ def build_trend(
                 and previous.bucket_end != item.bucket_start
             ):
                 reason = "DATE_CHANGED"
-            elif previous.bucket_start.date() != item.bucket_start.date():
+            elif (
+                previous.bucket_start.astimezone(ZoneInfo(previous.timezone)).date()
+                != item.bucket_start.astimezone(ZoneInfo(item.timezone)).date()
+            ):
                 reason = "DATE_CHANGED"
             else:
                 delta = _series_delta(previous, item)
@@ -453,8 +502,8 @@ def build_trend(
             )
         points.append(
             TrendPoint(
-                bucket_start=_bucket_start(item.bucket_start, grain),
-                bucket_end=item.bucket_end,
+                bucket_start=_bucket_start(item.bucket_start, grain, item.timezone),
+                bucket_end=_bucket_end(item.bucket_end, grain, item.timezone),
                 values=values,
                 availability=availability,
                 delta=delta,

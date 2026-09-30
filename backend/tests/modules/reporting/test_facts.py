@@ -8,6 +8,7 @@ from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.common import CallEvidence
 from app.integrations.tiktok.contracts.reporting import ReportPage, ReportRow
 from app.modules.ads.models import AdObject, CampaignNameProjection
+from app.modules.ads.sync_models import AdDirectoryRun
 from app.modules.reporting.contracts import (
     METRIC_DEFINITIONS,
     REPORT_CONTRACTS,
@@ -177,6 +178,26 @@ def test_observation_delta_preserves_negative_corrections_and_fences_context(
 
 def test_observation_membership_digest_uses_complete_directory_group(session, reporting_seed):
     run = _run(session, reporting_seed)
+    directory_run = AdDirectoryRun(
+        tenant_id=run.tenant_id,
+        advertiser_id=run.advertiser_id,
+        bc_id=run.bc_id,
+        actor_id=run.actor_id,
+        connection_id=run.connection_id,
+        channel=run.channel,
+        frozen_route=run.frozen_route,
+        partition_key="a" * 64,
+        query={},
+        status="COMPLETE",
+        claim_generation=1,
+        next_page=1,
+        coverage="COMPLETE",
+        published_version=1,
+        completed_at=run.created_at,
+        kind="campaign",
+        ad_type="REGULAR",
+    )
+    session.add(directory_run)
     session.add(
         AdObject(
             tenant_id=run.tenant_id,
@@ -185,8 +206,10 @@ def test_observation_membership_digest_uses_complete_directory_group(session, re
             remote_id="campaign-1",
             ad_type="REGULAR",
             name="Provider · Drama",
-            observed_at=datetime.now(UTC),
+            observed_at=run.created_at,
             published_version=1,
+            source_connection_id=run.connection_id,
+            source_channel=run.channel,
         )
     )
     session.add(
@@ -201,7 +224,7 @@ def test_observation_membership_digest_uses_complete_directory_group(session, re
             status="VALID",
             parser_revision=1,
             grouping_revision=1,
-            observed_at=datetime.now(UTC),
+            observed_at=run.created_at,
         )
     )
     session.flush()
@@ -217,8 +240,10 @@ def test_observation_membership_digest_uses_complete_directory_group(session, re
             remote_id="campaign-2",
             ad_type="REGULAR",
             name="Provider · Other",
-            observed_at=datetime.now(UTC),
+            observed_at=run.created_at,
             published_version=1,
+            source_connection_id=run.connection_id,
+            source_channel=run.channel,
         )
     )
     session.add(
@@ -233,7 +258,7 @@ def test_observation_membership_digest_uses_complete_directory_group(session, re
             status="VALID",
             parser_revision=1,
             grouping_revision=1,
-            observed_at=datetime.now(UTC),
+            observed_at=run.created_at,
         )
     )
     session.flush()
@@ -242,6 +267,13 @@ def test_observation_membership_digest_uses_complete_directory_group(session, re
     )
     assert second is not None
     assert second[0] != first[0]
+
+
+def test_observation_membership_rejects_empty_directory_scope(session, reporting_seed):
+    run = _run(session, reporting_seed)
+    assert _observation_membership(
+        session, run=run, subjects={("account", run.advertiser_id)}
+    ) is None
 
 
 def test_publish_replaces_complete_partition_without_erasing_other_metric_group(
