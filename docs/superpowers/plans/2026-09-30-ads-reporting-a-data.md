@@ -55,26 +55,26 @@
 - Produces `ReportQuery(advertiser_id,report_contract,metric_family,dimensions:tuple[str,...],metrics:tuple[str,...],start_date:date,end_date:date,granularity:str,currency,timezone,attribution,filter_ids:tuple[str,...],page:int)`；字符串字段均为 `str`。
 - Produces `ReportRow(subject_key:tuple[str,...],bucket_start:datetime,bucket_end:datetime,values:dict[str,Decimal|None],availability:dict[str,str])`、`ReportPage(rows:tuple[ReportRow,...],next_page:int|None,complete:bool,evidence:CallEvidence,page:int=1)`、`ReportTask(task_id,advertiser_id,status:Literal['PENDING','RUNNING','READY','FAILED'],query:ReportQuery)`。
 
-- [ ] **RED：** 添加 RF1 及身份校验测试，非空 ID、时区日期、完整标记/后续页冲突均须拒绝。响应携带实际请求 page（正整数，next_page 必须更大），不从游标推测页号；完整异步文件使用 page=1。
+- [x] **RED：** 添加 RF1 及身份校验测试，非空 ID、时区日期、完整标记/后续页冲突均须拒绝。响应携带实际请求 page（正整数，next_page 必须更大），不从游标推测页号；完整异步文件使用 page=1。
 ```python
 assert parse_campaign_name(' 嘉书 - 总裁归来 -账户2').drama_name == '总裁归来'
 assert parse_campaign_name('嘉书--测试').status == 'INVALID'
 assert parse_campaign_name('嘉书-总裁归来').status == 'VALID'
 assert parse_campaign_name('嘉书-Cafe\u0301-备注') == parse_campaign_name('嘉书-Café')
 ```
-- [ ] **Run RED：** `uv run --frozen pytest --confcutdir=tests/contracts tests/contracts/test_ads_reporting_contracts.py -q`，预期新模块缺失导致失败。
-- [ ] **Implement：** 实现上述不可变 DTO 和 NFC/trim/保留空段解析；定义 `AdsReadOperations.read_page(query:DirectoryQuery)->DirectoryPage`；`ReportOperations.read_page(query:ReportQuery)->ReportPage`、`create_task(query:ReportQuery)->ReportTask`、`check_task(task:ReportTask)->ReportTask`、`download_task(task:ReportTask)->ReportPage`。
-- [ ] **GREEN：** 重跑上述命令，全部通过；下载合同明确仅 `READY` 且整个文件成功解析才 `complete=True`，不模拟平台分页。
-- [ ] **Commit：** 明确暂存本任务列出的四个文件、新包 init 和进度记录，提交 `ads: define directory and reporting read contracts`。
+- [x] **Run RED：** `uv run --frozen pytest --confcutdir=tests/contracts tests/contracts/test_ads_reporting_contracts.py -q`，预期新模块缺失导致失败。
+- [x] **Implement：** 实现上述不可变 DTO 和 NFC/trim/保留空段解析；定义 `AdsReadOperations.read_page(query:DirectoryQuery)->DirectoryPage`；`ReportOperations.read_page(query:ReportQuery)->ReportPage`、`create_task(query:ReportQuery)->ReportTask`、`check_task(task:ReportTask)->ReportTask`、`download_task(task:ReportTask)->ReportPage`。
+- [x] **GREEN：** 重跑上述命令，全部通过；下载合同明确仅 `READY` 且整个文件成功解析才 `complete=True`，不模拟平台分页。
+- [x] **Commit：** 明确暂存本任务列出的四个文件、新包 init 和进度记录，提交 `ads: define directory and reporting read contracts`。
 
 ### Task 2 (A2): 目录持久身份、素材使用关系与授权读取
 
 **Files:** Create `backend/app/modules/ads/models.py`、`backend/app/modules/ads/directory.py`、`backend/app/modules/ads/sync_models.py`、`backend/app/modules/reporting/models.py`、`backend/app/modules/reporting/sync_models.py`、`backend/app/alembic/versions/ads_reporting_data.py`、`backend/tests/modules/ads/conftest.py`；Modify `backend/app/alembic/env.py`；Test `backend/tests/modules/ads/test_directory.py`、`backend/tests/modules/ads/test_directory_migration.py`。
 
 **Interfaces:**
-- Consumes A1 `EntityRef/AdEntity/AdMaterialUsage` 与 `accounts.access.usable_grants`；Produces `AdObject`（EntityRef 四键唯一，持久化 AdEntity 全字段及 `published_version:int`）、`CampaignNameProjection(campaign_ref,raw_name,provider_label,drama_name,status,parser_revision:int,name_revision:int,grouping_revision:int)`、`AdMaterialReference`（持久化 AdMaterialUsage）。名称投影保留按 name_revision 排序的审计记录；grouping_revision 仅在规范化的版权方/剧名/有效性发生变化时递增，备注变化只更新 name_revision。
+- Consumes A1 `EntityRef/AdEntity/AdMaterialUsage` 与 `accounts.access.usable_grants`；Produces `AdObject`（EntityRef 四键唯一，持久化 AdEntity 全字段及 `published_version:int`）、`CampaignNameProjection(campaign_ref,raw_name,provider_label,drama_name,status,parser_revision:int,name_revision:int,grouping_revision:int)`、`AdMaterialReference`（持久化 AdMaterialUsage，另含外部素材 name、可空 main_material_id/main_material_type、creative_ids）。名称投影保留按 name_revision 排序的审计记录；grouping_revision 仅在规范化的版权方/剧名/有效性发生变化时递增，备注变化只更新 name_revision。
 - Produces `locate(session:Session,*,context:TenantContext,bc_id:str,ref:EntityRef)->AdObject`；`list_objects(session:Session,*,context:TenantContext,bc_id:str,advertiser_ids:tuple[str,...],kind:str,parent:EntityRef|None=None)->tuple[AdObject,...]`。
-- Produces A4/A5/A7 下列字段合同规定的全部持久模型：`AdDirectoryRun/AdDirectoryPage/ReportFact/ReportCoverage/ReportObservation/ReportSyncRun/ReportStagedPage/SyncSchedule`，以及 A3 的 `AccountBalanceObservation`；包括运行唯一键、冻结路由、领取代数、分页与异步 task_id、版本、覆盖和错误字段。模型创建集中此任务，采集行为分后续任务实现。
+- Produces A4/A5/A7 下列字段合同规定的全部持久模型：`AdDirectoryRun/AdDirectoryPage/ReportFact/ReportCoverage/ReportObservation/ReportSyncRun/ReportStagedPage/SyncSchedule`，以及 A3 的 `AccountBalanceObservation`（含 balance_scope/scope_id，区分独占账户与共享 Portfolio）；包括运行唯一键、冻结路由、领取代数、分页与异步 task_id、版本、覆盖和错误字段。模型创建集中此任务，采集行为分后续任务实现。
 
 - [ ] **RED：** 真实数据库 fixture `directory_seed` 暴露授权 context/bc/ref；新增 RF2、跨 BC 拒绝、外部素材无本地记录仍可读和迁移唯一约束测试。
 ```python
@@ -91,7 +91,7 @@ with pytest.raises(DomainError):
 
 ### Task 3 (A3): 普通与 Smart+ 目录双通道及余额观测
 
-**Files:** Create `backend/app/integrations/tiktok/adapters/sdk_ads.py`、`backend/app/integrations/tiktok/adapters/mcp_ads.py`；Modify `backend/app/integrations/tiktok/gateway.py`、`backend/app/integrations/tiktok/mcp/tool-contracts.json`、A1 `contracts/ads.py`、A2 `models.py`；Test `backend/tests/integrations/tiktok/test_ads_read_adapters.py`、`backend/tests/contracts/test_tiktok_sdk_surface.py`。
+**Files:** Create `backend/app/integrations/tiktok/adapters/sdk_ads.py`、`backend/app/integrations/tiktok/adapters/mcp_ads.py`；Modify `backend/app/integrations/tiktok/gateway.py`、`backend/app/integrations/tiktok/mcp/tool-contracts.json`、`backend/app/integrations/tiktok/mcp/protocol-profile.json`、`backend/app/integrations/tiktok/mcp/results.py`、A1 `contracts/ads.py`、A2 `models.py`；Test `backend/tests/integrations/tiktok/test_ads_read_adapters.py`、`backend/tests/contracts/test_tiktok_sdk_surface.py`。
 
 **Interfaces:**
 - Consumes A1 `DirectoryQuery/Page`；Produces `SdkAdsReadOperations`/`McpAdsReadOperations`、`TikTokGateway.ads:AdsReadOperations`。
@@ -109,7 +109,7 @@ assert regular.materials[0].use_ref.platform_material_id == 'video-11'
 assert ads_transport.gateway.ads.read_balance('account-test').amount is None
 ```
 - [ ] **Run RED：** `uv run --frozen pytest tests/integrations/tiktok/test_ads_read_adapters.py -q`，预期 `gateway.ads` 缺失；SDK surface 使用 `--confcutdir=tests/contracts` 单独验证。
-- [ ] **Implement：** 注册每个精确只读操作并经现有额度/路由门禁；普通 `*/get/`、Smart+ `smart_plus/*/get/` 分别调用。自动创意补读 `/ad/get/`，不可得则材料完整性为 false；余额接口按其 BC 财务权限合同校验，不降级伪零。
+- [ ] **Implement：** 注册每个物理端点的精确只读操作并经现有额度/路由门禁，统一业务 Protocol 不等于多个工具共用一个发送键；manifest 变更同步摘要，保留原 schema 校验；普通 `*/get/`、Smart+ `smart_plus/*/get/` 分别调用。自动创意补读 `/ad/get/`，不可得则材料完整性为 false；余额接口是 BC 财务分页读取，需独立 BC 财务证据并按当前账户权限过滤，不由广告 read/build 权限推断；缺证据显示不可用，不降级伪零。
 - [ ] **GREEN：** 重跑；每次分页发送前验证冻结代数，检查 SDK 实际 method/path/参数；未授权 API 和无工具旧类型返回明确能力状态，绝不借 build 权限或另一通道兜底。
 - [ ] **Commit：** 明确暂存本任务列出路径及进度记录，提交 `ads: add scoped API and MCP directory readers`。
 
@@ -138,7 +138,7 @@ assert locate(session, context=directory_run.context, bc_id=directory_run.bc_id,
 **Files:** Create `backend/app/modules/reporting/contracts.py`、`backend/app/modules/reporting/facts.py`、`backend/tests/modules/reporting/conftest.py`；Consume A2 reporting models/sync_models；Test `backend/tests/modules/reporting/test_facts.py`。
 
 **Interfaces:**
-- Produces `MetricDefinition(name,unit,additivity,supported_contracts)`、`ReportContract(key,metric_family,dimensions,metrics,granularities,empty_result_policy)`；`ReportFact` 键含 tenant/advertiser/subject_key/bucket/granularity/report_contract/metric_family/currency/timezone/attribution，值含 Decimal、availability、published_version。
+- Produces `MetricDefinition(name,unit,additivity,supported_contracts)`、`ReportContract(key,metric_family,dimensions,metrics,granularities,empty_result_policy)`；`ReportFact` 键含 tenant/advertiser/subject_key/bucket/granularity/report_contract/metric_family/currency/timezone/attribution，每个 metric_name 一行，值为 NUMERIC/Decimal、availability、published_version；描述/关联 attributes 为白名单 JSONB，不进事实身份或金额，不能写原始响应/下载 URL。
 - Produces `ReportCoverage`（同发布分片键、status、missing_reason、采集时间/版本）、`ReportSyncRun/ReportStagedPage`（route、claim_generation、query、页、异步 task_id、状态）；`ReportObservation` 保存账户/系列 subject、日期/口径/values、observed_at、membership_digest、name_revision、grouping_revision，不持久化剧合计。差值兼容性比较 grouping_revision，不能把仅备注变化当成迁组。
 - Produces `publish_report(session,*,run_id:UUID,claim_generation:int)->int`；`observation_delta(previous:ReportObservation,current:ReportObservation)->dict[str,Decimal]|None`，B 消费事实和此比较函数，不在此实现六维查询。
 
