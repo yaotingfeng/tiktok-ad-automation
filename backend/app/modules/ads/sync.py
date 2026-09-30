@@ -215,7 +215,7 @@ def stage_directory_page(
         .where(AdDirectoryPage.run_id == run_id, AdDirectoryPage.complete.is_(True))
         .with_for_update()
     ).first()
-    if terminal is not None:
+    if terminal is not None and page.page > terminal.page:
         raise _domain("directory_run_terminal", "目录运行已暂存末页")
 
     session.add(
@@ -557,21 +557,6 @@ def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) 
             return run.published_version
         if run.claim_generation != claim_generation:
             raise _domain("directory_claim_lost", "目录同步 claim 已被替换")
-        if run.request_sequence is not None:
-            newer_published = session.exec(
-                select(AdDirectoryRun.id)
-                .where(
-                    AdDirectoryRun.tenant_id == run.tenant_id,
-                    AdDirectoryRun.advertiser_id == run.advertiser_id,
-                    AdDirectoryRun.kind == run.kind,
-                    AdDirectoryRun.ad_type == run.ad_type,
-                    AdDirectoryRun.request_sequence > run.request_sequence,
-                    AdDirectoryRun.published_version.is_not(None),
-                )
-                .limit(1)
-            ).first()
-            if newer_published is not None:
-                raise _domain("directory_run_stale", "较早目录运行不能晚于新运行发布")
         route = _route_for_run(run)
         _ensure_route_authority(session, run, route)
         pages = session.exec(
@@ -588,6 +573,22 @@ def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) 
         ).one_or_none()
         if tenant is None:
             raise _domain("tenant_forbidden", "目录运行的租户不存在")
+        # 必须在租户版本锁之后重查，避免旧运行检查完毕后等待锁期间被新运行发布。
+        if run.request_sequence is not None:
+            newer_published = session.exec(
+                select(AdDirectoryRun.id)
+                .where(
+                    AdDirectoryRun.tenant_id == run.tenant_id,
+                    AdDirectoryRun.advertiser_id == run.advertiser_id,
+                    AdDirectoryRun.kind == run.kind,
+                    AdDirectoryRun.ad_type == run.ad_type,
+                    AdDirectoryRun.request_sequence > run.request_sequence,
+                    AdDirectoryRun.published_version.is_not(None),
+                )
+                .limit(1)
+            ).first()
+            if newer_published is not None:
+                raise _domain("directory_run_stale", "较早目录运行不能晚于新运行发布")
         # PostgreSQL greatest/NULL 的行为会随空表变化；分别读取更清晰，也兼容测试数据库。
         object_max = (
             session.exec(select(func.max(AdObject.published_version))).one() or 0

@@ -138,6 +138,24 @@ def test_staging_rejects_pages_after_terminal_page(session, directory_seed):
         )
 
 
+def test_staging_allows_earlier_page_after_out_of_order_terminal(
+    session, directory_seed
+):
+    run = _run(session, directory_seed)
+    stage_directory_page(
+        session,
+        run_id=run.id,
+        page=_page(directory_seed, page=2),
+        claim_generation=1,
+    )
+    stage_directory_page(
+        session,
+        run_id=run.id,
+        page=_page(directory_seed, page=1, complete=False, next_page=2),
+        claim_generation=1,
+    )
+
+
 def test_staging_rejects_wrong_automation_type(session, directory_seed):
     run = _run(session, directory_seed, kind="campaign")
     with pytest.raises(DomainError):
