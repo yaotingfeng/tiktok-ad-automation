@@ -1,3 +1,23 @@
+import pytest
+from sqlalchemy import text
+
+
+def _truncate_test_database() -> None:
+    """Reset the dedicated API test database after the Engine-path test commits."""
+    from app.core.db import engine
+
+    with engine.begin() as connection:
+        table_names = connection.execute(
+            text(
+                "SELECT tablename FROM pg_tables "
+                "WHERE schemaname = 'public' AND tablename <> 'alembic_version'"
+            )
+        ).scalars().all()
+        if table_names:
+            quoted = ", ".join(f'"public"."{name.replace(chr(34), chr(34) * 2)}"' for name in table_names)
+            connection.execute(text(f"TRUNCATE TABLE {quoted} RESTART IDENTITY CASCADE"))
+
+
 def test_reporting_routes_have_stable_operation_ids():
     from app.main import app
 
@@ -42,3 +62,59 @@ def test_query_snapshot_survives_request_session_rollback(report_case, client):
             app.dependency_overrides.pop(get_current_user, None)
         else:
             app.dependency_overrides[get_current_user] = previous
+
+
+@pytest.mark.filterwarnings("ignore:transaction already deassociated from connection")
+def test_engine_api_cursor_and_selection_cross_request(report_case, client):
+    """The production Engine path commits the snapshot before the next request."""
+    from app.api.deps import get_current_user, get_db
+    from app.main import app
+    from app.models import User
+
+    user = report_case.session.get(User, report_case.context.actor_id)
+    assert user is not None
+    report_case.seed_campaign("P-Engine-A", "report-account", 1, 2)
+    report_case.seed_campaign("P-Engine-B", "report-account", 1, 2)
+    # The fixture uses an outer transaction plus savepoints. Commit that outer
+    # connection explicitly so SessionDep's independent Engine connection can
+    # observe the seed rows; this test owns a unique tenant.
+    report_case.session.get_bind().commit()
+    old_db = app.dependency_overrides.pop(get_db, None)
+    old_user = app.dependency_overrides.get(get_current_user)
+    app.dependency_overrides[get_current_user] = lambda: user
+    try:
+        path = f"/api/tenants/{report_case.context.tenant_id}/ads"
+        params = {
+            "bc_id": report_case.bc_id,
+            "dimension": "campaign",
+            "start_date": "2026-09-30",
+            "end_date": "2026-09-30",
+            "limit": "1",
+        }
+        first = client.get(path, params=params)
+        assert first.status_code == 200, first.text
+        payload = first.json()
+        assert payload["next_cursor"]
+        second = client.get(path, params=params | {
+            "snapshot_id": payload["snapshot"]["snapshot_id"],
+            "cursor": payload["next_cursor"],
+        })
+        assert second.status_code == 200, second.text
+        selected = client.post(
+            f"/api/tenants/{report_case.context.tenant_id}/ad-selections",
+            params={"bc_id": report_case.bc_id},
+            json={"snapshot_id": payload["snapshot"]["snapshot_id"], "mode": "ALL_MATCHING"},
+        )
+        assert selected.status_code == 200, selected.text
+        assert selected.json()["refs"]
+    finally:
+        if old_db is not None:
+            app.dependency_overrides[get_db] = old_db
+        if old_user is None:
+            app.dependency_overrides.pop(get_current_user, None)
+        else:
+            app.dependency_overrides[get_current_user] = old_user
+        # SessionDep intentionally uses an independent Engine connection. The
+        # committed seed must be removed so later tests retain transaction isolation.
+        report_case.session.close()
+        _truncate_test_database()

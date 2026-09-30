@@ -32,4 +32,4 @@ OpenAPI route check: reporting routes: ads_reporting-query_ads, ads_reporting-ad
 
 ## 提交
 
-实现提交：`待更新`（`reports: add consistent queries and frozen cross-page selections`）。未执行真实 TikTok/MCP 请求、广告写入、部署或推送。
+实现提交：`reports: add consistent queries and frozen cross-page selections`；复审修复提交随后记录于 Git 历史。未执行真实 TikTok/MCP 请求、广告写入、部署或推送。
