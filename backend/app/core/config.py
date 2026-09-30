@@ -73,6 +73,10 @@ class Settings(BaseSettings):
         default_factory=dict, repr=False
     )
     MATERIAL_CLEANUP_ENABLED: bool = False
+    # 广告目录/报表的周期扫描默认关闭；手动持久运行仍可由恢复任务核验。
+    ADS_SYNC_ENABLED: bool = False
+    ADS_DIRECTORY_WORKER_CONCURRENCY: int = Field(default=1, ge=1, le=32)
+    ADS_REPORTING_WORKER_CONCURRENCY: int = Field(default=1, ge=1, le=32)
     # R2 分片接收和 TikTok URL 转存支持 1 GiB；不放宽旧 SDK 整文件内存保护。
     MATERIAL_URL_MAX_UPLOAD_BYTES: int = Field(default=1024**3, gt=0)
     # 0 表示不限制 R2 临时原件总量；计数与清理仍正常运行。

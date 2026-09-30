@@ -15,6 +15,9 @@ x-app-environment: &app-environment
   TIKTOK_REDIRECT_URI: ${TIKTOK_REDIRECT_URI:-}
   TIKTOK_AUTHORIZATION_URL: ${TIKTOK_AUTHORIZATION_URL:-}
   TIKTOK_CALL_POLICIES: ${TIKTOK_CALL_POLICIES:-{}}
+  ADS_SYNC_ENABLED: ${ADS_SYNC_ENABLED:-false}
+  ADS_DIRECTORY_WORKER_CONCURRENCY: ${ADS_DIRECTORY_WORKER_CONCURRENCY:-1}
+  ADS_REPORTING_WORKER_CONCURRENCY: ${ADS_REPORTING_WORKER_CONCURRENCY:-1}
   BC_CAPABILITY_MAX_AGE_SECONDS: ${BC_CAPABILITY_MAX_AGE_SECONDS:-86400}
   SCENE_MAX_AGE_SECONDS: ${SCENE_MAX_AGE_SECONDS:-86400}
   MATERIAL_SDK_MAX_UPLOAD_BYTES: ${MATERIAL_SDK_MAX_UPLOAD_BYTES:-268435456}
@@ -91,6 +94,16 @@ services:
   worker:
     <<: *app
     command: [celery, -A, app.jobs.celery_app:celery_app, worker, -Q, 'resources,resource-results,builds,control', --loglevel=INFO]
+    depends_on:
+      prestart: {condition: service_completed_successfully}
+  worker-ads-directory:
+    <<: *app
+    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ads-directory, --concurrency, '${ADS_DIRECTORY_WORKER_CONCURRENCY:-1}', '--hostname=ads-directory@%h', --loglevel=INFO]
+    depends_on:
+      prestart: {condition: service_completed_successfully}
+  worker-ads-reporting:
+    <<: *app
+    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ads-reporting, --concurrency, '${ADS_REPORTING_WORKER_CONCURRENCY:-1}', '--hostname=ads-reporting@%h', --loglevel=INFO]
     depends_on:
       prestart: {condition: service_completed_successfully}
   beat:

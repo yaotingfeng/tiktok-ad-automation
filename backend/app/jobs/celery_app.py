@@ -32,12 +32,19 @@ celery_app.conf.update(
         "app.modules.builds.tasks",
         "app.modules.builds.scene_tasks",
         "app.modules.builds.recovery_tasks",
+        # A7 durable directory/report runs register before the outbox publisher
+        # starts, so a recovery message can never hit an unknown task/queue.
+        "app.modules.ads.tasks",
+        "app.modules.reporting.tasks",
     ),
     task_queues=(
         Queue("resources"),
         Queue("resource-results"),
         Queue("builds"),
         Queue("control"),
+        Queue("ads-directory"),
+        Queue("ads-reporting"),
+        Queue("ad-management"),
     ),
     # 消费者按部署角色隔离准备与结果；多队列角色仍公平轮询，不扩大外部额度。
     broker_transport_options={"queue_order_strategy": "round_robin"},
@@ -46,6 +53,9 @@ celery_app.conf.update(
     task_routes={
         "jobs.flush_dispatch": {"queue": "control"},
         "jobs.compact_dispatches": {"queue": "control"},
+        "reporting.scan_due": {"queue": "control"},
+        "ads.sync_step": {"queue": "ads-directory"},
+        "reporting.sync_step": {"queue": "ads-reporting"},
     },
     beat_schedule={
         "repair-external-imports": {
@@ -141,6 +151,13 @@ celery_app.conf.update(
         "flush-dispatch": {
             "task": "jobs.flush_dispatch",
             "schedule": 1.0,
+            "options": {"queue": "control"},
+        },
+        # Beat only wakes the local durable-plan scanner.  The task checks the
+        # explicit feature flag before touching plans or the provider gateway.
+        "scan-ads-reporting-due": {
+            "task": "reporting.scan_due",
+            "schedule": 30.0,
             "options": {"queue": "control"},
         },
     },

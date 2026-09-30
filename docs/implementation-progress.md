@@ -1485,3 +1485,16 @@
 - 在独立本地 PostgreSQL `tkada_original_names_20260929_test` 和 Redis DB14 验证，TikTok/R2 使用离线传输替身。首轮 `test_url_ingest.py test_source_uploads.py test_native_distribution.py test_material_upload_adapters.py` 共 104 passed；补充原名、异常名称、歧义和历史冻结名称用例后，`test_url_ingest.py test_video_reissue.py test_material_upload_adapters.py tests/modules/builds/test_execution.py` 共 87 passed（两轮包含重叠用例）。修改文件 Ruff、格式检查、ty、Python 编译及 `git diff --check` 通过。
 - 本轮提交主题 `materials: 上传到 TikTok 时完整保留素材原名`；未推送、未部署，没有真实 TikTok/R2 写入，无迁移、无新增配置。
 - 外部推送接口仍处于方案讨论，本轮未实现：已确认直接使用素材工具已有 R2 链接，不复制第二份。租户可由请求中的 `tenant_id` 标识，无须额外团队映射；服务端仍验证接入方身份和允许的租户范围，运营无需管理凭证。现有默认连接按 `(tenant_id, bc_id)` 保存，可直接复用，但多个 BC 时不能仅凭默认连接唯一确定目标 BC；该选择尚待接口设计明确。
+
+## 2026-09-30 广告目录与报表队列接入（A8，本地完成）
+
+- 完成 `ads-directory`、`ads-reporting` 独立队列、Beat 到期扫描门控、Compose/systemd 模板和 `queued_dispatches` 索引；`ADS_SYNC_ENABLED` 默认关闭，未部署或启用。
+- A7 两域任务加入租约、领取代数围栏和事务 successor Outbox；过期恢复递增代数，旧 worker 不得调用 provider 或发布目录/报表事实。异步报告已有 task_id 时只续查/下载，不在未知 create 后紧循环重建。
+- admission policy/Lua 增加可选 `reports.task_create` 账户小时桶并保持六旧桶原子行为；非空/非法策略仍在发送前拒绝。报告见 `.superpowers/sdd/2026-09-30-ads-reporting-a-data/task-8-report.md` 和 `docs/validation/2026-09-30-ads-reporting-data.md`。
+- 本地隔离 PostgreSQL/Redis 回归：A8 新增 5 项、jobs 107 项（3 跳过）、reporting/ads 48 项、worker authorization 22 项；Ruff、ty、compileall 通过。无 TikTok/MCP 调用、无部署。
+
+## 2026-09-30 A8 P1 WAIT 退避修复（本地完成，未发布）
+
+- 报表 `WAIT` 续接在同一事务把 `next_attempt_at` 传播到 Outbox `available_at`，worker 领取前再次执行持久化到期门禁；旧 broker 消息不能提前建立 gateway 或消耗异步检查额度。
+- Worker 与 Beat 共用稳定 successor key，终态、旧 generation 和路由重绑定安全短路；真实 PostgreSQL/Redis 回归覆盖到期前后 claim、事务续接和冻结路由。报告见 `superpowers/sdd/2026-09-30-ads-reporting-a-data/task-8-fix-report.md`。
+- 聚焦 A8/jobs 回归 71 passed；reporting/ads/worker authorization 回归 44 passed、2 skipped；Ruff、ty、compileall 通过。未部署、未启用开关、无 TikTok/MCP 调用。

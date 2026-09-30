@@ -16,7 +16,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from billiard.exceptions import SoftTimeLimitExceeded  # type: ignore[import-untyped]
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from redis.exceptions import RedisError
 
 from app.core.config import settings
@@ -25,7 +25,13 @@ from app.core.errors import DomainError
 _ADMISSION_SCRIPT = Path(__file__).with_suffix(".lua").read_text()
 _RELEASE_SCRIPT = "for i=1,#KEYS do redis.call('ZREM',KEYS[i],ARGV[1]) end return 1"
 _ENDPOINT_OVERRIDES = frozenset(
-    {"endpoint_max_inflight", "endpoint_calls_per_window", "lease_ms"}
+    {
+        "endpoint_max_inflight",
+        "endpoint_calls_per_window",
+        "lease_ms",
+        "advertiser_calls_per_window",
+        "advertiser_window_ms",
+    }
 )
 
 
@@ -46,6 +52,20 @@ class AdmissionPolicy(BaseModel):
     endpoint_calls_per_window: int = Field(gt=0)
     window_ms: int = Field(gt=0)
     lease_ms: int = Field(gt=0)
+    # Optional TikTok async report create quota: 500/account/hour by default in
+    # deployments that opt in.  The bucket is consumed only by task creation.
+    advertiser_calls_per_window: int | None = Field(default=None, gt=0)
+    advertiser_window_ms: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _validate_async_bucket(self):
+        if (self.advertiser_calls_per_window is None) != (
+            self.advertiser_window_ms is None
+        ):
+            raise ValueError(
+                "advertiser_calls_per_window and advertiser_window_ms must be paired"
+            )
+        return self
 
 
 def admission_policy(endpoint: str) -> AdmissionPolicy:
@@ -53,7 +73,7 @@ def admission_policy(endpoint: str) -> AdmissionPolicy:
     if config == {}:
         raise DomainError("admission_unconfigured", "请配置应用调用额度")
     try:
-        if not isinstance(config, dict) or set(config) - {"base", "endpoints"}:
+        if not isinstance(config, dict) or not config or set(config) - {"base", "endpoints"}:
             raise ValueError("Invalid policy structure")
         base = config.get("base")
         endpoints = config.get("endpoints", {})
@@ -76,14 +96,24 @@ def admission_policy(endpoint: str) -> AdmissionPolicy:
 
 
 def admission_keys(
-    app_scope: str, endpoint: str, tenant_id: UUID, advertiser_id: str
+    app_scope: str,
+    endpoint: str,
+    tenant_id: UUID,
+    advertiser_id: str,
+    *,
+    async_create: bool | None = None,
 ) -> list[str]:
-    """All six keys use the application hash tag for atomic Redis Cluster eval."""
+    """All shared buckets use one Redis hash tag for an atomic Lua eval.
+
+    ``async_create`` is deliberately opt-in.  Callers that only have an
+    endpoint name may request the key for release cleanup; no quota is charged
+    unless the validated policy enables it.
+    """
     digest = sha256(app_scope.encode()).hexdigest()
     base = f"tiktok:{{{digest}}}"
     endpoint_key = sha256(endpoint.encode()).hexdigest()
     account_key = sha256(advertiser_id.encode()).hexdigest()
-    return [
+    keys = [
         f"{base}:rate",
         f"{base}:endpoint:{endpoint_key}:rate",
         f"{base}:active",
@@ -91,6 +121,13 @@ def admission_keys(
         f"{base}:tenant:{tenant_id}:active",
         f"{base}:advertiser:{account_key}:active",
     ]
+    if async_create is None:
+        async_create = False
+    if async_create:
+        keys.append(
+            f"{base}:advertiser:{account_key}:async-create-rate"
+        )
+    return keys
 
 
 def admit_call(
@@ -103,7 +140,13 @@ def admit_call(
     lease_id: UUID,
     policy: AdmissionPolicy,
 ) -> Admission:
-    keys = admission_keys(app_scope, endpoint, tenant_id, advertiser_id)
+    async_create = (
+        endpoint == "reports.task_create"
+        and policy.advertiser_calls_per_window is not None
+    )
+    keys = admission_keys(
+        app_scope, endpoint, tenant_id, advertiser_id, async_create=async_create
+    )
     args = [
         str(lease_id),
         policy.window_ms,
@@ -114,9 +157,13 @@ def admit_call(
         policy.endpoint_max_inflight,
         policy.tenant_max_inflight,
         policy.advertiser_max_inflight,
+        policy.advertiser_window_ms or 0,
+        policy.advertiser_calls_per_window or 0,
     ]
     try:
-        granted, delay = redis_client.eval(_ADMISSION_SCRIPT, 6, *keys, *args)
+        granted, delay = redis_client.eval(
+            _ADMISSION_SCRIPT, len(keys), *keys, *args
+        )
     except RedisError as error:
         raise DomainError(
             "admission_unavailable", "调用配额服务暂不可用", True
@@ -134,7 +181,15 @@ def release_call(
     lease_id: UUID,
 ) -> None:
     """Release inflight leases only. RedisError is handled separately by caller."""
-    keys = admission_keys(app_scope, endpoint, tenant_id, advertiser_id)[2:]
+    # The optional async-create rate bucket is intentionally excluded: a lease
+    # release must never refund an already-counted provider create attempt.
+    keys = admission_keys(
+        app_scope,
+        endpoint,
+        tenant_id,
+        advertiser_id,
+        async_create=endpoint == "reports.task_create",
+    )[2:6]
     redis_client.eval(_RELEASE_SCRIPT, len(keys), *keys, str(lease_id))
 
 

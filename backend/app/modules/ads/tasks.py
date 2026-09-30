@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from redis import Redis
 from sqlmodel import Session, select
@@ -16,14 +16,16 @@ from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.ads import DirectoryQuery
 from app.integrations.tiktok.gateway import open_tiktok_gateway
 from app.jobs.celery_app import celery_app
-from app.jobs.outbox import validate_dispatch_payload
+from app.jobs.outbox import enqueue_after_commit, validate_dispatch_payload
 from app.jobs.tasks import register_dispatch_task
 from app.modules.accounts.routing import verify_route
 from app.modules.ads.sync import publish_directory, stage_directory_page
 from app.modules.ads.sync_models import AdDirectoryRun
 
 TASK_NAME = "ads.sync_step"
-register_dispatch_task(TASK_NAME, "resources")
+register_dispatch_task(TASK_NAME, "ads-directory")
+
+_LEASE_SECONDS = 90
 
 
 def _context(tenant_id: str, actor_id: str) -> TenantContext:
@@ -77,6 +79,14 @@ def run_directory_step(
             or run.published_version is not None
         ):
             return "FAILED" if run.status == "FAILED" else "READY"
+        now = datetime.now(UTC)
+        # A crashed worker leaves a short lease.  A live duplicate must not
+        # open a second provider call; the scanner advances generation only
+        # after this lease expires.
+        if run.claimed_until is not None and run.claimed_until > now:
+            return "WAIT"
+        run.claim_token = uuid4()
+        run.claimed_until = now + timedelta(seconds=_LEASE_SECONDS)
         route = _route(run.frozen_route)
         verify_route(
             session,
@@ -112,6 +122,10 @@ def run_directory_step(
         )
         if page.complete:
             publish_directory(session, run_id=run_id, claim_generation=claim_generation)
+            current = session.get(AdDirectoryRun, run_id, populate_existing=True)
+            if current is not None and current.claim_generation == claim_generation:
+                current.claim_token = None
+                current.claimed_until = None
             result = "READY"
         else:
             current = session.get(AdDirectoryRun, run_id)
@@ -119,7 +133,20 @@ def run_directory_step(
                 raise DomainError("directory_incomplete", "目录页缺少后续游标")
             current.next_page = page.next_page
             current.status = "RUNNING"
+            current.next_attempt_at = datetime.now(UTC)
+            current.claim_token = None
+            current.claimed_until = None
             result = "CONTINUE"
+        if result == "CONTINUE":
+            # Successor is part of the same DB transaction as the staged page;
+            # a broker failure therefore leaves one durable outbox row to retry.
+            enqueue_after_commit(
+                session,
+                context=context,
+                task_name=TASK_NAME,
+                task_key=f"ads-directory:{run_id}:{claim_generation}:{page.next_page}",
+                payload={"run_id": str(run_id), "claim_generation": claim_generation},
+            )
         session.commit()
         return result
 

@@ -12,7 +12,15 @@ from redis.exceptions import RedisError
 from app.core.config import settings
 from app.jobs.celery_app import celery_app
 
-_QUEUES = ("control", "builds", "resources", "resource-results")
+_QUEUES = (
+    "control",
+    "builds",
+    "resources",
+    "resource-results",
+    "ads-directory",
+    "ads-reporting",
+    "ad-management",
+)
 _CACHE_SECONDS = 5.0
 # 真实3.5万条积压的完整索引约1.6秒；1秒会稳定漏掉最后的结果队列，
 # 令每条outbox都重复深扫描。仍保留消息数上限、实时LPOS和有界补查。

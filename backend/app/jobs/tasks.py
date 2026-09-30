@@ -14,7 +14,17 @@ from app.core.db import engine
 from app.core.errors import DomainError
 from app.jobs.celery_app import celery_app
 
-_ALLOWED_QUEUES = frozenset({"control", "resources", "resource-results", "builds"})
+_ALLOWED_QUEUES = frozenset(
+    {
+        "control",
+        "resources",
+        "resource-results",
+        "builds",
+        "ads-directory",
+        "ads-reporting",
+        "ad-management",
+    }
+)
 _RESOURCE_RESULTS = frozenset(
     {
         "materials.verify_target",

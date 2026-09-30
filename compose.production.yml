@@ -71,8 +71,38 @@ services:
     stop_grace_period: 90s
     init: true
     logging: *production-logging
+  worker-ads-directory:
+    extends:
+      file: compose.yml
+      service: worker-ads-directory
+    image: *release-image
+    environment:
+      ADS_SYNC_ENABLED: ${ADS_SYNC_ENABLED:-false}
+      ADS_DIRECTORY_WORKER_CONCURRENCY: ${ADS_DIRECTORY_WORKER_CONCURRENCY:-1}
+    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ads-directory, --concurrency, '${ADS_DIRECTORY_WORKER_CONCURRENCY:-1}', '--hostname=ads-directory@%h', --loglevel=INFO]
+    cpus: 0.75
+    mem_limit: 768m
+    stop_grace_period: 120s
+    init: true
+    logging: *production-logging
+  worker-ads-reporting:
+    extends:
+      file: compose.yml
+      service: worker-ads-reporting
+    image: *release-image
+    environment:
+      ADS_SYNC_ENABLED: ${ADS_SYNC_ENABLED:-false}
+      ADS_REPORTING_WORKER_CONCURRENCY: ${ADS_REPORTING_WORKER_CONCURRENCY:-1}
+    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ads-reporting, --concurrency, '${ADS_REPORTING_WORKER_CONCURRENCY:-1}', '--hostname=ads-reporting@%h', --loglevel=INFO]
+    cpus: 0.75
+    mem_limit: 768m
+    stop_grace_period: 120s
+    init: true
+    logging: *production-logging
   beat:
     image: *release-image
+    environment:
+      ADS_SYNC_ENABLED: ${ADS_SYNC_ENABLED:-false}
     cpus: 0.25
     mem_limit: 256m
     stop_grace_period: 30s

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from redis import Redis
 from sqlmodel import Session, col, select
@@ -15,17 +16,37 @@ from app.core.db import engine
 from app.core.errors import DomainError
 from app.integrations.tiktok.gateway import open_tiktok_gateway
 from app.jobs.celery_app import celery_app
-from app.jobs.outbox import validate_dispatch_payload
+from app.jobs.models import PendingDispatch
+from app.jobs.outbox import enqueue_after_commit, validate_dispatch_payload
 from app.jobs.tasks import register_dispatch_task
 from app.modules.accounts.routing import verify_route
 from app.modules.ads.balances import persist_balance
+from app.modules.ads.sync_models import AdDirectoryRun
 from app.modules.reporting.contracts import decode_query
-from app.modules.reporting.scheduling import record_schedule_completion
+from app.modules.reporting.scheduling import (
+    enqueue_due_syncs,
+    record_schedule_completion,
+)
 from app.modules.reporting.sync import collect_report_step
 from app.modules.reporting.sync_models import ReportSyncRun, SyncSchedule
 
 TASK_NAME = "reporting.sync_step"
-register_dispatch_task(TASK_NAME, "resources")
+SCAN_TASK_NAME = "reporting.scan_due"
+register_dispatch_task(TASK_NAME, "ads-reporting")
+register_dispatch_task(SCAN_TASK_NAME, "control")
+
+_LEASE_SECONDS = 90
+
+
+def _successor_key(run: ReportSyncRun, *, claim_generation: int) -> str:
+    """Stable key shared by worker continuation and Beat recovery."""
+
+    state = (
+        f"page:{run.next_page}"
+        f":task:{run.task_id or '-'}:status:{run.task_status or '-'}"
+        f":due:{run.next_attempt_at.isoformat() if run.next_attempt_at else '-'}"
+    )
+    return f"{TASK_NAME}:{run.id}:{claim_generation}:{sha256(state.encode()).hexdigest()}"
 
 
 def _context(tenant_id: str, actor_id: str) -> TenantContext:
@@ -75,6 +96,13 @@ def run_report_step(
             raise DomainError("action_forbidden", "报表任务操作者不匹配")
         if run.claim_generation != claim_generation:
             return "FAILED"
+        if run.status in {"COMPLETE", "FAILED", "CANCELLED", "STALE"} or run.published_version is not None:
+            return "FAILED" if run.status == "FAILED" else "READY"
+        now = datetime.now(UTC)
+        # 旧 broker 消息或重复投递也必须服从持久退避；到期前不领取、
+        # 不建立 gateway，不能只依赖 Outbox 的投递时间防止紧循环轮询。
+        if run.next_attempt_at is not None and run.next_attempt_at > now:
+            return "WAIT"
         route = _route(run.frozen_route)
         task_status = run.task_status
         advertiser_id = run.advertiser_id
@@ -84,6 +112,10 @@ def run_report_step(
         ):
             raise DomainError("report_query_invalid", "报表广告类型无效")
         ad_type = persisted_ad_type.strip().upper() if persisted_ad_type else None
+        if run.claimed_until is not None and run.claimed_until > now:
+            return "WAIT"
+        run.claim_token = uuid4()
+        run.claimed_until = now + timedelta(seconds=_LEASE_SECONDS)
         verify_route(
             session,
             context=context,
@@ -126,6 +158,8 @@ def run_report_step(
                 current.coverage = "COMPLETE"
                 current.completed_at = datetime.now(UTC)
                 current.observed_at = datetime.now(UTC)
+                current.claim_token = None
+                current.claimed_until = None
                 session.commit()
                 return "READY"
         with Session(database_engine) as session:
@@ -135,6 +169,31 @@ def run_report_step(
                 claim_generation=claim_generation,
                 gateway=gateway,
             )
+            current = session.get(ReportSyncRun, run_id, populate_existing=True)
+            if current is not None and current.claim_generation == claim_generation:
+                current.claim_token = None
+                current.claimed_until = None
+                if result in {"CONTINUE", "WAIT"}:
+                    current.next_attempt_at = current.next_attempt_at or datetime.now(UTC)
+            if (
+                result in {"CONTINUE", "WAIT"}
+                and current is not None
+                and current.claim_generation == claim_generation
+            ):
+                dispatch_id = enqueue_after_commit(
+                    session,
+                    context=context,
+                    task_name=TASK_NAME,
+                    task_key=_successor_key(current, claim_generation=claim_generation),
+                    payload={"run_id": str(run_id), "claim_generation": claim_generation},
+                )
+                dispatch = session.get(PendingDispatch, dispatch_id)
+                if dispatch is not None and current.next_attempt_at is not None:
+                    # Outbox eligibility is part of the same transaction as
+                    # WAIT state; a poll can never run before its durable due.
+                    dispatch.available_at = max(
+                        dispatch.available_at, current.next_attempt_at
+                    )
             if result == "READY":
                 _record_request_completion(session, run_id=run_id)
             session.commit()
@@ -190,6 +249,91 @@ def _route(value: dict[str, Any]):
         raise DomainError("frozen_route_changed", "报表任务冻结路由无效") from exc
 
 
+def scan_due_runs(*, database_engine: Any, now: datetime | None = None) -> int:
+    """Claim due plans and enqueue bounded work without contacting TikTok.
+
+    A lease-expired run gets a new generation before its successor is written;
+    any old worker that returns later is fenced by the generation check in the
+    directory/report collector.  All state and outbox rows commit together.
+    """
+
+    if not settings.ADS_SYNC_ENABLED:
+        return 0
+    now = now or datetime.now(UTC)
+    queued = 0
+    with Session(database_engine) as session, session.begin():
+        request_ids = enqueue_due_syncs(session, now=now)
+        # Include every shard of each request, not just the first ID returned by
+        # request_sync; report requests commonly fan out into several contracts.
+        directory_rows = session.exec(
+            select(AdDirectoryRun).where(
+                col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
+                col(AdDirectoryRun.next_attempt_at).is_(None)
+                | (col(AdDirectoryRun.next_attempt_at) <= now),
+            )
+        ).all()
+        report_rows = session.exec(
+            select(ReportSyncRun).where(
+                col(ReportSyncRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
+                col(ReportSyncRun.next_attempt_at).is_(None)
+                | (col(ReportSyncRun.next_attempt_at) <= now),
+            )
+        ).all()
+        # Short current-day shards are served before the long historical
+        # backfill.  The two queues still have independent one-slot consumers,
+        # so a large history cannot consume the control/other worker pool.
+        def priority(row: ReportSyncRun) -> tuple[int, UUID]:
+            query = row.query if isinstance(row.query, dict) else {}
+            try:
+                start = datetime.fromisoformat(str(query["start_date"]))
+                end = datetime.fromisoformat(str(query["end_date"]))
+                span = (end - start).days
+            except (KeyError, TypeError, ValueError):
+                span = 10_000
+            return (span, row.id)
+
+        report_rows = sorted(report_rows, key=priority)
+        del request_ids  # selection above intentionally also recovers after restart
+        for row, task_name in [
+            *[(item, "ads.sync_step") for item in directory_rows],
+            *[(item, TASK_NAME) for item in report_rows],
+        ]:
+            if row.claimed_until is not None and row.claimed_until > now:
+                continue
+            if row.claimed_until is not None and row.claimed_until <= now:
+                row.claim_generation += 1
+                row.claim_token = None
+                row.claimed_until = None
+            context = TenantContext(tenant_id=row.tenant_id, actor_id=row.actor_id, role="operator")
+            task_key = (
+                _successor_key(row, claim_generation=row.claim_generation)
+                if isinstance(row, ReportSyncRun)
+                else f"{task_name}:{row.id}:{row.claim_generation}:page:{row.next_page}:task:{getattr(row, 'task_id', None) or '-'}"
+            )
+            enqueue_after_commit(
+                session,
+                context=context,
+                task_name=task_name,
+                task_key=task_key,
+                payload={"run_id": str(row.id), "claim_generation": row.claim_generation},
+            )
+            queued += 1
+    return queued
+
+
+@celery_app.task(name=SCAN_TASK_NAME, time_limit=30, soft_time_limit=25)
+def scan_due(
+    *,
+    tenant_id: str | None = None,
+    actor_id: str | None = None,
+    payload: dict[str, Any] | None = None,
+) -> int:
+    # Beat supplies no tenant; the keyword shape remains compatible with the
+    # standard outbox task contract for controlled/manual invocations.
+    del tenant_id, actor_id, payload
+    return scan_due_runs(database_engine=engine)
+
+
 @celery_app.task(  # type: ignore[untyped-decorator]
     name=TASK_NAME,
     time_limit=60,
@@ -209,4 +353,4 @@ def sync_step(*, tenant_id: str, actor_id: str, payload: dict[str, Any]) -> str:
         )
 
 
-__all__ = ["TASK_NAME", "sync_step", "run_report_step"]
+__all__ = ["TASK_NAME", "SCAN_TASK_NAME", "sync_step", "scan_due", "run_report_step", "scan_due_runs"]

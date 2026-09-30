@@ -1,0 +1,317 @@
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from uuid import uuid4
+
+import pytest
+from sqlmodel import Session, select
+
+from app.core.context import TenantContext
+from app.core.db import engine
+from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
+from app.jobs import outbox
+from app.jobs.admission import AdmissionPolicy, admission_keys, admit_call, release_call
+from app.jobs.celery_app import celery_app
+from app.jobs.models import DispatchTenantCursor, PendingDispatch
+from app.jobs.outbox import enqueue_after_commit, flush_dispatch
+from app.modules.reporting.sync import collect_report_step
+from app.modules.reporting.sync_models import ReportSyncRun
+from app.modules.reporting.tasks import TASK_NAME
+
+
+class _Result:
+    def __init__(self, row):
+        self.row = row
+
+    def one_or_none(self):
+        return self.row
+
+
+class _Session:
+    def __init__(self, row):
+        self.row = row
+        self.rolled_back = False
+
+    def exec(self, _statement):
+        return _Result(self.row)
+
+    def rollback(self):
+        self.rolled_back = True
+
+    def flush(self):
+        return None
+
+
+def test_old_generation_stops_before_transport_and_does_not_publish():
+    run = SimpleNamespace(
+        id=uuid4(), claim_generation=2, status="RUNNING", coverage="PENDING", error_code=None
+    )
+    session = _Session(run)
+
+    class Transport:
+        def read_page(self, _query):
+            raise AssertionError("stale generation must not call provider")
+
+    assert collect_report_step(
+        session, run_id=run.id, claim_generation=1, gateway=SimpleNamespace(reports=Transport())
+    ) == "FAILED"
+    assert run.status == "RUNNING"
+    assert run.coverage == "PENDING"
+    assert session.rolled_back is False
+
+
+@pytest.fixture
+def recovery_run(session, reporting_seed):
+    route = FrozenTikTokRoute(
+        tenant_id=reporting_seed.context.tenant_id,
+        bc_id="bc-report",
+        connection_id=reporting_seed.connection.id,
+        channel="OFFICIAL_API",
+        authorization_revision=0,
+        adapter_contract_revision="official-api-v1",
+        binding_revision=0,
+    )
+    query = {
+        "advertiser_id": "report-account",
+        "report_contract": "basic_campaign",
+        "metric_family": "delivery",
+        "dimensions": ["campaign_id", "stat_time_day"],
+        "metrics": ["spend"],
+        "start_date": "2026-09-01",
+        "end_date": "2026-09-01",
+        "granularity": "DAY",
+        "currency": "USD",
+        "timezone": "UTC",
+        "attribution": "default",
+        "filter_ids": [],
+        "page": 1,
+    }
+    run = ReportSyncRun(
+        tenant_id=reporting_seed.context.tenant_id,
+        advertiser_id="report-account",
+        bc_id=route.bc_id,
+        actor_id=reporting_seed.context.actor_id,
+        connection_id=route.connection_id,
+        channel=route.channel,
+        frozen_route=route.model_dump(mode="json"),
+        request_id=uuid4(),
+        partition_key="a" * 64,
+        query=query,
+        claim_generation=2,
+        status="RUNNING",
+    )
+    session.add(run)
+    session.flush()
+    return run
+
+
+def test_old_generation_is_fenced_in_real_postgresql(session, recovery_run):
+    run_id = recovery_run.id
+
+    class Transport:
+        def read_page(self, _query):
+            raise AssertionError("stale generation must not call provider")
+
+    assert collect_report_step(
+        session,
+        run_id=run_id,
+        claim_generation=1,
+        gateway=SimpleNamespace(reports=Transport()),
+    ) == "FAILED"
+    persisted = session.exec(select(ReportSyncRun).where(ReportSyncRun.id == run_id)).one()
+    assert persisted.claim_generation == 2
+    assert persisted.status == "RUNNING"
+
+
+def test_async_create_bucket_is_per_advertiser_and_release_keeps_rate(redis_client):
+    policy = AdmissionPolicy(
+        app_max_inflight=20,
+        endpoint_max_inflight=20,
+        tenant_max_inflight=20,
+        advertiser_max_inflight=20,
+        app_calls_per_window=1000,
+        endpoint_calls_per_window=1000,
+        window_ms=1000,
+        lease_ms=1000,
+        advertiser_calls_per_window=2,
+        advertiser_window_ms=3_600_000,
+    )
+    scope = {
+        "app_scope": f"recovery-{uuid4()}",
+        "endpoint": "reports.task_create",
+        "tenant_id": uuid4(),
+        "advertiser_id": "a",
+    }
+    leases = [uuid4() for _ in range(2)]
+    other = scope | {"advertiser_id": "b"}
+    try:
+        for lease in leases:
+            assert admit_call(redis_client, **scope, lease_id=lease, policy=policy).granted
+        assert not admit_call(redis_client, **scope, lease_id=uuid4(), policy=policy).granted
+        assert admit_call(redis_client, **other, lease_id=uuid4(), policy=policy).granted
+        release_call(redis_client, **scope, lease_id=leases[0])
+        # Releasing inflight does not refund the hourly creation bucket.
+        assert not admit_call(redis_client, **scope, lease_id=uuid4(), policy=policy).granted
+    finally:
+        keys = admission_keys(**scope, async_create=True)
+        redis_client.delete(*keys)
+        redis_client.delete(*admission_keys(**other, async_create=True))
+
+
+def test_successor_available_at_is_a_real_outbox_gate(monkeypatch):
+    """A WAIT continuation is invisible to the publisher until its due time."""
+
+    context = TenantContext(uuid4(), uuid4(), "operator")
+    with Session(engine) as session:
+        session.exec(
+            PendingDispatch.__table__.delete().where(
+                PendingDispatch.tenant_id == context.tenant_id
+            )
+        )
+        session.exec(
+            DispatchTenantCursor.__table__.delete().where(
+                DispatchTenantCursor.tenant_id == context.tenant_id
+            )
+        )
+        due = datetime.now(UTC) + timedelta(seconds=30)
+        dispatch_id = enqueue_after_commit(
+            session,
+            context=context,
+            task_name=TASK_NAME,
+            task_key=f"wait:{uuid4()}",
+            payload={"run_id": str(uuid4()), "claim_generation": 1},
+        )
+        dispatch = session.get(PendingDispatch, dispatch_id)
+        assert dispatch is not None
+        dispatch.available_at = due
+        session.commit()
+
+    sent = []
+    monkeypatch.setattr(outbox, "engine", engine)
+    monkeypatch.setattr(
+        "app.jobs.queued_dispatches.queued_dispatches",
+        lambda: SimpleNamespace(contains=lambda **_: False),
+    )
+    monkeypatch.setattr(
+        celery_app, "send_task", lambda *args, **kwargs: sent.append(kwargs)
+    )
+    try:
+        assert flush_dispatch() == 0
+        with Session(engine) as session:
+            row = session.get(PendingDispatch, dispatch_id)
+            assert row is not None
+            row.available_at = datetime.now(UTC) - timedelta(seconds=1)
+            session.commit()
+        assert flush_dispatch() == 1
+        assert sent
+    finally:
+        with Session(engine) as session:
+            row = session.get(PendingDispatch, dispatch_id)
+            if row is not None:
+                session.delete(row)
+            cursor = session.get(DispatchTenantCursor, context.tenant_id)
+            if cursor is not None:
+                session.delete(cursor)
+            session.commit()
+
+
+
+def test_worker_wait_and_successor_respect_persisted_due(
+    session, reporting_seed, recovery_run, redis_client, monkeypatch
+):
+    from app.modules.reporting import tasks
+
+    now = datetime.now(UTC)
+    recovery_run.task_id = "remote-task-1"
+    recovery_run.task_status = "RUNNING"
+    recovery_run.status = "WAITING_REMOTE"
+    recovery_run.next_attempt_at = now + timedelta(seconds=30)
+    session.flush()
+    route_before = dict(recovery_run.frozen_route)
+    calls = []
+
+    class Reports:
+        def check_task(self, task):
+            calls.append(task.task_id)
+            return task
+
+    @contextmanager
+    def gateway(**kwargs):
+        assert kwargs["route"].model_dump(mode="json") == route_before
+        yield SimpleNamespace(reports=Reports())
+
+    monkeypatch.setattr(tasks, "open_tiktok_gateway", gateway)
+    args = {
+        "database_engine": session.connection(),
+        "redis_client": redis_client,
+        "context": reporting_seed.context,
+        "run_id": recovery_run.id,
+        "claim_generation": 2,
+    }
+    # A duplicate broker message bypassing publisher cannot claim before due.
+    assert tasks.run_report_step(**args) == "WAIT"
+    session.refresh(recovery_run)
+    assert recovery_run.claim_token is None
+    assert recovery_run.claimed_until is None
+    assert calls == []
+    assert not session.exec(select(PendingDispatch).where(
+        PendingDispatch.tenant_id == reporting_seed.context.tenant_id
+    )).all()
+
+    recovery_run.next_attempt_at = now - timedelta(seconds=1)
+    session.flush()
+    assert tasks.run_report_step(**args) == "WAIT"
+    session.refresh(recovery_run)
+    assert calls == ["remote-task-1"]
+    successor = session.exec(select(PendingDispatch).where(
+        PendingDispatch.tenant_id == reporting_seed.context.tenant_id
+    )).one()
+    assert recovery_run.next_attempt_at > now
+    assert successor.available_at == recovery_run.next_attempt_at
+    assert successor.payload == {"run_id": str(recovery_run.id), "claim_generation": 2}
+    assert successor.task_key == tasks._successor_key(recovery_run, claim_generation=2)
+    assert recovery_run.frozen_route == route_before
+    assert tasks.run_report_step(**args) == "WAIT"
+    assert calls == ["remote-task-1"]
+
+    # Terminals and stale generations short circuit even with an elapsed due.
+    recovery_run.status = "COMPLETE"
+    recovery_run.next_attempt_at = now - timedelta(seconds=1)
+    session.flush()
+    assert tasks.run_report_step(**args) == "READY"
+    assert tasks.run_report_step(**(args | {"claim_generation": 1})) == "FAILED"
+    assert calls == ["remote-task-1"]
+
+
+
+def test_rebound_route_stops_before_gateway(
+    session, reporting_seed, recovery_run, redis_client, monkeypatch
+):
+    from app.core.errors import DomainError
+    from app.modules.accounts.connection_models import BCConnectionBinding
+    from app.modules.reporting import tasks
+
+    binding = session.exec(select(BCConnectionBinding).where(
+        BCConnectionBinding.tenant_id == reporting_seed.context.tenant_id,
+        BCConnectionBinding.bc_id == "bc-report",
+    )).one()
+    binding.revision += 1
+    session.flush()
+    frozen = dict(recovery_run.frozen_route)
+
+    def forbidden(**_kwargs):
+        raise AssertionError("changed binding must stop before gateway")
+
+    monkeypatch.setattr(tasks, "open_tiktok_gateway", forbidden)
+    with pytest.raises(DomainError):
+        tasks.run_report_step(
+            database_engine=session.connection(),
+            redis_client=redis_client,
+            context=reporting_seed.context,
+            run_id=recovery_run.id,
+            claim_generation=2,
+        )
+    # Failed verification rolls back the attempted claim; route is never replaced.
+    session.refresh(recovery_run)
+    assert recovery_run.frozen_route == frozen
+    assert recovery_run.claimed_until is None

@@ -117,6 +117,7 @@ URL 导入的上传及异常恢复查询完整响应保存于 `material_response
 | --- | --- | --- |
 | `MATERIAL_INGEST_ENABLED` | 阻止新素材导入受理、上传权限签发及新来源账户 URL 上传；已发送操作的结果核查仍保留。页面可访问不代表能入库 | 配置私有存储、分片 CORS、容量窗口、Linux prefork Worker、Beat 和调用额度；当前租户/BC 的连接与上传权限有效。在用户授权的素材与账户范围验证接收、来源上传成功回执的有效 VID 及页面可用状态；未知结果恢复另外验证 |
 | `MATERIAL_CLEANUP_ENABLED` | 不发送新的原件删除/分片终止；已发送删除继续核查。已核实来源的原件会停在 `cleanup_pending / cleanup_disabled`，持续占用容量，窗口耗尽后新文件等待容量 | 私有存储具有相应删除和读取权限，明确接受清理临时原件。成功来源回执、对象归属及无活动使用等由任务再次检查；确认 DELETE/HEAD 或分片关闭证据、页面已清理计数、预算释放及账户素材保留 |
+| `ADS_SYNC_ENABLED` | 停止 Beat 扫描新的目录/报表计划；已持久运行仍由恢复路径按冻结路由和领取代数核验 | API、目录 Worker、报表 Worker、Beat 加载同一值，并先完成非空调用策略、数据库/Redis 恢复验证；开启前单独确认周期采集影响 |
 
 清理开启后，已有合格积压也会处理；来源账户上传已确认成功且原件无活动使用后即可清理，没有固定保留几天的期限。后台每 30 秒检查待恢复清理任务，完成时间受任务队列、使用占用和存储响应影响。取消/闲置原件也会经各自证据检查后处理；`MATERIAL_ABANDON_SECONDS` 是闲置候选观察阈值，不是已入库素材的统一保留期。删除临时原件不会删除广告账户里的素材；重新关闭开关不能恢复已删除字节，也不等于完整跨账户分发或广告搭建已验收。
 
@@ -163,7 +164,7 @@ URL 导入的上传及异常恢复查询完整响应保存于 `material_response
 以下为当前测试环境的完整单行写法，不含凭据；其他环境先根据已核实的通道限制和负载制定策略，不直接当作官方默认值：
 
 ```dotenv
-TIKTOK_CALL_POLICIES='{"base":{"app_max_inflight":4,"endpoint_max_inflight":2,"tenant_max_inflight":4,"advertiser_max_inflight":4,"app_calls_per_window":10,"endpoint_calls_per_window":3,"window_ms":1000,"lease_ms":960000},"endpoints":{}}'
+TIKTOK_CALL_POLICIES='{"base":{"app_max_inflight":4,"endpoint_max_inflight":2,"tenant_max_inflight":4,"advertiser_max_inflight":4,"app_calls_per_window":10,"endpoint_calls_per_window":3,"window_ms":1000,"lease_ms":960000},"endpoints":{"reports.task_create":{"advertiser_calls_per_window":500,"advertiser_window_ms":3600000}}}'
 ```
 
 | 字段 | 含义与测试值 |
@@ -173,6 +174,7 @@ TIKTOK_CALL_POLICIES='{"base":{"app_max_inflight":4,"endpoint_max_inflight":2,"t
 | app_max_inflight / endpoint_max_inflight | 每共享配额域总并发 4、每逻辑操作并发 2 |
 | tenant_max_inflight / advertiser_max_inflight | 同配额域内每租户/每广告账户各最多 4 个并发请求 |
 | lease_ms | 并发占用租约 960000 毫秒，用于异常退出后的回收，不是请求超时或等待时长 |
+| reports.task_create advertiser_calls_per_window / advertiser_window_ms | 可选的异步报表创建账户小时桶（推荐 500 / 3600000）；仅创建尝试消费，和已有六项在同一 Lua 事务中检查/写入，释放租约不退小时计数 |
 | endpoints | 按实际逻辑操作名覆盖 endpoint_max_inflight、endpoint_calls_per_window、lease_ms，不能覆盖共享总量 |
 
 操作键及上传租约要求见下文“准入配置键迁移”；上传租约必须大于 905000 毫秒，候选目录读取租约也必须覆盖其整个请求时限。未知 MCP 主体时 **MCP_SERVICE_QUOTA_SCOPE 不设置**，代码将所有 MCP 连接合并至保守共享域；不能用租户、BC、connection_id 或 attempt_id 拆分额度，也不要写空字符串。只有核实真实上游配额归属后才设置该项。API 使用真实 App ID 的配额域；没有 API App 不影响 MCP 使用共享域。
@@ -266,7 +268,7 @@ Beat 每秒触发一次 outbox 发布。单次发布默认最多 20 个公平轮
 
 ## 准入配置键迁移
 
-双通道 gateway 使用逻辑操作键查询 `TIKTOK_CALL_POLICIES.endpoints`，当前操作分组为 `accounts.*`、`scene.*`、`materials.*`、`build.*` 和 `protocol.*`（以发布版本的实际 operation 名称为准）。以上指网关业务/协议键；独立 MCP 刷新仍使用 `auth_refresh`，不将它改名为点分前缀。升级时逐项迁移原 SDK URL 路径覆盖；旧 URL 条目不会命中，也没有兼容回退。共享 base 与配额归属域继续生效，不能通过改键绕过共享额度。
+双通道 gateway 使用逻辑操作键查询 `TIKTOK_CALL_POLICIES.endpoints`，当前操作分组为 `accounts.*`、`scene.*`、`materials.*`、`build.*`、`reports.*` 和 `protocol.*`（以发布版本的实际 operation 名称为准）。以上指网关业务/协议键；独立 MCP 刷新仍使用 `auth_refresh`，不将它改名为点分前缀。升级时逐项迁移原 SDK URL 路径覆盖；旧 URL 条目不会命中，也没有兼容回退。共享 base 与配额归属域继续生效，不能通过改键绕过共享额度。
 
 例如旧 `/open_api/v1.3/file/video/ad/upload/` 覆盖需分别配置 `materials.upload_video_file` 与 `materials.upload_video_url`。二者当前 worker hard limit 为 900 秒，lease 必须严格大于 hard limit 加 5 秒，即 **大于 905000ms**；仅保留旧 URL 条目会落到 base，短 lease 会被门禁拒绝。容量/频率/并发值应依据目标环境及实际已核实的通道额度设置，测试里的 970000ms 和宽松 quota 不是官方生产默认。配额配置正确仍不能替代账户权限及实际上传回读验收。
 
