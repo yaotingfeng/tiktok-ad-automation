@@ -215,7 +215,9 @@ def stage_directory_page(
         .where(AdDirectoryPage.run_id == run_id, AdDirectoryPage.complete.is_(True))
         .with_for_update()
     ).first()
-    if terminal is not None and page.page > terminal.page:
+    if terminal is not None and (
+        page.page > terminal.page or (page.complete and page.page != terminal.page)
+    ):
         raise _domain("directory_run_terminal", "目录运行已暂存末页")
 
     session.add(
