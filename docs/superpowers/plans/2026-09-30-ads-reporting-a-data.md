@@ -185,17 +185,17 @@ assert collect_report_step(session, run_id=report_sync.id, claim_generation=1, g
 - Produces `SyncRequest(route:FrozenTikTokRoute,advertiser_ids:tuple[str,...],scope:Literal['directory','active','report','balance','history','targeted'],start_date:date|None,end_date:date|None,refs:tuple[EntityRef,...]=())`、`request_sync(session:Session,*,context:TenantContext,request:SyncRequest)->UUID`；B 手动刷新与 C 操作后定向刷新只提交该本地入口。
 - Produces `SyncSchedule`（租户授权后台身份、冻结 route、账户、scope、next_due_at、请求历史覆盖）及 `enqueue_due_syncs(session,*,now:datetime)->tuple[UUID,...]`；任务仅运行 run_id/claim_generation 所指持久工作。
 
-- [ ] **RED：** RF4 固定账户本地今日和边界日期；相同请求并发及长任务到下一周期仍返回原运行，停投但处归因窗对象必须入核心查询。
+- [x] **RED：** RF4 固定账户本地今日和边界日期；相同请求并发及长任务到下一周期仍返回原运行，停投但处归因窗对象必须入核心查询。
 ```python
 first = request_sync(session, context=sync_seed.context, request=sync_seed.request)
 assert request_sync(session, context=sync_seed.context, request=sync_seed.request) == first
 assert sync_seed.planned_window(kind='initial').days == 30
 assert sync_seed.planned_window(kind='unknown_attribution').days == 35
 ```
-- [ ] **Run RED：** `uv run --frozen pytest tests/modules/reporting/test_scheduling.py -q`，预期调度接口缺失失败；fixture `planned_window` 必须读取实际持久计划，不能复制实现算法。
-- [ ] **Implement：** 固定目录3h；活跃配置/余额30min；核心当日+前日30min；近7日3h；每日13:00 UTC归因窗+7（未知35）；每周最近90日已请求范围；初始30日。首次30日后，归因回补可扩展到35日或更长，成功覆盖按实际发布记录，不能仍标只有30日。持久唯一键包含路由代数、账户、合同/指标组、窗口，重复请求合并但不跨不同授权语义合并。
-- [ ] **GREEN：** 重跑；配置集合为启用或近7日有消耗，余额失败不阻断报告；新绑定账户能建立初始计划，解绑停止后续调度；后台身份权限重新读取；观测保留系列粒度，跨日/改名不生成伪半小时流量。
-- [ ] **Commit：** 明确暂存本任务列出路径及进度记录，提交 `reporting: schedule resumable refresh and attribution backfill`。
+- [x] **Run RED：** `uv run --frozen pytest tests/modules/reporting/test_scheduling.py -q`，预期调度接口缺失失败；fixture `planned_window` 必须读取实际持久计划，不能复制实现算法。
+- [x] **Implement：** 固定目录3h；活跃配置/余额30min；核心当日+前日30min；近7日3h；每日13:00 UTC归因窗+7（未知35）；每周最近90日已请求范围；初始30日。首次30日后，归因回补可扩展到35日或更长，成功覆盖按实际发布记录，不能仍标只有30日。持久唯一键包含路由代数、账户、合同/指标组、窗口，重复请求合并但不跨不同授权语义合并。
+- [x] **GREEN：** 重跑；配置集合为启用或近7日有消耗，余额失败不阻断报告；新绑定账户能建立初始计划，解绑停止后续调度；后台身份权限重新读取；观测保留系列粒度，跨日/改名不生成伪半小时流量。
+- [x] **Commit：** `ca8bd7b` 初始实现，`c66ea51`、`e480a94`、`bb54b80`、`2629c50` 完成复审修复；最终独立复审 `task-7-rereview-2.md` APPROVED。
 
 ### Task 8 (A8): 队列公平性、冻结权限与恢复验收
 
