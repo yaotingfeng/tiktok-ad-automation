@@ -75,6 +75,30 @@ def test_async_payload_matches_generated_task_model(report_query):
         sdk.ReportTaskCreateBody(**_payload(report_query))
 
 
+@pytest.mark.parametrize(
+    ("report_contract", "identity"),
+    [
+        ("basic_account", "advertiser_id"),
+        ("basic_campaign", "campaign_id"),
+        ("basic_adgroup", "adgroup_id"),
+        ("basic_ad", "ad_id"),
+        ("basic_smart_plus_ad", "ad_id_v2"),
+        ("basic_smart_plus_creative", "ad_id"),
+    ],
+)
+def test_async_typed_parent_fails_closed_without_verified_type_filter(
+    report_query, report_contract, identity
+):
+    query = replace(
+        report_query,
+        report_contract=report_contract,
+        dimensions=(identity, "stat_time_day"),
+    )
+    with pytest.raises(DomainError) as failure:
+        _async_payload(query, ad_type="SMART_PLUS")
+    assert failure.value.code == "report_async_ad_type_unsupported"
+
+
 def test_ad_type_is_a_real_outbound_filter():
     query = ReportQuery(
         advertiser_id="report-account",
