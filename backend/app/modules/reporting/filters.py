@@ -64,6 +64,7 @@ class CompiledFilter:
         statement: Any,
         *,
         name_column: ColumnElement[Any] | None = None,
+        naming_status_column: ColumnElement[Any] | None = None,
         advertiser_column: ColumnElement[Any] | None = None,
         remote_id_column: ColumnElement[Any] | None = None,
         ad_type_column: ColumnElement[Any] | None = None,
@@ -81,6 +82,8 @@ class CompiledFilter:
             name_filter = self.name_predicate(name_column)
             if name_filter is not None:
                 predicates.append(name_filter)
+        if naming_status_column is not None and self.naming_status is not None:
+            predicates.append(naming_status_column == self.naming_status)
         if advertiser_column is not None and self.advertiser_ids:
             predicates.append(advertiser_column.in_(self.advertiser_ids))
         if remote_id_column is not None and self.ids:
@@ -139,6 +142,7 @@ def apply_authorized_scope(
     *,
     context: TenantContext,
     bc_id: str,
+    tenant_column: ColumnElement[Any],
     advertiser_column: ColumnElement[Any],
 ) -> Any:
     """Constrain a report/directory query to the selected BC's usable grants."""
@@ -150,7 +154,10 @@ def apply_authorized_scope(
         bc_id=bc_id,
         action="read",
     ).with_only_columns(BCAccountAccess.advertiser_id)
-    return statement.where(advertiser_column.in_(grants))
+    return statement.where(
+        tenant_column == context.tenant_id,
+        advertiser_column.in_(grants),
+    )
 
 
 def authorized_grants(

@@ -18,6 +18,17 @@ Dimension = Literal["account", "campaign", "adgroup", "ad", "material", "drama"]
 Availability = Literal[
     "AVAILABLE", "MISSING", "UNAVAILABLE", "UNSUPPORTED", "FAILED"
 ]
+CANONICAL_METRIC_KEYS = frozenset(
+    {
+        "spend",
+        "native_growth_ad_revenue_value_d0",
+        "native_growth_total_ad_impression_value",
+        "impressions",
+        "clicks",
+        # Derived only after canonical A buckets are aggregated.
+        "d0_roas",
+    }
+)
 
 
 def _finite(value: Decimal | None) -> Decimal | None:
@@ -104,6 +115,17 @@ class MetricVector(BaseModel):
     optimization_goal: str | None = None
     values: dict[str, Decimal | None] = Field(default_factory=dict)
     availability: dict[str, Availability] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_published_metrics(self) -> MetricVector:
+        if self.optimization_goal is not None:
+            raise ValueError("optimization_goal is not a published report coordinate")
+        unknown = (set(self.values) | set(self.availability)) - CANONICAL_METRIC_KEYS
+        if unknown:
+            raise ValueError(f"unsupported report metric keys: {sorted(unknown)}")
+        if set(self.values) != set(self.availability):
+            raise ValueError("metric values and availability must have the same keys")
+        return self
 
 
 class ReportRow(BaseModel):
