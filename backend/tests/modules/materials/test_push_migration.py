@@ -23,7 +23,6 @@ def test_upgrade_keeps_tenants_and_default_bc_is_scoped(monkeypatch):
                 text("SELECT id,name,active FROM tenant ORDER BY id")
             ).all()
         command.upgrade(config, "material_push")
-        command.check(config)
         with engine.begin() as db:
             assert (
                 db.execute(text("SELECT id,name,active FROM tenant ORDER BY id")).all()
@@ -71,6 +70,9 @@ def test_upgrade_keeps_tenants_and_default_bc_is_scoped(monkeypatch):
             )
         with pytest.raises(RuntimeError, match="已有外部素材批次"):
             command.downgrade(config, "audience_targeting")
+        # 历史行为断言结束后再校验当前模型，后续迁移不会使旧版本误报落后。
+        command.upgrade(config, "head")
+        command.check(config)
 
 
 def test_duplicate_names_stop_upgrade_without_renaming(monkeypatch):
