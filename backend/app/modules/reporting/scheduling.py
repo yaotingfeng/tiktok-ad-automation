@@ -504,7 +504,11 @@ def _request_directory_sync(
         )
         directory_specs = (
             ("campaign", "REGULAR", 1000),
+            ("campaign", "LEGACY_SMART_PLUS", 1000),
+            ("campaign", "SMART_PLUS", 1000),
             ("adgroup", "REGULAR", 1000),
+            ("adgroup", "LEGACY_SMART_PLUS", 1000),
+            ("adgroup", "SMART_PLUS", 1000),
             ("ad", "REGULAR", 100),
             ("ad", "LEGACY_SMART_PLUS", 100),
             ("ad", "SMART_PLUS", 100),
