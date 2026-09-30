@@ -44,13 +44,16 @@ def run_export(export_id: UUID) -> None:
             # 撤权是确定性失败；过期保留 EXPIRED 语义，其他授权错误写入
             # FAILED，绝不留下可下载对象。
             detail = getattr(exc, "detail", getattr(exc, "code", ""))
+            # A late/replayed task can discover a revoked COMPLETE export.  Only
+            # delete a key derived from this exact export scope; malformed or
+            # foreign keys remain untouched and are rejected by download.
+            if export.object_key == _expected_key(export):
+                _delete_object(export.object_key)
+                export.object_key = None
             if detail == "report_export_expired":
-                if export.object_key == _expected_key(export):
-                    _delete_object(export.object_key)
                 export.status = "EXPIRED"
             else:
                 export.status = "FAILED"
-            export.object_key = None
             session.add(export)
             session.commit()
             return
