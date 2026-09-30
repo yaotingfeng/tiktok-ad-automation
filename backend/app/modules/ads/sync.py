@@ -601,12 +601,24 @@ def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) 
                     raw_name=obj.name,
                     parser_revision=1,
                 )
+        material_incomplete = any(
+            page.coverage in {"PARTIAL_MATERIALS", "MATERIALS_INCOMPLETE"}
+            for page in ordered
+        )
         run.status = "COMPLETE"
-        run.coverage = "COMPLETE"
+        # 分页已经完整不代表素材子查询完整；运行摘要保留这两个覆盖维度。
+        run.coverage = "MATERIALS_INCOMPLETE" if material_incomplete else "COMPLETE"
         run.observed_at = fallback
         run.published_version = version
         run.completed_at = fallback
-        run.missing_reason = None
+        run.missing_reason = next(
+            (
+                page.missing_reason
+                for page in ordered
+                if page.missing_reason is not None
+            ),
+            None,
+        )
         session.add(run)
         session.flush()
         for page in ordered:
