@@ -435,3 +435,17 @@ def test_native_build_read_retains_original_decimal_lexeme(operation, field):
     assert result.data["list"][0]["other"] == 1.25
     structured = decode_mcp_result(receipt(raw=json.loads(text)), contract=selected)
     assert isinstance(structured.data["list"][0][field], float)
+
+
+@pytest.mark.parametrize(
+    "structured_code,text_code", [(40001, 0), (40001, 40002), (0, 40001)]
+)
+def test_contradictory_carriers_precede_business_error_classification(
+    structured_code, text_code
+):
+    raw = {"code": structured_code, "data": {}, "request_id": "structured-receipt"}
+    text = {"code": text_code, "data": {}, "request_id": "text-receipt"}
+    failure = assert_unknown(
+        receipt(raw, texts=[json.dumps(text)]), code="mcp_response_ambiguous"
+    )
+    assert failure.evidence.remote_code is None

@@ -204,10 +204,11 @@ def decode_mcp_result(
         raise _unknown("mcp_tool_error", evidence)
 
     if raw is not None:
-        _require_success(raw, evidence, contract)
-        # 即使禁止文本回退，出现互相矛盾的双份回执也不能确认业务成功。
+        # 先验证双载体一致性，再分类成功或拒绝；矛盾回执不能进入
+        # 只读业务拒绝的会话复用分支，也不能成为写入无副作用证据。
         if text_receipts and not _same_json(raw, text_receipts[0]):
             raise _unknown("mcp_response_ambiguous", evidence)
+        _require_success(raw, evidence, contract)
     else:
         if not text_json_allowed or len(text_receipts) != 1:
             raise _unknown("mcp_response_invalid", evidence)

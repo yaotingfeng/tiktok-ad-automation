@@ -107,7 +107,8 @@ def compile_query(query: DirectoryQuery) -> tuple[str, dict[str, Any]]:
         # 创意父级是资产组；ad_ids_v2 会裁掉创意内容，不能作为其请求筛选器。
         if query.kind == "creative":
             raise DomainError(
-                "ads_query_invalid", "创意目录须按创意 ID 读取；父级由返回的 v2 ID 关联"
+                "ads_query_invalid",
+                "创意目录须按创意 ID 读取；父级由返回的 smart_plus_ad_id 关联",
             )
         filtering["campaign_ids" if kind == "adgroup" else "adgroup_ids"] = list(
             query.parent_ids
@@ -185,9 +186,12 @@ class AdsReadAdapter:
             "creative": "ad",
         }
         parent_kind = parents.get(kind)
+        # 创意行的父资产组字段是 smart_plus_ad_id；ad_id_v2 属于资产组摘要合同。
         parent_id = (
             identifier(
-                row.get("ad_id_v2" if kind == "creative" else f"{parent_kind}_id")
+                row.get(
+                    "smart_plus_ad_id" if kind == "creative" else f"{parent_kind}_id"
+                )
             )
             if parent_kind
             else None
@@ -447,10 +451,10 @@ class AdsReadAdapter:
                     or row.get("adgroup_id") not in groups
                 ):
                     raise invalid()
-                if not row.get("ad_id_v2") or not row.get("ad_id"):
+                if not row.get("smart_plus_ad_id") or not row.get("ad_id"):
                     complete = False
                     continue
-                asset_id = identifier(row["ad_id_v2"])
+                asset_id = identifier(row["smart_plus_ad_id"])
                 identifier(row["ad_id"])
                 if asset_id not in ad_refs:
                     continue
@@ -471,7 +475,7 @@ class AdsReadAdapter:
                 creatives.append(entity)
                 usage, known = self._materials(
                     row,
-                    ad_refs[row["ad_id_v2"]],
+                    ad_refs[row["smart_plus_ad_id"]],
                     smart=False,
                     creative_id=entity.ref.remote_id,
                 )

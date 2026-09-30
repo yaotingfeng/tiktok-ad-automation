@@ -742,3 +742,39 @@ def test_waiting_acquire_rechecks_retirement_under_lock(client_factory, mcp_wire
             competitor.join(timeout=2)
     assert outcomes == {"first": "UNKNOWN", "competitor": "NOT_SENT"}
     assert len(tool_calls(mcp_wire)) == 1
+
+
+def test_contradictory_read_carriers_retire_session(
+    client_factory, fixture_contract, mcp_wire
+):
+    import json
+    from dataclasses import replace
+
+    selected = replace(fixture_contract, effect="READ")
+    mcp_wire.results[selected.tool_name].append(
+        {
+            "structuredContent": {
+                "code": 40001,
+                "data": {},
+                "request_id": "structured-rejection",
+            },
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {"code": 0, "data": {}, "request_id": "text-success"}
+                    ),
+                }
+            ],
+        }
+    )
+    with client_factory(contracts={selected.operation: selected}) as client:
+        with pytest.raises(RemoteCallError) as failure:
+            invoke(client)
+        assert failure.value.code == "mcp_response_ambiguous"
+        assert failure.value.effect == "UNKNOWN"
+        with pytest.raises(RemoteCallError) as retired:
+            invoke(client)
+        assert retired.value.code == "mcp_session_unavailable"
+        assert retired.value.effect == "NOT_SENT"
+    assert len(tool_calls(mcp_wire)) == 1

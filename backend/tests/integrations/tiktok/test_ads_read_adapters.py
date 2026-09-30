@@ -123,7 +123,8 @@ def test_directory_three_levels(
                     {
                         "advertiser_id": gateway_case[2],
                         "ad_id": "creative-8",
-                        "ad_id_v2": "object-7",
+                        "smart_plus_ad_id": "object-7",
+                        "campaign_automation_type": "UPGRADED_SMART_PLUS_CREATIVE",
                         "adgroup_id": "parent-g",
                         "video_id": "video-auto",
                     }
@@ -716,7 +717,8 @@ def test_multiple_native_creatives_preserve_one_material_use(
     creatives = [
         {
             "advertiser_id": gateway_case[2],
-            "ad_id_v2": "smart-1",
+            "smart_plus_ad_id": "smart-1",
+            "campaign_automation_type": "UPGRADED_SMART_PLUS_CREATIVE",
             "ad_id": creative,
             "adgroup_id": "group-1",
             "video_id": "same-video",
@@ -777,3 +779,75 @@ def test_post_only_material_and_video_identity_do_not_collide(
     assert post.main_material_id is None and post.main_material_type is None
     assert post.name == "授权帖子" and post.creative_ids == ("post-creative",)
     assert post.operation_status == "DISABLE"
+
+
+@pytest.mark.parametrize(
+    "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
+)
+def test_standalone_smart_creative_uses_documented_parent_field(
+    database_engine, redis_client, gateway_case, gateway_wire
+):
+    creative = {
+        "advertiser_id": gateway_case[2],
+        "adgroup_id": "group-1",
+        "campaign_automation_type": "UPGRADED_SMART_PLUS_CREATIVE",
+        "ad_id": "creative-1",
+        "smart_plus_ad_id": "asset-group-1",
+        "video_id": "video-1",
+    }
+    assert "ad_id_v2" not in creative
+    replies(gateway_wire, gateway_case[1].channel, {"ad_get": [page([creative])]})
+    with gateway(database_engine, redis_client, gateway_case) as client:
+        result = client.ads.read_page(
+            query(gateway_case, "creative", "SMART_PLUS", ids=("creative-1",))
+        )
+    assert result.complete and result.materials_complete
+    entity = result.items[0]
+    assert entity.ref.kind == "creative" and entity.ref.remote_id == "creative-1"
+    assert (
+        entity.parent_ref.kind == "ad"
+        and entity.parent_ref.remote_id == "asset-group-1"
+    )
+    assert result.materials[0].use_ref.ad_ref == entity.parent_ref
+    assert result.materials[0].creative_ids == ("creative-1",)
+
+
+@pytest.mark.parametrize(
+    "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
+)
+@pytest.mark.parametrize("damage", ["account", "group"])
+def test_supplement_smart_parent_preserves_account_and_group_checks(
+    database_engine, redis_client, gateway_case, gateway_wire, damage
+):
+    ads = [
+        {
+            "advertiser_id": gateway_case[2],
+            "smart_plus_ad_id": f"smart-{n}",
+            "adgroup_id": f"group-{n}",
+            "creative_list": [],
+        }
+        for n in (1, 2)
+    ]
+    creative = {
+        "advertiser_id": gateway_case[2],
+        "smart_plus_ad_id": "smart-1",
+        "campaign_automation_type": "UPGRADED_SMART_PLUS_CREATIVE",
+        "ad_id": "creative-1",
+        "adgroup_id": "group-1",
+        "video_id": "video-1",
+    }
+    if damage == "account":
+        creative["advertiser_id"] = "other-account"
+    else:
+        # 组仍在本页组集合中，但不属于此真实资产组；不能仅检查集合包含关系。
+        creative["adgroup_id"] = "group-2"
+    replies(
+        gateway_wire,
+        gateway_case[1].channel,
+        {"smart_plus_ad_get": [page(ads)], "ad_get": [page([creative], size=1000)]},
+    )
+    with gateway(database_engine, redis_client, gateway_case) as client:
+        result = client.ads.read_page(query(gateway_case, ad_type="SMART_PLUS"))
+    assert result.complete and not result.materials_complete
+    assert result.material_missing_reason == "ads_response_invalid"
+    assert len(result.items) == 2 and not result.materials
