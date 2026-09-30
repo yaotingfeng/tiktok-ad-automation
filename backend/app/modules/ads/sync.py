@@ -22,12 +22,12 @@ from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.ads import DirectoryPage, EntityRef
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
-from app.modules.accounts.models import TenantBC
 from app.modules.accounts.routing import verify_route
 from app.modules.ads.directory import append_campaign_name_projection
 from app.modules.ads.models import AdMaterialReference, AdObject
 from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
 from app.modules.reporting.sync_models import SyncSchedule
+from app.modules.tenants.models import Tenant
 
 
 def _ref_json(ref: EntityRef | None) -> dict[str, str] | None:
@@ -576,15 +576,13 @@ def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) 
             .with_for_update()
         ).all()
         ordered = _complete_chain(pages)
-        # Tenant 行是现有模型中的稳定锁点；先串行化版本分配，再读取最大值，
-        # 避免两个账户同步同时取得同一个 published_version。
+        # Tenant 行是现有模型中的稳定锁点；先串行化同租户所有 BC 的版本分配，
+        # 再读取最大值，避免不同账户或 BC 同时取得同一个 published_version。
         tenant = session.exec(
-            select(TenantBC)
-            .where(TenantBC.tenant_id == run.tenant_id, TenantBC.bc_id == run.bc_id)
-            .with_for_update()
+            select(Tenant).where(Tenant.id == run.tenant_id).with_for_update()
         ).one_or_none()
         if tenant is None:
-            raise _domain("account_not_in_bc", "目录运行的 BC 不存在")
+            raise _domain("tenant_forbidden", "目录运行的租户不存在")
         # PostgreSQL greatest/NULL 的行为会随空表变化；分别读取更清晰，也兼容测试数据库。
         object_max = (
             session.exec(select(func.max(AdObject.published_version))).one() or 0
