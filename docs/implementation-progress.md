@@ -1507,3 +1507,10 @@
 - Worker 与 Beat 共用稳定 successor key，终态、旧 generation 和路由重绑定安全短路；真实 PostgreSQL/Redis 回归覆盖到期前后 claim、事务续接和冻结路由。报告见 `superpowers/sdd/2026-09-30-ads-reporting-a-data/task-8-fix-report.md`。
 - 聚焦 A8/jobs 回归 71 passed；reporting/ads/worker authorization 回归 44 passed、2 skipped；Ruff、ty、compileall 通过。未部署、未启用开关、无 TikTok/MCP 调用。
 - 复审补强使用独立 PostgreSQL sessions 与真实 Redis：重复领取互斥、scanner 过期接管并递增 generation、旧目录/报表 worker 不调用 provider/发布，新目录 generation 完成一次发布；两个真实单槽 Celery worker 在目录积压时仍执行报表探针。新增聚焦回归 14 passed，changed-file ty 通过；全 app 既有 28 条诊断未纳入本轮。
+## 2026-10-01：B2 六维聚合与趋势已完成
+
+- B2 已完成三轮实现修复并通过最终独立复审：`c28f9d8` 起始实现，后续修复链包含 `d3e623c`、`d8e356b`、`54b15fc`、`24cf4e8`、`f7c5dd7`、`f2137bc`、`98bf21e`、`268739a`。
+- 六维聚合覆盖账户、广告系列、广告组、广告、素材、剧；素材使用五段 subject 与逐事实 typed use_ref 证明，部分映射保留原始数值但显式标记 `UNSUPPORTED/INCOMPLETE`，不把未证明父广告金额归到素材。
+- 趋势按冻结的完整目录成员、selected BC/connection/channel、目录版本与投影时间证明后发布观测；本地时区 day/hour 桶保留时区与粒度身份，剧维度先按成员配置过滤后聚合，再应用共享筛选阈值。
+- `task-2-rereview-3.md` 最终 Verdict 为 APPROVED；专用 reporting+adapter 回归 79 项通过，Ruff 与 `git diff --check` 通过。未调用真实 TikTok/MCP、未执行广告写入或部署。
+- B3 可以消费 B1 快照查询合同与 B2 `build_dimension_rows`/`build_trend`；B1 的非 NULL 值与非 `AVAILABLE` 状态语义仍由后续集成验收继续守护。

@@ -69,11 +69,11 @@
 
 **Interfaces:** `aggregate_metrics(rows:Sequence[MetricVector])->MetricVector` 只接受同口径桶；`build_dimension_rows(session,*,context,bc_id,filters:ReportingFilter)->tuple[ReportRow,...]`；`build_trend(session,*,context,bc_id,filters:ReportingFilter,grain:Literal['hour','day','observation'])->TrendPublic` 由 B3 在创建快照的一致读事务内调用。`TrendPublic` 定义在 schemas，含分桶 points、coverage、actual_interval_minutes、delta_reason。
 
-- [ ] **RED：** `test_roas_uses_summed_revenue` 用 USD/UTC/同归因/IAA 的两行 `(spend,d0_revenue)=(10,30),(90,90)`，断言 `aggregate_metrics(rows).values['d0_roas'] == Decimal('1.2')`；零消耗断言 `is None`。`test_material_usage_not_double_counted` 用同 VID 两广告实际 3/7，断言同账户素材合计 10、按两剧分别 3/7，多素材广告父金额不得复制；跨账户 VID 相同仍保留两份实际事实。
-- [ ] **运行 RED：** `uv run --frozen pytest tests/modules/reporting/test_aggregation.py tests/modules/reporting/test_trends.py -q`；预期聚合/趋势能力缺失失败。
-- [ ] **实现：** 六维分别选择已确认报告合同；剧用系列事实，素材用实际素材事实，缺失目录保留 ID 行；按币种/时区/归因/目标分桶，区分零与不可用。趋势从 A 的 ReportObservation 系列事实按最新名称投影重算；成员/grouping_revision 或日期变更则 `delta_reason='SCOPE_CHANGED'`/`'DATE_CHANGED'`、delta 为 None，不把迁组当效果变化；备注修改且筛选成员未变时仍可比较。
-- [ ] **GREEN：** 上述 pytest 通过，并测试暂停/删除金额仍在、同名不同版权方分开、空结果与缺页状态不同、混币种拆桶、负差值保留、缺失素材 D0 返回 UNSUPPORTED、无剧 ID 的外部系列正常归组。
-- [ ] **提交：** `git commit -m 'reports: aggregate six dimensions with explicit metric coverage'`。
+- [x] **RED：** `test_roas_uses_summed_revenue` 用 USD/UTC/同归因/IAA 的两行 `(spend,d0_revenue)=(10,30),(90,90)`，断言 `aggregate_metrics(rows).values['d0_roas'] == Decimal('1.2')`；零消耗断言 `is None`。`test_material_usage_not_double_counted` 用同 VID 两广告实际 3/7，断言同账户素材合计 10、按两剧分别 3/7，多素材广告父金额不得复制；跨账户 VID 相同仍保留两份实际事实。
+- [x] **运行 RED：** `uv run --frozen pytest tests/modules/reporting/test_aggregation.py tests/modules/reporting/test_trends.py -q`；预期聚合/趋势能力缺失失败。
+- [x] **实现：** 六维分别选择已确认报告合同；剧用系列事实，素材用实际素材事实，缺失目录保留 ID 行；按币种/时区/归因/目标分桶，区分零与不可用。趋势从 A 的 ReportObservation 系列事实按最新名称投影重算；成员/grouping_revision 或日期变更则 `delta_reason='SCOPE_CHANGED'`/`'DATE_CHANGED'`、delta 为 None，不把迁组当效果变化；备注修改且筛选成员未变时仍可比较。
+- [x] **GREEN：** 上述 pytest 通过，并测试暂停/删除金额仍在、同名不同版权方分开、空结果与缺页状态不同、混币种拆桶、负差值保留、缺失素材 D0 返回 UNSUPPORTED、无剧 ID 的外部系列正常归组；最终 reporting+adapter 专项回归 79 项通过。
+- [x] **提交：** 实现及三轮修复已提交，最终独立复审记录于 `.superpowers/sdd/2026-09-30-ads-reporting-b-workspace/task-2-rereview-3.md`，Verdict APPROVED。
 
 ## Task 3 (B3)：快照查询、跨页选择、详情与本地 API
 
