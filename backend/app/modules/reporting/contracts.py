@@ -95,6 +95,7 @@ _MATERIAL = (
             "adgroup_id",
             "smart_plus_ad_id",
             "main_material_id",
+            "main_material_type",
         ),
         ("spend", "impressions", "clicks"),
         ("RANGE",),
@@ -106,7 +107,7 @@ _MATERIAL = (
     ReportContract(
         "material_breakdown",
         "material",
-        ("main_material_id", "stat_time_day", "stat_time_hour"),
+        ("main_material_id", "main_material_type", "stat_time_day", "stat_time_hour"),
         ("spend", "impressions", "clicks"),
         ("RANGE", "DAY", "HOUR"),
         "REPLACE_PARTITION",
@@ -204,9 +205,22 @@ def validate_query(
     }[query.granularity]
     if query.report_contract == "material_overview":
         valid = (
-            len(query.dimensions) == 2
-            and query.dimensions[0] in contract.dimensions[:-1]
-            and query.dimensions[1] == "main_material_id"
+            len(query.dimensions) == 3
+            and query.dimensions[0] in contract.dimensions[:-2]
+            and query.dimensions[1:] == ("main_material_id", "main_material_type")
+        )
+    elif query.report_contract == "material_breakdown":
+        time_dimension = {
+            "DAY": ("stat_time_day",),
+            "HOUR": ("stat_time_hour",),
+            "RANGE": (),
+        }[query.granularity]
+        valid = query.dimensions == ("main_material_id", "main_material_type", *time_dimension)
+    elif query.report_contract == "basic":
+        valid = (
+            len(query.dimensions) == (1 if query.granularity == "RANGE" else 2)
+            and query.dimensions[0] in {"advertiser_id", "campaign_id", "adgroup_id", "ad_id", "ad_id_v2"}
+            and (query.granularity == "RANGE" or query.dimensions[1] == {"DAY": "stat_time_day", "HOUR": "stat_time_hour"}[query.granularity])
         )
     else:
         valid = query.dimensions == (contract.dimensions[0], *time_dimension)
@@ -250,9 +264,10 @@ def query_payload(query: ReportQuery) -> dict:
 
 def decode_query(value: dict) -> ReportQuery:
     expected = set(ReportQuery.__dataclass_fields__)
-    if type(value) is not dict or set(value) != expected:
+    if type(value) is not dict or not set(value) <= expected or set(value) - expected - {"page"}:
         raise ValueError("invalid persisted report query")
     data = dict(value)
+    data.setdefault("page", 1)
     for key in ("dimensions", "metrics", "filter_ids"):
         if type(data[key]) is not list:
             raise ValueError("invalid persisted report list")

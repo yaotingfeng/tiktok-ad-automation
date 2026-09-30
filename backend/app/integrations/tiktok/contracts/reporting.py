@@ -1,10 +1,10 @@
 """双通道报表合同；金额精度、不可用值与完整性由适配器显式提供。"""
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from .accounts import require_id
 from .ads import (
@@ -64,6 +64,8 @@ class ReportRow:
     bucket_end: datetime
     values: dict[str, Decimal | None]
     availability: dict[str, str]
+    # 仅允许适配器解析出的描述/关联字段；事实层会再次按白名单过滤。
+    attributes: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         # subject_key 是有序复合键，允许不同位置拥有相同值。
@@ -78,6 +80,8 @@ class ReportRow:
             raise ValueError("invalid report bucket range")
         if type(self.values) is not dict or type(self.availability) is not dict:
             raise ValueError("invalid report metric maps")
+        if type(self.attributes) is not dict:
+            raise ValueError("invalid report attributes")
         for name, amount in self.values.items():
             require_text(name)
             if amount is not None and (
@@ -90,6 +94,7 @@ class ReportRow:
         # 缺失指标保留 None，不能转为零或借浮点数推断金额。
         object.__setattr__(self, "values", deepcopy(self.values))
         object.__setattr__(self, "availability", deepcopy(self.availability))
+        object.__setattr__(self, "attributes", deepcopy(self.attributes))
 
 
 @dataclass(frozen=True)

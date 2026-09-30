@@ -8,11 +8,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, func
 from sqlmodel import Session, select
@@ -23,7 +22,13 @@ from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.integrations.tiktok.contracts.reporting import ReportPage, ReportRow
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.accounts.routing import verify_route
-from app.modules.reporting.contracts import supports_metric
+from app.modules.reporting.contracts import (
+    decode_query,
+    report_buckets,
+    report_partition_key,
+    supports_metric,
+    validate_query,
+)
 from app.modules.reporting.models import ReportCoverage, ReportFact, ReportObservation
 from app.modules.reporting.sync_models import ReportStagedPage, ReportSyncRun
 
@@ -76,6 +81,7 @@ def _row_payload(row: ReportRow) -> dict[str, Any]:
             for key, value in row.values.items()
         },
         "availability": dict(row.availability),
+        "attributes": _json_value(row.attributes),
     }
 
 
@@ -173,6 +179,7 @@ def stage_report_page(
     ).one_or_none()
     if run is None:
         raise _domain("report_run_not_found", "报表同步运行不存在")
+    query, contract = _validated_query(run)
     if run.published_version is not None or run.status in {
         "COMPLETE",
         "FAILED",
@@ -205,20 +212,20 @@ def stage_report_page(
     ).first()
     if terminal is not None and (page.page > terminal.page or page.complete):
         raise _domain("report_page_after_terminal", "报表完整页之后不能继续写页")
-    session.add(
-        ReportStagedPage(
-            run_id=run.id,
-            page=page.page,
-            tenant_id=run.tenant_id,
-            advertiser_id=run.advertiser_id,
-            claim_generation=claim_generation,
-            next_page=page.next_page,
-            complete=page.complete,
-            evidence=_evidence_json(page),
-            rows=[_row_payload(item) for item in page.rows],
-            task_id=run.task_id,
-        )
+    staged = ReportStagedPage(
+        run_id=run.id,
+        page=page.page,
+        tenant_id=run.tenant_id,
+        advertiser_id=run.advertiser_id,
+        claim_generation=claim_generation,
+        next_page=page.next_page,
+        complete=page.complete,
+        evidence=_evidence_json(page),
+        rows=[_row_payload(item) for item in page.rows],
+        task_id=run.task_id,
     )
+    _row_records([staged], query, contract)
+    session.add(staged)
     session.flush()
 
 
@@ -268,7 +275,8 @@ def _attributes(value: Any) -> dict[str, Any]:
 
 def _contains_url(value: Any) -> bool:
     if isinstance(value, str):
-        return value.startswith(("http://", "https://"))
+        normalized = value.strip().lower()
+        return normalized.startswith(("http://", "https://", "www."))
     if isinstance(value, dict):
         return any(_contains_url(item) for item in value.values())
     if isinstance(value, list):
@@ -285,24 +293,6 @@ def _query_date(value: Any) -> date | None:
         except ValueError:
             return None
     return None
-
-
-def _empty_bucket(run: ReportSyncRun) -> tuple[datetime, datetime]:
-    query = run.query
-    start = _query_date(query.get("start_date"))
-    end = _query_date(query.get("end_date"))
-    if start is None or end is None or end < start:
-        raise _domain("report_query_invalid", "报表查询日期无效")
-    try:
-        zone = ZoneInfo(str(query.get("timezone") or "UTC"))
-    except Exception:
-        zone = UTC
-    return (
-        datetime.combine(start, time.min, tzinfo=zone).astimezone(UTC),
-        datetime.combine(end + timedelta(days=1), time.min, tzinfo=zone).astimezone(
-            UTC
-        ),
-    )
 
 
 def _run_coordinates(run: ReportSyncRun) -> dict[str, Any]:
@@ -331,6 +321,24 @@ def _run_coordinates(run: ReportSyncRun) -> dict[str, Any]:
     }
 
 
+def _validated_query(run: ReportSyncRun):
+    """发布前重新验证完整查询；不能因坏时区而回退到 UTC。"""
+    try:
+        query = decode_query(run.query)
+        if query.advertiser_id != run.advertiser_id:
+            raise ValueError("query advertiser differs from run")
+        if report_partition_key(query) != run.partition_key:
+            raise ValueError("partition key does not match query")
+        contract = validate_query(
+            query,
+            channel=run.channel,
+            ad_type=run.query.get("ad_type"),
+        )
+    except (TypeError, ValueError, KeyError) as exc:
+        raise _domain("report_query_invalid", "报表查询合同无效") from exc
+    return query, contract
+
+
 def _newer_published_run(session: Session, run: ReportSyncRun) -> bool:
     if run.request_sequence is None:
         raise _domain("report_sequence_missing", "报表运行尚未取得数据库请求序号")
@@ -348,11 +356,37 @@ def _newer_published_run(session: Session, run: ReportSyncRun) -> bool:
     return newer is not None
 
 
+_AVAILABILITY = frozenset({"AVAILABLE", "MISSING", "UNAVAILABLE", "UNSUPPORTED", "FAILED"})
+
+
+def _valid_subject(subject: Any, query: Any, contract: Any) -> bool:
+    if type(subject) is not list or any(type(item) is not str or not item for item in subject):
+        return False
+    if contract.subject_kind != "material":
+        return (
+            len(subject) == 2
+            and subject[0] == contract.subject_kind
+        )
+    if query.report_contract == "material_overview":
+        return (
+            len(subject) == 4
+            and subject[:2] == ["material", query.dimensions[0]]
+            and all(subject[2:])
+            and (not query.filter_ids or subject[1] in query.filter_ids)
+        )
+    return (
+        len(subject) == 4
+        and subject[:2] == ["material", "main_material_id"]
+        and all(subject[2:])
+        and (not query.filter_ids or subject[2] in query.filter_ids)
+    )
+
+
 def _row_records(
-    pages: list[ReportStagedPage], run: ReportSyncRun
+    pages: list[ReportStagedPage], query: Any, contract: Any
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    metrics = tuple(run.query.get("metrics") or ())
+    metrics = tuple(query.metrics)
     for page in pages:
         for raw in page.rows:
             if not isinstance(raw, dict):
@@ -360,11 +394,7 @@ def _row_records(
             subject = raw.get("subject_key")
             values = raw.get("values")
             availability = raw.get("availability") or {}
-            if (
-                not isinstance(subject, list)
-                or not subject
-                or any(not isinstance(item, str) or not item for item in subject)
-            ):
+            if not _valid_subject(subject, query, contract):
                 raise _domain("report_row_invalid", "报表行身份无效")
             if not isinstance(values, dict) or not isinstance(availability, dict):
                 raise _domain("report_row_invalid", "报表行指标结构无效")
@@ -372,18 +402,23 @@ def _row_records(
             end = _parse_datetime(raw.get("bucket_end"))
             if start >= end:
                 raise _domain("report_row_invalid", "报表桶范围无效")
-            attrs = _attributes(raw.get("attributes"))
-            for metric_name, amount in values.items():
+            attrs = _attributes(raw.get("attributes", {}))
+            for metric_name in set(values) | set(availability):
+                amount = values.get(metric_name)
                 if not isinstance(metric_name, str) or not metric_name:
                     raise _domain("report_row_invalid", "报表指标名称无效")
-                # 只拒绝已知合同中明确不支持的指标；未知响应字段不会进入事实。
-                if metrics and metric_name not in metrics:
+                if metric_name not in metrics:
                     continue
                 if not supports_metric(
-                    report_contract=run.query["report_contract"],
+                    report_contract=query.report_contract,
                     metric_name=metric_name,
                 ):
                     continue
+                state = availability.get(metric_name, "AVAILABLE" if amount is not None else "MISSING")
+                if state not in _AVAILABILITY:
+                    raise _domain("report_availability_invalid", "报表可用性状态无效")
+                if (state == "AVAILABLE") != (amount is not None):
+                    raise _domain("report_availability_invalid", "报表值与可用性状态不一致")
                 records.append(
                     {
                         "subject_key": subject,
@@ -391,12 +426,7 @@ def _row_records(
                         "bucket_end": end,
                         "metric_name": metric_name,
                         "value": _parse_decimal(amount),
-                        "availability": str(
-                            availability.get(
-                                metric_name,
-                                "AVAILABLE" if amount is not None else "UNAVAILABLE",
-                            )
-                        ),
+                        "availability": state,
                         "attributes": attrs,
                     }
                 )
@@ -419,6 +449,7 @@ def publish_report(session: Session, *, run_id: UUID, claim_generation: int) -> 
         raise _domain("report_claim_lost", "报表同步 claim 已被替换")
     if run.published_version is not None or run.status in {"FAILED", "CANCELLED", "STALE"}:
         raise _domain("report_run_closed", "报表同步运行已经结束")
+    query, contract = _validated_query(run)
     route = _route_for_run(run)
     _ensure_route_authority(session, run, route)
     pages = list(
@@ -429,7 +460,7 @@ def publish_report(session: Session, *, run_id: UUID, claim_generation: int) -> 
         ).all()
     )
     ordered = _complete_chain(pages)
-    records = _row_records(ordered, run)
+    records = _row_records(ordered, query, contract)
     # 锁定账户行，使同一账户的 ReportFact/ReportCoverage 版本分配单调。
     account = session.exec(
         select(AdvertiserAccount)
@@ -458,11 +489,18 @@ def publish_report(session: Session, *, run_id: UUID, claim_generation: int) -> 
     ).one()
     version = max(current_fact or 0, current_coverage or 0) + 1
     coordinates = _run_coordinates(run)
-    query = run.query
+    bucket_keys = set(report_buckets(query))
+    present_by_subject_bucket: dict[tuple[tuple[str, ...], tuple[datetime, datetime]], set[str]] = {}
+    for item in records:
+        identity = (
+            tuple(item["subject_key"]),
+            (item["bucket_start"], item["bucket_end"]),
+        )
+        present_by_subject_bucket.setdefault(identity, set()).add(item["metric_name"])
+    # 非空响应如果缺少请求指标，不能删除旧的完整指标组；适配器应显式补出不可用状态。
+    if any(set(query.metrics) - metric_names for metric_names in present_by_subject_bucket.values()):
+        raise _domain("report_metrics_incomplete", "报表页缺少请求指标，不能替换完整事实组")
     # 完整分片按指标组替换，只触碰本 partition_key；其他指标组保留。
-    bucket_keys = {(item["bucket_start"], item["bucket_end"]) for item in records}
-    if not bucket_keys:
-        bucket_keys.add(_empty_bucket(run))
     for bucket_start, bucket_end in bucket_keys:
         session.execute(
             delete(ReportFact).where(
@@ -531,9 +569,9 @@ def publish_report(session: Session, *, run_id: UUID, claim_generation: int) -> 
                 bucket_start=bucket_start,
                 bucket_end=bucket_end,
                 partition_key=run.partition_key,
-                filter_ids=list(query.get("filter_ids") or ()),
-                requested_metrics=list(query.get("metrics") or ()),
-                dimensions=list(query.get("dimensions") or ()),
+                filter_ids=list(query.filter_ids),
+                requested_metrics=list(query.metrics),
+                dimensions=list(query.dimensions),
                 status="COMPLETE_EMPTY" if not records else "COMPLETE",
                 missing_reason=None,
                 observed_at=datetime.now(UTC),
@@ -543,9 +581,9 @@ def publish_report(session: Session, *, run_id: UUID, claim_generation: int) -> 
             )
             session.add(coverage)
         elif coverage.request_sequence <= run.request_sequence:
-            coverage.filter_ids = list(query.get("filter_ids") or ())
-            coverage.requested_metrics = list(query.get("metrics") or ())
-            coverage.dimensions = list(query.get("dimensions") or ())
+            coverage.filter_ids = list(query.filter_ids)
+            coverage.requested_metrics = list(query.metrics)
+            coverage.dimensions = list(query.dimensions)
             coverage.status = "COMPLETE_EMPTY" if not records else "COMPLETE"
             coverage.missing_reason = None
             coverage.observed_at = datetime.now(UTC)

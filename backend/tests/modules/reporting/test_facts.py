@@ -10,6 +10,8 @@ from app.integrations.tiktok.contracts.reporting import ReportPage, ReportRow
 from app.modules.reporting.contracts import (
     METRIC_DEFINITIONS,
     REPORT_CONTRACTS,
+    decode_query,
+    report_partition_key,
     supports_metric,
 )
 from app.modules.reporting.facts import (
@@ -21,7 +23,7 @@ from app.modules.reporting.models import ReportCoverage, ReportFact
 from app.modules.reporting.sync_models import ReportSyncRun
 
 
-def _run(session, reporting_seed, *, partition_key, metrics=("spend", "clicks")):
+def _run(session, reporting_seed, *, metrics=("spend", "clicks")):
     context = reporting_seed.context
     connection_id = reporting_seed.connection.id
     route = {
@@ -40,7 +42,20 @@ def _run(session, reporting_seed, *, partition_key, metrics=("spend", "clicks"))
         actor_id=context.actor_id,
         connection_id=connection_id,
         frozen_route=route,
-        partition_key=partition_key,
+        partition_key=report_partition_key(decode_query({
+            "advertiser_id": "report-account",
+            "report_contract": "basic_campaign",
+            "metric_family": "delivery",
+            "dimensions": ["campaign_id", "stat_time_day"],
+            "metrics": list(metrics),
+            "start_date": "2026-09-01",
+            "end_date": "2026-09-01",
+            "granularity": "DAY",
+            "currency": "USD",
+            "timezone": "UTC",
+            "attribution": "default",
+            "filter_ids": ["campaign-1"],
+        })),
         query={
             "advertiser_id": "report-account",
             "report_contract": "basic_campaign",
@@ -80,6 +95,23 @@ def _page(*, values, complete=True):
     )
 
 
+def _page_at(start, *, values):
+    return ReportPage(
+        rows=(
+            ReportRow(
+                subject_key=("campaign", "campaign-1"),
+                bucket_start=start,
+                bucket_end=start + timedelta(days=1),
+                values=values,
+                availability=dict.fromkeys(values, "AVAILABLE"),
+            ),
+        ),
+        next_page=None,
+        complete=True,
+        evidence=CallEvidence(request_id=f"offline-{start.date()}"),
+    )
+
+
 def test_metric_contracts_keep_native_growth_out_of_material_reports():
     assert {"spend", "impressions", "clicks"} <= set(METRIC_DEFINITIONS)
     assert supports_metric(
@@ -111,7 +143,7 @@ def test_publish_replaces_complete_partition_without_erasing_other_metric_group(
 ):
     # 授权门禁在独立路由测试中验证；本测试只使用真实 DB 验证发布事务和分片隔离。
     monkeypatch.setattr("app.modules.reporting.facts._ensure_route_authority", lambda *args: None)
-    first = _run(session, reporting_seed, partition_key="1" * 64)
+    first = _run(session, reporting_seed)
     stage_report_page(
         session,
         run_id=first.id,
@@ -124,7 +156,7 @@ def test_publish_replaces_complete_partition_without_erasing_other_metric_group(
     assert {row.metric_name for row in first_facts} == {"spend", "clicks"}
     assert next(row for row in first_facts if row.metric_name == "spend").value == Decimal("10.00")
 
-    other = _run(session, reporting_seed, partition_key="2" * 64, metrics=("impressions",))
+    other = _run(session, reporting_seed, metrics=("impressions",))
     stage_report_page(
         session,
         run_id=other.id,
@@ -139,7 +171,7 @@ def test_publish_replaces_complete_partition_without_erasing_other_metric_group(
     }
 
     # 同一完整分片的空结果只替换该分片，且不会把缺失指标填成零。
-    empty = _run(session, reporting_seed, partition_key="1" * 64)
+    empty = _run(session, reporting_seed)
     stage_report_page(
         session,
         run_id=empty.id,
@@ -155,7 +187,7 @@ def test_publish_replaces_complete_partition_without_erasing_other_metric_group(
     remaining = session.exec(select(ReportFact)).all()
     assert {row.metric_name for row in remaining} == {"impressions"}
     coverage = session.exec(
-        select(ReportCoverage).where(ReportCoverage.partition_key == "1" * 64)
+        select(ReportCoverage).where(ReportCoverage.partition_key == first.partition_key)
     ).one()
     assert coverage.status == "COMPLETE_EMPTY"
 
@@ -164,22 +196,35 @@ def test_missing_metric_is_not_filled_with_zero_and_real_zero_is_preserved(
     session, reporting_seed, monkeypatch
 ):
     monkeypatch.setattr("app.modules.reporting.facts._ensure_route_authority", lambda *args: None)
-    run = _run(session, reporting_seed, partition_key="3" * 64)
+    run = _run(session, reporting_seed)
     stage_report_page(
         session,
         run_id=run.id,
         page=_page(values={"spend": Decimal("0")}),
         claim_generation=1,
     )
-    publish_report(session, run_id=run.id, claim_generation=1)
+    with pytest.raises(DomainError):
+        publish_report(session, run_id=run.id, claim_generation=1)
+
+    complete = _run(session, reporting_seed, metrics=("spend", "clicks"))
+    stage_report_page(
+        session,
+        run_id=complete.id,
+        page=_page(values={"spend": Decimal("0"), "clicks": Decimal("0")}),
+        claim_generation=1,
+    )
+    publish_report(session, run_id=complete.id, claim_generation=1)
     facts = session.exec(select(ReportFact)).all()
-    assert [(row.metric_name, row.value) for row in facts] == [("spend", Decimal("0"))]
+    assert {row.metric_name: row.value for row in facts} == {
+        "spend": Decimal("0"),
+        "clicks": Decimal("0"),
+    }
 
 
 def test_old_partition_run_cannot_overwrite_newer_run(session, reporting_seed, monkeypatch):
     monkeypatch.setattr("app.modules.reporting.facts._ensure_route_authority", lambda *args: None)
-    old = _run(session, reporting_seed, partition_key="4" * 64)
-    new = _run(session, reporting_seed, partition_key="4" * 64)
+    old = _run(session, reporting_seed, metrics=("spend",))
+    new = _run(session, reporting_seed, metrics=("spend",))
     for run, amount in ((new, "20"), (old, "10")):
         stage_report_page(
             session,
@@ -205,3 +250,85 @@ def test_observation_currency_timezone_attribution_membership_and_group_changes(
     ):
         current = observations.corrected.model_copy(update={field: value})
         assert observation_delta(observations.previous, current) is None
+
+
+def test_complete_empty_replaces_every_requested_local_day_bucket(
+    session, reporting_seed, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.modules.reporting.facts._ensure_route_authority", lambda *args: None
+    )
+    first = _run(session, reporting_seed)
+    first.query = first.query | {"end_date": "2026-09-02"}
+    first.partition_key = report_partition_key(decode_query(first.query))
+    session.flush()
+    start = datetime(2026, 9, 1, tzinfo=UTC)
+    stage_report_page(
+        session,
+        run_id=first.id,
+        page=_page_at(start, values={"spend": Decimal("1"), "clicks": Decimal("1")}),
+        claim_generation=1,
+    )
+    # Two pages are represented by a complete first page in this fixture; publish
+    # an explicit second run below to seed the second bucket before clearing it.
+    second = _run(session, reporting_seed)
+    second.query = second.query | {"end_date": "2026-09-02"}
+    second.partition_key = report_partition_key(decode_query(second.query))
+    session.flush()
+    stage_report_page(
+        session,
+        run_id=second.id,
+        page=_page_at(start + timedelta(days=1), values={"spend": Decimal("2"), "clicks": Decimal("2")}),
+        claim_generation=1,
+    )
+    # The first page run is intentionally not published; the second run proves
+    # the target bucket calculation and then a later empty run clears all buckets.
+    publish_report(session, run_id=second.id, claim_generation=1)
+    empty = _run(session, reporting_seed)
+    empty.query = empty.query | {"end_date": "2026-09-02"}
+    empty.partition_key = report_partition_key(decode_query(empty.query))
+    session.flush()
+    stage_report_page(
+        session,
+        run_id=empty.id,
+        page=ReportPage(rows=(), next_page=None, complete=True, evidence=CallEvidence()),
+        claim_generation=1,
+    )
+    publish_report(session, run_id=empty.id, claim_generation=1)
+    assert session.exec(select(ReportFact)).all() == []
+    coverages = session.exec(select(ReportCoverage)).all()
+    assert len(coverages) == 2
+    assert {item.status for item in coverages} == {"COMPLETE_EMPTY"}
+
+
+def test_staged_attributes_are_allowlisted_and_urls_are_dropped(
+    session, reporting_seed, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.modules.reporting.facts._ensure_route_authority", lambda *args: None
+    )
+    run = _run(session, reporting_seed, metrics=("spend",))
+    start = datetime(2026, 9, 1, tzinfo=UTC)
+    page = ReportPage(
+        rows=(
+            ReportRow(
+                subject_key=("campaign", "campaign-1"),
+                bucket_start=start,
+                bucket_end=start + timedelta(days=1),
+                values={"spend": Decimal("1")},
+                availability={"spend": "AVAILABLE"},
+                attributes={
+                    "campaign_name": "版权方-剧名-备注",
+                    "download_url": " HTTPS://signed.example/file?token=x ",
+                    "raw_response": {"secret": "payload"},
+                },
+            ),
+        ),
+        next_page=None,
+        complete=True,
+        evidence=CallEvidence(request_id="attributes"),
+    )
+    stage_report_page(session, run_id=run.id, page=page, claim_generation=1)
+    publish_report(session, run_id=run.id, claim_generation=1)
+    fact = session.exec(select(ReportFact)).one()
+    assert fact.attributes == {"campaign_name": "版权方-剧名-备注"}
