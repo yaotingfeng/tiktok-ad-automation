@@ -116,25 +116,8 @@ _MATERIAL = (
         additivity="NON_ADDITIVE_MATERIAL",
     ),
 )
-_BASIC_ALIAS = ReportContract(
-    "basic",
-    "delivery",
-    (
-        "advertiser_id",
-        "campaign_id",
-        "adgroup_id",
-        "ad_id",
-        "ad_id_v2",
-        "stat_time_day",
-        "stat_time_hour",
-    ),
-    CORE_METRICS,
-    ("RANGE", "DAY", "HOUR"),
-    "REPLACE_PARTITION",
-    subject_kind="campaign",
-)
 REPORT_CONTRACTS: Mapping[str, ReportContract] = MappingProxyType(
-    {item.key: item for item in (_BASIC_ALIAS, *_BASIC, *_MATERIAL)}
+    {item.key: item for item in (*_BASIC, *_MATERIAL)}
 )
 METRIC_DEFINITIONS: Mapping[str, MetricDefinition] = MappingProxyType(
     {
@@ -181,9 +164,20 @@ def validate_query(
 ) -> ReportContract:
     """只开放固定 ID/时间组合；不把同端点的任意维度或异步能力自动放行。"""
     contract = get_report_contract(query.report_contract)
+    # ReportQuery 是稳定的公共 DTO；广告类型作为持久化 run 查询的额外路由字段
+    # 校验，而不是塞入 DTO。受限合同必须显式声明类型，避免 basic_ad/material
+    # 在缺省值下绕过合同矩阵。
+    restricted_ad_type_contracts = {
+        "basic_ad",
+        "basic_smart_plus_ad",
+        "basic_smart_plus_creative",
+        "material_overview",
+        "material_breakdown",
+    }
     if channel not in contract.channels or (
-        ad_type is not None and ad_type not in contract.ad_types
-    ):
+        query.report_contract in restricted_ad_type_contracts
+        and (not isinstance(ad_type, str) or not ad_type)
+    ) or (ad_type is not None and ad_type not in contract.ad_types):
         raise ValueError("unsupported channel or advertising type")
     if (
         query.metric_family != contract.metric_family
@@ -216,12 +210,6 @@ def validate_query(
             "RANGE": (),
         }[query.granularity]
         valid = query.dimensions == ("main_material_id", "main_material_type", *time_dimension)
-    elif query.report_contract == "basic":
-        valid = (
-            len(query.dimensions) == (1 if query.granularity == "RANGE" else 2)
-            and query.dimensions[0] in {"advertiser_id", "campaign_id", "adgroup_id", "ad_id", "ad_id_v2"}
-            and (query.granularity == "RANGE" or query.dimensions[1] == {"DAY": "stat_time_day", "HOUR": "stat_time_hour"}[query.granularity])
-        )
     else:
         valid = query.dimensions == (contract.dimensions[0], *time_dimension)
     if not valid:
@@ -263,10 +251,16 @@ def query_payload(query: ReportQuery) -> dict:
 
 
 def decode_query(value: dict) -> ReportQuery:
-    expected = set(ReportQuery.__dataclass_fields__)
-    if type(value) is not dict or not set(value) <= expected or set(value) - expected - {"page"}:
+    if type(value) is not dict:
         raise ValueError("invalid persisted report query")
-    data = dict(value)
+    # ad_type belongs to the persisted run admission boundary, not ReportQuery's
+    # stable DTO. Keep accepting it here so publication can validate the matrix.
+    persisted = dict(value)
+    persisted.pop("ad_type", None)
+    expected = set(ReportQuery.__dataclass_fields__)
+    if not set(persisted) <= expected or set(persisted) - expected - {"page"}:
+        raise ValueError("invalid persisted report query")
+    data = persisted
     data.setdefault("page", 1)
     for key in ("dimensions", "metrics", "filter_ids"):
         if type(data[key]) is not list:

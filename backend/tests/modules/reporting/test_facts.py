@@ -13,6 +13,7 @@ from app.modules.reporting.contracts import (
     decode_query,
     report_partition_key,
     supports_metric,
+    validate_query,
 )
 from app.modules.reporting.facts import (
     observation_delta,
@@ -125,6 +126,36 @@ def test_metric_contracts_keep_native_growth_out_of_material_reports():
     assert "main_material_id" in REPORT_CONTRACTS["material_overview"].dimensions
 
 
+def test_restricted_contracts_require_ad_type_and_reject_basic_alias():
+    query = {
+        "advertiser_id": "report-account",
+        "report_contract": "basic_ad",
+        "metric_family": "delivery",
+        "dimensions": ["ad_id", "stat_time_day"],
+        "metrics": ["spend"],
+        "start_date": "2026-09-01",
+        "end_date": "2026-09-01",
+        "granularity": "DAY",
+        "currency": "USD",
+        "timezone": "UTC",
+        "attribution": "default",
+        "filter_ids": [],
+    }
+    with pytest.raises(ValueError):
+        validate_query(decode_query(query), channel="OFFICIAL_API")
+    assert validate_query(
+        decode_query(query | {"ad_type": "REGULAR"}),
+        channel="OFFICIAL_API",
+        ad_type="REGULAR",
+    ).key == "basic_ad"
+    with pytest.raises(ValueError):
+        validate_query(
+            decode_query(query | {"report_contract": "basic"}),
+            channel="OFFICIAL_API",
+            ad_type="REGULAR",
+        )
+
+
 def test_observation_delta_preserves_negative_corrections_and_fences_context(
     observations,
 ):
@@ -219,6 +250,31 @@ def test_missing_metric_is_not_filled_with_zero_and_real_zero_is_preserved(
         "spend": Decimal("0"),
         "clicks": Decimal("0"),
     }
+
+
+def test_unknown_only_rows_are_rejected_without_replacing_old_facts(
+    session, reporting_seed, monkeypatch
+):
+    monkeypatch.setattr("app.modules.reporting.facts._ensure_route_authority", lambda *args: None)
+    original = _run(session, reporting_seed, metrics=("spend",))
+    stage_report_page(
+        session,
+        run_id=original.id,
+        page=_page(values={"spend": Decimal("7")}),
+        claim_generation=1,
+    )
+    publish_report(session, run_id=original.id, claim_generation=1)
+
+    invalid = _run(session, reporting_seed, metrics=("spend",))
+    with pytest.raises(DomainError) as error:
+        stage_report_page(
+            session,
+            run_id=invalid.id,
+            page=_page(values={"unsupported_metric": Decimal("999")}),
+            claim_generation=1,
+        )
+    assert error.value.code == "report_metrics_invalid"
+    assert session.exec(select(ReportFact)).one().value == Decimal("7")
 
 
 def test_old_partition_run_cannot_overwrite_newer_run(session, reporting_seed, monkeypatch):
@@ -332,3 +388,33 @@ def test_staged_attributes_are_allowlisted_and_urls_are_dropped(
     publish_report(session, run_id=run.id, claim_generation=1)
     fact = session.exec(select(ReportFact)).one()
     assert fact.attributes == {"campaign_name": "版权方-剧名-备注"}
+
+
+def test_nested_allowlisted_attributes_are_rejected(session, reporting_seed, monkeypatch):
+    monkeypatch.setattr(
+        "app.modules.reporting.facts._ensure_route_authority", lambda *args: None
+    )
+    run = _run(session, reporting_seed, metrics=("spend",))
+    start = datetime(2026, 9, 1, tzinfo=UTC)
+    with pytest.raises(DomainError) as error:
+        stage_report_page(
+            session,
+            run_id=run.id,
+            page=ReportPage(
+                rows=(
+                    ReportRow(
+                        subject_key=("campaign", "campaign-1"),
+                        bucket_start=start,
+                        bucket_end=start + timedelta(days=1),
+                        values={"spend": Decimal("1")},
+                        availability={"spend": "AVAILABLE"},
+                        attributes={"campaign_name": {"raw": "payload"}},
+                    ),
+                ),
+                next_page=None,
+                complete=True,
+                evidence=CallEvidence(request_id="nested-attributes"),
+            ),
+            claim_generation=1,
+        )
+    assert error.value.code == "report_attributes_invalid"

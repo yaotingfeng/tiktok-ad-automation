@@ -50,6 +50,7 @@ _ATTRIBUTE_KEYS = frozenset(
         "smart_plus_creative_name",
     }
 )
+_ATTRIBUTE_ARRAY_KEYS = frozenset({"smart_plus_creative_id"})
 
 
 def _domain(code: str, message: str) -> DomainError:
@@ -266,7 +267,16 @@ def _attributes(value: Any) -> dict[str, Any]:
     for key, item in value.items():
         if key not in _ATTRIBUTE_KEYS:
             continue
-        encoded = _json_value(item)
+        if key in _ATTRIBUTE_ARRAY_KEYS:
+            if not isinstance(item, (list, tuple)) or any(
+                type(element) is not str for element in item
+            ):
+                raise _domain("report_attributes_invalid", "报表关联字段必须是字符串列表")
+            encoded = list(item)
+        else:
+            if type(item) is not str:
+                raise _domain("report_attributes_invalid", "报表描述字段必须是字符串")
+            encoded = item
         if _contains_url(encoded):
             continue
         result[str(key)] = encoded
@@ -372,7 +382,7 @@ def _valid_subject(subject: Any, query: Any, contract: Any) -> bool:
             len(subject) == 4
             and subject[:2] == ["material", query.dimensions[0]]
             and all(subject[2:])
-            and (not query.filter_ids or subject[1] in query.filter_ids)
+            and (not query.filter_ids or subject[2] in query.filter_ids)
         )
     return (
         len(subject) == 4
@@ -403,6 +413,7 @@ def _row_records(
             if start >= end:
                 raise _domain("report_row_invalid", "报表桶范围无效")
             attrs = _attributes(raw.get("attributes", {}))
+            row_has_supported_metric = False
             for metric_name in set(values) | set(availability):
                 amount = values.get(metric_name)
                 if not isinstance(metric_name, str) or not metric_name:
@@ -414,6 +425,7 @@ def _row_records(
                     metric_name=metric_name,
                 ):
                     continue
+                row_has_supported_metric = True
                 state = availability.get(metric_name, "AVAILABLE" if amount is not None else "MISSING")
                 if state not in _AVAILABILITY:
                     raise _domain("report_availability_invalid", "报表可用性状态无效")
@@ -430,6 +442,9 @@ def _row_records(
                         "attributes": attrs,
                     }
                 )
+            if not row_has_supported_metric:
+                # 带行但只有未知/不适用指标不是“完整空结果”；否则发布会误删旧事实。
+                raise _domain("report_metrics_invalid", "报表行没有可发布的请求指标")
     return records
 
 
