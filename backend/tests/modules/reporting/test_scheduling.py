@@ -95,7 +95,55 @@ def test_request_sync_is_idempotent_for_same_frozen_request(session, reporting_s
     first = request_sync(session, context=reporting_seed.context, request=request)
     second = request_sync(session, context=reporting_seed.context, request=request)
     assert second == first
-    assert len(session.exec(select(ReportSyncRun)).all()) == 1
+    runs = session.exec(select(ReportSyncRun)).all()
+    assert len(runs) == 9  # eight contracts plus the legacy Smart+ ad partition
+    assert {run.query["report_contract"] for run in runs} == {
+        "basic_account",
+        "basic_campaign",
+        "basic_adgroup",
+        "basic_ad",
+        "basic_smart_plus_ad",
+        "basic_smart_plus_creative",
+        "material_overview",
+        "material_breakdown",
+    }
+
+
+def test_report_ranges_are_sharded_and_terminal_occurrence_is_not_reused(
+    session, reporting_seed
+):
+    route = FrozenTikTokRoute(
+        tenant_id=reporting_seed.context.tenant_id,
+        bc_id="bc-report",
+        connection_id=reporting_seed.connection.id,
+        channel="OFFICIAL_API",
+        authorization_revision=0,
+        adapter_contract_revision="official-api-v1",
+        binding_revision=0,
+    )
+    request = SyncRequest(
+        route=route,
+        advertiser_ids=("report-account",),
+        scope="report",
+        start_date=date(2026, 1, 1),
+        end_date=date(2026, 3, 31),
+    )
+    first = request_sync(session, context=reporting_seed.context, request=request)
+    runs = session.exec(select(ReportSyncRun)).all()
+    assert len(runs) == 27  # nine contract/type partitions, each <= 30 days
+    assert all(
+        (
+            date.fromisoformat(run.query["end_date"])
+            - date.fromisoformat(run.query["start_date"])
+        ).days
+        < 30
+        for run in runs
+    )
+    for run in runs:
+        run.status = "COMPLETE"
+    session.flush()
+    second = request_sync(session, context=reporting_seed.context, request=request)
+    assert second != first
 
 
 def test_fixed_plans_use_local_account_windows_and_intervals(session, reporting_seed):
@@ -115,15 +163,21 @@ def test_fixed_plans_use_local_account_windows_and_intervals(session, reporting_
         now=datetime(2026, 9, 30, 12, tzinfo=UTC),
     )
     assert len(rows) == 8
-    core = next(row for row in rows if row.scope == "report" and "core" in row.schedule_key)
+    core = next(
+        row for row in rows if row.scope == "report" and "core" in row.schedule_key
+    )
     assert core.interval_seconds == 1800
     assert (core.end_date - core.start_date).days == 1
-    initial = next(row for row in rows if row.scope == "history" and "initial" in row.schedule_key)
+    initial = next(
+        row for row in rows if row.scope == "history" and "initial" in row.schedule_key
+    )
     assert (initial.end_date - initial.start_date).days == 29
     assert len(session.exec(select(SyncSchedule)).all()) == 8
 
 
-def test_due_plan_advances_from_prior_due_time_without_tight_recreation(session, reporting_seed):
+def test_due_plan_advances_from_prior_due_time_without_tight_recreation(
+    session, reporting_seed
+):
     route = FrozenTikTokRoute(
         tenant_id=reporting_seed.context.tenant_id,
         bc_id="bc-report",
@@ -137,4 +191,7 @@ def test_due_plan_advances_from_prior_due_time_without_tight_recreation(session,
     ensure_sync_schedules(session, context=reporting_seed.context, route=route, now=now)
     run_ids = enqueue_due_syncs(session, now=now + timedelta(hours=4))
     assert len(run_ids) == 8
-    assert all(row.next_due_at > now + timedelta(hours=4) for row in session.exec(select(SyncSchedule)).all())
+    assert all(
+        row.next_due_at > now + timedelta(hours=4)
+        for row in session.exec(select(SyncSchedule)).all()
+    )

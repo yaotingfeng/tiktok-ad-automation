@@ -28,7 +28,9 @@ register_dispatch_task(TASK_NAME, "resources")
 
 def _context(tenant_id: str, actor_id: str) -> TenantContext:
     try:
-        return TenantContext(tenant_id=UUID(tenant_id), actor_id=UUID(actor_id), role="operator")
+        return TenantContext(
+            tenant_id=UUID(tenant_id), actor_id=UUID(actor_id), role="operator"
+        )
     except (TypeError, ValueError, AttributeError) as exc:
         raise DomainError("dispatch_payload_invalid", "目录任务操作者无效") from exc
 
@@ -58,7 +60,10 @@ def run_directory_step(
     with Session(database_engine) as session:
         run = session.exec(
             select(AdDirectoryRun)
-            .where(AdDirectoryRun.id == run_id, AdDirectoryRun.tenant_id == context.tenant_id)
+            .where(
+                AdDirectoryRun.id == run_id,
+                AdDirectoryRun.tenant_id == context.tenant_id,
+            )
             .with_for_update()
         ).one_or_none()
         if run is None:
@@ -67,6 +72,11 @@ def run_directory_step(
             raise DomainError("action_forbidden", "目录任务操作者不匹配")
         if run.claim_generation != claim_generation:
             return "FAILED"
+        if (
+            run.status in {"COMPLETE", "FAILED", "CANCELLED", "STALE"}
+            or run.published_version is not None
+        ):
+            return "FAILED" if run.status == "FAILED" else "READY"
         route = _route(run.frozen_route)
         verify_route(
             session,
@@ -76,6 +86,9 @@ def run_directory_step(
             capability="read",
         )
         query_data = dict(run.query)
+        # Celery retries must resume the persisted cursor.  The durable query is
+        # the contract; page is the only mutable transport cursor.
+        query_data["page"] = run.next_page
         query_data["ids"] = tuple(query_data.get("ids", ()))
         query_data["parent_ids"] = tuple(query_data.get("parent_ids", ()))
         query = DirectoryQuery(**query_data)

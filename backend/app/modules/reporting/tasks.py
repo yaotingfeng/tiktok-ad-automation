@@ -7,7 +7,7 @@ from typing import Any
 from uuid import UUID
 
 from redis import Redis
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from app.core.config import settings
 from app.core.context import TenantContext
@@ -18,8 +18,11 @@ from app.jobs.celery_app import celery_app
 from app.jobs.outbox import validate_dispatch_payload
 from app.jobs.tasks import register_dispatch_task
 from app.modules.accounts.routing import verify_route
+from app.modules.ads.balances import persist_balance
+from app.modules.reporting.contracts import decode_query
+from app.modules.reporting.scheduling import record_schedule_completion
 from app.modules.reporting.sync import collect_report_step
-from app.modules.reporting.sync_models import ReportSyncRun
+from app.modules.reporting.sync_models import ReportSyncRun, SyncSchedule
 
 TASK_NAME = "reporting.sync_step"
 register_dispatch_task(TASK_NAME, "resources")
@@ -27,7 +30,9 @@ register_dispatch_task(TASK_NAME, "resources")
 
 def _context(tenant_id: str, actor_id: str) -> TenantContext:
     try:
-        return TenantContext(tenant_id=UUID(tenant_id), actor_id=UUID(actor_id), role="operator")
+        return TenantContext(
+            tenant_id=UUID(tenant_id), actor_id=UUID(actor_id), role="operator"
+        )
     except (TypeError, ValueError, AttributeError) as exc:
         raise DomainError("dispatch_payload_invalid", "报表任务操作者无效") from exc
 
@@ -59,7 +64,9 @@ def run_report_step(
     with Session(database_engine) as session:
         run = session.exec(
             select(ReportSyncRun)
-            .where(ReportSyncRun.id == run_id, ReportSyncRun.tenant_id == context.tenant_id)
+            .where(
+                ReportSyncRun.id == run_id, ReportSyncRun.tenant_id == context.tenant_id
+            )
             .with_for_update()
         ).one_or_none()
         if run is None:
@@ -69,6 +76,8 @@ def run_report_step(
         if run.claim_generation != claim_generation:
             return "FAILED"
         route = _route(run.frozen_route)
+        task_status = run.task_status
+        advertiser_id = run.advertiser_id
         verify_route(
             session,
             context=context,
@@ -86,6 +95,32 @@ def run_report_step(
         route=route,
         task_deadline=deadline,
     ) as gateway:
+        if task_status == "BALANCE":
+            balance = gateway.ads.read_balance(advertiser_id)
+            with Session(database_engine) as session:
+                current = session.exec(
+                    select(ReportSyncRun)
+                    .where(
+                        ReportSyncRun.id == run_id,
+                        ReportSyncRun.tenant_id == context.tenant_id,
+                    )
+                    .with_for_update()
+                ).one_or_none()
+                if current is None or current.claim_generation != claim_generation:
+                    return "FAILED"
+                persist_balance(
+                    session,
+                    context=context,
+                    route=route,
+                    advertiser_id=current.advertiser_id,
+                    balance=balance,
+                )
+                current.status = "COMPLETE"
+                current.coverage = "COMPLETE"
+                current.completed_at = datetime.now(UTC)
+                current.observed_at = datetime.now(UTC)
+                session.commit()
+                return "READY"
         with Session(database_engine) as session:
             result = collect_report_step(
                 session,
@@ -93,8 +128,50 @@ def run_report_step(
                 claim_generation=claim_generation,
                 gateway=gateway,
             )
+            if result == "READY":
+                _record_request_completion(session, run_id=run_id)
             session.commit()
             return result
+
+
+def _record_request_completion(session: Session, *, run_id: UUID) -> None:
+    """Mark schedule coverage only after every report shard is published."""
+
+    current = session.get(ReportSyncRun, run_id, populate_existing=True)
+    if current is None or current.task_status == "BALANCE":
+        return
+    runs = session.exec(
+        select(ReportSyncRun).where(
+            ReportSyncRun.tenant_id == current.tenant_id,
+            ReportSyncRun.request_id == current.request_id,
+        )
+    ).all()
+    if not runs or any(row.status != "COMPLETE" for row in runs):
+        return
+    dates = []
+    for row in runs:
+        try:
+            query = decode_query(row.query)
+        except TypeError, ValueError, KeyError:
+            continue
+        dates.append((query.start_date, query.end_date))
+    if not dates:
+        return
+    start_date = min(item[0] for item in dates)
+    end_date = max(item[1] for item in dates)
+    schedules = session.exec(
+        select(SyncSchedule).where(
+            SyncSchedule.tenant_id == current.tenant_id,
+            col(SyncSchedule.last_request_id).in_([row.id for row in runs]),
+        )
+    ).all()
+    for schedule in schedules:
+        record_schedule_completion(
+            session,
+            schedule_id=schedule.id,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
 
 def _route(value: dict[str, Any]):

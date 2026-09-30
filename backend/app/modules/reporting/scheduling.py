@@ -12,7 +12,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal, cast
-from uuid import UUID, uuid5
+from uuid import UUID, uuid4, uuid5
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import or_, text
@@ -27,13 +27,11 @@ from app.modules.accounts.models import AdvertiserAccount, BCAccountAccess
 from app.modules.accounts.routing import verify_route
 from app.modules.ads.models import AdObject
 from app.modules.ads.sync_models import AdDirectoryRun
-from app.modules.reporting.contracts import CORE_METRICS, report_partition_key
+from app.modules.reporting.contracts import REPORT_CONTRACTS, report_partition_key
 from app.modules.reporting.models import ReportFact
 from app.modules.reporting.sync_models import ReportSyncRun, SyncSchedule
 
-SyncScope = Literal[
-    "directory", "active", "report", "balance", "history", "targeted"
-]
+SyncScope = Literal["directory", "active", "report", "balance", "history", "targeted"]
 _SCOPES = frozenset({"directory", "active", "report", "balance", "history", "targeted"})
 _SCHEDULE_SECONDS = {
     "directory": 3 * 60 * 60,
@@ -50,6 +48,23 @@ _SCHEDULE_WINDOWS = {
     "history": ("initial", "attribution", "weekly90d"),
 }
 _REQUEST_NAMESPACE = UUID("c5c96c13-7e3a-4cbb-a7cc-9b12e9d1c6ad")
+_TERMINAL_STATUSES = frozenset({"COMPLETE", "FAILED", "CANCELLED", "STALE"})
+
+
+def _report_specs() -> tuple[tuple[str, str | None], ...]:
+    """Return the approved report contract/type matrix used by fixed plans."""
+
+    return (
+        ("basic_account", None),
+        ("basic_campaign", None),
+        ("basic_adgroup", None),
+        ("basic_ad", "REGULAR"),
+        ("basic_ad", "LEGACY_SMART_PLUS"),
+        ("basic_smart_plus_ad", "SMART_PLUS"),
+        ("basic_smart_plus_creative", "SMART_PLUS"),
+        ("material_overview", "SMART_PLUS"),
+        ("material_breakdown", "SMART_PLUS"),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,14 +191,23 @@ def _route_digest(route: FrozenTikTokRoute) -> str:
 
 
 def schedule_key(
-    *, route: FrozenTikTokRoute, advertiser_id: str, scope: str, window: str
+    *,
+    route: FrozenTikTokRoute,
+    advertiser_id: str,
+    scope: str,
+    window: str,
+    contract: str = "directory",
+    metric_family: str = "directory",
+    ad_type: str = "ALL",
 ) -> str:
     """Stable short key including authorization and binding generations."""
 
     # The digest contains channel, connection, authorization_revision and
     # binding_revision.  It is part of the unique key so a rebind can never merge
     # work with the old authorization semantics.
-    return f"{scope}:{window}:{advertiser_id[:12]}:{_route_digest(route)}"[:64]
+    identity = f"{scope}:{window}:{contract}:{metric_family}:{ad_type}:{advertiser_id}:{_route_digest(route)}"
+    digest = hashlib.sha256(identity.encode()).hexdigest()[:20]
+    return f"{scope}:{window}:{contract[:8]}:{ad_type[:8]}:{digest}"[:64]
 
 
 def _request_id(request: SyncRequest) -> UUID:
@@ -200,14 +224,19 @@ def _request_id(request: SyncRequest) -> UUID:
                 "kind": ref.kind,
                 "remote_id": ref.remote_id,
             }
-            for ref in sorted(request.refs, key=lambda item: (item.advertiser_id, item.kind, item.remote_id))
+            for ref in sorted(
+                request.refs,
+                key=lambda item: (item.advertiser_id, item.kind, item.remote_id),
+            )
         ],
     }
     encoded = json.dumps(key, sort_keys=True, separators=(",", ":"))
     return uuid5(_REQUEST_NAMESPACE, encoded)
 
 
-def _validate_accounts(session: Session, *, context: TenantContext, request: SyncRequest) -> None:
+def _validate_accounts(
+    session: Session, *, context: TenantContext, request: SyncRequest
+) -> None:
     if context.tenant_id != request.route.tenant_id:
         raise DomainError("connection_tenant_mismatch", "同步请求租户不匹配")
     # Validate the frozen route once without requiring a potentially stale account
@@ -235,33 +264,75 @@ def _query_for(
     start_date: date,
     end_date: date,
     refs: tuple[EntityRef, ...],
+    report_contract: str = "basic_campaign",
+    ad_type: str | None = None,
 ) -> dict[str, Any]:
+    contract = REPORT_CONTRACTS[report_contract]
+    identity = contract.dimensions[0]
+    time_dimension = ("stat_time_day",)
+    if contract.granularities == ("RANGE",):
+        dimensions = (
+            ["advertiser_id", "main_material_id", "main_material_type"]
+            if report_contract == "material_overview"
+            else ["main_material_id", "main_material_type"]
+        )
+        granularity = "RANGE"
+    elif report_contract == "material_breakdown":
+        dimensions = ["main_material_id", "main_material_type", "stat_time_day"]
+        granularity = "DAY"
+    else:
+        dimensions = [identity, *time_dimension]
+        granularity = "DAY"
+    allowed_kinds = {
+        "advertiser_id": set(),
+        "campaign_id": {"campaign"},
+        "adgroup_id": {"adgroup"},
+        "ad_id": {"ad"},
+        "ad_id_v2": {"ad"},
+        "main_material_id": {"ad", "creative"},
+    }.get(identity, set())
+    if report_contract == "basic_smart_plus_creative":
+        allowed_kinds = {"creative"}
     filter_ids = sorted(
         {
             ref.remote_id
             for ref in refs
-            if ref.advertiser_id == account.advertiser_id
-            and ref.kind in {"campaign", "adgroup", "ad"}
+            if ref.advertiser_id == account.advertiser_id and ref.kind in allowed_kinds
         }
     )
-    # The account-level contract is intentionally used for the durable scheduler
-    # seed.  Object-level runs are added by the collector after directory membership
-    # is known; this avoids inventing a campaign total from child rows.
-    return {
+    metrics = list(contract.metrics)
+    query = {
         "advertiser_id": account.advertiser_id,
-        "report_contract": "basic_campaign",
-        "metric_family": "delivery",
-        "dimensions": ["campaign_id", "stat_time_day"],
-        "metrics": list(CORE_METRICS),
+        "report_contract": report_contract,
+        "metric_family": contract.metric_family,
+        "dimensions": dimensions,
+        "metrics": metrics
+        if report_contract not in {"material_overview", "material_breakdown"}
+        else ["spend", "impressions", "clicks"],
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
-        "granularity": "DAY",
+        "granularity": granularity,
         "currency": account.currency,
         "timezone": account.timezone,
         "attribution": "default",
         "filter_ids": filter_ids,
         "page": 1,
     }
+    if ad_type is not None:
+        query["ad_type"] = ad_type
+    return query
+
+
+def _date_shards(
+    start_date: date, end_date: date, *, max_days: int = 30
+) -> tuple[tuple[date, date], ...]:
+    shards: list[tuple[date, date]] = []
+    cursor = start_date
+    while cursor <= end_date:
+        shard_end = min(cursor + timedelta(days=max_days - 1), end_date)
+        shards.append((cursor, shard_end))
+        cursor = shard_end + timedelta(days=1)
+    return tuple(shards)
 
 
 def _existing_run(
@@ -279,12 +350,41 @@ def _existing_run(
             ReportSyncRun.tenant_id == tenant_id,
             ReportSyncRun.advertiser_id == advertiser_id,
             ReportSyncRun.partition_key == partition,
+            col(ReportSyncRun.status).notin_(_TERMINAL_STATUSES),
         )
         .order_by(col(ReportSyncRun.created_at))
     ).first()
 
 
-def request_sync(session: Session, *, context: TenantContext, request: SyncRequest) -> UUID:
+def _request_has_terminal(
+    session: Session, *, request_id: UUID, tenant_id: UUID
+) -> bool:
+    report = session.exec(
+        select(ReportSyncRun.id)
+        .where(
+            ReportSyncRun.tenant_id == tenant_id,
+            ReportSyncRun.request_id == request_id,
+            col(ReportSyncRun.status).in_(_TERMINAL_STATUSES),
+        )
+        .limit(1)
+    ).first()
+    if report is not None:
+        return True
+    directory = session.exec(
+        select(AdDirectoryRun.id)
+        .where(
+            AdDirectoryRun.tenant_id == tenant_id,
+            AdDirectoryRun.request_id == request_id,
+            col(AdDirectoryRun.status).in_(_TERMINAL_STATUSES),
+        )
+        .limit(1)
+    ).first()
+    return directory is not None
+
+
+def request_sync(
+    session: Session, *, context: TenantContext, request: SyncRequest
+) -> UUID:
     """Create or return a durable report run for one logical refresh request.
 
     The request UUID is deterministic over the frozen route, IDs, references and
@@ -303,7 +403,13 @@ def request_sync(session: Session, *, context: TenantContext, request: SyncReque
         {"key": f"report-sync:{request.route.tenant_id}:{request_id}"},
     )
     now = datetime.now(UTC)
-    if request.scope in {"directory", "active"}:
+    # A terminal occurrence must not be reused forever.  An in-flight occurrence
+    # remains mergeable; when all matching rows are terminal, mint a new request id.
+    if _request_has_terminal(
+        session, request_id=request_id, tenant_id=context.tenant_id
+    ):
+        request_id = uuid4()
+    if request.scope in {"directory", "active", "targeted"}:
         return _request_directory_sync(
             session,
             context=context,
@@ -314,55 +420,69 @@ def request_sync(session: Session, *, context: TenantContext, request: SyncReque
     selected: list[ReportSyncRun] = []
     for advertiser_id in request.advertiser_ids:
         account = session.get(
-            AdvertiserAccount, (context.tenant_id, advertiser_id), populate_existing=True
+            AdvertiserAccount,
+            (context.tenant_id, advertiser_id),
+            populate_existing=True,
         )
         if account is None:
             raise DomainError("account_not_in_bc", "广告账户不存在")
+        start_date: date | None
+        end_date: date | None
         if request.start_date is not None:
+            assert request.end_date is not None
             start_date, end_date = request.start_date, request.end_date
         elif request.scope == "history":
             start_date, end_date = _dates("initial", account=account, now=now)
         else:
             start_date, end_date = _dates("core", account=account, now=now)
         assert start_date is not None and end_date is not None
-        query = _query_for(
-            account, start_date=start_date, end_date=end_date, refs=request.refs
+        specs = (
+            (("basic_account", None),)
+            if request.scope == "balance"
+            else _report_specs()
         )
-        partition = report_partition_key(
-            # This compact DTO is built by decode_query to preserve the canonical
-            # contract serialization used by A5/A6.
-            _decode_query(query)
-        )
-        existing = _existing_run(
-            session,
-            request_id=request_id,
-            tenant_id=context.tenant_id,
-            advertiser_id=advertiser_id,
-            partition=partition,
-        )
-        if existing is not None:
-            selected.append(existing)
-            continue
-        run = ReportSyncRun(
-            tenant_id=context.tenant_id,
-            advertiser_id=advertiser_id,
-            bc_id=request.route.bc_id,
-            actor_id=context.actor_id,
-            connection_id=request.route.connection_id,
-            channel=request.route.channel,
-            frozen_route=_route_dump(request.route),
-            request_id=request_id,
-            partition_key=partition,
-            query=query,
-            status="QUEUED",
-            claim_generation=1,
-            next_page=1,
-            coverage="PENDING",
-            observed_at=now,
-            task_id=f"sync:{request.scope}",
-        )
-        session.add(run)
-        selected.append(run)
+        for report_contract, ad_type in specs:
+            for shard_start, shard_end in _date_shards(start_date, end_date):
+                query = _query_for(
+                    account,
+                    start_date=shard_start,
+                    end_date=shard_end,
+                    refs=request.refs,
+                    report_contract=report_contract,
+                    ad_type=ad_type,
+                )
+                partition = report_partition_key(_decode_query(query), ad_type=ad_type)
+                existing = _existing_run(
+                    session,
+                    request_id=request_id,
+                    tenant_id=context.tenant_id,
+                    advertiser_id=advertiser_id,
+                    partition=partition,
+                )
+                if existing is not None:
+                    selected.append(existing)
+                    continue
+                run = ReportSyncRun(
+                    tenant_id=context.tenant_id,
+                    advertiser_id=advertiser_id,
+                    bc_id=request.route.bc_id,
+                    actor_id=context.actor_id,
+                    connection_id=request.route.connection_id,
+                    channel=request.route.channel,
+                    frozen_route=_route_dump(request.route),
+                    request_id=request_id,
+                    partition_key=partition,
+                    query=query,
+                    status="QUEUED",
+                    claim_generation=1,
+                    next_page=1,
+                    coverage="PENDING",
+                    observed_at=now,
+                    task_id=None,
+                    task_status="BALANCE" if request.scope == "balance" else None,
+                )
+                session.add(run)
+                selected.append(run)
     session.flush()
     return selected[0].id
 
@@ -382,20 +502,42 @@ def _request_directory_sync(
         account_refs = tuple(
             ref for ref in request.refs if ref.advertiser_id == advertiser_id
         )
-        for kind, ad_type, page_size in (
+        directory_specs = (
             ("campaign", "REGULAR", 1000),
             ("adgroup", "REGULAR", 1000),
             ("ad", "REGULAR", 100),
-        ):
-            ids = tuple(sorted({ref.remote_id for ref in account_refs if ref.kind == kind}))
+            ("ad", "LEGACY_SMART_PLUS", 100),
+            ("ad", "SMART_PLUS", 100),
+            ("creative", "SMART_PLUS", 100),
+        )
+        for kind, ad_type, page_size in directory_specs:
+            ids = tuple(
+                sorted(
+                    {
+                        ref.remote_id
+                        for ref in account_refs
+                        if ref.kind == kind
+                        and (
+                            request.scope != "targeted"
+                            or (kind == "creative" and ref.kind == "creative")
+                            or (kind != "creative" and ref.kind == kind)
+                        )
+                    }
+                )
+            )
             parent_kind = {
                 "campaign": (),
                 "adgroup": ("campaign",),
                 "ad": ("adgroup",),
+                "creative": ("ad",),
             }[kind]
             parent_ids = tuple(
-                sorted({ref.remote_id for ref in account_refs if ref.kind in parent_kind})
+                sorted(
+                    {ref.remote_id for ref in account_refs if ref.kind in parent_kind}
+                )
             )
+            if request.scope == "targeted" and not ids and not parent_ids:
+                continue
             query = {
                 "advertiser_id": advertiser_id,
                 "kind": kind,
@@ -416,6 +558,7 @@ def _request_directory_sync(
                     AdDirectoryRun.request_id == request_id,
                     AdDirectoryRun.advertiser_id == advertiser_id,
                     AdDirectoryRun.partition_key == partition,
+                    col(AdDirectoryRun.status).notin_(_TERMINAL_STATUSES),
                 )
                 .order_by(col(AdDirectoryRun.created_at))
             ).first()
@@ -466,7 +609,9 @@ def ensure_sync_schedules(
     now = now or datetime.now(UTC)
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
-    verify_route(session, context=context, route=route, advertiser_id=None, capability="read")
+    verify_route(
+        session, context=context, route=route, advertiser_id=None, capability="read"
+    )
     requested = set(advertiser_ids or ())
     grants = session.exec(
         select(BCAccountAccess).where(
@@ -484,16 +629,24 @@ def ensure_sync_schedules(
     # Removing a BC grant must stop future scans immediately, including plans from
     # an older binding generation.  Historical run facts remain queryable.
     if not requested:
-        for row in session.exec(
+        for unbound_row in session.exec(
             select(SyncSchedule).where(
                 SyncSchedule.tenant_id == route.tenant_id,
                 SyncSchedule.bc_id == route.bc_id,
                 col(SyncSchedule.enabled).is_(True),
             )
         ).all():
-            if row.advertiser_id not in active_ids:
-                row.enabled = False
-                row.error_code = "account_unbound"
+            if unbound_row.advertiser_id not in active_ids:
+                unbound_row.enabled = False
+                unbound_row.error_code = "account_unbound"
+    # Serialize the select-then-insert schedule seed across beat workers and
+    # browser-triggered refreshes.  The lock is transaction scoped and released
+    # before any provider call (there are none in this function).
+    SASession.execute(
+        session,
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"sync-schedule:{route.tenant_id}:{route.bc_id}:{route.connection_id}"},
+    )
     result: list[SyncSchedule] = []
     for grant in grants:
         account = session.get(
@@ -528,8 +681,11 @@ def ensure_sync_schedules(
                     advertiser_id=account.advertiser_id,
                     scope=scope,
                     window=window,
+                    contract="all" if scope == "report" else scope,
+                    metric_family="delivery" if scope == "report" else scope,
+                    ad_type="ALL",
                 )
-                row = session.exec(
+                row: SyncSchedule | None = session.exec(
                     select(SyncSchedule).where(
                         SyncSchedule.tenant_id == route.tenant_id,
                         SyncSchedule.bc_id == route.bc_id,
@@ -538,12 +694,29 @@ def ensure_sync_schedules(
                         SyncSchedule.schedule_key == key,
                     )
                 ).one_or_none()
+                attribution_days = None
+                if window == "attribution" and row is not None:
+                    value = row.completed_coverage.get("attribution_days")
+                    if isinstance(value, int) and value >= 0:
+                        attribution_days = value
                 start_date, end_date = (
                     _dates("directory", account=account, now=now)
                     if window == "rolling"
-                    else _dates(window, account=account, now=now)
+                    else _dates(
+                        window,
+                        account=account,
+                        now=now,
+                        attribution_days=attribution_days,
+                    )
                 )
                 if row is None:
+                    interval_seconds = _SCHEDULE_SECONDS.get(scope, 30 * 60)
+                    if window == "recent7d":
+                        interval_seconds = 3 * 60 * 60
+                    elif window == "attribution":
+                        interval_seconds = 24 * 60 * 60
+                    elif window == "initial":
+                        interval_seconds = 24 * 60 * 60
                     row = SyncSchedule(
                         tenant_id=route.tenant_id,
                         bc_id=route.bc_id,
@@ -555,11 +728,7 @@ def ensure_sync_schedules(
                         schedule_key=key,
                         scope=scope,
                         enabled=True,
-                        interval_seconds=(
-                            3 * 60 * 60
-                            if window == "recent7d"
-                            else _SCHEDULE_SECONDS.get(scope, 30 * 60)
-                        ),
+                        interval_seconds=interval_seconds,
                         next_due_at=_next_due(window, now),
                         start_date=start_date,
                         end_date=end_date,
@@ -567,10 +736,10 @@ def ensure_sync_schedules(
                     )
                     session.add(row)
                 else:
-                    row.enabled = True
+                    if not (window == "initial" and row.requested_coverage):
+                        row.enabled = True
                     row.actor_id = context.actor_id
                     row.frozen_route = _route_dump(route)
-                    row.next_due_at = min(row.next_due_at, _next_due(window, now))
                     row.start_date, row.end_date = start_date, end_date
                     row.error_code = None
                 result.append(row)
@@ -624,10 +793,28 @@ def enqueue_due_syncs(session: Session, *, now: datetime) -> tuple[UUID, ...]:
             schedule.claimed_until = schedule.claim_token = None
             continue
         refs = tuple(
-            ref
-            for item in schedule.refs
-            if (ref := _ref_from_json(item)) is not None
+            ref for item in schedule.refs if (ref := _ref_from_json(item)) is not None
         )
+        window = (
+            schedule.schedule_key.split(":", 2)[1]
+            if ":" in schedule.schedule_key
+            else "rolling"
+        )
+        if window == "attribution":
+            account = session.get(
+                AdvertiserAccount,
+                (schedule.tenant_id, schedule.advertiser_id),
+                populate_existing=True,
+            )
+            if account is not None:
+                known = schedule.completed_coverage.get("attribution_days")
+                known_days = known if isinstance(known, int) and known >= 0 else None
+                schedule.start_date, schedule.end_date = _dates(
+                    "attribution",
+                    account=account,
+                    now=now,
+                    attribution_days=known_days,
+                )
         if schedule.scope in {"active", "report"}:
             # Membership is read from current directory plus recent spend facts;
             # stopped objects inside the attribution horizon remain eligible.
@@ -650,7 +837,10 @@ def enqueue_due_syncs(session: Session, *, now: datetime) -> tuple[UUID, ...]:
         result.append(run_id)
         schedule.last_request_id = run_id
         schedule.requested_coverage = {
-            "start_date": schedule.start_date.isoformat() if schedule.start_date else None,
+            "window": window,
+            "start_date": schedule.start_date.isoformat()
+            if schedule.start_date
+            else None,
             "end_date": schedule.end_date.isoformat() if schedule.end_date else None,
             "requested_at": now.isoformat(),
         }
@@ -661,6 +851,10 @@ def enqueue_due_syncs(session: Session, *, now: datetime) -> tuple[UUID, ...]:
         while due <= now:
             due += step
         schedule.next_due_at = due
+        if window == "initial":
+            # Initial history is a one-shot seed.  Its run remains durable and
+            # retryable, while the schedule itself cannot recreate it every tick.
+            schedule.enabled = False
         schedule.claim_generation += 1
         schedule.claim_token = None
         schedule.claimed_until = None
@@ -686,17 +880,33 @@ def record_schedule_completion(
         raise DomainError("sync_schedule_not_found", "同步计划不存在")
     if start_date > end_date:
         raise ValueError("coverage range is inverted")
-    current = schedule.completed_coverage if isinstance(schedule.completed_coverage, dict) else {}
-    ranges = list(current.get("ranges", [])) if isinstance(current.get("ranges", []), list) else []
+    current = (
+        schedule.completed_coverage
+        if isinstance(schedule.completed_coverage, dict)
+        else {}
+    )
+    ranges = (
+        list(current.get("ranges", []))
+        if isinstance(current.get("ranges", []), list)
+        else []
+    )
     item = {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()}
     if item not in ranges:
         ranges.append(item)
     # A schedule's completed range is an evidence summary, not a synthetic union:
     # retain every non-contiguous published range for the query layer to inspect.
-    schedule.completed_coverage = {
-        "ranges": sorted(ranges, key=lambda value: (value["start_date"], value["end_date"])),
+    coverage: dict[str, Any] = {
+        "ranges": sorted(
+            ranges, key=lambda value: (value["start_date"], value["end_date"])
+        ),
         "updated_at": datetime.now(UTC).isoformat(),
     }
+    if "attribution" in schedule.schedule_key:
+        coverage["attribution_days"] = max(
+            int(current.get("attribution_days", 0) or 0),
+            (end_date - start_date).days + 1,
+        )
+    schedule.completed_coverage = coverage
     session.add(schedule)
     session.flush()
     return schedule.completed_coverage
@@ -712,7 +922,7 @@ def _ref_from_json(value: Any) -> EntityRef | None:
             value["kind"],
             str(value["remote_id"]),
         )
-    except (KeyError, TypeError, ValueError):
+    except KeyError, TypeError, ValueError:
         return None
 
 
@@ -753,7 +963,14 @@ def active_or_recent_refs(
         if fact.value is not None and fact.value > 0 and len(fact.subject_key) >= 2:
             kind = str(fact.subject_key[0])
             if kind in {"campaign", "adgroup", "ad", "creative"}:
-                refs.add(EntityRef(tenant_id, advertiser_id, kind, str(fact.subject_key[1])))
+                refs.add(
+                    EntityRef(
+                        tenant_id,
+                        advertiser_id,
+                        cast(Literal["campaign", "adgroup", "ad", "creative"], kind),
+                        str(fact.subject_key[1]),
+                    )
+                )
     return tuple(sorted(refs, key=lambda ref: (ref.kind, ref.remote_id)))
 
 
