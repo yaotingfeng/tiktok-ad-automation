@@ -32,3 +32,14 @@ A8 需要把两个任务注册到独立 `ads-directory`/`ads-reporting` 消费�
 - `.venv/bin/ruff check ...`：通过
 - `.venv/bin/mypy backend/app/modules/reporting/scheduling.py backend/app/modules/reporting/tasks.py backend/app/modules/ads/tasks.py`：通过
 - `python3 -m py_compile backend/app/modules/reporting/scheduling.py backend/app/modules/reporting/tasks.py backend/app/modules/ads/tasks.py`：通过
+
+## Re-review 1 修复
+
+- 报表 worker 从持久 query 读取 `ad_type` 并传入 typed gateway，A6 解码后的查询仍按 basic ad、Smart+ 和 material 合同执行；余额使用独立的本地 `task_status` 标记，远端 `task_id` 仍为空直到真正建 task。
+- material breakdown 计划始终使用空实体过滤器，避免 A6 拒绝未经核验的 filtered partition。
+- request occurrence 只有在同一请求的全部 report/directory shards 都进入终态时才生成新 UUID；混合终态与进行中分片会复用原 request ID。报告计划读取已知 attribution coverage，未知时才使用 35 日窗口。
+
+复核验证（专用 PostgreSQL/Redis，未调用 TikTok/MCP）：
+
+- `.venv/bin/pytest -q backend/tests/modules/reporting/test_scheduling.py backend/tests/modules/reporting backend/tests/modules/ads`：46 passed
+- `ruff check`、`mypy`（3 个变更模块）、`python3 -m py_compile`：通过

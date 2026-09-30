@@ -78,6 +78,12 @@ def run_report_step(
         route = _route(run.frozen_route)
         task_status = run.task_status
         advertiser_id = run.advertiser_id
+        persisted_ad_type = run.query.get("ad_type")
+        if persisted_ad_type is not None and (
+            not isinstance(persisted_ad_type, str) or not persisted_ad_type.strip()
+        ):
+            raise DomainError("report_query_invalid", "报表广告类型无效")
+        ad_type = persisted_ad_type.strip().upper() if persisted_ad_type else None
         verify_route(
             session,
             context=context,
@@ -94,6 +100,7 @@ def run_report_step(
         context=context,
         route=route,
         task_deadline=deadline,
+        ad_type=ad_type,
     ) as gateway:
         if task_status == "BALANCE":
             balance = gateway.ads.read_balance(advertiser_id)

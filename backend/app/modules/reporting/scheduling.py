@@ -300,6 +300,11 @@ def _query_for(
             if ref.advertiser_id == account.advertiser_id and ref.kind in allowed_kinds
         }
     )
+    # A6 deliberately rejects filtered material breakdown requests.  Keep this
+    # scheduled contract account-wide while retaining entity filters for the
+    # other approved dimensions.
+    if report_contract == "material_breakdown":
+        filter_ids = []
     metrics = list(contract.metrics)
     query = {
         "advertiser_id": account.advertiser_id,
@@ -350,7 +355,6 @@ def _existing_run(
             ReportSyncRun.tenant_id == tenant_id,
             ReportSyncRun.advertiser_id == advertiser_id,
             ReportSyncRun.partition_key == partition,
-            col(ReportSyncRun.status).notin_(_TERMINAL_STATUSES),
         )
         .order_by(col(ReportSyncRun.created_at))
     ).first()
@@ -359,27 +363,20 @@ def _existing_run(
 def _request_has_terminal(
     session: Session, *, request_id: UUID, tenant_id: UUID
 ) -> bool:
-    report = session.exec(
-        select(ReportSyncRun.id)
-        .where(
+    report_statuses = session.exec(
+        select(ReportSyncRun.status).where(
             ReportSyncRun.tenant_id == tenant_id,
             ReportSyncRun.request_id == request_id,
-            col(ReportSyncRun.status).in_(_TERMINAL_STATUSES),
         )
-        .limit(1)
-    ).first()
-    if report is not None:
-        return True
-    directory = session.exec(
-        select(AdDirectoryRun.id)
-        .where(
+    ).all()
+    directory_statuses = session.exec(
+        select(AdDirectoryRun.status).where(
             AdDirectoryRun.tenant_id == tenant_id,
             AdDirectoryRun.request_id == request_id,
-            col(AdDirectoryRun.status).in_(_TERMINAL_STATUSES),
         )
-        .limit(1)
-    ).first()
-    return directory is not None
+    ).all()
+    statuses = [*report_statuses, *directory_statuses]
+    return bool(statuses) and all(status in _TERMINAL_STATUSES for status in statuses)
 
 
 def request_sync(
@@ -562,7 +559,6 @@ def _request_directory_sync(
                     AdDirectoryRun.request_id == request_id,
                     AdDirectoryRun.advertiser_id == advertiser_id,
                     AdDirectoryRun.partition_key == partition,
-                    col(AdDirectoryRun.status).notin_(_TERMINAL_STATUSES),
                 )
                 .order_by(col(AdDirectoryRun.created_at))
             ).first()
@@ -822,12 +818,32 @@ def enqueue_due_syncs(session: Session, *, now: datetime) -> tuple[UUID, ...]:
         if schedule.scope in {"active", "report"}:
             # Membership is read from current directory plus recent spend facts;
             # stopped objects inside the attribution horizon remain eligible.
+            attribution_days: int | None = None
+            if schedule.scope == "report":
+                attribution_schedule = session.exec(
+                    select(SyncSchedule).where(
+                        SyncSchedule.tenant_id == schedule.tenant_id,
+                        SyncSchedule.bc_id == schedule.bc_id,
+                        SyncSchedule.advertiser_id == schedule.advertiser_id,
+                        SyncSchedule.scope == "history",
+                        col(SyncSchedule.schedule_key).like("history:attribution:%"),
+                    )
+                ).first()
+                known = (
+                    attribution_schedule.completed_coverage.get("attribution_days")
+                    if attribution_schedule is not None
+                    and isinstance(attribution_schedule.completed_coverage, dict)
+                    else None
+                )
+                attribution_days = (
+                    known if isinstance(known, int) and known >= 0 else 35
+                )
             refs = active_or_recent_refs(
                 session,
                 tenant_id=schedule.tenant_id,
                 advertiser_id=schedule.advertiser_id,
                 now=now,
-                attribution_days=35 if schedule.scope == "report" else None,
+                attribution_days=attribution_days,
             )
         request = SyncRequest(
             route=route,

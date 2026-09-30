@@ -146,6 +146,41 @@ def test_report_ranges_are_sharded_and_terminal_occurrence_is_not_reused(
     assert second != first
 
 
+def test_mixed_shards_reuse_request_and_material_breakdown_is_unfiltered(
+    session, reporting_seed
+):
+    route = FrozenTikTokRoute(
+        tenant_id=reporting_seed.context.tenant_id,
+        bc_id="bc-report",
+        connection_id=reporting_seed.connection.id,
+        channel="OFFICIAL_API",
+        authorization_revision=0,
+        adapter_contract_revision="official-api-v1",
+        binding_revision=0,
+    )
+    request = SyncRequest(
+        route=route,
+        advertiser_ids=("report-account",),
+        scope="report",
+        start_date=date(2026, 1, 1),
+        end_date=date(2026, 3, 31),
+        refs=(EntityRef(route.tenant_id, "report-account", "ad", "ad-1"),),
+    )
+    first = request_sync(session, context=reporting_seed.context, request=request)
+    runs = session.exec(select(ReportSyncRun)).all()
+    material = next(
+        run for run in runs if run.query["report_contract"] == "material_breakdown"
+    )
+    assert material.query["filter_ids"] == []
+    first_run = session.get(ReportSyncRun, first)
+    assert first_run is not None
+    first_run.status = "COMPLETE"
+    session.flush()
+    second = request_sync(session, context=reporting_seed.context, request=request)
+    assert second == first
+    assert len(session.exec(select(ReportSyncRun)).all()) == len(runs)
+
+
 def test_fixed_plans_use_local_account_windows_and_intervals(session, reporting_seed):
     route = FrozenTikTokRoute(
         tenant_id=reporting_seed.context.tenant_id,
