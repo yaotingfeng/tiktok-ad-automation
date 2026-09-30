@@ -81,11 +81,11 @@
 
 **Interfaces:** `query_ads(session,*,context,bc_id,filters:ReportingFilter,snapshot_id:UUID|None=None,cursor:str|None=None,limit:int=50)->AdsQueryPage`；`freeze_selection(session,*,context,bc_id,request:SelectionRequest)->FrozenSelection`；`get_ad_detail(session,*,context,bc_id,ref:EntityRef)->AdDetailPublic`。详情消费 A 的 `ads.directory.locate`；C 用 selection_id 取得不可变目标。
 
-- [ ] **RED：** `test_all_matching_freezes_snapshot` 用 report_case 种 51 个匹配系列和 1 个不匹配系列，limit=50 取两页，新增第 52 个匹配系列后冻结旧快照，断言 `len(selection.refs)==51`、新 ID 不在其中、分页总数/汇总不变。`test_material_selection_keeps_usage_ids` 断言两个广告内素材 ID 都在 `selection.material_uses`，不能只返回素材库 VID。
-- [ ] **运行 RED：** `uv run --frozen pytest tests/modules/reporting/test_queries.py tests/modules/reporting/test_selection.py tests/modules/reporting/test_detail.py tests/modules/reporting/test_api.py -q`。
-- [ ] **实现：** 快照存有序行与指标，游标绑定 snapshot/filter/actor/BC，稳定 row_key 处理并列排序，limit 1–100。账户/剧选择展开快照时的系列 refs；组/广告保留本身 refs；素材保留具体 MaterialUseRef。注册 `/api/tenants/{tenant_id}/ads`、`ads/{kind}/{id}`（必传 advertiser_id/bc_id）、`reports/trend` 和 POST `ad-selections`，只查本地数据；路由 tags 为 `["ads_reporting"]`，各 operation_id 唯一并使用 `ads_reporting-` 前缀。
-- [ ] **GREEN：** 测试无额外 TikTok 请求，伪造其他 BC 游标/快照/ID 404，15 分钟过期 409；改名后旧快照不变、新查询按新名归组；详情显示父停用/审核/排期原因，展示外部素材及历史操作但不要求本地素材映射。
-- [ ] **提交：** `git commit -m 'reports: add consistent queries and frozen cross-page selections'`。
+- [x] **RED：** `test_all_matching_freezes_snapshot` 用 report_case 种 51 个匹配系列和 1 个不匹配系列，limit=50 取两页，新增第 52 个匹配系列后冻结旧快照，断言 `len(selection.refs)==51`、新 ID 不在其中、分页总数/汇总不变。`test_material_selection_keeps_usage_ids` 断言两个广告内素材 ID 都在 `selection.material_uses`，不能只返回素材库 VID。
+- [x] **运行 RED：** `uv run --frozen pytest tests/modules/reporting/test_queries.py tests/modules/reporting/test_selection.py tests/modules/reporting/test_detail.py tests/modules/reporting/test_api.py -q`。
+- [x] **实现：** 快照存有序行与指标，游标绑定 snapshot/filter/actor/BC，稳定 row_key 处理并列排序，limit 1–100。账户/剧选择展开快照时的系列 refs；组/广告保留本身 refs；素材保留具体 MaterialUseRef。注册 `/api/tenants/{tenant_id}/ads`、`ads/{kind}/{id}`（必传 advertiser_id/bc_id）、`reports/trend` 和 POST `ad-selections`，只查本地数据；路由 tags 为 `["ads_reporting"]`，各 operation_id 唯一并使用 `ads_reporting-` 前缀。
+- [x] **GREEN：** 测试无额外 TikTok 请求，伪造其他 BC 游标/快照/ID 404，15 分钟过期 409；改名后旧快照不变、新查询按新名归组；详情显示父停用/审核/排期原因，展示外部素材及历史操作但不要求本地素材映射。真实 Engine 跨请求 API→cursor→selection 回归通过。
+- [x] **提交：** `c7ac4d1`、`79825c0`、`e04783e`；最终独立复审记录于 `.superpowers/sdd/2026-09-30-ads-reporting-b-workspace/task-3-rereview-1.md`，Verdict APPROVED。
 
 ## Task 4 (B4)：个人视图、异步导出与手动刷新
 

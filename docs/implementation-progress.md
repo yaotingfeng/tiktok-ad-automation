@@ -1514,3 +1514,10 @@
 - 趋势按冻结的完整目录成员、selected BC/connection/channel、目录版本与投影时间证明后发布观测；本地时区 day/hour 桶保留时区与粒度身份，剧维度先按成员配置过滤后聚合，再应用共享筛选阈值。
 - `task-2-rereview-3.md` 最终 Verdict 为 APPROVED；专用 reporting+adapter 回归 79 项通过，Ruff 与 `git diff --check` 通过。未调用真实 TikTok/MCP、未执行广告写入或部署。
 - B3 可以消费 B1 快照查询合同与 B2 `build_dimension_rows`/`build_trend`；B1 的非 NULL 值与非 `AVAILABLE` 状态语义仍由后续集成验收继续守护。
+
+## 2026-10-01：B3 快照查询、冻结选择、详情与本地 API 已完成
+
+- B3 实现与修复提交为 `c7ac4d1`、`79825c0`、`e04783e`；本地 API 已注册广告查询、详情、趋势和冻结选择路由，所有查询只读本地数据，不调用 TikTok/MCP。
+- 查询使用 B1 `snapshot_transaction` 的 REPEATABLE READ 短事务，快照、游标和 selection 持久化并绑定租户、操作者、BC、筛选摘要和授权账户；账户/剧系列引用在快照创建时批量冻结，素材保留具体 `MaterialUseRef`。
+- 详情读取真实租户范围内 `AuditEvent` 历史，展示父级限制和外部素材；publication/naming 版本摘要按冻结范围保存。真实 Engine Session 的跨请求 GET→cursor→POST selection 已覆盖。
+- 最终复审记录为 `task-3-rereview-1.md`，Verdict APPROVED；14 项 B3 聚焦测试、77 项 reporting 回归、Ruff、compileall、diff-check 通过。已知 `transaction already deassociated` 仅为测试夹具 teardown 警告；未调用真实 TikTok/MCP、未写广告或部署。
