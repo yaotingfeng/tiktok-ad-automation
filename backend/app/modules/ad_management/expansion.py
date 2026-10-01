@@ -842,7 +842,11 @@ def _expand(
             else:
                 add_item(row, use=use)
     else:
-        candidate_rows: list[AdObject] = list(objects.values()) if account_fallback else []
+        candidate_rows: list[AdObject] = (
+            [row for row in objects.values() if _ref_key(row.ref) not in excluded_refs]
+            if account_fallback
+            else []
+        )
         for ref in refs:
             row = objects.get(_ref_key(ref))
             if row is not None:
