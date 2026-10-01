@@ -112,7 +112,8 @@ def _check_preview(
         "status": "set_status",
         "material_status": "set_material_status",
     }.get(str(preview.mutation.get("field", "")))
-    if operation is None:
+    is_restore = str(preview.mutation.get("field", "")) == "restore"
+    if operation is None and not is_restore:
         raise DomainError("management_operation_invalid", "冻结管理操作无效")
     items = session.exec(
         select(ManagementPreviewItem)
@@ -131,7 +132,13 @@ def _check_preview(
                     "frozen_route_scope_mismatch", "管理目标的冻结路由已变化"
                 )
             item_operation = item.capability.get("operation") if item.capability else None
-            if item_operation is not None and item_operation != operation:
+            expected_operation = item_operation if is_restore else operation
+            if expected_operation not in {
+                "update_roas",
+                "update_budget",
+                "set_status",
+                "set_material_status",
+            }:
                 raise DomainError(
                     "management_operation_invalid", "管理目标操作与预览不一致"
                 )
@@ -146,7 +153,7 @@ def _check_preview(
                 route=route,
                 advertiser_id=advertiser_id,
                 capability="ads_manage",
-                operation=operation,
+                operation=expected_operation,
                 entity_kind=entity_kind,
             )
     return preview, route, list(items)

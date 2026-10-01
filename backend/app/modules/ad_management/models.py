@@ -93,7 +93,7 @@ class ManagementPreviewItem(SQLModel, table=True):
             name="fk_management_preview_item_preview",
         ),
         CheckConstraint(
-            "execution_result IN ('PENDING','ACCEPTED','REJECTED','NOT_SENT','UNKNOWN','NO_CHANGE','CONFLICT','UNSUPPORTED')",
+            "execution_result IN ('PENDING','ACCEPTED','REJECTED','NOT_SENT','UNKNOWN','NO_CHANGE','CONFLICT','UNSUPPORTED','CANCELLED')",
             name="ck_management_preview_item_result",
         ),
         Index(
@@ -213,7 +213,7 @@ class ManagementTaskItem(SQLModel, table=True):
             name="fk_management_task_item_preview_scope",
         ),
         CheckConstraint(
-            "execution_result IN ('PENDING','ACCEPTED','REJECTED','NOT_SENT','UNKNOWN','NO_CHANGE','CONFLICT','UNSUPPORTED')",
+            "execution_result IN ('PENDING','ACCEPTED','REJECTED','NOT_SENT','UNKNOWN','NO_CHANGE','CONFLICT','UNSUPPORTED','CANCELLED')",
             name="ck_management_task_item_result",
         ),
         CheckConstraint("claim_generation >= 1", name="ck_management_task_item_claim_generation"),

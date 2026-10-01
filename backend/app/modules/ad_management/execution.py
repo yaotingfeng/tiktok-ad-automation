@@ -45,7 +45,7 @@ from app.modules.ads.models import AdMaterialReference, AdObject
 from app.modules.reporting.scheduling import SyncRequest, request_sync
 
 _CLAIM_SECONDS = 120
-_TERMINAL = frozenset({"ACCEPTED", "REJECTED", "UNKNOWN", "NO_CHANGE", "CONFLICT", "UNSUPPORTED"})
+_TERMINAL = frozenset({"ACCEPTED", "REJECTED", "UNKNOWN", "NO_CHANGE", "CONFLICT", "UNSUPPORTED", "CANCELLED"})
 _FIELD_BY_OPERATION = {
     "update_roas": "roas",
     "update_budget": "budget",

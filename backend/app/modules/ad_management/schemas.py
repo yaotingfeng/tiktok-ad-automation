@@ -99,6 +99,7 @@ class ManagementItemPublic(BaseModel):
         "NO_CHANGE",
         "CONFLICT",
         "UNSUPPORTED",
+        "CANCELLED",
     ] = "PENDING"
     observation_state: str | None = None
     delivery_status: str | None = None
@@ -135,3 +136,25 @@ class ManagementTaskPublic(BaseModel):
         "CANCELLED",
     ]
     counts: ManagementCounts = Field(default_factory=ManagementCounts)
+
+
+class ManagementPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    selection_id: UUID
+    bc_id: str = Field(min_length=1, max_length=128)
+    mutation: MutationSpec
+
+
+class ManagementTaskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    preview_id: UUID
+    preview_digest: str = Field(min_length=64, max_length=64)
+    idempotency_key: UUID
+
+
+class ManagementRetryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    idempotency_key: UUID
