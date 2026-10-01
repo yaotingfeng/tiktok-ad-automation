@@ -1580,3 +1580,9 @@
 - C6 最终提交为 `4242910`；新增任务列表/详情、取消、明确未发送项重试、恢复预览和本地核查动作。所有入口按租户、操作者、BC、当前账户访问和管理能力过滤；viewer 可读不可写，撤权账户从列表过滤，取消不回滚已发送项，UNKNOWN/ACCEPTED 不会重发。
 - 恢复预览可继续提交为原操作的反向值，保留原本已停用项并把当前配置变化标记为冲突；取消状态贯穿 ORM、schema、迁移和执行器。retry 使用数据库 advisory idempotency lock，列表按有界批次过滤撤权项，避免并发重复任务和整 BC 无界加载。
 - C6/C5/C4/queue 隔离 PostgreSQL/Redis 回归 51 项通过，fresh Alembic、Ruff、compileall、`git diff --check` 通过；OpenAPI 管理路由 operation_id 唯一且均为 `ad_management-` 前缀。最终独立窄复审 `task-6-rereview-final.md` 为 APPROVED。未调用真实 TikTok/MCP、未写广告、未部署。
+
+## 2026-10-01：C7 管理预览与任务工作台已完成
+
+- C7 最终提交为 `a8d540d`；广告报表工作台接入冻结 selection、批量管理预览、五分钟过期提示、连接/账户摘要、显式父级联动、排除不可用项和一次性提交导航。新增任务列表/详情页，逐项展示 execution/delivery/observation/attempt 回执，UNKNOWN 只核查，`REFRESH_PENDING` 只允许定向刷新重试。
+- 只读成员可查看任务审计但隐藏批量写入口、取消/重试/恢复/刷新重试；BC/维度/筛选变化会清理旧 selection/preview，迟到冻结结果被丢弃。生成客户端、TanStack 路由和 Playwright workspace 配置已更新。
+- C7/C6/C5/C4/queue 真实 PostgreSQL/Redis 隔离回归 52 项通过，C7 Playwright 3 项及广告工作台/报表合计 11 项通过；fresh Alembic、TypeScript/Vite build、Biome、Ruff、compileall、`git diff --check` 通过。最终独立窄复审 `task-7-rereview-final.md` 为 APPROVED。未调用真实 TikTok/MCP、未写广告、未部署。

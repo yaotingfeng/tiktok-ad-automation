@@ -186,7 +186,7 @@ assert next(item for item in restore.items if item.ref == externally_changed_ref
 
 **Interfaces:** `ManagementPreviewSheet({selectionId: string, bcId: string, open: boolean, onOpenChange: (open: boolean) => void})`；调用 generated `AdManagementService` 对应 prepare/submit/get/list/cancel/retry/restore/reconcile。当前页/跨页/全选继续使用 B 的 selection_id，不在浏览器展开远端对象。
 
-- [ ] RED：新增 Playwright `test('preview impact and uncertain task')`，传输边界返回两个联动组、一个不可操作素材、有效预览和未知任务，验证用户可见行为；预览失效另用独立场景测试。
+- [x] RED：新增 Playwright `test('preview impact and uncertain task')`，传输边界返回两个联动组、一个不可操作素材、有效预览和未知任务，验证用户可见行为；预览失效另用独立场景测试。
 ```typescript
 await page.getByRole("button", { name: "批量调整" }).click()
 await expect(page.getByText("联动 2 个广告组")).toBeVisible()
@@ -197,10 +197,10 @@ await page.getByRole("button", { name: "提交" }).click()
 await expect(page.getByText("请求结果需核实")).toBeVisible()
 await expect(page.getByRole("button", { name: "重试未知项" })).toHaveCount(0)
 ```
-- [ ] Run RED：先将 `ad-management` 加到 Playwright workspace `testMatch` 与 chromium `testIgnore`，再运行 `bunx playwright test tests/ad-management.spec.ts --project=workspace --workers=2 --reporter=line`，应因页面/控件尚缺失失败而非“没有测试”。
-- [ ] Implement：预览展示 BC、连接、账户、选中/去重/联动/不可用数量、旧新值、到期提示与显式父级选择；提交一次导航任务详情。列表及详情分别显示接口结果、同步确认和实际投放；恢复打开新预览，未知项只提供核查。只读隐藏写入口但可查看任务审计；刷新只轮询本地任务，不触发 TikTok 查询。
-- [ ] GREEN：从仓库根运行 `bash scripts/generate-client.sh` 后，前端执行 `bunx playwright test tests/ad-management.spec.ts tests/build-task-pages.spec.ts --project=workspace --workers=2 --reporter=line` 与 `bun run build`。追加父级未选不被提交、BC 切换清空旧预览、超时需重新准备、只读无写入口、窄屏/长名称布局检查。
-- [ ] Commit：`ad-management: deliver previews and management task pages`；root 统一生成客户端/路由树并确认阶段 B 无回归，提交前记录本地验证及未获授权的真实联调项。
+- [x] Run RED：先将 `ad-management` 加到 Playwright workspace `testMatch` 与 chromium `testIgnore`，再运行 `bunx playwright test tests/ad-management.spec.ts --project=workspace --workers=2 --reporter=line`，应因页面/控件尚缺失失败而非“没有测试”。
+- [x] Implement：预览展示 BC、连接、账户、选中/去重/联动/不可用数量、旧新值、到期提示与显式父级选择；提交一次导航任务详情。列表及详情分别显示接口结果、同步确认和实际投放；恢复打开新预览，未知项只提供核查。只读隐藏写入口但可查看任务审计；刷新只轮询本地任务，不触发 TikTok 查询。
+- [x] GREEN：从仓库根运行 `bash scripts/generate-client.sh` 后，前端执行 `bunx playwright test tests/ad-management.spec.ts tests/build-task-pages.spec.ts --project=workspace --workers=2 --reporter=line` 与 `bun run build`。追加父级未选不被提交、BC 切换清空旧预览、超时需重新准备、只读无写入口、窄屏/长名称布局检查。
+- [x] Commit：`a8d540d`；最终独立窄复审 `task-7-rereview-final.md` 为 APPROVED。
 
 ## 阶段验收与交接
 
