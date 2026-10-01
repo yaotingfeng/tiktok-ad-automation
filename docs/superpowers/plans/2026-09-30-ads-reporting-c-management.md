@@ -77,7 +77,7 @@ with pytest.raises(DomainError, match="management_permission_unverified"):
 
 `refresh_management_capabilities(database_engine: Engine, *, context: TenantContext, route: FrozenTikTokRoute, advertiser_id: str) -> tuple[ManagementCapability,...]` 在 `modules/accounts/management_capabilities.py` 使用只读 gateway 的 `accounts.authorization_facts()` 与现有完整账户角色证据；缺少角色时复用现有角色采集，不用广告写入试探权限。`record_management_capabilities(session, *, route: FrozenTikTokRoute, advertiser_id: str, evidence: ManagementPermissionEvidence) -> tuple[ManagementCapability,...]` 保存结果，Evidence 在 contracts/management.py 定义 scope/role/operations/source/observed_at；scope/tool 存在但无法证明账户写权仍为 UNKNOWN。首次准备预览先完成此只读核验，再要求 ads_manage，避免先要求管理证明才能读取证明。
 
-- [ ] RED：新增 `test_material_status_uses_ad_reference`，在两个通道传输 fixture 上参数化下述素材状态命令断言；追加普通组整体替换必需字段保留、Smart+ 广告/创意 ID 分离、素材批量上限与未知能力拒绝。
+- [x] RED：新增 `test_material_status_uses_ad_reference`，在两个通道传输 fixture 上参数化下述素材状态命令断言；追加普通组整体替换必需字段保留、Smart+ 广告/创意 ID 分离、素材批量上限与未知能力拒绝。
 ```python
 receipt = adapter.apply(command)
 assert receipt.outcome == "ACCEPTED"
@@ -89,10 +89,10 @@ with pytest.raises(DomainError, match="management_permission_unverified"):
     read_build_only_adapter.apply(command)
 assert read_build_only_wire.write_count == 0
 ```
-- [ ] Run RED：`uv run --frozen pytest tests/integrations/tiktok/test_management_adapters.py -q`，应因缺失合同/适配器失败。
-- [ ] Implement：注册精确 `management.update_roas/update_budget/set_status/set_material_status` 到 `ads_manage`，接通 Task 1 路由/账户门禁、AuthorizationFacts、两通道 authorization 和权限响应证据保存。普通与 Smart+ endpoint/schema 分开，只发验证过的最小字段集，金额保持 Decimal 精度。未验证的 Smart+ 联动合同不可发送；API 使用官方 SDK，MCP 校验实际工具 schema，不以工具存在或 build=true 认定管理授权。换授权/绑定代数后旧证据不能使用。
-- [ ] GREEN：上述测试通过；追加首次缺管理证据但实际 scope/ADMIN 角色齐全可通过只读核验、ANALYST 拒绝、甲账户证明不授予乙账户、换代旧证明失效断言；运行 `uv run --frozen pytest tests/modules/accounts/test_build_gateway.py tests/modules/accounts/test_group_isolation_gateway.py -q` 验证旧权限无扩大。
-- [ ] Commit：`ad-management: add capability-gated API and MCP mutations`；提交明确文件及协调完成的 gateway 改动。
+- [x] Run RED：`uv run --frozen pytest tests/integrations/tiktok/test_management_adapters.py -q`，应因缺失合同/适配器失败。
+- [x] Implement：注册精确 `management.update_roas/update_budget/set_status/set_material_status` 到 `ads_manage`，接通 Task 1 路由/账户门禁、AuthorizationFacts、两通道 authorization 和权限响应证据保存。普通与 Smart+ endpoint/schema 分开，只发验证过的最小字段集，金额保持 Decimal 精度。未验证的 Smart+ 联动合同不可发送；API 使用官方 SDK，MCP 校验实际工具 schema，不以工具存在或 build=true 认定管理授权。换授权/绑定代数后旧证据不能使用。
+- [x] GREEN：上述测试通过；追加首次缺管理证据但实际 scope/ADMIN 角色齐全可通过只读核验、ANALYST 拒绝、甲账户证明不授予乙账户、换代旧证明失效断言；运行 `uv run --frozen pytest tests/modules/accounts/test_build_gateway.py tests/modules/accounts/test_group_isolation_gateway.py -q` 验证旧权限无扩大。
+- [x] Commit：`ad-management: add capability-gated API and MCP mutations`；提交明确文件及协调完成的 gateway 改动。最终修复链为 `07ef214`、`5386465`、`9378f76`、`b20c516`、`bcf2649`、`fb3e9d3`。
 
 ### Task 3：真实影响展开、5 分钟预览和冲突检测
 

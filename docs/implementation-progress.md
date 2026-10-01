@@ -1548,3 +1548,10 @@
 - 管理能力只接受当前绑定与授权代数的 `VERIFIED` 证据，不能由 read/build 权限推导；ROAS、预算、启停的状态模式和素材引用结构在模型边界校验，普通素材没有独立广告素材引用时保留 `UNSUPPORTED`。
 - 为避免改写已应用迁移，完整性约束放入后续 `ad_management_integrity` 迁移；覆盖跨租户、跨 BC、跨预览项、旧能力代数、非法操作和重复/非法请求尝试的回归测试。
 - 专用 PostgreSQL `tkada_c1_test` 与 Redis DB14：36 项通过；Alembic upgrade/downgrade/upgrade 与 `alembic check`、Ruff、ty、compileall、`git diff --check` 通过。最终独立复审 `task-1-rereview-final.md` 为 APPROVED；未调用真实 TikTok/MCP、未写广告、未部署。
+
+## 2026-10-01：C2 MCP/API 管理写入契约与能力门禁已完成
+
+- C2 提交链为 `07ef214`、`5386465`、`9378f76`、`b20c516`、`bcf2649`、`fb3e9d3`；新增管理命令/回执合同、SDK 与 MCP 适配器、管理能力刷新与证据保存，以及 `AuthorizationFacts.management_operations` 精确操作映射。
+- 每次管理发送都绑定当前 tenant/BC/advertiser、连接授权代数、BC binding 代数和适配契约代数，并把无前缀操作与实体层级传入专用管理门禁；SDK 没有专用 management scope 或 MCP 没有真实 observed 工具合同时 fail-closed，不能由 build/read 权限推导。
+- 普通与 Smart+ 的 campaign/adgroup/ad endpoint、ROAS/预算和素材引用分离；campaign ROAS、普通素材独立启停、缺失/未知/冲突广告类型、非法状态值和未验证 MCP 工具均在发送前拒绝，普通素材不会以平台 VID 冒充广告素材引用。
+- 隔离 PostgreSQL `tkada_c2_20261001_test` 与 Redis DB2：最终相关回归 77 项通过（最终适配器聚焦 17 项）；Ruff、compileall、`git diff --check` 通过。最终窄修复复审确认 `task-2-rereview-final-3.md` 的唯一 P1 已由 `fb3e9d3` 解决；未调用真实 TikTok/MCP、未写广告、未部署。
