@@ -12,7 +12,7 @@ from datetime import UTC, date, datetime, timedelta
 from datetime import time as dt_time
 from decimal import Decimal
 from hashlib import sha256
-from typing import cast
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -455,6 +455,42 @@ def test_workspace_fastapi_contract_has_no_external_write_routes() -> None:
     ]
     assert reporting
     assert all(operation["operationId"].startswith("ads_reporting-") for operation in reporting)
+
+
+def test_workspace_http_query_contract(workspace_case: _WorkspaceCase, session: Session, client) -> None:
+    """通过真实 FastAPI/TestClient 读取已发布本地报表，禁止隐式平台请求。"""
+    from app.api.deps import get_current_user
+    from app.main import app
+
+    user = session.get(User, workspace_case.primary.context.actor_id)
+    assert user is not None
+    # B3 的生产路由提交快照；在这个 fixture 中把 commit 降为 flush，
+    # 让根 conftest 的 PostgreSQL 外层事务仍能回滚合成数据。
+    client_commit = session.commit
+    session.commit = cast(Any, lambda: session.flush())
+    previous = app.dependency_overrides.get(get_current_user)
+    app.dependency_overrides[get_current_user] = lambda: user
+    try:
+        response = client.get(
+            f"/api/tenants/{workspace_case.primary.context.tenant_id}/ads",
+            params={
+                "bc_id": workspace_case.primary.bc_id,
+                "dimension": "campaign",
+                "start_date": "2026-09-30",
+                "end_date": "2026-09-30",
+                "limit": 2,
+            },
+        )
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["total"] == 3
+        assert payload["snapshot"]["filters"]["dimension"] == "campaign"
+    finally:
+        session.commit = cast(Any, client_commit)
+        if previous is None:
+            app.dependency_overrides.pop(get_current_user, None)
+        else:
+            app.dependency_overrides[get_current_user] = previous
 
 
 def test_workspace_snapshot_contract(workspace_case: _WorkspaceCase, session: Session) -> None:
