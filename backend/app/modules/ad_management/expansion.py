@@ -60,9 +60,12 @@ class Expansion:
     selection_material_uses: tuple[MaterialUseRef, ...]
     items: tuple[ExpandedItem, ...]
     commands: tuple[ManagementCommand, ...]
+    selected_count_override: int | None = None
 
     @property
     def selected_count(self) -> int:
+        if self.selected_count_override is not None:
+            return self.selected_count_override
         return len(self.selection_refs)
 
 
@@ -577,11 +580,46 @@ def _expand(
         if row is not None:
             objects[_ref_key(ref)] = row
 
+    smart_types = {"SMART_PLUS", "UPGRADED_SMART_PLUS", "SMART+", "SMARTPLUS"}
+    account_fallback = False
+    # Account/drama rows may intentionally carry no synthetic EntityRef. In
+    # that case expand the exact advertiser scope captured by B, using only
+    # route-bound rows observed before the frozen selection.
+    if not objects and not refs and not uses and selection_record.advertiser_ids:
+        account_fallback = True
+        account_campaigns = session.exec(
+            select(AdObject).where(
+                AdObject.tenant_id == context.tenant_id,
+                col(AdObject.advertiser_id).in_(selection_record.advertiser_ids),
+                AdObject.kind == "campaign",
+                AdObject.source_connection_id == route.connection_id,
+                AdObject.source_channel == route.channel,
+                AdObject.observed_at <= selection_record.created_at,
+            ).execution_options(populate_existing=True)
+        ).all()
+        for campaign in account_campaigns:
+            objects[_ref_key(campaign.ref)] = campaign
+        if mutation.field == "roas":
+            for campaign in account_campaigns:
+                siblings = session.exec(
+                    select(AdObject).where(
+                        AdObject.tenant_id == context.tenant_id,
+                        AdObject.advertiser_id == campaign.advertiser_id,
+                        AdObject.kind == "adgroup",
+                        AdObject.parent_kind == "campaign",
+                        AdObject.parent_remote_id == campaign.remote_id,
+                        AdObject.source_connection_id == route.connection_id,
+                        AdObject.source_channel == route.channel,
+                        AdObject.observed_at <= selection_record.created_at,
+                    ).execution_options(populate_existing=True)
+                ).all()
+                for sibling in siblings:
+                    objects[_ref_key(sibling.ref)] = sibling
+
     # Smart+ ROAS is a series operation. Read only existing group rows from the
     # frozen route and before the selection timestamp, so later-created siblings
     # cannot be absorbed into this preview.
     candidate_seed = tuple(objects.values())
-    smart_types = {"SMART_PLUS", "UPGRADED_SMART_PLUS", "SMART+", "SMARTPLUS"}
     # Campaign/account/drama selections represent the whole series even when
     # the campaign row itself has no Smart+ marker.  Smart+ descendants are
     # therefore discovered for every selected campaign, while ad/adgroup
@@ -620,38 +658,6 @@ def _expand(
             ).all()
             for sibling in siblings:
                 objects[_ref_key(sibling.ref)] = sibling
-    # Account-dimension B rows carry advertiser_ids while intentionally having no
-    # synthetic account EntityRef. Expand their pre-selection campaign/group
-    # directory rows under the same route and cutoff.
-    if not candidate_seed and mutation.field in {"roas", "status"}:
-        account_campaigns = session.exec(
-            select(AdObject).where(
-                AdObject.tenant_id == context.tenant_id,
-                col(AdObject.advertiser_id).in_(selection_record.advertiser_ids),
-                AdObject.kind == "campaign",
-                AdObject.source_connection_id == route.connection_id,
-                AdObject.source_channel == route.channel,
-                AdObject.observed_at <= selection_record.created_at,
-            ).execution_options(populate_existing=True)
-        ).all()
-        for campaign in account_campaigns:
-            objects[_ref_key(campaign.ref)] = campaign
-        if mutation.field == "roas":
-            for campaign in account_campaigns:
-                siblings = session.exec(
-                    select(AdObject).where(
-                        AdObject.tenant_id == context.tenant_id,
-                        AdObject.advertiser_id == campaign.advertiser_id,
-                        AdObject.kind == "adgroup",
-                        AdObject.parent_kind == "campaign",
-                        AdObject.parent_remote_id == campaign.remote_id,
-                        AdObject.source_connection_id == route.connection_id,
-                        AdObject.source_channel == route.channel,
-                        AdObject.observed_at <= selection_record.created_at,
-                    ).execution_options(populate_existing=True)
-                ).all()
-                for sibling in siblings:
-                    objects[_ref_key(sibling.ref)] = sibling
     commands: list[ManagementCommand] = []
     command_by_ref: dict[tuple[Any, ...], ManagementCommand] = {}
     command_items: dict[tuple[Any, ...], ExpandedItem] = {}
@@ -830,7 +836,7 @@ def _expand(
             else:
                 add_item(row, use=use)
     else:
-        candidate_rows: list[AdObject] = []
+        candidate_rows: list[AdObject] = list(objects.values()) if account_fallback else []
         for ref in refs:
             row = objects.get(_ref_key(ref))
             if row is not None:
@@ -1014,7 +1020,13 @@ def _expand(
         if any(len(values) > 1 for values in by_series.values()):
             raise DomainError("config_conflict", "同系列不同最终 ROAS，预览拒绝")
 
-    return Expansion(refs, uses, tuple(items), tuple(commands))
+    return Expansion(
+        refs,
+        uses,
+        tuple(items),
+        tuple(commands),
+        len(selection_record.advertiser_ids) if account_fallback else None,
+    )
 
 
 def expand_targets(

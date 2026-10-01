@@ -256,6 +256,31 @@ def test_campaign_selection_expands_existing_smart_plus_groups(session, manageme
     }
 
 
+def test_account_selection_fallback_expands_route_fenced_series(session, management_env):
+    context, bc, account, route, selection = management_env
+    old = selection.created_at - timedelta(minutes=1)
+    campaign = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "account-series")
+    group = EntityRef(context.tenant_id, account.advertiser_id, "adgroup", "account-group")
+    session.add_all([
+        _row(campaign, ad_type="REGULAR", connection_id=route.connection_id, observed_at=old),
+        _row(group, parent=campaign, ad_type="SMART_PLUS", configuration={"roas_bid": "1.20"}, connection_id=route.connection_id, observed_at=old),
+    ])
+    _cap(session, context, bc, route, account.advertiser_id, "update_roas", "adgroup")
+    session.flush()
+    # Account rows can be aggregate B selections with no synthetic account ref.
+    _set_selection(selection, [])
+    preview = prepare_preview(
+        session,
+        context,
+        bc.bc_id,
+        selection.id,
+        MutationSpec(field="roas", mode="set", value=Decimal("1.50")),
+    )
+    assert preview.counts.selected == 1
+    assert {item.ref for item in preview.items if item.execution_result == "PENDING"} == {group}
+    assert all(item.ref.kind != "account" for item in preview.items)
+
+
 def test_unrelated_include_parent_and_excluded_parent_are_fenced(session, management_env):
     context, bc, account, route, selection = management_env
     campaign = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "parent-series")
