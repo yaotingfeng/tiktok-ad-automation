@@ -21,6 +21,9 @@ test.describe("ads workspace", () => {
     await expect(
       page.getByRole("cell", { name: "外部广告", exact: true }),
     ).toBeVisible()
+    await expect(
+      page.getByRole("cell", { name: "目录未同步", exact: true }),
+    ).toBeVisible()
   })
 
   test("切BC忽略迟到响应", async ({ page }) => {

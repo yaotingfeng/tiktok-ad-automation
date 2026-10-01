@@ -92,7 +92,6 @@ export async function adsBoundary(
               drama_name: "总裁归来",
               advertiser_id: ADVERTISER,
               status: "ENABLE",
-              target_roas: "1.50",
             }
       return route.fulfill({
         headers,
