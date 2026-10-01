@@ -124,7 +124,7 @@ assert r.items[0].execution_result == "UNSUPPORTED" and r.counts.targets == 0
 
 **Interfaces:** `submit_management_task(...)`；`claim_mutation(session: Session, refs: tuple[EntityRef,...], owner_id: UUID) -> MutationLease`，lease 含领取代数。锁键按 tenant/账户/祖先系列协调重叠操作，既有 build.disable_adgroup 与新管理共用；网络调用不持有数据库行事务锁。
 
-- [ ] RED：新增 `test_duplicate_submission_and_cross_bc_lock`；真实 PostgreSQL 双连接并发提交和真实 Redis 准入，重复 delivery fixture 重放下述结果；另测同对象跨 BC 与组隔离互斥。
+- [x] RED：新增 `test_duplicate_submission_and_cross_bc_lock`；真实 PostgreSQL 双连接并发提交和真实 Redis 准入，重复 delivery fixture 重放下述结果；另测同对象跨 BC 与组隔离互斥。
 ```python
 first, second = submit_same_preview_concurrently(preview, idempotency_key)
 assert first.task_id == second.task_id
@@ -133,10 +133,10 @@ lease = claim_mutation(session_a, (target_ref,), owner_a)
 with pytest.raises(DomainError, match="mutation_busy"):
     claim_mutation(session_b, (same_object_via_other_bc,), owner_b)
 ```
-- [ ] Run RED：`uv run --frozen pytest tests/modules/ad_management/test_submission_concurrency.py -q`，应因提交/互斥未实现失败。
-- [ ] Implement：校验未过期摘要、显式排除和权限，单事务保存不可变目标/冻结路由/Outbox。双请求摘要不一致冲突；不重新搜索。互斥范围包含所有联动组、祖先启停及素材所属广告；以租约＋数据库代数阻止旧工作者发布，失联已可能发送请求必须转核实再释放重发资格。
-- [ ] GREEN：上述测试通过，加入事务在 Outbox 前失败无残留、预览 301 秒拒绝、重复领取不产生第二次发送、非相交系列可并发。
-- [ ] Commit：`ad-management: atomically submit and coordinate remote mutations`；root 合入已核实的旧隔离调用点，无旁路写入。
+- [x] Run RED：`uv run --frozen pytest tests/modules/ad_management/test_submission_concurrency.py -q`，应因提交/互斥未实现失败。
+- [x] Implement：校验未过期摘要、显式排除和权限，单事务保存不可变目标/冻结路由/Outbox。双请求摘要不一致冲突；不重新搜索。互斥范围包含所有联动组、祖先启停及素材所属广告；以租约＋数据库代数阻止旧工作者发布，失联已可能发送请求必须转核实再释放重发资格。
+- [x] GREEN：上述测试通过，加入事务在 Outbox 前失败无残留、预览 301 秒拒绝、重复领取不产生第二次发送、非相交系列可并发。
+- [x] Commit：`a1965c9` 基础实现，`1e8e260` 修复并提交 Celery handoff、Lua 原子 fence/续租、任务项审计迁移与 nested savepoint；最终独立复审 `task-4-rereview-final.md` 为 APPROVED。
 
 ### Task 5：执行、成功回执和未知结果核查
 

@@ -1562,3 +1562,9 @@
 - 预览只接受未过期 B selection，保存 selection/snapshot/membership、路由与配置证据，5 分钟 digest 有效期；ROAS/预算使用 Decimal 精确计算，预算 owner 去重，同系列冲突、缺失 parent/owner/material、普通素材独立状态均显式 `UNSUPPORTED` 或拒绝。
 - 所有对象和历史 Smart+ sibling 均受冻结 route 的 tenant/BC/source connection/channel 与选择时间 fence；account/drama 维度仅在原始冻结选择为空时按维度扩展，显式排除优先于 parent/series fallback；grouping_revision 沿 campaign ancestor 记录。
 - 隔离 PostgreSQL C3 相关回归最终 37 项通过（最终复审聚焦 35 项）；Ruff、ty、compileall、`git diff --check` 通过。最终独立复审 `task-3-rereview-final-5.md` 为 APPROVED；未调用真实 TikTok/MCP、未写广告、未部署。
+
+## 2026-10-01：C4 原子提交、Outbox 与跨路径对象互斥已完成
+
+- C4 基础提交为 `a1965c9`，修复提交为 `1e8e260`：管理预览按幂等键、摘要、过期时间、当前路由和管理能力重新校验，在同一事务保存冻结任务/任务项并写入单条 transactional outbox；任务项独立保存 `reason`、`membership_digest`，新增 `ad_management_task_item_audit` 迁移。
+- 新增 `ad_management.execute` 的可执行 fail-closed handoff；C5 执行器接入前，合法投递会将任务停在 `NEEDS_REVIEW`，错误 envelope、租户/操作者或任务身份不会被吞掉。Redis 多对象 Lua 租约按租户/账户/对象及本地祖先展开，跨 BC/连接共享锁域；原子 fence 会核验全部 key 并续租，既有 SDK/MCP `disable_adgroup` 与广告管理共用该域。
+- 隔离 PostgreSQL/Redis 回归：C4 并发测试 7 项通过，管理模块与 group isolation 合计 63 项通过且无 warning；新数据库从零 `alembic upgrade head` 验证迁移和两列存在，Celery registry 含 `ad_management.execute`；Ruff、compileall、`git diff --check` 通过。最终独立复审 `task-4-rereview-final.md` 为 APPROVED；未调用真实 TikTok/MCP、未写广告、未部署。
