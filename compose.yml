@@ -18,6 +18,7 @@ x-app-environment: &app-environment
   ADS_SYNC_ENABLED: ${ADS_SYNC_ENABLED:-false}
   ADS_DIRECTORY_WORKER_CONCURRENCY: ${ADS_DIRECTORY_WORKER_CONCURRENCY:-1}
   ADS_REPORTING_WORKER_CONCURRENCY: ${ADS_REPORTING_WORKER_CONCURRENCY:-1}
+  AD_MANAGEMENT_WORKER_CONCURRENCY: ${AD_MANAGEMENT_WORKER_CONCURRENCY:-1}
   BC_CAPABILITY_MAX_AGE_SECONDS: ${BC_CAPABILITY_MAX_AGE_SECONDS:-86400}
   SCENE_MAX_AGE_SECONDS: ${SCENE_MAX_AGE_SECONDS:-86400}
   MATERIAL_SDK_MAX_UPLOAD_BYTES: ${MATERIAL_SDK_MAX_UPLOAD_BYTES:-268435456}
@@ -104,6 +105,11 @@ services:
   worker-ads-reporting:
     <<: *app
     command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ads-reporting, --concurrency, '${ADS_REPORTING_WORKER_CONCURRENCY:-1}', '--hostname=ads-reporting@%h', --loglevel=INFO]
+    depends_on:
+      prestart: {condition: service_completed_successfully}
+  worker-ad-management:
+    <<: *app
+    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ad-management, --concurrency, '${AD_MANAGEMENT_WORKER_CONCURRENCY:-1}', '--hostname=ad-management@%h', --loglevel=INFO]
     depends_on:
       prestart: {condition: service_completed_successfully}
   beat:

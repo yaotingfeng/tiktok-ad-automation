@@ -99,6 +99,19 @@ services:
     stop_grace_period: 120s
     init: true
     logging: *production-logging
+  worker-ad-management:
+    extends:
+      file: compose.yml
+      service: worker-ad-management
+    image: *release-image
+    environment:
+      AD_MANAGEMENT_WORKER_CONCURRENCY: ${AD_MANAGEMENT_WORKER_CONCURRENCY:-1}
+    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ad-management, --concurrency, '${AD_MANAGEMENT_WORKER_CONCURRENCY:-1}', '--hostname=ad-management@%h', --loglevel=INFO]
+    cpus: 0.75
+    mem_limit: 768m
+    stop_grace_period: 120s
+    init: true
+    logging: *production-logging
   beat:
     image: *release-image
     environment:

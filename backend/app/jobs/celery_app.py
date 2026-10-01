@@ -37,6 +37,7 @@ celery_app.conf.update(
         "app.modules.ads.tasks",
         "app.modules.reporting.tasks",
         "app.modules.reporting.export_tasks",
+        "app.modules.ad_management.tasks",
         "app.modules.ad_management.submissions",
     ),
     task_queues=(

@@ -631,6 +631,7 @@ def open_tiktok_gateway(
                             advertiser, f"management.{operation}", kind
                         ),
                         management_scope=management_scope,
+                        before_send=before_request,
                         deadline=task_deadline,
                     ),
                     materials=SDKMaterialOperations(

@@ -16,12 +16,9 @@ from sqlalchemy import text
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
-from app.core.db import engine
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
-from app.jobs.celery_app import celery_app
 from app.jobs.outbox import enqueue_after_commit
-from app.jobs.tasks import register_dispatch_task
 from app.modules.accounts.routing import verify_route
 from app.modules.ad_management.models import (
     ManagementPreview,
@@ -30,64 +27,11 @@ from app.modules.ad_management.models import (
     ManagementTaskItem,
 )
 from app.modules.ad_management.schemas import ManagementCounts, ManagementTaskPublic
+from app.modules.ad_management.tasks import (
+    MANAGEMENT_DISPATCH_TASK,
+    execute_management_task,  # noqa: F401
+)
 from app.modules.tenants.permissions import require_tenant
-
-MANAGEMENT_DISPATCH_TASK = "ad_management.execute"
-register_dispatch_task(MANAGEMENT_DISPATCH_TASK, "ad-management")
-
-
-def _dispatch_identity(payload: dict[str, Any]) -> tuple[UUID, int]:
-    """Validate the tiny outbox envelope before opening a worker transaction."""
-    from app.jobs.outbox import validate_dispatch_payload
-
-    validate_dispatch_payload(payload)
-    if set(payload) != {"task_id", "generation"}:
-        raise DomainError("dispatch_payload_invalid", "管理任务参数无效")
-    try:
-        task_id = UUID(str(payload["task_id"]))
-    except (TypeError, ValueError, AttributeError) as exc:
-        raise DomainError("dispatch_payload_invalid", "管理任务标识无效") from exc
-    generation = payload["generation"]
-    if type(generation) is not int or generation < 1:
-        raise DomainError("dispatch_payload_invalid", "管理任务领取代数无效")
-    return task_id, generation
-
-
-@celery_app.task(name=MANAGEMENT_DISPATCH_TASK)
-def execute_management_task(*, tenant_id: str, actor_id: str, payload: dict[str, Any]) -> str:
-    """Durable handoff for the C5 executor, never an empty acknowledgement.
-
-    C4 owns admission and outbox delivery.  Until C5 supplies the physical
-    executor, a valid dispatch is explicitly parked for review instead of
-    disappearing as an unknown Celery task or being replayed blindly.
-    """
-    try:
-        tenant = UUID(tenant_id)
-        actor = UUID(actor_id)
-    except (TypeError, ValueError, AttributeError) as exc:
-        raise DomainError("dispatch_payload_invalid", "管理任务操作者无效") from exc
-    task_id, generation = _dispatch_identity(payload)
-    with Session(engine) as session, session.begin():
-        task = session.exec(
-            select(ManagementTask).where(
-                ManagementTask.id == task_id,
-                ManagementTask.tenant_id == tenant,
-                ManagementTask.actor_id == actor,
-            )
-        ).one_or_none()
-        if task is None:
-            raise DomainError("resource_not_found", "管理任务不存在")
-        if task.status in {"SUCCEEDED", "PARTIAL", "FAILED", "CANCELLED", "NEEDS_REVIEW"}:
-            return task.status
-        # ``generation`` is persisted in the dispatch payload and must be
-        # present in the eventual C5 claim; do not treat a stale envelope as a
-        # new request.  The current schema has no task claim column yet, so the
-        # handoff records review state and leaves the immutable target intact.
-        task.status = "NEEDS_REVIEW"
-        task.counts = {**task.counts, "dispatch_generation": generation}
-        task.updated_at = _now()
-        session.add(task)
-    return "NEEDS_REVIEW"
 
 
 def _now() -> datetime:

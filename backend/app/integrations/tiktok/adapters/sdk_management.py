@@ -154,12 +154,14 @@ class SdkManagementOperations:
         authorization_check: CapabilityCheck | None = None,
         require_capability: CapabilityCheck | None = None,
         management_scope: ManagementScope | None = None,
+        before_send: Callable[[], None] | None = None,
     ):
         self._client = client
         self._scope = request_scope
         self._deadline = deadline
         self._check = capability_check or authorization_check or require_capability
         self._management_scope = management_scope
+        self._before_send = before_send
         if self._check is None:
             raise DomainError("management_permission_unverified", "管理请求缺少账户能力门禁")
         if self._management_scope is None:
@@ -171,7 +173,10 @@ class SdkManagementOperations:
         operation = f"management.{command.operation}"
         if operation not in {f"management.{name}" for name in MANAGEMENT_OPERATIONS}:
             raise DomainError("management_operation_invalid", "管理操作无效")
-        self._check(command.ref.advertiser_id, command.operation, command.ref.kind)
+        check = self._check
+        management_scope = self._management_scope
+        assert check is not None and management_scope is not None
+        check(command.ref.advertiser_id, command.operation, command.ref.kind)
         smart_plus = _smart_plus(command)
         payload = _payload(command, smart_plus=smart_plus)
         methods: dict[str, Any]
@@ -198,7 +203,7 @@ class SdkManagementOperations:
         sent = False
         try:
             remaining(self._deadline)
-            scope = self._management_scope(
+            scope = management_scope(
                 command.ref.advertiser_id,
                 command.operation,
                 command.ref.kind,
@@ -206,6 +211,8 @@ class SdkManagementOperations:
             )
             with scope:
                 budget = remaining(self._deadline)
+                if self._before_send is not None:
+                    self._before_send()
                 sent = True
                 method(
                     self._client.default_headers["Access-Token"],

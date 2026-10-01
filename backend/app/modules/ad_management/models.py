@@ -216,8 +216,12 @@ class ManagementTaskItem(SQLModel, table=True):
             "execution_result IN ('PENDING','ACCEPTED','REJECTED','NOT_SENT','UNKNOWN','NO_CHANGE','CONFLICT','UNSUPPORTED')",
             name="ck_management_task_item_result",
         ),
+        CheckConstraint("claim_generation >= 1", name="ck_management_task_item_claim_generation"),
         Index(
             "ix_management_task_item_status", "tenant_id", "task_id", "execution_result"
+        ),
+        Index(
+            "ix_management_task_item_claim_due", "tenant_id", "task_id", "claimed_until"
         ),
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -239,6 +243,12 @@ class ManagementTaskItem(SQLModel, table=True):
     delivery_status: str | None = Field(default=None, max_length=32)
     request_attribution: str | None = Field(default=None, max_length=64)
     grouping_revision: int = 0
+    # C5 单 item 领取围栏：旧 worker 即使在 provider 返回后醒来，也不能写回。
+    claim_generation: int = Field(default=1, ge=1)
+    claim_token: UUID | None = Field(default=None)
+    claimed_until: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
     parent_ref: dict | None = Field(
         default=None, sa_column=Column(JSONB, nullable=True)
     )
