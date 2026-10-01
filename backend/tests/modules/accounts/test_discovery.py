@@ -1,5 +1,6 @@
 """目录发布单元回归：输入已观察页，完整性失败不得触碰旧快照。"""
 
+import json
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -10,6 +11,7 @@ from sqlmodel import select
 from app.core.credentials import encrypt_credentials
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.discovery import AUTHORIZED_LIST_SOURCE
+from app.integrations.tiktok.mcp_auth.bootstrap import observed_subject
 from app.integrations.tiktok.official.authorization import material_authorization
 from app.modules.accounts.api_directory import SCHEMA_DIGEST
 from app.modules.accounts.discovery import finalize_directory
@@ -31,6 +33,23 @@ ROW = {
     "timezone": "UTC",
     "remote_status": "ENABLE",
 }
+
+
+def test_observed_subject_normalizes_immutable_authorization_fields():
+    class _Observed:
+        facts = material_authorization(
+            {"scope": "[2,6]", "management_operations": "[\"ad.update\"]"},
+            observed_at=datetime.now(UTC),
+        )
+
+    class _Gateway:
+        def observe_authorization(self):
+            return _Observed()
+
+    payload = observed_subject(_Gateway())
+    assert payload["scopes"] == ["2", "6"]
+    assert payload["management_operations"] == []
+    json.dumps(payload)
 
 
 def staged(session, run, stage, rows, *, bc_id="", page=1, total_pages=1, last=True):

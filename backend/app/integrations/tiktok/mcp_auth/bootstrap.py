@@ -381,6 +381,10 @@ def observed_subject(gateway: Any) -> dict[str, Any]:
     observed = gateway.observe_authorization()
     facts = asdict(observed.facts)
     facts["scopes"] = list(observed.facts.scopes)
+    # AuthorizationFacts uses immutable sets internally, while call evidence is
+    # persisted as JSONB.  Normalize every set-valued field at this boundary so
+    # a real MCP observation cannot fail during the database flush.
+    facts["management_operations"] = sorted(observed.facts.management_operations)
     facts["observed_at"] = observed.facts.observed_at.isoformat()
     return facts
 
