@@ -144,7 +144,7 @@ with pytest.raises(DomainError, match="mutation_busy"):
 
 **Interfaces:** `execute_item(database_engine: Engine, item_id: UUID) -> None`；`reconcile_item(session: Session, context: TenantContext, item_id: UUID) -> ManagementItemPublic`。公共项 DTO 定义 `execution_result,observation_state,delivery_status,request_attribution`；消费 A 的 `modules/reporting/scheduling.py`：`request_sync(session, *, context: TenantContext, request: SyncRequest) -> UUID`；SyncRequest 携原冻结 route、受影响 advertiser_ids/refs，`scope='targeted'`，start_date/end_date 为 None。仅提交合并刷新，不复用创建步骤表。
 
-- [ ] RED：新增 `test_success_without_blocking_read_and_unknown_not_resent`；外部传输分别返回明确成功/超时，真实数据库记录请求已武装后崩溃；下面两组断言不能被同步回读阻塞。
+- [x] RED：新增 `test_success_without_blocking_read_and_unknown_not_resent`；外部传输分别返回明确成功/超时，真实数据库记录请求已武装后崩溃；下面两组断言不能被同步回读阻塞。
 ```python
 execute_item(engine, accepted_item.id)
 assert load_item(accepted_item.id).execution_result == "ACCEPTED"
@@ -154,10 +154,10 @@ assert wire.write_count(uncertain_item.id) == 1
 result = reconcile_item(session, context, uncertain_item.id)
 assert result.observation_state == "TARGET_OBSERVED" and result.request_attribution == "UNKNOWN"
 ```
-- [ ] Run RED：`uv run --frozen pytest tests/modules/ad_management/test_execution.py -q`，应因执行与核查缺失失败。
-- [ ] Implement：注册独立 `ad-management` 队列，补齐 Compose/systemd 消费者、`AD_MANAGEMENT_WORKER_CONCURRENCY=1` 注入与新增精确操作的非空调用策略校验/示例，不在本任务部署。每次物理请求前再验用户权限/冻结路由/领取代数/原配置/父子关系/剧归组，冲突仅阻断相关项。明确成功即记接受并后台刷新；后续不同值不重发旧任务。可能已发送的超时记 NEEDS_REVIEW，核查不等于期望值仍不能重发；仅明确未发送/可重试拒绝且原值未变才可续接。
-- [ ] GREEN：上述测试通过；追加撤权发生在准入后、改名迁组、旧领取代写回、请求成功但 DB 回执提交失败、跨通道不回退，以及一个失败项不阻断无关项；运行 `uv run --frozen pytest tests/jobs/test_ads_reporting_queues.py -q` 验证管理消费者映射、变量注入、缺调用策略拒发及不挤占搭建最低份额。
-- [ ] Commit：`ad-management: persist receipts and reconcile uncertain results`；提交具体文件，root 协调 worker 注册及队列映射。
+- [x] Run RED：`uv run --frozen pytest tests/modules/ad_management/test_execution.py -q`，应因执行与核查缺失失败。
+- [x] Implement：注册独立 `ad-management` 队列，补齐 Compose/systemd 消费者、`AD_MANAGEMENT_WORKER_CONCURRENCY=1` 注入与新增精确操作的非空调用策略校验/示例，不在本任务部署。每次物理请求前再验用户权限/冻结路由/领取代数/原配置/父子关系/剧归组，冲突仅阻断相关项。明确成功即记接受并后台刷新；后续不同值不重发旧任务。可能已发送的超时记 NEEDS_REVIEW，核查不等于期望值仍不能重发；仅明确未发送/可重试拒绝且原值未变才可续接。
+- [x] GREEN：上述测试通过；追加撤权发生在准入后、改名迁组、旧领取代写回、请求成功但 DB 回执提交失败、跨通道不回退，以及一个失败项不阻断无关项；运行 `uv run --frozen pytest tests/jobs/test_ads_reporting_queues.py -q` 验证管理消费者映射、变量注入、缺调用策略拒发及不挤占搭建最低份额。
+- [x] Commit：`7d28573`；最终独立窄复审 `task-5-rereview-final.md` 为 APPROVED。
 
 ### Task 6：任务查询、取消/重试/恢复和 HTTP 权限
 

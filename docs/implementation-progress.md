@@ -1568,3 +1568,9 @@
 - C4 基础提交为 `a1965c9`，修复提交为 `1e8e260`：管理预览按幂等键、摘要、过期时间、当前路由和管理能力重新校验，在同一事务保存冻结任务/任务项并写入单条 transactional outbox；任务项独立保存 `reason`、`membership_digest`，新增 `ad_management_task_item_audit` 迁移。
 - 新增 `ad_management.execute` 的可执行 fail-closed handoff；C5 执行器接入前，合法投递会将任务停在 `NEEDS_REVIEW`，错误 envelope、租户/操作者或任务身份不会被吞掉。Redis 多对象 Lua 租约按租户/账户/对象及本地祖先展开，跨 BC/连接共享锁域；原子 fence 会核验全部 key 并续租，既有 SDK/MCP `disable_adgroup` 与广告管理共用该域。
 - 隔离 PostgreSQL/Redis 回归：C4 并发测试 7 项通过，管理模块与 group isolation 合计 63 项通过且无 warning；新数据库从零 `alembic upgrade head` 验证迁移和两列存在，Celery registry 含 `ad_management.execute`；Ruff、compileall、`git diff --check` 通过。最终独立复审 `task-4-rereview-final.md` 为 APPROVED；未调用真实 TikTok/MCP、未写广告、未部署。
+
+## 2026-10-01：C5 广告管理执行、回执与未知结果核查已完成
+
+- C5 最终提交为 `7d28573`；执行器按任务项隔离，领取记录与预发送 attempt 同事务持久化，Redis 对象租约、数据库 claim generation/token、冻结 route、权限、父子关系和当前原始值在每次物理请求前重新核验。缺失观测、撤权、改名迁组或旧领取均 fail-closed，不跨 API/MCP 通道回退。
+- 明确成功立即写入 attempt/ReceiptRow 并异步创建 targeted report refresh；provider 后回执失败、租约失效、过期预发送记录均转 UNKNOWN 并保留可审计回执，后续投递不重发未知变更。成功后的 targeted refresh 失败会写 `REFRESH_PENDING` 与管理 outbox，worker 只重试刷新，不重复发送广告变更。
+- C5+C4/model/preview 隔离 PostgreSQL/Redis 回归 40 项通过，管理适配器聚焦回归 17 项通过；Ruff、compileall、`git diff --check`、Alembic check 通过。最终独立窄复审 `task-5-rereview-final.md` 为 APPROVED。未调用真实 TikTok/MCP、未写广告、未部署。
