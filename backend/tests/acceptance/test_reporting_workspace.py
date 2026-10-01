@@ -67,6 +67,8 @@ class _WorkspaceCase:
 
 def _scope(session: Session, *, label: str, bc_id: str) -> _Scope:
     tenant_id, actor_id = uuid4(), uuid4()
+    # 先提交被复合外键引用的租户/用户，再提交 membership 与 BC/账户目录。
+    # 显式分段避免真实 PostgreSQL flush 时账户外键先于 tenant 插入。
     session.add_all(
         [
             User(
@@ -76,13 +78,16 @@ def _scope(session: Session, *, label: str, bc_id: str) -> _Scope:
                 is_active=True,
             ),
             Tenant(id=tenant_id, name=f"B6 tenant {label}"),
-            TenantMembership(
-                tenant_id=tenant_id,
-                user_id=actor_id,
-                role="operator",
-                active=True,
-            ),
         ]
+    )
+    session.flush()
+    session.add(
+        TenantMembership(
+            tenant_id=tenant_id,
+            user_id=actor_id,
+            role="operator",
+            active=True,
+        )
     )
     connection = TikTokConnection(
         tenant_id=tenant_id,
@@ -440,21 +445,32 @@ def test_workspace_fastapi_contract_has_no_external_write_routes() -> None:
     from app.main import app
 
     paths = app.openapi()["paths"]
-    expected = {
-        "/api/tenants/{tenant_id}/ads",
-        "/api/tenants/{tenant_id}/reports/trend",
-        "/api/tenants/{tenant_id}/ad-selections",
-        "/api/tenants/{tenant_id}/report-exports",
+    expected_operations = {
+        ("GET", "/api/tenants/{tenant_id}/ads"): "ads_reporting-query_ads",
+        ("GET", "/api/tenants/{tenant_id}/ads/{kind}/{remote_id}"): "ads_reporting-ad_detail",
+        ("GET", "/api/tenants/{tenant_id}/reports/trend"): "ads_reporting-report_trend",
+        ("POST", "/api/tenants/{tenant_id}/ad-selections"): "ads_reporting-freeze_ad_selection",
+        ("GET", "/api/tenants/{tenant_id}/report-views"): "ads_reporting-list_report_views",
+        ("POST", "/api/tenants/{tenant_id}/report-views"): "ads_reporting-create_report_view",
+        ("PATCH", "/api/tenants/{tenant_id}/report-views/{view_id}"): "ads_reporting-update_report_view",
+        ("DELETE", "/api/tenants/{tenant_id}/report-views/{view_id}"): "ads_reporting-delete_report_view",
+        ("GET", "/api/tenants/{tenant_id}/report-exports"): "ads_reporting-list_report_exports",
+        ("POST", "/api/tenants/{tenant_id}/report-exports"): "ads_reporting-create_report_export",
+        ("GET", "/api/tenants/{tenant_id}/report-exports/{export_id}"): "ads_reporting-get_report_export",
+        ("GET", "/api/tenants/{tenant_id}/report-exports/{export_id}/download"): "ads_reporting-download_report_export",
+        ("GET", "/api/tenants/{tenant_id}/ad-sync-runs"): "ads_reporting-list_ad_sync_runs",
+        ("POST", "/api/tenants/{tenant_id}/ad-sync-runs"): "ads_reporting-request_ad_sync",
+        ("GET", "/api/tenants/{tenant_id}/ad-sync-runs/{run_id}"): "ads_reporting-get_ad_sync_run",
     }
-    assert expected <= set(paths)
-    reporting = [
-        operation
-        for path in paths.values()
-        for operation in path.values()
+    actual_operations = {
+        (method.upper(), path): operation["operationId"]
+        for path, methods in paths.items()
+        for method, operation in methods.items()
         if operation.get("tags") == ["ads_reporting"]
-    ]
-    assert reporting
-    assert all(operation["operationId"].startswith("ads_reporting-") for operation in reporting)
+    }
+    # 该稳定映射就是生成客户端的静态输入：路径、HTTP method、operationId
+    # 任一漂移都会使客户端合同与服务端不一致。
+    assert actual_operations == expected_operations
 
 
 def test_workspace_http_query_contract(workspace_case: _WorkspaceCase, session: Session, client, monkeypatch) -> None:
@@ -542,7 +558,20 @@ def test_workspace_http_query_contract(workspace_case: _WorkspaceCase, session: 
                 "end_date": "2026-09-30",
             },
         )
-        assert wrong_bc.status_code == 403, wrong_bc.text
+        assert wrong_bc.status_code == 200, wrong_bc.text
+        assert wrong_bc.json()["total"] == 0
+        assert wrong_bc.json()["items"] == []
+        foreign_snapshot = client.get(
+            f"/api/tenants/{workspace_case.primary.context.tenant_id}/ads",
+            params={
+                "bc_id": workspace_case.other.bc_id,
+                "dimension": "campaign",
+                "start_date": "2026-09-30",
+                "end_date": "2026-09-30",
+                "snapshot_id": snapshot_id,
+            },
+        )
+        assert foreign_snapshot.status_code == 404, foreign_snapshot.text
         assert provider_calls == []
     finally:
         session.commit = cast(Any, client_commit)
