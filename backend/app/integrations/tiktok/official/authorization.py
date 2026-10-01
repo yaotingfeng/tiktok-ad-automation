@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 
 from app.integrations.tiktok.contracts.accounts import AuthorizationFacts
+from app.integrations.tiktok.contracts.management import MANAGEMENT_OPERATIONS
 
 ISSUER = "https://business-api.tiktok.com"
 RESOURCE = "https://business-api.tiktok.com/open_api/v1.3"
@@ -26,6 +27,14 @@ def material_authorization(
         known = True
     except KeyError, ValueError, TypeError:
         scopes, known = set(), False
+    # 管理写操作必须来自授权材料中的明确操作声明；scope 数字本身不作猜测映射。
+    management = frozenset()
+    try:
+        raw_operations = json.loads(material.get("management_operations", "[]"))
+        if isinstance(raw_operations, list) and all(isinstance(v, str) for v in raw_operations):
+            management = frozenset(v for v in raw_operations if v in MANAGEMENT_OPERATIONS)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        management = frozenset()
     # 已有官方权限合同 doc1753986142651394；此处不以目录可见性授予写入。
     return AuthorizationFacts(
         subject_id=None,
@@ -35,6 +44,7 @@ def material_authorization(
         scopes=tuple(str(v) for v in sorted(scopes)),
         read_authorized=None,
         build_authorized=(2 in scopes) if known else None,
+        management_operations=management,
         upload_authorized=bool(scopes & {6, 61, 611}) if known else None,
         evidence_source="OFFICIAL_TOKEN_SCOPE",
         observed_at=observed_at,

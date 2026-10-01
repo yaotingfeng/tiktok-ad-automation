@@ -22,10 +22,12 @@ from app.integrations.tiktok.adapters.ads_read import (
 )
 from app.integrations.tiktok.adapters.mcp_ads import McpAdsReadOperations
 from app.integrations.tiktok.adapters.mcp_builds import McpBuildOperations
+from app.integrations.tiktok.adapters.mcp_management import McpManagementOperations
 from app.integrations.tiktok.adapters.mcp_materials import MCPMaterialOperations
 from app.integrations.tiktok.adapters.mcp_reporting import McpReportingOperations
 from app.integrations.tiktok.adapters.sdk_ads import SdkAdsReadOperations
 from app.integrations.tiktok.adapters.sdk_builds import ApiBuildOperations
+from app.integrations.tiktok.adapters.sdk_management import SdkManagementOperations
 from app.integrations.tiktok.adapters.sdk_materials import SDKMaterialOperations
 from app.integrations.tiktok.adapters.sdk_reporting import SdkReportingOperations
 from app.integrations.tiktok.admission import (
@@ -42,6 +44,10 @@ from app.integrations.tiktok.contracts.accounts import (
 from app.integrations.tiktok.contracts.ads import AdsReadOperations
 from app.integrations.tiktok.contracts.builds import BuildOperations
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
+from app.integrations.tiktok.contracts.management import (
+    MANAGEMENT_OPERATIONS,
+    ManagementOperations,
+)
 from app.integrations.tiktok.contracts.materials import MaterialOperations
 from app.integrations.tiktok.contracts.reporting import ReportOperations
 from app.integrations.tiktok.contracts.scenes import ScenesGateway
@@ -115,6 +121,8 @@ _OPERATION_CAPABILITIES: dict[str, Capability] = {
     "build.create_cta_portfolio": "build",
     "build.disable_adgroup": "build",
     "build.list_optimizer_rules": "read",
+    # 管理写操作逐一登记；账户证据仍由 verify_route + ManagementCapability 核验。
+    **dict.fromkeys((f"management.{name}" for name in MANAGEMENT_OPERATIONS), "ads_manage"),
     # 报表端点按独立操作登记，确保每个同步页、异步任务状态和下载请求
     # 都重新通过同一冻结路由与共享额度门禁。
     "reports.integrated": "read",
@@ -139,6 +147,7 @@ class TikTokGateway:
     builds: BuildOperations
     ads: AdsReadOperations
     reports: ReportOperations
+    management: ManagementOperations
 
 
 def _capability(advertiser_id: str | None, operation: str) -> Capability:
@@ -200,6 +209,11 @@ def _facts(
             build_authorized=authorization.permission_summary.get("build_authorized")
             if authorization
             else None,
+            management_operations=frozenset(
+                authorization.permission_summary.get("management_operations", ())
+            )
+            if authorization
+            else frozenset(),
             evidence_source=authorization.source if authorization else "UNKNOWN",
             observed_at=authorization.verified_at or datetime.fromtimestamp(0, UTC)
             if authorization
@@ -489,6 +503,7 @@ def open_tiktok_gateway(
                     ),
                     scenes=McpScenesGateway(client, context=read_context),
                     builds=McpBuildOperations(client, isolation=group_isolation),
+                    management=McpManagementOperations(client),
                     materials=MCPMaterialOperations(
                         client,
                         share_authorize=lambda account: authorize(
@@ -535,6 +550,9 @@ def open_tiktok_gateway(
                         request_scope=request_scope,
                         deadline=task_deadline,
                         isolation=group_isolation,
+                    ),
+                    management=SdkManagementOperations(
+                        official, request_scope=request_scope, deadline=task_deadline
                     ),
                     materials=SDKMaterialOperations(
                         official,

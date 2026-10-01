@@ -35,6 +35,8 @@ class AuthorizationFacts:
     build_authorized: bool | None
     evidence_source: str
     observed_at: datetime
+    # 连接级声明仅记录授权明确映射的管理操作；不代表任一账户已获管理写权。
+    management_operations: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         for value in (self.issuer, self.resource, self.evidence_source):
@@ -46,6 +48,10 @@ class AuthorizationFacts:
             raise ValueError("invalid scopes")
         for scope in self.scopes:
             require_id(scope)
+        if type(self.management_operations) is not frozenset:
+            raise ValueError("invalid management operations")
+        for operation in self.management_operations:
+            require_id(operation)
         for flag in (
             self.read_authorized,
             self.upload_authorized,

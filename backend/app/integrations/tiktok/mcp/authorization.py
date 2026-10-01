@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 
 from app.integrations.tiktok.contracts.accounts import AuthorizationFacts
+from app.integrations.tiktok.contracts.management import MANAGEMENT_OPERATIONS
 from app.integrations.tiktok.mcp.protocol import load_mcp_protocol
 
 
@@ -32,6 +33,13 @@ def material_authorization(
         source = "MCP_TOKEN_SCOPE_WITH_CLIENT"
     except KeyError, ValueError, TypeError:
         pass
+    management = frozenset()
+    try:
+        raw_operations = json.loads(material.get("management_operations", "[]"))
+        if isinstance(raw_operations, list) and all(isinstance(v, str) for v in raw_operations):
+            management = frozenset(v for v in raw_operations if v in MANAGEMENT_OPERATIONS)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        management = frozenset()
     return AuthorizationFacts(
         subject_id=None,
         grant_id=None,
@@ -41,6 +49,7 @@ def material_authorization(
         read_authorized=None,
         upload_authorized=None,
         build_authorized=None,
+        management_operations=management,
         evidence_source=source,
         observed_at=observed_at,
     )

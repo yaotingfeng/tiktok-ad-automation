@@ -124,15 +124,10 @@ def usable_grants(
                 col(BCAccountAccess.checked_at) <= func.now(),
             )
         )
-        if (operation is None) != (entity_kind is None):
-            raise DomainError(
-                "management_permission_unverified", "必须同时指定管理操作和对象类型"
-            )
         if operation is not None:
-            evidence = evidence.where(
-                ManagementCapability.operation == operation,
-                ManagementCapability.entity_kind == entity_kind,
-            )
+            evidence = evidence.where(ManagementCapability.operation == operation)
+            if entity_kind is not None:
+                evidence = evidence.where(ManagementCapability.entity_kind == entity_kind)
         statement = statement.where(evidence.exists())
     return statement
 
