@@ -1586,3 +1586,9 @@
 - C7 最终提交为 `a8d540d`；广告报表工作台接入冻结 selection、批量管理预览、五分钟过期提示、连接/账户摘要、显式父级联动、排除不可用项和一次性提交导航。新增任务列表/详情页，逐项展示 execution/delivery/observation/attempt 回执，UNKNOWN 只核查，`REFRESH_PENDING` 只允许定向刷新重试。
 - 只读成员可查看任务审计但隐藏批量写入口、取消/重试/恢复/刷新重试；BC/维度/筛选变化会清理旧 selection/preview，迟到冻结结果被丢弃。生成客户端、TanStack 路由和 Playwright workspace 配置已更新。
 - C7/C6/C5/C4/queue 真实 PostgreSQL/Redis 隔离回归 52 项通过，C7 Playwright 3 项及广告工作台/报表合计 11 项通过；fresh Alembic、TypeScript/Vite build、Biome、Ruff、compileall、`git diff --check` 通过。最终独立窄复审 `task-7-rereview-final.md` 为 APPROVED。未调用真实 TikTok/MCP、未写广告、未部署。
+
+## 2026-10-02：广告管理与报表发布到新加坡测试环境
+
+- 固定版本 `5bf5b5506180b62b87e6720f5edf1b32bc6002ad` 已部署到新加坡 staging；完整备份 `/var/backups/tt-ada-staging/20261001T163955Z/`，项目/前端、私有配置、PostgreSQL、Redis 和迁移恢复演练通过。
+- 在线数据库 head 为 `ad_management_cancelled`；API、原有 Worker、Beat 与 `ad-management` Worker active，Celery ping 全部通过，HTTPS/API 边界和近 10 分钟 error 日志通过。
+- `ads-directory`/`ads-reporting` 服务单元已安装但保持 inactive，`ADS_SYNC_ENABLED=false`；因此未触发真实广告目录/报表拉取，未调用真实 TikTok API/MCP，未执行广告写入。真实 BC 只读联调和同步周期观察待后续单独验收。
