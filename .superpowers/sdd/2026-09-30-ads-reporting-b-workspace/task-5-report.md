@@ -10,4 +10,4 @@
 - `PLAYWRIGHT_BASE_URL=http://127.0.0.1:5173 npx playwright test tests/ads-workspace.spec.ts tests/ads-reporting.spec.ts --project=workspace`（7 passed，含快照分页、详情 operation、混币种桶和相同筛选重置）
 - `npx @biomejs/biome check src/features/ads tests/ads-workspace.spec.ts tests/ads-reporting.spec.ts tests/utils/adsBoundary.ts src/routes/_layout.tsx src/features/tenants/TenantScope.tsx 'src/routes/_layout/tenants.$tenantId.ads.tsx'`
 
-未调用真实 TikTok/MCP、未写广告、未部署或推送。修复提交：`a2a9f82`、`e9ab5dc`、`1aed8d5`，提交主题分别为 `ads: fix reporting workspace snapshot and actions`、`ads: keep read-only reporting actions available` 与 `ads: harden snapshot detail and bucket handling`。
+未调用真实 TikTok/MCP、未写广告、未部署或推送。修复提交：`a2a9f82`、`e9ab5dc`、`1aed8d5`、`c926f61`，提交主题分别为 `ads: fix reporting workspace snapshot and actions`、`ads: keep read-only reporting actions available`、`ads: harden snapshot detail and bucket handling` 与 `ads: keep target coverage fixture contract honest`。
