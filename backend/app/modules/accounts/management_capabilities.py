@@ -26,7 +26,7 @@ from app.modules.accounts.management_capability_models import ManagementCapabili
 
 # 平台接口的对象层级是独立合同；禁止把广告内素材能力扩散为整条广告状态能力。
 _ENTITY_KINDS_BY_OPERATION: dict[str, tuple[str, ...]] = {
-    "update_roas": ("campaign", "adgroup"),
+    "update_roas": ("adgroup",),
     "update_budget": ("campaign", "adgroup"),
     "set_status": ("campaign", "adgroup", "ad"),
     "set_material_status": ("ad",),

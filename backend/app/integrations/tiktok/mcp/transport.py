@@ -1,6 +1,7 @@
 """任务作用域的官方 MCP 客户端；HTTP 边界控制权限、准入及单次发送。"""
 
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -64,7 +65,7 @@ _METHOD_OPERATIONS = {
     "tools/list": "protocol.list_tools",
     "notifications/cancelled": "protocol.cancel",
 }
-Authorize = Callable[[str | None, str], None]
+Authorize = Callable[..., None]
 Admit = Callable[[str | None, str], AbstractContextManager[None]]
 
 
@@ -111,6 +112,7 @@ class _CallState:
     operation: str
     advertiser_id: str | None
     deadline: datetime
+    entity_kind: str | None = None
     tool_name: str | None = None
     sent: bool = False
     response_bytes: int = 0
@@ -118,6 +120,28 @@ class _CallState:
     interruption: BaseException | None = None
     retired: bool = False
     send_guard: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+
+def _authorize(
+    bound: BoundMCPClient,
+    advertiser_id: str | None,
+    operation: str,
+    entity_kind: str | None,
+) -> None:
+    """向新管理回调透传实体，同时兼容既有只读二元回调。"""
+    callback = bound._authorize
+    try:
+        parameters = inspect.signature(callback).parameters
+        accepts_entity = any(
+            parameter.kind == inspect.Parameter.VAR_POSITIONAL
+            for parameter in parameters.values()
+        ) or len(parameters) >= 3
+    except (TypeError, ValueError):
+        accepts_entity = True
+    if accepts_entity:
+        callback(advertiser_id, operation, entity_kind)
+    else:
+        callback(advertiser_id, operation)
 
 
 def _exit_lease(
@@ -246,13 +270,13 @@ class _GuardedTransport(httpx2.AsyncBaseTransport):
             deadline = state.deadline if state is not None else bound._task_deadline
             _remaining(deadline)
             try:
-                bound._authorize(advertiser_id, operation)
+                _authorize(bound, advertiser_id, operation, state.entity_kind if state else None)
                 _remaining(deadline)
                 lease = bound._admit(advertiser_id, operation)
                 lease.__enter__()
                 entered = True
                 _remaining(deadline)
-                bound._authorize(advertiser_id, operation)
+                _authorize(bound, advertiser_id, operation, state.entity_kind if state else None)
                 _remaining(deadline)
             except Exception as callback_error:
                 if state is None or not state.sent:
@@ -396,6 +420,11 @@ class BoundMCPClient:
             self._lock.release()
             raise
 
+    def has_contract(self, operation: str) -> bool:
+        """管理适配器在发送前区分未核验合同与可发送合同。"""
+        contract = self._contracts.get(operation)
+        return contract is not None and contract.tool_name in self._observed
+
     def _cancel_session(self) -> None:
         if self._session_scope is not None:
             self._session_scope.cancel()
@@ -483,6 +512,7 @@ class BoundMCPClient:
         operation: str,
         advertiser_id: str | None,
         arguments: dict[str, Any],
+        entity_kind: str | None = None,
         deadline: datetime | None = None,
     ) -> McpBusinessResponse:
         self._acquire()
@@ -496,7 +526,7 @@ class BoundMCPClient:
                 if deadline is not None:
                     _remaining(deadline)
                     effective = min(effective, deadline)
-                state = _CallState(operation, advertiser_id, effective)
+                state = _CallState(operation, advertiser_id, effective, entity_kind)
                 contract = self._contracts.get(operation)
                 if (
                     contract is None

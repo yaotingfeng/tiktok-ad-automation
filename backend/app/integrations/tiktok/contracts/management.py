@@ -56,13 +56,17 @@ class ManagementCommand:
         object.__setattr__(self, "desired", dict(self.desired))
         if self.ad_material_id is not None:
             _text(self.ad_material_id, "ad material id")
+        if self.field in {"status", "material_status"}:
+            status_keys = [key for key in ("status", "operation_status") if key in self.desired]
+            if len(status_keys) != 1:
+                raise ValueError("status requires exactly one status field")
+            if self.desired[status_keys[0]] not in {"ENABLE", "DISABLE"}:
+                raise ValueError("status must be ENABLE or DISABLE")
         if self.field == "material_status":
             if self.ref.kind != "ad":
                 raise ValueError("material status requires ad identity")
             if self.ad_material_id is None:
                 raise ValueError("material status requires ad material reference")
-            if "operation_status" not in self.desired and "status" not in self.desired:
-                raise ValueError("material status requires operation_status")
             batch = self.desired.get("ad_material_ids")
             if batch is not None and (
                 type(batch) is not list

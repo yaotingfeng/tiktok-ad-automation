@@ -26,17 +26,38 @@ from app.integrations.tiktok.contracts.management import (
 from app.integrations.tiktok.official.accounts import RequestScope, remaining
 
 CapabilityCheck = Callable[[str, str, str], None]
+ManagementScope = Callable[[str, str, str, datetime], Any]
 
 
 def _smart_plus(command: ManagementCommand) -> bool:
+    """只接受目录明确给出的广告类型；缺失或冲突必须闭合拒绝。"""
     values = {**command.original, **command.desired}
-    marker = values.get("ad_type", values.get("platform_ad_type", values.get("is_smart_plus")))
-    if isinstance(marker, bool):
-        return marker
-    if isinstance(marker, str):
-        return marker.upper() in {"SMART_PLUS", "UPGRADED_SMART_PLUS", "SMART+", "SMARTPLUS"}
-    # 当前目录默认使用 Smart+ 身份；明确 regular/auction 标记才走旧端点。
-    return str(values.get("campaign_type", "")).upper() not in {"REGULAR", "AUCTION", "NORMAL"}
+    markers = [
+        values[key]
+        for key in ("ad_type", "platform_ad_type", "campaign_type")
+        if key in values
+    ]
+    if "is_smart_plus" in values:
+        markers.append(values["is_smart_plus"])
+    if not markers:
+        raise DomainError("management_contract_unsupported", "广告类型未经目录核验")
+    parsed: set[bool] = set()
+    for marker in markers:
+        if isinstance(marker, bool):
+            parsed.add(marker)
+        elif isinstance(marker, str):
+            kind = marker.upper()
+            if kind in {"SMART_PLUS", "UPGRADED_SMART_PLUS", "SMART+", "SMARTPLUS"}:
+                parsed.add(True)
+            elif kind in {"REGULAR", "AUCTION", "NORMAL"}:
+                parsed.add(False)
+            else:
+                raise DomainError("management_contract_unsupported", "广告类型未经目录核验")
+        else:
+            raise DomainError("management_contract_unsupported", "广告类型未经目录核验")
+    if len(parsed) != 1:
+        raise DomainError("management_contract_unsupported", "广告类型标识冲突")
+    return parsed.pop()
 
 
 def _decimal(value: object, field: str) -> str:
@@ -74,6 +95,7 @@ def _receipt(raw: object) -> ManagementReceipt:
 
 def _payload(command: ManagementCommand, *, smart_plus: bool) -> dict[str, Any]:
     ref = command.ref
+    status = command.desired.get("status", command.desired.get("operation_status"))
     if command.field == "material_status":
         if not smart_plus:
             raise DomainError("management_contract_unsupported", "普通广告不支持独立素材状态")
@@ -81,9 +103,7 @@ def _payload(command: ManagementCommand, *, smart_plus: bool) -> dict[str, Any]:
             "advertiser_id": ref.advertiser_id,
             "smart_plus_ad_id": ref.remote_id,
             "ad_material_ids": [command.ad_material_id],
-            "operation_status": command.desired.get(
-                "operation_status", command.desired.get("status")
-            ),
+            "operation_status": status,
         }
     if command.field == "status":
         key = f"{ref.kind}_ids"
@@ -92,11 +112,9 @@ def _payload(command: ManagementCommand, *, smart_plus: bool) -> dict[str, Any]:
         return {
             "advertiser_id": ref.advertiser_id,
             key: [ref.remote_id],
-            "operation_status": command.desired.get(
-                "operation_status", command.desired.get("status")
-            ),
+            "operation_status": status,
         }
-    if ref.kind not in {"campaign", "adgroup"}:
+    if ref.kind != "adgroup":
         raise DomainError("management_contract_unsupported", "该对象不支持预算或 ROAS 修改")
     payload: dict[str, Any] = {"advertiser_id": ref.advertiser_id}
     payload["campaign_id" if ref.kind == "campaign" else "adgroup_id"] = ref.remote_id
@@ -129,15 +147,19 @@ class SdkManagementOperations:
         capability_check: CapabilityCheck | None = None,
         authorization_check: CapabilityCheck | None = None,
         require_capability: CapabilityCheck | None = None,
+        management_scope: ManagementScope | None = None,
     ):
         self._client = client
         self._scope = request_scope
         self._deadline = deadline
         self._check = capability_check or authorization_check or require_capability
+        self._management_scope = management_scope
 
     def apply(self, command: ManagementCommand) -> ManagementReceipt:
         if not isinstance(command, ManagementCommand):
             raise TypeError("management command required")
+        if self._management_scope is None and self._check is None:
+            raise DomainError("management_permission_unverified", "管理请求缺少账户能力门禁")
         operation = f"management.{command.operation}"
         if operation not in {f"management.{name}" for name in MANAGEMENT_OPERATIONS}:
             raise DomainError("management_operation_invalid", "管理操作无效")
@@ -169,7 +191,17 @@ class SdkManagementOperations:
         sent = False
         try:
             remaining(self._deadline)
-            with self._scope(command.ref.advertiser_id, operation, self._deadline):
+            scope = (
+                self._management_scope(
+                    command.ref.advertiser_id,
+                    command.operation,
+                    command.ref.kind,
+                    self._deadline,
+                )
+                if self._management_scope is not None
+                else self._scope(command.ref.advertiser_id, operation, self._deadline)
+            )
+            with scope:
                 budget = remaining(self._deadline)
                 sent = True
                 method(

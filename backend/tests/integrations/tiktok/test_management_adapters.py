@@ -20,12 +20,15 @@ class _McpWire:
         self.calls.append((operation, advertiser_id, arguments))
         return McpBusinessResponse({}, CallEvidence(request_id="management-request"))
 
+    def has_contract(self, _operation):
+        return True
+
 
 def _command(field="material_status"):
     return ManagementCommand(
         ref=EntityRef(uuid4(), "adv-1", "ad", "smart-ad-1"),
         field=field,
-        original={},
+        original={"ad_type": "SMART_PLUS"},
         desired={"operation_status": "DISABLE"},
         ad_material_id="ad-material-1" if field == "material_status" else None,
     )
@@ -66,3 +69,51 @@ def test_regular_group_replacement_preserves_required_fields():
     assert payload["roas_bid"] == "1.2500"
     assert payload["campaign_id"] == "campaign-1"
     assert payload["adgroup_name"] == "name"
+
+
+def test_missing_type_fails_closed_before_transport():
+    wire = _McpWire()
+    command = ManagementCommand(
+        ref=EntityRef(uuid4(), "adv-1", "ad", "ad-1"),
+        field="status",
+        original={},
+        desired={"status": "DISABLE"},
+    )
+    with pytest.raises(DomainError, match="广告类型"):
+        McpManagementOperations(wire).apply(command)  # type: ignore[arg-type]
+    assert wire.calls == []
+
+
+def test_campaign_roas_is_unsupported_without_transport():
+    wire = _McpWire()
+    command = ManagementCommand(
+        ref=EntityRef(uuid4(), "adv-1", "campaign", "campaign-1"),
+        field="roas",
+        original={"ad_type": "SMART_PLUS"},
+        desired={"roas_bid": "1.20"},
+    )
+    with pytest.raises(DomainError, match="不支持"):
+        McpManagementOperations(wire).apply(command)  # type: ignore[arg-type]
+    assert wire.calls == []
+
+
+def test_mcp_without_observed_management_contract_is_unsupported():
+    class UnobservedWire(_McpWire):
+        def has_contract(self, _operation):
+            return False
+
+    wire = UnobservedWire()
+    with pytest.raises(DomainError, match="MCP 管理工具合同"):
+        McpManagementOperations(wire).apply(_command())  # type: ignore[arg-type]
+    assert wire.calls == []
+
+
+@pytest.mark.parametrize("desired", [{"status": "PAUSE"}, {"status": None}, {"status": "ENABLE", "operation_status": "DISABLE"}])
+def test_status_contract_rejects_invalid_or_ambiguous_values(desired):
+    with pytest.raises(ValueError):
+        ManagementCommand(
+            ref=EntityRef(uuid4(), "adv-1", "ad", "ad-1"),
+            field="status",
+            original={"ad_type": "SMART_PLUS"},
+            desired=desired,
+        )

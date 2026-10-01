@@ -336,10 +336,19 @@ def open_tiktok_gateway(
             return account.currency
 
     # 此后不保留 Session；portal 回调各自拥有独立、限时的数据库事务。
-    def authorize(advertiser_id: str | None, operation: str) -> None:
+    def authorize(
+        advertiser_id: str | None,
+        operation: str,
+        entity_kind: str | None = None,
+    ) -> None:
         if before_request is not None:
             before_request()
         capability = _capability(advertiser_id, operation)
+        management_operation = (
+            operation.removeprefix("management.")
+            if operation.startswith("management.")
+            else None
+        )
         if operation in {"build.disable_adgroup", "build.list_optimizer_rules"}:
             assert advertiser_id is not None
             require_isolation_target(group_isolation, advertiser_id=advertiser_id)
@@ -358,6 +367,8 @@ def open_tiktok_gateway(
                 route=route,
                 advertiser_id=advertiser_id,
                 capability=capability,
+                operation=management_operation,
+                entity_kind=entity_kind,
             )
         if route.channel == "OFFICIAL_MCP":
             ensure_mcp_credentials(
@@ -374,6 +385,8 @@ def open_tiktok_gateway(
                 route=route,
                 advertiser_id=advertiser_id,
                 capability=capability,
+                operation=management_operation,
+                entity_kind=entity_kind,
             )
             if operation == FINANCE_OPERATION:
                 current = _authorization(session, route)
@@ -446,6 +459,21 @@ def open_tiktok_gateway(
                 yield
 
     @contextmanager
+    def management_scope(
+        advertiser_id: str,
+        operation: str,
+        entity_kind: str,
+        deadline: datetime,
+    ) -> Iterator[None]:
+        if deadline != task_deadline:
+            raise DomainError("read_deadline_invalid", "调用期限与任务不一致")
+        full_operation = f"management.{operation}"
+        authorize(advertiser_id, full_operation, entity_kind)
+        with admit(advertiser_id, full_operation):
+            authorize(advertiser_id, full_operation, entity_kind)
+            yield
+
+    @contextmanager
     def report_download_scope(
         advertiser_id: str, deadline: datetime
     ) -> Iterator[None]:
@@ -503,7 +531,12 @@ def open_tiktok_gateway(
                     ),
                     scenes=McpScenesGateway(client, context=read_context),
                     builds=McpBuildOperations(client, isolation=group_isolation),
-                    management=McpManagementOperations(client),
+                    management=McpManagementOperations(
+                        client,
+                        capability_check=lambda advertiser, operation, kind: authorize(
+                            advertiser, f"management.{operation}", kind
+                        ),
+                    ),
                     materials=MCPMaterialOperations(
                         client,
                         share_authorize=lambda account: authorize(
@@ -552,7 +585,10 @@ def open_tiktok_gateway(
                         isolation=group_isolation,
                     ),
                     management=SdkManagementOperations(
-                        official, request_scope=request_scope, deadline=task_deadline
+                        official,
+                        request_scope=request_scope,
+                        management_scope=management_scope,
+                        deadline=task_deadline,
                     ),
                     materials=SDKMaterialOperations(
                         official,

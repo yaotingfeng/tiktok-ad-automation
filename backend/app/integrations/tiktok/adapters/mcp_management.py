@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 
+from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.common import RemoteCallError
 from app.integrations.tiktok.contracts.management import (
     ManagementCommand,
@@ -29,16 +30,28 @@ class McpManagementOperations:
     def apply(self, command: ManagementCommand) -> ManagementReceipt:
         if not isinstance(command, ManagementCommand):
             raise TypeError("management command required")
+        if self._check is None and not hasattr(self._client, "has_contract"):
+            raise DomainError("management_permission_unverified", "管理请求缺少账户能力门禁")
         if self._check is not None:
             self._check(command.ref.advertiser_id, command.operation, command.ref.kind)
+        operation = f"management.{command.operation}"
+        if hasattr(self._client, "has_contract") and not self._client.has_contract(operation):
+            raise DomainError("management_contract_unsupported", "MCP 管理工具合同尚未核验")
         payload = _payload(command, smart_plus=_smart_plus(command))
         try:
             response = self._client.call(
-                operation=f"management.{command.operation}",
+                operation=operation,
                 advertiser_id=command.ref.advertiser_id,
                 arguments=payload,
+                entity_kind=command.ref.kind,
             )
         except RemoteCallError as error:
+            if error.code == "mcp_contract_changed":
+                raise DomainError("mcp_contract_changed", "MCP 管理工具合同已变化") from None
+            if error.code == "mcp_arguments_invalid":
+                raise DomainError("mcp_arguments_invalid", "MCP 管理参数无效") from None
+            if error.code == "mcp_tool_unavailable":
+                raise DomainError("management_contract_unsupported", "MCP 管理工具合同尚未核验") from None
             if error.effect == "NOT_SENT":
                 return ManagementReceipt("NOT_SENT", error.evidence.request_id, True, error.evidence)
             return ManagementReceipt("UNKNOWN", error.evidence.request_id, False, error.evidence)
