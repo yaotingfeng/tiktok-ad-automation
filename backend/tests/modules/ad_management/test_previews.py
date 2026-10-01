@@ -268,6 +268,7 @@ def test_account_selection_fallback_expands_route_fenced_series(session, managem
     _cap(session, context, bc, route, account.advertiser_id, "update_roas", "adgroup")
     session.flush()
     # Account rows can be aggregate B selections with no synthetic account ref.
+    selection.filters = {"dimension": "account"}
     _set_selection(selection, [])
     preview = prepare_preview(
         session,
@@ -279,6 +280,35 @@ def test_account_selection_fallback_expands_route_fenced_series(session, managem
     assert preview.counts.selected == 1
     assert {item.ref for item in preview.items if item.execution_result == "PENDING"} == {group}
     assert all(item.ref.kind != "account" for item in preview.items)
+
+
+def test_excluding_campaign_does_not_fallback_to_full_account_scope(session, management_env):
+    context, bc, account, route, selection = management_env
+    old = selection.created_at - timedelta(minutes=1)
+    campaign = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "excluded-account-series")
+    group = EntityRef(context.tenant_id, account.advertiser_id, "adgroup", "excluded-account-group")
+    session.add_all([
+        _row(campaign, connection_id=route.connection_id, observed_at=old),
+        _row(group, parent=campaign, ad_type="SMART_PLUS", configuration={"roas_bid": "1.20"}, connection_id=route.connection_id, observed_at=old),
+    ])
+    _cap(session, context, bc, route, account.advertiser_id, "update_roas", "adgroup")
+    session.flush()
+    selection.filters = {"dimension": "account"}
+    _set_selection(selection, [campaign])
+    preview = prepare_preview(
+        session,
+        context,
+        bc.bc_id,
+        selection.id,
+        MutationSpec(
+            field="roas",
+            mode="set",
+            value=Decimal("1.50"),
+            excluded_refs=(campaign,),
+        ),
+    )
+    assert preview.counts.selected == 0
+    assert all(item.ref != group for item in preview.items)
 
 
 def test_unrelated_include_parent_and_excluded_parent_are_fenced(session, management_env):

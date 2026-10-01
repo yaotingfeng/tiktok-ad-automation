@@ -585,7 +585,13 @@ def _expand(
     # Account/drama rows may intentionally carry no synthetic EntityRef. In
     # that case expand the exact advertiser scope captured by B, using only
     # route-bound rows observed before the frozen selection.
-    if not objects and not refs and not uses and selection_record.advertiser_ids:
+    selection_dimension = str((selection_record.filters or {}).get("dimension", "")).lower()
+    aggregate_scope = (
+        selection_dimension in {"account", "drama"}
+        and not selection.refs
+        and not selection.material_uses
+    )
+    if not objects and not refs and not uses and aggregate_scope:
         account_fallback = True
         account_campaigns = session.exec(
             select(AdObject).where(
