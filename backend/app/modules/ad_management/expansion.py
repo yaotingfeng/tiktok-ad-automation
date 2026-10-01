@@ -836,7 +836,7 @@ def _expand(
     if mutation.field == "roas":
         by_series: dict[tuple[Any, ...], set[str]] = defaultdict(set)
         for item in items:
-            if item.command is None or item.final_value is None:
+            if item.final_value is None:
                 continue
             row = objects.get(_ref_key(item.ref))
             series = (
