@@ -34,7 +34,7 @@ class McpManagementOperations:
             raise TypeError("management command required")
         self._check(command.ref.advertiser_id, command.operation, command.ref.kind)
         operation = f"management.{command.operation}"
-        if hasattr(self._client, "has_contract") and not self._client.has_contract(operation):
+        if not hasattr(self._client, "has_contract") or not self._client.has_contract(operation):
             raise DomainError("management_contract_unsupported", "MCP 管理工具合同尚未核验")
         payload = _payload(command, smart_plus=_smart_plus(command))
         try:

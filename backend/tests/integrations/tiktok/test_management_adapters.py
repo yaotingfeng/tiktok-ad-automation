@@ -118,6 +118,21 @@ def test_mcp_without_observed_management_contract_is_unsupported():
     assert wire.calls == []
 
 
+def test_mcp_without_observation_api_fails_closed_before_transport():
+    class UnobservedWire:
+        def __init__(self):
+            self.calls = []
+
+        def call(self, **kwargs):
+            self.calls.append(kwargs)
+            return McpBusinessResponse({}, CallEvidence(request_id="unexpected"))
+
+    wire = UnobservedWire()
+    with pytest.raises(DomainError, match="MCP 管理工具合同"):
+        McpManagementOperations(wire, capability_check=_allow).apply(_command())  # type: ignore[arg-type]
+    assert wire.calls == []
+
+
 @pytest.mark.parametrize("desired", [{"status": "PAUSE"}, {"status": None}, {"status": "ENABLE", "operation_status": "DISABLE"}])
 def test_status_contract_rejects_invalid_or_ambiguous_values(desired):
     with pytest.raises(ValueError):

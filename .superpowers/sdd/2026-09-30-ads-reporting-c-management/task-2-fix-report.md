@@ -14,10 +14,11 @@
 5. 增加无类型、错层级、非法状态、无 MCP 合同及素材状态的双通道回归覆盖。
 6. 两个管理适配器构造时强制能力回调；SDK gateway 管理回调携带无前缀 operation 与实体层级，通用 request scope 不能替代管理能力门禁。
 7. campaign budget 按普通/Smart+ 分别调用官方 campaign_update 合同；ROAS 仍仅允许 adgroup，campaign ROAS 在 payload 层零发送。
+8. MCP 管理适配器在 transport 缺失 observed-contract 查询能力时也 fail closed，绝不发送。
 
 验证（隔离 PostgreSQL `tkada_c2_20261001_test`，Redis 6387/2）：
 
-- `uv run --frozen pytest tests/integrations/tiktok/test_management_adapters.py tests/integrations/tiktok/test_mcp_protocol.py tests/modules/accounts/test_build_gateway.py -q`：75 passed
+- `uv run --frozen pytest tests/integrations/tiktok/test_management_adapters.py tests/integrations/tiktok/test_mcp_protocol.py tests/modules/accounts/test_build_gateway.py -q`：76 passed
 - `uv run --frozen pytest tests/modules/accounts/test_group_isolation_gateway.py -q`：测试进程完成（本地 runner 仅输出通过点，未返回汇总行）
 - `uv run --frozen ruff check ...`：通过
 - `uv run --frozen python -m compileall -q app/integrations/tiktok app/modules/accounts`：通过
