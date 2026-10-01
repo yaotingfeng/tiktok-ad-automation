@@ -150,4 +150,7 @@ class TokenPayload(SQLModel):
     sub: str | None = None
 
 
+# 广告管理的复合外键及任务表在普通应用进程也必须登记，不能只依赖迁移导入。
+from app.modules.accounts import management_capability_models  # noqa: E402, F401
+from app.modules.ad_management import models as ad_management_models  # noqa: E402, F401
 from app.modules.materials import reissue_models  # noqa: E402, F401

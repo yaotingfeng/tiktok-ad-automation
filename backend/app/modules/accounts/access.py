@@ -6,6 +6,11 @@ from sqlmodel.sql.expression import SelectOfScalar
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
+from app.modules.accounts.connection_models import (
+    BCConnectionBinding,
+    ConnectionAuthorization,
+)
+from app.modules.accounts.management_capability_models import ManagementCapability
 from app.modules.accounts.models import (
     OPERABLE_REMOTE_STATUSES as OPERABLE_REMOTE_STATUSES,
 )
@@ -21,9 +26,16 @@ from app.modules.tenants.permissions import require_tenant
 
 
 def usable_grants(
-    *, tenant_id: UUID, bc_id: str | SQLColumnExpression[str], action: str
+    *,
+    tenant_id: UUID,
+    bc_id: str | SQLColumnExpression[str],
+    action: str,
+    operation: str | None = None,
+    entity_kind: str | None = None,
 ) -> SelectOfScalar[BCAccountAccess]:
     """One joined statement, also used for efficient deterministic source choice."""
+    if action not in {"read", "upload", "build", "ads_manage"}:
+        raise DomainError("invalid_account_action", "账户动作无效")
     statement = (
         select(BCAccountAccess)
         .join(
@@ -69,6 +81,59 @@ def usable_grants(
         statement = statement.where(col(BCAccountAccess.can_build).is_(True))
     if action == "upload":
         statement = statement.where(col(BCAccountAccess.can_upload).is_(True))
+    if action == "ads_manage":
+        # 管理证据按当前连接授权/合同代数匹配；build 证据不会放大成广告写权。
+        evidence = (
+            select(ManagementCapability.id)
+            .join(
+                BCConnectionBinding,
+                and_(
+                    col(BCConnectionBinding.tenant_id)
+                    == ManagementCapability.tenant_id,
+                    col(BCConnectionBinding.bc_id) == ManagementCapability.bc_id,
+                    col(BCConnectionBinding.connection_id)
+                    == ManagementCapability.connection_id,
+                ),
+            )
+            .join(
+                ConnectionAuthorization,
+                and_(
+                    col(ConnectionAuthorization.tenant_id)
+                    == ManagementCapability.tenant_id,
+                    col(ConnectionAuthorization.connection_id)
+                    == ManagementCapability.connection_id,
+                    col(ConnectionAuthorization.authorization_revision)
+                    == ManagementCapability.authorization_revision,
+                ),
+            )
+            .where(
+                ManagementCapability.tenant_id == BCAccountAccess.tenant_id,
+                ManagementCapability.bc_id == BCAccountAccess.bc_id,
+                ManagementCapability.advertiser_id == BCAccountAccess.advertiser_id,
+                ManagementCapability.connection_id == BCAccountAccess.connection_id,
+                ManagementCapability.authorization_revision
+                == TikTokConnection.authorization_revision,
+                ManagementCapability.adapter_contract_revision
+                == TikTokConnection.adapter_contract_revision,
+                ManagementCapability.binding_revision == BCConnectionBinding.revision,
+                BCConnectionBinding.status == "ACTIVE",
+                BCConnectionBinding.kind == TikTokConnection.kind,
+                ManagementCapability.state == "VERIFIED",
+                col(ManagementCapability.verified_at) <= func.now(),
+                col(ConnectionAuthorization.verified_at) <= func.now(),
+                col(BCAccountAccess.checked_at) <= func.now(),
+            )
+        )
+        if (operation is None) != (entity_kind is None):
+            raise DomainError(
+                "management_permission_unverified", "必须同时指定管理操作和对象类型"
+            )
+        if operation is not None:
+            evidence = evidence.where(
+                ManagementCapability.operation == operation,
+                ManagementCapability.entity_kind == entity_kind,
+            )
+        statement = statement.where(evidence.exists())
     return statement
 
 
@@ -80,8 +145,10 @@ def resolve_account_access(
     advertiser_id: str,
     action: Capability,
     connection_id: UUID | None = None,
+    operation: str | None = None,
+    entity_kind: str | None = None,
 ) -> AccountAccess:
-    if action not in {"read", "build", "upload"}:
+    if action not in {"read", "build", "upload", "ads_manage"}:
         raise DomainError("invalid_account_action", "账户动作无效")
     route = freeze_route(
         session, context=context, bc_id=bc_id, connection_id=connection_id
@@ -92,6 +159,8 @@ def resolve_account_access(
         route=route,
         advertiser_id=advertiser_id,
         capability=action,
+        operation=operation,
+        entity_kind=entity_kind,
     )
     account = session.get(AdvertiserAccount, (context.tenant_id, advertiser_id))
     assert account is not None

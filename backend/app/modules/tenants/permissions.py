@@ -17,6 +17,7 @@ Action = Literal[
     "strategy_write",
     "provider_write",
     "reporting_write",
+    "ads_manage",
 ]
 Role = Literal["platform_admin", "tenant_admin", "operator", "viewer"]
 ALL_ACTIONS = frozenset(
@@ -28,6 +29,7 @@ ALL_ACTIONS = frozenset(
         "strategy_write",
         "provider_write",
         "reporting_write",
+        "ads_manage",
     }
 )
 PERMISSIONS = {

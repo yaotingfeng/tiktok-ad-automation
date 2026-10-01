@@ -30,6 +30,7 @@ from app.modules.tenants import models as tenants_models  # noqa: F401
 from app.modules.accounts import models as accounts_models  # noqa: F401
 from app.modules.accounts import connection_models  # noqa: E402, F401
 from app.modules.accounts import capability_models  # noqa: F401
+from app.modules.accounts import management_capability_models  # noqa: F401
 from app.modules.accounts import directory_models  # noqa: F401
 from app.modules.accounts import discovery_models  # noqa: E402, F401
 from app.modules.builds import execution_models  # noqa: F401
@@ -56,6 +57,7 @@ from app.modules.ads import sync_models as ads_sync_models  # noqa: E402, F401
 from app.modules.reporting import models as reporting_models  # noqa: E402, F401
 from app.modules.reporting import sync_models as reporting_sync_models  # noqa: E402, F401
 from app.modules.reporting import query_models as reporting_query_models  # noqa: E402, F401
+from app.modules.ad_management import models as ad_management_models  # noqa: E402, F401
 from app.core.config import settings # noqa
 
 target_metadata = SQLModel.metadata

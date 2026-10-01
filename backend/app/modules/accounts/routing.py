@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
 
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
@@ -25,7 +25,7 @@ from app.modules.accounts.models import (
 from app.modules.tenants.models import AuditEvent
 from app.modules.tenants.permissions import require_tenant
 
-Capability = Literal["read", "upload", "build"]
+Capability = Literal["read", "upload", "build", "ads_manage"]
 
 
 def _bc(session: Session, context: TenantContext, bc_id: str) -> TenantBC:
@@ -107,8 +107,10 @@ def verify_route(
     route: FrozenTikTokRoute,
     advertiser_id: str | None,
     capability: Capability,
+    operation: str | None = None,
+    entity_kind: str | None = None,
 ) -> None:
-    if capability not in {"read", "upload", "build"}:
+    if capability not in {"read", "upload", "build", "ads_manage"}:
         raise DomainError("invalid_account_action", "账户动作无效")
     if route.tenant_id != context.tenant_id:
         raise DomainError("connection_tenant_mismatch", "连接不属于当前租户")
@@ -159,6 +161,7 @@ def verify_route(
         raise DomainError("account_metadata_incomplete", "账户信息尚未完整")
     if not (grant.in_bc and grant.authorized and grant.active):
         raise DomainError("account_access_denied", "当前连接未授权该账户")
+
     authorization = session.exec(
         select(ConnectionAuthorization)
         .where(
@@ -176,6 +179,48 @@ def verify_route(
         or not observed_authorization(grant.checked_at, now)
     ):
         raise DomainError("account_access_denied", "缺少已确认的账户授权")
+    # 广告管理证据独立于 build/upload。即使旧账户目录允许搭建，也不能
+    # 将 can_build 推导为管理写权；证据必须匹配本次冻结 route 的全部代数。
+    if capability == "ads_manage":
+        from app.modules.accounts.management_capability_models import (
+            ManagementCapability,
+        )
+
+        if (
+            account.remote_status not in OPERABLE_REMOTE_STATUSES
+            or grant.permission_state != "VERIFIED"
+        ):
+            raise DomainError("account_access_denied", "账户当前状态不支持管理操作")
+        if (operation is None) != (entity_kind is None):
+            raise DomainError(
+                "management_permission_unverified", "必须同时指定管理操作和对象类型"
+            )
+        statement = select(ManagementCapability).where(
+            ManagementCapability.tenant_id == context.tenant_id,
+            ManagementCapability.bc_id == route.bc_id,
+            ManagementCapability.advertiser_id == advertiser_id,
+            ManagementCapability.connection_id == route.connection_id,
+            ManagementCapability.authorization_revision == route.authorization_revision,
+            ManagementCapability.binding_revision == route.binding_revision,
+            ManagementCapability.adapter_contract_revision
+            == route.adapter_contract_revision,
+            ManagementCapability.state == "VERIFIED",
+            col(ManagementCapability.verified_at) <= now,
+        )
+        if operation is not None:
+            statement = statement.where(
+                ManagementCapability.operation == operation,
+                ManagementCapability.entity_kind == entity_kind,
+            )
+        management_capability = session.exec(
+            statement.execution_options(populate_existing=True)
+        ).first()
+        if management_capability is None:
+            raise DomainError(
+                "management_permission_unverified",
+                "management_permission_unverified: 缺少当前账户和连接代数的广告管理授权证据",
+            )
+        return
     if (
         not authorization.source
         or authorization.source == "UNKNOWN"

@@ -7,7 +7,14 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import CheckConstraint, Engine, ForeignKeyConstraint, Index, text
+from sqlalchemy import (
+    CheckConstraint,
+    Engine,
+    ForeignKeyConstraint,
+    Index,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Session, SQLModel, col, select
 
@@ -85,6 +92,7 @@ class FrozenSelectionRecord(FrozenQueryScope, table=True):
     __tablename__ = "frozen_selection"
     __table_args__ = (
         *_scope_constraints(),
+        UniqueConstraint("tenant_id", "id", name="uq_frozen_selection_tenant_id"),
         CheckConstraint("expires_at > created_at", name="ck_frozen_selection_expiry"),
         Index("ix_frozen_selection_owner_expiry", "tenant_id", "bc_id", "actor_id", "expires_at"),
     )
