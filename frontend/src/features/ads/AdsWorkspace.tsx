@@ -235,7 +235,7 @@ export function AdsWorkspace() {
           </Button>
           <Button
             variant="outline"
-            disabled={!ads.snapshot || exportMutation.isPending}
+            disabled={!ads.snapshot || exportMutation.isPending || roleReadonly}
             onClick={() =>
               runAction(() =>
                 exportMutation.mutate(undefined, {

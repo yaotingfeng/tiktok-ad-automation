@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,6 +18,7 @@ from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.ads import EntityRef, MaterialUseRef
 from app.modules.ads import directory
 from app.modules.ads.models import AdMaterialReference, AdObject
+from app.modules.reporting.query_models import read_snapshot
 from app.modules.tenants.models import AuditEvent
 
 
@@ -93,7 +95,12 @@ def get_ad_detail(
     context: TenantContext,
     bc_id: str,
     ref: EntityRef,
+    snapshot_id: UUID | None = None,
 ) -> AdDetailPublic:
+    if snapshot_id is not None:
+        # Bind detail reads to the same tenant/BC snapshot lifecycle as list,
+        # pagination and selection requests before reading current directory data.
+        read_snapshot(session, context=context, bc_id=bc_id, snapshot_id=snapshot_id)
     try:
         entity = directory.locate(session, context=context, bc_id=bc_id, ref=ref)
     except DomainError as exc:

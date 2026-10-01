@@ -214,6 +214,7 @@ def ad_detail_route(
         context=context,
         bc_id=bc_id,
         ref=EntityRef(tenant_id, advertiser_id, kind, remote_id),
+        snapshot_id=snapshot_id,
     )
 
 
