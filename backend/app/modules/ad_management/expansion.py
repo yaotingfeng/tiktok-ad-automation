@@ -1,0 +1,654 @@
+"""从 B 的冻结选择展开广告管理影响范围。
+
+C3 只消费冻结选择中的身份集合，然后读取这些身份当前已发布的目录行。
+这里不重新执行报表筛选，因此冻结后新出现的广告不会进入预览；父级和预算
+拥有者只在它们是已冻结对象的关系或显式 ``include_parents`` 时进入写入范围。
+"""
+from __future__ import annotations
+
+from collections import defaultdict
+from copy import deepcopy
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
+from typing import Any, cast
+from uuid import UUID
+
+from sqlmodel import Session, col, select
+
+from app.core.context import TenantContext
+from app.core.errors import DomainError
+from app.integrations.tiktok.contracts.ads import EntityRef, MaterialUseRef
+from app.integrations.tiktok.contracts.management import (
+    ManagementCommand,
+    ManagementField,
+)
+from app.modules.ad_management.schemas import MutationSpec
+from app.modules.ads.directory import locate
+from app.modules.ads.models import AdMaterialReference, AdObject
+from app.modules.reporting.query_models import FrozenSelectionRecord
+from app.modules.reporting.selection import get_frozen_selection
+
+_OPERATION_BY_FIELD = {
+    "roas": "update_roas",
+    "budget": "update_budget",
+    "status": "set_status",
+    "material_status": "set_material_status",
+}
+
+
+@dataclass(frozen=True)
+class ExpandedItem:
+    """预览使用的完整影响项；``command`` 为 None 表示不可操作或仅联动。"""
+
+    ref: EntityRef
+    material_use: MaterialUseRef | None
+    original_value: Decimal | str | None
+    final_value: Decimal | str | None
+    reason: str | None
+    execution_result: str
+    command: ManagementCommand | None
+    parent_ref: EntityRef | None
+    grouping_revision: int
+    capability: dict[str, Any]
+    linked: bool = False
+
+
+@dataclass(frozen=True)
+class Expansion:
+    selection_refs: tuple[EntityRef, ...]
+    selection_material_uses: tuple[MaterialUseRef, ...]
+    items: tuple[ExpandedItem, ...]
+    commands: tuple[ManagementCommand, ...]
+
+    @property
+    def selected_count(self) -> int:
+        return len(self.selection_refs)
+
+
+def _ref_key(ref: EntityRef) -> tuple[UUID, str, str, str]:
+    return ref.tenant_id, ref.advertiser_id, ref.kind, ref.remote_id
+
+
+def _use_key(use: MaterialUseRef) -> tuple[Any, ...]:
+    return (
+        *_ref_key(use.ad_ref),
+        use.platform_material_id,
+        use.ad_material_id,
+        use.material_type,
+    )
+
+
+def _ref_dict(ref: EntityRef) -> dict[str, str]:
+    return {
+        "tenant_id": str(ref.tenant_id),
+        "advertiser_id": ref.advertiser_id,
+        "kind": ref.kind,
+        "remote_id": ref.remote_id,
+    }
+
+
+def _use_dict(use: MaterialUseRef) -> dict[str, Any]:
+    return {
+        "ad_ref": _ref_dict(use.ad_ref),
+        "platform_material_id": use.platform_material_id,
+        "ad_material_id": use.ad_material_id,
+        "material_type": use.material_type,
+    }
+
+
+def _number(value: Any, *, field: str, ref: EntityRef) -> Decimal:
+    try:
+        result = value if isinstance(value, Decimal) else Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise DomainError(
+            "management_operation_invalid",
+            f"{field} 当前值无效: {ref.kind}/{ref.remote_id}",
+        ) from exc
+    if not result.is_finite() or result <= 0:
+        raise DomainError(
+            "management_operation_invalid",
+            f"{field} 当前值必须为正数: {ref.kind}/{ref.remote_id}",
+        )
+    return result
+
+
+def _final_value(current: Decimal, mutation: MutationSpec) -> Decimal | str:
+    if mutation.field == "status" or mutation.field == "material_status":
+        return mutation.value
+    assert isinstance(mutation.value, Decimal)
+    if mutation.mode == "set":
+        result = mutation.value
+    elif mutation.mode == "add":
+        result = current + mutation.value
+    elif mutation.mode == "subtract":
+        result = current - mutation.value
+    elif mutation.mode == "increase_percent":
+        result = current * (Decimal("1") + mutation.value / Decimal("100"))
+    else:
+        result = current * (Decimal("1") - mutation.value / Decimal("100"))
+    if not result.is_finite() or result <= 0:
+        raise DomainError("management_operation_invalid", "管理后的数值必须为正数")
+    return result
+
+
+def _parent_ref(row: AdObject) -> EntityRef | None:
+    return row.parent_ref
+
+
+def _object_for_ref(
+    session: Session,
+    *,
+    context: TenantContext,
+    bc_id: str,
+    ref: EntityRef,
+) -> AdObject | None:
+    try:
+        return locate(session, context=context, bc_id=bc_id, ref=ref)
+    except DomainError as exc:
+        if exc.code in {"ad_object_not_found", "directory_forbidden"}:
+            return None
+        raise
+
+
+def _material_row(session: Session, use: MaterialUseRef) -> AdMaterialReference | None:
+    statement = select(AdMaterialReference).where(
+        AdMaterialReference.tenant_id == use.ad_ref.tenant_id,
+        AdMaterialReference.advertiser_id == use.ad_ref.advertiser_id,
+        AdMaterialReference.ad_remote_id == use.ad_ref.remote_id,
+        AdMaterialReference.platform_material_id == use.platform_material_id,
+        AdMaterialReference.material_type == use.material_type,
+    )
+    if use.ad_material_id is None:
+        statement = statement.where(col(AdMaterialReference.ad_material_id).is_(None))
+    else:
+        statement = statement.where(AdMaterialReference.ad_material_id == use.ad_material_id)
+    return session.exec(statement.execution_options(populate_existing=True)).first()
+
+
+def _budget_owner(
+    session: Session,
+    *,
+    context: TenantContext,
+    bc_id: str,
+    row: AdObject,
+    objects: dict[tuple[UUID, str, str, str], AdObject],
+) -> AdObject | None:
+    """Resolve the actual budget owner without searching for new descendants.
+
+    TikTok may expose campaign budget mode on either the campaign or group row;
+    explicit ``budget_owner``/``budget_mode`` values win, otherwise a group with
+    a local budget owns itself and a group without one inherits its campaign.
+    """
+    current = row
+    visited: set[tuple[UUID, str, str, str]] = set()
+    while current is not None and _ref_key(current.ref) not in visited:
+        visited.add(_ref_key(current.ref))
+        if current.kind == "campaign":
+            return current
+        config = current.configuration or {}
+        owner = str(config.get("budget_owner") or "").upper()
+        mode = str(config.get("budget_mode") or "").upper()
+        if current.kind == "adgroup" and (
+            owner in {"ADGROUP", "AD_GROUP", "GROUP"}
+            or "ADGROUP" in mode
+            or "AD_GROUP" in mode
+            or ("budget" in config and owner not in {"CAMPAIGN", "SERIES"} and "CAMPAIGN" not in mode)
+        ):
+            return current
+        parent = current.parent_ref
+        if parent is None:
+            return current if current.kind in {"campaign", "adgroup"} else None
+        next_row = objects.get(_ref_key(parent))
+        if next_row is None:
+            next_row = _object_for_ref(session, context=context, bc_id=bc_id, ref=parent)
+            if next_row is not None:
+                objects[_ref_key(parent)] = next_row
+        current = next_row
+    return None
+
+
+def _current_value(
+    session: Session,
+    row: AdObject,
+    use: MaterialUseRef | None,
+    field: str,
+) -> Decimal | str | None:
+    if use is not None and field in {"status", "material_status"}:
+        material = _material_row(session, use)
+        return material.operation_status if material is not None else row.operation_status
+    if field == "status":
+        return row.operation_status
+    key = "roas_bid" if field == "roas" else "budget"
+    return (row.configuration or {}).get(key)
+
+
+def _grouping_revision(session: Session, ref: EntityRef) -> int:
+    # Name parsing is an audit coordinate only. Invalid names remain manageable
+    # by identity and simply use revision 0.
+    from app.modules.ads.models import CampaignNameProjection
+
+    if ref.kind != "campaign":
+        return 0
+    row = session.exec(
+        select(CampaignNameProjection)
+        .where(
+            CampaignNameProjection.tenant_id == ref.tenant_id,
+            CampaignNameProjection.advertiser_id == ref.advertiser_id,
+            CampaignNameProjection.campaign_remote_id == ref.remote_id,
+        )
+        .order_by(col(CampaignNameProjection.name_revision).desc())
+        .limit(1)
+    ).first()
+    return row.grouping_revision if row is not None else 0
+
+
+def _series_key(
+    session: Session, row: AdObject, objects: dict[tuple[UUID, str, str, str], AdObject]
+) -> tuple[Any, ...]:
+    """Return the frozen naming series coordinate, falling back to identity.
+
+    A valid provider/drama projection coordinates a series across campaigns;
+    invalid names still remain manageable by object identity.
+    """
+    campaign = row
+    seen: set[tuple[Any, ...]] = set()
+    while campaign.parent_ref is not None and campaign.kind != "campaign":
+        key = _ref_key(campaign.ref)
+        if key in seen:
+            break
+        seen.add(key)
+        parent = objects.get(_ref_key(campaign.parent_ref))
+        if parent is None:
+            parent = session.get(
+                AdObject,
+                _ref_key(campaign.parent_ref),
+                populate_existing=True,
+            )
+            if parent is not None:
+                objects[_ref_key(parent.ref)] = parent
+        if parent is None:
+            break
+        campaign = parent
+    if campaign.kind != "campaign":
+        return (row.advertiser_id, row.remote_id)
+    from app.modules.ads.models import CampaignNameProjection
+
+    projection = session.exec(
+        select(CampaignNameProjection)
+        .where(
+            CampaignNameProjection.tenant_id == campaign.tenant_id,
+            CampaignNameProjection.advertiser_id == campaign.advertiser_id,
+            CampaignNameProjection.campaign_remote_id == campaign.remote_id,
+        )
+        .order_by(col(CampaignNameProjection.name_revision).desc())
+        .limit(1)
+    ).first()
+    if projection is not None and projection.status == "VALID":
+        return (campaign.advertiser_id, projection.provider_label, projection.drama_name)
+    return (campaign.advertiser_id, "campaign", campaign.remote_id)
+
+
+def _command(
+    row: AdObject,
+    *,
+    field: str,
+    final: Decimal | str,
+    use: MaterialUseRef | None,
+) -> ManagementCommand:
+    original: dict[str, Any] = {"ad_type": row.ad_type}
+    original.update(deepcopy(row.configuration or {}))
+    if field == "roas":
+        desired = {"roas_bid": str(final)}
+    elif field == "budget":
+        desired = {"budget": str(final)}
+    elif field == "material_status":
+        desired = {"operation_status": final}
+    else:
+        desired = {"operation_status": final}
+    return ManagementCommand(
+        ref=row.ref,
+        field=cast(ManagementField, field),
+        original=original,
+        desired=desired,
+        ad_material_id=use.ad_material_id if use is not None else None,
+    )
+
+
+def _load_selection(
+    session: Session, context: TenantContext, selection_id: UUID
+):
+    record = session.exec(
+        select(FrozenSelectionRecord).where(
+            FrozenSelectionRecord.id == selection_id,
+            FrozenSelectionRecord.tenant_id == context.tenant_id,
+            FrozenSelectionRecord.actor_id == context.actor_id,
+        )
+    ).first()
+    if record is None:
+        from fastapi import HTTPException
+
+        raise HTTPException(404, detail="frozen_selection_not_found")
+    # get_frozen_selection rechecks current read grants, expiry, and reconstructs
+    # exact refs/material identities from the persisted B record.
+    return record.bc_id, get_frozen_selection(
+        session, context=context, bc_id=record.bc_id, selection_id=selection_id
+    )
+
+
+def _expand(
+    session: Session,
+    context: TenantContext,
+    *,
+    bc_id: str,
+    selection_id: UUID,
+    mutation: MutationSpec,
+    require_capabilities: bool = False,
+    route: Any = None,
+) -> Expansion:
+    selected_bc, selection = _load_selection(session, context, selection_id)
+    if selected_bc != bc_id:
+        raise DomainError("read_bc_mismatch", "冻结选择不属于当前 BC")
+    excluded_refs = {_ref_key(ref) for ref in mutation.excluded_refs}
+    excluded_uses = {_use_key(item) for item in mutation.excluded_material_uses}
+    unique_refs: list[EntityRef] = []
+    seen_refs: set[tuple[Any, ...]] = set()
+    for ref in selection.refs:
+        key = _ref_key(ref)
+        if key not in excluded_refs and key not in seen_refs:
+            seen_refs.add(key)
+            unique_refs.append(ref)
+    refs = tuple(unique_refs)
+    unique_uses: list[MaterialUseRef] = []
+    seen_uses: set[tuple[Any, ...]] = set()
+    for use in selection.material_uses:
+        key = _use_key(use)
+        if key not in excluded_uses and _ref_key(use.ad_ref) not in excluded_refs and key not in seen_uses:
+            seen_uses.add(key)
+            unique_uses.append(use)
+    uses = tuple(unique_uses)
+    objects: dict[tuple[UUID, str, str, str], AdObject] = {}
+    for ref in refs:
+        row = _object_for_ref(session, context=context, bc_id=bc_id, ref=ref)
+        if row is not None:
+            objects[_ref_key(ref)] = row
+    # Explicit parents are the only extra identities admitted into a write set.
+    for ref in mutation.include_parents:
+        if ref.tenant_id != context.tenant_id or ref.advertiser_id not in {
+            selection_ref.advertiser_id for selection_ref in refs
+        }:
+            raise DomainError("management_operation_invalid", "显式父级超出冻结选择账户范围")
+        row = _object_for_ref(session, context=context, bc_id=bc_id, ref=ref)
+        if row is not None:
+            objects[_ref_key(ref)] = row
+    items: list[ExpandedItem] = []
+    commands: list[ManagementCommand] = []
+    command_by_ref: dict[tuple[Any, ...], ManagementCommand] = {}
+    command_items: dict[tuple[Any, ...], ExpandedItem] = {}
+    material_mode = mutation.field == "material_status" or (
+        mutation.field == "status" and bool(uses)
+    )
+    effective_field = "material_status" if material_mode else mutation.field
+
+    def add_item(
+        row: AdObject,
+        *,
+        use: MaterialUseRef | None = None,
+        linked: bool = False,
+        force_field: str | None = None,
+    ) -> None:
+        field = force_field or effective_field
+        current = _current_value(session, row, use, field)
+        operation = _OPERATION_BY_FIELD[field]
+        capability_ok = True
+        capability: dict[str, Any] = {
+            "operation": operation,
+            "entity_kind": row.kind,
+            "ad_type": row.ad_type,
+            "published_version": row.published_version,
+            "observed_at": row.observed_at.isoformat(),
+            "configuration": deepcopy(row.configuration or {}),
+        }
+        if use is not None:
+            capability["ad_material_id"] = use.ad_material_id
+            capability["platform_material_id"] = use.platform_material_id
+        if require_capabilities:
+            from app.modules.accounts.management_capability_models import (
+                ManagementCapability,
+            )
+
+            statement = select(ManagementCapability).where(
+                ManagementCapability.tenant_id == context.tenant_id,
+                ManagementCapability.bc_id == bc_id,
+                ManagementCapability.advertiser_id == row.advertiser_id,
+                ManagementCapability.operation == operation,
+                ManagementCapability.entity_kind == row.kind,
+                ManagementCapability.state == "VERIFIED",
+                col(ManagementCapability.verified_at).is_not(None),
+                col(ManagementCapability.verified_at) <= datetime.now(UTC),
+            )
+            if route is not None:
+                statement = statement.where(
+                    ManagementCapability.connection_id == route.connection_id,
+                    ManagementCapability.authorization_revision == route.authorization_revision,
+                    ManagementCapability.binding_revision == route.binding_revision,
+                    ManagementCapability.adapter_contract_revision == route.adapter_contract_revision,
+                )
+            capability_ok = session.exec(statement).first() is not None
+        if use is not None and (
+            use.ad_material_id is None
+            or row.ad_type.upper() not in {"SMART_PLUS", "UPGRADED_SMART_PLUS", "SMART+", "SMARTPLUS"}
+        ):
+            items.append(
+                ExpandedItem(row.ref, use, current, None, "material_status_unsupported", "UNSUPPORTED", None, row.parent_ref, 0, capability, linked)
+            )
+            return
+        if current is None:
+            items.append(
+                ExpandedItem(row.ref, use, None, None, "configuration_missing", "UNSUPPORTED", None, row.parent_ref, 0, capability, linked)
+            )
+            return
+        if field not in {"status", "material_status"}:
+            current = _number(current, field=field, ref=row.ref)
+        if field in {"status", "material_status"}:
+            final: Decimal | str = mutation.value
+        else:
+            final = _final_value(_number(current, field=field, ref=row.ref), mutation)
+        if not capability_ok:
+            items.append(
+                ExpandedItem(row.ref, use, current, final, "management_capability_unverified", "UNSUPPORTED", None, row.parent_ref, 0, capability, linked)
+            )
+            return
+        if current == final:
+            items.append(
+                ExpandedItem(row.ref, use, current, final, "no_change", "NO_CHANGE", None, row.parent_ref, 0, capability, linked)
+            )
+            return
+        command = _command(row, field=field, final=final, use=use)
+        key = (_ref_key(row.ref), _use_key(use) if use else None, field)
+        if key in command_by_ref:
+            return
+        command_by_ref[key] = command
+        item = ExpandedItem(row.ref, use, current, final, None, "PENDING", command, row.parent_ref, 0, capability, linked)
+        command_items[key] = item
+        commands.append(command)
+        items.append(item)
+
+    # Material selection represents independent switches; ordinary material refs
+    # intentionally never degrade to an ad status command.
+    if material_mode and uses:
+        for use in uses:
+            row = objects.get(_ref_key(use.ad_ref))
+            if row is None:
+                items.append(ExpandedItem(use.ad_ref, use, None, None, "ad_not_found", "UNSUPPORTED", None, None, 0, {}, False))
+            else:
+                add_item(row, use=use)
+    else:
+        candidate_rows: list[AdObject] = []
+        for ref in refs:
+            row = objects.get(_ref_key(ref))
+            if row is not None:
+                candidate_rows.append(row)
+        for parent_ref in mutation.include_parents:
+            row = objects.get(_ref_key(parent_ref))
+            if row is not None and row not in candidate_rows:
+                candidate_rows.append(row)
+
+        # ROAS is an ad-group setting. Ads and frozen campaigns map to groups only
+        # when that group identity was itself frozen; no fresh descendants are read.
+        if mutation.field == "roas":
+            groups: dict[tuple[Any, ...], AdObject] = {}
+            for row in candidate_rows:
+                target = row
+                if row.kind == "ad":
+                    parent = objects.get(_ref_key(row.parent_ref)) if row.parent_ref else None
+                    if parent is None and row.parent_ref is not None:
+                        parent = _object_for_ref(
+                            session,
+                            context=context,
+                            bc_id=bc_id,
+                            ref=row.parent_ref,
+                        )
+                        if parent is not None:
+                            objects[_ref_key(parent.ref)] = parent
+                    target = parent if parent is not None and parent.kind == "adgroup" else None
+                    if target is None:
+                        items.append(
+                            ExpandedItem(
+                                row.ref,
+                                None,
+                                None,
+                                None,
+                                "adgroup_missing",
+                                "UNSUPPORTED",
+                                None,
+                                row.parent_ref,
+                                0,
+                                {"ad_type": row.ad_type, "configuration": deepcopy(row.configuration or {})},
+                                False,
+                            )
+                        )
+                if target is not None and target.kind == "adgroup":
+                    groups[_ref_key(target.ref)] = target
+            for row in groups.values():
+                add_item(row)
+        elif mutation.field == "budget":
+            owners: dict[tuple[Any, ...], AdObject] = {}
+            for row in candidate_rows:
+                owner = _budget_owner(session, context=context, bc_id=bc_id, row=row, objects=objects)
+                if owner is not None:
+                    owners[_ref_key(owner.ref)] = owner
+                else:
+                    items.append(
+                        ExpandedItem(
+                            row.ref,
+                            None,
+                            None,
+                            None,
+                            "budget_owner_missing",
+                            "UNSUPPORTED",
+                            None,
+                            row.parent_ref,
+                            0,
+                            {"ad_type": row.ad_type, "configuration": deepcopy(row.configuration or {})},
+                            False,
+                        )
+                    )
+            for row in owners.values():
+                add_item(row)
+        else:
+            for row in candidate_rows:
+                add_item(row)
+
+        # Enabling a child does not silently rewrite a paused ancestor. Keep the
+        # blocked parent visible so the caller can explicitly add it through
+        # ``include_parents`` in a follow-up preview.
+        if mutation.field == "status" and mutation.value == "ENABLE":
+            existing = {_ref_key(item.ref) for item in items}
+            for row in candidate_rows:
+                parent = row
+                while parent.parent_ref is not None:
+                    parent_row = objects.get(_ref_key(parent.parent_ref))
+                    if parent_row is None:
+                        parent_row = _object_for_ref(
+                            session,
+                            context=context,
+                            bc_id=bc_id,
+                            ref=parent.parent_ref,
+                        )
+                        if parent_row is not None:
+                            objects[_ref_key(parent_row.ref)] = parent_row
+                    if parent_row is None:
+                        break
+                    if parent_row.operation_status != "ENABLE" and _ref_key(parent_row.ref) not in existing:
+                        items.append(
+                            ExpandedItem(
+                                parent_row.ref,
+                                None,
+                                parent_row.operation_status,
+                                "ENABLE",
+                                "parent_disabled",
+                                "NO_CHANGE",
+                                None,
+                                parent_row.parent_ref,
+                                0,
+                                {
+                                    "ad_type": parent_row.ad_type,
+                                    "configuration": deepcopy(parent_row.configuration or {}),
+                                },
+                                True,
+                            )
+                        )
+                        existing.add(_ref_key(parent_row.ref))
+                    parent = parent_row
+
+    # Keep selected refs that did not become direct commands visible in the preview.
+    visible_refs = {_ref_key(item.ref) for item in items}
+    for ref in refs:
+        if _ref_key(ref) in visible_refs:
+            continue
+        row = objects.get(_ref_key(ref))
+        if row is None:
+            items.append(ExpandedItem(ref, None, None, None, "directory_missing", "UNSUPPORTED", None, None, 0, {}, True))
+        else:
+            items.append(ExpandedItem(ref, None, None, None, "linked_impact", "NO_CHANGE", None, row.parent_ref, 0, {"ad_type": row.ad_type, "configuration": deepcopy(row.configuration or {})}, True))
+
+    # Same series cannot receive divergent ROAS values in one management task.
+    if mutation.field == "roas":
+        by_series: dict[tuple[Any, ...], set[str]] = defaultdict(set)
+        for item in items:
+            if item.command is None or item.final_value is None:
+                continue
+            row = objects.get(_ref_key(item.ref))
+            series = _series_key(session, row, objects) if row is not None else (item.ref.advertiser_id, item.ref.remote_id)
+            by_series[series].add(str(item.final_value))
+        if any(len(values) > 1 for values in by_series.values()):
+            raise DomainError("config_conflict", "同系列不同最终 ROAS，预览拒绝")
+
+    return Expansion(refs, uses, tuple(items), tuple(commands))
+
+
+def expand_targets(
+    session: Session,
+    context: TenantContext,
+    selection_id: UUID,
+    mutation: MutationSpec,
+) -> tuple[ManagementCommand, ...]:
+    """Expand a valid B selection into immutable management commands.
+
+    Capability checks are performed by :func:`prepare_preview` after the route is
+    frozen. This lower-level helper deliberately returns only command objects;
+    callers needing unsupported/linked items should consume the preview result.
+    """
+    bc_id, _ = _load_selection(session, context, selection_id)
+    return _expand(
+        session,
+        context,
+        bc_id=bc_id,
+        selection_id=selection_id,
+        mutation=mutation,
+        require_capabilities=False,
+    ).commands
+
+
+__all__ = ["ExpandedItem", "Expansion", "expand_targets", "_expand", "_ref_dict", "_use_dict"]
