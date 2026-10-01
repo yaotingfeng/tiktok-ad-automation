@@ -40,7 +40,15 @@ def test_scope_and_role_are_reloaded(session, context, other_context):
 
 
 @pytest.mark.parametrize(
-    "action", ["build", "upload", "manage", "provider_write", "strategy_write"]
+    "action",
+    [
+        "build",
+        "upload",
+        "manage",
+        "provider_write",
+        "strategy_write",
+        "reporting_write",
+    ],
 )
 def test_viewer_cannot_write(session, context, action):
     member = session.get(TenantMembership, (context.tenant_id, context.actor_id))

@@ -123,8 +123,10 @@ def _filters(
     )
 
 
-def _context(session, user, tenant_id: UUID) -> TenantContext:
-    return require_tenant(session, actor_id=user.id, tenant_id=tenant_id, action="read")
+def _context(
+    session, user, tenant_id: UUID, *, action: Literal["read", "reporting_write"] = "read"
+) -> TenantContext:
+    return require_tenant(session, actor_id=user.id, tenant_id=tenant_id, action=action)
 
 
 @router.get("/ads", response_model=AdsQueryPage, name="query_ads")
@@ -285,7 +287,7 @@ def freeze_ad_selection_route(
     session: SessionDep,
     user: CurrentUser,
 ) -> FrozenSelection:
-    context = _context(session, user, tenant_id)
+    context = _context(session, user, tenant_id, action="reporting_write")
     result = freeze_selection(session, context=context, bc_id=bc_id, request=body)
     session.commit()
     return result
@@ -299,7 +301,7 @@ def create_report_view_route(
     session: SessionDep,
     user: CurrentUser,
 ) -> SavedViewPublic:
-    context = _context(session, user, tenant_id)
+    context = _context(session, user, tenant_id, action="reporting_write")
     result = save_view(
         session,
         context=context,
@@ -336,7 +338,7 @@ def update_report_view_route(
     session: SessionDep,
     user: CurrentUser,
 ) -> SavedViewPublic:
-    context = _context(session, user, tenant_id)
+    context = _context(session, user, tenant_id, action="reporting_write")
     result = update_view(
         session,
         context=context,
@@ -358,7 +360,7 @@ def delete_report_view_route(
     session: SessionDep,
     user: CurrentUser,
 ) -> dict[str, bool]:
-    context = _context(session, user, tenant_id)
+    context = _context(session, user, tenant_id, action="reporting_write")
     delete_view(session, context=context, bc_id=bc_id, view_id=view_id)
     session.commit()
     return {"deleted": True}
@@ -372,7 +374,7 @@ def create_report_export_route(
     session: SessionDep,
     user: CurrentUser,
 ) -> ExportPublic:
-    context = _context(session, user, tenant_id)
+    context = _context(session, user, tenant_id, action="reporting_write")
     result = create_export(
         session,
         context=context,
@@ -438,7 +440,7 @@ def request_ad_sync_route(
     session: SessionDep,
     user: CurrentUser,
 ) -> SyncRunPublic:
-    context = _context(session, user, tenant_id)
+    context = _context(session, user, tenant_id, action="reporting_write")
     # 先冻结当前默认通道，再由 request_sync 对每个账户重新核对当前授权。
     route = freeze_route(session, context=context, bc_id=bc_id, connection_id=None)
     request = SyncRequest(

@@ -10,11 +10,25 @@ from app.models import User
 from app.modules.tenants.models import Tenant, TenantMembership
 
 Action = Literal[
-    "read", "manage", "build", "upload", "strategy_write", "provider_write"
+    "read",
+    "manage",
+    "build",
+    "upload",
+    "strategy_write",
+    "provider_write",
+    "reporting_write",
 ]
 Role = Literal["platform_admin", "tenant_admin", "operator", "viewer"]
 ALL_ACTIONS = frozenset(
-    {"read", "manage", "build", "upload", "strategy_write", "provider_write"}
+    {
+        "read",
+        "manage",
+        "build",
+        "upload",
+        "strategy_write",
+        "provider_write",
+        "reporting_write",
+    }
 )
 PERMISSIONS = {
     "platform_admin": ALL_ACTIONS,
