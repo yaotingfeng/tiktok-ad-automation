@@ -158,6 +158,8 @@ class SdkManagementOperations:
         self._management_scope = management_scope
         if self._check is None:
             raise DomainError("management_permission_unverified", "管理请求缺少账户能力门禁")
+        if self._management_scope is None:
+            raise DomainError("management_permission_unverified", "管理请求缺少专用准入门禁")
 
     def apply(self, command: ManagementCommand) -> ManagementReceipt:
         if not isinstance(command, ManagementCommand):
@@ -165,8 +167,7 @@ class SdkManagementOperations:
         operation = f"management.{command.operation}"
         if operation not in {f"management.{name}" for name in MANAGEMENT_OPERATIONS}:
             raise DomainError("management_operation_invalid", "管理操作无效")
-        if self._check is not None:
-            self._check(command.ref.advertiser_id, command.operation, command.ref.kind)
+        self._check(command.ref.advertiser_id, command.operation, command.ref.kind)
         smart_plus = _smart_plus(command)
         payload = _payload(command, smart_plus=smart_plus)
         methods: dict[str, Any]
@@ -193,15 +194,11 @@ class SdkManagementOperations:
         sent = False
         try:
             remaining(self._deadline)
-            scope = (
-                self._management_scope(
-                    command.ref.advertiser_id,
-                    command.operation,
-                    command.ref.kind,
-                    self._deadline,
-                )
-                if self._management_scope is not None
-                else self._scope(command.ref.advertiser_id, operation, self._deadline)
+            scope = self._management_scope(
+                command.ref.advertiser_id,
+                command.operation,
+                command.ref.kind,
+                self._deadline,
             )
             with scope:
                 budget = remaining(self._deadline)

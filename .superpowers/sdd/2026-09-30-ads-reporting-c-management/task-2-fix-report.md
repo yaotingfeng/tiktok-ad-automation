@@ -3,6 +3,7 @@
 - 原始提交保留：`07ef214 ad-management: add capability-gated API and MCP mutations`
 - 前次修复提交保留：`5386465 ad-management: close C2 management gate gaps`
 - 本次窄修复提交：`ad-management: make C2 gates non-bypassable`
+- 最终门禁修复提交：`ad-management: require dedicated SDK management scope`
 - 未调用真实 TikTok/MCP、未部署、未执行真实广告写入。
 
 修复内容：
@@ -15,6 +16,7 @@
 6. 两个管理适配器构造时强制能力回调；SDK gateway 管理回调携带无前缀 operation 与实体层级，通用 request scope 不能替代管理能力门禁。
 7. campaign budget 按普通/Smart+ 分别调用官方 campaign_update 合同；ROAS 仍仅允许 adgroup，campaign ROAS 在 payload 层零发送。
 8. MCP 管理适配器在 transport 缺失 observed-contract 查询能力时也 fail closed，绝不发送。
+9. SDK 管理适配器构造时强制专用 `management_scope`，发送始终携带无前缀 operation、实体层级和截止时间；generic request scope 不再可作为回退。素材状态补充 API transport-double 与零发送门禁回归。
 
 验证（隔离 PostgreSQL `tkada_c2_20261001_test`，Redis 6387/2）：
 

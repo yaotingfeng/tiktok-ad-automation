@@ -44,17 +44,65 @@ def _allow(_advertiser: str, _operation: str, _kind: str) -> None:
     return None
 
 
-@pytest.mark.parametrize("channel", ["api", "mcp"])
-def test_material_status_uses_ad_reference(channel):
+def test_mcp_material_status_uses_ad_reference():
     command = _command()
     assert _payload(command, smart_plus=True)["ad_material_ids"] == [command.ad_material_id]
     assert _payload(command, smart_plus=True)["smart_plus_ad_id"] == command.ref.remote_id
     wire = _McpWire()
     receipt = McpManagementOperations(wire, capability_check=_allow).apply(command)  # type: ignore[arg-type]
-    assert channel == "mcp" or receipt.outcome == "ACCEPTED"
     assert receipt.outcome == "ACCEPTED"
     assert wire.calls[0][2]["advertiser_id"] == command.ref.advertiser_id
     assert wire.calls[0][2]["ad_material_ids"] == [command.ad_material_id]
+
+
+def test_sdk_material_status_uses_ad_reference_and_capability_gate(monkeypatch):
+    calls: list[dict] = []
+
+    class FakeAsync:
+        def get(self):
+            return None
+
+    class FakeAdApi:
+        def __init__(self, _client):
+            pass
+
+        def smart_plus_ad_material_status_update(self, _token, **kwargs):
+            calls.append(kwargs)
+            return FakeAsync()
+
+    class FakeClient:
+        default_headers = {"Access-Token": "synthetic-token"}
+        last_response = type("Response", (), {"data": b'{"code": 0, "data": {}}'})()
+
+    @contextmanager
+    def scope(*_args):
+        yield
+
+    monkeypatch.setattr(sdk_management.sdk, "AdApi", FakeAdApi)
+    command = _command()
+    receipt = SdkManagementOperations(
+        FakeClient(),
+        request_scope=scope,
+        management_scope=scope,
+        capability_check=_allow,
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+    ).apply(command)
+    assert receipt.outcome == "ACCEPTED"
+    assert calls[0]["body"]["smart_plus_ad_id"] == command.ref.remote_id
+    assert calls[0]["body"]["ad_material_ids"] == [command.ad_material_id]
+
+    def deny(_advertiser: str, _operation: str, _kind: str) -> None:
+        raise DomainError("management_permission_unverified", "management permission unverified")
+
+    with pytest.raises(DomainError, match="management permission"):
+        SdkManagementOperations(
+            FakeClient(),
+            request_scope=scope,
+            management_scope=scope,
+            capability_check=deny,
+            deadline=datetime.now(UTC) + timedelta(seconds=30),
+        ).apply(command)
+    assert len(calls) == 1
 
 
 def test_management_gate_runs_before_mcp_transport():
@@ -154,6 +202,13 @@ def test_management_adapters_require_capability_callback_at_construction():
             request_scope=lambda *_args: None,  # type: ignore[arg-type]
             deadline=datetime.now(UTC),
         )
+    with pytest.raises(DomainError, match="专用准入门禁"):
+        SdkManagementOperations(
+            object(),
+            request_scope=lambda *_args: None,  # type: ignore[arg-type]
+            capability_check=_allow,
+            deadline=datetime.now(UTC),
+        )
 
 
 @pytest.mark.parametrize("smart_plus", [False, True])
@@ -175,6 +230,7 @@ def test_campaign_budget_uses_campaign_payload_contract(smart_plus):
 @pytest.mark.parametrize("smart_plus", [False, True])
 def test_sdk_campaign_budget_uses_matching_campaign_update(monkeypatch, smart_plus):
     calls: list[dict] = []
+    scope_calls: list[tuple] = []
 
     class FakeAsync:
         def get(self):
@@ -201,7 +257,8 @@ def test_sdk_campaign_budget_uses_matching_campaign_update(monkeypatch, smart_pl
         last_response = type("Response", (), {"data": b'{"code": 0, "data": {}}'})()
 
     @contextmanager
-    def scope(*_args):
+    def scope(*args):
+        scope_calls.append(args)
         yield
 
     monkeypatch.setattr(sdk_management.sdk, "CampaignCreationApi", FakeCampaignApi)
@@ -212,14 +269,16 @@ def test_sdk_campaign_budget_uses_matching_campaign_update(monkeypatch, smart_pl
         original={"ad_type": "SMART_PLUS" if smart_plus else "REGULAR"},
         desired={"budget": "100.00"},
     )
+    deadline = datetime.now(UTC) + timedelta(seconds=30)
     receipt = SdkManagementOperations(
         FakeClient(),
         request_scope=scope,
         management_scope=scope,
         capability_check=_allow,
-        deadline=datetime.now(UTC) + timedelta(seconds=30),
+        deadline=deadline,
     ).apply(command)
     assert receipt.outcome == "ACCEPTED"
     assert calls[0]["method"] == (
         "smart_plus_campaign_update" if smart_plus else "campaign_update"
     )
+    assert scope_calls == [("adv-1", "update_budget", "campaign", deadline)]
