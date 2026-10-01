@@ -6,7 +6,7 @@ export const BC_B = "bc-b"
 export const ADVERTISER = "adv-1"
 const token = "ads-workspace-test-token"
 
-export type AdsBoundaryOptions = { delayedA?: boolean }
+export type AdsBoundaryOptions = { delayedA?: boolean; paged?: boolean }
 
 export async function adsBoundary(
   page: Page,
@@ -72,7 +72,12 @@ export async function adsBoundary(
       const bc = url.searchParams.get("bc_id")
       if (bc === BC_A && options.delayedA)
         await new Promise((resolve) => setTimeout(resolve, 700))
-      const name = bc === BC_B ? "乙-其他剧-测试" : "嘉书-总裁归来-测试"
+      const secondPage = Boolean(url.searchParams.get("cursor"))
+      const name = secondPage
+        ? "嘉书-第二页-测试"
+        : bc === BC_B
+          ? "乙-其他剧-测试"
+          : "嘉书-总裁归来-测试"
       const dimension = url.searchParams.get("dimension")
       const display =
         dimension === "drama"
@@ -137,15 +142,30 @@ export async function adsBoundary(
           ],
           total: 1,
           summary: {
-            d0_roas: "1.2",
-            spend: "100",
-            native_growth_ad_revenue_value_d0: "120",
+            row_count: 1,
+            buckets: [
+              {
+                currency: "USD",
+                timezone: "UTC",
+                attribution: "IAA",
+                values: {
+                  spend: "100",
+                  native_growth_ad_revenue_value_d0: "120",
+                  d0_roas: "1.2",
+                },
+                availability: {
+                  spend: "AVAILABLE",
+                  native_growth_ad_revenue_value_d0: "AVAILABLE",
+                  d0_roas: "AVAILABLE",
+                },
+              },
+            ],
           },
           coverage: {
             status: "COMPLETE",
             latest_sync_at: "2026-10-01T00:00:00Z",
           },
-          next_cursor: null,
+          next_cursor: options.paged && !secondPage ? "cursor-1" : null,
         },
       })
     }

@@ -21,6 +21,7 @@ export type AdsSearch = Omit<
   page: number
   limit: number
   cursor?: string | null
+  snapshot_id?: string | null
 }
 export const DIMENSIONS: Array<{ value: AdsDimension; label: string }> = [
   { value: "account", label: "账户" },
@@ -61,6 +62,16 @@ export function toAdsQuery(
     snapshot_id: snapshotId,
   }
 }
+export function toReportingFilter(search: AdsSearch): ReportingFilter_Input {
+  const {
+    page: _page,
+    limit: _limit,
+    cursor: _cursor,
+    snapshot_id: _snapshot,
+    ...filters
+  } = search
+  return filters
+}
 export function rowName(row: ReportRow): string {
   const display = row.display ?? {}
   return (
@@ -90,6 +101,58 @@ export function rowMetric(
       bucket?.availability?.[metric] ??
       (value === null ? "MISSING" : "AVAILABLE"),
   }
+}
+export function rowTargetRoas(row: ReportRow): string | null {
+  const display = row.display ?? {}
+  const record = row as unknown as Record<string, unknown>
+  const candidates = [
+    display.target_roas,
+    record.target_roas,
+    record.targetRoas,
+    record.roas_bid,
+    record.target_roas_bid,
+  ]
+  for (const candidate of candidates) {
+    if (candidate !== null && candidate !== undefined && candidate !== "")
+      return String(candidate)
+  }
+  const configurations = [
+    (display as Record<string, unknown>).configuration,
+    record.configuration,
+    record.directory,
+    record.config,
+  ]
+  for (const configuration of configurations) {
+    if (!configuration || typeof configuration !== "object") continue
+    const config = configuration as Record<string, unknown>
+    for (const key of ["target_roas", "targetRoas", "roas_bid"]) {
+      const value = config[key]
+      if (value !== null && value !== undefined && value !== "")
+        return String(value)
+    }
+  }
+  return null
+}
+export function availabilityLabel(
+  availability: string,
+  value: string | null,
+): string {
+  if (availability === "AVAILABLE") return formatMetric(value)
+  if (availability === "UNSUPPORTED") return "平台未提供"
+  if (availability === "UNAVAILABLE") return "暂不可用"
+  if (availability === "FAILED") return "读取失败"
+  if (availability === "INCOMPLETE") return "覆盖不完整"
+  return "数据缺失"
+}
+export function targetRoasLabel(row: ReportRow): string {
+  const target = rowTargetRoas(row)
+  if (target !== null) return formatMetric(target)
+  const status = String(row.coverage?.status ?? "").toUpperCase()
+  if (status === "FAILED") return "读取失败"
+  if (status === "UNAVAILABLE") return "暂不可用"
+  if (status === "UNSUPPORTED") return "平台未提供"
+  if (["MISSING", "INCOMPLETE"].includes(status)) return "目录未同步"
+  return "目录未同步"
 }
 export function formatMetric(
   value: string | number | null | undefined,

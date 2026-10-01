@@ -157,7 +157,7 @@ export function TenantScopeProvider({
     // 租户切换时重新绑定默认 BC；同租户手动切换不会被此 effect 覆盖。
     if (requestedBC) setSelectedBCId(requestedBC)
     else if (defaultBCId) setSelectedBCId(defaultBCId)
-  }, [tenantId, defaultBCId, requestedBC])
+  }, [defaultBCId, requestedBC])
   useEffect(() => {
     if (!tenantId || !bcId) return
     return () => {

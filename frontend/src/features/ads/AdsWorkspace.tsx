@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { useEffect, useState } from "react"
 import { AdsReportingService, type ReportRow } from "@/client"
@@ -13,7 +13,12 @@ import { AdsSummary } from "./AdsSummary"
 import { AdsTable } from "./AdsTable"
 import { AdsTrend } from "./AdsTrend"
 import { ReportCoverageNotice } from "./ReportCoverageNotice"
-import { type AdsSearch, DIMENSIONS, defaultAdsSearch } from "./search"
+import {
+  type AdsSearch,
+  DIMENSIONS,
+  defaultAdsSearch,
+  toReportingFilter,
+} from "./search"
 import { useAdsQuery } from "./useAdsQuery"
 export function AdsWorkspace() {
   const { tenantId, bc, scope, bcDirectory } = useTenantScope()
@@ -24,6 +29,76 @@ export function AdsWorkspace() {
   const [cursorHistory, setCursorHistory] = useState<Array<string | null>>([])
   const ads = useAdsQuery(applied)
   const queryClient = useQueryClient()
+  const items = ads.query.data?.items ?? []
+  const currentBcId = bc?.bc_id
+  const [actionError, setActionError] = useState<string | null>(null)
+  const syncMutation = useMutation({
+    mutationFn: async () => {
+      const refs = items.flatMap((row) => row.refs ?? [])
+      const advertiserIds = [...new Set(refs.map((ref) => ref.advertiser_id))]
+      if (!advertiserIds.length) throw new Error("当前筛选没有可刷新的广告账户")
+      return (
+        await AdsReportingService.requestAdSync({
+          path: { tenant_id: tenantId! },
+          query: { bc_id: bc!.bc_id },
+          body: { advertiser_ids: advertiserIds, scope: "report", refs },
+        })
+      ).data
+    },
+  })
+  const exportMutation = useMutation({
+    mutationFn: async () => {
+      if (!ads.snapshot) throw new Error("当前报表没有可导出的快照")
+      return (
+        await AdsReportingService.createReportExport({
+          path: { tenant_id: tenantId! },
+          query: { bc_id: bc!.bc_id },
+          body: {
+            snapshot_id: ads.snapshot.snapshot_id,
+            idempotency_key: `ads-export-${ads.snapshot.snapshot_id}-${Date.now()}`,
+          },
+        })
+      ).data
+    },
+  })
+  const viewMutation = useMutation({
+    mutationFn: async () =>
+      (
+        await AdsReportingService.createReportView({
+          path: { tenant_id: tenantId! },
+          query: { bc_id: bc!.bc_id },
+          body: {
+            name: "广告报表当前筛选",
+            filters: toReportingFilter(applied),
+            columns: [
+              "name",
+              "drama",
+              "status",
+              "spend",
+              "d0_roas",
+              "target_roas",
+            ],
+          },
+        })
+      ).data,
+  })
+  const selectionMutation = useMutation({
+    mutationFn: async () => {
+      if (!ads.snapshot) throw new Error("当前报表没有可操作的快照")
+      return (
+        await AdsReportingService.freezeAdSelection({
+          path: { tenant_id: tenantId! },
+          query: { bc_id: bc!.bc_id },
+          body: {
+            snapshot_id: ads.snapshot.snapshot_id,
+            mode: ads.selection.allMatching ? "ALL_MATCHING" : "EXPLICIT",
+            row_keys: [...ads.selection.selected],
+            excluded_row_keys: [...ads.selection.excluded],
+          },
+        })
+      ).data
+    },
+  })
   const trend = useQuery({
     queryKey: [
       "tenant",
@@ -62,14 +137,32 @@ export function AdsWorkspace() {
     }
   }, [bc, bcDirectory, navigate, tenantId])
   useEffect(() => {
-    setSearch((current) => ({ ...current, page: 1 }))
-    setApplied((current) => ({ ...current, page: 1 }))
-  }, [bc?.bc_id])
+    if (!currentBcId) return
+    setCursorHistory([])
+    setSelectedRow(null)
+    setSearch((current) => ({
+      ...current,
+      page: 1,
+      cursor: undefined,
+      snapshot_id: undefined,
+    }))
+    setApplied((current) => ({
+      ...current,
+      page: 1,
+      cursor: undefined,
+      snapshot_id: undefined,
+    }))
+  }, [currentBcId])
   const update = (next: Partial<AdsSearch>) =>
     setSearch((current) => ({ ...current, ...next, page: next.page ?? 1 }))
   const apply = () => {
     setCursorHistory([])
-    setApplied({ ...search, page: 1, cursor: undefined })
+    setApplied({
+      ...search,
+      page: 1,
+      cursor: undefined,
+      snapshot_id: undefined,
+    })
   }
   const reset = () => {
     const next = defaultAdsSearch()
@@ -77,11 +170,9 @@ export function AdsWorkspace() {
     setSearch(next)
     setApplied(next)
   }
-  const items = ads.query.data?.items ?? []
-  const refresh = () => {
-    void queryClient.invalidateQueries({
-      queryKey: ["tenant", tenantId, "ads", bc?.bc_id],
-    })
+  const runAction = (action: () => void) => {
+    setActionError(null)
+    action()
   }
   const roleReadonly = scope?.role === "viewer"
   const nextPage = () => {
@@ -91,6 +182,7 @@ export function AdsWorkspace() {
     setApplied((current) => ({
       ...current,
       cursor: nextCursor,
+      snapshot_id: ads.snapshot?.snapshot_id,
       page: current.page + 1,
     }))
   }
@@ -118,14 +210,48 @@ export function AdsWorkspace() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={refresh}>
-            刷新
+          <Button
+            variant="outline"
+            disabled={syncMutation.isPending || roleReadonly}
+            onClick={() =>
+              runAction(() =>
+                syncMutation.mutate(undefined, {
+                  onSuccess: () =>
+                    void queryClient.invalidateQueries({
+                      queryKey: ["tenant", tenantId, "ads", bc?.bc_id],
+                    }),
+                  onError: (error) => setActionError(String(error)),
+                }),
+              )
+            }
+          >
+            {syncMutation.isPending ? "刷新中…" : "刷新"}
           </Button>
-          <Button variant="outline" disabled={!ads.snapshot}>
-            导出
+          <Button
+            variant="outline"
+            disabled={!ads.snapshot || exportMutation.isPending || roleReadonly}
+            onClick={() =>
+              runAction(() =>
+                exportMutation.mutate(undefined, {
+                  onError: (error) => setActionError(String(error)),
+                }),
+              )
+            }
+          >
+            {exportMutation.isPending ? "导出中…" : "导出"}
           </Button>
-          <Button variant="outline" disabled={roleReadonly}>
-            保存筛选
+          <Button
+            variant="outline"
+            disabled={viewMutation.isPending || roleReadonly}
+            onClick={() =>
+              runAction(() =>
+                viewMutation.mutate(undefined, {
+                  onError: (error) => setActionError(String(error)),
+                }),
+              )
+            }
+          >
+            {viewMutation.isPending ? "保存中…" : "保存筛选"}
           </Button>
         </div>
       </div>
@@ -135,7 +261,7 @@ export function AdsWorkspace() {
         </p>
       )}
       <ReportCoverageNotice coverage={ads.query.data?.coverage} />
-      <AdsSummary summary={ads.query.data?.summary} />
+      <AdsSummary summary={ads.query.data?.summary} rows={items} />
       <AdsTrend trend={trend.data} />
       <Card>
         <CardContent className="space-y-4 p-4">
@@ -149,8 +275,21 @@ export function AdsWorkspace() {
             value={applied.dimension}
             onValueChange={(value) => {
               const dimension = value as AdsSearch["dimension"]
-              setApplied((current) => ({ ...current, dimension, page: 1 }))
-              setSearch((current) => ({ ...current, dimension, page: 1 }))
+              setCursorHistory([])
+              setApplied((current) => ({
+                ...current,
+                dimension,
+                page: 1,
+                cursor: undefined,
+                snapshot_id: undefined,
+              }))
+              setSearch((current) => ({
+                ...current,
+                dimension,
+                page: 1,
+                cursor: undefined,
+                snapshot_id: undefined,
+              }))
             }}
           >
             <TabsList>
@@ -193,8 +332,24 @@ export function AdsWorkspace() {
               : ads.selection.selected.size}{" "}
             条
           </span>
-          <Button disabled={roleReadonly}>批量操作</Button>
+          <Button
+            disabled={selectionMutation.isPending || roleReadonly}
+            onClick={() =>
+              runAction(() =>
+                selectionMutation.mutate(undefined, {
+                  onError: (error) => setActionError(String(error)),
+                }),
+              )
+            }
+          >
+            {selectionMutation.isPending ? "处理中…" : "批量操作"}
+          </Button>
         </div>
+      )}
+      {actionError && (
+        <p role="alert" className="text-sm text-destructive">
+          操作失败：{actionError}
+        </p>
       )}
       {ads.query.isError && (
         <p role="alert" className="text-sm text-destructive">

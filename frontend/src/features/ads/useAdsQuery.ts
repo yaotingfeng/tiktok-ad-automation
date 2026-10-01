@@ -24,19 +24,32 @@ export function useAdsQuery(search: AdsSearch) {
       (
         await AdsReportingService.queryAds({
           path: { tenant_id: tenantId! },
-          query: { bc_id: bcId!, ...toAdsQuery(search) },
+          query: {
+            bc_id: bcId!,
+            ...toAdsQuery(search, search.snapshot_id ?? undefined),
+          },
           signal,
         })
       ).data,
     placeholderData: (previous) => previous,
   })
-  // BC 变化必须清空跨页冻结选择，避免不同 BC 的 row_key 复用。
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reset is intentionally scoped to tenant and BC changes.
+  const selectionKey = useMemo(() => {
+    const {
+      page: _page,
+      limit: _limit,
+      cursor: _cursor,
+      snapshot_id: _snapshot,
+      ...filters
+    } = search
+    return JSON.stringify({ tenantId, bcId, filters })
+  }, [tenantId, bcId, search])
+  // 筛选/维度/BC 变化必须清空跨页冻结选择，避免 row_key 复用。
   useEffect(() => {
+    if (!selectionKey) return
     setSelected(new Set())
     setExcluded(new Set())
     setAllMatching(false)
-  }, [tenantId, bcId])
+  }, [selectionKey])
   const toggleRow = (row: ReportRow, checked: boolean) => {
     setSelected((current) => {
       const next = new Set(current)

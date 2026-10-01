@@ -12,11 +12,12 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import {
-  formatMetric,
+  availabilityLabel,
   officialPlatformUrl,
   rowDrama,
   rowMetric,
   rowName,
+  targetRoasLabel,
 } from "./search"
 export function AdsTable({
   rows,
@@ -79,7 +80,6 @@ export function AdsTable({
             {rows.map((row) => {
               const d0 = rowMetric(row, "d0_roas")
               const spend = rowMetric(row, "spend")
-              const target = row.display?.target_roas
               const url = officialPlatformUrl(row)
               return (
                 <TableRow key={row.row_key}>
@@ -113,16 +113,12 @@ export function AdsTable({
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    {spend.availability === "UNSUPPORTED"
-                      ? "平台未提供"
-                      : formatMetric(spend.value)}
+                    {availabilityLabel(spend.availability, spend.value)}
                   </TableCell>
                   <TableCell>
-                    {d0.availability === "UNSUPPORTED"
-                      ? "平台未提供"
-                      : formatMetric(d0.value)}
+                    {availabilityLabel(d0.availability, d0.value)}
                   </TableCell>
-                  <TableCell>{target ? formatMetric(target) : "—"}</TableCell>
+                  <TableCell>{targetRoasLabel(row)}</TableCell>
                   <TableCell>
                     {row.display?.local_material_id ? "TK-ADA" : "外部广告"}
                   </TableCell>

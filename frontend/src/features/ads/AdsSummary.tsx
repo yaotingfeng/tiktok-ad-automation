@@ -1,7 +1,55 @@
+import type { ReportRow } from "@/client"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { formatMetric } from "./search"
-export function AdsSummary({ summary }: { summary?: Record<string, unknown> }) {
-  const d0 = summary?.d0_roas ?? summary?.actual_d0_roas
+import { formatMetric, rowTargetRoas } from "./search"
+
+type SummaryBucket = {
+  values?: Record<string, string | number | null>
+}
+
+type AdsSummaryData = {
+  buckets?: SummaryBucket[]
+  [key: string]: unknown
+}
+
+function metricValue(summary: AdsSummaryData | undefined, key: string) {
+  const buckets = summary?.buckets ?? []
+  const values = buckets
+    .map((bucket) => bucket.values?.[key])
+    .filter(
+      (value): value is string | number =>
+        value !== null && value !== undefined,
+    )
+  if (values.length === 0)
+    return summary?.[key] as string | number | null | undefined
+  if (values.every((value) => String(value) === String(values[0])))
+    return values[0]
+  return "多个"
+}
+
+function displayValue(value: string | number | null | undefined) {
+  return value === "多个" ? value : formatMetric(value)
+}
+
+export function AdsSummary({
+  summary,
+  rows = [],
+}: {
+  summary?: Record<string, unknown>
+  rows?: ReportRow[]
+}) {
+  const data = summary as AdsSummaryData | undefined
+  const d0 = metricValue(data, "d0_roas") ?? metricValue(data, "actual_d0_roas")
+  const targets = rows
+    .map(rowTargetRoas)
+    .filter((value): value is string => value !== null)
+  const target =
+    targets.length === 0
+      ? rows.length > 0
+        ? "目录未同步"
+        : null
+      : targets.every((value) => value === targets[0])
+        ? targets[0]
+        : "多个"
   return (
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <Card>
@@ -11,7 +59,7 @@ export function AdsSummary({ summary }: { summary?: Record<string, unknown> }) {
           </CardTitle>
         </CardHeader>
         <CardContent className="text-xl font-semibold">
-          {formatMetric(summary?.spend as string | null)}
+          {displayValue(metricValue(data, "spend"))}
         </CardContent>
       </Card>
       <Card>
@@ -21,9 +69,7 @@ export function AdsSummary({ summary }: { summary?: Record<string, unknown> }) {
           </CardTitle>
         </CardHeader>
         <CardContent className="text-xl font-semibold">
-          {formatMetric(
-            summary?.native_growth_ad_revenue_value_d0 as string | null,
-          )}
+          {displayValue(metricValue(data, "native_growth_ad_revenue_value_d0"))}
         </CardContent>
       </Card>
       <Card>
@@ -33,7 +79,7 @@ export function AdsSummary({ summary }: { summary?: Record<string, unknown> }) {
           </CardTitle>
         </CardHeader>
         <CardContent className="text-xl font-semibold">
-          {formatMetric(d0 as string | null)}
+          {displayValue(d0)}
         </CardContent>
       </Card>
       <Card>
@@ -43,9 +89,9 @@ export function AdsSummary({ summary }: { summary?: Record<string, unknown> }) {
           </CardTitle>
         </CardHeader>
         <CardContent className="text-xl font-semibold">
-          {summary?.target_roas == null
-            ? "—"
-            : formatMetric(summary.target_roas as string)}
+          {target === "多个" || target === "目录未同步"
+            ? target
+            : formatMetric(target)}
         </CardContent>
       </Card>
     </div>
