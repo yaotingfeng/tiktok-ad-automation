@@ -53,4 +53,30 @@ test.describe("ads workspace", () => {
     await page.getByRole("button", { name: "应用筛选" }).click()
     await expect(page.getByText("已选 1 条", { exact: true })).toHaveCount(0)
   })
+
+  test("从第二页切 BC 不携带旧快照", async ({ page }) => {
+    await adsBoundary(page, { paged: true })
+    const bcBRequests: string[] = []
+    page.on("request", (request) => {
+      const url = new URL(request.url())
+      if (
+        url.pathname.endsWith(`/tenants/${TENANT}/ads`) &&
+        url.searchParams.get("bc_id") === "bc-b"
+      )
+        bcBRequests.push(request.url())
+    })
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("button", { name: "下一页" }).click()
+    await expect(
+      page.getByText("嘉书-第二页-测试", { exact: true }),
+    ).toBeVisible()
+    await page.getByRole("combobox", { name: "当前 BC" }).click()
+    await page.getByText("乙 BC", { exact: true }).click()
+    await expect(
+      page.getByText("乙-其他剧-测试", { exact: true }),
+    ).toBeVisible()
+    const bcB = new URL(bcBRequests.at(-1) ?? "http://localhost")
+    expect(bcB.searchParams.get("cursor")).toBeNull()
+    expect(bcB.searchParams.get("snapshot_id")).toBeNull()
+  })
 })

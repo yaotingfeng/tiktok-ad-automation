@@ -11,6 +11,7 @@ export function ReportCoverageNotice({
   const messageByStatus: Record<string, string> = {
     AVAILABLE: "当前筛选范围已完整覆盖。",
     COMPLETE: "当前筛选范围已完整覆盖。",
+    COMPLETE_EMPTY: "当前筛选范围没有可用数据。",
     MISSING: "目录数据缺失，目标 ROAS 可能无法显示。",
     UNAVAILABLE: "覆盖数据暂不可用。",
     UNSUPPORTED: "平台不支持该指标。",
@@ -25,7 +26,9 @@ export function ReportCoverageNotice({
   return (
     <Alert
       variant={
-        ["AVAILABLE", "COMPLETE"].includes(status) ? "default" : "destructive"
+        ["AVAILABLE", "COMPLETE", "COMPLETE_EMPTY"].includes(status)
+          ? "default"
+          : "destructive"
       }
     >
       <AlertTitle>数据覆盖</AlertTitle>

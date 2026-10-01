@@ -28,10 +28,15 @@ export function AdsWorkspace() {
   const [applied, setApplied] = useState<AdsSearch>(search)
   const [cursorHistory, setCursorHistory] = useState<Array<string | null>>([])
   const [queryRevision, setQueryRevision] = useState(0)
-  const ads = useAdsQuery(applied, queryRevision)
+  const currentBcId = bc?.bc_id
+  const [appliedBcId, setAppliedBcId] = useState<string | null>(null)
+  const requestSearch =
+    appliedBcId === currentBcId
+      ? applied
+      : { ...applied, page: 1, cursor: undefined, snapshot_id: undefined }
+  const ads = useAdsQuery(requestSearch, queryRevision)
   const queryClient = useQueryClient()
   const items = ads.query.data?.items ?? []
-  const currentBcId = bc?.bc_id
   const [actionError, setActionError] = useState<string | null>(null)
   const syncMutation = useMutation({
     mutationFn: async () => {
@@ -132,6 +137,7 @@ export function AdsWorkspace() {
   }, [bc, bcDirectory, navigate, tenantId])
   useEffect(() => {
     if (!currentBcId) return
+    setAppliedBcId(currentBcId)
     setCursorHistory([])
     setSelectedRow(null)
     setSearch((current) => ({
@@ -212,7 +218,7 @@ export function AdsWorkspace() {
         <div className="flex flex-wrap gap-2">
           <Button
             variant="outline"
-            disabled={syncMutation.isPending}
+            disabled={syncMutation.isPending || roleReadonly}
             onClick={() =>
               runAction(() =>
                 syncMutation.mutate(undefined, {
