@@ -1555,3 +1555,10 @@
 - 每次管理发送都绑定当前 tenant/BC/advertiser、连接授权代数、BC binding 代数和适配契约代数，并把无前缀操作与实体层级传入专用管理门禁；SDK 没有专用 management scope 或 MCP 没有真实 observed 工具合同时 fail-closed，不能由 build/read 权限推导。
 - 普通与 Smart+ 的 campaign/adgroup/ad endpoint、ROAS/预算和素材引用分离；campaign ROAS、普通素材独立启停、缺失/未知/冲突广告类型、非法状态值和未验证 MCP 工具均在发送前拒绝，普通素材不会以平台 VID 冒充广告素材引用。
 - 隔离 PostgreSQL `tkada_c2_20261001_test` 与 Redis DB2：最终相关回归 77 项通过（最终适配器聚焦 17 项）；Ruff、compileall、`git diff --check` 通过。最终窄修复复审确认 `task-2-rereview-final-3.md` 的唯一 P1 已由 `fb3e9d3` 解决；未调用真实 TikTok/MCP、未写广告、未部署。
+
+## 2026-10-01：C3 真实影响展开与 5 分钟预览已完成
+
+- C3 最终提交链为 `eba8f0a`、`a29959e`、`d700fae`、`f3c1b18`、`28b07fb`、`eb08d33`、`0c8642e`、`abd0200`、`f02b84a`、`e3ee502`、`4a286bb`、`782aee9`；新增冻结选择到管理命令的影响展开与持久化预览。
+- 预览只接受未过期 B selection，保存 selection/snapshot/membership、路由与配置证据，5 分钟 digest 有效期；ROAS/预算使用 Decimal 精确计算，预算 owner 去重，同系列冲突、缺失 parent/owner/material、普通素材独立状态均显式 `UNSUPPORTED` 或拒绝。
+- 所有对象和历史 Smart+ sibling 均受冻结 route 的 tenant/BC/source connection/channel 与选择时间 fence；account/drama 维度仅在原始冻结选择为空时按维度扩展，显式排除优先于 parent/series fallback；grouping_revision 沿 campaign ancestor 记录。
+- 隔离 PostgreSQL C3 相关回归最终 37 项通过（最终复审聚焦 35 项）；Ruff、ty、compileall、`git diff --check` 通过。最终独立复审 `task-3-rereview-final-5.md` 为 APPROVED；未调用真实 TikTok/MCP、未写广告、未部署。

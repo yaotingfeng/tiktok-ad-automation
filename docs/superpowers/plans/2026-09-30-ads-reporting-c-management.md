@@ -100,7 +100,7 @@ assert read_build_only_wire.write_count == 0
 
 **Interfaces:** Task 1 的 `MutationSpec`；B 的 `FrozenSelection`；输出统一 `prepare_preview(...)`。新增 `expand_targets(session: Session, context: TenantContext, selection_id: UUID, mutation: MutationSpec) -> tuple[ManagementCommand,...]`，命令之外的不可操作项由预览完整保留。
 
-- [ ] RED：新增 `test_percentage_and_budget_owner_previews` 的下面断言，以及同系列不同最终 ROAS 拒绝、预算拥有者去重、素材无开关不变成停广告、父级启用仅在 include_parents 内出现。
+- [x] RED：新增 `test_percentage_and_budget_owner_previews` 的下面断言，以及同系列不同最终 ROAS 拒绝、预算拥有者去重、素材无开关不变成停广告、父级启用仅在 include_parents 内出现。
 ```python
 p = prepare_preview(session, context, bc_id, selection_id, increase_ten_percent)
 assert (p.expires_at - p.created_at).total_seconds() == 300
@@ -113,10 +113,10 @@ r = prepare_preview(session, context, bc_id, ordinary_material_selection_id, dis
 assert r.items[0].material_use.ad_material_id is None
 assert r.items[0].execution_result == "UNSUPPORTED" and r.counts.targets == 0
 ```
-- [ ] Run RED：`uv run --frozen pytest tests/modules/ad_management/test_previews.py -q`，应因预览函数缺失失败。
-- [ ] Implement：仅接纳未过期的 B 查询选择（15 分钟），复制 refs/material_uses/成员摘要及配置证据供 5 分钟管理预览与后续任务独立保存，B 快照清理不影响已提交任务；新鲜读取后按能力展开，ROAS 作用于组且 Smart+ 展开系列影响，预算只改实际拥有者；账户/剧停用展开系列。精度/最小值/模式按能力合同校验，零/负数非法不截断。原状态无需改变记录 NO_CHANGE；扩大范围、联动、不可操作项全部展示，excluded_refs 显式排除后产生新摘要。
-- [ ] GREEN：上述测试通过，加入冻结后新广告不进入预览、非法命名仍能按对象管理、重复素材引用去重和错误 BC selection 拒绝。
-- [ ] Commit：`ad-management: freeze validated impact previews`；仅提交本任务文件。
+- [x] Run RED：`uv run --frozen pytest tests/modules/ad_management/test_previews.py -q`，应因预览函数缺失失败。
+- [x] Implement：仅接纳未过期的 B 查询选择（15 分钟），复制 refs/material_uses/成员摘要及配置证据供 5 分钟管理预览与后续任务独立保存，B 快照清理不影响已提交任务；新鲜读取后按能力展开，ROAS 作用于组且 Smart+ 展开系列影响，预算只改实际拥有者；账户/剧停用展开系列。精度/最小值/模式按能力合同校验，零/负数非法不截断。原状态无需改变记录 NO_CHANGE；扩大范围、联动、不可操作项全部展示，excluded_refs 显式排除后产生新摘要。
+- [x] GREEN：上述测试通过，加入冻结后新广告不进入预览、非法命名仍能按对象管理、重复素材引用去重和错误 BC selection 拒绝。
+- [x] Commit：`ad-management: freeze validated impact previews`；仅提交本任务文件。最终修复链为 `eba8f0a`、`a29959e`、`d700fae`、`f3c1b18`、`28b07fb`、`eb08d33`、`0c8642e`、`abd0200`、`f02b84a`、`e3ee502`、`4a286bb`、`782aee9`。
 
 ### Task 4：原子提交、Outbox 与跨路径对象互斥
 
