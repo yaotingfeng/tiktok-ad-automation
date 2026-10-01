@@ -296,6 +296,8 @@ def _grouping_revision_for_row(
     context: TenantContext,
     bc_id: str,
     route: Any,
+    observed_before: datetime,
+    allow_newer_parent: bool,
 ) -> int:
     campaign = row if row.kind == "campaign" else None
     current = row
@@ -316,10 +318,14 @@ def _grouping_revision_for_row(
             )
             # Ancestors of a frozen identity remain part of that identity's
             # evidence even when their latest directory observation is newer
-            # than the B snapshot.  The cutoff applies to newly discovered
-            # Smart+ descendants, not the selected object's parent chain.
-            if parent is not None:
+            # than the B snapshot.  Newly discovered sibling rows stay behind
+            # the frozen cutoff.
+            if parent is not None and (
+                allow_newer_parent or parent.observed_at <= observed_before
+            ):
                 objects[_ref_key(parent.ref)] = parent
+            else:
+                parent = None
         if parent is None:
             raise DomainError(
                 "grouping_revision_missing",
@@ -653,6 +659,9 @@ def _expand(
         mutation.field == "status" and bool(uses)
     )
     effective_field = "material_status" if material_mode else mutation.field
+    selected_identity_keys = {
+        _ref_key(ref) for ref in refs
+    } | {_ref_key(use.ad_ref) for use in uses}
 
     def grouping_revision_for(row: AdObject) -> int | None:
         try:
@@ -663,6 +672,8 @@ def _expand(
                 context=context,
                 bc_id=bc_id,
                 route=route,
+                observed_before=selection_record.created_at,
+                allow_newer_parent=_ref_key(row.ref) in selected_identity_keys,
             )
         except DomainError as exc:
             if exc.code == "grouping_revision_missing":
