@@ -31,33 +31,37 @@ ManagementScope = Callable[[str, str, str, datetime], Any]
 
 def _smart_plus(command: ManagementCommand) -> bool:
     """只接受目录明确给出的广告类型；缺失或冲突必须闭合拒绝。"""
-    values = {**command.original, **command.desired}
-    markers = [
-        values[key]
-        for key in ("ad_type", "platform_ad_type", "campaign_type")
-        if key in values
-    ]
-    if "is_smart_plus" in values:
-        markers.append(values["is_smart_plus"])
-    if not markers:
-        raise DomainError("management_contract_unsupported", "广告类型未经目录核验")
-    parsed: set[bool] = set()
-    for marker in markers:
-        if isinstance(marker, bool):
-            parsed.add(marker)
-        elif isinstance(marker, str):
-            kind = marker.upper()
-            if kind in {"SMART_PLUS", "UPGRADED_SMART_PLUS", "SMART+", "SMARTPLUS"}:
-                parsed.add(True)
-            elif kind in {"REGULAR", "AUCTION", "NORMAL"}:
-                parsed.add(False)
+    marker_names = ("ad_type", "platform_ad_type", "is_smart_plus", "campaign_type")
+
+    def parse_markers(values: dict[str, Any]) -> bool | None:
+        parsed: set[bool] = set()
+        for name in marker_names:
+            if name not in values:
+                continue
+            marker = values[name]
+            if isinstance(marker, bool) and name == "is_smart_plus":
+                parsed.add(marker)
+            elif isinstance(marker, str):
+                kind = marker.upper()
+                if kind in {"SMART_PLUS", "UPGRADED_SMART_PLUS", "SMART+", "SMARTPLUS"}:
+                    parsed.add(True)
+                elif kind in {"REGULAR", "AUCTION", "NORMAL"}:
+                    parsed.add(False)
+                else:
+                    raise DomainError("management_contract_unsupported", "广告类型未经目录核验")
             else:
                 raise DomainError("management_contract_unsupported", "广告类型未经目录核验")
-        else:
-            raise DomainError("management_contract_unsupported", "广告类型未经目录核验")
-    if len(parsed) != 1:
+        if len(parsed) > 1:
+            raise DomainError("management_contract_unsupported", "广告类型标识冲突")
+        return next(iter(parsed), None)
+
+    original_type = parse_markers(command.original)
+    desired_type = parse_markers(command.desired)
+    if original_type is None:
+        raise DomainError("management_contract_unsupported", "广告类型未经目录核验")
+    if desired_type is not None and desired_type != original_type:
         raise DomainError("management_contract_unsupported", "广告类型标识冲突")
-    return parsed.pop()
+    return original_type
 
 
 def _decimal(value: object, field: str) -> str:

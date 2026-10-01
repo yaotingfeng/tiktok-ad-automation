@@ -105,6 +105,42 @@ def test_sdk_material_status_uses_ad_reference_and_capability_gate(monkeypatch):
     assert len(calls) == 1
 
 
+def test_conflicting_frozen_and_desired_types_are_zero_send_on_both_channels():
+    command = ManagementCommand(
+        ref=EntityRef(uuid4(), "adv-1", "adgroup", "group-1"),
+        field="budget",
+        original={"ad_type": "REGULAR"},
+        desired={"ad_type": "SMART_PLUS", "budget": "100"},
+    )
+    wire = _McpWire()
+    with pytest.raises(DomainError, match="广告类型标识冲突"):
+        McpManagementOperations(wire, capability_check=_allow).apply(command)  # type: ignore[arg-type]
+    assert wire.calls == []
+
+    scope_calls: list[tuple] = []
+
+    @contextmanager
+    def scope(*args):
+        scope_calls.append(args)
+        yield
+
+    callback_calls: list[tuple[str, str, str]] = []
+
+    def check(advertiser: str, operation: str, kind: str) -> None:
+        callback_calls.append((advertiser, operation, kind))
+
+    with pytest.raises(DomainError, match="广告类型标识冲突"):
+        SdkManagementOperations(
+            object(),
+            request_scope=scope,
+            management_scope=scope,
+            capability_check=check,
+            deadline=datetime.now(UTC) + timedelta(seconds=30),
+        ).apply(command)
+    assert callback_calls == [("adv-1", "update_budget", "adgroup")]
+    assert scope_calls == []
+
+
 def test_management_gate_runs_before_mcp_transport():
     wire = _McpWire()
 

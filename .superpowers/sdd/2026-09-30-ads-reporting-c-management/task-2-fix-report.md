@@ -4,6 +4,7 @@
 - 前次修复提交保留：`5386465 ad-management: close C2 management gate gaps`
 - 本次窄修复提交：`ad-management: make C2 gates non-bypassable`
 - 最终门禁修复提交：`ad-management: require dedicated SDK management scope`
+- 类型冲突修复提交：`ad-management: reject conflicting management object types`
 - 未调用真实 TikTok/MCP、未部署、未执行真实广告写入。
 
 修复内容：
@@ -17,10 +18,11 @@
 7. campaign budget 按普通/Smart+ 分别调用官方 campaign_update 合同；ROAS 仍仅允许 adgroup，campaign ROAS 在 payload 层零发送。
 8. MCP 管理适配器在 transport 缺失 observed-contract 查询能力时也 fail closed，绝不发送。
 9. SDK 管理适配器构造时强制专用 `management_scope`，发送始终携带无前缀 operation、实体层级和截止时间；generic request scope 不再可作为回退。素材状态补充 API transport-double 与零发送门禁回归。
+10. Smart+/普通类型从 original 与 desired 的全部标记独立解析；冻结类型缺失、未知、跨字段或 desired 覆盖冲突均零发送，不允许 desired 改变 original endpoint。
 
 验证（隔离 PostgreSQL `tkada_c2_20261001_test`，Redis 6387/2）：
 
-- `uv run --frozen pytest tests/integrations/tiktok/test_management_adapters.py tests/integrations/tiktok/test_mcp_protocol.py tests/modules/accounts/test_build_gateway.py -q`：76 passed
+- `uv run --frozen pytest tests/integrations/tiktok/test_management_adapters.py tests/integrations/tiktok/test_mcp_protocol.py tests/modules/accounts/test_build_gateway.py -q`：77 passed
 - `uv run --frozen pytest tests/modules/accounts/test_group_isolation_gateway.py -q`：测试进程完成（本地 runner 仅输出通过点，未返回汇总行）
 - `uv run --frozen ruff check ...`：通过
 - `uv run --frozen python -m compileall -q app/integrations/tiktok app/modules/accounts`：通过
