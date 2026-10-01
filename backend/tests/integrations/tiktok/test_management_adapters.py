@@ -1,12 +1,18 @@
 """管理适配器合同测试；传输边界使用内存替身，不连接 TikTok。"""
 
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
 
 from app.core.errors import DomainError
+from app.integrations.tiktok.adapters import sdk_management
 from app.integrations.tiktok.adapters.mcp_management import McpManagementOperations
-from app.integrations.tiktok.adapters.sdk_management import _payload
+from app.integrations.tiktok.adapters.sdk_management import (
+    SdkManagementOperations,
+    _payload,
+)
 from app.integrations.tiktok.contracts.ads import EntityRef
 from app.integrations.tiktok.contracts.common import CallEvidence, McpBusinessResponse
 from app.integrations.tiktok.contracts.management import ManagementCommand
@@ -34,13 +40,17 @@ def _command(field="material_status"):
     )
 
 
+def _allow(_advertiser: str, _operation: str, _kind: str) -> None:
+    return None
+
+
 @pytest.mark.parametrize("channel", ["api", "mcp"])
 def test_material_status_uses_ad_reference(channel):
     command = _command()
     assert _payload(command, smart_plus=True)["ad_material_ids"] == [command.ad_material_id]
     assert _payload(command, smart_plus=True)["smart_plus_ad_id"] == command.ref.remote_id
     wire = _McpWire()
-    receipt = McpManagementOperations(wire).apply(command)  # type: ignore[arg-type]
+    receipt = McpManagementOperations(wire, capability_check=_allow).apply(command)  # type: ignore[arg-type]
     assert channel == "mcp" or receipt.outcome == "ACCEPTED"
     assert receipt.outcome == "ACCEPTED"
     assert wire.calls[0][2]["advertiser_id"] == command.ref.advertiser_id
@@ -80,7 +90,7 @@ def test_missing_type_fails_closed_before_transport():
         desired={"status": "DISABLE"},
     )
     with pytest.raises(DomainError, match="广告类型"):
-        McpManagementOperations(wire).apply(command)  # type: ignore[arg-type]
+        McpManagementOperations(wire, capability_check=_allow).apply(command)  # type: ignore[arg-type]
     assert wire.calls == []
 
 
@@ -93,7 +103,7 @@ def test_campaign_roas_is_unsupported_without_transport():
         desired={"roas_bid": "1.20"},
     )
     with pytest.raises(DomainError, match="不支持"):
-        McpManagementOperations(wire).apply(command)  # type: ignore[arg-type]
+        McpManagementOperations(wire, capability_check=_allow).apply(command)  # type: ignore[arg-type]
     assert wire.calls == []
 
 
@@ -104,7 +114,7 @@ def test_mcp_without_observed_management_contract_is_unsupported():
 
     wire = UnobservedWire()
     with pytest.raises(DomainError, match="MCP 管理工具合同"):
-        McpManagementOperations(wire).apply(_command())  # type: ignore[arg-type]
+        McpManagementOperations(wire, capability_check=_allow).apply(_command())  # type: ignore[arg-type]
     assert wire.calls == []
 
 
@@ -117,3 +127,84 @@ def test_status_contract_rejects_invalid_or_ambiguous_values(desired):
             original={"ad_type": "SMART_PLUS"},
             desired=desired,
         )
+
+
+def test_management_adapters_require_capability_callback_at_construction():
+    wire = _McpWire()
+    with pytest.raises(DomainError, match="能力门禁"):
+        McpManagementOperations(wire)  # type: ignore[arg-type]
+    with pytest.raises(DomainError, match="能力门禁"):
+        SdkManagementOperations(
+            object(),
+            request_scope=lambda *_args: None,  # type: ignore[arg-type]
+            deadline=datetime.now(UTC),
+        )
+
+
+@pytest.mark.parametrize("smart_plus", [False, True])
+def test_campaign_budget_uses_campaign_payload_contract(smart_plus):
+    command = ManagementCommand(
+        ref=EntityRef(uuid4(), "adv-1", "campaign", "campaign-1"),
+        field="budget",
+        original={"ad_type": "SMART_PLUS" if smart_plus else "REGULAR"},
+        desired={"budget": "100.00"},
+    )
+    payload = _payload(command, smart_plus=smart_plus)
+    assert payload == {
+        "advertiser_id": "adv-1",
+        "campaign_id": "campaign-1",
+        "budget": "100.00",
+    }
+
+
+@pytest.mark.parametrize("smart_plus", [False, True])
+def test_sdk_campaign_budget_uses_matching_campaign_update(monkeypatch, smart_plus):
+    calls: list[dict] = []
+
+    class FakeAsync:
+        def get(self):
+            return None
+
+    class FakeCampaignApi:
+        def __init__(self, _client):
+            pass
+
+        def campaign_update(self, _token, **kwargs):
+            calls.append({"method": "campaign_update", **kwargs})
+            return FakeAsync()
+
+        def smart_plus_campaign_update(self, _token, **kwargs):
+            calls.append({"method": "smart_plus_campaign_update", **kwargs})
+            return FakeAsync()
+
+    class FakeAdgroupApi:
+        def __init__(self, _client):
+            pass
+
+    class FakeClient:
+        default_headers = {"Access-Token": "synthetic-token"}
+        last_response = type("Response", (), {"data": b'{"code": 0, "data": {}}'})()
+
+    @contextmanager
+    def scope(*_args):
+        yield
+
+    monkeypatch.setattr(sdk_management.sdk, "CampaignCreationApi", FakeCampaignApi)
+    monkeypatch.setattr(sdk_management.sdk, "AdgroupApi", FakeAdgroupApi)
+    command = ManagementCommand(
+        ref=EntityRef(uuid4(), "adv-1", "campaign", "campaign-1"),
+        field="budget",
+        original={"ad_type": "SMART_PLUS" if smart_plus else "REGULAR"},
+        desired={"budget": "100.00"},
+    )
+    receipt = SdkManagementOperations(
+        FakeClient(),
+        request_scope=scope,
+        management_scope=scope,
+        capability_check=_allow,
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+    ).apply(command)
+    assert receipt.outcome == "ACCEPTED"
+    assert calls[0]["method"] == (
+        "smart_plus_campaign_update" if smart_plus else "campaign_update"
+    )

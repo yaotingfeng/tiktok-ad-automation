@@ -26,14 +26,13 @@ class McpManagementOperations:
     ):
         self._client = client
         self._check = capability_check or authorization_check or require_capability
+        if self._check is None:
+            raise DomainError("management_permission_unverified", "管理请求缺少账户能力门禁")
 
     def apply(self, command: ManagementCommand) -> ManagementReceipt:
         if not isinstance(command, ManagementCommand):
             raise TypeError("management command required")
-        if self._check is None and not hasattr(self._client, "has_contract"):
-            raise DomainError("management_permission_unverified", "管理请求缺少账户能力门禁")
-        if self._check is not None:
-            self._check(command.ref.advertiser_id, command.operation, command.ref.kind)
+        self._check(command.ref.advertiser_id, command.operation, command.ref.kind)
         operation = f"management.{command.operation}"
         if hasattr(self._client, "has_contract") and not self._client.has_contract(operation):
             raise DomainError("management_contract_unsupported", "MCP 管理工具合同尚未核验")

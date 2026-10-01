@@ -114,8 +114,10 @@ def _payload(command: ManagementCommand, *, smart_plus: bool) -> dict[str, Any]:
             key: [ref.remote_id],
             "operation_status": status,
         }
-    if ref.kind != "adgroup":
+    if ref.kind not in {"campaign", "adgroup"}:
         raise DomainError("management_contract_unsupported", "该对象不支持预算或 ROAS 修改")
+    if command.field == "roas" and ref.kind != "adgroup":
+        raise DomainError("management_contract_unsupported", "广告系列不支持 ROAS 修改")
     payload: dict[str, Any] = {"advertiser_id": ref.advertiser_id}
     payload["campaign_id" if ref.kind == "campaign" else "adgroup_id"] = ref.remote_id
     source = {**command.original, **command.desired}
@@ -154,12 +156,12 @@ class SdkManagementOperations:
         self._deadline = deadline
         self._check = capability_check or authorization_check or require_capability
         self._management_scope = management_scope
+        if self._check is None:
+            raise DomainError("management_permission_unverified", "管理请求缺少账户能力门禁")
 
     def apply(self, command: ManagementCommand) -> ManagementReceipt:
         if not isinstance(command, ManagementCommand):
             raise TypeError("management command required")
-        if self._management_scope is None and self._check is None:
-            raise DomainError("management_permission_unverified", "管理请求缺少账户能力门禁")
         operation = f"management.{command.operation}"
         if operation not in {f"management.{name}" for name in MANAGEMENT_OPERATIONS}:
             raise DomainError("management_operation_invalid", "管理操作无效")
@@ -187,7 +189,7 @@ class SdkManagementOperations:
         elif smart_plus:
             method = sdk.CampaignCreationApi(self._client).smart_plus_campaign_update if command.ref.kind == "campaign" else sdk.AdgroupApi(self._client).smart_plus_adgroup_update
         else:
-            method = sdk.AdgroupApi(self._client).adgroup_update
+            method = sdk.CampaignCreationApi(self._client).campaign_update if command.ref.kind == "campaign" else sdk.AdgroupApi(self._client).adgroup_update
         sent = False
         try:
             remaining(self._deadline)

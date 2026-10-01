@@ -1,7 +1,8 @@
 # C2 修复报告
 
 - 原始提交保留：`07ef214 ad-management: add capability-gated API and MCP mutations`
-- 本次修复提交：`ad-management: close C2 management gate gaps`
+- 前次修复提交保留：`5386465 ad-management: close C2 management gate gaps`
+- 本次窄修复提交：`ad-management: make C2 gates non-bypassable`
 - 未调用真实 TikTok/MCP、未部署、未执行真实广告写入。
 
 修复内容：
@@ -11,10 +12,12 @@
 3. 状态及素材状态合同要求唯一 `status` 或 `operation_status`，且值只能 `ENABLE`/`DISABLE`。
 4. 删除未经真实 tools/list/schema 证据的 synthetic MCP WRITE 合同及文档声明；无观察合同返回 `management_contract_unsupported`，不发送。
 5. 增加无类型、错层级、非法状态、无 MCP 合同及素材状态的双通道回归覆盖。
+6. 两个管理适配器构造时强制能力回调；SDK gateway 管理回调携带无前缀 operation 与实体层级，通用 request scope 不能替代管理能力门禁。
+7. campaign budget 按普通/Smart+ 分别调用官方 campaign_update 合同；ROAS 仍仅允许 adgroup，campaign ROAS 在 payload 层零发送。
 
 验证（隔离 PostgreSQL `tkada_c2_20261001_test`，Redis 6387/2）：
 
-- `uv run --frozen pytest tests/integrations/tiktok/test_management_adapters.py tests/integrations/tiktok/test_mcp_protocol.py tests/modules/accounts/test_build_gateway.py -q`：70 passed
+- `uv run --frozen pytest tests/integrations/tiktok/test_management_adapters.py tests/integrations/tiktok/test_mcp_protocol.py tests/modules/accounts/test_build_gateway.py -q`：75 passed
 - `uv run --frozen pytest tests/modules/accounts/test_group_isolation_gateway.py -q`：测试进程完成（本地 runner 仅输出通过点，未返回汇总行）
 - `uv run --frozen ruff check ...`：通过
 - `uv run --frozen python -m compileall -q app/integrations/tiktok app/modules/accounts`：通过

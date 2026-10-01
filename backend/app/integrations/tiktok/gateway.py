@@ -587,6 +587,9 @@ def open_tiktok_gateway(
                     management=SdkManagementOperations(
                         official,
                         request_scope=request_scope,
+                        capability_check=lambda advertiser, operation, kind: authorize(
+                            advertiser, f"management.{operation}", kind
+                        ),
                         management_scope=management_scope,
                         deadline=task_deadline,
                     ),
