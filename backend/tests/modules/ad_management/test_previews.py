@@ -2,16 +2,18 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from sqlmodel import select
 
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.ads import EntityRef, MaterialUseRef
 from app.modules.accounts.management_capability_models import ManagementCapability
+from app.modules.ad_management.models import ManagementPreviewItem
 from app.modules.ad_management.previews import prepare_preview
 from app.modules.ad_management.schemas import MutationSpec
-from app.modules.ads.models import AdObject
+from app.modules.ads.models import AdObject, CampaignNameProjection
 
 
-def _row(ref, *, parent=None, ad_type="REGULAR", configuration=None, status="ENABLE", connection_id=None):
+def _row(ref, *, parent=None, ad_type="REGULAR", configuration=None, status="ENABLE", connection_id=None, observed_at=None):
     return AdObject(
         tenant_id=ref.tenant_id,
         advertiser_id=ref.advertiser_id,
@@ -25,7 +27,7 @@ def _row(ref, *, parent=None, ad_type="REGULAR", configuration=None, status="ENA
         operation_status=status,
         review_status="APPROVED",
         delivery_status="DELIVERING",
-        observed_at=datetime.now(UTC),
+        observed_at=observed_at or datetime.now(UTC),
         published_version=1,
         source_connection_id=connection_id,
         source_channel="OFFICIAL_API",
@@ -121,3 +123,94 @@ def test_same_series_divergent_roas_rejected(session, management_env):
     _set_selection(selection, [a, b])
     with pytest.raises(DomainError, match="最终 ROAS"):
         prepare_preview(session, context, bc.bc_id, selection.id, MutationSpec(field="roas", mode="increase_percent", value=10))
+
+
+def test_source_fence_and_grouping_revision_are_frozen(session, management_env):
+    context, bc, account, route, selection = management_env
+    from app.modules.accounts.models import TikTokConnection
+
+    wrong_connection = TikTokConnection(tenant_id=context.tenant_id, status="ACTIVE")
+    session.add(wrong_connection)
+    session.flush()
+    campaign = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "fenced-series")
+    group = EntityRef(context.tenant_id, account.advertiser_id, "adgroup", "fenced-group")
+    session.add_all([
+        _row(campaign, ad_type="SMART_PLUS", configuration={"budget": "10"}, connection_id=route.connection_id),
+        _row(group, parent=campaign, ad_type="SMART_PLUS", configuration={"roas_bid": "1.20"}, connection_id=wrong_connection.id),
+        CampaignNameProjection(
+            tenant_id=context.tenant_id,
+            advertiser_id=account.advertiser_id,
+            campaign_remote_id=campaign.remote_id,
+            name_revision=7,
+            raw_name="provider-drama-note",
+            provider_label="provider",
+            drama_name="drama",
+            status="VALID",
+            parser_revision=1,
+            grouping_revision=7,
+        ),
+    ])
+    _cap(session, context, bc, route, account.advertiser_id, "update_roas", "adgroup")
+    session.flush()
+    _set_selection(selection, [group])
+    with pytest.raises(DomainError, match="来源"):
+        prepare_preview(session, context, bc.bc_id, selection.id, MutationSpec(field="roas", mode="set", value=Decimal("1.30")))
+    group_row = session.get(AdObject, (context.tenant_id, account.advertiser_id, "adgroup", group.remote_id))
+    assert group_row is not None
+    group_row.source_connection_id = route.connection_id
+    session.flush()
+    p = prepare_preview(session, context, bc.bc_id, selection.id, MutationSpec(field="roas", mode="set", value=Decimal("1.30")))
+    assert p.items[0].ref == group
+    persisted = session.exec(select(ManagementPreviewItem).where(ManagementPreviewItem.preview_id == p.preview_id)).first()
+    assert persisted is not None and persisted.grouping_revision == 7
+
+
+def test_smart_plus_series_expands_only_preselection_siblings_and_conflicts(session, management_env):
+    context, bc, account, route, selection = management_env
+    cutoff = selection.created_at
+    campaign = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "smart-series")
+    selected = EntityRef(context.tenant_id, account.advertiser_id, "adgroup", "selected-group")
+    sibling = EntityRef(context.tenant_id, account.advertiser_id, "adgroup", "sibling-group")
+    late = EntityRef(context.tenant_id, account.advertiser_id, "adgroup", "late-group")
+    old = cutoff - timedelta(minutes=1)
+    future = cutoff + timedelta(minutes=1)
+    session.add_all([
+        _row(campaign, ad_type="SMART_PLUS", connection_id=route.connection_id, observed_at=old),
+        _row(selected, parent=campaign, ad_type="SMART_PLUS", configuration={"roas_bid": "1.20"}, connection_id=route.connection_id, observed_at=old),
+        _row(sibling, parent=campaign, ad_type="SMART_PLUS", configuration={"roas_bid": "1.20"}, connection_id=route.connection_id, observed_at=old),
+        _row(late, parent=campaign, ad_type="SMART_PLUS", configuration={"roas_bid": "9.00"}, connection_id=route.connection_id, observed_at=future),
+    ])
+    _cap(session, context, bc, route, account.advertiser_id, "update_roas", "adgroup")
+    session.flush()
+    _set_selection(selection, [selected])
+    p = prepare_preview(session, context, bc.bc_id, selection.id, MutationSpec(field="roas", mode="set", value=Decimal("1.50")))
+    assert {item.ref.remote_id for item in p.items if item.execution_result == "PENDING"} == {selected.remote_id, sibling.remote_id}
+    assert late.remote_id not in {item.ref.remote_id for item in p.items}
+    # A divergent historical sibling is a fail-closed series conflict.
+    sibling_row = session.get(AdObject, (context.tenant_id, account.advertiser_id, "adgroup", sibling.remote_id))
+    assert sibling_row is not None
+    sibling_row.configuration = {"roas_bid": "1.80"}
+    session.flush()
+    _set_selection(selection, [selected])
+    with pytest.raises(DomainError, match="最终 ROAS"):
+        prepare_preview(session, context, bc.bc_id, selection.id, MutationSpec(field="roas", mode="increase_percent", value=10))
+
+
+def test_unrelated_include_parent_and_excluded_parent_are_fenced(session, management_env):
+    context, bc, account, route, selection = management_env
+    campaign = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "parent-series")
+    selected = EntityRef(context.tenant_id, account.advertiser_id, "adgroup", "parent-group")
+    unrelated = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "unrelated-series")
+    session.add_all([
+        _row(campaign, connection_id=route.connection_id),
+        _row(selected, parent=campaign, connection_id=route.connection_id),
+        _row(unrelated, connection_id=route.connection_id),
+    ])
+    _cap(session, context, bc, route, account.advertiser_id, "set_status", "adgroup")
+    _cap(session, context, bc, route, account.advertiser_id, "set_status", "campaign")
+    session.flush()
+    _set_selection(selection, [selected])
+    with pytest.raises(DomainError, match="显式父级"):
+        prepare_preview(session, context, bc.bc_id, selection.id, MutationSpec(field="status", mode="set", value="DISABLE", include_parents=(unrelated,)))
+    p = prepare_preview(session, context, bc.bc_id, selection.id, MutationSpec(field="status", mode="set", value="DISABLE", include_parents=(campaign,), excluded_refs=(campaign,)))
+    assert all(item.ref != campaign or item.execution_result == "UNSUPPORTED" for item in p.items)

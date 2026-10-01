@@ -142,9 +142,20 @@ def _object_for_ref(
     context: TenantContext,
     bc_id: str,
     ref: EntityRef,
+    route: Any,
 ) -> AdObject | None:
     try:
-        return locate(session, context=context, bc_id=bc_id, ref=ref)
+        row = locate(session, context=context, bc_id=bc_id, ref=ref)
+        if (
+            route is None
+            or row.source_connection_id != route.connection_id
+            or row.source_channel != route.channel
+        ):
+            raise DomainError(
+                "management_source_conflict",
+                "目录对象来源与冻结 BC/连接不一致",
+            )
+        return row
     except DomainError as exc:
         if exc.code in {"ad_object_not_found", "directory_forbidden"}:
             return None
@@ -173,6 +184,7 @@ def _budget_owner(
     bc_id: str,
     row: AdObject,
     objects: dict[tuple[UUID, str, str, str], AdObject],
+    route: Any,
 ) -> AdObject | None:
     """Resolve the actual budget owner without searching for new descendants.
 
@@ -201,7 +213,7 @@ def _budget_owner(
             return current if current.kind in {"campaign", "adgroup"} else None
         next_row = objects.get(_ref_key(parent))
         if next_row is None:
-            next_row = _object_for_ref(session, context=context, bc_id=bc_id, ref=parent)
+            next_row = _object_for_ref(session, context=context, bc_id=bc_id, ref=parent, route=route)
             if next_row is not None:
                 objects[_ref_key(parent)] = next_row
         current = next_row
@@ -243,8 +255,96 @@ def _grouping_revision(session: Session, ref: EntityRef) -> int:
     return row.grouping_revision if row is not None else 0
 
 
+def _campaign_ancestor(
+    session: Session,
+    *,
+    context: TenantContext,
+    bc_id: str,
+    row: AdObject,
+    objects: dict[tuple[UUID, str, str, str], AdObject],
+    route: Any,
+) -> AdObject | None:
+    current = row
+    seen: set[tuple[Any, ...]] = set()
+    while current.kind != "campaign" and current.parent_ref is not None:
+        key = _ref_key(current.ref)
+        if key in seen:
+            return None
+        seen.add(key)
+        parent = objects.get(_ref_key(current.parent_ref))
+        if parent is None:
+            parent = _object_for_ref(
+                session,
+                context=context,
+                bc_id=bc_id,
+                ref=current.parent_ref,
+                route=route,
+            )
+            if parent is not None:
+                objects[_ref_key(parent.ref)] = parent
+        if parent is None:
+            return None
+        current = parent
+    return current if current.kind == "campaign" else None
+
+
+def _grouping_revision_for_row(
+    session: Session,
+    *,
+    row: AdObject,
+    objects: dict[tuple[UUID, str, str, str], AdObject],
+) -> int:
+    campaign = row if row.kind == "campaign" else None
+    if campaign is None:
+        parent = objects.get(_ref_key(row.parent_ref)) if row.parent_ref else None
+        while parent is not None and parent.kind != "campaign":
+            parent = objects.get(_ref_key(parent.parent_ref)) if parent.parent_ref else None
+        campaign = parent
+    return _grouping_revision(session, campaign.ref) if campaign is not None else 0
+
+
+def _is_ancestor(
+    session: Session,
+    *,
+    context: TenantContext,
+    bc_id: str,
+    child: AdObject,
+    ancestor: EntityRef,
+    objects: dict[tuple[UUID, str, str, str], AdObject],
+    route: Any,
+) -> bool:
+    current: AdObject | None = child
+    seen: set[tuple[Any, ...]] = set()
+    while current is not None and current.parent_ref is not None:
+        key = _ref_key(current.ref)
+        if key in seen:
+            return False
+        seen.add(key)
+        parent_ref = current.parent_ref
+        if _ref_key(parent_ref) == _ref_key(ancestor):
+            return True
+        current = objects.get(_ref_key(parent_ref))
+        if current is None:
+            current = _object_for_ref(
+                session,
+                context=context,
+                bc_id=bc_id,
+                ref=parent_ref,
+                route=route,
+            )
+            if current is not None:
+                objects[_ref_key(current.ref)] = current
+    return False
+
+
 def _series_key(
-    session: Session, row: AdObject, objects: dict[tuple[UUID, str, str, str], AdObject]
+    session: Session,
+    row: AdObject,
+    objects: dict[tuple[UUID, str, str, str], AdObject],
+    *,
+    context: TenantContext,
+    bc_id: str,
+    route: Any,
 ) -> tuple[Any, ...]:
     """Return the frozen naming series coordinate, falling back to identity.
 
@@ -260,10 +360,12 @@ def _series_key(
         seen.add(key)
         parent = objects.get(_ref_key(campaign.parent_ref))
         if parent is None:
-            parent = session.get(
-                AdObject,
-                _ref_key(campaign.parent_ref),
-                populate_existing=True,
+            parent = _object_for_ref(
+                session,
+                context=context,
+                bc_id=bc_id,
+                ref=campaign.parent_ref,
+                route=route,
             )
             if parent is not None:
                 objects[_ref_key(parent.ref)] = parent
@@ -333,7 +435,7 @@ def _load_selection(
     # exact refs/material identities from the persisted B record.
     return record.bc_id, get_frozen_selection(
         session, context=context, bc_id=record.bc_id, selection_id=selection_id
-    )
+    ), record
 
 
 def _expand(
@@ -346,7 +448,7 @@ def _expand(
     require_capabilities: bool = False,
     route: Any = None,
 ) -> Expansion:
-    selected_bc, selection = _load_selection(session, context, selection_id)
+    selected_bc, selection, selection_record = _load_selection(session, context, selection_id)
     if selected_bc != bc_id:
         raise DomainError("read_bc_mismatch", "冻结选择不属于当前 BC")
     excluded_refs = {_ref_key(ref) for ref in mutation.excluded_refs}
@@ -369,19 +471,84 @@ def _expand(
     uses = tuple(unique_uses)
     objects: dict[tuple[UUID, str, str, str], AdObject] = {}
     for ref in refs:
-        row = _object_for_ref(session, context=context, bc_id=bc_id, ref=ref)
-        if row is not None:
-            objects[_ref_key(ref)] = row
-    # Explicit parents are the only extra identities admitted into a write set.
-    for ref in mutation.include_parents:
-        if ref.tenant_id != context.tenant_id or ref.advertiser_id not in {
-            selection_ref.advertiser_id for selection_ref in refs
-        }:
-            raise DomainError("management_operation_invalid", "显式父级超出冻结选择账户范围")
-        row = _object_for_ref(session, context=context, bc_id=bc_id, ref=ref)
+        row = _object_for_ref(session, context=context, bc_id=bc_id, ref=ref, route=route)
         if row is not None:
             objects[_ref_key(ref)] = row
     items: list[ExpandedItem] = []
+    # Explicit exclusions are retained as visible, non-operable evidence.
+    for ref in mutation.excluded_refs:
+        items.append(ExpandedItem(ref, None, None, None, "excluded_ref", "UNSUPPORTED", None, None, 0, {}, False))
+    for use in mutation.excluded_material_uses:
+        items.append(ExpandedItem(use.ad_ref, use, None, None, "excluded_material_use", "UNSUPPORTED", None, None, 0, {}, False))
+
+    # Explicit parents must be a real ancestor of a selected object/material ad.
+    selected_children = list(refs) + [use.ad_ref for use in uses]
+    for ref in mutation.include_parents:
+        if _ref_key(ref) in excluded_refs:
+            items.append(ExpandedItem(ref, None, None, None, "excluded_ref", "UNSUPPORTED", None, None, 0, {}, False))
+            continue
+        if ref.tenant_id != context.tenant_id:
+            raise DomainError("management_parent_invalid", "显式父级不属于当前租户")
+        row = _object_for_ref(session, context=context, bc_id=bc_id, ref=ref, route=route)
+        valid = False
+        for child_ref in selected_children:
+            child = objects.get(_ref_key(child_ref))
+            if child is None:
+                child = _object_for_ref(session, context=context, bc_id=bc_id, ref=child_ref, route=route)
+                if child is not None:
+                    objects[_ref_key(child.ref)] = child
+            if child is not None:
+                valid = _is_ancestor(
+                    session,
+                    context=context,
+                    bc_id=bc_id,
+                    child=child,
+                    ancestor=ref,
+                    objects=objects,
+                    route=route,
+                )
+            if valid:
+                break
+        if not valid:
+            raise DomainError("management_parent_invalid", "显式父级不是所选对象的真实祖先")
+        if row is not None:
+            objects[_ref_key(ref)] = row
+
+    # Smart+ ROAS is a series operation. Read only existing group rows from the
+    # frozen route and before the selection timestamp, so later-created siblings
+    # cannot be absorbed into this preview.
+    candidate_seed = tuple(objects.values())
+    smart_types = {"SMART_PLUS", "UPGRADED_SMART_PLUS", "SMART+", "SMARTPLUS"}
+    if mutation.field == "roas" and any(row.ad_type.upper() in smart_types for row in candidate_seed):
+        campaigns: dict[tuple[Any, ...], AdObject] = {}
+        for row in candidate_seed:
+            campaign = _campaign_ancestor(
+                session,
+                context=context,
+                bc_id=bc_id,
+                row=row,
+                objects=objects,
+                route=route,
+            )
+            if campaign is None and row.kind == "campaign":
+                campaign = row
+            if campaign is not None:
+                campaigns[_ref_key(campaign.ref)] = campaign
+        for campaign in campaigns.values():
+            siblings = session.exec(
+                select(AdObject).where(
+                    AdObject.tenant_id == context.tenant_id,
+                    AdObject.advertiser_id == campaign.advertiser_id,
+                    AdObject.kind == "adgroup",
+                    AdObject.parent_kind == "campaign",
+                    AdObject.parent_remote_id == campaign.remote_id,
+                    AdObject.source_connection_id == route.connection_id,
+                    AdObject.source_channel == route.channel,
+                    AdObject.observed_at <= selection_record.created_at,
+                ).execution_options(populate_existing=True)
+            ).all()
+            for sibling in siblings:
+                objects[_ref_key(sibling.ref)] = sibling
     commands: list[ManagementCommand] = []
     command_by_ref: dict[tuple[Any, ...], ManagementCommand] = {}
     command_items: dict[tuple[Any, ...], ExpandedItem] = {}
@@ -409,6 +576,14 @@ def _expand(
             "observed_at": row.observed_at.isoformat(),
             "configuration": deepcopy(row.configuration or {}),
         }
+        grouping_revision = _grouping_revision_for_row(
+            session, row=row, objects=objects
+        )
+        capability["grouping_revision"] = grouping_revision
+        capability["source_connection_id"] = str(row.source_connection_id) if row.source_connection_id else None
+        capability["source_channel"] = row.source_channel
+        if route is not None:
+            capability["route"] = route.model_dump(mode="json")
         if use is not None:
             capability["ad_material_id"] = use.ad_material_id
             capability["platform_material_id"] = use.platform_material_id
@@ -440,12 +615,12 @@ def _expand(
             or row.ad_type.upper() not in {"SMART_PLUS", "UPGRADED_SMART_PLUS", "SMART+", "SMARTPLUS"}
         ):
             items.append(
-                ExpandedItem(row.ref, use, current, None, "material_status_unsupported", "UNSUPPORTED", None, row.parent_ref, 0, capability, linked)
+                ExpandedItem(row.ref, use, current, None, "material_status_unsupported", "UNSUPPORTED", None, row.parent_ref, grouping_revision, capability, linked)
             )
             return
         if current is None:
             items.append(
-                ExpandedItem(row.ref, use, None, None, "configuration_missing", "UNSUPPORTED", None, row.parent_ref, 0, capability, linked)
+                ExpandedItem(row.ref, use, None, None, "configuration_missing", "UNSUPPORTED", None, row.parent_ref, grouping_revision, capability, linked)
             )
             return
         if field not in {"status", "material_status"}:
@@ -456,12 +631,12 @@ def _expand(
             final = _final_value(_number(current, field=field, ref=row.ref), mutation)
         if not capability_ok:
             items.append(
-                ExpandedItem(row.ref, use, current, final, "management_capability_unverified", "UNSUPPORTED", None, row.parent_ref, 0, capability, linked)
+                ExpandedItem(row.ref, use, current, final, "management_capability_unverified", "UNSUPPORTED", None, row.parent_ref, grouping_revision, capability, linked)
             )
             return
         if current == final:
             items.append(
-                ExpandedItem(row.ref, use, current, final, "no_change", "NO_CHANGE", None, row.parent_ref, 0, capability, linked)
+                ExpandedItem(row.ref, use, current, final, "no_change", "NO_CHANGE", None, row.parent_ref, grouping_revision, capability, linked)
             )
             return
         command = _command(row, field=field, final=final, use=use)
@@ -469,7 +644,7 @@ def _expand(
         if key in command_by_ref:
             return
         command_by_ref[key] = command
-        item = ExpandedItem(row.ref, use, current, final, None, "PENDING", command, row.parent_ref, 0, capability, linked)
+        item = ExpandedItem(row.ref, use, current, final, None, "PENDING", command, row.parent_ref, grouping_revision, capability, linked)
         command_items[key] = item
         commands.append(command)
         items.append(item)
@@ -494,6 +669,13 @@ def _expand(
             if row is not None and row not in candidate_rows:
                 candidate_rows.append(row)
 
+        if mutation.field == "roas" and any(
+            row.ad_type.upper() in smart_types for row in candidate_rows
+        ):
+            for row in objects.values():
+                if row.kind == "adgroup" and row not in candidate_rows:
+                    candidate_rows.append(row)
+
         # ROAS is an ad-group setting. Ads and frozen campaigns map to groups only
         # when that group identity was itself frozen; no fresh descendants are read.
         if mutation.field == "roas":
@@ -508,6 +690,7 @@ def _expand(
                             context=context,
                             bc_id=bc_id,
                             ref=row.parent_ref,
+                            route=route,
                         )
                         if parent is not None:
                             objects[_ref_key(parent.ref)] = parent
@@ -523,8 +706,8 @@ def _expand(
                                 "UNSUPPORTED",
                                 None,
                                 row.parent_ref,
-                                0,
-                                {"ad_type": row.ad_type, "configuration": deepcopy(row.configuration or {})},
+                                _grouping_revision_for_row(session, row=row, objects=objects),
+                                {"ad_type": row.ad_type, "configuration": deepcopy(row.configuration or {}), "source_connection_id": str(row.source_connection_id) if row.source_connection_id else None, "source_channel": row.source_channel, "route": route.model_dump(mode="json") if route is not None else None},
                                 False,
                             )
                         )
@@ -535,7 +718,7 @@ def _expand(
         elif mutation.field == "budget":
             owners: dict[tuple[Any, ...], AdObject] = {}
             for row in candidate_rows:
-                owner = _budget_owner(session, context=context, bc_id=bc_id, row=row, objects=objects)
+                owner = _budget_owner(session, context=context, bc_id=bc_id, row=row, objects=objects, route=route)
                 if owner is not None:
                     owners[_ref_key(owner.ref)] = owner
                 else:
@@ -549,8 +732,8 @@ def _expand(
                             "UNSUPPORTED",
                             None,
                             row.parent_ref,
-                            0,
-                            {"ad_type": row.ad_type, "configuration": deepcopy(row.configuration or {})},
+                            _grouping_revision_for_row(session, row=row, objects=objects),
+                            {"ad_type": row.ad_type, "configuration": deepcopy(row.configuration or {}), "source_connection_id": str(row.source_connection_id) if row.source_connection_id else None, "source_channel": row.source_channel, "route": route.model_dump(mode="json") if route is not None else None},
                             False,
                         )
                     )
@@ -575,6 +758,7 @@ def _expand(
                             context=context,
                             bc_id=bc_id,
                             ref=parent.parent_ref,
+                            route=route,
                         )
                         if parent_row is not None:
                             objects[_ref_key(parent_row.ref)] = parent_row
@@ -591,10 +775,13 @@ def _expand(
                                 "NO_CHANGE",
                                 None,
                                 parent_row.parent_ref,
-                                0,
+                                _grouping_revision_for_row(session, row=parent_row, objects=objects),
                                 {
                                     "ad_type": parent_row.ad_type,
                                     "configuration": deepcopy(parent_row.configuration or {}),
+                                    "source_connection_id": str(parent_row.source_connection_id) if parent_row.source_connection_id else None,
+                                    "source_channel": parent_row.source_channel,
+                                    "route": route.model_dump(mode="json") if route is not None else None,
                                 },
                                 True,
                             )
@@ -611,7 +798,7 @@ def _expand(
         if row is None:
             items.append(ExpandedItem(ref, None, None, None, "directory_missing", "UNSUPPORTED", None, None, 0, {}, True))
         else:
-            items.append(ExpandedItem(ref, None, None, None, "linked_impact", "NO_CHANGE", None, row.parent_ref, 0, {"ad_type": row.ad_type, "configuration": deepcopy(row.configuration or {})}, True))
+            items.append(ExpandedItem(ref, None, None, None, "linked_impact", "NO_CHANGE", None, row.parent_ref, _grouping_revision_for_row(session, row=row, objects=objects), {"ad_type": row.ad_type, "configuration": deepcopy(row.configuration or {}), "source_connection_id": str(row.source_connection_id) if row.source_connection_id else None, "source_channel": row.source_channel, "route": route.model_dump(mode="json") if route is not None else None}, True))
 
     # Same series cannot receive divergent ROAS values in one management task.
     if mutation.field == "roas":
@@ -620,7 +807,18 @@ def _expand(
             if item.command is None or item.final_value is None:
                 continue
             row = objects.get(_ref_key(item.ref))
-            series = _series_key(session, row, objects) if row is not None else (item.ref.advertiser_id, item.ref.remote_id)
+            series = (
+                _series_key(
+                    session,
+                    row,
+                    objects,
+                    context=context,
+                    bc_id=bc_id,
+                    route=route,
+                )
+                if row is not None
+                else (item.ref.advertiser_id, item.ref.remote_id)
+            )
             by_series[series].add(str(item.final_value))
         if any(len(values) > 1 for values in by_series.values()):
             raise DomainError("config_conflict", "同系列不同最终 ROAS，预览拒绝")
@@ -640,7 +838,10 @@ def expand_targets(
     frozen. This lower-level helper deliberately returns only command objects;
     callers needing unsupported/linked items should consume the preview result.
     """
-    bc_id, _ = _load_selection(session, context, selection_id)
+    from app.modules.accounts.routing import freeze_route
+
+    bc_id, _, _ = _load_selection(session, context, selection_id)
+    route = freeze_route(session, context=context, bc_id=bc_id)
     return _expand(
         session,
         context,
@@ -648,6 +849,7 @@ def expand_targets(
         selection_id=selection_id,
         mutation=mutation,
         require_capabilities=False,
+        route=route,
     ).commands
 
 
