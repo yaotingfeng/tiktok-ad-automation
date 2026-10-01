@@ -290,6 +290,12 @@ def _update_task(session: Session, task_id: UUID, tenant_id: UUID) -> None:
                 "not_sent": "NOT_SENT", "pending": "PENDING", "unsupported": "UNSUPPORTED",
             }[key]
         )
+    counts["refresh_pending"] = sum(
+        1
+        for row in rows
+        if row.execution_result == "ACCEPTED"
+        and row.observation_state == "REFRESH_PENDING"
+    )
     task.counts = counts
     statuses = {row.execution_result for row in rows}
     if "UNKNOWN" in statuses:
@@ -458,6 +464,7 @@ def _set_refresh_state(
         elif item.reason == "targeted_refresh_failed":
             item.reason = None
         session.add(item)
+        _update_task(session, item.task_id, item.tenant_id)
 
 
 def _retry_targeted_refresh(database_engine: Engine, item_id: UUID) -> None:

@@ -80,6 +80,24 @@ class ManagementCounts(BaseModel):
     targets: int = Field(default=0, ge=0)
     linked: int = Field(default=0, ge=0)
     unsupported: int = Field(default=0, ge=0)
+    refresh_pending: int = Field(default=0, ge=0)
+    accepted: int = Field(default=0, ge=0)
+    rejected: int = Field(default=0, ge=0)
+    unknown: int = Field(default=0, ge=0)
+    not_sent: int = Field(default=0, ge=0)
+    pending: int = Field(default=0, ge=0)
+
+
+class ManagementAttemptPublic(BaseModel):
+    """可审计的单次 provider 请求回执摘要。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    attempt: int = Field(ge=1)
+    request_at: datetime
+    outcome: Literal["ACCEPTED", "REJECTED", "NOT_SENT", "UNKNOWN"]
+    request_id: str | None = None
+    retryable: bool = False
 
 
 class ManagementItemPublic(BaseModel):
@@ -104,6 +122,7 @@ class ManagementItemPublic(BaseModel):
     observation_state: str | None = None
     delivery_status: str | None = None
     request_attribution: str | None = None
+    attempts: tuple[ManagementAttemptPublic, ...] = ()
 
 
 class ManagementPreviewPublic(BaseModel):
@@ -136,6 +155,7 @@ class ManagementTaskPublic(BaseModel):
         "CANCELLED",
     ]
     counts: ManagementCounts = Field(default_factory=ManagementCounts)
+    items: tuple[ManagementItemPublic, ...] = ()
 
 
 class ManagementPreviewRequest(BaseModel):

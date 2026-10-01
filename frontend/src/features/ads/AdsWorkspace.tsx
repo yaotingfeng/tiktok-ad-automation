@@ -1,10 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import { useEffect, useState } from "react"
-import { AdsReportingService, type ReportRow } from "@/client"
+import { useCallback, useEffect, useRef, useState } from "react"
+import {
+  AdsReportingService,
+  type FrozenSelection,
+  type ReportRow,
+} from "@/client"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { ManagementPreviewSheet } from "@/features/ad-management/ManagementPreviewSheet"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import { AdsDetails } from "./AdsDetails"
@@ -12,6 +17,7 @@ import { AdsFilters } from "./AdsFilters"
 import { AdsSummary } from "./AdsSummary"
 import { AdsTable } from "./AdsTable"
 import { AdsTrend } from "./AdsTrend"
+import { BulkActionBar } from "./BulkActionBar"
 import { ReportCoverageNotice } from "./ReportCoverageNotice"
 import {
   type AdsSearch,
@@ -38,6 +44,16 @@ export function AdsWorkspace() {
   const queryClient = useQueryClient()
   const items = ads.query.data?.items ?? []
   const [actionError, setActionError] = useState<string | null>(null)
+  const [frozenSelection, setFrozenSelection] =
+    useState<FrozenSelection | null>(null)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const scopeRef = useRef(`${tenantId ?? ""}:${currentBcId ?? ""}`)
+  const selectionRequestScopeRef = useRef<string | null>(null)
+  const clearManagementPreview = useCallback(() => {
+    selectionRequestScopeRef.current = null
+    setFrozenSelection(null)
+    setPreviewOpen(false)
+  }, [])
   const syncMutation = useMutation({
     mutationFn: async () => {
       const refs = items.flatMap((row) => row.refs ?? [])
@@ -97,6 +113,11 @@ export function AdsWorkspace() {
         })
       ).data
     },
+    onSuccess: (selection) => {
+      if (selectionRequestScopeRef.current !== scopeRef.current) return
+      setFrozenSelection(selection)
+      setPreviewOpen(true)
+    },
   })
   const trend = useQuery({
     queryKey: [
@@ -137,6 +158,8 @@ export function AdsWorkspace() {
   }, [bc, bcDirectory, navigate, tenantId])
   useEffect(() => {
     if (!currentBcId) return
+    scopeRef.current = `${tenantId ?? ""}:${currentBcId}`
+    clearManagementPreview()
     setAppliedBcId(currentBcId)
     setCursorHistory([])
     setSelectedRow(null)
@@ -152,11 +175,12 @@ export function AdsWorkspace() {
       cursor: undefined,
       snapshot_id: undefined,
     }))
-  }, [currentBcId])
+  }, [clearManagementPreview, currentBcId, tenantId])
   const update = (next: Partial<AdsSearch>) =>
     setSearch((current) => ({ ...current, ...next, page: next.page ?? 1 }))
   const apply = () => {
     ads.selection.clear()
+    clearManagementPreview()
     setCursorHistory([])
     setSelectedRow(null)
     setQueryRevision((current) => current + 1)
@@ -170,6 +194,7 @@ export function AdsWorkspace() {
   const reset = () => {
     const next = defaultAdsSearch()
     ads.selection.clear()
+    clearManagementPreview()
     setCursorHistory([])
     setSelectedRow(null)
     setQueryRevision((current) => current + 1)
@@ -282,6 +307,7 @@ export function AdsWorkspace() {
             onValueChange={(value) => {
               const dimension = value as AdsSearch["dimension"]
               ads.selection.clear()
+              clearManagementPreview()
               setCursorHistory([])
               setApplied((current) => ({
                 ...current,
@@ -330,28 +356,21 @@ export function AdsWorkspace() {
           </Tabs>
         </CardContent>
       </Card>
-      {ads.selection.selected.size > 0 && (
-        <div className="sticky bottom-4 z-10 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-background p-3 shadow-lg">
-          <span>
-            已选{" "}
-            {ads.selection.allMatching
-              ? `全部 ${ads.query.data?.total ?? 0} 条`
-              : ads.selection.selected.size}{" "}
-            条
-          </span>
-          <Button
-            disabled={selectionMutation.isPending || roleReadonly}
-            onClick={() =>
-              runAction(() =>
-                selectionMutation.mutate(undefined, {
-                  onError: (error) => setActionError(String(error)),
-                }),
-              )
-            }
-          >
-            {selectionMutation.isPending ? "处理中…" : "批量操作"}
-          </Button>
-        </div>
+      {ads.selection.selected.size > 0 && !roleReadonly && (
+        <BulkActionBar
+          selectedCount={ads.selection.selected.size}
+          allMatching={ads.selection.allMatching}
+          total={ads.query.data?.total ?? 0}
+          disabled={selectionMutation.isPending || roleReadonly}
+          onOpenPreview={() =>
+            runAction(() => {
+              selectionRequestScopeRef.current = scopeRef.current
+              selectionMutation.mutate(undefined, {
+                onError: (error) => setActionError(String(error)),
+              })
+            })
+          }
+        />
       )}
       {actionError && (
         <p role="alert" className="text-sm text-destructive">
@@ -369,6 +388,15 @@ export function AdsWorkspace() {
         snapshotId={ads.snapshot?.snapshot_id}
         onClose={() => setSelectedRow(null)}
       />
+      {tenantId && bc?.bc_id && (
+        <ManagementPreviewSheet
+          tenantId={tenantId}
+          bcId={bc.bc_id}
+          selection={frozenSelection}
+          open={previewOpen}
+          onOpenChange={setPreviewOpen}
+        />
+      )}
     </div>
   )
 }

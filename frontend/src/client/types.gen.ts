@@ -2112,6 +2112,218 @@ export type LinkPreparationRequest = {
 };
 
 /**
+ * ManagementAttemptPublic
+ *
+ * 可审计的单次 provider 请求回执摘要。
+ */
+export type ManagementAttemptPublic = {
+    /**
+     * Attempt
+     */
+    attempt: number;
+    /**
+     * Request At
+     */
+    request_at: string;
+    /**
+     * Outcome
+     */
+    outcome: 'ACCEPTED' | 'REJECTED' | 'NOT_SENT' | 'UNKNOWN';
+    /**
+     * Request Id
+     */
+    request_id?: string | null;
+    /**
+     * Retryable
+     */
+    retryable?: boolean;
+};
+
+/**
+ * ManagementCounts
+ */
+export type ManagementCounts = {
+    /**
+     * Selected
+     */
+    selected?: number;
+    /**
+     * Targets
+     */
+    targets?: number;
+    /**
+     * Linked
+     */
+    linked?: number;
+    /**
+     * Unsupported
+     */
+    unsupported?: number;
+    /**
+     * Refresh Pending
+     */
+    refresh_pending?: number;
+    /**
+     * Accepted
+     */
+    accepted?: number;
+    /**
+     * Rejected
+     */
+    rejected?: number;
+    /**
+     * Unknown
+     */
+    unknown?: number;
+    /**
+     * Not Sent
+     */
+    not_sent?: number;
+    /**
+     * Pending
+     */
+    pending?: number;
+};
+
+/**
+ * ManagementItemPublic
+ */
+export type ManagementItemPublic = {
+    ref: EntityRef;
+    material_use?: MaterialUseRef | null;
+    /**
+     * Original Value
+     */
+    original_value?: string | null;
+    /**
+     * Final Value
+     */
+    final_value?: string | string | null;
+    /**
+     * Reason
+     */
+    reason?: string | null;
+    /**
+     * Execution Result
+     */
+    execution_result?: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'NOT_SENT' | 'UNKNOWN' | 'NO_CHANGE' | 'CONFLICT' | 'UNSUPPORTED' | 'CANCELLED';
+    /**
+     * Observation State
+     */
+    observation_state?: string | null;
+    /**
+     * Delivery Status
+     */
+    delivery_status?: string | null;
+    /**
+     * Request Attribution
+     */
+    request_attribution?: string | null;
+    /**
+     * Attempts
+     */
+    attempts?: Array<ManagementAttemptPublic>;
+};
+
+/**
+ * ManagementPreviewPublic
+ */
+export type ManagementPreviewPublic = {
+    /**
+     * Preview Id
+     */
+    preview_id: string;
+    /**
+     * Digest
+     */
+    digest: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Expires At
+     */
+    expires_at: string;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    route: FrozenTikTokRoute;
+    /**
+     * Items
+     */
+    items?: Array<ManagementItemPublic>;
+    counts?: ManagementCounts;
+};
+
+/**
+ * ManagementPreviewRequest
+ */
+export type ManagementPreviewRequest = {
+    /**
+     * Selection Id
+     */
+    selection_id: string;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    mutation: MutationSpec;
+};
+
+/**
+ * ManagementRetryRequest
+ */
+export type ManagementRetryRequest = {
+    /**
+     * Idempotency Key
+     */
+    idempotency_key: string;
+};
+
+/**
+ * ManagementTaskPublic
+ */
+export type ManagementTaskPublic = {
+    /**
+     * Task Id
+     */
+    task_id: string;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Status
+     */
+    status: 'PREPARING' | 'READY' | 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'PARTIAL' | 'FAILED' | 'NEEDS_REVIEW' | 'CANCELLED';
+    counts?: ManagementCounts;
+    /**
+     * Items
+     */
+    items?: Array<ManagementItemPublic>;
+};
+
+/**
+ * ManagementTaskRequest
+ */
+export type ManagementTaskRequest = {
+    /**
+     * Preview Id
+     */
+    preview_id: string;
+    /**
+     * Preview Digest
+     */
+    preview_digest: string;
+    /**
+     * Idempotency Key
+     */
+    idempotency_key: string;
+};
+
+/**
  * ManualLinkInput
  */
 export type ManualLinkInput = {
@@ -2573,6 +2785,38 @@ export type MiniOption = {
 };
 
 /**
+ * MutationSpec
+ *
+ * 一项批量管理动作；父级和排除集合都是显式输入。
+ */
+export type MutationSpec = {
+    /**
+     * Field
+     */
+    field: 'roas' | 'budget' | 'status';
+    /**
+     * Mode
+     */
+    mode: 'set' | 'add' | 'subtract' | 'increase_percent' | 'decrease_percent';
+    /**
+     * Value
+     */
+    value: number | string | 'ENABLE' | 'DISABLE';
+    /**
+     * Include Parents
+     */
+    include_parents?: Array<EntityRef>;
+    /**
+     * Excluded Refs
+     */
+    excluded_refs?: Array<EntityRef>;
+    /**
+     * Excluded Material Uses
+     */
+    excluded_material_uses?: Array<MaterialUseRef>;
+};
+
+/**
  * ObjectCounts
  */
 export type ObjectCounts = {
@@ -2778,6 +3022,24 @@ export type Page_IngestSummary_ = {
      * Items
      */
     items: Array<IngestSummary>;
+    /**
+     * Next Cursor
+     */
+    next_cursor?: string | null;
+    /**
+     * Total
+     */
+    total: number;
+};
+
+/**
+ * Page[ManagementTaskPublic]
+ */
+export type Page_ManagementTaskPublic_ = {
+    /**
+     * Items
+     */
+    items: Array<ManagementTaskPublic>;
     /**
      * Next Cursor
      */
@@ -6836,6 +7098,313 @@ export type accountsPutDefaultConnectionResponses = {
 };
 
 export type accountsPutDefaultConnectionResponse = accountsPutDefaultConnectionResponses[keyof accountsPutDefaultConnectionResponses];
+
+export type adManagementPreparePreviewData = {
+    body: ManagementPreviewRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/ad-management-previews';
+};
+
+export type adManagementPreparePreviewErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adManagementPreparePreviewError = adManagementPreparePreviewErrors[keyof adManagementPreparePreviewErrors];
+
+export type adManagementPreparePreviewResponses = {
+    /**
+     * Successful Response
+     */
+    201: ManagementPreviewPublic;
+};
+
+export type adManagementPreparePreviewResponse = adManagementPreparePreviewResponses[keyof adManagementPreparePreviewResponses];
+
+export type adManagementListTasksData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+        /**
+         * Cursor
+         */
+        cursor?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/ad-management-tasks';
+};
+
+export type adManagementListTasksErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adManagementListTasksError = adManagementListTasksErrors[keyof adManagementListTasksErrors];
+
+export type adManagementListTasksResponses = {
+    /**
+     * Successful Response
+     */
+    200: Page_ManagementTaskPublic_;
+};
+
+export type adManagementListTasksResponse = adManagementListTasksResponses[keyof adManagementListTasksResponses];
+
+export type adManagementSubmitTaskData = {
+    body: ManagementTaskRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/ad-management-tasks';
+};
+
+export type adManagementSubmitTaskErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adManagementSubmitTaskError = adManagementSubmitTaskErrors[keyof adManagementSubmitTaskErrors];
+
+export type adManagementSubmitTaskResponses = {
+    /**
+     * Successful Response
+     */
+    202: ManagementTaskPublic;
+};
+
+export type adManagementSubmitTaskResponse = adManagementSubmitTaskResponses[keyof adManagementSubmitTaskResponses];
+
+export type adManagementGetTaskData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Task Id
+         */
+        task_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/ad-management-tasks/{task_id}';
+};
+
+export type adManagementGetTaskErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adManagementGetTaskError = adManagementGetTaskErrors[keyof adManagementGetTaskErrors];
+
+export type adManagementGetTaskResponses = {
+    /**
+     * Successful Response
+     */
+    200: ManagementTaskPublic;
+};
+
+export type adManagementGetTaskResponse = adManagementGetTaskResponses[keyof adManagementGetTaskResponses];
+
+export type adManagementCancelTaskData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Task Id
+         */
+        task_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/ad-management-tasks/{task_id}/cancel';
+};
+
+export type adManagementCancelTaskErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adManagementCancelTaskError = adManagementCancelTaskErrors[keyof adManagementCancelTaskErrors];
+
+export type adManagementCancelTaskResponses = {
+    /**
+     * Successful Response
+     */
+    200: ManagementTaskPublic;
+};
+
+export type adManagementCancelTaskResponse = adManagementCancelTaskResponses[keyof adManagementCancelTaskResponses];
+
+export type adManagementRetryTaskData = {
+    body: ManagementRetryRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Task Id
+         */
+        task_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/ad-management-tasks/{task_id}/retry';
+};
+
+export type adManagementRetryTaskErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adManagementRetryTaskError = adManagementRetryTaskErrors[keyof adManagementRetryTaskErrors];
+
+export type adManagementRetryTaskResponses = {
+    /**
+     * Successful Response
+     */
+    202: ManagementTaskPublic;
+};
+
+export type adManagementRetryTaskResponse = adManagementRetryTaskResponses[keyof adManagementRetryTaskResponses];
+
+export type adManagementPrepareRestoreData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Task Id
+         */
+        task_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/ad-management-tasks/{task_id}/restore';
+};
+
+export type adManagementPrepareRestoreErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adManagementPrepareRestoreError = adManagementPrepareRestoreErrors[keyof adManagementPrepareRestoreErrors];
+
+export type adManagementPrepareRestoreResponses = {
+    /**
+     * Successful Response
+     */
+    201: ManagementPreviewPublic;
+};
+
+export type adManagementPrepareRestoreResponse = adManagementPrepareRestoreResponses[keyof adManagementPrepareRestoreResponses];
+
+export type adManagementReconcileTaskData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Task Id
+         */
+        task_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/ad-management-tasks/{task_id}/reconcile';
+};
+
+export type adManagementReconcileTaskErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adManagementReconcileTaskError = adManagementReconcileTaskErrors[keyof adManagementReconcileTaskErrors];
+
+export type adManagementReconcileTaskResponses = {
+    /**
+     * Successful Response
+     */
+    200: ManagementTaskPublic;
+};
+
+export type adManagementReconcileTaskResponse = adManagementReconcileTaskResponses[keyof adManagementReconcileTaskResponses];
+
+export type adManagementRetryTargetedRefreshData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Task Id
+         */
+        task_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/ad-management-tasks/{task_id}/refresh';
+};
+
+export type adManagementRetryTargetedRefreshErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adManagementRetryTargetedRefreshError = adManagementRetryTargetedRefreshErrors[keyof adManagementRetryTargetedRefreshErrors];
+
+export type adManagementRetryTargetedRefreshResponses = {
+    /**
+     * Successful Response
+     */
+    202: ManagementTaskPublic;
+};
+
+export type adManagementRetryTargetedRefreshResponse = adManagementRetryTargetedRefreshResponses[keyof adManagementRetryTargetedRefreshResponses];
 
 export type accountsConfigurationData = {
     body?: never;

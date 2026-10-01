@@ -18,6 +18,7 @@ from app.modules.ad_management.actions import (
     list_tasks,
     prepare_restore,
     reconcile,
+    retry_targeted_refresh,
     retry_task,
 )
 from app.modules.ad_management.models import (
@@ -188,6 +189,19 @@ def test_reconcile_is_read_only_for_accepted_item(session, management_env):
     assert session.get(ManagementTaskItem, item.id).execution_result == before
 
 
+def test_targeted_refresh_retry_queues_without_replaying_mutation(
+    session, management_env
+):
+    context, task, item = _task(session, management_env, result="ACCEPTED")
+    item.observation_state = "REFRESH_PENDING"
+    session.add(item)
+    session.flush()
+    queued = retry_targeted_refresh(session, context, task.id)
+    assert queued.task_id == task.id
+    assert queued.status == "RUNNING"
+    assert session.get(ManagementTaskItem, item.id).execution_result == "ACCEPTED"
+
+
 def test_management_http_routes_have_scoped_operation_ids():
     spec = app.openapi()
     routes = {
@@ -196,7 +210,7 @@ def test_management_http_routes_have_scoped_operation_ids():
         for method, payload in methods.items()
         if method in {"get", "post"} and "ad-management" in path
     }
-    assert len(routes) == 8
+    assert len(routes) == 9
     assert all(operation.startswith("ad_management-") for operation in routes.values())
 
 

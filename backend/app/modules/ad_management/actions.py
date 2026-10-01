@@ -6,7 +6,7 @@ import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlmodel import Session, col, select
 
@@ -16,6 +16,7 @@ from app.core.pagination import Page
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.jobs.outbox import enqueue_after_commit
 from app.modules.accounts.routing import verify_route
+from app.modules.ad_management.execution import _public as _item_public
 from app.modules.ad_management.models import (
     ManagementPreview,
     ManagementPreviewItem,
@@ -25,6 +26,7 @@ from app.modules.ad_management.models import (
 )
 from app.modules.ad_management.reconciliation import reconcile_item
 from app.modules.ad_management.schemas import (
+    ManagementAttemptPublic,
     ManagementCounts,
     ManagementItemPublic,
     ManagementPreviewPublic,
@@ -38,12 +40,17 @@ from app.modules.ads.models import AdObject
 from app.modules.tenants.permissions import require_tenant
 
 
-def _public(task: ManagementTask) -> ManagementTaskPublic:
+def _public(
+    task: ManagementTask,
+    *,
+    items: tuple[ManagementItemPublic, ...] = (),
+) -> ManagementTaskPublic:
     return ManagementTaskPublic(
         task_id=task.id,
         bc_id=task.bc_id,
         status=cast(Any, task.status),
         counts=ManagementCounts.model_validate(task.counts or {}),
+        items=items,
     )
 
 
@@ -114,7 +121,42 @@ def _scoped_task(
 def get_task(
     session: Session, context: TenantContext, bc_id: str, task_id: UUID
 ) -> ManagementTaskPublic:
-    return _public(_scoped_task(session, context, bc_id, task_id))
+    task = _scoped_task(session, context, bc_id, task_id)
+    rows = session.exec(
+        select(ManagementTaskItem)
+        .where(
+            ManagementTaskItem.task_id == task.id,
+            ManagementTaskItem.tenant_id == context.tenant_id,
+        )
+        .order_by(col(ManagementTaskItem.position))
+    ).all()
+    public_items: list[ManagementItemPublic] = []
+    for row in rows:
+        attempts = session.exec(
+            select(ManagementRequestAttempt)
+            .where(
+                ManagementRequestAttempt.task_item_id == row.id,
+                ManagementRequestAttempt.tenant_id == context.tenant_id,
+            )
+            .order_by(col(ManagementRequestAttempt.attempt))
+        ).all()
+        public_items.append(
+            _item_public(row).model_copy(
+                update={
+                    "attempts": tuple(
+                        ManagementAttemptPublic(
+                            attempt=attempt.attempt,
+                            request_at=attempt.request_at,
+                            outcome=cast(Any, attempt.outcome),
+                            request_id=attempt.request_id,
+                            retryable=attempt.retryable,
+                        )
+                        for attempt in attempts
+                    )
+                }
+            )
+        )
+    return _public(task, items=tuple(public_items))
 
 
 def list_tasks(
@@ -456,11 +498,52 @@ def reconcile(
     return _public(task)
 
 
+def retry_targeted_refresh(
+    session: Session, context: TenantContext, task_id: UUID
+) -> ManagementTaskPublic:
+    """Queue only durable post-write refreshes; never replay a mutation."""
+    task = session.exec(
+        select(ManagementTask)
+        .where(
+            ManagementTask.id == task_id,
+            ManagementTask.tenant_id == context.tenant_id,
+        )
+        .with_for_update()
+    ).one_or_none()
+    if task is None:
+        raise DomainError("management_task_not_found", "管理任务不存在")
+    _scoped_task(session, context, task.bc_id, task.id, action="ads_manage")
+    pending = session.exec(
+        select(ManagementTaskItem.id).where(
+            ManagementTaskItem.task_id == task.id,
+            ManagementTaskItem.tenant_id == context.tenant_id,
+            ManagementTaskItem.execution_result == "ACCEPTED",
+            ManagementTaskItem.observation_state == "REFRESH_PENDING",
+        )
+    ).all()
+    if not pending:
+        raise DomainError(
+            "management_refresh_retry_not_allowed", "没有待重试的定向刷新"
+        )
+    enqueue_after_commit(
+        session,
+        context=context,
+        task_name=MANAGEMENT_DISPATCH_TASK,
+        task_key=f"ad_management.refresh.manual:{task.id}:{uuid4()}",
+        payload={"task_id": str(task.id), "generation": 1},
+    )
+    task.status = "RUNNING"
+    session.add(task)
+    session.flush()
+    return _public(task)
+
+
 __all__ = [
     "cancel_task",
     "get_task",
     "list_tasks",
     "prepare_restore",
     "reconcile",
+    "retry_targeted_refresh",
     "retry_task",
 ]

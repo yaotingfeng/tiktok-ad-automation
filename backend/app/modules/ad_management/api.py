@@ -13,6 +13,7 @@ from app.modules.ad_management.actions import (
     list_tasks,
     prepare_restore,
     reconcile,
+    retry_targeted_refresh,
     retry_task,
 )
 from app.modules.ad_management.previews import prepare_preview
@@ -208,6 +209,26 @@ def reconcile_task_route(
         session, actor_id=user.id, tenant_id=tenant_id, action="read"
     )
     result = reconcile(session, context, task_id)
+    session.commit()
+    return result
+
+
+@router.post(
+    "/ad-management-tasks/{task_id}/refresh",
+    response_model=ManagementTaskPublic,
+    status_code=202,
+    operation_id="ad_management-retry_targeted_refresh",
+)
+def retry_targeted_refresh_route(
+    tenant_id: UUID,
+    task_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+) -> ManagementTaskPublic:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="ads_manage"
+    )
+    result = retry_targeted_refresh(session, context, task_id)
     session.commit()
     return result
 
