@@ -76,7 +76,7 @@ export function AdsWorkspace() {
           body: {
             name: "广告报表当前筛选",
             filters: toReportingFilter(applied),
-            columns: ["name", "drama", "status", "spend", "d0_roas"],
+            columns: ["name", "status", "spend", "d0_roas"],
           },
         })
       ).data,
