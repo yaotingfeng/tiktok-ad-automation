@@ -527,7 +527,15 @@ def _expand(
     # cannot be absorbed into this preview.
     candidate_seed = tuple(objects.values())
     smart_types = {"SMART_PLUS", "UPGRADED_SMART_PLUS", "SMART+", "SMARTPLUS"}
-    if mutation.field == "roas" and any(row.ad_type.upper() in smart_types for row in candidate_seed):
+    # Campaign/account/drama selections represent the whole series even when
+    # the campaign row itself has no Smart+ marker.  Smart+ descendants are
+    # therefore discovered for every selected campaign, while ad/adgroup
+    # selections opt in when their own type carries the marker.
+    series_selection = mutation.field == "roas" and (
+        any(row.kind == "campaign" for row in candidate_seed)
+        or any(row.ad_type.upper() in smart_types for row in candidate_seed)
+    )
+    if series_selection:
         campaigns: dict[tuple[Any, ...], AdObject] = {}
         for row in candidate_seed:
             campaign = _campaign_ancestor(
@@ -709,9 +717,7 @@ def _expand(
             if row is not None and row not in candidate_rows:
                 candidate_rows.append(row)
 
-        if mutation.field == "roas" and any(
-            row.ad_type.upper() in smart_types for row in candidate_rows
-        ):
+        if series_selection:
             for row in objects.values():
                 if row.kind == "adgroup" and row not in candidate_rows:
                     candidate_rows.append(row)

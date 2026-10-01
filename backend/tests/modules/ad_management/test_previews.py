@@ -196,6 +196,30 @@ def test_smart_plus_series_expands_only_preselection_siblings_and_conflicts(sess
         prepare_preview(session, context, bc.bc_id, selection.id, MutationSpec(field="roas", mode="increase_percent", value=10))
 
 
+def test_campaign_selection_expands_existing_smart_plus_groups(session, management_env):
+    context, bc, account, route, selection = management_env
+    cutoff = selection.created_at
+    campaign = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "campaign-selection")
+    group = EntityRef(context.tenant_id, account.advertiser_id, "adgroup", "campaign-smart-group")
+    session.add_all([
+        _row(campaign, ad_type="REGULAR", connection_id=route.connection_id, observed_at=cutoff - timedelta(minutes=1)),
+        _row(group, parent=campaign, ad_type="SMART_PLUS", configuration={"roas_bid": "1.20"}, connection_id=route.connection_id, observed_at=cutoff - timedelta(minutes=1)),
+    ])
+    _cap(session, context, bc, route, account.advertiser_id, "update_roas", "adgroup")
+    session.flush()
+    _set_selection(selection, [campaign])
+    preview = prepare_preview(
+        session,
+        context,
+        bc.bc_id,
+        selection.id,
+        MutationSpec(field="roas", mode="set", value=Decimal("1.50")),
+    )
+    assert {item.ref.remote_id for item in preview.items if item.execution_result == "PENDING"} == {
+        group.remote_id
+    }
+
+
 def test_unrelated_include_parent_and_excluded_parent_are_fenced(session, management_env):
     context, bc, account, route, selection = management_env
     campaign = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "parent-series")
