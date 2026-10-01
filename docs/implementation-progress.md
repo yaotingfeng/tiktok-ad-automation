@@ -1527,3 +1527,17 @@
 - B4 最终提交链为 `61b20d7`、`940d53f`、`688d869`：个人视图按 actor/tenant/BC 隔离，导出复制快照内容并使用幂等键，生成通过本地 `ads-reporting` outbox/worker，刷新使用 A 的冻结路由与 `request_sync`。
 - 导出下载复核当前授权和租户/BC/export 对象前缀；撤权、迟到任务、过期对象只清理本导出的预期对象；CSV 保护公式前缀并保留 Decimal 数字，失败不留下半文件。cleanup 由 Beat 调用，不注册为不匹配的 outbox handler。
 - 最终复审 `task-4-rereview-2.md` 与 `task-4-rereview-3.md` 均 APPROVED；9 项导出/API 与 83 项 reporting 测试通过，Ruff、changed-file ty、compileall、diff-check 通过。全量 reporting ty 的 34 条诊断属于 B3 既有范围；未调用真实 TikTok/MCP、未部署。
+
+## 2026-10-01：B5 六维广告管理与报表工作台（本地完成，未部署）
+
+- 完成账户、广告系列、广告组、广告、素材、剧六个维度的统一工作台：搜索、筛选、分页、汇总、趋势、详情、coverage 状态、外部广告提示与固定官方平台跳转；广告系列命名第二段剧名可直接展示，外部创建广告不要求本地 build/material ID。
+- 查询沿用 B3 快照合同，分页、详情和跨页冻结保留 `snapshot_id`；切换 BC、维度、筛选或搜索会清理 cursor/selection 并取消迟到请求。多币种/时区/归因桶不静默取第一桶；`AVAILABLE/MISSING/UNAVAILABLE/UNSUPPORTED/FAILED/INCOMPLETE/COMPLETE_EMPTY` 分层显示。target ROAS 未由 B3 明确发布时显示目录未同步，不伪造平台值。
+- 刷新、导出、保存视图、跨页冻结和同步均接入 B4/B3 API；后端新增 `reporting_write` 权限动作，viewer 只能查询/读取，直接 HTTP 写请求返回 403，operator/editor 才可写。保存视图严格使用后端支持列。
+- 本地验证：Playwright 8 passed（npm runner，环境未安装 Bun）、TypeScript、Vite build、Biome 15 路径、Ruff、compileall、`git diff --check` 通过；新增 API 权限测试。专用 PostgreSQL reporting API pytest 因环境缺少专用 `DATABASE_URL` 在收集阶段拒绝，未伪造通过。未调用真实 TikTok/MCP、未写广告、未部署。
+- 实现提交链包含 `3d239ee`、`a2a9f82`、`e9ab5dc`、`1aed8d5`、`c1b10e7`、`c926f61`、`172b470`、`cca9801`、`15bb0a2`、`15f9a9b`、`da0067c`、`2ebd88b`；最终权限独立复审 `task-5-rereview-permissions.md` 为 APPROVED。B6 阶段验收随后完成。
+
+## 2026-10-01：B6 工作台阶段验收与查询容量证据（本地实现，待数据库环境）
+
+- 新增 `backend/tests/acceptance/test_reporting_workspace.py`：真实 PostgreSQL session 验收双租户/双 BC、不同版权方同名系列、外部素材、暂停/删除事实，以及列表、汇总、趋势、导出、`ALL_MATCHING` 全选和权限隔离；TestClient 覆盖列表首屏/游标、趋势、详情 GET 并断言 TikTok gateway 计数为 0；快照后新增目录成员不会进入 selection/导出。容量夹具精确插入并回读 1,000 campaign/10,000 ad 目录行，量测集合 campaign 查询 SQL 次数与耗时，明确不等同真实 ads fact 全链路规模。
+- 新增[工作台阶段验收记录](validation/2026-09-30-ads-reporting-workspace.md)及 B6 任务报告。未调用 TikTok/MCP、未写广告、未部署。
+- 本轮可运行检查：Ruff、compileall、`git diff --check` 通过。专用 PostgreSQL `tkada_ads_reporting_final_20260930_test` acceptance **4 passed**；容量输出为 1,000 campaign/10,000 ad、20 条 SQL、164.79ms，未发现 N+1，明确不代表 ads fact 全链路规模。修复查询入口在创建快照前校验 BC/usable grants，未知或未授权 BC 返回 404，避免无效外键 500；TestClient wrong-BC 与已有 snapshot 跨 BC 回归均通过。reporting+acceptance 合并 81 passed，另有 1 个既有 TestClient.delete 基线失败及 6 个未注入 TEST_REDIS_URL 的既有 setup errors；`ty check app` 的 45 条诊断仍属既有 ads/reporting SQLModel 类型问题。

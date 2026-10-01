@@ -107,11 +107,11 @@
 
 **Interfaces:** `AdsWorkspace(): React.ReactElement`，`useAdsQuery(search:AdsSearch)` 返回 query/snapshot/selection state；`AdsSearch` 在 search.ts 定义并映射后端 ReportingFilter。`AdsDetails({ref,onClose})`、`AdsTrend({trend})`、`ReportCoverageNotice({coverage})`；C 在 AdsWorkspace 接入自己的 BulkActionBar。
 
-- [ ] **RED：** Playwright `外部广告六维切换保留筛选`，在合成 HTTP 边界返回名称 `嘉书-总裁归来-测试` 且无 build/material 本地 ID，断言页面可搜索、切“剧”后显示总裁归来、D0 ROAS 为 1.20；`切BC忽略迟到响应` 延迟甲 BC 响应后切乙，断言甲名称不可见。在 workspace testMatch 和 chromium testIgnore 同时加入 `ads-workspace|ads-reporting`。
-- [ ] **运行 RED：** frontend 下 `bunx playwright test tests/ads-workspace.spec.ts tests/ads-reporting.spec.ts --project=workspace --workers=2 --reporter=line`；预期缺页面/行为断言失败，不能是未收集测试。
-- [ ] **实现：** 根目录 `bash scripts/generate-client.sh`；使用生成 API、TanStack 查询键 tenant/BC/filter/snapshot，切 BC 清空选择并取消旧请求。shadcn 表格/卡片/页签/侧栏；趋势使用独立 SVG 组件加可访问数据表，无新增图表依赖。显示最新同步/缺失范围、真实零/无值/不支持、目标/实际 ROAS和父级限制；支持列配置、保存筛选、刷新、导出、平台跳转及跨页全选。平台链接只能由已验证的官方固定域名/路由和账户 ID 构造，不支持的类型隐藏链接。
-- [ ] **GREEN：** 上述浏览器测试通过，新增 390/1024/1440 宽度、并列排序、过期快照重查、viewer 只读、混时区趋势分组、命名异常行保留、财务指标不存在断言；运行 `bun run build` 和 `bunx biome check src/features/ads tests/ads-workspace.spec.ts tests/ads-reporting.spec.ts tests/utils/adsBoundary.ts`。
-- [ ] **提交：** `git commit -m 'ads: add six-dimension reporting workspace'`，显式暂存生成产物和本任务文件。
+- [x] **RED：** Playwright 覆盖外部广告六维切换、搜索、分页快照和 BC 切换迟到响应；测试使用合成 HTTP 边界，不依赖 build/material 本地 ID。
+- [x] **运行 RED：** 环境未安装 Bun，改用 `npm exec playwright test ... --project=workspace` 收集并执行；未把未收集误报为通过。
+- [x] **实现：** 已接入生成客户端、TanStack 查询键 tenant/BC/filter/snapshot、BC 切换取消旧请求、六维表格/趋势/详情/coverage、真实刷新/导出/保存/跨页冻结 API、外部广告和官方固定跳转门禁。后端 `reporting_write` action 保护所有持久化端点，viewer 只能读。
+- [x] **GREEN：** 最终 Playwright 8 项、TypeScript、Vite build、Biome 15 路径、Ruff、compileall、diff-check 通过；target ROAS 未发布时显示目录未同步，COMPLETE_EMPTY 显示无数据，多桶指标不静默取第一桶。专用 PostgreSQL API pytest 因环境缺少 `DATABASE_URL` 未收集，已记录，不伪造通过。
+- [x] **提交：** B5 实现及修复提交为 `3d239ee`、`a2a9f82`、`e9ab5dc`、`1aed8d5`、`c1b10e7`、`c926f61`、`172b470`、`cca9801`、`15bb0a2`、`15f9a9b`、`da0067c`、`2ebd88b`；最终独立复审 `task-5-rereview-permissions.md` APPROVED。
 
 ## Task 6 (B6)：阶段验收与查询容量证据
 
@@ -119,8 +119,8 @@
 
 **Interfaces:** 通过真实 PostgreSQL 上的 FastAPI 和生成客户端合同验证 B1–B5，外部平台调用计数始终为零；不新增产品接口。
 
-- [ ] **RED：** `test_workspace_snapshot_contract` 构造 2 个租户、2 个 BC、3 个同名不同版权方系列、外部素材、暂停/删除事实，断言列表/汇总/趋势/导出/全选对象和金额一致，其他租户/BC不可见；在 1,000 个系列、10,000 个广告的合成数据上记录 SQL 次数及耗时，不把该规模冒称真实业务规模。
-- [ ] **运行检查：** backend 下 `uv run --frozen pytest tests/acceptance/test_reporting_workspace.py -q`；新验收测试若揭示遗漏先失败、修正归属任务后再通过，不人为制造实现无关失败。
-- [ ] **实现修正：** 仅修复本阶段缺口；分页无 N+1，空数据支持清晰首次同步入口；更新验收记录的环境、数据量、覆盖范围和已知基线问题。
-- [ ] **GREEN：** backend 下 `uv run --frozen pytest tests/modules/reporting tests/acceptance/test_reporting_workspace.py -q`、`uv run --frozen ruff check app/modules/reporting tests/modules/reporting`、`uv run --frozen ty check app`；frontend 的 B5 两项文件及 `tests/workspace-shell.spec.ts` 通过，`bun run build` 通过，`git diff --check` 无输出。
-- [ ] **提交：** `git commit -m 'reports: verify workspace query consistency and isolation'`；记录实际通过数及尚未完成的真实平台验收，交接阶段 C。
+- [x] **RED：** 验收先暴露分页断言、真实 HTTP 合同缺失、冻结全选未挑战、容量回读不足和未知 BC 外键 500；均在 B6 范围内修正。
+- [x] **运行检查：** 专用 PostgreSQL `tkada_ads_reporting_final_20260930_test` 上 acceptance 4 passed；容量实测 1,000 campaign/10,000 ad、20 SQL，未发现 N+1。全 reporting+acceptance 81 passed，另有 1 个既有 TestClient.delete 基线失败及 6 个未注入 TEST_REDIS_URL 的既有 setup errors。
+- [x] **实现修正：** 补齐真实 TestClient 列表/游标/趋势/详情、TikTok gateway 0 调用哨兵、快照后新增成员不进入 ALL_MATCHING/export；查询入口在快照创建前校验 BC/usable grants，未知或未授权 BC 返回 404。
+- [x] **GREEN：** Ruff、compileall、测试文件 ty、OpenAPI 15 条 operation 合同、`git diff --check` 通过；全 app ty 的 45 条诊断、Bun 缺失和 Redis 环境限制如实记录。容量数据是合成量测，不代表真实业务规模；未调用外部平台。
+- [x] **提交：** `8c2e1b1`、`820550c`、`b6a3ef0`、`b094905`、`f7d0830`、`14bd4a5`；最终复审 `task-6-rereview-final-2.md` APPROVED。
