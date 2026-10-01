@@ -1577,6 +1577,6 @@
 
 ## 2026-10-01：C6 任务查询、取消/重试/恢复和 HTTP 权限已完成
 
-- C6 最终提交为 `6c78766`；新增任务列表/详情、取消、明确未发送项重试、恢复预览和本地核查动作。所有入口按租户、操作者、BC、当前账户访问和管理能力过滤；viewer 可读不可写，撤权账户从列表过滤，取消不回滚已发送项，UNKNOWN/ACCEPTED 不会重发。
+- C6 最终提交为 `4242910`；新增任务列表/详情、取消、明确未发送项重试、恢复预览和本地核查动作。所有入口按租户、操作者、BC、当前账户访问和管理能力过滤；viewer 可读不可写，撤权账户从列表过滤，取消不回滚已发送项，UNKNOWN/ACCEPTED 不会重发。
 - 恢复预览可继续提交为原操作的反向值，保留原本已停用项并把当前配置变化标记为冲突；取消状态贯穿 ORM、schema、迁移和执行器。retry 使用数据库 advisory idempotency lock，列表按有界批次过滤撤权项，避免并发重复任务和整 BC 无界加载。
 - C6/C5/C4/queue 隔离 PostgreSQL/Redis 回归 51 项通过，fresh Alembic、Ruff、compileall、`git diff --check` 通过；OpenAPI 管理路由 operation_id 唯一且均为 `ad_management-` 前缀。最终独立窄复审 `task-6-rereview-final.md` 为 APPROVED。未调用真实 TikTok/MCP、未写广告、未部署。

@@ -178,7 +178,7 @@ assert next(item for item in restore.items if item.ref == externally_changed_ref
 - [x] Run RED：`uv run --frozen pytest tests/modules/ad_management/test_api_actions.py -q`，应因端点/动作缺失失败。
 - [x] Implement：在现有 `/api` 前缀下注册 `POST /tenants/{tenant_id}/ad-management-previews`、`POST/GET .../ad-management-tasks`、`GET .../ad-management-tasks/{task_id}`，以及该任务路径下 `POST cancel/retry/restore/reconcile`。路由 tags 固定 `["ad_management"]`，明确 operation_id 前缀 `ad_management-`；restore 返回新预览，reconcile 只读核查，retry 无法接纳未知/成功项。GET 带 bc_id，任务身份/路由以服务器事实为准。
 - [x] GREEN：上述测试通过；追加跨租户同 ID、绑定撤销、重复取消、取消与发送竞争、部分成功不回滚、下级成功但父级暂停仍不可称投放；HTTP 测试不调用真实平台。
-- [x] Commit：`6c78766`；最终独立窄复审 `task-6-rereview-final.md` 为 APPROVED。
+- [x] Commit：`4242910`；最终独立窄复审 `task-6-rereview-final.md` 为 APPROVED。
 
 ### Task 7：管理预览与任务 UI 集成
 
