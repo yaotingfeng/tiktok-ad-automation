@@ -165,7 +165,7 @@ assert result.observation_state == "TARGET_OBSERVED" and result.request_attribut
 
 **Interfaces:** `cancel_task(session, context, task_id: UUID) -> ManagementTaskPublic`；`retry_task(session, context, task_id: UUID, idempotency_key: UUID) -> ManagementTaskPublic`；`prepare_restore(session, context, task_id: UUID) -> ManagementPreviewPublic`。查询 `get_task(session,context,bc_id,task_id)` 和分页 `list_tasks(session,context,bc_id,cursor,limit)` 始终从当前访问关系过滤。
 
-- [ ] RED：新增 `test_readonly_cancel_and_restore_scope`；API 断言无写权限返回 403，取消只影响未发送项、恢复保留原本停用项且修改后冲突。
+- [x] RED：新增 `test_readonly_cancel_and_restore_scope`；API 断言无写权限返回 403，取消只影响未发送项、恢复保留原本停用项且修改后冲突。
 ```python
 assert client.post(preview_url, headers=viewer_headers, json=preview_body).status_code == 403
 cancel_task(session, context, task.id)
@@ -175,10 +175,10 @@ restore = prepare_restore(session, context, pause_task.id)
 assert original_disabled_ref not in [item.ref for item in restore.items]
 assert next(item for item in restore.items if item.ref == externally_changed_ref).reason == "configuration_conflict"
 ```
-- [ ] Run RED：`uv run --frozen pytest tests/modules/ad_management/test_api_actions.py -q`，应因端点/动作缺失失败。
-- [ ] Implement：在现有 `/api` 前缀下注册 `POST /tenants/{tenant_id}/ad-management-previews`、`POST/GET .../ad-management-tasks`、`GET .../ad-management-tasks/{task_id}`，以及该任务路径下 `POST cancel/retry/restore/reconcile`。路由 tags 固定 `["ad_management"]`，明确 operation_id 前缀 `ad_management-`；restore 返回新预览，reconcile 只读核查，retry 无法接纳未知/成功项。GET 带 bc_id，任务身份/路由以服务器事实为准。
-- [ ] GREEN：上述测试通过；追加跨租户同 ID、绑定撤销、重复取消、取消与发送竞争、部分成功不回滚、下级成功但父级暂停仍不可称投放；HTTP 测试不调用真实平台。
-- [ ] Commit：`ad-management: expose scoped task actions and audit queries`；检查 OpenAPI operation_id 唯一并提交本任务文件。
+- [x] Run RED：`uv run --frozen pytest tests/modules/ad_management/test_api_actions.py -q`，应因端点/动作缺失失败。
+- [x] Implement：在现有 `/api` 前缀下注册 `POST /tenants/{tenant_id}/ad-management-previews`、`POST/GET .../ad-management-tasks`、`GET .../ad-management-tasks/{task_id}`，以及该任务路径下 `POST cancel/retry/restore/reconcile`。路由 tags 固定 `["ad_management"]`，明确 operation_id 前缀 `ad_management-`；restore 返回新预览，reconcile 只读核查，retry 无法接纳未知/成功项。GET 带 bc_id，任务身份/路由以服务器事实为准。
+- [x] GREEN：上述测试通过；追加跨租户同 ID、绑定撤销、重复取消、取消与发送竞争、部分成功不回滚、下级成功但父级暂停仍不可称投放；HTTP 测试不调用真实平台。
+- [x] Commit：`6c78766`；最终独立窄复审 `task-6-rereview-final.md` 为 APPROVED。
 
 ### Task 7：管理预览与任务 UI 集成
 
