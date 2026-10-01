@@ -232,6 +232,8 @@ class ManagementTaskItem(SQLModel, table=True):
     )
     original_value: str | None = Field(default=None, max_length=128)
     final_value: str | None = Field(default=None, max_length=128)
+    reason: str | None = Field(default=None, max_length=255)
+    membership_digest: str | None = Field(default=None, max_length=64)
     execution_result: str = Field(default="PENDING", max_length=16)
     observation_state: str | None = Field(default=None, max_length=32)
     delivery_status: str | None = Field(default=None, max_length=32)

@@ -37,6 +37,7 @@ celery_app.conf.update(
         "app.modules.ads.tasks",
         "app.modules.reporting.tasks",
         "app.modules.reporting.export_tasks",
+        "app.modules.ad_management.submissions",
     ),
     task_queues=(
         Queue("resources"),
@@ -58,6 +59,7 @@ celery_app.conf.update(
         "ads.sync_step": {"queue": "ads-directory"},
         "reporting.sync_step": {"queue": "ads-reporting"},
         "reporting.export": {"queue": "ads-reporting"},
+        "ad_management.execute": {"queue": "ad-management"},
         "reporting.cleanup_exports": {"queue": "ads-reporting"},
     },
     beat_schedule={

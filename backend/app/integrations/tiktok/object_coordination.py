@@ -36,6 +36,7 @@ class MutationLease:
     generation: int
     keys: tuple[str, ...]
     expires_at: datetime
+    lease_seconds: int = _DEFAULT_LEASE_SECONDS
     _redis: Redis | None = None
 
     def __enter__(self) -> MutationLease:
@@ -47,15 +48,52 @@ class MutationLease:
 
     def is_current(self, redis_client: Redis | None = None) -> bool:
         client = redis_client or self._redis or _redis()
+        script = """
+        local expected = ARGV[1]
+        for _, key in ipairs(KEYS) do
+          if redis.call('get', key) ~= expected then return 0 end
+        end
+        return 1
+        """
         try:
             expected = f"{self.owner_id}:{self.token}:{self.generation}"
-            return all(client.get(key) == expected for key in self.keys)
+            return bool(client.eval(script, len(self.keys), *self.keys, expected))
         finally:
             if redis_client is None and self._redis is None:
                 client.close()
 
     def assert_current(self, redis_client: Redis | None = None) -> None:
         if not self.is_current(redis_client):
+            raise DomainError(
+                "mutation_lease_stale", "mutation_lease_stale: 远端对象领取代数已失效"
+            )
+
+    def fence(self, redis_client: Redis | None = None) -> None:
+        """Atomically validate and renew the token immediately before send."""
+        client = redis_client or self._redis or _redis()
+        script = """
+        local expected = ARGV[1]
+        for _, key in ipairs(KEYS) do
+          if redis.call('get', key) ~= expected then return 0 end
+        end
+        for _, key in ipairs(KEYS) do
+          redis.call('pexpire', key, ARGV[2])
+        end
+        return 1
+        """
+        expected = f"{self.owner_id}:{self.token}:{self.generation}"
+        try:
+            ok = client.eval(
+                script,
+                len(self.keys),
+                *self.keys,
+                expected,
+                self.lease_seconds * 1000,
+            )
+        finally:
+            if redis_client is None and self._redis is None:
+                client.close()
+        if not ok:
             raise DomainError(
                 "mutation_lease_stale", "mutation_lease_stale: 远端对象领取代数已失效"
             )
@@ -164,6 +202,7 @@ def claim_mutation(
             generation=generation,
             keys=keys,
             expires_at=datetime.now(UTC) + timedelta(seconds=lease_seconds),
+            lease_seconds=lease_seconds,
             _redis=redis_client,
         )
     finally:

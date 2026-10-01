@@ -519,7 +519,7 @@ def open_tiktok_gateway(
             raise DomainError(
                 "group_isolation_authority_required", "停用前未领取远端对象租约"
             )
-        isolation_lease.assert_current(redis_client)
+        isolation_lease.fence(redis_client)
 
     read_context = RuntimeReadContext(route.bc_id)
     try:

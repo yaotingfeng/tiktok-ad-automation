@@ -8,6 +8,7 @@ there is no provider call in either test here.
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
+from time import sleep
 from uuid import uuid4
 
 import pytest
@@ -19,12 +20,102 @@ from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.ads import EntityRef
 from app.integrations.tiktok.object_coordination import claim_mutation
 from app.jobs.models import PendingDispatch
+from app.modules.accounts.connection_models import (
+    BCConnectionBinding,
+    BCDefaultRoute,
+    ConnectionAuthorization,
+)
+from app.modules.accounts.models import (
+    AdvertiserAccount,
+    BCAccountAccess,
+    TenantBC,
+    TikTokConnection,
+)
+from app.modules.accounts.routing import freeze_route
 from app.modules.ad_management.models import (
     ManagementPreview,
     ManagementPreviewItem,
     ManagementTask,
+    ManagementTaskItem,
 )
 from app.modules.ad_management.submissions import submit_management_task
+from app.modules.reporting.query_models import FrozenSelectionRecord
+from tests.modules.conftest import create_context
+
+
+@pytest.fixture
+def committed_management_env():
+    """Committed setup visible to two independent PostgreSQL connections."""
+    with Session(engine, expire_on_commit=False) as setup:
+        context = create_context(setup)
+        connection = TikTokConnection(tenant_id=context.tenant_id, status="ACTIVE")
+        bc = TenantBC(tenant_id=context.tenant_id, bc_id="management-race-bc")
+        account = AdvertiserAccount(
+            tenant_id=context.tenant_id,
+            advertiser_id="management-race-account",
+            currency="USD",
+            timezone="UTC",
+            remote_status="STATUS_ENABLE",
+        )
+        setup.add_all([connection, bc, account])
+        setup.flush()
+        now = datetime.now(UTC)
+        setup.add_all(
+            [
+                BCAccountAccess(
+                    tenant_id=context.tenant_id,
+                    bc_id=bc.bc_id,
+                    advertiser_id=account.advertiser_id,
+                    connection_id=connection.id,
+                    in_bc=True,
+                    authorized=True,
+                    active=True,
+                    can_build=True,
+                    can_upload=True,
+                    permission_state="VERIFIED",
+                    checked_at=now,
+                ),
+                BCConnectionBinding(
+                    tenant_id=context.tenant_id,
+                    bc_id=bc.bc_id,
+                    connection_id=connection.id,
+                    kind=connection.kind,
+                ),
+                ConnectionAuthorization(
+                    tenant_id=context.tenant_id,
+                    connection_id=connection.id,
+                    authorization_revision=connection.authorization_revision,
+                    scopes=["read", "build"],
+                    permission_summary={"read_authorized": True, "build_authorized": True},
+                    source="SYNTHETIC_COMPLETE_EVIDENCE",
+                    verified_at=now,
+                ),
+                BCDefaultRoute(
+                    tenant_id=context.tenant_id,
+                    bc_id=bc.bc_id,
+                    connection_id=connection.id,
+                ),
+            ]
+        )
+        selection = FrozenSelectionRecord(
+            tenant_id=context.tenant_id,
+            bc_id=bc.bc_id,
+            actor_id=context.actor_id,
+            snapshot_id=uuid4(),
+            advertiser_ids=[account.advertiser_id],
+            filters={},
+            filter_digest="f" * 64,
+            publication_versions={},
+            naming_versions={},
+            refs=[],
+            material_uses=[],
+            membership_digest="m" * 64,
+        )
+        setup.add(selection)
+        setup.flush()
+        route = freeze_route(setup, context=context, bc_id=bc.bc_id)
+        setup.commit()
+    yield context, bc, account, route, selection
 
 
 def _preview(session, management_env, *, expires_at=None, created_at=None):
@@ -63,23 +154,17 @@ def _preview(session, management_env, *, expires_at=None, created_at=None):
     return row
 
 
-def test_duplicate_submission_creates_one_task_and_dispatch(session, management_env):
-    context, *_ = management_env
-    preview = _preview(session, management_env)
+def test_duplicate_submission_creates_one_task_and_dispatch(committed_management_env):
+    context, *_ = committed_management_env
+    with Session(engine, expire_on_commit=False) as setup:
+        preview = _preview(setup, committed_management_env)
+        setup.commit()
+        preview_id, preview_digest = preview.id, preview.digest
     key = uuid4()
-    # The shared fixture intentionally owns an uncommitted outer transaction.
-    # Commit this self-contained setup before opening the two independent
-    # PostgreSQL sessions used by the race, then remove only rows created here.
-    session.commit()
-    # ``session`` is a savepoint session around the fixture's root PG
-    # connection.  Commit that root transaction so independent worker
-    # connections can observe the setup rows.
-    session.connection().commit()
-
     def submit_once():
         with Session(engine) as worker:
             result = submit_management_task(
-                worker, context, preview.id, preview.digest, key
+                worker, context, preview_id, preview_digest, key
             )
             worker.commit()
             return result
@@ -97,6 +182,18 @@ def test_duplicate_submission_creates_one_task_and_dispatch(session, management_
                     )
                 ).all()
             ) == 1
+            copied = check.exec(
+                select(ManagementTaskItem).where(
+                    ManagementTaskItem.task_id == first.task_id
+                )
+            ).one()
+            assert copied.reason == "missing_ad_material_id"
+            assert copied.membership_digest is None
+        with Session(engine) as conflict:
+            with pytest.raises(DomainError, match="idempotency_conflict"):
+                submit_management_task(
+                    conflict, context, preview_id, "e" * 64, key
+                )
     finally:
         # Child rows are explicitly cleaned because setup was committed for
         # visibility across PostgreSQL connections.
@@ -124,13 +221,13 @@ def test_duplicate_submission_creates_one_task_and_dispatch(session, management_
             cleanup.execute(
                 delete(ManagementPreviewItem).where(
                     ManagementPreviewItem.tenant_id == context.tenant_id,
-                    ManagementPreviewItem.preview_id == preview.id,
+                    ManagementPreviewItem.preview_id == preview_id,
                 )
             )
             cleanup.execute(
                 delete(ManagementPreview).where(
                     ManagementPreview.tenant_id == context.tenant_id,
-                    ManagementPreview.id == preview.id,
+                    ManagementPreview.id == preview_id,
                 )
             )
             cleanup.commit()
@@ -154,11 +251,20 @@ def test_expired_preview_and_failed_outbox_leave_no_task(session, management_env
     def fail_enqueue(*_args, **_kwargs):
         raise RuntimeError("synthetic outbox failure")
 
+    failed_key = uuid4()
     monkeypatch.setattr(submissions, "enqueue_after_commit", fail_enqueue)
     with pytest.raises(RuntimeError, match="synthetic outbox failure"):
-        submit_management_task(session, context, ready.id, ready.digest, uuid4())
-    session.rollback()
+        submit_management_task(session, context, ready.id, ready.digest, failed_key)
+    # The nested submission savepoint must remove task/items/outbox even when
+    # the caller catches the exception and commits its outer transaction.
+    session.commit()
     assert session.exec(select(PendingDispatch)).all() == []
+    assert session.exec(
+        select(ManagementTask).where(
+            ManagementTask.tenant_id == context.tenant_id,
+            ManagementTask.idempotency_key == failed_key,
+        )
+    ).all() == []
 
 
 def test_repeated_lease_is_rejected_and_non_intersecting_objects_run_in_parallel(
@@ -223,6 +329,26 @@ def test_cross_bc_object_lease_is_shared_and_stale_generation_is_fenced(
         finally:
             # Idempotent release also cleans up if an assertion fails.
             lease_a.release(redis_client)
+
+
+def test_atomic_fence_rejects_expired_and_replaced_lease(redis_client):
+    ref = EntityRef(uuid4(), "fence-account", "campaign", "fence-series")
+    with Session(engine) as session:
+        old = claim_mutation(
+            session, (ref,), uuid4(), redis_client=redis_client, lease_seconds=1
+        )
+        sleep(1.1)
+        with pytest.raises(DomainError, match="mutation_lease_stale"):
+            old.fence(redis_client)
+        replacement = claim_mutation(
+            session, (ref,), uuid4(), redis_client=redis_client, lease_seconds=10
+        )
+        try:
+            with pytest.raises(DomainError, match="mutation_lease_stale"):
+                old.fence(redis_client)
+            replacement.fence(redis_client)
+        finally:
+            replacement.release(redis_client)
 
 
 def test_two_postgres_sessions_race_for_one_remote_object(redis_client):
