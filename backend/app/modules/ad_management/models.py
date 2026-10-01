@@ -27,13 +27,19 @@ class ManagementPreview(SQLModel, table=True):
     __tablename__ = "management_preview"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_management_preview_tenant_id"),
-        UniqueConstraint("tenant_id", "bc_id", "id", name="uq_management_preview_scope_id"),
+        UniqueConstraint(
+            "tenant_id", "bc_id", "id", name="uq_management_preview_scope_id"
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "bc_id"], ["tenant_bc.tenant_id", "tenant_bc.bc_id"]
         ),
         ForeignKeyConstraint(
-            ["tenant_id", "selection_id"],
-            ["frozen_selection.tenant_id", "frozen_selection.id"],
+            ["tenant_id", "bc_id", "selection_id"],
+            [
+                "frozen_selection.tenant_id",
+                "frozen_selection.bc_id",
+                "frozen_selection.id",
+            ],
             name="fk_management_preview_selection",
         ),
         CheckConstraint("expires_at > created_at", name="ck_management_preview_expiry"),
@@ -74,7 +80,12 @@ class ManagementPreview(SQLModel, table=True):
 class ManagementPreviewItem(SQLModel, table=True):
     __tablename__ = "management_preview_item"
     __table_args__ = (
-        UniqueConstraint("tenant_id", "id", name="uq_management_preview_item_tenant_id"),
+        UniqueConstraint(
+            "tenant_id", "id", name="uq_management_preview_item_tenant_id"
+        ),
+        UniqueConstraint(
+            "tenant_id", "preview_id", "id", name="uq_management_preview_item_scope"
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "preview_id"],
             ["management_preview.tenant_id", "management_preview.id"],
@@ -118,6 +129,9 @@ class ManagementTask(SQLModel, table=True):
     __tablename__ = "management_task"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_management_task_tenant_id"),
+        UniqueConstraint(
+            "tenant_id", "id", "preview_id", name="uq_management_task_preview_scope"
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "bc_id", "preview_id"],
             [
@@ -176,9 +190,27 @@ class ManagementTaskItem(SQLModel, table=True):
             name="fk_management_task_item_task",
         ),
         ForeignKeyConstraint(
+            ["tenant_id", "task_id", "preview_id"],
+            [
+                "management_task.tenant_id",
+                "management_task.id",
+                "management_task.preview_id",
+            ],
+            name="fk_management_task_item_task_preview",
+        ),
+        ForeignKeyConstraint(
             ["tenant_id", "preview_item_id"],
             ["management_preview_item.tenant_id", "management_preview_item.id"],
             name="fk_management_task_item_preview_item",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "preview_id", "preview_item_id"],
+            [
+                "management_preview_item.tenant_id",
+                "management_preview_item.preview_id",
+                "management_preview_item.id",
+            ],
+            name="fk_management_task_item_preview_scope",
         ),
         CheckConstraint(
             "execution_result IN ('PENDING','ACCEPTED','REJECTED','NOT_SENT','UNKNOWN','NO_CHANGE','CONFLICT','UNSUPPORTED')",
@@ -192,6 +224,7 @@ class ManagementTaskItem(SQLModel, table=True):
     tenant_id: UUID
     task_id: UUID
     preview_item_id: UUID
+    preview_id: UUID
     position: int = 0
     ref: dict = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))
     material_use: dict | None = Field(
@@ -215,7 +248,15 @@ class ManagementTaskItem(SQLModel, table=True):
 class ManagementRequestAttempt(SQLModel, table=True):
     __tablename__ = "management_request_attempt"
     __table_args__ = (
-        UniqueConstraint("tenant_id", "id", name="uq_management_request_attempt_tenant_id"),
+        UniqueConstraint(
+            "tenant_id", "id", name="uq_management_request_attempt_tenant_id"
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "task_item_id",
+            "attempt",
+            name="uq_management_request_attempt_number",
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "task_item_id"],
             ["management_task_item.tenant_id", "management_task_item.id"],
@@ -226,6 +267,7 @@ class ManagementRequestAttempt(SQLModel, table=True):
             "outcome IN ('ACCEPTED','REJECTED','NOT_SENT','UNKNOWN')",
             name="ck_management_request_attempt_outcome",
         ),
+        CheckConstraint("attempt >= 1", name="ck_management_request_attempt_number"),
         Index(
             "ix_management_request_attempt_item", "tenant_id", "task_item_id", "attempt"
         ),

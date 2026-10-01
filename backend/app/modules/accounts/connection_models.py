@@ -264,6 +264,15 @@ class BCConnectionBinding(SQLModel, table=True):
         ForeignKeyConstraint(
             ["tenant_id", "bc_id"], ["tenant_bc.tenant_id", "tenant_bc.bc_id"]
         ),
+        # 管理能力以冻结绑定代数作真实 FK 目标，解绑/换代后旧证据无法再插入或匹配。
+        UniqueConstraint(
+            "tenant_id",
+            "bc_id",
+            "connection_id",
+            "authorization_revision",
+            "revision",
+            name="uq_bc_binding_authorization_revision",
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "connection_id", "kind"],
             [

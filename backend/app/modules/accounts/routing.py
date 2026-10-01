@@ -191,9 +191,10 @@ def verify_route(
             or grant.permission_state != "VERIFIED"
         ):
             raise DomainError("account_access_denied", "账户当前状态不支持管理操作")
-        if (operation is None) != (entity_kind is None):
+        if operation is None or entity_kind is None:
             raise DomainError(
-                "management_permission_unverified", "必须同时指定管理操作和对象类型"
+                "management_permission_unverified",
+                "management_permission_unverified: 必须同时指定管理操作和对象类型",
             )
         statement = select(ManagementCapability).where(
             ManagementCapability.tenant_id == context.tenant_id,

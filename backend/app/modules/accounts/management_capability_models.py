@@ -33,6 +33,32 @@ class ManagementCapability(SQLModel, table=True):
             ["tenant_id", "connection_id"],
             ["tiktok_connection.tenant_id", "tiktok_connection.id"],
         ),
+        ForeignKeyConstraint(
+            [
+                "tenant_id",
+                "bc_id",
+                "connection_id",
+                "authorization_revision",
+                "binding_revision",
+            ],
+            [
+                "bc_connection_binding.tenant_id",
+                "bc_connection_binding.bc_id",
+                "bc_connection_binding.connection_id",
+                "bc_connection_binding.authorization_revision",
+                "bc_connection_binding.revision",
+            ],
+            name="fk_management_capability_binding_revision",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "connection_id", "authorization_revision"],
+            [
+                "connection_authorization.tenant_id",
+                "connection_authorization.connection_id",
+                "connection_authorization.authorization_revision",
+            ],
+            name="fk_management_capability_authorization_revision",
+        ),
         CheckConstraint(
             "authorization_revision >= 0 AND binding_revision >= 0",
             name="ck_management_capability_revisions",
@@ -42,7 +68,7 @@ class ManagementCapability(SQLModel, table=True):
             name="ck_management_capability_contract",
         ),
         CheckConstraint(
-            "operation IN ('update_roas','update_budget','set_status','set_material_status','ads_manage')",
+            "operation IN ('update_roas','update_budget','set_status','set_material_status')",
             name="ck_management_capability_operation",
         ),
         CheckConstraint(

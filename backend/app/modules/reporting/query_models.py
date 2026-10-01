@@ -93,6 +93,9 @@ class FrozenSelectionRecord(FrozenQueryScope, table=True):
     __table_args__ = (
         *_scope_constraints(),
         UniqueConstraint("tenant_id", "id", name="uq_frozen_selection_tenant_id"),
+        UniqueConstraint(
+            "tenant_id", "bc_id", "id", name="uq_frozen_selection_scope_id"
+        ),
         CheckConstraint("expires_at > created_at", name="ck_frozen_selection_expiry"),
         Index("ix_frozen_selection_owner_expiry", "tenant_id", "bc_id", "actor_id", "expires_at"),
     )
@@ -187,5 +190,5 @@ def read_snapshot_rows(
         select(QuerySnapshotRow).where(
             QuerySnapshotRow.snapshot_id == snapshot.id,
             col(QuerySnapshotRow.stable_sequence) > after_sequence,
-        ).order_by(QuerySnapshotRow.stable_sequence, QuerySnapshotRow.row_key).limit(limit)
+        ).order_by(col(QuerySnapshotRow.stable_sequence), col(QuerySnapshotRow.row_key)).limit(limit)
     ).all())
