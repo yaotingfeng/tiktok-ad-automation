@@ -133,6 +133,7 @@ export function targetRoasLabel(row: ReportRow): string {
   if (status === "FAILED") return "读取失败"
   if (status === "UNAVAILABLE") return "暂不可用"
   if (status === "UNSUPPORTED") return "平台未提供"
+  if (status === "COMPLETE_EMPTY") return "无数据"
   if (["MISSING", "INCOMPLETE"].includes(status)) return "目录未同步"
   return "目录未同步"
 }
