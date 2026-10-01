@@ -625,7 +625,9 @@ def _expand(
     # Smart+ ROAS is a series operation. Read only existing group rows from the
     # frozen route and before the selection timestamp, so later-created siblings
     # cannot be absorbed into this preview.
-    candidate_seed = tuple(objects.values())
+    candidate_seed = tuple(
+        row for row in objects.values() if _ref_key(row.ref) not in excluded_refs
+    )
     # Campaign/account/drama selections represent the whole series even when
     # the campaign row itself has no Smart+ marker.  Smart+ descendants are
     # therefore discovered for every selected campaign, while ad/adgroup
@@ -843,7 +845,16 @@ def _expand(
                 add_item(row, use=use)
     else:
         candidate_rows: list[AdObject] = (
-            [row for row in objects.values() if _ref_key(row.ref) not in excluded_refs]
+            [
+                row
+                for row in objects.values()
+                if _ref_key(row.ref) not in excluded_refs
+                and not (
+                    row.kind == "adgroup"
+                    and row.parent_ref is not None
+                    and _ref_key(row.parent_ref) in excluded_refs
+                )
+            ]
             if account_fallback
             else []
         )
@@ -858,7 +869,15 @@ def _expand(
 
         if series_selection:
             for row in objects.values():
-                if row.kind == "adgroup" and row not in candidate_rows:
+                if (
+                    row.kind == "adgroup"
+                    and _ref_key(row.ref) not in excluded_refs
+                    and not (
+                        row.parent_ref is not None
+                        and _ref_key(row.parent_ref) in excluded_refs
+                    )
+                    and row not in candidate_rows
+                ):
                     candidate_rows.append(row)
 
         # ROAS is an ad-group setting. Ads and frozen campaigns map to groups only

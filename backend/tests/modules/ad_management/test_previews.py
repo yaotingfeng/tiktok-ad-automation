@@ -311,6 +311,47 @@ def test_excluding_campaign_does_not_fallback_to_full_account_scope(session, man
     assert all(item.ref != group for item in preview.items)
 
 
+def test_account_series_fallback_honors_excluded_campaign_and_group(session, management_env):
+    context, bc, account, route, selection = management_env
+    old = selection.created_at - timedelta(minutes=1)
+    campaign = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "excluded-series-fallback")
+    group = EntityRef(context.tenant_id, account.advertiser_id, "adgroup", "excluded-group-fallback")
+    session.add_all([
+        _row(campaign, connection_id=route.connection_id, observed_at=old),
+        _row(group, parent=campaign, ad_type="SMART_PLUS", configuration={"roas_bid": "1.20"}, connection_id=route.connection_id, observed_at=old),
+    ])
+    _cap(session, context, bc, route, account.advertiser_id, "update_roas", "adgroup")
+    session.flush()
+    selection.filters = {"dimension": "account"}
+    _set_selection(selection, [])
+    excluded_campaign = prepare_preview(
+        session,
+        context,
+        bc.bc_id,
+        selection.id,
+        MutationSpec(
+            field="roas",
+            mode="set",
+            value=Decimal("1.50"),
+            excluded_refs=(campaign,),
+        ),
+    )
+    assert all(item.execution_result != "PENDING" for item in excluded_campaign.items)
+    excluded_group = prepare_preview(
+        session,
+        context,
+        bc.bc_id,
+        selection.id,
+        MutationSpec(
+            field="roas",
+            mode="set",
+            value=Decimal("1.50"),
+            excluded_refs=(group,),
+        ),
+    )
+    assert all(item.execution_result != "PENDING" for item in excluded_group.items)
+
+
 def test_unrelated_include_parent_and_excluded_parent_are_fenced(session, management_env):
     context, bc, account, route, selection = management_env
     campaign = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "parent-series")
