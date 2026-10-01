@@ -18,7 +18,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import event
-from sqlmodel import Session
+from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.db import engine
@@ -457,11 +457,19 @@ def test_workspace_fastapi_contract_has_no_external_write_routes() -> None:
     assert all(operation["operationId"].startswith("ads_reporting-") for operation in reporting)
 
 
-def test_workspace_http_query_contract(workspace_case: _WorkspaceCase, session: Session, client) -> None:
+def test_workspace_http_query_contract(workspace_case: _WorkspaceCase, session: Session, client, monkeypatch) -> None:
     """通过真实 FastAPI/TestClient 读取已发布本地报表，禁止隐式平台请求。"""
     from app.api.deps import get_current_user
+    from app.integrations.tiktok import gateway
     from app.main import app
 
+    provider_calls: list[str] = []
+
+    def fail_if_provider_called(*_args: object, **_kwargs: object) -> None:
+        provider_calls.append("tiktok")
+        raise AssertionError("reporting GET must not open a TikTok gateway")
+
+    monkeypatch.setattr(gateway, "open_tiktok_gateway", fail_if_provider_called)
     user = session.get(User, workspace_case.primary.context.actor_id)
     assert user is not None
     # B3 的生产路由提交快照；在这个 fixture 中把 commit 降为 flush，
@@ -484,7 +492,58 @@ def test_workspace_http_query_contract(workspace_case: _WorkspaceCase, session: 
         assert response.status_code == 200, response.text
         payload = response.json()
         assert payload["total"] == 3
+        assert len(payload["items"]) == 2
+        assert payload["next_cursor"]
         assert payload["snapshot"]["filters"]["dimension"] == "campaign"
+        snapshot_id = payload["snapshot"]["snapshot_id"]
+        second_page = client.get(
+            f"/api/tenants/{workspace_case.primary.context.tenant_id}/ads",
+            params={
+                "bc_id": workspace_case.primary.bc_id,
+                "dimension": "campaign",
+                "start_date": "2026-09-30",
+                "end_date": "2026-09-30",
+                "limit": 2,
+                "snapshot_id": snapshot_id,
+                "cursor": payload["next_cursor"],
+            },
+        )
+        assert second_page.status_code == 200, second_page.text
+        assert len(second_page.json()["items"]) == 1
+        trend = client.get(
+            f"/api/tenants/{workspace_case.primary.context.tenant_id}/reports/trend",
+            params={
+                "bc_id": workspace_case.primary.bc_id,
+                "dimension": "campaign",
+                "start_date": "2026-09-30",
+                "end_date": "2026-09-30",
+                "snapshot_id": snapshot_id,
+            },
+        )
+        assert trend.status_code == 200, trend.text
+        assert {"points", "coverage"} <= set(trend.json())
+        item = payload["items"][0]
+        detail = client.get(
+            f"/api/tenants/{workspace_case.primary.context.tenant_id}/ads/campaign/{item["display"]["remote_id"]}",
+            params={
+                "advertiser_id": workspace_case.primary.advertiser_id,
+                "bc_id": workspace_case.primary.bc_id,
+                "snapshot_id": snapshot_id,
+            },
+        )
+        assert detail.status_code == 200, detail.text
+        assert {"ref", "name", "statuses"} <= set(detail.json())
+        wrong_bc = client.get(
+            f"/api/tenants/{workspace_case.primary.context.tenant_id}/ads",
+            params={
+                "bc_id": workspace_case.other.bc_id,
+                "dimension": "campaign",
+                "start_date": "2026-09-30",
+                "end_date": "2026-09-30",
+            },
+        )
+        assert wrong_bc.status_code == 403, wrong_bc.text
+        assert provider_calls == []
     finally:
         session.commit = cast(Any, client_commit)
         if previous is None:
@@ -505,8 +564,22 @@ def test_workspace_snapshot_contract(workspace_case: _WorkspaceCase, session: Se
         limit=2,
     )
     assert page.total == 3
+    assert len(page.items) == 2
     assert {row.display["operation_status"] for row in page.items} <= {"ENABLE", "PAUSED", "DELETED"}
-    assert {row.display["provider"] for row in page.items} == {"版权方甲", "版权方乙", "版权方丙"}
+    assert {row.display["provider"] for row in page.items} <= {"版权方甲", "版权方乙", "版权方丙"}
+    assert page.next_cursor is not None
+    next_page = query_ads(
+        session,
+        context=case.primary.context,
+        bc_id=case.primary.bc_id,
+        filters=filters,
+        snapshot_id=page.snapshot.snapshot_id,
+        cursor=page.next_cursor,
+        limit=2,
+    )
+    assert len(next_page.items) == 1
+    assert {row.display["provider"] for row in page.items + next_page.items} == {"版权方甲", "版权方乙", "版权方丙"}
+    assert next_page.summary == page.summary
     drama_page = query_ads(
         session,
         context=case.primary.context,
@@ -533,6 +606,25 @@ def test_workspace_snapshot_contract(workspace_case: _WorkspaceCase, session: Se
     assert trend.points
     assert sum(point.values["spend"] or Decimal(0) for point in trend.points) == Decimal("60")
 
+    # 快照发布后新增一个目录成员；分页、全选和导出均只能消费已冻结的三行。
+    session.add(
+        AdObject(
+            tenant_id=case.primary.context.tenant_id,
+            advertiser_id=case.primary.advertiser_id,
+            kind="campaign",
+            remote_id="campaign-added-after-snapshot",
+            ad_type="REGULAR",
+            name="后来新增但不应进入冻结结果",
+            operation_status="ENABLE",
+            review_status="APPROVED",
+            observed_at=datetime.now(UTC),
+            published_version=1,
+            source_connection_id=case.primary.connection_id,
+            source_channel="OFFICIAL_API",
+        )
+    )
+    session.flush()
+
     selection = freeze_selection(
         session,
         context=case.primary.context,
@@ -543,6 +635,7 @@ def test_workspace_snapshot_contract(workspace_case: _WorkspaceCase, session: Se
         ),
     )
     assert {item.remote_id for item in selection.refs} == {ref.remote_id for ref in case.campaign_refs}
+    assert "campaign-added-after-snapshot" not in {item.remote_id for item in selection.refs}
 
     export = create_export(
         session,
@@ -566,6 +659,7 @@ def test_workspace_snapshot_contract(workspace_case: _WorkspaceCase, session: Se
     ).decode()
     assert csv.splitlines()[0].startswith("row_key,")
     assert len(csv.splitlines()) == 4
+    assert "campaign-added-after-snapshot" not in csv
 
     material_rows = build_dimension_rows(
         session,
@@ -643,6 +737,24 @@ def test_workspace_capacity_has_no_n_plus_one(workspace_case: _WorkspaceCase, se
         )
     session.add_all([*campaigns, *ads])
     session.flush()
+    capacity_campaign_ids = session.exec(
+        select(AdObject.remote_id).where(
+            AdObject.tenant_id == scope.context.tenant_id,
+            AdObject.advertiser_id == scope.advertiser_id,
+            AdObject.kind == "campaign",
+            col(AdObject.remote_id).like("capacity-campaign-%"),
+        )
+    ).all()
+    capacity_ad_ids = session.exec(
+        select(AdObject.remote_id).where(
+            AdObject.tenant_id == scope.context.tenant_id,
+            AdObject.advertiser_id == scope.advertiser_id,
+            AdObject.kind == "ad",
+            col(AdObject.remote_id).like("capacity-ad-%"),
+        )
+    ).all()
+    assert len(capacity_campaign_ids) == 1_000
+    assert len(capacity_ad_ids) == 10_000
 
     statements = 0
 

@@ -7,9 +7,9 @@
 
 - 验收夹具构造两个独立租户、两个独立 BC、各自的连接/账户授权和操作者。主租户同一 BC 内放置三个相同剧名、不同版权方的系列，保留 `PAUSED` 与 `DELETED` 目录状态及对应历史事实；另一租户有同名系列作为越权对照。
 - 主租户包含一个没有本地文件的外部视频素材，事实通过完整 `ad_id + ad_material_id + MaterialUseRef` 证明，验证素材列表仍保留平台 VID 和广告内素材 ID。
-- `test_workspace_fastapi_contract_has_no_external_write_routes` 检查 B5 FastAPI 本地工作台路径、`ads_reporting-` operation ID 和路由集合。
-- `test_workspace_snapshot_contract` 覆盖 campaign/drama 列表、汇总 D0 收入/消耗/ROAS、快照趋势、`ALL_MATCHING` 全选、冻结快照导出/下载、素材行和跨租户/BC 隔离。暂停/删除对象的已发布金额继续计入；同名剧按版权方分开；错误 BC 返回拒绝。
-- `test_workspace_capacity_has_no_n_plus_one` 合成 1,000 个系列和 10,000 个广告，仅量测本地 `build_dimension_rows` 的集合查询。测试记录 SQL 语句数和耗时，并要求 SQL 数量保持固定上限；若随系列/广告数量线性增长即判定为 N+1。该数据量是合成容量场景，不代表当前真实业务规模。
+- `test_workspace_fastapi_contract_has_no_external_write_routes` 检查 B5 FastAPI 本地工作台路径、`ads_reporting-` operation ID 和路由集合；`test_workspace_http_query_contract` 使用真实 TestClient 调用列表首屏、游标分页、趋势和详情 GET，核对 tenant/BC 参数、响应结构，并把 gateway 入口替换为计数哨兵，断言外部调用为 0。
+- `test_workspace_snapshot_contract` 覆盖 campaign/drama 列表、汇总 D0 收入/消耗/ROAS、快照趋势、`ALL_MATCHING` 全选、冻结快照导出/下载、素材行和跨租户/BC 隔离。分页先验证 2+1 行；快照发布后新增无关目录成员，selection 和 CSV 仍只含冻结的 3 个系列。暂停/删除对象的已发布金额继续计入；同名剧按版权方分开；错误 BC 返回拒绝。
+- `test_workspace_capacity_has_no_n_plus_one` 精确插入并回读 1,000 个 campaign 目录行和 10,000 个 ad 目录行，仅量测本地 `build_dimension_rows` 的 campaign 集合查询。测试记录 SQL 语句数和耗时，并要求 SQL 数量保持固定上限；若随系列/广告数量线性增长即判定为 N+1。该数据量是合成容量场景，不代表真实业务规模，也不等同于带 10,000 条广告报表事实的全链路压测。
 
 ## 执行证据
 
