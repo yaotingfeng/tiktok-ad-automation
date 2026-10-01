@@ -18,16 +18,16 @@
 | `uv run --frozen ruff check app/modules/reporting tests/modules/reporting tests/acceptance/test_reporting_workspace.py` | 通过 |
 | `uv run --frozen python -m compileall -q app/modules/reporting tests/modules/reporting tests/acceptance/test_reporting_workspace.py` | 通过 |
 | `git diff --check` | 通过 |
-| `uv run --frozen pytest tests/acceptance/test_reporting_workspace.py -q` | 未收集：测试守卫拒绝当前环境，缺少命名为专用 PostgreSQL 测试库的 `DATABASE_URL`（exit 4） |
-| `uv run --frozen pytest tests/modules/reporting tests/acceptance/test_reporting_workspace.py -q` | 同上，未启动任何测试用例 |
+| `DATABASE_URL=postgresql+psycopg://…/tkada_ads_reporting_final_20260930_test uv run --frozen pytest tests/acceptance/test_reporting_workspace.py -q -s` | **4 passed**；容量输出 `campaigns=1000 ads=10000 sql_statements=20 elapsed_ms=164.79` |
+| `DATABASE_URL=… uv run --frozen pytest tests/modules/reporting tests/acceptance/test_reporting_workspace.py -q` | **81 passed**；另有 1 个既有 API 测试失败（TestClient.delete 不接受 json）及 6 个既有 Redis 测试因未注入 `TEST_REDIS_URL` setup errors，均不属于 B6 |
 | `uv run --frozen ty check app` | 未通过；报告的是 B6 之前已有的 reporting/ads 全仓类型诊断，未修改这些实现 |
 | Bun/前端 B5 验证 | 当前 shell 没有 `bun`，本轮未伪造运行前端命令 |
 
-因此本轮没有可报告的真实 PostgreSQL SQL 次数、耗时、通过数或隔离数据量；容量阈值已写入验收测试，待注入独立 `DATABASE_URL` 后执行并把实际数值补入本节。当前未将环境拒绝计为实现失败，也未把静态检查结果冒充数据库验收通过。
+B6 acceptance 已在命名含 `test` 的隔离 PostgreSQL 库上完成：4 项通过；容量场景精确回读 1,000 campaign/10,000 ad，campaign 集合查询 20 条 SQL、164.79ms，未发现 N+1。该量测没有填充 10,000 条广告报表事实，因此不代表真实 ads fact 全链路规模。当前未将 reporting 基线失败或缺 Redis 环境冒充 B6 失败，也未把静态检查结果冒充真实平台联调。
 
 ## 证据边界与后续运行
 
-- 测试使用真实 SQLModel/PostgreSQL session 时，会执行迁移并由根 `tests/conftest.py` 回滚每个测试；不连接 TikTok/MCP。外部调用计数应保持为零，因为验收路径只调用本地 reporting/query/export 服务。
+- 测试使用真实 SQLModel/PostgreSQL session 时，会执行迁移并由根 `tests/conftest.py` 回滚每个测试；不连接 TikTok/MCP。TestClient GET 回归将 gateway 入口替换为计数哨兵，实际外部调用计数为 0。
 - 运行 B6 数据库验收前，需要在 `backend/` 注入独立测试数据库（数据库名含 `test` 段）及非应用 Redis 库，然后执行：
 
   ```bash

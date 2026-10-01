@@ -17,6 +17,7 @@ from sqlmodel import Session, select
 
 from app.core.context import TenantContext
 from app.core.db import engine
+from app.modules.accounts.models import TenantBC
 from app.modules.ads.models import AdObject, CampaignNameProjection
 from app.modules.reporting.aggregation import aggregate_metrics, build_dimension_rows
 from app.modules.reporting.filters import authorized_grants, compile_filter
@@ -350,6 +351,17 @@ def query_ads(
     if snapshot_id is None:
         if cursor is not None:
             raise HTTPException(404, detail="query_cursor_not_found")
+        # 先验证 BC 存在且当前操作者至少有一个可读账户，再创建快照。
+        # 否则未知/未授权 BC 会先写入带无效外键的空快照，造成 500，
+        # 同时把 BC 是否存在泄露给调用方。对外统一隐藏为 404。
+        bc = session.get(TenantBC, (context.tenant_id, bc_id), populate_existing=True)
+        if bc is None or bc.ownership_conflict:
+            raise HTTPException(404, detail="query_scope_not_found")
+        grants = authorized_grants(
+            session, context=context, bc_id=bc_id, advertiser_ids=filters.advertiser_ids
+        )
+        if not grants:
+            raise HTTPException(404, detail="query_scope_not_found")
         if session.get_bind() is engine:
             with snapshot_transaction(engine) as snapshot_session:
                 snapshot = _build_snapshot(

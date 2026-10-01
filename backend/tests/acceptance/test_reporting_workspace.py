@@ -558,9 +558,8 @@ def test_workspace_http_query_contract(workspace_case: _WorkspaceCase, session: 
                 "end_date": "2026-09-30",
             },
         )
-        assert wrong_bc.status_code == 200, wrong_bc.text
-        assert wrong_bc.json()["total"] == 0
-        assert wrong_bc.json()["items"] == []
+        # 未知/未授权 BC 在创建快照前被 admission 隐藏为 404，避免无效 FK/500。
+        assert wrong_bc.status_code == 404, wrong_bc.text
         foreign_snapshot = client.get(
             f"/api/tenants/{workspace_case.primary.context.tenant_id}/ads",
             params={
@@ -807,5 +806,6 @@ def test_workspace_capacity_has_no_n_plus_one(workspace_case: _WorkspaceCase, se
     assert len(rows) >= 1_000
     # A fixed number of set-based reads is expected. A query per series/ad would
     # scale with input rows and is an N+1 regression even if the result is correct.
+    print(f"B6 capacity: campaigns=1000 ads=10000 sql_statements={statements} elapsed_ms={elapsed_ms:.2f}")  # noqa: T201
     assert statements <= 30, f"{statements} SQL statements for 1,000 series/10,000 ads"
     assert elapsed_ms < 30_000, f"synthetic capacity query exceeded 30s: {elapsed_ms:.1f}ms"
