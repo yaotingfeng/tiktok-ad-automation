@@ -390,6 +390,15 @@ def request_sync(
     """
 
     _validate_accounts(session, context=context, request=request)
+    # A manual refresh is also the first durable scheduling touch for a BC.  Seed
+    # the fixed 3-hour directory and 30-minute reporting plans from the same
+    # frozen route so Beat can continue the refresh after this request completes.
+    ensure_sync_schedules(
+        session,
+        context=context,
+        route=request.route,
+        advertiser_ids=request.advertiser_ids,
+    )
     request_id = _request_id(request)
     # PostgreSQL advisory lock closes the select-then-insert race for two browser
     # clicks or two Beat deliveries.  It is transaction-scoped and never held over
