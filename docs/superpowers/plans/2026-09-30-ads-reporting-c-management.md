@@ -51,7 +51,7 @@
 
 管理权限证据独立为 `ManagementCapability(tenant_id,bc_id,advertiser_id,connection_id,authorization_revision,binding_revision,adapter_contract_revision,operation,entity_kind,state,verified_at,evidence)`；state 为 `VERIFIED/UNKNOWN/REVOKED`。证据记录已确认的 scope、账户管理角色和适用工具/接口，旧 `can_build` 不迁成管理授权；缺失/未知证据拒绝。租户 `ads_manage`、有效账户访问和该操作平台证据三者必须同时满足。
 
-- [ ] RED：新增 `test_status_modes_and_management_permission` 的下面断言及同键不同摘要拒绝、跨租户复合 FK 拒绝；测试 fixture 创建真实租户/成员/目录/选择，`management_env.wire` 只替换 SDK/MCP 传输。后续片段中的对象由该 fixture 初始化，load/count/concurrent helpers 在此 conftest 中调用真实 Session/线程屏障，不 mock 业务函数。
+- [x] RED：新增 `test_status_modes_and_management_permission` 的下面断言及同键不同摘要拒绝、跨租户复合 FK 拒绝；测试 fixture 创建真实租户/成员/目录/选择，`management_env.wire` 只替换 SDK/MCP 传输。后续片段中的对象由该 fixture 初始化，load/count/concurrent helpers 在此 conftest 中调用真实 Session/线程屏障，不 mock 业务函数。
 ```python
 with pytest.raises(ValidationError):
     MutationSpec(field="status", mode="increase_percent", value="ENABLE")
@@ -62,10 +62,10 @@ with pytest.raises(DomainError, match="management_permission_unverified"):
     verify_route(session, context=operator_context, route=read_build_only_route,
                  advertiser_id=advertiser_id, capability="ads_manage")
 ```
-- [ ] Run RED：`uv run --frozen pytest tests/modules/ad_management/test_models.py -q`，应因缺少模型/权限失败。
-- [ ] Implement：新增租户 `ads_manage`，同步扩展 `routing.Capability`、`verify_route`、`access.resolve_account_access` 和 `usable_grants`，管理访问只接受当前代数 VERIFIED 证据，禁止 read/build 权限推导。建管理证据、预览、批次、目标、请求尝试和回执，幂等键按租户/操作者约束。批次状态 `PREPARING,READY,QUEUED,RUNNING,SUCCEEDED,PARTIAL,FAILED,NEEDS_REVIEW,CANCELLED`；项结果另含 `NO_CHANGE,CONFLICT,UNSUPPORTED`。
-- [ ] GREEN：上述测试通过；迁移在隔离数据库 upgrade 后通过模型测试，回滚只验证新迁移且不触碰真实业务库。
-- [ ] Commit：`ad-management: add scoped preview and task contracts`；暂存本任务明确文件，检查 diff 后提交。
+- [x] Run RED：`uv run --frozen pytest tests/modules/ad_management/test_models.py -q`，应因缺少模型/权限失败。
+- [x] Implement：新增租户 `ads_manage`，同步扩展 `routing.Capability`、`verify_route`、`access.resolve_account_access` 和 `usable_grants`，管理访问只接受当前代数 VERIFIED 证据，禁止 read/build 权限推导。建管理证据、预览、批次、目标、请求尝试和回执，幂等键按租户/操作者约束。批次状态 `PREPARING,READY,QUEUED,RUNNING,SUCCEEDED,PARTIAL,FAILED,NEEDS_REVIEW,CANCELLED`；项结果另含 `NO_CHANGE,CONFLICT,UNSUPPORTED`。
+- [x] GREEN：上述测试通过；迁移在隔离数据库 upgrade 后通过模型测试，回滚只验证新迁移且不触碰真实业务库。
+- [x] Commit：`ad-management: add scoped preview and task contracts`；暂存本任务明确文件，检查 diff 后提交。最终修复提交为 `d414a9c`，并以不可变后续迁移 `ad_management_integrity` 保留已应用迁移历史。
 
 ### Task 2：MCP/API 写入合同与能力门禁
 

@@ -1541,3 +1541,10 @@
 - 新增 `backend/tests/acceptance/test_reporting_workspace.py`：真实 PostgreSQL session 验收双租户/双 BC、不同版权方同名系列、外部素材、暂停/删除事实，以及列表、汇总、趋势、导出、`ALL_MATCHING` 全选和权限隔离；TestClient 覆盖列表首屏/游标、趋势、详情 GET 并断言 TikTok gateway 计数为 0；快照后新增目录成员不会进入 selection/导出。容量夹具精确插入并回读 1,000 campaign/10,000 ad 目录行，量测集合 campaign 查询 SQL 次数与耗时，明确不等同真实 ads fact 全链路规模。
 - 新增[工作台阶段验收记录](validation/2026-09-30-ads-reporting-workspace.md)及 B6 任务报告。未调用 TikTok/MCP、未写广告、未部署。
 - 本轮可运行检查：Ruff、compileall、`git diff --check` 通过。专用 PostgreSQL `tkada_ads_reporting_final_20260930_test` acceptance **4 passed**；容量输出为 1,000 campaign/10,000 ad、20 条 SQL、164.79ms，未发现 N+1，明确不代表 ads fact 全链路规模。修复查询入口在创建快照前校验 BC/usable grants，未知或未授权 BC 返回 404，避免无效外键 500；TestClient wrong-BC 与已有 snapshot 跨 BC 回归均通过。reporting+acceptance 合并 81 passed，另有 1 个既有 TestClient.delete 基线失败及 6 个未注入 TEST_REDIS_URL 的既有 setup errors；`ty check app` 的 45 条诊断仍属既有 ads/reporting SQLModel 类型问题。
+
+## 2026-10-01：C1 管理合同、持久化与独立权限已完成
+
+- C1 提交为 `17fb1f7`、`5323e8e`、`d414a9c`；新增管理变更合同、不可变预览/任务/项/请求尝试/回执模型、`ads_manage` 独立权限动作，以及当前路由、BC、账户、授权和能力代数的复合约束。
+- 管理能力只接受当前绑定与授权代数的 `VERIFIED` 证据，不能由 read/build 权限推导；ROAS、预算、启停的状态模式和素材引用结构在模型边界校验，普通素材没有独立广告素材引用时保留 `UNSUPPORTED`。
+- 为避免改写已应用迁移，完整性约束放入后续 `ad_management_integrity` 迁移；覆盖跨租户、跨 BC、跨预览项、旧能力代数、非法操作和重复/非法请求尝试的回归测试。
+- 专用 PostgreSQL `tkada_c1_test` 与 Redis DB14：36 项通过；Alembic upgrade/downgrade/upgrade 与 `alembic check`、Ruff、ty、compileall、`git diff --check` 通过。最终独立复审 `task-1-rereview-final.md` 为 APPROVED；未调用真实 TikTok/MCP、未写广告、未部署。
