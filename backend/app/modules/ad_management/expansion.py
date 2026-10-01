@@ -549,6 +549,38 @@ def _expand(
             ).all()
             for sibling in siblings:
                 objects[_ref_key(sibling.ref)] = sibling
+    # Account-dimension B rows carry advertiser_ids while intentionally having no
+    # synthetic account EntityRef. Expand their pre-selection campaign/group
+    # directory rows under the same route and cutoff.
+    if not candidate_seed and mutation.field in {"roas", "status"}:
+        account_campaigns = session.exec(
+            select(AdObject).where(
+                AdObject.tenant_id == context.tenant_id,
+                col(AdObject.advertiser_id).in_(selection_record.advertiser_ids),
+                AdObject.kind == "campaign",
+                AdObject.source_connection_id == route.connection_id,
+                AdObject.source_channel == route.channel,
+                AdObject.observed_at <= selection_record.created_at,
+            ).execution_options(populate_existing=True)
+        ).all()
+        for campaign in account_campaigns:
+            objects[_ref_key(campaign.ref)] = campaign
+        if mutation.field == "roas":
+            for campaign in account_campaigns:
+                siblings = session.exec(
+                    select(AdObject).where(
+                        AdObject.tenant_id == context.tenant_id,
+                        AdObject.advertiser_id == campaign.advertiser_id,
+                        AdObject.kind == "adgroup",
+                        AdObject.parent_kind == "campaign",
+                        AdObject.parent_remote_id == campaign.remote_id,
+                        AdObject.source_connection_id == route.connection_id,
+                        AdObject.source_channel == route.channel,
+                        AdObject.observed_at <= selection_record.created_at,
+                    ).execution_options(populate_existing=True)
+                ).all()
+                for sibling in siblings:
+                    objects[_ref_key(sibling.ref)] = sibling
     commands: list[ManagementCommand] = []
     command_by_ref: dict[tuple[Any, ...], ManagementCommand] = {}
     command_items: dict[tuple[Any, ...], ExpandedItem] = {}
