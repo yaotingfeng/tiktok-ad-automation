@@ -165,6 +165,42 @@ def test_source_fence_and_grouping_revision_are_frozen(session, management_env):
     assert persisted is not None and persisted.grouping_revision == 7
 
 
+def test_child_inherits_grouping_revision_from_frozen_route_ancestor(session, management_env):
+    context, bc, account, route, selection = management_env
+    campaign = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "revision-series")
+    group = EntityRef(context.tenant_id, account.advertiser_id, "adgroup", "revision-group")
+    session.add_all([
+        _row(campaign, connection_id=route.connection_id, observed_at=selection.created_at - timedelta(minutes=1)),
+        _row(group, parent=campaign, configuration={"roas_bid": "1.20"}, connection_id=route.connection_id, observed_at=selection.created_at - timedelta(minutes=1)),
+        CampaignNameProjection(
+            tenant_id=context.tenant_id,
+            advertiser_id=account.advertiser_id,
+            campaign_remote_id=campaign.remote_id,
+            name_revision=7,
+            raw_name="provider-drama-note",
+            provider_label="provider",
+            drama_name="drama",
+            status="VALID",
+            parser_revision=1,
+            grouping_revision=7,
+        ),
+    ])
+    _cap(session, context, bc, route, account.advertiser_id, "update_roas", "adgroup")
+    session.flush()
+    _set_selection(selection, [group])
+    preview = prepare_preview(
+        session,
+        context,
+        bc.bc_id,
+        selection.id,
+        MutationSpec(field="roas", mode="set", value=Decimal("1.30")),
+    )
+    assert preview.items[0].execution_result == "PENDING"
+    assert preview.items[0].ref == group
+    persisted = session.exec(select(ManagementPreviewItem).where(ManagementPreviewItem.preview_id == preview.preview_id)).first()
+    assert persisted is not None and persisted.grouping_revision == 7
+
+
 def test_smart_plus_series_expands_only_preselection_siblings_and_conflicts(session, management_env):
     context, bc, account, route, selection = management_env
     cutoff = selection.created_at
@@ -238,3 +274,54 @@ def test_unrelated_include_parent_and_excluded_parent_are_fenced(session, manage
         prepare_preview(session, context, bc.bc_id, selection.id, MutationSpec(field="status", mode="set", value="DISABLE", include_parents=(unrelated,)))
     p = prepare_preview(session, context, bc.bc_id, selection.id, MutationSpec(field="status", mode="set", value="DISABLE", include_parents=(campaign,), excluded_refs=(campaign,)))
     assert all(item.ref != campaign or item.execution_result == "UNSUPPORTED" for item in p.items)
+
+
+def test_missing_include_parent_is_retained_as_unsupported(session, management_env):
+    context, bc, account, route, selection = management_env
+    campaign = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "existing-parent")
+    group = EntityRef(context.tenant_id, account.advertiser_id, "adgroup", "missing-parent-group")
+    missing_parent = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "missing-parent")
+    session.add_all([
+        _row(campaign, connection_id=route.connection_id),
+        _row(group, parent=campaign, connection_id=route.connection_id),
+    ])
+    _cap(session, context, bc, route, account.advertiser_id, "set_status", "adgroup")
+    session.flush()
+    _set_selection(selection, [group])
+    preview = prepare_preview(
+        session,
+        context,
+        bc.bc_id,
+        selection.id,
+        MutationSpec(
+            field="status",
+            mode="set",
+            value="DISABLE",
+            include_parents=(missing_parent,),
+        ),
+    )
+    missing = [item for item in preview.items if item.ref == missing_parent]
+    assert len(missing) == 1
+    assert missing[0].reason == "parent_not_found"
+    assert missing[0].execution_result == "UNSUPPORTED"
+    assert preview.counts.targets == 1
+
+
+def test_missing_material_reference_cannot_fallback_to_ad_status(session, management_env):
+    context, bc, account, route, selection = management_env
+    ad = EntityRef(context.tenant_id, account.advertiser_id, "ad", "missing-material-reference")
+    use = MaterialUseRef(ad, "platform-vid", "ad-material-id", "VIDEO")
+    session.add(_row(ad, ad_type="SMART_PLUS", connection_id=route.connection_id))
+    _cap(session, context, bc, route, account.advertiser_id, "set_material_status", "ad")
+    session.flush()
+    _set_selection(selection, [ad], [use])
+    preview = prepare_preview(
+        session,
+        context,
+        bc.bc_id,
+        selection.id,
+        MutationSpec(field="status", mode="set", value="DISABLE"),
+    )
+    assert preview.items[0].reason == "material_reference_missing"
+    assert preview.items[0].execution_result == "UNSUPPORTED"
+    assert preview.counts.targets == 0

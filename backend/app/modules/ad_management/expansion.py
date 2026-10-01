@@ -293,14 +293,44 @@ def _grouping_revision_for_row(
     *,
     row: AdObject,
     objects: dict[tuple[UUID, str, str, str], AdObject],
+    context: TenantContext,
+    bc_id: str,
+    route: Any,
 ) -> int:
     campaign = row if row.kind == "campaign" else None
+    current = row
+    seen: set[tuple[Any, ...]] = set()
+    while campaign is None and current.parent_ref is not None:
+        key = _ref_key(current.ref)
+        if key in seen:
+            raise DomainError("grouping_revision_missing", "对象祖先链存在循环")
+        seen.add(key)
+        parent = objects.get(_ref_key(current.parent_ref))
+        if parent is None:
+            parent = _object_for_ref(
+                session,
+                context=context,
+                bc_id=bc_id,
+                ref=current.parent_ref,
+                route=route,
+            )
+            # Ancestors of a frozen identity remain part of that identity's
+            # evidence even when their latest directory observation is newer
+            # than the B snapshot.  The cutoff applies to newly discovered
+            # Smart+ descendants, not the selected object's parent chain.
+            if parent is not None:
+                objects[_ref_key(parent.ref)] = parent
+        if parent is None:
+            raise DomainError(
+                "grouping_revision_missing",
+                "对象的冻结祖先尚未在目录中确认",
+            )
+        current = parent
+        if current.kind == "campaign":
+            campaign = current
     if campaign is None:
-        parent = objects.get(_ref_key(row.parent_ref)) if row.parent_ref else None
-        while parent is not None and parent.kind != "campaign":
-            parent = objects.get(_ref_key(parent.parent_ref)) if parent.parent_ref else None
-        campaign = parent
-    return _grouping_revision(session, campaign.ref) if campaign is not None else 0
+        raise DomainError("grouping_revision_missing", "对象没有可确认的系列祖先")
+    return _grouping_revision(session, campaign.ref)
 
 
 def _is_ancestor(
@@ -498,6 +528,25 @@ def _expand(
         if ref.tenant_id != context.tenant_id:
             raise DomainError("management_parent_invalid", "显式父级不属于当前租户")
         row = _object_for_ref(session, context=context, bc_id=bc_id, ref=ref, route=route)
+        if row is None:
+            items.append(
+                ExpandedItem(
+                    ref,
+                    None,
+                    None,
+                    None,
+                    "parent_not_found",
+                    "UNSUPPORTED",
+                    None,
+                    None,
+                    0,
+                    {
+                        "route": route.model_dump(mode="json") if route is not None else None,
+                    },
+                    False,
+                )
+            )
+            continue
         valid = False
         for child_ref in selected_children:
             child = objects.get(_ref_key(child_ref))
@@ -605,6 +654,21 @@ def _expand(
     )
     effective_field = "material_status" if material_mode else mutation.field
 
+    def grouping_revision_for(row: AdObject) -> int | None:
+        try:
+            return _grouping_revision_for_row(
+                session,
+                row=row,
+                objects=objects,
+                context=context,
+                bc_id=bc_id,
+                route=route,
+            )
+        except DomainError as exc:
+            if exc.code == "grouping_revision_missing":
+                return None
+            raise
+
     def add_item(
         row: AdObject,
         *,
@@ -613,6 +677,32 @@ def _expand(
         force_field: str | None = None,
     ) -> None:
         field = force_field or effective_field
+        material = _material_row(session, use) if use is not None else None
+        if use is not None and use.ad_material_id is not None and material is None:
+            grouping_revision = grouping_revision_for(row)
+            items.append(
+                ExpandedItem(
+                    row.ref,
+                    use,
+                    None,
+                    None,
+                    "material_reference_missing",
+                    "UNSUPPORTED",
+                    None,
+                    row.parent_ref,
+                    grouping_revision or 0,
+                    {
+                        "operation": _OPERATION_BY_FIELD[field],
+                        "entity_kind": row.kind,
+                        "ad_type": row.ad_type,
+                        "source_connection_id": str(row.source_connection_id) if row.source_connection_id else None,
+                        "source_channel": row.source_channel,
+                        "route": route.model_dump(mode="json") if route is not None else None,
+                    },
+                    linked,
+                )
+            )
+            return
         current = _current_value(session, row, use, field)
         operation = _OPERATION_BY_FIELD[field]
         capability_ok = True
@@ -624,9 +714,31 @@ def _expand(
             "observed_at": row.observed_at.isoformat(),
             "configuration": deepcopy(row.configuration or {}),
         }
-        grouping_revision = _grouping_revision_for_row(
-            session, row=row, objects=objects
-        )
+        grouping_revision = grouping_revision_for(row)
+        if grouping_revision is None:
+            items.append(
+                ExpandedItem(
+                    row.ref,
+                    use,
+                    current,
+                    None,
+                    "grouping_revision_missing",
+                    "UNSUPPORTED",
+                    None,
+                    row.parent_ref,
+                    0,
+                    {
+                        "operation": operation,
+                        "entity_kind": row.kind,
+                        "ad_type": row.ad_type,
+                        "source_connection_id": str(row.source_connection_id) if row.source_connection_id else None,
+                        "source_channel": row.source_channel,
+                        "route": route.model_dump(mode="json") if route is not None else None,
+                    },
+                    linked,
+                )
+            )
+            return
         capability["grouping_revision"] = grouping_revision
         capability["source_connection_id"] = str(row.source_connection_id) if row.source_connection_id else None
         capability["source_channel"] = row.source_channel
@@ -752,7 +864,7 @@ def _expand(
                                 "UNSUPPORTED",
                                 None,
                                 row.parent_ref,
-                                _grouping_revision_for_row(session, row=row, objects=objects),
+                                grouping_revision_for(row) or 0,
                                 {"ad_type": row.ad_type, "configuration": deepcopy(row.configuration or {}), "source_connection_id": str(row.source_connection_id) if row.source_connection_id else None, "source_channel": row.source_channel, "route": route.model_dump(mode="json") if route is not None else None},
                                 False,
                             )
@@ -778,7 +890,7 @@ def _expand(
                             "UNSUPPORTED",
                             None,
                             row.parent_ref,
-                            _grouping_revision_for_row(session, row=row, objects=objects),
+                            grouping_revision_for(row) or 0,
                             {"ad_type": row.ad_type, "configuration": deepcopy(row.configuration or {}), "source_connection_id": str(row.source_connection_id) if row.source_connection_id else None, "source_channel": row.source_channel, "route": route.model_dump(mode="json") if route is not None else None},
                             False,
                         )
@@ -811,17 +923,18 @@ def _expand(
                     if parent_row is None:
                         break
                     if parent_row.operation_status != "ENABLE" and _ref_key(parent_row.ref) not in existing:
+                        grouping_revision = grouping_revision_for(parent_row)
                         items.append(
                             ExpandedItem(
                                 parent_row.ref,
                                 None,
                                 parent_row.operation_status,
                                 "ENABLE",
-                                "parent_disabled",
-                                "NO_CHANGE",
+                                "parent_disabled" if grouping_revision is not None else "grouping_revision_missing",
+                                "NO_CHANGE" if grouping_revision is not None else "UNSUPPORTED",
                                 None,
                                 parent_row.parent_ref,
-                                _grouping_revision_for_row(session, row=parent_row, objects=objects),
+                                grouping_revision or 0,
                                 {
                                     "ad_type": parent_row.ad_type,
                                     "configuration": deepcopy(parent_row.configuration or {}),
@@ -844,7 +957,28 @@ def _expand(
         if row is None:
             items.append(ExpandedItem(ref, None, None, None, "directory_missing", "UNSUPPORTED", None, None, 0, {}, True))
         else:
-            items.append(ExpandedItem(ref, None, None, None, "linked_impact", "NO_CHANGE", None, row.parent_ref, _grouping_revision_for_row(session, row=row, objects=objects), {"ad_type": row.ad_type, "configuration": deepcopy(row.configuration or {}), "source_connection_id": str(row.source_connection_id) if row.source_connection_id else None, "source_channel": row.source_channel, "route": route.model_dump(mode="json") if route is not None else None}, True))
+            grouping_revision = grouping_revision_for(row)
+            items.append(
+                ExpandedItem(
+                    ref,
+                    None,
+                    None,
+                    None,
+                    "linked_impact" if grouping_revision is not None else "grouping_revision_missing",
+                    "NO_CHANGE" if grouping_revision is not None else "UNSUPPORTED",
+                    None,
+                    row.parent_ref,
+                    grouping_revision or 0,
+                    {
+                        "ad_type": row.ad_type,
+                        "configuration": deepcopy(row.configuration or {}),
+                        "source_connection_id": str(row.source_connection_id) if row.source_connection_id else None,
+                        "source_channel": row.source_channel,
+                        "route": route.model_dump(mode="json") if route is not None else None,
+                    },
+                    True,
+                )
+            )
 
     # Same series cannot receive divergent ROAS values in one management task.
     if mutation.field == "roas":
