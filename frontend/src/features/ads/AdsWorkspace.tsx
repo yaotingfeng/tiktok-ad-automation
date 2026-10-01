@@ -212,7 +212,7 @@ export function AdsWorkspace() {
         <div className="flex flex-wrap gap-2">
           <Button
             variant="outline"
-            disabled={syncMutation.isPending || roleReadonly}
+            disabled={syncMutation.isPending}
             onClick={() =>
               runAction(() =>
                 syncMutation.mutate(undefined, {
@@ -229,7 +229,7 @@ export function AdsWorkspace() {
           </Button>
           <Button
             variant="outline"
-            disabled={!ads.snapshot || exportMutation.isPending || roleReadonly}
+            disabled={!ads.snapshot || exportMutation.isPending}
             onClick={() =>
               runAction(() =>
                 exportMutation.mutate(undefined, {
