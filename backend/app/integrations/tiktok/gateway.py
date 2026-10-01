@@ -41,7 +41,7 @@ from app.integrations.tiktok.contracts.accounts import (
     AuthorizationFacts,
     RuntimeReadContext,
 )
-from app.integrations.tiktok.contracts.ads import AdsReadOperations
+from app.integrations.tiktok.contracts.ads import AdsReadOperations, EntityRef
 from app.integrations.tiktok.contracts.builds import BuildOperations
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.integrations.tiktok.contracts.management import (
@@ -66,6 +66,7 @@ from app.integrations.tiktok.mcp.protocol import load_mcp_protocol, load_tool_co
 from app.integrations.tiktok.mcp.scenes import McpScenesGateway
 from app.integrations.tiktok.mcp.transport import open_bound_mcp_client
 from app.integrations.tiktok.mcp_auth.refresh import ensure_mcp_credentials
+from app.integrations.tiktok.object_coordination import MutationLease, claim_mutation
 from app.integrations.tiktok.official.accounts import OfficialAccountsGateway
 from app.integrations.tiktok.official.authorization import (
     material_authorization as api_material_authorization,
@@ -318,6 +319,7 @@ def open_tiktok_gateway(
             observed = json.loads(json.dumps(observation.tool_schemas))
 
     finance = FinanceReadState()
+    isolation_lease: MutationLease | None = None
 
     def check_account(advertiser_id: str) -> str:
         # 本地权限读独立事务；既用于未知财务证据，也用于完整分页后再次过滤权限。
@@ -415,6 +417,7 @@ def open_tiktok_gateway(
             # 与授权和准入一样在每个物理发送前重复执行；调用方必须幂等核对
             # ledger_id、冻结 body/digest/route、独占 claim 和截止时间，不得仅传空回调。
             before_isolation_write()
+            isolation_guard()
 
     @contextmanager
     def admit(advertiser_id: str | None, operation: str) -> Iterator[None]:
@@ -486,6 +489,38 @@ def open_tiktok_gateway(
             authorize(advertiser_id, "reports.task_download")
             yield
 
+    def isolation_guard() -> None:
+        """Fence the exact instant before the legacy disable request."""
+        nonlocal isolation_lease
+        if group_isolation is None or before_isolation_write is None:
+            raise DomainError(
+                "group_isolation_authority_required", "停用前必须核查持久纠正账本"
+            )
+        # Legacy group isolation and C4 management use the same remote object
+        # domain. Claim lazily because SDK adapters invoke this hook immediately
+        # before entering their request scope.
+        if isolation_lease is None:
+            ref = EntityRef(
+                route.tenant_id,
+                group_isolation.advertiser_id,
+                "adgroup",
+                group_isolation.adgroup_id,
+            )
+            with bounded_session(
+                database_engine, task_deadline=task_deadline
+            ) as lock_session:
+                isolation_lease = claim_mutation(
+                    lock_session,
+                    (ref,),
+                    group_isolation.ledger_id,
+                    redis_client=redis_client,
+                )
+        if isolation_lease is None:
+            raise DomainError(
+                "group_isolation_authority_required", "停用前未领取远端对象租约"
+            )
+        isolation_lease.assert_current(redis_client)
+
     read_context = RuntimeReadContext(route.bc_id)
     try:
         if route.channel == "OFFICIAL_MCP":
@@ -530,7 +565,11 @@ def open_tiktok_gateway(
                         observation_authorization=observation_facts,
                     ),
                     scenes=McpScenesGateway(client, context=read_context),
-                    builds=McpBuildOperations(client, isolation=group_isolation),
+                    builds=McpBuildOperations(
+                        client,
+                        isolation=group_isolation,
+                        before_disable=isolation_guard,
+                    ),
                     management=McpManagementOperations(
                         client,
                         capability_check=lambda advertiser, operation, kind: authorize(
@@ -583,6 +622,7 @@ def open_tiktok_gateway(
                         request_scope=request_scope,
                         deadline=task_deadline,
                         isolation=group_isolation,
+                        before_disable=isolation_guard,
                     ),
                     management=SdkManagementOperations(
                         official,
@@ -614,5 +654,7 @@ def open_tiktok_gateway(
                     ),
                 )
     finally:
+        if isolation_lease is not None:
+            isolation_lease.release(redis_client)
         material.clear()
         token = None

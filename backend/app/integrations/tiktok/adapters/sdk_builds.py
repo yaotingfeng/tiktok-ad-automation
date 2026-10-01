@@ -1,6 +1,7 @@
 """工厂拥有的官方 SDK 广告创建与只读适配；逐次授权/准入复用已有请求边界。"""
 
 import json
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -50,9 +51,11 @@ class ApiBuildOperations:
         request_scope: RequestScope,
         deadline: datetime,
         isolation: FrozenGroupIsolation | None = None,
+        before_disable: Callable[[], None] | None = None,
     ):
         self._request_scope, self._deadline = request_scope, deadline
         self._isolation = isolation
+        self._before_disable = before_disable
         self._requests = OfficialReadRequests(
             client, request_scope=request_scope, deadline=deadline
         )
@@ -60,6 +63,8 @@ class ApiBuildOperations:
     def disable_adgroup(
         self, *, advertiser_id: str, adgroup_id: str
     ) -> McpBusinessResponse:
+        if self._before_disable is not None:
+            self._before_disable()
         require_isolation_target(
             self._isolation, advertiser_id=advertiser_id, adgroup_id=adgroup_id
         )

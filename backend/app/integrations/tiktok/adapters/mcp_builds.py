@@ -1,5 +1,6 @@
 """仅消费 P0 固定 build.* 映射与已校验 envelope，不建立额外 HTTP 层。"""
 
+from collections.abc import Callable
 from uuid import UUID
 
 from app.integrations.tiktok.adapters.build_results import created_result
@@ -27,14 +28,21 @@ from app.modules.builds.request_compiler import (
 
 class McpBuildOperations:
     def __init__(
-        self, client: BoundMCPClient, *, isolation: FrozenGroupIsolation | None = None
+        self,
+        client: BoundMCPClient,
+        *,
+        isolation: FrozenGroupIsolation | None = None,
+        before_disable: Callable[[], None] | None = None,
     ):
         self._client = client
         self._isolation = isolation
+        self._before_disable = before_disable
 
     def disable_adgroup(
         self, *, advertiser_id: str, adgroup_id: str
     ) -> McpBusinessResponse:
+        if self._before_disable is not None:
+            self._before_disable()
         require_isolation_target(
             self._isolation, advertiser_id=advertiser_id, adgroup_id=adgroup_id
         )
