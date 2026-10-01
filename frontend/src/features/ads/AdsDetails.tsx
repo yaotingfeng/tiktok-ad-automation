@@ -13,15 +13,17 @@ import { rowName } from "./search"
 export function AdsDetails({
   ref,
   row,
+  snapshotId,
   onClose,
 }: {
   ref?: EntityRef | null
   row?: ReportRow | null
+  snapshotId?: string | null
   onClose: () => void
 }) {
   const { tenantId, bc } = useTenantScope()
   const query = useQuery({
-    queryKey: ["tenant", tenantId, "ads", "detail", bc?.bc_id, ref],
+    queryKey: ["tenant", tenantId, "ads", "detail", bc?.bc_id, snapshotId, ref],
     enabled: !!tenantId && !!bc && !!ref && ref.kind !== "creative",
     queryFn: async ({ signal }) =>
       (
@@ -31,7 +33,11 @@ export function AdsDetails({
             kind: ref!.kind as "campaign" | "adgroup" | "ad" | "creative",
             remote_id: ref!.remote_id,
           },
-          query: { advertiser_id: ref!.advertiser_id, bc_id: bc!.bc_id },
+          query: {
+            advertiser_id: ref!.advertiser_id,
+            bc_id: bc!.bc_id,
+            snapshot_id: snapshotId ?? undefined,
+          },
           signal,
         })
       ).data,
@@ -58,7 +64,7 @@ export function AdsDetails({
           <div className="flex items-center gap-2">
             <Badge variant="outline">{detail?.ad_type ?? "外部广告"}</Badge>
             <span>
-              {detail?.statuses?.operation_status ??
+              {detail?.statuses?.operation ??
                 row?.display?.status ??
                 "状态待同步"}
             </span>

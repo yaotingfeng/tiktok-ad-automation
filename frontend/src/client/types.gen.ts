@@ -9182,6 +9182,10 @@ export type adsReportingAdDetailData = {
          * Bc Id
          */
         bc_id: string;
+        /**
+         * Snapshot Id
+         */
+        snapshot_id?: string | null;
     };
     url: '/api/tenants/{tenant_id}/ads/{kind}/{remote_id}';
 };

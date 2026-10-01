@@ -31,3 +31,29 @@ test("翻页沿用同一报表快照", async ({ page }) => {
     "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   )
 })
+
+test("详情沿用快照并读取 operation 状态", async ({ page }) => {
+  await adsBoundary(page)
+  const detailRequests: string[] = []
+  page.on("request", (request) => {
+    if (request.url().includes("/ads/campaign/campaign-1?"))
+      detailRequests.push(request.url())
+  })
+  await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+  await page.getByRole("button", { name: "嘉书-总裁归来-测试" }).click()
+  await expect(page.getByText("PAUSED", { exact: true })).toBeVisible()
+  expect(
+    new URL(detailRequests.at(-1) ?? "http://localhost").searchParams.get(
+      "snapshot_id",
+    ),
+  ).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+})
+
+test("混币种桶不静默合并", async ({ page }) => {
+  await adsBoundary(page, { mixedBuckets: true })
+  await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+  await expect(
+    page.getByText("覆盖不完整", { exact: true }).first(),
+  ).toBeVisible()
+  await expect(page.getByText("多口径", { exact: true })).toHaveCount(3)
+})

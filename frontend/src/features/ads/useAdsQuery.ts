@@ -7,15 +7,15 @@ import {
 } from "@/client"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { type AdsSearch, toAdsQuery } from "./search"
-export function useAdsQuery(search: AdsSearch) {
+export function useAdsQuery(search: AdsSearch, queryRevision = 0) {
   const { tenantId, bc, scope } = useTenantScope()
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [allMatching, setAllMatching] = useState(false)
   const [excluded, setExcluded] = useState<Set<string>>(new Set())
   const bcId = bc?.bc_id ?? null
   const queryKey = useMemo(
-    () => ["tenant", tenantId, "ads", bcId, search] as const,
-    [tenantId, bcId, search],
+    () => ["tenant", tenantId, "ads", bcId, queryRevision, search] as const,
+    [tenantId, bcId, queryRevision, search],
   )
   const query = useQuery<AdsQueryPage>({
     queryKey,
@@ -31,7 +31,6 @@ export function useAdsQuery(search: AdsSearch) {
           signal,
         })
       ).data,
-    placeholderData: (previous) => previous,
   })
   const selectionKey = useMemo(() => {
     const {

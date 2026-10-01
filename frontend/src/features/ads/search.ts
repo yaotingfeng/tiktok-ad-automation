@@ -93,7 +93,14 @@ export function rowMetric(
   row: ReportRow,
   metric: string,
 ): { value: string | null; availability: string } {
-  const bucket = row.metric_buckets?.[0]
+  const buckets = row.metric_buckets ?? []
+  const coordinates = new Set(
+    buckets.map(
+      (bucket) => `${bucket.currency}|${bucket.timezone}|${bucket.attribution}`,
+    ),
+  )
+  if (coordinates.size > 1) return { value: null, availability: "INCOMPLETE" }
+  const bucket = buckets[0]
   const value = bucket?.values?.[metric] ?? null
   return {
     value,
@@ -104,34 +111,9 @@ export function rowMetric(
 }
 export function rowTargetRoas(row: ReportRow): string | null {
   const display = row.display ?? {}
-  const record = row as unknown as Record<string, unknown>
-  const candidates = [
-    display.target_roas,
-    record.target_roas,
-    record.targetRoas,
-    record.roas_bid,
-    record.target_roas_bid,
-  ]
-  for (const candidate of candidates) {
-    if (candidate !== null && candidate !== undefined && candidate !== "")
-      return String(candidate)
-  }
-  const configurations = [
-    (display as Record<string, unknown>).configuration,
-    record.configuration,
-    record.directory,
-    record.config,
-  ]
-  for (const configuration of configurations) {
-    if (!configuration || typeof configuration !== "object") continue
-    const config = configuration as Record<string, unknown>
-    for (const key of ["target_roas", "targetRoas", "roas_bid"]) {
-      const value = config[key]
-      if (value !== null && value !== undefined && value !== "")
-        return String(value)
-    }
-  }
-  return null
+  // B3 currently does not publish target_roas in ReportRow.display. Never
+  // reinterpret roas_bid or provider configuration as a report fact.
+  return display.target_roas ?? null
 }
 export function availabilityLabel(
   availability: string,

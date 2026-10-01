@@ -39,4 +39,15 @@ test.describe("ads workspace", () => {
       page.getByText("嘉书-总裁归来-测试", { exact: true }),
     ).toHaveCount(0)
   })
+
+  test("相同筛选应用也清空选择", async ({ page }) => {
+    await adsBoundary(page)
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page
+      .getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" })
+      .check()
+    await expect(page.getByText("已选 1 条", { exact: true })).toBeVisible()
+    await page.getByRole("button", { name: "应用筛选" }).click()
+    await expect(page.getByText("已选 1 条", { exact: true })).toHaveCount(0)
+  })
 })

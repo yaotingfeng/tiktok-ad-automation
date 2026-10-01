@@ -206,6 +206,7 @@ def ad_detail_route(
     bc_id: Annotated[str, Query(min_length=1, max_length=128)],
     session: SessionDep,
     user: CurrentUser,
+    snapshot_id: UUID | None = None,
 ) -> AdDetailPublic:
     context = _context(session, user, tenant_id)
     return get_ad_detail(

@@ -3,6 +3,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { formatMetric, rowTargetRoas } from "./search"
 
 type SummaryBucket = {
+  currency?: string
+  timezone?: string
+  attribution?: string
   values?: Record<string, string | number | null>
 }
 
@@ -13,6 +16,12 @@ type AdsSummaryData = {
 
 function metricValue(summary: AdsSummaryData | undefined, key: string) {
   const buckets = summary?.buckets ?? []
+  const coordinates = new Set(
+    buckets.map(
+      (bucket) => `${bucket.currency}|${bucket.timezone}|${bucket.attribution}`,
+    ),
+  )
+  if (coordinates.size > 1) return "多口径"
   const values = buckets
     .map((bucket) => bucket.values?.[key])
     .filter(
@@ -27,7 +36,7 @@ function metricValue(summary: AdsSummaryData | undefined, key: string) {
 }
 
 function displayValue(value: string | number | null | undefined) {
-  return value === "多个" ? value : formatMetric(value)
+  return value === "多个" || value === "多口径" ? value : formatMetric(value)
 }
 
 export function AdsSummary({
@@ -89,7 +98,7 @@ export function AdsSummary({
           </CardTitle>
         </CardHeader>
         <CardContent className="text-xl font-semibold">
-          {target === "多个" || target === "目录未同步"
+          {target === "多个" || target === "多口径" || target === "目录未同步"
             ? target
             : formatMetric(target)}
         </CardContent>

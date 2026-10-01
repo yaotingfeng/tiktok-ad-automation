@@ -6,7 +6,11 @@ export const BC_B = "bc-b"
 export const ADVERTISER = "adv-1"
 const token = "ads-workspace-test-token"
 
-export type AdsBoundaryOptions = { delayedA?: boolean; paged?: boolean }
+export type AdsBoundaryOptions = {
+  delayedA?: boolean
+  paged?: boolean
+  mixedBuckets?: boolean
+}
 
 export async function adsBoundary(
   page: Page,
@@ -132,6 +136,25 @@ export async function adsBoundary(
                     d0_roas: "AVAILABLE",
                   },
                 },
+                ...(options.mixedBuckets
+                  ? [
+                      {
+                        currency: "CNY",
+                        timezone: "Asia/Shanghai",
+                        attribution: "IAA",
+                        values: {
+                          spend: "100",
+                          native_growth_ad_revenue_value_d0: "120",
+                          d0_roas: "1.2",
+                        },
+                        availability: {
+                          spend: "AVAILABLE",
+                          native_growth_ad_revenue_value_d0: "AVAILABLE",
+                          d0_roas: "AVAILABLE",
+                        },
+                      },
+                    ]
+                  : []),
               ],
               capabilities: { can_manage: true },
               coverage: {
@@ -159,6 +182,25 @@ export async function adsBoundary(
                   d0_roas: "AVAILABLE",
                 },
               },
+              ...(options.mixedBuckets
+                ? [
+                    {
+                      currency: "CNY",
+                      timezone: "Asia/Shanghai",
+                      attribution: "IAA",
+                      values: {
+                        spend: "100",
+                        native_growth_ad_revenue_value_d0: "120",
+                        d0_roas: "1.2",
+                      },
+                      availability: {
+                        spend: "AVAILABLE",
+                        native_growth_ad_revenue_value_d0: "AVAILABLE",
+                        d0_roas: "AVAILABLE",
+                      },
+                    },
+                  ]
+                : []),
             ],
           },
           coverage: {
@@ -169,6 +211,25 @@ export async function adsBoundary(
         },
       })
     }
+    if (path.endsWith(`/tenants/${TENANT}/ads/campaign/campaign-1`))
+      return route.fulfill({
+        headers,
+        json: {
+          ref: {
+            tenant_id: TENANT,
+            advertiser_id: ADVERTISER,
+            kind: "campaign",
+            remote_id: "campaign-1",
+          },
+          name: "嘉书-总裁归来-测试",
+          ad_type: "VIDEO",
+          configuration: {},
+          statuses: { operation: "PAUSED", review: "APPROVED" },
+          materials: [],
+          operation_history: [],
+          observed_at: "2026-10-01T00:00:00Z",
+        },
+      })
     if (path.endsWith("/reports/trend"))
       return route.fulfill({
         headers,

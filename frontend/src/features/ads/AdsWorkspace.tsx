@@ -27,7 +27,8 @@ export function AdsWorkspace() {
   const [selectedRow, setSelectedRow] = useState<ReportRow | null>(null)
   const [applied, setApplied] = useState<AdsSearch>(search)
   const [cursorHistory, setCursorHistory] = useState<Array<string | null>>([])
-  const ads = useAdsQuery(applied)
+  const [queryRevision, setQueryRevision] = useState(0)
+  const ads = useAdsQuery(applied, queryRevision)
   const queryClient = useQueryClient()
   const items = ads.query.data?.items ?? []
   const currentBcId = bc?.bc_id
@@ -70,14 +71,7 @@ export function AdsWorkspace() {
           body: {
             name: "广告报表当前筛选",
             filters: toReportingFilter(applied),
-            columns: [
-              "name",
-              "drama",
-              "status",
-              "spend",
-              "d0_roas",
-              "target_roas",
-            ],
+            columns: ["name", "drama", "status", "spend", "d0_roas"],
           },
         })
       ).data,
@@ -156,7 +150,10 @@ export function AdsWorkspace() {
   const update = (next: Partial<AdsSearch>) =>
     setSearch((current) => ({ ...current, ...next, page: next.page ?? 1 }))
   const apply = () => {
+    ads.selection.clear()
     setCursorHistory([])
+    setSelectedRow(null)
+    setQueryRevision((current) => current + 1)
     setApplied({
       ...search,
       page: 1,
@@ -166,7 +163,10 @@ export function AdsWorkspace() {
   }
   const reset = () => {
     const next = defaultAdsSearch()
+    ads.selection.clear()
     setCursorHistory([])
+    setSelectedRow(null)
+    setQueryRevision((current) => current + 1)
     setSearch(next)
     setApplied(next)
   }
@@ -275,6 +275,7 @@ export function AdsWorkspace() {
             value={applied.dimension}
             onValueChange={(value) => {
               const dimension = value as AdsSearch["dimension"]
+              ads.selection.clear()
               setCursorHistory([])
               setApplied((current) => ({
                 ...current,
@@ -359,6 +360,7 @@ export function AdsWorkspace() {
       <AdsDetails
         row={selectedRow}
         ref={selectedRow?.refs?.[0] ?? null}
+        snapshotId={ads.snapshot?.snapshot_id}
         onClose={() => setSelectedRow(null)}
       />
     </div>
