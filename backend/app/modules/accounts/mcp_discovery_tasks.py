@@ -120,6 +120,7 @@ def read_discovery_stage(
         facts = asdict(observed.facts)
         facts["observed_at"] = observed.facts.observed_at.isoformat()
         facts["scopes"] = list(observed.facts.scopes)
+        facts["management_operations"] = sorted(observed.facts.management_operations)
         return [
             {
                 "stage": "SUBJECT",
