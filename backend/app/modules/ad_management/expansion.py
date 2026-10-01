@@ -453,6 +453,9 @@ def _expand(
         raise DomainError("read_bc_mismatch", "冻结选择不属于当前 BC")
     excluded_refs = {_ref_key(ref) for ref in mutation.excluded_refs}
     excluded_uses = {_use_key(item) for item in mutation.excluded_material_uses}
+    excluded_material_ad_refs = {
+        _ref_key(item.ad_ref) for item in mutation.excluded_material_uses
+    }
     unique_refs: list[EntityRef] = []
     seen_refs: set[tuple[Any, ...]] = set()
     for ref in selection.refs:
@@ -484,8 +487,13 @@ def _expand(
     # Explicit parents must be a real ancestor of a selected object/material ad.
     selected_children = list(refs) + [use.ad_ref for use in uses]
     for ref in mutation.include_parents:
-        if _ref_key(ref) in excluded_refs:
-            items.append(ExpandedItem(ref, None, None, None, "excluded_ref", "UNSUPPORTED", None, None, 0, {}, False))
+        if _ref_key(ref) in excluded_refs or _ref_key(ref) in excluded_material_ad_refs:
+            reason = (
+                "excluded_ref"
+                if _ref_key(ref) in excluded_refs
+                else "excluded_material_use"
+            )
+            items.append(ExpandedItem(ref, None, None, None, reason, "UNSUPPORTED", None, None, 0, {}, False))
             continue
         if ref.tenant_id != context.tenant_id:
             raise DomainError("management_parent_invalid", "显式父级不属于当前租户")
