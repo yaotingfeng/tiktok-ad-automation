@@ -584,8 +584,15 @@ def _verified_gangganhao(
     ):
         raise _error("provider_schema_unsupported")
     actual = data["config"]
-    for key in ("free_episode_count", "episode_seq", "payment_template_id"):
-        if key in config and str(actual.get(key)) != str(config[key]):
+    expected = work.get("ggh_config") if isinstance(work.get("ggh_config"), dict) else config
+    for key in (
+        "authorizer_app_id",
+        "series_id",
+        "free_episode_count",
+        "episode_seq",
+        "payment_template_id",
+    ):
+        if key in expected and str(actual.get(key)) != str(expected[key]):
             raise _error("config_conflict")
 
 
@@ -602,8 +609,9 @@ def _verified_rongliang(
     ):
         raise _error("provider_result_unknown")
     actual = data["config"]
+    expected = work.get("rongliang_config") if isinstance(work.get("rongliang_config"), dict) else config
     for key in ("client_id", "episodic_drama_id", "platform"):
-        if key in config and str(actual.get(key)) != str(config[key]):
+        if key in expected and str(actual.get(key)) != str(expected[key]):
             raise _error("config_conflict")
 
 
@@ -1024,11 +1032,14 @@ def _run_gangganhao_item(
     if stage == "ggh_detail":
         detail = client.series_detail(work["drama"]["external_drama_id"])
         effective = dict(config)
+        delivery_mode = detail.get("delivery_mode")
+        if not isinstance(delivery_mode, str) or not delivery_mode.strip():
+            delivery_mode = getattr(client, "delivery_mode", "iaa")
         effective.update(
             authorizer_app_id=application_id,
             series_id=detail["series_id"],
             series_title=detail["series_title"],
-            delivery_mode=detail.get("delivery_mode", getattr(client, "delivery_mode", "iaa")),
+            delivery_mode=delivery_mode,
         )
         work["ggh_config"] = effective
         work["stage"] = "lookup"

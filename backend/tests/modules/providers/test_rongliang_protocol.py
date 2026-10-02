@@ -107,6 +107,56 @@ def test_rongliang_create_without_matching_batch_is_result_unknown():
     assert error.value.code == "provider_result_unknown"
 
 
+def test_rongliang_read_link_returns_verifiable_configuration():
+    def handle(request):
+        if request.url.path.endswith("/link/page"):
+            assert request.url.params["batchId"] == "B-1"
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "records": [
+                            {
+                                "batchId": "B-1",
+                                "clientId": 1144,
+                                "episodicDramaId": 991,
+                                "deliverPlatform": 1,
+                                "deliveryType": 1,
+                                "linkType": 2,
+                                "compilationsAlias": "Moon",
+                            }
+                        ],
+                        "total": 1,
+                    },
+                },
+            )
+        if request.url.path.endswith("/link/url"):
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "deepLink": "https://www.tiktok.com/minis/rl?batchId=B-1",
+                        "planName": "Moon",
+                        "adGroupName": "Moon Ads",
+                    },
+                },
+            )
+        raise AssertionError(request.url)
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http:
+        receipt = RongliangClient(http, token="dist-jwt").read_link("B-1")
+    assert receipt.config == {
+        "client_id": 1144,
+        "episodic_drama_id": 991,
+        "platform": 1,
+        "delivery_type": 1,
+        "link_type": 2,
+        "alias": "Moon",
+    }
+
+
 def test_rongliang_token_expiry_is_stable():
     with httpx.Client(
         transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"code": "user-2", "msg": "expired"}))

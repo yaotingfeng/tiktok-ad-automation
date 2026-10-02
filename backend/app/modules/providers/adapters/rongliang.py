@@ -205,8 +205,37 @@ class RongliangClient:
         return self._receipt(batch, url_data, normalized)
 
     def read_link(self, remote_id: str) -> LinkReceipt:
-        data = self._link_url(external_id(remote_id))
-        return self._receipt(external_id(remote_id), data, {})
+        batch_id = external_id(remote_id)
+        data = self._request(
+            "GET",
+            "/link/page",
+            query={
+                "pageNumber": 1,
+                "pageSize": PAGE_SIZE,
+                "batchId": batch_id,
+            },
+        )
+        if not isinstance(data, dict) or not isinstance(data.get("records"), list):
+            raise failure("provider_result_unknown")
+        rows = [
+            row
+            for row in data["records"]
+            if isinstance(row, dict) and str(row.get("batchId")) == batch_id
+        ]
+        if len(rows) != 1:
+            raise failure("provider_result_unknown")
+        row = rows[0]
+        config: JsonDict = {
+            "client_id": positive(row.get("clientId")),
+            "episodic_drama_id": positive(row.get("episodicDramaId")),
+            "platform": positive(row.get("deliverPlatform", 1)),
+            "delivery_type": positive(row.get("deliveryType", 1)),
+            "link_type": positive(row.get("linkType", 2)),
+        }
+        if isinstance(row.get("compilationsAlias"), str):
+            config["alias"] = row["compilationsAlias"]
+        url_data = self._link_url(batch_id)
+        return self._receipt(batch_id, url_data, config)
 
     def capabilities(self, application: Any = None):
         return capabilities_for_kind("rongliang", application)

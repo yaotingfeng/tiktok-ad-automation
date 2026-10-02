@@ -91,6 +91,8 @@ class DuibaClient:
                     "tiktok_minis_id": None,
                 }
             )
+        if not result:
+            raise failure("provider_application_discovery_unverified")
         return result
 
     def search(self, title: str, cursor: str | None) -> SearchPage:

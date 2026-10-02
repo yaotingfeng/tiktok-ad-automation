@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 
+from app.core.errors import DomainError
 from app.modules.providers.capabilities import capabilities_for_kind
 from app.modules.providers.schemas import DramaCandidate
 
@@ -26,8 +27,10 @@ PAGE_SIZE = 100
 
 
 class GangganhaoClient:
-    def __init__(self, http: httpx.Client, *, token: str = ""):
-        self.http, self.token = http, token
+    def __init__(
+        self, http: httpx.Client, *, token: str = "", application_id: str = ""
+    ):
+        self.http, self.token, self.application_id = http, token, application_id
 
     @classmethod
     def login(
@@ -99,14 +102,19 @@ class GangganhaoClient:
                     "tiktok_minis_id": None,
                 }
             )
+        if not result:
+            raise failure("provider_application_discovery_unverified")
         return result
 
     def search(self, title: str, cursor: str | None) -> SearchPage:
         page = positive(cursor or 1)
+        query = {"page": page, "size": PAGE_SIZE, "keyword": title}
+        if self.application_id:
+            query["authorizerAppIds[]"] = self.application_id
         data = self._request(
             "GET",
             "/series",
-            query={"page": page, "size": PAGE_SIZE, "keyword": title},
+            query=query,
         )
         if not isinstance(data, dict) or not isinstance(data.get("list"), list):
             raise failure("provider_schema_unsupported")
@@ -121,6 +129,10 @@ class GangganhaoClient:
             row_title = row.get("seriesTitle")
             if not isinstance(row_title, str):
                 raise failure("provider_schema_unsupported")
+            if self.application_id and str(row.get("authorizerAppId")) != str(
+                self.application_id
+            ):
+                continue
             if row_title == title:
                 items.append(
                     DramaCandidate(
@@ -184,7 +196,10 @@ class GangganhaoClient:
             "publish_id": external_id(data.get("publishId", publish.get("id", publish_id))),
             "series_id": external_id(publish.get("seriesId", series.get("id"))),
             "series_title": string(publish.get("seriesTitle", series.get("title", ""))),
-            "delivery_mode": publish.get("deliveryMode", "iaa"),
+            # 详情接口有版本会省略变现方式；工作流随后回退到已选应用的目录事实。
+            "delivery_mode": publish.get("deliveryMode")
+            if isinstance(publish.get("deliveryMode"), str)
+            else None,
         }
 
     def create_link(self, drama_id: str, config: JsonDict) -> LinkReceipt:
@@ -207,7 +222,31 @@ class GangganhaoClient:
         data = self._request("GET", f"/campaign-links/{external_id(remote_id)}")
         if not isinstance(data, dict):
             raise failure("provider_result_unknown")
-        return self._receipt(data, {})
+        try:
+            free_episode_count = int(data.get("freeEpisodeCount"))
+        except (TypeError, ValueError):
+            raise failure("provider_result_unknown") from None
+        if free_episode_count < 0:
+            raise failure("provider_result_unknown")
+        series_title = data.get("seriesTitle")
+        delivery_mode = data.get("deliveryMode")
+        config: JsonDict = {
+            "authorizer_app_id": positive(data.get("authorizerAppId")),
+            "series_id": positive(data.get("seriesId")),
+            "series_title": series_title if isinstance(series_title, str) else "",
+            "free_episode_count": free_episode_count,
+            "episode_seq": positive(data.get("episodeSeq")),
+            "delivery_mode": delivery_mode if isinstance(delivery_mode, str) else "iaa",
+        }
+        template_id = data.get("paymentTemplateId")
+        if template_id not in (None, "", 0):
+            config["payment_template_id"] = positive(template_id)
+        if isinstance(data.get("paymentTemplateName"), str):
+            config["payment_template_name"] = data["paymentTemplateName"]
+        if isinstance(data.get("name"), str) and data["name"].strip():
+            config["name"] = data["name"].strip()
+        normalized = self._validate_config(config, require_template=False)
+        return self._receipt(data, normalized)
 
     def create_step(self, step: str, payload: JsonDict) -> JsonDict:
         if step != "create" or not isinstance(payload.get("config"), dict):
@@ -302,10 +341,13 @@ class GangganhaoClient:
             raise failure("provider_result_unknown")
         name = data.get("name") or ""
         link_code = data.get("linkCode") or ""
-        return LinkReceipt(
-            remote_id=external_id(remote_id),
-            url=url,
-            protected_base=name or link_code,
-            attribution={"linkCode": link_code, "name": name},
-            config=config,
-        )
+        try:
+            return LinkReceipt(
+                remote_id=external_id(remote_id),
+                url=url,
+                protected_base=name or link_code,
+                attribution={"linkCode": link_code, "name": name},
+                config=config,
+            )
+        except (ValueError, DomainError):
+            raise failure("provider_result_unknown") from None

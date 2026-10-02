@@ -15,7 +15,7 @@
 
 | 检查 | 结果 |
 | --- | --- |
-| `uv run pytest tests/modules/providers -q` | 292 passed |
+| `uv run pytest tests/modules/providers -q` | 300 passed |
 | `uv run pytest tests/modules/providers/test_preparation_api.py -q` | 12 passed，含能力接口与租户/验证状态检查 |
 | `npm run build`（`frontend/`） | TypeScript 与 Vite 构建通过 |
 | `npx --yes --package bun bunx playwright test tests/providers.spec.ts` | 22 passed |
@@ -27,7 +27,9 @@
 
 ## 复审修复
 
-复审发现刚刚好历史链接查询原先只按剧集和参数匹配，未把 `authorizerAppId` 纳入查询和详情核验，存在跨应用误复用链接的风险。现已要求查询配置携带应用 ID，并同时校验详情中的应用 ID、系列 ID、集数和支付模板；新增跨应用误复用回归，专项协议测试 4 项通过。
+复审发现刚刚好历史链接查询原先只按剧集和参数匹配，未把 `authorizerAppId` 纳入查询和详情核验，存在跨应用误复用链接的风险；同时发现刚刚好剧目搜索没有按当前应用过滤，以及刚刚好/容量创建后的回读配置为空会误判配置冲突。现已全部修复，并增加跨应用搜索、远端回读配置、付费模板回退和三条完整 durable workflow 回归。
+
+第二轮复审后，兑吧、刚刚好、容量均已验证从搜索、详情/预览、历史查询、创建到回读进入 `ready`，无卡在创建后回读的路径。
 
 ## 未纳入本轮
 

@@ -132,3 +132,15 @@ def test_duiba_rejects_missing_episode_lc_ids_before_remote_write():
                 {"miniapp_id": "77", "episode": 1, "card_point_episode": 9},
             )
     assert error.value.code == "provider_request_invalid"
+
+
+def test_duiba_rejects_empty_application_discovery():
+    with httpx.Client(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, json={"success": True, "data": []})
+        )
+    ) as http:
+        client = DuibaClient(http, token="jwt")
+        with pytest.raises(DomainError) as error:
+            client.discover_applications()
+    assert error.value.code == "provider_application_discovery_unverified"

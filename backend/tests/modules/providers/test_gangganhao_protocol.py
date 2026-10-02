@@ -76,6 +76,31 @@ def test_gangganhao_login_apps_search_and_iaa_create():
     assert len(seen) == 4
 
 
+def test_gangganhao_search_is_scoped_to_selected_application():
+    def handle(request):
+        if request.url.path.endswith("/series"):
+            assert request.url.params["authorizerAppIds[]"] == "16"
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "list": [
+                            {"publishId": 886, "seriesId": 12, "seriesTitle": "Moon", "authorizerAppId": 16},
+                            {"publishId": 887, "seriesId": 13, "seriesTitle": "Moon", "authorizerAppId": 17},
+                        ],
+                        "total": 2,
+                    },
+                },
+            )
+        raise AssertionError(request.url)
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http:
+        client = GangganhaoClient(http, token="portal-jwt", application_id="16")
+        page = client.search("Moon", None)
+    assert [item.external_drama_id for item in page.items] == ["886"]
+
+
 def test_gangganhao_iap_requires_payment_template_before_any_write():
     with httpx.Client(transport=httpx.MockTransport(lambda _: pytest.fail("no remote call"))) as http:
         client = GangganhaoClient(http, token="portal-jwt")
@@ -92,6 +117,18 @@ def test_gangganhao_iap_requires_payment_template_before_any_write():
                 },
             )
     assert error.value.code == "provider_request_invalid"
+
+
+def test_gangganhao_rejects_empty_application_discovery():
+    with httpx.Client(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, json={"code": 0, "data": {"list": []}})
+        )
+    ) as http:
+        client = GangganhaoClient(http, token="portal-jwt")
+        with pytest.raises(DomainError) as error:
+            client.discover_applications()
+    assert error.value.code == "provider_application_discovery_unverified"
 
 
 def test_gangganhao_lookup_compares_template_and_sequence():
@@ -151,3 +188,38 @@ def test_gangganhao_lookup_rejects_link_from_another_application():
             None,
         )
     assert page.items == []
+
+
+def test_gangganhao_read_link_returns_verifiable_configuration():
+    def handle(request):
+        assert request.url.path.endswith("/campaign-links/972")
+        return httpx.Response(
+            200,
+            json={
+                "code": 0,
+                "data": {
+                    "id": 972,
+                    "authorizerAppId": 16,
+                    "seriesId": 12,
+                    "seriesTitle": "Moon",
+                    "freeEpisodeCount": 3,
+                    "episodeSeq": 1,
+                    "paymentTemplateId": 7,
+                    "paymentTemplateName": "Pay",
+                    "deliveryMode": "mixed",
+                    "minisLink": "https://www.tiktok.com/minis/ggh",
+                },
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http:
+        receipt = GangganhaoClient(http, token="portal-jwt").read_link("972")
+    assert receipt.config == {
+        "authorizer_app_id": 16,
+        "series_id": 12,
+        "series_title": "Moon",
+        "free_episode_count": 3,
+        "episode_seq": 1,
+        "payment_template_id": 7,
+        "payment_template_name": "Pay",
+    }

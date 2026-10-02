@@ -1602,3 +1602,8 @@
 
 - 代码复审发现刚刚好历史链接复用缺少 `authorizerAppId` 作用域约束，已在 `GangganhaoClient.lookup_link` 中加入查询参数，并对详情同时校验应用 ID 与系列 ID，避免同剧同参数的其他应用链接被误复用。新增跨应用隔离回归。
 - 复审后专用 PostgreSQL 测试库中 `backend/tests/modules/providers` 共 292 项通过；前端构建、Providers Playwright、三个外部 CLI 语法检查、Ruff、compileall 和 `git diff --check` 均通过。未调用真实版权方、TikTok 或广告写入。
+
+## 2026-10-02：版权方来源扩展上线前第二轮复审
+
+- 发现并修复刚刚好剧目搜索未携带当前 `authorizerAppId`、创建后远端回读未还原核验配置，以及容量按批次回读未读取完整链接记录的问题；补充三条新来源从搜索到创建、回读并进入 `ready` 的 durable workflow 回归。
+- 复审后 provider 全量回归 300 项通过；专项 workflow 3 项、前端构建、Providers Playwright 22 项、三个 CLI 语法检查、Ruff、compileall、迁移 head 和差异检查均通过。仍未调用真实版权方或 TikTok 写接口，真实账号联调仍是上线前必要步骤。

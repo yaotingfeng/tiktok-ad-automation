@@ -28,8 +28,8 @@ from .contract import (
 )
 from .duiba import DuibaClient
 from .gangganhao import GangganhaoClient
-from .rongliang import RongliangClient
 from .jiashu import JiashuClient
+from .rongliang import RongliangClient
 from .wangyan import WangyanClient
 
 _CREDENTIAL_FIELDS: Mapping[str, frozenset[str]] = {
@@ -80,7 +80,9 @@ def adapter_for_kind(
     if kind == "duiba":
         return DuibaClient(http, token=credentials["token"])
     if kind == "gangganhao":
-        return GangganhaoClient(http, token=credentials["token"])
+        return GangganhaoClient(
+            http, token=credentials["token"], application_id=application_id
+        )
     if kind == "rongliang":
         return RongliangClient(http, token=credentials["token"])
     raise failure("provider_unavailable", retryable=True)
