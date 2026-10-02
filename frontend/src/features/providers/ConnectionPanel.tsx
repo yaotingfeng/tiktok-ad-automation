@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
 import { useCallback, useMemo, useState } from "react"
 import {
+  type ProviderConnectionCreate,
   type ProviderApplicationPublic,
   type ProviderConnectionPublic,
   ProvidersService,
@@ -71,7 +72,9 @@ export function ConnectionPanel({
     ...connectionsQuery(tenantId!, paging.cursor, paging.limit, {
       query: search,
       kind:
-        kindFilter === "all" ? undefined : (kindFilter as "wangyan" | "jiashu"),
+        kindFilter === "all"
+          ? undefined
+          : (kindFilter as ProviderConnectionCreate["kind"]),
       status: statusFilter === "all" ? undefined : (statusFilter as "active"),
     }),
     refetchInterval: (q) =>
@@ -326,12 +329,25 @@ function ConnectionEditor({
     [confirmDisable, setConfirmDisable] = useState(false),
     [saved, setSaved] = useState(initial),
     [name, setName] = useState(initial?.display_name || ""),
-    [kind, setKind] = useState(initial?.kind || "wangyan"),
+    [kind, setKind] = useState<ProviderConnectionCreate["kind"]>(
+      (initial?.kind as ProviderConnectionCreate["kind"]) || "wangyan",
+    ),
     [account, setAccount] = useState(""),
+    [portalId, setPortalId] = useState(""),
     [password, setPassword] = useState(""),
     [pending, setPending] = useState(false),
     [error, setError] = useState<string>()
-  const dirty = name !== (saved?.display_name || "") || !!account || !!password
+  const dirty =
+    name !== (saved?.display_name || "") ||
+    !!account ||
+    !!portalId ||
+    !!password
+  const accountKey =
+    kind === "jiashu" || kind === "gangganhao"
+      ? "username"
+      : kind === "duiba"
+        ? "account"
+        : "email"
   const submit = async () => {
     if (pending) return
     setPending(true)
@@ -339,7 +355,11 @@ function ConnectionEditor({
     let row = saved
     try {
       const credentials = password
-        ? { [kind === "jiashu" ? "username" : "email"]: account, password }
+        ? {
+            [accountKey]: account,
+            ...(kind === "gangganhao" ? { portal_id: portalId } : {}),
+            password,
+          }
         : undefined
       setPassword("")
       if (row) {
@@ -354,7 +374,7 @@ function ConnectionEditor({
           await ProvidersService.postConnection({
             path: { tenant_id: tenantId },
             body: {
-              kind: kind as "wangyan" | "jiashu",
+              kind,
               display_name: name,
               credentials: credentials!,
             },
@@ -420,8 +440,9 @@ function ConnectionEditor({
               value={kind}
               disabled={!!saved || pending}
               onValueChange={(v) => {
-                setKind(v)
+                setKind(v as ProviderConnectionCreate["kind"])
                 setAccount("")
+                setPortalId("")
                 setPassword("")
               }}
             >
@@ -432,18 +453,38 @@ function ConnectionEditor({
                 <SelectGroup>
                   <SelectItem value="wangyan">网眼</SelectItem>
                   <SelectItem value="jiashu">嘉书</SelectItem>
+                  <SelectItem value="duiba">兑吧</SelectItem>
+                  <SelectItem value="gangganhao">刚刚好</SelectItem>
+                  <SelectItem value="rongliang">容量</SelectItem>
                 </SelectGroup>
               </SelectContent>
             </Select>
           </Field>
           {saved && <FieldDescription>连接 ID：{saved.id}</FieldDescription>}
+          {kind === "gangganhao" && (
+            <Field>
+              <FieldLabel htmlFor="provider-portal-id">门户 ID</FieldLabel>
+              <Input
+                id="provider-portal-id"
+                autoComplete="off"
+                required={!saved || !!password}
+                value={portalId}
+                disabled={pending}
+                onChange={(e) => setPortalId(e.target.value)}
+              />
+            </Field>
+          )}
           <Field>
             <FieldLabel htmlFor="provider-account">
-              {kind === "jiashu" ? "用户名" : "邮箱"}
+              {kind === "jiashu" || kind === "gangganhao"
+                ? "用户名"
+                : kind === "duiba"
+                  ? "账号"
+                  : "邮箱"}
             </FieldLabel>
             <Input
               id="provider-account"
-              type={kind === "jiashu" ? "text" : "email"}
+              type={kind === "wangyan" || kind === "rongliang" ? "email" : "text"}
               autoComplete="off"
               required={!saved || !!password}
               value={account}

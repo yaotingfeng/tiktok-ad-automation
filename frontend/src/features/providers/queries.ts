@@ -49,6 +49,30 @@ export const applicationsQuery = (
         })
       ).data,
   })
+export const capabilitiesQuery = (
+  tenantId: string,
+  connectionId: string,
+  applicationId: string,
+) =>
+  queryOptions({
+    queryKey: [
+      ...providerKey(tenantId),
+      "capabilities",
+      connectionId,
+      applicationId,
+    ],
+    queryFn: async ({ signal }) =>
+      (
+        await ProvidersService.applicationCapabilities({
+          path: {
+            tenant_id: tenantId,
+            connection_id: connectionId,
+            application_id: applicationId,
+          },
+          signal,
+        })
+      ).data,
+  })
 export const resultsQuery = (
   tenantId: string,
   taskId: string,

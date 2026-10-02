@@ -402,6 +402,30 @@ def test_applications_are_paged_and_stale_verification_is_visible(
     assert all("channel_config" not in item and "id" not in item for item in all_items)
 
 
+def test_application_capabilities_require_verified_application_and_return_safe_schema(
+    api_client, request_fixture
+):
+    context, connection_id, _ = request_fixture
+    path = (
+        f"/api/tenants/{context.tenant_id}/providers/connections/"
+        f"{connection_id}/applications/external-app/capabilities"
+    )
+    response = api_client.get(path, headers=auth_headers(context))
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["provider_kind"] == "jiashu"
+    assert payload["schema_version"] == 1
+    assert payload["defaults"] == {"episode": 1}
+    assert payload["fields"][0]["name"] == "episode"
+    assert "channel_config" not in payload
+
+    missing = api_client.get(
+        path.replace("external-app", "missing-app"), headers=auth_headers(context)
+    )
+    assert missing.status_code == 404
+    assert missing.json()["code"] == "resource_not_found"
+
+
 def test_verify_api_uses_connection_session_and_returns_only_public_fields(
     api_client, request_fixture, monkeypatch
 ):

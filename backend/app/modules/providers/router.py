@@ -19,6 +19,7 @@ from app.modules.providers.catalog import (
     list_links,
     preparation_summary,
 )
+from app.modules.providers.capabilities import LinkConfigSchema, capabilities_for_kind
 from app.modules.providers.connections import (
     save_connection,
     verify_connection,
@@ -390,3 +391,39 @@ def list_applications(
         next_cursor=_cursor(scope, rows[limit - 1].id) if len(rows) > limit else None,
         total=total,
     )
+
+
+@router.get(
+    "/connections/{connection_id}/applications/{application_id}/capabilities",
+    response_model=LinkConfigSchema,
+)
+def application_capabilities(
+    tenant_id: UUID,
+    connection_id: UUID,
+    application_id: str,
+    session: SessionDep,
+    user: CurrentUser,
+) -> LinkConfigSchema:
+    """Return the selected provider application's safe link-config contract."""
+
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="read"
+    )
+    connection = get_connection(session, context=context, connection_id=connection_id)
+    app = session.exec(
+        select(ProviderApplication).where(
+            ProviderApplication.tenant_id == tenant_id,
+            ProviderApplication.connection_id == connection_id,
+            ProviderApplication.external_id == application_id,
+        )
+    ).one_or_none()
+    if app is None:
+        raise DomainError("resource_not_found", "当前版权方应用不存在")
+    if connection.status not in {"active", "reauth_required"} or app.channel_config.get(
+        "verification_token"
+    ) != str(connection.verification_token):
+        raise DomainError("connection_unavailable", "当前版权方应用尚未验证")
+    try:
+        return capabilities_for_kind(connection.kind, app)
+    except ValueError:
+        raise DomainError("provider_request_invalid", "当前版权方不支持自动取链") from None

@@ -2084,6 +2084,68 @@ export type InputLine = {
 };
 
 /**
+ * LinkConfigField
+ */
+export type LinkConfigField = {
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Label
+     */
+    label: string;
+    /**
+     * Type
+     */
+    type: 'string' | 'integer' | 'select' | 'boolean';
+    /**
+     * Required
+     */
+    required?: boolean;
+    /**
+     * Default
+     */
+    default?: unknown;
+    /**
+     * Options
+     */
+    options?: Array<string>;
+};
+
+/**
+ * LinkConfigSchema
+ */
+export type LinkConfigSchema = {
+    /**
+     * Provider Kind
+     */
+    provider_kind: string;
+    /**
+     * Fields
+     */
+    fields: Array<LinkConfigField>;
+    /**
+     * Defaults
+     */
+    defaults?: {
+        [key: string]: unknown;
+    };
+    /**
+     * Required When
+     */
+    required_when?: {
+        [key: string]: {
+            [key: string]: Array<string>;
+        };
+    };
+    /**
+     * Schema Version
+     */
+    schema_version: number;
+};
+
+/**
  * LinkPreparationRequest
  */
 export type LinkPreparationRequest = {
@@ -3935,7 +3997,7 @@ export type ProviderConnectionCreate = {
     /**
      * Kind
      */
-    kind: 'wangyan' | 'jiashu';
+    kind: 'wangyan' | 'jiashu' | 'duiba' | 'gangganhao' | 'rongliang';
     /**
      * Display Name
      */
@@ -9131,6 +9193,51 @@ export type materialPushGetMaterialBatchResponses = {
 
 export type materialPushGetMaterialBatchResponse = materialPushGetMaterialBatchResponses[keyof materialPushGetMaterialBatchResponses];
 
+export type materialPushGetExternalSourceData = {
+    body?: never;
+    path: {
+        /**
+         * Material Id
+         */
+        material_id: string;
+        /**
+         * Operation Id
+         */
+        operation_id: string;
+    };
+    query: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Expires
+         */
+        expires: number;
+        /**
+         * Signature
+         */
+        signature: string;
+    };
+    url: '/api/integrations/materials/source/{material_id}/{operation_id}';
+};
+
+export type materialPushGetExternalSourceErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type materialPushGetExternalSourceError = materialPushGetExternalSourceErrors[keyof materialPushGetExternalSourceErrors];
+
+export type materialPushGetExternalSourceResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
 export type materialsAuthorizeReissueData = {
     body: MaterialReissueInput;
     path: {
@@ -9427,7 +9534,7 @@ export type providersListConnectionsData = {
         /**
          * Kind
          */
-        kind?: 'wangyan' | 'jiashu' | null;
+        kind?: 'wangyan' | 'jiashu' | 'duiba' | 'gangganhao' | 'rongliang' | null;
         /**
          * Status
          */
@@ -9594,6 +9701,44 @@ export type providersListApplicationsResponses = {
 };
 
 export type providersListApplicationsResponse = providersListApplicationsResponses[keyof providersListApplicationsResponses];
+
+export type providersApplicationCapabilitiesData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Connection Id
+         */
+        connection_id: string;
+        /**
+         * Application Id
+         */
+        application_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/providers/connections/{connection_id}/applications/{application_id}/capabilities';
+};
+
+export type providersApplicationCapabilitiesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type providersApplicationCapabilitiesError = providersApplicationCapabilitiesErrors[keyof providersApplicationCapabilitiesErrors];
+
+export type providersApplicationCapabilitiesResponses = {
+    /**
+     * Successful Response
+     */
+    200: LinkConfigSchema;
+};
+
+export type providersApplicationCapabilitiesResponse = providersApplicationCapabilitiesResponses[keyof providersApplicationCapabilitiesResponses];
 
 export type adsReportingQueryAdsData = {
     body?: never;

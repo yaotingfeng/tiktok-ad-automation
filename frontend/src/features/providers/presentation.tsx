@@ -4,7 +4,13 @@ import { useState } from "react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { isForbidden } from "@/features/tenants/shared"
-export const kinds: Record<string, string> = { wangyan: "网眼", jiashu: "嘉书" }
+export const kinds: Record<string, string> = {
+  wangyan: "网眼",
+  jiashu: "嘉书",
+  duiba: "兑吧",
+  gangganhao: "刚刚好",
+  rongliang: "容量",
+}
 export const connectionStates: Record<string, string> = {
   pending: "待验证",
   active: "可用",

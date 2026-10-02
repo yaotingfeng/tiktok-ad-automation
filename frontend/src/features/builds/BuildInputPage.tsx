@@ -18,6 +18,7 @@ import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { AccountPicker } from "@/features/accounts/AccountPicker"
+import { capabilitiesQuery } from "@/features/providers/queries"
 import { versionQuery } from "@/features/strategies/queries"
 import { normalizeDecimal } from "@/features/strategies/validation"
 import { DirectoryPicker } from "@/features/tenants/DirectoryPicker"
@@ -26,6 +27,7 @@ import { mutationKey } from "./api"
 import { DraftConflict } from "./DraftConflict"
 import { ManualLinksDialog } from "./ManualLinksDialog"
 import { linksForLines, type NamedManualLink } from "./manualLinks"
+import { ProviderLinkConfigFields } from "./ProviderLinkConfigFields"
 import {
   BuildError,
   BuildGuard,
@@ -41,6 +43,7 @@ type Values = {
   account: string
   connection: string
   application: string
+  linkConfig: Record<string, string | number | boolean | null>
   version: string
 }
 type Pending = { requestId: string; prepare: boolean; values: Values }
@@ -85,6 +88,7 @@ export function BuildInputPage({
     customProvider: summary?.custom_provider_name || "",
     manualLinks: original?.manualLinks || [],
     application: summary?.application_id || "",
+    linkConfig: summary?.link_config || {},
     version: summary?.strategy_version_id || "",
   })
   const [values, setValues] = useState<Values>({
@@ -110,6 +114,23 @@ export function BuildInputPage({
     ...versionQuery(tenantId, values.version),
     enabled: !!values.version,
   })
+  const capabilities = useQuery({
+    ...capabilitiesQuery(tenantId, values.connection, values.application),
+    enabled:
+      values.connection !== "other" &&
+      !!values.connection &&
+      !!values.application,
+  })
+  useEffect(() => {
+    const defaults = capabilities.data?.defaults as
+      | Record<string, string | number | boolean | null>
+      | undefined
+    if (!defaults) return
+    setValues((current) => ({
+      ...current,
+      linkConfig: { ...defaults, ...current.linkConfig },
+    }))
+  }, [capabilities.data])
   const dirty = JSON.stringify(values) !== JSON.stringify(initial.current)
   const disabled = busy || !!pending || !write || forbidden
   const change = (patch: Partial<Values>) =>
@@ -209,6 +230,7 @@ export function BuildInputPage({
               execution_connection_id: null,
               application_id:
                 values.connection === "other" ? null : values.application,
+              link_config: values.linkConfig,
               drama_lines: values.drama.split("\n"),
               account_lines: values.account.split("\n"),
             },
@@ -250,7 +272,7 @@ export function BuildInputPage({
                 values.connection === "other" ? null : values.application,
               drama_lines: values.drama.split("\n"),
               account_lines: values.account.split("\n"),
-              link_config: {},
+              link_config: values.linkConfig,
             },
             signal: controller.current.signal,
           })
@@ -361,7 +383,11 @@ export function BuildInputPage({
                   description: "填写版权方名称，使用已有推广链接。",
                   selected: values.connection === "other",
                   onSelect: () => {
-                    change({ connection: "other", application: "" })
+                    change({
+                      connection: "other",
+                      application: "",
+                      linkConfig: {},
+                    })
                     setLabels((l) => ({
                       ...l,
                       connection: "",
@@ -382,7 +408,7 @@ export function BuildInputPage({
                 }
                 renderItem={(item) => <span>{item.display_name}</span>}
                 onSelect={(item) => {
-                  change({ connection: item.id, application: "" })
+                  change({ connection: item.id, application: "", linkConfig: {} })
                   setLabels((l) => ({
                     ...l,
                     connection: item.display_name,
@@ -459,6 +485,23 @@ export function BuildInputPage({
           </FieldGroup>
         </CardContent>
       </Card>
+      {values.connection !== "other" && capabilities.data && (
+        <Card className="min-w-0">
+          <CardHeader>
+            <CardTitle>自动取链参数</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ProviderLinkConfigFields
+              schema={capabilities.data}
+              value={values.linkConfig}
+              disabled={disabled}
+              onChange={(patch) =>
+                change({ linkConfig: { ...values.linkConfig, ...patch } })
+              }
+            />
+          </CardContent>
+        </Card>
+      )}
       <div className="grid min-w-0 gap-6 md:grid-cols-2">
         {(["drama", "account"] as const).map((kind) => (
           <Card key={kind} className="min-w-0">
