@@ -1596,5 +1596,5 @@
 
 - 投放工具新增兑吧、刚刚好、容量三种自动版权方连接，并统一到现有租户加密凭据、会话刷新、搜索、链接复用、创建回读和未知结果恢复流程；网眼、嘉书继续走兼容 adapter。
 - 连接管理页按来源显示凭据字段；投放页选择已验证应用后读取能力 schema，填写来源专属取链参数，并在草稿创建/更新与请求恢复中保留 `link_config`。`other` 仍保留手动链接路径。
-- 后端版权方回归 288 项、能力接口专项 12 项、providers 浏览器测试 22 项、前端 TypeScript/Vite 构建、三套 CLI `node --check` 和迁移 head 检查通过。验证命令与边界见[本轮验收](validation/2026-10-02-provider-expansion.md)。
+- 后端版权方回归 291 项、能力接口专项 12 项、providers 浏览器测试 22 项、前端 TypeScript/Vite 构建、三套 CLI `node --check` 和迁移 head 检查通过。验证命令与边界见[本轮验收](validation/2026-10-02-provider-expansion.md)。
 - 本轮未读取本机来源账号文件，未调用真实版权方或 TikTok 写接口，未部署；真实账号和创建/回读需分来源另行验收。

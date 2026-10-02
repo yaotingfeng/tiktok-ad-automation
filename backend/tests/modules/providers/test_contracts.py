@@ -8,7 +8,11 @@ from app.modules.providers.adapters.contract import (
     SearchPage,
     verify_receipt,
 )
-from app.modules.providers.capabilities import LinkConfigField, LinkConfigSchema
+from app.modules.providers.capabilities import (
+    LinkConfigField,
+    LinkConfigSchema,
+    capabilities_for_kind,
+)
 from app.modules.providers.drama_identity import display_id
 from app.modules.providers.schemas import DramaCandidate, ResolvedLink, link_reuse_key
 
@@ -215,6 +219,18 @@ def test_capability_schema_validates_defaults_and_conditional_requirements():
             required_when={},
             schema_version=1,
         )
+
+
+@pytest.mark.parametrize("delivery_mode", ["iaa", "iap", "mixed"])
+def test_gangganhao_capability_marks_payment_template_for_paid_modes(delivery_mode):
+    from types import SimpleNamespace
+
+    schema = capabilities_for_kind(
+        "gangganhao",
+        SimpleNamespace(channel_config={"delivery_mode": delivery_mode}),
+    )
+    field = next(item for item in schema.fields if item.name == "payment_template_id")
+    assert field.required is (delivery_mode in {"iap", "mixed"})
 
 
 @pytest.mark.parametrize(

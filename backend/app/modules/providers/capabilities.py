@@ -55,13 +55,22 @@ def capabilities_for_kind(provider_kind: str, _application: Any = None) -> LinkC
             LinkConfigField(name="miniapp_id", label="小程序", type="string"),
         ]
     elif provider_kind == "gangganhao":
+        channel_config = getattr(_application, "channel_config", {})
+        delivery_mode = (
+            str(channel_config.get("delivery_mode", "iaa")).lower()
+            if isinstance(channel_config, dict)
+            else "iaa"
+        )
         fields = [
             LinkConfigField(
                 name="free_episode_count", label="免费集数", type="integer", default=1
             ),
             LinkConfigField(name="episode_seq", label="跳转集", type="integer", default=1),
             LinkConfigField(
-                name="payment_template_id", label="支付模板", type="select"
+                name="payment_template_id",
+                label="支付模板",
+                type="select",
+                required=delivery_mode in {"iap", "mixed"},
             ),
             LinkConfigField(name="name", label="推广名称", type="string"),
         ]
@@ -74,7 +83,7 @@ def capabilities_for_kind(provider_kind: str, _application: Any = None) -> LinkC
         raise ValueError("unknown provider kind")
     defaults = {field.name: field.default for field in fields if field.default is not None}
     required_when = (
-        {"payment_template_id": {"monetization": ["iap", "mixed"]}}
+        {"payment_template_id": {"delivery_mode": ["iap", "mixed"]}}
         if provider_kind == "gangganhao"
         else {}
     )

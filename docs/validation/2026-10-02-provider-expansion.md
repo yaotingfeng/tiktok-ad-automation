@@ -15,7 +15,7 @@
 
 | 检查 | 结果 |
 | --- | --- |
-| `uv run pytest tests/modules/providers -q` | 288 passed |
+| `uv run pytest tests/modules/providers -q` | 291 passed |
 | `uv run pytest tests/modules/providers/test_preparation_api.py -q` | 12 passed，含能力接口与租户/验证状态检查 |
 | `npm run build`（`frontend/`） | TypeScript 与 Vite 构建通过 |
 | `npx --yes --package bun bunx playwright test tests/providers.spec.ts` | 22 passed |
