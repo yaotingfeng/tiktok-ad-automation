@@ -1592,3 +1592,9 @@
 - 固定版本 `5bf5b5506180b62b87e6720f5edf1b32bc6002ad` 已部署到新加坡 staging；完整备份 `/var/backups/tt-ada-staging/20261001T163955Z/`，项目/前端、私有配置、PostgreSQL、Redis 和迁移恢复演练通过。
 - 在线数据库 head 为 `ad_management_cancelled`；API、原有 Worker、Beat 与 `ad-management` Worker active，Celery ping 全部通过，HTTPS/API 边界和近 10 分钟 error 日志通过。
 - `ads-directory`/`ads-reporting` 服务单元已安装但保持 inactive，`ADS_SYNC_ENABLED=false`；因此未触发真实广告目录/报表拉取，未调用真实 TikTok API/MCP，未执行广告写入。真实 BC 只读联调和同步周期观察待后续单独验收。
+## 2026-10-02：版权方来源扩展接入（本地离线验收）
+
+- 投放工具新增兑吧、刚刚好、容量三种自动版权方连接，并统一到现有租户加密凭据、会话刷新、搜索、链接复用、创建回读和未知结果恢复流程；网眼、嘉书继续走兼容 adapter。
+- 连接管理页按来源显示凭据字段；投放页选择已验证应用后读取能力 schema，填写来源专属取链参数，并在草稿创建/更新与请求恢复中保留 `link_config`。`other` 仍保留手动链接路径。
+- 后端版权方回归 288 项、能力接口专项 12 项、providers 浏览器测试 22 项、前端 TypeScript/Vite 构建、三套 CLI `node --check` 和迁移 head 检查通过。验证命令与边界见[本轮验收](validation/2026-10-02-provider-expansion.md)。
+- 本轮未读取本机来源账号文件，未调用真实版权方或 TikTok 写接口，未部署；真实账号和创建/回读需分来源另行验收。
