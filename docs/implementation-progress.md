@@ -1598,3 +1598,7 @@
 - 连接管理页按来源显示凭据字段；投放页选择已验证应用后读取能力 schema，填写来源专属取链参数，并在草稿创建/更新与请求恢复中保留 `link_config`。`other` 仍保留手动链接路径。
 - 后端版权方回归 291 项、能力接口专项 12 项、providers 浏览器测试 22 项、前端 TypeScript/Vite 构建、三套 CLI `node --check` 和迁移 head 检查通过。验证命令与边界见[本轮验收](validation/2026-10-02-provider-expansion.md)。
 - 本轮未读取本机来源账号文件，未调用真实版权方或 TikTok 写接口，未部署；真实账号和创建/回读需分来源另行验收。
+## 2026-10-02：版权方来源扩展复审修复
+
+- 代码复审发现刚刚好历史链接复用缺少 `authorizerAppId` 作用域约束，已在 `GangganhaoClient.lookup_link` 中加入查询参数，并对详情同时校验应用 ID 与系列 ID，避免同剧同参数的其他应用链接被误复用。新增跨应用隔离回归。
+- 复审后专用 PostgreSQL 测试库中 `backend/tests/modules/providers` 共 292 项通过；前端构建、Providers Playwright、三个外部 CLI 语法检查、Ruff、compileall 和 `git diff --check` 均通过。未调用真实版权方、TikTok 或广告写入。

@@ -97,6 +97,8 @@ def test_gangganhao_iap_requires_payment_template_before_any_write():
 def test_gangganhao_lookup_compares_template_and_sequence():
     def handle(request):
         if request.url.path.endswith("/campaign-links"):
+            assert request.url.params["seriesId"] == "12"
+            assert request.url.params["authorizerAppId"] == "16"
             return httpx.Response(
                 200,
                 json={"code": 0, "data": {"list": [{"id": 972, "seriesId": 12}], "total": 1}},
@@ -104,7 +106,7 @@ def test_gangganhao_lookup_compares_template_and_sequence():
         if request.url.path.endswith("/campaign-links/972"):
             return httpx.Response(
                 200,
-                json={"code": 0, "data": {"id": 972, "seriesId": 12, "freeEpisodeCount": 3, "episodeSeq": 1, "paymentTemplateId": 7, "minisLink": "https://www.tiktok.com/minis/ggh"}},
+                json={"code": 0, "data": {"id": 972, "authorizerAppId": 16, "seriesId": 12, "freeEpisodeCount": 3, "episodeSeq": 1, "paymentTemplateId": 7, "minisLink": "https://www.tiktok.com/minis/ggh"}},
             )
         raise AssertionError(request.url)
 
@@ -112,7 +114,7 @@ def test_gangganhao_lookup_compares_template_and_sequence():
         client = GangganhaoClient(http, token="portal-jwt")
         page = client.lookup_link(
             "886",
-            {"series_id": "12", "free_episode_count": 3, "episode_seq": 1, "payment_template_id": 7},
+            {"authorizer_app_id": "16", "series_id": "12", "free_episode_count": 3, "episode_seq": 1, "payment_template_id": 7},
             None,
         )
     assert len(page.items) == 1
@@ -120,7 +122,32 @@ def test_gangganhao_lookup_compares_template_and_sequence():
         client = GangganhaoClient(http, token="portal-jwt")
         page = client.lookup_link(
             "886",
-            {"series_id": "12", "free_episode_count": 3, "episode_seq": 1, "payment_template_id": 8},
+            {"authorizer_app_id": "16", "series_id": "12", "free_episode_count": 3, "episode_seq": 1, "payment_template_id": 8},
+            None,
+        )
+    assert page.items == []
+
+
+def test_gangganhao_lookup_rejects_link_from_another_application():
+    def handle(request):
+        if request.url.path.endswith("/campaign-links"):
+            assert request.url.params["authorizerAppId"] == "16"
+            return httpx.Response(
+                200,
+                json={"code": 0, "data": {"list": [{"id": 972, "seriesId": 12}], "total": 1}},
+            )
+        if request.url.path.endswith("/campaign-links/972"):
+            return httpx.Response(
+                200,
+                json={"code": 0, "data": {"id": 972, "authorizerAppId": 17, "seriesId": 12, "freeEpisodeCount": 3, "episodeSeq": 1, "paymentTemplateId": 7, "minisLink": "https://www.tiktok.com/minis/ggh"}},
+            )
+        raise AssertionError(request.url)
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http:
+        client = GangganhaoClient(http, token="portal-jwt")
+        page = client.lookup_link(
+            "886",
+            {"authorizer_app_id": "16", "series_id": "12", "free_episode_count": 3, "episode_seq": 1, "payment_template_id": 7},
             None,
         )
     assert page.items == []

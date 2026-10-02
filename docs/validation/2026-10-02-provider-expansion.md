@@ -15,7 +15,7 @@
 
 | 检查 | 结果 |
 | --- | --- |
-| `uv run pytest tests/modules/providers -q` | 291 passed |
+| `uv run pytest tests/modules/providers -q` | 292 passed |
 | `uv run pytest tests/modules/providers/test_preparation_api.py -q` | 12 passed，含能力接口与租户/验证状态检查 |
 | `npm run build`（`frontend/`） | TypeScript 与 Vite 构建通过 |
 | `npx --yes --package bun bunx playwright test tests/providers.spec.ts` | 22 passed |
@@ -24,6 +24,10 @@
 | `git diff --check` | 通过 |
 
 浏览器测试使用 `npx --yes --package bun bunx`，因为验收环境没有全局 `bun` 命令；这只影响命令入口，不影响构建结果。
+
+## 复审修复
+
+复审发现刚刚好历史链接查询原先只按剧集和参数匹配，未把 `authorizerAppId` 纳入查询和详情核验，存在跨应用误复用链接的风险。现已要求查询配置携带应用 ID，并同时校验详情中的应用 ID、系列 ID、集数和支付模板；新增跨应用误复用回归，专项协议测试 4 项通过。
 
 ## 未纳入本轮
 

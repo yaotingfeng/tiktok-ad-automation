@@ -135,11 +135,18 @@ class GangganhaoClient:
 
     def lookup_link(self, drama_id: str, config: JsonDict, cursor: str | None) -> LinkLookupPage:
         normalized = self._validate_config(config, require_template=False)
+        if "authorizer_app_id" not in normalized:
+            raise failure("provider_request_invalid")
         page = positive(cursor or 1)
         data = self._request(
             "GET",
             "/campaign-links",
-            query={"page": page, "size": PAGE_SIZE, "seriesId": normalized["series_id"]},
+            query={
+                "page": page,
+                "size": PAGE_SIZE,
+                "seriesId": normalized["series_id"],
+                "authorizerAppId": normalized["authorizer_app_id"],
+            },
         )
         if not isinstance(data, dict) or not isinstance(data.get("list"), list):
             raise failure("provider_schema_unsupported")
@@ -219,6 +226,10 @@ class GangganhaoClient:
 
     @staticmethod
     def _matches(detail: JsonDict, config: JsonDict) -> bool:
+        if str(detail.get("authorizerAppId")) != str(config["authorizer_app_id"]):
+            return False
+        if str(detail.get("seriesId")) != str(config["series_id"]):
+            return False
         if positive(detail.get("freeEpisodeCount")) != config["free_episode_count"]:
             return False
         if positive(detail.get("episodeSeq")) != config["episode_seq"]:
