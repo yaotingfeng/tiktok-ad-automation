@@ -1,0 +1,7 @@
+{
+  "login": {"code": 0, "token": "<redacted-token>"},
+  "application": {"clientId": 1144, "clientName": "Cove", "clientType": "TIKTOK_MINI_PROGRAM"},
+  "compilation": {"compilationsId": 8453, "originalTitle": "Moon", "compilationsName": "Moon Show"},
+  "episode": {"episodicDramaId": 991, "title": "1"},
+  "link": {"batchId": "B-1", "deepLink": "https://www.tiktok.com/minis/example", "planName": "Moon", "adGroupName": "Moon Ads"}
+}

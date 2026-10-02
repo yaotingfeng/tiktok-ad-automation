@@ -22,6 +22,7 @@ from app.modules.providers.adapters.contract import LinkReceipt, ProviderClient
 from app.modules.providers.adapters.duiba import DuibaClient
 from app.modules.providers.adapters.gangganhao import GangganhaoClient
 from app.modules.providers.adapters.jiashu import JiashuClient
+from app.modules.providers.adapters.rongliang import RongliangClient
 from app.modules.providers.models import (
     LinkPreparation,
     LinkPreparationItem,
@@ -318,6 +319,7 @@ def _validated_work(value: object) -> dict[str, Any]:
         "search",
         "duiba_preview",
         "ggh_detail",
+        "rl_detail",
         "lookup",
         "create",
         "read_before",
@@ -587,6 +589,24 @@ def _verified_gangganhao(
             raise _error("config_conflict")
 
 
+def _verified_rongliang(
+    data: dict[str, Any], work: dict[str, Any], config: dict[str, Any]
+) -> None:
+    if (
+        not isinstance(data, dict)
+        or not isinstance(data.get("config"), dict)
+        or not isinstance(data.get("attribution"), dict)
+        or data.get("remote_id") != work["channel"]
+        or not data.get("url")
+        or data.get("protected_base") is None
+    ):
+        raise _error("provider_result_unknown")
+    actual = data["config"]
+    for key in ("client_id", "episodic_drama_id", "platform"):
+        if key in config and str(actual.get(key)) != str(config[key]):
+            raise _error("config_conflict")
+
+
 def _publish(
     session: Session,
     context: TenantContext,
@@ -608,6 +628,8 @@ def _publish(
         _verified_duiba(data, work, prep.config)
     elif connection.kind == "gangganhao":
         _verified_gangganhao(data, work, prep.config)
+    elif connection.kind == "rongliang":
+        _verified_rongliang(data, work, prep.config)
     else:
         _verified(data, work, prep.config)
     if not data.get("url"):
@@ -1104,6 +1126,173 @@ def _run_gangganhao_item(
     raise _error("provider_state_invalid")
 
 
+def _run_rongliang_item(
+    session: Session,
+    context: TenantContext,
+    item_id: UUID,
+    token: UUID,
+    work: dict[str, Any],
+    config: dict[str, Any],
+    client: ProviderClient,
+    connection_id: UUID,
+    application_id: str,
+    raw_input: str,
+) -> None:
+    """Advance one 容量 step and require an exact post-create batch read-back."""
+
+    if not isinstance(client, RongliangClient):
+        raise _error("provider_state_invalid")
+    stage = work["stage"]
+    if stage == "search":
+        cursor = None if work["search_page"] == 1 else str(work["search_page"])
+        page = client.search(raw_input.strip(), cursor)
+        candidates = {row["external_drama_id"]: row for row in work["candidates"]}
+        for candidate in page.items:
+            row = candidate.model_dump()
+            previous = candidates.get(row["external_drama_id"])
+            if previous is not None and previous != row:
+                raise _error("provider_schema_unsupported")
+            candidates[row["external_drama_id"]] = row
+        work["candidates"] = list(candidates.values())
+        if not page.complete:
+            assert page.next_cursor is not None
+            work["search_page"] = _positive(page.next_cursor)
+        elif len(candidates) != 1:
+            _finish_unit(
+                session,
+                context,
+                item_id,
+                token,
+                work,
+                status="needs_resolution",
+                code="drama_not_found" if not candidates else "drama_ambiguous",
+            )
+            return
+        else:
+            _, prep, _, _ = _load(session, context, item_id)
+            work["drama"] = _resolved_drama(
+                session, context, prep, next(iter(candidates.values()))
+            )
+            work["stage"] = "rl_detail"
+        _finish_unit(session, context, item_id, token, work)
+        return
+
+    if stage == "rl_detail":
+        options = client.episode_options(work["drama"]["external_drama_id"])
+        if not options:
+            raise _error("provider_request_invalid")
+        wanted = config.get("episodic_drama_id")
+        episode = next(
+            (row for row in options if wanted is not None and str(row.get("episodicDramaId")) == str(wanted)),
+            options[0],
+        )
+        episode_id = episode.get("episodicDramaId")
+        if episode_id is None:
+            raise _error("provider_schema_unsupported")
+        effective = dict(config)
+        effective.update(
+            client_id=config.get("client_id", application_id),
+            episodic_drama_id=episode_id,
+            platform=config.get("platform", 1),
+            delivery_type=config.get("delivery_type", 1),
+            link_type=config.get("link_type", 2),
+        )
+        work["rongliang_config"] = effective
+        work["stage"] = "lookup"
+        work["lookup_cursor"] = None
+        work["lookup_found"] = None
+        _finish_unit(session, context, item_id, token, work)
+        return
+
+    effective = work.get("rongliang_config")
+    if not isinstance(effective, dict):
+        raise _error("provider_state_invalid")
+    work["scope_key"] = _digest(
+        [
+            str(context.tenant_id),
+            str(connection_id),
+            application_id,
+            "rongliang",
+            work["drama"]["external_drama_id"],
+            effective.get("client_id"),
+            effective.get("episodic_drama_id"),
+            effective.get("platform"),
+        ]
+    )
+    work.setdefault(
+        "channel",
+        "rl-"
+        + _digest(
+            [
+                work["drama"]["external_drama_id"],
+                effective.get("client_id"),
+                effective.get("episodic_drama_id"),
+                effective.get("platform"),
+            ]
+        ),
+    )
+    if not claim_remote_scope(
+        session,
+        tenant_id=context.tenant_id,
+        scope_key=work["scope_key"],
+        item_id=item_id,
+    ):
+        session.commit()
+        raise _error("provider_scope_busy", retryable=True)
+    session.commit()
+
+    if stage in {"lookup", "recover_create"}:
+        page = client.lookup_link(
+            work["drama"]["external_drama_id"],
+            effective,
+            work.get("lookup_cursor"),
+        )
+        for row in page.items:
+            batch = row.get("batchId")
+            if isinstance(batch, str) and batch:
+                work["channel"] = batch
+                work["lookup_found"] = batch
+        if not page.complete:
+            work["lookup_cursor"] = page.next_cursor
+            _finish_unit(session, context, item_id, token, work)
+            return
+        if stage == "recover_create":
+            _recover_effect(session, context, work, found=work.get("lookup_found") is not None)
+        work["lookup_complete"] = True
+        work["stage"] = "read_before" if work.get("lookup_found") else "create"
+        _finish_unit(session, context, item_id, token, work)
+        return
+
+    if stage == "create":
+        if not work.get("lookup_complete"):
+            raise _error("lookup_incomplete")
+        response = _effect_request(
+            session,
+            context,
+            item_id,
+            token,
+            work,
+            "create",
+            {"vid": work["drama"]["external_drama_id"], "config": effective},
+            client,
+        )
+        remote_id = response.get("remote_id")
+        if not isinstance(remote_id, str) or not remote_id:
+            raise _error("provider_result_unknown")
+        work["channel"] = remote_id
+        work["stage"] = "verify"
+        _finish_unit(session, context, item_id, token, work)
+        return
+
+    if stage in {"read_before", "verify"}:
+        data = _read_effect(session, context, item_id, token, work, client)
+        _verified_rongliang(data, work, config)
+        _publish(session, context, item_id, token, work, data)
+        return
+
+    raise _error("provider_state_invalid")
+
+
 def run_link_item(
     session: Session,
     *,
@@ -1183,7 +1372,21 @@ def run_link_item(
                     raw_input,
                 )
                 return
-            if stage != "search" and kind in {"jiashu", "duiba", "gangganhao"}:
+            if kind == "rongliang":
+                _run_rongliang_item(
+                    session,
+                    context,
+                    item_id,
+                    token,
+                    work,
+                    config,
+                    client,
+                    connection_id,
+                    application_id,
+                    raw_input,
+                )
+                return
+            if stage != "search" and kind in {"jiashu", "duiba", "gangganhao", "rongliang"}:
                 local = find_ready_link(
                     session,
                     context=context,
@@ -1421,7 +1624,7 @@ def run_link_item(
             else "failed"
         )
         if (
-            kind in {"wangyan", "duiba", "gangganhao"}
+            kind in {"wangyan", "duiba", "gangganhao", "rongliang"}
             and code
             not in {
                 "provider_rejected",
