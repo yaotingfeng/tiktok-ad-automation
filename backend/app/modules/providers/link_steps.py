@@ -7,6 +7,7 @@ is recovered by read-back, never reset to pending merely because a worker died.
 
 import hashlib
 import json
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -17,7 +18,8 @@ from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
-from app.modules.providers.adapters.contract import ProviderClient
+from app.modules.providers.adapters.contract import LinkReceipt, ProviderClient
+from app.modules.providers.adapters.duiba import DuibaClient
 from app.modules.providers.adapters.jiashu import JiashuClient
 from app.modules.providers.models import (
     LinkPreparation,
@@ -313,6 +315,7 @@ def _validated_work(value: object) -> dict[str, Any]:
     work = dict(value)
     if work.get("stage", "search") not in {
         "search",
+        "duiba_preview",
         "lookup",
         "create",
         "read_before",
@@ -544,6 +547,26 @@ def _verified(
             raise _error("attribution_contract_unverified")
 
 
+def _verified_duiba(
+    data: dict[str, Any], work: dict[str, Any], config: dict[str, Any]
+) -> None:
+    if (
+        not isinstance(data, dict)
+        or not isinstance(data.get("config"), dict)
+        or not isinstance(data.get("attribution"), dict)
+        or data.get("remote_id") != work["channel"]
+        or not data.get("url")
+        or data.get("protected_base") is None
+    ):
+        raise _error("provider_schema_unsupported")
+    actual = data["config"]
+    for key in ("episode", "card_point_episode"):
+        if key in config and _positive(actual.get(key)) != _positive(config[key]):
+            raise _error("config_conflict")
+    if "miniapp_id" in config and str(actual.get("miniapp_id")) != str(config["miniapp_id"]):
+        raise _error("config_conflict")
+
+
 def _publish(
     session: Session,
     context: TenantContext,
@@ -561,6 +584,8 @@ def _publish(
         from app.modules.providers.wangyan_steps import verified_data
 
         data = verified_data(data, work, prep.config, prep.application_id)
+    elif connection.kind == "duiba":
+        _verified_duiba(data, work, prep.config)
     else:
         _verified(data, work, prep.config)
     if not data.get("url"):
@@ -729,6 +754,178 @@ def _effect_request(
     return response
 
 
+def _run_duiba_item(
+    session: Session,
+    context: TenantContext,
+    item_id: UUID,
+    token: UUID,
+    work: dict[str, Any],
+    config: dict[str, Any],
+    client: ProviderClient,
+    connection_id: UUID,
+    application_id: str,
+    raw_input: str,
+) -> None:
+    """Advance one 兑吧 step while preserving the durable effect boundary."""
+
+    if not isinstance(client, DuibaClient):
+        raise _error("provider_state_invalid")
+    stage = work["stage"]
+    if stage == "search":
+        cursor = None if work["search_page"] == 1 else str(work["search_page"])
+        page = client.search(raw_input.strip(), cursor)
+        candidates = {row["external_drama_id"]: row for row in work["candidates"]}
+        for candidate in page.items:
+            row = candidate.model_dump()
+            previous = candidates.get(row["external_drama_id"])
+            if previous is not None and previous != row:
+                raise _error("provider_schema_unsupported")
+            candidates[row["external_drama_id"]] = row
+        work["candidates"] = list(candidates.values())
+        if not page.complete:
+            assert page.next_cursor is not None
+            work["search_page"] = _positive(page.next_cursor)
+        elif len(candidates) != 1:
+            _finish_unit(
+                session,
+                context,
+                item_id,
+                token,
+                work,
+                status="needs_resolution",
+                code="drama_not_found" if not candidates else "drama_ambiguous",
+            )
+            return
+        else:
+            _, prep, _, _ = _load(session, context, item_id)
+            work["drama"] = _resolved_drama(
+                session, context, prep, next(iter(candidates.values()))
+            )
+            work["stage"] = "duiba_preview"
+        _finish_unit(session, context, item_id, token, work)
+        return
+
+    if stage == "duiba_preview":
+        drama_id = work["drama"]["external_drama_id"]
+        episodes = client.preview_drama(drama_id)
+        episode = _positive(config.get("episode", 1))
+        card_point = _positive(config.get("card_point_episode", episode))
+        by_serial = {row["serialNo"]: row for row in episodes}
+        if episode not in by_serial or card_point not in by_serial:
+            raise _error("provider_request_invalid")
+        effective = dict(config)
+        effective.setdefault("miniapp_id", application_id)
+        effective.update(
+            default_episode_lc_id=by_serial[episode]["lc671EpisodeId"],
+            card_point_episode_lc_id=by_serial[card_point]["lc671EpisodeId"],
+        )
+        work["duiba_config"] = effective
+        work["stage"] = "lookup"
+        work["lookup_cursor"] = None
+        work["lookup_found"] = None
+        _finish_unit(session, context, item_id, token, work)
+        return
+
+    effective = work.get("duiba_config")
+    if not isinstance(effective, dict):
+        raise _error("provider_state_invalid")
+    scope_key = _digest(
+        [
+            str(context.tenant_id),
+            str(connection_id),
+            application_id,
+            "duiba",
+            work["drama"]["external_drama_id"],
+            effective.get("miniapp_id"),
+            effective.get("episode"),
+            effective.get("card_point_episode"),
+        ]
+    )
+    work["scope_key"] = scope_key
+    work.setdefault(
+        "channel",
+        "duiba-"
+        + _digest(
+            [
+                work["drama"]["external_drama_id"],
+                effective.get("miniapp_id"),
+                effective.get("episode"),
+                effective.get("card_point_episode"),
+            ]
+        ),
+    )
+    if not claim_remote_scope(
+        session, tenant_id=context.tenant_id, scope_key=scope_key, item_id=item_id
+    ):
+        session.commit()
+        raise _error("provider_scope_busy", retryable=True)
+    session.commit()
+
+    if stage in {"lookup", "recover_create"}:
+        try:
+            page = client.lookup_link(
+                work["drama"]["external_drama_id"],
+                effective,
+                work.get("lookup_cursor"),
+            )
+        except DomainError as error:
+            if (
+                error.code == "provider_unavailable"
+                and stage == "lookup"
+                and client.safe_idempotent_create_without_lookup
+            ):
+                work["lookup_complete"] = True
+                work["lookup_unavailable"] = True
+                work["stage"] = "create"
+                _finish_unit(session, context, item_id, token, work)
+                return
+            raise
+        for row in page.items:
+            remote_id = row.get("linkNo", row.get("id"))
+            if remote_id is not None:
+                work["channel"] = str(remote_id)
+                work["lookup_found"] = str(remote_id)
+        if not page.complete:
+            work["lookup_cursor"] = page.next_cursor
+            _finish_unit(session, context, item_id, token, work)
+            return
+        if stage == "recover_create":
+            _recover_effect(session, context, work, found=work.get("lookup_found") is not None)
+        work["lookup_complete"] = True
+        work["stage"] = "read_before" if work.get("lookup_found") else "create"
+        _finish_unit(session, context, item_id, token, work)
+        return
+
+    if stage == "create":
+        if not work.get("lookup_complete"):
+            raise _error("lookup_incomplete")
+        response = _effect_request(
+            session,
+            context,
+            item_id,
+            token,
+            work,
+            "create",
+            {"vid": work["drama"]["external_drama_id"], "config": effective},
+            client,
+        )
+        remote_id = response.get("remote_id")
+        if not isinstance(remote_id, str) or not remote_id:
+            raise _error("provider_result_unknown")
+        work["channel"] = remote_id
+        work["stage"] = "verify"
+        _finish_unit(session, context, item_id, token, work)
+        return
+
+    if stage in {"read_before", "verify"}:
+        data = _read_effect(session, context, item_id, token, work, client)
+        _verified_duiba(data, work, config)
+        _publish(session, context, item_id, token, work, data)
+        return
+
+    raise _error("provider_state_invalid")
+
+
 def run_link_item(
     session: Session,
     *,
@@ -780,6 +977,20 @@ def run_link_item(
             transport=transport,
         ) as provider:
             client = provider.client
+            if kind == "duiba":
+                _run_duiba_item(
+                    session,
+                    context,
+                    item_id,
+                    token,
+                    work,
+                    config,
+                    client,
+                    connection_id,
+                    application_id,
+                    raw_input,
+                )
+                return
             if stage != "search" and kind == "jiashu":
                 local = find_ready_link(
                     session,
@@ -1018,7 +1229,7 @@ def run_link_item(
             else "failed"
         )
         if (
-            kind == "wangyan"
+            kind in {"wangyan", "duiba"}
             and code
             not in {
                 "provider_rejected",
@@ -1088,6 +1299,8 @@ def _read_effect(
     session.commit()
     try:
         data = client.read_link(work["channel"])
+        if isinstance(data, LinkReceipt):
+            data = asdict(data)
     except Exception:
         _persist_effect(
             session,

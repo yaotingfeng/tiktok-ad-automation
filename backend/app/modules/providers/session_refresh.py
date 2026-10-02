@@ -19,6 +19,7 @@ from app.core.errors import DomainError
 from app.modules.tenants.permissions import require_tenant
 
 from .adapters.contract import failure
+from .adapters.duiba import DuibaClient
 from .adapters.jiashu import JiashuClient
 from .adapters.registry import credential_fields
 from .adapters.wangyan import WangyanClient
@@ -236,7 +237,7 @@ def advance_session_refresh(
     if exhausted:
         raise failure(REFRESHING, retryable=True)
     try:
-        if kind not in {"jiashu", "wangyan"}:
+        if kind not in {"jiashu", "wangyan", "duiba"}:
             raise failure("provider_unavailable", retryable=True)
         with httpx.Client(
             transport=transport, trust_env=False, follow_redirects=False, timeout=30
@@ -256,6 +257,13 @@ def advance_session_refresh(
                             password=credentials["password"],
                         )
                         credentials["session"] = client.session
+                    elif kind == "duiba":
+                        duiba = DuibaClient.login(
+                            http,
+                            account=credentials["account"],
+                            password=credentials["password"],
+                        )
+                        credentials["token"] = duiba.token
                     else:
                         other = WangyanClient.login(
                             http,
@@ -280,6 +288,10 @@ def advance_session_refresh(
                     applications[index]["channel_config"] = client.application_options(
                         applications[index]["external_id"]
                     )
+            elif kind == "duiba":
+                applications = DuibaClient(
+                    http, token=credentials["token"]
+                ).discover_applications()
             else:
                 applications = WangyanClient(
                     http, token=credentials["token"], application_id=""
@@ -307,7 +319,7 @@ def advance_session_refresh(
                 refresh.applications = applications
                 if phase == "options":
                     refresh.option_index += 1
-                if kind == "wangyan" or (
+                if kind in {"wangyan", "duiba"} or (
                     phase == "options" and refresh.option_index == len(applications)
                 ):
                     _publish(session, row, refresh)

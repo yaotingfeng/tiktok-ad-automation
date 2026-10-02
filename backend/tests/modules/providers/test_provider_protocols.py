@@ -60,9 +60,8 @@ def test_registry_returns_normalized_adapter_without_cross_provider_fallback():
         page = adapter.search("Moon", None)
         assert page.items == [] and page.complete
         assert adapter.capabilities(None).provider_kind == "jiashu"
-        with pytest.raises(DomainError) as error:
-            adapter_for_kind("duiba", http, {"token": "wrong"})
-    assert error.value.code == "provider_unavailable"
+        duiba = adapter_for_kind("duiba", http, {"token": "duiba-token"})
+        assert duiba.token == "duiba-token"
 
 
 @pytest.mark.parametrize(

@@ -1,0 +1,13 @@
+{
+  "login": {"success": true, "data": {"token": "<redacted-jwt>"}},
+  "application": {"id": 77, "name": "English Mini", "language": "EN"},
+  "drama": {"id": 12, "title": "Moon"},
+  "episodes": [
+    {"serialNo": 1, "lc671EpisodeId": "episode-1"},
+    {"serialNo": 9, "lc671EpisodeId": "episode-9"}
+  ],
+  "link": {
+    "linkNo": "L-99",
+    "minisLink": "https://www.tiktok.com/minis/example"
+  }
+}
