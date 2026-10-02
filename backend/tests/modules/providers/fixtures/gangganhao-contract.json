@@ -1,0 +1,6 @@
+{
+  "login": {"code": 0, "data": {"token": "<redacted-jwt>"}},
+  "application": {"authorizerAppId": 16, "appName": "Rovela", "deliveryMode": "iaa"},
+  "series": {"publishId": 886, "seriesId": 12, "seriesTitle": "Moon"},
+  "link": {"id": 972, "linkCode": "C-1", "minisLink": "https://www.tiktok.com/minis/example"}
+}

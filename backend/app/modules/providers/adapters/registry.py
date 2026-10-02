@@ -27,6 +27,7 @@ from .contract import (
     verify_receipt,
 )
 from .duiba import DuibaClient
+from .gangganhao import GangganhaoClient
 from .jiashu import JiashuClient
 from .wangyan import WangyanClient
 
@@ -77,6 +78,8 @@ def adapter_for_kind(
         )
     if kind == "duiba":
         return DuibaClient(http, token=credentials["token"])
+    if kind == "gangganhao":
+        return GangganhaoClient(http, token=credentials["token"])
     raise failure("provider_unavailable", retryable=True)
 
 

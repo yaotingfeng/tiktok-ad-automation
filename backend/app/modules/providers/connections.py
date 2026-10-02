@@ -22,6 +22,7 @@ from app.modules.tenants.permissions import require_tenant
 
 from .adapters.contract import ProviderClient, ProviderSession, failure
 from .adapters.duiba import DuibaClient
+from .adapters.gangganhao import GangganhaoClient
 from .adapters.jiashu import JiashuClient
 from .adapters.registry import adapter_for_kind, credential_fields
 from .adapters.wangyan import WangyanClient
@@ -158,7 +159,7 @@ def verify_connection(
         row.error_code = None
     logged_in = False
     try:
-        if kind not in {"jiashu", "wangyan", "duiba"}:
+        if kind not in {"jiashu", "wangyan", "duiba", "gangganhao"}:
             raise failure("provider_unavailable", retryable=True)
         with httpx.Client(
             transport=transport, trust_env=False, follow_redirects=False, timeout=30
@@ -181,6 +182,16 @@ def verify_connection(
                 logged_in = True
                 applications = duiba.discover_applications()
                 credentials["token"] = duiba.token
+            elif kind == "gangganhao":
+                ggh = GangganhaoClient.login(
+                    http,
+                    portal_id=credentials["portal_id"],
+                    username=credentials["username"],
+                    password=credentials["password"],
+                )
+                logged_in = True
+                applications = ggh.discover_applications()
+                credentials["token"] = ggh.token
             else:
                 other = WangyanClient.login(
                     http, email=credentials["email"], password=credentials["password"]
@@ -329,12 +340,17 @@ def open_provider_session(
             transport=transport, trust_env=False, follow_redirects=False, timeout=30
         ) as http:
             client: ProviderClient
-            if kind not in {"jiashu", "wangyan", "duiba"}:
+            if kind not in {"jiashu", "wangyan", "duiba", "gangganhao"}:
                 raise failure("provider_unavailable", retryable=True)
             if kind == "duiba":
                 client = adapter_for_kind(
                     kind, http, credentials, application_id=application_id
                 )
+            elif kind == "gangganhao":
+                client = adapter_for_kind(
+                    kind, http, credentials, application_id=application_id
+                )
+                client.delivery_mode = str(app.channel_config.get("delivery_mode", "iaa"))
             elif kind == "jiashu":
                 client = JiashuClient(
                     http,
