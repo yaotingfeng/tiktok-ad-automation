@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
@@ -12,8 +12,10 @@ from app.core.errors import DomainError
 from .push_auth import authenticate
 from .push_schemas import PushBatchInput, PushBatchPublic
 from .push_service import read_batch, register_batch
+from .external_proxy import stream_external_source
 
 router = APIRouter(prefix="/integrations/materials/batches", tags=["material-push"])
+source_router = APIRouter(prefix="/integrations/materials", tags=["material-push"])
 MAX_BODY_BYTES = 2 * 1024 * 1024
 INPUT_SCHEMA = PushBatchInput.model_json_schema()
 INPUT_SCHEMA["properties"]["materials"]["items"] = INPUT_SCHEMA.pop("$defs")[
@@ -34,6 +36,23 @@ SIGNATURE_HEADERS = [
         ("X-Signature", "sha256=HMAC-SHA256 小写十六进制；详见接入文档"),
     )
 ]
+
+
+@source_router.get("/source/{material_id}/{operation_id}")
+def get_external_source(
+    material_id: UUID,
+    operation_id: UUID,
+    tenant_id: UUID = Query(...),
+    expires: int = Query(...),
+    signature: str = Query(..., min_length=64, max_length=64),
+):
+    return stream_external_source(
+        tenant_id=tenant_id,
+        material_id=material_id,
+        operation_id=operation_id,
+        expires=expires,
+        signature=signature,
+    )
 
 
 async def read_signed_body(request: Request) -> bytes:

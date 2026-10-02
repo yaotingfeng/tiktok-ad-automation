@@ -506,10 +506,10 @@ def issue_ingest_url(
     ):
         raise storage_error("object_use_invalid")
     if obj.storage_provider == "external":
-        from .push_worker import external_source_url
+        from .external_proxy import external_proxy_url
 
-        # 外部对象由素材工具持有，只提供其已校验来源地址，不签发自有 R2 权限。
-        url = external_source_url(session, context=context, material_id=obj.material_id)
+        # 外部对象由素材工具持有；使用一次性签名中转补齐 TikTok 所需的
+        # Content-Length/Content-Type，避免把 R2 的内部响应头直接暴露给平台。
         acquire_original_use(
             session,
             context=context,
@@ -518,7 +518,11 @@ def issue_ingest_url(
             operation_id=operation_id,
             lifetime_seconds=settings.MATERIAL_INGEST_URL_SECONDS,
         )
-        return url
+        return external_proxy_url(
+            tenant_id=context.tenant_id,
+            material_id=obj.material_id,
+            operation_id=operation_id,
+        )
     if (
         not obj.storage_bucket
         or not obj.storage_provider
