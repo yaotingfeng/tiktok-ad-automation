@@ -5,6 +5,7 @@ import pytest
 
 from app.core.errors import DomainError
 from app.modules.providers.adapters.jiashu import JiashuClient
+from app.modules.providers.adapters.registry import adapter_for_kind
 from app.modules.providers.adapters.wangyan import WangyanClient
 
 
@@ -44,6 +45,24 @@ def test_jiashu_sessions_and_application_params_stay_request_local():
         "page": 1,
         "page_size": 20,
     }
+
+
+def test_registry_returns_normalized_adapter_without_cross_provider_fallback():
+    def handle(_request):
+        return httpx.Response(
+            200, json={"code": "0000", "data": {"data": [], "count": 0}}
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http:
+        adapter = adapter_for_kind(
+            "jiashu", http, {"session": "private-session"}, application_id="app"
+        )
+        page = adapter.search("Moon", None)
+        assert page.items == [] and page.complete
+        assert adapter.capabilities(None).provider_kind == "jiashu"
+        with pytest.raises(DomainError) as error:
+            adapter_for_kind("duiba", http, {"token": "wrong"})
+    assert error.value.code == "provider_unavailable"
 
 
 @pytest.mark.parametrize(

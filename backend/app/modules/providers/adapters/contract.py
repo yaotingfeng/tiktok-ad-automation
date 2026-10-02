@@ -1,15 +1,88 @@
 """Offline-reviewed transport contract. No global session or implicit retry."""
 
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 from uuid import UUID
 
 import httpx
 
 from app.core.errors import DomainError
+from app.modules.providers.schemas import DramaCandidate
 
 type JsonDict = dict[str, Any]
+
+
+@dataclass(frozen=True)
+class SearchPage:
+    """A provider search page whose cursor proves whether the scan is complete."""
+
+    items: list[DramaCandidate]
+    next_cursor: str | None
+    complete: bool
+
+    def __post_init__(self) -> None:
+        if self.complete and self.next_cursor is not None:
+            raise ValueError("complete search pages cannot carry a cursor")
+        if not self.complete and not self.next_cursor:
+            raise ValueError("incomplete search pages require a cursor")
+
+
+@dataclass(frozen=True)
+class LinkLookupPage:
+    """Existing-link results with the same completeness guarantee as searches."""
+
+    items: list[JsonDict]
+    next_cursor: str | None
+    complete: bool
+
+    def __post_init__(self) -> None:
+        if self.complete and self.next_cursor is not None:
+            raise ValueError("complete link pages cannot carry a cursor")
+        if not self.complete and not self.next_cursor:
+            raise ValueError("incomplete link pages require a cursor")
+
+
+@dataclass(frozen=True)
+class LinkReceipt:
+    """Provider link identity and attribution after protocol normalization."""
+
+    remote_id: str
+    url: str
+    protected_base: str | None
+    attribution: JsonDict
+    config: JsonDict
+
+    def __post_init__(self) -> None:
+        if not self.remote_id or not isinstance(self.remote_id, str):
+            raise ValueError("link receipt remote_id must be non-empty")
+        if not isinstance(self.url, str) or not self.url.strip():
+            raise ValueError("link receipt URL must be non-empty")
+        parsed = urlsplit(self.url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ValueError("link receipt URL must be HTTPS")
+        # None means the adapter failed to prove an attribution base. Empty
+        # string is an explicit provider result and is therefore valid.
+        if self.protected_base is None:
+            raise ValueError("link receipt protected_base is missing")
+        if not isinstance(self.protected_base, str):
+            raise ValueError("link receipt protected_base must be a string")
+        if not isinstance(self.attribution, dict) or not isinstance(self.config, dict):
+            raise ValueError("link receipt metadata must be objects")
+
+
+@dataclass(frozen=True)
+class VerifiedLink:
+    remote_id: str
+    external_drama_id: str
+    title: str
+    url: str
+    protected_base: str
+    attribution: JsonDict
+    config: JsonDict
 
 
 class ProviderClient(Protocol):
@@ -19,6 +92,44 @@ class ProviderClient(Protocol):
     ) -> JsonDict: ...
     def create_step(self, step: str, payload: JsonDict) -> JsonDict: ...
     def read_link(self, remote_id: str) -> JsonDict: ...
+
+
+class ProviderAdapter(Protocol):
+    def search(self, title: str, cursor: str | None) -> SearchPage: ...
+
+    def lookup_link(
+        self, drama_id: str, config: JsonDict, cursor: str | None
+    ) -> LinkLookupPage: ...
+
+    def create_link(self, drama_id: str, config: JsonDict) -> LinkReceipt: ...
+
+    def read_link(self, remote_id: str) -> LinkReceipt: ...
+
+    def verify_link(
+        self, receipt: LinkReceipt, drama: DramaCandidate, config: JsonDict
+    ) -> VerifiedLink: ...
+
+    def capabilities(self, application: Any) -> Any: ...
+
+
+def verify_receipt(
+    receipt: LinkReceipt, drama: DramaCandidate, config: JsonDict
+) -> VerifiedLink:
+    """Verify the normalized identity/config before persisting a ready link."""
+
+    if receipt.config != config:
+        raise ValueError("link receipt configuration does not match request")
+    if not drama.external_drama_id.strip() or not drama.title.strip():
+        raise ValueError("drama identity must be non-empty")
+    return VerifiedLink(
+        remote_id=receipt.remote_id,
+        external_drama_id=drama.external_drama_id,
+        title=drama.title,
+        url=receipt.url,
+        protected_base=receipt.protected_base or "",
+        attribution=receipt.attribution,
+        config=receipt.config,
+    )
 
 
 @dataclass(frozen=True)

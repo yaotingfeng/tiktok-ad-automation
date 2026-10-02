@@ -3,6 +3,13 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
+from app.modules.providers.adapters.contract import (
+    LinkReceipt,
+    SearchPage,
+    verify_receipt,
+)
+from app.modules.providers.capabilities import LinkConfigField, LinkConfigSchema
+from app.modules.providers.drama_identity import display_id
 from app.modules.providers.schemas import DramaCandidate, ResolvedLink, link_reuse_key
 
 
@@ -133,3 +140,92 @@ def test_unresolved_result_retains_original_line_and_candidates():
     result = ResolvedLink(**fields)
     assert result.drama_id is None and len(result.candidates) == 2
     assert result.raw_input == " Moon "
+
+
+def test_search_page_requires_cursor_when_results_are_incomplete():
+    candidate = DramaCandidate(external_drama_id="opaque-1", title="Moon")
+    assert SearchPage(items=[candidate], next_cursor="next", complete=False).next_cursor == "next"
+    with pytest.raises(ValueError):
+        SearchPage(items=[candidate], next_cursor=None, complete=False)
+    with pytest.raises(ValueError):
+        SearchPage(items=[candidate], next_cursor="next", complete=True)
+
+
+def test_link_receipt_validates_url_and_distinguishes_empty_protected_base():
+    receipt = LinkReceipt(
+        remote_id="link-1",
+        url="https://www.tiktok.com/minis/example",
+        protected_base="",
+        attribution={"linkNo": "L-1"},
+        config={"episode": 1},
+    )
+    assert receipt.protected_base == ""
+    with pytest.raises(ValueError):
+        LinkReceipt(
+            remote_id="link-1",
+            url="http://www.tiktok.com/minis/example",
+            protected_base="campaign",
+            attribution={},
+            config={},
+        )
+    with pytest.raises(ValueError):
+        LinkReceipt(
+            remote_id="link-1",
+            url="https://www.tiktok.com/minis/example",
+            protected_base=None,
+            attribution={},
+            config={},
+        )
+
+
+def test_generic_receipt_verification_keeps_opaque_identity_and_config():
+    drama = DramaCandidate(external_drama_id="compilation-7", title="Moon")
+    receipt = LinkReceipt(
+        remote_id="batch-9",
+        url="https://www.tiktok.com/minis/example",
+        protected_base="campaign",
+        attribution={"name": "campaign"},
+        config={"episode_seq": 3},
+    )
+    result = verify_receipt(receipt, drama, {"episode_seq": 3})
+    assert result.external_drama_id == "compilation-7"
+    assert result.remote_id == "batch-9"
+    with pytest.raises(ValueError):
+        verify_receipt(receipt, drama, {"episode_seq": 4})
+
+
+def test_capability_schema_validates_defaults_and_conditional_requirements():
+    schema = LinkConfigSchema(
+        provider_kind="gangganhao",
+        fields=[
+            LinkConfigField(
+                name="payment_template_id", label="支付模板", type="select"
+            )
+        ],
+        defaults={"payment_template_id": ""},
+        required_when={"payment_template_id": {"monetization": ["iap", "mixed"]}},
+        schema_version=1,
+    )
+    assert schema.fields[0].name == "payment_template_id"
+    with pytest.raises(ValueError):
+        LinkConfigSchema(
+            provider_kind="duiba",
+            fields=[],
+            defaults={"unknown": 1},
+            required_when={},
+            schema_version=1,
+        )
+
+
+@pytest.mark.parametrize(
+    ("kind", "external", "stored", "attribution", "expected"),
+    [
+        ("wangyan", "opaque", None, {"drama_int_id": 31091}, "31091"),
+        ("wangyan", "opaque", None, {"drama_int_id": "31092"}, "31092"),
+        ("duiba", "lc671-episode-7", None, {}, "lc671-episode-7"),
+        ("gangganhao", "publish-7", None, {"seriesId": "content-only"}, "publish-7"),
+        ("rongliang", "compilation-7", None, {}, "compilation-7"),
+    ],
+)
+def test_display_id_keeps_provider_identity_rules(kind, external, stored, attribution, expected):
+    assert display_id(kind, external, stored, attribution) == expected

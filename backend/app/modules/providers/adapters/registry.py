@@ -7,10 +7,25 @@ Wangyan protocol.
 """
 
 from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
-from .contract import ProviderClient, failure
+from app.modules.providers.capabilities import capabilities_for_kind
+from app.modules.providers.schemas import DramaCandidate
+
+from .contract import (
+    JsonDict,
+    LinkLookupPage,
+    LinkReceipt,
+    ProviderAdapter,
+    ProviderClient,
+    SearchPage,
+    VerifiedLink,
+    failure,
+    verify_receipt,
+)
 from .jiashu import JiashuClient
 from .wangyan import WangyanClient
 
@@ -39,18 +54,76 @@ def adapter_for_kind(
     *,
     application_id: str = "",
     channel_prefix: str = "",
-) -> ProviderClient:
+) -> ProviderAdapter:
     """Build a session adapter without falling back across provider kinds."""
 
     if kind == "jiashu":
-        return JiashuClient(
-            http,
-            session=credentials["session"],
-            application_id=application_id,
-            channel_prefix=channel_prefix,
+        return LegacyProviderAdapter(
+            kind,
+            JiashuClient(
+                http,
+                session=credentials["session"],
+                application_id=application_id,
+                channel_prefix=channel_prefix,
+            ),
         )
     if kind == "wangyan":
-        return WangyanClient(
-            http, token=credentials["token"], application_id=application_id
+        return LegacyProviderAdapter(
+            kind,
+            WangyanClient(
+                http, token=credentials["token"], application_id=application_id
+            ),
         )
     raise failure("provider_unavailable", retryable=True)
+
+
+@dataclass
+class LegacyProviderAdapter:
+    """Normalize the two pre-existing clients while their workflows migrate."""
+
+    kind: str
+    client: ProviderClient
+
+    def search(self, title: str, cursor: str | None) -> SearchPage:
+        try:
+            page = int(cursor or 1)
+        except (TypeError, ValueError):
+            raise failure("provider_request_invalid") from None
+        raw = self.client.search(title, page)
+        items = [DramaCandidate.model_validate(item) for item in raw["items"]]
+        return SearchPage(
+            items=items,
+            next_cursor=raw.get("next_cursor"),
+            complete=raw.get("complete") is True,
+        )
+
+    def lookup_link(
+        self, drama_id: str, config: JsonDict, cursor: str | None
+    ) -> LinkLookupPage:
+        raw = self.client.find_existing(drama_id, config, cursor)
+        return LinkLookupPage(
+            items=[item for item in raw["items"] if isinstance(item, dict)],
+            next_cursor=raw.get("next_cursor"),
+            complete=raw.get("complete") is True,
+        )
+
+    def create_link(self, drama_id: str, config: JsonDict) -> LinkReceipt:
+        raise failure("provider_unavailable", retryable=True)
+
+    def read_link(self, remote_id: str) -> LinkReceipt:
+        raw = self.client.read_link(remote_id)
+        return LinkReceipt(
+            remote_id=str(raw["remote_id"]),
+            url=raw["url"],
+            protected_base=raw.get("protected_base"),
+            attribution=raw.get("attribution", {}),
+            config=raw.get("config", {}),
+        )
+
+    def verify_link(
+        self, receipt: LinkReceipt, drama: DramaCandidate, config: JsonDict
+    ) -> VerifiedLink:
+        return verify_receipt(receipt, drama, config)
+
+    def capabilities(self, application: Any):
+        return capabilities_for_kind(self.kind, application)
