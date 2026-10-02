@@ -13,7 +13,8 @@ from app.modules.builds.submission_catalog_api import (
     router as submission_catalog_router,
 )
 from app.modules.materials.ingest_api import router as ingest_router
-from app.modules.materials.push_api import router as material_push_router, source_router as material_source_router
+from app.modules.materials.push_api import router as material_push_router
+from app.modules.materials.push_api import source_router as material_source_router
 from app.modules.materials.reissue_api import router as material_reissue_router
 from app.modules.materials.router import router as materials_router
 from app.modules.providers.router import router as providers_router

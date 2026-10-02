@@ -9,10 +9,10 @@ from starlette.concurrency import run_in_threadpool
 from app.api.deps import SessionDep
 from app.core.errors import DomainError
 
+from .external_proxy import stream_external_source
 from .push_auth import authenticate
 from .push_schemas import PushBatchInput, PushBatchPublic
 from .push_service import read_batch, register_batch
-from .external_proxy import stream_external_source
 
 router = APIRouter(prefix="/integrations/materials/batches", tags=["material-push"])
 source_router = APIRouter(prefix="/integrations/materials", tags=["material-push"])

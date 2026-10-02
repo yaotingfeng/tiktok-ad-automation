@@ -4,7 +4,6 @@ import hashlib
 import hmac
 from collections.abc import Iterator
 from datetime import UTC, datetime
-from urllib.parse import urlsplit
 from uuid import UUID
 
 import urllib3

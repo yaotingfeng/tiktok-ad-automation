@@ -13,13 +13,13 @@ from sqlmodel import col, select
 from app.api.deps import CurrentUser, SessionDep
 from app.core.errors import ERROR_HTTP_STATUS, DomainError
 from app.core.pagination import Page, count_rows
+from app.modules.providers.capabilities import LinkConfigSchema, capabilities_for_kind
 from app.modules.providers.catalog import (
     LinkStatus,
     get_link,
     list_links,
     preparation_summary,
 )
-from app.modules.providers.capabilities import LinkConfigSchema, capabilities_for_kind
 from app.modules.providers.connections import (
     save_connection,
     verify_connection,
