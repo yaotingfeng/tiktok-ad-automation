@@ -48,6 +48,21 @@ UPLOAD_EVIDENCE = (
             "结果未知只回查；账户授权和角色仍独立验证，不从工具可见性推断。"
         ),
     ),
+    MaterialUploadEvidence(
+        channel="OFFICIAL_MCP",
+        adapter_contract_revision="b6282cb567d38c28d2725746d46ff88d7b19397e764f2048946aaf7a9afaa912",
+        policy=MaterialUploadPolicy(1024**3),
+        category="APPLICATION",
+        sources=(
+            "app/integrations/tiktok/mcp/protocol-profile.json",
+            "app/integrations/tiktok/mcp/tool-contracts.json",
+        ),
+        notes=(
+            "2026-10-02复核：整套MCP工具清单版本虽更新，file_video_ad_upload的URL上传schema"
+            "与上一已核实版本一致，历史相同连接已有成功VID回执。"
+            "按应用容量发送一次，关闭自动修复和绑定，保留原件并实际回读MD5/大小。"
+        ),
+    ),
 )
 
 
