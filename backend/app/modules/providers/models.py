@@ -28,7 +28,8 @@ class ProviderConnection(SQLModel, table=True):
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_provider_connection_tenant_id"),
         CheckConstraint(
-            "kind IN ('wangyan','jiashu','other')", name="ck_provider_connection_kind"
+            "kind IN ('wangyan','jiashu','duiba','gangganhao','rongliang','other')",
+            name="ck_provider_connection_kind",
         ),
         CheckConstraint(
             "status IN ('pending','verifying','active','reauth_required','error','disabled','local')",

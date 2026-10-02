@@ -22,6 +22,7 @@ from app.modules.tenants.permissions import require_tenant
 
 from .adapters.contract import ProviderClient, ProviderSession, failure
 from .adapters.jiashu import JiashuClient
+from .adapters.registry import credential_fields
 from .adapters.wangyan import WangyanClient
 from .models import ProviderApplication, ProviderConnection
 
@@ -57,9 +58,12 @@ def save_connection(
     require_tenant(
         session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="manage"
     )
-    fields = {"username", "password"} if kind == "jiashu" else {"email", "password"}
+    try:
+        fields = credential_fields(kind)
+    except DomainError:
+        raise failure("provider_request_invalid") from None
     if (
-        kind not in {"jiashu", "wangyan"}
+        kind not in {"jiashu", "wangyan", "duiba", "gangganhao", "rongliang"}
         or not isinstance(credentials, dict)
         or set(credentials) != fields
         or any(
@@ -153,6 +157,8 @@ def verify_connection(
         row.error_code = None
     logged_in = False
     try:
+        if kind not in {"jiashu", "wangyan"}:
+            raise failure("provider_unavailable", retryable=True)
         with httpx.Client(
             transport=transport, trust_env=False, follow_redirects=False, timeout=30
         ) as http:
@@ -313,6 +319,8 @@ def open_provider_session(
             transport=transport, trust_env=False, follow_redirects=False, timeout=30
         ) as http:
             client: ProviderClient
+            if kind not in {"jiashu", "wangyan"}:
+                raise failure("provider_unavailable", retryable=True)
             if kind == "jiashu":
                 client = JiashuClient(
                     http,

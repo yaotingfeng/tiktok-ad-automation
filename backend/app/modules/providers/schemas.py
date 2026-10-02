@@ -13,7 +13,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-ProviderKind = Literal["wangyan", "jiashu"]
+ProviderKind = Literal["wangyan", "jiashu", "duiba", "gangganhao", "rongliang"]
 LinkResultStatus = Literal[
     "pending",
     "needs_resolution",

@@ -20,6 +20,7 @@ from app.modules.tenants.permissions import require_tenant
 
 from .adapters.contract import failure
 from .adapters.jiashu import JiashuClient
+from .adapters.registry import credential_fields
 from .adapters.wangyan import WangyanClient
 from .models import ProviderApplication, ProviderConnection, ProviderSessionRefresh
 
@@ -235,15 +236,16 @@ def advance_session_refresh(
     if exhausted:
         raise failure(REFRESHING, retryable=True)
     try:
+        if kind not in {"jiashu", "wangyan"}:
+            raise failure("provider_unavailable", retryable=True)
         with httpx.Client(
             transport=transport, trust_env=False, follow_redirects=False, timeout=30
         ) as http:
             if phase == "login":
-                fields = (
-                    {"username", "password"}
-                    if kind == "jiashu"
-                    else {"email", "password"}
-                )
+                try:
+                    fields = credential_fields(kind)
+                except DomainError:
+                    raise failure("provider_request_invalid") from None
                 if any(not credentials.get(k) for k in fields):
                     raise failure("provider_auth_failed")
                 try:

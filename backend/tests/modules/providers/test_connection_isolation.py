@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from typing import get_args
 from uuid import uuid4
 
 import httpx
@@ -17,6 +18,7 @@ from app.modules.providers.connections import (
     verify_connection,
 )
 from app.modules.providers.models import ProviderApplication, ProviderConnection
+from app.modules.providers.schemas import ProviderKind
 from app.modules.tenants.models import AuditEvent, Tenant, TenantMembership
 from tests.modules.conftest import create_context
 
@@ -77,6 +79,48 @@ def transport(callback=None):
         return httpx.Response(200, json={"code": "0000", "data": data})
 
     return httpx.MockTransport(handle)
+
+
+@pytest.mark.parametrize(
+    ("kind", "credentials"),
+    [
+        ("duiba", {"account": "duiba-account", "password": "private-password"}),
+        (
+            "gangganhao",
+            {
+                "portal_id": "56",
+                "username": "portal-user",
+                "password": "private-password",
+            },
+        ),
+        (
+            "rongliang",
+            {"email": "rongliang@example.test", "password": "private-password"},
+        ),
+    ],
+)
+def test_new_provider_kinds_accept_their_exact_credential_fields(kind, credentials):
+    assert kind in get_args(ProviderKind)
+    with Session(engine) as session, session.begin():
+        context = create_context(session, role="tenant_admin")
+        row = save_connection(
+            session,
+            context=context,
+            kind=kind,
+            display_name=f"{kind} fixture",
+            credentials=credentials,
+        )
+        assert row.kind == kind
+        tenant_id, actor_id = context.tenant_id, context.actor_id
+    with Session(engine) as session, session.begin():
+        for model in (ProviderConnection, AuditEvent, TenantMembership):
+            session.exec(delete(model).where(model.tenant_id == tenant_id))
+        session.exec(delete(Tenant).where(Tenant.id == tenant_id))
+        session.exec(delete(User).where(User.id == actor_id))
+
+
+def test_provider_kind_does_not_expose_manual_other_kind():
+    assert "other" not in get_args(ProviderKind)
 
 
 def test_encrypted_connections_are_tenant_bound_and_verified_apps_are_external(
