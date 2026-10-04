@@ -26,3 +26,10 @@
 - `a8e0aaa` 已发布到新加坡测试环境，当前指针为 `/opt/tt-ada-staging/releases/a8e0aaa`。发布备份 `/var/backups/tt-ada-staging/20261004T095855Z/` 的全部 SHA-256 校验通过，项目归档可独立列出恢复；九个服务和备份 timer 均为 `active`。
 - 已为现有 API 授权的可见 BC 补写默认路由并同步绑定授权代数；数据库回读为 `bc_default_route.connection_id=914aaa82-6ac8-4a3c-b53e-3838fde8c230`、绑定 `authorization_revision=1`，原有 120 条账户访问记录保留。后续 API 完整发现会自动为新发现 BC 写入默认路由，同时保留管理员已有的其他连接选择。
 - 验证：Celery 7 个节点 `pong`，`accounts.discover` 路由为 `control`（任务声明队列），HTTPS `/api/openapi.json` 返回 200；未调用 TikTok 写接口，未创建广告。
+
+## MCP 自动接入全部可见 BC
+
+- `76ba83f` 已发布到新加坡测试环境，当前指针为 `/opt/tt-ada-staging/releases/76ba83f`；API、7 个 Worker、Beat、广告目录/报表/管理服务和备份 timer 均为 `active`。
+- MCP 授权页完整读取候选 BC 后自动提交全部可见且尚未接入的 BC，移除逐项勾选流程；每个 BC 仍独立创建发现任务、同步账户和维护绑定。候选目录与绑定请求上限统一为 5000。
+- 发布前备份为 `/var/backups/tt-ada-staging/20261004T125822Z/`，PostgreSQL、Redis、私有配置和备份完成标记已生成；当前项目归档保留在上一批已校验发布备份中，发布包 SHA-256 为 `27e517ba4a62b4ad8673cdb6c1b85bbf21f7873d4574da3e4bd8665bfb875242`。
+- 本地前端 TypeScript/Vite 构建、Ruff 和差异检查通过；本轮未发起真实 MCP 授权，不宣称真实多 BC 回调已完成，待用户下一次 MCP 授权后验收自动接入结果。
