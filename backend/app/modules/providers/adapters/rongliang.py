@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json as jsonlib
+import os
+import secrets
 import shutil
 import subprocess
 import tempfile
@@ -30,6 +32,7 @@ from .contract import (
 BASE = "https://distribution.wolftv.online/manage/ocean/management/distribution"
 PAGE_SIZE = 100
 COOKIE_DOMAIN = "distribution.wolftv.online"
+XLA_CI = os.getenv("RONG_LIANG_XLA_CI", "").strip()
 
 
 class _CurlSession:
@@ -47,6 +50,7 @@ class _CurlSession:
         handle.close()
         self.cookie_file = Path(handle.name)
         self.cookie_file.chmod(0o600)
+        self.xla_ci = XLA_CI or secrets.token_hex(16)
         if cookie:
             self.cookie_file.write_text(cookie + "\n", encoding="utf-8")
 
@@ -65,6 +69,7 @@ class _CurlSession:
         params: JsonDict | None = None,
         json: JsonDict | None = None,
         content: str | None = None,
+        form: dict[str, str] | None = None,
     ) -> JsonDict:
         if params:
             from urllib.parse import urlencode
@@ -78,12 +83,10 @@ class _CurlSession:
             "--compressed",
             "--max-time",
             "30",
-            "--request",
-            method,
             "--cookie",
             str(self.cookie_file),
-            "--cookie-jar",
-            str(self.cookie_file),
+            "--cookie",
+            f"XLA_CI={self.xla_ci}",
             "--user-agent",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
             "--header",
@@ -92,17 +95,37 @@ class _CurlSession:
             "accept-language: zh-CN,zh;q=0.9",
             "--url",
             url,
-            "--write-out",
-            "\n__RONG_LIANG_STATUS__%{http_code}",
         ]
+        if method not in {"GET", "POST"}:
+            command.extend(["--request", method])
+        # Rewriting this provider's cookie jar on ordinary API reads makes its
+        # session invalid. Only the login response needs to persist Set-Cookie.
+        if url.endswith("/auth/login"):
+            cookie_index = command.index("--cookie")
+            del command[cookie_index : cookie_index + 2]
+            command[command.index("--user-agent"):command.index("--user-agent")] = [
+                "--cookie-jar",
+                str(self.cookie_file),
+            ]
         for name, value in (headers or {}).items():
             command.extend(["--header", f"{name}: {value}"])
         body = content
+        if form:
+            for name, value in form.items():
+                command.extend(["--form-string", f"{name}={value}"])
+            body = None
         if json is not None:
             body = jsonlib.dumps(json, ensure_ascii=False, separators=(",", ":"))
             command.extend(["--header", "content-type: application/json"])
         if body is not None:
             command.extend(["--data-binary", "@-"])
+        response_file = tempfile.NamedTemporaryFile(
+            prefix="rongliang-response-", delete=False
+        )
+        response_file.close()
+        response_path = Path(response_file.name)
+        response_path.chmod(0o600)
+        command.extend(["--output", str(response_path), "--write-out", "%{http_code}"])
         try:
             completed = subprocess.run(
                 command,
@@ -113,9 +136,12 @@ class _CurlSession:
             )
         except OSError:
             raise failure("provider_unavailable", retryable=True) from None
-        marker = "\n__RONG_LIANG_STATUS__"
-        payload, separator, status_text = completed.stdout.rpartition(marker)
-        if not separator or completed.returncode != 0:
+        try:
+            payload = response_path.read_text(encoding="utf-8")
+        finally:
+            response_path.unlink(missing_ok=True)
+        status_text = completed.stdout.strip()
+        if completed.returncode != 0:
             raise failure("provider_unavailable", retryable=True)
         try:
             status = int(status_text)
@@ -175,8 +201,7 @@ class RongliangClient:
                 body = curl.request(
                     "POST",
                     BASE + "/auth/login",
-                    headers={"content-type": "application/x-www-form-urlencoded; charset=UTF-8"},
-                    content=encoded,
+                    form={"email": email, "password": password},
                 )
         except Exception:
             if curl is not None:
