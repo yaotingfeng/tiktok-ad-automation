@@ -1639,3 +1639,8 @@
 - 发现用户重新授权后连接长期停在 `DISCOVERING` 的根因：`accounts.discover` 排在共享素材准备队列积压之后。提交 `cefce8c` 将账户发现统一改投 `resource-results`，保留原任务 ID 移动现有消息，未清空或重投素材队列。
 - 发现任务已成功执行；最新 `DiscoveryRun` 为 `COMPLETE/FINALIZE`，对应连接为 `ACTIVE`，授权尝试为 `ACCEPTED`。账户发现队列映射、Celery ping、HTTPS/OpenAPI 入口均通过。
 - 用户要求的容量版权方提交 `a9437c2` 已发布到新加坡测试环境；完整备份 `/var/backups/tt-ada-staging/20261004T093611Z/` 的 PostgreSQL、Redis、配置和项目归档校验通过。容量协议 4 项、Ruff、compileall 通过；真实版权方/TikTok 写入未执行。详见[本轮验收](validation/2026-10-04-staging-queue-and-provider-release.md)。
+
+## 2026-10-04：API 多 BC 默认路由修复
+
+- API OAuth 发现继续以 TikTok 官方 BCS 返回为准，支持返回多 BC；不会把当前 token 不可见的租户 BC 自动挂入授权。修复 `a8e0aaa` 让 API 发布路径为每个新发现 BC 写入 `BCDefaultRoute`，并同步绑定授权代数，避免详情页错误显示“未使用此授权”。
+- 已部署并修复现有测试授权；备份与回读记录见[本轮验收](validation/2026-10-04-staging-queue-and-provider-release.md)。

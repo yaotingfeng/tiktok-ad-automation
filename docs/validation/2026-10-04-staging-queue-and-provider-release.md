@@ -18,3 +18,11 @@
 - 线上工作目录导入 `accounts.discover` 映射为 `resource-results`；Celery 7 个节点全部 `pong`；HTTPS 首页和 OpenAPI 入口返回 200。
 - 容量版权方协议回归 4 项、Ruff、compileall 通过；服务器存在 `/usr/bin/curl`（libcurl 8.5.0），Provider 模块导入通过。
 - 本轮未使用真实版权方凭据、未调用 TikTok 或版权方写接口，未创建广告；容量真实账号联调仍需单独授权后验证。
+
+## API 多 BC 授权显示修复
+
+- 诊断确认：API 目录发现会处理 TikTok 官方 BCS 接口返回的全部 BC；本次授权 token 实际只返回 `7683817908149272592`（麦斯国际运营522），因此不会把租户已有但该 token 不可见的 `7678608005688066065`（广西智普...）擅自并入这份授权。
+- “未使用此授权”的直接原因是 API 发布路径只写入了 `BCConnectionBinding`，没有像 MCP 发布路径一样写入 `BCDefaultRoute`；详情页按默认路由判断，所以绑定存在仍显示未使用。
+- `a8e0aaa` 已发布到新加坡测试环境，当前指针为 `/opt/tt-ada-staging/releases/a8e0aaa`。发布备份 `/var/backups/tt-ada-staging/20261004T095855Z/` 的全部 SHA-256 校验通过，项目归档可独立列出恢复；九个服务和备份 timer 均为 `active`。
+- 已为现有 API 授权的可见 BC 补写默认路由并同步绑定授权代数；数据库回读为 `bc_default_route.connection_id=914aaa82-6ac8-4a3c-b53e-3838fde8c230`、绑定 `authorization_revision=1`，原有 120 条账户访问记录保留。后续 API 完整发现会自动为新发现 BC 写入默认路由，同时保留管理员已有的其他连接选择。
+- 验证：Celery 7 个节点 `pong`，`accounts.discover` 路由为 `control`（任务声明队列），HTTPS `/api/openapi.json` 返回 200；未调用 TikTok 写接口，未创建广告。
