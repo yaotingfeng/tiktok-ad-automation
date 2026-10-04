@@ -39,11 +39,10 @@ class GroupPlan:
 
 
 def _stable_material_ids(materials: Iterable[NamedMaterial]) -> tuple[UUID, ...]:
-    """按历史文件名/ID顺序去重，避免输入顺序和重复行影响计划。"""
-    ordered = sorted(materials, key=lambda item: (item.file_name, item.material_id))
+    """保留素材包冻结顺序，并按首次出现的 ID 去重。"""
     seen: set[UUID] = set()
     result: list[UUID] = []
-    for item in ordered:
+    for item in materials:
         if item.material_id not in seen:
             seen.add(item.material_id)
             result.append(item.material_id)

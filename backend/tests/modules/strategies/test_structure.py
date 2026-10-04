@@ -207,10 +207,10 @@ def test_material_ids_are_deduplicated_but_same_name_ids_remain_distinct():
         seed=1,
     )[0]
 
-    assert group.material_ids == (UUID(int=1), UUID(int=2), UUID(int=3))
+    assert group.material_ids == (UUID(int=3), UUID(int=1), UUID(int=2))
 
 
-def test_duplicate_ids_use_sorted_material_record_regardless_of_input_order():
+def test_material_input_order_is_preserved_and_duplicate_ids_keep_first_record():
     items = [
         SimpleNamespace(material_id=UUID(int=2), file_name="Beta.mp4"),
         SimpleNamespace(material_id=UUID(int=1), file_name="Zeta.mp4"),
@@ -226,10 +226,12 @@ def test_duplicate_ids_use_sorted_material_record_regardless_of_input_order():
     )
 
     first = plan_structure(items, config=config, pool=seed_copies(), seed=1)
-    second = plan_structure(list(reversed(items)), config=config, pool=seed_copies(), seed=1)
+    second = plan_structure(
+        [items[1], items[2], items[0]], config=config, pool=seed_copies(), seed=1
+    )
 
-    assert first == second
-    assert first[0].material_ids == (UUID(int=1), UUID(int=2))
+    assert first[0].material_ids == (UUID(int=2), UUID(int=1))
+    assert second[0].material_ids == (UUID(int=1), UUID(int=2))
 
 
 @pytest.mark.parametrize(
