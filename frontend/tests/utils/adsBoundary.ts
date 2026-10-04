@@ -86,13 +86,58 @@ export async function adsBoundary(
       const display =
         dimension === "drama"
           ? { name: "总裁归来", drama_name: "总裁归来", provider: "嘉书" }
-          : {
-              name,
-              campaign_name: name,
-              drama_name: "总裁归来",
-              advertiser_id: ADVERTISER,
-              status: "ENABLE",
-            }
+          : dimension === "account"
+            ? {
+                name: "甲账户",
+                account_name: "甲账户",
+                account_id: ADVERTISER,
+                advertiser_id: ADVERTISER,
+                status: "ENABLE",
+              }
+            : dimension === "adgroup"
+              ? {
+                  name,
+                  account_name: "甲账户",
+                  account_id: ADVERTISER,
+                  campaign_name: "嘉书-总裁归来-测试",
+                  campaign_id: "campaign-1",
+                  adgroup_name: name,
+                  adgroup_id: "adgroup-1",
+                  advertiser_id: ADVERTISER,
+                  status: "ENABLE",
+                }
+              : dimension === "ad"
+                ? {
+                    name,
+                    account_name: "甲账户",
+                    account_id: ADVERTISER,
+                    campaign_name: "嘉书-总裁归来-测试",
+                    campaign_id: "campaign-1",
+                    adgroup_name: "嘉书-总裁归来-测试",
+                    adgroup_id: "adgroup-1",
+                    ad_name: name,
+                    ad_id: "ad-1",
+                    advertiser_id: ADVERTISER,
+                    status: "ENABLE",
+                  }
+                : dimension === "material"
+                  ? {
+                      name: "素材-测试",
+                      material_name: "素材-测试",
+                      main_material_id: "material-1",
+                      advertiser_id: ADVERTISER,
+                      status: "ENABLE",
+                    }
+                  : {
+                      name,
+                      campaign_name: name,
+                      account_name: "甲账户",
+                      account_id: ADVERTISER,
+                      campaign_id: "campaign-1",
+                      drama_name: "总裁归来",
+                      advertiser_id: ADVERTISER,
+                      status: "ENABLE",
+                    }
       return route.fulfill({
         headers,
         json: {

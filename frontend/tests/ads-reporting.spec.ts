@@ -40,7 +40,7 @@ test("详情沿用快照并读取 operation 状态", async ({ page }) => {
       detailRequests.push(request.url())
   })
   await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
-  await page.getByRole("button", { name: "嘉书-总裁归来-测试" }).click()
+  await page.getByRole("button", { name: "查看详情" }).click()
   await expect(page.getByText("PAUSED", { exact: true })).toBeVisible()
   expect(
     new URL(detailRequests.at(-1) ?? "http://localhost").searchParams.get(

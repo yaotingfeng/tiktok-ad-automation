@@ -14,8 +14,10 @@ import {
 import {
   type AdsDimension,
   availabilityLabel,
+  childDimensionForColumn,
   officialPlatformUrl,
   rowBudget,
+  rowHierarchyId,
   rowMetric,
   rowName,
   rowOptimizationGoal,
@@ -69,6 +71,7 @@ export function AdsTable({
   onToggle,
   onSelectAll,
   onOpen,
+  onNavigate,
   nextCursor,
   hasPrevious,
   onNext,
@@ -82,6 +85,7 @@ export function AdsTable({
   onToggle: (row: ReportRow, checked: boolean) => void
   onSelectAll: () => void
   onOpen: (row: ReportRow) => void
+  onNavigate: (row: ReportRow, columnKey: string) => void
   nextCursor?: string | null
   hasPrevious: boolean
   onNext: () => void
@@ -174,26 +178,45 @@ export function AdsTable({
                       aria-label={`选择 ${rowName(row)}`}
                     />
                   </TableCell>
-                  {columns.map((column, index) => (
-                    <TableCell
-                      key={column.key}
-                      className={`max-w-64 text-xs ${index === 0 ? "sticky left-12 z-10 bg-background" : ""}`}
-                    >
-                      {index === columns.length - 1 ? (
-                        <button
-                          type="button"
-                          className="max-w-64 text-left font-medium hover:underline"
-                          onClick={() => onOpen(row)}
-                        >
-                          {displayText(row, column.key) === "—"
-                            ? rowName(row)
-                            : displayText(row, column.key)}
-                        </button>
-                      ) : (
-                        displayText(row, column.key)
-                      )}
-                    </TableCell>
-                  ))}
+                  {columns.map((column, index) => {
+                    const label = displayText(row, column.key)
+                    const identifier = rowHierarchyId(row, column.key)
+                    const canNavigate =
+                      childDimensionForColumn(column.key) !== null
+                    return (
+                      <TableCell
+                        key={column.key}
+                        className={`max-w-64 text-xs ${index === 0 ? "sticky left-12 z-10 bg-background" : ""}`}
+                      >
+                        <div className="flex flex-col items-start">
+                          <button
+                            type="button"
+                            className="max-w-64 text-left font-medium hover:underline"
+                            onClick={() =>
+                              canNavigate
+                                ? onNavigate(row, column.key)
+                                : onOpen(row)
+                            }
+                          >
+                            {label === "—" ? rowName(row) : label}
+                          </button>
+                          {identifier && (
+                            <button
+                              type="button"
+                              className="text-[10px] text-muted-foreground hover:underline"
+                              onClick={() =>
+                                canNavigate
+                                  ? onNavigate(row, column.key)
+                                  : onOpen(row)
+                              }
+                            >
+                              {identifier}
+                            </button>
+                          )}
+                        </div>
+                      </TableCell>
+                    )
+                  })}
                   <TableCell>
                     <Badge variant="outline" className="text-[10px]">
                       {row.display?.status ??
@@ -256,6 +279,13 @@ export function AdsTable({
                     </TableCell>
                   )}
                   <TableCell>
+                    <button
+                      type="button"
+                      className="mr-2 underline"
+                      onClick={() => onOpen(row)}
+                    >
+                      查看详情
+                    </button>
                     {url ? (
                       <a
                         className="underline"

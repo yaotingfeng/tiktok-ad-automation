@@ -20,8 +20,10 @@ import { BulkActionBar } from "./BulkActionBar"
 import { ReportCoverageNotice } from "./ReportCoverageNotice"
 import {
   type AdsSearch,
+  childDimensionForColumn,
   DIMENSIONS,
   defaultAdsSearch,
+  rowHierarchyId,
   toReportingFilter,
 } from "./search"
 import { useAdsQuery } from "./useAdsQuery"
@@ -179,6 +181,36 @@ export function AdsWorkspace() {
     setSearch(next)
     setApplied(next)
   }
+  const navigateToChild = (row: ReportRow, columnKey: string) => {
+    const dimension = childDimensionForColumn(columnKey)
+    if (!dimension) {
+      setSelectedRow(row)
+      return
+    }
+    const parentId = rowHierarchyId(row, columnKey)
+    const advertiserId =
+      row.display?.account_id ?? row.refs?.[0]?.advertiser_id ?? null
+    if (!parentId || !advertiserId) {
+      setActionError("当前行缺少层级 ID，暂时无法跳转下级报表")
+      return
+    }
+    const next: AdsSearch = {
+      ...applied,
+      dimension,
+      advertiser_ids: [advertiserId],
+      ids: [parentId],
+      page: 1,
+      cursor: undefined,
+      snapshot_id: undefined,
+    }
+    ads.selection.clear()
+    clearManagementPreview()
+    setSelectedRow(null)
+    setCursorHistory([])
+    setActionError(null)
+    setSearch(next)
+    setApplied(next)
+  }
   const runAction = (action: () => void) => {
     setActionError(null)
     action()
@@ -293,6 +325,7 @@ export function AdsWorkspace() {
               ads.selection.clear()
               clearManagementPreview()
               setCursorHistory([])
+              setSelectedRow(null)
               setApplied((current) => ({
                 ...current,
                 dimension,
@@ -331,6 +364,7 @@ export function AdsWorkspace() {
                   onToggle={ads.selection.toggleRow}
                   onSelectAll={ads.selection.selectAllMatching}
                   onOpen={setSelectedRow}
+                  onNavigate={navigateToChild}
                   nextCursor={ads.query.data?.next_cursor}
                   hasPrevious={cursorHistory.length > 0}
                   onNext={nextPage}

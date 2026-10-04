@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test"
-import { adsBoundary, BC_A, TENANT } from "./utils/adsBoundary"
+import { ADVERTISER, adsBoundary, BC_A, TENANT } from "./utils/adsBoundary"
 
 test.describe("ads workspace", () => {
   test("外部广告六维切换保留筛选", async ({ page }) => {
@@ -57,6 +57,51 @@ test.describe("ads workspace", () => {
     await expect(
       page.getByText("嘉书-总裁归来-测试", { exact: true }),
     ).toHaveCount(0)
+  })
+
+  test("按账户到素材逐级跳转并固定账户", async ({ page }) => {
+    await adsBoundary(page)
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+
+    const navigate = async (
+      buttonName: string,
+      dimension: string,
+      id: string,
+    ) => {
+      const request = page.waitForRequest((value) => {
+        const url = new URL(value.url())
+        return (
+          value.method() === "GET" &&
+          url.pathname.endsWith(`/tenants/${TENANT}/ads`) &&
+          url.searchParams.get("dimension") === dimension
+        )
+      })
+      await page
+        .locator("tbody tr")
+        .first()
+        .getByRole("button", { name: buttonName, exact: true })
+        .last()
+        .click()
+      const url = new URL((await request).url())
+      expect(url.searchParams.get("ids")).toBe(id)
+      expect(url.searchParams.get("advertiser_id")).toBe(ADVERTISER)
+      const labels: Record<string, string> = {
+        account: "账户",
+        campaign: "系列",
+        adgroup: "广告组",
+        ad: "广告",
+        material: "素材",
+      }
+      await expect(
+        page.getByRole("tab", { name: labels[dimension], exact: true }),
+      ).toHaveAttribute("data-state", "active")
+    }
+
+    await page.getByRole("tab", { name: "账户" }).click()
+    await navigate(ADVERTISER, "campaign", ADVERTISER)
+    await navigate("嘉书-总裁归来-测试", "adgroup", "campaign-1")
+    await navigate("嘉书-总裁归来-测试", "ad", "adgroup-1")
+    await navigate("嘉书-总裁归来-测试", "material", "ad-1")
   })
 
   test("相同筛选应用也清空选择", async ({ page }) => {

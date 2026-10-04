@@ -31,6 +31,19 @@ export const DIMENSIONS: Array<{ value: AdsDimension; label: string }> = [
   { value: "material", label: "素材" },
   { value: "drama", label: "剧" },
 ]
+const CHILD_DIMENSION_BY_COLUMN: Record<string, AdsDimension> = {
+  account_name: "campaign",
+  campaign_name: "adgroup",
+  adgroup_name: "ad",
+  ad_name: "material",
+}
+const ID_COLUMN_BY_DISPLAY_COLUMN: Record<string, string> = {
+  account_name: "account_id",
+  campaign_name: "campaign_id",
+  adgroup_name: "adgroup_id",
+  ad_name: "ad_id",
+  material_name: "main_material_id",
+}
 export function defaultAdsSearch(): AdsSearch {
   const today = new Date().toISOString().slice(0, 10)
   return {
@@ -88,6 +101,26 @@ export function rowDrama(row: ReportRow): string | null {
     return display.drama_name ?? display.drama ?? null
   const parts = rowName(row).split("-")
   return parts.length > 1 && parts[1].trim() ? parts[1].trim() : null
+}
+export function childDimensionForColumn(
+  columnKey: string,
+): AdsDimension | null {
+  return CHILD_DIMENSION_BY_COLUMN[columnKey] ?? null
+}
+export function rowHierarchyId(
+  row: ReportRow,
+  columnKey: string,
+): string | null {
+  const display = row.display ?? {}
+  const idKey = ID_COLUMN_BY_DISPLAY_COLUMN[columnKey]
+  if (idKey && display[idKey]) return display[idKey]
+  const expectedKind = idKey?.replace("_id", "")
+  const ref = row.refs?.find((item) => item.kind === expectedKind)
+  if (ref?.remote_id) return ref.remote_id
+  if (columnKey === "account_name") {
+    return display.account_id ?? row.refs?.[0]?.advertiser_id ?? null
+  }
+  return null
 }
 export function rowMetric(
   row: ReportRow,
