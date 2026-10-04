@@ -1,8 +1,11 @@
 """预算/竞价策略的离线请求合同回归。"""
 
 import pytest
+from pydantic import ValidationError
 
 from app.core.errors import DomainError
+from app.integrations.tiktok.contracts.builds import CampaignCreate
+from app.modules.builds.preview_schemas import frozen_bid_strategy
 from app.modules.builds.preview_validation import scene_reasons
 from app.modules.builds.request_compiler import compile_request, decode_intent
 from app.modules.builds.scene_schemas import SceneContext
@@ -89,6 +92,11 @@ def test_series_and_group_budget_are_emitted_at_their_own_layer():
     )
 
 
+def test_campaign_without_budget_strategy_or_budget_is_rejected():
+    with pytest.raises(ValidationError):
+        CampaignCreate(advertiser_id="adv", name="campaign")
+
+
 def test_bid_payloads_separate_highest_value_and_target_roas():
     highest = compile_request(
         "adgroup",
@@ -142,6 +150,27 @@ def test_readback_event_variants_map_to_the_same_highest_value_strategy(event):
     }
     intent = decode_intent("ADGROUP", body)
     assert intent.bid_strategy == "HIGHEST_VALUE"
+
+
+def test_legacy_preview_target_roas_freezes_target_bid_payload():
+    strategy = frozen_bid_strategy(
+        scene_snapshot={}, preview_config={}, target_roas="1.20"
+    )
+    assert strategy == "TARGET_ROAS"
+    body = compile_request(
+        "adgroup",
+        fixed={
+            "advertiser_id": "adv",
+            "campaign_id": "campaign",
+            "adgroup_name": "group",
+            "budget_strategy": "SERIES",
+            "bid_strategy": strategy,
+            "roas_bid": 1.2,
+        },
+        resolved={},
+    )
+    assert body["deep_bid_type"] == "VO_MIN_ROAS"
+    assert body["roas_bid"] == 1.2
 
 
 def test_unsupported_group_budget_is_a_preview_blocker():

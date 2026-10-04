@@ -93,7 +93,6 @@ class CampaignCreate(FrozenModel):
             values["budget_strategy"] = (
                 "ADGROUP"
                 if values.get("budget_mode") == "BUDGET_MODE_INFINITE"
-                or values.get("budget") is None
                 else "SERIES"
             )
         if values["budget_strategy"] == "ADGROUP":

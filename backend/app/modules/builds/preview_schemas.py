@@ -12,6 +12,25 @@ from .targeting_schemas import AudienceTargeting
 Readiness = Literal["READY", "PREPARING", "BLOCKED"]
 
 
+def frozen_bid_strategy(
+    *,
+    scene_snapshot: dict[str, Any],
+    preview_config: dict[str, Any],
+    target_roas: Decimal | None,
+) -> Literal["HIGHEST_VALUE", "TARGET_ROAS"]:
+    """Project old previews without inventing a new highest-value bid.
+
+    Older frozen previews predate ``bid_strategy`` but stored a non-null
+    ``target_roas``. Preserve that target-ROAS intent when reconstructing the
+    immutable execution input; only previews with no target value default to
+    highest value.
+    """
+    strategy = scene_snapshot.get("bid_strategy") or preview_config.get("bid_strategy")
+    if strategy in {"HIGHEST_VALUE", "TARGET_ROAS"}:
+        return strategy
+    return "TARGET_ROAS" if target_roas is not None else "HIGHEST_VALUE"
+
+
 class PreviewAccepted(BaseModel):
     preview_id: UUID
 

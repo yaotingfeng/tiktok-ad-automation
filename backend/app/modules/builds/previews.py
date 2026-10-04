@@ -59,6 +59,7 @@ from app.modules.builds.preview_schemas import (
     PreviewUnit,
     Readiness,
     SkippedMaterialPublic,
+    frozen_bid_strategy,
 )
 from app.modules.builds.preview_validation import measured, name_reasons, scene_reasons
 from app.modules.builds.route_views import execution_route_view
@@ -1153,8 +1154,10 @@ def load_frozen_unit(
         budget_strategy=unit.scene_snapshot.get(
             "budget_strategy", preview.config.get("budget_strategy", "SERIES")
         ),
-        bid_strategy=unit.scene_snapshot.get(
-            "bid_strategy", preview.config.get("bid_strategy", "HIGHEST_VALUE")
+        bid_strategy=frozen_bid_strategy(
+            scene_snapshot=unit.scene_snapshot,
+            preview_config=preview.config,
+            target_roas=preview.target_roas,
         ),
         readiness=cast(Readiness, unit.readiness),
         reason_codes=tuple(unit.reason_codes),

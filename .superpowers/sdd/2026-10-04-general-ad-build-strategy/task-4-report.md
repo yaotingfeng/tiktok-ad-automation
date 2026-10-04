@@ -1,7 +1,8 @@
 # Task 4 report — TikTok budget and bid contracts
 
 基线：`299cc6e`
-提交：`f5db89d`
+基础提交：`f5db89d`
+Fix round 1 提交：`16d02c9`
 
 ## 完成内容
 
@@ -12,6 +13,7 @@
   - 目标 ROAS 写入 `VO_MIN_ROAS` 和精确目标值。
 - 保留创建 wire、标准回读（`ACTIVE_PAY`）和 Smart+ 回读（`IMPRESSION_LEVEL_AD_REVENUE`）的独立 fixture/mapping；回读通过 `deep_bid_type` / `roas_bid` 归一化策略，未覆盖真实事件值。
 - 回读比对允许上述已知事件枚举差异，同时仍保留远端实际事件字段，不把未经证实的值改写成创建值。
+- 历史预览读取时，缺少新竞价字段会由非空 `target_roas` 推导为 `TARGET_ROAS`；无目标值才默认 `HIGHEST_VALUE`。Campaign 缺少显式组预算形态和日预算时不会误认成合法组预算。
 - 场景约束新增 Campaign/Ad Group 预算能力槽位和竞价能力快照。没有账户级组预算只读证据时预览返回 `adgroup_budget_unverified`，不会降级为系列预算。
 - 预览快照和 `FrozenUnit` 固定预算/竞价策略；执行编译只读冻结值，并在执行步骤的 `resolved` 审计字段保存从已发送 wire 推导的策略。
 - 新增离线合同回归 `tests/modules/builds/test_strategy_payloads.py`。
