@@ -74,6 +74,9 @@ def test_fixed_group_allocation_shared_and_average():
     assert tuple(len(group.material_ids) for group in shared) == (20, 20)
     assert tuple(len(group.material_ids) for group in average) == (10, 10)
     assert tuple(len(group.material_ids) for group in uneven) == (13, 12)
+    assert average[0].material_ids == tuple(UUID(int=i) for i in range(1, 11))
+    assert average[1].material_ids == tuple(UUID(int=i) for i in range(11, 21))
+    assert set(average[0].material_ids).isdisjoint(average[1].material_ids)
 
 
 def test_material_bounded_groups_split_in_order():
@@ -139,6 +142,27 @@ def test_material_bounded_ads(max_materials_per_ad, expected_ads):
     assert all(len(ad.material_ids) <= max_materials_per_ad for ad in group.ads)
 
 
+def test_ads_only_consume_their_group_materials():
+    groups = plan_structure(
+        materials(12),
+        config=base_config(
+            group_count=2,
+            group_material_allocation="SEQUENTIAL_AVERAGE",
+            ad_generation_mode="BY_MATERIAL",
+            ads_per_group=None,
+            ad_material_allocation=None,
+            max_materials_per_ad=2,
+        ),
+        pool=seed_copies(),
+        seed=7,
+    )
+
+    for group in groups:
+        group_materials = set(group.material_ids)
+        assert all(set(ad.material_ids) <= group_materials for ad in group.ads)
+        assert set().union(*(set(ad.material_ids) for ad in group.ads)) == group_materials
+
+
 def test_creative_count_copies_each_ad_material_set():
     group = plan_structure(
         materials(10),
@@ -155,15 +179,13 @@ def test_creative_count_copies_each_ad_material_set():
         seed=51,
     )[0]
 
-    assert len(group.ads) == 6
+    assert len(group.ads) == 2
     for base_ad_no in (1, 2):
         copies = [ad for ad in group.ads if ad.base_ad_no == base_ad_no]
-        assert len(copies) == 3
-        assert {ad.material_ids for ad in copies} == {
-            tuple(UUID(int=i) for i in range(1, 11))
-        }
-        assert len({ad.copies[0].text for ad in copies}) == 3
-        assert all(len(ad.copies) == 1 for ad in copies)
+        assert len(copies) == 1
+        assert copies[0].material_ids == tuple(UUID(int=i) for i in range(1, 11))
+        assert len(copies[0].copies) == 3
+        assert len({copy.text for copy in copies[0].copies}) == 3
 
 
 def test_material_ids_are_deduplicated_but_same_name_ids_remain_distinct():
@@ -186,6 +208,28 @@ def test_material_ids_are_deduplicated_but_same_name_ids_remain_distinct():
     )[0]
 
     assert group.material_ids == (UUID(int=1), UUID(int=2), UUID(int=3))
+
+
+def test_duplicate_ids_use_sorted_material_record_regardless_of_input_order():
+    items = [
+        SimpleNamespace(material_id=UUID(int=2), file_name="Beta.mp4"),
+        SimpleNamespace(material_id=UUID(int=1), file_name="Zeta.mp4"),
+        SimpleNamespace(material_id=UUID(int=1), file_name="Alpha.mp4"),
+    ]
+    config = base_config(
+        group_count=1,
+        group_material_allocation="SHARED",
+        ad_generation_mode="FIXED",
+        ads_per_group=1,
+        max_materials_per_ad=None,
+        ad_material_allocation="SHARED",
+    )
+
+    first = plan_structure(items, config=config, pool=seed_copies(), seed=1)
+    second = plan_structure(list(reversed(items)), config=config, pool=seed_copies(), seed=1)
+
+    assert first == second
+    assert first[0].material_ids == (UUID(int=1), UUID(int=2))
 
 
 @pytest.mark.parametrize(

@@ -40,11 +40,14 @@ class GroupPlan:
 
 def _stable_material_ids(materials: Iterable[NamedMaterial]) -> tuple[UUID, ...]:
     """按历史文件名/ID顺序去重，避免输入顺序和重复行影响计划。"""
-    unique = {item.material_id: item for item in materials}
-    ordered = sorted(
-        unique.values(), key=lambda item: (item.file_name, item.material_id)
-    )
-    return tuple(item.material_id for item in ordered)
+    ordered = sorted(materials, key=lambda item: (item.file_name, item.material_id))
+    seen: set[UUID] = set()
+    result: list[UUID] = []
+    for item in ordered:
+        if item.material_id not in seen:
+            seen.add(item.material_id)
+            result.append(item.material_id)
+    return tuple(result)
 
 
 def _average_slices(
@@ -152,11 +155,9 @@ def plan_structure(
         ad_material_sets = _allocate_ads(group_ids, config)
         ads: list[AdMaterialPlan] = []
         for base_ad_no, ad_ids in enumerate(ad_material_sets, start=1):
-            # 先为基础广告抽样，再将每条文案展开为独立广告；展开不重新分配素材。
+            # 基础广告先固定素材集合和文案池抽样；后续执行阶段再按 creative_no 展开。
             selected = tuple(rng.sample(copies, config.creative_count))
-            ads.extend(
-                AdMaterialPlan(base_ad_no, ad_ids, (copy,)) for copy in selected
-            )
+            ads.append(AdMaterialPlan(base_ad_no, ad_ids, selected))
         groups.append(GroupPlan(group_no, group_ids, tuple(ads)))
 
     return tuple(groups)

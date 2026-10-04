@@ -33,4 +33,5 @@ def test_structure_replay_is_stable_for_sorted_materials_and_copies():
 
     assert first == second
     assert [len(group.material_ids) for group in first] == [10, 10, 3]
-    assert [len(group.ads) for group in first] == [3, 3, 3]
+    assert [len(group.ads) for group in first] == [1, 1, 1]
+    assert all(len(group.ads[0].copies) == 3 for group in first)
