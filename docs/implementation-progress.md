@@ -1607,3 +1607,10 @@
 
 - 发现并修复刚刚好剧目搜索未携带当前 `authorizerAppId`、创建后远端回读未还原核验配置，以及容量按批次回读未读取完整链接记录的问题；补充三条新来源从搜索到创建、回读并进入 `ready` 的 durable workflow 回归。
 - 复审后 provider 全量回归 300 项通过；专项 workflow 3 项、前端构建、Providers Playwright 22 项、三个 CLI 语法检查、Ruff、compileall、迁移 head 和差异检查均通过。仍未调用真实版权方或 TikTok 写接口，真实账号联调仍是上线前必要步骤。
+
+## 2026-10-04：测试环境官方 TikTok API 应用配置
+
+- 在新加坡 staging 私有配置 `/etc/tt-ada-staging/app.env` 写入用户提供的官方 App ID/Secret、测试站点 API 回调及官方授权入口；未改变 MCP 注册、调用额度、数据库/Redis 或其他开关。Secret 未写入 Git、日志或验收文档。
+- 修改前完整备份 `/var/backups/tt-ada-staging/20261004T032437Z/` 完成 PostgreSQL、Redis、私有配置/证书、项目及运行时配置归档；SHA256 校验和与隔离解压恢复抽查通过。
+- API、资源/结果/构建/控制、广告目录/报表/管理 Worker 和 Beat 共九个服务已重载并通过实际环境一致性检查；Celery 7 节点 ping、健康/登录/租户隔离、OFFICIAL_API/MCP configuration、回调边界和官方授权入口 HTTP 200 均通过。
+- 验收记录见 `docs/validation/2026-10-04-staging-tiktok-api-app.md`。真实 OAuth 同意、BC 绑定、账户发现、素材及广告接口仍需用户授权后单独验收；本轮未调用 TikTok 写接口。
