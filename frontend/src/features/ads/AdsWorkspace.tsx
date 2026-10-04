@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
@@ -16,7 +16,6 @@ import { AdsDetails } from "./AdsDetails"
 import { AdsFilters } from "./AdsFilters"
 import { AdsSummary } from "./AdsSummary"
 import { AdsTable } from "./AdsTable"
-import { AdsTrend } from "./AdsTrend"
 import { BulkActionBar } from "./BulkActionBar"
 import { ReportCoverageNotice } from "./ReportCoverageNotice"
 import {
@@ -63,7 +62,13 @@ export function AdsWorkspace() {
         await AdsReportingService.requestAdSync({
           path: { tenant_id: tenantId! },
           query: { bc_id: bc!.bc_id },
-          body: { advertiser_ids: advertiserIds, scope: "report", refs },
+          body: {
+            advertiser_ids: advertiserIds,
+            scope: "report",
+            start_date: applied.start_date,
+            end_date: applied.end_date,
+            refs,
+          },
         })
       ).data
     },
@@ -118,33 +123,6 @@ export function AdsWorkspace() {
       setFrozenSelection(selection)
       setPreviewOpen(true)
     },
-  })
-  const trend = useQuery({
-    queryKey: [
-      "tenant",
-      tenantId,
-      "ads",
-      bc?.bc_id,
-      "trend",
-      ads.snapshot?.snapshot_id,
-      applied,
-    ],
-    enabled: !!tenantId && !!bc && !!ads.snapshot,
-    queryFn: async ({ signal }) =>
-      (
-        await AdsReportingService.reportTrend({
-          path: { tenant_id: tenantId! },
-          query: {
-            bc_id: bc!.bc_id,
-            dimension: applied.dimension,
-            start_date: applied.start_date,
-            end_date: applied.end_date,
-            query: applied.query || undefined,
-            snapshot_id: ads.snapshot!.snapshot_id,
-          },
-          signal,
-        })
-      ).data,
   })
   useEffect(() => {
     if (!bc && tenantId && bcDirectory?.items[0]?.bc_id) {
@@ -291,17 +269,23 @@ export function AdsWorkspace() {
           最新同步：{String(latest)}
         </p>
       )}
-      <ReportCoverageNotice coverage={ads.query.data?.coverage} />
-      <AdsSummary summary={ads.query.data?.summary} rows={items} />
-      <AdsTrend trend={trend.data} />
       <Card>
-        <CardContent className="space-y-4 p-4">
+        <CardContent className="p-4">
           <AdsFilters
             search={search}
             onChange={update}
             onApply={apply}
             onReset={reset}
           />
+        </CardContent>
+      </Card>
+      <ReportCoverageNotice coverage={ads.query.data?.coverage} />
+      <AdsSummary summary={ads.query.data?.summary} />
+      {ads.query.isFetching && (
+        <p className="text-xs text-muted-foreground">正在加载当前报表…</p>
+      )}
+      <Card>
+        <CardContent className="space-y-4 p-4">
           <Tabs
             value={applied.dimension}
             onValueChange={(value) => {
@@ -340,6 +324,7 @@ export function AdsWorkspace() {
               >
                 <AdsTable
                   rows={items}
+                  dimension={dimension.value}
                   selected={ads.selection.selected}
                   allMatching={ads.selection.allMatching}
                   total={ads.query.data?.total ?? 0}

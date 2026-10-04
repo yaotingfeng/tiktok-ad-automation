@@ -1,6 +1,5 @@
-import type { ReportRow } from "@/client"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { formatMetric, rowTargetRoas } from "./search"
+import { formatMetric } from "./search"
 
 type SummaryBucket = {
   currency?: string
@@ -39,26 +38,46 @@ function displayValue(value: string | number | null | undefined) {
   return value === "多个" || value === "多口径" ? value : formatMetric(value)
 }
 
-export function AdsSummary({
-  summary,
-  rows = [],
-}: {
-  summary?: Record<string, unknown>
-  rows?: ReportRow[]
-}) {
+function ratioValue(
+  summary: AdsSummaryData | undefined,
+  numerator: string,
+  denominator: string,
+) {
+  const top = metricValue(summary, numerator)
+  const bottom = metricValue(summary, denominator)
+  if (
+    top === "多个" ||
+    top === "多口径" ||
+    bottom === "多个" ||
+    bottom === "多口径"
+  )
+    return "多口径"
+  const numeratorValue = Number(top)
+  const denominatorValue = Number(bottom)
+  if (
+    !Number.isFinite(numeratorValue) ||
+    !Number.isFinite(denominatorValue) ||
+    denominatorValue === 0
+  )
+    return null
+  return numeratorValue / denominatorValue
+}
+
+function percentValue(value: string | number | null | undefined) {
+  if (value === "多个" || value === "多口径") return value
+  const number = Number(value)
+  return Number.isFinite(number) ? `${(number * 100).toFixed(2)}%` : "—"
+}
+
+export function AdsSummary({ summary }: { summary?: Record<string, unknown> }) {
   const data = summary as AdsSummaryData | undefined
-  const d0 = metricValue(data, "d0_roas") ?? metricValue(data, "actual_d0_roas")
-  const targets = rows
-    .map(rowTargetRoas)
-    .filter((value): value is string => value !== null)
-  const target =
-    targets.length === 0
-      ? rows.length > 0
-        ? "目录未同步"
-        : null
-      : targets.every((value) => value === targets[0])
-        ? targets[0]
-        : "多个"
+  const revenue = metricValue(data, "native_growth_total_ad_impression_value")
+  const revenueRoas = ratioValue(
+    data,
+    "native_growth_total_ad_impression_value",
+    "spend",
+  )
+  const ctr = ratioValue(data, "clicks", "impressions")
   return (
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <Card>
@@ -74,33 +93,31 @@ export function AdsSummary({
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-medium text-muted-foreground">
-            D0 收入
+            广告收入
           </CardTitle>
         </CardHeader>
         <CardContent className="text-xl font-semibold">
-          {displayValue(metricValue(data, "native_growth_ad_revenue_value_d0"))}
+          {displayValue(revenue)}
         </CardContent>
       </Card>
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-medium text-muted-foreground">
-            实际 D0 ROAS
+            广告收益 ROAS
           </CardTitle>
         </CardHeader>
         <CardContent className="text-xl font-semibold">
-          {displayValue(d0)}
+          {displayValue(revenueRoas)}
         </CardContent>
       </Card>
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-medium text-muted-foreground">
-            目标 ROAS
+            点击率
           </CardTitle>
         </CardHeader>
         <CardContent className="text-xl font-semibold">
-          {target === "多个" || target === "多口径" || target === "目录未同步"
-            ? target
-            : formatMetric(target)}
+          {percentValue(ctr)}
         </CardContent>
       </Card>
     </div>

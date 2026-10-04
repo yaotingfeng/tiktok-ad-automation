@@ -12,15 +12,55 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import {
-  availabilityLabel,
+  type AdsDimension,
   officialPlatformUrl,
-  rowDrama,
-  rowMetric,
+  rowBudget,
   rowName,
+  rowOptimizationGoal,
   targetRoasLabel,
 } from "./search"
+
+type DisplayColumn = { key: string; label: string }
+
+function displayColumns(dimension: AdsDimension): DisplayColumn[] {
+  switch (dimension) {
+    case "account":
+      return [{ key: "account_name", label: "账户" }]
+    case "campaign":
+      return [
+        { key: "account_name", label: "账户" },
+        { key: "campaign_name", label: "系列" },
+      ]
+    case "adgroup":
+      return [
+        { key: "account_name", label: "账户" },
+        { key: "campaign_name", label: "系列" },
+        { key: "adgroup_name", label: "广告组" },
+      ]
+    case "ad":
+      return [
+        { key: "account_name", label: "账户" },
+        { key: "campaign_name", label: "系列" },
+        { key: "adgroup_name", label: "广告组" },
+        { key: "ad_name", label: "广告" },
+      ]
+    case "material":
+      return [{ key: "material_name", label: "素材" }]
+    case "drama":
+      return [{ key: "drama_name", label: "剧" }]
+  }
+}
+
+function displayText(row: ReportRow, key: string) {
+  return (
+    row.display?.[key] ??
+    (key === "drama_name" ? row.display?.name : null) ??
+    "—"
+  )
+}
 export function AdsTable({
   rows,
+  dimension,
   selected,
   allMatching,
   total,
@@ -33,6 +73,7 @@ export function AdsTable({
   onPrevious,
 }: {
   rows: ReportRow[]
+  dimension: AdsDimension
   selected: Set<string>
   allMatching: boolean
   total: number
@@ -44,6 +85,7 @@ export function AdsTable({
   onNext: () => void
   onPrevious: () => void
 }) {
+  const columns = displayColumns(dimension)
   const currentAll =
     rows.length > 0 && rows.every((row) => selected.has(row.row_key))
   return (
@@ -66,20 +108,35 @@ export function AdsTable({
                   aria-label="选择全部匹配结果"
                 />
               </TableHead>
-              <TableHead>名称</TableHead>
-              <TableHead>剧</TableHead>
+              {columns.map((column, index) => (
+                <TableHead
+                  key={column.key}
+                  className={
+                    index === 0
+                      ? "sticky left-12 z-10 bg-background"
+                      : undefined
+                  }
+                >
+                  {column.label}
+                </TableHead>
+              ))}
               <TableHead>状态</TableHead>
-              <TableHead>消耗</TableHead>
-              <TableHead>D0 ROAS</TableHead>
-              <TableHead>目标 ROAS</TableHead>
-              <TableHead>来源</TableHead>
+              {(dimension === "campaign" || dimension === "adgroup") && (
+                <TableHead>
+                  {dimension === "campaign" ? "系列预算" : "广告组预算"}
+                </TableHead>
+              )}
+              {(dimension === "campaign" ||
+                dimension === "adgroup" ||
+                dimension === "ad") && <TableHead>目标 ROAS</TableHead>}
+              {(dimension === "campaign" ||
+                dimension === "adgroup" ||
+                dimension === "ad") && <TableHead>优化目标</TableHead>}
               <TableHead>详情</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {rows.map((row) => {
-              const d0 = rowMetric(row, "d0_roas")
-              const spend = rowMetric(row, "spend")
               const url = officialPlatformUrl(row)
               return (
                 <TableRow key={row.row_key}>
@@ -92,36 +149,52 @@ export function AdsTable({
                       aria-label={`选择 ${rowName(row)}`}
                     />
                   </TableCell>
-                  <TableCell>
-                    <button
-                      type="button"
-                      className="max-w-72 text-left font-medium hover:underline"
-                      onClick={() => onOpen(row)}
+                  {columns.map((column, index) => (
+                    <TableCell
+                      key={column.key}
+                      className={`max-w-64 text-xs ${index === 0 ? "sticky left-12 z-10 bg-background" : ""}`}
                     >
-                      {rowName(row)}
-                    </button>
-                    <div className="font-mono text-xs text-muted-foreground">
-                      {row.row_key}
-                    </div>
-                  </TableCell>
-                  <TableCell>{rowDrama(row) ?? "命名不规范"}</TableCell>
+                      {index === columns.length - 1 ? (
+                        <button
+                          type="button"
+                          className="max-w-64 text-left font-medium hover:underline"
+                          onClick={() => onOpen(row)}
+                        >
+                          {displayText(row, column.key) === "—"
+                            ? rowName(row)
+                            : displayText(row, column.key)}
+                        </button>
+                      ) : (
+                        displayText(row, column.key)
+                      )}
+                    </TableCell>
+                  ))}
                   <TableCell>
-                    <Badge variant="outline">
+                    <Badge variant="outline" className="text-[10px]">
                       {row.display?.status ??
                         row.display?.operation_status ??
                         "未知"}
                     </Badge>
                   </TableCell>
-                  <TableCell>
-                    {availabilityLabel(spend.availability, spend.value)}
-                  </TableCell>
-                  <TableCell>
-                    {availabilityLabel(d0.availability, d0.value)}
-                  </TableCell>
-                  <TableCell>{targetRoasLabel(row)}</TableCell>
-                  <TableCell>
-                    {row.display?.local_material_id ? "TK-ADA" : "外部广告"}
-                  </TableCell>
+                  {(dimension === "campaign" || dimension === "adgroup") && (
+                    <TableCell className="text-xs">
+                      {rowBudget(row, dimension) ?? "—"}
+                    </TableCell>
+                  )}
+                  {(dimension === "campaign" ||
+                    dimension === "adgroup" ||
+                    dimension === "ad") && (
+                    <TableCell className="text-xs">
+                      {targetRoasLabel(row)}
+                    </TableCell>
+                  )}
+                  {(dimension === "campaign" ||
+                    dimension === "adgroup" ||
+                    dimension === "ad") && (
+                    <TableCell className="text-xs">
+                      {rowOptimizationGoal(row) ?? "—"}
+                    </TableCell>
+                  )}
                   <TableCell>
                     {url ? (
                       <a
@@ -147,7 +220,7 @@ export function AdsTable({
           </p>
         )}
         <div className="flex flex-wrap items-center justify-between gap-2 border-t px-4 py-3 text-sm text-muted-foreground">
-          <span>共 {total} 条</span>
+          <span className="text-xs">共 {total} 条</span>
           <div className="flex items-center gap-2">
             <Button
               type="button"

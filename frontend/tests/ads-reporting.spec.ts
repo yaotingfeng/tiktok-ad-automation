@@ -52,8 +52,6 @@ test("详情沿用快照并读取 operation 状态", async ({ page }) => {
 test("混币种桶不静默合并", async ({ page }) => {
   await adsBoundary(page, { mixedBuckets: true })
   await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
-  await expect(
-    page.getByText("覆盖不完整", { exact: true }).first(),
-  ).toBeVisible()
-  await expect(page.getByText("多口径", { exact: true })).toHaveCount(3)
+  await expect(page.getByText(/报表覆盖不完整/)).toBeVisible()
+  await expect(page.getByText("多口径", { exact: true })).toHaveCount(4)
 })

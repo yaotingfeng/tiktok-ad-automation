@@ -21,16 +21,6 @@ export function AdsFilters({
         onApply()
       }}
     >
-      <div className="min-w-56 flex-1 space-y-1.5">
-        <Label htmlFor="ads-search">搜索广告</Label>
-        <Input
-          id="ads-search"
-          aria-label="搜索广告"
-          value={search.query ?? ""}
-          onChange={(event) => onChange({ query: event.target.value })}
-          placeholder="名称、剧名、版权方或 ID（多关键词 AND）"
-        />
-      </div>
       <div className="space-y-1.5">
         <Label htmlFor="ads-start">开始日期</Label>
         <Input
@@ -47,6 +37,16 @@ export function AdsFilters({
           type="date"
           value={search.end_date}
           onChange={(event) => onChange({ end_date: event.target.value })}
+        />
+      </div>
+      <div className="min-w-56 flex-1 space-y-1.5">
+        <Label htmlFor="ads-search">搜索广告</Label>
+        <Input
+          id="ads-search"
+          aria-label="搜索广告"
+          value={search.query ?? ""}
+          onChange={(event) => onChange({ query: event.target.value })}
+          placeholder="名称、剧名、版权方或 ID（多关键词 AND）"
         />
       </div>
       <Button type="submit" aria-label="应用筛选">

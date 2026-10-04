@@ -15,15 +15,16 @@ test.describe("ads workspace", () => {
     await expect(
       page.getByRole("cell", { name: "总裁归来", exact: true }),
     ).toBeVisible()
+    await expect(page.getByText("广告收益 ROAS", { exact: true })).toBeVisible()
     await expect(
       page.getByRole("cell", { name: "1.20", exact: true }),
-    ).toBeVisible()
+    ).toHaveCount(0)
     await expect(
       page.getByRole("cell", { name: "外部广告", exact: true }),
-    ).toBeVisible()
+    ).toHaveCount(0)
     await expect(
       page.getByRole("cell", { name: "目录未同步", exact: true }),
-    ).toBeVisible()
+    ).toHaveCount(0)
   })
 
   test("切BC忽略迟到响应", async ({ page }) => {

@@ -20,6 +20,10 @@ export function useAdsQuery(search: AdsSearch, queryRevision = 0) {
   const query = useQuery<AdsQueryPage>({
     queryKey,
     enabled: !!tenantId && !!bcId,
+    placeholderData: (previous) => previous,
+    staleTime: 15_000,
+    gcTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
     queryFn: async ({ signal }) =>
       (
         await AdsReportingService.queryAds({

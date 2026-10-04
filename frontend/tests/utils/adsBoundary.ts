@@ -157,7 +157,7 @@ export async function adsBoundary(
               ],
               capabilities: { can_manage: true },
               coverage: {
-                status: "COMPLETE",
+                status: options.mixedBuckets ? "INCOMPLETE" : "COMPLETE",
                 latest_sync_at: "2026-10-01T00:00:00Z",
               },
             },
@@ -203,7 +203,7 @@ export async function adsBoundary(
             ],
           },
           coverage: {
-            status: "COMPLETE",
+            status: options.mixedBuckets ? "INCOMPLETE" : "COMPLETE",
             latest_sync_at: "2026-10-01T00:00:00Z",
           },
           next_cursor: options.paged && !secondPage ? "cursor-1" : null,

@@ -27,6 +27,8 @@ from app.modules.reporting.schemas import (
 )
 
 D0 = "native_growth_ad_revenue_value_d0"
+TOTAL_REVENUE = "native_growth_total_ad_impression_value"
+DERIVED_METRICS = frozenset({"d0_roas", "ad_revenue_roas", "ctr"})
 CONTRACTS = {
     "account": ("basic_account",), "campaign": ("basic_campaign",),
     "drama": ("basic_campaign",), "adgroup": ("basic_adgroup",),
@@ -55,7 +57,7 @@ def period(filters: ReportingFilter, timezone: str) -> tuple[datetime, datetime]
 
 def bucket_key(vector: MetricVector) -> tuple[Any, ...]:
     return (vector.currency, vector.timezone, vector.attribution,
-            tuple(sorted((name, state) for name, state in vector.availability.items() if name != "d0_roas")))
+            tuple(sorted((name, state) for name, state in vector.availability.items() if name not in DERIVED_METRICS)))
 
 
 def aggregate_metrics(rows: Sequence[MetricVector]) -> MetricVector:
@@ -65,8 +67,11 @@ def aggregate_metrics(rows: Sequence[MetricVector]) -> MetricVector:
     if any(bucket_key(row) != bucket_key(rows[0]) for row in rows[1:]):
         raise ValueError("incompatible coordinates or availability buckets")
     values: dict[str, Decimal | None] = {}
-    states = dict(rows[0].availability)
-    states.pop("d0_roas", None)
+    states = {
+        name: state
+        for name, state in rows[0].availability.items()
+        if name not in DERIVED_METRICS
+    }
     for name, state in states.items():
         amounts = [row.values.get(name) for row in rows]
         if state == "AVAILABLE" and all(value is not None for value in amounts):
@@ -77,16 +82,30 @@ def aggregate_metrics(rows: Sequence[MetricVector]) -> MetricVector:
             values[name] = None
             if state == "AVAILABLE":
                 states[name] = "MISSING"
-    spend, revenue = values.get("spend"), values.get(D0)
-    values["d0_roas"] = revenue / spend if spend and revenue is not None else None
-    if values["d0_roas"] is not None:
-        states["d0_roas"] = "AVAILABLE"
-    else:
-        unavailable = {states.get("spend"), states.get(D0)}
-        states["d0_roas"] = next(
-            (state for state in ("FAILED", "UNSUPPORTED", "UNAVAILABLE", "MISSING") if state in unavailable),
-            "MISSING",
+    for derived, numerator, denominator in (
+        ("d0_roas", D0, "spend"),
+        ("ad_revenue_roas", TOTAL_REVENUE, "spend"),
+        ("ctr", "clicks", "impressions"),
+    ):
+        numerator_value = values.get(numerator)
+        denominator_value = values.get(denominator)
+        values[derived] = (
+            numerator_value / denominator_value
+            if numerator_value is not None and denominator_value
+            else None
         )
+        if values[derived] is not None:
+            states[derived] = "AVAILABLE"
+        else:
+            unavailable = {states.get(numerator), states.get(denominator)}
+            states[derived] = next(
+                (
+                    state
+                    for state in ("FAILED", "UNSUPPORTED", "UNAVAILABLE", "MISSING")
+                    if state in unavailable
+                ),
+                "MISSING",
+            )
     return MetricVector(currency=rows[0].currency, timezone=rows[0].timezone,
                         attribution=rows[0].attribution, values=values, availability=states)
 
@@ -221,6 +240,108 @@ def _number(value: Any) -> Decimal | None:
         return None
 
 
+def _text_number(value: Any) -> str | None:
+    number = _number(value)
+    return format(number, "f") if number is not None else None
+
+
+def _config_display(entity: AdObject | None) -> dict[str, str | None]:
+    """把目录配置转成报表可读字段，避免把原始 JSON 直接暴露到表格。"""
+    if entity is None:
+        return {}
+    config = entity.configuration or {}
+    target = _text_number(config.get("roas_bid") or config.get("target_roas"))
+    budget = _text_number(
+        config.get("budget")
+        or config.get("daily_budget")
+        or config.get("campaign_daily_budget")
+    )
+    return {
+        "target_roas": target,
+        "budget": budget,
+        "budget_mode": str(config.get("budget_mode")) if config.get("budget_mode") else None,
+        "optimization_goal": (
+            str(config.get("optimization_goal"))
+            if config.get("optimization_goal")
+            else None
+        ),
+    }
+
+
+def _entity_name(
+    objects: dict[tuple[str, str, str], AdObject],
+    advertiser_id: str,
+    kind: str,
+    remote_id: str | None,
+) -> str | None:
+    if not remote_id:
+        return None
+    entity = objects.get((advertiser_id, kind, remote_id))
+    return entity.name or remote_id if entity else remote_id
+
+
+def _hierarchy_display(
+    *,
+    accounts: dict[str, AdvertiserAccount],
+    objects: dict[tuple[str, str, str], AdObject],
+    advertiser_id: str,
+    kind: str,
+    remote_id: str,
+    entity: AdObject | None,
+) -> dict[str, str | None]:
+    """按当前维度只返回需要的固定层级列，父级缺失时保留 ID 线索。"""
+    account = accounts.get(advertiser_id)
+    display: dict[str, str | None] = {
+        "account_id": advertiser_id,
+        "account_name": account.name or advertiser_id if account else advertiser_id,
+    }
+    if kind == "account":
+        return display
+    campaign_id: str | None = remote_id if kind == "campaign" else None
+    adgroup_id: str | None = remote_id if kind == "adgroup" else None
+    current = entity
+    if current is not None:
+        if current.kind == "adgroup":
+            campaign_id = current.parent_remote_id
+        elif current.kind == "ad":
+            adgroup_id = current.parent_remote_id
+            parent = objects.get((advertiser_id, "adgroup", adgroup_id or ""))
+            campaign_id = parent.parent_remote_id if parent else None
+    if kind == "campaign":
+        display["campaign_id"] = remote_id
+        display["campaign_name"] = entity.name or remote_id if entity else remote_id
+    elif kind == "adgroup":
+        display.update(
+            {
+                "campaign_id": campaign_id,
+                "campaign_name": _entity_name(objects, advertiser_id, "campaign", campaign_id),
+                "adgroup_id": remote_id,
+                "adgroup_name": entity.name or remote_id if entity else remote_id,
+            }
+        )
+    elif kind == "ad":
+        display.update(
+            {
+                "campaign_id": campaign_id,
+                "campaign_name": _entity_name(objects, advertiser_id, "campaign", campaign_id),
+                "adgroup_id": adgroup_id,
+                "adgroup_name": _entity_name(objects, advertiser_id, "adgroup", adgroup_id),
+                "ad_id": remote_id,
+                "ad_name": entity.name or remote_id if entity else remote_id,
+            }
+        )
+    config = _config_display(entity)
+    if config.get("target_roas"):
+        display["target_roas"] = config["target_roas"]
+    if config.get("optimization_goal"):
+        display["optimization_goal"] = config["optimization_goal"]
+    if kind == "campaign" and config.get("budget"):
+        display["campaign_budget"] = config["budget"]
+    if kind == "adgroup" and config.get("budget"):
+        display["adgroup_budget"] = config["budget"]
+    return display
+
+
 def _entity_matches(entity: AdObject | None, projection: CampaignNameProjection | None,
                     filters: ReportingFilter, timezone: str) -> bool:
     for allowed, value in ((filters.ad_types, entity.ad_type if entity else None),
@@ -328,21 +449,43 @@ def build_dimension_rows(session: Session, *, context: TenantContext, bc_id: str
     identities.update((adv, rid) for adv, obj_kind, rid in objects if obj_kind == kind)
     if kind == "account":
         identities.update((adv, adv) for adv in accounts)
+    facts_by_identity: dict[tuple[str, str, str], list[ReportFact]] = defaultdict(list)
+    for fact in facts:
+        if len(fact.subject_key) >= 2:
+            facts_by_identity[(fact.advertiser_id, fact.subject_key[0], fact.subject_key[1])].append(fact)
     grouped: dict[str, list[ReportRow]] = defaultdict(list)
     for adv, rid in sorted(identities):
         entity = objects.get((adv, kind, rid))
         projection = projections.get((adv, rid)) if kind == "campaign" else None
         if not _entity_matches(entity, projection, filters, accounts[adv].timezone):
             continue
-        items = [f for f in facts if f.advertiser_id == adv and f.subject_key == [kind, rid]]
+        items = facts_by_identity.get((adv, kind, rid), [])
         key = drama_key(bc_id, adv, rid, projection) if filters.dimension == "drama" else f"{adv}:{kind}:{rid}"
         refs: tuple[EntityRef, ...] = () if kind == "account" else (EntityRef(context.tenant_id, adv, cast(Any, kind), rid),)
         name = (projection.drama_name if projection and projection.status == "VALID" else rid) if filters.dimension == "drama" else entity.name if entity else rid
+        display = (
+            {"name": name, "drama_name": name, "provider": projection.provider_label if projection else None}
+            if filters.dimension == "drama"
+            else _hierarchy_display(
+                accounts=accounts,
+                objects=objects,
+                advertiser_id=adv,
+                kind=kind,
+                remote_id=rid,
+                entity=entity,
+            )
+        )
+        display.update({
+            "name": name,
+            "remote_id": rid,
+            "provider": projection.provider_label if projection else None,
+            "naming_status": projection.status if projection else "INVALID",
+            "ad_type": entity.ad_type if entity else None,
+            "operation_status": entity.operation_status if entity else None,
+            "review_status": entity.review_status if entity else None,
+        })
         row = ReportRow(row_key=key, refs=refs,
-            display={"name": name, "remote_id": rid, "provider": projection.provider_label if projection else None,
-                     "naming_status": projection.status if projection else "INVALID",
-                     "ad_type": entity.ad_type if entity else None, "operation_status": entity.operation_status if entity else None,
-                     "review_status": entity.review_status if entity else None},
+            display=display,
             metric_buckets=_aggregate_fact_vectors(items),
             coverage=_row_coverage(items, coverages, adv, rid, filters),
             directory_versions={f"{adv}:{rid}": entity.published_version} if entity else {})
@@ -425,8 +568,9 @@ def _build_material_rows(facts: Sequence[ReportFact], materials: Sequence[AdMate
                 "availability": dict.fromkeys(v.availability, "UNSUPPORTED")
             }) for v in vectors)
         status = "COMPLETE" if proven else ("INCOMPLETE" if candidates_by_item else "UNSUPPORTED")
+        material_name = next(iter(candidates_by_id.values())).name if proven else main_id
         row = ReportRow(row_key=json.dumps([adv, "material", dimension, grouping, main_id, main_type]),
-                        display={"name": next(iter(candidates_by_id.values())).name if proven else main_id, "main_material_id": main_id,
+                        display={"name": material_name, "material_name": material_name, "main_material_id": main_id,
                                  "grouping_id": grouping, "material_type": main_type},
                         refs=tuple(item.use_ref.ad_ref for item in candidates_by_id.values()) if proven else (),
                         material_uses=tuple(item.use_ref for item in candidates_by_id.values()) if proven else (),

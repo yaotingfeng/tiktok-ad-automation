@@ -27,6 +27,8 @@ CANONICAL_METRIC_KEYS = frozenset(
         "clicks",
         # Derived only after canonical A buckets are aggregated.
         "d0_roas",
+        "ad_revenue_roas",
+        "ctr",
     }
 )
 

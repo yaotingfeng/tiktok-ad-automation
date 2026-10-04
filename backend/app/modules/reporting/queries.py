@@ -210,7 +210,14 @@ def _new_snapshot(
         total=len(rows),
         summary=_summary(rows),
         coverage={
-            "status": "EMPTY" if not rows else ("COMPLETE" if all(status == "COMPLETE" for status in statuses) else "INCOMPLETE"),
+            "status": "EMPTY"
+            if not rows
+            else (
+                "COMPLETE"
+                if all(status in {"COMPLETE", "COMPLETE_EMPTY"} for status in statuses)
+                and all(len(row.metric_buckets) <= 1 for row in rows)
+                else "INCOMPLETE"
+            ),
             "rows": len(rows),
         },
     )
@@ -320,12 +327,9 @@ def _build_snapshot(
             )
         rows = tuple(frozen_rows)
     snapshot = _new_snapshot(session, context=context, bc_id=bc_id, filters=filters, rows=rows)
-    try:
-        snapshot.trends = build_trend(
-            session, context=context, bc_id=bc_id, filters=filters, grain="day"
-        ).model_dump(mode="json")
-    except (ValueError, RuntimeError):
-        snapshot.trends = TrendPublic(coverage={"status": "UNAVAILABLE"}).model_dump(mode="json")
+    # 趋势已从报表页移除。快照只保存列表和汇总，避免首次打开页面重复扫描
+    # 全量事实；保留按需端点供旧客户端读取。
+    snapshot.trends = {}
     session.flush()
     return snapshot
 
@@ -403,4 +407,11 @@ def snapshot_trend(
         raise HTTPException(404, detail="query_snapshot_not_found")
     if snapshot.filter_digest != filter_digest(filters):
         raise HTTPException(409, detail="query_snapshot_filter_mismatch")
-    return TrendPublic.model_validate(snapshot.trends or {"coverage": {"status": "EMPTY"}})
+    if snapshot.trends:
+        return TrendPublic.model_validate(snapshot.trends)
+    try:
+        return build_trend(
+            session, context=context, bc_id=bc_id, filters=filters, grain="day"
+        )
+    except (ValueError, RuntimeError):
+        return TrendPublic(coverage={"status": "UNAVAILABLE"})

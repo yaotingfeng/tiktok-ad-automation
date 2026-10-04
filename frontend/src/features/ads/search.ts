@@ -111,9 +111,24 @@ export function rowMetric(
 }
 export function rowTargetRoas(row: ReportRow): string | null {
   const display = row.display ?? {}
-  // B3 currently does not publish target_roas in ReportRow.display. Never
-  // reinterpret roas_bid or provider configuration as a report fact.
+  // 目标 ROAS 来自已同步的目录配置，和报表收入/消耗指标分开显示。
   return display.target_roas ?? null
+}
+export function rowBudget(
+  row: ReportRow,
+  dimension: AdsDimension,
+): string | null {
+  const key = dimension === "campaign" ? "campaign_budget" : "adgroup_budget"
+  const value = row.display?.[key]
+  return value ? formatMetric(value) : null
+}
+export function rowOptimizationGoal(row: ReportRow): string | null {
+  const value = row.display?.optimization_goal
+  if (!value) return null
+  const normalized = value.toUpperCase().replace(/_/g, " ")
+  if (normalized.includes("VALUE")) return "最大价值"
+  if (normalized.includes("ROAS")) return "目标 ROAS"
+  return value
 }
 export function availabilityLabel(
   availability: string,
