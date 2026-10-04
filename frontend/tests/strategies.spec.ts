@@ -1,5 +1,9 @@
 import { expect, type Page, test } from "@playwright/test"
-import type { StrategyPublic, VersionPublic } from "../src/client"
+import type {
+  StrategyConfig_Output,
+  StrategyPublic,
+  VersionPublic,
+} from "../src/client"
 
 const A = "11111111-1111-4111-8111-111111111111",
   B = "22222222-2222-4222-8222-222222222222",
@@ -7,11 +11,20 @@ const A = "11111111-1111-4111-8111-111111111111",
   V = "33333333-3333-4333-8333-333333333333",
   U = "44444444-4444-4444-8444-444444444444",
   POOL = "02a4e656-a330-40dc-864c-26e81961f3ca"
-const config = {
+const config: StrategyConfig_Output = {
   budget: "100.00",
   currency: "USD",
+  budget_strategy: "SERIES",
+  bid_strategy: "TARGET_ROAS",
   target_roas: "1.08",
-  group_size: 10,
+  group_generation_mode: "BY_MATERIAL",
+  group_count: null,
+  group_material_allocation: null,
+  max_materials_per_group: 10,
+  ad_generation_mode: "BY_MATERIAL",
+  ads_per_group: null,
+  ad_material_allocation: null,
+  max_materials_per_ad: 1,
   creative_count: 2,
   copy_pool_version: POOL,
   cta_option_ids: ["official-existing-id"],
@@ -254,14 +267,12 @@ test("23 条素材的创意数量 2→3 只改变 Ad 数量，不倍增预算", 
   await boundary(page)
   await page.goto(editUrl)
   const example = page.getByRole("region", { name: "结构与预算示例" })
-  await expect(example.getByText("6 条 Ad", { exact: true })).toBeVisible()
-  await page.getByLabel("创意数量", { exact: true }).fill("3")
+  await expect(example).toContainText("最终 46 个广告")
+  await page.getByLabel("每个广告创意数量", { exact: true }).fill("3")
+  await expect(example.getByText("3 个广告组", { exact: true })).toBeVisible()
+  await expect(example).toContainText("最终 69 个广告")
   await expect(
-    example.getByText("3 个 Ad Group", { exact: true }),
-  ).toBeVisible()
-  await expect(example.getByText("9 条 Ad", { exact: true })).toBeVisible()
-  await expect(
-    example.getByText("USD 100 / Campaign / 天", { exact: true }),
+    example.getByText("USD 100 / 系列 / 天", { exact: true }),
   ).toBeVisible()
   await expect(page.getByLabel("自定义 CTA")).toHaveCount(0)
 })
@@ -294,7 +305,7 @@ test("策略无有效改动时不产生重复版本，金额仅格式变化也�
   await expect(
     page.getByRole("button", { name: "保存为新版本", exact: true }),
   ).toBeDisabled()
-  await page.getByLabel("Campaign 日预算", { exact: true }).fill("100.0")
+  await page.getByLabel("日预算", { exact: true }).fill("100.0")
   await expect(
     page.getByRole("button", { name: "保存为新版本", exact: true }),
   ).toBeDisabled()
@@ -327,7 +338,7 @@ test("名称和配置同时修改时只发送一次原子版本保存", async ({
   await page.goto(editUrl)
 
   await page.getByLabel("策略名称", { exact: true }).fill("新策略名称")
-  await page.getByLabel("Campaign 日预算", { exact: true }).fill("200")
+  await page.getByLabel("日预算", { exact: true }).fill("200")
   await page.getByRole("button", { name: "保存为新版本", exact: true }).click()
 
   await expect(page.getByText("已保存 v2", { exact: true })).toBeVisible()
@@ -347,7 +358,7 @@ test("名称和配置同时修改时只发送一次原子版本保存", async ({
 test("超时保存按 request_id 精确确认，不重复发送版本写入", async ({ page }) => {
   const { requests } = await boundary(page, { mode: "unknown" })
   await page.goto(editUrl)
-  await page.getByLabel("Campaign 日预算", { exact: true }).fill("101.00")
+  await page.getByLabel("日预算", { exact: true }).fill("101.00")
   await page.getByRole("button", { name: "保存为新版本", exact: true }).click()
   await expect(page.getByText("已保存 v2", { exact: true })).toBeVisible()
   const writes = requests.filter(
@@ -368,7 +379,7 @@ test("未知保存回查404不视为未保存，刷新后仍只回查同一请�
 }) => {
   const { requests } = await boundary(page, { mode: "unknown404" })
   await page.goto(editUrl)
-  await page.getByLabel("Campaign 日预算", { exact: true }).fill("101.00")
+  await page.getByLabel("日预算", { exact: true }).fill("101.00")
   await page.getByRole("button", { name: "保存为新版本", exact: true }).click()
   await expect(page.getByText("保存结果待确认", { exact: true })).toBeVisible()
   await expect(
@@ -394,14 +405,12 @@ test("未知保存回查404不视为未保存，刷新后仍只回查同一请�
 test("409保留输入并显示服务器差异；不会自动变更版本基线", async ({ page }) => {
   const { requests } = await boundary(page, { mode: "conflict" })
   await page.goto(editUrl)
-  await page.getByLabel("Campaign 日预算", { exact: true }).fill("130.00")
+  await page.getByLabel("日预算", { exact: true }).fill("130.00")
   await page.getByRole("button", { name: "保存为新版本", exact: true }).click()
   await expect(
     page.getByText("服务器当前为 v2，本地输入已保留。"),
   ).toBeVisible()
-  await expect(page.getByLabel("Campaign 日预算", { exact: true })).toHaveValue(
-    "130.00",
-  )
+  await expect(page.getByLabel("日预算", { exact: true })).toHaveValue("130.00")
   await page.getByRole("button", { name: "查看服务器差异" }).click()
   await expect(page.getByRole("dialog")).toContainText("服务器：120.00")
   await expect(page.getByRole("dialog")).toContainText("本地：130.00")
@@ -414,15 +423,14 @@ test("98条有效文案阻止99创意，非法变量定位字段；保留已有C
 }) => {
   const { requests } = await boundary(page, { capacity: 98 })
   await page.goto(editUrl)
-  await page.getByLabel("创意数量", { exact: true }).fill("99")
-  await expect(page.getByLabel("创意数量", { exact: true })).toHaveAttribute(
-    "aria-invalid",
-    "true",
-  )
+  await page.getByLabel("每个广告创意数量", { exact: true }).fill("99")
+  await expect(
+    page.getByLabel("每个广告创意数量", { exact: true }),
+  ).toHaveAttribute("aria-invalid", "true")
   await expect(
     page.getByRole("button", { name: "保存为新版本", exact: true }),
   ).toBeDisabled()
-  await page.getByLabel("创意数量", { exact: true }).fill("3")
+  await page.getByLabel("每个广告创意数量", { exact: true }).fill("3")
   await page
     .getByLabel("广告名称格式", { exact: true })
     .fill("[版权方＋剧名]-[剧目 ID]-[错误字段]")
@@ -440,9 +448,7 @@ test("98条有效文案阻止99创意，非法变量定位字段；保留已有C
 test("预算大数十进制原文保存，结构和命名示例不进入配置", async ({ page }) => {
   const { requests } = await boundary(page)
   await page.goto(editUrl)
-  await page
-    .getByLabel("Campaign 日预算", { exact: true })
-    .fill("9007199254740993.12")
+  await page.getByLabel("日预算", { exact: true }).fill("9007199254740993.12")
   await page.getByRole("button", { name: "保存为新版本", exact: true }).click()
   await expect(page.getByText("已保存 v2", { exact: true })).toBeVisible()
   const write = requests.find(
@@ -746,8 +752,8 @@ test("策略205条列表默认可用、50/100服务端游标与字段对应", as
   const first = page.locator("tbody tr").first()
   await expect(first).toContainText("USD 100")
   await expect(first).toContainText("1.08 倍")
-  await expect(first).toContainText("10 条/组")
-  await expect(first).toContainText("SP1～SP2")
+  await expect(first).toContainText("每组最多 10 条")
+  await expect(first).toContainText("每个广告创意数量 2")
   await page.getByRole("button", { name: "下一页", exact: true }).click()
   await expect(
     page.getByRole("link", { name: "分页策略 51", exact: true }),
@@ -794,9 +800,10 @@ test("只读成员能看版本和文案池，不能编辑复制或停用", async
     .getByRole("dialog")
     .getByRole("button", { name: "查看版本", exact: true })
     .click()
-  await expect(
-    page.getByLabel("Campaign 日预算", { exact: true }),
-  ).toHaveAttribute("readonly", "")
+  await expect(page.getByLabel("日预算", { exact: true })).toHaveAttribute(
+    "readonly",
+    "",
+  )
   await expect(
     page.getByRole("button", { name: "保存为新版本", exact: true }),
   ).toHaveCount(0)
@@ -813,10 +820,10 @@ test("新建空表单无生产预算默认值，空租户和403明确区分", as
   await page.goto(`/tenants/${A}/strategies`)
   await expect(page.getByText("还没有投放策略", { exact: true })).toBeVisible()
   await page.getByRole("link", { name: "新建策略", exact: true }).click()
-  await expect(page.getByLabel("Campaign 日预算", { exact: true })).toHaveValue(
-    "",
-  )
-  await expect(page.getByLabel("创意数量", { exact: true })).toHaveValue("")
+  await expect(page.getByLabel("日预算", { exact: true })).toHaveValue("")
+  await expect(
+    page.getByLabel("每个广告创意数量", { exact: true }),
+  ).toHaveValue("1")
   await expect(
     page.getByRole("button", { name: "创建策略", exact: true }),
   ).toBeDisabled()
@@ -844,13 +851,14 @@ test("策略停用只PATCH本地可用性，旧版本保留且可恢复", async 
 test("确定校验失败保留输入并标记字段，不进入未知回查", async ({ page }) => {
   const { requests } = await boundary(page, { mode: "failure" })
   await page.goto(editUrl)
-  await page.getByLabel("创意数量", { exact: true }).fill("3")
+  await page.getByLabel("每个广告创意数量", { exact: true }).fill("3")
   await page.getByRole("button", { name: "保存为新版本", exact: true }).click()
-  await expect(page.getByLabel("创意数量", { exact: true })).toHaveValue("3")
-  await expect(page.getByLabel("创意数量", { exact: true })).toHaveAttribute(
-    "aria-invalid",
-    "true",
-  )
+  await expect(
+    page.getByLabel("每个广告创意数量", { exact: true }),
+  ).toHaveValue("3")
+  await expect(
+    page.getByLabel("每个广告创意数量", { exact: true }),
+  ).toHaveAttribute("aria-invalid", "true")
   expect(
     requests.filter((r) => r.path.includes("/strategy-save-requests/")),
   ).toHaveLength(0)
@@ -898,13 +906,11 @@ test("切租户先保护策略输入，确认后到新租户列表而非旧策�
 }) => {
   const { requests } = await boundary(page)
   await page.goto(editUrl)
-  await page.getByLabel("Campaign 日预算", { exact: true }).fill("321.00")
+  await page.getByLabel("日预算", { exact: true }).fill("321.00")
   await page.getByRole("combobox", { name: "当前租户" }).click()
   await page.getByRole("option", { name: /策略租户乙/ }).click()
   await page.getByRole("button", { name: "留在当前页", exact: true }).click()
-  await expect(page.getByLabel("Campaign 日预算", { exact: true })).toHaveValue(
-    "321.00",
-  )
+  await expect(page.getByLabel("日预算", { exact: true })).toHaveValue("321.00")
   expect(new URL(page.url()).pathname).toContain(`/tenants/${A}/`)
   await page.getByRole("combobox", { name: "当前租户" }).click()
   await page.getByRole("option", { name: /策略租户乙/ }).click()
@@ -926,9 +932,7 @@ for (const path of [`/tenants/${A}/strategies/new`, editUrl])
     await page.getByLabel("密码", { exact: true }).fill("synthetic-password")
     await page.getByRole("button", { name: "登录", exact: true }).click()
     await expect(page).toHaveURL(path)
-    await expect(
-      page.getByLabel("Campaign 日预算", { exact: true }),
-    ).toBeVisible()
+    await expect(page.getByLabel("日预算", { exact: true })).toBeVisible()
   })
 test("策略403保留登录而不展示空列表", async ({ page }) => {
   await boundary(page, { deny: true })
@@ -951,12 +955,11 @@ test("历史版本始终只读，当前版本更新不改变旧版本预算", as
     config: records[0].config,
   })
   await page.goto(`${editUrl}?version_id=${V}`)
-  await expect(page.getByLabel("Campaign 日预算", { exact: true })).toHaveValue(
-    "100.00",
+  await expect(page.getByLabel("日预算", { exact: true })).toHaveValue("100.00")
+  await expect(page.getByLabel("日预算", { exact: true })).toHaveAttribute(
+    "readonly",
+    "",
   )
-  await expect(
-    page.getByLabel("Campaign 日预算", { exact: true }),
-  ).toHaveAttribute("readonly", "")
   await expect(
     page.getByRole("button", { name: "保存为新版本", exact: true }),
   ).toHaveCount(0)
@@ -984,12 +987,10 @@ test("精确回查返回本次v2，即使服务器最新v3也不冒认其他版�
     },
   )
   await page.goto(editUrl)
-  await page.getByLabel("Campaign 日预算", { exact: true }).fill("101.00")
+  await page.getByLabel("日预算", { exact: true }).fill("101.00")
   await page.getByRole("button", { name: "保存为新版本", exact: true }).click()
   await expect(page.getByText("已保存 v2", { exact: true })).toBeVisible()
-  await expect(page.getByLabel("Campaign 日预算", { exact: true })).toHaveValue(
-    "101.00",
-  )
+  await expect(page.getByLabel("日预算", { exact: true })).toHaveValue("101.00")
   await expect(
     page.getByRole("button", { name: "保存为新版本", exact: true }),
   ).toHaveCount(0)
@@ -1044,15 +1045,11 @@ test("切换BC保留当前租户策略，目录请求没有BC筛选", async ({ p
     }),
   )
   await page.goto(`${editUrl}?bc_id=${BC1}`)
-  await expect(page.getByLabel("Campaign 日预算", { exact: true })).toHaveValue(
-    "100.00",
-  )
+  await expect(page.getByLabel("日预算", { exact: true })).toHaveValue("100.00")
   await page.getByRole("combobox", { name: "当前 BC" }).click()
   await page.getByRole("option", { name: /第二BC/ }).click()
   await expect(page).toHaveURL(new RegExp(`bc_id=${BC2}`))
-  await expect(page.getByLabel("Campaign 日预算", { exact: true })).toHaveValue(
-    "100.00",
-  )
+  await expect(page.getByLabel("日预算", { exact: true })).toHaveValue("100.00")
   expect(
     requests
       .filter((r) => r.path.includes("/strategies"))
@@ -1070,13 +1067,13 @@ for (const viewport of [
     await page.setViewportSize(viewport)
     await boundary(page)
     await page.goto(editUrl)
-    await expect(
-      page.getByLabel("Campaign 日预算", { exact: true }),
-    ).toHaveValue("100.00")
+    await expect(page.getByLabel("日预算", { exact: true })).toHaveValue(
+      "100.00",
+    )
     await expect(
       page.getByRole("region", { name: "结构与预算示例" }),
     ).toBeVisible()
-    await page.getByLabel("创意数量", { exact: true }).fill("3")
+    await page.getByLabel("每个广告创意数量", { exact: true }).fill("3")
     await page
       .getByRole("region", { name: "结构与预算示例" })
       .scrollIntoViewIfNeeded()
@@ -1102,7 +1099,7 @@ test("后台检查版本变化保留本地配置，临时读取失败也不卸�
 }) => {
   const { records } = await boundary(page)
   await page.goto(editUrl)
-  await page.getByLabel("Campaign 日预算", { exact: true }).fill("130.00")
+  await page.getByLabel("日预算", { exact: true }).fill("130.00")
   records[0].latest_version = 2
   records[0].config = {
     ...config,
@@ -1113,9 +1110,7 @@ test("后台检查版本变化保留本地配置，临时读取失败也不卸�
   await expect(
     page.getByText("服务器当前为 v2，本地输入已保留。"),
   ).toBeVisible()
-  await expect(page.getByLabel("Campaign 日预算", { exact: true })).toHaveValue(
-    "130.00",
-  )
+  await expect(page.getByLabel("日预算", { exact: true })).toHaveValue("130.00")
   await expect(
     page.getByText("已有 ID：official-existing-id", { exact: true }),
   ).toBeVisible()
@@ -1129,9 +1124,7 @@ test("后台检查版本变化保留本地配置，临时读取失败也不卸�
   await expect(page.getByText("读取暂时失败", { exact: true })).toBeVisible({
     timeout: 10000,
   })
-  await expect(page.getByLabel("Campaign 日预算", { exact: true })).toHaveValue(
-    "130.00",
-  )
+  await expect(page.getByLabel("日预算", { exact: true })).toHaveValue("130.00")
 })
 
 test("策略列表与历史预算去尾零但编辑原文保留", async ({ page }) => {
@@ -1141,25 +1134,17 @@ test("策略列表与历史预算去尾零但编辑原文保留", async ({ page 
   api.versions[0].config.budget = budget
   await page.goto(`/tenants/${A}/strategies`)
   await expect(
-    page.getByRole("cell", {
-      name: "USD 9007199254740993123456.1234 每个 Campaign / 天",
-      exact: true,
-    }),
+    page.getByRole("cell").filter({ hasText: "USD 9007199254740993123456.1234 / 天" }).first(),
   ).toBeVisible()
   await page.getByRole("button", { name: "查看版本", exact: true }).click()
   await expect(
-    page.getByRole("dialog").getByRole("cell", {
-      name: "USD 9007199254740993123456.1234 ROAS 1.08 倍",
-      exact: true,
-    }),
+    page.getByRole("dialog").getByRole("cell").filter({ hasText: "USD 9007199254740993123456.1234 / 天" }).first(),
   ).toBeVisible()
   await page
     .getByRole("dialog")
     .getByRole("button", { name: "查看版本", exact: true })
     .click()
-  await expect(page.getByLabel("Campaign 日预算", { exact: true })).toHaveValue(
-    budget,
-  )
+  await expect(page.getByLabel("日预算", { exact: true })).toHaveValue(budget)
   expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
 })
 
@@ -1176,10 +1161,10 @@ test("策略固定列完整显示超长预算和ROAS且文字不覆盖相邻单�
   }
   await page.goto(`/tenants/${A}/strategies`)
   for (const name of [
-    "USD 9007199254740993123456.1234 每个 Campaign / 天",
+    "USD 9007199254740993123456.1234 / 天",
     `${roas} 倍`,
   ]) {
-    const cell = page.getByRole("cell", { name, exact: true })
+    const cell = page.getByRole("cell").filter({ hasText: name }).first()
     await expect(cell).toBeVisible()
     const bounds = await cell.evaluate((el) => {
       const box = el.getBoundingClientRect()
@@ -1225,12 +1210,14 @@ test("空白新建策略默认 USD，币种禁止展开且保存仍提交 USD", 
   await currency.click({ force: true })
   await expect(page.getByRole("listbox")).toHaveCount(0)
   await page.getByLabel("策略名称", { exact: true }).fill("空白新建策略")
-  await page.getByLabel("Campaign 日预算", { exact: true }).fill("100")
-  await page.keyboard.press("Tab")
-  await expect(page.getByLabel("目标 ROAS", { exact: true })).toBeFocused()
+  await page.getByLabel("日预算", { exact: true }).fill("100")
+  await page.getByRole("combobox", { name: "竞价策略" }).click()
+  await page.getByRole("option", { name: "目标 ROAS", exact: true }).click()
   await page.getByLabel("目标 ROAS", { exact: true }).fill("1.08")
-  await page.getByLabel("每组素材数量", { exact: true }).fill("10")
-  await page.getByLabel("创意数量", { exact: true }).fill("2")
+  await page.getByRole("combobox", { name: "广告组数量规则" }).click()
+  await page.getByRole("option", { name: "按素材数量", exact: true }).click()
+  await page.getByLabel("每组最多素材数", { exact: true }).fill("10")
+  await page.getByLabel("每个广告创意数量", { exact: true }).fill("2")
   await expect(currency).toHaveText("USD")
   await expect(
     page.getByRole("button", { name: "创建策略", exact: true }),
@@ -1247,7 +1234,7 @@ test("空白新建策略默认 USD，币种禁止展开且保存仍提交 USD", 
     currency: "USD",
     budget: "100",
     target_roas: "1.08",
-    group_size: 10,
+    max_materials_per_group: 10,
     creative_count: 2,
   })
 })
@@ -1353,4 +1340,64 @@ test("策略定向保存成年年龄、语言和性别，无BC不提供全球国
     age_groups: ["AGE_25_34"],
     gender: "GENDER_FEMALE",
   })
+})
+
+test("策略默认值按业务决策顺序展示，隐藏无决策价值的安排项", async ({
+  page,
+}) => {
+  await boundary(page, { empty: true })
+  await page.goto(`/tenants/${A}/strategies/new`)
+  await expect(page.getByRole("combobox", { name: "预算策略" })).toHaveText(
+    "系列预算",
+  )
+  await expect(page.getByRole("combobox", { name: "竞价策略" })).toHaveText(
+    "最高价值",
+  )
+  await expect(
+    page.getByRole("combobox", { name: "广告组数量规则" }),
+  ).toHaveText("固定数量")
+  await expect(page.getByLabel("广告组数量", { exact: true })).toHaveValue("1")
+  await expect(page.getByLabel("广告组素材安排", { exact: true })).toHaveCount(
+    0,
+  )
+  await expect(page.getByRole("combobox", { name: "广告数量规则" })).toHaveText(
+    "按素材数量",
+  )
+  await expect(
+    page.getByLabel("每个广告最多素材数", { exact: true }),
+  ).toHaveValue("1")
+  await expect(page.getByLabel("广告素材安排", { exact: true })).toHaveCount(0)
+  await expect(page.getByText(/素材不足处理/)).toHaveCount(0)
+})
+
+test("切换数量规则和竞价策略会清除不相关字段", async ({ page }) => {
+  await boundary(page, { empty: true })
+  await page.goto(`/tenants/${A}/strategies/new`)
+  const groupRule = page.getByRole("combobox", { name: "广告组数量规则" })
+  await groupRule.click()
+  await page.getByRole("option", { name: "按素材数量", exact: true }).click()
+  await expect(page.getByLabel("每组最多素材数", { exact: true })).toBeVisible()
+  await expect(page.getByLabel("广告组数量", { exact: true })).toHaveCount(0)
+  await groupRule.click()
+  await page.getByRole("option", { name: "固定数量", exact: true }).click()
+  await page.getByLabel("广告组数量", { exact: true }).fill("2")
+  await expect(page.getByLabel("广告组素材安排", { exact: true })).toBeVisible()
+  await page.getByRole("combobox", { name: "广告组素材安排" }).click()
+  await page
+    .getByRole("option", { name: "按顺序平均分配", exact: true })
+    .click()
+  await groupRule.click()
+  await page.getByRole("option", { name: "按素材数量", exact: true }).click()
+  await expect(page.getByLabel("广告组素材安排", { exact: true })).toHaveCount(
+    0,
+  )
+  await expect(page.getByLabel("广告组数量", { exact: true })).toHaveCount(0)
+
+  const bidRule = page.getByRole("combobox", { name: "竞价策略" })
+  await bidRule.click()
+  await page.getByRole("option", { name: "目标 ROAS", exact: true }).click()
+  await page.getByLabel("目标 ROAS", { exact: true }).fill("1.2")
+  await bidRule.click()
+  await page.getByRole("option", { name: "最高价值", exact: true }).click()
+  await expect(page.getByLabel("目标 ROAS", { exact: true })).toHaveCount(0)
 })

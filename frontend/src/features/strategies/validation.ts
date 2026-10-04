@@ -118,11 +118,22 @@ export const configFingerprint = (config: StrategyConfig_Output) =>
   JSON.stringify({
     targeting: normalizedTargeting(config.targeting),
     currency: config.currency,
-    group_size: config.group_size,
-    creative_count: config.creative_count,
+    budget_strategy: config.budget_strategy ?? "SERIES",
+    bid_strategy: config.bid_strategy ?? "HIGHEST_VALUE",
+    group_generation_mode: config.group_generation_mode ?? "FIXED",
+    group_count: config.group_count ?? null,
+    group_material_allocation: config.group_material_allocation ?? null,
+    max_materials_per_group: config.max_materials_per_group ?? null,
+    ad_generation_mode: config.ad_generation_mode ?? "BY_MATERIAL",
+    ads_per_group: config.ads_per_group ?? null,
+    ad_material_allocation: config.ad_material_allocation ?? null,
+    max_materials_per_ad: config.max_materials_per_ad ?? null,
+    creative_count: config.creative_count ?? 1,
     copy_pool_version: config.copy_pool_version,
     budget: normalizeDecimal(config.budget),
-    target_roas: normalizeDecimal(config.target_roas),
+    target_roas: config.target_roas
+      ? normalizeDecimal(config.target_roas)
+      : null,
     cta_option_ids: config.cta_option_ids || [],
     campaign_name_template:
       config.campaign_name_template ?? DEFAULT_NAME_TEMPLATE,

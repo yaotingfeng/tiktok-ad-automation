@@ -105,44 +105,54 @@ export function StrategyList() {
         ),
       },
       {
-        header: "Campaign 日预算",
+        header: "预算策略",
         size: 168,
         cell: ({ row }) => (
           <div className="flex flex-col gap-1 tabular-nums">
             <span className="wrap-anywhere whitespace-normal">
-              {row.original.config.currency}{" "}
-              {normalizeDecimal(row.original.config.budget)}
+              {row.original.config.budget_strategy === "ADGROUP"
+                ? "组预算"
+                : "系列预算"}
             </span>
-            <p className="text-xs text-muted-foreground">每个 Campaign / 天</p>
+            <p className="text-xs text-muted-foreground">
+              {row.original.config.currency}{" "}
+              {normalizeDecimal(row.original.config.budget)} / 天
+            </p>
           </div>
         ),
       },
       {
-        header: "目标 ROAS",
+        header: "竞价策略",
         size: 112,
         cell: ({ row }) => (
           <span className="block wrap-anywhere whitespace-normal tabular-nums">
-            {row.original.config.target_roas} 倍
+            {row.original.config.bid_strategy === "TARGET_ROAS"
+              ? `${row.original.config.target_roas || "待填写"} 倍`
+              : "最高价值"}
           </span>
         ),
       },
       {
-        header: "每组素材",
-        size: 104,
+        header: "广告组规则",
+        size: 180,
         cell: ({ row }) => (
-          <span title="按文件名顺序分组，保留不足整组的尾组">
-            {row.original.config.group_size} 条/组
+          <span>
+            {row.original.config.group_generation_mode === "BY_MATERIAL"
+              ? `按素材数量 · 每组最多 ${row.original.config.max_materials_per_group} 条`
+              : `固定 ${row.original.config.group_count} 组 · ${row.original.config.group_material_allocation === "SEQUENTIAL_AVERAGE" ? "按顺序平均分配" : "共用全部素材"}`}
           </span>
         ),
       },
       {
-        header: "创意数量",
-        size: 108,
+        header: "广告规则 / 创意",
+        size: 190,
         cell: ({ row }) => (
           <div className="flex flex-col gap-1">
-            {row.original.config.creative_count} 条/组
+            {row.original.config.ad_generation_mode === "BY_MATERIAL"
+              ? `按素材数量 · 每广告最多 ${row.original.config.max_materials_per_ad} 条`
+              : `固定 ${row.original.config.ads_per_group} 个广告`}
             <p className="text-xs text-muted-foreground">
-              SP1～SP{row.original.config.creative_count}
+              每个广告创意数量 {row.original.config.creative_count ?? 1}
             </p>
           </div>
         ),

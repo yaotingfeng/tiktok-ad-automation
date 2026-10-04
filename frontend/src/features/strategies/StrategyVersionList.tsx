@@ -50,18 +50,23 @@ export function StrategyVersionList({
     () => [
       { header: "版本", cell: ({ row }) => `v${row.original.number}` },
       {
-        header: "预算 / ROAS",
+        header: "预算 / 竞价",
         cell: ({ row: { original: r } }) => (
           <div>
-            {r.config.currency} {normalizeDecimal(r.config.budget)}
-            <p>ROAS {r.config.target_roas} 倍</p>
+            {r.config.budget_strategy === "ADGROUP" ? "组预算" : "系列预算"} ·{" "}
+            {r.config.currency} {normalizeDecimal(r.config.budget)} / 天
+            <p>
+              {r.config.bid_strategy === "TARGET_ROAS"
+                ? `目标 ROAS ${r.config.target_roas || "待填写"} 倍`
+                : "最高价值"}
+            </p>
           </div>
         ),
       },
       {
-        header: "素材 / 创意",
+        header: "结构 / 创意",
         cell: ({ row }) =>
-          `${row.original.config.group_size} 条素材/组 · ${row.original.config.creative_count} 条创意/组`,
+          `${row.original.config.group_generation_mode === "BY_MATERIAL" ? `按素材数量（每组最多 ${row.original.config.max_materials_per_group} 条）` : `固定 ${row.original.config.group_count} 组`} · ${row.original.config.ad_generation_mode === "BY_MATERIAL" ? `每广告最多 ${row.original.config.max_materials_per_ad} 条素材` : `固定 ${row.original.config.ads_per_group} 个广告`} · 创意 ${row.original.config.creative_count ?? 1}`,
       },
       {
         header: "保存信息",

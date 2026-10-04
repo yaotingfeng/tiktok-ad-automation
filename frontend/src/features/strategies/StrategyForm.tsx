@@ -79,11 +79,20 @@ const currencies = (
   Intl as typeof Intl & { supportedValuesOf: (key: string) => string[] }
 ).supportedValuesOf("currency")
 const fieldNames: Record<string, string> = {
-  budget: "Campaign 日预算",
+  budget: "日预算",
   currency: "预算币种",
   target_roas: "目标 ROAS",
-  group_size: "每组素材数量",
-  creative_count: "创意数量",
+  budget_strategy: "预算策略",
+  bid_strategy: "竞价策略",
+  group_generation_mode: "广告组数量规则",
+  group_count: "广告组数量",
+  group_material_allocation: "广告组素材安排",
+  max_materials_per_group: "每组最多素材数",
+  ad_generation_mode: "广告数量规则",
+  ads_per_group: "每组广告数量",
+  ad_material_allocation: "广告素材安排",
+  max_materials_per_ad: "每个广告最多素材数",
+  creative_count: "每个广告创意数量",
   campaign_name_template: "广告名称格式",
   copy_pool_version: "文案池版本",
   cta_option_ids: "CTA 配置",
@@ -115,11 +124,43 @@ export function StrategyForm({
     // 新建策略固定使用 USD；已有版本按原币种展示，避免隐式改币种或换汇。
     [currency] = useState(initial?.currency || "USD"),
     [roas, setRoas] = useState(initial?.target_roas || ""),
-    [groupSize, setGroupSize] = useState(
-      initial ? String(initial.group_size) : "",
+    [budgetStrategy, setBudgetStrategy] = useState<"SERIES" | "ADGROUP">(
+      initial?.budget_strategy || "SERIES",
+    ),
+    [bidStrategy, setBidStrategy] = useState<"HIGHEST_VALUE" | "TARGET_ROAS">(
+      initial?.bid_strategy ||
+        (initial?.target_roas ? "TARGET_ROAS" : "HIGHEST_VALUE"),
+    ),
+    [groupGenerationMode, setGroupGenerationMode] = useState<
+      "FIXED" | "BY_MATERIAL"
+    >(initial?.group_generation_mode || "FIXED"),
+    [groupCount, setGroupCount] = useState(
+      initial?.group_count != null ? String(initial.group_count) : "1",
+    ),
+    [groupMaterialAllocation, setGroupMaterialAllocation] = useState<
+      "SHARED" | "SEQUENTIAL_AVERAGE"
+    >(initial?.group_material_allocation || "SHARED"),
+    [maxMaterialsPerGroup, setMaxMaterialsPerGroup] = useState(
+      initial?.max_materials_per_group != null
+        ? String(initial.max_materials_per_group)
+        : "",
+    ),
+    [adGenerationMode, setAdGenerationMode] = useState<"FIXED" | "BY_MATERIAL">(
+      initial?.ad_generation_mode || "BY_MATERIAL",
+    ),
+    [adsPerGroup, setAdsPerGroup] = useState(
+      initial?.ads_per_group != null ? String(initial.ads_per_group) : "",
+    ),
+    [adMaterialAllocation, setAdMaterialAllocation] = useState<
+      "SHARED" | "SEQUENTIAL_AVERAGE"
+    >(initial?.ad_material_allocation || "SHARED"),
+    [maxMaterialsPerAd, setMaxMaterialsPerAd] = useState(
+      initial?.max_materials_per_ad != null
+        ? String(initial.max_materials_per_ad)
+        : "1",
     ),
     [creativeCount, setCreativeCount] = useState(
-      initial ? String(initial.creative_count) : "",
+      initial?.creative_count != null ? String(initial.creative_count) : "1",
     ),
     [nameTemplate, setNameTemplate] = useState(
       initial?.campaign_name_template ?? DEFAULT_NAME_TEMPLATE,
@@ -156,11 +197,35 @@ export function StrategyForm({
           .map((row) => row.text),
       ).size
     : undefined
+  // 结构层只提交当前模式的数量和素材安排；其余字段显式清空，避免保存后残留旧决策。
   const cfg: StrategyConfig_Output = {
     budget,
     currency,
-    target_roas: roas,
-    group_size: Number(groupSize),
+    budget_strategy: budgetStrategy,
+    bid_strategy: bidStrategy,
+    target_roas: bidStrategy === "TARGET_ROAS" ? roas : null,
+    group_generation_mode: groupGenerationMode,
+    group_count: groupGenerationMode === "FIXED" ? Number(groupCount) : null,
+    group_material_allocation:
+      groupGenerationMode === "FIXED"
+        ? Number(groupCount) > 1
+          ? groupMaterialAllocation
+          : "SHARED"
+        : null,
+    max_materials_per_group:
+      groupGenerationMode === "BY_MATERIAL"
+        ? Number(maxMaterialsPerGroup)
+        : null,
+    ad_generation_mode: adGenerationMode,
+    ads_per_group: adGenerationMode === "FIXED" ? Number(adsPerGroup) : null,
+    ad_material_allocation:
+      adGenerationMode === "FIXED"
+        ? Number(adsPerGroup) > 1
+          ? adMaterialAllocation
+          : "SHARED"
+        : null,
+    max_materials_per_ad:
+      adGenerationMode === "BY_MATERIAL" ? Number(maxMaterialsPerAd) : null,
     creative_count: Number(creativeCount),
     copy_pool_version: copyPoolVersion,
     cta_option_ids: ctaIds,
@@ -181,7 +246,10 @@ export function StrategyForm({
       : !!name ||
         !!budget ||
         !!roas ||
-        !!groupSize ||
+        !!groupCount ||
+        !!maxMaterialsPerGroup ||
+        !!adsPerGroup ||
+        !!maxMaterialsPerAd ||
         !!creativeCount ||
         nameTemplate !== DEFAULT_NAME_TEMPLATE ||
         JSON.stringify(targeting) !== JSON.stringify(normalizedTargeting())
@@ -194,21 +262,26 @@ export function StrategyForm({
     roasIssue = decimalError(roas),
     templateIssue = nameTemplateError(nameTemplate)
   if (budgetIssue) local.budget = budgetIssue
-  if (roasIssue) local.target_roas = roasIssue
+  if (roasIssue && bidStrategy === "TARGET_ROAS") local.target_roas = roasIssue
   if (!/^[A-Z]{3}$/.test(currency)) local.currency = "请选择预算币种。"
+  const positiveInteger = (value: string) =>
+    /^\d+$/.test(value) &&
+    Number.isSafeInteger(Number(value)) &&
+    Number(value) > 0
+  if (groupGenerationMode === "FIXED" && !positiveInteger(groupCount))
+    local.group_count = "请输入大于 0 的整数。"
   if (
-    !/^\d+$/.test(groupSize) ||
-    !Number.isSafeInteger(cfg.group_size) ||
-    cfg.group_size < 1
+    groupGenerationMode === "BY_MATERIAL" &&
+    !positiveInteger(maxMaterialsPerGroup)
   )
-    local.group_size = "请输入大于 0 的整数。"
-  if (
-    !/^\d+$/.test(creativeCount) ||
-    !Number.isSafeInteger(cfg.creative_count) ||
-    cfg.creative_count < 1
-  )
+    local.max_materials_per_group = "请输入大于 0 的整数。"
+  if (adGenerationMode === "FIXED" && !positiveInteger(adsPerGroup))
+    local.ads_per_group = "请输入大于 0 的整数。"
+  if (adGenerationMode === "BY_MATERIAL" && !positiveInteger(maxMaterialsPerAd))
+    local.max_materials_per_ad = "请输入大于 0 的整数。"
+  if (!positiveInteger(creativeCount))
     local.creative_count = "请输入大于 0 的整数。"
-  else if (capacity !== undefined && cfg.creative_count > capacity)
+  else if (capacity !== undefined && Number(creativeCount) > capacity)
     local.creative_count = `创意数量不能超过 ${capacity} 条有效且不重复的英文文案。`
   if (templateIssue) local.campaign_name_template = templateIssue
   const errors = { ...local, ...serverErrors },
@@ -429,7 +502,13 @@ export function StrategyForm({
         inputMode={
           ["budget", "target_roas"].includes(key)
             ? "decimal"
-            : ["group_size", "creative_count"].includes(key)
+            : [
+                  "group_count",
+                  "max_materials_per_group",
+                  "ads_per_group",
+                  "max_materials_per_ad",
+                  "creative_count",
+                ].includes(key)
               ? "numeric"
               : undefined
         }
@@ -437,6 +516,45 @@ export function StrategyForm({
       <FieldDescription id={`strategy-${key}-help`}>
         {description}
       </FieldDescription>
+      {invalid(key) && <FieldError>{errors[key]}</FieldError>}
+    </Field>
+  )
+  const selectField = (
+    key: string,
+    value: string,
+    setter: (value: string) => void,
+    options: Array<{ value: string; label: string }>,
+    description?: string,
+  ) => (
+    <Field data-invalid={invalid(key)}>
+      <FieldLabel htmlFor={`strategy-${key}`}>{fieldNames[key]}</FieldLabel>
+      <Select
+        value={value}
+        onValueChange={(next) => {
+          setter(next)
+          setTouched((old) => ({ ...old, [key]: true }))
+          setServerErrors((old) => {
+            const copy = { ...old }
+            delete copy[key]
+            return copy
+          })
+        }}
+        disabled={pending || !!unknownRequest || readonly}
+      >
+        <SelectTrigger id={`strategy-${key}`} aria-invalid={invalid(key)}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            {options.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+      <FieldDescription>{description}</FieldDescription>
       {invalid(key) && <FieldError>{errors[key]}</FieldError>}
     </Field>
   )
@@ -563,16 +681,38 @@ export function StrategyForm({
             <CardHeader>
               <CardTitle>预算与出价</CardTitle>
               <CardDescription>
-                多个广告组共享这个 Campaign 的日预算。
+                选择预算归属和竞价方式；目标 ROAS 仅在对应竞价策略下填写。
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <FieldGroup className="sm:grid sm:grid-cols-3">
+              <FieldGroup className="sm:grid sm:grid-cols-2">
+                {selectField(
+                  "budget_strategy",
+                  budgetStrategy,
+                  (value) => setBudgetStrategy(value as "SERIES" | "ADGROUP"),
+                  [
+                    { value: "SERIES", label: "系列预算" },
+                    { value: "ADGROUP", label: "组预算" },
+                  ],
+                )}
+                {selectField(
+                  "bid_strategy",
+                  bidStrategy,
+                  (value) => {
+                    const next = value as "HIGHEST_VALUE" | "TARGET_ROAS"
+                    setBidStrategy(next)
+                    if (next === "HIGHEST_VALUE") setRoas("")
+                  },
+                  [
+                    { value: "HIGHEST_VALUE", label: "最高价值" },
+                    { value: "TARGET_ROAS", label: "目标 ROAS" },
+                  ],
+                )}
                 {input(
                   "budget",
                   budget,
                   setBudget,
-                  "每个 Campaign / 天；金额按十进制字符串保存。",
+                  "按日预算金额保存；不会自动换算币种。",
                 )}
                 <Field data-disabled data-invalid={invalid("currency")}>
                   <FieldLabel htmlFor="strategy-currency">预算币种</FieldLabel>
@@ -608,12 +748,13 @@ export function StrategyForm({
                     <FieldError>{errors.currency}</FieldError>
                   )}
                 </Field>
-                {input(
-                  "target_roas",
-                  roas,
-                  setRoas,
-                  "目标倍率，例如 1.08 倍；不表示百分比。",
-                )}
+                {bidStrategy === "TARGET_ROAS" &&
+                  input(
+                    "target_roas",
+                    roas,
+                    setRoas,
+                    "目标倍率，例如 1.08 倍；不表示百分比。",
+                  )}
               </FieldGroup>
             </CardContent>
           </Card>
@@ -649,22 +790,118 @@ export function StrategyForm({
             <CardHeader>
               <CardTitle>素材与创意</CardTitle>
               <CardDescription>
-                每个素材组对应一个 Ad Group；SP 使用同样素材、不同文案。
+                先决定广告组如何生成，再决定每个广告组内的广告如何使用素材。
               </CardDescription>
             </CardHeader>
             <CardContent>
               <FieldGroup className="sm:grid sm:grid-cols-2">
-                {input(
-                  "group_size",
-                  groupSize,
-                  setGroupSize,
-                  "按文件名顺序分组，保留不足整组的尾组。",
-                )}{" "}
+                {selectField(
+                  "group_generation_mode",
+                  groupGenerationMode,
+                  (value) => {
+                    const next = value as "FIXED" | "BY_MATERIAL"
+                    setGroupGenerationMode(next)
+                    if (next === "FIXED") {
+                      setGroupCount((old) => (positiveInteger(old) ? old : "1"))
+                      setGroupMaterialAllocation("SHARED")
+                      setMaxMaterialsPerGroup("")
+                    } else {
+                      setGroupCount("")
+                      setGroupMaterialAllocation("SHARED")
+                    }
+                  },
+                  [
+                    { value: "FIXED", label: "固定数量" },
+                    { value: "BY_MATERIAL", label: "按素材数量" },
+                  ],
+                  "固定数量按组数创建；按素材数量按顺序拆分素材。",
+                )}
+                {groupGenerationMode === "FIXED" &&
+                  input(
+                    "group_count",
+                    groupCount,
+                    setGroupCount,
+                    "每个系列创建的广告组数量。",
+                  )}
+                {groupGenerationMode === "BY_MATERIAL" &&
+                  input(
+                    "max_materials_per_group",
+                    maxMaterialsPerGroup,
+                    setMaxMaterialsPerGroup,
+                    "每组最多使用的素材数量；按素材顺序拆分。",
+                  )}
+                {groupGenerationMode === "FIXED" &&
+                  Number(groupCount) > 1 &&
+                  selectField(
+                    "group_material_allocation",
+                    groupMaterialAllocation,
+                    (value) =>
+                      setGroupMaterialAllocation(
+                        value as "SHARED" | "SEQUENTIAL_AVERAGE",
+                      ),
+                    [
+                      { value: "SHARED", label: "共用全部素材" },
+                      { value: "SEQUENTIAL_AVERAGE", label: "按顺序平均分配" },
+                    ],
+                    "平均分配在搭建预览中按素材顺序计算。",
+                  )}
+                {selectField(
+                  "ad_generation_mode",
+                  adGenerationMode,
+                  (value) => {
+                    const next = value as "FIXED" | "BY_MATERIAL"
+                    setAdGenerationMode(next)
+                    if (next === "FIXED") {
+                      setAdsPerGroup((old) =>
+                        positiveInteger(old) ? old : "1",
+                      )
+                      setAdMaterialAllocation("SHARED")
+                      setMaxMaterialsPerAd("")
+                    } else {
+                      setAdsPerGroup("")
+                      setAdMaterialAllocation("SHARED")
+                    }
+                  },
+                  [
+                    { value: "FIXED", label: "固定数量" },
+                    { value: "BY_MATERIAL", label: "按素材数量" },
+                  ],
+                  "固定数量按广告数创建；按素材数量按上限拆分。",
+                )}
+                {adGenerationMode === "FIXED" &&
+                  input(
+                    "ads_per_group",
+                    adsPerGroup,
+                    setAdsPerGroup,
+                    "每个广告组创建的广告数量。",
+                  )}
+                {adGenerationMode === "BY_MATERIAL" &&
+                  input(
+                    "max_materials_per_ad",
+                    maxMaterialsPerAd,
+                    setMaxMaterialsPerAd,
+                    "每个广告最多使用的素材数量；按素材顺序拆分。",
+                  )}
+                {adGenerationMode === "FIXED" &&
+                  Number(adsPerGroup) > 1 &&
+                  selectField(
+                    "ad_material_allocation",
+                    adMaterialAllocation,
+                    (value) =>
+                      setAdMaterialAllocation(
+                        value as "SHARED" | "SEQUENTIAL_AVERAGE",
+                      ),
+                    [
+                      { value: "SHARED", label: "共用本组素材" },
+                      { value: "SEQUENTIAL_AVERAGE", label: "按顺序平均分配" },
+                    ],
+                    "平均分配在搭建预览中按本组素材顺序计算。",
+                  )}
                 {input(
                   "creative_count",
                   creativeCount,
                   setCreativeCount,
-                  "每个 Ad Group 的普通 Smart+ Ad 数量。",
+                  "基础广告完成素材分配后，每个广告复制的创意数量。",
                 )}
               </FieldGroup>
             </CardContent>
@@ -804,8 +1041,7 @@ export function StrategyForm({
             </CardHeader>
             <CardContent className="flex flex-col gap-2 text-sm">
               <p>
-                每剧每户 1 个 Campaign；每个素材组 1 个 Ad Group；每组 N 条普通
-                Ad。
+                素材先按广告组规则分配，再按广告规则生成基础广告；创意数量只复制已分配素材的广告。
               </p>
               <p>本批所有有效剧目覆盖全部有效目标账户。策略不保存账户池。</p>
               <p>提交具体搭建预览后，Campaign、Ad Group、Ad 直接启用。</p>
@@ -814,12 +1050,32 @@ export function StrategyForm({
         </form>
         <aside className="flex min-w-0 flex-col gap-6">
           <StrategyStructureExample
-            groupSize={/^\d+$/.test(groupSize) ? cfg.group_size : Number.NaN}
+            groupGenerationMode={groupGenerationMode}
+            groupCount={positiveInteger(groupCount) ? Number(groupCount) : null}
+            groupMaterialAllocation={groupMaterialAllocation}
+            maxMaterialsPerGroup={
+              positiveInteger(maxMaterialsPerGroup)
+                ? Number(maxMaterialsPerGroup)
+                : null
+            }
+            adGenerationMode={adGenerationMode}
+            adsPerGroup={
+              positiveInteger(adsPerGroup) ? Number(adsPerGroup) : null
+            }
+            adMaterialAllocation={adMaterialAllocation}
+            maxMaterialsPerAd={
+              positiveInteger(maxMaterialsPerAd)
+                ? Number(maxMaterialsPerAd)
+                : null
+            }
             creativeCount={
-              /^\d+$/.test(creativeCount) ? cfg.creative_count : Number.NaN
+              positiveInteger(creativeCount) ? Number(creativeCount) : 0
             }
             budget={budgetIssue ? "" : budget}
             currency={currency}
+            budgetStrategy={budgetStrategy}
+            bidStrategy={bidStrategy}
+            targetRoas={roas}
           />
           <StrategyNamingExample nameTemplate={nameTemplate} />
         </aside>
