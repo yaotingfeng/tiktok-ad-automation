@@ -153,7 +153,8 @@ class AppConfiguration(BaseModel):
 
 class McpBindingRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    bc_ids: list[str] = Field(min_length=1, max_length=1000)
+    # 自动接入全部可见 BC；上限与候选目录完整读取上限保持一致。
+    bc_ids: list[str] = Field(min_length=1, max_length=5000)
 
     @model_validator(mode="after")
     def valid_selection(self) -> Self:

@@ -5,9 +5,7 @@ import { PaginationSummary } from "@/components/Common/PaginationSummary"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
-  Field,
   FieldDescription,
   FieldGroup,
   FieldLabel,
@@ -25,7 +23,7 @@ import { bindingLabels } from "./presentation"
 
 const PAGE_SIZE = 50
 const MAX_DIRECTORY_BCS = 5000
-const MAX_SELECTED_BCS = 1000
+const MAX_SELECTED_BCS = MAX_DIRECTORY_BCS
 
 class BCDirectoryError extends Error {}
 
@@ -120,8 +118,9 @@ export function McpAuthorizationSheet({
     const available = candidates.data.items
       .filter(canSelect)
       .map((item) => item.bc_id)
-    // 只有唯一可接入项自动勾选；用户取消勾选后不反复替其选择。
-    const autoSelect = !initialized.current && available.length === 1
+    // MCP 授权与官方 API 保持一致：一次授权自动接入全部当前可见且尚未接入的 BC。
+    // 已有绑定由服务端按连接复用规则处理，不重复创建。
+    const autoSelect = !initialized.current
     setSelected((previous) =>
       autoSelect ? available : previous.filter((id) => available.includes(id)),
     )
@@ -131,7 +130,7 @@ export function McpAuthorizationSheet({
     mutationFn: async () => {
       if (selecting) {
         if (!selected.length || selected.length > MAX_SELECTED_BCS)
-          throw new Error("每次请选择 1 至 1000 个 BC")
+          throw new Error(`本次最多自动接入 ${MAX_DIRECTORY_BCS} 个 BC`)
         const body = { bc_ids: selected }
         if (attemptId) {
           await AccountsService.binding({
@@ -205,7 +204,7 @@ export function McpAuthorizationSheet({
         <p className="text-sm">
           {selecting
             ? "同一授权可接入多个 BC。各 BC 独立同步账户、解绑和选择默认执行连接。"
-            : "使用当前租户管理员自己的 TikTok 账号授权。返回后选择要接入的 BC，原有连接在验证完成前继续保留。"}
+            : "使用当前租户管理员自己的 TikTok 账号授权。返回后系统自动接入全部可见 BC，原有连接在验证完成前继续保留。"}
         </p>
         {addBindings && (
           <div className="flex flex-col gap-2">
@@ -260,71 +259,28 @@ export function McpAuthorizationSheet({
             )}
             {candidates.data && (
               <FieldSet>
-                <FieldLegend>接入 BC</FieldLegend>
+                <FieldLegend>自动接入 BC</FieldLegend>
                 <FieldDescription>
                   共 {candidates.data.total} 个可访问 BC，{available.length}{" "}
-                  个可接入，已选 {selected.length} 个。
+                  个新 BC 将自动接入并同步账户；已有绑定会保留。
                 </FieldDescription>
                 {selected.length > MAX_SELECTED_BCS && (
                   <Alert variant="destructive">
-                    <AlertTitle>所选 BC 超过单次接入上限</AlertTitle>
+                  <AlertTitle>可见 BC 超过单次接入上限</AlertTitle>
                     <AlertDescription>
-                      每次最多接入 1000 个 BC，当前已选 {selected.length}{" "}
-                      个，请减少选择后提交。
+                      每次最多自动接入 {MAX_DIRECTORY_BCS} 个 BC，当前有{" "}
+                      {selected.length} 个。
                     </AlertDescription>
                   </Alert>
                 )}
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={
-                      !available.length ||
-                      candidates.isFetching ||
-                      mutation.isPending
-                    }
-                    onClick={() =>
-                      setSelected(available.map((item) => item.bc_id))
-                    }
-                  >
-                    全选可接入 BC
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={!selected.length || mutation.isPending}
-                    onClick={() => setSelected([])}
-                  >
-                    清空选择
-                  </Button>
-                </div>
                 <FieldGroup>
                   {visible.map((item) => (
-                    <Field
+                    <div
                       key={item.bc_id}
-                      orientation="horizontal"
                       data-disabled={!canSelect(item)}
+                      className="flex items-center gap-2"
                     >
-                      <Checkbox
-                        id={`mcp-bc-${item.bc_id}`}
-                        checked={selected.includes(item.bc_id)}
-                        disabled={
-                          !canSelect(item) ||
-                          mutation.isPending ||
-                          candidates.isFetching
-                        }
-                        onCheckedChange={(checked) =>
-                          setSelected((previous) =>
-                            checked === true
-                              ? [
-                                  ...previous.filter((id) => id !== item.bc_id),
-                                  item.bc_id,
-                                ]
-                              : previous.filter((id) => id !== item.bc_id),
-                          )
-                        }
-                      />
-                      <FieldLabel htmlFor={`mcp-bc-${item.bc_id}`}>
+                      <FieldLabel>
                         {item.name || "未命名 BC"} · {item.bc_id}
                       </FieldLabel>
                       {item.binding_status && (
@@ -335,7 +291,7 @@ export function McpAuthorizationSheet({
                       {item.connected && !item.binding_status && (
                         <Badge variant="outline">已接入</Badge>
                       )}
-                    </Field>
+                    </div>
                   ))}
                 </FieldGroup>
                 {!candidates.data.total && (
