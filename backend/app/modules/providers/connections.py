@@ -198,6 +198,7 @@ def verify_connection(
                     http,
                     email=credentials["email"],
                     password=credentials["password"],
+                    use_curl=True,
                 )
                 logged_in = True
                 applications = rongliang.discover_applications()

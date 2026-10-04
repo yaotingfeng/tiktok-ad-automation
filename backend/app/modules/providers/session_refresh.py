@@ -279,6 +279,7 @@ def advance_session_refresh(
                             http,
                             email=credentials["email"],
                             password=credentials["password"],
+                            use_curl=True,
                         )
                         credentials["token"] = rongliang.token
                     else:
@@ -314,8 +315,11 @@ def advance_session_refresh(
                     http, token=credentials["token"]
                 ).discover_applications()
             elif kind == "rongliang":
-                applications = RongliangClient(
-                    http, token=credentials["token"]
+                applications = RongliangClient.login(
+                    http,
+                    email=credentials["email"],
+                    password=credentials["password"],
+                    use_curl=True,
                 ).discover_applications()
             else:
                 applications = WangyanClient(

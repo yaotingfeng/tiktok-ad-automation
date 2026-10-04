@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import json as jsonlib
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
@@ -27,9 +32,114 @@ PAGE_SIZE = 100
 COOKIE_DOMAIN = "distribution.wolftv.online"
 
 
+class _CurlSession:
+    """Small cookie-preserving libcurl session for the capacity backend.
+
+    The provider accepts the browser/libcurl TLS session but intermittently
+    rejects the equivalent HTTPX session as unauthenticated.  Keep this
+    transport local to this adapter; tests continue to use the HTTPX path.
+    """
+
+    def __init__(self, *, cookie: str = ""):
+        if shutil.which("curl") is None:
+            raise failure("provider_unavailable", retryable=True)
+        handle = tempfile.NamedTemporaryFile(prefix="rongliang-cookies-", delete=False)
+        handle.close()
+        self.cookie_file = Path(handle.name)
+        self.cookie_file.chmod(0o600)
+        if cookie:
+            self.cookie_file.write_text(cookie + "\n", encoding="utf-8")
+
+    def close(self) -> None:
+        self.cookie_file.unlink(missing_ok=True)
+
+    def __del__(self) -> None:
+        self.close()
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        params: JsonDict | None = None,
+        json: JsonDict | None = None,
+        content: str | None = None,
+    ) -> JsonDict:
+        if params:
+            from urllib.parse import urlencode
+
+            url = f"{url}?{urlencode(params)}"
+        command = [
+            "curl",
+            "--silent",
+            "--show-error",
+            "--http1.1",
+            "--compressed",
+            "--max-time",
+            "30",
+            "--request",
+            method,
+            "--cookie",
+            str(self.cookie_file),
+            "--cookie-jar",
+            str(self.cookie_file),
+            "--user-agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+            "--header",
+            "accept: application/json, text/plain, */*",
+            "--header",
+            "accept-language: zh-CN,zh;q=0.9",
+            "--url",
+            url,
+            "--write-out",
+            "\n__RONG_LIANG_STATUS__%{http_code}",
+        ]
+        for name, value in (headers or {}).items():
+            command.extend(["--header", f"{name}: {value}"])
+        body = content
+        if json is not None:
+            body = jsonlib.dumps(json, ensure_ascii=False, separators=(",", ":"))
+            command.extend(["--header", "content-type: application/json"])
+        if body is not None:
+            command.extend(["--data-binary", "@-"])
+        try:
+            completed = subprocess.run(
+                command,
+                input=body,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except OSError:
+            raise failure("provider_unavailable", retryable=True) from None
+        marker = "\n__RONG_LIANG_STATUS__"
+        payload, separator, status_text = completed.stdout.rpartition(marker)
+        if not separator or completed.returncode != 0:
+            raise failure("provider_unavailable", retryable=True)
+        try:
+            status = int(status_text)
+            body_value = jsonlib.loads(payload)
+        except (TypeError, ValueError, jsonlib.JSONDecodeError):
+            raise failure("provider_schema_unsupported") from None
+        if status in {401, 403}:
+            raise failure("provider_session_expired")
+        if status >= 500 or status in {408, 429}:
+            raise failure("provider_unavailable", retryable=True)
+        if not 200 <= status < 300 or not isinstance(body_value, dict):
+            raise failure("provider_rejected")
+        return body_value
+
+
 class RongliangClient:
-    def __init__(self, http: httpx.Client, *, token: str = ""):
-        self.http, self.token = http, token
+    def __init__(
+        self,
+        http: httpx.Client,
+        *,
+        token: str = "",
+        curl_session: _CurlSession | None = None,
+    ):
+        self.http, self.token, self._curl = http, token, curl_session
         # 容量网页依赖登录响应下发的完整 Cookie 集合。旧实现手工只发
         # dist_token，会丢掉同一登录会话的其他 Cookie，导致后台返回
         # HTTP 500 / code=403 (admin not login)。恢复已缓存 token 时也要
@@ -37,21 +147,46 @@ class RongliangClient:
         if token and not any(cookie.name == "dist_token" for cookie in self.http.cookies.jar):
             self.http.cookies.set("dist_token", token, domain=COOKIE_DOMAIN, path="/")
 
+    def __del__(self) -> None:
+        if self._curl is not None:
+            self._curl.close()
+
     @classmethod
-    def login(cls, http: httpx.Client, *, email: str, password: str) -> RongliangClient:
+    def login(
+        cls,
+        http: httpx.Client,
+        *,
+        email: str,
+        password: str,
+        use_curl: bool = False,
+    ) -> RongliangClient:
         encoded = urlencode({"email": email, "password": password})
-        body, _ = request_json(
-            http,
-            "POST",
-            BASE + "/auth/login",
-            headers={"content-type": "application/x-www-form-urlencoded; charset=UTF-8"},
-            content=encoded,
-        )
+        curl: _CurlSession | None = _CurlSession() if use_curl else None
+        try:
+            if curl is None:
+                body, _ = request_json(
+                    http,
+                    "POST",
+                    BASE + "/auth/login",
+                    headers={"content-type": "application/x-www-form-urlencoded; charset=UTF-8"},
+                    content=encoded,
+                )
+            else:
+                body = curl.request(
+                    "POST",
+                    BASE + "/auth/login",
+                    headers={"content-type": "application/x-www-form-urlencoded; charset=UTF-8"},
+                    content=encoded,
+                )
+        except Exception:
+            if curl is not None:
+                curl.close()
+            raise
         # 登录成功响应当前没有 code 字段，只有 token 和用户信息；与 CLI
         # 及浏览器实际响应保持一致，只有明确的非零 code 才视为认证失败。
         if body.get("code") not in (None, 0, "0") or not isinstance(body.get("token"), str):
             raise failure("provider_auth_failed")
-        return cls(http, token=body["token"])
+        return cls(http, token=body["token"], curl_session=curl)
 
     def _request(
         self,
@@ -62,14 +197,17 @@ class RongliangClient:
         json: JsonDict | None = None,
         write: bool = False,
     ) -> Any:
-        body, _ = request_json(
-            self.http,
-            method,
-            BASE + path,
-            params=query,
-            json=json,
-            write=write,
-        )
+        if self._curl is not None:
+            body = self._curl.request(method, BASE + path, params=query, json=json)
+        else:
+            body, _ = request_json(
+                self.http,
+                method,
+                BASE + path,
+                params=query,
+                json=json,
+                write=write,
+            )
         code = body.get("code")
         if code in {"user-2", 401, "401", 403, "403"}:
             raise failure("provider_session_expired")

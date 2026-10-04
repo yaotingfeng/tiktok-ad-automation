@@ -84,6 +84,13 @@ def adapter_for_kind(
             http, token=credentials["token"], application_id=application_id
         )
     if kind == "rongliang":
+        if credentials.get("email") and credentials.get("password"):
+            return RongliangClient.login(
+                http,
+                email=credentials["email"],
+                password=credentials["password"],
+                use_curl=True,
+            )
         return RongliangClient(http, token=credentials["token"])
     raise failure("provider_unavailable", retryable=True)
 
