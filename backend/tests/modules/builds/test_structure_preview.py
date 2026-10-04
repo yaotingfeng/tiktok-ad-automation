@@ -1,6 +1,9 @@
 from uuid import uuid4
 
-from app.modules.builds.preview_materials import frozen_ad_material_ids
+from app.modules.builds.preview_materials import (
+    frozen_ad_material_ids,
+    material_limit_exceeded,
+)
 from app.modules.builds.preview_models import PreviewAdMaterial, PreviewCopy
 from app.modules.builds.preview_validation import scene_reasons
 from app.modules.builds.scene_schemas import SceneContext
@@ -107,7 +110,7 @@ def test_legacy_frozen_group_materials_are_used_when_ad_rows_are_absent():
 
         def exec(self, query):
             self.calls += 1
-            return Result([] if self.calls == 1 else [uuid4(), uuid4()])
+            return Result([] if self.calls < 3 else [uuid4(), uuid4()])
 
     assert len(
         frozen_ad_material_ids(
@@ -119,3 +122,8 @@ def test_legacy_frozen_group_materials_are_used_when_ad_rows_are_absent():
             base_ad_no=1,
         )
     ) == 2
+
+
+def test_material_limit_uses_frozen_scene_limit():
+    assert material_limit_exceeded([10], 9)
+    assert not material_limit_exceeded([10], 10)

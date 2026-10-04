@@ -27,6 +27,11 @@ SKIPPABLE_MATERIAL_REASONS = frozenset(
 )
 
 
+def material_limit_exceeded(counts: list[int] | tuple[int, ...], maximum: int) -> bool:
+    """冻结场景提供每广告素材上限；不把平台默认值写死在预览层。"""
+    return any(count > maximum for count in counts)
+
+
 def material_not_skipped(
     *,
     tenant_id: UUID,
@@ -67,7 +72,20 @@ def frozen_ad_material_ids(
         PreviewAdMaterial.base_ad_no == base_ad_no,
     ).order_by(col(PreviewAdMaterial.position))
     ids = list(session.exec(query).all())
-    if not ids:
+    # 只有整部剧尚未写入广告级映射时才兼容历史组级快照；新表部分缺行
+    # 表示冻结数据损坏，必须返回空集合让执行链明确阻断。
+    any_ad_rows = bool(
+        session.exec(
+            select(PreviewAdMaterial.material_id).where(
+                PreviewAdMaterial.tenant_id == tenant_id,
+                PreviewAdMaterial.preview_id == preview_id,
+                PreviewAdMaterial.drama_id == drama_id,
+            )
+        ).first()
+    )
+    if not ids and any_ad_rows:
+        return []
+    if not any_ad_rows:
         legacy = select(PreviewGroupMaterial.material_id).where(
             PreviewGroupMaterial.tenant_id == tenant_id,
             PreviewGroupMaterial.preview_id == preview_id,

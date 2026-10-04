@@ -33,6 +33,7 @@ from app.modules.builds.models import (
 from app.modules.builds.preview_materials import (
     SKIPPABLE_MATERIAL_REASONS,
     frozen_ad_material_ids,
+    material_limit_exceeded,
     material_not_skipped,
 )
 from app.modules.builds.preview_models import (
@@ -760,7 +761,7 @@ def _expand_unit(
                 .group_by(PreviewAdMaterial.base_ad_no)
             ).all()
         )
-        if any(value > 50 for value in ad_material_counts.values()):
+        if material_limit_exceeded(list(ad_material_counts.values()), maximum):
             _block(unit, ["material_group_limit_exceeded"])
     names = _names(preview, drama, config, group.group_no, 1)
     planned = PlannedGroup(
