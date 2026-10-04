@@ -1633,3 +1633,9 @@
 - 保留当前 release `1269501eba5c872240080a4a816ba8aa50254cfe`、上一版回滚 release `db9a8d3764f4f35685228805811f8f975a332e18` 和备份批次 `20261004T070523Z`；删除其余历史备份、旧 release、失败发布目录、旧恢复目录及 `/tmp` 编译缓存，磁盘使用率由 99% 降至约 69%。
 - 清理过程中发现当前 release 的 `.venv` 间接指向已删除历史 release，曾短暂触发 `203/EXEC`；已按锁定依赖重新建立 `/opt/tt-ada-staging/shared-venv` 并恢复符号链接。API、全部 Worker、Beat 和备份 timer 已恢复 active。
 - 清理后 `check-bootstrap.py` 通过；浏览器容量后台 `form_data`、`link/page` 均返回 HTTP 200；容量协议 4 项、Ruff、CLI 语法检查再次通过。
+
+## 2026-10-04：账户发现队列修复与容量版权方版本发布
+
+- 发现用户重新授权后连接长期停在 `DISCOVERING` 的根因：`accounts.discover` 排在共享素材准备队列积压之后。提交 `cefce8c` 将账户发现统一改投 `resource-results`，保留原任务 ID 移动现有消息，未清空或重投素材队列。
+- 发现任务已成功执行；最新 `DiscoveryRun` 为 `COMPLETE/FINALIZE`，对应连接为 `ACTIVE`，授权尝试为 `ACCEPTED`。账户发现队列映射、Celery ping、HTTPS/OpenAPI 入口均通过。
+- 用户要求的容量版权方提交 `a9437c2` 已发布到新加坡测试环境；完整备份 `/var/backups/tt-ada-staging/20261004T093611Z/` 的 PostgreSQL、Redis、配置和项目归档校验通过。容量协议 4 项、Ruff、compileall 通过；真实版权方/TikTok 写入未执行。详见[本轮验收](validation/2026-10-04-staging-queue-and-provider-release.md)。
