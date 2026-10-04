@@ -395,7 +395,7 @@ def test_two_drafts_freeze_independent_preview_rows_and_keep_strategy_version(
             "average-two",
             {
                 "budget_strategy": "SERIES",
-                "bid_strategy": "HIGHEST_VALUE",
+                "bid_strategy": "TARGET_ROAS",
                 "group_generation_mode": "FIXED",
                 "group_count": 2,
                 "group_material_allocation": "SEQUENTIAL_AVERAGE",
@@ -405,7 +405,7 @@ def test_two_drafts_freeze_independent_preview_rows_and_keep_strategy_version(
                 "ad_material_allocation": None,
                 "max_materials_per_ad": 1,
                 "creative_count": 1,
-                "target_roas": None,
+                "target_roas": "1.08",
             },
             2,
             20,
@@ -514,6 +514,11 @@ def test_strategy_structure_matrix_persists_material_ads_and_frozen_contract(
                     "optimization_goal": "VALUE",
                     "optimization_event": "AD_REVENUE_VALUE",
                     "deep_bid_type": "VO_HIGHEST_VALUE",
+                },
+                "TARGET_ROAS": {
+                    "optimization_goal": "VALUE",
+                    "optimization_event": "AD_REVENUE_VALUE",
+                    "deep_bid_type": "VO_MIN_ROAS",
                 }
             },
         }
@@ -559,9 +564,24 @@ def test_strategy_structure_matrix_persists_material_ads_and_frozen_contract(
     assert len(ads) == expected_ads * 2 * 3  # 两剧三账户，每个组合都完整冻结。
     assert mappings and len({row.material_id for row in mappings}) == 20
     assert all(ad.cta_option_ids == ["cta-1"] for ad in ads)
-    # 每条冻结广告都必须把自己的素材集合编译成带视频与封面的 creative_list；
-    # 这里仍使用本地目标资产证据，不发起平台请求。
-    from app.modules.builds.request_compiler import ad_assets
+    # 每个 drama/group 的冻结素材顺序是广告结构的输入合同；组间必须互斥。
+    group_material_ids = {}
+    for row in sorted(groups, key=lambda item: (item.drama_id, item.group_no, item.position)):
+        group_material_ids.setdefault((row.drama_id, row.group_no), []).append(
+            row.material_id
+        )
+    assert len(group_material_ids) == expected_groups * 2
+    for drama_id in {key[0] for key in group_material_ids}:
+        drama_groups = [
+            values
+            for (row_drama, _), values in group_material_ids.items()
+            if row_drama == drama_id
+        ]
+        for index, left in enumerate(drama_groups):
+            for right in drama_groups[index + 1 :]:
+                assert set(left).isdisjoint(right)
+
+    from app.modules.builds.request_compiler import ad_assets, compile_request
 
     groups_by_id = {
         row.id: row
@@ -572,15 +592,87 @@ def test_strategy_structure_matrix_persists_material_ads_and_frozen_contract(
             )
         ).all()
     }
-    for ad in ads[: min(len(ads), 12)]:
+    for unit in units:
+        snapshot = unit.scene_snapshot
+        campaign_fixed = {
+            "advertiser_id": unit.advertiser_id,
+            "campaign_name": unit.campaign_name,
+            "budget_strategy": changes["budget_strategy"],
+        }
+        if changes["budget_strategy"] == "SERIES":
+            campaign_fixed["budget"] = preview.budget
+        campaign_body = compile_request(
+            "campaign",
+            fixed=campaign_fixed,
+            resolved=dict(snapshot.get("campaign_fields", {})),
+        )
+        adgroup_fixed = {
+            "advertiser_id": unit.advertiser_id,
+            "campaign_id": "fixture-campaign",
+            "adgroup_name": "fixture-adgroup",
+            "budget_strategy": changes["budget_strategy"],
+            "bid_strategy": changes["bid_strategy"],
+        }
+        if changes["budget_strategy"] == "ADGROUP":
+            adgroup_fixed["budget"] = preview.budget
+        if changes["bid_strategy"] == "TARGET_ROAS":
+            adgroup_fixed["roas_bid"] = preview.target_roas
+        adgroup_resolved = dict(snapshot.get("adgroup_fields", {}))
+        if changes["bid_strategy"] == "HIGHEST_VALUE":
+            adgroup_resolved.update(
+                optimization_goal="VALUE",
+                optimization_event="AD_REVENUE_VALUE",
+                deep_bid_type="VO_HIGHEST_VALUE",
+            )
+        else:
+            adgroup_resolved["deep_bid_type"] = "VO_MIN_ROAS"
+        adgroup_body = compile_request(
+            "adgroup", fixed=adgroup_fixed, resolved=adgroup_resolved
+        )
+        if changes["budget_strategy"] == "SERIES":
+            assert campaign_body["budget_mode"] == "BUDGET_MODE_DYNAMIC_DAILY_BUDGET"
+            assert "budget" in campaign_body
+            assert "budget" not in adgroup_body
+        else:
+            assert campaign_body["budget_mode"] == "BUDGET_MODE_INFINITE"
+            assert "budget" not in campaign_body
+            assert adgroup_body["budget_mode"] == "BUDGET_MODE_DYNAMIC_DAILY_BUDGET"
+            assert "budget" in adgroup_body
+        if changes["bid_strategy"] == "HIGHEST_VALUE":
+            assert adgroup_body["deep_bid_type"] == "VO_HIGHEST_VALUE"
+            assert adgroup_body["optimization_goal"] == "VALUE"
+            assert "roas_bid" not in adgroup_body
+        else:
+            assert adgroup_body["deep_bid_type"] == "VO_MIN_ROAS"
+            assert adgroup_body["roas_bid"] == "1.08"
+
+    # 每条冻结广告都必须把自己的素材集合编译成带视频与封面的 creative_list；
+    # 这里仍使用本地目标资产证据，不发起平台请求。
+    for ad in ads:
         group = groups_by_id[ad.group_id]
-        frozen_ids = [
-            row.material_id
-            for row in mappings
-            if row.drama_id == group.drama_id
-            and row.group_no == group.group_no
-            and row.base_ad_no == ad.base_ad_no
-        ]
+        group_ids = group_material_ids[(group.drama_id, group.group_no)]
+        if label == "shared-creatives":
+            expected_ids = group_ids
+        else:
+            width = 2 if label == "group-budget-highest" else 1
+            start = (ad.base_ad_no - 1) * width
+            expected_ids = group_ids[start : start + width]
+        frozen_rows = session.exec(
+            select(PreviewAdMaterial)
+            .where(
+                PreviewAdMaterial.tenant_id == context.tenant_id,
+                PreviewAdMaterial.preview_id == preview_id,
+                PreviewAdMaterial.drama_id == group.drama_id,
+                PreviewAdMaterial.group_no == group.group_no,
+                PreviewAdMaterial.base_ad_no == ad.base_ad_no,
+            )
+            .order_by(PreviewAdMaterial.position)
+        ).all()
+        frozen_ids = [row.material_id for row in frozen_rows]
+        assert frozen_ids == expected_ids
+        assert [row.position for row in frozen_rows] == list(
+            range(1, len(expected_ids) + 1)
+        )
         body = ad_assets(
             [
                 {
@@ -597,11 +689,45 @@ def test_strategy_structure_matrix_persists_material_ads_and_frozen_contract(
                 "identity_authorized_bc_id": "bc-draft",
             },
         )
-        assert len(body["creative_list"]) == len(frozen_ids)
-        assert all(
-            creative["creative_info"].get("image_info")
-            for creative in body["creative_list"]
+        compiled_ad = compile_request(
+            "ad",
+            fixed={
+                "advertiser_id": "account-A",
+                "budget_strategy": changes["budget_strategy"],
+                "bid_strategy": changes["bid_strategy"],
+            },
+            resolved={
+                **body,
+                "advertiser_id": "account-A",
+                "adgroup_id": str(group.id),
+                "ad_name": ad.name,
+                "ad_configuration": {
+                    "call_to_action_id": ad.cta_option_ids[0]
+                },
+            },
         )
+        assert len(compiled_ad["creative_list"]) == len(expected_ids)
+        assert compiled_ad["operation_status"] == "ENABLE"
+        assert "budget" not in compiled_ad
+        assert "budget_mode" not in compiled_ad
+        assert "roas_bid" not in compiled_ad
+        assert "deep_bid_type" not in compiled_ad
+        assert compiled_ad["ad_configuration"] == {
+            "call_to_action_id": "cta-1"
+        }
+        assert [
+            creative["creative_info"]["video_info"]["video_id"]
+            for creative in compiled_ad["creative_list"]
+        ] == [f"fixture-video-{material_id}" for material_id in expected_ids]
+        assert [
+            creative["creative_info"]["image_info"][0]["web_uri"]
+            for creative in compiled_ad["creative_list"]
+        ] == [f"fixture-cover-{material_id}" for material_id in expected_ids]
+        assert compiled_ad["ad_text_list"] == [{"ad_text": ad.text}]
+        assert compiled_ad["landing_page_url_list"] == [
+            {"landing_page_url": "https://example.test/minis"}
+        ]
+        assert ad.cta_option_ids == ["cta-1"]
     assert all(
         unit.scene_snapshot["budget_strategy"] == changes["budget_strategy"]
         for unit in units
