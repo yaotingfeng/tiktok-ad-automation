@@ -52,6 +52,9 @@ class SubmissionView(BaseModel):
     expanded: bool
     currency: str
     daily_budget_sum: str
+    daily_budget_label: str = "系列预算合计"
+    budget_strategy: Literal["SERIES", "ADGROUP"] = "SERIES"
+    bid_strategy: Literal["HIGHEST_VALUE", "TARGET_ROAS"] = "HIGHEST_VALUE"
     planned: ObjectCounts
     submitted: ObjectCounts
     succeeded: ObjectCounts
@@ -141,6 +144,9 @@ class SubmissionUnitPublic(BaseModel):
     succeeded_ad_count: int = 0
     material_count: int = 0
     ready_material_count: int = 0
+    unique_material_count: int = 0
+    material_allocation_count: int = 0
+    structure_summary: str = ""
     campaign_step: StepPublic | None = None
     unit_id: UUID
     drama_id: UUID
@@ -181,6 +187,8 @@ class SubmissionListItem(SubmissionMetadata):
     succeeded: ObjectCounts
     failed: ObjectCounts
     unknown: ObjectCounts
+    budget_strategy: Literal["SERIES", "ADGROUP"] = "SERIES"
+    bid_strategy: Literal["HIGHEST_VALUE", "TARGET_ROAS"] = "HIGHEST_VALUE"
 
 
 class SubmissionGroupPublic(BaseModel):

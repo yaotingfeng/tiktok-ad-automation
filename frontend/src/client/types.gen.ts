@@ -1244,6 +1244,10 @@ export type FrozenAd = {
      */
     ad_id: string;
     /**
+     * Base Ad No
+     */
+    base_ad_no: number;
+    /**
      * Creative No
      */
     creative_no: number;
@@ -1263,6 +1267,10 @@ export type FrozenAd = {
      * Cta Option Ids
      */
     cta_option_ids: Array<string>;
+    /**
+     * Material Ids
+     */
+    material_ids: Array<string>;
 };
 
 /**
@@ -1429,7 +1437,15 @@ export type FrozenUnit = {
     /**
      * Target Roas
      */
-    target_roas: string;
+    target_roas: string | null;
+    /**
+     * Budget Strategy
+     */
+    budget_strategy?: 'SERIES' | 'ADGROUP';
+    /**
+     * Bid Strategy
+     */
+    bid_strategy?: 'HIGHEST_VALUE' | 'TARGET_ROAS';
     /**
      * Readiness
      */
@@ -3761,6 +3777,26 @@ export type PreviewDramaPublic = {
      * Daily Budget Sum
      */
     daily_budget_sum: string;
+    /**
+     * Unique Material Count
+     */
+    unique_material_count?: number;
+    /**
+     * Material Allocation Count
+     */
+    material_allocation_count?: number;
+    /**
+     * Ad Material Allocation Count
+     */
+    ad_material_allocation_count?: number;
+    /**
+     * Daily Budget Label
+     */
+    daily_budget_label?: string;
+    /**
+     * Structure Summary
+     */
+    structure_summary?: string;
 };
 
 /**
@@ -3901,6 +3937,42 @@ export type PreviewSummary = {
      */
     daily_budget_sum: string;
     /**
+     * Daily Budget Label
+     */
+    daily_budget_label?: string;
+    /**
+     * Budget Strategy
+     */
+    budget_strategy?: 'SERIES' | 'ADGROUP';
+    /**
+     * Bid Strategy
+     */
+    bid_strategy?: 'HIGHEST_VALUE' | 'TARGET_ROAS';
+    /**
+     * Group Generation Mode
+     */
+    group_generation_mode?: 'FIXED' | 'BY_MATERIAL';
+    /**
+     * Ad Generation Mode
+     */
+    ad_generation_mode?: 'FIXED' | 'BY_MATERIAL';
+    /**
+     * Creative Count
+     */
+    creative_count?: number;
+    /**
+     * Unique Material Count
+     */
+    unique_material_count?: number;
+    /**
+     * Material Allocation Count
+     */
+    material_allocation_count?: number;
+    /**
+     * Structure Summary
+     */
+    structure_summary?: string;
+    /**
      * Content Digest
      */
     content_digest: string | null;
@@ -3966,6 +4038,34 @@ export type PreviewUnit = {
      * Ad Count
      */
     ad_count: number;
+    /**
+     * Material Count
+     */
+    material_count?: number;
+    /**
+     * Unique Material Count
+     */
+    unique_material_count?: number;
+    /**
+     * Material Allocation Count
+     */
+    material_allocation_count?: number;
+    /**
+     * Group Summary
+     */
+    group_summary?: string;
+    /**
+     * Ad Summary
+     */
+    ad_summary?: string;
+    /**
+     * Material Summary
+     */
+    material_summary?: string;
+    /**
+     * Structure Summary
+     */
+    structure_summary?: string;
 };
 
 /**
@@ -4988,18 +5088,54 @@ export type StrategyConfig_Input = {
      */
     currency: string;
     /**
-     * Target Roas
+     * Budget Strategy
      */
-    target_roas: number | string;
+    budget_strategy?: 'SERIES' | 'ADGROUP';
+    /**
+     * Bid Strategy
+     */
+    bid_strategy?: 'HIGHEST_VALUE' | 'TARGET_ROAS';
     targeting?: AudienceTargeting;
     /**
-     * Group Size
+     * Group Generation Mode
      */
-    group_size: number;
+    group_generation_mode?: 'FIXED' | 'BY_MATERIAL';
+    /**
+     * Group Count
+     */
+    group_count?: number | null;
+    /**
+     * Group Material Allocation
+     */
+    group_material_allocation?: 'SHARED' | 'SEQUENTIAL_AVERAGE' | null;
+    /**
+     * Max Materials Per Group
+     */
+    max_materials_per_group?: number | null;
+    /**
+     * Ad Generation Mode
+     */
+    ad_generation_mode?: 'FIXED' | 'BY_MATERIAL';
+    /**
+     * Ads Per Group
+     */
+    ads_per_group?: number | null;
+    /**
+     * Ad Material Allocation
+     */
+    ad_material_allocation?: 'SHARED' | 'SEQUENTIAL_AVERAGE' | null;
+    /**
+     * Max Materials Per Ad
+     */
+    max_materials_per_ad?: number | null;
     /**
      * Creative Count
      */
-    creative_count: number;
+    creative_count?: number;
+    /**
+     * Target Roas
+     */
+    target_roas?: number | string | null;
     /**
      * Copy Pool Version
      */
@@ -5027,18 +5163,54 @@ export type StrategyConfig_Output = {
      */
     currency: string;
     /**
-     * Target Roas
+     * Budget Strategy
      */
-    target_roas: string;
+    budget_strategy?: 'SERIES' | 'ADGROUP';
+    /**
+     * Bid Strategy
+     */
+    bid_strategy?: 'HIGHEST_VALUE' | 'TARGET_ROAS';
     targeting?: AudienceTargeting;
     /**
-     * Group Size
+     * Group Generation Mode
      */
-    group_size: number;
+    group_generation_mode?: 'FIXED' | 'BY_MATERIAL';
+    /**
+     * Group Count
+     */
+    group_count?: number | null;
+    /**
+     * Group Material Allocation
+     */
+    group_material_allocation?: 'SHARED' | 'SEQUENTIAL_AVERAGE' | null;
+    /**
+     * Max Materials Per Group
+     */
+    max_materials_per_group?: number | null;
+    /**
+     * Ad Generation Mode
+     */
+    ad_generation_mode?: 'FIXED' | 'BY_MATERIAL';
+    /**
+     * Ads Per Group
+     */
+    ads_per_group?: number | null;
+    /**
+     * Ad Material Allocation
+     */
+    ad_material_allocation?: 'SHARED' | 'SEQUENTIAL_AVERAGE' | null;
+    /**
+     * Max Materials Per Ad
+     */
+    max_materials_per_ad?: number | null;
     /**
      * Creative Count
      */
-    creative_count: number;
+    creative_count?: number;
+    /**
+     * Target Roas
+     */
+    target_roas?: string | null;
     /**
      * Copy Pool Version
      */
@@ -5270,6 +5442,14 @@ export type SubmissionListItem = {
     succeeded: ObjectCounts;
     failed: ObjectCounts;
     unknown: ObjectCounts;
+    /**
+     * Budget Strategy
+     */
+    budget_strategy?: 'SERIES' | 'ADGROUP';
+    /**
+     * Bid Strategy
+     */
+    bid_strategy?: 'HIGHEST_VALUE' | 'TARGET_ROAS';
 };
 
 /**
@@ -5353,6 +5533,18 @@ export type SubmissionUnitPublic = {
      * Ready Material Count
      */
     ready_material_count?: number;
+    /**
+     * Unique Material Count
+     */
+    unique_material_count?: number;
+    /**
+     * Material Allocation Count
+     */
+    material_allocation_count?: number;
+    /**
+     * Structure Summary
+     */
+    structure_summary?: string;
     campaign_step?: StepPublic | null;
     /**
      * Unit Id
@@ -5453,6 +5645,18 @@ export type SubmissionView = {
      * Daily Budget Sum
      */
     daily_budget_sum: string;
+    /**
+     * Daily Budget Label
+     */
+    daily_budget_label?: string;
+    /**
+     * Budget Strategy
+     */
+    budget_strategy?: 'SERIES' | 'ADGROUP';
+    /**
+     * Bid Strategy
+     */
+    bid_strategy?: 'HIGHEST_VALUE' | 'TARGET_ROAS';
     planned: ObjectCounts;
     submitted: ObjectCounts;
     succeeded: ObjectCounts;

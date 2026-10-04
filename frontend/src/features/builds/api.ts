@@ -2,10 +2,24 @@ import {
   BuildsService,
   type DraftInputPublic,
   type Page_DraftInputPublic_,
+  type PreviewSummary,
 } from "@/client"
 import type { NamedManualLink } from "./manualLinks"
 export const buildKey = (tenantId: string, bcId: string) =>
   ["tenant", tenantId, "builds", bcId] as const
+
+export function budgetLabel(
+  preview: Pick<PreviewSummary, "budget_strategy" | "daily_budget_label">,
+) {
+  return (
+    preview.daily_budget_label ||
+    (preview.budget_strategy === "ADGROUP" ? "组预算合计" : "系列预算合计")
+  )
+}
+
+export function bidLabel(strategy: PreviewSummary["bid_strategy"]) {
+  return strategy === "TARGET_ROAS" ? "目标 ROAS" : "最高价值"
+}
 export async function loadDraftInputs(
   tenantId: string,
   draftId: string,

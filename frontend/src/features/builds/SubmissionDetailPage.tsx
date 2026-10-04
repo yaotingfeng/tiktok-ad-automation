@@ -240,8 +240,8 @@ function Detail({
           <div className="flex min-w-0 flex-wrap gap-x-6 gap-y-2 text-sm text-muted-foreground [&>span]:break-words">
             <span>版权方：{data.provider_name || "暂无冻结版权方"}</span>
             <span>策略：{data.strategy_label || "暂未获取"}</span>
-            <span title="已提交广告系列配置日预算之和，非预计实际消耗。">
-              配置日预算合计 {data.currency}{" "}
+            <span title="已提交对象配置日预算之和，非预计实际消耗。">
+              {data.daily_budget_label || "配置日预算合计"} {data.currency}{" "}
               {normalizeDecimal(data.daily_budget_sum)}（非实际消耗）
             </span>
           </div>

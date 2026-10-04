@@ -126,10 +126,17 @@ export function SubmissionUnitsTable({
                   excluded ? (
                     <Reasons codes={r.reason_codes} />
                   ) : (
-                    <span>
-                      已准备 {r.ready_material_count ?? "—"} /{" "}
-                      {r.material_count ?? "—"} 份
-                    </span>
+                    <div className="flex flex-col gap-1">
+                      <span>
+                        已准备 {r.ready_material_count ?? "—"} /{" "}
+                        {r.material_count ?? "—"} 次素材分配
+                      </span>
+                      {!!r.unique_material_count && (
+                        <span className="text-xs text-muted-foreground">
+                          去重素材 {r.unique_material_count} 个
+                        </span>
+                      )}
+                    </div>
                   ),
               },
               {
@@ -149,6 +156,11 @@ export function SubmissionUnitsTable({
                       <span>
                         广告 {r.succeeded_ad_count ?? "—"} / {r.ad_count ?? "—"}
                       </span>
+                      {r.structure_summary && (
+                        <span className="text-xs text-muted-foreground">
+                          {r.structure_summary}
+                        </span>
+                      )}
                     </div>
                   ),
               },

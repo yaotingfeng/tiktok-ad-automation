@@ -12,6 +12,45 @@ from .targeting_schemas import AudienceTargeting
 Readiness = Literal["READY", "PREPARING", "BLOCKED"]
 
 
+def budget_strategy_label(strategy: str | None) -> str:
+    """把冻结合同中的预算枚举转换为业务页面使用的中文名称。"""
+    return "组预算合计" if strategy == "ADGROUP" else "系列预算合计"
+
+
+def budget_unit_label(strategy: str | None) -> str:
+    return "组日预算" if strategy == "ADGROUP" else "系列日预算"
+
+
+def bid_strategy_label(strategy: str | None) -> str:
+    return "目标 ROAS" if strategy == "TARGET_ROAS" else "最高价值"
+
+
+def generation_mode_label(mode: str | None) -> str:
+    return "按素材数量" if mode == "BY_MATERIAL" else "固定数量"
+
+
+def build_structure_summary(
+    *,
+    campaign_count: int,
+    group_count: int,
+    ad_count: int,
+    creative_count: int,
+    group_generation_mode: str | None,
+    ad_generation_mode: str | None,
+    material_allocation_count: int,
+    unique_material_count: int,
+) -> str:
+    """生成预览和提交页共用的业务摘要，不暴露内部 base_ad_no。"""
+    per_group = f"每组 {ad_count // group_count} 个广告" if group_count and ad_count % group_count == 0 else "各组广告数量按策略生成"
+    per_ad = f"每个广告 {material_allocation_count // ad_count} 个素材" if ad_count and material_allocation_count % ad_count == 0 else "每个广告素材数量按策略生成"
+    return (
+        f"{campaign_count} 个系列、{group_count} 个广告组、{per_group}、"
+        f"创意数量 {creative_count}、最终 {ad_count} 个广告、{per_ad}；"
+        f"广告组{generation_mode_label(group_generation_mode)}，广告{generation_mode_label(ad_generation_mode)}；"
+        f"去重素材 {unique_material_count} 个，分配引用 {material_allocation_count} 次"
+    )
+
+
 def frozen_bid_strategy(
     *,
     scene_snapshot: dict[str, Any],
@@ -68,6 +107,15 @@ class PreviewSummary(BaseModel):
     input_issue_count: int
     total_unit_count: int
     daily_budget_sum: Decimal
+    daily_budget_label: str = "系列预算合计"
+    budget_strategy: Literal["SERIES", "ADGROUP"] = "SERIES"
+    bid_strategy: Literal["HIGHEST_VALUE", "TARGET_ROAS"] = "HIGHEST_VALUE"
+    group_generation_mode: Literal["FIXED", "BY_MATERIAL"] = "FIXED"
+    ad_generation_mode: Literal["FIXED", "BY_MATERIAL"] = "BY_MATERIAL"
+    creative_count: int = 1
+    unique_material_count: int = 0
+    material_allocation_count: int = 0
+    structure_summary: str = ""
     content_digest: str | None
     error_code: str | None
     created_at: datetime
@@ -86,6 +134,13 @@ class PreviewUnit(BaseModel):
     reason_codes: list[str]
     group_count: int
     ad_count: int
+    material_count: int = 0
+    unique_material_count: int = 0
+    material_allocation_count: int = 0
+    group_summary: str = ""
+    ad_summary: str = ""
+    material_summary: str = ""
+    structure_summary: str = ""
 
 
 class FrozenUnit(BaseModel):
@@ -160,6 +215,11 @@ class PreviewDramaPublic(BaseModel):
     eligible_adgroup_count: int
     eligible_ad_count: int
     daily_budget_sum: Decimal
+    unique_material_count: int = 0
+    material_allocation_count: int = 0
+    ad_material_allocation_count: int = 0
+    daily_budget_label: str = "系列预算合计"
+    structure_summary: str = ""
 
 
 class SkippedMaterialPublic(BaseModel):

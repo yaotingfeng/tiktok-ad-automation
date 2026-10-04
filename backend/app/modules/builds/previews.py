@@ -59,7 +59,12 @@ from app.modules.builds.preview_schemas import (
     PreviewUnit,
     Readiness,
     SkippedMaterialPublic,
+    bid_strategy_label,
+    budget_strategy_label,
+    budget_unit_label,
+    build_structure_summary,
     frozen_bid_strategy,
+    generation_mode_label,
 )
 from app.modules.builds.preview_validation import measured, name_reasons, scene_reasons
 from app.modules.builds.route_views import execution_route_view
@@ -940,6 +945,36 @@ def get_preview_summary(
     counts = {state: (int(n), int(g or 0), int(a or 0)) for state, n, g, a in rows}
     eligible = [counts.get(state, (0, 0, 0)) for state in ("READY", "PREPARING")]
     n, g, a = (sum(x[i] for x in eligible) for i in range(3))
+    unique_material_count = session.exec(
+        select(func.count(func.distinct(PreviewGroupMaterial.material_id))).where(
+            PreviewGroupMaterial.tenant_id == context.tenant_id,
+            PreviewGroupMaterial.preview_id == preview_id,
+        )
+    ).one()
+    material_allocation_count = session.exec(
+        select(func.count(PreviewGroupMaterial.material_id)).where(
+            PreviewGroupMaterial.tenant_id == context.tenant_id,
+            PreviewGroupMaterial.preview_id == preview_id,
+        )
+    ).one()
+    config = preview.config
+    budget_strategy = config.get("budget_strategy", "SERIES")
+    bid_strategy = frozen_bid_strategy(
+        scene_snapshot={}, preview_config=config, target_roas=preview.target_roas
+    )
+    group_generation_mode = config.get("group_generation_mode", "FIXED")
+    ad_generation_mode = config.get("ad_generation_mode", "BY_MATERIAL")
+    creative_count = int(config.get("creative_count", 1))
+    structure_summary = build_structure_summary(
+        campaign_count=n,
+        group_count=g,
+        ad_count=a,
+        creative_count=creative_count,
+        group_generation_mode=group_generation_mode,
+        ad_generation_mode=ad_generation_mode,
+        material_allocation_count=int(material_allocation_count),
+        unique_material_count=int(unique_material_count),
+    ) + f"；预算策略 {budget_strategy_label(budget_strategy)}；竞价策略 {bid_strategy_label(bid_strategy)}"
     issue_count = session.exec(
         select(func.count())
         .select_from(PreviewInput)
@@ -1003,8 +1038,16 @@ def get_preview_summary(
         preparing_count=counts.get("PREPARING", (0, 0, 0))[0],
         input_issue_count=issue_count,
         total_unit_count=sum(x[0] for x in counts.values()),
-        daily_budget_sum=preview.budget
-        * (g if preview.config.get("budget_strategy") == "ADGROUP" else n),
+        daily_budget_sum=preview.budget * (g if budget_strategy == "ADGROUP" else n),
+        daily_budget_label=budget_strategy_label(budget_strategy),
+        budget_strategy=budget_strategy,
+        bid_strategy=bid_strategy,
+        group_generation_mode=group_generation_mode,
+        ad_generation_mode=ad_generation_mode,
+        creative_count=creative_count,
+        unique_material_count=int(unique_material_count),
+        material_allocation_count=int(material_allocation_count),
+        structure_summary=structure_summary,
         content_digest=preview.content_digest,
         error_code=preview.error_code,
         created_at=preview.created_at,
@@ -1086,6 +1129,72 @@ def get_preview_units(
             .group_by(col(PreviewSkippedMaterial.unit_id))
         ).all()
     )
+    unit_ids = [u.id for u, _ in rows[:limit]]
+    material_rows = (
+        session.exec(
+            select(
+                BuildUnit.id,
+                func.count(PreviewGroupMaterial.material_id),
+                func.count(func.distinct(PreviewGroupMaterial.material_id)),
+            )
+            .join(
+                PreviewGroupMaterial,
+                (PreviewGroupMaterial.tenant_id == BuildUnit.tenant_id)
+                & (PreviewGroupMaterial.preview_id == BuildUnit.preview_id)
+                & (PreviewGroupMaterial.drama_id == BuildUnit.drama_id),
+            )
+            .where(
+                BuildUnit.tenant_id == context.tenant_id,
+                BuildUnit.preview_id == preview_id,
+                col(BuildUnit.id).in_(unit_ids),
+                material_not_skipped(
+                    tenant_id=context.tenant_id,
+                    unit_id=col(BuildUnit.id),
+                    material_id=col(PreviewGroupMaterial.material_id),
+                ),
+            )
+            .group_by(BuildUnit.id)
+        ).all()
+        if unit_ids
+        else []
+    )
+    ad_material_rows = (
+        session.exec(
+            select(BuildUnit.id, func.count(PreviewAdMaterial.material_id))
+            .join(
+                PreviewAdMaterial,
+                (PreviewAdMaterial.tenant_id == BuildUnit.tenant_id)
+                & (PreviewAdMaterial.preview_id == BuildUnit.preview_id)
+                & (PreviewAdMaterial.drama_id == BuildUnit.drama_id),
+            )
+            .where(
+                BuildUnit.tenant_id == context.tenant_id,
+                BuildUnit.preview_id == preview_id,
+                col(BuildUnit.id).in_(unit_ids),
+                material_not_skipped(
+                    tenant_id=context.tenant_id,
+                    unit_id=col(BuildUnit.id),
+                    material_id=col(PreviewAdMaterial.material_id),
+                ),
+            )
+            .group_by(BuildUnit.id)
+        ).all()
+        if unit_ids
+        else []
+    )
+    ad_material_counts = {row[0]: int(row[1] or 0) for row in ad_material_rows}
+    material_counts = {
+        row[0]: (int(row[1] or 0), int(row[2] or 0), ad_material_counts.get(row[0], 0))
+        for row in material_rows
+    }
+    config = preview.config
+    budget_strategy = config.get("budget_strategy", "SERIES")
+    bid_strategy = frozen_bid_strategy(
+        scene_snapshot={}, preview_config=config, target_roas=preview.target_roas
+    )
+    group_generation_mode = config.get("group_generation_mode", "FIXED")
+    ad_generation_mode = config.get("ad_generation_mode", "BY_MATERIAL")
+    creative_count = int(config.get("creative_count", 1))
     return Page(
         items=[
             PreviewUnit(
@@ -1101,6 +1210,26 @@ def get_preview_units(
                 reason_codes=u.reason_codes,
                 group_count=u.group_count,
                 ad_count=u.ad_count,
+                material_count=material_counts.get(u.id, (0, 0, 0))[0],
+                unique_material_count=material_counts.get(u.id, (0, 0, 0))[1],
+                material_allocation_count=material_counts.get(u.id, (0, 0, 0))[2],
+                group_summary=f"{u.group_count} 个广告组（广告组{generation_mode_label(group_generation_mode)}）",
+                ad_summary=f"{u.ad_count} 个广告（广告{generation_mode_label(ad_generation_mode)}，创意数量 {creative_count}）",
+                material_summary=(
+                    f"去重素材 {material_counts.get(u.id, (0, 0, 0))[1]} 个，"
+                    f"广告素材分配 {material_counts.get(u.id, (0, 0, 0))[2]} 次"
+                ),
+                structure_summary=build_structure_summary(
+                    campaign_count=1,
+                    group_count=u.group_count,
+                    ad_count=u.ad_count,
+                    creative_count=creative_count,
+                    group_generation_mode=group_generation_mode,
+                    ad_generation_mode=ad_generation_mode,
+                    material_allocation_count=material_counts.get(u.id, (0, 0, 0))[2],
+                    unique_material_count=material_counts.get(u.id, (0, 0, 0))[1],
+                )
+                + f"；{budget_unit_label(budget_strategy)}；竞价策略 {bid_strategy_label(bid_strategy)}",
             )
             for u, d in rows[:limit]
         ],

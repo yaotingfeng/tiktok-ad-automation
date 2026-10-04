@@ -75,6 +75,13 @@ export function PreviewGenerationProgress({
             已用时 {durationLabel(elapsed)}
           </p>
         </div>
+        <p className="text-xs text-muted-foreground">
+          预算策略：
+          {preview.budget_strategy === "ADGROUP" ? "组预算" : "系列预算"} ·
+          竞价策略：
+          {preview.bid_strategy === "TARGET_ROAS" ? "目标 ROAS" : "最高价值"} ·
+          创意数量：{preview.creative_count}
+        </p>
         <div className="flex flex-col gap-2">
           <p className="text-sm tabular-nums">
             {total === null

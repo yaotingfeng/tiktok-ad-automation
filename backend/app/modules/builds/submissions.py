@@ -31,6 +31,10 @@ from app.modules.builds.execution_schemas import (
 )
 from app.modules.builds.models import BuildDraft
 from app.modules.builds.preview_models import BuildPreview, BuildUnit
+from app.modules.builds.preview_schemas import (
+    budget_strategy_label,
+    frozen_bid_strategy,
+)
 from app.modules.builds.previews import load_frozen_unit
 from app.modules.builds.route_views import execution_route_view
 from app.modules.builds.routes import (
@@ -729,6 +733,12 @@ def get_submission(
     from app.modules.builds.submission_catalog import metadata
 
     recovery = recovery_summary(session, context=context, submission=row)
+    budget_strategy = preview.config.get("budget_strategy", "SERIES")
+    bid_strategy = frozen_bid_strategy(
+        scene_snapshot={},
+        preview_config=preview.config,
+        target_roas=preview.target_roas,
+    )
     return SubmissionView(
         corrected_ad_count=stage_counts.get("AD:VERIFIED_REPLACEMENT", 0),
         execution_route=execution_route_view(
@@ -753,7 +763,13 @@ def get_submission(
         status=status,
         expanded=row.expanded,
         currency=preview.config["currency"],
-        daily_budget_sum=str(preview.budget * scope["submitted_c"]),
+        daily_budget_sum=str(
+            preview.budget
+            * (scope["submitted_g"] if budget_strategy == "ADGROUP" else scope["submitted_c"])
+        ),
+        daily_budget_label=budget_strategy_label(budget_strategy),
+        budget_strategy=budget_strategy,
+        bid_strategy=bid_strategy,
         planned=planned,
         submitted=submitted,
         excluded=excluded,

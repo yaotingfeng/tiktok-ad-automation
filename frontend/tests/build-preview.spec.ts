@@ -157,6 +157,18 @@ test("冻结预览两剧三账户实际六Campaign，金额使用后端字符串
     ),
   ).toHaveLength(1)
 })
+
+test("预览摘要说明预算层级、竞价策略与素材分配口径", async ({ page }) => {
+  await buildsBoundary(page)
+  await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
+  await expect(
+    page.getByText("系列预算合计 USD 600", { exact: true }),
+  ).toBeVisible()
+  await expect(page.getByText(/广告组按素材数量/).first()).toBeVisible()
+  await expect(page.getByText(/去重素材 23 个/).first()).toBeVisible()
+  await page.getByRole("tab", { name: "账户组合", exact: true }).click()
+  await expect(page.getByText(/每个广告 1 个素材/).first()).toBeVisible()
+})
 test("部分阻断组合和输入问题分别计数，不按已加载页估算", async ({ page }) => {
   await buildsBoundary(page, { blocked: true })
   await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)

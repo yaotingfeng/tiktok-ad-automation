@@ -27,7 +27,7 @@ import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import { cn } from "@/lib/utils"
-import { buildKey } from "./api"
+import { bidLabel, budgetLabel, buildKey } from "./api"
 import { ExecutionRoute } from "./ExecutionRoute"
 import { PreviewGenerationProgress } from "./PreviewGenerationProgress"
 import {
@@ -309,6 +309,7 @@ export function BuildPreviewPanel({
                   tenantId={tenantId}
                   bcId={bcId}
                   previewId={previewId}
+                  budgetStrategy={current.budget_strategy}
                   dramaId={dramaId}
                   excluded={tab === "excluded"}
                   onUnit={setUnit}
@@ -374,11 +375,24 @@ export function PreviewSummaryBar({
               Group · {preview.ad_count} Ad
             </p>
             <p className="mt-1 text-sm">
-              配置日预算合计 {preview.currency}{" "}
+              {budgetLabel(preview)} {preview.currency}{" "}
               {normalizeDecimal(preview.daily_budget_sum)}
             </p>
             <p className="text-xs text-muted-foreground">
-              各 Campaign 配置日预算之和，非预计实际消耗。
+              {preview.structure_summary ||
+                `预算策略：${preview.budget_strategy === "ADGROUP" ? "组预算" : "系列预算"}；竞价策略：${bidLabel(preview.bid_strategy)}。`}
+              <span className="block">
+                预算策略：
+                {preview.budget_strategy === "ADGROUP" ? "组预算" : "系列预算"}{" "}
+                · 竞价策略：{bidLabel(preview.bid_strategy)}
+              </span>
+              <span className="block">
+                以上金额为配置日预算之和，非预计实际消耗。
+              </span>
+              <span className="block">
+                配置日预算合计 {preview.currency}{" "}
+                {normalizeDecimal(preview.daily_budget_sum)}
+              </span>
               {!readOnly &&
                 preview.blocked_count > 0 &&
                 `排除 ${preview.blocked_count} 个阻断组合。`}
@@ -433,6 +447,7 @@ export function PreviewUnitTable({
   tenantId,
   bcId,
   previewId,
+  budgetStrategy,
   excluded,
   dramaId,
   onUnit,
@@ -440,6 +455,7 @@ export function PreviewUnitTable({
   tenantId: string
   bcId: string
   previewId: string
+  budgetStrategy: PreviewSummary["budget_strategy"]
   excluded: boolean
   dramaId?: string
   onUnit: (unit: PreviewUnit) => void
@@ -516,14 +532,24 @@ export function PreviewUnitTable({
             ),
           },
           {
-            header: "Ad Group / Ad",
-            cell: ({ row }) =>
-              `${row.original.group_count} / ${row.original.ad_count}`,
+            header: "广告组 / 广告 / 素材",
+            cell: ({ row }) => (
+              <div className="flex flex-col gap-1">
+                <span>
+                  {row.original.group_count} / {row.original.ad_count} /{" "}
+                  {row.original.material_count ?? "—"}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  {row.original.structure_summary ||
+                    `${row.original.group_count} 个广告组、${row.original.ad_count} 个广告`}
+                </span>
+              </div>
+            ),
           },
           {
-            header: "Campaign 日预算",
+            header: "预算",
             cell: ({ row }) =>
-              `${row.original.currency} ${normalizeDecimal(row.original.budget)}`,
+              `${budgetStrategy === "ADGROUP" ? "组日预算" : "系列日预算"} ${row.original.currency} ${normalizeDecimal(row.original.budget)}`,
           },
           {
             header: "Campaign 名称",
@@ -893,11 +919,15 @@ function PreviewDramaTable({
         columns={[
           { header: "剧目", accessorKey: "title" },
           {
-            header: "选中素材 / 原分组",
+            header: "素材分配 / 去重素材",
             cell: ({ row }) => (
               <div>
                 {row.original.material_count} /{" "}
-                {row.original.material_group_count}
+                {row.original.unique_material_count ?? "—"}
+                <span className="text-xs text-muted-foreground">
+                  （原分组 {row.original.material_group_count}，广告分配{" "}
+                  {row.original.ad_material_allocation_count ?? "—"} 次）
+                </span>
                 {!!row.original.skipped_material_count && (
                   <p className="text-xs text-muted-foreground">
                     {row.original.skipped_material_count}{" "}
@@ -918,7 +948,7 @@ function PreviewDramaTable({
               `${row.original.eligible_campaign_count} / ${row.original.eligible_adgroup_count} / ${row.original.eligible_ad_count}`,
           },
           {
-            header: "配置日预算合计",
+            header: budgetLabel(preview),
             cell: ({ row }) =>
               `${preview.currency} ${normalizeDecimal(row.original.daily_budget_sum)}`,
           },

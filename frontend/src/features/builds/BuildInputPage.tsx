@@ -408,7 +408,11 @@ export function BuildInputPage({
                 }
                 renderItem={(item) => <span>{item.display_name}</span>}
                 onSelect={(item) => {
-                  change({ connection: item.id, application: "", linkConfig: {} })
+                  change({
+                    connection: item.id,
+                    application: "",
+                    linkConfig: {},
+                  })
                   setLabels((l) => ({
                     ...l,
                     connection: item.display_name,
@@ -581,11 +585,23 @@ export function BuildInputPage({
           </CardHeader>
           <CardContent className="text-sm">
             <p>
-              每个 Campaign 日预算 {version.data.config.currency}{" "}
-              {normalizeDecimal(version.data.config.budget)} · 目标 ROAS{" "}
-              {version.data.config.target_roas} · 每组{" "}
-              {version.data.config.group_size} 份素材 ·{" "}
-              {version.data.config.creative_count} 条 SP 创意
+              {version.data.config.budget_strategy === "ADGROUP"
+                ? "组预算"
+                : "系列预算"}{" "}
+              {version.data.config.currency}{" "}
+              {normalizeDecimal(version.data.config.budget)} ·{" "}
+              {version.data.config.bid_strategy === "TARGET_ROAS"
+                ? `目标 ROAS ${version.data.config.target_roas}`
+                : "最高价值"}{" "}
+              · 广告组
+              {version.data.config.group_generation_mode === "BY_MATERIAL"
+                ? `按素材数量（上限 ${version.data.config.max_materials_per_group}）`
+                : `固定 ${version.data.config.group_count} 组`}{" "}
+              · 广告
+              {version.data.config.ad_generation_mode === "BY_MATERIAL"
+                ? `按素材数量（每个广告上限 ${version.data.config.max_materials_per_ad}）`
+                : `固定 ${version.data.config.ads_per_group} 个/组`}{" "}
+              · 创意数量 {version.data.config.creative_count}
             </p>
           </CardContent>
         </Card>

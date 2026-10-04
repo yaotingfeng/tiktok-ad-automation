@@ -188,6 +188,12 @@ export const reasonLabels: Record<string, string> = {
   cta_options_unavailable: "CTA 尚未通过当前场景核实",
   field_limits_unverified: "平台字段限制尚未核实",
   budget_limits_unverified: "预算限制尚未核实",
+  adgroup_budget_unverified:
+    "当前账户尚未核实组预算能力，请改用系列预算或先完成账户能力核查。",
+  invalid_material_allocation:
+    "素材安排与数量规则不匹配，请调整固定数量或素材上限后重新预览。",
+  bid_strategy_invalid:
+    "竞价策略与账户能力不匹配，请选择可用竞价方式并重新生成预览。",
   budget_out_of_range: "预算超出平台允许范围",
   roas_out_of_range: "目标 ROAS 超出允许范围",
   roas_limits_unverified: "目标 ROAS 限制尚未核实",

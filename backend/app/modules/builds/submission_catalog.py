@@ -25,6 +25,8 @@ from app.modules.builds.execution_schemas import (
     SubmissionMetadata,
     SubmissionUnitPublic,
 )
+from app.modules.builds.preview_models import BuildPreview
+from app.modules.builds.preview_schemas import build_structure_summary
 from app.modules.builds.receipt_completion import obsolete_readback_sql
 from app.modules.builds.submissions import (
     _page_scope,
@@ -238,7 +240,7 @@ def list_submissions(
         + """, metadata AS ("""
         + METADATA
         + """ WHERE s.tenant_id=:tenant), filtered AS (
- SELECT s.*,p.batch_short_id,m.actor_name,m.provider_name,m.strategy_label
+ SELECT s.*,p.batch_short_id,p.config,p.target_roas,m.actor_name,m.provider_name,m.strategy_label
  FROM catalog_submissions s JOIN build_preview p ON p.tenant_id=s.tenant_id AND p.id=s.preview_id JOIN metadata m ON m.submission_id=s.id
  WHERE s.tenant_id=:tenant AND s.bc_id=:bc
  AND (CAST(:from AS timestamptz) IS NULL OR s.created_at>=:from) AND (CAST(:to AS timestamptz) IS NULL OR s.created_at<:to)
@@ -255,6 +257,8 @@ def list_submissions(
  """
         + COUNTS
         + """ SELECT p.*,ft.total_count,coalesce(t.drama_count,0) drama_count,coalesce(t.account_count,0) account_count,
+ coalesce(p.config->>'budget_strategy','SERIES') budget_strategy,
+ coalesce(p.config->>'bid_strategy',CASE WHEN p.target_roas IS NULL THEN 'HIGHEST_VALUE' ELSE 'TARGET_ROAS' END) bid_strategy,
  coalesce(t.excluded_unit_count,0) excluded_unit_count,coalesce(t.submitted_c,0) submitted_c,coalesce(t.submitted_g,0) submitted_g,coalesce(t.submitted_a,0) submitted_a,coalesce(o.values,'{}'::jsonb) outcomes,
  (SELECT count(*) FROM build_verified_replacement vr WHERE vr.tenant_id=p.tenant_id AND vr.submission_id=p.id) corrected_ad_count
  FROM filtered_total ft LEFT JOIN page p ON true LEFT JOIN totals t ON t.submission_id=p.id LEFT JOIN outcomes o ON o.submission_id=p.id ORDER BY p.created_at DESC,p.id DESC"""
@@ -326,6 +330,8 @@ def list_submissions(
                 succeeded=outcomes["succeeded"],
                 failed=outcomes["failed"],
                 unknown=outcomes["unknown"],
+                budget_strategy=row["budget_strategy"],
+                bid_strategy=row["bid_strategy"],
             )
         )
     return Page(
@@ -642,11 +648,14 @@ def enrich_units(
                 + obsolete_readback_sql("e")
                 + """ GROUP BY e.unit_id
 ), materials AS (
- SELECT u.id unit_id,count(m.material_id) material_count FROM page u LEFT JOIN preview_group_material m ON m.tenant_id=u.tenant_id AND m.preview_id=u.preview_id AND m.drama_id=u.drama_id
+ SELECT u.id unit_id,count(m.material_id) material_count,count(DISTINCT m.material_id) unique_material_count,
+ (SELECT count(*) FROM preview_ad_material am WHERE am.tenant_id=u.tenant_id AND am.preview_id=u.preview_id AND am.drama_id=u.drama_id
+  AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped WHERE skipped.tenant_id=am.tenant_id AND skipped.unit_id=u.id AND skipped.material_id=am.material_id)) material_allocation_count
+ FROM page u LEFT JOIN preview_group_material m ON m.tenant_id=u.tenant_id AND m.preview_id=u.preview_id AND m.drama_id=u.drama_id
  AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=u.id AND skipped.material_id=m.material_id) GROUP BY u.id
 )
  SELECT u.id,ac.name account_name,u.group_count,u.ad_count,coalesce(c.succeeded_group_count,0) succeeded_group_count,coalesce(c.succeeded_ad_count,0) succeeded_ad_count,
- coalesce(c.ready_material_count,0) ready_material_count,m.material_count,c.states,c.mismatch,c.unverified_success,"""
+ coalesce(c.ready_material_count,0) ready_material_count,m.material_count,m.unique_material_count,m.material_allocation_count,c.states,c.mismatch,c.unverified_success,"""
                 + STEP_JSON
                 + """ step FROM page u
  LEFT JOIN counts c ON c.unit_id=u.id LEFT JOIN materials m ON m.unit_id=u.id
@@ -664,6 +673,8 @@ def enrich_units(
         .all()
     )
     indexed = {r["id"]: r for r in rows}
+    preview = session.get(BuildPreview, preview_id)
+    config = preview.config if preview else {}
     for item in items:
         row = indexed[item.unit_id]
         for key in [
@@ -673,6 +684,8 @@ def enrich_units(
             "succeeded_group_count",
             "succeeded_ad_count",
             "material_count",
+            "unique_material_count",
+            "material_allocation_count",
             "ready_material_count",
         ]:
             setattr(item, key, row[key])
@@ -686,6 +699,16 @@ def enrich_units(
             states.add("PENDING" if states else "QUEUED")
         item.result_status = (
             "EXCLUDED" if item.disposition == "EXCLUDED" else aggregate_status(states)
+        )
+        item.structure_summary = build_structure_summary(
+            campaign_count=1,
+            group_count=int(row["group_count"] or 0),
+            ad_count=int(row["ad_count"] or 0),
+            creative_count=int(config.get("creative_count", 1)),
+            group_generation_mode=config.get("group_generation_mode", "FIXED"),
+            ad_generation_mode=config.get("ad_generation_mode", "BY_MATERIAL"),
+            material_allocation_count=int(row["material_allocation_count"] or 0),
+            unique_material_count=int(row["unique_material_count"] or 0),
         )
 
 
