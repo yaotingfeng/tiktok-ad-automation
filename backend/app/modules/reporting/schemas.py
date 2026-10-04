@@ -23,11 +23,13 @@ CANONICAL_METRIC_KEYS = frozenset(
         "spend",
         "native_growth_ad_revenue_value_d0",
         "native_growth_total_ad_impression_value",
+        "native_growth_total_ad_impression_event_count",
         "impressions",
         "clicks",
         # Derived only after canonical A buckets are aggregated.
         "d0_roas",
         "ad_revenue_roas",
+        "cost_per_ad_impression_event",
         "ctr",
     }
 )

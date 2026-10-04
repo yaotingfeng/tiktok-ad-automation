@@ -133,8 +133,15 @@ export function rowOptimizationGoal(row: ReportRow): string | null {
 export function availabilityLabel(
   availability: string,
   value: string | null,
+  options?: { percent?: boolean },
 ): string {
-  if (availability === "AVAILABLE") return formatMetric(value)
+  if (availability === "AVAILABLE") {
+    if (options?.percent) {
+      const number = Number(value)
+      return Number.isFinite(number) ? `${(number * 100).toFixed(2)}%` : "—"
+    }
+    return formatMetric(value)
+  }
   if (availability === "UNSUPPORTED") return "平台未提供"
   if (availability === "UNAVAILABLE") return "暂不可用"
   if (availability === "FAILED") return "读取失败"

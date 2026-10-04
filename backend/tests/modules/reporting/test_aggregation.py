@@ -37,6 +37,34 @@ def test_roas_uses_summed_revenue_and_zero_spend_is_undefined():
     assert zero.values["d0_roas"] is None
 
 
+def test_report_metrics_include_revenue_roas_event_cost_and_ctr():
+    vector = MetricVector(
+        currency="USD",
+        timezone="UTC",
+        attribution="default",
+        values={
+            "spend": Decimal("100"),
+            "native_growth_ad_revenue_value_d0": Decimal("120"),
+            "native_growth_total_ad_impression_value": Decimal("150"),
+            "native_growth_total_ad_impression_event_count": Decimal("50"),
+            "impressions": Decimal("1000"),
+            "clicks": Decimal("20"),
+        },
+        availability={
+            "spend": "AVAILABLE",
+            "native_growth_ad_revenue_value_d0": "AVAILABLE",
+            "native_growth_total_ad_impression_value": "AVAILABLE",
+            "native_growth_total_ad_impression_event_count": "AVAILABLE",
+            "impressions": "AVAILABLE",
+            "clicks": "AVAILABLE",
+        },
+    )
+    result = aggregate_metrics([vector])
+    assert result.values["ad_revenue_roas"] == Decimal("1.5")
+    assert result.values["cost_per_ad_impression_event"] == Decimal("2")
+    assert result.values["ctr"] == Decimal("0.02")
+
+
 def test_missing_and_unsupported_are_not_converted_to_zero():
     with pytest.raises(ValueError, match="availability buckets"):
         aggregate_metrics([_vector("10", "30"), _vector("0", "0", state="MISSING")])

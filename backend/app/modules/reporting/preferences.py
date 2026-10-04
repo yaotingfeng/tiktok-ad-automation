@@ -32,9 +32,14 @@ SUPPORTED_VIEW_COLUMNS = frozenset(
         "coverage",
         "spend",
         "native_growth_ad_revenue_value_d0",
+        "native_growth_total_ad_impression_value",
+        "native_growth_total_ad_impression_event_count",
+        "ad_revenue_roas",
         "d0_roas",
+        "cost_per_ad_impression_event",
         "impressions",
         "clicks",
+        "ctr",
     }
 )
 

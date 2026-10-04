@@ -28,7 +28,10 @@ from app.modules.reporting.schemas import (
 
 D0 = "native_growth_ad_revenue_value_d0"
 TOTAL_REVENUE = "native_growth_total_ad_impression_value"
-DERIVED_METRICS = frozenset({"d0_roas", "ad_revenue_roas", "ctr"})
+IMPRESSION_EVENTS = "native_growth_total_ad_impression_event_count"
+DERIVED_METRICS = frozenset(
+    {"d0_roas", "ad_revenue_roas", "cost_per_ad_impression_event", "ctr"}
+)
 CONTRACTS = {
     "account": ("basic_account",), "campaign": ("basic_campaign",),
     "drama": ("basic_campaign",), "adgroup": ("basic_adgroup",),
@@ -85,6 +88,7 @@ def aggregate_metrics(rows: Sequence[MetricVector]) -> MetricVector:
     for derived, numerator, denominator in (
         ("d0_roas", D0, "spend"),
         ("ad_revenue_roas", TOTAL_REVENUE, "spend"),
+        ("cost_per_ad_impression_event", "spend", IMPRESSION_EVENTS),
         ("ctr", "clicks", "impressions"),
     ):
         numerator_value = values.get(numerator)

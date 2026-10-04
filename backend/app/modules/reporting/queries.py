@@ -19,7 +19,11 @@ from app.core.context import TenantContext
 from app.core.db import engine
 from app.modules.accounts.models import TenantBC
 from app.modules.ads.models import AdObject, CampaignNameProjection
-from app.modules.reporting.aggregation import aggregate_metrics, build_dimension_rows
+from app.modules.reporting.aggregation import (
+    DERIVED_METRICS,
+    aggregate_metrics,
+    build_dimension_rows,
+)
 from app.modules.reporting.filters import authorized_grants, compile_filter
 from app.modules.reporting.models import ReportFact
 from app.modules.reporting.query_models import (
@@ -98,7 +102,7 @@ def _summary(rows: tuple[ReportRow, ...]) -> dict[str, Any]:
                     sorted(
                         (name, state)
                         for name, state in vector.availability.items()
-                        if name != "d0_roas"
+                        if name not in DERIVED_METRICS
                     )
                 ),
             )

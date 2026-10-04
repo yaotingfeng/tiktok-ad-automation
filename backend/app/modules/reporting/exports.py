@@ -262,9 +262,14 @@ def _csv_rows(export: ReportExport) -> bytes:
         "fetched_at",
         "spend",
         "native_growth_ad_revenue_value_d0",
+        "native_growth_total_ad_impression_value",
+        "native_growth_total_ad_impression_event_count",
+        "ad_revenue_roas",
         "d0_roas",
+        "cost_per_ad_impression_event",
         "impressions",
         "clicks",
+        "ctr",
     ]
     captured = export.created_at.astimezone(UTC).isoformat()
     out = io.StringIO(newline="")

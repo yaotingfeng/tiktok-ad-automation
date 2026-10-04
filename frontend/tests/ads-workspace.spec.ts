@@ -15,10 +15,25 @@ test.describe("ads workspace", () => {
     await expect(
       page.getByRole("cell", { name: "总裁归来", exact: true }),
     ).toBeVisible()
-    await expect(page.getByText("广告收益 ROAS", { exact: true })).toBeVisible()
+    for (const column of [
+      "消耗",
+      "广告收益 ROAS",
+      "D0 ROAS",
+      "广告展示总价值",
+      "广告展示事件总数",
+      "单次广告展示事件成本",
+      "点击率",
+    ]) {
+      await expect(
+        page.getByRole("columnheader", { name: column }),
+      ).toBeVisible()
+    }
+    await expect(
+      page.getByRole("columnheader", { name: "来源", exact: true }),
+    ).toHaveCount(0)
     await expect(
       page.getByRole("cell", { name: "1.20", exact: true }),
-    ).toHaveCount(0)
+    ).toBeVisible()
     await expect(
       page.getByRole("cell", { name: "外部广告", exact: true }),
     ).toHaveCount(0)

@@ -13,8 +13,10 @@ import {
 } from "@/components/ui/table"
 import {
   type AdsDimension,
+  availabilityLabel,
   officialPlatformUrl,
   rowBudget,
+  rowMetric,
   rowName,
   rowOptimizationGoal,
   targetRoasLabel,
@@ -121,6 +123,13 @@ export function AdsTable({
                 </TableHead>
               ))}
               <TableHead>状态</TableHead>
+              <TableHead>消耗</TableHead>
+              <TableHead>广告收益 ROAS</TableHead>
+              <TableHead>D0 ROAS</TableHead>
+              <TableHead>广告展示总价值</TableHead>
+              <TableHead>广告展示事件总数</TableHead>
+              <TableHead>单次广告展示事件成本</TableHead>
+              <TableHead>点击率</TableHead>
               {(dimension === "campaign" || dimension === "adgroup") && (
                 <TableHead>
                   {dimension === "campaign" ? "系列预算" : "广告组预算"}
@@ -138,6 +147,22 @@ export function AdsTable({
           <TableBody>
             {rows.map((row) => {
               const url = officialPlatformUrl(row)
+              const spend = rowMetric(row, "spend")
+              const adRevenueRoas = rowMetric(row, "ad_revenue_roas")
+              const d0Roas = rowMetric(row, "d0_roas")
+              const impressionValue = rowMetric(
+                row,
+                "native_growth_total_ad_impression_value",
+              )
+              const impressionEvents = rowMetric(
+                row,
+                "native_growth_total_ad_impression_event_count",
+              )
+              const impressionEventCost = rowMetric(
+                row,
+                "cost_per_ad_impression_event",
+              )
+              const ctr = rowMetric(row, "ctr")
               return (
                 <TableRow key={row.row_key}>
                   <TableCell>
@@ -175,6 +200,41 @@ export function AdsTable({
                         row.display?.operation_status ??
                         "未知"}
                     </Badge>
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {availabilityLabel(spend.availability, spend.value)}
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {availabilityLabel(
+                      adRevenueRoas.availability,
+                      adRevenueRoas.value,
+                    )}
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {availabilityLabel(d0Roas.availability, d0Roas.value)}
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {availabilityLabel(
+                      impressionValue.availability,
+                      impressionValue.value,
+                    )}
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {availabilityLabel(
+                      impressionEvents.availability,
+                      impressionEvents.value,
+                    )}
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {availabilityLabel(
+                      impressionEventCost.availability,
+                      impressionEventCost.value,
+                    )}
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {availabilityLabel(ctr.availability, ctr.value, {
+                      percent: true,
+                    })}
                   </TableCell>
                   {(dimension === "campaign" || dimension === "adgroup") && (
                     <TableCell className="text-xs">

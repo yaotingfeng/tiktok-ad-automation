@@ -39,6 +39,7 @@ CORE_METRICS = (
     "spend",
     "native_growth_ad_revenue_value_d0",
     "native_growth_total_ad_impression_value",
+    "native_growth_total_ad_impression_event_count",
     "impressions",
     "clicks",
 )
