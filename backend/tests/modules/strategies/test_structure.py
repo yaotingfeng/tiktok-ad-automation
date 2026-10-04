@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.errors import DomainError
-from app.modules.strategies.copy_pool import seed_copies
+from app.modules.strategies.copy_pool import CopyChoice, seed_copies
 from app.modules.strategies.schemas import StrategyConfig
 from app.modules.strategies.structure import plan_structure
 
@@ -118,6 +118,10 @@ def test_fixed_ad_allocation(allocation):
     assert tuple(len(ad.material_ids) for ad in group.ads) == (
         (10, 10) if allocation == "SHARED" else (5, 5)
     )
+    if allocation == "SEQUENTIAL_AVERAGE":
+        assert group.ads[0].material_ids == tuple(UUID(int=i) for i in range(1, 6))
+        assert group.ads[1].material_ids == tuple(UUID(int=i) for i in range(6, 11))
+        assert set(group.ads[0].material_ids).isdisjoint(group.ads[1].material_ids)
 
 
 @pytest.mark.parametrize(
@@ -232,6 +236,27 @@ def test_material_input_order_is_preserved_and_duplicate_ids_keep_first_record()
 
     assert first[0].material_ids == (UUID(int=2), UUID(int=1))
     assert second[0].material_ids == (UUID(int=1), UUID(int=2))
+
+
+def test_copy_pool_exhaustion_counts_unique_non_empty_texts():
+    config = base_config(
+        group_count=1,
+        group_material_allocation="SHARED",
+        ad_generation_mode="FIXED",
+        ads_per_group=1,
+        max_materials_per_ad=None,
+        ad_material_allocation="SHARED",
+        creative_count=3,
+    )
+    pool = (
+        CopyChoice(uuid4(), "First"),
+        CopyChoice(uuid4(), "First"),
+        CopyChoice(uuid4(), "  "),
+        CopyChoice(uuid4(), "Second"),
+    )
+
+    with pytest.raises(DomainError, match="copy_pool_exhausted"):
+        plan_structure(materials(1), config=config, pool=pool, seed=1)
 
 
 @pytest.mark.parametrize(
