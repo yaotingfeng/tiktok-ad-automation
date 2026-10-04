@@ -13,6 +13,7 @@
 ## Global Constraints
 
 - 每次策略执行使用一个已确定的素材集合；不增加按标签分配或手动逐条分配。
+- 素材包在预览前冻结 position 顺序；所有“按顺序平均分配”和“按素材上限拆分”都沿用该顺序，不能按文件名重新排序。
 - 广告组层和广告层分别采用“固定数量 / 按素材数量”二选一。
 - 固定数量才显示素材安排：共用全部素材或按顺序平均分配。
 - 按素材数量只设置每组或每个广告的素材上限，并按顺序拆分。
@@ -117,7 +118,7 @@
 - `AdMaterialPlan(base_ad_no: int, material_ids: tuple[UUID, ...], copies: tuple[CopyChoice, ...])`
 - `GroupPlan(group_no: int, material_ids: tuple[UUID, ...], ads: tuple[AdMaterialPlan, ...])`
 - `plan_structure(materials, *, config: StrategyConfig, pool: tuple[CopyChoice, ...], seed: int) -> tuple[GroupPlan, ...]`
-- `plan_structure()` 先按现有稳定顺序去重素材，再依次执行广告组分配、广告分配和创意复制；它不访问数据库、不读取平台、不自动补素材。
+- `plan_structure()` 使用素材包冻结的 position 顺序，并按首次出现的 material ID 去重，再依次执行广告组分配、广告分配和创意复制；它不访问数据库、不读取平台、不自动补素材。
 
 - [ ] **Step 1: 写分配器失败测试**
 
@@ -159,7 +160,7 @@
 - Modify: `backend/app/modules/builds/cover_execution.py`
 - Modify: `backend/app/modules/builds/execution.py`
 - Modify: `backend/app/modules/builds/material_execution.py`
-- Modify: `backend/app/alembic/versions/20261004_general_ad_build_strategy.py`
+- Create: `backend/app/alembic/versions/20261005_preview_ad_material_strategy.py`
 - Create: `backend/tests/modules/builds/test_structure_preview.py`
 - Modify: `backend/tests/modules/builds/test_previews.py`
 - Modify: `backend/tests/modules/builds/test_preview_workspace_api.py`
@@ -172,6 +173,7 @@
 - `PreviewCopy` 增加 `base_ad_no`，唯一键改为 `drama_id + group_no + base_ad_no + creative_no`。
 - `PlannedAd` 增加 `base_ad_no`，唯一键改为 `group_id + base_ad_no + creative_no`。
 - `FrozenAd` 增加 `base_ad_no` 和 `material_ids`；执行阶段以 `FrozenAd.material_ids` 为准，不再以组级素材覆盖所有广告。
+- 广告命名必须同时包含基础广告序号和创意序号，或使用等价的连续最终广告序号；同组内不同基础广告的复制广告不能因只使用 `creative_no` 而重名。历史已冻结名称继续按原快照读取。
 
 - [ ] **Step 1: 先增加数据库模型和预览 schema 测试**
 
@@ -179,7 +181,7 @@
 
 - [ ] **Step 2: 增加迁移表和约束**
 
-  在同一个 Alembic migration 中创建 `preview_ad_material`，调整 `uq_preview_drama_material` 为包含 `group_no` 的唯一约束，补充 `base_ad_no > 0` 检查和新唯一约束。迁移执行前后用真实 PostgreSQL 验证升级、降级和已有预览读取。
+  在后续 Alembic migration `20261005_preview_ad_material_strategy.py` 中创建 `preview_ad_material`，调整 `uq_preview_drama_material` 为包含 `group_no` 的唯一约束，补充 `base_ad_no > 0` 检查和新唯一约束。不得回改已提交的 `20261004_general_ad_build_strategy.py`；迁移执行前后用真实 PostgreSQL 验证升级、降级和已有预览读取。
 
 - [ ] **Step 3: 改造预览生成流程**
 
@@ -223,6 +225,7 @@
 - `AdGroupCreate` 支持：
   - 最高价值：`optimization_goal="VALUE"`、`optimization_event="AD_REVENUE_VALUE"`、`deep_bid_type="VO_HIGHEST_VALUE"`，不包含 `roas_bid`；
   - 目标 ROAS：`deep_bid_type="VO_MIN_ROAS"`，包含精确 `roas_bid`。
+- 最高价值的创建请求、标准广告组回读和 Smart+ 专用回读可能使用不同的事件字段枚举；必须分别建立 wire、标准回读和 Smart+ 回读 fixture，明确把平台返回值映射到统一的 `bid_strategy`，不能直接把现有 `ACTIVE_PAY` 字符串替换成未经证实的新值。
 - `FrozenUnit`、场景快照和执行步骤保存 `budget_strategy`、`bid_strategy`，确保预览冻结后执行不会读取可变策略。
 
 - [ ] **Step 1: 写请求合同失败测试**
