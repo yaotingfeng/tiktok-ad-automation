@@ -21,12 +21,14 @@
 
 ```text
 uv run pytest --confcutdir=/tmp /tmp/task7_offline.py -q
-7 passed in 0.16s
+7 passed in 0.16s (DB-free supplemental checks)
 
 PATH="$PWD/.tools/node_modules/.bin:$PATH" \
   bun run --cwd frontend test -- tests/build-preparation.spec.ts \
   -g '预览展示冻结定向|当前版本已有预览' --workers=1
 2 passed
+
+新增 DB-bound 回归位于 `backend/tests/modules/builds/test_previews.py`（A/B 隔离和四结构矩阵）、`test_material_execution.py`（真实素材切片幂等）、`test_partial_material_execution.py`（不可用素材/UNKNOWN 恢复）及 `test_cover_execution.py`（pending cover 恢复冻结行）；它们未被 7 项 harness 计入。尝试运行预览 smoke 时，session migration fixture 在 PostgreSQL `127.0.0.1:15432` 连接阶段返回 5 个 `connection refused` errors，因此没有把这些 DB-bound 测试记为通过。
 
 uv run ruff check backend/tests/modules/builds/test_execution_assets.py
 All checks passed
@@ -52,7 +54,7 @@ passed
 
 不能在当前环境宣称升级/降级已验收：测试 PostgreSQL `127.0.0.1:15432` 连接被拒绝，Alembic `check` 和 pytest 的 session migration fixture 均在连接阶段失败。Redis 未启动，因此真实 PostgreSQL/Redis 并发、素材准备任务去重、部分失败恢复和迁移 upgrade/downgrade 尚未执行。没有 staging 预览证据，本记录不把离线测试称为 staging 或生产验收。
 
-完整前端命令曾运行 `build-preparation.spec.ts` 与 `build-task-pages.spec.ts`；环境中的既有策略选择器/草稿 fixture 在 118 项中先产生 4 项 fixture 失败并中断，18 项在中断前通过，未将这次结果标记为全量通过。聚焦的新增/受影响场景单独通过。Bun 使用仓库已有 `.tools/node_modules/.bin/bun`（1.4.2）。
+完整前端命令曾手动中断；最终记录为 **44 passed / 13 failed / 1 interrupted / 60 not run**。失败来自既有策略选择器/草稿 fixture，不能作为本轮全量通过证据。聚焦的新增/受影响场景单独通过。Bun 使用仓库已有 `.tools/node_modules/.bin/bun`（1.4.2）。
 
 项目级 `node .codex/skills/tiktok-smart-plus-drama-ads/scripts/test-batch-tools.mjs`、完整 backend pytest、完整 frontend test/build 和迁移 upgrade/downgrade 应在专用 PostgreSQL、Redis 和完整环境配置可用后重跑。
 

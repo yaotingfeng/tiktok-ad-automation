@@ -20,7 +20,11 @@ from app.modules.builds.cover_execution import validate_ad_assets
 from app.modules.builds.execution_models import ExecutionStep
 from app.modules.builds.execution_schemas import StepClaim
 from app.modules.builds.models import DraftGroupMaterial
-from app.modules.builds.preview_models import BuildUnit
+from app.modules.builds.preview_models import (
+    BuildUnit,
+    PreviewAdMaterial,
+    PreviewSkippedMaterial,
+)
 from app.modules.builds.routes import load_preview_route
 from app.modules.materials.models import AccountMaterial
 from tests.modules.builds.test_previews import drain
@@ -265,3 +269,67 @@ def test_ad_request_and_final_fence_keep_same_frozen_material_order(
         c["creative_info"]["video_info"]["video_id"] for c in body["creative_list"]
     ] == [f"video-{identity}" for identity in group.material_ids]
     validate_ad_assets(session, step=ad, unit=partial.unit, body=body)
+
+
+def test_unavailable_material_and_unknown_ad_recovery_preserve_frozen_rows(
+    session, context, partial
+):
+    """素材不可用与广告 UNKNOWN 恢复只能推进执行状态，不能重写冻结素材。"""
+    before_ad_materials = session.exec(
+        select(PreviewAdMaterial).where(
+            PreviewAdMaterial.tenant_id == context.tenant_id,
+            PreviewAdMaterial.preview_id == partial.preview,
+        )
+    ).all()
+    before_skipped = session.exec(
+        select(PreviewSkippedMaterial).where(
+            PreviewSkippedMaterial.tenant_id == context.tenant_id,
+            PreviewSkippedMaterial.preview_id == partial.preview,
+        )
+    ).all()
+    assert before_ad_materials and before_skipped
+    before_ad_material_snapshot = sorted(row.model_dump_json() for row in before_ad_materials)
+    before_skipped_snapshot = sorted(row.model_dump_json() for row in before_skipped)
+    ad = session.exec(
+        select(ExecutionStep).where(
+            ExecutionStep.submission_id == partial.submission,
+            ExecutionStep.unit_id == partial.unit.id,
+            ExecutionStep.kind == "AD",
+        )
+    ).first()
+    assert ad is not None
+    ad.status, ad.phase, ad.error_code, ad.dispatch_id = (
+        "UNKNOWN",
+        "DONE",
+        "result_unknown",
+        None,
+    )
+    session.add(ad)
+    session.flush()
+    receipt = recovery.request_recovery(
+        session,
+        context=context,
+        submission_id=partial.submission,
+        request_id=uuid4(),
+        kind="RECONCILE",
+    )
+    session.commit()
+    recovery.process_recovery(
+        database_engine=session.bind,
+        context=context,
+        payload={"recovery_id": str(receipt.recovery_id), "revision": 0},
+    )
+    after_ad_materials = session.exec(
+        select(PreviewAdMaterial).where(
+            PreviewAdMaterial.tenant_id == context.tenant_id,
+            PreviewAdMaterial.preview_id == partial.preview,
+        )
+    ).all()
+    after_skipped = session.exec(
+        select(PreviewSkippedMaterial).where(
+            PreviewSkippedMaterial.tenant_id == context.tenant_id,
+            PreviewSkippedMaterial.preview_id == partial.preview,
+        )
+    ).all()
+    assert sorted(row.model_dump_json() for row in after_ad_materials) == before_ad_material_snapshot
+    assert sorted(row.model_dump_json() for row in after_skipped) == before_skipped_snapshot

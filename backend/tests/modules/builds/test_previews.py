@@ -1,3 +1,4 @@
+from dataclasses import replace
 from decimal import Decimal
 from itertools import islice
 from types import SimpleNamespace
@@ -8,9 +9,18 @@ from sqlmodel import select
 
 from app.modules.builds import previews
 from app.modules.builds.drafts import create_draft, edit_material_groups, prepare_draft
-from app.modules.builds.models import DraftDrama
+from app.modules.builds.models import BuildDraft, DraftDrama, DraftInput
+from app.modules.builds.preview_models import (
+    BuildPreview,
+    BuildUnit,
+    PlannedAd,
+    PlannedGroup,
+    PreviewAdMaterial,
+    PreviewGroupMaterial,
+)
 from app.modules.builds.previews import iter_pairs, unit_readiness
 from app.modules.builds.scene_schemas import SceneContext
+from app.modules.providers.models import ProviderApplication
 from app.modules.strategies.models import StrategyVersion
 from app.modules.strategies.service import append_version
 from tests.modules.builds.test_drafts import account, finish, ready_links
@@ -204,6 +214,413 @@ def drain(session, context, identity):
         if previews.continue_preview(session, context=context, preview_id=identity):
             return
     raise AssertionError("preview never finished")
+
+
+def _clone_ready_draft(
+    session, context, source_id, *, strategy_version_id, link_config
+):
+    """为同一策略版本准备第二份草稿，确保 A/B 冻结数据走真实持久化路径。"""
+    source = session.get(BuildDraft, source_id)
+    assert source is not None
+    drama_lines = [
+        row.raw_text
+        for row in session.exec(
+            select(DraftInput)
+            .where(DraftInput.draft_id == source_id, DraftInput.kind == "drama")
+            .order_by(DraftInput.line_no)
+        ).all()
+        if row.raw_text.strip()
+    ]
+    account_lines = [
+        row.raw_text
+        for row in session.exec(
+            select(DraftInput)
+            .where(DraftInput.draft_id == source_id, DraftInput.kind == "account")
+            .order_by(DraftInput.line_no)
+        ).all()
+        if row.raw_text.strip() and row.duplicate_of is None
+    ]
+    # provider_drama.external_drama_id is unique within an application; a
+    # cloned draft therefore needs its own application scope before the real
+    # prepare/finish path creates link rows.
+    application_id = f"{source.application_id}-clone-{uuid4().hex[:12]}"
+    session.add(
+        ProviderApplication(
+            tenant_id=context.tenant_id,
+            connection_id=source.provider_connection_id,
+            external_id=application_id,
+            name=f"{source.application_id} clone",
+        )
+    )
+    session.flush()
+    intent = {
+        "bc_id": source.bc_id,
+        "strategy_version_id": strategy_version_id,
+        "provider_connection_id": source.provider_connection_id,
+        "application_id": application_id,
+        "drama_lines": drama_lines,
+        "account_lines": account_lines,
+        "link_config": link_config,
+    }
+    draft_id = create_draft(session, context=context, request_id=uuid4(), **intent)
+    task_id = prepare_draft(
+        session, context=context, draft_id=draft_id, request_id=uuid4()
+    )
+    ready_links(session, context, task_id, intent)
+    finish(session, context, task_id)
+    return draft_id
+
+
+def test_two_drafts_freeze_independent_preview_rows_and_keep_strategy_version(
+    session, context, prepared
+):
+    """两个真实 draft/preview 的冻结行必须按 preview 隔离，策略版本不可变。"""
+    source = session.get(BuildDraft, prepared)
+    assert source is not None
+    version_before = session.get(StrategyVersion, source.strategy_version_id)
+    assert version_before is not None
+    version_snapshot = (version_before.id, version_before.number, version_before.config)
+    second = _clone_ready_draft(
+        session,
+        context,
+        prepared,
+        strategy_version_id=source.strategy_version_id,
+        link_config={"episode": 2, "charge_level": 1},
+    )
+    first_preview = previews.generate_preview(
+        session, context=context, draft_id=prepared, expected_revision=1
+    )
+    drain(session, context, first_preview)
+    second_preview = previews.generate_preview(
+        session, context=context, draft_id=second, expected_revision=1
+    )
+    drain(session, context, second_preview)
+
+    first_materials = session.exec(
+        select(PreviewAdMaterial).where(
+            PreviewAdMaterial.tenant_id == context.tenant_id,
+            PreviewAdMaterial.preview_id == first_preview,
+        )
+    ).all()
+    second_materials = session.exec(
+        select(PreviewAdMaterial).where(
+            PreviewAdMaterial.tenant_id == context.tenant_id,
+            PreviewAdMaterial.preview_id == second_preview,
+        )
+    ).all()
+    first_groups = session.exec(
+        select(PreviewGroupMaterial).where(
+            PreviewGroupMaterial.tenant_id == context.tenant_id,
+            PreviewGroupMaterial.preview_id == first_preview,
+        )
+    ).all()
+    second_groups = session.exec(
+        select(PreviewGroupMaterial).where(
+            PreviewGroupMaterial.tenant_id == context.tenant_id,
+            PreviewGroupMaterial.preview_id == second_preview,
+        )
+    ).all()
+    first_ads = session.exec(
+        select(PlannedAd).where(
+            PlannedAd.tenant_id == context.tenant_id,
+            PlannedAd.preview_id == first_preview,
+        )
+    ).all()
+    second_ads = session.exec(
+        select(PlannedAd).where(
+            PlannedAd.tenant_id == context.tenant_id,
+            PlannedAd.preview_id == second_preview,
+        )
+    ).all()
+    assert (
+        first_materials
+        and second_materials
+        and first_groups
+        and second_groups
+        and first_ads
+        and second_ads
+    )
+    first_keys = {
+        (row.preview_id, row.drama_id, row.group_no, row.base_ad_no, row.position)
+        for row in first_materials
+    }
+    second_keys = {
+        (row.preview_id, row.drama_id, row.group_no, row.base_ad_no, row.position)
+        for row in second_materials
+    }
+    first_group_keys = {
+        (row.preview_id, row.drama_id, row.group_no, row.position)
+        for row in first_groups
+    }
+    second_group_keys = {
+        (row.preview_id, row.drama_id, row.group_no, row.position)
+        for row in second_groups
+    }
+    assert {row.preview_id for row in first_materials} == {first_preview}
+    assert {row.preview_id for row in second_materials} == {second_preview}
+    assert first_keys.isdisjoint(second_keys)
+    assert {row.preview_id for row in first_groups} == {first_preview}
+    assert {row.preview_id for row in second_groups} == {second_preview}
+    assert first_group_keys.isdisjoint(second_group_keys)
+    assert {row.preview_id for row in first_ads} == {first_preview}
+    assert {row.preview_id for row in second_ads} == {second_preview}
+    version_after = session.get(StrategyVersion, source.strategy_version_id)
+    assert version_after is not None
+    assert (version_after.id, version_after.number, version_after.config) == version_snapshot
+
+
+@pytest.mark.parametrize(
+    ("label", "changes", "expected_groups", "expected_ads"),
+    [
+        (
+            "by-material-one",
+            {
+                "budget_strategy": "SERIES",
+                "bid_strategy": "HIGHEST_VALUE",
+                "group_generation_mode": "FIXED",
+                "group_count": 1,
+                "group_material_allocation": "SHARED",
+                "max_materials_per_group": None,
+                "ad_generation_mode": "BY_MATERIAL",
+                "ads_per_group": None,
+                "ad_material_allocation": None,
+                "max_materials_per_ad": 1,
+                "creative_count": 1,
+                "target_roas": None,
+            },
+            1,
+            20,
+        ),
+        (
+            "average-two",
+            {
+                "budget_strategy": "SERIES",
+                "bid_strategy": "HIGHEST_VALUE",
+                "group_generation_mode": "FIXED",
+                "group_count": 2,
+                "group_material_allocation": "SEQUENTIAL_AVERAGE",
+                "max_materials_per_group": None,
+                "ad_generation_mode": "BY_MATERIAL",
+                "ads_per_group": None,
+                "ad_material_allocation": None,
+                "max_materials_per_ad": 1,
+                "creative_count": 1,
+                "target_roas": None,
+            },
+            2,
+            20,
+        ),
+        (
+            "shared-creatives",
+            {
+                "budget_strategy": "SERIES",
+                "bid_strategy": "HIGHEST_VALUE",
+                "group_generation_mode": "FIXED",
+                "group_count": 1,
+                "group_material_allocation": "SHARED",
+                "max_materials_per_group": None,
+                "ad_generation_mode": "FIXED",
+                "ads_per_group": 2,
+                "ad_material_allocation": "SHARED",
+                "max_materials_per_ad": None,
+                "creative_count": 3,
+                "target_roas": None,
+            },
+            1,
+            6,
+        ),
+        (
+            "group-budget-highest",
+            {
+                "budget_strategy": "ADGROUP",
+                "bid_strategy": "HIGHEST_VALUE",
+                "group_generation_mode": "FIXED",
+                "group_count": 2,
+                "group_material_allocation": "SHARED",
+                "max_materials_per_group": None,
+                "ad_generation_mode": "BY_MATERIAL",
+                "ads_per_group": None,
+                "ad_material_allocation": None,
+                "max_materials_per_ad": 2,
+                "creative_count": 1,
+                "target_roas": None,
+            },
+            2,
+            20,
+        ),
+    ],
+)
+def test_strategy_structure_matrix_persists_material_ads_and_frozen_contract(
+    session,
+    context,
+    prepared,
+    monkeypatch,
+    label,
+    changes,
+    expected_groups,
+    expected_ads,
+):
+    """四种策略均经真实预览写入 PlannedAd/PreviewAdMaterial 后再核对合同。"""
+    from app.modules.builds.models import DraftGroupMaterial
+
+    source = session.get(BuildDraft, prepared)
+    assert source is not None
+    source_version = session.get(StrategyVersion, source.strategy_version_id)
+    assert source_version is not None
+    version_id = append_version(
+        session,
+        context=context,
+        strategy_id=source_version.strategy_id,
+        config=config(**changes),
+    )
+    draft_id = _clone_ready_draft(
+        session,
+        context,
+        prepared,
+        strategy_version_id=version_id,
+        link_config={"episode": 10 + expected_groups, "charge_level": 1},
+    )
+    # 使用固定 20 条离线素材，让第四个矩阵精确得到每组 10 个广告。
+    rows = session.exec(
+        select(DraftGroupMaterial)
+        .where(DraftGroupMaterial.draft_id == draft_id)
+        .order_by(DraftGroupMaterial.drama_id, DraftGroupMaterial.position)
+    ).all()
+    seen_by_drama = {}
+    for row in rows:
+        seen_by_drama[row.drama_id] = seen_by_drama.get(row.drama_id, 0) + 1
+        if seen_by_drama[row.drama_id] > 20:
+            session.delete(row)
+    session.flush()
+    base_scene = previews.read_scene_context(
+        session,
+        context=context,
+        bc_id="bc-draft",
+        advertiser_id="account-A",
+        link_id=uuid4(),
+        route=None,
+    )
+    constraints = dict(base_scene.field_constraints)
+    constraints.update(
+        {
+            "adgroup_daily_budget": {
+                "currency": "USD",
+                "minimum_inclusive": "50",
+                "maximum_exclusive": "10000000",
+                "precision": "0.01",
+            },
+            "bid_capabilities": {
+                "HIGHEST_VALUE": {
+                    "optimization_goal": "VALUE",
+                    "optimization_event": "AD_REVENUE_VALUE",
+                    "deep_bid_type": "VO_HIGHEST_VALUE",
+                }
+            },
+        }
+    )
+    monkeypatch.setattr(
+        previews,
+        "read_scene_context",
+        lambda *args, **kwargs: replace(base_scene, field_constraints=constraints),
+    )
+    preview_id = previews.generate_preview(
+        session, context=context, draft_id=draft_id, expected_revision=1
+    )
+    drain(session, context, preview_id)
+    preview = session.get(BuildPreview, preview_id)
+    assert preview is not None
+    assert preview.config["budget_strategy"] == changes["budget_strategy"]
+    assert preview.config["bid_strategy"] == changes["bid_strategy"]
+    groups = session.exec(
+        select(PreviewGroupMaterial).where(
+            PreviewGroupMaterial.tenant_id == context.tenant_id,
+            PreviewGroupMaterial.preview_id == preview_id,
+        )
+    ).all()
+    mappings = session.exec(
+        select(PreviewAdMaterial).where(
+            PreviewAdMaterial.tenant_id == context.tenant_id,
+            PreviewAdMaterial.preview_id == preview_id,
+        )
+    ).all()
+    ads = session.exec(
+        select(PlannedAd).where(
+            PlannedAd.tenant_id == context.tenant_id,
+            PlannedAd.preview_id == preview_id,
+        )
+    ).all()
+    units = session.exec(
+        select(BuildUnit).where(
+            BuildUnit.tenant_id == context.tenant_id,
+            BuildUnit.preview_id == preview_id,
+        )
+    ).all()
+    assert len({(row.drama_id, row.group_no) for row in groups}) == expected_groups * 2
+    assert len(ads) == expected_ads * 2 * 3  # 两剧三账户，每个组合都完整冻结。
+    assert mappings and len({row.material_id for row in mappings}) == 20
+    assert all(ad.cta_option_ids == ["cta-1"] for ad in ads)
+    # 每条冻结广告都必须把自己的素材集合编译成带视频与封面的 creative_list；
+    # 这里仍使用本地目标资产证据，不发起平台请求。
+    from app.modules.builds.request_compiler import ad_assets
+
+    groups_by_id = {
+        row.id: row
+        for row in session.exec(
+            select(PlannedGroup).where(
+                PlannedGroup.tenant_id == context.tenant_id,
+                PlannedGroup.preview_id == preview_id,
+            )
+        ).all()
+    }
+    for ad in ads[: min(len(ads), 12)]:
+        group = groups_by_id[ad.group_id]
+        frozen_ids = [
+            row.material_id
+            for row in mappings
+            if row.drama_id == group.drama_id
+            and row.group_no == group.group_no
+            and row.base_ad_no == ad.base_ad_no
+        ]
+        body = ad_assets(
+            [
+                {
+                    "video_id": f"fixture-video-{material_id}",
+                    "image_id": f"fixture-cover-{material_id}",
+                }
+                for material_id in frozen_ids
+            ],
+            text=ad.text,
+            url="https://example.test/minis",
+            identity={
+                "identity_type": "BC_AUTH_TT",
+                "identity_id": "fixture-identity",
+                "identity_authorized_bc_id": "bc-draft",
+            },
+        )
+        assert len(body["creative_list"]) == len(frozen_ids)
+        assert all(
+            creative["creative_info"].get("image_info")
+            for creative in body["creative_list"]
+        )
+    assert all(
+        unit.scene_snapshot["budget_strategy"] == changes["budget_strategy"]
+        for unit in units
+    )
+    assert all(
+        unit.scene_snapshot["bid_strategy"] == changes["bid_strategy"]
+        for unit in units
+    )
+    if changes["budget_strategy"] == "ADGROUP":
+        assert all(
+            "adgroup_daily_budget" in unit.scene_snapshot["field_constraints"]
+            for unit in units
+        )
+    else:
+        assert all(
+            "campaign_daily_budget" in unit.scene_snapshot["field_constraints"]
+            for unit in units
+        )
+    assert label in {"by-material-one", "average-two", "shared-creatives", "group-budget-highest"}
 
 
 def test_identity_picker_keeps_same_named_authorizations_separate_and_saves_choice(

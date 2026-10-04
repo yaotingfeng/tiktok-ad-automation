@@ -1660,6 +1660,6 @@
 ## 2026-10-05：通用投放策略 Task 7 离线回归与验收记录
 
 - Task 7 在基线 `637dda9` 上补充端到端离线回归：按素材单素材广告、两组顺序平均、固定广告共用素材与创意复制、组预算最高价值四套结构；同时验证两个草稿复用同一策略版本时预览冻结行隔离、共享素材按账户去重而广告保留独立 creative_list，以及不可用素材、待核实封面、缺少最高价值能力字段和恢复不重新规划等边界。
-- 离线夹具通过：`uv run pytest --confcutdir=/tmp /tmp/task7_offline.py -q`（7 passed）；新增测试保留在 `backend/tests/modules/builds/test_execution_assets.py`，前端冻结预算/竞价回归 `PATH="$PWD/.tools/node_modules/.bin:$PATH" bun run --cwd frontend test -- tests/build-preparation.spec.ts -g '预览展示冻结定向|当前版本已有预览' --workers=1`（2 passed）。
+- 7 项 harness 只是 DB-free supplemental checks：`uv run pytest --confcutdir=/tmp /tmp/task7_offline.py -q`（7 passed）；同时新增真实 DB-bound A/B、结构矩阵、素材切片幂等和恢复冻结行回归，分别位于 `test_previews.py`、`test_material_execution.py`、`test_partial_material_execution.py`、`test_cover_execution.py`，等待专用 PostgreSQL/Redis 后执行。前端冻结预算/竞价回归 `PATH="$PWD/.tools/node_modules/.bin:$PATH" bun run --cwd frontend test -- tests/build-preparation.spec.ts -g '预览展示冻结定向|当前版本已有预览' --workers=1`（2 passed）。
 - 迁移脚本可解析，`uv run alembic heads` 显示 `20261005_preview_ad_material_strategy` 与既有 `provider_kinds_expansion` 两个 head；upgrade/downgrade、完整后端回归和 Redis 恢复验证因专用 PostgreSQL `127.0.0.1:15432` 未运行而未执行。全量前端命令受既有 fixture/策略选择器失败影响，具体证据记录在 `docs/validation/2026-10-04-general-ad-build-strategy.md`。
-- 本轮没有 staging 预览、真实 TikTok 读回或广告创建/启用写入；真实平台写入仍需独立授权和 staging 验收，不得据此宣称生产验收。
+- 完整前端回归为手动中断的部分结果：44 passed / 13 failed / 1 interrupted / 60 not run；失败来自既有策略选择器/草稿 fixture。本轮没有 staging 预览、真实 TikTok 读回或广告创建/启用写入；真实平台写入仍需独立授权和 staging 验收，不得据此宣称生产验收。

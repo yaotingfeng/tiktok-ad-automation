@@ -15,6 +15,7 @@ from app.modules.builds.dependency_waits import wake_material_dependencies
 from app.modules.builds.execution import process_step
 from app.modules.builds.execution_models import ExecutionStep, Submission
 from app.modules.builds.material_execution import recover_material_results
+from app.modules.builds.preview_models import PreviewAdMaterial
 from app.modules.materials.cover_models import MaterialCoverJob
 from app.modules.materials.models import AccountMaterial, MaterialFile
 from app.modules.tenants.models import TenantMembership
@@ -224,6 +225,17 @@ def test_pending_cover_permission_denial_keeps_recovery_identity(
 def test_cover_retry_or_reconcile_keeps_job_identity(executable, redis_client, armed):
     identity, job_id, submission_id = pending(executable, redis_client)
     db, context, _ = executable
+    with Session(db) as session:
+        frozen_materials_before = sorted(
+            row.model_dump_json()
+            for row in session.exec(
+                select(PreviewAdMaterial).where(
+                    PreviewAdMaterial.tenant_id == context.tenant_id,
+                    PreviewAdMaterial.preview_id
+                    == session.get(ExecutionStep, identity).preview_id,
+                )
+            ).all()
+        )
     with Session(db) as session, session.begin():
         job = session.get(MaterialCoverJob, job_id)
         job.status, job.dispatch_id = ("UNKNOWN" if armed else "BLOCKED"), None
@@ -255,6 +267,17 @@ def test_cover_retry_or_reconcile_keeps_job_identity(executable, redis_client, a
         assert dispatch.payload["job_id"] == str(job_id)
         assert session.get(ExecutionStep, identity).cover_job_id == job_id
         assert len(session.exec(select(MaterialCoverJob)).all()) == 1
+        frozen_materials_after = sorted(
+            row.model_dump_json()
+            for row in session.exec(
+                select(PreviewAdMaterial).where(
+                    PreviewAdMaterial.tenant_id == context.tenant_id,
+                    PreviewAdMaterial.preview_id
+                    == session.get(ExecutionStep, identity).preview_id,
+                )
+            ).all()
+        )
+        assert frozen_materials_after == frozen_materials_before
 
 
 def test_reconciled_video_completes_video_stage_then_ad_prepares_only_cover(
