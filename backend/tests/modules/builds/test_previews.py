@@ -693,14 +693,14 @@ def test_strategy_structure_matrix_persists_material_ads_and_frozen_contract(
             "ad",
             fixed={
                 "advertiser_id": "account-A",
+                "campaign_id": "fixture-campaign",
+                "adgroup_id": str(group.id),
+                "ad_name": ad.name,
                 "budget_strategy": changes["budget_strategy"],
                 "bid_strategy": changes["bid_strategy"],
             },
             resolved={
                 **body,
-                "advertiser_id": "account-A",
-                "adgroup_id": str(group.id),
-                "ad_name": ad.name,
                 "ad_configuration": {
                     "call_to_action_id": ad.cta_option_ids[0]
                 },
