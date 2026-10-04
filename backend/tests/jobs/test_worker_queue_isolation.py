@@ -139,3 +139,5 @@ def test_material_results_have_a_reserved_slot_without_increasing_total_slots():
     assert dispatch_queue("materials.prepare_cover") == "resources"
     assert dispatch_queue("materials.verify_cover") == "resource-results"
     assert dispatch_queue("materials.verify_target") == "resource-results"
+    # OAuth 后的账户发现必须绕过素材准备长队列，否则连接会长期停留在 DISCOVERING。
+    assert dispatch_queue("accounts.discover") == "resource-results"

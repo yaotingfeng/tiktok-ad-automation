@@ -38,7 +38,8 @@ from .models import (
     TikTokConnection,
 )
 
-register_dispatch_task("accounts.discover", "resources")
+# 账户发现必须绕过素材准备长队列；结果队列有独立执行槽，避免 OAuth 后连接长期停在 DISCOVERING。
+register_dispatch_task("accounts.discover", "resource-results")
 HARD_LIMIT_SECONDS = 45
 RECOVERY_SECONDS = 60
 

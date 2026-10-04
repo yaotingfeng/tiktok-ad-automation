@@ -45,7 +45,8 @@ from app.modules.tenants.permissions import require_tenant
 TOKEN_ENDPOINT = "/open_api/v1.3/oauth2/access_token/"
 OAUTH_DEADLINE_SECONDS = 40
 OAUTH_CLEANUP_MARGIN_MS = 10000
-register_dispatch_task("accounts.discover", "resources")
+# 与账户发现消费者保持一致，避免授权后的发现任务被素材准备队列阻塞。
+register_dispatch_task("accounts.discover", "resource-results")
 
 
 def _configured_authorization_url() -> SplitResult:
