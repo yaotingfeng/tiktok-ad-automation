@@ -1621,3 +1621,9 @@
 - 提前完成模型注册后修复导入顺序；新增真实 OAuth worker 模块 spawn 导入回归。修复提交为 `db9a8d3`（完整 SHA 见验收记录）。本地超时/成功/导入回归、Ruff、compileall 均通过。
 - 已按测试环境发布规范部署并重启 API、全部 Worker 和 Beat；备份 `/var/backups/tt-ada-staging/20261004T053152Z/` 的 checksum、项目/配置隔离恢复和迁移检查通过。线上 spawn 回归、九服务配置一致性、HTTPS 配置/回调边界和 Celery 7 节点 ping 通过。
 - 原失败授权码未重放；真实重新授权、code 换 token 和账户发现待用户重新发起授权后验收。记录见 `docs/validation/2026-10-04-staging-tiktok-oauth-fix.md`。
+
+## 2026-10-04：容量版权方登录会话修复已推送并部署
+
+- 提交 `1269501eba5c872240080a4a816ba8aa50254cfe` 已推送到 `origin/main` 并部署到新加坡测试环境；`current` 已切换至同一 SHA，API、资源/结果、构建、控制 Worker、Beat 和备份 timer 均 active。
+- 容量登录响应允许缺少 `code`，并保留 `dist_token` 与 `dist_current_user` 完整 Cookie；协议回归 4 项、Ruff、CLI `node --check` 通过。测试环境 Alembic current/head 一致，`alembic check` 无新迁移，入口健康/登录/回调/404 边界检查通过。
+- 发布批次备份为 `/var/backups/tt-ada-staging/20261004T070523Z/`，数据库、Redis、私有配置及当前项目归档已生成并校验；由于测试机磁盘仅约 20GB 且可用空间不足，独立 PostgreSQL 恢复演练在本轮切换前未完成，未宣称恢复验收通过。CLI 同步修复位于工作区 `projects/rongliang-drama-link-tool/rongliang-link-cli.js`，该目录无独立 Git 远端。
