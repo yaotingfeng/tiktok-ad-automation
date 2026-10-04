@@ -5,10 +5,6 @@ from __future__ import annotations
 import json as jsonlib
 import os
 import secrets
-import shutil
-import subprocess
-import tempfile
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
@@ -44,18 +40,19 @@ class _CurlSession:
     """
 
     def __init__(self, *, cookie: str = ""):
-        if shutil.which("curl") is None:
-            raise failure("provider_unavailable", retryable=True)
-        handle = tempfile.NamedTemporaryFile(prefix="rongliang-cookies-", delete=False)
-        handle.close()
-        self.cookie_file = Path(handle.name)
-        self.cookie_file.chmod(0o600)
+        try:
+            from curl_cffi import CurlMime, requests
+        except ImportError:
+            raise failure("provider_unavailable", retryable=True) from None
+        self._curl_mime = CurlMime
+        self.session = requests.Session(impersonate="chrome124")
         self.xla_ci = XLA_CI or secrets.token_hex(16)
+        self.session.cookies.set("XLA_CI", self.xla_ci, domain=COOKIE_DOMAIN, path="/")
         if cookie:
-            self.cookie_file.write_text(cookie + "\n", encoding="utf-8")
+            self.session.headers["Cookie"] = cookie
 
     def close(self) -> None:
-        self.cookie_file.unlink(missing_ok=True)
+        self.session.close()
 
     def __del__(self) -> None:
         self.close()
@@ -75,77 +72,34 @@ class _CurlSession:
             from urllib.parse import urlencode
 
             url = f"{url}?{urlencode(params)}"
-        command = [
-            "curl",
-            "--silent",
-            "--show-error",
-            "--http1.1",
-            "--compressed",
-            "--max-time",
-            "30",
-            "--cookie",
-            str(self.cookie_file),
-            "--cookie",
-            f"XLA_CI={self.xla_ci}",
-            "--user-agent",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
-            "--header",
-            "accept: application/json, text/plain, */*",
-            "--header",
-            "accept-language: zh-CN,zh;q=0.9",
-            "--url",
-            url,
-        ]
-        if method not in {"GET", "POST"}:
-            command.extend(["--request", method])
-        # Rewriting this provider's cookie jar on ordinary API reads makes its
-        # session invalid. Only the login response needs to persist Set-Cookie.
-        if url.endswith("/auth/login"):
-            cookie_index = command.index("--cookie")
-            del command[cookie_index : cookie_index + 2]
-            command[command.index("--user-agent"):command.index("--user-agent")] = [
-                "--cookie-jar",
-                str(self.cookie_file),
-            ]
-        for name, value in (headers or {}).items():
-            command.extend(["--header", f"{name}: {value}"])
+        request_headers = {
+            "accept": "application/json, text/plain, */*",
+            "accept-language": "zh-CN,zh;q=0.9",
+        }
+        request_headers.update(headers or {})
         body = content
+        multipart = None
         if form:
+            multipart = self._curl_mime()
             for name, value in form.items():
-                command.extend(["--form-string", f"{name}={value}"])
+                multipart.addpart(name=name, data=value.encode())
             body = None
-        if json is not None:
-            body = jsonlib.dumps(json, ensure_ascii=False, separators=(",", ":"))
-            command.extend(["--header", "content-type: application/json"])
-        if body is not None:
-            command.extend(["--data-binary", "@-"])
-        response_file = tempfile.NamedTemporaryFile(
-            prefix="rongliang-response-", delete=False
-        )
-        response_file.close()
-        response_path = Path(response_file.name)
-        response_path.chmod(0o600)
-        command.extend(["--output", str(response_path), "--write-out", "%{http_code}"])
         try:
-            completed = subprocess.run(
-                command,
-                input=body,
-                text=True,
-                capture_output=True,
-                check=False,
+            response = self.session.request(
+                method,
+                url,
+                headers=request_headers,
+                data=body,
+                json=json,
+                multipart=multipart,
+                timeout=30,
+                allow_redirects=False,
             )
-        except OSError:
+        except Exception:
             raise failure("provider_unavailable", retryable=True) from None
         try:
-            payload = response_path.read_text(encoding="utf-8")
-        finally:
-            response_path.unlink(missing_ok=True)
-        status_text = completed.stdout.strip()
-        if completed.returncode != 0:
-            raise failure("provider_unavailable", retryable=True)
-        try:
-            status = int(status_text)
-            body_value = jsonlib.loads(payload)
+            status = response.status_code
+            body_value = response.json()
         except (TypeError, ValueError, jsonlib.JSONDecodeError):
             raise failure("provider_schema_unsupported") from None
         if status in {401, 403}:

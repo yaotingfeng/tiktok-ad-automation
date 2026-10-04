@@ -21,6 +21,7 @@ dependencies = [
     "boto3>=1.43.89",
     "mcp==2.2.0",
     "httpx2==2.12.0",
+    "curl-cffi>=0.16.0,<1.0.0",
 ]
 
 [dependency-groups]
