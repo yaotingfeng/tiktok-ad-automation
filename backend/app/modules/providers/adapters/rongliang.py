@@ -25,7 +25,8 @@ from .contract import (
     string,
 )
 
-BASE = "https://distribution.wolftv.online/manage/ocean/management/distribution"
+AUTH_BASE = "https://distribution.wolftv.online/manage/ocean/management/distribution"
+API_BASE = f"{AUTH_BASE}/management"
 PAGE_SIZE = 100
 COOKIE_DOMAIN = "distribution.wolftv.online"
 XLA_CI = os.getenv("RONG_LIANG_XLA_CI", "").strip()
@@ -45,7 +46,7 @@ class _CurlSession:
         except ImportError:
             raise failure("provider_unavailable", retryable=True) from None
         self._curl_mime = CurlMime
-        self.session = requests.Session(impersonate="chrome124")
+        self.session = requests.Session(impersonate="chrome")
         self.xla_ci = XLA_CI or secrets.token_hex(16)
         self.session.cookies.set("XLA_CI", self.xla_ci, domain=COOKIE_DOMAIN, path="/")
         if cookie:
@@ -147,14 +148,14 @@ class RongliangClient:
                 body, _ = request_json(
                     http,
                     "POST",
-                    BASE + "/auth/login",
+                    AUTH_BASE + "/auth/login",
                     headers={"content-type": "application/x-www-form-urlencoded; charset=UTF-8"},
                     content=encoded,
                 )
             else:
                 body = curl.request(
                     "POST",
-                    BASE + "/auth/login",
+                    AUTH_BASE + "/auth/login",
                     form={"email": email, "password": password},
                 )
         except Exception:
@@ -177,12 +178,12 @@ class RongliangClient:
         write: bool = False,
     ) -> Any:
         if self._curl is not None:
-            body = self._curl.request(method, BASE + path, params=query, json=json)
+            body = self._curl.request(method, API_BASE + path, params=query, json=json)
         else:
             body, _ = request_json(
                 self.http,
                 method,
-                BASE + path,
+                API_BASE + path,
                 params=query,
                 json=json,
                 write=write,
