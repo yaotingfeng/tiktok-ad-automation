@@ -24,11 +24,18 @@ from .contract import (
 
 BASE = "https://distribution.wolftv.online/manage/ocean/management/distribution"
 PAGE_SIZE = 100
+COOKIE_DOMAIN = "distribution.wolftv.online"
 
 
 class RongliangClient:
     def __init__(self, http: httpx.Client, *, token: str = ""):
         self.http, self.token = http, token
+        # 容量网页依赖登录响应下发的完整 Cookie 集合。旧实现手工只发
+        # dist_token，会丢掉同一登录会话的其他 Cookie，导致后台返回
+        # HTTP 500 / code=403 (admin not login)。恢复已缓存 token 时也要
+        # 把 token 注入同一个 httpx Cookie jar，保持首次登录和自动重登一致。
+        if token and not any(cookie.name == "dist_token" for cookie in self.http.cookies.jar):
+            self.http.cookies.set("dist_token", token, domain=COOKIE_DOMAIN, path="/")
 
     @classmethod
     def login(cls, http: httpx.Client, *, email: str, password: str) -> RongliangClient:
@@ -40,7 +47,9 @@ class RongliangClient:
             headers={"content-type": "application/x-www-form-urlencoded; charset=UTF-8"},
             content=encoded,
         )
-        if body.get("code") not in (0, "0") or not isinstance(body.get("token"), str):
+        # 登录成功响应当前没有 code 字段，只有 token 和用户信息；与 CLI
+        # 及浏览器实际响应保持一致，只有明确的非零 code 才视为认证失败。
+        if body.get("code") not in (None, 0, "0") or not isinstance(body.get("token"), str):
             raise failure("provider_auth_failed")
         return cls(http, token=body["token"])
 
@@ -58,7 +67,6 @@ class RongliangClient:
             method,
             BASE + path,
             params=query,
-            headers={"cookie": f"dist_token={self.token}"},
             json=json,
             write=write,
         )

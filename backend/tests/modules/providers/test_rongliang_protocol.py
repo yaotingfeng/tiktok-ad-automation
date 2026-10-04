@@ -17,10 +17,17 @@ def test_rongliang_form_login_form_data_search_and_strict_create_readback():
             assert request.content == b"email=user%40example.test&password=private-password"
             return httpx.Response(
                 200,
-                json={"code": 0, "token": "dist-jwt", "userName": "User"},
-                headers={"set-cookie": "dist_token=dist-jwt; Path=/"},
+                json={"token": "dist-jwt", "userName": "User"},
+                headers=[
+                    ("set-cookie", "dist_token=dist-jwt; Path=/"),
+                    (
+                        "set-cookie",
+                        "dist_current_user=%7B%22userId%22%3A%22u-1%22%7D; Path=/",
+                    ),
+                ],
             )
-        assert request.headers["cookie"] == "dist_token=dist-jwt"
+        assert "dist_token=dist-jwt" in request.headers["cookie"]
+        assert "dist_current_user=%7B%22userId%22%3A%22u-1%22%7D" in request.headers["cookie"]
         if request.url.path.endswith("/link/form_data"):
             return httpx.Response(
                 200,
