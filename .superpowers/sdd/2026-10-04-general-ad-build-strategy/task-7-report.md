@@ -31,7 +31,7 @@
 - 前端聚焦回归：`PATH="$PWD/.tools/node_modules/.bin:$PATH" bun run --cwd frontend test -- tests/build-preparation.spec.ts -g '预览展示冻结定向|当前版本已有预览' --workers=1` → `2 passed`。
 - `uv run ruff check backend/tests/modules/builds/test_execution_assets.py` → passed。
 - `uv run python -m compileall -q backend/tests/modules/builds/test_execution_assets.py` → passed。
-- 修改的三个 DB-bound 测试文件 `ruff` 与 `compileall` 均通过。
+- 修改的四个 DB-bound 测试文件（`test_previews.py`、`test_material_execution.py`、`test_partial_material_execution.py`、`test_cover_execution.py`）`ruff` 与 `compileall` 均通过。
 - `git diff --check` → passed。
 - `uv run alembic heads` → `20261005_preview_ad_material_strategy` 与 `provider_kinds_expansion` 两个 head 可解析。
 
