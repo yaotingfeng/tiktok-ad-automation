@@ -1614,3 +1614,10 @@
 - 修改前完整备份 `/var/backups/tt-ada-staging/20261004T032437Z/` 完成 PostgreSQL、Redis、私有配置/证书、项目及运行时配置归档；SHA256 校验和与隔离解压恢复抽查通过。
 - API、资源/结果/构建/控制、广告目录/报表/管理 Worker 和 Beat 共九个服务已重载并通过实际环境一致性检查；Celery 7 节点 ping、健康/登录/租户隔离、OFFICIAL_API/MCP configuration、回调边界和官方授权入口 HTTP 200 均通过。
 - 验收记录见 `docs/validation/2026-10-04-staging-tiktok-api-app.md`。真实 OAuth 同意、BC 绑定、账户发现、素材及广告接口仍需用户授权后单独验收；本轮未调用 TikTok 写接口。
+
+## 2026-10-04：修复测试环境 TikTok OAuth spawn 导入失败
+
+- 根因是 OAuth 换 token 的 `multiprocessing spawn` 子进程直接导入 `app.integrations.tiktok.auth` 时，TikTok SDK/权限模块与完整 SQLModel 注册发生循环导入，worker 未启动，授权尝试被安全标记为 `RESULT_UNKNOWN`。
+- 提前完成模型注册后修复导入顺序；新增真实 OAuth worker 模块 spawn 导入回归。修复提交为 `db9a8d3`（完整 SHA 见验收记录）。本地超时/成功/导入回归、Ruff、compileall 均通过。
+- 已按测试环境发布规范部署并重启 API、全部 Worker 和 Beat；备份 `/var/backups/tt-ada-staging/20261004T053152Z/` 的 checksum、项目/配置隔离恢复和迁移检查通过。线上 spawn 回归、九服务配置一致性、HTTPS 配置/回调边界和 Celery 7 节点 ping 通过。
+- 原失败授权码未重放；真实重新授权、code 换 token 和账户发现待用户重新发起授权后验收。记录见 `docs/validation/2026-10-04-staging-tiktok-oauth-fix.md`。
