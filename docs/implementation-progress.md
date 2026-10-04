@@ -1656,3 +1656,10 @@
 - 六个维度改为按层级展示字段：账户、系列、广告组、广告逐级补齐父级名称；素材和剧只显示自身维度。系列/广告组/广告补充预算、优化目标和目标 ROAS；表格仅隐藏来源列，消耗、广告收益 ROAS、D0 ROAS、广告展示总价值、广告展示事件总数、单次广告展示事件成本和点击率均保留。
 - 报表同步请求会带上页面选择的日期范围；查询保留上一页数据、关闭窗口自动刷新并设置短缓存，覆盖提示明确区分已发布数据、排队同步和覆盖不完整。后端增加总广告收入 ROAS、CTR 派生指标并修正 COMPLETE_EMPTY 与混口径快照状态。
 - 验证：前端 TypeScript、Biome、后端 Ruff、compileall、`git diff --check` 通过；报表相关 Playwright 8 项通过。后端 PostgreSQL 回归因当前环境未提供命名含 `_test` 的专用数据库，未执行。
+
+## 2026-10-05：通用投放策略 Task 7 离线回归与验收记录
+
+- Task 7 在基线 `637dda9` 上补充端到端离线回归：按素材单素材广告、两组顺序平均、固定广告共用素材与创意复制、组预算最高价值四套结构；同时验证两个草稿复用同一策略版本时预览冻结行隔离、共享素材按账户去重而广告保留独立 creative_list，以及不可用素材、待核实封面、缺少最高价值能力字段和恢复不重新规划等边界。
+- 离线夹具通过：`uv run pytest --confcutdir=/tmp /tmp/task7_offline.py -q`（7 passed）；新增测试保留在 `backend/tests/modules/builds/test_execution_assets.py`，前端冻结预算/竞价回归 `PATH="$PWD/.tools/node_modules/.bin:$PATH" bun run --cwd frontend test -- tests/build-preparation.spec.ts -g '预览展示冻结定向|当前版本已有预览' --workers=1`（2 passed）。
+- 迁移脚本可解析，`uv run alembic heads` 显示 `20261005_preview_ad_material_strategy` 与既有 `provider_kinds_expansion` 两个 head；upgrade/downgrade、完整后端回归和 Redis 恢复验证因专用 PostgreSQL `127.0.0.1:15432` 未运行而未执行。全量前端命令受既有 fixture/策略选择器失败影响，具体证据记录在 `docs/validation/2026-10-04-general-ad-build-strategy.md`。
+- 本轮没有 staging 预览、真实 TikTok 读回或广告创建/启用写入；真实平台写入仍需独立授权和 staging 验收，不得据此宣称生产验收。

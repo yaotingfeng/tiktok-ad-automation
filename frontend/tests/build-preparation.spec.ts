@@ -2348,6 +2348,11 @@ test("预览展示冻结定向，而非当前策略配置", async ({ page }) => 
     route.fulfill({
       json: {
         ...api.preview,
+        budget_strategy: "ADGROUP",
+        bid_strategy: "HIGHEST_VALUE",
+        daily_budget_label: "组预算合计",
+        structure_summary:
+          "2 个广告组、20 个广告、每个广告 1 个素材；预算策略：组预算；竞价策略：最高价值。",
         targeting: {
           region_mode: "SELECTED",
           region_codes: ["US"],
@@ -2366,4 +2371,5 @@ test("预览展示冻结定向，而非当前策略配置", async ({ page }) => 
   await expect(
     page.getByText(/国家：美国.*语言：英语.*年龄：25–34 岁.*性别：女性/),
   ).toBeVisible()
+  await expect(page.getByText(/预算策略：组预算；竞价策略：最高价值/)).toBeVisible()
 })

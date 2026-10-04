@@ -494,6 +494,8 @@ test("素材核查预算耗尽明确停止自动重试，不提示重复上传",
       ),
   ).toBeVisible()
   expect(api.requests.every((r) => r.method === "GET")).toBe(true)
+  // 未知的素材核查结果只保留原冻结任务，不能重新规划广告或扩大素材集合。
+  expect(api.requests.some((r) => r.path.endsWith("/ads"))).toBe(false)
 })
 
 test("异常定位与操作记录只读按需查询，并保留平台ENABLE的真实含义", async ({
