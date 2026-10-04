@@ -1627,3 +1627,9 @@
 - 提交 `1269501eba5c872240080a4a816ba8aa50254cfe` 已推送到 `origin/main` 并部署到新加坡测试环境；`current` 已切换至同一 SHA，API、资源/结果、构建、控制 Worker、Beat 和备份 timer 均 active。
 - 容量登录响应允许缺少 `code`，并保留 `dist_token` 与 `dist_current_user` 完整 Cookie；协议回归 4 项、Ruff、CLI `node --check` 通过。测试环境 Alembic current/head 一致，`alembic check` 无新迁移，入口健康/登录/回调/404 边界检查通过。
 - 发布批次备份为 `/var/backups/tt-ada-staging/20261004T070523Z/`，数据库、Redis、私有配置及当前项目归档已生成并校验；由于测试机磁盘仅约 20GB 且可用空间不足，独立 PostgreSQL 恢复演练在本轮切换前未完成，未宣称恢复验收通过。CLI 同步修复位于工作区 `projects/rongliang-drama-link-tool/rongliang-link-cli.js`，该目录无独立 Git 远端。
+
+## 2026-10-04：测试服务器历史备份与垃圾文件清理
+
+- 保留当前 release `1269501eba5c872240080a4a816ba8aa50254cfe`、上一版回滚 release `db9a8d3764f4f35685228805811f8f975a332e18` 和备份批次 `20261004T070523Z`；删除其余历史备份、旧 release、失败发布目录、旧恢复目录及 `/tmp` 编译缓存，磁盘使用率由 99% 降至约 69%。
+- 清理过程中发现当前 release 的 `.venv` 间接指向已删除历史 release，曾短暂触发 `203/EXEC`；已按锁定依赖重新建立 `/opt/tt-ada-staging/shared-venv` 并恢复符号链接。API、全部 Worker、Beat 和备份 timer 已恢复 active。
+- 清理后 `check-bootstrap.py` 通过；浏览器容量后台 `form_data`、`link/page` 均返回 HTTP 200；容量协议 4 项、Ruff、CLI 语法检查再次通过。
