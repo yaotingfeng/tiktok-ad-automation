@@ -41,7 +41,7 @@ from app.modules.builds.preview_materials import material_not_skipped
 from app.modules.builds.preview_models import (
     PlannedAd,
     PlannedGroup,
-    PreviewGroupMaterial,
+    PreviewAdMaterial,
 )
 from app.modules.builds.preview_schemas import FrozenUnit
 from app.modules.builds.request_compiler import (
@@ -301,8 +301,9 @@ def prepare_request(
         fixed.update(
             campaign_id=_parent(session, step),
             adgroup_name=group.name,
-            roas_bid=exact_number(frozen.target_roas),
         )
+        if frozen.target_roas is not None:
+            fixed["roas_bid"] = exact_number(frozen.target_roas)
         resolved = dict(snapshot["adgroup_fields"])
         if not resolved.get("targeting_spec", {}).get("location_ids"):
             raise DomainError("scene_targeting_unavailable", "缺少已核实的投放地区")
@@ -324,19 +325,20 @@ def prepare_request(
         if ad is None:
             raise DomainError("resource_not_found", "冻结创意不存在")
         material_ids = session.exec(
-            select(PreviewGroupMaterial.material_id)
+            select(PreviewAdMaterial.material_id)
             .where(
-                PreviewGroupMaterial.tenant_id == step.tenant_id,
-                PreviewGroupMaterial.preview_id == step.preview_id,
-                PreviewGroupMaterial.drama_id == frozen.drama_id,
-                PreviewGroupMaterial.group_no == group.group_no,
+                PreviewAdMaterial.tenant_id == step.tenant_id,
+                PreviewAdMaterial.preview_id == step.preview_id,
+                PreviewAdMaterial.drama_id == frozen.drama_id,
+                PreviewAdMaterial.group_no == group.group_no,
+                PreviewAdMaterial.base_ad_no == ad.base_ad_no,
                 material_not_skipped(
                     tenant_id=step.tenant_id,
                     unit_id=step.unit_id,
-                    material_id=col(PreviewGroupMaterial.material_id),
+                    material_id=col(PreviewAdMaterial.material_id),
                 ),
             )
-            .order_by(col(PreviewGroupMaterial.position))
+            .order_by(col(PreviewAdMaterial.position))
             .limit(51)
         ).all()
         if not 1 <= len(material_ids) <= 50:

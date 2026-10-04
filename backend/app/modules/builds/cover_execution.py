@@ -19,8 +19,9 @@ from app.modules.builds.execution_state import evidence
 from app.modules.builds.preview_materials import material_not_skipped
 from app.modules.builds.preview_models import (
     BuildUnit,
+    PlannedAd,
     PlannedGroup,
-    PreviewGroupMaterial,
+    PreviewAdMaterial,
 )
 from app.modules.builds.routes import verify_unit_route
 from app.modules.materials.cover_models import MaterialCoverJob
@@ -80,16 +81,23 @@ def retry_ad_covers(
             & (col(AccountMaterial.connection_id) == MaterialCoverJob.connection_id),
         )
         .join(
-            PreviewGroupMaterial,
-            (col(PreviewGroupMaterial.tenant_id) == AccountMaterial.tenant_id)
-            & (col(PreviewGroupMaterial.material_id) == AccountMaterial.material_id),
+            PreviewAdMaterial,
+            (col(PreviewAdMaterial.tenant_id) == AccountMaterial.tenant_id)
+            & (col(PreviewAdMaterial.material_id) == AccountMaterial.material_id),
+        )
+        .join(
+            PlannedAd,
+            (col(PlannedAd.tenant_id) == PreviewAdMaterial.tenant_id)
+            & (col(PlannedAd.preview_id) == PreviewAdMaterial.preview_id)
+            & (col(PlannedAd.base_ad_no) == PreviewAdMaterial.base_ad_no)
+            & (col(PlannedAd.id) == step.planned_ad_id),
         )
         .join(
             PlannedGroup,
-            (col(PlannedGroup.tenant_id) == PreviewGroupMaterial.tenant_id)
-            & (col(PlannedGroup.preview_id) == PreviewGroupMaterial.preview_id)
-            & (col(PlannedGroup.drama_id) == PreviewGroupMaterial.drama_id)
-            & (col(PlannedGroup.group_no) == PreviewGroupMaterial.group_no),
+            (col(PlannedGroup.tenant_id) == PreviewAdMaterial.tenant_id)
+            & (col(PlannedGroup.preview_id) == PreviewAdMaterial.preview_id)
+            & (col(PlannedGroup.drama_id) == PreviewAdMaterial.drama_id)
+            & (col(PlannedGroup.group_no) == PreviewAdMaterial.group_no),
         )
         .where(
             MaterialCoverJob.tenant_id == context.tenant_id,
@@ -103,7 +111,7 @@ def retry_ad_covers(
             material_not_skipped(
                 tenant_id=context.tenant_id,
                 unit_id=unit.id,
-                material_id=col(PreviewGroupMaterial.material_id),
+                material_id=col(PreviewAdMaterial.material_id),
             ),
         )
         .order_by(col(MaterialCoverJob.id))
@@ -126,19 +134,26 @@ def validate_ad_assets(
     from app.modules.materials.covers import verified_cover_image_id
 
     rows = session.exec(
-        select(PreviewGroupMaterial.material_id, AccountMaterial, MaterialCoverJob)
-        .select_from(PreviewGroupMaterial)
+        select(PreviewAdMaterial.material_id, AccountMaterial, MaterialCoverJob)
+        .select_from(PreviewAdMaterial)
+        .join(
+            PlannedAd,
+            (col(PlannedAd.tenant_id) == PreviewAdMaterial.tenant_id)
+            & (col(PlannedAd.preview_id) == PreviewAdMaterial.preview_id)
+            & (col(PlannedAd.base_ad_no) == PreviewAdMaterial.base_ad_no)
+            & (col(PlannedAd.id) == step.planned_ad_id),
+        )
         .join(
             PlannedGroup,
-            (col(PlannedGroup.tenant_id) == PreviewGroupMaterial.tenant_id)
-            & (col(PlannedGroup.preview_id) == PreviewGroupMaterial.preview_id)
-            & (col(PlannedGroup.drama_id) == PreviewGroupMaterial.drama_id)
-            & (col(PlannedGroup.group_no) == PreviewGroupMaterial.group_no),
+            (col(PlannedGroup.tenant_id) == PreviewAdMaterial.tenant_id)
+            & (col(PlannedGroup.preview_id) == PreviewAdMaterial.preview_id)
+            & (col(PlannedGroup.drama_id) == PreviewAdMaterial.drama_id)
+            & (col(PlannedGroup.group_no) == PreviewAdMaterial.group_no),
         )
         .outerjoin(
             AccountMaterial,
-            (col(AccountMaterial.tenant_id) == PreviewGroupMaterial.tenant_id)
-            & (col(AccountMaterial.material_id) == PreviewGroupMaterial.material_id)
+            (col(AccountMaterial.tenant_id) == PreviewAdMaterial.tenant_id)
+            & (col(AccountMaterial.material_id) == PreviewAdMaterial.material_id)
             & (col(AccountMaterial.bc_id) == step.bc_id)
             & (col(AccountMaterial.advertiser_id) == unit.advertiser_id)
             & (col(AccountMaterial.connection_id) == unit.connection_id),
@@ -160,10 +175,10 @@ def validate_ad_assets(
             material_not_skipped(
                 tenant_id=step.tenant_id,
                 unit_id=unit.id,
-                material_id=col(PreviewGroupMaterial.material_id),
+                material_id=col(PreviewAdMaterial.material_id),
             ),
         )
-        .order_by(col(PreviewGroupMaterial.position))
+        .order_by(col(PreviewAdMaterial.position))
         .limit(51)
         .execution_options(populate_existing=True)
     ).all()

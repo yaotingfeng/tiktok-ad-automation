@@ -2,7 +2,6 @@ import hashlib
 import json
 from collections.abc import Callable, Iterable, Iterator
 from datetime import UTC, datetime
-from random import Random
 from time import monotonic
 from typing import Any, Literal, cast
 from uuid import UUID
@@ -40,6 +39,7 @@ from app.modules.builds.preview_models import (
     BuildUnit,
     PlannedAd,
     PlannedGroup,
+    PreviewAdMaterial,
     PreviewCopy,
     PreviewDrama,
     PreviewDramaGroup,
@@ -76,6 +76,7 @@ from app.modules.providers.models import (
 from app.modules.strategies.naming import render_names
 from app.modules.strategies.schemas import StrategyConfig
 from app.modules.strategies.service import get_copies, get_version
+from app.modules.strategies.structure import plan_structure
 from app.modules.tenants.permissions import require_tenant
 
 """Preview planning is local and never dispatches target assets or ads."""
@@ -387,6 +388,10 @@ def _snapshot_drama(
         return
     drama_id = UUID(p["current_drama"])
     if p["current_group"] is None:
+        # 草稿素材只是有序素材包来源；最终组数和基础广告数由冻结策略规划器决定。
+        if p.get("planned"):
+            p.update(drama_after=p["current_drama"], current_drama=None, planned=False)
+            return
         number = session.exec(
             select(DraftGroupMaterial.group_no)
             .where(
@@ -401,53 +406,50 @@ def _snapshot_drama(
         if number is None:
             p.update(drama_after=p["current_drama"], current_drama=None)
             return
-        group = PreviewDramaGroup(**_scope(preview), drama_id=drama_id, group_no=number)
-        session.add(group)
-        session.flush()
-        _record(preview, group.model_dump(mode="json"))
-        pool = get_copies(session, context=context, version_id=config.copy_pool_version)
-        # Sampling occurs only while creating the shared group, before account expansion.
-        seed = int(_hash("", [preview.id, drama_id, number]), 16)
-        choices = Random(seed).sample(list(pool), config.creative_count)
-        for n, copy in enumerate(choices, 1):
-            value = PreviewCopy(
-                **_scope(preview),
-                drama_id=drama_id,
-                group_no=number,
-                creative_no=n,
-                copy_id=copy.copy_id,
-                text=copy.text,
+        source_materials = session.exec(
+            select(DraftGroupMaterial)
+            .where(
+                DraftGroupMaterial.tenant_id == preview.tenant_id,
+                DraftGroupMaterial.draft_id == preview.draft_id,
+                DraftGroupMaterial.drama_id == drama_id,
             )
-            session.add(value)
-            _record(preview, value.model_dump(mode="json"))
-        p.update(current_group=number, position=0)
+            .order_by(col(DraftGroupMaterial.group_no), col(DraftGroupMaterial.position))
+        ).all()
+        pool = get_copies(session, context=context, version_id=config.copy_pool_version)
+        seed = int(_hash("", [preview.id, drama_id]), 16)
+        plans = plan_structure(source_materials, config=config, pool=tuple(pool), seed=seed)
+        for group_plan in plans:
+            group = PreviewDramaGroup(
+                **_scope(preview), drama_id=drama_id, group_no=group_plan.group_no
+            )
+            session.add(group)
+            session.flush()
+            _record(preview, group.model_dump(mode="json"))
+            for position, material_id in enumerate(group_plan.material_ids, 1):
+                material_row = PreviewGroupMaterial(
+                    **_scope(preview), drama_id=drama_id, group_no=group_plan.group_no,
+                    position=position, material_id=material_id,
+                )
+                session.add(material_row)
+                _record(preview, material_row.model_dump(mode="json"))
+            for ad_plan in group_plan.ads:
+                for position, material_id in enumerate(ad_plan.material_ids, 1):
+                    mapping = PreviewAdMaterial(
+                        **_scope(preview), drama_id=drama_id, group_no=group_plan.group_no,
+                        base_ad_no=ad_plan.base_ad_no, position=position, material_id=material_id,
+                    )
+                    session.add(mapping)
+                    _record(preview, mapping.model_dump(mode="json"))
+                for creative_no, copy in enumerate(ad_plan.copies, 1):
+                    value = PreviewCopy(
+                        **_scope(preview), drama_id=drama_id, group_no=group_plan.group_no,
+                        base_ad_no=ad_plan.base_ad_no, creative_no=creative_no,
+                        copy_id=copy.copy_id, text=copy.text,
+                    )
+                    session.add(value)
+                    _record(preview, value.model_dump(mode="json"))
+        p.update(planned=True, current_group=None, position=0)
         return
-    rows = session.exec(
-        select(DraftGroupMaterial)
-        .where(
-            DraftGroupMaterial.tenant_id == preview.tenant_id,
-            DraftGroupMaterial.draft_id == preview.draft_id,
-            DraftGroupMaterial.drama_id == drama_id,
-            DraftGroupMaterial.group_no == p["current_group"],
-            DraftGroupMaterial.position > p["position"],
-        )
-        .order_by(col(DraftGroupMaterial.position))
-        .limit(PAGE_SIZE)
-    ).all()
-    for row in rows:
-        material_row = PreviewGroupMaterial(
-            **_scope(preview),
-            drama_id=drama_id,
-            group_no=row.group_no,
-            position=row.position,
-            material_id=row.material_id,
-        )
-        session.add(material_row)
-        _record(preview, material_row.model_dump(mode="json"))
-    if rows:
-        p["position"] = rows[-1].position
-    else:
-        p.update(group_after=p["current_group"], current_group=None, position=0)
 
 
 def _names(
@@ -456,6 +458,7 @@ def _names(
     config: StrategyConfig,
     group: int,
     creative: int,
+    base_ad_no: int = 1,
 ) -> tuple[str, str, str]:
     # The engineering ceiling prevents malformed local text allocation; official
     # per-level measurements are checked separately, including CJK weighting.
@@ -465,7 +468,8 @@ def _names(
         date_text=preview.local_date,
         batch_short_id=preview.batch_short_id,
         group_no=group,
-        creative_no=creative,
+        # 使用连续最终广告序号，使同组不同基础广告的复制名称始终唯一。
+        creative_no=(base_ad_no - 1) * config.creative_count + creative,
         max_length=10000,
         provider_pinyin=drama.provider_pinyin,
         display_drama_id=drama.display_drama_id,
@@ -714,18 +718,22 @@ def _expand_unit(
                 ).all()
             )
             for identity in skipped_ids:
-                skipped = PreviewSkippedMaterial(
-                    tenant_id=preview.tenant_id,
-                    unit_id=unit.id,
-                    material_id=identity,
-                    preview_id=preview.id,
-                    bc_id=preview.bc_id,
-                    file_name=material_names[identity],
-                    reason_code=readiness[identity].reason_code
-                    or "material_unavailable",
-                )
-                session.add(skipped)
-                _record(preview, skipped.model_dump(mode="json"))
+                if session.get(
+                    PreviewSkippedMaterial,
+                    (preview.tenant_id, unit.id, identity),
+                ) is None:
+                    skipped = PreviewSkippedMaterial(
+                        tenant_id=preview.tenant_id,
+                        unit_id=unit.id,
+                        material_id=identity,
+                        preview_id=preview.id,
+                        bc_id=preview.bc_id,
+                        file_name=material_names[identity],
+                        reason_code=readiness[identity].reason_code
+                        or "material_unavailable",
+                    )
+                    session.add(skipped)
+                    _record(preview, skipped.model_dump(mode="json"))
         for identity, result in readiness.items():
             if result.state == "blocked":
                 if identity not in skipped_ids:
@@ -762,7 +770,9 @@ def _expand_unit(
         .order_by(col(PreviewCopy.creative_no))
     ).all()
     for copy in copies:
-        ad_name = _names(preview, drama, config, group.group_no, copy.creative_no)[2]
+        ad_name = _names(
+            preview, drama, config, group.group_no, copy.creative_no, copy.base_ad_no
+        )[2]
         _block(unit, name_reasons(ad_name, "ad", unit.scene_snapshot))
         method = unit.scene_snapshot["field_constraints"].get("copy_measurement")
         copy_limit = unit.scene_snapshot["copy_length_limit"]
@@ -778,6 +788,7 @@ def _expand_unit(
         ad = PlannedAd(
             **_scope(preview),
             group_id=planned.id,
+            base_ad_no=copy.base_ad_no,
             creative_no=copy.creative_no,
             name=ad_name,
             copy_id=copy.copy_id,
@@ -968,7 +979,8 @@ def get_preview_summary(
         preparing_count=counts.get("PREPARING", (0, 0, 0))[0],
         input_issue_count=issue_count,
         total_unit_count=sum(x[0] for x in counts.values()),
-        daily_budget_sum=preview.budget * n,
+        daily_budget_sum=preview.budget
+        * (g if preview.config.get("budget_strategy") == "ADGROUP" else n),
         content_digest=preview.content_digest,
         error_code=preview.error_code,
         created_at=preview.created_at,
@@ -1187,11 +1199,30 @@ def get_frozen_groups(
                 ads=tuple(
                     FrozenAd(
                         ad_id=a.id,
+                        base_ad_no=a.base_ad_no,
                         creative_no=a.creative_no,
                         name=a.name,
                         copy_id=a.copy_id,
                         text=a.text,
                         cta_option_ids=tuple(a.cta_option_ids),
+                        material_ids=tuple(
+                            session.exec(
+                                select(PreviewAdMaterial.material_id)
+                                .where(
+                                    PreviewAdMaterial.tenant_id == context.tenant_id,
+                                    PreviewAdMaterial.preview_id == preview.id,
+                                    PreviewAdMaterial.drama_id == unit.drama_id,
+                                    PreviewAdMaterial.group_no == group.group_no,
+                                    PreviewAdMaterial.base_ad_no == a.base_ad_no,
+                                    material_not_skipped(
+                                        tenant_id=context.tenant_id,
+                                        unit_id=unit_id,
+                                        material_id=col(PreviewAdMaterial.material_id),
+                                    ),
+                                )
+                                .order_by(col(PreviewAdMaterial.position))
+                            ).all()
+                        ),
                     )
                     for a in ads
                 ),

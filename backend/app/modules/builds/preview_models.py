@@ -63,7 +63,10 @@ class BuildPreview(SQLModel, table=True):
     status: str = "BUILDING"
     config: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
     budget: Decimal = Field(sa_column=Column(Numeric(38, 12), nullable=False))
-    target_roas: Decimal = Field(sa_column=Column(Numeric(38, 12), nullable=False))
+    # HIGHEST_VALUE 策略没有 ROAS 出价；必须把 None 保留到执行编译边界。
+    target_roas: Decimal | None = Field(
+        default=None, sa_column=Column(Numeric(38, 12), nullable=True)
+    )
     progress: dict[str, Any] = Field(
         default_factory=lambda: {"phase": "inputs", "after": 0},
         sa_column=Column(JSONB, nullable=False),
@@ -177,6 +180,7 @@ class PreviewGroupMaterial(PreviewRow, table=True):
             "tenant_id",
             "preview_id",
             "drama_id",
+            "group_no",
             "material_id",
             name="uq_preview_drama_material",
         ),
@@ -193,13 +197,46 @@ class PreviewCopy(PreviewRow, table=True):
     __table_args__ = (
         preview_fk(),
         drama_group_fk(),
-        CheckConstraint("creative_no > 0", name="ck_preview_copy_no"),
+        UniqueConstraint(
+            "tenant_id", "preview_id", "drama_id", "group_no", "base_ad_no", "creative_no",
+            name="uq_preview_copy_no",
+        ),
+        CheckConstraint("base_ad_no > 0 AND creative_no > 0", name="ck_preview_copy_no"),
     )
     drama_id: UUID = Field(primary_key=True)
     group_no: int = Field(primary_key=True)
+    base_ad_no: int = Field(default=1, primary_key=True)
     creative_no: int = Field(primary_key=True)
     copy_id: UUID = Field(foreign_key="copy_entry.id")
     text: str
+
+
+class PreviewAdMaterial(PreviewRow, table=True):
+    """冻结每个基础广告的素材集合；创意复制共享这些行。"""
+
+    __tablename__ = "preview_ad_material"
+    __table_args__ = (
+        preview_fk(),
+        drama_group_fk(),
+        ForeignKeyConstraint(
+            ["tenant_id", "material_id"],
+            ["material_file.tenant_id", "material_file.id"],
+        ),
+        CheckConstraint("base_ad_no > 0 AND position > 0", name="ck_preview_ad_material_position"),
+        UniqueConstraint(
+            "tenant_id", "preview_id", "drama_id", "group_no", "base_ad_no", "position",
+            name="uq_preview_ad_material_position",
+        ),
+        UniqueConstraint(
+            "tenant_id", "preview_id", "drama_id", "group_no", "base_ad_no", "material_id",
+            name="uq_preview_ad_material_id",
+        ),
+    )
+    drama_id: UUID = Field(primary_key=True)
+    group_no: int = Field(primary_key=True)
+    base_ad_no: int = Field(primary_key=True)
+    position: int = Field(primary_key=True)
+    material_id: UUID
 
 
 class BuildUnit(SQLModel, table=True):
@@ -330,12 +367,13 @@ class PlannedAd(PreviewRow, table=True):
             ["planned_group.tenant_id", "planned_group.preview_id", "planned_group.id"],
         ),
         UniqueConstraint(
-            "tenant_id", "group_id", "creative_no", name="uq_planned_ad_no"
+            "tenant_id", "group_id", "base_ad_no", "creative_no", name="uq_planned_ad_no"
         ),
-        CheckConstraint("creative_no > 0", name="ck_planned_ad_no"),
+        CheckConstraint("base_ad_no > 0 AND creative_no > 0", name="ck_planned_ad_no"),
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     group_id: UUID
+    base_ad_no: int = 1
     creative_no: int
     name: str
     copy_id: UUID = Field(foreign_key="copy_entry.id")

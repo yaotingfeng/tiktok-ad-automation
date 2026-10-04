@@ -88,7 +88,7 @@ class FrozenUnit(BaseModel):
     protected_base: str
     url: str
     budget: Decimal
-    target_roas: Decimal
+    target_roas: Decimal | None
     readiness: Readiness
     reason_codes: tuple[str, ...]
     scene_snapshot: dict[str, Any]
@@ -97,11 +97,13 @@ class FrozenUnit(BaseModel):
 class FrozenAd(BaseModel):
     model_config = ConfigDict(frozen=True)
     ad_id: UUID
+    base_ad_no: int
     creative_no: int
     name: str
     copy_id: UUID
     text: str
     cta_option_ids: tuple[str, ...]
+    material_ids: tuple[UUID, ...]
 
 
 class FrozenGroup(BaseModel):

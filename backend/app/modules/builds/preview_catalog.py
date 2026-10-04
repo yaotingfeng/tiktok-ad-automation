@@ -75,7 +75,12 @@ def get_preview_dramas(
         items=[
             PreviewDramaPublic(
                 **row,
-                daily_budget_sum=preview.budget * int(row["eligible_campaign_count"]),
+                daily_budget_sum=preview.budget
+                * int(
+                    row["eligible_adgroup_count"]
+                    if preview.config.get("budget_strategy") == "ADGROUP"
+                    else row["eligible_campaign_count"]
+                ),
             )
             for row in rows[:limit]
         ],

@@ -203,6 +203,14 @@ def plan_material_slice(
             steps = [step for step in rows if step.unit_id == unit.unit_id]
             if not steps:
                 continue
+            # 同一账户的共享素材可能来自多个广告组；目标账户准备任务按素材 ID
+            # 去重，随后把同一准备回执挂回该账户的所有历史步骤。
+            all_steps = steps
+            unique_steps: dict[UUID, ExecutionStep] = {}
+            for step in all_steps:
+                if step.material_id is not None:
+                    unique_steps.setdefault(step.material_id, step)
+            steps = list(unique_steps.values())
             try:
                 # 复用已有本地批读：仅当前保存点内缓存权限，退出前重新核验；
                 # 所有真实 HTTP 在提交后的 Worker 中重新鉴权，不跨请求缓存。
@@ -222,7 +230,7 @@ def plan_material_slice(
             except DomainError:
                 # 原步骤负责记录权限/内容错误；不得把一个目标失败扩散到其它账户。
                 continue
-            for step in steps:
+            for step in all_steps:
                 assert step.material_id is not None
                 result = prepared[step.material_id]
                 if result.state == "queued":

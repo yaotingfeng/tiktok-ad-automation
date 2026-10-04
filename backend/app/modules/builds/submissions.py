@@ -214,12 +214,16 @@ def submit_preview(
 BLUEPRINTS = """
 WITH unit_groups AS MATERIALIZED (
  SELECT id FROM planned_group WHERE tenant_id=:tenant AND preview_id=:preview AND unit_id=:unit
+), material_candidates AS MATERIALIZED (
+ SELECT DISTINCT m.material_id
+ FROM preview_group_material m
+ WHERE m.tenant_id=:tenant AND m.preview_id=:preview AND m.drama_id=:drama
+ AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped
+ WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=:unit AND skipped.material_id=m.material_id)
 ), candidates AS (
  SELECT 0 priority, 'MATERIAL:'||m.material_id k, NULL::text parent,
  'MATERIAL' kind, NULL::uuid group_id, NULL::uuid ad_id, m.material_id
- FROM preview_group_material m WHERE m.tenant_id=:tenant AND m.preview_id=:preview AND m.drama_id=:drama
- AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped
- WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=:unit AND skipped.material_id=m.material_id)
+ FROM material_candidates m
  UNION ALL SELECT 1,'CTA',NULL,'CTA',NULL,NULL,NULL
  UNION ALL SELECT 2,'CAMPAIGN',NULL,'CAMPAIGN',NULL,NULL,NULL
  UNION ALL SELECT 4,'ADGROUP:'||g.id,'CAMPAIGN','ADGROUP',g.id,NULL,NULL
