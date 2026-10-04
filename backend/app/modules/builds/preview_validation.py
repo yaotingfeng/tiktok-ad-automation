@@ -57,8 +57,17 @@ def scene_reasons(
         reasons.append("creative_count_exceeded")
     if scene.creative_limit <= 0 or scene.copy_length_limit <= 0:
         reasons.append("field_limits_unverified")
+    budget_key = (
+        "adgroup_daily_budget"
+        if config.budget_strategy == "ADGROUP"
+        else "campaign_daily_budget"
+    )
+    if config.budget_strategy == "ADGROUP" and not isinstance(
+        c.get("adgroup_daily_budget"), dict
+    ):
+        reasons.append("adgroup_budget_unverified")
     try:
-        budget = c["campaign_daily_budget"]
+        budget = c[budget_key]
         precision = Decimal(budget["precision"])
         if precision <= 0 or budget["currency"] != currency:
             reasons.append("budget_limits_unverified")
@@ -72,7 +81,11 @@ def scene_reasons(
         ):
             reasons.append("budget_out_of_range")
     except KeyError, TypeError, ValueError, InvalidOperation:
-        reasons.append("budget_limits_unverified")
+        reasons.append(
+            "adgroup_budget_unverified"
+            if config.budget_strategy == "ADGROUP"
+            else "budget_limits_unverified"
+        )
     # HIGHEST_VALUE 不发送 ROAS 出价；缺少 target_roas 不是场景核验失败。
     if config.bid_strategy == "TARGET_ROAS":
         try:
@@ -84,6 +97,22 @@ def scene_reasons(
                 reasons.append("roas_out_of_range")
         except KeyError, TypeError, ValueError, InvalidOperation:
             reasons.append("roas_limits_unverified")
+    capabilities = c.get("bid_capabilities")
+    if isinstance(capabilities, dict):
+        capability = capabilities.get(config.bid_strategy)
+        if not isinstance(capability, dict):
+            reasons.append("bid_strategy_invalid")
+        else:
+            expected = {
+                "HIGHEST_VALUE": {
+                    "optimization_goal": "VALUE",
+                    "optimization_event": "AD_REVENUE_VALUE",
+                    "deep_bid_type": "VO_HIGHEST_VALUE",
+                },
+                "TARGET_ROAS": {"deep_bid_type": "VO_MIN_ROAS"},
+            }[config.bid_strategy]
+            if any(capability.get(key) != value for key, value in expected.items()):
+                reasons.append("bid_strategy_invalid")
     assets = scene.cta_fields.get("asset_ids", ())
     if not assets or any(x not in assets for x in config.cta_option_ids):
         reasons.append("cta_options_unavailable")

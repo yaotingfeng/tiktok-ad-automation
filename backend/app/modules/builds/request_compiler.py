@@ -11,6 +11,7 @@ from pydantic import Field, ValidationError
 
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.builds import (
+    CREATE_HIGHEST_VALUE_EVENT,
     AdCreate,
     AdGroupCreate,
     BuildReadQuery,
@@ -115,6 +116,9 @@ def decode_intent(kind: str, body: dict[str, object]) -> CreateIntent:
     if not isinstance(body, dict) or "kind" in body:
         raise _invalid("body", body)
     values = dict(body)
+    # 策略枚举只存在于本地冻结输入；远端 wire 不允许把它们当作平台字段。
+    if any(field in values for field in ("budget_strategy", "bid_strategy")):
+        raise _invalid("strategy_fields", values)
     # 历史 Minis 模板的 catalog=false 不作为可观察事实；平台不会回传该字段。
     # 只允许移除明确 false，true/数字或未知值仍由严格 DTO 拒绝。
     if kind == "CAMPAIGN" and values.get("catalog_enabled") is False:
@@ -137,6 +141,8 @@ def decode_observed_intent(kind: str, body: dict[str, object]) -> CreateIntent:
     if not isinstance(body, dict) or "kind" in body:
         raise _invalid("body", body)
     values = dict(body)
+    if any(field in values for field in ("budget_strategy", "bid_strategy")):
+        raise _invalid("strategy_fields", values)
     if kind == "CAMPAIGN":
         parsed = _CampaignBody.model_validate(values)
         return CampaignCreate.model_validate(parsed.model_dump())
@@ -196,7 +202,14 @@ def decode_observed_intent(kind: str, body: dict[str, object]) -> CreateIntent:
 def encode_intent(intent: CreateIntent) -> dict[str, object]:
     """持久请求 JSON 使用精确十进制字符串；发送适配器另行处理 wire 数字。"""
     body = intent.model_dump(mode="json", exclude={"kind"}, exclude_none=True)
+    # budget_strategy/bid_strategy 是本地冻结合同，用于校验和回读映射，
+    # TikTok wire 只接受它们展开后的字段，不能把内部枚举发送到远端。
+    budget_strategy = body.get("budget_strategy")
+    body.pop("budget_strategy", None)
+    body.pop("bid_strategy", None)
     if isinstance(intent, CampaignCreate):
+        if budget_strategy == "ADGROUP":
+            body.pop("budget_optimize_on", None)
         body["campaign_name"] = body.pop("name")
     elif isinstance(intent, AdGroupCreate):
         body["adgroup_name"] = body.pop("name")
@@ -363,6 +376,8 @@ PROTECTED = frozenset(
         "budget_optimize_on",
         "roas_bid",
         "operation_status",
+        "budget_strategy",
+        "bid_strategy",
     }
 )
 
@@ -459,7 +474,16 @@ def _json_copy(value: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise DomainError("invalid_build_request", "搭建请求格式无效")
     try:
-        result: dict[str, Any] = json.loads(json.dumps(value, allow_nan=False))
+        def json_default(item: object) -> str:
+            if isinstance(item, Decimal):
+                return str(item)
+            raise TypeError
+
+        # 预览金额可能仍是 Decimal；先以文本复制，create_arguments 再做
+        # 官方 JSON 数字的无损转换，避免 Python float 在编译阶段提前舍入。
+        result: dict[str, Any] = json.loads(
+            json.dumps(value, allow_nan=False, default=json_default)
+        )
     except ValueError, TypeError, RecursionError:
         raise DomainError("invalid_build_request", "搭建请求格式无效") from None
     return result
@@ -472,9 +496,42 @@ def compile_request(
         raise DomainError("invalid_build_kind", "搭建层级无效")
     if not isinstance(resolved, dict) or PROTECTED.intersection(resolved):
         raise DomainError("scene_overrides_frozen_fields", "场景不能覆盖已确认字段")
-    body = {**_json_copy(resolved), **_json_copy(fixed), "operation_status": "ENABLE"}
+    frozen = _json_copy(fixed)
+    budget_strategy = frozen.pop("budget_strategy", None)
+    bid_strategy = frozen.pop("bid_strategy", None)
+    if budget_strategy not in {None, "SERIES", "ADGROUP"}:
+        raise DomainError("invalid_budget_strategy", "预算策略无效")
+    if bid_strategy not in {None, "HIGHEST_VALUE", "TARGET_ROAS"}:
+        raise DomainError("bid_strategy_invalid", "竞价策略无效")
+    body = {**_json_copy(resolved), **frozen, "operation_status": "ENABLE"}
     if kind == "campaign":
-        body["budget_optimize_on"] = True
-    if kind == "adgroup" and "budget" in body:
-        raise DomainError("adgroup_budget_not_allowed", "广告组不能设置独立预算")
+        if budget_strategy == "ADGROUP":
+            if "budget" in body:
+                raise DomainError("invalid_budget_strategy", "组预算不能发送系列预算")
+            body.pop("budget_optimize_on", None)
+            body["budget_mode"] = "BUDGET_MODE_INFINITE"
+        else:
+            if "budget" not in body:
+                raise DomainError("invalid_budget_strategy", "系列预算缺少 Campaign 日预算")
+            body["budget_optimize_on"] = True
+            body["budget_mode"] = "BUDGET_MODE_DYNAMIC_DAILY_BUDGET"
+    if kind == "adgroup":
+        if budget_strategy == "ADGROUP":
+            if "budget" not in body:
+                raise DomainError("invalid_budget_strategy", "组预算缺少 Ad Group 日预算")
+            body["budget_mode"] = "BUDGET_MODE_DYNAMIC_DAILY_BUDGET"
+        elif "budget" in body:
+            raise DomainError("adgroup_budget_not_allowed", "系列预算策略不能设置广告组预算")
+        if bid_strategy == "HIGHEST_VALUE":
+            if "roas_bid" in body:
+                raise DomainError("bid_strategy_invalid", "最高价值不能包含 ROAS 出价")
+            body.update(
+                optimization_goal="VALUE",
+                optimization_event=CREATE_HIGHEST_VALUE_EVENT,
+                deep_bid_type="VO_HIGHEST_VALUE",
+            )
+        elif bid_strategy == "TARGET_ROAS":
+            if "roas_bid" not in body:
+                raise DomainError("bid_strategy_invalid", "目标 ROAS 缺少目标值")
+            body["deep_bid_type"] = "VO_MIN_ROAS"
     return body

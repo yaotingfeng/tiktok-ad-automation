@@ -143,6 +143,25 @@ def arm_request(
     if len(encoded.encode()) > 262144:
         raise DomainError("invalid_build_request", "单步请求超出支持范围")
     digest = sha256(encoded.encode()).hexdigest()
+    # 请求正文遵循 TikTok wire 合同，不携带本地策略枚举；执行步骤仍保存
+    # 从冻结正文推导出的策略，供恢复/审计核对，绝不回读可变 StrategyVersion。
+    strategy_metadata: dict[str, str] = {}
+    if claim.kind == "CAMPAIGN":
+        strategy_metadata["budget_strategy"] = (
+            "ADGROUP"
+            if body.get("budget_mode") == "BUDGET_MODE_INFINITE"
+            else "SERIES"
+        )
+    elif claim.kind == "ADGROUP":
+        strategy_metadata["budget_strategy"] = (
+            "ADGROUP" if "budget" in body else "SERIES"
+        )
+        strategy_metadata["bid_strategy"] = (
+            "HIGHEST_VALUE"
+            if body.get("deep_bid_type") == "VO_HIGHEST_VALUE"
+            else "TARGET_ROAS"
+        )
+    step.resolved = {**step.resolved, **strategy_metadata}
     if step.request_body is not None and step.request_body_digest != digest:
         raise DomainError("execution_intent_changed", "已保存的执行请求不能改变")
     step.request_body, step.request_body_digest = json.loads(encoded), digest

@@ -6,7 +6,7 @@ limits its English copy pool to 1..100 characters; it is not a TikTok quota.
 
 from typing import Any
 
-REVISION = "minis-constraints-2026-09-09-v2"
+REVISION = "minis-constraints-2026-10-04-v3"
 PLATFORM_COPY_LENGTH_LIMIT: int | None = None
 COPY_LENGTH_LIMIT = 100
 COPY_LENGTH_MEASUREMENT = "characters"
@@ -26,6 +26,22 @@ def constraints_for(currency: str) -> tuple[dict[str, Any], tuple[str, ...]]:
         "max_creatives_per_ad": 50,
         "max_ads_per_adgroup": 30,
         "roas_bid": {"minimum": "0.01", "maximum": "1000"},
+        # None 表示账户级只读事实尚未核实，不能推断为平台不支持或自动降级。
+        "adgroup_daily_budget": None,
+        # 组预算能力必须有独立的账户级证据；默认不声明支持，预览会阻断。
+        # 这里保留能力槽位而不伪造数值，scene job 可在取得只读证据后填充。
+        "budget_capabilities": {
+            "campaign_daily_budget": "verified",
+            "adgroup_daily_budget": "unverified",
+        },
+        "bid_capabilities": {
+            "HIGHEST_VALUE": {
+                "optimization_goal": "VALUE",
+                "optimization_event": "AD_REVENUE_VALUE",
+                "deep_bid_type": "VO_HIGHEST_VALUE",
+            },
+            "TARGET_ROAS": {"deep_bid_type": "VO_MIN_ROAS"},
+        },
         "platform_copy_length": PLATFORM_COPY_LENGTH_LIMIT,
         "copy_policy": {
             "source": "APPLICATION",

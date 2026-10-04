@@ -600,6 +600,13 @@ def _expand_unit(
         scene = apply_targeting(
             scene, config.targeting, p.get("targeting_region_codes", [])
         )
+        # 预算/竞价属于本次预览的业务意图，和账户场景事实一起落入冻结快照。
+        # 执行阶段只读取这两个值，避免策略版本后续编辑改变已提交请求。
+        scene_snapshot = scene.to_snapshot()
+        scene_snapshot.update(
+            budget_strategy=config.budget_strategy,
+            bid_strategy=config.bid_strategy,
+        )
         name = _names(preview, drama, config, 1, 1)[0]
         unit = BuildUnit(
             **_scope(preview),
@@ -610,7 +617,7 @@ def _expand_unit(
             timezone=account.timezone,
             campaign_name=name,
             campaign_digest=hashlib.sha256(name.encode()).hexdigest(),
-            scene_snapshot=scene.to_snapshot(),
+            scene_snapshot=scene_snapshot,
         )
         _block(
             unit,
@@ -1143,6 +1150,12 @@ def load_frozen_unit(
         url=drama.url,
         budget=preview.budget,
         target_roas=preview.target_roas,
+        budget_strategy=unit.scene_snapshot.get(
+            "budget_strategy", preview.config.get("budget_strategy", "SERIES")
+        ),
+        bid_strategy=unit.scene_snapshot.get(
+            "bid_strategy", preview.config.get("bid_strategy", "HIGHEST_VALUE")
+        ),
         readiness=cast(Readiness, unit.readiness),
         reason_codes=tuple(unit.reason_codes),
         scene_snapshot=unit.scene_snapshot,

@@ -6,6 +6,9 @@ from typing import Literal, cast
 from pydantic import ValidationError
 
 from app.integrations.tiktok.contracts.builds import (
+    CREATE_HIGHEST_VALUE_EVENT,
+    SMART_PLUS_READBACK_EVENTS,
+    STANDARD_READBACK_EVENTS,
     AdGroupCreate,
     AdGroupObservedFacts,
     AdGroupStatus,
@@ -223,11 +226,23 @@ def compare_record(
         return "MISMATCH"
     if record.intent is None or record.missing_fields:
         return "INCOMPLETE"
-    return (
-        "MATCH"
-        if _equal(query.intent.model_dump(), record.intent.model_dump())
-        else "MISMATCH"
-    )
+    expected = query.intent.model_dump()
+    actual = record.intent.model_dump()
+    if query.intent.kind == "ADGROUP":
+        # 创建 wire、标准 adgroup 回读和 Smart+ 回读的事件枚举不同；
+        # deep_bid_type/roas_bid 已把它们映射到统一策略，事件本身仍保留为证据。
+        event_values = {
+            CREATE_HIGHEST_VALUE_EVENT,
+            *STANDARD_READBACK_EVENTS.values(),
+            *SMART_PLUS_READBACK_EVENTS.values(),
+        }
+        if (
+            expected.get("bid_strategy") == actual.get("bid_strategy")
+            and expected.get("optimization_event") in event_values
+            and actual.get("optimization_event") in event_values
+        ):
+            expected["optimization_event"] = actual["optimization_event"]
+    return "MATCH" if _equal(expected, actual) else "MISMATCH"
 
 
 def parse_status(

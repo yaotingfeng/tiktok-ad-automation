@@ -9,6 +9,30 @@ from urllib.parse import parse_qs, urlsplit
 from app.integrations.tiktok.mcp.protocol import load_tool_contracts
 from tests.integrations.tiktok.mcp_wire import McpWire
 
+# 三类字段证据保持分离：创建请求使用新合同值，标准与 Smart+ 回读保留
+# 各自实际观察到的事件枚举，readback_compare 再按 deep_bid_type/roas_bid
+# 归一化为 HIGHEST_VALUE/TARGET_ROAS。
+CREATE_BID_WIRE = {
+    "HIGHEST_VALUE": {
+        "optimization_goal": "VALUE",
+        "optimization_event": "AD_REVENUE_VALUE",
+        "deep_bid_type": "VO_HIGHEST_VALUE",
+    },
+    "TARGET_ROAS": {
+        "optimization_goal": "VALUE",
+        "optimization_event": "AD_REVENUE_VALUE",
+        "deep_bid_type": "VO_MIN_ROAS",
+    },
+}
+STANDARD_READBACK_BID_WIRE = {
+    "HIGHEST_VALUE": {"optimization_event": "ACTIVE_PAY"},
+    "TARGET_ROAS": {"optimization_event": "ACTIVE_PAY"},
+}
+SMART_PLUS_READBACK_BID_WIRE = {
+    "HIGHEST_VALUE": {"optimization_event": "IMPRESSION_LEVEL_AD_REVENUE"},
+    "TARGET_ROAS": {"optimization_event": "IMPRESSION_LEVEL_AD_REVENUE"},
+}
+
 
 class BuildWire:
     operations = {

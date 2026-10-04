@@ -89,6 +89,9 @@ class FrozenUnit(BaseModel):
     url: str
     budget: Decimal
     target_roas: Decimal | None
+    # 预览冻结后执行只读取这两个值，不再从可编辑策略版本回读。
+    budget_strategy: Literal["SERIES", "ADGROUP"] = "SERIES"
+    bid_strategy: Literal["HIGHEST_VALUE", "TARGET_ROAS"] = "HIGHEST_VALUE"
     readiness: Readiness
     reason_codes: tuple[str, ...]
     scene_snapshot: dict[str, Any]

@@ -47,6 +47,20 @@ def _schedule(value: str) -> str:
 Id = Annotated[str, Field(strict=True, min_length=1), AfterValidator(_nonblank)]
 Money = Annotated[Decimal, BeforeValidator(_money), Field(gt=0, allow_inf_nan=False)]
 BuildKind = Literal["CTA", "CAMPAIGN", "ADGROUP", "AD"]
+BudgetStrategy = Literal["SERIES", "ADGROUP"]
+BidStrategy = Literal["HIGHEST_VALUE", "TARGET_ROAS"]
+
+# 创建和回读的事件枚举来自不同平台接口，不能用创建值覆盖回读事实。
+# 统一竞价策略由 deep_bid_type/roas_bid 推导，事件仅按通道保留为观察字段。
+CREATE_HIGHEST_VALUE_EVENT = "AD_REVENUE_VALUE"
+STANDARD_READBACK_EVENTS = {
+    "HIGHEST_VALUE": "ACTIVE_PAY",
+    "TARGET_ROAS": "ACTIVE_PAY",
+}
+SMART_PLUS_READBACK_EVENTS = {
+    "HIGHEST_VALUE": "IMPRESSION_LEVEL_AD_REVENUE",
+    "TARGET_ROAS": "IMPRESSION_LEVEL_AD_REVENUE",
+}
 
 
 class FrozenModel(BaseModel):
@@ -57,20 +71,58 @@ class CampaignCreate(FrozenModel):
     kind: Literal["CAMPAIGN"] = "CAMPAIGN"
     advertiser_id: Id
     name: Id
-    budget: Money
+    # 组预算时 Campaign 使用平台的无限预算形态；预算值固定在 Ad Group。
+    budget: Money | None = None
+    budget_strategy: BudgetStrategy = "SERIES"
     operation_status: Literal["ENABLE"] = "ENABLE"
     objective_type: Literal["APP_PROMOTION"] = "APP_PROMOTION"
     app_promotion_type: Literal["MINIS"] = "MINIS"
     campaign_type: Literal["REGULAR_CAMPAIGN"] = "REGULAR_CAMPAIGN"
-    budget_mode: Literal["BUDGET_MODE_DYNAMIC_DAILY_BUDGET"] = (
-        "BUDGET_MODE_DYNAMIC_DAILY_BUDGET"
-    )
-    budget_optimize_on: Literal[True] = True
+    budget_mode: Literal[
+        "BUDGET_MODE_DYNAMIC_DAILY_BUDGET", "BUDGET_MODE_INFINITE"
+    ] = "BUDGET_MODE_DYNAMIC_DAILY_BUDGET"
+    budget_optimize_on: Literal[True, False] | None = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def infer_budget_strategy(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        values = dict(value)
+        if "budget_strategy" not in values:
+            values["budget_strategy"] = (
+                "ADGROUP"
+                if values.get("budget_mode") == "BUDGET_MODE_INFINITE"
+                or values.get("budget") is None
+                else "SERIES"
+            )
+        if values["budget_strategy"] == "ADGROUP":
+            values.setdefault("budget_mode", "BUDGET_MODE_INFINITE")
+            values.setdefault("budget_optimize_on", None)
+        return values
+
+    @model_validator(mode="after")
+    def validate_budget_contract(self) -> Self:
+        if self.budget_strategy == "SERIES":
+            if self.budget is None:
+                raise ValueError("series budget requires campaign budget")
+            if self.budget_mode != "BUDGET_MODE_DYNAMIC_DAILY_BUDGET":
+                raise ValueError("series budget requires dynamic daily budget mode")
+            if self.budget_optimize_on is not True:
+                raise ValueError("series budget requires budget optimization")
+        else:
+            if self.budget is not None:
+                raise ValueError("adgroup budget cannot include campaign budget")
+            if self.budget_mode != "BUDGET_MODE_INFINITE":
+                raise ValueError("adgroup budget requires infinite campaign mode")
+            if self.budget_optimize_on not in {None, False}:
+                raise ValueError("adgroup budget cannot enable campaign optimization")
+        return self
 
     @field_validator("budget_optimize_on", mode="before")
     @classmethod
     def strict_boolean(cls, value: object) -> object:
-        if type(value) is not bool:
+        if value is not None and type(value) is not bool:
             raise ValueError("boolean setting requires a boolean")
         return value
 
@@ -82,7 +134,11 @@ class AdGroupObservedFacts(FrozenModel):
     name: Id
     minis_id: Id
     vbo_window: Literal["ZERO_DAY"] | None = None
-    roas_bid: Money
+    budget_strategy: BudgetStrategy = "SERIES"
+    bid_strategy: BidStrategy = "TARGET_ROAS"
+    budget: Money | None = None
+    budget_mode: Literal["BUDGET_MODE_DYNAMIC_DAILY_BUDGET"] | None = None
+    roas_bid: Money | None = None
     location_ids: tuple[Id, ...] = Field(min_length=1)
     # None 只用于表达历史请求没有该字段，不为新预览补造远端观测值。
     languages: tuple[Language, ...] | None = Field(default=None, min_length=1)
@@ -108,17 +164,57 @@ class AdGroupObservedFacts(FrozenModel):
     schedule_start_time: Annotated[Id, AfterValidator(_schedule)]
     promotion_type: Literal["MINI_APP"] = "MINI_APP"
     optimization_goal: Literal["VALUE"] = "VALUE"
-    optimization_event: Literal["ACTIVE_PAY", "IMPRESSION_LEVEL_AD_REVENUE"] = (
-        "ACTIVE_PAY"
-    )
+    # 创建合同使用 AD_REVENUE_VALUE；历史标准/Smart+ 回读仍可能分别返回
+    # ACTIVE_PAY 或 IMPRESSION_LEVEL_AD_REVENUE，三者均保留为观察事实。
+    optimization_event: Literal[
+        "AD_REVENUE_VALUE", "ACTIVE_PAY", "IMPRESSION_LEVEL_AD_REVENUE"
+    ] = "AD_REVENUE_VALUE"
     bid_type: Literal["BID_TYPE_NO_BID"] = "BID_TYPE_NO_BID"
-    deep_bid_type: Literal["VO_MIN_ROAS"] = "VO_MIN_ROAS"
+    deep_bid_type: Literal["VO_HIGHEST_VALUE", "VO_MIN_ROAS"] = "VO_MIN_ROAS"
     billing_event: Literal["OCPM"] = "OCPM"
     placement_type: Literal["PLACEMENT_TYPE_NORMAL"] = "PLACEMENT_TYPE_NORMAL"
     placements: tuple[Literal["PLACEMENT_TIKTOK"], ...] = Field(
         default=("PLACEMENT_TIKTOK",), min_length=1
     )
     schedule_type: Literal["SCHEDULE_FROM_NOW"] = "SCHEDULE_FROM_NOW"
+
+    @model_validator(mode="before")
+    @classmethod
+    def infer_budget_and_bid_strategy(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        values = dict(value)
+        if "budget_strategy" not in values:
+            values["budget_strategy"] = (
+                "ADGROUP" if values.get("budget") is not None else "SERIES"
+            )
+        if values["budget_strategy"] == "ADGROUP":
+            values.setdefault("budget_mode", "BUDGET_MODE_DYNAMIC_DAILY_BUDGET")
+        if "bid_strategy" not in values:
+            values["bid_strategy"] = (
+                "TARGET_ROAS"
+                if values.get("roas_bid") is not None
+                or values.get("deep_bid_type") == "VO_MIN_ROAS"
+                else "HIGHEST_VALUE"
+            )
+        return values
+
+    @model_validator(mode="after")
+    def validate_budget_and_bid_contract(self) -> Self:
+        if self.budget_strategy == "ADGROUP":
+            if self.budget is None:
+                raise ValueError("adgroup budget requires an ad group budget")
+            if self.budget_mode != "BUDGET_MODE_DYNAMIC_DAILY_BUDGET":
+                raise ValueError("adgroup budget requires dynamic daily budget mode")
+        elif self.budget is not None or self.budget_mode is not None:
+            raise ValueError("series budget must remain on the campaign")
+        if self.bid_strategy == "HIGHEST_VALUE":
+            if self.roas_bid is not None or self.deep_bid_type != "VO_HIGHEST_VALUE":
+                raise ValueError("highest value must not include a ROAS bid")
+        else:
+            if self.roas_bid is None or self.deep_bid_type != "VO_MIN_ROAS":
+                raise ValueError("target ROAS requires an exact ROAS bid")
+        return self
 
 
 class AdGroupCreate(AdGroupObservedFacts):

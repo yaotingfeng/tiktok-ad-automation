@@ -13,7 +13,10 @@ from sqlmodel import Session, col, select
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.integrations.tiktok.bounded_resources import bounded_session
-from app.integrations.tiktok.contracts.builds import CreatedObject
+from app.integrations.tiktok.contracts.builds import (
+    CREATE_HIGHEST_VALUE_EVENT,
+    CreatedObject,
+)
 from app.integrations.tiktok.contracts.common import (
     CallEvidence,
     RemoteCallError,
@@ -198,6 +201,9 @@ def _current_scene(
             retryable=transient,
         )
     snapshot = scene.to_snapshot()
+    # 场景重核只更新远端证据；业务策略沿用预览冻结值。
+    snapshot["budget_strategy"] = frozen.budget_strategy
+    snapshot["bid_strategy"] = frozen.bid_strategy
 
     # New evidence IDs alone must not change frozen business intent. New facts do.
     def comparable(value: dict[str, Any], key: str) -> object:
@@ -292,18 +298,35 @@ def prepare_request(
     resolved: dict[str, Any]
     if step.kind == "CAMPAIGN":
         fixed.update(
-            campaign_name=frozen.campaign_name, budget=exact_number(frozen.budget)
+            campaign_name=frozen.campaign_name,
+            budget_strategy=frozen.budget_strategy,
         )
+        if frozen.budget_strategy == "SERIES":
+            fixed["budget"] = exact_number(frozen.budget)
         resolved = snapshot["campaign_fields"]
     elif step.kind == "ADGROUP":
         group = _group(session, step)
         fixed.update(
             campaign_id=_parent(session, step),
             adgroup_name=group.name,
+            budget_strategy=frozen.budget_strategy,
+            bid_strategy=frozen.bid_strategy,
         )
-        if frozen.target_roas is not None:
+        if frozen.budget_strategy == "ADGROUP":
+            fixed["budget"] = exact_number(frozen.budget)
+        if frozen.bid_strategy == "TARGET_ROAS":
+            if frozen.target_roas is None:
+                raise DomainError("bid_strategy_invalid", "目标 ROAS 缺少冻结目标值")
             fixed["roas_bid"] = exact_number(frozen.target_roas)
         resolved = dict(snapshot["adgroup_fields"])
+        if frozen.bid_strategy == "HIGHEST_VALUE":
+            resolved.update(
+                optimization_goal="VALUE",
+                optimization_event=CREATE_HIGHEST_VALUE_EVENT,
+                deep_bid_type="VO_HIGHEST_VALUE",
+            )
+        else:
+            resolved["deep_bid_type"] = "VO_MIN_ROAS"
         if not resolved.get("targeting_spec", {}).get("location_ids"):
             raise DomainError("scene_targeting_unavailable", "缺少已核实的投放地区")
         # FROM_NOW has a required UTC start. Resolve once at first arm; the entire
