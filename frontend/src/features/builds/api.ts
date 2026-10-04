@@ -17,6 +17,10 @@ export function budgetLabel(
   )
 }
 
+export function budgetUnitLabel(strategy: PreviewSummary["budget_strategy"]) {
+  return strategy === "ADGROUP" ? "组日预算" : "系列日预算"
+}
+
 export function bidLabel(strategy: PreviewSummary["bid_strategy"]) {
   return strategy === "TARGET_ROAS" ? "目标 ROAS" : "最高价值"
 }

@@ -26,3 +26,15 @@
 - `uv run pytest tests/modules/builds/test_preview_workspace_api.py -q` 在测试收集前阻断：环境未配置专用 PostgreSQL `DATABASE_URL`。
 - `bun run --cwd frontend build` 的失败来自尚未实施的 Task 6 策略页面仍读取旧 `group_size` 字段；Task 5 修改文件未产生 TypeScript 错误。
 - 完整 `tests/build-preview.spec.ts` 已通过主要预览场景；三步输入页面验收受现有 `ProviderLinkConfigFields` fixture 缺少能力字段影响，未调用真实 TikTok 接口。
+
+## Fix round 1
+
+- 素材分配次数改为优先统计冻结的 `PreviewAdMaterial` 广告级引用；共享素材按广告映射次数计数，去重素材数仍按素材 ID 去重。
+- 对没有广告级映射的历史预览，摘要、剧目、账户组合和提交目录统一回退到冻结组素材与 `PlannedAd` 关系；只读既有冻结数据，不重新规划。
+- 冻结详情使用预算层级和竞价策略业务文案；最高价值不展示目标 ROAS，目标 ROAS 仅在策略为 `TARGET_ROAS` 且有值时展示。摘要移除重复的预算/结构文案。
+
+Fix round 1 验证：
+
+- 通过 `uv run ruff check`、`python3 -m py_compile`、Biome（4 个变更前端文件）和 OpenAPI 生成检查。
+- 通过前端聚焦回归：`预览摘要说明预算层级、竞价策略与素材分配口径`、`冻结预算保持长Decimal有效位并只移除小数尾零`（2 passed）。
+- 后端 `test_preview_workspace_api.py` 未能收集：当前环境未配置测试所需的 `SECRET_KEY`、`PROJECT_NAME`、`DATABASE_URL`、`FIRST_SUPERUSER`、`FIRST_SUPERUSER_PASSWORD`；未连接真实 TikTok API。

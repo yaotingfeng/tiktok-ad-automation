@@ -1,8 +1,11 @@
 from decimal import Decimal
 from uuid import uuid4
 
+from sqlalchemy import delete
+
 from app.modules.builds import previews
 from app.modules.builds.drafts import create_draft
+from app.modules.builds.preview_models import PreviewAdMaterial
 from tests.modules.builds.test_previews import drain
 from tests.modules.builds.test_previews import prepared as prepared
 from tests.modules.strategies.test_api import headers
@@ -85,6 +88,8 @@ def test_preview_drama_groups_and_unit_filters_are_server_scoped(
     drama = data["items"][0]
     assert drama["account_count"] == 3
     assert drama["material_group_count"] == 3 and drama["material_count"] == 23
+    assert drama["unique_material_count"] == 23
+    assert drama["ad_material_allocation_count"] > 0
     assert drama["eligible_adgroup_count"] == 9 and drama["eligible_ad_count"] == 18
     assert Decimal(drama["daily_budget_sum"]) == 300
     second = client.get(
@@ -104,6 +109,7 @@ def test_preview_drama_groups_and_unit_filters_are_server_scoped(
     assert all(
         u["currency"] == "USD" and Decimal(u["budget"]) == 100 for u in units["items"]
     )
+    assert all(u["material_allocation_count"] > 0 for u in units["items"])
     assert (
         client.get(
             f"{base}/units",
@@ -121,6 +127,40 @@ def test_preview_drama_groups_and_unit_filters_are_server_scoped(
             headers=headers(other_context),
         ).status_code
         == 404
+    )
+
+
+def test_legacy_preview_summary_falls_back_to_group_materials_for_ad_allocations(
+    session, client, context, prepared
+):
+    preview = previews.generate_preview(
+        session, context=context, draft_id=prepared, expected_revision=1
+    )
+    drain(session, context, preview)
+    session.execute(
+        delete(PreviewAdMaterial).where(
+            PreviewAdMaterial.tenant_id == context.tenant_id,
+            PreviewAdMaterial.preview_id == preview,
+        )
+    )
+    session.flush()
+    summary = previews.get_preview_summary(
+        session, context=context, preview_id=preview
+    )
+    units = previews.get_preview_units(
+        session, context=context, preview_id=preview
+    ).items
+    assert summary.material_allocation_count > 0
+    assert units and all(unit.material_allocation_count > 0 for unit in units)
+    dramas = client.get(
+        f"/api/tenants/{context.tenant_id}/build-previews/{preview}/dramas",
+        headers=headers(context),
+    )
+    assert dramas.status_code == 200
+    assert dramas.json()["items"]
+    assert all(
+        drama["material_allocation_count"] > 0
+        for drama in dramas.json()["items"]
     )
 
 

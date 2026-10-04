@@ -893,6 +893,8 @@ export async function buildsBoundary(
         url: "https://example.com/real-frozen-link",
         budget: "100.00",
         target_roas: "1.08",
+        budget_strategy: "SERIES",
+        bid_strategy: "TARGET_ROAS",
         scene_snapshot: {
           minis_id: "real-minis",
           identity_id: "real-identity",

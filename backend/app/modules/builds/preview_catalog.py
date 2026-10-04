@@ -56,7 +56,12 @@ def get_preview_dramas(
         (SELECT count(*) FROM preview_drama_group g WHERE g.tenant_id=:tenant AND g.preview_id=:preview AND g.drama_id=p.drama_id) AS material_group_count,
         (SELECT count(*) FROM preview_group_material m WHERE m.tenant_id=:tenant AND m.preview_id=:preview AND m.drama_id=p.drama_id) AS material_count,
         (SELECT count(DISTINCT m.material_id) FROM preview_group_material m WHERE m.tenant_id=:tenant AND m.preview_id=:preview AND m.drama_id=p.drama_id) AS unique_material_count,
-        (SELECT count(*) FROM preview_ad_material m WHERE m.tenant_id=:tenant AND m.preview_id=:preview AND m.drama_id=p.drama_id) AS ad_material_allocation_count,
+        CASE WHEN EXISTS (SELECT 1 FROM preview_ad_material m0 WHERE m0.tenant_id=:tenant AND m0.preview_id=:preview)
+          THEN (SELECT count(*) FROM preview_ad_material m WHERE m.tenant_id=:tenant AND m.preview_id=:preview AND m.drama_id=p.drama_id)
+          ELSE (SELECT count(*) FROM planned_ad a JOIN planned_group g ON g.tenant_id=a.tenant_id AND g.preview_id=a.preview_id AND g.id=a.group_id
+            JOIN preview_group_material m ON m.tenant_id=g.tenant_id AND m.preview_id=g.preview_id AND m.drama_id=g.drama_id AND m.group_no=g.group_no
+            WHERE a.tenant_id=:tenant AND a.preview_id=:preview AND g.drama_id=p.drama_id)
+        END AS ad_material_allocation_count,
         u.*
       FROM page p CROSS JOIN LATERAL (
         SELECT count(*) AS account_count,
@@ -84,7 +89,9 @@ def get_preview_dramas(
             PreviewDramaPublic(
                 **{
                     **dict(row),
-                    "material_allocation_count": int(row["material_count"] or 0),
+                    "material_allocation_count": int(
+                        row["ad_material_allocation_count"] or 0
+                    ),
                     "daily_budget_label": budget_strategy_label(
                         preview.config.get("budget_strategy")
                     ),

@@ -649,8 +649,14 @@ def enrich_units(
                 + """ GROUP BY e.unit_id
 ), materials AS (
  SELECT u.id unit_id,count(m.material_id) material_count,count(DISTINCT m.material_id) unique_material_count,
- (SELECT count(*) FROM preview_ad_material am WHERE am.tenant_id=u.tenant_id AND am.preview_id=u.preview_id AND am.drama_id=u.drama_id
-  AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped WHERE skipped.tenant_id=am.tenant_id AND skipped.unit_id=u.id AND skipped.material_id=am.material_id)) material_allocation_count
+ CASE WHEN EXISTS (SELECT 1 FROM preview_ad_material am0 WHERE am0.tenant_id=u.tenant_id AND am0.preview_id=u.preview_id)
+  THEN (SELECT count(*) FROM preview_ad_material am WHERE am.tenant_id=u.tenant_id AND am.preview_id=u.preview_id AND am.drama_id=u.drama_id
+    AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped WHERE skipped.tenant_id=am.tenant_id AND skipped.unit_id=u.id AND skipped.material_id=am.material_id))
+  ELSE (SELECT count(*) FROM planned_ad a JOIN planned_group g ON g.tenant_id=a.tenant_id AND g.preview_id=a.preview_id AND g.id=a.group_id
+    JOIN preview_group_material legacy_m ON legacy_m.tenant_id=g.tenant_id AND legacy_m.preview_id=g.preview_id AND legacy_m.drama_id=g.drama_id AND legacy_m.group_no=g.group_no
+    WHERE a.tenant_id=u.tenant_id AND a.preview_id=u.preview_id AND g.unit_id=u.id
+      AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped WHERE skipped.tenant_id=legacy_m.tenant_id AND skipped.unit_id=u.id AND skipped.material_id=legacy_m.material_id))
+ END material_allocation_count
  FROM page u LEFT JOIN preview_group_material m ON m.tenant_id=u.tenant_id AND m.preview_id=u.preview_id AND m.drama_id=u.drama_id
  AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=u.id AND skipped.material_id=m.material_id) GROUP BY u.id
 )

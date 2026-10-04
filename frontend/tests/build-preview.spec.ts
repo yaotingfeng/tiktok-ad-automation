@@ -42,7 +42,7 @@ for (const [budget, expected] of [
     api.preview.daily_budget_sum = budget
     await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
     await expect(
-      page.getByText(`配置日预算合计 USD ${expected}`, { exact: true }),
+      page.getByText(`系列预算合计 USD ${expected}`, { exact: true }),
     ).toBeVisible()
   })
 }
@@ -135,7 +135,7 @@ test("冻结预览两剧三账户实际六Campaign，金额使用后端字符串
     page.getByText("6 Campaign · 18 Ad Group · 36 Ad", { exact: true }),
   ).toBeVisible()
   await expect(
-    page.getByText("配置日预算合计 USD 600", { exact: true }),
+    page.getByText("系列预算合计 USD 600", { exact: true }),
   ).toBeVisible()
   expect(
     api.requests.filter((r) => r.path.includes("/build-units/")),
@@ -176,7 +176,7 @@ test("部分阻断组合和输入问题分别计数，不按已加载页估算",
     page.getByText("4 Campaign · 12 Ad Group · 24 Ad", { exact: true }),
   ).toBeVisible()
   await expect(
-    page.getByText("配置日预算合计 USD 400", { exact: true }),
+    page.getByText("系列预算合计 USD 400", { exact: true }),
   ).toBeVisible()
   await page.getByRole("tab", { name: "排除组合", exact: true }).click()
   await expect(
@@ -732,15 +732,17 @@ test("冻结预算保持长Decimal有效位并只移除小数尾零", async ({ p
   api.preview.daily_budget_sum = "9007199254740993123456.123400000000"
   await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
   await expect(
-    page.getByText("配置日预算合计 USD 9007199254740993123456.1234", {
+    page.getByText("系列预算合计 USD 9007199254740993123456.1234", {
       exact: true,
     }),
   ).toBeVisible()
   await page.getByRole("tab", { name: "账户组合", exact: true }).click()
-  await expect(page.getByText("USD 100", { exact: true }).first()).toBeVisible()
+  await expect(
+    page.getByText("系列日预算 USD 100", { exact: true }).first(),
+  ).toBeVisible()
   await page.getByRole("button", { name: "查看冻结详情" }).first().click()
   await expect(
-    page.getByText("Campaign 日预算 USD 100 · ROAS 1.08", { exact: true }),
+    page.getByText("系列日预算 USD 100 · 目标 ROAS 1.08", { exact: true }),
   ).toBeVisible()
   expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
 })

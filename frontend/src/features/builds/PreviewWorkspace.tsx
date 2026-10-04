@@ -27,7 +27,7 @@ import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspaceEmpty } from "@/features/workspace/WorkspaceEmpty"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import { cn } from "@/lib/utils"
-import { bidLabel, budgetLabel, buildKey } from "./api"
+import { bidLabel, budgetLabel, budgetUnitLabel, buildKey } from "./api"
 import { ExecutionRoute } from "./ExecutionRoute"
 import { PreviewGenerationProgress } from "./PreviewGenerationProgress"
 import {
@@ -354,6 +354,12 @@ export function PreviewSummaryBar({
 }) {
   const [pending, setPending] = useState(false),
     [error, setError] = useState<unknown>()
+  const strategySummary = `预算策略：${preview.budget_strategy === "ADGROUP" ? "组预算" : "系列预算"}；竞价策略：${bidLabel(preview.bid_strategy)}。`
+  const structureSummary = preview.structure_summary
+    ? /预算策略|竞价策略/.test(preview.structure_summary)
+      ? preview.structure_summary
+      : `${preview.structure_summary}；${strategySummary}`
+    : strategySummary
   return (
     <Card className={cn("min-w-0", !readOnly && "sticky bottom-0")}>
       <CardContent className="flex min-w-0 flex-col gap-3">
@@ -379,19 +385,9 @@ export function PreviewSummaryBar({
               {normalizeDecimal(preview.daily_budget_sum)}
             </p>
             <p className="text-xs text-muted-foreground">
-              {preview.structure_summary ||
-                `预算策略：${preview.budget_strategy === "ADGROUP" ? "组预算" : "系列预算"}；竞价策略：${bidLabel(preview.bid_strategy)}。`}
-              <span className="block">
-                预算策略：
-                {preview.budget_strategy === "ADGROUP" ? "组预算" : "系列预算"}{" "}
-                · 竞价策略：{bidLabel(preview.bid_strategy)}
-              </span>
+              {structureSummary}
               <span className="block">
                 以上金额为配置日预算之和，非预计实际消耗。
-              </span>
-              <span className="block">
-                配置日预算合计 {preview.currency}{" "}
-                {normalizeDecimal(preview.daily_budget_sum)}
               </span>
               {!readOnly &&
                 preview.blocked_count > 0 &&
@@ -549,7 +545,7 @@ export function PreviewUnitTable({
           {
             header: "预算",
             cell: ({ row }) =>
-              `${budgetStrategy === "ADGROUP" ? "组日预算" : "系列日预算"} ${row.original.currency} ${normalizeDecimal(row.original.budget)}`,
+              `${budgetUnitLabel(budgetStrategy)} ${row.original.currency} ${normalizeDecimal(row.original.budget)}`,
           },
           {
             header: "Campaign 名称",
@@ -735,9 +731,13 @@ function FrozenUnitSheet({
               expanded
             />
             <p className="text-sm">
-              Campaign 日预算 {detail.data.currency}{" "}
-              {normalizeDecimal(detail.data.budget)} · ROAS{" "}
-              {detail.data.target_roas}
+              {budgetUnitLabel(detail.data.budget_strategy)}{" "}
+              {detail.data.currency} {normalizeDecimal(detail.data.budget)} ·{" "}
+              {bidLabel(detail.data.bid_strategy)}
+              {detail.data.bid_strategy === "TARGET_ROAS" &&
+              detail.data.target_roas !== null
+                ? ` ${detail.data.target_roas}`
+                : ""}
             </p>
             <CopyField label="推广链接" value={detail.data.url} expanded />
             <p className="break-all text-xs text-muted-foreground">

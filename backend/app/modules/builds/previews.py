@@ -951,10 +951,33 @@ def get_preview_summary(
             PreviewGroupMaterial.preview_id == preview_id,
         )
     ).one()
-    material_allocation_count = session.exec(
-        select(func.count(PreviewGroupMaterial.material_id)).where(
-            PreviewGroupMaterial.tenant_id == context.tenant_id,
-            PreviewGroupMaterial.preview_id == preview_id,
+    ad_material_rows = session.exec(
+        select(func.count(PreviewAdMaterial.material_id)).where(
+            PreviewAdMaterial.tenant_id == context.tenant_id,
+            PreviewAdMaterial.preview_id == preview_id,
+        )
+    ).one()
+    # 旧预览没有广告级映射时，按冻结的组素材和 PlannedAd 关系还原展示口径。
+    # 这里只读既有冻结行，不重新规划广告或素材。
+    material_allocation_count = ad_material_rows or session.exec(
+        select(func.count(PreviewGroupMaterial.material_id))
+        .select_from(PlannedAd)
+        .join(
+            PlannedGroup,
+            (PlannedGroup.tenant_id == PlannedAd.tenant_id)
+            & (PlannedGroup.preview_id == PlannedAd.preview_id)
+            & (PlannedGroup.id == PlannedAd.group_id),
+        )
+        .join(
+            PreviewGroupMaterial,
+            (PreviewGroupMaterial.tenant_id == PlannedGroup.tenant_id)
+            & (PreviewGroupMaterial.preview_id == PlannedGroup.preview_id)
+            & (PreviewGroupMaterial.drama_id == PlannedGroup.drama_id)
+            & (PreviewGroupMaterial.group_no == PlannedGroup.group_no),
+        )
+        .where(
+            PlannedAd.tenant_id == context.tenant_id,
+            PlannedAd.preview_id == preview_id,
         )
     ).one()
     config = preview.config
@@ -1183,6 +1206,43 @@ def get_preview_units(
         else []
     )
     ad_material_counts = {row[0]: int(row[1] or 0) for row in ad_material_rows}
+    if not ad_material_counts and unit_ids:
+        legacy_ad_material_rows = session.exec(
+            select(BuildUnit.id, func.count(PreviewGroupMaterial.material_id))
+            .join(
+                PlannedGroup,
+                (PlannedGroup.tenant_id == BuildUnit.tenant_id)
+                & (PlannedGroup.preview_id == BuildUnit.preview_id)
+                & (PlannedGroup.unit_id == BuildUnit.id),
+            )
+            .join(
+                PlannedAd,
+                (PlannedAd.tenant_id == PlannedGroup.tenant_id)
+                & (PlannedAd.preview_id == PlannedGroup.preview_id)
+                & (PlannedAd.group_id == PlannedGroup.id),
+            )
+            .join(
+                PreviewGroupMaterial,
+                (PreviewGroupMaterial.tenant_id == PlannedGroup.tenant_id)
+                & (PreviewGroupMaterial.preview_id == PlannedGroup.preview_id)
+                & (PreviewGroupMaterial.drama_id == PlannedGroup.drama_id)
+                & (PreviewGroupMaterial.group_no == PlannedGroup.group_no),
+            )
+            .where(
+                BuildUnit.tenant_id == context.tenant_id,
+                BuildUnit.preview_id == preview_id,
+                col(BuildUnit.id).in_(unit_ids),
+                material_not_skipped(
+                    tenant_id=context.tenant_id,
+                    unit_id=col(BuildUnit.id),
+                    material_id=col(PreviewGroupMaterial.material_id),
+                ),
+            )
+            .group_by(BuildUnit.id)
+        ).all()
+        ad_material_counts = {
+            row[0]: int(row[1] or 0) for row in legacy_ad_material_rows
+        }
     material_counts = {
         row[0]: (int(row[1] or 0), int(row[2] or 0), ad_material_counts.get(row[0], 0))
         for row in material_rows
