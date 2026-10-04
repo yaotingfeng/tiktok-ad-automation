@@ -1134,11 +1134,18 @@ test("策略列表与历史预算去尾零但编辑原文保留", async ({ page 
   api.versions[0].config.budget = budget
   await page.goto(`/tenants/${A}/strategies`)
   await expect(
-    page.getByRole("cell").filter({ hasText: "USD 9007199254740993123456.1234 / 天" }).first(),
+    page
+      .getByRole("cell")
+      .filter({ hasText: "USD 9007199254740993123456.1234 / 天" })
+      .first(),
   ).toBeVisible()
   await page.getByRole("button", { name: "查看版本", exact: true }).click()
   await expect(
-    page.getByRole("dialog").getByRole("cell").filter({ hasText: "USD 9007199254740993123456.1234 / 天" }).first(),
+    page
+      .getByRole("dialog")
+      .getByRole("cell")
+      .filter({ hasText: "USD 9007199254740993123456.1234 / 天" })
+      .first(),
   ).toBeVisible()
   await page
     .getByRole("dialog")
@@ -1160,10 +1167,7 @@ test("策略固定列完整显示超长预算和ROAS且文字不覆盖相邻单�
     record.config.target_roas = roas
   }
   await page.goto(`/tenants/${A}/strategies`)
-  for (const name of [
-    "USD 9007199254740993123456.1234 / 天",
-    `${roas} 倍`,
-  ]) {
+  for (const name of ["USD 9007199254740993123456.1234 / 天", `${roas} 倍`]) {
     const cell = page.getByRole("cell").filter({ hasText: name }).first()
     await expect(cell).toBeVisible()
     const bounds = await cell.evaluate((el) => {
@@ -1213,7 +1217,7 @@ test("空白新建策略默认 USD，币种禁止展开且保存仍提交 USD", 
   await page.getByLabel("日预算", { exact: true }).fill("100")
   await page.getByRole("combobox", { name: "竞价策略" }).click()
   await page.getByRole("option", { name: "目标 ROAS", exact: true }).click()
-  await page.getByLabel("目标 ROAS", { exact: true }).fill("1.08")
+  await page.locator("#strategy-target_roas").fill("1.08")
   await page.getByRole("combobox", { name: "广告组数量规则" }).click()
   await page.getByRole("option", { name: "按素材数量", exact: true }).click()
   await page.getByLabel("每组最多素材数", { exact: true }).fill("10")
@@ -1396,8 +1400,8 @@ test("切换数量规则和竞价策略会清除不相关字段", async ({ page 
   const bidRule = page.getByRole("combobox", { name: "竞价策略" })
   await bidRule.click()
   await page.getByRole("option", { name: "目标 ROAS", exact: true }).click()
-  await page.getByLabel("目标 ROAS", { exact: true }).fill("1.2")
+  await page.locator("#strategy-target_roas").fill("1.2")
   await bidRule.click()
   await page.getByRole("option", { name: "最高价值", exact: true }).click()
-  await expect(page.getByLabel("目标 ROAS", { exact: true })).toHaveCount(0)
+  await expect(page.locator("#strategy-target_roas")).toHaveCount(0)
 })

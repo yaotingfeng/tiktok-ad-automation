@@ -108,13 +108,13 @@ export function StrategyList() {
         header: "预算策略",
         size: 168,
         cell: ({ row }) => (
-          <div className="flex flex-col gap-1 tabular-nums">
+          <div className="flex min-w-0 flex-col gap-1 tabular-nums">
             <span className="wrap-anywhere whitespace-normal">
               {row.original.config.budget_strategy === "ADGROUP"
                 ? "组预算"
                 : "系列预算"}
             </span>
-            <p className="text-xs text-muted-foreground">
+            <p className="wrap-anywhere whitespace-normal text-xs text-muted-foreground">
               {row.original.config.currency}{" "}
               {normalizeDecimal(row.original.config.budget)} / 天
             </p>

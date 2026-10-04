@@ -19,3 +19,10 @@
 - Biome check on the six changed frontend files — passed when run from `frontend/` with the nested frontend configuration.
 - `bun run test -- tests/strategies.spec.ts` — not runnable in this environment because `bun` is not installed. Direct Playwright invocation also needs the configured Vite web server (`bun run dev`); no live platform/API calls were made.
 - `bun run build` — not runnable because `bun` is not installed; TypeScript build-equivalent check passed above.
+
+## Fix round 1
+
+- Long budget values in the strategy list now have `min-w-0` and `wrap-anywhere` constraints on the amount cell.
+- ROAS test inputs use `#strategy-target_roas` so they cannot collide with Radix select options.
+- Re-ran the focused suite with the local Vite server and Playwright workspace project: **43 passed**.
+- `node_modules/.bin/tsc -p frontend/tsconfig.build.json --noEmit`, Biome on all changed strategy files, and `git diff --check` passed.
