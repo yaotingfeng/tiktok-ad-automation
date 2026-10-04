@@ -73,15 +73,17 @@ def scene_reasons(
             reasons.append("budget_out_of_range")
     except KeyError, TypeError, ValueError, InvalidOperation:
         reasons.append("budget_limits_unverified")
-    try:
-        if (
-            not Decimal(c["roas_bid"]["minimum"])
-            <= config.target_roas
-            <= Decimal(c["roas_bid"]["maximum"])
-        ):
-            reasons.append("roas_out_of_range")
-    except KeyError, TypeError, ValueError, InvalidOperation:
-        reasons.append("roas_limits_unverified")
+    # HIGHEST_VALUE 不发送 ROAS 出价；缺少 target_roas 不是场景核验失败。
+    if config.bid_strategy == "TARGET_ROAS":
+        try:
+            if (
+                not Decimal(c["roas_bid"]["minimum"])
+                <= config.target_roas
+                <= Decimal(c["roas_bid"]["maximum"])
+            ):
+                reasons.append("roas_out_of_range")
+        except KeyError, TypeError, ValueError, InvalidOperation:
+            reasons.append("roas_limits_unverified")
     assets = scene.cta_fields.get("asset_ids", ())
     if not assets or any(x not in assets for x in config.cta_option_ids):
         reasons.append("cta_options_unavailable")

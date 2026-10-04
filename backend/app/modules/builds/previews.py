@@ -32,6 +32,7 @@ from app.modules.builds.models import (
 )
 from app.modules.builds.preview_materials import (
     SKIPPABLE_MATERIAL_REASONS,
+    frozen_ad_material_ids,
     material_not_skipped,
 )
 from app.modules.builds.preview_models import (
@@ -661,21 +662,13 @@ def _expand_unit(
         session.add(unit)
         p.update(unit_id=None, group_after=0)
         return
-    count = session.exec(
-        select(func.count())
-        .select_from(PreviewGroupMaterial)
-        .where(
-            PreviewGroupMaterial.tenant_id == preview.tenant_id,
-            PreviewGroupMaterial.preview_id == preview.id,
-            PreviewGroupMaterial.drama_id == drama.drama_id,
-            PreviewGroupMaterial.group_no == group.group_no,
-        )
-    ).one()
     maximum = unit.scene_snapshot["creative_limit"]
-    if not maximum or count > 50:
+    # 广告级素材集合才是平台单广告上限；共享组展示行可以大于 50，不能
+    # 用组级总数错误阻断每个基础广告均在上限内的策略。
+    if not maximum:
         _block(
             unit,
-            ["material_group_limit_exceeded" if maximum else "field_limits_unverified"],
+            ["field_limits_unverified"],
         )
     else:
         # 本地读取仍限 50 条；平台数量限制按排除不可用素材后的实际组校验。
@@ -745,7 +738,29 @@ def _expand_unit(
             session.add(unit)
             p["group_after"] = group.group_no
             return
-        if len(materials) - len(skipped_ids) > maximum:
+        if not materials:
+            _block(unit, ["materials_missing"])
+            session.add(unit)
+            p["group_after"] = group.group_no
+            return
+        ad_material_counts = dict(
+            session.exec(
+                select(PreviewAdMaterial.base_ad_no, func.count())
+                .where(
+                    PreviewAdMaterial.tenant_id == preview.tenant_id,
+                    PreviewAdMaterial.preview_id == preview.id,
+                    PreviewAdMaterial.drama_id == drama.drama_id,
+                    PreviewAdMaterial.group_no == group.group_no,
+                    material_not_skipped(
+                        tenant_id=preview.tenant_id,
+                        unit_id=unit.id,
+                        material_id=col(PreviewAdMaterial.material_id),
+                    ),
+                )
+                .group_by(PreviewAdMaterial.base_ad_no)
+            ).all()
+        )
+        if any(value > 50 for value in ad_material_counts.values()):
             _block(unit, ["material_group_limit_exceeded"])
     names = _names(preview, drama, config, group.group_no, 1)
     planned = PlannedGroup(
@@ -1206,22 +1221,15 @@ def get_frozen_groups(
                         text=a.text,
                         cta_option_ids=tuple(a.cta_option_ids),
                         material_ids=tuple(
-                            session.exec(
-                                select(PreviewAdMaterial.material_id)
-                                .where(
-                                    PreviewAdMaterial.tenant_id == context.tenant_id,
-                                    PreviewAdMaterial.preview_id == preview.id,
-                                    PreviewAdMaterial.drama_id == unit.drama_id,
-                                    PreviewAdMaterial.group_no == group.group_no,
-                                    PreviewAdMaterial.base_ad_no == a.base_ad_no,
-                                    material_not_skipped(
-                                        tenant_id=context.tenant_id,
-                                        unit_id=unit_id,
-                                        material_id=col(PreviewAdMaterial.material_id),
-                                    ),
-                                )
-                                .order_by(col(PreviewAdMaterial.position))
-                            ).all()
+                            frozen_ad_material_ids(
+                                session,
+                                tenant_id=context.tenant_id,
+                                preview_id=preview.id,
+                                drama_id=unit.drama_id,
+                                group_no=group.group_no,
+                                base_ad_no=a.base_ad_no,
+                                unit_id=unit_id,
+                            )
                         ),
                     )
                     for a in ads

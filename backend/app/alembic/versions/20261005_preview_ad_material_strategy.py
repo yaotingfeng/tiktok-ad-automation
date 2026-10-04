@@ -21,7 +21,7 @@ def upgrade() -> None:
     op.create_primary_key(
         "preview_copy_pkey",
         "preview_copy",
-        ["tenant_id", "preview_id", "bc_id", "drama_id", "group_no", "base_ad_no", "creative_no"],
+        ["tenant_id", "preview_id", "drama_id", "group_no", "base_ad_no", "creative_no"],
     )
     op.drop_constraint("uq_preview_drama_material", "preview_group_material", type_="unique")
     op.create_unique_constraint(
@@ -48,7 +48,7 @@ def upgrade() -> None:
         sa.Column("position", sa.Integer(), nullable=False),
         sa.Column("material_id", sa.Uuid(), nullable=False),
         sa.PrimaryKeyConstraint(
-            "tenant_id", "preview_id", "bc_id", "drama_id", "group_no", "base_ad_no", "position"
+            "tenant_id", "preview_id", "drama_id", "group_no", "base_ad_no", "position"
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "preview_id", "bc_id"],
@@ -72,6 +72,17 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    connection = op.get_bind()
+    if connection.execute(
+        sa.text(
+            "SELECT EXISTS (SELECT 1 FROM preview_group_material "
+            "GROUP BY tenant_id, preview_id, drama_id, material_id "
+            "HAVING count(DISTINCT group_no) > 1)"
+        )
+    ).scalar():
+        raise RuntimeError(
+            "Cannot downgrade: preview_group_material now contains shared materials across groups"
+        )
     op.drop_table("preview_ad_material")
     op.drop_constraint("ck_planned_ad_no", "planned_ad", type_="check")
     op.create_check_constraint("ck_planned_ad_no", "planned_ad", "creative_no > 0")
@@ -88,6 +99,6 @@ def downgrade() -> None:
     op.create_primary_key(
         "preview_copy_pkey",
         "preview_copy",
-        ["tenant_id", "preview_id", "bc_id", "drama_id", "group_no", "creative_no"],
+        ["tenant_id", "preview_id", "drama_id", "group_no", "creative_no"],
     )
     op.drop_column("preview_copy", "base_ad_no")

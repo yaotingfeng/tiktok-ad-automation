@@ -37,11 +37,10 @@ from app.modules.builds.execution_state import (
     record_unknown,
     transient_retry,
 )
-from app.modules.builds.preview_materials import material_not_skipped
+from app.modules.builds.preview_materials import frozen_ad_material_ids
 from app.modules.builds.preview_models import (
     PlannedAd,
     PlannedGroup,
-    PreviewAdMaterial,
 )
 from app.modules.builds.preview_schemas import FrozenUnit
 from app.modules.builds.request_compiler import (
@@ -324,23 +323,15 @@ def prepare_request(
         ).one_or_none()
         if ad is None:
             raise DomainError("resource_not_found", "冻结创意不存在")
-        material_ids = session.exec(
-            select(PreviewAdMaterial.material_id)
-            .where(
-                PreviewAdMaterial.tenant_id == step.tenant_id,
-                PreviewAdMaterial.preview_id == step.preview_id,
-                PreviewAdMaterial.drama_id == frozen.drama_id,
-                PreviewAdMaterial.group_no == group.group_no,
-                PreviewAdMaterial.base_ad_no == ad.base_ad_no,
-                material_not_skipped(
-                    tenant_id=step.tenant_id,
-                    unit_id=step.unit_id,
-                    material_id=col(PreviewAdMaterial.material_id),
-                ),
-            )
-            .order_by(col(PreviewAdMaterial.position))
-            .limit(51)
-        ).all()
+        material_ids = frozen_ad_material_ids(
+            session,
+            tenant_id=step.tenant_id,
+            preview_id=step.preview_id,
+            drama_id=frozen.drama_id,
+            group_no=group.group_no,
+            base_ad_no=ad.base_ad_no,
+            unit_id=step.unit_id,
+        )[:51]
         if not 1 <= len(material_ids) <= 50:
             raise DomainError("invalid_material_group", "冻结素材组无效")
         from app.modules.materials.cover_models import MaterialCoverJob

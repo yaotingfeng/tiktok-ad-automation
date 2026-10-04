@@ -16,12 +16,11 @@ from app.modules.builds.execution_models import (
     SubmissionUnit,
 )
 from app.modules.builds.execution_state import evidence
-from app.modules.builds.preview_materials import material_not_skipped
+from app.modules.builds.preview_materials import frozen_ad_material_ids
 from app.modules.builds.preview_models import (
     BuildUnit,
     PlannedAd,
     PlannedGroup,
-    PreviewAdMaterial,
 )
 from app.modules.builds.routes import verify_unit_route
 from app.modules.materials.cover_models import MaterialCoverJob
@@ -71,33 +70,37 @@ def retry_ad_covers(
 
     if step.kind != "AD" or step.request_body is not None or step.remote_id:
         raise DomainError("execution_requires_reconciliation", "广告结果需要先核实")
+    ad = session.exec(
+        select(PlannedAd).where(
+            PlannedAd.tenant_id == step.tenant_id,
+            PlannedAd.preview_id == step.preview_id,
+            PlannedAd.id == step.planned_ad_id,
+        )
+    ).one_or_none()
+    group = session.exec(
+        select(PlannedGroup).where(
+            PlannedGroup.tenant_id == step.tenant_id,
+            PlannedGroup.preview_id == step.preview_id,
+            PlannedGroup.id == step.group_id,
+        )
+    ).one_or_none()
+    if ad is None or group is None:
+        raise DomainError("resource_not_found", "冻结创意不存在")
+    material_ids = frozen_ad_material_ids(
+        session,
+        tenant_id=step.tenant_id,
+        preview_id=step.preview_id,
+        drama_id=group.drama_id,
+        group_no=group.group_no,
+        base_ad_no=ad.base_ad_no,
+        unit_id=unit.id,
+    )
     jobs = session.exec(
         select(MaterialCoverJob)
         .join(
             AccountMaterial,
             (col(AccountMaterial.id) == MaterialCoverJob.asset_id)
             & (col(AccountMaterial.tenant_id) == MaterialCoverJob.tenant_id)
-            & (col(AccountMaterial.video_id) == MaterialCoverJob.video_id)
-            & (col(AccountMaterial.connection_id) == MaterialCoverJob.connection_id),
-        )
-        .join(
-            PreviewAdMaterial,
-            (col(PreviewAdMaterial.tenant_id) == AccountMaterial.tenant_id)
-            & (col(PreviewAdMaterial.material_id) == AccountMaterial.material_id),
-        )
-        .join(
-            PlannedAd,
-            (col(PlannedAd.tenant_id) == PreviewAdMaterial.tenant_id)
-            & (col(PlannedAd.preview_id) == PreviewAdMaterial.preview_id)
-            & (col(PlannedAd.base_ad_no) == PreviewAdMaterial.base_ad_no)
-            & (col(PlannedAd.id) == step.planned_ad_id),
-        )
-        .join(
-            PlannedGroup,
-            (col(PlannedGroup.tenant_id) == PreviewAdMaterial.tenant_id)
-            & (col(PlannedGroup.preview_id) == PreviewAdMaterial.preview_id)
-            & (col(PlannedGroup.drama_id) == PreviewAdMaterial.drama_id)
-            & (col(PlannedGroup.group_no) == PreviewAdMaterial.group_no),
         )
         .where(
             MaterialCoverJob.tenant_id == context.tenant_id,
@@ -105,14 +108,7 @@ def retry_ad_covers(
             MaterialCoverJob.advertiser_id == unit.advertiser_id,
             MaterialCoverJob.connection_id == unit.connection_id,
             col(MaterialCoverJob.superseded_by_id).is_(None),
-            PlannedGroup.preview_id == step.preview_id,
-            PlannedGroup.unit_id == step.unit_id,
-            PlannedGroup.id == step.group_id,
-            material_not_skipped(
-                tenant_id=context.tenant_id,
-                unit_id=unit.id,
-                material_id=col(PreviewAdMaterial.material_id),
-            ),
+            col(AccountMaterial.material_id).in_(material_ids),
         )
         .order_by(col(MaterialCoverJob.id))
         .limit(50)
@@ -133,31 +129,34 @@ def validate_ad_assets(
     """Pure local final fence, after admission and immediately before AD arming."""
     from app.modules.materials.covers import verified_cover_image_id
 
+    ad = session.exec(
+        select(PlannedAd).where(
+            PlannedAd.tenant_id == step.tenant_id,
+            PlannedAd.preview_id == step.preview_id,
+            PlannedAd.id == step.planned_ad_id,
+        )
+    ).one_or_none()
+    group = session.exec(
+        select(PlannedGroup).where(
+            PlannedGroup.tenant_id == step.tenant_id,
+            PlannedGroup.preview_id == step.preview_id,
+            PlannedGroup.id == step.group_id,
+        )
+    ).one_or_none()
+    if ad is None or group is None:
+        raise DomainError("resource_not_found", "冻结创意不存在")
+    material_ids = frozen_ad_material_ids(
+        session,
+        tenant_id=step.tenant_id,
+        preview_id=step.preview_id,
+        drama_id=group.drama_id,
+        group_no=group.group_no,
+        base_ad_no=ad.base_ad_no,
+        unit_id=unit.id,
+    )
     rows = session.exec(
-        select(PreviewAdMaterial.material_id, AccountMaterial, MaterialCoverJob)
-        .select_from(PreviewAdMaterial)
-        .join(
-            PlannedAd,
-            (col(PlannedAd.tenant_id) == PreviewAdMaterial.tenant_id)
-            & (col(PlannedAd.preview_id) == PreviewAdMaterial.preview_id)
-            & (col(PlannedAd.base_ad_no) == PreviewAdMaterial.base_ad_no)
-            & (col(PlannedAd.id) == step.planned_ad_id),
-        )
-        .join(
-            PlannedGroup,
-            (col(PlannedGroup.tenant_id) == PreviewAdMaterial.tenant_id)
-            & (col(PlannedGroup.preview_id) == PreviewAdMaterial.preview_id)
-            & (col(PlannedGroup.drama_id) == PreviewAdMaterial.drama_id)
-            & (col(PlannedGroup.group_no) == PreviewAdMaterial.group_no),
-        )
-        .outerjoin(
-            AccountMaterial,
-            (col(AccountMaterial.tenant_id) == PreviewAdMaterial.tenant_id)
-            & (col(AccountMaterial.material_id) == PreviewAdMaterial.material_id)
-            & (col(AccountMaterial.bc_id) == step.bc_id)
-            & (col(AccountMaterial.advertiser_id) == unit.advertiser_id)
-            & (col(AccountMaterial.connection_id) == unit.connection_id),
-        )
+        select(AccountMaterial.material_id, AccountMaterial, MaterialCoverJob)
+        .select_from(AccountMaterial)
         .outerjoin(
             MaterialCoverJob,
             (col(MaterialCoverJob.tenant_id) == AccountMaterial.tenant_id)
@@ -168,20 +167,17 @@ def validate_ad_assets(
             & col(MaterialCoverJob.superseded_by_id).is_(None),
         )
         .where(
-            PlannedGroup.tenant_id == step.tenant_id,
-            PlannedGroup.preview_id == step.preview_id,
-            PlannedGroup.unit_id == step.unit_id,
-            PlannedGroup.id == step.group_id,
-            material_not_skipped(
-                tenant_id=step.tenant_id,
-                unit_id=unit.id,
-                material_id=col(PreviewAdMaterial.material_id),
-            ),
+            AccountMaterial.tenant_id == step.tenant_id,
+            AccountMaterial.bc_id == step.bc_id,
+            AccountMaterial.advertiser_id == unit.advertiser_id,
+            AccountMaterial.connection_id == unit.connection_id,
+            col(AccountMaterial.material_id).in_(material_ids),
         )
-        .order_by(col(PreviewAdMaterial.position))
         .limit(51)
         .execution_options(populate_existing=True)
     ).all()
+    row_order = {material_id: index for index, material_id in enumerate(material_ids)}
+    rows.sort(key=lambda row: row_order.get(row[0], len(row_order)))
     try:
         if any(
             len(entry["creative_info"]["image_info"]) != 1
@@ -197,7 +193,11 @@ def validate_ad_assets(
         ]
     except KeyError, TypeError, IndexError:
         raise DomainError("invalid_build_request", "创意素材结构无效") from None
-    valid = 1 <= len(rows) <= 50 and len(rows) == len(actual)
+    valid = (
+        1 <= len(rows) <= 50
+        and len(rows) == len(material_ids)
+        and len(rows) == len(actual)
+    )
     for (_, mapping, job), (video_id, image_id) in zip(rows, actual, strict=False):
         if not mapping or not mapping_fresh(mapping) or mapping.video_id != video_id:
             valid = False
