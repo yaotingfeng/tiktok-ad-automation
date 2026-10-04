@@ -101,6 +101,8 @@ def retry_ad_covers(
             AccountMaterial,
             (col(AccountMaterial.id) == MaterialCoverJob.asset_id)
             & (col(AccountMaterial.tenant_id) == MaterialCoverJob.tenant_id)
+            & (col(AccountMaterial.video_id) == MaterialCoverJob.video_id)
+            & (col(AccountMaterial.connection_id) == MaterialCoverJob.connection_id),
         )
         .where(
             MaterialCoverJob.tenant_id == context.tenant_id,
