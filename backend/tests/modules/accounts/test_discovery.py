@@ -14,6 +14,7 @@ from app.integrations.tiktok.contracts.discovery import AUTHORIZED_LIST_SOURCE
 from app.integrations.tiktok.mcp_auth.bootstrap import observed_subject
 from app.integrations.tiktok.official.authorization import material_authorization
 from app.modules.accounts.api_directory import SCHEMA_DIGEST
+from app.modules.accounts.connection_models import BCDefaultRoute
 from app.modules.accounts.discovery import finalize_directory
 from app.modules.accounts.discovery_models import DiscoveryStagedPage
 from app.modules.accounts.mcp_discovery_tasks import stage_results
@@ -303,6 +304,12 @@ def test_api_directory_publishes_actual_role_permissions_without_a_second_job(
     )
     expected = account_role in {"ADMIN", "OPERATOR"}
     assert grant.can_build == grant.can_upload == expected
+    # API 完整发现的每个可见 BC 默认使用本次已核验授权；已有其他默认路由由
+    # 冲突保护保留，管理员仍可在授权管理中切换。
+    assert (
+        session.get(BCDefaultRoute, (run.tenant_id, old.bc_id)).connection_id
+        == run.connection_id
+    )
     proof = get_capability_evidence(
         session,
         context=context,

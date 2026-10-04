@@ -20,6 +20,7 @@ from app.integrations.tiktok.official.authorization import (
 )
 from app.modules.accounts.connection_models import (
     BCConnectionBinding,
+    BCDefaultRoute,
     ConnectionAuthorization,
 )
 from app.modules.accounts.directory_merge import merge_directory_bc
@@ -175,6 +176,26 @@ def publish_api_directory(
         attempt.candidate_ciphertext = None
         attempt.status = "ACCEPTED"
         session.add(attempt)
+    # API 授权的完整目录已经核验了每个可见 BC；新发现的 BC 默认使用这份
+    # 授权，同时保留管理员此前为该 BC 选择的其他连接。绑定代数必须和本次
+    # 授权版本同步，否则默认路由会被冻结路由校验视为过期。
+    for bc_id in bcs:
+        binding = session.get(
+            BCConnectionBinding, (run.tenant_id, bc_id, connection.id)
+        )
+        if binding is None:
+            raise incomplete()
+        binding.authorization_revision = connection.authorization_revision
+        session.add(binding)
+        session.exec(
+            insert(BCDefaultRoute)
+            .values(
+                tenant_id=run.tenant_id,
+                bc_id=bc_id,
+                connection_id=connection.id,
+            )
+            .on_conflict_do_nothing(index_elements=["tenant_id", "bc_id"])
+        )
     connection.status = "ACTIVE"
     connection.adapter_contract_revision = CONTRACT_REVISION
     summary = {
