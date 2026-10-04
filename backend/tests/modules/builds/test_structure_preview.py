@@ -124,6 +124,28 @@ def test_legacy_frozen_group_materials_are_used_when_ad_rows_are_absent():
     ) == 2
 
 
+def test_partial_ad_rows_in_another_drama_disable_legacy_fallback():
+    class Result:
+        def all(self):
+            return []
+
+        def first(self):
+            return uuid4()
+
+    class Session:
+        def exec(self, query):
+            return Result()
+
+    assert frozen_ad_material_ids(
+        Session(),
+        tenant_id=uuid4(),
+        preview_id=uuid4(),
+        drama_id=uuid4(),
+        group_no=1,
+        base_ad_no=1,
+    ) == []
+
+
 def test_material_limit_uses_frozen_scene_limit():
     assert material_limit_exceeded([10], 9)
     assert not material_limit_exceeded([10], 10)

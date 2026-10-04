@@ -79,7 +79,6 @@ def frozen_ad_material_ids(
             select(PreviewAdMaterial.material_id).where(
                 PreviewAdMaterial.tenant_id == tenant_id,
                 PreviewAdMaterial.preview_id == preview_id,
-                PreviewAdMaterial.drama_id == drama_id,
             )
         ).first()
     )
