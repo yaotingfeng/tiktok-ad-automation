@@ -60,7 +60,7 @@ from app.modules.providers.repository import get_application, get_connection
 from app.modules.providers.schemas import _validate_json
 from app.modules.providers.service import get_link_results, prepare_links
 from app.modules.strategies.models import Strategy
-from app.modules.strategies.service import get_version, get_version_record
+from app.modules.strategies.service import get_version_record
 from app.modules.tenants.permissions import require_tenant
 
 from .manual_links import materialize, resolve_provider, validate_manual_links
@@ -1062,10 +1062,10 @@ def _materials_page(
         title=drama.title,
         cursor=drama.material_cursor,
     )
-    config = get_version(session, context=context, version_id=draft.strategy_version_id)
     for item in page.items:
         # 库在分页期间可能新增同内容别名或切换可见代表；按内容核对已选项，
-        # 保留最初冻结的文件 ID，不让同一视频重复进入不同广告组。
+        # 保留最初冻结的文件 ID，不让同一视频重复进入素材包。分组由预览
+        # 规划器根据冻结的素材包顺序决定，草稿阶段只保存一个稳定的源分组。
         exists = session.exec(
             select(DraftGroupMaterial.material_id)
             .join(
@@ -1089,8 +1089,8 @@ def _materials_page(
                 draft_id=draft.id,
                 drama_id=drama.drama_id,
                 bc_id=draft.bc_id,
-                group_no=index // config.group_size + 1,
-                position=index % config.group_size + 1,
+                group_no=1,
+                position=index + 1,
                 material_id=item.material_id,
             )
         )

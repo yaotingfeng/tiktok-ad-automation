@@ -66,7 +66,12 @@ from app.modules.builds.preview_schemas import (
     frozen_bid_strategy,
     generation_mode_label,
 )
-from app.modules.builds.preview_validation import measured, name_reasons, scene_reasons
+from app.modules.builds.preview_validation import (
+    final_ad_count_exceeded,
+    measured,
+    name_reasons,
+    scene_reasons,
+)
 from app.modules.builds.route_views import execution_route_view
 from app.modules.builds.routes import load_preview_route, save_preview_route
 from app.modules.builds.scene import read_scene_context
@@ -798,6 +803,14 @@ def _expand_unit(
         )
         .order_by(col(PreviewCopy.creative_no))
     ).all()
+    maximum_ads = unit.scene_snapshot["field_constraints"].get("max_ads_per_adgroup")
+    base_ad_count = len({copy.base_ad_no for copy in copies})
+    if final_ad_count_exceeded(
+        base_ad_count=base_ad_count,
+        creative_count=config.creative_count,
+        maximum=maximum_ads,
+    ):
+        _block(unit, ["creative_count_exceeded"])
     for copy in copies:
         ad_name = _names(
             preview, drama, config, group.group_no, copy.creative_no, copy.base_ad_no

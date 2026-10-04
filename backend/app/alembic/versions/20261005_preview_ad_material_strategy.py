@@ -69,6 +69,10 @@ def upgrade() -> None:
             name="uq_preview_ad_material_id",
         ),
     )
+    op.execute(
+        "CREATE TRIGGER preview_ad_material_frozen BEFORE INSERT OR UPDATE OR DELETE "
+        "ON preview_ad_material FOR EACH ROW EXECUTE FUNCTION check_preview_child_write()"
+    )
 
 
 def downgrade() -> None:
@@ -83,6 +87,7 @@ def downgrade() -> None:
         raise RuntimeError(
             "Cannot downgrade: preview_group_material now contains shared materials across groups"
         )
+    op.execute("DROP TRIGGER preview_ad_material_frozen ON preview_ad_material")
     op.drop_table("preview_ad_material")
     op.drop_constraint("ck_planned_ad_no", "planned_ad", type_="check")
     op.create_check_constraint("ck_planned_ad_no", "planned_ad", "creative_no > 0")

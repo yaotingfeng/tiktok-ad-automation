@@ -1,3 +1,4 @@
+from pathlib import Path
 from uuid import uuid4
 
 from app.modules.builds.preview_materials import (
@@ -5,7 +6,10 @@ from app.modules.builds.preview_materials import (
     material_limit_exceeded,
 )
 from app.modules.builds.preview_models import PreviewAdMaterial, PreviewCopy
-from app.modules.builds.preview_validation import scene_reasons
+from app.modules.builds.preview_validation import (
+    final_ad_count_exceeded,
+    scene_reasons,
+)
 from app.modules.builds.scene_schemas import SceneContext
 from app.modules.strategies.copy_pool import CopyChoice
 from app.modules.strategies.schemas import StrategyConfig
@@ -19,22 +23,23 @@ class Material:
 
 
 def strategy(**changes):
-    return StrategyConfig(
-        budget="100",
-        currency="USD",
-        bid_strategy="HIGHEST_VALUE",
-        group_generation_mode="FIXED",
-        group_count=2,
-        group_material_allocation="SHARED",
-        ad_generation_mode="FIXED",
-        ads_per_group=2,
-        ad_material_allocation="SHARED",
-        max_materials_per_group=None,
-        max_materials_per_ad=None,
-        creative_count=2,
-        copy_pool_version=uuid4(),
-        **changes,
-    )
+    values = {
+        "budget": "100",
+        "currency": "USD",
+        "bid_strategy": "HIGHEST_VALUE",
+        "group_generation_mode": "FIXED",
+        "group_count": 2,
+        "group_material_allocation": "SHARED",
+        "ad_generation_mode": "FIXED",
+        "ads_per_group": 2,
+        "ad_material_allocation": "SHARED",
+        "max_materials_per_group": None,
+        "max_materials_per_ad": None,
+        "creative_count": 2,
+        "copy_pool_version": uuid4(),
+    }
+    values.update(changes)
+    return StrategyConfig(**values)
 
 
 def copies():
@@ -83,9 +88,48 @@ def test_highest_value_without_roas_does_not_require_roas_limits():
         },
         cta_fields={"asset_ids": ["cta"]},
     )
-    reasons = scene_reasons(strategy(cta_option_ids=("cta",)), scene, "USD")
+    reasons = scene_reasons(
+        strategy(cta_option_ids=("cta",), creative_count=31), scene, "USD"
+    )
     assert "roas_limits_unverified" not in reasons
     assert "roas_out_of_range" not in reasons
+    assert "creative_count_exceeded" not in reasons
+
+
+def test_final_ad_limit_uses_base_ads_times_creative_count():
+    config = strategy(
+        group_count=1,
+        ad_generation_mode="BY_MATERIAL",
+        ads_per_group=None,
+        ad_material_allocation=None,
+        max_materials_per_ad=1,
+        creative_count=3,
+    )
+    groups = plan_structure(
+        [Material(uuid4()) for _ in range(20)],
+        config=config,
+        pool=copies(),
+        seed=11,
+    )
+    assert len(groups[0].ads) == 20
+    assert final_ad_count_exceeded(
+        base_ad_count=len(groups[0].ads),
+        creative_count=config.creative_count,
+        maximum=30,
+    )
+
+
+def test_preview_ad_material_migration_installs_frozen_child_trigger():
+    migration = (
+        Path(__file__).resolve().parents[3]
+        / "app/alembic/versions/20261005_preview_ad_material_strategy.py"
+    ).read_text()
+    assert (
+        "CREATE TRIGGER preview_ad_material_frozen BEFORE INSERT OR UPDATE OR DELETE"
+        in migration
+    )
+    assert "check_preview_child_write()" in migration
+    assert "DROP TRIGGER preview_ad_material_frozen ON preview_ad_material" in migration
 
 
 def test_ad_material_models_keep_ad_base_in_primary_key():

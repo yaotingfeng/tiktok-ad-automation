@@ -376,9 +376,18 @@ def test_preparation_matches_all_material_pages_once_per_drama(
             DraftDrama.draft_id == draft_id, DraftDrama.title == "Moon"
         )
     ).one()
-    groups = [row for row in rows if row.drama_id == moon.drama_id]
-    assert max(row.group_no for row in groups) == 21
-    assert sum(row.group_no == 21 for row in groups) == 6
+    groups = sorted(
+        (row for row in rows if row.drama_id == moon.drama_id),
+        key=lambda row: (row.group_no, row.position),
+    )
+    assert {row.group_no for row in groups} == {1}
+    assert [row.position for row in groups] == list(range(1, len(groups) + 1))
+    assert [row.material_id for row in groups] == [
+        row.id
+        for row in sorted(
+            [*expected, shared], key=lambda row: (row.file_name.encode(), row.id)
+        )
+    ]
     revision = edit_material_groups(
         session,
         context=context,
@@ -405,6 +414,41 @@ def test_preparation_matches_all_material_pages_once_per_drama(
         ).material_state
         == "manual"
     )
+
+
+def test_new_strategy_draft_keeps_material_match_order_in_source_package(
+    session, context, intent
+):
+    account(session, context)
+    source = [
+        material(session, context, "Moon - 03.mp4", bc="bc-draft"),
+        material(session, context, "Moon - 01.mp4", bc="bc-draft"),
+        material(session, context, "Moon - 02.mp4", bc="bc-draft"),
+    ]
+    focused_intent = intent | {
+        "drama_lines": ["Moon"],
+        "account_lines": ["account-A"],
+    }
+    draft_id = create_draft(session, context=context, **focused_intent)
+    task_id = prepare_draft(
+        session, context=context, draft_id=draft_id, request_id=uuid4()
+    )
+    ready_links(session, context, task_id, focused_intent)
+    finish(session, context, task_id)
+
+    rows = session.exec(
+        select(DraftGroupMaterial)
+        .where(DraftGroupMaterial.draft_id == draft_id)
+        .order_by(DraftGroupMaterial.group_no, DraftGroupMaterial.position)
+    ).all()
+    assert [(row.group_no, row.position) for row in rows] == [
+        (1, 1),
+        (1, 2),
+        (1, 3),
+    ]
+    assert [row.material_id for row in rows] == [row.id for row in source[1:]] + [
+        source[0].id
+    ]
 
 
 def test_unknown_link_keeps_original_status_and_input(session, context, intent):

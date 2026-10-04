@@ -41,6 +41,17 @@ def name_reasons(name: str, kind: str, scene: dict[str, Any]) -> list[str]:
     return reasons
 
 
+def final_ad_count_exceeded(
+    *, base_ad_count: int, creative_count: int, maximum: Any
+) -> bool:
+    """Check the platform limit against the final copied-ad count per group."""
+    return (
+        type(maximum) is int
+        and maximum > 0
+        and base_ad_count * creative_count > maximum
+    )
+
+
 def scene_reasons(
     config: StrategyConfig, scene: SceneContext, currency: str
 ) -> list[str]:
@@ -53,8 +64,6 @@ def scene_reasons(
     maximum = c.get("max_ads_per_adgroup")
     if type(maximum) is not int or maximum <= 0:
         reasons.append("field_limits_unverified")
-    elif config.creative_count > maximum:
-        reasons.append("creative_count_exceeded")
     if scene.creative_limit <= 0 or scene.copy_length_limit <= 0:
         reasons.append("field_limits_unverified")
     budget_key = (
