@@ -24,6 +24,8 @@ from redis import Redis
 from sqlalchemy import update
 from sqlmodel import Session, col, select
 
+# 预加载完整 SQLModel 注册表；spawn 子进程直接导入本模块时，避免权限模块反向导入形成环。
+import app.models as _app_models  # noqa: F401
 from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.credentials import encrypt_credentials

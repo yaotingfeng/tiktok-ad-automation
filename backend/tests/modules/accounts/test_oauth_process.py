@@ -1,6 +1,7 @@
 import multiprocessing
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 
@@ -47,3 +48,22 @@ def test_spawned_exchange_succeeds_from_request_thread():
             deadline_seconds=10,
             _worker=success_worker,
         ).result(timeout=12) == {"access_token": "fake-process-token", "scope": "[2,6]"}
+
+
+def test_oauth_worker_module_is_importable_in_spawn_child():
+    """The real OAuth worker must survive multiprocessing spawn import order."""
+    import os
+    import subprocess
+    import sys
+
+    backend = Path(__file__).resolve().parents[3]
+    environment = {**os.environ, "PYTHONPATH": str(backend)}
+    result = subprocess.run(
+        [sys.executable, "-c", "import app.integrations.tiktok.auth"],
+        cwd=backend,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
