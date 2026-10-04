@@ -66,7 +66,7 @@ export function StrategyVersionList({
       {
         header: "结构 / 创意",
         cell: ({ row }) =>
-          `${row.original.config.group_generation_mode === "BY_MATERIAL" ? `按素材数量（每组最多 ${row.original.config.max_materials_per_group} 条）` : `固定 ${row.original.config.group_count} 组`} · ${row.original.config.ad_generation_mode === "BY_MATERIAL" ? `每广告最多 ${row.original.config.max_materials_per_ad} 条素材` : `固定 ${row.original.config.ads_per_group} 个广告`} · 创意 ${row.original.config.creative_count ?? 1}`,
+          `${row.original.config.group_generation_mode === "BY_MATERIAL" ? `按素材数量（每组最多 ${row.original.config.max_materials_per_group} 条）` : `固定 ${row.original.config.group_count} 组`} · ${row.original.config.ad_generation_mode === "BY_MATERIAL" ? `每广告最多 ${row.original.config.max_materials_per_ad} 条素材` : `固定 ${row.original.config.ads_per_group} 个广告 · ${row.original.config.ad_material_allocation === "SEQUENTIAL_AVERAGE" ? "按顺序平均分配" : "共用本组素材"}`} · 创意 ${row.original.config.creative_count ?? 1}`,
       },
       {
         header: "保存信息",

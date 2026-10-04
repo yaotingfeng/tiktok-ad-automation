@@ -150,7 +150,7 @@ export function StrategyList() {
           <div className="flex flex-col gap-1">
             {row.original.config.ad_generation_mode === "BY_MATERIAL"
               ? `按素材数量 · 每广告最多 ${row.original.config.max_materials_per_ad} 条`
-              : `固定 ${row.original.config.ads_per_group} 个广告`}
+              : `固定 ${row.original.config.ads_per_group} 个广告 · ${row.original.config.ad_material_allocation === "SEQUENTIAL_AVERAGE" ? "按顺序平均分配" : "共用本组素材"}`}
             <p className="text-xs text-muted-foreground">
               每个广告创意数量 {row.original.config.creative_count ?? 1}
             </p>

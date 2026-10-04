@@ -679,115 +679,6 @@ export function StrategyForm({
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle>预算与出价</CardTitle>
-              <CardDescription>
-                选择预算归属和竞价方式；目标 ROAS 仅在对应竞价策略下填写。
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <FieldGroup className="sm:grid sm:grid-cols-2">
-                {selectField(
-                  "budget_strategy",
-                  budgetStrategy,
-                  (value) => setBudgetStrategy(value as "SERIES" | "ADGROUP"),
-                  [
-                    { value: "SERIES", label: "系列预算" },
-                    { value: "ADGROUP", label: "组预算" },
-                  ],
-                )}
-                {selectField(
-                  "bid_strategy",
-                  bidStrategy,
-                  (value) => {
-                    const next = value as "HIGHEST_VALUE" | "TARGET_ROAS"
-                    setBidStrategy(next)
-                    if (next === "HIGHEST_VALUE") setRoas("")
-                  },
-                  [
-                    { value: "HIGHEST_VALUE", label: "最高价值" },
-                    { value: "TARGET_ROAS", label: "目标 ROAS" },
-                  ],
-                )}
-                {input(
-                  "budget",
-                  budget,
-                  setBudget,
-                  "按日预算金额保存；不会自动换算币种。",
-                )}
-                <Field data-disabled data-invalid={invalid("currency")}>
-                  <FieldLabel htmlFor="strategy-currency">预算币种</FieldLabel>
-                  <Select value={currency} disabled>
-                    <SelectTrigger
-                      id="strategy-currency"
-                      aria-label="预算币种"
-                      aria-invalid={invalid("currency")}
-                    >
-                      <SelectValue placeholder="选择币种" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {Array.from(
-                          new Set([
-                            ...currencies,
-                            ...(currency ? [currency] : []),
-                          ]),
-                        )
-                          .sort()
-                          .map((code) => (
-                            <SelectItem key={code} value={code}>
-                              {code}
-                            </SelectItem>
-                          ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                  <FieldDescription>
-                    暂不支持切换币种；须与目标账户一致，不自动换算。
-                  </FieldDescription>
-                  {invalid("currency") && (
-                    <FieldError>{errors.currency}</FieldError>
-                  )}
-                </Field>
-                {bidStrategy === "TARGET_ROAS" &&
-                  input(
-                    "target_roas",
-                    roas,
-                    setRoas,
-                    "目标倍率，例如 1.08 倍；不表示百分比。",
-                  )}
-              </FieldGroup>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>受众定向</CardTitle>
-              <CardDescription>
-                策略保存常用设置，搭建时可仅修改本次批次。
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-4">
-              {(!bc || !targetingDirectory.data?.region_codes?.length) && (
-                <p className="text-sm text-muted-foreground">
-                  请选择 BC 并同步账户和小程序地区后再选择国家。
-                </p>
-              )}
-              {targetingDirectory.error && (
-                <RequestError error={targetingDirectory.error} />
-              )}
-              <TargetingForm
-                value={targeting}
-                onChange={(v) => {
-                  setTargeting(v)
-                  setServerErrors({})
-                }}
-                countries={targetingDirectory.data?.region_codes || []}
-                disabled={readonly || pending || !!unknownRequest}
-                reference
-              />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
               <CardTitle>素材与创意</CardTitle>
               <CardDescription>
                 先决定广告组如何生成，再决定每个广告组内的广告如何使用素材。
@@ -904,6 +795,115 @@ export function StrategyForm({
                   "基础广告完成素材分配后，每个广告复制的创意数量。",
                 )}
               </FieldGroup>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>预算与出价</CardTitle>
+              <CardDescription>
+                选择预算归属和竞价方式；目标 ROAS 仅在对应竞价策略下填写。
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <FieldGroup className="sm:grid sm:grid-cols-2">
+                {selectField(
+                  "budget_strategy",
+                  budgetStrategy,
+                  (value) => setBudgetStrategy(value as "SERIES" | "ADGROUP"),
+                  [
+                    { value: "SERIES", label: "系列预算" },
+                    { value: "ADGROUP", label: "组预算" },
+                  ],
+                )}
+                {selectField(
+                  "bid_strategy",
+                  bidStrategy,
+                  (value) => {
+                    const next = value as "HIGHEST_VALUE" | "TARGET_ROAS"
+                    setBidStrategy(next)
+                    if (next === "HIGHEST_VALUE") setRoas("")
+                  },
+                  [
+                    { value: "HIGHEST_VALUE", label: "最高价值" },
+                    { value: "TARGET_ROAS", label: "目标 ROAS" },
+                  ],
+                )}
+                {input(
+                  "budget",
+                  budget,
+                  setBudget,
+                  "按日预算金额保存；不会自动换算币种。",
+                )}
+                <Field data-disabled data-invalid={invalid("currency")}>
+                  <FieldLabel htmlFor="strategy-currency">预算币种</FieldLabel>
+                  <Select value={currency} disabled>
+                    <SelectTrigger
+                      id="strategy-currency"
+                      aria-label="预算币种"
+                      aria-invalid={invalid("currency")}
+                    >
+                      <SelectValue placeholder="选择币种" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {Array.from(
+                          new Set([
+                            ...currencies,
+                            ...(currency ? [currency] : []),
+                          ]),
+                        )
+                          .sort()
+                          .map((code) => (
+                            <SelectItem key={code} value={code}>
+                              {code}
+                            </SelectItem>
+                          ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <FieldDescription>
+                    暂不支持切换币种；须与目标账户一致，不自动换算。
+                  </FieldDescription>
+                  {invalid("currency") && (
+                    <FieldError>{errors.currency}</FieldError>
+                  )}
+                </Field>
+                {bidStrategy === "TARGET_ROAS" &&
+                  input(
+                    "target_roas",
+                    roas,
+                    setRoas,
+                    "目标倍率，例如 1.08 倍；不表示百分比。",
+                  )}
+              </FieldGroup>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>受众定向</CardTitle>
+              <CardDescription>
+                策略保存常用设置，搭建时可仅修改本次批次。
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              {(!bc || !targetingDirectory.data?.region_codes?.length) && (
+                <p className="text-sm text-muted-foreground">
+                  请选择 BC 并同步账户和小程序地区后再选择国家。
+                </p>
+              )}
+              {targetingDirectory.error && (
+                <RequestError error={targetingDirectory.error} />
+              )}
+              <TargetingForm
+                value={targeting}
+                onChange={(v) => {
+                  setTargeting(v)
+                  setServerErrors({})
+                }}
+                countries={targetingDirectory.data?.region_codes || []}
+                disabled={readonly || pending || !!unknownRequest}
+                reference
+              />
             </CardContent>
           </Card>
           <Card>

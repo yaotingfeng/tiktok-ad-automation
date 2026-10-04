@@ -1351,6 +1351,16 @@ test("策略默认值按业务决策顺序展示，隐藏无决策价值的安�
 }) => {
   await boundary(page, { empty: true })
   await page.goto(`/tenants/${A}/strategies/new`)
+  const cardTitles = page.locator('form#strategy-form [data-slot="card-title"]')
+  await expect(cardTitles).toHaveText([
+    "基本信息",
+    "素材与创意",
+    "预算与出价",
+    "受众定向",
+    "文案与 CTA",
+    "广告命名",
+    "生成规则",
+  ])
   await expect(page.getByRole("combobox", { name: "预算策略" })).toHaveText(
     "系列预算",
   )
@@ -1372,6 +1382,18 @@ test("策略默认值按业务决策顺序展示，隐藏无决策价值的安�
   ).toHaveValue("1")
   await expect(page.getByLabel("广告素材安排", { exact: true })).toHaveCount(0)
   await expect(page.getByText(/素材不足处理/)).toHaveCount(0)
+})
+
+test("固定广告结构摘要包含素材安排", async ({ page }) => {
+  const api = await boundary(page)
+  api.records[0].config.ad_generation_mode = "FIXED"
+  api.records[0].config.ads_per_group = 2
+  api.records[0].config.max_materials_per_ad = null
+  api.records[0].config.ad_material_allocation = "SEQUENTIAL_AVERAGE"
+  await page.goto(`/tenants/${A}/strategies`)
+  await expect(page.locator("tbody tr").first()).toContainText(
+    "固定 2 个广告 · 按顺序平均分配",
+  )
 })
 
 test("切换数量规则和竞价策略会清除不相关字段", async ({ page }) => {

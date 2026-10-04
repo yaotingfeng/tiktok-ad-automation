@@ -26,3 +26,10 @@
 - ROAS test inputs use `#strategy-target_roas` so they cannot collide with Radix select options.
 - Re-ran the focused suite with the local Vite server and Playwright workspace project: **43 passed**.
 - `node_modules/.bin/tsc -p frontend/tsconfig.build.json --noEmit`, Biome on all changed strategy files, and `git diff --check` passed.
+
+## Fix round 2
+
+- Reordered the form cards to match the approved decision flow: basic information, material/structure, budget and bid, targeting, copy/CTA, naming, then generation notes.
+- Added a DOM-order regression assertion for the strategy editor.
+- Fixed list and version summaries so fixed-count ads also show whether materials are shared or sequentially averaged.
+- Focused strategy Playwright suite with a local Vite server: **44 passed**.
