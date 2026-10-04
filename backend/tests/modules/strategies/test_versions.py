@@ -25,9 +25,18 @@ def config(**changes):
         {
             "budget": "100.25",
             "currency": "USD",
+            "budget_strategy": "SERIES",
+            "bid_strategy": "TARGET_ROAS",
             "target_roas": "1.08",
-            "group_size": 10,
-            "creative_count": 2,
+            "group_generation_mode": "BY_MATERIAL",
+            "group_count": None,
+            "group_material_allocation": None,
+            "max_materials_per_group": 10,
+            "ad_generation_mode": "FIXED",
+            "ads_per_group": 2,
+            "ad_material_allocation": "SHARED",
+            "max_materials_per_ad": None,
+            "creative_count": 1,
             "copy_pool_version": POOL_VERSION,
         }
         | changes

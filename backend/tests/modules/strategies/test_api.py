@@ -55,6 +55,12 @@ def test_versioned_save_recovery_history_and_local_disable(client, context):
     assert first.status_code == 201, first.text
     initial = first.json()
     assert initial["config"]["budget"] == "100.25"
+    assert initial["config"]["group_generation_mode"] == "BY_MATERIAL"
+    assert initial["config"]["max_materials_per_group"] == 10
+    assert initial["config"]["ad_generation_mode"] == "FIXED"
+    assert initial["config"]["ads_per_group"] == 2
+    assert initial["config"]["creative_count"] == 1
+    assert "group_size" not in initial["config"]
     assert initial["number"] == 1
     assert (
         client.post(f"{base}/strategies", json=body, headers=headers(context)).json()[

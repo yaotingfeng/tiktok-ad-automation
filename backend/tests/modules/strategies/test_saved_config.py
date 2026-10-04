@@ -62,10 +62,31 @@ def test_new_requests_reject_removed_suffix():
         )
 
 
+def test_legacy_structure_is_projected_only_when_read():
+    saved = config().model_dump(mode="json") | {
+        "group_size": 10,
+        "creative_count": 2,
+    }
+    current = read_saved_config(saved)
+
+    assert current.group_generation_mode == "BY_MATERIAL"
+    assert current.group_count is None
+    assert current.max_materials_per_group == 10
+    assert current.ad_generation_mode == "FIXED"
+    assert current.ads_per_group == 2
+    assert current.ad_material_allocation == "SHARED"
+    assert current.max_materials_per_ad is None
+    assert current.creative_count == 1
+    assert "group_size" not in current.model_dump()
+    assert "group_size" in saved
+
+
 def test_reading_historical_versions_preserves_database_record_and_digest(
     session, context
 ):
     saved = config().model_dump(mode="json") | {
+        "group_size": 10,
+        "creative_count": 2,
         "campaign_suffix": "-{YYYYMMDD}-{batch_short_id}",
         "campaign_name_template": "{provider_pinyin}-{drama_name}-{drama_id}-{random}",
     }
@@ -96,6 +117,9 @@ def test_reading_historical_versions_preserves_database_record_and_digest(
     ]
     for record in records:
         assert record.config.campaign_name_template == "{provider_drama}-{drama_id}"
+        assert record.config.group_generation_mode == "BY_MATERIAL"
+        assert record.config.max_materials_per_group == 10
+        assert record.config.ads_per_group == 2
     session.expire_all()
     assert (
         session.exec(select(StrategyVersion).where(StrategyVersion.id == version.id))

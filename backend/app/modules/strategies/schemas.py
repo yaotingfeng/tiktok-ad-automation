@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
@@ -26,13 +26,73 @@ class StrategyConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     budget: Money
     currency: str = Field(pattern=r"^[A-Z]{3}$")
-    target_roas: Money
+    budget_strategy: Literal["SERIES", "ADGROUP"] = "SERIES"
+    bid_strategy: Literal["HIGHEST_VALUE", "TARGET_ROAS"] = "HIGHEST_VALUE"
     targeting: AudienceTargeting = Field(default_factory=AudienceTargeting)
-    group_size: int = Field(gt=0, strict=True)
-    creative_count: int = Field(gt=0, strict=True)
+    group_generation_mode: Literal["FIXED", "BY_MATERIAL"] = "FIXED"
+    group_count: int | None = Field(default=1, gt=0, strict=True)
+    group_material_allocation: Literal["SHARED", "SEQUENTIAL_AVERAGE"] | None = (
+        "SHARED"
+    )
+    max_materials_per_group: int | None = Field(default=None, gt=0, strict=True)
+    ad_generation_mode: Literal["FIXED", "BY_MATERIAL"] = "BY_MATERIAL"
+    ads_per_group: int | None = Field(default=None, gt=0, strict=True)
+    ad_material_allocation: Literal["SHARED", "SEQUENTIAL_AVERAGE"] | None = None
+    max_materials_per_ad: int | None = Field(default=1, gt=0, strict=True)
+    creative_count: int = Field(default=1, gt=0, strict=True)
+    target_roas: Money | None = None
     copy_pool_version: UUID
     cta_option_ids: tuple[str, ...] = ()
     campaign_name_template: str = Field(default=DEFAULT_NAME_TEMPLATE, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_structure(self) -> StrategyConfig:
+        """确保每一层只携带与生成模式对应的数量和素材分配。"""
+        if self.group_generation_mode == "FIXED":
+            if self.group_count is None:
+                raise ValueError("group_count is required for FIXED groups")
+            if self.max_materials_per_group is not None:
+                raise ValueError(
+                    "max_materials_per_group is only valid for BY_MATERIAL groups"
+                )
+        else:
+            if self.max_materials_per_group is None:
+                raise ValueError(
+                    "max_materials_per_group is required for BY_MATERIAL groups"
+                )
+            if self.group_count is not None:
+                raise ValueError(
+                    "group_count is only valid for FIXED groups"
+                )
+            if self.group_material_allocation is not None:
+                raise ValueError(
+                    "group_material_allocation is only valid for FIXED groups"
+                )
+
+        if self.ad_generation_mode == "FIXED":
+            if self.ads_per_group is None:
+                raise ValueError("ads_per_group is required for FIXED ads")
+            if self.max_materials_per_ad is not None:
+                raise ValueError(
+                    "max_materials_per_ad is only valid for BY_MATERIAL ads"
+                )
+        else:
+            if self.max_materials_per_ad is None:
+                raise ValueError(
+                    "max_materials_per_ad is required for BY_MATERIAL ads"
+                )
+            if self.ads_per_group is not None:
+                raise ValueError("ads_per_group is only valid for BY_MATERIAL ads")
+            if self.ad_material_allocation is not None:
+                raise ValueError(
+                    "ad_material_allocation is only valid for BY_MATERIAL ads"
+                )
+
+        if self.bid_strategy == "TARGET_ROAS" and self.target_roas is None:
+            raise ValueError("target_roas is required for TARGET_ROAS")
+        if self.bid_strategy == "HIGHEST_VALUE" and self.target_roas is not None:
+            raise ValueError("target_roas is only valid for TARGET_ROAS")
+        return self
 
 
 class ValidationIssue(BaseModel):

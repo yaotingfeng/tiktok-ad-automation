@@ -5,6 +5,7 @@ import json
 from typing import Any, cast
 from uuid import UUID, uuid4
 
+from pydantic import ValidationError
 from sqlalchemy import and_, text
 from sqlalchemy.orm import Session as SQLAlchemySession
 from sqlmodel import Session, col, select
@@ -84,7 +85,39 @@ def validate_strategy(
     session: Session, *, context: TenantContext, config: StrategyConfig
 ) -> list[ValidationIssue]:
     _authorize(session, context)
-    config = StrategyConfig.model_validate(config.model_dump())
+    try:
+        config = StrategyConfig.model_validate(config.model_dump())
+    except ValidationError as error:
+        # API callers receive one field-level issue per contract violation.  No
+        # material inventory is consulted when the structure itself is invalid.
+        issues: list[ValidationIssue] = []
+        for item in error.errors():
+            message = str(item.get("msg", "configuration_invalid"))
+            field = next(
+                (
+                    candidate
+                    for candidate in (
+                        "group_count",
+                        "group_material_allocation",
+                        "max_materials_per_group",
+                        "ads_per_group",
+                        "ad_material_allocation",
+                        "max_materials_per_ad",
+                        "target_roas",
+                    )
+                    if candidate in message
+                ),
+                "config",
+            )
+            code = (
+                "target_roas_required"
+                if "required for TARGET_ROAS" in message
+                else "target_roas_forbidden"
+                if "only valid for TARGET_ROAS" in message
+                else "configuration_invalid"
+            )
+            issues.append(ValidationIssue(field=field, code=code))
+        return issues
     errors = []
     try:
         copies = get_copies(

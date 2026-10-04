@@ -67,14 +67,14 @@ class StrategyVersion(SQLModel, table=True):
             ["tenant_id", "strategy_id"], ["strategy.tenant_id", "strategy.id"]
         ),
         CheckConstraint(
-            "number > 0 AND budget > 0 AND target_roas > 0 AND budget != 'NaN'::numeric AND target_roas != 'NaN'::numeric",
+            "number > 0 AND budget > 0 AND budget != 'NaN'::numeric AND (target_roas IS NULL OR (target_roas > 0 AND target_roas != 'NaN'::numeric))",
             name="ck_strategy_version_values",
         ),
         CheckConstraint(
             "request_kind IN ('create','append')", name="ck_strategy_request_kind"
         ),
         CheckConstraint(
-            "coalesce((jsonb_typeof(config) = 'object' AND (config->>'budget')::numeric = budget AND (config->>'target_roas')::numeric = target_roas AND config->>'copy_pool_version' = copy_pool_version_id::text), false)",
+            "coalesce((jsonb_typeof(config) = 'object' AND (config->>'budget')::numeric = budget AND (config->>'target_roas')::numeric IS NOT DISTINCT FROM target_roas AND config->>'copy_pool_version' = copy_pool_version_id::text), false)",
             name="ck_strategy_config_identity",
         ),
     )
@@ -85,7 +85,9 @@ class StrategyVersion(SQLModel, table=True):
     copy_pool_version_id: UUID = Field(foreign_key="copy_pool_version.id")
     config: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
     budget: Decimal = Field(sa_column=Column(Numeric(38, 12), nullable=False))
-    target_roas: Decimal = Field(sa_column=Column(Numeric(38, 12), nullable=False))
+    target_roas: Decimal | None = Field(
+        default=None, sa_column=Column(Numeric(38, 12), nullable=True)
+    )
     created_by: UUID = Field(foreign_key="user.id")
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC),

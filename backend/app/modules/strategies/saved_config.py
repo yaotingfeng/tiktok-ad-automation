@@ -8,6 +8,29 @@ from app.modules.strategies.schemas import StrategyConfig
 
 def read_saved_config(saved: dict[str, Any]) -> StrategyConfig:
     config = dict(saved)
+    # General strategy changed the meaning of both legacy quantities.  Keep the
+    # immutable JSON untouched and project it only at this read boundary:
+    # ``group_size`` becomes a material-bounded group rule, while the old
+    # creative count becomes fixed ads sharing each group's materials.
+    legacy_structure = "group_size" in config or (
+        "creative_count" in config and "ad_generation_mode" not in config
+    )
+    if legacy_structure:
+        group_size = config.pop("group_size", 1)
+        old_creative_count = config.pop("creative_count", 1)
+        config.setdefault("budget_strategy", "SERIES")
+        config["bid_strategy"] = (
+            "TARGET_ROAS" if config.get("target_roas") is not None else "HIGHEST_VALUE"
+        )
+        config["group_generation_mode"] = "BY_MATERIAL"
+        config["group_count"] = None
+        config["group_material_allocation"] = None
+        config["max_materials_per_group"] = group_size
+        config["ad_generation_mode"] = "FIXED"
+        config["ads_per_group"] = old_creative_count
+        config["ad_material_allocation"] = "SHARED"
+        config["max_materials_per_ad"] = None
+        config["creative_count"] = 1
     if "campaign_suffix" in config:
         # 旧后缀退出策略契约；仅转换存储格式，不保留旧版权方命名引擎。
         # 已冻结预览和提交直接读名称快照，不经过此转换。
