@@ -142,7 +142,11 @@ def try_prepare_batch(
     with (
         bounded_session(
             database_engine,
-            task_deadline=now + timedelta(seconds=READ_HARD_LIMIT - 5),
+            # 领取批次包含最多 200 条 outbox/member 写入，并可能等待另一
+            # 个 worker 释放同一冻结范围的 advisory lock。它是本地事务，
+            # 不应复用单次远端读取的 40 秒期限；远端请求仍由 _send_batch
+            # 使用 READ_HARD_LIMIT 独立约束。
+            task_deadline=now + timedelta(seconds=BATCH_CLAIM_SECONDS),
         ) as db,
         db.begin(),
     ):
