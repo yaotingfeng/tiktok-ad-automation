@@ -77,6 +77,12 @@ class McpReportingOperations(ReportOperations):
             self._ad_type,
         )
         seen = self._seen.setdefault(key, set())
+        # The gateway instance may serve more than one persisted sync run with
+        # the same query. A new first page starts a new pagination sequence;
+        # otherwise a page 1 seen by the previous run is incorrectly rejected
+        # as a cross-run page conflict.
+        if query.page == 1:
+            seen.clear()
         operation = {
             "material_overview": "reports.material_overview",
             "material_breakdown": "reports.material_breakdown",
