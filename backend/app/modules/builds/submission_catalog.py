@@ -658,7 +658,8 @@ def enrich_units(
       AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped WHERE skipped.tenant_id=legacy_m.tenant_id AND skipped.unit_id=u.id AND skipped.material_id=legacy_m.material_id))
  END material_allocation_count
  FROM page u LEFT JOIN preview_group_material m ON m.tenant_id=u.tenant_id AND m.preview_id=u.preview_id AND m.drama_id=u.drama_id
- AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=u.id AND skipped.material_id=m.material_id) GROUP BY u.id
+ AND NOT EXISTS (SELECT 1 FROM preview_skipped_material skipped WHERE skipped.tenant_id=m.tenant_id AND skipped.unit_id=u.id AND skipped.material_id=m.material_id)
+ GROUP BY u.id,u.tenant_id,u.preview_id,u.drama_id
 )
  SELECT u.id,ac.name account_name,u.group_count,u.ad_count,coalesce(c.succeeded_group_count,0) succeeded_group_count,coalesce(c.succeeded_ad_count,0) succeeded_ad_count,
  coalesce(c.ready_material_count,0) ready_material_count,m.material_count,m.unique_material_count,m.material_allocation_count,c.states,c.mismatch,c.unverified_success,"""
