@@ -28,6 +28,31 @@ class _Batch:
 _current: ContextVar[_Batch | None] = ContextVar("local_preview_reads", default=None)
 
 
+def _cache_key(value: Any) -> Any:
+    """将权限读取参数转成稳定、可哈希的缓存键。
+
+    场景读取会把冻结的投放身份作为字典传入；直接把 kwargs.items()
+    放入 tuple 会在预览批处理中遇到 ``unhashable type: 'dict'``，导致
+    Worker 每次重试都停在场景整理阶段。递归冻结只用于进程内短批次缓存，
+    不改变业务参数，也不把缓存带出当前事务。
+    """
+    if isinstance(value, dict):
+        pairs = ((_cache_key(key), _cache_key(item)) for key, item in value.items())
+        return ("dict", tuple(sorted(pairs, key=repr)))
+    if isinstance(value, (list, tuple)):
+        return (type(value).__name__, tuple(_cache_key(item) for item in value))
+    if isinstance(value, (set, frozenset)):
+        return (
+            type(value).__name__,
+            tuple(sorted((_cache_key(item) for item in value), key=repr)),
+        )
+    try:
+        hash(value)
+    except TypeError:
+        return (type(value).__qualname__, repr(value))
+    return value
+
+
 def local_read_batch_active(session: Session) -> bool:
     batch = _current.get()
     return bool(
@@ -47,7 +72,11 @@ def reuse_local_read[F: Callable[..., Any]](function: F) -> F:
         batch = _current.get()
         if batch is None or not local_read_batch_active(session):
             return function(session, *args, **kwargs)
-        key = (function, args, tuple(sorted(kwargs.items())))
+        key = (
+            function,
+            _cache_key(args),
+            _cache_key(kwargs),
+        )
         if key in batch.checks:
             return batch.checks[key][3]
         value = function(session, *args, **kwargs)

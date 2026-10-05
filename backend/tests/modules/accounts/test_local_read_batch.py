@@ -193,3 +193,28 @@ def test_primary_selection_is_shared_only_for_read_only_batches(session, route_c
         )
     finally:
         event.remove(db, "before_cursor_execute", counted)
+
+
+def test_cache_key_accepts_nested_identity_arguments(session):
+    """预览场景的冻结身份参数可以安全参与短批次缓存。"""
+    from app.core.local_read_batch import local_read_batch, reuse_local_read
+
+    calls = []
+
+    @reuse_local_read
+    def read_identity(_db, *, selected_identity):
+        calls.append(selected_identity)
+        return selected_identity
+
+    identity = {"identity_id": "identity-1", "labels": ["en", "US"]}
+    with local_read_batch(session):
+        assert read_identity(session, selected_identity=identity) == identity
+        assert (
+            read_identity(
+                session,
+                selected_identity={"labels": ["en", "US"], "identity_id": "identity-1"},
+            )
+            == identity
+        )
+    # 计算阶段相同参数只读一次，退出批次时仍会进行一次独立复核。
+    assert len(calls) == 2
