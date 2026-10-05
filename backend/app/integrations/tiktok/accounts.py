@@ -116,4 +116,9 @@ def detail_row(row: dict) -> dict:
         "currency": str(row.get("currency") or ""),
         "timezone": str(row.get("timezone") or ""),
         "remote_status": str(row.get("status") or "UNKNOWN"),
+        "create_time": (
+            str(row["create_time"])
+            if row.get("create_time") is not None
+            else None
+        ),
     }

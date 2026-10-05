@@ -86,6 +86,10 @@ class AdvertiserFact:
     timezone: str
     remote_status: str
     authorized: bool | None
+    # Official advertiser/info returns an epoch create_time.  Keep the raw
+    # string in the read contract so the directory merge can parse it once and
+    # retain the provider's exact value for historical report bounds.
+    create_time: str | None = None
 
     def __post_init__(self) -> None:
         require_id(self.advertiser_id)
@@ -96,6 +100,8 @@ class AdvertiserFact:
             raise ValueError("invalid advertiser details")
         if self.authorized is not None and type(self.authorized) is not bool:
             raise ValueError("invalid authorization flag")
+        if self.create_time is not None and type(self.create_time) is not str:
+            raise ValueError("invalid create time")
 
 
 @dataclass(frozen=True)
