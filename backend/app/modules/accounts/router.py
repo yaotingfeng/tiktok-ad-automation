@@ -50,9 +50,11 @@ from app.modules.accounts.schemas import (
     ConnectionUpdate,
     DefaultConnectionRequest,
     DiscoveryStatus,
+    McpSyncResult,
     ResolvedLine,
     ResolveRequest,
 )
+from app.modules.accounts.tasks import start_connection_discovery
 from app.modules.tenants.permissions import require_tenant
 
 router = APIRouter(prefix="/tenants/{tenant_id}", tags=["accounts"])
@@ -638,6 +640,27 @@ def post_authorization(
     session.commit()
     response.headers["Cache-Control"] = "no-store"
     return AuthorizationURL(url=url)
+
+
+@router.post(
+    "/tiktok/connections/{connection_id}/sync",
+    response_model=McpSyncResult,
+    operation_id="syncApiConnection",
+)
+def sync_api_connection(
+    tenant_id: UUID,
+    connection_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+) -> McpSyncResult:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="manage"
+    )
+    run = start_connection_discovery(
+        session, context=context, connection_id=connection_id
+    )
+    session.commit()
+    return McpSyncResult(discovery_run_id=run.id)
 
 
 @router.patch("/tiktok/connections/{connection_id}", response_model=ConnectionPublic)

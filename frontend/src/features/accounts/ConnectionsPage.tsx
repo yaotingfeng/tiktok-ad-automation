@@ -646,7 +646,8 @@ function ConnectionDetails({
       ).data,
     refetchInterval: (state) =>
       !state.state.error &&
-      ((detail.pending_binding_count ?? 0) > 0 ||
+      (isDiscoveryPending(detail) ||
+        (detail.pending_binding_count ?? 0) > 0 ||
         state.state.data?.items.some(
           (item) => item.binding_status === "SYNCING",
         ))
@@ -691,10 +692,19 @@ function ConnectionDetails({
       await queryClient.invalidateQueries({ queryKey: ["tenant", tenantId] })
     },
   })
+  const apiSyncMutation = useMutation({
+    mutationFn: async () => {
+      await AccountsService.syncApiConnection({
+        path: { tenant_id: tenantId!, connection_id: detail.id },
+      })
+      await queryClient.invalidateQueries({ queryKey: ["tenant", tenantId] })
+    },
+  })
   const manage =
     canManage(scope?.role) &&
     !isForbidden(query.error) &&
-    !isForbidden(bcMutation.error)
+    !isForbidden(bcMutation.error) &&
+    !isForbidden(apiSyncMutation.error)
   const columns: ColumnDef<BCPublic>[] = [
     {
       header: "关联 BC",
@@ -786,7 +796,7 @@ function ConnectionDetails({
       description="当前租户的授权连接信息，不包含任何凭据"
       className="sm:max-w-5xl"
       dirty={false}
-      pending={bcMutation.isPending}
+      pending={bcMutation.isPending || apiSyncMutation.isPending}
       onClose={onClose}
     >
       <div className="flex flex-col gap-5">
@@ -865,6 +875,41 @@ function ConnectionDetails({
             <AlertTitle>BC 操作未完成</AlertTitle>
             <AlertDescription>
               {errorMessage(bcMutation.error)}
+            </AlertDescription>
+          </Alert>
+        )}
+        {detail.kind === "OFFICIAL_API" && (
+          <section className="flex flex-wrap items-center gap-3 rounded-md border p-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium">账户目录同步</p>
+              <p className="text-xs text-muted-foreground">
+                API 将重新读取当前授权可见的全部 BC 和广告账户，并整体更新目录。
+                {detail.discovery_status
+                  ? ` 当前状态：${discoveryLabels[detail.discovery_status]}`
+                  : ""}
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              disabled={
+                !manage ||
+                detail.status !== "ACTIVE" ||
+                isDiscoveryPending(detail) ||
+                apiSyncMutation.isPending
+              }
+              onClick={() => apiSyncMutation.mutate()}
+            >
+              {isDiscoveryPending(detail) || apiSyncMutation.isPending
+                ? "同步中…"
+                : "同步全部账户"}
+            </Button>
+          </section>
+        )}
+        {apiSyncMutation.error && (
+          <Alert variant="destructive">
+            <AlertTitle>账户同步未完成</AlertTitle>
+            <AlertDescription>
+              {errorMessage(apiSyncMutation.error)}
             </AlertDescription>
           </Alert>
         )}

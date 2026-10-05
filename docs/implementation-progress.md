@@ -1674,3 +1674,10 @@
 
 - 修复 `3f228a7aaf5eb8553b488696140973e4b8c7381b` 补齐搭建组合查询的 PostgreSQL 分组字段，消除 CF8H 搭建明细的 `GroupingError`。
 - 已推送 `origin/main` 并发布到新加坡测试环境；备份、发布版本、服务重启和 CF8H `/units` HTTP 200 回读证据见[本轮验收](validation/2026-10-05-submission-detail-grouping-fix.md)。
+
+## 2026-10-05：API 授权详情增加账户同步
+
+- 新增 `POST /api/tenants/{tenant_id}/tiktok/connections/{connection_id}/sync`，仅允许 ACTIVE 的官方 API 连接，使用现有加密授权凭据创建整连接目录发现任务；同一连接已有进行中任务时复用原任务。
+- API worker 现在区分 OAuth 候选目录和已授权连接目录：候选仍使用候选凭据与候选准入，主动同步使用连接凭据与普通 API 账户目录准入；两者均在完整暂存后原子发布。
+- 连接详情页新增“同步全部账户”，显示发现进度并在完成后刷新 BC、账户和授权视图。MCP 继续保留单 BC 同步。
+- 验证：后端 Ruff、compileall，前端 TypeScript/Vite build 通过；Bi​​ome 因仓库已有嵌套配置冲突未执行。PostgreSQL 回归因本机未配置专用 `_test` 数据库未执行。

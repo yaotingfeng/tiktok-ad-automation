@@ -733,3 +733,26 @@ def test_declared_permission_preserved_when_grant_has_no_business_capability(
     ).json()["items"][0]
     assert result["permission_state"] == "VERIFIED"
     assert result["availability"] == "NO_ACCESS"
+
+
+def test_api_connection_sync_starts_one_full_directory_run(
+    client, session, account_access_case
+):
+    context, grant = account_access_case
+    path = (
+        f"/api/tenants/{context.tenant_id}/tiktok/connections/"
+        f"{grant.connection_id}/sync"
+    )
+    response = client.post(path, headers=headers(context))
+    assert response.status_code == 200
+    run_id = response.json()["discovery_run_id"]
+    run = session.get(DiscoveryRun, run_id)
+    assert run is not None
+    assert run.connection_id == grant.connection_id
+    assert run.candidate_attempt_id is None
+    assert run.bc_id is None
+    assert run.work == {"stage": "SUBJECT", "page": 1}
+
+    duplicate = client.post(path, headers=headers(context))
+    assert duplicate.status_code == 200
+    assert duplicate.json()["discovery_run_id"] == run_id

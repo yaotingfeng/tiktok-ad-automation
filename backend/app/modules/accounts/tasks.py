@@ -16,7 +16,10 @@ from app.core.context import TenantContext
 from app.core.db import engine
 from app.core.errors import DomainError
 from app.integrations.tiktok.bounded_resources import bounded_session
-from app.integrations.tiktok.official.bootstrap import open_api_candidate_accounts
+from app.integrations.tiktok.official.bootstrap import (
+    open_api_candidate_accounts,
+    open_api_connection_accounts,
+)
 from app.integrations.tiktok.sdk import (
     AccountAdmissionDeferred,
 )
@@ -64,6 +67,49 @@ def queue_run(
         dispatch = session.get(PendingDispatch, dispatch_id)
         assert dispatch is not None
         dispatch.available_at = due
+
+
+def start_connection_discovery(
+    session: Session, *, context: TenantContext, connection_id: UUID
+) -> DiscoveryRun:
+    """使用现有 API 凭据重新读取整份 BC/账户目录，不创建 OAuth 候选。"""
+    require_tenant(
+        session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="manage"
+    )
+    connection = session.exec(
+        select(TikTokConnection)
+        .where(
+            TikTokConnection.id == connection_id,
+            TikTokConnection.tenant_id == context.tenant_id,
+        )
+        .with_for_update()
+    ).one_or_none()
+    if connection is None or connection.kind != "OFFICIAL_API":
+        raise DomainError("connection_channel_mismatch", "账户同步仅支持官方 API 授权")
+    if connection.status != "ACTIVE" or not connection.credential_ciphertext:
+        raise DomainError("connection_unavailable", "当前 API 授权不可用于账户同步")
+    existing = session.exec(
+        select(DiscoveryRun).where(
+            DiscoveryRun.tenant_id == context.tenant_id,
+            DiscoveryRun.connection_id == connection.id,
+            col(DiscoveryRun.status).in_(["RUNNING", "ADMISSION_WAIT"]),
+            col(DiscoveryRun.bc_id).is_(None),
+        )
+    ).first()
+    if existing is not None:
+        return existing
+    run = DiscoveryRun(
+        tenant_id=context.tenant_id,
+        actor_id=context.actor_id,
+        connection_id=connection.id,
+        credential_revision=connection.credential_revision,
+        status="RUNNING",
+        work={"stage": "SUBJECT", "page": 1},
+    )
+    session.add(run)
+    session.flush()
+    queue_run(session, run)
+    return run
 
 
 def start_discovery(session: Session, *, attempt_id: UUID) -> DiscoveryRun:
@@ -212,10 +258,8 @@ def process_discovery(
             return
         try:
             connection = validate_run(session, run)
-            if connection.kind != "OFFICIAL_API" or run.candidate_attempt_id is None:
-                raise DomainError(
-                    "discovery_stale", "历史目录任务缺少可核实候选，请重新授权"
-                )
+            if connection.kind != "OFFICIAL_API":
+                raise DomainError("connection_channel_mismatch", "目录任务不属于官方 API")
         except DomainError as error:
             run.status, run.error_code = "ERROR", error.code
             session.add(run)
@@ -239,7 +283,12 @@ def process_discovery(
         if work["stage"] == "DETAILS" and not ids:
             results = read_discovery_stage(None, work=work, requested_ids=ids)
         else:
-            with open_api_candidate_accounts(
+            gateway_factory = (
+                open_api_candidate_accounts
+                if run.candidate_attempt_id is not None
+                else open_api_connection_accounts
+            )
+            with gateway_factory(
                 database_engine=database_engine,
                 redis_client=redis_client,
                 context=context,

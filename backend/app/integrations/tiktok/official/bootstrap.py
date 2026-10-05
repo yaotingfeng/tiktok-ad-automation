@@ -21,7 +21,7 @@ from app.integrations.tiktok.bounded_resources import bounded_redis, bounded_ses
 from app.integrations.tiktok.contracts.accounts import CandidateReadContext
 from app.integrations.tiktok.official.accounts import OfficialAccountsGateway
 from app.integrations.tiktok.official.authorization import material_authorization
-from app.integrations.tiktok.sdk import official_client
+from app.integrations.tiktok.sdk import admitted_account_call, official_client
 from app.jobs.admission import admission_policy
 from app.modules.accounts.discovery import locked_run, validate_run
 from app.modules.accounts.models import AuthorizationAttempt, DiscoveryRun
@@ -110,6 +110,102 @@ def open_api_candidate_accounts(
                     validate_run(session, run)
                     if run.claim_id != expected_claim:
                         raise DomainError("discovery_stale", "候选调用的派发已失效")
+                    run.sent_count += 1
+                    session.add(run)
+                    session.commit()
+                yield
+
+    try:
+        with official_client(access_token=token) as client:
+            yield OfficialAccountsGateway(
+                client,
+                context=CandidateReadContext(),
+                authorization=facts,
+                app_id=settings.TIKTOK_APP_ID,
+                secret=settings.TIKTOK_APP_SECRET,
+                request_scope=request_scope,
+                deadline=task_deadline,
+            )
+    finally:
+        private.clear()
+
+@contextmanager
+def open_api_connection_accounts(
+    *,
+    database_engine: Engine,
+    redis_client: Redis,
+    context: TenantContext,
+    run_id: UUID,
+    task_deadline: datetime,
+) -> Iterator[OfficialAccountsGateway]:
+    """使用现有 API 授权读取完整 BC 目录；不创建或消费 OAuth 候选。"""
+    settings.require_tiktok_app()
+    expected_claim: UUID | None = None
+
+    def material() -> dict[str, str]:
+        with bounded_session(database_engine, task_deadline=task_deadline) as session:
+            run = session.get(DiscoveryRun, run_id, populate_existing=True)
+            if (
+                run is None
+                or (run.tenant_id, run.actor_id)
+                != (context.tenant_id, context.actor_id)
+                or (expected_claim is not None and run.claim_id != expected_claim)
+                or run.candidate_attempt_id is not None
+                or run.status not in {"RUNNING", "ADMISSION_WAIT"}
+            ):
+                raise DomainError("discovery_stale", "API 目录任务已失效")
+            connection = validate_run(session, run)
+            if connection.kind != "OFFICIAL_API":
+                raise DomainError("connection_channel_mismatch", "此任务不属于官方 API")
+            return decrypt_credentials(
+                tenant_id=context.tenant_id,
+                ciphertext=connection.credential_ciphertext or "",
+            )
+
+    private = material()
+    with bounded_session(database_engine, task_deadline=task_deadline) as session:
+        run = session.get(DiscoveryRun, run_id)
+        assert run is not None
+        expected_claim = run.claim_id
+    token = private.get("access_token")
+    if not token:
+        raise DomainError("credential_invalid", "凭据缺少访问令牌")
+    facts = material_authorization(private, observed_at=datetime.now(UTC))
+
+    @contextmanager
+    def request_scope(
+        advertiser_id: str | None, operation: str, deadline: datetime
+    ) -> Iterator[None]:
+        if (
+            advertiser_id is not None
+            or operation not in ACCOUNT_DIRECTORY_OPERATIONS
+            or deadline != task_deadline
+        ):
+            raise DomainError("gateway_operation_forbidden", "API 同步仅允许账户目录读取")
+        material()
+        policy = admission_policy(operation)
+        if policy.lease_ms <= max(
+            50_000, (task_deadline - datetime.now(UTC)).total_seconds() * 1000 + 1000
+        ):
+            raise DomainError(
+                "admission_policy_invalid", "调用租约必须覆盖账户同步期限"
+            )
+        with bounded_redis(redis_client, task_deadline=task_deadline) as bounded:
+            with admitted_account_call(
+                bounded,
+                context=context,
+                endpoint=operation,
+                advertiser_id="",
+                policy=policy,
+            ):
+                material()
+                with bounded_session(
+                    database_engine, task_deadline=task_deadline
+                ) as session:
+                    run = locked_run(session, run_id)
+                    validate_run(session, run)
+                    if run.claim_id != expected_claim:
+                        raise DomainError("discovery_stale", "API 同步派发已失效")
                     run.sent_count += 1
                     session.add(run)
                     session.commit()

@@ -7297,6 +7297,40 @@ export type accountsPostAuthorizationResponses = {
 
 export type accountsPostAuthorizationResponse = accountsPostAuthorizationResponses[keyof accountsPostAuthorizationResponses];
 
+export type syncApiConnectionData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Connection Id
+         */
+        connection_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/tiktok/connections/{connection_id}/sync';
+};
+
+export type syncApiConnectionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type syncApiConnectionError = syncApiConnectionErrors[keyof syncApiConnectionErrors];
+
+export type syncApiConnectionResponses = {
+    /**
+     * Successful Response
+     */
+    200: McpSyncResult;
+};
+
+export type syncApiConnectionResponse = syncApiConnectionResponses[keyof syncApiConnectionResponses];
+
 export type accountsPatchConnectionData = {
     body: ConnectionUpdate;
     path: {
