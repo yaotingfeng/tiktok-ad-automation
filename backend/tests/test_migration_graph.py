@@ -21,8 +21,7 @@ def test_preview_provider_heads_are_merged_without_operations():
     )
 
     source = (
-        backend
-        / "app/alembic/versions/20261005_merge_preview_provider_heads.py"
+        backend / "app/alembic/versions/20261005_merge_preview_provider_heads.py"
     ).read_text()
     tree = ast.parse(source)
     for function_name in ("upgrade", "downgrade"):
