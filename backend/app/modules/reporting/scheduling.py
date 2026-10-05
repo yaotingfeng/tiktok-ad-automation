@@ -568,6 +568,9 @@ def _request_directory_sync(
                     {ref.remote_id for ref in account_refs if ref.kind in parent_kind}
                 )
             )
+            # TikTok 的创意读取只接受创意 ID，父级广告 ID 不能作为筛选器。
+            if kind == "creative":
+                parent_ids = ()
             if request.scope == "targeted" and not ids and not parent_ids:
                 continue
             # TikTok 对 filtering.ids/parent_ids 都限制最多 100 个；历史上把全部
