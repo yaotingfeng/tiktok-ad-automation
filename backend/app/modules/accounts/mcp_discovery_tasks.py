@@ -9,8 +9,6 @@ from uuid import UUID, uuid4
 
 from billiard.process import current_process  # type: ignore[import-untyped]
 from redis import Redis
-from sqlalchemy import bindparam, text
-from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session, select
 
 from app.core.config import settings
@@ -252,20 +250,24 @@ def _detail_ids(session: Session, *, run: DiscoveryRun) -> tuple[str, ...]:
     ids = [row["advertiser_id"] for row in page.rows]
     if not ids:
         return ()
-    result = (
-        SASession.execute(
-            session,
-            text("""
-        SELECT item->>'advertiser_id' FROM discovery_staged_page p
-        CROSS JOIN LATERAL jsonb_array_elements(p.rows) item
-        WHERE p.run_id=:run_id AND p.stage='AUTHORIZED' AND item->>'advertiser_id' IN :ids
-    """).bindparams(bindparam("ids", expanding=True)),
-            {"run_id": run.id, "ids": ids},
+    # Keep this intersection in Python. The two official API responses use
+    # different stages and JSON arrays; the previous lateral ``IN`` query could
+    # silently return an empty set for a valid page, causing the details stage
+    # to be recorded as an intentional empty intersection.
+    authorized_pages = session.exec(
+        select(DiscoveryStagedPage).where(
+            DiscoveryStagedPage.run_id == run.id,
+            DiscoveryStagedPage.stage == "AUTHORIZED",
+            DiscoveryStagedPage.bc_id == "",
         )
-        .scalars()
-        .all()
-    )
-    return tuple(sorted(result))
+    ).all()
+    authorized = {
+        row["advertiser_id"]
+        for page in authorized_pages
+        for row in page.rows
+        if isinstance(row, dict) and isinstance(row.get("advertiser_id"), str)
+    }
+    return tuple(sorted(set(ids) & authorized))
 
 
 def stage_results(
