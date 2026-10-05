@@ -213,7 +213,11 @@ def _filter(query: ReportQuery) -> list[dict[str, str]] | None:
     if query.filter_ids:
         field = _MATERIAL_FILTER.get(identity, "ad_ids" if identity in {"ad_id", "ad_id_v2"} else f"{identity}s")
         if identity == "ad_id_v2":
-            field = "ad_id_v2"
+            # The v2 identity is a report dimension, while the filtering field
+            # keeps the plural API name.  Sending ``ad_id_v2`` is rejected by
+            # the integrated endpoint (40002); ``ad_ids_v2`` is accepted and
+            # preserves the requested v2 identity scope.
+            field = "ad_ids_v2"
         filters.append({"field_name": field, "filter_type": "IN", "filter_value": json.dumps(list(query.filter_ids))})
     # Basic reports default to STATUS_NOT_DELETE.  Historical coverage must also
     # retain rows whose campaign/ad group/ad was later deleted.
