@@ -224,10 +224,6 @@ class PreviewAdMaterial(PreviewRow, table=True):
         ),
         CheckConstraint("base_ad_no > 0 AND position > 0", name="ck_preview_ad_material_position"),
         UniqueConstraint(
-            "tenant_id", "preview_id", "drama_id", "group_no", "base_ad_no", "position",
-            name="uq_preview_ad_material_position",
-        ),
-        UniqueConstraint(
             "tenant_id", "preview_id", "drama_id", "group_no", "base_ad_no", "material_id",
             name="uq_preview_ad_material_id",
         ),
