@@ -181,6 +181,13 @@ def _page(query: ReportQuery, response: Any, seen: set[int]) -> ReportPage:
     data, evidence = _data(response)
     rows = data.get("list")
     info = data.get("page_info")
+    # Some official MCP report tools return an empty object for a valid
+    # zero-row page instead of the normal ``list/page_info`` envelope. Treat
+    # that response as an explicit empty first page so a no-delivery account
+    # is published as COMPLETE_EMPTY rather than a permanent parse failure.
+    if data == {} and query.page == 1:
+        rows = []
+        info = {"page": 1, "page_size": 1, "total_page": 0, "total_number": 0}
     if type(rows) is not list or type(info) is not dict or any(type(row) is not dict for row in rows):
         raise _error("report_response_invalid")
     page = info.get("page", query.page)
