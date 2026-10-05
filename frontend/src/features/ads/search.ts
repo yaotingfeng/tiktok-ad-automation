@@ -141,7 +141,13 @@ export function rowMetric(
     ),
   )
   if (coordinates.size > 1) return { value: null, availability: "INCOMPLETE" }
-  const bucket = buckets[0]
+  // 同一口径可能由多个指标族组成；按指标合并读取，不能只取第一个桶。
+  const matching = buckets.filter(
+    (bucket) =>
+      `${bucket.currency}|${bucket.timezone}|${bucket.attribution}` ===
+      [...coordinates][0],
+  )
+  const bucket = matching.find((item) => item.values?.[metric] != null) ?? matching[0]
   const value = bucket?.values?.[metric] ?? null
   return {
     value,

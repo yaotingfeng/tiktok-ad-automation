@@ -219,7 +219,16 @@ def _new_snapshot(
             else (
                 "COMPLETE"
                 if all(status in {"COMPLETE", "COMPLETE_EMPTY"} for status in statuses)
-                and all(len(row.metric_buckets) <= 1 for row in rows)
+                and all(
+                    len(
+                        {
+                            (bucket.currency, bucket.timezone, bucket.attribution)
+                            for bucket in row.metric_buckets
+                        }
+                    )
+                    <= 1
+                    for row in rows
+                )
                 else "INCOMPLETE"
             ),
             "rows": len(rows),
