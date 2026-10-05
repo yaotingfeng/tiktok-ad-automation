@@ -4,7 +4,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "reporting_account_history_start"
-down_revision = "20261005_preview_ad_material"
+down_revision = "20261005_preview_copy_unique"
 branch_labels = None
 depends_on = None
 
