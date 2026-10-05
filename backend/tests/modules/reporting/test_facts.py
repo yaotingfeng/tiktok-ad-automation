@@ -163,6 +163,35 @@ def test_restricted_contracts_require_ad_type_and_reject_basic_alias():
         )
 
 
+def test_material_reports_use_platform_supported_dimensions():
+    overview = {
+        "advertiser_id": "report-account",
+        "report_contract": "material_overview",
+        "metric_family": "material",
+        "dimensions": ["advertiser_id", "main_material_id"],
+        "metrics": ["spend"],
+        "start_date": "2026-09-01",
+        "end_date": "2026-09-01",
+        "granularity": "RANGE",
+        "currency": "USD",
+        "timezone": "UTC",
+        "attribution": "default",
+        "filter_ids": [],
+        "ad_type": "SMART_PLUS",
+    }
+    breakdown = overview | {
+        "report_contract": "material_breakdown",
+        "dimensions": ["main_material_id", "stat_time_day"],
+        "granularity": "DAY",
+    }
+    assert validate_query(
+        decode_query(overview), channel="OFFICIAL_API", ad_type="SMART_PLUS"
+    ).key == "material_overview"
+    assert validate_query(
+        decode_query(breakdown), channel="OFFICIAL_API", ad_type="SMART_PLUS"
+    ).key == "material_breakdown"
+
+
 def test_observation_delta_preserves_negative_corrections_and_fences_context(
     observations,
 ):

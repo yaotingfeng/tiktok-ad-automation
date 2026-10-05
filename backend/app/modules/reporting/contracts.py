@@ -199,9 +199,9 @@ def validate_query(
     }[query.granularity]
     if query.report_contract == "material_overview":
         valid = (
-            len(query.dimensions) == 3
-            and query.dimensions[0] in contract.dimensions[:-2]
-            and query.dimensions[1:] == ("main_material_id", "main_material_type")
+            len(query.dimensions) == 2
+            and query.dimensions[0] in contract.dimensions[:-1]
+            and query.dimensions[1:] == ("main_material_id",)
         )
     elif query.report_contract == "material_breakdown":
         time_dimension = {
@@ -209,7 +209,7 @@ def validate_query(
             "HOUR": ("stat_time_hour",),
             "RANGE": (),
         }[query.granularity]
-        valid = query.dimensions == ("main_material_id", "main_material_type", *time_dimension)
+        valid = query.dimensions == ("main_material_id", *time_dimension)
     else:
         valid = query.dimensions == (contract.dimensions[0], *time_dimension)
     if not valid:
