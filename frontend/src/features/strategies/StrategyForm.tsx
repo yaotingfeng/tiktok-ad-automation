@@ -740,142 +740,186 @@ export function StrategyForm({
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle>素材与创意</CardTitle>
+              <CardTitle>搭建结构</CardTitle>
               <CardDescription>
-                先决定广告组如何生成，再决定每个广告组内的广告如何使用素材。
+                先设置广告组如何拆分素材，再设置每个广告组内广告如何生成和分配素材。
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <FieldGroup className="sm:grid sm:grid-cols-2">
-                {selectField(
-                  "group_generation_mode",
-                  groupGenerationMode,
-                  (value) => {
-                    const next = value as "FIXED" | "BY_MATERIAL"
-                    setGroupGenerationMode(next)
-                    setServerErrors((old) => {
-                      const nextErrors = { ...old }
-                      delete nextErrors.group_count
-                      delete nextErrors.max_materials_per_group
-                      delete nextErrors.group_material_allocation
-                      delete nextErrors.config
-                      return nextErrors
-                    })
-                    if (next === "FIXED") {
-                      setGroupCount((old) =>
-                        boundedInteger(old, MAX_FIXED_GROUP_COUNT) ? old : "1",
-                      )
-                      setGroupMaterialAllocation("SHARED")
-                      setMaxMaterialsPerGroup("")
-                    } else {
-                      setGroupCount("")
-                      setGroupMaterialAllocation("SHARED")
-                    }
-                  },
-                  [
-                    { value: "FIXED", label: "固定数量" },
-                    { value: "BY_MATERIAL", label: "按素材数量" },
-                  ],
-                  "固定数量按组数创建；按素材数量按顺序拆分素材。",
-                )}
-                {groupGenerationMode === "FIXED" &&
-                  input(
-                    "group_count",
-                    groupCount,
-                    setGroupCount,
-                    "每个系列创建的广告组数量。",
-                  )}
-                {groupGenerationMode === "BY_MATERIAL" &&
-                  input(
-                    "max_materials_per_group",
-                    maxMaterialsPerGroup,
-                    setMaxMaterialsPerGroup,
-                    "每组最多使用的素材数量；按素材顺序拆分。",
-                  )}
-                {groupGenerationMode === "FIXED" &&
-                  Number(groupCount) > 1 &&
-                  selectField(
-                    "group_material_allocation",
-                    groupMaterialAllocation,
-                    (value) =>
-                      setGroupMaterialAllocation(
-                        value as "SHARED" | "SEQUENTIAL_AVERAGE",
-                      ),
-                    [
-                      { value: "SHARED", label: "共用全部素材" },
-                      { value: "SEQUENTIAL_AVERAGE", label: "按顺序平均分配" },
-                    ],
-                    "平均分配在搭建预览中按素材顺序计算。",
-                  )}
-                {selectField(
-                  "ad_generation_mode",
-                  adGenerationMode,
-                  (value) => {
-                    const next = value as "FIXED" | "BY_MATERIAL"
-                    setAdGenerationMode(next)
-                    setServerErrors((old) => {
-                      const nextErrors = { ...old }
-                      delete nextErrors.ads_per_group
-                      delete nextErrors.max_materials_per_ad
-                      delete nextErrors.ad_material_allocation
-                      delete nextErrors.config
-                      return nextErrors
-                    })
-                    if (next === "FIXED") {
-                      setAdsPerGroup((old) =>
-                        boundedInteger(old, MAX_FIXED_ADS_PER_GROUP)
-                          ? old
-                          : "1",
-                      )
-                      setAdMaterialAllocation("SHARED")
-                      setMaxMaterialsPerAd("")
-                    } else {
-                      setAdsPerGroup("")
-                      setAdMaterialAllocation("SHARED")
-                    }
-                  },
-                  [
-                    { value: "FIXED", label: "固定数量" },
-                    { value: "BY_MATERIAL", label: "按素材数量" },
-                  ],
-                  "固定数量按广告数创建；按素材数量按上限拆分。",
-                )}
-                {adGenerationMode === "FIXED" &&
-                  input(
-                    "ads_per_group",
-                    adsPerGroup,
-                    setAdsPerGroup,
-                    "每个广告组创建的广告数量。",
-                  )}
-                {adGenerationMode === "BY_MATERIAL" &&
-                  input(
-                    "max_materials_per_ad",
-                    maxMaterialsPerAd,
-                    setMaxMaterialsPerAd,
-                    "每个广告最多使用的素材数量；按素材顺序拆分。",
-                  )}
-                {adGenerationMode === "FIXED" &&
-                  Number(adsPerGroup) > 1 &&
-                  selectField(
-                    "ad_material_allocation",
-                    adMaterialAllocation,
-                    (value) =>
-                      setAdMaterialAllocation(
-                        value as "SHARED" | "SEQUENTIAL_AVERAGE",
-                      ),
-                    [
-                      { value: "SHARED", label: "共用本组素材" },
-                      { value: "SEQUENTIAL_AVERAGE", label: "按顺序平均分配" },
-                    ],
-                    "平均分配在搭建预览中按本组素材顺序计算。",
-                  )}
-                {input(
-                  "creative_count",
-                  creativeCount,
-                  setCreativeCount,
-                  "基础广告完成素材分配后，每个广告复制的创意数量。",
-                )}
-              </FieldGroup>
+              <div className="space-y-8">
+                <section
+                  aria-labelledby="strategy-ad-group-structure"
+                  className="space-y-4"
+                >
+                  <div>
+                    <h3
+                      id="strategy-ad-group-structure"
+                      className="font-medium text-sm"
+                    >
+                      广告组
+                    </h3>
+                    <p className="text-sm text-muted-foreground">
+                      决定一个系列拆成几个广告组，以及素材如何分给各组。
+                    </p>
+                  </div>
+                  <FieldGroup className="sm:grid sm:grid-cols-2">
+                    {selectField(
+                      "group_generation_mode",
+                      groupGenerationMode,
+                      (value) => {
+                        const next = value as "FIXED" | "BY_MATERIAL"
+                        setGroupGenerationMode(next)
+                        setServerErrors((old) => {
+                          const nextErrors = { ...old }
+                          delete nextErrors.group_count
+                          delete nextErrors.max_materials_per_group
+                          delete nextErrors.group_material_allocation
+                          delete nextErrors.config
+                          return nextErrors
+                        })
+                        if (next === "FIXED") {
+                          setGroupCount((old) =>
+                            boundedInteger(old, MAX_FIXED_GROUP_COUNT)
+                              ? old
+                              : "1",
+                          )
+                          setGroupMaterialAllocation("SHARED")
+                          setMaxMaterialsPerGroup("")
+                        } else {
+                          setGroupCount("")
+                          setGroupMaterialAllocation("SHARED")
+                        }
+                      },
+                      [
+                        { value: "FIXED", label: "固定数量" },
+                        { value: "BY_MATERIAL", label: "按素材数量" },
+                      ],
+                      "固定数量按组数创建；按素材数量按顺序拆分素材。",
+                    )}
+                    {groupGenerationMode === "FIXED" &&
+                      input(
+                        "group_count",
+                        groupCount,
+                        setGroupCount,
+                        "每个系列创建的广告组数量。",
+                      )}
+                    {groupGenerationMode === "BY_MATERIAL" &&
+                      input(
+                        "max_materials_per_group",
+                        maxMaterialsPerGroup,
+                        setMaxMaterialsPerGroup,
+                        "每组最多使用的素材数量；按素材顺序拆分。",
+                      )}
+                    {groupGenerationMode === "FIXED" &&
+                      Number(groupCount) > 1 &&
+                      selectField(
+                        "group_material_allocation",
+                        groupMaterialAllocation,
+                        (value) =>
+                          setGroupMaterialAllocation(
+                            value as "SHARED" | "SEQUENTIAL_AVERAGE",
+                          ),
+                        [
+                          { value: "SHARED", label: "共用全部素材" },
+                          {
+                            value: "SEQUENTIAL_AVERAGE",
+                            label: "按顺序平均分配",
+                          },
+                        ],
+                        "平均分配在搭建预览中按素材顺序计算。",
+                      )}
+                  </FieldGroup>
+                </section>
+                <section
+                  aria-labelledby="strategy-ad-structure"
+                  className="space-y-4 border-t pt-6"
+                >
+                  <div>
+                    <h3
+                      id="strategy-ad-structure"
+                      className="font-medium text-sm"
+                    >
+                      广告
+                    </h3>
+                    <p className="text-sm text-muted-foreground">
+                      决定每个广告组创建几个广告，以及组内素材如何分配；创意数量会复制基础广告。
+                    </p>
+                  </div>
+                  <FieldGroup className="sm:grid sm:grid-cols-2">
+                    {selectField(
+                      "ad_generation_mode",
+                      adGenerationMode,
+                      (value) => {
+                        const next = value as "FIXED" | "BY_MATERIAL"
+                        setAdGenerationMode(next)
+                        setServerErrors((old) => {
+                          const nextErrors = { ...old }
+                          delete nextErrors.ads_per_group
+                          delete nextErrors.max_materials_per_ad
+                          delete nextErrors.ad_material_allocation
+                          delete nextErrors.config
+                          return nextErrors
+                        })
+                        if (next === "FIXED") {
+                          setAdsPerGroup((old) =>
+                            boundedInteger(old, MAX_FIXED_ADS_PER_GROUP)
+                              ? old
+                              : "1",
+                          )
+                          setAdMaterialAllocation("SHARED")
+                          setMaxMaterialsPerAd("")
+                        } else {
+                          setAdsPerGroup("")
+                          setAdMaterialAllocation("SHARED")
+                        }
+                      },
+                      [
+                        { value: "FIXED", label: "固定数量" },
+                        { value: "BY_MATERIAL", label: "按素材数量" },
+                      ],
+                      "固定数量按广告数创建；按素材数量按上限拆分。",
+                    )}
+                    {adGenerationMode === "FIXED" &&
+                      input(
+                        "ads_per_group",
+                        adsPerGroup,
+                        setAdsPerGroup,
+                        "每个广告组创建的广告数量。",
+                      )}
+                    {adGenerationMode === "BY_MATERIAL" &&
+                      input(
+                        "max_materials_per_ad",
+                        maxMaterialsPerAd,
+                        setMaxMaterialsPerAd,
+                        "每个广告最多使用的素材数量；按素材顺序拆分。",
+                      )}
+                    {adGenerationMode === "FIXED" &&
+                      Number(adsPerGroup) > 1 &&
+                      selectField(
+                        "ad_material_allocation",
+                        adMaterialAllocation,
+                        (value) =>
+                          setAdMaterialAllocation(
+                            value as "SHARED" | "SEQUENTIAL_AVERAGE",
+                          ),
+                        [
+                          { value: "SHARED", label: "共用本组素材" },
+                          {
+                            value: "SEQUENTIAL_AVERAGE",
+                            label: "按顺序平均分配",
+                          },
+                        ],
+                        "平均分配在搭建预览中按本组素材顺序计算。",
+                      )}
+                    {input(
+                      "creative_count",
+                      creativeCount,
+                      setCreativeCount,
+                      "基础广告完成素材分配后，每个广告复制的创意数量。",
+                    )}
+                  </FieldGroup>
+                </section>
+              </div>
             </CardContent>
           </Card>
           <Card>

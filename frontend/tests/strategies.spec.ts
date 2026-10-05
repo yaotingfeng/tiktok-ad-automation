@@ -1429,13 +1429,19 @@ test("策略默认值按业务决策顺序展示，隐藏无决策价值的安�
   const cardTitles = page.locator('form#strategy-form [data-slot="card-title"]')
   await expect(cardTitles).toHaveText([
     "基本信息",
-    "素材与创意",
+    "搭建结构",
     "预算与出价",
     "受众定向",
     "文案与 CTA",
     "广告命名",
     "生成规则",
   ])
+  await expect(
+    page.getByRole("heading", { name: "广告组", exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("heading", { name: "广告", exact: true }),
+  ).toBeVisible()
   await expect(page.getByRole("combobox", { name: "预算策略" })).toHaveText(
     "系列预算",
   )
