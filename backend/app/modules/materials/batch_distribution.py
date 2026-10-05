@@ -432,6 +432,7 @@ def try_prepare_batch(
                     kind="prepare",
                     due=op.claimed_until,
                     claim_id=op.attempt_token,
+                    assume_new=True,
                 )
         db.flush()
         batch_id = batch.id

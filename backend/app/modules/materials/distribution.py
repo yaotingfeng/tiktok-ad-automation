@@ -152,6 +152,7 @@ def queue_distribution(
     claim_id: UUID | None = None,
     observe: bool = False,
     read_only: bool = False,
+    assume_new: bool = False,
 ) -> None:
     # 显式接替后旧未知只保留历史，不再安排核实或准备消息。
     if dist.superseded_by_id is not None or operation.superseded_by_id is not None:
@@ -213,14 +214,16 @@ def queue_distribution(
         if observe:
             payload["revision"] = operation.remote_response.get("revision", 0)
             key += f":{payload['revision']}"
-    existing = session.exec(
-        select(PendingDispatch)
-        .where(
-            PendingDispatch.tenant_id == dist.tenant_id,
-            PendingDispatch.task_key == key,
-        )
-        .with_for_update()
-    ).first()
+    existing = None
+    if not assume_new:
+        existing = session.exec(
+            select(PendingDispatch)
+            .where(
+                PendingDispatch.tenant_id == dist.tenant_id,
+                PendingDispatch.task_key == key,
+            )
+            .with_for_update()
+        ).first()
     if existing:
         if (existing.actor_id, existing.task_name, existing.payload) != (
             dist.actor_id,
