@@ -25,6 +25,7 @@ from app.modules.reporting.schemas import (
     ReportingFilter,
     ReportRow,
 )
+from app.modules.reporting.sync_models import ReportSyncRun
 
 D0 = "native_growth_ad_revenue_value_d0"
 TOTAL_REVENUE = "native_growth_total_ad_impression_value"
@@ -56,6 +57,15 @@ def scoped_rows(session: Session, model: Any, *, context: TenantContext, bc_id: 
     if material_ad_ids and model is AdMaterialReference:
         statement = statement.where(col(model.ad_remote_id).in_(material_ad_ids))
     if model in {ReportFact, ReportCoverage}:
+        # Facts and coverage rows are tenant-scoped for historical storage, but
+        # the same advertiser can be visible in more than one BC. Bind report
+        # reads through their source run so a selected BC never inherits the
+        # other BC's history for a shared advertiser.
+        statement = statement.join(
+            ReportSyncRun,
+            (ReportSyncRun.tenant_id == col(model.tenant_id))
+            & (ReportSyncRun.id == col(model.source_run_id)),
+        ).where(ReportSyncRun.bc_id == bc_id)
         # A first page must not materialize every historical fact for the BC.
         # The selected date is local to each account, so use a conservative UTC
         # buffer here and let ``select_facts`` apply the exact account timezone
