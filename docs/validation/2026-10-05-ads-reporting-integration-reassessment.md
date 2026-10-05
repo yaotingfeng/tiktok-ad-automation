@@ -89,4 +89,15 @@ TikTok 官方还明确说明报表数据不是固定实时值：普通基本报�
 - [Reporting performance improvements](https://business-api.tiktok.com/portal/docs/reporting-performance-improvements/v1.3)：同步报表性能、超时和 `X-Tt-Ads-Throttle` 响应头等说明。
 - [TikTok API v2.0 guide](https://business-api.tiktok.com/portal/docs?id=share)：只对有字段/枚举变化的接口提供 v2.0 增量说明，不能仅凭路径替换宣称已完成迁移。
 
-本评估没有调用任何 TikTok Ads MCP 连接，也没有执行广告写入。真实只读联调下一步需要先明确使用 Xingyu、Junbo 还是 New Junbo BC，再按该 BC 的账户授权范围执行。
+## New Junbo 只读联调与本轮修正
+
+用户已明确选择 New Junbo，本轮使用 `tiktok-ads-new-junbo` 连接完成只读核验：
+
+- `user_info` 返回主体 `7683801818308428818`；`bc_get` 返回唯一 BC `7683817908149272592`（麦斯国际运营522），状态 ENABLE。
+- `auth_advertiser_get` 返回 150 个授权广告账户。账户 `7691249596315533313` 的 `advertiser_info` 返回 USD、`America/Caracas` 和 `create_time=1790758652`。
+- 同一账户调用同步 `report_integrated_get`（BASIC、AUCTION_ADVERTISER、2026-10-04、spend/impressions/clicks/conversion）成功返回一行：spend 176.93、impressions 417、clicks 241、conversion 131。
+- 同一账户调用异步 `report_task_create` 成功取得任务 `7693121677747552276`；后续 `report_task_check` 从 PROCESSING 变为 SUCCESS，`report_task_download` 返回带 campaign、日期和指标列的 CSV（2026-10-03 至 2026-10-04 共 8 行）。没有调用任何创建广告、更新预算、状态启停或其他广告写接口。
+
+代码已据此修正：账户目录保存 `create_time` 作为全历史回补起点；空账户列表会解析当前 BC 的全部已授权账户；报表过滤器显式保留 STATUS_ALL；报表过滤 ID 按 100 条分片；历史账户级报表使用官方异步任务，系列/广告组/广告历史保留同步路径以支持状态过滤；首次报表页为空时前端直接启动 history 回补，不再因没有本地行而拒绝刷新。
+
+本轮仍需在 staging 服务器完成迁移、备份、开启报表服务，并观察完整工作日的队列和覆盖结果后，才能宣称 New Junbo 历史回补已经全部完成。

@@ -59,16 +59,22 @@ export function AdsWorkspace() {
     mutationFn: async () => {
       const refs = items.flatMap((row) => row.refs ?? [])
       const advertiserIds = [...new Set(refs.map((ref) => ref.advertiser_id))]
-      if (!advertiserIds.length) throw new Error("当前筛选没有可刷新的广告账户")
+      // An empty first page is expected before the directory has its first
+      // report.  The server resolves an empty list to every active account in
+      // the selected BC, so the initial click can actually bootstrap history.
       return (
         await AdsReportingService.requestAdSync({
           path: { tenant_id: tenantId! },
           query: { bc_id: bc!.bc_id },
           body: {
             advertiser_ids: advertiserIds,
-            scope: "report",
-            start_date: applied.start_date,
-            end_date: applied.end_date,
+            scope: advertiserIds.length ? "report" : "history",
+            ...(advertiserIds.length
+              ? {
+                  start_date: applied.start_date,
+                  end_date: applied.end_date,
+                }
+              : {}),
             refs,
           },
         })

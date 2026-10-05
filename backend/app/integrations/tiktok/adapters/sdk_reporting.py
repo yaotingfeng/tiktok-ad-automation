@@ -208,13 +208,24 @@ def _page(query: ReportQuery, response: Any, seen: set[int]) -> ReportPage:
 
 
 def _filter(query: ReportQuery) -> list[dict[str, str]] | None:
-    if not query.filter_ids:
-        return None
+    filters: list[dict[str, str]] = []
     identity = query.dimensions[0]
-    field = _MATERIAL_FILTER.get(identity, "ad_ids" if identity in {"ad_id", "ad_id_v2"} else f"{identity}s")
-    if identity == "ad_id_v2":
-        field = "ad_id_v2"
-    return [{"field_name": field, "filter_type": "IN", "filter_value": json.dumps(list(query.filter_ids))}]
+    if query.filter_ids:
+        field = _MATERIAL_FILTER.get(identity, "ad_ids" if identity in {"ad_id", "ad_id_v2"} else f"{identity}s")
+        if identity == "ad_id_v2":
+            field = "ad_id_v2"
+        filters.append({"field_name": field, "filter_type": "IN", "filter_value": json.dumps(list(query.filter_ids))})
+    # Basic reports default to STATUS_NOT_DELETE.  Historical coverage must also
+    # retain rows whose campaign/ad group/ad was later deleted.
+    status_field = {
+        "campaign_id": "campaign_status",
+        "adgroup_id": "adgroup_status",
+        "ad_id": "ad_status",
+        "ad_id_v2": "ad_status",
+    }.get(identity)
+    if status_field:
+        filters.append({"field_name": status_field, "filter_type": "IN", "filter_value": json.dumps(["STATUS_ALL"])})
+    return filters or None
 
 
 def _payload(
@@ -291,6 +302,18 @@ def _async_payload(query: ReportQuery, *, ad_type: str | None = None) -> dict[st
         # 不能把不同广告类型塞进同一事实分区。
         raise _error("report_async_ad_type_unsupported", "异步报表无法安全隔离广告类型")
     payload = _payload(query, ad_type=ad_type)
+    # The async endpoint only accepts entity-ID/country filters.  Status filters
+    # are a synchronous-report feature; the scheduler therefore uses async only
+    # for account history and keeps entity history on the status-complete sync
+    # path.
+    if isinstance(payload.get("filtering"), list):
+        payload["filtering"] = [
+            item
+            for item in payload["filtering"]
+            if item.get("field_name") not in {"campaign_status", "adgroup_status", "ad_status"}
+        ]
+        if not payload["filtering"]:
+            payload.pop("filtering", None)
     # 平台 task/create 没有同步 page/page_size；保留完整 query 口径，其余字段由
     # 任务合同决定，避免把本地分页参数发送到生成 SDK/MCP schema。
     payload.pop("page", None)

@@ -70,9 +70,11 @@ def merge_directory_bc(
             CROSS JOIN LATERAL jsonb_array_elements(p.rows) item WHERE p.run_id=:run_id AND p.stage='ASSETS' AND p.bc_id=:bc_id),
         details AS (SELECT item FROM discovery_staged_page p
             CROSS JOIN LATERAL jsonb_array_elements(p.rows) item WHERE p.run_id=:run_id AND p.stage='DETAILS' AND p.bc_id=:bc_id)
-        INSERT INTO advertiser_account (tenant_id,advertiser_id,name,currency,timezone,remote_status,ownership_conflict)
+        INSERT INTO advertiser_account (tenant_id,advertiser_id,name,currency,timezone,remote_status,remote_created_at,ownership_conflict)
         SELECT :tenant_id,a.item->>'advertiser_id',COALESCE(d.item->>'name',a.item->>'name',''),
-            COALESCE(d.item->>'currency',''),COALESCE(d.item->>'timezone',''),COALESCE(d.item->>'remote_status','UNKNOWN'),false
+            COALESCE(d.item->>'currency',''),COALESCE(d.item->>'timezone',''),COALESCE(d.item->>'remote_status','UNKNOWN'),
+            CASE WHEN (d.item->>'create_time') ~ '^[0-9]+(\\.[0-9]+)?$'
+                THEN to_timestamp((d.item->>'create_time')::double precision) ELSE NULL END,false
         FROM assets a LEFT JOIN details d ON d.item->>'advertiser_id'=a.item->>'advertiser_id'
         ON CONFLICT (tenant_id,advertiser_id) DO NOTHING
     """),
@@ -82,7 +84,10 @@ def merge_directory_bc(
         session,
         text("""
         UPDATE advertiser_account x SET name=item->>'name',currency=item->>'currency',
-            timezone=item->>'timezone',remote_status=item->>'remote_status',ownership_conflict=false
+            timezone=item->>'timezone',remote_status=item->>'remote_status',
+            remote_created_at=CASE WHEN (item->>'create_time') ~ '^[0-9]+(\\.[0-9]+)?$'
+                THEN to_timestamp((item->>'create_time')::double precision) ELSE x.remote_created_at END,
+            ownership_conflict=false
         FROM discovery_staged_page p CROSS JOIN LATERAL jsonb_array_elements(p.rows) item
         WHERE p.run_id=:run_id AND p.stage='DETAILS' AND p.bc_id=:bc_id
             AND x.tenant_id=:tenant_id AND x.advertiser_id=item->>'advertiser_id'

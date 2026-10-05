@@ -116,6 +116,11 @@ class AdvertiserAccount(SQLModel, table=True):
     currency: str = ""
     timezone: str = ""
     remote_status: str = "UNKNOWN"
+    # TikTok advertiser_info.create_time.  Used only to bound historical report
+    # backfills; a missing value keeps the conservative legacy window.
+    remote_created_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True))
+    )
     ownership_conflict: bool = False
 
 

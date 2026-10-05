@@ -257,7 +257,7 @@ class ExportCreate(BaseModel):
 class SyncRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    advertiser_ids: tuple[str, ...] = Field(min_length=1)
+    advertiser_ids: tuple[str, ...] = Field(default=())
     scope: Literal["directory", "active", "report", "history", "targeted"] = "report"
     start_date: date | None = None
     end_date: date | None = None
@@ -271,6 +271,8 @@ class SyncRunRequest(BaseModel):
             raise ValueError("start_date must be on or before end_date")
         if len(set(self.advertiser_ids)) != len(self.advertiser_ids):
             raise ValueError("advertiser_ids must be unique")
+        if not self.advertiser_ids and self.scope not in {"active", "report", "history"}:
+            raise ValueError("advertiser_ids are required for this sync scope")
         return self
 
 

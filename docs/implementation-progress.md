@@ -1695,3 +1695,9 @@
 - 预览冻结单元保存状态与排期，Campaign/Ad Group/Ad 创建请求统一发送配置状态；Ad Group 在指定区间时发送 `SCHEDULE_START_END`、开始和结束时间，立即开始仍在首次执行时生成 UTC 时间。
 - 策略编辑、列表和版本历史新增创建状态与 UTC 排期展示；OpenAPI TypeScript client 已刷新。
 - 验证：前端 `npm run build`、后端 Ruff、compile smoke、根目录 batch regression 通过。PostgreSQL 测试因本机不存在可用测试角色/数据库未执行；Playwright 策略套件因未配置 baseURL 全部在导航前失败。未进行真实 TikTok 写入。
+
+## 2026-10-05：New Junbo 广告报表接入修正
+
+- 使用 `tiktok-ads-new-junbo` 完成真实只读核验：BC `7683817908149272592`、150 个授权广告账户；账户级昨日报表同步查询返回有效指标，异步报表任务创建、PROCESSING→SUCCESS 状态查询和 CSV 下载均成功。未执行任何广告写入。
+- 报表接入修正：保存账户 `create_time` 作为历史回补起点；空账户列表自动解析当前 BC 全部授权账户；基本报表补齐 `STATUS_ALL`；按官方 100 ID 上限持久化分片；历史账户级报表使用官方 async create/check/download，带实体状态的层级历史保持同步查询；首次空目录可直接触发 history 回补。
+- 新增迁移 `reporting_account_history_start.py`。后端 compileall、Ruff、前端 TypeScript 和差异检查通过。完整 PostgreSQL 回归仍因本机没有命名 `_test` 专用数据库未执行；staging 备份、迁移、服务启用和完整工作日观察待本轮发布完成。

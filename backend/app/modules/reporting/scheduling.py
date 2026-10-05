@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal, cast
 from uuid import UUID, uuid4, uuid5
@@ -106,8 +106,10 @@ class SyncRequest:
         if self.scope not in _SCOPES:
             raise ValueError("unsupported sync scope")
         ids = tuple(dict.fromkeys(self.advertiser_ids))
-        if not ids or any(type(value) is not str or not value.strip() for value in ids):
+        if any(type(value) is not str or not value.strip() for value in ids):
             raise ValueError("advertiser_ids must contain non-empty strings")
+        if not ids and self.scope not in {"active", "report", "history", "balance"}:
+            raise ValueError("advertiser_ids are required for this sync scope")
         if ids != self.advertiser_ids:
             object.__setattr__(self, "advertiser_ids", ids)
         if (self.start_date is None) != (self.end_date is None):
@@ -182,6 +184,14 @@ def _dates(
     today = _local_today(account, now)
     if kind in {"directory", "active", "balance"}:
         return None, None
+    if kind == "initial" and account.remote_created_at is not None:
+        try:
+            created = account.remote_created_at.astimezone(
+                ZoneInfo(account.timezone)
+            ).date()
+        except (ValueError, ZoneInfoNotFoundError) as exc:
+            raise DomainError("account_metadata_incomplete", "广告账户时区无效") from exc
+        return created, today
     span = planned_window(
         kind=kind,
         now=now,
@@ -411,7 +421,25 @@ def request_sync(
     converge on the same run while a route rebind produces a new request identity.
     """
 
+    if not request.advertiser_ids:
+        grants = session.exec(
+            select(BCAccountAccess.advertiser_id).where(
+                BCAccountAccess.tenant_id == request.route.tenant_id,
+                BCAccountAccess.bc_id == request.route.bc_id,
+                BCAccountAccess.connection_id == request.route.connection_id,
+                col(BCAccountAccess.in_bc).is_(True),
+                col(BCAccountAccess.authorized).is_(True),
+                col(BCAccountAccess.active).is_(True),
+            ).order_by(col(BCAccountAccess.advertiser_id))
+        ).all()
+        request = replace(request, advertiser_ids=tuple(grants))
+        if not request.advertiser_ids:
+            raise DomainError("no_authorized_accounts", "当前 BC 没有可同步的广告账户")
     _validate_accounts(session, context=context, request=request)
+    # Keep the provider adapter out of the module import graph.  The adapter
+    # loads the SDK/account transport, while scheduling is imported by those
+    # same transport modules during application bootstrap.
+    from app.integrations.tiktok.adapters.sdk_reporting import plan_report_shards
     # A manual refresh is also the first durable scheduling touch for a BC.  Seed
     # the fixed 3-hour directory and 30-minute reporting plans from the same
     # frozen route so Beat can continue the refresh after this request completes.
@@ -479,38 +507,56 @@ def request_sync(
                     report_contract=report_contract,
                     ad_type=ad_type,
                 )
-                partition = report_partition_key(_decode_query(query), ad_type=ad_type)
-                existing = _existing_run(
-                    session,
-                    request_id=request_id,
-                    tenant_id=context.tenant_id,
-                    advertiser_id=advertiser_id,
-                    partition=partition,
+                query_obj = _decode_query(query)
+                # TikTok synchronous filters accept at most 100 IDs per request.
+                # Keep every shard independently durable so a partial page cannot
+                # hide the remaining historical entities.
+                query_shards = plan_report_shards(
+                    query_obj, entity_ids=query_obj.filter_ids, max_ids=100
                 )
-                if existing is not None:
-                    selected.append(existing)
-                    continue
-                run = ReportSyncRun(
-                    tenant_id=context.tenant_id,
-                    advertiser_id=advertiser_id,
-                    bc_id=request.route.bc_id,
-                    actor_id=context.actor_id,
-                    connection_id=request.route.connection_id,
-                    channel=request.route.channel,
-                    frozen_route=_route_dump(request.route),
-                    request_id=request_id,
-                    partition_key=partition,
-                    query=query,
-                    status="QUEUED",
-                    claim_generation=1,
-                    next_page=1,
-                    coverage="PENDING",
-                    observed_at=now,
-                    task_id=None,
-                    task_status="BALANCE" if request.scope == "balance" else None,
-                )
-                session.add(run)
-                selected.append(run)
+                for query_obj in query_shards:
+                    query = {
+                        **query,
+                        "filter_ids": list(query_obj.filter_ids),
+                        "page": 1,
+                    }
+                    partition = report_partition_key(query_obj, ad_type=ad_type)
+                    existing = _existing_run(
+                        session,
+                        request_id=request_id,
+                        tenant_id=context.tenant_id,
+                        advertiser_id=advertiser_id,
+                        partition=partition,
+                    )
+                    if existing is not None:
+                        selected.append(existing)
+                        continue
+                    async_history = (
+                        request.scope == "history"
+                        and ad_type is None
+                        and report_contract == "basic_account"
+                    )
+                    run = ReportSyncRun(
+                        tenant_id=context.tenant_id,
+                        advertiser_id=advertiser_id,
+                        bc_id=request.route.bc_id,
+                        actor_id=context.actor_id,
+                        connection_id=request.route.connection_id,
+                        channel=request.route.channel,
+                        frozen_route=_route_dump(request.route),
+                        request_id=request_id,
+                        partition_key=partition,
+                        query=query,
+                        status="QUEUED",
+                        claim_generation=1,
+                        next_page=1,
+                        coverage="PENDING",
+                        observed_at=now,
+                        task_id=None,
+                        task_status="QUEUING" if async_history else ("BALANCE" if request.scope == "balance" else None),
+                    )
+                    session.add(run)
+                    selected.append(run)
     session.flush()
     return selected[0].id
 
