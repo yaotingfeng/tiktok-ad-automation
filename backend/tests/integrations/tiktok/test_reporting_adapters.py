@@ -125,7 +125,7 @@ def test_material_day_accepts_date_only_and_rejects_short_totals():
         advertiser_id="report-account",
         report_contract="material_breakdown",
         metric_family="material",
-        dimensions=("main_material_id", "main_material_type", "stat_time_day"),
+        dimensions=("main_material_id", "stat_time_day"),
         metrics=("spend",),
         start_date=date(2026, 9, 24),
         end_date=date(2026, 9, 24),

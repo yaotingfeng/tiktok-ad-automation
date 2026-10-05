@@ -96,7 +96,6 @@ _MATERIAL = (
             "adgroup_id",
             "smart_plus_ad_id",
             "main_material_id",
-            "main_material_type",
         ),
         ("spend", "impressions", "clicks"),
         ("RANGE",),
@@ -108,7 +107,7 @@ _MATERIAL = (
     ReportContract(
         "material_breakdown",
         "material",
-        ("main_material_id", "main_material_type", "stat_time_day", "stat_time_hour"),
+        ("main_material_id", "stat_time_day", "stat_time_hour"),
         ("spend", "impressions", "clicks"),
         ("RANGE", "DAY", "HOUR"),
         "REPLACE_PARTITION",

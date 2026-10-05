@@ -304,13 +304,13 @@ def _query_for(
     time_dimension = ("stat_time_day",)
     if contract.granularities == ("RANGE",):
         dimensions = (
-            ["advertiser_id", "main_material_id", "main_material_type"]
+            ["advertiser_id", "main_material_id"]
             if report_contract == "material_overview"
-            else ["main_material_id", "main_material_type"]
+            else ["main_material_id"]
         )
         granularity = "RANGE"
     elif report_contract == "material_breakdown":
-        dimensions = ["main_material_id", "main_material_type", "stat_time_day"]
+        dimensions = ["main_material_id", "stat_time_day"]
         granularity = "DAY"
     else:
         dimensions = [identity, *time_dimension]
