@@ -13,7 +13,7 @@ def test_preview_provider_heads_are_merged_without_operations():
     config.set_main_option("script_location", str(backend / "app/alembic"))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_heads() == ["20261005_merge_preview_heads"]
+    assert script.get_heads() == ["20261005_preview_copy_unique"]
     merge = script.get_revision("20261005_merge_preview_heads")
     assert merge.down_revision == (
         "20261005_preview_ad_material",
