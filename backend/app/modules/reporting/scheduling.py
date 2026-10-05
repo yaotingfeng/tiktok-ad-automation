@@ -692,6 +692,14 @@ def ensure_sync_schedules(
     now = now or datetime.now(UTC)
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
+    # Platform administrators can enter any tenant without a membership row.
+    # ``sync_schedule`` deliberately has a tenant-membership FK, so an ad-hoc
+    # report request must still work for that role without attempting to seed a
+    # durable schedule owned by a nonexistent membership.
+    from app.modules.tenants.models import TenantMembership
+
+    if session.get(TenantMembership, (route.tenant_id, context.actor_id)) is None:
+        return ()
     verify_route(
         session, context=context, route=route, advertiser_id=None, capability="read"
     )
