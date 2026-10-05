@@ -277,7 +277,11 @@ def _payload(
         if type_filter is None:
             raise _error("report_query_invalid", "广告类型未核验")
         if query.report_contract == "basic_smart_plus_creative":
-            type_filter = "UPGRADED_SMART_PLUS_CREATIVE"
+            # The official integrated report accepts the parent
+            # ``UPGRADED_SMART_PLUS`` automation type for the creative-level
+            # ``ad_id`` dimension; the more specific enum is a response value
+            # and is rejected when sent as a filter (40002).
+            type_filter = "UPGRADED_SMART_PLUS"
         filters_value = payload.setdefault("filtering", [])
         filters: list[dict[str, str]]
         if isinstance(filters_value, list):

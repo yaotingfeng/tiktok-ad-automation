@@ -120,6 +120,29 @@ def test_ad_type_is_a_real_outbound_filter():
     assert regular["filtering"] != legacy["filtering"]
 
 
+def test_smart_plus_creative_uses_parent_outbound_filter():
+    query = ReportQuery(
+        advertiser_id="report-account",
+        report_contract="basic_smart_plus_creative",
+        metric_family="delivery",
+        dimensions=("ad_id", "stat_time_day"),
+        metrics=("spend",),
+        start_date=date(2026, 9, 1),
+        end_date=date(2026, 9, 1),
+        granularity="DAY",
+        currency="USD",
+        timezone="UTC",
+        attribution="default",
+        filter_ids=(),
+        page=1,
+    )
+    assert _payload(query, ad_type="SMART_PLUS")["filtering"][-1] == {
+        "field_name": "campaign_automation_type",
+        "filter_type": "IN",
+        "filter_value": '["UPGRADED_SMART_PLUS"]',
+    }
+
+
 def test_material_day_accepts_date_only_and_rejects_short_totals():
     query = ReportQuery(
         advertiser_id="report-account",
