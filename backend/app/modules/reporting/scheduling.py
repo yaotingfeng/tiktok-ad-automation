@@ -535,6 +535,11 @@ def request_sync(
                         request.scope == "history"
                         and ad_type is None
                         and report_contract == "basic_account"
+                        # The official API application used by staging is not
+                        # on TikTok's async-report allowlist (40118). MCP can
+                        # use the task endpoint when its connection exposes it;
+                        # API history stays on bounded synchronous pagination.
+                        and request.route.channel == "OFFICIAL_MCP"
                     )
                     run = ReportSyncRun(
                         tenant_id=context.tenant_id,
