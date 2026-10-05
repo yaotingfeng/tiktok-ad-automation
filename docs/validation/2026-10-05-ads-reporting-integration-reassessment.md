@@ -100,4 +100,16 @@ TikTok 官方还明确说明报表数据不是固定实时值：普通基本报�
 
 代码已据此修正：账户目录保存 `create_time` 作为全历史回补起点；空账户列表会解析当前 BC 的全部已授权账户；报表过滤器显式保留 STATUS_ALL；报表过滤 ID 按 100 条分片；历史账户级报表使用官方异步任务，系列/广告组/广告历史保留同步路径以支持状态过滤；首次报表页为空时前端直接启动 history 回补，不再因没有本地行而拒绝刷新。
 
-本轮仍需在 staging 服务器完成迁移、备份、开启报表服务，并观察完整工作日的队列和覆盖结果后，才能宣称 New Junbo 历史回补已经全部完成。
+### New Junbo staging 发布更新（2026-10-05）
+
+以上“待完成”事项已进入 staging 验收，但历史回补仍在后台继续，不能把当前排队量写成已完成：
+
+- 目标只使用 `tiktok-ads-new-junbo`：BC `7683817908149272592`（麦斯国际运营522），150/150 个有效授权账户已完成目录发布，150/150 个账户已保存官方 `create_time`；最新目录运行 `COMPLETE`。
+- 已应用 `reporting_account_history_start` 迁移。历史请求 `0ac76dbc-2d6d-59ba-8c21-d2e1f89f0afe` 创建了 1,080 个持久报表分片，日期按每个账户的官方创建时间到当前日生成；查询页、任务状态和覆盖记录都不会把排队误报为成功。
+- API 应用对 `report/task/create` 返回官方 40118（异步报表仅限白名单），所以 New Junbo 当前冻结路由为 `OFFICIAL_API` 时使用同步分页；异步 create/check/download 适配器仍保留给实际具备白名单的 MCP 路由。该选择与真实回执一致，不再让全部账户历史进入必失败的异步路径。
+- 素材报表请求已改为官方支持的维度：overview 使用 `advertiser_id + main_material_id`，breakdown 使用 `main_material_id + stat_time_day/hour`；`main_material_type` 从返回行读取，不再作为请求维度。Smart+ 创意级基础报表使用 `UPGRADED_SMART_PLUS` 过滤值，具体 `UPGRADED_SMART_PLUS_CREATIVE` 只作为返回语义，避免 40002。
+- 报表 worker 已实际收到同步任务并发布事实；截至 13:24（Asia/Shanghai）数据库中 New Junbo 有 `367` 个 `COMPLETE`、`1,171` 个 `COMPLETE_EMPTY`、`18` 个 `RUNNING`、`2,903` 个 `QUEUED/PENDING`，无 `FAILED` 分片。已发布事实为 268,440 行、覆盖 46 个账户，时间范围到 2026-10-05；剩余分片由 worker 持续排空。
+- 调度器已限制每轮最多处理 50 个到期计划、报表积压超过 500 个时暂停生成周期任务；本次 `reporting.scan_due` 实测约 0.4 秒成功，未再触发原先 25 秒软超时。所有 API/Worker/Beat 服务 active，Celery 7 个节点 ping 通过，`check-bootstrap.py` 通过。
+- 本轮发布前完整备份批次至少包括 `/var/backups/tt-ada-staging/20261005T131434Z/`，项目归档 checksum 通过；当前运行 release 为 `155c000bdc23b08a3a09c191c77165c76b0a005e`。未调用广告创建、预算、状态启停或其他广告写接口。
+
+因此当前状态是“接入和持续回补已正常运行，历史数据尚未全部排空”。普通页面会读取已发布本地事实；在覆盖完成前仍会显示覆盖中/排队状态，而不是把未完成分片伪装成完整数据。

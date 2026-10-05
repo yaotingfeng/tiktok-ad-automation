@@ -1708,3 +1708,11 @@
 - 使用 `tiktok-ads-new-junbo` 完成真实只读核验：BC `7683817908149272592`、150 个授权广告账户；账户级昨日报表同步查询返回有效指标，异步报表任务创建、PROCESSING→SUCCESS 状态查询和 CSV 下载均成功。未执行任何广告写入。
 - 报表接入修正：保存账户 `create_time` 作为历史回补起点；空账户列表自动解析当前 BC 全部授权账户；基本报表补齐 `STATUS_ALL`；按官方 100 ID 上限持久化分片；历史账户级报表使用官方 async create/check/download，带实体状态的层级历史保持同步查询；首次空目录可直接触发 history 回补。
 - 新增迁移 `reporting_account_history_start.py`。后端 compileall、Ruff、前端 TypeScript 和差异检查通过。完整 PostgreSQL 回归仍因本机没有命名 `_test` 专用数据库未执行；staging 备份、迁移、服务启用和完整工作日观察待本轮发布完成。
+
+## 2026-10-05：New Junbo staging 报表链路恢复
+
+- 修复目录详情 ID 交集、账户 `create_time` 回写、平台管理员报表成员关系、报表分片扫描和历史积压背压；New Junbo 150/150 账户目录已发布，150/150 个账户保存 `remote_created_at`。
+- 根据真实官方回执关闭 API 路由的异步历史路径：应用返回 40118（异步报表白名单限制），API 历史改用同步分页；修正素材报表支持的维度和 Smart+ 创意过滤值，并重排旧的未完成分片。
+- 当前运行 release `155c000bdc23b08a3a09c191c77165c76b0a005e`。最近完整发布备份为 `/var/backups/tt-ada-staging/20261005T131434Z/`，项目归档 checksum 通过。API、全部 Worker、目录/报表 Worker、Beat active；Celery 7 节点 ping 和 `check-bootstrap.py` 通过。
+- 截至验收快照：`COMPLETE=367`、`COMPLETE_EMPTY=1171`、`RUNNING=18`、`QUEUED/PENDING=2903`、`FAILED=0`；已发布事实 268,440 行、46 个账户。历史回补仍在运行，不能将排队量宣称为已完成。
+- 本轮本地 compileall、Ruff、`git diff --check` 和报表合同 smoke check 通过；完整 PostgreSQL pytest 仍因本机未提供命名 `_test` 专用数据库而未执行。相关提交：`82705d6`、`645ef5e`、`e3b3b48`、`2503208`、`f934472`、`155c000`。
