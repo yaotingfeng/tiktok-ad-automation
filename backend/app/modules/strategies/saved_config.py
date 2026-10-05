@@ -50,4 +50,8 @@ def read_saved_config(saved: dict[str, Any]) -> StrategyConfig:
         config["campaign_name_template"] = "{provider_drama}-" + "".join(
             parts
         ).removeprefix("-")
-    return StrategyConfig.model_validate(config)
+    # 这是唯一允许历史固定数量越过当前输入边界的读取入口；值保持原样，
+    # 新预览规划器仍会拒绝无法安全展开的旧配置，不把兼容误当成截断。
+    return StrategyConfig.model_validate(
+        config, context={"allow_legacy_fixed_counts": legacy_structure}
+    )

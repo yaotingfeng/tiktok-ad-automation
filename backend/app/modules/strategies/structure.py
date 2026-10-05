@@ -16,6 +16,7 @@ from app.modules.strategies.copy_pool import CopyChoice
 from app.modules.strategies.schemas import (
     MAX_FIXED_ADS_PER_GROUP,
     MAX_FIXED_GROUP_COUNT,
+    MAX_TOTAL_PLANNED_ADS,
     StrategyConfig,
 )
 
@@ -163,6 +164,24 @@ def plan_structure(
 
     material_ids = _stable_material_ids(materials)
     group_material_sets = _allocate_groups(material_ids, config)
+    # 在创建广告/创意 tuple 前先计算最终展开规模，避免固定组数、固定广告数
+    # 与创意复制组合成百万级内存计划。该上限高于当前正常批量策略，且不替代
+    # 场景阶段对平台单广告组上限的核验。
+    planned_ad_count = 0
+    for group_ids in group_material_sets:
+        if config.ad_generation_mode == "FIXED":
+            assert config.ads_per_group is not None
+            base_ad_count = config.ads_per_group
+        else:
+            assert config.max_materials_per_ad is not None
+            base_ad_count = (
+                len(group_ids) + config.max_materials_per_ad - 1
+            ) // config.max_materials_per_ad
+        planned_ad_count += base_ad_count * config.creative_count
+        if planned_ad_count > MAX_TOTAL_PLANNED_ADS:
+            raise DomainError(
+                "configuration_invalid", "策略展开广告数量超过本地安全上限"
+            )
     rng = Random(seed)
     groups: list[GroupPlan] = []
 

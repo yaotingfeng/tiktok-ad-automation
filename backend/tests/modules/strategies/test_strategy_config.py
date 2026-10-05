@@ -65,9 +65,23 @@ def test_fixed_structure_counts_have_a_bounded_product_limit(field):
             group_count=101 if field == "group_count" else 1,
             ad_generation_mode="FIXED",
             ads_per_group=101 if field == "ads_per_group" else 1,
+            max_materials_per_ad=None,
         )
 
     assert field in str(error.value)
+
+
+def test_legacy_fixed_count_can_be_read_without_truncation():
+    from app.modules.strategies.saved_config import read_saved_config
+
+    saved = base_config().model_dump(mode="json") | {
+        "group_size": 10,
+        "creative_count": 101,
+    }
+
+    current = read_saved_config(saved)
+
+    assert current.ads_per_group == 101
 
 
 def test_allocation_is_only_valid_for_fixed_generation():

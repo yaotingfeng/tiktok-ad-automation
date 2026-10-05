@@ -7,6 +7,7 @@ from typing import Any, Literal, cast
 from uuid import UUID
 
 from sqlalchemy import and_, func
+from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -905,7 +906,9 @@ def continue_preview(
         session.flush()
         return True
     route = load_preview_route(session, context=context, preview_id=preview.id)
-    config = StrategyConfig.model_validate(preview.config)
+    config = StrategyConfig.model_validate(
+        preview.config, context={"allow_legacy_fixed_counts": True}
+    )
     # SQLAlchemy JSON mutations are tracked by replacing the container once.
     preview.progress = dict(preview.progress)
     # 短批次及时提交真实进度；仅本地计算复用授权，退出时全量重验后才保存。
@@ -1395,21 +1398,71 @@ def get_frozen_groups(
     group_nos = [group.group_no for group in page_groups]
     group_ids = [group.id for group in page_groups]
 
-    # 先批量读取当前页的组级映射与排除证据，后续组/广告只在内存中组装，
-    # 保留旧预览的组级回退，同时避免每个广告、每个素材查询一次跳过表。
+    # 先以窗口函数按组做有界读取；计数和行读取都在数据库完成，避免恶意
+    # 数据在 Python 中聚合后才发现超过 100 条。排除证据使用租户/任务范围
+    # 的 EXISTS，保持旧预览的组级回退语义和输出顺序。
     group_material_rows = []
     if group_nos:
-        group_material_rows = session.exec(
-            select(PreviewGroupMaterial)
+        group_material_counts = dict(
+            session.exec(
+                select(
+                    PreviewGroupMaterial.group_no,
+                    func.count().label("material_count"),
+                )
+                .where(
+                    PreviewGroupMaterial.tenant_id == context.tenant_id,
+                    PreviewGroupMaterial.preview_id == preview.id,
+                    PreviewGroupMaterial.drama_id == unit.drama_id,
+                    col(PreviewGroupMaterial.group_no).in_(group_nos),
+                    material_not_skipped(
+                        tenant_id=context.tenant_id,
+                        unit_id=unit_id,
+                        material_id=col(PreviewGroupMaterial.material_id),
+                    ),
+                )
+                .group_by(PreviewGroupMaterial.group_no)
+            ).all()
+        )
+        if any(count > 100 for count in group_material_counts.values()):
+            raise DomainError(
+                "preview_group_too_large", "素材分组超过可用上限，请先调整草稿分组"
+            )
+        material_rank = func.row_number().over(
+            partition_by=PreviewGroupMaterial.group_no,
+            order_by=PreviewGroupMaterial.position,
+        ).label("row_no")
+        material_rows = (
+            select(
+                PreviewGroupMaterial.group_no,
+                PreviewGroupMaterial.position,
+                PreviewGroupMaterial.material_id,
+                material_rank,
+            )
             .where(
                 PreviewGroupMaterial.tenant_id == context.tenant_id,
                 PreviewGroupMaterial.preview_id == preview.id,
                 PreviewGroupMaterial.drama_id == unit.drama_id,
                 col(PreviewGroupMaterial.group_no).in_(group_nos),
+                material_not_skipped(
+                    tenant_id=context.tenant_id,
+                    unit_id=unit_id,
+                    material_id=col(PreviewGroupMaterial.material_id),
+                ),
+            )
+            .subquery()
+        )
+        group_material_rows = session.exec(
+            select(
+                material_rows.c.group_no,
+                material_rows.c.position,
+                material_rows.c.material_id,
+            )
+            .where(
+                material_rows.c.row_no <= 100,
             )
             .order_by(
-                col(PreviewGroupMaterial.group_no),
-                col(PreviewGroupMaterial.position),
+                material_rows.c.group_no,
+                material_rows.c.position,
             )
         ).all()
     group_material_map: dict[int, list[UUID]] = {}
@@ -1417,23 +1470,42 @@ def get_frozen_groups(
         group_material_map.setdefault(row.group_no, []).append(row.material_id)
     ads_by_group: dict[UUID, list[PlannedAd]] = {}
     if group_ids:
-        planned_ads = session.exec(
-            select(PlannedAd)
+        ad_counts = dict(
+            session.exec(
+                select(PlannedAd.group_id, func.count().label("ad_count"))
+                .where(
+                    PlannedAd.tenant_id == context.tenant_id,
+                    col(PlannedAd.group_id).in_(group_ids),
+                )
+                .group_by(PlannedAd.group_id)
+            ).all()
+        )
+        if any(count > 100 for count in ad_counts.values()):
+            raise DomainError("preview_group_too_large", "创意数量超过可用上限")
+        ad_rank = func.row_number().over(
+            partition_by=PlannedAd.group_id,
+            order_by=(PlannedAd.base_ad_no, PlannedAd.creative_no),
+        ).label("row_no")
+        ad_rows = (
+            select(PlannedAd, ad_rank)
             .where(
                 PlannedAd.tenant_id == context.tenant_id,
                 col(PlannedAd.group_id).in_(group_ids),
             )
+            .subquery()
+        )
+        ad_alias = aliased(PlannedAd, ad_rows)
+        planned_ads = session.exec(
+            select(ad_alias)
+            .where(ad_rows.c.row_no <= 100)
             .order_by(
-                col(PlannedAd.group_id),
-                col(PlannedAd.base_ad_no),
-                col(PlannedAd.creative_no),
+                ad_alias.group_id,
+                ad_alias.base_ad_no,
+                ad_alias.creative_no,
             )
         ).all()
         for ad in planned_ads:
             ads_by_group.setdefault(ad.group_id, []).append(ad)
-    for ads in ads_by_group.values():
-        if len(ads) > 100:
-            raise DomainError("preview_group_too_large", "创意数量超过可用上限")
 
     # 只要预览曾写入过广告级映射，就把缺行视为冻结数据损坏；完全没有
     # 广告级行的历史预览继续使用组级素材快照。
@@ -1447,48 +1519,82 @@ def get_frozen_groups(
     )
     ad_material_map: dict[tuple[int, int], list[UUID]] = {}
     if has_ad_material_rows and group_nos:
-        ad_material_rows = session.exec(
-            select(PreviewAdMaterial)
+        ad_material_counts = session.exec(
+            select(
+                PreviewAdMaterial.group_no,
+                PreviewAdMaterial.base_ad_no,
+                func.count().label("material_count"),
+            )
             .where(
                 PreviewAdMaterial.tenant_id == context.tenant_id,
                 PreviewAdMaterial.preview_id == preview.id,
                 PreviewAdMaterial.drama_id == unit.drama_id,
                 col(PreviewAdMaterial.group_no).in_(group_nos),
+                material_not_skipped(
+                    tenant_id=context.tenant_id,
+                    unit_id=unit_id,
+                    material_id=col(PreviewAdMaterial.material_id),
+                ),
+            )
+            .group_by(
+                PreviewAdMaterial.group_no,
+                PreviewAdMaterial.base_ad_no,
+            )
+        ).all()
+        if any(row[2] > 100 for row in ad_material_counts):
+            raise DomainError(
+                "preview_group_too_large", "广告素材数量超过可用上限"
+            )
+        ad_material_rank = func.row_number().over(
+            partition_by=(
+                PreviewAdMaterial.group_no,
+                PreviewAdMaterial.base_ad_no,
+            ),
+            order_by=PreviewAdMaterial.position,
+        ).label("row_no")
+        ad_material_rows_query = (
+            select(
+                PreviewAdMaterial.group_no,
+                PreviewAdMaterial.base_ad_no,
+                PreviewAdMaterial.position,
+                PreviewAdMaterial.material_id,
+                ad_material_rank,
+            )
+            .where(
+                PreviewAdMaterial.tenant_id == context.tenant_id,
+                PreviewAdMaterial.preview_id == preview.id,
+                PreviewAdMaterial.drama_id == unit.drama_id,
+                col(PreviewAdMaterial.group_no).in_(group_nos),
+                material_not_skipped(
+                    tenant_id=context.tenant_id,
+                    unit_id=unit_id,
+                    material_id=col(PreviewAdMaterial.material_id),
+                ),
+            )
+            .subquery()
+        )
+        ad_material_rows = session.exec(
+            select(
+                ad_material_rows_query.c.group_no,
+                ad_material_rows_query.c.base_ad_no,
+                ad_material_rows_query.c.position,
+                ad_material_rows_query.c.material_id,
+            )
+            .where(
+                ad_material_rows_query.c.row_no <= 100,
             )
             .order_by(
-                col(PreviewAdMaterial.group_no),
-                col(PreviewAdMaterial.base_ad_no),
-                col(PreviewAdMaterial.position),
+                ad_material_rows_query.c.group_no,
+                ad_material_rows_query.c.base_ad_no,
+                ad_material_rows_query.c.position,
             )
         ).all()
         for row in ad_material_rows:
             ad_material_map.setdefault(
                 (row.group_no, row.base_ad_no), []
             ).append(row.material_id)
-
-    candidate_material_ids = {
-        material_id for ids in group_material_map.values() for material_id in ids
-    }
-    candidate_material_ids.update(
-        material_id for ids in ad_material_map.values() for material_id in ids
-    )
-    skipped_material_ids: set[UUID] = set()
-    if candidate_material_ids:
-        skipped_material_ids = set(
-            session.exec(
-                select(PreviewSkippedMaterial.material_id).where(
-                    PreviewSkippedMaterial.tenant_id == context.tenant_id,
-                    PreviewSkippedMaterial.unit_id == unit_id,
-                    col(PreviewSkippedMaterial.material_id).in_(candidate_material_ids),
-                )
-            ).all()
-        )
     filtered_group_materials = {
-        group_no: [
-            material_id
-            for material_id in material_ids
-            if material_id not in skipped_material_ids
-        ]
+        group_no: list(material_ids)
         for group_no, material_ids in group_material_map.items()
     }
     for group_no in group_nos:
@@ -1497,13 +1603,6 @@ def get_frozen_groups(
             raise DomainError(
                 "preview_group_too_large", "素材分组超过可用上限，请先调整草稿分组"
             )
-    for key, material_ids in tuple(ad_material_map.items()):
-        ad_material_map[key] = [
-            material_id
-            for material_id in material_ids
-            if material_id not in skipped_material_ids
-        ]
-
     items = []
     for group in page_groups:
         materials = filtered_group_materials.get(group.group_no, [])

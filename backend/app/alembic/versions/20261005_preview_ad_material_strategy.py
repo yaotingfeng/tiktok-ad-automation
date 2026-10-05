@@ -83,6 +83,32 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     connection = op.get_bind()
+    # 旧表没有基础广告维度。若历史新结构已写入其它基础广告序号，回退会
+    # 丢失不可逆身份；先拒绝并检查恢复旧主键/唯一键是否会发生冲突。
+    if connection.execute(
+        sa.text(
+            "SELECT EXISTS (SELECT 1 FROM preview_copy "
+            "WHERE base_ad_no <> 1)"
+        )
+    ).scalar() or connection.execute(
+        sa.text("SELECT EXISTS (SELECT 1 FROM planned_ad WHERE base_ad_no <> 1)")
+    ).scalar():
+        raise RuntimeError(
+            "Cannot downgrade: base_ad_no contains non-legacy identities"
+        )
+    if connection.execute(
+        sa.text(
+            "SELECT EXISTS (SELECT 1 FROM preview_copy "
+            "GROUP BY tenant_id, preview_id, drama_id, group_no, creative_no "
+            "HAVING count(*) > 1)"
+        )
+    ).scalar() or connection.execute(
+        sa.text(
+            "SELECT EXISTS (SELECT 1 FROM planned_ad "
+            "GROUP BY tenant_id, group_id, creative_no HAVING count(*) > 1)"
+        )
+    ).scalar():
+        raise RuntimeError("Cannot downgrade: legacy ad keys would conflict")
     if connection.execute(
         sa.text(
             "SELECT EXISTS (SELECT 1 FROM preview_group_material "

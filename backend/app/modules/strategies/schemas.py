@@ -3,7 +3,14 @@ from decimal import Decimal
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    model_validator,
+)
 
 from app.modules.builds.targeting_schemas import AudienceTargeting
 from app.modules.strategies.naming import DEFAULT_NAME_TEMPLATE
@@ -12,6 +19,7 @@ from app.modules.strategies.naming import DEFAULT_NAME_TEMPLATE
 # 单次预览保留明确的工程边界，避免恶意或误填整数导致无界 tuple 分配。
 MAX_FIXED_GROUP_COUNT = 100
 MAX_FIXED_ADS_PER_GROUP = 100
+MAX_TOTAL_PLANNED_ADS = 10_000
 
 
 def exact_decimal(value: Any) -> Any:
@@ -35,17 +43,13 @@ class StrategyConfig(BaseModel):
     bid_strategy: Literal["HIGHEST_VALUE", "TARGET_ROAS"] = "HIGHEST_VALUE"
     targeting: AudienceTargeting = Field(default_factory=AudienceTargeting)
     group_generation_mode: Literal["FIXED", "BY_MATERIAL"] = "FIXED"
-    group_count: int | None = Field(
-        default=1, gt=0, le=MAX_FIXED_GROUP_COUNT, strict=True
-    )
+    group_count: int | None = Field(default=1, gt=0, strict=True)
     group_material_allocation: Literal["SHARED", "SEQUENTIAL_AVERAGE"] | None = (
         "SHARED"
     )
     max_materials_per_group: int | None = Field(default=None, gt=0, strict=True)
     ad_generation_mode: Literal["FIXED", "BY_MATERIAL"] = "BY_MATERIAL"
-    ads_per_group: int | None = Field(
-        default=None, gt=0, le=MAX_FIXED_ADS_PER_GROUP, strict=True
-    )
+    ads_per_group: int | None = Field(default=None, gt=0, strict=True)
     ad_material_allocation: Literal["SHARED", "SEQUENTIAL_AVERAGE"] | None = None
     max_materials_per_ad: int | None = Field(default=1, gt=0, strict=True)
     creative_count: int = Field(default=1, gt=0, strict=True)
@@ -55,7 +59,7 @@ class StrategyConfig(BaseModel):
     campaign_name_template: str = Field(default=DEFAULT_NAME_TEMPLATE, max_length=1000)
 
     @model_validator(mode="after")
-    def validate_structure(self) -> StrategyConfig:
+    def validate_structure(self, info: ValidationInfo) -> StrategyConfig:
         """确保每一层只携带与生成模式对应的数量和素材分配。"""
         if self.group_generation_mode == "FIXED":
             if self.group_count is None:
@@ -95,6 +99,30 @@ class StrategyConfig(BaseModel):
             if self.ad_material_allocation is not None:
                 raise ValueError(
                     "ad_material_allocation is only valid for BY_MATERIAL ads"
+                )
+
+        # 新请求必须受内存安全边界约束；历史配置读取使用显式 context
+        # 保留原值，随后由 planner 以明确错误阻断，不静默截断旧策略。
+        allow_legacy_counts = bool(
+            isinstance(info.context, dict)
+            and info.context.get("allow_legacy_fixed_counts")
+        )
+        if not allow_legacy_counts:
+            if (
+                self.group_generation_mode == "FIXED"
+                and self.group_count is not None
+                and self.group_count > MAX_FIXED_GROUP_COUNT
+            ):
+                raise ValueError(
+                    f"group_count exceeds maximum {MAX_FIXED_GROUP_COUNT}"
+                )
+            if (
+                self.ad_generation_mode == "FIXED"
+                and self.ads_per_group is not None
+                and self.ads_per_group > MAX_FIXED_ADS_PER_GROUP
+            ):
+                raise ValueError(
+                    f"ads_per_group exceeds maximum {MAX_FIXED_ADS_PER_GROUP}"
                 )
 
         if self.bid_strategy == "TARGET_ROAS" and self.target_roas is None:

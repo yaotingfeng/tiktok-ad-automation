@@ -1,6 +1,9 @@
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+
+from app.core.errors import DomainError
 from app.modules.builds.preview_materials import (
     frozen_ad_material_ids,
     material_limit_exceeded,
@@ -55,6 +58,17 @@ def test_planner_reuses_shared_materials_per_group_and_copies_per_base_ad():
     assert all(len(group.ads) == 2 for group in groups)
     assert all(len(ad.material_ids) == 20 and len(ad.copies) == 2 for group in groups for ad in group.ads)
     assert {ad.base_ad_no for ad in groups[0].ads} == {1, 2}
+
+
+def test_planner_rejects_oversized_total_creative_expansion_before_allocating():
+    config = strategy(group_count=100, ads_per_group=100, creative_count=100)
+    materials = [Material(uuid4())]
+    pool = tuple(
+        CopyChoice(copy_id=uuid4(), text=f"copy-{index}") for index in range(100)
+    )
+
+    with pytest.raises(DomainError, match="策略展开广告数量"):
+        plan_structure(materials, config=config, pool=pool, seed=7)
 
 
 def test_planner_deduplicates_material_rows_before_allocating():
@@ -132,6 +146,8 @@ def test_preview_ad_material_migration_installs_frozen_child_trigger():
     assert "DROP TRIGGER preview_ad_material_frozen ON preview_ad_material" in migration
     assert 'op.alter_column("preview_copy", "base_ad_no", server_default=None)' in migration
     assert 'op.alter_column("planned_ad", "base_ad_no", server_default=None)' in migration
+    assert "base_ad_no contains non-legacy identities" in migration
+    assert "legacy ad keys would conflict" in migration
 
 
 def test_ad_material_models_keep_ad_base_in_primary_key():
