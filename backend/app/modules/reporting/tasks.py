@@ -8,7 +8,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from redis import Redis
-from sqlmodel import Session, col, select
+from sqlmodel import Session, col, func, select
 
 from app.core.config import settings
 from app.core.context import TenantContext
@@ -33,6 +33,7 @@ from app.modules.reporting.sync_models import ReportSyncRun, SyncSchedule
 TASK_NAME = "reporting.sync_step"
 SCAN_TASK_NAME = "reporting.scan_due"
 MAX_REPORT_RUNS_PER_SCAN = 100
+MAX_PENDING_REPORTS_BEFORE_SCHEDULES = 500
 register_dispatch_task(TASK_NAME, "ads-reporting")
 register_dispatch_task(SCAN_TASK_NAME, "control")
 
@@ -263,7 +264,24 @@ def scan_due_runs(*, database_engine: Any, now: datetime | None = None) -> int:
     now = now or datetime.now(UTC)
     queued = 0
     with Session(database_engine) as session, session.begin():
-        request_ids = enqueue_due_syncs(session, now=now)
+        pending_reports = session.exec(
+            select(func.count())
+            .select_from(ReportSyncRun)
+            .where(
+                col(ReportSyncRun.status).in_(
+                    ["QUEUED", "RUNNING", "WAITING_REMOTE"]
+                )
+            )
+        ).one()
+        # A historical request can fan out into thousands of shards.  Keep
+        # recurring schedules from recreating work faster than the dedicated
+        # report worker can drain it; normal schedules resume automatically
+        # once the durable backlog falls below the threshold.
+        request_ids = (
+            ()
+            if pending_reports >= MAX_PENDING_REPORTS_BEFORE_SCHEDULES
+            else enqueue_due_syncs(session, now=now)
+        )
         # Include every shard of each request, not just the first ID returned by
         # request_sync; report requests commonly fan out into several contracts.
         # 与 worker 领取使用同一行锁；跳过活跃事务，避免扫描旧快照后覆盖
