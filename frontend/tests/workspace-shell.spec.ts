@@ -95,6 +95,45 @@ async function expectNoOverflow(page: Page) {
   ).toBe(true)
 }
 
+test("退出登录清理应用提交账本并保留登录回跳", async ({ page }) => {
+  await apiBoundary(page)
+  await page.goto("/")
+  await page.evaluate(() => {
+    sessionStorage.setItem("build-submit:tenant:bc:preview", "pending")
+    sessionStorage.setItem(
+      "submission-recovery:tenant:bc:submission",
+      "pending",
+    )
+    sessionStorage.setItem("strategy-save-pending:tenant:strategy", "pending")
+    sessionStorage.setItem("workspace-login-return", "/settings")
+    sessionStorage.setItem("unrelated-session", "keep")
+  })
+  await page.getByTestId("user-menu").click()
+  await page.getByRole("menuitem", { name: "退出登录" }).click()
+  await page.waitForURL("/login")
+  await expect
+    .poll(() =>
+      page.evaluate(() => ({
+        build: sessionStorage.getItem("build-submit:tenant:bc:preview"),
+        recovery: sessionStorage.getItem(
+          "submission-recovery:tenant:bc:submission",
+        ),
+        strategy: sessionStorage.getItem(
+          "strategy-save-pending:tenant:strategy",
+        ),
+        returnTo: sessionStorage.getItem("workspace-login-return"),
+        unrelated: sessionStorage.getItem("unrelated-session"),
+      })),
+    )
+    .toEqual({
+      build: null,
+      recovery: null,
+      strategy: null,
+      returnTo: "/settings",
+      unrelated: "keep",
+    })
+})
+
 test("workspace navigation keeps one 22px content title and a stable neutral shell", async ({
   page,
 }) => {

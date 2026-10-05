@@ -83,12 +83,15 @@ export function usePreviewSubmission(
       if (!ctrl.signal.aborted) {
         reportError(e)
         setError(e)
-        if (!unknownOutcome(e)) {
+        // 超时或限流响应可能发生在服务端受理之后，保留 request ledger，
+        // 让用户先按原 request_id 回查，避免整批重复创建；明确的 4xx 仍可重试。
+        const status = e instanceof AxiosError ? e.response?.status : undefined
+        const potentiallyAccepted = status === 408 || status === 429
+        if (!unknownOutcome(e) && !potentiallyAccepted) {
           sessionStorage.removeItem(key)
           setRecord(null)
         }
-        if (e instanceof AxiosError && e.response?.status === 403)
-          setForbidden(true)
+        if (status === 403) setForbidden(true)
       }
     } finally {
       lock.current = false

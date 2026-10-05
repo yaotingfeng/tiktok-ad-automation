@@ -45,6 +45,7 @@ export async function buildsBoundary(
     inputCount?: number
     unitCount?: number
     submitUnknown?: boolean
+    submitStatus?: 408 | 429
     submitDenied?: boolean
     deny?: boolean
     createUnknown?: boolean
@@ -660,6 +661,11 @@ export async function buildsBoundary(
     if (path.endsWith(`/build-previews/${P}/submit`)) {
       if (options.submitDenied) return reply({ code: "action_forbidden" }, 403)
       if (options.submitUnknown) return route.abort("failed")
+      if (options.submitStatus)
+        return reply(
+          { code: "submit_response_uncertain" },
+          options.submitStatus,
+        )
       preview.submission_id = submissionId
       return reply({ submission_id: submissionId, status: "QUEUED" }, 202)
     }

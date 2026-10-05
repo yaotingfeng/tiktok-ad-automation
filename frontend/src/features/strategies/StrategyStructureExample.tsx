@@ -8,7 +8,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { normalizeDecimal } from "@/features/strategies/validation"
+import {
+  MAX_FIXED_ADS_PER_GROUP,
+  MAX_FIXED_GROUP_COUNT,
+  normalizeDecimal,
+} from "@/features/strategies/validation"
 
 type GenerationMode = "FIXED" | "BY_MATERIAL"
 type Allocation = "SHARED" | "SEQUENTIAL_AVERAGE"
@@ -46,15 +50,30 @@ export function StrategyStructureExample({
 }) {
   const [expanded, setExpanded] = useState<number | null>(null)
   const materialCount = 23
+  // 示例组件也可能被测试或其他页面直接传入数值，不能只依赖表单层校验。
+  const safeGroupCount =
+    typeof groupCount === "number" &&
+    Number.isSafeInteger(groupCount) &&
+    groupCount > 0 &&
+    groupCount <= MAX_FIXED_GROUP_COUNT
+      ? groupCount
+      : null
+  const safeAdsPerGroup =
+    typeof adsPerGroup === "number" &&
+    Number.isSafeInteger(adsPerGroup) &&
+    adsPerGroup > 0 &&
+    adsPerGroup <= MAX_FIXED_ADS_PER_GROUP
+      ? adsPerGroup
+      : null
   const groups = useMemo(() => {
     if (groupGenerationMode === "FIXED") {
-      if (!groupCount || groupCount < 1) return []
+      if (safeGroupCount === null) return []
       if (groupMaterialAllocation === "SHARED")
-        return Array.from({ length: groupCount }, () => materialCount)
-      const base = Math.floor(materialCount / groupCount)
-      const remainder = materialCount % groupCount
+        return Array.from({ length: safeGroupCount }, () => materialCount)
+      const base = Math.floor(materialCount / safeGroupCount)
+      const remainder = materialCount % safeGroupCount
       return Array.from(
-        { length: groupCount },
+        { length: safeGroupCount },
         (_, i) => base + (i < remainder ? 1 : 0),
       )
     }
@@ -68,21 +87,20 @@ export function StrategyStructureExample({
         ),
     )
   }, [
-    groupCount,
+    safeGroupCount,
     groupGenerationMode,
     groupMaterialAllocation,
     maxMaterialsPerGroup,
   ])
   const adCounts = groups.map((count) => {
-    if (adGenerationMode === "FIXED")
-      return adsPerGroup && adsPerGroup > 0 ? adsPerGroup : 0
+    if (adGenerationMode === "FIXED") return safeAdsPerGroup || 0
     return maxMaterialsPerAd && maxMaterialsPerAd > 0
       ? Math.ceil(count / maxMaterialsPerAd)
       : 0
   })
   const adMaterialCounts = (groupMaterialCount: number) => {
     if (adGenerationMode === "FIXED") {
-      const count = adsPerGroup || 0
+      const count = safeAdsPerGroup || 0
       if (adMaterialAllocation === "SHARED")
         return Array.from({ length: count }, () => groupMaterialCount)
       const base = count ? Math.floor(groupMaterialCount / count) : 0

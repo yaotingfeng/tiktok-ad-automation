@@ -624,6 +624,32 @@ test("提交响应丢失后刷新只回查原请求，返回预览不能再次�
   ).toHaveLength(1)
 })
 
+for (const status of [408, 429] as const) {
+  test(`${status} 提交响应仍保留原 request ledger，明确回查前不允许重复提交`, async ({
+    page,
+  }) => {
+    const api = await buildsBoundary(page, { submitStatus: status })
+    await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
+    await page.getByRole("button", { name: /创建并立即启用/ }).click()
+    await expect(
+      page.getByRole("button", { name: "查询原提交结果" }),
+    ).toBeEnabled()
+    await expect(
+      page.getByRole("button", { name: /创建并立即启用/ }),
+    ).toBeDisabled()
+    expect(
+      await page.evaluate(
+        ({ T, BC, P }) =>
+          sessionStorage.getItem(`build-submit:${T}:${BC}:${P}`),
+        { T, BC, P },
+      ),
+    ).toBeTruthy()
+    expect(api.requests.filter((r) => r.path.endsWith("/submit"))).toHaveLength(
+      1,
+    )
+  })
+}
+
 test("原提交404保留同request且切BC先守卫，不把未找到当未创建", async ({
   page,
 }) => {

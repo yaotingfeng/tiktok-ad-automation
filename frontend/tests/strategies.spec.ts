@@ -1427,3 +1427,52 @@ test("切换数量规则和竞价策略会清除不相关字段", async ({ page 
   await page.getByRole("option", { name: "最高价值", exact: true }).click()
   await expect(page.locator("#strategy-target_roas")).toHaveCount(0)
 })
+
+test("规则切换后清理服务端互斥字段错误，仍可保存", async ({ page }) => {
+  await boundary(page)
+  let validationCalls = 0
+  await page.route("**/api/tenants/*/strategies/validate", async (route) => {
+    validationCalls += 1
+    if (validationCalls === 1)
+      return route.fulfill({
+        json: {
+          valid: false,
+          errors: [{ field: "group_count", code: "group_count_invalid" }],
+          scene_check_pending: true,
+        },
+      })
+    return route.fulfill({
+      json: { valid: true, errors: [], scene_check_pending: true },
+    })
+  })
+  await page.goto(editUrl)
+  const groupRule = page.getByRole("combobox", { name: "广告组数量规则" })
+  await groupRule.click()
+  await page.getByRole("option", { name: "固定数量", exact: true }).click()
+  await page.getByLabel("日预算", { exact: true }).fill("101")
+  await page.getByLabel("广告组数量", { exact: true }).fill("2")
+  await page.getByRole("button", { name: "保存为新版本", exact: true }).click()
+  await expect(page.getByText(/广告组数量：该字段未通过策略校验/)).toBeVisible()
+  await groupRule.click()
+  await page.getByRole("option", { name: "按素材数量", exact: true }).click()
+  await expect(page.getByText(/广告组数量：/)).toHaveCount(0)
+  await page.getByLabel("每组最多素材数", { exact: true }).fill("10")
+  await page.getByRole("button", { name: "保存为新版本", exact: true }).click()
+  await expect(page.getByText("已保存 v2", { exact: true })).toBeVisible()
+  expect(validationCalls).toBe(2)
+})
+
+test("固定数量超过后端安全上限时显示字段错误并阻止保存", async ({ page }) => {
+  await boundary(page)
+  await page.goto(editUrl)
+  const groupRule = page.getByRole("combobox", { name: "广告组数量规则" })
+  await groupRule.click()
+  await page.getByRole("option", { name: "固定数量", exact: true }).click()
+  await page.getByLabel("广告组数量", { exact: true }).fill("101")
+  await expect(
+    page.getByText("请输入 1 至 100 的整数。", { exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "保存为新版本", exact: true }),
+  ).toBeDisabled()
+})

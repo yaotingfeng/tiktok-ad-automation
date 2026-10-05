@@ -8,12 +8,25 @@ import {
   UsersService,
 } from "@/client"
 import { clearApiFeedback } from "@/lib/api-feedback"
-import { clearLoginReturn, consumeLoginReturn } from "@/lib/login-return"
+import { consumeLoginReturn } from "@/lib/login-return"
 import { handleError } from "@/utils"
 import useCustomToast from "./useCustomToast"
 
 const isLoggedIn = () => {
   return localStorage.getItem("access_token") !== null
+}
+
+const APP_SESSION_LEDGER_PREFIXES = [
+  "build-submit:",
+  "submission-recovery:",
+  "strategy-save-pending:",
+]
+
+function clearAppSessionLedgers() {
+  for (const key of Object.keys(sessionStorage)) {
+    if (APP_SESSION_LEDGER_PREFIXES.some((prefix) => key.startsWith(prefix)))
+      sessionStorage.removeItem(key)
+  }
 }
 
 const useAuth = () => {
@@ -51,9 +64,9 @@ const useAuth = () => {
 
   const logout = () => {
     localStorage.removeItem("access_token")
+    clearAppSessionLedgers()
     queryClient.clear()
     clearApiFeedback()
-    clearLoginReturn()
     navigate({ to: "/login" })
   }
 

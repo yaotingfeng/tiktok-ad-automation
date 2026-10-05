@@ -1,6 +1,9 @@
 import type { StrategyConfig_Output } from "@/client"
 import { normalizedTargeting } from "@/features/targeting/TargetingForm"
 export const DEFAULT_NAME_TEMPLATE = "{provider_drama}-{drama_id}"
+// 固定结构会直接展开为内存计划，必须与后端保持同一安全上限，避免误填值触发巨量数组。
+export const MAX_FIXED_GROUP_COUNT = 100
+export const MAX_FIXED_ADS_PER_GROUP = 100
 export const NAME_LABELS: Record<string, string> = {
   provider_drama: "版权方＋剧名",
   drama_id: "剧目 ID",
@@ -139,6 +142,7 @@ export const configFingerprint = (config: StrategyConfig_Output) =>
       config.campaign_name_template ?? DEFAULT_NAME_TEMPLATE,
   })
 export const issueMessages: Record<string, string> = {
+  configuration_invalid: "整体策略配置无效，请检查各项生成规则和互斥字段。",
   copy_pool_exhausted: "创意数量超过有效且不重复的英文文案数。",
   copy_pool_not_found: "引用的文案池版本不可用。",
   invalid_name_template: "广告名称格式无效，请检查字段和括号。",

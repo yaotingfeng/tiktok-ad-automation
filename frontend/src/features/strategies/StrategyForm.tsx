@@ -70,6 +70,8 @@ import {
   decimalError,
   displayNameTemplate,
   issueMessages,
+  MAX_FIXED_ADS_PER_GROUP,
+  MAX_FIXED_GROUP_COUNT,
   NAME_LABELS,
   nameTemplateError,
   parseNameTemplate,
@@ -96,6 +98,7 @@ const fieldNames: Record<string, string> = {
   campaign_name_template: "广告名称格式",
   copy_pool_version: "文案池版本",
   cta_option_ids: "CTA 配置",
+  config: "整体配置",
   name: "策略名称",
   targeting: "受众定向",
 }
@@ -268,15 +271,23 @@ export function StrategyForm({
     /^\d+$/.test(value) &&
     Number.isSafeInteger(Number(value)) &&
     Number(value) > 0
-  if (groupGenerationMode === "FIXED" && !positiveInteger(groupCount))
-    local.group_count = "请输入大于 0 的整数。"
+  const boundedInteger = (value: string, maximum: number) =>
+    positiveInteger(value) && Number(value) <= maximum
+  if (
+    groupGenerationMode === "FIXED" &&
+    !boundedInteger(groupCount, MAX_FIXED_GROUP_COUNT)
+  )
+    local.group_count = `请输入 1 至 ${MAX_FIXED_GROUP_COUNT} 的整数。`
   if (
     groupGenerationMode === "BY_MATERIAL" &&
     !positiveInteger(maxMaterialsPerGroup)
   )
     local.max_materials_per_group = "请输入大于 0 的整数。"
-  if (adGenerationMode === "FIXED" && !positiveInteger(adsPerGroup))
-    local.ads_per_group = "请输入大于 0 的整数。"
+  if (
+    adGenerationMode === "FIXED" &&
+    !boundedInteger(adsPerGroup, MAX_FIXED_ADS_PER_GROUP)
+  )
+    local.ads_per_group = `请输入 1 至 ${MAX_FIXED_ADS_PER_GROUP} 的整数。`
   if (adGenerationMode === "BY_MATERIAL" && !positiveInteger(maxMaterialsPerAd))
     local.max_materials_per_ad = "请输入大于 0 的整数。"
   if (!positiveInteger(creativeCount))
@@ -284,7 +295,48 @@ export function StrategyForm({
   else if (capacity !== undefined && Number(creativeCount) > capacity)
     local.creative_count = `创意数量不能超过 ${capacity} 条有效且不重复的英文文案。`
   if (templateIssue) local.campaign_name_template = templateIssue
-  const errors = { ...local, ...serverErrors },
+  // 规则切换后互斥字段会卸载；过滤动态不可见字段，避免顶部定位和保存按钮被旧错误卡住。
+  const visibleFields = new Set([
+    "name",
+    "budget",
+    "currency",
+    "budget_strategy",
+    "bid_strategy",
+    "group_generation_mode",
+    "ad_generation_mode",
+    "creative_count",
+    "campaign_name_template",
+    "targeting",
+    "copy_pool_version",
+    "cta_option_ids",
+    "config",
+  ])
+  if (groupGenerationMode === "FIXED") {
+    visibleFields.add("group_count")
+    if (
+      boundedInteger(groupCount, MAX_FIXED_GROUP_COUNT) &&
+      Number(groupCount) > 1
+    )
+      visibleFields.add("group_material_allocation")
+  } else {
+    visibleFields.add("max_materials_per_group")
+  }
+  if (adGenerationMode === "FIXED") {
+    visibleFields.add("ads_per_group")
+    if (
+      boundedInteger(adsPerGroup, MAX_FIXED_ADS_PER_GROUP) &&
+      Number(adsPerGroup) > 1
+    )
+      visibleFields.add("ad_material_allocation")
+  } else {
+    visibleFields.add("max_materials_per_ad")
+  }
+  if (bidStrategy === "TARGET_ROAS") visibleFields.add("target_roas")
+  const errors = Object.fromEntries(
+      Object.entries({ ...local, ...serverErrors }).filter(([key]) =>
+        visibleFields.has(key),
+      ),
+    ),
     firstError = Object.keys(errors)[0]
   useEffect(() => {
     if (
@@ -378,8 +430,11 @@ export function StrategyForm({
           setServerErrors(
             Object.fromEntries(
               validation.errors.map((issue) => [
-                issue.field,
-                issueMessages[issue.code] || "该字段未通过策略校验。",
+                issue.field || "config",
+                issueMessages[issue.code] ||
+                  (issue.field === "config"
+                    ? "整体策略配置无效，请检查各项生成规则和互斥字段。"
+                    : "该字段未通过策略校验。"),
               ]),
             ),
           )
@@ -478,6 +533,7 @@ export function StrategyForm({
       setServerErrors((old) => {
         const next = { ...old }
         delete next[key]
+        delete next.config
         return next
       })
     }
@@ -536,6 +592,7 @@ export function StrategyForm({
           setServerErrors((old) => {
             const copy = { ...old }
             delete copy[key]
+            delete copy.config
             return copy
           })
         }}
@@ -639,6 +696,7 @@ export function StrategyForm({
               className="h-auto max-w-full whitespace-normal px-0 text-left"
               onClick={() => {
                 setTouched((old) => ({ ...old, [firstError]: true }))
+                // 整体配置错误没有对应的 DOM 字段；有元素时才定位，避免 focus 不存在节点。
                 document.getElementById(`strategy-${firstError}`)?.focus()
               }}
             >
@@ -692,8 +750,18 @@ export function StrategyForm({
                   (value) => {
                     const next = value as "FIXED" | "BY_MATERIAL"
                     setGroupGenerationMode(next)
+                    setServerErrors((old) => {
+                      const nextErrors = { ...old }
+                      delete nextErrors.group_count
+                      delete nextErrors.max_materials_per_group
+                      delete nextErrors.group_material_allocation
+                      delete nextErrors.config
+                      return nextErrors
+                    })
                     if (next === "FIXED") {
-                      setGroupCount((old) => (positiveInteger(old) ? old : "1"))
+                      setGroupCount((old) =>
+                        boundedInteger(old, MAX_FIXED_GROUP_COUNT) ? old : "1",
+                      )
                       setGroupMaterialAllocation("SHARED")
                       setMaxMaterialsPerGroup("")
                     } else {
@@ -742,9 +810,19 @@ export function StrategyForm({
                   (value) => {
                     const next = value as "FIXED" | "BY_MATERIAL"
                     setAdGenerationMode(next)
+                    setServerErrors((old) => {
+                      const nextErrors = { ...old }
+                      delete nextErrors.ads_per_group
+                      delete nextErrors.max_materials_per_ad
+                      delete nextErrors.ad_material_allocation
+                      delete nextErrors.config
+                      return nextErrors
+                    })
                     if (next === "FIXED") {
                       setAdsPerGroup((old) =>
-                        positiveInteger(old) ? old : "1",
+                        boundedInteger(old, MAX_FIXED_ADS_PER_GROUP)
+                          ? old
+                          : "1",
                       )
                       setAdMaterialAllocation("SHARED")
                       setMaxMaterialsPerAd("")
@@ -821,6 +899,12 @@ export function StrategyForm({
                   (value) => {
                     const next = value as "HIGHEST_VALUE" | "TARGET_ROAS"
                     setBidStrategy(next)
+                    setServerErrors((old) => {
+                      const nextErrors = { ...old }
+                      delete nextErrors.target_roas
+                      delete nextErrors.config
+                      return nextErrors
+                    })
                     if (next === "HIGHEST_VALUE") setRoas("")
                   },
                   [
