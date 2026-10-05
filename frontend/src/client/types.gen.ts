@@ -3949,6 +3949,22 @@ export type PreviewSummary = {
      */
     bid_strategy?: 'HIGHEST_VALUE' | 'TARGET_ROAS';
     /**
+     * Creation Status
+     */
+    creation_status?: 'ENABLE' | 'DISABLE';
+    /**
+     * Schedule Type
+     */
+    schedule_type?: 'SCHEDULE_FROM_NOW' | 'SCHEDULE_START_END';
+    /**
+     * Schedule Start Time
+     */
+    schedule_start_time?: string | null;
+    /**
+     * Schedule End Time
+     */
+    schedule_end_time?: string | null;
+    /**
      * Group Generation Mode
      */
     group_generation_mode?: 'FIXED' | 'BY_MATERIAL';
@@ -5095,6 +5111,22 @@ export type StrategyConfig_Input = {
      * Bid Strategy
      */
     bid_strategy?: 'HIGHEST_VALUE' | 'TARGET_ROAS';
+    /**
+     * Creation Status
+     */
+    creation_status?: 'ENABLE' | 'DISABLE';
+    /**
+     * Schedule Type
+     */
+    schedule_type?: 'SCHEDULE_FROM_NOW' | 'SCHEDULE_START_END';
+    /**
+     * Schedule Start Time
+     */
+    schedule_start_time?: string | null;
+    /**
+     * Schedule End Time
+     */
+    schedule_end_time?: string | null;
     targeting?: AudienceTargeting;
     /**
      * Group Generation Mode
@@ -5170,6 +5202,22 @@ export type StrategyConfig_Output = {
      * Bid Strategy
      */
     bid_strategy?: 'HIGHEST_VALUE' | 'TARGET_ROAS';
+    /**
+     * Creation Status
+     */
+    creation_status?: 'ENABLE' | 'DISABLE';
+    /**
+     * Schedule Type
+     */
+    schedule_type?: 'SCHEDULE_FROM_NOW' | 'SCHEDULE_START_END';
+    /**
+     * Schedule Start Time
+     */
+    schedule_start_time?: string | null;
+    /**
+     * Schedule End Time
+     */
+    schedule_end_time?: string | null;
     targeting?: AudienceTargeting;
     /**
      * Group Generation Mode

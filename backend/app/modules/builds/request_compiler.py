@@ -84,7 +84,7 @@ class _AdBody(FrozenModel):
     advertiser_id: Id
     adgroup_id: Id
     ad_name: Id
-    operation_status: Literal["ENABLE"]
+    operation_status: Literal["ENABLE", "DISABLE"]
     creative_list: tuple[_Creative, ...] = Field(min_length=1, max_length=50)
     ad_text_list: tuple[_Text, ...] = Field(min_length=1, max_length=1)
     landing_page_url_list: tuple[_Url, ...] = Field(min_length=1, max_length=1)
@@ -499,11 +499,14 @@ def compile_request(
     frozen = _json_copy(fixed)
     budget_strategy = frozen.pop("budget_strategy", None)
     bid_strategy = frozen.pop("bid_strategy", None)
+    creation_status = frozen.pop("creation_status", "ENABLE")
+    if creation_status not in {"ENABLE", "DISABLE"}:
+        raise DomainError("invalid_creation_status", "创建状态必须为 ENABLE 或 DISABLE")
     if budget_strategy not in {None, "SERIES", "ADGROUP"}:
         raise DomainError("invalid_budget_strategy", "预算策略无效")
     if bid_strategy not in {None, "HIGHEST_VALUE", "TARGET_ROAS"}:
         raise DomainError("bid_strategy_invalid", "竞价策略无效")
-    body = {**_json_copy(resolved), **frozen, "operation_status": "ENABLE"}
+    body = {**_json_copy(resolved), **frozen, "operation_status": creation_status}
     if kind == "campaign":
         if budget_strategy == "ADGROUP":
             if "budget" in body:

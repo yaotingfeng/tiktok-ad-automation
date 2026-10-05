@@ -92,6 +92,30 @@ def test_series_and_group_budget_are_emitted_at_their_own_layer():
     )
 
 
+def test_creation_status_and_utc_schedule_are_emitted():
+    group = compile_request(
+        "adgroup",
+        fixed={
+            "advertiser_id": "adv",
+            "campaign_id": "campaign",
+            "adgroup_name": "group",
+            "budget_strategy": "SERIES",
+            "bid_strategy": "HIGHEST_VALUE",
+            "deep_bid_type": "VO_HIGHEST_VALUE",
+            "creation_status": "DISABLE",
+        },
+        resolved={
+            "targeting_spec": {"location_ids": ["US"]},
+            "schedule_type": "SCHEDULE_START_END",
+            "schedule_start_time": "2026-10-06 16:00:00",
+            "schedule_end_time": "2026-10-07 16:00:00",
+        },
+    )
+    assert group["operation_status"] == "DISABLE"
+    assert group["schedule_type"] == "SCHEDULE_START_END"
+    assert group["schedule_end_time"] == "2026-10-07 16:00:00"
+
+
 def test_campaign_without_budget_strategy_or_budget_is_rejected():
     with pytest.raises(ValidationError):
         CampaignCreate(advertiser_id="adv", name="campaign")

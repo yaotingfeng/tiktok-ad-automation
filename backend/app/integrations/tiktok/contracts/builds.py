@@ -74,7 +74,7 @@ class CampaignCreate(FrozenModel):
     # 组预算时 Campaign 使用平台的无限预算形态；预算值固定在 Ad Group。
     budget: Money | None = None
     budget_strategy: BudgetStrategy = "SERIES"
-    operation_status: Literal["ENABLE"] = "ENABLE"
+    operation_status: Literal["ENABLE", "DISABLE"] = "ENABLE"
     objective_type: Literal["APP_PROMOTION"] = "APP_PROMOTION"
     app_promotion_type: Literal["MINIS"] = "MINIS"
     campaign_type: Literal["REGULAR_CAMPAIGN"] = "REGULAR_CAMPAIGN"
@@ -161,6 +161,7 @@ class AdGroupObservedFacts(FrozenModel):
         return self
 
     schedule_start_time: Annotated[Id, AfterValidator(_schedule)]
+    schedule_end_time: Annotated[Id, AfterValidator(_schedule)] | None = None
     promotion_type: Literal["MINI_APP"] = "MINI_APP"
     optimization_goal: Literal["VALUE"] = "VALUE"
     # 创建合同使用 AD_REVENUE_VALUE；历史标准/Smart+ 回读仍可能分别返回
@@ -175,7 +176,7 @@ class AdGroupObservedFacts(FrozenModel):
     placements: tuple[Literal["PLACEMENT_TIKTOK"], ...] = Field(
         default=("PLACEMENT_TIKTOK",), min_length=1
     )
-    schedule_type: Literal["SCHEDULE_FROM_NOW"] = "SCHEDULE_FROM_NOW"
+    schedule_type: Literal["SCHEDULE_FROM_NOW", "SCHEDULE_START_END"] = "SCHEDULE_FROM_NOW"
 
     @model_validator(mode="before")
     @classmethod
@@ -200,6 +201,13 @@ class AdGroupObservedFacts(FrozenModel):
 
     @model_validator(mode="after")
     def validate_budget_and_bid_contract(self) -> Self:
+        if self.schedule_type == "SCHEDULE_START_END":
+            if self.schedule_end_time is None:
+                raise ValueError("SCHEDULE_START_END requires schedule_end_time")
+            if self.schedule_end_time <= self.schedule_start_time:
+                raise ValueError("schedule_end_time must be later than schedule_start_time")
+        elif self.schedule_end_time is not None:
+            raise ValueError("SCHEDULE_FROM_NOW must not include schedule_end_time")
         if self.budget_strategy == "ADGROUP":
             if self.budget is None:
                 raise ValueError("adgroup budget requires an ad group budget")
@@ -217,7 +225,7 @@ class AdGroupObservedFacts(FrozenModel):
 
 
 class AdGroupCreate(AdGroupObservedFacts):
-    operation_status: Literal["ENABLE"] = "ENABLE"
+    operation_status: Literal["ENABLE", "DISABLE"] = "ENABLE"
 
     @model_validator(mode="after")
     def require_strict_targeting(self) -> Self:
@@ -262,7 +270,7 @@ class AdCreate(IdentityFields):
     landing_page_url: Id
     portfolio_id: Id
     assets: tuple[CreativeAsset, ...] = Field(min_length=1, max_length=50)
-    operation_status: Literal["ENABLE"] = "ENABLE"
+    operation_status: Literal["ENABLE", "DISABLE"] = "ENABLE"
 
 
 class CtaAsset(FrozenModel):

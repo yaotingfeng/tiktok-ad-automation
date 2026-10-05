@@ -1681,3 +1681,10 @@
 - API worker 现在区分 OAuth 候选目录和已授权连接目录：候选仍使用候选凭据与候选准入，主动同步使用连接凭据与普通 API 账户目录准入；两者均在完整暂存后原子发布。
 - 连接详情页新增“同步全部账户”，显示发现进度并在完成后刷新 BC、账户和授权视图。MCP 继续保留单 BC 同步。
 - 验证：后端 Ruff、compileall，前端 TypeScript/Vite build 通过；Bi​​ome 因仓库已有嵌套配置冲突未执行。PostgreSQL 回归因本机未配置专用 `_test` 数据库未执行。
+
+## 2026-10-05：投放策略支持 UTC 排期与创建状态
+
+- 策略版本新增 `creation_status`（ENABLE/DISABLE）及 `schedule_type`、UTC 开始/结束时间；旧策略默认保持创建后启用、立即开始。
+- 预览冻结单元保存状态与排期，Campaign/Ad Group/Ad 创建请求统一发送配置状态；Ad Group 在指定区间时发送 `SCHEDULE_START_END`、开始和结束时间，立即开始仍在首次执行时生成 UTC 时间。
+- 策略编辑、列表和版本历史新增创建状态与 UTC 排期展示；OpenAPI TypeScript client 已刷新。
+- 验证：前端 `npm run build`、后端 Ruff、compile smoke、根目录 batch regression 通过。PostgreSQL 测试因本机不存在可用测试角色/数据库未执行；Playwright 策略套件因未配置 baseURL 全部在导航前失败。未进行真实 TikTok 写入。

@@ -117,3 +117,29 @@ def test_bid_strategy_controls_target_roas_presence():
 def test_removed_and_unknown_fields_are_rejected(field):
     with pytest.raises(ValidationError):
         base_config(**{field: 10 if field == "group_size" else []})
+
+
+def test_creation_status_and_utc_schedule_defaults_and_validation():
+    config = base_config()
+    assert config.creation_status == "ENABLE"
+    assert config.schedule_type == "SCHEDULE_FROM_NOW"
+    assert config.schedule_start_time is None
+    assert config.schedule_end_time is None
+
+    scheduled = base_config(
+        creation_status="DISABLE",
+        schedule_type="SCHEDULE_START_END",
+        schedule_start_time="2026-10-06 16:00:00",
+        schedule_end_time="2026-10-07 16:00:00",
+    )
+    assert scheduled.creation_status == "DISABLE"
+    assert scheduled.schedule_type == "SCHEDULE_START_END"
+
+    with pytest.raises(ValidationError):
+        base_config(schedule_type="SCHEDULE_START_END")
+    with pytest.raises(ValidationError):
+        base_config(
+            schedule_type="SCHEDULE_START_END",
+            schedule_start_time="2026-10-07 16:00:00",
+            schedule_end_time="2026-10-06 16:00:00",
+        )

@@ -35,12 +35,26 @@ Money = Annotated[
 ]
 
 
+def _parse_utc_schedule(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        raise ValueError("schedule timestamps must use UTC YYYY-MM-DD HH:MM:SS") from None
+
+
 class StrategyConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     budget: Money
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     budget_strategy: Literal["SERIES", "ADGROUP"] = "SERIES"
     bid_strategy: Literal["HIGHEST_VALUE", "TARGET_ROAS"] = "HIGHEST_VALUE"
+    # 创建状态与排期统一使用 UTC，避免服务端和广告账户时区混用。
+    creation_status: Literal["ENABLE", "DISABLE"] = "ENABLE"
+    schedule_type: Literal["SCHEDULE_FROM_NOW", "SCHEDULE_START_END"] = "SCHEDULE_FROM_NOW"
+    schedule_start_time: str | None = None
+    schedule_end_time: str | None = None
     targeting: AudienceTargeting = Field(default_factory=AudienceTargeting)
     group_generation_mode: Literal["FIXED", "BY_MATERIAL"] = "FIXED"
     group_count: int | None = Field(default=1, gt=0, strict=True)
@@ -58,7 +72,17 @@ class StrategyConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_structure(self, info: ValidationInfo) -> StrategyConfig:
-        """确保每一层只携带与生成模式对应的数量和素材分配。"""
+        """确保结构、状态与 UTC 排期字段满足创建合同。"""
+        if self.schedule_type == "SCHEDULE_FROM_NOW":
+            if self.schedule_start_time is not None or self.schedule_end_time is not None:
+                raise ValueError("SCHEDULE_FROM_NOW must not include schedule timestamps")
+        else:
+            if self.schedule_start_time is None or self.schedule_end_time is None:
+                raise ValueError("SCHEDULE_START_END requires start and end timestamps")
+        parsed_start = _parse_utc_schedule(self.schedule_start_time)
+        parsed_end = _parse_utc_schedule(self.schedule_end_time)
+        if parsed_start is not None and parsed_end is not None and parsed_end <= parsed_start:
+            raise ValueError("schedule_end_time must be later than schedule_start_time")
         if self.group_generation_mode == "FIXED":
             if self.group_count is None:
                 raise ValueError("group_count is required for FIXED groups")

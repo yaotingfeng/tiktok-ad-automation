@@ -110,6 +110,10 @@ class PreviewSummary(BaseModel):
     daily_budget_label: str = "系列预算合计"
     budget_strategy: Literal["SERIES", "ADGROUP"] = "SERIES"
     bid_strategy: Literal["HIGHEST_VALUE", "TARGET_ROAS"] = "HIGHEST_VALUE"
+    creation_status: Literal["ENABLE", "DISABLE"] = "ENABLE"
+    schedule_type: Literal["SCHEDULE_FROM_NOW", "SCHEDULE_START_END"] = "SCHEDULE_FROM_NOW"
+    schedule_start_time: str | None = None
+    schedule_end_time: str | None = None
     group_generation_mode: Literal["FIXED", "BY_MATERIAL"] = "FIXED"
     ad_generation_mode: Literal["FIXED", "BY_MATERIAL"] = "BY_MATERIAL"
     creative_count: int = 1

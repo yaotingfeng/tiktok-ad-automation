@@ -300,6 +300,7 @@ def prepare_request(
         fixed.update(
             campaign_name=frozen.campaign_name,
             budget_strategy=frozen.budget_strategy,
+            creation_status=frozen.creation_status,
         )
         if frozen.budget_strategy == "SERIES":
             fixed["budget"] = exact_number(frozen.budget)
@@ -311,6 +312,7 @@ def prepare_request(
             adgroup_name=group.name,
             budget_strategy=frozen.budget_strategy,
             bid_strategy=frozen.bid_strategy,
+            creation_status=frozen.creation_status,
         )
         if frozen.budget_strategy == "ADGROUP":
             fixed["budget"] = exact_number(frozen.budget)
@@ -329,12 +331,18 @@ def prepare_request(
             resolved["deep_bid_type"] = "VO_MIN_ROAS"
         if not resolved.get("targeting_spec", {}).get("location_ids"):
             raise DomainError("scene_targeting_unavailable", "缺少已核实的投放地区")
-        # FROM_NOW has a required UTC start. Resolve once at first arm; the entire
-        # body is persisted and immutable before I/O, including this timestamp.
-        resolved.update(
-            schedule_type="SCHEDULE_FROM_NOW",
-            schedule_start_time=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
-        )
+        # 立即开始在首次执行时生成 UTC 时间；指定区间沿用预览冻结值。
+        if frozen.schedule_type == "SCHEDULE_FROM_NOW":
+            resolved.update(
+                schedule_type="SCHEDULE_FROM_NOW",
+                schedule_start_time=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            )
+        else:
+            resolved.update(
+                schedule_type="SCHEDULE_START_END",
+                schedule_start_time=frozen.schedule_start_time,
+                schedule_end_time=frozen.schedule_end_time,
+            )
     elif step.kind == "AD":
         group = _group(session, step)
         ad = session.exec(
@@ -466,7 +474,11 @@ def prepare_request(
         if cta.status != "SUCCEEDED" or not cta.remote_id:
             raise DomainError("cta_not_ready", "CTA 尚未准备完成", retryable=True)
         resolved["ad_configuration"] = {"call_to_action_id": cta.remote_id}
-        fixed.update(adgroup_id=_parent(session, step), ad_name=ad.name)
+        fixed.update(
+            adgroup_id=_parent(session, step),
+            ad_name=ad.name,
+            creation_status=frozen.creation_status,
+        )
     else:
         raise DomainError("invalid_build_kind", "该步骤不是广告创建请求")
     return compile_request(step.kind.lower(), fixed=fixed, resolved=resolved)

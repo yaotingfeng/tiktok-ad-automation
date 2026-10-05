@@ -83,7 +83,6 @@ def test_campaign_keeps_exact_values_and_direct_enable():
     assert value.budget == Decimal("100.01")
     assert value.operation_status == "ENABLE"
     for change in (
-        {"operation_status": "DISABLE"},
         {"unverified_option": True},
         {"advertiser_id": 123},
         {"advertiser_id": " "},
@@ -93,6 +92,7 @@ def test_campaign_keeps_exact_values_and_direct_enable():
     ):
         with pytest.raises(ValidationError):
             CampaignCreate(**{**value.model_dump(), **change})
+    assert CampaignCreate(**{**value.model_dump(), "operation_status": "DISABLE"}).operation_status == "DISABLE"
 
 
 def test_video_ad_without_custom_cover_roundtrips_and_accepts_generated_cover():
