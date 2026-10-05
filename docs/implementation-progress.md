@@ -1669,3 +1669,8 @@
 
 - MCP 管理入口原先在 `require_mcp_admin` 额外要求当前操作者必须存在有效租户成员关系，导致平台管理员进入代管租户后点击“添加 BC”返回 `action_forbidden`；现与 API 授权共用 `manage` 模型，平台管理员可管理已进入租户，普通管理员仍需有效成员关系。
 - 回归测试覆盖平台管理员无租户成员关系可执行 MCP 管理，以及普通无成员用户和成员失效仍被拒绝。Ruff、compileall 通过；完整 PostgreSQL 回归因本机未配置命名 `_test` 专用数据库未执行。
+
+## 2026-10-05：CF8H 搭建明细查询修复并发布
+
+- 修复 `3f228a7aaf5eb8553b488696140973e4b8c7381b` 补齐搭建组合查询的 PostgreSQL 分组字段，消除 CF8H 搭建明细的 `GroupingError`。
+- 已推送 `origin/main` 并发布到新加坡测试环境；备份、发布版本、服务重启和 CF8H `/units` HTTP 200 回读证据见[本轮验收](validation/2026-10-05-submission-detail-grouping-fix.md)。
