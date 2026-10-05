@@ -1717,9 +1717,10 @@
 - 截至验收快照：`COMPLETE=367`、`COMPLETE_EMPTY=1171`、`RUNNING=18`、`QUEUED/PENDING=2903`、`FAILED=0`；已发布事实 268,440 行、46 个账户。历史回补仍在运行，不能将排队量宣称为已完成。
 - 本轮本地 compileall、Ruff、`git diff --check` 和报表合同 smoke check 通过；完整 PostgreSQL pytest 仍因本机未提供命名 `_test` 专用数据库而未执行。相关提交：`82705d6`、`645ef5e`、`e3b3b48`、`2503208`、`f934472`、`155c000`。
 
-## 2026-10-05：New Junbo 报表查询内存与过滤修复
+## 2026-10-05：New Junbo 报表查询内存与 BC 隔离修复
 
 - 素材报表由一次性加载整个 BC 的事实和素材目录改为按授权账户分批构建，并按事实中的广告 ID 限定素材映射；staging `material` 查询由 OOM/502 恢复为 HTTP 200。
 - 同步报表的 `ad_id_v2` 过滤字段改为 `ad_ids_v2`；官方合法零行的空对象回执被解释为 `COMPLETE_EMPTY`，避免将无投放账户误报为 `mcp_response_invalid`。
-- 发布 release `3494c13` 前备份 `/var/backups/tt-ada-staging/20261005T145033Z/` 校验通过；7 个 Celery 节点、API/Worker/Beat、bootstrap 检查通过。New Junbo BC 快照为 `COMPLETE=4055`、`RUNNING=16`、`QUEUED=896`、`FAILED=0`，事实 `359,391` 行（2026-07-08 至 2026-10-05）。
+- 报表事实和覆盖读取通过 `ReportSyncRun.bc_id` 绑定当前 BC，避免同一租户多 BC 共享账户时发生历史事实串 BC。
+- 发布 release `c59ad1c` 前备份 `/var/backups/tt-ada-staging/20261005T151138Z/` 校验通过；7 个 Celery 节点、API/Worker/Beat、bootstrap 检查通过。New Junbo BC 快照为 `COMPLETE=4062`、`RUNNING=9`、`QUEUED=896`、`FAILED=0`，按 BC 隔离后的事实 `377,757` 行（2026-07-08 至 2026-10-05）。
 - 本轮仍只做代码层部署和测试环境只读报表验证，未执行任何广告写入；完整 PostgreSQL 回归仍受本机没有命名 `_test` 专用数据库限制。
