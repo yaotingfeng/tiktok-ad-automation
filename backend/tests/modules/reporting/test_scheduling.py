@@ -8,6 +8,8 @@ from app.integrations.tiktok.contracts.ads import EntityRef
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.modules.reporting.scheduling import (
     SyncRequest,
+    directory_filter_chunks,
+    directory_id_chunks,
     enqueue_due_syncs,
     ensure_sync_schedules,
     planned_window,
@@ -27,6 +29,19 @@ def _route():
         adapter_contract_revision="official-api-v1",
         binding_revision=9,
     )
+
+
+def test_directory_id_chunks_bound_each_platform_filter_to_100_ids():
+    ids = tuple(f"id-{i}" for i in range(205))
+
+    chunks = directory_id_chunks(ids)
+
+    assert [len(chunk) for chunk in chunks] == [100, 100, 5]
+    assert tuple(item for chunk in chunks for item in chunk) == ids
+    assert directory_id_chunks(()) == ((),)
+    filters = directory_filter_chunks(tuple(f"id-{i}" for i in range(101)), tuple(f"p-{i}" for i in range(101)))
+    assert len(filters) == 4
+    assert all(len(ids) <= 100 and len(parents) <= 100 for ids, parents in filters)
 
 
 def test_planned_windows_keep_initial_and_unknown_attribution_bounds():

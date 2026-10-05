@@ -51,6 +51,28 @@ _REQUEST_NAMESPACE = UUID("c5c96c13-7e3a-4cbb-a7cc-9b12e9d1c6ad")
 _TERMINAL_STATUSES = frozenset({"COMPLETE", "FAILED", "CANCELLED", "STALE"})
 
 
+def directory_id_chunks(ids: tuple[str, ...], *, limit: int = 100) -> tuple[tuple[str, ...], ...]:
+    """Split directory filters to the platform's maximum 100 IDs per request."""
+
+    if limit != 100:
+        raise ValueError("directory ID limit must remain 100")
+    if not ids:
+        return ((),)
+    return tuple(ids[offset : offset + limit] for offset in range(0, len(ids), limit))
+
+
+def directory_filter_chunks(
+    ids: tuple[str, ...], parent_ids: tuple[str, ...]
+) -> tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]:
+    """Return a bounded product when both ID filters need pagination."""
+
+    return tuple(
+        (id_chunk, parent_chunk)
+        for id_chunk in directory_id_chunks(ids)
+        for parent_chunk in directory_id_chunks(parent_ids)
+    )
+
+
 def _report_specs() -> tuple[tuple[str, str | None], ...]:
     """Return the approved report contract/type matrix used by fixed plans."""
 
@@ -548,53 +570,56 @@ def _request_directory_sync(
             )
             if request.scope == "targeted" and not ids and not parent_ids:
                 continue
-            query = {
-                "advertiser_id": advertiser_id,
-                "kind": kind,
-                "ad_type": ad_type,
-                "page": 1,
-                "page_size": page_size,
-                "ids": list(ids),
-                "parent_ids": list(parent_ids),
-                "include_deleted": request.scope == "directory",
-            }
-            partition = hashlib.sha256(
-                json.dumps(query, sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest()
-            existing = session.exec(
-                select(AdDirectoryRun)
-                .where(
-                    AdDirectoryRun.tenant_id == context.tenant_id,
-                    AdDirectoryRun.request_id == request_id,
-                    AdDirectoryRun.advertiser_id == advertiser_id,
-                    AdDirectoryRun.partition_key == partition,
+            # TikTok 对 filtering.ids/parent_ids 都限制最多 100 个；历史上把全部
+            # Smart+ 创意 ID 放进一个运行，导致任务进入队列后必然 ads_query_invalid。
+            for id_chunk, parent_chunk in directory_filter_chunks(ids, parent_ids):
+                query = {
+                    "advertiser_id": advertiser_id,
+                    "kind": kind,
+                    "ad_type": ad_type,
+                    "page": 1,
+                    "page_size": page_size,
+                    "ids": list(id_chunk),
+                    "parent_ids": list(parent_chunk),
+                    "include_deleted": request.scope == "directory",
+                }
+                partition = hashlib.sha256(
+                    json.dumps(query, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest()
+                existing = session.exec(
+                    select(AdDirectoryRun)
+                    .where(
+                        AdDirectoryRun.tenant_id == context.tenant_id,
+                        AdDirectoryRun.request_id == request_id,
+                        AdDirectoryRun.advertiser_id == advertiser_id,
+                        AdDirectoryRun.partition_key == partition,
+                    )
+                    .order_by(col(AdDirectoryRun.created_at))
+                ).first()
+                if existing is not None:
+                    selected.append(existing)
+                    continue
+                run = AdDirectoryRun(
+                    tenant_id=context.tenant_id,
+                    advertiser_id=advertiser_id,
+                    bc_id=request.route.bc_id,
+                    actor_id=context.actor_id,
+                    connection_id=request.route.connection_id,
+                    channel=request.route.channel,
+                    frozen_route=_route_dump(request.route),
+                    request_id=request_id,
+                    partition_key=partition,
+                    query=query,
+                    status="QUEUED",
+                    claim_generation=1,
+                    next_page=1,
+                    coverage="PENDING",
+                    observed_at=now,
+                    kind=kind,
+                    ad_type=ad_type,
                 )
-                .order_by(col(AdDirectoryRun.created_at))
-            ).first()
-            if existing is not None:
-                selected.append(existing)
-                continue
-            run = AdDirectoryRun(
-                tenant_id=context.tenant_id,
-                advertiser_id=advertiser_id,
-                bc_id=request.route.bc_id,
-                actor_id=context.actor_id,
-                connection_id=request.route.connection_id,
-                channel=request.route.channel,
-                frozen_route=_route_dump(request.route),
-                request_id=request_id,
-                partition_key=partition,
-                query=query,
-                status="QUEUED",
-                claim_generation=1,
-                next_page=1,
-                coverage="PENDING",
-                observed_at=now,
-                kind=kind,
-                ad_type=ad_type,
-            )
-            session.add(run)
-            selected.append(run)
+                session.add(run)
+                selected.append(run)
     session.flush()
     return selected[0].id
 
