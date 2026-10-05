@@ -1,7 +1,7 @@
 """合并预览策略与版权方类型两条迁移分支。"""
 
-revision = "20261005_merge_preview_provider_heads"
-down_revision = ("20261005_preview_ad_material_strategy", "provider_kinds_expansion")
+revision = "20261005_merge_preview_heads"
+down_revision = ("20261005_preview_ad_material", "provider_kinds_expansion")
 branch_labels = None
 depends_on = None
 

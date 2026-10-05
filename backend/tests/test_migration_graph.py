@@ -13,15 +13,15 @@ def test_preview_provider_heads_are_merged_without_operations():
     config.set_main_option("script_location", str(backend / "app/alembic"))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_heads() == ["20261005_merge_preview_provider_heads"]
-    merge = script.get_revision("20261005_merge_preview_provider_heads")
+    assert script.get_heads() == ["20261005_merge_preview_heads"]
+    merge = script.get_revision("20261005_merge_preview_heads")
     assert merge.down_revision == (
-        "20261005_preview_ad_material_strategy",
+        "20261005_preview_ad_material",
         "provider_kinds_expansion",
     )
 
     source = (
-        backend / "app/alembic/versions/20261005_merge_preview_provider_heads.py"
+        backend / "app/alembic/versions/20261005_merge_preview_heads.py"
     ).read_text()
     tree = ast.parse(source)
     for function_name in ("upgrade", "downgrade"):

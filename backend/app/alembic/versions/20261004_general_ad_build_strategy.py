@@ -3,7 +3,7 @@
 import sqlalchemy as sa
 from alembic import op
 
-revision = "20261004_general_ad_build_strategy"
+revision = "20261004_general_strategy"
 down_revision = "mat_response_archive"
 branch_labels = None
 depends_on = None
