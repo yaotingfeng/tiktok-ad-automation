@@ -188,6 +188,16 @@ def _page(query: ReportQuery, response: Any, seen: set[int]) -> ReportPage:
     if data == {} and query.page == 1:
         rows = []
         info = {"page": 1, "page_size": 1, "total_page": 0, "total_number": 0}
+    elif (
+        query.page == 1
+        and rows == []
+        and type(info) is dict
+        and info.get("total_number") == 0
+    ):
+        # A few empty official report responses use a zero-based page marker;
+        # normalize that marker to the first logical page before validation.
+        info = dict(info)
+        info.update({"page": 1, "page_size": max(1, int(info.get("page_size", 1))), "total_page": 0})
     if type(rows) is not list or type(info) is not dict or any(type(row) is not dict for row in rows):
         raise _error("report_response_invalid")
     page = info.get("page", query.page)
