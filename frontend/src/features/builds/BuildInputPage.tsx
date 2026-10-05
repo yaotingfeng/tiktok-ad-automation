@@ -17,6 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { AccountPicker } from "@/features/accounts/AccountPicker"
 import { capabilitiesQuery } from "@/features/providers/queries"
 import { versionQuery } from "@/features/strategies/queries"
@@ -45,6 +46,24 @@ type Values = {
   application: string
   linkConfig: Record<string, string | number | boolean | null>
   version: string
+  scheduleMode: "IMMEDIATE" | "START_AT" | "START_END"
+  scheduleStart: string
+  scheduleEnd: string
+}
+
+function localInputFromUtc(value?: string | null) {
+  if (!value) return ""
+  const date = new Date(`${value.replace(" ", "T")}Z`)
+  if (Number.isNaN(date.getTime())) return ""
+  const pad = (part: number) => String(part).padStart(2, "0")
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+function utcFromLocalInput(value: string) {
+  if (!value) return null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  return date.toISOString().slice(0, 19).replace("T", " ")
 }
 type Pending = { requestId: string; prepare: boolean; values: Values }
 export function BuildInputPage({
@@ -90,6 +109,9 @@ export function BuildInputPage({
     application: summary?.application_id || "",
     linkConfig: summary?.link_config || {},
     version: summary?.strategy_version_id || "",
+    scheduleMode: summary?.delivery_config?.schedule_mode || "IMMEDIATE",
+    scheduleStart: localInputFromUtc(summary?.delivery_config?.schedule_start_time),
+    scheduleEnd: localInputFromUtc(summary?.delivery_config?.schedule_end_time),
   })
   const [values, setValues] = useState<Values>({
       ...initial.current,
@@ -196,6 +218,23 @@ export function BuildInputPage({
       setInputError(e instanceof Error ? e.message : "请检查剧目与链接")
       return
     }
+    if (values.scheduleMode !== "IMMEDIATE" && !values.scheduleStart) {
+      setInputError("请选择投放开始时间。")
+      return
+    }
+    if (values.scheduleMode === "START_END" && !values.scheduleEnd) {
+      setInputError("请选择投放结束时间。")
+      return
+    }
+    if (
+      values.scheduleMode === "START_END" &&
+      values.scheduleStart &&
+      values.scheduleEnd &&
+      new Date(values.scheduleEnd) <= new Date(values.scheduleStart)
+    ) {
+      setInputError("结束时间必须晚于开始时间。")
+      return
+    }
     setBusy(true)
     setError(undefined)
     try {
@@ -231,6 +270,17 @@ export function BuildInputPage({
               application_id:
                 values.connection === "other" ? null : values.application,
               link_config: values.linkConfig,
+              delivery_config: {
+                schedule_mode: values.scheduleMode,
+                schedule_start_time:
+                  values.scheduleMode === "IMMEDIATE"
+                    ? null
+                    : utcFromLocalInput(values.scheduleStart),
+                schedule_end_time:
+                  values.scheduleMode === "START_END"
+                    ? utcFromLocalInput(values.scheduleEnd)
+                    : null,
+              },
               drama_lines: values.drama.split("\n"),
               account_lines: values.account.split("\n"),
             },
@@ -273,6 +323,17 @@ export function BuildInputPage({
               drama_lines: values.drama.split("\n"),
               account_lines: values.account.split("\n"),
               link_config: values.linkConfig,
+              delivery_config: {
+                schedule_mode: values.scheduleMode,
+                schedule_start_time:
+                  values.scheduleMode === "IMMEDIATE"
+                    ? null
+                    : utcFromLocalInput(values.scheduleStart),
+                schedule_end_time:
+                  values.scheduleMode === "START_END"
+                    ? utcFromLocalInput(values.scheduleEnd)
+                    : null,
+              },
             },
             signal: controller.current.signal,
           })
@@ -506,6 +567,61 @@ export function BuildInputPage({
           </CardContent>
         </Card>
       )}
+      <Card className="min-w-0">
+        <CardHeader>
+          <CardTitle>投放排期</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <p className="text-sm text-muted-foreground">
+            在本次广告搭建中设置。日期时间使用选择器填写，提交前会按广告账户时区转换为 TikTok API 所需的 UTC。
+          </p>
+          <RadioGroup
+            value={values.scheduleMode}
+            disabled={disabled}
+            onValueChange={(value) =>
+              change({ scheduleMode: value as Values["scheduleMode"] })
+            }
+            className="grid gap-3 md:grid-cols-3"
+          >
+            {[
+              ["IMMEDIATE", "立即开始"],
+              ["START_AT", "指定时间开启"],
+              ["START_END", "指定开始和结束时间"],
+            ].map(([value, label]) => (
+              <label key={value} className="flex items-center gap-2 rounded-md border p-3 text-sm">
+                <RadioGroupItem value={value} />
+                {label}
+              </label>
+            ))}
+          </RadioGroup>
+          {values.scheduleMode !== "IMMEDIATE" && (
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field>
+                <FieldLabel htmlFor="schedule-start">开始时间</FieldLabel>
+                <Input
+                  id="schedule-start"
+                  type="datetime-local"
+                  value={values.scheduleStart}
+                  disabled={disabled}
+                  onChange={(event) => change({ scheduleStart: event.target.value })}
+                />
+              </Field>
+              {values.scheduleMode === "START_END" && (
+                <Field>
+                  <FieldLabel htmlFor="schedule-end">结束时间</FieldLabel>
+                  <Input
+                    id="schedule-end"
+                    type="datetime-local"
+                    value={values.scheduleEnd}
+                    disabled={disabled}
+                    onChange={(event) => change({ scheduleEnd: event.target.value })}
+                  />
+                </Field>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
       <div className="grid min-w-0 gap-6 md:grid-cols-2">
         {(["drama", "account"] as const).map((kind) => (
           <Card key={kind} className="min-w-0">

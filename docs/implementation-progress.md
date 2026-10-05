@@ -1696,6 +1696,13 @@
 - 策略编辑、列表和版本历史新增创建状态与 UTC 排期展示；OpenAPI TypeScript client 已刷新。
 - 验证：前端 `npm run build`、后端 Ruff、compile smoke、根目录 batch regression 通过。PostgreSQL 测试因本机不存在可用测试角色/数据库未执行；Playwright 策略套件因未配置 baseURL 全部在导航前失败。未进行真实 TikTok 写入。
 
+## 2026-10-05：将投放排期迁移到广告搭建
+
+- 投放策略页只保留创建状态；排期改为广告搭建页本次批次配置，提供“立即开始、指定时间开启、指定开始和结束时间”三种选项。
+- 搭建页使用日期时间选择器，保存时按广告账户时区生成 UTC 字符串；草稿和预览分别持久化、冻结本次排期，避免策略版本复用旧时间。
+- 新增 `build_draft.delivery_config` 迁移，并支持指定开始时间不填写结束时间；预览摘要展示最终排期。
+- 验证：前端 `npm run build`、后端 Ruff、compileall、排期模型校验通过；本机 PostgreSQL 回归仍因缺少专用测试数据库未执行。
+
 ## 2026-10-05：New Junbo 广告报表接入修正
 
 - 使用 `tiktok-ads-new-junbo` 完成真实只读核验：BC `7683817908149272592`、150 个授权广告账户；账户级昨日报表同步查询返回有效指标，异步报表任务创建、PROCESSING→SUCCESS 状态查询和 CSV 下载均成功。未执行任何广告写入。

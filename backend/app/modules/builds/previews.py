@@ -207,7 +207,16 @@ def generate_preview(
         raise DomainError(
             "targeting_regions_unavailable", "所选国家不在本批共同可投范围，请调整定向"
         )
-    config = config.model_copy(update={"targeting": targeting})
+    delivery = draft.delivery_config or {}
+    mode = delivery.get("schedule_mode", "IMMEDIATE")
+    config = config.model_copy(
+        update={
+            "targeting": targeting,
+            "schedule_type": "SCHEDULE_FROM_NOW" if mode == "IMMEDIATE" else "SCHEDULE_START_END",
+            "schedule_start_time": delivery.get("schedule_start_time"),
+            "schedule_end_time": delivery.get("schedule_end_time"),
+        }
+    )
     row = BuildPreview(
         tenant_id=context.tenant_id,
         bc_id=draft.bc_id,

@@ -69,9 +69,9 @@ export function StrategyVersionList({
           `${row.original.config.group_generation_mode === "BY_MATERIAL" ? `按素材数量（每组最多 ${row.original.config.max_materials_per_group} 条）` : `固定 ${row.original.config.group_count} 组`} · ${row.original.config.ad_generation_mode === "BY_MATERIAL" ? `每广告最多 ${row.original.config.max_materials_per_ad} 条素材` : `固定 ${row.original.config.ads_per_group} 个广告 · ${row.original.config.ad_material_allocation === "SEQUENTIAL_AVERAGE" ? "按顺序平均分配" : "共用本组素材"}`} · 创意 ${row.original.config.creative_count ?? 1}`,
       },
       {
-        header: "创建与排期",
+        header: "创建状态",
         cell: ({ row: { original: r } }) =>
-          `${r.config.creation_status === "DISABLE" ? "创建后停用" : "创建后启用"} · ${r.config.schedule_type === "SCHEDULE_START_END" ? `${r.config.schedule_start_time} 至 ${r.config.schedule_end_time} UTC` : "立即开始（UTC）"}`,
+          r.config.creation_status === "DISABLE" ? "创建后停用" : "创建后启用",
       },
       {
         header: "保存信息",

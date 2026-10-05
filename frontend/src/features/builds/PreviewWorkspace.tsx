@@ -354,7 +354,13 @@ export function PreviewSummaryBar({
 }) {
   const [pending, setPending] = useState(false),
     [error, setError] = useState<unknown>()
-  const strategySummary = `预算策略：${preview.budget_strategy === "ADGROUP" ? "组预算" : "系列预算"}；竞价策略：${bidLabel(preview.bid_strategy)}。`
+  const scheduleSummary =
+    preview.schedule_type === "SCHEDULE_FROM_NOW"
+      ? "立即开始"
+      : preview.schedule_end_time
+        ? `指定时间：${preview.schedule_start_time} 至 ${preview.schedule_end_time} UTC`
+        : `指定时间：${preview.schedule_start_time} UTC 起`
+  const strategySummary = `预算策略：${preview.budget_strategy === "ADGROUP" ? "组预算" : "系列预算"}；竞价策略：${bidLabel(preview.bid_strategy)}；投放排期：${scheduleSummary}。`
   const structureSummary = preview.structure_summary
     ? /预算策略|竞价策略/.test(preview.structure_summary)
       ? preview.structure_summary

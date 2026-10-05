@@ -133,19 +133,12 @@ export function StrategyList() {
         ),
       },
       {
-        header: "创建与排期",
-        size: 190,
+        header: "创建状态",
+        size: 130,
         cell: ({ row }) => {
           const config = row.original.config
           return (
-            <div className="flex flex-col gap-1">
-              <span>{config.creation_status === "DISABLE" ? "创建后停用" : "创建后启用"}</span>
-              <p className="text-xs text-muted-foreground">
-                {config.schedule_type === "SCHEDULE_START_END"
-                  ? `${config.schedule_start_time} 至 ${config.schedule_end_time} UTC`
-                  : "立即开始（UTC）"}
-              </p>
-            </div>
+            <span>{config.creation_status === "DISABLE" ? "创建后停用" : "创建后启用"}</span>
           )
         },
       },

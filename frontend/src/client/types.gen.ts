@@ -674,6 +674,14 @@ export type CreateDraftRequest = {
     link_config?: {
         [key: string]: unknown;
     };
+    delivery_config?: DeliveryConfig;
+};
+
+/** Per-build delivery schedule. */
+export type DeliveryConfig = {
+    schedule_mode?: 'IMMEDIATE' | 'START_AT' | 'START_END';
+    schedule_start_time?: string | null;
+    schedule_end_time?: string | null;
 };
 
 /**
@@ -1081,6 +1089,7 @@ export type DraftSummary = {
     link_config: {
         [key: string]: string | number | boolean | null;
     };
+    delivery_config?: DeliveryConfig;
     /**
      * Custom Provider Name
      */
@@ -3633,6 +3642,7 @@ export type PatchDraftRequest = {
     link_config?: {
         [key: string]: unknown;
     } | null;
+    delivery_config?: DeliveryConfig | null;
 };
 
 /**

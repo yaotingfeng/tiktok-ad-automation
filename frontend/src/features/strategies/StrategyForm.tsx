@@ -87,9 +87,6 @@ const fieldNames: Record<string, string> = {
   budget_strategy: "预算策略",
   bid_strategy: "竞价策略",
   creation_status: "创建状态",
-  schedule_type: "投放排期",
-  schedule_start_time: "开始时间（UTC）",
-  schedule_end_time: "结束时间（UTC）",
   group_generation_mode: "广告组数量规则",
   group_count: "广告组数量",
   group_material_allocation: "广告组素材安排",
@@ -140,15 +137,6 @@ export function StrategyForm({
     ),
     [creationStatus, setCreationStatus] = useState<"ENABLE" | "DISABLE">(
       initial?.creation_status || "ENABLE",
-    ),
-    [scheduleType, setScheduleType] = useState<
-      "SCHEDULE_FROM_NOW" | "SCHEDULE_START_END"
-    >(initial?.schedule_type || "SCHEDULE_FROM_NOW"),
-    [scheduleStartTime, setScheduleStartTime] = useState(
-      initial?.schedule_start_time || "",
-    ),
-    [scheduleEndTime, setScheduleEndTime] = useState(
-      initial?.schedule_end_time || "",
     ),
     [groupGenerationMode, setGroupGenerationMode] = useState<
       "FIXED" | "BY_MATERIAL"
@@ -223,11 +211,6 @@ export function StrategyForm({
     budget_strategy: budgetStrategy,
     bid_strategy: bidStrategy,
     creation_status: creationStatus,
-    schedule_type: scheduleType,
-    schedule_start_time:
-      scheduleType === "SCHEDULE_START_END" ? scheduleStartTime || null : null,
-    schedule_end_time:
-      scheduleType === "SCHEDULE_START_END" ? scheduleEndTime || null : null,
     target_roas: bidStrategy === "TARGET_ROAS" ? roas : null,
     group_generation_mode: groupGenerationMode,
     group_count: groupGenerationMode === "FIXED" ? Number(groupCount) : null,
@@ -317,19 +300,6 @@ export function StrategyForm({
   else if (capacity !== undefined && Number(creativeCount) > capacity)
     local.creative_count = `创意数量不能超过 ${capacity} 条有效且不重复的英文文案。`
   if (templateIssue) local.campaign_name_template = templateIssue
-  if (scheduleType === "SCHEDULE_START_END") {
-    const utcPattern = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/
-    if (!utcPattern.test(scheduleStartTime))
-      local.schedule_start_time = "请输入 UTC 格式：YYYY-MM-DD HH:MM:SS。"
-    if (!utcPattern.test(scheduleEndTime))
-      local.schedule_end_time = "请输入 UTC 格式：YYYY-MM-DD HH:MM:SS。"
-    if (
-      utcPattern.test(scheduleStartTime) &&
-      utcPattern.test(scheduleEndTime) &&
-      scheduleEndTime <= scheduleStartTime
-    )
-      local.schedule_end_time = "结束时间必须晚于开始时间。"
-  }
   // 规则切换后互斥字段会卸载；过滤动态不可见字段，避免顶部定位和保存按钮被旧错误卡住。
   const visibleFields = new Set([
     "name",
@@ -338,7 +308,6 @@ export function StrategyForm({
     "budget_strategy",
     "bid_strategy",
     "creation_status",
-    "schedule_type",
     "group_generation_mode",
     "ad_generation_mode",
     "creative_count",
@@ -369,10 +338,6 @@ export function StrategyForm({
     visibleFields.add("max_materials_per_ad")
   }
   if (bidStrategy === "TARGET_ROAS") visibleFields.add("target_roas")
-  if (scheduleType === "SCHEDULE_START_END") {
-    visibleFields.add("schedule_start_time")
-    visibleFields.add("schedule_end_time")
-  }
   const errors = Object.fromEntries(
       Object.entries({ ...local, ...serverErrors }).filter(([key]) =>
         visibleFields.has(key),
@@ -1052,9 +1017,9 @@ export function StrategyForm({
           </Card>
           <Card>
             <CardHeader>
-              <CardTitle>创建状态与投放排期</CardTitle>
+              <CardTitle>创建状态</CardTitle>
               <CardDescription>
-                时间统一按 UTC 填写；排期字段会冻结到本次预览并发送到广告组创建请求。
+                控制广告对象创建后是启用还是停用；本次投放排期请在广告搭建页面设置。
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -1069,39 +1034,6 @@ export function StrategyForm({
                   ],
                   "停用状态会创建对象但不投放，需要后续手动启用。",
                 )}
-                {selectField(
-                  "schedule_type",
-                  scheduleType,
-                  (value) => {
-                    const next = value as
-                      | "SCHEDULE_FROM_NOW"
-                      | "SCHEDULE_START_END"
-                    setScheduleType(next)
-                    if (next === "SCHEDULE_FROM_NOW") {
-                      setScheduleStartTime("")
-                      setScheduleEndTime("")
-                    }
-                  },
-                  [
-                    { value: "SCHEDULE_FROM_NOW", label: "立即开始" },
-                    { value: "SCHEDULE_START_END", label: "指定开始和结束时间" },
-                  ],
-                  "立即开始由系统在首次执行时写入当前 UTC 时间。",
-                )}
-                {scheduleType === "SCHEDULE_START_END" &&
-                  input(
-                    "schedule_start_time",
-                    scheduleStartTime,
-                    setScheduleStartTime,
-                    "格式：YYYY-MM-DD HH:MM:SS，例如 2026-10-06 16:00:00。",
-                  )}
-                {scheduleType === "SCHEDULE_START_END" &&
-                  input(
-                    "schedule_end_time",
-                    scheduleEndTime,
-                    setScheduleEndTime,
-                    "必须晚于开始时间；格式同样为 UTC。",
-                  )}
               </FieldGroup>
             </CardContent>
           </Card>

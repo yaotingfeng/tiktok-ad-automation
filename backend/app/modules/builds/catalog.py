@@ -96,6 +96,7 @@ def draft_summary(
         else None,
         provider_kind=provider.kind if provider else "",
         link_config=display_config(row.link_config),
+        delivery_config=row.delivery_config,
         input_counts=counts,
         drama_count=drama_count,
         account_count=account_count,

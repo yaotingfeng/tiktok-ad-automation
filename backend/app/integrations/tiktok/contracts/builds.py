@@ -202,9 +202,7 @@ class AdGroupObservedFacts(FrozenModel):
     @model_validator(mode="after")
     def validate_budget_and_bid_contract(self) -> Self:
         if self.schedule_type == "SCHEDULE_START_END":
-            if self.schedule_end_time is None:
-                raise ValueError("SCHEDULE_START_END requires schedule_end_time")
-            if self.schedule_end_time <= self.schedule_start_time:
+            if self.schedule_end_time is not None and self.schedule_end_time <= self.schedule_start_time:
                 raise ValueError("schedule_end_time must be later than schedule_start_time")
         elif self.schedule_end_time is not None:
             raise ValueError("SCHEDULE_FROM_NOW must not include schedule_end_time")

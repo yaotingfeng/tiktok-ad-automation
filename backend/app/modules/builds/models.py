@@ -83,6 +83,10 @@ class BuildDraft(SQLModel, table=True):
     link_config: dict[str, Any] = Field(
         default_factory=dict, sa_column=Column(JSONB, nullable=False)
     )
+    # 排期属于本次广告搭建，不能随投放策略版本复用。
+    delivery_config: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
     targeting_override: dict[str, Any] | None = Field(
         default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True)
     )

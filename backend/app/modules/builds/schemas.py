@@ -1,13 +1,47 @@
-from datetime import datetime
+from __future__ import annotations
+
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.modules.builds.targeting_schemas import AudienceTargeting
 from app.modules.providers.schemas import DramaCandidate
 
 InputText = Annotated[str, Field(max_length=1000)]
+
+
+class DeliveryConfig(BaseModel):
+    """广告搭建阶段的投放排期；策略只保存预算和结构规则。"""
+
+    model_config = ConfigDict(extra="forbid")
+    schedule_mode: Literal["IMMEDIATE", "START_AT", "START_END"] = "IMMEDIATE"
+    schedule_start_time: str | None = None
+    schedule_end_time: str | None = None
+
+    @model_validator(mode="after")
+    def validate_schedule(self) -> DeliveryConfig:
+        def parse(value: str | None) -> datetime | None:
+            if value is None:
+                return None
+            import re
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", value):
+                raise ValueError("排期时间必须为 UTC YYYY-MM-DD HH:MM:SS")
+            try:
+                return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+            except ValueError as exc:
+                raise ValueError("排期时间不是有效日期") from exc
+        start, end = parse(self.schedule_start_time), parse(self.schedule_end_time)
+        if self.schedule_mode == "IMMEDIATE" and (start or end):
+            raise ValueError("立即开始不应填写排期时间")
+        if self.schedule_mode in {"START_AT", "START_END"} and start is None:
+            raise ValueError("指定时间开启必须填写开始时间")
+        if self.schedule_mode == "START_AT" and end is not None:
+            raise ValueError("指定时间开启不应填写结束时间")
+        if self.schedule_mode == "START_END" and (end is None or end <= start):
+            raise ValueError("结束时间必须晚于开始时间")
+        return self
 
 
 class ManualLinkInput(BaseModel):
@@ -39,6 +73,7 @@ class CreateDraftRequest(BaseModel):
     drama_lines: list[InputText] = Field(max_length=1000)
     account_lines: list[InputText] = Field(max_length=100_000)
     link_config: dict[str, Any] = Field(default_factory=dict)
+    delivery_config: DeliveryConfig = Field(default_factory=DeliveryConfig)
 
 
 class PatchDraftRequest(BaseModel):
@@ -54,6 +89,7 @@ class PatchDraftRequest(BaseModel):
     drama_lines: list[InputText] | None = Field(default=None, max_length=1000)
     account_lines: list[InputText] | None = Field(default=None, max_length=100_000)
     link_config: dict[str, Any] | None = None
+    delivery_config: DeliveryConfig | None = None
 
 
 class DraftSaved(BaseModel):
@@ -90,6 +126,7 @@ class DraftSummary(BaseModel):
     execution_connection_id: UUID | None = None
     application_id: str
     link_config: dict[str, str | int | bool | None]
+    delivery_config: DeliveryConfig = Field(default_factory=DeliveryConfig)
     custom_provider_name: str | None = None
     provider_kind: str = ""
     input_counts: dict[str, dict[str, int]]
