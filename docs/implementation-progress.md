@@ -1,3 +1,10 @@
+## 2026-10-05：广告报表接入重新评估
+
+- 完成测试环境与代码链路复核：staging 的 `ADS_SYNC_ENABLED=false`，`ads-directory`/`ads-reporting` 保持 inactive，前端 GET 只读本地已发布事实；这解释了当前全量“数据缺失”而不是平台空报表。
+- 对照 TikTok 官方 Reporting、SDK、数据延迟、限流和 v2.0 文档，确认报表主链必须是同步/异步查询 + 本地事实库；没有足够的官方可重放指标推送合同可替代历史回补。
+- 记录四个方案缺口：历史只覆盖 30/35/90 天、调度未选择异步、下级报表未显式 `STATUS_ALL`、报告过滤 ID 分片工具未接入调度。详细评估见 `docs/validation/2026-10-05-ads-reporting-integration-reassessment.md`。
+- 验证范围：`uv run --frozen python -m compileall -q app/modules/reporting app/integrations/tiktok/adapters/sdk_reporting.py` 与 Ruff 通过；报表 pytest 需要命名的专用 PostgreSQL，未把缺少测试数据库冒充通过；隔离导入适配器测试还暴露现有模块循环导入，未修改生产代码。
+
 ## 2026-09-30：B2 聚合与趋势复审修复
 
 - B2 复审修复已完成：按 BC/provider/剧名合并 drama，选择账户本地时区的非重叠事实桶并读取 coverage，五段素材 subject 与真实 use_ref 证明固定，素材 D0 明确 UNSUPPORTED。
