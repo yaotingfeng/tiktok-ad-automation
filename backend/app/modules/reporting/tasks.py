@@ -32,6 +32,7 @@ from app.modules.reporting.sync_models import ReportSyncRun, SyncSchedule
 
 TASK_NAME = "reporting.sync_step"
 SCAN_TASK_NAME = "reporting.scan_due"
+MAX_REPORT_RUNS_PER_SCAN = 100
 register_dispatch_task(TASK_NAME, "ads-reporting")
 register_dispatch_task(SCAN_TASK_NAME, "control")
 
@@ -279,7 +280,9 @@ def scan_due_runs(*, database_engine: Any, now: datetime | None = None) -> int:
                 col(ReportSyncRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
                 col(ReportSyncRun.next_attempt_at).is_(None)
                 | (col(ReportSyncRun.next_attempt_at) <= now),
-            ).with_for_update(skip_locked=True)
+            ).order_by(col(ReportSyncRun.created_at), col(ReportSyncRun.id))
+            .limit(MAX_REPORT_RUNS_PER_SCAN)
+            .with_for_update(skip_locked=True)
         ).all()
         # Short current-day shards are served before the long historical
         # backfill.  The two queues still have independent one-slot consumers,
