@@ -842,6 +842,13 @@ def ensure_sync_schedules(
 seed_sync_schedules = ensure_sync_schedules
 
 
+# A schedule scan runs in the control worker's 30-second budget.  Each due
+# schedule performs a route/membership check and can fan out into several
+# report shards, so processing the entire account pool in one transaction can
+# starve the report queue.  Leave the rest due for the next scan.
+MAX_SCHEDULES_PER_SCAN = 50
+
+
 def enqueue_due_syncs(session: Session, *, now: datetime) -> tuple[UUID, ...]:
     """Claim due plans and create bounded report runs in the caller transaction."""
 
@@ -858,6 +865,7 @@ def enqueue_due_syncs(session: Session, *, now: datetime) -> tuple[UUID, ...]:
             ),
         )
         .order_by(col(SyncSchedule.next_due_at), col(SyncSchedule.id))
+        .limit(MAX_SCHEDULES_PER_SCAN)
         .with_for_update(skip_locked=True)
     ).all()
     result: list[UUID] = []
