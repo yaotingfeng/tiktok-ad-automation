@@ -13,6 +13,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.core.context import TenantContext
@@ -168,8 +169,8 @@ def _new_snapshot(
     now = datetime.now(UTC)
     statuses = [row.coverage.get("status") for row in rows]
     publication_versions = {"reporting": 1}
-    facts = session.exec(
-        select(ReportFact.published_version).where(
+    max_version = session.exec(
+        select(func.max(ReportFact.published_version)).where(
             ReportFact.tenant_id == context.tenant_id,
             ReportFact.advertiser_id.in_(allowed_ids),
             ReportSyncRun.bc_id == bc_id,
@@ -180,9 +181,9 @@ def _new_snapshot(
             (ReportSyncRun.tenant_id == ReportFact.tenant_id)
             & (ReportSyncRun.id == ReportFact.source_run_id),
         )
-    ).all()
-    if facts:
-        publication_versions["max"] = max(int(value) for value in facts)
+    ).one()
+    if max_version is not None:
+        publication_versions["max"] = int(max_version)
     naming_versions = {"directory": 1}
     campaigns = {
         (ref.advertiser_id, ref.remote_id)

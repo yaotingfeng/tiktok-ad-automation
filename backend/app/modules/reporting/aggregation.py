@@ -49,6 +49,20 @@ def scoped_rows(session: Session, model: Any, *, context: TenantContext, bc_id: 
     )
     if filters.advertiser_ids:
         statement = statement.where(col(model.advertiser_id).in_(filters.advertiser_ids))
+    if model in {ReportFact, ReportCoverage}:
+        # A first page must not materialize every historical fact for the BC.
+        # The selected date is local to each account, so use a conservative UTC
+        # buffer here and let ``select_facts`` apply the exact account timezone
+        # boundary after rows are loaded.  The report-period index covers this
+        # predicate and keeps the small staging host below its memory budget.
+        contracts = CONTRACTS[filters.dimension]
+        start = datetime.combine(filters.start_date - timedelta(days=1), time.min, UTC)
+        end = datetime.combine(filters.end_date + timedelta(days=2), time.min, UTC)
+        statement = statement.where(
+            col(model.report_contract).in_(contracts),
+            col(model.bucket_start) < end,
+            col(model.bucket_end) > start,
+        )
     return list(session.exec(statement).all())
 
 
