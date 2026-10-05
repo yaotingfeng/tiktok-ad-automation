@@ -45,6 +45,10 @@ SOURCE_KEYS = (
     "content_md5",
 )
 BATCH_CLAIM_SECONDS = READ_HARD_LIMIT + 30
+# A full 20x10 claim writes 200 member/outbox rows. Keep its worker lease
+# short, but give the local transaction enough time to finish on slow staging
+# PostgreSQL; the remote TikTok request remains bounded by READ_HARD_LIMIT.
+BATCH_CLAIM_HARD_LIMIT = 10 * 60
 
 
 def rectangle(
@@ -146,7 +150,7 @@ def try_prepare_batch(
             # 个 worker 释放同一冻结范围的 advisory lock。它是本地事务，
             # 不应复用单次远端读取的 40 秒期限；远端请求仍由 _send_batch
             # 使用 READ_HARD_LIMIT 独立约束。
-            task_deadline=now + timedelta(seconds=BATCH_CLAIM_SECONDS),
+            task_deadline=now + timedelta(seconds=BATCH_CLAIM_HARD_LIMIT),
         ) as db,
         db.begin(),
     ):
