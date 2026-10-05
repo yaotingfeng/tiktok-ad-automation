@@ -209,12 +209,17 @@ def generate_preview(
         )
     delivery = draft.delivery_config or {}
     mode = delivery.get("schedule_mode", "IMMEDIATE")
+    schedule_type = "SCHEDULE_START_END" if mode == "START_END" else "SCHEDULE_FROM_NOW"
     config = config.model_copy(
         update={
             "targeting": targeting,
-            "schedule_type": "SCHEDULE_FROM_NOW" if mode == "IMMEDIATE" else "SCHEDULE_START_END",
-            "schedule_start_time": delivery.get("schedule_start_time"),
-            "schedule_end_time": delivery.get("schedule_end_time"),
+            "schedule_type": schedule_type,
+            "schedule_start_time": (
+                delivery.get("schedule_start_time") if mode != "IMMEDIATE" else None
+            ),
+            "schedule_end_time": (
+                delivery.get("schedule_end_time") if mode == "START_END" else None
+            ),
         }
     )
     row = BuildPreview(

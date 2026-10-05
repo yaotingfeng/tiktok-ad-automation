@@ -335,7 +335,10 @@ def prepare_request(
         if frozen.schedule_type == "SCHEDULE_FROM_NOW":
             resolved.update(
                 schedule_type="SCHEDULE_FROM_NOW",
-                schedule_start_time=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
+                # 官方接口用 SCHEDULE_FROM_NOW 同时覆盖“立即开始”和“指定开始时间”；
+                # 没有指定时间时才在首次执行边界生成当前 UTC 时间。
+                schedule_start_time=frozen.schedule_start_time
+                or datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
             )
         else:
             resolved.update(
