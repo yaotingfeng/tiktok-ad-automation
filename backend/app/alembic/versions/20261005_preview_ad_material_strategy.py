@@ -16,6 +16,12 @@ def upgrade() -> None:
     op.add_column(
         "planned_ad", sa.Column("base_ad_no", sa.Integer(), nullable=False, server_default="1")
     )
+    # 旧预览的所有创意都属于基础广告 1；回填完成后移除默认值，避免未来
+    # 漏写基础广告序号时静默生成错误的冻结映射。
+    op.execute("UPDATE preview_copy SET base_ad_no = 1 WHERE base_ad_no IS NULL")
+    op.execute("UPDATE planned_ad SET base_ad_no = 1 WHERE base_ad_no IS NULL")
+    op.alter_column("preview_copy", "base_ad_no", server_default=None)
+    op.alter_column("planned_ad", "base_ad_no", server_default=None)
     # 创意序号只在基础广告内唯一；基础广告序号必须进入原复合主键。
     op.drop_constraint("preview_copy_pkey", "preview_copy", type_="primary")
     op.create_primary_key(

@@ -130,6 +130,8 @@ def test_preview_ad_material_migration_installs_frozen_child_trigger():
     )
     assert "check_preview_child_write()" in migration
     assert "DROP TRIGGER preview_ad_material_frozen ON preview_ad_material" in migration
+    assert 'op.alter_column("preview_copy", "base_ad_no", server_default=None)' in migration
+    assert 'op.alter_column("planned_ad", "base_ad_no", server_default=None)' in migration
 
 
 def test_ad_material_models_keep_ad_base_in_primary_key():
@@ -188,6 +190,47 @@ def test_partial_ad_rows_in_another_drama_disable_legacy_fallback():
         group_no=1,
         base_ad_no=1,
     ) == []
+
+
+def test_frozen_ad_material_ids_reads_skipped_materials_in_one_batch():
+    first_id, skipped_id, last_id = uuid4(), uuid4(), uuid4()
+
+    class Result:
+        def __init__(self, values):
+            self.values = values
+
+        def all(self):
+            return self.values
+
+        def first(self):
+            return self.values[0] if self.values else None
+
+    class Session:
+        def __init__(self):
+            self.calls = 0
+
+        def exec(self, query):
+            self.calls += 1
+            # ad rows, preview-level presence, then one batched skipped-ID query
+            return Result(
+                [first_id, skipped_id, last_id]
+                if self.calls == 1
+                else [uuid4()]
+                if self.calls == 2
+                else [skipped_id]
+            )
+
+    session = Session()
+    assert frozen_ad_material_ids(
+        session,
+        tenant_id=uuid4(),
+        preview_id=uuid4(),
+        drama_id=uuid4(),
+        group_no=1,
+        base_ad_no=1,
+        unit_id=uuid4(),
+    ) == [first_id, last_id]
+    assert session.calls == 3
 
 
 def test_material_limit_uses_frozen_scene_limit():

@@ -8,6 +8,11 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_valida
 from app.modules.builds.targeting_schemas import AudienceTargeting
 from app.modules.strategies.naming import DEFAULT_NAME_TEMPLATE
 
+# 固定数量会直接展开为内存计划。100 既覆盖当前产品的正常批量策略，也给
+# 单次预览保留明确的工程边界，避免恶意或误填整数导致无界 tuple 分配。
+MAX_FIXED_GROUP_COUNT = 100
+MAX_FIXED_ADS_PER_GROUP = 100
+
 
 def exact_decimal(value: Any) -> Any:
     if isinstance(value, (float, bool)):
@@ -30,13 +35,17 @@ class StrategyConfig(BaseModel):
     bid_strategy: Literal["HIGHEST_VALUE", "TARGET_ROAS"] = "HIGHEST_VALUE"
     targeting: AudienceTargeting = Field(default_factory=AudienceTargeting)
     group_generation_mode: Literal["FIXED", "BY_MATERIAL"] = "FIXED"
-    group_count: int | None = Field(default=1, gt=0, strict=True)
+    group_count: int | None = Field(
+        default=1, gt=0, le=MAX_FIXED_GROUP_COUNT, strict=True
+    )
     group_material_allocation: Literal["SHARED", "SEQUENTIAL_AVERAGE"] | None = (
         "SHARED"
     )
     max_materials_per_group: int | None = Field(default=None, gt=0, strict=True)
     ad_generation_mode: Literal["FIXED", "BY_MATERIAL"] = "BY_MATERIAL"
-    ads_per_group: int | None = Field(default=None, gt=0, strict=True)
+    ads_per_group: int | None = Field(
+        default=None, gt=0, le=MAX_FIXED_ADS_PER_GROUP, strict=True
+    )
     ad_material_allocation: Literal["SHARED", "SEQUENTIAL_AVERAGE"] | None = None
     max_materials_per_ad: int | None = Field(default=1, gt=0, strict=True)
     creative_count: int = Field(default=1, gt=0, strict=True)

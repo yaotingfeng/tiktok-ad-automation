@@ -94,15 +94,16 @@ def frozen_ad_material_ids(
         ids = list(session.exec(legacy).all())
     if unit_id is None:
         return ids
-    return [
-        material_id
-        for material_id in ids
-        if session.exec(
+    if not ids:
+        return ids
+    # 当前广告的素材一次性读取排除证据，避免每个素材单独查询跳过表。
+    skipped = set(
+        session.exec(
             select(PreviewSkippedMaterial.material_id).where(
                 PreviewSkippedMaterial.tenant_id == tenant_id,
                 PreviewSkippedMaterial.unit_id == unit_id,
-                PreviewSkippedMaterial.material_id == material_id,
+                col(PreviewSkippedMaterial.material_id).in_(ids),
             )
-        ).first()
-        is None
-    ]
+        ).all()
+    )
+    return [material_id for material_id in ids if material_id not in skipped]

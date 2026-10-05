@@ -58,6 +58,18 @@ def test_generation_mode_requires_its_matching_quantity(changes):
         base_config(**changes)
 
 
+@pytest.mark.parametrize("field", ["group_count", "ads_per_group"])
+def test_fixed_structure_counts_have_a_bounded_product_limit(field):
+    with pytest.raises(ValidationError) as error:
+        base_config(
+            group_count=101 if field == "group_count" else 1,
+            ad_generation_mode="FIXED",
+            ads_per_group=101 if field == "ads_per_group" else 1,
+        )
+
+    assert field in str(error.value)
+
+
 def test_allocation_is_only_valid_for_fixed_generation():
     with pytest.raises(ValidationError):
         base_config(

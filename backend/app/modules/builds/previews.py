@@ -32,7 +32,6 @@ from app.modules.builds.models import (
 )
 from app.modules.builds.preview_materials import (
     SKIPPABLE_MATERIAL_REASONS,
-    frozen_ad_material_ids,
     material_limit_exceeded,
     material_not_skipped,
 )
@@ -801,7 +800,7 @@ def _expand_unit(
             PreviewCopy.drama_id == drama.drama_id,
             PreviewCopy.group_no == group.group_no,
         )
-        .order_by(col(PreviewCopy.creative_no))
+        .order_by(col(PreviewCopy.base_ad_no), col(PreviewCopy.creative_no))
     ).all()
     maximum_ads = unit.scene_snapshot["field_constraints"].get("max_ads_per_adgroup")
     base_ad_count = len({copy.base_ad_no for copy in copies})
@@ -1392,38 +1391,123 @@ def get_frozen_groups(
     rows = session.exec(
         query.order_by(col(PlannedGroup.group_no)).limit(limit + 1)
     ).all()
-    items = []
-    for group in rows[:limit]:
-        materials = session.exec(
-            select(PreviewGroupMaterial.material_id)
+    page_groups = rows[:limit]
+    group_nos = [group.group_no for group in page_groups]
+    group_ids = [group.id for group in page_groups]
+
+    # 先批量读取当前页的组级映射与排除证据，后续组/广告只在内存中组装，
+    # 保留旧预览的组级回退，同时避免每个广告、每个素材查询一次跳过表。
+    group_material_rows = []
+    if group_nos:
+        group_material_rows = session.exec(
+            select(PreviewGroupMaterial)
             .where(
                 PreviewGroupMaterial.tenant_id == context.tenant_id,
                 PreviewGroupMaterial.preview_id == preview.id,
                 PreviewGroupMaterial.drama_id == unit.drama_id,
-                PreviewGroupMaterial.group_no == group.group_no,
-                material_not_skipped(
-                    tenant_id=context.tenant_id,
-                    unit_id=unit_id,
-                    material_id=col(PreviewGroupMaterial.material_id),
-                ),
+                col(PreviewGroupMaterial.group_no).in_(group_nos),
             )
-            .order_by(col(PreviewGroupMaterial.position))
-            .limit(101)
+            .order_by(
+                col(PreviewGroupMaterial.group_no),
+                col(PreviewGroupMaterial.position),
+            )
         ).all()
+    group_material_map: dict[int, list[UUID]] = {}
+    for row in group_material_rows:
+        group_material_map.setdefault(row.group_no, []).append(row.material_id)
+    ads_by_group: dict[UUID, list[PlannedAd]] = {}
+    if group_ids:
+        planned_ads = session.exec(
+            select(PlannedAd)
+            .where(
+                PlannedAd.tenant_id == context.tenant_id,
+                col(PlannedAd.group_id).in_(group_ids),
+            )
+            .order_by(
+                col(PlannedAd.group_id),
+                col(PlannedAd.base_ad_no),
+                col(PlannedAd.creative_no),
+            )
+        ).all()
+        for ad in planned_ads:
+            ads_by_group.setdefault(ad.group_id, []).append(ad)
+    for ads in ads_by_group.values():
+        if len(ads) > 100:
+            raise DomainError("preview_group_too_large", "创意数量超过可用上限")
+
+    # 只要预览曾写入过广告级映射，就把缺行视为冻结数据损坏；完全没有
+    # 广告级行的历史预览继续使用组级素材快照。
+    has_ad_material_rows = bool(
+        session.exec(
+            select(PreviewAdMaterial.material_id).where(
+                PreviewAdMaterial.tenant_id == context.tenant_id,
+                PreviewAdMaterial.preview_id == preview.id,
+            )
+        ).first()
+    )
+    ad_material_map: dict[tuple[int, int], list[UUID]] = {}
+    if has_ad_material_rows and group_nos:
+        ad_material_rows = session.exec(
+            select(PreviewAdMaterial)
+            .where(
+                PreviewAdMaterial.tenant_id == context.tenant_id,
+                PreviewAdMaterial.preview_id == preview.id,
+                PreviewAdMaterial.drama_id == unit.drama_id,
+                col(PreviewAdMaterial.group_no).in_(group_nos),
+            )
+            .order_by(
+                col(PreviewAdMaterial.group_no),
+                col(PreviewAdMaterial.base_ad_no),
+                col(PreviewAdMaterial.position),
+            )
+        ).all()
+        for row in ad_material_rows:
+            ad_material_map.setdefault(
+                (row.group_no, row.base_ad_no), []
+            ).append(row.material_id)
+
+    candidate_material_ids = {
+        material_id for ids in group_material_map.values() for material_id in ids
+    }
+    candidate_material_ids.update(
+        material_id for ids in ad_material_map.values() for material_id in ids
+    )
+    skipped_material_ids: set[UUID] = set()
+    if candidate_material_ids:
+        skipped_material_ids = set(
+            session.exec(
+                select(PreviewSkippedMaterial.material_id).where(
+                    PreviewSkippedMaterial.tenant_id == context.tenant_id,
+                    PreviewSkippedMaterial.unit_id == unit_id,
+                    col(PreviewSkippedMaterial.material_id).in_(candidate_material_ids),
+                )
+            ).all()
+        )
+    filtered_group_materials = {
+        group_no: [
+            material_id
+            for material_id in material_ids
+            if material_id not in skipped_material_ids
+        ]
+        for group_no, material_ids in group_material_map.items()
+    }
+    for group_no in group_nos:
+        materials = filtered_group_materials.get(group_no, [])
         if len(materials) > 100:
             raise DomainError(
                 "preview_group_too_large", "素材分组超过可用上限，请先调整草稿分组"
             )
-        ads = session.exec(
-            select(PlannedAd)
-            .where(
-                PlannedAd.tenant_id == context.tenant_id, PlannedAd.group_id == group.id
-            )
-            .order_by(col(PlannedAd.creative_no))
-            .limit(101)
-        ).all()
-        if len(ads) > 100:
-            raise DomainError("preview_group_too_large", "创意数量超过可用上限")
+    for key, material_ids in tuple(ad_material_map.items()):
+        ad_material_map[key] = [
+            material_id
+            for material_id in material_ids
+            if material_id not in skipped_material_ids
+        ]
+
+    items = []
+    for group in page_groups:
+        materials = filtered_group_materials.get(group.group_no, [])
+        ads = ads_by_group.get(group.id, [])
         items.append(
             FrozenGroup(
                 group_id=group.id,
@@ -1440,14 +1524,11 @@ def get_frozen_groups(
                         text=a.text,
                         cta_option_ids=tuple(a.cta_option_ids),
                         material_ids=tuple(
-                            frozen_ad_material_ids(
-                                session,
-                                tenant_id=context.tenant_id,
-                                preview_id=preview.id,
-                                drama_id=unit.drama_id,
-                                group_no=group.group_no,
-                                base_ad_no=a.base_ad_no,
-                                unit_id=unit_id,
+                            ad_material_map.get(
+                                (group.group_no, a.base_ad_no),
+                                []
+                                if has_ad_material_rows
+                                else filtered_group_materials.get(group.group_no, []),
                             )
                         ),
                     )

@@ -93,22 +93,52 @@ def validate_strategy(
         issues: list[ValidationIssue] = []
         for item in error.errors():
             message = str(item.get("msg", "configuration_invalid"))
+            location = item.get("loc") or ()
+            located_field = location[-1] if location else None
             field = next(
                 (
                     candidate
                     for candidate in (
+                        "budget",
+                        "currency",
+                        "group_generation_mode",
                         "group_count",
                         "group_material_allocation",
                         "max_materials_per_group",
+                        "ad_generation_mode",
                         "ads_per_group",
                         "ad_material_allocation",
                         "max_materials_per_ad",
+                        "creative_count",
                         "target_roas",
+                        "copy_pool_version",
+                        "cta_option_ids",
+                        "campaign_name_template",
                     )
-                    if candidate in message
+                    if candidate == located_field or candidate in message
                 ),
                 "config",
             )
+            # Pydantic 的模型级错误 loc 为空，只能从业务消息恢复字段；无法
+            # 恢复时保留 config，调用方仍可按稳定错误码展示整段配置错误。
+            if field == "config" and located_field in {
+                "budget",
+                "currency",
+                "group_generation_mode",
+                "group_count",
+                "group_material_allocation",
+                "max_materials_per_group",
+                "ad_generation_mode",
+                "ads_per_group",
+                "ad_material_allocation",
+                "max_materials_per_ad",
+                "creative_count",
+                "target_roas",
+                "copy_pool_version",
+                "cta_option_ids",
+                "campaign_name_template",
+            }:
+                field = located_field
             code = (
                 "target_roas_required"
                 if "required for TARGET_ROAS" in message
