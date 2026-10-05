@@ -44,9 +44,7 @@ class StrategyConfig(BaseModel):
     targeting: AudienceTargeting = Field(default_factory=AudienceTargeting)
     group_generation_mode: Literal["FIXED", "BY_MATERIAL"] = "FIXED"
     group_count: int | None = Field(default=1, gt=0, strict=True)
-    group_material_allocation: Literal["SHARED", "SEQUENTIAL_AVERAGE"] | None = (
-        "SHARED"
-    )
+    group_material_allocation: Literal["SHARED", "SEQUENTIAL_AVERAGE"] | None = "SHARED"
     max_materials_per_group: int | None = Field(default=None, gt=0, strict=True)
     ad_generation_mode: Literal["FIXED", "BY_MATERIAL"] = "BY_MATERIAL"
     ads_per_group: int | None = Field(default=None, gt=0, strict=True)
@@ -74,9 +72,7 @@ class StrategyConfig(BaseModel):
                     "max_materials_per_group is required for BY_MATERIAL groups"
                 )
             if self.group_count is not None:
-                raise ValueError(
-                    "group_count is only valid for FIXED groups"
-                )
+                raise ValueError("group_count is only valid for FIXED groups")
             if self.group_material_allocation is not None:
                 raise ValueError(
                     "group_material_allocation is only valid for FIXED groups"
@@ -91,9 +87,7 @@ class StrategyConfig(BaseModel):
                 )
         else:
             if self.max_materials_per_ad is None:
-                raise ValueError(
-                    "max_materials_per_ad is required for BY_MATERIAL ads"
-                )
+                raise ValueError("max_materials_per_ad is required for BY_MATERIAL ads")
             if self.ads_per_group is not None:
                 raise ValueError("ads_per_group is only valid for BY_MATERIAL ads")
             if self.ad_material_allocation is not None:
@@ -113,9 +107,7 @@ class StrategyConfig(BaseModel):
                 and self.group_count is not None
                 and self.group_count > MAX_FIXED_GROUP_COUNT
             ):
-                raise ValueError(
-                    f"group_count exceeds maximum {MAX_FIXED_GROUP_COUNT}"
-                )
+                raise ValueError(f"group_count exceeds maximum {MAX_FIXED_GROUP_COUNT}")
             if (
                 self.ad_generation_mode == "FIXED"
                 and self.ads_per_group is not None

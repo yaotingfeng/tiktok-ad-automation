@@ -426,11 +426,15 @@ def _snapshot_drama(
                 DraftGroupMaterial.draft_id == preview.draft_id,
                 DraftGroupMaterial.drama_id == drama_id,
             )
-            .order_by(col(DraftGroupMaterial.group_no), col(DraftGroupMaterial.position))
+            .order_by(
+                col(DraftGroupMaterial.group_no), col(DraftGroupMaterial.position)
+            )
         ).all()
         pool = get_copies(session, context=context, version_id=config.copy_pool_version)
         seed = int(_hash("", [preview.id, drama_id]), 16)
-        plans = plan_structure(source_materials, config=config, pool=tuple(pool), seed=seed)
+        plans = plan_structure(
+            source_materials, config=config, pool=tuple(pool), seed=seed
+        )
         for group_plan in plans:
             group = PreviewDramaGroup(
                 **_scope(preview), drama_id=drama_id, group_no=group_plan.group_no
@@ -440,24 +444,35 @@ def _snapshot_drama(
             _record(preview, group.model_dump(mode="json"))
             for position, material_id in enumerate(group_plan.material_ids, 1):
                 material_row = PreviewGroupMaterial(
-                    **_scope(preview), drama_id=drama_id, group_no=group_plan.group_no,
-                    position=position, material_id=material_id,
+                    **_scope(preview),
+                    drama_id=drama_id,
+                    group_no=group_plan.group_no,
+                    position=position,
+                    material_id=material_id,
                 )
                 session.add(material_row)
                 _record(preview, material_row.model_dump(mode="json"))
             for ad_plan in group_plan.ads:
                 for position, material_id in enumerate(ad_plan.material_ids, 1):
                     mapping = PreviewAdMaterial(
-                        **_scope(preview), drama_id=drama_id, group_no=group_plan.group_no,
-                        base_ad_no=ad_plan.base_ad_no, position=position, material_id=material_id,
+                        **_scope(preview),
+                        drama_id=drama_id,
+                        group_no=group_plan.group_no,
+                        base_ad_no=ad_plan.base_ad_no,
+                        position=position,
+                        material_id=material_id,
                     )
                     session.add(mapping)
                     _record(preview, mapping.model_dump(mode="json"))
                 for creative_no, copy in enumerate(ad_plan.copies, 1):
                     value = PreviewCopy(
-                        **_scope(preview), drama_id=drama_id, group_no=group_plan.group_no,
-                        base_ad_no=ad_plan.base_ad_no, creative_no=creative_no,
-                        copy_id=copy.copy_id, text=copy.text,
+                        **_scope(preview),
+                        drama_id=drama_id,
+                        group_no=group_plan.group_no,
+                        base_ad_no=ad_plan.base_ad_no,
+                        creative_no=creative_no,
+                        copy_id=copy.copy_id,
+                        text=copy.text,
                     )
                     session.add(value)
                     _record(preview, value.model_dump(mode="json"))
@@ -730,10 +745,13 @@ def _expand_unit(
                 ).all()
             )
             for identity in skipped_ids:
-                if session.get(
-                    PreviewSkippedMaterial,
-                    (preview.tenant_id, unit.id, identity),
-                ) is None:
+                if (
+                    session.get(
+                        PreviewSkippedMaterial,
+                        (preview.tenant_id, unit.id, identity),
+                    )
+                    is None
+                ):
                     skipped = PreviewSkippedMaterial(
                         tenant_id=preview.tenant_id,
                         unit_id=unit.id,
@@ -974,27 +992,30 @@ def get_preview_summary(
     ).one()
     # 旧预览没有广告级映射时，按冻结的组素材和 PlannedAd 关系还原展示口径。
     # 这里只读既有冻结行，不重新规划广告或素材。
-    material_allocation_count = ad_material_rows or session.exec(
-        select(func.count(PreviewGroupMaterial.material_id))
-        .select_from(PlannedAd)
-        .join(
-            PlannedGroup,
-            (PlannedGroup.tenant_id == PlannedAd.tenant_id)
-            & (PlannedGroup.preview_id == PlannedAd.preview_id)
-            & (PlannedGroup.id == PlannedAd.group_id),
-        )
-        .join(
-            PreviewGroupMaterial,
-            (PreviewGroupMaterial.tenant_id == PlannedGroup.tenant_id)
-            & (PreviewGroupMaterial.preview_id == PlannedGroup.preview_id)
-            & (PreviewGroupMaterial.drama_id == PlannedGroup.drama_id)
-            & (PreviewGroupMaterial.group_no == PlannedGroup.group_no),
-        )
-        .where(
-            PlannedAd.tenant_id == context.tenant_id,
-            PlannedAd.preview_id == preview_id,
-        )
-    ).one()
+    material_allocation_count = (
+        ad_material_rows
+        or session.exec(
+            select(func.count(PreviewGroupMaterial.material_id))
+            .select_from(PlannedAd)
+            .join(
+                PlannedGroup,
+                (PlannedGroup.tenant_id == PlannedAd.tenant_id)
+                & (PlannedGroup.preview_id == PlannedAd.preview_id)
+                & (PlannedGroup.id == PlannedAd.group_id),
+            )
+            .join(
+                PreviewGroupMaterial,
+                (PreviewGroupMaterial.tenant_id == PlannedGroup.tenant_id)
+                & (PreviewGroupMaterial.preview_id == PlannedGroup.preview_id)
+                & (PreviewGroupMaterial.drama_id == PlannedGroup.drama_id)
+                & (PreviewGroupMaterial.group_no == PlannedGroup.group_no),
+            )
+            .where(
+                PlannedAd.tenant_id == context.tenant_id,
+                PlannedAd.preview_id == preview_id,
+            )
+        ).one()
+    )
     config = preview.config
     budget_strategy = config.get("budget_strategy", "SERIES")
     bid_strategy = frozen_bid_strategy(
@@ -1003,16 +1024,19 @@ def get_preview_summary(
     group_generation_mode = config.get("group_generation_mode", "FIXED")
     ad_generation_mode = config.get("ad_generation_mode", "BY_MATERIAL")
     creative_count = int(config.get("creative_count", 1))
-    structure_summary = build_structure_summary(
-        campaign_count=n,
-        group_count=g,
-        ad_count=a,
-        creative_count=creative_count,
-        group_generation_mode=group_generation_mode,
-        ad_generation_mode=ad_generation_mode,
-        material_allocation_count=int(material_allocation_count),
-        unique_material_count=int(unique_material_count),
-    ) + f"；预算策略 {budget_strategy_label(budget_strategy)}；竞价策略 {bid_strategy_label(bid_strategy)}"
+    structure_summary = (
+        build_structure_summary(
+            campaign_count=n,
+            group_count=g,
+            ad_count=a,
+            creative_count=creative_count,
+            group_generation_mode=group_generation_mode,
+            ad_generation_mode=ad_generation_mode,
+            material_allocation_count=int(material_allocation_count),
+            unique_material_count=int(unique_material_count),
+        )
+        + f"；预算策略 {budget_strategy_label(budget_strategy)}；竞价策略 {bid_strategy_label(bid_strategy)}"
+    )
     issue_count = session.exec(
         select(func.count())
         .select_from(PreviewInput)
@@ -1427,10 +1451,14 @@ def get_frozen_groups(
             raise DomainError(
                 "preview_group_too_large", "素材分组超过可用上限，请先调整草稿分组"
             )
-        material_rank = func.row_number().over(
-            partition_by=PreviewGroupMaterial.group_no,
-            order_by=PreviewGroupMaterial.position,
-        ).label("row_no")
+        material_rank = (
+            func.row_number()
+            .over(
+                partition_by=PreviewGroupMaterial.group_no,
+                order_by=PreviewGroupMaterial.position,
+            )
+            .label("row_no")
+        )
         material_rows = (
             select(
                 PreviewGroupMaterial.group_no,
@@ -1482,10 +1510,14 @@ def get_frozen_groups(
         )
         if any(count > 100 for count in ad_counts.values()):
             raise DomainError("preview_group_too_large", "创意数量超过可用上限")
-        ad_rank = func.row_number().over(
-            partition_by=PlannedAd.group_id,
-            order_by=(PlannedAd.base_ad_no, PlannedAd.creative_no),
-        ).label("row_no")
+        ad_rank = (
+            func.row_number()
+            .over(
+                partition_by=PlannedAd.group_id,
+                order_by=(PlannedAd.base_ad_no, PlannedAd.creative_no),
+            )
+            .label("row_no")
+        )
         ad_rows = (
             select(PlannedAd, ad_rank)
             .where(
@@ -1542,16 +1574,18 @@ def get_frozen_groups(
             )
         ).all()
         if any(row[2] > 100 for row in ad_material_counts):
-            raise DomainError(
-                "preview_group_too_large", "广告素材数量超过可用上限"
+            raise DomainError("preview_group_too_large", "广告素材数量超过可用上限")
+        ad_material_rank = (
+            func.row_number()
+            .over(
+                partition_by=(
+                    PreviewAdMaterial.group_no,
+                    PreviewAdMaterial.base_ad_no,
+                ),
+                order_by=PreviewAdMaterial.position,
             )
-        ad_material_rank = func.row_number().over(
-            partition_by=(
-                PreviewAdMaterial.group_no,
-                PreviewAdMaterial.base_ad_no,
-            ),
-            order_by=PreviewAdMaterial.position,
-        ).label("row_no")
+            .label("row_no")
+        )
         ad_material_rows_query = (
             select(
                 PreviewAdMaterial.group_no,
@@ -1590,9 +1624,9 @@ def get_frozen_groups(
             )
         ).all()
         for row in ad_material_rows:
-            ad_material_map.setdefault(
-                (row.group_no, row.base_ad_no), []
-            ).append(row.material_id)
+            ad_material_map.setdefault((row.group_no, row.base_ad_no), []).append(
+                row.material_id
+            )
     filtered_group_materials = {
         group_no: list(material_ids)
         for group_no, material_ids in group_material_map.items()

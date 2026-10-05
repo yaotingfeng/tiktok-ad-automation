@@ -46,7 +46,9 @@ def strategy(**changes):
 
 
 def copies():
-    return tuple(CopyChoice(copy_id=uuid4(), text=f"copy-{index}") for index in range(4))
+    return tuple(
+        CopyChoice(copy_id=uuid4(), text=f"copy-{index}") for index in range(4)
+    )
 
 
 def test_planner_reuses_shared_materials_per_group_and_copies_per_base_ad():
@@ -56,7 +58,11 @@ def test_planner_reuses_shared_materials_per_group_and_copies_per_base_ad():
     assert len(groups) == 2
     assert all(len(group.material_ids) == 20 for group in groups)
     assert all(len(group.ads) == 2 for group in groups)
-    assert all(len(ad.material_ids) == 20 and len(ad.copies) == 2 for group in groups for ad in group.ads)
+    assert all(
+        len(ad.material_ids) == 20 and len(ad.copies) == 2
+        for group in groups
+        for ad in group.ads
+    )
     assert {ad.base_ad_no for ad in groups[0].ads} == {1, 2}
 
 
@@ -144,15 +150,22 @@ def test_preview_ad_material_migration_installs_frozen_child_trigger():
     )
     assert "check_preview_child_write()" in migration
     assert "DROP TRIGGER preview_ad_material_frozen ON preview_ad_material" in migration
-    assert 'op.alter_column("preview_copy", "base_ad_no", server_default=None)' in migration
-    assert 'op.alter_column("planned_ad", "base_ad_no", server_default=None)' in migration
+    assert (
+        'op.alter_column("preview_copy", "base_ad_no", server_default=None)'
+        in migration
+    )
+    assert (
+        'op.alter_column("planned_ad", "base_ad_no", server_default=None)' in migration
+    )
     assert "base_ad_no contains non-legacy identities" in migration
     assert "legacy ad keys would conflict" in migration
 
 
 def test_ad_material_models_keep_ad_base_in_primary_key():
     assert "base_ad_no" in {column.name for column in PreviewCopy.__table__.primary_key}
-    assert "base_ad_no" in {column.name for column in PreviewAdMaterial.__table__.primary_key}
+    assert "base_ad_no" in {
+        column.name for column in PreviewAdMaterial.__table__.primary_key
+    }
 
 
 def test_legacy_frozen_group_materials_are_used_when_ad_rows_are_absent():
@@ -174,16 +187,19 @@ def test_legacy_frozen_group_materials_are_used_when_ad_rows_are_absent():
             self.calls += 1
             return Result([] if self.calls < 3 else [uuid4(), uuid4()])
 
-    assert len(
-        frozen_ad_material_ids(
-            LegacySession(),
-            tenant_id=uuid4(),
-            preview_id=uuid4(),
-            drama_id=uuid4(),
-            group_no=1,
-            base_ad_no=1,
+    assert (
+        len(
+            frozen_ad_material_ids(
+                LegacySession(),
+                tenant_id=uuid4(),
+                preview_id=uuid4(),
+                drama_id=uuid4(),
+                group_no=1,
+                base_ad_no=1,
+            )
         )
-    ) == 2
+        == 2
+    )
 
 
 def test_partial_ad_rows_in_another_drama_disable_legacy_fallback():
@@ -198,14 +214,17 @@ def test_partial_ad_rows_in_another_drama_disable_legacy_fallback():
         def exec(self, query):
             return Result()
 
-    assert frozen_ad_material_ids(
-        Session(),
-        tenant_id=uuid4(),
-        preview_id=uuid4(),
-        drama_id=uuid4(),
-        group_no=1,
-        base_ad_no=1,
-    ) == []
+    assert (
+        frozen_ad_material_ids(
+            Session(),
+            tenant_id=uuid4(),
+            preview_id=uuid4(),
+            drama_id=uuid4(),
+            group_no=1,
+            base_ad_no=1,
+        )
+        == []
+    )
 
 
 def test_frozen_ad_material_ids_reads_skipped_materials_in_one_batch():

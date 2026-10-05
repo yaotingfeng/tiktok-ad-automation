@@ -64,13 +64,17 @@ def frozen_ad_material_ids(
     Previews frozen before the ad-level table existed have no rows there. Their
     group-level order remains the authoritative historical intent.
     """
-    query = select(PreviewAdMaterial.material_id).where(
-        PreviewAdMaterial.tenant_id == tenant_id,
-        PreviewAdMaterial.preview_id == preview_id,
-        PreviewAdMaterial.drama_id == drama_id,
-        PreviewAdMaterial.group_no == group_no,
-        PreviewAdMaterial.base_ad_no == base_ad_no,
-    ).order_by(col(PreviewAdMaterial.position))
+    query = (
+        select(PreviewAdMaterial.material_id)
+        .where(
+            PreviewAdMaterial.tenant_id == tenant_id,
+            PreviewAdMaterial.preview_id == preview_id,
+            PreviewAdMaterial.drama_id == drama_id,
+            PreviewAdMaterial.group_no == group_no,
+            PreviewAdMaterial.base_ad_no == base_ad_no,
+        )
+        .order_by(col(PreviewAdMaterial.position))
+    )
     ids = list(session.exec(query).all())
     # 只有整部剧尚未写入广告级映射时才兼容历史组级快照；新表部分缺行
     # 表示冻结数据损坏，必须返回空集合让执行链明确阻断。
@@ -85,12 +89,16 @@ def frozen_ad_material_ids(
     if not ids and any_ad_rows:
         return []
     if not any_ad_rows:
-        legacy = select(PreviewGroupMaterial.material_id).where(
-            PreviewGroupMaterial.tenant_id == tenant_id,
-            PreviewGroupMaterial.preview_id == preview_id,
-            PreviewGroupMaterial.drama_id == drama_id,
-            PreviewGroupMaterial.group_no == group_no,
-        ).order_by(col(PreviewGroupMaterial.position))
+        legacy = (
+            select(PreviewGroupMaterial.material_id)
+            .where(
+                PreviewGroupMaterial.tenant_id == tenant_id,
+                PreviewGroupMaterial.preview_id == preview_id,
+                PreviewGroupMaterial.drama_id == drama_id,
+                PreviewGroupMaterial.group_no == group_no,
+            )
+            .order_by(col(PreviewGroupMaterial.position))
+        )
         ids = list(session.exec(legacy).all())
     if unit_id is None:
         return ids

@@ -59,9 +59,7 @@ def _average_slices(
 ) -> tuple[tuple[UUID, ...], ...]:
     """把连续素材切成 unit_count 段，余数依次放到前面的段。"""
     if unit_count > len(material_ids):
-        raise DomainError(
-            "invalid_material_allocation", "invalid_material_allocation"
-        )
+        raise DomainError("invalid_material_allocation", "invalid_material_allocation")
     width, remainder = divmod(len(material_ids), unit_count)
     result: list[tuple[UUID, ...]] = []
     cursor = 0
@@ -88,9 +86,7 @@ def _allocate_groups(
     if config.group_generation_mode == "FIXED" and (
         config.group_count is None or config.group_count > MAX_FIXED_GROUP_COUNT
     ):
-        raise DomainError(
-            "configuration_invalid", "固定广告组数量超过本地安全上限"
-        )
+        raise DomainError("configuration_invalid", "固定广告组数量超过本地安全上限")
     if not material_ids:
         # 没有素材时不生成空广告组；平均模式仍需明确报告数量不足。
         if (
@@ -118,9 +114,7 @@ def _allocate_ads(
     if config.ad_generation_mode == "FIXED" and (
         config.ads_per_group is None or config.ads_per_group > MAX_FIXED_ADS_PER_GROUP
     ):
-        raise DomainError(
-            "configuration_invalid", "固定每组广告数量超过本地安全上限"
-        )
+        raise DomainError("configuration_invalid", "固定每组广告数量超过本地安全上限")
     if not material_ids:
         if (
             config.ad_generation_mode == "FIXED"
