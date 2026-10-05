@@ -22,6 +22,7 @@ from app.core.errors import DomainError
 from app.integrations.tiktok.bounded_resources import bounded_session
 from app.integrations.tiktok.mcp.protocol import McpProtocolProfile, load_mcp_protocol
 from app.integrations.tiktok.mcp_auth.transport import exchange_token, strict_json
+from app.models import User
 from app.modules.accounts.connection_models import McpAuthorizationAttempt
 from app.modules.accounts.models import TikTokConnection
 from app.modules.accounts.schemas import AuthorizationURL
@@ -138,12 +139,14 @@ def require_mcp_admin(
     context = require_tenant(
         session, actor_id=actor_id, tenant_id=tenant_id, action="manage"
     )
-    # 超级管理员的通用平台管理权限不能替代本租户授权所需的有效成员关系。
-    # 该检查也用于回调和逐次候选 HTTP，不沿用发起授权时的历史成员状态。
+    # 平台管理员可代管已进入的租户，与 API 授权入口共享同一 manage 权限模型。
+    # 普通管理员仍必须保留当前租户的有效成员关系；回调和逐次候选 HTTP
+    # 继续在调用时重建权限，不能沿用发起授权时的历史成员状态。
+    user = session.get(User, actor_id, populate_existing=True)
     member = session.get(
         TenantMembership, (tenant_id, actor_id), populate_existing=True
     )
-    if member is None or not member.active:
+    if not user or not user.is_superuser and (member is None or not member.active):
         raise DomainError("action_forbidden", "请由该租户的有效管理员操作 MCP 授权")
     return context
 

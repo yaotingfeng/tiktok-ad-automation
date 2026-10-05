@@ -557,7 +557,23 @@ def test_oauth_timeout_is_bounded_without_live_request(monkeypatch):
     assert monotonic() - started < 1
 
 
-def test_global_admin_without_tenant_membership_cannot_authorize(session):
+def test_platform_admin_without_tenant_membership_can_manage_mcp(session):
+    """平台管理员进入代管租户后，MCP 管理权限应与其他账户管理入口一致。"""
+    from uuid import uuid4
+
+    from app.integrations.tiktok.mcp_auth.service import require_mcp_admin
+    from app.models import User
+    from app.modules.tenants.models import Tenant
+
+    actor = User(username=str(uuid4()), hashed_password="unused", is_superuser=True)
+    tenant = Tenant(name=f"synthetic-{uuid4()}")
+    session.add_all([actor, tenant])
+    session.flush()
+    context = require_mcp_admin(session, actor_id=actor.id, tenant_id=tenant.id)
+    assert context.role == "platform_admin"
+
+
+def test_non_admin_without_tenant_membership_cannot_authorize(session):
     from uuid import uuid4
 
     from app.core.context import TenantContext
@@ -565,7 +581,7 @@ def test_global_admin_without_tenant_membership_cannot_authorize(session):
     from app.modules.accounts.models import TikTokConnection
     from app.modules.tenants.models import Tenant
 
-    actor = User(username=str(uuid4()), hashed_password="unused", is_superuser=True)
+    actor = User(username=str(uuid4()), hashed_password="unused", is_superuser=False)
     tenant = Tenant(name=f"synthetic-{uuid4()}")
     session.add_all([actor, tenant])
     session.flush()
@@ -673,7 +689,7 @@ def test_receipt_callback_failure_never_returns_oauth_success(monkeypatch):
 
 
 @pytest.mark.parametrize("phase", ["redeem", "publish", "cancel"])
-def test_superuser_inactive_membership_blocks_callback(
+def test_inactive_membership_blocks_callback(
     client, committed_context, oauth_wire, phase
 ):
     from sqlmodel import Session
@@ -684,7 +700,7 @@ def test_superuser_inactive_membership_blocks_callback(
 
     with Session(engine) as own:
         user = own.get(User, committed_context.actor_id)
-        user.is_superuser = True
+        user.is_superuser = False
         own.add(user)
         own.commit()
     state, identity = issue(committed_context)

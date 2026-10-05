@@ -1664,3 +1664,8 @@
 - 7 项 harness 只是 DB-free supplemental checks：`uv run pytest --confcutdir=/tmp /tmp/task7_offline.py -q`（7 passed）；同时新增真实 DB-bound A/B、结构矩阵、素材切片幂等和恢复冻结行回归，分别位于 `test_previews.py`、`test_material_execution.py`、`test_partial_material_execution.py`、`test_cover_execution.py`，等待专用 PostgreSQL/Redis 后执行。前端冻结预算/竞价回归 `PATH="$PWD/.tools/node_modules/.bin:$PATH" bun run --cwd frontend test -- tests/build-preparation.spec.ts -g '预览展示冻结定向|当前版本已有预览' --workers=1`（2 passed）。
 - 迁移脚本可解析，`uv run alembic heads` 显示 `20261005_preview_ad_material_strategy` 与既有 `provider_kinds_expansion` 两个 head；upgrade/downgrade、完整后端回归和 Redis 恢复验证因专用 PostgreSQL `127.0.0.1:15432` 未运行而未执行。全量前端命令受既有 fixture/策略选择器失败影响，具体证据记录在 `docs/validation/2026-10-04-general-ad-build-strategy.md`。
 - 完整前端回归为手动中断的部分结果：44 passed / 13 failed / 1 interrupted / 60 not run；失败来自既有策略选择器/草稿 fixture。本轮没有 staging 预览、真实 TikTok 读回或广告创建/启用写入；真实平台写入仍需独立授权和 staging 验收，不得据此宣称生产验收。
+
+## 2026-10-05：平台管理员 MCP 授权权限统一
+
+- MCP 管理入口原先在 `require_mcp_admin` 额外要求当前操作者必须存在有效租户成员关系，导致平台管理员进入代管租户后点击“添加 BC”返回 `action_forbidden`；现与 API 授权共用 `manage` 模型，平台管理员可管理已进入租户，普通管理员仍需有效成员关系。
+- 回归测试覆盖平台管理员无租户成员关系可执行 MCP 管理，以及普通无成员用户和成员失效仍被拒绝。Ruff、compileall 通过；完整 PostgreSQL 回归因本机未配置命名 `_test` 专用数据库未执行。

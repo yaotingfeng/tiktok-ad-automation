@@ -503,7 +503,7 @@ def test_mandatory_account_contract_drift_blocks_business(
     assert not any(c["method"] == "tools/call" for c in catalog_wire.calls)
 
 
-def test_superuser_membership_rechecked_before_next_call_and_binding(
+def test_membership_rechecked_before_next_call_and_binding(
     committed_context, candidate, catalog_wire, redis_client
 ):
     from app.models import User
@@ -511,7 +511,7 @@ def test_superuser_membership_rechecked_before_next_call_and_binding(
 
     with Session(engine) as own:
         user = own.get(User, committed_context.actor_id)
-        user.is_superuser = True
+        user.is_superuser = False
         own.add(user)
         own.commit()
     bc_page(catalog_wire)
@@ -547,7 +547,7 @@ def test_superuser_membership_rechecked_before_next_call_and_binding(
         assert error.value.code == "action_forbidden"
 
 
-def test_superuser_without_membership_cannot_read_another_admin_candidate(
+def test_non_admin_without_membership_cannot_read_another_admin_candidate(
     committed_context, candidate, catalog_wire, redis_client
 ):
     from uuid import uuid4
@@ -557,7 +557,7 @@ def test_superuser_without_membership_cannot_read_another_admin_candidate(
     from app.core.context import TenantContext
     from app.models import User
 
-    other = User(username=str(uuid4()), hashed_password="unused", is_superuser=True)
+    other = User(username=str(uuid4()), hashed_password="unused", is_superuser=False)
     actor_id = other.id
     with Session(engine) as own:
         own.add(other)
