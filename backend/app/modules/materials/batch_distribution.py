@@ -376,54 +376,60 @@ def try_prepare_batch(
         )
         db.add(batch)
         db.flush()
-        for dist, op in selected:
-            previous_batch = op.remote_response.get("share_batch_id")
-            if previous_batch:
-                prior = db.get(MaterialShareBatch, UUID(previous_batch))
-                receipt = db.exec(
-                    select(MaterialShareBatchReceipt).where(
-                        MaterialShareBatchReceipt.batch_id == UUID(previous_batch),
-                        MaterialShareBatchReceipt.tenant_id == context.tenant_id,
-                        MaterialShareBatchReceipt.effect == "NOT_SENT",
+        # queue_distribution checks for an existing outbox row. Every call also
+        # triggers SQLAlchemy autoflush; suppressing that flush inside the loop
+        # avoids repeatedly writing the growing 20x10 batch before each check.
+        with db.no_autoflush:
+            for dist, op in selected:
+                previous_batch = op.remote_response.get("share_batch_id")
+                if previous_batch:
+                    prior = db.get(MaterialShareBatch, UUID(previous_batch))
+                    receipt = db.exec(
+                        select(MaterialShareBatchReceipt).where(
+                            MaterialShareBatchReceipt.batch_id == UUID(previous_batch),
+                            MaterialShareBatchReceipt.tenant_id == context.tenant_id,
+                            MaterialShareBatchReceipt.effect == "NOT_SENT",
+                        )
+                    ).first()
+                    if prior is None or prior.status != "not_sent" or receipt is None:
+                        raise DomainError(
+                            "material_batch_replay_forbidden",
+                            "原批次没有完整未发送证据",
+                        )
+                op.attempt_token = uuid4()
+                op.claimed_until = now + timedelta(seconds=BATCH_CLAIM_SECONDS)
+                op.remote_response = {
+                    **op.remote_response,
+                    "revision": op.remote_response.get("revision", 0) + 1,
+                    "share_batch_id": str(batch.id),
+                }
+                db.add(
+                    MaterialShareBatchMember(
+                        tenant_id=context.tenant_id,
+                        bc_id=dist.bc_id,
+                        batch_id=batch.id,
+                        material_id=dist.material_id,
+                        advertiser_id=dist.advertiser_id,
+                        distribution_id=dist.id,
+                        operation_id=op.id,
+                        operation_claim=op.attempt_token,
+                        operation_digest=op.request_digest,
+                        source_video_id=op.remote_response["source_video_id"],
+                        source_evidence={
+                            key: op.remote_response.get(key) for key in SOURCE_KEYS
+                        },
+                        revision=op.remote_response["revision"],
                     )
-                ).first()
-                if prior is None or prior.status != "not_sent" or receipt is None:
-                    raise DomainError(
-                        "material_batch_replay_forbidden", "原批次没有完整未发送证据"
-                    )
-            op.attempt_token = uuid4()
-            op.claimed_until = now + timedelta(seconds=BATCH_CLAIM_SECONDS)
-            op.remote_response = {
-                **op.remote_response,
-                "revision": op.remote_response.get("revision", 0) + 1,
-                "share_batch_id": str(batch.id),
-            }
-            db.add(
-                MaterialShareBatchMember(
-                    tenant_id=context.tenant_id,
-                    bc_id=dist.bc_id,
-                    batch_id=batch.id,
-                    material_id=dist.material_id,
-                    advertiser_id=dist.advertiser_id,
-                    distribution_id=dist.id,
-                    operation_id=op.id,
-                    operation_claim=op.attempt_token,
-                    operation_digest=op.request_digest,
-                    source_video_id=op.remote_response["source_video_id"],
-                    source_evidence={
-                        key: op.remote_response.get(key) for key in SOURCE_KEYS
-                    },
-                    revision=op.remote_response["revision"],
                 )
-            )
-            single.queue_distribution(
-                db,
-                dist,
-                op,
-                kind="prepare",
-                due=op.claimed_until,
-                claim_id=op.attempt_token,
-            )
+                single.queue_distribution(
+                    db,
+                    dist,
+                    op,
+                    kind="prepare",
+                    due=op.claimed_until,
+                    claim_id=op.attempt_token,
+                )
+        db.flush()
         batch_id = batch.id
     _send_batch(
         database_engine=database_engine,
