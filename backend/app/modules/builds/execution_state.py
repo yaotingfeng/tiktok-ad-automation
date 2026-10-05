@@ -131,9 +131,9 @@ def arm_request(
         validate_ad_assets(session, step=step, unit=unit, body=body)
     if (
         claim.kind in {"CAMPAIGN", "ADGROUP", "AD"}
-        and body.get("operation_status") != "ENABLE"
+        and body.get("operation_status") not in {"ENABLE", "DISABLE"}
     ):
-        raise DomainError("invalid_creation_status", "创建状态必须为启用")
+        raise DomainError("invalid_creation_status", "创建状态必须为 ENABLE 或 DISABLE")
     try:
         encoded = json.dumps(
             body, sort_keys=True, separators=(",", ":"), allow_nan=False

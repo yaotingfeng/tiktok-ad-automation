@@ -170,6 +170,10 @@ class FrozenUnit(BaseModel):
     # 预览冻结后执行只读取这两个值，不再从可编辑策略版本回读。
     budget_strategy: Literal["SERIES", "ADGROUP"] = "SERIES"
     bid_strategy: Literal["HIGHEST_VALUE", "TARGET_ROAS"] = "HIGHEST_VALUE"
+    creation_status: Literal["ENABLE", "DISABLE"] = "ENABLE"
+    schedule_type: Literal["SCHEDULE_FROM_NOW", "SCHEDULE_START_END"] = "SCHEDULE_FROM_NOW"
+    schedule_start_time: str | None = None
+    schedule_end_time: str | None = None
     readiness: Readiness
     reason_codes: tuple[str, ...]
     scene_snapshot: dict[str, Any]

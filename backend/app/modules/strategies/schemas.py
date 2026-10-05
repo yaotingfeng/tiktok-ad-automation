@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal
@@ -38,6 +39,8 @@ Money = Annotated[
 def _parse_utc_schedule(value: str | None) -> datetime | None:
     if value is None:
         return None
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", value):
+        raise ValueError("schedule timestamps must use UTC YYYY-MM-DD HH:MM:SS")
     try:
         return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
     except ValueError:
