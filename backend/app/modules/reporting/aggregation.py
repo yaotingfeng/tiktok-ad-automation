@@ -41,7 +41,7 @@ CONTRACTS = {
 
 
 def scoped_rows(session: Session, model: Any, *, context: TenantContext, bc_id: str,
-                filters: ReportingFilter) -> list[Any]:
+                filters: ReportingFilter, remote_ids: set[str] | None = None) -> list[Any]:
     """每次读取显式传入行的 tenant 列，并使用 B1 的当前 BC grant 子查询。"""
     statement = apply_authorized_scope(
         session, select(model), context=context, bc_id=bc_id,
@@ -49,6 +49,8 @@ def scoped_rows(session: Session, model: Any, *, context: TenantContext, bc_id: 
     )
     if filters.advertiser_ids:
         statement = statement.where(col(model.advertiser_id).in_(filters.advertiser_ids))
+    if remote_ids:
+        statement = statement.where(col(model.remote_id).in_(remote_ids))
     if model in {ReportFact, ReportCoverage}:
         # A first page must not materialize every historical fact for the BC.
         # The selected date is local to each account, so use a conservative UTC
@@ -454,14 +456,41 @@ def _row_coverage(items: Sequence[ReportFact], coverages: Sequence[ReportCoverag
 def build_dimension_rows(session: Session, *, context: TenantContext, bc_id: str,
                          filters: ReportingFilter) -> tuple[ReportRow, ...]:
     compile_filter(filters)
+    if filters.dimension == "material":
+        # Material rows only need the ad objects referenced by the selected
+        # facts. Loading every creative and every historical directory row here
+        # consumed most of the small staging host before the page was returned.
+        coverages = scoped_rows(session, ReportCoverage, context=context, bc_id=bc_id, filters=filters)
+        facts = select_facts(
+            scoped_rows(session, ReportFact, context=context, bc_id=bc_id, filters=filters),
+            coverages,
+            filters,
+        )
+        materials = scoped_rows(session, AdMaterialReference, context=context, bc_id=bc_id, filters=filters)
+        ad_ids = {
+            str(value)
+            for fact in facts
+            for key in ("ad_id", "ad_id_v2", "smart_plus_ad_id")
+            if (value := fact.attributes.get(key))
+        }
+        directory = {
+            (row.advertiser_id, row.kind, row.remote_id): row
+            for row in scoped_rows(
+                session,
+                AdObject,
+                context=context,
+                bc_id=bc_id,
+                filters=filters,
+                remote_ids=ad_ids,
+            )
+            if row.kind == "ad"
+        }
+        return _build_material_rows(facts, materials, filters, directory=directory)
     accounts = {row.advertiser_id: row for row in scoped_rows(session, AdvertiserAccount, context=context, bc_id=bc_id, filters=filters)}
     objects = {(row.advertiser_id, row.kind, row.remote_id): row for row in scoped_rows(session, AdObject, context=context, bc_id=bc_id, filters=filters)}
     projections = latest_projections(scoped_rows(session, CampaignNameProjection, context=context, bc_id=bc_id, filters=filters))
     coverages = scoped_rows(session, ReportCoverage, context=context, bc_id=bc_id, filters=filters)
     facts = select_facts(scoped_rows(session, ReportFact, context=context, bc_id=bc_id, filters=filters), coverages, filters)
-    if filters.dimension == "material":
-        return _build_material_rows(facts, scoped_rows(session, AdMaterialReference, context=context, bc_id=bc_id, filters=filters), filters,
-                                    directory=objects, projections=projections)
     kind = "campaign" if filters.dimension == "drama" else filters.dimension
     identities = {(fact.advertiser_id, fact.subject_key[1]) for fact in facts if fact.subject_key[0] == kind}
     identities.update((adv, rid) for adv, obj_kind, rid in objects if obj_kind == kind)
