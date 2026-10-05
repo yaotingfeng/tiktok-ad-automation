@@ -491,7 +491,10 @@ export function StrategyForm({
       finish(data)
     } catch (e) {
       const status = e instanceof AxiosError ? e.response?.status : undefined
-      if (attempted && (!status || status >= 500 || status === 408)) {
+      if (
+        attempted &&
+        (!status || status >= 500 || status === 408 || status === 429)
+      ) {
         setUnknownRequest(sessionStorage.getItem(requestKey))
         return
       }

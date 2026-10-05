@@ -46,7 +46,7 @@ async function boundary(
     role?: "operator" | "viewer" | "tenant_admin"
     count?: number
     capacity?: number
-    mode?: "conflict" | "unknown" | "unknown404" | "failure"
+    mode?: "conflict" | "unknown" | "unknown404" | "failure" | "rate_limited"
     empty?: boolean
     deny?: boolean
     loggedOut?: boolean
@@ -254,6 +254,15 @@ async function boundary(
           config: body.config,
           latest_version: 2,
         })
+      if (options.mode === "rate_limited")
+        return reply(
+          {
+            code: "request_rate_limited",
+            message: "保存请求正在处理中",
+            retryable: true,
+          },
+          429,
+        )
       if (options.mode === "unknown" || options.mode === "unknown404")
         return route.abort("timedout")
       return reply(row, 201)
@@ -374,6 +383,72 @@ test("超时保存按 request_id 精确确认，不重复发送版本写入", as
     "77777777-7777-4777-8777-777777777777",
   )
 })
+for (const kind of ["append", "create"] as const) {
+  test(`429 ${kind} 保存保留原 request ledger，不重复写入`, async ({
+    page,
+  }) => {
+    const { requests } = await boundary(page, {
+      mode: "rate_limited",
+      empty: kind === "create",
+    })
+    // 模拟 429 后回查暂时不可用，验证 ledger 在结果未确认时持续保留。
+    await page.route("**/api/tenants/*/strategy-save-requests/*", (route) =>
+      route.fulfill({
+        status: 404,
+        json: { code: "strategy_not_found", message: "尚无该保存记录" },
+      }),
+    )
+    await page.goto(
+      kind === "append" ? editUrl : `/tenants/${A}/strategies/new`,
+    )
+    if (kind === "create") {
+      await page.getByLabel("策略名称", { exact: true }).fill("限流策略")
+      await page.getByLabel("日预算", { exact: true }).fill("101.00")
+    } else {
+      await page.getByLabel("日预算", { exact: true }).fill("101.00")
+    }
+    await page
+      .getByRole("button", {
+        name: kind === "append" ? "保存为新版本" : "创建策略",
+        exact: true,
+      })
+      .click()
+    await expect(
+      page.getByText("保存结果待确认", { exact: true }),
+    ).toBeVisible()
+    const write = requests.find(
+      (r) => r.method === "POST" && !r.path.endsWith("/validate"),
+    )!
+    expect(write.body.request_id).toMatch(/^[0-9a-f-]{36}$/)
+    expect(
+      await page.evaluate(
+        ({ tenantId, strategyId }) =>
+          sessionStorage.getItem(
+            `strategy-save-pending:${tenantId}:${strategyId}`,
+          ),
+        { tenantId: A, strategyId: kind === "append" ? S : "new" },
+      ),
+    ).toBe(write.body.request_id)
+    await page.reload()
+    await expect(
+      page.getByText("保存结果待确认", { exact: true }),
+    ).toBeVisible()
+    expect(
+      await page.evaluate(
+        ({ tenantId, strategyId }) =>
+          sessionStorage.getItem(
+            `strategy-save-pending:${tenantId}:${strategyId}`,
+          ),
+        { tenantId: A, strategyId: kind === "append" ? S : "new" },
+      ),
+    ).toBe(write.body.request_id)
+    expect(
+      requests.filter(
+        (r) => r.method === "POST" && !r.path.endsWith("/validate"),
+      ),
+    ).toHaveLength(1)
+  })
+}
 test("未知保存回查404不视为未保存，刷新后仍只回查同一请求", async ({
   page,
 }) => {
