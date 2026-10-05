@@ -530,6 +530,26 @@ def _build_material_rows(facts: Sequence[ReportFact], materials: Sequence[AdMate
                          *, directory: dict[tuple[str, str, str], AdObject] | None = None,
                          projections: dict[tuple[str, str], CampaignNameProjection] | None = None) -> tuple[ReportRow, ...]:
     directory, projections = directory or {}, projections or {}
+    material_index: dict[tuple[str, str, str, str], list[AdMaterialReference]] = defaultdict(list)
+    for material in materials:
+        # Material facts carry the platform main-material identity while the
+        # directory may expose either the main or ad-level identity.  Index both
+        # forms once; scanning all 48k references for every fact made the
+        # material page quadratic and exhausted the staging host's memory.
+        main_key = (
+            (material.advertiser_id, material.ad_remote_id,
+             material.main_material_id, material.main_material_type)
+            if material.main_material_id and material.main_material_type
+            else None
+        )
+        platform_key = (
+            material.advertiser_id, material.ad_remote_id,
+            material.platform_material_id, material.material_type
+        )
+        if main_key is not None:
+            material_index[main_key].append(material)
+        if platform_key != main_key:
+            material_index[platform_key].append(material)
     grouped: dict[tuple[str, ...], list[ReportFact]] = defaultdict(list)
     for fact in facts:
         if len(fact.subject_key) != 5 or fact.subject_key[0] != "material":
@@ -556,12 +576,9 @@ def _build_material_rows(facts: Sequence[ReportFact], materials: Sequence[AdMate
                 proof_complete = False
                 continue
             matches = [
-                material for material in materials
-                if material.advertiser_id == adv
-                and material.ad_remote_id == ad_id
-                and (material.main_material_id == main_id or material.platform_material_id == main_id)
-                and (material.main_material_type == main_type or material.material_type == main_type)
-                and material.complete
+                material
+                for material in material_index.get((adv, ad_id, main_id, main_type), ())
+                if material.complete
                 and ("ad_material_id" not in item.attributes or material.ad_material_id == ad_material_id)
             ]
             if len(matches) != 1:
