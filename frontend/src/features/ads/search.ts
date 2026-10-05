@@ -45,11 +45,19 @@ const ID_COLUMN_BY_DISPLAY_COLUMN: Record<string, string> = {
   material_name: "main_material_id",
 }
 export function defaultAdsSearch(): AdsSearch {
-  const today = new Date().toISOString().slice(0, 10)
+  // 日报通常在次日才完整发布；默认打开最近一个完整自然日，避免把当天
+  // 尚未落库的指标误显示成整页“数据缺失”。用户仍可手动切回当天查看。
+  const yesterday = new Date()
+  yesterday.setDate(yesterday.getDate() - 1)
+  const defaultDate = [
+    yesterday.getFullYear(),
+    String(yesterday.getMonth() + 1).padStart(2, "0"),
+    String(yesterday.getDate()).padStart(2, "0"),
+  ].join("-")
   return {
     dimension: "campaign",
-    start_date: today,
-    end_date: today,
+    start_date: defaultDate,
+    end_date: defaultDate,
     query: "",
     page: 1,
     limit: 50,
