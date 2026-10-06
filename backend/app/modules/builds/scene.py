@@ -39,6 +39,7 @@ RESOURCES: tuple[SceneResource, ...] = (
     "minis",
     "cta",
     "vbo",
+    "regions",
     "budget",
 )
 
@@ -63,7 +64,7 @@ def _require_bounded_worker() -> None:
         raise DomainError("scene_worker_unbounded", "场景刷新需要有界后台任务")
 
 
-SCENE_CONTRACT_REVISION = "dual-channel-scene-2026-09-21-v5"
+SCENE_CONTRACT_REVISION = "dual-channel-scene-2026-10-06-v6-budget-evidence"
 
 
 def scene_scope_basis(*, route: FrozenTikTokRoute, business: dict[str, Any]) -> str:
