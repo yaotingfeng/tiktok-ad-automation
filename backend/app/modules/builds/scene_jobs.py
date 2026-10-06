@@ -199,6 +199,7 @@ def ensure_scene_preparation(
             "account_access_denied",
             "account_build_unverified",
             "scene_refresh_failed",
+            "tiktok_local_resources_unavailable",
         }
         proof = (
             get_capability_evidence(
@@ -215,7 +216,10 @@ def ensure_scene_preparation(
             return ScenePreparation(
                 job.id, "blocked", job.error_code or "scene_refresh_failed"
             )
-        if job.status == "FAILED" and job.error_code == "scene_refresh_failed":
+        if job.status == "FAILED" and job.error_code in {
+            "scene_refresh_failed",
+            "tiktok_local_resources_unavailable",
+        }:
             job.status = "PENDING"
             job.resource = "budget"
             job.next_page = 1
