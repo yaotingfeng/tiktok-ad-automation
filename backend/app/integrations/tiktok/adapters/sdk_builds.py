@@ -52,15 +52,10 @@ class ApiBuildOperations:
         deadline: datetime,
         isolation: FrozenGroupIsolation | None = None,
         before_disable: Callable[[], None] | None = None,
-        resolve_minis_app_id: bool = False,
     ):
         self._request_scope, self._deadline = request_scope, deadline
         self._isolation = isolation
         self._before_disable = before_disable
-        # TikTok API 的 app_id 是数值型应用 ID；它和 Smart+ Minis 的 minis_id
-        # 不是同一个字段。生产路径在发送前从该账户已有广告组回读映射，测试
-        # 适配器默认关闭网络回读，以保持纯传输边界测试的确定性。
-        self._resolve_minis_app_id = resolve_minis_app_id
         self._requests = OfficialReadRequests(
             client, request_scope=request_scope, deadline=deadline
         )
@@ -119,8 +114,6 @@ class ApiBuildOperations:
         operation, arguments = create_arguments(
             attempt_id=attempt_id, intent=intent, channel="OFFICIAL_API"
         )
-        if self._resolve_minis_app_id and intent.kind == "ADGROUP":
-            arguments["app_id"] = self._lookup_minis_app_id(intent)
         client = self._requests.client
         methods = {
             "CAMPAIGN": sdk.CampaignCreationApi(client).smart_plus_campaign_create,
@@ -154,36 +147,6 @@ class ApiBuildOperations:
             raise RemoteCallError(
                 "create_result_unknown", effect="UNKNOWN", evidence=CallEvidence()
             ) from None
-
-    def _lookup_minis_app_id(self, intent: CreateIntent) -> str:
-        """按广告账户和 Minis 回读唯一的数值 app_id，禁止把 minis_id 冒充 app_id。"""
-        response = self._read(
-            "build.get_adgroups",
-            intent.advertiser_id,
-            {
-                "advertiser_id": intent.advertiser_id,
-                "filtering": {
-                    "campaign_automation_type": "UPGRADED_SMART_PLUS",
-                },
-                "page": 1,
-                "page_size": 1000,
-            },
-        )
-        rows = response.data.get("list", [])
-        candidates = {
-            str(row.get("app_id"))
-            for row in rows
-            if isinstance(row, dict)
-            and row.get("minis_id") == intent.minis_id
-            and str(row.get("app_id", "")).isdigit()
-        }
-        if len(candidates) != 1:
-            raise RemoteCallError(
-                "minis_app_id_mapping_unavailable",
-                effect="NOT_SENT",
-                evidence=response.evidence,
-            )
-        return next(iter(candidates))
 
     def _read(
         self, operation: str, advertiser_id: str, arguments: dict[str, object]
