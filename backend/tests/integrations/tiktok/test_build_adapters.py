@@ -413,7 +413,7 @@ def test_create_uses_exact_frozen_fields_and_real_receipt_without_status_fill(
     for key in ("budget", "roas_bid"):
         if key in expected:
             expected[key] = float(expected[key])
-    if wire.channel == "OFFICIAL_MCP" and kind in {"CAMPAIGN", "ADGROUP"}:
+    if kind in {"CAMPAIGN", "ADGROUP"}:
         expected["request_id"] = remote_request_id(attempt_id)
     assert calls[0]["arguments"] == expected
     assert (body["advertiser_id"], wire.create_operations[kind]) in events

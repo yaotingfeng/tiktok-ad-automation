@@ -359,7 +359,7 @@ def create_arguments(
                 "decimal_serialization_loss", effect="NOT_SENT", evidence=CallEvidence()
             )
         body[field] = int(value) if value == value.to_integral() else number
-    if channel == "OFFICIAL_MCP" and intent.kind in {"CAMPAIGN", "ADGROUP"}:
+    if intent.kind in {"CAMPAIGN", "ADGROUP"}:
         body["request_id"] = remote_request_id(attempt_id)
     return CREATE_OPERATIONS[intent.kind], body
 
