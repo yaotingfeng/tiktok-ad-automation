@@ -354,8 +354,12 @@ export function PreviewSummaryBar({
 }) {
   const [pending, setPending] = useState(false),
     [error, setError] = useState<unknown>()
+  const createsDisabled = preview.creation_status === "DISABLE"
+  const submitAction = createsDisabled ? "创建并停用" : "创建并立即启用"
+  const submitStatus = createsDisabled ? "停用" : "立即启用"
   const scheduleSummary =
-    preview.schedule_type === "SCHEDULE_FROM_NOW" && !preview.schedule_start_time
+    preview.schedule_type === "SCHEDULE_FROM_NOW" &&
+    !preview.schedule_start_time
       ? "立即开始"
       : preview.schedule_type === "SCHEDULE_FROM_NOW"
         ? `指定时间开启：${preview.schedule_start_time} UTC`
@@ -417,7 +421,7 @@ export function PreviewSummaryBar({
                   preview.status !== "FROZEN" ||
                   preview.campaign_count === 0
                 }
-                aria-label={`创建并立即启用 ${preview.campaign_count} 个 Campaign / ${preview.adgroup_count} 个 Ad Group / ${preview.ad_count} 条 Ad`}
+                aria-label={`${submitAction} ${preview.campaign_count} 个 Campaign / ${preview.adgroup_count} 个 Ad Group / ${preview.ad_count} 条 Ad`}
                 onClick={async () => {
                   if (!onSubmit || pending) return
                   setPending(true)
@@ -430,10 +434,10 @@ export function PreviewSummaryBar({
                   }
                 }}
               >
-                {pending ? "正在确认提交结果" : "创建并立即启用"}
+                {pending ? "正在确认提交结果" : submitAction}
               </Button>
               <p className="text-xs text-muted-foreground">
-                将直接创建并启用，审核与实际投放状态由 TikTok 决定。
+                将直接创建并{submitStatus}，审核与实际投放状态由 TikTok 决定。
               </p>
               {!onSubmit && (
                 <p className="text-xs text-muted-foreground">
