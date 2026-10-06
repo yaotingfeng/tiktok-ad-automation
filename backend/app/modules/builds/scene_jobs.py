@@ -213,6 +213,15 @@ def ensure_scene_preparation(
             return ScenePreparation(
                 job.id, "blocked", job.error_code or "scene_refresh_failed"
             )
+        if job.status == "FAILED" and job.error_code == "scene_refresh_failed":
+            job.status = "PENDING"
+            job.resource = "budget"
+            job.next_page = 1
+            job.error_code = None
+            job.revision += 1
+            session.add(job)
+            _queue(session, job)
+            return ScenePreparation(job.id, "queued")
         # Missing/expired proof is bootstrapped by the new generation before any
         # asset GET. A current explicit negative proof never triggers this retry.
     job = SceneJob(
