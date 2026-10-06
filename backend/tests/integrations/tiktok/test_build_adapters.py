@@ -417,7 +417,6 @@ def test_create_uses_exact_frozen_fields_and_real_receipt_without_status_fill(
         expected["request_id"] = remote_request_id(attempt_id)
     if wire.channel == "OFFICIAL_API" and kind == "ADGROUP":
         expected["app_id"] = expected.pop("minis_id")
-        expected["optimization_event"] = "IMPRESSION_LEVEL_AD_REVENUE"
     assert calls[0]["arguments"] == expected
     assert (body["advertiser_id"], wire.create_operations[kind]) in events
 

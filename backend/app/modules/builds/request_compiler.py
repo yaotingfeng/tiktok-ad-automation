@@ -368,8 +368,6 @@ def create_arguments(
         minis_id = body.pop("minis_id", None)
         if minis_id is not None:
             body["app_id"] = minis_id
-        if body.get("optimization_event") == "AD_REVENUE_VALUE":
-            body["optimization_event"] = "IMPRESSION_LEVEL_AD_REVENUE"
     return CREATE_OPERATIONS[intent.kind], body
 
 
