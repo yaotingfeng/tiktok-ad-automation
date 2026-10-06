@@ -1,6 +1,7 @@
 """每次持久任务只读一页官方场景事实，同应用链接共享冻结连接下的结果。"""
 
 from datetime import UTC, datetime, timedelta
+import logging
 from typing import Any, cast
 from uuid import UUID, uuid4
 
@@ -44,6 +45,7 @@ TASK_NAME = "builds.refresh_scene"
 REPAIR_SECONDS = 120
 RESOURCES: tuple[SceneResource, ...] = ("identity", "minis", "cta", "vbo", "regions", "budget")
 register_dispatch_task(TASK_NAME, "resources")
+logger = logging.getLogger(__name__)
 
 
 def _queue(session: Session, job: SceneJob, *, delay: int = 0) -> None:
@@ -617,6 +619,7 @@ def process_scene_job(
             if current.status == "PENDING":
                 _queue(session, current)
     except Exception as error:
+        logger.exception("scene refresh failed for resource=%s", resource)
         code = error.code if isinstance(error, DomainError) else "scene_refresh_failed"
         allowed = {
             "scene_response_unverified",
