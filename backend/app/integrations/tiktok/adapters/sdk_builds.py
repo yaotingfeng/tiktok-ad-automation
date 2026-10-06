@@ -139,6 +139,14 @@ class ApiBuildOperations:
                     _request_timeout=(min(5.0, budget), min(30.0, budget)),
                 ).get()
                 raw = json.loads(client.last_response.data)
+                if isinstance(raw, dict) and type(raw.get("code")) is int and raw["code"] != 0:
+                    message = raw.get("message")
+                    logger.error(
+                        "official TikTok create rejected: kind=%s code=%s message=%s",
+                        intent.kind,
+                        raw["code"],
+                        message if isinstance(message, str) else type(message).__name__,
+                    )
                 response = sdk_creation_envelope(raw)
                 return created_result(kind=intent.kind, response=response)
         except RemoteCallError:
@@ -146,7 +154,8 @@ class ApiBuildOperations:
         except Exception as error:
             if not sent:
                 raise
-            logger.exception(
+            # SDK 异常文本可能包含请求信息，只记录类型，禁止输出异常原文。
+            logger.error(
                 "official TikTok create failed after send: kind=%s error_type=%s",
                 intent.kind,
                 type(error).__name__,
