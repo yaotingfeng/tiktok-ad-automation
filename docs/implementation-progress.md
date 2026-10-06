@@ -1725,3 +1725,9 @@
 - 发布 release `93d718f` 前备份 `/var/backups/tt-ada-staging/20261005T174700Z/` 校验通过；7 个 Celery 节点、API/Worker/Beat、bootstrap 检查通过。New Junbo BC 快照为 `COMPLETE=4396`、`QUEUED=569`、`FAILED=2`，按 BC 隔离后的事实 `422,658` 行（2026-07-08 至 2026-10-05）。
 - 两个失败分片均为素材 overview `report_page_conflict`，重试后仍复现；主报表层级无同类失败，需进一步针对这两个账户核对官方素材 overview 的分页回执。
 - 本轮仍只做代码层部署和测试环境只读报表验证，未执行任何广告写入；完整 PostgreSQL 回归仍受本机没有命名 `_test` 专用数据库限制。
+
+## 2026-10-06：投放策略浏览器端到端复测修复
+
+- 修复预览页提交动作忽略冻结策略 `creation_status` 的问题；停用策略现在显示“创建并停用”，说明文本同步，提交逻辑继续使用冻结配置。提交 `45820b1` 已推送并发布到新加坡 staging。
+- Chrome 真实页面复测 New Junbo BC：固定 2 个广告组、固定 1 个广告/组、系列预算 USD 50、创建后停用、命名含 `-user-test`，预览冻结并读回 1 Campaign / 2 Ad Group / 2 Ad；未手动删除素材、未提交广告写入。
+- 同轮确认预览缓存键递归冻结修复已使长期 BUILDING 预览进入 complete/FROZEN；旧预算 USD 20 因场景最低 USD 50 被正确标记 `budget_out_of_range`。
