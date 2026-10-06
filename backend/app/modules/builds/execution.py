@@ -805,6 +805,10 @@ def process_step(
                     )
             except DomainError as error:
                 # 素材依赖与等待结果同事务提交，保持已经冻结的目标连接。
+                print(
+                    f"BUILD_STEP_DOMAIN_ERROR kind={claim.kind} step={claim.step_id} code={error.code}",
+                    flush=True,
+                )
                 return finish_local(
                     session,
                     claim=claim,
