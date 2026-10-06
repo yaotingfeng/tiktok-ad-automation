@@ -1737,3 +1737,10 @@
 - 真实浏览器复测发现：既有素材封面任务使用 MCP 连接冻结，而广告搭建预览使用官方 API 连接；已验证封面在只读复用时被错误判为 `frozen_route_changed`，阻断后续广告创建。
 - 修复 `backend/app/modules/materials/covers.py`：封面已验证且内容摘要、目标视频仍匹配时，按当前任务连接重新核验只读权限并复用，不要求历史上传连接与当前广告执行连接相同；仍未验证或需上传的封面保持原冻结路由保护。
 - 提交 `7eb5521af1f3aea6285c721d260f9c9514de2436` 已推送并发布测试环境。浏览器复测 8/8 素材准备成功，1/2/2 结构预览准确。真实 Campaign 请求返回 `create_result_unknown`，无远端 ID，未继续重试以避免未知结果重复创建；广告报表未发现该批次系列。
+
+## 2026-10-06：回读信封字段修复与策略矩阵继续复测
+
+- `backend/app/modules/builds/reconciliation.py` 回读意图解码前剥离官方 API 的传输 `request_id`，MCP 仍校验原创建关联标识；提交 `f9f8fc6` 已推送并按完整备份、独立项目归档、同版核心服务流程发布。
+- 发布后真实浏览器任务 `7KIL` 完成 1 Campaign / 2 Ad Group / 2 Ad，23/23 素材准备完成且对象均停用；该任务验证了官方 API 回执不会再触发 `readback_intent_incomplete`。
+- 新建策略 `USER-TEST-TC03-1G-1A-1M-20261006` 并真实提交，预览和任务均完成 1 Campaign / 1 Ad Group / 1 Ad，未手动删减素材，页面回读已完成。
+- 组预算/目标 ROAS 预览继续按账户能力闸门 `adgroup_budget_unverified` 阻断；未伪造能力证据或绕过正式流程，待账户级核查完成后继续浏览器提交。
