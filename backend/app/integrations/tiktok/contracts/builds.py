@@ -37,6 +37,13 @@ def _money(value: object) -> Decimal:
         raise ValueError("money requires an exact decimal") from None
 
 
+def _nonnegative_money(value: object) -> Decimal:
+    result = _money(value)
+    if result < 0:
+        raise ValueError("money must not be negative")
+    return result
+
+
 def _schedule(value: str) -> str:
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", value):
         raise ValueError("schedule must use UTC YYYY-MM-DD HH:MM:SS")
@@ -73,7 +80,9 @@ class CampaignCreate(FrozenModel):
     advertiser_id: Id
     name: Id
     # 组预算时 Campaign 使用平台的无限预算形态；预算值固定在 Ad Group。
-    budget: Money | None = None
+    # TikTok's group-budget campaign wire contract requires an explicit
+    # zero budget together with INFINITE mode; series budgets remain > 0.
+    budget: Annotated[Decimal, BeforeValidator(_nonnegative_money)] | None = None
     budget_strategy: BudgetStrategy = "SERIES"
     operation_status: Literal["ENABLE", "DISABLE"] = "ENABLE"
     objective_type: Literal["APP_PROMOTION"] = "APP_PROMOTION"
@@ -83,6 +92,7 @@ class CampaignCreate(FrozenModel):
         "BUDGET_MODE_DYNAMIC_DAILY_BUDGET", "BUDGET_MODE_INFINITE"
     ] = "BUDGET_MODE_DYNAMIC_DAILY_BUDGET"
     budget_optimize_on: Literal[True, False] | None = True
+    smart_plus_adgroup_mode: Literal["SINGLE", "MULTIPLE"] | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -111,8 +121,8 @@ class CampaignCreate(FrozenModel):
             if self.budget_optimize_on is not True:
                 raise ValueError("series budget requires budget optimization")
         else:
-            if self.budget is not None:
-                raise ValueError("adgroup budget cannot include campaign budget")
+            if self.budget not in {None, Decimal("0")}:
+                raise ValueError("adgroup budget can only include explicit zero")
             if self.budget_mode != "BUDGET_MODE_INFINITE":
                 raise ValueError("adgroup budget requires infinite campaign mode")
             if self.budget_optimize_on not in {None, False}:

@@ -208,8 +208,6 @@ def encode_intent(intent: CreateIntent) -> dict[str, object]:
     body.pop("budget_strategy", None)
     body.pop("bid_strategy", None)
     if isinstance(intent, CampaignCreate):
-        if budget_strategy == "ADGROUP":
-            body.pop("budget_optimize_on", None)
         body["campaign_name"] = body.pop("name")
     elif isinstance(intent, AdGroupCreate):
         body["adgroup_name"] = body.pop("name")
@@ -511,8 +509,12 @@ def compile_request(
         if budget_strategy == "ADGROUP":
             if "budget" in body:
                 raise DomainError("invalid_budget_strategy", "组预算不能发送系列预算")
-            body.pop("budget_optimize_on", None)
+            # TikTok requires the explicit zero campaign budget and disabled
+            # campaign optimization when budget is owned by ad groups.
+            body["budget"] = 0
+            body["budget_optimize_on"] = False
             body["budget_mode"] = "BUDGET_MODE_INFINITE"
+            body["smart_plus_adgroup_mode"] = "MULTIPLE"
         else:
             if "budget" not in body:
                 raise DomainError("invalid_budget_strategy", "系列预算缺少 Campaign 日预算")

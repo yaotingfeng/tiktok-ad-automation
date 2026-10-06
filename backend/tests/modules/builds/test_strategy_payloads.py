@@ -81,7 +81,7 @@ def test_series_and_group_budget_are_emitted_at_their_own_layer():
         resolved={"targeting_spec": {"location_ids": ["US"]}},
     )
     assert group["budget"] == 100
-    assert "budget" not in compile_request(
+    group_campaign = compile_request(
         "campaign",
         fixed={
             "advertiser_id": "adv",
@@ -90,6 +90,10 @@ def test_series_and_group_budget_are_emitted_at_their_own_layer():
         },
         resolved={"objective_type": "APP_PROMOTION"},
     )
+    assert group_campaign["budget"] == 0
+    assert group_campaign["budget_mode"] == "BUDGET_MODE_INFINITE"
+    assert group_campaign["budget_optimize_on"] is False
+    assert group_campaign["smart_plus_adgroup_mode"] == "MULTIPLE"
 
 
 def test_creation_status_and_utc_schedule_are_emitted():
