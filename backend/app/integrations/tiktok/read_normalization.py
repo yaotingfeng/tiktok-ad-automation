@@ -387,7 +387,10 @@ def scene_arguments(
         }
     args: dict[str, Any] = {"advertiser_id": advertiser_id}
     if resource == "budget":
-        args.update(page=page, page_size=PAGE_SIZE, fields=["adgroup_id", "budget_mode", "budget", "min_budget"])
+        # `min_budget` is not accepted by the official Smart+ ad-group GET
+        # field selector; the current budget value is sufficient evidence that
+        # dynamic daily budgeting is enabled for this account.
+        args.update(page=page, page_size=PAGE_SIZE, fields=["adgroup_id", "budget_mode", "budget"])
         return "build.get_adgroups", args
     if resource in ("identity", "minis"):
         args.update(page=page, page_size=PAGE_SIZE)
