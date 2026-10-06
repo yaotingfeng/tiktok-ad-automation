@@ -35,7 +35,13 @@ def apply_targeting(
         or selected.gender != "GENDER_UNLIMITED"
     )
     if restrictive:
-        group["targeting_optimization_mode"] = "MANUAL"
+        allowed_modes = scene.field_constraints.get("targeting_optimization_modes")
+        if isinstance(allowed_modes, (list, tuple, set)) and "MANUAL" not in allowed_modes:
+            # 账户未证明支持 MANUAL 时在预览阶段阻断，避免先建 Campaign
+            # 再让 Ad Group 返回 40002，留下无法继续的孤立对象。
+            reasons.append("targeting_manual_unverified")
+        else:
+            group["targeting_optimization_mode"] = "MANUAL"
     group["targeting_spec"] = {
         "location_ids": sorted(mapping[code] for code in countries if code in mapping),
         **(

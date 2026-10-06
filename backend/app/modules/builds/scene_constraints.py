@@ -25,6 +25,9 @@ def constraints_for(currency: str) -> tuple[dict[str, Any], tuple[str, ...]]:
         "emoji_allowed": False,
         "max_creatives_per_ad": 50,
         "max_ads_per_adgroup": 30,
+        # 当前 Smart+ Minis 账户回读事实仅证明 AUTOMATIC；在取得账户级
+        # MANUAL allowlist 证据前，不能把手动性别/年龄/语言选择发送到创建接口。
+        "targeting_optimization_modes": ("AUTOMATIC",),
         "roas_bid": {"minimum": "0.01", "maximum": "1000"},
         # None 表示账户级只读事实尚未核实，不能推断为平台不支持或自动降级。
         "adgroup_daily_budget": None,

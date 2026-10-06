@@ -169,6 +169,20 @@ def test_targeting_resolves_only_the_common_country_ids_and_blocks_unavailable()
     assert not bad.supported
     assert "targeting_regions_unavailable" in bad.reason_codes
 
+    minis_automatic_only = targeting.apply_targeting(
+        scene.model_copy(
+            update={"field_constraints": {
+                **scene.field_constraints,
+                "targeting_optimization_modes": ("AUTOMATIC",),
+            }}
+        ),
+        AudienceTargeting(gender="GENDER_FEMALE"),
+        ["US"],
+    )
+    assert not minis_automatic_only.supported
+    assert "targeting_manual_unverified" in minis_automatic_only.reason_codes
+    assert "targeting_optimization_mode" not in minis_automatic_only.adgroup_fields
+
 
 def test_new_preview_freezes_effective_targeting(session, context, prepared):
     from sqlmodel import select
