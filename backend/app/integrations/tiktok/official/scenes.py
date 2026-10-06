@@ -66,6 +66,10 @@ class OfficialScenesGateway:
                 return sdk.IdentityApi(client).identity_get(
                     access_token=token, _request_timeout=timeout, **arguments
                 )
+            if resource == "budget":
+                return sdk.AdgroupApi(client).smart_plus_adgroup_get(
+                    access_token=token, _request_timeout=timeout, **arguments
+                )
             # 固定版本生成方法缺少 Minis 参数；继续通过官方 ApiClient 发送固定 GET。
             query = [
                 (key, json.dumps(value) if isinstance(value, (list, bool)) else value)
