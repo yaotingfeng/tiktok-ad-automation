@@ -223,7 +223,7 @@
 - `AdGroupCreate` 支持可选组预算，并要求组预算策略下发送精确日预算；系列预算策略下不发送组预算。
 - `CampaignCreate` 支持系列预算策略下的 Campaign 日预算；组预算策略下发送平台认可的无系列预算形式。实施第一步必须把官方合同和账户级只读事实固化为 contract fixture；若平台不支持该组合，保留配置合同但在预览阶段以 `adgroup_budget_unverified` 阻断，绝不静默降级为系列预算。
 - `AdGroupCreate` 支持：
-  - 最高价值：`optimization_goal="VALUE"`、`optimization_event="AD_REVENUE_VALUE"`、`deep_bid_type="VO_HIGHEST_VALUE"`，不包含 `roas_bid`；
+  - 最高价值：`optimization_goal="VALUE"`、`optimization_event="IMPRESSION_LEVEL_AD_REVENUE"`、`deep_bid_type="VO_HIGHEST_VALUE"`，不包含 `roas_bid`；
   - 目标 ROAS：`deep_bid_type="VO_MIN_ROAS"`，包含精确 `roas_bid`。
 - 最高价值的创建请求、标准广告组回读和 Smart+ 专用回读可能使用不同的事件字段枚举；必须分别建立 wire、标准回读和 Smart+ 回读 fixture，明确把平台返回值映射到统一的 `bid_strategy`，不能直接把现有 `ACTIVE_PAY` 字符串替换成未经证实的新值。
 - `FrozenUnit`、场景快照和执行步骤保存 `budget_strategy`、`bid_strategy`，确保预览冻结后执行不会读取可变策略。

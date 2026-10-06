@@ -44,7 +44,7 @@ def _scene(**constraints):
             "bid_capabilities": {
                 "HIGHEST_VALUE": {
                     "optimization_goal": "VALUE",
-                    "optimization_event": "AD_REVENUE_VALUE",
+                    "optimization_event": "IMPRESSION_LEVEL_AD_REVENUE",
                     "deep_bid_type": "VO_HIGHEST_VALUE",
                 },
                 "TARGET_ROAS": {"deep_bid_type": "VO_MIN_ROAS"},
@@ -133,7 +133,7 @@ def test_bid_payloads_separate_highest_value_and_target_roas():
         },
         resolved={"optimization_event": "ACTIVE_PAY"},
     )
-    assert highest["optimization_event"] == "AD_REVENUE_VALUE"
+    assert highest["optimization_event"] == "IMPRESSION_LEVEL_AD_REVENUE"
     assert highest["deep_bid_type"] == "VO_HIGHEST_VALUE"
     assert "roas_bid" not in highest
 

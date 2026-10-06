@@ -50,9 +50,10 @@ BuildKind = Literal["CTA", "CAMPAIGN", "ADGROUP", "AD"]
 BudgetStrategy = Literal["SERIES", "ADGROUP"]
 BidStrategy = Literal["HIGHEST_VALUE", "TARGET_ROAS"]
 
-# 创建和回读的事件枚举来自不同平台接口，不能用创建值覆盖回读事实。
-# 统一竞价策略由 deep_bid_type/roas_bid 推导，事件仅按通道保留为观察字段。
-CREATE_HIGHEST_VALUE_EVENT = "AD_REVENUE_VALUE"
+# Smart+ Minis 账户的官方读回值和历史成功请求均使用该枚举。
+# TikTok 文档虽将 AD_REVENUE_VALUE 作为等价别名保留，但创建时统一使用
+# 账户实际接受并读回的值，避免请求与回读合同产生无谓差异。
+CREATE_HIGHEST_VALUE_EVENT = "IMPRESSION_LEVEL_AD_REVENUE"
 STANDARD_READBACK_EVENTS = {
     "HIGHEST_VALUE": "ACTIVE_PAY",
     "TARGET_ROAS": "ACTIVE_PAY",
@@ -164,11 +165,11 @@ class AdGroupObservedFacts(FrozenModel):
     schedule_end_time: Annotated[Id, AfterValidator(_schedule)] | None = None
     promotion_type: Literal["MINI_APP"] = "MINI_APP"
     optimization_goal: Literal["VALUE"] = "VALUE"
-    # 创建合同使用 AD_REVENUE_VALUE；历史标准/Smart+ 回读仍可能分别返回
-    # ACTIVE_PAY 或 IMPRESSION_LEVEL_AD_REVENUE，三者均保留为观察事实。
+    # 历史标准/Smart+ 回读可能分别返回 ACTIVE_PAY 或
+    # IMPRESSION_LEVEL_AD_REVENUE；三者均保留为观察事实。
     optimization_event: Literal[
         "AD_REVENUE_VALUE", "ACTIVE_PAY", "IMPRESSION_LEVEL_AD_REVENUE"
-    ] = "AD_REVENUE_VALUE"
+    ] = "IMPRESSION_LEVEL_AD_REVENUE"
     bid_type: Literal["BID_TYPE_NO_BID"] = "BID_TYPE_NO_BID"
     deep_bid_type: Literal["VO_HIGHEST_VALUE", "VO_MIN_ROAS"] = "VO_MIN_ROAS"
     billing_event: Literal["OCPM"] = "OCPM"

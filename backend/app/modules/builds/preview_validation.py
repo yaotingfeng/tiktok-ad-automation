@@ -115,7 +115,7 @@ def scene_reasons(
             expected = {
                 "HIGHEST_VALUE": {
                     "optimization_goal": "VALUE",
-                    "optimization_event": "AD_REVENUE_VALUE",
+                    "optimization_event": "IMPRESSION_LEVEL_AD_REVENUE",
                     "deep_bid_type": "VO_HIGHEST_VALUE",
                 },
                 "TARGET_ROAS": {"deep_bid_type": "VO_MIN_ROAS"},

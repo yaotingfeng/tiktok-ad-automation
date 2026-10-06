@@ -512,12 +512,12 @@ def test_strategy_structure_matrix_persists_material_ads_and_frozen_contract(
             "bid_capabilities": {
                 "HIGHEST_VALUE": {
                     "optimization_goal": "VALUE",
-                    "optimization_event": "AD_REVENUE_VALUE",
+                    "optimization_event": "IMPRESSION_LEVEL_AD_REVENUE",
                     "deep_bid_type": "VO_HIGHEST_VALUE",
                 },
                 "TARGET_ROAS": {
                     "optimization_goal": "VALUE",
-                    "optimization_event": "AD_REVENUE_VALUE",
+                    "optimization_event": "IMPRESSION_LEVEL_AD_REVENUE",
                     "deep_bid_type": "VO_MIN_ROAS",
                 }
             },
@@ -621,7 +621,7 @@ def test_strategy_structure_matrix_persists_material_ads_and_frozen_contract(
         if changes["bid_strategy"] == "HIGHEST_VALUE":
             adgroup_resolved.update(
                 optimization_goal="VALUE",
-                optimization_event="AD_REVENUE_VALUE",
+                optimization_event="IMPRESSION_LEVEL_AD_REVENUE",
                 deep_bid_type="VO_HIGHEST_VALUE",
             )
         else:
