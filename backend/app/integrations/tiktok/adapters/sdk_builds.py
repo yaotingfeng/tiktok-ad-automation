@@ -172,13 +172,22 @@ class ApiBuildOperations:
             },
         )
         rows = response.data.get("list", [])
-        candidates = {
+        exact_candidates = {
             str(row.get("app_id"))
             for row in rows
             if isinstance(row, dict)
             and row.get("minis_id") == intent.minis_id
             and str(row.get("app_id", "")).isdigit()
         }
+        candidates = exact_candidates
+        if not candidates:
+            # 部分官方 SDK 版本会在 adgroup/get 的模型中丢弃 minis_id；
+            # 只有账户下唯一数值 app_id 时才允许无字段回退，避免跨 Minis 猜值。
+            candidates = {
+                str(row.get("app_id"))
+                for row in rows
+                if isinstance(row, dict) and str(row.get("app_id", "")).isdigit()
+            }
         if len(candidates) != 1:
             raise RemoteCallError(
                 "minis_app_id_mapping_unavailable",
