@@ -190,7 +190,7 @@ def ensure_scene_preparation(
         # A current authorized caller can recover a job stopped by local authority
         # loss. Unknown scope, malformed evidence and exhausted reads stay terminal;
         # they need changed credentials/contracts or an explicit reviewed retry.
-        restored = job.status == "BLOCKED" and job.error_code in {
+        restored = job.status in {"BLOCKED", "FAILED"} and job.error_code in {
             "action_forbidden",
             "tenant_forbidden",
             "connection_unavailable",
