@@ -3,6 +3,7 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+import logging
 from typing import Any
 
 from redis import ConnectionPool, Redis
@@ -17,6 +18,7 @@ from sqlmodel import Session
 from app.core.errors import DomainError
 
 MAX_RESOURCE_SECONDS = 5.0
+logger = logging.getLogger(__name__)
 
 
 def _remaining(task_deadline: datetime) -> float:
@@ -77,8 +79,9 @@ def bounded_session(
     try:
         with Session(scoped) as session:
             yield session
-    except SQLAlchemyError:
+    except SQLAlchemyError as error:
         failed = True
+        logger.exception("bounded database session failed: %s", type(error).__name__)
     finally:
         scoped.dispose()
     if failed:
