@@ -1,7 +1,7 @@
 """Allow persisted budget pages in the scene evidence table."""
 from alembic import op
 
-revision = "0019_scene_budget_page_constraint"
+revision = "0019_scene_budget_page"
 down_revision = "0018_scene_budget_evidence"
 branch_labels = None
 depends_on = None
