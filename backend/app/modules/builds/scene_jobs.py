@@ -196,6 +196,7 @@ def ensure_scene_preparation(
             "connection_unavailable",
             "account_access_denied",
             "account_build_unverified",
+            "scene_refresh_failed",
         }
         proof = (
             get_capability_evidence(
