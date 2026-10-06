@@ -121,6 +121,23 @@ def ensure_scene_preparation(
         and job.expires_at
         and job.expires_at > now
     ):
+        # Budget capability evidence was added after older COMPLETE jobs were
+        # persisted. Rebuild that shared scene instead of treating the old
+        # snapshot as current and blocking every ADGROUP preview.
+        if "budget" not in job.facts:
+            job.status = "STALE"
+            job.error_code = "scene_contract_changed"
+            session.add(job)
+            session.flush()
+            job = None
+        else:
+            pass
+    if (
+        job is not None
+        and job.status == "COMPLETE"
+        and job.expires_at
+        and job.expires_at > now
+    ):
         if not scope["minis_id"]:
             from .mini_selection import match_catalog_link
 
