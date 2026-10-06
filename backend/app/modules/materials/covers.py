@@ -394,6 +394,26 @@ def _ensure_cover(
         raise DomainError("material_route_unverified", "历史素材连接信息需要核实")
     job = jobs[0] if jobs else None
     if job:
+        # A verified cover is a read-only asset fact.  Older material batches
+        # may have been prepared through the MCP connection while the current
+        # build is frozen to the API connection for the same BC.  Requiring
+        # the historical upload route here incorrectly blocks an otherwise
+        # valid build before any remote write is needed.
+        current_mapping = _mapping(session, job)
+        if verified_cover_image_id(job) and current_mapping is not None:
+            if _digest_error(session, job):
+                return AssetPreparation(
+                    state="blocked", task_id=job.id, reason_code="cover_video_changed"
+                )
+            require_material_route(
+                session,
+                context=context,
+                route=route,
+                bc_id=bc_id,
+                advertiser_id=advertiser_id,
+                capability="read",
+            )
+            return AssetPreparation(state="ready", mapping=asset_public(current_mapping))
         require_same_route(
             load_material_route(job.frozen_route, context=context, bc_id=bc_id), route
         )
