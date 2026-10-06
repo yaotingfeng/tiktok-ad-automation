@@ -1,6 +1,7 @@
 """工厂拥有的官方 SDK 广告创建与只读适配；逐次授权/准入复用已有请求边界。"""
 
 import json
+import logging
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -41,6 +42,8 @@ from app.modules.builds.request_compiler import (
     read_arguments,
     status_arguments,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ApiBuildOperations:
@@ -140,9 +143,14 @@ class ApiBuildOperations:
                 return created_result(kind=intent.kind, response=response)
         except RemoteCallError:
             raise
-        except Exception:
+        except Exception as error:
             if not sent:
                 raise
+            logger.exception(
+                "official TikTok create failed after send: kind=%s error_type=%s",
+                intent.kind,
+                type(error).__name__,
+            )
             # HTTP 已进入官方发送入口；非零业务码、解析/超时均不证明无副作用。
             raise RemoteCallError(
                 "create_result_unknown", effect="UNKNOWN", evidence=CallEvidence()
