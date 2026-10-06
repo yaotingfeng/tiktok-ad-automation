@@ -423,18 +423,22 @@ def prepare_request(
             if ready.state != "ready" or not ready.mapping:
                 waiting = True
                 continue
-            # 当前 Smart+ 单视频接口要求恰好一张封面；已有且仍有效的目标图片优先复用。
-            from app.modules.materials.covers import ensure_cover
+            # 当前 Smart+ 单视频接口要求恰好一张封面。目标账户素材已带
+            # 核实图片时直接复用；不要让历史封面任务的连接路由阻断消费。
+            if ready.mapping and ready.mapping.image_id:
+                cover = ready
+            else:
+                from app.modules.materials.covers import ensure_cover
 
-            cover = ensure_cover(
-                session,
-                context=context,
-                bc_id=claim.bc_id,
-                material_id=material_id,
-                advertiser_id=claim.advertiser_id,
-                task_key=f"build-cover:{claim.step_id}:{material_id}",
-                route=claim.route,
-            )
+                cover = ensure_cover(
+                    session,
+                    context=context,
+                    bc_id=claim.bc_id,
+                    material_id=material_id,
+                    advertiser_id=claim.advertiser_id,
+                    task_key=f"build-cover:{claim.step_id}:{material_id}",
+                    route=claim.route,
+                )
             if cover.state == "blocked":
                 raise DomainError(
                     cover.reason_code or "target_asset_incomplete",
