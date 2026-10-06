@@ -267,9 +267,6 @@ def _merge(
     seen = (0 if first else previous.get("seen", 0)) + page["seen"]
     if last and seen != page["total_number"]:
         raise DomainError("scene_response_unverified", "远端列表缺少完整分页证据")
-    matches = ([] if first else previous.get("matches", [])) + page["matches"]
-    # Full-list uniqueness proof stays in bounded per-page evidence, not this
-    # compact accumulator or public SceneContext.
     compact = {
         key: value
         for key, value in page.items()
@@ -278,8 +275,12 @@ def _merge(
     if resource == "budget":
         return {
             **compact,
-            "dynamic_count": int(previous.get("dynamic_count", 0)) + int(page.get("dynamic_count", 0)),
+            "dynamic_count": int(previous.get("dynamic_count", 0))
+            + int(page.get("dynamic_count", 0)),
         }
+    matches = ([] if first else previous.get("matches", [])) + page["matches"]
+    # Full-list uniqueness proof stays in bounded per-page evidence, not this
+    # compact accumulator or public SceneContext.
     options = ([] if first else previous.get("options", [])) + page.get("options", [])
     return {
         **compact,
