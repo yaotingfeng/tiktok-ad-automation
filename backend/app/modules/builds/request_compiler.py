@@ -361,13 +361,6 @@ def create_arguments(
         body[field] = int(value) if value == value.to_integral() else number
     if intent.kind in {"CAMPAIGN", "ADGROUP"}:
         body["request_id"] = remote_request_id(attempt_id)
-    # The Marketing API names the Minis target ``app_id``; the MCP contract
-    # exposes the same value as ``minis_id``. Keep the wire shape aligned with
-    # the selected official channel so API ad-group requests are accepted.
-    if channel == "OFFICIAL_API" and intent.kind == "ADGROUP":
-        minis_id = body.pop("minis_id", None)
-        if minis_id is not None:
-            body["app_id"] = minis_id
     return CREATE_OPERATIONS[intent.kind], body
 
 
