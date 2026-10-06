@@ -84,7 +84,7 @@ class SceneJob(SQLModel, table=True):
             name="ck_build_scene_job_status",
         ),
         CheckConstraint(
-            "resource IN ('capabilities','identity','minis','cta','vbo','regions','done')",
+            "resource IN ('capabilities','identity','minis','cta','vbo','regions','budget','done')",
             name="ck_build_scene_job_resource",
         ),
         CheckConstraint(
@@ -184,7 +184,7 @@ class SceneJobPage(SQLModel, table=True):
         UniqueConstraint("job_id", "resource", "page", name="uq_build_scene_job_page"),
         CheckConstraint("page > 0", name="ck_build_scene_job_page_number"),
         CheckConstraint(
-            "resource IN ('identity','minis','cta','vbo','regions')",
+            "resource IN ('identity','minis','cta','vbo','regions','budget')",
             name="ck_build_scene_job_page_resource",
         ),
         CheckConstraint(

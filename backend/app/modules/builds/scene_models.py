@@ -42,7 +42,7 @@ class SceneReadState(SQLModel, table=True):
             ["tiktok_connection.tenant_id", "tiktok_connection.id"],
         ),
         CheckConstraint(
-            "resource IN ('account_roles','identity','minis','cta','vbo')",
+            "resource IN ('account_roles','identity','minis','cta','vbo','regions','budget')",
             name="ck_scene_resource",
         ),
         CheckConstraint("next_page > 0", name="ck_scene_page"),

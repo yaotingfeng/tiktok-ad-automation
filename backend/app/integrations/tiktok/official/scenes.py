@@ -19,6 +19,7 @@ ENDPOINTS = {
     "cta": "/open_api/v1.3/creative/cta/recommend/",
     "vbo": "/open_api/v1.3/tool/vbo_status/",
     "regions": "/open_api/v1.3/tool/region/",
+    "budget": "/open_api/v1.3/smart_plus/adgroup/get/",
 }
 
 

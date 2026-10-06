@@ -113,6 +113,7 @@ _OPERATION_CAPABILITIES: dict[str, Capability] = {
     "materials.upload_image_url": "upload",
     "build.get_campaigns": "read",
     "build.get_adgroups": "read",
+    "scene.list_budget_adgroups": "read",
     "build.get_ads": "read",
     "build.get_cta_portfolio": "read",
     "build.get_regular_adgroups": "read",

@@ -42,7 +42,7 @@ from .scene_schemas import ScenePreparation, SceneResource
 
 TASK_NAME = "builds.refresh_scene"
 REPAIR_SECONDS = 120
-RESOURCES: tuple[SceneResource, ...] = ("identity", "minis", "cta", "vbo", "regions")
+RESOURCES: tuple[SceneResource, ...] = ("identity", "minis", "cta", "vbo", "regions", "budget")
 register_dispatch_task(TASK_NAME, "resources")
 
 

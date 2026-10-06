@@ -12,8 +12,20 @@ COPY_LENGTH_LIMIT = 100
 COPY_LENGTH_MEASUREMENT = "characters"
 
 
-def constraints_for(currency: str) -> tuple[dict[str, Any], tuple[str, ...]]:
+def constraints_for(
+    currency: str,
+    *,
+    adgroup_budget_verified: bool = False,
+    adgroup_budget_facts: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], tuple[str, ...]]:
     reasons: list[str] = []
+    observed = adgroup_budget_facts or {}
+    minimum = observed.get("minimum_inclusive") or "50"
+    # The response's `budget` is the current configured value, not a platform
+    # maximum. Keep the documented ceiling until a dedicated limit endpoint is
+    # available.
+    maximum = "10000000"
+    precision = observed.get("precision") or "0.01"
     constraints: dict[str, Any] = {
         "revision": REVISION,
         "name_limits": {"campaign": 512, "adgroup": 512, "ad": 512},
@@ -30,12 +42,17 @@ def constraints_for(currency: str) -> tuple[dict[str, Any], tuple[str, ...]]:
         "targeting_optimization_modes": ("AUTOMATIC",),
         "roas_bid": {"minimum": "0.01", "maximum": "1000"},
         # None 表示账户级只读事实尚未核实，不能推断为平台不支持或自动降级。
-        "adgroup_daily_budget": None,
+        "adgroup_daily_budget": ({
+            "currency": "USD",
+            "minimum_inclusive": minimum,
+            "maximum_exclusive": maximum,
+            "precision": precision,
+        } if adgroup_budget_verified and currency == "USD" else None),
         # 组预算能力必须有独立的账户级证据；默认不声明支持，预览会阻断。
         # 这里保留能力槽位而不伪造数值，scene job 可在取得只读证据后填充。
         "budget_capabilities": {
             "campaign_daily_budget": "verified",
-            "adgroup_daily_budget": "unverified",
+            "adgroup_daily_budget": "verified" if adgroup_budget_verified and currency == "USD" else "unverified",
         },
         "bid_capabilities": {
             "HIGHEST_VALUE": {

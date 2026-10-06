@@ -100,6 +100,13 @@ class CtaFacts(FrozenFacts):
     recommend_assets: tuple[CtaRecommendation, ...]
 
 
+class BudgetFacts(PaginatedFacts):
+    dynamic_count: Count
+    minimum_inclusive: Text | None = None
+    maximum_exclusive: Text | None = None
+    precision: Text | None = None
+
+
 class VboFacts(FrozenFacts):
     vo_iaa_min_roas_zero_day: Text | None = None
     vo_status: Text | None = None
@@ -140,7 +147,7 @@ class RegionFacts(FrozenFacts):
         return self
 
 
-SceneFacts = RoleFacts | IdentityFacts | MinisFacts | CtaFacts | VboFacts | RegionFacts
+SceneFacts = RoleFacts | IdentityFacts | MinisFacts | CtaFacts | VboFacts | RegionFacts | BudgetFacts
 FACT_TYPES: dict[SceneResource, type[SceneFacts]] = {
     "account_roles": RoleFacts,
     "identity": IdentityFacts,
@@ -148,6 +155,7 @@ FACT_TYPES: dict[SceneResource, type[SceneFacts]] = {
     "cta": CtaFacts,
     "vbo": VboFacts,
     "regions": RegionFacts,
+    "budget": BudgetFacts,
 }
 
 

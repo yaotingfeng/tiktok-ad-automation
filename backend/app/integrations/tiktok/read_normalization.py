@@ -137,6 +137,31 @@ def parse_page(
         if len(ids) > 50:
             raise _invalid()
         return {"asset_ids": sorted(ids), "recommend_assets": assets}, True, request_id
+    if resource == "budget":
+        values, info = data.get("list"), data.get("page_info")
+        if not isinstance(values, list) or not isinstance(info, dict) or len(values) > PAGE_SIZE:
+            raise _invalid()
+        if any(type(info.get(k)) is not int for k in ("page", "page_size", "total_page", "total_number")) or info["page"] != page or info["page_size"] != PAGE_SIZE:
+            raise _invalid()
+        last = page >= max(1, info["total_page"])
+        if page > max(1, info["total_page"]) or (not last and not values):
+            raise _invalid()
+        hashes: set[str] = set(); dynamic = 0; minimum = maximum = precision = None
+        for item in values:
+            if not isinstance(item, dict):
+                raise _invalid()
+            identity = _string(item.get("adgroup_id"))
+            digest = sha256(identity.encode()).hexdigest()
+            if digest in hashes:
+                raise _invalid()
+            hashes.add(digest)
+            if item.get("budget_mode") == "BUDGET_MODE_DYNAMIC_DAILY_BUDGET":
+                dynamic += 1
+                if minimum is None and all(isinstance(item.get(k), (int, float, str)) for k in ("min_budget", "budget", "budget_mode")):
+                    minimum = str(item.get("min_budget")) if item.get("min_budget") is not None else None
+                    maximum = str(item.get("budget")) if item.get("budget") is not None else None
+                    precision = "0.01"
+        return {"item_id_hashes": sorted(hashes), "total_number": info["total_number"], "total_page": info["total_page"], "seen": len(values), "dynamic_count": dynamic, "minimum_inclusive": minimum, "maximum_exclusive": maximum, "precision": precision}, last, request_id
     if resource == "vbo":
         result: dict[str, Any] = {}
         for key in (
@@ -361,6 +386,9 @@ def scene_arguments(
             "page_size": PAGE_SIZE,
         }
     args: dict[str, Any] = {"advertiser_id": advertiser_id}
+    if resource == "budget":
+        args.update(page=page, page_size=PAGE_SIZE, fields=["adgroup_id", "budget_mode", "budget", "min_budget"])
+        return "build.get_adgroups", args
     if resource in ("identity", "minis"):
         args.update(page=page, page_size=PAGE_SIZE)
         return (

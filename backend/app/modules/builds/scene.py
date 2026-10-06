@@ -39,6 +39,7 @@ RESOURCES: tuple[SceneResource, ...] = (
     "minis",
     "cta",
     "vbo",
+    "budget",
 )
 
 
@@ -273,6 +274,11 @@ def _merge(
         for key, value in page.items()
         if key != "item_id_hashes" and (key != "options" or resource == "identity")
     }
+    if resource == "budget":
+        return {
+            **compact,
+            "dynamic_count": int(previous.get("dynamic_count", 0)) + int(page.get("dynamic_count", 0)),
+        }
     options = ([] if first else previous.get("options", [])) + page.get("options", [])
     return {
         **compact,
@@ -305,7 +311,12 @@ def _assemble_scene(
     group: dict[str, Any] = {}
     creative: dict[str, Any] = {}
     cta: dict[str, Any] = {}
-    constraints, missing = limits.constraints_for(scope["access"].currency)
+    budget_facts = facts.get("budget", {})
+    constraints, missing = limits.constraints_for(
+        scope["access"].currency,
+        adgroup_budget_verified=bool(budget_facts.get("dynamic_count", 0)),
+        adgroup_budget_facts=budget_facts,
+    )
     reasons.extend(missing)
     if not scope["minis_id"]:
         reasons.append("minis_selection_required")

@@ -129,3 +129,17 @@ def test_iaa_roas_selects_ad_revenue_only_with_actual_qualification(qualified):
         assert (
             result.adgroup_fields["optimization_event"] == "IMPRESSION_LEVEL_AD_REVENUE"
         )
+
+def test_dynamic_adgroup_budget_fact_is_typed_and_enables_group_budget_limits():
+    data = {
+        "list": [{"adgroup_id": "g1", "budget_mode": "BUDGET_MODE_DYNAMIC_DAILY_BUDGET", "budget": 50, "min_budget": 20}],
+        "page_info": {"page": 1, "page_size": 50, "total_page": 1, "total_number": 1},
+    }
+    page = scene_page(data, evidence=CallEvidence(request_id="budget"), resource="budget", page=1, advertiser_id="a", bc_id="b", minis_id=None)
+    assert page.facts.dynamic_count == 1
+    result = _assemble_scene(
+        scope={"basis": "synthetic", "access": SimpleNamespace(currency="USD"), "minis_id": "synthetic-minis"},
+        facts={"budget": page.facts.model_dump(), "vbo": {"vo_min_roas": "QUALIFIED"}, "minis": {"matches": [{"minis_id":"synthetic-minis","status":"ACTIVE","type":"MINI_SERIES","regions":["US"]}]}, "identity": {"matches": [{"identity_id":"i","identity_type":"BC_AUTH_TT","identity_authorized_bc_id":"b"}]}, "cta": {"asset_ids":["c"],"recommend_assets":[]}, "regions": {"locations": [{"region_code":"US","location_id":"1"}] }},
+        reasons=[], evidence_ids=(uuid4(),), capability=SimpleNamespace(scope_verified=True, can_build=True), locally_operable=True,
+    )
+    assert "adgroup_daily_budget" not in result.reason_codes
