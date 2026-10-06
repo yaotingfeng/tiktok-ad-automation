@@ -26,11 +26,23 @@ def apply_targeting(
     ):
         reasons.append("targeting_regions_unavailable")
     group = dict(scene.adgroup_fields)
-    # 显式 MANUAL 才能使年龄/性别成为控制条件；省略模式会让平台静默忽略它们。
-    group["targeting_optimization_mode"] = "MANUAL"
+    # Minis 默认的不限性别/年龄/语言定向不发送这些冗余字段。TikTok 的
+    # Smart+ Minis 创建接口对 targeting_optimization_mode 的接受范围比回读
+    # 字段更窄；只在用户确实选择了额外限制时显式使用 MANUAL。
+    restrictive = (
+        bool(selected.languages)
+        or bool(selected.age_groups)
+        or selected.gender != "GENDER_UNLIMITED"
+    )
+    if restrictive:
+        group["targeting_optimization_mode"] = "MANUAL"
     group["targeting_spec"] = {
         "location_ids": sorted(mapping[code] for code in countries if code in mapping),
-        "gender": selected.gender,
+        **(
+            {"gender": selected.gender}
+            if selected.gender != "GENDER_UNLIMITED"
+            else {}
+        ),
         **({"languages": list(selected.languages)} if selected.languages else {}),
         **({"age_groups": list(selected.age_groups)} if selected.age_groups else {}),
     }

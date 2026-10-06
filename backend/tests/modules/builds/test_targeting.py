@@ -154,7 +154,15 @@ def test_targeting_resolves_only_the_common_country_ids_and_blocks_unavailable()
     )
     result = targeting.apply_targeting(scene, AudienceTargeting(), ["US"])
     assert result.adgroup_fields["targeting_spec"]["location_ids"] == ("1",)
-    assert result.adgroup_fields["targeting_optimization_mode"] == "MANUAL"
+    assert "targeting_optimization_mode" not in result.adgroup_fields
+    assert "gender" not in result.adgroup_fields["targeting_spec"]
+    restricted = targeting.apply_targeting(
+        scene,
+        AudienceTargeting(gender="GENDER_FEMALE"),
+        ["US"],
+    )
+    assert restricted.adgroup_fields["targeting_optimization_mode"] == "MANUAL"
+    assert restricted.adgroup_fields["targeting_spec"]["gender"] == "GENDER_FEMALE"
     bad = targeting.apply_targeting(
         scene, AudienceTargeting(**chosen(region_codes=["GB"])), ["US"]
     )
