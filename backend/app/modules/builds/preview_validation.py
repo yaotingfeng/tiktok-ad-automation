@@ -60,6 +60,12 @@ def scene_reasons(
         reasons.append("scene_unsupported")
     if currency != config.currency:
         reasons.append("currency_mismatch")
+    # TikTok Smart+ Minis only accepts Minimum ROAS with campaign-level
+    # budget. A group-budget + target-ROAS request is rejected remotely as
+    # "Invalid CPA smart bid type"; block it before creating a partial
+    # campaign and direct the operator to the supported series-budget case.
+    if config.budget_strategy == "ADGROUP" and config.bid_strategy == "TARGET_ROAS":
+        reasons.append("target_roas_requires_series_budget")
     c = scene.field_constraints
     maximum = c.get("max_ads_per_adgroup")
     if type(maximum) is not int or maximum <= 0:

@@ -210,6 +210,20 @@ def test_unsupported_group_budget_is_a_preview_blocker():
     assert "adgroup_budget_unverified" in reasons
 
 
+def test_target_roas_group_budget_is_blocked_before_remote_create():
+    reasons = scene_reasons(
+        _config(budget_strategy="ADGROUP", bid_strategy="TARGET_ROAS", target_roas="1.05"),
+        _scene(adgroup_daily_budget={
+            "currency": "USD",
+            "minimum_inclusive": "50",
+            "maximum_exclusive": "10000000",
+            "precision": "0.01",
+        }),
+        "USD",
+    )
+    assert "target_roas_requires_series_budget" in reasons
+
+
 @pytest.mark.parametrize(
     "fixed,code",
     [
