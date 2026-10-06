@@ -379,6 +379,19 @@ def _ensure_cover(
         or not asset.verified_at
     ):
         return AssetPreparation(state="blocked", reason_code="cover_video_not_ready")
+    # A verified image on the current target-account asset is sufficient build
+    # evidence.  Older cover jobs may retain a historical connection route;
+    # that route must not prevent reusing the already verified target image.
+    if asset.image_id and purpose == "BUILD":
+        require_material_route(
+            session,
+            context=context,
+            route=route,
+            bc_id=bc_id,
+            advertiser_id=advertiser_id,
+            capability="read",
+        )
+        return AssetPreparation(state="ready", mapping=asset_public(asset))
     jobs = session.exec(
         select(MaterialCoverJob)
         .where(
@@ -437,17 +450,6 @@ def _ensure_cover(
                 )
         _access(session, context, job)
         return _result(session, job)
-    if asset.image_id and purpose == "BUILD":
-        # 无历史封面job的既有平台图片沿原验证事实复用；不能虚构上传job要求原件摘要。
-        require_material_route(
-            session,
-            context=context,
-            route=route,
-            bc_id=bc_id,
-            advertiser_id=advertiser_id,
-            capability="read",
-        )
-        return AssetPreparation(state="ready", mapping=asset_public(asset))
     identity = uuid4()
     job = MaterialCoverJob(
         id=identity,

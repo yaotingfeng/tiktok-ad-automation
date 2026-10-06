@@ -202,6 +202,41 @@ def test_cover_inherits_target_route_without_relabeling_uploaded_video(
     assert wire[0] == []
 
 
+def test_verified_target_image_reuses_across_historical_cover_route(
+    source_env,
+):
+    """A current target image is sufficient even when its cover job is historical."""
+    from uuid import uuid4
+
+    from sqlmodel import Session
+
+    from app.core.db import engine
+    from app.modules.accounts.routing import freeze_route
+    from app.modules.materials.covers import ensure_cover
+    from tests.modules.materials.test_readiness import asset
+
+    with Session(engine) as db, db.begin():
+        target = asset(db, source_env, "actual-account")
+        target.image_id = "ad-site-i18n-sg/existing-image"
+        route = freeze_route(
+            db,
+            context=source_env["context"],
+            bc_id=source_env["bc_id"],
+            connection_id=second_connection(db, source_env),
+        )
+        result = ensure_cover(
+            db,
+            context=source_env["context"],
+            bc_id=source_env["bc_id"],
+            material_id=source_env["material_id"],
+            advertiser_id="actual-account",
+            task_key=f"reuse:{uuid4()}",
+            route=route,
+        )
+        assert result.state == "ready"
+        assert result.mapping is not None
+
+
 def test_ingest_default_switch_before_first_delivery_uses_accepted_route(
     url_env, redis_client, wire
 ):
