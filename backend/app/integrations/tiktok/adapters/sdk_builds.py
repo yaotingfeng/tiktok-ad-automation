@@ -157,10 +157,8 @@ class ApiBuildOperations:
 
     def _lookup_minis_app_id(self, intent: CreateIntent) -> str:
         """按广告账户和 Minis 回读唯一的数值 app_id，禁止把 minis_id 冒充 app_id。"""
-        # 只有普通 adgroup/get 回执同时包含 minis_id 与数值 app_id；Smart+
-        # 专用读取合同会省略 minis_id，不能用于建立这条映射。
         response = self._read(
-            "build.get_regular_adgroups",
+            "build.get_adgroups",
             intent.advertiser_id,
             {
                 "advertiser_id": intent.advertiser_id,
