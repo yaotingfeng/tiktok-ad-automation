@@ -231,10 +231,14 @@ def source_intent(
     session: Session, source: ExecutionStep, route: FrozenTikTokRoute
 ) -> CreateIntent:
     body = dict(source.request_body or {})
+    # request_id 是传输信封字段，不属于冻结的业务创建意图。官方 API
+    # 同样会把它保存进请求回执；回读重新解码前必须剥离，否则严格契约
+    # 会把一次可安全核查的请求误判为 intent 不完整。
+    request_id = body.pop("request_id", None)
     if route.channel == "OFFICIAL_MCP" and source.kind in {"CAMPAIGN", "ADGROUP"}:
         _, original_id = original_create_attempt(session, source)
         # 历史 UUID 请求仅允许读取核查；新发送一律使用官方 int64 格式。
-        if body.pop("request_id", None) not in {
+        if request_id not in {
             remote_request_id(original_id),
             str(original_id),
         }:
