@@ -623,6 +623,7 @@ def open_tiktok_gateway(
                         deadline=task_deadline,
                         isolation=group_isolation,
                         before_disable=isolation_guard,
+                        resolve_minis_app_id=True,
                     ),
                     management=SdkManagementOperations(
                         official,
