@@ -172,7 +172,6 @@ def validate_ad_assets(
             AccountMaterial.tenant_id == step.tenant_id,
             AccountMaterial.bc_id == step.bc_id,
             AccountMaterial.advertiser_id == unit.advertiser_id,
-            AccountMaterial.connection_id == unit.connection_id,
             col(AccountMaterial.material_id).in_(material_ids),
         )
         .limit(51)
