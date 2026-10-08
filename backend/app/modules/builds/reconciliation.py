@@ -29,6 +29,7 @@ from app.integrations.tiktok.contracts.builds import (
     CreateIntent,
 )
 from app.integrations.tiktok.contracts.common import CallEvidence, RemoteCallError
+from app.integrations.tiktok.adapters.build_results import known_no_effect_rejection
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.integrations.tiktok.gateway import open_tiktok_gateway
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred
@@ -311,6 +312,58 @@ def _unknown(step: ExecutionStep, code: str) -> None:
     step.error_code, step.updated_at = code, datetime.now(UTC)
 
 
+def _recover_known_rejection(
+    session: Session, *, step: ExecutionStep, source: ExecutionStep
+) -> ReconciliationResult | None:
+    """Close historical UNKNOWN rows when the original receipt already proved rejection."""
+    if source.status != "UNKNOWN" or source.kind not in ID_KEYS:
+        return None
+    evidence_row = session.exec(
+        select(StepEvidence)
+        .where(
+            StepEvidence.tenant_id == source.tenant_id,
+            StepEvidence.submission_id == source.submission_id,
+            StepEvidence.step_id == source.id,
+            StepEvidence.conclusion == "RESULT_UNKNOWN",
+        )
+        .order_by(StepEvidence.observed_at.desc())
+        .limit(1)
+    ).first()
+    summary = evidence_row.summary if evidence_row is not None else {}
+    remote_code = summary.get("remote_code") if isinstance(summary, dict) else None
+    if not known_no_effect_rejection(source.kind, remote_code):
+        return None
+    now = datetime.now(UTC)
+    source.status, source.phase = "FAILED", "DONE"
+    source.error_code = "tiktok_business_error"
+    source.lease_token = source.lease_expires_at = None
+    source.due_at = now
+    source.checked_at = now
+    source.updated_at = now
+    session.add(source)
+    if step.id != source.id and step.status not in {"SUCCEEDED", "FAILED"}:
+        step.status, step.phase = "FAILED", "DONE"
+        step.error_code = "tiktok_business_error"
+        step.lease_token = step.lease_expires_at = None
+        step.due_at = now
+        step.checked_at = now
+        step.updated_at = now
+        session.add(step)
+    _evidence(
+        session,
+        source,
+        conclusion="REMOTE_REJECTED_RECOVERED",
+        summary={
+            "reason_code": "tiktok_business_error",
+            "remote_code": remote_code,
+            "recovered_from": "RESULT_UNKNOWN",
+        },
+        request_id=evidence_row.request_id if evidence_row is not None else None,
+    )
+    session.flush()
+    return ReconciliationResult("FAILED")
+
+
 def _claim(
     session: Session, context: TenantContext, step_id: UUID, revision: int
 ) -> _Claim | ReconciliationResult:
@@ -346,6 +399,9 @@ def _claim(
         for row in (step, source)
     ):
         return ReconciliationResult("BUSY", True, CLAIM_SECONDS)
+    recovered = _recover_known_rejection(session, step=step, source=source)
+    if recovered is not None:
+        return recovered
     if step.kind == "READBACK":
         if source.status != "SUCCEEDED" or not nonempty(source.remote_id):
             return ReconciliationResult("WAITING")

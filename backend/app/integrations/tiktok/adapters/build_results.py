@@ -54,6 +54,11 @@ _SDK_NO_EFFECT_REJECTIONS = {
 }
 
 
+def known_no_effect_rejection(kind: str, remote_code: object) -> bool:
+    """Return whether a saved business code proves that no object was created."""
+    return type(remote_code) is int and remote_code in _SDK_NO_EFFECT_REJECTIONS.get(kind, ())
+
+
 def sdk_creation_envelope(
     raw: object, *, kind: BuildKind | None = None
 ) -> McpBusinessResponse:
