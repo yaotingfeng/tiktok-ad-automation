@@ -24,6 +24,8 @@ python3 scripts/environment.py production path
 
 `init` 根据同一模板生成所选环境文件，权限为 0600；已有文件会拒绝覆盖，不生成或复制其他环境的密钥。非本地环境的数据库/Redis地址留空，必须按目标部署填写；其他占位值也须填写后才能使用。`info` 只显示位置与存在性，不显示文件内容。项目原有 `.env` 无需迁移。
 
+Kubernetes 部署使用 `deploy/k8s/apply.sh` 从仓库外的运行环境文件创建项目 Secret。可以复用当前测试环境的 R2 和回调配置，但必须把 `DATABASE_URL`、`REDIS_URL` 改成集群可达地址；不要将 `.env.staging`、R2 密钥或 MCP 注册 JSON 提交到 Git。迁移已有数据库时继续使用原 `CONNECTION_ENCRYPTION_KEY`。
+
 新机器从模板初始化后，通过受控传输或密钥管理恢复该环境的真实值。Git 本身不会保存、恢复密钥。不要将测试环境的数据库连接、加密密钥、OAuth 注册材料直接复制到生产；已有数据库必须保留其对应的加密密钥，否则无法解密原授权。`MCP_CLIENT_REGISTRATION_REF` 指向该环境的独立私有注册文件，也须单独备份。
 
 ## 部署与同步

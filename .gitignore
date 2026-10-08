@@ -22,5 +22,7 @@ backend/app/frontend/
 .DS_Store
 
 /deploy/traefik.yml
+/deploy/k8s/runtime.env
+/deploy/k8s/mcp-client-registration.json
 /frontend/openapi.json
 /.runtime/*

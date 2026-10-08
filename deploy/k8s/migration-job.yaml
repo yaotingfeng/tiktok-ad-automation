@@ -1,0 +1,42 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tiktok-ad-automation-migration-__RELEASE_ID__
+  labels:
+    app: tiktok-ad-automation
+    role: migration
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: tiktok-ad-automation
+        role: migration
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      containers:
+        - name: migration
+          image: __APP_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: [bash, scripts/prestart.sh]
+          envFrom:
+            - configMapRef:
+                name: tiktok-ad-automation-defaults
+            - secretRef:
+                name: tiktok-ad-automation-runtime
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: MCP_CLIENT_REGISTRATION_REF
+              value: /run/tk-ada/mcp-client.json
+          volumeMounts:
+            - name: mcp-registration
+              mountPath: /run/tk-ada
+              readOnly: true
+      volumes:
+        - name: mcp-registration
+          secret:
+            secretName: tiktok-ad-automation-mcp-registration

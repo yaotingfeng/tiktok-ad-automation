@@ -1,0 +1,437 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tiktok-ad-automation-api
+  labels:
+    app: tiktok-ad-automation
+    role: api
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: tiktok-ad-automation
+      role: api
+  template:
+    metadata:
+      labels:
+        app: tiktok-ad-automation
+        role: api
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: api
+          image: __APP_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: [uvicorn, "app.main:app", --host, "0.0.0.0", --port, "8000", --workers, "1", --no-access-log, --proxy-headers, --forwarded-allow-ips, "*"]
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: tiktok-ad-automation-defaults
+            - secretRef:
+                name: tiktok-ad-automation-runtime
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: MCP_CLIENT_REGISTRATION_REF
+              value: /run/tk-ada/mcp-client.json
+          volumeMounts:
+            - name: mcp-registration
+              mountPath: /run/tk-ada
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /api/utils/health-check/
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /api/utils/health-check/
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+      volumes:
+        - name: mcp-registration
+          secret:
+            secretName: tiktok-ad-automation-mcp-registration
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tiktok-ad-automation-worker-resource
+  labels:
+    app: tiktok-ad-automation
+    role: worker-resource
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: tiktok-ad-automation
+      role: worker-resource
+  template:
+    metadata:
+      labels:
+        app: tiktok-ad-automation
+        role: worker-resource
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 960
+      containers:
+        - name: worker-resource
+          image: __APP_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, "resources,resource-results", --pool, prefork, --concurrency, "2", --loglevel=INFO, --hostname, "resources@%h"]
+          envFrom:
+            - configMapRef:
+                name: tiktok-ad-automation-defaults
+            - secretRef:
+                name: tiktok-ad-automation-runtime
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: MCP_CLIENT_REGISTRATION_REF
+              value: /run/tk-ada/mcp-client.json
+          volumeMounts:
+            - name: mcp-registration
+              mountPath: /run/tk-ada
+              readOnly: true
+      volumes:
+        - name: mcp-registration
+          secret:
+            secretName: tiktok-ad-automation-mcp-registration
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tiktok-ad-automation-worker-results
+  labels:
+    app: tiktok-ad-automation
+    role: worker-results
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: tiktok-ad-automation
+      role: worker-results
+  template:
+    metadata:
+      labels:
+        app: tiktok-ad-automation
+        role: worker-results
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 960
+      containers:
+        - name: worker-results
+          image: __APP_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, resource-results, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "results@%h"]
+          envFrom:
+            - configMapRef:
+                name: tiktok-ad-automation-defaults
+            - secretRef:
+                name: tiktok-ad-automation-runtime
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: MCP_CLIENT_REGISTRATION_REF
+              value: /run/tk-ada/mcp-client.json
+          volumeMounts:
+            - name: mcp-registration
+              mountPath: /run/tk-ada
+              readOnly: true
+      volumes:
+        - name: mcp-registration
+          secret:
+            secretName: tiktok-ad-automation-mcp-registration
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tiktok-ad-automation-worker-builds
+  labels:
+    app: tiktok-ad-automation
+    role: worker-builds
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: tiktok-ad-automation
+      role: worker-builds
+  template:
+    metadata:
+      labels:
+        app: tiktok-ad-automation
+        role: worker-builds
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: worker-builds
+          image: __APP_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, builds, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "builds@%h"]
+          envFrom:
+            - configMapRef:
+                name: tiktok-ad-automation-defaults
+            - secretRef:
+                name: tiktok-ad-automation-runtime
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: MCP_CLIENT_REGISTRATION_REF
+              value: /run/tk-ada/mcp-client.json
+          volumeMounts:
+            - name: mcp-registration
+              mountPath: /run/tk-ada
+              readOnly: true
+      volumes:
+        - name: mcp-registration
+          secret:
+            secretName: tiktok-ad-automation-mcp-registration
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tiktok-ad-automation-worker-control
+  labels:
+    app: tiktok-ad-automation
+    role: worker-control
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: tiktok-ad-automation
+      role: worker-control
+  template:
+    metadata:
+      labels:
+        app: tiktok-ad-automation
+        role: worker-control
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: worker-control
+          image: __APP_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, control, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "control@%h"]
+          envFrom:
+            - configMapRef:
+                name: tiktok-ad-automation-defaults
+            - secretRef:
+                name: tiktok-ad-automation-runtime
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: MCP_CLIENT_REGISTRATION_REF
+              value: /run/tk-ada/mcp-client.json
+          volumeMounts:
+            - name: mcp-registration
+              mountPath: /run/tk-ada
+              readOnly: true
+      volumes:
+        - name: mcp-registration
+          secret:
+            secretName: tiktok-ad-automation-mcp-registration
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tiktok-ad-automation-worker-ads-directory
+  labels:
+    app: tiktok-ad-automation
+    role: worker-ads-directory
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: tiktok-ad-automation
+      role: worker-ads-directory
+  template:
+    metadata:
+      labels:
+        app: tiktok-ad-automation
+        role: worker-ads-directory
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: worker-ads-directory
+          image: __APP_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-directory, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "ads-directory@%h"]
+          envFrom:
+            - configMapRef:
+                name: tiktok-ad-automation-defaults
+            - secretRef:
+                name: tiktok-ad-automation-runtime
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: MCP_CLIENT_REGISTRATION_REF
+              value: /run/tk-ada/mcp-client.json
+          volumeMounts:
+            - name: mcp-registration
+              mountPath: /run/tk-ada
+              readOnly: true
+      volumes:
+        - name: mcp-registration
+          secret:
+            secretName: tiktok-ad-automation-mcp-registration
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tiktok-ad-automation-worker-ads-reporting
+  labels:
+    app: tiktok-ad-automation
+    role: worker-ads-reporting
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: tiktok-ad-automation
+      role: worker-ads-reporting
+  template:
+    metadata:
+      labels:
+        app: tiktok-ad-automation
+        role: worker-ads-reporting
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: worker-ads-reporting
+          image: __APP_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-reporting, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "ads-reporting@%h"]
+          envFrom:
+            - configMapRef:
+                name: tiktok-ad-automation-defaults
+            - secretRef:
+                name: tiktok-ad-automation-runtime
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: MCP_CLIENT_REGISTRATION_REF
+              value: /run/tk-ada/mcp-client.json
+          volumeMounts:
+            - name: mcp-registration
+              mountPath: /run/tk-ada
+              readOnly: true
+      volumes:
+        - name: mcp-registration
+          secret:
+            secretName: tiktok-ad-automation-mcp-registration
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tiktok-ad-automation-worker-ad-management
+  labels:
+    app: tiktok-ad-automation
+    role: worker-ad-management
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: tiktok-ad-automation
+      role: worker-ad-management
+  template:
+    metadata:
+      labels:
+        app: tiktok-ad-automation
+        role: worker-ad-management
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: worker-ad-management
+          image: __APP_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ad-management, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "ad-management@%h"]
+          envFrom:
+            - configMapRef:
+                name: tiktok-ad-automation-defaults
+            - secretRef:
+                name: tiktok-ad-automation-runtime
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: MCP_CLIENT_REGISTRATION_REF
+              value: /run/tk-ada/mcp-client.json
+          volumeMounts:
+            - name: mcp-registration
+              mountPath: /run/tk-ada
+              readOnly: true
+      volumes:
+        - name: mcp-registration
+          secret:
+            secretName: tiktok-ad-automation-mcp-registration
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tiktok-ad-automation-beat
+  labels:
+    app: tiktok-ad-automation
+    role: beat
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: tiktok-ad-automation
+      role: beat
+  template:
+    metadata:
+      labels:
+        app: tiktok-ad-automation
+        role: beat
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: beat
+          image: __APP_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: [celery, -A, "app.jobs.celery_app:celery_app", beat, --schedule, /var/run/celery/celerybeat-schedule, --loglevel=INFO]
+          envFrom:
+            - configMapRef:
+                name: tiktok-ad-automation-defaults
+            - secretRef:
+                name: tiktok-ad-automation-runtime
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: MCP_CLIENT_REGISTRATION_REF
+              value: /run/tk-ada/mcp-client.json
+          volumeMounts:
+            - name: beat-data
+              mountPath: /var/run/celery
+            - name: mcp-registration
+              mountPath: /run/tk-ada
+              readOnly: true
+      volumes:
+        - name: beat-data
+          persistentVolumeClaim:
+            claimName: tiktok-ad-automation-beat
+        - name: mcp-registration
+          secret:
+            secretName: tiktok-ad-automation-mcp-registration

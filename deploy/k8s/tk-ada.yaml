@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tiktok-ad-automation-defaults
+data:
+  PROJECT_NAME: TK-ADA
+  # These values match the current staging deployment. Override them in the
+  # external runtime env file when the cluster uses another public origin.
+  FRONTEND_HOST: https://137.220.150.31
+  MCP_REDIRECT_URI: https://tk-ada.137-220-150-31.sslip.io/api/integrations/tiktok/mcp/callback
+  OBJECT_STORAGE_PROVIDER: r2
+  S3_REGION: auto
+  MATERIAL_INGEST_ENABLED: "true"
+  MATERIAL_CLEANUP_ENABLED: "true"
+  MATERIAL_STORAGE_GLOBAL_BYTES: "0"
+  MATERIAL_STORAGE_TENANT_BYTES: "0"
+  MCP_CLIENT_REGISTRATION_REF: /run/tk-ada/mcp-client.json
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tiktok-ad-automation
+  labels:
+    app: tiktok-ad-automation
+spec:
+  selector:
+    app: tiktok-ad-automation
+    role: api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  type: ClusterIP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tiktok-ad-automation-beat
+  labels:
+    app: tiktok-ad-automation
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
