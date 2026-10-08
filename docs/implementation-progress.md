@@ -1744,3 +1744,8 @@
 - 发布后真实浏览器任务 `7KIL` 完成 1 Campaign / 2 Ad Group / 2 Ad，23/23 素材准备完成且对象均停用；该任务验证了官方 API 回执不会再触发 `readback_intent_incomplete`。
 - 新建策略 `USER-TEST-TC03-1G-1A-1M-20261006` 并真实提交，预览和任务均完成 1 Campaign / 1 Ad Group / 1 Ad，未手动删减素材，页面回读已完成。
 - 组预算/目标 ROAS 预览继续按账户能力闸门 `adgroup_budget_unverified` 阻断；未伪造能力证据或绕过正式流程，待账户级核查完成后继续浏览器提交。
+## 2026-10-08：素材与报表列表体验调整
+
+- 素材目录改为按 `created_at` 倒序分页，时间相同时按文件名和 ID 稳定排序；新增对应的签名复合游标，避免翻页重复或漏项。
+- 广告报表在名称和消耗表头增加升降序切换，沿用既有 `sort_by/sort_direction` 查询合同；账户、系列等名称在单元格内换行并保留完整文本提示。
+- 已通过 Python compileall、Ruff 和 `git diff --check`。本机没有 Bun，前端构建未执行；完整 PostgreSQL 回归仍需命名 `_test` 数据库。

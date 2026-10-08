@@ -23,8 +23,10 @@ from app.modules.materials.models import (
 )
 from app.modules.materials.repository import (
     asset_public,
+    decode_material_created_cursor,
     decode_material_cursor,
     deduplicate_material_statement,
+    encode_material_created_cursor,
     encode_material_cursor,
 )
 from app.modules.materials.schemas import (
@@ -352,24 +354,35 @@ def get_materials(
         statement = statement.where(MaterialFile.created_at <= created_to)
     # 内容别名先按筛选保留名称，再在 SQL 分页前选稳定代表。
     statement = deduplicate_material_statement(statement)
-    name_order = col(MaterialFile.file_name).collate("C")
     total = count_rows(session, statement)
     if cursor:
-        name, identity = decode_material_cursor(cursor, scope=scope)
+        created_at_value, name, identity = decode_material_created_cursor(cursor, scope=scope)
+        name_order = col(MaterialFile.file_name).collate("C")
         statement = statement.where(
             or_(
-                name_order > name,
-                and_(name_order == name, col(MaterialFile.id) > identity),
+                MaterialFile.created_at < created_at_value,
+                and_(
+                    MaterialFile.created_at == created_at_value,
+                    or_(
+                        name_order > name,
+                        and_(name_order == name, col(MaterialFile.id) > identity),
+                    ),
+                ),
             )
         )
     rows = session.exec(
-        statement.order_by(name_order, col(MaterialFile.id))
+        statement.order_by(
+            col(MaterialFile.created_at).desc(),
+            col(MaterialFile.file_name).collate("C"),
+            col(MaterialFile.id),
+        )
         .limit(limit + 1)
         .execution_options(populate_existing=True)
     ).all()
     next_cursor = (
-        encode_material_cursor(
+        encode_material_created_cursor(
             scope=scope,
+            created_at=rows[limit - 1][0].created_at.isoformat(),
             name=rows[limit - 1][0].file_name,
             identity=rows[limit - 1][0].id,
         )

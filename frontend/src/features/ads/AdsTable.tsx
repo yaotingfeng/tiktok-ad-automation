@@ -1,4 +1,5 @@
 import type { ReportRow } from "@/client"
+import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -25,6 +26,36 @@ import {
 } from "./search"
 
 type DisplayColumn = { key: string; label: string }
+
+function SortableHead({
+  label,
+  sortBy,
+  activeSortBy,
+  direction,
+  onSort,
+}: {
+  label: string
+  sortBy: "name" | "spend"
+  activeSortBy: string | undefined
+  direction: "asc" | "desc"
+  onSort: (sortBy: "name" | "spend") => void
+}) {
+  const active = activeSortBy === sortBy
+  const Icon = active ? (direction === "asc" ? ArrowUp : ArrowDown) : ArrowUpDown
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className="h-8 gap-1 px-1 font-medium"
+      onClick={() => onSort(sortBy)}
+      aria-label={`${label}${active ? (direction === "asc" ? "，当前升序" : "，当前降序") : "，点击排序"}`}
+    >
+      {label}
+      <Icon className="size-3.5" aria-hidden="true" />
+    </Button>
+  )
+}
 
 function displayColumns(dimension: AdsDimension): DisplayColumn[] {
   switch (dimension) {
@@ -76,6 +107,9 @@ export function AdsTable({
   hasPrevious,
   onNext,
   onPrevious,
+  sortBy,
+  sortDirection,
+  onSort,
 }: {
   rows: ReportRow[]
   dimension: AdsDimension
@@ -90,6 +124,9 @@ export function AdsTable({
   hasPrevious: boolean
   onNext: () => void
   onPrevious: () => void
+  sortBy: string
+  sortDirection: "asc" | "desc"
+  onSort: (sortBy: "name" | "spend") => void
 }) {
   const columns = displayColumns(dimension)
   const currentAll =
@@ -123,11 +160,25 @@ export function AdsTable({
                       : undefined
                   }
                 >
-                  {column.label}
+                  <SortableHead
+                    label={column.label}
+                    sortBy="name"
+                    activeSortBy={sortBy}
+                    direction={sortDirection}
+                    onSort={onSort}
+                  />
                 </TableHead>
               ))}
               <TableHead>状态</TableHead>
-              <TableHead>消耗</TableHead>
+              <TableHead>
+                <SortableHead
+                  label="消耗"
+                  sortBy="spend"
+                  activeSortBy={sortBy}
+                  direction={sortDirection}
+                  onSort={onSort}
+                />
+              </TableHead>
               <TableHead>广告收益 ROAS</TableHead>
               <TableHead>D0 ROAS</TableHead>
               <TableHead>广告展示总价值</TableHead>
@@ -186,12 +237,13 @@ export function AdsTable({
                     return (
                       <TableCell
                         key={column.key}
-                        className={`max-w-64 text-xs ${index === 0 ? "sticky left-12 z-10 bg-background" : ""}`}
+                        className={`max-w-56 min-w-0 text-xs ${index === 0 ? "sticky left-12 z-10 bg-background" : ""}`}
                       >
                         <div className="flex flex-col items-start">
                           <button
                             type="button"
-                            className="max-w-64 text-left font-medium hover:underline"
+                            className="block max-w-56 min-w-0 whitespace-normal break-words text-left font-medium hover:underline"
+                            title={label === "—" ? rowName(row) : label}
                             onClick={() =>
                               canNavigate
                                 ? onNavigate(row, column.key)

@@ -2,6 +2,7 @@ import base64
 import hashlib
 import hmac
 import json
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -76,6 +77,51 @@ def decode_material_cursor(cursor: str, *, scope: dict[str, str]) -> tuple[str, 
             raise ValueError
         return name, UUID(identity)
     except ValueError, TypeError, UnicodeError:
+        raise DomainError("invalid_cursor", "素材游标无效或不属于当前查询") from None
+
+
+def encode_material_created_cursor(
+    *, scope: dict[str, str], created_at: str, name: str, identity: UUID
+) -> str:
+    """为素材目录的创建时间倒序分页保存稳定的复合游标。"""
+    payload = json.dumps(
+        [scope, created_at, name, str(identity)], ensure_ascii=False, separators=(",", ":")
+    ).encode()
+    signature = hmac.new(settings.SECRET_KEY.encode(), payload, hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(signature + payload).decode()
+
+
+def decode_material_created_cursor(
+    cursor: str, *, scope: dict[str, str]
+) -> tuple[datetime, str, UUID]:
+    try:
+        if not cursor or len(cursor) > 8192:
+            raise ValueError
+        raw = base64.b64decode(cursor, altchars=b"-_", validate=True)
+        signature, payload = raw[:32], raw[32:]
+        if not hmac.compare_digest(
+            signature,
+            hmac.new(settings.SECRET_KEY.encode(), payload, hashlib.sha256).digest(),
+        ):
+            raise ValueError
+        values = json.loads(payload)
+        if not isinstance(values, list) or len(values) != 4:
+            raise ValueError
+        owner, created_at, name, identity = values
+        if (
+            owner != scope
+            or not isinstance(created_at, str)
+            or len(created_at) > 64
+            or not isinstance(name, str)
+            or len(name) > 1000
+            or not isinstance(identity, str)
+        ):
+            raise ValueError
+        parsed = datetime.fromisoformat(created_at)
+        if parsed.tzinfo is None:
+            raise ValueError
+        return parsed, name, UUID(identity)
+    except (ValueError, TypeError, UnicodeError):
         raise DomainError("invalid_cursor", "素材游标无效或不属于当前查询") from None
 
 

@@ -187,6 +187,27 @@ export function AdsWorkspace() {
     setSearch(next)
     setApplied(next)
   }
+  const sort = (sortBy: "name" | "spend") => {
+    const direction =
+      applied.sort_by === sortBy && applied.sort_direction === "asc"
+        ? "desc"
+        : "asc"
+    const next = {
+      ...applied,
+      sort_by: sortBy,
+      sort_direction: direction as "asc" | "desc",
+      page: 1,
+      cursor: undefined,
+      snapshot_id: undefined,
+    }
+    ads.selection.clear()
+    clearManagementPreview()
+    setCursorHistory([])
+    setSelectedRow(null)
+    setQueryRevision((current) => current + 1)
+    setSearch(next)
+    setApplied(next)
+  }
   const navigateToChild = (row: ReportRow, columnKey: string) => {
     const dimension = childDimensionForColumn(columnKey)
     if (!dimension) {
@@ -375,6 +396,9 @@ export function AdsWorkspace() {
                   hasPrevious={cursorHistory.length > 0}
                   onNext={nextPage}
                   onPrevious={previousPage}
+                  sortBy={applied.sort_by}
+                  sortDirection={applied.sort_direction ?? "asc"}
+                  onSort={sort}
                 />
               </TabsContent>
             ))}
