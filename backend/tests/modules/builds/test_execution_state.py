@@ -287,6 +287,36 @@ def test_typed_receipt_keeps_attempt_and_all_safe_correlation_ids(
     }
 
 
+def test_ad_disable_receipt_without_status_waits_for_readback(session, context, attempt):
+    """广告创建回执缺少状态时，不能把请求值当成平台停用事实。"""
+    from app.modules.builds.execution_state import arm_request, record_created
+
+    step, claim = attempt
+    step.kind = claim.kind = "AD"
+    claim = claim.model_copy(update={"kind": "AD"})
+    arm_request(
+        session,
+        context=context,
+        claim=claim,
+        body={
+            "advertiser_id": claim.advertiser_id,
+            "adgroup_id": "group-1",
+            "ad_name": "ad-user-test",
+            "operation_status": "DISABLE",
+        },
+    )
+    result = CreatedObject(
+        kind="AD",
+        remote_id="ad-1",
+        operation_status=None,
+        evidence=CallEvidence(request_id="request-ad"),
+    )
+
+    assert record_created(session, claim=claim, result=result) == "UNKNOWN"
+    assert step.remote_id == "ad-1"
+    assert step.error_code == "operation_status_pending_readback"
+
+
 def test_proven_not_sent_keeps_exact_armed_body_and_can_schedule_once(
     session, context, attempt
 ):

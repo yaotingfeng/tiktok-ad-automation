@@ -181,6 +181,14 @@ def arm_request(
 def record_created(session: Session, *, claim: StepClaim, result: CreatedObject) -> str:
     step = _step(session, claim)
     live = active_attempt(step, claim, phase="REQUEST_ARMED")
+    # 广告创建接口偶尔只返回 ID 而省略 operation_status。请求体中的 DISABLE
+    # 只是意图，不能冒充平台实际状态；先保留远端 ID 并转入回读，确认停用后再闭环。
+    status_pending_readback = (
+        result.kind == "AD"
+        and result.operation_status is None
+        and isinstance(step.request_body, dict)
+        and step.request_body.get("operation_status") == "DISABLE"
+    )
     evidence(
         session,
         step=step,
@@ -194,8 +202,13 @@ def record_created(session: Session, *, claim: StepClaim, result: CreatedObject)
         },
     )
     if live:
-        step.remote_id, step.status, step.phase = result.remote_id, "SUCCEEDED", "DONE"
-        step.operation_status, step.error_code = result.operation_status, None
+        step.remote_id = result.remote_id
+        step.status = "UNKNOWN" if status_pending_readback else "SUCCEEDED"
+        step.phase = "DONE"
+        step.operation_status = result.operation_status
+        step.error_code = (
+            "operation_status_pending_readback" if status_pending_readback else None
+        )
         step.lease_token = step.lease_expires_at = None
     elif step.status != "SUCCEEDED" and not step.remote_id:
         # Stop any replacement owner: the old attempt now has possible effect.
