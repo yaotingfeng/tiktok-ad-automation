@@ -396,7 +396,7 @@ export function AdsWorkspace() {
                   hasPrevious={cursorHistory.length > 0}
                   onNext={nextPage}
                   onPrevious={previousPage}
-                  sortBy={applied.sort_by}
+                  sortBy={applied.sort_by ?? "row_key"}
                   sortDirection={applied.sort_direction ?? "asc"}
                   onSort={sort}
                 />
