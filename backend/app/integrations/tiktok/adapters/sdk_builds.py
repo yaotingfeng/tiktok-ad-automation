@@ -147,7 +147,7 @@ class ApiBuildOperations:
                         raw["code"],
                         message if isinstance(message, str) else type(message).__name__,
                     )
-                response = sdk_creation_envelope(raw)
+                response = sdk_creation_envelope(raw, kind=intent.kind)
                 return created_result(kind=intent.kind, response=response)
         except RemoteCallError:
             raise

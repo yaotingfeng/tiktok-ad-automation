@@ -126,14 +126,19 @@ def sdk_write(request, monkeypatch):
 def test_sdk_write_preserves_error_code_without_replay_or_private_message(
     sdk_write, code, caplog
 ):
-    _, invoke, replies, calls = sdk_write
+    operation, invoke, replies, calls = sdk_write
     replies.append(
         {"code": code, "request_id": "provider-request", "message": PRIVATE_MESSAGE}
     )
     with pytest.raises(RemoteCallError) as caught:
         invoke()
     error = caught.value
-    assert error.effect == "UNKNOWN" and error.retryable is False
+    expected_effect = (
+        "REJECTED_NO_EFFECT"
+        if operation == "ad" and code in {40002, 51002}
+        else "UNKNOWN"
+    )
+    assert error.effect == expected_effect and error.retryable is False
     assert error.evidence == CallEvidence(
         request_id="provider-request", remote_code=code
     )
@@ -172,3 +177,27 @@ def test_sdk_write_success_does_not_record_zero_as_an_error(sdk_write):
     )
     assert invoke().evidence == CallEvidence(request_id="provider-request")
     assert len(calls) == 1
+
+
+def test_sdk_adgroup_40002_is_a_bounded_no_effect_rejection(sdk_write):
+    _, invoke, replies, calls = sdk_write
+    # The fixture's build operation is an AD create.  The dedicated ADGROUP
+    # assertion below exercises the shared envelope directly so the SDK path
+    # cannot silently turn a known business rejection into readback UNKNOWN.
+    from app.integrations.tiktok.adapters.build_results import sdk_creation_envelope
+
+    with pytest.raises(RemoteCallError) as caught:
+        sdk_creation_envelope(
+            {
+                "code": 40002,
+                "request_id": "provider-request",
+                "data": {},
+            },
+            kind="ADGROUP",
+        )
+    error = caught.value
+    assert error.effect == "REJECTED_NO_EFFECT"
+    assert error.evidence == CallEvidence(
+        request_id="provider-request", remote_code=40002
+    )
+    assert not calls and not replies
