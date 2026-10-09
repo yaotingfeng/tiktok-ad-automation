@@ -1,6 +1,6 @@
-# TK-ADA 公司 K8s 测试部署
+# TK-ADA 公司 K8s 生产部署
 
-本目录遵循公司 `deploy-help` 的镜像、端口、命名和共享入口约定。目标是公司集群中的测试实例；当前新加坡 systemd 测试服仍是独立环境。数据库选型不在本轮适配范围内。
+本目录遵循公司 `deploy-help` 的镜像、端口、命名和共享入口约定。2026-10-09 用户明确指定公司集群为生产环境，并授权直接迁移新加坡测试服的密钥、队列和授权。新加坡作为迁移源；最终切换前先停止旧调度/消费并完成一致性备份。数据库类型继续使用 PostgreSQL。具体目标与迁移边界见 `docs/runbooks/production-junbo.md`。
 
 ## 已固定的部署约定
 
@@ -10,15 +10,16 @@
 - namespace 为 `prod`，Ingress 为已有的 `public`；不创建第二个 Ingress，不配置 `imagePullSecrets`。
 - `K8S_CONTEXT` 和运维确认的单层 `*.jetmobo.com` 域名必须显式传入；没有测试服务器 IP/sslip.io 回退值。
 - API、7 个 Worker 和 Beat 使用同一镜像及配置。Worker 初始并发均为 1；Beat 单副本、`Recreate` 更新。
-- API 与 Worker 均有就绪探针；所有角色有 CPU/内存 requests 与 limits。应用合计请求 850m CPU / 4.25 GiB 内存；发布任务另请求 100m / 256 MiB。它们是测试起点，不是已完成压力测试的生产容量。
+- API 与 Worker 均有就绪探针；所有角色有 CPU/内存 requests 与 limits。应用合计请求 850m CPU / 4.25 GiB 内存；发布任务另请求 100m / 256 MiB。它们是首发预算，尚未经过生产压力测试。
+- Beat PVC 显式使用公司集群已有的 `cbs` StorageClass，申请 20 GiB；集群无默认存储类，不能省略该字段。
 - MCP Secret 使用单文件 `subPath` 挂载，兼容注册文件读取的 `O_NOFOLLOW`。配置摘要写入 Pod 注解，配置变化会重建所有角色；不依赖 Secret 热更新。
 
 ## 部署前要准备的具体资料
 
 1. 获授权的 kubeconfig、明确的 context，以及 `prod` 资源配额。优先使用项目受限凭据；凭据必须允许下述只读查重，权限不足时停止，不能跳过检查。
-2. 运维分配的测试域名和 DNS A 记录（公司入口 `134.175.255.190`），确认现有通配证书覆盖该域名。
+2. 运维分配的生产域名和 DNS A 记录（公司入口 `134.175.255.190`），确认现有通配证书覆盖该域名。
 3. 仓库外的运行配置和真实 MCP 注册文件；注册文件必须允许目标回调域名。私有 R2 桶的 CORS 同步允许目标前端 origin，禁止改为公开桶。
-4. 明确独立测试还是接替旧测试实例：独立实例使用隔离的业务状态/队列；接替时先停止旧调度、排空任务并按发布手册备份。不得让两套 Beat/Worker 未经安排消费同一批任务。
+4. 已确认从新加坡迁移密钥、队列和授权；最终切换时先停止旧调度、排空任务并按发布手册备份。不得让两套 Beat/Worker 同时消费同一批任务。
 5. 三个部署开关的明确取值。`MATERIAL_INGEST_ENABLED` 控制新导入入口，`MATERIAL_CLEANUP_ENABLED` 控制自动清理，`ADS_SYNC_ENABLED` 控制新周期同步；关闭它们不等于已有队列任务不会执行。首次值按用户确认填写，后续发布保留已确认值。
 
 `runtime-secret.example.env` 是字段模板，不是可直接部署的配置。使用 literal `KEY=value`，不要加 shell 引号或 `source` 到当前 shell；秘密文件权限设为 0600。目标域名必须同时用于 `FRONTEND_HOST`、MCP 回调和已启用的 TikTok API 回调。API 应用未配置时三个 API 注册字段全部留空，不能只填写一部分。
@@ -71,10 +72,10 @@ bash deploy/build-and-push.sh
 ```bash
 export K8S_CONTEXT='<已确认的 context>'
 export K8S_NAMESPACE=prod
-export INGRESS_HOST='<运维分配的测试子域>.jetmobo.com'
+export INGRESS_HOST='<运维分配的生产子域>.jetmobo.com'
 export RELEASE_ID="$(git rev-parse HEAD)"
 export APP_IMAGE="junbo-image.tencentcloudcr.com/prod/tiktok-ad-automation:${RELEASE_ID}"
-export RUNTIME_ENV_FILE='/private/path/tk-ada-test-runtime.env'
+export RUNTIME_ENV_FILE='/private/path/tk-ada-production-runtime.env'
 export MCP_CLIENT_REGISTRATION_FILE='/private/path/mcp-client.json'
 
 docker pull "$APP_IMAGE"

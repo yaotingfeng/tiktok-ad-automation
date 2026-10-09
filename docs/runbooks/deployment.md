@@ -10,7 +10,7 @@
 
 Kubernetes 资产位于 [`deploy/k8s/README.md`](../../deploy/k8s/README.md)。该方案保留 PostgreSQL，使用集群外可达的 PostgreSQL/Redis 和目标环境明确配置的 R2/回调，通过外部运行环境文件和 MCP 注册 Secret 注入；它不把测试密钥提交到 Git，也不在应用 namespace 内创建数据库或 Redis。
 
-截至 2026-09-19，生产服务器尚未提供，生产环境未建立。[production-junbo.md](production-junbo.md) 仅记录未来建环境的前置条件和发布原则；旧地址与旧“生产验收”均不代表现网。未取得用户明确提供的新服务器与授权清单前，不得执行任何生产连接或发布。
+2026-10-09 用户已明确公司 TKE `cls-n950t106` / `prod` 为生产目标，并授权从新加坡直接迁移密钥、队列和授权。当前已完成集群只读核验，尚未部署；具体迁移条件、已知缺项和授权边界见 [production-junbo.md](production-junbo.md)。旧地址与旧“生产验收”仍不代表该生产实例。
 
 其他环境的首次配置和宿主机命令见 [bootstrap-deployment.md](bootstrap-deployment.md)。下文为通用 staging 方案，补充版本、素材存储和升级顺序。
 

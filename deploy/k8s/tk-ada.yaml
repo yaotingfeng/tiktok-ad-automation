@@ -35,8 +35,10 @@ metadata:
   labels:
     app: tiktok-ad-automation
 spec:
+  # 公司 TKE 集群没有默认 StorageClass，显式使用已核实的 CBS。
+  storageClassName: cbs
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 1Gi
+      storage: 20Gi
