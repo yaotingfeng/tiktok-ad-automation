@@ -19,9 +19,7 @@ from app.modules.builds.scene_job_models import (
 )
 from app.modules.providers.models import ProviderApplication, ProviderConnection
 from app.modules.strategies.copy_pool import POOL_VERSION
-from app.modules.strategies.models import StrategyVersion
-from app.modules.strategies.schemas import StrategyConfig
-from app.modules.strategies.service import create_strategy
+from app.modules.strategies.models import Strategy, StrategyVersion
 from tests.migration_database import historical_database, insert_historical_bc
 from tests.modules.conftest import create_context
 
@@ -40,14 +38,22 @@ def test_historical_scene_migration_preserves_ids_and_facts_without_inventing_ro
                 display_name="Synthetic",
                 encrypted_credentials="synthetic",
             )
-            db.add_all(
-                [
-                    conn,
-                    provider,
-                    AdvertiserAccount(
-                        tenant_id=context.tenant_id, advertiser_id="old-advertiser"
-                    ),
-                ]
+            db.add_all([conn, provider])
+            account = AdvertiserAccount(
+                tenant_id=context.tenant_id, advertiser_id="old-advertiser"
+            )
+            # 历史 schema 只写当时存在的列，不能由今日 ORM 补入后续字段。
+            account_table = Table(
+                "advertiser_account", MetaData(), autoload_with=db.connection()
+            )
+            db.execute(
+                account_table.insert().values(
+                    **{
+                        key: value
+                        for key, value in account.model_dump().items()
+                        if key in account_table.c
+                    }
+                )
             )
             db.flush()
             db.add(
@@ -58,24 +64,33 @@ def test_historical_scene_migration_preserves_ids_and_facts_without_inventing_ro
                     name="Synthetic",
                 )
             )
-            strategy = create_strategy(
-                db,
-                context=context,
-                name="Historical",
-                config=StrategyConfig.model_validate(
-                    {
-                        "budget": "100",
-                        "currency": "USD",
-                        "target_roas": "1",
-                        "group_size": 10,
-                        "creative_count": 2,
-                        "copy_pool_version": POOL_VERSION,
-                    }
-                ),
+            strategy = Strategy(
+                tenant_id=context.tenant_id, name="Historical", latest_version=1
             )
-            version = db.exec(
-                select(StrategyVersion).where(StrategyVersion.strategy_id == strategy)
-            ).one()
+            db.add(strategy)
+            db.flush()
+            version = StrategyVersion(
+                tenant_id=context.tenant_id,
+                strategy_id=strategy.id,
+                number=1,
+                copy_pool_version_id=POOL_VERSION,
+                config={
+                    "budget": "100",
+                    "currency": "USD",
+                    "target_roas": "1",
+                    "group_size": 10,
+                    "creative_count": 2,
+                    "copy_pool_version": str(POOL_VERSION),
+                },
+                budget=100,
+                target_roas=1,
+                created_by=context.actor_id,
+                request_id=uuid4(),
+                request_digest="a" * 64,
+                request_kind="create",
+            )
+            db.add(version)
+            db.flush()
             draft = BuildDraft(
                 tenant_id=context.tenant_id,
                 bc_id="old-bc",
@@ -145,15 +160,23 @@ def test_historical_scene_migration_preserves_ids_and_facts_without_inventing_ro
             state = DraftScenePreparation(
                 tenant_id=context.tenant_id, draft_id=draft.id, preparation_id=prep.id
             )
-            for model, row, omitted in (
-                (SceneJob, job, {"frozen_route"}),
-                (SceneJobPage, page, {"mcp_request_id", "remote_task_id"}),
-                (DraftScenePreparation, state, {"frozen_route"}),
+            for model, row in (
+                (SceneJob, job),
+                (SceneJobPage, page),
+                (DraftScenePreparation, state),
             ):
                 table = Table(
                     model.__tablename__, MetaData(), autoload_with=db.connection()
                 )
-                db.execute(table.insert().values(**row.model_dump(exclude=omitted)))
+                db.execute(
+                    table.insert().values(
+                        **{
+                            key: value
+                            for key, value in row.model_dump().items()
+                            if key in table.c
+                        }
+                    )
+                )
             job_id, page_id, draft_id, prep_id = job.id, page.id, draft.id, prep.id
             route = FrozenTikTokRoute(
                 tenant_id=context.tenant_id,

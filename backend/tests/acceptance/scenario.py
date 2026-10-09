@@ -51,6 +51,7 @@ from app.modules.accounts.models import (
     TenantBC,
     TikTokConnection,
 )
+from app.modules.accounts.routing import freeze_route
 from app.modules.builds import drafts, previews, submissions
 from app.modules.builds.models import BuildDraft, DraftPreparation
 from app.modules.builds.preview_models import BuildPreview, BuildUnit
@@ -108,6 +109,7 @@ class Wire:
         self.scopes: dict[str, Scope] = {}
         self.objects: dict[str, tuple[bytes, UUID, UUID]] = {}
         self.videos: dict[tuple[str, str], dict[str, Any]] = {}
+        self.source_videos: dict[tuple[str, str], dict[str, Any]] = {}
         self.portfolios: dict[str, dict[str, Any]] = {}
         self.images: dict[tuple[str, str], dict[str, Any]] = {}
         self.calls: Counter[str] = Counter()
@@ -252,17 +254,69 @@ class Wire:
             }
             self.videos[(query["advertiser_id"], video_id)] = row
             data = [{"video_id": video_id, "material_id": row["material_id"]}]
+        elif path.endswith("/creative/asset/share/"):
+            # 只模拟官方传输：核实来源 MID 和目标授权，实际任务/映射仍由 worker 写入。
+            assert method == "POST"
+            scope = scopes[0]
+            assert set(body["shared_advertiser_ids"]) <= set(scope.accounts)
+            inventory = (
+                {**self.source_videos, **self.videos}
+                if body["asset_type"] == "VIDEO"
+                else self.images
+            )
+            for mid in body["material_ids"]:
+                matches = [
+                    row
+                    for (owner, _), row in inventory.items()
+                    if owner == account and row["material_id"] == mid
+                ]
+                assert len(matches) == 1
+                for target in body["shared_advertiser_ids"]:
+                    if body["asset_type"] == "VIDEO":
+                        identity = f"target-vid-{len(self.videos)}"
+                        self.videos[(target, identity)] = {
+                            **matches[0],
+                            "video_id": identity,
+                        }
+                    else:
+                        identity = f"target-image-{len(self.images)}"
+                        self.images[(target, identity)] = {
+                            **matches[0],
+                            "image_id": identity,
+                        }
+            data = {"failed_infos": {}}
+        elif path.endswith("/file/video/ad/search/"):
+            filters = json.loads(query.get("filtering", "{}"))
+            rows = [
+                row
+                for (owner, _), row in self.videos.items()
+                if owner == account
+                and (
+                    not filters.get("material_ids")
+                    or row["material_id"] in filters["material_ids"]
+                )
+                and (
+                    not filters.get("video_name")
+                    or row["file_name"] == filters["video_name"]
+                )
+            ]
+            page, size = int(query["page"]), int(query["page_size"])
+            data = {
+                "list": rows[(page - 1) * size : page * size],
+                "page_info": self.page(page, size, len(rows)),
+            }
         elif path.endswith("/file/video/ad/info/"):
             ids = (
                 json.loads(query["video_ids"])
                 if isinstance(query["video_ids"], str)
                 else query["video_ids"]
             )
+            inventory = {**self.source_videos, **self.videos}
             data = {
                 "list": [
-                    self.videos[(query["advertiser_id"], identity)]
+                    inventory[(query["advertiser_id"], identity)]
                     for identity in ids
-                    if (query["advertiser_id"], identity) in self.videos
+                    if (query["advertiser_id"], identity) in inventory
                 ]
             }
         elif path.endswith("/file/image/ad/upload/"):
@@ -271,6 +325,7 @@ class Wire:
             image_id = f"target-image-{len(self.images)}"
             data = {
                 "image_id": image_id,
+                "material_id": str(900000 + len(self.images)),
                 "file_name": body["file_name"],
                 "displayable": True,
                 "width": 720,
@@ -292,11 +347,15 @@ class Wire:
                 ]
             }
         elif path.endswith("/file/image/ad/search/"):
-            assert not query.get("filtering")
+            filters = json.loads(query.get("filtering", "{}"))
             rows = [
                 row
                 for (account, _), row in self.images.items()
                 if account == query["advertiser_id"]
+                and (
+                    not filters.get("material_ids")
+                    or row["material_id"] in filters["material_ids"]
+                )
             ]
             page, size = int(query["page"]), int(query["page_size"])
             data = {
@@ -912,8 +971,17 @@ def seed_scope(
             config=StrategyConfig(
                 budget=Decimal("100"),
                 currency="USD",
+                bid_strategy="TARGET_ROAS",
                 target_roas=Decimal("1.2"),
-                group_size=10,
+                # 保留 K10/N2 的原验收规模，使用当前显式结构合同。
+                group_generation_mode="BY_MATERIAL",
+                group_count=None,
+                group_material_allocation=None,
+                max_materials_per_group=10,
+                ad_generation_mode="FIXED",
+                ads_per_group=1,
+                ad_material_allocation="SHARED",
+                max_materials_per_ad=None,
                 creative_count=2,
                 copy_pool_version=POOL_VERSION,
             ),
@@ -1003,6 +1071,12 @@ def seed_scope(
                     advertiser_id=scope.sources[number % 2],
                     path="upload_original",
                     status="succeeded",
+                    frozen_route=freeze_route(
+                        session,
+                        context=scope.context,
+                        bc_id=bc,
+                        connection_id=conn.id,
+                    ).model_dump(mode="json"),
                     request_digest=hashlib.sha256(contents).hexdigest(),
                     remote_response={
                         "video_id": "source-vid-" + str(material.id),
@@ -1025,6 +1099,21 @@ def seed_scope(
                     )
                 )
                 scope.material_ids.append(material.id)
+                wire.source_videos[
+                    (scope.sources[number % 2], "source-vid-" + str(material.id))
+                ] = {
+                    "video_id": "source-vid-" + str(material.id),
+                    "material_id": "source-mid-" + str(material.id),
+                    "signature": material.video_md5,
+                    "file_name": material.file_name,
+                    "displayable": True,
+                    "width": 720,
+                    "height": 1280,
+                    "size": len(contents),
+                    "duration": 1,
+                    "format": "mp4",
+                    "video_cover_url": f"https://p16.example.com/cover-{material.id}.jpeg",
+                }
     wire.scopes[bc] = scope
     return scope
 
@@ -1083,6 +1172,9 @@ class AcceptanceScenario:
                 return session.get(BuildPreview, self.preview_id).status != "BUILDING"
 
         self.runtime.drive_until(done)
+        with Session(self.database_engine) as session:
+            preview = session.get(BuildPreview, self.preview_id)
+            assert preview.status == "FROZEN", (preview.status, preview.error_code)
         return self.preview_id
 
     def submit(self, request_id: UUID | None = None) -> UUID:

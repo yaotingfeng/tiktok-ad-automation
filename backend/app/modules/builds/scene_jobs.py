@@ -1,7 +1,7 @@
 """每次持久任务只读一页官方场景事实，同应用链接共享冻结连接下的结果。"""
 
-from datetime import UTC, datetime, timedelta
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID, uuid4
 
@@ -43,7 +43,14 @@ from .scene_schemas import ScenePreparation, SceneResource
 
 TASK_NAME = "builds.refresh_scene"
 REPAIR_SECONDS = 120
-RESOURCES: tuple[SceneResource, ...] = ("identity", "minis", "cta", "vbo", "regions", "budget")
+RESOURCES: tuple[SceneResource, ...] = (
+    "identity",
+    "minis",
+    "cta",
+    "vbo",
+    "regions",
+    "budget",
+)
 register_dispatch_task(TASK_NAME, "resources")
 logger = logging.getLogger(__name__)
 
@@ -123,17 +130,14 @@ def ensure_scene_preparation(
         and job.expires_at
         and job.expires_at > now
     ):
-        # Budget capability evidence was added after older COMPLETE jobs were
-        # persisted. Rebuild that shared scene instead of treating the old
-        # snapshot as current and blocking every ADGROUP preview.
-        if "budget" not in job.facts:
+        # 仅完整投放场景需要预算证据；用于解析手动链接的 Minis 目录只读取
+        # minis，必须保留其完成结果，否则会无限重建目录、永远无法选定小程序。
+        if scope["minis_id"] and "budget" not in job.facts:
             job.status = "STALE"
             job.error_code = "scene_contract_changed"
             session.add(job)
             session.flush()
             job = None
-        else:
-            pass
     if (
         job is not None
         and job.status == "COMPLETE"

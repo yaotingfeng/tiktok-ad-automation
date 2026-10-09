@@ -9,18 +9,39 @@ from sqlmodel import Session
 
 from app.core.errors import DomainError
 from app.modules.accounts.models import AdvertiserAccount, TikTokConnection
-from app.modules.materials.models import MaterialAssetOperation
+from app.modules.materials.models import MaterialFile
 from app.modules.materials.routes import load_material_route
-from tests.migration_database import historical_database
+from tests.migration_database import historical_database, insert_historical_bc
 from tests.modules.conftest import create_context
-from tests.modules.materials.test_tenant_materials import material
 
 
 def old_rows(db, connections):
     context = create_context(db)
-    file = material(db, context, "original-name.mp4")
-    db.add(
-        AdvertiserAccount(tenant_id=context.tenant_id, advertiser_id="actual-source")
+    # 不使用当前 BC ORM 读取历史 schema 尚不存在的主素材账户列。
+    insert_historical_bc(db, tenant_id=context.tenant_id, bc_id="bc-a")
+    file = MaterialFile(
+        tenant_id=context.tenant_id,
+        bc_id="bc-a",
+        file_name="original-name.mp4",
+        object_key=f"historical/{uuid4()}",
+        byte_size=4_000_000_000,
+        storage_state="stored",
+    )
+    db.add(file)
+    account_table = Table(
+        "advertiser_account", MetaData(), autoload_with=db.connection()
+    )
+    account = AdvertiserAccount(
+        tenant_id=context.tenant_id, advertiser_id="actual-source"
+    )
+    db.execute(
+        account_table.insert().values(
+            **{
+                key: value
+                for key, value in account.model_dump().items()
+                if key in account_table.c
+            }
+        )
     )
     for _ in range(connections):
         db.add(TikTokConnection(tenant_id=context.tenant_id, status="ACTIVE"))
@@ -150,7 +171,14 @@ def test_history_keeps_original_payload_ids_and_null_route_for_same_bc_two_tenan
                     )
         with Session(engine) as db:
             for context, op_id in ((first, identity), (second, second_id)):
-                operation = db.get(MaterialAssetOperation, op_id)
+                # 读取迁移目标真实存在的列，不让当前 ORM 引入后续迁移字段。
+                operation = db.execute(
+                    text(
+                        "SELECT advertiser_id, remote_response, frozen_route, bc_id "
+                        "FROM material_asset_operation WHERE id = :id"
+                    ),
+                    {"id": op_id},
+                ).one()
                 assert operation.advertiser_id == "actual-source"
                 assert operation.remote_response["video_id"] == "actual-remote-vid"
                 with pytest.raises(DomainError) as error:

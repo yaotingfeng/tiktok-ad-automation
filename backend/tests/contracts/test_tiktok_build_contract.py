@@ -87,12 +87,33 @@ def test_campaign_keeps_exact_values_and_direct_enable():
         {"advertiser_id": 123},
         {"advertiser_id": " "},
         {"budget": "NaN"},
+        {"budget": "sNaN"},
+        {"budget": "Infinity"},
+        {"budget": "-Infinity"},
         {"budget": "0"},
         {"budget": True},
     ):
         with pytest.raises(ValidationError):
             CampaignCreate(**{**value.model_dump(), **change})
-    assert CampaignCreate(**{**value.model_dump(), "operation_status": "DISABLE"}).operation_status == "DISABLE"
+    assert (
+        CampaignCreate(
+            **{**value.model_dump(), "operation_status": "DISABLE"}
+        ).operation_status
+        == "DISABLE"
+    )
+
+
+@pytest.mark.parametrize("budget", [None, "0"])
+def test_adgroup_budget_preserves_unlimited_campaign_budget(budget):
+    value = CampaignCreate(
+        advertiser_id="123",
+        name="广告组预算",
+        budget_strategy="ADGROUP",
+        budget=budget,
+    )
+    assert value.budget_mode == "BUDGET_MODE_INFINITE"
+    assert value.budget == (None if budget is None else Decimal("0"))
+    assert value.budget_optimize_on is None
 
 
 def test_video_ad_without_custom_cover_roundtrips_and_accepts_generated_cover():

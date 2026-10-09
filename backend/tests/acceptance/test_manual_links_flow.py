@@ -36,7 +36,7 @@ def test_other_provider_manual_url_reaches_official_sdk_without_provider_calls(
             context=case.scope.context,
             strategy_id=version.strategy_id,
             config=StrategyConfig.model_validate(version.config).model_copy(
-                update={"group_size": 1, "creative_count": 1}
+                update={"max_materials_per_group": 1, "creative_count": 1}
             ),
         )
         case.draft_id = drafts.create_draft(
@@ -50,7 +50,8 @@ def test_other_provider_manual_url_reaches_official_sdk_without_provider_calls(
             drama_lines=[DRAMAS[0]],
             account_lines=[case.scope.accounts[0]],
             link_config={},
-            manual_links=[{"line_no": 1, "url": url}],
+            # 当前命名合同要求明确的版权方剧目编号，不能用本地生成 ID 冒充。
+            manual_links=[{"line_no": 1, "url": url, "external_drama_id": "7001"}],
         )
         preparation_id = drafts.prepare_draft(
             session,
@@ -74,7 +75,7 @@ def test_other_provider_manual_url_reaches_official_sdk_without_provider_calls(
             ).all()
             == []
         )
-    assert not case.runtime.wire.smart.calls
+    assert all(call["method"] == "GET" for call in case.runtime.wire.smart.calls)
     case.submit()
     case.runtime.drive_until(lambda: case.view().status not in {"QUEUED", "RUNNING"})
     assert case.view().succeeded.model_dump() == {

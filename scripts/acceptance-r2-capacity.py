@@ -71,11 +71,19 @@ def run_capacity(*, count: int, database_url: str | None = None) -> dict[str, An
     if type(count) is not int or not 1 <= count <= 20_000:
         raise ValueError("Capacity count must be between 1 and 20000")
 
+    from fastapi.testclient import TestClient
+    from sqlalchemy import delete, event
+    from sqlmodel import Session, SQLModel, col, select
+
     from app.core.db import engine
     from app.core.security import create_access_token
     from app.main import app
     from app.models import User
-    from app.modules.accounts.models import TenantBC
+    from app.modules.accounts.connection_models import (
+        BCConnectionBinding,
+        BCDefaultRoute,
+    )
+    from app.modules.accounts.models import TenantBC, TikTokConnection
     from app.modules.materials import storage
     from app.modules.materials.ingest_models import (
         ObjectBudget,
@@ -84,9 +92,6 @@ def run_capacity(*, count: int, database_url: str | None = None) -> dict[str, An
     )
     from app.modules.materials.object_budget import release_object_reservation
     from app.modules.tenants.models import Tenant, TenantMembership
-    from fastapi.testclient import TestClient
-    from sqlalchemy import delete, event
-    from sqlmodel import Session, SQLModel, col, select
 
     run_id, tenant_id, actor_id = uuid4().hex, uuid4(), uuid4()
     bc_id = "capacity-" + run_id
@@ -161,6 +166,27 @@ def run_capacity(*, count: int, database_url: str | None = None) -> dict[str, An
                     ),
                     TenantBC(tenant_id=tenant_id, bc_id=bc_id),
                 ]
+            )
+            db.flush()
+            # 元数据入口也会冻结执行路由；登记合成连接，不绕过 BC 校验。
+            connection = TikTokConnection(tenant_id=tenant_id, status="ACTIVE")
+            db.add(connection)
+            db.flush()
+            db.add(
+                BCConnectionBinding(
+                    tenant_id=tenant_id,
+                    bc_id=bc_id,
+                    connection_id=connection.id,
+                    kind=connection.kind,
+                )
+            )
+            db.flush()
+            db.add(
+                BCDefaultRoute(
+                    tenant_id=tenant_id,
+                    bc_id=bc_id,
+                    connection_id=connection.id,
+                )
             )
         event.listen(engine, "before_cursor_execute", observe)
         with ExitStack() as overrides:

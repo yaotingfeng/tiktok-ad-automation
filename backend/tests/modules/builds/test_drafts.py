@@ -38,7 +38,7 @@ from app.modules.providers.models import (
     ProviderDrama,
 )
 from app.modules.providers.schemas import link_reuse_key
-from app.modules.strategies.models import StrategyVersion
+from app.modules.strategies.models import Strategy, StrategyVersion
 from app.modules.strategies.service import create_strategy
 from tests.modules.materials.test_tenant_materials import material
 from tests.modules.strategies.test_versions import config
@@ -68,7 +68,39 @@ def create_intent(session, context, *, historical=False):
             name="test",
         )
     )
-    strategy = create_strategy(session, context=context, name="test", config=config())
+    if historical:
+        # 历史 schema 只播种当时的策略，不调用依赖今日租户列的业务服务。
+        row = Strategy(tenant_id=context.tenant_id, name="test", latest_version=1)
+        session.add(row)
+        session.flush()
+        values = config()
+        session.add(
+            StrategyVersion(
+                tenant_id=context.tenant_id,
+                strategy_id=row.id,
+                number=1,
+                copy_pool_version_id=values.copy_pool_version,
+                config={
+                    "budget": str(values.budget),
+                    "currency": values.currency,
+                    "target_roas": str(values.target_roas),
+                    "group_size": 10,
+                    "creative_count": 2,
+                    "copy_pool_version": str(values.copy_pool_version),
+                },
+                budget=values.budget,
+                target_roas=values.target_roas,
+                created_by=context.actor_id,
+                request_id=uuid4(),
+                request_digest="a" * 64,
+                request_kind="create",
+            )
+        )
+        strategy = row.id
+    else:
+        strategy = create_strategy(
+            session, context=context, name="test", config=config()
+        )
     session.flush()
     version = session.exec(
         select(StrategyVersion).where(StrategyVersion.strategy_id == strategy)
@@ -159,7 +191,7 @@ def account(
     else:
         connection = session.get(TikTokConnection, default.connection_id)
         assert connection
-    session.add(
+    add_versioned_row(
         AdvertiserAccount(
             tenant_id=context.tenant_id,
             advertiser_id=identity,
@@ -186,7 +218,7 @@ def account(
         )
     )
     session.flush()
-    if not capability:
+    if not capability or historical:
         return
     # Explicit offline COMPLETE evidence: VERIFIED flags alone no longer establish
     # a current-token role/scope proof. No credentials or remote SDK are needed.

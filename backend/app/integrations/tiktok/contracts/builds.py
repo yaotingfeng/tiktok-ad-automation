@@ -39,6 +39,9 @@ def _money(value: object) -> Decimal:
 
 def _nonnegative_money(value: object) -> Decimal:
     result = _money(value)
+    # NaN 在大小比较时会抛 Decimal 异常；先拒绝非有限值，统一返回字段校验错误。
+    if not result.is_finite():
+        raise ValueError("money must be finite")
     if result < 0:
         raise ValueError("money must not be negative")
     return result
@@ -88,9 +91,9 @@ class CampaignCreate(FrozenModel):
     objective_type: Literal["APP_PROMOTION"] = "APP_PROMOTION"
     app_promotion_type: Literal["MINIS"] = "MINIS"
     campaign_type: Literal["REGULAR_CAMPAIGN"] = "REGULAR_CAMPAIGN"
-    budget_mode: Literal[
-        "BUDGET_MODE_DYNAMIC_DAILY_BUDGET", "BUDGET_MODE_INFINITE"
-    ] = "BUDGET_MODE_DYNAMIC_DAILY_BUDGET"
+    budget_mode: Literal["BUDGET_MODE_DYNAMIC_DAILY_BUDGET", "BUDGET_MODE_INFINITE"] = (
+        "BUDGET_MODE_DYNAMIC_DAILY_BUDGET"
+    )
     budget_optimize_on: Literal[True, False] | None = True
     smart_plus_adgroup_mode: Literal["SINGLE", "MULTIPLE"] | None = None
 
@@ -114,8 +117,8 @@ class CampaignCreate(FrozenModel):
     @model_validator(mode="after")
     def validate_budget_contract(self) -> Self:
         if self.budget_strategy == "SERIES":
-            if self.budget is None:
-                raise ValueError("series budget requires campaign budget")
+            if self.budget is None or self.budget <= 0:
+                raise ValueError("series budget requires positive campaign budget")
             if self.budget_mode != "BUDGET_MODE_DYNAMIC_DAILY_BUDGET":
                 raise ValueError("series budget requires dynamic daily budget mode")
             if self.budget_optimize_on is not True:
@@ -187,7 +190,9 @@ class AdGroupObservedFacts(FrozenModel):
     placements: tuple[Literal["PLACEMENT_TIKTOK"], ...] = Field(
         default=("PLACEMENT_TIKTOK",), min_length=1
     )
-    schedule_type: Literal["SCHEDULE_FROM_NOW", "SCHEDULE_START_END"] = "SCHEDULE_FROM_NOW"
+    schedule_type: Literal["SCHEDULE_FROM_NOW", "SCHEDULE_START_END"] = (
+        "SCHEDULE_FROM_NOW"
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -213,8 +218,13 @@ class AdGroupObservedFacts(FrozenModel):
     @model_validator(mode="after")
     def validate_budget_and_bid_contract(self) -> Self:
         if self.schedule_type == "SCHEDULE_START_END":
-            if self.schedule_end_time is not None and self.schedule_end_time <= self.schedule_start_time:
-                raise ValueError("schedule_end_time must be later than schedule_start_time")
+            if (
+                self.schedule_end_time is not None
+                and self.schedule_end_time <= self.schedule_start_time
+            ):
+                raise ValueError(
+                    "schedule_end_time must be later than schedule_start_time"
+                )
         elif self.schedule_end_time is not None:
             raise ValueError("SCHEDULE_FROM_NOW must not include schedule_end_time")
         if self.budget_strategy == "ADGROUP":

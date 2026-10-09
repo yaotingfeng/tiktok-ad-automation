@@ -1,4 +1,4 @@
-"""同一正式 SceneJob 通过真实 SDK/MCP HTTP 完成五类只读事实。"""
+"""同一正式 SceneJob 通过真实 SDK/MCP HTTP 完成六类只读事实。"""
 
 from uuid import uuid4
 
@@ -11,6 +11,41 @@ from app.modules.builds.scene import read_scene_context
 from app.modules.builds.scene_job_models import SceneJob, SceneJobPage
 from tests.integrations.tiktok.gateway_support import business_calls
 from tests.modules.builds.scene.support import enqueue, ensure, run, scene_responses
+
+
+@pytest.mark.parametrize(
+    "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
+)
+def test_minis_catalog_resolves_link_without_full_scene_budget_evidence(
+    database_engine, redis_client, scene_case, gateway_wire
+):
+    from sqlmodel import delete
+
+    from app.modules.builds.mini_targets import MiniTarget
+    from app.modules.providers.models import PromotionLink
+
+    case = scene_case
+    with Session(database_engine) as db, db.begin():
+        db.exec(
+            delete(MiniTarget).where(MiniTarget.tenant_id == case["context"].tenant_id)
+        )
+        db.get(
+            PromotionLink, case["link_id"]
+        ).url = "https://www.tiktok.com/minis/synthetic-minis"
+    catalog = ensure(database_engine, case)
+    enqueue(gateway_wire, "minis", scene_responses(case)["minis"])
+    job = run(database_engine, redis_client, case, catalog.job_id)
+    assert job.status == "COMPLETE" and job.minis_id is None
+    assert "budget" not in job.facts
+
+    # 已完成目录用于解析链接，再进入有明确 Minis 的完整场景，不能反复重读目录。
+    full = ensure(database_engine, case)
+    assert full.state == "queued" and full.job_id != catalog.job_id
+    assert ensure(database_engine, case).job_id == full.job_id
+    with Session(database_engine) as db:
+        assert db.get(SceneJob, catalog.job_id).status == "COMPLETE"
+        assert db.get(SceneJob, full.job_id).minis_id == "synthetic-minis"
+    assert len(business_calls(gateway_wire, case["route"].channel)) == 1
 
 
 @pytest.mark.parametrize("gateway_case", ["OFFICIAL_MCP"], indirect=True)
@@ -125,10 +160,10 @@ def test_one_frozen_job_completes_on_both_channels_without_api_app_for_mcp(
     for resource, data in scene_responses(case).items():
         enqueue(gateway_wire, resource, data)
         job = run(database_engine, redis_client, case, receipt.job_id)
-        assert job.status == ("COMPLETE" if resource == "regions" else "PENDING"), (
+        assert job.status == ("COMPLETE" if resource == "budget" else "PENDING"), (
             job.error_code
         )
-    assert len(business_calls(gateway_wire, case["route"].channel)) == 5
+    assert len(business_calls(gateway_wire, case["route"].channel)) == 6
     with Session(database_engine) as db:
         facts = read_scene_context(
             db,
@@ -147,7 +182,7 @@ def test_one_frozen_job_completes_on_both_channels_without_api_app_for_mcp(
         pages = db.exec(
             select(SceneJobPage).where(SceneJobPage.job_id == receipt.job_id)
         ).all()
-        assert len(pages) == 5
+        assert len(pages) == 6
         assert all(page.source_revision and page.endpoint for page in pages)
         if case["route"].channel == "OFFICIAL_MCP":
             assert all(page.mcp_request_id for page in pages)

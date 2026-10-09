@@ -269,6 +269,8 @@ def video_info(remote, vid):
         "list": [
             {
                 "video_id": vid,
+                "material_id": "mid-" + vid,
+                "file_name": "acceptance.mp4",
                 "signature": md5(remote.content).hexdigest(),
                 "displayable": True,
                 "width": 160,
@@ -279,6 +281,21 @@ def video_info(remote, vid):
                 "preview_url": "https://media.vetted.example/video?signature=transient",
             }
         ]
+    }
+
+
+def search_info(remote, vid):
+    row = video_info(remote, vid)["list"][0]
+    # MID 共享查询按来源 MID 识别同一素材；VID 仍由目标账户回执决定。
+    row["material_id"] = "mid-pipeline-source"
+    return {
+        "list": [row],
+        "page_info": {
+            "page": 1,
+            "page_size": 100,
+            "total_page": 1,
+            "total_number": 1,
+        },
     }
 
 
@@ -318,7 +335,12 @@ def test_api_to_verified_source_cleanup_target_and_cover(
         wire[1].append(
             {
                 "list": [{**candidate, "file_name": op.remote_response["remote_name"]}],
-                "page_info": {"page": 1, "page_size": 100, "total_page": 1},
+                "page_info": {
+                    "page": 1,
+                    "page_size": 100,
+                    "total_page": 1,
+                    "total_number": 1,
+                },
             }
         )
         source_run(env, redis_client, kind="verify", operation_id=op.id)
@@ -330,6 +352,7 @@ def test_api_to_verified_source_cleanup_target_and_cover(
         source_run(env, redis_client)
     source_run(env, redis_client, kind="verify", operation_id=operation(env).id)
     assert operation(env).status == "succeeded", operation(env).remote_response
+    source_operation_id = operation(env).id
     with Session(engine) as db:
         cleanup = db.exec(
             select(ObjectCleanup).where(ObjectCleanup.material_id == env["material_id"])
@@ -365,44 +388,67 @@ def test_api_to_verified_source_cleanup_target_and_cover(
         env["target"] = target(db, env)
     assert read(env, env["target"]).state == "preparable"
     prepared = queue(env, env["target"])
+    if fault == "source_unknown":
+        # 上传丢回执后的恢复未留下可复用 MID；共享前须重新读取来源详情。
+        wire[1].append(video_info(remote, "pipeline-source"))
     if fault == "target_unknown":
         from urllib3.exceptions import ReadTimeoutError
 
-        wire[1].extend(
-            [
-                video_info(remote, "pipeline-source"),
-                ReadTimeoutError(None, "https://synthetic.invalid", "lost reply"),
-            ]
+        wire[1].append(
+            ReadTimeoutError(None, "https://synthetic.invalid", "lost reply")
         )
         target_run(env, redis_client, prepared.task_id, kind="prepare")
         op = state(prepared.task_id)[1]
         assert op.status == "result_unknown", op.remote_response
-        candidate = video_info(remote, "pipeline-target")["list"][0]
-        wire[1].append(
-            {
-                "list": [{**candidate, "file_name": op.remote_response["remote_name"]}],
-                "page_info": {"page": 1, "page_size": 100, "total_page": 1},
-            }
-        )
-        target_run(env, redis_client, prepared.task_id)
-        wire[1].append(video_info(remote, "pipeline-target"))
+        wire[1].append(search_info(remote, "pipeline-target"))
     else:
-        wire[1].extend(
-            [
-                video_info(remote, "pipeline-source"),
-                [{"video_id": "pipeline-target"}],
-                video_info(remote, "pipeline-target"),
-            ]
-        )
+        # 来源上传核验已保存 MID 和文件名，共享直接复用，无需再读来源详情。
+        wire[1].append({})
         target_run(env, redis_client, prepared.task_id, kind="prepare")
+        # 同 BC 原生共享先回读源 VID 候选；未命中时从目标库存确认实际 VID。
+        found = search_info(remote, "pipeline-target")
+        wire[1].extend([{"list": []}, found])
     target_run(env, redis_client, prepared.task_id)
     assert state(prepared.task_id)[0].status == "ready"
     assert state(prepared.task_id)[2].video_id == "pipeline-target"
     from app.modules.materials import covers
-    from tests.modules.materials.test_covers import image_info, scopes
+    from tests.modules.materials.test_cover_throughput import page
+    from tests.modules.materials.test_covers import image_info, job_state, scopes
     from tests.modules.materials.test_covers import run as cover_run
 
     scopes(env)
+    from app.modules.materials.cover_models import MaterialCoverJob
+    from app.modules.materials.source_cover_service import prepare_source_cover
+    from tests.modules.materials.test_source_cover_events import source_event
+
+    # 先消费来源成功事件并完成源封面，再让目标封面走正式共享流程。
+    with Session(engine) as db, db.begin():
+        prepare_source_cover(
+            db,
+            context=env["context"],
+            operation_id=source_operation_id,
+            dispatch_id=source_event(db, env).id,
+        )
+        source_cover = (
+            db.exec(
+                select(MaterialCoverJob).where(
+                    MaterialCoverJob.material_id == env["material_id"],
+                    MaterialCoverJob.purpose == "SOURCE",
+                )
+            )
+            .one()
+            .id
+        )
+    response = video_info(remote, "pipeline-source")
+    response["list"][0]["video_cover_url"] = "https://image.example.test/cover"
+    wire[1].extend([response, {"image_id": "source-image", "signature": "a" * 32}])
+    cover_run(env, redis_client, source_cover)
+    source_image = image_info(
+        source_cover, image_id="source-image", width=160, height=240
+    )
+    wire[1].append(source_image)
+    cover_run(env, redis_client, source_cover, read=True)
+    assert job_state(source_cover).status == "READY"
     with Session(engine) as db, db.begin():
         cover = covers.ensure_cover(
             db,
@@ -418,11 +464,10 @@ def test_api_to_verified_source_cleanup_target_and_cover(
                 connection_id=env["connection_id"],
             ),
         )
-    response = video_info(remote, "pipeline-target")
-    response["list"][0]["video_cover_url"] = "https://image.example.test/cover"
-    wire[1].extend([response, {"image_id": "target-image", "signature": "a" * 32}])
+    wire[1].extend([page([]), {}])
     cover_run(env, redis_client, cover.task_id)
-    wire[1].append(image_info(cover.task_id, width=160, height=240))
+    target_image = {**source_image["list"][0], "image_id": "target-image"}
+    wire[1].append(page([target_image]))
     cover_run(env, redis_client, cover.task_id, read=True)
     mapping = read(env, env["target"]).mapping
     assert mapping.image_id == "target-image"
@@ -446,7 +491,13 @@ def test_api_to_verified_source_cleanup_target_and_cover(
         for call in wire[0]
         if call[0] == "POST" and "upload_type" in dict(call[2].get("fields", []))
     ]
-    assert len(posts) == 2
+    # 原件只上传到来源账户一次；同 BC 目标账户通过原生共享取得视频。
+    assert len(posts) == 1
+    shares = [
+        call for call in wire[0] if call[0] == "POST" and "/asset/share/" in call[1]
+    ]
+    assert len(shares) == 2  # 视频与封面各共享一次。
+    assert not wire[1]
     assert all(
         post["upload_type"] == "UPLOAD_BY_URL" and "video_file" not in post
         for post in posts
@@ -584,13 +635,19 @@ def test_1000_manifest_files_each_receive_a_bounded_fault_and_keep_identity(
     event.listen(engine, "before_cursor_execute", capture)
     try:
         summary = client.get(parent).json()
+        summary_statements = len(statements)
         first = client.get(parent + "/files", params={"limit": 100}).json()
     finally:
         event.remove(engine, "before_cursor_execute", capture)
     assert len(statements) <= 20
+    # 会话汇总仍读取持久计数；目录接口为 total 做一次有界作用域统计。
     assert not any(
-        "COUNT(" in sql.upper() or "SUM(" in sql.upper() for sql in statements
+        "COUNT(" in sql.upper() or "SUM(" in sql.upper()
+        for sql in statements[:summary_statements]
     )
+    assert sum("COUNT(" in sql.upper() for sql in statements) == 1
+    assert not any("SUM(" in sql.upper() for sql in statements)
+    assert first["total"] == 1000
     assert summary["accepted_count"] == 1000
     assert summary["uploaded_count"] == 200 and summary["cleaned_count"] == 400
     assert summary["ready_count"] == 0

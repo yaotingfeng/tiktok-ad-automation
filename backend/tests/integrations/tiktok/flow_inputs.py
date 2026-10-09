@@ -269,7 +269,7 @@ def _prepare_preview(database_engine, redis_client, case, wire, monkeypatch):
             db,
             context=context,
             name="Synthetic full flow",
-            config=config(creative_count=1),
+            config=config(ads_per_group=1, creative_count=1),
         )
         version = db.exec(
             select(StrategyVersion).where(StrategyVersion.strategy_id == strategy)

@@ -3,6 +3,7 @@ from decimal import Decimal
 import pytest
 from sqlmodel import Session, select
 
+from app.core.errors import DomainError
 from app.modules.builds import previews
 from app.modules.materials.models import AccountMaterial
 
@@ -23,10 +24,14 @@ def test_real_preparation_freeze_submission_and_official_sdk(acceptance_scenario
             36,
         )
         assert preview.daily_budget_sum == Decimal("600")
-        assert not scenario.runtime.wire.smart.calls
+        assert all(
+            call["method"] == "GET" for call in scenario.runtime.wire.smart.calls
+        )
     scenario.submit()
     scenario.runtime.drive_until(
-        lambda: scenario.view().status not in {"QUEUED", "RUNNING"}
+        lambda: scenario.view().status not in {"QUEUED", "RUNNING"},
+        # 138 份目标素材及源封面共享保留真实调度/等待间隔，给整批充分完成时间。
+        timeout=360,
     )
     view = scenario.view()
     assert view.succeeded.model_dump() == {
@@ -42,10 +47,12 @@ def test_real_preparation_freeze_submission_and_official_sdk(acceptance_scenario
         for rows in wire.smart.store.values()
         for row in rows.values()
     )
-    assert wire.calls["/open_api/v1.3/file/video/ad/upload/"] == 138
-    assert wire.calls["/open_api/v1.3/file/image/ad/upload/"] == 138
-    assert wire.calls["/open_api/v1.3/file/image/ad/info/"] >= 138
-    assert wire.calls["/open_api/v1.3/adgroup/get/"] >= 18
+    # 46 个来源视频原生共享到三个账户；封面各上传一次后共享，避免重复上传。
+    assert wire.calls["/open_api/v1.3/file/video/ad/upload/"] == 0
+    assert wire.calls["/open_api/v1.3/file/image/ad/upload/"] == 46
+    assert wire.calls["/open_api/v1.3/creative/asset/share/"] > 0
+    assert len(wire.videos) == 138
+    assert wire.calls["/open_api/v1.3/smart_plus/adgroup/create/"] == 18
     with Session(scenario.database_engine) as session:
         targets = session.exec(
             select(AccountMaterial).where(
@@ -56,7 +63,7 @@ def test_real_preparation_freeze_submission_and_official_sdk(acceptance_scenario
         assert len(targets) == 138
         assert all(
             row.video_id.startswith("target-vid-")
-            and row.mid.startswith("target-mid-")
+            and row.mid.startswith("source-mid-")
             and row.image_id
             for row in targets
         )
@@ -128,7 +135,7 @@ def test_preparation_and_freeze_are_real_and_have_no_tiktok_writes(acceptance_sc
     ]:
         assert wire.calls[f"/open_api/v1.3/{endpoint}/"] == 3
     assert wire.calls["/open_api/v1.3/bc/asset/get/"] == 1
-    assert not wire.smart.calls
+    assert all(call["method"] == "GET" for call in wire.smart.calls)
     assert not wire.videos and not wire.portfolios
 
 
@@ -138,7 +145,6 @@ def test_partial_input_and_material_matching_use_actual_preparation(
 ):
     from app.modules.accounts.models import AdvertiserAccount
     from app.modules.builds.preview_models import (
-        BuildUnit,
         PreviewDrama,
         PreviewGroupMaterial,
     )
@@ -161,31 +167,29 @@ def test_partial_input_and_material_matching_use_actual_preparation(
             row.file_name = "The Bond Hidden Promise.mp4"
             session.add(row)
     scenario.prepare()
+    if variant == "minis":
+        # 当前共同地区规则要求全部账户具备已核实的 Minis 地区，缺失时整批拒绝冻结。
+        with pytest.raises(DomainError) as error:
+            scenario.freeze()
+        assert error.value.code == "targeting_regions_unverified"
+        assert scenario.preview_id is None and scenario.submission_id is None
+        assert all(
+            call["method"] == "GET" for call in scenario.runtime.wire.smart.calls
+        )
+        assert not scenario.runtime.wire.videos
+        return
     preview_id = scenario.freeze()
     with Session(scenario.database_engine) as session:
         summary = previews.get_preview_summary(
             session, context=scenario.scope.context, preview_id=preview_id
         )
-        if variant in {"currency", "minis"}:
+        if variant == "currency":
             assert (
                 summary.campaign_count,
                 summary.adgroup_count,
                 summary.ad_count,
             ) == (4, 12, 24)
             assert summary.daily_budget_sum == Decimal("400")
-            if variant == "minis":
-                blocked = session.exec(
-                    select(BuildUnit).where(
-                        BuildUnit.preview_id == preview_id,
-                        BuildUnit.readiness == "BLOCKED",
-                    )
-                ).all()
-                assert len(blocked) == 2
-                assert all(
-                    row.advertiser_id == scenario.scope.accounts[0]
-                    and "minis_unavailable" in row.reason_codes
-                    for row in blocked
-                )
         else:
             assert summary.campaign_count == 6 and summary.input_issue_count == 0
             rows = session.exec(
@@ -203,7 +207,7 @@ def test_partial_input_and_material_matching_use_actual_preparation(
             assert {drama.title for _, drama in rows} == {"The Bond", "Hidden Promise"}
     scenario.submit()
     submitted = scenario.view()
-    if variant in {"currency", "minis"}:
+    if variant == "currency":
         assert submitted.submitted.model_dump() == {
             "campaign_count": 4,
             "adgroup_count": 12,
@@ -222,7 +226,7 @@ def test_partial_input_and_material_matching_use_actual_preparation(
             )
     else:
         assert submitted.submitted.campaign_count == 6
-    assert not scenario.runtime.wire.smart.calls
+    assert all(call["method"] == "GET" for call in scenario.runtime.wire.smart.calls)
     assert not scenario.runtime.wire.videos
 
 
@@ -287,7 +291,7 @@ def test_wangyan_ambiguous_create_recovery_blocks_without_second_post(
             )
         ).all()
         assert all(item.status == "result_unknown" for item in items)
-    assert not wire.smart.calls and not wire.videos
+    assert all(call["method"] == "GET" for call in wire.smart.calls) and not wire.videos
 
 
 def test_runtime_executes_production_control_and_yields_bounded_chunks(
@@ -323,4 +327,4 @@ def test_runtime_executes_production_control_and_yields_bounded_chunks(
     assert len(deliveries) == 12 and {
         message["task_id"] for message in deliveries
     } == set(map(str, identities))
-    assert not runtime.wire.smart.calls
+    assert all(call["method"] == "GET" for call in runtime.wire.smart.calls)

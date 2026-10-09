@@ -277,6 +277,7 @@ def _submit_waiting_for_cover(
             )
         ).all()
         ids = {step.kind: step.id for step in steps}
+        assert len(steps) == len(ids) == 5  # 本场景只有一条素材、CTA、系列、组和广告。
     created(wire, "CTA")
     assert (
         execution.process_step(

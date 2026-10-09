@@ -242,6 +242,8 @@ def scene_responses(case):
                 }
             ],
         },
+        # 当前场景还需读取组预算证据；空库存只证明未发现组预算能力。
+        "budget": page([]),
     }
 
 
@@ -255,6 +257,7 @@ def enqueue(wire, resource, data):
         "cta": "scene.recommend_ctas",
         "vbo": "scene.check_vbo",
         "regions": "scene.list_regions",
+        "budget": "build.get_adgroups",
     }
     tool = next(
         c.tool_name

@@ -4,7 +4,7 @@ from threading import Barrier
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import delete, update
+from sqlalchemy import MetaData, Table, delete, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, SQLModel
 
@@ -46,16 +46,28 @@ def material(session, context, name, *, bc="bc-a", state="stored"):
     return row
 
 
-def mapping(session, context, file, *, account="account-a"):
+def mapping(session, context, file, *, account="account-a", historical=False):
+    def add(row):
+        if not historical:
+            session.add(row)
+            return
+        # 历史映射仅写入当时已有的字段，不能把后续目录字段带到旧 schema。
+        table = Table(row.__tablename__, MetaData(), autoload_with=session.connection())
+        session.execute(
+            table.insert().values(
+                **{
+                    key: value
+                    for key, value in row.model_dump().items()
+                    if key in table.c
+                }
+            )
+        )
+
     connection = TikTokConnection(tenant_id=context.tenant_id, status="ACTIVE")
-    session.add_all(
-        [
-            connection,
-            AdvertiserAccount(tenant_id=context.tenant_id, advertiser_id=account),
-        ]
-    )
+    add(connection)
+    add(AdvertiserAccount(tenant_id=context.tenant_id, advertiser_id=account))
     session.flush()
-    session.add(
+    add(
         BCAccountAccess(
             tenant_id=context.tenant_id,
             bc_id=file.bc_id,
@@ -77,7 +89,7 @@ def mapping(session, context, file, *, account="account-a"):
         status="available",
         verified_at=datetime.now(UTC),
     )
-    session.add(row)
+    add(row)
     session.flush()
     return row
 

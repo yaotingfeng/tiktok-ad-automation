@@ -7,7 +7,7 @@ from sqlalchemy import text
 from sqlmodel import Session
 
 from app.modules.materials.ingest_models import OriginalUse, TemporaryMaterialObject
-from app.modules.materials.models import MaterialAssetOperation, MaterialFile
+from app.modules.materials.models import MaterialFile
 from tests.migration_database import historical_database
 from tests.modules.builds.test_route_migration import historical_rows, snapshot
 from tests.modules.materials.test_cover_evidence_migration import (
@@ -26,9 +26,11 @@ FINAL_HEAD = "mcp_cover_evidence"
 
 def _original_history(db, context, operation_id):
     """追加原件和已过期但仍 active 的用途，迁移不能替业务判断释放。"""
-    operation = db.get(MaterialAssetOperation, operation_id)
-    assert operation is not None
-    file = db.get(MaterialFile, operation.material_id)
+    material_id = db.execute(
+        text("SELECT material_id FROM material_asset_operation WHERE id=:id"),
+        {"id": operation_id},
+    ).scalar_one()
+    file = db.get(MaterialFile, material_id)
     assert file is not None
     file.current_object_generation = 1
     original = TemporaryMaterialObject(

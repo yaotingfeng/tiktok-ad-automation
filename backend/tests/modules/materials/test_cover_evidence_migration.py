@@ -30,7 +30,7 @@ def _history(db):
     )
     db.add(file)
     db.flush()
-    asset = mapping(db, context, file)
+    asset = mapping(db, context, file, historical=True)
     row = MaterialCoverJob(
         tenant_id=context.tenant_id,
         bc_id=file.bc_id,
@@ -64,6 +64,7 @@ def _history(db):
             "superseded_by_id",
         }
     )
+    values = {key: value for key, value in values.items() if key in job_table.c}
     SASession.execute(db, job_table.insert().values(values))
     SASession.execute(
         db, receipt_table.insert().values(receipt.model_dump(exclude={"receipt_facts"}))
