@@ -10,9 +10,26 @@
 - namespace 为 `prod`，Ingress 为已有的 `public`；不创建第二个 Ingress，不配置 `imagePullSecrets`。
 - `K8S_CONTEXT` 和运维确认的单层 `*.jetmobo.com` 域名必须显式传入；没有测试服务器 IP/sslip.io 回退值。
 - API、7 个 Worker 和 Beat 使用同一镜像及配置。Worker 初始并发均为 1；Beat 单副本、`Recreate` 更新。
-- API 与 Worker 均有就绪探针；所有角色有 CPU/内存 requests 与 limits。应用合计请求 850m CPU / 4.25 GiB 内存；发布任务另请求 100m / 256 MiB。它们是首发预算，尚未经过生产压力测试。
+- API 与 Worker 均有就绪探针；所有角色有 CPU/内存 requests 与 limits。应用合计请求 4.25 核 CPU / 10.5 GiB 内存，上限合计 10.5 核 / 21 GiB；发布任务另请求 100m / 256 MiB。它们是首发预算，尚未经过生产压力测试。
 - Beat PVC 显式使用公司集群已有的 `cbs` StorageClass，申请 20 GiB；集群无默认存储类，不能省略该字段。
 - MCP Secret 使用单文件 `subPath` 挂载，兼容注册文件读取的 `O_NOFOLLOW`。配置摘要写入 Pod 注解，配置变化会重建所有角色；不依赖 Secret 热更新。
+
+### 生产首发资源预算
+
+2026-10-09 用户反馈 2 核 / 2 GiB 测试服不足；只读实测物理内存 1967 MiB、Swap 已用 2004/2047 MiB。此前 850m / 4.25 GiB 仅为启动验证预算，生产按下表提高申请量；不以低负载时的 RSS 或启动成功推断峰值容量。
+
+| 角色 | 副本 | 每副本申请 CPU / 内存 | 每副本上限 CPU / 内存 |
+| --- | --- | --- | --- |
+| API | 1 | 0.5 核 / 1 GiB | 1 核 / 2 GiB |
+| 素材 Worker | 1 | 1 核 / 2 GiB | 2 核 / 4 GiB |
+| 报表 Worker | 1 | 1 核 / 2 GiB | 2 核 / 4 GiB |
+| 搭建 Worker | 1 | 0.5 核 / 1 GiB | 1 核 / 2 GiB |
+| 结果、控制、目录、广告管理 Worker | 各 1 | 0.25 核 / 1 GiB | 1 核 / 2 GiB |
+| Beat | 1 | 0.25 核 / 512 MiB | 0.5 核 / 1 GiB |
+
+总申请量为 4.25 核 / 10.5 GiB，上限合计 10.5 核 / 21 GiB，均不含外部 PostgreSQL、Redis、集群组件和发布瞬时资源。迁移 Job 另申请 0.1 核 / 256 MiB（上限 1 核 / 1 GiB）；Deployment 滚动更新还会创建临时副本。TKE 弹性实例的实际分配与计费以平台规格为准，不能把 requests 直接当成账单。
+
+七 Worker 仍各并发 1。上线先观察真实素材上传、报表同步及两者重叠时的峰值内存、CPU 限流、任务耗时、队列等待和数据库连接。内存持续超过 limit 的 80%、出现 OOM 或 CPU 限流伴随队列积压时，先定位对应角色再调整。完成这一负载验证前，不声明生产容量已验收；不以开启自动投放制造测试负载。
 
 ## 部署前要准备的具体资料
 

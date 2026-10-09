@@ -19,6 +19,7 @@
 | 生产域名 | 拟用 `tiktok-ad-automation.jetmobo.com`，待用户/运维确认；当前 Ingress 无此 host |
 | 应用端口 | API/容器/Service 均为 80 |
 | 拓扑 | 1 API、7 个独立 Worker、1 Beat，使用同一版本及运行 Secret |
+| 应用资源 | 合计申请 4.25 核 / 10.5 GiB，上限 10.5 核 / 21 GiB；不含 PostgreSQL、Redis 与发布瞬时资源 |
 | 存储 | 已有 `cbs` StorageClass，集群没有默认 StorageClass；Beat PVC 显式申请 CBS 20 GiB |
 | 配置落点 | `prod/tiktok-ad-automation-runtime` 与 `prod/tiktok-ad-automation-mcp-registration` Secret；未创建 |
 

@@ -27,8 +27,8 @@ spec:
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
           resources:
-            requests: {cpu: "100m", memory: 512Mi}
-            limits: {cpu: "1", memory: 1Gi}
+            requests: {cpu: "500m", memory: 1Gi}
+            limits: {cpu: "1", memory: 2Gi}
           command: [uvicorn, "app.main:app", --host, "0.0.0.0", --port, "80", --workers, "1", --no-access-log, --proxy-headers, --forwarded-allow-ips, "*"]
           ports:
             - name: http
@@ -98,8 +98,8 @@ spec:
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
           resources:
-            requests: {cpu: "100m", memory: 512Mi}
-            limits: {cpu: "1", memory: 2Gi}
+            requests: {cpu: "1", memory: 2Gi}
+            limits: {cpu: "2", memory: 4Gi}
           command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, "resources,resource-results", --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "resources@%h"]
           readinessProbe:
             exec:
@@ -157,7 +157,7 @@ spec:
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
           resources:
-            requests: {cpu: "100m", memory: 512Mi}
+            requests: {cpu: "250m", memory: 1Gi}
             limits: {cpu: "1", memory: 2Gi}
           command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, resource-results, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "results@%h"]
           readinessProbe:
@@ -216,7 +216,7 @@ spec:
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
           resources:
-            requests: {cpu: "100m", memory: 512Mi}
+            requests: {cpu: "500m", memory: 1Gi}
             limits: {cpu: "1", memory: 2Gi}
           command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, builds, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "builds@%h"]
           readinessProbe:
@@ -275,7 +275,7 @@ spec:
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
           resources:
-            requests: {cpu: "100m", memory: 512Mi}
+            requests: {cpu: "250m", memory: 1Gi}
             limits: {cpu: "1", memory: 2Gi}
           command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, control, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "control@%h"]
           readinessProbe:
@@ -334,7 +334,7 @@ spec:
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
           resources:
-            requests: {cpu: "100m", memory: 512Mi}
+            requests: {cpu: "250m", memory: 1Gi}
             limits: {cpu: "1", memory: 2Gi}
           command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-directory, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "ads-directory@%h"]
           readinessProbe:
@@ -393,8 +393,8 @@ spec:
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
           resources:
-            requests: {cpu: "100m", memory: 512Mi}
-            limits: {cpu: "1", memory: 2Gi}
+            requests: {cpu: "1", memory: 2Gi}
+            limits: {cpu: "2", memory: 4Gi}
           command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-reporting, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "ads-reporting@%h"]
           readinessProbe:
             exec:
@@ -452,7 +452,7 @@ spec:
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
           resources:
-            requests: {cpu: "100m", memory: 512Mi}
+            requests: {cpu: "250m", memory: 1Gi}
             limits: {cpu: "1", memory: 2Gi}
           command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ad-management, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "ad-management@%h"]
           readinessProbe:
@@ -514,8 +514,8 @@ spec:
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
           resources:
-            requests: {cpu: "50m", memory: 256Mi}
-            limits: {cpu: "1", memory: 512Mi}
+            requests: {cpu: "250m", memory: 512Mi}
+            limits: {cpu: "500m", memory: 1Gi}
           command: [celery, -A, "app.jobs.celery_app:celery_app", beat, --schedule, /var/run/celery/celerybeat-schedule, --loglevel=INFO]
           envFrom:
             - configMapRef:
