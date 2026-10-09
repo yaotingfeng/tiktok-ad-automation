@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
+> 2026-10-09 更新：用户已授权补齐公司部署规范并完成本地验证。下列旧计划中保留容器 8000、测试域名和隐式开关的部分已被本轮端口 80、显式目标域名/开关方案替代；最终流程以 `deploy/k8s/README.md` 为准。数据库选型不在本轮范围内。
+
 **Goal:** Add the minimum deployment assets needed to build TK-ADA into the company TCR, run it on the company Kubernetes cluster, and reuse the current staging PostgreSQL, Redis, R2 object storage, and callback configuration without committing credentials.
 
 **Architecture:** Keep the existing FastAPI/Celery application image and PostgreSQL/Alembic model unchanged. Add plain Kubernetes manifests for the API, isolated Celery workers, one Beat, and a per-release migration Job; inject the existing environment through a Kubernetes Secret and mount the existing MCP registration JSON as a separate Secret. Use the shared `public` Ingress through a guarded append-only patch script.

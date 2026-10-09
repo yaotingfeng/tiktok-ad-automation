@@ -1,7 +1,10 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: tiktok-ad-automation-migration-__RELEASE_ID__
+  name: __JOB_NAME__
+  annotations:
+    tk-ada/release: "__RELEASE_ID__"
+    tk-ada/config-digest: "__CONFIG_DIGEST__"
   labels:
     app: tiktok-ad-automation
     role: migration
@@ -21,6 +24,9 @@ spec:
         - name: migration
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
+          resources:
+            requests: {cpu: "100m", memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
           command: [bash, scripts/prestart.sh]
           envFrom:
             - configMapRef:
@@ -34,7 +40,8 @@ spec:
               value: /run/tk-ada/mcp-client.json
           volumeMounts:
             - name: mcp-registration
-              mountPath: /run/tk-ada
+              mountPath: /run/tk-ada/mcp-client.json
+              subPath: mcp-client.json
               readOnly: true
       volumes:
         - name: mcp-registration

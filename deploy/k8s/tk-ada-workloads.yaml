@@ -14,6 +14,8 @@ spec:
       role: api
   template:
     metadata:
+      annotations:
+        tk-ada/config-digest: "__CONFIG_DIGEST__"
       labels:
         app: tiktok-ad-automation
         role: api
@@ -24,10 +26,13 @@ spec:
         - name: api
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
-          command: [uvicorn, "app.main:app", --host, "0.0.0.0", --port, "8000", --workers, "1", --no-access-log, --proxy-headers, --forwarded-allow-ips, "*"]
+          resources:
+            requests: {cpu: "100m", memory: 512Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          command: [uvicorn, "app.main:app", --host, "0.0.0.0", --port, "80", --workers, "1", --no-access-log, --proxy-headers, --forwarded-allow-ips, "*"]
           ports:
             - name: http
-              containerPort: 8000
+              containerPort: 80
           envFrom:
             - configMapRef:
                 name: tiktok-ad-automation-defaults
@@ -40,7 +45,8 @@ spec:
               value: /run/tk-ada/mcp-client.json
           volumeMounts:
             - name: mcp-registration
-              mountPath: /run/tk-ada
+              mountPath: /run/tk-ada/mcp-client.json
+              subPath: mcp-client.json
               readOnly: true
           readinessProbe:
             httpGet:
@@ -79,6 +85,8 @@ spec:
       role: worker-resource
   template:
     metadata:
+      annotations:
+        tk-ada/config-digest: "__CONFIG_DIGEST__"
       labels:
         app: tiktok-ad-automation
         role: worker-resource
@@ -89,7 +97,17 @@ spec:
         - name: worker-resource
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
-          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, "resources,resource-results", --pool, prefork, --concurrency, "2", --loglevel=INFO, --hostname, "resources@%h"]
+          resources:
+            requests: {cpu: "100m", memory: 512Mi}
+            limits: {cpu: "1", memory: 2Gi}
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, "resources,resource-results", --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "resources@%h"]
+          readinessProbe:
+            exec:
+              command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['resources@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 4
           envFrom:
             - configMapRef:
                 name: tiktok-ad-automation-defaults
@@ -102,7 +120,8 @@ spec:
               value: /run/tk-ada/mcp-client.json
           volumeMounts:
             - name: mcp-registration
-              mountPath: /run/tk-ada
+              mountPath: /run/tk-ada/mcp-client.json
+              subPath: mcp-client.json
               readOnly: true
       volumes:
         - name: mcp-registration
@@ -125,6 +144,8 @@ spec:
       role: worker-results
   template:
     metadata:
+      annotations:
+        tk-ada/config-digest: "__CONFIG_DIGEST__"
       labels:
         app: tiktok-ad-automation
         role: worker-results
@@ -135,7 +156,17 @@ spec:
         - name: worker-results
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
+          resources:
+            requests: {cpu: "100m", memory: 512Mi}
+            limits: {cpu: "1", memory: 2Gi}
           command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, resource-results, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "results@%h"]
+          readinessProbe:
+            exec:
+              command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['results@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 4
           envFrom:
             - configMapRef:
                 name: tiktok-ad-automation-defaults
@@ -148,7 +179,8 @@ spec:
               value: /run/tk-ada/mcp-client.json
           volumeMounts:
             - name: mcp-registration
-              mountPath: /run/tk-ada
+              mountPath: /run/tk-ada/mcp-client.json
+              subPath: mcp-client.json
               readOnly: true
       volumes:
         - name: mcp-registration
@@ -171,6 +203,8 @@ spec:
       role: worker-builds
   template:
     metadata:
+      annotations:
+        tk-ada/config-digest: "__CONFIG_DIGEST__"
       labels:
         app: tiktok-ad-automation
         role: worker-builds
@@ -181,7 +215,17 @@ spec:
         - name: worker-builds
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
+          resources:
+            requests: {cpu: "100m", memory: 512Mi}
+            limits: {cpu: "1", memory: 2Gi}
           command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, builds, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "builds@%h"]
+          readinessProbe:
+            exec:
+              command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['builds@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 4
           envFrom:
             - configMapRef:
                 name: tiktok-ad-automation-defaults
@@ -194,7 +238,8 @@ spec:
               value: /run/tk-ada/mcp-client.json
           volumeMounts:
             - name: mcp-registration
-              mountPath: /run/tk-ada
+              mountPath: /run/tk-ada/mcp-client.json
+              subPath: mcp-client.json
               readOnly: true
       volumes:
         - name: mcp-registration
@@ -217,6 +262,8 @@ spec:
       role: worker-control
   template:
     metadata:
+      annotations:
+        tk-ada/config-digest: "__CONFIG_DIGEST__"
       labels:
         app: tiktok-ad-automation
         role: worker-control
@@ -227,7 +274,17 @@ spec:
         - name: worker-control
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
+          resources:
+            requests: {cpu: "100m", memory: 512Mi}
+            limits: {cpu: "1", memory: 2Gi}
           command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, control, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "control@%h"]
+          readinessProbe:
+            exec:
+              command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['control@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 4
           envFrom:
             - configMapRef:
                 name: tiktok-ad-automation-defaults
@@ -240,7 +297,8 @@ spec:
               value: /run/tk-ada/mcp-client.json
           volumeMounts:
             - name: mcp-registration
-              mountPath: /run/tk-ada
+              mountPath: /run/tk-ada/mcp-client.json
+              subPath: mcp-client.json
               readOnly: true
       volumes:
         - name: mcp-registration
@@ -263,6 +321,8 @@ spec:
       role: worker-ads-directory
   template:
     metadata:
+      annotations:
+        tk-ada/config-digest: "__CONFIG_DIGEST__"
       labels:
         app: tiktok-ad-automation
         role: worker-ads-directory
@@ -273,7 +333,17 @@ spec:
         - name: worker-ads-directory
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
+          resources:
+            requests: {cpu: "100m", memory: 512Mi}
+            limits: {cpu: "1", memory: 2Gi}
           command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-directory, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "ads-directory@%h"]
+          readinessProbe:
+            exec:
+              command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['ads-directory@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 4
           envFrom:
             - configMapRef:
                 name: tiktok-ad-automation-defaults
@@ -286,7 +356,8 @@ spec:
               value: /run/tk-ada/mcp-client.json
           volumeMounts:
             - name: mcp-registration
-              mountPath: /run/tk-ada
+              mountPath: /run/tk-ada/mcp-client.json
+              subPath: mcp-client.json
               readOnly: true
       volumes:
         - name: mcp-registration
@@ -309,6 +380,8 @@ spec:
       role: worker-ads-reporting
   template:
     metadata:
+      annotations:
+        tk-ada/config-digest: "__CONFIG_DIGEST__"
       labels:
         app: tiktok-ad-automation
         role: worker-ads-reporting
@@ -319,7 +392,17 @@ spec:
         - name: worker-ads-reporting
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
+          resources:
+            requests: {cpu: "100m", memory: 512Mi}
+            limits: {cpu: "1", memory: 2Gi}
           command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-reporting, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "ads-reporting@%h"]
+          readinessProbe:
+            exec:
+              command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['ads-reporting@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 4
           envFrom:
             - configMapRef:
                 name: tiktok-ad-automation-defaults
@@ -332,7 +415,8 @@ spec:
               value: /run/tk-ada/mcp-client.json
           volumeMounts:
             - name: mcp-registration
-              mountPath: /run/tk-ada
+              mountPath: /run/tk-ada/mcp-client.json
+              subPath: mcp-client.json
               readOnly: true
       volumes:
         - name: mcp-registration
@@ -355,6 +439,8 @@ spec:
       role: worker-ad-management
   template:
     metadata:
+      annotations:
+        tk-ada/config-digest: "__CONFIG_DIGEST__"
       labels:
         app: tiktok-ad-automation
         role: worker-ad-management
@@ -365,7 +451,17 @@ spec:
         - name: worker-ad-management
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
+          resources:
+            requests: {cpu: "100m", memory: 512Mi}
+            limits: {cpu: "1", memory: 2Gi}
           command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ad-management, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "ad-management@%h"]
+          readinessProbe:
+            exec:
+              command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['ad-management@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 4
           envFrom:
             - configMapRef:
                 name: tiktok-ad-automation-defaults
@@ -378,7 +474,8 @@ spec:
               value: /run/tk-ada/mcp-client.json
           volumeMounts:
             - name: mcp-registration
-              mountPath: /run/tk-ada
+              mountPath: /run/tk-ada/mcp-client.json
+              subPath: mcp-client.json
               readOnly: true
       volumes:
         - name: mcp-registration
@@ -394,6 +491,9 @@ metadata:
     role: beat
 spec:
   replicas: 1
+  # 更新时先停止旧调度器，避免重复投递及共享 schedule 文件冲突。
+  strategy:
+    type: Recreate
   revisionHistoryLimit: 2
   selector:
     matchLabels:
@@ -401,6 +501,8 @@ spec:
       role: beat
   template:
     metadata:
+      annotations:
+        tk-ada/config-digest: "__CONFIG_DIGEST__"
       labels:
         app: tiktok-ad-automation
         role: beat
@@ -411,6 +513,9 @@ spec:
         - name: beat
           image: __APP_IMAGE__
           imagePullPolicy: IfNotPresent
+          resources:
+            requests: {cpu: "50m", memory: 256Mi}
+            limits: {cpu: "1", memory: 512Mi}
           command: [celery, -A, "app.jobs.celery_app:celery_app", beat, --schedule, /var/run/celery/celerybeat-schedule, --loglevel=INFO]
           envFrom:
             - configMapRef:
@@ -426,7 +531,8 @@ spec:
             - name: beat-data
               mountPath: /var/run/celery
             - name: mcp-registration
-              mountPath: /run/tk-ada
+              mountPath: /run/tk-ada/mcp-client.json
+              subPath: mcp-client.json
               readOnly: true
       volumes:
         - name: beat-data

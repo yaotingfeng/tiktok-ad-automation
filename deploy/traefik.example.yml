@@ -11,4 +11,4 @@ http:
     application:
       loadBalancer:
         servers:
-          - url: http://backend:8000
+          - url: http://backend:80

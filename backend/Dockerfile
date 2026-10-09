@@ -73,4 +73,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 WORKDIR /app/backend/
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--no-access-log"]
+ARG VCS_REF=local
+LABEL org.opencontainers.image.revision=${VCS_REF}
+EXPOSE 80
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "80", "--workers", "4", "--no-access-log"]

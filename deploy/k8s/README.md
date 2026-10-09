@@ -1,78 +1,116 @@
-# TK-ADA Kubernetes deployment
+# TK-ADA 公司 K8s 测试部署
 
-This directory adds the minimum Kubernetes assets for TK-ADA. The application database remains PostgreSQL; this deployment does not run PostgreSQL or Redis inside the application namespace. Supply cluster-reachable PostgreSQL and Redis URLs through the external runtime env file.
+本目录遵循公司 `deploy-help` 的镜像、端口、命名和共享入口约定。目标是公司集群中的测试实例；当前新加坡 systemd 测试服仍是独立环境。数据库选型不在本轮适配范围内。
 
-The current staging object-storage and callback behavior is kept as the default in `tk-ada.yaml` and `runtime-secret.example.env`:
+## 已固定的部署约定
 
-- `OBJECT_STORAGE_PROVIDER=r2` and `S3_REGION=auto`
-- the current staging R2 endpoint, bucket, access key and secret are supplied privately at deployment time
-- MCP callback: `https://tk-ada.137-220-150-31.sslip.io/api/integrations/tiktok/mcp/callback`
-- current staging material ingest and cleanup defaults remain enabled
+- 镜像：`junbo-image.tencentcloudcr.com/prod/tiktok-ad-automation:<完整 Git SHA>`。
+- Gitea：`company` 远端 `https://git.gzjunbo.net/yaotf/tiktok-ad-automation.git`；GitHub `origin` 保留。
+- API、Dockerfile、Service 均为 80；外部通过共享 Ingress 的 HTTPS 443 访问。
+- namespace 为 `prod`，Ingress 为已有的 `public`；不创建第二个 Ingress，不配置 `imagePullSecrets`。
+- `K8S_CONTEXT` 和运维确认的单层 `*.jetmobo.com` 域名必须显式传入；没有测试服务器 IP/sslip.io 回退值。
+- API、7 个 Worker 和 Beat 使用同一镜像及配置。Worker 初始并发均为 1；Beat 单副本、`Recreate` 更新。
+- API 与 Worker 均有就绪探针；所有角色有 CPU/内存 requests 与 limits。应用合计请求 850m CPU / 4.25 GiB 内存；发布任务另请求 100m / 256 MiB。它们是测试起点，不是已完成压力测试的生产容量。
+- MCP Secret 使用单文件 `subPath` 挂载，兼容注册文件读取的 `O_NOFOLLOW`。配置摘要写入 Pod 注解，配置变化会重建所有角色；不依赖 Secret 热更新。
 
-Credentials, the real MCP registration JSON, kubeconfig and `.env.staging` must remain outside Git. When moving the existing staging database into Kubernetes, keep the same `CONNECTION_ENCRYPTION_KEY`; otherwise encrypted provider and TikTok connection records cannot be read.
+## 部署前要准备的具体资料
 
-The repository keeps the existing GitHub `origin` and uses the company repository as a second remote:
+1. 获授权的 kubeconfig、明确的 context，以及 `prod` 资源配额。优先使用项目受限凭据；凭据必须允许下述只读查重，权限不足时停止，不能跳过检查。
+2. 运维分配的测试域名和 DNS A 记录（公司入口 `134.175.255.190`），确认现有通配证书覆盖该域名。
+3. 仓库外的运行配置和真实 MCP 注册文件；注册文件必须允许目标回调域名。私有 R2 桶的 CORS 同步允许目标前端 origin，禁止改为公开桶。
+4. 明确独立测试还是接替旧测试实例：独立实例使用隔离的业务状态/队列；接替时先停止旧调度、排空任务并按发布手册备份。不得让两套 Beat/Worker 未经安排消费同一批任务。
+5. 三个部署开关的明确取值。`MATERIAL_INGEST_ENABLED` 控制新导入入口，`MATERIAL_CLEANUP_ENABLED` 控制自动清理，`ADS_SYNC_ENABLED` 控制新周期同步；关闭它们不等于已有队列任务不会执行。首次值按用户确认填写，后续发布保留已确认值。
+
+`runtime-secret.example.env` 是字段模板，不是可直接部署的配置。使用 literal `KEY=value`，不要加 shell 引号或 `source` 到当前 shell；秘密文件权限设为 0600。目标域名必须同时用于 `FRONTEND_HOST`、MCP 回调和已启用的 TikTok API 回调。API 应用未配置时三个 API 注册字段全部留空，不能只填写一部分。
+
+## 本地验证
+
+环境检查只检查本机，不读取或修改集群：
 
 ```bash
-git remote add company https://git.gzjunbo.net/yaotf/tiktok-ad-automation.git
-git push company main
+docker --version
+docker info
+kubectl version --client
+node scripts/test-deployment-assets.mjs
+uv run --with kubernetes-validate python scripts/validate-k8s-manifests.py
 ```
 
-## Prepare the runtime files
+当前开发机另外安装了经官方 SHA-256 验证的 `.tools/bin/kubectl`；需要时将该目录加入 PATH。客户端版本 1.34.1，实际连接前核对与集群版本兼容。
 
-Copy `runtime-secret.example.env` outside the repository and fill in all values. Start from the current staging private environment if appropriate, but replace its loopback `DATABASE_URL` and `REDIS_URL` with endpoints reachable from the Kubernetes cluster. `apply.sh` rejects loopback database and Redis URLs.
-
-Copy the current staging MCP registration JSON to a private path. The Kubernetes mount path is `/run/tk-ada/mcp-client.json`; the deployment injects that path into `MCP_CLIENT_REGISTRATION_REF` for API, every Worker and Beat.
-
-The R2 values are injected as follows:
-
-- `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`: runtime Secret
-- `S3_ENDPOINT_URL`, `S3_BUCKET`, `S3_REGION`, `OBJECT_STORAGE_PROVIDER`: runtime configuration
-- Configure the private bucket CORS for the final `FRONTEND_HOST`, allowing browser PUT/GET/HEAD and exposing `ETag`; do not make the bucket public.
-
-## Build and deploy
-
-Log in to the company TCR first. The release script uses the full Git SHA and never publishes `latest`:
+构建目标架构镜像并验证：
 
 ```bash
+docker buildx build --platform linux/amd64 --load \
+  -f backend/Dockerfile -t tiktok-ad-automation:deploy-check-amd64 .
+uv run python scripts/check-local-deployment.py \
+  --image tiktok-ad-automation:deploy-check-amd64
+```
+
+本地检查创建本轮专用的无外网 Docker 网络、临时依赖和合成配置，直接运行 K8s 清单里的九个应用命令及资源上限。检查实际配置解析、注册文件、额度、前端、登录、API 边界、七个 Worker 就绪、Beat 存活和 API 重启恢复。退出只清理本轮创建的容器、临时匿名卷及网络；不使用 `prune`，不读取现有私有运行配置，不调用真实 TikTok/R2。
+
+本地结果不包含 DNS、TLS、集群网络、真实授权和真实业务验收。全仓历史回归待处理项仍见 `docs/validation/2026-10-09-regression-followups.md`。
+
+## 提交、推送与正式镜像
+
+相关验证通过后提交本轮文件；按项目授权规则推送公司 Git。发布要求工作区干净，不应为了通过检查覆盖或丢弃用户未提交的改动。
+
+```bash
+git status -sb
+git rev-parse --show-toplevel
+git push company main
 docker login junbo-image.tencentcloudcr.com
 bash deploy/build-and-push.sh
 ```
 
-Then prepare the Kubernetes environment and run the migration before the workloads. The script creates or updates only the two project-prefixed Secrets, applies the project static resources, creates a per-SHA migration Job, waits for it to complete, and then rolls out the API, isolated Workers and the single Beat.
+脚本要求当前分支为 `main`，`RELEASE_SHA` 等于实际 HEAD，实时查询公司 `main` 必须与 HEAD 一致；随后才调用 Docker。镜像写入 `org.opencontainers.image.revision`。禁止换用其他项目/仓库或 `latest`。`DRY_RUN=1` 只检查本地参数并展示命令，不验证远端推送状态，不构成发布证据。
+
+## 配置校验与只读预检
+
+以下操作在运行配置及发布范围已确认后执行。文件路径和域名均替换为目标环境实际值：
 
 ```bash
+export K8S_CONTEXT='<已确认的 context>'
 export K8S_NAMESPACE=prod
+export INGRESS_HOST='<运维分配的测试子域>.jetmobo.com'
 export RELEASE_ID="$(git rev-parse HEAD)"
 export APP_IMAGE="junbo-image.tencentcloudcr.com/prod/tiktok-ad-automation:${RELEASE_ID}"
-export RUNTIME_ENV_FILE="/private/path/tk-ada-staging-runtime.env"
-export MCP_CLIENT_REGISTRATION_FILE="/private/path/mcp-client.json"
+export RUNTIME_ENV_FILE='/private/path/tk-ada-test-runtime.env'
+export MCP_CLIENT_REGISTRATION_FILE='/private/path/mcp-client.json'
 
-bash deploy/k8s/apply.sh
+docker pull "$APP_IMAGE"
+DRY_RUN=1 bash deploy/k8s/apply.sh
+PREFLIGHT_ONLY=1 bash deploy/k8s/apply.sh
 ```
 
-The namespace must already exist and the selected kubeconfig must be the project-scoped credential. No `imagePullSecrets` is included because the company cluster supplies image-pull access internally.
+- `DRY_RUN=1` 完全不联系集群，校验镜像/SHA、显式开关、目标域名、回调和外部配置文件。
+- `PREFLIGHT_ONLY=1` 先核对本地镜像 revision，再用 `--network none` 的容器运行应用实际配置校验器；随后只读检查集群。任何一步失败均不会写集群。远程 Docker 引擎须能读取注册文件路径；本机 Colima 使用仓库外但位于已共享用户目录的私有路径，不用 `/var/folders`。
+- 写入前全命名空间检查 Deployment/Service/Ingress/ConfigMap/PVC 名称及标签；同名或同标签跨 namespace、错误标签、外来镜像或域名冲突均阻断。
+- Secret 只查询两个本项目精确名称并核对标签，禁止查询其他项目 Secret。旧资源缺少归属标签时停止，不能自动认领；需要人工核对后按具体授权修复。
+- 错误只输出字段名或动作，不回显 Secret。若实际配置校验失败，可在上述隔离容器内运行 `python scripts/check_deployment.py` 查看失败类别。
 
-## Add the external host
+## 实际部署与入口
 
-The deployment does not create a second Ingress. Append the project host to the shared `public` Ingress only after checking its current rules:
+按 `docs/runbooks/deployment.md` 完成目标环境的发布前备份/排空和恢复验证；首次无历史状态的项目记录不适用项。上述条件齐全后：
 
 ```bash
-export K8S_NAMESPACE=prod
-export INGRESS_HOST="tk-ada.137-220-150-31.sslip.io"
+bash deploy/k8s/apply.sh
 bash deploy/k8s/patch-public-ingress.sh
 ```
 
-The patch refuses an existing host, verifies that `tiktok-ad-automation` is the project-labeled Service, appends one rule, and reads the new host back. It does not remove or rewrite any existing host rule.
+部署脚本再次执行预检，之后更新带项目标签的两个 Secret、静态资源，运行本版本与配置摘要对应的 Job，最后发布九个应用 Deployment 并等待 rollout。Job 名称长度受限，完整 SHA/摘要保存在注解；已有同名 Job 只有归属、SHA、摘要和完成状态全部符合时才能复用。失败时停止，不自动删除旧 Job 或回滚持久状态。
 
-## Verification
+Ingress 脚本核对 Service 的标签、选择器和端口，读取完整共享规则，使用 resourceVersion 乐观锁，只追加一条规则，再完整回读旧规则与新规则。已有 host 会拒绝重复追加；正常升级保留已属于本项目的入口即可，不必重复执行追加脚本。所有 kubectl 命令固定使用显式 context 和 namespace。
+
+## 集群验收与回退
 
 ```bash
-kubectl -n "$K8S_NAMESPACE" get deploy,svc,pods -l app=tiktok-ad-automation
-kubectl -n "$K8S_NAMESPACE" get job -l app=tiktok-ad-automation,role=migration
-kubectl -n "$K8S_NAMESPACE" logs deployment/tiktok-ad-automation-api --tail=100
-kubectl -n "$K8S_NAMESPACE" exec deployment/tiktok-ad-automation-worker-resource -- \
-  celery -A app.jobs.celery_app:celery_app inspect ping --timeout 10
+kubectl --context "$K8S_CONTEXT" -n prod get deploy,svc,pods -l app=tiktok-ad-automation
+kubectl --context "$K8S_CONTEXT" -n prod get job -l app=tiktok-ad-automation,role=migration
+kubectl --context "$K8S_CONTEXT" -n prod logs deployment/tiktok-ad-automation-api --tail=100
+curl --resolve "$INGRESS_HOST:443:134.175.255.190" "https://$INGRESS_HOST/api/utils/health-check/"
+uv run python scripts/check-bootstrap.py "https://$INGRESS_HOST"
 ```
 
-The API probe only proves that the process responds. Before enabling real TikTok or MCP work, verify the actual PostgreSQL/Redis configuration, R2 signed upload/readback, the callback URL, `TIKTOK_CALL_POLICIES`, tenant authorization and BC/account reads separately.
+HTTPS 验收不使用 `-k`，必须验证证书有效。继续检查七个 Worker、唯一 Beat、实际版本及配置一致性、R2 签名上传回读、API/MCP 注册/真实授权/账户发现。真实广告写入按具体授权另验。
+
+保存镜像 digest、旧/新 SHA、配置摘要、资源版本、备份证据及验收结果。回退前先确认当前持久状态与旧应用兼容，并按原流程停止调度/排空；使用旧镜像和对应的已核实私有配置，不盲目执行 `rollout undo`（它不会恢复 Secret）。恢复相关内容按既有发布手册处理，本脚本不自动回退。

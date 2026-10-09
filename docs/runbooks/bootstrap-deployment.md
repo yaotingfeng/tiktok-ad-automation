@@ -90,7 +90,7 @@ docker compose -f compose.yml -f compose.override.yml config --quiet
 docker compose -f compose.yml -f compose.override.yml up -d --build
 ```
 
-本地端口仅绑定 loopback：后端 8000、PostgreSQL 55432、Redis 56379。prestart 成功完成迁移和初始用户后才启动 API、Worker、Beat。不要使用 `down -v` 停止有业务数据的实例；正常停止用 `stop` 或不带 `-v` 的 `down`。
+本地 Docker 端口仅绑定 loopback：后端 80、PostgreSQL 55432、Redis 56379。prestart 成功完成迁移和初始用户后才启动 API、Worker、Beat。不要使用 `down -v` 停止有业务数据的实例；正常停止用 `stop` 或不带 `-v` 的 `down`。
 
 ## 实际 HTTPS 预发布
 
