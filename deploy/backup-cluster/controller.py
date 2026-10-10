@@ -55,7 +55,7 @@ def in_cluster_config():
     )
 
 
-def restore_pod(name, image, node):
+def restore_pod(name, image):
     # 恢复环境只接收解密历史凭据所需密钥，不注入真实数据库/R2/TikTok 连接配置。
     env = {
         "PROJECT_NAME": "TK-ADA backup verification",
@@ -69,7 +69,6 @@ def restore_pod(name, image, node):
         "MATERIAL_CLEANUP_ENABLED": "false",
         "ADS_SYNC_ENABLED": "false",
     }
-    mount = [{"name": "backups", "mountPath": "/backups", "readOnly": True}]
     return {
         "apiVersion": "v1",
         "kind": "Pod",
@@ -78,7 +77,6 @@ def restore_pod(name, image, node):
             "labels": {"app": PROJECT, "role": "backup-restore"},
         },
         "spec": {
-            "nodeName": node,
             "automountServiceAccountToken": False,
             "restartPolicy": "Never",
             "terminationGracePeriodSeconds": 10,
@@ -100,7 +98,6 @@ def restore_pod(name, image, node):
                             },
                         }
                     ],
-                    "volumeMounts": mount,
                     "resources": {
                         "requests": {"cpu": "25m", "memory": "128Mi"},
                         "limits": {"cpu": "1", "memory": "1Gi"},
@@ -114,7 +111,6 @@ def restore_pod(name, image, node):
                         {"name": "POSTGRES_DB", "value": "tkada_verify"},
                     ],
                     "args": ["postgres", "-c", "listen_addresses=127.0.0.1"],
-                    "volumeMounts": mount,
                     "resources": {
                         "requests": {"cpu": "50m", "memory": "128Mi"},
                         "limits": {"cpu": "1", "memory": "1Gi"},
@@ -137,12 +133,6 @@ def restore_pod(name, image, node):
                         "limits": {"cpu": "500m", "memory": "256Mi"},
                     },
                 },
-            ],
-            "volumes": [
-                {
-                    "name": "backups",
-                    "persistentVolumeClaim": {"claimName": NAME, "readOnly": True},
-                }
             ],
         },
     }
@@ -236,7 +226,7 @@ class ClusterBackup(Release):
         name = NAME + "-verify-" + self.state["token"][:10]
         self.state["restore_pod"] = name
         self.save(self.state["phase"])
-        obj = restore_pod(name, VPC + self.state["old_sha"], os.environ["NODE_NAME"])
+        obj = restore_pod(name, VPC + self.state["old_sha"])
         obj["metadata"]["annotations"] = {"backup-token": self.state["token"]}
         self.cluster.create(obj)
         self.cluster.k("wait", "--for=condition=Ready", "pod/" + name, "--timeout=300s")
@@ -303,7 +293,25 @@ class ClusterBackup(Release):
             "-c",
             'CREATE EXTENSION pg_trgm; CREATE EXTENSION "uuid-ossp";',
         )
-        dump = str(self.folder / "postgres.dump")
+        dump = "/tmp/postgres.dump"
+        run(
+            self.cluster.base
+            + [
+                "cp",
+                "-c",
+                "postgres",
+                str(self.folder / "postgres.dump"),
+                self.state["restore_pod"] + ":" + dump,
+            ],
+            env=dict(os.environ, KUBECTL_REMOTE_COMMAND_WEBSOCKETS="false"),
+        )
+        remote_digest = (
+            self.exec_restore("postgres", "sha256sum", dump).decode().split()[0]
+        )
+        require(
+            remote_digest == digest(self.folder / "postgres.dump"),
+            "Restore input transfer checksum mismatch",
+        )
         toc = self.exec_restore("postgres", "pg_restore", "--list", dump).decode()
         write(
             self.folder / "restore.toc",
@@ -316,8 +324,15 @@ class ClusterBackup(Release):
         )
         self.exec_restore(
             "postgres",
+            "sh",
+            "-c",
+            "cat > /tmp/restore.toc",
+            data=(self.folder / "restore.toc").read_bytes(),
+        )
+        self.exec_restore(
+            "postgres",
             "pg_restore",
-            "--use-list=" + str(self.folder / "restore.toc"),
+            "--use-list=/tmp/restore.toc",
             "--exit-on-error",
             "--single-transaction",
             "--no-owner",

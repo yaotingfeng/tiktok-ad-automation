@@ -32,7 +32,7 @@ class BackupTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
 
     def test_restore_environment_has_no_production_urls_or_cloud_keys(self):
-        pod = restore_pod("restore", IMAGE, "node")
+        pod = restore_pod("restore", IMAGE)
         app = pod["spec"]["containers"][0]
         values = {e["name"]: e.get("value") for e in app["env"]}
         self.assertIn("127.0.0.1", values["DATABASE_URL"])
@@ -44,7 +44,9 @@ class BackupTests(unittest.TestCase):
             secret["valueFrom"]["secretKeyRef"]["key"], "CONNECTION_ENCRYPTION_KEY"
         )
         self.assertFalse(pod["spec"]["automountServiceAccountToken"])
-        self.assertTrue(app["volumeMounts"][0]["readOnly"])
+        self.assertNotIn("volumeMounts", app)
+        self.assertNotIn("nodeName", pod["spec"])
+        self.assertNotIn("volumes", pod["spec"])
 
     def test_cron_defaults_suspended_and_cloud_disk_survives_pvc_deletion(self):
         objects = render.resources(IMAGE)["items"]
@@ -111,7 +113,8 @@ class BackupTests(unittest.TestCase):
             patch(
                 "controller.run",
                 side_effect=[b"", b'{"items":[{"status":{"phase":"Running"}}]}'],
-            ),self.assertRaises(RuntimeError)
+            ),
+            self.assertRaises(RuntimeError),
         ):
             instance.check_retired_source()
 

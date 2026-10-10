@@ -7,7 +7,7 @@
 - CronJob `tiktok-ad-automation-backup`，北京时间 03:00、并发 Forbid、失败不自动重试。首次 render 为 suspend，完成实际验证后启用。
 - 控制器使用独立 ServiceAccount；仅九 Deployment 的 scale 写权限，三个精确项目 Secret 读取，项目状态锁及临时 Pod 所需操作。没有数据库迁移 Job 权限、没有共享 Ingress 写权限、没有 Secret 列举权限；旧 prod 仅九 Deployment get 和残留 Pod list。
 - Kubernetes 原生 RBAC 无法按标签限制 Pod create/exec。因此该账号仍有 test 内 Pod 创建/执行权限，必须只给此受信任工具，不用于通用 CI/不可信分支；Pod 创建间接具有挂载 namespace Secret 的能力。后续若公司要求更强隔离，应加 admission 策略或独立 namespace 架构，不能把此权限称为严格的项目级隔离。
-- 控制器靠近 Beat 调度，复用其云盘所在节点；不修改九服务镜像或运行配置。恢复 Pod 独立 PG18/Redis8，仅监听 localhost、无 ServiceAccount token，NetworkPolicy 拒绝外部网络，停服前实测不能连接正式 PG/Redis/API。
+- 控制器靠近 Beat 调度，复用其云盘所在节点；不修改九服务镜像或运行配置。恢复 Pod 不挂载备份云盘，由调度器选择有余量的节点；PG dump 传输后核对摘要。独立 PG18/Redis8 仅监听 localhost、无 ServiceAccount token，NetworkPolicy 拒绝外部网络，停服前实测不能连接正式 PG/Redis/API。
 
 ## 备份与恢复验证
 
