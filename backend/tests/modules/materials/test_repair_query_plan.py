@@ -49,6 +49,7 @@ def test_repair_locks_candidate_dispatch_by_primary_key(source_env, wire):
         db.execute(text("SET LOCAL enable_seqscan = off"))
         db.execute(text("SET LOCAL enable_mergejoin = off"))
         db.execute(text("SET LOCAL enable_hashjoin = off"))
+        db.execute(text("SET LOCAL enable_bitmapscan = off"))
         plan = (
             db.connection()
             .exec_driver_sql("EXPLAIN (FORMAT JSON) " + statement, parameters)
@@ -70,12 +71,18 @@ def test_repair_locks_candidate_dispatch_by_primary_key(source_env, wire):
             node for node in nodes(plan) if node.get("Node Type") == "LockRows"
         ]
         assert len(lock_rows) == 1, plan
+        # 主键探测可能是 Index Scan，也可能是位图扫描（条件在子节点 Bitmap Index Scan，
+        # 子节点不带 Relation Name）；两者都是按 pending_dispatch_pkey 定位单行。
         indexed = [
             node
             for node in nodes(lock_rows[0])
-            if node.get("Relation Name") == "pending_dispatch" and "Index Cond" in node
+            if "Index Cond" in node
+            and (
+                node.get("Relation Name") == "pending_dispatch"
+                or node.get("Index Name") == "pending_dispatch_pkey"
+            )
         ]
-        assert any("id =" in node["Index Cond"] for node in indexed), indexed
+        assert any("id =" in node["Index Cond"] for node in indexed), lock_rows[0]
         assert db.execute(text("SHOW statement_timeout")).scalar_one() == "10s"
         assert db.execute(text("SHOW jit")).scalar_one() == "off"
     assert wire[0] == []

@@ -48,7 +48,8 @@ def test_reporting_routes_have_stable_operation_ids():
 def test_query_snapshot_survives_request_session_rollback(report_case, client):
     """GET creates a durable local snapshot consumed by a later request."""
     from app.api.deps import get_current_user
-    from app.main import app
+    # 与 client 使用同一应用实例；其他用例会 reload app.main 生成新对象。
+    app = client.app
     from app.models import User
 
     user = report_case.session.get(User, report_case.context.actor_id)
@@ -82,7 +83,8 @@ def test_reporting_write_routes_are_viewer_denied_and_operator_gated(
 ):
     """HTTP role gates run before report/BC mutations, for every write route."""
     from app.api.deps import get_current_user
-    from app.main import app
+    # 与 client 使用同一应用实例；其他用例会 reload app.main 生成新对象。
+    app = client.app
     from app.models import User
     from app.modules.tenants.models import TenantMembership
 
@@ -167,7 +169,8 @@ def test_reporting_write_routes_are_viewer_denied_and_operator_gated(
 def test_engine_api_cursor_and_selection_cross_request(report_case, client):
     """The production Engine path commits the snapshot before the next request."""
     from app.api.deps import get_current_user, get_db
-    from app.main import app
+    # 与 client 使用同一应用实例；其他用例会 reload app.main 生成新对象。
+    app = client.app
     from app.models import User
 
     user = report_case.session.get(User, report_case.context.actor_id)
