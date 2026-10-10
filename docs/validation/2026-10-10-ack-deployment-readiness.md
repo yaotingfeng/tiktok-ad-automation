@@ -26,7 +26,7 @@
 
 ## 剩余发布条件
 
-后续已落实 PostgreSQL `tkada`；Redis DB 15 的自行登记已撤回，编号待公司正式分配，见末节。还需配置新域名 CNAME、TLS host 与入口 rule，登记 TikTok API/MCP 回调并核对 R2 CORS。完成一致性备份及恢复验证后再停旧消费者并迁入生产；认证和空间创建不代表业务数据恢复或完整上线验收完成。
+后续已落实 PostgreSQL `tkada`；Redis DB 15 经撤回后，用户明确确认使用，已重新登记并验证，见末节。还需配置新域名 CNAME、TLS host 与入口 rule，登记 TikTok API/MCP 回调并核对 R2 CORS。完成一致性备份及恢复验证后再停旧消费者并迁入生产；认证和空间创建不代表业务数据恢复或完整上线验收完成。
 
 ## 后续：自行准备项目数据库空间
 
@@ -48,3 +48,12 @@
 - 私有配置的 Redis database 改为 null、REDIS_URL 清空，状态为 pending_company_assignment；PostgreSQL `tkada` 保留。
 - Redis DB 15 从未迁入业务数据或启动本项目消费者。清理探针和临时凭据 Secret 均已删除；证据为 `ack/tiktok-ad-automation-redis-unreserve-20261010.result.json`。
 - 编号须由公司运维核对分配记录并登记。各逻辑库键空间分开，但实例内存、CPU 和实例级操作共享；不能把不同编号视为独立 Redis 实例。
+
+## 后续：用户明确确认使用 Redis DB 15
+
+用户回复“可以，就用15”，授权使用该编号；无需再次询问编号分配。本次按此决定执行，不将空库检查本身解释为公司分配证明。
+
+- 在指定 ACK / prod 内运行本项目临时探针，Lua 原子确认 DB 15 无键后写入 `tkada:deployment:allocation`；结果 `allocated=true`、`marker_verified=true`、`key_count_after=1`。
+- 私有 `infrastructure.json` 已恢复 database=15、allocation_status=user_confirmed 及标记键；`runtime.env.incomplete` 已填入密码正确 URL 编码的内网 Redis `/15` URL。回读验证编号、主机、密码编码与两文件 0600 权限通过，未输出凭据。
+- 原始证据：`.runtime/company-production-20261010/ack/tiktok-ad-automation-redis-confirm-20261010.result.json`；临时 Pod 和凭据 Secret 已按 UID 核对后删除。
+- 标记仅记录 TK-ADA 用途，不构成 ACL 或资源隔离。没有操作其他库、迁入业务数据或启动消费者；源测试服保持运行。目标应用运行 Secret 尚未创建，剩余发布条件见上文。

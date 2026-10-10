@@ -1809,3 +1809,9 @@
 - 用户强调公司共享 Redis 的编号可能属于其他项目。更正之前“空库即能分配”的判断：空库或自行写标记不能排除公司已分配/预留，Redis 编号需核对公司的正式登记。
 - 原子比较完整值后仅删除本轮 `tkada:deployment:allocation` 标记，回读 DB 15 键数为 0；没有业务数据迁入、没有消费者启动、未操作其他键或 DB 0。
 - 私有 REDIS_URL 清空、Redis database=null，等待公司分配；新建 PostgreSQL `tkada` 保留。临时清理 Pod/凭据 Secret 已删除，验证证据及当前状态已同步至生产手册和 ACK 验证记录。
+
+## 2026-10-10：按用户明确确认使用 Redis DB 15
+
+- 用户回复“可以，就用15”，确认生产 Redis 编号。重新在 ACK 内原子检查空库并登记 TK-ADA 使用标记，回读匹配，键数为 1。
+- 私有配置已恢复 Redis database=15 / user_confirmed 及内网 `/15` URL；密码 URL 编码和 0600 权限校验通过。临时 Pod 与凭据 Secret 已清理，未修改其他项目数据。
+- 生产手册及 ACK 验证记录已同步。PostgreSQL `tkada` 与 Redis DB 15 均已准备；DNS/入口/外部回调及一致性备份恢复、消费者切换仍待完成，尚未部署业务服务。该标记不是实例级访问隔离。
