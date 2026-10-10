@@ -47,6 +47,14 @@ class BackupTests(unittest.TestCase):
         self.assertNotIn("volumeMounts", app)
         self.assertNotIn("nodeName", pod["spec"])
         self.assertNotIn("volumes", pod["spec"])
+        self.assertFalse(pod["spec"].get("hostNetwork", False))
+        init = pod["spec"]["initContainers"][0]
+        self.assertEqual(init["securityContext"]["capabilities"]["add"], ["NET_ADMIN"])
+        self.assertIn("ip link set", init["command"][-1])
+        for container in pod["spec"]["containers"]:
+            self.assertIn(
+                "NET_ADMIN", container["securityContext"]["capabilities"]["drop"]
+            )
 
     def test_cron_defaults_suspended_and_cloud_disk_survives_pvc_deletion(self):
         objects = render.resources(IMAGE)["items"]

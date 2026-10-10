@@ -81,9 +81,34 @@ def restore_pod(name, image):
             "restartPolicy": "Never",
             "terminationGracePeriodSeconds": 10,
             "imagePullSecrets": [{"name": PROJECT + "-registry"}],
+            # 仅在此 Pod 的网络命名空间关闭非 lo 网卡；不修改节点/其他 Pod 路由。
+            # ACK 既有 NetworkPolicy 的实测隔离不足，不能只依赖其声明。
+            "initContainers": [
+                {
+                    "name": "isolate-network",
+                    "image": "busybox:1.36",
+                    "command": [
+                        "sh",
+                        "-ec",
+                        'for path in /sys/class/net/*; do dev=${path##*/}; if [ "$dev" != lo ]; then ip link set "$dev" down; fi; done; ip link set lo up',
+                    ],
+                    "securityContext": {
+                        "capabilities": {"drop": ["ALL"], "add": ["NET_ADMIN"]},
+                        "allowPrivilegeEscalation": False,
+                    },
+                    "resources": {
+                        "requests": {"cpu": "10m", "memory": "16Mi"},
+                        "limits": {"cpu": "100m", "memory": "32Mi"},
+                    },
+                }
+            ],
             "containers": [
                 {
                     "name": "app",
+                    "securityContext": {
+                        "capabilities": {"drop": ["NET_ADMIN", "NET_RAW"]},
+                        "allowPrivilegeEscalation": False,
+                    },
                     "image": image,
                     "command": ["sleep", "86400"],
                     "env": [{"name": k, "value": v} for k, v in env.items()]
@@ -105,6 +130,10 @@ def restore_pod(name, image):
                 },
                 {
                     "name": "postgres",
+                    "securityContext": {
+                        "capabilities": {"drop": ["NET_ADMIN", "NET_RAW"]},
+                        "allowPrivilegeEscalation": False,
+                    },
                     "image": "postgres:18",
                     "env": [
                         {"name": "POSTGRES_HOST_AUTH_METHOD", "value": "trust"},
@@ -118,6 +147,10 @@ def restore_pod(name, image):
                 },
                 {
                     "name": "redis",
+                    "securityContext": {
+                        "capabilities": {"drop": ["NET_ADMIN", "NET_RAW"]},
+                        "allowPrivilegeEscalation": False,
+                    },
                     "image": "redis:8",
                     "args": [
                         "redis-server",
