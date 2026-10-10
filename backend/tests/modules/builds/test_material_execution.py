@@ -75,7 +75,11 @@ def test_shared_material_slice_is_deduplicated_and_ad_reads_stay_frozen(
         assert len(steps) >= 2
         material_id = steps[0].material_id
         assert material_id is not None
-        session.get(MaterialFile, material_id).video_md5 = "a" * 32
+        source = session.get(MaterialFile, material_id)
+        # 共用夹具的原文件为 4 GB，会被 SDK 上传容量边界正确阻断；本例要验证
+        # 真实切片规划，因此设为容量内大小并补齐内容摘要。
+        source.video_md5 = "a" * 32
+        source.byte_size = 1024 * 1024
         # Seed a second frozen reference rather than mutate immutable intent.
         session.add(ExecutionStep(**(steps[0].model_dump() | {
             "id": uuid4(), "step_key": "duplicate-material-reference", "dispatch_id": None
@@ -97,6 +101,30 @@ def test_shared_material_slice_is_deduplicated_and_ad_reads_stay_frozen(
         return original(*args, **kwargs)
 
     monkeypatch.setattr(distribution, "ensure_target_assets", capture)
+    # 上传租约必须覆盖素材 Worker 执行时限；共用夹具的 60 秒基础租约只适用于读写调用。
+    from app.core.config import settings
+
+    # 原文件上传路径要求私有存储配置齐全；合成值只供本地规划，不发起网络请求。
+    monkeypatch.setattr(settings, "S3_BUCKET", "offline-bucket")
+    monkeypatch.setattr(settings, "S3_ACCESS_KEY_ID", "offline-key")
+    monkeypatch.setattr(settings, "S3_SECRET_ACCESS_KEY", "offline-secret")
+    monkeypatch.setattr(
+        settings, "S3_ENDPOINT_URL", "https://offline.r2.cloudflarestorage.com"
+    )
+    upload_lease = {"lease_ms": 970000}
+    monkeypatch.setattr(
+        settings,
+        "TIKTOK_CALL_POLICIES",
+        {
+            **settings.TIKTOK_CALL_POLICIES,
+            "endpoints": {
+                **settings.TIKTOK_CALL_POLICIES.get("endpoints", {}),
+                "materials.upload_video_file": upload_lease,
+                "materials.upload_video_url": upload_lease,
+                "materials.share_assets": upload_lease,
+            },
+        },
+    )
     with Session(db) as session:
         material_step = session.get(ExecutionStep, ids["MATERIAL"][0])
         assert material_step is not None
@@ -144,7 +172,10 @@ def test_shared_material_slice_is_deduplicated_and_ad_reads_stay_frozen(
                 tenant_id=unit.tenant_id,
                 preview_id=submission.preview_id,
                 drama_id=unit.drama_id,
-                group_no=session.get(PlannedGroup, ad.group_id).group_no,
+                # PlannedGroup 主键为 (tenant_id, preview_id, id)。
+                group_no=session.get(
+                    PlannedGroup, (unit.tenant_id, submission.preview_id, ad.group_id)
+                ).group_no,
                 base_ad_no=ad.base_ad_no,
                 unit_id=unit.id,
             )
