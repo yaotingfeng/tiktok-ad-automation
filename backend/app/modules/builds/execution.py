@@ -782,10 +782,9 @@ def process_step(
                                 "execution_intent_changed", "原广告素材身份已变化"
                             )
                     local_body = dict(body)
-                    if claim.route.channel == "OFFICIAL_MCP" and claim.kind in {
-                        "CAMPAIGN",
-                        "ADGROUP",
-                    }:
+                    # 两通道都携带 request_id；重试先校验原 attempt 关联，
+                    # 再剥离传输字段供严格业务 DTO 解码，冻结正文保持不变。
+                    if claim.kind in {"CAMPAIGN", "ADGROUP"}:
                         if local_body.pop("request_id", None) != remote_request_id(
                             claim.attempt_id
                         ):

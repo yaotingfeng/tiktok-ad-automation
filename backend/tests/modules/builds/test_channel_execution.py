@@ -674,26 +674,23 @@ def test_final_quota_denial_requeues_identical_armed_attempt_without_http(
         assert step.status == "QUEUED" and step.dispatch_id
         revision = step.dispatch_revision
     created(wire, kind)
-    assert (
-        process_step(
-            database_engine=database_engine,
-            redis_client=redis_client,
-            context=case["context"],
-            step_id=case["ids"][kind],
-            revision=revision,
-        )
-        == "SUCCEEDED"
+    outcome = process_step(
+        database_engine=database_engine,
+        redis_client=redis_client,
+        context=case["context"],
+        step_id=case["ids"][kind],
+        revision=revision,
     )
     with Session(database_engine) as db:
         step = db.get(ExecutionStep, case["ids"][kind])
+        assert outcome == "SUCCEEDED", step.error_code
         assert (
             step.attempt,
             step.attempt_id,
             step.request_body,
             step.request_body_digest,
         ) == original
-        if route.channel == "OFFICIAL_MCP":
-            assert step.request_body["request_id"] == remote_request_id(step.attempt_id)
+        assert step.request_body["request_id"] == remote_request_id(step.attempt_id)
     assert len(business_calls(wire, route.channel)) == before_count + 1
 
 
