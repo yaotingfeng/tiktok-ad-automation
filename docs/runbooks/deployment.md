@@ -6,11 +6,11 @@
 
 历史集成分支 `feat/platform-implementation` 于 2026-09-16 在本地原位更名为 `main`，业务代码基线保持 `4f571406cab2690d04a2be16d18df042ef70ffe7`。远端主分支切换及旧分支清理状态见[整理记录](../validation/2026-09-16-branch-cleanup.md)。
 
-新加坡独立测试服务器使用无 Docker 的 systemd 部署，操作遵循 [staging-singapore.md](staging-singapore.md)。这是当前唯一已部署的远程环境，始终按测试环境管理。
+新加坡独立测试服务器使用无 Docker 的 systemd 部署，操作遵循 [staging-singapore.md](staging-singapore.md)。该服务器始终按测试环境管理；2026-10-10 已作为迁移源停用，生产状态见专用手册。
 
 Kubernetes 资产位于 [`deploy/k8s/README.md`](../../deploy/k8s/README.md)。该方案保留 PostgreSQL，使用集群外可达的 PostgreSQL/Redis 和目标环境明确配置的 R2/回调，通过外部运行环境文件和 MCP 注册 Secret 注入；它不把测试密钥提交到 Git，也不在应用 namespace 内创建数据库或 Redis。
 
-用户已授权迁移新加坡测试服的密钥、队列和授权。2026-10-10 提供 `singaporeconfig` 后，生产目标更正为阿里云新加坡 ACK `c19dbd82590a34b9f87cebb8c1a858796` / `prod`，不再使用部署 skill 默认的腾讯云集群。当前尚未部署业务服务；具体迁移条件、已知缺项和授权边界见 [production-junbo.md](production-junbo.md)。旧地址与旧“生产验收”仍不代表该生产实例。
+用户已授权迁移新加坡测试服的密钥、队列和授权。2026-10-10 提供 `singaporeconfig` 后，生产目标更正为阿里云新加坡 ACK `c19dbd82590a34b9f87cebb8c1a858796` / `prod`，不再使用部署 skill 默认的腾讯云集群。2026-10-10 已迁移业务数据并部署九角色，DNS 与用户 OAuth 仍待验；具体状态、已知缺项和授权边界见 [production-junbo.md](production-junbo.md)。旧地址与旧“生产验收”仍不代表该生产实例。
 
 其他环境的首次配置和宿主机命令见 [bootstrap-deployment.md](bootstrap-deployment.md)。下文为通用 staging 方案，补充版本、素材存储和升级顺序。
 

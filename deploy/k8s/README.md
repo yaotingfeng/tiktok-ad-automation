@@ -34,7 +34,7 @@
 ## 部署前要准备的具体资料
 
 1. 获授权的 kubeconfig、明确的 context，以及 `prod` 资源配额。优先使用项目受限凭据；凭据必须允许下述只读查重，权限不足时停止，不能跳过检查。
-2. 生产域名 `tkada.galaxyshortdrama.com` 的 CNAME 指向 `alb-ae6m00kf3iaolvbxim.ap-southeast-1.alb.aliyuncsslbintl.com`。集群内真实 TLS 握手确认 ALB 已提供有效 `*.galaxyshortdrama.com` 证书，无需新申请；2026-10-10 已按用户授权创建正式 Service 并追加新 host 的 TLS 声明与路由，控制器同步成功；应用尚未启动，完整业务访问待验。脚本只检查 TLS hosts 声明，不读取共享证书 Secret；发布验收还需通过域名真实访问。
+2. 生产域名 `tkada.galaxyshortdrama.com` 的 CNAME 指向 `alb-ae6m00kf3iaolvbxim.ap-southeast-1.alb.aliyuncsslbintl.com`。集群内真实 TLS 握手确认 ALB 已提供有效 `*.galaxyshortdrama.com` 证书，无需新申请；2026-10-10 已按用户授权创建正式 Service 并追加新 host 的 TLS 声明与路由，控制器同步成功；九角色已部署；指定 ALB 的真实 HTTPS/登录/静态资源/回调边界检查通过，普通域名解析仍返回 NXDOMAIN，需核对 DNS。脚本只检查 TLS hosts 声明，不读取共享证书 Secret；发布验收还需通过域名真实访问。
 3. 仓库外的运行配置和真实 MCP 注册文件；注册文件必须允许目标回调域名。私有 R2 桶的 CORS 同步允许目标前端 origin，禁止改为公开桶。
 4. 已确认从新加坡迁移密钥、队列和授权；最终切换时先停止旧调度、排空任务并按发布手册备份。不得让两套 Beat/Worker 同时消费同一批任务。
 5. 三个部署开关的明确取值。`MATERIAL_INGEST_ENABLED` 控制新导入入口，`MATERIAL_CLEANUP_ENABLED` 控制自动清理，`ADS_SYNC_ENABLED` 控制新周期同步；关闭它们不等于已有队列任务不会执行。首次值按用户确认填写，后续发布保留已确认值。

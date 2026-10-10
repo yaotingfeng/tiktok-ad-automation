@@ -1846,3 +1846,11 @@
 - 按用户要求直接处理 MCP，通过官方 DCR 接口成功注册生产客户端（HTTP 201，平台响应确认新回调），私密材料已保存。原客户端和运行授权保持不变。
 - 新 client_id 无法续期现有 3 份 MCP 授权，切换后需重新授权；不能把注册成功当成旧授权已迁移可用，未启动生产消费者。详见生产手册与 ACK 验证记录。
 - 使用正式候选镜像 `783d3b836b61171153cf1863f4ecd7617bc3e7d6`、真实运行环境与新注册文件，`DRY_RUN=1` 和 `PREFLIGHT_ONLY=1` 均 exit=0；后者包含镜像 revision 校验、断网容器 Settings/注册配置检查及 ACK 资源归属/入口只读检查。证据 `ack/production-client-config-preflight.json`。未写集群运行配置，未迁移数据库或队列；配置预检通过不代表历史 MCP 授权迁移通过。
+
+## 2026-10-10：完成 ACK 数据迁移和九角色生产部署
+
+- 用户明确继续全部部署，重新授权由其手动测试。源九服务正常停写、排空并停止；同一冻结窗口 PG/Redis/独立程序构建/配置证书完整备份及隔离恢复通过，136 表、4 凭据可解密，Redis 7 键。
+- 恢复到 ACK 内网 PostgreSQL `tkada` 与 Redis DB 15，数据指纹一致；平台 cron 两表、Redis 项目标记保留，未碰其他库。正式迁移 Job 与九 Deployment 成功，发布 SHA 783d3b8，head=0019_scene_budget_page。
+- 九角色配置和注册一致、开关保持 true/true/false、额度检查通过，七 Worker ping 7/7、Beat 单副本/20 GiB PVC Bound。指定 ALB 的真实 TLS、原账号登录、两租户、静态资源和回调边界通过；R2 写读删探针通过并清理。
+- 旧九服务停止并取消自启，旧入口改迁移提示，源备份 timer 恢复，原数据保留；私有生产配置恢复包已保存。临时迁移资源按 UID 清理。
+- 尚待普通域名解析（集群/Google DNS 均 NXDOMAIN，已请求核对阿里 DNS）、用户手动重新授权及真实业务/容量测试。托管自动备份策略、既有共享桶公开状态的限制如实记录，未冒充已验收。详见[正式发布记录](validation/2026-10-10-ack-production-release.md)。

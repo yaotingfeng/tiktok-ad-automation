@@ -1,5 +1,7 @@
 # TK-ADA 公司生产首发与迁移
 
+> **2026-10-10 当前状态**：已将测试服数据迁至新加坡 ACK 并部署 `783d3b836b61171153cf1863f4ecd7617bc3e7d6`。API、七 Worker、唯一 Beat 均就绪，旧九服务停止且取消自启。指定 ALB 的真实 HTTPS、管理员登录、两租户、静态资源、回调边界及 R2 读写删除检查通过。普通域名访问仍待 DNS 核对：集群与 Google DNS 对生产域名均返回 NXDOMAIN；MCP 三份历史授权需由用户在生产重新授权。详见[正式发布记录](../validation/2026-10-10-ack-production-release.md)。
+
 ## 已确认的目标与授权（2026-10-10 更新）
 
 用户已明确“公司集群就是生产环境，现在要部署到生产环境”，并要求“测试服的密钥、队列和授权要直接复制过去”。本次是新加坡测试实例向公司生产集群的迁移，覆盖此前“禁止复制测试密钥/授权”的默认规则；不再要求用户另找一套集群凭据。迁移不授权重复创建广告或绕过已有 UNKNOWN/冻结执行保护。2026-10-10 用户提供 `/Users/yaotingfeng/Downloads/singaporeconfig`，明确改用阿里云新加坡 ACK；原 skill 中的腾讯云 TKE 仅为此前误用的准备目标，后续不再向其部署。
@@ -16,19 +18,19 @@
 | 仓库凭据 | 同工具包 `vendor/tcr-cred.txt`，禁止回显/提交 |
 | 对外入口 | 现有 `prod/prod-https`，IngressClass `alb`；ALB 域名 `alb-ae6m00kf3iaolvbxim.ap-southeast-1.alb.aliyuncsslbintl.com` |
 | 证书 | 集群内以 `tkada.galaxyshortdrama.com` 为 SNI 的真实 TLS 校验通过，现有证书含 `*.galaxyshortdrama.com`；新 host 的 Ingress TLS 声明已追加并回读验证 |
-| 生产域名 | `tkada.galaxyshortdrama.com`；用户确认运维已配置公司侧解析至新加坡集群，应用入口 rule 已追加，后端应用尚未启动 |
-| PostgreSQL 业务库 | `tkada`，2026-10-10 已用所提供账号创建，所有者 `gzjunbo`；尚未迁入业务数据 |
+| 生产域名 | `tkada.galaxyshortdrama.com`；用户确认运维已配置公司侧解析至新加坡集群，入口及九个应用服务已部署；指定 ALB 的 HTTPS 验收通过，普通 DNS 访问待验 |
+| PostgreSQL 业务库 | `tkada`，2026-10-10 已用所提供账号创建，所有者 `gzjunbo`；已恢复源库 136 张业务表并验证 |
 | Redis 逻辑库 | DB 15；用户明确确认使用，已重新检查空库、登记本项目标记并回读验证 |
 | 应用端口 | API/容器/Service 均为 80 |
 | 拓扑 | 1 API、7 个独立 Worker、1 Beat，使用同一版本及运行 Secret |
 | 应用资源 | 合计申请 4.25 核 / 10.5 GiB，上限 10.5 核 / 21 GiB；不含 PostgreSQL、Redis 与发布瞬时资源 |
 | 存储 | Beat 申请 20 GiB，使用已存在的 `alicloud-disk-topology-alltype` / `WaitForFirstConsumer`，随首个 Pod 可用区绑定 |
 | 镜像拉取 | 已创建本项目 `tiktok-ad-automation-registry` Secret；ACK 默认 ACR 凭据不能拉取 TCR，工作负载显式引用本项目凭据 |
-| 配置落点 | `prod/tiktok-ad-automation-runtime` 与 `prod/tiktok-ad-automation-mcp-registration` Secret；未创建 |
+| 配置落点 | `prod/tiktok-ad-automation-runtime` 与 `prod/tiktok-ad-automation-mcp-registration` Secret；已创建并验证九角色一致 |
 
 ACK 已核实 7 个 Ready 节点，分布在新加坡四个可用区；`prod` 未配置 ResourceQuota/LimitRange。节点容量不是可直接独占的剩余资源，部署仍须核对其他工作负载已申请量及实际调度结果。
 
-## 迁移源核验
+## 迁移源核验（停写前快照）
 
 - 来源：新加坡 `137.220.150.31` 的现有测试实例，不将源服务器改称生产。
 - 实际运行版本：`8b877f4`，9 个应用 systemd 服务均 active。
@@ -39,7 +41,7 @@ ACK 已核实 7 个 Ready 节点，分布在新加坡四个可用区；`prod` �
 - 已生效开关为导入 `true`、清理 `true`、周期同步 `false`；迁移方案保留这些现有值，不用模板值静默覆盖。
 - PostgreSQL 与 Redis 当前均监听 `127.0.0.1`；直接复制这些 URL 到 Pod 会连接 Pod 自身，不能作为生产目标连接信息。
 
-## 2026-10-10 新目标配置与剩余条件
+## 2026-10-10 新目标准备过程（迁移前快照）
 
 用户已提供阿里云新加坡 PostgreSQL / Redis 地址及凭据，覆盖 skill 中公司固定 Redis 的默认值。凭据仅保存于 `.runtime/company-production-20261010/infrastructure.json`（0600），不写入文档、命令行参数或 Git。
 
@@ -50,7 +52,7 @@ ACK 已核实 7 个 Ready 节点，分布在新加坡四个可用区；`prod` �
 
 域名已确定为 `tkada.galaxyshortdrama.com`。同日私有运行草稿 `runtime.env.incomplete` 保留原授权加密密钥、R2/API 密钥及三个开关；同步新 origin 与回调，但未伪造远端注册文件。用户随后要求自行创建项目空间：已创建 PostgreSQL `tkada`（所有者 `gzjunbo`），此前自行登记 Redis DB 15 的做法曾撤回；随后用户明确回复“可以，就用15”。据此重新原子检查 DB 15 为空并登记本项目标记，回读匹配、键数为 1。私有草稿已配置 PostgreSQL `tkada` 与 Redis `/15` 的内网 URL；尚未迁入业务数据。
 
-待落实项：
+当时待落实项（已完成部分及最新剩余项见顶部状态和正式发布记录）：
 
 1. **PostgreSQL 与 Redis 编号已落实**：使用 `tkada` 项目库与用户明确确认的 Redis DB 15，REDIS_URL 已填写。Redis 的 0–255 编号为实例预设，本项目标记仅用于记录用途，不提供访问隔离或公司全局分配证明；实例 CPU、内存仍共享。不得修改实例库数或清空共享实例。
 2. ACK 已用所提供凭据完成内网 PostgreSQL 只读认证（`postgres` 管理库，服务端 18.3）和 Redis AUTH/PING。外网地址连接超时，部署选用内网；已随后建好 PostgreSQL 项目库并按用户确认登记 Redis DB 15；目标恢复仍待执行，没有迁入业务数据。
@@ -71,7 +73,7 @@ Redis：DB 15（用户已确认使用，已登记 TK-ADA 标记）；使用已�
 TikTok API 回调：https://tkada.galaxyshortdrama.com/api/integrations/tiktok/callback
 TikTok MCP 回调：https://tkada.galaxyshortdrama.com/api/integrations/tiktok/mcp/callback
 R2 CORS：已添加 https://tkada.galaxyshortdrama.com，保留测试 origin，OPTIONS 验证通过
-状态：正式 Service 和 Ingress rule 已配置；生产业务应用未启动，尚无后端实例
+状态：九个应用服务已就绪；指定 ALB 的 HTTPS/登录验收通过，普通域名解析待运维核对，用户手动重新授权待验
 ```
 
 2026-10-09 的 13 个部署对象已通过服务端 dry-run，不代表应用、磁盘绑定或网络验收。2026-10-10 此前腾讯云仅创建本项目前缀的临时网络探针，无密钥、无队列消费者，用于验证真实镜像拉取、调度和网络；探针结束后清理。旧目标的结果见当日腾讯云记录；新目标以 [ACK 验证记录](../validation/2026-10-10-ack-deployment-readiness.md) 为准。
@@ -91,7 +93,7 @@ R2 CORS：已添加 https://tkada.galaxyshortdrama.com，保留测试 origin，O
 
 目标未具备恢复条件或检查失败时，保持来源实例原状。切换后的回退必须先停止生产消费者、核对新旧持久状态兼容性，再按一致性备份恢复；禁止仅 `rollout undo`、清空队列或覆盖共享 Redis 来恢复。
 
-目前已完成本地验证、生产集群预检、临时网络探针及来源配置快照；尚未创建生产业务服务或切停测试服。此次记录取代“公司集群是测试环境”的此前表述，但不把本地验证或只读检查记为生产上线成功。
+生产已完成数据恢复与九角色部署，旧源服务已停止并取消自启；禁止直接启动旧消费者。回退前先停止生产写入与消费者，再判断是否已有新增业务事实并制定一致恢复方案。当前 DNS 与用户 OAuth 待验，不把指定 ALB 的 HTTPS 验收写成普通域名已可访问。
 
 ## 2026-10-10 磁盘清理与迁移恢复演练
 
@@ -116,3 +118,12 @@ R2 CORS：已添加 https://tkada.galaxyshortdrama.com，保留测试 origin，O
 - 原注册文件 SHA-256 前后相同。代码刷新流程校验凭据中的 client_id 与当前注册一致，因此新注册不能直接续期旧客户端下的 3 份 MCP 授权；迁移数据可保留，但切换新客户端后必须重新授权。尚未替换运行 Secret、撤销旧授权或启动生产消费者。
 - 私有证据 `ack/callback-readiness-retest.json`；API/MCP 完整授权测试及历史 MCP 重新授权仍待完成。
 - 使用正式候选镜像 `783d3b836b61171153cf1863f4ecd7617bc3e7d6`、真实运行环境与新注册文件，`DRY_RUN=1` 和 `PREFLIGHT_ONLY=1` 均 exit=0；后者包含镜像 revision 校验、断网容器 Settings/注册配置检查及 ACK 资源归属/入口只读检查。证据 `ack/production-client-config-preflight.json`。未写集群运行配置，未迁移数据库或队列；配置预检通过不代表历史 MCP 授权迁移通过。
+
+## 正式切换记录与恢复入口
+
+- 用户明确“继续完成，重新授权手动测试”，授权生产采用新 MCP 客户端并完成其余迁移。2026-10-10 06:14:06 UTC 源九服务全部优雅停止；七队列和 unacked 均为零，旧 Worker 无 active/reserved/scheduled 任务。
+- 完整冻结备份、原配置证书、源独立程序/前端构建、Redis RDB 与逐键逻辑快照位于私有 `.runtime/company-production-20261010/ack/cutover/`。该目录的 `manifest.json`、`backup-verified.json`、`target-restored.json` 分别记录清单、隔离恢复和生产恢复证据。
+- 发布 SHA `783d3b836b61171153cf1863f4ecd7617bc3e7d6`，镜像 digest `sha256:3d3a03ec331f7adc2796a30c47dbc0836d64596164cbf6dc40701927aa94b891`，head `0019_scene_budget_page`。实际注入配置备份为 `cutover/runtime.env` / `production-config.tar.gz`，本地 `.env.production` 已同步；新 MCP 注册为 `ack/mcp-client-production.json`。文件均私有且不入 Git。
+- 七 Worker 并发各 1、Beat 单副本、20 GiB PVC Bound；开关仍为导入 true、清理 true、周期同步 false。实际九角色配置摘要与注册摘要一致、额度校验通过、Worker ping 7/7、启动日志无 ERROR/Traceback。
+- 旧测试服保留数据库、Redis、release 和配置；九应用服务 disabled/inactive，旧 Nginx 返回 503 迁移提示页。源备份 timer 已恢复；它只备份旧源数据，不能当作生产持续备份。生产 RDS/Redis 的托管备份策略尚未从云控制台核验，本次一致性备份及生产配置恢复包已异机保存于当前工作站。
+- DNS 管理属于阿里云 ns7/ns8.alidns.com；2026-10-10 集群/Google DNS 实测生产主机名 NXDOMAIN。已请核对 `tkada` CNAME 指向 `alb-ae6m00kf3iaolvbxim.ap-southeast-1.alb.aliyuncsslbintl.com`，本机未持有该 DNS 账号权限；不要通过修改共享 CoreDNS、忽略证书校验或硬编码 ALB IP 冒充修复。

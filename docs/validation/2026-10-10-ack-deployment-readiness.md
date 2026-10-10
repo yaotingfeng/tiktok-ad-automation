@@ -101,3 +101,7 @@
 - 原注册文件 SHA-256 前后相同。代码刷新流程校验凭据中的 client_id 与当前注册一致，因此新注册不能直接续期旧客户端下的 3 份 MCP 授权；迁移数据可保留，但切换新客户端后必须重新授权。尚未替换运行 Secret、撤销旧授权或启动生产消费者。
 - 私有证据 `ack/callback-readiness-retest.json`；API/MCP 完整授权测试及历史 MCP 重新授权仍待完成。
 - 使用正式候选镜像 `783d3b836b61171153cf1863f4ecd7617bc3e7d6`、真实运行环境与新注册文件，`DRY_RUN=1` 和 `PREFLIGHT_ONLY=1` 均 exit=0；后者包含镜像 revision 校验、断网容器 Settings/注册配置检查及 ACK 资源归属/入口只读检查。证据 `ack/production-client-config-preflight.json`。未写集群运行配置，未迁移数据库或队列；配置预检通过不代表历史 MCP 授权迁移通过。
+
+## 后续：已执行正式迁移与部署
+
+用户确认手动重新授权后，已完成冻结备份、隔离恢复、目标恢复、迁移及九角色启动，旧源停止并取消自启。当前实际运行状态与剩余 DNS/OAuth 验收见[正式发布记录](2026-10-10-ack-production-release.md)，以上各阶段未部署表述仅保留为当时快照。
