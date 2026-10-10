@@ -77,6 +77,9 @@ class Release:
 
     def save(self, phase):
         self.state["phase"] = phase
+        self.state.setdefault("history", []).append(
+            {"phase": phase, "at": int(time.time())}
+        )
         write(self.folder / "state.json", self.state)
         print("release phase: " + phase, flush=True)
 

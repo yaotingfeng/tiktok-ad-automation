@@ -2,7 +2,7 @@
 
 > **当前发布与备份**：使用[本地一键发布](../../deploy/release/README.md)，无需Jenkins或备份云盘。最新恢复验证通过的项目备份为本机 `.runtime/local-release/backups/latest.tar`，仅保留最近一份；旧迁移归档路径仅为历史审计记录，不能作为当前恢复入口。
 
-> **当前部署**：已迁至同一新加坡 ACK 的 `test` 命名空间，入口为 `test/test-https`。本机使用阿里云 ACR 公网地址推送，Pod 通过 VPC 地址拉取。原 `prod` 九服务保留零副本；后文 prod/TCR 记录为迁移历史。验收见[ACR 与命名空间迁移记录](../validation/2026-10-10-acr-test-migration.md)。
+> **当前部署**：已迁至同一新加坡 ACK 的 `test` 命名空间，入口为 `test/test-https`。本机使用阿里云 ACR 公网地址推送，Pod 通过 VPC 地址拉取。原 `prod` 已停用，旧 Deployment 后续已被外部清理；仍用退役资源清单核对残留资源，禁止重启旧消费者。后文 prod/TCR 记录为迁移历史。验收见[ACR 与命名空间迁移记录](../validation/2026-10-10-acr-test-migration.md)。
 
 > **当前生产入口**：用户指定改为 `https://tkada.shortclipflix.com`；该域名已真实解析到新加坡 ALB，现有 `*.shortclipflix.com` 证书验证通过。本次配置切换及验收见[域名切换记录](../validation/2026-10-10-shortclipflix-domain.md)。下文 galaxyshortdrama 的 DNS 问题为首次发布时的历史情况。
 

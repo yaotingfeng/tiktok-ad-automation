@@ -146,24 +146,41 @@ def main():
         folder = base / "runs" / run_name
         folder.mkdir(parents=True, mode=0o700)
         checkout, sha = prepare_checkout(folder)
-        record = {"sha": sha, "action": args.action, "phase": "prepared"}
+        record = {
+            "sha": sha,
+            "action": args.action,
+            "phase": "prepared",
+            "started_at": int(time.time()),
+            "stages": [],
+        }
         write(folder / "run.json", record)
         write(base / "latest-run.json", {"run": run_name})
         log = folder / "execution.log"
-        if args.action in ("check", "deploy"):
-            stage(["bash", "deploy/ci/check.sh"], checkout, env, log)
-            record["phase"] = "checks-passed"
+
+        def mark(phase):
+            record["phase"] = phase
+            record["stages"].append({"phase": phase, "at": int(time.time())})
             write(folder / "run.json", record)
+            print("阶段：" + phase, flush=True)
+
+        print("详细日志：" + str(log), flush=True)
+        if args.action in ("check", "deploy"):
+            mark("checking")
+            stage(["bash", "deploy/ci/check.sh"], checkout, env, log)
+            mark("checks-passed")
         if args.action == "deploy":
             # 仅快进推送指定 SHA 到公司 main；origin 不参与发布。
+            mark("pushing")
             git("push", "company", sha + ":refs/heads/main", cwd=checkout)
             require(
                 git("ls-remote", "company", "refs/heads/main", cwd=checkout).split()[0]
                 == sha,
                 "Company main changed during release",
             )
+            mark("building")
             stage(["bash", "deploy/build-and-push.sh"], checkout, env, log)
         if args.action != "check":
+            mark("releasing" if args.action == "deploy" else "backing-up")
             command = [
                 sys.executable,
                 "deploy/release/release.py",
@@ -174,8 +191,7 @@ def main():
             if args.action == "deploy":
                 command += ["--sha", sha]
             stage(command, checkout, env, log)
-        record["phase"] = "complete"
-        write(folder / "run.json", record)
+        mark("complete")
         cleanup_checkout(folder)
         print("完成：" + args.action + "；批次：" + run_name, flush=True)
         if args.action != "check":
