@@ -1,4 +1,5 @@
 import { expect, type Page } from "@playwright/test"
+import type { LinkConfigSchema } from "../../src/client"
 export const T = "11111111-1111-4111-8111-111111111111",
   T2 = "22222222-2222-4222-8222-222222222222",
   D = "33333333-3333-4333-8333-333333333333",
@@ -347,6 +348,18 @@ export async function buildsBoundary(
           },
         ]),
       )
+    // 应用能力接口返回字段契约，不能沿用列表接口的空分页响应。
+    if (path.includes("/applications/") && path.endsWith("/capabilities"))
+      return reply({
+        provider_kind: "wangyan",
+        fields: [
+          { name: "episode", label: "起播集", type: "integer", default: 1 },
+          { name: "promote_name", label: "推广名称", type: "string" },
+        ],
+        defaults: { episode: 1 },
+        required_when: {},
+        schema_version: 1,
+      } satisfies LinkConfigSchema)
     if (path.endsWith("/applications"))
       return reply(
         paged([

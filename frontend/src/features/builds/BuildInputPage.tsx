@@ -148,6 +148,14 @@ export function BuildInputPage({
       | Record<string, string | number | boolean | null>
       | undefined
     if (!defaults) return
+    // 已保存输入的隐式默认值属于初始基线，不应仅因读取能力接口触发修改。
+    if (
+      summary &&
+      values.connection === initial.current.connection &&
+      values.application === initial.current.application
+    ) {
+      initial.current.linkConfig = { ...defaults, ...initial.current.linkConfig }
+    }
     setValues((current) => ({
       ...current,
       linkConfig: { ...defaults, ...current.linkConfig },

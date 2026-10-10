@@ -2636,7 +2636,7 @@ test("connection details direct authorization changes to the unified setting", a
   expect(writes).toHaveLength(0)
 })
 
-test("MCP candidate binds selected BCs and returns to connections", async ({
+test("MCP candidate binds all accessible BCs only after submission and returns to connections", async ({
   page,
 }) => {
   const { requests } = await accountBoundary(page, {
@@ -2647,11 +2647,12 @@ test("MCP candidate binds selected BCs and returns to connections", async ({
     `/tenants/${A}/accounts?tab=connections&mcp_authorization=CANDIDATE_READY&attempt_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
   )
   const sheet = page.getByRole("dialog", { name: "选择授权 BC", exact: true })
+  await expect(sheet.getByText(/2 个新 BC 将自动接入/)).toBeVisible()
+  await expect(sheet.getByRole("checkbox")).toHaveCount(0)
+  expect(requests.every((request) => request.method === "GET")).toBe(true)
   await expect(
     sheet.getByRole("button", { name: "接入并同步账户", exact: true }),
-  ).toBeDisabled()
-  await sheet.getByRole("checkbox", { name: /业务 BC 一/ }).check()
-  await sheet.getByRole("checkbox", { name: /业务 BC 二/ }).check()
+  ).toBeEnabled()
   await sheet
     .getByRole("button", { name: "接入并同步账户", exact: true })
     .click()
@@ -2729,7 +2730,7 @@ test("MCP candidate is cleared when tenant navigation changes", async ({
   )
   const sheet = page.getByRole("dialog", { name: "选择授权 BC", exact: true })
   await expect(
-    sheet.getByRole("checkbox", { name: /业务 BC 一/ }),
+    sheet.getByText(`业务 BC 一 · ${BC1}`, { exact: true }),
   ).toBeVisible()
   await page.keyboard.press("Escape")
   await expect(sheet).not.toBeVisible()
@@ -2846,22 +2847,20 @@ test("MCP single accessible BC is selected automatically without binding until s
     `/tenants/${A}/accounts?tab=connections&mcp_authorization=CANDIDATE_READY&attempt_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
   )
   const sheet = page.getByRole("dialog", { name: "选择授权 BC", exact: true })
-  const bc = sheet.getByRole("checkbox", { name: /唯一 BC/ })
-  await expect(bc).toBeChecked()
+  await expect(sheet.getByText(`唯一 BC · ${BC1}`, { exact: true })).toBeVisible()
+  await expect(sheet.getByText(/1 个新 BC 将自动接入/)).toBeVisible()
+  await expect(sheet.getByRole("checkbox")).toHaveCount(0)
   expect(requests.every((request) => request.method === "GET")).toBe(true)
-  await bc.uncheck()
-  await expect(bc).not.toBeChecked()
   await expect(
     sheet.getByRole("button", { name: "接入并同步账户" }),
-  ).toBeDisabled()
-  await bc.check()
+  ).toBeEnabled()
   await sheet.getByRole("button", { name: "接入并同步账户" }).click()
   expect(requests.find((request) => request.method === "POST")?.body).toEqual({
     bc_ids: [BC1],
   })
 })
 
-test("MCP selection survives pages and select all covers the complete directory", async ({
+test("MCP automatic binding covers the complete directory across displayed pages", async ({
   page,
 }) => {
   const candidateBCs = Array.from({ length: 101 }, (_, i) => ({
@@ -2876,24 +2875,14 @@ test("MCP selection survives pages and select all covers the complete directory"
     `/tenants/${A}/accounts?tab=connections&mcp_authorization=CANDIDATE_READY&attempt_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
   )
   const sheet = page.getByRole("dialog", { name: "选择授权 BC", exact: true })
-  await expect(
-    sheet.getByRole("button", { name: "接入并同步账户" }),
-  ).toBeDisabled()
-  await sheet
-    .getByRole("checkbox", { name: "跨页 BC 1 · bc-1", exact: true })
-    .check()
+  await expect(sheet.getByText(/101 个新 BC 将自动接入/)).toBeVisible()
+  await expect(sheet.getByText("跨页 BC 1 · bc-1", { exact: true })).toBeVisible()
   await sheet.getByRole("button", { name: "下一页 BC" }).click()
   await expect(sheet.getByText("共 101 条 · 第 2 / 3 页")).toBeVisible()
-  await sheet
-    .getByRole("checkbox", { name: "跨页 BC 51 · bc-51", exact: true })
-    .check()
+  await expect(sheet.getByText("跨页 BC 51 · bc-51", { exact: true })).toBeVisible()
   await sheet.getByRole("button", { name: "上一页 BC" }).click()
-  await expect(
-    sheet.getByRole("checkbox", { name: "跨页 BC 1 · bc-1", exact: true }),
-  ).toBeChecked()
-  await expect(sheet.getByText(/已选 2 个/)).toBeVisible()
-  await sheet.getByRole("button", { name: "全选可接入 BC" }).click()
-  await expect(sheet.getByText(/已选 101 个/)).toBeVisible()
+  await expect(sheet.getByText("跨页 BC 1 · bc-1", { exact: true })).toBeVisible()
+  expect(requests.every((request) => request.method === "GET")).toBe(true)
   await sheet.getByRole("button", { name: "接入并同步账户" }).click()
   const writes = requests.filter((request) => request.method !== "GET")
   expect(writes).toHaveLength(1)
@@ -2951,14 +2940,12 @@ test("MCP existing authorization refreshes accessible BCs and adds only new or u
     .getByRole("button", { name: "添加 BC", exact: true })
     .click()
   const sheet = page.getByRole("dialog", { name: "添加 BC", exact: true })
-  await expect(
-    sheet.getByRole("checkbox", { name: /已接入 BC/ }),
-  ).toBeDisabled()
-  await expect(sheet.getByRole("checkbox", { name: /失败 BC/ })).toBeDisabled()
-  await expect(sheet.getByRole("checkbox", { name: /已解绑 BC/ })).toBeChecked()
+  await expect(sheet.getByText(`已接入 BC · ${BC1}`, { exact: true })).toBeVisible()
+  await expect(sheet.getByText("失败 BC · bc-error", { exact: true })).toBeVisible()
+  await expect(sheet.getByText(/1 个新 BC 将自动接入/)).toBeVisible()
   await sheet.getByRole("button", { name: "刷新可访问 BC" }).click()
   await expect(
-    sheet.getByRole("checkbox", { name: /新增可访问 BC/ }),
+    sheet.getByText(`新增可访问 BC · ${BC3}`, { exact: true }),
   ).toBeVisible()
   expect(
     await page.evaluate(
@@ -2969,7 +2956,7 @@ test("MCP existing authorization refreshes accessible BCs and adds only new or u
     path: test.info().outputPath("mcp-add-bcs-mobile.png"),
     animations: "disabled",
   })
-  await sheet.getByRole("button", { name: "全选可接入 BC" }).click()
+  await expect(sheet.getByText(/2 个新 BC 将自动接入/)).toBeVisible()
   await sheet.getByRole("button", { name: "接入并同步账户" }).click()
   const writes = requests.filter((request) => request.method !== "GET")
   expect(writes).toHaveLength(1)
@@ -3151,7 +3138,7 @@ test("MCP incomplete BC directory blocks all selection and binding", async ({
 })
 
 for (const total of [1001, 5000]) {
-  test(`MCP ${total} accessible BCs allow a single selection and enforce the 1000 selection limit`, async ({
+  test(`MCP ${total} accessible BCs are bound completely within the 5000 BC limit`, async ({
     page,
   }) => {
     const candidateBCs = Array.from({ length: total }, (_, i) => ({
@@ -3169,28 +3156,15 @@ for (const total of [1001, 5000]) {
     await expect(
       sheet.getByText(new RegExp(`共 ${total} 个可访问 BC`)),
     ).toBeVisible({ timeout: 15000 })
-    await sheet.getByRole("button", { name: "全选可接入 BC" }).click()
-    await expect(
-      sheet.getByText("所选 BC 超过单次接入上限", { exact: true }),
-    ).toBeVisible()
-    await expect(
-      sheet.getByText(new RegExp(`当前已选 ${total} 个`)),
-    ).toBeVisible()
-    await expect(
-      sheet.getByRole("button", { name: "接入并同步账户" }),
-    ).toBeDisabled()
+    await expect(sheet.getByRole("checkbox")).toHaveCount(0)
     expect(requests.every((request) => request.method === "GET")).toBe(true)
-    await sheet.getByRole("button", { name: "清空选择" }).click()
-    await sheet
-      .getByRole("checkbox", { name: "目录 BC 1 · limit-bc-1", exact: true })
-      .check()
     await expect(
       sheet.getByRole("button", { name: "接入并同步账户" }),
     ).toBeEnabled()
     await sheet.getByRole("button", { name: "接入并同步账户" }).click()
     const writes = requests.filter((request) => request.method !== "GET")
     expect(writes).toHaveLength(1)
-    expect(writes[0]?.body).toEqual({ bc_ids: ["limit-bc-1"] })
+    expect(writes[0]?.body).toEqual({ bc_ids: candidateBCs.map((item) => item.bc_id) })
     expect(
       new Set(
         requests
@@ -3224,5 +3198,20 @@ test("MCP provider failure callback displays its outcome without restarting OAut
         request.path.endsWith("/authorizations"),
     ),
   ).toBe(false)
+  expect(requests.every((request) => request.method === "GET")).toBe(true)
+})
+
+// 完整目录上限与后端一致，不能截断后自动提交部分授权范围。
+test("MCP more than 5000 accessible BCs blocks binding without writes", async ({ page }) => {
+  const { requests } = await accountBoundary(page, { mcpReady: true })
+  await page.route("**/api/tenants/*/tiktok/mcp/candidates/*/bcs?*", (route) =>
+    route.fulfill({ json: { items: [], total: 5001, page: 1, page_size: 50 } }),
+  )
+  await page.goto(
+    `/tenants/${A}/accounts?tab=connections&bc_id=${BC1}&mcp_authorization=CANDIDATE_READY&attempt_id=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`,
+  )
+  const sheet = page.getByRole("dialog", { name: "选择授权 BC", exact: true })
+  await expect(sheet.getByText("可访问 BC 超过 5000 个，目录无法完整读取，请联系管理员。", { exact: true })).toBeVisible()
+  await expect(sheet.getByRole("button", { name: "接入并同步账户" })).toBeDisabled()
   expect(requests.every((request) => request.method === "GET")).toBe(true)
 })

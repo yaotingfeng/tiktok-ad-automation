@@ -16,6 +16,7 @@ const config: StrategyConfig_Output = {
   currency: "USD",
   budget_strategy: "SERIES",
   bid_strategy: "TARGET_ROAS",
+  creation_status: "ENABLE",
   target_roas: "1.08",
   group_generation_mode: "BY_MATERIAL",
   group_count: null,
@@ -531,6 +532,7 @@ test("预算大数十进制原文保存，结构和命名示例不进入配置",
   )!
   expect(write.body.config.budget).toBe("9007199254740993.12")
   expect(write.body.config.target_roas).toBe("1.08")
+  expect(write.body.config.creation_status).toBe("ENABLE")
   expect(write.body.config.cta_option_ids).toEqual(["official-existing-id"])
   expect(Object.keys(write.body.config).sort()).toEqual(
     [...Object.keys(config), "targeting"].sort(),
@@ -1431,6 +1433,7 @@ test("策略默认值按业务决策顺序展示，隐藏无决策价值的安�
     "基本信息",
     "搭建结构",
     "预算与出价",
+    "创建状态",
     "受众定向",
     "文案与 CTA",
     "广告命名",

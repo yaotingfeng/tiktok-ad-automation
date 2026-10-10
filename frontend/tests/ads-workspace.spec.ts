@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test"
-import { ADVERTISER, adsBoundary, BC_A, TENANT } from "./utils/adsBoundary"
+import { ADVERTISER, adsBoundary, BC_A, BC_B, TENANT } from "./utils/adsBoundary"
 
 test.describe("ads workspace", () => {
   test("外部广告六维切换保留筛选", async ({ page }) => {
@@ -122,7 +122,7 @@ test.describe("ads workspace", () => {
       const url = new URL(request.url())
       if (
         url.pathname.endsWith(`/tenants/${TENANT}/ads`) &&
-        url.searchParams.get("bc_id") === "bc-b"
+        url.searchParams.get("bc_id") === BC_B
       )
         bcBRequests.push(request.url())
     })

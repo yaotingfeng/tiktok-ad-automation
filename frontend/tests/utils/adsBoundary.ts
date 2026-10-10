@@ -1,8 +1,9 @@
 import type { Page } from "@playwright/test"
 
 export const TENANT = "11111111-1111-4111-8111-111111111111"
-export const BC_A = "bc-a"
-export const BC_B = "bc-b"
+// BC 使用路由接受的十进制字符串，覆盖大于 JS 安全整数的真实 ID 格式。
+export const BC_A = "90071992547409931111"
+export const BC_B = "90071992547409932222"
 export const ADVERTISER = "adv-1"
 const token = "ads-workspace-test-token"
 

@@ -53,7 +53,6 @@ export function McpAuthorizationSheet({
   const selecting = !!attemptId || addBindings
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState<string[]>([])
-  const initialized = useRef(false)
   const refreshRequested = useRef(false)
   const candidates = useQuery({
     queryKey: [
@@ -120,11 +119,8 @@ export function McpAuthorizationSheet({
       .map((item) => item.bc_id)
     // MCP 授权与官方 API 保持一致：一次授权自动接入全部当前可见且尚未接入的 BC。
     // 已有绑定由服务端按连接复用规则处理，不重复创建。
-    const autoSelect = !initialized.current
-    setSelected((previous) =>
-      autoSelect ? available : previous.filter((id) => available.includes(id)),
-    )
-    initialized.current = true
+    // 刷新目录后也重新取全部可接入 BC，避免新出现的 BC 被旧选择漏掉。
+    setSelected(available)
   }, [candidates.data])
   const mutation = useMutation({
     mutationFn: async () => {

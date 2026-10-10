@@ -10,7 +10,6 @@ import {
   type ReactNode,
   useContext,
   useEffect,
-  useState,
 } from "react"
 import {
   AccountsService,
@@ -70,9 +69,6 @@ export function TenantScopeProvider({
       },
   })
   const requestedBC = searchParams.bc_id
-  const [selectedBCId, setSelectedBCId] = useState<string | undefined>(
-    requestedBC,
-  )
   const tenantId = /^\/tenants\/([^/]+)/.exec(pathname)?.[1] ?? null
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -103,7 +99,7 @@ export function TenantScopeProvider({
       ).data,
   })
   const defaultBCId = tenant?.default_bc_id ?? bcQuery.data?.items[0]?.bc_id
-  const activeBCId = selectedBCId ?? requestedBC ?? defaultBCId
+  const activeBCId = requestedBC
   const initialBC = bcQuery.data?.items.find(
     (item) => item.bc_id === activeBCId,
   )
@@ -124,12 +120,11 @@ export function TenantScopeProvider({
       exactBC.data?.items.find((item) => item.bc_id === activeBCId) ??
       null)
     : null
-  // Scope identity comes only from a committed URL transition. Query results
-  // validate that selection; they must never remount an unsaved editor first.
+  // BC 只随已经通过离页守卫的 URL 切换；提前改本地状态会卸载未保存表单。
+  // 目录查询只验证当前选择，不在导航获准前切换租户/BC 作用域。
   const bcId = activeBCId ?? null
   const switchBC = (target: BCPublic) => {
     if (target.bc_id === bcId) return
-    setSelectedBCId(target.bc_id)
     void navigate({
       to: /\/build-tasks\//.test(pathname)
         ? `/tenants/${tenantId}/build-tasks`
@@ -153,11 +148,6 @@ export function TenantScopeProvider({
       replace: true,
     })
   }, [defaultBCId, requestedBC, pathname, navigate, searchParams])
-  useEffect(() => {
-    // 租户切换时重新绑定默认 BC；同租户手动切换不会被此 effect 覆盖。
-    if (requestedBC) setSelectedBCId(requestedBC)
-    else if (defaultBCId) setSelectedBCId(defaultBCId)
-  }, [defaultBCId, requestedBC])
   useEffect(() => {
     if (!tenantId || !bcId) return
     return () => {
