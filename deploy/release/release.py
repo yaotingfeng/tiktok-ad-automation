@@ -47,6 +47,17 @@ WORKERS = {
 }
 
 
+def manifest_items(payload):
+    """kubectl多文档输出可以是连续JSON对象，也可以是单个List。"""
+    remaining = payload.decode().strip()
+    items = []
+    while remaining:
+        value, end = json.JSONDecoder().raw_decode(remaining)
+        items.extend(value["items"] if value.get("kind") == "List" else [value])
+        remaining = remaining[end:].strip()
+    return items
+
+
 def drained(response, expected):
     return all(
         set(response.get(kind, {})) == set(expected)
@@ -323,7 +334,7 @@ class Release:
             for v in before["configmaps"]["items"]
             if v["metadata"]["name"] == PROJECT + "-defaults"
         )
-        rendered = json.loads(
+        rendered = manifest_items(
             self.cluster.k(
                 "create",
                 "--dry-run=client",
@@ -333,9 +344,7 @@ class Release:
                 "json",
             )
         )
-        new_defaults = next(
-            v["data"] for v in rendered["items"] if v["kind"] == "ConfigMap"
-        )
+        new_defaults = next(v["data"] for v in rendered if v["kind"] == "ConfigMap")
         require(
             old_defaults == new_defaults,
             "ConfigMap defaults changed; review configuration before automatic release",

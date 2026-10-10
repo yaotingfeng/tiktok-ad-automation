@@ -89,7 +89,8 @@ def main():
     env = environment(config, base)
     with (base / ".lock").open("a") as lock:
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if args.action != "status":
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise RuntimeError("Another local release/check is running") from None
         if args.action in ("status", "recover", "finish"):

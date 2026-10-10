@@ -13,7 +13,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "deploy/release"))
 from common import CONTEXT, PROJECT, ROLES, VPC, Cluster, write
-from release import Release, drained
+from release import Release, drained, manifest_items
 
 
 class ReleaseTests(unittest.TestCase):
@@ -43,6 +43,17 @@ class ReleaseTests(unittest.TestCase):
             "token": "fixture",
             "lock_uid": "lock",
         }
+
+    def test_kubectl_manifest_stream_and_list_are_equivalent(self):
+        items = [
+            {"kind": "ConfigMap", "data": {"flag": "false"}},
+            {"kind": "Deployment"},
+        ]
+        stream = "\n".join(json.dumps(item, indent=2) for item in items).encode()
+        self.assertEqual(manifest_items(stream), items)
+        self.assertEqual(
+            manifest_items(json.dumps({"kind": "List", "items": items}).encode()), items
+        )
 
     def test_prepare_pulls_production_images_as_amd64_on_any_host(self):
         from common import PUBLIC
