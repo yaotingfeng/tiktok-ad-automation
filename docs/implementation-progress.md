@@ -1879,3 +1879,9 @@
 - 新入口真实 DNS/TLS、原账号登录及两个租户正常；七 Worker ping 7/7，唯一 Beat，九角色配置/注册/开关和调用策略一致，日志无 ERROR/Traceback。运行配置及本地 .env.production 均与来源相同。
 - 临时工具按 UID 清理，恢复配置独立归档并回读验证。后续发布需带 retired-source.json 核对保留旧资源的 UID/模板及停止状态；禁止直接启动旧消费者。
 - 最新验收：[ACR / test 迁移记录](validation/2026-10-10-acr-test-migration.md)。用户授权/完整业务与峰值测试、托管自动备份策略和共享 R2 原有公开状态边界继续如实保留。
+
+## 2026-10-10：复核配置与后续发布说明
+
+- 从 test 的实际 API Pod 再次确认内网 PostgreSQL tkada 可查询、head 正常，Redis DB 15 AUTH/PING 成功；运行 origin/API/MCP 回调及 true/true/false 开关核对一致。
+- 本项目尚无集群 CronJob，生产托管备份策略仍未核实；本次迁移归档与恢复演练不等于持续备份已上线。
+- 修正部署手册残留的 prod 验收命令，统一使用显式 K8S_NAMESPACE；HTTPS 验收改为直接使用域名 DNS，不覆盖连接目标。仅文档改动，git diff --check 通过，不触发线上发版。

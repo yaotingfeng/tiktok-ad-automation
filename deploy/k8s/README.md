@@ -127,10 +127,10 @@ Ingress 脚本固定追加 `test/test-https`，核对 Service 的标签、选择
 ## 集群验收与回退
 
 ```bash
-kubectl --context "$K8S_CONTEXT" -n prod get deploy,svc,pods -l app=tiktok-ad-automation
-kubectl --context "$K8S_CONTEXT" -n prod get job -l app=tiktok-ad-automation,role=migration
-kubectl --context "$K8S_CONTEXT" -n prod logs deployment/tiktok-ad-automation-api --tail=100
-curl --connect-to "$INGRESS_HOST:443:alb-ae6m00kf3iaolvbxim.ap-southeast-1.alb.aliyuncsslbintl.com:443" "https://$INGRESS_HOST/api/utils/health-check/"
+kubectl --context "$K8S_CONTEXT" -n "$K8S_NAMESPACE" get deploy,svc,pods -l app=tiktok-ad-automation
+kubectl --context "$K8S_CONTEXT" -n "$K8S_NAMESPACE" get job -l app=tiktok-ad-automation,role=migration
+kubectl --context "$K8S_CONTEXT" -n "$K8S_NAMESPACE" logs deployment/tiktok-ad-automation-api --tail=100
+curl --fail --show-error "https://$INGRESS_HOST/api/utils/health-check/"
 uv run python scripts/check-bootstrap.py "https://$INGRESS_HOST"
 ```
 
