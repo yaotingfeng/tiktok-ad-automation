@@ -101,6 +101,10 @@ def catalog_wire(monkeypatch, policy, redis_client):
         for c in load_tool_contracts()
     ]
     wire = McpWire(tools)
+    # 与共享 gateway 夹具一致，避免真实数据库鉴权期间撞上本地服务一秒空闲断连。
+    # 只关闭 HTTP keepalive；MCP session、业务总期限和发送前校验均保持不变。
+    wire.close_connections = True
+    wire.request_timeout = 30
 
     class LocalTransport(httpx2.AsyncBaseTransport):
         def __init__(self):
@@ -534,17 +538,17 @@ def test_membership_rechecked_before_next_call_and_binding(
         before = len(catalog_wire.calls)
         with pytest.raises(DomainError) as error:
             gateway.authorization_facts()
-        assert error.value.code == "action_forbidden"
+        assert error.value.code == "tenant_forbidden"
         with pytest.raises(DomainError) as error:
             gateway.business_centers(page=1, page_size=50)
-        assert error.value.code == "action_forbidden"
+        assert error.value.code == "tenant_forbidden"
         assert len(catalog_wire.calls) == before
     with Session(engine) as own:
         with pytest.raises(DomainError) as error:
             bind_candidate_bc(
                 own, context=committed_context, attempt_id=candidate, bc_id="bc-1"
             )
-        assert error.value.code == "action_forbidden"
+        assert error.value.code == "tenant_forbidden"
 
 
 def test_non_admin_without_membership_cannot_read_another_admin_candidate(
@@ -568,7 +572,7 @@ def test_non_admin_without_membership_cannot_read_another_admin_candidate(
     try:
         with pytest.raises(DomainError) as error:
             read_bcs(context, candidate, redis_client)
-        assert error.value.code == "action_forbidden"
+        assert error.value.code == "tenant_forbidden"
         assert catalog_wire.calls == []
     finally:
         with Session(engine) as own:

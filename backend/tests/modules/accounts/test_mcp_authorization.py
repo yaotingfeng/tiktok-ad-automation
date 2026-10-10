@@ -590,7 +590,7 @@ def test_non_admin_without_tenant_membership_cannot_authorize(session):
     )
     with pytest.raises(DomainError) as error:
         start_mcp_authorization(session, context=context, connection_id=None)
-    assert error.value.code == "action_forbidden"
+    assert error.value.code == "tenant_forbidden"
     assert (
         session.exec(
             select(TikTokConnection).where(TikTokConnection.tenant_id == tenant.id)
@@ -726,7 +726,7 @@ def test_inactive_membership_blocks_callback(
         "/api/integrations/tiktok/mcp/callback", params=params, follow_redirects=False
     )
     assert response.status_code == 303
-    assert "action_forbidden" in response.headers["location"]
+    assert "tenant_forbidden" in response.headers["location"]
     assert len(oauth_wire.calls) == (1 if phase == "publish" else 0)
     with Session(engine) as own:
         attempt = own.get(McpAuthorizationAttempt, identity)

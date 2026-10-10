@@ -39,7 +39,7 @@ ROW = {
 def test_observed_subject_normalizes_immutable_authorization_fields():
     class _Observed:
         facts = material_authorization(
-            {"scope": "[2,6]", "management_operations": "[\"ad.update\"]"},
+            {"scope": "[2,6]", "management_operations": '["ad.update"]'},
             observed_at=datetime.now(UTC),
         )
 
@@ -85,6 +85,7 @@ def seed_complete(session, run, bc_id, rows, *, role=None):
         material_authorization({"scope": "[2,6]"}, observed_at=datetime.now(UTC))
     )
     facts["scopes"] = list(facts["scopes"])
+    facts["management_operations"] = sorted(facts["management_operations"])
     facts["observed_at"] = facts["observed_at"].isoformat()
     staged(session, run, "SUBJECT", [facts])
     staged(

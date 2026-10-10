@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
-from sqlalchemy import insert
+from sqlalchemy import insert, text
 from sqlmodel import select
 
 from app.core.config import settings
@@ -634,6 +634,8 @@ def test_10001_directory_accounts_page_exactly_once(
         ],
     )
     session.flush()
+    # 容量数据仍在回滚事务中，autovacuum 看不到；同步统计避免复用前面小夹具的计划。
+    session.execute(text("ANALYZE advertiser_account, bc_account_access"))
     path = f"/api/tenants/{context.tenant_id}/accounts"
     params = {"bc_id": grant.bc_id, "query": "Scale account", "limit": 200}
     observed = []
@@ -739,12 +741,24 @@ def test_api_connection_sync_starts_one_full_directory_run(
     client, session, account_access_case
 ):
     context, grant = account_access_case
+    # 同步会改变目录，只允许租户管理员；普通目录浏览夹具默认是操作员。
+    session.get(
+        TenantMembership, (context.tenant_id, context.actor_id)
+    ).role = "tenant_admin"
+    session.flush()
+    from app.core.credentials import encrypt_credentials
+
+    connection = session.get(TikTokConnection, grant.connection_id)
+    connection.credential_ciphertext = encrypt_credentials(
+        tenant_id=context.tenant_id, value={"access_token": "synthetic-sync-token"}
+    )
+    session.flush()
     path = (
         f"/api/tenants/{context.tenant_id}/tiktok/connections/"
         f"{grant.connection_id}/sync"
     )
     response = client.post(path, headers=headers(context))
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     run_id = response.json()["discovery_run_id"]
     run = session.get(DiscoveryRun, run_id)
     assert run is not None

@@ -389,7 +389,7 @@ def test_active_observation_and_subject_are_bound_to_current_authorization(
     assert len(catalog_wire.calls) == before
 
 
-def test_publish_preserves_existing_default_and_write_authorization(
+def test_publish_preserves_existing_default_and_refreshes_verified_scope(
     multi_bc, catalog_wire, redis_client
 ):
     context, connection_id, bcs, runs = multi_bc
@@ -441,7 +441,7 @@ def test_publish_preserves_existing_default_and_write_authorization(
         assert authorization.permission_summary == {
             "read_authorized": True,
             "build_authorized": True,
-            "upload_authorized": False,
+            "upload_authorized": True,
         }
 
 
@@ -466,6 +466,9 @@ def test_runtime_scans_are_independent_and_preserve_other_bc_evidence(
                 ConnectionAuthorization.connection_id == connection_id
             )
         ).one()
+        # 时间流逝不会撤销完整目录；模拟旧记录缺少当前 BC 的完成凭证，触发真正补采。
+        for run_id in runs:
+            session.get(DiscoveryRun, run_id).completed_at = None
         authorization.verified_at = datetime.now(UTC) - timedelta(hours=5)
         authorization.permission_summary = {
             "read_authorized": True,

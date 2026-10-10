@@ -8,11 +8,14 @@ from sqlalchemy import inspect, text
 from sqlmodel import Session
 
 from app.modules.accounts.models import (
-    AdvertiserAccount,
     BCAccountAccess,
     TikTokConnection,
 )
-from tests.migration_database import historical_database, insert_historical_bc
+from tests.migration_database import (
+    historical_database,
+    insert_historical_account,
+    insert_historical_bc,
+)
 from tests.modules.conftest import create_context
 
 
@@ -31,15 +34,14 @@ def test_staging_migration_preserves_live_directory_and_refuses_evidence_loss(
             insert_historical_bc(
                 session, tenant_id=context.tenant_id, bc_id="historical-bc"
             )
-            account = AdvertiserAccount(
+            advertiser_id = "0009007199254740993101234567"
+            insert_historical_account(
+                session,
                 tenant_id=context.tenant_id,
-                advertiser_id="0009007199254740993101234567",
+                advertiser_id=advertiser_id,
                 name="Existing live account",
-                currency="USD",
-                timezone="UTC",
-                remote_status="ENABLE",
             )
-            session.add_all([connection, account])
+            session.add(connection)
             session.flush()
             run_id, connection_id = uuid4(), connection.id
             # 只写 mcp01 已存在的列，保全测试不依赖当前 ORM 的新增字段。
@@ -59,7 +61,7 @@ def test_staging_migration_preserves_live_directory_and_refuses_evidence_loss(
                     "work": json.dumps(
                         {
                             "stage": "FINALIZE",
-                            "immutable_remote_id": account.advertiser_id,
+                            "immutable_remote_id": advertiser_id,
                         }
                     ),
                 },
@@ -68,7 +70,7 @@ def test_staging_migration_preserves_live_directory_and_refuses_evidence_loss(
                 BCAccountAccess(
                     tenant_id=context.tenant_id,
                     bc_id="historical-bc",
-                    advertiser_id=account.advertiser_id,
+                    advertiser_id=advertiser_id,
                     connection_id=connection.id,
                     in_bc=True,
                     authorized=True,

@@ -118,6 +118,7 @@ def test_unknown_capabilities_are_not_normalized_from_unverified_fields():
         "currency": "",
         "timezone": "",
         "remote_status": "UNKNOWN",
+        "create_time": None,
     }
     with pytest.raises(DomainError):
         accounts.external_id({"advertiser_id": 90071992547409931}, "advertiser_id")

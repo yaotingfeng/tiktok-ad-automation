@@ -35,6 +35,20 @@ def capability_case(database_engine, gateway_case, monkeypatch):
     context, route, advertiser = gateway_case
     monkeypatch.setattr(capabilities, "_require_bounded_worker", lambda: None)
     with Session(database_engine) as db, db.begin():
+        # 此组测试隔离角色 HTTP/刷新边界，先提供本 BC 已完整读取的目录证据。
+        completed = DiscoveryRun(
+            tenant_id=context.tenant_id,
+            actor_id=context.actor_id,
+            connection_id=route.connection_id,
+            bc_id=route.bc_id,
+            authorization_revision=route.authorization_revision,
+            binding_revision=route.binding_revision,
+            status="COMPLETE",
+            completed_at=datetime.now(UTC),
+        )
+        db.add(completed)
+        db.flush()
+        completed_id = completed.id
         job_id = capabilities.start_capability_refresh(
             db,
             context=context,
@@ -53,6 +67,7 @@ def capability_case(database_engine, gateway_case, monkeypatch):
                 CapabilityJob,
             ):
                 db.exec(delete(model).where(model.tenant_id == context.tenant_id))
+            db.exec(delete(DiscoveryRun).where(DiscoveryRun.id == completed_id))
 
 
 def run_capability(database_engine, redis_client, case):

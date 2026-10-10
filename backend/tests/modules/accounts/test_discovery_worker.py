@@ -17,8 +17,15 @@ from app.jobs.admission import admission_keys
 from app.jobs.models import DispatchTenantCursor, PendingDispatch
 from app.models import User
 from app.modules.accounts import tasks
+from app.modules.accounts.capability_models import (
+    CapabilityAsset,
+    CapabilityJob,
+    CapabilityPage,
+    CapabilityRequest,
+)
 from app.modules.accounts.connection_models import (
     BCConnectionBinding,
+    BCDefaultRoute,
     ConnectionAuthorization,
 )
 from app.modules.accounts.discovery import claim_external_asset, finalize_directory
@@ -90,7 +97,12 @@ def committed_runs(policy, monkeypatch):
                 delete(BCAccountAccess).where(BCAccountAccess.tenant_id.in_(tenant_ids))
             )
             for model in (
+                CapabilityRequest,
+                CapabilityAsset,
+                CapabilityPage,
+                CapabilityJob,
                 DiscoveryStagedPage,
+                BCDefaultRoute,
                 BCConnectionBinding,
                 ConnectionAuthorization,
             ):
@@ -237,12 +249,39 @@ def test_full_discovery_and_duplicate_delivery(
             BCAccountAccess, (run.tenant_id, bc, advertiser, run.connection_id)
         )
         assert (
-            access.active
-            and access.permission_state == "UNKNOWN"
-            and not access.can_build
+            access.active and access.permission_state == "VERIFIED" and access.can_build
         )
     step(contexts[0], runs[0], redis_client, revision=0)
     assert len(calls) == 5
+
+
+def test_existing_api_authorization_completes_after_claim_session_closes(
+    committed_runs, directory_transport, redis_client
+):
+    """既有授权与候选授权都必须在领取事务结束后安全选择工厂并完成发现。"""
+    contexts, runs = committed_runs
+    calls, _, bc, advertiser = directory_transport
+    with Session(engine) as session, session.begin():
+        run = session.get(DiscoveryRun, runs[0])
+        run.candidate_attempt_id = None
+        connection = session.get(TikTokConnection, run.connection_id)
+        connection.credential_ciphertext = encrypt_credentials(
+            tenant_id=run.tenant_id,
+            value={"access_token": "old-token", "scope": "[2,6]"},
+        )
+    for _ in range(6):
+        step(contexts[0], runs[0], redis_client)
+    assert len(calls) == 5
+    assert {token for _, _, token in calls} == {"old-token"}
+    with Session(engine) as session:
+        run = session.get(DiscoveryRun, runs[0])
+        assert (run.status, run.error_code) == ("COMPLETE", None)
+        assert run.candidate_attempt_id is None
+        access = session.get(
+            BCAccountAccess, (run.tenant_id, bc, advertiser, run.connection_id)
+        )
+        assert access.active and access.permission_state == "VERIFIED"
+        assert access.can_build and access.can_upload
 
 
 def test_candidate_only_promoted_after_full_scan(
@@ -537,9 +576,9 @@ def test_second_page_failure_resumes_same_run_and_does_not_remove_old_access(
                         "advertiser_role": "ADMIN",
                     }
                     for identity in (
-                        [advertiser] + [f"extra-{i}" for i in range(49)]
+                        [advertiser] + [f"{advertiser}-extra-{i}" for i in range(49)]
                         if page == 1
-                        else ["last-extra"]
+                        else [f"{advertiser}-last-extra"]
                     )
                 ],
                 "page_info": {
@@ -621,7 +660,7 @@ def test_second_page_failure_resumes_same_run_and_does_not_remove_old_access(
         step(contexts[0], runs[0], redis_client)
     with Session(engine) as session:
         run = session.get(DiscoveryRun, runs[0])
-        assert run.status == "COMPLETE"
+        assert run.status == "COMPLETE", run.error_code
         assert (
             len(
                 session.exec(
@@ -858,13 +897,16 @@ def test_handler_rejects_overridden_long_hard_deadline(monkeypatch):
         tasks.discover.pop_request()
 
 
-def test_historical_run_without_candidate_does_not_infer_current_route(
+def test_stale_api_run_without_candidate_does_not_use_current_credentials(
     committed_runs, directory_transport, redis_client
 ):
     contexts, runs = committed_runs
     with Session(engine) as session, session.begin():
         run = session.get(DiscoveryRun, runs[0])
         run.candidate_attempt_id = None
+        # 现有 API 授权支持直接同步，但旧任务不得借用重新授权后的凭据。
+        connection = session.get(TikTokConnection, run.connection_id)
+        connection.credential_revision += 1
     step(contexts[0], runs[0], redis_client)
     assert not directory_transport[0]
     with Session(engine) as session:

@@ -1,10 +1,16 @@
 """可见工具与成功读取均不得扩大当前候选的写权限。"""
 
 import pytest
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, select
 
 from app.core.db import engine
 from app.core.errors import DomainError
+from app.modules.accounts.capability_models import (
+    CapabilityAsset,
+    CapabilityJob,
+    CapabilityPage,
+    CapabilityRequest,
+)
 from app.modules.accounts.connection_models import ConnectionAuthorization
 from app.modules.accounts.models import BCAccountAccess, DiscoveryRun
 from tests.modules.accounts.test_mcp_authorization import accept, issue
@@ -71,7 +77,7 @@ def test_unknown_oauth_scope_remains_unknown_after_complete_reads(
         )
 
 
-def test_mcp_capability_worker_uses_frozen_connection_and_keeps_write_unknown(
+def test_mcp_capability_worker_uses_frozen_connection_and_blocks_analyst_writes(
     directory_context, oauth_wire, catalog_wire, redis_client, monkeypatch
 ):
     from uuid import uuid4
@@ -91,10 +97,21 @@ def test_mcp_capability_worker_uses_frozen_connection_and_keeps_write_unknown(
             own, context=directory_context, attempt_id=candidate, bc_id=bc_id
         )
         own.commit()
-    enqueue_directory(catalog_wire, bc_id, (advertiser_id,))
+    enqueue_directory(catalog_wire, bc_id, (advertiser_id,), role="ANALYST")
     assert finish(directory_context, run_id, redis_client)[0] == "COMPLETE"
     with Session(engine) as own:
         connection_id = own.get(DiscoveryRun, run_id).connection_id
+        # 模拟缓存缺失，保留完整目录/授权事实，让真实 worker 重新读取角色页。
+        for model in (
+            CapabilityRequest,
+            CapabilityAsset,
+            CapabilityPage,
+            CapabilityJob,
+        ):
+            own.exec(
+                delete(model).where(model.tenant_id == directory_context.tenant_id)
+            )
+        own.commit()
     monkeypatch.setattr(capabilities, "_require_bounded_worker", lambda: None)
     env = {
         "context": directory_context,
@@ -111,7 +128,7 @@ def test_mcp_capability_worker_uses_frozen_connection_and_keeps_write_unknown(
                 {
                     "asset_id": advertiser_id,
                     "asset_type": "ADVERTISER",
-                    "advertiser_role": "ADMIN",
+                    "advertiser_role": "ANALYST",
                 }
             ]
         ),
@@ -120,7 +137,7 @@ def test_mcp_capability_worker_uses_frozen_connection_and_keeps_write_unknown(
     job = run(env, redis_client, job_id)
     assert job.status == "COMPLETE" and job.channel == "OFFICIAL_MCP"
     assert job.authorization_revision == 1
-    assert not job.scope_known and not job.scope_build and not job.scope_upload
+    assert job.scope_known and job.scope_build and job.scope_upload
     with Session(engine) as own:
         grant = own.exec(
             select(BCAccountAccess).where(
@@ -128,7 +145,7 @@ def test_mcp_capability_worker_uses_frozen_connection_and_keeps_write_unknown(
             )
         ).one()
         assert not grant.can_build and not grant.can_upload
-        assert grant.permission_state == "UNKNOWN"
+        assert grant.permission_state == "VERIFIED"
     assert len(oauth_wire.calls) == 1
 
 

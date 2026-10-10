@@ -26,6 +26,34 @@ def insert_historical_bc(session, *, tenant_id, bc_id):
     )
 
 
+def insert_historical_account(
+    session,
+    *,
+    tenant_id,
+    advertiser_id,
+    name="",
+    currency="USD",
+    timezone="UTC",
+    remote_status="ENABLE",
+):
+    """旧版账户显式列播种，避免今日 ORM 的远端创建时间列渗入历史 schema。"""
+    session.execute(
+        text(
+            "INSERT INTO advertiser_account "
+            "(tenant_id,advertiser_id,name,currency,timezone,remote_status,ownership_conflict) "
+            "VALUES (:tenant_id,:advertiser_id,:name,:currency,:timezone,:remote_status,false)"
+        ),
+        {
+            "tenant_id": tenant_id,
+            "advertiser_id": advertiser_id,
+            "name": name,
+            "currency": currency,
+            "timezone": timezone,
+            "remote_status": remote_status,
+        },
+    )
+
+
 @contextmanager
 def historical_database(monkeypatch, revision):
     require_test_database(str(settings.DATABASE_URL))

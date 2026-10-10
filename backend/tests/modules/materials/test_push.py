@@ -5,6 +5,7 @@ import json
 import time
 from datetime import UTC, datetime, timedelta
 from hashlib import md5, sha256
+from urllib.parse import parse_qs, urlsplit
 from uuid import UUID, uuid4
 
 import pytest
@@ -18,6 +19,7 @@ from app.jobs.models import PendingDispatch
 from app.main import app
 from app.modules.accounts.models import TenantBC
 from app.modules.materials.ingest_models import (
+    IngestSessionFile,
     ObjectCleanup,
     TemporaryMaterialObject,
 )
@@ -60,6 +62,8 @@ def client(push_env):
 @pytest.fixture
 def push_env(source_env, monkeypatch):
     monkeypatch.setattr(settings, "MATERIAL_INGEST_ENABLED", True)
+    # 平台读取外部素材使用同源签名中转，夹具需满足远程上传的 HTTPS 入口合同。
+    monkeypatch.setattr(settings, "FRONTEND_HOST", "https://tkada.example.test")
     monkeypatch.setattr(
         settings,
         "MATERIAL_PUSH_CLIENTS",
@@ -113,6 +117,16 @@ def items(batch_id):
         ).all()
         db.expunge_all()
         return rows
+
+
+def assert_upload_completed(material_id):
+    with Session(engine) as db:
+        row = db.exec(
+            select(IngestSessionFile).where(
+                IngestSessionFile.material_id == material_id
+            )
+        ).one()
+        assert row.status == "available", row.error_code
 
 
 def test_batch_accepts_names_three_fields_and_signed_status(client, push_env):
@@ -357,8 +371,24 @@ def test_external_video_runs_existing_upload_and_is_not_cleaned(
         generation=1,
         kind="upload",
     )
+    assert_upload_completed(row.material_id)
     assert dict(wire[0][0][2]["fields"])["file_name"] == "原名_one.mp4"
-    assert dict(wire[0][0][2]["fields"])["video_url"] == URL
+    proxy = urlsplit(dict(wire[0][0][2]["fields"])["video_url"])
+    assert (proxy.scheme, proxy.netloc) == ("https", "tkada.example.test")
+    assert proxy.path.startswith(
+        f"/api/integrations/materials/source/{row.material_id}/"
+    )
+    query = parse_qs(proxy.query)
+    assert query["tenant_id"] == [str(push_env["context"].tenant_id)]
+    from app.modules.materials.external_proxy import _verify_signature
+
+    _verify_signature(
+        tenant_id=push_env["context"].tenant_id,
+        material_id=row.material_id,
+        operation_id=UUID(proxy.path.rsplit("/", 1)[1]),
+        expires=int(query["expires"][0]),
+        signature=query["signature"][0],
+    )
     with Session(engine) as db:
         assert not db.exec(
             select(ObjectCleanup).where(ObjectCleanup.material_id == row.material_id)
@@ -548,6 +578,7 @@ def test_completed_same_content_reuses_material_version(
         generation=1,
         kind="upload",
     )
+    assert_upload_completed(first.material_id)
     second = items(
         post(client, push_env, payload(push_env, ("one",))).json()["batch_id"]
     )[0]

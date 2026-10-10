@@ -8,11 +8,14 @@ from sqlalchemy import text
 from sqlmodel import Session
 
 from app.modules.accounts.models import (
-    AdvertiserAccount,
     BCAccountAccess,
     TikTokConnection,
 )
-from tests.migration_database import historical_database, insert_historical_bc
+from tests.migration_database import (
+    historical_database,
+    insert_historical_account,
+    insert_historical_bc,
+)
 from tests.modules.conftest import create_context
 
 
@@ -27,14 +30,8 @@ def test_upgrade_preserves_history_and_separates_observation_from_authority(
             insert_historical_bc(
                 session, tenant_id=context.tenant_id, bc_id="observed-bc"
             )
-            session.add(
-                AdvertiserAccount(
-                    tenant_id=context.tenant_id,
-                    advertiser_id="observed-account",
-                    currency="USD",
-                    timezone="UTC",
-                    remote_status="ENABLE",
-                )
+            insert_historical_account(
+                session, tenant_id=context.tenant_id, advertiser_id="observed-account"
             )
             session.flush()
             grant = BCAccountAccess(

@@ -29,10 +29,10 @@ from app.modules.accounts.connections import (
     disable_connection_bc,
     sync_connection_bc,
 )
-from app.modules.accounts.models import DiscoveryRun, TenantBC, TikTokConnection
+from app.modules.accounts.models import DiscoveryRun, TikTokConnection
 from app.modules.accounts.routing import freeze_route, verify_route
 from app.modules.materials.models import UploadBatch
-from tests.migration_database import historical_database
+from tests.migration_database import historical_database, insert_historical_bc
 from tests.modules.accounts import test_mcp_multibc_discovery as directory_fixtures
 from tests.modules.conftest import create_context
 
@@ -53,7 +53,8 @@ def active_bcs(multi_bc, catalog_wire, redis_client):
     context, connection_id, bcs, run_ids = multi_bc
     for bc_id, run_id in zip(bcs, run_ids, strict=True):
         enqueue_directory(catalog_wire, bc_id, (f"current-{bc_id}",))
-        assert finish(context, run_id, redis_client)[0] == "COMPLETE"
+        result = finish(context, run_id, redis_client)
+        assert result[0] == "COMPLETE", result
     with Session(engine) as session:
         routes = tuple(
             freeze_route(session, context=context, bc_id=bc_id) for bc_id in bcs
@@ -263,7 +264,7 @@ def test_migrated_json_checks_accept_legacy_and_validate_new_generation(
     ).scalar_one()
     session.execute(
         text(f"""CREATE TEMP TABLE route_revision_probe (
-        tenant_id uuid, bc_id text, connection_id uuid,
+        tenant_id uuid, bc_id text, source_bc_id text, connection_id uuid,
         frozen_route jsonb, source_route jsonb, target_route jsonb,
         old_route jsonb, new_route jsonb, {definition}
     ) ON COMMIT DROP""")
@@ -271,8 +272,8 @@ def test_migrated_json_checks_accept_legacy_and_validate_new_generation(
     connection_id = uuid4()
     route = legacy_route(context, connection_id)
     statement = text("""INSERT INTO route_revision_probe
-        (tenant_id,bc_id,connection_id,frozen_route,source_route,target_route,old_route,new_route)
-        VALUES (:tenant,:bc,:connection,CAST(:route AS jsonb),CAST(:route AS jsonb),
+        (tenant_id,bc_id,source_bc_id,connection_id,frozen_route,source_route,target_route,old_route,new_route)
+        VALUES (:tenant,:bc,:bc,:connection,CAST(:route AS jsonb),CAST(:route AS jsonb),
             CAST(:route AS jsonb),CAST(:route AS jsonb),CAST(:route AS jsonb))""")
 
     def insert(value):
@@ -312,7 +313,7 @@ def test_upgrade_preserves_old_routes_and_replaces_single_bc_uniqueness(monkeypa
             )
             session.add(connection)
             for bc_id in ("revision-bc", "other-bc"):
-                session.add(TenantBC(tenant_id=context.tenant_id, bc_id=bc_id))
+                insert_historical_bc(session, tenant_id=context.tenant_id, bc_id=bc_id)
             session.flush()
             connection_id = connection.id
             session.execute(
@@ -343,7 +344,6 @@ def test_upgrade_preserves_old_routes_and_replaces_single_bc_uniqueness(monkeypa
             old = session.get(UploadBatch, upload_id).frozen_route
             assert old == route and "binding_revision" not in old
             assert FrozenTikTokRoute.model_validate(old).binding_revision == 0
-            verify_bc(session, context, FrozenTikTokRoute.model_validate(old))
             binding = session.get(
                 BCConnectionBinding, (context.tenant_id, "revision-bc", connection_id)
             )
@@ -409,12 +409,20 @@ def test_upgrade_preserves_old_routes_and_replaces_single_bc_uniqueness(monkeypa
                 session.add(binding)
                 session.flush()
 
+        # 当前权限代码读取后续新增列，只能在完整升级后验证旧冻结路由仍可执行。
+        command.upgrade(config, "head")
+        with Session(database) as session:
+            assert session.get(UploadBatch, upload_id).frozen_route == route
+            verify_bc(session, context, FrozenTikTokRoute.model_validate(route))
+
 
 def test_runtime_scope_migration_uses_only_valid_original_frozen_evidence(monkeypatch):
     with historical_database(monkeypatch, "mcp_multi_bc") as (database, config):
         with Session(database) as session:
             context = create_context(session, role="tenant_admin")
-            session.add(TenantBC(tenant_id=context.tenant_id, bc_id="revision-bc"))
+            insert_historical_bc(
+                session, tenant_id=context.tenant_id, bc_id="revision-bc"
+            )
             session.flush()
             cases = {
                 "legacy": {},

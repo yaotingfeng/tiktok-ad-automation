@@ -267,6 +267,13 @@ def process_discovery(
             return
         work = copy.deepcopy(run.work)
         ids = _detail_ids(session, run=run) if work["stage"] == "DETAILS" else ()
+        # 提交会使 run 过期且会话随后关闭；读取路线必须在领取事务内定下，
+        # 不能在事务外再访问 run 属性（否则 DetachedInstanceError 被误记为 TikTok 错误）。
+        gateway_factory = (
+            open_api_candidate_accounts
+            if run.candidate_attempt_id is not None
+            else open_api_connection_accounts
+        )
         run.claim_id, run.claimed_until = (
             claim,
             now + timedelta(seconds=RECOVERY_SECONDS),
@@ -283,11 +290,6 @@ def process_discovery(
         if work["stage"] == "DETAILS" and not ids:
             results = read_discovery_stage(None, work=work, requested_ids=ids)
         else:
-            gateway_factory = (
-                open_api_candidate_accounts
-                if run.candidate_attempt_id is not None
-                else open_api_connection_accounts
-            )
             with gateway_factory(
                 database_engine=database_engine,
                 redis_client=redis_client,
