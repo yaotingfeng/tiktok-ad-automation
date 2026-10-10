@@ -1,0 +1,36 @@
+// 单独的 Pipeline Job，固定拉取可信 main；不配置 SCM push 触发。
+pipeline {
+  agent { label 'tkada-release' }
+  options { disableConcurrentBuilds(); timestamps(); skipDefaultCheckout(true) }
+  parameters { string(name: 'BACKUP_CRON', defaultValue: '', description: '停服一致性备份窗口；留空不自动运行。Jenkins 时区下的 cron。') }
+  triggers { cron(params.BACKUP_CRON) }
+  environment {
+    K8S_CONTEXT = 'kubernetes-admin-c19dbd82590a34b9f87cebb8c1a858796'
+    K8S_NAMESPACE = 'test'
+  }
+  stages {
+    stage('Consistent encrypted backup') {
+      steps {
+        checkout scm
+        withCredentials([
+          file(credentialsId: 'tkada-ack-kubeconfig', variable: 'KUBECONFIG'),
+          file(credentialsId: 'tkada-retired-source', variable: 'RETIRED_SOURCE_INVENTORY'),
+          file(credentialsId: 'tkada-backup-aws', variable: 'AWS_SHARED_CREDENTIALS_FILE'),
+          usernamePassword(credentialsId: 'tkada-acr-push', usernameVariable: 'ACR_USER', passwordVariable: 'ACR_PASSWORD')
+        ]) {
+          sh '''
+            set +x
+            set -eu
+            umask 077
+            : "${TKADA_STATE_ROOT:?Configure persistent private state}"
+            export DOCKER_CONFIG=$(mktemp -d "$TKADA_STATE_ROOT/docker.XXXXXX")
+            trap 'rm -rf "$DOCKER_CONFIG"' EXIT
+            printf '%s' "$ACR_PASSWORD" | docker login sg-acr-prod-registry.ap-southeast-1.cr.aliyuncs.com -u "$ACR_USER" --password-stdin
+            python3 deploy/release/release.py backup --state-dir "$TKADA_STATE_ROOT/backup-$(date -u +%Y%m%dT%H%M%SZ)-$BUILD_NUMBER"
+          '''
+        }
+      }
+    }
+  }
+  post { failure { echo '备份失败：保留私有状态及集群锁，按部署手册检查后恢复服务。' } }
+}

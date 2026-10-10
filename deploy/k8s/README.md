@@ -2,6 +2,8 @@
 
 本目录沿用公司 `deploy-help` 的镜像、端口和命名约定；2026-10-10 根据用户提供的 `singaporeconfig`，生产目标已切换为阿里云新加坡 ACK，入口、存储类和镜像拉取凭据以本手册实际核验值为准。2026-10-09 用户明确指定公司集群为生产环境，并授权直接迁移新加坡测试服的密钥、队列和授权。新加坡作为迁移源；最终切换前先停止旧调度/消费并完成一致性备份。数据库类型继续使用 PostgreSQL。具体目标与迁移边界见 `docs/runbooks/production-junbo.md`。
 
+普通升级优先通过 [一键发布编排](../release/README.md) 串联停写、备份恢复验证、加密上传、迁移和验收；本目录 apply 是底层部署步骤，不能代替备份。
+
 ## 已固定的部署约定
 
 - 集群拉取镜像：`sg-acr-prod-registry-vpc.ap-southeast-1.cr.aliyuncs.com/test/tiktok-ad-automation:<完整 Git SHA>`。

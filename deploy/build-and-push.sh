@@ -21,7 +21,9 @@ if [[ "${DRY_RUN:-0}" == "1" ]]; then
   echo "dry-run: cleanliness and remote publication are checked only on a real release"
   exit 0
 fi
-[[ "$(git branch --show-current)" == "main" ]] || fail "release must be built from main"
+branch=$(git branch --show-current)
+# Jenkins checkout 可为 detached HEAD；后面的实时 main SHA 校验仍为强制门禁。
+[[ "$branch" == "main" || -z "$branch" ]] || fail "release must be built from main or its exact detached commit"
 [[ -z "$(git status --porcelain --untracked-files=all)" ]] || fail "refusing to build from a dirty worktree"
 company_url=$(git remote get-url company)
 [[ "$company_url" =~ ^https://git\.gzjunbo\.net/[^/@]+/tiktok-ad-automation\.git$ ]] || fail "company remote must use the project Gitea HTTPS repository"

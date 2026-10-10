@@ -68,6 +68,20 @@ with open(os.environ['DOCKER_LOG'], 'a') as f:
             text=True,
         )
 
+    def test_detached_jenkins_checkout_still_requires_exact_remote_main(self):
+        subprocess.run(
+            [self.real_git, "checkout", "--detach", self.sha],
+            cwd=self.root,
+            check=True,
+            capture_output=True,
+        )
+        result = self.run_build()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.log.unlink()
+        result = self.run_build(REMOTE_SHA="0" * 40)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.log.exists())
+
     def test_non_head_sha_is_rejected_even_for_dry_run(self):
         result = self.run_build(DRY_RUN="1", RELEASE_SHA="0" * 40)
         self.assertNotEqual(result.returncode, 0)

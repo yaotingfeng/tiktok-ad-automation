@@ -505,7 +505,18 @@ class Deployment:
                 "--timeout=15m",
                 f"job/{self.job_name}",
             )
-        self.kubectl("apply", "-f", "-", payload=self.render("tk-ada-workloads.yaml"))
+        workloads = self.render("tk-ada-workloads.yaml")
+        if os.environ.get("RELEASE_HOLD_WORKLOADS") == "1":
+            # 发布编排已停写并验证备份；迁移后保持零副本，验收/恢复由编排统一负责。
+            require(
+                workloads.count("  replicas: 1") == len(ROLES),
+                "unexpected workload replica declarations",
+            )
+            workloads = workloads.replace("  replicas: 1", "  replicas: 0")
+        self.kubectl("apply", "-f", "-", payload=workloads)
+        if os.environ.get("RELEASE_HOLD_WORKLOADS") == "1":
+            print("PASS: migration completed; workloads held at zero replicas")
+            return
         for role in ROLES:
             print(f"waiting for deployment/{PROJECT}-{role}", flush=True)
             self.kubectl(
