@@ -1796,3 +1796,10 @@
 - 部署改用 `prod-https`、阿里云拓扑云盘 StorageClass，并创建/引用本项目 TCR 拉取 Secret。未配置拉取凭据时实际失败，补齐后 SHA 镜像在集群运行成功。
 - 25 项部署/构建行为回归、本地 13 资源严格 schema、ACK 服务端 dry-run、Ruff/格式/compileall/差异检查通过。临时探针与临时数据库凭据 Secret 已清理，仅保留本项目 registry Secret；未迁数据、未切停测试服。
 - TK-ADA 业务库名、Redis 库编号及回调/DNS 等发布条件仍待落实。完整证据见 [ACK 验证记录](validation/2026-10-10-ack-deployment-readiness.md)。
+
+## 2026-10-10：创建 PostgreSQL 项目库并登记 Redis DB 15
+
+- 用户要求自行准备项目数据库空间。实例并非全空：PostgreSQL 已有 6 个非模板库，Redis DB 0 有 39 个键；只读查看目录与数量，未读取其他项目业务内容。
+- `CREATE DATABASE tkada OWNER gzjunbo` 实际成功，回读确认所有者与 public CREATE 权限；通用 `rolcreatedb=false` 不代表该云实例最终拒绝建库。新库仅有平台预装 pg_cron 扩展两表，没有 TK-ADA 业务表；未执行表结构变更或源数据迁移。
+- Redis 支持 256 个预设逻辑库。DB 15 经原子空库检查后登记本项目占用标记，回读仅 1 个标记键；未创建新 Redis 实例或修改 DB 0。私有连接配置已填好 PostgreSQL `tkada` / Redis DB 15。
+- 创建及回读证据补充到 [ACK 验证记录](validation/2026-10-10-ack-deployment-readiness.md)。临时探针和凭据 Secret 均清理，测试服仍正常运行。下一步仍是 DNS/入口/回调与一致性迁移，不再把库名和编号列为用户待提供项。

@@ -26,4 +26,16 @@
 
 ## 剩余发布条件
 
-明确 TK-ADA 的 PostgreSQL 数据库名、Redis 专用逻辑库编号与迁入位置；配置新域名 CNAME、TLS host 与入口 rule，登记 TikTok API/MCP 回调并核对 R2 CORS。完成一致性备份及恢复验证后再停旧消费者并迁入生产。当前认证检查使用管理库，不代表业务数据恢复和完整上线验收完成。
+后续已按用户要求落实 PostgreSQL `tkada` / Redis DB 15，见下节。还需配置新域名 CNAME、TLS host 与入口 rule，登记 TikTok API/MCP 回调并核对 R2 CORS。完成一致性备份及恢复验证后再停旧消费者并迁入生产；认证和空间创建不代表业务数据恢复或完整上线验收完成。
+
+## 后续：自行准备项目数据库空间
+
+用户追问实例是否为空、能否自行创建，已在既有生产准备授权下完成以下操作：
+
+- 只读查询显示 PostgreSQL 原有 6 个非模板数据库，没有 `tkada`；Redis DB 0 有 39 个键，不能称两个实例全空。未读取其他项目业务表数据、Redis 键名或键值。
+- `gzjunbo` 的通用角色字段 `rolcreatedb=false`，但实际执行 `CREATE DATABASE tkada OWNER gzjunbo` 成功。此前仅凭字段判断不能建库不准确，以该云实例实际执行结果为准，未使用其他账号或提权。
+- 连接新 `tkada` 后确认所有者为 `gzjunbo`，当前账号拥有 public schema CREATE 权限。非系统目录下仅有云平台扩展自带的 `cron.job`、`cron.job_run_details`（所有者 `polardb_admin`）；无 TK-ADA 业务表。保留平台扩展表，未直接修改表结构或执行 Alembic。
+- Redis 实例为非 Cluster 模式，配置 256 个预设逻辑库（0–255）。DB 15 的 DBSIZE 为 0 后，使用原子 Lua 再次检查空库并创建本项目 `tkada:deployment:allocation` 标记；回读匹配，库内键数为 1。仅登记现有空逻辑库，无新 Redis 实例，无业务队列，没有修改 DB 0。
+- 原来不存在 TK-ADA 目标库，目标业务备份不适用；保留创建前目录/键数证据。测试服仍未停写或迁移，最终一致性备份与恢复检查照常执行。恢复 Redis DB 15 时须识别本项目标记并保留/明确处理，不能把整个共享实例当成可覆盖卷。
+- 私有 `infrastructure.json` 和 `runtime.env.incomplete` 已登记 `tkada`、DB 15 和内网 URL，密码正确 URL 编码，0600；未将配置发布到应用 Secret。原始查询/创建/回读证据在 `.runtime/company-production-20261010/ack/tiktok-ad-automation-*.result.json`。
+- 本轮所有临时 Pod 和临时凭据 Secret 已按 UID 核对清理；仅保留先前的项目 registry Secret。
