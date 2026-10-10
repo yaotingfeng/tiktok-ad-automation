@@ -68,10 +68,11 @@ class Deployment:
         self.context = setting("K8S_CONTEXT")
         self.host = setting("INGRESS_HOST")
         require(
-            re.fullmatch(
+            self.host == "tkada.galaxyshortdrama.com"
+            or re.fullmatch(
                 r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.jetmobo\.com", self.host
             ),
-            "INGRESS_HOST must be an assigned single-level jetmobo.com host",
+            "INGRESS_HOST must be tkada.galaxyshortdrama.com or an assigned single-level jetmobo.com host",
         )
         self.base = [
             "kubectl",
@@ -126,6 +127,20 @@ class Deployment:
     def ingress(self, allow_existing=False):
         ingress = self.get("ingress", "public")
         require(ingress is not None, "shared public Ingress not found")
+        # 自定义生产域名不能借用 jetmobo 的证书；只核对入口声明，不读取共享 Secret。
+        tls_hosts = [
+            host
+            for entry in ingress.get("spec", {}).get("tls", [])
+            for host in entry.get("hosts", [])
+        ]
+        require(
+            any(
+                host == self.host
+                or (host.startswith("*.") and self.host.split(".", 1)[1] == host[2:])
+                for host in tls_hosts
+            ),
+            "shared Ingress TLS hosts do not cover INGRESS_HOST; configure its certificate before deployment",
+        )
         rules = ingress.get("spec", {}).get("rules", [])
         require(
             rules, "shared public Ingress has no rules; inspect with operations team"

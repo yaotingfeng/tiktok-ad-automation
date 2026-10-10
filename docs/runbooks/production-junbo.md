@@ -15,8 +15,8 @@
 | 镜像仓库 | `junbo-image.tencentcloudcr.com/prod/tiktok-ad-automation:<完整 SHA>` |
 | 仓库凭据 | 同工具包 `vendor/tcr-cred.txt`，禁止回显/提交 |
 | 对外入口 | 现有 `prod/public` Ingress，IP `134.175.255.190`，HTTPS 443 |
-| 证书 | 现有 Ingress `*.jetmobo.com` 通配证书 |
-| 生产域名 | 拟用 `tiktok-ad-automation.jetmobo.com`，待用户/运维确认；当前 Ingress 无此 host |
+| 证书 | 现有证书不覆盖新域名；待配置 `tkada.galaxyshortdrama.com` 或 `*.galaxyshortdrama.com` 证书 |
+| 生产域名 | 用户于 2026-10-10 指定 `tkada.galaxyshortdrama.com`；尚无 DNS 解析及 Ingress rule |
 | 应用端口 | API/容器/Service 均为 80 |
 | 拓扑 | 1 API、7 个独立 Worker、1 Beat，使用同一版本及运行 Secret |
 | 应用资源 | 合计申请 4.25 核 / 10.5 GiB，上限 10.5 核 / 21 GiB；不含 PostgreSQL、Redis 与发布瞬时资源 |
@@ -36,29 +36,42 @@
 - 已生效开关为导入 `true`、清理 `true`、周期同步 `false`；迁移方案保留这些现有值，不用模板值静默覆盖。
 - PostgreSQL 与 Redis 当前均监听 `127.0.0.1`；直接复制这些 URL 到 Pod 会连接 Pod 自身，不能作为生产目标连接信息。
 
-## 当前缺项（不可用猜测值代替）
+## 2026-10-10 新目标配置与剩余条件
 
-1. 集群可达的生产 PostgreSQL 连接配置。skill 固定的是 MySQL，不能用它连接现有 PostgreSQL 程序，也不在本轮更改数据库类型。
-2. 公司 Redis 中明确分配给 TK-ADA 的逻辑库和恢复方式；不得向共享 DB 0 直接灌入来源 RDB，也不得覆盖其他项目键。先由运维落实隔离位置与导入方法。
-3. 最终生产域名/DNS，以及现有 API/MCP 应用是否允许该域名回调。复制已有 token 与 client_id 不等于远端登记了新的 redirect URI，禁止只修改本地 JSON 冒充已注册。
-4. 对来源授权记录和队列的一致性备份/目标恢复验证。目标地址未落实前保持测试服运行，不提前切停业务。
+用户已提供阿里云新加坡 PostgreSQL / Redis 地址及凭据，覆盖 skill 中公司固定 Redis 的默认值。凭据仅保存于 `.runtime/company-production-20261010/infrastructure.json`（0600），不写入文档、命令行参数或 Git。
 
-2026-10-09 查询拟用域名未返回 A 记录；13 个部署对象已通过真实集群 `apply --dry-run=server`，不会持久化对象，也不代表镜像拉取、CBS 实际绑定或应用已启动。日志位于私有目录 `server-dry-run.log`。
+| 服务 | 内网主机 | 外网主机 | 端口 |
+| --- | --- | --- | --- |
+| PostgreSQL | `pc-gs5ka8g997w7sv5ci.rwlb.singapore.rds.aliyuncs.com` | `singapore-pg-test.rwlb.singapore.rds.aliyuncs.com` | 5432 |
+| Redis | `r-gs5lmf0pt8tic0r0t7.redis.singapore.rds.aliyuncs.com` | `r-gs5lmf0pt8tic0r0t7pd-test.redis.singapore.rds.aliyuncs.com` | 6379 |
+
+域名已确定为 `tkada.galaxyshortdrama.com`。同日私有运行草稿 `runtime.env.incomplete` 保留原授权加密密钥、R2/API 密钥及三个开关；同步新 origin 与回调，但未伪造远端注册文件。数据库名及 Redis 库编号尚未明确，因此连接 URL 仍为空，不能直接部署。
+
+待落实项：
+
+1. TK-ADA 的 PostgreSQL **数据库名**与 Redis **逻辑库编号**。用户已提供主机和凭据，不再将其列为缺失；需要明确目标隔离位置后才可迁入状态，不能默认占用共享 DB 0。
+2. 公司腾讯云 TKE 到阿里云新加坡的网络路由与白名单。内网主机解析为 `192.168.*`，跨云内网不可仅凭域名判断可达；本机 TCP 建连不代表认证或集群连接成功。
+3. DNS A 记录及匹配 HTTPS 证书：现有 Ingress 仅声明 `*.jetmobo.com` 和 `*.gzxinran.net`，都不覆盖新域名。由运维配置新证书，保持共享入口其他站点正常；本项目脚本只追加自身 rule，不改他人规则或读取共享证书 Secret。
+4. 在现有 TikTok API 应用及 MCP 客户端中登记新回调，核对 R2 CORS 允许新 origin。复制 client_id/token 不等于已登记新的 redirect URI。
+5. 最终停写窗口中的一致性备份、目标恢复验证和单侧消费者切换；条件未齐前继续保持测试服运行。
 
 可交给运维的资料清单：
 
 ```text
 项目：TK-ADA / tiktok-ad-automation
 目标：公司 TKE cls-n950t106，namespace prod
-DNS：tiktok-ad-automation.jetmobo.com，A 记录 -> 134.175.255.190
-数据库：提供集群可达的 PostgreSQL 连接配置，保持现有 PostgreSQL 类型
-Redis：公司 10.33.48.33:6379，分配本项目独占逻辑库并确认迁移导入方式
-回调：在现有 TikTok API 应用及 MCP 客户端登记以下 HTTPS 回调：
-https://tiktok-ad-automation.jetmobo.com/api/integrations/tiktok/callback
-https://tiktok-ad-automation.jetmobo.com/api/integrations/tiktok/mcp/callback
-状态：共享 Ingress 尚未追加规则；基础设施落实后执行迁移与上线验收
-连接凭据通过本机私有配置文件提供，不放入代码或群消息。
+DNS：tkada.galaxyshortdrama.com，A 记录 -> 134.175.255.190
+HTTPS：为共享入口 public 配置覆盖该域名的证书及 TLS host，保留其他站点
+PostgreSQL：确认本项目数据库名，以及 TKE 到所提供 RDS 实例的路由/白名单
+Redis：确认本项目独占逻辑库编号、路由/白名单和允许的导入方式
+跨云连接：明确使用私网互通还是受控公网连接，核实 TLS 配置
+TikTok API 回调：https://tkada.galaxyshortdrama.com/api/integrations/tiktok/callback
+TikTok MCP 回调：https://tkada.galaxyshortdrama.com/api/integrations/tiktok/mcp/callback
+R2 CORS：允许 https://tkada.galaxyshortdrama.com
+状态：生产业务服务未启动，Ingress rule 尚未追加
 ```
+
+2026-10-09 的 13 个部署对象已通过服务端 dry-run，不代表应用、磁盘绑定或网络验收。2026-10-10 仅创建本项目前缀的临时网络探针，无密钥、无队列消费者，用于验证真实镜像拉取、调度和网络；探针结束后清理。具体结果见当日验证记录。
 
 ## 执行顺序
 
@@ -75,4 +88,4 @@ https://tiktok-ad-automation.jetmobo.com/api/integrations/tiktok/mcp/callback
 
 目标未具备恢复条件或检查失败时，保持来源实例原状。切换后的回退必须先停止生产消费者、核对新旧持久状态兼容性，再按一致性备份恢复；禁止仅 `rollout undo`、清空队列或覆盖共享 Redis 来恢复。
 
-目前仅完成本地验证与生产集群只读核验、来源配置快照；尚未创建任何生产资源，尚未切停测试服。此次记录取代“公司集群是测试环境”的此前表述，但不把本地验证或只读检查记为生产上线成功。
+目前已完成本地验证、生产集群预检、临时网络探针及来源配置快照；尚未创建生产业务服务或切停测试服。此次记录取代“公司集群是测试环境”的此前表述，但不把本地验证或只读检查记为生产上线成功。

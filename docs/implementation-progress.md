@@ -1780,3 +1780,11 @@
 - 九个应用继续分别部署，七 Worker 各并发 1。合计申请从 0.85 核 / 4.25 GiB 提高到 4.25 核 / 10.5 GiB，上限合计 10.5 核 / 21 GiB；素材与报表各申请 1 核 / 2 GiB、上限 2 核 / 4 GiB。预算不含外部 PostgreSQL、Redis、滚动更新与迁移任务。
 - 调整后 13 个对象通过严格 schema 和真实集群服务端 dry-run；素材、Beat Pod 模板也通过 admission dry-run，CPU/内存值未被修改。这不能证明真实调度、持久盘绑定、计费规格或高峰容量；生产仍需真实业务负载观察。
 - 前一准备提交 `f3bb074` 已推公司 Gitea，其 AMD64 候选镜像已推 TCR，digest 为 `sha256:274884aac1801e21c29384c96f389893350c390ab5b76004499438c0808bdcf8`，未部署。资源调整后须从新的完整 SHA 重新构建发布；构建与资源采样日志保留于 `.runtime/company-production-20261009/`。目标基础设施与回调缺项尚未解决，测试服未切停。
+
+## 2026-10-10：新域名适配与生产网络核验
+
+- 上轮资源调整提交 `1d3b43b` 已推公司 Gitea 和 TCR，镜像 digest 为 `sha256:94e53f7e7786c9ec728b6fe908c37f40d13c8ccbe94289d1ab5d8232a6e4455c`；本轮用该镜像在公司 TKE 运行无凭据的临时网络探针，拉取与调度成功。
+- 用户指定阿里云新加坡 PostgreSQL / Redis 和 `tkada.galaxyshortdrama.com`，已私密登记凭据，保留原授权密钥；尚未指定 PostgreSQL 库名、Redis 库编号。
+- 域名尚无 DNS，现有证书声明不覆盖它；部署脚本支持指定新域名并增加写入前 TLS host 覆盖检查。生产模板与 runbook 已同步，源 MCP 注册材料未伪造修改。
+- 四个内外网端点在集群中 DNS 解析成功，但协议连接探测均超时，需核对跨云网络/白名单。探针已清理，未启动生产业务消费者、未切停测试服。
+- 24 项部署/构建行为回归、Ruff/格式/compileall/差异检查通过。完整证据与后续条件见 [生产连通性记录](validation/2026-10-10-production-connectivity.md)。

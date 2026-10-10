@@ -8,7 +8,7 @@
 - Gitea：`company` 远端 `https://git.gzjunbo.net/yaotf/tiktok-ad-automation.git`；GitHub `origin` 保留。
 - API、Dockerfile、Service 均为 80；外部通过共享 Ingress 的 HTTPS 443 访问。
 - namespace 为 `prod`，Ingress 为已有的 `public`；不创建第二个 Ingress，不配置 `imagePullSecrets`。
-- `K8S_CONTEXT` 和运维确认的单层 `*.jetmobo.com` 域名必须显式传入；没有测试服务器 IP/sslip.io 回退值。
+- `K8S_CONTEXT` 和域名必须显式传入；当前用户指定 `tkada.galaxyshortdrama.com`，也支持公司分配的单层 `*.jetmobo.com` 域名；没有测试服务器 IP/sslip.io 回退值。
 - API、7 个 Worker 和 Beat 使用同一镜像及配置。Worker 初始并发均为 1；Beat 单副本、`Recreate` 更新。
 - API 与 Worker 均有就绪探针；所有角色有 CPU/内存 requests 与 limits。应用合计请求 4.25 核 CPU / 10.5 GiB 内存，上限合计 10.5 核 / 21 GiB；发布任务另请求 100m / 256 MiB。它们是首发预算，尚未经过生产压力测试。
 - Beat PVC 显式使用公司集群已有的 `cbs` StorageClass，申请 20 GiB；集群无默认存储类，不能省略该字段。
@@ -34,7 +34,7 @@
 ## 部署前要准备的具体资料
 
 1. 获授权的 kubeconfig、明确的 context，以及 `prod` 资源配额。优先使用项目受限凭据；凭据必须允许下述只读查重，权限不足时停止，不能跳过检查。
-2. 运维分配的生产域名和 DNS A 记录（公司入口 `134.175.255.190`），确认现有通配证书覆盖该域名。
+2. 生产域名 `tkada.galaxyshortdrama.com` 的 DNS A 记录指向公司入口 `134.175.255.190`；须为该域名配置匹配证书及 Ingress TLS hosts。现有 `*.jetmobo.com` 证书不覆盖它。脚本只检查 TLS hosts 声明，不读取共享证书 Secret；发布验收仍需真实 HTTPS 证书校验。
 3. 仓库外的运行配置和真实 MCP 注册文件；注册文件必须允许目标回调域名。私有 R2 桶的 CORS 同步允许目标前端 origin，禁止改为公开桶。
 4. 已确认从新加坡迁移密钥、队列和授权；最终切换时先停止旧调度、排空任务并按发布手册备份。不得让两套 Beat/Worker 同时消费同一批任务。
 5. 三个部署开关的明确取值。`MATERIAL_INGEST_ENABLED` 控制新导入入口，`MATERIAL_CLEANUP_ENABLED` 控制自动清理，`ADS_SYNC_ENABLED` 控制新周期同步；关闭它们不等于已有队列任务不会执行。首次值按用户确认填写，后续发布保留已确认值。
@@ -89,7 +89,7 @@ bash deploy/build-and-push.sh
 ```bash
 export K8S_CONTEXT='<已确认的 context>'
 export K8S_NAMESPACE=prod
-export INGRESS_HOST='<运维分配的生产子域>.jetmobo.com'
+export INGRESS_HOST='tkada.galaxyshortdrama.com'
 export RELEASE_ID="$(git rev-parse HEAD)"
 export APP_IMAGE="junbo-image.tencentcloudcr.com/prod/tiktok-ad-automation:${RELEASE_ID}"
 export RUNTIME_ENV_FILE='/private/path/tk-ada-production-runtime.env'

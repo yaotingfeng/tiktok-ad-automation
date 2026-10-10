@@ -53,7 +53,7 @@ with open(os.environ['FAKE_LOG'], 'a') as f:
 if 'get' in args:
     kind = args[args.index('get') + 1]
     if kind == 'ingress' and 'public' in args:
-        print(json.dumps(state.get('ingress', {'metadata': {'resourceVersion': '1'}, 'spec': {'rules': [{'host': 'other.jetmobo.com'}]}})))
+        print(json.dumps(state.get('ingress', {'metadata': {'resourceVersion': '1'}, 'spec': {'tls': [{'hosts': ['*.jetmobo.com']}], 'rules': [{'host': 'other.jetmobo.com'}]}})))
     elif kind == 'namespace':
         print('{}')
     elif kind == 'secret':
@@ -66,7 +66,7 @@ if 'get' in args:
         print(json.dumps({'items': state['items']}))
 elif 'patch' in args:
     patch = json.loads(args[args.index('--patch') + 1])
-    ingress = state.get('ingress', {'metadata': {'resourceVersion': '1'}, 'spec': {'rules': [{'host': 'other.jetmobo.com'}]}})
+    ingress = state.get('ingress', {'metadata': {'resourceVersion': '1'}, 'spec': {'tls': [{'hosts': ['*.jetmobo.com']}], 'rules': [{'host': 'other.jetmobo.com'}]}})
     ingress['spec']['rules'].append(patch[-1]['value'])
     state['ingress'] = ingress
     pathlib.Path(os.environ['FAKE_STATE']).write_text(json.dumps(state))
@@ -134,6 +134,60 @@ else:
     def test_require_explicit_context_and_host(self):
         for extra in ({"K8S_CONTEXT": ""}, {"INGRESS_HOST": ""}):
             self.assertNotEqual(self.run_script(**extra).returncode, 0)
+        self.assert_no_writes()
+
+    def custom_domain(self):
+        self.env["INGRESS_HOST"] = "tkada.galaxyshortdrama.com"
+        self.values["FRONTEND_HOST"] = "https://" + self.env["INGRESS_HOST"]
+        self.values["MCP_REDIRECT_URI"] = (
+            self.values["FRONTEND_HOST"] + "/api/integrations/tiktok/mcp/callback"
+        )
+
+    def test_custom_domain_requires_matching_tls_before_any_writes(self):
+        self.custom_domain()
+        for script in ("apply.sh", "patch-public-ingress.sh"):
+            result = self.run_script(script, dry=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("TLS hosts do not cover", result.stderr)
+            self.assert_no_writes()
+
+    def test_custom_domain_accepts_exact_or_single_level_wildcard_tls(self):
+        self.custom_domain()
+        for host in ("tkada.galaxyshortdrama.com", "*.galaxyshortdrama.com"):
+            self.state.write_text(
+                json.dumps(
+                    {
+                        "items": [],
+                        "ingress": {
+                            "metadata": {"resourceVersion": "1"},
+                            "spec": {
+                                "tls": [{"hosts": [host]}],
+                                "rules": [{"host": "other.jetmobo.com"}],
+                            },
+                        },
+                    }
+                )
+            )
+            result = self.run_script(dry=False, PREFLIGHT_ONLY="1")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assert_no_writes()
+
+    def test_parent_wildcard_cannot_cover_multiple_domain_levels(self):
+        self.custom_domain()
+        self.state.write_text(
+            json.dumps(
+                {
+                    "items": [],
+                    "ingress": {
+                        "spec": {
+                            "tls": [{"hosts": ["*.com"]}],
+                            "rules": [{"host": "other.jetmobo.com"}],
+                        },
+                    },
+                }
+            )
+        )
+        self.assertNotEqual(self.run_script(dry=False).returncode, 0)
         self.assert_no_writes()
 
     def test_reject_callback_from_another_environment(self):
