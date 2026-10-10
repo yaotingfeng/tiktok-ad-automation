@@ -20,7 +20,7 @@ from app.integrations.tiktok.contracts.accounts import (
 from app.integrations.tiktok.contracts.common import CallEvidence, McpBusinessResponse
 from app.integrations.tiktok.contracts.discovery import ObservedAuthorization
 from app.integrations.tiktok.discovery_read import DiscoveryReadAdapter
-from app.integrations.tiktok.sdk import checked_data
+from app.integrations.tiktok.sdk import AccountAdmissionDeferred, checked_data
 
 RequestScope = Callable[[str | None, str, datetime], AbstractContextManager[None]]
 
@@ -80,6 +80,22 @@ def _strict_sdk_envelope(
             client.deserialize = instance_original
 
 
+# 平台未给出 Retry-After 时的默认等待；上限避免异常大的头部长期挂起任务。
+_THROTTLE_DEFAULT_MS = 5_000
+_THROTTLE_MAX_MS = 60_000
+
+
+def _throttle_retry_ms(headers: object) -> int:
+    """按平台 Retry-After 秒数换算等待时长；缺失或无效时使用默认值。"""
+    getter = getattr(headers, "get", None)
+    value = getter("Retry-After") if callable(getter) else None
+    try:
+        seconds = int(str(value).strip())
+    except ValueError:
+        return _THROTTLE_DEFAULT_MS
+    return min(_THROTTLE_MAX_MS, max(1_000, seconds * 1_000))
+
+
 class OfficialReadRequests:
     def __init__(self, client: Any, *, request_scope: RequestScope, deadline: datetime):
         remaining(deadline)
@@ -104,7 +120,17 @@ class OfficialReadRequests:
                     self.client, exact=exact if exact_numbers else None
                 ):
                     response = send((min(5.0, budget), min(30.0, budget)))
-            except ApiException, TiktokSDKError, HTTPError:
+            except ApiException as error:
+                # 只读 GET 被平台限流时请求未被执行，必须释放 Worker 并进入既有的
+                # 额度延后/退避重试路径；不能当作终态错误让任务直接失败。
+                if error.status == 429:
+                    raise AccountAdmissionDeferred(
+                        _throttle_retry_ms(error.headers)
+                    ) from None
+                raise DomainError(
+                    "tiktok_response_error", "TikTok 请求未成功"
+                ) from None
+            except TiktokSDKError, HTTPError:
                 raise DomainError(
                     "tiktok_response_error", "TikTok 请求未成功"
                 ) from None

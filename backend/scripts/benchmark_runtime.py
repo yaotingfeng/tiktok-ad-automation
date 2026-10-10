@@ -183,7 +183,8 @@ def measure_runtime(
         assert (
             job
             and job.status == "PENDING"
-            and job.error_code == "capability_remote_unavailable"
+            # 平台 429 与本地额度门禁走同一延后重试类型，所有链路统一按可重试处理。
+            and job.error_code == "admission_deferred"
         ), (job.status, job.error_code, job.revision) if job else "missing job"
         dispatch = session.get(PendingDispatch, job.dispatch_id)
         assert dispatch and dispatch.payload == {"job_id": str(job_id), "revision": 1}
