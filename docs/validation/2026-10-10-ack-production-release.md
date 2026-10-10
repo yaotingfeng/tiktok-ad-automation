@@ -1,5 +1,7 @@
 # 2026-10-10 ACK 生产迁移与发布
 
+> 后续已按用户要求切换至 `https://tkada.shortclipflix.com`，真实 DNS/HTTPS/登录通过；见[域名切换记录](2026-10-10-shortclipflix-domain.md)。本文保留首次发布时旧域名的历史验收结果。
+
 ## 结果与待验边界
 
 生产数据与九个应用服务已部署到阿里云新加坡 ACK / `prod`。指定真实 ALB、保持生产域名 Host/SNI 和正常证书校验的 HTTPS 验收通过：健康、登录页、静态资源、原管理员登录、两个租户、无权限边界、API/MCP 回调路由及 MCP 注册配置均正常。七个 Worker ping 全部响应，唯一 Beat 与 20 GiB PVC 正常。

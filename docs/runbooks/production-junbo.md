@@ -1,6 +1,6 @@
 # TK-ADA 公司生产首发与迁移
 
-> **2026-10-10 当前状态**：已将测试服数据迁至新加坡 ACK 并部署 `783d3b836b61171153cf1863f4ecd7617bc3e7d6`。API、七 Worker、唯一 Beat 均就绪，旧九服务停止且取消自启。指定 ALB 的真实 HTTPS、管理员登录、两租户、静态资源、回调边界及 R2 读写删除检查通过。普通域名访问仍待 DNS 核对：集群与 Google DNS 对生产域名均返回 NXDOMAIN；MCP 三份历史授权需由用户在生产重新授权。详见[正式发布记录](../validation/2026-10-10-ack-production-release.md)。
+> **当前生产入口**：用户指定改为 `https://tkada.shortclipflix.com`；该域名已真实解析到新加坡 ALB，现有 `*.shortclipflix.com` 证书验证通过。本次配置切换及验收见[域名切换记录](../validation/2026-10-10-shortclipflix-domain.md)。下文 galaxyshortdrama 的 DNS 问题为首次发布时的历史情况。
 
 ## 已确认的目标与授权（2026-10-10 更新）
 
@@ -17,8 +17,8 @@
 | 镜像仓库 | `junbo-image.tencentcloudcr.com/prod/tiktok-ad-automation:<完整 SHA>` |
 | 仓库凭据 | 同工具包 `vendor/tcr-cred.txt`，禁止回显/提交 |
 | 对外入口 | 现有 `prod/prod-https`，IngressClass `alb`；ALB 域名 `alb-ae6m00kf3iaolvbxim.ap-southeast-1.alb.aliyuncsslbintl.com` |
-| 证书 | 集群内以 `tkada.galaxyshortdrama.com` 为 SNI 的真实 TLS 校验通过，现有证书含 `*.galaxyshortdrama.com`；新 host 的 Ingress TLS 声明已追加并回读验证 |
-| 生产域名 | `tkada.galaxyshortdrama.com`；用户确认运维已配置公司侧解析至新加坡集群，入口及九个应用服务已部署；指定 ALB 的 HTTPS 验收通过，普通 DNS 访问待验 |
+| 证书 | 新入口使用现有 `*.shortclipflix.com` 证书；真实 CA/域名校验通过，不读取共享证书 Secret |
+| 生产域名 | `tkada.shortclipflix.com`；CNAME 已真实指向上述 ACK ALB；原 galaxyshortdrama 域名已不作为生产入口 |
 | PostgreSQL 业务库 | `tkada`，2026-10-10 已用所提供账号创建，所有者 `gzjunbo`；已恢复源库 136 张业务表并验证 |
 | Redis 逻辑库 | DB 15；用户明确确认使用，已重新检查空库、登记本项目标记并回读验证 |
 | 应用端口 | API/容器/Service 均为 80 |
@@ -60,7 +60,7 @@ ACK 已核实 7 个 Ready 节点，分布在新加坡四个可用区；`prod` �
 4. 用户已在 API 应用登记生产回调，复测正常展示 TK-ADA 授权同意页。按用户直接处理 MCP 的授权，已通过官方动态注册接口创建生产客户端，HTTP 201 响应确认生产 MCP 回调；私有注册文件为 `ack/mcp-client-production.json`。新客户端 ID 与旧授权绑定不同，现有 3 份 MCP 连接切换后须重新授权；原注册及授权保持不变，新注册尚未应用到生产。R2 CORS 已追加生产 origin，新旧 origin 的真实 OPTIONS 均通过。完整 OAuth 收码/换码仍待应用部署及用户实际授权验证。
 5. 最终停写窗口中的一致性备份、目标恢复验证和单侧消费者切换；条件未齐前继续保持测试服运行。
 
-可交给运维的资料清单：
+首次迁移的历史资料清单（当前域名和回调见顶部及文末）：
 
 ```text
 项目：TK-ADA / tiktok-ad-automation
@@ -93,7 +93,7 @@ R2 CORS：已添加 https://tkada.galaxyshortdrama.com，保留测试 origin，O
 
 目标未具备恢复条件或检查失败时，保持来源实例原状。切换后的回退必须先停止生产消费者、核对新旧持久状态兼容性，再按一致性备份恢复；禁止仅 `rollout undo`、清空队列或覆盖共享 Redis 来恢复。
 
-生产已完成数据恢复与九角色部署，旧源服务已停止并取消自启；禁止直接启动旧消费者。回退前先停止生产写入与消费者，再判断是否已有新增业务事实并制定一致恢复方案。当前 DNS 与用户 OAuth 待验，不把指定 ALB 的 HTTPS 验收写成普通域名已可访问。
+生产已完成数据恢复与九角色部署，旧源服务已停止并取消自启；禁止直接启动旧消费者。回退前先停止生产写入与消费者，再判断是否已有新增业务事实并制定一致恢复方案。当前新域名的真实 DNS、HTTPS 和登录已通过；新域名 API 应用回调登记及用户 OAuth 仍待完成，详见顶部域名切换记录。
 
 ## 2026-10-10 磁盘清理与迁移恢复演练
 
@@ -127,3 +127,11 @@ R2 CORS：已添加 https://tkada.galaxyshortdrama.com，保留测试 origin，O
 - 七 Worker 并发各 1、Beat 单副本、20 GiB PVC Bound；开关仍为导入 true、清理 true、周期同步 false。实际九角色配置摘要与注册摘要一致、额度校验通过、Worker ping 7/7、启动日志无 ERROR/Traceback。
 - 旧测试服保留数据库、Redis、release 和配置；九应用服务 disabled/inactive，旧 Nginx 返回 503 迁移提示页。源备份 timer 已恢复；它只备份旧源数据，不能当作生产持续备份。生产 RDS/Redis 的托管备份策略尚未从云控制台核验，本次一致性备份及生产配置恢复包已异机保存于当前工作站。
 - DNS 管理属于阿里云 ns7/ns8.alidns.com；2026-10-10 集群/Google DNS 实测生产主机名 NXDOMAIN。已请核对 `tkada` CNAME 指向 `alb-ae6m00kf3iaolvbxim.ap-southeast-1.alb.aliyuncsslbintl.com`，本机未持有该 DNS 账号权限；不要通过修改共享 CoreDNS、忽略证书校验或硬编码 ALB IP 冒充修复。
+
+## 当前域名配置与恢复入口（同日后续切换）
+
+- 当前网站：`https://tkada.shortclipflix.com`，真实 DNS / HTTPS / 原账号登录已通过。新域名仅向共享入口追加自身条目。旧 galaxyshortdrama 的 NXDOMAIN 记录为历史观测。
+- 当前运行配置与 MCP 注册：私有 `ack/domain-shortclipflix/runtime.env`、`mcp-client.json`；本地 `.env.production` 已与线上核对同步。切换后的恢复包为同目录 `config-after.tar.gz`，校验和及回读证据为 `config-after-verified.json`。上述 `cutover/` 配置及 `ack/mcp-client-production.json` 是旧域名历史备份，不可直接作为当前配置重发。
+- 本轮冻结备份与恢复证据位于同目录 `manifest.json` / `backup-verified.json`；未改变运行镜像和数据库 head。九角色 ready，七 Worker ping 通过，唯一 Beat 和 PVC 正常；临时工具 Pod/Secret 已按 UID 清理，旧测试服务继续停止。
+- TikTok API 应用须登记 `https://tkada.shortclipflix.com/api/integrations/tiktok/callback`；MCP 新回调已由官方客户端注册并部署。用户手动重新授权及完整业务验收仍待完成。
+- 详细证据及运维待验边界见[域名切换记录](../validation/2026-10-10-shortclipflix-domain.md)。

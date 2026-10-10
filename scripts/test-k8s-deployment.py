@@ -142,7 +142,7 @@ else:
         self.assert_no_writes()
 
     def custom_domain(self):
-        self.env["INGRESS_HOST"] = "tkada.galaxyshortdrama.com"
+        self.env["INGRESS_HOST"] = "tkada.shortclipflix.com"
         self.values["FRONTEND_HOST"] = "https://" + self.env["INGRESS_HOST"]
         self.values["MCP_REDIRECT_URI"] = (
             self.values["FRONTEND_HOST"] + "/api/integrations/tiktok/mcp/callback"
@@ -158,7 +158,7 @@ else:
 
     def test_custom_domain_accepts_exact_or_single_level_wildcard_tls(self):
         self.custom_domain()
-        for host in ("tkada.galaxyshortdrama.com", "*.galaxyshortdrama.com"):
+        for host in ("tkada.shortclipflix.com", "*.shortclipflix.com"):
             self.state.write_text(
                 json.dumps(
                     {

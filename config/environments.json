@@ -24,7 +24,7 @@
     "overrides": {
       "DATABASE_URL": "",
       "REDIS_URL": "",
-      "FRONTEND_HOST": "https://tkada.galaxyshortdrama.com",
+      "FRONTEND_HOST": "https://tkada.shortclipflix.com",
       "OBJECT_STORAGE_PROVIDER": "r2",
       "S3_REGION": "auto"
     }

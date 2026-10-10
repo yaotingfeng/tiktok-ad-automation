@@ -8,7 +8,7 @@
 - Gitea：`company` 远端 `https://git.gzjunbo.net/yaotf/tiktok-ad-automation.git`；GitHub `origin` 保留。
 - API、Dockerfile、Service 均为 80；外部通过共享 Ingress 的 HTTPS 443 访问。
 - namespace 为 `prod`，Ingress 为已有的 `prod-https`（`alb`）；不创建第二个 Ingress。ACK 拉取 TCR 镜像必须显式引用本项目 `tiktok-ad-automation-registry` Secret，禁止借用其他项目 Secret。
-- `K8S_CONTEXT` 和域名必须显式传入；当前用户指定 `tkada.galaxyshortdrama.com`，也支持公司分配的单层 `*.jetmobo.com` 域名；没有测试服务器 IP/sslip.io 回退值。
+- `K8S_CONTEXT` 和域名必须显式传入；当前用户指定 `tkada.shortclipflix.com`，也支持公司分配的单层 `*.jetmobo.com` 域名；没有测试服务器 IP/sslip.io 回退值。
 - API、7 个 Worker 和 Beat 使用同一镜像及配置。Worker 初始并发均为 1；Beat 单副本、`Recreate` 更新。
 - API 与 Worker 均有就绪探针；所有角色有 CPU/内存 requests 与 limits。应用合计请求 4.25 核 CPU / 10.5 GiB 内存，上限合计 10.5 核 / 21 GiB；发布任务另请求 100m / 256 MiB。它们是首发预算，尚未经过生产压力测试。
 - Beat PVC 使用 `alicloud-disk-topology-alltype`，申请 20 GiB；`WaitForFirstConsumer` 将云盘绑定到实际 Pod 的可用区。
@@ -34,7 +34,7 @@
 ## 部署前要准备的具体资料
 
 1. 获授权的 kubeconfig、明确的 context，以及 `prod` 资源配额。优先使用项目受限凭据；凭据必须允许下述只读查重，权限不足时停止，不能跳过检查。
-2. 生产域名 `tkada.galaxyshortdrama.com` 的 CNAME 指向 `alb-ae6m00kf3iaolvbxim.ap-southeast-1.alb.aliyuncsslbintl.com`。集群内真实 TLS 握手确认 ALB 已提供有效 `*.galaxyshortdrama.com` 证书，无需新申请；2026-10-10 已按用户授权创建正式 Service 并追加新 host 的 TLS 声明与路由，控制器同步成功；九角色已部署；指定 ALB 的真实 HTTPS/登录/静态资源/回调边界检查通过，普通域名解析仍返回 NXDOMAIN，需核对 DNS。脚本只检查 TLS hosts 声明，不读取共享证书 Secret；发布验收还需通过域名真实访问。
+2. 生产域名 `tkada.shortclipflix.com` 的 CNAME 指向 `alb-ae6m00kf3iaolvbxim.ap-southeast-1.alb.aliyuncsslbintl.com`。集群内真实 TLS 握手确认 ALB 已提供有效 `*.shortclipflix.com` 证书，无需新申请；2026-10-10 已按用户授权创建正式 Service 并追加新 host 的 TLS 声明与路由，控制器同步成功；九角色已部署；生产域名已确认解析到该 ALB，使用现有 shortclipflix 通配证书；切换验收见生产手册。脚本只检查 TLS hosts 声明，不读取共享证书 Secret；发布验收还需通过域名真实访问。
 3. 仓库外的运行配置和真实 MCP 注册文件；注册文件必须允许目标回调域名。私有 R2 桶的 CORS 同步允许目标前端 origin，禁止改为公开桶。
 4. 已确认从新加坡迁移密钥、队列和授权；最终切换时先停止旧调度、排空任务并按发布手册备份。不得让两套 Beat/Worker 同时消费同一批任务。
 5. 三个部署开关的明确取值。`MATERIAL_INGEST_ENABLED` 控制新导入入口，`MATERIAL_CLEANUP_ENABLED` 控制自动清理，`ADS_SYNC_ENABLED` 控制新周期同步；关闭它们不等于已有队列任务不会执行。首次值按用户确认填写，后续发布保留已确认值。
@@ -91,7 +91,7 @@ export PATH="$PWD/.tools/ack-bin:$PATH"
 export KUBECONFIG="$PWD/.runtime/company-production-20261010/ack/kubeconfig"
 export K8S_CONTEXT='kubernetes-admin-c19dbd82590a34b9f87cebb8c1a858796'
 export K8S_NAMESPACE=prod
-export INGRESS_HOST='tkada.galaxyshortdrama.com'
+export INGRESS_HOST='tkada.shortclipflix.com'
 export RELEASE_ID="$(git rev-parse HEAD)"
 export APP_IMAGE="junbo-image.tencentcloudcr.com/prod/tiktok-ad-automation:${RELEASE_ID}"
 export RUNTIME_ENV_FILE='/private/path/tk-ada-production-runtime.env'

@@ -1854,3 +1854,12 @@
 - 九角色配置和注册一致、开关保持 true/true/false、额度检查通过，七 Worker ping 7/7、Beat 单副本/20 GiB PVC Bound。指定 ALB 的真实 TLS、原账号登录、两租户、静态资源和回调边界通过；R2 写读删探针通过并清理。
 - 旧九服务停止并取消自启，旧入口改迁移提示，源备份 timer 恢复，原数据保留；私有生产配置恢复包已保存。临时迁移资源按 UID 清理。
 - 尚待普通域名解析（集群/Google DNS 均 NXDOMAIN，已请求核对阿里 DNS）、用户手动重新授权及真实业务/容量测试。托管自动备份策略、既有共享桶公开状态的限制如实记录，未冒充已验收。详见[正式发布记录](validation/2026-10-10-ack-production-release.md)。
+
+## 2026-10-10：切换 shortclipflix 生产域名并完成基础验收
+
+- 用户指定 `tkada.shortclipflix.com`；真实 DNS 已指向新加坡 ALB，正常证书校验、浏览器页面、原账号登录与两个租户读取通过，未覆盖 DNS。
+- 完成冻结备份及隔离恢复：136 表、4 凭据、Redis 8 键、迁移前后指纹一致。修复备份传输截断后才切换，最终 PG dump 源端/本地摘要相同。
+- 共享入口仅追加本项目新域名 TLS/rule；运行配置仅改三个 origin/回调值，官方 MCP 新客户端注册并部署，R2 追加新 origin 且保留原来源。九角色就绪、配置及策略一致，七 Worker ping 7/7、Beat 单副本/PVC Bound。
+- 当前私有配置已同步 `.env.production` 并独立归档核对；临时 Pod/Secret 按 UID 清理。旧测试入口提示改为新域名，源九服务仍 inactive/disabled。
+- 4 项构建 + 21 项部署回归、Python 语法与差异检查通过。配置发布沿用运行镜像 783d3b8，文档/脚本提交不代表镜像重建。
+- 尚待 API 应用登记新域名回调、用户手动 API/MCP 重新授权与完整业务/容量验收；生产托管备份策略及共享桶原有公开状态限制继续保留。详见[切换记录](validation/2026-10-10-shortclipflix-domain.md)。

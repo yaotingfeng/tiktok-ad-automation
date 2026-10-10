@@ -68,11 +68,11 @@ class Deployment:
         self.context = setting("K8S_CONTEXT")
         self.host = setting("INGRESS_HOST")
         require(
-            self.host == "tkada.galaxyshortdrama.com"
+            self.host == "tkada.shortclipflix.com"
             or re.fullmatch(
                 r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.jetmobo\.com", self.host
             ),
-            "INGRESS_HOST must be tkada.galaxyshortdrama.com or an assigned single-level jetmobo.com host",
+            "INGRESS_HOST must be tkada.shortclipflix.com or an assigned single-level jetmobo.com host",
         )
         self.base = [
             "kubectl",
