@@ -1,6 +1,6 @@
 # TK-ADA 公司生产首发与迁移
 
-> **最新部署规范**：用户要求同一 ACK 改用 `test` 命名空间、`test/test-https` 入口与阿里云新加坡 ACR（公网推送、VPC 拉取）。本轮迁移完成前，下面原 `prod` / TCR 表格属于实际来源；迁移结果在文末记录。
+> **当前部署**：已迁至同一新加坡 ACK 的 `test` 命名空间，入口为 `test/test-https`。本机使用阿里云 ACR 公网地址推送，Pod 通过 VPC 地址拉取。原 `prod` 九服务保留零副本；后文 prod/TCR 记录为迁移历史。验收见[ACR 与命名空间迁移记录](../validation/2026-10-10-acr-test-migration.md)。
 
 > **当前生产入口**：用户指定改为 `https://tkada.shortclipflix.com`；该域名已真实解析到新加坡 ALB，现有 `*.shortclipflix.com` 证书验证通过。本次配置切换及验收见[域名切换记录](../validation/2026-10-10-shortclipflix-domain.md)。下文 galaxyshortdrama 的 DNS 问题为首次发布时的历史情况。
 
@@ -13,13 +13,13 @@
 | 集群 | 阿里云 ACK，新加坡 `ap-southeast-1`；集群 ID `c19dbd82590a34b9f87cebb8c1a858796` |
 | context | `kubernetes-admin-c19dbd82590a34b9f87cebb8c1a858796` |
 | 凭据来源 | 用户提供的 `/Users/yaotingfeng/Downloads/singaporeconfig`；私有副本 `.runtime/company-production-20261010/ack/kubeconfig`，0600，禁止入 Git |
-| namespace | `prod`，Active |
+| namespace | `test`，Active；生产用途，名称不代表改为测试环境 |
 | 服务端版本 | `v1.36.2-aliyun.1`；本地使用校验过官方 SHA256 的 `.tools/bin/kubectl-1.36` |
 | 应用资源前缀 | `tiktok-ad-automation`；2026-10-10 ACK 查重无同名业务 Deployment/Service |
-| 镜像仓库 | `junbo-image.tencentcloudcr.com/prod/tiktok-ad-automation:<完整 SHA>` |
-| 仓库凭据 | 同工具包 `vendor/tcr-cred.txt`，禁止回显/提交 |
-| 对外入口 | 现有 `prod/prod-https`，IngressClass `alb`；ALB 域名 `alb-ae6m00kf3iaolvbxim.ap-southeast-1.alb.aliyuncsslbintl.com` |
-| 证书 | 新入口使用现有 `*.shortclipflix.com` 证书；真实 CA/域名校验通过，不读取共享证书 Secret |
+| 镜像仓库 | 公网 `sg-acr-prod-registry.ap-southeast-1.cr.aliyuncs.com/test/tiktok-ad-automation:<完整 SHA>`；集群将主机替换为 `sg-acr-prod-registry-vpc.ap-southeast-1.cr.aliyuncs.com` |
+| 仓库凭据 | 用户提供的新加坡 ACR 账号，私有 `ack/acr-test-review/registry.json`；禁止回显/提交 |
+| 对外入口 | 现有 `test/test-https`，IngressClass `alb`；ALB 域名 `alb-ae6m00kf3iaolvbxim.ap-southeast-1.alb.aliyuncsslbintl.com` |
+| 证书 | ALB 按域名自动发现现有证书；TLS 条目不设置 secretName，不读取共享证书 Secret |
 | 生产域名 | `tkada.shortclipflix.com`；CNAME 已真实指向上述 ACK ALB；原 galaxyshortdrama 域名已不作为生产入口 |
 | PostgreSQL 业务库 | `tkada`，2026-10-10 已用所提供账号创建，所有者 `gzjunbo`；已恢复源库 136 张业务表并验证 |
 | Redis 逻辑库 | DB 15；用户明确确认使用，已重新检查空库、登记本项目标记并回读验证 |
@@ -27,10 +27,10 @@
 | 拓扑 | 1 API、7 个独立 Worker、1 Beat，使用同一版本及运行 Secret |
 | 应用资源 | 合计申请 4.25 核 / 10.5 GiB，上限 10.5 核 / 21 GiB；不含 PostgreSQL、Redis 与发布瞬时资源 |
 | 存储 | Beat 申请 20 GiB，使用已存在的 `alicloud-disk-topology-alltype` / `WaitForFirstConsumer`，随首个 Pod 可用区绑定 |
-| 镜像拉取 | 已创建本项目 `tiktok-ad-automation-registry` Secret；ACK 默认 ACR 凭据不能拉取 TCR，工作负载显式引用本项目凭据 |
-| 配置落点 | `prod/tiktok-ad-automation-runtime` 与 `prod/tiktok-ad-automation-mcp-registration` Secret；已创建并验证九角色一致 |
+| 镜像拉取 | `test/tiktok-ad-automation-registry` 保存 VPC ACR 主机认证；所有 Pod 显式引用本项目 Secret |
+| 配置落点 | `test/tiktok-ad-automation-runtime` 与 `test/tiktok-ad-automation-mcp-registration` Secret；已创建并验证九角色一致 |
 
-ACK 已核实 7 个 Ready 节点，分布在新加坡四个可用区；`prod` 未配置 ResourceQuota/LimitRange。节点容量不是可直接独占的剩余资源，部署仍须核对其他工作负载已申请量及实际调度结果。
+ACK 已核实 7 个 Ready 节点，分布在新加坡四个可用区；`test` 未配置 ResourceQuota/LimitRange。节点容量不是可直接独占的剩余资源，部署仍须核对其他工作负载已申请量及实际调度结果。
 
 ## 迁移源核验（停写前快照）
 
@@ -83,7 +83,7 @@ R2 CORS：已添加 https://tkada.galaxyshortdrama.com，保留测试 origin，O
 ## 执行顺序
 
 1. 保留来源私密配置、注册材料和授权加密密钥；整理目标配置，只有网络地址、域名及挂载路径按目标替换。不要生成新的加密密钥导致历史授权不可读。
-2. 完成项目相关验证，将已验证 `main` 推送公司 Gitea，构建带完整 SHA/revision 标签的 AMD64 镜像并推 TCR；保留本机用户未提交的 `AGENTS.md` 改动，使用干净发布副本。
+2. 完成项目相关验证，将已验证 `main` 推送公司 Gitea，构建带完整 SHA/revision 标签的 AMD64 镜像并推新加坡 ACR；保留本机用户未提交的 `AGENTS.md` 改动，使用干净发布副本。
 3. 目标运行配置齐全后，离线容器检查真实配置，执行集群只读预检与服务端 dry-run，核对配额、调度和阿里云云盘。
 4. 切换窗口停止新入口写入、旧 Beat 和正常排空 Worker，暂停备份 timer 并等待已开始备份结束。备份 PostgreSQL、Redis、独立源码/构建产物、私有配置、注册材料、证书与服务定义；校验和及隔离恢复通过后才进行目标恢复。
 5. 迁移原授权记录时同步保留密钥、连接代数、冻结请求、幂等记录和 UNKNOWN 状态；队列与持久业务事实必须来自同一停写窗口。不得用空库加队列、或单独复制 `.env` 代替授权数据迁移。
@@ -138,8 +138,12 @@ R2 CORS：已添加 https://tkada.galaxyshortdrama.com，保留测试 origin，O
 - TikTok API 应用须登记 `https://tkada.shortclipflix.com/api/integrations/tiktok/callback`；MCP 新回调已由官方客户端注册并部署。用户手动重新授权及完整业务验收仍待完成。
 - 详细证据及运维待验边界见[域名切换记录](../validation/2026-10-10-shortclipflix-domain.md)。
 
-## 2026-10-10：迁往 test 与新加坡 ACR（执行中）
+## 2026-10-10：迁往 test 与新加坡 ACR
 
 用户已授权修改并迁移。目标 namespace 为 `test`，共享入口为 `test-https`，与原 `prod-https` 使用同一 ALB，DNS、域名、API/MCP 回调和数据连接不变。公网镜像地址为 `sg-acr-prod-registry.ap-southeast-1.cr.aliyuncs.com/test/tiktok-ad-automation:<SHA>`；Pod 拉取地址为 `sg-acr-prod-registry-vpc.ap-southeast-1.cr.aliyuncs.com/test/tiktok-ad-automation:<SHA>`。用户提供的账号已登录成功；原始凭据仅保存在私有 `ack/acr-test-review/registry.json`。
 
 备份及迁移证据使用私有 `ack/acr-test-migration/`。先发布脚本到公司仓库并构建新镜像，验证 VPC 拉取，再停写/排空并完成 PG/Redis/源码构建/配置/Beat 文件备份及恢复演练。生产 PG/Redis 原地复用，不执行数据覆盖恢复；原 namespace 九服务最终保留零副本。目标 Beat 使用新 20 GiB PVC 恢复原调度文件，目标配置/注册/开关必须与来源逐项一致。共享入口仅迁移本项目 host，保留其他所有 spec 条目。
+
+当前运行 SHA 为 `673eecb9f928261541be57ecc93b3c7f4350682f`；ACR 镜像 index digest 为 `sha256:4923ba800e3c403d40cdbf8131fdadf164b783c25067c554e6dc32e9c439ec48`，AMD64 manifest 为 `sha256:9fa1b3d971991f44a4bf0afeef999c3d50186638dd0bf03002ef19b10637506a`。旧 `prod` 九 Deployment 为零副本，原 Beat PVC 和 Secret 保留作受控恢复依据，禁止直接启动。未来部署必须设置 `RETIRED_SOURCE_INVENTORY` 指向 `ack/acr-test-migration/retired-source.json`，逐项核对旧资源 UID/模板与停止状态；不能绕过查重。
+
+最新恢复配置包为 `ack/acr-test-migration/config-after.tar.gz`，同目录保存冻结备份、独立源码及实际构建、Beat 文件、恢复验证、入口前后快照与部署验收。当前运行配置和注册文件与切换前逐项相同，本地 `.env.production` 匹配。旧 `domain-shortclipflix/` 为上轮配置证据，不能直接重跑其中旧 namespace 部署脚本。

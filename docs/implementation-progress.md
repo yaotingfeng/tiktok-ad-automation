@@ -1870,3 +1870,12 @@
 - 构建脚本固定公网仓库，部署脚本固定 VPC 仓库及 test；本机离线验证使用公网同 SHA 镜像。增加显式退休源清单校验，只有 UID/标签/模板匹配、零副本且无运行应用 Pod 的已归档源资源才能保留。
 - 4 项构建、24 项部署行为测试通过，覆盖公网镜像误用于集群、旧 namespace、源 UID/模板漂移及残留消费者阻断；Ruff、语法和差异检查通过。
 - 迁移尚在执行：下一步构建/推送、VPC 拉取探针、冻结备份恢复、Beat 文件迁移和自身 Ingress 路由切换；保持现有 PG/Redis、密钥、回调和三开关。
+
+## 2026-10-10：完成 ACR / test 生产迁移
+
+- 脚本提交 `673eecb` 已推送公司仓库并构建 AMD64 镜像，公网 ACR 推送成功，test 探针通过 VPC 拉取并核对 imageID。BuildKit 上传会话停滞后使用 docker push 同一镜像完成，没有重新发布不同业务代码。
+- 旧 API/Beat 停止、七 Worker 排空后冻结，完成 PG/Redis/独立源码及运行构建/配置/Beat 文件备份与隔离恢复，136 表、4 凭据、Redis 7 个存活键、迁移前后指纹通过。
+- 仅迁移本项目两个 host 到 test/test-https，其他规则完全保留，证书按 ALB 域名自动发现；新 Beat PVC 恢复文件摘要一致。正式迁移 Job 与九角色部署成功，旧 prod 九 Deployment 保持零副本。
+- 新入口真实 DNS/TLS、原账号登录及两个租户正常；七 Worker ping 7/7，唯一 Beat，九角色配置/注册/开关和调用策略一致，日志无 ERROR/Traceback。运行配置及本地 .env.production 均与来源相同。
+- 临时工具按 UID 清理，恢复配置独立归档并回读验证。后续发布需带 retired-source.json 核对保留旧资源的 UID/模板及停止状态；禁止直接启动旧消费者。
+- 最新验收：[ACR / test 迁移记录](validation/2026-10-10-acr-test-migration.md)。用户授权/完整业务与峰值测试、托管自动备份策略和共享 R2 原有公开状态边界继续如实保留。

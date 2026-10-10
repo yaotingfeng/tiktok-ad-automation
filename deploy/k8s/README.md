@@ -95,6 +95,7 @@ export INGRESS_HOST='tkada.shortclipflix.com'
 export RELEASE_ID="$(git rev-parse HEAD)"
 export APP_IMAGE="sg-acr-prod-registry-vpc.ap-southeast-1.cr.aliyuncs.com/test/tiktok-ad-automation:${RELEASE_ID}"
 export RUNTIME_ENV_FILE='/private/path/tk-ada-production-runtime.env'
+export RETIRED_SOURCE_INVENTORY="$PWD/.runtime/company-production-20261010/ack/acr-test-migration/retired-source.json"
 export MCP_CLIENT_REGISTRATION_FILE='/private/path/mcp-client.json'
 
 export LOCAL_IMAGE="sg-acr-prod-registry.ap-southeast-1.cr.aliyuncs.com/test/tiktok-ad-automation:${RELEASE_ID}"
@@ -144,3 +145,5 @@ HTTPS 验收不使用 `-k`，必须验证证书有效。继续检查七个 Worke
 `test` 是公司指定的 Kubernetes 命名空间，生产运行配置仍为 `.env.production`。迁移时先备份、停入口/Beat 并排空 Worker，再保留源资源为零副本；Beat 文件恢复到目标独立 PVC。只迁移本项目两个域名的共享入口条目，不改变其他站点，避免两个 Ingress 同时声明同一域名。
 
 如保留旧 namespace 的停用资源，设置 `RETIRED_SOURCE_INVENTORY` 为私有归档 JSON（`namespace` 和原始 `items`，只含本项目 Deployment/Service/ConfigMap/PVC）。部署前逐项核对 UID、标签、原 Pod 模板及 Deployment 零副本，并检查源应用 Pod 已全部消失；未登记的同名资源仍阻断。该文件不是无条件跳过查重的开关；源服务被重新启动或替换会立即阻断部署。回退必须先停止目标，不能直接启动旧消费者。
+
+当前 `test/test-https` 的 TK-ADA TLS 条目使用 ALB 按域名自动发现证书（不设置 `secretName`），可跨 namespace 复用证书管理服务中的证书。依据：[阿里云 ALB HTTPS 证书配置](https://www.alibabacloud.com/help/en/ack/ack-managed-and-ack-dedicated/user-guide/use-an-alb-ingress-to-configure-certificates-for-an-https-listener)。仍须验证控制器同步与真实域名 HTTPS，TLS hosts 声明本身不是证书可用证明。
