@@ -13,7 +13,12 @@ def test_preview_provider_heads_are_merged_without_operations():
     config.set_main_option("script_location", str(backend / "app/alembic"))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_heads() == ["20261005_preview_copy_unique"]
+    # 后续迁移会继续前移 head；这里只约束迁移图收敛为单一 head，且已合并分支仍在主线上。
+    heads = script.get_heads()
+    assert len(heads) == 1
+    assert "20261005_merge_preview_heads" in {
+        revision.revision for revision in script.walk_revisions("base", heads[0])
+    }
     merge = script.get_revision("20261005_merge_preview_heads")
     assert merge.down_revision == (
         "20261005_preview_ad_material",
@@ -21,7 +26,7 @@ def test_preview_provider_heads_are_merged_without_operations():
     )
 
     source = (
-        backend / "app/alembic/versions/20261005_merge_preview_heads.py"
+        backend / "app/alembic/versions/20261005_merge_preview_provider_heads.py"
     ).read_text()
     tree = ast.parse(source)
     for function_name in ("upgrade", "downgrade"):

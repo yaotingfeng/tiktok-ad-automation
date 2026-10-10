@@ -298,7 +298,7 @@ def test_supplement_does_not_cross_tenants_or_overwrite_a_new_revision(
 
 
 def test_manual_link_uses_real_bc_route_and_freezes_long_provider_name(
-    session, context, intent
+    session, context, intent, monkeypatch
 ):
     from app.modules.builds import previews
     from app.modules.builds.drafts import _preparation_route
@@ -344,6 +344,17 @@ def test_manual_link_uses_real_bc_route_and_freezes_long_provider_name(
             link_id=drama.link_id,
             route=route,
         )
+    # This route/name test uses synthetic identity and targeting evidence.
+    from app.modules.builds import identity_selection
+    from tests.modules.builds.test_previews import seed_targeting_directory
+
+    monkeypatch.setattr(identity_selection, "require_preview_identity", lambda *a, **kw: {
+        "identity_id": "fixture-identity", "identity_type": "TT_USER"
+    })
+    from tests.modules.builds.test_drafts import finish
+
+    finish(session, context, prep.id)
+    seed_targeting_directory(session, context, ["account-A"], minis_id="mini-test")
     # 无素材时准备无需外部调用；直接验证已有本地事实进入冻结预览的过程。
     draft.status = "READY"
     prep.status = "READY"

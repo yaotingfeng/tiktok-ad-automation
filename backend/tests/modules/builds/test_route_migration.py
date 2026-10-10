@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 from alembic import command
-from sqlalchemy import MetaData, Table, text
+from sqlalchemy import MetaData, Table, null, text
 from sqlmodel import Session
 
 from app.modules.accounts.models import TikTokConnection
@@ -60,7 +60,7 @@ def historical_rows(
         session.execute(
             table.insert().values(
                 **{
-                    key: value
+                    key: null() if key == "targeting_override" and value is None else value
                     for key, value in row.model_dump().items()
                     if key in table.c
                 }

@@ -120,11 +120,14 @@ def test_lost_worker_recovers_on_lease_expiry(redis_client, scope, policy):
     import time
 
     policy.app_max_inflight = 1
-    policy.lease_ms = 50
+    # 真实 Redis 往返在共享 CI 主机可能超过 50ms；租约期限不是网络延迟断言。
+    policy.lease_ms = 1000
     assert call(redis_client, scope, policy).granted
     assert not call(redis_client, scope, policy).granted
-    time.sleep(0.08)
-    assert call(redis_client, scope, policy).granted
+    deadline = time.monotonic() + 3
+    while not call(redis_client, scope, policy).granted:
+        assert time.monotonic() < deadline, "expired worker lease did not release capacity"
+        time.sleep(0.02)
 
 
 @pytest.mark.parametrize(

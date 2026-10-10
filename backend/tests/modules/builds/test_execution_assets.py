@@ -181,7 +181,7 @@ def test_end_to_end_group_budget_highest_value_payload_has_correct_layer_and_bid
         resolved={"targeting_spec": {"location_ids": ["US"]}},
     )
     assert campaign["budget_mode"] == "BUDGET_MODE_INFINITE"
-    assert "budget" not in campaign
+    assert campaign["budget"] == 0
     assert adgroup["budget"] == 100
     assert adgroup["deep_bid_type"] == "VO_HIGHEST_VALUE"
     assert "roas_bid" not in adgroup

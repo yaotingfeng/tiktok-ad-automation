@@ -511,8 +511,8 @@ def test_authorized_source_upload_and_readback_resume_original_build_cover(
     executable, redis_client, wire
 ):
     from app.modules.accounts.models import BCAccountAccess
+    from app.modules.builds.cover_execution import recover_cover_results
     from app.modules.builds.dependency_waits import wake_material_dependencies
-    from app.modules.builds.execution import process_step
     from app.modules.materials.models import AccountMaterial
     from app.modules.materials.routes import load_material_route
     from tests.modules.builds.test_drafts import account
@@ -651,18 +651,24 @@ def test_authorized_source_upload_and_readback_resume_original_build_cover(
         assert job.status == "READY", job.error_code
         assert db.get(AccountMaterial, job.asset_id).image_id == "target-image"
     assert sum(call[0] == "POST" for call in wire[0]) == 2
-    assert wake_material_dependencies(database_engine=engine) == 1
     with Session(engine) as db:
-        revision = db.get(ExecutionStep, step_id).dispatch_revision
-    assert (
-        process_step(
-            database_engine=engine,
-            redis_client=redis_client,
-            context=context,
-            step_id=step_id,
-            revision=revision,
+        step = db.get(ExecutionStep, step_id)
+        # 授权补发只把原批次素材步骤接回等待，不提前落定、也不制造投递。
+        assert (step.status, step.error_code, step.dispatch_id) == (
+            "PENDING",
+            "cover_pending",
+            None,
         )
-        == "SUCCEEDED"
-    )
+    calls = len(wire[0])
+    # 封面已明确 READY：唤醒器只恢复真正 UNKNOWN 的投递，不再为终态制造
+    # 一次本地 Step 投递；由封面恢复器完整核验后直接落定原步骤。
+    assert wake_material_dependencies(database_engine=engine) == 0
+    assert recover_cover_results(database_engine=engine) == 1
     with Session(engine) as db:
-        assert db.get(ExecutionStep, step_id).status == "SUCCEEDED"
+        step = db.get(ExecutionStep, step_id)
+        assert (step.status, step.dispatch_id) == ("SUCCEEDED", None)
+        assert step.resolved["mapping"]["image_id"] == "target-image"
+        # 旧 UNKNOWN 代保持原样，不被新代结果覆盖。
+        assert db.get(MaterialCoverJob, old_id).status == "UNKNOWN"
+    # 落定只读本地已核验事实，不再调用远端，更不会重复上传或共享。
+    assert len(wire[0]) == calls

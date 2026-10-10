@@ -11,6 +11,7 @@ def test_skipped_material_migration_preserves_empty_historical_selection(monkeyp
     ):
         command.upgrade(config, "preview_skipped_materials")
         assert "preview_skipped_material" in inspect(engine).get_table_names()
+        command.upgrade(config, "head")
         command.check(config)
         command.downgrade(config, "material_seed_generations")
         assert "preview_skipped_material" not in inspect(engine).get_table_names()

@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 from sqlmodel import Session, select
 
 from app.core.errors import DomainError
@@ -5,16 +7,19 @@ from app.modules.builds.dependency_waits import wake_material_dependencies
 from app.modules.builds.execution_models import (
     ExecutionStep,
     Submission,
-    SubmissionUnit,
 )
 from app.modules.builds.material_execution import (
     plan_material_slice,
     recover_material_results,
 )
 from app.modules.builds.preview_materials import frozen_ad_material_ids
-from app.modules.builds.preview_models import PlannedAd, PlannedGroup
+from app.modules.builds.preview_models import BuildUnit, PlannedAd, PlannedGroup
 from app.modules.builds.routes import load_preview_route
-from app.modules.materials.models import AccountMaterial, MaterialDistribution
+from app.modules.materials.models import (
+    AccountMaterial,
+    MaterialDistribution,
+    MaterialFile,
+)
 from tests.modules.builds.test_execution import executable as executable
 from tests.modules.builds.test_recovery_materials import unknown_material
 
@@ -70,9 +75,11 @@ def test_shared_material_slice_is_deduplicated_and_ad_reads_stay_frozen(
         assert len(steps) >= 2
         material_id = steps[0].material_id
         assert material_id is not None
-        for step in steps[:2]:
-            step.material_id = material_id
-            session.add(step)
+        session.get(MaterialFile, material_id).video_md5 = "a" * 32
+        # Seed a second frozen reference rather than mutate immutable intent.
+        session.add(ExecutionStep(**(steps[0].model_dump() | {
+            "id": uuid4(), "step_key": "duplicate-material-reference", "dispatch_id": None
+        })))
         # 删除现成目标 VID，使 plan_material_slice 进入真实 ensure_target_assets 路径。
         for asset in session.exec(
             select(AccountMaterial).where(
@@ -120,13 +127,7 @@ def test_shared_material_slice_is_deduplicated_and_ad_reads_stay_frozen(
         assert anchor is not None
         submission = session.get(Submission, anchor.submission_id)
         assert submission is not None
-        unit = session.exec(
-            select(SubmissionUnit).where(
-                SubmissionUnit.tenant_id == context.tenant_id,
-                SubmissionUnit.submission_id == anchor.submission_id,
-                SubmissionUnit.unit_id == anchor.unit_id,
-            )
-        ).one()
+        unit = session.get(BuildUnit, anchor.unit_id)
         assert unit is not None
         ads = session.exec(
             select(PlannedAd)

@@ -16,7 +16,7 @@ from app.modules.builds.models import DraftAccount
 from app.modules.builds.preview_models import BuildPreview
 from app.modules.builds.preview_tasks import repair_previews
 from tests.modules.builds.test_drafts import account
-from tests.modules.builds.test_previews import drain
+from tests.modules.builds.test_previews import drain, seed_targeting_directory
 from tests.modules.builds.test_previews import prepared as prepared
 
 
@@ -45,6 +45,7 @@ def test_503_accounts_expand_every_drama_without_bulk_account_materialization(
             )
         )
     session.flush()
+    seed_targeting_directory(session, context, [f"extra-{i:04}" for i in range(500)])
     identity = previews.generate_preview(
         session, context=context, draft_id=prepared, expected_revision=1
     )

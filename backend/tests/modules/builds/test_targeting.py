@@ -1,5 +1,6 @@
 """定向选择不被丢弃，平台回读只比较实际观察字段。"""
 
+from dataclasses import replace
 from uuid import uuid4
 
 import pytest
@@ -170,11 +171,12 @@ def test_targeting_resolves_only_the_common_country_ids_and_blocks_unavailable()
     assert "targeting_regions_unavailable" in bad.reason_codes
 
     minis_automatic_only = targeting.apply_targeting(
-        scene.model_copy(
-            update={"field_constraints": {
+        replace(
+            scene,
+            field_constraints={
                 **scene.field_constraints,
                 "targeting_optimization_modes": ("AUTOMATIC",),
-            }}
+            },
         ),
         AudienceTargeting(gender="GENDER_FEMALE"),
         ["US"],
@@ -292,3 +294,15 @@ def test_invalid_country_blocks_preview_instead_of_silently_narrowing(
             expected_revision=draft.revision,
         )
     assert error.value.code == "targeting_regions_unavailable"
+
+
+def test_build_arguments_reject_unrecognized_channel_before_send():
+    from app.integrations.tiktok.contracts.common import RemoteCallError
+    from app.modules.builds.request_compiler import create_arguments, decode_intent
+
+    with pytest.raises(RemoteCallError) as caught:
+        create_arguments(
+            attempt_id=uuid4(), intent=decode_intent("ADGROUP", group_body()), channel="unknown"
+        )
+    assert caught.value.code == "invalid_build_request"
+    assert caught.value.effect == "NOT_SENT"

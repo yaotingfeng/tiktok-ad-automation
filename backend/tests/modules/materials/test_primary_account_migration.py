@@ -1,7 +1,7 @@
 """主素材账户升级只增加空选择，不搬动已上传/在途素材的实际来源。"""
 
 from alembic import command
-from sqlalchemy import inspect, text
+from sqlalchemy import MetaData, Table, inspect, text
 from sqlmodel import Session
 
 from app.modules.materials.models import MaterialAssetOperation, MaterialFile
@@ -18,6 +18,9 @@ def test_primary_account_upgrade_preserves_distributed_source_history(monkeypatc
         with Session(engine) as db, db.begin():
             context = create_context(db)
             insert_historical_bc(db, tenant_id=context.tenant_id, bc_id="old-bc")
+            operations = Table(
+                "material_asset_operation", MetaData(), autoload_with=db.connection()
+            )
             for index, status in enumerate(("succeeded", "result_unknown")):
                 file = MaterialFile(
                     tenant_id=context.tenant_id,
@@ -28,17 +31,27 @@ def test_primary_account_upgrade_preserves_distributed_source_history(monkeypatc
                 )
                 db.add(file)
                 db.flush()
-                asset = mapping(db, context, file, account=f"actual-source-{index}")
-                db.add(
-                    MaterialAssetOperation(
-                        tenant_id=context.tenant_id,
-                        bc_id=file.bc_id,
-                        material_id=file.id,
-                        advertiser_id=asset.advertiser_id,
-                        path="upload_original",
-                        status=status,
-                        request_digest=str(index) * 64,
-                        remote_response={"video_id": asset.video_id},
+                asset = mapping(
+                    db, context, file, account=f"actual-source-{index}", historical=True
+                )
+                operation = MaterialAssetOperation(
+                    tenant_id=context.tenant_id,
+                    bc_id=file.bc_id,
+                    material_id=file.id,
+                    advertiser_id=asset.advertiser_id,
+                    path="upload_original",
+                    status=status,
+                    request_digest=str(index) * 64,
+                    remote_response={"video_id": asset.video_id},
+                )
+                # 主账户迁移早于素材替代链，播种时排除后续新增列。
+                db.execute(
+                    operations.insert().values(
+                        **{
+                            key: value
+                            for key, value in operation.model_dump().items()
+                            if key in operations.c and value is not None
+                        }
                     )
                 )
         tables = ("account_material", "material_asset_operation", "material_file")

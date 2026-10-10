@@ -16,7 +16,7 @@ from tests.modules.materials.test_source_uploads import source_env as source_env
 from tests.modules.materials.test_source_uploads import wire as wire
 
 
-def test_205_identities_and_minis_are_shared_only_after_ten_complete_pages(
+def test_205_identities_and_minis_require_complete_identity_and_five_mini_pages(
     job_env, wire, redis_client
 ):
     env = job_env
@@ -26,10 +26,10 @@ def test_205_identities_and_minis_are_shared_only_after_ten_complete_pages(
         ("identity", "identity_list", "identity_id", expected[0]["identity_list"][0]),
         ("minis", "list", "minis_id", expected[1]["list"][0]),
     ):
-        for number in range(1, 6):
+        for number in (range(1, 2) if resource == "identity" else range(1, 6)):
             values = [
                 {field: f"unselected-{n}"}
-                for n in range((number - 1) * 50, min(number * 50, 205))
+                for n in (range(205) if resource == "identity" else range((number - 1) * 50, min(number * 50, 205)))
             ]
             if resource == "identity":
                 values = [
@@ -51,20 +51,22 @@ def test_205_identities_and_minis_are_shared_only_after_ten_complete_pages(
                 }
             payload = page(values, key=key, number=number, total=5)
             payload["page_info"]["total_number"] = 205
+            if resource == "identity":
+                payload["page_info"] = dict.fromkeys(payload["page_info"], 0)
             wire[1].append(payload)
             job = run(env, redis_client, job.id)
             assert job.status == "PENDING"
             assert ensure(env).state == "queued"
             assert "item_id_hashes" not in job.facts[resource]
     wire[1].extend(expected[2:])
-    for _ in range(3):
+    for _ in range(4):
         job = run(env, redis_client, job.id)
     assert job.status == "COMPLETE" and ensure(env).state == "ready"
     with Session(engine) as session:
         pages = session.exec(
             select(SceneJobPage).where(SceneJobPage.job_id == job.id)
         ).all()
-        assert len(pages) == 13
+        assert len(pages) == 10
         from app.modules.builds.mini_selection import catalog_options
 
         assert catalog_options(session, job, page=5)[0]["name"] == "Last page"
@@ -72,13 +74,16 @@ def test_205_identities_and_minis_are_shared_only_after_ten_complete_pages(
             catalog_options(session, job, minis_id="last-page-mini")[0]["name"]
             == "Last page"
         )
-        assert all(len(p.facts.get("item_id_hashes", [])) <= 50 for p in pages)
-    assert len(wire[0]) == 14
+        assert all(
+            len(p.facts.get("item_id_hashes", [])) <= 50
+            for p in pages if p.resource != "identity"
+        )
+    assert len(wire[0]) == 11
 
 
 @pytest.mark.parametrize(
     "resource,key,field",
-    [("identity", "identity_list", "identity_id"), ("minis", "list", "minis_id")],
+    [("minis", "list", "minis_id")],
 )
 def test_duplicate_in_any_earlier_page_keeps_shared_job_failed(
     job_env, wire, redis_client, resource, key, field
@@ -132,7 +137,7 @@ def test_scene_ttl_keeps_first_observation_and_does_not_extend_at_completion(
     job = run(env, redis_client, job.id)
     first, expiry = job.first_observed_at, job.expires_at
     wire[1].extend(responses(env)[1:])
-    for _ in range(4):
+    for _ in range(5):
         job = run(env, redis_client, job.id)
     assert job.first_observed_at == first and job.expires_at == expiry
     assert job.completed_at > first
@@ -144,3 +149,18 @@ def test_scene_ttl_keeps_first_observation_and_does_not_extend_at_completion(
     assert renewed.state == "queued" and renewed.job_id != job.id
     with Session(engine) as session:
         assert session.get(SceneJob, renewed.job_id).first_observed_at is None
+
+
+def test_partial_paginated_identity_response_is_rejected(job_env, wire, redis_client):
+    env = job_env
+    job = ready_for_get(env, wire, redis_client)
+    payload = responses(env)[0]
+    payload["page_info"].update(total_page=2, total_number=51)
+    wire[1].append(payload)
+    job = run(env, redis_client, job.id)
+    assert job.status == "FAILED"
+    assert job.error_code == "scene_response_unverified"
+    with Session(engine) as session:
+        assert session.exec(
+            select(SceneJobPage).where(SceneJobPage.job_id == job.id)
+        ).first() is None

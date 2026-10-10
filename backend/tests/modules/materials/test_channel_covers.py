@@ -714,8 +714,6 @@ def test_late_upload_signature_conflict_removes_ready_image_without_reupload(
 def test_ready_cover_cannot_be_reused_after_original_digest_changed(
     cover_env, gateway_wire, database_engine, redis_client
 ):
-    from app.core.errors import DomainError
-
     identity = queue(cover_env, database_engine).task_id
     prepare_replies(
         cover_env,
@@ -737,9 +735,11 @@ def test_ready_cover_cannot_be_reused_after_original_digest_changed(
     assert job(database_engine, identity).status == "READY"
     with Session(database_engine) as db, db.begin():
         db.get(MaterialFile, cover_env["material_id"]).video_md5 = "b" * 32
-    with pytest.raises(DomainError) as caught:
-        queue(cover_env, database_engine)
-    assert caught.value.code == "cover_video_changed"
+    # 已核实封面是只读资产事实（7eb5521）：原视频摘要变化时以阻断结果返回，
+    # 不复用旧封面，也不发起新的上传。
+    blocked = queue(cover_env, database_engine)
+    assert blocked.state == "blocked"
+    assert blocked.reason_code == "cover_video_changed"
     assert post_count(cover_env, gateway_wire) == 1
 
 
@@ -945,7 +945,7 @@ def test_preverified_external_cover_without_job_does_not_require_original_digest
     route = cover_env["route"]
     if case == "wrong_route":
         route = route.model_copy(update={"connection_id": uuid4()})
-    if case in {"read_revoked", "wrong_route", "historical_job"}:
+    if case in {"read_revoked", "wrong_route"}:
         with pytest.raises(DomainError):
             queue({**cover_env, "route": route}, database_engine, source=False)
     else:

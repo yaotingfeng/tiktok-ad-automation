@@ -43,7 +43,12 @@ def test_repair_locks_candidate_dispatch_by_primary_key(source_env, wire):
         finally:
             event.remove(engine, "before_cursor_execute", capture)
         statement, parameters = captured[-1]
+        # 测试库里 pending_dispatch 只有寥寥几行；一旦 autovacuum 统计为近空表，
+        # 规划器会改用按主键顺序全扫的 Merge/Hash Join，与线上历史消息量下的
+        # 计划不同。这里与禁用顺序扫描同理，模拟大表代价，只检查按主键探测是否可行。
         db.execute(text("SET LOCAL enable_seqscan = off"))
+        db.execute(text("SET LOCAL enable_mergejoin = off"))
+        db.execute(text("SET LOCAL enable_hashjoin = off"))
         plan = (
             db.connection()
             .exec_driver_sql("EXPLAIN (FORMAT JSON) " + statement, parameters)
@@ -59,9 +64,15 @@ def test_repair_locks_candidate_dispatch_by_primary_key(source_env, wire):
                 for child in value:
                     yield from nodes(child)
 
+        # 只看最外层加锁节点之下的扫描：候选 CTE 内部的主键探测不能代替
+        # 实际 FOR UPDATE 行按消息主键定位。
+        lock_rows = [
+            node for node in nodes(plan) if node.get("Node Type") == "LockRows"
+        ]
+        assert len(lock_rows) == 1, plan
         indexed = [
             node
-            for node in nodes(plan)
+            for node in nodes(lock_rows[0])
             if node.get("Relation Name") == "pending_dispatch" and "Index Cond" in node
         ]
         assert any("id =" in node["Index Cond"] for node in indexed), indexed

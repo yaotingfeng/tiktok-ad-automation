@@ -131,19 +131,21 @@ def test_preview_drama_groups_and_unit_filters_are_server_scoped(
 
 
 def test_legacy_preview_summary_falls_back_to_group_materials_for_ad_allocations(
-    session, client, context, prepared
+    session, client, context, prepared, monkeypatch
 ):
+    original_digest = previews._digest_units
+
+    def digest_without_ad_allocations(db, row):
+        # Historical previews lacked these rows; construct that snapshot before
+        # freezing so the immutability guard remains active throughout the test.
+        db.execute(delete(PreviewAdMaterial).where(PreviewAdMaterial.preview_id == row.id))
+        return original_digest(db, row)
+
+    monkeypatch.setattr(previews, "_digest_units", digest_without_ad_allocations)
     preview = previews.generate_preview(
         session, context=context, draft_id=prepared, expected_revision=1
     )
     drain(session, context, preview)
-    session.execute(
-        delete(PreviewAdMaterial).where(
-            PreviewAdMaterial.tenant_id == context.tenant_id,
-            PreviewAdMaterial.preview_id == preview,
-        )
-    )
-    session.flush()
     summary = previews.get_preview_summary(
         session, context=context, preview_id=preview
     )

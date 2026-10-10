@@ -625,6 +625,7 @@ def test_503_accounts_submit_only_header_and_expand_at_most_100_facts(
     from app.modules.builds.execution_models import SubmissionUnit
     from app.modules.builds.models import DraftAccount
     from tests.modules.builds.test_drafts import account
+    from tests.modules.builds.test_previews import seed_targeting_directory
 
     for index in range(500):
         identity = f"capacity-{index:04}"
@@ -645,6 +646,7 @@ def test_503_accounts_submit_only_header_and_expand_at_most_100_facts(
             )
         )
     session.flush()
+    seed_targeting_directory(session, context, [f"capacity-{i:04}" for i in range(500)])
     preview = previews.generate_preview(
         session, context=context, draft_id=prepared, expected_revision=1
     )

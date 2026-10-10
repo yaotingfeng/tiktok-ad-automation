@@ -51,7 +51,7 @@ def test_preview_readiness_requires_scene_currency_and_every_material_path():
     assert unit_readiness("USD", "USD", [], []) == "BLOCKED"
 
 
-def seed_targeting_directory(session, context, advertisers, minis_id="fixture-mini"):
+def seed_targeting_directory(session, context, advertisers, minis_id="fixture-mini", route=None):
     # 持久化离线目录，预览/执行继续使用合成场景，绝不调用真实 TikTok。
     from datetime import UTC, datetime, timedelta
 
@@ -59,7 +59,7 @@ def seed_targeting_directory(session, context, advertisers, minis_id="fixture-mi
     from app.modules.builds.scene import scene_scope_basis
     from app.modules.builds.scene_job_models import SceneJob, SceneJobPage
 
-    route = freeze_route(session, context=context, bc_id="bc-draft")
+    route = route or freeze_route(session, context=context, bc_id="bc-draft")
     for advertiser in advertisers:
         basis = scene_scope_basis(
             route=route,
@@ -138,7 +138,7 @@ def prepared(session, context, intent, monkeypatch):
             session,
             context=context,
             strategy_id=version.strategy_id,
-            config=config(budget="100", creative_count=2),
+            config=config(budget="100", ads_per_group=1, creative_count=2),
         ),
         drama_lines=["Moon", "Short Drama"],
         account_lines=["A", "B", "C"],
@@ -562,7 +562,9 @@ def test_strategy_structure_matrix_persists_material_ads_and_frozen_contract(
     ).all()
     assert len({(row.drama_id, row.group_no) for row in groups}) == expected_groups * 2
     assert len(ads) == expected_ads * 2 * 3  # 两剧三账户，每个组合都完整冻结。
-    assert mappings and len({row.material_id for row in mappings}) == 20
+    assert mappings
+    for drama_id in {row.drama_id for row in mappings}:
+        assert len({row.material_id for row in mappings if row.drama_id == drama_id}) == 20
     assert all(ad.cta_option_ids == ["cta-1"] for ad in ads)
     # 每个 drama/group 的冻结素材顺序是广告结构的输入合同；组间必须互斥。
     group_material_ids = {}
@@ -579,7 +581,10 @@ def test_strategy_structure_matrix_persists_material_ads_and_frozen_contract(
         ]
         for index, left in enumerate(drama_groups):
             for right in drama_groups[index + 1 :]:
-                assert set(left).isdisjoint(right)
+                if changes["group_material_allocation"] == "SHARED":
+                    assert left == right
+                else:
+                    assert set(left).isdisjoint(right)
 
     from app.modules.builds.request_compiler import ad_assets, compile_request
 
@@ -635,7 +640,7 @@ def test_strategy_structure_matrix_persists_material_ads_and_frozen_contract(
             assert "budget" not in adgroup_body
         else:
             assert campaign_body["budget_mode"] == "BUDGET_MODE_INFINITE"
-            assert "budget" not in campaign_body
+            assert campaign_body["budget"] == 0
             assert adgroup_body["budget_mode"] == "BUDGET_MODE_DYNAMIC_DAILY_BUDGET"
             assert "budget" in adgroup_body
         if changes["bid_strategy"] == "HIGHEST_VALUE":
@@ -644,7 +649,7 @@ def test_strategy_structure_matrix_persists_material_ads_and_frozen_contract(
             assert "roas_bid" not in adgroup_body
         else:
             assert adgroup_body["deep_bid_type"] == "VO_MIN_ROAS"
-            assert adgroup_body["roas_bid"] == "1.08"
+            assert Decimal(adgroup_body["roas_bid"]) == Decimal("1.08")
 
     # 每条冻结广告都必须把自己的素材集合编译成带视频与封面的 creative_list；
     # 这里仍使用本地目标资产证据，不发起平台请求。

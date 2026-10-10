@@ -4,7 +4,6 @@ from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
-from app.modules.accounts.models import AdvertiserAccount
 from app.modules.ads.models import AdObject
 from tests.migration_database import historical_database
 from tests.modules.conftest import create_context
@@ -14,8 +13,13 @@ def test_additive_upgrade_constraints_and_safe_downgrade(monkeypatch):
     with historical_database(monkeypatch, "material_push") as (engine, config):
         with Session(engine) as session, session.begin():
             context = create_context(session)
-            account = AdvertiserAccount(tenant_id=context.tenant_id, advertiser_id="a")
-            session.add(account)
+            # 历史版本不具备当前 ORM 后加字段；仅按该版本实际列准备旧数据。
+            session.execute(
+                text("INSERT INTO advertiser_account "
+                     "(tenant_id, advertiser_id, name, currency, timezone, remote_status, ownership_conflict) "
+                     "VALUES (:tenant_id, 'a', '', '', '', 'UNKNOWN', false)"),
+                {"tenant_id": context.tenant_id},
+            )
         command.upgrade(config, "ads_reporting_data")
         assert {
             "ad_object",

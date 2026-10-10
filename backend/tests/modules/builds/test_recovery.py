@@ -346,7 +346,7 @@ def test_501_real_frozen_ads_resume_in_bounded_pages_and_duplicate_delivery(exec
                 session,
                 context=context,
                 strategy_id=version.strategy_id,
-                config=config(group_size=1, creative_count=30),
+                config=config(max_materials_per_group=1, ads_per_group=30),
             ),
             "drama_lines": ["Moon"],
             "account_lines": ["account-A"],

@@ -503,7 +503,8 @@ def test_rebound_distribution_runs_native_share_and_publishes_only_verified_targ
             old.model_dump(),
             db.get(MaterialAssetOperation, old.operation_id).model_dump(),
         ) == old_evidence
-    assert [method for method, _ in calls] == ["GET", "POST", "GET"]
+    # Verify the source candidate on the target before searching its actual VID.
+    assert [method for method, _ in calls] == ["GET", "POST", "GET", "GET"]
 
 
 @pytest.mark.parametrize("rejected_material", ["batch"], indirect=True)

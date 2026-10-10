@@ -10,7 +10,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
 from app.modules.accounts.models import (
-    AdvertiserAccount,
     BCAccountAccess,
     TikTokConnection,
 )
@@ -23,7 +22,11 @@ from app.modules.materials.models import (
     MaterialFile,
     UploadBatch,
 )
-from tests.migration_database import historical_database, insert_historical_bc
+from tests.migration_database import (
+    historical_database,
+    insert_historical_account,
+    insert_historical_bc,
+)
 from tests.modules.conftest import create_context
 
 ROUTES = {
@@ -47,13 +50,9 @@ def test_history_is_preserved_and_new_route_evidence_cannot_be_rewritten_or_drop
             conn = TikTokConnection(tenant_id=context.tenant_id, status="ACTIVE")
             scope = {"tenant_id": context.tenant_id, "bc_id": "historical-material-bc"}
             insert_historical_bc(db, **scope)
-            db.add_all(
-                [
-                    conn,
-                    AdvertiserAccount(
-                        tenant_id=context.tenant_id, advertiser_id="actual-source"
-                    ),
-                ]
+            db.add(conn)
+            insert_historical_account(
+                db, tenant_id=context.tenant_id, advertiser_id="actual-source"
             )
             db.flush()
             # 历史绑定仅包含原有归属列，不播种后续多 BC 生命周期字段。

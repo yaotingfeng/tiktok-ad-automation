@@ -10,11 +10,13 @@ from app.modules.materials.models import MaterialDistribution
 from tests.modules.materials.test_tenant_materials import mapping, material
 
 
-def seed_routes(session, context):
+def seed_routes(session, context, *, historical=False):
     source = material(session, context, "source.mp4")
     destination = material(session, context, "target.mp4", bc="bc-b")
-    source_asset = mapping(session, context, source)
-    target_asset = mapping(session, context, destination, account="account-b")
+    source_asset = mapping(session, context, source, historical=historical)
+    target_asset = mapping(
+        session, context, destination, account="account-b", historical=historical
+    )
     routes = []
     for asset in (source_asset, target_asset):
         session.add(
@@ -97,7 +99,7 @@ def test_cross_bc_frozen_source_cannot_be_rewritten(session, route_pair):
 
 def test_upgrade_preserves_history_and_refuses_unsafe_downgrade(monkeypatch):
     from alembic import command
-    from sqlalchemy import text
+    from sqlalchemy import MetaData, Table, text
     from sqlmodel import Session
 
     from tests.migration_database import historical_database
@@ -108,7 +110,10 @@ def test_upgrade_preserves_history_and_refuses_unsafe_downgrade(monkeypatch):
         config,
     ):
         with Session(engine) as session, session.begin():
-            values = seed_routes(session, create_context(session))
+            values = seed_routes(session, create_context(session), historical=True)
+            table = Table(
+                "material_distribution", MetaData(), autoload_with=session.connection()
+            )
             historical = MaterialDistribution(
                 **{
                     **values,
@@ -117,8 +122,16 @@ def test_upgrade_preserves_history_and_refuses_unsafe_downgrade(monkeypatch):
                     "status": "blocked",
                 }
             )
-            session.add(historical)
-            session.flush()
+            # 旧版本尚无替代链字段，仅播种该迁移之前的真实列。
+            session.execute(
+                table.insert().values(
+                    **{
+                        key: value
+                        for key, value in historical.model_dump().items()
+                        if key in table.c and value is not None
+                    }
+                )
+            )
             identity = historical.id
             before = session.execute(
                 text("SELECT to_jsonb(d) FROM material_distribution d WHERE id=:id"),
@@ -139,7 +152,16 @@ def test_upgrade_preserves_history_and_refuses_unsafe_downgrade(monkeypatch):
         command.downgrade(config, "preview_skipped_materials")
         command.upgrade(config, "material_route_scope")
         with Session(engine) as session, session.begin():
-            session.add(MaterialDistribution(**values))
+            row = MaterialDistribution(**values)
+            session.execute(
+                table.insert().values(
+                    **{
+                        key: value
+                        for key, value in row.model_dump().items()
+                        if key in table.c and value is not None
+                    }
+                )
+            )
         with pytest.raises(RuntimeError, match="cross-BC evidence"):
             command.downgrade(config, "preview_skipped_materials")
         with engine.connect() as db:

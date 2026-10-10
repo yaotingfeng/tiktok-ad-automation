@@ -162,6 +162,7 @@ def test_remote_identity_upsert_ignores_channel_but_separates_account_and_kind(
     session.flush()
     rows = session.exec(
         select(AdObject)
+        .where(AdObject.tenant_id == seed.context.tenant_id)
         .order_by(AdObject.advertiser_id, AdObject.kind)
         .execution_options(populate_existing=True)
     ).all()

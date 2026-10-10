@@ -42,6 +42,11 @@ from app.modules.accounts.capabilities import (
     start_capability_refresh,
 )
 from app.modules.accounts.capability_models import CapabilityJob
+from app.modules.accounts.connection_models import (
+    BCConnectionBinding,
+    BCDefaultRoute,
+    ConnectionAuthorization,
+)
 from app.modules.accounts.models import (
     AdvertiserAccount,
     BCAccountAccess,
@@ -49,8 +54,10 @@ from app.modules.accounts.models import (
     TikTokConnection,
 )
 from app.modules.accounts.router import get_accounts
+from app.modules.accounts.routing import freeze_route
 from app.modules.builds.drafts import continue_draft, create_draft, prepare_draft
 from app.modules.builds.execution_models import ExecutionStep, Submission
+from app.modules.builds.mini_targets import MiniTarget, url_key
 from app.modules.builds.models import BuildDraft, DraftPreparation
 from app.modules.builds.preview_models import (
     BuildUnit,
@@ -111,11 +118,22 @@ class Transport:
         self.calls: Counter[str] = Counter()
         self.scopes: dict[str, Scope] = {}
 
+    def bc_for(self, advertiser_id: str) -> str:
+        matches = [
+            bc
+            for bc, scope in self.scopes.items()
+            if advertiser_id.startswith(scope.account_prefix + "-")
+        ]
+        assert len(matches) == 1, "Unknown synthetic advertiser"
+        return matches[0]
+
     def sdk(self, _pool: Any, method: str, url: str, **kwargs: Any) -> HTTPResponse:
         from urllib.parse import urlsplit
 
         path = urlsplit(url).path
-        assert method == "GET", "Capacity harness forbids all TikTok writes"
+        assert method == "GET", (
+            f"Capacity harness forbids all TikTok writes: {method} {path}"
+        )
         self.calls[path] += 1
         query = dict(kwargs.get("fields", []))
         if path.endswith("/bc/asset/get/"):
@@ -146,7 +164,10 @@ class Transport:
                     {
                         "identity_id": "capacity-identity",
                         "identity_type": "BC_AUTH_TT",
-                        "identity_authorized_bc_id": query["identity_authorized_bc_id"],
+                        # 身份读取只携带 advertiser_id；按合成账户前缀找到所属 BC。
+                        "identity_authorized_bc_id": self.bc_for(
+                            query["advertiser_id"]
+                        ),
                         "available_status": "AVAILABLE",
                         "can_push_video": True,
                         "is_gpppa": False,
@@ -202,6 +223,17 @@ class Transport:
                     },
                 ],
             }
+        elif path.endswith("/smart_plus/adgroup/get/"):
+            # Budget resource - return empty list to indicate no budget constraints
+            data = {
+                "list": [],
+                "page_info": {
+                    "page": 1,
+                    "page_size": 50,
+                    "total_page": 1,
+                    "total_number": 0,
+                },
+            }
         else:
             raise AssertionError("Unrecognized SDK capacity read")
         return HTTPResponse(
@@ -225,7 +257,7 @@ class Transport:
                 "code": "0000",
                 "data": {
                     "data": [
-                        {"video_id": str(number), "name": title, "language": "en"}
+                        {"video_id": str(number + 1), "name": title, "language": "en"}
                     ],
                     "count": 1,
                 },
@@ -253,10 +285,17 @@ def offline_runtime(transport: Transport) -> Iterator[Redis]:
             "lease_ms": 60000,
         },
         "endpoints": {
-            "/open_api/v1.3/file/video/ad/upload/": {
+            # 准入策略按逻辑操作名覆盖（与验收场景一致），不再使用旧 SDK URL 键；
+            # 上传/共享需覆盖 900 秒工作进程硬限。
+            "materials.share_assets": {"lease_ms": 970000},
+            "materials.upload_video_file": {
                 "lease_ms": 970000,
                 "endpoint_max_inflight": 1,
-            }
+            },
+            "materials.upload_video_url": {
+                "lease_ms": 970000,
+                "endpoint_max_inflight": 1,
+            },
         },
     }
     original_resolve = socket.getaddrinfo
@@ -361,6 +400,37 @@ def seed_inventory(engine: Engine, parameters: Parameters, label: str = "t1") ->
         )
         session.add_all([conn, provider])
         session.flush()
+        # 明确的合成授权/BC 选择是初始输入；能力和场景仍由真实 worker 从 HTTP 取证。
+        session.add(
+            BCConnectionBinding(
+                tenant_id=tenant.id,
+                bc_id=bc,
+                connection_id=conn.id,
+                kind=conn.kind,
+            )
+        )
+        session.flush()
+        session.add_all(
+            [
+                BCDefaultRoute(tenant_id=tenant.id, bc_id=bc, connection_id=conn.id),
+                ConnectionAuthorization(
+                    tenant_id=tenant.id,
+                    connection_id=conn.id,
+                    authorization_revision=conn.authorization_revision,
+                    issuer="https://business-api.tiktok.com",
+                    resource="https://business-api.tiktok.com/open_api/v1.3",
+                    scopes=["2", "6"],
+                    source="SYNTHETIC_VERIFIED_EVIDENCE",
+                    permission_summary={
+                        "read_authorized": True,
+                        "build_authorized": True,
+                        "upload_authorized": True,
+                    },
+                    verified_at=datetime.now(UTC),
+                ),
+            ]
+        )
+        session.flush()
         app = ProviderApplication(
             tenant_id=tenant.id,
             connection_id=provider.id,
@@ -380,9 +450,18 @@ def seed_inventory(engine: Engine, parameters: Parameters, label: str = "t1") ->
             config=StrategyConfig(
                 budget=Decimal("100"),
                 currency="USD",
+                bid_strategy="TARGET_ROAS",
                 target_roas=Decimal("1.2"),
-                group_size=parameters.group_size,
-                creative_count=parameters.creative_count,
+                # 通用策略合同：group_size 表示每组素材上限，creative_count 表示
+                # 每组共用素材的固定广告数；与历史配置读取边界的投影一致。
+                group_generation_mode="BY_MATERIAL",
+                group_count=None,
+                group_material_allocation=None,
+                max_materials_per_group=parameters.group_size,
+                ad_generation_mode="FIXED",
+                ads_per_group=parameters.creative_count,
+                ad_material_allocation="SHARED",
+                max_materials_per_ad=None,
                 copy_pool_version=POOL_VERSION,
             ),
         )
@@ -445,7 +524,10 @@ def seed_inventory(engine: Engine, parameters: Parameters, label: str = "t1") ->
                 tenant_id=context.tenant_id,
                 connection_id=provider.id,
                 application_id=app.external_id,
-                external_drama_id=str(number),
+                # 广告命名要求版权方数字编号为正整数；嘉书以 video_id 同时作为
+                # 技术与展示编号，因此合成 video_id 从 1 开始并与搜索响应一致。
+                external_drama_id=str(number + 1),
+                display_drama_id=str(number + 1),
                 title=title,
                 language="en",
             )
@@ -460,7 +542,7 @@ def seed_inventory(engine: Engine, parameters: Parameters, label: str = "t1") ->
                     context.tenant_id,
                     provider.id,
                     app.external_id,
-                    str(number),
+                    str(number + 1),
                     {"episode": 1},
                 ),
                 config={"episode": 1},
@@ -471,6 +553,17 @@ def seed_inventory(engine: Engine, parameters: Parameters, label: str = "t1") ->
             )
             session.add(link)
             session.flush()
+            # 添加 MiniTarget 记录，将 link URL 映射到 minis_id
+            link_url = f"https://example.com/capacity/{number}"
+            mini_target = MiniTarget(
+                tenant_id=context.tenant_id,
+                url_digest=url_key(link_url),
+                minis_id="capacity-minis",
+                source="USER",
+                actor_id=context.actor_id,
+                confirmed_at=datetime.now(UTC),
+            )
+            session.add(mini_target)
             if number == 0:
                 scope.first_link = link.id
             for material_number in range(parameters.materials_per_drama):
@@ -555,12 +648,19 @@ def bootstrap(
     started = perf_counter()
     for number in range(target_count):
         with Session(engine) as session, session.begin():
+            route = freeze_route(
+                session,
+                context=scope.context,
+                bc_id=scope.bc_id,
+                connection_id=scope.connection_id,
+            )
             prep = ensure_scene_preparation(
                 session,
                 context=scope.context,
                 bc_id=scope.bc_id,
                 advertiser_id=scope.account(number),
                 link_id=scope.first_link,
+                route=route,
             )
         assert prep.job_id
         for _ in range(10):
@@ -568,7 +668,9 @@ def bootstrap(
                 scene_job = session.get(SceneJob, prep.job_id)
                 assert scene_job is not None
                 if scene_job.status != "PENDING":
-                    assert scene_job.status == "COMPLETE", scene_job.error_code
+                    assert scene_job.status == "COMPLETE", (
+                        f"Scene job failed: {scene_job.error_code}"
+                    )
                     break
                 revision = scene_job.revision
             process_scene_job(
@@ -578,16 +680,13 @@ def bootstrap(
                 actor_id=scope.context.actor_id,
                 payload={"job_id": str(scene_job.id), "revision": revision},
             )
-        with Session(engine) as session, session.begin():
-            assert (
-                ensure_scene_preparation(
-                    session,
-                    context=scope.context,
-                    bc_id=scope.bc_id,
-                    advertiser_id=scope.account(number),
-                    link_id=scope.first_link,
-                ).state
-                == "ready"
+        with Session(engine) as session:
+            scene_job = session.get(SceneJob, prep.job_id)
+            assert scene_job is not None and scene_job.status == "COMPLETE", (
+                f"Scene preparation did not complete: {scene_job.status}, "
+                f"error_code={scene_job.error_code}, "
+                f"resource={scene_job.resource}, "
+                f"next_page={scene_job.next_page}"
             )
         if (number + 1) % 100 == 0:
             recorder.progress(

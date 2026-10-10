@@ -217,6 +217,7 @@ def test_wake_waiting_for_consumer_lock_schedules_followup(executable):
         if (
             statement.startswith("SELECT submission_unit.")
             and "FOR UPDATE" in statement
+            and "SKIP LOCKED" not in statement  # Pause the consumer, not slice planning.
             and not consumer_locked.is_set()
         ):
             consumer_locked.set()

@@ -62,9 +62,13 @@ def test_parallel_aliases_seed_once_then_share_three_targets_and_reuse_for_fourt
         [info(), [{"video_id": "primary-vid", "material_id": "primary-mid"}]]
     )
     run(seed_env, redis_client, seed_id, kind="prepare")
-    wire[1].append(info(vid="primary-vid", material_id="primary-mid"))
+    # 上传成功回执即可信任：种子在 prepare 后直接 ready，不再自动回读。
+    assert state(seed_id)[0].status == "ready"
+    assert [call[0] for call in wire[0]] == ["GET", "POST"]
+    # 重复投递的核实消息不能再访问远端，更不能再次上传。
     run(seed_env, redis_client, seed_id)
     assert state(seed_id)[0].status == "ready"
+    assert len(wire[0]) == 2
     for index, result in enumerate(prepared):
         wire[1].extend(
             [
@@ -77,6 +81,9 @@ def test_parallel_aliases_seed_once_then_share_three_targets_and_reuse_for_fourt
             ]
         )
         run(seed_env, redis_client, result.task_id, kind="prepare")
+        # 共享 ACK 不等于目标可用：先按源 VID 查目标账户详情；本场景目标
+        # 账户里没有源 VID，再按持久文件名分页发现目标实际 VID。
+        wire[1].append({"list": []})
         wire[1].append(
             {
                 **info(vid=f"target-{index}", file_name="primary.mp4"),
@@ -97,3 +104,5 @@ def test_parallel_aliases_seed_once_then_share_three_targets_and_reuse_for_fourt
     assert state(next_target.task_id)[1].remote_response["transport"] == "native_share"
     uploads = [dict(c[2]["fields"]) for c in wire[0] if "/video/ad/upload/" in c[1]]
     assert [c["advertiser_id"] for c in uploads] == ["primary-b"]
+    # 每个预置的远端响应都恰好被消费，避免响应错位掩盖多余或缺失的请求。
+    assert wire[1] == []

@@ -123,7 +123,7 @@ def test_historical_upgrade_preserves_rows_and_refuses_cross_bc_downgrade(monkey
         with Session(engine) as db, db.begin():
             owner = create_context(db)
             file = material(db, owner, "historical.mp4")
-            asset = mapping(db, owner, file)
+            asset = mapping(db, owner, file, historical=True)
             before = {
                 table: db.execute(
                     text(f"SELECT to_jsonb(t) FROM {table} t ORDER BY id")
@@ -193,7 +193,7 @@ def test_seed_upgrade_starts_empty_and_preserves_previous_distribution(monkeypat
         with Session(engine) as db, db.begin():
             owner = create_context(db)
             file = material(db, owner, "before-seed.mp4")
-            asset = mapping(db, owner, file)
+            asset = mapping(db, owner, file, historical=True)
             identity = uuid4()
             db.execute(
                 text(
@@ -254,7 +254,7 @@ def test_seed_generation_upgrade_preserves_old_jobs_and_guards_downgrade(
         with Session(engine) as db, db.begin():
             owner = create_context(db)
             file = material(db, owner, "old-seed.mp4")
-            asset = mapping(db, owner, file)
+            asset = mapping(db, owner, file, historical=True)
             distribution_id, seed_id = uuid4(), uuid4()
             values = {
                 "id": distribution_id,

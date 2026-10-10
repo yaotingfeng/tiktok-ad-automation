@@ -113,7 +113,7 @@ def test_group_limit_applies_to_retained_materials_not_skipped_ones(
         session.exec(
             select(DraftGroupMaterial.material_id).where(
                 DraftGroupMaterial.draft_id == prepared,
-                DraftGroupMaterial.position == 1,
+                DraftGroupMaterial.position.in_([1, 11, 21]),
             )
         ).all()
     )

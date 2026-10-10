@@ -487,7 +487,10 @@ def test_management_queue_is_registered_with_one_slot():
 
     assert dispatch_queue("ad_management.execute") == "ad-management"
     assert celery_app.conf.task_routes["ad_management.execute"]["queue"] == "ad-management"
-    assert "--concurrency 1" in open("deploy/staging-ad-management.service").read()
+    from pathlib import Path
+
+    service = Path(__file__).resolve().parents[4] / "deploy/staging-ad-management.service"
+    assert "--concurrency 1" in service.read_text()
 
 
 def test_terminal_task_dispatches_durable_refresh_pending_item(c5_env, monkeypatch):

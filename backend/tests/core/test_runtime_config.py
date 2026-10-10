@@ -1,3 +1,8 @@
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 from cryptography.fernet import Fernet
 from pydantic import ValidationError
@@ -138,3 +143,33 @@ def test_periodic_control_messages_expire_before_next_tick():
             "synthetic-periodic-id", entry["task"], expires=expiry
         )
         assert message.headers["expires"] is not None
+
+
+@pytest.mark.parametrize("env_file", [None, "/dev/null", "explicit.env"])
+def test_settings_env_file_override_isolates_local_credentials(tmp_path, env_file):
+    # 用合成凭据验证默认加载与显式隔离，不接触开发者实际 .env。
+    backend = tmp_path / "backend"
+    backend.mkdir()
+    (tmp_path / ".env").write_text("TIKTOK_APP_SECRET=local-only-sentinel\n")
+    (backend / "explicit.env").write_text("TIKTOK_APP_SECRET=explicit-sentinel\n")
+    environment = {
+        "PATH": os.environ.get("PATH", ""),
+        "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
+        "SECRET_KEY": "test-signing-key",
+        "PROJECT_NAME": "Settings isolation test",
+        "DATABASE_URL": "postgresql://test:test@localhost/settings_test",
+        "FIRST_SUPERUSER": "admin",
+        "FIRST_SUPERUSER_PASSWORD": "test-password",
+    }
+    if env_file is not None:
+        environment["APP_ENV_FILE"] = env_file
+    expected = {None: "local-only-sentinel", "/dev/null": "", "explicit.env": "explicit-sentinel"}[env_file]
+    result = subprocess.run(
+        [sys.executable, "-c", "from app.core.config import settings; print(settings.TIKTOK_APP_SECRET)"],
+        cwd=backend,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == expected

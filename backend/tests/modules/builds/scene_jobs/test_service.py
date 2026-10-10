@@ -97,6 +97,7 @@ def responses(env):
         },
         {"vo_min_roas": "QUALIFIED"},
         region_response()["data"],
+        page([]),  # No existing dynamic-budget adgroups.
     ]
 
 
@@ -152,7 +153,7 @@ def test_confirmed_same_mini_links_share_scene_and_bc_proof(
     second = ensure(env, other_link)
     assert first.job_id == second.job_id and first.state == second.state == "queued"
     job = complete(env, wire, redis_client)
-    assert len(wire[0]) == 6  # one BC role GET, four scene assets, one targeting GET
+    assert len(wire[0]) == 7  # one BC role GET and all six scene resources
     assert all(call[0] == "GET" for call in wire[0])
     assert ensure(env, other_link).state == "ready"
     with Session(engine) as session:
@@ -179,7 +180,7 @@ def test_confirmed_same_mini_links_share_scene_and_bc_proof(
                     select(SceneJobPage).where(SceneJobPage.job_id == job.id)
                 ).all()
             )
-            == 5
+            == 6
         )
 
 
@@ -233,7 +234,7 @@ def test_changed_mini_reuses_fresh_mini_independent_scene_facts(
             "vbo",
             "regions",
         }
-    assert len(wire[0]) == 6
+    assert len(wire[0]) == 7
 
 
 def test_complete_scene_reader_is_readonly_no_credentials_or_network(
@@ -355,8 +356,8 @@ def test_missing_provider_mapping_still_discovers_named_minis(
     selected_job = run(job_env, redis_client, selected.job_id)
     assert selected_job.resource == "cta"  # 无第二次 Mini 目录读取。
     wire[1].extend(responses(job_env)[2:])
-    for _ in range(3):
+    for _ in range(4):
         selected_job = run(job_env, redis_client, selected.job_id)
     assert selected_job.status == "COMPLETE", selected_job.error_code
     assert ensure(job_env).state == "ready"
-    assert len(wire[0]) == 6
+    assert len(wire[0]) == 7

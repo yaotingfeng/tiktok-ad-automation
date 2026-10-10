@@ -198,7 +198,7 @@ def test_outbox_builds_all_layers_and_only_reads_ambiguous_creates(
             assert sum(m == "GET" for m, _ in calls) == 1
             return
         assert all(s.status == "SUCCEEDED" for s in steps), [
-            (s.kind, s.status, s.error_code) for s in steps
+            (s.kind, s.status, s.error_code) for s in steps if s.status != "SUCCEEDED"
         ]
         assert all(not s.mismatch for s in steps)
         assert session.exec(select(Submission)).one().status == "COMPLETED"
@@ -253,6 +253,7 @@ def test_pending_cover_waits_without_repeated_step_or_unit_messages(
 ):
     from app.modules.builds.dispatch import queue_step
     from app.modules.materials.cover_models import MaterialCoverJob
+    from app.modules.materials.models import AccountMaterial
     from tests.modules.builds.test_cover_execution import pending
 
     identity, job_id, _ = pending(executable, redis_client)
@@ -289,12 +290,13 @@ def test_pending_cover_waits_without_repeated_step_or_unit_messages(
         job.known_image_id = "verified-cover"
         job.request_armed_at = datetime.now(UTC)
         job.dispatch_id = None
+        session.get(AccountMaterial, job.asset_id).image_id = job.known_image_id
     repair_execution(database_engine=db)
     with Session(db) as session:
         step = session.get(ExecutionStep, identity)
-        assert step.status == "QUEUED" and step.dispatch_revision == revision + 1
+        assert step.status == "SUCCEEDED" and step.dispatch_revision == revision
         dispatch_id = step.dispatch_id
-        assert dispatch_id
+        assert dispatch_id is None
     repair_execution(database_engine=db)
     with Session(db) as session:
         assert session.get(ExecutionStep, identity).dispatch_id == dispatch_id

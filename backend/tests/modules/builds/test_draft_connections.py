@@ -12,6 +12,7 @@ from app.modules.builds.drafts import create_draft, prepare_draft, update_draft
 from app.modules.builds.models import BuildDraft, DraftPreparation
 from app.modules.builds.scene_job_models import DraftScenePreparation
 from tests.modules.builds.test_drafts import account
+from tests.modules.builds.test_previews import prepared as prepared
 
 
 def connection(session, context, *, bc_id="bc-draft"):
@@ -191,18 +192,39 @@ def test_http_draft_choice_can_be_preserved_or_explicitly_cleared(
 
 
 def test_new_preview_uses_explicit_choice_and_existing_preview_is_not_refrozen(
-    session, context, intent
+    session, context, prepared
 ):
+    from sqlmodel import select
+
+    from app.modules.accounts.connection_models import ConnectionAuthorization
+    from app.modules.accounts.models import BCAccountAccess
+    from app.modules.accounts.routing import freeze_route
+    from app.modules.builds.models import DraftAccount
     from app.modules.builds.previews import generate_preview
     from app.modules.builds.routes import load_preview_route
+    from tests.modules.builds.test_previews import seed_targeting_directory
 
+    original = session.get(BCDefaultRoute, (context.tenant_id, "bc-draft")).connection_id
     selected = connection(session, context)
-    account(session, context)
-    draft_id = create_draft(
-        session, context=context, execution_connection_id=selected, **intent
-    )
-    # 此例只核实已准备草稿创建父预览时的路由，不调用展开或广告接口。
-    session.get(BuildDraft, draft_id).status = "READY"
+    authorization = session.exec(select(ConnectionAuthorization).where(
+        ConnectionAuthorization.connection_id == original
+    )).one()
+    session.add(ConnectionAuthorization(**(authorization.model_dump() | {
+        "id": uuid4(), "connection_id": selected
+    })))
+    advertisers = []
+    for row in session.exec(select(DraftAccount).where(DraftAccount.draft_id == prepared)).all():
+        advertisers.append(row.advertiser_id)
+        grant = session.get(BCAccountAccess, (context.tenant_id, "bc-draft", row.advertiser_id, original))
+        session.add(BCAccountAccess(**(grant.model_dump() | {"connection_id": selected})))
+        row.connection_id = selected
+    session.flush()
+    seed_targeting_directory(session, context, advertisers, route=freeze_route(
+        session, context=context, bc_id="bc-draft", connection_id=selected
+    ))
+    draft_id = prepared
+    # 保留已准备链接和目标证据，只切换新预览要冻结的显式连接。
+    session.get(BuildDraft, draft_id).execution_connection_id = selected
     session.flush()
     preview = generate_preview(
         session, context=context, draft_id=draft_id, expected_revision=1

@@ -245,3 +245,26 @@ def test_gangganhao_capability_marks_payment_template_for_paid_modes(delivery_mo
 )
 def test_display_id_keeps_provider_identity_rules(kind, external, stored, attribution, expected):
     assert display_id(kind, external, stored, attribution) == expected
+
+
+@pytest.mark.parametrize("kind", ["duiba", "gangganhao", "rongliang"])
+def test_normalized_adapters_verify_receipt_identity_and_reject_config_conflict(kind):
+    import httpx
+
+    from app.modules.providers.adapters.registry import adapter_for_kind
+
+    drama = DramaCandidate(external_drama_id="drama-7", title="Moon")
+    receipt = LinkReceipt(
+        remote_id="batch-9",
+        url="https://www.tiktok.com/minis/example",
+        protected_base="campaign",
+        attribution={"name": "campaign"},
+        config={"episode_seq": 3},
+    )
+    with httpx.Client(transport=httpx.MockTransport(lambda _request: pytest.fail("unexpected network request"))) as http:
+        adapter = adapter_for_kind(kind, http, {"token": "offline-token"})
+        result = adapter.verify_link(receipt, drama, {"episode_seq": 3})
+        assert result.external_drama_id == "drama-7"
+        assert result.remote_id == "batch-9"
+        with pytest.raises(ValueError):
+            adapter.verify_link(receipt, drama, {"episode_seq": 4})

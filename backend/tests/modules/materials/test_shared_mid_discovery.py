@@ -31,6 +31,25 @@ from tests.modules.strategies.test_concurrency import (
 )
 
 
+@pytest.fixture(autouse=True)
+def source_vid_miss_before_mid_search(gateway_wire, monkeypatch):
+    import urllib3
+
+    original = urllib3.PoolManager.request
+
+    def request(pool, method, url, **kwargs):
+        data = gateway_wire["sdk_data"]["data"]
+        if "/video/ad/info/" in url and "page_info" in data:
+            gateway_wire["sdk_data"]["data"] = {"list": []}
+            try:
+                return original(pool, method, url, **kwargs)
+            finally:
+                gateway_wire["sdk_data"]["data"] = data
+        return original(pool, method, url, **kwargs)
+
+    monkeypatch.setattr(urllib3.PoolManager, "request", request)
+
+
 def search_wire(wire, names, rows, *, total_page=1, total_number=None):
     data = {
         "list": rows,
@@ -42,6 +61,12 @@ def search_wire(wire, names, rows, *, total_page=1, total_number=None):
         },
     }
     wire["sdk_data"]["data"] = data
+    # Current verification first checks source VIDs in the target, then searches
+    # missing copies by MID; both calls remain scoped and batched.
+    wire["wire"].results[names["materials.get_videos"]].clear()
+    wire["wire"].results[names["materials.get_videos"]].append(
+        {"content": [], "structuredContent": {"code": 0, "data": {"list": []}}}
+    )
     wire["wire"].results[names["materials.search_videos"]].append(
         {"content": [], "structuredContent": {"code": 0, "data": data}}
     )
@@ -129,7 +154,7 @@ def test_individually_shared_mids_use_one_scoped_read_without_batch_ledger(
     assert set(calls[0]["filtering"]["material_ids"]) == {
         row["material_id"] for row in rows
     }
-    assert len(business_calls(gateway_wire, gateway_case[1].channel)) == 1
+    assert len(business_calls(gateway_wire, gateway_case[1].channel)) == 2
     with Session(database_engine) as db:
         assert db.exec(select(MaterialUploadAttempt)).all() == []
         assert db.exec(select(MaterialShareBatchReceipt)).all() == []
@@ -166,7 +191,7 @@ def test_twenty_shared_mids_discover_actual_target_vids_in_one_read(
     for task in tasks:
         run(share_case, redis_client, task, kind="prepare")
         run(share_case, redis_client, task)
-    assert len(business_calls(gateway_wire, gateway_case[1].channel)) == before == 3
+    assert len(business_calls(gateway_wire, gateway_case[1].channel)) == before == 4
     assert_single_share(database_engine)
 
 
@@ -198,7 +223,7 @@ def test_missing_mid_retries_only_that_member_without_resharing(
     assert calls[-1]["filtering"] == {"material_ids": [rows[2]["material_id"]]}
     for task in tasks:
         run(share_case, redis_client, task, kind="prepare")
-    assert len(business_calls(gateway_wire, gateway_case[1].channel)) == 4
+    assert len(business_calls(gateway_wire, gateway_case[1].channel)) == 6
     assert_single_share(database_engine)
 
 
@@ -250,7 +275,7 @@ def test_ambiguous_or_out_of_scope_page_never_publishes_ready(
     assert len(search_calls(gateway_wire, gateway_case[1].channel, names)) == 1
     for task in tasks:
         run(share_case, redis_client, task, kind="prepare")
-    assert len(business_calls(gateway_wire, gateway_case[1].channel)) == 3
+    assert len(business_calls(gateway_wire, gateway_case[1].channel)) == 4
     assert_single_share(database_engine)
 
 
@@ -287,7 +312,7 @@ def test_twenty_by_ten_shared_rectangle_needs_only_ten_scoped_searches(
         assert set(calls[-1]["filtering"]["material_ids"]) == {
             row["material_id"] for row in rows
         }
-    assert len(business_calls(gateway_wire, gateway_case[1].channel)) == 12
+    assert len(business_calls(gateway_wire, gateway_case[1].channel)) == 22
     assert_single_share(database_engine)
     with Session(database_engine) as db:
         sources = db.exec(
@@ -361,5 +386,5 @@ def test_missing_size_keeps_actual_vid_but_requires_strict_detail_read(
     assert state(tasks[1])[0].status == "ready"
     assert state(tasks[1])[2].video_id == target_rows[1]["video_id"]
     assert len(search_calls(gateway_wire, gateway_case[1].channel, names)) == 1
-    assert len(business_calls(gateway_wire, gateway_case[1].channel)) == 5
+    assert len(business_calls(gateway_wire, gateway_case[1].channel)) == 6
     assert_single_share(database_engine)

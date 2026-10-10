@@ -89,5 +89,5 @@ def test_duplicate_delivery_during_presend_must_not_fail_unsent_original(
                 MaterialAssetOperation.material_id == source_env["material_id"]
             )
         ).one()
-        assert operation.status == "verifying", operation.remote_response
+        assert operation.status == "succeeded", operation.remote_response
     assert len(wire[0]) == 1

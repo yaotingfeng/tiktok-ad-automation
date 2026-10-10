@@ -235,11 +235,11 @@ def test_restored_actor_can_resume_with_new_job_and_old_receipt_stays_fenced(
     renewed = ensure(env)
     assert renewed.state == "queued" and renewed.job_id != job.id
     wire[1].extend(responses(env))
-    for _ in range(5):
+    for _ in range(6):
         result = run(env, redis_client, renewed.job_id)
     assert result.status == "COMPLETE"
     assert run(env, redis_client, job.id).status == "BLOCKED"
-    assert len(wire[0]) == 6
+    assert len(wire[0]) == 7
 
 
 def test_restored_authority_bootstraps_again_when_previous_capability_worker_was_blocked(
@@ -258,6 +258,6 @@ def test_restored_authority_bootstraps_again_when_previous_capability_worker_was
     run_capability(env, redis_client, job.capability_job_id)
     run_capability(env, redis_client, job.capability_job_id)
     wire[1].extend(responses(env))
-    for _ in range(5):
+    for _ in range(6):
         job = run(env, redis_client, job.id)
     assert job.status == "COMPLETE" and ensure(env).state == "ready"

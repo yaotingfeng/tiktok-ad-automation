@@ -11,7 +11,7 @@ from urllib3.response import HTTPResponse
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.common import RemoteCallError
 from app.integrations.tiktok.sdk import official_client
-from app.modules.builds.request_compiler import decode_intent
+from app.modules.builds.request_compiler import decode_intent, remote_request_id
 from tests.contracts.test_tiktok_build_contract import build_bodies
 from tests.integrations.tiktok.build_wire import sdk_build_operations
 
@@ -118,7 +118,8 @@ def test_official_method_accepts_unmodeled_dictionary(monkeypatch):
         ("ad", "smart_plus_ad_id"),
     ],
 )
-def test_actual_official_transport_serializes_each_layer(monkeypatch, kind, id_key):
+@pytest.mark.parametrize("status", ["ENABLE", "DISABLE"])
+def test_actual_official_transport_serializes_each_layer(monkeypatch, kind, id_key, status):
     from app.modules.builds.request_compiler import compile_request
 
     calls = []
@@ -129,7 +130,7 @@ def test_actual_official_transport_serializes_each_layer(monkeypatch, kind, id_k
             body=json.dumps(
                 {
                     "code": 0,
-                    "data": {id_key: "remote-1", "operation_status": "ENABLE"},
+                    "data": {id_key: "remote-1", "operation_status": status},
                     "request_id": "request-1",
                 }
             ).encode(),
@@ -143,15 +144,20 @@ def test_actual_official_transport_serializes_each_layer(monkeypatch, kind, id_k
             fixed=fixed(kind),
             resolved={"minis_id": "fixture-minis"} if kind == "adgroup" else {},
         )
+        body["operation_status"] = status
+        attempt_id = uuid4()
         result = sdk_build_operations(client).create(
-            attempt_id=uuid4(), intent=decode_intent(kind.upper(), body)
+            attempt_id=attempt_id, intent=decode_intent(kind.upper(), body)
         )
     assert result.remote_id == "remote-1" and result.evidence.request_id == "request-1"
-    assert result.operation_status == "ENABLE"
+    assert result.operation_status == status
     assert len(calls) == 1
     method, url, kwargs = calls[0]
     assert method == "POST" and url.endswith(f"/smart_plus/{kind}/create/")
-    assert json.loads(kwargs["body"]) == body
+    assert json.loads(kwargs["body"]) == (
+        {**body, "request_id": remote_request_id(attempt_id)}
+        if kind in {"campaign", "adgroup"} else body
+    )
     assert kwargs["headers"]["Access-Token"] == "fixture-token"
 
 
@@ -196,14 +202,14 @@ def test_remote_rejection_or_missing_smart_id_preserves_safe_evidence(
                 attempt_id=uuid4(), intent=decode_intent("AD", fixed("ad"))
             )
     assert (
-        caught.value.effect == "UNKNOWN"
+        caught.value.effect == ("REJECTED_NO_EFFECT" if _code == 40002 else "UNKNOWN")
         and caught.value.evidence.request_id == "request-2"
     )
     assert "fixture-token-secret" not in str(caught.value)
     assert len(calls) == 1
 
 
-def test_create_never_sends_non_enabled_status(monkeypatch):
+def test_create_never_sends_invalid_status(monkeypatch):
 
     calls = []
     monkeypatch.setattr("urllib3.PoolManager.request", lambda *a, **k: calls.append(1))
@@ -212,7 +218,7 @@ def test_create_never_sends_non_enabled_status(monkeypatch):
             sdk_build_operations(client).create(
                 attempt_id=uuid4(),
                 intent=decode_intent(
-                    "AD", {**fixed("ad"), "operation_status": "DISABLE"}
+                    "AD", {**fixed("ad"), "operation_status": "PAUSED"}
                 ),
             )
     assert not calls

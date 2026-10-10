@@ -99,7 +99,13 @@ def transport(callback=None):
         ),
     ],
 )
-def test_new_provider_kinds_accept_their_exact_credential_fields(kind, credentials):
+def test_new_provider_kinds_accept_their_exact_credential_fields(
+    kind, credentials, monkeypatch
+):
+    # 独立提供加密密钥，不依赖其他用例 fixture 遗留的模块级设置。
+    monkeypatch.setattr(
+        settings, "CONNECTION_ENCRYPTION_KEY", Fernet.generate_key().decode()
+    )
     assert kind in get_args(ProviderKind)
     with Session(engine) as session, session.begin():
         context = create_context(session, role="tenant_admin")

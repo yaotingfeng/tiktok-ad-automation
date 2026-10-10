@@ -340,8 +340,8 @@ def test_source_candidate_requires_account_inventory_without_upload(
 @pytest.mark.parametrize(
     "gateway_case", ["OFFICIAL_API", "OFFICIAL_MCP"], indirect=True
 )
-def test_legacy_build_candidate_promotion_only_queues_read(
-    cover_env, gateway_wire, database_engine, redis_client
+def test_legacy_ready_build_cover_is_reused_without_remote_calls(
+    cover_env, gateway_wire, database_engine
 ):
     identity = build_queue(cover_env, database_engine).task_id
     with Session(database_engine) as db, db.begin():
@@ -350,23 +350,14 @@ def test_legacy_build_candidate_promotion_only_queues_read(
         row.width, row.height, row.status = 360, 640, "READY"
         row.dispatch_id = None
         db.get(AccountMaterial, row.asset_id).image_id = row.candidate_image_id
+    # 已核实封面是只读资产事实（7eb5521，线上已运行）：历史 BUILD 候选已 READY 时，
+    # 来源准备直接复用当前映射，不重新上传、不额外回读，也不改写原任务。
     promoted = queue(cover_env, database_engine)
-    assert promoted.task_id == identity
-    assert job(database_engine, identity).status == "VERIFYING"
-    prepare_replies(
-        cover_env,
-        gateway_wire,
-        [
-            ("file_image_ad_info_get", image_data("old.jpg", image_id="legacy-tos-id")),
-            (
-                "file_image_ad_search",
-                search_data(image_data("renamed.jpg", image_id="alias-id")["list"]),
-            ),
-        ],
-    )
-    run(cover_env, database_engine, redis_client, identity, read=True)
+    assert promoted.state == "ready" and promoted.task_id is None
+    assert promoted.mapping.image_id == "legacy-tos-id"
     assert job(database_engine, identity).status == "READY"
     assert post_count(cover_env, gateway_wire) == 0
+    assert not gateway_wire["sdk_calls"] and not gateway_wire["wire"].calls
 
 
 @pytest.mark.parametrize(

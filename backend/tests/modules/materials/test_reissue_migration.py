@@ -31,7 +31,7 @@ def _history(db):
     )
     db.add(submission)
     file = material(db, context, "old.mp4", bc=preview.bc_id)
-    asset = mapping(db, context, file)
+    asset = mapping(db, context, file, historical=True)
     scope = {
         "tenant_id": context.tenant_id,
         "bc_id": file.bc_id,
@@ -91,7 +91,7 @@ def test_reissue_migration_preserves_unknown_history(monkeypatch):
                 ).scalar_one()
                 for table in TABLES
             }
-        command.upgrade(config, "head")
+        command.upgrade(config, "material_approved_reissue")
         with engine.connect() as db:
             for table in TABLES:
                 current = db.execute(
@@ -108,7 +108,7 @@ def database(monkeypatch):
     with historical_database(monkeypatch, "material_route_scope") as (engine, config):
         with Session(engine) as db, db.begin():
             scope, rows = _history(db)
-        command.upgrade(config, "head")
+        command.upgrade(config, "material_approved_reissue")
         yield engine, config, scope, rows
 
 

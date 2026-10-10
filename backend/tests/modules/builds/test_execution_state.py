@@ -23,7 +23,8 @@ from tests.modules.builds.test_previews import prepared as prepared
 
 
 @pytest.fixture
-def attempt(session, context, prepared):
+def attempt(session, context, prepared, request):
+    kind = getattr(request, "param", "CAMPAIGN")
     preview = generate_preview(
         session, context=context, draft_id=prepared, expected_revision=1
     )
@@ -59,7 +60,7 @@ def attempt(session, context, prepared):
         preview_id=preview,
         bc_id="bc-draft",
         unit_id=unit.unit_id,
-        kind="CAMPAIGN",
+        kind=kind,
         step_key="campaign",
         status="RUNNING",
         phase="CLAIMED",
@@ -79,7 +80,7 @@ def attempt(session, context, prepared):
         actor_id=context.actor_id,
         bc_id="bc-draft",
         advertiser_id=unit.advertiser_id,
-        kind="CAMPAIGN",
+        kind=kind,
         group_id=None,
         planned_ad_id=None,
         material_id=None,
@@ -287,24 +288,28 @@ def test_typed_receipt_keeps_attempt_and_all_safe_correlation_ids(
     }
 
 
-def test_ad_disable_receipt_without_status_waits_for_readback(session, context, attempt):
+@pytest.mark.parametrize("attempt", ["AD"], indirect=True)
+def test_ad_disable_receipt_without_status_waits_for_readback(session, attempt):
     """广告创建回执缺少状态时，不能把请求值当成平台停用事实。"""
-    from app.modules.builds.execution_state import arm_request, record_created
+    from app.modules.builds.execution_state import record_created
 
     step, claim = attempt
-    step.kind = claim.kind = "AD"
-    claim = claim.model_copy(update={"kind": "AD"})
-    arm_request(
-        session,
-        context=context,
-        claim=claim,
-        body={
-            "advertiser_id": claim.advertiser_id,
-            "adgroup_id": "group-1",
-            "ad_name": "ad-user-test",
-            "operation_status": "DISABLE",
-        },
-    )
+    # Seed the already armed receipt boundary; asset compilation has separate
+    # integration coverage and is not part of status readback reconciliation.
+    import hashlib
+    import json
+
+    step.request_body = {
+        "advertiser_id": claim.advertiser_id,
+        "adgroup_id": "group-1",
+        "ad_name": "ad-user-test",
+        "operation_status": "DISABLE",
+    }
+    step.request_body_digest = hashlib.sha256(json.dumps(
+        step.request_body, sort_keys=True, separators=(",", ":")
+    ).encode()).hexdigest()
+    step.phase = "REQUEST_ARMED"
+    session.flush()
     result = CreatedObject(
         kind="AD",
         remote_id="ad-1",

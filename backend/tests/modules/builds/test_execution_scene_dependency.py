@@ -47,7 +47,7 @@ def test_expired_scene_commits_preparation_without_arming_any_ad(
         == "PENDING"
     )
     with Session(db) as session:
-        job = session.exec(select(SceneJob)).one()
+        job = session.exec(select(SceneJob).where(SceneJob.status == "PENDING")).one()
         assert job.status == "PENDING"
         assert (
             session.get(PendingDispatch, job.dispatch_id).task_name
@@ -85,4 +85,4 @@ def test_unrecoverable_scene_dependency_is_explicit_local_failure(
         step = session.get(ExecutionStep, ids["CTA"][0])
         assert step.request_body is None
         assert step.error_code == "scene_link_unavailable"
-        assert not session.exec(select(SceneJob)).all()
+        assert not session.exec(select(SceneJob).where(SceneJob.status == "PENDING")).all()

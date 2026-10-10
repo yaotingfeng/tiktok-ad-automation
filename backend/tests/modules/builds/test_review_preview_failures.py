@@ -14,6 +14,9 @@ def test_account_revoked_after_draft_blocks_its_pairs_without_aborting_preview(
     session, context, prepared, monkeypatch
 ):
     valid_scene = previews.read_scene_context
+    identity = previews.generate_preview(
+        session, context=context, draft_id=prepared, expected_revision=1
+    )
     for grant in session.exec(
         select(BCAccountAccess).where(
             BCAccountAccess.tenant_id == context.tenant_id,
@@ -34,9 +37,6 @@ def test_account_revoked_after_draft_blocks_its_pairs_without_aborting_preview(
         )
 
     monkeypatch.setattr(previews, "read_scene_context", scene)
-    identity = previews.generate_preview(
-        session, context=context, draft_id=prepared, expected_revision=1
-    )
     drain(session, context, identity)
     summary = previews.get_preview_summary(
         session, context=context, preview_id=identity
@@ -122,6 +122,9 @@ def test_eligible_unit_does_not_freeze_revoked_connection_when_account_has_new_g
     from app.modules.builds.models import DraftAccount
 
     original_scene = previews.read_scene_context
+    identity = previews.generate_preview(
+        session, context=context, draft_id=prepared, expected_revision=1
+    )
     draft_account = session.get(DraftAccount, (context.tenant_id, prepared, "B"))
     old_id = draft_account.connection_id
     old_grant = session.get(
@@ -161,17 +164,13 @@ def test_eligible_unit_does_not_freeze_revoked_connection_when_account_has_new_g
         return original_scene(session, **kwargs)
 
     monkeypatch.setattr(previews, "read_scene_context", current_scene)
-    identity = previews.generate_preview(
-        session, context=context, draft_id=prepared, expected_revision=1
-    )
     drain(session, context, identity)
     for unit in previews.get_preview_units(
         session, context=context, preview_id=identity
     ).items:
-        if unit.advertiser_id == "B" and unit.readiness != "BLOCKED":
-            frozen = previews.load_frozen_unit(
-                session, context=context, unit_id=unit.unit_id
-            )
-            assert frozen.connection_id == new.id, (
-                "Eligible frozen unit retains revoked connection"
-            )
+        if unit.advertiser_id == "B":
+            # The queued preview keeps its original route; a new grant cannot
+            # silently reroute already frozen intent to a different connection.
+            assert unit.readiness == "BLOCKED"
+        else:
+            assert unit.readiness != "BLOCKED"

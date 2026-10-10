@@ -178,16 +178,15 @@ def test_relay_primary_cover_upload_then_local_image_share_preserves_origin(
     assert not wire[0]
     wire[1].extend([primary_video(), image(0)])
     run(env, redis_client, primary_identity)
-    wire[1].append({"list": [image(0)]})
-    run(env, redis_client, primary_identity, read=True)
+    # 上传成功回执即可信任（bbe3c97），不再自动回读；回执已带 MID 900000。
     assert job_state(primary_identity).status == "READY"
+    # 目标账号：按冻结 MID 探测 → 共享 → 共享后核验；来源已有 MID，无需再读。
     wire[1].extend(
         [
-            {"list": [image(0)]},
-            page([]),
+            page([]),  # 目标账号 MID 探测：尚未共享
             ReadTimeoutError(None, "offline", "timeout")
             if uncertain
-            else {"failed_infos": {}},
+            else {"failed_infos": {}},  # 共享请求回执
         ]
     )
     drive(env, redis_client, identity)
@@ -195,7 +194,7 @@ def test_relay_primary_cover_upload_then_local_image_share_preserves_origin(
         with Session(engine) as db:
             batch = db.get(MaterialCoverShareBatch, job_state(identity).share_batch_id)
             assert batch.status == "UNKNOWN" and batch.armed_at is not None
-    wire[1].append(page([image(0, target_id=True)]))
+    wire[1].append(page([image(0, target_id=True)]))  # 共享后核验
     drive(env, redis_client, identity, read=True)
     assert job_state(identity).status == "READY"
     posts = [call for call in wire[0] if call[0] == "POST"]
@@ -241,9 +240,10 @@ def test_primary_alias_reuses_its_owned_cover_without_self_share(
         source_identity = source.id
     wire[1].extend([primary_video(), image(0)])
     run(env, redis_client, source_identity)
-    wire[1].append({"list": [image(0)]})
-    run(env, redis_client, source_identity, read=True)
-    wire[1].extend([{"list": [image(0)]}, page([image(0)] if present else [])])
+    # 上传成功回执即可信任（bbe3c97），不再自动回读。
+    assert job_state(source_identity).status == "READY"
+    # 别名复用：在主账号按 MID 探测自有封面是否存在。
+    wire[1].append(page([image(0)] if present else []))
     if not present:
         wire[1].append(page([]))
     drive(env, redis_client, identity)
@@ -332,7 +332,8 @@ def test_alias_source_identity_changed_during_read_never_shares_image(
                     "digest_verified_at": None,
                 }[changed],
             )
-        return {"list": [image(0)]}
+        # MID 探测返回合法分页；读取期间来源身份已变化，必须以 cover_source_changed 阻断。
+        return page([image(0)])
 
     wire[1].append(changed_response)
     drive(env, redis_client, identity)

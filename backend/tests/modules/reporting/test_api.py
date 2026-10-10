@@ -11,7 +11,9 @@ def _truncate_test_database() -> None:
             connection.execute(
                 text(
                     "SELECT tablename FROM pg_tables "
-                    "WHERE schemaname = 'public' AND tablename <> 'alembic_version'"
+                    "WHERE schemaname = 'public' AND tablename NOT IN "
+                    # 迁移种入的不可变文案池属于共享基线；清空会让后续策略测试失去引用。
+                    "('alembic_version', 'copy_pool_version', 'copy_entry')"
                 )
             )
             .scalars()
@@ -134,7 +136,9 @@ def test_reporting_write_routes_are_viewer_denied_and_operator_gated(
         )
         assert readable.status_code == 200, readable.text
         for method, path, body in write_requests:
-            response = getattr(client, method)(
+            # TestClient.delete 不接受 json；统一走 request，DELETE 不带请求体。
+            response = client.request(
+                method.upper(),
                 path,
                 params={"bc_id": report_case.bc_id},
                 json=body,
@@ -144,7 +148,9 @@ def test_reporting_write_routes_are_viewer_denied_and_operator_gated(
         membership.role = "operator"
         report_case.session.flush()
         for method, path, body in write_requests:
-            response = getattr(client, method)(
+            # TestClient.delete 不接受 json；统一走 request，DELETE 不带请求体。
+            response = client.request(
+                method.upper(),
                 path,
                 params={"bc_id": report_case.bc_id},
                 json=body,
