@@ -26,7 +26,7 @@
 
 ## 剩余发布条件
 
-后续已落实 PostgreSQL `tkada`；Redis DB 15 经撤回后，用户明确确认使用，已重新登记并验证，见末节。用户随后确认运维已完成公司侧域名解析；Service、TLS host 与入口 rule 已随后配置；还需验证域名实际访问，登记 TikTok API/MCP 回调并核对 R2 CORS。完成一致性备份及恢复验证后再停旧消费者并迁入生产；认证和空间创建不代表业务数据恢复或完整上线验收完成。
+后续已落实 PostgreSQL `tkada`；Redis DB 15 经撤回后，用户明确确认使用，已重新登记并验证，见末节。用户随后确认运维已完成公司侧域名解析；Service、TLS host 与入口 rule 已随后配置；还需验证域名实际访问，登记 TikTok API/MCP 回调；R2 CORS 已随后配置并通过新旧 origin 预检。完成一致性备份及恢复验证后再停旧消费者并迁入生产；认证和空间创建不代表业务数据恢复或完整上线验收完成。
 
 ## 后续：自行准备项目数据库空间
 
@@ -74,3 +74,14 @@
 - 指定 ACK ALB 地址并携带应用域名 SNI/Host 的集群内真实 HTTPS 检查通过默认 CA 与主机名校验，证书含 `*.galaxyshortdrama.com`；HTTP 返回 503。正式 Service 的 EndpointSlice 无后端实例，与生产应用尚未启动一致，不能报告登录页或业务已可用。本地直连 TLS 失败，以上成功证据来自集群探针。
 - 同一探针通过集群默认 DNS 仍无法解析应用域名；该结果单独保留，不将指定 ALB 地址的 HTTPS 验证视为 DNS 已生效。临时探针已清理。
 - 私有证据：`ack/ingress-before-tkada-route.json`、`ingress-after-tkada-route.json`、`tkada-service-created.json`、`ingress-route-result.json`、`ingress-https-verification.json`。正式部署应复用现有 Service 和入口，不再重复追加域名。
+
+## 后续：清理测试服磁盘、补齐 R2 CORS 和验证备份恢复
+
+- 磁盘清理明确授权来自用户“把一些什么备份、数据库备份，还有项目的备份文件给删掉”。限定删除 10 月 5–7 日的 25 个旧备份目录，保留 10 月 8 日所有 5 个目录，且删除前验证完整备份 `20261008T021306Z`。私有精确清单为 `ack/staging-backup-cleanup.json`；释放 3,230,224,384 字节，根盘从 100% 降至 85%。
+- 清理前 PostgreSQL 报 No space left on device，Redis 最近 RDB 失败；清理后 PostgreSQL 查询成功，RDB/AOF 最近写入均 ok，9 服务 active、健康 200、备份 timer active。没有清理当前程序、数据库、Redis 状态或素材。
+- R2 S3 凭据读取 CORS 返回 AccessDenied；通过浏览器既有 Google 登录流程进入 Cloudflare，并核对账号与配置中 R2 endpoint 匹配后，在原桶 CORS 中仅追加 `https://tkada.galaxyshortdrama.com`。保留旧 origin、PUT/GET/HEAD、AllowedHeaders、ExposeHeaders 与 900 秒 MaxAge。保存后 UI 回读成功，两个 origin 的签名 URL OPTIONS 均返回 204、正确 Allow-Origin 及 PUT/GET/HEAD；未上传测试对象。证据为 `r2-cors-before.json`、`r2-cors-verification.json`。
+- 该既有桶 Public Development URL 已开启，本轮没有修改其公开状态。CORS 验证只证明浏览器跨域响应，不证明桶私有或生产完整上传已验收。
+- 在线数据库备份 157,252,972 字节，独立程序/构建归档 6,269,368 字节，配置/证书归档 19,132 字节；Redis RDB 2,194 字节。全部仅存私有 `ack/rehearsal-source/`，数据库/归档核对 SHA-256，项目与配置恢复到独立目录，前端构建位于 backend/app/frontend。
+- 使用独立内部 Docker 网络的 PostgreSQL 18、Redis 8 演练恢复；数据库 136 表可读取，4 个凭据 envelope 解密验证通过。候选镜像 e01da729 执行 Alembic upgrade head 成功，head=0019_scene_budget_page、全部表行数与凭据校验前后一致。Redis RDB checksum 成功、恢复 7 键。未运行应用消费者，按 ID 删除本轮容器/匿名卷/内部网络；源服务器临时 RDB 经校验后删除，本地副本保留。
+- 演练时源服务仍在线，因此上述备份不是一致性切换批次，不能直接用于双端启动。最终停写备份和目标恢复尚未执行。
+- 回调真实卡点：浏览器当前 TikTok API 管理账号只展示审核拒绝且无有效 ID 的应用，无法修改运行配置所用应用；原 MCP 完整动态注册响应没有客户端管理 URI/令牌，只登记测试回调。代码刷新检查历史凭据 client_id 必须等于注册 client_id，直接换新客户端会破坏续期；未伪造新回调登记、未重新授权或刷新令牌。已询问用户现有 API 应用的管理账号，旧测试服继续运行。

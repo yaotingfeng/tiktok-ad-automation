@@ -55,7 +55,7 @@ ACK 已核实 7 个 Ready 节点，分布在新加坡四个可用区；`prod` �
 1. **PostgreSQL 与 Redis 编号已落实**：使用 `tkada` 项目库与用户明确确认的 Redis DB 15，REDIS_URL 已填写。Redis 的 0–255 编号为实例预设，本项目标记仅用于记录用途，不提供访问隔离或公司全局分配证明；实例 CPU、内存仍共享。不得修改实例库数或清空共享实例。
 2. ACK 已用所提供凭据完成内网 PostgreSQL 只读认证（`postgres` 管理库，服务端 18.3）和 Redis AUTH/PING。外网地址连接超时，部署选用内网；已随后建好 PostgreSQL 项目库并按用户确认登记 Redis DB 15；目标恢复仍待执行，没有迁入业务数据。
 3. 用户确认运维已完成公司侧域名解析至新加坡集群，不再要求重复配置 DNS；从实际使用网络核验解析与访问。本项目 Service、TLS 声明与路由已创建，控制器已成功同步；应用启动后再验证完整访问。现有通配证书已通过真实验证，无需新申请。不要再使用旧腾讯云入口 `134.175.255.190`。本项目只追加自身路由，不读取其他项目的证书 Secret。
-4. 在现有 TikTok API 应用及 MCP 客户端中登记新回调，核对 R2 CORS 允许新 origin。复制 client_id/token 不等于已登记新的 redirect URI。
+4. 在现有 TikTok API 应用及 MCP 客户端中登记新回调。R2 CORS 已通过匹配账号的 Cloudflare 控制台追加生产 origin，保留测试 origin，两者真实 OPTIONS 均返回 204 和正确 Allow-Origin。当前 TikTok 浏览器账号未展示配置中的有效 API 应用；原 MCP 动态注册响应没有 registration_client_uri/access_token，尚无已验证的原客户端回调修改路径。复制 client_id/token 不等于已登记新的 redirect URI，不得通过伪造注册 JSON 或直接换 client_id 绕过历史授权绑定。
 5. 最终停写窗口中的一致性备份、目标恢复验证和单侧消费者切换；条件未齐前继续保持测试服运行。
 
 可交给运维的资料清单：
@@ -70,7 +70,7 @@ Redis：DB 15（用户已确认使用，已登记 TK-ADA 标记）；使用已�
 网络：ACK 内网 PostgreSQL、Redis 已认证成功；不再按腾讯云跨云超时处理
 TikTok API 回调：https://tkada.galaxyshortdrama.com/api/integrations/tiktok/callback
 TikTok MCP 回调：https://tkada.galaxyshortdrama.com/api/integrations/tiktok/mcp/callback
-R2 CORS：允许 https://tkada.galaxyshortdrama.com
+R2 CORS：已添加 https://tkada.galaxyshortdrama.com，保留测试 origin，OPTIONS 验证通过
 状态：正式 Service 和 Ingress rule 已配置；生产业务应用未启动，尚无后端实例
 ```
 
@@ -92,3 +92,11 @@ R2 CORS：允许 https://tkada.galaxyshortdrama.com
 目标未具备恢复条件或检查失败时，保持来源实例原状。切换后的回退必须先停止生产消费者、核对新旧持久状态兼容性，再按一致性备份恢复；禁止仅 `rollout undo`、清空队列或覆盖共享 Redis 来恢复。
 
 目前已完成本地验证、生产集群预检、临时网络探针及来源配置快照；尚未创建生产业务服务或切停测试服。此次记录取代“公司集群是测试环境”的此前表述，但不把本地验证或只读检查记为生产上线成功。
+
+## 2026-10-10 磁盘清理与迁移恢复演练
+
+- 源测试服根分区曾为 100%，PostgreSQL 无法创建初始化文件，Redis 最近持久化失败。用户明确授权删除旧数据库/项目备份后，仅清理 `/var/backups/tt-ada-staging/` 中 10 月 5–7 日的 25 个备份目录，释放 3,230,224,384 字节（约 3.0 GiB）；10 月 8 日的 5 个备份目录全部保留。删除前核验保留完整备份 `20261008T021306Z` 的 SHA256SUMS、pg_restore 目录、Redis RDB 与项目/配置 tar。
+- 清理后 PostgreSQL 查询恢复、Redis RDB/AOF 状态均为 ok、9 应用服务 active、健康接口 200，备份 timer 保持启用。没有删除运行数据库、Redis 持久文件、当前 release 或素材。
+- 已将在线 PostgreSQL 自定义格式备份、Redis RDB、独立程序/前端构建归档、配置/证书归档保存到本地私有 `ack/rehearsal-source/`，并完成隔离恢复。136 张业务表可读取、4 份历史凭据可用原密钥解密；候选镜像 e01da729 的 Alembic upgrade head 通过，head=0019_scene_budget_page，迁移前后表行数及凭据检查结果一致。Redis RDB 校验通过并恢复 7 个键。
+- 这是运行中各自采样的恢复演练，不是同一停写窗口的正式切换备份；最终迁移仍须按执行顺序重新冻结、排空并备份。演练使用无外网内部 Docker 网络，没有启动 API/Worker/Beat；演练容器及其匿名卷已按 ID 核对清理，本地归档保留。
+- R2 使用既有 `junbo-manju-fb` 桶；控制台核验发现其 Public Development URL 原已开启，本轮未改变该共享桶公开状态，不能把它描述为已验证私有桶。CORS 只增加生产 origin，其他规则保持一致。正式私有存储要求与该现状需另行处理，不能擅自关闭可能仍供其他项目使用的公开入口。
