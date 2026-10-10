@@ -18,7 +18,7 @@
 | 证书 | 集群内以 `tkada.galaxyshortdrama.com` 为 SNI 的真实 TLS 校验通过，现有证书含 `*.galaxyshortdrama.com`；新 host 的 Ingress TLS 声明待登记 |
 | 生产域名 | 用户于 2026-10-10 指定 `tkada.galaxyshortdrama.com`；尚无 DNS 解析及 Ingress rule |
 | PostgreSQL 业务库 | `tkada`，2026-10-10 已用所提供账号创建，所有者 `gzjunbo`；尚未迁入业务数据 |
-| Redis 逻辑库 | DB `15`，空库原子登记后仅有 `tkada:deployment:allocation` 项目标记；DB 0 为其他既有用途 |
+| Redis 逻辑库 | 待公司运维正式分配；此前 DB 15 空库快照不能证明无人预留，已撤回自行占用配置 |
 | 应用端口 | API/容器/Service 均为 80 |
 | 拓扑 | 1 API、7 个独立 Worker、1 Beat，使用同一版本及运行 Secret |
 | 应用资源 | 合计申请 4.25 核 / 10.5 GiB，上限 10.5 核 / 21 GiB；不含 PostgreSQL、Redis 与发布瞬时资源 |
@@ -48,12 +48,12 @@ ACK 已核实 7 个 Ready 节点，分布在新加坡四个可用区；`prod` �
 | PostgreSQL | `pc-gs5ka8g997w7sv5ci.rwlb.singapore.rds.aliyuncs.com` | `singapore-pg-test.rwlb.singapore.rds.aliyuncs.com` | 5432 |
 | Redis | `r-gs5lmf0pt8tic0r0t7.redis.singapore.rds.aliyuncs.com` | `r-gs5lmf0pt8tic0r0t7pd-test.redis.singapore.rds.aliyuncs.com` | 6379 |
 
-域名已确定为 `tkada.galaxyshortdrama.com`。同日私有运行草稿 `runtime.env.incomplete` 保留原授权加密密钥、R2/API 密钥及三个开关；同步新 origin 与回调，但未伪造远端注册文件。用户随后要求自行创建项目空间：已创建 PostgreSQL `tkada`（所有者 `gzjunbo`），并将 Redis DB 15 登记给本项目。私有草稿的两个连接 URL 已填写、密码经 URL 编码；尚未迁入数据，不能把配置齐全当作上线完成。
+域名已确定为 `tkada.galaxyshortdrama.com`。同日私有运行草稿 `runtime.env.incomplete` 保留原授权加密密钥、R2/API 密钥及三个开关；同步新 origin 与回调，但未伪造远端注册文件。用户随后要求自行创建项目空间：已创建 PostgreSQL `tkada`（所有者 `gzjunbo`），此前自行登记 Redis DB 15 的做法已撤回：用户明确这是公司共享实例，空库不等于未分配，必须先查公司的分配登记。私有草稿保留 PostgreSQL URL，REDIS_URL 已清空待分配；尚未迁入数据。
 
 待落实项：
 
-1. **目标空间已落实**：PostgreSQL `tkada` / Redis DB 15；后续恢复前重新确认目标没有新增业务数据。Redis DB 15 的占用标记是本轮创建的唯一键，恢复时须明确保留/处理此标记，禁止清空实例或其他逻辑库。
-2. ACK 已用所提供凭据完成内网 PostgreSQL 只读认证（`postgres` 管理库，服务端 18.3）和 Redis AUTH/PING。外网地址连接超时，部署选用内网；已随后建好项目库并分配逻辑库；目标恢复仍待执行，没有迁入业务数据。
+1. **PostgreSQL 已落实，Redis 编号待分配**：保留 `tkada` 项目库。Redis 的 0–255 编号为实例预设，键数为 0 或写入自定义标记都不能证明归属、排除其他项目预留。由公司运维确认 TK-ADA 使用编号并登记后再填 REDIS_URL；不得自行把空库视为专用库，不得修改实例库数或清空共享实例。
+2. ACK 已用所提供凭据完成内网 PostgreSQL 只读认证（`postgres` 管理库，服务端 18.3）和 Redis AUTH/PING。外网地址连接超时，部署选用内网；已随后建好 PostgreSQL 项目库；Redis 正式分配与目标恢复仍待执行，没有迁入业务数据。
 3. DNS CNAME 指向上表 ACK ALB 域名，登记新 host 的 TLS 声明与路由。现有通配证书已通过真实验证，无需新申请。不要再使用旧腾讯云入口 `134.175.255.190`。本项目只追加自身路由，不读取其他项目的证书 Secret。
 4. 在现有 TikTok API 应用及 MCP 客户端中登记新回调，核对 R2 CORS 允许新 origin。复制 client_id/token 不等于已登记新的 redirect URI。
 5. 最终停写窗口中的一致性备份、目标恢复验证和单侧消费者切换；条件未齐前继续保持测试服运行。
@@ -66,7 +66,7 @@ ACK 已核实 7 个 Ready 节点，分布在新加坡四个可用区；`prod` �
 DNS：tkada.galaxyshortdrama.com，CNAME -> alb-ae6m00kf3iaolvbxim.ap-southeast-1.alb.aliyuncsslbintl.com
 HTTPS：为共享入口 prod/prod-https 确认匹配证书及 TLS host，保留其他站点
 PostgreSQL：tkada（已创建，所有者 gzjunbo）；使用已验证内网主机
-Redis：DB 15（已登记 TK-ADA 占用标记）；按既定一致性迁移流程导入
+Redis：请按公司分配登记给 TK-ADA 一个未分配/未预留的逻辑库编号；不能只凭空库判断
 网络：ACK 内网 PostgreSQL、Redis 已认证成功；不再按腾讯云跨云超时处理
 TikTok API 回调：https://tkada.galaxyshortdrama.com/api/integrations/tiktok/callback
 TikTok MCP 回调：https://tkada.galaxyshortdrama.com/api/integrations/tiktok/mcp/callback

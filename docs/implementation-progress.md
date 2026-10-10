@@ -1803,3 +1803,9 @@
 - `CREATE DATABASE tkada OWNER gzjunbo` 实际成功，回读确认所有者与 public CREATE 权限；通用 `rolcreatedb=false` 不代表该云实例最终拒绝建库。新库仅有平台预装 pg_cron 扩展两表，没有 TK-ADA 业务表；未执行表结构变更或源数据迁移。
 - Redis 支持 256 个预设逻辑库。DB 15 经原子空库检查后登记本项目占用标记，回读仅 1 个标记键；未创建新 Redis 实例或修改 DB 0。私有连接配置已填好 PostgreSQL `tkada` / Redis DB 15。
 - 创建及回读证据补充到 [ACK 验证记录](validation/2026-10-10-ack-deployment-readiness.md)。临时探针和凭据 Secret 均清理，测试服仍正常运行。下一步仍是 DNS/入口/回调与一致性迁移，不再把库名和编号列为用户待提供项。
+
+## 2026-10-10：撤回 Redis DB 15 自行登记
+
+- 用户强调公司共享 Redis 的编号可能属于其他项目。更正之前“空库即能分配”的判断：空库或自行写标记不能排除公司已分配/预留，Redis 编号需核对公司的正式登记。
+- 原子比较完整值后仅删除本轮 `tkada:deployment:allocation` 标记，回读 DB 15 键数为 0；没有业务数据迁入、没有消费者启动、未操作其他键或 DB 0。
+- 私有 REDIS_URL 清空、Redis database=null，等待公司分配；新建 PostgreSQL `tkada` 保留。临时清理 Pod/凭据 Secret 已删除，验证证据及当前状态已同步至生产手册和 ACK 验证记录。
