@@ -100,6 +100,24 @@ class Release:
                 )
         return current
 
+    def check_source(self, sha):
+        run(["git", "-C", str(ROOT), "cat-file", "-e", sha + "^{commit}"])
+
+    def archive_project(self, destination):
+        write(
+            destination,
+            run(
+                [
+                    "git",
+                    "-C",
+                    str(ROOT),
+                    "archive",
+                    "--format=tar.gz",
+                    self.state["old_sha"],
+                ]
+            ),
+        )
+
     def begin(self, action):
         require(
             not self.folder.exists(),
@@ -124,7 +142,7 @@ class Release:
             re.fullmatch("[0-9a-f]{40}", old_sha), "Current image must use a full SHA"
         )
         # 必须有旧源码才能生成独立项目归档；在停服前发现缺失。
-        run(["git", "-C", str(ROOT), "cat-file", "-e", old_sha + "^{commit}"])
+        self.check_source(old_sha)
         self.state = {
             "context": CONTEXT,
             "namespace": "test",

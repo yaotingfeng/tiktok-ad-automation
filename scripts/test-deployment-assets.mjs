@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 
 const repo = new URL("..", import.meta.url);
-for (const suite of ["test-build-release.py", "test-k8s-deployment.py", "test-release-tools.py"]) {
+for (const suite of ["test-build-release.py", "test-k8s-deployment.py", "test-release-tools.py", "test-cluster-backup.py"]) {
   test(suite, () => {
     execFileSync("python3", [new URL(`./${suite}`, import.meta.url).pathname], {
       cwd: repo,

@@ -1893,3 +1893,10 @@
 - Jenkins 主流水线 main 自动测试/构建/发布，非 main 仅测试；独立备份流水线默认未设置 cron。允许 Jenkins detached HEAD，但仍验证实时公司 main 与完整 SHA。
 - 46 项构建/K8s/发布门禁测试、真实 PG18/Redis8 恢复与加密凭据/候选迁移、真实 Celery 五任务暂停/保留/恢复测试通过；Ruff/编译/shell/差异检查通过。详见 [验证记录](validation/2026-10-10-jenkins-release-tools.md)。
 - 交接入口 [deploy/release/README.md](../deploy/release/README.md)。尚缺公司 Jenkins/Agent 和备份桶信息，未配置 webhook/定时任务、未实发线上、未宣称历史全量 CI 已修复。保留用户未提交的 AGENTS.md；聚焦提交主题 `deploy: 补齐 Jenkins 发布与可恢复备份编排`，只推公司 main。
+
+## 2026-10-10：集群一致性备份准备
+
+- 用户要求直接配置并操作集群备份；已核实 ACK test 创建 CronJob/PVC/RBAC 权限，当前九服务正常且无发布锁。没有阿里云控制台或专用私有桶凭据，托管备份/异地副本不能代为声称已配置。
+- 复用发布暂停与状态锁，新增集群控制器/受限账号、20 GiB Retain云盘、隔离恢复 Pod、age 公钥加密和最近14份成功批次保留。应用镜像/配置不变，工具独立镜像 digest。
+- 原生 RBAC Pod create/exec 在 test 内仍为 namespace级能力，文档明确剩余边界；不读取其他项目 Secret，不持有云账户权限。
+- 本条为部署准备状态；实际备份、恢复、定时启用和镜像 digest 待后续验收记录补齐。

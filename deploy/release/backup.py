@@ -9,9 +9,25 @@ import time
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from common import PUBLIC, ROOT, digest, require, run, write
+from common import PUBLIC, digest, require, run, write
 
 PROBE = Path(__file__).with_name("probe.py")
+
+
+REDIS_RESTORE_CODE = """import base64,json,time,redis,sys
+r=redis.Redis.from_url(__import__('os').environ['REDIS_URL'])
+records=json.load(sys.stdin)
+verified=0
+for item in records:
+ key=base64.b64decode(item['key']); value=base64.b64decode(item['dump']); expiry=item['expires_at_ms']
+ if expiry is not None and expiry<=int(time.time()*1000): continue
+ r.restore(key,expiry or 0,value,absttl=expiry is not None)
+ if expiry is None or expiry>int(time.time()*1000)+100:
+  assert r.dump(key)==value
+  if expiry: assert abs(r.pexpiretime(key)-expiry)<2
+  verified+=1
+print(json.dumps({'verified_keys':verified}))
+"""
 
 
 def pg_environment(values):
@@ -87,19 +103,7 @@ def snapshot(release):
         remote_file(cluster, pod, "app", "/tmp/" + filename, folder / filename)
     write(folder / "source-fingerprint.json", release.probe("fingerprint"))
     write(folder / "redis.json", release.probe("redis"))
-    write(
-        folder / "project.tar.gz",
-        run(
-            [
-                "git",
-                "-C",
-                str(ROOT),
-                "archive",
-                "--format=tar.gz",
-                release.state["old_sha"],
-            ]
-        ),
-    )
+    release.archive_project(folder / "project.tar.gz")
     # 清单包含运行配置、注册材料、原副本与旧部署、共享入口证书引用。
     with tarfile.open(folder / "config.tar.gz", "w:gz") as archive:
         for name in (
@@ -316,23 +320,9 @@ def restore_verify(folder, values, old_sha, candidate_sha=None):
             "Restored PostgreSQL facts/credentials differ",
         )
         # Redis DUMP/RESTORE 保留每种键的编码及绝对过期时间；验证每个有效键，不只比键数。
-        code = """import base64,json,time,redis,sys
-r=redis.Redis.from_url(__import__('os').environ['REDIS_URL'])
-records=json.load(sys.stdin)
-verified=0
-for item in records:
- key=base64.b64decode(item['key']); value=base64.b64decode(item['dump']); expiry=item['expires_at_ms']
- if expiry is not None and expiry<=int(time.time()*1000): continue
- r.restore(key,expiry or 0,value,absttl=expiry is not None)
- if expiry is None or expiry>int(time.time()*1000)+100:
-  assert r.dump(key)==value
-  if expiry: assert abs(r.pexpiretime(key)-expiry)<2
-  verified+=1
-print(json.dumps({'verified_keys':verified}))
-"""
         redis_result = json.loads(
             run(
-                app + [PUBLIC + old_sha, "python", "-c", code],
+                app + [PUBLIC + old_sha, "python", "-c", REDIS_RESTORE_CODE],
                 data=(folder / "redis.json").read_bytes(),
             )
         )
