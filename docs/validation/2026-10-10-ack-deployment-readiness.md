@@ -85,3 +85,11 @@
 - 使用独立内部 Docker 网络的 PostgreSQL 18、Redis 8 演练恢复；数据库 136 表可读取，4 个凭据 envelope 解密验证通过。候选镜像 e01da729 执行 Alembic upgrade head 成功，head=0019_scene_budget_page、全部表行数与凭据校验前后一致。Redis RDB checksum 成功、恢复 7 键。未运行应用消费者，按 ID 删除本轮容器/匿名卷/内部网络；源服务器临时 RDB 经校验后删除，本地副本保留。
 - 演练时源服务仍在线，因此上述备份不是一致性切换批次，不能直接用于双端启动。最终停写备份和目标恢复尚未执行。
 - 回调真实卡点：浏览器当前 TikTok API 管理账号只展示审核拒绝且无有效 ID 的应用，无法修改运行配置所用应用；原 MCP 完整动态注册响应没有客户端管理 URI/令牌，只登记测试回调。代码刷新检查历史凭据 client_id 必须等于注册 client_id，直接换新客户端会破坏续期；未伪造新回调登记、未重新授权或刷新令牌。已询问用户现有 API 应用的管理账号，旧测试服继续运行。
+
+## 后续：继续配置时的回调对照检查
+
+- 公司 main `783d3b836b61171153cf1863f4ecd7617bc3e7d6` 已由干净发布副本构建并推送，AMD64 镜像 digest=`sha256:3d3a03ec331f7adc2796a30c47dbc0836d64596164cbf6dc40701927aa94b891`，日志 `ack/build-current-release.log`。ACK 7 节点 Ready，应用仍未部署。
+- 源库汇总 API ACTIVE=1、MCP ACTIVE=3，不涉及远端平台令牌调用。当前浏览器对运行 API App ID 的管理详情显示“未找到应用程序”；旧测试回调能显示 TK-ADA 授权同意页，生产回调显示应用状态错误。需要有权管理该应用的账号修改，不能将前端泛化错误解释为整个旧应用无效。
+- 原 MCP client_id 搭配生产回调可渲染同意页；未提交同意，未验证后续平台回调校验，不能据此修改本地注册文件。官方文档和原始注册响应未提供可用的客户端管理 URI/令牌。保留原授权的迁移方案仍需落实这一点。
+- `DRY_RUN=1 deploy/k8s/apply.sh` 使用当前真实配置与原注册文件，返回 exit=2、`MCP registration does not allow the target callback`。这是实际配置阻断，不是集群部署成功；未执行集群写入。证据 `ack/current-config-preflight.json`、`callback-readiness.json`。
+- 已向用户请求登录当前 API 应用的管理账号；临时 OAuth 检查页已关闭，没有授权同意、换码、刷新或广告写操作。
