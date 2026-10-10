@@ -1,15 +1,21 @@
-# Jenkins 与一键发布
+# 发布编排与 Jenkins 接入
 
 目标固定为新加坡 ACK `c19dbd82590a34b9f87cebb8c1a858796` 的 `test` 命名空间，生产入口 `https://tkada.shortclipflix.com`。这套脚本用于已建立的九服务部署；首次部署继续按 `deploy/k8s/README.md`。不支持自动扩缩容拓扑或更换配置：当前九角色各一副本，普通发版直接读取线上 Secret，保留三个功能开关。
 
 ## 已实现与接通条件
 
-仓库提供发布、备份、恢复指令和 Jenkinsfile。**尚未连接公司 Jenkins 或备份桶，不能据此认定自动发布、定时备份已经运行。** 首次需要公司提供 Jenkins Job/Agent、Gitea webhook 接入及专用私有备份存储；现有本地管理员 kubeconfig 不自动上传 Jenkins。
+仓库提供发布、备份、恢复指令和 Jenkinsfile。提交和推送代码仍是独立的人工或助手操作；本地入口分为构建命令和发布命令，没有自动替用户提交全部工作区的按钮。**尚未连接公司 Jenkins 或备份桶，不能据此认定一键发布已经接通。** 首次需要公司提供 Jenkins Job/Agent、Gitea webhook 接入及专用私有备份存储；现有本地管理员 kubeconfig 不自动上传 Jenkins。
 
 - Gitea Multibranch Pipeline 指定根目录 `Jenkinsfile`；main 测试通过后自动构建/上传/发布，无人工审批按钮，其他分支只测试。使用 Gitea 插件配置 push webhook 或公司批准的 SCM 定期扫描；单有 Jenkinsfile 不会建立 webhook。
-- 备份 Job 固定可信 main 的 `Jenkinsfile.backup`，不接 push webhook。`BACKUP_CRON` 默认空；按双方确定的停服窗口填写，例如 Jenkins 时区为 Asia/Shanghai 时 `H 3 * * *`。这是停写一致性备份，会短暂停止网站与任务；云 PostgreSQL PITR/Redis 托管备份应由运维另外配置，不能用此 Job 代替在线灾备。
+- 日常数据备份使用已核实的阿里云 PolarDB/Tair 每日自动备份（各保留7天）；独立每日停服备份与对应云盘方案已撤除。发布前仍必须生成应用一致性备份并隔离恢复，托管数据库和Redis各自的备份不能直接替代同一停写窗口的发布恢复包。保留 `release.py backup` 作为手动操作入口，不配置定时触发。
 - main 的完整测试未通过时停止发布，不跳过既有失败。现有 Gitea Actions 可并行做测试，不含发布阶段，无需为了接入 Jenkins 删除。
 - 配置 Jenkins 构建失败通知和备份最大允许时间告警。仓库未指定公司通知渠道，不擅自向任何人发送消息。
+
+## 当前可用性（2026-10-10复核）
+
+**不能向非技术用户宣称已经可以一键上线。** 提交/推送是独立步骤；本地构建和发布仍分两条命令；Jenkins尚未接通且没有发布前备份桶。公司main后端Ruff/ty检查仍失败，流水线应停止而不是绕过。发布脚本门禁48项通过，已修正ACK imageID与仓库index digest匹配；当前应用镜像未更换。
+
+完整阶段评估、清理结果与待办见[验证记录](../../docs/validation/2026-10-10-jenkins-release-tools.md#后续清理与全流程复核用户要求2026-10-10)。
 
 ## Agent 和凭据
 
@@ -98,4 +104,4 @@ uv run ruff check deploy/release scripts/test-release-tools.py scripts/test-rele
 bash -n deploy/ci/check.sh deploy/build-and-push.sh
 ```
 
-integration 默认使用本地 `tiktok-ad-automation:deploy-check-amd64`，或设置 `RELEASE_TEST_IMAGE`。创建独立 PG18/Redis8，使用纯合成数据，测试恢复、损坏归档拒绝，以及真实 Celery 取消消费/排空/恢复时队列不丢失。退出只删除本次记录的容器/网络/临时镜像。完整 Jenkins 检查由 `deploy/ci/check.sh` 运行现有后端、前端、浏览器和构建测试；没有 Jenkins 服务时无法验证公司插件、webhook、Agent 权限与完整线上流水线。
+integration 默认使用本地 `tiktok-ad-automation:deploy-check-amd64`，或设置 `RELEASE_TEST_IMAGE`。创建独立 PG18及Redis7→8跨版本恢复环境，使用纯合成数据，测试恢复、损坏归档拒绝，以及真实 Celery 取消消费/排空/恢复时队列不丢失。退出只删除本次记录的容器/网络/临时镜像。完整 Jenkins 检查由 `deploy/ci/check.sh` 运行现有后端、前端、浏览器和构建测试；没有 Jenkins 服务时无法验证公司插件、webhook、Agent 权限与完整线上流水线。

@@ -44,6 +44,36 @@ class ReleaseTests(unittest.TestCase):
             "lock_uid": "lock",
         }
 
+    def test_image_digest_uses_registry_index_reported_by_ack(self):
+        index = "sha256:" + "1" * 64
+        child = "sha256:" + "2" * 64
+        descriptor = {
+            "digest": index,
+            "manifests": [
+                {"digest": child, "platform": {"architecture": "amd64", "os": "linux"}}
+            ],
+        }
+        from common import PUBLIC
+
+        pulled = [PUBLIC.rsplit(":", 1)[0] + "@" + index]
+        with patch(
+            "release.run",
+            side_effect=[json.dumps(descriptor).encode(), json.dumps(pulled).encode()],
+        ):
+            self.assertEqual(self.release.image_digest("a" * 40), index)
+
+    def test_changed_registry_tag_cannot_validate_a_different_local_image(self):
+        descriptor = {"digest": "sha256:" + "1" * 64}
+        from common import PUBLIC
+
+        pulled = [PUBLIC.rsplit(":", 1)[0] + "@sha256:" + "2" * 64]
+        with patch(
+            "release.run",
+            side_effect=[json.dumps(descriptor).encode(), json.dumps(pulled).encode()],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Pulled image"):
+                self.release.image_digest("a" * 40)
+
     def test_missing_worker_never_counts_as_drained(self):
         self.assertFalse(
             drained(

@@ -239,7 +239,17 @@ class Release:
 
     def image_digest(self, sha):
         manifest = json.loads(
-            run(["docker", "buildx", "imagetools", "inspect", "--raw", PUBLIC + sha])
+            run(
+                [
+                    "docker",
+                    "buildx",
+                    "imagetools",
+                    "inspect",
+                    "--format",
+                    "{{json .Manifest}}",
+                    PUBLIC + sha,
+                ]
+            )
         )
         if "manifests" in manifest:
             matches = [
@@ -251,7 +261,12 @@ class Release:
             require(
                 len(matches) == 1, "Expected exactly one linux/amd64 image manifest"
             )
-            return matches[0]
+        # ACK/containerd报告的是仓库顶层index摘要，不能拿AMD64子清单与之比较。
+        expected = manifest.get("digest", "")
+        require(
+            re.fullmatch(r"sha256:[0-9a-f]{64}", expected),
+            "Registry image digest unavailable",
+        )
         repo_digests = json.loads(
             run(
                 [
@@ -264,8 +279,11 @@ class Release:
                 ]
             )
         )
-        require(bool(repo_digests), "Pulled image digest unavailable")
-        return repo_digests[0].split("@", 1)[1]
+        require(
+            PUBLIC.rsplit(":", 1)[0] + "@" + expected in repo_digests,
+            "Pulled image differs from the current registry digest; pull and recheck before release",
+        )
+        return expected
 
     def prepare_tools(self, sha=None):
         for image in {PUBLIC + self.state["old_sha"], "postgres:18", "redis:8"} | (

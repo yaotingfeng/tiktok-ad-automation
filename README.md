@@ -8,7 +8,8 @@ TK-ADA 是多租户 TikTok 短剧广告自动投放工具。后端为 FastAPI、
 
 - [环境配置统一入口：本地、测试、待建生产](config/README.md)
 - [本地运行与 HTTPS 部署](docs/runbooks/bootstrap-deployment.md)
-- [生产环境筹备与发布规则（生产服务器尚未建立）](docs/runbooks/production-junbo.md)
+- [公司生产部署与迁移记录](docs/runbooks/production-junbo.md)
+- [发布脚本、Jenkins 接入与当前缺项](deploy/release/README.md)
 - [旧生产发布口径更正](docs/validation/2026-09-10-production-release.md)
 - [工程版本基线](docs/engineering-baseline.md)
 - [整体设计](docs/superpowers/specs/2026-09-08-tiktok-00-overall-design.md)
