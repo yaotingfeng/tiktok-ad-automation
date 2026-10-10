@@ -51,6 +51,29 @@ def fingerprint():
         }
 
 
+def redis_logical(client, key, kind):
+    """按内容规范化，避免不同 Redis 版本的 DUMP 编码造成假失败。"""
+
+    def enc(value):
+        return base64.b64encode(value).decode()
+
+    if kind == "string":
+        value = client.get(key)
+        return enc(value) if value is not None else None
+    if kind == "list":
+        return [enc(v) for v in client.lrange(key, 0, -1)]
+    if kind == "set":
+        return sorted(enc(v) for v in client.smembers(key))
+    if kind == "hash":
+        return sorted([enc(k), enc(v)] for k, v in client.hgetall(key).items())
+    if kind == "zset":
+        return [
+            [enc(v), score.hex()]
+            for v, score in client.zrange(key, 0, -1, withscores=True)
+        ]
+    raise RuntimeError("Unsupported Redis key type: " + kind)
+
+
 def redis_export():
     import redis
     from app.core.config import settings
@@ -59,17 +82,30 @@ def redis_export():
     if client.connection_pool.connection_kwargs.get("db") != 15:
         raise RuntimeError("Source Redis must be DB 15")
     records = []
-    enc = lambda value: base64.b64encode(value).decode()
+
+    def enc(value):
+        return base64.b64encode(value).decode()
+
     # 应用已停写；只读取本逻辑库，不调用共享实例 SAVE/FLUSH。
     for key in sorted(set(client.scan_iter())):
-        value, ttl = client.pipeline(transaction=True).dump(key).pttl(key).execute()
+        kind, value, ttl = (
+            client.pipeline(transaction=True).type(key).dump(key).pttl(key).execute()
+        )
         if value is None or ttl == -2:
+            continue
+        expires = int(time.time() * 1000) + ttl if ttl >= 0 else None
+        kind = kind.decode()
+        logical = redis_logical(client, key, kind)
+        # 冻结窗口无写入，但短期键仍可自然过期。
+        if not client.exists(key):
             continue
         records.append(
             {
                 "key": enc(key),
                 "dump": enc(value),
-                "expires_at_ms": int(time.time() * 1000) + ttl if ttl >= 0 else None,
+                "expires_at_ms": expires,
+                "type": kind,
+                "logical": logical,
             }
         )
     return records

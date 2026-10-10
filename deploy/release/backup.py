@@ -14,20 +14,29 @@ from common import PUBLIC, digest, require, run, write
 PROBE = Path(__file__).with_name("probe.py")
 
 
-REDIS_RESTORE_CODE = """import base64,json,time,redis,sys
+REDIS_RESTORE_CODE = (
+    "probe = {'__name__': 'backup_probe'}\nexec("
+    + repr(PROBE.read_text())
+    + ", probe)\n"
+    + """import base64,json,time,redis,sys
 r=redis.Redis.from_url(__import__('os').environ['REDIS_URL'])
 records=json.load(sys.stdin)
 verified=0
+reencoded=0
 for item in records:
  key=base64.b64decode(item['key']); value=base64.b64decode(item['dump']); expiry=item['expires_at_ms']
  if expiry is not None and expiry<=int(time.time()*1000): continue
  r.restore(key,expiry or 0,value,absttl=expiry is not None)
  if expiry is None or expiry>int(time.time()*1000)+100:
-  assert r.dump(key)==value
+  assert r.type(key).decode()==item['type'], 'Redis type mismatch'
+  assert probe['redis_logical'](r,key,item['type'])==item['logical'], 'Redis content mismatch'
+  if expiry is None: assert r.pttl(key)==-1
   if expiry: assert abs(r.pexpiretime(key)-expiry)<2
+  reencoded+=r.dump(key)!=value
   verified+=1
-print(json.dumps({'verified_keys':verified}))
+print(json.dumps({'verified_keys':verified,'reencoded_keys':reencoded}))
 """
+)
 
 
 def pg_environment(values):
@@ -319,7 +328,7 @@ def restore_verify(folder, values, old_sha, candidate_sha=None):
             fingerprint == json.loads((folder / "source-fingerprint.json").read_text()),
             "Restored PostgreSQL facts/credentials differ",
         )
-        # Redis DUMP/RESTORE 保留每种键的编码及绝对过期时间；验证每个有效键，不只比键数。
+        # Redis DUMP/RESTORE 保留键内容及绝对过期时间，允许跨版本重新编码；验证每个有效键，不只比键数。
         redis_result = json.loads(
             run(
                 app + [PUBLIC + old_sha, "python", "-c", REDIS_RESTORE_CODE],

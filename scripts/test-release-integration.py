@@ -1,4 +1,4 @@
-"""使用纯合成数据验证真实 PG18/Redis8 恢复与 Celery 暂停；不连接生产。"""
+"""使用纯合成数据验证真实 PG18/Redis7到8 恢复与 Celery 暂停；不连接生产。"""
 
 import base64
 import json
@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "deploy/release"))
-from backup import PROBE, restore_verify
+from backup import PROBE, REDIS_RESTORE_CODE, restore_verify
 from common import PUBLIC, digest, require, run, write
 
 
@@ -86,7 +86,16 @@ def main():
             )
             containers.append(
                 run(
-                    ["docker", "run", "-d", "--name", red, "--network", name, "redis:8"]
+                    [
+                        "docker",
+                        "run",
+                        "-d",
+                        "--name",
+                        red,
+                        "--network",
+                        name,
+                        "redis:7.0",
+                    ]
                 )
                 .decode()
                 .strip()
@@ -176,6 +185,30 @@ r.set('string',b'\\x00secret');r.rpush('queue',b'one',b'two');r.hset('hash',mapp
                 run(app + ["python", "-", "redis"], data=PROBE.read_bytes())
             )
             require(len(records) == 6, "Expected all Redis fixture types")
+            require(
+                all(
+                    int.from_bytes(base64.b64decode(r["dump"])[-10:-8], "little") == 10
+                    for r in records
+                ),
+                "Expected older Redis DUMP version",
+            )
+            damaged = json.loads(json.dumps(records))
+            damaged[0]["logical"] = ["wrong fixture content"]
+            try:
+                run(
+                    app
+                    + [
+                        "python",
+                        "-c",
+                        "import os; os.environ['REDIS_URL'] = os.environ['REDIS_URL'].rsplit('/', 1)[0] + '/14'\n"
+                        + REDIS_RESTORE_CODE,
+                    ],
+                    data=json.dumps(damaged).encode(),
+                )
+            except RuntimeError:
+                pass
+            else:
+                raise RuntimeError("Wrong Redis logical content accepted")
             write(folder / "redis.json", records)
             for archive_name, entry in [
                 ("project", "README.md"),
@@ -211,6 +244,10 @@ r.set('string',b'\\x00secret');r.rpush('queue',b'one',b'two');r.hset('hash',mapp
             require(
                 result["redis"]["verified_keys"] == 6,
                 "Redis restore did not verify every fixture key",
+            )
+            require(
+                result["redis"]["reencoded_keys"] == 6,
+                "Expected cross-version Redis serialization changes",
             )
             print(
                 "PASS: isolated PostgreSQL restore, encrypted credential, candidate migration, six Redis key types/TTL",
