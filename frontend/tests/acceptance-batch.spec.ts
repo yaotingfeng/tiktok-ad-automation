@@ -63,22 +63,27 @@ async function pumpUntil(
   phase: "preparation" | "preview" | "execution",
   predicate: () => Promise<Progress>,
 ) {
-  // Execution includes 138 video uploads, their real 60-second delayed reads,
-  // 138 covers and the advertising graph. Match the backend acceptance budget;
+  // Execution includes 138 target materials, source covers and their real
+  // delayed verification reads. Match the backend acceptance execution budget;
   // the existing 600-second test deadline still bounds the complete scenario.
-  const timeout = phase === "execution" ? 240_000 : 180_000
+  const timeout = phase === "execution" ? 360_000 : 180_000
   const startedAt = performance.now()
   let lastProgressAt = startedAt
+  let pumpCalls = 0
+  let pumpDurationMs = 0
   let state = "No business state read"
   let diagnostics = "No task delivery completed"
   try {
     await expect
       .poll(
         async () => {
+          const pumpStartedAt = performance.now()
           const response = await request.post("/__acceptance__/pump", {
             data: { tenant_id: scope.tenant_id },
             timeout: 120_000,
           })
+          pumpCalls += 1
+          pumpDurationMs += performance.now() - pumpStartedAt
           expect(response.ok()).toBeTruthy()
           diagnostics = (await response.json()).diagnostics
           const progress = await predicate()
@@ -89,11 +94,13 @@ async function pumpUntil(
           }
           return progress.ready
         },
-        { timeout, intervals: [250, 500, 1000] },
+        // pump 已连续执行最多 10 秒；与后端 drive_until 一样仅让出 100ms，
+        // 避免每轮额外停工 1 秒挤占真实业务和延迟回读的执行预算。
+        { timeout, intervals: [100] },
       )
       .toBeTruthy()
     console.info(
-      `Acceptance ${phase} completed in ${((performance.now() - startedAt) / 1000).toFixed(1)}s: ${state}`,
+      `Acceptance ${phase} completed in ${((performance.now() - startedAt) / 1000).toFixed(1)}s (${pumpCalls} pumps, ${(pumpDurationMs / 1000).toFixed(1)}s in delivery/diagnostics): ${state}`,
     )
   } catch (error) {
     console.error(
@@ -225,7 +232,7 @@ test("真实 API 两剧三户：冻结 6/18/36 与 USD600，提交并完成后�
   })
 })
 
-test("真实草稿编辑使旧预览失效；提交响应丢失后仅按原请求恢复", async ({
+test("真实草稿编辑使旧预览失效；丢失回执按原请求恢复并只读回看", async ({
   page,
   request,
 }) => {
@@ -277,13 +284,25 @@ test("真实草稿编辑使旧预览失效；提交响应丢失后仅按原请�
   await expect(
     page.getByRole("button", { name: "查询原提交结果", exact: true }),
   ).toBeVisible()
-  await page.reload()
-  await expect(
-    page.getByRole("button", { name: "查询原提交结果", exact: true }),
-  ).toBeVisible()
   await page
     .getByRole("button", { name: "查询原提交结果", exact: true })
     .click()
+  await expect(page).toHaveURL(/build-tasks\//)
+  // 真实服务端已经记录关联任务，刷新预览应只读回看，不能再次提交。
+  await page.goto(
+    `/tenants/${scope.tenant_id}/build-previews/${current.previewId}?bc_id=${scope.bc_id}`,
+  )
+  await expect(
+    page.getByRole("heading", { name: "提交配置", exact: true }),
+  ).toBeVisible()
+  await page.reload()
+  await expect(
+    page.getByRole("heading", { name: "提交配置", exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: /创建并立即启用/ }),
+  ).toHaveCount(0)
+  await page.getByRole("link", { name: "返回任务详情", exact: true }).click()
   await expect(page).toHaveURL(/build-tasks\//)
   const evidence = await (
     await request.get(`/__acceptance__/evidence/${scope.tenant_id}`)
@@ -434,12 +453,15 @@ test("真实 API 网眼入口：正式归因、完整账户编号与冻结 6/18/
     page.getByText(scope.accounts[0], { exact: true }).first(),
   ).toBeVisible()
   await page.getByRole("button", { name: "查看冻结详情" }).first().click()
-  await expect(
-    page
-      .getByRole("dialog")
-      .getByText(/https:\/\/www\.tiktok\.com\/minis\/acceptance\?link_id=/)
-      .first(),
-  ).toBeVisible()
+  const frozenLink = page
+    .getByRole("dialog")
+    .getByText(/^https:\/\/www\.tiktok\.com\/minis\/acceptance\?/)
+    .first()
+  await expect(frozenLink).toBeVisible()
+  // 查询参数顺序不属于链接合同；分别核实小程序与版权方链接编号。
+  const linkUrl = new URL((await frozenLink.textContent())!)
+  expect(linkUrl.searchParams.get("minis_id")).toBe("acceptance-minis")
+  expect(linkUrl.searchParams.get("link_id")).toMatch(/^\d+$/)
   await page.screenshot({
     path: testInfo.outputPath("wangyan-frozen-detail.png"),
     fullPage: true,

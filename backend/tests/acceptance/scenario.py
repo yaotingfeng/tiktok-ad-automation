@@ -551,11 +551,20 @@ class Runtime:
     database_engine: Any
     messages: deque = field(default_factory=deque)
     delivered: list[dict[str, Any]] = field(default_factory=list)
+    expired: list[dict[str, Any]] = field(default_factory=list)
 
     beat_due: dict[str, float] = field(default_factory=dict)
+    dispatch_interval: float = field(init=False)
+    dispatch_due: float = field(init=False)
 
     def __post_init__(self) -> None:
         now = time.monotonic()
+        self.dispatch_interval = next(
+            float(entry["schedule"])
+            for entry in celery_app.conf.beat_schedule.values()
+            if entry["task"] == "jobs.flush_dispatch"
+        )
+        self.dispatch_due = now
         self.beat_due = {
             name: now + float(entry["schedule"])
             for name, entry in celery_app.conf.beat_schedule.items()
@@ -576,15 +585,25 @@ class Runtime:
                 entry["task"],
                 kwargs=dict(entry.get("kwargs", {})),
                 task_id=str(uuid4()),
-                queue=entry["options"]["queue"],
+                **entry["options"],
             )
 
     def publish(self, name: str, **kwargs: Any) -> SimpleNamespace:
         message = {"name": name, **kwargs}
+        # Celery 在消费前丢弃到期周期 tick；生产 Beat 明确设置 expires，
+        # 业务 outbox 不设置它，积压后仍必须执行原业务消息。
+        if kwargs.get("expires") is not None:
+            message["expires_at"] = time.monotonic() + float(kwargs["expires"])
         self.messages.append(message)
         return SimpleNamespace(id=kwargs["task_id"])
 
     def deliver(self, message: dict[str, Any]) -> None:
+        if (
+            message.get("expires_at") is not None
+            and time.monotonic() >= message["expires_at"]
+        ):
+            self.expired.append(message)
+            return
         task = celery_app.tasks[message["name"]]
         # Model the worker request with each registered task's own limits. The
         # material guards remain real; offline_runtime supplies only process facts.
@@ -601,6 +620,7 @@ class Runtime:
         self.delivered.append(message)
 
     def publish_due(self) -> None:
+        self.dispatch_due = time.monotonic() + self.dispatch_interval
         # Execute the registered production control task: its bounded fair drain
         # is part of the behavior under acceptance, not a fake publisher loop.
         self.deliver(
@@ -628,7 +648,11 @@ class Runtime:
         deadline = time.monotonic() + 10
         for count in range(max_steps):
             self.tick_beat()
-            self.publish_due()
+            # 控制 Worker 按实际 Beat 节奏扫描；逐条业务消息重复完整扫描会
+            # 将几百次空扫描串入同一线程，挤占真正任务的验收期限。
+            # 保留真实时间、所有租户消息及生产控制任务的公平调度逻辑。
+            if time.monotonic() >= self.dispatch_due:
+                self.publish_due()
             if not self.messages:
                 return count
             self.deliver(self.messages.popleft())

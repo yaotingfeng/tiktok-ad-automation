@@ -2,6 +2,7 @@
 
 import ast
 import importlib.util
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -298,3 +299,110 @@ def test_smart_post_evidence_excludes_another_scenarios_background_work(
         assert response.status_code == 200
         assert response.json()["smart_posts"] == expected
         assert response.json()["submission_count"] == 0
+
+
+def test_control_flush_follows_real_beat_cadence_while_business_queue_drains(
+    acceptance_scenario, monkeypatch
+):
+    """真实控制任务无需在每条业务消息前重复扫描同一 outbox。"""
+    import time
+
+    from app.jobs.celery_app import celery_app
+    from app.jobs.outbox import enqueue_after_commit
+
+    scenario = acceptance_scenario
+    with Session(scenario.database_engine) as session, session.begin():
+        identities = {
+            str(
+                enqueue_after_commit(
+                    session,
+                    context=scenario.scope.context,
+                    task_name="jobs.probe",
+                    task_key="cadence-probe-" + str(uuid4()),
+                    payload={},
+                )
+            )
+            for _ in range(12)
+        }
+    runtime = scenario.runtime
+    actual_publish = runtime.publish_due
+    published_at = []
+
+    def observe_control():
+        published_at.append(time.monotonic())
+        actual_publish()
+
+    monkeypatch.setattr(runtime, "publish_due", observe_control)
+    runtime.drive_until(
+        lambda: identities.issubset(
+            item["task_id"]
+            for item in runtime.delivered
+            if item["name"] == "jobs.probe"
+        )
+    )
+    interval = next(
+        float(entry["schedule"])
+        for entry in celery_app.conf.beat_schedule.values()
+        if entry["task"] == "jobs.flush_dispatch"
+    )
+    assert published_at
+    assert all(
+        later - earlier >= interval
+        for earlier, later in zip(published_at, published_at[1:], strict=False)
+    ), "Control scans must follow real Beat cadence rather than each business delivery"
+    # 只核对本测试的任务精确一次；其他租户消息仍照常公平执行。
+    assert Counter(
+        item["task_id"]
+        for item in runtime.delivered
+        if item["name"] == "jobs.probe" and item["task_id"] in identities
+    ) == dict.fromkeys(identities, 1)
+
+
+def test_worker_discards_expired_beat_tick_but_keeps_live_tick_and_business(
+    acceptance_scenario,
+):
+    """遵守 celery_app 的真实 expires 合同，业务消息不能随旧 tick 丢弃。"""
+    import time
+
+    from app.jobs.celery_app import celery_app
+
+    runtime = acceptance_scenario.runtime
+    name, entry = min(
+        (
+            (name, entry)
+            for name, entry in celery_app.conf.beat_schedule.items()
+            if entry["task"] != "jobs.flush_dispatch"
+        ),
+        key=lambda pair: pair[1]["options"]["expires"],
+    )
+    runtime.beat_due[name] = 0
+    started = time.monotonic()
+    runtime.tick_beat()
+    expired_tick = runtime.messages.pop()
+    assert expired_tick["name"] == entry["task"]
+    assert expired_tick["expires_at"] >= started + entry["options"]["expires"]
+    context = acceptance_scenario.scope.context
+    runtime.publish(
+        "jobs.probe",
+        task_id=str(uuid4()),
+        queue="control",
+        kwargs={
+            "tenant_id": str(context.tenant_id),
+            "actor_id": str(context.actor_id),
+            "payload": {},
+        },
+    )
+    business = runtime.messages.pop()
+    assert "expires_at" not in business
+    # 只经过真实时间；不改生产间隔、不伪造时钟、不提前到期业务租约。
+    time.sleep(max(0, expired_tick["expires_at"] - time.monotonic()) + 0.01)
+    runtime.beat_due[name] = 0
+    runtime.tick_beat()
+    live_tick = runtime.messages.pop()
+    runtime.deliver(expired_tick)
+    runtime.deliver(live_tick)
+    runtime.deliver(business)
+    assert expired_tick in runtime.expired
+    assert expired_tick not in runtime.delivered
+    assert live_tick in runtime.delivered
+    assert business in runtime.delivered

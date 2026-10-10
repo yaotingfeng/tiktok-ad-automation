@@ -274,7 +274,11 @@ def create_app(remote: StorageWire, video: bytes):
     from app.jobs.models import PendingDispatch
     from app.main import FRONTEND_DIR, app
     from app.models import User
-    from app.modules.accounts.models import TenantBC
+    from app.modules.accounts.connection_models import (
+        BCConnectionBinding,
+        BCDefaultRoute,
+    )
+    from app.modules.accounts.models import TenantBC, TikTokConnection
     from app.modules.materials import storage
     from app.modules.materials.ingest_models import (
         IngestSession,
@@ -335,6 +339,25 @@ def create_app(remote: StorageWire, video: bytes):
                 TenantMembership(tenant_id=tenant.id, user_id=user.id, role="operator")
             )
             db.add(TenantBC(tenant_id=tenant.id, bc_id=bc, name="合成素材 BC"))
+            # 导入会冻结明确 BC 默认路由；合成记录不含凭据，也不会启动平台调用。
+            connection = TikTokConnection(
+                tenant_id=tenant.id,
+                status="ACTIVE",
+                kind="OFFICIAL_API",
+                display_name="R2 浏览器合成连接",
+            )
+            db.add(connection)
+            db.flush()
+            db.add(BCConnectionBinding(
+                tenant_id=tenant.id,
+                bc_id=bc,
+                connection_id=connection.id,
+                kind=connection.kind,
+            ))
+            db.flush()
+            db.add(BCDefaultRoute(
+                tenant_id=tenant.id, bc_id=bc, connection_id=connection.id
+            ))
             result = {
                 "tenant_id": str(tenant.id),
                 "bc_id": bc,
