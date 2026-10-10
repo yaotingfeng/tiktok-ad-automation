@@ -240,7 +240,8 @@ def resources(image):
                         "resources": ["deployments"],
                         "resourceNames": [PROJECT + "-" + r for r in ROLES],
                         "verbs": ["get"],
-                    }
+                    },
+                    {"apiGroups": [""], "resources": ["pods"], "verbs": ["list"]},
                 ],
             },
             {

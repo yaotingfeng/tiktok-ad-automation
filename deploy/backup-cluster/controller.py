@@ -190,34 +190,47 @@ class ClusterBackup(Release):
             "All nine roles must be ready on one image digest",
         )
         self.state["image_digests"] = {self.state["old_sha"]: ids.pop()}
-        # 跨 namespace 旧消费者不能重启；当前部署前置资产核验记录仍保留。
-        retired = json.loads(Path("/backup-public/retired-source.json").read_text())
-        for item in retired["items"]:
-            if item["kind"] == "Deployment":
-                obj = json.loads(
-                    run(
-                        [
-                            "kubectl",
-                            "--context",
-                            CONTEXT,
-                            "-n",
-                            retired["namespace"],
-                            "get",
-                            "deployment",
-                            item["metadata"]["name"],
-                            "-o",
-                            "json",
-                        ]
-                    )
-                )
-                require(
-                    obj["metadata"]["uid"] == item["metadata"]["uid"]
-                    and obj["spec"]["replicas"] == 0
-                    and not obj["status"].get("replicas"),
-                    "Retired source consumer changed",
-                )
+        self.check_retired_source()
         self.save("prepared")
         self.prepare_restore()
+
+    def check_retired_source(self):
+        # 退休资源可能已由管理员清理；缺失允许，但残留消费者必须阻断。
+        retired = json.loads(Path("/backup-public/retired-source.json").read_text())
+        base = ["kubectl", "--context", CONTEXT, "-n", retired["namespace"]]
+        for item in retired["items"]:
+            if item["kind"] != "Deployment":
+                continue
+            raw = run(
+                base
+                + [
+                    "get",
+                    "deployment",
+                    item["metadata"]["name"],
+                    "--ignore-not-found",
+                    "-o",
+                    "json",
+                ]
+            )
+            if not raw.strip():
+                continue
+            obj = json.loads(raw)
+            require(
+                obj["metadata"]["uid"] == item["metadata"]["uid"]
+                and obj["spec"]["replicas"] == 0
+                and not obj["status"].get("replicas"),
+                "Retired source consumer changed",
+            )
+        pods = json.loads(
+            run(base + ["get", "pods", "-l", "app=" + PROJECT, "-o", "json"])
+        )
+        require(
+            not any(
+                p.get("status", {}).get("phase") not in ("Succeeded", "Failed")
+                for p in pods["items"]
+            ),
+            "Retired source still has active Pods",
+        )
 
     def prepare_restore(self):
         name = NAME + "-verify-" + self.state["token"][:10]
@@ -443,7 +456,15 @@ class ClusterBackup(Release):
             self.encrypt()
             self.cleanup_restore()
             self.resume(self.state["old_sha"])
-        except (RuntimeError, OSError, ValueError, KeyError):
+        except (RuntimeError, OSError, ValueError, KeyError) as exc:
+            write(
+                self.folder / "failure.json",
+                {
+                    "phase": self.state.get("phase"),
+                    "error_type": type(exc).__name__,
+                    "detail": str(exc),
+                },
+            )
             # 纯备份从不迁移/改配置。失败优先恢复服务，失败状态仍需报警。
             phase = self.state.get("phase")
             if phase not in ("complete", "resuming"):

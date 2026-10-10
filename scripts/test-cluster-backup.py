@@ -83,6 +83,38 @@ class BackupTests(unittest.TestCase):
         scale = next(r for r in rules if "deployments/scale" in r["resources"])
         self.assertEqual(len(scale["resourceNames"]), 9)
 
+    def test_removed_retired_deployment_is_safe_only_without_orphan_pods(self):
+        with patch.dict(os.environ, K8S_CONTEXT=CONTEXT, K8S_NAMESPACE="test"):
+            instance = ClusterBackup(self.root / "backup-fixture")
+        retired = {
+            "namespace": "prod",
+            "items": [
+                {
+                    "kind": "Deployment",
+                    "metadata": {"name": PROJECT + "-api", "uid": "old"},
+                }
+            ],
+        }
+        with (
+            patch(
+                "controller.Path.read_text",
+                return_value=__import__("json").dumps(retired),
+            ),
+            patch("controller.run", side_effect=[b"", b'{"items":[]}']),
+        ):
+            instance.check_retired_source()
+        with (
+            patch(
+                "controller.Path.read_text",
+                return_value=__import__("json").dumps(retired),
+            ),
+            patch(
+                "controller.run",
+                side_effect=[b"", b'{"items":[{"status":{"phase":"Running"}}]}'],
+            ),self.assertRaises(RuntimeError)
+        ):
+            instance.check_retired_source()
+
     def test_mutable_or_foreign_image_rejected(self):
         for image in [
             IMAGE.replace("@sha256:", ":latest-"),
