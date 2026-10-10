@@ -16,7 +16,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
@@ -212,7 +212,7 @@ def stage_directory_page(
         raise _domain("directory_page_conflict", "同一目录页已有不同暂存证据")
     terminal = session.exec(
         select(AdDirectoryPage)
-        .where(AdDirectoryPage.run_id == run_id, AdDirectoryPage.complete.is_(True))
+        .where(col(AdDirectoryPage.run_id) == run_id, col(AdDirectoryPage.complete).is_(True))
         .with_for_update()
     ).first()
     if terminal is not None and (
@@ -352,7 +352,7 @@ def _upsert_entity(
     if existing is not None and existing.observed_at > observed:
         # full 与 targeted 分区可能重叠；旧观察不得覆盖较新的对象事实。
         return existing
-    values = {
+    values: dict[str, Any] = {
         "parent_kind": parent[2] if parent else None,
         "parent_remote_id": parent[3] if parent else None,
         "ad_type": str(data.get("ad_type") or run.ad_type),
@@ -389,7 +389,8 @@ def _upsert_material(
     use = data.get("use_ref")
     ad_ref = _parse_ref(use.get("ad_ref")) if isinstance(use, dict) else None
     if (
-        ad_ref is None
+        not isinstance(use, dict)
+        or ad_ref is None
         or ad_ref[0] != run.tenant_id
         or ad_ref[1] != run.advertiser_id
         or ad_ref[2] != "ad"
@@ -406,7 +407,7 @@ def _upsert_material(
         AdMaterialReference.material_type == material_type,
     )
     stmt = stmt.where(
-        AdMaterialReference.ad_material_id.is_(None)
+        col(AdMaterialReference.ad_material_id).is_(None)
         if inner_id is None
         else AdMaterialReference.ad_material_id == inner_id
     )
@@ -421,7 +422,7 @@ def _upsert_material(
         )
     except (TypeError, ValueError) as exc:
         raise _domain("directory_page_invalid", "本地素材身份无效") from exc
-    values = {
+    values: dict[str, Any] = {
         "tenant_id": run.tenant_id,
         "advertiser_id": run.advertiser_id,
         "ad_remote_id": ad_ref[3],
@@ -564,10 +565,10 @@ def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) 
         pages = session.exec(
             select(AdDirectoryPage)
             .where(AdDirectoryPage.run_id == run.id)
-            .order_by(AdDirectoryPage.page)
+            .order_by(col(AdDirectoryPage.page))
             .with_for_update()
         ).all()
-        ordered = _complete_chain(pages)
+        ordered = _complete_chain(list(pages))
         # Tenant 行是现有模型中的稳定锁点；先串行化同租户所有 BC 的版本分配，
         # 再读取最大值，避免不同账户或 BC 同时取得同一个 published_version。
         tenant = session.exec(
@@ -584,8 +585,8 @@ def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) 
                     AdDirectoryRun.advertiser_id == run.advertiser_id,
                     AdDirectoryRun.kind == run.kind,
                     AdDirectoryRun.ad_type == run.ad_type,
-                    AdDirectoryRun.request_sequence > run.request_sequence,
-                    AdDirectoryRun.published_version.is_not(None),
+                    col(AdDirectoryRun.request_sequence) > run.request_sequence,
+                    col(AdDirectoryRun.published_version).is_not(None),
                 )
                 .limit(1)
             ).first()

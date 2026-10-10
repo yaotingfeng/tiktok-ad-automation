@@ -14,7 +14,7 @@ from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from sqlalchemy import func
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.db import engine
@@ -172,13 +172,13 @@ def _new_snapshot(
     max_version = session.exec(
         select(func.max(ReportFact.published_version)).where(
             ReportFact.tenant_id == context.tenant_id,
-            ReportFact.advertiser_id.in_(allowed_ids),
+            col(ReportFact.advertiser_id).in_(allowed_ids),
             ReportSyncRun.bc_id == bc_id,
-            ReportSyncRun.connection_id.in_(connection_ids),
+            col(ReportSyncRun.connection_id).in_(connection_ids),
         )
         .join(
             ReportSyncRun,
-            (ReportSyncRun.tenant_id == ReportFact.tenant_id)
+            (col(ReportSyncRun.tenant_id) == col(ReportFact.tenant_id))
             & (ReportSyncRun.id == ReportFact.source_run_id),
         )
     ).one()
@@ -195,8 +195,8 @@ def _new_snapshot(
         projections = session.exec(
             select(CampaignNameProjection).where(
                 CampaignNameProjection.tenant_id == context.tenant_id,
-                CampaignNameProjection.advertiser_id.in_({item[0] for item in campaigns}),
-                CampaignNameProjection.campaign_remote_id.in_({item[1] for item in campaigns}),
+                col(CampaignNameProjection.advertiser_id).in_({item[0] for item in campaigns}),
+                col(CampaignNameProjection.campaign_remote_id).in_({item[1] for item in campaigns}),
             )
         ).all()
         for projection in projections:
@@ -324,8 +324,8 @@ def _build_snapshot(
         campaigns = session.exec(
             select(AdObject).where(
                 AdObject.tenant_id == context.tenant_id,
-                AdObject.advertiser_id.in_(allowed_ids),
-                AdObject.source_connection_id.in_(connection_ids),
+                col(AdObject.advertiser_id).in_(allowed_ids),
+                col(AdObject.source_connection_id).in_(connection_ids),
                 AdObject.kind == "campaign",
             ).order_by(AdObject.advertiser_id, AdObject.remote_id)
         ).all()

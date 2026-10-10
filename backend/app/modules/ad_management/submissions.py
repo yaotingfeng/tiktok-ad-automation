@@ -13,6 +13,7 @@ from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import text
+from sqlalchemy.orm import Session as SASession
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -61,7 +62,7 @@ def _idempotency_lock(session: Session, context: TenantContext, key: UUID) -> No
     """Serialize one tenant/actor key before the unique insert race."""
     if session.get_bind().dialect.name != "postgresql":
         return
-    session.execute(
+    cast(SASession, session).execute(
         text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
         {"key": f"ad-management-submit:{context.tenant_id}:{context.actor_id}:{key}"},
     )

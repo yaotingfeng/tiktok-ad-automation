@@ -146,7 +146,9 @@ def parse_page(
         last = page >= max(1, info["total_page"])
         if page > max(1, info["total_page"]) or (not last and not values):
             raise _invalid()
-        hashes: set[str] = set(); dynamic = 0; minimum = maximum = precision = None
+        hashes: set[str] = set()
+        dynamic = 0
+        minimum = maximum = precision = None
         for item in values:
             if not isinstance(item, dict):
                 raise _invalid()

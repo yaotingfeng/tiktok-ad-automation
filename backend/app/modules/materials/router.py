@@ -360,9 +360,9 @@ def get_materials(
         name_order = col(MaterialFile.file_name).collate("C")
         statement = statement.where(
             or_(
-                MaterialFile.created_at < created_at_value,
+                col(MaterialFile.created_at) < created_at_value,
                 and_(
-                    MaterialFile.created_at == created_at_value,
+                    col(MaterialFile.created_at) == created_at_value,
                     or_(
                         name_order > name,
                         and_(name_order == name, col(MaterialFile.id) > identity),

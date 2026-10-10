@@ -21,7 +21,6 @@ from app.core.errors import DomainError
 from app.modules.providers.adapters.contract import LinkReceipt, ProviderClient
 from app.modules.providers.adapters.duiba import DuibaClient
 from app.modules.providers.adapters.gangganhao import GangganhaoClient
-from app.modules.providers.adapters.jiashu import JiashuClient
 from app.modules.providers.adapters.rongliang import RongliangClient
 from app.modules.providers.models import (
     LinkPreparation,
@@ -584,7 +583,8 @@ def _verified_gangganhao(
     ):
         raise _error("provider_schema_unsupported")
     actual = data["config"]
-    expected = work.get("ggh_config") if isinstance(work.get("ggh_config"), dict) else config
+    frozen_config = work.get("ggh_config")
+    expected = frozen_config if isinstance(frozen_config, dict) else config
     for key in (
         "authorizer_app_id",
         "series_id",
@@ -609,7 +609,8 @@ def _verified_rongliang(
     ):
         raise _error("provider_result_unknown")
     actual = data["config"]
-    expected = work.get("rongliang_config") if isinstance(work.get("rongliang_config"), dict) else config
+    frozen_config = work.get("rongliang_config")
+    expected = frozen_config if isinstance(frozen_config, dict) else config
     for key in ("client_id", "episodic_drama_id", "platform"):
         if key in expected and str(actual.get(key)) != str(expected[key]):
             raise _error("config_conflict")
@@ -1397,7 +1398,12 @@ def run_link_item(
                     raw_input,
                 )
                 return
-            if stage != "search" and kind in {"jiashu", "duiba", "gangganhao", "rongliang"}:
+            from app.modules.providers.adapters.jiashu import JiashuClient
+            from app.modules.providers.adapters.wangyan import WangyanClient
+
+            if not isinstance(client, (JiashuClient, WangyanClient)):
+                raise _error("provider_state_invalid")
+            if stage != "search" and kind == "jiashu":
                 local = find_ready_link(
                     session,
                     context=context,
@@ -1423,7 +1429,6 @@ def run_link_item(
                     return
                 session.commit()
             if kind == "wangyan":
-                from app.modules.providers.adapters.wangyan import WangyanClient
                 from app.modules.providers.wangyan_steps import advance, guard
 
                 if not isinstance(client, WangyanClient):

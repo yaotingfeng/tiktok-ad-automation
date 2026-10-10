@@ -25,9 +25,10 @@ class McpManagementOperations:
         require_capability: CapabilityCheck | None = None,
     ):
         self._client = client
-        self._check = capability_check or authorization_check or require_capability
-        if self._check is None:
+        check = capability_check or authorization_check or require_capability
+        if check is None:
             raise DomainError("management_permission_unverified", "管理请求缺少账户能力门禁")
+        self._check: CapabilityCheck = check
 
     def apply(self, command: ManagementCommand) -> ManagementReceipt:
         if not isinstance(command, ManagementCommand):

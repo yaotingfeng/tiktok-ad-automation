@@ -12,11 +12,12 @@ from dataclasses import asdict
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import delete, func
-from sqlmodel import Session, select
+from sqlalchemy.orm import Session as SASession
+from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
@@ -212,7 +213,7 @@ def stage_report_page(
         raise _domain("report_page_conflict", "同一报表页已有不同暂存证据")
     terminal = session.exec(
         select(ReportStagedPage)
-        .where(ReportStagedPage.run_id == run_id, ReportStagedPage.complete.is_(True))
+        .where(col(ReportStagedPage.run_id) == run_id, col(ReportStagedPage.complete).is_(True))
         .with_for_update()
     ).first()
     if terminal is not None and (page.page > terminal.page or page.complete):
@@ -363,8 +364,8 @@ def _newer_published_run(session: Session, run: ReportSyncRun) -> bool:
             ReportSyncRun.tenant_id == run.tenant_id,
             ReportSyncRun.advertiser_id == run.advertiser_id,
             ReportSyncRun.partition_key == run.partition_key,
-            ReportSyncRun.request_sequence > run.request_sequence,
-            ReportSyncRun.published_version.is_not(None),
+            col(ReportSyncRun.request_sequence) > run.request_sequence,
+            col(ReportSyncRun.published_version).is_not(None),
         )
         .limit(1)
     ).first()
@@ -478,11 +479,11 @@ def _observation_membership(
             AdDirectoryRun.kind == "campaign",
             AdDirectoryRun.status == "COMPLETE",
             AdDirectoryRun.coverage == "COMPLETE",
-            AdDirectoryRun.published_version.is_not(None),
-            AdDirectoryRun.completed_at.is_not(None),
-            AdDirectoryRun.completed_at <= run.created_at,
+            col(AdDirectoryRun.published_version).is_not(None),
+            col(AdDirectoryRun.completed_at).is_not(None),
+            col(AdDirectoryRun.completed_at) <= run.created_at,
         )
-        .order_by(AdDirectoryRun.published_version.desc())
+        .order_by(col(AdDirectoryRun.published_version).desc())
     ).first()
     if directory_run is None or directory_run.published_version is None or directory_run.completed_at is None:
         return None
@@ -610,13 +611,15 @@ def publish_report(session: Session, *, run_id: UUID, claim_generation: int) -> 
     if run.published_version is not None or run.status in {"FAILED", "CANCELLED", "STALE"}:
         raise _domain("report_run_closed", "报表同步运行已经结束")
     query, contract = _validated_query(run)
+    if run.request_sequence is None:
+        raise _domain("report_run_invalid", "报表运行缺少请求顺序")
     route = _route_for_run(run)
     _ensure_route_authority(session, run, route)
     pages = list(
         session.exec(
             select(ReportStagedPage)
             .where(ReportStagedPage.run_id == run.id)
-            .order_by(ReportStagedPage.page)
+            .order_by(col(ReportStagedPage.page))
         ).all()
     )
     ordered = _complete_chain(pages)
@@ -662,14 +665,14 @@ def publish_report(session: Session, *, run_id: UUID, claim_generation: int) -> 
         raise _domain("report_metrics_incomplete", "报表页缺少请求指标，不能替换完整事实组")
     # 完整分片按指标组替换，只触碰本 partition_key；其他指标组保留。
     for bucket_start, bucket_end in bucket_keys:
-        session.execute(
+        cast(SASession, session).execute(
             delete(ReportFact).where(
-                ReportFact.tenant_id == run.tenant_id,
-                ReportFact.advertiser_id == run.advertiser_id,
-                ReportFact.source_partition_key == run.partition_key,
-                ReportFact.bucket_start == bucket_start,
-                ReportFact.bucket_end == bucket_end,
-                ReportFact.request_sequence <= run.request_sequence,
+                col(ReportFact.tenant_id) == run.tenant_id,
+                col(ReportFact.advertiser_id) == run.advertiser_id,
+                col(ReportFact.source_partition_key) == run.partition_key,
+                col(ReportFact.bucket_start) == bucket_start,
+                col(ReportFact.bucket_end) == bucket_end,
+                col(ReportFact.request_sequence) <= run.request_sequence,
             )
         )
     for item in records:

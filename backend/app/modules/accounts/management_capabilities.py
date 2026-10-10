@@ -19,10 +19,8 @@ from app.integrations.tiktok.contracts.management import (
     ManagementPermissionEvidence,
 )
 from app.integrations.tiktok.gateway import open_tiktok_gateway
-from app.modules.accounts.connection_models import (
-    BCAccountAccess,
-)
 from app.modules.accounts.management_capability_models import ManagementCapability
+from app.modules.accounts.models import BCAccountAccess
 
 # 平台接口的对象层级是独立合同；禁止把广告内素材能力扩散为整条广告状态能力。
 _ENTITY_KINDS_BY_OPERATION: dict[str, tuple[str, ...]] = {

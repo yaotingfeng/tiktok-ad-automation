@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from uuid import UUID, uuid4
 
 from redis import Redis
@@ -88,7 +89,7 @@ class MutationLease:
                 len(self.keys),
                 *self.keys,
                 expected,
-                self.lease_seconds * 1000,
+                str(self.lease_seconds * 1000),
             )
         finally:
             if redis_client is None and self._redis is None:
@@ -183,14 +184,15 @@ def claim_mutation(
     """
     try:
         generation_key = f"{_LOCK_PREFIX}{refs[0].tenant_id}:generation"
-        result = client.eval(
+        # 同步 Redis 客户端执行的 Lua 固定返回一个整数数组。
+        result = cast(list[int], client.eval(
             script,
             len(keys),
             *keys,
             f"{owner_id}:{token}",
-            lease_seconds,
+            str(lease_seconds),
             generation_key,
-        )
+        ))
         if not result or result[0] == 0:
             raise DomainError(
                 "mutation_busy", "mutation_busy: 远端对象正在由其他任务管理"

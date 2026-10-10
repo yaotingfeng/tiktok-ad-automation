@@ -17,10 +17,9 @@ from app.modules.providers.schemas import DramaCandidate
 
 from .contract import (
     JsonDict,
+    LegacyProviderClient,
     LinkLookupPage,
     LinkReceipt,
-    ProviderAdapter,
-    ProviderClient,
     SearchPage,
     VerifiedLink,
     failure,
@@ -57,7 +56,7 @@ def adapter_for_kind(
     *,
     application_id: str = "",
     channel_prefix: str = "",
-) -> ProviderAdapter:
+) -> LegacyProviderAdapter | DuibaClient | GangganhaoClient | RongliangClient:
     """Build a session adapter without falling back across provider kinds."""
 
     if kind == "jiashu":
@@ -100,7 +99,7 @@ class LegacyProviderAdapter:
     """Normalize the two pre-existing clients while their workflows migrate."""
 
     kind: str
-    client: ProviderClient
+    client: LegacyProviderClient
 
     def search(self, title: str, cursor: str | None) -> SearchPage:
         try:

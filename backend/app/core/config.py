@@ -1,3 +1,4 @@
+import os
 import warnings
 from collections.abc import Mapping
 from typing import Any, Literal, Self
@@ -26,8 +27,8 @@ def configured_app_fields(values: Mapping[str, str | None]) -> list[str]:
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        # Use top level .env file (one level above ./backend/)
-        env_file="../.env",
+        # 发布验证可显式选择 /dev/null，防止读取本地业务凭据。
+        env_file=os.environ.get("APP_ENV_FILE", "../.env"),
         env_ignore_empty=True,
         extra="ignore",
         hide_input_in_errors=True,

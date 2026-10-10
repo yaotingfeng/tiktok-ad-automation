@@ -104,6 +104,8 @@ def scene_reasons(
     # HIGHEST_VALUE 不发送 ROAS 出价；缺少 target_roas 不是场景核验失败。
     if config.bid_strategy == "TARGET_ROAS":
         try:
+            if config.target_roas is None:
+                raise ValueError("TARGET_ROAS requires a bid")
             if (
                 not Decimal(c["roas_bid"]["minimum"])
                 <= config.target_roas

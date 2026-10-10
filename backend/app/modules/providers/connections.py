@@ -353,19 +353,15 @@ def open_provider_session(
             client: ProviderClient
             if kind not in {"jiashu", "wangyan", "duiba", "gangganhao", "rongliang"}:
                 raise failure("provider_unavailable", retryable=True)
-            if kind == "duiba":
-                client = adapter_for_kind(
+            if kind in {"duiba", "gangganhao", "rongliang"}:
+                adapter = adapter_for_kind(
                     kind, http, credentials, application_id=application_id
                 )
-            elif kind == "gangganhao":
-                client = adapter_for_kind(
-                    kind, http, credentials, application_id=application_id
-                )
-                client.delivery_mode = str(app.channel_config.get("delivery_mode", "iaa"))
-            elif kind == "rongliang":
-                client = adapter_for_kind(
-                    kind, http, credentials, application_id=application_id
-                )
+                if not isinstance(adapter, (DuibaClient, GangganhaoClient, RongliangClient)):
+                    raise failure("provider_state_invalid")
+                client = adapter
+                if isinstance(client, GangganhaoClient):
+                    client.delivery_mode = str(app.channel_config.get("delivery_mode", "iaa"))
             elif kind == "jiashu":
                 client = JiashuClient(
                     http,

@@ -808,7 +808,7 @@ def _expand_unit(
                         material_id=col(PreviewAdMaterial.material_id),
                     ),
                 )
-                .group_by(PreviewAdMaterial.base_ad_no)
+                .group_by(col(PreviewAdMaterial.base_ad_no))
             ).all()
         )
         if material_limit_exceeded(list(ad_material_counts.values()), maximum):
@@ -999,7 +999,7 @@ def get_preview_summary(
         )
     ).one()
     ad_material_rows = session.exec(
-        select(func.count(PreviewAdMaterial.material_id)).where(
+        select(func.count(col(PreviewAdMaterial.material_id))).where(
             PreviewAdMaterial.tenant_id == context.tenant_id,
             PreviewAdMaterial.preview_id == preview_id,
         )
@@ -1009,17 +1009,17 @@ def get_preview_summary(
     material_allocation_count = (
         ad_material_rows
         or session.exec(
-            select(func.count(PreviewGroupMaterial.material_id))
+            select(func.count(col(PreviewGroupMaterial.material_id)))
             .select_from(PlannedAd)
             .join(
                 PlannedGroup,
-                (PlannedGroup.tenant_id == PlannedAd.tenant_id)
+                (col(PlannedGroup.tenant_id) == col(PlannedAd.tenant_id))
                 & (PlannedGroup.preview_id == PlannedAd.preview_id)
                 & (PlannedGroup.id == PlannedAd.group_id),
             )
             .join(
                 PreviewGroupMaterial,
-                (PreviewGroupMaterial.tenant_id == PlannedGroup.tenant_id)
+                (col(PreviewGroupMaterial.tenant_id) == col(PlannedGroup.tenant_id))
                 & (PreviewGroupMaterial.preview_id == PlannedGroup.preview_id)
                 & (PreviewGroupMaterial.drama_id == PlannedGroup.drama_id)
                 & (PreviewGroupMaterial.group_no == PlannedGroup.group_no),
@@ -1214,12 +1214,12 @@ def get_preview_units(
         session.exec(
             select(
                 BuildUnit.id,
-                func.count(PreviewGroupMaterial.material_id),
+                func.count(col(PreviewGroupMaterial.material_id)),
                 func.count(func.distinct(PreviewGroupMaterial.material_id)),
             )
             .join(
                 PreviewGroupMaterial,
-                (PreviewGroupMaterial.tenant_id == BuildUnit.tenant_id)
+                (col(PreviewGroupMaterial.tenant_id) == col(BuildUnit.tenant_id))
                 & (PreviewGroupMaterial.preview_id == BuildUnit.preview_id)
                 & (PreviewGroupMaterial.drama_id == BuildUnit.drama_id),
             )
@@ -1233,17 +1233,17 @@ def get_preview_units(
                     material_id=col(PreviewGroupMaterial.material_id),
                 ),
             )
-            .group_by(BuildUnit.id)
+            .group_by(col(BuildUnit.id))
         ).all()
         if unit_ids
         else []
     )
     ad_material_rows = (
         session.exec(
-            select(BuildUnit.id, func.count(PreviewAdMaterial.material_id))
+            select(col(BuildUnit.id), func.count(col(PreviewAdMaterial.material_id)))
             .join(
                 PreviewAdMaterial,
-                (PreviewAdMaterial.tenant_id == BuildUnit.tenant_id)
+                (col(PreviewAdMaterial.tenant_id) == col(BuildUnit.tenant_id))
                 & (PreviewAdMaterial.preview_id == BuildUnit.preview_id)
                 & (PreviewAdMaterial.drama_id == BuildUnit.drama_id),
             )
@@ -1257,7 +1257,7 @@ def get_preview_units(
                     material_id=col(PreviewAdMaterial.material_id),
                 ),
             )
-            .group_by(BuildUnit.id)
+            .group_by(col(BuildUnit.id))
         ).all()
         if unit_ids
         else []
@@ -1265,22 +1265,22 @@ def get_preview_units(
     ad_material_counts = {row[0]: int(row[1] or 0) for row in ad_material_rows}
     if not ad_material_counts and unit_ids:
         legacy_ad_material_rows = session.exec(
-            select(BuildUnit.id, func.count(PreviewGroupMaterial.material_id))
+            select(col(BuildUnit.id), func.count(col(PreviewGroupMaterial.material_id)))
             .join(
                 PlannedGroup,
-                (PlannedGroup.tenant_id == BuildUnit.tenant_id)
+                (col(PlannedGroup.tenant_id) == col(BuildUnit.tenant_id))
                 & (PlannedGroup.preview_id == BuildUnit.preview_id)
                 & (PlannedGroup.unit_id == BuildUnit.id),
             )
             .join(
                 PlannedAd,
-                (PlannedAd.tenant_id == PlannedGroup.tenant_id)
+                (col(PlannedAd.tenant_id) == col(PlannedGroup.tenant_id))
                 & (PlannedAd.preview_id == PlannedGroup.preview_id)
                 & (PlannedAd.group_id == PlannedGroup.id),
             )
             .join(
                 PreviewGroupMaterial,
-                (PreviewGroupMaterial.tenant_id == PlannedGroup.tenant_id)
+                (col(PreviewGroupMaterial.tenant_id) == col(PlannedGroup.tenant_id))
                 & (PreviewGroupMaterial.preview_id == PlannedGroup.preview_id)
                 & (PreviewGroupMaterial.drama_id == PlannedGroup.drama_id)
                 & (PreviewGroupMaterial.group_no == PlannedGroup.group_no),
@@ -1295,7 +1295,7 @@ def get_preview_units(
                     material_id=col(PreviewGroupMaterial.material_id),
                 ),
             )
-            .group_by(BuildUnit.id)
+            .group_by(col(BuildUnit.id))
         ).all()
         ad_material_counts = {
             row[0]: int(row[1] or 0) for row in legacy_ad_material_rows
@@ -1466,7 +1466,7 @@ def get_frozen_groups(
                         material_id=col(PreviewGroupMaterial.material_id),
                     ),
                 )
-                .group_by(PreviewGroupMaterial.group_no)
+                .group_by(col(PreviewGroupMaterial.group_no))
             ).all()
         )
         if any(count > 100 for count in group_material_counts.values()):
@@ -1476,8 +1476,8 @@ def get_frozen_groups(
         material_rank = (
             func.row_number()
             .over(
-                partition_by=PreviewGroupMaterial.group_no,
-                order_by=PreviewGroupMaterial.position,
+                partition_by=col(PreviewGroupMaterial.group_no),
+                order_by=col(PreviewGroupMaterial.position),
             )
             .label("row_no")
         )
@@ -1517,7 +1517,7 @@ def get_frozen_groups(
         ).all()
     group_material_map: dict[int, list[UUID]] = {}
     for row in group_material_rows:
-        group_material_map.setdefault(row.group_no, []).append(row.material_id)
+        group_material_map.setdefault(row[0], []).append(row[2])
     ads_by_group: dict[UUID, list[PlannedAd]] = {}
     if group_ids:
         ad_counts = dict(
@@ -1527,7 +1527,7 @@ def get_frozen_groups(
                     PlannedAd.tenant_id == context.tenant_id,
                     col(PlannedAd.group_id).in_(group_ids),
                 )
-                .group_by(PlannedAd.group_id)
+                .group_by(col(PlannedAd.group_id))
             ).all()
         )
         if any(count > 100 for count in ad_counts.values()):
@@ -1535,8 +1535,8 @@ def get_frozen_groups(
         ad_rank = (
             func.row_number()
             .over(
-                partition_by=PlannedAd.group_id,
-                order_by=(PlannedAd.base_ad_no, PlannedAd.creative_no),
+                partition_by=col(PlannedAd.group_id),
+                order_by=(col(PlannedAd.base_ad_no), col(PlannedAd.creative_no)),
             )
             .label("row_no")
         )
@@ -1553,9 +1553,9 @@ def get_frozen_groups(
             select(ad_alias)
             .where(ad_rows.c.row_no <= 100)
             .order_by(
-                ad_alias.group_id,
-                ad_alias.base_ad_no,
-                ad_alias.creative_no,
+                col(ad_alias.group_id),
+                col(ad_alias.base_ad_no),
+                col(ad_alias.creative_no),
             )
         ).all()
         for ad in planned_ads:
@@ -1591,8 +1591,8 @@ def get_frozen_groups(
                 ),
             )
             .group_by(
-                PreviewAdMaterial.group_no,
-                PreviewAdMaterial.base_ad_no,
+                col(PreviewAdMaterial.group_no),
+                col(PreviewAdMaterial.base_ad_no),
             )
         ).all()
         if any(row[2] > 100 for row in ad_material_counts):
@@ -1601,10 +1601,10 @@ def get_frozen_groups(
             func.row_number()
             .over(
                 partition_by=(
-                    PreviewAdMaterial.group_no,
-                    PreviewAdMaterial.base_ad_no,
+                    col(PreviewAdMaterial.group_no),
+                    col(PreviewAdMaterial.base_ad_no),
                 ),
-                order_by=PreviewAdMaterial.position,
+                order_by=col(PreviewAdMaterial.position),
             )
             .label("row_no")
         )
@@ -1613,8 +1613,7 @@ def get_frozen_groups(
                 PreviewAdMaterial.group_no,
                 PreviewAdMaterial.base_ad_no,
                 PreviewAdMaterial.position,
-                PreviewAdMaterial.material_id,
-                ad_material_rank,
+                col(PreviewAdMaterial.material_id),
             )
             .where(
                 PreviewAdMaterial.tenant_id == context.tenant_id,
@@ -1627,6 +1626,7 @@ def get_frozen_groups(
                     material_id=col(PreviewAdMaterial.material_id),
                 ),
             )
+            .add_columns(ad_material_rank)
             .subquery()
         )
         ad_material_rows = session.exec(
@@ -1646,8 +1646,8 @@ def get_frozen_groups(
             )
         ).all()
         for row in ad_material_rows:
-            ad_material_map.setdefault((row.group_no, row.base_ad_no), []).append(
-                row.material_id
+            ad_material_map.setdefault((row[0], row[1]), []).append(
+                row[3]
             )
     filtered_group_materials = {
         group_no: list(material_ids)

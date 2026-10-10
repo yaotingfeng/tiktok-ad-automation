@@ -178,7 +178,7 @@ def validate_ad_assets(
         .execution_options(populate_existing=True)
     ).all()
     row_order = {material_id: index for index, material_id in enumerate(material_ids)}
-    rows.sort(key=lambda row: row_order.get(row[0], len(row_order)))
+    rows = sorted(rows, key=lambda row: row_order.get(row[0], len(row_order)))
     try:
         if any(
             len(entry["creative_info"]["image_info"]) != 1

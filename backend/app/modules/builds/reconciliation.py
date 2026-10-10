@@ -21,6 +21,7 @@ from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
+from app.integrations.tiktok.adapters.build_results import known_no_effect_rejection
 from app.integrations.tiktok.bounded_resources import bounded_session
 from app.integrations.tiktok.contracts.builds import (
     AdGroupStatus,
@@ -29,7 +30,6 @@ from app.integrations.tiktok.contracts.builds import (
     CreateIntent,
 )
 from app.integrations.tiktok.contracts.common import CallEvidence, RemoteCallError
-from app.integrations.tiktok.adapters.build_results import known_no_effect_rejection
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.integrations.tiktok.gateway import open_tiktok_gateway
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred
@@ -326,7 +326,7 @@ def _recover_known_rejection(
             StepEvidence.step_id == source.id,
             StepEvidence.conclusion == "RESULT_UNKNOWN",
         )
-        .order_by(StepEvidence.observed_at.desc())
+        .order_by(col(StepEvidence.observed_at).desc())
         .limit(1)
     ).first()
     summary = evidence_row.summary if evidence_row is not None else {}

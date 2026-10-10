@@ -22,11 +22,9 @@ from app.modules.strategies.schemas import (
 
 
 class NamedMaterial(Protocol):
+    # 规划器只读取冻结素材 ID；文件名不参与分组，也不要求草稿映射重复保存。
     @property
     def material_id(self) -> UUID: ...
-
-    @property
-    def file_name(self) -> str: ...
 
 
 @dataclass(frozen=True)

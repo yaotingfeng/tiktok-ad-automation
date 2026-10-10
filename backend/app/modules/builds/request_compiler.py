@@ -204,7 +204,6 @@ def encode_intent(intent: CreateIntent) -> dict[str, object]:
     body = intent.model_dump(mode="json", exclude={"kind"}, exclude_none=True)
     # budget_strategy/bid_strategy 是本地冻结合同，用于校验和回读映射，
     # TikTok wire 只接受它们展开后的字段，不能把内部枚举发送到远端。
-    budget_strategy = body.get("budget_strategy")
     body.pop("budget_strategy", None)
     body.pop("bid_strategy", None)
     if isinstance(intent, CampaignCreate):
@@ -342,7 +341,7 @@ def create_arguments(
     *, attempt_id: UUID, intent: CreateIntent, channel: ChannelKind
 ) -> tuple[str, dict[str, object]]:
     """attempt 仅做本地关联；金额必须能由两条官方 JSON 路径无损表达。"""
-    if not isinstance(attempt_id, UUID):
+    if channel not in {"OFFICIAL_API", "OFFICIAL_MCP"} or not isinstance(attempt_id, UUID):
         raise RemoteCallError(
             "invalid_build_request", effect="NOT_SENT", evidence=CallEvidence()
         )

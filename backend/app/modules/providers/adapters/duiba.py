@@ -19,6 +19,7 @@ from .contract import (
     positive,
     request_json,
     string,
+    verify_receipt,
 )
 
 BASE = "https://qjad.dui88.com/api/dist"
@@ -27,6 +28,8 @@ PAGE_SIZE = 100
 
 class DuibaClient:
     """A tenant-owned client; bearer state is never stored on the HTTP client."""
+
+    verify_link = staticmethod(verify_receipt)
 
     safe_idempotent_create_without_lookup = True
 

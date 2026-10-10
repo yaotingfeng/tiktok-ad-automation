@@ -20,6 +20,7 @@ from .contract import (
     positive,
     request_json,
     string,
+    verify_receipt,
 )
 
 BASE = "https://gateway.dorareel.com/portal/distributor"
@@ -27,10 +28,13 @@ PAGE_SIZE = 100
 
 
 class GangganhaoClient:
+    verify_link = staticmethod(verify_receipt)
+
     def __init__(
         self, http: httpx.Client, *, token: str = "", application_id: str = ""
     ):
         self.http, self.token, self.application_id = http, token, application_id
+        self.delivery_mode = "iaa"
 
     @classmethod
     def login(

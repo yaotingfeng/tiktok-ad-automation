@@ -428,7 +428,7 @@ def _sort_rows(rows: Sequence[ReportRow], filters: ReportingFilter) -> tuple[Rep
             raise ValueError("spend sorting requires one currency")
         def spend_key(row: ReportRow) -> tuple[bool, Decimal]:
             value = row.metric_buckets[0].values.get("spend") if row.metric_buckets else None
-            amount = cast(Decimal, value) if value is not None else Decimal(0)
+            amount = value if value is not None else Decimal(0)
             # Missing values remain at the end for both directions.
             return (value is None, -amount if filters.sort_direction == "desc" else amount)
 

@@ -86,8 +86,8 @@ def get_preview_dramas(
     )
     return Page(
         items=[
-            PreviewDramaPublic(
-                **{
+            PreviewDramaPublic.model_validate(
+                {
                     **dict(row),
                     "material_allocation_count": int(
                         row["ad_material_allocation_count"] or 0
@@ -112,13 +112,13 @@ def get_preview_dramas(
                         unique_material_count=int(row["unique_material_count"] or 0),
                     )
                     + f"；预算策略 {budget_strategy_label(preview.config.get('budget_strategy'))}；竞价策略 {bid_strategy_label(frozen_bid_strategy(scene_snapshot={}, preview_config=preview.config, target_roas=preview.target_roas))}",
+                    "daily_budget_sum": preview.budget
+                    * int(
+                        row["eligible_adgroup_count"]
+                        if preview.config.get("budget_strategy") == "ADGROUP"
+                        else row["eligible_campaign_count"]
+                    ),
                 },
-                daily_budget_sum=preview.budget
-                * int(
-                    row["eligible_adgroup_count"]
-                    if preview.config.get("budget_strategy") == "ADGROUP"
-                    else row["eligible_campaign_count"]
-                ),
             )
             for row in rows[:limit]
         ],

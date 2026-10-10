@@ -35,7 +35,7 @@ def material_limit_exceeded(counts: list[int] | tuple[int, ...], maximum: int) -
 def material_not_skipped(
     *,
     tenant_id: UUID,
-    unit_id: UUID,
+    unit_id: UUID | SQLColumnExpression[UUID],
     material_id: SQLColumnExpression[UUID],
 ) -> SQLColumnExpression[bool]:
     return (

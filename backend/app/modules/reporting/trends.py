@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
-from typing import Literal, cast
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from sqlmodel import Session, col, select
@@ -496,9 +496,8 @@ def build_trend(
         values = {name: _decimal(value) for name, value in item.values.items()}
         availability: dict[str, Availability] = {}
         for name, state in item.availability.items():
-            availability[name] = cast(
-                Availability,
-                state if state in {"AVAILABLE", "MISSING", "UNAVAILABLE", "UNSUPPORTED", "FAILED"} else "FAILED",
+            availability[name] = (
+                state if state in {"AVAILABLE", "MISSING", "UNAVAILABLE", "UNSUPPORTED", "FAILED"} else "FAILED"
             )
         points.append(
             TrendPoint(

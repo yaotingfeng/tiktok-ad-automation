@@ -77,7 +77,7 @@ def _all_rows(session: Session, *, snapshot_id: UUID, total: int) -> tuple[Any, 
                     QuerySnapshotRow.snapshot_id == snapshot_id,
                     col(QuerySnapshotRow.stable_sequence) > after,
                 )
-                .order_by(QuerySnapshotRow.stable_sequence)
+                .order_by(col(QuerySnapshotRow.stable_sequence))
                 .limit(100)
             ).all()
         )

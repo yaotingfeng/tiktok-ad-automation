@@ -1091,7 +1091,7 @@ def active_or_recent_refs(
                     EntityRef(
                         tenant_id,
                         advertiser_id,
-                        cast(Literal["campaign", "adgroup", "ad", "creative"], kind),
+                        kind,
                         str(fact.subject_key[1]),
                     )
                 )

@@ -140,7 +140,7 @@ def apply_authorized_scope(
         tenant_id=context.tenant_id,
         bc_id=bc_id,
         action="read",
-    ).with_only_columns(BCAccountAccess.advertiser_id)
+    ).with_only_columns(col(BCAccountAccess.advertiser_id))
     return statement.where(
         tenant_column == context.tenant_id,
         advertiser_column.in_(grants),

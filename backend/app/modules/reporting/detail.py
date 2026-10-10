@@ -146,7 +146,7 @@ def get_ad_detail(
     history_rows = session.exec(
         select(AuditEvent).where(
             AuditEvent.tenant_id == context.tenant_id,
-            AuditEvent.target_id.in_((ref.remote_id, str(ref))),
+            col(AuditEvent.target_id).in_((ref.remote_id, str(ref))),
         ).order_by(col(AuditEvent.created_at).desc())
     ).all()
     history = tuple(

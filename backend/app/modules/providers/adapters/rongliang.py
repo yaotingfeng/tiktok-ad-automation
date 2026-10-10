@@ -5,7 +5,7 @@ from __future__ import annotations
 import json as jsonlib
 import os
 import secrets
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlencode
 
 import httpx
@@ -23,6 +23,7 @@ from .contract import (
     positive,
     request_json,
     string,
+    verify_receipt,
 )
 
 AUTH_BASE = "https://distribution.wolftv.online/manage/ocean/management/distribution"
@@ -60,7 +61,7 @@ class _CurlSession:
 
     def request(
         self,
-        method: str,
+        method: Literal["GET", "POST"],
         url: str,
         *,
         headers: dict[str, str] | None = None,
@@ -113,6 +114,8 @@ class _CurlSession:
 
 
 class RongliangClient:
+    verify_link = staticmethod(verify_receipt)
+
     def __init__(
         self,
         http: httpx.Client,
@@ -170,7 +173,7 @@ class RongliangClient:
 
     def _request(
         self,
-        method: str,
+        method: Literal["GET", "POST"],
         path: str,
         *,
         query: JsonDict | None = None,

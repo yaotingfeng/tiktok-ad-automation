@@ -39,7 +39,7 @@ class DeliveryConfig(BaseModel):
             raise ValueError("指定时间开启必须填写开始时间")
         if self.schedule_mode == "START_AT" and end is not None:
             raise ValueError("指定时间开启不应填写结束时间")
-        if self.schedule_mode == "START_END" and (end is None or end <= start):
+        if self.schedule_mode == "START_END" and (start is None or end is None or end <= start):
             raise ValueError("结束时间必须晚于开始时间")
         return self
 

@@ -86,6 +86,13 @@ class VerifiedLink:
 
 
 class ProviderClient(Protocol):
+    """持久任务共用步骤发送/回读；搜索分页由各版权方独立合同约束。"""
+
+    def create_step(self, step: str, payload: JsonDict) -> JsonDict: ...
+    def read_link(self, remote_id: str) -> JsonDict | LinkReceipt: ...
+
+
+class LegacyProviderClient(ProviderClient, Protocol):
     def search(self, title: str, page: int) -> JsonDict: ...
     def find_existing(
         self, drama_id: str, config: JsonDict, cursor: str | None

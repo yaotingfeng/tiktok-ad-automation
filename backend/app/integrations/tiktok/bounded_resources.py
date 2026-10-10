@@ -1,9 +1,9 @@
 """MCP 回调的短数据库事务和逐命令 Redis 期限；不修改应用共享连接池。"""
 
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-import logging
 from typing import Any
 
 from redis import ConnectionPool, Redis
