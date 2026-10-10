@@ -26,7 +26,7 @@
 
 ## 剩余发布条件
 
-后续已落实 PostgreSQL `tkada`；Redis DB 15 经撤回后，用户明确确认使用，已重新登记并验证，见末节。还需配置新域名 CNAME、TLS host 与入口 rule，登记 TikTok API/MCP 回调并核对 R2 CORS。完成一致性备份及恢复验证后再停旧消费者并迁入生产；认证和空间创建不代表业务数据恢复或完整上线验收完成。
+后续已落实 PostgreSQL `tkada`；Redis DB 15 经撤回后，用户明确确认使用，已重新登记并验证，见末节。用户随后确认运维已完成公司侧域名解析；还需验证实际访问、配置 TLS host 与入口 rule，登记 TikTok API/MCP 回调并核对 R2 CORS。完成一致性备份及恢复验证后再停旧消费者并迁入生产；认证和空间创建不代表业务数据恢复或完整上线验收完成。
 
 ## 后续：自行准备项目数据库空间
 
@@ -57,3 +57,10 @@
 - 私有 `infrastructure.json` 已恢复 database=15、allocation_status=user_confirmed 及标记键；`runtime.env.incomplete` 已填入密码正确 URL 编码的内网 Redis `/15` URL。回读验证编号、主机、密码编码与两文件 0600 权限通过，未输出凭据。
 - 原始证据：`.runtime/company-production-20261010/ack/tiktok-ad-automation-redis-confirm-20261010.result.json`；临时 Pod 和凭据 Secret 已按 UID 核对后删除。
 - 标记仅记录 TK-ADA 用途，不构成 ACL 或资源隔离。没有操作其他库、迁入业务数据或启动消费者；源测试服保持运行。目标应用运行 Secret 尚未创建，剩余发布条件见上文。
+
+## 后续：公司侧域名解析配置确认与实际访问核验
+
+- 用户明确说明运维已将公司域名 `tkada.galaxyshortdrama.com` 解析到新加坡集群。按此记录为已配置，不再将公共 DNS 无记录解释为运维未配置，不要求用户重复申请域名。
+- 本轮公共 DNS 查询返回 NXDOMAIN；本机普通 DNS 返回代理地址，不能作为公司解析是否配置的结论。随后在指定 ACK / prod 新建无业务凭据的本项目临时 Pod，通过集群默认 DNS 实测：应用域名返回 Name or service not known，ALB 域名正常解析，HTTPS 尚不能通过域名访问。公司 DNS 的生效范围、缓存及实际客户端访问仍待核验，不能声称域名访问已通过。
+- 只读核对 `prod/prod-https`，当前没有本项目 host rule 或匹配的 TLS host 声明；后续在应用 Service 准备后按部署流程追加本项目入口。
+- 私有证据为 `ack/company-domain-check.json`。临时 Pod 已按 UID 核实后清理；没有启动业务消费者。

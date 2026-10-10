@@ -16,7 +16,7 @@
 | 仓库凭据 | 同工具包 `vendor/tcr-cred.txt`，禁止回显/提交 |
 | 对外入口 | 现有 `prod/prod-https`，IngressClass `alb`；ALB 域名 `alb-ae6m00kf3iaolvbxim.ap-southeast-1.alb.aliyuncsslbintl.com` |
 | 证书 | 集群内以 `tkada.galaxyshortdrama.com` 为 SNI 的真实 TLS 校验通过，现有证书含 `*.galaxyshortdrama.com`；新 host 的 Ingress TLS 声明待登记 |
-| 生产域名 | 用户于 2026-10-10 指定 `tkada.galaxyshortdrama.com`；尚无 DNS 解析及 Ingress rule |
+| 生产域名 | `tkada.galaxyshortdrama.com`；用户确认运维已配置公司侧解析至新加坡集群，应用入口 rule 尚未追加 |
 | PostgreSQL 业务库 | `tkada`，2026-10-10 已用所提供账号创建，所有者 `gzjunbo`；尚未迁入业务数据 |
 | Redis 逻辑库 | DB 15；用户明确确认使用，已重新检查空库、登记本项目标记并回读验证 |
 | 应用端口 | API/容器/Service 均为 80 |
@@ -54,7 +54,7 @@ ACK 已核实 7 个 Ready 节点，分布在新加坡四个可用区；`prod` �
 
 1. **PostgreSQL 与 Redis 编号已落实**：使用 `tkada` 项目库与用户明确确认的 Redis DB 15，REDIS_URL 已填写。Redis 的 0–255 编号为实例预设，本项目标记仅用于记录用途，不提供访问隔离或公司全局分配证明；实例 CPU、内存仍共享。不得修改实例库数或清空共享实例。
 2. ACK 已用所提供凭据完成内网 PostgreSQL 只读认证（`postgres` 管理库，服务端 18.3）和 Redis AUTH/PING。外网地址连接超时，部署选用内网；已随后建好 PostgreSQL 项目库并按用户确认登记 Redis DB 15；目标恢复仍待执行，没有迁入业务数据。
-3. DNS CNAME 指向上表 ACK ALB 域名，登记新 host 的 TLS 声明与路由。现有通配证书已通过真实验证，无需新申请。不要再使用旧腾讯云入口 `134.175.255.190`。本项目只追加自身路由，不读取其他项目的证书 Secret。
+3. 用户确认运维已完成公司侧域名解析至新加坡集群，不再要求重复配置 DNS；从实际使用网络核验解析与访问。继续登记新 host 的 TLS 声明与路由。现有通配证书已通过真实验证，无需新申请。不要再使用旧腾讯云入口 `134.175.255.190`。本项目只追加自身路由，不读取其他项目的证书 Secret。
 4. 在现有 TikTok API 应用及 MCP 客户端中登记新回调，核对 R2 CORS 允许新 origin。复制 client_id/token 不等于已登记新的 redirect URI。
 5. 最终停写窗口中的一致性备份、目标恢复验证和单侧消费者切换；条件未齐前继续保持测试服运行。
 
@@ -63,7 +63,7 @@ ACK 已核实 7 个 Ready 节点，分布在新加坡四个可用区；`prod` �
 ```text
 项目：TK-ADA / tiktok-ad-automation
 目标：阿里云新加坡 ACK c19dbd82590a34b9f87cebb8c1a858796，namespace prod
-DNS：tkada.galaxyshortdrama.com，CNAME -> alb-ae6m00kf3iaolvbxim.ap-southeast-1.alb.aliyuncsslbintl.com
+DNS：用户确认运维已配置 tkada.galaxyshortdrama.com 指向新加坡集群；目标入口为上述 ACK ALB，实际访问待验
 HTTPS：为共享入口 prod/prod-https 确认匹配证书及 TLS host，保留其他站点
 PostgreSQL：tkada（已创建，所有者 gzjunbo）；使用已验证内网主机
 Redis：DB 15（用户已确认使用，已登记 TK-ADA 标记）；使用已验证内网主机，实例资源仍共享
