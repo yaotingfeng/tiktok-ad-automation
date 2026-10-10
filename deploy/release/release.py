@@ -14,7 +14,14 @@ import time
 from pathlib import Path
 from urllib.request import urlopen
 
-from backup import PROBE, restore_verify, snapshot, upload
+from backup import (
+    PROBE,
+    cleanup_completed,
+    local_destination,
+    publish_local,
+    restore_verify,
+    snapshot,
+)
 from common import (
     CONTEXT,
     FLAGS,
@@ -331,20 +338,8 @@ class Release:
             old_defaults == new_defaults,
             "ConfigMap defaults changed; review configuration before automatic release",
         )
-        # 备份接收方的密钥和桶必须在停服前就绪。
-        for name in ("BACKUP_BUCKET", "BACKUP_PREFIX", "BACKUP_AGE_RECIPIENT"):
-            require(os.environ.get(name), name + " must be configured")
-        require(
-            os.environ["BACKUP_AGE_RECIPIENT"].startswith("age1"),
-            "Use a validated age public recipient",
-        )
-        run(["age", "--version"])
-        aws = ["aws"] + (
-            ["--endpoint-url", os.environ["BACKUP_ENDPOINT_URL"]]
-            if os.environ.get("BACKUP_ENDPOINT_URL")
-            else []
-        )
-        run(aws + ["s3api", "head-bucket", "--bucket", os.environ["BACKUP_BUCKET"]])
+        # 停服前确认本机目标可写，无需云桶或额外备份云盘。
+        local_destination()
         if sha:
             self.check_remote(sha)
         run(
@@ -521,6 +516,7 @@ class Release:
         self.accept(sha)
         self.save("complete")
         self.unlock()
+        cleanup_completed(self.folder)
 
     def accept(self, sha):
         current = self.validate_deployments()
@@ -674,7 +670,7 @@ class Release:
         snapshot(self)
         self.save("backed-up")
         restore_verify(self.folder, self.values, self.state["old_sha"], sha)
-        upload(self.folder)
+        publish_local(self.folder)
         self.save("backup-verified")
         if sha:
             self.assert_lock()

@@ -67,12 +67,17 @@ class ReleaseTests(unittest.TestCase):
         from common import PUBLIC
 
         pulled = [PUBLIC.rsplit(":", 1)[0] + "@sha256:" + "2" * 64]
-        with patch(
-            "release.run",
-            side_effect=[json.dumps(descriptor).encode(), json.dumps(pulled).encode()],
+        with (
+            patch(
+                "release.run",
+                side_effect=[
+                    json.dumps(descriptor).encode(),
+                    json.dumps(pulled).encode(),
+                ],
+            ),
+            self.assertRaisesRegex(RuntimeError, "Pulled image"),
         ):
-            with self.assertRaisesRegex(RuntimeError, "Pulled image"):
-                self.release.image_digest("a" * 40)
+            self.release.image_digest("a" * 40)
 
     def test_missing_worker_never_counts_as_drained(self):
         self.assertFalse(
@@ -211,7 +216,7 @@ class ReleaseTests(unittest.TestCase):
             patch.object(self.release, "pause"),
             patch("release.snapshot"),
             patch("release.restore_verify", side_effect=RuntimeError("bad backup")),
-            patch("release.upload") as upload,
+            patch("release.publish_local") as upload,
             patch("release.run") as command,
             patch.object(self.release, "resume") as resume,
         ):
@@ -255,7 +260,7 @@ class ReleaseTests(unittest.TestCase):
             patch.object(self.release, "pause"),
             patch("release.snapshot"),
             patch("release.restore_verify"),
-            patch("release.upload"),
+            patch("release.publish_local"),
             patch.object(self.release, "assert_lock"),
             patch.object(self.release, "config_unchanged"),
             patch.object(self.release.cluster, "app_pods", return_value=[]),
@@ -267,32 +272,6 @@ class ReleaseTests(unittest.TestCase):
                 self.release.execute("deploy", "b" * 40)
             self.assertEqual(self.release.state["phase"], "migration-started")
             resume.assert_not_called()
-
-    def test_remote_backup_corruption_is_rejected(self):
-        from backup import upload
-
-        write(self.release.folder / "manifest.json", {"files": {}})
-        write(self.release.folder / "restore-verified.json", {"verified": True})
-
-        def transport(args):
-            if args[0] == "age":
-                Path(args[args.index("-o") + 1]).write_bytes(b"ciphertext")
-            elif "get-object" in args:
-                Path(args[-1]).write_bytes(b"corrupted ciphertext")
-            return b""
-
-        with (
-            patch.dict(
-                os.environ,
-                BACKUP_BUCKET="private-fixture",
-                BACKUP_PREFIX="fixture",
-                BACKUP_AGE_RECIPIENT="age1fixture",
-            ),
-            patch("backup.run", side_effect=transport),
-            self.assertRaisesRegex(RuntimeError, "checksum"),
-        ):
-            upload(self.release.folder)
-        self.assertFalse((self.release.folder / "upload-verified.json").exists())
 
     def test_apply_holds_workloads_until_orchestrator_resumes(self):
         spec = importlib.util.spec_from_file_location(

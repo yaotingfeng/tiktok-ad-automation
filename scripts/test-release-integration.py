@@ -9,10 +9,11 @@ import tarfile
 import tempfile
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "deploy/release"))
-from backup import PROBE, REDIS_RESTORE_CODE, restore_verify
+from backup import PROBE, REDIS_RESTORE_CODE, publish_local, restore_verify
 from common import PUBLIC, digest, require, run, write
 
 
@@ -236,6 +237,8 @@ r.set('string',b'\\x00secret');r.rpush('queue',b'one',b'two');r.hset('hash',mapp
                 {"files": {f: digest(folder / f) for f in files}},
             )
             restore_verify(folder, values, sha, sha)
+            with patch.dict(os.environ, LOCAL_BACKUP_DIR=str(folder / "local-backups")):
+                publish_local(folder)
             result = json.loads((folder / "restore-verified.json").read_text())
             require(
                 result["credentials_decrypted"] == 1,

@@ -1,5 +1,7 @@
-"""完整备份、隔离恢复及加密远端回读。正式数据库永不作为恢复目标。"""
+"""完整备份、隔离恢复及本地原子归档。正式数据库永不作为恢复目标。"""
 
+import fcntl
+import hashlib
 import json
 import os
 import secrets
@@ -350,6 +352,7 @@ def restore_verify(folder, values, old_sha, candidate_sha=None):
         write(
             folder / "restore-verified.json",
             {
+                "manifest_sha256": digest(folder / "manifest.json"),
                 "postgres_matches": True,
                 "credentials_decrypted": fingerprint["credentials_decrypted"],
                 "redis": redis_result,
@@ -366,47 +369,114 @@ def restore_verify(folder, values, old_sha, candidate_sha=None):
         (folder / "verify-app.env").unlink(missing_ok=True)
 
 
-def upload(folder):
-    bucket, prefix, recipient = (
-        os.environ[name]
-        for name in ("BACKUP_BUCKET", "BACKUP_PREFIX", "BACKUP_AGE_RECIPIENT")
-    )
+def local_destination():
+    value = os.environ.get("LOCAL_BACKUP_DIR", "")
+    require(bool(value), "LOCAL_BACKUP_DIR must be configured")
+    folder = Path(value).expanduser().absolute()
+    require(not folder.is_symlink(), "Backup directory cannot be a symlink")
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    folder.chmod(0o700)
+    require(os.access(folder, os.W_OK), "Local backup directory is not writable")
+    return folder
+
+
+def verify_bundle(bundle, checksums):
+    # 从已经关闭的归档重新读取实际内容，不能只相信打包前的源文件。
+    with tarfile.open(bundle, "r:") as archive:
+        members = archive.getmembers()
+        require(
+            len(members) == len(checksums)
+            and {m.name for m in members} == set(checksums)
+            and all(m.isfile() for m in members),
+            "Local backup member mismatch",
+        )
+        for member in members:
+            with archive.extractfile(member) as stream:
+                require(
+                    hashlib.file_digest(stream, "sha256").hexdigest()
+                    == checksums[member.name],
+                    "Local backup readback checksum mismatch",
+                )
+
+
+def publish_local(folder):
+    folder = Path(folder)
+    verify_archives(folder)
+    proof = json.loads((folder / "restore-verified.json").read_text())
     require(
-        bucket and prefix and recipient.startswith("age1"),
-        "Explicit backup destination and age recipient required",
+        proof.get("postgres_matches") is True
+        and "redis" in proof
+        and proof.get("manifest_sha256") == digest(folder / "manifest.json"),
+        "Successful restore verification required",
     )
-    key = prefix.rstrip("/") + "/" + folder.name + ".tar.age"
-    bundle = folder / "backup.tar"
+    destination = local_destination()
+    require(
+        destination.resolve() != folder.resolve(),
+        "Backup and state directories must differ",
+    )
+    target = destination / "latest.tar"
+    require(not target.is_symlink(), "Backup archive cannot be a symlink")
     manifest = json.loads((folder / "manifest.json").read_text())
-    with tarfile.open(bundle, "w") as archive:
-        for name in [*manifest["files"], "manifest.json", "restore-verified.json"]:
-            archive.add(folder / name, arcname=name)
-    encrypted = folder / "backup.tar.age"
-    run(["age", "-r", recipient, "-o", str(encrypted), str(bundle)])
-    bundle.unlink()
-    aws = ["aws"]
-    if os.environ.get("BACKUP_ENDPOINT_URL"):
-        aws += ["--endpoint-url", os.environ["BACKUP_ENDPOINT_URL"]]
-    run(
-        aws
-        + [
-            "s3api",
-            "put-object",
-            "--bucket",
-            bucket,
-            "--key",
-            key,
-            "--body",
-            str(encrypted),
-        ]
-    )
-    copy = folder / "remote-readback.age"
-    run(aws + ["s3api", "get-object", "--bucket", bucket, "--key", key, str(copy)])
+    checksums = {
+        name: digest(folder / name)
+        for name in [*manifest["files"], "manifest.json", "restore-verified.json"]
+    }
+    temporary = destination / (".pending-" + secrets.token_hex(8) + ".tar")
+    # 本机文件锁串行化发布；固定文件名原子替换，只保留最近一份完整备份。
+    with (destination / ".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            with temporary.open("xb") as stream:
+                temporary.chmod(0o600)
+                with tarfile.open(fileobj=stream, mode="w") as archive:
+                    for name in checksums:
+                        require(
+                            not (folder / name).is_symlink(),
+                            "Backup source cannot be a symlink",
+                        )
+                        archive.add(folder / name, arcname=name, recursive=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+            verify_bundle(temporary, checksums)
+            checksum = digest(temporary)
+            temporary.replace(target)
+            fd = os.open(destination, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            write(
+                folder / "local-backup.json",
+                {
+                    "path": str(target),
+                    "sha256": checksum,
+                    "old_sha": manifest.get("old_sha"),
+                    "retained": 1,
+                    "encrypted": False,
+                    "verified_at": int(time.time()),
+                },
+            )
+        finally:
+            temporary.unlink(missing_ok=True)
+    return target
+
+
+def cleanup_completed(folder):
+    """成功验收后删除本批重复备份与私密配置；失败现场必须保留。"""
+    folder = Path(folder)
+    if not (folder / "local-backup.json").exists():
+        return
+    record = json.loads((folder / "local-backup.json").read_text())
     require(
-        digest(copy) == digest(encrypted), "Remote backup readback checksum mismatch"
+        digest(record["path"]) == record["sha256"], "Published local backup changed"
     )
-    copy.unlink()
-    write(
-        folder / "upload-verified.json",
-        {"bucket": bucket, "key": key, "sha256": digest(encrypted), "encrypted": True},
-    )
+    manifest = json.loads((folder / "manifest.json").read_text())
+    for name in [
+        *manifest["files"],
+        "cluster-before.json",
+        "runtime.env",
+        "mcp-client.json",
+        "restore.toc",
+    ]:
+        require(Path(name).name == name, "Unsafe cleanup path")
+        (folder / name).unlink(missing_ok=True)

@@ -1927,3 +1927,9 @@
 - 对非技术用户的结论：尚不可交付一键发布。还缺完整CI通过、发布前备份远端存储与回读演练、Jenkins/可信执行环境及触发/告警接入、首次完整发布与故障验收。当前代码只能称编排已实现；本轮没有线上发布。详细阶段表见[发布工具验证记录](validation/2026-10-10-jenkins-release-tools.md)。
 
 - 远端ACR另有4个backup-工具tag无法清理：当前RAM账号删除操作被cr:DeleteRepositoryTag权限拒绝。明确保留待管理员处理，未声称全部远端镜像已删除；正式运行镜像保留。
+
+## 2026-10-10：转为本地发布与最新一份备份
+
+- 用户明确取消云备份存储需求；新增 `deploy/local.py` 统一检查/推送公司main/构建上传/备份/发布/恢复入口，删除 Jenkinsfile 与 AWS/age云桶门禁。原工作区未提交内容保留；副本只使用已提交 main。
+- 最新备份原子保存 `.runtime/local-release/backups/latest.tar`，恢复证据绑定 manifest SHA，回读通过才替换旧包。成功后清理本批重复私密文件，失败保留恢复现场。用户AGENTS改动不纳入提交。
+- 55项部署/本地备份门禁及真实PG18/Redis7→8/Celery恢复集成通过。完整应用检查和线上执行仍在进行，结果见[本地发布记录](validation/2026-10-10-local-release.md)。

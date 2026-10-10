@@ -22,7 +22,7 @@ if [[ "${DRY_RUN:-0}" == "1" ]]; then
   exit 0
 fi
 branch=$(git branch --show-current)
-# Jenkins checkout 可为 detached HEAD；后面的实时 main SHA 校验仍为强制门禁。
+# 独立发布副本可为 detached HEAD；后面的实时 main SHA 校验仍为强制门禁。
 [[ "$branch" == "main" || -z "$branch" ]] || fail "release must be built from main or its exact detached commit"
 [[ -z "$(git status --porcelain --untracked-files=all)" ]] || fail "refusing to build from a dirty worktree"
 company_url=$(git remote get-url company)
