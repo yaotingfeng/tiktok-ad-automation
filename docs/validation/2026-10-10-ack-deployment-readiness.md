@@ -93,3 +93,11 @@
 - 原 MCP client_id 搭配生产回调可渲染同意页；未提交同意，未验证后续平台回调校验，不能据此修改本地注册文件。官方文档和原始注册响应未提供可用的客户端管理 URI/令牌。保留原授权的迁移方案仍需落实这一点。
 - `DRY_RUN=1 deploy/k8s/apply.sh` 使用当前真实配置与原注册文件，返回 exit=2、`MCP registration does not allow the target callback`。这是实际配置阻断，不是集群部署成功；未执行集群写入。证据 `ack/current-config-preflight.json`、`callback-readiness.json`。
 - 已向用户请求登录当前 API 应用的管理账号；临时 OAuth 检查页已关闭，没有授权同意、换码、刷新或广告写操作。
+
+## 2026-10-10：API 回调复测与 MCP 生产客户端注册
+
+- 用户确认已在 API 应用配置生产回调，并明确授权直接处理独立 MCP 客户端。API 使用同一 App ID 和生产回调复测，正常显示 TK-ADA 授权同意页，之前的应用状态错误消失。未点击同意；此项证明授权入口已接受配置，尚未证明生产回调收码与令牌交换。临时检查页已关闭。
+- 通过官方 discovery 的 registration_endpoint 执行一次生产客户端动态注册，HTTP 201；平台原始响应明确返回生产 MCP redirect_uri、authorization_code/refresh_token 配置及新的 client_id。完整响应与严格五字段注册文件仅保存在私有 `ack/mcp-registration-production-response.json`、`ack/mcp-client-production.json`，权限 0600。没有伪造原客户端的登记，也没有修改测试服。
+- 原注册文件 SHA-256 前后相同。代码刷新流程校验凭据中的 client_id 与当前注册一致，因此新注册不能直接续期旧客户端下的 3 份 MCP 授权；迁移数据可保留，但切换新客户端后必须重新授权。尚未替换运行 Secret、撤销旧授权或启动生产消费者。
+- 私有证据 `ack/callback-readiness-retest.json`；API/MCP 完整授权测试及历史 MCP 重新授权仍待完成。
+- 使用正式候选镜像 `783d3b836b61171153cf1863f4ecd7617bc3e7d6`、真实运行环境与新注册文件，`DRY_RUN=1` 和 `PREFLIGHT_ONLY=1` 均 exit=0；后者包含镜像 revision 校验、断网容器 Settings/注册配置检查及 ACK 资源归属/入口只读检查。证据 `ack/production-client-config-preflight.json`。未写集群运行配置，未迁移数据库或队列；配置预检通过不代表历史 MCP 授权迁移通过。

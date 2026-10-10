@@ -55,7 +55,7 @@ ACK 已核实 7 个 Ready 节点，分布在新加坡四个可用区；`prod` �
 1. **PostgreSQL 与 Redis 编号已落实**：使用 `tkada` 项目库与用户明确确认的 Redis DB 15，REDIS_URL 已填写。Redis 的 0–255 编号为实例预设，本项目标记仅用于记录用途，不提供访问隔离或公司全局分配证明；实例 CPU、内存仍共享。不得修改实例库数或清空共享实例。
 2. ACK 已用所提供凭据完成内网 PostgreSQL 只读认证（`postgres` 管理库，服务端 18.3）和 Redis AUTH/PING。外网地址连接超时，部署选用内网；已随后建好 PostgreSQL 项目库并按用户确认登记 Redis DB 15；目标恢复仍待执行，没有迁入业务数据。
 3. 用户确认运维已完成公司侧域名解析至新加坡集群，不再要求重复配置 DNS；从实际使用网络核验解析与访问。本项目 Service、TLS 声明与路由已创建，控制器已成功同步；应用启动后再验证完整访问。现有通配证书已通过真实验证，无需新申请。不要再使用旧腾讯云入口 `134.175.255.190`。本项目只追加自身路由，不读取其他项目的证书 Secret。
-4. 在现有 TikTok API 应用及 MCP 客户端中登记新回调。R2 CORS 已通过匹配账号的 Cloudflare 控制台追加生产 origin，保留测试 origin，两者真实 OPTIONS 均返回 204 和正确 Allow-Origin。当前 TikTok 浏览器账号未展示配置中的有效 API 应用；原 MCP 动态注册响应没有 registration_client_uri/access_token，尚无已验证的原客户端回调修改路径。复制 client_id/token 不等于已登记新的 redirect URI，不得通过伪造注册 JSON 或直接换 client_id 绕过历史授权绑定。
+4. 用户已在 API 应用登记生产回调，复测正常展示 TK-ADA 授权同意页。按用户直接处理 MCP 的授权，已通过官方动态注册接口创建生产客户端，HTTP 201 响应确认生产 MCP 回调；私有注册文件为 `ack/mcp-client-production.json`。新客户端 ID 与旧授权绑定不同，现有 3 份 MCP 连接切换后须重新授权；原注册及授权保持不变，新注册尚未应用到生产。R2 CORS 已追加生产 origin，新旧 origin 的真实 OPTIONS 均通过。完整 OAuth 收码/换码仍待应用部署及用户实际授权验证。
 5. 最终停写窗口中的一致性备份、目标恢复验证和单侧消费者切换；条件未齐前继续保持测试服运行。
 
 可交给运维的资料清单：
@@ -108,3 +108,11 @@ R2 CORS：已添加 https://tkada.galaxyshortdrama.com，保留测试 origin，O
 - API App ID 为 `7690990985458761748`。当前浏览器账号直接访问应用管理详情显示“未找到应用程序”。同一 App ID 使用旧测试回调可显示 TK-ADA 同意页面；换生产回调则显示应用状态错误。这个对照表明不能把错误简单归因为应用整体停用，生产回调需要由该应用管理账号核对并登记。
 - 原 MCP client_id 配生产回调也能显示前端同意页面，但未点击 Authorize，不能据此认定远端接受回调。已查官方自定义客户端文档，公开流程只有注册/授权/换码/刷新/撤销，未找到原客户端回调更新接口；完整原注册响应也无管理 URI/令牌。不伪造注册材料，不擅自换客户端破坏原 3 份授权续期。
 - 当前真实配置离线预检明确失败于 `MCP registration does not allow the target callback`，未写入集群运行 Secret 或启动应用。已请用户切换到上述 App ID 的管理账号；保留管理详情页供继续操作，临时授权测试页均已关闭，没有提交同意、换码或刷新。
+
+## 2026-10-10：API 回调复测与 MCP 生产客户端注册
+
+- 用户确认已在 API 应用配置生产回调，并明确授权直接处理独立 MCP 客户端。API 使用同一 App ID 和生产回调复测，正常显示 TK-ADA 授权同意页，之前的应用状态错误消失。未点击同意；此项证明授权入口已接受配置，尚未证明生产回调收码与令牌交换。临时检查页已关闭。
+- 通过官方 discovery 的 registration_endpoint 执行一次生产客户端动态注册，HTTP 201；平台原始响应明确返回生产 MCP redirect_uri、authorization_code/refresh_token 配置及新的 client_id。完整响应与严格五字段注册文件仅保存在私有 `ack/mcp-registration-production-response.json`、`ack/mcp-client-production.json`，权限 0600。没有伪造原客户端的登记，也没有修改测试服。
+- 原注册文件 SHA-256 前后相同。代码刷新流程校验凭据中的 client_id 与当前注册一致，因此新注册不能直接续期旧客户端下的 3 份 MCP 授权；迁移数据可保留，但切换新客户端后必须重新授权。尚未替换运行 Secret、撤销旧授权或启动生产消费者。
+- 私有证据 `ack/callback-readiness-retest.json`；API/MCP 完整授权测试及历史 MCP 重新授权仍待完成。
+- 使用正式候选镜像 `783d3b836b61171153cf1863f4ecd7617bc3e7d6`、真实运行环境与新注册文件，`DRY_RUN=1` 和 `PREFLIGHT_ONLY=1` 均 exit=0；后者包含镜像 revision 校验、断网容器 Settings/注册配置检查及 ACK 资源归属/入口只读检查。证据 `ack/production-client-config-preflight.json`。未写集群运行配置，未迁移数据库或队列；配置预检通过不代表历史 MCP 授权迁移通过。
