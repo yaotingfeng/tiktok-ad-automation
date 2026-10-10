@@ -44,6 +44,29 @@ class ReleaseTests(unittest.TestCase):
             "lock_uid": "lock",
         }
 
+    def test_prepare_pulls_production_images_as_amd64_on_any_host(self):
+        from common import PUBLIC
+
+        self.release.state["old_sha"] = "a" * 40
+        with (
+            patch("release.run", return_value=b"") as command,
+            patch.object(
+                self.release,
+                "image_digest",
+                side_effect=RuntimeError("stop after pulls"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "stop after pulls"),
+        ):
+            self.release.prepare_tools("b" * 40)
+        pulls = [call.args[0] for call in command.call_args_list]
+        self.assertIn(
+            ["docker", "pull", "--platform=linux/amd64", PUBLIC + "a" * 40], pulls
+        )
+        self.assertIn(
+            ["docker", "pull", "--platform=linux/amd64", PUBLIC + "b" * 40], pulls
+        )
+        self.assertIn(["docker", "pull", "postgres:18"], pulls)
+
     def test_image_digest_uses_registry_index_reported_by_ack(self):
         index = "sha256:" + "1" * 64
         child = "sha256:" + "2" * 64

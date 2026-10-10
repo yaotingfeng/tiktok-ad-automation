@@ -296,7 +296,9 @@ class Release:
         for image in {PUBLIC + self.state["old_sha"], "postgres:18", "redis:8"} | (
             {PUBLIC + sha} if sha else set()
         ):
-            run(["docker", "pull", image])
+            # Apple Silicon 本机也必须验证线上 AMD64 镜像；恢复依赖可用本机架构。
+            platform = ["--platform=linux/amd64"] if image.startswith(PUBLIC) else []
+            run(["docker", "pull", *platform, image])
         self.state["image_digests"] = {
             version: self.image_digest(version)
             for version in {self.state["old_sha"], sha or self.state["old_sha"]}
