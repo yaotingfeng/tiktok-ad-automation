@@ -52,12 +52,17 @@ with open(os.environ['FAKE_LOG'], 'a') as f:
     f.write(json.dumps({'args': args, 'payload': payload}) + '\\n')
 if 'get' in args:
     kind = args[args.index('get') + 1]
-    if kind == 'ingress' and 'public' in args:
+    if kind == 'ingress' and 'prod-https' in args:
         print(json.dumps(state.get('ingress', {'metadata': {'resourceVersion': '1'}, 'spec': {'tls': [{'hosts': ['*.jetmobo.com']}], 'rules': [{'host': 'other.jetmobo.com'}]}})))
     elif kind == 'namespace':
         print('{}')
     elif kind == 'secret':
-        print(json.dumps(state['secret']) if 'secret' in state else '')
+        if 'secret' in state:
+            print(json.dumps(state['secret']))
+        elif 'tiktok-ad-automation-registry' in args and not state.get('missing_registry'):
+            print(json.dumps({'metadata': {'name': 'tiktok-ad-automation-registry', 'labels': {'app': 'tiktok-ad-automation'}}, 'type': 'kubernetes.io/dockerconfigjson', 'data': {'.dockerconfigjson': 'e30='}}))
+        else:
+            print('')
     elif kind == 'service':
         print(json.dumps({'metadata': {'labels': {'app': 'tiktok-ad-automation'}}, 'spec': {'selector': {'app': 'tiktok-ad-automation', 'role': 'api'}, 'ports': [{'port': 80, 'targetPort': 80}]}}))
     elif kind == 'job':
@@ -272,6 +277,13 @@ else:
         self.assertNotEqual(self.run_script(dry=False).returncode, 0)
         self.assert_no_writes()
 
+    def test_missing_registry_pull_secret_blocks_before_writes(self):
+        self.state.write_text(json.dumps({"items": [], "missing_registry": True}))
+        result = self.run_script(dry=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("registry pull Secret is missing", result.stderr)
+        self.assert_no_writes()
+
     def test_duplicate_ingress_blocks_before_apply(self):
         self.state.write_text(
             json.dumps(
@@ -305,14 +317,14 @@ else:
         self.assertNotEqual(self.run_script(dry=False).returncode, 0)
         self.assert_no_writes()
 
-    def test_host_collision_on_other_namespace_public_ingress_blocks_writes(self):
+    def test_host_collision_on_other_namespace_shared_ingress_blocks_writes(self):
         self.state.write_text(
             json.dumps(
                 {
                     "items": [
                         {
                             "kind": "Ingress",
-                            "metadata": {"name": "public", "namespace": "other"},
+                            "metadata": {"name": "prod-https", "namespace": "other"},
                             "spec": {"rules": [{"host": self.env["INGRESS_HOST"]}]},
                         }
                     ]
@@ -412,6 +424,7 @@ else:
         self.assertEqual(
             patch[0], {"op": "test", "path": "/metadata/resourceVersion", "value": "1"}
         )
+        self.assertIn("prod-https", call["args"])
         self.assertEqual(patch[1]["op"], "add")
         self.assertEqual(patch[1]["path"], "/spec/rules/-")
         self.assertEqual(

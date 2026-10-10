@@ -1788,3 +1788,11 @@
 - 域名尚无 DNS，现有证书声明不覆盖它；部署脚本支持指定新域名并增加写入前 TLS host 覆盖检查。生产模板与 runbook 已同步，源 MCP 注册材料未伪造修改。
 - 四个内外网端点在集群中 DNS 解析成功，但协议连接探测均超时，需核对跨云网络/白名单。探针已清理，未启动生产业务消费者、未切停测试服。
 - 24 项部署/构建行为回归、Ruff/格式/compileall/差异检查通过。完整证据与后续条件见 [生产连通性记录](validation/2026-10-10-production-connectivity.md)。
+
+## 2026-10-10：纠正为阿里云新加坡 ACK 并验证认证
+
+- 用户提供 `singaporeconfig`，生产目标更正为 ACK `c19dbd82590a34b9f87cebb8c1a858796` / `prod`。连接成功、7 节点 Ready、服务端 1.36.2；使用官方校验过的同版 kubectl。此前 TKE 探测不代表实际目标网络状态。
+- ACK 内网 PostgreSQL 认证及管理库只读查询成功（18.3），Redis 认证/PING 成功；不再要求跨云放行。ALB 真实 TLS 校验确认已有有效 `*.galaxyshortdrama.com` 证书，仍需 DNS 和新 host 入口登记。
+- 部署改用 `prod-https`、阿里云拓扑云盘 StorageClass，并创建/引用本项目 TCR 拉取 Secret。未配置拉取凭据时实际失败，补齐后 SHA 镜像在集群运行成功。
+- 25 项部署/构建行为回归、本地 13 资源严格 schema、ACK 服务端 dry-run、Ruff/格式/compileall/差异检查通过。临时探针与临时数据库凭据 Secret 已清理，仅保留本项目 registry Secret；未迁数据、未切停测试服。
+- TK-ADA 业务库名、Redis 库编号及回调/DNS 等发布条件仍待落实。完整证据见 [ACK 验证记录](validation/2026-10-10-ack-deployment-readiness.md)。

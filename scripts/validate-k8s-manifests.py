@@ -30,7 +30,7 @@ workloads = [o for o in objects if o["kind"] == "Deployment"]
 assert len(workloads) == 9
 for workload in workloads:
     spec = workload["spec"]["template"]["spec"]
-    assert "imagePullSecrets" not in spec
+    assert spec["imagePullSecrets"] == [{"name": "tiktok-ad-automation-registry"}]
     container = spec["containers"][0]
     assert all(
         k in container["resources"][budget]

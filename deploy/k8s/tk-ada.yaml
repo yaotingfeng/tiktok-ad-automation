@@ -35,8 +35,8 @@ metadata:
   labels:
     app: tiktok-ad-automation
 spec:
-  # 公司 TKE 集群没有默认 StorageClass，显式使用已核实的 CBS。
-  storageClassName: cbs
+  # ACK 按首个消费者所在可用区创建云盘，避免多可用区提前绑定错区。
+  storageClassName: alicloud-disk-topology-alltype
   accessModes:
     - ReadWriteOnce
   resources:

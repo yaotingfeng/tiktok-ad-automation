@@ -18,6 +18,8 @@ spec:
         app: tiktok-ad-automation
         role: migration
     spec:
+      imagePullSecrets:
+        - name: tiktok-ad-automation-registry
       automountServiceAccountToken: false
       restartPolicy: Never
       containers:

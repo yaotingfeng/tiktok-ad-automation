@@ -20,6 +20,8 @@ spec:
         app: tiktok-ad-automation
         role: api
     spec:
+      imagePullSecrets:
+        - name: tiktok-ad-automation-registry
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 60
       containers:
@@ -91,6 +93,8 @@ spec:
         app: tiktok-ad-automation
         role: worker-resource
     spec:
+      imagePullSecrets:
+        - name: tiktok-ad-automation-registry
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 960
       containers:
@@ -150,6 +154,8 @@ spec:
         app: tiktok-ad-automation
         role: worker-results
     spec:
+      imagePullSecrets:
+        - name: tiktok-ad-automation-registry
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 960
       containers:
@@ -209,6 +215,8 @@ spec:
         app: tiktok-ad-automation
         role: worker-builds
     spec:
+      imagePullSecrets:
+        - name: tiktok-ad-automation-registry
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 120
       containers:
@@ -268,6 +276,8 @@ spec:
         app: tiktok-ad-automation
         role: worker-control
     spec:
+      imagePullSecrets:
+        - name: tiktok-ad-automation-registry
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 120
       containers:
@@ -327,6 +337,8 @@ spec:
         app: tiktok-ad-automation
         role: worker-ads-directory
     spec:
+      imagePullSecrets:
+        - name: tiktok-ad-automation-registry
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 120
       containers:
@@ -386,6 +398,8 @@ spec:
         app: tiktok-ad-automation
         role: worker-ads-reporting
     spec:
+      imagePullSecrets:
+        - name: tiktok-ad-automation-registry
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 120
       containers:
@@ -445,6 +459,8 @@ spec:
         app: tiktok-ad-automation
         role: worker-ad-management
     spec:
+      imagePullSecrets:
+        - name: tiktok-ad-automation-registry
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 120
       containers:
@@ -507,6 +523,8 @@ spec:
         app: tiktok-ad-automation
         role: beat
     spec:
+      imagePullSecrets:
+        - name: tiktok-ad-automation-registry
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
       containers:

@@ -63,7 +63,7 @@ class Deployment:
         self.namespace = setting("K8S_NAMESPACE")
         require(
             self.namespace == "prod",
-            "shared public Ingress requires K8S_NAMESPACE=prod",
+            "shared prod-https Ingress requires K8S_NAMESPACE=prod",
         )
         self.context = setting("K8S_CONTEXT")
         self.host = setting("INGRESS_HOST")
@@ -125,8 +125,8 @@ class Deployment:
             )
 
     def ingress(self, allow_existing=False):
-        ingress = self.get("ingress", "public")
-        require(ingress is not None, "shared public Ingress not found")
+        ingress = self.get("ingress", "prod-https")
+        require(ingress is not None, "shared prod-https Ingress not found")
         # 自定义生产域名不能借用 jetmobo 的证书；只核对入口声明，不读取共享 Secret。
         tls_hosts = [
             host
@@ -143,7 +143,8 @@ class Deployment:
         )
         rules = ingress.get("spec", {}).get("rules", [])
         require(
-            rules, "shared public Ingress has no rules; inspect with operations team"
+            rules,
+            "shared prod-https Ingress has no rules; inspect with operations team",
         )
         for rule in rules:
             if rule.get("host") == self.host:
@@ -308,7 +309,7 @@ class Deployment:
 
     def preflight(self):
         self.kubectl("get", "namespace", self.namespace, "-o", "json")
-        # 全集群只读取部署/Service/Ingress/配置/PVC 元数据；Secret 仅查询本项目两个精确名称。
+        # 全集群查重；Secret 仅查询本项目运行配置、注册文件和镜像拉取凭据。
         inventory = json.loads(
             self.kubectl(
                 "get",
@@ -329,7 +330,7 @@ class Deployment:
                 )
                 self.owner(obj)
             if obj.get("kind") == "Ingress" and (
-                name != "public" or metadata.get("namespace") != self.namespace
+                name != "prod-https" or metadata.get("namespace") != self.namespace
             ):
                 require(
                     all(
@@ -342,6 +343,14 @@ class Deployment:
             obj = self.get("secret", f"{PROJECT}-{suffix}")
             if obj:
                 self.owner(obj)
+        registry = self.get("secret", f"{PROJECT}-registry")
+        require(registry is not None, "project registry pull Secret is missing")
+        self.owner(registry)
+        require(
+            registry.get("type") == "kubernetes.io/dockerconfigjson"
+            and registry.get("data", {}).get(".dockerconfigjson"),
+            "project registry pull Secret has invalid format",
+        )
         self.ingress(allow_existing=True)
         self.existing_job = self.get("job", self.job_name)
         if self.existing_job:
@@ -469,9 +478,14 @@ class Deployment:
             {"op": "add", "path": "/spec/rules/-", "value": rule},
         ]
         self.kubectl(
-            "patch", "ingress", "public", "--type=json", "--patch", json.dumps(patch)
+            "patch",
+            "ingress",
+            "prod-https",
+            "--type=json",
+            "--patch",
+            json.dumps(patch),
         )
-        updated = self.get("ingress", "public")
+        updated = self.get("ingress", "prod-https")
         expected = ingress["spec"]["rules"] + [rule]
         require(
             updated["spec"]["rules"] == expected,

@@ -1,29 +1,30 @@
 # TK-ADA 公司生产首发与迁移
 
-## 已确认的目标与授权（2026-10-09）
+## 已确认的目标与授权（2026-10-10 更新）
 
-用户已明确“公司集群就是生产环境，现在要部署到生产环境”，并要求“测试服的密钥、队列和授权要直接复制过去”。本次是新加坡测试实例向公司生产集群的迁移，覆盖此前“禁止复制测试密钥/授权”的默认规则；不再要求用户另找一套集群凭据。迁移不授权重复创建广告或绕过已有 UNKNOWN/冻结执行保护。
+用户已明确“公司集群就是生产环境，现在要部署到生产环境”，并要求“测试服的密钥、队列和授权要直接复制过去”。本次是新加坡测试实例向公司生产集群的迁移，覆盖此前“禁止复制测试密钥/授权”的默认规则；不再要求用户另找一套集群凭据。迁移不授权重复创建广告或绕过已有 UNKNOWN/冻结执行保护。2026-10-10 用户提供 `/Users/yaotingfeng/Downloads/singaporeconfig`，明确改用阿里云新加坡 ACK；原 skill 中的腾讯云 TKE 仅为此前误用的准备目标，后续不再向其部署。
 
 | 项目 | 已核实值 |
 | --- | --- |
-| 集群 | `cls-n950t106`，公司 TKE 弹性集群 |
-| context | `cls-n950t106-100040386575-context-default` |
-| 凭据来源 | 用户提供的 `deploy-help 2/vendor/kubeconfig`；禁止入 Git |
+| 集群 | 阿里云 ACK，新加坡 `ap-southeast-1`；集群 ID `c19dbd82590a34b9f87cebb8c1a858796` |
+| context | `kubernetes-admin-c19dbd82590a34b9f87cebb8c1a858796` |
+| 凭据来源 | 用户提供的 `/Users/yaotingfeng/Downloads/singaporeconfig`；私有副本 `.runtime/company-production-20261010/ack/kubeconfig`，0600，禁止入 Git |
 | namespace | `prod`，Active |
-| 服务端版本 | `v1.34.1-tke.8` |
-| 应用资源前缀 | `tiktok-ad-automation`；2026-10-09 查重无已存在同名项目资源 |
+| 服务端版本 | `v1.36.2-aliyun.1`；本地使用校验过官方 SHA256 的 `.tools/bin/kubectl-1.36` |
+| 应用资源前缀 | `tiktok-ad-automation`；2026-10-10 ACK 查重无同名业务 Deployment/Service |
 | 镜像仓库 | `junbo-image.tencentcloudcr.com/prod/tiktok-ad-automation:<完整 SHA>` |
 | 仓库凭据 | 同工具包 `vendor/tcr-cred.txt`，禁止回显/提交 |
-| 对外入口 | 现有 `prod/public` Ingress，IP `134.175.255.190`，HTTPS 443 |
-| 证书 | 现有证书不覆盖新域名；待配置 `tkada.galaxyshortdrama.com` 或 `*.galaxyshortdrama.com` 证书 |
+| 对外入口 | 现有 `prod/prod-https`，IngressClass `alb`；ALB 域名 `alb-ae6m00kf3iaolvbxim.ap-southeast-1.alb.aliyuncsslbintl.com` |
+| 证书 | 集群内以 `tkada.galaxyshortdrama.com` 为 SNI 的真实 TLS 校验通过，现有证书含 `*.galaxyshortdrama.com`；新 host 的 Ingress TLS 声明待登记 |
 | 生产域名 | 用户于 2026-10-10 指定 `tkada.galaxyshortdrama.com`；尚无 DNS 解析及 Ingress rule |
 | 应用端口 | API/容器/Service 均为 80 |
 | 拓扑 | 1 API、7 个独立 Worker、1 Beat，使用同一版本及运行 Secret |
 | 应用资源 | 合计申请 4.25 核 / 10.5 GiB，上限 10.5 核 / 21 GiB；不含 PostgreSQL、Redis 与发布瞬时资源 |
-| 存储 | 已有 `cbs` StorageClass，集群没有默认 StorageClass；Beat PVC 显式申请 CBS 20 GiB |
+| 存储 | Beat 申请 20 GiB，使用已存在的 `alicloud-disk-topology-alltype` / `WaitForFirstConsumer`，随首个 Pod 可用区绑定 |
+| 镜像拉取 | 已创建本项目 `tiktok-ad-automation-registry` Secret；ACK 默认 ACR 凭据不能拉取 TCR，工作负载显式引用本项目凭据 |
 | 配置落点 | `prod/tiktok-ad-automation-runtime` 与 `prod/tiktok-ad-automation-mcp-registration` Secret；未创建 |
 
-集群是弹性虚拟节点，API 返回的巨大 allocatable 数值不代表已购买或可无限使用的物理容量。现有业务 Pod 已由平台自动注入 eklet toleration；不修改别人的资源。应用首发保守预算与扩容观测要求见 K8s 手册和通用发布手册。
+ACK 已核实 7 个 Ready 节点，分布在新加坡四个可用区；`prod` 未配置 ResourceQuota/LimitRange。节点容量不是可直接独占的剩余资源，部署仍须核对其他工作负载已申请量及实际调度结果。
 
 ## 迁移源核验
 
@@ -50,8 +51,8 @@
 待落实项：
 
 1. TK-ADA 的 PostgreSQL **数据库名**与 Redis **逻辑库编号**。用户已提供主机和凭据，不再将其列为缺失；需要明确目标隔离位置后才可迁入状态，不能默认占用共享 DB 0。
-2. 公司腾讯云 TKE 到阿里云新加坡的网络路由与白名单。内网主机解析为 `192.168.*`，跨云内网不可仅凭域名判断可达；本机 TCP 建连不代表认证或集群连接成功。
-3. DNS A 记录及匹配 HTTPS 证书：现有 Ingress 仅声明 `*.jetmobo.com` 和 `*.gzxinran.net`，都不覆盖新域名。由运维配置新证书，保持共享入口其他站点正常；本项目脚本只追加自身 rule，不改他人规则或读取共享证书 Secret。
+2. ACK 已用所提供凭据完成内网 PostgreSQL 只读认证（`postgres` 管理库，服务端 18.3）和 Redis AUTH/PING。外网地址连接超时，部署选用内网；业务数据库名、Redis 库编号及目标恢复仍待明确，未读写业务数据。
+3. DNS CNAME 指向上表 ACK ALB 域名，登记新 host 的 TLS 声明与路由。现有通配证书已通过真实验证，无需新申请。不要再使用旧腾讯云入口 `134.175.255.190`。本项目只追加自身路由，不读取其他项目的证书 Secret。
 4. 在现有 TikTok API 应用及 MCP 客户端中登记新回调，核对 R2 CORS 允许新 origin。复制 client_id/token 不等于已登记新的 redirect URI。
 5. 最终停写窗口中的一致性备份、目标恢复验证和单侧消费者切换；条件未齐前继续保持测试服运行。
 
@@ -59,25 +60,25 @@
 
 ```text
 项目：TK-ADA / tiktok-ad-automation
-目标：公司 TKE cls-n950t106，namespace prod
-DNS：tkada.galaxyshortdrama.com，A 记录 -> 134.175.255.190
-HTTPS：为共享入口 public 配置覆盖该域名的证书及 TLS host，保留其他站点
-PostgreSQL：确认本项目数据库名，以及 TKE 到所提供 RDS 实例的路由/白名单
-Redis：确认本项目独占逻辑库编号、路由/白名单和允许的导入方式
-跨云连接：明确使用私网互通还是受控公网连接，核实 TLS 配置
+目标：阿里云新加坡 ACK c19dbd82590a34b9f87cebb8c1a858796，namespace prod
+DNS：tkada.galaxyshortdrama.com，CNAME -> alb-ae6m00kf3iaolvbxim.ap-southeast-1.alb.aliyuncsslbintl.com
+HTTPS：为共享入口 prod/prod-https 确认匹配证书及 TLS host，保留其他站点
+PostgreSQL：确认本项目数据库名及迁入权限；使用所提供的内网主机
+Redis：确认本项目独占逻辑库编号和允许的导入方式；使用内网主机
+网络：ACK 内网 PostgreSQL、Redis 已认证成功；不再按腾讯云跨云超时处理
 TikTok API 回调：https://tkada.galaxyshortdrama.com/api/integrations/tiktok/callback
 TikTok MCP 回调：https://tkada.galaxyshortdrama.com/api/integrations/tiktok/mcp/callback
 R2 CORS：允许 https://tkada.galaxyshortdrama.com
 状态：生产业务服务未启动，Ingress rule 尚未追加
 ```
 
-2026-10-09 的 13 个部署对象已通过服务端 dry-run，不代表应用、磁盘绑定或网络验收。2026-10-10 仅创建本项目前缀的临时网络探针，无密钥、无队列消费者，用于验证真实镜像拉取、调度和网络；探针结束后清理。具体结果见当日验证记录。
+2026-10-09 的 13 个部署对象已通过服务端 dry-run，不代表应用、磁盘绑定或网络验收。2026-10-10 此前腾讯云仅创建本项目前缀的临时网络探针，无密钥、无队列消费者，用于验证真实镜像拉取、调度和网络；探针结束后清理。旧目标的结果见当日腾讯云记录；新目标以 [ACK 验证记录](../validation/2026-10-10-ack-deployment-readiness.md) 为准。
 
 ## 执行顺序
 
 1. 保留来源私密配置、注册材料和授权加密密钥；整理目标配置，只有网络地址、域名及挂载路径按目标替换。不要生成新的加密密钥导致历史授权不可读。
 2. 完成项目相关验证，将已验证 `main` 推送公司 Gitea，构建带完整 SHA/revision 标签的 AMD64 镜像并推 TCR；保留本机用户未提交的 `AGENTS.md` 改动，使用干净发布副本。
-3. 目标运行配置齐全后，离线容器检查真实配置，执行集群只读预检与服务端 dry-run，核对配额、调度和 CBS。
+3. 目标运行配置齐全后，离线容器检查真实配置，执行集群只读预检与服务端 dry-run，核对配额、调度和阿里云云盘。
 4. 切换窗口停止新入口写入、旧 Beat 和正常排空 Worker，暂停备份 timer 并等待已开始备份结束。备份 PostgreSQL、Redis、独立源码/构建产物、私有配置、注册材料、证书与服务定义；校验和及隔离恢复通过后才进行目标恢复。
 5. 迁移原授权记录时同步保留密钥、连接代数、冻结请求、幂等记录和 UNKNOWN 状态；队列与持久业务事实必须来自同一停写窗口。不得用空库加队列、或单独复制 `.env` 代替授权数据迁移。
 6. 目标先恢复事实和队列并完成验证，再运行审查后的版本迁移及九角色部署；确认旧消费者已经停止后才让生产消费。若发现仍有未确认的真实广告任务，先列明具体任务状态与原授权再处理，不盲目重发。
