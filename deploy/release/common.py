@@ -32,7 +32,17 @@ def require(ok, message):
 
 def run(args, *, data=None, env=None):
     result = subprocess.run(args, input=data, capture_output=True, env=env, check=False)
-    # 外部命令错误可能含数据库 URL 或 Secret，只报动作，不回显正文。
+    # 错误正文可能含私密连接配置，仅保存到调用方指定的私有诊断文件。
+    if result.returncode and os.environ.get("RELEASE_DIAGNOSTIC_LOG"):
+        write(
+            os.environ["RELEASE_DIAGNOSTIC_LOG"],
+            {
+                "command": Path(args[0]).name,
+                "returncode": result.returncode,
+                "stderr": result.stderr.decode(errors="replace"),
+            },
+        )
+    # 控制台只报动作，不回显正文。
     require(
         result.returncode == 0,
         f"{Path(args[0]).name} {args[1] if len(args) > 1 else ''} failed ({result.returncode})",

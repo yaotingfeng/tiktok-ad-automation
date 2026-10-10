@@ -7,6 +7,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import time
@@ -30,6 +31,7 @@ def git(*args, cwd=ROOT):
 def stage(args, cwd, env, log):
     # 完整输出只落入私有日志；控制台不展开运行配置或外部命令错误正文。
     print("执行：" + Path(args[0]).name + " " + Path(args[1]).name, flush=True)
+    env = dict(env, RELEASE_DIAGNOSTIC_LOG=str(log.with_name("command-error.json")))
     with log.open("ab") as stream:
         result = subprocess.run(
             args, cwd=cwd, env=env, stdout=stream, stderr=stream, check=False
@@ -71,6 +73,13 @@ def prepare_checkout(folder):
     git("checkout", "--detach", sha, cwd=checkout)
     git("remote", "add", "company", COMPANY, cwd=checkout)
     return checkout, sha
+
+
+def cleanup_checkout(folder):
+    checkout = folder / "checkout"
+    require(not checkout.is_symlink(), "Checkout cleanup cannot follow a symlink")
+    if checkout.exists():
+        shutil.rmtree(checkout)
 
 
 def main():
@@ -129,6 +138,7 @@ def main():
                 env,
                 folder / "execution.log",
             )
+            cleanup_checkout(folder)
             print("恢复处理完成；请运行 status 查看状态。")
             return
         require(args.run is None, "--run is only valid for status/recover/finish")
@@ -166,6 +176,7 @@ def main():
             stage(command, checkout, env, log)
         record["phase"] = "complete"
         write(folder / "run.json", record)
+        cleanup_checkout(folder)
         print("完成：" + args.action + "；批次：" + run_name, flush=True)
         if args.action != "check":
             print("本地最新备份：" + str(base / "backups/latest.tar"))

@@ -212,6 +212,27 @@ class ReleaseTests(unittest.TestCase):
                 self.release.recover()
             resume.assert_not_called()
 
+    def test_command_failure_keeps_diagnostics_private(self):
+        import subprocess
+
+        from common import run
+
+        log = self.release.folder / "command-error.json"
+        with (
+            patch.dict(os.environ, RELEASE_DIAGNOSTIC_LOG=str(log)),
+            patch(
+                "common.subprocess.run",
+                return_value=subprocess.CompletedProcess(
+                    ["fixture"], 1, b"", b"private-fixture"
+                ),
+            ),
+            self.assertRaisesRegex(RuntimeError, "fixture") as caught,
+        ):
+            run(["fixture"])
+        self.assertNotIn("private-fixture", str(caught.exception))
+        self.assertEqual(json.loads(log.read_text())["stderr"], "private-fixture")
+        self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+
     def test_state_is_valid_json_and_private(self):
         path = self.release.folder / "state.json"
         write(path, {"phase": "frozen"})
