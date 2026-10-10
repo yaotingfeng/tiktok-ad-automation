@@ -12,7 +12,12 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 PROJECT = "tiktok-ad-automation"
-IMAGE_PREFIX = f"junbo-image.tencentcloudcr.com/prod/{PROJECT}:"
+IMAGE_PREFIX = (
+    f"sg-acr-prod-registry-vpc.ap-southeast-1.cr.aliyuncs.com/test/{PROJECT}:"
+)
+PUBLIC_IMAGE_PREFIX = (
+    "sg-acr-prod-registry.ap-southeast-1.cr.aliyuncs.com/test/" + PROJECT + ":"
+)
 DIRECTORY = Path(__file__).resolve().parent
 ROLES = (
     "api",
@@ -62,8 +67,8 @@ class Deployment:
     def __init__(self):
         self.namespace = setting("K8S_NAMESPACE")
         require(
-            self.namespace == "prod",
-            "shared prod-https Ingress requires K8S_NAMESPACE=prod",
+            self.namespace == "test",
+            "shared test-https Ingress requires K8S_NAMESPACE=test",
         )
         self.context = setting("K8S_CONTEXT")
         self.host = setting("INGRESS_HOST")
@@ -125,8 +130,8 @@ class Deployment:
             )
 
     def ingress(self, allow_existing=False):
-        ingress = self.get("ingress", "prod-https")
-        require(ingress is not None, "shared prod-https Ingress not found")
+        ingress = self.get("ingress", "test-https")
+        require(ingress is not None, "shared test-https Ingress not found")
         # 自定义生产域名不能借用 jetmobo 的证书；只核对入口声明，不读取共享 Secret。
         tls_hosts = [
             host
@@ -144,7 +149,7 @@ class Deployment:
         rules = ingress.get("spec", {}).get("rules", [])
         require(
             rules,
-            "shared prod-https Ingress has no rules; inspect with operations team",
+            "shared test-https Ingress has no rules; inspect with operations team",
         )
         for rule in rules:
             if rule.get("host") == self.host:
@@ -261,6 +266,8 @@ class Deployment:
         self.job_name = f"{PROJECT}-migration-{self.release[:12]}-{self.digest[:12]}"
 
     def validate_image(self):
+        # 本机从公网 ACR 拉取；Pod 使用同仓库同 SHA 的 VPC 地址。
+        local_image = PUBLIC_IMAGE_PREFIX + self.release
         # 使用已拉取镜像验证真实配置，禁止校验容器访问网络或现有业务队列。
         result = subprocess.run(
             [
@@ -269,7 +276,7 @@ class Deployment:
                 "inspect",
                 "--format",
                 '{{index .Config.Labels "org.opencontainers.image.revision"}}',
-                self.image,
+                local_image,
             ],
             capture_output=True,
             text=True,
@@ -294,7 +301,7 @@ class Deployment:
                 f"type=bind,source={registration},target=/run/tk-ada/mcp-client.json,readonly",
                 "-e",
                 "MCP_CLIENT_REGISTRATION_REF=/run/tk-ada/mcp-client.json",
-                self.image,
+                local_image,
                 "python",
                 "scripts/check_deployment.py",
             ],
@@ -319,18 +326,21 @@ class Deployment:
                 "json",
             )
         )
+        retired = self.retired_source(inventory["items"])
         for obj in inventory["items"]:
             metadata = obj.get("metadata", {})
             name = metadata.get("name", "")
             labeled = metadata.get("labels", {}).get("app") == PROJECT
             if name == PROJECT or name.startswith(PROJECT + "-") or labeled:
+                if (obj.get("kind"), metadata.get("namespace"), name) in retired:
+                    continue
                 require(
                     metadata.get("namespace") == self.namespace,
                     f"cross-namespace project collision: {name}",
                 )
                 self.owner(obj)
             if obj.get("kind") == "Ingress" and (
-                name != "prod-https" or metadata.get("namespace") != self.namespace
+                name != "test-https" or metadata.get("namespace") != self.namespace
             ):
                 require(
                     all(
@@ -368,6 +378,73 @@ class Deployment:
                 ),
                 "existing migration Job is not complete",
             )
+
+    def retired_source(self, inventory):
+        # 命名空间迁移可保留停用资源用于回退；只豁免显式归档中 UID 相同的资源。
+        # 不接受仅靠 namespace 或 app 标签放行，旧消费者仍在运行时必须阻断。
+        path = os.environ.get("RETIRED_SOURCE_INVENTORY")
+        if not path:
+            return set()
+        archive = json.loads(Path(path).read_text())
+        namespace = archive["namespace"]
+        require(namespace != self.namespace, "retired source must differ from target")
+        expected = {}
+        for obj in archive["items"]:
+            metadata = obj["metadata"]
+            require(
+                metadata.get("namespace") == namespace
+                and metadata.get("labels", {}).get("app") == PROJECT
+                and metadata.get("uid")
+                and (
+                    metadata["name"] == PROJECT
+                    or metadata["name"].startswith(PROJECT + "-")
+                )
+                and obj["kind"]
+                in ("Deployment", "Service", "ConfigMap", "PersistentVolumeClaim"),
+                "invalid retired source inventory",
+            )
+            expected[(obj["kind"], namespace, metadata["name"])] = obj
+        require(expected, "retired source inventory must not be empty")
+        found = set()
+        for obj in inventory:
+            meta = obj.get("metadata", {})
+            key = (obj.get("kind"), meta.get("namespace"), meta.get("name"))
+            if key not in expected:
+                continue
+            original = expected[key]
+            require(
+                meta.get("uid") == original["metadata"]["uid"]
+                and meta.get("labels", {}).get("app") == PROJECT,
+                "retired source identity changed",
+            )
+            if obj["kind"] == "Deployment":
+                require(
+                    obj.get("spec", {}).get("replicas", 1) == 0
+                    and not obj.get("status", {}).get("replicas", 0)
+                    and obj["spec"]["template"] == original["spec"]["template"],
+                    "retired source Deployment is active or changed",
+                )
+            found.add(key)
+        pods = json.loads(
+            self.kubectl(
+                "get", "pods", "-n", namespace, "-l", f"app={PROJECT}", "-o", "json"
+            )
+        )
+        require(
+            not any(
+                pod.get("status", {}).get("phase") in ("Pending", "Running", "Unknown")
+                and (
+                    pod.get("metadata", {}).get("labels", {}).get("role") in ROLES
+                    or any(
+                        ref.get("kind") == "ReplicaSet"
+                        for ref in pod.get("metadata", {}).get("ownerReferences", [])
+                    )
+                )
+                for pod in pods["items"]
+            ),
+            "retired source still has application Pods",
+        )
+        return found
 
     def render(self, name):
         return (
@@ -480,12 +557,12 @@ class Deployment:
         self.kubectl(
             "patch",
             "ingress",
-            "prod-https",
+            "test-https",
             "--type=json",
             "--patch",
             json.dumps(patch),
         )
-        updated = self.get("ingress", "prod-https")
+        updated = self.get("ingress", "test-https")
         expected = ingress["spec"]["rules"] + [rule]
         require(
             updated["spec"]["rules"] == expected,

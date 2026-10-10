@@ -4,10 +4,10 @@
 
 ## 已固定的部署约定
 
-- 镜像：`junbo-image.tencentcloudcr.com/prod/tiktok-ad-automation:<完整 Git SHA>`。
+- 集群拉取镜像：`sg-acr-prod-registry-vpc.ap-southeast-1.cr.aliyuncs.com/test/tiktok-ad-automation:<完整 Git SHA>`。
 - Gitea：`company` 远端 `https://git.gzjunbo.net/yaotf/tiktok-ad-automation.git`；GitHub `origin` 保留。
 - API、Dockerfile、Service 均为 80；外部通过共享 Ingress 的 HTTPS 443 访问。
-- namespace 为 `prod`，Ingress 为已有的 `prod-https`（`alb`）；不创建第二个 Ingress。ACK 拉取 TCR 镜像必须显式引用本项目 `tiktok-ad-automation-registry` Secret，禁止借用其他项目 Secret。
+- namespace 为 `test`，Ingress 为已有的 `test-https`（`alb`）；不创建第二个 Ingress。ACK 拉取 ACR VPC 镜像必须显式引用本项目 `tiktok-ad-automation-registry` Secret，禁止借用其他项目 Secret。
 - `K8S_CONTEXT` 和域名必须显式传入；当前用户指定 `tkada.shortclipflix.com`，也支持公司分配的单层 `*.jetmobo.com` 域名；没有测试服务器 IP/sslip.io 回退值。
 - API、7 个 Worker 和 Beat 使用同一镜像及配置。Worker 初始并发均为 1；Beat 单副本、`Recreate` 更新。
 - API 与 Worker 均有就绪探针；所有角色有 CPU/内存 requests 与 limits。应用合计请求 4.25 核 CPU / 10.5 GiB 内存，上限合计 10.5 核 / 21 GiB；发布任务另请求 100m / 256 MiB。它们是首发预算，尚未经过生产压力测试。
@@ -33,7 +33,7 @@
 
 ## 部署前要准备的具体资料
 
-1. 获授权的 kubeconfig、明确的 context，以及 `prod` 资源配额。优先使用项目受限凭据；凭据必须允许下述只读查重，权限不足时停止，不能跳过检查。
+1. 获授权的 kubeconfig、明确的 context，以及 `test` 资源配额。优先使用项目受限凭据；凭据必须允许下述只读查重，权限不足时停止，不能跳过检查。
 2. 生产域名 `tkada.shortclipflix.com` 的 CNAME 指向 `alb-ae6m00kf3iaolvbxim.ap-southeast-1.alb.aliyuncsslbintl.com`。集群内真实 TLS 握手确认 ALB 已提供有效 `*.shortclipflix.com` 证书，无需新申请；2026-10-10 已按用户授权创建正式 Service 并追加新 host 的 TLS 声明与路由，控制器同步成功；九角色已部署；生产域名已确认解析到该 ALB，使用现有 shortclipflix 通配证书；切换验收见生产手册。脚本只检查 TLS hosts 声明，不读取共享证书 Secret；发布验收还需通过域名真实访问。
 3. 仓库外的运行配置和真实 MCP 注册文件；注册文件必须允许目标回调域名。私有 R2 桶的 CORS 同步允许目标前端 origin，禁止改为公开桶。
 4. 已确认从新加坡迁移密钥、队列和授权；最终切换时先停止旧调度、排空任务并按发布手册备份。不得让两套 Beat/Worker 同时消费同一批任务。
@@ -76,7 +76,7 @@ uv run python scripts/check-local-deployment.py \
 git status -sb
 git rev-parse --show-toplevel
 git push company main
-docker login junbo-image.tencentcloudcr.com
+docker login sg-acr-prod-registry.ap-southeast-1.cr.aliyuncs.com
 bash deploy/build-and-push.sh
 ```
 
@@ -90,14 +90,15 @@ bash deploy/build-and-push.sh
 export PATH="$PWD/.tools/ack-bin:$PATH"
 export KUBECONFIG="$PWD/.runtime/company-production-20261010/ack/kubeconfig"
 export K8S_CONTEXT='kubernetes-admin-c19dbd82590a34b9f87cebb8c1a858796'
-export K8S_NAMESPACE=prod
+export K8S_NAMESPACE=test
 export INGRESS_HOST='tkada.shortclipflix.com'
 export RELEASE_ID="$(git rev-parse HEAD)"
-export APP_IMAGE="junbo-image.tencentcloudcr.com/prod/tiktok-ad-automation:${RELEASE_ID}"
+export APP_IMAGE="sg-acr-prod-registry-vpc.ap-southeast-1.cr.aliyuncs.com/test/tiktok-ad-automation:${RELEASE_ID}"
 export RUNTIME_ENV_FILE='/private/path/tk-ada-production-runtime.env'
 export MCP_CLIENT_REGISTRATION_FILE='/private/path/mcp-client.json'
 
-docker pull "$APP_IMAGE"
+export LOCAL_IMAGE="sg-acr-prod-registry.ap-southeast-1.cr.aliyuncs.com/test/tiktok-ad-automation:${RELEASE_ID}"
+docker pull "$LOCAL_IMAGE"
 DRY_RUN=1 bash deploy/k8s/apply.sh
 PREFLIGHT_ONLY=1 bash deploy/k8s/apply.sh
 ```
@@ -120,7 +121,7 @@ bash deploy/k8s/patch-public-ingress.sh
 
 部署脚本再次执行预检，之后更新带项目标签的两个 Secret、静态资源，运行本版本与配置摘要对应的 Job，最后发布九个应用 Deployment 并等待 rollout。Job 名称长度受限，完整 SHA/摘要保存在注解；已有同名 Job 只有归属、SHA、摘要和完成状态全部符合时才能复用。失败时停止，不自动删除旧 Job 或回滚持久状态。
 
-Ingress 脚本固定追加 `prod/prod-https`，核对 Service 的标签、选择器和端口，读取完整共享规则，使用 resourceVersion 乐观锁，只追加一条规则，再完整回读旧规则与新规则。已有 host 会拒绝重复追加；正常升级保留已属于本项目的入口即可，不必重复执行追加脚本。所有 kubectl 命令固定使用显式 context 和 namespace。
+Ingress 脚本固定追加 `test/test-https`，核对 Service 的标签、选择器和端口，读取完整共享规则，使用 resourceVersion 乐观锁，只追加一条规则，再完整回读旧规则与新规则。已有 host 会拒绝重复追加；正常升级保留已属于本项目的入口即可，不必重复执行追加脚本。所有 kubectl 命令固定使用显式 context 和 namespace。
 
 ## 集群验收与回退
 
@@ -135,3 +136,11 @@ uv run python scripts/check-bootstrap.py "https://$INGRESS_HOST"
 HTTPS 验收不使用 `-k`，必须验证证书有效。继续检查七个 Worker、唯一 Beat、实际版本及配置一致性、R2 签名上传回读、API/MCP 注册/真实授权/账户发现。真实广告写入按具体授权另验。
 
 保存镜像 digest、旧/新 SHA、配置摘要、资源版本、备份证据及验收结果。回退前先确认当前持久状态与旧应用兼容，并按原流程停止调度/排空；使用旧镜像和对应的已核实私有配置，不盲目执行 `rollout undo`（它不会恢复 Secret）。恢复相关内容按既有发布手册处理，本脚本不自动回退。
+
+## 新加坡 ACR 与命名空间迁移
+
+本机通过公网 `sg-acr-prod-registry.ap-southeast-1.cr.aliyuncs.com/test/tiktok-ad-automation:<SHA>` 构建/推送/拉取；集群使用同仓库的 VPC 地址。部署脚本在本机校验公网镜像 revision 与真实运行配置，工作负载只接受 VPC 地址；发布后须核对 Pod imageID 与推送 digest。仓库密码只通过 stdin 或受控 dockerconfigjson 注入，不能出现在命令参数、文档或 Git。
+
+`test` 是公司指定的 Kubernetes 命名空间，生产运行配置仍为 `.env.production`。迁移时先备份、停入口/Beat 并排空 Worker，再保留源资源为零副本；Beat 文件恢复到目标独立 PVC。只迁移本项目两个域名的共享入口条目，不改变其他站点，避免两个 Ingress 同时声明同一域名。
+
+如保留旧 namespace 的停用资源，设置 `RETIRED_SOURCE_INVENTORY` 为私有归档 JSON（`namespace` 和原始 `items`，只含本项目 Deployment/Service/ConfigMap/PVC）。部署前逐项核对 UID、标签、原 Pod 模板及 Deployment 零副本，并检查源应用 Pod 已全部消失；未登记的同名资源仍阻断。该文件不是无条件跳过查重的开关；源服务被重新启动或替换会立即阻断部署。回退必须先停止目标，不能直接启动旧消费者。

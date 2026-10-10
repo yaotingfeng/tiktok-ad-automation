@@ -3,10 +3,10 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "$repo_root"
 fail() { echo "[deploy/build] $*" >&2; exit 2; }
-registry=junbo-image.tencentcloudcr.com/prod
+registry=sg-acr-prod-registry.ap-southeast-1.cr.aliyuncs.com/test
 project_name=tiktok-ad-automation
 # 仓库/项目名固定，避免环境变量误将本项目推入其他项目镜像。
-[[ "${TCR_REGISTRY:-$registry}" == "$registry" ]] || fail "TCR_REGISTRY must use the company registry"
+[[ "${ACR_REGISTRY:-$registry}" == "$registry" ]] || fail "ACR_REGISTRY must use the company registry"
 [[ "${PROJECT_NAME:-$project_name}" == "$project_name" ]] || fail "PROJECT_NAME must be tiktok-ad-automation"
 head_sha=$(git rev-parse HEAD)
 release_sha=${RELEASE_SHA:-$head_sha}

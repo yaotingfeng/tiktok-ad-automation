@@ -93,7 +93,8 @@ with open(os.environ['DOCKER_LOG'], 'a') as f:
         build = next(call for call in calls if call[:2] == ["buildx", "build"])
         self.assertEqual(
             build[build.index("-t") + 1],
-            "junbo-image.tencentcloudcr.com/prod/tiktok-ad-automation:" + self.sha,
+            "sg-acr-prod-registry.ap-southeast-1.cr.aliyuncs.com/test/tiktok-ad-automation:"
+            + self.sha,
         )
         self.assertIn("VCS_REF=" + self.sha, build)
         self.assertIn("--push", build)

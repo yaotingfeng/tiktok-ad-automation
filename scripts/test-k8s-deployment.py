@@ -9,7 +9,10 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 SHA = "0123456789abcdef0123456789abcdef01234567"
-IMAGE = "junbo-image.tencentcloudcr.com/prod/tiktok-ad-automation:" + SHA
+IMAGE = (
+    "sg-acr-prod-registry-vpc.ap-southeast-1.cr.aliyuncs.com/test/tiktok-ad-automation:"
+    + SHA
+)
 PROJECT = "tiktok-ad-automation"
 
 
@@ -52,7 +55,7 @@ with open(os.environ['FAKE_LOG'], 'a') as f:
     f.write(json.dumps({'args': args, 'payload': payload}) + '\\n')
 if 'get' in args:
     kind = args[args.index('get') + 1]
-    if kind == 'ingress' and 'prod-https' in args:
+    if kind == 'ingress' and 'test-https' in args:
         print(json.dumps(state.get('ingress', {'metadata': {'resourceVersion': '1'}, 'spec': {'tls': [{'hosts': ['*.jetmobo.com']}], 'rules': [{'host': 'other.jetmobo.com'}]}})))
     elif kind == 'namespace':
         print('{}')
@@ -67,6 +70,8 @@ if 'get' in args:
         print(json.dumps({'metadata': {'labels': {'app': 'tiktok-ad-automation'}}, 'spec': {'selector': {'app': 'tiktok-ad-automation', 'role': 'api'}, 'ports': [{'port': 80, 'targetPort': 80}]}}))
     elif kind == 'job':
         print('')
+    elif kind == 'pods':
+        print(json.dumps({'items': state.get('source_pods', [])}))
     else:
         print(json.dumps({'items': state['items']}))
 elif 'patch' in args:
@@ -90,7 +95,7 @@ else:
             PATH=str(self.root) + os.pathsep + os.environ["PATH"],
             FAKE_STATE=str(self.state),
             FAKE_LOG=str(self.log),
-            K8S_NAMESPACE="prod",
+            K8S_NAMESPACE="test",
             K8S_CONTEXT="fixture-context",
             INGRESS_HOST="tiktok-ad-automation-test.jetmobo.com",
             RELEASE_ID=SHA,
@@ -135,6 +140,70 @@ else:
                 result = self.run_script(APP_IMAGE=image)
                 self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assert_no_writes()
+
+    def test_public_registry_image_cannot_be_used_for_cluster_deployment(self):
+        public = IMAGE.replace("-registry-vpc.", "-registry.")
+        self.assertNotEqual(self.run_script(APP_IMAGE=public).returncode, 0)
+        self.assert_no_writes()
+
+    def test_old_namespace_is_rejected(self):
+        self.assertNotEqual(self.run_script(K8S_NAMESPACE="prod").returncode, 0)
+        self.assert_no_writes()
+
+    def test_retired_source_requires_matching_uid_and_stopped_consumers(self):
+        source = {
+            "kind": "Deployment",
+            "metadata": {
+                "namespace": "prod",
+                "name": PROJECT + "-api",
+                "uid": "archived-uid",
+                "labels": {"app": PROJECT},
+            },
+            "spec": {
+                "replicas": 0,
+                "template": {
+                    "spec": {"containers": [{"image": "old-registry/project:" + SHA}]}
+                },
+            },
+            "status": {"replicas": 0},
+        }
+        archive = self.root / "retired.json"
+        archive.write_text(json.dumps({"namespace": "prod", "items": [source]}))
+        for case in (
+            "stopped",
+            "uid_changed",
+            "replicas_active",
+            "pod_active",
+            "template_changed",
+        ):
+            with self.subTest(case=case):
+                current = json.loads(json.dumps(source))
+                pods = []
+                if case == "uid_changed":
+                    current["metadata"]["uid"] = "replacement"
+                elif case == "replicas_active":
+                    current["spec"]["replicas"] = 1
+                elif case == "pod_active":
+                    pods = [
+                        {
+                            "metadata": {"labels": {"role": "api"}},
+                            "status": {"phase": "Running"},
+                        }
+                    ]
+                elif case == "template_changed":
+                    current["spec"]["template"]["spec"]["containers"][0]["image"] = (
+                        "foreign:latest"
+                    )
+                self.state.write_text(
+                    json.dumps({"items": [current], "source_pods": pods})
+                )
+                result = self.run_script(
+                    dry=False, PREFLIGHT_ONLY="1", RETIRED_SOURCE_INVENTORY=str(archive)
+                )
+                self.assertEqual(
+                    result.returncode == 0, case == "stopped", result.stderr
+                )
+                self.assert_no_writes()
 
     def test_require_explicit_context_and_host(self):
         for extra in ({"K8S_CONTEXT": ""}, {"INGRESS_HOST": ""}):
@@ -228,7 +297,7 @@ else:
                             "kind": "Service",
                             "metadata": {
                                 "name": PROJECT,
-                                "namespace": "prod",
+                                "namespace": "test",
                                 "labels": {"app": "somebody-else"},
                             },
                         }
@@ -324,7 +393,7 @@ else:
                     "items": [
                         {
                             "kind": "Ingress",
-                            "metadata": {"name": "prod-https", "namespace": "other"},
+                            "metadata": {"name": "test-https", "namespace": "other"},
                             "spec": {"rules": [{"host": self.env["INGRESS_HOST"]}]},
                         }
                     ]
@@ -343,7 +412,7 @@ else:
                             "kind": "Deployment",
                             "metadata": {
                                 "name": PROJECT + "-api",
-                                "namespace": "prod",
+                                "namespace": "test",
                                 "labels": {"app": PROJECT},
                             },
                             "spec": {
@@ -424,7 +493,7 @@ else:
         self.assertEqual(
             patch[0], {"op": "test", "path": "/metadata/resourceVersion", "value": "1"}
         )
-        self.assertIn("prod-https", call["args"])
+        self.assertIn("test-https", call["args"])
         self.assertEqual(patch[1]["op"], "add")
         self.assertEqual(patch[1]["path"], "/spec/rules/-")
         self.assertEqual(

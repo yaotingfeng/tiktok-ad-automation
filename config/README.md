@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | local | `.env` | 在 `backend/` 启动后端，Settings 读取 `../.env`；进程环境变量优先 |
 | staging | `.env.staging` | 部署到测试服务器 `/etc/tt-ada-staging/app.env`，systemd 向 API、Worker、Beat 注入 |
-| production | `.env.production` | 阿里云新加坡 ACK `c19dbd82590a34b9f87cebb8c1a858796` / `prod`；配置已注入 `tiktok-ad-automation-runtime` Secret；2026-10-10 九角色已部署 |
+| production | `.env.production` | 阿里云新加坡 ACK `c19dbd82590a34b9f87cebb8c1a858796` / `test`（本轮迁移目标）；配置注入 `tiktok-ad-automation-runtime` Secret；2026-10-10 九角色已部署 |
 
 `.env.staging` 和 `.env.production` 是部署准备文件，创建后不会自动加载或切换运行环境。部署成功后，服务器固定路径中的配置是该实例的生效来源；本地副本不代表已部署。前端只有公开构建参数，使用 `frontend/.env.example`；禁止放入存储或平台密钥。
 
