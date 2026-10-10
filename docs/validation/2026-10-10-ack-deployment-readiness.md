@@ -26,7 +26,7 @@
 
 ## 剩余发布条件
 
-后续已落实 PostgreSQL `tkada`；Redis DB 15 经撤回后，用户明确确认使用，已重新登记并验证，见末节。用户随后确认运维已完成公司侧域名解析；还需验证实际访问、配置 TLS host 与入口 rule，登记 TikTok API/MCP 回调并核对 R2 CORS。完成一致性备份及恢复验证后再停旧消费者并迁入生产；认证和空间创建不代表业务数据恢复或完整上线验收完成。
+后续已落实 PostgreSQL `tkada`；Redis DB 15 经撤回后，用户明确确认使用，已重新登记并验证，见末节。用户随后确认运维已完成公司侧域名解析；Service、TLS host 与入口 rule 已随后配置；还需验证域名实际访问，登记 TikTok API/MCP 回调并核对 R2 CORS。完成一致性备份及恢复验证后再停旧消费者并迁入生产；认证和空间创建不代表业务数据恢复或完整上线验收完成。
 
 ## 后续：自行准备项目数据库空间
 
@@ -64,3 +64,13 @@
 - 本轮公共 DNS 查询返回 NXDOMAIN；本机普通 DNS 返回代理地址，不能作为公司解析是否配置的结论。随后在指定 ACK / prod 新建无业务凭据的本项目临时 Pod，通过集群默认 DNS 实测：应用域名返回 Name or service not known，ALB 域名正常解析，HTTPS 尚不能通过域名访问。公司 DNS 的生效范围、缓存及实际客户端访问仍待核验，不能声称域名访问已通过。
 - 只读核对 `prod/prod-https`，当前没有本项目 host rule 或匹配的 TLS host 声明；后续在应用 Service 准备后按部署流程追加本项目入口。
 - 私有证据为 `ack/company-domain-check.json`。临时 Pod 已按 UID 核实后清理；没有启动业务消费者。
+
+## 后续：按用户授权配置正式域名入口
+
+- 用户要求“那你配置一下”。本次只配置入口：全 namespace 查重后创建 `prod/tiktok-ad-automation` ClusterIP Service，selector 为 app=tiktok-ad-automation、role=api，port/targetPort=80，与仓库正式清单一致。
+- 在 `prod/prod-https` 追加本项目 TLS 条目，引用原有 `galaxyshortdrama.com` 证书；未读取或修改证书 Secret。TLS patch 使用 resourceVersion 比较，回读确认仅追加本项目条目。
+- 随后调用现有 `patch-public-ingress.sh`，核对 Service 归属后追加 host=`tkada.galaxyshortdrama.com`、path=/、Prefix、backend=`tiktok-ad-automation:80`。全量回读确认原有全部 rules/TLS 条目保持一致，控制器事件报告 SuccessfullyReconciled。
+- 变更前共享 Ingress JSON 已独立保存并核对 SHA-256；Service/TLS patch 先通过服务端 dry-run。首次入口不存在旧项目 Service、应用运行文件、构建产物或私有证书，因此这些旧应用备份项不适用；本次没有应用发布、数据迁移或运行配置变更，不切停源实例，最终迁移的完整备份要求仍保留。回退须按届时资源版本只撤销本项目新增条目，不能整份覆盖共享入口。
+- 指定 ACK ALB 地址并携带应用域名 SNI/Host 的集群内真实 HTTPS 检查通过默认 CA 与主机名校验，证书含 `*.galaxyshortdrama.com`；HTTP 返回 503。正式 Service 的 EndpointSlice 无后端实例，与生产应用尚未启动一致，不能报告登录页或业务已可用。本地直连 TLS 失败，以上成功证据来自集群探针。
+- 同一探针通过集群默认 DNS 仍无法解析应用域名；该结果单独保留，不将指定 ALB 地址的 HTTPS 验证视为 DNS 已生效。临时探针已清理。
+- 私有证据：`ack/ingress-before-tkada-route.json`、`ingress-after-tkada-route.json`、`tkada-service-created.json`、`ingress-route-result.json`、`ingress-https-verification.json`。正式部署应复用现有 Service 和入口，不再重复追加域名。
