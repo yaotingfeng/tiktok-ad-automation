@@ -50,8 +50,13 @@ with open(os.environ['DOCKER_LOG'], 'a') as f:
         for path in self.bin.iterdir():
             path.chmod(0o755)
         self.log = self.root / ".git" / "docker.log"
+        # 完整检查会为应用测试导出 PROJECT_NAME；镜像项目名由构建脚本固定，
+        # 不能继承应用显示名，否则在检查环境里会误触项目名防护。
+        inherited = {
+            key: value for key, value in os.environ.items() if key != "PROJECT_NAME"
+        }
         self.env = dict(
-            os.environ,
+            inherited,
             PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
             REAL_GIT=self.real_git,
             REMOTE_SHA=self.sha,
