@@ -11,7 +11,7 @@
 - 1 个系列、1 个广告组、按素材生成广告、每个广告 1 个素材：20 个 `PlannedAd`，每个广告的 `PreviewAdMaterial` 集合为单条素材。
 - 1 个系列、2 个广告组、组层顺序平均、每个广告 1 个素材：两组各 10 个广告，组素材集合互斥且按冻结顺序切分；该 fixture 同时编译目标 ROAS，断言 `VO_MIN_ROAS` 和 `roas_bid`。
 - 1 个系列、1 个广告组、固定 2 个基础广告、共用素材、`creative_count=3`：6 个最终 `PlannedAd`，两个基础广告各自冻结 20 条素材，创意复制不增加广告级素材映射。
-- 1 个系列、2 个广告组、每组 10 个广告、组预算、最高价值：Campaign 使用 `BUDGET_MODE_INFINITE` 且不带系列日预算，Ad Group 带精确预算；最高价值带 `VO_HIGHEST_VALUE` 且不带 `roas_bid`。
+- 1 个系列、2 个广告组、每组 10 个广告、组预算、最高价值：Campaign 使用 `BUDGET_MODE_INFINITE`；按后续2026-10-06修复 `39e4798` 显式带 `budget=0`、`budget_optimize_on=false`、`smart_plus_adgroup_mode=MULTIPLE`（预算由广告组承担），Ad Group 带精确预算；最高价值带 `VO_HIGHEST_VALUE` 且不带 `roas_bid`。
 
 相同策略版本被两个独立草稿引用时，测试使用不同 preview ID 生成 A/B 冻结行，行集合互斥，策略配置保持不变。共享素材执行夹具按 `(advertiser_id, material_id)` 去重准备任务，同时保留每个广告自己的 `creative_list` 和独立正文。CTA 推荐资产、目标视频和封面字段在本地编译前均有 fence。
 

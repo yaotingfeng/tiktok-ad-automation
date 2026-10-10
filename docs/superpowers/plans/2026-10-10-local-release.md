@@ -18,8 +18,8 @@
 
 ## Tasks
 
-- [ ] 本地备份：修改backup.py/release.py，测试原子保留、损坏拒绝、同目录/符号链接误删保护、恢复失败旧归档保留；移除upload和AWS/age云门禁及Jenkinsfile。
-- [ ] 统一入口：deploy/local.py提供check/deploy/backup/status/recover/finish；本机私有配置、明确SHA干净checkout、测试→构建推送→备份发布；可重入恢复入口与错误日志；不自动提交所有工作区。
+- [x] 本地备份：修改backup.py/release.py，测试原子保留、损坏拒绝、同目录/符号链接误删保护、恢复失败旧归档保留；移除upload和AWS/age云门禁及Jenkinsfile。真实备份与恢复验证通过。
+- [x] 统一入口：deploy/local.py提供check/deploy/backup/status/recover/finish；本机私有配置、明确SHA干净checkout、测试→构建推送→备份发布；可重入恢复入口与错误日志；不自动提交所有工作区。实际应用完整发布验收见最后任务。
 - [ ] 既有后端：按ty/Ruff诊断修复类型契约/确实错误，运行完整后端测试，不降低门禁。
 - [ ] 本地检查环境：补齐Bun与PG18工具；验证完整前后端/浏览器及镜像构建、发布备份恢复集成；清理本轮临时资源。
 - [ ] 交付验证：提交推公司main，真实只读预检；实际本地备份及恢复演练；如发布候选就绪，说明版本和影响后按既有授权完成发布验收。记录真实结果/限制，文档只保留当前本地方式。

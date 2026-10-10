@@ -1937,3 +1937,12 @@
 - 真实本机备份批次20261010T202414-b32e32成功：158MiB单归档，PG事实/4份授权解密/Redis8键恢复通过，原版九服务全部恢复，开关及配置一致，HTTPS200、锁释放。ARM镜像拉取和kubectl多文档解析两个停服前缺陷已修复并回归。正式候选尚待完整后端/浏览器验收通过。
 
 - 全量门禁发现真实官方API限流重试缺陷：`27bc0d2` 已为两通道 Campaign/AdGroup 发送请求编号，但执行器仅在MCP重试时校验并剥离该传输字段，API重试被严格DTO拒绝。统一两通道校验，保留原attempt、冻结正文和摘要；真实PG/Redis、官方SDK/MCP传输边界回归22/22通过（458.27秒），包括限流不发HTTP、解限后只发一次、未知结果不重发。Ruff与差异检查通过。仅本地验证，尚未部署。
+
+## 2026-10-11：完整后端回归收尾与官方读取限流重试修复
+
+- 接续 Codex 会话：在当前工作区、全新 PG18/Redis8 上并行全量重跑后端。Codex 遗留的约400项失败/错误绝大多数为测试过时，本轮逐项按已提交业务规则修正测试，不放宽核心断言、不新增 skip。
+- **撤回 Codex 未提交的封面业务改动**：`covers.py` 被改为仅 `purpose == "BUILD"` 才复用已核实封面，用以迎合4个过时单测，却使大批量搭建验收卡在 `material_refresh_required`（15个广告、38个封面 VERIFYING）。恢复 `7eb5521`（10-06，线上 `673eecb` 已运行）的“已核实封面为只读资产事实、任何用途直接复用”，改为更新过时测试预期；`test_batch_flow.py` 9/9 通过。
+- **修复真实业务缺陷（经用户确认）**：`3bfce19`（09-12）把账户能力读取迁入官方读取网关时丢失了 HTTP 429 处理，平台限流被归为 `tiktok_response_error` 终态失败。`OfficialReadRequests.invoke` 现对只读 GET 的 429 抛出 `AccountAdmissionDeferred`（`admission_deferred`），按平台 `Retry-After` 换算等待（默认5秒，限制在1–60秒），复用账户能力、场景、报表、广告目录、搭建回读等既有延后重试路径；其他 HTTP 错误仍为 `tiktok_response_error`。新增 `tests/integrations/tiktok/test_official_read_throttle.py`。
+- 测试修正要点：上传成功回执可信任（`bbe3c97`）后多余的回读响应错位（封面/种子/重发共享测试）；终态封面依赖改由 `recover_cover_results` 落定（`68c20db`）；历史迁移测试改为只写入旧 schema 已有列；报表 API 清库不再清空迁移种入的不可变文案池；版权方连接测试自带加密密钥；迁移图测试只约束单一 head；修复查询计划测试固定 join 策略以排除统计信息漂移；容量基准夹具补齐 BC 绑定/默认路由/授权、真实场景准备路由、MiniTarget、正数剧目 ID 与按逻辑操作名的额度策略。
+- 已知：`ruff format --check` 仓库原有128个文件未格式化（发布门禁不检查此项），本轮未做全量格式化以免扩大差异。
+- 全量回归（全新 PG18/Redis8、3 组并行）：4581 通过、4 失败。其中嘉书批量验收、180 单元回执查询耗时、共享中断信号用例为负载/时序敏感，空闲机器单独重跑均通过（批量验收 9/9）。`test_shared_material_slice_is_deduplicated_and_ad_reads_stay_frozen` 单独仍失败，逐层查明为夹具缺失：4 GB 原文件超出 SDK 上传容量、缺上传租约、缺私有存储配置、PlannedGroup 复合主键取值；补齐后 9/9 通过，规划逻辑未改。
