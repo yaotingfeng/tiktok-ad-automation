@@ -12,6 +12,7 @@ from uuid import uuid4
 import pytest
 from sqlmodel import Session, select
 
+from app.core.config import settings
 from app.core.db import engine
 from app.integrations.tiktok.contracts.common import CallEvidence, RemoteCallError
 from app.integrations.tiktok.contracts.management import ManagementReceipt
@@ -42,29 +43,96 @@ from app.modules.ad_management.models import (
 )
 from app.modules.ads.models import AdObject
 from app.modules.reporting.query_models import FrozenSelectionRecord
+from app.modules.reporting.store_models import AdSyncBc
 from tests.modules.conftest import create_context
 
 
 @pytest.fixture
-def c5_env():
+def c5_env(monkeypatch):
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
     with Session(engine, expire_on_commit=False) as setup:
         context = create_context(setup)
         connection = TikTokConnection(tenant_id=context.tenant_id, status="ACTIVE")
         bc = TenantBC(tenant_id=context.tenant_id, bc_id="c5-bc")
-        account = AdvertiserAccount(tenant_id=context.tenant_id, advertiser_id="c5-account", currency="USD", timezone="UTC", remote_status="STATUS_ENABLE")
+        account = AdvertiserAccount(
+            tenant_id=context.tenant_id,
+            advertiser_id="c5-account",
+            currency="USD",
+            timezone="UTC",
+            remote_status="STATUS_ENABLE",
+        )
         setup.add_all([connection, bc, account])
         setup.flush()
         now = datetime.now(UTC)
-        setup.add_all([
-            BCAccountAccess(tenant_id=context.tenant_id, bc_id=bc.bc_id, advertiser_id=account.advertiser_id, connection_id=connection.id, in_bc=True, authorized=True, active=True, can_build=True, can_upload=True, permission_state="VERIFIED", checked_at=now),
-            BCConnectionBinding(tenant_id=context.tenant_id, bc_id=bc.bc_id, connection_id=connection.id, kind=connection.kind),
-            ConnectionAuthorization(tenant_id=context.tenant_id, connection_id=connection.id, authorization_revision=connection.authorization_revision, scopes=["read", "build"], permission_summary={"read_authorized": True, "build_authorized": True}, source="SYNTHETIC_COMPLETE_EVIDENCE", verified_at=now),
-            BCDefaultRoute(tenant_id=context.tenant_id, bc_id=bc.bc_id, connection_id=connection.id),
-        ])
-        selection = FrozenSelectionRecord(tenant_id=context.tenant_id, bc_id=bc.bc_id, actor_id=context.actor_id, snapshot_id=uuid4(), advertiser_ids=[account.advertiser_id], filters={}, filter_digest="f" * 64, publication_versions={}, naming_versions={}, refs=[], material_uses=[], membership_digest="m" * 64)
+        setup.add_all(
+            [
+                BCAccountAccess(
+                    tenant_id=context.tenant_id,
+                    bc_id=bc.bc_id,
+                    advertiser_id=account.advertiser_id,
+                    connection_id=connection.id,
+                    in_bc=True,
+                    authorized=True,
+                    active=True,
+                    can_build=True,
+                    can_upload=True,
+                    permission_state="VERIFIED",
+                    checked_at=now,
+                ),
+                BCConnectionBinding(
+                    tenant_id=context.tenant_id,
+                    bc_id=bc.bc_id,
+                    connection_id=connection.id,
+                    kind=connection.kind,
+                ),
+                ConnectionAuthorization(
+                    tenant_id=context.tenant_id,
+                    connection_id=connection.id,
+                    authorization_revision=connection.authorization_revision,
+                    scopes=["read", "build"],
+                    permission_summary={
+                        "read_authorized": True,
+                        "build_authorized": True,
+                    },
+                    source="SYNTHETIC_COMPLETE_EVIDENCE",
+                    verified_at=now,
+                ),
+                BCDefaultRoute(
+                    tenant_id=context.tenant_id,
+                    bc_id=bc.bc_id,
+                    connection_id=connection.id,
+                ),
+            ]
+        )
+        selection = FrozenSelectionRecord(
+            tenant_id=context.tenant_id,
+            bc_id=bc.bc_id,
+            actor_id=context.actor_id,
+            snapshot_id=uuid4(),
+            advertiser_ids=[account.advertiser_id],
+            filters={},
+            filter_digest="f" * 64,
+            publication_versions={},
+            naming_versions={},
+            refs=[],
+            material_uses=[],
+            membership_digest="m" * 64,
+        )
         setup.add(selection)
         setup.flush()
         route = freeze_route(setup, context=context, bc_id=bc.bc_id)
+        setup.add(
+            AdSyncBc(
+                tenant_id=context.tenant_id,
+                bc_id=bc.bc_id,
+                actor_id=context.actor_id,
+                frozen_route=route.model_dump(mode="json"),
+                next_hot_at=now,
+                next_material_at=now,
+                next_daily_at=now,
+                next_directory_at=now,
+            )
+        )
         setup.commit()
         return context, bc, account, route, selection
 
@@ -193,7 +261,9 @@ def _cleanup(task_id):
         if task is not None:
             session.delete(task)
         for dispatch in session.exec(
-            select(PendingDispatch).where(PendingDispatch.task_name == "ad_management.execute")
+            select(PendingDispatch).where(
+                PendingDispatch.task_name == "ad_management.execute"
+            )
         ).all():
             if dispatch.payload.get("task_id") == str(task_id):
                 session.delete(dispatch)
@@ -211,14 +281,16 @@ def test_accepted_write_commits_receipt_without_synchronous_readback(
         calls.append(command)
         return ManagementReceipt("ACCEPTED", "request-c5-accepted", False)
 
-    monkeypatch.setattr("app.modules.ad_management.execution._redis", lambda: redis_client)
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution._redis", lambda: redis_client
+    )
     monkeypatch.setattr(
         "app.modules.ad_management.execution.open_tiktok_gateway",
         lambda **_kwargs: _Gateway(apply),
     )
     monkeypatch.setattr(
-        "app.modules.ad_management.execution.request_sync",
-        lambda _session, *, context, request: refreshes.append((context, request)) or uuid4(),
+        "app.modules.ad_management.execution.request_directory",
+        lambda _session, **kwargs: refreshes.append(kwargs) or 1,
     )
     try:
         execute_item(engine, item_id)
@@ -226,12 +298,23 @@ def test_accepted_write_commits_receipt_without_synchronous_readback(
             item = session.get(ManagementTaskItem, item_id)
             assert item is not None and item.execution_result == "ACCEPTED"
             assert len(calls) == 1
-            assert len(session.exec(select(ManagementRequestAttempt).where(ManagementRequestAttempt.task_item_id == item_id)).all()) == 1
-            receipt = session.exec(select(ReceiptRow).where(ReceiptRow.tenant_id == context.tenant_id)).one()
+            assert (
+                len(
+                    session.exec(
+                        select(ManagementRequestAttempt).where(
+                            ManagementRequestAttempt.task_item_id == item_id
+                        )
+                    ).all()
+                )
+                == 1
+            )
+            receipt = session.exec(
+                select(ReceiptRow).where(ReceiptRow.tenant_id == context.tenant_id)
+            ).one()
             assert receipt.outcome == "ACCEPTED"
             assert len(refreshes) == 1
-            assert refreshes[0][1].scope == "targeted"
-            assert refreshes[0][1].start_date is None and refreshes[0][1].end_date is None
+            assert refreshes[0]["scope"] == "targeted"
+            assert refreshes[0]["advertiser_ids"] == ["c5-account"]
     finally:
         _cleanup(task_id)
 
@@ -245,10 +328,14 @@ def test_unknown_result_is_terminal_and_is_never_resent(
     def apply(_self, _command):
         calls.append(True)
         raise RemoteCallError(
-            "mcp_call_failed", effect="UNKNOWN", evidence=CallEvidence(request_id="unknown-c5")
+            "mcp_call_failed",
+            effect="UNKNOWN",
+            evidence=CallEvidence(request_id="unknown-c5"),
         )
 
-    monkeypatch.setattr("app.modules.ad_management.execution._redis", lambda: redis_client)
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution._redis", lambda: redis_client
+    )
     monkeypatch.setattr(
         "app.modules.ad_management.execution.open_tiktok_gateway",
         lambda **_kwargs: _Gateway(apply),
@@ -259,7 +346,11 @@ def test_unknown_result_is_terminal_and_is_never_resent(
         with Session(engine) as session:
             item = session.get(ManagementTaskItem, item_id)
             assert item is not None and item.execution_result == "UNKNOWN"
-            attempts = session.exec(select(ManagementRequestAttempt).where(ManagementRequestAttempt.task_item_id == item_id)).all()
+            attempts = session.exec(
+                select(ManagementRequestAttempt).where(
+                    ManagementRequestAttempt.task_item_id == item_id
+                )
+            ).all()
             assert len(attempts) == 1
             assert attempts[0].outcome == "UNKNOWN"
         assert calls == [True]
@@ -267,7 +358,9 @@ def test_unknown_result_is_terminal_and_is_never_resent(
         _cleanup(task_id)
 
 
-def test_targeted_refresh_failure_is_durable_and_retry_does_not_resend(c5_env, redis_client, monkeypatch):
+def test_targeted_refresh_failure_is_durable_and_retry_does_not_resend(
+    c5_env, redis_client, monkeypatch
+):
     _context, task_id, item_id = _committed_item(c5_env)
     calls = []
     refreshes = []
@@ -277,16 +370,23 @@ def test_targeted_refresh_failure_is_durable_and_retry_does_not_resend(c5_env, r
         calls.append(True)
         return ManagementReceipt("ACCEPTED", "refresh-retry", False)
 
-    def request_refresh(_session, *, context, request):
+    def request_refresh(_session, **kwargs):
         if failed["once"]:
             failed["once"] = False
             raise RuntimeError("synthetic refresh outage")
-        refreshes.append((context, request))
+        refreshes.append(kwargs)
         return uuid4()
 
-    monkeypatch.setattr("app.modules.ad_management.execution._redis", lambda: redis_client)
-    monkeypatch.setattr("app.modules.ad_management.execution.open_tiktok_gateway", lambda **_kwargs: _Gateway(apply))
-    monkeypatch.setattr("app.modules.ad_management.execution.request_sync", request_refresh)
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution._redis", lambda: redis_client
+    )
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution.open_tiktok_gateway",
+        lambda **_kwargs: _Gateway(apply),
+    )
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution.request_directory", request_refresh
+    )
     try:
         execute_item(engine, item_id)
         with Session(engine) as session:
@@ -294,13 +394,17 @@ def test_targeted_refresh_failure_is_durable_and_retry_does_not_resend(c5_env, r
             assert item is not None
             assert item.execution_result == "ACCEPTED"
             assert item.observation_state == "REFRESH_PENDING"
-            assert session.exec(
-                select(PendingDispatch).where(
-                    PendingDispatch.tenant_id == item.tenant_id,
-                    PendingDispatch.task_name == "ad_management.execute",
-                    PendingDispatch.payload["task_id"].as_string() == str(item.task_id),
-                )
-            ).first() is not None
+            assert (
+                session.exec(
+                    select(PendingDispatch).where(
+                        PendingDispatch.tenant_id == item.tenant_id,
+                        PendingDispatch.task_name == "ad_management.execute",
+                        PendingDispatch.payload["task_id"].as_string()
+                        == str(item.task_id),
+                    )
+                ).first()
+                is not None
+            )
         execute_item(engine, item_id)
         with Session(engine) as session:
             item = session.get(ManagementTaskItem, item_id)
@@ -313,7 +417,9 @@ def test_targeted_refresh_failure_is_durable_and_retry_does_not_resend(c5_env, r
         _cleanup(task_id)
 
 
-def test_revoked_management_capability_blocks_request_after_claim(c5_env, redis_client, monkeypatch):
+def test_revoked_management_capability_blocks_request_after_claim(
+    c5_env, redis_client, monkeypatch
+):
     context, task_id, item_id = _committed_item(c5_env)
     calls = []
     with Session(engine) as session:
@@ -331,8 +437,13 @@ def test_revoked_management_capability_blocks_request_after_claim(c5_env, redis_
         calls.append(True)
         return ManagementReceipt("ACCEPTED", "should-not-send", False)
 
-    monkeypatch.setattr("app.modules.ad_management.execution._redis", lambda: redis_client)
-    monkeypatch.setattr("app.modules.ad_management.execution.open_tiktok_gateway", lambda **_kwargs: _Gateway(apply))
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution._redis", lambda: redis_client
+    )
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution.open_tiktok_gateway",
+        lambda **_kwargs: _Gateway(apply),
+    )
     try:
         execute_item(engine, item_id)
         with Session(engine) as session:
@@ -344,14 +455,25 @@ def test_revoked_management_capability_blocks_request_after_claim(c5_env, redis_
         _cleanup(task_id)
 
 
-def test_missing_current_object_fails_closed_before_provider(c5_env, redis_client, monkeypatch):
+def test_missing_current_object_fails_closed_before_provider(
+    c5_env, redis_client, monkeypatch
+):
     _context, task_id, item_id = _committed_item(c5_env)
     with Session(engine) as session:
-        session.delete(session.get(AdObject, (_context.tenant_id, "c5-account", "adgroup", "group-c5")))
+        session.delete(
+            session.get(
+                AdObject, (_context.tenant_id, "c5-account", "adgroup", "group-c5")
+            )
+        )
         session.commit()
     calls = []
-    monkeypatch.setattr("app.modules.ad_management.execution._redis", lambda: redis_client)
-    monkeypatch.setattr("app.modules.ad_management.execution.open_tiktok_gateway", lambda **_kwargs: _Gateway(lambda *_args: calls.append(True)))
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution._redis", lambda: redis_client
+    )
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution.open_tiktok_gateway",
+        lambda **_kwargs: _Gateway(lambda *_args: calls.append(True)),
+    )
     try:
         execute_item(engine, item_id)
         with Session(engine) as session:
@@ -363,13 +485,18 @@ def test_missing_current_object_fails_closed_before_provider(c5_env, redis_clien
         _cleanup(task_id)
 
 
-def test_frozen_route_revision_change_blocks_without_channel_fallback(c5_env, redis_client, monkeypatch):
+def test_frozen_route_revision_change_blocks_without_channel_fallback(
+    c5_env, redis_client, monkeypatch
+):
     _context, task_id, item_id = _committed_item(c5_env)
     calls = []
     with Session(engine) as session:
         task = session.get(ManagementTask, task_id)
         assert task is not None
-        task.route = {**task.route, "authorization_revision": task.route["authorization_revision"] + 1}
+        task.route = {
+            **task.route,
+            "authorization_revision": task.route["authorization_revision"] + 1,
+        }
         session.add(task)
         session.commit()
 
@@ -377,8 +504,13 @@ def test_frozen_route_revision_change_blocks_without_channel_fallback(c5_env, re
         calls.append(True)
         return ManagementReceipt("ACCEPTED", "should-not-send", False)
 
-    monkeypatch.setattr("app.modules.ad_management.execution._redis", lambda: redis_client)
-    monkeypatch.setattr("app.modules.ad_management.execution.open_tiktok_gateway", lambda **_kwargs: _Gateway(apply))
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution._redis", lambda: redis_client
+    )
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution.open_tiktok_gateway",
+        lambda **_kwargs: _Gateway(apply),
+    )
     try:
         execute_item(engine, item_id)
         with Session(engine) as session:
@@ -432,23 +564,39 @@ def test_one_unknown_item_does_not_block_sibling(c5_env, redis_client, monkeypat
     def apply(_self, command):
         calls.append(command.ref.remote_id)
         if command.ref.remote_id == "group-c5":
-            raise RemoteCallError("mcp_call_failed", effect="UNKNOWN", evidence=CallEvidence(request_id="unknown-sibling"))
+            raise RemoteCallError(
+                "mcp_call_failed",
+                effect="UNKNOWN",
+                evidence=CallEvidence(request_id="unknown-sibling"),
+            )
         return ManagementReceipt("ACCEPTED", "accepted-sibling", False)
 
-    monkeypatch.setattr("app.modules.ad_management.execution._redis", lambda: redis_client)
-    monkeypatch.setattr("app.modules.ad_management.execution.open_tiktok_gateway", lambda **_kwargs: _Gateway(apply))
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution._redis", lambda: redis_client
+    )
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution.open_tiktok_gateway",
+        lambda **_kwargs: _Gateway(apply),
+    )
     try:
         execute_item(engine, first_id)
         execute_item(engine, second_id)
         with Session(engine) as session:
-            assert session.get(ManagementTaskItem, first_id).execution_result == "UNKNOWN"
-            assert session.get(ManagementTaskItem, second_id).execution_result == "ACCEPTED"
+            assert (
+                session.get(ManagementTaskItem, first_id).execution_result == "UNKNOWN"
+            )
+            assert (
+                session.get(ManagementTaskItem, second_id).execution_result
+                == "ACCEPTED"
+            )
         assert calls == ["group-c5", "group-c5-sibling"]
     finally:
         _cleanup(task_id)
 
 
-def test_receipt_commit_failure_is_fenced_unknown_and_not_replayed(c5_env, redis_client, monkeypatch):
+def test_receipt_commit_failure_is_fenced_unknown_and_not_replayed(
+    c5_env, redis_client, monkeypatch
+):
     context, task_id, item_id = _committed_item(c5_env)
     calls = []
 
@@ -456,9 +604,16 @@ def test_receipt_commit_failure_is_fenced_unknown_and_not_replayed(c5_env, redis
         calls.append(True)
         return ManagementReceipt("ACCEPTED", "accepted-before-db-failure", False)
 
-    monkeypatch.setattr("app.modules.ad_management.execution._redis", lambda: redis_client)
-    monkeypatch.setattr("app.modules.ad_management.execution.open_tiktok_gateway", lambda **_kwargs: _Gateway(apply))
-    original_persist = __import__("app.modules.ad_management.execution", fromlist=["_persist_outcome"])._persist_outcome
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution._redis", lambda: redis_client
+    )
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution.open_tiktok_gateway",
+        lambda **_kwargs: _Gateway(apply),
+    )
+    original_persist = __import__(
+        "app.modules.ad_management.execution", fromlist=["_persist_outcome"]
+    )._persist_outcome
     failed = {"once": True}
 
     def fail_once(*args, **kwargs):
@@ -467,14 +622,20 @@ def test_receipt_commit_failure_is_fenced_unknown_and_not_replayed(c5_env, redis
             raise RuntimeError("synthetic receipt commit failure")
         return original_persist(*args, **kwargs)
 
-    monkeypatch.setattr("app.modules.ad_management.execution._persist_outcome", fail_once)
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution._persist_outcome", fail_once
+    )
     try:
         execute_item(engine, item_id)
         execute_item(engine, item_id)
         with Session(engine) as session:
             item = session.get(ManagementTaskItem, item_id)
             assert item is not None and item.execution_result == "UNKNOWN"
-            attempt = session.exec(select(ManagementRequestAttempt).where(ManagementRequestAttempt.task_item_id == item_id)).one()
+            attempt = session.exec(
+                select(ManagementRequestAttempt).where(
+                    ManagementRequestAttempt.task_item_id == item_id
+                )
+            ).one()
             assert attempt.outcome == "UNKNOWN"
         assert calls == [True]
     finally:
@@ -486,10 +647,14 @@ def test_management_queue_is_registered_with_one_slot():
     from app.jobs.tasks import dispatch_queue
 
     assert dispatch_queue("ad_management.execute") == "ad-management"
-    assert celery_app.conf.task_routes["ad_management.execute"]["queue"] == "ad-management"
+    assert (
+        celery_app.conf.task_routes["ad_management.execute"]["queue"] == "ad-management"
+    )
     from pathlib import Path
 
-    service = Path(__file__).resolve().parents[4] / "deploy/staging-ad-management.service"
+    service = (
+        Path(__file__).resolve().parents[4] / "deploy/staging-ad-management.service"
+    )
     assert "--concurrency 1" in service.read_text()
 
 
@@ -505,7 +670,10 @@ def test_terminal_task_dispatches_durable_refresh_pending_item(c5_env, monkeypat
         session.add_all([item, task])
         session.commit()
     calls = []
-    monkeypatch.setattr("app.modules.ad_management.tasks.execute_item", lambda _engine, current_id: calls.append(current_id))
+    monkeypatch.setattr(
+        "app.modules.ad_management.tasks.execute_item",
+        lambda _engine, current_id: calls.append(current_id),
+    )
     from app.modules.ad_management.tasks import execute_management_task
 
     try:
@@ -531,6 +699,7 @@ def test_stale_lease_cannot_write_provider_receipt(c5_env, redis_client, monkeyp
             self.checks += 1
             if self.checks >= 3:
                 from app.core.errors import DomainError
+
                 raise DomainError("mutation_lease_stale", "stale")
 
         def release(self, *_args):
@@ -542,15 +711,27 @@ def test_stale_lease_cannot_write_provider_receipt(c5_env, redis_client, monkeyp
         calls.append(True)
         return ManagementReceipt("ACCEPTED", "accepted-stale", False)
 
-    monkeypatch.setattr("app.modules.ad_management.execution._redis", lambda: redis_client)
-    monkeypatch.setattr("app.modules.ad_management.execution.claim_mutation", lambda *_args, **_kwargs: lease)
-    monkeypatch.setattr("app.modules.ad_management.execution.open_tiktok_gateway", lambda **_kwargs: _Gateway(apply))
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution._redis", lambda: redis_client
+    )
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution.claim_mutation",
+        lambda *_args, **_kwargs: lease,
+    )
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution.open_tiktok_gateway",
+        lambda **_kwargs: _Gateway(apply),
+    )
     try:
         execute_item(engine, item_id)
         with Session(engine) as session:
             item = session.get(ManagementTaskItem, item_id)
             assert item is not None and item.execution_result == "UNKNOWN"
-            attempt = session.exec(select(ManagementRequestAttempt).where(ManagementRequestAttempt.task_item_id == item_id)).one()
+            attempt = session.exec(
+                select(ManagementRequestAttempt).where(
+                    ManagementRequestAttempt.task_item_id == item_id
+                )
+            ).one()
             assert attempt.outcome == "UNKNOWN"
         assert calls == [True]
         execute_item(engine, item_id)
@@ -559,7 +740,9 @@ def test_stale_lease_cannot_write_provider_receipt(c5_env, redis_client, monkeyp
         _cleanup(task_id)
 
 
-def test_expired_pre_attempt_recovers_unknown_receipt_without_resend(c5_env, redis_client, monkeypatch):
+def test_expired_pre_attempt_recovers_unknown_receipt_without_resend(
+    c5_env, redis_client, monkeypatch
+):
     context, task_id, item_id = _committed_item(c5_env)
     with Session(engine) as session:
         item = session.get(ManagementTaskItem, item_id)
@@ -582,14 +765,25 @@ def test_expired_pre_attempt_recovers_unknown_receipt_without_resend(c5_env, red
         session.add(item)
         session.commit()
     calls = []
-    monkeypatch.setattr("app.modules.ad_management.execution._redis", lambda: redis_client)
-    monkeypatch.setattr("app.modules.ad_management.execution.open_tiktok_gateway", lambda **_kwargs: _Gateway(lambda *_args: calls.append(True)))
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution._redis", lambda: redis_client
+    )
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution.open_tiktok_gateway",
+        lambda **_kwargs: _Gateway(lambda *_args: calls.append(True)),
+    )
     try:
         execute_item(engine, item_id)
         with Session(engine) as session:
             item = session.get(ManagementTaskItem, item_id)
-            attempt = session.exec(select(ManagementRequestAttempt).where(ManagementRequestAttempt.task_item_id == item_id)).one()
-            receipt = session.exec(select(ReceiptRow).where(ReceiptRow.attempt_id == attempt.id)).one()
+            attempt = session.exec(
+                select(ManagementRequestAttempt).where(
+                    ManagementRequestAttempt.task_item_id == item_id
+                )
+            ).one()
+            receipt = session.exec(
+                select(ReceiptRow).where(ReceiptRow.attempt_id == attempt.id)
+            ).one()
             assert item is not None and item.execution_result == "UNKNOWN"
             assert attempt.outcome == "UNKNOWN"
             assert receipt.outcome == "UNKNOWN"
@@ -598,7 +792,9 @@ def test_expired_pre_attempt_recovers_unknown_receipt_without_resend(c5_env, red
         _cleanup(task_id)
 
 
-def test_duplicate_delivery_sends_once_while_first_provider_call_is_in_flight(c5_env, redis_client, monkeypatch):
+def test_duplicate_delivery_sends_once_while_first_provider_call_is_in_flight(
+    c5_env, redis_client, monkeypatch
+):
     _context, task_id, item_id = _committed_item(c5_env)
     calls = []
     provider_started = Event()
@@ -610,8 +806,13 @@ def test_duplicate_delivery_sends_once_while_first_provider_call_is_in_flight(c5
         assert release_provider.wait(timeout=5)
         return ManagementReceipt("ACCEPTED", "duplicate-once", False)
 
-    monkeypatch.setattr("app.modules.ad_management.execution._redis", lambda: redis_client)
-    monkeypatch.setattr("app.modules.ad_management.execution.open_tiktok_gateway", lambda **_kwargs: _Gateway(apply))
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution._redis", lambda: redis_client
+    )
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution.open_tiktok_gateway",
+        lambda **_kwargs: _Gateway(apply),
+    )
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
             first = pool.submit(execute_item, engine, item_id)
@@ -623,7 +824,16 @@ def test_duplicate_delivery_sends_once_while_first_provider_call_is_in_flight(c5
         with Session(engine) as session:
             item = session.get(ManagementTaskItem, item_id)
             assert item is not None and item.execution_result == "ACCEPTED"
-            assert len(session.exec(select(ManagementRequestAttempt).where(ManagementRequestAttempt.task_item_id == item_id)).all()) == 1
+            assert (
+                len(
+                    session.exec(
+                        select(ManagementRequestAttempt).where(
+                            ManagementRequestAttempt.task_item_id == item_id
+                        )
+                    ).all()
+                )
+                == 1
+            )
         assert calls == [True]
     finally:
         _cleanup(task_id)

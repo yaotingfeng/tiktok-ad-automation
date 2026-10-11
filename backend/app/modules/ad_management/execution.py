@@ -41,11 +41,23 @@ from app.modules.ad_management.models import (
     ManagementTaskItem,
 )
 from app.modules.ad_management.schemas import ManagementItemPublic
+from app.modules.ads.directory_requests import request_directory
 from app.modules.ads.models import AdMaterialReference, AdObject
-from app.modules.reporting.scheduling import SyncRequest, request_sync
+from app.modules.reporting.planner import plan_hot
+from app.modules.reporting.store_models import AdSyncBc
 
 _CLAIM_SECONDS = 120
-_TERMINAL = frozenset({"ACCEPTED", "REJECTED", "UNKNOWN", "NO_CHANGE", "CONFLICT", "UNSUPPORTED", "CANCELLED"})
+_TERMINAL = frozenset(
+    {
+        "ACCEPTED",
+        "REJECTED",
+        "UNKNOWN",
+        "NO_CHANGE",
+        "CONFLICT",
+        "UNSUPPORTED",
+        "CANCELLED",
+    }
+)
 _FIELD_BY_OPERATION = {
     "update_roas": "roas",
     "update_budget": "budget",
@@ -123,14 +135,14 @@ def _public(item: ManagementTaskItem) -> ManagementItemPublic:
             return None
         try:
             return Decimal(value)
-        except (InvalidOperation, ValueError):
+        except InvalidOperation, ValueError:
             return None
 
     final: Decimal | str | None = item.final_value
     if final is not None and str(final) not in {"ENABLE", "DISABLE"}:
         try:
             final = Decimal(str(final))
-        except (InvalidOperation, ValueError):
+        except InvalidOperation, ValueError:
             pass
     return ManagementItemPublic(
         ref=_ref(item.ref),
@@ -152,15 +164,19 @@ def _route(task: ManagementTask) -> FrozenTikTokRoute:
         raise DomainError("frozen_route_scope_mismatch", "冻结执行路由无效") from exc
 
 
-def _attempts(session: Session, item: ManagementTaskItem) -> list[ManagementRequestAttempt]:
-    return list(session.exec(
-        select(ManagementRequestAttempt)
-        .where(
-            ManagementRequestAttempt.tenant_id == item.tenant_id,
-            ManagementRequestAttempt.task_item_id == item.id,
-        )
-        .order_by(col(ManagementRequestAttempt.attempt))
-    ).all())
+def _attempts(
+    session: Session, item: ManagementTaskItem
+) -> list[ManagementRequestAttempt]:
+    return list(
+        session.exec(
+            select(ManagementRequestAttempt)
+            .where(
+                ManagementRequestAttempt.tenant_id == item.tenant_id,
+                ManagementRequestAttempt.task_item_id == item.id,
+            )
+            .order_by(col(ManagementRequestAttempt.attempt))
+        ).all()
+    )
 
 
 def _can_run(
@@ -178,13 +194,21 @@ def _can_run(
     if latest is not None and latest.outcome == "ACCEPTED":
         item.execution_result = "ACCEPTED"
         return False
-    if latest is not None and latest.outcome in {"NOT_SENT", "REJECTED"} and not latest.retryable:
+    if (
+        latest is not None
+        and latest.outcome in {"NOT_SENT", "REJECTED"}
+        and not latest.retryable
+    ):
         if latest.outcome == "NOT_SENT" and item.delivery_status == "ATTEMPT_RECORDED":
             # While the original worker still owns a live claim, its provider
             # request may be in flight.  Leave the item pending so that worker
             # can publish the receipt; after the claim expires, fail closed as
             # UNKNOWN instead of replaying a possibly accepted mutation.
-            if item.claim_token is not None and item.claimed_until is not None and item.claimed_until > _now():
+            if (
+                item.claim_token is not None
+                and item.claimed_until is not None
+                and item.claimed_until > _now()
+            ):
                 return False
             # The previous worker's claim is no longer live.  Preserve a
             # durable UNKNOWN attempt and receipt before exposing the terminal
@@ -211,29 +235,47 @@ def _can_run(
     return True
 
 
-def _same_frozen_value(session: Session, item: ManagementTaskItem, ref: EntityRef) -> None:
+def _same_frozen_value(
+    session: Session, item: ManagementTaskItem, ref: EntityRef
+) -> None:
     """Verify the local observation still equals the immutable preview value."""
     capability = item.capability or {}
     if item.original_value is None:
         raise DomainError("management_observation_conflict", "冻结目标原始值缺失")
-    if item.material_use is not None and capability.get("operation") == "set_material_status":
+    if (
+        item.material_use is not None
+        and capability.get("operation") == "set_material_status"
+    ):
         use = _material(item.material_use)
         assert use is not None
         row = session.get(
             AdMaterialReference,
-            (ref.tenant_id, ref.advertiser_id, use.ad_ref.remote_id, use.platform_material_id, use.ad_material_id, use.material_type),
+            (
+                ref.tenant_id,
+                ref.advertiser_id,
+                use.ad_ref.remote_id,
+                use.platform_material_id,
+                use.ad_material_id,
+                use.material_type,
+            ),
         )
         if row is None:
-            raise DomainError("management_observation_conflict", "冻结素材当前观测不存在")
+            raise DomainError(
+                "management_observation_conflict", "冻结素材当前观测不存在"
+            )
         current = row.operation_status
         if current is None:
             raise DomainError("management_observation_conflict", "冻结素材当前值缺失")
     else:
-        row = session.get(AdObject, (ref.tenant_id, ref.advertiser_id, ref.kind, ref.remote_id))
+        row = session.get(
+            AdObject, (ref.tenant_id, ref.advertiser_id, ref.kind, ref.remote_id)
+        )
         if row is None:
             # Some management dimensions have no directory row.  Capability
             # evidence cannot replace the current immutable observation.
-            raise DomainError("management_observation_conflict", "冻结目标当前观测不存在")
+            raise DomainError(
+                "management_observation_conflict", "冻结目标当前观测不存在"
+            )
         expected_parent = _ref(item.parent_ref) if item.parent_ref else None
         actual_parent = row.parent_ref
         if (expected_parent is None) != (actual_parent is None) or (
@@ -251,7 +293,9 @@ def _same_frozen_value(session: Session, item: ManagementTaskItem, ref: EntityRe
         expected_connection = capability.get("source_connection_id")
         if expected_channel and row.source_channel != expected_channel:
             raise DomainError("management_source_conflict", "目录对象来源通道已变化")
-        if expected_connection and str(row.source_connection_id) != str(expected_connection):
+        if expected_connection and str(row.source_connection_id) != str(
+            expected_connection
+        ):
             raise DomainError("management_source_conflict", "目录对象来源连接已变化")
         operation = str(capability.get("operation"))
         if operation == "set_status":
@@ -267,10 +311,12 @@ def _same_frozen_value(session: Session, item: ManagementTaskItem, ref: EntityRe
 
 def _update_task(session: Session, task_id: UUID, tenant_id: UUID) -> None:
     task = session.exec(
-        select(ManagementTask).where(
+        select(ManagementTask)
+        .where(
             ManagementTask.id == task_id,
             ManagementTask.tenant_id == tenant_id,
-        ).with_for_update()
+        )
+        .with_for_update()
     ).one_or_none()
     if task is None:
         return
@@ -281,13 +327,25 @@ def _update_task(session: Session, task_id: UUID, tenant_id: UUID) -> None:
         )
     ).all()
     counts = dict(task.counts or {})
-    for key in ("accepted", "rejected", "unknown", "not_sent", "pending", "unsupported"):
+    for key in (
+        "accepted",
+        "rejected",
+        "unknown",
+        "not_sent",
+        "pending",
+        "unsupported",
+    ):
         counts[key] = sum(
             1
             for row in rows
-            if row.execution_result == {
-                "accepted": "ACCEPTED", "rejected": "REJECTED", "unknown": "UNKNOWN",
-                "not_sent": "NOT_SENT", "pending": "PENDING", "unsupported": "UNSUPPORTED",
+            if row.execution_result
+            == {
+                "accepted": "ACCEPTED",
+                "rejected": "REJECTED",
+                "unknown": "UNKNOWN",
+                "not_sent": "NOT_SENT",
+                "pending": "PENDING",
+                "unsupported": "UNSUPPORTED",
             }[key]
         )
     counts["refresh_pending"] = sum(
@@ -353,9 +411,15 @@ def _persist_outcome(
 ) -> bool:
     with Session(database_engine) as session, session.begin():
         item = session.exec(
-            select(ManagementTaskItem).where(ManagementTaskItem.id == item_id).with_for_update()
+            select(ManagementTaskItem)
+            .where(ManagementTaskItem.id == item_id)
+            .with_for_update()
         ).one_or_none()
-        if item is None or item.claim_token != token or item.claim_generation != generation:
+        if (
+            item is None
+            or item.claim_token != token
+            or item.claim_generation != generation
+        ):
             return False
         # Provider acceptance is only written by the current fenced owner.  A
         # stale owner leaves the durable attempt untouched for explicit review.
@@ -398,7 +462,11 @@ def _persist_outcome(
         )
         item.execution_result = outcome
         item.delivery_status = "DELIVERED" if outcome == "ACCEPTED" else outcome
-        item.observation_state = "ACCEPTED" if outcome == "ACCEPTED" else ("NEEDS_REVIEW" if outcome == "UNKNOWN" else None)
+        item.observation_state = (
+            "ACCEPTED"
+            if outcome == "ACCEPTED"
+            else ("NEEDS_REVIEW" if outcome == "UNKNOWN" else None)
+        )
         item.request_attribution = request_id
         item.claim_token = None
         item.claimed_until = None
@@ -414,20 +482,30 @@ def _refresh_after_commit(
     route: FrozenTikTokRoute,
     ref: EntityRef,
 ) -> None:
-    # Refresh is a separate durable transaction.  A read permission change after
-    # a successful write must not rewrite the already accepted management receipt.
+    # 回执已独立提交；同步关闭或缺 API 计划时不追加后台读取。
+    del context
+    if not settings.ADS_SYNC_ENABLED:
+        return
     with Session(database_engine) as session, session.begin():
-        request_sync(
+        plan = session.get(AdSyncBc, (route.tenant_id, route.bc_id))
+        if plan is None or not plan.enabled:
+            return
+        request_directory(
             session,
-            context=context,
-            request=SyncRequest(
-                route=route,
-                advertiser_ids=(ref.advertiser_id,),
-                scope="targeted",
-                start_date=None,
-                end_date=None,
-                refs=(ref,),
-            ),
+            tenant_id=route.tenant_id,
+            bc_id=route.bc_id,
+            frozen_route=plan.frozen_route,
+            actor_id=plan.actor_id,
+            advertiser_ids=[ref.advertiser_id],
+            scope="targeted",
+            refs=[ref],
+        )
+        plan_hot(
+            session,
+            plan,
+            active=[ref.advertiser_id],
+            now=datetime.now(UTC),
+            tier="manual",
         )
 
 
@@ -441,7 +519,9 @@ def _set_refresh_state(
     """Persist targeted-refresh progress independently of the write receipt."""
     with Session(database_engine) as session, session.begin():
         item = session.exec(
-            select(ManagementTaskItem).where(ManagementTaskItem.id == item_id).with_for_update()
+            select(ManagementTaskItem)
+            .where(ManagementTaskItem.id == item_id)
+            .with_for_update()
         ).one_or_none()
         if item is None or item.execution_result != "ACCEPTED":
             return
@@ -471,7 +551,9 @@ def _retry_targeted_refresh(database_engine: Engine, item_id: UUID) -> None:
     """Retry a durable post-write refresh without replaying the mutation."""
     with Session(database_engine) as session:
         item = session.exec(
-            select(ManagementTaskItem).where(ManagementTaskItem.id == item_id).with_for_update()
+            select(ManagementTaskItem)
+            .where(ManagementTaskItem.id == item_id)
+            .with_for_update()
         ).one_or_none()
         if item is None or item.execution_result != "ACCEPTED":
             return
@@ -479,7 +561,9 @@ def _retry_targeted_refresh(database_engine: Engine, item_id: UUID) -> None:
         if task is None:
             return
         route = _route(task)
-        context = TenantContext(tenant_id=task.tenant_id, actor_id=task.actor_id, role="operator")
+        context = TenantContext(
+            tenant_id=task.tenant_id, actor_id=task.actor_id, role="operator"
+        )
         ref = _ref(item.ref)
         session.commit()
     try:
@@ -501,8 +585,16 @@ def _mark_unknown_after_persist_failure(
     """Turn this owner's committed pre-attempt into UNKNOWN on receipt failure."""
     try:
         with Session(database_engine) as session, session.begin():
-            item = session.exec(select(ManagementTaskItem).where(ManagementTaskItem.id == item_id).with_for_update()).one_or_none()
-            if item is None or item.claim_token != token or item.claim_generation != generation:
+            item = session.exec(
+                select(ManagementTaskItem)
+                .where(ManagementTaskItem.id == item_id)
+                .with_for_update()
+            ).one_or_none()
+            if (
+                item is None
+                or item.claim_token != token
+                or item.claim_generation != generation
+            ):
                 return
             attempt = session.exec(
                 select(ManagementRequestAttempt)
@@ -519,7 +611,14 @@ def _mark_unknown_after_persist_failure(
             attempt.retryable = False
             attempt.response = {"reason": "receipt_commit_failed"}
             session.add(attempt)
-            session.add(ReceiptRow(tenant_id=item.tenant_id, attempt_id=attempt.id, outcome="UNKNOWN", response={"reason": "receipt_commit_failed"}))
+            session.add(
+                ReceiptRow(
+                    tenant_id=item.tenant_id,
+                    attempt_id=attempt.id,
+                    outcome="UNKNOWN",
+                    response={"reason": "receipt_commit_failed"},
+                )
+            )
             item.execution_result = "UNKNOWN"
             item.observation_state = "NEEDS_REVIEW"
             item.claim_token = None
@@ -552,7 +651,11 @@ def _mark_unknown_after_fence_failure(
                 .where(ManagementTaskItem.id == item_id)
                 .with_for_update()
             ).one_or_none()
-            if item is None or item.claim_token != token or item.claim_generation != generation:
+            if (
+                item is None
+                or item.claim_token != token
+                or item.claim_generation != generation
+            ):
                 return
             attempt = session.exec(
                 select(ManagementRequestAttempt)
@@ -596,13 +699,25 @@ def execute_item(database_engine: Engine, item_id: UUID) -> None:
     owner = uuid4()
     try:
         with Session(database_engine) as session:
-            item = session.exec(select(ManagementTaskItem).where(ManagementTaskItem.id == item_id).with_for_update()).one_or_none()
+            item = session.exec(
+                select(ManagementTaskItem)
+                .where(ManagementTaskItem.id == item_id)
+                .with_for_update()
+            ).one_or_none()
             if item is None:
                 raise DomainError("management_item_not_found", "管理任务项不存在")
-            task = session.exec(select(ManagementTask).where(ManagementTask.id == item.task_id, ManagementTask.tenant_id == item.tenant_id)).one_or_none()
+            task = session.exec(
+                select(ManagementTask).where(
+                    ManagementTask.id == item.task_id,
+                    ManagementTask.tenant_id == item.tenant_id,
+                )
+            ).one_or_none()
             if task is None:
                 raise DomainError("management_task_not_found", "管理任务不存在")
-            if item.execution_result == "ACCEPTED" and item.observation_state == "REFRESH_PENDING":
+            if (
+                item.execution_result == "ACCEPTED"
+                and item.observation_state == "REFRESH_PENDING"
+            ):
                 session.commit()
                 _retry_targeted_refresh(database_engine, item_id)
                 return
@@ -612,16 +727,30 @@ def execute_item(database_engine: Engine, item_id: UUID) -> None:
                 session.commit()
                 return
             route = _route(task)
-            context = TenantContext(tenant_id=task.tenant_id, actor_id=task.actor_id, role="operator")
+            context = TenantContext(
+                tenant_id=task.tenant_id, actor_id=task.actor_id, role="operator"
+            )
             ref = _ref(item.ref)
             command = _command(item)
-            if route.tenant_id != item.tenant_id or ref.tenant_id != item.tenant_id or route.channel not in {"OFFICIAL_API", "OFFICIAL_MCP"}:
-                raise DomainError("frozen_route_scope_mismatch", "冻结路由与管理目标不一致")
+            if (
+                route.tenant_id != item.tenant_id
+                or ref.tenant_id != item.tenant_id
+                or route.channel not in {"OFFICIAL_API", "OFFICIAL_MCP"}
+            ):
+                raise DomainError(
+                    "frozen_route_scope_mismatch", "冻结路由与管理目标不一致"
+                )
             if (item.capability or {}).get("route") != route.model_dump(mode="json"):
                 raise DomainError("frozen_route_changed", "任务项冻结路由已变化")
             # claim_mutation shares the lock domain with build.disable_adgroup;
             # Redis failure is a per-item failure, never a whole-task abort.
-            lease = claim_mutation(session, (ref,), owner, redis_client=redis_client, lease_seconds=_CLAIM_SECONDS)
+            lease = claim_mutation(
+                session,
+                (ref,),
+                owner,
+                redis_client=redis_client,
+                lease_seconds=_CLAIM_SECONDS,
+            )
             generation = item.claim_generation + (1 if attempts else 0)
             item.claim_generation = generation
             item.claim_token = owner
@@ -651,13 +780,25 @@ def execute_item(database_engine: Engine, item_id: UUID) -> None:
         assert lease is not None
         lease.fence(redis_client)
         with Session(database_engine) as check:
-            current = check.exec(select(ManagementTaskItem).where(ManagementTaskItem.id == item_id)).one()
+            current = check.exec(
+                select(ManagementTaskItem).where(ManagementTaskItem.id == item_id)
+            ).one()
             task = check.get(ManagementTask, current.task_id)
             assert task is not None
             route = _route(task)
-            context = TenantContext(tenant_id=task.tenant_id, actor_id=task.actor_id, role="operator")
+            context = TenantContext(
+                tenant_id=task.tenant_id, actor_id=task.actor_id, role="operator"
+            )
             ref = _ref(current.ref)
-            verify_route(check, context=context, route=route, advertiser_id=ref.advertiser_id, capability="ads_manage", operation=(current.capability or {}).get("operation"), entity_kind=(current.capability or {}).get("entity_kind"))
+            verify_route(
+                check,
+                context=context,
+                route=route,
+                advertiser_id=ref.advertiser_id,
+                capability="ads_manage",
+                operation=(current.capability or {}).get("operation"),
+                entity_kind=(current.capability or {}).get("entity_kind"),
+            )
             _same_frozen_value(check, current, ref)
             command = _command(current)
 
@@ -674,7 +815,9 @@ def execute_item(database_engine: Engine, item_id: UUID) -> None:
                 if latest_task is None:
                     raise DomainError("management_task_not_found", "管理任务不存在")
                 latest_route = _route(latest_task)
-                if latest_route != route or (latest.capability or {}).get("route") != route.model_dump(mode="json"):
+                if latest_route != route or (latest.capability or {}).get(
+                    "route"
+                ) != route.model_dump(mode="json"):
                     raise DomainError("frozen_route_changed", "任务项冻结路由已变化")
                 if latest.claim_token != owner or latest.claim_generation != generation:
                     raise DomainError("management_claim_stale", "管理任务领取已过期")
@@ -707,10 +850,19 @@ def execute_item(database_engine: Engine, item_id: UUID) -> None:
                 receipt = gateway.management.apply(command)
         except RemoteCallError as error:
             outcome = "UNKNOWN" if error.effect == "UNKNOWN" else "NOT_SENT"
-            receipt = ManagementReceipt(outcome, error.evidence.request_id or error.evidence.mcp_request_id, outcome == "NOT_SENT" and error.code in TRANSIENT_NOT_SENT, error.evidence)
+            receipt = ManagementReceipt(
+                outcome,
+                error.evidence.request_id or error.evidence.mcp_request_id,
+                outcome == "NOT_SENT" and error.code in TRANSIENT_NOT_SENT,
+                error.evidence,
+            )
         except DomainError as error:
             outcome = "UNKNOWN" if provider_called else "NOT_SENT"
-            receipt = ManagementReceipt(outcome, None, outcome == "NOT_SENT" and error.code in TRANSIENT_NOT_SENT)
+            receipt = ManagementReceipt(
+                outcome,
+                None,
+                outcome == "NOT_SENT" and error.code in TRANSIENT_NOT_SENT,
+            )
         except Exception:
             outcome = "UNKNOWN" if provider_called else "NOT_SENT"
             receipt = ManagementReceipt(outcome, None, False)
@@ -718,11 +870,28 @@ def execute_item(database_engine: Engine, item_id: UUID) -> None:
         # The attempt number is looked up from SQL after the provider call.  It is
         # never inferred from Redis generation, preserving retries after restart.
         with Session(database_engine) as read:
-            attempt = read.exec(select(ManagementRequestAttempt).where(ManagementRequestAttempt.task_item_id == item_id).order_by(col(ManagementRequestAttempt.attempt).desc())).first()
+            attempt = read.exec(
+                select(ManagementRequestAttempt)
+                .where(ManagementRequestAttempt.task_item_id == item_id)
+                .order_by(col(ManagementRequestAttempt.attempt).desc())
+            ).first()
             assert attempt is not None
             attempt_no = attempt.attempt
         try:
-            persisted = _persist_outcome(database_engine, item_id=item_id, token=owner, generation=generation, attempt_no=attempt_no, outcome=receipt.outcome, request_id=receipt.request_id, retryable=receipt.retryable, response=_evidence(receipt), lease=lease, context=context, route=route)
+            persisted = _persist_outcome(
+                database_engine,
+                item_id=item_id,
+                token=owner,
+                generation=generation,
+                attempt_no=attempt_no,
+                outcome=receipt.outcome,
+                request_id=receipt.request_id,
+                retryable=receipt.retryable,
+                response=_evidence(receipt),
+                lease=lease,
+                context=context,
+                route=route,
+            )
         except DomainError:
             # A stale lease or route/permission generation is itself a writeback
             # fence.  When the provider was reached, fail closed with a durable
@@ -747,7 +916,9 @@ def execute_item(database_engine: Engine, item_id: UUID) -> None:
             persisted = False
         if persisted and receipt.outcome == "ACCEPTED":
             try:
-                _refresh_after_commit(database_engine, context=context, route=route, ref=ref)
+                _refresh_after_commit(
+                    database_engine, context=context, route=route, ref=ref
+                )
             except Exception:
                 # Keep the accepted receipt while recording a durable refresh
                 # retry state; a later management delivery only refreshes.
@@ -765,7 +936,9 @@ def execute_item(database_engine: Engine, item_id: UUID) -> None:
                 item.claim_token = None
                 item.claimed_until = None
                 item.delivery_status = error.code
-                item.observation_state = "NEEDS_REVIEW" if error.code.startswith("route_") else None
+                item.observation_state = (
+                    "NEEDS_REVIEW" if error.code.startswith("route_") else None
+                )
                 session.add(item)
                 _update_task(session, item.task_id, item.tenant_id)
                 session.commit()

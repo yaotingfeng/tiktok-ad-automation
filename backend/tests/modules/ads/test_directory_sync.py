@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 from sqlmodel import select
 
+from app.core.config import settings
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.ads import (
     AdEntity,
@@ -18,7 +19,6 @@ from app.modules.accounts.connection_models import (
 from app.modules.ads.models import AdObject
 from app.modules.ads.sync import publish_directory, stage_directory_page
 from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
-from app.modules.reporting.sync_models import SyncSchedule
 
 
 def _route(seed):
@@ -190,7 +190,8 @@ def test_publish_requires_terminal_page_and_projects_name(session, directory_see
     assert campaign is not None and campaign.published_version == version
 
 
-def test_missing_parent_queues_targeted_follow_up(session, directory_seed):
+def test_missing_parent_queues_targeted_follow_up(session, directory_seed, monkeypatch):
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
     _authority(session, directory_seed)
     run = _run(session, directory_seed, kind="ad", ad_type="SMART_PLUS")
     parent = EntityRef(
@@ -216,11 +217,16 @@ def test_missing_parent_queues_targeted_follow_up(session, directory_seed):
     )
     stage_directory_page(session, run_id=run.id, page=page, claim_generation=1)
     publish_directory(session, run_id=run.id, claim_generation=1)
-    target = session.exec(
-        select(SyncSchedule).where(SyncSchedule.scope == "targeted")
-    ).one()
-    assert target.requested_coverage["reason"] == "missing_parent"
-    assert target.requested_coverage["directory_targets"][0]["ad_type"] == "SMART_PLUS"
+    targets = session.exec(
+        select(AdDirectoryRun).where(
+            AdDirectoryRun.tenant_id == run.tenant_id, AdDirectoryRun.id != run.id
+        )
+    ).all()
+    assert len(targets) == 6
+    assert any(
+        t.kind == "adgroup" and t.query["ids"] == ["missing-group"] for t in targets
+    )
+    assert all(t.frozen_route == run.frozen_route for t in targets)
 
 
 def test_late_older_run_is_fenced_after_newer_run_publishes(session, directory_seed):

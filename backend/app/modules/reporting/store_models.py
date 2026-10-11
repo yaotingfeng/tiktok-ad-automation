@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, Column, Index, Numeric, UniqueConstraint
+from sqlalchemy import CheckConstraint, Column, ForeignKeyConstraint, Index, Numeric
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -60,6 +60,10 @@ class AdReportDay(_Fact, table=True):
     """唯一明细来源：一条广告（ad_id_v2）一天；按月分区（迁移中声明）。"""
 
     __tablename__ = "ad_report_day"
+    __table_args__ = (
+        Index("ix_ad_report_day_period", "tenant_id", "stat_date", "advertiser_id"),
+        Index("ix_ad_report_day_campaign", "tenant_id", "campaign_id", "stat_date"),
+    )
     stat_date: date = Field(primary_key=True)
     ad_id: str = Field(primary_key=True, max_length=64)
     campaign_id: str = Field(max_length=64)
@@ -74,6 +78,11 @@ class CampaignReportDay(_Fact, table=True):
     """由 ad_report_day 在同一事务汇总写入的查询加速表，不独立拉取。"""
 
     __tablename__ = "campaign_report_day"
+    __table_args__ = (
+        Index(
+            "ix_campaign_report_day_period", "tenant_id", "stat_date", "advertiser_id"
+        ),
+    )
     stat_date: date = Field(primary_key=True)
     campaign_id: str = Field(primary_key=True, max_length=64)
     campaign_name: str | None = None
@@ -99,6 +108,17 @@ class MaterialReportDay(_Fact, table=True):
     """Smart+ 素材分时报表：主素材一天；按月分区。素材无 D3、D30（恒为 NULL）。"""
 
     __tablename__ = "material_report_day"
+    __table_args__ = (
+        Index(
+            "ix_material_report_day_period", "tenant_id", "stat_date", "advertiser_id"
+        ),
+        Index(
+            "ix_material_report_day_material",
+            "tenant_id",
+            "main_material_id",
+            "stat_date",
+        ),
+    )
     stat_date: date = Field(primary_key=True)
     main_material_id: str = Field(primary_key=True, max_length=64)
     main_material_type: str = Field(max_length=64)
@@ -199,6 +219,11 @@ class AdSyncBc(SQLModel, table=True):
     """每个已绑定 API 连接的 BC 一行：冻结路由、后台身份与各档位下次执行时间。"""
 
     __tablename__ = "ad_sync_bc"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "bc_id"], ["tenant_bc.tenant_id", "tenant_bc.bc_id"]
+        ),
+    )
     tenant_id: UUID = Field(primary_key=True)
     bc_id: str = Field(primary_key=True, max_length=128)
     frozen_route: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
@@ -223,9 +248,6 @@ class AdSyncAccount(SQLModel, table=True):
     """账户同步归属：一个账户只归一个 BC 计划拉取，避免多 BC 重复调用。"""
 
     __tablename__ = "ad_sync_account"
-    __table_args__ = (
-        UniqueConstraint("tenant_id", "advertiser_id", name="uq_ad_sync_account"),
-    )
     tenant_id: UUID = Field(primary_key=True)
     advertiser_id: str = Field(primary_key=True, max_length=128)
     owner_bc_id: str = Field(max_length=128)

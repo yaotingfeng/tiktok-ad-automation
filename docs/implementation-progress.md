@@ -2008,3 +2008,5 @@
 - 用户裁定：任务 7 小时始终覆盖各账户今天与昨天；广告/素材日仍按 UTC 12:00 分界。任务 6 修正不再使用缓存系列，始终读取本次日期段完整系列清单；拆分中的 read_deadline_exceeded 归为 report_timeout，计入有上限的读取重试，普通 AccountAdmissionDeferred 不计次数。RED 2 failed（遗漏新系列、截止期限无限延后），GREEN 报表目录 136 passed；改动文件格式、lint、业务文件 ty 通过。此项单独提交后继续任务 7。
 
 - 任务 7：API 绑定 BC 自动计划、稳定主 BC 去重、活跃筛选、分档窗口与预算参数；Settings/.env.example/部署手册同步补齐。按用户裁定小时始终今天+昨天，UTC 13:00 回归覆盖广告/素材日仅今天。DiscoveryRun 用实际 COMPLETE、completed_at/created_at 排序并限定 BC；测试替身建立真正 MCP 连接以满足实际复合外键；提前补任务 9 所需发现种子。补停用已删除绑定的计划、冻结连接范围内选主，避免残留计划继续同步。RED 新模块缺失，GREEN reporting+core 194 passed；四文件格式/lint、业务 ty 通过。任务 6 修正提交 `6ec4990`。
+
+- 任务 8：目录请求独立化，30 分钟槽幂等、100 ID 分片及 API/总开关门控；缺父对象和管理回执后改用定向目录+手动热刷。RED 新模块缺失；回归发现任务 1 的 ORM 与迁移不一致（索引/FK/冗余唯一约束、分区子表被当独立删除表），补模型元数据，并让 Alembic 仅排除实际挂在两个报表父表下的子分区；不改已有迁移。GREEN ads+ad_management+reporting 221 passed，八文件格式/lint及四业务文件 ty 通过。偏离：实际既有迁移一致性检查要求上述元数据修正；现有修改文件按要求整体格式化。任务 7 提交 `71a9164`。

@@ -2,7 +2,7 @@ from logging import getLogger
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool, text
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -25,40 +25,40 @@ transport_logger.disabled = transport_logging_disabled
 # target_metadata = None
 
 from app.models import SQLModel  # noqa
-from app.jobs import models as jobs_models  # noqa: F401
-from app.modules.tenants import models as tenants_models  # noqa: F401
-from app.modules.accounts import models as accounts_models  # noqa: F401
+from app.jobs import models as jobs_models  # noqa: E402, F401
+from app.modules.tenants import models as tenants_models  # noqa: E402, F401
+from app.modules.accounts import models as accounts_models  # noqa: E402, F401
 from app.modules.accounts import connection_models  # noqa: E402, F401
-from app.modules.accounts import capability_models  # noqa: F401
-from app.modules.accounts import management_capability_models  # noqa: F401
-from app.modules.accounts import directory_models  # noqa: F401
+from app.modules.accounts import capability_models  # noqa: E402, F401
+from app.modules.accounts import management_capability_models  # noqa: E402, F401
+from app.modules.accounts import directory_models  # noqa: E402, F401
 from app.modules.accounts import discovery_models  # noqa: E402, F401
-from app.modules.builds import execution_models  # noqa: F401
+from app.modules.builds import execution_models  # noqa: E402, F401
 from app.modules.builds import correction_models  # noqa: E402, F401
 from app.modules.builds import route_models  # noqa: E402, F401
-from app.modules.builds import recovery_models  # noqa: F401
+from app.modules.builds import recovery_models  # noqa: E402, F401
 from app.modules.builds import recovery_routes  # noqa: E402, F401
 from app.modules.builds import mini_targets  # noqa: E402, F401
-from app.modules.builds import scene_job_models  # noqa: F401
-from app.modules.materials import models as materials_models  # noqa: F401
+from app.modules.builds import scene_job_models  # noqa: E402, F401
+from app.modules.materials import models as materials_models  # noqa: E402, F401
 from app.modules.materials import seed_models  # noqa: E402, F401
 from app.modules.materials import batch_models  # noqa: E402, F401
-from app.modules.materials import cover_models  # noqa: F401
+from app.modules.materials import cover_models  # noqa: E402, F401
 from app.modules.materials import ingest_models  # noqa: E402, F401
 from app.modules.materials import push_models  # noqa: E402, F401
-from app.modules.providers import models as provider_models  # noqa: F401
-from app.modules.strategies import models as strategy_models  # noqa: F401
-from app.modules.builds import models as builds_models  # noqa: F401
-from app.modules.builds import scene_models  # noqa: F401
-from app.modules.builds import preview_models  # noqa: F401
-from app.modules.builds import mutation_models  # noqa: F401
+from app.modules.providers import models as provider_models  # noqa: E402, F401
+from app.modules.strategies import models as strategy_models  # noqa: E402, F401
+from app.modules.builds import models as builds_models  # noqa: E402, F401
+from app.modules.builds import scene_models  # noqa: E402, F401
+from app.modules.builds import preview_models  # noqa: E402, F401
+from app.modules.builds import mutation_models  # noqa: E402, F401
 from app.modules.ads import models as ads_models  # noqa: E402, F401
 from app.modules.ads import sync_models as ads_sync_models  # noqa: E402, F401
 from app.modules.reporting import models as reporting_models  # noqa: E402, F401
 from app.modules.reporting import sync_models as reporting_sync_models  # noqa: E402, F401
 from app.modules.reporting import query_models as reporting_query_models  # noqa: E402, F401
 from app.modules.ad_management import models as ad_management_models  # noqa: E402, F401
-from app.core.config import settings # noqa
+from app.core.config import settings  # noqa
 
 target_metadata = SQLModel.metadata
 
@@ -110,8 +110,27 @@ def run_migrations_online():
     )
 
     with connectable.connect() as connection:
+        # 分区子表由报表分区管理器维护，ORM 只映射父表；不能自动生成删除子表的迁移。
+        report_partitions = set(
+            connection.execute(
+                text("""
+            SELECT child.relname FROM pg_inherits i
+            JOIN pg_class child ON child.oid=i.inhrelid
+            JOIN pg_class parent ON parent.oid=i.inhparent
+            WHERE parent.relname IN ('ad_report_day','material_report_day')
+        """)
+            ).scalars()
+        )
+        connection.commit()
+
+        def include_name(name, type_, _parent_names):
+            return type_ != "table" or name not in report_partitions
+
         context.configure(
-            connection=connection, target_metadata=target_metadata, compare_type=True
+            connection=connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+            include_name=include_name,
         )
 
         with context.begin_transaction():

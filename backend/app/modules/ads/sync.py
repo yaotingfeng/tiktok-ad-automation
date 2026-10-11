@@ -7,12 +7,10 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import asdict
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import func
@@ -24,9 +22,9 @@ from app.integrations.tiktok.contracts.ads import DirectoryPage, EntityRef
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.modules.accounts.routing import verify_route
 from app.modules.ads.directory import append_campaign_name_projection
+from app.modules.ads.directory_requests import request_directory
 from app.modules.ads.models import AdMaterialReference, AdObject
 from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
-from app.modules.reporting.sync_models import SyncSchedule
 from app.modules.tenants.models import Tenant
 
 
@@ -212,7 +210,10 @@ def stage_directory_page(
         raise _domain("directory_page_conflict", "同一目录页已有不同暂存证据")
     terminal = session.exec(
         select(AdDirectoryPage)
-        .where(col(AdDirectoryPage.run_id) == run_id, col(AdDirectoryPage.complete).is_(True))
+        .where(
+            col(AdDirectoryPage.run_id) == run_id,
+            col(AdDirectoryPage.complete).is_(True),
+        )
         .with_for_update()
     ).first()
     if terminal is not None and (
@@ -454,29 +455,6 @@ def _upsert_material(
     session.add(existing)
 
 
-def _schedule_key(
-    route: FrozenTikTokRoute,
-    *,
-    actor_id: UUID,
-    ref: tuple[UUID, str, str, str],
-    ad_type: str,
-) -> str:
-    payload = {
-        "route": route.model_dump(mode="json"),
-        "actor_id": str(actor_id),
-        "ref": {
-            "tenant_id": str(ref[0]),
-            "advertiser_id": ref[1],
-            "kind": ref[2],
-            "remote_id": ref[3],
-        },
-        "ad_type": ad_type,
-    }
-    return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
-
-
 def _queue_missing_parent(
     session: Session,
     *,
@@ -485,63 +463,18 @@ def _queue_missing_parent(
     ref: tuple[UUID, str, str, str],
     ad_type: str,
 ) -> None:
-    serialized = {
-        "tenant_id": str(ref[0]),
-        "advertiser_id": ref[1],
-        "kind": ref[2],
-        "remote_id": ref[3],
-    }
-    key = _schedule_key(route, actor_id=run.actor_id, ref=ref, ad_type=ad_type)
-    row = session.exec(
-        select(SyncSchedule)
-        .where(
-            SyncSchedule.tenant_id == run.tenant_id,
-            SyncSchedule.bc_id == run.bc_id,
-            SyncSchedule.advertiser_id == run.advertiser_id,
-            SyncSchedule.scope == "targeted",
-            SyncSchedule.schedule_key == key,
-        )
-        .with_for_update()
-    ).first()
-    target = {"ref": serialized, "ad_type": ad_type}
-    if row is None:
-        row = SyncSchedule(
-            tenant_id=run.tenant_id,
-            advertiser_id=run.advertiser_id,
-            bc_id=run.bc_id,
-            actor_id=run.actor_id,
-            connection_id=run.connection_id,
-            channel=run.channel,
-            frozen_route=run.frozen_route,
-            scope="targeted",
-            schedule_key=key,
-            next_due_at=datetime.now(UTC),
-            refs=[serialized],
-            requested_coverage={
-                "mode": "once",
-                "reason": "missing_parent",
-                "directory_targets": [target],
-            },
-            enabled=True,
-        )
-    else:
-        # 活跃任务合并目标时保留原 claim/截止时间，避免发布事务偷走 A7 worker 的租约。
-        targets = (
-            list(row.requested_coverage.get("directory_targets", []))
-            if isinstance(row.requested_coverage, dict)
-            else []
-        )
-        if target not in targets:
-            targets.append(target)
-        row.requested_coverage = {
-            "mode": "once",
-            "reason": "missing_parent",
-            "directory_targets": targets,
-        }
-        if serialized not in row.refs:
-            row.refs = [*row.refs, serialized]
-        row.enabled = True
-    session.add(row)
+    # 缺失父对象仅补定向目录，使用当前运行已冻结的路由。
+    del route, ad_type
+    request_directory(
+        session,
+        tenant_id=run.tenant_id,
+        bc_id=run.bc_id,
+        frozen_route=run.frozen_route,
+        actor_id=run.actor_id,
+        advertiser_ids=[ref[1]],
+        scope="targeted",
+        refs=[EntityRef(ref[0], ref[1], cast(Any, ref[2]), ref[3])],
+    )
 
 
 def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) -> int:
