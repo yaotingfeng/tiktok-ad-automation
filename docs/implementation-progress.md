@@ -1981,7 +1981,7 @@
 
 ## 2026-10-11：取链参数与版权方后台对齐
 
-- 分支 `feat/provider-link-config`（基线 `97838de`）分 8 步把 TK-ADA 的取链参数对齐到各版权方后台：Task 1-7 提交为 `49cb6e9`、`28c917e`、`1b2e3ba`、`dee9fa3`、`385454b`、`dd76e60`、`cdc52d9`、`5421be8`、`b421a47`。新增迁移 `0021_provider_link_defaults`（应用级取链默认值）。
+- 分支 `feat/provider-link-config`（基线 `97838de`）分 8 步把 TK-ADA 的取链参数对齐到各版权方后台：Task 1-7 提交为 `49cb6e9`、`28c917e`、`1b2e3ba`、`dee9fa3`、`385454b`、`dd76e60`、`cdc52d9`、`5421be8`、`b421a47`。新增迁移 `0022_provider_link_defaults`（应用级取链默认值）。
 - 行为变化：网眼推广名称由网眼后台生成，不再由本系统传入；网眼创建超时后按同参数回查，恰好 1 条链接则采用、0 条则重建、多条转人工；容量剧集固定取第一项，别名自动取；兑吧卡点集、刚刚好免费集数按剧默认值取；刚刚好支付模板随连接验证刷新；修复候选手动选择后没有进入 detail 阶段的缺陷。
 - 验证（专用库 + Redis，对照基线 `97838de`）：`ruff check`、`ty check` 通过；mypy 185 个错误与基线一致、无新增；`ruff format --check` 77 个文件与基线同一清单。前端 `bun run build` 通过；playwright workspace 项目 486 通过，chromium 项目因无后端（ECONNREFUSED 127.0.0.1:8000）未运行。后端 3 组并行全量：4538 通过、87 失败，全部在 `tests/modules/materials`，未设 `OBJECT_STORAGE_PROVIDER=s3` 的本机 `.env` 触发（与基线同样失败）；设置 s3 占位变量后素材模块重跑 1278 通过、5 跳过、1 失败（`test_repair_query_plan`，膨胀的测试库统计漂移，全新库通过，基线同库亦非本分支改动）。
 - 未在真实版权方后台联调；仅本地验证，未部署，未调用真实 TikTok。

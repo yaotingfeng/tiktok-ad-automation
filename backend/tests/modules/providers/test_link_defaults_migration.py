@@ -13,7 +13,7 @@ from tests.migration_database import historical_database, insert_historical_bc
 from tests.modules.builds.test_drafts import config
 from tests.modules.conftest import create_context
 
-REVISION = "0021_provider_link_defaults"
+REVISION = "0022_provider_link_defaults"
 
 
 def _seed_parents(db, context):
@@ -97,8 +97,8 @@ def _draft(db, context, parents, status, link_config):
     return draft_id
 
 
-def test_0021_cleans_only_unsubmitted_drafts(monkeypatch):
-    with historical_database(monkeypatch, "0020_draft_delivery_mutation") as (
+def test_0022_cleans_only_unsubmitted_drafts(monkeypatch):
+    with historical_database(monkeypatch, "0021_report_run_retry_count") as (
         engine,
         config_,
     ):

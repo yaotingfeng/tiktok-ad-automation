@@ -4,8 +4,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0021_provider_link_defaults"
-down_revision = "0020_draft_delivery_mutation"
+revision = "0022_provider_link_defaults"
+down_revision = "0021_report_run_retry_count"
 branch_labels = None
 depends_on = None
 
