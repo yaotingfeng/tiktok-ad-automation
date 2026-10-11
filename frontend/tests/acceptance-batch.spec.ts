@@ -13,7 +13,19 @@ type Scenario = {
   accounts: string[]
   other_tenant_id: string
   other_bc_id: string
+  // 后端按 ACCEPTANCE_SCALE（compact 默认 / full）推导的期望数量。
+  expected: {
+    scale: string
+    strategy_name: string
+    campaigns: number
+    adgroups: number
+    ads: number
+    daily_budget: number
+    excluded: { campaign_count: number; adgroup_count: number; ad_count: number }
+    excluded_budget: number
+  }
 }
+const budgetPattern = (value: number) => new RegExp(`^${value}(?:\\.0+)?$`)
 async function seed(
   request: APIRequestContext,
   partial = false,
@@ -47,7 +59,7 @@ async function inputs(
   await page.getByRole("combobox", { name: "投放策略", exact: true }).click()
   await page
     .getByRole("option")
-    .filter({ hasText: "Acceptance K10 N2" })
+    .filter({ hasText: scope.expected.strategy_name })
     .click()
   await page
     .getByLabel("剧目名称", { exact: true })
@@ -63,7 +75,7 @@ async function pumpUntil(
   phase: "preparation" | "preview" | "execution",
   predicate: () => Promise<Progress>,
 ) {
-  // Execution includes 138 target materials, source covers and their real
+  // Execution includes all target materials, source covers and their real
   // delayed verification reads. Match the backend acceptance execution budget;
   // the existing 600-second test deadline still bounds the complete scenario.
   const timeout = phase === "execution" ? 360_000 : 180_000
@@ -159,7 +171,7 @@ async function freeze(page: Page, request: APIRequestContext, scope: Scenario) {
   return { previewId, summary }
 }
 
-test("真实 API 两剧三户：冻结 6/18/36 与 USD600，提交并完成后台任务", async ({
+test("真实 API 两剧多户：按规模冻结系列/广告组/广告与预算，提交并完成后台任务", async ({
   page,
   request,
 }, testInfo) => {
@@ -171,8 +183,12 @@ test("真实 API 两剧三户：冻结 6/18/36 与 USD600，提交并完成后�
     summary.campaign_count,
     summary.adgroup_count,
     summary.ad_count,
-  ]).toEqual([6, 18, 36])
-  expect(summary.daily_budget_sum).toMatch(/^600(?:\.0+)?$/)
+  ]).toEqual([
+    scope.expected.campaigns,
+    scope.expected.adgroups,
+    scope.expected.ads,
+  ])
+  expect(summary.daily_budget_sum).toMatch(budgetPattern(scope.expected.daily_budget))
   for (const width of [1440, 1280, 390]) {
     await page.setViewportSize({ width, height: 900 })
     await expect(
@@ -214,11 +230,11 @@ test("真实 API 两剧三户：冻结 6/18/36 与 USD600，提交并完成后�
     }
   })
   expect(task.succeeded).toEqual({
-    campaign_count: 6,
-    adgroup_count: 18,
-    ad_count: 36,
+    campaign_count: scope.expected.campaigns,
+    adgroup_count: scope.expected.adgroups,
+    ad_count: scope.expected.ads,
   })
-  expect(task.daily_budget_sum).toMatch(/^600(?:\.0+)?$/)
+  expect(task.daily_budget_sum).toMatch(budgetPattern(scope.expected.daily_budget))
   await page.reload()
   await expect(
     page.getByRole("heading", {
@@ -278,7 +294,7 @@ test("真实草稿编辑使旧预览失效；丢失回执按原请求恢复并�
   await page.getByRole("button", { name: "刷新准备结果", exact: true }).click()
   const current = await freeze(page, request, scope)
   expect(current.previewId).not.toBe(old.previewId)
-  expect(current.summary.campaign_count).toBe(6)
+  expect(current.summary.campaign_count).toBe(scope.expected.campaigns)
   await request.post("/__acceptance__/lose-submission-response")
   await page.getByRole("button", { name: /创建并立即启用/ }).click()
   await expect(
@@ -333,7 +349,7 @@ test("真实草稿编辑使旧预览失效；丢失回执按原请求恢复并�
     )
     const task = await response.json()
     return {
-      ready: task.succeeded.ad_count === 36,
+      ready: task.succeeded.ad_count === scope.expected.ads,
       state: {
         status: task.status,
         stage_counts: task.stage_counts,
@@ -353,17 +369,23 @@ test("真实币种差异排除两组合；普通投手访问另一租户保留�
   await login(page, scope)
   await prepare(page, request, scope)
   const { summary } = await freeze(page, request, scope)
-  expect(summary.blocked_count).toBe(2)
+  expect(summary.blocked_count).toBe(scope.expected.excluded.campaign_count)
   expect([
     summary.campaign_count,
     summary.adgroup_count,
     summary.ad_count,
-  ]).toEqual([4, 12, 24])
-  expect(summary.daily_budget_sum).toMatch(/^400(?:\.0+)?$/)
+  ]).toEqual([
+    scope.expected.campaigns - scope.expected.excluded.campaign_count,
+    scope.expected.adgroups - scope.expected.excluded.adgroup_count,
+    scope.expected.ads - scope.expected.excluded.ad_count,
+  ])
+  expect(summary.daily_budget_sum).toMatch(
+    budgetPattern(scope.expected.excluded_budget),
+  )
   await page.getByRole("tab", { name: "排除组合", exact: true }).click()
   await expect(
     page.getByText("账户币种与策略不一致", { exact: true }),
-  ).toHaveCount(2)
+  ).toHaveCount(scope.expected.excluded.campaign_count)
   await page.screenshot({
     path: testInfo.outputPath("partial-excluded.png"),
     fullPage: true,
@@ -380,15 +402,13 @@ test("真实币种差异排除两组合；普通投手访问另一租户保留�
   )
   const task = await response.json()
   expect(task.submitted).toEqual({
-    campaign_count: 4,
-    adgroup_count: 12,
-    ad_count: 24,
+    campaign_count:
+      scope.expected.campaigns - scope.expected.excluded.campaign_count,
+    adgroup_count:
+      scope.expected.adgroups - scope.expected.excluded.adgroup_count,
+    ad_count: scope.expected.ads - scope.expected.excluded.ad_count,
   })
-  expect(task.excluded).toEqual({
-    campaign_count: 2,
-    adgroup_count: 6,
-    ad_count: 12,
-  })
+  expect(task.excluded).toEqual(scope.expected.excluded)
   const forbidden = await request.get(
     `/api/tenants/${scope.other_tenant_id}/submissions/${submissionId}`,
     { headers: { Authorization: `Bearer ${token}` } },
@@ -406,7 +426,7 @@ test("真实币种差异排除两组合；普通投手访问另一租户保留�
   expect(page.url()).not.toContain("/login")
 })
 
-test("真实 API 网眼入口：正式归因、完整账户编号与冻结 6/18/36", async ({
+test("真实 API 网眼入口：正式归因、完整账户编号与按规模冻结", async ({
   page,
   request,
 }, testInfo) => {
@@ -421,9 +441,13 @@ test("真实 API 网眼入口：正式归因、完整账户编号与冻结 6/18/
     summary.campaign_count,
     summary.adgroup_count,
     summary.ad_count,
-  ]).toEqual([6, 18, 36])
+  ]).toEqual([
+    scope.expected.campaigns,
+    scope.expected.adgroups,
+    scope.expected.ads,
+  ])
   expect(summary.blocked_count).toBe(0)
-  expect(summary.daily_budget_sum).toMatch(/^600(?:\.0+)?$/)
+  expect(summary.daily_budget_sum).toMatch(budgetPattern(scope.expected.daily_budget))
   const token = await page.evaluate(() => localStorage.getItem("access_token"))
   const response = await request.get(
     `/api/tenants/${scope.tenant_id}/build-previews/${previewId}/units?limit=50`,
@@ -434,7 +458,7 @@ test("真实 API 网眼入口：正式归因、完整账户编号与冻结 6/18/
   expect(response.ok()).toBeTruthy()
   const units = await response.json()
   expect(units.next_cursor).toBeNull()
-  expect(units.items).toHaveLength(6)
+  expect(units.items).toHaveLength(scope.expected.campaigns)
   expect(
     [
       ...new Set(

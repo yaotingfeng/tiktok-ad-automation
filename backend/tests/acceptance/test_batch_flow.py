@@ -6,6 +6,7 @@ from sqlmodel import Session, select
 from app.core.errors import DomainError
 from app.modules.builds import previews
 from app.modules.materials.models import AccountMaterial
+from tests.acceptance.scenario import SCALE
 
 
 @pytest.mark.parametrize("acceptance_scenario", ["jiashu", "wangyan"], indirect=True)
@@ -19,40 +20,41 @@ def test_real_preparation_freeze_submission_and_official_sdk(acceptance_scenario
         )
         assert preview.status == "FROZEN"
         assert (preview.campaign_count, preview.adgroup_count, preview.ad_count) == (
-            6,
-            18,
-            36,
+            SCALE.campaigns,
+            SCALE.adgroups,
+            SCALE.ads,
         )
-        assert preview.daily_budget_sum == Decimal("600")
+        assert preview.daily_budget_sum == Decimal(SCALE.daily_budget)
         assert all(
             call["method"] == "GET" for call in scenario.runtime.wire.smart.calls
         )
     scenario.submit()
     scenario.runtime.drive_until(
         lambda: scenario.view().status not in {"QUEUED", "RUNNING"},
-        # 138 份目标素材及源封面共享保留真实调度/等待间隔，给整批充分完成时间。
+        # 满规模 138 份目标素材及源封面共享保留真实调度/等待间隔，给整批充分完成时间。
         timeout=360,
     )
     view = scenario.view()
     assert view.succeeded.model_dump() == {
-        "campaign_count": 6,
-        "adgroup_count": 18,
-        "ad_count": 36,
+        "campaign_count": SCALE.campaigns,
+        "adgroup_count": SCALE.adgroups,
+        "ad_count": SCALE.ads,
     }, scenario.runtime.diagnostics()
-    assert Decimal(view.daily_budget_sum) == Decimal("600")
+    assert Decimal(view.daily_budget_sum) == Decimal(SCALE.daily_budget)
     wire = scenario.runtime.wire
-    assert len([call for call in wire.smart.calls if call["method"] == "POST"]) == 60
+    posts = [call for call in wire.smart.calls if call["method"] == "POST"]
+    assert len(posts) == SCALE.posts
     assert all(
         row["operation_status"] == "ENABLE"
         for rows in wire.smart.store.values()
         for row in rows.values()
     )
-    # 46 个来源视频原生共享到三个账户；封面各上传一次后共享，避免重复上传。
+    # 来源视频（满规模 46 个）原生共享到全部目标账户；封面各上传一次后共享，避免重复上传。
     assert wire.calls["/open_api/v1.3/file/video/ad/upload/"] == 0
-    assert wire.calls["/open_api/v1.3/file/image/ad/upload/"] == 46
+    assert wire.calls["/open_api/v1.3/file/image/ad/upload/"] == SCALE.source_videos
     assert wire.calls["/open_api/v1.3/creative/asset/share/"] > 0
-    assert len(wire.videos) == 138
-    assert wire.calls["/open_api/v1.3/smart_plus/adgroup/create/"] == 18
+    assert len(wire.videos) == SCALE.target_videos
+    assert wire.calls["/open_api/v1.3/smart_plus/adgroup/create/"] == SCALE.adgroups
     with Session(scenario.database_engine) as session:
         targets = session.exec(
             select(AccountMaterial).where(
@@ -60,7 +62,7 @@ def test_real_preparation_freeze_submission_and_official_sdk(acceptance_scenario
                 AccountMaterial.advertiser_id.in_(scenario.scope.accounts),
             )
         ).all()
-        assert len(targets) == 138
+        assert len(targets) == SCALE.target_videos
         assert all(
             row.video_id.startswith("target-vid-")
             and row.mid.startswith("source-mid-")
@@ -79,13 +81,13 @@ def test_preparation_and_freeze_are_real_and_have_no_tiktok_writes(acceptance_sc
         )
         assert summary.status == "FROZEN"
         assert (summary.campaign_count, summary.adgroup_count, summary.ad_count) == (
-            6,
-            18,
-            36,
+            SCALE.campaigns,
+            SCALE.adgroups,
+            SCALE.ads,
         )
-        assert summary.daily_budget_sum == Decimal("600")
+        assert summary.daily_budget_sum == Decimal(SCALE.daily_budget)
         assert summary.blocked_count == 0
-        assert summary.preparing_count == 6
+        assert summary.preparing_count == SCALE.campaigns
         assert (
             session.exec(
                 select(AccountMaterial).where(
@@ -112,13 +114,15 @@ def test_preparation_and_freeze_are_real_and_have_no_tiktok_writes(acceptance_sc
             copies[(unit.drama_id, group.group_no, ad.creative_no)].add(
                 (ad.copy_id, ad.text)
             )
-        assert len(copies) == 12 and all(len(values) == 1 for values in copies.values())
+        assert len(copies) == SCALE.copy_slots and all(
+            len(values) == 1 for values in copies.values()
+        )
         history = session.exec(
             select(MaterialUploadAttempt).where(
                 MaterialUploadAttempt.tenant_id == scenario.scope.context.tenant_id
             )
         ).all()
-        assert len(history) == 46
+        assert len(history) == SCALE.source_videos
         assert {row.advertiser_id for row in history} == set(scenario.scope.sources)
         assert all(
             row.status == "succeeded"
@@ -133,7 +137,7 @@ def test_preparation_and_freeze_are_real_and_have_no_tiktok_writes(acceptance_sc
         "tool/vbo_status",
         "tool/region",
     ]:
-        assert wire.calls[f"/open_api/v1.3/{endpoint}/"] == 3
+        assert wire.calls[f"/open_api/v1.3/{endpoint}/"] == SCALE.target_accounts
     assert wire.calls["/open_api/v1.3/bc/asset/get/"] == 1
     assert all(call["method"] == "GET" for call in wire.smart.calls)
     assert not wire.videos and not wire.portfolios
@@ -151,6 +155,7 @@ def test_partial_input_and_material_matching_use_actual_preparation(
     from app.modules.materials.models import MaterialFile
 
     scenario = acceptance_scenario
+    excluded = SCALE.excluded_by_currency()
     if variant == "currency":
         with Session(scenario.database_engine) as session, session.begin():
             row = session.get(
@@ -188,10 +193,17 @@ def test_partial_input_and_material_matching_use_actual_preparation(
                 summary.campaign_count,
                 summary.adgroup_count,
                 summary.ad_count,
-            ) == (4, 12, 24)
-            assert summary.daily_budget_sum == Decimal("400")
+            ) == (
+                SCALE.campaigns - excluded["campaign_count"],
+                SCALE.adgroups - excluded["adgroup_count"],
+                SCALE.ads - excluded["ad_count"],
+            )
+            assert summary.daily_budget_sum == Decimal(
+                SCALE.daily_budget - SCALE.budget_per_campaign * SCALE.dramas
+            )
         else:
-            assert summary.campaign_count == 6 and summary.input_issue_count == 0
+            assert summary.campaign_count == SCALE.campaigns
+            assert summary.input_issue_count == 0
             rows = session.exec(
                 select(PreviewGroupMaterial, PreviewDrama)
                 .join(
@@ -209,23 +221,21 @@ def test_partial_input_and_material_matching_use_actual_preparation(
     submitted = scenario.view()
     if variant == "currency":
         assert submitted.submitted.model_dump() == {
-            "campaign_count": 4,
-            "adgroup_count": 12,
-            "ad_count": 24,
+            "campaign_count": SCALE.campaigns - excluded["campaign_count"],
+            "adgroup_count": SCALE.adgroups - excluded["adgroup_count"],
+            "ad_count": SCALE.ads - excluded["ad_count"],
         }
-        assert Decimal(submitted.daily_budget_sum) == Decimal("400")
-        assert submitted.excluded_unit_count == 2
-        assert submitted.excluded.model_dump() == {
-            "campaign_count": 2,
-            "adgroup_count": 6,
-            "ad_count": 12,
-        }
+        assert Decimal(submitted.daily_budget_sum) == Decimal(
+            SCALE.daily_budget - SCALE.budget_per_campaign * SCALE.dramas
+        )
+        assert submitted.excluded_unit_count == excluded["campaign_count"]
+        assert submitted.excluded.model_dump() == excluded
         for name, planned_count in submitted.planned.model_dump().items():
             assert planned_count == getattr(submitted.submitted, name) + getattr(
                 submitted.excluded, name
             )
     else:
-        assert submitted.submitted.campaign_count == 6
+        assert submitted.submitted.campaign_count == SCALE.campaigns
     assert all(call["method"] == "GET" for call in scenario.runtime.wire.smart.calls)
     assert not scenario.runtime.wire.videos
 

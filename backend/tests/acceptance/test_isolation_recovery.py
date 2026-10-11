@@ -13,7 +13,7 @@ from app.main import app
 from app.modules.builds import submissions
 from app.modules.builds.execution_models import ExecutionStep, SubmissionRequest
 from app.modules.tenants.models import TenantMembership
-from tests.acceptance.scenario import PASSWORD
+from tests.acceptance.scenario import PASSWORD, SCALE
 
 
 def test_cross_tenant_http_reads_and_frozen_cursor_are_isolated(acceptance_scenario):
@@ -181,7 +181,12 @@ def test_remote_commit_lost_reply_uses_get_without_recreating(
     wire = scenario.runtime.wire
     wire.lose_response_kind = kind
     wire.ambiguous_kind = kind if ambiguous else None
-    expected_creates = 6 if kind == "campaign" else 12
+    # material_count=1：每个（剧 × 账户）系列 1 组、每组 creative_count 条广告。
+    expected_creates = (
+        SCALE.campaigns
+        if kind == "campaign"
+        else SCALE.campaigns * SCALE.creative_count
+    )
     create_endpoint = f"/open_api/v1.3/smart_plus/{kind}/create/"
     get_endpoint = f"/open_api/v1.3/smart_plus/{kind}/get/"
     scenario.submit()
@@ -203,7 +208,11 @@ def test_remote_commit_lost_reply_uses_get_without_recreating(
                     ExecutionStep.status == "SUCCEEDED",
                 )
             ).one()
-        return verified == (20 if kind == "campaign" else 23)
+        # 已成功的系列/广告组/广告步骤数：总数（系列 + 1 组 + 广告）减去仍未完成的部分。
+        total = SCALE.campaigns * (2 + SCALE.creative_count)
+        return verified == total - (
+            2 + SCALE.creative_count if kind == "campaign" else 1
+        )
 
     scenario.runtime.drive_until(settled, timeout=420)
     view = scenario.view()
@@ -266,7 +275,7 @@ def test_remote_commit_lost_reply_uses_get_without_recreating(
     else:
         assert view.status == "COMPLETED", scenario.runtime.diagnostics()
         assert len(wire.smart.store[kind]) == expected_creates
-        assert view.succeeded.campaign_count == 6
+        assert view.succeeded.campaign_count == SCALE.campaigns
     creates = wire.calls[create_endpoint]
     for message in list(scenario.runtime.delivered):
         if message["name"] in {"builds.execute_step", "builds.reconcile_step"}:
@@ -308,7 +317,7 @@ def test_submission_aliases_and_duplicate_delivery_do_not_repeat_post(
     assert (
         len([c for c in scenario.runtime.wire.smart.calls if c["method"] == "POST"])
         == before
-        == 24
+        == SCALE.campaigns * (2 + SCALE.creative_count)
     )
 
 

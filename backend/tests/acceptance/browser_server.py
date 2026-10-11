@@ -26,7 +26,14 @@ from app.core.db import engine
 from app.main import FRONTEND_DIR, app
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.builds.execution_models import Submission
-from tests.acceptance.scenario import PASSWORD, Scope, Wire, offline_runtime, seed_scope
+from tests.acceptance.scenario import (
+    PASSWORD,
+    SCALE,
+    Scope,
+    Wire,
+    offline_runtime,
+    seed_scope,
+)
 from tests.database import require_test_database
 
 require_test_database(str(settings.DATABASE_URL))
@@ -136,7 +143,7 @@ class ScenarioRequest(BaseModel):
 
 @app.get("/__acceptance__/health")
 def health():
-    return {"ready": runtime is not None}
+    return {"ready": runtime is not None, "expected": SCALE.public()}
 
 
 @app.post("/__acceptance__/scenario")
@@ -164,6 +171,7 @@ def scenario(options: ScenarioRequest):
             "accounts": scope.accounts,
             "other_tenant_id": str(other.context.tenant_id),
             "other_bc_id": other.bc_id,
+            "expected": SCALE.public(),
         }
 
 

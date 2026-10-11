@@ -14,6 +14,8 @@ export default defineConfig({
       "cd ../backend && ../.venv/bin/python -m tests.acceptance.browser_server",
     url: "http://127.0.0.1:5191/__acceptance__/health",
     reuseExistingServer: !process.env.CI,
+    // 规模由后端 ACCEPTANCE_SCALE 决定（compact 默认 / full），随进程环境继承。
+    env: { ACCEPTANCE_SCALE: process.env.ACCEPTANCE_SCALE ?? "compact" },
     timeout: 120_000,
   },
   use: {

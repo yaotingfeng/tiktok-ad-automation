@@ -22,6 +22,8 @@ python3 deploy/local.py deploy
 - 发布工具：发布门禁测试；发布编排、迁移或镜像本身变化时另跑镜像集成测试。
 - 核心配置/调度/数据库迁移/依赖锁/共用测试夹具，或无法归类的文件：自动全量。
 
+端到端验收（后端 `tests/acceptance` 与浏览器验收）默认使用精简规模（2 剧 × 2 账户 × 每剧 5 素材，4 系列/12 广告组/24 广告）；需要满规模（2 剧 × 3 账户 × 23 素材，6/18/36）时设置 `ACCEPTANCE_SCALE=full`，或执行 `python3 deploy/local.py check --full-scale`。
+
 需要全量回归时显式执行 `python3 deploy/local.py check --full` 或 `deploy --full`。同一提交已通过且覆盖到当前线上版本时直接复用结果，不重复检查。通过记录保存在 `.runtime/local-release/checks/`，实测用例耗时缓存在 `.runtime/local-release/ci-cache/`，用于并行分组均衡。
 
 后端测试按耗时分 4 组并行（`CHECK_BACKEND_SHARDS` 可调），每组独立数据库与 Redis 库号；独立测试库从迁移好的模板复制。并行失败的用例会在全新库中单独重跑一次，重跑通过的列为“并行不稳定”，仍失败才阻止发布。后端、前端、发布工具三条检查线同时运行。

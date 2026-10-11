@@ -173,6 +173,11 @@ def main():
     parser.add_argument(
         "--full", action="store_true", help="按需全量检查；默认只检查受改动影响的部分"
     )
+    parser.add_argument(
+        "--full-scale",
+        action="store_true",
+        help="端到端验收按满规模运行（ACCEPTANCE_SCALE=full）；默认精简规模",
+    )
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
     base = args.config.resolve().parent
@@ -227,6 +232,10 @@ def main():
             not args.full or args.action in ("check", "deploy"),
             "--full is only valid for check/deploy",
         )
+        require(
+            not args.full_scale or args.action in ("check", "deploy"),
+            "--full-scale is only valid for check/deploy",
+        )
         run_name = time.strftime("%Y%m%dT%H%M%S") + "-" + secrets.token_hex(3)
         folder = base / "runs" / run_name
         folder.mkdir(parents=True, mode=0o700)
@@ -262,6 +271,7 @@ def main():
                         env,
                         CHECK_PLAN=str(folder / "check-plan.json"),
                         CHECK_CACHE_DIR=str(base / "ci-cache"),
+                        **({"ACCEPTANCE_SCALE": "full"} if args.full_scale else {}),
                     ),
                     log,
                 )

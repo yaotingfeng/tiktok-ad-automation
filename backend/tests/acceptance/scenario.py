@@ -71,6 +71,126 @@ from app.modules.tenants.models import Tenant, TenantMembership
 from tests.fakes.tiktok import FakeTikTokAPI
 
 DRAMAS = ("The Bond", "Hidden Promise")
+
+
+@dataclass(frozen=True)
+class ScaleProfile:
+    """端到端验收规模。所有“期望数量”都由这里推导，测试不得再写死数字。
+
+    规则：每个（剧 × 目标账户）一个系列；每系列的广告组数 = ceil(素材数 / 每组素材上限)；
+    每组固定 1 个广告规格 × creative_count(2) = 2 条广告；每个系列预算 USD100。
+
+    full（ACCEPTANCE_SCALE=full，原规模）：2 剧 × 3 账户 × 23 素材、每组上限 10
+        -> 6 系列 / 18 广告组（每系列 10+10+3）/ 36 广告 / 预算 600；
+        46 个来源视频、138 份目标素材、60 次 POST。
+    compact（默认）：2 剧 × 2 账户 × 5 素材、每组上限 2
+        -> 4 系列 / 12 广告组（每系列 2+2+1）/ 24 广告 / 预算 400；
+        10 个来源视频、20 份目标素材、40 次 POST。
+        仍保留多剧并行与命名隔离、多账户（全部剧投全部账户）、来源账户共享、
+        封面上传后共享，以及“素材不能整除分组上限”的余数组；只缩小素材总量。
+    """
+
+    name: str
+    target_accounts: int
+    materials_per_drama: int
+    max_materials_per_group: int
+    creative_count: int = 2
+    budget_per_campaign: int = 100
+    # 等待类计时（结果未知步骤的修复等待、搭建修复任务的 Beat 间隔）的缩放倍数。
+    # full 保持线上真实计时；compact 按比例缩短。租约与执行时限不缩放。
+    timer_scale: float = 1.0
+
+    @property
+    def strategy_name(self) -> str:
+        """验收策略名称；浏览器验收按此名称在下拉框中选择。"""
+        return f"Acceptance K{self.max_materials_per_group} N{self.creative_count}"
+
+    @property
+    def dramas(self) -> int:
+        return len(DRAMAS)
+
+    @property
+    def groups_per_campaign(self) -> int:
+        return -(-self.materials_per_drama // self.max_materials_per_group)
+
+    @property
+    def campaigns(self) -> int:
+        return self.dramas * self.target_accounts
+
+    @property
+    def adgroups(self) -> int:
+        return self.campaigns * self.groups_per_campaign
+
+    @property
+    def ads(self) -> int:
+        return self.adgroups * self.creative_count
+
+    @property
+    def daily_budget(self) -> int:
+        return self.campaigns * self.budget_per_campaign
+
+    @property
+    def posts(self) -> int:
+        """提交期的 TikTok 创建调用总数：系列 + 广告组 + 广告。"""
+        return self.campaigns + self.adgroups + self.ads
+
+    @property
+    def source_videos(self) -> int:
+        return self.dramas * self.materials_per_drama
+
+    @property
+    def target_videos(self) -> int:
+        return self.source_videos * self.target_accounts
+
+    @property
+    def copy_slots(self) -> int:
+        """（剧 × 组序号 × 创意序号）共用文案的槽位数，与账户数无关。"""
+        return self.dramas * self.groups_per_campaign * self.creative_count
+
+    def excluded_by_currency(self) -> dict[str, int]:
+        """一个目标账户币种不同时被排除的数量（每剧一个系列）。"""
+        campaigns = self.dramas
+        adgroups = campaigns * self.groups_per_campaign
+        return {
+            "campaign_count": campaigns,
+            "adgroup_count": adgroups,
+            "ad_count": adgroups * self.creative_count,
+        }
+
+    def public(self) -> dict[str, Any]:
+        """供浏览器验收读取的期望值。"""
+        excluded = self.excluded_by_currency()
+        return {
+            "scale": self.name,
+            "strategy_name": self.strategy_name,
+            "campaigns": self.campaigns,
+            "adgroups": self.adgroups,
+            "ads": self.ads,
+            "daily_budget": self.daily_budget,
+            "excluded": excluded,
+            "excluded_budget": self.daily_budget
+            - self.budget_per_campaign * self.dramas,
+        }
+
+
+SCALES = {
+    "full": ScaleProfile("full", 3, 23, 10),
+    "compact": ScaleProfile("compact", 2, 5, 2, timer_scale=0.1),
+}
+# 只缩放纯等待阈值：搭建步骤被修复任务接手前的静置时间与修复任务间隔。二者不参与
+# 任何执行期限或租约计算；进行中调用的租约与硬时限保持原值。
+SCALED_WAIT_CONSTANTS = (("app.modules.builds.dispatch", "REPAIR_SECONDS"),)
+SCALED_BEAT_TASKS = frozenset({"builds.repair_execution"})
+
+
+def current_scale() -> ScaleProfile:
+    name = os.environ.get("ACCEPTANCE_SCALE", "compact") or "compact"
+    if name not in SCALES:
+        raise RuntimeError("ACCEPTANCE_SCALE 只能是 compact 或 full: " + name)
+    return SCALES[name]
+
+
+SCALE = current_scale()
 PASSWORD = "Offline-acceptance-2026!"
 
 
@@ -566,21 +686,30 @@ class Runtime:
         )
         self.dispatch_due = now
         self.beat_due = {
-            name: now + float(entry["schedule"])
+            name: now + self.interval(entry)
             for name, entry in celery_app.conf.beat_schedule.items()
             if entry["task"] != "jobs.flush_dispatch"
         }
 
+    @staticmethod
+    def interval(entry: dict[str, Any]) -> float:
+        """Beat 间隔；精简规模下按 timer_scale 缩短选定的修复任务。"""
+        seconds = float(entry["schedule"])
+        if entry["task"] in SCALED_BEAT_TASKS:
+            return max(1.0, seconds * SCALE.timer_scale)
+        return seconds
+
     def tick_beat(self) -> None:
         # A BUSY read deliberately retains its original published message. The
         # actual periodic repair re-publishes it after its safety lease expires.
-        # Use production intervals and real time; never expire leases by hand.
+        # 满规模使用线上真实间隔与真实时间；精简规模只按比例缩短 SCALED_BEAT_TASKS
+        # 的间隔。任何规模都不手工让租约过期。
         now = time.monotonic()
         for name, due in self.beat_due.items():
             if now < due:
                 continue
             entry = celery_app.conf.beat_schedule[name]
-            self.beat_due[name] = now + float(entry["schedule"])
+            self.beat_due[name] = now + self.interval(entry)
             self.publish(
                 entry["task"],
                 kwargs=dict(entry.get("kwargs", {})),
@@ -831,6 +960,10 @@ def offline_runtime(wire: Wire, database_engine: Any) -> Iterator[Runtime]:
             if hasattr(module, "engine"):
                 stack.enter_context(patch.object(module, "engine", database_engine))
         stack.enter_context(patch("app.jobs.outbox.engine", database_engine))
+        for module_name, constant in SCALED_WAIT_CONSTANTS:
+            module = importlib.import_module(module_name)
+            scaled = max(1, round(getattr(module, constant) * SCALE.timer_scale))
+            stack.enter_context(patch.object(module, constant, scaled))
         stack.enter_context(patch.object(celery_app, "send_task", runtime.publish))
         stack.enter_context(
             patch(
@@ -887,9 +1020,11 @@ def seed_scope(
     *,
     label: str,
     provider_kind: str = "jiashu",
-    material_count: int = 23,
+    material_count: int | None = None,
 ) -> Scope:
     """Only identity, credentials, discovered accounts and original/source inventory."""
+    if material_count is None:
+        material_count = SCALE.materials_per_drama
     with Session(database_engine) as session, session.begin():
         tenant = Tenant(name="Acceptance " + label)
         user = User(
@@ -991,22 +1126,22 @@ def seed_scope(
         strategy_id = create_strategy(
             session,
             context=context,
-            name="Acceptance K10 N2",
+            name=SCALE.strategy_name,
             config=StrategyConfig(
                 budget=Decimal("100"),
                 currency="USD",
                 bid_strategy="TARGET_ROAS",
                 target_roas=Decimal("1.2"),
-                # 保留 K10/N2 的原验收规模，使用当前显式结构合同。
+                # 每组素材上限与创意数随验收规模变化（见 ScaleProfile），使用当前显式结构合同。
                 group_generation_mode="BY_MATERIAL",
                 group_count=None,
                 group_material_allocation=None,
-                max_materials_per_group=10,
+                max_materials_per_group=SCALE.max_materials_per_group,
                 ad_generation_mode="FIXED",
                 ads_per_group=1,
                 ad_material_allocation="SHARED",
                 max_materials_per_ad=None,
-                creative_count=2,
+                creative_count=SCALE.creative_count,
                 copy_pool_version=POOL_VERSION,
             ),
         )
@@ -1021,7 +1156,10 @@ def seed_scope(
             provider.id,
             app.external_id,
             version.id,
-            tuple(synthetic_id(f"{label}:target:{n}") for n in range(3)),
+            tuple(
+                synthetic_id(f"{label}:target:{n}")
+                for n in range(SCALE.target_accounts)
+            ),
             tuple(synthetic_id(f"{label}:source:{n}") for n in range(2)),
         )
         scope.label = label
