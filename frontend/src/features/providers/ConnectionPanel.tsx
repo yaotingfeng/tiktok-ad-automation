@@ -2,8 +2,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
 import { useCallback, useMemo, useState } from "react"
 import {
-  type ProviderConnectionCreate,
   type ProviderApplicationPublic,
+  type ProviderConnectionCreate,
   type ProviderConnectionPublic,
   ProvidersService,
 } from "@/client"
@@ -48,6 +48,7 @@ import {
   useRetainedData,
 } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
+import { ApplicationLinkDefaults } from "./ApplicationLinkDefaults"
 import {
   connectionStates,
   kinds,
@@ -309,7 +310,11 @@ export function ConnectionPanel({
             <Button variant="outline" onClick={() => onLinks(detail.id)}>
               该连接的链接记录
             </Button>
-            <Applications tenantId={tenantId!} connection={detail} />
+            <Applications
+              tenantId={tenantId!}
+              connection={detail}
+              canEditDefaults={manage}
+            />
           </div>
         </ManagementSheet>
       )}
@@ -484,7 +489,9 @@ function ConnectionEditor({
             </FieldLabel>
             <Input
               id="provider-account"
-              type={kind === "wangyan" || kind === "rongliang" ? "email" : "text"}
+              type={
+                kind === "wangyan" || kind === "rongliang" ? "email" : "text"
+              }
               autoComplete="off"
               required={!saved || !!password}
               value={account}
@@ -575,10 +582,12 @@ export function Applications({
   tenantId,
   connection,
   onSelect,
+  canEditDefaults = false,
 }: {
   tenantId: string
   connection: ProviderConnectionPublic
   onSelect?: (application: ProviderApplicationPublic) => void
+  canEditDefaults?: boolean
 }) {
   const paging = useCursorPage(),
     query = useQuery(
@@ -622,8 +631,27 @@ export function Applications({
             },
           ]
         : []),
+      // 取链默认值只在连接管理视图提供，且仅有管理权限的成员可见（后端另行强制 403）。
+      ...(!onSelect && canEditDefaults
+        ? [
+            {
+              header: "取链默认值",
+              cell: ({
+                row,
+              }: {
+                row: { original: ProviderApplicationPublic }
+              }) => (
+                <ApplicationLinkDefaults
+                  tenantId={tenantId}
+                  connection={connection}
+                  application={row.original}
+                />
+              ),
+            },
+          ]
+        : []),
     ],
-    [onSelect, connection.status],
+    [onSelect, connection, tenantId, canEditDefaults],
   )
   return (
     <section className="flex min-w-0 flex-col gap-4">

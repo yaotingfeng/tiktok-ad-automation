@@ -1,5 +1,10 @@
 import type { LinkConfigSchema } from "@/client"
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -9,54 +14,72 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 
-type LinkConfigValue = string | number | boolean | null
+export type LinkConfigValues = Record<string, number>
 
+// defaults：推广应用默认值，只显示可设默认的字段；overrides：本次单独调整，留空即沿用下层值。
 export function ProviderLinkConfigFields({
   schema,
   value,
+  mode,
   disabled,
   onChange,
 }: {
   schema: LinkConfigSchema
-  value: Record<string, LinkConfigValue>
+  value: LinkConfigValues
+  mode: "defaults" | "overrides"
   disabled: boolean
-  onChange: (patch: Record<string, LinkConfigValue>) => void
+  onChange: (next: LinkConfigValues) => void
 }) {
-  if (!schema.fields.length) return null
+  const fields = schema.fields.filter(
+    (field) => mode === "overrides" || field.source === "application_default",
+  )
+  if (!fields.length) return null
+  const update = (name: string, raw: string) => {
+    const next = { ...value }
+    // 清空即删除该键，不提交 null，后端按“未调整”处理。
+    if (raw === "") delete next[name]
+    else next[name] = Number(raw)
+    onChange(next)
+  }
   return (
     <FieldGroup className="grid min-w-0 gap-4 md:grid-cols-2">
-      {schema.fields.map((field) => {
-        const current = value[field.name] ?? schema.defaults?.[field.name] ?? ""
-        const required = field.required || Object.entries(schema.required_when || {}).some(
-          ([fieldName, rules]) =>
-            fieldName === field.name &&
-            Object.entries(rules).some(([dependency, allowed]) =>
-              allowed.includes(String(value[dependency] ?? "")),
-            ),
-        )
-        const label = `${field.label}${required ? "（必填）" : "（选填）"}`
-        const update = (raw: string | boolean) => {
-          let next: LinkConfigValue = raw
-          if (field.type === "integer") next = raw === "" ? null : Number(raw)
-          if (field.type === "boolean") next = Boolean(raw)
-          onChange({ [field.name]: next })
-        }
+      {fields.map((field) => {
+        const current = value[field.name]
+        const placeholder =
+          field.source === "per_drama"
+            ? (field.rule ?? "")
+            : String(
+                schema.application_defaults?.[field.name] ??
+                  schema.defaults?.[field.name] ??
+                  "",
+              )
         return (
           <Field key={field.name}>
-            <FieldLabel htmlFor={`link-config-${field.name}`}>{label}</FieldLabel>
-            {field.type === "select" && (field.options?.length || 0) > 0 ? (
+            <FieldLabel htmlFor={`link-config-${field.name}`}>
+              {field.label}
+            </FieldLabel>
+            {field.type === "select" ? (
               <Select
-                value={String(current)}
-                disabled={disabled}
-                onValueChange={update}
+                value={current === undefined ? "" : String(current)}
+                disabled={disabled || !field.options?.length}
+                onValueChange={(raw) => update(field.name, raw)}
               >
-                <SelectTrigger id={`link-config-${field.name}`}>
-                  <SelectValue placeholder="请选择" />
+                <SelectTrigger
+                  id={`link-config-${field.name}`}
+                  aria-label={field.label}
+                >
+                  <SelectValue
+                    placeholder={
+                      field.options?.length
+                        ? "请选择"
+                        : "暂无可选项，请重新验证连接"
+                    }
+                  />
                 </SelectTrigger>
                 <SelectContent>
                   {field.options?.map((option) => (
-                    <SelectItem key={option} value={option}>
-                      {option}
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -64,22 +87,18 @@ export function ProviderLinkConfigFields({
             ) : (
               <Input
                 id={`link-config-${field.name}`}
-                type={field.type === "integer" ? "number" : field.type === "boolean" ? "checkbox" : "text"}
-                value={field.type === "boolean" ? undefined : String(current ?? "")}
-                checked={field.type === "boolean" ? Boolean(current) : undefined}
-                required={required}
+                type="number"
+                min={field.minimum ?? 1}
+                value={current === undefined ? "" : String(current)}
+                placeholder={placeholder}
                 disabled={disabled}
                 onChange={(event) =>
-                  update(
-                    field.type === "boolean"
-                      ? event.currentTarget.checked
-                      : event.currentTarget.value,
-                  )
+                  update(field.name, event.currentTarget.value)
                 }
               />
             )}
-            {field.name === "payment_template_id" && (
-              <FieldDescription>付费或混合剧目必须选择版权方支付模板。</FieldDescription>
+            {field.rule && mode === "overrides" && (
+              <FieldDescription>留空则{field.rule}</FieldDescription>
             )}
           </Field>
         )

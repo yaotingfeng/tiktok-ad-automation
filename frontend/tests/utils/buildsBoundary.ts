@@ -36,6 +36,77 @@ export const config = {
   cta_option_ids: [],
   campaign_name_template: "{provider_drama}-{drama_id}",
 }
+const intField = (name: string, label: string, extra = {}) => ({
+  name,
+  label,
+  type: "integer" as const,
+  minimum: 1,
+  required: false,
+  options: [],
+  ...extra,
+})
+const linkSchemas: Record<string, LinkConfigSchema> = {
+  wangyan: {
+    provider_kind: "wangyan",
+    fields: [
+      intField("episode", "起播集", {
+        default: 1,
+        source: "application_default",
+      }),
+    ],
+    defaults: { episode: 1 },
+    application_defaults: {},
+    schema_version: 2,
+  },
+  duiba: {
+    provider_kind: "duiba",
+    fields: [
+      intField("episode", "起播集", {
+        default: 1,
+        source: "application_default",
+      }),
+      intField("card_point_episode", "卡点集", {
+        source: "per_drama",
+        rule: "按剧免费集数",
+      }),
+    ],
+    defaults: { episode: 1 },
+    application_defaults: { episode: 2 },
+    schema_version: 2,
+  },
+  rongliang: {
+    provider_kind: "rongliang",
+    fields: [],
+    defaults: {},
+    application_defaults: {},
+    schema_version: 2,
+  },
+  "gangganhao-paid-no-template": {
+    provider_kind: "gangganhao",
+    fields: [
+      intField("free_episode_count", "免费集数", {
+        source: "per_drama",
+        rule: "按剧免费集数，缺失时为 3",
+        minimum: 0,
+      }),
+      intField("episode_seq", "跳转集", {
+        default: 1,
+        source: "application_default",
+      }),
+      {
+        ...intField("payment_template_id", "支付模板", {
+          source: "application_default",
+          required: true,
+        }),
+        type: "select" as const,
+        options: [{ value: "7", label: "周卡" }],
+      },
+    ],
+    defaults: { episode_seq: 1 },
+    application_defaults: {},
+    schema_version: 2,
+  },
+} as unknown as Record<string, LinkConfigSchema>
 export async function buildsBoundary(
   page: Page,
   options: {
@@ -73,6 +144,7 @@ export async function buildsBoundary(
     draftList?: boolean
     miniSelected?: boolean
     skippedMaterials?: boolean
+    linkKind?: "wangyan" | "duiba" | "rongliang" | "gangganhao-paid-no-template"
   } = {},
 ) {
   const submissionId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -355,16 +427,7 @@ export async function buildsBoundary(
       )
     // 应用能力接口返回字段契约，不能沿用列表接口的空分页响应。
     if (path.includes("/applications/") && path.endsWith("/capabilities"))
-      return reply({
-        provider_kind: "wangyan",
-        fields: [
-          { name: "episode", label: "起播集", type: "integer", default: 1 },
-          { name: "promote_name", label: "推广名称", type: "string" },
-        ],
-        defaults: { episode: 1 },
-        required_when: {},
-        schema_version: 1,
-      } satisfies LinkConfigSchema)
+      return reply(linkSchemas[options.linkKind ?? "wangyan"])
     if (path.endsWith("/applications"))
       return reply(
         paged([

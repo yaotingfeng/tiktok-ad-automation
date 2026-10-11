@@ -180,6 +180,33 @@ async function boundary(
       row.status = "active"
       return reply(row)
     }
+    if (path.endsWith("/applications/com.real.external.app/capabilities"))
+      return reply({
+        provider_kind: "wangyan",
+        fields: [
+          {
+            name: "episode",
+            label: "起播集",
+            type: "integer",
+            default: 1,
+            source: "application_default",
+            minimum: 1,
+            required: false,
+            options: [],
+          },
+        ],
+        defaults: { episode: 1 },
+        application_defaults: {},
+        schema_version: 2,
+      })
+    if (path.endsWith("/applications/com.real.external.app/link-defaults"))
+      return reply({
+        provider_kind: "wangyan",
+        fields: [],
+        defaults: { episode: 1 },
+        application_defaults: body.link_defaults,
+        schema_version: 2,
+      })
     if (path.endsWith("/applications/com.real.external.app/minis")) {
       configuredMini = route.request().postDataJSON().minis_id
       return reply({
@@ -832,4 +859,22 @@ test("版权方连接不再要求配置 Mini", async ({ page }) => {
   await expect(page.getByText("已核实应用", { exact: true })).toBeVisible()
   await expect(page.getByRole("button", { name: "配置 Mini" })).toHaveCount(0)
   await expect(page.getByText("Minis 关联", { exact: true })).toHaveCount(0)
+})
+
+test("应用表可设置取链默认值并刷新列表", async ({ page }) => {
+  const { requests } = await boundary(page, { role: "tenant_admin" })
+  await page.goto(`/tenants/${tenantId}/providers`)
+  await page.getByRole("button", { name: "查看已发现应用" }).click()
+  await page.getByRole("button", { name: "取链默认值" }).first().click()
+  await page.getByLabel("起播集").fill("3")
+  await page.getByRole("button", { name: "保存", exact: true }).click()
+  await expect
+    .poll(
+      () =>
+        requests.find(
+          (r) => r.method === "PATCH" && r.path.endsWith("/link-defaults"),
+        )?.body,
+    )
+    .toEqual({ link_defaults: { episode: 3 } })
+  await expect(page.getByRole("dialog", { name: /取链默认值/ })).toHaveCount(0)
 })

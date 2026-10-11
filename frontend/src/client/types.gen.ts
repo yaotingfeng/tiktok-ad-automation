@@ -1189,6 +1189,14 @@ export type DramaCandidate = {
      * Display Drama Id
      */
     display_drama_id?: string | null;
+    /**
+     * Free Episode Count
+     */
+    free_episode_count?: number | null;
+    /**
+     * Episode Count
+     */
+    episode_count?: number | null;
 };
 
 /**
@@ -2168,7 +2176,7 @@ export type LinkConfigField = {
     /**
      * Type
      */
-    type: 'string' | 'integer' | 'select' | 'boolean';
+    type: 'integer' | 'select';
     /**
      * Required
      */
@@ -2180,7 +2188,33 @@ export type LinkConfigField = {
     /**
      * Options
      */
-    options?: Array<string>;
+    options?: Array<LinkConfigOption>;
+    /**
+     * Source
+     */
+    source: 'application_default' | 'per_drama';
+    /**
+     * Rule
+     */
+    rule?: string | null;
+    /**
+     * Minimum
+     */
+    minimum?: number;
+};
+
+/**
+ * LinkConfigOption
+ */
+export type LinkConfigOption = {
+    /**
+     * Value
+     */
+    value: string;
+    /**
+     * Label
+     */
+    label: string;
 };
 
 /**
@@ -2202,17 +2236,27 @@ export type LinkConfigSchema = {
         [key: string]: unknown;
     };
     /**
-     * Required When
+     * Application Defaults
      */
-    required_when?: {
-        [key: string]: {
-            [key: string]: Array<string>;
-        };
+    application_defaults?: {
+        [key: string]: unknown;
     };
     /**
      * Schema Version
      */
     schema_version: number;
+};
+
+/**
+ * LinkDefaultsUpdate
+ */
+export type LinkDefaultsUpdate = {
+    /**
+     * Link Defaults
+     */
+    link_defaults: {
+        [key: string]: unknown;
+    };
 };
 
 /**
@@ -4158,6 +4202,12 @@ export type ProviderApplicationPublic = {
      * Available
      */
     available: boolean;
+    /**
+     * Link Defaults
+     */
+    link_defaults?: {
+        [key: string]: unknown;
+    };
 };
 
 /**
@@ -10079,6 +10129,44 @@ export type providersApplicationCapabilitiesResponses = {
 };
 
 export type providersApplicationCapabilitiesResponse = providersApplicationCapabilitiesResponses[keyof providersApplicationCapabilitiesResponses];
+
+export type providersPatchApplicationLinkDefaultsData = {
+    body: LinkDefaultsUpdate;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Connection Id
+         */
+        connection_id: string;
+        /**
+         * Application Id
+         */
+        application_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/providers/connections/{connection_id}/applications/{application_id}/link-defaults';
+};
+
+export type providersPatchApplicationLinkDefaultsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type providersPatchApplicationLinkDefaultsError = providersPatchApplicationLinkDefaultsErrors[keyof providersPatchApplicationLinkDefaultsErrors];
+
+export type providersPatchApplicationLinkDefaultsResponses = {
+    /**
+     * Successful Response
+     */
+    200: LinkConfigSchema;
+};
+
+export type providersPatchApplicationLinkDefaultsResponse = providersPatchApplicationLinkDefaultsResponses[keyof providersPatchApplicationLinkDefaultsResponses];
 
 export type adsReportingQueryAdsData = {
     body?: never;

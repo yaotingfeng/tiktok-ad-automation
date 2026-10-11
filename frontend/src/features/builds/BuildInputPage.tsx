@@ -6,6 +6,7 @@ import { flushSync } from "react-dom"
 import {
   BuildsService,
   type DraftSummary,
+  type LinkConfigSchema,
   type ProviderConnectionPublic,
   ProvidersService,
   StrategiesService,
@@ -25,6 +26,7 @@ import { DirectoryPicker } from "@/features/tenants/DirectoryPicker"
 import { ApplicationPicker } from "./ApplicationPicker"
 import { mutationKey } from "./api"
 import { DraftConflict } from "./DraftConflict"
+import { LinkConfigSummary } from "./LinkConfigSummary"
 import { ManualLinksDialog } from "./ManualLinksDialog"
 import { linksForLines, type NamedManualLink } from "./manualLinks"
 import { ProviderLinkConfigFields } from "./ProviderLinkConfigFields"
@@ -43,9 +45,22 @@ type Values = {
   account: string
   connection: string
   application: string
-  linkConfig: Record<string, string | number | boolean | null>
+  linkConfig: Record<string, number>
   version: string
 }
+
+// 付费应用的支付模板既无本次调整也无应用默认时，提交前提示，避免取链阶段才失败。
+const templateMissing = (
+  schema: LinkConfigSchema,
+  overrides: Record<string, number>,
+) =>
+  schema.fields.some(
+    (field) =>
+      field.name === "payment_template_id" &&
+      field.required &&
+      overrides[field.name] === undefined &&
+      schema.application_defaults?.[field.name] === undefined,
+  )
 
 type Pending = { requestId: string; prepare: boolean; values: Values }
 export function BuildInputPage({
@@ -89,7 +104,7 @@ export function BuildInputPage({
     customProvider: summary?.custom_provider_name || "",
     manualLinks: original?.manualLinks || [],
     application: summary?.application_id || "",
-    linkConfig: summary?.link_config || {},
+    linkConfig: (summary?.link_config || {}) as Record<string, number>,
     version: summary?.strategy_version_id || "",
   })
   const [values, setValues] = useState<Values>({
@@ -103,7 +118,10 @@ export function BuildInputPage({
     [leaving, setLeaving] = useState(false),
     [revision, setRevision] = useState(summary?.revision),
     [manualOpen, setManualOpen] = useState(false),
-    [inputError, setInputError] = useState("")
+    [inputError, setInputError] = useState(""),
+    [adjusting, setAdjusting] = useState(
+      () => Object.keys(summary?.link_config || {}).length > 0,
+    )
   const controller = useRef(new AbortController()),
     navigate = useNavigate()
   useEffect(() => {
@@ -122,24 +140,6 @@ export function BuildInputPage({
       !!values.connection &&
       !!values.application,
   })
-  useEffect(() => {
-    const defaults = capabilities.data?.defaults as
-      | Record<string, string | number | boolean | null>
-      | undefined
-    if (!defaults) return
-    // 已保存输入的隐式默认值属于初始基线，不应仅因读取能力接口触发修改。
-    if (
-      summary &&
-      values.connection === initial.current.connection &&
-      values.application === initial.current.application
-    ) {
-      initial.current.linkConfig = { ...defaults, ...initial.current.linkConfig }
-    }
-    setValues((current) => ({
-      ...current,
-      linkConfig: { ...defaults, ...current.linkConfig },
-    }))
-  }, [capabilities.data])
   const dirty = JSON.stringify(values) !== JSON.stringify(initial.current)
   const disabled = busy || !!pending || !write || forbidden
   const change = (patch: Partial<Values>) =>
@@ -499,19 +499,42 @@ export function BuildInputPage({
         </CardContent>
       </Card>
       {values.connection !== "other" && capabilities.data && (
-        <Card className="min-w-0">
+        <Card className="min-w-0" role="region" aria-label="自动取链参数">
           <CardHeader>
             <CardTitle>自动取链参数</CardTitle>
           </CardHeader>
-          <CardContent>
-            <ProviderLinkConfigFields
+          <CardContent className="flex flex-col gap-4">
+            <LinkConfigSummary
               schema={capabilities.data}
-              value={values.linkConfig}
-              disabled={disabled}
-              onChange={(patch) =>
-                change({ linkConfig: { ...values.linkConfig, ...patch } })
-              }
+              overrides={values.linkConfig}
             />
+            {templateMissing(capabilities.data, values.linkConfig) && (
+              <Alert variant="destructive">
+                <AlertDescription>
+                  付费或混合变现应用需要支付模板，请在版权方连接的推广应用中设置
+                </AlertDescription>
+              </Alert>
+            )}
+            {capabilities.data.fields.length > 0 && (
+              <Button
+                type="button"
+                variant="outline"
+                className="self-start"
+                disabled={disabled}
+                onClick={() => setAdjusting((open) => !open)}
+              >
+                本次单独调整
+              </Button>
+            )}
+            {adjusting && (
+              <ProviderLinkConfigFields
+                schema={capabilities.data}
+                value={values.linkConfig}
+                mode="overrides"
+                disabled={disabled}
+                onChange={(linkConfig) => change({ linkConfig })}
+              />
+            )}
           </CardContent>
         </Card>
       )}
@@ -637,7 +660,10 @@ export function BuildInputPage({
                       ? !values.customProvider.trim()
                       : !values.application) ||
                     !values.drama.trim() ||
-                    !values.account.trim()
+                    !values.account.trim() ||
+                    (capabilities.data
+                      ? templateMissing(capabilities.data, values.linkConfig)
+                      : false)
                   }
                   onClick={() => void save(false)}
                 >
@@ -651,7 +677,10 @@ export function BuildInputPage({
                       ? !values.customProvider.trim()
                       : !values.application) ||
                     !values.drama.trim() ||
-                    !values.account.trim()
+                    !values.account.trim() ||
+                    (capabilities.data
+                      ? templateMissing(capabilities.data, values.linkConfig)
+                      : false)
                   }
                   onClick={() => void save(true)}
                 >
