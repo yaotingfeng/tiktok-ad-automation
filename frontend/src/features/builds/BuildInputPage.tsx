@@ -660,10 +660,7 @@ export function BuildInputPage({
                       ? !values.customProvider.trim()
                       : !values.application) ||
                     !values.drama.trim() ||
-                    !values.account.trim() ||
-                    (capabilities.data
-                      ? templateMissing(capabilities.data, values.linkConfig)
-                      : false)
+                    !values.account.trim()
                   }
                   onClick={() => void save(false)}
                 >
@@ -678,6 +675,7 @@ export function BuildInputPage({
                       : !values.application) ||
                     !values.drama.trim() ||
                     !values.account.trim() ||
+                    // 缺支付模板只阻止准备，草稿仍可保存
                     (capabilities.data
                       ? templateMissing(capabilities.data, values.linkConfig)
                       : false)

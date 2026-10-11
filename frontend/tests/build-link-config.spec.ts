@@ -42,4 +42,8 @@ test("刚刚好付费应用未设置支付模板时提示去连接设置", async
       "付费或混合变现应用需要支付模板，请在版权方连接的推广应用中设置",
     ),
   ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "保存草稿", exact: true }),
+  ).toBeEnabled()
+  await expect(page.getByRole("button", { name: "解析并准备" })).toBeDisabled()
 })
