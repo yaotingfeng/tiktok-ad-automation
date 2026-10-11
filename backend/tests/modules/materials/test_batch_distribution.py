@@ -905,8 +905,14 @@ def test_armed_expired_batch_appends_unknown_and_never_repeats_share(
 
     with monkeypatch.context() as patch:
         patch.setattr(urllib3.PoolManager, "request", kill_after_share)
-        with pytest.raises(KeyboardInterrupt):
-            run(share_case, redis_client, tasks[0], kind="prepare")
+        # 发布检查在后台进程中运行，继承的 SIGINT 处于忽略状态，信号会被直接吞掉；
+        # 显式装回默认中断处理，保证在任何启动方式下都能模拟进程中断，结束后恢复原处理。
+        previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+        try:
+            with pytest.raises(KeyboardInterrupt):
+                run(share_case, redis_client, tasks[0], kind="prepare")
+        finally:
+            signal.signal(signal.SIGINT, previous)
     original = state(tasks[0])[1]
     with Session(database_engine) as db, db.begin():
         for task in tasks:
