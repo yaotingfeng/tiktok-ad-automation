@@ -303,6 +303,28 @@ def test_successful_rediscovery_does_not_keep_old_application_usable(connections
         connection_id=ids[0],
         transport=transport(),
     )
+    # 管理员保存的取链默认值与发现写入的 channel_config 分开，重新发现不覆盖。
+    with Session(engine) as session, session.begin():
+        app = session.exec(
+            select(ProviderApplication).where(
+                ProviderApplication.connection_id == ids[0],
+                ProviderApplication.external_id == "external-app",
+            )
+        ).one()
+        app.link_defaults = {"episode": 2}
+    verify_connection(
+        database_engine=engine,
+        context=contexts[0],
+        connection_id=ids[0],
+        transport=transport(),
+    )
+    with Session(engine) as session:
+        assert session.exec(
+            select(ProviderApplication.link_defaults).where(
+                ProviderApplication.connection_id == ids[0],
+                ProviderApplication.external_id == "external-app",
+            )
+        ).one() == {"episode": 2}
 
     def replacement(request):
         if request.url.path.endswith("login"):

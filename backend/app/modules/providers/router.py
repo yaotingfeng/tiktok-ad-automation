@@ -8,12 +8,16 @@ from fastapi import APIRouter, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
-from sqlmodel import col, select
+from sqlmodel import Session, col, select
 
 from app.api.deps import CurrentUser, SessionDep
 from app.core.errors import ERROR_HTTP_STATUS, DomainError
 from app.core.pagination import Page, count_rows
-from app.modules.providers.capabilities import LinkConfigSchema, capabilities_for_kind
+from app.modules.providers.capabilities import (
+    LinkConfigSchema,
+    capabilities_for_kind,
+    validate_link_values,
+)
 from app.modules.providers.catalog import (
     LinkStatus,
     get_link,
@@ -28,6 +32,7 @@ from app.modules.providers.models import ProviderApplication, ProviderConnection
 from app.modules.providers.repository import _after_id, _cursor, get_connection
 from app.modules.providers.schemas import (
     CandidateSelection,
+    LinkDefaultsUpdate,
     LinkPreparationRequest,
     LinkResultStatus,
     PreparationAccepted,
@@ -385,12 +390,37 @@ def list_applications(
                 and connection.verification_token is not None
                 and row.channel_config.get("verification_token")
                 == str(connection.verification_token),
+                link_defaults=row.link_defaults,
             )
             for row in rows[:limit]
         ],
         next_cursor=_cursor(scope, rows[limit - 1].id) if len(rows) > limit else None,
         total=total,
     )
+
+
+def _verified_application(
+    session: Session,
+    tenant_id: UUID,
+    connection: ProviderConnection,
+    application_id: str,
+) -> ProviderApplication:
+    """取当前连接下已验证的推广应用；未发现或未通过本代验证都不可用。"""
+
+    app = session.exec(
+        select(ProviderApplication).where(
+            ProviderApplication.tenant_id == tenant_id,
+            ProviderApplication.connection_id == connection.id,
+            ProviderApplication.external_id == application_id,
+        )
+    ).one_or_none()
+    if app is None:
+        raise DomainError("resource_not_found", "当前版权方应用不存在")
+    if connection.status not in {"active", "reauth_required"} or app.channel_config.get(
+        "verification_token"
+    ) != str(connection.verification_token):
+        raise DomainError("connection_unavailable", "当前版权方应用尚未验证")
+    return app
 
 
 @router.get(
@@ -410,20 +440,46 @@ def application_capabilities(
         session, actor_id=user.id, tenant_id=tenant_id, action="read"
     )
     connection = get_connection(session, context=context, connection_id=connection_id)
-    app = session.exec(
-        select(ProviderApplication).where(
-            ProviderApplication.tenant_id == tenant_id,
-            ProviderApplication.connection_id == connection_id,
-            ProviderApplication.external_id == application_id,
-        )
-    ).one_or_none()
-    if app is None:
-        raise DomainError("resource_not_found", "当前版权方应用不存在")
-    if connection.status not in {"active", "reauth_required"} or app.channel_config.get(
-        "verification_token"
-    ) != str(connection.verification_token):
-        raise DomainError("connection_unavailable", "当前版权方应用尚未验证")
+    app = _verified_application(session, tenant_id, connection, application_id)
     try:
         return capabilities_for_kind(connection.kind, app)
     except ValueError:
-        raise DomainError("provider_request_invalid", "当前版权方不支持自动取链") from None
+        raise DomainError(
+            "provider_request_invalid", "当前版权方不支持自动取链"
+        ) from None
+
+
+@router.patch(
+    "/connections/{connection_id}/applications/{application_id}/link-defaults",
+    response_model=LinkConfigSchema,
+)
+def patch_application_link_defaults(
+    tenant_id: UUID,
+    connection_id: UUID,
+    application_id: str,
+    body: LinkDefaultsUpdate,
+    session: SessionDep,
+    user: CurrentUser,
+) -> LinkConfigSchema:
+    """保存推广应用的取链默认值；只接受可设默认的字段，按剧字段不能保存为默认。"""
+
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="manage"
+    )
+    connection = get_connection(session, context=context, connection_id=connection_id)
+    app = _verified_application(session, tenant_id, connection, application_id)
+    app.link_defaults = validate_link_values(
+        connection.kind, app, body.link_defaults, target="defaults"
+    )
+    session.add(app)
+    session.add(
+        AuditEvent(
+            tenant_id=tenant_id,
+            actor_id=user.id,
+            action="provider.application.link_defaults.update",
+            target_id=str(app.id),
+        )
+    )
+    schema = capabilities_for_kind(connection.kind, app)
+    session.commit()
+    return schema

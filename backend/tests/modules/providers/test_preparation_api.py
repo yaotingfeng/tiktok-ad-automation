@@ -426,6 +426,60 @@ def test_application_capabilities_require_verified_application_and_return_safe_s
     assert missing.json()["code"] == "resource_not_found"
 
 
+def _set_role(context, role):
+    from app.modules.tenants.models import TenantMembership
+
+    with Session(engine) as session:
+        member = session.get(TenantMembership, (context.tenant_id, context.actor_id))
+        member.role = role
+        session.add(member)
+        session.commit()
+
+
+def test_application_link_defaults_round_trip(api_client, request_fixture):
+    context, connection_id, _ = request_fixture
+    _set_role(context, "tenant_admin")
+    headers = auth_headers(context)
+    base = f"/api/tenants/{context.tenant_id}/providers/connections/{connection_id}"
+    url = f"{base}/applications/external-app/link-defaults"
+    response = api_client.patch(
+        url, headers=headers, json={"link_defaults": {"episode": 2}}
+    )
+    assert response.status_code == 200
+    assert response.json()["application_defaults"] == {"episode": 2}
+    rejected = api_client.patch(
+        url, headers=headers, json={"link_defaults": {"card_point_episode": 3}}
+    )
+    assert rejected.status_code == 422
+    assert rejected.json()["code"] == "link_config_invalid"
+    missing = api_client.patch(
+        url.replace("external-app", "missing-app"),
+        headers=headers,
+        json={"link_defaults": {"episode": 2}},
+    )
+    assert missing.status_code == 404
+    listed = api_client.get(f"{base}/applications", headers=headers).json()["items"]
+    assert listed[0]["link_defaults"] == {"episode": 2}
+    capabilities = api_client.get(
+        f"{base}/applications/external-app/capabilities", headers=headers
+    ).json()
+    assert capabilities["application_defaults"] == {"episode": 2}
+
+
+def test_non_manager_cannot_change_application_link_defaults(
+    api_client, request_fixture
+):
+    context, connection_id, _ = request_fixture
+    _set_role(context, "viewer")
+    response = api_client.patch(
+        f"/api/tenants/{context.tenant_id}/providers/connections/{connection_id}"
+        "/applications/external-app/link-defaults",
+        headers=auth_headers(context),
+        json={"link_defaults": {"episode": 2}},
+    )
+    assert response.status_code == 403
+
+
 def test_verify_api_uses_connection_session_and_returns_only_public_fields(
     api_client, request_fixture, monkeypatch
 ):

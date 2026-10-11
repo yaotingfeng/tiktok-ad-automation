@@ -158,6 +158,13 @@ class ProviderApplicationPublic(BaseModel):
     name: str
     tiktok_minis_id: str | None = None
     available: bool
+    link_defaults: dict[str, Any] = Field(default_factory=dict)
+
+
+class LinkDefaultsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    link_defaults: dict[str, Any]
 
 
 class ProviderLinkPublic(BaseModel):

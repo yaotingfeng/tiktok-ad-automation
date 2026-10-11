@@ -78,6 +78,10 @@ class ProviderApplication(SQLModel, table=True):
             "jsonb_typeof(channel_config) = 'object'",
             name="ck_provider_application_config",
         ),
+        CheckConstraint(
+            "jsonb_typeof(link_defaults) = 'object'",
+            name="ck_provider_application_link_defaults",
+        ),
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     tenant_id: UUID = Field(foreign_key="tenant.id")
@@ -86,6 +90,11 @@ class ProviderApplication(SQLModel, table=True):
     name: str = Field(max_length=255)
     channel_config: dict[str, Any] = Field(
         default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
+    # 管理员维护的取链默认值；与版权方发现写入的 channel_config 分开，重新发现不覆盖。
+    link_defaults: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")),
     )
     tiktok_minis_id: str | None = Field(default=None, max_length=255)
 
