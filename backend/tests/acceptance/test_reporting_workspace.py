@@ -343,7 +343,8 @@ def _external_material(session: Session, *, scope: _Scope, run: ReportSyncRun, r
             ReportFact(
                 tenant_id=scope.context.tenant_id,
                 advertiser_id=scope.advertiser_id,
-                subject_key=["material", "campaign", ref.remote_id, "vid-external-1", "VIDEO"],
+                # 定时同步按 smart_plus_ad_id 拆分素材，事实带广告身份才能证明归属。
+                subject_key=["material", "smart_plus_ad_id", ad_id, "vid-external-1", "VIDEO"],
                 bucket_start=start,
                 bucket_end=end,
                 granularity="DAY",
@@ -355,7 +356,7 @@ def _external_material(session: Session, *, scope: _Scope, run: ReportSyncRun, r
                 metric_name=metric_name,
                 value=value,
                 availability="AVAILABLE",
-                attributes={"ad_id": ad_id, "ad_material_id": "ad-material-1"},
+                attributes={"smart_plus_ad_id": ad_id, "ad_material_id": "ad-material-1"},
                 published_version=1,
                 request_sequence=1,
                 source_partition_key=partition,

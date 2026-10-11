@@ -21,8 +21,8 @@ from app.core.db import engine
 from app.modules.accounts.models import TenantBC
 from app.modules.ads.models import AdObject, CampaignNameProjection
 from app.modules.reporting.aggregation import (
-    DERIVED_METRICS,
     aggregate_metrics,
+    bucket_key,
     build_dimension_rows,
 )
 from app.modules.reporting.filters import authorized_grants, compile_filter
@@ -95,19 +95,8 @@ def _summary(rows: tuple[ReportRow, ...]) -> dict[str, Any]:
     buckets: dict[tuple[Any, ...], list[MetricVector]] = {}
     for row in rows:
         for vector in row.metric_buckets:
-            key = (
-                vector.currency,
-                vector.timezone,
-                vector.attribution,
-                tuple(
-                    sorted(
-                        (name, state)
-                        for name, state in vector.availability.items()
-                        if name not in DERIVED_METRICS
-                    )
-                ),
-            )
-            buckets.setdefault(key, []).append(vector)
+            # 与行聚合共用同一口径键，避免汇总按可用状态拆桶后显示“多个”。
+            buckets.setdefault(bucket_key(vector), []).append(vector)
     totals: list[dict[str, Any]] = []
     for vectors in buckets.values():
         total = aggregate_metrics(vectors)

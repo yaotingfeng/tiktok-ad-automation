@@ -111,7 +111,8 @@ def test_request_sync_is_idempotent_for_same_frozen_request(session, reporting_s
     second = request_sync(session, context=reporting_seed.context, request=request)
     assert second == first
     runs = session.exec(select(ReportSyncRun)).all()
-    assert len(runs) == 9  # eight contracts plus the legacy Smart+ ad partition
+    # 七个基础合同/类型分区各 1 个，素材 overview 只能按单日请求，两天 2 个。
+    assert len(runs) == 9
     assert {run.query["report_contract"] for run in runs} == {
         "basic_account",
         "basic_campaign",
@@ -120,8 +121,13 @@ def test_request_sync_is_idempotent_for_same_frozen_request(session, reporting_s
         "basic_smart_plus_ad",
         "basic_smart_plus_creative",
         "material_overview",
-        "material_breakdown",
     }
+    material = [run for run in runs if run.query["report_contract"] == "material_overview"]
+    assert {(run.query["start_date"], run.query["end_date"]) for run in material} == {
+        ("2026-09-01", "2026-09-01"),
+        ("2026-09-02", "2026-09-02"),
+    }
+    assert all(run.query["dimensions"] == ["smart_plus_ad_id", "main_material_id"] for run in material)
 
 
 def test_report_ranges_are_sharded_and_terminal_occurrence_is_not_reused(
@@ -145,7 +151,8 @@ def test_report_ranges_are_sharded_and_terminal_occurrence_is_not_reused(
     )
     first = request_sync(session, context=reporting_seed.context, request=request)
     runs = session.exec(select(ReportSyncRun)).all()
-    assert len(runs) == 27  # nine contract/type partitions, each <= 30 days
+    # 七个基础分区按 30 天切成 3 片；素材 overview 按天，90 天 90 片。
+    assert len(runs) == 7 * 3 + 90
     assert all(
         (
             date.fromisoformat(run.query["end_date"])
@@ -161,7 +168,7 @@ def test_report_ranges_are_sharded_and_terminal_occurrence_is_not_reused(
     assert second != first
 
 
-def test_mixed_shards_reuse_request_and_material_breakdown_is_unfiltered(
+def test_mixed_shards_reuse_request_and_material_overview_is_unfiltered(
     session, reporting_seed
 ):
     route = FrozenTikTokRoute(
@@ -184,9 +191,10 @@ def test_mixed_shards_reuse_request_and_material_breakdown_is_unfiltered(
     first = request_sync(session, context=reporting_seed.context, request=request)
     runs = session.exec(select(ReportSyncRun)).all()
     material = next(
-        run for run in runs if run.query["report_contract"] == "material_breakdown"
+        run for run in runs if run.query["report_contract"] == "material_overview"
     )
     assert material.query["filter_ids"] == []
+    assert not any(run.query["report_contract"] == "material_breakdown" for run in runs)
     first_run = session.get(ReportSyncRun, first)
     assert first_run is not None
     first_run.status = "COMPLETE"

@@ -136,8 +136,8 @@ def query_ads_route(
     user: CurrentUser,
     bc_id: Annotated[str, Query(min_length=1, max_length=128)],
     dimension: Dimension = "campaign",
-    start_date: date = date.today(),
-    end_date: date = date.today(),
+    start_date: date | None = None,
+    end_date: date | None = None,
     advertiser_id: str | None = Query(default=None, max_length=128),
     ids: CSV = None,
     query: CSV = None,
@@ -154,17 +154,19 @@ def query_ads_route(
     max_target_roas: Decimal | None = None,
     created_from: date | None = None,
     created_to: date | None = None,
-    sort_by: str = Query(default="row_key", max_length=32),
+    sort_by: str = Query(default="row_key", max_length=64),
     sort_direction: Literal["asc", "desc"] = "asc",
     snapshot_id: UUID | None = None,
     cursor: Annotated[str | None, Query(max_length=8192)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
 ) -> AdsQueryPage:
     context = _context(session, user, tenant_id)
+    # 默认日期必须按请求时刻计算；写在参数默认值里会固定为服务启动当天。
+    today = date.today()
     filters = _filters(
         dimension=dimension,
-        start_date=start_date,
-        end_date=end_date,
+        start_date=start_date or today,
+        end_date=end_date or today,
         advertiser_id=advertiser_id,
         ids=ids,
         query=query,
@@ -227,8 +229,8 @@ def report_trend_route(
     user: CurrentUser,
     bc_id: Annotated[str, Query(min_length=1, max_length=128)],
     dimension: Dimension = "campaign",
-    start_date: date = date.today(),
-    end_date: date = date.today(),
+    start_date: date | None = None,
+    end_date: date | None = None,
     advertiser_id: str | None = Query(default=None, max_length=128),
     ids: CSV = None,
     query: CSV = None,
@@ -243,10 +245,12 @@ def report_trend_route(
     snapshot_id: UUID | None = None,
 ) -> TrendPublic:
     context = _context(session, user, tenant_id)
+    # 默认日期必须按请求时刻计算；写在参数默认值里会固定为服务启动当天。
+    today = date.today()
     filters = _filters(
         dimension=dimension,
-        start_date=start_date,
-        end_date=end_date,
+        start_date=start_date or today,
+        end_date=end_date or today,
         advertiser_id=advertiser_id,
         ids=ids,
         query=query,

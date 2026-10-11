@@ -1,3 +1,16 @@
+## 2026-10-11：广告报表数据准确性与排序修复
+
+- 新骏伯 BC 只读核验（MCP `tiktok-ads-new-junbo`，BC `7683817908149272592`，账户 `7691249267022446613`，2026-10-05）：系列级账户全量（`STATUS_ALL`）消耗合计 499.29 与账户级一致；`campaign_automation_type` 过滤只接受一个值；素材 overview 支持 `smart_plus_ad_id` 分组且返回 `ad_material_id`，与 Smart+ 目录一致，而主素材 ID（Spark 帖子）与目录 `video_id` 不同。未执行任何写入。
+- 空结果隔离：普通/旧版 Smart+ 必须分两次请求，`select_facts` 按来源运行的 `ad_type` 匹配 `COMPLETE_EMPTY`，旧版 Smart+ 的空结果不再屏蔽普通广告消耗。
+- 指标口径：可相加口径只看币种/时区/归因；某天指标缺失时整行仍是一个桶，该指标合计为空（不再拆桶后前端只读到一部分，导致消耗少算）。
+- 周期报表（核心 2 天、近 7 天）改为账户全量读取，不再按本地目录 ID 过滤，后台新建对象在下一次 30 分钟周期即有数据。
+- 素材：overview 按 `smart_plus_ad_id × main_material_id` 单日请求，额外取 `ad_material_id/smart_plus_creative_id/main_material_name` 证明归属；同账户同素材跨广告合并为一行；不再调度无法归属的 breakdown。
+- 调度：扫描在 SQL 中先取近期短窗口，历史回补积压只暂停历史计划，不再挡住周期刷新。
+- 重试：额度/本地资源/令牌刷新延后无限退避；MCP/SDK 读取失败最多 5 次指数退避（新增迁移 `0021_report_run_retry_count`）；合同错误仍立即失败。
+- 其他：日桶按次日当地零点计算（修夏令时切换日）；对象数达到同步报表 20,000 上限时拒绝发布；查询默认日期按请求时刻计算；账户行名称取账户名。
+- 排序：所有名称列按各自字段、全部指标列及预算/目标 ROAS 列可升降序；无值排末尾，混币种按币种分组而非报 500。名称默认升序，数值默认降序。
+- 验证：专用 PostgreSQL/Redis（Docker）中报表与适配器 118 项通过（含新增 `test_reporting_accuracy.py` 13 项、素材 Spark 归属用例）；后端全量 4616 项按 CI 环境变量重跑后仅 `test_username_migration` 因本机 pg_dump 17 低于容器 PG 18 失败，7 项并行不稳定单独重跑通过；真实 MCP 回执经适配器解析通过；前端构建与 TypeScript 通过。未部署；staging 发布需执行迁移 0021。
+
 ## 2026-10-05：广告报表接入重新评估
 
 - 完成测试环境与代码链路复核：staging 的 `ADS_SYNC_ENABLED=false`，`ads-directory`/`ads-reporting` 保持 inactive，前端 GET 只读本地已发布事实；这解释了当前全量“数据缺失”而不是平台空报表。

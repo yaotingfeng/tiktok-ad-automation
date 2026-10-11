@@ -10100,11 +10100,11 @@ export type adsReportingQueryAdsData = {
         /**
          * Start Date
          */
-        start_date?: string;
+        start_date?: string | null;
         /**
          * End Date
          */
-        end_date?: string;
+        end_date?: string | null;
         /**
          * Advertiser Id
          */
@@ -10282,11 +10282,11 @@ export type adsReportingReportTrendData = {
         /**
          * Start Date
          */
-        start_date?: string;
+        start_date?: string | null;
         /**
          * End Date
          */
-        end_date?: string;
+        end_date?: string | null;
         /**
          * Advertiser Id
          */

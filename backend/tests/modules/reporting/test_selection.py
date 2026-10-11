@@ -74,7 +74,7 @@ def test_material_selection_keeps_usage_ids(report_case):
             ReportFact(
                 tenant_id=report_case.context.tenant_id,
                 advertiser_id="report-account",
-                subject_key=["material", "VIDEO", "group", material_id, "VIDEO"],
+                subject_key=["material", "smart_plus_ad_id", "ad-1", material_id, "VIDEO"],
                 bucket_start=start,
                 bucket_end=start + timedelta(days=1),
                 granularity="DAY",
@@ -84,7 +84,7 @@ def test_material_selection_keeps_usage_ids(report_case):
                 timezone="UTC",
                 attribution="default",
                 metric_name="spend",
-                attributes={"ad_id": "ad-1", "ad_material_id": ad_material_id},
+                attributes={"smart_plus_ad_id": "ad-1", "ad_material_id": ad_material_id},
                 value=Decimal("1"),
                 availability="AVAILABLE",
                 published_version=1,

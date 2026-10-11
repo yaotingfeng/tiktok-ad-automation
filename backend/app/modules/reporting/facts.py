@@ -53,9 +53,11 @@ _ATTRIBUTE_KEYS = frozenset(
         "ad_material_id",
         "smart_plus_creative_id",
         "smart_plus_creative_name",
+        "main_material_name",
     }
 )
 _ATTRIBUTE_ARRAY_KEYS = frozenset({"smart_plus_creative_id"})
+SYNC_REPORT_SUBJECT_LIMIT = 20_000
 
 
 def _domain(code: str, message: str) -> DomainError:
@@ -624,6 +626,10 @@ def publish_report(session: Session, *, run_id: UUID, claim_generation: int) -> 
     )
     ordered = _complete_chain(pages)
     records = _row_records(ordered, query, contract)
+    # 平台同步报表单次最多返回 20,000 个对象，超出部分被静默截断。触顶时
+    # 无法证明完整，宁可失败显示缺口，也不能把截断结果当完整事实发布。
+    if len({tuple(item["subject_key"]) for item in records}) >= SYNC_REPORT_SUBJECT_LIMIT:
+        raise _domain("report_truncation_risk", "报表对象数达到平台上限，结果可能被截断")
     # 锁定账户行，使同一账户的 ReportFact/ReportCoverage 版本分配单调。
     account = session.exec(
         select(AdvertiserAccount)

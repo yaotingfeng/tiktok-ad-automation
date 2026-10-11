@@ -11,6 +11,7 @@ from sqlalchemy import (
     DateTime,
     Identity,
     Index,
+    Integer,
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -38,6 +39,10 @@ class ReportSyncRun(SyncRunFields, table=True):
     )
     task_id: str | None = Field(default=None, max_length=128)
     task_status: str | None = Field(default=None, max_length=32)
+    # 平台读取失败后的有界重试次数（迁移 0021）；额度延后不计入。
+    retry_count: int = Field(
+        default=0, sa_column=Column(Integer, nullable=False, server_default="0")
+    )
 
 
 class ReportStagedPage(StagedPageFields, table=True):

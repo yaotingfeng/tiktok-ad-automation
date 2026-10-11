@@ -66,8 +66,11 @@ def test_report_metrics_include_revenue_roas_event_cost_and_ctr():
 
 
 def test_missing_and_unsupported_are_not_converted_to_zero():
-    with pytest.raises(ValueError, match="availability buckets"):
-        aggregate_metrics([_vector("10", "30"), _vector("0", "0", state="MISSING")])
+    # 部分成员缺失时合并为同一口径，但该指标合计为空，不能显示只含部分成员的金额。
+    mixed = aggregate_metrics([_vector("10", "30"), _vector("0", "0", state="MISSING")])
+    assert mixed.values["spend"] is None
+    assert mixed.availability["spend"] == "MISSING"
+    assert mixed.values["d0_roas"] is None
     missing = aggregate_metrics([_vector("0", "0", state="MISSING")])
     assert missing.values["spend"] is None
     assert missing.availability["spend"] == "MISSING"
@@ -105,7 +108,7 @@ def test_material_usage_not_double_counted():
         ReportFact(
             tenant_id=tenant_id,
             advertiser_id="account-a",
-            subject_key=["material", "campaign_id", "campaign", "vid-shared", "VIDEO"],
+            subject_key=["material", "smart_plus_ad_id", ad_id, "vid-shared", "VIDEO"],
             bucket_start=start,
             bucket_end=start + timedelta(days=1),
             granularity="RANGE",
@@ -117,7 +120,7 @@ def test_material_usage_not_double_counted():
             metric_name="spend",
             value=Decimal(amount),
             availability="AVAILABLE",
-            attributes={"ad_id": ad_id},
+            attributes={"smart_plus_ad_id": ad_id},
             published_version=1,
             request_sequence=1,
             source_partition_key="material-test",
@@ -151,7 +154,7 @@ def test_material_partial_ad_proof_never_claims_complete_spend():
         ReportFact(
             tenant_id=tenant_id,
             advertiser_id="account-a",
-            subject_key=["material", "campaign_id", "campaign", "vid-shared", "VIDEO"],
+            subject_key=["material", "smart_plus_ad_id", grouping, "vid-shared", "VIDEO"],
             bucket_start=start,
             bucket_end=start + timedelta(days=1),
             granularity="RANGE",
@@ -168,7 +171,11 @@ def test_material_partial_ad_proof_never_claims_complete_spend():
             request_sequence=1,
             source_partition_key="material-partial",
         )
-        for amount, attributes in (("3", {"ad_id": "ad-3"}), ("7", {}))
+        # 第二条事实缺少广告身份，无法证明归属。
+        for amount, grouping, attributes in (
+            ("3", "ad-3", {"smart_plus_ad_id": "ad-3"}),
+            ("7", "ad-7", {}),
+        )
     )
     rows = _build_material_rows(
         facts,
@@ -244,3 +251,56 @@ def test_dimension_rows_group_valid_campaign_by_provider_and_drama(report_case):
     )
     assert [row.row_key for row in rows] == ["bc-report-case:drama:Provider:My Drama"]
     assert rows[0].refs[0].remote_id == ref.remote_id
+
+
+def test_spark_material_is_proven_by_ad_material_id():
+    """真实形态：报表主素材是 Spark 帖子 ID，目录只有 video_id，两者靠 ad_material_id 对齐。"""
+    tenant_id = uuid4()
+    start = datetime(2026, 10, 5, tzinfo=UTC)
+    material = AdMaterialReference(
+        tenant_id=tenant_id,
+        advertiser_id="account-a",
+        ad_remote_id="sp-ad-1",
+        platform_material_id="v10033g50000db1ai17og65ok6js5j4g",
+        ad_material_id="1878185024236946",
+        material_type="VIDEO",
+        name="",
+        complete=True,
+        published_version=1,
+    )
+    facts = (
+        ReportFact(
+            tenant_id=tenant_id,
+            advertiser_id="account-a",
+            subject_key=["material", "smart_plus_ad_id", "sp-ad-1", "7693057367335914783", "VIDEO_SPARK_ADS"],
+            bucket_start=start,
+            bucket_end=start + timedelta(days=1),
+            granularity="RANGE",
+            report_contract="material_overview",
+            metric_family="material",
+            currency="USD",
+            timezone="UTC",
+            attribution="default",
+            metric_name="spend",
+            value=Decimal("20.11"),
+            availability="AVAILABLE",
+            attributes={
+                "smart_plus_ad_id": "sp-ad-1",
+                "ad_material_id": "1878185024236946",
+                "main_material_name": "15 Days Left to Divorce-CL6.mp4",
+            },
+            published_version=1,
+            request_sequence=1,
+            source_partition_key="material-spark",
+        ),
+    )
+    rows = _build_material_rows(
+        facts,
+        (material,),
+        ReportingFilter(dimension="material", start_date=start.date(), end_date=start.date()),
+    )
+    assert len(rows) == 1
+    assert rows[0].coverage["status"] == "COMPLETE"
+    assert rows[0].metric_buckets[0].values["spend"] == Decimal("20.11")
+    assert rows[0].display["material_name"] == "15 Days Left to Divorce-CL6.mp4"
+    assert [use.ad_ref.remote_id for use in rows[0].material_uses] == ["sp-ad-1"]

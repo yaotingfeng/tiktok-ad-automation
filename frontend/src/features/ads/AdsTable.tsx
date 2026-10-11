@@ -1,5 +1,5 @@
-import type { ReportRow } from "@/client"
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react"
+import type { ReportRow } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -27,6 +27,20 @@ import {
 
 type DisplayColumn = { key: string; label: string }
 
+// 表头排序字段与后端 SUPPORTED_SORT_FIELDS 一一对应；每列按自己的字段排序。
+const METRIC_COLUMNS: Array<{ key: string; label: string }> = [
+  { key: "spend", label: "消耗" },
+  { key: "ad_revenue_roas", label: "广告收益 ROAS" },
+  { key: "d0_roas", label: "D0 ROAS" },
+  { key: "native_growth_total_ad_impression_value", label: "广告展示总价值" },
+  {
+    key: "native_growth_total_ad_impression_event_count",
+    label: "广告展示事件总数",
+  },
+  { key: "cost_per_ad_impression_event", label: "单次广告展示事件成本" },
+  { key: "ctr", label: "点击率" },
+]
+
 function SortableHead({
   label,
   sortBy,
@@ -35,13 +49,17 @@ function SortableHead({
   onSort,
 }: {
   label: string
-  sortBy: "name" | "spend"
+  sortBy: string
   activeSortBy: string | undefined
   direction: "asc" | "desc"
-  onSort: (sortBy: "name" | "spend") => void
+  onSort: (sortBy: string) => void
 }) {
   const active = activeSortBy === sortBy
-  const Icon = active ? (direction === "asc" ? ArrowUp : ArrowDown) : ArrowUpDown
+  const Icon = active
+    ? direction === "asc"
+      ? ArrowUp
+      : ArrowDown
+    : ArrowUpDown
   return (
     <Button
       type="button"
@@ -126,7 +144,7 @@ export function AdsTable({
   onPrevious: () => void
   sortBy: string
   sortDirection: "asc" | "desc"
-  onSort: (sortBy: "name" | "spend") => void
+  onSort: (sortBy: string) => void
 }) {
   const columns = displayColumns(dimension)
   const currentAll =
@@ -162,7 +180,7 @@ export function AdsTable({
                 >
                   <SortableHead
                     label={column.label}
-                    sortBy="name"
+                    sortBy={column.key}
                     activeSortBy={sortBy}
                     direction={sortDirection}
                     onSort={onSort}
@@ -170,29 +188,45 @@ export function AdsTable({
                 </TableHead>
               ))}
               <TableHead>状态</TableHead>
-              <TableHead>
-                <SortableHead
-                  label="消耗"
-                  sortBy="spend"
-                  activeSortBy={sortBy}
-                  direction={sortDirection}
-                  onSort={onSort}
-                />
-              </TableHead>
-              <TableHead>广告收益 ROAS</TableHead>
-              <TableHead>D0 ROAS</TableHead>
-              <TableHead>广告展示总价值</TableHead>
-              <TableHead>广告展示事件总数</TableHead>
-              <TableHead>单次广告展示事件成本</TableHead>
-              <TableHead>点击率</TableHead>
+              {METRIC_COLUMNS.map((column) => (
+                <TableHead key={column.key}>
+                  <SortableHead
+                    label={column.label}
+                    sortBy={column.key}
+                    activeSortBy={sortBy}
+                    direction={sortDirection}
+                    onSort={onSort}
+                  />
+                </TableHead>
+              ))}
               {(dimension === "campaign" || dimension === "adgroup") && (
                 <TableHead>
-                  {dimension === "campaign" ? "系列预算" : "广告组预算"}
+                  <SortableHead
+                    label={dimension === "campaign" ? "系列预算" : "广告组预算"}
+                    sortBy={
+                      dimension === "campaign"
+                        ? "campaign_budget"
+                        : "adgroup_budget"
+                    }
+                    activeSortBy={sortBy}
+                    direction={sortDirection}
+                    onSort={onSort}
+                  />
                 </TableHead>
               )}
               {(dimension === "campaign" ||
                 dimension === "adgroup" ||
-                dimension === "ad") && <TableHead>目标 ROAS</TableHead>}
+                dimension === "ad") && (
+                <TableHead>
+                  <SortableHead
+                    label="目标 ROAS"
+                    sortBy="target_roas"
+                    activeSortBy={sortBy}
+                    direction={sortDirection}
+                    onSort={onSort}
+                  />
+                </TableHead>
+              )}
               {(dimension === "campaign" ||
                 dimension === "adgroup" ||
                 dimension === "ad") && <TableHead>优化目标</TableHead>}

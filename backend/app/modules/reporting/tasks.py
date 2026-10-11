@@ -8,6 +8,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from redis import Redis
+from sqlalchemy import Date, and_, cast, literal_column
 from sqlmodel import Session, col, func, select
 
 from app.core.config import settings
@@ -34,10 +35,21 @@ TASK_NAME = "reporting.sync_step"
 SCAN_TASK_NAME = "reporting.scan_due"
 MAX_REPORT_RUNS_PER_SCAN = 100
 MAX_PENDING_REPORTS_BEFORE_SCHEDULES = 500
+# 跨度小于 7 天（含当天/昨天、近 7 天）视为周期刷新，其余为历史回补。
+SHORT_WINDOW_DAYS = 7
 register_dispatch_task(TASK_NAME, "ads-reporting")
 register_dispatch_task(SCAN_TASK_NAME, "control")
 
 _LEASE_SECONDS = 90
+# 运行的查询窗口保存在 JSONB 中；按日期跨度区分周期刷新与历史回补。
+_QUERY_START_DATE = cast(literal_column("(report_sync_run.query->>'start_date')"), Date)
+_QUERY_END_DATE = cast(literal_column("(report_sync_run.query->>'end_date')"), Date)
+# 周期刷新 = 跨度短且结束于最近几天；历史回补里按天拆出的旧日期素材分片
+# 跨度同样很短，但不属于需要优先刷新的近期数据。
+_SHORT_WINDOW = and_(
+    (_QUERY_END_DATE - _QUERY_START_DATE) < SHORT_WINDOW_DAYS,
+    _QUERY_END_DATE >= func.current_date() - SHORT_WINDOW_DAYS,
+)
 
 
 def _successor_key(run: ReportSyncRun, *, claim_generation: int) -> str:
@@ -264,23 +276,24 @@ def scan_due_runs(*, database_engine: Any, now: datetime | None = None) -> int:
     now = now or datetime.now(UTC)
     queued = 0
     with Session(database_engine) as session, session.begin():
-        pending_reports = session.exec(
-            select(func.count())
-            .select_from(ReportSyncRun)
-            .where(
-                col(ReportSyncRun.status).in_(
-                    ["QUEUED", "RUNNING", "WAITING_REMOTE"]
-                )
-            )
+        pending = col(ReportSyncRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"])
+        pending_short = session.exec(
+            select(func.count()).select_from(ReportSyncRun).where(pending, _SHORT_WINDOW)
         ).one()
-        # A historical request can fan out into thousands of shards.  Keep
-        # recurring schedules from recreating work faster than the dedicated
-        # report worker can drain it; normal schedules resume automatically
-        # once the durable backlog falls below the threshold.
+        pending_reports = session.exec(
+            select(func.count()).select_from(ReportSyncRun).where(pending)
+        ).one()
+        # 背压分两层：历史回补可能拆出上千个分片，只暂停继续派生历史计划；
+        # 当天/近 7 天这类短窗口计划只受短窗口自身积压限制，不能因为历史
+        # 积压就停止刷新，否则投手看到的当天数据会停在几小时前。
         request_ids = (
             ()
-            if pending_reports >= MAX_PENDING_REPORTS_BEFORE_SCHEDULES
-            else enqueue_due_syncs(session, now=now)
+            if pending_short >= MAX_PENDING_REPORTS_BEFORE_SCHEDULES
+            else enqueue_due_syncs(
+                session,
+                now=now,
+                include_history=pending_reports < MAX_PENDING_REPORTS_BEFORE_SCHEDULES,
+            )
         )
         # Include every shard of each request, not just the first ID returned by
         # request_sync; report requests commonly fan out into several contracts.
@@ -293,29 +306,23 @@ def scan_due_runs(*, database_engine: Any, now: datetime | None = None) -> int:
                 | (col(AdDirectoryRun.next_attempt_at) <= now),
             ).with_for_update(skip_locked=True)
         ).all()
+        # 优先级必须在 SQL 里决定：先取最近结束的短窗口（当天、近 7 天），
+        # 再取历史回补。若先按创建时间取前 N 条再在内存排序，历史分片排在
+        # 前面时当天分片根本进不了本轮。
         report_rows = session.exec(
             select(ReportSyncRun).where(
-                col(ReportSyncRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
+                pending,
                 col(ReportSyncRun.next_attempt_at).is_(None)
                 | (col(ReportSyncRun.next_attempt_at) <= now),
-            ).order_by(col(ReportSyncRun.created_at), col(ReportSyncRun.id))
+            ).order_by(
+                _SHORT_WINDOW.desc(),
+                _QUERY_END_DATE.desc(),
+                col(ReportSyncRun.created_at),
+                col(ReportSyncRun.id),
+            )
             .limit(MAX_REPORT_RUNS_PER_SCAN)
             .with_for_update(skip_locked=True)
         ).all()
-        # Short current-day shards are served before the long historical
-        # backfill.  The two queues still have independent one-slot consumers,
-        # so a large history cannot consume the control/other worker pool.
-        def priority(row: ReportSyncRun) -> tuple[int, UUID]:
-            query = row.query if isinstance(row.query, dict) else {}
-            try:
-                start = datetime.fromisoformat(str(query["start_date"]))
-                end = datetime.fromisoformat(str(query["end_date"]))
-                span = (end - start).days
-            except (KeyError, TypeError, ValueError):
-                span = 10_000
-            return (span, row.id)
-
-        report_rows = sorted(report_rows, key=priority)
         del request_ids  # selection above intentionally also recovers after restart
         for row, task_name in [
             *[(item, "ads.sync_step") for item in directory_rows],

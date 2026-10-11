@@ -18,7 +18,21 @@ from app.modules.accounts.models import BCAccountAccess
 from app.modules.reporting.schemas import ReportingFilter
 from app.modules.tenants.permissions import require_tenant
 
-SUPPORTED_SORT_FIELDS = frozenset({"row_key", "name", "spend"})
+# 表头可排序字段：名称类按展示文本，指标类按合计值，配置类按目录数值。
+NAME_SORT_FIELDS = frozenset(
+    {"name", "account_name", "campaign_name", "adgroup_name", "ad_name",
+     "material_name", "drama_name"}
+)
+METRIC_SORT_FIELDS = frozenset(
+    {"spend", "native_growth_ad_revenue_value_d0",
+     "native_growth_total_ad_impression_value",
+     "native_growth_total_ad_impression_event_count", "impressions", "clicks",
+     "d0_roas", "ad_revenue_roas", "cost_per_ad_impression_event", "ctr"}
+)
+CONFIG_SORT_FIELDS = frozenset({"target_roas", "campaign_budget", "adgroup_budget"})
+SUPPORTED_SORT_FIELDS = (
+    frozenset({"row_key"}) | NAME_SORT_FIELDS | METRIC_SORT_FIELDS | CONFIG_SORT_FIELDS
+)
 
 def _like_literal(value: str) -> str:
     """Escape SQL LIKE metacharacters while retaining parameter binding."""

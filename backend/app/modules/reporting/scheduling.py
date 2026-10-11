@@ -84,8 +84,8 @@ def _report_specs() -> tuple[tuple[str, str | None], ...]:
         ("basic_ad", "LEGACY_SMART_PLUS"),
         ("basic_smart_plus_ad", "SMART_PLUS"),
         ("basic_smart_plus_creative", "SMART_PLUS"),
+        # 素材只拉按广告拆分的 overview；breakdown 没有广告身份，无法归属。
         ("material_overview", "SMART_PLUS"),
-        ("material_breakdown", "SMART_PLUS"),
     )
 
 
@@ -303,8 +303,10 @@ def _query_for(
     identity = contract.dimensions[0]
     time_dimension = ("stat_time_day",)
     if contract.granularities == ("RANGE",):
+        # 按 smart_plus_ad_id 分组才能证明素材金额属于哪条广告；按账户分组的
+        # 素材事实没有广告身份，报表层只能丢弃。
         dimensions = (
-            ["advertiser_id", "main_material_id"]
+            ["smart_plus_ad_id", "main_material_id"]
             if report_contract == "material_overview"
             else ["main_material_id"]
         )
@@ -498,7 +500,10 @@ def request_sync(
             else _report_specs()
         )
         for report_contract, ad_type in specs:
-            for shard_start, shard_end in _date_shards(start_date, end_date):
+            # overview 不支持按天拆分，只返回整个区间的合计。按单日请求才能让
+            # 任意所选日期由完整的日桶组成，而不是无法拆分的多日 RANGE。
+            max_days = 1 if REPORT_CONTRACTS[report_contract].granularities == ("RANGE",) else 30
+            for shard_start, shard_end in _date_shards(start_date, end_date, max_days=max_days):
                 query = _query_for(
                     account,
                     start_date=shard_start,
@@ -854,14 +859,24 @@ seed_sync_schedules = ensure_sync_schedules
 MAX_SCHEDULES_PER_SCAN = 50
 
 
-def enqueue_due_syncs(session: Session, *, now: datetime) -> tuple[UUID, ...]:
-    """Claim due plans and create bounded report runs in the caller transaction."""
+def enqueue_due_syncs(
+    session: Session, *, now: datetime, include_history: bool = True
+) -> tuple[UUID, ...]:
+    """Claim due plans and create bounded report runs in the caller transaction.
+
+    ``include_history=False`` 时只领取周期刷新计划；历史计划保持到期状态，
+    待积压下降后再领取，不会丢失。
+    """
 
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
+    scope_filter = (
+        () if include_history else (col(SyncSchedule.scope) != "history",)
+    )
     rows = session.exec(
         select(SyncSchedule)
         .where(
+            *scope_filter,
             col(SyncSchedule.enabled).is_(True),
             SyncSchedule.next_due_at <= now,
             or_(
@@ -919,36 +934,19 @@ def enqueue_due_syncs(session: Session, *, now: datetime) -> tuple[UUID, ...]:
                     now=now,
                     attribution_days=known_days,
                 )
-        if schedule.scope in {"active", "report"}:
-            # Membership is read from current directory plus recent spend facts;
-            # stopped objects inside the attribution horizon remain eligible.
-            attribution_days: int | None = None
-            if schedule.scope == "report":
-                attribution_schedule = session.exec(
-                    select(SyncSchedule).where(
-                        SyncSchedule.tenant_id == schedule.tenant_id,
-                        SyncSchedule.bc_id == schedule.bc_id,
-                        SyncSchedule.advertiser_id == schedule.advertiser_id,
-                        SyncSchedule.scope == "history",
-                        col(SyncSchedule.schedule_key).like("history:attribution:%"),
-                    )
-                ).first()
-                known = (
-                    attribution_schedule.completed_coverage.get("attribution_days")
-                    if attribution_schedule is not None
-                    and isinstance(attribution_schedule.completed_coverage, dict)
-                    else None
-                )
-                attribution_days = (
-                    known if isinstance(known, int) and known >= 0 else 35
-                )
+        if schedule.scope == "active":
+            # 活跃配置刷新只读取启用或近期有消耗的对象。
             refs = active_or_recent_refs(
                 session,
                 tenant_id=schedule.tenant_id,
                 advertiser_id=schedule.advertiser_id,
                 now=now,
-                attribution_days=attribution_days,
             )
+        elif schedule.scope == "report":
+            # 周期报表按账户全量读取（带 STATUS_ALL），不按本地目录的对象 ID
+            # 过滤：目录每 3 小时才同步一次，按 ID 过滤会漏掉后台新建的系列、
+            # 广告组和广告，直到下次目录同步。平台只返回有数据的行，量很小。
+            refs = ()
         request = SyncRequest(
             route=route,
             advertiser_ids=(schedule.advertiser_id,),

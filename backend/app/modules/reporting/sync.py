@@ -10,11 +10,38 @@ from sqlmodel import Session, select
 from app.core.errors import DomainError
 from app.integrations.tiktok.adapters.sdk_reporting import plan_report_shards
 from app.integrations.tiktok.contracts.reporting import ReportTask
+from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.modules.reporting.contracts import decode_query
 from app.modules.reporting.facts import publish_report, stage_report_page
 from app.modules.reporting.sync_models import ReportSyncRun
 
 _WAIT_SECONDS = 30
+# 额度、本地资源、令牌刷新等延后：请求未真正打到平台，等待后无限期重试。
+_DEFERRED_CODES = frozenset(
+    {
+        "admission_deferred",
+        "admission_unavailable",
+        "tiktok_local_resources_unavailable",
+        "gateway_credentials_changed",
+        "mcp_refresh_pending",
+        "read_deadline_exceeded",
+    }
+)
+# 平台/传输层读取失败：MCP 把限流（40100）等业务拒绝统一归为
+# mcp_business_error，无法区分是否永久错误，只做有界退避重试。
+_PROVIDER_RETRY_CODES = frozenset(
+    {
+        "mcp_business_error",
+        "mcp_request_failed",
+        "mcp_session_unavailable",
+        "mcp_session_open_failed",
+        "mcp_call_failed",
+        "tiktok_response_error",
+        "report_file_download_failed",
+        "report_file_incomplete",
+    }
+)
+MAX_PROVIDER_RETRIES = 5
 
 
 def _run(session: Session, run_id: UUID) -> ReportSyncRun:
@@ -35,6 +62,31 @@ def _wait(run: ReportSyncRun, *, task_status: str | None = None) -> str:
     run.next_attempt_at = datetime.now(UTC) + timedelta(seconds=_WAIT_SECONDS)
     if task_status is not None:
         run.task_status = task_status
+    return "WAIT"
+
+
+def _retry_later(run: ReportSyncRun, error: DomainError) -> str | None:
+    """可重试错误安排退避后再领取；返回 None 表示应判为失败。
+
+    只读报表重试不会产生远端副作用。分页进度、异步任务号都保存在运行上，
+    重试从原页/原任务继续，不会重复写入已暂存的页。
+    """
+    if error.code in _DEFERRED_CODES or (
+        isinstance(error, AccountAdmissionDeferred)
+    ):
+        delay_ms = getattr(error, "retry_after_ms", _WAIT_SECONDS * 1000)
+        delay = timedelta(milliseconds=max(1000, int(delay_ms)))
+    elif error.code in _PROVIDER_RETRY_CODES and run.retry_count < MAX_PROVIDER_RETRIES:
+        run.retry_count += 1
+        # 60s、120s、240s……最长 30 分钟，避免限流期间继续消耗额度。
+        delay = timedelta(seconds=min(30 * 60, 60 * 2 ** (run.retry_count - 1)))
+    else:
+        return None
+    run.status = "WAITING_REMOTE"
+    run.coverage = "PENDING"
+    run.error_code = error.code
+    run.next_attempt_at = datetime.now(UTC) + delay
+    run.observed_at = datetime.now(UTC)
     return "WAIT"
 
 
@@ -137,7 +189,7 @@ def collect_report_step(
             if callable(rollback):
                 rollback()
             return "FAILED"
-        return _failed(run, error)
+        return _retry_later(run, error) or _failed(run, error)
     finally:
         session.flush()
 

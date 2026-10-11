@@ -187,11 +187,17 @@ export function AdsWorkspace() {
     setSearch(next)
     setApplied(next)
   }
-  const sort = (sortBy: "name" | "spend") => {
+  const sort = (sortBy: string) => {
+    // 同一列再次点击切换方向；新列中名称默认升序，数值指标默认降序（大的在前）。
+    const isName = sortBy.endsWith("_name") || sortBy === "name"
     const direction =
-      applied.sort_by === sortBy && applied.sort_direction === "asc"
-        ? "desc"
-        : "asc"
+      applied.sort_by === sortBy
+        ? applied.sort_direction === "asc"
+          ? "desc"
+          : "asc"
+        : isName
+          ? "asc"
+          : "desc"
     const next = {
       ...applied,
       sort_by: sortBy,

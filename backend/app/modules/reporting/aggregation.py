@@ -17,7 +17,12 @@ from app.integrations.tiktok.contracts.ads import EntityRef
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.ads.models import AdMaterialReference, AdObject, CampaignNameProjection
 from app.modules.reporting.contracts import CORE_METRICS, supports_metric
-from app.modules.reporting.filters import apply_authorized_scope, compile_filter
+from app.modules.reporting.filters import (
+    CONFIG_SORT_FIELDS,
+    NAME_SORT_FIELDS,
+    apply_authorized_scope,
+    compile_filter,
+)
 from app.modules.reporting.models import ReportCoverage, ReportFact
 from app.modules.reporting.schemas import (
     Availability,
@@ -37,8 +42,12 @@ CONTRACTS = {
     "account": ("basic_account",), "campaign": ("basic_campaign",),
     "drama": ("basic_campaign",), "adgroup": ("basic_adgroup",),
     "ad": ("basic_ad", "basic_smart_plus_ad"),
-    "material": ("material_overview", "material_breakdown"),
+    # 素材只使用按 smart_plus_ad_id 拆分的 overview：breakdown 没有广告身份，
+    # 无法证明素材金额属于哪条广告，混入会产生重复且无归属的素材行。
+    "material": ("material_overview",),
 }
+# 定时同步请求的素材分组维度；其他分组的历史事实不能证明广告内使用位置。
+MATERIAL_GROUPING = "smart_plus_ad_id"
 
 
 def scoped_rows(session: Session, model: Any, *, context: TenantContext, bc_id: str,
@@ -88,33 +97,53 @@ def period(filters: ReportingFilter, timezone: str) -> tuple[datetime, datetime]
             datetime.combine(filters.end_date + timedelta(days=1), time.min, zone).astimezone(UTC))
 
 
+# 指标不可用时的优先级：越靠前越严重，合计时取最严重的状态展示。
+_UNAVAILABLE_ORDER = ("FAILED", "UNSUPPORTED", "UNAVAILABLE", "MISSING")
+
+
 def bucket_key(vector: MetricVector) -> tuple[Any, ...]:
-    return (vector.currency, vector.timezone, vector.attribution,
-            tuple(sorted((name, state) for name, state in vector.availability.items() if name not in DERIVED_METRICS)))
+    """可相加口径只由币种、时区和归因决定。
+
+    不能再把各指标的可用状态放进口径：同一行某天收入缺失会被拆成两个桶，
+    前端只能读到其中一个，消耗就会少算。缺失改为在合计时按指标标记。
+    """
+    return (vector.currency, vector.timezone, vector.attribution)
+
+
+def _worst_state(states: Sequence[str]) -> str:
+    return next((state for state in _UNAVAILABLE_ORDER if state in states), "MISSING")
 
 
 def aggregate_metrics(rows: Sequence[MetricVector]) -> MetricVector:
-    """仅同口径/覆盖相加；ROAS 为收入总和/消耗总和，零分母仍为空。"""
+    """仅同口径相加；ROAS 为收入总和/消耗总和，零分母仍为空。
+
+    某指标只要有一个成员不可用，合计就为空并标出最严重的不可用状态，
+    绝不把缺失当零，也不展示只含部分成员的“看似完整”的金额。
+    """
     if not rows:
         raise ValueError("cannot aggregate empty metric rows")
     if any(bucket_key(row) != bucket_key(rows[0]) for row in rows[1:]):
-        raise ValueError("incompatible coordinates or availability buckets")
+        raise ValueError("incompatible coordinates for metric aggregation")
     values: dict[str, Decimal | None] = {}
-    states = {
-        name: state
-        for name, state in rows[0].availability.items()
-        if name not in DERIVED_METRICS
-    }
-    for name, state in states.items():
+    names = sorted(
+        {name for row in rows for name in row.availability if name not in DERIVED_METRICS}
+    )
+    states: dict[str, str] = {}
+    for name in names:
+        member_states = [row.availability.get(name, "MISSING") for row in rows]
         amounts = [row.values.get(name) for row in rows]
-        if state == "AVAILABLE" and all(value is not None for value in amounts):
+        if all(state == "AVAILABLE" for state in member_states) and all(
+            value is not None for value in amounts
+        ):
             if any(not cast(Decimal, value).is_finite() for value in amounts):
                 raise ValueError("metrics require finite decimals")
             values[name] = sum((cast(Decimal, value) for value in amounts), Decimal(0))
+            states[name] = "AVAILABLE"
         else:
             values[name] = None
-            if state == "AVAILABLE":
-                states[name] = "MISSING"
+            states[name] = _worst_state(
+                [state for state in member_states if state != "AVAILABLE"]
+            )
     for derived, numerator, denominator in (
         ("d0_roas", D0, "spend"),
         ("ad_revenue_roas", TOTAL_REVENUE, "spend"),
@@ -131,22 +160,45 @@ def aggregate_metrics(rows: Sequence[MetricVector]) -> MetricVector:
         if values[derived] is not None:
             states[derived] = "AVAILABLE"
         else:
-            unavailable = {states.get(numerator), states.get(denominator)}
-            states[derived] = next(
-                (
-                    state
-                    for state in ("FAILED", "UNSUPPORTED", "UNAVAILABLE", "MISSING")
-                    if state in unavailable
-                ),
-                "MISSING",
-            )
+            unavailable = [
+                state
+                for state in (states.get(numerator), states.get(denominator))
+                if state is not None and state != "AVAILABLE"
+            ]
+            states[derived] = _worst_state(unavailable)
     return MetricVector(currency=rows[0].currency, timezone=rows[0].timezone,
-                        attribution=rows[0].attribution, values=values, availability=states)
+                        attribution=rows[0].attribution, values=values,
+                        availability=cast(dict[str, Availability], states))
 
 
-def _coverage_matches(coverage: ReportCoverage, fact: ReportFact) -> bool:
+def run_ad_types(session: Session, *, tenant_id: Any, rows: Sequence[Any]) -> dict[Any, str | None]:
+    """读取事实/覆盖来源运行的广告类型。
+
+    普通广告与旧版 Smart+ 共用 basic_ad 合同，但平台的
+    campaign_automation_type 过滤只接受一个值，必须分两次请求。覆盖表不保存
+    广告类型；若不按来源运行区分，旧版 Smart+ 的“完整空结果”会把同账户
+    普通广告的真实消耗整体屏蔽。
+    """
+    run_ids = {row.source_run_id for row in rows if row.source_run_id is not None}
+    if not run_ids:
+        return {}
+    result: dict[Any, str | None] = {}
+    for run_id, query in session.exec(
+        select(ReportSyncRun.id, ReportSyncRun.query).where(
+            ReportSyncRun.tenant_id == tenant_id,
+            col(ReportSyncRun.id).in_(run_ids),
+        )
+    ).all():
+        ad_type = query.get("ad_type") if isinstance(query, dict) else None
+        result[run_id] = ad_type if isinstance(ad_type, str) else None
+    return result
+
+
+def _coverage_matches(coverage: ReportCoverage, fact: ReportFact,
+                      ad_types: dict[Any, str | None]) -> bool:
     subject_id = fact.subject_key[2] if fact.subject_key[0] == "material" else fact.subject_key[1]
     return (coverage.advertiser_id == fact.advertiser_id
+            and ad_types.get(coverage.source_run_id) == ad_types.get(fact.source_run_id)
             and coverage.report_contract == fact.report_contract
             and coverage.currency == fact.currency and coverage.timezone == fact.timezone
             and coverage.attribution == fact.attribution
@@ -156,7 +208,8 @@ def _coverage_matches(coverage: ReportCoverage, fact: ReportFact) -> bool:
 
 
 def select_facts(facts: Sequence[ReportFact], coverages: Sequence[ReportCoverage],
-                 filters: ReportingFilter, *, grain: str | None = None) -> tuple[ReportFact, ...]:
+                 filters: ReportingFilter, *, ad_types: dict[Any, str | None],
+                 grain: str | None = None) -> tuple[ReportFact, ...]:
     """日期须完整包含桶，绝不按比例拆 RANGE。每个 subject 选择一种非重叠粒度。
 
     DAY 优先，随后完整 RANGE，再 HOUR；同粒度重叠时新发布覆盖旧发布。
@@ -174,7 +227,7 @@ def select_facts(facts: Sequence[ReportFact], coverages: Sequence[ReportCoverage
         if grain and fact.granularity != grain:
             continue
         empty = any(c.status == "COMPLETE_EMPTY" and c.request_sequence >= fact.request_sequence
-                    and _coverage_matches(c, fact) for c in coverages)
+                    and _coverage_matches(c, fact, ad_types) for c in coverages)
         if empty:
             continue
         key = (fact.advertiser_id, tuple(fact.subject_key), fact.report_contract,
@@ -417,24 +470,47 @@ def _passes_filter(row: ReportRow, filters: ReportingFilter) -> bool:
     return True
 
 
-def _sort_rows(rows: Sequence[ReportRow], filters: ReportingFilter) -> tuple[ReportRow, ...]:
-    ordered = sorted(rows, key=lambda row: row.row_key)
-    if filters.sort_by == "spend":
-        # 混币种行没有可排序的合计金额，明确拒绝而非取 max 或偷偷换汇。
-        if any(len(row.metric_buckets) > 1 for row in rows):
-            raise ValueError("spend sorting requires one compatible metric bucket per row")
-        currencies = {v.currency for row in rows for v in row.metric_buckets}
-        if len(currencies) > 1:
-            raise ValueError("spend sorting requires one currency")
-        def spend_key(row: ReportRow) -> tuple[bool, Decimal]:
-            value = row.metric_buckets[0].values.get("spend") if row.metric_buckets else None
-            amount = value if value is not None else Decimal(0)
-            # Missing values remain at the end for both directions.
-            return (value is None, -amount if filters.sort_direction == "desc" else amount)
+def _sort_value(row: ReportRow, field: str) -> tuple[str, Decimal] | None:
+    """返回 (币种, 数值)；同一行多口径或无值时返回 None，统一排到末尾。"""
+    if field in CONFIG_SORT_FIELDS:
+        number = _number(row.display.get(field)) if row.display.get(field) else None
+        return ("", number) if number is not None else None
+    if len(row.metric_buckets) != 1:
+        return None
+    vector = row.metric_buckets[0]
+    value = vector.values.get(field)
+    if value is None:
+        return None
+    # 金额类指标先按币种分组，避免把不同币种的金额直接比较大小。
+    currency = vector.currency if field in {"spend", D0, TOTAL_REVENUE, "cost_per_ad_impression_event"} else ""
+    return (currency, value)
 
-        return tuple(sorted(ordered, key=spend_key))
-    return tuple(sorted(ordered, key=lambda row: (row.display.get("name") or "") if filters.sort_by == "name" else row.row_key,
-                        reverse=filters.sort_direction == "desc"))
+
+def _sort_rows(rows: Sequence[ReportRow], filters: ReportingFilter) -> tuple[ReportRow, ...]:
+    """服务端稳定排序：row_key 作为并列值，翻页不会漏行或重复。
+
+    无值（未同步、平台未提供、多口径）在升序和降序下都排在末尾，
+    不把缺失当作零参与排序。
+    """
+    field = filters.sort_by
+    descending = filters.sort_direction == "desc"
+    ordered = sorted(rows, key=lambda row: row.row_key, reverse=descending)
+    if field == "row_key":
+        return tuple(ordered)
+    if field in NAME_SORT_FIELDS:
+        def name_key(row: ReportRow) -> str | None:
+            value = row.display.get(field) or (row.display.get("name") if field == "name" else None)
+            return value.casefold() if isinstance(value, str) and value else None
+
+        present = [row for row in ordered if name_key(row) is not None]
+        missing = [row for row in ordered if name_key(row) is None]
+        present.sort(key=lambda row: cast(str, name_key(row)), reverse=descending)
+        return (*present, *missing)
+    present_values = [(row, _sort_value(row, field)) for row in ordered]
+    present = [(row, value) for row, value in present_values if value is not None]
+    missing = [row for row, value in present_values if value is None]
+    present.sort(key=lambda item: cast(tuple[str, Decimal], item[1]), reverse=descending)
+    return (*(row for row, _ in present), *missing)
 
 
 def _row_coverage(items: Sequence[ReportFact], coverages: Sequence[ReportCoverage],
@@ -489,10 +565,16 @@ def build_dimension_rows(session: Session, *, context: TenantContext, bc_id: str
             coverages = scoped_rows(
                 session, ReportCoverage, context=context, bc_id=bc_id, filters=account_filters
             )
+            raw_facts = scoped_rows(
+                session, ReportFact, context=context, bc_id=bc_id, filters=account_filters
+            )
             facts = select_facts(
-                scoped_rows(session, ReportFact, context=context, bc_id=bc_id, filters=account_filters),
+                raw_facts,
                 coverages,
                 account_filters,
+                ad_types=run_ad_types(
+                    session, tenant_id=context.tenant_id, rows=[*raw_facts, *coverages]
+                ),
             )
             if not facts:
                 continue
@@ -530,7 +612,13 @@ def build_dimension_rows(session: Session, *, context: TenantContext, bc_id: str
     objects = {(row.advertiser_id, row.kind, row.remote_id): row for row in scoped_rows(session, AdObject, context=context, bc_id=bc_id, filters=filters)}
     projections = latest_projections(scoped_rows(session, CampaignNameProjection, context=context, bc_id=bc_id, filters=filters))
     coverages = scoped_rows(session, ReportCoverage, context=context, bc_id=bc_id, filters=filters)
-    facts = select_facts(scoped_rows(session, ReportFact, context=context, bc_id=bc_id, filters=filters), coverages, filters)
+    raw_facts = scoped_rows(session, ReportFact, context=context, bc_id=bc_id, filters=filters)
+    facts = select_facts(
+        raw_facts,
+        coverages,
+        filters,
+        ad_types=run_ad_types(session, tenant_id=context.tenant_id, rows=[*raw_facts, *coverages]),
+    )
     kind = "campaign" if filters.dimension == "drama" else filters.dimension
     identities = {(fact.advertiser_id, fact.subject_key[1]) for fact in facts if fact.subject_key[0] == kind}
     identities.update((adv, rid) for adv, obj_kind, rid in objects if obj_kind == kind)
@@ -549,7 +637,13 @@ def build_dimension_rows(session: Session, *, context: TenantContext, bc_id: str
         items = facts_by_identity.get((adv, kind, rid), [])
         key = drama_key(bc_id, adv, rid, projection) if filters.dimension == "drama" else f"{adv}:{kind}:{rid}"
         refs: tuple[EntityRef, ...] = () if kind == "account" else (EntityRef(context.tenant_id, adv, cast(Any, kind), rid),)
-        name = (projection.drama_name if projection and projection.status == "VALID" else rid) if filters.dimension == "drama" else entity.name if entity else rid
+        if filters.dimension == "drama":
+            name = projection.drama_name if projection and projection.status == "VALID" else rid
+        elif kind == "account":
+            # 账户不在广告目录里，名称来自账户表；否则名称排序实际按 ID 排。
+            name = accounts[adv].name or rid
+        else:
+            name = entity.name if entity and entity.name else rid
         display = (
             {"name": name, "drama_name": name, "provider": projection.provider_label if projection else None}
             if filters.dimension == "drama"
@@ -619,13 +713,21 @@ def _build_material_rows(facts: Sequence[ReportFact], materials: Sequence[AdMate
             material_index[main_key].append(material)
         if platform_key != main_key:
             material_index[platform_key].append(material)
+        # Smart+ 素材报表的主素材 ID（如 Spark 帖子）与目录 video_id 不同命名空间，
+        # 广告内素材 ID 才是两边共有的身份。
+        if material.ad_material_id:
+            material_index[(material.advertiser_id, material.ad_remote_id, "ad_material", material.ad_material_id)].append(material)
     grouped: dict[tuple[str, ...], list[ReportFact]] = defaultdict(list)
     for fact in facts:
         if len(fact.subject_key) != 5 or fact.subject_key[0] != "material":
             raise ValueError("material subject requires five typed parts")
-        grouped[(fact.advertiser_id, *fact.subject_key[1:])].append(fact)
+        if fact.subject_key[1] != MATERIAL_GROUPING:
+            continue
+        # 同一账户内同一主素材跨多条广告的事实互不重叠（每行是“广告×素材”），
+        # 合并为一行素材，广告使用位置保留在 material_uses。
+        grouped[(fact.advertiser_id, fact.subject_key[1], fact.subject_key[3], fact.subject_key[4])].append(fact)
     result = []
-    for (adv, dimension, grouping, main_id, main_type), items in grouped.items():
+    for (adv, dimension, main_id, main_type), items in grouped.items():
         # Every metric fact must carry exactly one typed ad identity. A single
         # mapped row cannot prove another row's parent spend belongs to it.
         candidates_by_item: list[AdMaterialReference] = []
@@ -644,9 +746,14 @@ def _build_material_rows(facts: Sequence[ReportFact], materials: Sequence[AdMate
             if "ad_material_id" in item.attributes and not isinstance(ad_material_id, str):
                 proof_complete = False
                 continue
+            candidates = (
+                material_index.get((adv, ad_id, "ad_material", ad_material_id), ())
+                if isinstance(ad_material_id, str) and ad_material_id
+                else material_index.get((adv, ad_id, main_id, main_type), ())
+            )
             matches = [
                 material
-                for material in material_index.get((adv, ad_id, main_id, main_type), ())
+                for material in candidates
                 if material.complete
                 and ("ad_material_id" not in item.attributes or material.ad_material_id == ad_material_id)
             ]
@@ -661,8 +768,10 @@ def _build_material_rows(facts: Sequence[ReportFact], materials: Sequence[AdMate
         }
         proven = proof_complete and len(candidates_by_item) == len(items) and bool(candidates_by_id)
         ad_ids = {candidate.ad_remote_id for candidate in candidates_by_item}
-        entity = directory.get((adv, "ad", next(iter(ad_ids), grouping))) if proven else None
-        if not _entity_matches(entity, None, filters, items[0].timezone):
+        # 素材可被多条广告使用：任一使用它的广告满足目录筛选即保留；
+        # 无法证明使用位置时按“目录缺失”处理，与其他维度一致。
+        entities = [directory.get((adv, "ad", ad_id)) for ad_id in sorted(ad_ids)] if proven else [None]
+        if not any(_entity_matches(entity, None, filters, items[0].timezone) for entity in entities):
             continue
         vectors = _aggregate_fact_vectors(items)
         if not proven:
@@ -672,10 +781,17 @@ def _build_material_rows(facts: Sequence[ReportFact], materials: Sequence[AdMate
                 "availability": dict.fromkeys(v.availability, "UNSUPPORTED")
             }) for v in vectors)
         status = "COMPLETE" if proven else ("INCOMPLETE" if candidates_by_item else "UNSUPPORTED")
-        material_name = next(iter(candidates_by_id.values())).name if proven else main_id
-        row = ReportRow(row_key=json.dumps([adv, "material", dimension, grouping, main_id, main_type]),
+        # 目录素材名常为空（Spark 帖子），回退到报表返回的主素材文件名。
+        report_name = next(
+            (item.attributes.get("main_material_name") for item in items
+             if item.attributes.get("main_material_name")),
+            None,
+        )
+        directory_name = next(iter(candidates_by_id.values())).name if proven else None
+        material_name = directory_name or report_name or main_id
+        row = ReportRow(row_key=json.dumps([adv, "material", dimension, main_id, main_type]),
                         display={"name": material_name, "material_name": material_name, "main_material_id": main_id,
-                                 "grouping_id": grouping, "material_type": main_type},
+                                 "account_id": adv, "material_type": main_type},
                         refs=tuple(item.use_ref.ad_ref for item in candidates_by_id.values()) if proven else (),
                         material_uses=tuple(item.use_ref for item in candidates_by_id.values()) if proven else (),
                         metric_buckets=vectors, coverage={"status": status,

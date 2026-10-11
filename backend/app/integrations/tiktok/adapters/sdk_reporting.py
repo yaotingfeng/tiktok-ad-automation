@@ -9,7 +9,7 @@ import io
 import json
 import urllib.request
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo
@@ -59,7 +59,11 @@ _ATTRIBUTE_KEYS = {
     "ad_material_id",
     "smart_plus_creative_id",
     "smart_plus_creative_name",
+    "main_material_name",
 }
+# 素材 overview 的属性型 metrics：不参与金额计算，只用于证明素材在广告内的
+# 使用位置（ad_material_id 与目录一致；主素材 ID 与目录 video_id 不同命名空间）。
+_MATERIAL_ATTRIBUTE_METRICS = ("ad_material_id", "smart_plus_creative_id", "main_material_name")
 
 
 def _error(code: str, message: str = "报表回执无效") -> DomainError:
@@ -124,12 +128,16 @@ def _bucket(query: ReportQuery, dimensions: dict[str, Any]) -> tuple[datetime, d
         raise _error("report_row_invalid", "报表行缺少时间维度")
     try:
         format_string = "%Y-%m-%d" if query.granularity == "DAY" and len(raw) == 10 else "%Y-%m-%d %H:%M:%S"
-        parsed = datetime.strptime(raw, format_string).replace(
-            tzinfo=ZoneInfo(query.timezone)
-        ).astimezone(UTC)
+        local = datetime.strptime(raw, format_string)
     except (TypeError, ValueError) as exc:
         raise _error("report_row_invalid", "报表时间维度无效") from exc
-    end = parsed + (timedelta(hours=1) if query.granularity == "HOUR" else timedelta(days=1))
+    zone = ZoneInfo(query.timezone)
+    parsed = local.replace(tzinfo=zone).astimezone(UTC)
+    if query.granularity == "HOUR":
+        return parsed, parsed + timedelta(hours=1)
+    # 日桶终点是次日当地零点；夏令时切换日只有 23/25 小时，不能固定加 24 小时，
+    # 否则与查询窗口的日桶边界不一致，该日数据会被当作窗口外丢弃。
+    end = datetime.combine(local.date() + timedelta(days=1), time.min, zone).astimezone(UTC)
     return parsed, end
 
 
@@ -160,7 +168,12 @@ def _row(query: ReportQuery, raw: dict[str, Any]) -> ReportRow:
         attributes = {}
     # 只携带事实层已列入白名单的描述/关联字段；素材与创意的数组身份
     # 原样保留，绝不按数组长度拆分或平均分摊 spend。
-    for key, value in dimensions.items():
+    attribute_sources = dict(dimensions)
+    if contract.startswith("material_"):
+        attribute_sources.update(
+            (key, metrics[key]) for key in _MATERIAL_ATTRIBUTE_METRICS if key in metrics
+        )
+    for key, value in attribute_sources.items():
         if key not in _ATTRIBUTE_KEYS or key in {"main_material_id", "main_material_type"}:
             continue
         if key == "smart_plus_creative_id":
@@ -258,7 +271,7 @@ def _payload(
         return {
             "advertiser_id": query.advertiser_id,
             "dimensions": list(query.dimensions),
-            "metrics": list(query.metrics),
+            "metrics": [*query.metrics, *_MATERIAL_ATTRIBUTE_METRICS],
             "start_date": query.start_date.isoformat(),
             "end_date": query.end_date.isoformat(),
             "page": query.page,
