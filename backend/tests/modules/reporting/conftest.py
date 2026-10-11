@@ -105,7 +105,9 @@ def reporting_seed(session, context, observations):
         authorization_revision=0,
         adapter_contract_revision="official-api-v1",
     )
-    session.add_all([TenantBC(tenant_id=context.tenant_id, bc_id="bc-report"), connection])
+    session.add_all(
+        [TenantBC(tenant_id=context.tenant_id, bc_id="bc-report"), connection]
+    )
     session.flush()
     session.add_all(
         [
@@ -139,7 +141,9 @@ def reporting_seed(session, context, observations):
         ]
     )
     session.flush()
-    return SimpleNamespace(context=context, connection=connection, observations=observations)
+    return SimpleNamespace(
+        context=context, connection=connection, observations=observations
+    )
 
 
 @pytest.fixture
@@ -151,6 +155,7 @@ def other_context() -> SimpleNamespace:
 @pytest.fixture
 def report_case(session, context, other_context):
     """B 查询场景：真实 PostgreSQL 中的租户、BC 授权、目录和事实。"""
+
     def seed_identity(scope):
         if session.get(User, scope.actor_id) is None:
             session.add(
@@ -162,7 +167,9 @@ def report_case(session, context, other_context):
                 )
             )
         if session.get(Tenant, scope.tenant_id) is None:
-            session.add(Tenant(id=scope.tenant_id, name=f"report-{scope.tenant_id.hex[:12]}"))
+            session.add(
+                Tenant(id=scope.tenant_id, name=f"report-{scope.tenant_id.hex[:12]}")
+            )
         if session.get(TenantMembership, (scope.tenant_id, scope.actor_id)) is None:
             session.add(
                 TenantMembership(
@@ -253,7 +260,9 @@ def report_case(session, context, other_context):
         if session.get(AdvertiserAccount, (context.tenant_id, advertiser_id)) is None:
             session.add(account)
             session.flush()
-        ref = EntityRef(context.tenant_id, advertiser_id, "campaign", f"campaign-{uuid4().hex[:12]}")
+        ref = EntityRef(
+            context.tenant_id, advertiser_id, "campaign", f"campaign-{uuid4().hex[:12]}"
+        )
         session.add(
             AdObject(
                 tenant_id=ref.tenant_id,
@@ -334,7 +343,10 @@ def report_case(session, context, other_context):
         context=context,
         other_context=other_context,
         bc_id=own_bc.bc_id,
-        headers={"x-tenant-id": str(context.tenant_id), "x-actor-id": str(context.actor_id)},
+        headers={
+            "x-tenant-id": str(context.tenant_id),
+            "x-actor-id": str(context.actor_id),
+        },
         other_headers={
             "x-tenant-id": str(other_context.tenant_id),
             "x-actor-id": str(other_context.actor_id),
@@ -344,3 +356,6 @@ def report_case(session, context, other_context):
         currency="USD",
         timezone="UTC",
     )
+
+
+from tests.modules.reporting.sync_conftest import *  # noqa: E402,F401,F403
