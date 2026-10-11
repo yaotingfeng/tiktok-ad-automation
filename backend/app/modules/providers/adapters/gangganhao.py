@@ -25,6 +25,8 @@ from .contract import (
 
 BASE = "https://gateway.dorareel.com/portal/distributor"
 PAGE_SIZE = 100
+# 需要支付模板的变现方式：付费与混合应用建链必须选择支付模板。
+PAYMENT_TEMPLATE_MODES = frozenset({"iap", "mixed"})
 
 
 class GangganhaoClient:
@@ -93,11 +95,15 @@ class GangganhaoClient:
             if external in seen or not isinstance(name, str) or not name.strip():
                 raise failure("provider_schema_unsupported")
             seen.add(external)
-            config = {
+            config: JsonDict = {
                 "delivery_mode": row["deliveryMode"]
                 if isinstance(row.get("deliveryMode"), str)
                 else "iaa"
             }
+            if str(config["delivery_mode"]).lower() in PAYMENT_TEMPLATE_MODES:
+                # 付费/混合应用建链必须选择支付模板；拉取失败不阻断应用发现，
+                # 搭建页会提示重新验证连接以刷新模板。
+                config["payment_templates"] = self._payment_templates(external)
             result.append(
                 {
                     "external_id": external,
@@ -109,6 +115,28 @@ class GangganhaoClient:
         if not result:
             raise failure("provider_application_discovery_unverified")
         return result
+
+    def _payment_templates(self, authorizer_app_id: str) -> list[JsonDict]:
+        # 模板只是搭建页的可选项：查询失败时返回空列表，不影响应用发现。
+        try:
+            data = self._request(
+                "GET",
+                "/payment-templates",
+                query={"authorizerAppId": authorizer_app_id},
+            )
+        except DomainError:
+            return []
+        rows = data.get("list") if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            return []
+        return [
+            {"id": str(row["id"]), "name": row["name"]}
+            for row in rows
+            if isinstance(row, dict)
+            and row.get("id") is not None
+            and isinstance(row.get("name"), str)
+            and row["name"].strip()
+        ]
 
     def search(self, title: str, cursor: str | None) -> SearchPage:
         page = positive(cursor or 1)
@@ -319,7 +347,7 @@ class GangganhaoClient:
             raise failure("provider_request_invalid")
         if normalized["episode_seq"] > max(normalized["free_episode_count"], 1):
             raise failure("provider_request_invalid")
-        template_required = mode in {"iap", "mixed"}
+        template_required = mode in PAYMENT_TEMPLATE_MODES
         if template_required and "payment_template_id" not in config:
             raise failure("provider_request_invalid")
         if require_template and template_required:

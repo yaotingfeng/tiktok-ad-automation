@@ -223,3 +223,38 @@ def test_gangganhao_read_link_returns_verifiable_configuration():
         "payment_template_id": 7,
         "payment_template_name": "Pay",
     }
+
+
+def test_gangganhao_discovery_records_payment_templates_per_application():
+    def handle(request):
+        if request.url.path.endswith("/apps"):
+            return httpx.Response(200, json={"code": 0, "data": {"list": [
+                {"authorizerAppId": 16, "appName": "Rovela", "deliveryMode": "iap"},
+                {"authorizerAppId": 17, "appName": "Free", "deliveryMode": "iaa"},
+            ]}})
+        if request.url.path.endswith("/payment-templates"):
+            assert request.url.params["authorizerAppId"] == "16"
+            return httpx.Response(200, json={"code": 0, "data": {"list": [{"id": 7, "name": "周卡"}]}})
+        raise AssertionError(request.url)
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http:
+        apps = GangganhaoClient(http, token="t").discover_applications()
+    assert apps[0]["channel_config"] == {
+        "delivery_mode": "iap",
+        "payment_templates": [{"id": "7", "name": "周卡"}],
+    }
+    # 免费应用不需要支付模板，不额外请求。
+    assert apps[1]["channel_config"] == {"delivery_mode": "iaa"}
+
+
+def test_gangganhao_template_fetch_failure_keeps_discovery():
+    def handle(request):
+        if request.url.path.endswith("/apps"):
+            return httpx.Response(200, json={"code": 0, "data": {"list": [
+                {"authorizerAppId": 16, "appName": "Rovela", "deliveryMode": "mixed"}
+            ]}})
+        return httpx.Response(500)
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http:
+        apps = GangganhaoClient(http, token="t").discover_applications()
+    assert apps[0]["channel_config"] == {"delivery_mode": "mixed", "payment_templates": []}
