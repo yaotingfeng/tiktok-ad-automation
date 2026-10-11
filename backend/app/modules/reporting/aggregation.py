@@ -509,7 +509,7 @@ def _sort_rows(rows: Sequence[ReportRow], filters: ReportingFilter) -> tuple[Rep
     present_values = [(row, _sort_value(row, field)) for row in ordered]
     present = [(row, value) for row, value in present_values if value is not None]
     missing = [row for row, value in present_values if value is None]
-    present.sort(key=lambda item: cast(tuple[str, Decimal], item[1]), reverse=descending)
+    present.sort(key=lambda item: item[1], reverse=descending)
     return (*(row for row, _ in present), *missing)
 
 
