@@ -19,7 +19,6 @@ from tests.modules.strategies.test_concurrency import (
     isolated_strategy_database,  # noqa: F401
 )
 
-
 # 一次提交展开的全部执行步骤：每份目标素材、每个系列的 CTA，再加系列/广告组/广告创建。
 # full 规模为 204，compact 为 64；数量随 ACCEPTANCE_SCALE 推导，不写死。
 TOTAL_STEPS = SCALE.target_videos + SCALE.campaigns + SCALE.posts
@@ -92,10 +91,17 @@ def test_one_delivery_commits_multiple_bounded_pages(submitted):
         remove()
     done, count, revision, dispatch, error = snapshot(case)
     assert done, "one delivery must continue beyond its first page"
-    assert count == TOTAL_STEPS and revision == 0 and dispatch == identity and error is None
+    assert (
+        count == TOTAL_STEPS
+        and revision == 0
+        and dispatch == identity
+        and error is None
+    )
     progress = sorted({p[1] for p in pages if p[1]})
     assert len(progress) >= 3
-    assert all(b - a <= PAGE for a, b in zip([0, *progress[:-1]], progress, strict=True))
+    assert all(
+        b - a <= PAGE for a, b in zip([0, *progress[:-1]], progress, strict=True)
+    )
     deliver(case)
     assert snapshot(case) == (done, count, revision, dispatch, error)
 
