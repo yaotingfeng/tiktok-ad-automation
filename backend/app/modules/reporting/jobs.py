@@ -20,7 +20,7 @@ from app.integrations.tiktok.contracts.report_reader import RawReportPage, Repor
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.reporting import publish
-from app.modules.reporting.store_models import CampaignReportDay, ReportSyncJob
+from app.modules.reporting.store_models import ReportSyncJob
 
 PRIORITY = {"hot": 1, "manual": 1, "material": 2, "daily": 3, "history": 4}
 TRUNCATION_ROWS = 20_000
@@ -223,49 +223,7 @@ def _run(session, job: ReportSyncJob, reader: _CountingReader) -> int:
                 or job.campaign_ids
             ):
                 raise
-            # 首次同步没有缓存时也必须读取系列清单。所有分批在发布前完成，失败保留整份旧事实。
-            ids = sorted(
-                set(
-                    session.exec(
-                        select(CampaignReportDay.campaign_id).where(
-                            CampaignReportDay.tenant_id == t,
-                            CampaignReportDay.advertiser_id == advertisers[0],
-                            CampaignReportDay.stat_date >= s - timedelta(days=32),
-                            CampaignReportDay.stat_date <= e,
-                        )
-                    ).all()
-                )
-            )
-            if not ids:
-                campaigns = _read_all(
-                    lambda p: reader.campaign_day(
-                        advertiser_ids=advertisers, start=s, end=e, page=p
-                    )
-                )
-                ids = sorted(
-                    {
-                        str(row.get("dimensions", {}).get("campaign_id", ""))
-                        for row in campaigns
-                    }
-                )
-            if not ids or "" in ids or "None" in ids:
-                raise DomainError(
-                    "report_truncation_risk", "截断报表没有完整系列清单"
-                ) from error
-            rows = []
-            for offset in range(0, len(ids), 30):
-                batch = tuple(ids[offset : offset + 30])
-                rows.extend(
-                    _read_all(
-                        lambda p, batch=batch: reader.ad_day(
-                            advertiser_ids=advertisers,
-                            start=s,
-                            end=e,
-                            page=p,
-                            campaign_ids=batch,
-                        )
-                    )
-                )
+            rows = _read_campaign_batches(reader, advertisers, s, e)
         return publish.publish_ad_day(
             session,
             tenant_id=t,
@@ -312,6 +270,41 @@ def _run(session, job: ReportSyncJob, reader: _CountingReader) -> int:
         )
         return len(rows)
     raise DomainError("report_job_kind_invalid", "未知报表任务类型")
+
+
+def _read_campaign_batches(reader, advertisers, start, end):
+    """每次拆分都重新读取本期完整系列清单，缓存可能缺少新系列，不能作为过滤依据。"""
+    try:
+        campaigns = _read_all(
+            lambda p: reader.campaign_day(
+                advertiser_ids=advertisers, start=start, end=end, page=p
+            )
+        )
+        ids = sorted(
+            {str(row.get("dimensions", {}).get("campaign_id", "")) for row in campaigns}
+        )
+        if not ids or "" in ids or "None" in ids:
+            raise DomainError("report_truncation_risk", "截断报表没有完整系列清单")
+        rows = []
+        for offset in range(0, len(ids), 30):
+            batch = tuple(ids[offset : offset + 30])
+            rows.extend(
+                _read_all(
+                    lambda p, batch=batch: reader.ad_day(
+                        advertiser_ids=advertisers,
+                        start=start,
+                        end=end,
+                        page=p,
+                        campaign_ids=batch,
+                    )
+                )
+            )
+        return rows
+    except DomainError as error:
+        if error.code == "read_deadline_exceeded":
+            # 已进入拆分读取的截止期限耗尽属于读取失败，不能无限走额度延后。
+            raise DomainError("report_timeout", "系列分批读取超时") from error
+        raise
 
 
 class _CountingReader:

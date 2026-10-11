@@ -1,6 +1,7 @@
 # backend/tests/modules/reporting/test_jobs.py
 from datetime import UTC, date, datetime, timedelta
 
+import pytest
 from sqlmodel import Session, select
 
 from app.core.errors import DomainError
@@ -399,7 +400,7 @@ def test_failure_on_later_page_keeps_previous_publication(committed_sync_seed):
         assert s.get(ReportSyncJob, job.id).request_count == 2
 
 
-def test_cached_campaign_ids_are_used_before_campaign_discovery(committed_sync_seed):
+def test_split_discovers_new_campaigns_despite_old_cache(committed_sync_seed):
     from uuid import uuid4
 
     from app.modules.reporting.publish import AccountMeta, publish_ad_day
@@ -418,12 +419,25 @@ def test_cached_campaign_ids_are_used_before_campaign_discovery(committed_sync_s
         s.commit()
     job = _enqueue_and_claim(factory, seed)
 
+    calls = []
+
     class Reader(FakeReader):
+        def campaign_day(self, *, start, end, **_kwargs):
+            assert (start, end) == (D, D)
+            return RawReportPage(
+                tuple({"dimensions": {"campaign_id": c}} for c in ("c1", "c2")), 1, 1, 2
+            )
+
         def ad_day(self, *, campaign_ids=(), **_kwargs):
             if not campaign_ids:
                 return RawReportPage((), 1, 20, 20_000)
-            assert campaign_ids == ("c1",)
-            return RawReportPage((ad_row("new", D),), 1, 1, 1)
+            calls.extend(campaign_ids)
+            return RawReportPage(
+                tuple(ad_row(f"new-{c}", D, campaign=c) for c in campaign_ids),
+                1,
+                1,
+                len(campaign_ids),
+            )
 
     assert (
         execute_job(
@@ -431,10 +445,40 @@ def test_cached_campaign_ids_are_used_before_campaign_discovery(committed_sync_s
         )
         == "COMPLETE"
     )
+    assert calls == ["c1", "c2"]
     with factory() as s:
-        assert [
+        assert sorted(
             r.ad_id
             for r in s.exec(
                 select(AdReportDay).where(AdReportDay.tenant_id == seed.tenant_id)
             ).all()
-        ] == ["new"]
+        ) == ["new-c1", "new-c2"]
+
+
+@pytest.mark.parametrize("code", ["report_timeout", "read_deadline_exceeded"])
+def test_split_timeout_eventually_fails(committed_sync_seed, code):
+    seed, factory = committed_sync_seed
+    job = _enqueue_and_claim(factory, seed)
+
+    class Reader(FakeReader):
+        def campaign_day(self, **_kwargs):
+            return RawReportPage(({"dimensions": {"campaign_id": "c1"}},), 1, 1, 1)
+
+        def ad_day(self, *, campaign_ids=(), **_kwargs):
+            if not campaign_ids:
+                return RawReportPage((), 1, 20, 20_000)
+            raise DomainError(code, "读取超时")
+
+    for attempt in range(1, 7):
+        result = execute_job(
+            factory, job_id=job.id, claim_token=job.claim_token, reader=Reader()
+        )
+        assert result == ("WAITING" if attempt <= 5 else "FAILED")
+        with factory() as s:
+            assert s.get(ReportSyncJob, job.id).attempts == min(attempt, 5)
+        if attempt <= 5:
+            job = _reclaim(factory, job.id)
+    with factory() as s:
+        assert s.get(
+            ReportSyncState, (seed.tenant_id, "acc-1", "ad_day", D)
+        ).status in ("FAILED", "STALE")
