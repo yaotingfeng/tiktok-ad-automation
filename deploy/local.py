@@ -15,7 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "deploy/release"))
-from common import CONTEXT, require, write
+from common import CONTEXT, VPC, require, write
 
 COMPANY = "https://git.gzjunbo.net/yaotf/tiktok-ad-automation.git"
 
@@ -82,6 +82,84 @@ def cleanup_checkout(folder):
         shutil.rmtree(checkout)
 
 
+def deployed_sha(env):
+    """读取线上九个服务共用的镜像版本；无法确认时返回 None，检查随之全量。"""
+    try:
+        output = subprocess.run(
+            ["kubectl", "--context", CONTEXT, "-n", "test", "get", "deployments",
+             "-l", "app=tiktok-ad-automation", "-o", "json", "--request-timeout=30s"],
+            env=env, capture_output=True, text=True, check=True,
+        ).stdout
+        images = {
+            item["spec"]["template"]["spec"]["containers"][0]["image"]
+            for item in json.loads(output)["items"]
+        }
+    except (subprocess.CalledProcessError, OSError, ValueError, KeyError, IndexError):
+        return None
+    if len(images) != 1:
+        return None
+    sha = next(iter(images)).removeprefix(VPC)
+    return sha if re.fullmatch("[0-9a-f]{40}", sha) else None
+
+
+def check_basis(base, sha, deployed, repo=ROOT):
+    """最近一次已覆盖到线上版本的通过记录（本提交或其祖先）；没有则返回 None。
+
+    记录含义：full 为从零全量通过；否则 base 到该提交之间的改动均已检查。只有
+    覆盖起点与当前线上版本一致的记录，才能作为增量检查的起点。
+    """
+    best = None
+    for path in sorted((base / "checks").glob("*.json")):
+        record = json.loads(path.read_text())
+        if not (record.get("full") or (deployed and record.get("base") == deployed)):
+            continue
+        candidate = record["sha"]
+        if candidate != sha and subprocess.run(
+            ["git", "merge-base", "--is-ancestor", candidate, sha], cwd=repo, check=False
+        ).returncode:
+            continue
+        distance = int(git("rev-list", "--count", candidate + ".." + sha, cwd=repo))
+        if best is None or distance < best[0]:
+            best = (distance, record)
+    return best[1] if best else None
+
+
+def plan_checks(args, base, folder, checkout, sha, env):
+    """生成本次检查计划；返回 (计划, 通过后写入的覆盖记录)。"""
+    command = [sys.executable, "deploy/ci/select_tests.py", "--repo", str(checkout),
+               "--head", sha, "--output", str(folder / "check-plan.json")]
+    deployed = deployed_sha(env)
+    basis = None if args.full else check_basis(base, sha, deployed)
+    if args.full:
+        command.append("--full")
+        coverage = {"full": True, "base": None}
+    elif basis:
+        # 增量起点已覆盖到线上版本：只检查起点之后的改动。
+        command += ["--base", basis["sha"]]
+        coverage = {"full": basis.get("full", False), "base": basis.get("base")}
+    elif deployed:
+        command += ["--base", deployed]
+        coverage = {"full": False, "base": deployed}
+    else:
+        coverage = {"full": True, "base": None}
+    subprocess.run(command, cwd=checkout, check=True)
+    plan = json.loads((folder / "check-plan.json").read_text())
+    if plan["mode"] == "full":
+        coverage = {"full": True, "base": None}
+    backend = plan["backend"]
+    scope = "全部" if backend["all"] else f"{len(backend['targets'])} 个测试文件"
+    lanes = [k for k, v in plan["frontend"].items() if v]
+    print(
+        f"检查范围：{plan['mode']}（{'；'.join(plan['reasons'])}）"
+        + (f"；增量起点 {basis['sha'][:7]}" if basis else "")
+        + (f"；线上 {deployed[:7]}" if deployed else "；线上版本未知")
+        + f"；后端 {scope}；前端 {'/'.join(lanes) or '无'}"
+        + ("；发布工具" if plan["deploy_tools"] else ""),
+        flush=True,
+    )
+    return plan, coverage
+
+
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -92,6 +170,9 @@ def main():
         "--config", type=Path, default=ROOT / ".runtime/local-release/config.json"
     )
     parser.add_argument("--run", help="批次目录名；状态/恢复默认最近一批")
+    parser.add_argument(
+        "--full", action="store_true", help="按需全量检查；默认只检查受改动影响的部分"
+    )
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
     base = args.config.resolve().parent
@@ -142,6 +223,10 @@ def main():
             print("恢复处理完成；请运行 status 查看状态。")
             return
         require(args.run is None, "--run is only valid for status/recover/finish")
+        require(
+            not args.full or args.action in ("check", "deploy"),
+            "--full is only valid for check/deploy",
+        )
         run_name = time.strftime("%Y%m%dT%H%M%S") + "-" + secrets.token_hex(3)
         folder = base / "runs" / run_name
         folder.mkdir(parents=True, mode=0o700)
@@ -165,9 +250,28 @@ def main():
 
         print("详细日志：" + str(log), flush=True)
         if args.action in ("check", "deploy"):
-            mark("checking")
-            stage(["bash", "deploy/ci/check.sh"], checkout, env, log)
-            mark("checks-passed")
+            plan, coverage = plan_checks(args, base, folder, checkout, sha, env)
+            if plan["mode"] == "none":
+                mark("checks-skipped")
+            else:
+                mark("checking")
+                stage(
+                    ["bash", "deploy/ci/check.sh"],
+                    checkout,
+                    dict(
+                        env,
+                        CHECK_PLAN=str(folder / "check-plan.json"),
+                        CHECK_CACHE_DIR=str(base / "ci-cache"),
+                    ),
+                    log,
+                )
+                mark("checks-passed")
+            # 记录本提交的覆盖范围，后续发布可在此基础上增量检查或直接复用。
+            (base / "checks").mkdir(mode=0o700, exist_ok=True)
+            write(
+                base / "checks" / (sha + ".json"),
+                {"sha": sha, **coverage, "mode": plan["mode"], "at": int(time.time())},
+            )
         if args.action == "deploy":
             # 仅快进推送指定 SHA 到公司 main；origin 不参与发布。
             mark("pushing")

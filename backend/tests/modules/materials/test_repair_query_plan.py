@@ -82,7 +82,14 @@ def test_repair_locks_candidate_dispatch_by_primary_key(source_env, wire):
                 or node.get("Index Name") == "pending_dispatch_pkey"
             )
         ]
-        assert any("id =" in node["Index Cond"] for node in indexed), lock_rows[0]
+        # 失败时输出加锁节点下的完整扫描链，便于区分统计漂移与真实回退。
+        chain = [
+            (n.get("Node Type"), n.get("Relation Name"), n.get("Index Name"),
+             n.get("Index Cond") or n.get("Filter"))
+            for n in nodes(lock_rows[0])
+            if "Node Type" in n
+        ]
+        assert any("id =" in node["Index Cond"] for node in indexed), chain
         assert db.execute(text("SHOW statement_timeout")).scalar_one() == "10s"
         assert db.execute(text("SHOW jit")).scalar_one() == "off"
     assert wire[0] == []

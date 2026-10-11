@@ -194,6 +194,37 @@ class LocalEntryTests(unittest.TestCase):
             self.local.prepare_checkout(self.root / "run")
         self.assertFalse((self.root / "run/checkout").exists())
 
+    def test_check_basis_reuses_only_records_covering_current_production(self):
+        def commit(text):
+            (self.repo / "source.txt").write_text(text)
+            subprocess.run(["git", "commit", "-qam", text], cwd=self.repo, check=True)
+            return self.local.git("rev-parse", "HEAD")
+
+        deployed = self.local.git("rev-parse", "HEAD")
+        checked = commit("checked")
+        head = commit("head")
+        state = self.root / "state"
+        (state / "checks").mkdir(parents=True)
+
+        def record(sha, **fields):
+            (state / "checks" / (sha + ".json")).write_text(
+                json.dumps({"sha": sha, **fields})
+            )
+
+        basis = lambda online: self.local.check_basis(  # noqa: E731
+            state, head, online, repo=self.repo
+        )
+        self.assertIsNone(basis(deployed))
+        # 只覆盖到其他线上版本的增量记录不能复用。
+        record(checked, full=False, base="0" * 40)
+        self.assertIsNone(basis(deployed))
+        record(checked, full=False, base=deployed)
+        self.assertEqual(basis(deployed)["sha"], checked)
+        # 线上版本变化后，增量记录失效；全量记录始终可作为起点，且优先最近的祖先。
+        self.assertIsNone(basis(checked))
+        record(head, full=True)
+        self.assertEqual(basis(checked)["sha"], head)
+
 
 if __name__ == "__main__":
     unittest.main()

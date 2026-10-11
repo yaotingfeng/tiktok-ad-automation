@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+"""并行运行后端 pytest：按历史耗时分组，每组独立数据库与 Redis 库号。
+
+- 耗时超过阈值的测试文件按用例拆分到多个组，避免单个慢文件决定总时长。
+- 每组内保持文件路径排序（已知部分夹具依赖收集顺序）。
+- 并行失败的用例在全新数据库中单独重跑一次；重跑通过记为“并行不稳定”并列出，
+  仍失败才判定失败。失败过多时视为真实故障，不重跑。
+- 运行后把实测耗时写回缓存，下次分组更均衡。
+
+必须在 backend 目录、uv 环境中执行，并已设置指向独立测试实例的 DATABASE_URL、
+REDIS_URL、TEST_REDIS_URL（Redis 需开启足够多的库号）。
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from collections import defaultdict
+from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
+
+DEFAULT_WEIGHT = 1.0
+ACCEPTANCE_WEIGHT = 120.0
+SPLIT_SECONDS = 240.0
+MAX_RERUNS = 20
+
+
+def weights_for(nodeids, durations):
+    """每条用例的估计耗时：优先实测值，缺失时按目录给经验值。"""
+    result = {}
+    for nodeid in nodeids:
+        if nodeid in durations:
+            result[nodeid] = durations[nodeid]
+        else:
+            result[nodeid] = (
+                ACCEPTANCE_WEIGHT if nodeid.startswith("tests/acceptance/") else DEFAULT_WEIGHT
+            )
+    return result
+
+
+def partition(nodeids, durations, shards):
+    """最长处理时间优先装箱；返回每组的 pytest 参数（文件路径或用例 ID）。"""
+    weights = weights_for(nodeids, durations)
+    by_file = defaultdict(list)
+    for nodeid in nodeids:
+        by_file[nodeid.split("::", 1)[0]].append(nodeid)
+    units = []  # (估计耗时, 文件, 参数列表)
+    for path, ids in by_file.items():
+        total = sum(weights[i] for i in ids)
+        if total > SPLIT_SECONDS and len(ids) > 1:
+            units.extend((weights[i], path, [i]) for i in ids)
+        else:
+            units.append((total, path, [path]))
+    bins = [[0.0, []] for _ in range(max(1, shards))]
+    for weight, path, args in sorted(units, key=lambda unit: (-unit[0], unit[1])):
+        target = min(bins, key=lambda b: b[0])
+        target[0] += weight
+        target[1].append((path, args))
+    return [
+        (load, [arg for _, args in sorted(items, key=lambda item: item[0]) for arg in args])
+        for load, items in bins
+        if items
+    ]
+
+
+def with_database(url, name):
+    parts = urlsplit(url)
+    return urlunsplit(parts._replace(path="/" + name))
+
+
+def with_redis_db(url, number):
+    parts = urlsplit(url)
+    return urlunsplit(parts._replace(path="/" + str(number)))
+
+
+def recreate_database(base_url, name):
+    import psycopg
+    from psycopg import sql
+
+    admin = urlsplit(base_url)._replace(path="/postgres")
+    dsn = urlunsplit(admin).replace("postgresql+psycopg://", "postgresql://")
+    with psycopg.connect(dsn, autocommit=True) as connection:
+        connection.execute(
+            sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name))
+        )
+        connection.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+
+
+def collect(targets, env):
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", *targets],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    ids = [line for line in result.stdout.splitlines() if "::" in line]
+    if result.returncode not in (0, 5) or (not ids and result.returncode != 5):
+        sys.stdout.write(result.stdout[-4000:] + result.stderr[-4000:])
+        raise SystemExit("后端测试收集失败")
+    return ids
+
+
+def read_results(path):
+    outcomes, durations = {}, defaultdict(float)
+    if not path.exists():
+        return outcomes, durations
+    for line in path.read_text().splitlines():
+        record = json.loads(line)
+        nodeid = record["nodeid"]
+        durations[nodeid] += record["duration"]
+        if record["outcome"] == "failed":
+            outcomes[nodeid] = "failed"
+        elif record["outcome"] == "skipped" and nodeid not in outcomes:
+            # 条件跳过发生在 setup 阶段，不会再有 call 记录。
+            outcomes[nodeid] = "skipped"
+        elif record["when"] == "call" and outcomes.get(nodeid) != "failed":
+            outcomes[nodeid] = record["outcome"]
+    return outcomes, durations
+
+
+def shard_env(base_env, index, name, results):
+    env = dict(base_env)
+    env["DATABASE_URL"] = with_database(base_env["DATABASE_URL"], name)
+    env["REDIS_URL"] = with_redis_db(base_env["REDIS_URL"], 2 + 2 * index)
+    env["TEST_REDIS_URL"] = with_redis_db(base_env["TEST_REDIS_URL"], 3 + 2 * index)
+    env["CI_RESULTS_FILE"] = str(results)
+    plugin_dir = str(Path(__file__).resolve().parent)
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [plugin_dir, env.get("PYTHONPATH")]))
+    return env
+
+
+def pytest_command(args):
+    return [
+        sys.executable, "-m", "pytest", "-q", "--tb=short", "--show-capture=no",
+        "-p", "no:cacheprovider", "-p", "pytest_results", *args,
+    ]
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--shards", type=int, default=int(os.environ.get("CHECK_BACKEND_SHARDS", "4")))
+    parser.add_argument("--work", type=Path, required=True)
+    parser.add_argument("--durations", type=Path, action="append", default=[])
+    parser.add_argument("--save-durations", type=Path)
+    parser.add_argument("targets", nargs="*", help="测试文件；缺省为全部")
+    args = parser.parse_args()
+    args.work.mkdir(parents=True, exist_ok=True)
+    base_env = dict(os.environ)
+    durations = {}
+    for path in args.durations:
+        if path.exists():
+            durations.update(json.loads(path.read_text()))
+    nodeids = collect(args.targets or ["tests"], base_env)
+    if not nodeids:
+        print("后端：没有需要运行的测试")
+        return 0
+    groups = partition(nodeids, durations, args.shards)
+    print(f"后端：{len(nodeids)} 项，分 {len(groups)} 组并行", flush=True)
+    started = time.monotonic()
+    running = []
+    for index, (load, group) in enumerate(groups):
+        name = f"ci_shard{index}_test"
+        recreate_database(base_env["DATABASE_URL"], name)
+        results = args.work / f"shard{index}.jsonl"
+        results.unlink(missing_ok=True)
+        log = (args.work / f"shard{index}.log").open("w")
+        process = subprocess.Popen(
+            pytest_command(group),
+            env=shard_env(base_env, index, name, results),
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+        running.append((index, process, log, results, load))
+        print(f"  组 {index}：{len(group)} 个参数，预计 {load / 60:.1f} 分钟", flush=True)
+    outcomes, measured = {}, {}
+    for index, process, log, results, _ in running:
+        process.wait()
+        log.close()
+        shard_outcomes, shard_durations = read_results(results)
+        outcomes.update(shard_outcomes)
+        measured.update(shard_durations)
+        tail = (args.work / f"shard{index}.log").read_text().strip().splitlines()[-1:]
+        print(f"  组 {index} 结束（{(time.monotonic() - started) / 60:.1f} 分钟）：{tail[0] if tail else ''}", flush=True)
+    failed = sorted(n for n, o in outcomes.items() if o == "failed")
+    missing = sorted(set(nodeids) - set(outcomes))
+    if missing:
+        # 用例未产生结果通常是进程崩溃；当作失败处理，进入重跑。
+        failed = sorted(set(failed) | set(missing))
+    unstable = []
+    if failed and len(failed) <= MAX_RERUNS:
+        print(f"后端：{len(failed)} 项并行失败，在全新库中单独重跑", flush=True)
+        name = "ci_rerun_test"
+        recreate_database(base_env["DATABASE_URL"], name)
+        results = args.work / "rerun.jsonl"
+        results.unlink(missing_ok=True)
+        # 含随机值的参数化 ID 每次收集都会变化，无法按 ID 重跑；改为重跑其所在文件，
+        # 只取原失败用例的结果。任一 ID 无法匹配都会让 pytest 放弃整个重跑。
+        stable = set(collect([n for n in failed if "::" in n], base_env)) if failed else set()
+        rerun_args = sorted({n if n in stable else n.split("::", 1)[0] for n in failed})
+        with (args.work / "rerun.log").open("w") as log:
+            subprocess.run(
+                pytest_command(rerun_args),
+                env=shard_env(base_env, args.shards, name, results),
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+        rerun, _ = read_results(results)
+        # 重跑整个文件时，用例 ID 中的随机参数会改变；按文件内同名函数前缀对应。
+        def rerun_outcome(nodeid):
+            if nodeid in rerun:
+                return rerun[nodeid]
+            prefix = nodeid.split("[", 1)[0]
+            matches = [o for n, o in rerun.items() if n.split("[", 1)[0] == prefix]
+            if matches and all(o in ("passed", "skipped") for o in matches):
+                return "passed"
+            return "failed"
+
+        unstable = [n for n in failed if rerun_outcome(n) == "passed"]
+        failed = [n for n in failed if rerun_outcome(n) != "passed"]
+    if args.save_durations:
+        merged = dict(durations)
+        merged.update(measured)
+        args.save_durations.parent.mkdir(parents=True, exist_ok=True)
+        args.save_durations.write_text(json.dumps(merged, sort_keys=True))
+    passed = sum(1 for o in outcomes.values() if o == "passed")
+    print(
+        f"后端合计：{len(nodeids)} 项，通过 {passed}，失败 {len(failed)}，"
+        f"并行不稳定 {len(unstable)}，用时 {(time.monotonic() - started) / 60:.1f} 分钟",
+        flush=True,
+    )
+    for nodeid in unstable:
+        print("  并行不稳定（单独重跑通过）：" + nodeid)
+    for nodeid in failed:
+        print("  失败：" + nodeid)
+    if failed:
+        print(f"详细输出：{args.work}/shard*.log、rerun.log")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

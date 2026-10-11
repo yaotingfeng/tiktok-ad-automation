@@ -6,7 +6,7 @@ repo=$(cd "$(dirname "$0")/../.." && pwd)
 # 仅继承工具连接配置，阻断终端中的生产数据库、云存储和平台凭据。
 if [[ ${1:-} != --isolated-environment ]]; then
   clean_env=("PATH=$PATH" "HOME=$HOME")
-  for key in TMPDIR LANG LC_ALL BUN_BIN PG_BIN_DIR DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH UV_CACHE_DIR UV_PYTHON_INSTALL_DIR PLAYWRIGHT_BROWSERS_PATH HTTPS_PROXY HTTP_PROXY ALL_PROXY NO_PROXY SSL_CERT_FILE SSL_CERT_DIR; do
+  for key in TMPDIR LANG LC_ALL BUN_BIN PG_BIN_DIR CHECK_PLAN CHECK_CACHE_DIR CHECK_BACKEND_SHARDS CHECK_BROWSER_WORKERS DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH UV_CACHE_DIR UV_PYTHON_INSTALL_DIR PLAYWRIGHT_BROWSERS_PATH HTTPS_PROXY HTTP_PROXY ALL_PROXY NO_PROXY SSL_CERT_FILE SSL_CERT_DIR; do
     if [[ -n ${!key:-} ]]; then clean_env+=("$key=${!key}"); fi
   done
   exec env -i "${clean_env[@]}" bash "$repo/deploy/ci/check.sh" --isolated-environment
@@ -73,14 +73,42 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 python3 "$repo/deploy/ci/test_snapshot.py"
+python3 "$repo/deploy/ci/test_select_tests.py"
+python3 "$repo/deploy/ci/test_backend_tests.py"
+# 检查计划由 deploy/local.py 按改动生成；直接运行本脚本时默认全量。
+plan_file=${CHECK_PLAN:-}
+if [[ -z $plan_file ]]; then
+  plan_file="$work/plan.json"
+  python3 "$repo/deploy/ci/select_tests.py" --full --output "$plan_file"
+fi
+plan() { python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); [v:=v[k] for k in sys.argv[2:]]; print(" ".join(v) if isinstance(v,list) else ("1" if v is True else ("" if v is False else v)))' "$plan_file" "$@"; }
+mode=$(plan mode)
+printf '检查范围：%s（%s）\n' "$mode" "$(plan reasons)"
+if [[ $mode == none ]]; then
+  printf 'No checks required for this change.\n'
+  exit 0
+fi
+backend_all=$(plan backend all)
+backend_targets=$(plan backend targets)
+lint=$(plan lint)
+fe_build=$(plan frontend build)
+fe_workspace=$(plan frontend workspace)
+fe_batch=$(plan frontend batch)
+fe_r2=$(plan frontend r2)
+deploy_tools=$(plan deploy_tools)
+release_integration=$(plan release_integration)
 python3 "$repo/deploy/ci/snapshot.py" "$repo" "$work/source"
-mkdir -p "$work/bin" "$work/source/.runtime"
+mkdir -p "$work/bin" "$work/source/.runtime" "$work/lanes"
 ln -s "$BUN_BIN" "$work/bin/bun"
 export PATH="$work/bin:$PATH"
 cd "$work/source"
-docker run -d --name "$pg_name" -p 127.0.0.1::5432 \
-  -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=ci-local-password -e POSTGRES_DB=tiktok_ci_test postgres:18 >/dev/null
-docker run -d --name "$redis_name" -p 127.0.0.1::6379 redis:8 >/dev/null
+# 并行分组各用独立库与 Redis 库号；PG 连接数和 Redis 库数按并发放大。
+# 测试库用完即删：数据放内存盘并关闭落盘保证，只影响本次临时实例，不涉及任何正式数据。
+docker run -d --name "$pg_name" -p 127.0.0.1::5432 --tmpfs /var/lib/postgresql:rw,size=4g \
+  -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=ci-local-password -e POSTGRES_DB=tiktok_ci_test postgres:18 \
+  -c max_connections=600 -c fsync=off -c synchronous_commit=off -c full_page_writes=off \
+  -c shared_buffers=512MB -c work_mem=16MB >/dev/null
+docker run -d --name "$redis_name" -p 127.0.0.1::6379 redis:8 --databases 64 >/dev/null
 for ((attempt=0; attempt<60; attempt++)); do
   if docker exec "$pg_name" pg_isready -U postgres >/dev/null 2>&1 && docker exec "$redis_name" redis-cli ping >/dev/null 2>&1; then break; fi
   sleep 1
@@ -98,11 +126,74 @@ export FASTAPI_ENV=development VITE_API_URL='' CI=1 APP_ENV_FILE=/dev/null DOTEN
 export AWS_EC2_METADATA_DISABLED=true AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_CONFIG_FILE=/dev/null
 export UV_NO_ENV_FILE=1 PLAYWRIGHT_SKIP_BROWSER_GC=1
 uv sync --frozen --package app
-node scripts/test-deployment-assets.mjs
-(cd backend && uv run python -m tests.pg_backup && uv run ruff check app tests && uv run ty check app && uv run pytest -q --tb=short --show-capture=no)
-bun install --frozen-lockfile
-bun run --filter frontend build
-(cd frontend && bun x playwright install chromium && bun x playwright test --project workspace --reporter=list && bun x playwright test --config=playwright.acceptance.config.ts && bun x playwright test --config=playwright.r2-acceptance.config.ts)
-docker build -f backend/Dockerfile -t "$image_name" .
-RELEASE_TEST_IMAGE="$image_name" uv run python scripts/test-release-integration.py
-printf 'Full local check passed.\n'
+cache_dir=${CHECK_CACHE_DIR:-$repo/.runtime/ci-cache}
+mkdir -p "$cache_dir"
+
+lane_backend() {
+  cd backend
+  uv run python -m tests.pg_backup
+  if [[ -n $lint ]]; then uv run ruff check app tests && uv run ty check app; fi
+  if [[ -n $backend_all || -n $backend_targets ]]; then
+    local targets=(tests)
+    # 目标路径不含空格，按空格拆分为多个参数。
+    [[ -n $backend_all ]] || read -r -a targets <<<"$backend_targets"
+    uv run python ../deploy/ci/backend_tests.py --work "$work/backend" \
+      --durations ../deploy/ci/test-durations.json --durations "$cache_dir/test-durations.json" \
+      --save-durations "$cache_dir/test-durations.json" "${targets[@]}"
+  fi
+}
+
+lane_frontend() {
+  bun install --frozen-lockfile
+  bun run --filter frontend build
+  cd frontend
+  bun x playwright install chromium
+  if [[ -n $fe_workspace ]]; then
+    # 工作台用例只依赖页面内模拟接口，可并行；浏览器验收共用真实后端，保持串行。
+    bun x playwright test --project workspace --reporter=list --workers="${CHECK_BROWSER_WORKERS:-3}"
+  fi
+  if [[ -n $fe_batch || -n $fe_r2 ]]; then
+    # 浏览器验收使用独立库与 Redis 库号，与后端分组并行互不干扰。
+    docker exec "$pg_name" psql -U postgres -qc 'CREATE DATABASE ci_browser_test' >/dev/null
+    export DATABASE_URL="postgresql://postgres:ci-local-password@127.0.0.1:$pg_port/ci_browser_test"
+    export REDIS_URL="redis://127.0.0.1:$redis_port/40" TEST_REDIS_URL="redis://127.0.0.1:$redis_port/41"
+  fi
+  if [[ -n $fe_batch ]]; then bun x playwright test --config=playwright.acceptance.config.ts; fi
+  if [[ -n $fe_r2 ]]; then bun x playwright test --config=playwright.r2-acceptance.config.ts; fi
+}
+
+lane_deploy() {
+  if [[ -n $deploy_tools ]]; then node scripts/test-deployment-assets.mjs; fi
+  if [[ -n $release_integration ]]; then
+    docker build -f backend/Dockerfile -t "$image_name" .
+    RELEASE_TEST_IMAGE="$image_name" uv run python scripts/test-release-integration.py
+  fi
+}
+
+# 三条检查线并行；各自日志结束后整段输出，失败时标明是哪一条。
+lanes=()
+[[ -n $lint || -n $backend_all || -n $backend_targets ]] && lanes+=(backend)
+[[ -n $fe_build ]] && lanes+=(frontend)
+[[ -n $deploy_tools || -n $release_integration ]] && lanes+=(deploy)
+started=$SECONDS
+pids=()
+for lane in "${lanes[@]}"; do
+  ( set -euo pipefail; "lane_$lane" ) >"$work/lanes/$lane.log" 2>&1 &
+  pids+=($!)
+  printf '检查线启动：%s\n' "$lane"
+done
+failed=()
+for index in "${!lanes[@]}"; do
+  lane=${lanes[$index]}
+  if wait "${pids[$index]}"; then status=通过; else status=失败; failed+=("$lane"); fi
+  printf '检查线%s：%s（%d 分钟）\n' "$status" "$lane" $(( (SECONDS - started) / 60 ))
+done
+for lane in "${lanes[@]}"; do
+  printf '\n===== %s =====\n' "$lane"
+  cat "$work/lanes/$lane.log"
+done
+if (( ${#failed[@]} )); then
+  printf '\nCheck failed: %s\n' "${failed[*]}"
+  exit 1
+fi
+printf '\nLocal check passed (%s).\n' "$mode"
