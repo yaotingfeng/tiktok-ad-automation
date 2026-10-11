@@ -76,6 +76,16 @@ def _strict_sdk_envelope(
                     int((tomorrow - now).total_seconds() * 1000)
                 )
             raise AccountAdmissionDeferred(300_000)
+        if (
+            exact is not None
+            and raw["code"] != 0
+            and any(
+                marker in str(raw.get("message") or "").lower()
+                for marker in ("permission", "权限")
+            )
+        ):
+            # 只保留权限分类，不把平台原文（可能含账户信息）写入任务或页面。
+            raise DomainError("report_permission_denied", "报表权限不足")
         if exact is not None and raw["code"] == 40002:
             raise DomainError("report_query_invalid", "报表参数被平台拒绝")
         if exact is not None and raw["code"] == 0:

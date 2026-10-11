@@ -14,8 +14,8 @@ from app.jobs.tasks import dispatch_queue
 def test_ads_reporting_tasks_have_dedicated_queues_and_standard_beat_gate():
     celery_app.loader.import_default_modules()
     assert dispatch_queue("ads.sync_step") == "ads-directory"
-    assert dispatch_queue("reporting.sync_step") == "ads-reporting"
-    assert celery_app.conf.task_routes["reporting.scan_due"]["queue"] == "control"
+    assert dispatch_queue("reporting.job_step") == "ads-reporting"
+    assert celery_app.conf.task_routes["reporting.plan_due"]["queue"] == "control"
     assert "scan-ads-reporting-due" in celery_app.conf.beat_schedule
     assert "ads-directory" in _QUEUES
     assert "ads-reporting" in _QUEUES
@@ -23,9 +23,9 @@ def test_ads_reporting_tasks_have_dedicated_queues_and_standard_beat_gate():
     previous = settings.ADS_SYNC_ENABLED
     settings.ADS_SYNC_ENABLED = False
     try:
-        from app.modules.reporting.tasks import scan_due_runs
+        from app.modules.reporting.job_tasks import plan_due_runs
 
-        assert scan_due_runs(database_engine=None) == 0
+        assert plan_due_runs(database_engine=None, redis_client=None) == 0
     finally:
         settings.ADS_SYNC_ENABLED = previous
 
@@ -56,10 +56,14 @@ def test_real_redis_workers_keep_reporting_live_during_directory_backlog(redis_c
     prefix = f"queue-share-{uuid4().hex}:"
     broker = os.environ["TEST_REDIS_URL"]
     producer = Celery(
-        f"a8-producer-{prefix}", broker=broker, set_as_current=False,
+        f"a8-producer-{prefix}",
+        broker=broker,
+        set_as_current=False,
     )
     producer.conf.update(
-        task_serializer="json", accept_content=["json"], task_ignore_result=True,
+        task_serializer="json",
+        accept_content=["json"],
+        task_ignore_result=True,
         task_create_missing_queues=True,
         broker_transport_options={"global_keyprefix": prefix},
     )
@@ -69,26 +73,42 @@ def test_real_redis_workers_keep_reporting_live_during_directory_backlog(redis_c
             processes.append(
                 subprocess.Popen(
                     [
-                        sys.executable, "-m", "celery",
-                        "-A", "tests.jobs.queue_isolation_worker:app", "worker",
-                        "-Q", prefix + queue, "--pool", "threads", "--concurrency", "1",
-                        "--hostname", f"a8-{queue}@localhost", "--loglevel", "ERROR",
-                        "--without-gossip", "--without-mingle",
+                        sys.executable,
+                        "-m",
+                        "celery",
+                        "-A",
+                        "tests.jobs.queue_isolation_worker:app",
+                        "worker",
+                        "-Q",
+                        prefix + queue,
+                        "--pool",
+                        "threads",
+                        "--concurrency",
+                        "1",
+                        "--hostname",
+                        f"a8-{queue}@localhost",
+                        "--loglevel",
+                        "ERROR",
+                        "--without-gossip",
+                        "--without-mingle",
                     ],
                     cwd=root / "backend",
                     env={**os.environ, "QUEUE_ISOLATION_PREFIX": prefix},
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                 )
             )
         for _ in processes:
             assert redis_client.blpop(prefix + "worker-ready", timeout=15)
         for _ in range(50):
             producer.send_task(
-                "test.isolation.queue_probe", args=["directory", 0.03],
+                "test.isolation.queue_probe",
+                args=["directory", 0.03],
                 queue=prefix + "ads-directory",
             )
         producer.send_task(
-            "test.isolation.queue_probe", args=["reporting", 0],
+            "test.isolation.queue_probe",
+            args=["reporting", 0],
             queue=prefix + "ads-reporting",
         )
         assert redis_client.blpop(prefix + "probe:reporting", timeout=3)

@@ -320,3 +320,32 @@ def test_campaign_discovery_uses_local_days_and_all_statuses():
     assert args["dimensions"] == ["campaign_id", "stat_time_day"]
     assert "multi_adv_report_in_utc_time" not in args
     assert args["filtering"][0]["field_name"] == "campaign_status"
+
+
+def test_bc_permission_error_keeps_safe_classification():
+    from contextlib import nullcontext
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    from business_api_client import ApiClient
+
+    from app.integrations.tiktok.official.accounts import OfficialReadRequests
+
+    client = ApiClient()
+    requests = OfficialReadRequests(
+        client,
+        request_scope=lambda *_: nullcontext(),
+        deadline=datetime.now(UTC) + timedelta(seconds=20),
+    )
+
+    def send(_timeout):
+        return client.deserialize(
+            SimpleNamespace(
+                data=b'{"code":40001,"message":"No permission to read this BC report","data":{}}'
+            ),
+            "InlineResponse200",
+        )
+
+    with pytest.raises(DomainError) as caught:
+        requests.invoke("reports.bc", None, send, exact_numbers=True)
+    assert caught.value.code == "report_permission_denied"

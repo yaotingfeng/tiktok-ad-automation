@@ -36,6 +36,7 @@ celery_app.conf.update(
         # starts, so a recovery message can never hit an unknown task/queue.
         "app.modules.ads.tasks",
         "app.modules.reporting.tasks",
+        "app.modules.reporting.job_tasks",
         "app.modules.reporting.export_tasks",
         "app.modules.ad_management.tasks",
         "app.modules.ad_management.submissions",
@@ -57,6 +58,9 @@ celery_app.conf.update(
         "jobs.flush_dispatch": {"queue": "control"},
         "jobs.compact_dispatches": {"queue": "control"},
         "reporting.scan_due": {"queue": "control"},
+        "reporting.plan_due": {"queue": "control"},
+        "reporting.job_step": {"queue": "ads-reporting"},
+        "reporting.cleanup_store": {"queue": "ads-reporting"},
         "ads.sync_step": {"queue": "ads-directory"},
         "reporting.sync_step": {"queue": "ads-reporting"},
         "reporting.export": {"queue": "ads-reporting"},
@@ -161,8 +165,13 @@ celery_app.conf.update(
         },
         # Beat only wakes the local durable-plan scanner.  The task checks the
         # explicit feature flag before touching plans or the provider gateway.
+        "cleanup-report-store": {
+            "task": "reporting.cleanup_store",
+            "schedule": 3600.0,
+            "options": {"queue": "ads-reporting"},
+        },
         "scan-ads-reporting-due": {
-            "task": "reporting.scan_due",
+            "task": "reporting.plan_due",
             "schedule": 30.0,
             "options": {"queue": "control"},
         },
