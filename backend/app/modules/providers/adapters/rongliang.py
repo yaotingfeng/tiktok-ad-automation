@@ -273,12 +273,18 @@ class RongliangClient:
             "GET", "/link/compilations_alias", query={"compilationsId": external_id(compilation_id)}
         )
         if not isinstance(data, dict):
-            return ""
+            raise failure("provider_schema_unsupported")
+        # 后台规则 aliasList[0] || originalTitle（JS 真值判断）：空串视为缺失，
+        # 两者都没有时不能传空别名，否则计划名剧名部分为空
         aliases = data.get("aliasList")
-        if isinstance(aliases, list) and aliases and isinstance(aliases[0], str):
-            return aliases[0]
+        if isinstance(aliases, list) and aliases:
+            first = aliases[0]
+            if isinstance(first, str) and first.strip():
+                return first
         title = data.get("originalTitle")
-        return title if isinstance(title, str) else ""
+        if isinstance(title, str) and title.strip():
+            return title
+        raise failure("provider_schema_unsupported")
 
     def lookup_link(self, drama_id: str, config: JsonDict, cursor: str | None) -> LinkLookupPage:
         normalized = self._validate_config(config, require_episode=True)

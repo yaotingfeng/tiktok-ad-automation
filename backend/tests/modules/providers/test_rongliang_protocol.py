@@ -179,7 +179,8 @@ def test_rongliang_token_expiry_is_stable():
     [
         ({"aliasList": ["罪爱难逃", "备用"], "originalTitle": "Broken Altar"}, "罪爱难逃"),
         ({"aliasList": [], "originalTitle": "Broken Altar"}, "Broken Altar"),
-        ({"aliasList": None}, ""),
+        ({"aliasList": [""], "originalTitle": "Broken Altar"}, "Broken Altar"),
+        ({"aliasList": ["  "], "originalTitle": "Broken Altar"}, "Broken Altar"),
     ],
 )
 def test_rongliang_alias_follows_web_form(payload, expected):
@@ -191,3 +192,17 @@ def test_rongliang_alias_follows_web_form(payload, expected):
     with httpx.Client(transport=httpx.MockTransport(handle)) as http:
         client = RongliangClient(http, token="t")
         assert client.compilations_alias("77") == expected
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{"aliasList": None}, {"aliasList": [""], "originalTitle": ""}, ["x"], None],
+)
+def test_rongliang_alias_missing_raises_instead_of_empty(payload):
+    with httpx.Client(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"code": 0, "data": payload}))
+    ) as http:
+        client = RongliangClient(http, token="t")
+        with pytest.raises(DomainError) as error:
+            client.compilations_alias("77")
+    assert error.value.code == "provider_schema_unsupported"
