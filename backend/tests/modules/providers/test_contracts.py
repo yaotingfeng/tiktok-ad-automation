@@ -198,27 +198,11 @@ def test_generic_receipt_verification_keeps_opaque_identity_and_config():
         verify_receipt(receipt, drama, {"episode_seq": 4})
 
 
-def test_capability_schema_validates_defaults_and_conditional_requirements():
-    schema = LinkConfigSchema(
-        provider_kind="gangganhao",
-        fields=[
-            LinkConfigField(
-                name="payment_template_id", label="支付模板", type="select"
-            )
-        ],
-        defaults={"payment_template_id": ""},
-        required_when={"payment_template_id": {"monetization": ["iap", "mixed"]}},
-        schema_version=1,
-    )
-    assert schema.fields[0].name == "payment_template_id"
+def test_capability_schema_rejects_unknown_field_keys():
     with pytest.raises(ValueError):
-        LinkConfigSchema(
-            provider_kind="duiba",
-            fields=[],
-            defaults={"unknown": 1},
-            required_when={},
-            schema_version=1,
-        )
+        LinkConfigField(name="Bad-Name", label="x", type="integer", source="per_drama")
+    with pytest.raises(ValueError):
+        LinkConfigSchema(provider_kind="duiba", fields=[], required_when={}, schema_version=2)
 
 
 @pytest.mark.parametrize("delivery_mode", ["iaa", "iap", "mixed"])
@@ -227,7 +211,7 @@ def test_gangganhao_capability_marks_payment_template_for_paid_modes(delivery_mo
 
     schema = capabilities_for_kind(
         "gangganhao",
-        SimpleNamespace(channel_config={"delivery_mode": delivery_mode}),
+        SimpleNamespace(channel_config={"delivery_mode": delivery_mode}, link_defaults={}),
     )
     field = next(item for item in schema.fields if item.name == "payment_template_id")
     assert field.required is (delivery_mode in {"iap", "mixed"})

@@ -414,7 +414,7 @@ def test_application_capabilities_require_verified_application_and_return_safe_s
     assert response.status_code == 200
     payload = response.json()
     assert payload["provider_kind"] == "jiashu"
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert payload["defaults"] == {"episode": 1}
     assert payload["fields"][0]["name"] == "episode"
     assert "channel_config" not in payload
