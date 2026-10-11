@@ -1,6 +1,7 @@
 """Tenant provider API. Validation failures never reflect submitted credentials."""
 
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Iterator
+from contextlib import contextmanager
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
@@ -399,6 +400,18 @@ def list_applications(
     )
 
 
+@contextmanager
+def _auto_link_supported() -> Iterator[None]:
+    """版权方类型没有取链契约时统一返回领域错误，而不是 500。"""
+
+    try:
+        yield
+    except ValueError:
+        raise DomainError(
+            "provider_request_invalid", "当前版权方不支持自动取链"
+        ) from None
+
+
 def _verified_application(
     session: Session,
     tenant_id: UUID,
@@ -468,9 +481,10 @@ def patch_application_link_defaults(
     )
     connection = get_connection(session, context=context, connection_id=connection_id)
     app = _verified_application(session, tenant_id, connection, application_id)
-    app.link_defaults = validate_link_values(
-        connection.kind, app, body.link_defaults, target="defaults"
-    )
+    with _auto_link_supported():
+        app.link_defaults = validate_link_values(
+            connection.kind, app, body.link_defaults, target="defaults"
+        )
     session.add(app)
     session.add(
         AuditEvent(
@@ -480,6 +494,7 @@ def patch_application_link_defaults(
             target_id=str(app.id),
         )
     )
-    schema = capabilities_for_kind(connection.kind, app)
+    with _auto_link_supported():
+        schema = capabilities_for_kind(connection.kind, app)
     session.commit()
     return schema

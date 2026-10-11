@@ -466,11 +466,12 @@ def test_application_link_defaults_round_trip(api_client, request_fixture):
     assert capabilities["application_defaults"] == {"episode": 2}
 
 
+@pytest.mark.parametrize("role", ["viewer", "operator"])
 def test_non_manager_cannot_change_application_link_defaults(
-    api_client, request_fixture
+    api_client, request_fixture, role
 ):
     context, connection_id, _ = request_fixture
-    _set_role(context, "viewer")
+    _set_role(context, role)
     response = api_client.patch(
         f"/api/tenants/{context.tenant_id}/providers/connections/{connection_id}"
         "/applications/external-app/link-defaults",
@@ -478,6 +479,26 @@ def test_non_manager_cannot_change_application_link_defaults(
         json={"link_defaults": {"episode": 2}},
     )
     assert response.status_code == 403
+
+
+def test_link_defaults_unsupported_kind_returns_domain_error(
+    api_client, request_fixture
+):
+    from app.modules.providers.models import ProviderConnection
+
+    context, connection_id, _ = request_fixture
+    _set_role(context, "tenant_admin")
+    with Session(engine) as session:
+        session.get(ProviderConnection, connection_id).kind = "other"
+        session.commit()
+    response = api_client.patch(
+        f"/api/tenants/{context.tenant_id}/providers/connections/{connection_id}"
+        "/applications/external-app/link-defaults",
+        headers=auth_headers(context),
+        json={"link_defaults": {"episode": 2}},
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == "provider_request_invalid"
 
 
 def test_verify_api_uses_connection_session_and_returns_only_public_fields(
