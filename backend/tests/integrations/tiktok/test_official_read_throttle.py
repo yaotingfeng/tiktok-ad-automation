@@ -67,3 +67,41 @@ def test_other_http_failures_remain_terminal_response_errors(status):
         _requests().invoke("accounts.bc_asset_get", None, _raise(_http_error(status)))
     assert not isinstance(caught.value, AccountAdmissionDeferred)
     assert caught.value.code == "tiktok_response_error"
+
+
+@pytest.mark.parametrize(
+    "message", ["Too many requests (QPM)", "QPD exceeded", "Requests PER DAY exceeded"]
+)
+def test_business_code_40100_defers_instead_of_failing(message):
+    import json
+
+    from business_api_client import ApiClient
+
+    client = ApiClient()
+    body = json.dumps(
+        {"code": 40100, "message": message, "request_id": "r", "data": {}}
+    )
+    requests = OfficialReadRequests(
+        client, request_scope=_scope, deadline=datetime.now(UTC) + timedelta(seconds=30)
+    )
+    before = datetime.now(UTC)
+    with pytest.raises(AccountAdmissionDeferred) as caught:
+        requests.invoke(
+            "reports.integrated",
+            "adv",
+            lambda _timeout: client.deserialize(SimpleNamespace(data=body), "object"),
+            exact_numbers=True,
+        )
+    after = datetime.now(UTC)
+    if "QPM" in message:
+        assert caught.value.retry_after_ms == 300_000
+    else:
+        # 跨日额度在次日 UTC 零点后留五秒余量，不能误用每分钟的五分钟等待。
+        target = (before + timedelta(days=1)).replace(
+            hour=0, minute=0, second=5, microsecond=0
+        )
+        assert (
+            int((target - after).total_seconds() * 1000)
+            <= caught.value.retry_after_ms
+            <= int((target - before).total_seconds() * 1000)
+        )

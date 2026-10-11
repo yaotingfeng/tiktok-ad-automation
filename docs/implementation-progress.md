@@ -1995,3 +1995,4 @@
 - 偏离：计划 `_num()` 共用 Column 导致 SQLModel 多表继承报错，改为 `Field(sa_type=Numeric)`，仍为无精度限制 numeric、允许 NULL。计划测试口令 `ci-only` 不满足现有八位校验，使用仅本地测试口令 `ci-only-test`；补齐必填 PROJECT_NAME。
 - 已确认任务 6 按规格处理首次无系列 ID 的截断：先查系列，再拆分，不采用计划中的直接失败。
 - 任务 2：按计划实现基础/素材指标映射与账户本地日小时解析；RED 模块不存在，GREEN 报表目录 109 passed；改动 Python 格式检查通过，无业务偏离。任务 1 提交 `b05c21f`。
+- 任务 3：40100 的 QPM/QPD 延后；传输边界以真实 ApiClient.deserialize 配合合成 JSON，RED 3 failed，专项 GREEN 13 passed；集成目录 CI 六分片 679 项，通过 678、跳过 1、失败 0、并行不稳定 0（3.4 分钟）。跳过为现有 material_adapters SDK 不适用用例。Python 格式检查通过。任务 2 提交 `7738fc8`。

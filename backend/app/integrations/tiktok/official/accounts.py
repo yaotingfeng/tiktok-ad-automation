@@ -3,7 +3,7 @@
 import json
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import business_api_client as sdk
@@ -63,6 +63,19 @@ def _strict_sdk_envelope(
             or (raw["code"] == 0 and type(raw.get("data")) is not dict)
         ):
             raise DomainError("tiktok_response_error", "TikTok 返回不支持的数据结构")
+        if raw["code"] == 40100:
+            # 平台应用级限流：请求未被执行。QPM 需等 5 分钟，QPD 需等到次日
+            # UTC 0 点；统一走额度延后，不能计为读取失败。
+            message = str(raw.get("message") or "").lower()
+            if "qpd" in message or "per day" in message:
+                now = datetime.now(UTC)
+                tomorrow = (now + timedelta(days=1)).replace(
+                    hour=0, minute=0, second=5, microsecond=0
+                )
+                raise AccountAdmissionDeferred(
+                    int((tomorrow - now).total_seconds() * 1000)
+                )
+            raise AccountAdmissionDeferred(300_000)
         if exact is not None and raw["code"] == 0:
             # 只对显式选择精确数值的读取保留原始十进制文本，不能从 SDK float 反推。
             exact["data"] = json.loads(response.data, parse_float=str)["data"]
