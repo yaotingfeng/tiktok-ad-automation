@@ -14,13 +14,23 @@ from app.modules.builds import submission_tasks
 from app.modules.builds.execution_models import ExecutionStep, Submission
 from app.modules.tenants.models import TenantMembership
 from tests.acceptance.conftest import acceptance_scenario  # noqa: F401
+from tests.acceptance.scenario import SCALE
 from tests.modules.strategies.test_concurrency import (
     isolated_strategy_database,  # noqa: F401
 )
 
 
+# 一次提交展开的全部执行步骤：每份目标素材、每个系列的 CTA，再加系列/广告组/广告创建。
+# full 规模为 204，compact 为 64；数量随 ACCEPTANCE_SCALE 推导，不写死。
+TOTAL_STEPS = SCALE.target_videos + SCALE.campaigns + SCALE.posts
+# 精简规模不足默认一页（100 步），分页、让出和页预算路径会被跳过；
+# 因此按总步数缩小页大小，保证任一规模下都至少展开 3 页，且两页装不下全部步骤。
+PAGE = (TOTAL_STEPS - 1) // 3
+
+
 @pytest.fixture
-def submitted(acceptance_scenario):
+def submitted(acceptance_scenario, monkeypatch):
+    monkeypatch.setattr(submission_tasks, "PAGE_SIZE", PAGE)
     case = acceptance_scenario
     case.prepare()
     case.freeze()
@@ -81,11 +91,11 @@ def test_one_delivery_commits_multiple_bounded_pages(submitted):
     finally:
         remove()
     done, count, revision, dispatch, error = snapshot(case)
-    assert done, "one delivery must continue beyond its first 100-step page"
-    assert count == 204 and revision == 0 and dispatch == identity and error is None
+    assert done, "one delivery must continue beyond its first page"
+    assert count == TOTAL_STEPS and revision == 0 and dispatch == identity and error is None
     progress = sorted({p[1] for p in pages if p[1]})
     assert len(progress) >= 3
-    assert all(b - a <= 100 for a, b in zip([0, *progress[:-1]], progress, strict=True))
+    assert all(b - a <= PAGE for a, b in zip([0, *progress[:-1]], progress, strict=True))
     deliver(case)
     assert snapshot(case) == (done, count, revision, dispatch, error)
 
@@ -104,10 +114,10 @@ def test_committed_page_survives_worker_loss_and_original_delivery_replay(submit
     finally:
         remove()
     first = snapshot(case)
-    assert 0 < first[1] <= 100 and not first[0]
+    assert 0 < first[1] <= PAGE and not first[0]
     assert first[2:4] == (0, identity)
     deliver(case)
-    assert snapshot(case)[:4] == (True, 204, 0, identity)
+    assert snapshot(case)[:4] == (True, TOTAL_STEPS, 0, identity)
 
 
 def test_permission_is_rechecked_after_each_committed_page(submitted):
@@ -134,7 +144,7 @@ def test_permission_is_rechecked_after_each_committed_page(submitted):
     finally:
         remove()
     state = snapshot(case)
-    assert not state[0] and 0 < state[1] <= 100
+    assert not state[0] and 0 < state[1] <= PAGE
     assert state[2:] == (0, identity, "action_forbidden")
 
 
@@ -159,7 +169,7 @@ def test_page_budget_yields_one_current_successor(submitted, monkeypatch):
             session.add(ordinary)
     deliver(case)
     done, count, revision, dispatch, _ = snapshot(case)
-    assert not done and 100 < count <= 200
+    assert not done and PAGE < count <= 2 * PAGE
     assert revision == 1 and dispatch != identity
     deliver(case)  # Stale original generation cannot append another page.
     assert snapshot(case)[:4] == (done, count, revision, dispatch)
@@ -211,7 +221,7 @@ def test_wall_clock_budget_yields_after_the_current_committed_page(
     monkeypatch.setattr(submission_tasks, "monotonic", lambda: next(ticks))
     deliver(case)
     done, count, revision, dispatch, _ = snapshot(case)
-    assert not done and 0 < count <= 100
+    assert not done and 0 < count <= PAGE
     assert revision == 1 and dispatch != identity
 
 
@@ -229,7 +239,7 @@ def test_other_tenant_due_expansion_gets_a_yield_after_one_page(submitted):
         )
     deliver(case)
     done, count, revision, dispatch, _ = snapshot(case)
-    assert not done and 0 < count <= 100
+    assert not done and 0 < count <= PAGE
     assert revision == 1 and dispatch != identity
 
 
