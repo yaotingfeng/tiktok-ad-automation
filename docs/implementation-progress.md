@@ -1985,3 +1985,12 @@
 - 行为变化：网眼推广名称由网眼后台生成，不再由本系统传入；网眼创建超时后按同参数回查，恰好 1 条链接则采用、0 条则重建、多条转人工；容量剧集固定取第一项，别名自动取；兑吧卡点集、刚刚好免费集数按剧默认值取；刚刚好支付模板随连接验证刷新；修复候选手动选择后没有进入 detail 阶段的缺陷。
 - 验证（专用库 + Redis，对照基线 `97838de`）：`ruff check`、`ty check` 通过；mypy 185 个错误与基线一致、无新增；`ruff format --check` 77 个文件与基线同一清单。前端 `bun run build` 通过；playwright workspace 项目 486 通过，chromium 项目因无后端（ECONNREFUSED 127.0.0.1:8000）未运行。后端 3 组并行全量：4538 通过、87 失败，全部在 `tests/modules/materials`，未设 `OBJECT_STORAGE_PROVIDER=s3` 的本机 `.env` 触发（与基线同样失败）；设置 s3 占位变量后素材模块重跑 1278 通过、5 跳过、1 失败（`test_repair_query_plan`，膨胀的测试库统计漂移，全新库通过，基线同库亦非本分支改动）。
 - 未在真实版权方后台联调；仅本地验证，未部署，未调用真实 TikTok。
+
+
+## 2026-10-12 报表同步重做（任务 1–14，本地实施）
+
+- 基准 main `747e0b3`，用户批准 detached worktree，全部验收后合并；不部署、不调用真实 TikTok。
+- 任务 1：新增十张报表事实/调度表、月分区工具与 0023 迁移。实际迁移 head 为 `0022_provider_link_defaults`，down_revision 与计划一致。
+- TDD：缺少 partitions 模块时失败；实现后 `pytest -q -p no:cacheprovider tests/modules/reporting`：104 passed；五个改动 Python 文件 ruff format --check 通过。
+- 偏离：计划 `_num()` 共用 Column 导致 SQLModel 多表继承报错，改为 `Field(sa_type=Numeric)`，仍为无精度限制 numeric、允许 NULL。计划测试口令 `ci-only` 不满足现有八位校验，使用仅本地测试口令 `ci-only-test`；补齐必填 PROJECT_NAME。
+- 已确认任务 6 按规格处理首次无系列 ID 的截断：先查系列，再拆分，不采用计划中的直接失败。

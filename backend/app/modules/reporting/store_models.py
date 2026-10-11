@@ -1,0 +1,232 @@
+# backend/app/modules/reporting/store_models.py
+"""报表事实按“租户 + 广告账户”存放，不挂在 BC 下；BC 可见性由当前授权决定。
+
+一行一个对象一个时间桶，指标各占一列；平台 '-' 存 NULL，金额保留平台精度。
+"""
+
+from datetime import UTC, date, datetime
+from decimal import Decimal
+from typing import Any
+from uuid import UUID, uuid4
+
+from sqlalchemy import CheckConstraint, Column, Index, Numeric, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlmodel import Field, SQLModel
+
+from app.modules.ads.models import AwareDateTime
+
+# 所有日/小时事实共享的指标列；顺序即 API 与导出列序。
+METRIC_COLUMNS = (
+    "spend",
+    "impressions",
+    "clicks",
+    "ad_impression_events",
+    "revenue_d0",
+    "revenue_d3",
+    "revenue_d7",
+    "revenue_d14",
+    "revenue_d30",
+    "revenue_total",
+)
+
+
+def _num() -> Any:
+    return Field(default=None, sa_type=Numeric, nullable=True)
+
+
+class _Metrics(SQLModel):
+    spend: Decimal | None = _num()
+    impressions: Decimal | None = _num()
+    clicks: Decimal | None = _num()
+    ad_impression_events: Decimal | None = _num()
+    revenue_d0: Decimal | None = _num()
+    revenue_d3: Decimal | None = _num()
+    revenue_d7: Decimal | None = _num()
+    revenue_d14: Decimal | None = _num()
+    revenue_d30: Decimal | None = _num()
+    revenue_total: Decimal | None = _num()
+
+
+class _Fact(_Metrics):
+    tenant_id: UUID = Field(primary_key=True)
+    advertiser_id: str = Field(primary_key=True, max_length=128)
+    currency: str = Field(max_length=16)
+    timezone: str = Field(max_length=64)
+    fetched_at: datetime = Field(sa_type=AwareDateTime)
+    sync_job_id: UUID
+
+
+class AdReportDay(_Fact, table=True):
+    """唯一明细来源：一条广告（ad_id_v2）一天；按月分区（迁移中声明）。"""
+
+    __tablename__ = "ad_report_day"
+    stat_date: date = Field(primary_key=True)
+    ad_id: str = Field(primary_key=True, max_length=64)
+    campaign_id: str = Field(max_length=64)
+    adgroup_id: str = Field(max_length=64)
+    campaign_automation_type: str | None = Field(default=None, max_length=64)
+    ad_name: str | None = None
+    campaign_name: str | None = None
+    adgroup_name: str | None = None
+
+
+class CampaignReportDay(_Fact, table=True):
+    """由 ad_report_day 在同一事务汇总写入的查询加速表，不独立拉取。"""
+
+    __tablename__ = "campaign_report_day"
+    stat_date: date = Field(primary_key=True)
+    campaign_id: str = Field(primary_key=True, max_length=64)
+    campaign_name: str | None = None
+
+
+class CampaignReportDayUtc(_Fact, table=True):
+    """UTC 自然日系列数据，供日报与跨账户 UTC 汇总。"""
+
+    __tablename__ = "campaign_report_day_utc"
+    stat_date: date = Field(primary_key=True)
+    campaign_id: str = Field(primary_key=True, max_length=64)
+
+
+class CampaignReportHour(_Fact, table=True):
+    """系列小时数据，只保留最近 30 天；stat_hour 为该账户本地整点对应的 UTC 时刻。"""
+
+    __tablename__ = "campaign_report_hour"
+    stat_hour: datetime = Field(primary_key=True, sa_type=AwareDateTime)
+    campaign_id: str = Field(primary_key=True, max_length=64)
+
+
+class MaterialReportDay(_Fact, table=True):
+    """Smart+ 素材分时报表：主素材一天；按月分区。素材无 D3、D30（恒为 NULL）。"""
+
+    __tablename__ = "material_report_day"
+    stat_date: date = Field(primary_key=True)
+    main_material_id: str = Field(primary_key=True, max_length=64)
+    main_material_type: str = Field(max_length=64)
+    main_material_name: str | None = None
+
+
+class AccountReconciliationDay(SQLModel, table=True):
+    """账户报表原值与广告汇总值的每日对账，只用于提示，不进入展示。"""
+
+    __tablename__ = "account_reconciliation_day"
+    tenant_id: UUID = Field(primary_key=True)
+    advertiser_id: str = Field(primary_key=True, max_length=128)
+    stat_date: date = Field(primary_key=True)
+    account_spend: Decimal | None = _num()
+    ad_sum_spend: Decimal | None = _num()
+    account_revenue_total: Decimal | None = _num()
+    ad_sum_revenue_total: Decimal | None = _num()
+    checked_at: datetime = Field(sa_type=AwareDateTime)
+
+
+REPORT_KINDS = (
+    "ad_day",
+    "campaign_hour",
+    "campaign_day_utc",
+    "material_day",
+    "account_day",
+)
+
+
+class ReportSyncState(SQLModel, table=True):
+    """每个账户、每种报表、每一天的发布状态；页面据此显示更新时间与缺口。"""
+
+    __tablename__ = "report_sync_state"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('COMPLETE','STALE','FAILED')",
+            name="ck_report_sync_state_status",
+        ),
+    )
+    tenant_id: UUID = Field(primary_key=True)
+    advertiser_id: str = Field(primary_key=True, max_length=128)
+    report_kind: str = Field(primary_key=True, max_length=32)
+    stat_date: date = Field(primary_key=True)
+    status: str = Field(max_length=16)
+    row_count: int = 0
+    last_success_at: datetime | None = Field(default=None, sa_type=AwareDateTime)
+    error_code: str | None = Field(default=None, max_length=128)
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=AwareDateTime
+    )
+
+
+class ReportSyncJob(SQLModel, table=True):
+    """一次报表请求（含全部分页）一行；领取有租约，重复投递按 job_key 幂等。"""
+
+    __tablename__ = "report_sync_job"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('QUEUED','RUNNING','WAITING','COMPLETE','FAILED','CANCELLED')",
+            name="ck_report_sync_job_status",
+        ),
+        Index("ix_report_sync_job_due", "status", "priority", "due_at"),
+        Index(
+            "uq_report_sync_job_active_key",
+            "job_key",
+            unique=True,
+            postgresql_where="status IN ('QUEUED','RUNNING','WAITING')",
+        ),
+    )
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    tenant_id: UUID
+    bc_id: str = Field(max_length=128)
+    kind: str = Field(max_length=32)
+    priority: int
+    status: str = Field(default="QUEUED", max_length=16)
+    advertiser_ids: list[str] = Field(sa_column=Column(JSONB, nullable=False))
+    campaign_ids: list[str] = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False)
+    )
+    start_date: date
+    end_date: date
+    job_key: str = Field(max_length=128)
+    frozen_route: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
+    actor_id: UUID
+    due_at: datetime = Field(sa_type=AwareDateTime)
+    claim_token: UUID | None = None
+    claimed_until: datetime | None = Field(default=None, sa_type=AwareDateTime)
+    attempts: int = 0
+    error_code: str | None = Field(default=None, max_length=128)
+    request_count: int = 0
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=AwareDateTime
+    )
+    finished_at: datetime | None = Field(default=None, sa_type=AwareDateTime)
+
+
+class AdSyncBc(SQLModel, table=True):
+    """每个已绑定 API 连接的 BC 一行：冻结路由、后台身份与各档位下次执行时间。"""
+
+    __tablename__ = "ad_sync_bc"
+    tenant_id: UUID = Field(primary_key=True)
+    bc_id: str = Field(primary_key=True, max_length=128)
+    frozen_route: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
+    actor_id: UUID
+    enabled: bool = True
+    disabled_reason: str | None = Field(default=None, max_length=128)
+    # None=未检查；False=授权用户无 BC 报表权限，退回账户级报表筛选。
+    bc_report_supported: bool | None = None
+    next_hot_at: datetime = Field(sa_type=AwareDateTime)
+    next_material_at: datetime = Field(sa_type=AwareDateTime)
+    next_directory_at: datetime = Field(sa_type=AwareDateTime)
+    next_daily_at: datetime = Field(sa_type=AwareDateTime)
+    last_active_advertiser_ids: list[str] = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False)
+    )
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=AwareDateTime
+    )
+
+
+class AdSyncAccount(SQLModel, table=True):
+    """账户同步归属：一个账户只归一个 BC 计划拉取，避免多 BC 重复调用。"""
+
+    __tablename__ = "ad_sync_account"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "advertiser_id", name="uq_ad_sync_account"),
+    )
+    tenant_id: UUID = Field(primary_key=True)
+    advertiser_id: str = Field(primary_key=True, max_length=128)
+    owner_bc_id: str = Field(max_length=128)
+    history_planned_at: datetime | None = Field(default=None, sa_type=AwareDateTime)
