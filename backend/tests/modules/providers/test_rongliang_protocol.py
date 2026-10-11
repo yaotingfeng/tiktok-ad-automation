@@ -172,3 +172,22 @@ def test_rongliang_token_expiry_is_stable():
         with pytest.raises(DomainError) as error:
             client.discover_applications()
     assert error.value.code == "provider_session_expired"
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"aliasList": ["罪爱难逃", "备用"], "originalTitle": "Broken Altar"}, "罪爱难逃"),
+        ({"aliasList": [], "originalTitle": "Broken Altar"}, "Broken Altar"),
+        ({"aliasList": None}, ""),
+    ],
+)
+def test_rongliang_alias_follows_web_form(payload, expected):
+    def handle(request):
+        assert request.url.path.endswith("/link/compilations_alias")
+        assert request.url.params["compilationsId"] == "77"
+        return httpx.Response(200, json={"code": 0, "data": payload})
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http:
+        client = RongliangClient(http, token="t")
+        assert client.compilations_alias("77") == expected

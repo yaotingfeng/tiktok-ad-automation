@@ -1231,24 +1231,22 @@ def _run_rongliang_item(
         return
 
     if stage == "rl_detail":
-        options = client.episode_options(work["drama"]["external_drama_id"])
+        compilation_id = work["drama"]["external_drama_id"]
+        options = client.episode_options(compilation_id)
         if not options:
             raise _error("provider_request_invalid")
-        wanted = config.get("episodic_drama_id")
-        episode = next(
-            (row for row in options if wanted is not None and str(row.get("episodicDramaId")) == str(wanted)),
-            options[0],
-        )
-        episode_id = episode.get("episodicDramaId")
+        # 后台网页固定选剧集下拉第一项，不开放其他起播集；这里保持一致。
+        episode_id = options[0].get("episodicDramaId")
         if episode_id is None:
             raise _error("provider_schema_unsupported")
         effective = dict(config)
         effective.update(
-            client_id=config.get("client_id", application_id),
+            client_id=application_id,
             episodic_drama_id=episode_id,
-            platform=config.get("platform", 1),
-            delivery_type=config.get("delivery_type", 1),
-            link_type=config.get("link_type", 2),
+            platform=1,
+            delivery_type=1,
+            link_type=2,
+            alias=client.compilations_alias(compilation_id),
         )
         work["rongliang_config"] = effective
         work["stage"] = "lookup"

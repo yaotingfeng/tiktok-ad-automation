@@ -266,6 +266,20 @@ class RongliangClient:
             raise failure("provider_schema_unsupported")
         return data
 
+    def compilations_alias(self, compilation_id: str) -> str:
+        """与后台新增链接表单一致：取第一个别名，没有别名用原名；别名决定计划名剧名部分。"""
+
+        data = self._request(
+            "GET", "/link/compilations_alias", query={"compilationsId": external_id(compilation_id)}
+        )
+        if not isinstance(data, dict):
+            return ""
+        aliases = data.get("aliasList")
+        if isinstance(aliases, list) and aliases and isinstance(aliases[0], str):
+            return aliases[0]
+        title = data.get("originalTitle")
+        return title if isinstance(title, str) else ""
+
     def lookup_link(self, drama_id: str, config: JsonDict, cursor: str | None) -> LinkLookupPage:
         normalized = self._validate_config(config, require_episode=True)
         page = positive(cursor or 1)

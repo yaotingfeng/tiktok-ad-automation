@@ -191,7 +191,17 @@ class ProviderRemote:
         if path.endswith("/episodic_dramas"):
             return httpx.Response(
                 200,
-                json={"code": 0, "data": [{"episodicDramaId": 991, "title": "1"}]},
+                json={
+                    "code": 0,
+                    "data": [
+                        {"episodicDramaId": 991, "title": "1"},
+                        {"episodicDramaId": 992, "title": "2"},
+                    ],
+                },
+            )
+        if path.endswith("/link/compilations_alias"):
+            return httpx.Response(
+                200, json={"code": 0, "data": {"aliasList": ["罪爱难逃"], "originalTitle": "Moon"}}
             )
         if path.endswith("/link/page"):
             if self.created or request.url.params.get("batchId") == "R-1":
@@ -213,6 +223,9 @@ class ProviderRemote:
                 json={"code": 0, "data": {"records": rows, "total": len(rows)}},
             )
         if path.endswith("/link/create"):
+            body = json.loads(request.content)
+            assert body["episodicDramaId"] == 991
+            assert body["compilationsAlias"] == "罪爱难逃"
             self.created = True
             return httpx.Response(200, json={"code": 0, "data": True})
         if path.endswith("/link/url"):
@@ -222,7 +235,7 @@ class ProviderRemote:
                     "code": 0,
                     "data": {
                         "deepLink": "https://www.tiktok.com/minis/rl?batchId=R-1",
-                        "planName": "Moon",
+                        "planName": "罪爱难逃",
                         "adGroupName": "Moon Ads",
                     },
                 },
