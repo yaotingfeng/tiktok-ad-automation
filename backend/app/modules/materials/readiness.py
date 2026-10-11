@@ -98,7 +98,11 @@ def matching_target_assets(
     advertiser_id: str,
     route: FrozenTikTokRoute,
 ) -> dict[str, AccountMaterial]:
-    """只读查询同内容、同实际账户及当前连接的合法副本，供提交复用。"""
+    """只读查询同内容、同实际账户的已确认副本，供提交复用。
+
+    VID 属于目标账户，后续核查和封面都经当前冻结连接发出；因此只要求当前
+    连接对该账户可读，不要求副本由当前连接上传（历史上传连接可能已失效）。
+    """
     keys = {
         content_key(material) for material in materials if material.digest_verified_at
     }
@@ -108,7 +112,7 @@ def matching_target_assets(
         usable_grants(tenant_id=context.tenant_id, bc_id=route.bc_id, action="read")
         .where(
             BCAccountAccess.advertiser_id == AccountMaterial.advertiser_id,
-            BCAccountAccess.connection_id == AccountMaterial.connection_id,
+            BCAccountAccess.connection_id == route.connection_id,
         )
         .exists()
     )
@@ -123,7 +127,6 @@ def matching_target_assets(
             AccountMaterial.tenant_id == context.tenant_id,
             AccountMaterial.bc_id == route.bc_id,
             AccountMaterial.advertiser_id == advertiser_id,
-            AccountMaterial.connection_id == route.connection_id,
             AccountMaterial.status == "available",
             col(AccountMaterial.verified_at).is_not(None),
             material_content_key_expression().in_(keys),

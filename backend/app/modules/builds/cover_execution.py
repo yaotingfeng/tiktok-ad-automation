@@ -101,8 +101,8 @@ def retry_ad_covers(
             AccountMaterial,
             (col(AccountMaterial.id) == MaterialCoverJob.asset_id)
             & (col(AccountMaterial.tenant_id) == MaterialCoverJob.tenant_id)
-            & (col(AccountMaterial.video_id) == MaterialCoverJob.video_id)
-            & (col(AccountMaterial.connection_id) == MaterialCoverJob.connection_id),
+            # 封面任务的连接即本次搭建连接；映射的历史上传连接不参与匹配。
+            & (col(AccountMaterial.video_id) == MaterialCoverJob.video_id),
         )
         .where(
             MaterialCoverJob.tenant_id == context.tenant_id,
@@ -163,7 +163,8 @@ def validate_ad_assets(
             MaterialCoverJob,
             (col(MaterialCoverJob.tenant_id) == AccountMaterial.tenant_id)
             & (col(MaterialCoverJob.asset_id) == AccountMaterial.id)
-            & (col(MaterialCoverJob.connection_id) == AccountMaterial.connection_id)
+            # 同一映射同一 VID 只有一个当前代封面任务；它可能由与历史上传
+            # 不同的连接发出，最终仍以 READY 正证据与映射图片一致为准。
             & (col(MaterialCoverJob.video_id) == AccountMaterial.video_id)
             # 一个视频保留多代历史，但最终创意只能使用当前代正证据。
             & col(MaterialCoverJob.superseded_by_id).is_(None),
@@ -325,7 +326,6 @@ def recover_cover_results(*, database_engine: Any, limit: int = 100) -> int:
                 and result.mapping
                 and result.mapping.image_id
                 and result.mapping.video_id == job.video_id
-                and result.mapping.connection_id == unit.connection_id
             ):
                 step.status, step.phase, step.error_code = "SUCCEEDED", "DONE", None
                 step.resolved = {

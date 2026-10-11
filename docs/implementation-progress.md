@@ -1955,3 +1955,13 @@
 - 前端：新增 `DraftSchedule` 卡片挂在 `IdentityTargetPicker` 之后，单独“保存排期”；移除 `BuildInputPage` 的排期卡片与校验；重新生成 API client。
 - 验证：专用库 `tkada_delivery_step_20261011_test` + Redis DB9，`pytest test_delivery/test_targeting/test_drafts/test_expansion_delivery/test_api/test_previews` 65 passed；`playwright build-preparation.spec.ts --project=workspace` 75 passed（新增排期位置与单独保存用例）；`bun run build`、biome、ruff 通过。未部署、未调用真实 TikTok。
 - 跟进（用户要求去掉单独按钮）：排期不再单独“保存排期”，点击“生成搭建预览”时若排期有变化，前端先调用 `PATCH .../delivery` 再按返回的新 revision 生成预览；未变化则不额外请求。`save_delivery` 改为把当前 revision 已完成的准备记录（phase=done、READY、沿用 provider_task_id）原样迁到新 revision，草稿保持 READY，不再重核场景，因此可立即生成预览；保存结果未知时沿用通用修改回执回查。验证：`test_delivery.py` 2 passed（含保存后立即生成带新排期的预览），`build-preparation.spec.ts` 77 passed，`bun run build`、biome、ruff、mypy 通过。
+
+## 2026-10-11：目标素材不再绑定历史上传连接
+
+- 用户排查连接重叠（多条连接/MCP 与 API 同时覆盖同一账户）的影响。只读核查结论：报表与广告目录同步按 BC 默认连接冻结、按账户建计划，非默认连接的旧计划会被停用，**不存在按连接重复拉取**；`account_material` 按 (BC, 素材, 账户) 唯一，**数据不会拆成多份**。
+- 真实缺陷：多处把"映射记录的历史上传连接仍有效"当作素材可用条件，而 VID 属于广告账户。连接 A 上传、A 停用/重新授权后改用连接 B 搭建时：封面准备因 `_mapping` 比较 `connection_id` 报 `cover_video_changed`；同内容另一内部素材的副本不被复用而重复上传；搭建规划和依赖唤醒同样只认当前连接上传的映射。
+- 修复（经用户确认方案）：`materials/covers.py` `_mapping` 身份去掉连接比较，封面任务按自己冻结的连接核验权限与上传；`materials/readiness.py` 同内容复用改为"当前路由连接对该账户可读"，不要求副本由当前连接上传；`builds/cover_execution.py` 封面任务匹配、发送前最终校验和封面结果落定不再要求封面连接等于映射/单元连接（仍以 READY 正证据与映射图片一致为准）；`builds/material_execution.py`、`builds/dependency_waits.py` 已有目标映射即跳过传输规划，不区分上传连接。`account_material.connection_id` 保留为上传留档，不改写；来源侧（跨账户分享来源须由其上传连接可读）本轮未改。
+- 新增 `tests/modules/materials/test_cross_connection_targets.py`（3 项：他连接上传后当前连接准备封面、同内容他连接副本复用、当前连接无权限仍阻断）；`test_frozen_material_routes.py::test_cover_inherits_target_route_without_relabeling_uploaded_video` 原断言旧行为，改为断言封面继承当前目标连接、不改写映射上传连接、在途任务不被另一连接改道。
+- 验证（本地 PostgreSQL 17 + Redis，新建专用库 `tkada_shared_material_20261011_test`、`tkada_shared_material_builds_20261011_test`）：素材模块 1278 通过、5 跳过、1 失败（`test_repair_query_plan` 查询计划统计漂移，单独重跑通过；该用例本轮由 `ed133a7` 另行调整）；搭建+广告管理在全新库 934 通过、3 跳过。同环境 `HEAD` 基线副本搭建+广告管理为 932 通过、2 失败（`test_window_capacity`、`test_management_queue_is_registered_with_one_slot`），改动版均通过，判定与本轮无关。Ruff、compileall、`git diff --check` 通过。
+- 本地测试需在环境中显式设置 `OBJECT_STORAGE_PROVIDER=s3` 及占位 S3 变量：本机 `.env` 为 `r2` 时旧上传入口返回 `ingest_api_required`，约 85 项素材用例因环境而非代码失败。曾在复用旧库连续运行时观察到 `scope_basis` 查询长时间不返回，全新库基线与改动版均未复现。
+- 仅本地验证；未部署，未调用真实 TikTok/MCP/R2，无广告写入。

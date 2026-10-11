@@ -164,13 +164,13 @@ def plan_material_slice(
             col(ExecutionStep.remote_id).is_(None),
             col(ExecutionStep.lease_token).is_(None),
         )
-        # 已有可用映射无需进入传输规划，仍由正常步骤准备封面。
+        # 已有可用映射无需进入传输规划，仍由正常步骤准备封面。映射属于目标
+        # 账户，可能由其他连接上传；正常步骤仍按本次冻结连接核验权限。
         available = select(
             AccountMaterial.material_id, AccountMaterial.advertiser_id
         ).where(
             AccountMaterial.tenant_id == context.tenant_id,
             AccountMaterial.bc_id == submission.bc_id,
-            AccountMaterial.connection_id == route.connection_id,
             AccountMaterial.status == "available",
             col(AccountMaterial.verified_at).is_not(None),
         )

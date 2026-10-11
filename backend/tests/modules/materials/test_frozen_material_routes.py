@@ -141,6 +141,8 @@ def test_cover_inherits_target_route_without_relabeling_uploaded_video(
     from app.modules.materials.models import AccountMaterial
     from tests.modules.materials.test_readiness import asset
 
+    # 封面继承搭建冻结的目标连接（第二条），不要求与视频历史上传连接相同；
+    # 映射上的上传连接只是留档，不被改写。
     with Session(engine) as db, db.begin():
         actual = asset(db, source_env, "actual-account")
         identity = actual.id
@@ -151,25 +153,6 @@ def test_cover_inherits_target_route_without_relabeling_uploaded_video(
             bc_id=source_env["bc_id"],
             connection_id=second,
         )
-        with pytest.raises(DomainError) as error:
-            ensure_cover(
-                db,
-                context=source_env["context"],
-                bc_id=source_env["bc_id"],
-                material_id=source_env["material_id"],
-                advertiser_id="actual-account",
-                task_key=f"new:{uuid4()}",
-                route=route,
-            )
-        assert error.value.code == "cover_video_changed"
-        assert not db.exec(select(MaterialCoverJob)).all()
-    with Session(engine) as db, db.begin():
-        old_route = freeze_route(
-            db,
-            context=source_env["context"],
-            bc_id=source_env["bc_id"],
-            connection_id=source_env["connection_id"],
-        )
         result = ensure_cover(
             db,
             context=source_env["context"],
@@ -177,9 +160,17 @@ def test_cover_inherits_target_route_without_relabeling_uploaded_video(
             material_id=source_env["material_id"],
             advertiser_id="actual-account",
             task_key=f"new:{uuid4()}",
-            route=old_route,
+            route=route,
         )
         assert result.state == "queued"
+    # 同一 VID 已有在途封面任务时，另一条连接不能另起或改道该任务。
+    with Session(engine) as db, db.begin():
+        old_route = freeze_route(
+            db,
+            context=source_env["context"],
+            bc_id=source_env["bc_id"],
+            connection_id=source_env["connection_id"],
+        )
         with pytest.raises(DomainError) as error:
             ensure_cover(
                 db,
@@ -188,7 +179,7 @@ def test_cover_inherits_target_route_without_relabeling_uploaded_video(
                 material_id=source_env["material_id"],
                 advertiser_id="actual-account",
                 task_key=f"new:{uuid4()}",
-                route=route,
+                route=old_route,
             )
         assert error.value.code == "frozen_route_changed"
         assert (
@@ -198,7 +189,7 @@ def test_cover_inherits_target_route_without_relabeling_uploaded_video(
         jobs = db.exec(
             select(MaterialCoverJob).where(MaterialCoverJob.asset_id == identity)
         ).all()
-        assert len(jobs) == 1 and jobs[0].connection_id == source_env["connection_id"]
+        assert len(jobs) == 1 and jobs[0].connection_id == second
     assert wire[0] == []
 
 

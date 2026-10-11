@@ -72,7 +72,7 @@ def wake_material_dependencies(*, database_engine: Any, limit: int = 100) -> int
             AccountMaterial.bc_id == ExecutionStep.bc_id,
             AccountMaterial.material_id == ExecutionStep.material_id,
             AccountMaterial.advertiser_id == BuildUnit.advertiser_id,
-            AccountMaterial.connection_id == BuildUnit.connection_id,
+            # 与就绪判断一致：目标映射不区分历史上传连接，唤醒后按单元连接核验。
             AccountMaterial.status == "available",
             col(AccountMaterial.verified_at).is_not(None),
         )

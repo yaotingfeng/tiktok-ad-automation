@@ -58,6 +58,9 @@ def _now() -> datetime:
 
 def _mapping(session: Session, job: MaterialCoverJob) -> AccountMaterial | None:
     asset = session.get(AccountMaterial, job.asset_id, populate_existing=True)
+    # VID 属于目标账户本身：封面任务按自己冻结的连接核验权限并上传，
+    # 映射上的历史上传连接只是留档，不参与身份比较。同一 VID 即同一平台
+    # 视频，封面依附于 VID；视频换代时 video_id 变化，迟到回执仍会被拦下。
     if (
         asset
         and (
@@ -65,7 +68,6 @@ def _mapping(session: Session, job: MaterialCoverJob) -> AccountMaterial | None:
             asset.bc_id,
             asset.material_id,
             asset.advertiser_id,
-            asset.connection_id,
             asset.video_id,
             asset.status,
         )
@@ -74,7 +76,6 @@ def _mapping(session: Session, job: MaterialCoverJob) -> AccountMaterial | None:
             job.bc_id,
             job.material_id,
             job.advertiser_id,
-            job.connection_id,
             job.video_id,
             "available",
         )
