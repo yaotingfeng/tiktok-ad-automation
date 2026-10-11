@@ -26,6 +26,7 @@ from app.modules.builds.preview_schemas import (
 )
 from app.modules.builds.schemas import (
     CreateDraftRequest,
+    DeliveryChange,
     DraftDramaPublic,
     DraftGroupEditRequest,
     DraftInputPublic,
@@ -617,5 +618,23 @@ def update_targeting(
         session, actor_id=user.id, tenant_id=tenant_id, action="build"
     )
     revision = save_targeting(session, context=context, draft_id=draft_id, body=body)
+    session.commit()
+    return DraftSaved(draft_id=draft_id, revision=revision)
+
+
+@router.patch("/build-drafts/{draft_id}/delivery", response_model=DraftSaved)
+def update_delivery(
+    tenant_id: UUID,
+    draft_id: UUID,
+    body: DeliveryChange,
+    session: SessionDep,
+    user: CurrentUser,
+) -> DraftSaved:
+    from .delivery_service import save_delivery
+
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="build"
+    )
+    revision = save_delivery(session, context=context, draft_id=draft_id, body=body)
     session.commit()
     return DraftSaved(draft_id=draft_id, revision=revision)

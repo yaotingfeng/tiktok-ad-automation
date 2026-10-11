@@ -2371,5 +2371,48 @@ test("预览展示冻结定向，而非当前策略配置", async ({ page }) => 
   await expect(
     page.getByText(/国家：美国.*语言：英语.*年龄：25–34 岁.*性别：女性/),
   ).toBeVisible()
-  await expect(page.getByText(/预算策略：组预算；竞价策略：最高价值/)).toBeVisible()
+  await expect(
+    page.getByText(/预算策略：组预算；竞价策略：最高价值/),
+  ).toBeVisible()
+})
+
+test("投放排期在第二步投放身份之后设置，单独保存不重新提交输入", async ({
+  page,
+}) => {
+  const api = await buildsBoundary(page)
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  const identity = page.getByText("投放身份", { exact: true }).first()
+  const schedule = page.getByText("投放排期", { exact: true })
+  await expect(schedule).toBeVisible()
+  const identityBox = await identity.boundingBox()
+  const scheduleBox = await schedule.boundingBox()
+  expect(scheduleBox!.y).toBeGreaterThan(identityBox!.y)
+  const save = page.getByRole("button", { name: "保存排期", exact: true })
+  await expect(save).toBeDisabled()
+  await page.getByLabel("指定开始和结束时间").check()
+  await page.getByLabel("开始时间", { exact: true }).fill("2026-11-01T08:00")
+  await page.getByLabel("结束时间", { exact: true }).fill("2026-11-01T07:00")
+  await save.click()
+  await expect(page.getByText("结束时间必须晚于开始时间。")).toBeVisible()
+  await page.getByLabel("结束时间", { exact: true }).fill("2026-11-08T08:00")
+  await save.click()
+  await expect
+    .poll(() => api.requests.filter((r) => r.path.endsWith("/delivery")).length)
+    .toBe(1)
+  const sent = api.requests.find((r) => r.path.endsWith("/delivery"))!
+  expect(sent.body.expected_revision).toBe(1)
+  expect(sent.body.delivery_config.schedule_mode).toBe("START_END")
+  expect(sent.body.delivery_config.schedule_start_time).toMatch(
+    /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/,
+  )
+  expect(
+    api.requests.filter(
+      (r) => r.method === "PATCH" && r.path.endsWith(`/build-drafts/${D}`),
+    ),
+  ).toHaveLength(0)
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}&edit=true`)
+  await expect(
+    page.getByRole("button", { name: "解析并准备", exact: true }),
+  ).toBeVisible()
+  await expect(page.getByText("投放排期", { exact: true })).toHaveCount(0)
 })

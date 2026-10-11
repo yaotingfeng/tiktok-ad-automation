@@ -113,6 +113,11 @@ export async function buildsBoundary(
     execution_connection_id: options.executionConnectionId ?? null,
     application_id: "app-external-001",
     link_config: {},
+    delivery_config: {
+      schedule_mode: "IMMEDIATE",
+      schedule_start_time: null,
+      schedule_end_time: null,
+    } as any,
     input_counts: {
       drama: { ready: originals.drama.length },
       account: { ready: 3 },
@@ -432,6 +437,14 @@ export async function buildsBoundary(
     if (path.endsWith("/candidate")) {
       candidateSelected = true
       return reply({ task_id: P }, 202)
+    }
+    if (path.endsWith(`/build-drafts/${D}/delivery`) && method === "PATCH") {
+      summary.delivery_config = body.delivery_config
+      summary.revision++
+      preview.status = "OBSOLETE"
+      const result = { draft_id: D, revision: summary.revision }
+      mutations.set(body.request_id, result)
+      return reply(result)
     }
     if (path.endsWith(`/build-drafts/${D}/targeting`)) {
       if (method === "PATCH") {

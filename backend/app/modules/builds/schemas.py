@@ -73,7 +73,6 @@ class CreateDraftRequest(BaseModel):
     drama_lines: list[InputText] = Field(max_length=1000)
     account_lines: list[InputText] = Field(max_length=100_000)
     link_config: dict[str, Any] = Field(default_factory=dict)
-    delivery_config: DeliveryConfig = Field(default_factory=DeliveryConfig)
 
 
 class PatchDraftRequest(BaseModel):
@@ -89,7 +88,15 @@ class PatchDraftRequest(BaseModel):
     drama_lines: list[InputText] | None = Field(default=None, max_length=1000)
     account_lines: list[InputText] | None = Field(default=None, max_length=100_000)
     link_config: dict[str, Any] | None = None
-    delivery_config: DeliveryConfig | None = None
+
+
+class DeliveryChange(BaseModel):
+    """第二步单独保存投放排期，不走会清空准备结果的通用草稿更新。"""
+
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    expected_revision: int = Field(gt=0, strict=True)
+    delivery_config: DeliveryConfig
 
 
 class DraftSaved(BaseModel):

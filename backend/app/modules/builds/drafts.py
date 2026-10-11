@@ -43,7 +43,6 @@ from app.modules.builds.scene_job_models import (
     SceneJob,
 )
 from app.modules.builds.scene_jobs import ensure_scene_preparation
-from app.modules.builds.schemas import DeliveryConfig
 from app.modules.materials.content_identity import (
     content_key,
     material_content_key_expression,
@@ -124,7 +123,6 @@ def _check_intent(
     drama_lines: list[str],
     account_lines: list[str],
     link_config: dict[str, Any],
-    delivery_config: dict[str, Any] | None = None,
     execution_connection_id: UUID | None = None,
 ) -> None:
     _authorize(session, context)
@@ -180,10 +178,6 @@ def _check_intent(
             raise ValueError
     except ValueError, TypeError, RecursionError:
         raise DomainError("draft_input_invalid", "推广链接配置无效") from None
-    try:
-        DeliveryConfig.model_validate(delivery_config or {})
-    except (ValueError, TypeError):
-        raise DomainError("draft_input_invalid", "广告排期配置无效") from None
 
 
 def _store_inputs(
@@ -239,7 +233,6 @@ def create_draft(
     drama_lines: list[str],
     account_lines: list[str],
     link_config: dict[str, Any],
-    delivery_config: dict[str, Any] | None = None,
     custom_provider_name: str | None = None,
     manual_links: list[dict[str, Any]] | None = None,
     request_id: UUID | None = None,
@@ -260,7 +253,6 @@ def create_draft(
         "drama_lines": drama_lines,
         "account_lines": account_lines,
         "link_config": link_config,
-        "delivery_config": delivery_config or {},
     }
     _check_intent(session, context, **intent)
     if manual:
@@ -306,7 +298,6 @@ def create_draft(
         execution_connection_id=execution_connection_id,
         application_id=application_id,
         link_config=link_config,
-        delivery_config=delivery_config or {},
         created_by=context.actor_id,
         request_id=request_id,
         request_digest=digest,
@@ -1261,7 +1252,6 @@ def update_draft(
     drama_lines: list[str] | None = None,
     account_lines: list[str] | None = None,
     link_config: dict[str, Any] | None = None,
-    delivery_config: dict[str, Any] | None = None,
     manual_links: list[dict[str, Any]] | None = None,
     custom_provider_name: str | None = None,
     execution_connection_id: UUID | None | _Unchanged = _Unchanged.VALUE,
@@ -1305,7 +1295,6 @@ def update_draft(
         "drama_lines": [raw for kind, raw in existing if kind == "drama"],
         "account_lines": [raw for kind, raw in existing if kind == "account"],
         "link_config": draft.link_config,
-        "delivery_config": draft.delivery_config,
     }
     intent: dict[str, Any] = old_intent | {
         key: value
@@ -1316,7 +1305,6 @@ def update_draft(
             "drama_lines": drama_lines,
             "account_lines": account_lines,
             "link_config": link_config,
-            "delivery_config": delivery_config,
         }.items()
         if value is not None
     }
@@ -1354,7 +1342,6 @@ def update_draft(
     draft.execution_connection_id = intent["execution_connection_id"]
     draft.application_id = intent["application_id"]
     draft.link_config = intent["link_config"]
-    draft.delivery_config = intent["delivery_config"]
     draft.status = "DRAFT"
     session.add(draft)
     session.flush()

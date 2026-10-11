@@ -674,14 +674,6 @@ export type CreateDraftRequest = {
     link_config?: {
         [key: string]: unknown;
     };
-    delivery_config?: DeliveryConfig;
-};
-
-/** Per-build delivery schedule. */
-export type DeliveryConfig = {
-    schedule_mode?: 'IMMEDIATE' | 'START_AT' | 'START_END';
-    schedule_start_time?: string | null;
-    schedule_end_time?: string | null;
 };
 
 /**
@@ -707,6 +699,43 @@ export type DefaultConnectionRequest = {
      * Connection Id
      */
     connection_id: string;
+};
+
+/**
+ * DeliveryChange
+ *
+ * 第二步单独保存投放排期，不走会清空准备结果的通用草稿更新。
+ */
+export type DeliveryChange = {
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Expected Revision
+     */
+    expected_revision: number;
+    delivery_config: DeliveryConfig;
+};
+
+/**
+ * DeliveryConfig
+ *
+ * 广告搭建阶段的投放排期；策略只保存预算和结构规则。
+ */
+export type DeliveryConfig = {
+    /**
+     * Schedule Mode
+     */
+    schedule_mode?: 'IMMEDIATE' | 'START_AT' | 'START_END';
+    /**
+     * Schedule Start Time
+     */
+    schedule_start_time?: string | null;
+    /**
+     * Schedule End Time
+     */
+    schedule_end_time?: string | null;
 };
 
 /**
@@ -1455,6 +1484,22 @@ export type FrozenUnit = {
      * Bid Strategy
      */
     bid_strategy?: 'HIGHEST_VALUE' | 'TARGET_ROAS';
+    /**
+     * Creation Status
+     */
+    creation_status?: 'ENABLE' | 'DISABLE';
+    /**
+     * Schedule Type
+     */
+    schedule_type?: 'SCHEDULE_FROM_NOW' | 'SCHEDULE_START_END';
+    /**
+     * Schedule Start Time
+     */
+    schedule_start_time?: string | null;
+    /**
+     * Schedule End Time
+     */
+    schedule_end_time?: string | null;
     /**
      * Readiness
      */
@@ -3642,7 +3687,6 @@ export type PatchDraftRequest = {
     link_config?: {
         [key: string]: unknown;
     } | null;
-    delivery_config?: DeliveryConfig | null;
 };
 
 /**
@@ -5802,7 +5846,7 @@ export type SyncRunRequest = {
     /**
      * Advertiser Ids
      */
-    advertiser_ids: Array<string>;
+    advertiser_ids?: Array<string>;
     /**
      * Scope
      */
@@ -12279,6 +12323,40 @@ export type buildsTargetingAccountsResponses = {
 };
 
 export type buildsTargetingAccountsResponse = buildsTargetingAccountsResponses[keyof buildsTargetingAccountsResponses];
+
+export type buildsUpdateDeliveryData = {
+    body: DeliveryChange;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Draft Id
+         */
+        draft_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/build-drafts/{draft_id}/delivery';
+};
+
+export type buildsUpdateDeliveryErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type buildsUpdateDeliveryError = buildsUpdateDeliveryErrors[keyof buildsUpdateDeliveryErrors];
+
+export type buildsUpdateDeliveryResponses = {
+    /**
+     * Successful Response
+     */
+    200: DraftSaved;
+};
+
+export type buildsUpdateDeliveryResponse = buildsUpdateDeliveryResponses[keyof buildsUpdateDeliveryResponses];
 
 export type buildsSavedSubmissionData = {
     body?: never;

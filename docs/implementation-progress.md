@@ -1947,3 +1947,10 @@
 - 已知：`ruff format --check` 仓库原有128个文件未格式化（发布门禁不检查此项），本轮未做全量格式化以免扩大差异。
 - 全量回归（全新 PG18/Redis8、3 组并行）：4581 通过、4 失败。其中嘉书批量验收、180 单元回执查询耗时、共享中断信号用例为负载/时序敏感，空闲机器单独重跑均通过（批量验收 9/9）。`test_shared_material_slice_is_deduplicated_and_ad_reads_stay_frozen` 单独仍失败，逐层查明为夹具缺失：4 GB 原文件超出 SDK 上传容量、缺上传租约、缺私有存储配置、PlannedGroup 复合主键取值；补齐后 9/9 通过，规划逻辑未改。
 - **已发布（2026-10-11 08:40）**：`deploy/local.py deploy` 批次 `20261011T054516-34dfd3`，`19c161d` 上线并推送公司 main；九服务新摘要 Ready、开关 true/true/false、HTTPS 200。线上停写约 11 分钟，完整检查 163.6 分钟。详见 [2026-10-11 本地发布验收](validation/2026-10-11-local-release.md)。
+
+## 2026-10-11 投放排期移到第二步投放身份之后
+
+- 用户要求：广告搭建的投放排期从第一步（批量输入）移到第二步（准备与调整），放在投放身份后面。
+- 后端：通用草稿更新会清空账户/剧目/素材准备结果，不能用于第二步。新增 `PATCH /build-drafts/{draft_id}/delivery`（`delivery_service.save_delivery`，幂等回执 kind=`delivery`），仅 READY 草稿可保存；与定向相同换新 revision 使旧预览失效，并复用 `prepare_selected_mini` 只重核场景、沿用上一版准备。迁移 `0020_draft_delivery_mutation` 放开回执 kind 约束。创建/通用更新不再接收 `delivery_config`（第一步编辑会保留已保存排期）。
+- 前端：新增 `DraftSchedule` 卡片挂在 `IdentityTargetPicker` 之后，单独“保存排期”；移除 `BuildInputPage` 的排期卡片与校验；重新生成 API client。
+- 验证：专用库 `tkada_delivery_step_20261011_test` + Redis DB9，`pytest test_delivery/test_targeting/test_drafts/test_expansion_delivery/test_api/test_previews` 65 passed；`playwright build-preparation.spec.ts --project=workspace` 75 passed（新增排期位置与单独保存用例）；`bun run build`、biome、ruff 通过。未部署、未调用真实 TikTok。

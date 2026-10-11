@@ -41,6 +41,7 @@ import {
 import { BuildDramaTable } from "./BuildDramaTable"
 import { BuildInputPage } from "./BuildInputPage"
 import { BuildLinkSheet } from "./BuildLinkSheet"
+import { DraftSchedule } from "./DraftSchedule"
 import { DraftTargeting } from "./DraftTargeting"
 import { DramaMaterialSheet } from "./DramaMaterialSheet"
 import { IdentityTargetPicker } from "./IdentityTargetPicker"
@@ -671,6 +672,17 @@ function Preparation({
         summary={current}
         write={allowed && !busy && !pending && !pendingMutation}
         onPrepare={() => prepare()}
+        onRefresh={() => {
+          refreshMutationState((value) => value + 1)
+          void summary.refetch()
+        }}
+      />
+      <DraftSchedule
+        key={`schedule:${current.revision}`}
+        tenantId={tenantId}
+        bcId={bcId}
+        summary={current}
+        write={allowed && !busy && !pending && !pendingMutation}
         onRefresh={() => {
           refreshMutationState((value) => value + 1)
           void summary.refetch()
