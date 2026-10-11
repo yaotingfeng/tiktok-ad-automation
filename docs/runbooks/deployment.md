@@ -287,3 +287,7 @@ Beat 每秒触发一次 outbox 发布。单次发布默认最多 20 个公平轮
 ### 广告管理执行队列
 
 `ad-management` 使用独立 worker，配置 `AD_MANAGEMENT_WORKER_CONCURRENCY=1`。C5 只提供 Compose/systemd 模板，不在本任务部署或启用。
+
+### 报表每日调用预算
+
+`TIKTOK_REPORT_DAILY_CALL_BUDGET=691200` 是应用级运行参数（正整数），用于计算报表每日调用余量；不是业务开关，不改变 `ADS_SYNC_ENABLED` 总开关。余量低于 30% 时，广告热刷间隔从 30 分钟延长到 60 分钟，素材热刷从 60 分钟延长到 120 分钟。它依赖 Redis 的当日计数以及已有 `TIKTOK_CALL_POLICIES` 实际准入，两者均需有效；关闭总开关仍停止新报表任务。发布时记录预算实际值并确认 API、Worker、Beat 加载一致。新增参数模板值为 691200；本地实现不表示服务器已配置或发布。

@@ -13,6 +13,7 @@ from app.modules.accounts.connection_models import (
 from app.modules.accounts.models import (
     AdvertiserAccount,
     BCAccountAccess,
+    DiscoveryRun,
     TenantBC,
     TikTokConnection,
 )
@@ -80,6 +81,16 @@ def sync_seed(session):
     )
     session.flush()
     for bc in ("bc-a", "bc-b"):
+        session.add(
+            DiscoveryRun(
+                tenant_id=tenant,
+                actor_id=actor,
+                connection_id=connection.id,
+                bc_id=bc,
+                status="COMPLETE",
+                completed_at=datetime.now(UTC),
+            )
+        )
         session.add(
             BCConnectionBinding(
                 tenant_id=tenant,

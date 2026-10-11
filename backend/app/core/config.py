@@ -76,6 +76,8 @@ class Settings(BaseSettings):
     MATERIAL_CLEANUP_ENABLED: bool = False
     # 广告目录/报表的周期扫描默认关闭；手动持久运行仍可由恢复任务核验。
     ADS_SYNC_ENABLED: bool = False
+    # 应用级报表每日调用预算，用于额度余量计算和降频。
+    TIKTOK_REPORT_DAILY_CALL_BUDGET: int = Field(default=691_200, gt=0)
     ADS_DIRECTORY_WORKER_CONCURRENCY: int = Field(default=1, ge=1, le=32)
     ADS_REPORTING_WORKER_CONCURRENCY: int = Field(default=1, ge=1, le=32)
     AD_MANAGEMENT_WORKER_CONCURRENCY: int = Field(default=1, ge=1, le=1)

@@ -2006,3 +2006,5 @@
 - 任务 6 最终验证：报表目录 134 passed；TikTok 集成目录 CI 六分片 697 项、通过 696、跳过 1、失败 0、并行不稳定 0（3.8 分钟）；跳过为既有 SDK 素材不适用用例。七个改动 Python 文件 ruff format --check / ruff check 通过，四个改动业务文件 ty check 通过。任务 14 全量门禁尚未执行，不能视为整体验收。
 
 - 用户裁定：任务 7 小时始终覆盖各账户今天与昨天；广告/素材日仍按 UTC 12:00 分界。任务 6 修正不再使用缓存系列，始终读取本次日期段完整系列清单；拆分中的 read_deadline_exceeded 归为 report_timeout，计入有上限的读取重试，普通 AccountAdmissionDeferred 不计次数。RED 2 failed（遗漏新系列、截止期限无限延后），GREEN 报表目录 136 passed；改动文件格式、lint、业务文件 ty 通过。此项单独提交后继续任务 7。
+
+- 任务 7：API 绑定 BC 自动计划、稳定主 BC 去重、活跃筛选、分档窗口与预算参数；Settings/.env.example/部署手册同步补齐。按用户裁定小时始终今天+昨天，UTC 13:00 回归覆盖广告/素材日仅今天。DiscoveryRun 用实际 COMPLETE、completed_at/created_at 排序并限定 BC；测试替身建立真正 MCP 连接以满足实际复合外键；提前补任务 9 所需发现种子。补停用已删除绑定的计划、冻结连接范围内选主，避免残留计划继续同步。RED 新模块缺失，GREEN reporting+core 194 passed；四文件格式/lint、业务 ty 通过。任务 6 修正提交 `6ec4990`。
