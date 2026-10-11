@@ -61,14 +61,25 @@ def create_intent(session, context, *, historical=False):
     )
     session.add(connection)
     session.flush()
-    session.add(
-        ProviderApplication(
+    if historical:
+        from tests.migration_database import insert_historical_application
+
+        insert_historical_application(
+            session,
             tenant_id=context.tenant_id,
             connection_id=connection.id,
             external_id="app-draft",
             name="test",
         )
-    )
+    else:
+        session.add(
+            ProviderApplication(
+                tenant_id=context.tenant_id,
+                connection_id=connection.id,
+                external_id="app-draft",
+                name="test",
+            )
+        )
     if historical:
         # 历史 schema 只播种当时的策略，不调用依赖今日租户列的业务服务。
         row = Strategy(tenant_id=context.tenant_id, name="test", latest_version=1)

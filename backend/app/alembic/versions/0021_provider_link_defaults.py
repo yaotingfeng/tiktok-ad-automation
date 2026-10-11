@@ -9,8 +9,8 @@ down_revision = "0020_draft_delivery_mutation"
 branch_labels = None
 depends_on = None
 
-# 已废弃字段：网眼推广名称、容量剧集与别名，均改为自动处理。
-OBSOLETE = ("promote_name", "alias", "episodic_drama_id")
+# 已废弃字段：网眼推广名称、容量剧集与别名、兑吧小程序 ID、刚刚好推广名称，均改为自动处理。
+OBSOLETE = ("promote_name", "alias", "episodic_drama_id", "miniapp_id", "name")
 # 旧界面强制写入的默认值；清除后改走应用默认或按剧自动。
 OLD_DEFAULTS = ("episode", "episode_seq", "card_point_episode", "free_episode_count")
 

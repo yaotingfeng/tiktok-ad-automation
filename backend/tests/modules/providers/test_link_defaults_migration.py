@@ -130,8 +130,20 @@ def test_0021_cleans_only_unsubmitted_drafts(monkeypatch):
                 },
             )
             c = _draft(
-                db, context, parents, "READY", {"episode": 1, "promote_name": "x"}
+                db,
+                context,
+                parents,
+                "READY",
+                {"episode": 1, "promote_name": "x", "miniapp_id": "1144", "name": "x"},
             )
+            d = _draft(
+                db,
+                context,
+                parents,
+                "DRAFT",
+                {"miniapp_id": "1144", "name": "x", "episode": 3},
+            )
+            e = _draft(db, context, parents, "DRAFT", {"episode_seq": 1, "episode": 2})
         command.upgrade(config_, REVISION)
         with engine.connect() as db:
             rows = dict(
@@ -144,5 +156,12 @@ def test_0021_cleans_only_unsubmitted_drafts(monkeypatch):
             )
         assert rows[a] == {}
         assert rows[b] == {"episode": 3}
-        assert rows[c] == {"episode": 1, "promote_name": "x"}
+        assert rows[c] == {
+            "episode": 1,
+            "promote_name": "x",
+            "miniapp_id": "1144",
+            "name": "x",
+        }
+        assert rows[d] == {"episode": 3}
+        assert rows[e] == {"episode": 2}
         assert applications == [{}]

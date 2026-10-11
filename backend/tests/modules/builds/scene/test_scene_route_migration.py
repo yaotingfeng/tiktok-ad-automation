@@ -17,10 +17,14 @@ from app.modules.builds.scene_job_models import (
     SceneJob,
     SceneJobPage,
 )
-from app.modules.providers.models import ProviderApplication, ProviderConnection
+from app.modules.providers.models import ProviderConnection
 from app.modules.strategies.copy_pool import POOL_VERSION
 from app.modules.strategies.models import Strategy, StrategyVersion
-from tests.migration_database import historical_database, insert_historical_bc
+from tests.migration_database import (
+    historical_database,
+    insert_historical_application,
+    insert_historical_bc,
+)
 from tests.modules.conftest import create_context
 
 
@@ -56,13 +60,12 @@ def test_historical_scene_migration_preserves_ids_and_facts_without_inventing_ro
                 )
             )
             db.flush()
-            db.add(
-                ProviderApplication(
-                    tenant_id=context.tenant_id,
-                    connection_id=provider.id,
-                    external_id="old-app",
-                    name="Synthetic",
-                )
+            insert_historical_application(
+                db,
+                tenant_id=context.tenant_id,
+                connection_id=provider.id,
+                external_id="old-app",
+                name="Synthetic",
             )
             strategy = Strategy(
                 tenant_id=context.tenant_id, name="Historical", latest_version=1

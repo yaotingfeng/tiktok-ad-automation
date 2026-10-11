@@ -1,5 +1,6 @@
 """Fresh historical schemas; never downgrade a shared/current application DB."""
 
+import json
 from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
@@ -50,6 +51,36 @@ def insert_historical_account(
             "currency": currency,
             "timezone": timezone,
             "remote_status": remote_status,
+        },
+    )
+
+
+def insert_historical_application(
+    session,
+    *,
+    tenant_id,
+    connection_id,
+    external_id,
+    name,
+    channel_config=None,
+    tiktok_minis_id=None,
+):
+    """旧版推广应用显式列播种，避免今日 ORM 的 link_defaults 列渗入历史 schema。"""
+    session.execute(
+        text(
+            "INSERT INTO provider_application "
+            "(id,tenant_id,connection_id,external_id,name,channel_config,tiktok_minis_id) "
+            "VALUES (:id,:tenant_id,:connection_id,:external_id,:name,"
+            "CAST(:channel_config AS jsonb),:tiktok_minis_id)"
+        ),
+        {
+            "id": uuid4(),
+            "tenant_id": tenant_id,
+            "connection_id": connection_id,
+            "external_id": external_id,
+            "name": name,
+            "channel_config": json.dumps(channel_config or {}),
+            "tiktok_minis_id": tiktok_minis_id,
         },
     )
 
