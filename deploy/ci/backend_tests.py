@@ -198,8 +198,9 @@ def main():
         results.unlink(missing_ok=True)
         # 含随机值的参数化 ID 每次收集都会变化，无法按 ID 重跑；改为重跑其所在文件，
         # 只取原失败用例的结果。任一 ID 无法匹配都会让 pytest 放弃整个重跑。
-        stable = set(collect([n for n in failed if "::" in n], base_env)) if failed else set()
-        rerun_args = sorted({n if n in stable else n.split("::", 1)[0] for n in failed})
+        # 先收集失败用例所在文件，再判断哪些 ID 仍可直接引用。
+        current = set(collect(sorted({n.split("::", 1)[0] for n in failed}), base_env))
+        rerun_args = sorted({n if n in current else n.split("::", 1)[0] for n in failed})
         with (args.work / "rerun.log").open("w") as log:
             subprocess.run(
                 pytest_command(rerun_args),

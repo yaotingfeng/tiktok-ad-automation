@@ -126,6 +126,9 @@ export FASTAPI_ENV=development VITE_API_URL='' CI=1 APP_ENV_FILE=/dev/null DOTEN
 export AWS_EC2_METADATA_DISABLED=true AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_CONFIG_FILE=/dev/null
 export UV_NO_ENV_FILE=1 PLAYWRIGHT_SKIP_BROWSER_GC=1
 uv sync --frozen --package app
+# 测试数据库运行在 Docker 内，是所有分组共享的瓶颈：组数不超过 Docker CPU 数。
+docker_cpus=$(docker info --format '{{.NCPU}}' 2>/dev/null || echo 4)
+export CHECK_BACKEND_SHARDS=${CHECK_BACKEND_SHARDS:-$(( docker_cpus < 4 ? docker_cpus : (docker_cpus > 6 ? 6 : docker_cpus) ))}
 cache_dir=${CHECK_CACHE_DIR:-$repo/.runtime/ci-cache}
 mkdir -p "$cache_dir"
 
@@ -153,7 +156,10 @@ lane_frontend() {
     bun x playwright test --project workspace --reporter=list --workers="${CHECK_BROWSER_WORKERS:-3}"
   fi
   if [[ -n $fe_batch || -n $fe_r2 ]]; then
-    # 浏览器验收使用独立库与 Redis 库号，与后端分组并行互不干扰。
+    # 浏览器端到端验收与后端端到端验收都是多分钟级批量搭建，同时运行会互相挤占
+    # 到超时；等后端检查线结束再开始，其余前端检查不受影响。
+    while [[ -e "$work/lanes/backend.running" ]]; do sleep 5; done
+    # 浏览器验收使用独立库与 Redis 库号。
     docker exec "$pg_name" psql -U postgres -qc 'CREATE DATABASE ci_browser_test' >/dev/null
     export DATABASE_URL="postgresql://postgres:ci-local-password@127.0.0.1:$pg_port/ci_browser_test"
     export REDIS_URL="redis://127.0.0.1:$redis_port/40" TEST_REDIS_URL="redis://127.0.0.1:$redis_port/41"
@@ -178,7 +184,8 @@ lanes=()
 started=$SECONDS
 pids=()
 for lane in "${lanes[@]}"; do
-  ( set -euo pipefail; "lane_$lane" ) >"$work/lanes/$lane.log" 2>&1 &
+  touch "$work/lanes/$lane.running"
+  ( set -euo pipefail; trap 'rm -f "$work/lanes/'"$lane"'.running"' EXIT; "lane_$lane" ) >"$work/lanes/$lane.log" 2>&1 &
   pids+=($!)
   printf '检查线启动：%s\n' "$lane"
 done
