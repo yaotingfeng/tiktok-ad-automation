@@ -239,16 +239,55 @@ def _recovery_effect(
     work: dict[str, Any],
     config: dict[str, Any],
 ) -> ProviderEffect:
-    effect = _creation(session, context, item_id, work, config)
+    # 行锁读取：恢复判定与回执写入串行，状态检查基于最新提交值。
+    identity = _creation(session, context, item_id, work, config).id
+    effect = session.exec(
+        select(ProviderEffect)
+        .where(ProviderEffect.id == identity)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one()
     if (
         effect.status not in {"sending", "result_unknown", "succeeded"}
         or effect.attempt_token is None
         or work.get("uncertain_effect") != str(effect.id)
         or work.get("uncertain_attempt_token") != str(effect.attempt_token)
-        or work.get("promote_name") != "ytf-" + effect.id.hex
+        or work.get("created_effect") != str(effect.id)
     ):
         raise core._error("provider_state_invalid")
     return effect
+
+
+def _confirm_absent(
+    session: Session,
+    context: TenantContext,
+    work: dict[str, Any],
+    config: dict[str, Any],
+    item_id: UUID,
+) -> None:
+    """建链前已完整确认无同参数链接，恢复扫描仍为 0 条说明那次请求未落地。"""
+    effect = _recovery_effect(session, context, item_id, work, config)
+    if effect.status == "result_unknown":
+        # 网眼已明确受理（accepted）却查不到链接，不能视为未落地，只能人工核实。
+        absent = effect.result.get("accepted") is False
+    elif effect.status == "sending":
+        # 发送方进程中断、没有任何回执：原尝试的执行期限过后，请求方才不可能仍在等待响应。
+        execution = effect.result.get("_execution")
+        absent = (
+            isinstance(execution, dict)
+            and isinstance(execution.get("until"), str)
+            and core._utc(execution["until"]) <= datetime.now(UTC)
+        )
+    else:
+        absent = False
+    if not absent or _known(session, context, effect) is not None:
+        raise core._error("provider_result_unknown")
+    effect.status, effect.remote_id = "confirmed_absent", None
+    effect.result = {**effect.result, "recovered": True, "found": False}
+    session.add(effect)
+    work.pop("uncertain_effect", None)
+    work.pop("uncertain_attempt_token", None)
+    work.pop("remote_id", None)
 
 
 def _known(
@@ -360,19 +399,18 @@ def _create(
     guard(session, context, item_id, token, work)
     effect = _creation(session, context, item_id, work, config)
     identity = effect.id
-    name = "ytf-" + identity.hex
-    if work.get("promote_name", name) != name:
+    if work.get("created_effect", str(identity)) != str(identity):
         raise core._error("provider_state_invalid")
-    work["promote_name"] = name
     if effect.status == "failed":
         raise core._error(effect.result.get("error_code", "provider_rejected"))
-    if effect.status != "pending":
+    if effect.status not in {"pending", "confirmed_absent"}:
         if (
             effect.status not in {"sending", "result_unknown", "succeeded"}
             or effect.attempt_token is None
         ):
             raise core._error("provider_state_invalid")
         known = _known(session, context, effect)
+        work["created_effect"] = str(identity)
         _mark_uncertain(work, effect)
         if known:
             work["remote_id"], work["stage"] = known, "verify"
@@ -383,10 +421,13 @@ def _create(
         return
     if not work.get("lookup_complete"):
         raise core._error("lookup_incomplete")
+    # 重建前不得残留上次尝试的待核实标记或回执；出现即说明上次可能已落地。
+    stale = effect.status == "confirmed_absent" and bool(work.get("uncertain_effect"))
+    if stale or _known(session, context, effect) is not None:
+        raise core._error("provider_result_unknown")
     payload = {
         "vid": work["drama"]["external_drama_id"],
         "drama_num": core._positive(config.get("episode", 1)),
-        "promote_name": name,
     }
     effect.result = {"intent": payload}
     session.add(effect)
@@ -395,7 +436,7 @@ def _create(
         session, effect_id=identity, tenant_id=context.tenant_id, attempt_token=token
     ):
         raise core._error("provider_scope_busy")
-    work["active_effect"] = str(identity)
+    work["active_effect"] = work["created_effect"] = str(identity)
     _checkpoint(session, context, item_id, token, work)
     try:
         response = client.create_step("create", payload)
@@ -440,8 +481,6 @@ def verified_data(
     work: dict[str, Any],
     config: dict[str, Any],
     application_id: str,
-    *,
-    require_name: bool = False,
 ) -> dict[str, Any]:
     if (
         not isinstance(data, dict)
@@ -464,12 +503,6 @@ def verified_data(
         or core._positive(attribution.get("chapter_index")) != episode
     ):
         raise core._error("config_conflict")
-    if (
-        work.get("promote_name")
-        and data.get("promote_name") != work["promote_name"]
-        and (require_name or data.get("promote_name") is not None)
-    ):
-        raise core._error("provider_result_unknown")
     if not data.get("url") or data["url"] != actual.get("jump_url"):
         raise core._error("provider_result_unknown")
     protected = render_attribution(attribution, work["drama"]["title"])
@@ -516,8 +549,7 @@ def advance(
         _create(session, context, item_id, token, work, config, client)
         return None
     if work["stage"] == "verify":
-        direct_receipt = False
-        if work.get("promote_name") and not work.get("uncertain_effect"):
+        if work.get("created_effect") and not work.get("uncertain_effect"):
             # A local publication failure may follow an already verified effect.
             # Restore its original fence, never interpret it as ordinary history.
             _mark_uncertain(work, _creation(session, context, item_id, work, config))
@@ -526,24 +558,6 @@ def advance(
             known = _known(session, context, effect)
             if known and known != work.get("remote_id"):
                 raise core._error("provider_result_unknown")
-            direct_receipt = (
-                session.exec(
-                    select(ProviderEffect.id)
-                    .where(
-                        ProviderEffect.tenant_id == context.tenant_id,
-                        ProviderEffect.remote_scope_key == scope,
-                        ProviderEffect.step == "wy_receipt",
-                        ProviderEffect.status == "succeeded",
-                        ProviderEffect.remote_id == work.get("remote_id"),
-                        col(ProviderEffect.result)["effect_id"].astext
-                        == str(effect.id),
-                        col(ProviderEffect.result)["attempt"].astext
-                        == str(effect.attempt_token),
-                    )
-                    .limit(1)
-                ).first()
-                is not None
-            )
             session.commit()
         data = _read(
             session,
@@ -553,13 +567,7 @@ def advance(
             work,
             lambda: client.read_link(_identity(work.get("remote_id"))),
         )
-        data = verified_data(
-            data,
-            work,
-            config,
-            application_id,
-            require_name=bool(work.get("promote_name")) and not direct_receipt,
-        )
+        data = verified_data(data, work, config, application_id)
         if work.get("uncertain_effect"):
             effect = _recovery_effect(session, context, item_id, work, config)
             effect.status, effect.remote_id = "succeeded", data["remote_id"]
@@ -615,8 +623,6 @@ def advance(
             identity = _identity(row.get("remote_id"))
             if identity not in identities:
                 raise core._error("lookup_incomplete")
-            if recovering and row.get("promote_name") != work.get("promote_name"):
-                continue
             scan["matches"] = (
                 min(2, scan["matches"] + 1) if recovering else scan["matches"] + 1
             )
@@ -642,10 +648,16 @@ def advance(
             if scan["seen"] != total:
                 raise core._error("lookup_incomplete")
             scan["done"] = True
-            if recovering and scan["matches"] != 1:
+            if recovering and scan["matches"] == 0:
+                # 建链只发生在完整扫描证明无同参数链接之后，恢复扫描看到的同参数
+                # 链接都只能来自这次建链；仍为 0 条说明本次未落地，可安全重建。
+                _confirm_absent(session, context, work, config, item_id)
+                work["lookup_complete"], work["stage"] = True, "create"
+            elif recovering and scan["matches"] != 1:
+                # 出现多条无法判断哪条属于本次建链，交人工核实，绝不重建。
                 _checkpoint(session, context, item_id, token, work)
                 raise core._error("provider_result_unknown")
-            if scan["candidate"]:
+            elif scan["candidate"]:
                 work["remote_id"], work["stage"] = scan["candidate"], "verify"
             else:
                 work["lookup_complete"], work["stage"] = True, "create"

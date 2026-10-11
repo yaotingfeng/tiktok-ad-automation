@@ -87,19 +87,19 @@ class Remote:
         assert request.url.path.endswith("/link/create") and request.method == "POST"
         assert payload["drama_id"] == "opaque-drama"
         assert payload["app"] == "wy-app" and payload["promote_platform"] == "tiktok"
-        assert payload["chapter_index"] == 1 and payload["promote_name"].startswith(
-            "ytf-"
-        )
+        assert payload["chapter_index"] == 1 and "promote_name" not in payload
         if self.reject:
             return httpx.Response(200, json={"code": 400, "data": None})
-        row = remote_link(901, name=payload["promote_name"])
-        if self.expose_created:
+        # 本次请求的远端行为在 after_post 运行前就已确定；after_post 只影响后续请求。
+        lose, expose = self.lose_reply, self.expose_created
+        row = remote_link(901)
+        if expose:
             self.rows.append(row)
             if self.duplicate_created:
                 self.rows.append({**row, "id": 902})
         if self.after_post:
             self.after_post()
-        if self.lose_reply:
+        if lose:
             raise httpx.ReadTimeout(
                 "synthetic committed response lost", request=request
             )
@@ -224,11 +224,10 @@ def test_complete_empty_history_creates_once_then_reads_actual_id(workflow, omit
     assert len(writes(workflow)) == 1
 
 
-@pytest.mark.parametrize("result", ["unique", "empty", "ambiguous"])
-def test_unknown_post_only_performs_correlated_reads(workflow, result):
+@pytest.mark.parametrize("result", ["unique", "ambiguous"])
+def test_unknown_post_adopts_single_new_link_or_stops(workflow, result):
     remote = workflow[-1]
     remote.lose_reply = True
-    remote.expose_created = result != "empty"
     remote.duplicate_created = result == "ambiguous"
     item = finish(workflow, limit=12)
     assert len(writes(workflow)) == 1
@@ -236,12 +235,136 @@ def test_unknown_post_only_performs_correlated_reads(workflow, result):
         item.resolved
     )
     with Session(workflow[0]) as session:
-        effects = session.exec(
+        effect = session.exec(
             select(ProviderEffect).where(ProviderEffect.step == "create")
-        ).all()
-        assert len(effects) == 1
-        assert effects[0].status != "confirmed_absent"
-        assert (effects[0].remote_id == "901") == (result == "unique")
+        ).one()
+        assert (effect.remote_id == "901") == (result == "unique")
+        assert effect.status != "confirmed_absent"
+
+
+def test_unknown_post_with_no_new_link_recreates_once(workflow):
+    remote = workflow[-1]
+    remote.lose_reply = True
+    remote.expose_created = False
+
+    def recover_network():
+        # 第一次请求确实未落地；之后网络恢复，第二次建链正常返回。
+        remote.lose_reply = False
+        remote.expose_created = True
+        remote.after_post = None
+
+    remote.after_post = recover_network
+    item = finish(workflow, limit=20)
+    assert item.status == "ready", item.resolved
+    assert len(writes(workflow)) == 2
+    with Session(workflow[0]) as session:
+        effect = session.exec(
+            select(ProviderEffect).where(ProviderEffect.step == "create")
+        ).one()
+        assert effect.status == "succeeded" and effect.remote_id == "901"
+        link = session.exec(select(PromotionLink)).one()
+        assert link.remote_id == "901"
+
+
+def test_unknown_post_with_incomplete_recovery_scan_never_recreates(workflow):
+    remote = workflow[-1]
+    remote.lose_reply = True
+    remote.expose_created = False
+    while not writes(workflow):
+        advance(workflow)
+    remote.rows = [remote_link(i, episode=2) for i in range(100, 121)]
+    remote.rows[-1] = remote_link(100, episode=2)  # 分页重复，扫描不完整
+    item = finish(workflow, limit=10)
+    assert item.status == "result_unknown"
+    assert len(writes(workflow)) == 1
+
+
+def create_effect(env):
+    with Session(env[0]) as session:
+        return session.exec(
+            select(ProviderEffect).where(ProviderEffect.step == "create")
+        ).one()
+
+
+def expire_create_execution(env):
+    from datetime import UTC, datetime, timedelta
+
+    with Session(env[0]) as session, session.begin():
+        effect = session.exec(
+            select(ProviderEffect).where(ProviderEffect.step == "create")
+        ).one()
+        execution = {
+            **effect.result["_execution"],
+            "until": (datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+        }
+        effect.result = {**effect.result, "_execution": execution}
+        session.add(effect)
+
+
+def test_crashed_sender_recreates_only_after_its_execution_window(workflow):
+    remote = workflow[-1]
+    remote.expose_created = False
+
+    def worker_exit():
+        remote.after_post = None
+        remote.expose_created = True
+        raise SystemExit("synthetic worker terminated before receiving response")
+
+    remote.after_post = worker_exit
+    with pytest.raises(SystemExit):
+        finish(workflow)
+    expire_completed_worker_claim(workflow)
+    # 原发送方的执行期限未过：恢复扫描为 0 条也不能判定未落地。
+    item = finish(workflow, limit=6)
+    assert item.status == "result_unknown", item.resolved
+    assert len(writes(workflow)) == 1 and create_effect(workflow).status == "sending"
+    expire_create_execution(workflow)
+    item = finish(workflow, limit=12)
+    assert item.status == "ready", item.resolved
+    assert len(writes(workflow)) == 2
+    effect = create_effect(workflow)
+    assert effect.status == "succeeded" and effect.remote_id == "901"
+
+
+def test_late_receipt_after_confirmed_absent_blocks_recreate(workflow):
+    remote = workflow[-1]
+    remote.lose_reply = True
+    remote.expose_created = False
+    for _ in range(12):
+        advance(workflow)
+        if writes(workflow) and create_effect(workflow).status == "confirmed_absent":
+            break
+    effect = create_effect(workflow)
+    assert effect.status == "confirmed_absent" and len(writes(workflow)) == 1
+    with Session(workflow[0]) as session, session.begin():
+        session.add(
+            ProviderEffect(
+                tenant_id=effect.tenant_id,
+                remote_scope_key=effect.remote_scope_key,
+                step="wy_receipt",
+                request_digest="synthetic-late-receipt",
+                status="succeeded",
+                remote_id="901",
+                result={
+                    "effect_id": str(effect.id),
+                    "attempt": str(effect.attempt_token),
+                    "remote_id": "901",
+                },
+            )
+        )
+    item = finish(workflow, limit=6)
+    assert item.status == "result_unknown", item.resolved
+    assert len(writes(workflow)) == 1
+
+
+def test_accepted_create_without_visible_link_never_recreates(workflow):
+    # 网眼已明确受理但列表查不到：不是“请求未落地”，只能人工核实。
+    remote = workflow[-1]
+    remote.omit_id = True
+    remote.expose_created = False
+    item = finish(workflow, limit=10)
+    assert item.status == "result_unknown", item.resolved
+    assert len(writes(workflow)) == 1
 
 
 def set_role(env, role):
@@ -426,22 +549,6 @@ def test_client_cleanup_systemexit_cannot_drop_known_receipt(workflow, monkeypat
     assert finish(workflow).status == "ready" and len(writes(workflow)) == 1
 
 
-@pytest.mark.parametrize("changed_name", [None, "someone-elses-create"])
-def test_unknown_create_exact_read_rechecks_correlated_name(workflow, changed_name):
-    remote = workflow[-1]
-    remote.lose_reply = True
-    for _ in range(9):
-        item = advance(workflow)
-        if item.resolved.get("_work", {}).get("stage") == "verify":
-            break
-    remote.rows[0]["promote_name"] = changed_name
-    item = advance(workflow)
-    assert item.status == "result_unknown"
-    assert len(writes(workflow)) == 1
-    with Session(workflow[0]) as session:
-        assert not session.exec(select(PromotionLink)).all()
-
-
 def test_unknown_scan_rejects_forged_effect_nonce_before_get(workflow):
     remote = workflow[-1]
     remote.lose_reply = True
@@ -537,7 +644,8 @@ def test_definite_remote_rejection_stays_failed_without_auto_replay(workflow):
 def test_same_remote_scope_never_creates_for_a_second_preparation(workflow, unknown):
     remote = workflow[-1]
     remote.lose_reply = unknown
-    remote.expose_created = not unknown
+    # 回执丢失且出现两条同参数链接：首个条目停在待核实并继续占用远端范围。
+    remote.duplicate_created = unknown
     first = finish(workflow, limit=8)
     assert first.status == ("result_unknown" if unknown else "ready")
     with Session(workflow[0]) as session, session.begin():
@@ -585,20 +693,3 @@ def test_worker_exit_after_remote_commit_recovers_without_any_receipt(workflow):
     assert finish(workflow).status == "ready"
     assert len(writes(workflow)) == 1
     assert workflow[-1].calls[-1][2]["id"] == "901"
-
-
-def test_direct_known_id_receipt_does_not_require_optional_remote_name(workflow):
-    while not writes(workflow):
-        advance(workflow)
-    workflow[-1].rows[0].pop("promote_name")
-    assert finish(workflow).status == "ready"
-    assert len(writes(workflow)) == 1
-    assert workflow[-1].calls[-1][2]["id"] == "901"
-
-
-def test_direct_known_id_still_rejects_a_nonempty_wrong_name(workflow):
-    while not writes(workflow):
-        advance(workflow)
-    workflow[-1].rows[0]["promote_name"] = "someone-elses-create"
-    assert advance(workflow).status == "result_unknown"
-    assert len(writes(workflow)) == 1

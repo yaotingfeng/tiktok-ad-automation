@@ -343,7 +343,8 @@ class WangyanClient:
         return _link(rows[0])
 
     def create_step(self, step: str, payload: JsonDict) -> JsonDict:
-        if step != "create" or set(payload) - {"vid", "drama_num", "promote_name"}:
+        # 与 CLI 一致不传推广名称，由网眼后台自动生成。
+        if step != "create" or set(payload) - {"vid", "drama_num"}:
             raise failure("provider_request_invalid")
         if not self.application_id.strip():
             raise failure("provider_request_invalid")
@@ -353,11 +354,6 @@ class WangyanClient:
             "chapter_index": positive(payload.get("drama_num")),
             "promote_platform": "tiktok",
         }
-        if "promote_name" in payload:
-            name = payload["promote_name"]
-            if not isinstance(name, str) or not name.strip() or len(name) > 255:
-                raise failure("provider_request_invalid")
-            body["promote_name"] = name
         result, _ = request_json(
             self.http,
             "POST",

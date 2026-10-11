@@ -245,7 +245,6 @@ def test_create_uses_cli_shape_and_source_supported_stable_name():
             "drama_id": "opaque-drama",
             "chapter_index": 2,
             "promote_platform": "tiktok",
-            "promote_name": "operation-123",
         }
         return httpx.Response(
             200, json={"code": 0, "data": {"id": 12}, "msg": "private-response"}
@@ -253,7 +252,7 @@ def test_create_uses_cli_shape_and_source_supported_stable_name():
 
     assert client(transport).create_step(
         "create",
-        {"vid": "opaque-drama", "drama_num": 2, "promote_name": "operation-123"},
+        {"vid": "opaque-drama", "drama_num": 2},
     ) == {"accepted": True, "remote_id": "12"}
     assert len(seen) == 1
 
@@ -374,10 +373,10 @@ def test_cross_page_duplicates_are_returned_for_durable_history_fence():
 @pytest.mark.parametrize(
     "payload",
     [
-        {"vid": "opaque", "drama_num": 1, "promote_name": " "},
+        # 推广名称由网眼后台生成，调用方传入即视为非法请求。
+        {"vid": "opaque", "drama_num": 1, "promote_name": "x"},
         {"vid": "opaque", "drama_num": 1, "app": "other"},
         {"vid": "opaque", "drama_num": True},
-        {"vid": "opaque", "drama_num": 1, "promote_name": "x" * 256},
     ],
 )
 def test_invalid_create_does_not_touch_transport(payload):
@@ -386,6 +385,17 @@ def test_invalid_create_does_not_touch_transport(payload):
 
     with pytest.raises(DomainError):
         client(forbidden).create_step("create", payload)
+
+
+def test_create_rejects_caller_supplied_promote_name():
+    def forbidden(_request):
+        pytest.fail("invalid input performed network request")
+
+    with pytest.raises(DomainError) as error:
+        client(forbidden).create_step(
+            "create", {"vid": "opaque", "drama_num": 1, "promote_name": "x"}
+        )
+    assert error.value.code == "provider_request_invalid"
 
 
 def test_empty_application_does_not_use_provider_default():

@@ -579,7 +579,7 @@ class Wire:
                 )
             assert path.endswith("/link/create") and request.method == "POST"
             assert body["promote_platform"] == "tiktok" and body["chapter_index"] == 1
-            assert body["promote_name"].startswith("ytf-")
+            assert "promote_name" not in body
             opaque = body["drama_id"]
             assert opaque in {"opaque-drama-1", "opaque-drama-2"}
             rows = self.wangyan_links.setdefault((application, opaque), [])
@@ -591,7 +591,8 @@ class Wire:
                 "drama_int_id": 70 + int(opaque.rsplit("-", 1)[1]),
                 "chapter_index": 1,
                 "promote_platform": "tiktok",
-                "promote_name": body["promote_name"],
+                # 模拟网眼后台自动生成的推广名称。
+                "promote_name": "26017-A1180-TT-auto",
                 "tt_minis_link": f"https://www.tiktok.com/minis/acceptance?minis_id=acceptance-minis&link_id={identity}",
             }
             rows.append(row)
