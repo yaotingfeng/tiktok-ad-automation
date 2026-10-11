@@ -1996,3 +1996,5 @@
 - 已确认任务 6 按规格处理首次无系列 ID 的截断：先查系列，再拆分，不采用计划中的直接失败。
 - 任务 2：按计划实现基础/素材指标映射与账户本地日小时解析；RED 模块不存在，GREEN 报表目录 109 passed；改动 Python 格式检查通过，无业务偏离。任务 1 提交 `b05c21f`。
 - 任务 3：40100 的 QPM/QPD 延后；传输边界以真实 ApiClient.deserialize 配合合成 JSON，RED 3 failed，专项 GREEN 13 passed；集成目录 CI 六分片 679 项，通过 678、跳过 1、失败 0、并行不稳定 0（3.4 分钟）。跳过为现有 material_adapters SDK 不适用用例。Python 格式检查通过。任务 2 提交 `7738fc8`。
+- 任务 4：官方 SDK 读取器覆盖 BC、广告日、系列小时、UTC 系列日、账户对账、素材日；固定 SDK 接受 advertiser_ids/bc_id/multi_adv_report_in_utc_time，无底层 HTTP 回退。RED 新模块不存在；补充边界 RED 3 failed/合法 BC RED 1 failed；GREEN 专项 16 passed，集成目录六分片 694 passed、1 skipped，无失败/并行不稳定；五文件格式检查通过。
+- 任务 4 偏离：共享准入 admission.py 还存在无账户操作白名单，补入 reports.bc（规格共享限流范围）；发送前及额度准入后核验合并请求中每个账户和冻结 BC；补齐负数/零分页校验，避免 ZeroDivisionError 或把负总数当完整空结果。网关回调 lambda 改具名函数满足 ruff。任务 3 提交 `22dd148`。

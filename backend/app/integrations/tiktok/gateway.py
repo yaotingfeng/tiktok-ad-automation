@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+import business_api_client as sdk
 from redis import Redis
 from sqlalchemy import Engine, or_
 from sqlmodel import Session, col, select
@@ -29,6 +30,7 @@ from app.integrations.tiktok.adapters.sdk_ads import SdkAdsReadOperations
 from app.integrations.tiktok.adapters.sdk_builds import ApiBuildOperations
 from app.integrations.tiktok.adapters.sdk_management import SdkManagementOperations
 from app.integrations.tiktok.adapters.sdk_materials import SDKMaterialOperations
+from app.integrations.tiktok.adapters.sdk_report_reader import SdkReportReader
 from app.integrations.tiktok.adapters.sdk_reporting import SdkReportingOperations
 from app.integrations.tiktok.admission import (
     PROTOCOL_OPERATIONS,
@@ -49,6 +51,7 @@ from app.integrations.tiktok.contracts.management import (
     ManagementOperations,
 )
 from app.integrations.tiktok.contracts.materials import MaterialOperations
+from app.integrations.tiktok.contracts.report_reader import ReportReader
 from app.integrations.tiktok.contracts.reporting import ReportOperations
 from app.integrations.tiktok.contracts.scenes import ScenesGateway
 from app.integrations.tiktok.group_isolation import (
@@ -67,7 +70,10 @@ from app.integrations.tiktok.mcp.scenes import McpScenesGateway
 from app.integrations.tiktok.mcp.transport import open_bound_mcp_client
 from app.integrations.tiktok.mcp_auth.refresh import ensure_mcp_credentials
 from app.integrations.tiktok.object_coordination import MutationLease, claim_mutation
-from app.integrations.tiktok.official.accounts import OfficialAccountsGateway
+from app.integrations.tiktok.official.accounts import (
+    OfficialAccountsGateway,
+    OfficialReadRequests,
+)
 from app.integrations.tiktok.official.authorization import (
     material_authorization as api_material_authorization,
 )
@@ -124,10 +130,13 @@ _OPERATION_CAPABILITIES: dict[str, Capability] = {
     "build.disable_adgroup": "build",
     "build.list_optimizer_rules": "read",
     # 管理写操作逐一登记；账户证据仍由 verify_route + ManagementCapability 核验。
-    **dict.fromkeys((f"management.{name}" for name in MANAGEMENT_OPERATIONS), "ads_manage"),
+    **dict.fromkeys(
+        (f"management.{name}" for name in MANAGEMENT_OPERATIONS), "ads_manage"
+    ),
     # 报表端点按独立操作登记，确保每个同步页、异步任务状态和下载请求
     # 都重新通过同一冻结路由与共享额度门禁。
     "reports.integrated": "read",
+    "reports.bc": "read",
     "reports.material_overview": "read",
     "reports.material_breakdown": "read",
     "reports.task_create": "read",
@@ -150,6 +159,7 @@ class TikTokGateway:
     ads: AdsReadOperations
     reports: ReportOperations
     management: ManagementOperations
+    report_reader: ReportReader | None = None
 
 
 def _capability(advertiser_id: str | None, operation: str) -> Capability:
@@ -159,13 +169,17 @@ def _capability(advertiser_id: str | None, operation: str) -> Capability:
     if (
         advertiser_id is None
         and operation
-        not in PROTOCOL_OPERATIONS | _DIRECTORY_OPERATIONS | {FINANCE_OPERATION}
+        not in PROTOCOL_OPERATIONS
+        | _DIRECTORY_OPERATIONS
+        | {FINANCE_OPERATION, "reports.bc"}
     ):
         raise DomainError("account_required", "该操作必须指定广告账户")
     if (
         advertiser_id is not None
         and operation
-        in PROTOCOL_OPERATIONS | _DIRECTORY_OPERATIONS | {FINANCE_OPERATION}
+        in PROTOCOL_OPERATIONS
+        | _DIRECTORY_OPERATIONS
+        | {FINANCE_OPERATION, "reports.bc"}
     ):
         raise DomainError("gateway_operation_forbidden", "目录操作归属参数无效")
     return capability
@@ -462,6 +476,14 @@ def open_tiktok_gateway(
             ):
                 yield
 
+    def check_report_request(operation: str, arguments: dict[str, Any]) -> None:
+        # 合并账户读取必须逐一核验；BC 报表只能读取本次冻结绑定的 BC。
+        if operation == "reports.bc":
+            if arguments.get("bc_id") != route.bc_id:
+                raise DomainError("report_scope_forbidden", "报表 BC 与冻结路由不一致")
+        for advertiser in arguments.get("advertiser_ids", []):
+            authorize(advertiser, operation)
+
     @contextmanager
     def management_scope(
         advertiser_id: str,
@@ -478,9 +500,7 @@ def open_tiktok_gateway(
             yield
 
     @contextmanager
-    def report_download_scope(
-        advertiser_id: str, deadline: datetime
-    ) -> Iterator[None]:
+    def report_download_scope(advertiser_id: str, deadline: datetime) -> Iterator[None]:
         # MCP 签名文件虽不使用 tools/call，但仍是本次冻结任务的物理发送；
         # 在发送前复用同一授权、绑定和共享额度门禁。
         if deadline != task_deadline:
@@ -601,6 +621,14 @@ def open_tiktok_gateway(
                         request_scope=request_scope,
                         deadline=task_deadline,
                     ),
+                    report_reader=SdkReportReader(
+                        send=_sdk_report_send(
+                            official,
+                            request_scope,
+                            task_deadline,
+                            request_check=check_report_request,
+                        )
+                    ),
                     reports=SdkReportingOperations(
                         official,
                         route=route,
@@ -660,3 +688,45 @@ def open_tiktok_gateway(
             isolation_lease.release(redis_client)
         material.clear()
         token = None
+
+
+def _sdk_report_send(client, request_scope, deadline, *, request_check=None):
+    """每个物理请求独立准入；直接使用已核对支持批量参数的官方生成 SDK。"""
+    requests = OfficialReadRequests(
+        client, request_scope=request_scope, deadline=deadline
+    )
+    api = sdk.ReportingApi(client)
+    token = client.default_headers["Access-Token"]
+
+    def send(operation, advertiser_id, arguments):
+        if request_check is not None:
+            request_check(operation, arguments)
+        if operation not in {
+            "reports.integrated",
+            "reports.bc",
+            "reports.material_breakdown",
+        }:
+            raise DomainError("report_operation_invalid", "报表操作未登记")
+
+        def call(timeout):
+            # 额度准入后再查全体账户，避免等待期间撤权仍发出合并请求。
+            if request_check is not None:
+                request_check(operation, arguments)
+            args = dict(arguments)
+            if operation in {"reports.integrated", "reports.bc"}:
+                return api.report_integrated_get(
+                    args.pop("report_type"), token, **args, _request_timeout=timeout
+                )
+            return api.smart_plus_material_report_breakdown(
+                args.pop("advertiser_id"),
+                args.pop("dimensions"),
+                args.pop("start_date"),
+                args.pop("end_date"),
+                token,
+                **args,
+                _request_timeout=timeout,
+            )
+
+        return requests.invoke(operation, advertiser_id, call, exact_numbers=True).data
+
+    return send

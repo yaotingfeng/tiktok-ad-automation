@@ -75,7 +75,7 @@ def admit_tiktok_call(
         and operation
         not in PROTOCOL_OPERATIONS
         | ACCOUNT_DIRECTORY_OPERATIONS
-        | {"finance.get_advertiser_balances"}
+        | {"finance.get_advertiser_balances", "reports.bc"}
     ):
         raise DomainError("account_required", "该操作必须指定广告账户")
     with admitted_scope(
