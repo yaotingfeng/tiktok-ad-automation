@@ -1985,3 +1985,8 @@
 - 行为变化：网眼推广名称由网眼后台生成，不再由本系统传入；网眼创建超时后按同参数回查，恰好 1 条链接则采用、0 条则重建、多条转人工；容量剧集固定取第一项，别名自动取；兑吧卡点集、刚刚好免费集数按剧默认值取；刚刚好支付模板随连接验证刷新；修复候选手动选择后没有进入 detail 阶段的缺陷。
 - 验证（专用库 + Redis，对照基线 `97838de`）：`ruff check`、`ty check` 通过；mypy 185 个错误与基线一致、无新增；`ruff format --check` 77 个文件与基线同一清单。前端 `bun run build` 通过；playwright workspace 项目 486 通过，chromium 项目因无后端（ECONNREFUSED 127.0.0.1:8000）未运行。后端 3 组并行全量：4538 通过、87 失败，全部在 `tests/modules/materials`，未设 `OBJECT_STORAGE_PROVIDER=s3` 的本机 `.env` 触发（与基线同样失败）；设置 s3 占位变量后素材模块重跑 1278 通过、5 跳过、1 失败（`test_repair_query_plan`，膨胀的测试库统计漂移，全新库通过，基线同库亦非本分支改动）。
 - 未在真实版权方后台联调；仅本地验证，未部署，未调用真实 TikTok。
+
+## 2026-10-12：发布 ac6ee2f 到生产
+
+- 用户要求推送并部署本地优化与修复。`deploy/local.py deploy` 前三次在检查阶段停止（未触达线上），逐一修复：报表排序多余 `cast`（`8f83cbe`）；展开分页用例按验收规模推导步数与页大小（`25bda2f`、`3a3ef18`）；素材共享中断用例在后台检查进程中 SIGINT 被继承忽略，改为显式装回默认处理（`ac6ee2f`）。
+- 批次 `20261012T003438-42935f` 完成：九服务 `ac6ee2f` Ready，迁移 head `0022_provider_link_defaults`，开关 true/true/false，HTTPS 200；公司 main 与 GitHub origin 已推送。真实 TikTok/OAuth/版权方写入未验证。详见 [2026-10-12 本地发布验收](validation/2026-10-12-local-release.md)。
