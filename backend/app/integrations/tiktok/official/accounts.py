@@ -9,7 +9,7 @@ from typing import Any
 import business_api_client as sdk
 from business_api_client.rest import ApiException
 from business_api_client.tiktok_business.tiktok_exceptions import TiktokSDKError
-from urllib3.exceptions import HTTPError
+from urllib3.exceptions import HTTPError, TimeoutError
 
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.accounts import (
@@ -76,6 +76,8 @@ def _strict_sdk_envelope(
                     int((tomorrow - now).total_seconds() * 1000)
                 )
             raise AccountAdmissionDeferred(300_000)
+        if exact is not None and raw["code"] == 40002:
+            raise DomainError("report_query_invalid", "报表参数被平台拒绝")
         if exact is not None and raw["code"] == 0:
             # 只对显式选择精确数值的读取保留原始十进制文本，不能从 SDK float 反推。
             exact["data"] = json.loads(response.data, parse_float=str)["data"]
@@ -143,6 +145,13 @@ class OfficialReadRequests:
                 raise DomainError(
                     "tiktok_response_error", "TikTok 请求未成功"
                 ) from None
+            except TimeoutError:
+                code = (
+                    "report_timeout"
+                    if operation.startswith("reports.")
+                    else "tiktok_response_error"
+                )
+                raise DomainError(code, "TikTok 读取超时") from None
             except TiktokSDKError, HTTPError:
                 raise DomainError(
                     "tiktok_response_error", "TikTok 请求未成功"

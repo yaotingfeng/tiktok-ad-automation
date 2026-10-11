@@ -131,6 +131,19 @@ class SdkReportReader:
             filtering=[{**_STATUS_ALL, "field_name": "campaign_status"}],
         )
 
+    def campaign_day(self, *, advertiser_ids, start, end, page):
+        _check_range(start, end, max_days=30)
+        return self._basic(
+            advertiser_ids=advertiser_ids,
+            data_level="AUCTION_CAMPAIGN",
+            dimensions=("campaign_id", "stat_time_day"),
+            metrics=CAMPAIGN_METRICS,
+            start=start,
+            end=end,
+            page=page,
+            filtering=[{**_STATUS_ALL, "field_name": "campaign_status"}],
+        )
+
     def campaign_day_utc(self, *, advertiser_ids, start, end, page):
         _check_range(start, end, max_days=30)
         return self._basic(

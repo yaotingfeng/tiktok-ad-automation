@@ -274,3 +274,49 @@ def test_report_gateway_bc_read_uses_frozen_bc(
             == ()
         )
     assert len(gateway_wire["sdk_calls"]) == 1
+
+
+def test_report_parameter_error_is_terminal_and_timeout_is_distinct():
+    from contextlib import nullcontext
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    from business_api_client import ApiClient
+    from urllib3.exceptions import ReadTimeoutError
+
+    from app.integrations.tiktok.official.accounts import OfficialReadRequests
+
+    client = ApiClient()
+    requests = OfficialReadRequests(
+        client,
+        request_scope=lambda *_: nullcontext(),
+        deadline=datetime.now(UTC) + timedelta(seconds=20),
+    )
+
+    def invalid(_timeout):
+        return client.deserialize(
+            SimpleNamespace(data=b'{"code":40002,"message":"invalid","data":{}}'),
+            "InlineResponse200",
+        )
+
+    with pytest.raises(DomainError) as caught:
+        requests.invoke("reports.integrated", "a", invalid, exact_numbers=True)
+    assert caught.value.code == "report_query_invalid"
+
+    def timeout(_timeout):
+        raise ReadTimeoutError(None, "synthetic", "timeout")
+
+    with pytest.raises(DomainError) as caught:
+        requests.invoke("reports.integrated", "a", timeout, exact_numbers=True)
+    assert caught.value.code == "report_timeout"
+
+
+def test_campaign_discovery_uses_local_days_and_all_statuses():
+    reader, rec = _reader(PAGE)
+    reader.campaign_day(
+        advertiser_ids=("a",), start=date(2026, 10, 5), end=date(2026, 10, 5), page=1
+    )
+    args = rec.calls[0][2]
+    assert args["dimensions"] == ["campaign_id", "stat_time_day"]
+    assert "multi_adv_report_in_utc_time" not in args
+    assert args["filtering"][0]["field_name"] == "campaign_status"

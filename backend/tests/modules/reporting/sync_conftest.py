@@ -146,3 +146,52 @@ def ad_row(
             "campaign_automation_type": "UPGRADED_SMART_PLUS",
         },
     }
+
+
+@pytest.fixture
+def committed_sync_seed():
+    """独立提交的随机租户供真实多连接领取/发布；只清理本夹具创建的租户。"""
+    from sqlmodel import Session, SQLModel
+
+    from app.core.db import engine
+
+    def factory():
+        return Session(engine, expire_on_commit=False)
+
+    with factory() as db:
+        seed = sync_seed.__wrapped__(db)
+        db.commit()
+    try:
+        yield seed, factory
+    finally:
+        with factory() as db:
+            # 新事实表不挂 BC；先删除其租户行，再逆外键顺序删除授权种子。
+            names = (
+                "ad_sync_account",
+                "ad_sync_bc",
+                "report_sync_job",
+                "report_sync_state",
+                "account_reconciliation_day",
+                "campaign_report_day",
+                "campaign_report_day_utc",
+                "campaign_report_hour",
+                "ad_report_day",
+                "material_report_day",
+            )
+            for name in names:
+                table = SQLModel.metadata.tables[name]
+                db.exec(table.delete().where(table.c.tenant_id == seed.tenant_id))
+            for table in reversed(SQLModel.metadata.sorted_tables):
+                if "tenant_id" in table.c and table.name not in names:
+                    db.exec(table.delete().where(table.c.tenant_id == seed.tenant_id))
+            db.exec(
+                SQLModel.metadata.tables["tenant"]
+                .delete()
+                .where(SQLModel.metadata.tables["tenant"].c.id == seed.tenant_id)
+            )
+            db.exec(
+                SQLModel.metadata.tables["user"]
+                .delete()
+                .where(SQLModel.metadata.tables["user"].c.id == seed.actor_id)
+            )
+            db.commit()
