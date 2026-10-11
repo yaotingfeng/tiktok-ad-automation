@@ -91,7 +91,7 @@ class PatchDraftRequest(BaseModel):
 
 
 class DeliveryChange(BaseModel):
-    """第二步单独保存投放排期，不走会清空准备结果的通用草稿更新。"""
+    """生成搭建预览前保存投放排期，不走会清空准备结果的通用草稿更新。"""
 
     model_config = ConfigDict(extra="forbid")
     request_id: UUID

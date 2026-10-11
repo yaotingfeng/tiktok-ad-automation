@@ -704,7 +704,7 @@ export type DefaultConnectionRequest = {
 /**
  * DeliveryChange
  *
- * 第二步单独保存投放排期，不走会清空准备结果的通用草稿更新。
+ * 生成搭建预览前保存投放排期，不走会清空准备结果的通用草稿更新。
  */
 export type DeliveryChange = {
     /**

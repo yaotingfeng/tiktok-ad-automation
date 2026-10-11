@@ -1,15 +1,11 @@
-import { useQueryClient } from "@tanstack/react-query"
-import { useState } from "react"
-import { BuildsService, type DraftSummary } from "@/client"
-import { Button } from "@/components/ui/button"
+import type { DeliveryConfig, DraftSummary } from "@/client"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { buildKey, mutationKey, readPendingMutation } from "./api"
-import { BuildError, reportError, unknownOutcome } from "./presentation"
 
 type Mode = "IMMEDIATE" | "START_AT" | "START_END"
+export type ScheduleValue = { mode: Mode; start: string; end: string }
 
 function localInputFromUtc(value?: string | null) {
   if (!value) return ""
@@ -26,92 +22,50 @@ function utcFromLocalInput(value: string) {
   return date.toISOString().slice(0, 19).replace("T", " ")
 }
 
-function initial(summary: DraftSummary) {
+export function scheduleFromSummary(summary: DraftSummary): ScheduleValue {
   return {
-    mode: (summary.delivery_config?.schedule_mode || "IMMEDIATE") as Mode,
+    mode: summary.delivery_config?.schedule_mode || "IMMEDIATE",
     start: localInputFromUtc(summary.delivery_config?.schedule_start_time),
     end: localInputFromUtc(summary.delivery_config?.schedule_end_time),
   }
 }
 
-// 投放排期属于本次搭建，在第二步选完投放身份后单独保存；
-// 后端沿用已准备的账户、链接与素材，只重核场景并使旧预览失效。
+export function scheduleError(value: ScheduleValue) {
+  if (value.mode !== "IMMEDIATE" && !value.start) return "请选择投放开始时间。"
+  if (value.mode === "START_END" && !value.end) return "请选择投放结束时间。"
+  if (
+    value.mode === "START_END" &&
+    new Date(value.end) <= new Date(value.start)
+  )
+    return "结束时间必须晚于开始时间。"
+  return ""
+}
+
+export function deliveryConfig(value: ScheduleValue): DeliveryConfig {
+  return {
+    schedule_mode: value.mode,
+    schedule_start_time:
+      value.mode === "IMMEDIATE" ? null : utcFromLocalInput(value.start),
+    schedule_end_time:
+      value.mode === "START_END" ? utcFromLocalInput(value.end) : null,
+  }
+}
+
+// 投放排期属于本次搭建，在第二步投放身份之后填写；
+// 不单独保存，点击“生成搭建预览”时由准备页先保存排期再生成预览。
 export function DraftSchedule({
-  tenantId,
-  bcId,
-  summary,
-  write,
-  onRefresh,
+  value,
+  onChange,
+  disabled,
+  error,
 }: {
-  tenantId: string
-  bcId: string
-  summary: DraftSummary
-  write: boolean
-  onRefresh: () => void
+  value: ScheduleValue
+  onChange: (value: ScheduleValue) => void
+  disabled: boolean
+  error: string
 }) {
-  const client = useQueryClient()
-  const [value, setValue] = useState(() => initial(summary))
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<unknown>()
-  const [inputError, setInputError] = useState("")
-  const key = mutationKey(tenantId, bcId, summary.draft_id)
-  const disabled =
-    !write || busy || summary.status !== "READY" || !!readPendingMutation(key)
-  const saved = initial(summary)
-  const dirty = JSON.stringify(value) !== JSON.stringify(saved)
-  const change = (patch: Partial<typeof value>) => {
-    setInputError("")
-    setValue((v) => ({ ...v, ...patch }))
-  }
-  async function save() {
-    if (disabled) return
-    if (value.mode !== "IMMEDIATE" && !value.start)
-      return setInputError("请选择投放开始时间。")
-    if (value.mode === "START_END" && !value.end)
-      return setInputError("请选择投放结束时间。")
-    if (
-      value.mode === "START_END" &&
-      new Date(value.end) <= new Date(value.start)
-    )
-      return setInputError("结束时间必须晚于开始时间。")
-    const requestId = crypto.randomUUID()
-    setBusy(true)
-    setError(undefined)
-    sessionStorage.setItem(
-      key,
-      JSON.stringify({ requestId, kind: "delivery", prepare: false }),
-    )
-    try {
-      await BuildsService.updateDelivery({
-        path: { tenant_id: tenantId, draft_id: summary.draft_id },
-        body: {
-          request_id: requestId,
-          expected_revision: summary.revision,
-          delivery_config: {
-            schedule_mode: value.mode,
-            schedule_start_time:
-              value.mode === "IMMEDIATE"
-                ? null
-                : utcFromLocalInput(value.start),
-            schedule_end_time:
-              value.mode === "START_END" ? utcFromLocalInput(value.end) : null,
-          },
-        },
-      })
-      sessionStorage.removeItem(key)
-      await client.invalidateQueries({
-        queryKey: [...buildKey(tenantId, bcId), summary.draft_id],
-      })
-      onRefresh()
-    } catch (e) {
-      if (!unknownOutcome(e)) sessionStorage.removeItem(key)
-      setError(e)
-      reportError(e)
-      onRefresh()
-    } finally {
-      setBusy(false)
-    }
-  }
+  const change = (patch: Partial<ScheduleValue>) =>
+    onChange({ ...value, ...patch })
   return (
     <Card className="min-w-0">
       <CardHeader>
@@ -119,7 +73,7 @@ export function DraftSchedule({
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <p className="text-sm text-muted-foreground">
-          在本次广告搭建中设置。日期时间使用选择器填写，提交前会按广告账户时区转换为
+          在本次广告搭建中设置，生成搭建预览时一并保存。日期时间使用选择器填写，提交前会按广告账户时区转换为
           TikTok API 所需的 UTC。
         </p>
         <RadioGroup
@@ -169,34 +123,10 @@ export function DraftSchedule({
             )}
           </div>
         )}
-        {inputError && (
+        {error && (
           <p role="alert" className="text-sm text-destructive">
-            {inputError}
+            {error}
           </p>
-        )}
-        {!!error && <BuildError error={error} />}
-        {write && (
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="outline"
-              disabled={disabled || !dirty}
-              onClick={() => void save()}
-            >
-              {busy ? "正在保存…" : "保存排期"}
-            </Button>
-            {dirty && (
-              <Button
-                variant="ghost"
-                disabled={busy}
-                onClick={() => {
-                  setInputError("")
-                  setValue(saved)
-                }}
-              >
-                撤销修改
-              </Button>
-            )}
-          </div>
         )}
       </CardContent>
     </Card>

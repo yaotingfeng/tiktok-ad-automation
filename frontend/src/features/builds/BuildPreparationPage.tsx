@@ -41,7 +41,13 @@ import {
 import { BuildDramaTable } from "./BuildDramaTable"
 import { BuildInputPage } from "./BuildInputPage"
 import { BuildLinkSheet } from "./BuildLinkSheet"
-import { DraftSchedule } from "./DraftSchedule"
+import {
+  DraftSchedule,
+  deliveryConfig,
+  type ScheduleValue,
+  scheduleError,
+  scheduleFromSummary,
+} from "./DraftSchedule"
 import { DraftTargeting } from "./DraftTargeting"
 import { DramaMaterialSheet } from "./DramaMaterialSheet"
 import { IdentityTargetPicker } from "./IdentityTargetPicker"
@@ -135,6 +141,9 @@ function Preparation({
       q.state.data?.status === "PREPARING" ? 2000 : false,
   })
   const [, refreshMutationState] = useState(0)
+  // null 表示沿用草稿已保存的排期；用户修改后暂存本地，生成预览时一并保存。
+  const [scheduleEdit, setScheduleEdit] = useState<ScheduleValue | null>(null),
+    [scheduleProblem, setScheduleProblem] = useState("")
   const pendingMutation = readPendingMutation(
     mutationKey(tenantId, bcId, draftId),
   )
@@ -330,11 +339,49 @@ function Preparation({
     if (!current || busy || !allowed || !scoped || pendingMutation) return
     // 原请求结果查询仍可恢复；只有新建预览必须满足当前必填条件。
     if (!recover && previewRevision === null && !previewReady) return
+    const creating = !recover && previewRevision === null
+    const savedSchedule = scheduleFromSummary(current)
+    const schedule = scheduleEdit ?? savedSchedule
+    const problem = creating ? scheduleError(schedule) : ""
+    setScheduleProblem(problem)
+    if (problem) return
     setBusy(true)
     setError(undefined)
-    const revision = previewRevision ?? current.revision
+    let revision = previewRevision ?? current.revision
     try {
       let previewId: string
+      if (
+        creating &&
+        JSON.stringify(schedule) !== JSON.stringify(savedSchedule)
+      ) {
+        // 排期变化先保存（沿用已准备结果、换新 revision），再按新 revision 生成预览；
+        // 保存结果未知时沿用通用修改回查，避免重复提交。
+        const key = mutationKey(tenantId, bcId, draftId)
+        const requestId = crypto.randomUUID()
+        sessionStorage.setItem(
+          key,
+          JSON.stringify({ requestId, kind: "delivery", prepare: false }),
+        )
+        try {
+          const { data } = await BuildsService.updateDelivery({
+            path: { tenant_id: tenantId, draft_id: draftId },
+            body: {
+              request_id: requestId,
+              expected_revision: revision,
+              delivery_config: deliveryConfig(schedule),
+            },
+            signal: controller.current.signal,
+          })
+          revision = data.revision
+        } catch (e) {
+          if (!unknownOutcome(e)) sessionStorage.removeItem(key)
+          refreshMutationState((value) => value + 1)
+          void summary.refetch()
+          throw e
+        }
+        sessionStorage.removeItem(key)
+        setScheduleEdit(null)
+      }
       if (recover || previewRevision !== null) {
         const { data } = await BuildsService.previewRequest({
           path: { tenant_id: tenantId, draft_id: draftId, revision },
@@ -678,15 +725,19 @@ function Preparation({
         }}
       />
       <DraftSchedule
-        key={`schedule:${current.revision}`}
-        tenantId={tenantId}
-        bcId={bcId}
-        summary={current}
-        write={allowed && !busy && !pending && !pendingMutation}
-        onRefresh={() => {
-          refreshMutationState((value) => value + 1)
-          void summary.refetch()
+        value={scheduleEdit ?? scheduleFromSummary(current)}
+        onChange={(value) => {
+          setScheduleProblem("")
+          setScheduleEdit(value)
         }}
+        disabled={
+          !allowed ||
+          busy ||
+          !!pending ||
+          !!pendingMutation ||
+          previewRevision !== null
+        }
+        error={scheduleProblem}
       />
       <Card className="sticky bottom-0 min-w-0">
         <CardContent className="flex min-w-0 flex-wrap items-center justify-between gap-3">

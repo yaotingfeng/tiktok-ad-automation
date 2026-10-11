@@ -1,4 +1,4 @@
-"""第二步保存投放排期：沿用已准备结果，旧预览失效。"""
+"""生成预览前保存投放排期：沿用已准备结果，旧预览失效，新预览立即可生成。"""
 
 from uuid import uuid4
 
@@ -60,6 +60,16 @@ def test_delivery_save_preserves_groups_and_obsoletes_preview(
     preview = session.get(BuildPreview, preview_id)
     session.refresh(preview)
     assert preview.status == "OBSOLETE"
+    # 无需重新准备：草稿保持 READY，新 revision 可立即生成带新排期的预览。
+    assert draft.status == "READY"
+    fresh = previews.generate_preview(
+        session, context=context, draft_id=prepared, expected_revision=revision
+    )
+    drain(session, context, fresh)
+    config = session.get(BuildPreview, fresh).config
+    assert config["schedule_type"] == "SCHEDULE_START_END"
+    assert config["schedule_start_time"] == "2026-11-01 00:00:00"
+    assert config["schedule_end_time"] == "2026-11-08 00:00:00"
 
 
 def test_delivery_save_requires_ready_draft(session, context, prepared):

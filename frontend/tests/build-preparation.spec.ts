@@ -2376,9 +2376,16 @@ test("预览展示冻结定向，而非当前策略配置", async ({ page }) => 
   ).toBeVisible()
 })
 
-test("投放排期在第二步投放身份之后设置，单独保存不重新提交输入", async ({
-  page,
-}) => {
+async function selectMini(page: import("@playwright/test").Page, api: any) {
+  await page.getByRole("button", { name: "选择小程序", exact: true }).click()
+  await page.getByRole("button", { name: /LemonShow.*选择并继续/ }).click()
+  api.summary.status = "READY"
+  await expect(
+    page.getByRole("button", { name: "生成搭建预览", exact: true }),
+  ).toBeEnabled()
+}
+
+test("投放排期在第二步投放身份之后，生成预览时一并保存", async ({ page }) => {
   const api = await buildsBoundary(page)
   await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
   const identity = page.getByText("投放身份", { exact: true }).first()
@@ -2387,29 +2394,50 @@ test("投放排期在第二步投放身份之后设置，单独保存不重新�
   const identityBox = await identity.boundingBox()
   const scheduleBox = await schedule.boundingBox()
   expect(scheduleBox!.y).toBeGreaterThan(identityBox!.y)
-  const save = page.getByRole("button", { name: "保存排期", exact: true })
-  await expect(save).toBeDisabled()
+  await expect(
+    page.getByRole("button", { name: "保存排期", exact: true }),
+  ).toHaveCount(0)
+  const preview = page.getByRole("button", {
+    name: "生成搭建预览",
+    exact: true,
+  })
+  await selectMini(page, api)
   await page.getByLabel("指定开始和结束时间").check()
   await page.getByLabel("开始时间", { exact: true }).fill("2026-11-01T08:00")
   await page.getByLabel("结束时间", { exact: true }).fill("2026-11-01T07:00")
-  await save.click()
+  await expect(preview).toBeEnabled()
+  await preview.click()
   await expect(page.getByText("结束时间必须晚于开始时间。")).toBeVisible()
+  const before = api.requests.filter((r) => r.method !== "GET").length
   await page.getByLabel("结束时间", { exact: true }).fill("2026-11-08T08:00")
-  await save.click()
-  await expect
-    .poll(() => api.requests.filter((r) => r.path.endsWith("/delivery")).length)
-    .toBe(1)
-  const sent = api.requests.find((r) => r.path.endsWith("/delivery"))!
-  expect(sent.body.expected_revision).toBe(1)
-  expect(sent.body.delivery_config.schedule_mode).toBe("START_END")
-  expect(sent.body.delivery_config.schedule_start_time).toMatch(
+  await preview.click()
+  await expect(page).toHaveURL(new RegExp(`/build-previews/${P}`))
+  const writes = api.requests.filter((r) => r.method !== "GET").slice(before)
+  expect(writes.map((r) => r.path.split("/").at(-1))).toEqual([
+    "delivery",
+    "previews",
+  ])
+  expect(writes[0].body.delivery_config.schedule_mode).toBe("START_END")
+  expect(writes[0].body.delivery_config.schedule_start_time).toMatch(
     /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/,
   )
-  expect(
-    api.requests.filter(
-      (r) => r.method === "PATCH" && r.path.endsWith(`/build-drafts/${D}`),
-    ),
-  ).toHaveLength(0)
+  // 预览按保存排期后返回的新 revision 生成。
+  expect(writes[1].body.expected_revision).toBe(
+    writes[0].body.expected_revision + 1,
+  )
+})
+
+test("排期未修改时生成预览不额外保存排期", async ({ page }) => {
+  const api = await buildsBoundary(page)
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await selectMini(page, api)
+  await page.getByRole("button", { name: "生成搭建预览", exact: true }).click()
+  await expect(page).toHaveURL(new RegExp(`/build-previews/${P}`))
+  expect(api.requests.some((r) => r.path.endsWith("/delivery"))).toBe(false)
+})
+
+test("第一步输入页不再填写投放排期", async ({ page }) => {
+  await buildsBoundary(page)
   await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}&edit=true`)
   await expect(
     page.getByRole("button", { name: "解析并准备", exact: true }),
