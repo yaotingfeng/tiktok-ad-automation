@@ -15,6 +15,7 @@ from .contract import (
     LinkLookupPage,
     LinkReceipt,
     SearchPage,
+    count_or_none,
     external_id,
     failure,
     positive,
@@ -27,6 +28,19 @@ BASE = "https://gateway.dorareel.com/portal/distributor"
 PAGE_SIZE = 100
 # 需要支付模板的变现方式：付费与混合应用建链必须选择支付模板。
 PAYMENT_TEMPLATE_MODES = frozenset({"iap", "mixed"})
+
+
+def episode_range_valid(
+    free_episode_count: int, episode_seq: int, episode_count: int | None = None
+) -> bool:
+    """刚刚好后台的集数规则：免费集数 0～总集数；为 0 时跳转集只能 1；跳转集 ≤ max(免费集数, 1)。"""
+
+    return not (
+        free_episode_count < 0
+        or (episode_count is not None and free_episode_count > episode_count)
+        or (free_episode_count == 0 and episode_seq != 1)
+        or episode_seq > max(free_episode_count, 1)
+    )
 
 
 class GangganhaoClient:
@@ -172,6 +186,8 @@ class GangganhaoClient:
                         display_drama_id=external_id(row.get("publishId")),
                         title=row_title,
                         language=row.get("language") if isinstance(row.get("language"), str) else None,
+                        free_episode_count=count_or_none(row.get("freeEpisodeCount"), minimum=0),
+                        episode_count=count_or_none(row.get("episodeCount"), minimum=1),
                     )
                 )
         complete = page * PAGE_SIZE >= total
@@ -327,11 +343,13 @@ class GangganhaoClient:
             raise failure("provider_request_invalid")
         try:
             mode = str(config.get("delivery_mode", "iaa")).lower()
+            free_episode_count = int(config["free_episode_count"])
+            episode_seq = positive(config["episode_seq"])
             normalized = {
                 "series_id": positive(config["series_id"]),
                 "series_title": string(config.get("series_title", "")).strip(),
-                "free_episode_count": int(config["free_episode_count"]),
-                "episode_seq": positive(config["episode_seq"]),
+                "free_episode_count": free_episode_count,
+                "episode_seq": episode_seq,
             }
         except (KeyError, TypeError, ValueError):
             raise failure("provider_request_invalid") from None
@@ -341,11 +359,7 @@ class GangganhaoClient:
             normalized["authorizer_app_id"] = positive(config["authorizer_app_id"])
         elif require_template:
             raise failure("provider_request_invalid")
-        if normalized["free_episode_count"] < 0:
-            raise failure("provider_request_invalid")
-        if normalized["free_episode_count"] == 0 and normalized["episode_seq"] != 1:
-            raise failure("provider_request_invalid")
-        if normalized["episode_seq"] > max(normalized["free_episode_count"], 1):
+        if not episode_range_valid(free_episode_count, episode_seq):
             raise failure("provider_request_invalid")
         template_required = mode in PAYMENT_TEMPLATE_MODES
         if template_required and "payment_template_id" not in config:

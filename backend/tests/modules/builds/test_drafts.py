@@ -31,6 +31,7 @@ from app.modules.builds.models import (
     DraftPreparation,
 )
 from app.modules.providers.models import (
+    LinkPreparation,
     LinkPreparationItem,
     PromotionLink,
     ProviderApplication,
@@ -112,7 +113,7 @@ def create_intent(session, context, *, historical=False):
         "application_id": "app-draft",
         "drama_lines": [" Moon ", "Moon", "", "Short Drama"],
         "account_lines": ["account-A", "account-A", "missing", ""],
-        "link_config": {"episode": 1, "charge_level": 1},
+        "link_config": {"episode": 1},
     }
 
 
@@ -696,3 +697,81 @@ def test_scene_reference_uses_a_current_ready_link_when_first_drama_link_changed
     monkeypatch.setattr(drafts, "ensure_scene_preparation", ensure)
     finish(session, context, task_id)
     assert called == [dramas[1].link_id]
+
+
+def provider_draft(session, context, intent, kind):
+    """在同一 BC 与策略下改用指定版权方应用建草稿。"""
+
+    account(session, context)
+    connection = ProviderConnection(
+        tenant_id=context.tenant_id,
+        kind=kind,
+        display_name=kind,
+        encrypted_credentials="unused",
+        status="active",
+    )
+    session.add(connection)
+    session.flush()
+    application = ProviderApplication(
+        tenant_id=context.tenant_id,
+        connection_id=connection.id,
+        external_id=f"{kind}-app",
+        name=kind,
+    )
+    session.add(application)
+    session.flush()
+    draft_id = create_draft(
+        session,
+        context=context,
+        **{
+            **intent,
+            "provider_connection_id": connection.id,
+            "application_id": application.external_id,
+        },
+    )
+    return session.get(BuildDraft, draft_id), application
+
+
+def latest_link_preparation(session, draft):
+    prep = session.exec(
+        select(DraftPreparation)
+        .where(DraftPreparation.draft_id == draft.id)
+        .order_by(DraftPreparation.draft_revision.desc())
+    ).first()
+    return session.get(LinkPreparation, prep.provider_task_id)
+
+
+def test_draft_preparation_uses_application_defaults_and_overrides(
+    session, context, intent
+):
+    draft, application = provider_draft(session, context, intent, "duiba")
+    application.link_defaults = {"episode": 2}
+    draft.link_config = {"card_point_episode": 6}
+    session.add_all([application, draft])
+    session.flush()
+    first = prepare_draft(
+        session, context=context, draft_id=draft.id, request_id=uuid4()
+    )
+    prep = latest_link_preparation(session, draft)
+    assert prep.config == {"episode": 2, "card_point_episode": 6}
+
+    # 生效参数不变时重新准备复用原取链任务（按生效参数摘要匹配），不重新取链。
+    previous = session.get(DraftPreparation, first)
+    previous.status = "READY"
+    session.add(previous)
+    session.flush()
+    second = prepare_draft(
+        session, context=context, draft_id=draft.id, request_id=uuid4()
+    )
+    assert second != first
+    assert session.get(DraftPreparation, second).provider_task_id == prep.id
+
+
+def test_draft_preparation_rejects_obsolete_override_keys(session, context, intent):
+    draft, _ = provider_draft(session, context, intent, "wangyan")
+    draft.link_config = {"promote_name": "x"}
+    session.add(draft)
+    session.flush()
+    with pytest.raises(DomainError) as error:
+        prepare_draft(session, context=context, draft_id=draft.id, request_id=uuid4())
+    assert error.value.code == "link_config_invalid"

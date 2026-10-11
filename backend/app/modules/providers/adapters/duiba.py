@@ -14,6 +14,7 @@ from .contract import (
     LinkLookupPage,
     LinkReceipt,
     SearchPage,
+    count_or_none,
     external_id,
     failure,
     positive,
@@ -121,6 +122,8 @@ class DuibaClient:
                     display_drama_id=external_id(row.get("id")),
                     title=row_title,
                     language=row.get("language") if isinstance(row.get("language"), str) else None,
+                    free_episode_count=count_or_none(row.get("freeEpisodeCount"), minimum=0),
+                    episode_count=count_or_none(row.get("episodeCount"), minimum=1),
                 )
             )
         return SearchPage(items=items, next_cursor=next_cursor, complete=complete)

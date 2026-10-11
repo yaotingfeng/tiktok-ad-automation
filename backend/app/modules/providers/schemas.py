@@ -33,6 +33,9 @@ class DramaCandidate(BaseModel):
     title: str = Field(min_length=1)
     language: str | None = None
     display_drama_id: str | None = None
+    # 剧单返回的免费集数、总集数，只用于逐剧计算取链参数，不写入剧目表。
+    free_episode_count: int | None = Field(default=None, ge=0)
+    episode_count: int | None = Field(default=None, ge=1)
 
 
 class ResolvedLink(BaseModel):

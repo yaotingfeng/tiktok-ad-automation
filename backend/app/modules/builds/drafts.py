@@ -50,6 +50,7 @@ from app.modules.materials.content_identity import (
 from app.modules.materials.models import MaterialFile
 from app.modules.materials.repository import material_visible
 from app.modules.materials.service import match_materials
+from app.modules.providers.capabilities import effective_link_config
 from app.modules.providers.models import (
     LinkPreparation,
     LinkPreparationItem,
@@ -415,12 +416,28 @@ def prepare_draft(
     )
     from app.modules.providers.link_steps import _digest
 
+    # 与 create_preparation_request 使用同一合并规则，保证复用判断比较的是生效参数；
+    # 手动版权方不自动取链，没有取链参数契约。
+    link_config = (
+        draft.link_config
+        if provider.kind == "other"
+        else effective_link_config(
+            provider.kind,
+            get_application(
+                session,
+                context=context,
+                connection_id=draft.provider_connection_id,
+                application_id=draft.application_id,
+            ),
+            draft.link_config,
+        )
+    )
     provider_digest = _digest(
         [
             str(draft.provider_connection_id),
             draft.application_id,
             list(lines),
-            draft.link_config,
+            link_config,
         ]
     )
     previous_provider = session.exec(
@@ -456,7 +473,7 @@ def prepare_draft(
                 DraftPreparation.draft_id == draft.id,
                 LinkPreparation.connection_id == draft.provider_connection_id,
                 LinkPreparation.application_id == draft.application_id,
-                col(LinkPreparation.config) == draft.link_config,
+                col(LinkPreparation.config) == link_config,
             )
             .order_by(col(DraftPreparation.draft_revision).desc())
             .limit(1)
@@ -488,7 +505,7 @@ def prepare_draft(
                 connection_id=draft.provider_connection_id,
                 application_id=draft.application_id,
                 lines=list(lines),
-                config=draft.link_config,
+                config=link_config,
                 request_id=uuid5(prep.id, "provider-links"),
             )
         )

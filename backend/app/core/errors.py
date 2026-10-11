@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 ERROR_HTTP_STATUS: dict[str, int] = {
     "link_config_invalid": 422,
     "link_config_template_required": 422,
+    "link_episode_out_of_range": 409,
     "ads_type_unavailable": 409,
     "ads_query_invalid": 422,
     "ads_response_invalid": 502,
@@ -286,6 +287,7 @@ ERROR_HTTP_STATUS: dict[str, int] = {
 ERROR_PUBLIC_MESSAGES: dict[str, str] = {
     "link_config_invalid": "取链参数无效，请检查起播集、卡点集、免费集数、跳转集或支付模板",
     "link_config_template_required": "付费或混合变现应用需要支付模板，请在版权方连接的推广应用中设置",
+    "link_episode_out_of_range": "跳转集或免费集数超出该剧可选范围，请单独调整参数",
     "tenant_name_conflict": "租户名称已存在，请使用唯一名称",
     "push_unauthorized": "接口签名无效、已过期或接入凭证已停用",
     "push_forbidden": "接入方或执行用户没有该租户的推送权限",

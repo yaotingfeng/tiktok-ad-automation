@@ -144,3 +144,31 @@ def test_duiba_rejects_empty_application_discovery():
         with pytest.raises(DomainError) as error:
             client.discover_applications()
     assert error.value.code == "provider_application_discovery_unverified"
+
+
+def test_duiba_search_carries_drama_free_episode_count():
+    def handle(request):
+        assert request.url.params["keyword"] == "Moon"
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": {
+                    "list": [
+                        {
+                            "id": 31,
+                            "title": "Moon",
+                            "language": "en",
+                            "freeEpisodeCount": 8,
+                            "episodeCount": 60,
+                        }
+                    ],
+                    "total": 1,
+                },
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http:
+        page = DuibaClient(http, token="t").search("Moon", None)
+    assert page.items[0].free_episode_count == 8
+    assert page.items[0].episode_count == 60

@@ -285,7 +285,7 @@ def test_two_drafts_freeze_independent_preview_rows_and_keep_strategy_version(
         context,
         prepared,
         strategy_version_id=source.strategy_version_id,
-        link_config={"episode": 2, "charge_level": 1},
+        link_config={"episode": 2},
     )
     first_preview = previews.generate_preview(
         session, context=context, draft_id=prepared, expected_revision=1
@@ -478,7 +478,7 @@ def test_strategy_structure_matrix_persists_material_ads_and_frozen_contract(
         context,
         prepared,
         strategy_version_id=version_id,
-        link_config={"episode": 10 + expected_groups, "charge_level": 1},
+        link_config={"episode": 10 + expected_groups},
     )
     # 使用固定 20 条离线素材，让第四个矩阵精确得到每组 10 个广告。
     rows = session.exec(

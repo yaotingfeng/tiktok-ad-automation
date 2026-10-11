@@ -20,7 +20,10 @@ from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.modules.providers.adapters.contract import LinkReceipt, ProviderClient
 from app.modules.providers.adapters.duiba import DuibaClient
-from app.modules.providers.adapters.gangganhao import GangganhaoClient
+from app.modules.providers.adapters.gangganhao import (
+    GangganhaoClient,
+    episode_range_valid,
+)
 from app.modules.providers.adapters.rongliang import RongliangClient
 from app.modules.providers.models import (
     LinkPreparation,
@@ -67,6 +70,9 @@ ERROR_MESSAGES = {
     "action_forbidden": "当前操作人已无取链权限",
     "drama_not_found": "当前应用未找到完全匹配的剧目",
     "drama_ambiguous": "当前应用存在多个完全匹配的剧目，请选择候选",
+    "link_episode_out_of_range": "跳转集或免费集数超出该剧可选范围，请单独调整参数",
+    "link_config_invalid": "取链参数无效",
+    "link_config_template_required": "付费或混合变现应用需要支付模板",
     "provider_internal_error": "当前取链步骤未完成",
 }
 
@@ -484,6 +490,18 @@ def _page(data: dict[str, Any]) -> tuple[list[dict[str, Any]], str | None]:
     return data["items"], cursor
 
 
+# 剧事实仅存于本次 work，不进入 ProviderDrama 表。
+_DRAMA_FACTS = {"free_episode_count", "episode_count"}
+
+
+def stage_after_resolution(kind: str) -> str:
+    """剧目确定后进入的阶段：有逐剧参数的版权方先读详情，避免候选选择后跳过。"""
+
+    return {"duiba": "duiba_preview", "gangganhao": "ggh_detail", "rongliang": "rl_detail"}.get(
+        kind, "lookup"
+    )
+
+
 def _resolved_drama(
     session: Session,
     context: TenantContext,
@@ -499,7 +517,7 @@ def _resolved_drama(
             tenant_id=context.tenant_id,
             connection_id=prep.connection_id,
             application_id=prep.application_id,
-            **candidate,
+            **{key: value for key, value in candidate.items() if key not in _DRAMA_FACTS},
         )
         .on_conflict_do_update(
             index_elements=[
@@ -563,10 +581,15 @@ def _verified_duiba(
     ):
         raise _error("provider_schema_unsupported")
     actual = data["config"]
+    # 卡点集按剧计算，核验以冻结在该剧 work 中的生效参数为准。
+    frozen_config = work.get("duiba_config")
+    expected = frozen_config if isinstance(frozen_config, dict) else config
     for key in ("episode", "card_point_episode"):
-        if key in config and _positive(actual.get(key)) != _positive(config[key]):
+        if key in expected and _positive(actual.get(key)) != _positive(expected[key]):
             raise _error("config_conflict")
-    if "miniapp_id" in config and str(actual.get("miniapp_id")) != str(config["miniapp_id"]):
+    if "miniapp_id" in expected and str(actual.get("miniapp_id")) != str(
+        expected["miniapp_id"]
+    ):
         raise _error("config_conflict")
 
 
@@ -854,7 +877,7 @@ def _run_duiba_item(
             work["drama"] = _resolved_drama(
                 session, context, prep, next(iter(candidates.values()))
             )
-            work["stage"] = "duiba_preview"
+            work["stage"] = stage_after_resolution("duiba")
         _finish_unit(session, context, item_id, token, work)
         return
 
@@ -862,11 +885,17 @@ def _run_duiba_item(
         drama_id = work["drama"]["external_drama_id"]
         episodes = client.preview_drama(drama_id)
         episode = _positive(config.get("episode", 1))
-        card_point = _positive(config.get("card_point_episode", episode))
+        # 卡点集未调整时与后台/CLI 一致取剧免费集数；剧单缺失时回退为起播集。
+        card_point = _positive(
+            config.get("card_point_episode")
+            or work["drama"].get("free_episode_count")
+            or episode
+        )
         by_serial = {row["serialNo"]: row for row in episodes}
         if episode not in by_serial or card_point not in by_serial:
             raise _error("provider_request_invalid")
         effective = dict(config)
+        effective.update(card_point_episode=card_point, episode=episode)
         effective.setdefault("miniapp_id", application_id)
         effective.update(
             default_episode_lc_id=by_serial[episode]["lc671EpisodeId"],
@@ -1026,17 +1055,29 @@ def _run_gangganhao_item(
             work["drama"] = _resolved_drama(
                 session, context, prep, next(iter(candidates.values()))
             )
-            work["stage"] = "ggh_detail"
+            work["stage"] = stage_after_resolution("gangganhao")
         _finish_unit(session, context, item_id, token, work)
         return
 
     if stage == "ggh_detail":
-        detail = client.series_detail(work["drama"]["external_drama_id"])
+        drama = work["drama"]
+        detail = client.series_detail(drama["external_drama_id"])
+        # 免费集数未调整时取剧自身设置，缺失时为 3，与 CLI 一致。
+        free = config.get("free_episode_count")
+        if free is None:
+            free = drama.get("free_episode_count")
+        free = 3 if free is None else int(free)
+        seq = _positive(config.get("episode_seq", 1))
+        # 校验与刚刚好后台一致；不满足时只让该剧冲突，不静默改值。
+        if not episode_range_valid(free, seq, drama.get("episode_count")):
+            raise _error("link_episode_out_of_range")
         effective = dict(config)
         delivery_mode = detail.get("delivery_mode")
         if not isinstance(delivery_mode, str) or not delivery_mode.strip():
             delivery_mode = getattr(client, "delivery_mode", "iaa")
         effective.update(
+            free_episode_count=free,
+            episode_seq=seq,
             authorizer_app_id=application_id,
             series_id=detail["series_id"],
             series_title=detail["series_title"],
@@ -1185,7 +1226,7 @@ def _run_rongliang_item(
             work["drama"] = _resolved_drama(
                 session, context, prep, next(iter(candidates.values()))
             )
-            work["stage"] = "rl_detail"
+            work["stage"] = stage_after_resolution("rongliang")
         _finish_unit(session, context, item_id, token, work)
         return
 
@@ -1630,7 +1671,7 @@ def run_link_item(
                 "connection_unavailable",
             }
             else "config_conflict"
-            if code in {"config_conflict", "config_unverifiable"}
+            if code in {"config_conflict", "config_unverifiable", "link_episode_out_of_range"}
             else "result_unknown"
             if code in {"provider_result_unknown", "provider_state_invalid"}
             else "retryable_error"

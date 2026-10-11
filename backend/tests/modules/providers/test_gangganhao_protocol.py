@@ -67,6 +67,8 @@ def test_gangganhao_login_apps_search_and_iaa_create():
         ]
         page = client.search("Moon", None)
         assert page.items[0].external_drama_id == "886"
+        assert page.items[0].free_episode_count == 3
+        assert page.items[0].episode_count == 10
         receipt = client.create_link(
             "886",
             {"authorizer_app_id": "16", "series_id": "12", "series_title": "Moon", "free_episode_count": 3, "episode_seq": 1, "delivery_mode": "iaa"},

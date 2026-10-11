@@ -210,6 +210,18 @@ def positive(value: object) -> int:
     return number
 
 
+def count_or_none(value: object, *, minimum: int) -> int | None:
+    """剧单数值字段缺失或格式异常时返回 None，由取链流程按 CLI 规则回退。"""
+
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = int(str(value))
+    except ValueError:
+        return None
+    return number if number >= minimum else None
+
+
 def external_id(value: object) -> str:
     if (
         isinstance(value, bool)

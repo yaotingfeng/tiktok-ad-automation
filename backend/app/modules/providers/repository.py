@@ -17,6 +17,7 @@ from sqlmodel import Session, col, select
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.core.pagination import Page, count_rows
+from app.modules.providers.capabilities import effective_link_config
 from app.modules.providers.models import (
     LinkPreparation,
     PromotionLink,
@@ -294,7 +295,7 @@ def create_preparation_request(
         tenant_id=context.tenant_id,
         action="provider_write",
     )
-    get_application(
+    application = get_application(
         session,
         context=context,
         connection_id=connection_id,
@@ -306,6 +307,8 @@ def create_preparation_request(
     cleaned = clean_lines(lines)
     if not cleaned or not isinstance(config, dict):
         raise DomainError("provider_request_invalid", "剧名和推广配置不能为空")
+    # 应用默认值与本次调整在此唯一入口合并；已合并结果再次合并保持不变。
+    config = effective_link_config(connection.kind, application, config)
     try:
         _validate_json(config)
         digest = _digest([str(connection_id), application_id, lines, config])
@@ -499,6 +502,7 @@ def select_preparation_candidate(
         _resolved_drama,
         _store,
         _validated_work,
+        stage_after_resolution,
     )
     from app.modules.providers.schemas import DramaCandidate
     from app.modules.providers.tasks import queue_item
@@ -533,7 +537,12 @@ def select_preparation_candidate(
     if selected is None:
         raise DomainError("candidate_not_available", "候选不属于当前输入行及应用")
     work["drama"] = _resolved_drama(session, context, prep, selected.model_dump())
-    work.update(stage="lookup", lookup_cursor=None, lookup_found=None)
+    # 人工选定候选后与唯一匹配一致，先进入版权方详情阶段计算逐剧参数。
+    work.update(
+        stage=stage_after_resolution(connection.kind),
+        lookup_cursor=None,
+        lookup_found=None,
+    )
     work.pop("claim_token", None)
     work.pop("claim_until", None)
     _store(item, prep, connection, work)
