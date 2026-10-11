@@ -112,3 +112,12 @@ def test_remote_scope_serializes_different_config_requests():
             assert sorted(pool.map(claim, ids)) == [False, True]
     finally:
         cleanup_workflow(context.tenant_id, context.actor_id)
+
+
+def test_task_hard_limit_is_shorter_than_claim_window():
+    from app.modules.providers.link_steps import CLAIM_SECONDS
+    from app.modules.providers.tasks import HARD_LIMIT_SECONDS
+
+    # 网眼丢响应恢复只在尝试的执行窗口（CLAIM_SECONDS）过后才把该尝试视为不存在；
+    # 这只有在 prefork 硬超时先杀掉发送方时才安全，所以硬超时必须短于执行窗口
+    assert HARD_LIMIT_SECONDS < CLAIM_SECONDS
