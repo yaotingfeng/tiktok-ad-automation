@@ -257,7 +257,8 @@ test("预览总数未知时仅显示阶段和真实已处理数，耗时持续�
 }) => {
   const api = await buildsBoundary(page, { previewStatus: "BUILDING" })
   const now = new Date("2026-09-17T02:00:00Z")
-  await page.clock.install({ time: now })
+  // 只固定业务读取的时间，保留路由和轮询定时器正常运行。
+  await page.clock.setFixedTime(now)
   api.preview.created_at = "2026-09-17T01:59:50Z"
   api.preview.generation_progress = {
     phase: "dramas",
@@ -277,7 +278,7 @@ test("预览总数未知时仅显示阶段和真实已处理数，耗时持续�
   ).toBeVisible()
   await expect(page.getByRole("progressbar")).toHaveCount(0)
   await expect(page.getByText("已用时 10 秒", { exact: true })).toBeVisible()
-  await page.clock.runFor(1000)
+  await page.clock.setFixedTime(new Date(now.getTime() + 1000))
   await expect(page.getByText("已用时 11 秒", { exact: true })).toBeVisible()
 })
 
@@ -305,7 +306,8 @@ test("预览长期未推进提示核实，刷新仅查询同一预览并清除�
 }) => {
   const api = await buildsBoundary(page, { previewStatus: "BUILDING" })
   const now = new Date("2026-09-17T02:00:00Z")
-  await page.clock.install({ time: now })
+  // 只固定业务读取的时间，保留路由和轮询定时器正常运行。
+  await page.clock.setFixedTime(now)
   api.preview.created_at = "2026-09-17T01:59:00Z"
   api.preview.generation_progress.updated_at = "2026-09-17T01:59:31Z"
   await page.goto(`/tenants/${T}/build-previews/${P}?bc_id=${BC}`)
@@ -313,7 +315,7 @@ test("预览长期未推进提示核实，刷新仅查询同一预览并清除�
     page.getByRole("status", { name: "正在生成搭建预览" }),
   ).toBeVisible()
   await expect(page.getByText("进度暂未更新", { exact: true })).toHaveCount(0)
-  await page.clock.runFor(2000)
+  await page.clock.setFixedTime(new Date(now.getTime() + 2000))
   await expect(page.getByText("进度暂未更新", { exact: true })).toBeVisible()
   api.preview.generation_progress.updated_at = "2026-09-17T02:00:02Z"
   api.preview.generation_progress.completed_units = 1
