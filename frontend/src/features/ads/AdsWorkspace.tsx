@@ -65,17 +65,29 @@ export function AdsWorkspace() {
   const scopeRef = useRef(`${tenantId ?? ""}:${currentBcId ?? ""}`)
   const selectionRequestScopeRef = useRef<string | null>(null)
 
-  // 列偏好状态
-  const prefsScope = `${tenantId ?? ""}:${user?.id ?? ""}`
-  const [columnPrefs, setColumnPrefs] = useState<ColumnPrefs | null>(() =>
-    loadColumnPrefs(prefsScope, applied.dimension),
-  )
+  // 列偏好状态：仅在 tenantId 和 user.id 都就绪后读写
+  const prefsReady = Boolean(tenantId && user?.id)
+  const prefsScope = prefsReady ? `${tenantId}:${user!.id}` : null
+  const [columnPrefs, setColumnPrefs] = useState<ColumnPrefs | null>(null)
+
+  // 当 scope 就绪时加载偏好
+  useEffect(() => {
+    if (prefsScope) {
+      setColumnPrefs(loadColumnPrefs(prefsScope, applied.dimension))
+    }
+  }, [prefsScope, applied.dimension])
+
   const handlePrefsChange = (prefs: ColumnPrefs) => {
     setColumnPrefs(prefs)
-    saveColumnPrefs(prefsScope, applied.dimension, prefs)
+    if (prefsScope) {
+      saveColumnPrefs(prefsScope, applied.dimension, prefs)
+    }
   }
   const allColumns = columnsFor(catalog.data ?? [], applied.dimension)
-  const visibleColumns = applyColumnPrefs(allColumns, columnPrefs)
+  const visibleColumns = applyColumnPrefs(
+    allColumns,
+    prefsReady ? columnPrefs : null,
+  )
 
   // 汇总卡片与趋势状态
   const [activeMetric, setActiveMetric] = useState("spend")
@@ -570,8 +582,9 @@ export function AdsWorkspace() {
                 snapshot_id: undefined,
               }))
               // 加载新维度的列偏好
-              const newPrefs = loadColumnPrefs(prefsScope, dimension)
-              setColumnPrefs(newPrefs)
+              if (prefsScope) {
+                setColumnPrefs(loadColumnPrefs(prefsScope, dimension))
+              }
             }}
           >
             <TabsList>

@@ -11,7 +11,6 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
@@ -342,8 +341,11 @@ export function AdsTable({
             已选择全部 {total} 条匹配结果，可取消单行。
           </div>
         )}
-        <div className="max-h-[calc(100vh-28rem)] overflow-auto">
-          <Table>
+        <div
+          data-slot="table-container"
+          className="max-h-[calc(100vh-28rem)] overflow-auto"
+        >
+          <table data-slot="table" className="w-full caption-bottom text-sm">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead
@@ -493,7 +495,7 @@ export function AdsTable({
                 )
               })}
             </TableBody>
-          </Table>
+          </table>
         </div>
         {!rows.length && (
           <p className="p-8 text-center text-sm text-muted-foreground">

@@ -300,18 +300,39 @@ test.describe("ads workspace", () => {
     await adsBoundary(page)
     await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
     await page.getByRole("button", { name: "列设置" }).click()
-    await page.getByRole("menuitemcheckbox", { name: "千次展示成本 (CPM)" }).click()
+    await page
+      .getByRole("menuitemcheckbox", { name: "千次展示成本 (CPM)" })
+      .click()
     await page.keyboard.press("Escape")
-    await expect(page.getByRole("columnheader", { name: /千次展示成本/ })).toHaveCount(0)
+    await expect(
+      page.getByRole("columnheader", { name: /千次展示成本/ }),
+    ).toHaveCount(0)
+
+    // 验证 localStorage 键包含用户 ID
+    const storageKey = await page.evaluate(() => {
+      const keys = Object.keys(localStorage).filter((k) =>
+        k.startsWith("ads-columns:"),
+      )
+      return keys.length > 0 ? keys[0] : null
+    })
+    expect(storageKey).toContain(TENANT)
+    expect(storageKey).toContain("44444444-4444-4444-8444-444444444444") // adsBoundary /api/users/me 返回的 user.id
+
     await page.reload()
-    await expect(page.getByRole("columnheader", { name: /千次展示成本/ })).toHaveCount(0)
+    await expect(
+      page.getByRole("columnheader", { name: /千次展示成本/ }),
+    ).toHaveCount(0)
   })
 
   test("保存筛选提交字典列键", async ({ page }) => {
     await adsBoundary(page)
     await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
     await expect(page.getByRole("columnheader", { name: /消耗/ })).toBeVisible()
-    const request = page.waitForRequest((r) => new URL(r.url()).pathname.endsWith("/report-views") && r.method() === "POST")
+    const request = page.waitForRequest(
+      (r) =>
+        new URL(r.url()).pathname.endsWith("/report-views") &&
+        r.method() === "POST",
+    )
     await page.getByRole("button", { name: "保存筛选" }).click()
     const body = (await request).postDataJSON()
     expect(body.columns).toContain("roas_d0")
@@ -328,5 +349,7 @@ test.describe("ads workspace", () => {
     await container.evaluate((el) => el.scrollTo({ top: 200 }))
     const after = (await header.boundingBox())?.y
     expect(after).toBe(before)
+    // 分页按钮在滚动区域外可见
+    await expect(page.getByRole("button", { name: "下一页" })).toBeVisible()
   })
 })
