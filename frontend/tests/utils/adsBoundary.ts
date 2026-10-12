@@ -548,7 +548,7 @@ export async function adsBoundary(
               mode: "set",
               original_value: "ENABLE",
               final_value: "DISABLE",
-              execution_result: "SUCCEEDED",
+              execution_result: "ACCEPTED",
               reason: null,
             },
             {
@@ -558,7 +558,7 @@ export async function adsBoundary(
               mode: "set",
               original_value: null,
               final_value: "1.2",
-              execution_result: "FAILED",
+              execution_result: "REJECTED",
               reason: "rejected",
             },
           ],

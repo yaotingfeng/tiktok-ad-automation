@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router"
+import { Badge } from "@/components/ui/badge"
 import {
   Table,
   TableBody,
@@ -31,13 +32,28 @@ const MODES: Record<string, string> = {
   increase_percent: "增加百分比",
   decrease_percent: "减少百分比",
 }
-const RESULTS: Record<string, string> = {
-  SUCCEEDED: "成功",
-  ACCEPTED: "已受理",
-  FAILED: "失败",
-  UNSUPPORTED: "不支持",
-  CONFLICT: "冲突",
-  PENDING: "待处理",
+// 与后端 execution_result 取值一一对应；被拒绝、有冲突醒目提示，结果待确认弱化显示。
+const RESULTS: Record<
+  string,
+  { label: string; variant: "outline" | "destructive" | "secondary" }
+> = {
+  ACCEPTED: { label: "已执行", variant: "outline" },
+  NO_CHANGE: { label: "无需修改", variant: "outline" },
+  REJECTED: { label: "被拒绝", variant: "destructive" },
+  CONFLICT: { label: "有冲突", variant: "destructive" },
+  UNSUPPORTED: { label: "不支持", variant: "outline" },
+  NOT_SENT: { label: "未发送", variant: "outline" },
+  CANCELLED: { label: "已取消", variant: "outline" },
+  PENDING: { label: "待执行", variant: "outline" },
+  UNKNOWN: { label: "结果待确认", variant: "secondary" },
+}
+
+function ResultBadge({ value }: { value?: string | null }) {
+  if (!value) return "—"
+  const result = RESULTS[value]
+  // 未登记的新状态原样显示，避免误译。
+  if (!result) return value
+  return <Badge variant={result.variant}>{result.label}</Badge>
 }
 
 // 启停只有"设为"一种方式，不重复显示；数值动作带上调整方式。
@@ -84,9 +100,7 @@ export function HistoryTab({
               <TableCell>{actionText(item)}</TableCell>
               <TableCell>{`${item.original_value ?? "—"} → ${item.final_value ?? "—"}`}</TableCell>
               <TableCell title={item.reason ?? undefined}>
-                {RESULTS[item.execution_result ?? ""] ??
-                  item.execution_result ??
-                  "—"}
+                <ResultBadge value={item.execution_result} />
               </TableCell>
               <TableCell>
                 {item.task_id && (

@@ -557,6 +557,7 @@ export function AdsWorkspace() {
         onSelectMetric={setActiveMetric}
       />
       <div className="space-y-3">
+        {/* 页面趋势始终按账户筛选汇总为账户级，下钻对象的趋势在详情面板里看。 */}
         <Button
           variant="outline"
           size="sm"
@@ -566,12 +567,12 @@ export function AdsWorkspace() {
           {trendOpen ? (
             <>
               <ChevronUp className="mr-2 h-4 w-4" />
-              收起趋势
+              收起账户趋势
             </>
           ) : (
             <>
               <ChevronDown className="mr-2 h-4 w-4" />
-              展开趋势
+              展开账户趋势
             </>
           )}
         </Button>
@@ -591,9 +592,6 @@ export function AdsWorkspace() {
           />
         )}
       </div>
-      {ads.query.isLoading && (
-        <p className="text-xs text-muted-foreground">正在加载当前报表…</p>
-      )}
       <Card>
         <CardContent className="space-y-4 p-4">
           <Tabs
@@ -675,6 +673,7 @@ export function AdsWorkspace() {
                   sortBy={applied.sort_by ?? "spend"}
                   sortDirection={applied.sort_direction ?? "desc"}
                   onSort={sort}
+                  loading={ads.query.isLoading}
                 />
               </TabsContent>
             ))}

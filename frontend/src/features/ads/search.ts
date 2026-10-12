@@ -114,40 +114,6 @@ const UNAVAILABLE_REASONS: Record<string, string> = {
 export function unavailableReason(availability: string): string {
   return UNAVAILABLE_REASONS[availability] ?? "暂无数据，同步完成后显示"
 }
-export function availabilityLabel(
-  availability: string,
-  value: string | null,
-  options?: { percent?: boolean },
-): string {
-  if (availability === "MULTI") return value ?? "—"
-  if (availability !== "AVAILABLE" || value === null) return "—"
-  if (options?.percent) {
-    const number = Number(value)
-    return Number.isFinite(number) ? `${(number * 100).toFixed(2)}%` : "—"
-  }
-  return formatMetric(value)
-}
-/** “—”对应的原因说明；有值时不返回说明。 */
-export function availabilityReason(
-  availability: string,
-  value: string | null,
-): string | undefined {
-  if (
-    availability === "MULTI" ||
-    (availability === "AVAILABLE" && value !== null)
-  )
-    return undefined
-  return unavailableReason(availability)
-}
-function formatMetric(
-  value: string | number | null | undefined,
-  digits = 2,
-): string {
-  if (value === null || value === undefined || value === "") return "—"
-  const number = Number(value)
-  return Number.isFinite(number) ? number.toFixed(digits) : "—"
-}
-
 const NAME_KEY: Record<AdsDimension, string> = {
   account: "account_name",
   campaign: "campaign_name",

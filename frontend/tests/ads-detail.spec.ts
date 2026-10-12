@@ -40,6 +40,11 @@ test.describe("ads detail", () => {
     await expect(sheet.getByText("ENABLE → DISABLE")).toBeVisible()
     // 原值缺失显示为"—"，不显示 null。
     await expect(sheet.getByText("— → 1.2")).toBeVisible()
+    // 结果按真实 execution_result 显示中文，被拒绝用醒目样式。
+    await expect(sheet.getByText("已执行", { exact: true })).toBeVisible()
+    const rejected = sheet.getByText("被拒绝", { exact: true })
+    await expect(rejected).toBeVisible()
+    await expect(rejected).toHaveClass(/bg-destructive/)
   })
 
   test("详情内暂停走同一预览流程", async ({ page }) => {

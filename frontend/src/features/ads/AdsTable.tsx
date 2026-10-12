@@ -294,6 +294,7 @@ export function AdsTable({
   sortBy,
   sortDirection,
   onSort,
+  loading,
 }: {
   rows: ReportRow[]
   dimension: AdsDimension
@@ -314,6 +315,7 @@ export function AdsTable({
   sortBy: string
   sortDirection: "asc" | "desc"
   onSort: (sortBy: string) => void
+  loading: boolean
 }) {
   const config = configColumns(dimension)
   const pageSelected =
@@ -341,7 +343,7 @@ export function AdsTable({
         )}
         <div
           data-slot="table-container"
-          className="max-h-[calc(100vh-28rem)] overflow-auto"
+          className="max-h-[calc(100vh-28rem)] min-h-[24rem] overflow-auto"
         >
           <table data-slot="table" className="w-full caption-bottom text-sm">
             <TableHeader>
@@ -495,9 +497,10 @@ export function AdsTable({
             </TableBody>
           </table>
         </div>
+        {/* 首屏未返回前没有行，不能提前显示"没有匹配"误导用户。 */}
         {!rows.length && (
           <p className="p-8 text-center text-sm text-muted-foreground">
-            没有匹配的广告
+            {loading ? "正在加载当前报表…" : "没有匹配的广告"}
           </p>
         )}
         <div className="flex flex-wrap items-center justify-between gap-2 border-t px-4 py-3 text-sm text-muted-foreground">

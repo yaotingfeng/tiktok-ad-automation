@@ -292,7 +292,8 @@ test.describe("ads workspace", () => {
     await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
     await expect(page.getByRole("heading", { name: "广告报表" })).toBeVisible()
     expect(trendCalls.count).toBe(0)
-    await page.getByRole("button", { name: "展开趋势" }).click()
+    // 页面趋势始终是账户筛选下的账户级趋势，标题写明避免误读为下钻对象。
+    await page.getByRole("button", { name: "展开账户趋势" }).click()
     await expect(page.getByTestId("ads-trend-chart")).toBeVisible()
     await expectLineDrawn(page.getByTestId("ads-trend-chart"))
     expect(trendCalls.count).toBe(1)
@@ -353,5 +354,30 @@ test.describe("ads workspace", () => {
     expect(after).toBe(before)
     // 分页按钮在滚动区域外可见
     await expect(page.getByRole("button", { name: "下一页" })).toBeVisible()
+  })
+
+  test("矮屏下表格滚动区仍保留最小高度", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 600 })
+    await adsBoundary(page)
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    const container = page.locator('[data-slot="table-container"]')
+    await expect(container).toBeVisible()
+    // 24rem = 384px；视口高度减去页头后不足时不能把表格压成一两行。
+    expect(
+      await container.evaluate((el) => getComputedStyle(el).minHeight),
+    ).toBe("384px")
+  })
+
+  test("首屏加载中不显示空结果提示", async ({ page }) => {
+    await adsBoundary(page, { delayedA: true })
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await expect(
+      page.getByText("正在加载当前报表…", { exact: true }),
+    ).toBeVisible()
+    // 用即时计数而不是自动重试断言：加载结束后提示自然消失，重试会掩盖问题。
+    expect(
+      await page.getByText("没有匹配的广告", { exact: true }).count(),
+    ).toBe(0)
+    await expect(page.getByText("甲账户", { exact: true })).toBeVisible()
   })
 })
