@@ -316,8 +316,17 @@ class _CountingReader:
         read = getattr(self.reader, name)
 
         def counted(**kwargs):
-            self.count += 1
-            return read(**kwargs)
+            before = getattr(self.reader, "request_count", None)
+            try:
+                return read(**kwargs)
+            finally:
+                after = getattr(self.reader, "request_count", None)
+                # 官方读取器提供物理发送计数；纯内存测试读取器每次调用即一次合成响应。
+                self.count += (
+                    after - before
+                    if isinstance(before, int) and isinstance(after, int)
+                    else 1
+                )
 
         return counted
 
@@ -337,6 +346,22 @@ def execute_job(
             return "FAILED"  # 旧领取者：不得改写新领取的任务
         counted = _CountingReader(reader)
         try:
+            # 按账户排序取得事务锁；不同档位和重叠日期必须从读取开始串行。
+            # 账户对账与广告日共享锁，避免对账读取旧广告而覆盖新结果。
+            lock_kind = "ad_day" if job.kind == "account_day" else job.kind
+            for advertiser in sorted(job.advertiser_ids):
+                acquired = (
+                    session.connection()
+                    .execute(
+                        text(
+                            "SELECT pg_try_advisory_xact_lock(hashtextextended(:scope, 0))"
+                        ),
+                        {"scope": f"report:{job.tenant_id}:{advertiser}:{lock_kind}"},
+                    )
+                    .scalar_one()
+                )
+                if not acquired:
+                    raise AccountAdmissionDeferred(5000)
             _run(session, job, counted)
             job.status, job.error_code, job.finished_at = (
                 "COMPLETE",

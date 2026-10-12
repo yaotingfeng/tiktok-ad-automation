@@ -242,3 +242,26 @@ def test_late_older_run_is_fenced_after_newer_run_publishes(session, directory_s
     )
     with pytest.raises(DomainError):
         publish_directory(session, run_id=older.id, claim_generation=1)
+
+
+def test_disabled_switch_does_not_execute_queued_directory_task(
+    monkeypatch, directory_seed
+):
+    from app.modules.ads import tasks
+
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", False)
+
+    def unexpected_gateway(**_kwargs):
+        raise AssertionError("关闭总开关后不能发起目录请求")
+
+    monkeypatch.setattr(tasks, "open_tiktok_gateway", unexpected_gateway)
+    assert (
+        tasks.run_directory_step(
+            database_engine=None,
+            redis_client=None,
+            context=directory_seed.context,
+            run_id=uuid4(),
+            claim_generation=1,
+        )
+        == "WAIT"
+    )

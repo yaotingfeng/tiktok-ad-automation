@@ -12,7 +12,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import delete, insert, text
-from sqlmodel import Session
+from sqlmodel import Session, col
 
 from app.core.errors import DomainError
 from app.modules.reporting.metrics import (
@@ -22,6 +22,7 @@ from app.modules.reporting.metrics import (
     parse_local_day,
     parse_local_hour,
 )
+from app.modules.reporting.partitions import ensure_month_partitions_for_range
 from app.modules.reporting.store_models import (
     METRIC_COLUMNS,
     AccountReconciliationDay,
@@ -185,25 +186,26 @@ def publish_ad_day(
             }
         )
         counts[(advertiser, day)] = counts.get((advertiser, day), 0) + 1
+    ensure_month_partitions_for_range(session, start, end)
     advertisers = sorted(accounts)
     statement = delete(AdReportDay).where(
-        AdReportDay.tenant_id == tenant_id,
-        AdReportDay.advertiser_id.in_(advertisers),
-        AdReportDay.stat_date.between(start, end),
+        col(AdReportDay.tenant_id) == tenant_id,
+        col(AdReportDay.advertiser_id).in_(advertisers),
+        col(AdReportDay.stat_date).between(start, end),
     )
     if campaign_ids:
-        statement = statement.where(AdReportDay.campaign_id.in_(campaign_ids))
-    session.execute(statement)
+        statement = statement.where(col(AdReportDay.campaign_id).in_(campaign_ids))
+    session.connection().execute(statement)
     if records:
-        session.execute(insert(AdReportDay), records)
-    session.execute(
+        session.connection().execute(insert(AdReportDay), records)
+    session.connection().execute(
         delete(CampaignReportDay).where(
-            CampaignReportDay.tenant_id == tenant_id,
-            CampaignReportDay.advertiser_id.in_(advertisers),
-            CampaignReportDay.stat_date.between(start, end),
+            col(CampaignReportDay.tenant_id) == tenant_id,
+            col(CampaignReportDay.advertiser_id).in_(advertisers),
+            col(CampaignReportDay.stat_date).between(start, end),
         )
     )
-    session.execute(
+    session.connection().execute(
         text(_rollup_sql()),
         {
             "tenant_id": tenant_id,
@@ -222,6 +224,7 @@ def publish_ad_day(
             days=_days(start, end),
             counts=counts,
         )
+    _refresh_reconciliation_sums(session, tenant_id, accounts, start, end)
     session.flush()
     return len(records)
 
@@ -259,8 +262,10 @@ def _publish_simple(
             }
         )
         counts[(advertiser, day)] = counts.get((advertiser, day), 0) + 1
+    if model is MaterialReportDay:
+        ensure_month_partitions_for_range(session, start, end)
     advertisers = sorted(accounts)
-    session.execute(
+    session.connection().execute(
         delete(model).where(
             model.tenant_id == tenant_id,
             model.advertiser_id.in_(advertisers),
@@ -268,7 +273,7 @@ def _publish_simple(
         )
     )
     if records:
-        session.execute(insert(model), records)
+        session.connection().execute(insert(model), records)
     _set_state(
         session,
         tenant_id=tenant_id,
@@ -404,31 +409,43 @@ def publish_account_reconciliation(
                 metrics.get("native_growth_total_ad_impression_value")
             ),
         }
-    sums = session.execute(
-        text("""
-        SELECT advertiser_id, stat_date,
-               CASE WHEN COUNT(spend)=COUNT(*) THEN SUM(spend) END,
-               CASE WHEN COUNT(revenue_total)=COUNT(*) THEN SUM(revenue_total) END
-        FROM ad_report_day WHERE tenant_id=:t AND advertiser_id = ANY(:a) AND stat_date BETWEEN :s AND :e
-        GROUP BY advertiser_id, stat_date"""),
-        {"t": tenant_id, "a": sorted(accounts), "s": start, "e": end},
-    ).all()
-    summed = {(a, d): (s, r) for a, d, s, r in sums}
     now = datetime.now(UTC)
     for advertiser in accounts:
         for day in _days(start, end):
             rep = reported.get((advertiser, day), {"spend": None, "total": None})
-            ad_spend, ad_total = summed.get((advertiser, day), (None, None))
             session.merge(
                 AccountReconciliationDay(
                     tenant_id=tenant_id,
                     advertiser_id=advertiser,
                     stat_date=day,
                     account_spend=rep["spend"],
-                    ad_sum_spend=ad_spend,
                     account_revenue_total=rep["total"],
-                    ad_sum_revenue_total=ad_total,
                     checked_at=now,
                 )
             )
     session.flush()
+    _refresh_reconciliation_sums(session, tenant_id, accounts, start, end)
+
+
+def _refresh_reconciliation_sums(session, tenant_id, accounts, start, end):
+    # 两种完成顺序均引用当前事实；平台 NULL 仍传播，完整空结果才为零。
+    session.connection().execute(
+        text("""
+        UPDATE account_reconciliation_day r SET (ad_sum_spend, ad_sum_revenue_total) = (
+            SELECT
+              CASE WHEN COUNT(*)=0 THEN CASE WHEN EXISTS (
+                SELECT 1 FROM report_sync_state s WHERE s.tenant_id=r.tenant_id
+                AND s.advertiser_id=r.advertiser_id AND s.stat_date=r.stat_date
+                AND s.report_kind='ad_day' AND s.status='COMPLETE') THEN 0 END
+                WHEN COUNT(a.spend)=COUNT(*) THEN SUM(a.spend) END,
+              CASE WHEN COUNT(*)=0 THEN CASE WHEN EXISTS (
+                SELECT 1 FROM report_sync_state s WHERE s.tenant_id=r.tenant_id
+                AND s.advertiser_id=r.advertiser_id AND s.stat_date=r.stat_date
+                AND s.report_kind='ad_day' AND s.status='COMPLETE') THEN 0 END
+                WHEN COUNT(a.revenue_total)=COUNT(*) THEN SUM(a.revenue_total) END
+            FROM ad_report_day a WHERE a.tenant_id=r.tenant_id
+              AND a.advertiser_id=r.advertiser_id AND a.stat_date=r.stat_date
+        ) WHERE r.tenant_id=:t AND r.advertiser_id=ANY(:a) AND r.stat_date BETWEEN :s AND :e
+    """),
+        {"t": tenant_id, "a": sorted(accounts), "s": start, "e": end},
+    )

@@ -1,6 +1,6 @@
 """在本地发布数据上构建并读取短期报表快照。
 
-查询请求只在第一次请求时读取目录/事实。后续分页、趋势和选择均消费
+查询请求只在第一次请求时读取目录/事实。后续分页和选择均消费
 快照行，避免修正或改名在同一个浏览器操作中混入新版本。
 """
 
@@ -40,10 +40,8 @@ from app.modules.reporting.schemas import (
     QuerySnapshotPublic,
     ReportingFilter,
     ReportRow,
-    TrendPublic,
 )
 from app.modules.reporting.store_models import ReportSyncState
-from app.modules.reporting.trends import build_trend
 from app.modules.tenants.permissions import require_tenant
 
 
@@ -339,7 +337,7 @@ def _build_snapshot(
         session, context=context, bc_id=bc_id, filters=filters, rows=rows
     )
     # 趋势已从报表页移除。快照只保存列表和汇总，避免首次打开页面重复扫描
-    # 全量事实；保留按需端点供旧客户端读取。
+    # 全量事实。
     snapshot.trends = {}
     session.flush()
     return snapshot
@@ -408,29 +406,3 @@ def query_ads(
         cursor=cursor,
         limit=limit,
     )
-
-
-def snapshot_trend(
-    session: Session,
-    *,
-    context: TenantContext,
-    bc_id: str,
-    snapshot_id: UUID,
-    filters: ReportingFilter,
-) -> TrendPublic:
-    """读取查询快照内的趋势，不把新观测覆盖到旧报表。"""
-    snapshot = read_snapshot(
-        session, context=context, bc_id=bc_id, snapshot_id=snapshot_id
-    )
-    if snapshot.actor_id != context.actor_id:
-        raise HTTPException(404, detail="query_snapshot_not_found")
-    if snapshot.filter_digest != filter_digest(filters):
-        raise HTTPException(409, detail="query_snapshot_filter_mismatch")
-    if snapshot.trends:
-        return TrendPublic.model_validate(snapshot.trends)
-    try:
-        return build_trend(
-            session, context=context, bc_id=bc_id, filters=filters, grain="day"
-        )
-    except ValueError, RuntimeError:
-        return TrendPublic(coverage={"status": "UNAVAILABLE"})

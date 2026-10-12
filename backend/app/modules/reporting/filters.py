@@ -31,7 +31,9 @@ NAME_SORT_FIELDS = frozenset(
     }
 )
 METRIC_SORT_FIELDS = CANONICAL_METRIC_KEYS
-CONFIG_SORT_FIELDS = frozenset({"target_roas", "campaign_budget", "adgroup_budget"})
+CONFIG_SORT_FIELDS = frozenset(
+    {"target_roas", "campaign_budget", "adgroup_budget", "balance"}
+)
 SUPPORTED_SORT_FIELDS = (
     frozenset({"row_key"}) | NAME_SORT_FIELDS | METRIC_SORT_FIELDS | CONFIG_SORT_FIELDS
 )
@@ -116,9 +118,7 @@ def compile_filter(filters: ReportingFilter) -> CompiledFilter:
         raise ValueError("unsupported sort field")
     if filters.sort_direction not in {"asc", "desc"}:
         raise ValueError("unsupported sort direction")
-    # Directory configuration and D0 ROAS predicates are applied by the
-    # aggregation layer.  Keep compilation side-effect free so callers cannot
-    # accidentally turn an accepted filter into a silent no-op.
+    # 目录配置与 D0 ROAS 在汇总层应用；编译不产生副作用，不能默默忽略筛选。
     query = filters.query or ""
     keywords = tuple(query.split())
     return CompiledFilter(

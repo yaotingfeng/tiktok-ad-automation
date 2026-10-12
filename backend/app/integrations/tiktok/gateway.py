@@ -25,13 +25,11 @@ from app.integrations.tiktok.adapters.mcp_ads import McpAdsReadOperations
 from app.integrations.tiktok.adapters.mcp_builds import McpBuildOperations
 from app.integrations.tiktok.adapters.mcp_management import McpManagementOperations
 from app.integrations.tiktok.adapters.mcp_materials import MCPMaterialOperations
-from app.integrations.tiktok.adapters.mcp_reporting import McpReportingOperations
 from app.integrations.tiktok.adapters.sdk_ads import SdkAdsReadOperations
 from app.integrations.tiktok.adapters.sdk_builds import ApiBuildOperations
 from app.integrations.tiktok.adapters.sdk_management import SdkManagementOperations
 from app.integrations.tiktok.adapters.sdk_materials import SDKMaterialOperations
 from app.integrations.tiktok.adapters.sdk_report_reader import SdkReportReader
-from app.integrations.tiktok.adapters.sdk_reporting import SdkReportingOperations
 from app.integrations.tiktok.admission import (
     PROTOCOL_OPERATIONS,
     admit_tiktok_call,
@@ -52,7 +50,6 @@ from app.integrations.tiktok.contracts.management import (
 )
 from app.integrations.tiktok.contracts.materials import MaterialOperations
 from app.integrations.tiktok.contracts.report_reader import ReportReader
-from app.integrations.tiktok.contracts.reporting import ReportOperations
 from app.integrations.tiktok.contracts.scenes import ScenesGateway
 from app.integrations.tiktok.group_isolation import (
     FrozenGroupIsolation,
@@ -137,11 +134,7 @@ _OPERATION_CAPABILITIES: dict[str, Capability] = {
     # 都重新通过同一冻结路由与共享额度门禁。
     "reports.integrated": "read",
     "reports.bc": "read",
-    "reports.material_overview": "read",
     "reports.material_breakdown": "read",
-    "reports.task_create": "read",
-    "reports.task_check": "read",
-    "reports.task_download": "read",
 }
 _DIRECTORY_OPERATIONS = frozenset(
     operation
@@ -157,7 +150,6 @@ class TikTokGateway:
     materials: MaterialOperations
     builds: BuildOperations
     ads: AdsReadOperations
-    reports: ReportOperations
     management: ManagementOperations
     report_reader: ReportReader | None = None
 
@@ -247,7 +239,6 @@ def open_tiktok_gateway(
     context: TenantContext,
     route: FrozenTikTokRoute,
     task_deadline: datetime,
-    ad_type: str | None = None,
     before_request: Callable[[], None] | None = None,
     response_observer: ResponseObserver | None = None,
     group_isolation: FrozenGroupIsolation | None = None,
@@ -499,17 +490,6 @@ def open_tiktok_gateway(
             authorize(advertiser_id, full_operation, entity_kind)
             yield
 
-    @contextmanager
-    def report_download_scope(advertiser_id: str, deadline: datetime) -> Iterator[None]:
-        # MCP 签名文件虽不使用 tools/call，但仍是本次冻结任务的物理发送；
-        # 在发送前复用同一授权、绑定和共享额度门禁。
-        if deadline != task_deadline:
-            raise DomainError("read_deadline_invalid", "调用期限与任务不一致")
-        authorize(advertiser_id, "reports.task_download")
-        with admit(advertiser_id, "reports.task_download"):
-            authorize(advertiser_id, "reports.task_download")
-            yield
-
     def isolation_guard() -> None:
         """Fence the exact instant before the legacy disable request."""
         nonlocal isolation_lease
@@ -572,13 +552,6 @@ def open_tiktok_gateway(
                         subject_id=facts.subject_id,
                         finance=finance,
                     ),
-                    reports=McpReportingOperations(
-                        client,
-                        route=route,
-                        ad_type=ad_type,
-                        deadline=task_deadline,
-                        download_gate=report_download_scope,
-                    ),
                     accounts=McpAccountsGateway(
                         client,
                         context=read_context,
@@ -628,13 +601,6 @@ def open_tiktok_gateway(
                             task_deadline,
                             request_check=check_report_request,
                         )
-                    ),
-                    reports=SdkReportingOperations(
-                        official,
-                        route=route,
-                        request_scope=request_scope,
-                        deadline=task_deadline,
-                        ad_type=ad_type,
                     ),
                     accounts=OfficialAccountsGateway(
                         official,
@@ -712,6 +678,8 @@ def _sdk_report_send(client, request_scope, deadline, *, request_check=None):
             # 额度准入后再查全体账户，避免等待期间撤权仍发出合并请求。
             if request_check is not None:
                 request_check(operation, arguments)
+            # 仅在准入与冻结授权核验通过后计数；平台返回限流仍是一次已发送请求。
+            sender.request_count += 1
             args = dict(arguments)
             if operation in {"reports.integrated", "reports.bc"}:
                 return api.report_integrated_get(
@@ -729,4 +697,11 @@ def _sdk_report_send(client, request_scope, deadline, *, request_check=None):
 
         return requests.invoke(operation, advertiser_id, call, exact_numbers=True).data
 
-    return send
+    class Sender:
+        request_count = 0
+
+        def __call__(self, operation, advertiser_id, arguments):
+            return send(operation, advertiser_id, arguments)
+
+    sender = Sender()
+    return sender

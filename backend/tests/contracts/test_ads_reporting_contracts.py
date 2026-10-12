@@ -1,8 +1,7 @@
 """目录身份、RF1 命名和报表边界不能靠隐式转换修补。"""
 
 from dataclasses import FrozenInstanceError, replace
-from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
+from datetime import UTC, date, datetime
 from uuid import UUID
 
 import pytest
@@ -16,12 +15,6 @@ from app.integrations.tiktok.contracts.ads import (
     MaterialUseRef,
 )
 from app.integrations.tiktok.contracts.common import CallEvidence
-from app.integrations.tiktok.contracts.reporting import (
-    ReportPage,
-    ReportQuery,
-    ReportRow,
-    ReportTask,
-)
 from app.modules.ads.naming import CampaignIdentity, parse_campaign_name
 
 TENANT = UUID("00000000-0000-0000-0000-000000000001")
@@ -70,40 +63,6 @@ def directory_query(**changes):
             "ids": (),
             "parent_ids": (),
             "include_deleted": False,
-            **changes,
-        }
-    )
-
-
-def report_query(**changes):
-    return ReportQuery(
-        **{
-            "advertiser_id": "00123",
-            "report_contract": "BASIC_AD",
-            "metric_family": "delivery",
-            "dimensions": ("ad_id",),
-            "metrics": ("spend", "revenue"),
-            "start_date": date(2026, 9, 29),
-            "end_date": date(2026, 9, 30),
-            "granularity": "DAY",
-            "currency": "USD",
-            "timezone": "Asia/Shanghai",
-            "attribution": "7d_click_1d_view",
-            "filter_ids": (),
-            "page": 1,
-            **changes,
-        }
-    )
-
-
-def report_row(**changes):
-    return ReportRow(
-        **{
-            "subject_key": ("00123", "ad-1"),
-            "bucket_start": NOW,
-            "bucket_end": NOW + timedelta(days=1),
-            "values": {"spend": Decimal("0"), "revenue": None},
-            "availability": {"spend": "AVAILABLE", "revenue": "UNAVAILABLE"},
             **changes,
         }
     )
@@ -279,9 +238,7 @@ def test_directory_query_rejects_invalid_identifiers_and_pagination(changes):
         directory_query(**changes)
 
 
-@pytest.mark.parametrize(
-    "page_type,items_field", [(DirectoryPage, "items"), (ReportPage, "rows")]
-)
+@pytest.mark.parametrize("page_type,items_field", [(DirectoryPage, "items")])
 @pytest.mark.parametrize(
     "changes",
     [
@@ -308,9 +265,7 @@ def test_pages_reject_completion_conflicts_and_untyped_evidence(
 
 
 def test_incomplete_page_without_continuation_is_not_promoted_to_complete():
-    page = ReportPage((), None, False, EVIDENCE)
-    assert page.complete is False
-    assert page.evidence is EVIDENCE
+    assert DirectoryPage((), (), None, False, EVIDENCE).complete is False
     assert DirectoryPage((), (), 2, False, EVIDENCE).next_page == 2
     assert DirectoryPage((entity(),), (), None, True, EVIDENCE).complete is True
 
@@ -333,114 +288,7 @@ def test_directory_page_rejects_untyped_contents(changes):
         )
 
 
-@pytest.mark.parametrize(
-    "changes",
-    [
-        {"advertiser_id": " "},
-        {"report_contract": ""},
-        {"metric_family": ""},
-        {"dimensions": ["ad_id"]},
-        {"dimensions": ("",)},
-        {"metrics": ()},
-        {"metrics": ("spend", "spend")},
-        {"start_date": NOW},
-        {"end_date": "2026-09-30"},
-        {"start_date": date(2026, 10, 1)},
-        {"granularity": ""},
-        {"currency": ""},
-        {"timezone": ""},
-        {"attribution": ""},
-        {"filter_ids": ("",)},
-        {"page": 0},
-        {"page": True},
-    ],
-)
-def test_report_query_rejects_invalid_dates_metadata_and_identifiers(changes):
-    with pytest.raises(ValueError):
-        report_query(**changes)
-
-
-def test_report_query_accepts_same_day_and_exact_metadata():
-    query = report_query(start_date=date(2026, 9, 30))
-    assert query.start_date == query.end_date
-    assert query.timezone == "Asia/Shanghai"
-    with pytest.raises(FrozenInstanceError):
-        query.page = 2
-
-
-@pytest.mark.parametrize(
-    "changes",
-    [
-        {"subject_key": ()},
-        {"subject_key": ("",)},
-        {"subject_key": ["ad-1"]},
-        {"bucket_start": NOW.replace(tzinfo=None)},
-        {"bucket_end": NOW.replace(tzinfo=None)},
-        {"bucket_end": NOW},
-        {"bucket_end": NOW - timedelta(hours=1)},
-        {"values": {"spend": 0.1}},
-        {"values": {"spend": Decimal("NaN")}},
-        {"values": {"spend": Decimal("Infinity")}},
-        {"values": {"": None}},
-        {"availability": {"spend": None}},
-        {"availability": {"spend": ""}},
-    ],
-)
-def test_report_row_rejects_ambiguous_buckets_and_non_decimal_values(changes):
-    with pytest.raises(ValueError):
-        report_row(**changes)
-
-
-def test_report_row_keeps_missing_values_distinct_from_exact_decimal_zero():
-    values = {"spend": Decimal("0"), "revenue": None}
-    availability = {"spend": "AVAILABLE", "revenue": "UNAVAILABLE"}
-    row = report_row(values=values, availability=availability)
-    values["revenue"] = Decimal("9")
-    availability["revenue"] = "AVAILABLE"
-    assert row.values == {"spend": Decimal("0"), "revenue": None}
-    assert row.availability["revenue"] == "UNAVAILABLE"
-    assert ReportPage((row,), None, True, EVIDENCE).rows == (row,)
-
-
-@pytest.mark.parametrize("rows", [[], ("unparsed row",)])
-def test_report_page_rejects_unparsed_or_mutable_rows(rows):
-    with pytest.raises(ValueError):
-        ReportPage(rows, None, True, EVIDENCE)
-
-
-@pytest.mark.parametrize(
-    "changes",
-    [
-        {"task_id": ""},
-        {"advertiser_id": "other"},
-        {"status": "DONE"},
-        {"query": {}},
-    ],
-)
-def test_report_task_rejects_invalid_or_cross_account_identity(changes):
-    with pytest.raises(ValueError):
-        ReportTask(
-            **{
-                "task_id": "task-1",
-                "advertiser_id": "00123",
-                "status": "PENDING",
-                "query": report_query(),
-                **changes,
-            }
-        )
-
-
-@pytest.mark.parametrize("status", ["PENDING", "RUNNING", "READY", "FAILED"])
-def test_report_task_keeps_query_and_known_status(status):
-    query = report_query()
-    task = ReportTask("task-1", "00123", status, query)
-    assert task.query == query
-    assert task.status == status
-
-
-@pytest.mark.parametrize(
-    "page_type,items_field", [(DirectoryPage, "items"), (ReportPage, "rows")]
-)
+@pytest.mark.parametrize("page_type,items_field", [(DirectoryPage, "items")])
 @pytest.mark.parametrize("page,next_page", [(0, None), (True, None), (3, 3), (3, 2)])
 def test_pages_reject_invalid_current_page_and_non_advancing_continuation(
     page_type, items_field, page, next_page
@@ -460,22 +308,5 @@ def test_pages_reject_invalid_current_page_and_non_advancing_continuation(
 
 def test_pages_keep_actual_page_number_for_resume_and_duplicate_detection():
     directory = DirectoryPage((), (), 4, False, EVIDENCE, page=3)
-    report = ReportPage((), None, True, EVIDENCE, page=3)
     assert directory.page == 3
-    assert report.page == 3
-    assert ReportPage((), None, True, EVIDENCE).page == 1
-
-
-def test_report_subject_can_repeat_identifiers_at_distinct_positions():
-    assert report_row(subject_key=("123", "123")).subject_key == ("123", "123")
-
-
-def test_report_bucket_compares_instants_across_dst_fold():
-    from zoneinfo import ZoneInfo
-
-    timezone = ZoneInfo("America/New_York")
-    start = datetime(2026, 11, 1, 1, 30, tzinfo=timezone, fold=0)
-    end = datetime(2026, 11, 1, 1, 15, tzinfo=timezone, fold=1)
-    assert report_row(bucket_start=start, bucket_end=end).bucket_end == end
-    with pytest.raises(ValueError):
-        report_row(bucket_start=end, bucket_end=start)
+    assert DirectoryPage((), (), None, True, EVIDENCE).page == 1

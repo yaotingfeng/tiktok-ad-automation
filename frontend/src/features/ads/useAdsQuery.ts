@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   type AdsQueryPage,
   AdsReportingService,
@@ -73,11 +73,11 @@ export function useAdsQuery(search: AdsSearch, queryRevision = 0) {
     setSelected(new Set(query.data?.items?.map((row) => row.row_key) ?? []))
     setExcluded(new Set())
   }
-  const clear = () => {
+  const clear = useCallback(() => {
     setSelected(new Set())
     setExcluded(new Set())
     setAllMatching(false)
-  }
+  }, [])
   return {
     query,
     snapshot: query.data?.snapshot ?? null,

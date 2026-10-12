@@ -177,7 +177,11 @@ def test_cleanup_removes_expired_jobs_hours_and_snapshot_rows(session, sync_seed
 
     from app.modules.reporting.jobs import enqueue_job
     from app.modules.reporting.query_models import QuerySnapshot, QuerySnapshotRow
-    from app.modules.reporting.store_models import CampaignReportHour, ReportSyncJob
+    from app.modules.reporting.store_models import (
+        CampaignReportHour,
+        ReportBalanceRun,
+        ReportSyncJob,
+    )
     from tests.modules.reporting.test_jobs import D, _route
 
     now = datetime.now(UTC)
@@ -228,15 +232,34 @@ def test_cleanup_removes_expired_jobs_hours_and_snapshot_rows(session, sync_seed
         )
     )
     session.flush()
+    runs = []
+    for status in ("COMPLETE", "FAILED", "ACTIVE"):
+        run = ReportBalanceRun(
+            tenant_id=sync_seed.tenant_id,
+            actor_id=sync_seed.actor_id,
+            run_key=f"old-{status}",
+            frozen_route=_route(sync_seed),
+            remaining_advertiser_ids=["acc-1"],
+            status=status,
+            created_at=now - timedelta(days=8),
+        )
+        session.add(run)
+        runs.append((run.id, status))
+    session.flush()
     snapshot_id = snapshot.id
     assert job_tasks.cleanup_store(session, now=now) == {
         "jobs": 1,
         "hours": 1,
         "snapshots": 1,
+        "balances": 2,
     }
     session.expire_all()
     assert session.get(QuerySnapshotRow, (snapshot_id, "old")) is None
     assert session.get(ReportSyncJob, job_id) is None
+    for run_id, status in runs:
+        assert (session.get(ReportBalanceRun, run_id) is not None) == (
+            status == "ACTIVE"
+        )
 
 
 def test_revoked_actor_fails_job_before_gateway(

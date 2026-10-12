@@ -79,14 +79,14 @@ def material_metric_values(metrics: dict) -> dict[str, Decimal | None]:
     }
 
 
-def parse_local_day(raw: str) -> date:
+def parse_local_day(raw: object) -> date:
     try:
         return date.fromisoformat(str(raw)[:10])
     except ValueError as exc:
         raise DomainError("report_row_invalid", "报表日期维度无效") from exc
 
 
-def parse_local_hour(raw: str, timezone: str) -> datetime:
+def parse_local_hour(raw: object, timezone: str) -> datetime:
     try:
         local = datetime.strptime(str(raw), "%Y-%m-%d %H:%M:%S")
         return local.replace(tzinfo=ZoneInfo(timezone)).astimezone(UTC)

@@ -8,12 +8,15 @@ export const ADVERTISER = "adv-1"
 const token = "ads-workspace-test-token"
 
 export type AdsBoundaryOptions = {
+  lastSuccess?: string
+  slowed?: boolean
   delayedA?: boolean
   paged?: boolean
   mixedBuckets?: boolean
   refreshStatus?: "QUEUED" | "SYNC_DISABLED" | "API_BINDING_REQUIRED"
   incomplete?: boolean
   reconciliation?: boolean
+  balance?: boolean
 }
 
 export async function adsBoundary(
@@ -160,6 +163,14 @@ export async function adsBoundary(
               row_key: `${bc}-campaign-1`,
               display: {
                 ...display,
+                ...(options.balance
+                  ? {
+                      balance: "12.50",
+                      balance_currency: "CNY",
+                      balance_scope: "PORTFOLIO",
+                      balance_updated_at: "2026-10-12T00:00:00Z",
+                    }
+                  : {}),
                 ...(options.reconciliation
                   ? { reconciliation: "DIFF", account_report_spend: "101" }
                   : {}),
@@ -395,12 +406,18 @@ export async function adsBoundary(
             {
               advertiser_id: ADVERTISER,
               timezone: "Asia/Hong_Kong",
-              last_success_at: "2026-10-05T05:00:00Z",
+              last_success_at: options.lastSuccess ?? "2026-10-05T05:00:00Z",
               incomplete_dates: options.incomplete ? ["2026-10-04"] : [],
               failed_dates: [],
             },
           ],
-          plan: { enabled: true, disabled_reason: null, next_hot_at: null },
+          publication_version: options.lastSuccess ?? "version-1",
+          plan: {
+            enabled: true,
+            disabled_reason: null,
+            next_hot_at: null,
+            slowed: options.slowed ?? false,
+          },
         },
       })
     if (path.endsWith("/ad-sync-refresh"))

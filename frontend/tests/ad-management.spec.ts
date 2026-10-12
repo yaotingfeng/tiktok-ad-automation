@@ -199,6 +199,26 @@ test.describe("广告管理工作台", () => {
     await expect(page.getByRole("heading", { name: "管理预览" })).toBeVisible()
     await expect(page.getByText(`连接：${route.connection_id}`)).toBeVisible()
     await expect(page.getByText("账户：adv-1")).toBeVisible()
+    // 后台新发布只提示，不关闭用户正在确认的冻结管理预览。
+    await page.route("**/ad-sync-status?*", (handler) =>
+      handler.fulfill({
+        json: {
+          accounts: [],
+          latest_directory_at: null,
+          publication_version: "background-new",
+          plan: {
+            enabled: true,
+            bc_report_supported: true,
+            next_hot_at: null,
+            next_daily_at: null,
+            slowed: false,
+          },
+        },
+      }),
+    )
+    await page.clock.install()
+    await page.clock.fastForward(31_000)
+    await expect(page.getByRole("heading", { name: "管理预览" })).toBeVisible()
     await page.getByRole("checkbox", { name: "包括父级联动" }).click()
     await expect.poll(() => previewBodies.length).toBe(2)
     expect(previewBodies[1]?.mutation?.include_parents).toEqual([

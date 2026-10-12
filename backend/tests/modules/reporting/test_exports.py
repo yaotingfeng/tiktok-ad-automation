@@ -43,3 +43,43 @@ def test_csv_keeps_decimal_amount_numeric():
     assert "'=formula" in text
     assert ",-2," in text
     assert "USD" in text and "UTC" in text and "COMPLETE" in text
+
+
+def test_balance_export_keeps_observation_currency_out_of_period_metrics():
+    import csv
+    import io
+
+    export = ReportExport(
+        tenant_id=uuid4(),
+        bc_id="bc",
+        actor_id=uuid4(),
+        advertiser_ids=["a"],
+        filters={},
+        filter_digest="a" * 64,
+        publication_versions={},
+        naming_versions={},
+        snapshot_id=uuid4(),
+        idempotency_key="balance",
+        frozen_rows=[
+            {
+                "row_key": "a",
+                "display": {
+                    "balance": "12.50",
+                    "balance_currency": "CNY",
+                    "balance_scope": "PORTFOLIO",
+                    "balance_updated_at": "2026-10-12T00:00:00Z",
+                },
+                "metric_buckets": [
+                    {"currency": "USD", "timezone": "UTC", "values": {"spend": "10"}}
+                ],
+            }
+        ],
+        coverage={},
+    )
+    row = next(csv.DictReader(io.StringIO(_csv_rows(export).decode())))
+    assert row["balance"] == "12.50" and row["balance_currency"] == "CNY"
+    assert (
+        row["balance_scope"] == "PORTFOLIO"
+        and row["spend"] == "10"
+        and row["currency"] == "USD"
+    )

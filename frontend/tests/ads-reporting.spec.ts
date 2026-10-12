@@ -102,3 +102,75 @@ test("账户对账提示保留广告汇总", async ({ page }) => {
   await expect(page.getByLabel("账户报表：USD 101.00")).toBeVisible()
   await expect(page.getByRole("cell", { name: /100.00/ }).first()).toBeVisible()
 })
+
+test("同步发布后清除第二页快照和选择并显示放缓", async ({ page }) => {
+  await page.clock.install()
+  const options = {
+    paged: true,
+    slowed: true,
+    lastSuccess: "2026-10-05T05:00:00Z",
+  }
+  await adsBoundary(page, options)
+  const requests: string[] = []
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith(`/tenants/${TENANT}/ads`))
+      requests.push(request.url())
+  })
+  await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+  await page.getByRole("button", { name: "下一页" }).click()
+  await expect(
+    page.getByText("嘉书-第二页-测试", { exact: true }),
+  ).toBeVisible()
+  await page.getByRole("checkbox").last().check()
+  await expect(page.getByText("已选 1 条", { exact: true })).toBeVisible()
+  await page.getByRole("button", { name: "刷新", exact: true }).click()
+  await expect(page.getByText("已加入刷新队列")).toBeVisible()
+  options.lastSuccess = "2026-10-05T05:01:00Z"
+  await page.clock.fastForward(31_000)
+  await expect(page.getByText(/数据更新到 13:01/)).toBeVisible()
+  await expect(page.getByText("嘉书-第二页-测试", { exact: true })).toHaveCount(
+    0,
+  )
+  await expect(page.getByText("已选 1 条", { exact: true })).toHaveCount(0)
+  const latest = new URL(requests.at(-1)!)
+  expect(latest.searchParams.get("snapshot_id")).toBeNull()
+  expect(latest.searchParams.get("cursor")).toBeNull()
+})
+
+test("额度放缓状态可见", async ({ page }) => {
+  await adsBoundary(page, { slowed: true })
+  await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+  await expect(page.getByText("数据更新放缓", { exact: true })).toBeVisible()
+})
+
+test("账户余额单独显示币种和共享资金池", async ({ page }) => {
+  await adsBoundary(page, { balance: true })
+  await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+  await page.getByRole("tab", { name: "账户", exact: true }).click()
+  await expect(
+    page.getByRole("cell", { name: "CNY 12.50（共享资金池）", exact: true }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "余额，点击排序", exact: true }),
+  ).toBeVisible()
+})
+
+test("后台发布不打断第二页选择，用户可选择加载最新数据", async ({ page }) => {
+  await page.clock.install()
+  const options = { paged: true, lastSuccess: "2026-10-05T05:00:00Z" }
+  await adsBoundary(page, options)
+  await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+  await page.getByRole("button", { name: "下一页" }).click()
+  await page.getByRole("checkbox").last().check()
+  options.lastSuccess = "2026-10-05T05:01:00Z"
+  await page.clock.fastForward(31_000)
+  await expect(
+    page.getByText("嘉书-第二页-测试", { exact: true }),
+  ).toBeVisible()
+  await expect(page.getByText("已选 1 条", { exact: true })).toBeVisible()
+  await page.getByRole("button", { name: "查看最新数据", exact: true }).click()
+  await expect(page.getByText("嘉书-第二页-测试", { exact: true })).toHaveCount(
+    0,
+  )
+  await expect(page.getByText("已选 1 条", { exact: true })).toHaveCount(0)
+})

@@ -4,14 +4,13 @@
 可以把“本地读请求没有外部调用”作为明确断言。容量场景也只测聚合查询本身，
 不把合成数据量写成真实业务规模。
 """
+
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
-from datetime import time as dt_time
+from datetime import UTC, date, datetime
 from decimal import Decimal
-from hashlib import sha256
 from typing import Any, cast
 from uuid import UUID, uuid4
 
@@ -31,14 +30,18 @@ from app.modules.accounts.models import (
     TikTokConnection,
 )
 from app.modules.ads.models import AdMaterialReference, AdObject, CampaignNameProjection
-from app.modules.reporting.aggregation import build_dimension_rows
+from app.modules.reporting.dimension_query import build_rows
 from app.modules.reporting.exports import (
     create_export,
     download_export,
     generate_export,
 )
-from app.modules.reporting.models import ReportCoverage, ReportFact, ReportObservation
-from app.modules.reporting.queries import query_ads, snapshot_trend
+from app.modules.reporting.publish import (
+    AccountMeta,
+    publish_ad_day,
+    publish_material_day,
+)
+from app.modules.reporting.queries import query_ads
 from app.modules.reporting.schemas import (
     AdsQueryPage,
     Dimension,
@@ -46,8 +49,8 @@ from app.modules.reporting.schemas import (
     SelectionRequest,
 )
 from app.modules.reporting.selection import freeze_selection
-from app.modules.reporting.sync_models import ReportSyncRun
 from app.modules.tenants.models import Tenant, TenantMembership
+from tests.modules.reporting.sync_conftest import ad_row
 
 
 @dataclass(frozen=True)
@@ -132,48 +135,10 @@ def _scope(session: Session, *, label: str, bc_id: str) -> _Scope:
     )
 
 
-def _run(
-    session: Session,
-    *,
-    scope: _Scope,
-    contract: str = "basic_campaign",
-) -> ReportSyncRun:
-    run = ReportSyncRun(
-        tenant_id=scope.context.tenant_id,
-        advertiser_id=scope.advertiser_id,
-        bc_id=scope.bc_id,
-        actor_id=scope.context.actor_id,
-        connection_id=scope.connection_id,
-        channel="OFFICIAL_API",
-        frozen_route={
-            "tenant_id": str(scope.context.tenant_id),
-            "bc_id": scope.bc_id,
-            "connection_id": str(scope.connection_id),
-            "channel": "OFFICIAL_API",
-            "authorization_revision": 0,
-            "adapter_contract_revision": "official-api-v1",
-            "binding_revision": 0,
-        },
-        request_id=uuid4(),
-        partition_key=sha256(uuid4().bytes).hexdigest(),
-        query={"report_contract": contract},
-        status="COMPLETE",
-        coverage="COMPLETE",
-        published_version=1,
-        observed_at=datetime.now(UTC),
-        completed_at=datetime.now(UTC),
-        next_page=1,
-    )
-    session.add(run)
-    session.flush()
-    return run
-
-
 def _campaign(
     session: Session,
     *,
     scope: _Scope,
-    run: ReportSyncRun,
     index: int,
     provider: str,
     title: str,
@@ -182,7 +147,9 @@ def _campaign(
     status: str = "ENABLE",
 ) -> EntityRef:
     campaign_id = f"campaign-{index}"
-    ref = EntityRef(scope.context.tenant_id, scope.advertiser_id, "campaign", campaign_id)
+    ref = EntityRef(
+        scope.context.tenant_id, scope.advertiser_id, "campaign", campaign_id
+    )
     observed_at = datetime(2026, 9, 30, 1, tzinfo=UTC)
     session.add(
         AdObject(
@@ -216,92 +183,35 @@ def _campaign(
             observed_at=observed_at,
         )
     )
-    start = datetime.combine(date(2026, 9, 30), dt_time.min, tzinfo=UTC)
-    end = start + timedelta(days=1)
-    partition = sha256(campaign_id.encode()).hexdigest()
-    for metric_name, value in (
-        ("spend", spend),
-        ("native_growth_ad_revenue_value_d0", revenue),
-    ):
-        session.add(
-            ReportFact(
-                tenant_id=scope.context.tenant_id,
-                advertiser_id=scope.advertiser_id,
-                subject_key=["campaign", campaign_id],
-                bucket_start=start,
-                bucket_end=end,
-                granularity="DAY",
-                report_contract="basic_campaign",
-                metric_family="delivery",
-                currency="USD",
-                timezone="UTC",
-                attribution="default",
-                metric_name=metric_name,
-                value=value,
-                availability="AVAILABLE",
-                published_version=1,
-                request_sequence=1,
-                source_partition_key=partition,
-                source_run_id=run.id,
-            )
-        )
-    session.add(
-        ReportCoverage(
-            tenant_id=scope.context.tenant_id,
-            advertiser_id=scope.advertiser_id,
-            partition_key=partition,
-            bucket_start=start,
-            bucket_end=end,
-            granularity="DAY",
-            report_contract="basic_campaign",
-            metric_family="delivery",
-            currency="USD",
-            timezone="UTC",
-            attribution="default",
-            filter_ids=[campaign_id],
-            requested_metrics=["spend", "native_growth_ad_revenue_value_d0"],
-            dimensions=["campaign"],
-            status="COMPLETE",
-            observed_at=observed_at,
-            published_version=1,
-            request_sequence=1,
-            source_run_id=run.id,
-        )
-    )
-    session.add(
-        ReportObservation(
-            tenant_id=scope.context.tenant_id,
-            advertiser_id=scope.advertiser_id,
-            bucket_start=start,
-            bucket_end=end,
-            granularity="DAY",
-            report_contract="basic_campaign",
-            metric_family="delivery",
-            currency="USD",
-            timezone="UTC",
-            attribution="default",
-            subject_kind="campaign",
-            subject_key=["campaign", campaign_id],
-            values={
-                "spend": str(spend),
-                "native_growth_ad_revenue_value_d0": str(revenue),
-            },
-            availability={
-                "spend": "AVAILABLE",
-                "native_growth_ad_revenue_value_d0": "AVAILABLE",
-            },
-            observed_at=observed_at,
-            membership_digest="a" * 64,
-            name_revision=1,
-            grouping_revision=1,
-            published_version=1,
+    # 多次添加系列时累计该账户的合成原始行，再走整份发布。
+    key = (scope.context.tenant_id, scope.advertiser_id)
+    rows = session.info.setdefault("workspace_report_rows", {}).setdefault(key, [])
+    day = date(2026, 9, 30)
+    rows.append(
+        ad_row(
+            f"ad-{index}",
+            day,
+            campaign=campaign_id,
+            adv=scope.advertiser_id,
+            spend=str(spend),
+            d0=str(revenue),
+            total=str(revenue),
         )
     )
     session.flush()
+    publish_ad_day(
+        session,
+        tenant_id=scope.context.tenant_id,
+        job_id=uuid4(),
+        accounts={scope.advertiser_id: AccountMeta("USD", "UTC")},
+        start=day,
+        end=day,
+        rows=rows,
+    )
     return ref
 
 
-def _external_material(session: Session, *, scope: _Scope, run: ReportSyncRun, ref: EntityRef) -> None:
+def _external_material(session: Session, *, scope: _Scope, ref: EntityRef) -> None:
     """外部素材没有本地 material_file，仍保留精确广告内使用身份。"""
     ad_id = "ad-external-1"
     session.add(
@@ -328,6 +238,8 @@ def _external_material(session: Session, *, scope: _Scope, run: ReportSyncRun, r
             advertiser_id=scope.advertiser_id,
             ad_remote_id=ad_id,
             platform_material_id="vid-external-1",
+            main_material_id="vid-external-1",
+            main_material_type="VIDEO",
             ad_material_id="ad-material-1",
             material_type="VIDEO",
             name="外部视频.mp4",
@@ -335,72 +247,38 @@ def _external_material(session: Session, *, scope: _Scope, run: ReportSyncRun, r
             published_version=1,
         )
     )
-    start = datetime.combine(date(2026, 9, 30), dt_time.min, tzinfo=UTC)
-    end = start + timedelta(days=1)
-    partition = sha256(b"external-material").hexdigest()
-    for metric_name, value in (("spend", Decimal("7")),):
-        session.add(
-            ReportFact(
-                tenant_id=scope.context.tenant_id,
-                advertiser_id=scope.advertiser_id,
-                # 定时同步按 smart_plus_ad_id 拆分素材，事实带广告身份才能证明归属。
-                subject_key=["material", "smart_plus_ad_id", ad_id, "vid-external-1", "VIDEO"],
-                bucket_start=start,
-                bucket_end=end,
-                granularity="DAY",
-                report_contract="material_overview",
-                metric_family="delivery",
-                currency="USD",
-                timezone="UTC",
-                attribution="default",
-                metric_name=metric_name,
-                value=value,
-                availability="AVAILABLE",
-                attributes={"smart_plus_ad_id": ad_id, "ad_material_id": "ad-material-1"},
-                published_version=1,
-                request_sequence=1,
-                source_partition_key=partition,
-                source_run_id=run.id,
-            )
-        )
-    session.add(
-        ReportCoverage(
-            tenant_id=scope.context.tenant_id,
-            advertiser_id=scope.advertiser_id,
-            partition_key=partition,
-            bucket_start=start,
-            bucket_end=end,
-            granularity="DAY",
-            report_contract="material_overview",
-            metric_family="delivery",
-            currency="USD",
-            timezone="UTC",
-            attribution="default",
-            filter_ids=["vid-external-1"],
-            requested_metrics=["spend"],
-            dimensions=["material"],
-            status="COMPLETE",
-            observed_at=datetime.now(UTC),
-            published_version=1,
-            request_sequence=1,
-            source_run_id=run.id,
-        )
-    )
     session.flush()
+    day = date(2026, 9, 30)
+    publish_material_day(
+        session,
+        tenant_id=scope.context.tenant_id,
+        job_id=uuid4(),
+        accounts={scope.advertiser_id: AccountMeta("USD", "UTC")},
+        start=day,
+        end=day,
+        rows=[
+            {
+                "dimensions": {
+                    "advertiser_id": scope.advertiser_id,
+                    "main_material_id": "vid-external-1",
+                    "main_material_type": "VIDEO",
+                    "stat_time_day": str(day),
+                },
+                "metrics": {"spend": "7"},
+            }
+        ],
+    )
 
 
 @pytest.fixture
 def workspace_case(session: Session) -> _WorkspaceCase:
     primary = _scope(session, label="primary", bc_id="bc-b6-primary")
     other = _scope(session, label="other", bc_id="bc-b6-other")
-    primary_run = _run(session, scope=primary)
-    other_run = _run(session, scope=other)
     providers = ("版权方甲", "版权方乙", "版权方丙")
     refs = tuple(
         _campaign(
             session,
             scope=primary,
-            run=primary_run,
             index=index,
             provider=provider,
             title="同名剧",
@@ -410,11 +288,10 @@ def workspace_case(session: Session) -> _WorkspaceCase:
         )
         for index, provider in enumerate(providers, start=1)
     )
-    _external_material(session, scope=primary, run=primary_run, ref=refs[0])
+    _external_material(session, scope=primary, ref=refs[0])
     _campaign(
         session,
         scope=other,
-        run=other_run,
         index=1,
         provider="其他版权方",
         title="同名剧",
@@ -448,21 +325,59 @@ def test_workspace_fastapi_contract_has_no_external_write_routes() -> None:
     paths = app.openapi()["paths"]
     expected_operations = {
         ("GET", "/api/tenants/{tenant_id}/ads"): "ads_reporting-query_ads",
-        ("GET", "/api/tenants/{tenant_id}/ads/{kind}/{remote_id}"): "ads_reporting-ad_detail",
-        ("GET", "/api/tenants/{tenant_id}/reports/trend"): "ads_reporting-report_trend",
-        ("POST", "/api/tenants/{tenant_id}/ad-selections"): "ads_reporting-freeze_ad_selection",
-        ("GET", "/api/tenants/{tenant_id}/report-views"): "ads_reporting-list_report_views",
-        ("POST", "/api/tenants/{tenant_id}/report-views"): "ads_reporting-create_report_view",
-        ("PATCH", "/api/tenants/{tenant_id}/report-views/{view_id}"): "ads_reporting-update_report_view",
-        ("DELETE", "/api/tenants/{tenant_id}/report-views/{view_id}"): "ads_reporting-delete_report_view",
-        ("GET", "/api/tenants/{tenant_id}/report-exports"): "ads_reporting-list_report_exports",
-        ("POST", "/api/tenants/{tenant_id}/report-exports"): "ads_reporting-create_report_export",
-        ("GET", "/api/tenants/{tenant_id}/report-exports/{export_id}"): "ads_reporting-get_report_export",
-        ("GET", "/api/tenants/{tenant_id}/report-exports/{export_id}/download"): "ads_reporting-download_report_export",
-        ("GET", "/api/tenants/{tenant_id}/ad-sync-runs"): "ads_reporting-list_ad_sync_runs",
-        ("POST", "/api/tenants/{tenant_id}/ad-sync-runs"): "ads_reporting-request_ad_sync",
-        ("GET", "/api/tenants/{tenant_id}/ad-sync-runs/{run_id}"): "ads_reporting-get_ad_sync_run",
+        (
+            "GET",
+            "/api/tenants/{tenant_id}/ads/{kind}/{remote_id}",
+        ): "ads_reporting-ad_detail",
+        (
+            "POST",
+            "/api/tenants/{tenant_id}/ad-selections",
+        ): "ads_reporting-freeze_ad_selection",
+        (
+            "GET",
+            "/api/tenants/{tenant_id}/report-views",
+        ): "ads_reporting-list_report_views",
+        (
+            "POST",
+            "/api/tenants/{tenant_id}/report-views",
+        ): "ads_reporting-create_report_view",
+        (
+            "PATCH",
+            "/api/tenants/{tenant_id}/report-views/{view_id}",
+        ): "ads_reporting-update_report_view",
+        (
+            "DELETE",
+            "/api/tenants/{tenant_id}/report-views/{view_id}",
+        ): "ads_reporting-delete_report_view",
+        (
+            "GET",
+            "/api/tenants/{tenant_id}/report-exports",
+        ): "ads_reporting-list_report_exports",
+        (
+            "POST",
+            "/api/tenants/{tenant_id}/report-exports",
+        ): "ads_reporting-create_report_export",
+        (
+            "GET",
+            "/api/tenants/{tenant_id}/report-exports/{export_id}",
+        ): "ads_reporting-get_report_export",
+        (
+            "GET",
+            "/api/tenants/{tenant_id}/report-exports/{export_id}/download",
+        ): "ads_reporting-download_report_export",
     }
+    expected_operations.update(
+        {
+            (
+                "POST",
+                "/api/tenants/{tenant_id}/ad-sync-refresh",
+            ): "ads_reporting-request_ad_sync_refresh",
+            (
+                "GET",
+                "/api/tenants/{tenant_id}/ad-sync-status",
+            ): "ads_reporting-get_ad_sync_status",
+        }
+    )
     actual_operations = {
         (method.upper(), path): operation["operationId"]
         for path, methods in paths.items()
@@ -474,7 +389,9 @@ def test_workspace_fastapi_contract_has_no_external_write_routes() -> None:
     assert actual_operations == expected_operations
 
 
-def test_workspace_http_query_contract(workspace_case: _WorkspaceCase, session: Session, client, monkeypatch) -> None:
+def test_workspace_http_query_contract(
+    workspace_case: _WorkspaceCase, session: Session, client, monkeypatch
+) -> None:
     """通过真实 FastAPI/TestClient 读取已发布本地报表，禁止隐式平台请求。"""
     from app.api.deps import get_current_user
     from app.integrations.tiktok import gateway
@@ -537,11 +454,10 @@ def test_workspace_http_query_contract(workspace_case: _WorkspaceCase, session: 
                 "snapshot_id": snapshot_id,
             },
         )
-        assert trend.status_code == 200, trend.text
-        assert {"points", "coverage"} <= set(trend.json())
+        assert trend.status_code == 404, trend.text
         item = payload["items"][0]
         detail = client.get(
-            f"/api/tenants/{workspace_case.primary.context.tenant_id}/ads/campaign/{item["display"]["remote_id"]}",
+            f"/api/tenants/{workspace_case.primary.context.tenant_id}/ads/campaign/{item['display']['remote_id']}",
             params={
                 "advertiser_id": workspace_case.primary.advertiser_id,
                 "bc_id": workspace_case.primary.bc_id,
@@ -581,8 +497,10 @@ def test_workspace_http_query_contract(workspace_case: _WorkspaceCase, session: 
             app.dependency_overrides[get_current_user] = previous
 
 
-def test_workspace_snapshot_contract(workspace_case: _WorkspaceCase, session: Session) -> None:
-    """列表、汇总、趋势、导出、全选共享同一租户/BC 冻结结果。"""
+def test_workspace_snapshot_contract(
+    workspace_case: _WorkspaceCase, session: Session
+) -> None:
+    """列表、汇总、导出、全选共享同一租户/BC 冻结结果。"""
     case = workspace_case
     filters = _filters()
     page = query_ads(
@@ -594,8 +512,16 @@ def test_workspace_snapshot_contract(workspace_case: _WorkspaceCase, session: Se
     )
     assert page.total == 3
     assert len(page.items) == 2
-    assert {row.display["operation_status"] for row in page.items} <= {"ENABLE", "PAUSED", "DELETED"}
-    assert {row.display["provider"] for row in page.items} <= {"版权方甲", "版权方乙", "版权方丙"}
+    assert {row.display["operation_status"] for row in page.items} <= {
+        "ENABLE",
+        "PAUSED",
+        "DELETED",
+    }
+    assert {row.display["provider"] for row in page.items} <= {
+        "版权方甲",
+        "版权方乙",
+        "版权方丙",
+    }
     assert page.next_cursor is not None
     next_page = query_ads(
         session,
@@ -607,7 +533,11 @@ def test_workspace_snapshot_contract(workspace_case: _WorkspaceCase, session: Se
         limit=2,
     )
     assert len(next_page.items) == 1
-    assert {row.display["provider"] for row in page.items + next_page.items} == {"版权方甲", "版权方乙", "版权方丙"}
+    assert {row.display["provider"] for row in page.items + next_page.items} == {
+        "版权方甲",
+        "版权方乙",
+        "版权方丙",
+    }
     assert next_page.summary == page.summary
     drama_page = query_ads(
         session,
@@ -617,23 +547,15 @@ def test_workspace_snapshot_contract(workspace_case: _WorkspaceCase, session: Se
         limit=100,
     )
     assert drama_page.total == 3
-    assert sum(Decimal(str(_bucket_values(bucket)["spend"])) for bucket in _summary_buckets(drama_page)) == Decimal("60")
+    assert sum(
+        Decimal(str(_bucket_values(bucket)["spend"]))
+        for bucket in _summary_buckets(drama_page)
+    ) == Decimal("60")
     bucket = _summary_buckets(page)[0]
     values = _bucket_values(bucket)
     assert Decimal(str(values["spend"])) == Decimal("60")
-    assert Decimal(str(values["native_growth_ad_revenue_value_d0"])) == Decimal("120")
-    assert Decimal(str(values["d0_roas"])) == Decimal("2")
-
-    trend = snapshot_trend(
-        session,
-        context=case.primary.context,
-        bc_id=case.primary.bc_id,
-        snapshot_id=page.snapshot.snapshot_id,
-        filters=filters,
-    )
-    assert trend.coverage["status"] in {"COMPLETE", "INCOMPLETE"}
-    assert trend.points
-    assert sum(point.values["spend"] or Decimal(0) for point in trend.points) == Decimal("60")
+    assert Decimal(str(values["revenue_d0"])) == Decimal("120")
+    assert Decimal(str(values["roas_d0"])) == Decimal("2")
 
     # 快照发布后新增一个目录成员；分页、全选和导出均只能消费已冻结的三行。
     session.add(
@@ -663,8 +585,12 @@ def test_workspace_snapshot_contract(workspace_case: _WorkspaceCase, session: Se
             mode="ALL_MATCHING",
         ),
     )
-    assert {item.remote_id for item in selection.refs} == {ref.remote_id for ref in case.campaign_refs}
-    assert "campaign-added-after-snapshot" not in {item.remote_id for item in selection.refs}
+    assert {item.remote_id for item in selection.refs} == {
+        ref.remote_id for ref in case.campaign_refs
+    }
+    assert "campaign-added-after-snapshot" not in {
+        item.remote_id for item in selection.refs
+    }
 
     export = create_export(
         session,
@@ -690,7 +616,7 @@ def test_workspace_snapshot_contract(workspace_case: _WorkspaceCase, session: Se
     assert len(csv.splitlines()) == 4
     assert "campaign-added-after-snapshot" not in csv
 
-    material_rows = build_dimension_rows(
+    material_rows = build_rows(
         session,
         context=case.primary.context,
         bc_id=case.primary.bc_id,
@@ -719,7 +645,9 @@ def test_workspace_snapshot_contract(workspace_case: _WorkspaceCase, session: Se
         )
 
 
-def test_workspace_capacity_has_no_n_plus_one(workspace_case: _WorkspaceCase, session: Session) -> None:
+def test_workspace_capacity_has_no_n_plus_one(
+    workspace_case: _WorkspaceCase, session: Session
+) -> None:
     """合成 1,000 系列/10,000 广告只作为查询容量证据，不代表线上规模。"""
     case = workspace_case
     scope = case.primary
@@ -794,7 +722,7 @@ def test_workspace_capacity_has_no_n_plus_one(workspace_case: _WorkspaceCase, se
     event.listen(engine, "before_cursor_execute", count_sql)
     started = time.perf_counter()
     try:
-        rows = build_dimension_rows(
+        rows = build_rows(
             session,
             context=scope.context,
             bc_id=scope.bc_id,
@@ -807,6 +735,10 @@ def test_workspace_capacity_has_no_n_plus_one(workspace_case: _WorkspaceCase, se
     assert len(rows) >= 1_000
     # A fixed number of set-based reads is expected. A query per series/ad would
     # scale with input rows and is an N+1 regression even if the result is correct.
-    print(f"B6 capacity: campaigns=1000 ads=10000 sql_statements={statements} elapsed_ms={elapsed_ms:.2f}")  # noqa: T201
+    print(  # noqa: T201
+        f"B6 capacity: campaigns=1000 ads=10000 sql_statements={statements} elapsed_ms={elapsed_ms:.2f}"
+    )
     assert statements <= 30, f"{statements} SQL statements for 1,000 series/10,000 ads"
-    assert elapsed_ms < 30_000, f"synthetic capacity query exceeded 30s: {elapsed_ms:.1f}ms"
+    assert elapsed_ms < 30_000, (
+        f"synthetic capacity query exceeded 30s: {elapsed_ms:.1f}ms"
+    )

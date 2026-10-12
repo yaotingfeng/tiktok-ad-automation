@@ -19,27 +19,43 @@ def ensure_month_partitions(
 ) -> None:
     """创建当月及未来 months_ahead 个月的分区；已存在则跳过，可重复调用。"""
     today = today or date.today()
-    for table in PARTITIONED_TABLES:
-        for offset in range(0, months_ahead + 1):
-            start, end = _month_start(today, offset), _month_start(today, offset + 1)
-            name = f"{table}_{start:%Y_%m}"
-            session.execute(
-                text(
-                    f"CREATE TABLE IF NOT EXISTS {name} PARTITION OF {table} "
-                    f"FOR VALUES FROM ('{start.isoformat()}') TO ('{end.isoformat()}')"
-                )
-            )
+    ensure_month_partitions_for_range(
+        session, _month_start(today, 0), _month_start(today, months_ahead)
+    )
 
 
 def ensure_month_partitions_for_range(session: Session, start: date, end: date) -> None:
-    """为历史区间逐月建分区，必须在写入该区间数据之前调用。"""
+    """建分区时原子迁移 DEFAULT 既有行；父表锁防止搬迁过程中再写入该月。"""
     cursor = date(start.year, start.month, 1)
     while cursor <= end:
         nxt = _month_start(cursor, 1)
         for table in PARTITIONED_TABLES:
-            session.execute(
+            name = f"{table}_{cursor:%Y_%m}"
+            connection = session.connection()
+            if connection.execute(
+                text("SELECT to_regclass(:name)"), {"name": name}
+            ).scalar():
+                continue
+            connection.execute(text(f"LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE"))
+            if connection.execute(
+                text("SELECT to_regclass(:name)"), {"name": name}
+            ).scalar():
+                continue
+            connection.execute(
                 text(
-                    f"CREATE TABLE IF NOT EXISTS {table}_{cursor:%Y_%m} PARTITION OF {table} "
+                    f"CREATE TABLE {name} (LIKE {table} INCLUDING DEFAULTS INCLUDING CONSTRAINTS)"
+                )
+            )
+            connection.execute(
+                text(
+                    f"WITH moved AS (DELETE FROM {table}_default WHERE stat_date >= :s AND stat_date < :e RETURNING *) "
+                    f"INSERT INTO {name} SELECT * FROM moved"
+                ),
+                {"s": cursor, "e": nxt},
+            )
+            connection.execute(
+                text(
+                    f"ALTER TABLE {table} ATTACH PARTITION {name} "
                     f"FOR VALUES FROM ('{cursor.isoformat()}') TO ('{nxt.isoformat()}')"
                 )
             )

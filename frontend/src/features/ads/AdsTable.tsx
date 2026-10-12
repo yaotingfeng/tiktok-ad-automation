@@ -189,6 +189,17 @@ export function AdsTable({
                 </TableHead>
               ))}
               <TableHead>状态</TableHead>
+              {dimension === "account" && (
+                <TableHead>
+                  <SortableHead
+                    label="余额"
+                    sortBy="balance"
+                    activeSortBy={sortBy}
+                    direction={sortDirection}
+                    onSort={onSort}
+                  />
+                </TableHead>
+              )}
               {METRIC_COLUMNS.map((column) => (
                 <TableHead key={column.key}>
                   <SortableHead
@@ -296,6 +307,16 @@ export function AdsTable({
                         "未知"}
                     </Badge>
                   </TableCell>
+                  {dimension === "account" && (
+                    <TableCell
+                      className="text-xs"
+                      title={row.display?.balance_updated_at ?? undefined}
+                    >
+                      {row.display?.balance != null
+                        ? `${row.display.balance_currency} ${formatMetric(row.display.balance)}${row.display.balance_scope === "PORTFOLIO" ? "（共享资金池）" : ""}`
+                        : "—"}
+                    </TableCell>
+                  )}
                   {METRIC_COLUMNS.map((column) => {
                     const metric = rowMetric(row, column.key)
                     const reconciliation = `账户报表：${row.metric_buckets?.[0]?.currency ?? ""} ${formatMetric(row.display?.account_report_spend)}`

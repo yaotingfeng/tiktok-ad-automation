@@ -349,3 +349,56 @@ def test_bc_permission_error_keeps_safe_classification():
     with pytest.raises(DomainError) as caught:
         requests.invoke("reports.bc", None, send, exact_numbers=True)
     assert caught.value.code == "report_permission_denied"
+
+
+def test_physical_counter_excludes_local_admission_and_validation(monkeypatch):
+    from contextlib import contextmanager
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    from business_api_client import ApiClient, ReportingApi
+
+    from app.integrations.tiktok.gateway import _sdk_report_send
+    from app.integrations.tiktok.sdk import AccountAdmissionDeferred
+    from app.modules.reporting.jobs import _CountingReader
+
+    client = ApiClient()
+    client.default_headers["Access-Token"] = "synthetic-only"
+    blocked = [True]
+
+    @contextmanager
+    def scope(*_args):
+        if blocked[0]:
+            raise AccountAdmissionDeferred(300000)
+        yield
+
+    def throttle(*_args, **_kwargs):
+        return client.deserialize(
+            SimpleNamespace(data=b'{"code":40100,"message":"QPM limit","data":{}}'),
+            "InlineResponse200",
+        )
+
+    monkeypatch.setattr(ReportingApi, "report_integrated_get", throttle)
+    reader = _CountingReader(
+        SdkReportReader(
+            send=_sdk_report_send(
+                client, scope, datetime.now(UTC) + timedelta(seconds=60)
+            )
+        )
+    )
+    args = {
+        "advertiser_ids": ("a",),
+        "start": date(2026, 10, 5),
+        "end": date(2026, 10, 5),
+        "page": 1,
+    }
+    with pytest.raises(AccountAdmissionDeferred):
+        reader.ad_day(**args)
+    assert reader.count == 0
+    with pytest.raises(DomainError):
+        reader.ad_day(**(args | {"advertiser_ids": ()}))
+    assert reader.count == 0
+    blocked[0] = False
+    with pytest.raises(AccountAdmissionDeferred):
+        reader.ad_day(**args)
+    assert reader.count == 1

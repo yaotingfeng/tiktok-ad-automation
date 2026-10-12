@@ -59,6 +59,9 @@ def run_directory_step(
     run_id: UUID,
     claim_generation: int,
 ) -> str:
+    # 实例总开关同时拦截已经排队的目录任务；重新开启后由扫描器恢复。
+    if not settings.ADS_SYNC_ENABLED:
+        return "WAIT"
     with Session(database_engine) as session:
         run = session.exec(
             select(AdDirectoryRun)

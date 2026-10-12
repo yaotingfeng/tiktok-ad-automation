@@ -7,21 +7,15 @@ local wait = 0
 local key_count = #KEYS
 for i = 1, key_count do
     local cutoff = now
-    local bucket_window = window
     if i <= 2 then
         cutoff = now - window
-    elseif i == 7 then
-        bucket_window = tonumber(ARGV[10])
-        cutoff = now - bucket_window
     end
     redis.call('ZREMRANGEBYSCORE', KEYS[i], '-inf', cutoff)
     local capacity = tonumber(ARGV[i + 3])
-    if i == 7 then capacity = tonumber(ARGV[11]) end
     local current = redis.call('ZSCORE', KEYS[i], member)
     if current then
         local remaining = tonumber(current) - now
         if i <= 2 then remaining = remaining + window end
-        if i == 7 then remaining = remaining + bucket_window end
         wait = math.max(wait, remaining)
     end
     if redis.call('ZCARD', KEYS[i]) >= capacity then
@@ -29,8 +23,6 @@ for i = 1, key_count do
         local remaining = tonumber(first[2]) - now
         if i <= 2 then
             remaining = remaining + window
-        elseif i == 7 then
-            remaining = remaining + bucket_window
         else
             -- 并发租约是崩溃兜底期限，不是最早可用时间；正常调用可提前释放。
             -- 仅短间隔重新原子准入，不提前删租约、不占额度、不在Worker内睡眠。
@@ -44,7 +36,6 @@ for i = 1, key_count do
     local score = now + lease
     local ttl = lease + 1000
     if i <= 2 then score = now; ttl = window + 1000 end
-    if i == 7 then score = now; ttl = tonumber(ARGV[10]) + 1000 end
     redis.call('ZADD', KEYS[i], score, member)
     if i > 2 then
         local latest = redis.call('ZRANGE', KEYS[i], -1, -1, 'WITHSCORES')

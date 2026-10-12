@@ -35,8 +35,8 @@ celery_app.conf.update(
         # A7 durable directory/report runs register before the outbox publisher
         # starts, so a recovery message can never hit an unknown task/queue.
         "app.modules.ads.tasks",
-        "app.modules.reporting.tasks",
         "app.modules.reporting.job_tasks",
+        "app.modules.reporting.balance_tasks",
         "app.modules.reporting.export_tasks",
         "app.modules.ad_management.tasks",
         "app.modules.ad_management.submissions",
@@ -57,12 +57,12 @@ celery_app.conf.update(
     task_routes={
         "jobs.flush_dispatch": {"queue": "control"},
         "jobs.compact_dispatches": {"queue": "control"},
-        "reporting.scan_due": {"queue": "control"},
         "reporting.plan_due": {"queue": "control"},
         "reporting.job_step": {"queue": "ads-reporting"},
+        "reporting.plan_balances": {"queue": "control"},
+        "reporting.balance_step": {"queue": "ads-directory"},
         "reporting.cleanup_store": {"queue": "ads-reporting"},
         "ads.sync_step": {"queue": "ads-directory"},
-        "reporting.sync_step": {"queue": "ads-reporting"},
         "reporting.export": {"queue": "ads-reporting"},
         "ad_management.execute": {"queue": "ad-management"},
         "reporting.cleanup_exports": {"queue": "ads-reporting"},
@@ -169,6 +169,11 @@ celery_app.conf.update(
             "task": "reporting.cleanup_store",
             "schedule": 3600.0,
             "options": {"queue": "ads-reporting"},
+        },
+        "scan-account-balances": {
+            "task": "reporting.plan_balances",
+            "schedule": 1800.0,
+            "options": {"queue": "control"},
         },
         "scan-ads-reporting-due": {
             "task": "reporting.plan_due",

@@ -10,7 +10,7 @@ from math import ceil
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import text
+from sqlalchemy import exists, text
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -181,6 +181,10 @@ def due_plans(session, *, now: datetime, limit: int = 50) -> list[AdSyncBc]:
             select(AdSyncBc)
             .where(
                 col(AdSyncBc.enabled).is_(True),
+                exists().where(
+                    col(AdSyncAccount.tenant_id) == col(AdSyncBc.tenant_id),
+                    col(AdSyncAccount.owner_bc_id) == col(AdSyncBc.bc_id),
+                ),
                 (AdSyncBc.next_hot_at <= now)
                 | (AdSyncBc.next_material_at <= now)
                 | (AdSyncBc.next_daily_at <= now)

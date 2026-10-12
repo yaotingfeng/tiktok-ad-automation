@@ -851,3 +851,39 @@ def test_supplement_smart_parent_preserves_account_and_group_checks(
     assert result.complete and not result.materials_complete
     assert result.material_missing_reason == "ads_response_invalid"
     assert len(result.items) == 2 and not result.materials
+
+
+@pytest.mark.parametrize("gateway_case", ["OFFICIAL_API"], indirect=True)
+def test_balance_batch_reads_one_bounded_page_and_resumes_at_requested_page(
+    database_engine, redis_client, gateway_case, gateway_wire
+):
+    authenticated_subject(database_engine, gateway_case)
+    member = {
+        "user_id": "subject-1",
+        "relation_status": "BOUND",
+        "ext_user_role": {"finance_role": "ANALYST"},
+    }
+    target = {
+        "advertiser_id": gateway_case[2],
+        "currency": "USD",
+        "balance_info": {"account_balance": "12.5"},
+    }
+    balance = {
+        "advertiser_account_list": [target],
+        "page_info": page([target], number=3, size=100, total=201)["page_info"],
+    }
+    replies(
+        gateway_wire,
+        "OFFICIAL_API",
+        {
+            "bc_member_get": [page([member], size=20)],
+            "advertiser_balance_get": [balance],
+        },
+    )
+    with gateway(database_engine, redis_client, gateway_case) as client:
+        values, next_page = client.ads.read_balance_page((gateway_case[2],), page=3)
+    assert values[gateway_case[2]].amount == Decimal("12.5") and next_page is None
+    calls = business_calls(gateway_wire, "OFFICIAL_API")
+    assert len(calls) == 2
+    args = dict(calls[-1][2]["fields"])
+    assert args["page"] == 3 and args["page_size"] == 100

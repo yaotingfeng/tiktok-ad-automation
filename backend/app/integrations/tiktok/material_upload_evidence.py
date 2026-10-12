@@ -29,9 +29,7 @@ UPLOAD_EVIDENCE = (
             "https://www.postman.com/tiktok/tiktok-api-for-business/request/999yihe/file-video-upload",
             "docs/superpowers/specs/2026-09-10-r2-transient-video-upload-design.md#2026-09-11-单文件容量调整",
         ),
-        notes=(
-            "应用容量、零客户端重试与实际MD5/大小回读；不声明服务内部保证。"
-        ),
+        notes=("应用容量、零客户端重试与实际MD5/大小回读；不声明服务内部保证。"),
     ),
     MaterialUploadEvidence(
         channel="OFFICIAL_MCP",
@@ -61,6 +59,20 @@ UPLOAD_EVIDENCE = (
             "2026-10-02复核：整套MCP工具清单版本虽更新，file_video_ad_upload的URL上传schema"
             "与上一已核实版本一致，历史相同连接已有成功VID回执。"
             "按应用容量发送一次，关闭自动修复和绑定，保留原件并实际回读MD5/大小。"
+        ),
+    ),
+    MaterialUploadEvidence(
+        channel="OFFICIAL_MCP",
+        adapter_contract_revision="d192781a73fd191fd0763d5ff934590bf0e17ad126eb4320b6e2ec4f0966db4b",
+        policy=MaterialUploadPolicy(1024**3),
+        category="APPLICATION",
+        sources=(
+            "app/integrations/tiktok/mcp/protocol-profile.json",
+            "app/integrations/tiktok/mcp/tool-contracts.json",
+        ),
+        notes=(
+            "2026-10-12本地合同复核：仅删除六个旧报表工具，余下33个合同逐字段与前版一致。"
+            "URL上传合同及应用容量未改变；沿用已有上传证据，不声明新的真实联调。"
         ),
     ),
 )

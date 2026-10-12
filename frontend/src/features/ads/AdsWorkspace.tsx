@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
@@ -42,7 +42,6 @@ export function AdsWorkspace() {
       ? applied
       : { ...applied, page: 1, cursor: undefined, snapshot_id: undefined }
   const ads = useAdsQuery(requestSearch, queryRevision)
-  const queryClient = useQueryClient()
   const items = ads.query.data?.items ?? []
   const [actionError, setActionError] = useState<string | null>(null)
   const [frozenSelection, setFrozenSelection] =
@@ -79,6 +78,48 @@ export function AdsWorkspace() {
       ).data,
     refetchInterval: 30_000,
   })
+  const publicationRef = useRef<{ scope: string; version: string } | null>(null)
+  const publicationScope = `${tenantId}:${currentBcId}:${applied.start_date}:${applied.end_date}`
+  const clearSelection = ads.selection.clear
+  const pendingRefreshScope = useRef<string | null>(null)
+  const [newDataAvailable, setNewDataAvailable] = useState(false)
+  const loadLatest = useCallback(() => {
+    pendingRefreshScope.current = null
+    setNewDataAvailable(false)
+    clearSelection()
+    clearManagementPreview()
+    setSelectedRow(null)
+    setCursorHistory([])
+    setSearch((current) => ({
+      ...current,
+      page: 1,
+      cursor: undefined,
+      snapshot_id: undefined,
+    }))
+    setApplied((current) => ({
+      ...current,
+      page: 1,
+      cursor: undefined,
+      snapshot_id: undefined,
+    }))
+    setQueryRevision((current) => current + 1)
+    setSyncNotice("报表数据已更新")
+  }, [clearSelection, clearManagementPreview])
+  useEffect(() => {
+    if (!syncStatus.data) return
+    const version = syncStatus.data.publication_version
+    const previous = publicationRef.current
+    publicationRef.current = { scope: publicationScope, version }
+    if (!previous || previous.scope !== publicationScope) {
+      pendingRefreshScope.current = null
+      setNewDataAvailable(false)
+      return
+    }
+    if (previous.version === version) return
+    // 主动刷新完成后换快照；普通后台发布不能打断跨页选择和已打开的预览。
+    if (pendingRefreshScope.current === publicationScope) loadLatest()
+    else setNewDataAvailable(true)
+  }, [syncStatus.data, publicationScope, loadLatest])
   const syncMutation = useMutation({
     mutationFn: async () => {
       // 手动刷新按当前筛选账户插队，不从当前页推导范围，也不触发历史回补。
@@ -94,6 +135,8 @@ export function AdsWorkspace() {
     },
     onSuccess: ({ result, requestScope }) => {
       if (scopeRef.current !== requestScope) return
+      if (result.status === "QUEUED")
+        pendingRefreshScope.current = publicationScope
       setSyncNotice(
         result.status === "SYNC_DISABLED"
           ? "报表同步未开启"
@@ -313,10 +356,6 @@ export function AdsWorkspace() {
             onClick={() =>
               runAction(() =>
                 syncMutation.mutate(undefined, {
-                  onSuccess: () =>
-                    void queryClient.invalidateQueries({
-                      queryKey: ["tenant", tenantId, "ads", bc?.bc_id],
-                    }),
                   onError: (error) => setActionError(String(error)),
                 }),
               )
@@ -352,10 +391,18 @@ export function AdsWorkspace() {
           </Button>
         </div>
       </div>
+      {newDataAvailable && (
+        <Button variant="outline" size="sm" onClick={loadLatest}>
+          查看最新数据
+        </Button>
+      )}
       {syncNotice && (
         <p role="status" className="text-sm">
           {syncNotice}
         </p>
+      )}
+      {syncStatus.data?.plan.enabled && syncStatus.data.plan.slowed && (
+        <p>数据更新放缓</p>
       )}
       {syncStatus.data?.accounts.map((account) => (
         <div

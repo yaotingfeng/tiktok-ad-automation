@@ -148,7 +148,7 @@ def test_query_limit_is_bounded(report_case, limit):
 
 
 def test_snapshot_owner_scope_and_expiry(report_case):
-    from app.modules.reporting.queries import query_ads, snapshot_trend
+    from app.modules.reporting.queries import query_ads
     from app.modules.reporting.selection import freeze_selection
 
     case = report_case
@@ -189,13 +189,6 @@ def test_snapshot_owner_scope_and_expiry(report_case):
                     filters=filters,
                     snapshot_id=page.snapshot.snapshot_id,
                     cursor=page.next_cursor,
-                ),
-                lambda: snapshot_trend(
-                    case.session,
-                    context=context,
-                    bc_id=bc_id,
-                    snapshot_id=page.snapshot.snapshot_id,
-                    filters=filters,
                 ),
                 lambda: freeze_selection(
                     case.session,

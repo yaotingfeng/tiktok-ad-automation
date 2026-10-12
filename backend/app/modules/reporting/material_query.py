@@ -17,6 +17,7 @@ from app.modules.reporting.dimension_query import (
     _hierarchy_display,
     _passes_filter,
     _sort_rows,
+    empty_metric_values,
     latest_projections,
     metric_vector,
     scoped_rows,
@@ -58,6 +59,7 @@ def build_material_rows(session, *, context, bc_id, filters) -> tuple[ReportRow,
         )
     )
     usage_index = defaultdict(dict)
+    directory_materials = set()
     for usage in scoped_rows(
         session,
         AdMaterialReference,
@@ -66,6 +68,10 @@ def build_material_rows(session, *, context, bc_id, filters) -> tuple[ReportRow,
     ):
         if not usage.complete:
             continue
+        material_id = usage.main_material_id or usage.ad_material_id
+        material_type = usage.main_material_type or usage.material_type
+        if material_id and material_type:
+            directory_materials.add((usage.advertiser_id, material_id, material_type))
         # 主素材为带类型身份；广告内素材 ID 只能关联同一账户，绝不能跨账户猜测。
         if usage.main_material_id:
             usage_index[
@@ -102,6 +108,8 @@ def build_material_rows(session, *, context, bc_id, filters) -> tuple[ReportRow,
                 item["main_material_type"],
             )
         ].append(item)
+    for identity in directory_materials:
+        grouped.setdefault(identity, [])
     result = []
     for (adv, mid, material_type), items in sorted(grouped.items()):
         candidates = usage_index.get((adv, mid, material_type), {}) | usage_index.get(
@@ -176,6 +184,16 @@ def build_material_rows(session, *, context, bc_id, filters) -> tuple[ReportRow,
                     unsupported={"revenue_d3", "revenue_d30"},
                 )
                 for item in items
+            )
+            or (
+                metric_vector(
+                    empty_metric_values(
+                        states, advertiser=adv, filters=filters, kind="material_day"
+                    ),
+                    currency=accounts[adv].currency,
+                    timezone=accounts[adv].timezone,
+                    unsupported={"revenue_d3", "revenue_d30"},
+                ),
             ),
             coverage=coverage,
             membership_digest=sha256(

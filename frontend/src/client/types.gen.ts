@@ -5886,6 +5886,10 @@ export type SyncAccountStatus = {
  */
 export type SyncPlanStatus = {
     /**
+     * Slowed
+     */
+    slowed?: boolean | null;
+    /**
      * Enabled
      */
     enabled: boolean;
@@ -5931,6 +5935,10 @@ export type SyncRefreshRequest = {
  * SyncStatusPublic
  */
 export type SyncStatusPublic = {
+    /**
+     * Publication Version
+     */
+    publication_version: string;
     /**
      * Accounts
      */
@@ -6093,70 +6101,6 @@ export type Token = {
      * Token Type
      */
     token_type?: string;
-};
-
-/**
- * TrendPoint
- *
- * 趋势分桶及其可比较的差值；缺失值保持 ``None``。
- */
-export type TrendPoint = {
-    /**
-     * Bucket Start
-     */
-    bucket_start: string;
-    /**
-     * Bucket End
-     */
-    bucket_end: string;
-    /**
-     * Values
-     */
-    values?: {
-        [key: string]: string | null;
-    };
-    /**
-     * Availability
-     */
-    availability?: {
-        [key: string]: 'AVAILABLE' | 'MISSING' | 'UNAVAILABLE' | 'UNSUPPORTED' | 'FAILED';
-    };
-    /**
-     * Delta
-     */
-    delta?: {
-        [key: string]: string;
-    } | null;
-    /**
-     * Delta Reason
-     */
-    delta_reason?: 'SCOPE_CHANGED' | 'DATE_CHANGED' | null;
-};
-
-/**
- * TrendPublic
- *
- * B2 对外趋势 DTO；coverage 显式区分完整、空结果和不完整。
- */
-export type TrendPublic = {
-    /**
-     * Points
-     */
-    points?: Array<TrendPoint>;
-    /**
-     * Coverage
-     */
-    coverage?: {
-        [key: string]: unknown;
-    };
-    /**
-     * Actual Interval Minutes
-     */
-    actual_interval_minutes?: number | null;
-    /**
-     * Delta Reason
-     */
-    delta_reason?: 'SCOPE_CHANGED' | 'DATE_CHANGED' | null;
 };
 
 /**
@@ -10372,101 +10316,6 @@ export type adsReportingAdDetailResponses = {
 };
 
 export type adsReportingAdDetailResponse = adsReportingAdDetailResponses[keyof adsReportingAdDetailResponses];
-
-export type adsReportingReportTrendData = {
-    body?: never;
-    path: {
-        /**
-         * Tenant Id
-         */
-        tenant_id: string;
-    };
-    query: {
-        /**
-         * Bc Id
-         */
-        bc_id: string;
-        /**
-         * Dimension
-         */
-        dimension?: 'account' | 'campaign' | 'adgroup' | 'ad' | 'material' | 'drama';
-        /**
-         * Start Date
-         */
-        start_date?: string | null;
-        /**
-         * End Date
-         */
-        end_date?: string | null;
-        /**
-         * Advertiser Id
-         */
-        advertiser_id?: string | null;
-        /**
-         * Ids
-         */
-        ids?: string | null;
-        /**
-         * Query
-         */
-        query?: string | null;
-        /**
-         * Min Spend
-         */
-        min_spend?: number | string | null;
-        /**
-         * Max Spend
-         */
-        max_spend?: number | string | null;
-        /**
-         * Min D0 Roas
-         */
-        min_d0_roas?: number | string | null;
-        /**
-         * Max D0 Roas
-         */
-        max_d0_roas?: number | string | null;
-        /**
-         * Min Target Roas
-         */
-        min_target_roas?: number | string | null;
-        /**
-         * Max Target Roas
-         */
-        max_target_roas?: number | string | null;
-        /**
-         * Created From
-         */
-        created_from?: string | null;
-        /**
-         * Created To
-         */
-        created_to?: string | null;
-        /**
-         * Snapshot Id
-         */
-        snapshot_id?: string | null;
-    };
-    url: '/api/tenants/{tenant_id}/reports/trend';
-};
-
-export type adsReportingReportTrendErrors = {
-    /**
-     * Validation Error
-     */
-    422: HTTPValidationError;
-};
-
-export type adsReportingReportTrendError = adsReportingReportTrendErrors[keyof adsReportingReportTrendErrors];
-
-export type adsReportingReportTrendResponses = {
-    /**
-     * Successful Response
-     */
-    200: TrendPublic;
-};
-
-export type adsReportingReportTrendResponse = adsReportingReportTrendResponses[keyof adsReportingReportTrendResponses];
 
 export type adsReportingFreezeAdSelectionData = {
     body: SelectionRequest;

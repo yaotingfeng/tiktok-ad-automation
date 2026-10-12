@@ -83,7 +83,10 @@ def test_filter_compiles_directory_configuration_and_d0_thresholds():
     "metric_kwargs",
     [
         {"optimization_goal": "VALUE"},
-        {"values": {"d0_revenue": Decimal("1")}, "availability": {"d0_revenue": "MISSING"}},
+        {
+            "values": {"d0_revenue": Decimal("1")},
+            "availability": {"d0_revenue": "MISSING"},
+        },
         {"values": {"spend": Decimal("1")}, "availability": {"spend": "VALUE"}},
         {"values": {"spend": Decimal("1")}, "availability": {}},
     ],
@@ -92,7 +95,9 @@ def test_metric_vector_rejects_unsupported_economics(metric_kwargs):
     from app.modules.reporting.schemas import MetricVector
 
     with pytest.raises(ValueError):
-        MetricVector(currency="USD", timezone="UTC", attribution="default", **metric_kwargs)
+        MetricVector(
+            currency="USD", timezone="UTC", attribution="default", **metric_kwargs
+        )
 
 
 def test_metric_vector_accepts_canonical_a_metrics_and_derived_roas():
@@ -102,8 +107,16 @@ def test_metric_vector_accepts_canonical_a_metrics_and_derived_roas():
         currency="USD",
         timezone="UTC",
         attribution="default",
-        values={"spend": Decimal("10"), "native_growth_ad_revenue_value_d0": Decimal("12"), "d0_roas": Decimal("1.2")},
-        availability={"spend": "AVAILABLE", "native_growth_ad_revenue_value_d0": "AVAILABLE", "d0_roas": "AVAILABLE"},
+        values={
+            "spend": Decimal("10"),
+            "revenue_d0": Decimal("12"),
+            "roas_d0": Decimal("1.2"),
+        },
+        availability={
+            "spend": "AVAILABLE",
+            "revenue_d0": "AVAILABLE",
+            "roas_d0": "AVAILABLE",
+        },
     )
     assert row.optimization_goal is None
 
@@ -188,9 +201,14 @@ def test_filter_scope_correlates_tenant_and_naming_status(report_case):
         select(CampaignNameProjection),
         naming_status_column=CampaignNameProjection.status,
     )
-    assert report_case.session.exec(
-        empty_statement.where(CampaignNameProjection.tenant_id == report_case.context.tenant_id)
-    ).all() == []
+    assert (
+        report_case.session.exec(
+            empty_statement.where(
+                CampaignNameProjection.tenant_id == report_case.context.tenant_id
+            )
+        ).all()
+        == []
+    )
 
 
 def test_snapshot_read_is_tenant_bc_scoped_and_viewer_allowed(report_case):
@@ -217,14 +235,19 @@ def test_snapshot_read_is_tenant_bc_scoped_and_viewer_allowed(report_case):
         )
     )
     report_case.session.flush()
-    assert read_snapshot(
-        report_case.session,
-        context=TenantContext(
-            tenant_id=report_case.context.tenant_id, actor_id=viewer.id, role="viewer"
-        ),
-        bc_id=report_case.bc_id,
-        snapshot_id=snapshot.id,
-    ).id == snapshot.id
+    assert (
+        read_snapshot(
+            report_case.session,
+            context=TenantContext(
+                tenant_id=report_case.context.tenant_id,
+                actor_id=viewer.id,
+                role="viewer",
+            ),
+            bc_id=report_case.bc_id,
+            snapshot_id=snapshot.id,
+        ).id
+        == snapshot.id
+    )
     with pytest.raises(HTTPException) as error:
         read_snapshot(
             report_case.session,

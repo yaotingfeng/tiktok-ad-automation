@@ -42,6 +42,10 @@ class SdkReportReader:
     def __init__(self, *, send: Send) -> None:
         self._send = send
 
+    @property
+    def request_count(self) -> int:
+        return getattr(self._send, "request_count", 0)
+
     def _basic(
         self,
         *,

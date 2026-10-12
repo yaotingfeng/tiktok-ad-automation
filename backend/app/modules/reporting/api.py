@@ -7,11 +7,13 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from hashlib import sha256
 from typing import Annotated, Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
+from redis import Redis, RedisError
 from sqlmodel import col, select
 
 from app.api.deps import CurrentUser, SessionDep
@@ -27,7 +29,9 @@ from app.modules.reporting.exports import (
     list_exports,
 )
 from app.modules.reporting.filters import authorized_grants
+from app.modules.reporting.models import AccountBalanceObservation
 from app.modules.reporting.planner import (
+    calls_today,
     ensure_bc_plans,
     owned_accounts,
     plan_hot,
@@ -39,7 +43,7 @@ from app.modules.reporting.preferences import (
     save_view,
     update_view,
 )
-from app.modules.reporting.queries import query_ads, snapshot_trend
+from app.modules.reporting.queries import query_ads
 from app.modules.reporting.schemas import (
     AdsQueryPage,
     ExportCreate,
@@ -55,7 +59,6 @@ from app.modules.reporting.schemas import (
     SyncRefreshPublic,
     SyncRefreshRequest,
     SyncStatusPublic,
-    TrendPublic,
 )
 from app.modules.reporting.selection import freeze_selection
 from app.modules.reporting.store_models import AdSyncBc, ReportSyncState
@@ -198,7 +201,7 @@ def query_ads_route(
         limit=limit,
     )
     # SessionDep rolls back on request teardown; persist the local snapshot so a
-    # later cursor/trend/selection request can read the same frozen rows.
+    # later cursor/selection request can read the same frozen rows.
     session.commit()
     return result
 
@@ -221,69 +224,6 @@ def ad_detail_route(
         bc_id=bc_id,
         ref=EntityRef(tenant_id, advertiser_id, kind, remote_id),
         snapshot_id=snapshot_id,
-    )
-
-
-@router.get("/reports/trend", response_model=TrendPublic, name="report_trend")
-def report_trend_route(
-    tenant_id: UUID,
-    session: SessionDep,
-    user: CurrentUser,
-    bc_id: Annotated[str, Query(min_length=1, max_length=128)],
-    dimension: Dimension = "campaign",
-    start_date: date | None = None,
-    end_date: date | None = None,
-    advertiser_id: str | None = Query(default=None, max_length=128),
-    ids: CSV = None,
-    query: CSV = None,
-    min_spend: Decimal | None = None,
-    max_spend: Decimal | None = None,
-    min_d0_roas: Decimal | None = None,
-    max_d0_roas: Decimal | None = None,
-    min_target_roas: Decimal | None = None,
-    max_target_roas: Decimal | None = None,
-    created_from: date | None = None,
-    created_to: date | None = None,
-    snapshot_id: UUID | None = None,
-) -> TrendPublic:
-    context = _context(session, user, tenant_id)
-    # 默认日期必须按请求时刻计算；写在参数默认值里会固定为服务启动当天。
-    today = date.today()
-    filters = _filters(
-        dimension=dimension,
-        start_date=start_date or today,
-        end_date=end_date or today,
-        advertiser_id=advertiser_id,
-        ids=ids,
-        query=query,
-        ad_types=None,
-        operation_statuses=None,
-        review_statuses=None,
-        budget_modes=None,
-        naming_status=None,
-        min_spend=min_spend,
-        max_spend=max_spend,
-        min_d0_roas=min_d0_roas,
-        max_d0_roas=max_d0_roas,
-        min_target_roas=min_target_roas,
-        max_target_roas=max_target_roas,
-        created_from=created_from,
-        created_to=created_to,
-        sort_by="row_key",
-        sort_direction="asc",
-    )
-    if snapshot_id is None:
-        page = query_ads(
-            session, context=context, bc_id=bc_id, filters=filters, limit=1
-        )
-        snapshot_id = page.snapshot.snapshot_id
-        session.commit()
-    return snapshot_trend(
-        session,
-        context=context,
-        bc_id=bc_id,
-        snapshot_id=snapshot_id,
-        filters=filters,
     )
 
 
@@ -530,12 +470,44 @@ def get_ad_sync_status_route(
         select(ReportSyncState).where(
             ReportSyncState.tenant_id == tenant_id,
             col(ReportSyncState.advertiser_id).in_(allowed),
-            ReportSyncState.report_kind == "ad_day",
             ReportSyncState.stat_date >= start_date,
             ReportSyncState.stat_date <= end_date,
         )
     ).all()
-    by_key = {(r.advertiser_id, r.stat_date): r for r in states}
+    by_key = {
+        (r.advertiser_id, r.stat_date): r for r in states if r.report_kind == "ad_day"
+    }
+    balances = session.exec(
+        select(AccountBalanceObservation)
+        .where(
+            AccountBalanceObservation.tenant_id == tenant_id,
+            col(AccountBalanceObservation.advertiser_id).in_(allowed),
+        )
+        .distinct(col(AccountBalanceObservation.advertiser_id))
+        .order_by(
+            col(AccountBalanceObservation.advertiser_id),
+            col(AccountBalanceObservation.observed_at).desc(),
+            col(AccountBalanceObservation.id).desc(),
+        )
+    ).all()
+    # 余额按独立观测版本刷新，不能继续展示旧快照中的金额。
+    balance_version = [(b.advertiser_id, str(b.id)) for b in balances]
+    # 素材发布与失败覆盖也推进版本，页面不能只看广告日的最后成功时间。
+    version = sha256(
+        repr(
+            sorted(
+                (
+                    r.advertiser_id,
+                    r.report_kind,
+                    str(r.stat_date),
+                    r.status,
+                    str(r.last_success_at),
+                )
+                for r in states
+            )
+            + balance_version
+        ).encode()
+    ).hexdigest()
     days = [
         start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)
     ]
@@ -572,9 +544,25 @@ def get_ad_sync_status_route(
     )
     return SyncStatusPublic(
         accounts=tuple(result),
+        publication_version=version,
         plan=SyncPlanStatus(
             enabled=enabled,
             disabled_reason=reason,
             next_hot_at=plan.next_hot_at if plan else None,
+            slowed=_sync_slowed(),
         ),
     )
+
+
+def _sync_slowed() -> bool | None:
+    try:
+        with Redis.from_url(
+            settings.REDIS_URL, socket_connect_timeout=1, socket_timeout=1
+        ) as redis:
+            return (
+                calls_today(redis, datetime.now(UTC))
+                > settings.TIKTOK_REPORT_DAILY_CALL_BUDGET * 0.7
+            )
+    except RedisError:
+        # 额度状态不可读不能伪装成正常，也不阻断已发布数据的本地查询。
+        return None

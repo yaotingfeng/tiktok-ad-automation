@@ -118,3 +118,68 @@ def test_manual_request_does_not_create_other_tenant_plans(
     )
     assert response.status_code == 200, response.text
     assert session.get(AdSyncBc, (other.tenant_id, "bc-a")) is None
+
+
+def test_status_exposes_budget_slowdown_and_material_publication(
+    sync_api, session, sync_seed, redis_client, monkeypatch
+):
+    from datetime import UTC, datetime
+
+    from app.modules.reporting import api
+    from app.modules.reporting.planner import record_calls
+    from app.modules.reporting.store_models import ReportSyncState
+
+    client, path = sync_api
+    monkeypatch.setattr(api.Redis, "from_url", lambda *a, **kw: redis_client)
+    monkeypatch.setattr(settings, "TIKTOK_REPORT_DAILY_CALL_BUDGET", 100)
+    record_calls(redis_client, datetime.now(UTC), 75)
+    params = {"bc_id": "bc-a", "start_date": "2026-10-05", "end_date": "2026-10-05"}
+    first = client.get(f"{path}/ad-sync-status", params=params).json()
+    assert first["plan"]["slowed"] is True
+    session.add(
+        ReportSyncState(
+            tenant_id=sync_seed.tenant_id,
+            advertiser_id="acc-1",
+            report_kind="material_day",
+            stat_date=date(2026, 10, 5),
+            status="COMPLETE",
+            last_success_at=datetime.now(UTC),
+        )
+    )
+    session.flush()
+    second = client.get(f"{path}/ad-sync-status", params=params).json()
+    assert second["publication_version"] != first["publication_version"]
+
+
+def test_balance_publication_advances_visible_status_version(
+    sync_api, session, sync_seed
+):
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    from app.modules.reporting.models import AccountBalanceObservation
+
+    client, path = sync_api
+    params = {"bc_id": "bc-a", "start_date": "2026-10-05", "end_date": "2026-10-05"}
+    first = client.get(f"{path}/ad-sync-status", params=params).json()[
+        "publication_version"
+    ]
+    session.add(
+        AccountBalanceObservation(
+            tenant_id=sync_seed.tenant_id,
+            advertiser_id="acc-1",
+            amount=Decimal("8"),
+            currency="USD",
+            availability="AVAILABLE",
+            balance_scope="ADVERTISER",
+            scope_id="acc-1",
+            observed_at=datetime.now(UTC),
+        )
+    )
+    session.flush()
+    assert (
+        client.get(f"{path}/ad-sync-status", params=params).json()[
+            "publication_version"
+        ]
+        != first
+    )

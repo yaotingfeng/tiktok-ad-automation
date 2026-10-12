@@ -26,6 +26,7 @@ from app.modules.reporting.filters import (
     authorized_grants,
     compile_filter,
 )
+from app.modules.reporting.models import AccountBalanceObservation
 from app.modules.reporting.schemas import (
     Availability,
     MetricVector,
@@ -47,7 +48,10 @@ def bucket_key(vector: MetricVector) -> tuple[str]:
 
 
 def metric_vector(values, *, currency, timezone, unsupported=()) -> MetricVector:
-    values = {name: values.get(name) for name in METRIC_COLUMNS}
+    values = {
+        name: None if name in unsupported else values.get(name)
+        for name in METRIC_COLUMNS
+    }
     states = {
         name: "UNSUPPORTED"
         if name in unsupported
@@ -200,6 +204,17 @@ def _coverage(states, *, advertisers, filters, kind="ad_day"):
         "failed_dates": failed,
         "updated_at": max(updated).isoformat() if updated else None,
     }
+
+
+def empty_metric_values(states, *, advertiser, filters, kind="ad_day"):
+    # 用户裁定：完整覆盖的无事实对象才为零；缺覆盖与平台显式 NULL 不能填零。
+    complete = (
+        _coverage(states, advertisers={advertiser}, filters=filters, kind=kind)[
+            "status"
+        ]
+        == "COMPLETE"
+    )
+    return {name: Decimal(0) if complete else None for name in METRIC_COLUMNS}
 
 
 def latest_projections(
@@ -459,7 +474,14 @@ def _sort_value(row: ReportRow, field: str) -> tuple[str, Decimal] | None:
     """返回 (币种, 数值)；同一行多口径或无值时返回 None，统一排到末尾。"""
     if field in CONFIG_SORT_FIELDS:
         number = _number(row.display.get(field)) if row.display.get(field) else None
-        return ("", number) if number is not None else None
+        return (
+            (
+                row.display.get("balance_currency") or "" if field == "balance" else "",
+                number,
+            )
+            if number is not None
+            else None
+        )
     if len(row.metric_buckets) != 1:
         return None
     vector = row.metric_buckets[0]
@@ -597,6 +619,22 @@ def build_rows(
         if kind == "account"
         else []
     )
+    balances = {}
+    if kind == "account":
+        for observation in session.exec(
+            select(AccountBalanceObservation)
+            .where(
+                AccountBalanceObservation.tenant_id == context.tenant_id,
+                col(AccountBalanceObservation.advertiser_id).in_(advertisers),
+            )
+            .distinct(col(AccountBalanceObservation.advertiser_id))
+            .order_by(
+                col(AccountBalanceObservation.advertiser_id),
+                col(AccountBalanceObservation.observed_at).desc(),
+                col(AccountBalanceObservation.id).desc(),
+            )
+        ):
+            balances.setdefault(observation.advertiser_id, observation)
     groups = defaultdict(list)
     group_accounts = defaultdict(set)
     for adv, rid in sorted(identities):
@@ -666,6 +704,19 @@ def build_rows(
             operation_status=entity.operation_status if entity else None,
             review_status=entity.review_status if entity else None,
         )
+        if kind == "account":
+            balance = balances.get(adv)
+            # 余额是独立时点观测；资金池余额必须标记共享，不纳入期间指标合计。
+            display.update(
+                balance=str(balance.amount)
+                if balance
+                and balance.availability == "AVAILABLE"
+                and balance.amount is not None
+                else None,
+                balance_currency=balance.currency if balance else None,
+                balance_scope=balance.balance_scope if balance else "UNKNOWN",
+                balance_updated_at=balance.observed_at.isoformat() if balance else None,
+            )
         own_recs = [r for r in reconciliations if r.advertiser_id == adv]
         if any(
             a is not None and b is not None and abs(a - b) > Decimal("0.01")
@@ -694,7 +745,9 @@ def build_rows(
         if not vectors:
             vectors = (
                 metric_vector(
-                    {}, currency=accounts[adv].currency, timezone=accounts[adv].timezone
+                    empty_metric_values(states, advertiser=adv, filters=filters),
+                    currency=accounts[adv].currency,
+                    timezone=accounts[adv].timezone,
                 ),
             )
         refs = (

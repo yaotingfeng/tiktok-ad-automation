@@ -38,16 +38,6 @@ CANONICAL_METRIC_KEYS = frozenset(
         "cost_per_ad_impression_event",
     }
 )
-# 任务 14 删除旧模块时一并收紧内部 DTO；新查询只生成上述公开指标。
-_LEGACY_METRIC_KEYS = frozenset(
-    {
-        "native_growth_ad_revenue_value_d0",
-        "native_growth_total_ad_impression_value",
-        "native_growth_total_ad_impression_event_count",
-        "d0_roas",
-        "ad_revenue_roas",
-    }
-)
 
 
 def _finite(value: Decimal | None) -> Decimal | None:
@@ -68,7 +58,7 @@ class ReportingFilter(BaseModel):
     ad_types: tuple[str, ...] = ()
     operation_statuses: tuple[str, ...] = ()
     review_statuses: tuple[str, ...] = ()
-    # Directory configuration, applied by the aggregation layer.
+    # 目录配置筛选由汇总查询显式应用。
     budget_modes: tuple[str, ...] = ()
     created_from: date | None = None
     created_to: date | None = None
@@ -143,9 +133,7 @@ class MetricVector(BaseModel):
     def validate_published_metrics(self) -> MetricVector:
         if self.optimization_goal is not None:
             raise ValueError("optimization_goal is not a published report coordinate")
-        unknown = (set(self.values) | set(self.availability)) - (
-            CANONICAL_METRIC_KEYS | _LEGACY_METRIC_KEYS
-        )
+        unknown = (set(self.values) | set(self.availability)) - (CANONICAL_METRIC_KEYS)
         if unknown:
             raise ValueError(f"unsupported report metric keys: {sorted(unknown)}")
         if set(self.values) != set(self.availability):
@@ -165,30 +153,6 @@ class ReportRow(BaseModel):
     directory_versions: dict[str, int] = Field(default_factory=dict)
     membership_digest: str = ""
     coverage: dict[str, object] = Field(default_factory=dict)
-
-
-class TrendPoint(BaseModel):
-    """趋势分桶及其可比较的差值；缺失值保持 ``None``。"""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    bucket_start: datetime
-    bucket_end: datetime
-    values: dict[str, Decimal | None] = Field(default_factory=dict)
-    availability: dict[str, Availability] = Field(default_factory=dict)
-    delta: dict[str, Decimal] | None = None
-    delta_reason: Literal["SCOPE_CHANGED", "DATE_CHANGED"] | None = None
-
-
-class TrendPublic(BaseModel):
-    """B2 对外趋势 DTO；coverage 显式区分完整、空结果和不完整。"""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    points: tuple[TrendPoint, ...] = ()
-    coverage: dict[str, object] = Field(default_factory=dict)
-    actual_interval_minutes: int | None = None
-    delta_reason: Literal["SCOPE_CHANGED", "DATE_CHANGED"] | None = None
 
 
 class QuerySnapshotPublic(BaseModel):
@@ -304,11 +268,13 @@ class SyncAccountStatus(BaseModel):
 
 
 class SyncPlanStatus(BaseModel):
+    slowed: bool | None = None
     enabled: bool
     disabled_reason: str | None = None
     next_hot_at: datetime | None = None
 
 
 class SyncStatusPublic(BaseModel):
+    publication_version: str
     accounts: tuple[SyncAccountStatus, ...]
     plan: SyncPlanStatus

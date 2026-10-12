@@ -2,8 +2,11 @@
 
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
+from typing import Any
 from uuid import UUID
 
+from billiard.exceptions import SoftTimeLimitExceeded
 from redis import Redis
 from sqlalchemy import delete
 from sqlmodel import Session, col, select
@@ -32,7 +35,12 @@ from app.modules.reporting.jobs import (
 from app.modules.reporting.metrics import parse_decimal
 from app.modules.reporting.partitions import ensure_month_partitions
 from app.modules.reporting.query_models import QuerySnapshot
-from app.modules.reporting.store_models import CampaignReportHour, ReportSyncJob
+from app.modules.reporting.store_models import (
+    AdSyncBc,
+    CampaignReportHour,
+    ReportBalanceRun,
+    ReportSyncJob,
+)
 
 register_dispatch_task("reporting.job_step", "ads-reporting")
 register_dispatch_task("reporting.plan_due", "control")
@@ -71,8 +79,8 @@ def _active(session, reader, plan, accounts, now, *, days):
         end = planner.local_today(timezone, now)
         windows.setdefault((end - timedelta(days=days - 1), end), []).append(account)
     active = set()
-    for (start, end), candidates in windows.items():
-        if plan.bc_report_supported is not False:
+    if plan.bc_report_supported is not False:
+        for (start, end), candidates in windows.items():
             active.update(
                 planner.screen_active(
                     reader,
@@ -82,23 +90,46 @@ def _active(session, reader, plan, accounts, now, *, days):
                     candidates=set(candidates),
                 )
             )
-        else:
-            for offset in range(0, len(candidates), 5):
-                batch = tuple(sorted(candidates)[offset : offset + 5])
-                # 账户级平台上限 30 天，32 天回刷筛选必须分段。
-                for s, e in planner._shards(start, end):
-                    rows = _read_all(
-                        lambda p, s=s, e=e, batch=batch: reader.account_day(
-                            advertiser_ids=batch, start=s, end=e, page=p
-                        )
-                    )
-                    for row in rows:
-                        account = str(
-                            row.get("dimensions", {}).get("advertiser_id", "")
-                        )
-                        spend = parse_decimal(row.get("metrics", {}).get("spend"))
-                        if account in batch and spend is not None and spend > 0:
-                            active.add(account)
+        return sorted(active)
+    requests = []
+    for (start, end), candidates in sorted(windows.items()):
+        candidates = sorted(candidates)
+        for offset in range(0, len(candidates), 5):
+            for s, e in planner._shards(start, end):
+                requests.append((tuple(candidates[offset : offset + 5]), s, e))
+    # 日期或冻结范围变化后重新筛选；同一轮失败只重读尚未完成的请求。
+    fingerprint = sha256(
+        repr((plan.frozen_route, str(plan.actor_id), requests)).encode()
+    ).hexdigest()
+    key = str(days)
+    progress: dict[str, Any] = plan.screening_progress.get(key, {})
+    if progress.get("fingerprint") != fingerprint:
+        progress = {"fingerprint": fingerprint, "offset": 0, "active": []}
+    active.update(progress["active"])
+    for index in range(progress["offset"], len(requests)):
+        batch, start, end = requests[index]
+        rows = _read_all(
+            lambda p, batch=batch, start=start, end=end: reader.account_day(
+                advertiser_ids=batch, start=start, end=end, page=p
+            )
+        )
+        for row in rows:
+            account = str(row.get("dimensions", {}).get("advertiser_id", ""))
+            spend = parse_decimal(row.get("metrics", {}).get("spend"))
+            if account in batch and spend is not None and spend > 0:
+                active.add(account)
+        plan.screening_progress = {
+            **plan.screening_progress,
+            key: {
+                "fingerprint": fingerprint,
+                "offset": index + 1,
+                "active": sorted(active),
+            },
+        }
+        session.flush()
+    plan.screening_progress = {
+        k: v for k, v in plan.screening_progress.items() if k != key
+    }
     return sorted(active)
 
 
@@ -144,6 +175,7 @@ def plan_due_runs(*, database_engine, redis_client, now=None):
     if not settings.ADS_SYNC_ENABLED:
         return 0
     now = now or datetime.now(UTC)
+    deadline = datetime.now(UTC) + timedelta(seconds=150)
     slow = (
         planner.calls_today(redis_client, now)
         > settings.TIKTOK_REPORT_DAILY_CALL_BUDGET * 0.7
@@ -153,85 +185,114 @@ def plan_due_runs(*, database_engine, redis_client, now=None):
     with Session(database_engine) as session, session.begin():
         ensure_month_partitions(session, today=now.date())
         planner.ensure_bc_plans(session, now=now)
-        for plan in planner.due_plans(session, now=now):
-            accounts = planner.owned_accounts(session, plan)
-            if not accounts:
-                continue
-            counted = None
-            try:
-                if plan.next_hot_at <= now or plan.next_daily_at <= now:
-                    with _reader_for(
-                        database_engine=database_engine,
-                        redis_client=redis_client,
-                        plan=plan,
-                        deadline=datetime.now(UTC) + timedelta(seconds=170),
-                    ) as reader:
-                        if reader is None:
-                            plan.enabled, plan.disabled_reason = (
-                                False,
-                                "api_binding_required",
-                            )
-                            continue
-                        counted = _CountingReader(reader)
-                        if plan.next_hot_at <= now:
-                            active = _active(
-                                session, counted, plan, accounts, now, days=1
-                            )
-                            planner.plan_hot(session, plan, active=active, now=now)
-                            plan.last_active_advertiser_ids = active
-                            plan.next_hot_at = _advance(plan.next_hot_at, now, hot)
-                        if plan.next_daily_at <= now:
-                            active = _active(
-                                session, counted, plan, accounts, now, days=32
-                            )
-                            planner.plan_daily(
-                                session, plan, active_32d=active, now=now
-                            )
-                            plan.next_daily_at = planner._next_daily(now)
-                if plan.next_material_at <= now:
-                    planner.plan_material(
-                        session, plan, active=plan.last_active_advertiser_ids, now=now
-                    )
-                    plan.next_material_at = _advance(
-                        plan.next_material_at, now, material
-                    )
-                # 授权后的历史回补立即规划一次，不等到每日回刷；未知开户时间稍后重查。
-                planner.plan_history(session, plan, now=now)
-                if plan.next_directory_at <= now:
-                    for scope, advs in (
-                        ("directory", accounts),
-                        ("active", plan.last_active_advertiser_ids),
-                    ):
-                        request_directory(
-                            session,
-                            tenant_id=plan.tenant_id,
-                            bc_id=plan.bc_id,
-                            frozen_route=plan.frozen_route,
-                            actor_id=plan.actor_id,
-                            advertiser_ids=advs,
-                            scope=scope,
+        keys = [(p.tenant_id, p.bc_id) for p in planner.due_plans(session, now=now)]
+    dispatched = _dispatch_pending(database_engine, now)
+    for key in keys:
+        if datetime.now(UTC) >= deadline:
+            break
+        try:
+            _plan_one(database_engine, redis_client, key, now, deadline, hot, material)
+        except SoftTimeLimitExceeded:
+            # 已提交计划和派发不随后续慢请求回滚，下一轮从未完成计划继续。
+            break
+        dispatched += _dispatch_pending(database_engine, now)
+    return dispatched
+
+
+def _defer_plan(plan, retry_at):
+    # 所有已到期档位一起尊重读取/额度退避，不能被其他到期字段绕过。
+    for field in (
+        "next_hot_at",
+        "next_daily_at",
+        "next_material_at",
+        "next_directory_at",
+    ):
+        setattr(plan, field, max(getattr(plan, field), retry_at))
+
+
+def _plan_one(database_engine, redis_client, key, now, deadline, hot, material):
+    with Session(database_engine) as session, session.begin():
+        plan = session.exec(
+            select(AdSyncBc)
+            .where(AdSyncBc.tenant_id == key[0], AdSyncBc.bc_id == key[1])
+            .with_for_update(skip_locked=True)
+        ).one_or_none()
+        if plan is None or not plan.enabled:
+            return
+        accounts = planner.owned_accounts(session, plan)
+        if not accounts:
+            return
+        counted = None
+        try:
+            if plan.next_hot_at <= now or plan.next_daily_at <= now:
+                with _reader_for(
+                    database_engine=database_engine,
+                    redis_client=redis_client,
+                    plan=plan,
+                    deadline=deadline,
+                ) as reader:
+                    if reader is None:
+                        plan.enabled, plan.disabled_reason = (
+                            False,
+                            "api_binding_required",
                         )
-                    plan.next_directory_at = _advance(
-                        plan.next_directory_at, now, planner.DIRECTORY_INTERVAL
-                    )
-            except AccountAdmissionDeferred as error:
-                plan.next_hot_at = now + timedelta(
-                    milliseconds=max(1000, error.retry_after_ms)
+                        return
+                    counted = _CountingReader(reader)
+                    if plan.next_hot_at <= now:
+                        active = _active(session, counted, plan, accounts, now, days=1)
+                        planner.plan_hot(session, plan, active=active, now=now)
+                        plan.last_active_advertiser_ids = active
+                        plan.next_hot_at = _advance(plan.next_hot_at, now, hot)
+                    if plan.next_daily_at <= now:
+                        active = _active(session, counted, plan, accounts, now, days=32)
+                        planner.plan_daily(session, plan, active_32d=active, now=now)
+                        plan.next_daily_at = planner._next_daily(now)
+            if plan.next_material_at <= now:
+                planner.plan_material(
+                    session, plan, active=plan.last_active_advertiser_ids, now=now
                 )
-            except DomainError as error:
-                if (
-                    error.code == "report_permission_denied"
-                    or error.code == "tiktok_response_error"
-                    and any(v in error.message.lower() for v in ("permission", "权限"))
+                plan.next_material_at = _advance(plan.next_material_at, now, material)
+            # 授权后的历史回补立即规划一次，不等到每日回刷；未知开户时间稍后重查。
+            planner.plan_history(session, plan, now=now)
+            if plan.next_directory_at <= now:
+                for scope, advs in (
+                    ("directory", accounts),
+                    ("active", plan.last_active_advertiser_ids),
                 ):
-                    plan.bc_report_supported = False
-                    plan.next_hot_at = now + timedelta(minutes=1)
-                else:
-                    plan.disabled_reason = error.code
-                    plan.next_hot_at = now + timedelta(minutes=5)
-            finally:
-                if counted is not None:
-                    planner.record_calls(redis_client, now, counted.count)
+                    request_directory(
+                        session,
+                        tenant_id=plan.tenant_id,
+                        bc_id=plan.bc_id,
+                        frozen_route=plan.frozen_route,
+                        actor_id=plan.actor_id,
+                        advertiser_ids=advs,
+                        scope=scope,
+                    )
+                plan.next_directory_at = _advance(
+                    plan.next_directory_at, now, planner.DIRECTORY_INTERVAL
+                )
+        except AccountAdmissionDeferred as error:
+            _defer_plan(
+                plan, now + timedelta(milliseconds=max(1000, error.retry_after_ms))
+            )
+        except DomainError as error:
+            if (
+                error.code == "report_permission_denied"
+                or error.code == "tiktok_response_error"
+                and any(v in error.message.lower() for v in ("permission", "权限"))
+            ):
+                plan.bc_report_supported = False
+                _defer_plan(plan, now + timedelta(minutes=1))
+            else:
+                plan.disabled_reason = error.code
+                _defer_plan(plan, now + timedelta(minutes=5))
+        finally:
+            if counted is not None:
+                planner.record_calls(redis_client, now, counted.count)
+
+
+def _dispatch_pending(database_engine, now):
+    with Session(database_engine) as session, session.begin():
         jobs = claim_jobs(session, now=now, limit=100)
         for job in jobs:
             enqueue_after_commit(
@@ -346,6 +407,12 @@ def cleanup_store(session, *, now):
             col(CampaignReportHour.stat_hour) < now - timedelta(days=30),
         ),
         ("snapshots", QuerySnapshot, col(QuerySnapshot.expires_at) < now),
+        (
+            "balances",
+            ReportBalanceRun,
+            (col(ReportBalanceRun.created_at) < now - timedelta(days=7))
+            & (col(ReportBalanceRun.status).in_(["COMPLETE", "FAILED"])),
+        ),
     ):
         result[key] = (
             session.connection().execute(delete(model).where(condition)).rowcount

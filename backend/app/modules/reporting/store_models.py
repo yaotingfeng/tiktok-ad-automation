@@ -236,6 +236,11 @@ class AdSyncBc(SQLModel, table=True):
     next_material_at: datetime = Field(sa_type=AwareDateTime)
     next_directory_at: datetime = Field(sa_type=AwareDateTime)
     next_daily_at: datetime = Field(sa_type=AwareDateTime)
+    # 账户级筛选逐请求保存游标，额度或期限耗尽后继续，不能从首批重扫。
+    screening_progress: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, server_default="{}"),
+    )
     last_active_advertiser_ids: list[str] = Field(
         default_factory=list, sa_column=Column(JSONB, nullable=False)
     )
@@ -252,3 +257,23 @@ class AdSyncAccount(SQLModel, table=True):
     advertiser_id: str = Field(primary_key=True, max_length=128)
     owner_bc_id: str = Field(max_length=128)
     history_planned_at: datetime | None = Field(default=None, sa_type=AwareDateTime)
+
+
+class ReportBalanceRun(SQLModel, table=True):
+    """余额冻结范围和逐页进度只存数据库，队列载荷保持有界。"""
+
+    __tablename__ = "report_balance_run"
+    __table_args__ = (
+        Index("uq_report_balance_run_key", "tenant_id", "run_key", unique=True),
+    )
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    tenant_id: UUID
+    actor_id: UUID
+    run_key: str = Field(max_length=128)
+    frozen_route: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
+    remaining_advertiser_ids: list[str] = Field(sa_column=Column(JSONB, nullable=False))
+    next_page: int = 1
+    status: str = Field(default="ACTIVE", max_length=16)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(UTC), sa_type=AwareDateTime
+    )

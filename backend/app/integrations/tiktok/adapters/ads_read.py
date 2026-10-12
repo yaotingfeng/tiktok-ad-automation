@@ -498,33 +498,10 @@ class AdsReadAdapter:
         self._finance.verified = False
         if not self._subject_id:
             return unavailable("PERMISSION_UNVERIFIED")
-        matches = []
-        page = 1
         try:
-            while True:
-                response = self._call(
-                    "accounts.list_bc_members",
-                    {"bc_id": self.route.bc_id, "page": page, "page_size": 20},
-                )
-                evidence = response.evidence
-                rows, next_page = paged_rows(response.data, page=page, page_size=20)
-                matches.extend(
-                    row for row in rows if row.get("user_id") == self._subject_id
-                )
-                if next_page is None:
-                    break
-                page = next_page
-            if (
-                len(matches) != 1
-                or matches[0].get("relation_status") != "BOUND"
-                or type(matches[0].get("ext_user_role")) is not dict
-                or matches[0]["ext_user_role"].get("finance_role")
-                not in {"MANAGER", "ANALYST"}
-            ):
+            allowed, evidence = self._verify_finance(advertiser_id)
+            if not allowed:
                 return unavailable("PERMISSION_UNVERIFIED")
-            self._finance.subject_id = self._subject_id
-            self._finance.advertiser_id = advertiser_id
-            self._finance.verified = True
             page, balances = 1, []
             while True:
                 response = self._call(
@@ -554,45 +531,141 @@ class AdsReadAdapter:
                     "BALANCE_MISSING" if not balances else "BALANCE_AMBIGUOUS"
                 )
             row, evidence = balances[0]
-            if row.get("currency") != currency:
-                return unavailable("CURRENCY_UNVERIFIED")
-            # 默认顶层数额可能属于共享 Payment Portfolio；缺少明确 scope 不当作账户余额。
-            nested = row.get("balance_info")
-            portfolio_id = row.get("payment_portfolio_id")
-            scope: Literal["ADVERTISER", "PORTFOLIO", "UNKNOWN"]
-            if type(nested) is dict:
-                amount = nested.get("account_balance")
-                scope, scope_id = "ADVERTISER", advertiser_id
-            elif portfolio_id:
-                amount = row.get("account_balance")
-                scope, scope_id = (
-                    "PORTFOLIO",
-                    identifier(
-                        str(portfolio_id) if type(portfolio_id) is int else portfolio_id
-                    ),
-                )
-            else:
-                return unavailable("BALANCE_SCOPE_UNVERIFIED")
-            if type(amount) not in {str, int}:
-                return unavailable("BALANCE_MISSING")
-            try:
-                decimal = Decimal(amount)
-            except InvalidOperation:
-                return unavailable("BALANCE_MISSING")
-            if not decimal.is_finite():
-                return unavailable("BALANCE_MISSING")
-            return AccountBalance(
-                decimal,
-                currency,
-                "AVAILABLE",
-                now,
-                evidence,
-                scope,
-                scope_id,
-            )
+            return self._balance_value(advertiser_id, row, evidence, now)
         except DomainError as error:
             if error.code not in OPTIONAL_READ_FAILURES:
                 raise
             return unavailable(error.code)
+        finally:
+            self._finance.verified = False
+
+    def _verify_finance(self, advertiser_id: str) -> tuple[bool, CallEvidence]:
+        matches = []
+        page = 1
+        evidence = CallEvidence()
+        self._finance.verified = False
+        if not self._subject_id:
+            return False, evidence
+        while True:
+            response = self._call(
+                "accounts.list_bc_members",
+                {"bc_id": self.route.bc_id, "page": page, "page_size": 20},
+            )
+            evidence = response.evidence
+            rows, next_page = paged_rows(response.data, page=page, page_size=20)
+            matches.extend(
+                row for row in rows if row.get("user_id") == self._subject_id
+            )
+            if next_page is None:
+                break
+            page = next_page
+        if (
+            len(matches) != 1
+            or matches[0].get("relation_status") != "BOUND"
+            or type(matches[0].get("ext_user_role")) is not dict
+            or matches[0]["ext_user_role"].get("finance_role")
+            not in {"MANAGER", "ANALYST"}
+        ):
+            return False, evidence
+        self._finance.subject_id = self._subject_id
+        self._finance.advertiser_id = advertiser_id
+        self._finance.verified = True
+        return True, evidence
+
+    def _balance_value(self, advertiser_id, row, evidence, now):
+        currency = self._check_account(advertiser_id)
+
+        def unavailable(reason):
+            return AccountBalance(None, currency, reason, now, evidence)
+
+        if row.get("currency") != currency:
+            return unavailable("CURRENCY_UNVERIFIED")
+        # 默认顶层数额可能属于共享 Payment Portfolio；缺少明确 scope 不当作账户余额。
+        nested = row.get("balance_info")
+        portfolio_id = row.get("payment_portfolio_id")
+        scope: Literal["ADVERTISER", "PORTFOLIO", "UNKNOWN"]
+        if type(nested) is dict:
+            amount = nested.get("account_balance")
+            scope, scope_id = "ADVERTISER", advertiser_id
+        elif portfolio_id:
+            amount = row.get("account_balance")
+            scope, scope_id = (
+                "PORTFOLIO",
+                identifier(
+                    str(portfolio_id) if type(portfolio_id) is int else portfolio_id
+                ),
+            )
+        else:
+            return unavailable("BALANCE_SCOPE_UNVERIFIED")
+        if type(amount) not in {str, int}:
+            return unavailable("BALANCE_MISSING")
+        try:
+            decimal = Decimal(amount)
+        except InvalidOperation:
+            return unavailable("BALANCE_MISSING")
+        if not decimal.is_finite():
+            return unavailable("BALANCE_MISSING")
+        return AccountBalance(
+            decimal,
+            currency,
+            "AVAILABLE",
+            now,
+            evidence,
+            scope,
+            scope_id,
+        )
+
+    def read_balance_page(
+        self, advertiser_ids: tuple[str, ...], *, page: int = 1
+    ) -> tuple[dict[str, AccountBalance], int | None]:
+        """每次只读 BC 余额的一页，调用方持久派发下一页，避免逐账户全表扫描。"""
+        if not advertiser_ids or page < 1:
+            raise invalid()
+        self._check_account(advertiser_ids[0])
+        now = datetime.now(UTC)
+        allowed, evidence = self._verify_finance(advertiser_ids[0])
+        if not allowed:
+            return {
+                adv: AccountBalance(
+                    None,
+                    self._check_account(adv),
+                    "PERMISSION_UNVERIFIED",
+                    now,
+                    evidence,
+                )
+                for adv in advertiser_ids
+            }, None
+        try:
+            response = self._call(
+                FINANCE_OPERATION,
+                {
+                    "bc_id": self.route.bc_id,
+                    "page": page,
+                    "page_size": 100,
+                    "fields": ["balance_info"],
+                },
+            )
+            rows, next_page = paged_rows(
+                response.data, page=page, page_size=100, key="advertiser_account_list"
+            )
+            wanted = set(advertiser_ids)
+            results = {}
+            for row in rows:
+                adv = row.get("advertiser_id")
+                if adv not in wanted:
+                    continue
+                if adv in results:
+                    raise invalid()
+                results[adv] = self._balance_value(adv, row, response.evidence, now)
+            if next_page is None:
+                for adv in wanted - results.keys():
+                    results[adv] = AccountBalance(
+                        None,
+                        self._check_account(adv),
+                        "BALANCE_MISSING",
+                        now,
+                        response.evidence,
+                    )
+            return results, next_page
         finally:
             self._finance.verified = False

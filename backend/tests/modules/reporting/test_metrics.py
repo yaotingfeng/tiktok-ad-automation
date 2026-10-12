@@ -75,3 +75,13 @@ def test_day_and_hour_parsing():
     assert parse_local_hour("2026-10-05 10:00:00", "Asia/Hong_Kong") == datetime(
         2026, 10, 5, 2, tzinfo=UTC
     )
+
+
+def test_missing_hour_dimension_is_a_report_error():
+    import pytest
+
+    from app.core.errors import DomainError
+    from app.modules.reporting.metrics import parse_local_hour
+
+    with pytest.raises(DomainError, match="报表小时维度无效"):
+        parse_local_hour(None, "UTC")

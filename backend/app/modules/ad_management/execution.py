@@ -842,7 +842,6 @@ def execute_item(database_engine: Engine, item_id: UUID) -> None:
                 context=context,
                 route=route,
                 task_deadline=deadline,
-                ad_type=(command.original.get("ad_type") if command.original else None),
                 before_request=before_provider_request,
             ) as gateway:
                 lease.fence(redis_client)

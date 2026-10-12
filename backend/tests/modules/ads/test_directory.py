@@ -244,47 +244,6 @@ def test_material_null_identity_is_deduplicated_and_distinct_ad_uses_survive(
     assert len(session.exec(select(AdMaterialReference)).all()) == 3
 
 
-def test_fact_precision_without_directory_and_overlap_identity(session, directory_seed):
-    from decimal import Decimal
-
-    from sqlalchemy.exc import IntegrityError
-
-    from app.modules.reporting.models import ReportFact
-
-    seed = directory_seed
-    values = {
-        "tenant_id": seed.ref.tenant_id,
-        "advertiser_id": "account-a",
-        "subject_key": ["campaign", "missing"],
-        "bucket_start": datetime(2026, 9, 1, tzinfo=UTC),
-        "bucket_end": datetime(2026, 9, 2, tzinfo=UTC),
-        "granularity": "DAY",
-        "report_contract": "basic",
-        "metric_family": "delivery",
-        "currency": "USD",
-        "timezone": "UTC",
-        "attribution": "default",
-        "metric_name": "spend",
-        "value": Decimal("1234567890.123456789012345678901234"),
-        "availability": "AVAILABLE",
-        "published_version": 1,
-        "request_sequence": 1,
-        "source_partition_key": "1" * 64,
-    }
-    fact = ReportFact(**values)
-    session.add(fact)
-    session.flush()
-    session.expire(fact)
-    assert fact.value == Decimal("1234567890.123456789012345678901234")
-    with pytest.raises(IntegrityError), session.begin_nested():
-        session.add(ReportFact(**(values | {"source_partition_key": "2" * 64})))
-        session.flush()
-    session.add(
-        ReportFact(**(values | {"metric_name": "clicks", "value": Decimal("12")}))
-    )
-    session.flush()
-
-
 def test_run_and_page_scope_route_consistency_and_monotonic_order(
     session, directory_seed
 ):
@@ -293,7 +252,6 @@ def test_run_and_page_scope_route_consistency_and_monotonic_order(
     from sqlalchemy.exc import IntegrityError
 
     from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
-    from app.modules.reporting.sync_models import ReportSyncRun, SyncSchedule
 
     seed = directory_seed
     route = {
@@ -315,8 +273,9 @@ def test_run_and_page_scope_route_consistency_and_monotonic_order(
         "partition_key": "1" * 64,
         "query": {"page": 1},
     }
-    first = ReportSyncRun(**values)
-    second = ReportSyncRun(**(values | {"partition_key": "2" * 64}))
+    values.update(kind="ad", ad_type="SMART_PLUS")
+    first = AdDirectoryRun(**values)
+    second = AdDirectoryRun(**(values | {"partition_key": "2" * 64}))
     directory = AdDirectoryRun(**(values | {"kind": "ad", "ad_type": "SMART_PLUS"}))
     session.add_all([first, second, directory])
     session.flush()
@@ -329,7 +288,7 @@ def test_run_and_page_scope_route_consistency_and_monotonic_order(
         {"binding_revision": None},
     ]:
         with pytest.raises(IntegrityError), session.begin_nested():
-            session.add(ReportSyncRun(**(values | {"frozen_route": route | altered})))
+            session.add(AdDirectoryRun(**(values | {"frozen_route": route | altered})))
             session.flush()
     with pytest.raises(IntegrityError), session.begin_nested():
         session.add(
@@ -346,71 +305,15 @@ def test_run_and_page_scope_route_consistency_and_monotonic_order(
             )
         )
         session.flush()
-    session.add(
-        SyncSchedule(
-            tenant_id=seed.ref.tenant_id,
-            advertiser_id="account-a",
-            bc_id=seed.bc_id,
-            actor_id=seed.context.actor_id,
-            connection_id=seed.connection.id,
-            frozen_route=route,
-            scope="directory",
-            schedule_key="1" * 64,
-            next_due_at=datetime.now(UTC),
-        )
-    )
-    session.flush()
 
 
-def test_coverage_observation_and_shared_balance_retain_semantics(
-    session, directory_seed
-):
+def test_shared_balance_retains_scope_and_exact_amount(session, directory_seed):
     from decimal import Decimal
 
-    from app.modules.reporting.models import (
-        AccountBalanceObservation,
-        ReportCoverage,
-        ReportObservation,
-    )
+    from app.modules.reporting.models import AccountBalanceObservation
 
-    seed = directory_seed
-    coordinates = {
-        "tenant_id": seed.ref.tenant_id,
-        "advertiser_id": "account-a",
-        "bucket_start": datetime(2026, 9, 1, tzinfo=UTC),
-        "bucket_end": datetime(2026, 9, 2, tzinfo=UTC),
-        "granularity": "DAY",
-        "report_contract": "basic",
-        "metric_family": "delivery",
-        "currency": "USD",
-        "timezone": "UTC",
-        "attribution": "default",
-    }
-    coverage = ReportCoverage(
-        **coordinates,
-        partition_key="1" * 64,
-        filter_ids=["campaign-1"],
-        requested_metrics=["spend"],
-        dimensions=["campaign_id"],
-        status="COMPLETE_EMPTY",
-        observed_at=datetime.now(UTC),
-        published_version=1,
-        request_sequence=1,
-    )
-    observation = ReportObservation(
-        **coordinates,
-        subject_kind="campaign",
-        subject_key=["campaign", "campaign-1"],
-        values={"spend": "123.123456789012345678901234", "clicks": None},
-        availability={"clicks": "UNAVAILABLE"},
-        observed_at=datetime.now(UTC),
-        membership_digest="2" * 64,
-        name_revision=3,
-        grouping_revision=2,
-        published_version=1,
-    )
     balance = AccountBalanceObservation(
-        tenant_id=seed.ref.tenant_id,
+        tenant_id=directory_seed.ref.tenant_id,
         advertiser_id="account-a",
         amount=Decimal("99.123456789012345678901234"),
         currency="USD",
@@ -419,16 +322,9 @@ def test_coverage_observation_and_shared_balance_retain_semantics(
         scope_id="shared-portfolio",
         observed_at=datetime.now(UTC),
     )
-    session.add_all([coverage, observation, balance])
+    session.add(balance)
     session.flush()
     session.expire_all()
-    assert coverage.filter_ids == ["campaign-1"]
-    assert coverage.requested_metrics == ["spend"]
-    assert observation.values == {
-        "spend": "123.123456789012345678901234",
-        "clicks": None,
-    }
-    assert (observation.name_revision, observation.grouping_revision) == (3, 2)
     assert balance.amount == Decimal("99.123456789012345678901234")
     assert (balance.balance_scope, balance.scope_id) == (
         "PORTFOLIO",
@@ -485,12 +381,7 @@ def test_local_material_from_other_bc_does_not_hide_ad(session, directory_seed):
         session.flush()
 
 
-def test_external_material_metadata_and_report_attributes_roundtrip(
-    session, directory_seed
-):
-    from decimal import Decimal
-
-    from app.modules.reporting.models import ReportFact
+def test_external_material_metadata_roundtrip(session, directory_seed):
 
     seed = directory_seed
     material = AdMaterialReference(
@@ -506,31 +397,7 @@ def test_external_material_metadata_and_report_attributes_roundtrip(
         main_material_type="POST",
         creative_ids=["creative-1", "creative-2"],
     )
-    fact = ReportFact(
-        tenant_id=seed.ref.tenant_id,
-        advertiser_id="account-a",
-        subject_key=["POST", "spark-post-id"],
-        bucket_start=datetime(2026, 9, 1, tzinfo=UTC),
-        bucket_end=datetime(2026, 9, 2, tzinfo=UTC),
-        granularity="DAY",
-        report_contract="overview",
-        metric_family="material",
-        currency="USD",
-        timezone="UTC",
-        attribution="default",
-        metric_name="spend",
-        value=Decimal("1.234567890123456789"),
-        availability="AVAILABLE",
-        published_version=1,
-        request_sequence=1,
-        source_partition_key="1" * 64,
-        attributes={
-            "ad_material_id": "ad-inner-id",
-            "creative_ids": ["creative-1", "creative-2"],
-            "creative_names": ["first", "second"],
-        },
-    )
-    session.add_all([material, fact])
+    session.add(material)
     session.flush()
     session.expire_all()
     assert material.name == "external video name"
@@ -543,8 +410,3 @@ def test_external_material_metadata_and_report_attributes_roundtrip(
         "library-vid",
         "ad-inner-id",
     )
-    assert fact.attributes == {
-        "ad_material_id": "ad-inner-id",
-        "creative_ids": ["creative-1", "creative-2"],
-        "creative_names": ["first", "second"],
-    }

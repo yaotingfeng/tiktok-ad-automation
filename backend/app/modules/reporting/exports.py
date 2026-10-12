@@ -296,6 +296,14 @@ def _csv_rows(export: ReportExport) -> bytes:
         "ctr",
         "cost_per_ad_impression_event",
     ]
+    metric_fields = fields[7:]
+    balance_fields = [
+        "balance",
+        "balance_currency",
+        "balance_scope",
+        "balance_updated_at",
+    ]
+    fields.extend(balance_fields)
     captured = export.created_at.astimezone(UTC).isoformat()
     out = io.StringIO(newline="")
     writer = csv.DictWriter(out, fieldnames=fields, lineterminator="\n")
@@ -329,9 +337,13 @@ def _csv_rows(export: ReportExport) -> bytes:
                 "coverage": csv_safe_text(str(row_coverage)),
                 "fetched_at": coverage.get("updated_at") or captured,
             }
-            for key in fields[7:]:
+            for key in metric_fields:
                 value = _decimal(values.get(key))
                 data[key] = value if value is not None else ""
+            # 余额是独立时点观测，不混入日期段消耗与回收币种。
+            for key in balance_fields:
+                value = display.get(key)
+                data[key] = csv_safe_text(str(value)) if value is not None else ""
             writer.writerow(data)
     return out.getvalue().encode("utf-8")
 
