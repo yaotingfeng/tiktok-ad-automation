@@ -23,7 +23,7 @@ def test_auth_creates_plans_without_manual_refresh(session, sync_seed):
         select(AdSyncBc).where(AdSyncBc.tenant_id == sync_seed.tenant_id)
     ).all()
     assert {p.bc_id for p in plans} == {"bc-a", "bc-b"} and all(
-        p.next_hot_at <= NOW for p in plans
+        p.next_hot_at <= NOW and p.next_daily_at <= NOW for p in plans
     )
 
 

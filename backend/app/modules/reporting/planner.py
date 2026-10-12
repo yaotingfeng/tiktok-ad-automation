@@ -120,7 +120,9 @@ def ensure_bc_plans(
                 next_hot_at=now,
                 next_material_at=now,
                 next_directory_at=now,
-                next_daily_at=_next_daily(now),
+                # 新授权的 BC 立即回刷近 32 天；历史回补只覆盖 32 天之前，
+                # 若等到下一个每日时点，中间这段数据会一直为空。
+                next_daily_at=now,
             )
             session.add(plan)
         plan.frozen_route, plan.actor_id, plan.enabled, plan.disabled_reason = (

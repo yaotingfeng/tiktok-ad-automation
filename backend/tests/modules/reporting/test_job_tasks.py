@@ -42,9 +42,9 @@ def test_plan_due_screens_with_bc_report_and_dispatches(
         redis_client=redis_client,
         now=datetime(2026, 10, 12, 3, tzinfo=UTC),
     )
-    assert (
-        calls == ["bc-a"] and dispatched >= 2
-    )  # 只为负责账户的主 BC 筛选；ad_day + campaign_hour 已派发
+    # 只为负责账户的主 BC 筛选；新计划首轮同时做热刷（1 天）与 32 天回刷，
+    # 各筛选一次，ad_day + campaign_hour 等任务已派发。
+    assert calls == ["bc-a", "bc-a"] and dispatched >= 2
 
 
 @contextmanager
@@ -113,7 +113,8 @@ def test_bc_permission_failure_falls_back_next_round(
         redis_client=redis_client,
         now=now + timedelta(minutes=5),
     )
-    assert calls == ["bc", ("acc-1", "acc-2")]
+    # 回退为账户报表筛选：热刷 1 个请求，32 天回刷按 30 天切成 2 个请求。
+    assert calls == ["bc", *[("acc-1", "acc-2")] * 3]
 
 
 def test_disabled_worker_never_opens_gateway(

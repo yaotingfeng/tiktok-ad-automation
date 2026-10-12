@@ -44,6 +44,8 @@ from app.modules.reporting.schemas import (
 from app.modules.reporting.store_models import ReportSyncState
 from app.modules.tenants.permissions import require_tenant
 
+SNAPSHOT_INSERT_BATCH = 1000
+
 
 def filter_digest(filters: ReportingFilter) -> str:
     """Canonical filter digest used to bind cursors and snapshots."""
@@ -220,6 +222,10 @@ def _new_snapshot(
     session.add(snapshot)
     session.flush()
     for sequence, row in enumerate(rows):
+        if sequence and sequence % SNAPSHOT_INSERT_BATCH == 0:
+            # 素材维度单次快照可达数万行 JSONB；一次性 executemany 会让数据库代理
+            # 在写入途中断开连接，按批 flush 控制单次往返的数据量。
+            session.flush()
         encoded = row.model_dump(mode="json")
         session.add(
             QuerySnapshotRow(

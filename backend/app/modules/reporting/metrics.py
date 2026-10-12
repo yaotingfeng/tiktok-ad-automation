@@ -47,7 +47,9 @@ AD_DAY_METRICS = (
 )
 CAMPAIGN_METRICS = (*_BASIC.values(), "campaign_name")
 ACCOUNT_METRICS = ("spend", "native_growth_total_ad_impression_value")
-MATERIAL_METRICS = (*_MATERIAL.values(), "main_material_name")
+# 素材细分接口会随每行自动返回 main_material_name / main_material_type，
+# 但它们不是可请求的指标：写进 metrics 会让平台以 40002 拒绝整个请求。
+MATERIAL_METRICS = tuple(_MATERIAL.values())
 
 
 def parse_decimal(value: object) -> Decimal | None:

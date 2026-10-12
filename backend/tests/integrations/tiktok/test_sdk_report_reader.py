@@ -141,6 +141,9 @@ def test_material_day_single_account():
         "stat_time_day",
     ]
     assert args["page_size"] == 100
+    # 平台随行返回素材名称，请求 metrics 中带上它会被 40002 拒绝。
+    assert "main_material_name" not in args["metrics"]
+    assert "spend" in args["metrics"]
 
 
 @pytest.mark.parametrize("kind", ["ad", "bc", "utc", "material"])
