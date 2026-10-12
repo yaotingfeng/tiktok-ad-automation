@@ -2022,3 +2022,6 @@
 - 任务 11 偏离：用 JSON 元组编码剧身份避免版权方/剧名含冒号时误合并；报表名称取所选日期内最新非空值，替代无顺序的字符串 MAX；账户全选按当前账户授权冻结目录，不再要求历史来源连接一致。按任务顺序，素材路由和旧 DTO 内部指标允许集暂留至任务 12/14 切换删除，旧测试夹具暂同时发布新数据；新五维返回仅新键。排序依实施计划在 SQL 汇总后稳定排序。
 
 - 任务 12：素材日报 SQL 汇总与全指标排序；完整目录使用位置按账户、主素材带类型身份或广告内素材 ID 关联，多个使用位置不重复金额；未知使用位置仍展示金额，D3/D30 收入及 ROAS 标 UNSUPPORTED；素材选择测试改用新发布种子。RED 模块不存在，GREEN 报表目录 172 passed，四文件格式/lint、两业务文件 ty 通过。任务 11 提交 `4dc6268`。无业务偏离。
+
+- 任务 13：生成客户端改用刷新/状态 API；D0–D30 ROAS 表头与单元格统一数组驱动；多币种逐份展示、保留缺失、不重新平均比率；账户本地更新时间、缺失日期、对账原值与手动刷新结果可见。RED 新同步时间提示不存在；GREEN 全工作台 Playwright 490 passed（3.3 分钟），bun build 通过，修改范围 Biome 12 文件通过。任务 12 提交 `2cd9138`。
+- 任务 13 偏离：按仍有效旧规格 §3 将日期默认值从既有昨日恢复为今日；币种用 ISO 代码展示以避免 $ 歧义。全前端 Biome 剩余六个既有格式失败：src/features/accounts/McpAuthorizationSheet.tsx、src/features/strategies/StrategyList.tsx、src/features/tenants/TenantScope.tsx、src/index.css、tests/acceptance-batch.spec.ts、tests/tenants-accounts.spec.ts；git diff --exit-code 对基线 747e0b3 确认六文件零差异，不扩大范围修复。生成的未跟踪 openapi.json 已在本地格式化。

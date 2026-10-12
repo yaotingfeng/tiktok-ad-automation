@@ -11,6 +11,9 @@ export type AdsBoundaryOptions = {
   delayedA?: boolean
   paged?: boolean
   mixedBuckets?: boolean
+  refreshStatus?: "QUEUED" | "SYNC_DISABLED" | "API_BINDING_REQUIRED"
+  incomplete?: boolean
+  reconciliation?: boolean
 }
 
 export async function adsBoundary(
@@ -155,7 +158,12 @@ export async function adsBoundary(
           items: [
             {
               row_key: `${bc}-campaign-1`,
-              display,
+              display: {
+                ...display,
+                ...(options.reconciliation
+                  ? { reconciliation: "DIFF", account_report_spend: "101" }
+                  : {}),
+              },
               refs: [
                 {
                   tenant_id: TENANT,
@@ -172,25 +180,35 @@ export async function adsBoundary(
                   attribution: "IAA",
                   values: {
                     spend: "100",
-                    native_growth_ad_revenue_value_d0: "120",
-                    native_growth_total_ad_impression_value: "150",
-                    native_growth_total_ad_impression_event_count: "50",
+                    revenue_d0: "120",
+                    revenue_total: "150",
+                    ad_impression_events: "50",
                     impressions: "1000",
                     clicks: "20",
-                    ad_revenue_roas: "1.5",
-                    d0_roas: "1.2",
+                    roas_total: "1.5",
+                    roas_d0: "1.2",
+                    roas_d3: dimension === "material" ? null : "1.3",
+                    roas_d7: "1.4",
+                    roas_d14: "1.5",
+                    roas_d30: dimension === "material" ? null : "1.6",
                     cost_per_ad_impression_event: "2",
                     ctr: "0.02",
                   },
                   availability: {
                     spend: "AVAILABLE",
-                    native_growth_ad_revenue_value_d0: "AVAILABLE",
-                    native_growth_total_ad_impression_value: "AVAILABLE",
-                    native_growth_total_ad_impression_event_count: "AVAILABLE",
+                    revenue_d0: "AVAILABLE",
+                    revenue_total: "AVAILABLE",
+                    ad_impression_events: "AVAILABLE",
                     impressions: "AVAILABLE",
                     clicks: "AVAILABLE",
-                    ad_revenue_roas: "AVAILABLE",
-                    d0_roas: "AVAILABLE",
+                    roas_total: "AVAILABLE",
+                    roas_d0: "AVAILABLE",
+                    roas_d3:
+                      dimension === "material" ? "UNSUPPORTED" : "AVAILABLE",
+                    roas_d7: "AVAILABLE",
+                    roas_d14: "AVAILABLE",
+                    roas_d30:
+                      dimension === "material" ? "UNSUPPORTED" : "AVAILABLE",
                     cost_per_ad_impression_event: "AVAILABLE",
                     ctr: "AVAILABLE",
                   },
@@ -203,26 +221,39 @@ export async function adsBoundary(
                         attribution: "IAA",
                         values: {
                           spend: "100",
-                          native_growth_ad_revenue_value_d0: "120",
-                          native_growth_total_ad_impression_value: "150",
-                          native_growth_total_ad_impression_event_count: "50",
+                          revenue_d0: "120",
+                          revenue_total: "150",
+                          ad_impression_events: "50",
                           impressions: "1000",
                           clicks: "20",
-                          ad_revenue_roas: "1.5",
-                          d0_roas: "1.2",
+                          roas_total: "1.5",
+                          roas_d0: "1.2",
+                          roas_d3: dimension === "material" ? null : "1.3",
+                          roas_d7: "1.4",
+                          roas_d14: "1.5",
+                          roas_d30: dimension === "material" ? null : "1.6",
                           cost_per_ad_impression_event: "2",
                           ctr: "0.02",
                         },
                         availability: {
                           spend: "AVAILABLE",
-                          native_growth_ad_revenue_value_d0: "AVAILABLE",
-                          native_growth_total_ad_impression_value: "AVAILABLE",
-                          native_growth_total_ad_impression_event_count:
-                            "AVAILABLE",
+                          revenue_d0: "AVAILABLE",
+                          revenue_total: "AVAILABLE",
+                          ad_impression_events: "AVAILABLE",
                           impressions: "AVAILABLE",
                           clicks: "AVAILABLE",
-                          ad_revenue_roas: "AVAILABLE",
-                          d0_roas: "AVAILABLE",
+                          roas_total: "AVAILABLE",
+                          roas_d0: "AVAILABLE",
+                          roas_d3:
+                            dimension === "material"
+                              ? "UNSUPPORTED"
+                              : "AVAILABLE",
+                          roas_d7: "AVAILABLE",
+                          roas_d14: "AVAILABLE",
+                          roas_d30:
+                            dimension === "material"
+                              ? "UNSUPPORTED"
+                              : "AVAILABLE",
                           cost_per_ad_impression_event: "AVAILABLE",
                           ctr: "AVAILABLE",
                         },
@@ -232,8 +263,8 @@ export async function adsBoundary(
               ],
               capabilities: { can_manage: true },
               coverage: {
-                status: options.mixedBuckets ? "INCOMPLETE" : "COMPLETE",
-                latest_sync_at: "2026-10-01T00:00:00Z",
+                status: "COMPLETE",
+                updated_at: "2026-10-01T00:00:00Z",
               },
             },
           ],
@@ -247,25 +278,35 @@ export async function adsBoundary(
                 attribution: "IAA",
                 values: {
                   spend: "100",
-                  native_growth_ad_revenue_value_d0: "120",
-                  native_growth_total_ad_impression_value: "150",
-                  native_growth_total_ad_impression_event_count: "50",
+                  revenue_d0: "120",
+                  revenue_total: "150",
+                  ad_impression_events: "50",
                   impressions: "1000",
                   clicks: "20",
-                  ad_revenue_roas: "1.5",
-                  d0_roas: "1.2",
+                  roas_total: "1.5",
+                  roas_d0: "1.2",
+                  roas_d3: dimension === "material" ? null : "1.3",
+                  roas_d7: "1.4",
+                  roas_d14: "1.5",
+                  roas_d30: dimension === "material" ? null : "1.6",
                   cost_per_ad_impression_event: "2",
                   ctr: "0.02",
                 },
                 availability: {
                   spend: "AVAILABLE",
-                  native_growth_ad_revenue_value_d0: "AVAILABLE",
-                  native_growth_total_ad_impression_value: "AVAILABLE",
-                  native_growth_total_ad_impression_event_count: "AVAILABLE",
+                  revenue_d0: "AVAILABLE",
+                  revenue_total: "AVAILABLE",
+                  ad_impression_events: "AVAILABLE",
                   impressions: "AVAILABLE",
                   clicks: "AVAILABLE",
-                  ad_revenue_roas: "AVAILABLE",
-                  d0_roas: "AVAILABLE",
+                  roas_total: "AVAILABLE",
+                  roas_d0: "AVAILABLE",
+                  roas_d3:
+                    dimension === "material" ? "UNSUPPORTED" : "AVAILABLE",
+                  roas_d7: "AVAILABLE",
+                  roas_d14: "AVAILABLE",
+                  roas_d30:
+                    dimension === "material" ? "UNSUPPORTED" : "AVAILABLE",
                   cost_per_ad_impression_event: "AVAILABLE",
                   ctr: "AVAILABLE",
                 },
@@ -278,26 +319,39 @@ export async function adsBoundary(
                       attribution: "IAA",
                       values: {
                         spend: "100",
-                        native_growth_ad_revenue_value_d0: "120",
-                        native_growth_total_ad_impression_value: "150",
-                        native_growth_total_ad_impression_event_count: "50",
+                        revenue_d0: "120",
+                        revenue_total: "150",
+                        ad_impression_events: "50",
                         impressions: "1000",
                         clicks: "20",
-                        ad_revenue_roas: "1.5",
-                        d0_roas: "1.2",
+                        roas_total: "1.5",
+                        roas_d0: "1.2",
+                        roas_d3: dimension === "material" ? null : "1.3",
+                        roas_d7: "1.4",
+                        roas_d14: "1.5",
+                        roas_d30: dimension === "material" ? null : "1.6",
                         cost_per_ad_impression_event: "2",
                         ctr: "0.02",
                       },
                       availability: {
                         spend: "AVAILABLE",
-                        native_growth_ad_revenue_value_d0: "AVAILABLE",
-                        native_growth_total_ad_impression_value: "AVAILABLE",
-                        native_growth_total_ad_impression_event_count:
-                          "AVAILABLE",
+                        revenue_d0: "AVAILABLE",
+                        revenue_total: "AVAILABLE",
+                        ad_impression_events: "AVAILABLE",
                         impressions: "AVAILABLE",
                         clicks: "AVAILABLE",
-                        ad_revenue_roas: "AVAILABLE",
-                        d0_roas: "AVAILABLE",
+                        roas_total: "AVAILABLE",
+                        roas_d0: "AVAILABLE",
+                        roas_d3:
+                          dimension === "material"
+                            ? "UNSUPPORTED"
+                            : "AVAILABLE",
+                        roas_d7: "AVAILABLE",
+                        roas_d14: "AVAILABLE",
+                        roas_d30:
+                          dimension === "material"
+                            ? "UNSUPPORTED"
+                            : "AVAILABLE",
                         cost_per_ad_impression_event: "AVAILABLE",
                         ctr: "AVAILABLE",
                       },
@@ -307,8 +361,8 @@ export async function adsBoundary(
             ],
           },
           coverage: {
-            status: options.mixedBuckets ? "INCOMPLETE" : "COMPLETE",
-            latest_sync_at: "2026-10-01T00:00:00Z",
+            status: "COMPLETE",
+            updated_at: "2026-10-01T00:00:00Z",
           },
           next_cursor: options.paged && !secondPage ? "cursor-1" : null,
         },
@@ -333,13 +387,29 @@ export async function adsBoundary(
           observed_at: "2026-10-01T00:00:00Z",
         },
       })
-    if (path.endsWith("/reports/trend"))
+    if (path.endsWith("/ad-sync-status"))
       return route.fulfill({
         headers,
         json: {
-          points: [],
-          coverage: { status: "COMPLETE" },
-          actual_interval_minutes: 30,
+          accounts: [
+            {
+              advertiser_id: ADVERTISER,
+              timezone: "Asia/Hong_Kong",
+              last_success_at: "2026-10-05T05:00:00Z",
+              incomplete_dates: options.incomplete ? ["2026-10-04"] : [],
+              failed_dates: [],
+            },
+          ],
+          plan: { enabled: true, disabled_reason: null, next_hot_at: null },
+        },
+      })
+    if (path.endsWith("/ad-sync-refresh"))
+      return route.fulfill({
+        headers,
+        json: {
+          queued: 3,
+          accounts: 1,
+          status: options.refreshStatus ?? "QUEUED",
         },
       })
     if (path.endsWith("/report-views"))

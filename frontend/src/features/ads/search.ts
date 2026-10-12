@@ -45,14 +45,12 @@ const ID_COLUMN_BY_DISPLAY_COLUMN: Record<string, string> = {
   material_name: "main_material_id",
 }
 export function defaultAdsSearch(): AdsSearch {
-  // 日报通常在次日才完整发布；默认打开最近一个完整自然日，避免把当天
-  // 尚未落库的指标误显示成整页“数据缺失”。用户仍可手动切回当天查看。
-  const yesterday = new Date()
-  yesterday.setDate(yesterday.getDate() - 1)
+  // 工作台按已审定规则默认今日；日期交给后端按各账户本地日解释。
+  const today = new Date()
   const defaultDate = [
-    yesterday.getFullYear(),
-    String(yesterday.getMonth() + 1).padStart(2, "0"),
-    String(yesterday.getDate()).padStart(2, "0"),
+    today.getFullYear(),
+    String(today.getMonth() + 1).padStart(2, "0"),
+    String(today.getDate()).padStart(2, "0"),
   ].join("-")
   return {
     dimension: "campaign",
@@ -135,19 +133,19 @@ export function rowMetric(
   metric: string,
 ): { value: string | null; availability: string } {
   const buckets = row.metric_buckets ?? []
-  const coordinates = new Set(
-    buckets.map(
-      (bucket) => `${bucket.currency}|${bucket.timezone}|${bucket.attribution}`,
-    ),
-  )
-  if (coordinates.size > 1) return { value: null, availability: "INCOMPLETE" }
-  // 同一口径可能由多个指标族组成；按指标合并读取，不能只取第一个桶。
-  const matching = buckets.filter(
-    (bucket) =>
-      `${bucket.currency}|${bucket.timezone}|${bucket.attribution}` ===
-      [...coordinates][0],
-  )
-  const bucket = matching.find((item) => item.values?.[metric] != null) ?? matching[0]
+  if (buckets.length > 1) {
+    // 每个币种独立展示；缺失不能被其他币种的值或零覆盖。
+    return {
+      availability: "MULTI",
+      value: buckets
+        .map((bucket) => {
+          const value = bucket.values?.[metric] ?? null
+          return `${bucket.currency} ${availabilityLabel(bucket.availability?.[metric] ?? (value === null ? "MISSING" : "AVAILABLE"), value, { percent: metric === "ctr" })}`
+        })
+        .join(" / "),
+    }
+  }
+  const bucket = buckets[0]
   const value = bucket?.values?.[metric] ?? null
   return {
     value,
@@ -156,6 +154,7 @@ export function rowMetric(
       (value === null ? "MISSING" : "AVAILABLE"),
   }
 }
+
 export function rowTargetRoas(row: ReportRow): string | null {
   const display = row.display ?? {}
   // 目标 ROAS 来自已同步的目录配置，和报表收入/消耗指标分开显示。
@@ -182,7 +181,9 @@ export function availabilityLabel(
   value: string | null,
   options?: { percent?: boolean },
 ): string {
+  if (availability === "MULTI") return value ?? "—"
   if (availability === "AVAILABLE") {
+    if (value === null) return "数据缺失"
     if (options?.percent) {
       const number = Number(value)
       return Number.isFinite(number) ? `${(number * 100).toFixed(2)}%` : "—"

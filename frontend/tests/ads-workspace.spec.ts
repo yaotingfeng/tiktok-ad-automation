@@ -1,5 +1,11 @@
 import { expect, test } from "@playwright/test"
-import { ADVERTISER, adsBoundary, BC_A, BC_B, TENANT } from "./utils/adsBoundary"
+import {
+  ADVERTISER,
+  adsBoundary,
+  BC_A,
+  BC_B,
+  TENANT,
+} from "./utils/adsBoundary"
 
 test.describe("ads workspace", () => {
   test("外部广告六维切换保留筛选", async ({ page }) => {
@@ -17,15 +23,22 @@ test.describe("ads workspace", () => {
     ).toBeVisible()
     for (const column of [
       "消耗",
-      "广告收益 ROAS",
+      "总收入 ROAS",
       "D0 ROAS",
-      "广告展示总价值",
+      "D3 ROAS",
+      "D7 ROAS",
+      "D14 ROAS",
+      "D30 ROAS",
+      "总收入",
       "广告展示事件总数",
       "单次广告展示事件成本",
       "点击率",
     ]) {
       await expect(
-        page.getByRole("columnheader", { name: column }),
+        page.getByRole("columnheader", {
+          name: `${column}，点击排序`,
+          exact: true,
+        }),
       ).toBeVisible()
     }
     await expect(

@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
@@ -55,30 +55,53 @@ export function AdsWorkspace() {
     setFrozenSelection(null)
     setPreviewOpen(false)
   }, [])
-  const syncMutation = useMutation({
-    mutationFn: async () => {
-      const refs = items.flatMap((row) => row.refs ?? [])
-      const advertiserIds = [...new Set(refs.map((ref) => ref.advertiser_id))]
-      // An empty first page is expected before the directory has its first
-      // report.  The server resolves an empty list to every active account in
-      // the selected BC, so the initial click can actually bootstrap history.
-      return (
-        await AdsReportingService.requestAdSync({
+  const [syncNotice, setSyncNotice] = useState<string | null>(null)
+  const syncStatus = useQuery({
+    queryKey: [
+      "tenant",
+      tenantId,
+      "ads-sync-status",
+      currentBcId,
+      applied.start_date,
+      applied.end_date,
+    ],
+    enabled: Boolean(tenantId && currentBcId),
+    queryFn: async () =>
+      (
+        await AdsReportingService.getAdSyncStatus({
           path: { tenant_id: tenantId! },
-          query: { bc_id: bc!.bc_id },
-          body: {
-            advertiser_ids: advertiserIds,
-            scope: advertiserIds.length ? "report" : "history",
-            ...(advertiserIds.length
-              ? {
-                  start_date: applied.start_date,
-                  end_date: applied.end_date,
-                }
-              : {}),
-            refs,
+          query: {
+            bc_id: currentBcId!,
+            start_date: applied.start_date,
+            end_date: applied.end_date,
           },
         })
+      ).data,
+    refetchInterval: 30_000,
+  })
+  const syncMutation = useMutation({
+    mutationFn: async () => {
+      // 手动刷新按当前筛选账户插队，不从当前页推导范围，也不触发历史回补。
+      const requestScope = scopeRef.current
+      const result = (
+        await AdsReportingService.requestAdSyncRefresh({
+          path: { tenant_id: tenantId! },
+          query: { bc_id: bc!.bc_id },
+          body: { advertiser_ids: applied.advertiser_ids ?? [] },
+        })
       ).data
+      return { result, requestScope }
+    },
+    onSuccess: ({ result, requestScope }) => {
+      if (scopeRef.current !== requestScope) return
+      setSyncNotice(
+        result.status === "SYNC_DISABLED"
+          ? "报表同步未开启"
+          : result.status === "API_BINDING_REQUIRED"
+            ? "该 BC 未接入 API，无法同步报表"
+            : "已加入刷新队列",
+      )
+      void syncStatus.refetch()
     },
   })
   const exportMutation = useMutation({
@@ -105,7 +128,7 @@ export function AdsWorkspace() {
           body: {
             name: "广告报表当前筛选",
             filters: toReportingFilter(applied),
-            columns: ["name", "status", "spend", "d0_roas"],
+            columns: ["name", "status", "spend", "roas_d0"],
           },
         })
       ).data,
@@ -146,6 +169,8 @@ export function AdsWorkspace() {
     if (!currentBcId) return
     scopeRef.current = `${tenantId ?? ""}:${currentBcId}`
     clearManagementPreview()
+    setSyncNotice(null)
+    setActionError(null)
     setAppliedBcId(currentBcId)
     setCursorHistory([])
     setSelectedRow(null)
@@ -272,8 +297,6 @@ export function AdsWorkspace() {
       return next
     })
   }
-  const latest = (ads.query.data?.coverage?.latest_sync_at ??
-    ads.query.data?.coverage?.observed_at) as string | undefined
   return (
     <div className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -329,10 +352,34 @@ export function AdsWorkspace() {
           </Button>
         </div>
       </div>
-      {latest && (
-        <p className="text-xs text-muted-foreground">
-          最新同步：{String(latest)}
+      {syncNotice && (
+        <p role="status" className="text-sm">
+          {syncNotice}
         </p>
+      )}
+      {syncStatus.data?.accounts.map((account) => (
+        <div
+          key={account.advertiser_id}
+          className="text-xs text-muted-foreground"
+        >
+          <p>
+            {account.advertiser_id} ·{" "}
+            {account.last_success_at
+              ? `数据更新到 ${new Date(account.last_success_at).toLocaleTimeString("zh-CN", { timeZone: account.timezone, hour: "2-digit", minute: "2-digit", hour12: false })}（账户本地）`
+              : "尚未同步"}
+          </p>
+          {(account.incomplete_dates ?? []).length > 0 && (
+            <p>
+              以下日期数据不完整：{(account.incomplete_dates ?? []).join("、")}
+            </p>
+          )}
+        </div>
+      ))}
+      {syncStatus.data?.plan.disabled_reason === "sync_disabled" && (
+        <p>报表同步未开启</p>
+      )}
+      {syncStatus.data?.plan.disabled_reason === "api_binding_required" && (
+        <p>该 BC 未接入 API，无法同步报表</p>
       )}
       <Card>
         <CardContent className="p-4">

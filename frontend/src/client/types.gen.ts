@@ -5856,63 +5856,86 @@ export type SubmitRequest = {
 };
 
 /**
- * SyncRunPublic
+ * SyncAccountStatus
  */
-export type SyncRunPublic = {
+export type SyncAccountStatus = {
     /**
-     * Id
+     * Advertiser Id
      */
-    id: string;
+    advertiser_id: string;
     /**
-     * Request Id
+     * Timezone
      */
-    request_id: string;
+    timezone: string;
     /**
-     * Status
+     * Last Success At
      */
-    status: string;
+    last_success_at?: string | null;
     /**
-     * Coverage
+     * Incomplete Dates
      */
-    coverage: string;
+    incomplete_dates?: Array<string>;
     /**
-     * Error Code
+     * Failed Dates
      */
-    error_code?: string | null;
-    /**
-     * Observed At
-     */
-    observed_at?: string | null;
-    /**
-     * Completed At
-     */
-    completed_at?: string | null;
+    failed_dates?: Array<string>;
 };
 
 /**
- * SyncRunRequest
+ * SyncPlanStatus
  */
-export type SyncRunRequest = {
+export type SyncPlanStatus = {
+    /**
+     * Enabled
+     */
+    enabled: boolean;
+    /**
+     * Disabled Reason
+     */
+    disabled_reason?: string | null;
+    /**
+     * Next Hot At
+     */
+    next_hot_at?: string | null;
+};
+
+/**
+ * SyncRefreshPublic
+ */
+export type SyncRefreshPublic = {
+    /**
+     * Queued
+     */
+    queued?: number;
+    /**
+     * Accounts
+     */
+    accounts?: number;
+    /**
+     * Status
+     */
+    status: 'QUEUED' | 'SYNC_DISABLED' | 'API_BINDING_REQUIRED';
+};
+
+/**
+ * SyncRefreshRequest
+ */
+export type SyncRefreshRequest = {
     /**
      * Advertiser Ids
      */
     advertiser_ids?: Array<string>;
+};
+
+/**
+ * SyncStatusPublic
+ */
+export type SyncStatusPublic = {
     /**
-     * Scope
+     * Accounts
      */
-    scope?: 'directory' | 'active' | 'report' | 'history' | 'targeted';
-    /**
-     * Start Date
-     */
-    start_date?: string | null;
-    /**
-     * End Date
-     */
-    end_date?: string | null;
-    /**
-     * Refs
-     */
-    refs?: Array<EntityRef>;
+    accounts: Array<SyncAccountStatus>;
+    plan: SyncPlanStatus;
 };
 
 /**
@@ -10782,7 +10805,42 @@ export type adsReportingDownloadReportExportResponses = {
     200: unknown;
 };
 
-export type adsReportingListAdSyncRunsData = {
+export type adsReportingRequestAdSyncRefreshData = {
+    body: SyncRefreshRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/ad-sync-refresh';
+};
+
+export type adsReportingRequestAdSyncRefreshErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adsReportingRequestAdSyncRefreshError = adsReportingRequestAdSyncRefreshErrors[keyof adsReportingRequestAdSyncRefreshErrors];
+
+export type adsReportingRequestAdSyncRefreshResponses = {
+    /**
+     * Successful Response
+     */
+    200: SyncRefreshPublic;
+};
+
+export type adsReportingRequestAdSyncRefreshResponse = adsReportingRequestAdSyncRefreshResponses[keyof adsReportingRequestAdSyncRefreshResponses];
+
+export type adsReportingGetAdSyncStatusData = {
     body?: never;
     path: {
         /**
@@ -10795,103 +10853,35 @@ export type adsReportingListAdSyncRunsData = {
          * Bc Id
          */
         bc_id: string;
+        /**
+         * Start Date
+         */
+        start_date: string;
+        /**
+         * End Date
+         */
+        end_date: string;
     };
-    url: '/api/tenants/{tenant_id}/ad-sync-runs';
+    url: '/api/tenants/{tenant_id}/ad-sync-status';
 };
 
-export type adsReportingListAdSyncRunsErrors = {
+export type adsReportingGetAdSyncStatusErrors = {
     /**
      * Validation Error
      */
     422: HTTPValidationError;
 };
 
-export type adsReportingListAdSyncRunsError = adsReportingListAdSyncRunsErrors[keyof adsReportingListAdSyncRunsErrors];
+export type adsReportingGetAdSyncStatusError = adsReportingGetAdSyncStatusErrors[keyof adsReportingGetAdSyncStatusErrors];
 
-export type adsReportingListAdSyncRunsResponses = {
-    /**
-     * Response Ads Reporting-List Ad Sync Runs
-     *
-     * Successful Response
-     */
-    200: Array<SyncRunPublic>;
-};
-
-export type adsReportingListAdSyncRunsResponse = adsReportingListAdSyncRunsResponses[keyof adsReportingListAdSyncRunsResponses];
-
-export type adsReportingRequestAdSyncData = {
-    body: SyncRunRequest;
-    path: {
-        /**
-         * Tenant Id
-         */
-        tenant_id: string;
-    };
-    query: {
-        /**
-         * Bc Id
-         */
-        bc_id: string;
-    };
-    url: '/api/tenants/{tenant_id}/ad-sync-runs';
-};
-
-export type adsReportingRequestAdSyncErrors = {
-    /**
-     * Validation Error
-     */
-    422: HTTPValidationError;
-};
-
-export type adsReportingRequestAdSyncError = adsReportingRequestAdSyncErrors[keyof adsReportingRequestAdSyncErrors];
-
-export type adsReportingRequestAdSyncResponses = {
+export type adsReportingGetAdSyncStatusResponses = {
     /**
      * Successful Response
      */
-    200: SyncRunPublic;
+    200: SyncStatusPublic;
 };
 
-export type adsReportingRequestAdSyncResponse = adsReportingRequestAdSyncResponses[keyof adsReportingRequestAdSyncResponses];
-
-export type adsReportingGetAdSyncRunData = {
-    body?: never;
-    path: {
-        /**
-         * Tenant Id
-         */
-        tenant_id: string;
-        /**
-         * Run Id
-         */
-        run_id: string;
-    };
-    query: {
-        /**
-         * Bc Id
-         */
-        bc_id: string;
-    };
-    url: '/api/tenants/{tenant_id}/ad-sync-runs/{run_id}';
-};
-
-export type adsReportingGetAdSyncRunErrors = {
-    /**
-     * Validation Error
-     */
-    422: HTTPValidationError;
-};
-
-export type adsReportingGetAdSyncRunError = adsReportingGetAdSyncRunErrors[keyof adsReportingGetAdSyncRunErrors];
-
-export type adsReportingGetAdSyncRunResponses = {
-    /**
-     * Successful Response
-     */
-    200: SyncRunPublic;
-};
-
-export type adsReportingGetAdSyncRunResponse = adsReportingGetAdSyncRunResponses[keyof adsReportingGetAdSyncRunResponses];
+export type adsReportingGetAdSyncStatusResponse = adsReportingGetAdSyncStatusResponses[keyof adsReportingGetAdSyncStatusResponses];
 
 export type strategiesGetStrategiesData = {
     body?: never;

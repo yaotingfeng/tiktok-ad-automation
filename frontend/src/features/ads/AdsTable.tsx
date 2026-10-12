@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react"
+import { ArrowDown, ArrowUp, ArrowUpDown, Info } from "lucide-react"
 import type { ReportRow } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -16,6 +16,7 @@ import {
   type AdsDimension,
   availabilityLabel,
   childDimensionForColumn,
+  formatMetric,
   officialPlatformUrl,
   rowBudget,
   rowHierarchyId,
@@ -30,13 +31,13 @@ type DisplayColumn = { key: string; label: string }
 // 表头排序字段与后端 SUPPORTED_SORT_FIELDS 一一对应；每列按自己的字段排序。
 const METRIC_COLUMNS: Array<{ key: string; label: string }> = [
   { key: "spend", label: "消耗" },
-  { key: "ad_revenue_roas", label: "广告收益 ROAS" },
-  { key: "d0_roas", label: "D0 ROAS" },
-  { key: "native_growth_total_ad_impression_value", label: "广告展示总价值" },
-  {
-    key: "native_growth_total_ad_impression_event_count",
-    label: "广告展示事件总数",
-  },
+  { key: "roas_total", label: "总收入 ROAS" },
+  ...["d0", "d3", "d7", "d14", "d30"].map((day) => ({
+    key: `roas_${day}`,
+    label: `${day.toUpperCase()} ROAS`,
+  })),
+  { key: "revenue_total", label: "总收入" },
+  { key: "ad_impression_events", label: "广告展示事件总数" },
   { key: "cost_per_ad_impression_event", label: "单次广告展示事件成本" },
   { key: "ctr", label: "点击率" },
 ]
@@ -230,28 +231,13 @@ export function AdsTable({
               {(dimension === "campaign" ||
                 dimension === "adgroup" ||
                 dimension === "ad") && <TableHead>优化目标</TableHead>}
+              <TableHead>数据状态</TableHead>
               <TableHead>详情</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {rows.map((row) => {
               const url = officialPlatformUrl(row)
-              const spend = rowMetric(row, "spend")
-              const adRevenueRoas = rowMetric(row, "ad_revenue_roas")
-              const d0Roas = rowMetric(row, "d0_roas")
-              const impressionValue = rowMetric(
-                row,
-                "native_growth_total_ad_impression_value",
-              )
-              const impressionEvents = rowMetric(
-                row,
-                "native_growth_total_ad_impression_event_count",
-              )
-              const impressionEventCost = rowMetric(
-                row,
-                "cost_per_ad_impression_event",
-              )
-              const ctr = rowMetric(row, "ctr")
               return (
                 <TableRow key={row.row_key}>
                   <TableCell>
@@ -310,41 +296,29 @@ export function AdsTable({
                         "未知"}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-xs">
-                    {availabilityLabel(spend.availability, spend.value)}
-                  </TableCell>
-                  <TableCell className="text-xs">
-                    {availabilityLabel(
-                      adRevenueRoas.availability,
-                      adRevenueRoas.value,
-                    )}
-                  </TableCell>
-                  <TableCell className="text-xs">
-                    {availabilityLabel(d0Roas.availability, d0Roas.value)}
-                  </TableCell>
-                  <TableCell className="text-xs">
-                    {availabilityLabel(
-                      impressionValue.availability,
-                      impressionValue.value,
-                    )}
-                  </TableCell>
-                  <TableCell className="text-xs">
-                    {availabilityLabel(
-                      impressionEvents.availability,
-                      impressionEvents.value,
-                    )}
-                  </TableCell>
-                  <TableCell className="text-xs">
-                    {availabilityLabel(
-                      impressionEventCost.availability,
-                      impressionEventCost.value,
-                    )}
-                  </TableCell>
-                  <TableCell className="text-xs">
-                    {availabilityLabel(ctr.availability, ctr.value, {
-                      percent: true,
-                    })}
-                  </TableCell>
+                  {METRIC_COLUMNS.map((column) => {
+                    const metric = rowMetric(row, column.key)
+                    const reconciliation = `账户报表：${row.metric_buckets?.[0]?.currency ?? ""} ${formatMetric(row.display?.account_report_spend)}`
+                    return (
+                      <TableCell key={column.key} className="text-xs">
+                        {availabilityLabel(metric.availability, metric.value, {
+                          percent: column.key === "ctr",
+                        })}
+                        {column.key === "spend" &&
+                          dimension === "account" &&
+                          row.display?.reconciliation === "DIFF" && (
+                            <span
+                              className="ml-1 inline-flex"
+                              role="img"
+                              title={reconciliation}
+                              aria-label={reconciliation}
+                            >
+                              <Info className="size-3.5" aria-hidden="true" />
+                            </span>
+                          )}
+                      </TableCell>
+                    )
+                  })}
                   {(dimension === "campaign" || dimension === "adgroup") && (
                     <TableCell className="text-xs">
                       {rowBudget(row, dimension) ?? "—"}
@@ -364,6 +338,26 @@ export function AdsTable({
                       {rowOptimizationGoal(row) ?? "—"}
                     </TableCell>
                   )}
+                  <TableCell className="text-xs text-muted-foreground">
+                    {row.coverage?.updated_at
+                      ? new Date(
+                          String(row.coverage.updated_at),
+                        ).toLocaleString("zh-CN", {
+                          timeZone:
+                            row.metric_buckets?.[0]?.timezone === "MIXED"
+                              ? "UTC"
+                              : row.metric_buckets?.[0]?.timezone,
+                          hour12: false,
+                        })
+                      : "尚未同步"}
+                    {row.coverage?.status !== "COMPLETE" && (
+                      <div
+                        title={`缺失日期：${(row.coverage?.stale_dates as string[] | undefined)?.join("、") ?? ""}`}
+                      >
+                        数据不完整
+                      </div>
+                    )}
+                  </TableCell>
                   <TableCell>
                     <button
                       type="button"
