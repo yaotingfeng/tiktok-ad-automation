@@ -118,7 +118,11 @@ def scene_reasons(
     if isinstance(capabilities, dict):
         capability = capabilities.get(config.bid_strategy)
         if not isinstance(capability, dict):
-            reasons.append("bid_strategy_invalid")
+            reasons.append(
+                "minis_vbo_unverified"
+                if config.bid_strategy == "TARGET_ROAS"
+                else "bid_strategy_invalid"
+            )
         else:
             expected = {
                 "HIGHEST_VALUE": {

@@ -242,8 +242,6 @@ def scene_responses(case):
                 }
             ],
         },
-        # 当前场景还需读取组预算证据；空库存只证明未发现组预算能力。
-        "budget": page([]),
     }
 
 

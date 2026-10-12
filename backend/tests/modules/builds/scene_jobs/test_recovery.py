@@ -37,7 +37,7 @@ def ready_for_get(env, wire, redis_client):
     return job
 
 
-def test_two_deliveries_only_one_get_and_no_database_lock_across_transport(
+def test_four_deliveries_only_one_get_and_no_database_lock_across_transport(
     job_env, wire, redis_client
 ):
     env = job_env
@@ -56,19 +56,21 @@ def test_two_deliveries_only_one_get_and_no_database_lock_across_transport(
                 .with_for_update()
             ).one()
         entered.set()
-        assert release.wait(3)
+        assert release.wait(15)
         return responses(env)[0]
 
     wire[1].append(remote)
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=4) as pool:
         first = pool.submit(run, env, redis_client, job.id)
-        assert entered.wait(3)
-        second = pool.submit(run, env, redis_client, job.id)
+        assert entered.wait(15)
+        duplicates = [pool.submit(run, env, redis_client, job.id) for _ in range(3)]
         try:
-            assert second.result(timeout=2).claim_token is not None
+            assert all(
+                task.result(timeout=10).claim_token is not None for task in duplicates
+            )
         finally:
             release.set()
-        result = first.result(timeout=3)
+        result = first.result(timeout=15)
     assert result.resource == "minis"
     assert len(wire[0]) == 2
 
@@ -239,7 +241,7 @@ def test_restored_actor_can_resume_with_new_job_and_old_receipt_stays_fenced(
         result = run(env, redis_client, renewed.job_id)
     assert result.status == "COMPLETE"
     assert run(env, redis_client, job.id).status == "BLOCKED"
-    assert len(wire[0]) == 7
+    assert len(wire[0]) == 6
 
 
 def test_restored_authority_bootstraps_again_when_previous_capability_worker_was_blocked(
@@ -261,3 +263,44 @@ def test_restored_authority_bootstraps_again_when_previous_capability_worker_was
     for _ in range(6):
         job = run(env, redis_client, job.id)
     assert job.status == "COMPLETE" and ensure(env).state == "ready"
+
+
+def test_local_quota_wait_does_not_exhaust_scene_retries(
+    job_env, wire, redis_client, monkeypatch
+):
+    from app.core.config import settings
+    from app.integrations.tiktok.sdk import AccountAdmissionDeferred
+    from app.jobs.admission import admission_policy, admitted_scope
+
+    env = job_env
+    job = ready_for_get(env, wire, redis_client)
+    config = {
+        **settings.TIKTOK_CALL_POLICIES,
+        "base": {
+            **settings.TIKTOK_CALL_POLICIES["base"],
+            "app_max_inflight": 1,
+            "lease_ms": 600000,
+        },
+    }
+    monkeypatch.setattr(settings, "TIKTOK_CALL_POLICIES", config)
+    policy = admission_policy("scene.list_identities")
+    before = len(wire[0])
+    with admitted_scope(
+        redis_client,
+        app_scope=settings.TIKTOK_APP_ID,
+        endpoint="scene.list_identities",
+        tenant_id=env["context"].tenant_id,
+        advertiser_id="actual-account",
+        policy=policy,
+        denied_error=AccountAdmissionDeferred,
+    ):
+        for _ in range(6):
+            waiting = run(env, redis_client, job.id)
+            assert waiting.status == "PENDING"
+            assert waiting.failure_count == 0
+            assert waiting.resource == "identity"
+    assert len(wire[0]) == before
+    wire[1].append(responses(env)[0])
+    resumed = run(env, redis_client, job.id)
+    assert resumed.resource == "minis"
+    assert len(wire[0]) == before + 1

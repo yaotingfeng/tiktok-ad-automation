@@ -20,9 +20,9 @@
 | 11 | 4dc6268 | reporting: 五维按广告日汇总并支持回收排序与数据缺口提示 |
 | 12 | 2cd9138 | reporting: 素材日汇总关联使用位置且保留未知归属金额 |
 | 13 | e12cef5 | frontend: 报表展示 D0–D30 回收及账户同步与对账状态 |
-| 14 | 本记录所在提交 | reporting: 删除旧报表路径并修复调度发布与查询边界 |
+| 14 | dd7f6f9 | reporting: 删除旧报表路径并修复调度发布与查询边界 |
 
-所有提交末尾均含 `Co-Authored-By: Codex <noreply@openai.com>`。任务 14 的审查修复均在该任务提交内，最终回复提供实际哈希。
+所有提交末尾均含 `Co-Authored-By: Codex <noreply@openai.com>`。任务 14 的审查修复均在 `dd7f6f9` 内。
 
 ## 2. 偏离计划与原因
 
@@ -152,7 +152,7 @@ uv run --frozen python ../deploy/ci/backend_tests.py --shards 6 \
 - 前端本次改动范围 Biome：通过。
 - 全前端 Biome：六个既有格式失败，与基线 `747e0b3` 内容完全一致：`src/features/accounts/McpAuthorizationSheet.tsx`、`src/features/strategies/StrategyList.tsx`、`src/features/tenants/TenantScope.tsx`、`src/index.css`、`tests/acceptance-batch.spec.ts`、`tests/tenants-accounts.spec.ts`。没有因本次改动新增的问题。
 - `bun run build`：通过。
-- `bun x playwright test --project=workspace`：494 passed (4.0m)。覆盖后台更新保持分页/选择/预览、主动刷新后换快照、余额和放缓提示。
+- `bun x playwright test --project=workspace`：任务 14 提交前 494 passed (4.0m)，整合 main 后 494 passed (6.0m)。覆盖后台更新保持分页/选择/预览、主动刷新后换快照、余额和放缓提示。
 
 ## 5. Review Focus
 
@@ -198,11 +198,15 @@ backend/tests/modules/materials/test_ingest_models.py:511:        # No rescans o
 
 ## 8. Git 状态与集成
 
-任务 14 在既有 detached worktree 提交；main 的既有 `AGENTS.md` 修改、未提交的 `backend/tests/modules/builds/test_execution_scene_dependency.py` 及未跟踪前端生成文件必须保持原样。整合执行时 main 已有的其他会话提交（当前至 `61252ad`），不把这些搭建业务和部署清单改动归入本任务，不 push。实际集成提交与最终 Git 状态见最终回报。
+任务 14 在既有 detached worktree 提交；main 的既有 `AGENTS.md` 修改及未跟踪前端生成文件必须保持原样。另一会话已将场景依赖测试提交为 `8b22d7e`；整合执行时 main 已有的其他会话提交（至 `8b22d7e`），不把这些搭建业务和部署清单改动归入本任务，不 push。仅 `docs/implementation-progress.md` 发生冲突，保留双方全部记录；报表页面自动保留 main 的 `isLoading` 首次加载提示改动。报表后端实现与已完成全量的 `dd7f6f9` 一致。
+
+整合后追加验证：307 项后端受影响测试初次 305 passed、2 failed；两项广告目录 MCP 替身在调用前期限/本地资源检查失败，新库原样独立复跑 2 passed (3.95s)。前端完整 workspace 494 passed (6.0m)，build、全仓 ruff、ty 通过，Biome 保持同六处既有格式失败、本次文件通过。没有因集成再修改业务代码。
+
+main 采用本地快进合并；实际集成提交与最终 Git 状态见最终回报。
 
 ## 9. 独立审查问题、修复与回归
 
-以下全部在任务 14 提交修复；任务 6 两项另见 `6ec4990`。
+以下全部在任务 14 提交 `dd7f6f9` 修复；任务 6 两项另见 `6ec4990`。
 
 | 问题 | 修复 | 对应测试 |
 |---|---|---|

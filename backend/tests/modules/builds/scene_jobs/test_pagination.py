@@ -66,7 +66,7 @@ def test_205_identities_and_minis_require_complete_identity_and_five_mini_pages(
         pages = session.exec(
             select(SceneJobPage).where(SceneJobPage.job_id == job.id)
         ).all()
-        assert len(pages) == 10
+        assert len(pages) == 9
         from app.modules.builds.mini_selection import catalog_options
 
         assert catalog_options(session, job, page=5)[0]["name"] == "Last page"
@@ -78,7 +78,7 @@ def test_205_identities_and_minis_require_complete_identity_and_five_mini_pages(
             len(p.facts.get("item_id_hashes", [])) <= 50
             for p in pages if p.resource != "identity"
         )
-    assert len(wire[0]) == 11
+    assert len(wire[0]) == 10
 
 
 @pytest.mark.parametrize(

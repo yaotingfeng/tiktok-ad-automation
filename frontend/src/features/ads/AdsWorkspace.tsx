@@ -440,7 +440,7 @@ export function AdsWorkspace() {
       </Card>
       <ReportCoverageNotice coverage={ads.query.data?.coverage} />
       <AdsSummary summary={ads.query.data?.summary} />
-      {ads.query.isFetching && (
+      {ads.query.isLoading && (
         <p className="text-xs text-muted-foreground">正在加载当前报表…</p>
       )}
       <Card>

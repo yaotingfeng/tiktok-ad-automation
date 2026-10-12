@@ -1114,7 +1114,7 @@ test("小程序和投放身份搜索缓存目录并保留刷新前结果", async
   )
   await miniDialog.getByRole("button", { name: "搜索", exact: true }).click()
   await expect(miniDialog.getByText("Second Page Mini")).toBeVisible()
-  await expect(miniDialog.getByText("正在更新搜索结果…")).toBeVisible()
+  await expect(miniDialog.getByText("正在更新搜索结果…")).toHaveCount(0)
   releaseMiniSearch()
   await expect(miniDialog.getByText("Haunted Ghost")).toBeVisible()
   const miniRequest = await miniRequestPromise

@@ -105,7 +105,6 @@ export function BuildDramaTable({
     <div className="flex min-w-0 flex-col gap-4">
       <ServerTable
         fetching={query.isFetching}
-        showRefreshStatus={false}
         error={query.error}
         retry={() => void query.refetch()}
         filtered={false}

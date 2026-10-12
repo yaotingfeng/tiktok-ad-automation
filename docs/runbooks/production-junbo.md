@@ -149,3 +149,11 @@ R2 CORS：已添加 https://tkada.galaxyshortdrama.com，保留测试 origin，O
 当前运行 SHA 为 `673eecb9f928261541be57ecc93b3c7f4350682f`；ACR 镜像 index digest 为 `sha256:4923ba800e3c403d40cdbf8131fdadf164b783c25067c554e6dc32e9c439ec48`，AMD64 manifest 为 `sha256:9fa1b3d971991f44a4bf0afeef999c3d50186638dd0bf03002ef19b10637506a`。旧 `prod` 九 Deployment 为零副本，原 Beat PVC 和 Secret 保留作受控恢复依据，禁止直接启动。未来部署必须设置 `RETIRED_SOURCE_INVENTORY` 指向 `ack/acr-test-migration/retired-source.json`，逐项核对旧资源 UID/模板与停止状态；不能绕过查重。
 
 最新恢复配置包为 `ack/acr-test-migration/config-after.tar.gz`，同目录保存冻结备份、独立源码及实际构建、Beat 文件、恢复验证、入口前后快照与部署验收。当前运行配置和注册文件与切换前逐项相同，本地 `.env.production` 匹配。旧 `domain-shortclipflix/` 为上轮配置证据，不能直接重跑其中旧 namespace 部署脚本。
+
+## 2026-10-12：准备阶段读取并发与预算检查
+
+- 候选配置：`worker-resource` 保持一个 Pod，Celery prefork 从 1 槽调整为 4 槽；请求仍受线上共享额度控制（应用/租户并发 4、单接口并发 2、每秒应用 10/接口 3），不放宽 TikTok 配额。
+- 发布前基线：资源 Worker 约 355 MiB，原请求 2 GiB/上限 4 GiB；PG 连接约 69/200。新增三槽按默认连接池每槽最多 15 连接估算，上限增量 45；场景调用的短事务使用 NullPool。发布后复核 Pod RSS/重启、连接占用与错误日志；视频处理仍受素材准入约束。
+- 每账户场景不再读取历史 Smart+ 广告组来判断预算资格，USD 金额/精度与预算竞价组合本地校验；保留旧预算证据模型供历史记录读取，不再由场景任务调度。
+- VBO 最低 ROAS 资格只约束目标 ROAS 策略；最高价值不再被此资格阻断。有效场景仍按租户、BC、账户、Mini、冻结授权及版本隔离，沿用实际 86400 秒缓存；场景合同更新后首次会重新准备。
+- 九角色、三个业务开关及应用额度不变。本次不迁移数据库；正式上线结果以对应验收记录为准。

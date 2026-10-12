@@ -389,7 +389,6 @@ export function UploadQueue({
             loading={query.isPending && !data}
             // 后台轮询保留当前行与布局，不订阅 isFetching 反复重建单元格。
             fetching={query.isPending}
-            showRefreshStatus={false}
             error={query.error}
             retry={() => void query.refetch()}
             filtered={status !== "all"}
