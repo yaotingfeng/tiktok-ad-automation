@@ -13,11 +13,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   type ManagementAction,
   ManagementPreviewSheet,
+  managementActionKey,
 } from "@/features/ad-management/ManagementPreviewSheet"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import useAuth from "@/hooks/useAuth"
-import { AdsDetails } from "./AdsDetails"
 import { AdsFilters } from "./AdsFilters"
 import { AdsSummary } from "./AdsSummary"
 import { AdsTable } from "./AdsTable"
@@ -29,6 +29,7 @@ import {
   loadColumnPrefs,
   saveColumnPrefs,
 } from "./columnPrefs"
+import { AdsDetailSheet } from "./details/AdsDetailSheet"
 import { columnsFor, useMetricCatalog } from "./metricCatalog"
 import { ReportStatusBar } from "./ReportStatusBar"
 import {
@@ -36,7 +37,9 @@ import {
   childDimension,
   DIMENSIONS,
   defaultAdsSearch,
+  detailRowFor,
   type ParentLink,
+  rowAdvertiserId,
   rowObjectId,
   toReportingFilter,
 } from "./search"
@@ -47,7 +50,15 @@ export function AdsWorkspace() {
   const { user } = useAuth()
   const navigate = useNavigate()
   const [search, setSearch] = useState<AdsSearch>(() => defaultAdsSearch())
-  const [selectedRow, setSelectedRow] = useState<ReportRow | null>(null)
+  // 详情面板目标：表格行，或由上级路径/剧关联系列构造的对象行（不在快照内，不可直接操作）。
+  const [detail, setDetail] = useState<{
+    row: ReportRow
+    dimension: AdsSearch["dimension"]
+    fromSnapshot: boolean
+  } | null>(null)
+  const openDetail = (row: ReportRow, dimension: AdsSearch["dimension"]) =>
+    setDetail({ row, dimension, fromSnapshot: true })
+  const closeDetail = useCallback(() => setDetail(null), [])
   const [applied, setApplied] = useState<AdsSearch>(search)
   const [cursorHistory, setCursorHistory] = useState<Array<string | null>>([])
   const [queryRevision, setQueryRevision] = useState(0)
@@ -162,7 +173,7 @@ export function AdsWorkspace() {
     setNewDataAvailable(false)
     clearSelection()
     clearManagementPreview()
-    setSelectedRow(null)
+    closeDetail()
     setCursorHistory([])
     setSearch((current) => ({
       ...current,
@@ -178,7 +189,7 @@ export function AdsWorkspace() {
     }))
     setQueryRevision((current) => current + 1)
     setSyncNotice("报表数据已更新")
-  }, [clearSelection, clearManagementPreview])
+  }, [clearSelection, clearManagementPreview, closeDetail])
   useEffect(() => {
     if (!syncStatus.data) return
     const version = syncStatus.data.publication_version
@@ -251,18 +262,26 @@ export function AdsWorkspace() {
       ).data,
   })
   const selectionMutation = useMutation({
-    mutationFn: async () => {
+    // rowKeys 用于详情里的单对象操作：只冻结这一行，不受表格勾选影响。
+    mutationFn: async (rowKeys?: string[]) => {
       if (!ads.snapshot) throw new Error("当前报表没有可操作的快照")
       return (
         await AdsReportingService.freezeAdSelection({
           path: { tenant_id: tenantId! },
           query: { bc_id: bc!.bc_id },
-          body: {
-            snapshot_id: ads.snapshot.snapshot_id,
-            mode: ads.selection.allMatching ? "ALL_MATCHING" : "EXPLICIT",
-            row_keys: [...ads.selection.selected],
-            excluded_row_keys: [...ads.selection.excluded],
-          },
+          body: rowKeys
+            ? {
+                snapshot_id: ads.snapshot.snapshot_id,
+                mode: "EXPLICIT",
+                row_keys: rowKeys,
+                excluded_row_keys: [],
+              }
+            : {
+                snapshot_id: ads.snapshot.snapshot_id,
+                mode: ads.selection.allMatching ? "ALL_MATCHING" : "EXPLICIT",
+                row_keys: [...ads.selection.selected],
+                excluded_row_keys: [...ads.selection.excluded],
+              },
         })
       ).data
     },
@@ -290,7 +309,7 @@ export function AdsWorkspace() {
     setActionError(null)
     setAppliedBcId(currentBcId)
     setCursorHistory([])
-    setSelectedRow(null)
+    closeDetail()
     setSearch((current) => ({
       ...current,
       page: 1,
@@ -303,14 +322,14 @@ export function AdsWorkspace() {
       cursor: undefined,
       snapshot_id: undefined,
     }))
-  }, [clearManagementPreview, currentBcId, tenantId])
+  }, [clearManagementPreview, closeDetail, currentBcId, tenantId])
   const update = (next: Partial<AdsSearch>) =>
     setSearch((current) => ({ ...current, ...next, page: next.page ?? 1 }))
   const apply = () => {
     ads.selection.clear()
     clearManagementPreview()
     setCursorHistory([])
-    setSelectedRow(null)
+    closeDetail()
     setQueryRevision((current) => current + 1)
     setApplied({
       ...search,
@@ -324,7 +343,7 @@ export function AdsWorkspace() {
     ads.selection.clear()
     clearManagementPreview()
     setCursorHistory([])
-    setSelectedRow(null)
+    closeDetail()
     setQueryRevision((current) => current + 1)
     setSearch(next)
     setApplied(next)
@@ -351,7 +370,7 @@ export function AdsWorkspace() {
     ads.selection.clear()
     clearManagementPreview()
     setCursorHistory([])
-    setSelectedRow(null)
+    closeDetail()
     setQueryRevision((current) => current + 1)
     setSearch(next)
     setApplied(next)
@@ -373,7 +392,7 @@ export function AdsWorkspace() {
     }
     ads.selection.clear()
     clearManagementPreview()
-    setSelectedRow(null)
+    closeDetail()
     setCursorHistory([])
     setActionError(null)
     setSearch(next)
@@ -382,15 +401,11 @@ export function AdsWorkspace() {
   const navigateToChild = (row: ReportRow) => {
     const dimension = childDimension(applied.dimension)
     if (!dimension) {
-      setSelectedRow(row)
+      openDetail(row, applied.dimension)
       return
     }
     const parentId = rowObjectId(row, applied.dimension)
-    const advertiserId =
-      row.display?.account_id ??
-      row.display?.advertiser_id ??
-      row.refs?.[0]?.advertiser_id ??
-      null
+    const advertiserId = rowAdvertiserId(row)
     if (!parentId || !advertiserId) {
       setActionError("当前行缺少层级 ID，暂时无法跳转下级报表")
       return
@@ -417,12 +432,18 @@ export function AdsWorkspace() {
   }
   const roleReadonly = scope?.role === "viewer"
   // 工具栏动作：先记下动作与发起时的 BC 范围，再冻结选择；冻结成功后才打开预览。
-  const startManagementAction = (next: ManagementAction) => {
+  // 每次发起都换一个预览会话号，使预览面板重新挂载，旧的方式/数值/排除项不会被带入。
+  const [previewSession, setPreviewSession] = useState(0)
+  const startManagementAction = (
+    next: ManagementAction,
+    rowKeys?: string[],
+  ) => {
     if (roleReadonly) return
     runAction(() => {
       setManagementAction(next)
+      setPreviewSession((current) => current + 1)
       selectionRequestScopeRef.current = scopeRef.current
-      selectionMutation.mutate(undefined, {
+      selectionMutation.mutate(rowKeys, {
         onError: (error) => setActionError(String(error)),
       })
     })
@@ -582,7 +603,7 @@ export function AdsWorkspace() {
               ads.selection.clear()
               clearManagementPreview()
               setCursorHistory([])
-              setSelectedRow(null)
+              closeDetail()
               setApplied((current) => ({
                 ...current,
                 dimension,
@@ -627,7 +648,7 @@ export function AdsWorkspace() {
                     dimension: dimension.value,
                     readonly: roleReadonly,
                     busy: selectionMutation.isPending || !ads.snapshot,
-                    onAction: startManagementAction,
+                    onAction: (action) => startManagementAction(action),
                     onSelectAllMatching: ads.selection.selectAllMatching,
                     onClear: ads.selection.clear,
                   }}
@@ -644,7 +665,7 @@ export function AdsWorkspace() {
                   onToggleAllOnPage={(checked) =>
                     ads.selection.toggleRows(items, checked)
                   }
-                  onOpen={setSelectedRow}
+                  onOpen={(row) => openDetail(row, dimension.value)}
                   onDrill={navigateToChild}
                   onFilterParent={filterByParent}
                   nextCursor={ads.query.data?.next_cursor}
@@ -670,14 +691,33 @@ export function AdsWorkspace() {
           广告报表读取失败，请刷新重试。
         </p>
       )}
-      <AdsDetails
-        row={selectedRow}
-        ref={selectedRow?.refs?.[0] ?? null}
+      <AdsDetailSheet
+        row={detail?.row ?? null}
+        dimension={detail?.dimension ?? applied.dimension}
+        startDate={applied.start_date}
+        endDate={applied.end_date}
+        readonly={roleReadonly || !detail?.fromSnapshot}
         snapshotId={ads.snapshot?.snapshot_id}
-        onClose={() => setSelectedRow(null)}
+        onClose={closeDetail}
+        onAction={(row, action) => {
+          // 单对象操作只冻结该行；先关闭详情，避免两个抽屉叠在一起。
+          closeDetail()
+          startManagementAction(action, [row.row_key])
+        }}
+        onOpenParent={(link, advertiserId) =>
+          setDetail({
+            row: detailRowFor(link, advertiserId),
+            dimension: link.kind,
+            fromSnapshot: false,
+          })
+        }
+        onShowMaterials={(advertiserId, id) =>
+          filterTo("material", advertiserId, id)
+        }
       />
       {tenantId && bc?.bc_id && (
         <ManagementPreviewSheet
+          key={`${previewSession}:${frozenSelection?.selection_id ?? ""}:${managementActionKey(managementAction)}`}
           tenantId={tenantId}
           bcId={bc.bc_id}
           selection={frozenSelection}

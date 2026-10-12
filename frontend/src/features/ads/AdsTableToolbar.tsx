@@ -39,6 +39,11 @@ const ACTIONS: Record<
   budget: { label: "修改预算", action: { field: "budget" } },
 }
 
+/** 工具栏动作键对应的管理动作；详情面板的单对象操作复用同一映射。 */
+export function toolbarAction(key: ToolbarActionKey): ManagementAction {
+  return ACTIONS[key].action
+}
+
 export type ToolbarSelection = {
   selectedCount: number
   allMatching: boolean
@@ -79,7 +84,7 @@ function SelectionToolbar({
               variant="outline"
               size="sm"
               disabled={busy}
-              onClick={() => onAction(ACTIONS[key].action)}
+              onClick={() => onAction(toolbarAction(key))}
             >
               {ACTIONS[key].label}
             </Button>

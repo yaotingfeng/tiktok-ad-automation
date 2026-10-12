@@ -231,3 +231,35 @@ export function metricOf(row: ReportRow, key: string, bucket = 0) {
     currency: vector?.currency ?? "",
   }
 }
+/** 行所属账户 ID：账户行在 display，其余行优先 display，再退到对象引用。 */
+export function rowAdvertiserId(row: ReportRow): string {
+  const display = row.display ?? {}
+  return (
+    display.account_id ??
+    display.advertiser_id ??
+    row.refs?.[0]?.advertiser_id ??
+    ""
+  )
+}
+/**
+ * 由上级路径或剧的关联系列构造详情用的行：只有身份字段，没有指标，
+ * 也不在当前快照里，因此不能作为冻结选择的行键。
+ */
+export function detailRowFor(
+  link: ParentLink,
+  advertiserId: string,
+): ReportRow {
+  return {
+    row_key: `detail:${link.kind}:${advertiserId}:${link.id}`,
+    display: {
+      name: link.name,
+      [`${link.kind}_name`]: link.name,
+      [`${link.kind}_id`]: link.id,
+      remote_id: link.id,
+      account_id: advertiserId,
+      advertiser_id: advertiserId,
+    },
+    refs: [],
+    metric_buckets: [],
+  }
+}

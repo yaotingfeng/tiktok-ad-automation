@@ -12,6 +12,7 @@ import {
   nameKeyFor,
   type ParentLink,
   parentPath,
+  rowAdvertiserId,
   rowName,
   rowObjectId,
 } from "./search"
@@ -49,15 +50,10 @@ export function AdsNameCell({
   onDrill: (row: ReportRow) => void
   onFilterParent: (link: ParentLink, advertiserId: string) => void
 }) {
-  const display = row.display ?? {}
   const name = rowDisplayName(row, dimension)
   const id = rowObjectId(row, dimension)
   const path = parentPath(row, dimension)
-  const advertiserId =
-    display.account_id ??
-    display.advertiser_id ??
-    row.refs?.[0]?.advertiser_id ??
-    ""
+  const advertiserId = rowAdvertiserId(row)
   const incomplete = incompleteText(row)
   return (
     <div className="flex min-w-0 items-start gap-1">

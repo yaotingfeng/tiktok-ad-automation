@@ -61,6 +61,12 @@ const KIND_LABELS: Record<EntityRef["kind"], string> = {
 // 数值输入停顿后才请求预览，避免每敲一个字符都让服务器计算一次。
 const VALUE_DEBOUNCE_MS = 400
 
+/** 动作的稳定键：调用方用它（连同冻结选择 ID）作为面板 key，换动作即重新挂载。 */
+export function managementActionKey(action: ManagementAction | null) {
+  if (!action) return ""
+  return action.field === "status" ? `status:${action.value}` : action.field
+}
+
 export function actionTitle(action: ManagementAction | null) {
   if (!action) return "管理预览"
   if (action.field === "status")
@@ -68,8 +74,11 @@ export function actionTitle(action: ManagementAction | null) {
   return action.field === "roas" ? "修改目标 ROAS" : "修改预算"
 }
 
+// 只接受大于 0 的普通十进制数；"0x10"、"1e3" 之类后端 Decimal 不认的写法一律拒绝。
+const PLAIN_DECIMAL = /^\d+(\.\d+)?$/
 function validNumber(value: string) {
-  return value.trim() !== "" && Number.isFinite(Number(value))
+  const trimmed = value.trim()
+  return PLAIN_DECIMAL.test(trimmed) && Number(trimmed) > 0
 }
 
 function remaining(expiresAt?: string) {
@@ -104,17 +113,8 @@ export function ManagementPreviewSheet({
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
   }, [open])
-  // 每次重新打开或换了冻结选择/动作都从空白开始，不沿用上一次填的数值。
-  // biome-ignore lint/correctness/useExhaustiveDependencies: action 变化时也要重置
-  useEffect(() => {
-    if (!open || !selection?.selection_id) return
-    setMode("set")
-    setInput("")
-    setValue("")
-    setExcludeUnsupported(false)
-    setExcludedRefs([])
-    setIncludeParents(false)
-  }, [open, selection?.selection_id, action])
+  // 面板状态不在这里手动清空：调用方按"冻结选择 + 动作"给面板换 key，
+  // 每次重新打开都是全新挂载，旧的方式、数值、排除项和父级联动不可能被提交。
   useEffect(() => {
     if (input === value) return
     const timer = window.setTimeout(() => setValue(input), VALUE_DEBOUNCE_MS)
@@ -253,7 +253,9 @@ export function ManagementPreviewSheet({
                   {percent && <span className="text-muted-foreground">%</span>}
                 </div>
                 {needsValue && (
-                  <p className="text-xs text-muted-foreground">请输入数值</p>
+                  <p className="text-xs text-muted-foreground">
+                    请输入大于 0 的数值
+                  </p>
                 )}
               </div>
             </div>

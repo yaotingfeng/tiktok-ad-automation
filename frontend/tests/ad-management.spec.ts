@@ -352,7 +352,7 @@ test.describe("广告管理工作台", () => {
     await expect(
       page.getByRole("heading", { name: "修改目标 ROAS" }),
     ).toBeVisible()
-    await expect(page.getByText("请输入数值")).toBeVisible()
+    await expect(page.getByText("请输入大于 0 的数值")).toBeVisible()
     await expect(page.getByRole("status", { name: /正在生成/ })).toHaveCount(0)
     await page.getByRole("combobox", { name: "调整方式" }).click()
     await page.getByRole("option", { name: "增加百分比" }).click()
@@ -360,6 +360,13 @@ test.describe("广告管理工作台", () => {
     await page.getByRole("textbox", { name: "管理新值" }).fill("abc")
     await page.waitForTimeout(700)
     expect(previewBodies).toHaveLength(0)
+    // 0 与科学计数法、十六进制等后端 Decimal 不认的写法同样不发预览。
+    for (const invalid of ["0", "1e3", "0x10"]) {
+      await page.getByRole("textbox", { name: "管理新值" }).fill(invalid)
+      await expect(page.getByText("请输入大于 0 的数值")).toBeVisible()
+      await page.waitForTimeout(700)
+      expect(previewBodies).toHaveLength(0)
+    }
     const preview = page.waitForRequest((r) =>
       r.url().includes("ad-management-previews"),
     )

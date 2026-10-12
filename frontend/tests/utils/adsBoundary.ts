@@ -24,6 +24,79 @@ export type AdsBoundaryOptions = {
   partialSpend?: boolean
   /** 记录趋势请求次数 */
   trendCalls?: { count: number }
+  /** 只改 /api/me/tenants 返回的成员角色，用于只读成员用例。 */
+  role?: "viewer" | "operator"
+}
+
+// 详情接口的配置取自线上实测的 TikTok 原始对象形态。
+const DETAIL_CONFIGURATION: Record<string, Record<string, unknown>> = {
+  campaign: {
+    budget: "50",
+    budget_mode: "BUDGET_MODE_DYNAMIC_DAILY_BUDGET",
+    objective_type: "APP_PROMOTION",
+    app_promotion_type: "MINIS",
+    campaign_type: "REGULAR_CAMPAIGN",
+    budget_optimize_on: false,
+    smart_plus_adgroup_mode: "MULTIPLE",
+    create_time: "2026-09-30 08:00:00",
+    modify_time: "2026-10-01 08:00:00",
+  },
+  adgroup: {
+    roas_bid: "1.1",
+    bid_type: "BID_TYPE_NO_BID",
+    deep_bid_type: "VO_MIN_ROAS",
+    optimization_goal: "VALUE",
+    optimization_event: "IMPRESSION_LEVEL_AD_REVENUE",
+    vbo_window: "ZERO_DAY",
+    billing_event: "OCPM",
+    budget: "30",
+    budget_mode: "BUDGET_MODE_DYNAMIC_DAILY_BUDGET",
+    min_budget: null,
+    schedule_type: "SCHEDULE_FROM_NOW",
+    schedule_start_time: "2026-09-30 08:00:00",
+    schedule_end_time: null,
+    dayparting: null,
+    placement_type: "PLACEMENT_TYPE_NORMAL",
+    placements: ["PLACEMENT_TIKTOK"],
+    targeting_spec: {
+      gender: "GENDER_UNLIMITED",
+      age_groups: ["AGE_18_24", "AGE_25_34"],
+      location_ids: ["6252001"],
+      spc_audience_age: "OVER_EIGHTEEN",
+      brand_safety_type: "STANDARD_INVENTORY",
+    },
+    click_attribution_window: "SEVEN_DAYS",
+    view_attribution_window: "ONE_DAY",
+    engaged_view_attribution_window: "SEVEN_DAYS",
+    attribution_event_count: "EVERY",
+    minis_id: "minis-1",
+    promotion_type: "MINI_APP",
+    comment_disabled: false,
+    share_disabled: false,
+    video_download_disabled: true,
+    create_time: "2026-09-30 08:00:00",
+    modify_time: "2026-10-01 08:00:00",
+  },
+  ad: {
+    ad_text_list: [{ ad_text: "总裁归来，今晚上线" }],
+    landing_page_url_list: [{ landing_page_url: "https://example.com/lp" }],
+    creative_list: [
+      {
+        creative_info: {
+          ad_format: "SINGLE_VIDEO",
+          video_info: { file_name: "ep1.mp4", video_id: "v-1" },
+        },
+      },
+    ],
+    ad_configuration: { identity_type: "CUSTOMIZED_USER", identity_id: "id-1" },
+    create_time: "2026-09-30 08:00:00",
+    modify_time: "2026-10-01 08:00:00",
+  },
+}
+const DETAIL_IDS: Record<string, string> = {
+  campaign: "campaign-1",
+  adgroup: "adgroup-1",
+  ad: "ad-1",
 }
 
 export async function adsBoundary(
@@ -65,7 +138,7 @@ export async function adsBoundary(
               id: TENANT,
               name: "报表租户",
               active: true,
-              role: "tenant_admin",
+              role: options.role ?? "tenant_admin",
               default_bc_id: BC_A,
             },
           ],
@@ -411,23 +484,119 @@ export async function adsBoundary(
         },
       })
     }
-    if (path.endsWith(`/tenants/${TENANT}/ads/campaign/campaign-1`))
+    const detailMatch = /\/ads\/(campaign|adgroup|ad)\/([^/]+)$/.exec(path)
+    if (detailMatch && DETAIL_IDS[detailMatch[1]] === detailMatch[2]) {
+      const kind = detailMatch[1]
       return route.fulfill({
         headers,
         json: {
           ref: {
             tenant_id: TENANT,
             advertiser_id: ADVERTISER,
-            kind: "campaign",
-            remote_id: "campaign-1",
+            kind,
+            remote_id: detailMatch[2],
           },
           name: "嘉书-总裁归来-测试",
           ad_type: "VIDEO",
-          configuration: {},
-          statuses: { operation: "PAUSED", review: "APPROVED" },
-          materials: [],
-          operation_history: [],
+          configuration: DETAIL_CONFIGURATION[kind],
+          statuses:
+            kind === "campaign"
+              ? { operation: "PAUSED", review: "APPROVED" }
+              : { operation: "ENABLE", review: "APPROVED" },
+          parent:
+            kind === "campaign"
+              ? null
+              : {
+                  ref: {
+                    tenant_id: TENANT,
+                    advertiser_id: ADVERTISER,
+                    kind: "campaign",
+                    remote_id: "campaign-1",
+                  },
+                  operation_status: "DISABLE",
+                  reasons: ["operation_status:DISABLE"],
+                },
+          materials:
+            kind === "ad"
+              ? [
+                  {
+                    use_ref: {
+                      ad_ref: {
+                        tenant_id: TENANT,
+                        advertiser_id: ADVERTISER,
+                        kind: "ad",
+                        remote_id: "ad-1",
+                      },
+                      platform_material_id: "material-1",
+                      ad_material_id: null,
+                      material_type: "VIDEO",
+                    },
+                    name: "ep1.mp4",
+                    operation_status: "ENABLE",
+                    complete: true,
+                    external: false,
+                  },
+                ]
+              : [],
+          operation_history: [
+            {
+              task_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              created_at: "2026-10-01T03:00:00Z",
+              field: "status",
+              mode: "set",
+              original_value: "ENABLE",
+              final_value: "DISABLE",
+              execution_result: "SUCCEEDED",
+              reason: null,
+            },
+          ],
           observed_at: "2026-10-01T00:00:00Z",
+        },
+      })
+    }
+    if (path.endsWith(`/tenants/${TENANT}/ad-selections`)) {
+      const body = request.postDataJSON() as { row_keys?: string[] }
+      return route.fulfill({
+        headers,
+        json: {
+          selection_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          snapshot_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          refs: (body.row_keys ?? []).map(() => ({
+            tenant_id: TENANT,
+            advertiser_id: ADVERTISER,
+            kind: "campaign",
+            remote_id: "campaign-1",
+          })),
+          material_uses: [],
+          membership_digest: "m".repeat(64),
+          expires_at: "2099-01-01T00:00:00Z",
+        },
+      })
+    }
+    if (
+      request.method() === "POST" &&
+      path.endsWith(`/tenants/${TENANT}/ad-management-previews`)
+    )
+      return route.fulfill({
+        status: 201,
+        headers,
+        json: {
+          preview_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          digest: "p".repeat(64),
+          created_at: "2026-10-01T00:00:00Z",
+          expires_at: "2099-01-01T00:05:00Z",
+          bc_id: BC_A,
+          route: {
+            tenant_id: TENANT,
+            bc_id: BC_A,
+            connection_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+            channel: "OFFICIAL_API",
+            authorization_revision: 1,
+            binding_revision: 1,
+            adapter_contract_revision: "test-v1",
+          },
+          items: [],
+          counts: { selected: 1, targets: 1, linked: 0, unsupported: 0 },
         },
       })
     if (path.endsWith("/ad-sync-status"))
