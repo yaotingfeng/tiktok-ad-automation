@@ -99,6 +99,18 @@ def build_material_rows(session, *, context, bc_id, filters) -> tuple[ReportRow,
         start=filters.start_date,
         end=filters.end_date,
     )
+    # 覆盖状态和空值口径只取决于账户：每个账户只算一次。逐素材行重算会对
+    # 全部同步状态做数万次全扫描，素材维度查询耗时数十秒、连接因空闲被代理断开。
+    coverage_by_account = {
+        adv: _coverage(states, advertisers={adv}, filters=filters, kind="material_day")
+        for adv in advertisers
+    }
+    empty_by_account = {
+        adv: empty_metric_values(
+            states, advertiser=adv, filters=filters, kind="material_day"
+        )
+        for adv in advertisers
+    }
     grouped = defaultdict(list)
     for item in data:
         grouped[
@@ -164,9 +176,7 @@ def build_material_rows(session, *, context, bc_id, filters) -> tuple[ReportRow,
             "advertiser_id": adv,
             "account_name": accounts[adv].name or adv,
         }
-        coverage = _coverage(
-            states, advertisers={adv}, filters=filters, kind="material_day"
-        )
+        coverage = dict(coverage_by_account[adv])
         if not uses:
             coverage["reason"] = "usage_unknown"
         row = ReportRow(
@@ -187,9 +197,7 @@ def build_material_rows(session, *, context, bc_id, filters) -> tuple[ReportRow,
             )
             or (
                 metric_vector(
-                    empty_metric_values(
-                        states, advertiser=adv, filters=filters, kind="material_day"
-                    ),
+                    empty_by_account[adv],
                     currency=accounts[adv].currency,
                     timezone=accounts[adv].timezone,
                     unsupported={"revenue_d3", "revenue_d30"},
