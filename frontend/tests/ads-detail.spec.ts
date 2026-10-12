@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test"
 import { adsBoundary, BC_A, TENANT } from "./utils/adsBoundary"
+import { expectLineDrawn } from "./utils/trendChart"
 
 test.describe("ads detail", () => {
   test("点名称打开详情，各页签有内容", async ({ page }) => {
@@ -17,10 +18,19 @@ test.describe("ads detail", () => {
     const sheet = page.getByRole("dialog")
     await expect(sheet.getByRole("tab", { name: "概览" })).toBeVisible()
     await expect(sheet.getByText("版权方")).toBeVisible()
+    // 状态枚举显示中文，原值保留在悬停说明里。
+    await expect(sheet.getByTitle("APPROVED")).toHaveText("已通过")
+    // 页头动作文案与表格工具栏一致。
+    const header = sheet.getByTestId("ads-detail-header")
+    for (const name of ["启用", "暂停", "修改目标 ROAS", "修改预算"])
+      await expect(
+        header.getByRole("button", { name, exact: true }),
+      ).toBeVisible()
     await sheet.getByRole("tab", { name: "设置" }).click()
-    await expect(sheet.getByText("目标 ROAS")).toBeVisible()
+    await expect(sheet.getByText("目标 ROAS", { exact: true })).toBeVisible()
     await sheet.getByRole("tab", { name: "趋势" }).click()
     await expect(sheet.getByTestId("ads-trend-chart")).toBeVisible()
+    await expectLineDrawn(sheet.getByTestId("ads-trend-chart"))
     // 对象趋势必须同时带账户与对象 ID，覆盖率才按该账户判断。
     const url = new URL(trendUrls.at(-1) ?? "")
     expect(url.searchParams.get("level")).toBe("adgroup")
@@ -28,6 +38,8 @@ test.describe("ads detail", () => {
     expect(url.searchParams.get("ids")).toBe("adgroup-1")
     await sheet.getByRole("tab", { name: "操作记录" }).click()
     await expect(sheet.getByText("ENABLE → DISABLE")).toBeVisible()
+    // 原值缺失显示为"—"，不显示 null。
+    await expect(sheet.getByText("— → 1.2")).toBeVisible()
   })
 
   test("详情内暂停走同一预览流程", async ({ page }) => {
@@ -111,4 +123,32 @@ test.describe("ads detail", () => {
     await detail
     await expect(sheet.getByRole("tab", { name: "设置" })).toBeVisible()
   })
+
+  for (const [timezone, zone, first] of [
+    ["Asia/Hong_Kong", "Asia/Hong_Kong", "09:00"],
+    ["MIXED", "UTC", "01:00"],
+  ]) {
+    test(`小时趋势按账户时区显示（${timezone}）`, async ({ page }) => {
+      await adsBoundary(page, { trendTimezone: timezone })
+      await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+      await page.getByRole("tab", { name: "系列" }).click()
+      await page
+        .getByRole("button", { name: /嘉书-总裁归来/ })
+        .first()
+        .click()
+      const sheet = page.getByRole("dialog")
+      await sheet.getByRole("tab", { name: "趋势" }).click()
+      const hourly = page.waitForRequest((r) =>
+        r.url().includes("granularity=hour"),
+      )
+      await sheet.getByRole("button", { name: "按小时" }).click()
+      await hourly
+      await expect(
+        sheet.getByRole("columnheader", { name: `时间（${zone}）` }),
+      ).toBeVisible()
+      await expect(
+        sheet.getByRole("cell", { name: first, exact: true }),
+      ).toBeVisible()
+    })
+  }
 })

@@ -12,6 +12,31 @@ import { Skeleton } from "@/components/ui/skeleton"
 import type { ColumnDef } from "./metricCatalog"
 import { formatMetric } from "./metricCatalog"
 
+/**
+ * 小时趋势点是 UTC 的 ISO 分钟串。对象只有单一账户时区时按该时区显示；
+ * 多时区（MIXED）或时区未知/非法时退回 UTC。
+ */
+export function trendHourZone(timezone?: string | null): string {
+  if (!timezone || timezone === "MIXED") return "UTC"
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone })
+    return timezone
+  } catch {
+    return "UTC"
+  }
+}
+
+export function formatTrendHour(at: string, zone: string): string {
+  const time = Date.parse(at)
+  if (!Number.isFinite(time)) return at
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: zone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(time)
+}
+
 type AdsTrendChartProps = {
   trend: TrendPublic | undefined
   metric: ColumnDef
@@ -76,12 +101,10 @@ export function AdsTrendChart({
     // 防御 null/undefined/非字符串
     if (typeof value !== "string" || !value) return ""
     if (trend.granularity === "hour") {
-      // ISO 时间戳，取小时部分
-      const match = /T(\d{2}):/.exec(value)
-      const hour = match ? match[1] : "00"
-      // 如果时区是单一 IANA 区则用该区，否则标注 UTC
-      const suffix = trend.timezone === "MIXED" ? " UTC" : ""
-      return `${hour}:00${suffix}`
+      // 单一时区按该时区显示；退回 UTC 时（多时区/未知）明确标注 UTC。
+      const zone = trendHourZone(trend.timezone)
+      const suffix = zone !== trend.timezone ? " UTC" : ""
+      return `${formatTrendHour(value, zone)}${suffix}`
     }
     // 日粒度：YYYY-MM-DD -> MM-DD
     const match = /-(\d{2}-\d{2})$/.exec(value)
@@ -90,12 +113,14 @@ export function AdsTrendChart({
 
   // 图表配置：每个币种一个颜色
   const chartConfig: Record<string, { label: string; color: string }> = {}
+  // 主题色变量是 oklch 值，必须直接用 var(--chart-N)；包一层 hsl() 会成为非法颜色，
+  // 折线 stroke 失效而看不见。
   const colors = [
-    "hsl(var(--chart-1))",
-    "hsl(var(--chart-2))",
-    "hsl(var(--chart-3))",
-    "hsl(var(--chart-4))",
-    "hsl(var(--chart-5))",
+    "var(--chart-1)",
+    "var(--chart-2)",
+    "var(--chart-3)",
+    "var(--chart-4)",
+    "var(--chart-5)",
   ]
   currencies.forEach((currency, index) => {
     chartConfig[currency] = {
@@ -144,6 +169,8 @@ export function AdsTrendChart({
               strokeWidth={2}
               dot={{ r: 3 }}
               connectNulls={false}
+              // 关闭入场动画，保证截图与用例里折线立即完整绘制。
+              isAnimationActive={false}
             />
           ))}
         </LineChart>

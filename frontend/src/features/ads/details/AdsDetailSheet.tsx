@@ -17,8 +17,8 @@ import { useTenantScope } from "@/features/tenants/TenantScope"
 import { rowDisplayName } from "../AdsNameCell"
 import {
   actionsFor,
-  type ToolbarActionKey,
   toolbarAction,
+  toolbarActionLabel,
 } from "../AdsTableToolbar"
 import { columnsFor, useMetricCatalog } from "../metricCatalog"
 import {
@@ -41,13 +41,6 @@ const KIND_LABELS: Record<AdsDimension, string> = {
   ad: "广告",
   material: "素材",
   drama: "剧",
-}
-// 详情页头的单对象动作；数值动作用短标签，和设置页的字段名区分开。
-const ACTION_LABELS: Record<ToolbarActionKey, string> = {
-  enable: "启用",
-  disable: "暂停",
-  roas: "调整 ROAS",
-  budget: "调整预算",
 }
 // 只有系列、广告组、广告有目录配置与管理任务记录，才请求对象详情接口。
 type DetailKind = "campaign" | "adgroup" | "ad"
@@ -134,7 +127,10 @@ export function AdsDetailSheet({
       >
         {row && (
           <>
-            <SheetHeader className="gap-2 pr-10">
+            <SheetHeader
+              className="gap-2 pr-10"
+              data-testid="ads-detail-header"
+            >
               <SheetTitle className="break-words">{name}</SheetTitle>
               <SheetDescription className="flex flex-wrap items-center gap-2">
                 <span>{KIND_LABELS[dimension]}</span>
@@ -153,7 +149,7 @@ export function AdsDetailSheet({
                       variant="outline"
                       onClick={() => onAction(row, toolbarAction(key))}
                     >
-                      {ACTION_LABELS[key]}
+                      {toolbarActionLabel(key)}
                     </Button>
                   ))}
                 </div>

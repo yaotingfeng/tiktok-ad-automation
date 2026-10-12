@@ -31,6 +31,34 @@ const REASON_PREFIX: Record<string, string> = {
   delivery_status: "上级投放状态",
 }
 
+const REVIEW_VALUES: Record<string, string> = {
+  APPROVED: "已通过",
+  REVIEW_PASS: "已通过",
+  IN_REVIEW: "审核中",
+  AUDIT: "审核中",
+  REJECTED: "未通过",
+  AUDIT_DENY: "未通过",
+}
+
+// 状态枚举翻成中文显示，原值放在悬停说明里；未登记的值原样显示。
+function StatusValue({
+  kind,
+  value,
+}: {
+  kind: "operation" | "review" | "delivery"
+  value: string | null | undefined
+}) {
+  if (!value) return <>—</>
+  let label = value
+  if (kind === "operation") label = STATUS_VALUES[value] ?? value
+  else if (kind === "review") label = REVIEW_VALUES[value] ?? value
+  else {
+    const parsed = statusLabel({ secondary_status: value })
+    if (parsed.label !== "未知") label = parsed.label
+  }
+  return <span title={value}>{label}</span>
+}
+
 // 后端把父级限制编码为 "operation_status:DISABLE" 一类字符串；翻成中文，未知值原样显示。
 export function parentReasonText(reason: string): string {
   if (reason === "parent_not_synced") return "上级尚未同步"
@@ -187,17 +215,32 @@ export function OverviewTab({
               <Field
                 label="操作状态"
                 value={
-                  detail?.statuses?.operation ?? display.operation_status ?? "—"
+                  <StatusValue
+                    kind="operation"
+                    value={
+                      detail?.statuses?.operation ?? display.operation_status
+                    }
+                  />
                 }
               />
               <Field
                 label="审核状态"
-                value={detail?.statuses?.review ?? display.review_status ?? "—"}
+                value={
+                  <StatusValue
+                    kind="review"
+                    value={detail?.statuses?.review ?? display.review_status}
+                  />
+                }
               />
               <Field
                 label="投放状态"
                 value={
-                  detail?.statuses?.delivery ?? display.secondary_status ?? "—"
+                  <StatusValue
+                    kind="delivery"
+                    value={
+                      detail?.statuses?.delivery ?? display.secondary_status
+                    }
+                  />
                 }
               />
             </dl>

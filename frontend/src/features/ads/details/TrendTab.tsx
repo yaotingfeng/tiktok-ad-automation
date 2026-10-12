@@ -9,7 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { AdsTrendChart } from "../AdsTrendChart"
+import { AdsTrendChart, formatTrendHour, trendHourZone } from "../AdsTrendChart"
 import { type ColumnDef, formatMetric } from "../metricCatalog"
 import { type AdsDimension, rowAdvertiserId, rowObjectId } from "../search"
 import { useAdsTrend } from "../useAdsTrend"
@@ -117,6 +117,8 @@ export function TrendTab({
   const metrics = TREND_METRICS.map((key) =>
     columns.find((column) => column.key === key),
   ).filter((column): column is ColumnDef => Boolean(column))
+  // 后端对单一账户时区返回 IANA 名，多账户不同时区返回 MIXED。
+  const hourZone = trendHourZone(trend.data?.timezone)
   const active =
     metrics.find((column) => column.key === metricKey) ?? metrics[0]
   return (
@@ -175,7 +177,7 @@ export function TrendTab({
             <TableHeader>
               <TableRow>
                 <TableHead className="whitespace-nowrap">
-                  {byHour ? "时间" : "日期"}
+                  {byHour ? `时间（${hourZone}）` : "日期"}
                 </TableHead>
                 {columns.map((column) => (
                   <TableHead
@@ -192,8 +194,8 @@ export function TrendTab({
               {trend.data?.points?.map((point) => (
                 <TableRow key={point.at}>
                   <TableCell className="whitespace-nowrap">
-                    {/* 小时点是 UTC 的 ISO 分钟串，明确标注 UTC。 */}
-                    {byHour ? `${point.at.slice(11, 16)} UTC` : point.at}
+                    {/* 小时点按对象唯一账户时区显示，时区名只在表头标一次。 */}
+                    {byHour ? formatTrendHour(point.at, hourZone) : point.at}
                     {point.coverage === "INCOMPLETE" && (
                       <span className="ml-1 text-xs text-amber-600">
                         不完整

@@ -26,6 +26,8 @@ export type AdsBoundaryOptions = {
   trendCalls?: { count: number }
   /** 只改 /api/me/tenants 返回的成员角色，用于只读成员用例。 */
   role?: "viewer" | "operator"
+  /** 趋势响应的 timezone：单一账户时区（IANA）或 MIXED。 */
+  trendTimezone?: string
 }
 
 // 详情接口的配置取自线上实测的 TikTok 原始对象形态。
@@ -549,6 +551,16 @@ export async function adsBoundary(
               execution_result: "SUCCEEDED",
               reason: null,
             },
+            {
+              task_id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+              created_at: "2026-09-30T03:00:00Z",
+              field: "roas",
+              mode: "set",
+              original_value: null,
+              final_value: "1.2",
+              execution_result: "FAILED",
+              reason: "rejected",
+            },
           ],
           observed_at: "2026-10-01T00:00:00Z",
         },
@@ -651,38 +663,30 @@ export async function adsBoundary(
     }
     if (path.endsWith(`/tenants/${TENANT}/ads/trend`)) {
       if (options.trendCalls) options.trendCalls.count++
+      // 小时点是 UTC 的 ISO 分钟串，与后端一致。
+      const hour = url.searchParams.get("granularity") === "hour"
+      const timezone = options.trendTimezone ?? "UTC"
       return route.fulfill({
         headers,
         json: {
-          level: "account",
-          granularity: "day",
-          timezone: "UTC",
+          level: url.searchParams.get("level") ?? "account",
+          granularity: hour ? "hour" : "day",
+          timezone,
           points: [
-            {
-              at: "2026-10-01",
-              buckets: [
-                {
-                  currency: "USD",
-                  timezone: "UTC",
-                  attribution: "IAA",
-                  values: { spend: "4.00" },
-                },
-              ],
-              coverage: "COMPLETE",
-            },
-            {
-              at: "2026-10-02",
-              buckets: [
-                {
-                  currency: "USD",
-                  timezone: "UTC",
-                  attribution: "IAA",
-                  values: { spend: "6.00" },
-                },
-              ],
-              coverage: "COMPLETE",
-            },
-          ],
+            [hour ? "2026-10-01T01:00Z" : "2026-10-01", "4.00"],
+            [hour ? "2026-10-01T02:00Z" : "2026-10-02", "6.00"],
+          ].map(([at, spend]) => ({
+            at,
+            buckets: [
+              {
+                currency: "USD",
+                timezone: timezone === "MIXED" ? "UTC" : timezone,
+                attribution: "IAA",
+                values: { spend },
+              },
+            ],
+            coverage: "COMPLETE",
+          })),
         },
       })
     }

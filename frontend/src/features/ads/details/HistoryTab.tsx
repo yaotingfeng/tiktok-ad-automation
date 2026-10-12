@@ -82,7 +82,7 @@ export function HistoryTab({
                   : "—"}
               </TableCell>
               <TableCell>{actionText(item)}</TableCell>
-              <TableCell>{`${item.original_value} → ${item.final_value}`}</TableCell>
+              <TableCell>{`${item.original_value ?? "—"} → ${item.final_value ?? "—"}`}</TableCell>
               <TableCell title={item.reason ?? undefined}>
                 {RESULTS[item.execution_result ?? ""] ??
                   item.execution_result ??

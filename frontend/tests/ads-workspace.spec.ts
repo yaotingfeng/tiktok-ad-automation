@@ -6,6 +6,7 @@ import {
   BC_B,
   TENANT,
 } from "./utils/adsBoundary"
+import { expectLineDrawn } from "./utils/trendChart"
 
 test.describe("ads workspace", () => {
   test("外部广告六维切换保留筛选", async ({ page }) => {
@@ -293,6 +294,7 @@ test.describe("ads workspace", () => {
     expect(trendCalls.count).toBe(0)
     await page.getByRole("button", { name: "展开趋势" }).click()
     await expect(page.getByTestId("ads-trend-chart")).toBeVisible()
+    await expectLineDrawn(page.getByTestId("ads-trend-chart"))
     expect(trendCalls.count).toBe(1)
   })
 

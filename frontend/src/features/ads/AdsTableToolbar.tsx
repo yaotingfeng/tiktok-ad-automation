@@ -44,6 +44,11 @@ export function toolbarAction(key: ToolbarActionKey): ManagementAction {
   return ACTIONS[key].action
 }
 
+/** 工具栏动作文案；详情面板页头沿用同一文案，两处保持一致。 */
+export function toolbarActionLabel(key: ToolbarActionKey): string {
+  return ACTIONS[key].label
+}
+
 export type ToolbarSelection = {
   selectedCount: number
   allMatching: boolean
@@ -86,7 +91,7 @@ function SelectionToolbar({
               disabled={busy}
               onClick={() => onAction(toolbarAction(key))}
             >
-              {ACTIONS[key].label}
+              {toolbarActionLabel(key)}
             </Button>
           ))}
         {!readonly && (
