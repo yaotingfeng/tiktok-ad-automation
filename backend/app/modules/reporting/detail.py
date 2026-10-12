@@ -154,6 +154,7 @@ def get_ad_detail(
             ManagementTaskItem.tenant_id == context.tenant_id,
             ManagementTask.bc_id == bc_id,
             col(ManagementTaskItem.ref).op("->>")("advertiser_id") == ref.advertiser_id,
+            col(ManagementTaskItem.ref).op("->>")("kind") == ref.kind,
             col(ManagementTaskItem.ref).op("->>")("remote_id") == ref.remote_id,
         )
         .order_by(col(ManagementTask.created_at).desc())
