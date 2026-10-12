@@ -51,7 +51,7 @@ def _actor(session, tenant_id: UUID, bc_id: str, connection_id: UUID) -> UUID | 
             # completed run intentionally has no BC scope.  Keep accepting
             # exact-BC runs for older/MCP-shaped records, but never cross the
             # tenant or connection boundary above.
-            or_(DiscoveryRun.bc_id == bc_id, col(DiscoveryRun.bc_id).is_(None)),
+            or_(col(DiscoveryRun.bc_id) == bc_id, col(DiscoveryRun.bc_id).is_(None)),
             DiscoveryRun.status == "COMPLETE",
         )
         .order_by(
