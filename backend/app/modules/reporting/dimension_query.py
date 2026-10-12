@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import case, func
+from sqlalchemy import func
 from sqlalchemy import select as sql_select
 from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlmodel import Session, col, select
@@ -172,7 +172,8 @@ def scoped_rows(session, model, *, tenant_id, advertisers):
 
 
 def _aggregate(session, *, model, group_cols, tenant_id, advertisers, start, end):
-    # COUNT(col) 与 COUNT(*) 不同表示至少一条 NULL，禁止部分求和冒充完整数据。
+    # 同一对象跨日按部分合计规则（设计 7.3）：只合计有值的日期，另带
+    # "<列>_has_null" 标记该列是否有日期为空，由 fact_vector 标成 PARTIAL。
     columns = [col(getattr(model, name)) for name in group_cols]
     metadata = [
         func.array_agg(
@@ -203,12 +204,13 @@ def _aggregate(session, *, model, group_cols, tenant_id, advertisers, start, end
             func.max(col(model.timezone)).label("zone_max"),
             *metadata,
             *[
-                case(
-                    (
-                        func.count(col(getattr(model, name))) == func.count(),
-                        func.sum(col(getattr(model, name))),
-                    )
-                ).label(name)
+                func.sum(col(getattr(model, name))).label(name)
+                for name in METRIC_COLUMNS
+            ],
+            *[
+                (func.count(col(getattr(model, name))) < func.count()).label(
+                    f"{name}_has_null"
+                )
                 for name in METRIC_COLUMNS
             ],
         )
@@ -605,6 +607,19 @@ def _sort_rows(
     return (*(row for row, _ in present), *missing)
 
 
+def fact_vector(
+    item: Mapping[str, Any], *, unsupported: Collection[str] = ()
+) -> MetricVector:
+    """把 _aggregate 的一行跨日合计转成指标向量；有日期为空的列标 PARTIAL。"""
+    return metric_vector(
+        item,
+        currency=item["currency"],
+        timezone=item["zone_min"] if item["zone_min"] == item["zone_max"] else "MIXED",
+        unsupported=unsupported,
+        partial={name for name in METRIC_COLUMNS if item[f"{name}_has_null"]},
+    )
+
+
 def build_rows(
     session: Session, *, context: TenantContext, bc_id: str, filters: ReportingFilter
 ) -> tuple[ReportRow, ...]:
@@ -798,16 +813,7 @@ def build_rows(
                 if all(r.account_spend is not None for r in own_recs)
                 else None
             )
-        vectors = tuple(
-            metric_vector(
-                item,
-                currency=item["currency"],
-                timezone=item["zone_min"]
-                if item["zone_min"] == item["zone_max"]
-                else "MIXED",
-            )
-            for item in items
-        )
+        vectors = tuple(fact_vector(item) for item in items)
         if not vectors:
             vectors = (
                 metric_vector(

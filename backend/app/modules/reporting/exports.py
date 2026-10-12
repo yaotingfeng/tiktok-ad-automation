@@ -272,20 +272,12 @@ def _csv_rows(export: ReportExport) -> bytes:
     from app.modules.reporting.metric_catalog import METRIC_CATALOG, metric_name_zh
 
     dimension = str((export.filters or {}).get("dimension") or "campaign")
-    metric_fields = [item.key for item in METRIC_CATALOG]
-    # 素材维度不支持的指标（material_field is None 且是存储列）从 metric_fields 中去掉。
-    if dimension == "material":
-        from app.modules.reporting.metric_catalog import STORED_KEYS
-
-        metric_fields = [
-            key
-            for key in metric_fields
-            if key not in STORED_KEYS
-            or any(
-                item.key == key and item.material_field is not None
-                for item in METRIC_CATALOG
-            )
-        ]
+    # 素材报表没有对应字段的指标（含由其派生的 ROAS）整列不导出，避免空列被误读为 0。
+    metric_fields = [
+        item.key
+        for item in METRIC_CATALOG
+        if dimension != "material" or item.material_field is not None
+    ]
     fields = [
         "row_key",
         "name",

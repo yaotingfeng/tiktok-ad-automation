@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
+from app.modules.reporting import trend as trend_module
 from app.modules.reporting.publish import (
     AccountMeta,
     mark_failed,
@@ -128,7 +129,9 @@ def test_mixed_currency_yields_two_buckets(session, sync_seed):
     assert trend.timezone == "MIXED"
 
 
-def test_hour_trend_filters_by_account_local_date(session, sync_seed):
+def test_hour_trend_filters_by_account_local_date(session, sync_seed, monkeypatch):
+    monkeypatch.setattr(trend_module, "_utc_today", lambda: D2 + timedelta(days=1))
+
     def hour(stamp, spend):
         return {
             "dimensions": {"campaign_id": "c1", "stat_time_hour": stamp},
@@ -231,3 +234,14 @@ def test_trend_route_parses_query_and_rejects_bad_range(report_case, client):
             app.dependency_overrides.pop(get_current_user, None)
         else:
             app.dependency_overrides[get_current_user] = previous
+
+
+def test_hour_trend_only_within_last_30_days(session, sync_seed, monkeypatch):
+    # 设计 7.6：小时数据只保留最近 30 天，更早的日期直接拒绝而不是返回空趋势。
+    monkeypatch.setattr(trend_module, "_utc_today", lambda: D2 + timedelta(days=30))
+    kw = {"granularity": "hour", "advertiser_ids": ("acc-1",), "ids": ("c1",)}
+    _trend(session, sync_seed, start=D2, end=D2, **kw)
+    with pytest.raises(HTTPException) as err:
+        _trend(session, sync_seed, start=D1, end=D2, **kw)
+    assert err.value.status_code == 422
+    assert err.value.detail == "trend_range_too_old"

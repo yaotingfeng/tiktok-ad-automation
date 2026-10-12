@@ -15,7 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.integrations.tiktok.contracts.ads import EntityRef, MaterialUseRef
 
 Dimension = Literal["account", "campaign", "adgroup", "ad", "material", "drama"]
-# PARTIAL 只出现在汇总合计：部分成员有值时的合计，缺失成员既不参与求和也不当成 0。
+# PARTIAL 表示部分合计：只合计有值的成员（跨日、跨账户或跨对象），缺失成员既不
+# 参与求和也不当成 0；会出现在报表行、汇总卡片和趋势点上（设计 7.3）。
 Availability = Literal[
     "AVAILABLE", "PARTIAL", "MISSING", "UNAVAILABLE", "UNSUPPORTED", "FAILED"
 ]

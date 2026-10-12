@@ -93,7 +93,9 @@ def test_missing_sync_state_marks_incomplete(session, sync_seed):
     assert all(r.coverage["status"] == "INCOMPLETE" for r in rows)  # 10-04 未同步
 
 
-def test_local_day_null_is_strict_and_names_fall_back_to_facts(session, sync_seed):
+def test_cross_day_null_sums_present_days_and_marks_partial_names_fall_back_to_facts(
+    session, sync_seed
+):
     _seed(session, sync_seed)
     day = date(2026, 10, 6)
     raw = ad_row("a1", day, campaign="c1", spend="3", d0="-", total="0")
@@ -116,9 +118,16 @@ def test_local_day_null_is_strict_and_names_fall_back_to_facts(session, sync_see
         filters=ReportingFilter(dimension="ad", start_date=D, end_date=day),
     )
     row = next(r for r in rows if r.display["remote_id"] == "a1")
-    assert row.metric_buckets[0].values["spend"] == Decimal(13)
-    assert row.metric_buckets[0].values["revenue_d0"] is None
-    assert row.metric_buckets[0].values["roas_d0"] is None
+    bucket = row.metric_buckets[0]
+    assert bucket.values["spend"] == Decimal(13)
+    assert bucket.availability["spend"] == "AVAILABLE"
+    # 设计 7.3：同一对象跨日也按部分合计——只合计有值的日期并标 PARTIAL。
+    # 10-06 的第 29 天回收为空，10-05 有值：第 30 天回收 = 10-05 的值。
+    assert bucket.values["revenue_d30"] == Decimal("5.00")
+    assert bucket.availability["revenue_d30"] == "PARTIAL"
+    assert bucket.availability["roas_d30"] == "PARTIAL"
+    assert bucket.values["revenue_d0"] == Decimal("5.00")
+    assert bucket.availability["roas_d0"] == "PARTIAL"
     assert row.display["name"] == "广告本名"
     assert row.display["campaign_name"] == "系列本名"
     assert row.display["adgroup_name"] == "广告组本名"
@@ -262,12 +271,16 @@ def test_account_row_equals_sum_of_its_campaigns(session, sync_seed):
     ctx = sync_seed.context
     camps = [
         r
-        for r in build_rows(session, context=ctx, bc_id="bc-a", filters=_filters("campaign"))
+        for r in build_rows(
+            session, context=ctx, bc_id="bc-a", filters=_filters("campaign")
+        )
         if r.display["advertiser_id"] == "acc-1"
     ]
     acct = next(
         r
-        for r in build_rows(session, context=ctx, bc_id="bc-a", filters=_filters("account"))
+        for r in build_rows(
+            session, context=ctx, bc_id="bc-a", filters=_filters("account")
+        )
         if r.display["remote_id"] == "acc-1"
     )
     for key in ("spend", "impressions", "clicks", "revenue_d0", "revenue_total"):

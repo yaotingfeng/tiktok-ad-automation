@@ -31,6 +31,8 @@ from app.modules.reporting.store_models import (
 
 MAX_DAY_SPAN = 90
 MAX_HOUR_SPAN = 2
+# 小时数据只保留最近 30 天（设计 7.6），按 UTC 日期判断起始日是否过旧。
+MAX_HOUR_AGE_DAYS = 30
 MAX_IDS = 200
 Coverage = Literal["COMPLETE", "INCOMPLETE", "MISSING"]
 # 层级 -> (日事实表, 对象 ID 列, 覆盖状态种类)；账户层级的 ids 即账户 ID。
@@ -47,6 +49,10 @@ _MATERIAL_UNSUPPORTED = frozenset({"revenue_d3", "revenue_d30"})
 
 def _invalid(detail: str) -> HTTPException:
     return HTTPException(422, detail=detail)
+
+
+def _utc_today() -> date:
+    return datetime.now(UTC).date()
 
 
 def build_trend(
@@ -71,6 +77,8 @@ def build_trend(
             raise _invalid("trend_hour_level_unsupported")
         if span > MAX_HOUR_SPAN:
             raise _invalid("trend_range_too_long")
+        if start < _utc_today() - timedelta(days=MAX_HOUR_AGE_DAYS):
+            raise _invalid("trend_range_too_old")
     elif span > MAX_DAY_SPAN:
         raise _invalid("trend_range_too_long")
     # 账户层级的 ids 本身就是账户，与 advertiser_ids 一样必须在授权内。

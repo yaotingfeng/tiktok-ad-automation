@@ -19,6 +19,7 @@ from app.modules.reporting.dimension_query import (
     _passes_filter,
     _sort_rows,
     empty_metric_values,
+    fact_vector,
     latest_projections,
     merge_metric_buckets,
     metric_vector,
@@ -191,14 +192,7 @@ def build_material_rows(session, *, context, bc_id, filters) -> tuple[ReportRow,
                 [
                     (
                         tuple(
-                            metric_vector(
-                                item,
-                                currency=item["currency"],
-                                timezone=item["zone_min"]
-                                if item["zone_min"] == item["zone_max"]
-                                else "MIXED",
-                                unsupported={"revenue_d3", "revenue_d30"},
-                            )
+                            fact_vector(item, unsupported={"revenue_d3", "revenue_d30"})
                             for item in items
                         )
                         or (
