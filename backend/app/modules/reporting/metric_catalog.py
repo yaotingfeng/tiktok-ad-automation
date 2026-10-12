@@ -281,7 +281,14 @@ def table_label(name: str) -> str:
 
 
 def basic_fields() -> dict[str, str]:
-    return {key: _BY_KEY[key].basic_field for key in STORED_KEYS}  # type: ignore[misc]
+    fields: dict[str, str] = {}
+    for key in STORED_KEYS:
+        field = _BY_KEY[key].basic_field
+        # 入库指标都来自基础报表，缺字段是指标字典配置错误，必须立即暴露。
+        if field is None:
+            raise ValueError(f"stored metric {key} has no basic report field")
+        fields[key] = field
+    return fields
 
 
 def material_fields() -> dict[str, str]:

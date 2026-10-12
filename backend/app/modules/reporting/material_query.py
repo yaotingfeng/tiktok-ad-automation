@@ -11,6 +11,7 @@ from sqlmodel import col, select
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.ads.models import AdMaterialReference, AdObject, CampaignNameProjection
 from app.modules.reporting.dimension_query import (
+    COMPLETE_COVERAGE_STATUSES,
     _aggregate,
     _coverage,
     _entity_matches,
@@ -19,6 +20,7 @@ from app.modules.reporting.dimension_query import (
     _sort_rows,
     empty_metric_values,
     latest_projections,
+    merge_metric_buckets,
     metric_vector,
     scoped_rows,
 )
@@ -184,24 +186,32 @@ def build_material_rows(session, *, context, bc_id, filters) -> tuple[ReportRow,
             display=display,
             refs=refs,
             material_uses=uses,
-            metric_buckets=tuple(
-                metric_vector(
-                    item,
-                    currency=item["currency"],
-                    timezone=item["zone_min"]
-                    if item["zone_min"] == item["zone_max"]
-                    else "MIXED",
-                    unsupported={"revenue_d3", "revenue_d30"},
-                )
-                for item in items
-            )
-            or (
-                metric_vector(
-                    empty_by_account[adv],
-                    currency=accounts[adv].currency,
-                    timezone=accounts[adv].timezone,
-                    unsupported={"revenue_d3", "revenue_d30"},
-                ),
+            # 与其他维度同一规则：账户覆盖不完整时，已同步部分的合计标 PARTIAL。
+            metric_buckets=merge_metric_buckets(
+                [
+                    (
+                        tuple(
+                            metric_vector(
+                                item,
+                                currency=item["currency"],
+                                timezone=item["zone_min"]
+                                if item["zone_min"] == item["zone_max"]
+                                else "MIXED",
+                                unsupported={"revenue_d3", "revenue_d30"},
+                            )
+                            for item in items
+                        )
+                        or (
+                            metric_vector(
+                                empty_by_account[adv],
+                                currency=accounts[adv].currency,
+                                timezone=accounts[adv].timezone,
+                                unsupported={"revenue_d3", "revenue_d30"},
+                            ),
+                        ),
+                        coverage["status"] not in COMPLETE_COVERAGE_STATUSES,
+                    )
+                ]
             ),
             coverage=coverage,
             membership_digest=sha256(

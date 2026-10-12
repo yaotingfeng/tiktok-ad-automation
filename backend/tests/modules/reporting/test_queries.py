@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
@@ -10,8 +11,14 @@ from app.models import User
 from app.modules.accounts.models import BCAccountAccess, TenantBC
 from app.modules.ads.directory import append_campaign_name_projection
 from app.modules.ads.models import AdObject
+from app.modules.reporting.dimension_query import (
+    aggregate_metrics,
+    merge_metric_buckets,
+    metric_vector,
+)
+from app.modules.reporting.queries import _summary
 from app.modules.reporting.query_models import QuerySnapshot
-from app.modules.reporting.schemas import ReportingFilter, SelectionRequest
+from app.modules.reporting.schemas import ReportingFilter, ReportRow, SelectionRequest
 from app.modules.tenants.models import TenantMembership
 
 
@@ -278,78 +285,71 @@ def test_current_account_revocation_rejects_snapshot_and_selection(report_case):
     assert exc.value.status_code == 403
 
 
-from decimal import Decimal  # noqa: E402
-
-from app.modules.reporting.dimension_query import (  # noqa: E402
-    aggregate_metrics,
-    metric_vector,
-)
-from app.modules.reporting.schemas import ReportRow  # noqa: E402
-
-
 def _vec(spend, revenue, *, unsupported=()):
     return metric_vector(
-        {
-            "spend": spend,
-            "revenue_total": revenue,
-            "impressions": None,
-            "clicks": None,
-            "ad_impression_events": None,
-            "revenue_d0": None,
-            "revenue_d3": None,
-            "revenue_d7": None,
-            "revenue_d14": None,
-            "revenue_d30": None,
-        },
+        {"spend": spend, "revenue_total": revenue},
         currency="USD",
         timezone="UTC",
         unsupported=unsupported,
     )
 
 
-def test_summary_sums_available_members_and_marks_partial():
-    total = aggregate_metrics(
-        [_vec(Decimal("10"), Decimal("5")), _vec(None, None)], partial=True
+COMPLETE = {"status": "COMPLETE", "stale_dates": [], "incomplete_advertiser_ids": []}
+
+
+def _incomplete(*advertisers, dates=("2026-10-01",)):
+    return {
+        "status": "INCOMPLETE",
+        "stale_dates": list(dates),
+        "incomplete_advertiser_ids": list(advertisers),
+    }
+
+
+def _row(key, adv, vector, coverage):
+    return ReportRow(
+        row_key=key,
+        display={"advertiser_id": adv},
+        metric_buckets=(vector,),
+        coverage=coverage,
     )
+
+
+def test_aggregate_sums_available_members_and_marks_partial():
+    total = aggregate_metrics([_vec(Decimal("10"), Decimal("5")), _vec(None, None)])
     assert total.values["spend"] == Decimal("10")
     assert total.availability["spend"] == "PARTIAL"
     assert total.values["roas_total"] == Decimal("0.5")
     assert total.availability["roas_total"] == "PARTIAL"
 
 
-def test_summary_all_present_stays_available():
+def test_aggregate_all_present_and_complete_stays_available():
     total = aggregate_metrics(
-        [_vec(Decimal("10"), Decimal("5")), _vec(Decimal("2"), Decimal("1"))],
-        partial=True,
+        [_vec(Decimal("10"), Decimal("5")), _vec(Decimal("2"), Decimal("1"))]
     )
     assert total.values["spend"] == Decimal("12")
     assert total.availability["spend"] == "AVAILABLE"
     assert total.availability["roas_total"] == "AVAILABLE"
 
 
-def test_summary_all_missing_stays_empty():
-    total = aggregate_metrics([_vec(None, None), _vec(None, None)], partial=True)
+def test_aggregate_marks_present_columns_partial_when_contributor_incomplete():
+    total = aggregate_metrics([_vec(Decimal("10"), None)], incomplete=True)
+    assert total.availability["spend"] == "PARTIAL"
+    assert total.availability["revenue_total"] == "MISSING"
+
+
+def test_aggregate_all_missing_stays_empty():
+    total = aggregate_metrics([_vec(None, None), _vec(None, None)], incomplete=True)
     assert total.values["spend"] is None
     assert total.availability["spend"] == "MISSING"
 
 
-def test_strict_aggregate_unchanged_for_rows():
-    total = aggregate_metrics([_vec(Decimal("10"), Decimal("5")), _vec(None, None)])
-    assert total.values["spend"] is None
-    assert total.availability["spend"] == "MISSING"
-
-
-def test_partial_aggregate_propagates_partial_members():
-    # 汇总的成员本身已是部分合计时，再合计仍标 PARTIAL，严格模式下则为空。
+def test_aggregate_propagates_partial_members():
     partial_member = aggregate_metrics(
-        [_vec(Decimal("10"), Decimal("5")), _vec(None, None)], partial=True
+        [_vec(Decimal("10"), Decimal("5")), _vec(None, None)]
     )
-    full = _vec(Decimal("2"), Decimal("1"))
-    assert (
-        aggregate_metrics([partial_member, full], partial=True).availability["spend"]
-        == "PARTIAL"
-    )
-    assert aggregate_metrics([partial_member, full]).values["spend"] is None
+    total = aggregate_metrics([partial_member, _vec(Decimal("2"), Decimal("1"))])
+    assert total.values["spend"] == Decimal("12")
+    assert total.availability["spend"] == "PARTIAL"
 
 
 def test_unsupported_only_when_all_members_unsupported():
@@ -357,63 +357,52 @@ def test_unsupported_only_when_all_members_unsupported():
         [
             _vec(Decimal("1"), Decimal("1"), unsupported={"revenue_d3"}),
             _vec(Decimal("1"), Decimal("1"), unsupported={"revenue_d3"}),
-        ],
-        partial=True,
+        ]
     )
     assert both.availability["revenue_d3"] == "UNSUPPORTED"
     assert both.availability["roas_d3"] == "UNSUPPORTED"
 
 
 def test_partially_unsupported_column_is_treated_as_missing():
-    members = [
-        _vec(Decimal("1"), Decimal("1"), unsupported={"revenue_total"}),
-        _vec(Decimal("4"), Decimal("2")),
-    ]
-    strict = aggregate_metrics(members)
-    assert strict.values["revenue_total"] is None
-    assert strict.availability["revenue_total"] == "MISSING"
-    loose = aggregate_metrics(members, partial=True)
-    assert loose.values["revenue_total"] == Decimal("2")
-    assert loose.availability["revenue_total"] == "PARTIAL"
-    assert loose.availability["roas_total"] == "PARTIAL"
+    total = aggregate_metrics(
+        [
+            _vec(Decimal("1"), Decimal("1"), unsupported={"revenue_total"}),
+            _vec(Decimal("4"), Decimal("2")),
+        ]
+    )
+    assert total.values["revenue_total"] == Decimal("2")
+    assert total.availability["revenue_total"] == "PARTIAL"
+    assert total.availability["roas_total"] == "PARTIAL"
+
+
+def test_merge_buckets_marks_only_buckets_with_incomplete_contributors():
+    eur = metric_vector({"spend": Decimal("3")}, currency="EUR", timezone="UTC")
+    merged = {
+        v.currency: v
+        for v in merge_metric_buckets(
+            [((_vec(Decimal("1"), None),), True), ((eur,), False)]
+        )
+    }
+    assert merged["USD"].availability["spend"] == "PARTIAL"
+    assert merged["EUR"].availability["spend"] == "AVAILABLE"
 
 
 def test_summary_counts_incomplete_advertisers_and_dates():
-    from app.modules.reporting.queries import _summary
-
-    def row(key, adv, vector, coverage):
-        return ReportRow(
-            row_key=key,
-            display={"advertiser_id": adv},
-            metric_buckets=(vector,),
-            coverage=coverage,
-        )
-
-    complete = {"status": "COMPLETE", "stale_dates": []}
     rows = (
-        row("a", "adv1", _vec(Decimal("10"), Decimal("5")), complete),
-        row(
+        _row("a", "adv1", _vec(Decimal("10"), Decimal("5")), COMPLETE),
+        _row(
             "b",
             "adv2",
             _vec(None, None),
-            {"status": "MISSING", "stale_dates": ["2026-09-30", "2026-10-01"]},
+            _incomplete("adv2", dates=("2026-09-30", "2026-10-01")),
         ),
-        row(
-            "c",
-            "adv2",
-            _vec(Decimal("1"), Decimal("1")),
-            {"status": "INCOMPLETE", "stale_dates": ["2026-10-01"]},
-        ),
-        # 剧维度跨账户合并：覆盖里给出具体不完整账户时以其为准。
-        row(
+        _row("c", "adv2", _vec(Decimal("1"), Decimal("1")), _incomplete("adv2")),
+        # 剧维度跨账户合并：以覆盖里列出的不完整账户为准，而不是首个成员账户。
+        _row(
             "d",
             "adv4",
             _vec(Decimal("3"), Decimal("1")),
-            {
-                "status": "INCOMPLETE",
-                "stale_dates": ["2026-10-02"],
-                "incomplete_advertiser_ids": ["adv3"],
-            },
+            _incomplete("adv3", dates=("2026-10-02",)),
         ),
     )
     summary = _summary(rows)
@@ -423,3 +412,29 @@ def test_summary_counts_incomplete_advertisers_and_dates():
     (bucket,) = summary["buckets"]
     assert Decimal(bucket["values"]["spend"]) == Decimal("14")
     assert bucket["availability"]["spend"] == "PARTIAL"
+
+
+def test_summary_partial_when_incomplete_row_has_values():
+    # 不完整账户已同步部分有值时，SQL 合计看似完整，汇总也必须标 PARTIAL。
+    rows = (
+        _row("a", "adv1", _vec(Decimal("10"), Decimal("5")), COMPLETE),
+        _row("b", "adv2", _vec(Decimal("4"), Decimal("2")), _incomplete("adv2")),
+    )
+    summary = _summary(rows)
+    (bucket,) = summary["buckets"]
+    assert Decimal(bucket["values"]["spend"]) == Decimal("14")
+    assert bucket["availability"]["spend"] == "PARTIAL"
+    assert bucket["availability"]["roas_total"] == "PARTIAL"
+    assert summary["incomplete_advertiser_count"] == 1
+
+
+def test_summary_complete_rows_stay_available():
+    rows = (
+        _row("a", "adv1", _vec(Decimal("10"), Decimal("5")), COMPLETE),
+        _row("b", "adv2", _vec(Decimal("4"), Decimal("2")), COMPLETE),
+    )
+    summary = _summary(rows)
+    (bucket,) = summary["buckets"]
+    assert bucket["availability"]["spend"] == "AVAILABLE"
+    assert summary["incomplete_advertiser_count"] == 0
+    assert summary["incomplete_dates"] == []

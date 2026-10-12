@@ -124,7 +124,7 @@ def test_local_day_null_is_strict_and_names_fall_back_to_facts(session, sync_see
     assert row.display["adgroup_name"] == "广告组本名"
 
 
-def test_drama_merges_same_currency_timezones_and_avoids_delimiter_collision(
+def test_drama_merges_same_currency_timezones_partial_sums_and_avoids_delimiter_collision(
     session, sync_seed
 ):
     from app.modules.ads.models import CampaignNameProjection
@@ -166,7 +166,10 @@ def test_drama_merges_same_currency_timezones_and_avoids_delimiter_collision(
     assert len(rows) == 1 and len(rows[0].metric_buckets) == 1
     assert rows[0].metric_buckets[0].timezone == "MIXED"
     assert rows[0].metric_buckets[0].values["spend"] == Decimal(17)
-    assert rows[0].metric_buckets[0].values["revenue_d0"] is None
+    # 一个成员 D0 回收为空：其余成员照常合计，标 PARTIAL 而不是整列置空。
+    assert rows[0].metric_buckets[0].values["revenue_d0"] == Decimal(6)
+    assert rows[0].metric_buckets[0].availability["revenue_d0"] == "PARTIAL"
+    assert rows[0].metric_buckets[0].availability["spend"] == "AVAILABLE"
     assert rows[0].coverage["status"] == "COMPLETE"
 
 

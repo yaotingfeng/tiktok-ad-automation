@@ -22,9 +22,9 @@ from app.core.db import engine
 from app.modules.accounts.models import TenantBC
 from app.modules.ads.models import AdObject, CampaignNameProjection
 from app.modules.reporting.dimension_query import (
-    aggregate_metrics,
-    bucket_key,
+    COMPLETE_COVERAGE_STATUSES,
     build_rows,
+    merge_metric_buckets,
 )
 from app.modules.reporting.filters import authorized_grants, compile_filter
 from app.modules.reporting.query_models import (
@@ -93,39 +93,32 @@ def _row_public(row: QuerySnapshotRow) -> ReportRow:
 
 
 def _summary(rows: tuple[ReportRow, ...]) -> dict[str, Any]:
-    """汇总按币种分桶；缺覆盖的成员不参与合计并单独计数，不当成 0。
+    """汇总按币种分桶，与行内合并共用部分合计规则（merge_metric_buckets）。
 
-    混口径/混币种桶仍按桶展示，不偷偷换汇。行内合计保持严格模式，只有这里的
-    汇总卡片用 partial 合计：已同步部分照常相加并标 PARTIAL，同时给出不完整
-    账户数与缺失日期，由页面提示"N 个账户数据不完整"。
+    混口径/混币种桶仍按桶展示，不偷偷换汇。缺覆盖的成员不当成 0：已同步部分照常
+    相加并标 PARTIAL，同时给出不完整账户数与缺失日期，由页面提示"N 个账户数据
+    不完整"。
     """
-    buckets: dict[tuple[Any, ...], list[MetricVector]] = {}
     incomplete_advertisers: set[str] = set()
     incomplete_dates: set[str] = set()
+    members: list[tuple[tuple[MetricVector, ...], bool]] = []
     for row in rows:
-        if row.coverage.get("status") not in (None, "COMPLETE", "COMPLETE_EMPTY"):
-            # 剧维度一行合并多个账户，覆盖里列出的不完整账户比首个成员账户准确。
-            listed = row.coverage.get("incomplete_advertiser_ids")
+        incomplete = row.coverage.get("status") not in COMPLETE_COVERAGE_STATUSES
+        if incomplete:
+            # 剧维度一行合并多个账户，覆盖里列出了具体哪些账户不完整。
             incomplete_advertisers.update(
-                cast(list[str], listed)
-                if listed
-                else [str(row.display.get("advertiser_id") or "")]
+                cast(list[str], row.coverage.get("incomplete_advertiser_ids") or [])
             )
             incomplete_dates.update(
                 cast(list[str], row.coverage.get("stale_dates") or [])
             )
-        for vector in row.metric_buckets:
-            # 与行聚合共用同一口径键，避免汇总按可用状态拆桶后显示“多个”。
-            buckets.setdefault(bucket_key(vector), []).append(vector)
-    totals = [
-        aggregate_metrics(vectors, partial=True).model_dump(mode="json")
-        for vectors in buckets.values()
-    ]
-    totals.sort(key=lambda value: json.dumps(value, sort_keys=True))
+        members.append((row.metric_buckets, incomplete))
     return {
         "row_count": len(rows),
-        "buckets": totals,
-        "incomplete_advertiser_count": len(incomplete_advertisers - {""}),
+        "buckets": [
+            total.model_dump(mode="json") for total in merge_metric_buckets(members)
+        ],
+        "incomplete_advertiser_count": len(incomplete_advertisers),
         "incomplete_dates": sorted(incomplete_dates),
     }
 
@@ -235,7 +228,7 @@ def _new_snapshot(
             if not rows
             else (
                 "COMPLETE"
-                if all(status in {"COMPLETE", "COMPLETE_EMPTY"} for status in statuses)
+                if all(status in COMPLETE_COVERAGE_STATUSES for status in statuses)
                 else "INCOMPLETE"
             ),
             "rows": len(rows),

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
@@ -96,15 +96,19 @@ def metric_vector(
     )
 
 
-def aggregate_metrics(
-    vectors: Sequence[MetricVector], *, partial: bool = False
-) -> MetricVector:
-    """合计同币种向量。
+# 覆盖完整的状态集合；快照覆盖、行合并与汇总共用，避免各处口径不一致。
+COMPLETE_COVERAGE_STATUSES = frozenset({"COMPLETE", "COMPLETE_EMPTY"})
 
-    行内合计（同一对象多天、剧下多系列）用严格模式：任一成员缺失则合计为空，
-    避免把不完整的对象当成完整数字。汇总卡片用 partial 模式：缺失成员不参与
-    求和、也不当成 0，合计结果标 PARTIAL，由页面提示"N 个账户数据不完整"。
-    只有全部成员都不支持某列时该列才是 UNSUPPORTED；部分成员不支持按缺失处理。
+
+def aggregate_metrics(
+    vectors: Sequence[MetricVector], *, incomplete: bool = False
+) -> MetricVector:
+    """合计同币种向量（部分合计规则，设计 7.3）。
+
+    行内合并（同一对象多天、剧下多账户/多系列）与汇总卡片用同一规则：值为空的
+    成员不参与求和、也不当成 0；只要有成员缺失或本身是部分合计，或调用方声明
+    有贡献成员覆盖不完整（incomplete），合计就标 PARTIAL。全部成员缺失仍为空。
+    只有全部成员都不支持某列时该列才是 UNSUPPORTED；部分不支持按缺失处理。
     """
     if not vectors or len({v.currency for v in vectors}) != 1:
         raise ValueError("incompatible currencies or empty metrics")
@@ -123,13 +127,11 @@ def aggregate_metrics(
             if v.values.get(name) is not None
             and v.availability.get(name) in ("AVAILABLE", "PARTIAL")
         ]
-        if len(present) == len(vectors) and "PARTIAL" not in states:
-            values[name] = sum(present, Decimal(0))
-        elif partial and present:
-            values[name] = sum(present, Decimal(0))
+        values[name] = sum(present, Decimal(0)) if present else None
+        if present and (
+            incomplete or len(present) < len(vectors) or "PARTIAL" in states
+        ):
             partial_names.add(name)
-        else:
-            values[name] = None
     zones = {v.timezone for v in vectors}
     return metric_vector(
         values,
@@ -137,6 +139,27 @@ def aggregate_metrics(
         timezone=next(iter(zones)) if len(zones) == 1 else "MIXED",
         unsupported=unsupported,
         partial=partial_names,
+    )
+
+
+def merge_metric_buckets(
+    members: Iterable[tuple[Sequence[MetricVector], bool]],
+) -> tuple[MetricVector, ...]:
+    """按口径键合并多个成员的指标桶；成员为 (向量, 覆盖是否不完整)。
+
+    某币种桶只要有一个覆盖不完整的成员参与，桶内已有值的列都标 PARTIAL：
+    SQL 只合计了已同步的日期，数字本身看起来完整，但并不是全量。
+    """
+    buckets: dict[tuple[str], list[MetricVector]] = defaultdict(list)
+    incomplete: dict[tuple[str], bool] = defaultdict(bool)
+    for vectors, member_incomplete in members:
+        for vector in vectors:
+            key = bucket_key(vector)
+            buckets[key].append(vector)
+            incomplete[key] = incomplete[key] or member_incomplete
+    return tuple(
+        aggregate_metrics(values, incomplete=incomplete[key])
+        for key, values in sorted(buckets.items())
     )
 
 
@@ -810,20 +833,21 @@ def build_rows(
         group_accounts[key].add(adv)
     result = []
     for key, members in groups.items():
-        buckets = defaultdict(list)
-        for row in members:
-            for vector in row.metric_buckets:
-                buckets[bucket_key(vector)].append(vector)
+        coverage = _coverage(states, advertisers=group_accounts[key], filters=filters)
+        incomplete_ids = set(cast(list[str], coverage["incomplete_advertiser_ids"]))
         refs = tuple(ref for row in members for ref in row.refs)
         row = members[0].model_copy(
             update={
                 "refs": refs,
-                "metric_buckets": tuple(
-                    aggregate_metrics(values) for _, values in sorted(buckets.items())
+                # 行内合并与汇总同一规则：覆盖不完整账户贡献的列标 PARTIAL。
+                "metric_buckets": merge_metric_buckets(
+                    (
+                        member.metric_buckets,
+                        member.display.get("advertiser_id") in incomplete_ids,
+                    )
+                    for member in members
                 ),
-                "coverage": _coverage(
-                    states, advertisers=group_accounts[key], filters=filters
-                ),
+                "coverage": coverage,
                 "membership_digest": sha256(
                     json.dumps(
                         sorted(
