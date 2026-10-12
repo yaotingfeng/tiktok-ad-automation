@@ -224,3 +224,31 @@ def test_summary_keeps_currencies_separate_and_derives_ratios():
     assert len(totals) == 2
     assert totals["USD"]["timezone"] == "MIXED"
     assert Decimal(totals["USD"]["values"]["roas_d0"]) == Decimal("0.7")
+
+
+def test_cpm_and_cpc_are_recomputed_from_totals(session, sync_seed):
+    _seed(session, sync_seed)
+    camp = {
+        r.display["remote_id"]: r
+        for r in build_rows(
+            session,
+            context=sync_seed.context,
+            bc_id="bc-a",
+            filters=_filters("campaign"),
+        )
+    }
+    values = camp["c1"].metric_buckets[0].values
+    # ad_row 每行固定 impressions=10、clicks=1；c1 合计消耗 15、展示 20、点击 2。
+    assert values["cpm"] == Decimal("15.00") / Decimal("20") * 1000
+    assert values["cpc"] == Decimal("15.00") / Decimal("2")
+
+
+def test_cpm_sorts_desc(session, sync_seed):
+    _seed(session, sync_seed)
+    rows = build_rows(
+        session,
+        context=sync_seed.context,
+        bc_id="bc-a",
+        filters=_filters("ad", sort_by="cpm", sort_direction="desc"),
+    )
+    assert [r.display["remote_id"] for r in rows] == ["a1", "a2", "b1"]

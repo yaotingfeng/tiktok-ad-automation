@@ -35,6 +35,8 @@ CANONICAL_METRIC_KEYS = frozenset(
         "roas_d30",
         "roas_total",
         "ctr",
+        "cpm",
+        "cpc",
         "cost_per_ad_impression_event",
     }
 )

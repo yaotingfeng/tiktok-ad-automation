@@ -60,16 +60,19 @@ def metric_vector(values, *, currency, timezone, unsupported=()) -> MetricVector
         else "MISSING"
         for name, value in values.items()
     }
-    for name, numerator, denominator in [
+    for name, numerator, denominator, scale in [
         *(
-            (f"roas_{d}", f"revenue_{d}", "spend")
+            (f"roas_{d}", f"revenue_{d}", "spend", 1)
             for d in ("d0", "d3", "d7", "d14", "d30", "total")
         ),
-        ("ctr", "clicks", "impressions"),
-        ("cost_per_ad_impression_event", "spend", "ad_impression_events"),
+        ("ctr", "clicks", "impressions", 1),
+        # 千次展示成本与平均点击成本只由同口径合计重算，不平均各行的比率。
+        ("cpm", "spend", "impressions", 1000),
+        ("cpc", "spend", "clicks", 1),
+        ("cost_per_ad_impression_event", "spend", "ad_impression_events", 1),
     ]:
         a, b = values.get(numerator), values.get(denominator)
-        values[name] = a / b if a is not None and b else None
+        values[name] = a / b * scale if a is not None and b else None
         states[name] = (
             "UNSUPPORTED"
             if numerator in unsupported or denominator in unsupported
@@ -501,6 +504,8 @@ def _sort_value(row: ReportRow, field: str) -> tuple[str, Decimal] | None:
             "revenue_d30",
             "revenue_total",
             "cost_per_ad_impression_event",
+            "cpm",
+            "cpc",
         }
         else ""
     )
