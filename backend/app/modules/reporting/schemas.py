@@ -247,7 +247,7 @@ class SyncRefreshRequest(BaseModel):
 
     @field_validator("advertiser_ids")
     @classmethod
-    def valid_accounts(cls, values):
+    def valid_accounts(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         if len(values) != len(set(values)) or any(
             not v.strip() or len(v) > 128 for v in values
         ):
@@ -280,3 +280,19 @@ class SyncStatusPublic(BaseModel):
     publication_version: str
     accounts: tuple[SyncAccountStatus, ...]
     plan: SyncPlanStatus
+
+
+class MetricDefinitionPublic(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    key: str
+    unit: Literal["money", "count", "ratio", "multiple"]
+    additive: bool
+    basic_field: str | None
+    material_field: str | None
+    basic_name_zh: str
+    material_name_zh: str | None
+    basic_name_en: str
+    material_name_en: str | None
+    basic_label: str
+    material_label: str | None

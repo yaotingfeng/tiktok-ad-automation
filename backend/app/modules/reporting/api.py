@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
@@ -14,7 +15,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 from redis import Redis, RedisError
-from sqlmodel import col, select
+from sqlmodel import Session, col, select
 
 from app.api.deps import CurrentUser, SessionDep
 from app.core.config import settings
@@ -29,6 +30,7 @@ from app.modules.reporting.exports import (
     list_exports,
 )
 from app.modules.reporting.filters import authorized_grants
+from app.modules.reporting.metric_catalog import METRIC_CATALOG, table_label
 from app.modules.reporting.models import AccountBalanceObservation
 from app.modules.reporting.planner import (
     calls_today,
@@ -49,6 +51,7 @@ from app.modules.reporting.schemas import (
     ExportCreate,
     ExportPublic,
     FrozenSelection,
+    MetricDefinitionPublic,
     ReportingFilter,
     SavedViewCreate,
     SavedViewPatch,
@@ -125,8 +128,8 @@ def _filters(
 
 
 def _context(
-    session,
-    user,
+    session: Session,
+    user: CurrentUser,
     tenant_id: UUID,
     *,
     action: Literal["read", "reporting_write"] = "read",
@@ -204,6 +207,27 @@ def query_ads_route(
     # later cursor/selection request can read the same frozen rows.
     session.commit()
     return result
+
+
+@router.get(
+    "/ads/metric-catalog",
+    response_model=tuple[MetricDefinitionPublic, ...],
+    name="metric_catalog",
+)
+def metric_catalog_route(
+    tenant_id: UUID, session: SessionDep, user: CurrentUser
+) -> tuple[MetricDefinitionPublic, ...]:
+    _context(session, user, tenant_id)
+    return tuple(
+        MetricDefinitionPublic(
+            **asdict(item),
+            basic_label=table_label(item.basic_name_zh),
+            material_label=table_label(item.material_name_zh)
+            if item.material_name_zh
+            else None,
+        )
+        for item in METRIC_CATALOG
+    )
 
 
 @router.get("/ads/{kind}/{remote_id}", response_model=AdDetailPublic, name="ad_detail")
@@ -400,7 +424,7 @@ def download_report_export_route(
     )
 
 
-def _sync_scope(session, context, bc_id):
+def _sync_scope(session: Session, context: TenantContext, bc_id: str) -> set[str]:
     bc = session.get(TenantBC, (context.tenant_id, bc_id))
     if bc is None or bc.ownership_conflict:
         raise HTTPException(404, detail="query_scope_not_found")
@@ -419,7 +443,7 @@ def request_ad_sync_refresh_route(
     session: SessionDep,
     user: CurrentUser,
     bc_id: Annotated[str, Query(min_length=1, max_length=128)],
-):
+) -> SyncRefreshPublic:
     context = _context(session, user, tenant_id, action="reporting_write")
     allowed = _sync_scope(session, context, bc_id)
     if not settings.ADS_SYNC_ENABLED:
@@ -452,7 +476,7 @@ def get_ad_sync_status_route(
     bc_id: Annotated[str, Query(min_length=1, max_length=128)],
     start_date: date,
     end_date: date,
-):
+) -> SyncStatusPublic:
     context = _context(session, user, tenant_id)
     allowed = _sync_scope(session, context, bc_id)
     if start_date > end_date:

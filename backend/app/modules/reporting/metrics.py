@@ -10,29 +10,10 @@ from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 from app.core.errors import DomainError
+from app.modules.reporting.metric_catalog import basic_fields, material_fields
 
-_BASIC = {
-    "spend": "spend",
-    "impressions": "impressions",
-    "clicks": "clicks",
-    "ad_impression_events": "native_growth_total_ad_impression_event_count",
-    "revenue_d0": "native_growth_ad_revenue_value_d0",
-    "revenue_d3": "native_growth_ad_revenue_value_d2",
-    "revenue_d7": "native_growth_ad_revenue_value_d6",
-    "revenue_d14": "native_growth_ad_revenue_value_d13",
-    "revenue_d30": "native_growth_ad_revenue_value_d29",
-    "revenue_total": "native_growth_total_ad_impression_value",
-}
-_MATERIAL = {
-    "spend": "spend",
-    "impressions": "impressions",
-    "clicks": "clicks",
-    "ad_impression_events": "onsite_total_ad_impression",
-    "revenue_d0": "onsite_ad_impression_ad_revenue_day0",
-    "revenue_d7": "onsite_ad_impression_ad_revenue_day6",
-    "revenue_d14": "onsite_ad_impression_ad_revenue_day13",
-    "revenue_total": "onsite_total_ad_impression_value",
-}
+_BASIC = basic_fields()
+_MATERIAL = material_fields()
 COLUMNS = tuple(_BASIC)
 
 # 广告报表随行带回上级 ID、名称和类型，新建对象无需等待目录同步即可归组。
@@ -66,13 +47,13 @@ def parse_decimal(value: object) -> Decimal | None:
     return amount
 
 
-def basic_metric_values(metrics: dict) -> dict[str, Decimal | None]:
+def basic_metric_values(metrics: dict[str, object]) -> dict[str, Decimal | None]:
     return {
         column: parse_decimal(metrics.get(field)) for column, field in _BASIC.items()
     }
 
 
-def material_metric_values(metrics: dict) -> dict[str, Decimal | None]:
+def material_metric_values(metrics: dict[str, object]) -> dict[str, Decimal | None]:
     return {
         column: parse_decimal(metrics.get(_MATERIAL[column]))
         if column in _MATERIAL

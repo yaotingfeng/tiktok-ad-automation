@@ -269,6 +269,23 @@ def _decimal(value: Any) -> Decimal | None:
 
 
 def _csv_rows(export: ReportExport) -> bytes:
+    from app.modules.reporting.metric_catalog import METRIC_CATALOG, metric_name_zh
+
+    dimension = str((export.filters or {}).get("dimension") or "campaign")
+    metric_fields = [item.key for item in METRIC_CATALOG]
+    # 素材维度不支持的指标（material_field is None 且是存储列）从 metric_fields 中去掉。
+    if dimension == "material":
+        from app.modules.reporting.metric_catalog import STORED_KEYS
+
+        metric_fields = [
+            key
+            for key in metric_fields
+            if key not in STORED_KEYS
+            or any(
+                item.key == key and item.material_field is not None
+                for item in METRIC_CATALOG
+            )
+        ]
     fields = [
         "row_key",
         "name",
@@ -277,26 +294,8 @@ def _csv_rows(export: ReportExport) -> bytes:
         "timezone",
         "coverage",
         "fetched_at",
-        "spend",
-        "impressions",
-        "clicks",
-        "ad_impression_events",
-        "revenue_d0",
-        "revenue_d3",
-        "revenue_d7",
-        "revenue_d14",
-        "revenue_d30",
-        "revenue_total",
-        "roas_d0",
-        "roas_d3",
-        "roas_d7",
-        "roas_d14",
-        "roas_d30",
-        "roas_total",
-        "ctr",
-        "cost_per_ad_impression_event",
+        *metric_fields,
     ]
-    metric_fields = fields[7:]
     balance_fields = [
         "balance",
         "balance_currency",
@@ -307,7 +306,10 @@ def _csv_rows(export: ReportExport) -> bytes:
     captured = export.created_at.astimezone(UTC).isoformat()
     out = io.StringIO(newline="")
     writer = csv.DictWriter(out, fieldnames=fields, lineterminator="\n")
-    writer.writeheader()
+    headers = {key: key for key in fields} | {
+        key: metric_name_zh(key, dimension) for key in metric_fields
+    }
+    writer.writerow(headers)
     for raw in export.frozen_rows:
         display = dict(raw.get("display") or {})
         # B3 stores the row coverage marker inside display for migration
@@ -392,7 +394,7 @@ def _get_object(key: str) -> bytes:
     ):
         response = make_s3().get_object(Bucket=settings.S3_BUCKET, Key=key)
         body = response["Body"]
-        return body.read()
+        return body.read()  # type: ignore[no-any-return]
     if key in _MEMORY_OBJECTS:
         return _MEMORY_OBJECTS[key]
     path = _object_path(key)

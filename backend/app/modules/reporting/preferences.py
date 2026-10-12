@@ -3,6 +3,7 @@
 视图只保存筛选和列配置，不保存查询结果。每次读写都重新解析租户、BC
 和账户授权，避免切换 BC 或撤权后复用旧偏好。
 """
+
 from __future__ import annotations
 
 from uuid import UUID, uuid4
@@ -13,12 +14,12 @@ from sqlmodel import Session, col, select
 from app.core.context import TenantContext
 from app.modules.accounts.models import TenantBC
 from app.modules.reporting.filters import authorized_grants, compile_filter
+from app.modules.reporting.metric_catalog import METRIC_CATALOG
 from app.modules.reporting.query_models import SavedReportView
 from app.modules.reporting.schemas import ReportingFilter, SavedViewPublic
 from app.modules.tenants.permissions import require_tenant
 
-# 这些列均来自冻结快照的稳定显示/指标字段；服务端拒绝任意 JSON 键，避免
-# 保存一个前端自定义字段后在导出或工作台中产生不一致的口径。
+# 列键与报表行一致：显示字段 + 指标字典键；与工作台、导出共用同一口径。
 SUPPORTED_VIEW_COLUMNS = frozenset(
     {
         "row_key",
@@ -30,22 +31,19 @@ SUPPORTED_VIEW_COLUMNS = frozenset(
         "currency",
         "timezone",
         "coverage",
-        "spend",
-        "native_growth_ad_revenue_value_d0",
-        "native_growth_total_ad_impression_value",
-        "native_growth_total_ad_impression_event_count",
-        "ad_revenue_roas",
-        "d0_roas",
-        "cost_per_ad_impression_event",
-        "impressions",
-        "clicks",
-        "ctr",
+        "budget",
+        "target_roas",
+        "optimization_goal",
+        "balance",
     }
+    | {item.key for item in METRIC_CATALOG}
 )
 
 
 def _authorize(session: Session, *, context: TenantContext, bc_id: str) -> None:
-    require_tenant(session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read")
+    require_tenant(
+        session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read"
+    )
     bc = session.get(TenantBC, (context.tenant_id, bc_id), populate_existing=True)
     if bc is None or bc.ownership_conflict:
         raise HTTPException(403, detail="report_scope_forbidden")
@@ -59,7 +57,10 @@ def validate_columns(columns: tuple[str, ...]) -> tuple[str, ...]:
         columns = tuple(columns)
     if not columns or len(set(columns)) != len(columns):
         raise HTTPException(422, detail="invalid_report_view_columns")
-    if any(type(column) is not str or column not in SUPPORTED_VIEW_COLUMNS for column in columns):
+    if any(
+        type(column) is not str or column not in SUPPORTED_VIEW_COLUMNS
+        for column in columns
+    ):
         raise HTTPException(422, detail="unsupported_report_view_column")
     return columns
 
