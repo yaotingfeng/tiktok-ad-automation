@@ -105,7 +105,19 @@ def test_account_selection_captures_campaigns_at_query_time(report_case):
     page = query(case, filters=filters_for("account"))
     case.seed_campaign("P-New", "report-account", 1, 2)
     assert freeze(case, page.snapshot.snapshot_id).refs == (old,)
-    assert page.items[0].refs == (old,)
+    assert page.items[0].refs == ()  # 账户行列表响应不返回引用
+
+
+def test_account_listing_refs_are_empty_but_freeze_expands_campaigns(report_case):
+    """账户维度列表响应不返回引用，避免每行带回上百条系列；冻结选择展开快照内引用。"""
+    case = report_case
+    c1 = case.seed_campaign("P-Drama-A", "report-account", 1, 2)
+    c2 = case.seed_campaign("P-Drama-B", "report-account", 1, 2)
+    page = query(case, filters=filters_for("account"))
+    assert len(page.items) == 1
+    assert page.items[0].refs == ()
+    selected = freeze(case, page.snapshot.snapshot_id)
+    assert set(selected.refs) == {c1, c2}
 
 
 def test_snapshot_preserves_coverage_and_versions(report_case):

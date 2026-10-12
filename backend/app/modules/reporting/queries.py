@@ -71,17 +71,20 @@ def _decode_cursor(value: str) -> dict[str, Any]:
         raise HTTPException(404, detail="query_cursor_not_found") from exc
 
 
-def _row_public(row: QuerySnapshotRow) -> ReportRow:
+def _row_public(row: QuerySnapshotRow, *, for_listing: bool = False) -> ReportRow:
     display = dict(row.display)
     # B1's row table predates the public coverage field. Keep it in the JSON
     # display payload so the migration remains compatible while snapshots retain
     # the exact coverage state captured at creation time.
     coverage = display.pop("__coverage__", {})
+    # 快照内的账户行保留其下全部系列引用，供冻结选择展开；列表响应不返回这些引用，
+    # 避免每个账户行带回上百条。冻结选择调用时 for_listing 保持 False。
+    refs = () if for_listing and row.dimension == "account" else row.refs
     return ReportRow.model_validate(
         {
             "row_key": row.row_key,
             "display": display,
-            "refs": row.refs,
+            "refs": refs,
             "material_uses": row.material_uses,
             "metric_buckets": row.metric_buckets,
             "capabilities": row.capabilities,
@@ -291,7 +294,7 @@ def _read_page(
         after_sequence=after,
         limit=limit,
     )
-    items = tuple(_row_public(row) for row in rows)
+    items = tuple(_row_public(row, for_listing=True) for row in rows)
     next_cursor = None
     if rows and rows[-1].stable_sequence + 1 < snapshot.total:
         next_cursor = _cursor(

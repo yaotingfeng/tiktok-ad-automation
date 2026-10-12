@@ -767,11 +767,13 @@ def build_rows(
             ad_type=entity.ad_type if entity else None,
             operation_status=entity.operation_status if entity else None,
             review_status=entity.review_status if entity else None,
+            secondary_status=entity.delivery_status if entity else None,
         )
         if kind == "account":
             balance = balances.get(adv)
             # 余额是独立时点观测；资金池余额必须标记共享，不纳入期间指标合计。
             display.update(
+                account_status=accounts[adv].remote_status,
                 balance=str(balance.amount)
                 if balance
                 and balance.availability == "AVAILABLE"

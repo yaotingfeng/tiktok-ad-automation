@@ -255,3 +255,23 @@ def test_cpm_sorts_desc(session, sync_seed):
         filters=_filters("ad", sort_by="cpm", sort_direction="desc"),
     )
     assert [r.display["remote_id"] for r in rows] == ["a1", "a2", "b1"]
+
+
+def test_account_row_equals_sum_of_its_campaigns(session, sync_seed):
+    _seed(session, sync_seed)
+    ctx = sync_seed.context
+    camps = [
+        r
+        for r in build_rows(session, context=ctx, bc_id="bc-a", filters=_filters("campaign"))
+        if r.display["advertiser_id"] == "acc-1"
+    ]
+    acct = next(
+        r
+        for r in build_rows(session, context=ctx, bc_id="bc-a", filters=_filters("account"))
+        if r.display["remote_id"] == "acc-1"
+    )
+    for key in ("spend", "impressions", "clicks", "revenue_d0", "revenue_total"):
+        assert acct.metric_buckets[0].values[key] == sum(
+            c.metric_buckets[0].values[key] for c in camps
+        )
+    assert "account_status" in acct.display
