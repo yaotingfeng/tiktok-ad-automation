@@ -62,9 +62,12 @@ from app.modules.reporting.schemas import (
     SyncRefreshPublic,
     SyncRefreshRequest,
     SyncStatusPublic,
+    TrendLevel,
+    TrendPublic,
 )
 from app.modules.reporting.selection import freeze_selection
 from app.modules.reporting.store_models import AdSyncBc, ReportSyncState
+from app.modules.reporting.trend import build_trend
 from app.modules.tenants.permissions import require_tenant
 
 router = APIRouter(prefix="/tenants/{tenant_id}", tags=["ads_reporting"])
@@ -227,6 +230,34 @@ def metric_catalog_route(
             else None,
         )
         for item in METRIC_CATALOG
+    )
+
+
+# 必须注册在 /ads/{kind}/{remote_id} 之前，避免静态路径被详情路由的参数段吞掉。
+@router.get("/ads/trend", response_model=TrendPublic, name="ad_trend")
+def ad_trend_route(
+    tenant_id: UUID,
+    bc_id: Annotated[str, Query(min_length=1, max_length=128)],
+    level: TrendLevel,
+    start_date: date,
+    end_date: date,
+    session: SessionDep,
+    user: CurrentUser,
+    granularity: Literal["day", "hour"] = "day",
+    advertiser_ids: Annotated[str | None, Query(max_length=20000)] = None,
+    ids: Annotated[str | None, Query(max_length=20000)] = None,
+) -> TrendPublic:
+    context = _context(session, user, tenant_id)
+    return build_trend(
+        session,
+        context=context,
+        bc_id=bc_id,
+        level=level,
+        advertiser_ids=_tuple(advertiser_ids),
+        ids=_tuple(ids),
+        start=start_date,
+        end=end_date,
+        granularity=granularity,
     )
 
 

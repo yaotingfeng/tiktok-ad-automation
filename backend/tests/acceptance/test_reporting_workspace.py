@@ -331,6 +331,10 @@ def test_workspace_fastapi_contract_has_no_external_write_routes() -> None:
         ): "ads_reporting-metric_catalog",
         (
             "GET",
+            "/api/tenants/{tenant_id}/ads/trend",
+        ): "ads_reporting-ad_trend",
+        (
+            "GET",
             "/api/tenants/{tenant_id}/ads/{kind}/{remote_id}",
         ): "ads_reporting-ad_detail",
         (

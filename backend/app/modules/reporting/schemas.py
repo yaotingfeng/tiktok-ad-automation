@@ -299,3 +299,25 @@ class MetricDefinitionPublic(BaseModel):
     material_name_en: str | None
     basic_label: str
     material_label: str | None
+
+
+TrendLevel = Literal["account", "campaign", "adgroup", "ad", "material"]
+
+
+class TrendPoint(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # 日粒度为账户本地日 YYYY-MM-DD；小时粒度为 UTC 整点 ISO 字符串（分钟精度）。
+    at: str
+    buckets: tuple[MetricVector, ...] = ()
+    coverage: Literal["COMPLETE", "INCOMPLETE", "MISSING"] = "MISSING"
+
+
+class TrendPublic(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    level: TrendLevel
+    granularity: Literal["day", "hour"]
+    # 所有事实同一时区时为该时区；多个时区为 MIXED；无数据为 UTC。
+    timezone: str
+    points: tuple[TrendPoint, ...] = ()
