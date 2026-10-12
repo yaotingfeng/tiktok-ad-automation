@@ -132,14 +132,24 @@ def test_balance_schedule_ignores_report_backoff_and_coalesces(
                 plan.next_directory_at
             ) = now + timedelta(days=1)
         s.commit()
-    assert balance_tasks.plan_balances(database_engine=engine, now=now) == 1
-    assert balance_tasks.plan_balances(database_engine=engine, now=now) == 0
-    assert (
-        balance_tasks.plan_balances(
-            database_engine=engine, now=now + timedelta(minutes=30)
-        )
-        == 1
-    )
+
+    def own_runs():
+        # 共享测试库中其他用例可能留下已启用计划；只统计本租户的余额运行。
+        with factory() as s:
+            return len(
+                s.exec(
+                    select(ReportBalanceRun.id).where(
+                        ReportBalanceRun.tenant_id == seed.tenant_id
+                    )
+                ).all()
+            )
+
+    balance_tasks.plan_balances(database_engine=engine, now=now)
+    assert own_runs() == 1
+    balance_tasks.plan_balances(database_engine=engine, now=now)
+    assert own_runs() == 1
+    balance_tasks.plan_balances(database_engine=engine, now=now + timedelta(minutes=30))
+    assert own_runs() == 2
     with factory() as s:
         rows = s.exec(
             select(PendingDispatch).where(
