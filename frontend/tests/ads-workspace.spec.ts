@@ -260,4 +260,37 @@ test.describe("ads workspace", () => {
       page.locator('th[data-metric="roas_total"]'),
     ).not.toHaveAttribute("data-recovery-open", "true")
   })
+
+  test("汇总卡片使用官方名并提示不完整账户", async ({ page }) => {
+    await adsBoundary(page, { incomplete: true })
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    // 卡片在表格之前，用 first() 选中卡片区的按钮
+    for (const name of [
+      "消耗",
+      "广告展示总价值",
+      "广告收益 ROAS",
+      "第 0 天广告收益 ROAS",
+      "展示量",
+      "点击率（目标页面）",
+    ])
+      await expect(
+        page.getByRole("button", { name: new RegExp(`^${name}`) }).first(),
+      ).toBeVisible()
+    // CPM 的括号需要转义
+    await expect(
+      page.getByRole("button", { name: /^千次展示成本/ }).first(),
+    ).toBeVisible()
+    await expect(page.getByText("2 个账户数据不完整")).toBeVisible()
+  })
+
+  test("趋势默认折叠，展开才请求", async ({ page }) => {
+    const trendCalls = { count: 0 }
+    await adsBoundary(page, { trendCalls })
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await expect(page.getByRole("heading", { name: "广告报表" })).toBeVisible()
+    expect(trendCalls.count).toBe(0)
+    await page.getByRole("button", { name: "展开趋势" }).click()
+    await expect(page.getByTestId("ads-trend-chart")).toBeVisible()
+    expect(trendCalls.count).toBe(1)
+  })
 })

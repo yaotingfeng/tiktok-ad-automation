@@ -22,6 +22,8 @@ export type AdsBoundaryOptions = {
   balance?: boolean
   /** 消耗列标为 PARTIAL，但行覆盖仍为 COMPLETE（成员账户平台返回 NULL 的情形）。 */
   partialSpend?: boolean
+  /** 记录趋势请求次数 */
+  trendCalls?: { count: number }
 }
 
 export async function adsBoundary(
@@ -302,6 +304,8 @@ export async function adsBoundary(
           total: 1,
           summary: {
             row_count: 1,
+            incomplete_advertiser_count: options.incomplete ? 2 : 0,
+            incomplete_dates: options.incomplete ? ["2026-10-04"] : [],
             buckets: [
               {
                 currency: "USD",
@@ -322,6 +326,8 @@ export async function adsBoundary(
                   roas_d30: dimension === "material" ? null : "1.6",
                   cost_per_ad_impression_event: "2",
                   ctr: "0.02",
+                  cpm: "0.1",
+                  cpc: "5",
                 },
                 availability: {
                   spend: "AVAILABLE",
@@ -340,6 +346,8 @@ export async function adsBoundary(
                     dimension === "material" ? "UNSUPPORTED" : "AVAILABLE",
                   cost_per_ad_impression_event: "AVAILABLE",
                   ctr: "AVAILABLE",
+                  cpm: "AVAILABLE",
+                  cpc: "AVAILABLE",
                 },
               },
               ...(options.mixedBuckets
@@ -363,6 +371,8 @@ export async function adsBoundary(
                         roas_d30: dimension === "material" ? null : "1.6",
                         cost_per_ad_impression_event: "2",
                         ctr: "0.02",
+                        cpm: "0.1",
+                        cpc: "5",
                       },
                       availability: {
                         spend: "AVAILABLE",
@@ -385,6 +395,8 @@ export async function adsBoundary(
                             : "AVAILABLE",
                         cost_per_ad_impression_event: "AVAILABLE",
                         ctr: "AVAILABLE",
+                        cpm: "AVAILABLE",
+                        cpc: "AVAILABLE",
                       },
                     },
                   ]
@@ -451,6 +463,43 @@ export async function adsBoundary(
       })
     if (path.endsWith("/report-views"))
       return route.fulfill({ headers, json: [] })
+    if (path.endsWith(`/tenants/${TENANT}/ads/trend`)) {
+      if (options.trendCalls) options.trendCalls.count++
+      return route.fulfill({
+        headers,
+        json: {
+          level: "account",
+          granularity: "day",
+          timezone: "UTC",
+          points: [
+            {
+              at: "2026-10-01",
+              buckets: [
+                {
+                  currency: "USD",
+                  timezone: "UTC",
+                  attribution: "IAA",
+                  values: { spend: "4.00" },
+                },
+              ],
+              coverage: "COMPLETE",
+            },
+            {
+              at: "2026-10-02",
+              buckets: [
+                {
+                  currency: "USD",
+                  timezone: "UTC",
+                  attribution: "IAA",
+                  values: { spend: "6.00" },
+                },
+              ],
+              coverage: "COMPLETE",
+            },
+          ],
+        },
+      })
+    }
     return route.fulfill({
       headers,
       status: 404,

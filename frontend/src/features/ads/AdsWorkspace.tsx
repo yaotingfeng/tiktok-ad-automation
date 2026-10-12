@@ -1,5 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
+import { ChevronDown, ChevronUp } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
   AdsReportingService,
@@ -16,6 +17,7 @@ import { AdsDetails } from "./AdsDetails"
 import { AdsFilters } from "./AdsFilters"
 import { AdsSummary } from "./AdsSummary"
 import { AdsTable } from "./AdsTable"
+import { AdsTrendChart } from "./AdsTrendChart"
 import { BulkActionBar } from "./BulkActionBar"
 import { columnsFor, useMetricCatalog } from "./metricCatalog"
 import { ReportStatusBar } from "./ReportStatusBar"
@@ -29,6 +31,7 @@ import {
   toReportingFilter,
 } from "./search"
 import { useAdsQuery } from "./useAdsQuery"
+import { useAdsTrend } from "./useAdsTrend"
 export function AdsWorkspace() {
   const { tenantId, bc, scope, bcDirectory } = useTenantScope()
   const navigate = useNavigate()
@@ -52,6 +55,36 @@ export function AdsWorkspace() {
   const [previewOpen, setPreviewOpen] = useState(false)
   const scopeRef = useRef(`${tenantId ?? ""}:${currentBcId ?? ""}`)
   const selectionRequestScopeRef = useRef<string | null>(null)
+
+  // 汇总卡片与趋势状态
+  const [activeMetric, setActiveMetric] = useState("spend")
+  const [trendOpen, setTrendOpen] = useState(() => {
+    try {
+      return localStorage.getItem("ads-trend-open") === "true"
+    } catch {
+      return false
+    }
+  })
+  const saveTrendOpen = (open: boolean) => {
+    setTrendOpen(open)
+    try {
+      localStorage.setItem("ads-trend-open", String(open))
+    } catch {
+      // 忽略存储失败
+    }
+  }
+  const granularity =
+    applied.start_date === applied.end_date ? "hour" : ("day" as const)
+  const trend = useAdsTrend({
+    level: "account",
+    advertiserIds: applied.advertiser_ids,
+    startDate: applied.start_date,
+    endDate: applied.end_date,
+    granularity,
+    enabled: trendOpen,
+  })
+  const activeColumn = catalog.data?.find((d) => d.key === activeMetric)
+
   const clearManagementPreview = useCallback(() => {
     selectionRequestScopeRef.current = null
     setFrozenSelection(null)
@@ -439,7 +472,59 @@ export function AdsWorkspace() {
           />
         </CardContent>
       </Card>
-      <AdsSummary summary={ads.query.data?.summary} />
+      {catalog.isError && (
+        <div className="flex items-center gap-2 text-sm text-destructive">
+          <p>指标定义读取失败</p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void catalog.refetch()}
+          >
+            重试
+          </Button>
+        </div>
+      )}
+      <AdsSummary
+        summary={ads.query.data?.summary}
+        catalog={catalog.data ?? []}
+        activeMetric={activeMetric}
+        onSelectMetric={setActiveMetric}
+      />
+      <div className="space-y-3">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => saveTrendOpen(!trendOpen)}
+          className="w-full"
+        >
+          {trendOpen ? (
+            <>
+              <ChevronUp className="mr-2 h-4 w-4" />
+              收起趋势
+            </>
+          ) : (
+            <>
+              <ChevronDown className="mr-2 h-4 w-4" />
+              展开趋势
+            </>
+          )}
+        </Button>
+        {trendOpen && activeColumn && (
+          <AdsTrendChart
+            trend={trend.data}
+            metric={{
+              key: activeColumn.key,
+              label: activeColumn.basic_label,
+              fullName: activeColumn.basic_name_zh,
+              unit: activeColumn.unit,
+              recoveryDay: null,
+            }}
+            loading={trend.isLoading}
+            error={trend.isError}
+            onRetry={() => void trend.refetch()}
+          />
+        )}
+      </div>
       {ads.query.isLoading && (
         <p className="text-xs text-muted-foreground">正在加载当前报表…</p>
       )}
