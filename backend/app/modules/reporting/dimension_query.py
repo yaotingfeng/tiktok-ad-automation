@@ -47,7 +47,9 @@ def bucket_key(vector: MetricVector) -> tuple[str]:
     return (vector.currency,)
 
 
-def metric_vector(values, *, currency, timezone, unsupported=()) -> MetricVector:
+def metric_vector(
+    values, *, currency, timezone, unsupported=(), partial=frozenset()
+) -> MetricVector:
     values = {
         name: None if name in unsupported else values.get(name)
         for name in METRIC_COLUMNS
@@ -55,9 +57,11 @@ def metric_vector(values, *, currency, timezone, unsupported=()) -> MetricVector
     states = {
         name: "UNSUPPORTED"
         if name in unsupported
-        else "AVAILABLE"
-        if value is not None
         else "MISSING"
+        if value is None
+        else "PARTIAL"
+        if name in partial
+        else "AVAILABLE"
         for name, value in values.items()
     }
     for name, numerator, denominator, scale in [
@@ -73,12 +77,15 @@ def metric_vector(values, *, currency, timezone, unsupported=()) -> MetricVector
     ]:
         a, b = values.get(numerator), values.get(denominator)
         values[name] = a / b * scale if a is not None and b else None
+        # 派生比率由合计重算，状态跟随分子、分母中较差的一个。
         states[name] = (
             "UNSUPPORTED"
             if numerator in unsupported or denominator in unsupported
-            else "AVAILABLE"
-            if values[name] is not None
             else "MISSING"
+            if values[name] is None
+            else "PARTIAL"
+            if numerator in partial or denominator in partial
+            else "AVAILABLE"
         )
     return MetricVector(
         currency=currency,
@@ -89,28 +96,47 @@ def metric_vector(values, *, currency, timezone, unsupported=()) -> MetricVector
     )
 
 
-def aggregate_metrics(vectors: Sequence[MetricVector]) -> MetricVector:
+def aggregate_metrics(
+    vectors: Sequence[MetricVector], *, partial: bool = False
+) -> MetricVector:
+    """合计同币种向量。
+
+    行内合计（同一对象多天、剧下多系列）用严格模式：任一成员缺失则合计为空，
+    避免把不完整的对象当成完整数字。汇总卡片用 partial 模式：缺失成员不参与
+    求和、也不当成 0，合计结果标 PARTIAL，由页面提示"N 个账户数据不完整"。
+    只有全部成员都不支持某列时该列才是 UNSUPPORTED；部分成员不支持按缺失处理。
+    """
     if not vectors or len({v.currency for v in vectors}) != 1:
         raise ValueError("incompatible currencies or empty metrics")
-    values = {}
-    unsupported = set()
+    values: dict[str, Decimal | None] = {}
+    unsupported: set[str] = set()
+    partial_names: set[str] = set()
     for name in METRIC_COLUMNS:
-        members = [v.values.get(name) for v in vectors]
         states = [v.availability.get(name) for v in vectors]
-        if "UNSUPPORTED" in states:
+        if all(s == "UNSUPPORTED" for s in states):
             unsupported.add(name)
-        values[name] = (
-            sum(cast(list[Decimal], members), Decimal(0))
-            if all(v is not None for v in members)
-            and all(s == "AVAILABLE" for s in states)
-            else None
-        )
+            values[name] = None
+            continue
+        present = [
+            cast(Decimal, v.values.get(name))
+            for v in vectors
+            if v.values.get(name) is not None
+            and v.availability.get(name) in ("AVAILABLE", "PARTIAL")
+        ]
+        if len(present) == len(vectors) and "PARTIAL" not in states:
+            values[name] = sum(present, Decimal(0))
+        elif partial and present:
+            values[name] = sum(present, Decimal(0))
+            partial_names.add(name)
+        else:
+            values[name] = None
     zones = {v.timezone for v in vectors}
     return metric_vector(
         values,
         currency=vectors[0].currency,
         timezone=next(iter(zones)) if len(zones) == 1 else "MIXED",
         unsupported=unsupported,
+        partial=partial_names,
     )
 
 
@@ -197,6 +223,15 @@ def _coverage(states, *, advertisers, filters, kind="ad_day"):
         {s.stat_date.isoformat() for s in selected if s and s.status == "FAILED"}
     )
     updated = [s.last_success_at for s in selected if s and s.last_success_at]
+    # 剧维度一行跨多个账户，汇总需要知道具体是哪些账户不完整，而不只看首个成员。
+    incomplete_advertisers = sorted(
+        {
+            adv
+            for adv in advertisers
+            for day in dates
+            if (s := relevant.get((adv, day))) is None or s.status != "COMPLETE"
+        }
+    )
     return {
         "status": "MISSING"
         if not any(selected)
@@ -205,6 +240,7 @@ def _coverage(states, *, advertisers, filters, kind="ad_day"):
         else "COMPLETE",
         "stale_dates": stale,
         "failed_dates": failed,
+        "incomplete_advertiser_ids": incomplete_advertisers,
         "updated_at": max(updated).isoformat() if updated else None,
     }
 

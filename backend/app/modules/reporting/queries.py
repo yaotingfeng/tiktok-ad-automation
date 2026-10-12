@@ -10,7 +10,7 @@ import base64
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
@@ -93,18 +93,41 @@ def _row_public(row: QuerySnapshotRow) -> ReportRow:
 
 
 def _summary(rows: tuple[ReportRow, ...]) -> dict[str, Any]:
-    """保存可重复的合计；混口径/混币种桶仍按桶展示，不偷偷换汇。"""
+    """汇总按币种分桶；缺覆盖的成员不参与合计并单独计数，不当成 0。
+
+    混口径/混币种桶仍按桶展示，不偷偷换汇。行内合计保持严格模式，只有这里的
+    汇总卡片用 partial 合计：已同步部分照常相加并标 PARTIAL，同时给出不完整
+    账户数与缺失日期，由页面提示"N 个账户数据不完整"。
+    """
     buckets: dict[tuple[Any, ...], list[MetricVector]] = {}
+    incomplete_advertisers: set[str] = set()
+    incomplete_dates: set[str] = set()
     for row in rows:
+        if row.coverage.get("status") not in (None, "COMPLETE", "COMPLETE_EMPTY"):
+            # 剧维度一行合并多个账户，覆盖里列出的不完整账户比首个成员账户准确。
+            listed = row.coverage.get("incomplete_advertiser_ids")
+            incomplete_advertisers.update(
+                cast(list[str], listed)
+                if listed
+                else [str(row.display.get("advertiser_id") or "")]
+            )
+            incomplete_dates.update(
+                cast(list[str], row.coverage.get("stale_dates") or [])
+            )
         for vector in row.metric_buckets:
             # 与行聚合共用同一口径键，避免汇总按可用状态拆桶后显示“多个”。
             buckets.setdefault(bucket_key(vector), []).append(vector)
-    totals: list[dict[str, Any]] = []
-    for vectors in buckets.values():
-        total = aggregate_metrics(vectors)
-        totals.append(total.model_dump(mode="json"))
+    totals = [
+        aggregate_metrics(vectors, partial=True).model_dump(mode="json")
+        for vectors in buckets.values()
+    ]
     totals.sort(key=lambda value: json.dumps(value, sort_keys=True))
-    return {"row_count": len(rows), "buckets": totals}
+    return {
+        "row_count": len(rows),
+        "buckets": totals,
+        "incomplete_advertiser_count": len(incomplete_advertisers - {""}),
+        "incomplete_dates": sorted(incomplete_dates),
+    }
 
 
 def _snapshot_public(snapshot: QuerySnapshot) -> QuerySnapshotPublic:

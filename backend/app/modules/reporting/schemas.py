@@ -15,7 +15,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.integrations.tiktok.contracts.ads import EntityRef, MaterialUseRef
 
 Dimension = Literal["account", "campaign", "adgroup", "ad", "material", "drama"]
-Availability = Literal["AVAILABLE", "MISSING", "UNAVAILABLE", "UNSUPPORTED", "FAILED"]
+# PARTIAL 只出现在汇总合计：部分成员有值时的合计，缺失成员既不参与求和也不当成 0。
+Availability = Literal[
+    "AVAILABLE", "PARTIAL", "MISSING", "UNAVAILABLE", "UNSUPPORTED", "FAILED"
+]
 CANONICAL_METRIC_KEYS = frozenset(
     {
         "spend",
