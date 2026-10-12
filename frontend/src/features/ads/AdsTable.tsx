@@ -1,4 +1,10 @@
-import { ArrowDown, ArrowUp, ArrowUpDown, Info } from "lucide-react"
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  CircleAlert,
+  Info,
+} from "lucide-react"
 import type { ReportRow } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -15,6 +21,7 @@ import {
 import {
   type AdsDimension,
   availabilityLabel,
+  availabilityReason,
   childDimensionForColumn,
   formatMetric,
   officialPlatformUrl,
@@ -24,9 +31,17 @@ import {
   rowName,
   rowOptimizationGoal,
   targetRoasLabel,
+  targetRoasReason,
 } from "./search"
 
 type DisplayColumn = { key: string; label: string }
+
+function rowIncompleteText(row: ReportRow) {
+  const dates = (row.coverage?.stale_dates as string[] | undefined) ?? []
+  return dates.length
+    ? `数据不完整，缺失日期：${dates.join("、")}`
+    : "该行数据尚未同步完整"
+}
 
 // 表头排序字段与后端 SUPPORTED_SORT_FIELDS 一一对应；每列按自己的字段排序。
 const METRIC_COLUMNS: Array<{ key: string; label: string }> = [
@@ -321,7 +336,14 @@ export function AdsTable({
                     const metric = rowMetric(row, column.key)
                     const reconciliation = `账户报表：${row.metric_buckets?.[0]?.currency ?? ""} ${formatMetric(row.display?.account_report_spend)}`
                     return (
-                      <TableCell key={column.key} className="text-xs">
+                      <TableCell
+                        key={column.key}
+                        className="text-xs"
+                        title={availabilityReason(
+                          metric.availability,
+                          metric.value,
+                        )}
+                      >
                         {availabilityLabel(metric.availability, metric.value, {
                           percent: column.key === "ctr",
                         })}
@@ -348,7 +370,10 @@ export function AdsTable({
                   {(dimension === "campaign" ||
                     dimension === "adgroup" ||
                     dimension === "ad") && (
-                    <TableCell className="text-xs">
+                    <TableCell
+                      className="text-xs"
+                      title={targetRoasReason(row)}
+                    >
                       {targetRoasLabel(row)}
                     </TableCell>
                   )}
@@ -360,24 +385,34 @@ export function AdsTable({
                     </TableCell>
                   )}
                   <TableCell className="text-xs text-muted-foreground">
-                    {row.coverage?.updated_at
-                      ? new Date(
-                          String(row.coverage.updated_at),
-                        ).toLocaleString("zh-CN", {
-                          timeZone:
-                            row.metric_buckets?.[0]?.timezone === "MIXED"
-                              ? "UTC"
-                              : row.metric_buckets?.[0]?.timezone,
-                          hour12: false,
-                        })
-                      : "尚未同步"}
-                    {row.coverage?.status !== "COMPLETE" && (
-                      <div
-                        title={`缺失日期：${(row.coverage?.stale_dates as string[] | undefined)?.join("、") ?? ""}`}
-                      >
-                        数据不完整
-                      </div>
-                    )}
+                    {/* 数据状态只给时间；不完整时用一个图标提示，缺失日期放在悬停说明，
+                        不在每一行重复输出整段文字。 */}
+                    <span className="inline-flex items-center gap-1">
+                      {row.coverage?.updated_at
+                        ? new Date(
+                            String(row.coverage.updated_at),
+                          ).toLocaleString("zh-CN", {
+                            timeZone:
+                              row.metric_buckets?.[0]?.timezone === "MIXED"
+                                ? "UTC"
+                                : row.metric_buckets?.[0]?.timezone,
+                            hour12: false,
+                          })
+                        : "—"}
+                      {row.coverage?.status !== "COMPLETE" && (
+                        <span
+                          className="inline-flex text-amber-500"
+                          role="img"
+                          aria-label={rowIncompleteText(row)}
+                          title={rowIncompleteText(row)}
+                        >
+                          <CircleAlert
+                            className="size-3.5"
+                            aria-hidden="true"
+                          />
+                        </span>
+                      )}
+                    </span>
                   </TableCell>
                   <TableCell>
                     <button

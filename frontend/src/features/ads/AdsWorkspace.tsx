@@ -17,7 +17,7 @@ import { AdsFilters } from "./AdsFilters"
 import { AdsSummary } from "./AdsSummary"
 import { AdsTable } from "./AdsTable"
 import { BulkActionBar } from "./BulkActionBar"
-import { ReportCoverageNotice } from "./ReportCoverageNotice"
+import { ReportStatusBar } from "./ReportStatusBar"
 import {
   type AdsSearch,
   childDimensionForColumn,
@@ -396,38 +396,11 @@ export function AdsWorkspace() {
           查看最新数据
         </Button>
       )}
-      {syncNotice && (
-        <p role="status" className="text-sm">
-          {syncNotice}
-        </p>
-      )}
-      {syncStatus.data?.plan.enabled && syncStatus.data.plan.slowed && (
-        <p>数据更新放缓</p>
-      )}
-      {syncStatus.data?.accounts.map((account) => (
-        <div
-          key={account.advertiser_id}
-          className="text-xs text-muted-foreground"
-        >
-          <p>
-            {account.advertiser_id} ·{" "}
-            {account.last_success_at
-              ? `数据更新到 ${new Date(account.last_success_at).toLocaleTimeString("zh-CN", { timeZone: account.timezone, hour: "2-digit", minute: "2-digit", hour12: false })}（账户本地）`
-              : "尚未同步"}
-          </p>
-          {(account.incomplete_dates ?? []).length > 0 && (
-            <p>
-              以下日期数据不完整：{(account.incomplete_dates ?? []).join("、")}
-            </p>
-          )}
-        </div>
-      ))}
-      {syncStatus.data?.plan.disabled_reason === "sync_disabled" && (
-        <p>报表同步未开启</p>
-      )}
-      {syncStatus.data?.plan.disabled_reason === "api_binding_required" && (
-        <p>该 BC 未接入 API，无法同步报表</p>
-      )}
+      <ReportStatusBar
+        status={syncStatus.data}
+        coverage={ads.query.data?.coverage}
+        notice={syncNotice}
+      />
       <Card>
         <CardContent className="p-4">
           <AdsFilters
@@ -438,7 +411,6 @@ export function AdsWorkspace() {
           />
         </CardContent>
       </Card>
-      <ReportCoverageNotice coverage={ads.query.data?.coverage} />
       <AdsSummary summary={ads.query.data?.summary} />
       {ads.query.isLoading && (
         <p className="text-xs text-muted-foreground">正在加载当前报表…</p>

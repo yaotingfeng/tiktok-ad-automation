@@ -1,5 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { availabilityLabel } from "./search"
+import { availabilityLabel, availabilityReason } from "./search"
 
 type SummaryBucket = {
   currency: string
@@ -24,7 +24,24 @@ export function AdsSummary({ summary }: { summary?: Record<string, unknown> }) {
               {column.label}
             </CardTitle>
           </CardHeader>
-          <CardContent className="text-xl font-semibold">
+          <CardContent
+            className="text-xl font-semibold"
+            title={
+              buckets.length
+                ? buckets
+                    .map((bucket) => {
+                      const value = bucket.values?.[column.key] ?? null
+                      return availabilityReason(
+                        bucket.availability?.[column.key] ??
+                          (value === null ? "MISSING" : "AVAILABLE"),
+                        value,
+                      )
+                    })
+                    .filter(Boolean)
+                    .join("；") || undefined
+                : "暂无数据，同步完成后显示"
+            }
+          >
             {buckets.length
               ? buckets
                   .map((bucket) => {

@@ -5,7 +5,10 @@ test("报表状态提示与官方链接门禁", async ({ page }) => {
   await adsBoundary(page)
   await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
   await expect(page.getByRole("heading", { name: "广告报表" })).toBeVisible()
-  await expect(page.getByText("数据覆盖", { exact: true })).toBeVisible()
+  // 状态收敛成一行结论，不再逐账户铺开，也不使用红色覆盖告警框。
+  await expect(page.getByText(/数据更新到 13:00（账户本地）/)).toBeVisible()
+  await expect(page.getByText("数据覆盖", { exact: true })).toHaveCount(0)
+  await expect(page.getByText(/^\d{19} ·/)).toHaveCount(0)
   await expect(page.getByRole("link", { name: "TikTok 后台" })).toHaveAttribute(
     "href",
     /https:\/\/ads\.tiktok\.com\/i18n\//,
@@ -62,7 +65,13 @@ test("新回收列排序、账户本地更新时间与缺失日期", async ({ pa
   await adsBoundary(page, { incomplete: true })
   await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
   await expect(page.getByText(/数据更新到 13:00（账户本地）/)).toBeVisible()
+  await expect(
+    page.getByText("1 个账户有日期缺失", { exact: true }),
+  ).toBeVisible()
+  await expect(page.getByText(/以下日期数据不完整/)).toHaveCount(0)
+  await page.getByRole("button", { name: "同步明细", exact: true }).click()
   await expect(page.getByText(/以下日期数据不完整：2026-10-04/)).toBeVisible()
+  await page.keyboard.press("Escape")
   const request = page.waitForRequest(
     (r) => new URL(r.url()).searchParams.get("sort_by") === "roas_d30",
   )
@@ -73,9 +82,11 @@ test("新回收列排序、账户本地更新时间与缺失日期", async ({ pa
     new URL((await request).url()).searchParams.get("sort_direction"),
   ).toBe("desc")
   await page.getByRole("tab", { name: "素材", exact: true }).click()
+  // 无值统一显示“—”，原因放在悬停说明。
+  await expect(page.locator('td[title="平台未提供该指标"]')).toHaveCount(2)
   await expect(
     page.getByRole("cell", { name: "平台未提供", exact: true }),
-  ).toHaveCount(2)
+  ).toHaveCount(0)
 })
 
 for (const [status, message] of [

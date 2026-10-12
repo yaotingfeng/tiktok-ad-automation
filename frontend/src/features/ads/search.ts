@@ -176,36 +176,50 @@ export function rowOptimizationGoal(row: ReportRow): string | null {
   if (normalized.includes("ROAS")) return "目标 ROAS"
   return value
 }
+// 指标单元格只显示数值；没有值时统一显示“—”，原因放在悬停说明里，
+// 避免同步未完成时整表、整排汇总卡片都是“数据缺失”之类的提示文字。
+const UNAVAILABLE_REASONS: Record<string, string> = {
+  UNSUPPORTED: "平台未提供该指标",
+  UNAVAILABLE: "暂不可用",
+  FAILED: "读取失败，请刷新重试",
+  INCOMPLETE: "该范围数据尚未同步完整",
+}
 export function availabilityLabel(
   availability: string,
   value: string | null,
   options?: { percent?: boolean },
 ): string {
   if (availability === "MULTI") return value ?? "—"
-  if (availability === "AVAILABLE") {
-    if (value === null) return "数据缺失"
-    if (options?.percent) {
-      const number = Number(value)
-      return Number.isFinite(number) ? `${(number * 100).toFixed(2)}%` : "—"
-    }
-    return formatMetric(value)
+  if (availability !== "AVAILABLE" || value === null) return "—"
+  if (options?.percent) {
+    const number = Number(value)
+    return Number.isFinite(number) ? `${(number * 100).toFixed(2)}%` : "—"
   }
-  if (availability === "UNSUPPORTED") return "平台未提供"
-  if (availability === "UNAVAILABLE") return "暂不可用"
-  if (availability === "FAILED") return "读取失败"
-  if (availability === "INCOMPLETE") return "覆盖不完整"
-  return "数据缺失"
+  return formatMetric(value)
+}
+/** “—”对应的原因说明；有值时不返回说明。 */
+export function availabilityReason(
+  availability: string,
+  value: string | null,
+): string | undefined {
+  if (
+    availability === "MULTI" ||
+    (availability === "AVAILABLE" && value !== null)
+  )
+    return undefined
+  return UNAVAILABLE_REASONS[availability] ?? "暂无数据，同步完成后显示"
 }
 export function targetRoasLabel(row: ReportRow): string {
   const target = rowTargetRoas(row)
-  if (target !== null) return formatMetric(target)
+  return target === null ? "—" : formatMetric(target)
+}
+export function targetRoasReason(row: ReportRow): string | undefined {
+  if (rowTargetRoas(row) !== null) return undefined
   const status = String(row.coverage?.status ?? "").toUpperCase()
-  if (status === "FAILED") return "读取失败"
-  if (status === "UNAVAILABLE") return "暂不可用"
+  if (status === "FAILED") return "读取失败，请刷新重试"
   if (status === "UNSUPPORTED") return "平台未提供"
-  if (status === "COMPLETE_EMPTY") return "无数据"
-  if (["MISSING", "INCOMPLETE"].includes(status)) return "目录未同步"
-  return "目录未同步"
+  if (status === "COMPLETE_EMPTY") return "未设置目标 ROAS"
+  return "广告目录尚未同步"
 }
 export function formatMetric(
   value: string | number | null | undefined,
