@@ -2913,6 +2913,56 @@ export type Message = {
 };
 
 /**
+ * MetricDefinitionPublic
+ */
+export type MetricDefinitionPublic = {
+    /**
+     * Key
+     */
+    key: string;
+    /**
+     * Unit
+     */
+    unit: 'money' | 'count' | 'ratio' | 'multiple';
+    /**
+     * Additive
+     */
+    additive: boolean;
+    /**
+     * Basic Field
+     */
+    basic_field: string | null;
+    /**
+     * Material Field
+     */
+    material_field: string | null;
+    /**
+     * Basic Name Zh
+     */
+    basic_name_zh: string;
+    /**
+     * Material Name Zh
+     */
+    material_name_zh: string | null;
+    /**
+     * Basic Name En
+     */
+    basic_name_en: string;
+    /**
+     * Material Name En
+     */
+    material_name_en: string | null;
+    /**
+     * Basic Label
+     */
+    basic_label: string;
+    /**
+     * Material Label
+     */
+    material_label: string | null;
+};
+
+/**
  * MetricVector
  */
 export type MetricVector = {
@@ -2942,7 +2992,7 @@ export type MetricVector = {
      * Availability
      */
     availability?: {
-        [key: string]: 'AVAILABLE' | 'MISSING' | 'UNAVAILABLE' | 'UNSUPPORTED' | 'FAILED';
+        [key: string]: 'AVAILABLE' | 'PARTIAL' | 'MISSING' | 'UNAVAILABLE' | 'UNSUPPORTED' | 'FAILED';
     };
 };
 
@@ -6101,6 +6151,46 @@ export type Token = {
      * Token Type
      */
     token_type?: string;
+};
+
+/**
+ * TrendPoint
+ */
+export type TrendPoint = {
+    /**
+     * At
+     */
+    at: string;
+    /**
+     * Buckets
+     */
+    buckets?: Array<MetricVector>;
+    /**
+     * Coverage
+     */
+    coverage?: 'COMPLETE' | 'INCOMPLETE' | 'MISSING';
+};
+
+/**
+ * TrendPublic
+ */
+export type TrendPublic = {
+    /**
+     * Level
+     */
+    level: 'account' | 'campaign' | 'adgroup' | 'ad' | 'material';
+    /**
+     * Granularity
+     */
+    granularity: 'day' | 'hour';
+    /**
+     * Timezone
+     */
+    timezone: string;
+    /**
+     * Points
+     */
+    points?: Array<TrendPoint>;
 };
 
 /**
@@ -10265,6 +10355,97 @@ export type adsReportingQueryAdsResponses = {
 };
 
 export type adsReportingQueryAdsResponse = adsReportingQueryAdsResponses[keyof adsReportingQueryAdsResponses];
+
+export type adsReportingMetricCatalogData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/ads/metric-catalog';
+};
+
+export type adsReportingMetricCatalogErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adsReportingMetricCatalogError = adsReportingMetricCatalogErrors[keyof adsReportingMetricCatalogErrors];
+
+export type adsReportingMetricCatalogResponses = {
+    /**
+     * Response Ads Reporting-Metric Catalog
+     *
+     * Successful Response
+     */
+    200: Array<MetricDefinitionPublic>;
+};
+
+export type adsReportingMetricCatalogResponse = adsReportingMetricCatalogResponses[keyof adsReportingMetricCatalogResponses];
+
+export type adsReportingAdTrendData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query: {
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+        /**
+         * Level
+         */
+        level: 'account' | 'campaign' | 'adgroup' | 'ad' | 'material';
+        /**
+         * Start Date
+         */
+        start_date: string;
+        /**
+         * End Date
+         */
+        end_date: string;
+        /**
+         * Granularity
+         */
+        granularity?: 'day' | 'hour';
+        /**
+         * Advertiser Ids
+         */
+        advertiser_ids?: string | null;
+        /**
+         * Ids
+         */
+        ids?: string | null;
+    };
+    url: '/api/tenants/{tenant_id}/ads/trend';
+};
+
+export type adsReportingAdTrendErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adsReportingAdTrendError = adsReportingAdTrendErrors[keyof adsReportingAdTrendErrors];
+
+export type adsReportingAdTrendResponses = {
+    /**
+     * Successful Response
+     */
+    200: TrendPublic;
+};
+
+export type adsReportingAdTrendResponse = adsReportingAdTrendResponses[keyof adsReportingAdTrendResponses];
 
 export type adsReportingAdDetailData = {
     body?: never;

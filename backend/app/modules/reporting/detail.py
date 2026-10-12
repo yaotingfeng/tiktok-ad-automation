@@ -16,10 +16,14 @@ from sqlmodel import Session, col, select
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.ads import EntityRef, MaterialUseRef
+from app.modules.ad_management.models import (
+    ManagementPreview,
+    ManagementTask,
+    ManagementTaskItem,
+)
 from app.modules.ads import directory
 from app.modules.ads.models import AdMaterialReference, AdObject
 from app.modules.reporting.query_models import read_snapshot
-from app.modules.tenants.models import AuditEvent
 
 
 class ParentRestrictionPublic(BaseModel):
@@ -141,23 +145,32 @@ def get_ad_detail(
         )
         for row in material_rows
     )
-    # AuditEvent is the only persisted operation history currently shared by A.
-    # Do not synthesize a history event from the current directory snapshot.
+    # 本工具的管理操作只记录在管理任务项里；按冻结的对象引用匹配，动作取自预览。
     history_rows = session.exec(
-        select(AuditEvent).where(
-            AuditEvent.tenant_id == context.tenant_id,
-            col(AuditEvent.target_id).in_((ref.remote_id, str(ref))),
-        ).order_by(col(AuditEvent.created_at).desc())
+        select(ManagementTaskItem, ManagementTask, ManagementPreview)
+        .join(ManagementTask, col(ManagementTask.id) == col(ManagementTaskItem.task_id))
+        .join(ManagementPreview, col(ManagementPreview.id) == col(ManagementTask.preview_id))
+        .where(
+            ManagementTaskItem.tenant_id == context.tenant_id,
+            ManagementTask.bc_id == bc_id,
+            col(ManagementTaskItem.ref).op("->>")("advertiser_id") == ref.advertiser_id,
+            col(ManagementTaskItem.ref).op("->>")("remote_id") == ref.remote_id,
+        )
+        .order_by(col(ManagementTask.created_at).desc())
+        .limit(100)
     ).all()
     history = tuple(
         {
-            "id": str(row.id),
-            "action": row.action,
-            "details": row.details,
-            "created_at": row.created_at.isoformat(),
+            "task_id": str(task.id),
+            "created_at": task.created_at.isoformat(),
+            "field": preview.mutation.get("field"),
+            "mode": preview.mutation.get("mode"),
+            "original_value": item.original_value,
+            "final_value": item.final_value,
+            "execution_result": item.execution_result,
+            "reason": item.reason,
         }
-        for row in history_rows
-        if row.details.get("bc_id") == bc_id
+        for item, task, preview in history_rows
     )
     return AdDetailPublic(
         ref=entity.ref,
