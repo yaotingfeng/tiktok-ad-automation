@@ -1,10 +1,7 @@
-from datetime import UTC, date, datetime, time, timedelta
-from decimal import Decimal
+from datetime import UTC, date, datetime
 
 from app.modules.ads.models import AdMaterialReference, AdObject
-from app.modules.reporting.models import ReportFact
 from app.modules.reporting.schemas import ReportingFilter, SelectionRequest
-from app.modules.reporting.sync_models import ReportSyncRun
 
 
 def test_material_selection_keeps_usage_ids(report_case):
@@ -62,38 +59,24 @@ def test_material_selection_keeps_usage_ids(report_case):
     )
     report_case.session.add_all([usage_a, usage_b])
     report_case.session.flush()
-    run = report_case.session.exec(
-        __import__("sqlmodel").select(ReportSyncRun)
-        .where(ReportSyncRun.tenant_id == report_case.context.tenant_id)
-        .order_by(ReportSyncRun.created_at.desc())
-    ).first()
-    assert run is not None
-    start = datetime.combine(date(2026, 9, 30), time.min, tzinfo=UTC)
-    for material_id, ad_material_id in (("vid-1", "creative-1"), ("vid-2", "creative-2")):
-        report_case.session.add(
-            ReportFact(
-                tenant_id=report_case.context.tenant_id,
-                advertiser_id="report-account",
-                subject_key=["material", "smart_plus_ad_id", "ad-1", material_id, "VIDEO"],
-                bucket_start=start,
-                bucket_end=start + timedelta(days=1),
-                granularity="DAY",
-                report_contract="material_overview",
-                metric_family="delivery",
-                currency="USD",
-                timezone="UTC",
-                attribution="default",
-                metric_name="spend",
-                attributes={"smart_plus_ad_id": "ad-1", "ad_material_id": ad_material_id},
-                value=Decimal("1"),
-                availability="AVAILABLE",
-                published_version=1,
-                request_sequence=1,
-                source_partition_key="material-test",
-                source_run_id=run.id,
-            )
-        )
-    report_case.session.flush()
+    from uuid import uuid4
+
+    from app.modules.reporting.publish import AccountMeta, publish_material_day
+    from tests.modules.reporting.test_material_query import material_row
+
+    day = date(2026, 9, 30)
+    rows = [material_row(mid, "1", adv="report-account") for mid in ("vid-1", "vid-2")]
+    for row in rows:
+        row["dimensions"]["stat_time_day"] = str(day)
+    publish_material_day(
+        report_case.session,
+        tenant_id=report_case.context.tenant_id,
+        job_id=uuid4(),
+        accounts={"report-account": AccountMeta("USD", "UTC")},
+        start=day,
+        end=day,
+        rows=rows,
+    )
     filters = ReportingFilter(
         dimension="material", start_date=date(2026, 9, 30), end_date=date(2026, 9, 30)
     )
@@ -107,6 +90,11 @@ def test_material_selection_keeps_usage_ids(report_case):
         report_case.session,
         context=report_case.context,
         bc_id=report_case.bc_id,
-        request=SelectionRequest(snapshot_id=page.snapshot.snapshot_id, mode="ALL_MATCHING"),
+        request=SelectionRequest(
+            snapshot_id=page.snapshot.snapshot_id, mode="ALL_MATCHING"
+        ),
     )
-    assert {use.ad_material_id for use in selection.material_uses} >= {"creative-1", "creative-2"}
+    assert {use.ad_material_id for use in selection.material_uses} >= {
+        "creative-1",
+        "creative-2",
+    }

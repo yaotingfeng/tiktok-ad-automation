@@ -524,9 +524,7 @@ def build_rows(
 ) -> tuple[ReportRow, ...]:
     compile_filter(filters)
     if filters.dimension == "material":
-        from app.modules.reporting.aggregation import (
-            build_dimension_rows as build_material_rows,
-        )
+        from app.modules.reporting.material_query import build_material_rows
 
         return build_material_rows(
             session, context=context, bc_id=bc_id, filters=filters
