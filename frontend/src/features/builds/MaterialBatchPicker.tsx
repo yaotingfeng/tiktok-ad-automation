@@ -167,7 +167,7 @@ export function MaterialBatchPicker({
           className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
           aria-busy={query.isFetching}
         >
-          {query.isFetching && (
+          {query.isLoading && (
             <p role="status" className="py-3 text-sm text-muted-foreground">
               正在加载素材…
             </p>

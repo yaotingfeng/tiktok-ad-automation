@@ -282,7 +282,7 @@ function AccountSelection({
         </Button>
       </div>
       <div className="min-h-0 overflow-y-auto" aria-busy={locked}>
-        {(query.isFetching || existing.isFetching) && (
+        {(query.isPending || existing.isPending) && (
           <p role="status" className="text-sm text-muted-foreground">
             正在读取账户…
           </p>

@@ -169,11 +169,6 @@ export function IdentityTargetPicker({
                 搜索
               </Button>
             </form>
-            {query.isFetching && !query.isPending ? (
-              <p role="status" className="text-sm text-muted-foreground">
-                正在更新搜索结果…
-              </p>
-            ) : null}
             <div className="max-h-96 space-y-2 overflow-y-auto">
               {data?.items?.map((item) => (
                 <Button

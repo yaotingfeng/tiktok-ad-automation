@@ -191,7 +191,6 @@ export function ServerTable<T>({
   filtered,
   emptyTitle,
   fixedLayout,
-  showRefreshStatus = true,
 }: {
   rows: T[]
   columns: ColumnDef<T>[]
@@ -202,7 +201,6 @@ export function ServerTable<T>({
   filtered: boolean
   emptyTitle: string
   fixedLayout?: { fillColumn: string }
-  showRefreshStatus?: boolean
 }) {
   const table = useReactTable({
     data: rows,
@@ -213,6 +211,7 @@ export function ServerTable<T>({
   })
   return (
     <div
+      // 后台刷新仅更新无障碍状态，不插入提示行，避免列表上下跳动。
       aria-busy={fetching}
       className="min-w-0 overflow-hidden rounded-lg border [&>[data-slot=table-container]]:max-h-[60svh] [&>[data-slot=table-container]]:overflow-y-auto"
     >
@@ -220,11 +219,6 @@ export function ServerTable<T>({
         <div className="p-4">
           <RequestError error={error} retry={retry} />
         </div>
-      )}
-      {showRefreshStatus && fetching && !loading && (
-        <p role="status" className="px-4 py-2 text-sm text-muted-foreground">
-          正在更新列表…
-        </p>
       )}
       <Table
         style={

@@ -1990,3 +1990,11 @@
 
 - 用户要求推送并部署本地优化与修复。`deploy/local.py deploy` 前三次在检查阶段停止（未触达线上），逐一修复：报表排序多余 `cast`（`8f83cbe`）；展开分页用例按验收规模推导步数与页大小（`25bda2f`、`3a3ef18`）；素材共享中断用例在后台检查进程中 SIGINT 被继承忽略，改为显式装回默认处理（`ac6ee2f`）。
 - 批次 `20261012T003438-42935f` 完成：九服务 `ac6ee2f` Ready，迁移 head `0022_provider_link_defaults`，开关 true/true/false，HTTPS 200；公司 main 与 GitHub origin 已推送。真实 TikTok/OAuth/版权方写入未验证。详见 [2026-10-12 本地发布验收](validation/2026-10-12-local-release.md)。
+
+## 2026-10-12：移除全部列表的后台刷新提示
+
+- 按用户要求扫描前端页面及弹窗列表：共享 `ServerTable`（21 个使用组件）移除“正在更新列表…”及 `showRefreshStatus` 开关，清理 4 个旧调用参数；用户目录、小程序和投放身份选择弹窗移除“正在更新搜索结果…”。账户选择、素材选择和广告报表的加载文字仅在首次请求无数据时展示，后台刷新不再插入提示行。
+- 保留查询、轮询、分页、筛选、首次加载、错误/业务状态反馈及现有操作锁定；共享表格继续使用 `aria-busy`。更新已有小程序搜索用例，断言刷新时保留旧搜索结果且无刷新提示。
+- 验证：Bun 冻结依赖安装未改锁文件；`bun run build`、12 个改动文件的 `biome check`、`git diff --check` 通过。`PLAYWRIGHT_BASE_URL=http://127.0.0.1:5197 bunx playwright test --project=workspace --workers=4 --reporter=line`：484 passed、2 failed（8.3 分钟）；报表相关最终版本单独复跑 9 passed。
+- 两个失败均为未修改的预览计时用例。全套结束后单 worker 复跑为 1 passed、1 failed；从 `5d4adc2` 导出未修改前端的独立 `/tmp/tkada-list-refresh-baseline` 副本作对照，同样 1 passed、1 failed。保留失败为 `build-preview.spec.ts:255` 精确期待“已用时 10 秒”（浏览器初始化期间时钟继续前进）；`:303` 停滞阈值用例在低负载下两边均通过。没有为本轮提示删除修改计时业务或放宽断言。
+- 本轮为本地前端修改，提交主题 `frontend: remove list refresh status messages`；未推送、未部署、未调用真实广告接口。工作区其他任务的后端、部署、AGENTS 及未跟踪产物不纳入提交。

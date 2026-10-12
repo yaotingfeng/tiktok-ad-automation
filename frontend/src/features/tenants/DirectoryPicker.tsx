@@ -130,11 +130,6 @@ export function DirectoryPicker<T extends { id: string }>({
               }}
             />
           )}
-          {enabled && query.isFetching && !query.isPending && (
-            <p role="status" className="text-sm text-muted-foreground">
-              正在更新搜索结果…
-            </p>
-          )}
           {enabled && (
             <div
               role="listbox"

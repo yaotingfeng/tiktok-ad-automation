@@ -868,7 +868,6 @@ function AccountInputTable({
       />
       <ServerTable
         fetching={query.isFetching}
-        showRefreshStatus={false}
         error={query.error}
         retry={() => void query.refetch()}
         filtered={false}
