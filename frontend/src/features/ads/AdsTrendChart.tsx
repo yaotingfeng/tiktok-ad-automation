@@ -72,7 +72,9 @@ export function AdsTrendChart({
   })
 
   // X 轴格式化：日粒度显示 MM-DD，小时粒度显示 HH:00
-  const formatXAxis = (value: string) => {
+  const formatXAxis = (value: unknown) => {
+    // 防御 null/undefined/非字符串
+    if (typeof value !== "string" || !value) return ""
     if (trend.granularity === "hour") {
       // ISO 时间戳，取小时部分
       const match = /T(\d{2}):/.exec(value)
@@ -119,9 +121,12 @@ export function AdsTrendChart({
                 labelFormatter={(value) => {
                   const point = trend.points?.find((p) => p.at === value)
                   const coverage = point?.coverage
-                  const label = formatXAxis(String(value))
+                  const label = formatXAxis(value)
                   if (coverage === "INCOMPLETE") {
                     return `${label}（该日数据不完整）`
+                  }
+                  if (coverage === "MISSING") {
+                    return `${label}（该时段无数据）`
                   }
                   return label
                 }}

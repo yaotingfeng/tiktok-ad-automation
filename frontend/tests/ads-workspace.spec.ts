@@ -183,6 +183,8 @@ test.describe("ads workspace", () => {
       page.getByRole("tab", { name: "账户", selected: true }),
     ).toBeVisible()
     const container = page.locator('[data-slot="table-container"]')
+    // 新增趋势区域后表格可能在视口下方，滚动到视图内再测量
+    await container.scrollIntoViewIfNeeded()
     const nameCell = page.locator('[data-sticky="name"]').first()
     const before = await nameCell.boundingBox()
     await container.evaluate((el) => el.scrollTo({ left: 800 }))

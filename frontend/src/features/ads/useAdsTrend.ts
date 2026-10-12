@@ -15,7 +15,19 @@ export function useAdsTrend(params: {
   const bcId = bc?.bc_id
   return useQuery({
     // 键包含 BC：切换 BC 后旧请求的结果不会显示到新 BC。
-    queryKey: ["tenant", tenantId, "ads-trend", bcId, params],
+    // queryKey 必须稳定：用基本类型而非对象引用
+    queryKey: [
+      "tenant",
+      tenantId,
+      "ads-trend",
+      bcId,
+      params.level,
+      params.advertiserIds?.join(",") ?? "",
+      params.ids?.join(",") ?? "",
+      params.startDate,
+      params.endDate,
+      params.granularity,
+    ],
     enabled: params.enabled && Boolean(tenantId && bcId),
     staleTime: 60_000,
     queryFn: async ({ signal }) =>

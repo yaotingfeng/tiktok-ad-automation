@@ -76,26 +76,36 @@ export function AdsSummary({
                 </CardHeader>
                 <CardContent className="text-xl font-semibold">
                   {buckets.length > 0 ? (
-                    buckets
-                      .map((bucket) => {
-                        const rawValue = bucket.values?.[key]
-                        const availability = bucket.availability?.[key]
-                        const formatted = formatMetric(rawValue, def.unit)
+                    <span
+                      title={
+                        buckets.some(
+                          (b) => b.availability?.[key] === "UNSUPPORTED",
+                        )
+                          ? "平台未提供"
+                          : undefined
+                      }
+                    >
+                      {buckets
+                        .map((bucket) => {
+                          const rawValue = bucket.values?.[key]
+                          const availability = bucket.availability?.[key]
+                          const formatted = formatMetric(rawValue, def.unit)
 
-                        // PARTIAL 仍显示数值，加一个小标记
-                        const isPartial = availability === "PARTIAL"
-                        const isUnsupported = availability === "UNSUPPORTED"
+                          // PARTIAL 仍显示数值，加一个小标记
+                          const isPartial = availability === "PARTIAL"
+                          const isUnsupported = availability === "UNSUPPORTED"
 
-                        if (isUnsupported) {
-                          return "—"
-                        }
+                          if (isUnsupported) {
+                            return "—"
+                          }
 
-                        const prefix =
-                          buckets.length > 1 ? `${bucket.currency} ` : ""
-                        const suffix = isPartial ? " 部分" : ""
-                        return `${prefix}${formatted}${suffix}`
-                      })
-                      .join(" / ")
+                          const prefix =
+                            buckets.length > 1 ? `${bucket.currency} ` : ""
+                          const suffix = isPartial ? " 部分" : ""
+                          return `${prefix}${formatted}${suffix}`
+                        })
+                        .join(" / ")}
+                    </span>
                   ) : (
                     <span className="text-muted-foreground">—</span>
                   )}
