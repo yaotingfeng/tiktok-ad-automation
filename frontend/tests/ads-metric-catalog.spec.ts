@@ -14,11 +14,14 @@ test("官方天数映射", () => {
 
 test("回收窗口按最晚的账户本地日判断", () => {
   const now = new Date("2026-10-12T01:00:00Z")
-  // UTC 已是 10-12，洛杉矶仍是 10-11：结束日 10-10 时第 2 天窗口对洛杉矶账户未结束。
-  expect(isRecoveryOpen(2, "2026-10-10", ["UTC"], now)).toBe(false)
+  // UTC 已是 10-12，从 10-09 算起 3 天已过，第 2 天窗口已结束；洛杉矶仍是 10-11（2 天）窗口未结束。
+  expect(isRecoveryOpen(2, "2026-10-09", ["UTC"], now)).toBe(false)
   expect(
-    isRecoveryOpen(2, "2026-10-10", ["UTC", "America/Los_Angeles"], now),
+    isRecoveryOpen(2, "2026-10-09", ["UTC", "America/Los_Angeles"], now),
   ).toBe(true)
+  // 第 0 天：当日开启，次日关闭
+  expect(isRecoveryOpen(0, "2026-10-12", ["UTC"], now)).toBe(true)
+  expect(isRecoveryOpen(0, "2026-10-11", ["UTC"], now)).toBe(false)
 })
 
 test("指标格式化", () => {
@@ -37,5 +40,15 @@ test("状态中文映射", () => {
   ).toBe("投放中")
   expect(statusLabel({ operation_status: "SOMETHING_NEW" }).label).toBe(
     "SOMETHING_NEW",
+  )
+  // 边界用例：secondary 覆盖 operation
+  expect(
+    statusLabel({ secondary_status: "CAMPAIGN_STATUS_DISABLE" }).label,
+  ).toBe("已暂停")
+  expect(
+    statusLabel({ secondary_status: "ADGROUP_STATUS_BUDGET_EXCEED" }).label,
+  ).toBe("预算不足")
+  expect(statusLabel({ secondary_status: "AD_STATUS_AUDIT_DENY" }).label).toBe(
+    "未通过",
   )
 })

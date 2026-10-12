@@ -46,7 +46,7 @@ export function isRecoveryOpen(
   return timezones.some((zone) => {
     const today = Date.parse(`${localToday(zone, now)}T00:00:00Z`)
     const daysPassed = (today - end) / 86_400_000
-    return daysPassed < day
+    return daysPassed < day + 1
   })
 }
 
