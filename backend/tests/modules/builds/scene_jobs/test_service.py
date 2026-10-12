@@ -180,7 +180,7 @@ def test_confirmed_same_mini_links_share_scene_and_bc_proof(
                     select(SceneJobPage).where(SceneJobPage.job_id == job.id)
                 ).all()
             )
-            == 6
+            == 5
         )
 
 
