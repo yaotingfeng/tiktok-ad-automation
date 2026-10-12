@@ -2089,3 +2089,11 @@
 - 验收独占：`backend_tests.py` 先多组并行跑普通用例，结束后再用 `CHECK_ACCEPTANCE_SHARDS`（默认 2）组单独跑验收，组号接续避免库名/Redis 库号冲突。按缓存估算全量约 42 分钟（普通 127 分钟/6 组 + 验收 41 分钟/2 组）；全量独占阶段尚未在 PG18 门禁中实测。
 - `test_template_item_api_removed` 参数改为固定 UUID，消除并行编排因随机 ID 误报的 5 项"并行不稳定"。
 - 验证：deploy/ci 四组单元测试通过；本机 PG17/Redis、隔离环境 `backend_tests.py --fast --shards 5`：4369 项通过 4357、失败 0、跳过 12（另 5 项为上述随机 ID 误报，已修复），用时 8.0 分钟；两阶段小样本（普通 10 项 + 验收 20 项，2+2 组）30 项全部通过；ruff 通过。
+
+## 2026-10-13：广告报表工作台重设计（规格 2026-10-12-ads-reporting-workspace-redesign）
+
+- 依据：[设计](superpowers/specs/2026-10-12-ads-reporting-workspace-redesign-design.md)、[计划](superpowers/plans/2026-10-12-ads-reporting-workspace-redesign.md)、[官方指标文档](contracts/tiktok-basic-report-metrics/README.md)。按子代理逐任务实现 + 逐任务审查 + 整体终审执行，提交 `814e2f87`..`aa53de1c`（23 个）。
+- 后端：指标字典与 `GET /ads/metric-catalog`，表头/导出/保存筛选统一官方名；新增千次展示成本、平均点击成本；行内、跨日、剧跨账户与汇总统一"部分合计"规则（缺覆盖成员不参与合计、标 PARTIAL，全部缺失仍为空，全部不支持才是平台未提供）；账户行列表响应不再带下级引用（快照内保留供冻结选择展开），补 `secondary_status`/`account_status`；新增本地事实趋势接口 `GET /ads/trend`（日≤90天、小时≤2天且限近30天、越权账户403）；详情操作记录改读管理任务项（按租户、BC、账户、类型、ID 匹配）。未新增数据库迁移、开关或 TikTok 调用。
+- 前端：默认账户维度；勾选框与当前对象名称列固定、表头固定；列名来自字典、回收窗口未结束的第 N 天列标灰；列设置（本地偏好，用户就绪后读写）；汇总卡片 7 项官方指标与按需加载的账户趋势；勾选后表头直接出现启用/暂停/修改目标 ROAS/修改预算，修复批量启用写死 DISABLE、调整方式写死 set；详情面板（概览/趋势/设置/素材/操作记录）与单对象操作，删除"查看详情""TikTok 后台""数据状态"列。另修复趋势折线颜色在 oklch 主题下不可见。
+- 验证：后端报表模块、报表合同、报表验收 248 通过；ruff、ty 通过，mypy 仍为既有 348；前端 build 通过，Playwright workspace 项目 532 通过。后端全量串行回归未跑完（本机耗时过长，已中止），以发布门禁的并行受影响检查为准；`test_ads_read_adapters::test_directory_three_levels[REGULAR-ad-OFFICIAL_API]` 在与其他测试并发争用测试库时出现一次 5 秒资源超时，本分支未改动集成层。
+- 遗留（后续处理）：从上级路径或剧打开的详情只读且无指标；状态映射个别边界（审核中/未投放）；详情概览与趋势表 PARTIAL 无单元格标记；历史查询无表达式索引；汇总中计数类指标按币种拆分。
