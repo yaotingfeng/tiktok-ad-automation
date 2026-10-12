@@ -1,4 +1,7 @@
 import type { Page } from "@playwright/test"
+import METRIC_CATALOG from "../fixtures/metricCatalog.json" with {
+  type: "json",
+}
 
 export const TENANT = "11111111-1111-4111-8111-111111111111"
 // BC 使用路由接受的十进制字符串，覆盖大于 JS 安全整数的真实 ID 格式。
@@ -17,6 +20,8 @@ export type AdsBoundaryOptions = {
   incomplete?: boolean
   reconciliation?: boolean
   balance?: boolean
+  /** 消耗列标为 PARTIAL，但行覆盖仍为 COMPLETE（成员账户平台返回 NULL 的情形）。 */
+  partialSpend?: boolean
 }
 
 export async function adsBoundary(
@@ -79,6 +84,8 @@ export async function adsBoundary(
         },
       })
     }
+    if (path.endsWith(`/tenants/${TENANT}/ads/metric-catalog`))
+      return route.fulfill({ headers, json: METRIC_CATALOG })
     if (path.endsWith(`/tenants/${TENANT}/ads`)) {
       const bc = url.searchParams.get("bc_id")
       if (bc === BC_A && options.delayedA)
@@ -95,11 +102,12 @@ export async function adsBoundary(
           ? { name: "总裁归来", drama_name: "总裁归来", provider: "嘉书" }
           : dimension === "account"
             ? {
-                name: "甲账户",
-                account_name: "甲账户",
+                name: bc === BC_B ? "乙账户" : "甲账户",
+                account_name: bc === BC_B ? "乙账户" : "甲账户",
                 account_id: ADVERTISER,
                 advertiser_id: ADVERTISER,
-                status: "ENABLE",
+                remote_id: ADVERTISER,
+                account_status: "STATUS_ENABLE",
               }
             : dimension === "adgroup"
               ? {
@@ -111,7 +119,9 @@ export async function adsBoundary(
                   adgroup_name: name,
                   adgroup_id: "adgroup-1",
                   advertiser_id: ADVERTISER,
-                  status: "ENABLE",
+                  remote_id: "adgroup-1",
+                  operation_status: "ENABLE",
+                  secondary_status: "ADGROUP_STATUS_DELIVERY_OK",
                 }
               : dimension === "ad"
                 ? {
@@ -125,15 +135,18 @@ export async function adsBoundary(
                     ad_name: name,
                     ad_id: "ad-1",
                     advertiser_id: ADVERTISER,
-                    status: "ENABLE",
+                    remote_id: "ad-1",
+                    operation_status: "ENABLE",
+                    secondary_status: "AD_STATUS_DELIVERY_OK",
                   }
                 : dimension === "material"
                   ? {
                       name: "素材-测试",
                       material_name: "素材-测试",
                       main_material_id: "material-1",
+                      account_id: ADVERTISER,
+                      account_name: "甲账户",
                       advertiser_id: ADVERTISER,
-                      status: "ENABLE",
                     }
                   : {
                       name,
@@ -143,7 +156,10 @@ export async function adsBoundary(
                       campaign_id: "campaign-1",
                       drama_name: "总裁归来",
                       advertiser_id: ADVERTISER,
-                      status: "ENABLE",
+                      remote_id: "campaign-1",
+                      operation_status: "DISABLE",
+                      secondary_status: "CAMPAIGN_STATUS_DISABLE",
+                      campaign_budget: "50",
                     }
       return route.fulfill({
         headers,
@@ -175,14 +191,18 @@ export async function adsBoundary(
                   ? { reconciliation: "DIFF", account_report_spend: "101" }
                   : {}),
               },
-              refs: [
-                {
-                  tenant_id: TENANT,
-                  advertiser_id: ADVERTISER,
-                  kind: "campaign",
-                  remote_id: "campaign-1",
-                },
-              ],
+              // 账户行在后端裁剪了列表引用，只保留 display.account_id。
+              refs:
+                dimension === "account"
+                  ? []
+                  : [
+                      {
+                        tenant_id: TENANT,
+                        advertiser_id: ADVERTISER,
+                        kind: "campaign",
+                        remote_id: "campaign-1",
+                      },
+                    ],
               material_uses: [],
               metric_buckets: [
                 {
@@ -206,7 +226,7 @@ export async function adsBoundary(
                     ctr: "0.02",
                   },
                   availability: {
-                    spend: "AVAILABLE",
+                    spend: options.partialSpend ? "PARTIAL" : "AVAILABLE",
                     revenue_d0: "AVAILABLE",
                     revenue_total: "AVAILABLE",
                     ad_impression_events: "AVAILABLE",

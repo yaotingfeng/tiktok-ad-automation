@@ -19,43 +19,96 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import { AdsNameCell, rowDisplayName } from "./AdsNameCell"
+import { type ColumnDef, formatMetric, isRecoveryOpen } from "./metricCatalog"
+import {
   type AdsDimension,
-  availabilityLabel,
-  availabilityReason,
-  childDimensionForColumn,
-  formatMetric,
-  officialPlatformUrl,
-  rowBudget,
-  rowHierarchyId,
-  rowMetric,
-  rowName,
+  DIMENSIONS,
+  metricOf,
+  nameKeyFor,
+  type ParentLink,
   rowOptimizationGoal,
-  targetRoasLabel,
-  targetRoasReason,
+  rowTargetRoas,
+  unavailableReason,
 } from "./search"
+import { statusLabel } from "./statusLabel"
 
-type DisplayColumn = { key: string; label: string }
+// 固定列必须是不透明背景，否则横向滚动时后面的列会透出来；
+// 悬停色用 color-mix 混合出与整行 hover:bg-muted/50 一致的不透明颜色。
+const STICKY_BG =
+  "bg-background group-hover:bg-[color-mix(in_oklab,var(--muted)_50%,var(--background))] group-data-[state=selected]:bg-muted"
+const STICKY_SELECT = `sticky left-0 z-20 w-10 min-w-10 max-w-10 ${STICKY_BG}`
+const STICKY_NAME = `sticky left-10 z-20 min-w-64 max-w-80 whitespace-normal shadow-[inset_-1px_0_0_var(--border)] ${STICKY_BG}`
+const HEAD = "sticky top-0 z-10 bg-background text-foreground"
 
-function rowIncompleteText(row: ReportRow) {
-  const dates = (row.coverage?.stale_dates as string[] | undefined) ?? []
-  return dates.length
-    ? `数据不完整，缺失日期：${dates.join("、")}`
-    : "该行数据尚未同步完整"
+const PARTIAL_TEXT = "部分账户数据未同步完整"
+
+type ConfigColumn = {
+  key: string
+  label: string
+  sortBy?: string
+  render: (row: ReportRow) => { text: string; title?: string }
 }
 
-// 表头排序字段与后端 SUPPORTED_SORT_FIELDS 一一对应；每列按自己的字段排序。
-const METRIC_COLUMNS: Array<{ key: string; label: string }> = [
-  { key: "spend", label: "消耗" },
-  { key: "roas_total", label: "总收入 ROAS" },
-  ...["d0", "d3", "d7", "d14", "d30"].map((day) => ({
-    key: `roas_${day}`,
-    label: `${day.toUpperCase()} ROAS`,
-  })),
-  { key: "revenue_total", label: "总收入" },
-  { key: "ad_impression_events", label: "广告展示事件总数" },
-  { key: "cost_per_ad_impression_event", label: "单次广告展示事件成本" },
-  { key: "ctr", label: "点击率" },
-]
+function budgetOf(row: ReportRow) {
+  const display = row.display ?? {}
+  const value =
+    display.budget ?? display.campaign_budget ?? display.adgroup_budget
+  return value
+    ? { text: formatMetric(value, "money") }
+    : { text: "—", title: "未设置预算或目录尚未同步" }
+}
+
+const TARGET_ROAS: ConfigColumn = {
+  key: "target_roas",
+  label: "目标 ROAS",
+  sortBy: "target_roas",
+  render: (row) => {
+    const value = rowTargetRoas(row)
+    return value
+      ? { text: formatMetric(value, "multiple") }
+      : { text: "—", title: "未设置目标 ROAS 或目录尚未同步" }
+  },
+}
+const OPTIMIZATION_GOAL: ConfigColumn = {
+  key: "optimization_goal",
+  label: "优化目标",
+  render: (row) => ({ text: rowOptimizationGoal(row) ?? "—" }),
+}
+
+/** 配置列不属于报表事实：系列看预算，广告组看预算与出价，广告看所属广告组的出价。 */
+function configColumns(dimension: AdsDimension): ConfigColumn[] {
+  switch (dimension) {
+    case "campaign":
+      return [
+        {
+          key: "budget",
+          label: "预算",
+          sortBy: "campaign_budget",
+          render: budgetOf,
+        },
+      ]
+    case "adgroup":
+      return [
+        {
+          key: "budget",
+          label: "预算",
+          sortBy: "adgroup_budget",
+          render: budgetOf,
+        },
+        TARGET_ROAS,
+        OPTIMIZATION_GOAL,
+      ]
+    case "ad":
+      return [TARGET_ROAS, OPTIMIZATION_GOAL]
+    default:
+      return []
+  }
+}
 
 function SortableHead({
   label,
@@ -81,7 +134,7 @@ function SortableHead({
       type="button"
       variant="ghost"
       size="sm"
-      className="h-8 gap-1 px-1 font-medium"
+      className="h-8 gap-1 px-1 font-medium text-inherit"
       onClick={() => onSort(sortBy)}
       aria-label={`${label}${active ? (direction === "asc" ? "，当前升序" : "，当前降序") : "，点击排序"}`}
     >
@@ -91,52 +144,151 @@ function SortableHead({
   )
 }
 
-function displayColumns(dimension: AdsDimension): DisplayColumn[] {
-  switch (dimension) {
-    case "account":
-      return [{ key: "account_name", label: "账户" }]
-    case "campaign":
-      return [
-        { key: "account_name", label: "账户" },
-        { key: "campaign_name", label: "系列" },
-      ]
-    case "adgroup":
-      return [
-        { key: "account_name", label: "账户" },
-        { key: "campaign_name", label: "系列" },
-        { key: "adgroup_name", label: "广告组" },
-      ]
-    case "ad":
-      return [
-        { key: "account_name", label: "账户" },
-        { key: "campaign_name", label: "系列" },
-        { key: "adgroup_name", label: "广告组" },
-        { key: "ad_name", label: "广告" },
-      ]
-    case "material":
-      return [{ key: "material_name", label: "素材" }]
-    case "drama":
-      return [{ key: "drama_name", label: "剧" }]
-  }
-}
-
-function displayText(row: ReportRow, key: string) {
+function BalanceCell({ row }: { row: ReportRow }) {
+  const display = row.display ?? {}
   return (
-    row.display?.[key] ??
-    (key === "drama_name" ? row.display?.name : null) ??
-    "—"
+    <TableCell
+      className="text-xs"
+      title={display.balance_updated_at ?? undefined}
+    >
+      {display.balance != null
+        ? `${display.balance_currency} ${formatMetric(display.balance, "money")}${display.balance_scope === "PORTFOLIO" ? "（共享资金池）" : ""}`
+        : "—"}
+    </TableCell>
   )
 }
+
+function MetricValue({
+  value,
+  availability,
+  column,
+  currency,
+}: {
+  value: string | null
+  availability: string
+  column: ColumnDef
+  currency?: string
+}) {
+  // PARTIAL 表示部分成员账户的值缺失，已同步部分照常显示，只加小标记。
+  const shown =
+    (availability === "AVAILABLE" || availability === "PARTIAL") &&
+    value !== null
+  const prefix = currency ? `${currency} ` : ""
+  if (!shown)
+    return (
+      <span title={currency ? unavailableReason(availability) : undefined}>
+        {prefix}—
+      </span>
+    )
+  return (
+    <span className="inline-flex items-center gap-1">
+      {prefix}
+      {formatMetric(value, column.unit)}
+      {availability === "PARTIAL" && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              role="img"
+              aria-label={PARTIAL_TEXT}
+              className="inline-flex text-amber-500"
+            >
+              <CircleAlert className="size-3" aria-hidden="true" />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>{PARTIAL_TEXT}</TooltipContent>
+        </Tooltip>
+      )}
+    </span>
+  )
+}
+
+function MetricCell({
+  row,
+  column,
+  dimension,
+}: {
+  row: ReportRow
+  column: ColumnDef
+  dimension: AdsDimension
+}) {
+  const buckets = row.metric_buckets ?? []
+  const reconciliation =
+    column.key === "spend" &&
+    dimension === "account" &&
+    row.display?.reconciliation === "DIFF"
+      ? `账户报表：${buckets[0]?.currency ?? ""} ${formatMetric(row.display?.account_report_spend, "money")}`
+      : null
+  const single = buckets.length <= 1 ? metricOf(row, column.key) : null
+  const singleShown =
+    single &&
+    (single.availability === "AVAILABLE" ||
+      single.availability === "PARTIAL") &&
+    single.value !== null
+  return (
+    <TableCell
+      data-metric={column.key}
+      className="text-xs"
+      title={
+        single && !singleShown
+          ? unavailableReason(single.availability)
+          : undefined
+      }
+    >
+      {single ? (
+        <MetricValue
+          value={single.value}
+          availability={single.availability}
+          column={column}
+        />
+      ) : (
+        // 多币种不能合并，每个币种独立一行。
+        <div className="flex flex-col">
+          {buckets.map((bucket, index) => {
+            const metric = metricOf(row, column.key, index)
+            return (
+              <MetricValue
+                key={`${bucket.currency}-${bucket.timezone}`}
+                value={metric.value}
+                availability={metric.availability}
+                column={column}
+                currency={metric.currency}
+              />
+            )
+          })}
+        </div>
+      )}
+      {reconciliation && (
+        <span
+          className="ml-1 inline-flex"
+          role="img"
+          title={reconciliation}
+          aria-label={reconciliation}
+        >
+          <Info className="size-3.5" aria-hidden="true" />
+        </span>
+      )}
+    </TableCell>
+  )
+}
+
+function browserTimezone() {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone
+}
+
 export function AdsTable({
   rows,
   dimension,
+  columns,
+  endDate,
   selected,
   allMatching,
   total,
   onToggle,
-  onSelectAll,
+  onToggleAllOnPage,
+  onSelectAllMatching,
   onOpen,
-  onNavigate,
+  onDrill,
+  onFilterParent,
   nextCursor,
   hasPrevious,
   onNext,
@@ -147,13 +299,17 @@ export function AdsTable({
 }: {
   rows: ReportRow[]
   dimension: AdsDimension
+  columns: ColumnDef[]
+  endDate: string
   selected: Set<string>
   allMatching: boolean
   total: number
   onToggle: (row: ReportRow, checked: boolean) => void
-  onSelectAll: () => void
+  onToggleAllOnPage: (checked: boolean) => void
+  onSelectAllMatching: () => void
   onOpen: (row: ReportRow) => void
-  onNavigate: (row: ReportRow, columnKey: string) => void
+  onDrill: (row: ReportRow) => void
+  onFilterParent: (link: ParentLink, advertiserId: string) => void
   nextCursor?: string | null
   hasPrevious: boolean
   onNext: () => void
@@ -162,9 +318,22 @@ export function AdsTable({
   sortDirection: "asc" | "desc"
   onSort: (sortBy: string) => void
 }) {
-  const columns = displayColumns(dimension)
-  const currentAll =
+  const config = configColumns(dimension)
+  const pageSelected =
     rows.length > 0 && rows.every((row) => selected.has(row.row_key))
+  // 回收窗口按各账户本地日判断；当前页没有单一时区可用时退回浏览器时区。
+  const zones = [
+    ...new Set(
+      rows.flatMap((row) =>
+        (row.metric_buckets ?? [])
+          .map((bucket) => bucket.timezone)
+          .filter((zone): zone is string => Boolean(zone) && zone !== "MIXED"),
+      ),
+    ),
+  ]
+  const timezones = zones.length ? zones : [browserTimezone()]
+  const dimensionLabel =
+    DIMENSIONS.find((item) => item.value === dimension)?.label ?? "名称"
   return (
     <Card>
       <CardContent className="p-0">
@@ -175,37 +344,34 @@ export function AdsTable({
         )}
         <Table>
           <TableHeader>
-            <TableRow>
-              <TableHead className="w-12">
+            <TableRow className="hover:bg-transparent">
+              <TableHead
+                data-sticky="select"
+                className={`${HEAD} left-0 z-30 w-10 min-w-10 max-w-10 px-3`}
+              >
                 <Checkbox
-                  checked={currentAll}
-                  onCheckedChange={(checked) => {
-                    if (checked) onSelectAll()
-                  }}
-                  aria-label="选择全部匹配结果"
+                  checked={pageSelected}
+                  onCheckedChange={(checked) =>
+                    onToggleAllOnPage(checked === true)
+                  }
+                  aria-label="选择当前页"
                 />
               </TableHead>
-              {columns.map((column, index) => (
-                <TableHead
-                  key={column.key}
-                  className={
-                    index === 0
-                      ? "sticky left-12 z-10 bg-background"
-                      : undefined
-                  }
-                >
-                  <SortableHead
-                    label={column.label}
-                    sortBy={column.key}
-                    activeSortBy={sortBy}
-                    direction={sortDirection}
-                    onSort={onSort}
-                  />
-                </TableHead>
-              ))}
-              <TableHead>状态</TableHead>
+              <TableHead
+                data-sticky="name"
+                className={`${HEAD} left-10 z-30 min-w-64 max-w-80 shadow-[inset_-1px_0_0_var(--border)]`}
+              >
+                <SortableHead
+                  label={dimensionLabel}
+                  sortBy={nameKeyFor(dimension)}
+                  activeSortBy={sortBy}
+                  direction={sortDirection}
+                  onSort={onSort}
+                />
+              </TableHead>
+              <TableHead className={HEAD}>状态</TableHead>
               {dimension === "account" && (
-                <TableHead>
+                <TableHead className={HEAD}>
                   <SortableHead
                     label="余额"
                     sortBy="balance"
@@ -215,226 +381,111 @@ export function AdsTable({
                   />
                 </TableHead>
               )}
-              {METRIC_COLUMNS.map((column) => (
-                <TableHead key={column.key}>
-                  <SortableHead
-                    label={column.label}
-                    sortBy={column.key}
-                    activeSortBy={sortBy}
-                    direction={sortDirection}
-                    onSort={onSort}
-                  />
+              {config.map((column) => (
+                <TableHead key={column.key} className={HEAD}>
+                  {column.sortBy ? (
+                    <SortableHead
+                      label={column.label}
+                      sortBy={column.sortBy}
+                      activeSortBy={sortBy}
+                      direction={sortDirection}
+                      onSort={onSort}
+                    />
+                  ) : (
+                    column.label
+                  )}
                 </TableHead>
               ))}
-              {(dimension === "campaign" || dimension === "adgroup") && (
-                <TableHead>
-                  <SortableHead
-                    label={dimension === "campaign" ? "系列预算" : "广告组预算"}
-                    sortBy={
-                      dimension === "campaign"
-                        ? "campaign_budget"
-                        : "adgroup_budget"
-                    }
-                    activeSortBy={sortBy}
-                    direction={sortDirection}
-                    onSort={onSort}
-                  />
-                </TableHead>
-              )}
-              {(dimension === "campaign" ||
-                dimension === "adgroup" ||
-                dimension === "ad") && (
-                <TableHead>
-                  <SortableHead
-                    label="目标 ROAS"
-                    sortBy="target_roas"
-                    activeSortBy={sortBy}
-                    direction={sortDirection}
-                    onSort={onSort}
-                  />
-                </TableHead>
-              )}
-              {(dimension === "campaign" ||
-                dimension === "adgroup" ||
-                dimension === "ad") && <TableHead>优化目标</TableHead>}
-              <TableHead>数据状态</TableHead>
-              <TableHead>详情</TableHead>
+              {columns.map((column) => {
+                // 第 N 天指标在窗口结束前仍会增长：表头标灰提示，数值照常显示。
+                const open =
+                  column.recoveryDay !== null &&
+                  isRecoveryOpen(column.recoveryDay, endDate, timezones)
+                return (
+                  <TableHead
+                    key={column.key}
+                    data-metric={column.key}
+                    data-recovery-open={open ? "true" : undefined}
+                    className={`${HEAD} ${open ? "text-muted-foreground" : ""}`}
+                  >
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex">
+                          <SortableHead
+                            label={column.label}
+                            sortBy={column.key}
+                            activeSortBy={sortBy}
+                            direction={sortDirection}
+                            onSort={onSort}
+                          />
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>{column.fullName}</p>
+                        {open && <p>回收窗口未结束，数值仍会增长</p>}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TableHead>
+                )
+              })}
             </TableRow>
           </TableHeader>
           <TableBody>
             {rows.map((row) => {
-              const url = officialPlatformUrl(row)
+              const checked = selected.has(row.row_key)
+              const status = statusLabel(row.display ?? {})
               return (
-                <TableRow key={row.row_key}>
-                  <TableCell>
+                <TableRow
+                  key={row.row_key}
+                  className="group"
+                  data-state={checked ? "selected" : undefined}
+                >
+                  <TableCell data-sticky="select" className={STICKY_SELECT}>
                     <Checkbox
-                      checked={selected.has(row.row_key)}
-                      onCheckedChange={(checked) =>
-                        onToggle(row, checked === true)
-                      }
-                      aria-label={`选择 ${rowName(row)}`}
+                      checked={checked}
+                      onCheckedChange={(value) => onToggle(row, value === true)}
+                      aria-label={`选择 ${rowDisplayName(row, dimension)}`}
                     />
                   </TableCell>
-                  {columns.map((column, index) => {
-                    const label = displayText(row, column.key)
-                    const identifier = rowHierarchyId(row, column.key)
-                    const canNavigate =
-                      childDimensionForColumn(column.key) !== null
-                    return (
-                      <TableCell
-                        key={column.key}
-                        className={`max-w-56 min-w-0 text-xs ${index === 0 ? "sticky left-12 z-10 bg-background" : ""}`}
-                      >
-                        <div className="flex flex-col items-start">
-                          <button
-                            type="button"
-                            className="block max-w-56 min-w-0 whitespace-normal break-words text-left font-medium hover:underline"
-                            title={label === "—" ? rowName(row) : label}
-                            onClick={() =>
-                              canNavigate
-                                ? onNavigate(row, column.key)
-                                : onOpen(row)
-                            }
-                          >
-                            {label === "—" ? rowName(row) : label}
-                          </button>
-                          {identifier && (
-                            <button
-                              type="button"
-                              className="text-[10px] text-muted-foreground hover:underline"
-                              onClick={() =>
-                                canNavigate
-                                  ? onNavigate(row, column.key)
-                                  : onOpen(row)
-                              }
-                            >
-                              {identifier}
-                            </button>
-                          )}
-                        </div>
-                      </TableCell>
-                    )
-                  })}
+                  <TableCell data-sticky="name" className={STICKY_NAME}>
+                    <AdsNameCell
+                      row={row}
+                      dimension={dimension}
+                      onOpen={onOpen}
+                      onDrill={onDrill}
+                      onFilterParent={onFilterParent}
+                    />
+                  </TableCell>
                   <TableCell>
-                    <Badge variant="outline" className="text-[10px]">
-                      {row.display?.status ??
-                        row.display?.operation_status ??
-                        "未知"}
+                    <Badge
+                      variant={status.tone}
+                      className="text-[10px]"
+                      title={status.raw}
+                    >
+                      {status.label}
                     </Badge>
                   </TableCell>
-                  {dimension === "account" && (
-                    <TableCell
-                      className="text-xs"
-                      title={row.display?.balance_updated_at ?? undefined}
-                    >
-                      {row.display?.balance != null
-                        ? `${row.display.balance_currency} ${formatMetric(row.display.balance)}${row.display.balance_scope === "PORTFOLIO" ? "（共享资金池）" : ""}`
-                        : "—"}
-                    </TableCell>
-                  )}
-                  {METRIC_COLUMNS.map((column) => {
-                    const metric = rowMetric(row, column.key)
-                    const reconciliation = `账户报表：${row.metric_buckets?.[0]?.currency ?? ""} ${formatMetric(row.display?.account_report_spend)}`
+                  {dimension === "account" && <BalanceCell row={row} />}
+                  {config.map((column) => {
+                    const cell = column.render(row)
                     return (
                       <TableCell
                         key={column.key}
                         className="text-xs"
-                        title={availabilityReason(
-                          metric.availability,
-                          metric.value,
-                        )}
+                        title={cell.title}
                       >
-                        {availabilityLabel(metric.availability, metric.value, {
-                          percent: column.key === "ctr",
-                        })}
-                        {column.key === "spend" &&
-                          dimension === "account" &&
-                          row.display?.reconciliation === "DIFF" && (
-                            <span
-                              className="ml-1 inline-flex"
-                              role="img"
-                              title={reconciliation}
-                              aria-label={reconciliation}
-                            >
-                              <Info className="size-3.5" aria-hidden="true" />
-                            </span>
-                          )}
+                        {cell.text}
                       </TableCell>
                     )
                   })}
-                  {(dimension === "campaign" || dimension === "adgroup") && (
-                    <TableCell className="text-xs">
-                      {rowBudget(row, dimension) ?? "—"}
-                    </TableCell>
-                  )}
-                  {(dimension === "campaign" ||
-                    dimension === "adgroup" ||
-                    dimension === "ad") && (
-                    <TableCell
-                      className="text-xs"
-                      title={targetRoasReason(row)}
-                    >
-                      {targetRoasLabel(row)}
-                    </TableCell>
-                  )}
-                  {(dimension === "campaign" ||
-                    dimension === "adgroup" ||
-                    dimension === "ad") && (
-                    <TableCell className="text-xs">
-                      {rowOptimizationGoal(row) ?? "—"}
-                    </TableCell>
-                  )}
-                  <TableCell className="text-xs text-muted-foreground">
-                    {/* 数据状态只给时间；不完整时用一个图标提示，缺失日期放在悬停说明，
-                        不在每一行重复输出整段文字。 */}
-                    <span className="inline-flex items-center gap-1">
-                      {row.coverage?.updated_at
-                        ? new Date(
-                            String(row.coverage.updated_at),
-                          ).toLocaleString("zh-CN", {
-                            timeZone:
-                              row.metric_buckets?.[0]?.timezone === "MIXED"
-                                ? "UTC"
-                                : row.metric_buckets?.[0]?.timezone,
-                            hour12: false,
-                          })
-                        : "—"}
-                      {row.coverage?.status !== "COMPLETE" && (
-                        <span
-                          className="inline-flex text-amber-500"
-                          role="img"
-                          aria-label={rowIncompleteText(row)}
-                          title={rowIncompleteText(row)}
-                        >
-                          <CircleAlert
-                            className="size-3.5"
-                            aria-hidden="true"
-                          />
-                        </span>
-                      )}
-                    </span>
-                  </TableCell>
-                  <TableCell>
-                    <button
-                      type="button"
-                      className="mr-2 underline"
-                      onClick={() => onOpen(row)}
-                    >
-                      查看详情
-                    </button>
-                    {url ? (
-                      <a
-                        className="underline"
-                        href={url}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        TikTok 后台
-                      </a>
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </TableCell>
+                  {columns.map((column) => (
+                    <MetricCell
+                      key={column.key}
+                      row={row}
+                      column={column}
+                      dimension={dimension}
+                    />
+                  ))}
                 </TableRow>
               )
             })}
@@ -462,7 +513,7 @@ export function AdsTable({
               variant="outline"
               size="sm"
               disabled={!rows.length || allMatching}
-              onClick={onSelectAll}
+              onClick={onSelectAllMatching}
             >
               选择全部匹配结果
             </Button>

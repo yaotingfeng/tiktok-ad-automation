@@ -192,6 +192,7 @@ test.describe("广告管理工作台", () => {
   test("当前选择打开预览并提交后进入任务详情", async ({ page }) => {
     const { previewBodies } = await managementBoundary(page)
     await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "系列", exact: true }).click()
     await page
       .getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" })
       .check()
@@ -245,6 +246,7 @@ test.describe("广告管理工作台", () => {
   test("任务列表显示状态且 viewer 隐藏写入口", async ({ page }) => {
     await managementBoundary(page, { viewer: true })
     await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "系列", exact: true }).click()
     await page
       .getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" })
       .check()
@@ -267,6 +269,7 @@ test.describe("广告管理工作台", () => {
       unsupported: true,
     })
     await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "系列", exact: true }).click()
     await page
       .getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" })
       .check()

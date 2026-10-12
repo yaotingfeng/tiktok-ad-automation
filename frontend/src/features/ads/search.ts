@@ -31,19 +31,6 @@ export const DIMENSIONS: Array<{ value: AdsDimension; label: string }> = [
   { value: "material", label: "素材" },
   { value: "drama", label: "剧" },
 ]
-const CHILD_DIMENSION_BY_COLUMN: Record<string, AdsDimension> = {
-  account_name: "campaign",
-  campaign_name: "adgroup",
-  adgroup_name: "ad",
-  ad_name: "material",
-}
-const ID_COLUMN_BY_DISPLAY_COLUMN: Record<string, string> = {
-  account_name: "account_id",
-  campaign_name: "campaign_id",
-  adgroup_name: "adgroup_id",
-  ad_name: "ad_id",
-  material_name: "main_material_id",
-}
 export function defaultAdsSearch(): AdsSearch {
   // 工作台按已审定规则默认今日；日期交给后端按各账户本地日解释。
   const today = new Date()
@@ -53,14 +40,15 @@ export function defaultAdsSearch(): AdsSearch {
     String(today.getDate()).padStart(2, "0"),
   ].join("-")
   return {
-    dimension: "campaign",
+    // 默认从账户看起，按消耗降序，先看花钱最多的对象。
+    dimension: "account",
     start_date: defaultDate,
     end_date: defaultDate,
     query: "",
     page: 1,
     limit: 50,
-    sort_by: "row_key",
-    sort_direction: "asc",
+    sort_by: "spend",
+    sort_direction: "desc",
   }
 }
 /** 将页面状态映射为生成客户端查询合同，避免直接拼 HTTP 请求。 */
@@ -101,72 +89,10 @@ export function rowName(row: ReportRow): string {
     row.row_key
   )
 }
-export function rowDrama(row: ReportRow): string | null {
-  const display = row.display ?? {}
-  if (display.drama_name || display.drama)
-    return display.drama_name ?? display.drama ?? null
-  const parts = rowName(row).split("-")
-  return parts.length > 1 && parts[1].trim() ? parts[1].trim() : null
-}
-export function childDimensionForColumn(
-  columnKey: string,
-): AdsDimension | null {
-  return CHILD_DIMENSION_BY_COLUMN[columnKey] ?? null
-}
-export function rowHierarchyId(
-  row: ReportRow,
-  columnKey: string,
-): string | null {
-  const display = row.display ?? {}
-  const idKey = ID_COLUMN_BY_DISPLAY_COLUMN[columnKey]
-  if (idKey && display[idKey]) return display[idKey]
-  const expectedKind = idKey?.replace("_id", "")
-  const ref = row.refs?.find((item) => item.kind === expectedKind)
-  if (ref?.remote_id) return ref.remote_id
-  if (columnKey === "account_name") {
-    return display.account_id ?? row.refs?.[0]?.advertiser_id ?? null
-  }
-  return null
-}
-export function rowMetric(
-  row: ReportRow,
-  metric: string,
-): { value: string | null; availability: string } {
-  const buckets = row.metric_buckets ?? []
-  if (buckets.length > 1) {
-    // 每个币种独立展示；缺失不能被其他币种的值或零覆盖。
-    return {
-      availability: "MULTI",
-      value: buckets
-        .map((bucket) => {
-          const value = bucket.values?.[metric] ?? null
-          return `${bucket.currency} ${availabilityLabel(bucket.availability?.[metric] ?? (value === null ? "MISSING" : "AVAILABLE"), value, { percent: metric === "ctr" })}`
-        })
-        .join(" / "),
-    }
-  }
-  const bucket = buckets[0]
-  const value = bucket?.values?.[metric] ?? null
-  return {
-    value,
-    availability:
-      bucket?.availability?.[metric] ??
-      (value === null ? "MISSING" : "AVAILABLE"),
-  }
-}
-
 export function rowTargetRoas(row: ReportRow): string | null {
   const display = row.display ?? {}
   // 目标 ROAS 来自已同步的目录配置，和报表收入/消耗指标分开显示。
   return display.target_roas ?? null
-}
-export function rowBudget(
-  row: ReportRow,
-  dimension: AdsDimension,
-): string | null {
-  const key = dimension === "campaign" ? "campaign_budget" : "adgroup_budget"
-  const value = row.display?.[key]
-  return value ? formatMetric(value) : null
 }
 export function rowOptimizationGoal(row: ReportRow): string | null {
   const value = row.display?.optimization_goal
@@ -183,6 +109,10 @@ const UNAVAILABLE_REASONS: Record<string, string> = {
   UNAVAILABLE: "暂不可用",
   FAILED: "读取失败，请刷新重试",
   INCOMPLETE: "该范围数据尚未同步完整",
+}
+/** 表格单元格"—"的悬停说明。 */
+export function unavailableReason(availability: string): string {
+  return UNAVAILABLE_REASONS[availability] ?? "暂无数据，同步完成后显示"
 }
 export function availabilityLabel(
   availability: string,
@@ -207,21 +137,9 @@ export function availabilityReason(
     (availability === "AVAILABLE" && value !== null)
   )
     return undefined
-  return UNAVAILABLE_REASONS[availability] ?? "暂无数据，同步完成后显示"
+  return unavailableReason(availability)
 }
-export function targetRoasLabel(row: ReportRow): string {
-  const target = rowTargetRoas(row)
-  return target === null ? "—" : formatMetric(target)
-}
-export function targetRoasReason(row: ReportRow): string | undefined {
-  if (rowTargetRoas(row) !== null) return undefined
-  const status = String(row.coverage?.status ?? "").toUpperCase()
-  if (status === "FAILED") return "读取失败，请刷新重试"
-  if (status === "UNSUPPORTED") return "平台未提供"
-  if (status === "COMPLETE_EMPTY") return "未设置目标 ROAS"
-  return "广告目录尚未同步"
-}
-export function formatMetric(
+function formatMetric(
   value: string | number | null | undefined,
   digits = 2,
 ): string {
@@ -229,20 +147,87 @@ export function formatMetric(
   const number = Number(value)
   return Number.isFinite(number) ? number.toFixed(digits) : "—"
 }
-/** 只允许已核验的 TikTok 后台固定路由，素材/剧没有可安全拼接的官方链接。 */
-export function officialPlatformUrl(row: ReportRow): string | null {
-  const ref = row.refs?.[0]
-  if (!ref || !["campaign", "adgroup", "ad"].includes(ref.kind)) return null
-  if (
-    !/^[A-Za-z0-9_-]{1,128}$/.test(ref.remote_id) ||
-    !/^[A-Za-z0-9_-]{1,128}$/.test(ref.advertiser_id)
+
+const NAME_KEY: Record<AdsDimension, string> = {
+  account: "account_name",
+  campaign: "campaign_name",
+  adgroup: "adgroup_name",
+  ad: "ad_name",
+  material: "material_name",
+  drama: "drama_name",
+}
+// 名称单元格的 ID 行；后端在维度行上统一给出 remote_id，素材用主素材 ID。
+const ID_KEY: Partial<Record<AdsDimension, string>> = {
+  account: "account_id",
+  campaign: "campaign_id",
+  adgroup: "adgroup_id",
+  ad: "ad_id",
+  material: "main_material_id",
+}
+// 逐级下钻：账户 → 系列 → 广告组 → 广告 → 素材；素材、剧没有下级。
+const CHILD: Partial<Record<AdsDimension, AdsDimension>> = {
+  account: "campaign",
+  campaign: "adgroup",
+  adgroup: "ad",
+  ad: "material",
+}
+export const nameKeyFor = (dimension: AdsDimension) => NAME_KEY[dimension]
+export const childDimension = (dimension: AdsDimension) =>
+  CHILD[dimension] ?? null
+
+/** 当前维度对象自身的 ID；剧维度没有平台 ID。 */
+export function rowObjectId(
+  row: ReportRow,
+  dimension: AdsDimension,
+): string | null {
+  if (dimension === "drama") return null
+  const display = row.display ?? {}
+  const idKey = ID_KEY[dimension]
+  return (
+    display.remote_id ??
+    (idKey ? display[idKey] : null) ??
+    row.refs?.[0]?.remote_id ??
+    null
   )
-    return null
-  const route =
-    ref.kind === "campaign"
-      ? "campaign"
-      : ref.kind === "adgroup"
-        ? "adgroup"
-        : "ad"
-  return `https://ads.tiktok.com/i18n/${route}/manage?aadvid=${encodeURIComponent(ref.advertiser_id)}&id=${encodeURIComponent(ref.remote_id)}`
+}
+
+export type ParentLink = {
+  kind: "account" | "campaign" | "adgroup"
+  id: string
+  name: string
+}
+/** 名称下方的上级路径；只列出比当前维度更高的层级，素材与剧不显示路径。 */
+export function parentPath(
+  row: ReportRow,
+  dimension: AdsDimension,
+): ParentLink[] {
+  const display = row.display ?? {}
+  const order = ["account", "campaign", "adgroup"] as const
+  const depth = {
+    account: 0,
+    campaign: 1,
+    adgroup: 2,
+    ad: 3,
+    material: 0,
+    drama: 0,
+  }[dimension]
+  return order
+    .slice(0, depth)
+    .map((kind) => ({
+      kind,
+      id: display[`${kind}_id`] ?? "",
+      name: display[`${kind}_name`] ?? display[`${kind}_id`] ?? "",
+    }))
+    .filter((link) => link.id)
+}
+/** 单个币种桶里的指标值与可用状态；多币种时由调用方逐桶渲染。 */
+export function metricOf(row: ReportRow, key: string, bucket = 0) {
+  const vector = row.metric_buckets?.[bucket]
+  const value = vector?.values?.[key] ?? null
+  return {
+    value,
+    availability:
+      vector?.availability?.[key] ?? (value === null ? "MISSING" : "AVAILABLE"),
+    currency: vector?.currency ?? "",
+  }
 }

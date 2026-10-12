@@ -17,13 +17,15 @@ import { AdsFilters } from "./AdsFilters"
 import { AdsSummary } from "./AdsSummary"
 import { AdsTable } from "./AdsTable"
 import { BulkActionBar } from "./BulkActionBar"
+import { columnsFor, useMetricCatalog } from "./metricCatalog"
 import { ReportStatusBar } from "./ReportStatusBar"
 import {
   type AdsSearch,
-  childDimensionForColumn,
+  childDimension,
   DIMENSIONS,
   defaultAdsSearch,
-  rowHierarchyId,
+  type ParentLink,
+  rowObjectId,
   toReportingFilter,
 } from "./search"
 import { useAdsQuery } from "./useAdsQuery"
@@ -43,6 +45,7 @@ export function AdsWorkspace() {
       : { ...applied, page: 1, cursor: undefined, snapshot_id: undefined }
   const ads = useAdsQuery(requestSearch, queryRevision)
   const items = ads.query.data?.items ?? []
+  const catalog = useMetricCatalog()
   const [actionError, setActionError] = useState<string | null>(null)
   const [frozenSelection, setFrozenSelection] =
     useState<FrozenSelection | null>(null)
@@ -282,19 +285,12 @@ export function AdsWorkspace() {
     setSearch(next)
     setApplied(next)
   }
-  const navigateToChild = (row: ReportRow, columnKey: string) => {
-    const dimension = childDimensionForColumn(columnKey)
-    if (!dimension) {
-      setSelectedRow(row)
-      return
-    }
-    const parentId = rowHierarchyId(row, columnKey)
-    const advertiserId =
-      row.display?.account_id ?? row.refs?.[0]?.advertiser_id ?? null
-    if (!parentId || !advertiserId) {
-      setActionError("当前行缺少层级 ID，暂时无法跳转下级报表")
-      return
-    }
+  // 切换到某个层级并按父级 ID 筛选；下钻和点击上级路径共用同一套状态重置。
+  const filterTo = (
+    dimension: AdsSearch["dimension"],
+    advertiserId: string,
+    parentId: string,
+  ) => {
     const next: AdsSearch = {
       ...applied,
       dimension,
@@ -311,6 +307,38 @@ export function AdsWorkspace() {
     setActionError(null)
     setSearch(next)
     setApplied(next)
+  }
+  const navigateToChild = (row: ReportRow) => {
+    const dimension = childDimension(applied.dimension)
+    if (!dimension) {
+      setSelectedRow(row)
+      return
+    }
+    const parentId = rowObjectId(row, applied.dimension)
+    const advertiserId =
+      row.display?.account_id ??
+      row.display?.advertiser_id ??
+      row.refs?.[0]?.advertiser_id ??
+      null
+    if (!parentId || !advertiserId) {
+      setActionError("当前行缺少层级 ID，暂时无法跳转下级报表")
+      return
+    }
+    filterTo(dimension, advertiserId, parentId)
+  }
+  const filterByParent = (link: ParentLink, advertiserId: string) => {
+    if (!advertiserId) {
+      setActionError("当前行缺少账户 ID，暂时无法按上级筛选")
+      return
+    }
+    // 点了哪个上级，就看它的直接下级：账户 → 系列，系列 → 广告组，广告组 → 广告。
+    const dimension =
+      link.kind === "account"
+        ? "campaign"
+        : link.kind === "campaign"
+          ? "adgroup"
+          : "ad"
+    filterTo(dimension, advertiserId, link.id)
   }
   const runAction = (action: () => void) => {
     setActionError(null)
@@ -457,19 +485,26 @@ export function AdsWorkspace() {
                 <AdsTable
                   rows={items}
                   dimension={dimension.value}
+                  columns={columnsFor(catalog.data ?? [], dimension.value)}
+                  endDate={applied.end_date}
                   selected={ads.selection.selected}
                   allMatching={ads.selection.allMatching}
                   total={ads.query.data?.total ?? 0}
                   onToggle={ads.selection.toggleRow}
-                  onSelectAll={ads.selection.selectAllMatching}
+                  onToggleAllOnPage={(checked) => {
+                    for (const row of items)
+                      ads.selection.toggleRow(row, checked)
+                  }}
+                  onSelectAllMatching={ads.selection.selectAllMatching}
                   onOpen={setSelectedRow}
-                  onNavigate={navigateToChild}
+                  onDrill={navigateToChild}
+                  onFilterParent={filterByParent}
                   nextCursor={ads.query.data?.next_cursor}
                   hasPrevious={cursorHistory.length > 0}
                   onNext={nextPage}
                   onPrevious={previousPage}
-                  sortBy={applied.sort_by ?? "row_key"}
-                  sortDirection={applied.sort_direction ?? "asc"}
+                  sortBy={applied.sort_by ?? "spend"}
+                  sortDirection={applied.sort_direction ?? "desc"}
                   onSort={sort}
                 />
               </TabsContent>
