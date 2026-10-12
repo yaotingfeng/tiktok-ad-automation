@@ -228,3 +228,46 @@ def test_removed_binding_disables_existing_plan(session, sync_seed):
     ensure_bc_plans(session, now=NOW)
     assert session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a")).enabled is False
     assert "acc-1" not in account_owners(session, tenant_id=sync_seed.tenant_id)
+
+
+def test_confirmed_zero_spend_accounts_count_as_complete(session, sync_seed):
+    """平台确认零消耗的账户记为已完成 0 行；已有成功状态不被覆盖。"""
+    from app.modules.reporting.planner import (
+        CONFIRMED_EMPTY_KINDS,
+        daily_window,
+        mark_confirmed_empty,
+    )
+    from app.modules.reporting.store_models import ReportSyncState
+
+    ensure_bc_plans(session, now=NOW)
+    plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
+    kept = ReportSyncState(
+        tenant_id=sync_seed.tenant_id,
+        advertiser_id="acc-1",
+        report_kind="ad_day",
+        stat_date=date(2026, 10, 12),
+        status="COMPLETE",
+        row_count=7,
+        last_success_at=NOW - timedelta(hours=1),
+    )
+    session.add(kept)
+    session.flush()
+    mark_confirmed_empty(
+        session, plan, inactive=["acc-1"], window_fn=daily_window(NOW), now=NOW
+    )
+    states = session.exec(
+        select(ReportSyncState).where(
+            ReportSyncState.tenant_id == sync_seed.tenant_id,
+            ReportSyncState.advertiser_id == "acc-1",
+        )
+    ).all()
+    assert {s.report_kind for s in states} == set(CONFIRMED_EMPTY_KINDS)
+    assert len(states) == 32 * len(CONFIRMED_EMPTY_KINDS)
+    assert all(s.status == "COMPLETE" for s in states)
+    assert (
+        session.get(
+            ReportSyncState,
+            (sync_seed.tenant_id, "acc-1", "ad_day", date(2026, 10, 12)),
+        ).row_count
+        == 7
+    )

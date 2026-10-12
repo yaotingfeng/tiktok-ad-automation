@@ -241,11 +241,25 @@ def _plan_one(database_engine, redis_client, key, now, deadline, hot, material):
                     if plan.next_hot_at <= now:
                         active = _active(session, counted, plan, accounts, now, days=1)
                         planner.plan_hot(session, plan, active=active, now=now)
+                        planner.mark_confirmed_empty(
+                            session,
+                            plan,
+                            inactive=sorted(set(accounts) - set(active)),
+                            window_fn=lambda tz: planner._hot_window(tz, now),
+                            now=now,
+                        )
                         plan.last_active_advertiser_ids = active
                         plan.next_hot_at = _advance(plan.next_hot_at, now, hot)
                     if plan.next_daily_at <= now:
                         active = _active(session, counted, plan, accounts, now, days=32)
                         planner.plan_daily(session, plan, active_32d=active, now=now)
+                        planner.mark_confirmed_empty(
+                            session,
+                            plan,
+                            inactive=sorted(set(accounts) - set(active)),
+                            window_fn=planner.daily_window(now),
+                            now=now,
+                        )
                         plan.next_daily_at = planner._next_daily(now)
             if plan.next_material_at <= now:
                 planner.plan_material(

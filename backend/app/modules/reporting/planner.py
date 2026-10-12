@@ -21,7 +21,11 @@ from app.modules.accounts.models import AdvertiserAccount, DiscoveryRun
 from app.modules.accounts.routing import freeze_route
 from app.modules.reporting.jobs import enqueue_job
 from app.modules.reporting.partitions import ensure_month_partitions_for_range
-from app.modules.reporting.store_models import AdSyncAccount, AdSyncBc
+from app.modules.reporting.store_models import (
+    AdSyncAccount,
+    AdSyncBc,
+    ReportSyncState,
+)
 
 HOT_INTERVAL = timedelta(minutes=30)
 MATERIAL_INTERVAL = timedelta(minutes=60)
@@ -293,6 +297,48 @@ def _group_by_window(
     return grouped
 
 
+# 筛选时平台确认窗口内零消耗的账户不会再建报表任务；为它们记一条“已完成、
+# 0 行”的同步状态，否则这些账户永远显示缺数据，汇总也会因一个缺失成员整体为空。
+CONFIRMED_EMPTY_KINDS = ("ad_day", "campaign_day_utc", "account_day", "material_day")
+
+
+def mark_confirmed_empty(
+    session, plan: AdSyncBc, *, inactive: Sequence[str], window_fn, now: datetime
+) -> int:
+    """只补从未成功或失败的日期；已有成功状态（及其事实）保持不动。"""
+    marked = 0
+    for (start, end), advertisers in _group_by_window(
+        session, plan, inactive, window_fn
+    ).items():
+        day = start
+        while day <= end:
+            for advertiser in advertisers:
+                for kind in CONFIRMED_EMPTY_KINDS:
+                    key = (plan.tenant_id, advertiser, kind, day)
+                    state = session.get(ReportSyncState, key)
+                    if state is not None and state.status == "COMPLETE":
+                        continue
+                    if state is None:
+                        state = ReportSyncState(
+                            tenant_id=plan.tenant_id,
+                            advertiser_id=advertiser,
+                            report_kind=kind,
+                            stat_date=day,
+                            status="COMPLETE",
+                        )
+                        session.add(state)
+                    state.status, state.error_code, state.row_count = (
+                        "COMPLETE",
+                        None,
+                        0,
+                    )
+                    state.last_success_at = state.updated_at = now
+                    marked += 1
+            day += timedelta(days=1)
+    session.flush()
+    return marked
+
+
 def plan_hot(
     session, plan: AdSyncBc, *, active: Sequence[str], now: datetime, tier: str = "hot"
 ) -> int:
@@ -363,8 +409,8 @@ def _shards(start: date, end: date, days: int = 30):
         cursor = stop + timedelta(days=1)
 
 
-def plan_daily(session, plan, *, active_32d, now) -> int:
-    count = 0
+def daily_window(now: datetime):
+    """每日回刷窗口：各账户本地今天往前共 REFRESH_DAYS 天。"""
 
     def window(tz):
         return (
@@ -372,8 +418,13 @@ def plan_daily(session, plan, *, active_32d, now) -> int:
             local_today(tz, now),
         )
 
+    return window
+
+
+def plan_daily(session, plan, *, active_32d, now) -> int:
+    count = 0
     for (start, end), advertisers in _group_by_window(
-        session, plan, active_32d, window
+        session, plan, active_32d, daily_window(now)
     ).items():
         for s, e in _shards(start, end):
             for batch in batch_accounts(
