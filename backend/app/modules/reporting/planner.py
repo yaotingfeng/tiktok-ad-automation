@@ -10,7 +10,7 @@ from math import ceil
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import exists, text
+from sqlalchemy import exists, or_, text
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -51,7 +51,7 @@ def _actor(session, tenant_id: UUID, bc_id: str, connection_id: UUID) -> UUID | 
             # completed run intentionally has no BC scope.  Keep accepting
             # exact-BC runs for older/MCP-shaped records, but never cross the
             # tenant or connection boundary above.
-            (DiscoveryRun.bc_id == bc_id) | col(DiscoveryRun.bc_id).is_(None),
+            or_(DiscoveryRun.bc_id == bc_id, col(DiscoveryRun.bc_id).is_(None)),
             DiscoveryRun.status == "COMPLETE",
         )
         .order_by(
