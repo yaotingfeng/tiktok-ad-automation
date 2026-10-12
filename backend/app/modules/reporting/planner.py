@@ -47,7 +47,11 @@ def _actor(session, tenant_id: UUID, bc_id: str, connection_id: UUID) -> UUID | 
         .where(
             DiscoveryRun.tenant_id == tenant_id,
             DiscoveryRun.connection_id == connection_id,
-            DiscoveryRun.bc_id == bc_id,
+            # Official API account discovery is connection-wide, so its
+            # completed run intentionally has no BC scope.  Keep accepting
+            # exact-BC runs for older/MCP-shaped records, but never cross the
+            # tenant or connection boundary above.
+            (DiscoveryRun.bc_id == bc_id) | DiscoveryRun.bc_id.is_(None),
             DiscoveryRun.status == "COMPLETE",
         )
         .order_by(

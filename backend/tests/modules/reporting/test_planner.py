@@ -27,6 +27,27 @@ def test_auth_creates_plans_without_manual_refresh(session, sync_seed):
     )
 
 
+def test_connection_level_discovery_creates_official_api_plans(session, sync_seed):
+    """Official API discovery is connection-wide and stores no BC scope."""
+    from app.modules.accounts.models import DiscoveryRun
+
+    for run in session.exec(
+        select(DiscoveryRun).where(
+            DiscoveryRun.tenant_id == sync_seed.tenant_id,
+            DiscoveryRun.connection_id == sync_seed.connection.id,
+        )
+    ).all():
+        run.bc_id = None
+    session.flush()
+
+    assert ensure_bc_plans(session, now=NOW) == 2
+    plans = session.exec(
+        select(AdSyncBc).where(AdSyncBc.tenant_id == sync_seed.tenant_id)
+    ).all()
+    assert {p.bc_id for p in plans} == {"bc-a", "bc-b"}
+    assert all(p.actor_id == sync_seed.actor_id for p in plans)
+
+
 def test_shared_account_is_planned_once(session, sync_seed):
     ensure_bc_plans(session, now=NOW)
     owners = account_owners(session, tenant_id=sync_seed.tenant_id)
