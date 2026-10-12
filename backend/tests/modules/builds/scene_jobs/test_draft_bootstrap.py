@@ -181,7 +181,7 @@ def test_unknown_accounts_bootstrap_before_strict_resolution_then_wait_for_share
     with Session(engine) as session:
         assert session.get(BuildDraft, draft_id).status == "READY"
         assert session.get(DraftPreparation, task_id).status == "READY"
-    assert len(wire[0]) == 7
+    assert len(wire[0]) == 6
 
 
 @pytest.mark.parametrize(
@@ -628,7 +628,7 @@ def test_name_choice_persists_exact_links_and_recovers_same_request(
             body=body.model_copy(update={"minis_id": "another"}),
         )
     assert raised.value.code == "idempotency_conflict"
-    assert len(wire[0]) == 7  # 查看和选择目录均不新增 TikTok 请求。
+    assert len(wire[0]) == 6  # 查看和选择目录均不新增 TikTok 请求。
 
 
 @pytest.mark.parametrize(
@@ -778,4 +778,4 @@ def test_mini_choice_queues_only_scene_refresh_and_preserves_prepared_inputs(
         assert db.get(BuildDraft, draft_id).status == "READY"
         assert snapshot(db) == before
         assert db.exec(select(CapabilityJob.id)).all() == capabilities_before
-    assert len(wire[0]) == 7
+    assert len(wire[0]) == 6

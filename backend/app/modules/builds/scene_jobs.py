@@ -16,6 +16,7 @@ from app.integrations.tiktok.bounded_resources import bounded_session
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.integrations.tiktok.gateway import open_tiktok_gateway
 from app.integrations.tiktok.read_normalization import scene_arguments
+from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.jobs.admission import admission_policy
 from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit
@@ -49,7 +50,6 @@ RESOURCES: tuple[SceneResource, ...] = (
     "cta",
     "vbo",
     "regions",
-    "budget",
 )
 register_dispatch_task(TASK_NAME, "resources")
 logger = logging.getLogger(__name__)
@@ -124,20 +124,6 @@ def ensure_scene_preparation(
             job = None
         else:
             return ScenePreparation(job.id, "queued")
-    if (
-        job is not None
-        and job.status == "COMPLETE"
-        and job.expires_at
-        and job.expires_at > now
-    ):
-        # 仅完整投放场景需要预算证据；用于解析手动链接的 Minis 目录只读取
-        # minis，必须保留其完成结果，否则会无限重建目录、永远无法选定小程序。
-        if scope["minis_id"] and "budget" not in job.facts:
-            job.status = "STALE"
-            job.error_code = "scene_contract_changed"
-            session.add(job)
-            session.flush()
-            job = None
     if (
         job is not None
         and job.status == "COMPLETE"
@@ -225,8 +211,7 @@ def ensure_scene_preparation(
             "tiktok_local_resources_unavailable",
         }:
             job.status = "PENDING"
-            job.resource = "budget"
-            job.next_page = 1
+            # 从真正失败的资源及页码恢复，不能跳到无关的历史预算查询。
             job.error_code = None
             job.revision += 1
             session.add(job)
@@ -627,7 +612,8 @@ def process_scene_job(
             if current.status == "PENDING":
                 _queue(session, current)
     except Exception as error:
-        logger.exception("scene refresh failed for resource=%s", resource)
+        if not isinstance(error, AccountAdmissionDeferred):
+            logger.exception("scene refresh failed for resource=%s", resource)
         code = error.code if isinstance(error, DomainError) else "scene_refresh_failed"
         allowed = {
             "scene_response_unverified",
@@ -669,8 +655,16 @@ def process_scene_job(
                 return
             current.claim_token, current.claimed_until = None, None
             current.error_code = safe
-            current.failure_count += 1
             current.revision += 1
+            if isinstance(error, AccountAdmissionDeferred):
+                # 并发准入排队不代表远端失败，不能耗尽重试次数；释放 Worker 槽位。
+                _queue(
+                    session,
+                    current,
+                    delay=max(1, min(60, (error.retry_after_ms + 999) // 1000)),
+                )
+                return
+            current.failure_count += 1
             if safe in {
                 "scene_refresh_stale",
                 "scene_evidence_expired",

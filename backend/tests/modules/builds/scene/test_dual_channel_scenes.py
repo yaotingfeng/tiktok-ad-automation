@@ -1,4 +1,4 @@
-"""同一正式 SceneJob 通过真实 SDK/MCP HTTP 完成六类只读事实。"""
+"""同一正式 SceneJob 通过真实 SDK/MCP HTTP 完成五类只读事实。"""
 
 from uuid import uuid4
 
@@ -160,10 +160,10 @@ def test_one_frozen_job_completes_on_both_channels_without_api_app_for_mcp(
     for resource, data in scene_responses(case).items():
         enqueue(gateway_wire, resource, data)
         job = run(database_engine, redis_client, case, receipt.job_id)
-        assert job.status == ("COMPLETE" if resource == "budget" else "PENDING"), (
+        assert job.status == ("COMPLETE" if resource == "regions" else "PENDING"), (
             job.error_code
         )
-    assert len(business_calls(gateway_wire, case["route"].channel)) == 6
+    assert len(business_calls(gateway_wire, case["route"].channel)) == 5
     with Session(database_engine) as db:
         facts = read_scene_context(
             db,
@@ -182,7 +182,8 @@ def test_one_frozen_job_completes_on_both_channels_without_api_app_for_mcp(
         pages = db.exec(
             select(SceneJobPage).where(SceneJobPage.job_id == receipt.job_id)
         ).all()
-        assert len(pages) == 6
+        assert len(pages) == 5
+        assert {page.resource for page in pages} == {"identity", "minis", "cta", "vbo", "regions"}
         assert all(page.source_revision and page.endpoint for page in pages)
         if case["route"].channel == "OFFICIAL_MCP":
             assert all(page.mcp_request_id for page in pages)

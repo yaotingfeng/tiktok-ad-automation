@@ -40,7 +40,6 @@ RESOURCES: tuple[SceneResource, ...] = (
     "cta",
     "vbo",
     "regions",
-    "budget",
 )
 
 
@@ -64,7 +63,7 @@ def _require_bounded_worker() -> None:
         raise DomainError("scene_worker_unbounded", "场景刷新需要有界后台任务")
 
 
-SCENE_CONTRACT_REVISION = "dual-channel-scene-2026-10-06-v6-budget-evidence"
+SCENE_CONTRACT_REVISION = "dual-channel-scene-2026-10-12-v7-strategy-validation"
 
 
 def scene_scope_basis(*, route: FrozenTikTokRoute, business: dict[str, Any]) -> str:
@@ -313,12 +312,7 @@ def _assemble_scene(
     group: dict[str, Any] = {}
     creative: dict[str, Any] = {}
     cta: dict[str, Any] = {}
-    budget_facts = facts.get("budget", {})
-    constraints, missing = limits.constraints_for(
-        scope["access"].currency,
-        adgroup_budget_verified=bool(budget_facts.get("dynamic_count", 0)),
-        adgroup_budget_facts=budget_facts,
-    )
+    constraints, missing = limits.constraints_for(scope["access"].currency)
     reasons.extend(missing)
     if not scope["minis_id"]:
         reasons.append("minis_selection_required")
@@ -412,7 +406,9 @@ def _assemble_scene(
             group["optimization_event"] = "IMPRESSION_LEVEL_AD_REVENUE"
             group["vbo_window"] = "ZERO_DAY"
         else:
-            reasons.append("minis_vbo_unverified")
+            # 最低 ROAS 资格只约束目标 ROAS；最高价值不能被该资格误拦。
+            # 保留同一账户场景缓存，预览按实际策略决定是否可用。
+            constraints["bid_capabilities"].pop("TARGET_ROAS")
     revision = sha256(
         (
             scope["basis"] + "".join(sorted(str(value) for value in evidence_ids))

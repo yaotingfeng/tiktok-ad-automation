@@ -1998,3 +1998,11 @@
 - 验证：Bun 冻结依赖安装未改锁文件；`bun run build`、12 个改动文件的 `biome check`、`git diff --check` 通过。`PLAYWRIGHT_BASE_URL=http://127.0.0.1:5197 bunx playwright test --project=workspace --workers=4 --reporter=line`：484 passed、2 failed（8.3 分钟）；报表相关最终版本单独复跑 9 passed。
 - 两个失败均为未修改的预览计时用例。全套结束后单 worker 复跑为 1 passed、1 failed；从 `5d4adc2` 导出未修改前端的独立 `/tmp/tkada-list-refresh-baseline` 副本作对照，同样 1 passed、1 failed。保留失败为 `build-preview.spec.ts:255` 精确期待“已用时 10 秒”（浏览器初始化期间时钟继续前进）；`:303` 停滞阈值用例在低负载下两边均通过。没有为本轮提示删除修改计时业务或放宽断言。
 - 本轮为本地前端修改，提交主题 `frontend: remove list refresh status messages`；未推送、未部署、未调用真实广告接口。工作区其他任务的后端、部署、AGENTS 及未跟踪产物不纳入提交。
+
+## 2026-10-12：准备页减少远端读取并提高并发
+
+- 用户授权优化生产准备耗时。定位 3 剧 × 10 账户批次的场景阶段约 138 秒，60 次读取由资源 Worker 单槽串行处理。
+- 移除历史 Smart+ 广告组预算 GET 及预算资格前置依赖；USD 预算/精度和预算竞价组合在本地校验。最低 ROAS 资格移至实际目标 ROAS 策略检查，最高价值不再被该资格阻断；账户场景仍按冻结授权隔离缓存。
+- 资源 Worker 拟由 1 槽调整为 4 槽，保留单接口并发 2 /应用及租户并发 4 等线上限流。修复本地准入等待被累计为失败、以及手动恢复错误跳到预算资源的问题。
+- 本地独立 PostgreSQL 18/Redis 8：新增预算/策略回归先红后绿；真实 Redis 配额占用六次等待与释放恢复、四路重复投递单次 HTTP 通过；原生 Minis/IAA 合同回归通过；API/MCP 双通道场景 20 项通过。Ruff、ty、部署资产测试、差异检查通过。初轮在本机高负载下遇到 `test_minis_catalog_resolves_link_without_full_scene_budget_evidence[OFFICIAL_MCP]` 期限超时和并发测试等待超时；独立库按 CI 临时库配置后复测通过，生产期限未改。
+- 尚未发布：生产有真实 RUNNING 搭建，等待本批结束；提交后由本地发布门禁检查受影响范围、备份和隔离恢复。细节见 [准备提速记录](validation/2026-10-12-preparation-speed.md)。
