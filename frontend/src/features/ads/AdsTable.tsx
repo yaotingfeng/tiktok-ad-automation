@@ -342,155 +342,159 @@ export function AdsTable({
             已选择全部 {total} 条匹配结果，可取消单行。
           </div>
         )}
-        <Table>
-          <TableHeader>
-            <TableRow className="hover:bg-transparent">
-              <TableHead
-                data-sticky="select"
-                className={`${HEAD} left-0 z-30 w-10 min-w-10 max-w-10 px-3`}
-              >
-                <Checkbox
-                  checked={pageSelected}
-                  onCheckedChange={(checked) =>
-                    onToggleAllOnPage(checked === true)
-                  }
-                  aria-label="选择当前页"
-                />
-              </TableHead>
-              <TableHead
-                data-sticky="name"
-                className={`${HEAD} left-10 z-30 min-w-64 max-w-80 shadow-[inset_-1px_0_0_var(--border)]`}
-              >
-                <SortableHead
-                  label={dimensionLabel}
-                  sortBy={nameKeyFor(dimension)}
-                  activeSortBy={sortBy}
-                  direction={sortDirection}
-                  onSort={onSort}
-                />
-              </TableHead>
-              <TableHead className={HEAD}>状态</TableHead>
-              {dimension === "account" && (
-                <TableHead className={HEAD}>
+        <div className="max-h-[calc(100vh-28rem)] overflow-auto">
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead
+                  data-sticky="select"
+                  className={`${HEAD} left-0 z-30 w-10 min-w-10 max-w-10 px-3`}
+                >
+                  <Checkbox
+                    checked={pageSelected}
+                    onCheckedChange={(checked) =>
+                      onToggleAllOnPage(checked === true)
+                    }
+                    aria-label="选择当前页"
+                  />
+                </TableHead>
+                <TableHead
+                  data-sticky="name"
+                  className={`${HEAD} left-10 z-30 min-w-64 max-w-80 shadow-[inset_-1px_0_0_var(--border)]`}
+                >
                   <SortableHead
-                    label="余额"
-                    sortBy="balance"
+                    label={dimensionLabel}
+                    sortBy={nameKeyFor(dimension)}
                     activeSortBy={sortBy}
                     direction={sortDirection}
                     onSort={onSort}
                   />
                 </TableHead>
-              )}
-              {config.map((column) => (
-                <TableHead key={column.key} className={HEAD}>
-                  {column.sortBy ? (
+                <TableHead className={HEAD}>状态</TableHead>
+                {dimension === "account" && (
+                  <TableHead className={HEAD}>
                     <SortableHead
-                      label={column.label}
-                      sortBy={column.sortBy}
+                      label="余额"
+                      sortBy="balance"
                       activeSortBy={sortBy}
                       direction={sortDirection}
                       onSort={onSort}
                     />
-                  ) : (
-                    column.label
-                  )}
-                </TableHead>
-              ))}
-              {columns.map((column) => {
-                // 第 N 天指标在窗口结束前仍会增长：表头标灰提示，数值照常显示。
-                const open =
-                  column.recoveryDay !== null &&
-                  isRecoveryOpen(column.recoveryDay, endDate, timezones)
-                return (
-                  <TableHead
-                    key={column.key}
-                    data-metric={column.key}
-                    data-recovery-open={open ? "true" : undefined}
-                    className={`${HEAD} ${open ? "text-muted-foreground" : ""}`}
-                  >
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span className="inline-flex">
-                          <SortableHead
-                            label={column.label}
-                            sortBy={column.key}
-                            activeSortBy={sortBy}
-                            direction={sortDirection}
-                            onSort={onSort}
-                          />
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>{column.fullName}</p>
-                        {open && <p>回收窗口未结束，数值仍会增长</p>}
-                      </TooltipContent>
-                    </Tooltip>
                   </TableHead>
+                )}
+                {config.map((column) => (
+                  <TableHead key={column.key} className={HEAD}>
+                    {column.sortBy ? (
+                      <SortableHead
+                        label={column.label}
+                        sortBy={column.sortBy}
+                        activeSortBy={sortBy}
+                        direction={sortDirection}
+                        onSort={onSort}
+                      />
+                    ) : (
+                      column.label
+                    )}
+                  </TableHead>
+                ))}
+                {columns.map((column) => {
+                  // 第 N 天指标在窗口结束前仍会增长：表头标灰提示，数值照常显示。
+                  const open =
+                    column.recoveryDay !== null &&
+                    isRecoveryOpen(column.recoveryDay, endDate, timezones)
+                  return (
+                    <TableHead
+                      key={column.key}
+                      data-metric={column.key}
+                      data-recovery-open={open ? "true" : undefined}
+                      className={`${HEAD} ${open ? "text-muted-foreground" : ""}`}
+                    >
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="inline-flex">
+                            <SortableHead
+                              label={column.label}
+                              sortBy={column.key}
+                              activeSortBy={sortBy}
+                              direction={sortDirection}
+                              onSort={onSort}
+                            />
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>{column.fullName}</p>
+                          {open && <p>回收窗口未结束，数值仍会增长</p>}
+                        </TooltipContent>
+                      </Tooltip>
+                    </TableHead>
+                  )
+                })}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row) => {
+                const checked = selected.has(row.row_key)
+                const status = statusLabel(row.display ?? {})
+                return (
+                  <TableRow
+                    key={row.row_key}
+                    className="group"
+                    data-state={checked ? "selected" : undefined}
+                  >
+                    <TableCell data-sticky="select" className={STICKY_SELECT}>
+                      <Checkbox
+                        checked={checked}
+                        onCheckedChange={(value) =>
+                          onToggle(row, value === true)
+                        }
+                        aria-label={`选择 ${rowDisplayName(row, dimension)}`}
+                      />
+                    </TableCell>
+                    <TableCell data-sticky="name" className={STICKY_NAME}>
+                      <AdsNameCell
+                        row={row}
+                        dimension={dimension}
+                        onOpen={onOpen}
+                        onDrill={onDrill}
+                        onFilterParent={onFilterParent}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={status.tone}
+                        className="text-[10px]"
+                        title={status.raw}
+                      >
+                        {status.label}
+                      </Badge>
+                    </TableCell>
+                    {dimension === "account" && <BalanceCell row={row} />}
+                    {config.map((column) => {
+                      const cell = column.render(row)
+                      return (
+                        <TableCell
+                          key={column.key}
+                          className="text-xs"
+                          title={cell.title}
+                        >
+                          {cell.text}
+                        </TableCell>
+                      )
+                    })}
+                    {columns.map((column) => (
+                      <MetricCell
+                        key={column.key}
+                        row={row}
+                        column={column}
+                        dimension={dimension}
+                      />
+                    ))}
+                  </TableRow>
                 )
               })}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((row) => {
-              const checked = selected.has(row.row_key)
-              const status = statusLabel(row.display ?? {})
-              return (
-                <TableRow
-                  key={row.row_key}
-                  className="group"
-                  data-state={checked ? "selected" : undefined}
-                >
-                  <TableCell data-sticky="select" className={STICKY_SELECT}>
-                    <Checkbox
-                      checked={checked}
-                      onCheckedChange={(value) => onToggle(row, value === true)}
-                      aria-label={`选择 ${rowDisplayName(row, dimension)}`}
-                    />
-                  </TableCell>
-                  <TableCell data-sticky="name" className={STICKY_NAME}>
-                    <AdsNameCell
-                      row={row}
-                      dimension={dimension}
-                      onOpen={onOpen}
-                      onDrill={onDrill}
-                      onFilterParent={onFilterParent}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <Badge
-                      variant={status.tone}
-                      className="text-[10px]"
-                      title={status.raw}
-                    >
-                      {status.label}
-                    </Badge>
-                  </TableCell>
-                  {dimension === "account" && <BalanceCell row={row} />}
-                  {config.map((column) => {
-                    const cell = column.render(row)
-                    return (
-                      <TableCell
-                        key={column.key}
-                        className="text-xs"
-                        title={cell.title}
-                      >
-                        {cell.text}
-                      </TableCell>
-                    )
-                  })}
-                  {columns.map((column) => (
-                    <MetricCell
-                      key={column.key}
-                      row={row}
-                      column={column}
-                      dimension={dimension}
-                    />
-                  ))}
-                </TableRow>
-              )
-            })}
-          </TableBody>
-        </Table>
+            </TableBody>
+          </Table>
+        </div>
         {!rows.length && (
           <p className="p-8 text-center text-sm text-muted-foreground">
             没有匹配的广告

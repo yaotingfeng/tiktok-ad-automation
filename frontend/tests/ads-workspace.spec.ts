@@ -295,4 +295,41 @@ test.describe("ads workspace", () => {
     await expect(page.getByTestId("ads-trend-chart")).toBeVisible()
     expect(trendCalls.count).toBe(1)
   })
+
+  test("隐藏列在刷新后保持", async ({ page }) => {
+    await adsBoundary(page)
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("button", { name: "列设置" }).click()
+    await page.getByRole("menuitemcheckbox", { name: "千次展示成本 (CPM)" }).click()
+    await page.keyboard.press("Escape")
+    await expect(page.getByRole("columnheader", { name: /千次展示成本/ })).toHaveCount(0)
+    await page.reload()
+    await expect(page.getByRole("columnheader", { name: /千次展示成本/ })).toHaveCount(0)
+  })
+
+  test("保存筛选提交字典列键", async ({ page }) => {
+    await adsBoundary(page)
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await expect(page.getByRole("columnheader", { name: /消耗/ })).toBeVisible()
+    const saveButton = page.getByText("保存筛选")
+    await expect(saveButton).toBeVisible()
+    await expect(saveButton).toBeEnabled()
+    const request = page.waitForRequest((r) => r.url().endsWith("/report-views") && r.method() === "POST")
+    await saveButton.click()
+    const body = (await request).postDataJSON()
+    expect(body.columns).toContain("roas_d0")
+    expect(body.columns).not.toContain("status_raw")
+  })
+
+  test("表头固定，垂直滚动后位置不变", async ({ page }) => {
+    await adsBoundary(page)
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    const container = page.locator('[data-slot="table-container"]')
+    await container.scrollIntoViewIfNeeded()
+    const header = page.locator('[data-sticky="name"]').first()
+    const before = (await header.boundingBox())?.y
+    await container.evaluate((el) => el.scrollTo({ top: 200 }))
+    const after = (await header.boundingBox())?.y
+    expect(after).toBe(before)
+  })
 })

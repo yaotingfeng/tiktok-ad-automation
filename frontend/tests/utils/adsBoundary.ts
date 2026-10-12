@@ -461,8 +461,25 @@ export async function adsBoundary(
           status: options.refreshStatus ?? "QUEUED",
         },
       })
-    if (path.endsWith("/report-views"))
+    if (path.endsWith("/report-views")) {
+      if (request.method() === "POST") {
+        return route.fulfill({
+          headers,
+          json: {
+            id: "view-1",
+            name: "广告报表当前筛选",
+            filters: {
+              dimension: "account",
+              start_date: "2026-10-01",
+              end_date: "2026-10-01",
+            },
+            columns: ["name", "status", "spend", "roas_d0"],
+            created_at: "2026-10-12T00:00:00Z",
+          },
+        })
+      }
       return route.fulfill({ headers, json: [] })
+    }
     if (path.endsWith(`/tenants/${TENANT}/ads/trend`)) {
       if (options.trendCalls) options.trendCalls.count++
       return route.fulfill({

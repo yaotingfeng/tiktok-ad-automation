@@ -7,11 +7,17 @@ export function AdsFilters({
   onChange,
   onApply,
   onReset,
+  onSaveView,
+  savingView,
+  disableSaveView,
 }: {
   search: AdsSearch
   onChange: (next: Partial<AdsSearch>) => void
   onApply: () => void
   onReset: () => void
+  onSaveView: () => void
+  savingView?: boolean
+  disableSaveView?: boolean
 }) {
   return (
     <form
@@ -54,6 +60,14 @@ export function AdsFilters({
       </Button>
       <Button type="button" variant="outline" onClick={onReset}>
         重置
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        disabled={savingView || disableSaveView}
+        onClick={onSaveView}
+      >
+        {savingView ? "保存中…" : "保存筛选"}
       </Button>
     </form>
   )

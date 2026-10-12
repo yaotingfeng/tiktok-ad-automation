@@ -13,12 +13,20 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ManagementPreviewSheet } from "@/features/ad-management/ManagementPreviewSheet"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
+import useAuth from "@/hooks/useAuth"
 import { AdsDetails } from "./AdsDetails"
 import { AdsFilters } from "./AdsFilters"
 import { AdsSummary } from "./AdsSummary"
 import { AdsTable } from "./AdsTable"
+import { AdsTableToolbar } from "./AdsTableToolbar"
 import { AdsTrendChart } from "./AdsTrendChart"
 import { BulkActionBar } from "./BulkActionBar"
+import {
+  applyColumnPrefs,
+  type ColumnPrefs,
+  loadColumnPrefs,
+  saveColumnPrefs,
+} from "./columnPrefs"
 import { columnsFor, useMetricCatalog } from "./metricCatalog"
 import { ReportStatusBar } from "./ReportStatusBar"
 import {
@@ -34,6 +42,7 @@ import { useAdsQuery } from "./useAdsQuery"
 import { useAdsTrend } from "./useAdsTrend"
 export function AdsWorkspace() {
   const { tenantId, bc, scope, bcDirectory } = useTenantScope()
+  const { user } = useAuth()
   const navigate = useNavigate()
   const [search, setSearch] = useState<AdsSearch>(() => defaultAdsSearch())
   const [selectedRow, setSelectedRow] = useState<ReportRow | null>(null)
@@ -55,6 +64,18 @@ export function AdsWorkspace() {
   const [previewOpen, setPreviewOpen] = useState(false)
   const scopeRef = useRef(`${tenantId ?? ""}:${currentBcId ?? ""}`)
   const selectionRequestScopeRef = useRef<string | null>(null)
+
+  // 列偏好状态
+  const prefsScope = `${tenantId ?? ""}:${user?.id ?? ""}`
+  const [columnPrefs, setColumnPrefs] = useState<ColumnPrefs | null>(() =>
+    loadColumnPrefs(prefsScope, applied.dimension),
+  )
+  const handlePrefsChange = (prefs: ColumnPrefs) => {
+    setColumnPrefs(prefs)
+    saveColumnPrefs(prefsScope, applied.dimension, prefs)
+  }
+  const allColumns = columnsFor(catalog.data ?? [], applied.dimension)
+  const visibleColumns = applyColumnPrefs(allColumns, columnPrefs)
 
   // 汇总卡片与趋势状态
   const [activeMetric, setActiveMetric] = useState("spend")
@@ -207,7 +228,7 @@ export function AdsWorkspace() {
           body: {
             name: "广告报表当前筛选",
             filters: toReportingFilter(applied),
-            columns: ["name", "status", "spend", "roas_d0"],
+            columns: ["name", "status", ...visibleColumns.map((c) => c.key)],
           },
         })
       ).data,
@@ -437,19 +458,6 @@ export function AdsWorkspace() {
           >
             {exportMutation.isPending ? "导出中…" : "导出"}
           </Button>
-          <Button
-            variant="outline"
-            disabled={viewMutation.isPending || roleReadonly}
-            onClick={() =>
-              runAction(() =>
-                viewMutation.mutate(undefined, {
-                  onError: (error) => setActionError(String(error)),
-                }),
-              )
-            }
-          >
-            {viewMutation.isPending ? "保存中…" : "保存筛选"}
-          </Button>
         </div>
       </div>
       {newDataAvailable && (
@@ -469,6 +477,15 @@ export function AdsWorkspace() {
             onChange={update}
             onApply={apply}
             onReset={reset}
+            onSaveView={() =>
+              runAction(() =>
+                viewMutation.mutate(undefined, {
+                  onError: (error) => setActionError(String(error)),
+                }),
+              )
+            }
+            savingView={viewMutation.isPending}
+            disableSaveView={roleReadonly}
           />
         </CardContent>
       </Card>
@@ -552,6 +569,9 @@ export function AdsWorkspace() {
                 cursor: undefined,
                 snapshot_id: undefined,
               }))
+              // 加载新维度的列偏好
+              const newPrefs = loadColumnPrefs(prefsScope, dimension)
+              setColumnPrefs(newPrefs)
             }}
           >
             <TabsList>
@@ -565,12 +585,17 @@ export function AdsWorkspace() {
               <TabsContent
                 key={dimension.value}
                 value={dimension.value}
-                className="mt-4"
+                className="mt-4 space-y-3"
               >
+                <AdsTableToolbar
+                  columns={allColumns}
+                  prefs={columnPrefs}
+                  onPrefsChange={handlePrefsChange}
+                />
                 <AdsTable
                   rows={items}
                   dimension={dimension.value}
-                  columns={columnsFor(catalog.data ?? [], dimension.value)}
+                  columns={visibleColumns}
                   endDate={applied.end_date}
                   selected={ads.selection.selected}
                   allMatching={ads.selection.allMatching}
