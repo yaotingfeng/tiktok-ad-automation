@@ -10,7 +10,10 @@ import {
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ManagementPreviewSheet } from "@/features/ad-management/ManagementPreviewSheet"
+import {
+  type ManagementAction,
+  ManagementPreviewSheet,
+} from "@/features/ad-management/ManagementPreviewSheet"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import useAuth from "@/hooks/useAuth"
@@ -20,7 +23,6 @@ import { AdsSummary } from "./AdsSummary"
 import { AdsTable } from "./AdsTable"
 import { AdsTableToolbar } from "./AdsTableToolbar"
 import { AdsTrendChart } from "./AdsTrendChart"
-import { BulkActionBar } from "./BulkActionBar"
 import {
   applyColumnPrefs,
   type ColumnPrefs,
@@ -62,6 +64,8 @@ export function AdsWorkspace() {
   const [frozenSelection, setFrozenSelection] =
     useState<FrozenSelection | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
+  const [managementAction, setManagementAction] =
+    useState<ManagementAction | null>(null)
   const scopeRef = useRef(`${tenantId ?? ""}:${currentBcId ?? ""}`)
   const selectionRequestScopeRef = useRef<string | null>(null)
 
@@ -122,6 +126,7 @@ export function AdsWorkspace() {
     selectionRequestScopeRef.current = null
     setFrozenSelection(null)
     setPreviewOpen(false)
+    setManagementAction(null)
   }, [])
   const [syncNotice, setSyncNotice] = useState<string | null>(null)
   const syncStatus = useQuery({
@@ -411,6 +416,17 @@ export function AdsWorkspace() {
     action()
   }
   const roleReadonly = scope?.role === "viewer"
+  // 工具栏动作：先记下动作与发起时的 BC 范围，再冻结选择；冻结成功后才打开预览。
+  const startManagementAction = (next: ManagementAction) => {
+    if (roleReadonly) return
+    runAction(() => {
+      setManagementAction(next)
+      selectionRequestScopeRef.current = scopeRef.current
+      selectionMutation.mutate(undefined, {
+        onError: (error) => setActionError(String(error)),
+      })
+    })
+  }
   const nextPage = () => {
     const nextCursor = ads.query.data?.next_cursor
     if (!nextCursor) return
@@ -604,6 +620,17 @@ export function AdsWorkspace() {
                   columns={allColumns}
                   prefs={columnPrefs}
                   onPrefsChange={handlePrefsChange}
+                  selection={{
+                    selectedCount: ads.selection.selected.size,
+                    allMatching: ads.selection.allMatching,
+                    total: ads.query.data?.total ?? 0,
+                    dimension: dimension.value,
+                    readonly: roleReadonly,
+                    busy: selectionMutation.isPending || !ads.snapshot,
+                    onAction: startManagementAction,
+                    onSelectAllMatching: ads.selection.selectAllMatching,
+                    onClear: ads.selection.clear,
+                  }}
                 />
                 <AdsTable
                   rows={items}
@@ -614,11 +641,9 @@ export function AdsWorkspace() {
                   allMatching={ads.selection.allMatching}
                   total={ads.query.data?.total ?? 0}
                   onToggle={ads.selection.toggleRow}
-                  onToggleAllOnPage={(checked) => {
-                    for (const row of items)
-                      ads.selection.toggleRow(row, checked)
-                  }}
-                  onSelectAllMatching={ads.selection.selectAllMatching}
+                  onToggleAllOnPage={(checked) =>
+                    ads.selection.toggleRows(items, checked)
+                  }
                   onOpen={setSelectedRow}
                   onDrill={navigateToChild}
                   onFilterParent={filterByParent}
@@ -635,22 +660,6 @@ export function AdsWorkspace() {
           </Tabs>
         </CardContent>
       </Card>
-      {ads.selection.selected.size > 0 && !roleReadonly && (
-        <BulkActionBar
-          selectedCount={ads.selection.selected.size}
-          allMatching={ads.selection.allMatching}
-          total={ads.query.data?.total ?? 0}
-          disabled={selectionMutation.isPending || roleReadonly}
-          onOpenPreview={() =>
-            runAction(() => {
-              selectionRequestScopeRef.current = scopeRef.current
-              selectionMutation.mutate(undefined, {
-                onError: (error) => setActionError(String(error)),
-              })
-            })
-          }
-        />
-      )}
       {actionError && (
         <p role="alert" className="text-sm text-destructive">
           操作失败：{actionError}
@@ -672,6 +681,7 @@ export function AdsWorkspace() {
           tenantId={tenantId}
           bcId={bc.bc_id}
           selection={frozenSelection}
+          action={managementAction}
           open={previewOpen}
           onOpenChange={setPreviewOpen}
         />

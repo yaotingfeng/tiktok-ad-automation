@@ -53,21 +53,30 @@ export function useAdsQuery(search: AdsSearch, queryRevision = 0) {
     setExcluded(new Set())
     setAllMatching(false)
   }, [selectionKey])
-  const toggleRow = (row: ReportRow, checked: boolean) => {
+  // 整页勾选要一次性写入，避免逐行 setState 造成多次渲染和中间态。
+  const toggleRows = (rows: ReportRow[], checked: boolean) => {
+    const keys = rows.map((row) => row.row_key)
     setSelected((current) => {
       const next = new Set(current)
-      if (checked) next.add(row.row_key)
-      else next.delete(row.row_key)
+      for (const key of keys) {
+        if (checked) next.add(key)
+        else next.delete(key)
+      }
       return next
     })
+    // 全部匹配模式下取消勾选记为排除，重新勾选则撤销排除。
     if (allMatching)
       setExcluded((current) => {
         const next = new Set(current)
-        if (checked) next.delete(row.row_key)
-        else next.add(row.row_key)
+        for (const key of keys) {
+          if (checked) next.delete(key)
+          else next.add(key)
+        }
         return next
       })
   }
+  const toggleRow = (row: ReportRow, checked: boolean) =>
+    toggleRows([row], checked)
   const selectAllMatching = () => {
     setAllMatching(true)
     setSelected(new Set(query.data?.items?.map((row) => row.row_key) ?? []))
@@ -86,6 +95,7 @@ export function useAdsQuery(search: AdsSearch, queryRevision = 0) {
       excluded,
       allMatching,
       toggleRow,
+      toggleRows,
       selectAllMatching,
       clear,
     },

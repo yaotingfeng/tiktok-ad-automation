@@ -196,8 +196,14 @@ test.describe("广告管理工作台", () => {
     await page
       .getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" })
       .check()
-    await page.getByRole("button", { name: "批量操作" }).click()
-    await expect(page.getByRole("heading", { name: "管理预览" })).toBeVisible()
+    await page.getByRole("button", { name: "暂停", exact: true }).click()
+    await expect(page.getByRole("heading", { name: "批量暂停" })).toBeVisible()
+    await expect.poll(() => previewBodies.length).toBe(1)
+    expect(previewBodies[0]?.mutation).toMatchObject({
+      field: "status",
+      mode: "set",
+      value: "DISABLE",
+    })
     await expect(page.getByText(`连接：${route.connection_id}`)).toBeVisible()
     await expect(page.getByText("账户：adv-1")).toBeVisible()
     // 后台新发布只提示，不关闭用户正在确认的冻结管理预览。
@@ -219,7 +225,7 @@ test.describe("广告管理工作台", () => {
     )
     await page.clock.install()
     await page.clock.fastForward(31_000)
-    await expect(page.getByRole("heading", { name: "管理预览" })).toBeVisible()
+    await expect(page.getByRole("heading", { name: "批量暂停" })).toBeVisible()
     await page.getByRole("checkbox", { name: "包括父级联动" }).click()
     await expect.poll(() => previewBodies.length).toBe(2)
     expect(previewBodies[1]?.mutation?.include_parents).toEqual([
@@ -250,7 +256,13 @@ test.describe("广告管理工作台", () => {
     await page
       .getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" })
       .check()
-    await expect(page.getByRole("button", { name: "批量操作" })).toHaveCount(0)
+    // 只读成员只看到计数和取消选择，不出现任何写入动作。
+    await expect(page.getByText("已选 1 条")).toBeVisible()
+    await expect(page.getByRole("button", { name: "取消选择" })).toBeVisible()
+    for (const name of ["启用", "暂停", "修改目标 ROAS", "修改预算"])
+      await expect(page.getByRole("button", { name, exact: true })).toHaveCount(
+        0,
+      )
     await page.goto(`/tenants/${TENANT}/ad-management-tasks?bc_id=${BC_A}`)
     await expect(page.getByRole("heading", { name: "管理任务" })).toBeVisible()
     await expect(page.getByText("排队中")).toBeVisible()
@@ -273,7 +285,9 @@ test.describe("广告管理工作台", () => {
     await page
       .getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" })
       .check()
-    await page.getByRole("button", { name: "批量操作" }).click()
+    await page.getByRole("button", { name: "修改预算" }).click()
+    await expect(page.getByRole("heading", { name: "修改预算" })).toBeVisible()
+    await page.getByRole("textbox", { name: "管理新值" }).fill("25")
     await expect(page.getByText(/排除不可用项后才可提交/)).toBeVisible()
     await expect(
       page.getByRole("button", { name: "提交管理任务" }),
@@ -291,5 +305,102 @@ test.describe("广告管理工作台", () => {
     await expect(
       page.getByRole("button", { name: "提交管理任务" }),
     ).toBeEnabled()
+  })
+
+  test("勾选后表头直接出现动作，启用提交 ENABLE", async ({ page }) => {
+    await managementBoundary(page)
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "系列", exact: true }).click()
+    await page
+      .getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" })
+      .check()
+    for (const name of [
+      "启用",
+      "暂停",
+      "修改目标 ROAS",
+      "修改预算",
+      "取消选择",
+    ])
+      await expect(
+        page.getByRole("button", { name, exact: true }),
+      ).toBeVisible()
+    await expect(page.getByRole("button", { name: "批量操作" })).toHaveCount(0)
+    const preview = page.waitForRequest(
+      (r) =>
+        r.url().includes("ad-management-previews") && r.method() === "POST",
+    )
+    await page.getByRole("button", { name: "启用", exact: true }).click()
+    expect((await preview).postDataJSON().mutation).toMatchObject({
+      field: "status",
+      mode: "set",
+      value: "ENABLE",
+    })
+    await expect(page.getByRole("heading", { name: "批量启用" })).toBeVisible()
+    await expect(page.getByRole("combobox", { name: "操作维度" })).toHaveCount(
+      0,
+    )
+  })
+
+  test("修改目标 ROAS 支持按百分比增加，数值为空不生成预览", async ({
+    page,
+  }) => {
+    const { previewBodies } = await managementBoundary(page)
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "广告组", exact: true }).click()
+    await page.getByRole("checkbox").nth(1).check()
+    await page.getByRole("button", { name: "修改目标 ROAS" }).click()
+    await expect(
+      page.getByRole("heading", { name: "修改目标 ROAS" }),
+    ).toBeVisible()
+    await expect(page.getByText("请输入数值")).toBeVisible()
+    await expect(page.getByRole("status", { name: /正在生成/ })).toHaveCount(0)
+    await page.getByRole("combobox", { name: "调整方式" }).click()
+    await page.getByRole("option", { name: "增加百分比" }).click()
+    // 空值或非法数值都不能发出预览请求，避免默认值误改真实广告。
+    await page.getByRole("textbox", { name: "管理新值" }).fill("abc")
+    await page.waitForTimeout(700)
+    expect(previewBodies).toHaveLength(0)
+    const preview = page.waitForRequest((r) =>
+      r.url().includes("ad-management-previews"),
+    )
+    await page.getByRole("textbox", { name: "管理新值" }).fill("10")
+    expect((await preview).postDataJSON().mutation).toMatchObject({
+      field: "roas",
+      mode: "increase_percent",
+      value: "10",
+    })
+  })
+
+  test("账户维度不提供修改目标 ROAS", async ({ page }) => {
+    await managementBoundary(page)
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("checkbox").nth(1).check()
+    for (const name of ["启用", "暂停", "修改预算"])
+      await expect(
+        page.getByRole("button", { name, exact: true }),
+      ).toBeVisible()
+    await expect(
+      page.getByRole("button", { name: "修改目标 ROAS" }),
+    ).toHaveCount(0)
+  })
+
+  test("取消选择恢复列设置，选择全部匹配结果在工具栏", async ({ page }) => {
+    await managementBoundary(page)
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "系列", exact: true }).click()
+    await expect(page.getByRole("button", { name: "列设置" })).toBeVisible()
+    await page
+      .getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" })
+      .check()
+    await page.getByRole("button", { name: "选择全部匹配结果" }).click()
+    await expect(page.getByText(/已选全部 \d+ 条匹配结果/)).toBeVisible()
+    await expect(
+      page.getByRole("button", { name: "选择全部匹配结果" }),
+    ).toBeDisabled()
+    await page.getByRole("button", { name: "取消选择" }).click()
+    await expect(page.getByRole("button", { name: "列设置" })).toBeVisible()
+    await expect(
+      page.getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" }),
+    ).not.toBeChecked()
   })
 })

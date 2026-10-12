@@ -284,7 +284,6 @@ export function AdsTable({
   total,
   onToggle,
   onToggleAllOnPage,
-  onSelectAllMatching,
   onOpen,
   onDrill,
   onFilterParent,
@@ -305,7 +304,6 @@ export function AdsTable({
   total: number
   onToggle: (row: ReportRow, checked: boolean) => void
   onToggleAllOnPage: (checked: boolean) => void
-  onSelectAllMatching: () => void
   onOpen: (row: ReportRow) => void
   onDrill: (row: ReportRow) => void
   onFilterParent: (link: ParentLink, advertiserId: string) => void
@@ -513,15 +511,6 @@ export function AdsTable({
               onClick={onPrevious}
             >
               上一页
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={!rows.length || allMatching}
-              onClick={onSelectAllMatching}
-            >
-              选择全部匹配结果
             </Button>
             <Button
               type="button"

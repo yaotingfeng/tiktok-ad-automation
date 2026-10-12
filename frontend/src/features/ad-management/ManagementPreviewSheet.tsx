@@ -13,6 +13,13 @@ import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
   Sheet,
   SheetContent,
   SheetFooter,
@@ -20,15 +27,50 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 
+// 工具栏选定的批量动作：启停直接带状态值，数值类动作在面板里再填调整方式与数值。
+export type ManagementAction =
+  | { field: "status"; value: "ENABLE" | "DISABLE" }
+  | { field: "roas" | "budget" }
+
 type Props = {
   tenantId: string
   bcId: string
   selection: FrozenSelection | null
+  action: ManagementAction | null
   open: boolean
   onOpenChange: (open: boolean) => void
 }
 
-const DEFAULT_VALUE = "25"
+type MutationMode = MutationSpec["mode"]
+
+const MODE_OPTIONS: Array<{ value: MutationMode; label: string }> = [
+  { value: "set", label: "设为" },
+  { value: "add", label: "增加" },
+  { value: "subtract", label: "减少" },
+  { value: "increase_percent", label: "增加百分比" },
+  { value: "decrease_percent", label: "减少百分比" },
+]
+
+const KIND_LABELS: Record<EntityRef["kind"], string> = {
+  campaign: "系列",
+  adgroup: "广告组",
+  ad: "广告",
+  creative: "素材",
+}
+
+// 数值输入停顿后才请求预览，避免每敲一个字符都让服务器计算一次。
+const VALUE_DEBOUNCE_MS = 400
+
+export function actionTitle(action: ManagementAction | null) {
+  if (!action) return "管理预览"
+  if (action.field === "status")
+    return action.value === "ENABLE" ? "批量启用" : "批量暂停"
+  return action.field === "roas" ? "修改目标 ROAS" : "修改预算"
+}
+
+function validNumber(value: string) {
+  return value.trim() !== "" && Number.isFinite(Number(value))
+}
 
 function remaining(expiresAt?: string) {
   if (!expiresAt) return ""
@@ -44,12 +86,15 @@ export function ManagementPreviewSheet({
   tenantId,
   bcId,
   selection,
+  action,
   open,
   onOpenChange,
 }: Props) {
   const navigate = useNavigate()
-  const [field, setField] = useState<MutationSpec["field"]>("budget")
-  const [value, setValue] = useState(DEFAULT_VALUE)
+  const [mode, setMode] = useState<MutationMode>("set")
+  // input 是输入框里的原文，value 是防抖后用于生成预览的数值。
+  const [input, setInput] = useState("")
+  const [value, setValue] = useState("")
   const [excludeUnsupported, setExcludeUnsupported] = useState(false)
   const [excludedRefs, setExcludedRefs] = useState<EntityRef[]>([])
   const [includeParents, setIncludeParents] = useState(false)
@@ -59,22 +104,44 @@ export function ManagementPreviewSheet({
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
   }, [open])
+  // 每次重新打开或换了冻结选择/动作都从空白开始，不沿用上一次填的数值。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: action 变化时也要重置
   useEffect(() => {
     if (!open || !selection?.selection_id) return
+    setMode("set")
+    setInput("")
+    setValue("")
     setExcludeUnsupported(false)
     setExcludedRefs([])
     setIncludeParents(false)
-  }, [open, selection?.selection_id])
-  const mutation = useMemo<MutationSpec>(
-    () => ({
-      field,
-      mode: field === "status" ? "set" : "set",
-      value: field === "status" ? "DISABLE" : value,
-      include_parents: includeParents ? (selection?.refs ?? []) : [],
+  }, [open, selection?.selection_id, action])
+  useEffect(() => {
+    if (input === value) return
+    const timer = window.setTimeout(() => setValue(input), VALUE_DEBOUNCE_MS)
+    return () => window.clearTimeout(timer)
+  }, [input, value])
+  const numeric = action !== null && action.field !== "status"
+  const mutation = useMemo<MutationSpec | null>(() => {
+    if (!action) return null
+    const includes = includeParents ? (selection?.refs ?? []) : []
+    if (action.field === "status")
+      return {
+        field: "status",
+        mode: "set",
+        value: action.value,
+        include_parents: includes,
+        excluded_refs: excludedRefs,
+      }
+    // 数值为空或非法时不生成预览，避免用默认值误改真实广告。
+    if (!validNumber(value)) return null
+    return {
+      field: action.field,
+      mode,
+      value: value.trim(),
+      include_parents: includes,
       excluded_refs: excludedRefs,
-    }),
-    [excludedRefs, field, includeParents, selection?.refs, value],
-  )
+    }
+  }, [action, mode, value, includeParents, excludedRefs, selection?.refs])
   const preview = useQuery<ManagementPreviewPublic>({
     queryKey: [
       "tenant",
@@ -86,9 +153,9 @@ export function ManagementPreviewSheet({
       excludeUnsupported,
       includeParents,
     ],
-    enabled: open && !!selection,
+    enabled: open && !!selection && !!mutation,
     queryFn: async ({ signal }) => {
-      if (!selection) throw new Error("请先冻结广告选择")
+      if (!selection || !mutation) throw new Error("请先冻结广告选择")
       return (
         await AdManagementService.preparePreview({
           path: { tenant_id: tenantId },
@@ -133,44 +200,69 @@ export function ManagementPreviewSheet({
     ) ?? []
   const expiresAt = preview.data?.expires_at
   const expired = expiresAt ? Date.parse(expiresAt) <= now : false
+  // 输入还在防抖期内时，屏幕上的预览对应的是旧数值，不能提交。
+  const settling = numeric && input !== value
+  const needsValue = numeric && !validNumber(input)
+  const percent = mode === "increase_percent" || mode === "decrease_percent"
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-xl">
         <SheetHeader>
-          <SheetTitle>管理预览</SheetTitle>
+          <SheetTitle>{actionTitle(action)}</SheetTitle>
           <p className="text-sm text-muted-foreground">
             BC：{bcId} · 服务器冻结 selection，不在浏览器展开远端对象。
           </p>
         </SheetHeader>
         <div className="flex flex-col gap-4 px-4 pb-4">
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <label className="flex flex-col gap-1">
-              操作维度
-              <select
-                aria-label="操作维度"
-                className="h-9 rounded-md border bg-background px-2"
-                value={field}
-                onChange={(event) =>
-                  setField(event.target.value as MutationSpec["field"])
-                }
-              >
-                <option value="budget">预算</option>
-                <option value="roas">目标 ROAS</option>
-                <option value="status">投放状态</option>
-              </select>
-            </label>
-            <div className="flex flex-col gap-1">
-              <label htmlFor="management-value">新值</label>
-              <Input
-                id="management-value"
-                aria-label="管理新值"
-                value={field === "status" ? "DISABLE" : value}
-                onChange={(event) => setValue(event.target.value)}
-                disabled={field === "status"}
-              />
+          {action?.field === "status" && (
+            <p className="text-sm">
+              将所选对象的投放状态设为
+              {action.value === "ENABLE" ? "启用" : "暂停"}。
+            </p>
+          )}
+          {numeric && (
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="flex flex-col gap-1">
+                <span>调整方式</span>
+                <Select
+                  value={mode}
+                  onValueChange={(next) => setMode(next as MutationMode)}
+                >
+                  <SelectTrigger aria-label="调整方式" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MODE_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label htmlFor="management-value">数值</label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="management-value"
+                    aria-label="管理新值"
+                    inputMode="decimal"
+                    value={input}
+                    onChange={(event) => setInput(event.target.value)}
+                  />
+                  {percent && <span className="text-muted-foreground">%</span>}
+                </div>
+                {needsValue && (
+                  <p className="text-xs text-muted-foreground">请输入数值</p>
+                )}
+              </div>
             </div>
-          </div>
-          {preview.isPending && <p role="status">正在生成管理预览…</p>}
+          )}
+          {preview.isLoading && (
+            <p role="status" aria-label="正在生成管理预览">
+              正在生成管理预览…
+            </p>
+          )}
           {preview.error && (
             <Alert variant="destructive">
               <AlertDescription>预览生成失败，请重新尝试。</AlertDescription>
@@ -260,7 +352,8 @@ export function ManagementPreviewSheet({
                           className="max-w-48 truncate p-2"
                           title={item.ref.remote_id}
                         >
-                          {item.ref.kind} · {item.ref.remote_id}
+                          {KIND_LABELS[item.ref.kind] ?? item.ref.kind} ·{" "}
+                          {item.ref.remote_id}
                         </td>
                         <td className="p-2">{item.original_value ?? "—"}</td>
                         <td className="p-2">{item.final_value ?? "—"}</td>
@@ -278,8 +371,10 @@ export function ManagementPreviewSheet({
         <SheetFooter>
           <Button
             disabled={
+              !mutation ||
               !preview.data ||
-              preview.isPending ||
+              preview.isFetching ||
+              settling ||
               submit.isPending ||
               expired ||
               (unsupported.length > 0 && !excludeUnsupported)

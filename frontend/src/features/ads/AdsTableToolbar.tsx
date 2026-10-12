@@ -7,18 +7,116 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import type { ManagementAction } from "@/features/ad-management/ManagementPreviewSheet"
 import { type ColumnPrefs, DEFAULT_HIDDEN } from "./columnPrefs"
 import type { ColumnDef } from "./metricCatalog"
+import type { AdsDimension } from "./search"
+
+export type ToolbarActionKey = "enable" | "disable" | "roas" | "budget"
+
+// 各维度工具栏提供的动作（规格 5.1）：账户与剧没有可直接修改的目标 ROAS，
+// 广告的预算归属广告组或系列，素材只有独立启停，其余在预览中按层级展开。
+const DIMENSION_ACTIONS: Record<AdsDimension, ToolbarActionKey[]> = {
+  account: ["enable", "disable", "budget"],
+  campaign: ["enable", "disable", "roas", "budget"],
+  adgroup: ["enable", "disable", "roas", "budget"],
+  ad: ["enable", "disable", "roas"],
+  material: ["enable", "disable"],
+  drama: ["enable", "disable", "budget"],
+}
+
+export function actionsFor(dimension: AdsDimension): ToolbarActionKey[] {
+  return DIMENSION_ACTIONS[dimension]
+}
+
+const ACTIONS: Record<
+  ToolbarActionKey,
+  { label: string; action: ManagementAction }
+> = {
+  enable: { label: "启用", action: { field: "status", value: "ENABLE" } },
+  disable: { label: "暂停", action: { field: "status", value: "DISABLE" } },
+  roas: { label: "修改目标 ROAS", action: { field: "roas" } },
+  budget: { label: "修改预算", action: { field: "budget" } },
+}
+
+export type ToolbarSelection = {
+  selectedCount: number
+  allMatching: boolean
+  total: number
+  dimension: AdsDimension
+  readonly: boolean
+  busy: boolean
+  onAction: (action: ManagementAction) => void
+  onSelectAllMatching: () => void
+  onClear: () => void
+}
+
+function SelectionToolbar({
+  selectedCount,
+  allMatching,
+  total,
+  dimension,
+  readonly,
+  busy,
+  onAction,
+  onSelectAllMatching,
+  onClear,
+}: ToolbarSelection) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm">
+      <span>
+        {allMatching
+          ? `已选全部 ${total} 条匹配结果`
+          : `已选 ${selectedCount} 条`}
+      </span>
+      <div className="flex flex-wrap items-center gap-2">
+        {/* 只读成员只能看到计数与取消选择，不显示任何写入动作和跨页全选。 */}
+        {!readonly &&
+          actionsFor(dimension).map((key) => (
+            <Button
+              key={key}
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => onAction(ACTIONS[key].action)}
+            >
+              {ACTIONS[key].label}
+            </Button>
+          ))}
+        {!readonly && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={allMatching}
+            onClick={onSelectAllMatching}
+          >
+            选择全部匹配结果
+          </Button>
+        )}
+        <Button type="button" variant="ghost" size="sm" onClick={onClear}>
+          取消选择
+        </Button>
+      </div>
+    </div>
+  )
+}
 
 export function AdsTableToolbar({
   columns,
   prefs,
   onPrefsChange,
+  selection,
 }: {
   columns: ColumnDef[]
   prefs: ColumnPrefs | null
   onPrefsChange: (prefs: ColumnPrefs) => void
+  selection: ToolbarSelection
 }) {
+  // 勾选任意一行（或进入全部匹配模式）后，工具栏整体切换为批量操作态。
+  if (selection.selectedCount > 0 || selection.allMatching)
+    return <SelectionToolbar {...selection} />
   const hidden = prefs?.hidden ?? DEFAULT_HIDDEN
   const order = prefs?.order ?? columns.map((c) => c.key)
 
