@@ -32,7 +32,7 @@ def test_csv_keeps_decimal_amount_numeric():
                     {
                         "currency": "USD",
                         "timezone": "UTC",
-                        "values": {"spend": "-2", "d0_roas": "1.2"},
+                        "values": {"spend": "-2", "roas_d0": "1.2"},
                     }
                 ],
             }

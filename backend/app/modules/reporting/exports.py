@@ -4,6 +4,7 @@
 这份副本。下载和生成都重新检查当前租户、BC 与账户授权；撤权后即使队列消息
 迟到也不会写出或下载旧报表。
 """
+
 from __future__ import annotations
 
 import csv
@@ -38,7 +39,9 @@ _LOCAL_ROOT = Path(tempfile.gettempdir()) / "tk-ada-report-exports"
 _MEMORY_OBJECTS: dict[str, bytes] = {}
 
 
-def _enqueue_export(session: Session, *, context: TenantContext, export_id: UUID) -> None:
+def _enqueue_export(
+    session: Session, *, context: TenantContext, export_id: UUID
+) -> None:
     from app.jobs.outbox import enqueue_after_commit
 
     enqueue_after_commit(
@@ -63,7 +66,9 @@ def csv_safe_text(value: str) -> str:
 def _public(row: ReportExport) -> ExportPublic:
     return ExportPublic(
         id=row.id,
-        status=cast(Literal["QUEUED", "RUNNING", "COMPLETE", "FAILED", "EXPIRED"], row.status),
+        status=cast(
+            Literal["QUEUED", "RUNNING", "COMPLETE", "FAILED", "EXPIRED"], row.status
+        ),
         coverage=dict(row.coverage),
         expires_at=row.expires_at,
     )
@@ -72,7 +77,9 @@ def _public(row: ReportExport) -> ExportPublic:
 def _scope_check(
     session: Session, *, context: TenantContext, bc_id: str, export: ReportExport
 ) -> None:
-    require_tenant(session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read")
+    require_tenant(
+        session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read"
+    )
     if (
         export.tenant_id != context.tenant_id
         or export.bc_id != bc_id
@@ -94,7 +101,9 @@ def _scope_check(
         raise HTTPException(409, detail="report_export_expired")
 
 
-def _rows_for_snapshot(session: Session, snapshot_id: UUID, total: int) -> list[dict[str, Any]]:
+def _rows_for_snapshot(
+    session: Session, snapshot_id: UUID, total: int
+) -> list[dict[str, Any]]:
     rows = session.exec(
         select(QuerySnapshotRow)
         .where(QuerySnapshotRow.snapshot_id == snapshot_id)
@@ -129,7 +138,11 @@ def create_export(
     snapshot_id: UUID,
     idempotency_key: str,
 ) -> ExportPublic:
-    if type(idempotency_key) is not str or not idempotency_key.strip() or len(idempotency_key) > 128:
+    if (
+        type(idempotency_key) is not str
+        or not idempotency_key.strip()
+        or len(idempotency_key) > 128
+    ):
         raise HTTPException(422, detail="invalid_export_idempotency_key")
     # Idempotency lookup itself is scoped by all three dimensions. A key from
     # another BC/user can never return an existing export.
@@ -148,7 +161,9 @@ def create_export(
         _enqueue_export(session, context=context, export_id=existing.id)
         return _public(existing)
 
-    snapshot = read_snapshot(session, context=context, bc_id=bc_id, snapshot_id=snapshot_id)
+    snapshot = read_snapshot(
+        session, context=context, bc_id=bc_id, snapshot_id=snapshot_id
+    )
     if snapshot.actor_id != context.actor_id:
         raise HTTPException(404, detail="query_snapshot_not_found")
     frozen_rows = _rows_for_snapshot(session, snapshot.id, snapshot.total)
@@ -213,7 +228,9 @@ def get_export(
 def list_exports(
     session: Session, *, context: TenantContext, bc_id: str
 ) -> tuple[ExportPublic, ...]:
-    require_tenant(session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read")
+    require_tenant(
+        session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read"
+    )
     # Scope must be checked even for an empty result, preventing a typoed BC from
     # being treated as a valid private namespace.
     bc = session.get(TenantBC, (context.tenant_id, bc_id), populate_existing=True)
@@ -261,15 +278,23 @@ def _csv_rows(export: ReportExport) -> bytes:
         "coverage",
         "fetched_at",
         "spend",
-        "native_growth_ad_revenue_value_d0",
-        "native_growth_total_ad_impression_value",
-        "native_growth_total_ad_impression_event_count",
-        "ad_revenue_roas",
-        "d0_roas",
-        "cost_per_ad_impression_event",
         "impressions",
         "clicks",
+        "ad_impression_events",
+        "revenue_d0",
+        "revenue_d3",
+        "revenue_d7",
+        "revenue_d14",
+        "revenue_d30",
+        "revenue_total",
+        "roas_d0",
+        "roas_d3",
+        "roas_d7",
+        "roas_d14",
+        "roas_d30",
+        "roas_total",
         "ctr",
+        "cost_per_ad_impression_event",
     ]
     captured = export.created_at.astimezone(UTC).isoformat()
     out = io.StringIO(newline="")
@@ -279,7 +304,8 @@ def _csv_rows(export: ReportExport) -> bytes:
         display = dict(raw.get("display") or {})
         # B3 stores the row coverage marker inside display for migration
         # compatibility; expose it as an explicit CSV column.
-        row_coverage = (display.pop("__coverage__", None) or export.coverage).get("status", "UNKNOWN")
+        coverage = display.pop("__coverage__", None) or export.coverage
+        row_coverage = coverage.get("status", "UNKNOWN")
         buckets = raw.get("metric_buckets") or [{}]
         for bucket in buckets:
             bucket = bucket or {}
@@ -288,12 +314,20 @@ def _csv_rows(export: ReportExport) -> bytes:
             timezone = bucket.get("timezone")
             data: dict[str, Any] = {
                 "row_key": csv_safe_text(str(raw.get("row_key", ""))),
-                "name": csv_safe_text(str(display.get("name") or display.get("campaign_name") or "")),
-                "advertiser_id": csv_safe_text(str(display.get("advertiser_id") or display.get("remote_id") or "")),
-                "currency": csv_safe_text(str(currency or display.get("currency") or "")),
-                "timezone": csv_safe_text(str(timezone or display.get("timezone") or "")),
+                "name": csv_safe_text(
+                    str(display.get("name") or display.get("campaign_name") or "")
+                ),
+                "advertiser_id": csv_safe_text(
+                    str(display.get("advertiser_id") or display.get("remote_id") or "")
+                ),
+                "currency": csv_safe_text(
+                    str(currency or display.get("currency") or "")
+                ),
+                "timezone": csv_safe_text(
+                    str(timezone or display.get("timezone") or "")
+                ),
                 "coverage": csv_safe_text(str(row_coverage)),
-                "fetched_at": captured,
+                "fetched_at": coverage.get("updated_at") or captured,
             }
             for key in fields[7:]:
                 value = _decimal(values.get(key))
@@ -314,9 +348,18 @@ def _object_path(key: str) -> Path:
 
 def _put_object(key: str, content: bytes) -> None:
     """Write atomically to configured object storage, with a test-local fallback."""
-    if settings.S3_BUCKET and settings.S3_ACCESS_KEY_ID and settings.S3_SECRET_ACCESS_KEY:
+    if (
+        settings.S3_BUCKET
+        and settings.S3_ACCESS_KEY_ID
+        and settings.S3_SECRET_ACCESS_KEY
+    ):
         client = make_s3()
-        client.put_object(Bucket=settings.S3_BUCKET, Key=key, Body=content, ContentType="text/csv; charset=utf-8")
+        client.put_object(
+            Bucket=settings.S3_BUCKET,
+            Key=key,
+            Body=content,
+            ContentType="text/csv; charset=utf-8",
+        )
         return
     path = _object_path(key)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -330,7 +373,11 @@ def _put_object(key: str, content: bytes) -> None:
 
 
 def _get_object(key: str) -> bytes:
-    if settings.S3_BUCKET and settings.S3_ACCESS_KEY_ID and settings.S3_SECRET_ACCESS_KEY:
+    if (
+        settings.S3_BUCKET
+        and settings.S3_ACCESS_KEY_ID
+        and settings.S3_SECRET_ACCESS_KEY
+    ):
         response = make_s3().get_object(Bucket=settings.S3_BUCKET, Key=key)
         body = response["Body"]
         return body.read()
@@ -344,7 +391,11 @@ def _get_object(key: str) -> bytes:
 
 
 def _delete_object(key: str) -> None:
-    if settings.S3_BUCKET and settings.S3_ACCESS_KEY_ID and settings.S3_SECRET_ACCESS_KEY:
+    if (
+        settings.S3_BUCKET
+        and settings.S3_ACCESS_KEY_ID
+        and settings.S3_SECRET_ACCESS_KEY
+    ):
         make_s3().delete_object(Bucket=settings.S3_BUCKET, Key=key)
         return
     _MEMORY_OBJECTS.pop(key, None)
@@ -378,7 +429,9 @@ def download_export(
     return _get_object(row.object_key)
 
 
-def cleanup_expired_exports(session: Session, *, now: datetime | None = None, limit: int = 100) -> int:
+def cleanup_expired_exports(
+    session: Session, *, now: datetime | None = None, limit: int = 100
+) -> int:
     """删除过期导出自己的对象，并清空其键；不会触碰其他前缀。"""
     now = now or datetime.now(UTC)
     rows = session.exec(

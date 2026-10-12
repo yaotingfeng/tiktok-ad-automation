@@ -19,16 +19,33 @@ Availability = Literal["AVAILABLE", "MISSING", "UNAVAILABLE", "UNSUPPORTED", "FA
 CANONICAL_METRIC_KEYS = frozenset(
     {
         "spend",
+        "impressions",
+        "clicks",
+        "ad_impression_events",
+        "revenue_d0",
+        "revenue_d3",
+        "revenue_d7",
+        "revenue_d14",
+        "revenue_d30",
+        "revenue_total",
+        "roas_d0",
+        "roas_d3",
+        "roas_d7",
+        "roas_d14",
+        "roas_d30",
+        "roas_total",
+        "ctr",
+        "cost_per_ad_impression_event",
+    }
+)
+# 任务 14 删除旧模块时一并收紧内部 DTO；新查询只生成上述公开指标。
+_LEGACY_METRIC_KEYS = frozenset(
+    {
         "native_growth_ad_revenue_value_d0",
         "native_growth_total_ad_impression_value",
         "native_growth_total_ad_impression_event_count",
-        "impressions",
-        "clicks",
-        # Derived only after canonical A buckets are aggregated.
         "d0_roas",
         "ad_revenue_roas",
-        "cost_per_ad_impression_event",
-        "ctr",
     }
 )
 
@@ -126,7 +143,9 @@ class MetricVector(BaseModel):
     def validate_published_metrics(self) -> MetricVector:
         if self.optimization_goal is not None:
             raise ValueError("optimization_goal is not a published report coordinate")
-        unknown = (set(self.values) | set(self.availability)) - CANONICAL_METRIC_KEYS
+        unknown = (set(self.values) | set(self.availability)) - (
+            CANONICAL_METRIC_KEYS | _LEGACY_METRIC_KEYS
+        )
         if unknown:
             raise ValueError(f"unsupported report metric keys: {sorted(unknown)}")
         if set(self.values) != set(self.availability):

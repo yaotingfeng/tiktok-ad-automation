@@ -243,6 +243,8 @@ def report_case(session, context, other_context):
     )
     session.flush()
 
+    published_rows = {}
+
     def seed_campaign(
         name: str,
         advertiser_id: str,
@@ -336,6 +338,31 @@ def report_case(session, context, other_context):
                 )
             )
         session.flush()
+        # 新查询用整份发布种子；旧同步测试的种子随任务 14 一次删除。
+        from app.modules.reporting.publish import AccountMeta, publish_ad_day
+        from tests.modules.reporting.sync_conftest import ad_row
+
+        rows = published_rows.setdefault(advertiser_id, [])
+        rows.append(
+            ad_row(
+                f"ad-{ref.remote_id}",
+                date(2026, 9, 30),
+                campaign=ref.remote_id,
+                adv=advertiser_id,
+                spend=str(spend),
+                d0=str(d0_revenue),
+                total=str(d0_revenue),
+            )
+        )
+        publish_ad_day(
+            session,
+            tenant_id=context.tenant_id,
+            job_id=uuid4(),
+            accounts={advertiser_id: AccountMeta("USD", "UTC")},
+            start=date(2026, 9, 30),
+            end=date(2026, 9, 30),
+            rows=rows,
+        )
         return ref
 
     return SimpleNamespace(

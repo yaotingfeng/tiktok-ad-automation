@@ -15,24 +15,27 @@ from sqlmodel import Session, col
 from app.core.context import TenantContext
 from app.modules.accounts.access import usable_grants
 from app.modules.accounts.models import BCAccountAccess
-from app.modules.reporting.schemas import ReportingFilter
+from app.modules.reporting.schemas import CANONICAL_METRIC_KEYS, ReportingFilter
 from app.modules.tenants.permissions import require_tenant
 
 # 表头可排序字段：名称类按展示文本，指标类按合计值，配置类按目录数值。
 NAME_SORT_FIELDS = frozenset(
-    {"name", "account_name", "campaign_name", "adgroup_name", "ad_name",
-     "material_name", "drama_name"}
+    {
+        "name",
+        "account_name",
+        "campaign_name",
+        "adgroup_name",
+        "ad_name",
+        "material_name",
+        "drama_name",
+    }
 )
-METRIC_SORT_FIELDS = frozenset(
-    {"spend", "native_growth_ad_revenue_value_d0",
-     "native_growth_total_ad_impression_value",
-     "native_growth_total_ad_impression_event_count", "impressions", "clicks",
-     "d0_roas", "ad_revenue_roas", "cost_per_ad_impression_event", "ctr"}
-)
+METRIC_SORT_FIELDS = CANONICAL_METRIC_KEYS
 CONFIG_SORT_FIELDS = frozenset({"target_roas", "campaign_budget", "adgroup_budget"})
 SUPPORTED_SORT_FIELDS = (
     frozenset({"row_key"}) | NAME_SORT_FIELDS | METRIC_SORT_FIELDS | CONFIG_SORT_FIELDS
 )
+
 
 def _like_literal(value: str) -> str:
     """Escape SQL LIKE metacharacters while retaining parameter binding."""
@@ -61,9 +64,9 @@ class CompiledFilter:
         """Return an AND expression for all keywords, or ``None`` if unfiltered."""
         if not self.like_patterns:
             return None
-        return and_(*(
-            column.ilike(pattern, escape="\\") for pattern in self.like_patterns
-        ))
+        return and_(
+            *(column.ilike(pattern, escape="\\") for pattern in self.like_patterns)
+        )
 
     def apply(
         self,
@@ -172,9 +175,9 @@ def authorized_grants(
     require_tenant(
         session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read"
     )
-    statement = usable_grants(
-        tenant_id=context.tenant_id, bc_id=bc_id, action="read"
-    )
+    statement = usable_grants(tenant_id=context.tenant_id, bc_id=bc_id, action="read")
     if advertiser_ids:
-        statement = statement.where(col(BCAccountAccess.advertiser_id).in_(advertiser_ids))
+        statement = statement.where(
+            col(BCAccountAccess.advertiser_id).in_(advertiser_ids)
+        )
     return tuple(session.exec(statement).all())

@@ -3,6 +3,7 @@
 查询请求只在第一次请求时读取目录/事实。后续分页、趋势和选择均消费
 快照行，避免修正或改名在同一个浏览器操作中混入新版本。
 """
+
 from __future__ import annotations
 
 import base64
@@ -20,13 +21,12 @@ from app.core.context import TenantContext
 from app.core.db import engine
 from app.modules.accounts.models import TenantBC
 from app.modules.ads.models import AdObject, CampaignNameProjection
-from app.modules.reporting.aggregation import (
+from app.modules.reporting.dimension_query import (
     aggregate_metrics,
     bucket_key,
-    build_dimension_rows,
+    build_rows,
 )
 from app.modules.reporting.filters import authorized_grants, compile_filter
-from app.modules.reporting.models import ReportFact
 from app.modules.reporting.query_models import (
     QuerySnapshot,
     QuerySnapshotRow,
@@ -42,14 +42,16 @@ from app.modules.reporting.schemas import (
     ReportRow,
     TrendPublic,
 )
-from app.modules.reporting.sync_models import ReportSyncRun
+from app.modules.reporting.store_models import ReportSyncState
 from app.modules.reporting.trends import build_trend
 from app.modules.tenants.permissions import require_tenant
 
 
 def filter_digest(filters: ReportingFilter) -> str:
     """Canonical filter digest used to bind cursors and snapshots."""
-    payload = json.dumps(filters.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    payload = json.dumps(
+        filters.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+    )
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
@@ -151,28 +153,24 @@ def _new_snapshot(
     grants = authorized_grants(
         session, context=context, bc_id=bc_id, advertiser_ids=filters.advertiser_ids
     )
-    if filters.advertiser_ids and {item.advertiser_id for item in grants} != set(filters.advertiser_ids):
+    if filters.advertiser_ids and {item.advertiser_id for item in grants} != set(
+        filters.advertiser_ids
+    ):
         raise HTTPException(403, detail="report_scope_forbidden")
     allowed_ids = {item.advertiser_id for item in grants}
-    connection_ids = {item.connection_id for item in grants}
     now = datetime.now(UTC)
     statuses = [row.coverage.get("status") for row in rows]
     publication_versions = {"reporting": 1}
-    max_version = session.exec(
-        select(func.max(ReportFact.published_version)).where(
-            ReportFact.tenant_id == context.tenant_id,
-            col(ReportFact.advertiser_id).in_(allowed_ids),
-            ReportSyncRun.bc_id == bc_id,
-            col(ReportSyncRun.connection_id).in_(connection_ids),
-        )
-        .join(
-            ReportSyncRun,
-            (col(ReportSyncRun.tenant_id) == col(ReportFact.tenant_id))
-            & (ReportSyncRun.id == ReportFact.source_run_id),
+    updated = session.exec(
+        select(func.max(ReportSyncState.last_success_at)).where(
+            ReportSyncState.tenant_id == context.tenant_id,
+            col(ReportSyncState.advertiser_id).in_(allowed_ids),
+            ReportSyncState.stat_date >= filters.start_date,
+            ReportSyncState.stat_date <= filters.end_date,
         )
     ).one()
-    if max_version is not None:
-        publication_versions["max"] = int(max_version)
+    if updated is not None:
+        publication_versions["max"] = int(updated.timestamp() * 1_000_000)
     naming_versions = {"directory": 1}
     campaigns = {
         (ref.advertiser_id, ref.remote_id)
@@ -184,12 +182,18 @@ def _new_snapshot(
         projections = session.exec(
             select(CampaignNameProjection).where(
                 CampaignNameProjection.tenant_id == context.tenant_id,
-                col(CampaignNameProjection.advertiser_id).in_({item[0] for item in campaigns}),
-                col(CampaignNameProjection.campaign_remote_id).in_({item[1] for item in campaigns}),
+                col(CampaignNameProjection.advertiser_id).in_(
+                    {item[0] for item in campaigns}
+                ),
+                col(CampaignNameProjection.campaign_remote_id).in_(
+                    {item[1] for item in campaigns}
+                ),
             )
         ).all()
         for projection in projections:
-            naming_versions[f"{projection.advertiser_id}:{projection.campaign_remote_id}"] = projection.name_revision
+            naming_versions[
+                f"{projection.advertiser_id}:{projection.campaign_remote_id}"
+            ] = projection.name_revision
     snapshot = QuerySnapshot(
         id=uuid4(),
         tenant_id=context.tenant_id,
@@ -209,16 +213,6 @@ def _new_snapshot(
             else (
                 "COMPLETE"
                 if all(status in {"COMPLETE", "COMPLETE_EMPTY"} for status in statuses)
-                and all(
-                    len(
-                        {
-                            (bucket.currency, bucket.timezone, bucket.attribution)
-                            for bucket in row.metric_buckets
-                        }
-                    )
-                    <= 1
-                    for row in rows
-                )
                 else "INCOMPLETE"
             ),
             "rows": len(rows),
@@ -258,8 +252,16 @@ def _read_page(
     cursor: str | None,
     limit: int,
 ) -> AdsQueryPage:
-    after = -1 if cursor is None else _check_cursor(
-        cursor=cursor, snapshot=snapshot, filters=filters, context=context, bc_id=bc_id
+    after = (
+        -1
+        if cursor is None
+        else _check_cursor(
+            cursor=cursor,
+            snapshot=snapshot,
+            filters=filters,
+            context=context,
+            bc_id=bc_id,
+        )
     )
     rows = read_snapshot_rows(
         session,
@@ -299,7 +301,7 @@ def _build_snapshot(
     bc_id: str,
     filters: ReportingFilter,
 ) -> QuerySnapshot:
-    rows = build_dimension_rows(session, context=context, bc_id=bc_id, filters=filters)
+    rows = build_rows(session, context=context, bc_id=bc_id, filters=filters)
     # Account rows are report aggregates, but management selection must retain
     # the exact campaign refs visible at snapshot creation time. The query's
     # authorized account set is fixed once, and one batch query avoids N+1 reads.
@@ -309,14 +311,14 @@ def _build_snapshot(
             session, context=context, bc_id=bc_id, advertiser_ids=filters.advertiser_ids
         )
         allowed_ids = {item.advertiser_id for item in grants}
-        connection_ids = {item.connection_id for item in grants}
         campaigns = session.exec(
-            select(AdObject).where(
+            select(AdObject)
+            .where(
                 AdObject.tenant_id == context.tenant_id,
                 col(AdObject.advertiser_id).in_(allowed_ids),
-                col(AdObject.source_connection_id).in_(connection_ids),
                 AdObject.kind == "campaign",
-            ).order_by(AdObject.advertiser_id, AdObject.remote_id)
+            )
+            .order_by(AdObject.advertiser_id, AdObject.remote_id)
         ).all()
         by_account: dict[str, list[AdObject]] = {}
         for campaign in campaigns:
@@ -325,11 +327,17 @@ def _build_snapshot(
             advertiser_id = row.display.get("remote_id")
             frozen_rows.append(
                 row.model_copy(
-                    update={"refs": tuple(item.ref for item in by_account.get(advertiser_id, []))}
+                    update={
+                        "refs": tuple(
+                            item.ref for item in by_account.get(advertiser_id, [])
+                        )
+                    }
                 )
             )
         rows = tuple(frozen_rows)
-    snapshot = _new_snapshot(session, context=context, bc_id=bc_id, filters=filters, rows=rows)
+    snapshot = _new_snapshot(
+        session, context=context, bc_id=bc_id, filters=filters, rows=rows
+    )
     # 趋势已从报表页移除。快照只保存列表和汇总，避免首次打开页面重复扫描
     # 全量事实；保留按需端点供旧客户端读取。
     snapshot.trends = {}
@@ -354,7 +362,9 @@ def query_ads(
         compile_filter(filters)
     except ValueError as exc:
         raise HTTPException(422, detail="invalid_reporting_filter") from exc
-    require_tenant(session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read")
+    require_tenant(
+        session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read"
+    )
     if snapshot_id is None:
         if cursor is not None:
             raise HTTPException(404, detail="query_cursor_not_found")
@@ -378,9 +388,13 @@ def query_ads(
             snapshot = _build_snapshot(
                 session, context=context, bc_id=bc_id, filters=filters
             )
-        snapshot = read_snapshot(session, context=context, bc_id=bc_id, snapshot_id=snapshot.id)
+        snapshot = read_snapshot(
+            session, context=context, bc_id=bc_id, snapshot_id=snapshot.id
+        )
     else:
-        snapshot = read_snapshot(session, context=context, bc_id=bc_id, snapshot_id=snapshot_id)
+        snapshot = read_snapshot(
+            session, context=context, bc_id=bc_id, snapshot_id=snapshot_id
+        )
         if snapshot.actor_id != context.actor_id:
             raise HTTPException(404, detail="query_snapshot_not_found")
         if snapshot.filter_digest != filter_digest(filters):
@@ -405,7 +419,9 @@ def snapshot_trend(
     filters: ReportingFilter,
 ) -> TrendPublic:
     """读取查询快照内的趋势，不把新观测覆盖到旧报表。"""
-    snapshot = read_snapshot(session, context=context, bc_id=bc_id, snapshot_id=snapshot_id)
+    snapshot = read_snapshot(
+        session, context=context, bc_id=bc_id, snapshot_id=snapshot_id
+    )
     if snapshot.actor_id != context.actor_id:
         raise HTTPException(404, detail="query_snapshot_not_found")
     if snapshot.filter_digest != filter_digest(filters):
@@ -416,5 +432,5 @@ def snapshot_trend(
         return build_trend(
             session, context=context, bc_id=bc_id, filters=filters, grain="day"
         )
-    except (ValueError, RuntimeError):
+    except ValueError, RuntimeError:
         return TrendPublic(coverage={"status": "UNAVAILABLE"})
