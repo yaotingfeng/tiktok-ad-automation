@@ -1,4 +1,5 @@
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from sqlmodel import Session, select
@@ -23,6 +24,10 @@ def test_expired_scene_commits_preparation_without_arming_any_ad(
         app.channel_config = {"verification_token": str(provider.verification_token)}
         app.tiktok_minis_id = "minis-1"
         session.add_all([provider, app])
+        # 让持久化证据真正过期，不能依赖缺少旧预算证据来触发刷新。
+        for job in session.exec(select(SceneJob)).all():
+            job.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            session.add(job)
     current = execution.read_scene_context(None)
     monkeypatch.setattr(
         execution,
