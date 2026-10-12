@@ -16,12 +16,15 @@ const OPERATION: Record<string, [string, Tone]> = {
   DISABLE: ["已暂停", "outline"],
   DELETE: ["已删除", "outline"],
 }
+// 账户目录同时存储带前缀与不带前缀两种形式（directory_capabilities.py 查询条件同时包含两者）
 const ACCOUNT: Record<string, [string, Tone]> = {
   STATUS_ENABLE: ["正常", "default"],
   STATUS_DISABLE: ["已停用", "outline"],
   STATUS_PENDING_CONFIRM: ["审核中", "secondary"],
   STATUS_CONFIRM_FAIL: ["未通过", "destructive"],
   STATUS_LIMIT: ["受限", "destructive"],
+  ENABLE: ["正常", "default"],
+  DISABLE: ["已停用", "outline"],
   UNKNOWN: ["未知", "outline"],
 }
 

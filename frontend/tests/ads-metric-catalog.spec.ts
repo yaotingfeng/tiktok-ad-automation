@@ -51,4 +51,7 @@ test("状态中文映射", () => {
   expect(statusLabel({ secondary_status: "AD_STATUS_AUDIT_DENY" }).label).toBe(
     "未通过",
   )
+  // 账户状态：目录存储带前缀与不带前缀两种形式
+  expect(statusLabel({ account_status: "ENABLE" }).label).toBe("正常")
+  expect(statusLabel({ account_status: "STATUS_ENABLE" }).label).toBe("正常")
 })
