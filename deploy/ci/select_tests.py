@@ -37,6 +37,8 @@ IGNORED = (
     re.compile(r"(^|/)[^/]+\.md$"),
     re.compile(r"^(AGENTS|CLAUDE)\.md$"),
     re.compile(r"^\.(gitignore|editorconfig)$"),
+    # 慢用例清单只决定快速层是否跳过某些用例，不改变任何用例的结果。
+    re.compile(r"^backend/tests/slow_tests\.txt$"),
 )
 # 端到端验收通过任务队列按名称调用 Worker，静态导入关系看不到；按业务区域显式对应。
 _BUILD_FLOW = (
@@ -75,6 +77,8 @@ RELEASE_INTEGRATION = re.compile(
 def empty_plan():
     return {
         "mode": "none",
+        # all：发布门禁，跑全部层；fast：日常快速检查，见 fast_tier。
+        "tier": "all",
         "reasons": [],
         "lint": False,
         "backend": {"all": False, "targets": []},
@@ -90,6 +94,17 @@ def full_plan(reason):
                 release_integration=True)
     plan["backend"]["all"] = True
     plan["frontend"] = {"build": True, "workspace": True, "batch": True, "r2": True}
+    return plan
+
+
+def fast_tier(plan):
+    """日常快速检查：后端排除 slow 标记（含全部验收），跳过浏览器验收与发布镜像集成。
+
+    这些慢检查只在发布门禁（tier=all）中运行，因此快速检查的结果不能作为发布依据。
+    """
+    plan["tier"] = "fast"
+    plan["frontend"]["batch"] = plan["frontend"]["r2"] = False
+    plan["release_integration"] = False
     return plan
 
 
@@ -249,6 +264,7 @@ def main() -> int:
     parser.add_argument("--base", help="已验证的基准提交；缺省时全量")
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--full", action="store_true")
+    parser.add_argument("--fast", action="store_true", help="只跑快速层，见 fast_tier")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.full:
@@ -262,6 +278,8 @@ def main() -> int:
             plan = full_plan("基准提交不在本地历史中：" + args.base)
         else:
             plan = plan_for(changed, args.repo / "backend")
+    if args.fast:
+        plan = fast_tier(plan)
     text = json.dumps(plan, ensure_ascii=False, indent=2)
     if args.output:
         args.output.write_text(text + "\n")

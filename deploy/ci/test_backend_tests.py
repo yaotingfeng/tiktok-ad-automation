@@ -46,5 +46,26 @@ class PartitionTests(unittest.TestCase):
         self.assertNotEqual(first["REDIS_URL"], first["TEST_REDIS_URL"])
 
 
+    def test_acceptance_runs_in_exclusive_phase(self):
+        ids = ["tests/x.py::a", "tests/acceptance/test_flow.py::b", "tests/y.py::c"]
+        regular, exclusive = backend_tests.split_exclusive(ids)
+        self.assertEqual(regular, ["tests/x.py::a", "tests/y.py::c"])
+        self.assertEqual(exclusive, ["tests/acceptance/test_flow.py::b"])
+
+    def test_fast_tier_deselects_slow_marker(self):
+        self.assertIn("not slow", backend_tests.pytest_command(["tests"], fast=True))
+        self.assertNotIn("not slow", backend_tests.pytest_command(["tests"], fast=False))
+
+    def test_exclusive_shards_do_not_reuse_regular_resources(self):
+        env = {
+            "DATABASE_URL": "postgresql://u:p@127.0.0.1:1/base_test",
+            "REDIS_URL": "redis://127.0.0.1:2/0",
+            "TEST_REDIS_URL": "redis://127.0.0.1:2/1",
+        }
+        regular = backend_tests.shard_env(env, 5, "ci_shard5_test", Path("/tmp/a"))
+        exclusive = backend_tests.shard_env(env, 6, "ci_shard6_test", Path("/tmp/b"))
+        self.assertNotEqual(regular["REDIS_URL"], exclusive["REDIS_URL"])
+        self.assertNotEqual(regular["TEST_REDIS_URL"], exclusive["TEST_REDIS_URL"])
+
 if __name__ == "__main__":
     unittest.main()

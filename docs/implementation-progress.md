@@ -2081,3 +2081,11 @@
 - 完整受影响门禁：后端 1553 普通通过 + 2 全新库独立重跑通过、3 跳过；浏览器工作台 486、搭建验收 4、R2 验收 1 通过，构建/类型/部署门禁通过。两项独立重跑是本机并发负载下的验收期限问题，未放宽生产期限。
 - 在真实搭建结束后正常冻结/排空，备份、隔离恢复与候选迁移验证成功；生产九角色运行该 SHA、Ready 9/9、Worker 7/7、Beat 单副本、HTTPS 200。配置/注册摘要一致，三个开关仍 true/true/false，数据库 head 仍 `0022_provider_link_defaults`。
 - 资源 Worker 实际池并发 4（原 1），恢复阶段约 507 MiB、PG 总连接 63，资源启动无 ERROR/Traceback。正式新批次耗时尚未实测，未创建或重试真实广告用于测速。备份、镜像摘要及范围边界见 [准备提速记录](validation/2026-10-12-preparation-speed.md)。
+
+## 2026-10-12 测试分层与验收独占阶段
+
+- 背景：全量后端 4672 项串行约 168 分钟（耗时缓存实测）；162 项 ≥10 秒用例占 103 分钟，两个验收文件 39 分钟。本机发布检查因负载超时被设为 `CHECK_BACKEND_SHARDS=2`，受影响检查 1558 项仍需约 50 分钟。
+- 分层：`slow` 标记由 `tests/conftest.py` 按目录（全部 `tests/acceptance`）及 `backend/tests/slow_tests.txt`（100 个实测 ≥10 秒的测试函数，`deploy/ci/slow_tests.py` 由耗时缓存生成）打上。`deploy/local.py check --fast` / `select_tests.py --fast` 生成 `tier=fast` 计划：后端 `-m "not slow"`，跳过浏览器验收与发布镜像集成，不写通过记录；`deploy` 始终 `tier=all`。
+- 验收独占：`backend_tests.py` 先多组并行跑普通用例，结束后再用 `CHECK_ACCEPTANCE_SHARDS`（默认 2）组单独跑验收，组号接续避免库名/Redis 库号冲突。按缓存估算全量约 42 分钟（普通 127 分钟/6 组 + 验收 41 分钟/2 组）；全量独占阶段尚未在 PG18 门禁中实测。
+- `test_template_item_api_removed` 参数改为固定 UUID，消除并行编排因随机 ID 误报的 5 项"并行不稳定"。
+- 验证：deploy/ci 四组单元测试通过；本机 PG17/Redis、隔离环境 `backend_tests.py --fast --shards 5`：4369 项通过 4357、失败 0、跳过 12（另 5 项为上述随机 ID 误报，已修复），用时 8.0 分钟；两阶段小样本（普通 10 项 + 验收 20 项，2+2 组）30 项全部通过；ruff 通过。

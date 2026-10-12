@@ -26,6 +26,24 @@ from app.main import app  # noqa: E402
 from tests.utils.user import authentication_token_from_username  # noqa: E402
 from tests.utils.utils import get_superuser_token_headers  # noqa: E402
 
+# 快速层：验收目录整体及清单中的慢测试函数标记为 slow，`-m "not slow"` 即可排除。
+# 清单由 deploy/ci/slow_tests.py 按实测耗时生成，按函数 ID（不含参数）匹配。
+SLOW_TESTS = {
+    line
+    for line in (Path(__file__).with_name("slow_tests.txt")).read_text().splitlines()
+    if line and not line.startswith("#")
+}
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    for item in items:
+        nodeid = item.nodeid
+        if (
+            nodeid.startswith("tests/acceptance/")
+            or nodeid.split("[", 1)[0] in SLOW_TESTS
+        ):
+            item.add_marker(pytest.mark.slow)
+
 
 @pytest.fixture(scope="session", autouse=True)
 def migrated_database() -> None:

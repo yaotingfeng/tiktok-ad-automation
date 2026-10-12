@@ -130,6 +130,8 @@ def plan_checks(args, base, folder, checkout, sha, env):
                "--head", sha, "--output", str(folder / "check-plan.json")]
     deployed = deployed_sha(env)
     basis = None if args.full else check_basis(base, sha, deployed)
+    if args.fast:
+        command.append("--fast")
     if args.full:
         command.append("--full")
         coverage = {"full": True, "base": None}
@@ -172,6 +174,11 @@ def main():
     parser.add_argument("--run", help="批次目录名；状态/恢复默认最近一批")
     parser.add_argument(
         "--full", action="store_true", help="按需全量检查；默认只检查受改动影响的部分"
+    )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="只跑快速层：跳过 slow 用例、全部验收和发布镜像集成；结果不作为发布依据",
     )
     parser.add_argument(
         "--full-scale",
@@ -232,6 +239,7 @@ def main():
             not args.full or args.action in ("check", "deploy"),
             "--full is only valid for check/deploy",
         )
+        require(not args.fast or args.action == "check", "--fast is only valid for check")
         require(
             not args.full_scale or args.action in ("check", "deploy"),
             "--full-scale is only valid for check/deploy",
@@ -277,11 +285,13 @@ def main():
                 )
                 mark("checks-passed")
             # 记录本提交的覆盖范围，后续发布可在此基础上增量检查或直接复用。
-            (base / "checks").mkdir(mode=0o700, exist_ok=True)
-            write(
-                base / "checks" / (sha + ".json"),
-                {"sha": sha, **coverage, "mode": plan["mode"], "at": int(time.time())},
-            )
+            # 快速检查跳过了慢用例与验收，不能作为发布的增量起点，因此不记录。
+            if plan["tier"] == "all":
+                (base / "checks").mkdir(mode=0o700, exist_ok=True)
+                write(
+                    base / "checks" / (sha + ".json"),
+                    {"sha": sha, **coverage, "mode": plan["mode"], "at": int(time.time())},
+                )
         if args.action == "deploy":
             # 仅快进推送指定 SHA 到公司 main；origin 不参与发布。
             mark("pushing")

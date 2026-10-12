@@ -99,5 +99,22 @@ class SelectTests(unittest.TestCase):
         self.assertEqual(self.plan("some/new/area.txt")["mode"], "full")
 
 
+    def test_fast_tier_drops_browser_acceptance_and_release_build(self):
+        plan = select_tests.fast_tier(self.plan("backend/app/modules/builds/execution.py"))
+        self.assertEqual(plan["tier"], "fast")
+        # 后端目标保留，慢用例由 pytest 的 slow 标记在运行时排除。
+        self.assertIn("tests/modules/builds/test_exec.py", plan["backend"]["targets"])
+        self.assertFalse(plan["frontend"]["batch"] or plan["frontend"]["r2"])
+        plan = select_tests.fast_tier(select_tests.full_plan("x"))
+        self.assertTrue(plan["backend"]["all"] and plan["frontend"]["workspace"])
+        self.assertFalse(plan["release_integration"])
+
+    def test_default_plans_run_every_tier(self):
+        self.assertEqual(self.plan("backend/app/modules/builds/execution.py")["tier"], "all")
+        self.assertEqual(select_tests.full_plan("x")["tier"], "all")
+
+    def test_slow_list_changes_need_no_checks(self):
+        self.assertEqual(self.plan("backend/tests/slow_tests.txt")["mode"], "none")
+
 if __name__ == "__main__":
     unittest.main()

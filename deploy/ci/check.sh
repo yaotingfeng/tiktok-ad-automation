@@ -6,7 +6,7 @@ repo=$(cd "$(dirname "$0")/../.." && pwd)
 # 仅继承工具连接配置，阻断终端中的生产数据库、云存储和平台凭据。
 if [[ ${1:-} != --isolated-environment ]]; then
   clean_env=("PATH=$PATH" "HOME=$HOME")
-  for key in TMPDIR LANG LC_ALL BUN_BIN PG_BIN_DIR CHECK_PLAN CHECK_CACHE_DIR CHECK_BACKEND_SHARDS CHECK_BROWSER_WORKERS ACCEPTANCE_SCALE DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH UV_CACHE_DIR UV_PYTHON_INSTALL_DIR PLAYWRIGHT_BROWSERS_PATH HTTPS_PROXY HTTP_PROXY ALL_PROXY NO_PROXY SSL_CERT_FILE SSL_CERT_DIR; do
+  for key in TMPDIR LANG LC_ALL BUN_BIN PG_BIN_DIR CHECK_PLAN CHECK_CACHE_DIR CHECK_BACKEND_SHARDS CHECK_ACCEPTANCE_SHARDS CHECK_BROWSER_WORKERS ACCEPTANCE_SCALE DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH UV_CACHE_DIR UV_PYTHON_INSTALL_DIR PLAYWRIGHT_BROWSERS_PATH HTTPS_PROXY HTTP_PROXY ALL_PROXY NO_PROXY SSL_CERT_FILE SSL_CERT_DIR; do
     if [[ -n ${!key:-} ]]; then clean_env+=("$key=${!key}"); fi
   done
   exec env -i "${clean_env[@]}" bash "$repo/deploy/ci/check.sh" --isolated-environment
@@ -75,6 +75,7 @@ trap 'exit 143' TERM
 python3 "$repo/deploy/ci/test_snapshot.py"
 python3 "$repo/deploy/ci/test_select_tests.py"
 python3 "$repo/deploy/ci/test_backend_tests.py"
+python3 "$repo/deploy/ci/test_slow_tests.py"
 # 检查计划由 deploy/local.py 按改动生成；直接运行本脚本时默认全量。
 plan_file=${CHECK_PLAN:-}
 if [[ -z $plan_file ]]; then
@@ -83,7 +84,8 @@ if [[ -z $plan_file ]]; then
 fi
 plan() { python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); [v:=v[k] for k in sys.argv[2:]]; print(" ".join(v) if isinstance(v,list) else ("1" if v is True else ("" if v is False else v)))' "$plan_file" "$@"; }
 mode=$(plan mode)
-printf '检查范围：%s（%s）\n' "$mode" "$(plan reasons)"
+tier=$(plan tier)
+printf '检查范围：%s（%s），层级：%s\n' "$mode" "$(plan reasons)" "$tier"
 if [[ $mode == none ]]; then
   printf 'No checks required for this change.\n'
   exit 0
@@ -140,7 +142,10 @@ lane_backend() {
     local targets=(tests)
     # 目标路径不含空格，按空格拆分为多个参数。
     [[ -n $backend_all ]] || read -r -a targets <<<"$backend_targets"
-    uv run python ../deploy/ci/backend_tests.py --work "$work/backend" \
+    # 快速层排除 slow 标记的用例（含全部验收）；发布门禁 tier=all 全部运行。
+    local tier_args=()
+    [[ $tier == fast ]] && tier_args=(--fast)
+    uv run python ../deploy/ci/backend_tests.py --work "$work/backend" ${tier_args[@]+"${tier_args[@]}"} \
       --durations ../deploy/ci/test-durations.json --durations "$cache_dir/test-durations.json" \
       --save-durations "$cache_dir/test-durations.json" "${targets[@]}"
   fi
@@ -203,4 +208,4 @@ if (( ${#failed[@]} )); then
   printf '\nCheck failed: %s\n' "${failed[*]}"
   exit 1
 fi
-printf '\nLocal check passed (%s).\n' "$mode"
+printf '\nLocal check passed (%s, %s).\n' "$mode" "$tier"

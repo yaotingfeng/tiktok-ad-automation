@@ -26,7 +26,9 @@ python3 deploy/local.py deploy
 
 需要全量回归时显式执行 `python3 deploy/local.py check --full` 或 `deploy --full`。同一提交已通过且覆盖到当前线上版本时直接复用结果，不重复检查。通过记录保存在 `.runtime/local-release/checks/`，实测用例耗时缓存在 `.runtime/local-release/ci-cache/`，用于并行分组均衡。
 
-后端测试按耗时分 4 组并行（`CHECK_BACKEND_SHARDS` 可调），每组独立数据库与 Redis 库号；独立测试库从迁移好的模板复制。并行失败的用例会在全新库中单独重跑一次，重跑通过的列为“并行不稳定”，仍失败才阻止发布。后端、前端、发布工具三条检查线同时运行。
+后端测试分两个阶段：普通用例按耗时多组并行（默认按 Docker CPU 数、最多 6 组，`CHECK_BACKEND_SHARDS` 可调），全部结束后，端到端验收（`tests/acceptance`）再单独分 2 组运行（`CHECK_ACCEPTANCE_SHARDS` 可调），避免多分钟级验收与普通用例同时争用测试数据库而超时。每组独立数据库与 Redis 库号；独立测试库从迁移好的模板复制。并行失败的用例会在全新库中单独重跑一次，重跑通过的列为“并行不稳定”，仍失败才阻止发布。后端、前端、发布工具三条检查线同时运行。
+
+日常快速检查：`python3 deploy/local.py check --fast`（可与 `--full` 组合）。快速层跳过 `slow` 标记的后端用例（全部 `tests/acceptance` 及 `backend/tests/slow_tests.txt` 中实测 10 秒以上的测试函数）、浏览器验收和发布镜像集成，结果不写入通过记录，不能作为发布依据；`deploy` 始终运行全部层级。本地直接跑 pytest 时用 `uv run pytest -m "not slow"` 得到同样的快速层。慢用例清单按实测耗时重新生成：`python3 deploy/ci/slow_tests.py .runtime/local-release/ci-cache/test-durations.json`。
 
 仅检查：`python3 deploy/local.py check`；仅做一次一致性备份：`python3 deploy/local.py backup`（会短暂停止服务、排空在途任务，再恢复原版）。
 
