@@ -2,9 +2,10 @@
 
 这些端点只访问本地发布表和查询快照；普通列表/趋势请求不会隐式调用 TikTok。
 """
+
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated, Literal, cast
 from uuid import UUID
@@ -14,16 +15,23 @@ from fastapi.responses import Response
 from sqlmodel import col, select
 
 from app.api.deps import CurrentUser, SessionDep
+from app.core.config import settings
 from app.core.context import TenantContext
 from app.integrations.tiktok.contracts.ads import EntityRef
-from app.modules.accounts.routing import freeze_route
-from app.modules.ads.sync_models import AdDirectoryRun
+from app.modules.accounts.models import AdvertiserAccount, TenantBC
 from app.modules.reporting.detail import AdDetailPublic, get_ad_detail
 from app.modules.reporting.exports import (
     create_export,
     download_export,
     get_export,
     list_exports,
+)
+from app.modules.reporting.filters import authorized_grants
+from app.modules.reporting.planner import (
+    ensure_bc_plans,
+    owned_accounts,
+    plan_hot,
+    plan_material,
 )
 from app.modules.reporting.preferences import (
     delete_view,
@@ -32,7 +40,6 @@ from app.modules.reporting.preferences import (
     update_view,
 )
 from app.modules.reporting.queries import query_ads, snapshot_trend
-from app.modules.reporting.scheduling import SyncRequest, request_sync
 from app.modules.reporting.schemas import (
     AdsQueryPage,
     ExportCreate,
@@ -43,29 +50,20 @@ from app.modules.reporting.schemas import (
     SavedViewPatch,
     SavedViewPublic,
     SelectionRequest,
-    SyncRunPublic,
-    SyncRunRequest,
+    SyncAccountStatus,
+    SyncPlanStatus,
+    SyncRefreshPublic,
+    SyncRefreshRequest,
+    SyncStatusPublic,
     TrendPublic,
 )
 from app.modules.reporting.selection import freeze_selection
-from app.modules.reporting.sync_models import ReportSyncRun
+from app.modules.reporting.store_models import AdSyncBc, ReportSyncState
 from app.modules.tenants.permissions import require_tenant
 
 router = APIRouter(prefix="/tenants/{tenant_id}", tags=["ads_reporting"])
 Dimension = Literal["account", "campaign", "adgroup", "ad", "material", "drama"]
 CSV = Annotated[str | None, Query(max_length=4096)]
-
-
-def _sync_public(row: ReportSyncRun | AdDirectoryRun) -> SyncRunPublic:
-    return SyncRunPublic(
-        id=row.id,
-        request_id=row.request_id,
-        status=cast(Literal["QUEUED", "RUNNING", "COMPLETE", "FAILED", "EXPIRED"], row.status),
-        coverage=row.coverage,
-        error_code=row.error_code,
-        observed_at=row.observed_at,
-        completed_at=row.completed_at,
-    )
 
 
 def _tuple(value: str | None) -> tuple[str, ...]:
@@ -124,7 +122,11 @@ def _filters(
 
 
 def _context(
-    session, user, tenant_id: UUID, *, action: Literal["read", "reporting_write"] = "read"
+    session,
+    user,
+    tenant_id: UUID,
+    *,
+    action: Literal["read", "reporting_write"] = "read",
 ) -> TenantContext:
     return require_tenant(session, actor_id=user.id, tenant_id=tenant_id, action=action)
 
@@ -271,7 +273,9 @@ def report_trend_route(
         sort_direction="asc",
     )
     if snapshot_id is None:
-        page = query_ads(session, context=context, bc_id=bc_id, filters=filters, limit=1)
+        page = query_ads(
+            session, context=context, bc_id=bc_id, filters=filters, limit=1
+        )
         snapshot_id = page.snapshot.snapshot_id
         session.commit()
     return snapshot_trend(
@@ -283,7 +287,9 @@ def report_trend_route(
     )
 
 
-@router.post("/ad-selections", response_model=FrozenSelection, name="freeze_ad_selection")
+@router.post(
+    "/ad-selections", response_model=FrozenSelection, name="freeze_ad_selection"
+)
 def freeze_ad_selection_route(
     tenant_id: UUID,
     body: SelectionRequest,
@@ -318,7 +324,11 @@ def create_report_view_route(
     return result
 
 
-@router.get("/report-views", response_model=tuple[SavedViewPublic, ...], name="list_report_views")
+@router.get(
+    "/report-views",
+    response_model=tuple[SavedViewPublic, ...],
+    name="list_report_views",
+)
 def list_report_views_route(
     tenant_id: UUID,
     bc_id: Annotated[str, Query(min_length=1, max_length=128)],
@@ -370,7 +380,9 @@ def delete_report_view_route(
     return {"deleted": True}
 
 
-@router.post("/report-exports", response_model=ExportPublic, name="create_report_export")
+@router.post(
+    "/report-exports", response_model=ExportPublic, name="create_report_export"
+)
 def create_report_export_route(
     tenant_id: UUID,
     body: ExportCreate,
@@ -390,7 +402,11 @@ def create_report_export_route(
     return result
 
 
-@router.get("/report-exports", response_model=tuple[ExportPublic, ...], name="list_report_exports")
+@router.get(
+    "/report-exports",
+    response_model=tuple[ExportPublic, ...],
+    name="list_report_exports",
+)
 def list_report_exports_route(
     tenant_id: UUID,
     bc_id: Annotated[str, Query(min_length=1, max_length=128)],
@@ -401,7 +417,9 @@ def list_report_exports_route(
     return list_exports(session, context=context, bc_id=bc_id)
 
 
-@router.get("/report-exports/{export_id}", response_model=ExportPublic, name="get_report_export")
+@router.get(
+    "/report-exports/{export_id}", response_model=ExportPublic, name="get_report_export"
+)
 def get_report_export_route(
     tenant_id: UUID,
     export_id: UUID,
@@ -413,7 +431,9 @@ def get_report_export_route(
     row = get_export(session, context=context, bc_id=bc_id, export_id=export_id)
     return ExportPublic(
         id=row.id,
-        status=cast(Literal["QUEUED", "RUNNING", "COMPLETE", "FAILED", "EXPIRED"], row.status),
+        status=cast(
+            Literal["QUEUED", "RUNNING", "COMPLETE", "FAILED", "EXPIRED"], row.status
+        ),
         coverage=dict(row.coverage),
         expires_at=row.expires_at,
     )
@@ -428,96 +448,133 @@ def download_report_export_route(
     user: CurrentUser,
 ) -> Response:
     context = _context(session, user, tenant_id)
-    content = download_export(session, context=context, bc_id=bc_id, export_id=export_id)
+    content = download_export(
+        session, context=context, bc_id=bc_id, export_id=export_id
+    )
     return Response(
         content=content,
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="report-{export_id}.csv"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="report-{export_id}.csv"'
+        },
     )
 
 
-@router.post("/ad-sync-runs", response_model=SyncRunPublic, name="request_ad_sync")
-def request_ad_sync_route(
+def _sync_scope(session, context, bc_id):
+    bc = session.get(TenantBC, (context.tenant_id, bc_id))
+    if bc is None or bc.ownership_conflict:
+        raise HTTPException(404, detail="query_scope_not_found")
+    return {
+        grant.advertiser_id
+        for grant in authorized_grants(session, context=context, bc_id=bc_id)
+    }
+
+
+@router.post(
+    "/ad-sync-refresh", response_model=SyncRefreshPublic, name="request_ad_sync_refresh"
+)
+def request_ad_sync_refresh_route(
     tenant_id: UUID,
-    body: SyncRunRequest,
-    bc_id: Annotated[str, Query(min_length=1, max_length=128)],
+    body: SyncRefreshRequest,
     session: SessionDep,
     user: CurrentUser,
-) -> SyncRunPublic:
+    bc_id: Annotated[str, Query(min_length=1, max_length=128)],
+):
     context = _context(session, user, tenant_id, action="reporting_write")
-    # 先冻结当前默认通道，再由 request_sync 对每个账户重新核对当前授权。
-    route = freeze_route(session, context=context, bc_id=bc_id, connection_id=None)
-    request = SyncRequest(
-        route=route,
-        advertiser_ids=body.advertiser_ids,
-        scope=body.scope,
-        start_date=body.start_date,
-        end_date=body.end_date,
-        refs=tuple(
-            EntityRef(ref.tenant_id, ref.advertiser_id, ref.kind, ref.remote_id)
-            for ref in body.refs
+    allowed = _sync_scope(session, context, bc_id)
+    if not settings.ADS_SYNC_ENABLED:
+        return SyncRefreshPublic(status="SYNC_DISABLED")
+    if not set(body.advertiser_ids) <= allowed:
+        raise HTTPException(403, detail="report_scope_forbidden")
+    now = datetime.now(UTC)
+    # 用户请求只建立当前租户的计划，不能顺带改动别的租户后台状态。
+    ensure_bc_plans(session, now=now, tenant_id=tenant_id)
+    plan = session.get(AdSyncBc, (tenant_id, bc_id))
+    if plan is None or not plan.enabled:
+        session.commit()
+        return SyncRefreshPublic(status="API_BINDING_REQUIRED")
+    accounts = sorted(
+        set(body.advertiser_ids or owned_accounts(session, plan)) & allowed
+    )
+    count = plan_hot(session, plan, active=accounts, now=now, tier="manual")
+    count += plan_material(session, plan, active=accounts, now=now, tier="manual")
+    session.commit()
+    return SyncRefreshPublic(status="QUEUED", queued=count, accounts=len(accounts))
+
+
+@router.get(
+    "/ad-sync-status", response_model=SyncStatusPublic, name="get_ad_sync_status"
+)
+def get_ad_sync_status_route(
+    tenant_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    bc_id: Annotated[str, Query(min_length=1, max_length=128)],
+    start_date: date,
+    end_date: date,
+):
+    context = _context(session, user, tenant_id)
+    allowed = _sync_scope(session, context, bc_id)
+    if start_date > end_date:
+        raise HTTPException(422, detail="invalid_reporting_filter")
+    plan = session.get(AdSyncBc, (tenant_id, bc_id))
+    accounts = session.exec(
+        select(AdvertiserAccount)
+        .where(
+            AdvertiserAccount.tenant_id == tenant_id,
+            col(AdvertiserAccount.advertiser_id).in_(allowed),
+        )
+        .order_by(AdvertiserAccount.advertiser_id)
+    ).all()
+    states = session.exec(
+        select(ReportSyncState).where(
+            ReportSyncState.tenant_id == tenant_id,
+            col(ReportSyncState.advertiser_id).in_(allowed),
+            ReportSyncState.report_kind == "ad_day",
+            ReportSyncState.stat_date >= start_date,
+            ReportSyncState.stat_date <= end_date,
+        )
+    ).all()
+    by_key = {(r.advertiser_id, r.stat_date): r for r in states}
+    days = [
+        start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)
+    ]
+    result = []
+    for account in accounts:
+        current = [by_key.get((account.advertiser_id, day)) for day in days]
+        successes = [
+            r.last_success_at
+            for r in current
+            if r is not None and r.last_success_at is not None
+        ]
+        result.append(
+            SyncAccountStatus(
+                advertiser_id=account.advertiser_id,
+                timezone=account.timezone,
+                last_success_at=max(successes) if successes else None,
+                incomplete_dates=tuple(
+                    day
+                    for day, row in zip(days, current, strict=True)
+                    if row is None or row.status != "COMPLETE"
+                ),
+                failed_dates=tuple(
+                    day
+                    for day, row in zip(days, current, strict=True)
+                    if row is not None and row.status == "FAILED"
+                ),
+            )
+        )
+    enabled = settings.ADS_SYNC_ENABLED and plan is not None and plan.enabled
+    reason = (
+        "sync_disabled"
+        if not settings.ADS_SYNC_ENABLED
+        else (plan.disabled_reason if plan is not None else "api_binding_required")
+    )
+    return SyncStatusPublic(
+        accounts=tuple(result),
+        plan=SyncPlanStatus(
+            enabled=enabled,
+            disabled_reason=reason,
+            next_hot_at=plan.next_hot_at if plan else None,
         ),
     )
-    run_id = request_sync(session, context=context, request=request)
-    session.commit()
-    row = session.get(ReportSyncRun, run_id) or session.get(AdDirectoryRun, run_id)
-    if row is None:
-        raise RuntimeError("sync run was not persisted")
-    return _sync_public(row)
-
-
-@router.get("/ad-sync-runs", response_model=tuple[SyncRunPublic, ...], name="list_ad_sync_runs")
-def list_ad_sync_runs_route(
-    tenant_id: UUID,
-    bc_id: Annotated[str, Query(min_length=1, max_length=128)],
-    session: SessionDep,
-    user: CurrentUser,
-) -> tuple[SyncRunPublic, ...]:
-    context = _context(session, user, tenant_id)
-    # 通过当前 BC 的授权集筛除撤权账户；轮询完全读取本地运行表。
-    from app.modules.reporting.filters import authorized_grants
-
-    allowed = {grant.advertiser_id for grant in authorized_grants(session, context=context, bc_id=bc_id)}
-    reports = session.exec(
-        select(ReportSyncRun)
-        .where(
-            ReportSyncRun.tenant_id == tenant_id,
-            ReportSyncRun.bc_id == bc_id,
-            ReportSyncRun.actor_id == context.actor_id,
-            col(ReportSyncRun.advertiser_id).in_(allowed),
-        )
-        .order_by(col(ReportSyncRun.created_at).desc())
-    ).all()
-    directories = session.exec(
-        select(AdDirectoryRun)
-        .where(
-            AdDirectoryRun.tenant_id == tenant_id,
-            AdDirectoryRun.bc_id == bc_id,
-            AdDirectoryRun.actor_id == context.actor_id,
-            col(AdDirectoryRun.advertiser_id).in_(allowed),
-        )
-        .order_by(col(AdDirectoryRun.created_at).desc())
-    ).all()
-    return tuple(_sync_public(row) for row in [*reports, *directories])
-
-
-@router.get("/ad-sync-runs/{run_id}", response_model=SyncRunPublic, name="get_ad_sync_run")
-def get_ad_sync_run_route(
-    tenant_id: UUID,
-    run_id: UUID,
-    bc_id: Annotated[str, Query(min_length=1, max_length=128)],
-    session: SessionDep,
-    user: CurrentUser,
-) -> SyncRunPublic:
-    context = _context(session, user, tenant_id)
-    row = session.get(ReportSyncRun, run_id, populate_existing=True)
-    if row is None:
-        row = session.get(AdDirectoryRun, run_id, populate_existing=True)
-    if row is None or row.tenant_id != tenant_id or row.bc_id != bc_id or row.actor_id != context.actor_id:
-        raise HTTPException(404, detail="ad_sync_run_not_found")
-    from app.modules.reporting.filters import authorized_grants
-
-    allowed = {grant.advertiser_id for grant in authorized_grants(session, context=context, bc_id=bc_id)}
-    if row.advertiser_id not in allowed:
-        raise HTTPException(403, detail="report_scope_forbidden")
-    return _sync_public(row)

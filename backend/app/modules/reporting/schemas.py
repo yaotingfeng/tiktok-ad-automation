@@ -15,9 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.integrations.tiktok.contracts.ads import EntityRef, MaterialUseRef
 
 Dimension = Literal["account", "campaign", "adgroup", "ad", "material", "drama"]
-Availability = Literal[
-    "AVAILABLE", "MISSING", "UNAVAILABLE", "UNSUPPORTED", "FAILED"
-]
+Availability = Literal["AVAILABLE", "MISSING", "UNAVAILABLE", "UNSUPPORTED", "FAILED"]
 CANONICAL_METRIC_KEYS = frozenset(
     {
         "spend",
@@ -97,7 +95,11 @@ class ReportingFilter(BaseModel):
     def validate_ranges(self) -> ReportingFilter:
         if self.start_date > self.end_date:
             raise ValueError("start_date must be on or before end_date")
-        if self.created_from and self.created_to and self.created_from > self.created_to:
+        if (
+            self.created_from
+            and self.created_to
+            and self.created_from > self.created_to
+        ):
             raise ValueError("created_from must be on or before created_to")
         for lower, upper in (
             (self.min_spend, self.max_spend),
@@ -254,35 +256,40 @@ class ExportCreate(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=128)
 
 
-class SyncRunRequest(BaseModel):
+class SyncRefreshRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+    advertiser_ids: tuple[str, ...] = ()
 
-    advertiser_ids: tuple[str, ...] = Field(default=())
-    scope: Literal["directory", "active", "report", "history", "targeted"] = "report"
-    start_date: date | None = None
-    end_date: date | None = None
-    refs: tuple[EntityRef, ...] = ()
-
-    @model_validator(mode="after")
-    def validate_dates(self) -> SyncRunRequest:
-        if (self.start_date is None) != (self.end_date is None):
-            raise ValueError("start_date and end_date must be supplied together")
-        if self.start_date and self.end_date and self.start_date > self.end_date:
-            raise ValueError("start_date must be on or before end_date")
-        if len(set(self.advertiser_ids)) != len(self.advertiser_ids):
-            raise ValueError("advertiser_ids must be unique")
-        if not self.advertiser_ids and self.scope not in {"active", "report", "history"}:
-            raise ValueError("advertiser_ids are required for this sync scope")
-        return self
+    @field_validator("advertiser_ids")
+    @classmethod
+    def valid_accounts(cls, values):
+        if len(values) != len(set(values)) or any(
+            not v.strip() or len(v) > 128 for v in values
+        ):
+            raise ValueError("advertiser_ids must be unique nonempty identifiers")
+        return values
 
 
-class SyncRunPublic(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+class SyncRefreshPublic(BaseModel):
+    queued: int = 0
+    accounts: int = 0
+    status: Literal["QUEUED", "SYNC_DISABLED", "API_BINDING_REQUIRED"]
 
-    id: UUID
-    request_id: UUID
-    status: str
-    coverage: str
-    error_code: str | None = None
-    observed_at: datetime | None = None
-    completed_at: datetime | None = None
+
+class SyncAccountStatus(BaseModel):
+    advertiser_id: str
+    timezone: str
+    last_success_at: datetime | None = None
+    incomplete_dates: tuple[date, ...] = ()
+    failed_dates: tuple[date, ...] = ()
+
+
+class SyncPlanStatus(BaseModel):
+    enabled: bool
+    disabled_reason: str | None = None
+    next_hot_at: datetime | None = None
+
+
+class SyncStatusPublic(BaseModel):
+    accounts: tuple[SyncAccountStatus, ...]
+    plan: SyncPlanStatus

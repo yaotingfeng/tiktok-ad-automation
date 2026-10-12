@@ -58,18 +58,28 @@ def _actor(session, tenant_id: UUID, bc_id: str, connection_id: UUID) -> UUID | 
     return run.actor_id if run else None
 
 
-def ensure_bc_plans(session: Session, *, now: datetime) -> int:
+def ensure_bc_plans(
+    session: Session, *, now: datetime, tenant_id: UUID | None = None
+) -> int:
     enabled = 0
-    bindings = session.exec(
-        select(BCConnectionBinding).where(BCConnectionBinding.status == "ACTIVE")
-    ).all()
+    scope_tenant = tenant_id
+    binding_query = select(BCConnectionBinding).where(
+        BCConnectionBinding.status == "ACTIVE"
+    )
+    plan_query = select(AdSyncBc)
+    if scope_tenant is not None:
+        binding_query = binding_query.where(
+            BCConnectionBinding.tenant_id == scope_tenant
+        )
+        plan_query = plan_query.where(AdSyncBc.tenant_id == scope_tenant)
+    bindings = session.exec(binding_query).all()
     # 同 BC 有多个 API 绑定时稳定选择一个，不能受数据库返回顺序影响。
     api = {
         (b.tenant_id, b.bc_id): b
         for b in sorted(bindings, key=lambda b: str(b.connection_id), reverse=True)
         if b.kind == "OFFICIAL_API"
     }
-    existing = session.exec(select(AdSyncBc)).all()
+    existing = session.exec(plan_query).all()
     for tenant_id, bc_id in {(b.tenant_id, b.bc_id) for b in bindings} | {
         (p.tenant_id, p.bc_id) for p in existing
     }:
@@ -118,27 +128,29 @@ def ensure_bc_plans(session: Session, *, now: datetime) -> int:
         plan.updated_at = now
         enabled += 1
     session.flush()
-    _refresh_owners(session)
+    _refresh_owners(session, tenant_id=scope_tenant)
     return enabled
 
 
-def _refresh_owners(session) -> None:
+def _refresh_owners(session, *, tenant_id=None) -> None:
     session.connection().execute(
         text("""
         INSERT INTO ad_sync_account (tenant_id, advertiser_id, owner_bc_id)
         SELECT a.tenant_id, a.advertiser_id, MIN(a.bc_id)
         FROM bc_account_access a JOIN ad_sync_bc p ON p.tenant_id=a.tenant_id AND p.bc_id=a.bc_id AND p.enabled
           AND a.connection_id::text = p.frozen_route->>'connection_id'
-        WHERE a.in_bc AND a.authorized AND a.active
+        WHERE (CAST(:tenant AS uuid) IS NULL OR a.tenant_id=CAST(:tenant AS uuid)) AND a.in_bc AND a.authorized AND a.active
         GROUP BY a.tenant_id, a.advertiser_id
-        ON CONFLICT (tenant_id, advertiser_id) DO UPDATE SET owner_bc_id = EXCLUDED.owner_bc_id""")
+        ON CONFLICT (tenant_id, advertiser_id) DO UPDATE SET owner_bc_id = EXCLUDED.owner_bc_id"""),
+        {"tenant": tenant_id},
     )
     session.connection().execute(
         text("""
-        DELETE FROM ad_sync_account s WHERE NOT EXISTS (
+        DELETE FROM ad_sync_account s WHERE (CAST(:tenant AS uuid) IS NULL OR s.tenant_id=CAST(:tenant AS uuid)) AND NOT EXISTS (
           SELECT 1 FROM bc_account_access a JOIN ad_sync_bc p ON p.tenant_id=a.tenant_id AND p.bc_id=a.bc_id AND p.enabled
           AND a.connection_id::text = p.frozen_route->>'connection_id'
-          WHERE a.tenant_id=s.tenant_id AND a.advertiser_id=s.advertiser_id AND a.in_bc AND a.authorized AND a.active)""")
+          WHERE a.tenant_id=s.tenant_id AND a.advertiser_id=s.advertiser_id AND a.in_bc AND a.authorized AND a.active)"""),
+        {"tenant": tenant_id},
     )
 
 
