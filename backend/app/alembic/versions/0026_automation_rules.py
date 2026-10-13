@@ -98,6 +98,7 @@ def upgrade() -> None:
         sa.Column("currency", _str(16), nullable=True),
         sa.Column("metrics", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column("targets", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("target_count", sa.Integer(), nullable=False),
         sa.Column("outcome", _str(32), nullable=False),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenant.id"]),
         sa.ForeignKeyConstraint(

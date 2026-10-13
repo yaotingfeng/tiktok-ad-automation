@@ -159,3 +159,8 @@ def test_run_history_and_detail(client, session, sync_seed, other_context):
     assert detail["hits"][0]["target_count"] == 1
     other = f"/api/tenants/{other_context.tenant_id}/automation-runs/{run.id}"
     assert client.get(other, headers=headers(other_context)).status_code == 404
+
+
+def test_once_rule_in_the_past_is_rejected(client, context):
+    past = {"frequency": "30M", "window": "ONCE", "once_at": "2020-01-01T00:00:00Z"}
+    assert create(client, context, schedule=past).status_code == 422

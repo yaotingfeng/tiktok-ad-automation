@@ -84,6 +84,8 @@ class AutomationRuleHit(SQLModel, table=True):
     currency: str | None = Field(default=None, max_length=16)
     metrics: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
     targets: list[dict[str, Any]] = Field(sa_column=Column(JSONB, nullable=False))
+    # targets 最多保存 max_targets 个；这里记录真实执行对象总数。
+    target_count: int = 0
     outcome: str = Field(default="NOTIFIED", max_length=32)
 
 

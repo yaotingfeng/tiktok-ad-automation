@@ -72,6 +72,10 @@ def _reschedule(session: Session, rule: AutomationRule, now: datetime) -> None:
         rule.next_run_at = None
         return
     definition = RuleDefinition.model_validate(rule.definition)
+    schedule = definition.schedule
+    if schedule.window == "ONCE" and schedule.once_at is not None and schedule.once_at <= now:
+        # 仅一次的规则时间已过：启用后永远不会运行，直接拒绝，避免界面显示开启却不运行。
+        raise DomainError("automation_rule_invalid", "「仅一次」的运行时间已过，请重新设置")
     setting = load_tenant_setting(session, rule.tenant_id)
     rule.next_run_at = next_run_at(
         definition.schedule, after=now, timezone=setting.schedule_timezone
@@ -234,7 +238,7 @@ def hit_public(hit: Hit, *, target_limit: int | None = None) -> HitPublic:
         bc_id=hit.bc_id,
         currency=hit.currency,
         metrics=hit.metrics,
-        target_count=len(targets),
+        target_count=hit.target_count,
         targets=targets[:target_limit] if target_limit else targets,
     )
 
@@ -351,7 +355,7 @@ def get_run(session: Session, *, context: TenantContext, run_id: UUID) -> RunDet
                 bc_id=hit.bc_id,
                 currency=hit.currency,
                 metrics=hit.metrics,
-                target_count=len(hit.targets),
+                target_count=hit.target_count,
                 targets=hit.targets,
             )
             for hit in hits

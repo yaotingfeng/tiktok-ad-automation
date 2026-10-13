@@ -6,6 +6,7 @@ from sqlmodel import select
 from app.core.config import settings
 from app.jobs.models import PendingDispatch
 from app.modules.automation_rules.models import (
+    AutomationRule,
     AutomationRuleRun,
     AutomationTenantSetting,
 )
@@ -66,3 +67,48 @@ def test_cleanup_keeps_30_days(session, sync_seed):
         )
     session.flush()
     assert cleanup_runs(session, now=NOW) == 1
+
+
+def test_paused_tenant_does_not_starve_others(session, sync_seed, monkeypatch):
+    from app.modules.automation_rules import tasks
+    from tests.modules.conftest import create_context
+    monkeypatch.setattr(settings, "AUTOMATED_RULES_ENABLED", True)
+    monkeypatch.setattr(tasks, "SCAN_LIMIT", 1)
+    paused = create_context(session)
+    session.add(AutomationTenantSetting(tenant_id=paused.tenant_id, paused=True))
+    old = AutomationRule(tenant_id=paused.tenant_id, name="p", created_by=paused.actor_id,
+                         updated_by=paused.actor_id, definition=make_rule(session, sync_seed).definition,
+                         next_run_at=NOW - timedelta(hours=5))
+    session.add(old)
+    other = session.exec(select(AutomationRule).where(AutomationRule.tenant_id == sync_seed.tenant_id)).one()
+    other.next_run_at = NOW - timedelta(minutes=1)
+    session.flush()
+    assert scan_due_rules(session, now=NOW) == 1
+    assert other.next_run_at > NOW
+
+
+def test_invalid_definition_is_disabled_without_blocking(session, sync_seed, monkeypatch):
+    monkeypatch.setattr(settings, "AUTOMATED_RULES_ENABLED", True)
+    bad = make_rule(session, sync_seed)
+    bad.name, bad.definition = "bad", {**bad.definition, "conditions": []}
+    bad.next_run_at = NOW - timedelta(hours=1)
+    good = make_rule(session, sync_seed)
+    good.name, good.next_run_at = "good", NOW - timedelta(minutes=1)
+    session.flush()
+    assert scan_due_rules(session, now=NOW) == 1
+    assert bad.enabled is False and bad.next_run_at is None
+
+
+def test_runnable_checks_flag_enabled_and_pause(session, sync_seed, monkeypatch):
+    from app.modules.automation_rules.tasks import runnable
+    rule = make_rule(session, sync_seed)
+    monkeypatch.setattr(settings, "AUTOMATED_RULES_ENABLED", False)
+    assert runnable(session, rule) is False
+    monkeypatch.setattr(settings, "AUTOMATED_RULES_ENABLED", True)
+    assert runnable(session, rule) is True
+    rule.enabled = False
+    assert runnable(session, rule) is False
+    rule.enabled = True
+    session.add(AutomationTenantSetting(tenant_id=rule.tenant_id, paused=True))
+    session.flush()
+    assert runnable(session, rule) is False

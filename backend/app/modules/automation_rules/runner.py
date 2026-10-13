@@ -17,7 +17,7 @@ from app.core.errors import DomainError
 from app.jobs.outbox import enqueue_after_commit
 from app.jobs.tasks import register_dispatch_task
 from app.modules.automation_rules import feishu
-from app.modules.automation_rules.evaluate import evaluate
+from app.modules.automation_rules.evaluate import Evaluation, evaluate
 from app.modules.automation_rules.inputs import load_inputs
 from app.modules.automation_rules.models import (
     AutomationRule,
@@ -82,6 +82,31 @@ def _finish_failed(
     return run
 
 
+def _write_hits(
+    session: Session, rule: AutomationRule, run: AutomationRuleRun, result: Evaluation
+) -> None:
+    for sequence, hit in enumerate(result.hits):
+        session.add(
+            AutomationRuleHit(
+                tenant_id=rule.tenant_id,
+                run_id=run.id,
+                sequence=sequence,
+                # 剧名与对象键来自平台命名，长度不受控，按列宽截断。
+                subject_key=hit.subject_key[:300],
+                subject_label=hit.subject_label[:500],
+                drama_name=hit.drama[:300] if hit.drama else None,
+                advertiser_id=hit.advertiser_id,
+                bc_id=hit.bc_id,
+                currency=hit.currency,
+                metrics=hit.metrics,
+                targets=[asdict(target) for target in hit.targets],
+                target_count=hit.target_count,
+                outcome="NOTIFIED",
+            )
+        )
+    session.flush()
+
+
 def execute_run(
     session: Session, *, rule: AutomationRule, slot_at: datetime, now: datetime
 ) -> AutomationRuleRun:
@@ -100,36 +125,24 @@ def execute_run(
         )
     except DomainError:
         return _finish_failed(run, "rule_owner_forbidden", now)
+    # 判断与命中写入放在保存点里：数据库错误或超时只回滚这一部分，
+    # 运行记录仍以失败状态提交，槽位不会无记录地丢失。
     try:
-        definition = RuleDefinition.model_validate(rule.definition)
-        inputs = load_inputs(
-            session, tenant_id=rule.tenant_id, definition=definition, now=now
-        )
-        result = evaluate(definition, inputs)
+        with session.begin_nested():
+            definition = RuleDefinition.model_validate(rule.definition)
+            inputs = load_inputs(
+                session, tenant_id=rule.tenant_id, definition=definition, now=now
+            )
+            result = evaluate(definition, inputs)
+            _write_hits(session, rule, run, result)
     except SoftTimeLimitExceeded:
-        raise
+        logger.warning("automation rule timed out", extra={"rule_id": str(rule.id)})
+        return _finish_failed(run, "evaluation_timeout", now)
     except Exception:
         logger.exception(
             "automation rule evaluation failed", extra={"rule_id": str(rule.id)}
         )
         return _finish_failed(run, "evaluation_failed", now)
-    for sequence, hit in enumerate(result.hits):
-        session.add(
-            AutomationRuleHit(
-                tenant_id=rule.tenant_id,
-                run_id=run.id,
-                sequence=sequence,
-                subject_key=hit.subject_key,
-                subject_label=hit.subject_label[:500],
-                drama_name=hit.drama,
-                advertiser_id=hit.advertiser_id,
-                bc_id=hit.bc_id,
-                currency=hit.currency,
-                metrics=hit.metrics,
-                targets=[asdict(target) for target in hit.targets],
-                outcome="NOTIFIED",
-            )
-        )
     run.checked_count = result.checked
     run.hit_count = len(result.hits)
     run.skipped_count = result.skipped_count
@@ -172,7 +185,7 @@ def build_run_card(
             label=hit.subject_label,
             drama=hit.drama_name if hit.drama_name != hit.subject_label else None,
             metrics=[(_metric_name(k), v or "—") for k, v in hit.metrics.items()],
-            target_count=len(hit.targets),
+            target_count=hit.target_count,
         )
         for hit in hits[: feishu.MAX_CARD_HITS]
     ]

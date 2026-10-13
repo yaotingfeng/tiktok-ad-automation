@@ -10,6 +10,7 @@ from app.modules.automation_rules.inputs import Entity, Inputs
 from app.modules.automation_rules.schemas import Condition, RuleDefinition
 from app.modules.reporting.metric_catalog import DERIVED_RATIOS, STORED_KEYS
 
+_DEPTH = {"campaign": 0, "adgroup": 1, "ad": 2, "material": 3}
 _RATIOS = {name: (num, den, scale) for name, num, den, scale in DERIVED_RATIOS}
 _STATUS = {"ACTIVE": "ENABLE", "PAUSED": "DISABLE"}
 
@@ -34,7 +35,9 @@ class Hit:
     bc_id: str | None
     currency: str
     metrics: dict[str, str]
+    # 只保留前 max_targets 个执行对象；target_count 是真实总数。
     targets: tuple[Target, ...]
+    target_count: int
 
 
 @dataclass(frozen=True)
@@ -67,15 +70,25 @@ def _sum(
     facts: dict[str, dict[str, dict[str, Decimal | None]]],
     range_type: str,
 ) -> dict[str, Decimal | None]:
+    """没有事实行按 0 计（账户已通过新鲜度检查，说明确实没有投放）；
+    有事实行但某指标全部为空时保持为空，与报表的 MISSING 口径一致，条件不满足。"""
     totals: dict[str, Decimal | None] = {key: Decimal(0) for key in STORED_KEYS}
+    seen: dict[str, bool] = dict.fromkeys(STORED_KEYS, False)
+    missing: dict[str, bool] = dict.fromkeys(STORED_KEYS, False)
     for member in members:
         row = facts.get(range_type, {}).get(member.key)
         if row is None:
-            continue  # 已通过新鲜度检查的账户,没有事实行即没有消耗,按 0 计。
+            continue
         for key in STORED_KEYS:
             value = row.get(key)
-            if value is not None:
+            if value is None:
+                missing[key] = True
+            else:
+                seen[key] = True
                 totals[key] = (totals[key] or Decimal(0)) + value
+    for key in STORED_KEYS:
+        if missing[key] and not seen[key]:
+            totals[key] = None
     return totals
 
 
@@ -136,6 +149,16 @@ def _format(value: Decimal | str | None) -> str:
     return str(value)
 
 
+def _materials_by_ad(inputs: Inputs) -> dict[str, list[Entity]]:
+    """广告 → 使用的素材，一次建好索引，避免每个命中都扫描全部素材。"""
+    result: dict[str, list[Entity]] = defaultdict(list)
+    for entity in inputs.entities.values():
+        if entity.kind == "material":
+            for use in entity.material_uses:
+                result[f"ad:{use['advertiser_id']}:{use['ad_remote_id']}"].append(entity)
+    return result
+
+
 def _children(inputs: Inputs) -> dict[str, list[Entity]]:
     result = defaultdict(list)
     for entity in inputs.entities.values():
@@ -149,8 +172,10 @@ def _targets(
     level: str,
     inputs: Inputs,
     children: dict[str, list[Entity]],
+    materials_by_ad: dict[str, list[Entity]],
 ) -> tuple[Target, ...]:
-    """把判断对象展开到执行层级;素材按使用它的广告归属。"""
+    """把判断对象展开到执行层级：执行层级更高时沿上级查找（合计口径），
+    更低时向下展开；素材按使用它的广告归属。"""
     found: dict[str, Entity] = {}
     ad_keys: set[str] = set()
     stack = list(members)
@@ -161,17 +186,16 @@ def _targets(
             continue
         if item.kind == "ad":
             ad_keys.add(item.key)
+        if level != "material" and _DEPTH[level] < _DEPTH[item.kind]:
+            parent = inputs.entities.get(item.parent_key or "")
+            if parent is not None:
+                stack.append(parent)
+            continue
         stack.extend(children.get(item.key, ()))
     if level == "material":
-        for entity in inputs.entities.values():
-            if entity.kind == "material" and (
-                entity.key in found
-                or any(
-                    f"ad:{u['advertiser_id']}:{u['ad_remote_id']}" in ad_keys
-                    for u in entity.material_uses
-                )
-            ):
-                found[entity.key] = entity
+        for ad_key in ad_keys:
+            for material in materials_by_ad.get(ad_key, ()):
+                found[material.key] = material
     return tuple(
         Target(
             e.key,
@@ -204,12 +228,16 @@ def evaluate(definition: RuleDefinition, inputs: Inputs) -> Evaluation:
         else:
             groups[(entity.currency,)].append(entity)
     children = _children(inputs)
+    materials_by_ad = _materials_by_ad(inputs)
     hits = []
     for key, members in groups.items():
         values = [(c, _metric(c, members, inputs)) for c in definition.conditions]
         if not all(_matches(c, v) for c, v in values):
             continue
         first = members[0]
+        targets = _targets(
+            members, definition.action.level, inputs, children, materials_by_ad
+        )
         if definition.aggregation == "EACH":
             subject, label = first.key, first.name
         elif definition.aggregation == "DRAMA":
@@ -227,7 +255,8 @@ def evaluate(definition: RuleDefinition, inputs: Inputs) -> Evaluation:
                 bc_id=first.bc_id if definition.aggregation == "EACH" else None,
                 currency=first.currency,
                 metrics={_metric_key(c): _format(v) for c, v in values},
-                targets=_targets(members, definition.action.level, inputs, children),
+                targets=targets[: definition.max_targets],
+                target_count=len(targets),
             )
         )
     return Evaluation(checked=len(groups), hits=tuple(hits), skipped_count=skipped)

@@ -113,3 +113,29 @@ def test_deliver_marks_sent_and_failed(session, sync_seed):
     )
     assert deliver_notification(session, run_id=run.id, transport=bad) == "FAILED"
     assert "bad" in session.get(AutomationRuleRun, run.id).notify_error
+
+
+def test_database_error_during_evaluation_records_failed_run(session, sync_seed, monkeypatch):
+    from sqlalchemy import text
+
+    from app.modules.automation_rules import runner
+
+    def broken(session, **_kwargs):
+        session.connection().execute(text("SELECT 1/0"))
+
+    _seed(session, sync_seed)
+    monkeypatch.setattr(runner, "load_inputs", broken)
+    run = execute_run(session, rule=make_rule(session, sync_seed), slot_at=NOW, now=NOW)
+    session.flush()
+    assert run.status == "FAILED" and run.error_code == "evaluation_failed"
+
+
+def test_long_drama_names_are_truncated(session, sync_seed):
+    from app.modules.ads.models import CampaignNameProjection
+    _seed(session, sync_seed)
+    row = session.get(CampaignNameProjection, (sync_seed.tenant_id, "acc-1", "c1", 1))
+    row.drama_name = "长" * 400
+    session.flush()
+    run = execute_run(session, rule=make_rule(session, sync_seed, aggregation="DRAMA"),
+                      slot_at=NOW, now=NOW)
+    assert run.status == "COMPLETE" and run.hit_count == 1

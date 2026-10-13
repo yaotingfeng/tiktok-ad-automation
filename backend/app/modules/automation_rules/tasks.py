@@ -1,9 +1,11 @@
 """自动规则后台任务：Beat 扫描到期规则，经 outbox 投递运行与飞书发送。"""
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
+from pydantic import ValidationError
 from sqlalchemy import delete
 from sqlmodel import Session, col, select
 
@@ -14,7 +16,11 @@ from app.core.errors import DomainError
 from app.jobs.celery_app import celery_app
 from app.jobs.outbox import enqueue_after_commit, validate_dispatch_payload
 from app.jobs.tasks import register_dispatch_task
-from app.modules.automation_rules.models import AutomationRule, AutomationRuleRun
+from app.modules.automation_rules.models import (
+    AutomationRule,
+    AutomationRuleRun,
+    AutomationTenantSetting,
+)
 from app.modules.automation_rules.runner import deliver_notification, execute_run
 from app.modules.automation_rules.schedule import next_run_at
 from app.modules.automation_rules.schemas import RuleDefinition
@@ -22,30 +28,49 @@ from app.modules.automation_rules.settings_service import load_tenant_setting
 
 register_dispatch_task("automation.run_rule", "ads-reporting")
 
+logger = logging.getLogger(__name__)
+
 SCAN_LIMIT = 200
 RUN_RETENTION = timedelta(days=30)
+
+
+def runnable(session: Session, rule: AutomationRule) -> bool:
+    """投递后到真正执行之间，规则可能已被关闭、租户暂停或部署开关关闭，执行前重新检查。"""
+    if not settings.AUTOMATED_RULES_ENABLED or not rule.enabled:
+        return False
+    return not load_tenant_setting(session, rule.tenant_id).paused
 
 
 def scan_due_rules(session: Session, *, now: datetime) -> int:
     """投递到期规则并推进下一次运行时刻；部署开关关闭时不调度任何规则。"""
     if not settings.AUTOMATED_RULES_ENABLED:
         return 0
+    # 暂停的租户在 SQL 中排除：保持到期状态，恢复后立即补跑一次；
+    # 也不会因为大量暂停规则排在前面而占满扫描上限、饿死其他租户。
+    paused = select(AutomationTenantSetting.tenant_id).where(
+        col(AutomationTenantSetting.paused).is_(True)
+    )
     rules = session.exec(
         select(AutomationRule)
         .where(
             col(AutomationRule.enabled).is_(True),
             col(AutomationRule.next_run_at) <= now,
+            col(AutomationRule.tenant_id).not_in(paused),
         )
         .order_by(col(AutomationRule.next_run_at))
         .limit(SCAN_LIMIT)
-        .with_for_update(skip_locked=True)
+        .with_for_update(skip_locked=True, of=AutomationRule)
     ).all()
     count = 0
     for rule in rules:
-        setting = load_tenant_setting(session, rule.tenant_id)
-        if setting.paused:
-            # 租户暂停全部规则：保持到期状态，恢复后立即补跑一次而不是逐个补齐错过的槽位。
+        try:
+            definition = RuleDefinition.model_validate(rule.definition)
+        except ValidationError:
+            # 指标目录调整后旧定义可能不再合法：只停用这一条规则，不影响其他规则调度。
+            logger.warning("automation rule definition invalid", extra={"rule_id": str(rule.id)})
+            rule.enabled, rule.next_run_at = False, None
             continue
+        setting = load_tenant_setting(session, rule.tenant_id)
         slot = rule.next_run_at
         assert slot is not None
         enqueue_after_commit(
@@ -55,7 +80,6 @@ def scan_due_rules(session: Session, *, now: datetime) -> int:
             task_key=f"automation-run:{rule.id}:{slot.isoformat()}",
             payload={"rule_id": str(rule.id), "slot_at": slot.isoformat()},
         )
-        definition = RuleDefinition.model_validate(rule.definition)
         if definition.schedule.window == "ONCE":
             rule.enabled, rule.next_run_at = False, None
         else:
@@ -105,6 +129,8 @@ def run_rule(*, tenant_id: str, actor_id: str, payload: dict[str, Any]) -> str:
             return "RULE_DELETED"
         if str(rule.tenant_id) != tenant_id:
             raise DomainError("action_forbidden", "规则不属于该租户")
+        if not runnable(session, rule):
+            return "SKIPPED"
         run = execute_run(
             session,
             rule=rule,
