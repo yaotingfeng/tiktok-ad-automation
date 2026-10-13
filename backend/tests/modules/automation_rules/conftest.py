@@ -20,3 +20,7 @@ def admin_context(session):
 @pytest.fixture
 def viewer_context(session):
     return create_context(session, role="viewer")
+
+
+# 跨 BC 账户种子(acc-2 同时属于 bc-a、bc-b)由报表测试共享。
+from tests.modules.reporting.sync_conftest import sync_seed as sync_seed  # noqa: E402
