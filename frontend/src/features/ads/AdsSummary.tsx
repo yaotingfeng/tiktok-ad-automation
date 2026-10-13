@@ -1,5 +1,6 @@
 import { AlertCircle } from "lucide-react"
 import type { MetricDefinitionPublic } from "@/client"
+import { Card } from "@/components/ui/card"
 import { formatMetric } from "./metricCatalog"
 
 type SummaryBucket = {
@@ -40,23 +41,24 @@ export function AdsSummary({ summary, catalog }: AdsSummaryProps) {
 
   return (
     <div className="space-y-2">
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+      {/* 与页面其他卡片同一套圆角、阴影和字号层级，一行 6 张，数值保持醒目。 */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
         {SUMMARY_KEYS.map((key) => {
           const def = catalog.find((d) => d.key === key)
           if (!def) return null
           return (
-            <div
+            <Card
               key={key}
-              className="min-w-0 rounded-md border bg-card px-3 py-2"
+              className="gap-1 px-4 py-3 lg:gap-1 lg:py-3"
               data-testid={`summary-${key}`}
             >
               <div
-                className="truncate text-xs text-muted-foreground"
+                className="truncate text-sm text-muted-foreground"
                 title={def.basic_name_zh}
               >
                 {def.basic_label}
               </div>
-              <div className="truncate text-base font-semibold tabular-nums">
+              <div className="truncate text-2xl font-semibold tabular-nums">
                 {buckets.length > 0 ? (
                   <span
                     title={
@@ -87,7 +89,7 @@ export function AdsSummary({ summary, catalog }: AdsSummaryProps) {
                   <span className="text-muted-foreground">—</span>
                 )}
               </div>
-            </div>
+            </Card>
           )
         })}
       </div>
