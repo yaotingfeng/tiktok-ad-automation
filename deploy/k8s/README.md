@@ -39,7 +39,7 @@
 2. 生产域名 `tkada.shortclipflix.com` 的 CNAME 指向 `alb-ae6m00kf3iaolvbxim.ap-southeast-1.alb.aliyuncsslbintl.com`。集群内真实 TLS 握手确认 ALB 已提供有效 `*.shortclipflix.com` 证书，无需新申请；2026-10-10 已按用户授权创建正式 Service 并追加新 host 的 TLS 声明与路由，控制器同步成功；九角色已部署；生产域名已确认解析到该 ALB，使用现有 shortclipflix 通配证书；切换验收见生产手册。脚本只检查 TLS hosts 声明，不读取共享证书 Secret；发布验收还需通过域名真实访问。
 3. 仓库外的运行配置和真实 MCP 注册文件；注册文件必须允许目标回调域名。私有 R2 桶的 CORS 同步允许目标前端 origin，禁止改为公开桶。
 4. 已确认从新加坡迁移密钥、队列和授权；最终切换时先停止旧调度、排空任务并按发布手册备份。不得让两套 Beat/Worker 同时消费同一批任务。
-5. 三个部署开关的明确取值。`MATERIAL_INGEST_ENABLED` 控制新导入入口，`MATERIAL_CLEANUP_ENABLED` 控制自动清理，`ADS_SYNC_ENABLED` 控制新周期同步；关闭它们不等于已有队列任务不会执行。首次值按用户确认填写，后续发布保留已确认值。
+5. 四个部署开关的明确取值。`MATERIAL_INGEST_ENABLED` 控制新导入入口，`MATERIAL_CLEANUP_ENABLED` 控制自动清理，`ADS_SYNC_ENABLED` 控制新周期同步，`AUTOMATED_RULES_ENABLED` 控制自动规则按排期运行与飞书通知；关闭它们不等于已有队列任务不会执行。首次值按用户确认填写，后续发布保留已确认值。
 
 `runtime-secret.example.env` 是字段模板，不是可直接部署的配置。使用 literal `KEY=value`，不要加 shell 引号或 `source` 到当前 shell；秘密文件权限设为 0600。目标域名必须同时用于 `FRONTEND_HOST`、MCP 回调和已启用的 TikTok API 回调。API 应用未配置时三个 API 注册字段全部留空，不能只填写一部分。
 

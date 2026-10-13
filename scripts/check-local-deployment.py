@@ -91,6 +91,7 @@ def run(image):
                 "S3_SECRET_ACCESS_KEY": "synthetic-local-only",
                 "TIKTOK_CALL_POLICIES": json.dumps(policies),
                 "ADS_SYNC_ENABLED": "false",
+                "AUTOMATED_RULES_ENABLED": "false",
                 "MATERIAL_INGEST_ENABLED": "false",
                 "MATERIAL_CLEANUP_ENABLED": "false",
                 "MCP_REDIRECT_URI": origin + "/api/integrations/tiktok/mcp/callback",

@@ -6,14 +6,18 @@ from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, col, select
+from sqlmodel import Session, col, func, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.modules.automation_rules.catalog import ACTION_LEVELS, RULE_METRICS
 from app.modules.automation_rules.evaluate import Hit, evaluate
 from app.modules.automation_rules.inputs import load_inputs
-from app.modules.automation_rules.models import AutomationRule, AutomationRuleRun
+from app.modules.automation_rules.models import (
+    AutomationRule,
+    AutomationRuleHit,
+    AutomationRuleRun,
+)
 from app.modules.automation_rules.schedule import next_run_at
 from app.modules.automation_rules.schemas import (
     CatalogMetric,
@@ -25,6 +29,9 @@ from app.modules.automation_rules.schemas import (
     RulePage,
     RulePublic,
     RuleUpdate,
+    RunDetail,
+    RunListItem,
+    RunPage,
     RunSummary,
 )
 from app.modules.automation_rules.settings_service import load_tenant_setting
@@ -289,4 +296,64 @@ def catalog() -> CatalogPublic:
             for metric in RULE_METRICS.values()
         ],
         action_levels={key: list(levels) for key, levels in ACTION_LEVELS.items()},
+    )
+
+
+def _run_item(run: AutomationRuleRun, rule_name: str) -> RunListItem:
+    return RunListItem(**run_summary(run).model_dump(), rule_name=rule_name)
+
+
+def list_runs(
+    session: Session,
+    *,
+    context: TenantContext,
+    rule_id: UUID | None,
+    limit: int,
+    offset: int,
+) -> RunPage:
+    require(session, context, "read")
+    condition = [AutomationRuleRun.tenant_id == context.tenant_id]
+    if rule_id is not None:
+        condition.append(AutomationRuleRun.rule_id == rule_id)
+    total = session.exec(
+        select(func.count()).select_from(AutomationRuleRun).where(*condition)
+    ).one()
+    rows = session.exec(
+        select(AutomationRuleRun, AutomationRule.name)
+        .join(AutomationRule, col(AutomationRule.id) == AutomationRuleRun.rule_id)
+        .where(*condition)
+        .order_by(col(AutomationRuleRun.started_at).desc())
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    return RunPage(items=[_run_item(run, name) for run, name in rows], total=total)
+
+
+def get_run(session: Session, *, context: TenantContext, run_id: UUID) -> RunDetail:
+    require(session, context, "read")
+    run = session.get(AutomationRuleRun, run_id)
+    if run is None or run.tenant_id != context.tenant_id:
+        raise DomainError("automation_run_not_found", "运行记录不存在")
+    rule = session.get(AutomationRule, run.rule_id)
+    hits = session.exec(
+        select(AutomationRuleHit)
+        .where(AutomationRuleHit.run_id == run.id)
+        .order_by(col(AutomationRuleHit.sequence))
+    ).all()
+    return RunDetail(
+        run=_run_item(run, rule.name if rule else ""),
+        hits=[
+            HitPublic(
+                subject_key=hit.subject_key,
+                subject_label=hit.subject_label,
+                drama_name=hit.drama_name,
+                advertiser_id=hit.advertiser_id,
+                bc_id=hit.bc_id,
+                currency=hit.currency,
+                metrics=hit.metrics,
+                target_count=len(hit.targets),
+                targets=hit.targets,
+            )
+            for hit in hits
+        ],
     )

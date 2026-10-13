@@ -45,6 +45,7 @@ def main():
             "MATERIAL_INGEST_ENABLED": "false",
             "MATERIAL_CLEANUP_ENABLED": "false",
             "ADS_SYNC_ENABLED": "false",
+            "AUTOMATED_RULES_ENABLED": "false",
             "CONNECTION_ENCRYPTION_KEY": base64.urlsafe_b64encode(
                 secrets.token_bytes(32)
             ).decode(),

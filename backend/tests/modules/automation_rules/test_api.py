@@ -141,3 +141,21 @@ def test_dry_run_http_reports_stale_accounts(client, session, sync_seed):
         "acc-1",
         "acc-2",
     }
+
+
+def test_run_history_and_detail(client, session, sync_seed, other_context):
+    from app.modules.automation_rules.runner import execute_run
+    from tests.modules.automation_rules.test_inputs import NOW, _seed
+    from tests.modules.automation_rules.test_runner import make_rule
+
+    _seed(session, sync_seed)
+    run = execute_run(session, rule=make_rule(session, sync_seed), slot_at=NOW, now=NOW)
+    ctx = sync_seed.context
+    base_url = f"/api/tenants/{ctx.tenant_id}/automation-runs"
+    page = client.get(base_url, headers=headers(ctx)).json()
+    assert page["total"] == 1 and page["items"][0]["rule_name"] == "r"
+    detail = client.get(f"{base_url}/{run.id}", headers=headers(ctx)).json()
+    assert [h["subject_key"] for h in detail["hits"]] == ["adgroup:acc-1:g1"]
+    assert detail["hits"][0]["target_count"] == 1
+    other = f"/api/tenants/{other_context.tenant_id}/automation-runs/{run.id}"
+    assert client.get(other, headers=headers(other_context)).status_code == 404

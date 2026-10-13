@@ -92,6 +92,7 @@ services:
     image: *release-image
     environment:
       ADS_SYNC_ENABLED: ${ADS_SYNC_ENABLED:-false}
+      AUTOMATED_RULES_ENABLED: ${AUTOMATED_RULES_ENABLED:-false}
       ADS_REPORTING_WORKER_CONCURRENCY: ${ADS_REPORTING_WORKER_CONCURRENCY:-1}
     command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ads-reporting, --concurrency, '${ADS_REPORTING_WORKER_CONCURRENCY:-1}', '--hostname=ads-reporting@%h', --loglevel=INFO]
     cpus: 0.75
@@ -116,6 +117,7 @@ services:
     image: *release-image
     environment:
       ADS_SYNC_ENABLED: ${ADS_SYNC_ENABLED:-false}
+      AUTOMATED_RULES_ENABLED: ${AUTOMATED_RULES_ENABLED:-false}
     cpus: 0.25
     mem_limit: 256m
     stop_grace_period: 30s

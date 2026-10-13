@@ -40,6 +40,7 @@ celery_app.conf.update(
         "app.modules.reporting.export_tasks",
         "app.modules.ad_management.tasks",
         "app.modules.ad_management.submissions",
+        "app.modules.automation_rules.tasks",
     ),
     task_queues=(
         Queue("resources"),
@@ -66,6 +67,10 @@ celery_app.conf.update(
         "reporting.export": {"queue": "ads-reporting"},
         "ad_management.execute": {"queue": "ad-management"},
         "reporting.cleanup_exports": {"queue": "ads-reporting"},
+        "automation.scan_due": {"queue": "control"},
+        "automation.run_rule": {"queue": "ads-reporting"},
+        "automation.send_feishu": {"queue": "control"},
+        "automation.cleanup": {"queue": "control"},
     },
     beat_schedule={
         "repair-external-imports": {
@@ -184,6 +189,16 @@ celery_app.conf.update(
             "task": "reporting.cleanup_exports",
             "schedule": 3600.0,
             "options": {"queue": "ads-reporting"},
+        },
+        "scan-automation-rules": {
+            "task": "automation.scan_due",
+            "schedule": 60.0,
+            "options": {"queue": "control"},
+        },
+        "cleanup-automation-runs": {
+            "task": "automation.cleanup",
+            "schedule": 3600.0,
+            "options": {"queue": "control"},
         },
     },
 )

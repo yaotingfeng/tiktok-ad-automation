@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from app.api.deps import CurrentUser, SessionDep
 from app.core.context import TenantContext
@@ -19,6 +19,8 @@ from app.modules.automation_rules.schemas import (
     RulePage,
     RulePublic,
     RuleUpdate,
+    RunDetail,
+    RunPage,
 )
 
 router = APIRouter(prefix="/tenants/{tenant_id}", tags=["automation_rules"])
@@ -126,3 +128,26 @@ def set_enabled(
 def delete_rule(tenant_id: UUID, rule_id: UUID, session: SessionDep, user: CurrentUser):
     service.delete_rule(session, context=_context(user, tenant_id), rule_id=rule_id)
     session.commit()
+
+
+@router.get("/automation-runs", response_model=RunPage)
+def list_runs(
+    tenant_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    rule_id: UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    return service.list_runs(
+        session,
+        context=_context(user, tenant_id),
+        rule_id=rule_id,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/automation-runs/{run_id}", response_model=RunDetail)
+def get_run(tenant_id: UUID, run_id: UUID, session: SessionDep, user: CurrentUser):
+    return service.get_run(session, context=_context(user, tenant_id), run_id=run_id)

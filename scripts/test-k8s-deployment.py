@@ -39,6 +39,7 @@ class DeploymentTests(unittest.TestCase):
             "MATERIAL_INGEST_ENABLED": "false",
             "MATERIAL_CLEANUP_ENABLED": "false",
             "ADS_SYNC_ENABLED": "false",
+            "AUTOMATED_RULES_ENABLED": "false",
         }
         registration = self.root / "mcp.json"
         registration.write_text('{"client_id":"fixture"}')

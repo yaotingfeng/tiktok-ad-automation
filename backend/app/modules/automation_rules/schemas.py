@@ -344,3 +344,17 @@ class CatalogMetric(BaseModel):
 class CatalogPublic(BaseModel):
     metrics: list[CatalogMetric]
     action_levels: dict[str, list[str]]
+
+
+class RunListItem(RunSummary):
+    rule_name: str
+
+
+class RunPage(BaseModel):
+    items: list[RunListItem]
+    total: int
+
+
+class RunDetail(BaseModel):
+    run: RunListItem
+    hits: list[HitPublic]
