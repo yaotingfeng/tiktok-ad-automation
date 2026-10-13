@@ -6,6 +6,7 @@ from app.modules.accounts.mcp_router import callback_router as mcp_callback_rout
 from app.modules.accounts.mcp_router import router as mcp_accounts_router
 from app.modules.accounts.router import router as accounts_router
 from app.modules.ad_management.api import router as ad_management_router
+from app.modules.automation_rules.api import router as automation_rules_router
 from app.modules.builds.api import router as builds_router
 from app.modules.builds.recovery_api import router as recovery_router
 from app.modules.builds.submission_api import router as submission_router
@@ -40,6 +41,7 @@ api_router.include_router(material_source_router)
 api_router.include_router(material_reissue_router)
 api_router.include_router(providers_router)
 api_router.include_router(reporting_router)
+api_router.include_router(automation_rules_router)
 api_router.include_router(strategies_router)
 api_router.include_router(builds_router)
 api_router.include_router(submission_router)

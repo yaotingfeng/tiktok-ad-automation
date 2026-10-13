@@ -3,8 +3,9 @@
 from datetime import datetime, time
 from decimal import Decimal
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.modules.automation_rules.catalog import (
     RULE_METRICS,
@@ -219,3 +220,35 @@ class RuleDefinition(_Strict):
         if FREQUENCY_MINUTES[self.schedule.frequency] < minimum:
             raise ValueError(f"run at most every {minimum} minutes")
         return self
+
+
+class AutomationSettingsPublic(BaseModel):
+    schedule_timezone: str
+    paused: bool
+    feishu_configured: bool
+    feishu_enabled: bool
+    feishu_url_hint: str | None
+    feishu_has_secret: bool
+
+
+class AutomationSettingsUpdate(_Strict):
+    schedule_timezone: str = Field(max_length=64)
+    paused: bool
+    feishu_enabled: bool
+    webhook_url: str | None = Field(default=None, max_length=300)
+    secret: str | None = Field(default=None, max_length=200)
+    clear_feishu: bool = False
+
+    @field_validator("schedule_timezone")
+    @classmethod
+    def zone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("unknown timezone") from exc
+        return value
+
+
+class FeishuTestRequest(_Strict):
+    webhook_url: str | None = Field(default=None, max_length=300)
+    secret: str | None = Field(default=None, max_length=200)
