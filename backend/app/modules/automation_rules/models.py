@@ -67,6 +67,12 @@ class AutomationRuleRun(SQLModel, table=True):
     error_code: str | None = Field(default=None, max_length=64)
     notify_status: str = Field(default="NOT_REQUIRED", max_length=16)
     notify_error: str | None = Field(default=None, max_length=500)
+    mode: str = Field(default="NOTIFY", max_length=16)
+    # NOT_REQUIRED / AWAITING_CONFIRMATION / QUEUED / SUBMITTED / PARTIAL / FAILED / DISMISSED / EXPIRED
+    execution_status: str = Field(default="NOT_REQUIRED", max_length=24)
+    execution_summary: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSONB, nullable=False)
+    )
 
 
 class AutomationRuleHit(SQLModel, table=True):
@@ -95,6 +101,10 @@ class AutomationTenantSetting(SQLModel, table=True):
     # 自定义运行时段按租户时区解释;各账户指标仍按各自账户时区取日期。
     schedule_timezone: str = Field(default="Asia/Shanghai", max_length=64)
     paused: bool = False
+    # 同一对象被一条规则改过后，冷却期内其他规则不得做相反动作。
+    reverse_cooldown_hours: int = 24
+    # 提高预算 / ROAS 时，同一对象当日累计涨幅上限（百分比）。
+    daily_increase_limit_pct: int = 100
     updated_at: datetime = Field(default_factory=_now, sa_type=AwareDateTime)
 
 
@@ -108,3 +118,44 @@ class TenantFeishuSetting(SQLModel, table=True):
     enabled: bool = True
     updated_by: UUID = Field(foreign_key="user.id")
     updated_at: datetime = Field(default_factory=_now, sa_type=AwareDateTime)
+
+
+class AutomationActionLedger(SQLModel, table=True):
+    """每次提交给广告管理的规则动作；频控、冷却期与每日涨幅上限都以它为准。"""
+
+    __tablename__ = "automation_action_ledger"
+    __table_args__ = (
+        Index("ix_automation_ledger_target", "tenant_id", "target_key", "created_at"),
+    )
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    tenant_id: UUID = Field(foreign_key="tenant.id")
+    rule_id: UUID = Field(foreign_key="automation_rule.id", ondelete="CASCADE")
+    run_id: UUID = Field(foreign_key="automation_rule_run.id", ondelete="CASCADE")
+    target_key: str = Field(max_length=300)
+    action: str = Field(max_length=32)
+    original_value: str | None = Field(default=None, max_length=128)
+    final_value: str | None = Field(default=None, max_length=128)
+    management_task_id: UUID | None = None
+    created_at: datetime = Field(default_factory=_now, sa_type=AwareDateTime)
+
+
+class AutomationConfirmation(SQLModel, table=True):
+    """确认后执行（或超出单次上限）的待确认批次，一次运行至多一个。"""
+
+    __tablename__ = "automation_confirmation"
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_automation_confirmation_run"),
+        Index("ix_automation_confirmation_status", "tenant_id", "status", "created_at"),
+        CheckConstraint(
+            "status IN ('PENDING','CONFIRMED','DISMISSED','EXPIRED')",
+            name="ck_automation_confirmation_status",
+        ),
+    )
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    tenant_id: UUID = Field(foreign_key="tenant.id")
+    rule_id: UUID = Field(foreign_key="automation_rule.id", ondelete="CASCADE")
+    run_id: UUID = Field(foreign_key="automation_rule_run.id", ondelete="CASCADE")
+    status: str = Field(default="PENDING", max_length=16)
+    decided_by: UUID | None = Field(default=None, foreign_key="user.id")
+    decided_at: datetime | None = Field(default=None, sa_type=AwareDateTime)
+    created_at: datetime = Field(default_factory=_now, sa_type=AwareDateTime)

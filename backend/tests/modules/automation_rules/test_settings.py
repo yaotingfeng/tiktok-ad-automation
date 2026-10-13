@@ -15,6 +15,8 @@ def test_defaults(client, admin_context):
     assert body == {
         "schedule_timezone": "Asia/Shanghai",
         "paused": False,
+        "reverse_cooldown_hours": 24,
+        "daily_increase_limit_pct": 100,
         "feishu_configured": False,
         "feishu_enabled": False,
         "feishu_url_hint": None,
@@ -124,3 +126,28 @@ def test_send_test_uses_given_webhook(session, admin_context):
         transport=transport,
     )
     assert len(calls) == 1
+
+
+def test_execution_settings_roundtrip(client, admin_context):
+    body = {
+        "schedule_timezone": "Asia/Shanghai",
+        "paused": False,
+        "feishu_enabled": False,
+        "reverse_cooldown_hours": 12,
+        "daily_increase_limit_pct": 50,
+    }
+    assert (
+        client.put(
+            url(admin_context), headers=headers(admin_context), json=body
+        ).status_code
+        == 200
+    )
+    got = client.get(url(admin_context), headers=headers(admin_context)).json()
+    assert got["reverse_cooldown_hours"] == 12 and got["daily_increase_limit_pct"] == 50
+    body["reverse_cooldown_hours"] = 0
+    assert (
+        client.put(
+            url(admin_context), headers=headers(admin_context), json=body
+        ).status_code
+        == 422
+    )

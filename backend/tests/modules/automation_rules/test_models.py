@@ -44,3 +44,29 @@ def test_one_run_per_slot(session):
         )
     with pytest.raises(IntegrityError):
         session.flush()
+
+
+def test_one_confirmation_per_run(session):
+    from app.modules.automation_rules.models import AutomationConfirmation
+
+    context = create_context(session)
+    item = rule(context)
+    session.add(item)
+    session.flush()
+    run = AutomationRuleRun(
+        tenant_id=context.tenant_id,
+        rule_id=item.id,
+        rule_version=1,
+        definition={},
+        slot_at=datetime(2026, 10, 14, tzinfo=UTC),
+    )
+    session.add(run)
+    session.flush()
+    for _ in range(2):
+        session.add(
+            AutomationConfirmation(
+                tenant_id=context.tenant_id, rule_id=item.id, run_id=run.id
+            )
+        )
+    with pytest.raises(IntegrityError):
+        session.flush()

@@ -226,6 +226,8 @@ class RuleDefinition(_Strict):
 class AutomationSettingsPublic(BaseModel):
     schedule_timezone: str
     paused: bool
+    reverse_cooldown_hours: int
+    daily_increase_limit_pct: int
     feishu_configured: bool
     feishu_enabled: bool
     feishu_url_hint: str | None
@@ -236,6 +238,8 @@ class AutomationSettingsUpdate(_Strict):
     schedule_timezone: str = Field(max_length=64)
     paused: bool
     feishu_enabled: bool
+    reverse_cooldown_hours: int = Field(default=24, ge=1, le=168)
+    daily_increase_limit_pct: int = Field(default=100, ge=1, le=1000)
     webhook_url: str | None = Field(default=None, max_length=300)
     secret: str | None = Field(default=None, max_length=200)
     clear_feishu: bool = False
