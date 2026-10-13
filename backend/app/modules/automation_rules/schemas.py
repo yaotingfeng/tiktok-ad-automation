@@ -2,7 +2,8 @@
 
 from datetime import datetime, time
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
+from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -252,3 +253,94 @@ class AutomationSettingsUpdate(_Strict):
 class FeishuTestRequest(_Strict):
     webhook_url: str | None = Field(default=None, max_length=300)
     secret: str | None = Field(default=None, max_length=200)
+
+
+class RuleCreate(_Strict):
+    name: str = Field(min_length=1, max_length=100)
+    definition: RuleDefinition
+    enabled: bool = True
+
+
+class RuleUpdate(RuleCreate):
+    expected_version: int = Field(ge=1)
+
+
+class RuleEnabled(_Strict):
+    enabled: bool
+
+
+class RunSummary(BaseModel):
+    id: UUID
+    rule_id: UUID
+    slot_at: datetime
+    status: str
+    started_at: datetime
+    finished_at: datetime | None
+    checked_count: int
+    hit_count: int
+    skipped_count: int
+    skipped_accounts: list[dict[str, str]]
+    error_code: str | None
+    notify_status: str
+    notify_error: str | None
+
+
+class RulePublic(BaseModel):
+    id: UUID
+    name: str
+    enabled: bool
+    version: int
+    definition: RuleDefinition
+    created_by: UUID
+    updated_by: UUID
+    created_at: datetime
+    updated_at: datetime
+    next_run_at: datetime | None
+    last_run_at: datetime | None
+    last_run: RunSummary | None = None
+
+
+class RulePage(BaseModel):
+    items: list[RulePublic]
+    total: int
+
+
+class HitPublic(BaseModel):
+    subject_key: str
+    subject_label: str
+    drama_name: str | None
+    advertiser_id: str | None
+    bc_id: str | None
+    currency: str | None
+    metrics: dict[str, str]
+    target_count: int
+    targets: list[dict[str, Any]]
+
+
+class DryRunRequest(_Strict):
+    definition: RuleDefinition
+
+
+class DryRunPublic(BaseModel):
+    checked_count: int
+    hit_count: int
+    skipped_count: int
+    skipped_accounts: list[dict[str, str]]
+    hits: list[HitPublic]
+
+
+class CatalogMetric(BaseModel):
+    key: str
+    group: str
+    name_zh: str
+    unit: str
+    kind: str
+    levels: list[str]
+    aggregations: list[str]
+    operators: list[str]
+    ranged: bool
+
+
+class CatalogPublic(BaseModel):
+    metrics: list[CatalogMetric]
+    action_levels: dict[str, list[str]]
