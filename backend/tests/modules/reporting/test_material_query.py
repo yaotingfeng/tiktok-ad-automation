@@ -4,7 +4,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 from app.modules.ads.models import AdMaterialReference
-from app.modules.reporting.material_query import build_material_rows
+from app.modules.reporting.dimension_query import build_rows
 from app.modules.reporting.publish import AccountMeta, publish_material_day
 from app.modules.reporting.schemas import ReportingFilter
 
@@ -40,7 +40,7 @@ def seed_materials(session, seed):
 
 
 def query(session, seed, **kw):
-    return build_material_rows(
+    return build_rows(
         session,
         context=seed.context,
         bc_id="bc-a",
@@ -114,3 +114,61 @@ def test_material_ad_material_identity_and_incomplete_usage(session, sync_seed):
     rows = {r.display["main_material_id"]: r for r in query(session, sync_seed)}
     assert rows["v1"].material_uses[0].ad_material_id == "v1"
     assert rows["v2"].material_uses == ()
+
+
+def _use(session, seed, ad, mid, adgroup="g1"):
+    from datetime import UTC, datetime
+
+    from app.modules.ads.models import AdObject
+
+    now = datetime.now(UTC)
+    session.add(
+        AdMaterialReference(
+            tenant_id=seed.tenant_id,
+            advertiser_id="acc-1",
+            ad_remote_id=ad,
+            platform_material_id=f"p-{mid}",
+            main_material_id=mid,
+            main_material_type="VIDEO",
+            material_type="VIDEO",
+            complete=True,
+            published_version=1,
+        )
+    )
+    for kind, remote_id, parent, name, status in (
+        ("ad", ad, adgroup, f"广告{ad}", "ENABLE"),
+        ("adgroup", adgroup, "c1", f"组{adgroup}", "DISABLE"),
+    ):
+        if session.get(AdObject, (seed.tenant_id, "acc-1", kind, remote_id)) is None:
+            session.add(
+                AdObject(
+                    tenant_id=seed.tenant_id,
+                    advertiser_id="acc-1",
+                    kind=kind,
+                    remote_id=remote_id,
+                    parent_kind="adgroup" if kind == "ad" else "campaign",
+                    parent_remote_id=parent,
+                    ad_type="SMART_PLUS",
+                    name=name,
+                    operation_status=status,
+                    observed_at=now,
+                    published_version=1,
+                )
+            )
+    session.flush()
+
+
+def test_material_search_matches_usage_hierarchy_and_entity_filter(session, sync_seed):
+    # 搜索可命中使用位置的广告/广告组名称与 ID；目录筛选只保留命中的使用位置。
+    seed_materials(session, sync_seed)
+    _use(session, sync_seed, "a1", "v1")
+    _use(session, sync_seed, "a2", "v2", adgroup="g2")
+    by_ad = query(session, sync_seed, query="广告a2")
+    assert [r.display["main_material_id"] for r in by_ad] == ["v2"]
+    by_group_id = query(session, sync_seed, ids=("g1",))
+    assert [r.display["main_material_id"] for r in by_group_id] == ["v1"]
+    enabled = query(session, sync_seed, operation_statuses=("ENABLE",))
+    assert {r.display["main_material_id"] for r in enabled} == {"v1", "v2"}
+    assert query(session, sync_seed, operation_statuses=("DISABLE",)) == ()
+    spend = query(session, sync_seed, min_spend=Decimal("15"))
+    assert [r.display["main_material_id"] for r in spend] == ["v2"]

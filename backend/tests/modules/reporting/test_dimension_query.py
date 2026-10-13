@@ -208,34 +208,102 @@ def test_reconciliation_keeps_ad_sum_and_shows_account_original(session, sync_se
     assert row.metric_buckets[0].values["spend"] == Decimal(15)
 
 
-def test_summary_keeps_currencies_separate_and_derives_ratios():
-    from app.modules.reporting.dimension_query import metric_vector
-    from app.modules.reporting.queries import _summary
-    from app.modules.reporting.schemas import ReportRow
+def _summary(session, seed, filters):
+    from app.modules.reporting.queries import query_ads
 
-    rows = tuple(
-        ReportRow(
-            row_key=str(i),
-            metric_buckets=(
-                metric_vector(
-                    {"spend": Decimal(spend), "revenue_d0": Decimal(revenue)},
-                    currency=currency,
-                    timezone=timezone,
-                ),
-            ),
+    return query_ads(
+        session, context=seed.context, bc_id="bc-a", filters=filters
+    ).summary
+
+
+def test_summary_keeps_currencies_separate_and_derives_ratios(session, sync_seed):
+    # 同币种跨时区合计并标 MIXED，ROAS 由合计重算；不同币种分桶，不换汇。
+    D1 = date(2026, 10, 4)
+    for adv, meta, day, spend, d0 in (
+        ("acc-2", AccountMeta("USD", "UTC"), D1, "10", "1"),
+        ("acc-1", AccountMeta("USD", "Asia/Hong_Kong"), D1, "20", "20"),
+        ("acc-2", AccountMeta("EUR", "UTC"), D, "100", "1"),
+    ):
+        publish_ad_day(
+            session,
+            tenant_id=sync_seed.tenant_id,
+            job_id=uuid4(),
+            accounts={adv: meta},
+            start=day,
+            end=day,
+            rows=[
+                ad_row(
+                    f"{adv}-{day}",
+                    day,
+                    campaign=f"c-{adv}-{day}",
+                    spend=spend,
+                    d0=d0,
+                    adv=adv,
+                )
+            ],
         )
-        for i, (currency, timezone, spend, revenue) in enumerate(
-            (
-                ("USD", "UTC", 10, 1),
-                ("USD", "Asia/Hong_Kong", 20, 20),
-                ("EUR", "UTC", 100, 1),
-            )
-        )
+    summary = _summary(
+        session,
+        sync_seed,
+        ReportingFilter(dimension="campaign", start_date=D1, end_date=D),
     )
-    totals = {v["currency"]: v for v in _summary(rows)["buckets"]}
-    assert len(totals) == 2
+    totals = {v["currency"]: v for v in summary["buckets"]}
+    assert set(totals) == {"EUR", "USD"}
     assert totals["USD"]["timezone"] == "MIXED"
     assert Decimal(totals["USD"]["values"]["roas_d0"]) == Decimal("0.7")
+    assert Decimal(totals["EUR"]["values"]["spend"]) == Decimal("100")
+
+
+def test_summary_counts_incomplete_advertisers_and_dates(session, sync_seed):
+    # acc-2 所选日期未同步：已同步部分照常相加并标 PARTIAL，给出不完整账户与日期。
+    _seed_campaign(session, sync_seed, "acc-2", "c-missing")
+    publish_ad_day(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        job_id=uuid4(),
+        accounts={"acc-1": AccountMeta("USD", "Asia/Hong_Kong")},
+        start=D,
+        end=D,
+        rows=[ad_row("a1", D, campaign="c1", spend="10", d0="5")],
+    )
+    summary = _summary(session, sync_seed, _filters("campaign"))
+    assert summary["row_count"] == 2
+    assert summary["incomplete_advertiser_count"] == 1
+    assert summary["incomplete_dates"] == [D.isoformat()]
+    (bucket,) = summary["buckets"]
+    assert Decimal(bucket["values"]["spend"]) == Decimal("10")
+    assert bucket["availability"]["spend"] == "PARTIAL"
+    assert bucket["availability"]["roas_d0"] == "PARTIAL"
+
+
+def test_summary_complete_rows_stay_available(session, sync_seed):
+    _seed(session, sync_seed)
+    summary = _summary(session, sync_seed, _filters("campaign"))
+    (bucket,) = summary["buckets"]
+    assert Decimal(bucket["values"]["spend"]) == Decimal("17")
+    assert bucket["availability"]["spend"] == "AVAILABLE"
+    assert summary["incomplete_advertiser_count"] == 0
+    assert summary["incomplete_dates"] == []
+
+
+def _seed_campaign(session, seed, adv, campaign):
+    from datetime import UTC, datetime
+
+    from app.modules.ads.models import AdObject
+
+    session.add(
+        AdObject(
+            tenant_id=seed.tenant_id,
+            advertiser_id=adv,
+            kind="campaign",
+            remote_id=campaign,
+            ad_type="SMART_PLUS",
+            name="嘉书-同剧",
+            observed_at=datetime.now(UTC),
+            published_version=1,
+        )
+    )
+    session.flush()
 
 
 def test_cpm_and_cpc_are_recomputed_from_totals(session, sync_seed):
@@ -363,3 +431,30 @@ def test_drama_groups_by_second_segment_only_hides_deleted_empty_and_aggregates_
     assert drama.display["operation_status"] == "DISABLE"
     assert drama.display["enabled_campaign_count"] == "0"
     assert drama.display["campaign_count"] == "2"
+
+
+def test_search_ids_metric_bounds_and_name_sort(session, sync_seed):
+    # 关键词按名称/ID 多词 AND；ID 命中行自身或上级；指标区间按币种桶判断；名称排序空值在后。
+    _seed(session, sync_seed)
+
+    def keys(**kw):
+        return [
+            r.display["remote_id"]
+            for r in build_rows(
+                session,
+                context=sync_seed.context,
+                bc_id="bc-a",
+                filters=_filters("ad", **kw),
+            )
+        ]
+
+    assert keys(query="a2") == ["a2"]
+    assert keys(query="剧c1 广告", sort_by="row_key") == ["a1", "a2"]
+    assert keys(query="剧c1 不存在") == []
+    assert keys(ids=("c9",)) == ["b1"]
+    assert keys(min_spend=Decimal("5"), sort_by="spend", sort_direction="asc") == [
+        "a2",
+        "a1",
+    ]
+    assert keys(max_spend=Decimal("4"), min_d0_roas=Decimal("0")) == []
+    assert keys(sort_by="campaign_name", sort_direction="desc") == ["b1", "a1", "a2"]

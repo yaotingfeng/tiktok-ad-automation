@@ -6,7 +6,7 @@ from app.modules.reporting.exports import _csv_rows, csv_safe_text
 from app.modules.reporting.query_models import ReportExport
 
 
-def _export_like_existing_test(frozen_rows, dimension="campaign"):
+def _export_like_existing_test(dimension="campaign"):
     """构造测试用导出对象，维度可配置。"""
     return ReportExport(
         id=uuid4(),
@@ -20,7 +20,6 @@ def _export_like_existing_test(frozen_rows, dimension="campaign"):
         naming_versions={},
         snapshot_id=uuid4(),
         idempotency_key="k",
-        frozen_rows=frozen_rows,
         coverage={"status": "COMPLETE"},
     )
 
@@ -31,22 +30,21 @@ def test_csv_safe_text_protects_formula_prefix(value: str):
 
 
 def test_csv_keeps_decimal_amount_numeric():
-    export = _export_like_existing_test(
-        frozen_rows=[
-            {
-                "row_key": "campaign-1",
-                "display": {"name": "=formula", "advertiser_id": "adv"},
-                "metric_buckets": [
-                    {
-                        "currency": "USD",
-                        "timezone": "UTC",
-                        "values": {"spend": "-2", "roas_d0": "1.2"},
-                    }
-                ],
-            }
-        ]
-    )
-    text = _csv_rows(export).decode()
+    export = _export_like_existing_test()
+    rows = [
+        {
+            "row_key": "campaign-1",
+            "display": {"name": "=formula", "advertiser_id": "adv"},
+            "metric_buckets": [
+                {
+                    "currency": "USD",
+                    "timezone": "UTC",
+                    "values": {"spend": "-2", "roas_d0": "1.2"},
+                }
+            ],
+        }
+    ]
+    text = _csv_rows(export, rows).decode()
     assert "'=formula" in text
     assert ",-2," in text
     assert "USD" in text and "UTC" in text and "COMPLETE" in text
@@ -67,23 +65,23 @@ def test_balance_export_keeps_observation_currency_out_of_period_metrics():
         naming_versions={},
         snapshot_id=uuid4(),
         idempotency_key="balance",
-        frozen_rows=[
-            {
-                "row_key": "a",
-                "display": {
-                    "balance": "12.50",
-                    "balance_currency": "CNY",
-                    "balance_scope": "PORTFOLIO",
-                    "balance_updated_at": "2026-10-12T00:00:00Z",
-                },
-                "metric_buckets": [
-                    {"currency": "USD", "timezone": "UTC", "values": {"spend": "10"}}
-                ],
-            }
-        ],
         coverage={},
     )
-    row = next(csv.DictReader(io.StringIO(_csv_rows(export).decode())))
+    rows = [
+        {
+            "row_key": "a",
+            "display": {
+                "balance": "12.50",
+                "balance_currency": "CNY",
+                "balance_scope": "PORTFOLIO",
+                "balance_updated_at": "2026-10-12T00:00:00Z",
+            },
+            "metric_buckets": [
+                {"currency": "USD", "timezone": "UTC", "values": {"spend": "10"}}
+            ],
+        }
+    ]
+    row = next(csv.DictReader(io.StringIO(_csv_rows(export, rows).decode())))
     assert row["balance"] == "12.50" and row["balance_currency"] == "CNY"
     assert (
         row["balance_scope"] == "PORTFOLIO"
@@ -93,8 +91,8 @@ def test_balance_export_keeps_observation_currency_out_of_period_metrics():
 
 
 def test_csv_header_uses_official_names():
-    export = _export_like_existing_test(frozen_rows=[], dimension="campaign")
-    header = _csv_rows(export).decode().splitlines()[0].split(",")
+    export = _export_like_existing_test(dimension="campaign")
+    header = _csv_rows(export, []).decode().splitlines()[0].split(",")
     assert "消耗" in header
     assert "Native Growth 第 2 天广告收益 ROAS" in header
     assert "roas_d3" not in header
@@ -102,8 +100,8 @@ def test_csv_header_uses_official_names():
 
 def test_material_csv_drops_every_metric_without_material_field():
     # 素材报表没有第 2 天/第 29 天回收，金额与 ROAS 列（含派生列）都不导出。
-    export = _export_like_existing_test(frozen_rows=[], dimension="material")
-    header = _csv_rows(export).decode().splitlines()[0]
+    export = _export_like_existing_test(dimension="material")
+    header = _csv_rows(export, []).decode().splitlines()[0]
     assert "第 2 天" not in header
     assert "第 29 天" not in header
     assert "第 6 天广告收入 ROAS" in header

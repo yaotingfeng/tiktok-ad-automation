@@ -10,7 +10,8 @@ import base64
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from decimal import Decimal
+from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
@@ -20,11 +21,11 @@ from sqlmodel import Session, col, select
 from app.core.context import TenantContext
 from app.core.db import engine
 from app.modules.accounts.models import TenantBC
-from app.modules.ads.models import AdObject, CampaignNameProjection
+from app.modules.ads.models import CampaignNameProjection
 from app.modules.reporting.dimension_query import (
-    COMPLETE_COVERAGE_STATUSES,
-    build_rows,
-    merge_metric_buckets,
+    latest_projections,
+    materialize_rows,
+    metric_vector,
 )
 from app.modules.reporting.filters import authorized_grants, compile_filter
 from app.modules.reporting.query_models import (
@@ -34,17 +35,20 @@ from app.modules.reporting.query_models import (
     read_snapshot_rows,
     snapshot_transaction,
 )
+from app.modules.reporting.row_set import (
+    MATERIAL_UNSUPPORTED,
+    SnapshotMember,
+    SnapshotTotals,
+    insert_snapshot_rows,
+)
 from app.modules.reporting.schemas import (
     AdsQueryPage,
-    MetricVector,
     QuerySnapshotPublic,
     ReportingFilter,
     ReportRow,
 )
-from app.modules.reporting.store_models import ReportSyncState
+from app.modules.reporting.store_models import METRIC_COLUMNS, ReportSyncState
 from app.modules.tenants.permissions import require_tenant
-
-SNAPSHOT_INSERT_BATCH = 1000
 
 
 def filter_digest(filters: ReportingFilter) -> str:
@@ -71,58 +75,46 @@ def _decode_cursor(value: str) -> dict[str, Any]:
         raise HTTPException(404, detail="query_cursor_not_found") from exc
 
 
-def _row_public(row: QuerySnapshotRow, *, for_listing: bool = False) -> ReportRow:
-    display = dict(row.display)
-    # B1's row table predates the public coverage field. Keep it in the JSON
-    # display payload so the migration remains compatible while snapshots retain
-    # the exact coverage state captured at creation time.
-    coverage = display.pop("__coverage__", {})
-    # 快照内的账户行保留其下全部系列引用，供冻结选择展开；列表响应不返回这些引用，
-    # 避免每个账户行带回上百条。冻结选择调用时 for_listing 保持 False。
-    refs = () if for_listing and row.dimension == "account" else row.refs
+def frozen_member(row: QuerySnapshotRow) -> SnapshotMember:
+    """快照行只冻结成员与顺序；展示和指标由 materialize_rows 按需补全。"""
+    return SnapshotMember(row.row_key, tuple(row.refs), tuple(row.material_uses))
+
+
+def frozen_row(row: QuerySnapshotRow) -> ReportRow:
+    """冻结选择只消费快照创建时的管理身份（账户行为当时的全部系列）。"""
     return ReportRow.model_validate(
-        {
-            "row_key": row.row_key,
-            "display": display,
-            "refs": refs,
-            "material_uses": row.material_uses,
-            "metric_buckets": row.metric_buckets,
-            "capabilities": row.capabilities,
-            "directory_versions": row.directory_versions,
-            "membership_digest": row.membership_digest,
-            "coverage": coverage,
-        }
+        {"row_key": row.row_key, "refs": row.refs, "material_uses": row.material_uses}
     )
 
 
-def _summary(rows: tuple[ReportRow, ...]) -> dict[str, Any]:
-    """汇总按币种分桶，与行内合并共用部分合计规则（merge_metric_buckets）。
+def _summary(totals: SnapshotTotals, *, dimension: str) -> dict[str, Any]:
+    """汇总按币种分桶，与行内合并共用部分合计规则（数据库内按成员计算）。
 
     混口径/混币种桶仍按桶展示，不偷偷换汇。缺覆盖的成员不当成 0：已同步部分照常
     相加并标 PARTIAL，同时给出不完整账户数与缺失日期，由页面提示"N 个账户数据
     不完整"。
     """
-    incomplete_advertisers: set[str] = set()
-    incomplete_dates: set[str] = set()
-    members: list[tuple[tuple[MetricVector, ...], bool]] = []
-    for row in rows:
-        incomplete = row.coverage.get("status") not in COMPLETE_COVERAGE_STATUSES
-        if incomplete:
-            # 剧维度一行合并多个账户，覆盖里列出了具体哪些账户不完整。
-            incomplete_advertisers.update(
-                cast(list[str], row.coverage.get("incomplete_advertiser_ids") or [])
-            )
-            incomplete_dates.update(
-                cast(list[str], row.coverage.get("stale_dates") or [])
-            )
-        members.append((row.metric_buckets, incomplete))
+    unsupported = MATERIAL_UNSUPPORTED if dimension == "material" else frozenset()
+    buckets = []
+    for bucket in totals.buckets:
+        values = {
+            name: Decimal(bucket[name]) if bucket.get(name) is not None else None
+            for name in METRIC_COLUMNS
+            if name not in unsupported
+        }
+        vector = metric_vector(
+            values,
+            currency=bucket["currency"],
+            timezone=bucket["tz"],
+            unsupported=unsupported,
+            partial={name for name in values if bucket.get(f"{name}_partial")},
+        )
+        buckets.append(vector.model_dump(mode="json"))
     return {
-        "row_count": len(rows),
-        "buckets": [
-            total.model_dump(mode="json") for total in merge_metric_buckets(members)
-        ],
-        "incomplete_advertiser_count": len(incomplete_advertisers),
-        "incomplete_dates": sorted(incomplete_dates),
+        "row_count": totals.total,
+        "buckets": buckets,
+        "incomplete_advertiser_count": len(totals.incomplete_advertisers),
+        "incomplete_dates": list(totals.incomplete_dates),
     }
 
 
@@ -161,14 +153,14 @@ def _check_cursor(
     return sequence
 
 
-def _new_snapshot(
+def _build_snapshot(
     session: Session,
     *,
     context: TenantContext,
     bc_id: str,
     filters: ReportingFilter,
-    rows: tuple[ReportRow, ...],
 ) -> QuerySnapshot:
+    """在数据库内一次算出并写入快照成员与顺序，再落汇总；行内容不入快照。"""
     grants = authorized_grants(
         session, context=context, bc_id=bc_id, advertiser_ids=filters.advertiser_ids
     )
@@ -176,9 +168,8 @@ def _new_snapshot(
         filters.advertiser_ids
     ):
         raise HTTPException(403, detail="report_scope_forbidden")
-    allowed_ids = {item.advertiser_id for item in grants}
+    allowed_ids = sorted({item.advertiser_id for item in grants})
     now = datetime.now(UTC)
-    statuses = [row.coverage.get("status") for row in rows]
     publication_versions = {"reporting": 1}
     updated = session.exec(
         select(func.max(ReportSyncState.last_success_at)).where(
@@ -190,77 +181,61 @@ def _new_snapshot(
     ).one()
     if updated is not None:
         publication_versions["max"] = int(updated.timestamp() * 1_000_000)
-    naming_versions = {"directory": 1}
-    campaigns = {
-        (ref.advertiser_id, ref.remote_id)
-        for row in rows
-        for ref in row.refs
-        if ref.kind == "campaign"
-    }
-    if campaigns:
-        projections = session.exec(
-            select(CampaignNameProjection).where(
-                CampaignNameProjection.tenant_id == context.tenant_id,
-                col(CampaignNameProjection.advertiser_id).in_(
-                    {item[0] for item in campaigns}
-                ),
-                col(CampaignNameProjection.campaign_remote_id).in_(
-                    {item[1] for item in campaigns}
-                ),
-            )
-        ).all()
-        for projection in projections:
-            naming_versions[
-                f"{projection.advertiser_id}:{projection.campaign_remote_id}"
-            ] = projection.name_revision
     snapshot = QuerySnapshot(
         id=uuid4(),
         tenant_id=context.tenant_id,
         bc_id=bc_id,
         actor_id=context.actor_id,
-        advertiser_ids=sorted(item.advertiser_id for item in grants),
+        advertiser_ids=allowed_ids,
         filters=filters.model_dump(mode="json"),
         filter_digest=filter_digest(filters),
         publication_versions=publication_versions,
-        naming_versions=naming_versions,
+        naming_versions={},
         expires_at=now + timedelta(minutes=15),
-        total=len(rows),
-        summary=_summary(rows),
-        coverage={
-            "status": "EMPTY"
-            if not rows
-            else (
-                "COMPLETE"
-                if all(status in COMPLETE_COVERAGE_STATUSES for status in statuses)
-                else "INCOMPLETE"
-            ),
-            "rows": len(rows),
-        },
+        total=0,
+        summary={},
+        coverage={},
     )
+    # 趋势已从报表页移除。快照只保存成员、汇总与覆盖。
     snapshot.trends = {}
     session.add(snapshot)
     session.flush()
-    for sequence, row in enumerate(rows):
-        if sequence and sequence % SNAPSHOT_INSERT_BATCH == 0:
-            # 素材维度单次快照可达数万行 JSONB；一次性 executemany 会让数据库代理
-            # 在写入途中断开连接，按批 flush 控制单次往返的数据量。
-            session.flush()
-        encoded = row.model_dump(mode="json")
-        session.add(
-            QuerySnapshotRow(
-                snapshot_id=snapshot.id,
-                row_key=row.row_key,
-                stable_sequence=sequence,
-                dimension=filters.dimension,
-                display=encoded["display"] | {"__coverage__": encoded["coverage"]},
-                refs=encoded["refs"],
-                material_uses=encoded["material_uses"],
-                metric_buckets=encoded["metric_buckets"],
-                capabilities=encoded["capabilities"],
-                directory_versions=encoded["directory_versions"],
-                membership_digest=row.membership_digest,
-            )
+    totals = insert_snapshot_rows(
+        session,
+        snapshot_id=snapshot.id,
+        tenant_id=context.tenant_id,
+        advertisers=allowed_ids,
+        bc_id=bc_id,
+        filters=filters,
+    )
+    naming_versions = {"directory": 1}
+    if totals.naming_campaigns:
+        projections = latest_projections(
+            session.exec(
+                select(CampaignNameProjection).where(
+                    CampaignNameProjection.tenant_id == context.tenant_id,
+                    col(CampaignNameProjection.advertiser_id).in_(
+                        {item[0] for item in totals.naming_campaigns}
+                    ),
+                    col(CampaignNameProjection.campaign_remote_id).in_(
+                        {item[1] for item in totals.naming_campaigns}
+                    ),
+                )
+            ).all()
         )
+        for key in totals.naming_campaigns:
+            if key in projections:
+                naming_versions[f"{key[0]}:{key[1]}"] = projections[key].name_revision
+    snapshot.naming_versions = naming_versions
+    snapshot.total = totals.total
+    snapshot.summary = _summary(totals, dimension=filters.dimension)
+    snapshot.coverage = {
+        "status": "EMPTY"
+        if not totals.total
+        else ("COMPLETE" if totals.complete else "INCOMPLETE"),
+        "rows": totals.total,
+    }
+    session.add(snapshot)
     session.flush()
     return snapshot
 
@@ -294,7 +269,15 @@ def _read_page(
         after_sequence=after,
         limit=limit,
     )
-    items = tuple(_row_public(row, for_listing=True) for row in rows)
+    items = materialize_rows(
+        session,
+        tenant_id=context.tenant_id,
+        filters=filters,
+        members=[frozen_member(row) for row in rows],
+    )
+    if filters.dimension == "account":
+        # 账户行保留其下全部系列引用供冻结选择展开；列表响应不返回，避免每行带回上百条。
+        items = tuple(item.model_copy(update={"refs": ()}) for item in items)
     next_cursor = None
     if rows and rows[-1].stable_sequence + 1 < snapshot.total:
         next_cursor = _cursor(
@@ -315,57 +298,6 @@ def _read_page(
         coverage=snapshot.coverage,
         next_cursor=next_cursor,
     )
-
-
-def _build_snapshot(
-    session: Session,
-    *,
-    context: TenantContext,
-    bc_id: str,
-    filters: ReportingFilter,
-) -> QuerySnapshot:
-    rows = build_rows(session, context=context, bc_id=bc_id, filters=filters)
-    # Account rows are report aggregates, but management selection must retain
-    # the exact campaign refs visible at snapshot creation time. The query's
-    # authorized account set is fixed once, and one batch query avoids N+1 reads.
-    frozen_rows: list[ReportRow] = []
-    if filters.dimension == "account":
-        grants = authorized_grants(
-            session, context=context, bc_id=bc_id, advertiser_ids=filters.advertiser_ids
-        )
-        allowed_ids = {item.advertiser_id for item in grants}
-        campaigns = session.exec(
-            select(AdObject)
-            .where(
-                AdObject.tenant_id == context.tenant_id,
-                col(AdObject.advertiser_id).in_(allowed_ids),
-                AdObject.kind == "campaign",
-            )
-            .order_by(AdObject.advertiser_id, AdObject.remote_id)
-        ).all()
-        by_account: dict[str, list[AdObject]] = {}
-        for campaign in campaigns:
-            by_account.setdefault(campaign.advertiser_id, []).append(campaign)
-        for row in rows:
-            advertiser_id = row.display.get("remote_id")
-            frozen_rows.append(
-                row.model_copy(
-                    update={
-                        "refs": tuple(
-                            item.ref for item in by_account.get(advertiser_id, [])
-                        )
-                    }
-                )
-            )
-        rows = tuple(frozen_rows)
-    snapshot = _new_snapshot(
-        session, context=context, bc_id=bc_id, filters=filters, rows=rows
-    )
-    # 趋势已从报表页移除。快照只保存列表和汇总，避免首次打开页面重复扫描
-    # 全量事实。
-    snapshot.trends = {}
-    session.flush()
-    return snapshot
 
 
 def query_ads(

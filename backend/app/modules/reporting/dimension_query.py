@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from collections.abc import Collection, Iterable, Mapping, Sequence
-from datetime import date, datetime, timedelta
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 from typing import Any, cast
-from zoneinfo import ZoneInfo
+from uuid import UUID
 
 from sqlalchemy import func
 from sqlalchemy import select as sql_select
@@ -20,13 +20,9 @@ from app.core.context import TenantContext
 from app.integrations.tiktok.contracts.ads import EntityRef
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.ads.models import AdObject, CampaignNameProjection
-from app.modules.reporting.filters import (
-    CONFIG_SORT_FIELDS,
-    NAME_SORT_FIELDS,
-    authorized_grants,
-    compile_filter,
-)
+from app.modules.reporting.filters import authorized_grants, compile_filter
 from app.modules.reporting.models import AccountBalanceObservation
+from app.modules.reporting.row_set import SnapshotMember, entity_ref, ordered_members
 from app.modules.reporting.schemas import (
     Availability,
     MetricVector,
@@ -171,7 +167,9 @@ def scoped_rows(session, model, *, tenant_id, advertisers):
     ).all()
 
 
-def _aggregate(session, *, model, group_cols, tenant_id, advertisers, start, end):
+def _aggregate(
+    session, *, model, group_cols, tenant_id, advertisers, start, end, ids=None
+):
     # 同一对象跨日按部分合计规则（设计 7.3）：只合计有值的日期，另带
     # "<列>_has_null" 标记该列是否有日期为空，由 fact_vector 标成 PARTIAL。
     columns = [col(getattr(model, name)) for name in group_cols]
@@ -219,6 +217,8 @@ def _aggregate(session, *, model, group_cols, tenant_id, advertisers, start, end
             col(model.advertiser_id).in_(advertisers),
             model.stat_date >= start,
             model.stat_date <= end,
+            # 分页补全只读页面对象的事实。
+            *([] if ids is None else [col(getattr(model, group_cols[1])).in_(ids)]),
         )
         .group_by(*columns, col(model.currency))
     )
@@ -298,41 +298,6 @@ def latest_projections(
         ):
             result[key] = row
     return result
-
-
-def drama_key(
-    bc_id: str,
-    advertiser_id: str,
-    campaign_id: str,
-    projection: CampaignNameProjection | None,
-) -> str:
-    if projection and projection.status == "VALID":
-        # 剧只按系列名第二段（剧名）归组：第一段可能是版权方的任意写法或网眼归因
-        # 参数，不参与身份；账户也不参与，同名剧跨账户合并。JSON 编码避免 ':' 碰撞。
-        return f"{bc_id}:drama:" + json.dumps(
-            [projection.drama_name], ensure_ascii=False, separators=(",", ":")
-        )
-    return f"{bc_id}:external:" + json.dumps(
-        [advertiser_id, campaign_id], separators=(",", ":")
-    )
-
-
-def _created(value: Any, timezone: str) -> date | None:
-    try:
-        if isinstance(value, (int, float)) or (
-            isinstance(value, str) and value.isdigit()
-        ):
-            return datetime.fromtimestamp(float(value), ZoneInfo(timezone)).date()
-        if isinstance(value, str):
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            return (
-                parsed.replace(tzinfo=ZoneInfo(timezone))
-                if parsed.tzinfo is None
-                else parsed.astimezone(ZoneInfo(timezone))
-            ).date()
-    except ValueError, OverflowError, OSError:
-        pass
-    return None
 
 
 def _number(value: Any) -> Decimal | None:
@@ -453,159 +418,6 @@ def _hierarchy_display(
     return display
 
 
-def _entity_matches(
-    entity: AdObject | None,
-    projection: CampaignNameProjection | None,
-    filters: ReportingFilter,
-    timezone: str,
-) -> bool:
-    for allowed, value in (
-        (filters.ad_types, entity.ad_type if entity else None),
-        (filters.operation_statuses, entity.operation_status if entity else None),
-        (filters.review_statuses, entity.review_status if entity else None),
-    ):
-        if allowed and value not in allowed:
-            return False
-    if (
-        filters.naming_status
-        and (projection.status if projection else "INVALID") != filters.naming_status
-    ):
-        return False
-    config = entity.configuration if entity else {}
-    if filters.budget_modes and config.get("budget_mode") not in filters.budget_modes:
-        return False
-    created = _created(config.get("create_time"), timezone)
-    if filters.created_from and (created is None or created < filters.created_from):
-        return False
-    if filters.created_to and (created is None or created > filters.created_to):
-        return False
-    target = _number(config.get("roas_bid"))
-    for bound, lower in (
-        (filters.min_target_roas, True),
-        (filters.max_target_roas, False),
-    ):
-        if bound is not None and (
-            target is None or (target < bound if lower else target > bound)
-        ):
-            return False
-    return True
-
-
-def _passes_filter(row: ReportRow, filters: ReportingFilter) -> bool:
-    ids = {row.row_key, *(ref.remote_id for ref in row.refs)}
-    ids.update(
-        value for key, value in row.display.items() if key.endswith("_id") and value
-    )
-    if filters.ids and not ids.intersection(filters.ids):
-        return False
-    text = " ".join(
-        [row.row_key, *sorted(ids), *(value for value in row.display.values() if value)]
-    ).casefold()
-    if filters.query and any(
-        word.casefold() not in text for word in filters.query.split()
-    ):
-        return False
-    bounds = (
-        ("spend", filters.min_spend, filters.max_spend),
-        ("roas_d0", filters.min_d0_roas, filters.max_d0_roas),
-    )
-    if any(low is not None or high is not None for _, low, high in bounds):
-        return any(
-            all(
-                (
-                    low is None
-                    or (
-                        v.values.get(name) is not None
-                        and cast(Decimal, v.values[name]) >= low
-                    )
-                )
-                and (
-                    high is None
-                    or (
-                        v.values.get(name) is not None
-                        and cast(Decimal, v.values[name]) <= high
-                    )
-                )
-                for name, low, high in bounds
-            )
-            for v in row.metric_buckets
-        )
-    return True
-
-
-def _sort_value(row: ReportRow, field: str) -> tuple[str, Decimal] | None:
-    """返回 (币种, 数值)；同一行多口径或无值时返回 None，统一排到末尾。"""
-    if field in CONFIG_SORT_FIELDS:
-        number = _number(row.display.get(field)) if row.display.get(field) else None
-        return (
-            (
-                row.display.get("balance_currency") or "" if field == "balance" else "",
-                number,
-            )
-            if number is not None
-            else None
-        )
-    if len(row.metric_buckets) != 1:
-        return None
-    vector = row.metric_buckets[0]
-    value = vector.values.get(field)
-    if value is None:
-        return None
-    # 金额类指标先按币种分组，避免把不同币种的金额直接比较大小。
-    currency = (
-        vector.currency
-        if field
-        in {
-            "spend",
-            "revenue_d0",
-            "revenue_d3",
-            "revenue_d7",
-            "revenue_d14",
-            "revenue_d30",
-            "revenue_total",
-            "cost_per_ad_impression_event",
-            "cpm",
-            "cpc",
-        }
-        else ""
-    )
-    return (currency, value)
-
-
-def _sort_rows(
-    rows: Sequence[ReportRow], filters: ReportingFilter
-) -> tuple[ReportRow, ...]:
-    """服务端稳定排序：row_key 作为并列值，翻页不会漏行或重复。
-
-    无值（未同步、平台未提供、多口径）在升序和降序下都排在末尾，
-    不把缺失当作零参与排序。
-    """
-    field = filters.sort_by
-    descending = filters.sort_direction == "desc"
-    ordered = sorted(rows, key=lambda row: row.row_key)
-    if field == "row_key" and descending:
-        ordered.reverse()
-    if field == "row_key":
-        return tuple(ordered)
-    if field in NAME_SORT_FIELDS:
-
-        def name_key(row: ReportRow) -> str | None:
-            value = row.display.get(field) or (
-                row.display.get("name") if field == "name" else None
-            )
-            return value.casefold() if isinstance(value, str) and value else None
-
-        present = [row for row in ordered if name_key(row) is not None]
-        missing = [row for row in ordered if name_key(row) is None]
-        present.sort(key=lambda row: cast(str, name_key(row)), reverse=descending)
-        return (*present, *missing)
-    present_values = [(row, _sort_value(row, field)) for row in ordered]
-    present = [(row, value) for row, value in present_values if value is not None]
-    missing = [row for row, value in present_values if value is None]
-    present.sort(key=lambda item: item[1], reverse=descending)
-    return (*(row for row, _ in present), *missing)
-
-
 def fact_vector(
     item: Mapping[str, Any], *, unsupported: Collection[str] = ()
 ) -> MetricVector:
@@ -619,93 +431,154 @@ def fact_vector(
     )
 
 
+def ref_digest(refs: Iterable[EntityRef]) -> str:
+    return sha256(
+        json.dumps(
+            sorted(
+                (str(ref.tenant_id), ref.advertiser_id, ref.kind, ref.remote_id)
+                for ref in refs
+            )
+        ).encode()
+    ).hexdigest()
+
+
 def build_rows(
     session: Session, *, context: TenantContext, bc_id: str, filters: ReportingFilter
 ) -> tuple[ReportRow, ...]:
+    """完整有序结果：数据库算出成员与顺序，再逐行补全展示与指标。"""
     compile_filter(filters)
-    if filters.dimension == "material":
-        from app.modules.reporting.material_query import build_material_rows
-
-        return build_material_rows(
-            session, context=context, bc_id=bc_id, filters=filters
-        )
-    advertisers = {
+    advertisers = [
         g.advertiser_id
         for g in authorized_grants(
             session, context=context, bc_id=bc_id, advertiser_ids=filters.advertiser_ids
         )
+    ]
+    members = ordered_members(
+        session,
+        tenant_id=context.tenant_id,
+        advertisers=advertisers,
+        bc_id=bc_id,
+        filters=filters,
+    )
+    return materialize_rows(
+        session, tenant_id=context.tenant_id, filters=filters, members=members
+    )
+
+
+def materialize_rows(
+    session: Session,
+    *,
+    tenant_id: UUID,
+    filters: ReportingFilter,
+    members: Sequence[SnapshotMember],
+) -> tuple[ReportRow, ...]:
+    """按快照冻结的成员与顺序补全展示字段、指标和覆盖；不再做筛选与排序。
+
+    只读取这些行涉及的账户、对象和事实，翻页与分批导出的成本与页大小成正比。
+    """
+    if not members:
+        return ()
+    if filters.dimension == "material":
+        from app.modules.reporting.material_query import materialize_material_rows
+
+        return materialize_material_rows(
+            session, tenant_id=tenant_id, filters=filters, members=members
+        )
+    kind = "campaign" if filters.dimension == "drama" else filters.dimension
+    row_refs = {
+        member.row_key: tuple(entity_ref(ref) for ref in member.refs)
+        for member in members
     }
+    # 账户行的 refs 是冻结的系列集合，行身份是账户本身。
+    identities = {
+        member.row_key: (
+            ((member.row_key.split(":account:", 1)[0],) * 2,)
+            if kind == "account"
+            else tuple(
+                (ref.advertiser_id, ref.remote_id) for ref in row_refs[member.row_key]
+            )
+        )
+        for member in members
+    }
+    advertisers = sorted({adv for ids in identities.values() for adv, _ in ids})
+    member_ids = sorted({rid for ids in identities.values() for _, rid in ids})
     accounts = {
         a.advertiser_id: a
         for a in scoped_rows(
-            session,
-            AdvertiserAccount,
-            tenant_id=context.tenant_id,
-            advertisers=advertisers,
+            session, AdvertiserAccount, tenant_id=tenant_id, advertisers=advertisers
         )
     }
-    # 只加载当前维度及其上级的目录对象：系列/剧不需要广告组与广告（数量大且带完整配置），
-    # 全量加载曾占剧维度查询约三分之一的耗时。
-    object_kinds = {
-        "account": (),
-        "campaign": ("campaign",),
-        "drama": ("campaign",),
-        "adgroup": ("campaign", "adgroup"),
-        "ad": ("campaign", "adgroup", "ad"),
-    }[filters.dimension]
-    objects = (
-        {
-            (o.advertiser_id, o.kind, o.remote_id): o
-            for o in session.exec(
-                select(AdObject).where(
-                    AdObject.tenant_id == context.tenant_id,
-                    col(AdObject.advertiser_id).in_(advertisers),
-                    col(AdObject.kind).in_(object_kinds),
-                )
-            ).all()
-        }
-        if object_kinds
-        else {}
-    )
-    projections = latest_projections(
-        scoped_rows(
-            session,
-            CampaignNameProjection,
-            tenant_id=context.tenant_id,
-            advertisers=advertisers,
-        )
-    )
     states = session.exec(
         select(ReportSyncState).where(
-            ReportSyncState.tenant_id == context.tenant_id,
+            ReportSyncState.tenant_id == tenant_id,
             col(ReportSyncState.advertiser_id).in_(advertisers),
             ReportSyncState.stat_date >= filters.start_date,
             ReportSyncState.stat_date <= filters.end_date,
         )
     ).all()
-    kind = "campaign" if filters.dimension == "drama" else filters.dimension
     model = CampaignReportDay if kind in {"account", "campaign"} else AdReportDay
     group_cols = ["advertiser_id"] + ([] if kind == "account" else [f"{kind}_id"])
     grouped_facts = _aggregate(
         session,
         model=model,
         group_cols=group_cols,
-        tenant_id=context.tenant_id,
+        tenant_id=tenant_id,
         advertisers=advertisers,
         start=filters.start_date,
         end=filters.end_date,
+        ids=None if kind == "account" else member_ids,
     )
     facts = defaultdict(list)
     for fact in grouped_facts:
         adv = fact["advertiser_id"]
         facts[(adv, adv if kind == "account" else fact[f"{kind}_id"])].append(fact)
-    identities = set(facts) | {(adv, rid) for adv, k, rid in objects if k == kind}
-    if kind == "account":
-        identities.update((adv, adv) for adv in advertisers)
+    # 目录缺失时父级身份来自报表元数据，名称仍优先取目录对象。
+    parents = {
+        parent: {
+            item[f"{parent}_id"]
+            for items in facts.values()
+            for item in items
+            if item.get(f"{parent}_id")
+        }
+        for parent in ("adgroup", "campaign")
+    }
+    objects = _page_objects(
+        session,
+        tenant_id=tenant_id,
+        advertisers=advertisers,
+        kind=kind,
+        ids=member_ids,
+        parents=parents,
+    )
+    campaign_ids = (
+        {o.remote_id for (_, k, _), o in objects.items() if k == "campaign"}
+        | {
+            o.parent_remote_id
+            for (_, k, _), o in objects.items()
+            if k == "adgroup" and o.parent_remote_id
+        }
+        | {
+            item["campaign_id"]
+            for items in facts.values()
+            for item in items
+            if item.get("campaign_id")
+        }
+    )
+    projections = latest_projections(
+        session.exec(
+            select(CampaignNameProjection).where(
+                CampaignNameProjection.tenant_id == tenant_id,
+                col(CampaignNameProjection.advertiser_id).in_(advertisers),
+                col(CampaignNameProjection.campaign_remote_id).in_(campaign_ids),
+            )
+        ).all()
+        if campaign_ids
+        else []
+    )
     reconciliations = (
         session.exec(
             select(AccountReconciliationDay).where(
-                AccountReconciliationDay.tenant_id == context.tenant_id,
+                AccountReconciliationDay.tenant_id == tenant_id,
                 col(AccountReconciliationDay.advertiser_id).in_(advertisers),
                 AccountReconciliationDay.stat_date >= filters.start_date,
                 AccountReconciliationDay.stat_date <= filters.end_date,
@@ -714,12 +587,12 @@ def build_rows(
         if kind == "account"
         else []
     )
-    balances = {}
+    balances: dict[str, AccountBalanceObservation] = {}
     if kind == "account":
         for observation in session.exec(
             select(AccountBalanceObservation)
             .where(
-                AccountBalanceObservation.tenant_id == context.tenant_id,
+                AccountBalanceObservation.tenant_id == tenant_id,
                 col(AccountBalanceObservation.advertiser_id).in_(advertisers),
             )
             .distinct(col(AccountBalanceObservation.advertiser_id))
@@ -730,8 +603,7 @@ def build_rows(
             )
         ):
             balances.setdefault(observation.advertiser_id, observation)
-    # 覆盖状态只取决于账户集合与日期：按账户集合缓存，避免每行、每组对全部同步状态
-    # 重新扫描（剧维度 30 天曾因此耗时数秒）。返回副本，行之间不共享可变对象。
+    # 覆盖状态只取决于账户集合与日期：按账户集合缓存，避免每行重复扫描同步状态。
     coverage_cache: dict[frozenset[str], dict[str, Any]] = {}
 
     def coverage_for(members: Collection[str]) -> dict[str, Any]:
@@ -753,194 +625,221 @@ def build_rows(
             }
         return empty_cache[adv]
 
-    groups = defaultdict(list)
-    group_accounts = defaultdict(set)
-    # 剧行状态按成员系列汇总，不能沿用任意一个成员的状态。
-    group_statuses: dict[str, list[str | None]] = defaultdict(list)
-    group_providers: dict[str, list[str]] = defaultdict(list)
-    for adv, rid in sorted(identities):
-        entity = objects.get((adv, kind, rid))
-        items = facts.get((adv, rid), [])
-        metadata = items[0] if items else {}
-        campaign_id = rid if kind == "campaign" else metadata.get("campaign_id")
-        if entity and kind == "adgroup":
-            campaign_id = entity.parent_remote_id or campaign_id
-        if entity and kind == "ad":
-            parent = objects.get((adv, "adgroup", entity.parent_remote_id or ""))
-            campaign_id = parent.parent_remote_id if parent else campaign_id
-        projection = projections.get((adv, campaign_id))
-        if not _entity_matches(entity, projection, filters, accounts[adv].timezone):
-            continue
-        # 剧维度不列出所选日期没有数据的已删除系列（多为测试/探针系列），
-        # 否则它们的名称第二段会被当成剧名出现在剧列表里。
-        if (
-            filters.dimension == "drama"
-            and not items
-            and entity is not None
-            and (entity.delivery_status or "").endswith("DELETE")
-        ):
-            continue
-        key = (
-            drama_key(bc_id, adv, rid, projection)
-            if filters.dimension == "drama"
-            else f"{adv}:{kind}:{rid}"
-        )
-        name = (
-            accounts[adv].name or rid
-            if kind == "account"
-            else (
-                entity.name
-                if entity and entity.name
-                else metadata.get(f"{kind}_name") or rid
-            )
-        )
-        display = _hierarchy_display(
-            accounts=accounts,
-            objects=objects,
-            advertiser_id=adv,
-            kind=kind,
-            remote_id=rid,
-            entity=entity,
-        )
-        # 目录尚未同步时以报表中的父级身份与名称补齐，不能丢弃已删除广告的历史消耗。
-        for parent_kind in ("campaign", "adgroup", "ad"):
-            if parent_kind not in display and f"{parent_kind}_id" not in display:
-                continue
-            parent_id = display.get(f"{parent_kind}_id") or metadata.get(
-                f"{parent_kind}_id"
-            )
-            if parent_id:
-                obj = objects.get((adv, parent_kind, parent_id))
-                display[f"{parent_kind}_id"] = parent_id
-                display[f"{parent_kind}_name"] = (
-                    obj.name
-                    if obj and obj.name
-                    else metadata.get(f"{parent_kind}_name") or parent_id
-                )
-        if filters.dimension == "drama":
-            name = (
-                projection.drama_name
-                if projection and projection.status == "VALID"
-                else name
-            )
-            display.update(drama_name=name)
-        display.update(
-            name=name,
-            remote_id=rid,
-            advertiser_id=adv,
-            provider=projection.provider_label if projection else None,
-            naming_status=projection.status if projection else "INVALID",
-            ad_type=entity.ad_type if entity else None,
-            operation_status=entity.operation_status if entity else None,
-            review_status=entity.review_status if entity else None,
-            secondary_status=entity.delivery_status if entity else None,
-        )
-        if kind == "account":
-            balance = balances.get(adv)
-            # 余额是独立时点观测；资金池余额必须标记共享，不纳入期间指标合计。
-            display.update(
-                account_status=accounts[adv].remote_status,
-                balance=str(balance.amount)
-                if balance
-                and balance.availability == "AVAILABLE"
-                and balance.amount is not None
-                else None,
-                balance_currency=balance.currency if balance else None,
-                balance_scope=balance.balance_scope if balance else "UNKNOWN",
-                balance_updated_at=balance.observed_at.isoformat() if balance else None,
-            )
-        own_recs = [r for r in reconciliations if r.advertiser_id == adv]
-        if any(
-            a is not None and b is not None and abs(a - b) > Decimal("0.01")
-            for r in own_recs
-            for a, b in (
-                (r.account_spend, r.ad_sum_spend),
-                (r.account_revenue_total, r.ad_sum_revenue_total),
-            )
-        ):
-            display["reconciliation"] = "DIFF"
-            display["account_report_spend"] = (
-                str(sum((cast(Decimal, r.account_spend) for r in own_recs), Decimal(0)))
-                if all(r.account_spend is not None for r in own_recs)
-                else None
-            )
-        vectors = tuple(fact_vector(item) for item in items)
-        if not vectors:
-            vectors = (
-                metric_vector(
-                    empty_values_for(adv),
-                    currency=accounts[adv].currency,
-                    timezone=accounts[adv].timezone,
-                ),
-            )
-        refs = (
-            ()
-            if kind == "account"
-            else (EntityRef(context.tenant_id, adv, cast(Any, kind), rid),)
-        )
-        groups[key].append(
-            ReportRow(
-                row_key=key,
-                display=display,
-                refs=refs,
-                metric_buckets=vectors,
-                directory_versions={f"{adv}:{rid}": entity.published_version}
-                if entity
-                else {},
-            )
-        )
-        group_accounts[key].add(adv)
-        group_statuses[key].append(entity.operation_status if entity else None)
-        if projection and projection.provider_label:
-            group_providers[key].append(projection.provider_label)
     result = []
-    for key, members in groups.items():
-        coverage = coverage_for(group_accounts[key])
+    for member in members:
+        rows: list[ReportRow] = []
+        statuses: list[str | None] = []
+        providers: list[str] = []
+        for adv, rid in identities[member.row_key]:
+            entity = objects.get((adv, kind, rid))
+            items = facts.get((adv, rid), [])
+            metadata = items[0] if items else {}
+            campaign_id = rid if kind == "campaign" else metadata.get("campaign_id")
+            if entity and kind == "adgroup":
+                campaign_id = entity.parent_remote_id or campaign_id
+            if entity and kind == "ad":
+                parent = objects.get((adv, "adgroup", entity.parent_remote_id or ""))
+                campaign_id = parent.parent_remote_id if parent else campaign_id
+            projection = projections.get((adv, campaign_id))
+            rows.append(
+                _member_row(
+                    kind=kind,
+                    filters=filters,
+                    accounts=accounts,
+                    objects=objects,
+                    adv=adv,
+                    rid=rid,
+                    entity=entity,
+                    items=items,
+                    projection=projection,
+                    balance=balances.get(adv),
+                    reconciliations=[
+                        r for r in reconciliations if r.advertiser_id == adv
+                    ],
+                    empty_values=empty_values_for(adv),
+                )
+            )
+            statuses.append(entity.operation_status if entity else None)
+            if projection and projection.provider_label:
+                providers.append(projection.provider_label)
+        refs = row_refs[member.row_key]
+        coverage = coverage_for({adv for adv, _ in identities[member.row_key]})
         incomplete_ids = set(cast(list[str], coverage["incomplete_advertiser_ids"]))
-        refs = tuple(ref for row in members for ref in row.refs)
-        row = members[0].model_copy(
+        row = rows[0].model_copy(
             update={
+                "row_key": member.row_key,
                 "refs": refs,
                 # 行内合并与汇总同一规则：覆盖不完整账户贡献的列标 PARTIAL。
                 "metric_buckets": merge_metric_buckets(
-                    (
-                        member.metric_buckets,
-                        member.display.get("advertiser_id") in incomplete_ids,
-                    )
-                    for member in members
+                    (r.metric_buckets, r.display.get("advertiser_id") in incomplete_ids)
+                    for r in rows
                 ),
                 "coverage": coverage,
-                "membership_digest": sha256(
-                    json.dumps(
-                        sorted(
-                            (
-                                str(ref.tenant_id),
-                                ref.advertiser_id,
-                                ref.kind,
-                                ref.remote_id,
-                            )
-                            for ref in refs
-                        )
-                    ).encode()
-                ).hexdigest(),
+                "membership_digest": ref_digest(refs),
                 "directory_versions": {
-                    k: v
-                    for member in members
-                    for k, v in member.directory_versions.items()
+                    k: v for r in rows for k, v in r.directory_versions.items()
                 },
             }
         )
         if filters.dimension == "drama":
             row = row.model_copy(
                 update={
-                    "display": _drama_status_display(
-                        row.display, group_statuses[key], group_providers[key]
-                    )
+                    "display": _drama_status_display(row.display, statuses, providers)
                 }
             )
-        if _passes_filter(row, filters):
-            result.append(row)
-    return _sort_rows(result, filters)
+        result.append(row)
+    return tuple(result)
+
+
+def _page_objects(
+    session: Session,
+    *,
+    tenant_id: UUID,
+    advertisers: Sequence[str],
+    kind: str,
+    ids: Sequence[str],
+    parents: Mapping[str, set[str]],
+) -> dict[tuple[str, str, str], AdObject]:
+    """只读取页面对象及其上级（广告 -> 广告组 -> 系列），不加载整个目录。"""
+    if kind == "account":
+        return {}
+    objects: dict[tuple[str, str, str], AdObject] = {}
+    levels = ("ad", "adgroup", "campaign")
+    above = levels[levels.index(kind) + 1 :]
+    wanted = {kind: set(ids)} | {level: set(parents.get(level, ())) for level in above}
+    for current, parent in (
+        ("ad", "adgroup"),
+        ("adgroup", "campaign"),
+        ("campaign", None),
+    ):
+        remote_ids = wanted.get(current)
+        if not remote_ids:
+            continue
+        for obj in session.exec(
+            select(AdObject).where(
+                AdObject.tenant_id == tenant_id,
+                col(AdObject.advertiser_id).in_(advertisers),
+                AdObject.kind == current,
+                col(AdObject.remote_id).in_(remote_ids),
+            )
+        ).all():
+            objects[(obj.advertiser_id, obj.kind, obj.remote_id)] = obj
+            if parent and obj.parent_remote_id:
+                wanted.setdefault(parent, set()).add(obj.parent_remote_id)
+    return objects
+
+
+def _member_row(
+    *,
+    kind: str,
+    filters: ReportingFilter,
+    accounts: dict[str, AdvertiserAccount],
+    objects: dict[tuple[str, str, str], AdObject],
+    adv: str,
+    rid: str,
+    entity: AdObject | None,
+    items: Sequence[Mapping[str, Any]],
+    projection: CampaignNameProjection | None,
+    balance: AccountBalanceObservation | None,
+    reconciliations: Sequence[AccountReconciliationDay],
+    empty_values: Mapping[str, Decimal | None],
+) -> ReportRow:
+    metadata = items[0] if items else {}
+    name = (
+        accounts[adv].name or rid
+        if kind == "account"
+        else (
+            entity.name
+            if entity and entity.name
+            else metadata.get(f"{kind}_name") or rid
+        )
+    )
+    display = _hierarchy_display(
+        accounts=accounts,
+        objects=objects,
+        advertiser_id=adv,
+        kind=kind,
+        remote_id=rid,
+        entity=entity,
+    )
+    # 目录尚未同步时以报表中的父级身份与名称补齐，不能丢弃已删除广告的历史消耗。
+    for parent_kind in ("campaign", "adgroup", "ad"):
+        if parent_kind not in display and f"{parent_kind}_id" not in display:
+            continue
+        parent_id = display.get(f"{parent_kind}_id") or metadata.get(
+            f"{parent_kind}_id"
+        )
+        if parent_id:
+            obj = objects.get((adv, parent_kind, parent_id))
+            display[f"{parent_kind}_id"] = parent_id
+            display[f"{parent_kind}_name"] = (
+                obj.name
+                if obj and obj.name
+                else metadata.get(f"{parent_kind}_name") or parent_id
+            )
+    if filters.dimension == "drama":
+        name = (
+            projection.drama_name
+            if projection and projection.status == "VALID"
+            else name
+        )
+        display.update(drama_name=name)
+    display.update(
+        name=name,
+        remote_id=rid,
+        advertiser_id=adv,
+        provider=projection.provider_label if projection else None,
+        naming_status=projection.status if projection else "INVALID",
+        ad_type=entity.ad_type if entity else None,
+        operation_status=entity.operation_status if entity else None,
+        review_status=entity.review_status if entity else None,
+        secondary_status=entity.delivery_status if entity else None,
+    )
+    if kind == "account":
+        # 余额是独立时点观测；资金池余额必须标记共享，不纳入期间指标合计。
+        display.update(
+            account_status=accounts[adv].remote_status,
+            balance=str(balance.amount)
+            if balance
+            and balance.availability == "AVAILABLE"
+            and balance.amount is not None
+            else None,
+            balance_currency=balance.currency if balance else None,
+            balance_scope=balance.balance_scope if balance else "UNKNOWN",
+            balance_updated_at=balance.observed_at.isoformat() if balance else None,
+        )
+    if any(
+        a is not None and b is not None and abs(a - b) > Decimal("0.01")
+        for r in reconciliations
+        for a, b in (
+            (r.account_spend, r.ad_sum_spend),
+            (r.account_revenue_total, r.ad_sum_revenue_total),
+        )
+    ):
+        display["reconciliation"] = "DIFF"
+        display["account_report_spend"] = (
+            str(
+                sum(
+                    (cast(Decimal, r.account_spend) for r in reconciliations),
+                    Decimal(0),
+                )
+            )
+            if all(r.account_spend is not None for r in reconciliations)
+            else None
+        )
+    vectors = tuple(fact_vector(item) for item in items) or (
+        metric_vector(
+            empty_values,
+            currency=accounts[adv].currency,
+            timezone=accounts[adv].timezone,
+        ),
+    )
+    return ReportRow(
+        row_key=f"{adv}:{kind}:{rid}",
+        display=display,
+        metric_buckets=vectors,
+        directory_versions={f"{adv}:{rid}": entity.published_version} if entity else {},
+    )
 
 
 def _drama_status_display(

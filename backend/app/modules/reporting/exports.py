@@ -1,8 +1,8 @@
 """冻结报表导出。
 
-导出创建时把快照行复制到 ``ReportExport.frozen_rows``，后台生成阶段只消费
-这份副本。下载和生成都重新检查当前租户、BC 与账户授权；撤权后即使队列消息
-迟到也不会写出或下载旧报表。
+导出创建时把快照成员与顺序复制到 ``ReportExport.frozen_rows``，后台生成阶段
+按这份成员分批补全行内容。下载和生成都重新检查当前租户、BC 与账户授权；
+撤权后即使队列消息迟到也不会写出或下载旧报表。
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import csv
 import io
 import os
 import tempfile
+from collections.abc import Iterable, Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -25,16 +26,19 @@ from app.core.config import settings
 from app.core.context import TenantContext
 from app.modules.accounts.models import TenantBC
 from app.modules.materials.storage import make_s3
+from app.modules.reporting.dimension_query import materialize_rows
 from app.modules.reporting.filters import authorized_grants
 from app.modules.reporting.query_models import (
     QuerySnapshotRow,
     ReportExport,
     read_snapshot,
 )
-from app.modules.reporting.schemas import ExportPublic
+from app.modules.reporting.row_set import SnapshotMember
+from app.modules.reporting.schemas import ExportPublic, ReportingFilter
 from app.modules.tenants.permissions import require_tenant
 
 _EXPORT_PREFIX = "report-exports"
+EXPORT_BATCH = 500
 _LOCAL_ROOT = Path(tempfile.gettempdir()) / "tk-ada-report-exports"
 _MEMORY_OBJECTS: dict[str, bytes] = {}
 
@@ -104,6 +108,7 @@ def _scope_check(
 def _rows_for_snapshot(
     session: Session, snapshot_id: UUID, total: int
 ) -> list[dict[str, Any]]:
+    """冻结快照成员与顺序；行内容在后台生成时按批补全，避免大快照阻塞请求。"""
     rows = session.exec(
         select(QuerySnapshotRow)
         .where(QuerySnapshotRow.snapshot_id == snapshot_id)
@@ -111,23 +116,14 @@ def _rows_for_snapshot(
     ).all()
     if len(rows) != total:
         raise HTTPException(409, detail="query_snapshot_incomplete")
-    frozen: list[dict[str, Any]] = []
-    for row in rows:
-        # JSONB 中的 Decimal 已由 Pydantic 序列化为字符串；复制整个行结构
-        # 保证后续目录/事实修正不会改变已排队的导出内容。
-        frozen.append(
-            {
-                "row_key": row.row_key,
-                "display": dict(row.display),
-                "refs": list(row.refs),
-                "material_uses": list(row.material_uses),
-                "metric_buckets": list(row.metric_buckets),
-                "capabilities": dict(row.capabilities),
-                "directory_versions": dict(row.directory_versions),
-                "membership_digest": row.membership_digest,
-            }
-        )
-    return frozen
+    return [
+        {
+            "row_key": row.row_key,
+            "refs": list(row.refs),
+            "material_uses": list(row.material_uses),
+        }
+        for row in rows
+    ]
 
 
 def create_export(
@@ -268,7 +264,7 @@ def _decimal(value: Any) -> Decimal | None:
     return None
 
 
-def _csv_rows(export: ReportExport) -> bytes:
+def _csv_rows(export: ReportExport, rows: Iterable[dict[str, Any]]) -> bytes:
     from app.modules.reporting.metric_catalog import METRIC_CATALOG, metric_name_zh
 
     dimension = str((export.filters or {}).get("dimension") or "campaign")
@@ -302,11 +298,9 @@ def _csv_rows(export: ReportExport) -> bytes:
         key: metric_name_zh(key, dimension) for key in metric_fields
     }
     writer.writerow(headers)
-    for raw in export.frozen_rows:
+    for raw in rows:
         display = dict(raw.get("display") or {})
-        # B3 stores the row coverage marker inside display for migration
-        # compatibility; expose it as an explicit CSV column.
-        coverage = display.pop("__coverage__", None) or export.coverage
+        coverage = raw.get("coverage") or export.coverage
         row_coverage = coverage.get("status", "UNKNOWN")
         buckets = raw.get("metric_buckets") or [{}]
         for bucket in buckets:
@@ -408,10 +402,27 @@ def _delete_object(key: str) -> None:
     _object_path(key).unlink(missing_ok=True)
 
 
+def _export_rows(session: Session, export: ReportExport) -> Iterator[dict[str, Any]]:
+    """按冻结成员与顺序分批补全行内容，内存与单次查询量只与批大小相关。"""
+    filters = ReportingFilter.model_validate(export.filters)
+    members = [
+        SnapshotMember(raw["row_key"], tuple(raw["refs"]), tuple(raw["material_uses"]))
+        for raw in export.frozen_rows
+    ]
+    for start in range(0, len(members), EXPORT_BATCH):
+        for row in materialize_rows(
+            session,
+            tenant_id=export.tenant_id,
+            filters=filters,
+            members=members[start : start + EXPORT_BATCH],
+        ):
+            yield row.model_dump(mode="json")
+
+
 def generate_export(session: Session, export: ReportExport) -> None:
     """Generate a complete object or leave no externally visible partial file."""
     key = _expected_key(export)
-    content = _csv_rows(export)
+    content = _csv_rows(export, _export_rows(session, export))
     _put_object(key, content)
     export.object_key = key
     export.status = "COMPLETE"

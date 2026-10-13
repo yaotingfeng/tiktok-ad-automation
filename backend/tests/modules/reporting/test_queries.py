@@ -16,9 +16,8 @@ from app.modules.reporting.dimension_query import (
     merge_metric_buckets,
     metric_vector,
 )
-from app.modules.reporting.queries import _summary
 from app.modules.reporting.query_models import QuerySnapshot
-from app.modules.reporting.schemas import ReportingFilter, ReportRow, SelectionRequest
+from app.modules.reporting.schemas import ReportingFilter, SelectionRequest
 from app.modules.tenants.models import TenantMembership
 
 
@@ -94,9 +93,12 @@ def test_all_matching_freezes_snapshot(report_case):
     reread = query(
         case, filters=filters, snapshot_id=first.snapshot.snapshot_id, limit=100
     )
+    # 快照冻结成员、顺序与汇总；行内容按当前数据补全（如覆盖的同步时间）。
     assert reread.total == first.total
     assert reread.summary == first.summary
-    assert reread.items == first.items + second.items
+    assert [row.row_key for row in reread.items] == [
+        row.row_key for row in first.items + second.items
+    ]
 
 
 def test_account_selection_captures_campaigns_at_query_time(report_case):
@@ -153,9 +155,12 @@ def test_rename_keeps_old_snapshot_and_new_query_regroups(report_case):
     case.session.flush()
     reread = query(case, filters=filters, snapshot_id=old.snapshot.snapshot_id)
     new = query(case, filters=filters)
-    assert reread.items == old.items
+    # 旧快照保留原归组（成员与顺序不变），展示名称按当前目录补全；新查询重新归组。
+    assert [row.row_key for row in reread.items] == [row.row_key for row in old.items]
+    assert reread.items[0].refs == old.items[0].refs
     assert old.items[0].display["name"] == "Old"
     assert new.items[0].display["name"] == "New"
+    assert new.items[0].row_key != old.items[0].row_key
     assert freeze(case, old.snapshot.snapshot_id).refs == (ref,)
 
 
@@ -306,26 +311,6 @@ def _vec(spend, revenue, *, unsupported=()):
     )
 
 
-COMPLETE = {"status": "COMPLETE", "stale_dates": [], "incomplete_advertiser_ids": []}
-
-
-def _incomplete(*advertisers, dates=("2026-10-01",)):
-    return {
-        "status": "INCOMPLETE",
-        "stale_dates": list(dates),
-        "incomplete_advertiser_ids": list(advertisers),
-    }
-
-
-def _row(key, adv, vector, coverage):
-    return ReportRow(
-        row_key=key,
-        display={"advertiser_id": adv},
-        metric_buckets=(vector,),
-        coverage=coverage,
-    )
-
-
 def test_aggregate_sums_available_members_and_marks_partial():
     total = aggregate_metrics([_vec(Decimal("10"), Decimal("5")), _vec(None, None)])
     assert total.values["spend"] == Decimal("10")
@@ -397,56 +382,3 @@ def test_merge_buckets_marks_only_buckets_with_incomplete_contributors():
     }
     assert merged["USD"].availability["spend"] == "PARTIAL"
     assert merged["EUR"].availability["spend"] == "AVAILABLE"
-
-
-def test_summary_counts_incomplete_advertisers_and_dates():
-    rows = (
-        _row("a", "adv1", _vec(Decimal("10"), Decimal("5")), COMPLETE),
-        _row(
-            "b",
-            "adv2",
-            _vec(None, None),
-            _incomplete("adv2", dates=("2026-09-30", "2026-10-01")),
-        ),
-        _row("c", "adv2", _vec(Decimal("1"), Decimal("1")), _incomplete("adv2")),
-        # 剧维度跨账户合并：以覆盖里列出的不完整账户为准，而不是首个成员账户。
-        _row(
-            "d",
-            "adv4",
-            _vec(Decimal("3"), Decimal("1")),
-            _incomplete("adv3", dates=("2026-10-02",)),
-        ),
-    )
-    summary = _summary(rows)
-    assert summary["row_count"] == 4
-    assert summary["incomplete_advertiser_count"] == 2
-    assert summary["incomplete_dates"] == ["2026-09-30", "2026-10-01", "2026-10-02"]
-    (bucket,) = summary["buckets"]
-    assert Decimal(bucket["values"]["spend"]) == Decimal("14")
-    assert bucket["availability"]["spend"] == "PARTIAL"
-
-
-def test_summary_partial_when_incomplete_row_has_values():
-    # 不完整账户已同步部分有值时，SQL 合计看似完整，汇总也必须标 PARTIAL。
-    rows = (
-        _row("a", "adv1", _vec(Decimal("10"), Decimal("5")), COMPLETE),
-        _row("b", "adv2", _vec(Decimal("4"), Decimal("2")), _incomplete("adv2")),
-    )
-    summary = _summary(rows)
-    (bucket,) = summary["buckets"]
-    assert Decimal(bucket["values"]["spend"]) == Decimal("14")
-    assert bucket["availability"]["spend"] == "PARTIAL"
-    assert bucket["availability"]["roas_total"] == "PARTIAL"
-    assert summary["incomplete_advertiser_count"] == 1
-
-
-def test_summary_complete_rows_stay_available():
-    rows = (
-        _row("a", "adv1", _vec(Decimal("10"), Decimal("5")), COMPLETE),
-        _row("b", "adv2", _vec(Decimal("4"), Decimal("2")), COMPLETE),
-    )
-    summary = _summary(rows)
-    (bucket,) = summary["buckets"]
-    assert bucket["availability"]["spend"] == "AVAILABLE"
-    assert summary["incomplete_advertiser_count"] == 0
-    assert summary["incomplete_dates"] == []

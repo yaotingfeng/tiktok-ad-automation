@@ -17,7 +17,7 @@ from sqlmodel import Session, col, select
 from app.core.context import TenantContext
 from app.integrations.tiktok.contracts.ads import EntityRef, MaterialUseRef
 from app.modules.reporting.filters import authorized_grants
-from app.modules.reporting.queries import _row_public
+from app.modules.reporting.queries import frozen_row
 from app.modules.reporting.query_models import (
     FrozenSelectionRecord,
     QuerySnapshotRow,
@@ -129,7 +129,7 @@ def freeze_selection(
     seen_refs: set[tuple[Any, ...]] = set()
     seen_uses: set[tuple[Any, ...]] = set()
     for row in selected:
-        public = _row_public(row)
+        public = frozen_row(row)
         # Account refs were expanded when the query snapshot was created; reading
         # current AdObject rows here would admit campaigns added after the snapshot.
         row_refs = list(public.refs)

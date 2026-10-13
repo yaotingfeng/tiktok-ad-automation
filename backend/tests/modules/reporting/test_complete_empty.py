@@ -223,3 +223,22 @@ def test_drama_row_partial_when_member_account_incomplete(session, sync_seed):
     assert vector.availability["roas_d0"] == "PARTIAL"
     assert result[0].coverage["status"] != "COMPLETE"
     assert result[0].coverage["incomplete_advertiser_ids"] == ["acc-2"]
+
+
+def test_drama_ids_filter_matches_member_campaign(session, sync_seed):
+    # 剧行按成员系列 ID 筛选（成员 ID 数组为 varchar，需与文本数组比较）。
+    seed_empty(session, sync_seed)
+    result = build_rows(
+        session,
+        context=sync_seed.context,
+        bc_id="bc-a",
+        filters=ReportingFilter(
+            dimension="drama",
+            start_date=D,
+            end_date=D,
+            advertiser_ids=("acc-1",),
+            ids=("c2",),
+        ),
+    )
+    assert len(result) == 1
+    assert {ref.remote_id for ref in result[0].refs} == {"c1", "c2"}
