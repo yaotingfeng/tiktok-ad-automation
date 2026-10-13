@@ -1,3 +1,13 @@
+## 2026-10-14：自动规则阶段 1（规则与预警）
+
+- 调研与设计：[调研报告](integrations/2026-10-13-tiktok-automated-rules-research.md)、[设计规格](superpowers/specs/2026-10-14-automated-rules-design.md)、[阶段 1 计划](superpowers/plans/2026-10-14-automated-rules-phase1.md)。新骏伯 BC 实测：开放 API 能读取网页创建的原生规则，但在代理商开户的子账户上创建规则返回 40002（授权用户为 BC 与账户 ADMIN），因此不用 TikTok 原生规则，由 TK-ADA 自建规则引擎。
+- 后端新增 `modules/automation_rules`：规则定义（跨 BC 适用账户、系列/广告组/广告/素材四个层级、每个对象/每部剧合计/所有对象合计三种口径、最多 5 个条件、执行层级校验、频控与排期）、5 张表（迁移 `0026_automation_rules`）、判断引擎（按账户时区取日期、比率用分子分母合计重算、币种分组、命名不规范不参与剧合计、数据超过 90/150 分钟未同步的账户跳过）、试运行、Beat 每 60 秒扫描到期规则（`ads-reporting` 队列判断、`control` 队列发送飞书）、运行与命中记录保留 30 天、租户飞书 Webhook（只允许飞书/Lark 官方域名，加密存储，可选签名校验）。
+- 阶段 1 只开放「仅通知」：保存「自动执行」「确认后执行」返回 409；不改动任何广告，不新增 TikTok 调用。
+- 新增部署开关 `AUTOMATED_RULES_ENABLED`（默认 false），已补齐 Settings、`.env.example`、compose、k8s 示例、发布工具与部署手册；AGENTS.md 开关表在工作区修改中，与用户自己未提交的 AGENTS.md 修改一起，未提交。
+- 前端：「投放工作」新增「自动规则」（规则管理、编辑器、试运行、执行记录与明细，飞书卡片链接可直接打开指定运行）；「租户管理」新增「通知设置」（仅租户管理员）。
+- 验证：专用 PostgreSQL 18/Redis 8 临时容器中 automation_rules 79 项通过；与 reporting、jobs、迁移图合跑 378 通过 3 跳过；`alembic check` 无差异、迁移可降级再升级；新模块 Ruff/ty 通过，mypy 仅余与全代码库一致的 Celery 装饰器无类型提示 4 项；`scripts/test-k8s-deployment.py` 24 项、`scripts/test-release-tools.py` 21 项通过；前端 Playwright 自动规则用例 11 项通过、TypeScript 构建通过。`scripts/test-release-integration.py` 需要 Docker 发布镜像，未运行。
+- 未验证：真实飞书群发送、staging/生产开关取值（首次发布前需向用户确认）。下一步：阶段 2（自动执行、确认后执行、定向刷新、频控台账、冲突检测）。
+
 ## 2026-10-11：广告报表数据准确性与排序修复
 
 - 新骏伯 BC 只读核验（MCP `tiktok-ads-new-junbo`，BC `7683817908149272592`，账户 `7691249267022446613`，2026-10-05）：系列级账户全量（`STATUS_ALL`）消耗合计 499.29 与账户级一致；`campaign_automation_type` 过滤只接受一个值；素材 overview 支持 `smart_plus_ad_id` 分组且返回 `ad_material_id`，与 Smart+ 目录一致，而主素材 ID（Spark 帖子）与目录 `video_id` 不同。未执行任何写入。
