@@ -554,7 +554,8 @@ def test_workspace_snapshot_contract(
         filters=_filters("drama"),
         limit=100,
     )
-    assert drama_page.total == 3
+    # 剧只按系列名第二段归组：三个版权方的“同名剧”合并为一行，金额合计不变。
+    assert drama_page.total == 1
     assert sum(
         Decimal(str(_bucket_values(bucket)["spend"]))
         for bucket in _summary_buckets(drama_page)

@@ -21,7 +21,7 @@ const PARENT_KIND: Record<string, string> = {
   account: "账户",
 }
 const STATUS_VALUES: Record<string, string> = {
-  ENABLE: "投放中",
+  ENABLE: "已开启",
   DISABLE: "已暂停",
   DELETE: "已删除",
 }
@@ -190,6 +190,7 @@ export function OverviewTab({
         <section className="flex flex-col gap-2">
           <h3 className="font-medium">命名解析</h3>
           <dl className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            {/* 版权方即系列名第一段；剧跨多个写法合并时后端会全部列出。 */}
             <Field label="版权方" value={naming.provider ?? "—"} />
             <Field label="剧名" value={naming.drama ?? "—"} />
             {dimension !== "drama" && (

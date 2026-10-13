@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/table"
 
 const STATUS: Record<string, string> = {
-  ENABLE: "投放中",
+  ENABLE: "已开启",
   DISABLE: "已暂停",
   DELETE: "已删除",
 }

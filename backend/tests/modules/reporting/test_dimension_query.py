@@ -288,3 +288,78 @@ def test_account_row_equals_sum_of_its_campaigns(session, sync_seed):
             c.metric_buckets[0].values[key] for c in camps
         )
     assert "account_status" in acct.display
+
+
+def test_drama_groups_by_second_segment_only_hides_deleted_empty_and_aggregates_status(
+    session, sync_seed
+):
+    from datetime import UTC, datetime
+
+    from sqlmodel import select
+
+    from app.modules.accounts.models import TikTokConnection
+    from app.modules.ads.models import AdObject, CampaignNameProjection
+
+    _seed(session, sync_seed)
+    connection = session.exec(
+        select(TikTokConnection).where(
+            TikTokConnection.tenant_id == sync_seed.tenant_id
+        )
+    ).first()
+
+    def campaign(adv, remote_id, name, delivery):
+        session.add(
+            AdObject(
+                tenant_id=sync_seed.tenant_id,
+                advertiser_id=adv,
+                kind="campaign",
+                remote_id=remote_id,
+                ad_type="SMART_PLUS",
+                name=name,
+                operation_status="DISABLE",
+                delivery_status=delivery,
+                review_status="APPROVED",
+                observed_at=datetime.now(UTC),
+                published_version=1,
+                source_connection_id=connection.id,
+                source_channel="OFFICIAL_API",
+            )
+        )
+        provider, drama = name.split("-")[:2]
+        session.add(
+            CampaignNameProjection(
+                tenant_id=sync_seed.tenant_id,
+                advertiser_id=adv,
+                campaign_remote_id=remote_id,
+                name_revision=1,
+                raw_name=name,
+                provider_label=provider,
+                drama_name=drama,
+                status="VALID",
+                parser_revision=1,
+                grouping_revision=1,
+            )
+        )
+
+    # 第一段写法不同（版权方中文、网眼归因参数）不影响归组。
+    campaign("acc-1", "c1", "容量-同一部剧-1", "CAMPAIGN_STATUS_DISABLE")
+    campaign("acc-2", "c9", "{b31091/s345647/c1}-同一部剧-2", "CAMPAIGN_STATUS_DISABLE")
+    # 已删除且所选日期无数据的探针系列不应作为剧出现。
+    campaign("acc-1", "probe-1", "probe-capability-ytf", "CAMPAIGN_STATUS_DELETE")
+    session.flush()
+    rows = build_rows(
+        session, context=sync_seed.context, bc_id="bc-a", filters=_filters("drama")
+    )
+    assert [row.display["name"] for row in rows] == ["同一部剧"]
+    drama = rows[0]
+    assert {ref.remote_id for ref in drama.refs} == {"c1", "c9"}
+    assert drama.metric_buckets[0].values["spend"] == Decimal(17)
+    # 版权方显示系列名第一段，多个不同写法全部列出。
+    assert set(drama.display["provider"].split("、")) == {
+        "容量",
+        "{b31091/s345647/c1}",
+    }
+    # 全部成员已暂停：剧状态为已暂停，而不是取任意成员的状态。
+    assert drama.display["operation_status"] == "DISABLE"
+    assert drama.display["enabled_campaign_count"] == "0"
+    assert drama.display["campaign_count"] == "2"

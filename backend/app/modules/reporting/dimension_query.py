@@ -307,11 +307,10 @@ def drama_key(
     projection: CampaignNameProjection | None,
 ) -> str:
     if projection and projection.status == "VALID":
-        # JSON 元组编码避免名称内 ':' 产生碰撞；账户不参与有效剧的 BC 范围身份。
+        # 剧只按系列名第二段（剧名）归组：第一段可能是版权方的任意写法或网眼归因
+        # 参数，不参与身份；账户也不参与，同名剧跨账户合并。JSON 编码避免 ':' 碰撞。
         return f"{bc_id}:drama:" + json.dumps(
-            [projection.provider_label, projection.drama_name],
-            ensure_ascii=False,
-            separators=(",", ":"),
+            [projection.drama_name], ensure_ascii=False, separators=(",", ":")
         )
     return f"{bc_id}:external:" + json.dumps(
         [advertiser_id, campaign_id], separators=(",", ":")
@@ -645,12 +644,29 @@ def build_rows(
             advertisers=advertisers,
         )
     }
-    objects = {
-        (o.advertiser_id, o.kind, o.remote_id): o
-        for o in scoped_rows(
-            session, AdObject, tenant_id=context.tenant_id, advertisers=advertisers
-        )
-    }
+    # 只加载当前维度及其上级的目录对象：系列/剧不需要广告组与广告（数量大且带完整配置），
+    # 全量加载曾占剧维度查询约三分之一的耗时。
+    object_kinds = {
+        "account": (),
+        "campaign": ("campaign",),
+        "drama": ("campaign",),
+        "adgroup": ("campaign", "adgroup"),
+        "ad": ("campaign", "adgroup", "ad"),
+    }[filters.dimension]
+    objects = (
+        {
+            (o.advertiser_id, o.kind, o.remote_id): o
+            for o in session.exec(
+                select(AdObject).where(
+                    AdObject.tenant_id == context.tenant_id,
+                    col(AdObject.advertiser_id).in_(advertisers),
+                    col(AdObject.kind).in_(object_kinds),
+                )
+            ).all()
+        }
+        if object_kinds
+        else {}
+    )
     projections = latest_projections(
         scoped_rows(
             session,
@@ -714,8 +730,34 @@ def build_rows(
             )
         ):
             balances.setdefault(observation.advertiser_id, observation)
+    # 覆盖状态只取决于账户集合与日期：按账户集合缓存，避免每行、每组对全部同步状态
+    # 重新扫描（剧维度 30 天曾因此耗时数秒）。返回副本，行之间不共享可变对象。
+    coverage_cache: dict[frozenset[str], dict[str, Any]] = {}
+
+    def coverage_for(members: Collection[str]) -> dict[str, Any]:
+        cache_key = frozenset(members)
+        if cache_key not in coverage_cache:
+            coverage_cache[cache_key] = _coverage(
+                states, advertisers=cache_key, filters=filters
+            )
+        return dict(coverage_cache[cache_key])
+
+    empty_cache: dict[str, dict[str, Decimal | None]] = {}
+
+    def empty_values_for(adv: str) -> dict[str, Decimal | None]:
+        if adv not in empty_cache:
+            complete = coverage_for({adv})["status"] == "COMPLETE"
+            # 用户裁定：完整覆盖的无事实对象才为零；缺覆盖不能填零。
+            empty_cache[adv] = {
+                name: Decimal(0) if complete else None for name in METRIC_COLUMNS
+            }
+        return empty_cache[adv]
+
     groups = defaultdict(list)
     group_accounts = defaultdict(set)
+    # 剧行状态按成员系列汇总，不能沿用任意一个成员的状态。
+    group_statuses: dict[str, list[str | None]] = defaultdict(list)
+    group_providers: dict[str, list[str]] = defaultdict(list)
     for adv, rid in sorted(identities):
         entity = objects.get((adv, kind, rid))
         items = facts.get((adv, rid), [])
@@ -728,6 +770,15 @@ def build_rows(
             campaign_id = parent.parent_remote_id if parent else campaign_id
         projection = projections.get((adv, campaign_id))
         if not _entity_matches(entity, projection, filters, accounts[adv].timezone):
+            continue
+        # 剧维度不列出所选日期没有数据的已删除系列（多为测试/探针系列），
+        # 否则它们的名称第二段会被当成剧名出现在剧列表里。
+        if (
+            filters.dimension == "drama"
+            and not items
+            and entity is not None
+            and (entity.delivery_status or "").endswith("DELETE")
+        ):
             continue
         key = (
             drama_key(bc_id, adv, rid, projection)
@@ -817,7 +868,7 @@ def build_rows(
         if not vectors:
             vectors = (
                 metric_vector(
-                    empty_metric_values(states, advertiser=adv, filters=filters),
+                    empty_values_for(adv),
                     currency=accounts[adv].currency,
                     timezone=accounts[adv].timezone,
                 ),
@@ -839,9 +890,12 @@ def build_rows(
             )
         )
         group_accounts[key].add(adv)
+        group_statuses[key].append(entity.operation_status if entity else None)
+        if projection and projection.provider_label:
+            group_providers[key].append(projection.provider_label)
     result = []
     for key, members in groups.items():
-        coverage = _coverage(states, advertisers=group_accounts[key], filters=filters)
+        coverage = coverage_for(group_accounts[key])
         incomplete_ids = set(cast(list[str], coverage["incomplete_advertiser_ids"]))
         refs = tuple(ref for row in members for ref in row.refs)
         row = members[0].model_copy(
@@ -876,6 +930,43 @@ def build_rows(
                 },
             }
         )
+        if filters.dimension == "drama":
+            row = row.model_copy(
+                update={
+                    "display": _drama_status_display(
+                        row.display, group_statuses[key], group_providers[key]
+                    )
+                }
+            )
         if _passes_filter(row, filters):
             result.append(row)
     return _sort_rows(result, filters)
+
+
+def _drama_status_display(
+    display: dict[str, Any], statuses: list[str | None], providers: list[str]
+) -> dict[str, Any]:
+    """剧行状态：任一成员系列开关开启即"已开启"，否则全部暂停为"已暂停"，全部删除为"已删除"。
+
+    系列开关开启只代表 TikTok 侧开关打开，不代表正在花钱；开启数量一并给出，
+    让投手看清是几个系列开着。审核与投放细分状态在系列维度查看。
+    """
+    enabled = sum(1 for status in statuses if status == "ENABLE")
+    if enabled:
+        operation = "ENABLE"
+    elif any(status == "DISABLE" for status in statuses):
+        operation = "DISABLE"
+    elif statuses and all(status == "DELETE" for status in statuses):
+        operation = "DELETE"
+    else:
+        operation = None
+    return {
+        **display,
+        # 版权方直接显示系列名第一段；同一部剧各系列第一段不同时全部列出，按出现顺序去重。
+        "provider": "、".join(dict.fromkeys(providers)) or None,
+        "operation_status": operation,
+        "secondary_status": None,
+        "review_status": None,
+        "campaign_count": str(len(statuses)),
+        "enabled_campaign_count": str(enabled),
+    }

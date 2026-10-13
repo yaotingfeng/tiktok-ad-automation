@@ -2,6 +2,8 @@ type Tone = "default" | "secondary" | "destructive" | "outline"
 
 // 主状态优先看审核与投放（secondary_status），再看开关（operation_status）；
 // 未登记的枚举原样显示，不隐藏，避免平台新增状态时投手看不到。
+// "投放中"只用于平台明确的投放状态（DELIVERY_OK 等）；系列的 CAMPAIGN_STATUS_ENABLE
+// 和开关 ENABLE 只表示开关打开、不代表正在花钱，显示为"已开启"。
 const SECONDARY: Array<[RegExp, string, Tone]> = [
   [/DELETE/, "已删除", "outline"],
   [/AUDIT_DENY|REJECT|NOT_APPROVE/, "未通过", "destructive"],
@@ -9,10 +11,11 @@ const SECONDARY: Array<[RegExp, string, Tone]> = [
   [/BUDGET_EXCEED|OFFLINE_BUDGET|BALANCE/, "预算不足", "destructive"],
   [/NOT_START|NO_SCHEDULE|TIME_NO_REACH|DONE/, "不在排期", "secondary"],
   [/DISABLE/, "已暂停", "outline"],
-  [/ENABLE|DELIVERY_OK|DELIVERING/, "投放中", "default"],
+  [/DELIVERY_OK|DELIVERING/, "投放中", "default"],
+  [/ENABLE/, "已开启", "secondary"],
 ]
 const OPERATION: Record<string, [string, Tone]> = {
-  ENABLE: ["投放中", "default"],
+  ENABLE: ["已开启", "secondary"],
   DISABLE: ["已暂停", "outline"],
   DELETE: ["已删除", "outline"],
 }
@@ -35,6 +38,21 @@ export function statusLabel(
   if (account) {
     const [label, tone] = ACCOUNT[account] ?? [account, "outline" as Tone]
     return { label, tone, raw: account }
+  }
+  // 剧行状态由后端按成员系列汇总：开启时附上开启系列数，例如"已开启 3/18"。
+  if (display.campaign_count) {
+    const operation = display.operation_status ?? ""
+    const [label, tone] = OPERATION[operation] ?? ["未知", "outline" as Tone]
+    const enabled = display.enabled_campaign_count ?? "0"
+    const raw = `${enabled}/${display.campaign_count} 个系列开启`
+    return {
+      label:
+        operation === "ENABLE"
+          ? `${label} ${enabled}/${display.campaign_count}`
+          : label,
+      tone,
+      raw,
+    }
   }
   const secondary = display.secondary_status ?? ""
   const operation = display.operation_status ?? ""

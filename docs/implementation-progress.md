@@ -2108,3 +2108,11 @@
 - 用户确认第 6 条（推广目标显示"应用推广"）不改：接口字段即 `APP_PROMOTION` + `MINIS`。
 - 验证：tsc、biome、`bun run build` 通过；Playwright workspace 报表相关（ads-workspace/ads-reporting/ads-detail/ads-column-prefs/ads-metric-catalog/ad-management）61 通过，新增筛选标签逐级取消、导出自动下载、路径层级前缀、广告组详情无素材页签用例。未部署、未调用真实 TikTok。
 - 生产发布：`python3 deploy/local.py deploy`，批次 `20261013T154637-31cae6`，`8213b4a` → `1afdd69b`，phase=complete。受影响检查（前端 build/workspace/R2 验收）通过；同一停写窗口备份隔离恢复通过（PostgreSQL 一致、5 份凭据可解密），`latest.tar` 已替换；镜像 `sha256:d95b65fc…b309`，9 Pod Ready、Worker 7/7、Beat 1，HTTPS 与健康检查 200。开关与发布前一致：导入/清理/周期同步均为 true。无数据库迁移；未做真实 OAuth 或广告写入验收。
+
+## 2026-10-13：剧维度按剧名归组、状态与性能修正
+
+- 剧只按系列名第二段（剧名）归组，跨账户、跨第一段写法合并；版权方直接显示第一段，多种写法用"、"全部列出。剧维度不再列出所选日期无数据的已删除系列（生产中 34 个 `probe-*` 测试系列的第二段曾被当作剧名）。
+- 状态：剧行状态按成员系列汇总（有开启系列为"已开启 n/m"，全部暂停/删除对应显示），不再取任意一个成员；全站"投放中"只用于平台明确投放状态（DELIVERY_OK/DELIVERING），开关 ENABLE 与 `CAMPAIGN_STATUS_ENABLE` 显示"已开启"。生产只读核实：130 个系列开关开启，但 10/7 之后消耗均为 0。
+- 性能：查询内按账户集合缓存同步覆盖与空值口径，系列/剧维度只加载系列目录。生产数据只读试跑：剧近 30 天 5.4 秒 → 0.7 秒，系列今日 2.7 秒 → 0.4 秒，剧行 122 → 84。
+- 汇总卡片恢复常规卡片样式（标题 14px、数值 24px，一行 6 张）。
+- 验证：后端报表模块与报表验收 182 通过（验收用例"同名剧不同版权方"按新规则改为合并 1 行）；前端报表相关 61 通过；tsc、biome、ruff 通过。

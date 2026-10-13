@@ -37,7 +37,22 @@ test("状态中文映射", () => {
       operation_status: "ENABLE",
       secondary_status: "CAMPAIGN_STATUS_ENABLE",
     }).label,
+  ).toBe("已开启")
+  // 只有平台明确的投放状态才显示"投放中"。
+  expect(
+    statusLabel({
+      operation_status: "ENABLE",
+      secondary_status: "ADGROUP_STATUS_DELIVERY_OK",
+    }).label,
   ).toBe("投放中")
+  // 剧行按成员汇总，附开启系列数。
+  expect(
+    statusLabel({
+      operation_status: "ENABLE",
+      campaign_count: "18",
+      enabled_campaign_count: "3",
+    }).label,
+  ).toBe("已开启 3/18")
   expect(statusLabel({ operation_status: "SOMETHING_NEW" }).label).toBe(
     "SOMETHING_NEW",
   )
