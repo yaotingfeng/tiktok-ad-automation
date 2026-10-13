@@ -5993,6 +5993,10 @@ export type SyncStatusPublic = {
      * Accounts
      */
     accounts: Array<SyncAccountStatus>;
+    /**
+     * Complete From
+     */
+    complete_from?: string | null;
     plan: SyncPlanStatus;
 };
 

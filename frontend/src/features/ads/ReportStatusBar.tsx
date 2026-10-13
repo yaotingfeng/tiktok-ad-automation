@@ -86,6 +86,10 @@ export function ReportStatusBar({
   }
 
   const extras: { text: string; tone: Tone }[] = []
+  // 历史回填只覆盖到开户日之后的部分区间：告诉用户从哪天起数据完整，
+  // 选择更早的日期时就能理解缺口来自回填范围，而不是同步出错。
+  if (status?.complete_from)
+    extras.push({ text: `完整数据自 ${status.complete_from} 起`, tone: "ok" })
   if (pending.length && pending.length < accounts.length)
     extras.push({ text: `${pending.length} 个账户同步中`, tone: "pending" })
   if (incomplete.length)

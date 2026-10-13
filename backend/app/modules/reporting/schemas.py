@@ -283,6 +283,8 @@ class SyncPlanStatus(BaseModel):
 class SyncStatusPublic(BaseModel):
     publication_version: str
     accounts: tuple[SyncAccountStatus, ...]
+    # 完整数据起始日：此日至账户本地昨天全部账户已同步完成；无完整区间时为空。
+    complete_from: date | None = None
     plan: SyncPlanStatus
 
 

@@ -5,16 +5,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
 from typing import Annotated, Literal, cast
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 from redis import Redis, RedisError
+from sqlalchemy import bindparam, text
 from sqlmodel import Session, col, select
 
 from app.api.deps import CurrentUser, SessionDep
@@ -35,6 +38,7 @@ from app.modules.reporting.models import AccountBalanceObservation
 from app.modules.reporting.planner import (
     calls_today,
     ensure_bc_plans,
+    local_today,
     owned_accounts,
     plan_hot,
     plan_material,
@@ -497,6 +501,80 @@ def request_ad_sync_refresh_route(
     return SyncRefreshPublic(status="QUEUED", queued=count, accounts=len(accounts))
 
 
+# 按账户找出广告日报表连续“已完成”的日期段：降序编号后 日期+序号 在连续段内恒定。
+_COMPLETE_RUNS_SQL = text(
+    """
+    SELECT advertiser_id, MIN(stat_date) AS run_start, MAX(stat_date) AS run_end
+    FROM (
+        SELECT advertiser_id, stat_date,
+               stat_date + (ROW_NUMBER() OVER (
+                   PARTITION BY advertiser_id ORDER BY stat_date DESC
+               ))::int AS grp
+        FROM report_sync_state
+        WHERE tenant_id = :tenant_id
+          AND report_kind = 'ad_day'
+          AND status = 'COMPLETE'
+          AND advertiser_id IN :advertiser_ids
+    ) runs
+    GROUP BY advertiser_id, grp
+    """
+).bindparams(bindparam("advertiser_ids", expanding=True))
+
+
+def complete_data_start(
+    session: Session,
+    tenant_id: UUID,
+    accounts: Sequence[AdvertiserAccount],
+    now: datetime,
+) -> date | None:
+    """完整数据起始日：从这一天到各账户本地昨天，所有账户每天都已同步完成。
+
+    今天仍在热刷新，由“数据更新到”表达，不参与判断。开户前的日期不会有报表，
+    不能算作缺口：账户从开户起就连续完整时不限制起始日；开户时间未知的账户只能
+    以自身连续段起点为准。任一账户昨天都不完整时没有完整区间，返回 None。
+    """
+    if not accounts:
+        return None
+    runs: dict[str, list[tuple[date, date]]] = {}
+    for row in session.connection().execute(
+        _COMPLETE_RUNS_SQL,
+        {
+            "tenant_id": tenant_id,
+            "advertiser_ids": [account.advertiser_id for account in accounts],
+        },
+    ):
+        runs.setdefault(row.advertiser_id, []).append((row.run_start, row.run_end))
+    bounds: list[date] = []
+    openings: list[date] = []
+    for account in accounts:
+        timezone = account.timezone or "UTC"
+        yesterday = local_today(timezone, now) - timedelta(days=1)
+        opened = (
+            account.remote_created_at.astimezone(ZoneInfo(timezone)).date()
+            if account.remote_created_at
+            else None
+        )
+        if opened is not None:
+            if opened > yesterday:
+                continue  # 今天才开户，还没有可判断的完整日期
+            openings.append(opened)
+        run_start = next(
+            (
+                start
+                for start, end in runs.get(account.advertiser_id, [])
+                if start <= yesterday <= end
+            ),
+            None,
+        )
+        if run_start is None:
+            return None
+        if opened is None or run_start > opened:
+            bounds.append(run_start)
+    if bounds:
+        return max(bounds)
+    return min(openings) if openings else None
+
+
 @router.get(
     "/ad-sync-status", response_model=SyncStatusPublic, name="get_ad_sync_status"
 )
@@ -599,6 +677,9 @@ def get_ad_sync_status_route(
     )
     return SyncStatusPublic(
         accounts=tuple(result),
+        complete_from=complete_data_start(
+            session, tenant_id, accounts, datetime.now(UTC)
+        ),
         publication_version=version,
         plan=SyncPlanStatus(
             enabled=enabled,

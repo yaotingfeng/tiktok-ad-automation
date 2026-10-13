@@ -109,6 +109,8 @@ function configColumns(dimension: AdsDimension): ConfigColumn[] {
   }
 }
 
+// 表头按钮去掉内边距（含小号按钮带图标时的 has-[>svg]:px-2.5），
+// 否则表头文字比下方单元格多缩进，看起来与数据错位。
 function SortableHead({
   label,
   sortBy,
@@ -133,7 +135,7 @@ function SortableHead({
       type="button"
       variant="ghost"
       size="sm"
-      className="h-8 gap-1 px-1 font-medium text-inherit"
+      className="h-8 gap-1 px-0 font-medium text-inherit hover:bg-transparent has-[>svg]:px-0"
       onClick={() => onSort(sortBy)}
       aria-label={`${label}${active ? (direction === "asc" ? "，当前升序" : "，当前降序") : "，点击排序"}`}
     >
@@ -350,7 +352,7 @@ export function AdsTable({
               <TableRow className="hover:bg-transparent">
                 <TableHead
                   data-sticky="select"
-                  className={`${HEAD} left-0 z-30 w-10 min-w-10 max-w-10 px-3`}
+                  className={`${HEAD} left-0 z-30 w-10 min-w-10 max-w-10`}
                 >
                   <Checkbox
                     checked={pageSelected}

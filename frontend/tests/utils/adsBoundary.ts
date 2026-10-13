@@ -631,6 +631,7 @@ export async function adsBoundary(
               failed_dates: [],
             },
           ],
+          complete_from: options.incomplete ? "2026-10-05" : "2026-09-01",
           publication_version: options.lastSuccess ?? "version-1",
           plan: {
             enabled: true,

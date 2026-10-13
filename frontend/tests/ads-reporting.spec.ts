@@ -74,6 +74,24 @@ test("新回收列排序、账户本地更新时间与缺失日期", async ({ pa
   await expect(
     page.getByText("1 个账户有日期缺失", { exact: true }),
   ).toBeVisible()
+  await expect(
+    page.getByText("完整数据自 2026-10-05 起", { exact: true }),
+  ).toBeVisible()
+  // 表头文字与下方数值左边缘对齐，不能被排序按钮内边距额外推开。
+  // 量的是首个文字节点的位置，按钮外框本身总是贴着表头内边距。
+  const textLeft = (selector: string) =>
+    page
+      .locator(selector)
+      .first()
+      .evaluate((element) => {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
+        const range = document.createRange()
+        range.selectNodeContents(walker.nextNode() as Text)
+        return range.getBoundingClientRect().left
+      })
+  const headLeft = await textLeft('thead th[data-metric="spend"]')
+  const cellLeft = await textLeft('tbody td[data-metric="spend"]')
+  expect(Math.abs(headLeft - cellLeft)).toBeLessThan(1)
   await expect(page.getByText(/以下日期数据不完整/)).toHaveCount(0)
   await page.getByRole("button", { name: "同步明细", exact: true }).click()
   await expect(page.getByText(/以下日期数据不完整：2026-10-04/)).toBeVisible()
