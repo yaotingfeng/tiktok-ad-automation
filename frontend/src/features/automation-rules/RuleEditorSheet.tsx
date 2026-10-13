@@ -64,6 +64,35 @@ const lines = (value: string) =>
     .map((item) => item.trim())
     .filter(Boolean)
 
+/** 输入框保留原始文本，避免受控回写时吞掉正在输入的逗号。 */
+function MonthDaysInput({
+  label,
+  days,
+  onChange,
+}: {
+  label: string
+  days: number[]
+  onChange: (days: number[]) => void
+}) {
+  const [text, setText] = useState(days.join(","))
+  return (
+    <Input
+      aria-label={label}
+      placeholder="日期，如 1,15"
+      className="w-36"
+      value={text}
+      onChange={(e) => {
+        setText(e.target.value)
+        onChange(
+          lines(e.target.value)
+            .map(Number)
+            .filter((day) => Number.isInteger(day)),
+        )
+      }}
+    />
+  )
+}
+
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="flex flex-col gap-3 border-b py-4 last:border-b-0">
@@ -175,7 +204,7 @@ export function RuleEditorSheet({
     (initial.definition.accounts.advertiser_ids ?? []).join("\n"),
   )
   const [dramaText, setDramaText] = useState(
-    (initial.definition.apply_to.drama_names ?? []).join("，"),
+    (initial.definition.apply_to.drama_names ?? []).join("\n"),
   )
   const [dryRun, setDryRun] = useState<DryRunPublic | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -200,7 +229,11 @@ export function RuleEditorSheet({
       apply_to: {
         ...def.apply_to,
         object_ids: lines(objectText),
-        drama_names: lines(dramaText),
+        // 短剧标题常含逗号，剧名只按行分隔。
+        drama_names: dramaText
+          .split("\n")
+          .map((item) => item.trim())
+          .filter(Boolean),
       },
     })
   const levels = actionLevels(
@@ -407,9 +440,10 @@ export function RuleEditorSheet({
           />
         )}
         <div className="grid gap-3 sm:grid-cols-3">
-          <Input
+          <Textarea
+            rows={2}
             aria-label="剧名"
-            placeholder="剧名（版权方-剧名，逗号分隔）"
+            placeholder="剧名（版权方-剧名），每行一个"
             value={dramaText}
             onChange={(e) => {
               setDryRun(null)
@@ -876,18 +910,10 @@ export function RuleEditorSheet({
                     </div>
                   ))}
                 {period.date_type === "MONTH" && (
-                  <Input
-                    aria-label={`时间段 ${index + 1} 日期`}
-                    placeholder="日期，如 1,15"
-                    className="w-36"
-                    value={(period.days ?? []).join(",")}
-                    onChange={(e) =>
-                      setPeriod(index, {
-                        days: lines(e.target.value)
-                          .map(Number)
-                          .filter((d) => Number.isInteger(d)),
-                      })
-                    }
+                  <MonthDaysInput
+                    label={`时间段 ${index + 1} 日期`}
+                    days={period.days ?? []}
+                    onChange={(days) => setPeriod(index, { days })}
                   />
                 )}
                 <Input

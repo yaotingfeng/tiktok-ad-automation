@@ -37,6 +37,7 @@ import {
 const RUN_ERRORS: Record<string, string> = {
   rule_owner_forbidden: "规则最后修改人已无权限",
   evaluation_failed: "判断失败",
+  evaluation_timeout: "判断超时",
 }
 
 function LastRun({ rule }: { rule: RulePublic }) {

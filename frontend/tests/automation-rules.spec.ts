@@ -110,3 +110,32 @@ test("非管理员没有通知设置入口", async ({ page }) => {
   await page.goto(`/tenants/${TENANT}/automation-rules`)
   await expect(page.getByRole("link", { name: "通知设置" })).toHaveCount(0)
 })
+
+test("剧名按行填写，标题里的逗号不拆分；按月日期可以连续输入", async ({
+  page,
+}) => {
+  const created: unknown[] = []
+  await automationBoundary(page, { created })
+  await page.goto(`/tenants/${TENANT}/automation-rules`)
+  await page.getByRole("button", { name: "新建规则" }).click()
+  await page.getByRole("spinbutton", { name: "条件 1 数值" }).fill("10")
+  await page
+    .getByRole("textbox", { name: "剧名" })
+    .fill("嘉书-闪婚后，傅先生马甲藏不住了\n嘉书-总裁归来")
+  await page.getByRole("radio", { name: "自定义时段" }).click()
+  await page.getByRole("combobox", { name: "时间段 1 频次" }).click()
+  await page.getByRole("option", { name: "按月" }).click()
+  const days = page.getByRole("textbox", { name: "时间段 1 日期" })
+  await days.pressSequentially("1,15")
+  await expect(days).toHaveValue("1,15")
+  await page.getByRole("button", { name: "保存" }).click()
+  await expect.poll(() => created.length).toBe(1)
+  expect(created[0]).toMatchObject({
+    definition: {
+      apply_to: {
+        drama_names: ["嘉书-闪婚后，傅先生马甲藏不住了", "嘉书-总裁归来"],
+      },
+      schedule: { periods: [{ date_type: "MONTH", days: [1, 15] }] },
+    },
+  })
+})
