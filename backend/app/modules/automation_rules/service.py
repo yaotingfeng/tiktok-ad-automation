@@ -73,9 +73,15 @@ def _reschedule(session: Session, rule: AutomationRule, now: datetime) -> None:
         return
     definition = RuleDefinition.model_validate(rule.definition)
     schedule = definition.schedule
-    if schedule.window == "ONCE" and schedule.once_at is not None and schedule.once_at <= now:
+    if (
+        schedule.window == "ONCE"
+        and schedule.once_at is not None
+        and schedule.once_at <= now
+    ):
         # 仅一次的规则时间已过：启用后永远不会运行，直接拒绝，避免界面显示开启却不运行。
-        raise DomainError("automation_rule_invalid", "「仅一次」的运行时间已过，请重新设置")
+        raise DomainError(
+            "automation_rule_invalid", "「仅一次」的运行时间已过，请重新设置"
+        )
     setting = load_tenant_setting(session, rule.tenant_id)
     rule.next_run_at = next_run_at(
         definition.schedule, after=now, timezone=setting.schedule_timezone

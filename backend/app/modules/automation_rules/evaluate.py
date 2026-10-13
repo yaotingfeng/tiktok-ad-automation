@@ -155,7 +155,9 @@ def _materials_by_ad(inputs: Inputs) -> dict[str, list[Entity]]:
     for entity in inputs.entities.values():
         if entity.kind == "material":
             for use in entity.material_uses:
-                result[f"ad:{use['advertiser_id']}:{use['ad_remote_id']}"].append(entity)
+                result[f"ad:{use['advertiser_id']}:{use['ad_remote_id']}"].append(
+                    entity
+                )
     return result
 
 

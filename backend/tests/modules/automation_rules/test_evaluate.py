@@ -214,7 +214,10 @@ def test_material_targets_from_ads():
 
 
 def test_total_action_level_above_judged_level_walks_up():
-    facts = {"adgroup:a:g1": {"spend": Decimal("6")}, "adgroup:a:g2": {"spend": Decimal("6")}}
+    facts = {
+        "adgroup:a:g1": {"spend": Decimal("6")},
+        "adgroup:a:g2": {"spend": Decimal("6")},
+    }
     result = evaluate(
         rule(aggregation="DRAMA", action={"type": "PAUSE", "level": "campaign"}),
         inputs(GROUPS, facts),
@@ -224,13 +227,26 @@ def test_total_action_level_above_judged_level_walks_up():
 
 def test_all_null_metric_is_missing_not_zero():
     facts = {"adgroup:a:g1": {"spend": Decimal("5"), "revenue_d7": None}}
-    result = evaluate(rule(conditions=[
-        {"metric": "revenue_d7", "range": "TODAY", "operator": "LT", "values": ["10"]}]),
-        inputs([ent("adgroup", "a", "g1")], facts))
+    result = evaluate(
+        rule(
+            conditions=[
+                {
+                    "metric": "revenue_d7",
+                    "range": "TODAY",
+                    "operator": "LT",
+                    "values": ["10"],
+                }
+            ]
+        ),
+        inputs([ent("adgroup", "a", "g1")], facts),
+    )
     assert result.hits == ()
 
 
 def test_stored_targets_capped_but_counted():
-    facts = {"adgroup:a:g1": {"spend": Decimal("6")}, "adgroup:a:g2": {"spend": Decimal("6")}}
+    facts = {
+        "adgroup:a:g1": {"spend": Decimal("6")},
+        "adgroup:a:g2": {"spend": Decimal("6")},
+    }
     result = evaluate(rule(aggregation="DRAMA", max_targets=1), inputs(GROUPS, facts))
     assert len(result.hits[0].targets) == 1 and result.hits[0].target_count == 2

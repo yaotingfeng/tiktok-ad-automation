@@ -67,7 +67,9 @@ def scan_due_rules(session: Session, *, now: datetime) -> int:
             definition = RuleDefinition.model_validate(rule.definition)
         except ValidationError:
             # 指标目录调整后旧定义可能不再合法：只停用这一条规则，不影响其他规则调度。
-            logger.warning("automation rule definition invalid", extra={"rule_id": str(rule.id)})
+            logger.warning(
+                "automation rule definition invalid", extra={"rule_id": str(rule.id)}
+            )
             rule.enabled, rule.next_run_at = False, None
             continue
         setting = load_tenant_setting(session, rule.tenant_id)
