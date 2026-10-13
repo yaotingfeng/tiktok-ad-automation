@@ -297,3 +297,16 @@ def material_fields() -> dict[str, str]:
         for key in STORED_KEYS
         if (field := _BY_KEY[key].material_field) is not None
     }
+
+
+# 派生比率：由同口径合计的分子、分母重算，报表与自动规则共用，不平均各行比率。
+DERIVED_RATIOS: tuple[tuple[str, str, str, int], ...] = (
+    *(
+        (f"roas_{d}", f"revenue_{d}", "spend", 1)
+        for d in ("d0", "d3", "d7", "d14", "d30", "total")
+    ),
+    ("ctr", "clicks", "impressions", 1),
+    ("cpm", "spend", "impressions", 1000),
+    ("cpc", "spend", "clicks", 1),
+    ("cost_per_ad_impression_event", "spend", "ad_impression_events", 1),
+)

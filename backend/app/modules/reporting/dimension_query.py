@@ -21,6 +21,7 @@ from app.integrations.tiktok.contracts.ads import EntityRef
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.ads.models import AdObject, CampaignNameProjection
 from app.modules.reporting.filters import authorized_grants, compile_filter
+from app.modules.reporting.metric_catalog import DERIVED_RATIOS
 from app.modules.reporting.models import AccountBalanceObservation
 from app.modules.reporting.row_set import SnapshotMember, entity_ref, ordered_members
 from app.modules.reporting.schemas import (
@@ -60,17 +61,7 @@ def metric_vector(
         else "AVAILABLE"
         for name, value in values.items()
     }
-    for name, numerator, denominator, scale in [
-        *(
-            (f"roas_{d}", f"revenue_{d}", "spend", 1)
-            for d in ("d0", "d3", "d7", "d14", "d30", "total")
-        ),
-        ("ctr", "clicks", "impressions", 1),
-        # 千次展示成本与平均点击成本只由同口径合计重算，不平均各行的比率。
-        ("cpm", "spend", "impressions", 1000),
-        ("cpc", "spend", "clicks", 1),
-        ("cost_per_ad_impression_event", "spend", "ad_impression_events", 1),
-    ]:
+    for name, numerator, denominator, scale in DERIVED_RATIOS:
         a, b = values.get(numerator), values.get(denominator)
         values[name] = a / b * scale if a is not None and b else None
         # 派生比率由合计重算，状态跟随分子、分母中较差的一个。
