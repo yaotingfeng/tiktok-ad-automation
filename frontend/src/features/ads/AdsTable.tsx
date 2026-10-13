@@ -334,7 +334,7 @@ export function AdsTable({
   const dimensionLabel =
     DIMENSIONS.find((item) => item.value === dimension)?.label ?? "名称"
   return (
-    <Card>
+    <Card className="gap-0 py-0 lg:gap-0 lg:py-0">
       <CardContent className="p-0">
         {allMatching && (
           <div className="border-b bg-muted/40 px-4 py-2 text-sm">

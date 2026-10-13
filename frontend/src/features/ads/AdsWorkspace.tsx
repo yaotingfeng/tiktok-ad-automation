@@ -464,7 +464,7 @@ export function AdsWorkspace() {
     })
   }
   return (
-    <div className="flex min-w-0 flex-col gap-4">
+    <div className="flex min-w-0 flex-col gap-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <WorkspacePageTitle>广告报表</WorkspacePageTitle>
@@ -515,8 +515,9 @@ export function AdsWorkspace() {
         notice={syncNotice}
         onLoadLatest={newDataAvailable ? loadLatest : undefined}
       />
-      <Card>
-        <CardContent className="p-4">
+      {/* 卡片自带纵向内边距，这里改为只用内容区的紧凑内边距，给列表留出空间。 */}
+      <Card className="py-0 lg:py-0">
+        <CardContent className="px-4 py-3">
           <AdsFilters
             search={search}
             onChange={update}
@@ -550,8 +551,8 @@ export function AdsWorkspace() {
         summary={ads.query.data?.summary}
         catalog={catalog.data ?? []}
       />
-      <Card>
-        <CardContent className="space-y-4 p-4">
+      <Card className="py-0 lg:py-0">
+        <CardContent className="space-y-3 p-4">
           <Tabs
             value={applied.dimension}
             onValueChange={(value) => {
@@ -600,7 +601,7 @@ export function AdsWorkspace() {
               <TabsContent
                 key={dimension.value}
                 value={dimension.value}
-                className="mt-4 space-y-3"
+                className="mt-3 space-y-3"
               >
                 <AdsTableToolbar
                   columns={allColumns}
