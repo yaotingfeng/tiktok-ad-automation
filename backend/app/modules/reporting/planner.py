@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import exists, or_, text
 from sqlmodel import Session, col, select
 
+from app.core.config import settings
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.report_reader import ReportReader
@@ -299,7 +300,7 @@ def _group_by_window(
 
 # 筛选时平台确认窗口内零消耗的账户不会再建报表任务；为它们记一条“已完成、
 # 0 行”的同步状态，否则这些账户永远显示缺数据，汇总也会因一个缺失成员整体为空。
-CONFIRMED_EMPTY_KINDS = ("ad_day", "campaign_day_utc", "account_day", "material_day")
+CONFIRMED_EMPTY_KINDS = ("ad_day", "account_day", "material_day")
 
 
 def mark_confirmed_empty(
@@ -358,6 +359,7 @@ def plan_hot(
             advertiser_ids=advertisers,
             days=(end - start).days + 1,
         ):
+            # 系列小时报不在热刷新中定时拉取，只在用户打开小时趋势时按需拉取。
             count += bool(
                 enqueue_job(
                     session,
@@ -369,22 +371,78 @@ def plan_hot(
                     **_common(plan),
                 )
             )
-            # 小时报表始终覆盖本地今天和昨天，不受广告日 UTC 中午窗口影响。
-            day = end - timedelta(days=1)
-            while day <= end:
-                count += bool(
-                    enqueue_job(
-                        session,
-                        kind="campaign_hour",
-                        tier=tier,
-                        advertiser_ids=batch,
-                        start=day,
-                        end=day,
-                        **_common(plan),
-                    )
-                )
-                day += timedelta(days=1)
     return count
+
+
+def request_campaign_hours(
+    session,
+    *,
+    tenant_id: UUID,
+    bc_id: str,
+    advertiser_ids: Sequence[str],
+    start: date,
+    end: date,
+    now: datetime,
+) -> bool:
+    """小时趋势按需拉取：为缺失或已过期的账户本地日排入手动小时任务。
+
+    返回是否仍在拉取中，页面据此轮询。今天、昨天的小时数据还在增长或被平台修正，
+    超过热刷间隔视为过期；更早的日期完成后不再重拉。刚失败的日期在一个热刷间隔内
+    不重排，避免页面轮询时对同一个失败请求反复重试。只为本 BC 负责的账户排队，
+    其他 BC 负责的账户沿用其冻结路由，不能借当前 BC 的身份拉取。
+    """
+    plan = session.get(AdSyncBc, (tenant_id, bc_id))
+    if not settings.ADS_SYNC_ENABLED or plan is None or not plan.enabled:
+        return False
+    owned = sorted(set(advertiser_ids) & set(owned_accounts(session, plan)))
+    if not owned:
+        return False
+    states = {
+        (s.advertiser_id, s.stat_date): s
+        for s in session.exec(
+            select(ReportSyncState).where(
+                ReportSyncState.tenant_id == tenant_id,
+                col(ReportSyncState.advertiser_id).in_(owned),
+                ReportSyncState.report_kind == "campaign_hour",
+                col(ReportSyncState.stat_date) >= start,
+                col(ReportSyncState.stat_date) <= end,
+            )
+        ).all()
+    }
+    pending: dict[date, list[str]] = {}
+    for advertiser, timezone in _timezones(session, tenant_id, owned).items():
+        today = local_today(timezone or "UTC", now)
+        day = start
+        while day <= min(end, today):
+            state = states.get((advertiser, day))
+            if state is None:
+                due = True
+            elif state.status == "COMPLETE":
+                due = (
+                    day >= today - timedelta(days=1)
+                    and state.last_success_at is not None
+                    and state.last_success_at < now - HOT_INTERVAL
+                )
+            else:
+                due = state.updated_at < now - HOT_INTERVAL
+            if due:
+                pending.setdefault(day, []).append(advertiser)
+            day += timedelta(days=1)
+    for day, advertisers in pending.items():
+        for batch in batch_accounts(
+            session, tenant_id=tenant_id, advertiser_ids=advertisers, days=1
+        ):
+            # 已在排队或执行中的相同任务按 job_key 去重，轮询不会重复入队。
+            enqueue_job(
+                session,
+                kind="campaign_hour",
+                tier="manual",
+                advertiser_ids=batch,
+                start=day,
+                end=day,
+                **_common(plan),
+            )
+    return bool(pending)
 
 
 def plan_material(session, plan, *, active, now, tier: str = "material") -> int:
@@ -439,7 +497,7 @@ def plan_daily(session, plan, *, active_32d, now) -> int:
                 advertiser_ids=advertisers,
                 days=(e - s).days + 1,
             ):
-                for kind in ("ad_day", "campaign_day_utc", "account_day"):
+                for kind in ("ad_day", "account_day"):
                     count += bool(
                         enqueue_job(
                             session,
@@ -467,7 +525,10 @@ def plan_daily(session, plan, *, active_32d, now) -> int:
 
 
 def plan_history(session, plan, *, now) -> int:
-    """授权后一次：开户日至回刷窗口之前，按 30 天切片；已规划的账户不再重复。"""
+    """授权后一次：开户日至回刷窗口之前，按 30 天切片；已规划的账户不再重复。
+
+    历史只回补广告日和素材日；系列小时报按需拉取，账户对账只在 32 天回刷内做。
+    """
     count = 0
     rows = session.exec(
         select(AdSyncAccount, AdvertiserAccount)
@@ -490,18 +551,17 @@ def plan_history(session, plan, *, now) -> int:
         if start <= end:
             ensure_month_partitions_for_range(session, start, end)
             for s, e in _shards(start, end):
-                for kind in ("ad_day", "campaign_day_utc"):
-                    count += bool(
-                        enqueue_job(
-                            session,
-                            kind=kind,
-                            tier="history",
-                            advertiser_ids=[account.advertiser_id],
-                            start=s,
-                            end=e,
-                            **_common(plan),
-                        )
+                count += bool(
+                    enqueue_job(
+                        session,
+                        kind="ad_day",
+                        tier="history",
+                        advertiser_ids=[account.advertiser_id],
+                        start=s,
+                        end=e,
+                        **_common(plan),
                     )
+                )
                 count += bool(
                     enqueue_job(
                         session,

@@ -30,6 +30,8 @@ export type AdsBoundaryOptions = {
   role?: "viewer" | "operator"
   /** 趋势响应的 timezone：单一账户时区（IANA）或 MIXED。 */
   trendTimezone?: string
+  /** 前 N 次小时趋势响应仍在按需拉取（syncing=true 且无数据点）。 */
+  hourSyncingCalls?: number
 }
 
 // 详情接口的配置取自线上实测的 TikTok 原始对象形态。
@@ -107,6 +109,7 @@ export async function adsBoundary(
   page: Page,
   options: AdsBoundaryOptions = {},
 ) {
+  let hourCalls = 0
   await page.addInitScript(
     (value) => localStorage.setItem("access_token", value),
     token,
@@ -690,6 +693,18 @@ export async function adsBoundary(
       // 小时点是 UTC 的 ISO 分钟串，与后端一致。
       const hour = url.searchParams.get("granularity") === "hour"
       const timezone = options.trendTimezone ?? "UTC"
+      const syncing = hour && (options.hourSyncingCalls ?? 0) > hourCalls++
+      if (syncing)
+        return route.fulfill({
+          headers,
+          json: {
+            level: url.searchParams.get("level") ?? "account",
+            granularity: "hour",
+            timezone: "UTC",
+            points: [],
+            syncing: true,
+          },
+        })
       return route.fulfill({
         headers,
         json: {

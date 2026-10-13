@@ -28,7 +28,6 @@ from app.modules.reporting.store_models import (
     AccountReconciliationDay,
     AdReportDay,
     CampaignReportDay,
-    CampaignReportDayUtc,
     CampaignReportHour,
     MaterialReportDay,
     ReportSyncState,
@@ -330,32 +329,6 @@ def publish_campaign_hour(session, *, tenant_id, job_id, accounts, day, rows) ->
         rows=rows,
         value_parser=values,
         time_filter=window,
-    )
-
-
-def publish_campaign_day_utc(
-    session, *, tenant_id, job_id, accounts, start, end, rows
-) -> int:
-    def keys(row, _meta):
-        dims = row.get("dimensions") or {}
-        day = _in_range(parse_local_day(dims.get("stat_time_day")), start, end)
-        if not dims.get("campaign_id"):
-            raise DomainError("report_row_invalid", "系列行缺少系列 ID")
-        return {"stat_date": day, "campaign_id": str(dims["campaign_id"])}, day
-
-    return _publish_simple(
-        session,
-        model=CampaignReportDayUtc,
-        kind="campaign_day_utc",
-        key_builder=keys,
-        tenant_id=tenant_id,
-        job_id=job_id,
-        accounts=accounts,
-        start=start,
-        end=end,
-        rows=rows,
-        value_parser=basic_metric_values,
-        time_filter=lambda m: m.stat_date.between(start, end),
     )
 
 

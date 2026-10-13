@@ -252,7 +252,7 @@ def ad_trend_route(
     ids: Annotated[str | None, Query(max_length=20000)] = None,
 ) -> TrendPublic:
     context = _context(session, user, tenant_id)
-    return build_trend(
+    trend = build_trend(
         session,
         context=context,
         bc_id=bc_id,
@@ -263,6 +263,9 @@ def ad_trend_route(
         end=end_date,
         granularity=granularity,
     )
+    # 小时趋势可能排入了按需拉取任务，需提交后才会被调度派发。
+    session.commit()
+    return trend
 
 
 @router.get("/ads/{kind}/{remote_id}", response_model=AdDetailPublic, name="ad_detail")

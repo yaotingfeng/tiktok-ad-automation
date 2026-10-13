@@ -324,3 +324,5 @@ class TrendPublic(BaseModel):
     # 所有事实同一时区时为该时区；多个时区为 MIXED；无数据为 UTC。
     timezone: str
     points: tuple[TrendPoint, ...] = ()
+    # 小时趋势按需拉取：仍有缺失或过期的小时数据在排队/拉取中，页面需轮询。
+    syncing: bool = False

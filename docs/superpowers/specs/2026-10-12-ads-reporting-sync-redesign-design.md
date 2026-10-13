@@ -2,6 +2,8 @@
 
 日期：2026-10-12。状态：方向已在对话中获用户确认，本稿待用户审阅。
 
+> **2026-10-13 修订（用户确认）**：UTC 系列日没有任何读取方，停止拉取并删除 `campaign_report_day_utc`（迁移 0025）；系列小时报不再随热刷新定时拉取，改为用户打开小时趋势时按需拉取（缺失或过期的日期排入手动任务，页面轮询）。下文相关条目已按此更新。
+
 本稿替代 `2026-09-30-ads-management-reporting-design.md` 中第 6、7 节（指标合同、同步调度）及其对应的存储设计；该稿中的工作台交互、剧识别规则、批量操作业务规则继续有效。
 
 ## 1. 目标与已确认决定
@@ -17,7 +19,7 @@
 - 素材报表第一版一起交付，不分期。
 - 以按天数据为准；只对系列层额外保留近期小时数据。
 - 当前只有 Upgraded Smart+ 广告，不为普通广告单独设计；统一用 `ad_id_v2`，将来出现普通广告时自然包含。
-- 业务口径按建议执行：日期按广告账户时区；另存一份 UTC 系列日数据供跨账户汇总和日报使用；回收指标为 D0、D3、D7、D14、D30 与总收入。
+- 业务口径按建议执行：日期按广告账户时区（UTC 系列日已于 2026-10-13 取消）；回收指标为 D0、D3、D7、D14、D30 与总收入。
 
 ## 2. 平台事实与依据
 
@@ -48,12 +50,11 @@
 | --- | --- | --- |
 | 筛选 | `/report/integrated/get/`，`report_type=BC`，`bc_id`，维度 `advertiser_id`，指标 `spend` | 每个已绑定 BC，分页 1000 |
 | 广告日明细 | 同步报表 `BASIC`，`data_level=AUCTION_AD`，维度 `ad_id_v2`+`stat_time_day`，过滤 `ad_status=STATUS_ALL`，`advertiser_ids` 最多 5 个 | 筛选出的活跃账户 |
-| 系列小时 | 同步报表 `BASIC`，`AUCTION_CAMPAIGN`，维度 `campaign_id`+`stat_time_hour` | 活跃账户的今天与昨天 |
+| 系列小时 | 同步报表 `BASIC`，`AUCTION_CAMPAIGN`，维度 `campaign_id`+`stat_time_hour` | 用户打开小时趋势时按需拉取所选日期；今天、昨天超过 30 分钟视为过期 |
 | 素材日明细 | `/smart_plus/material_report/breakdown/`，维度 `main_material_id`+`stat_time_day`，单账户 | 活跃账户 |
 
-另有两类每日一次的请求：
+另有一类每日一次的请求：
 
-- UTC 系列日：同步报表 `AUCTION_CAMPAIGN`，`multi_adv_report_in_utc_time=true`，用于日报和跨账户 UTC 汇总。
 - 对账：同步报表 `AUCTION_ADVERTISER` 按天，只用于和广告汇总比对，不进入展示。
 
 广告日明细请求的 metrics：`spend`、`impressions`、`clicks`、`native_growth_total_ad_impression_event_count`、`native_growth_ad_revenue_value_d0`、`native_growth_ad_revenue_value_d2`、`native_growth_ad_revenue_value_d6`、`native_growth_ad_revenue_value_d13`、`native_growth_ad_revenue_value_d29`、`native_growth_total_ad_impression_value`、`campaign_id`、`adgroup_id`、`campaign_name`、`adgroup_name`、`ad_name`。平台 `dN` 表示点击后 N+1 天累计，故 D3/D7/D14/D30 分别对应 `d2/d6/d13/d29`。
@@ -77,11 +78,12 @@
 
 | 档位 | 内容 | 频率 | 优先级 |
 | --- | --- | --- | --- |
-| 当天热刷 | 筛选 + 广告日（今天；UTC 12:00 前含昨天）+ 系列小时（今天、昨天） | 每 30 分钟 | 1 |
+| 当天热刷 | 筛选 + 广告日（今天；UTC 12:00 前含昨天） | 每 30 分钟 | 1 |
 | 素材热刷 | 素材日（今天，UTC 12:00 前含昨天） | 每 60 分钟 | 2 |
 | 手动刷新 | 指定账户立即执行一次当天热刷 | 按需，短时间内重复点击合并 | 1 |
-| 每日回刷 | 筛选 32 天 + 广告日、素材日最近 32 天 + UTC 系列日 + 对账 | 每天 UTC 12:30 后 | 3 |
-| 历史回补 | 开户日至 32 天前的广告日、素材日、UTC 系列日 | 授权后一次，按 30 天切片 | 4 |
+| 小时趋势 | 打开小时趋势时为缺失或过期的系列小时日期排队 | 按需，相同任务排队中不重复 | 1 |
+| 每日回刷 | 筛选 32 天 + 广告日、素材日最近 32 天 + 对账 | 每天 UTC 12:30 后 | 3 |
+| 历史回补 | 开户日至 32 天前的广告日、素材日 | 授权后一次，按 30 天切片 | 4 |
 
 - 32 天前的数据视为定稿，之后不再自动回拉；用户手动刷新历史区间时按需重拉。
 - 新账户授权完成或新 BC 绑定完成后，立即创建该账户的计划；解除授权后停止计划，已存数据保留但不再可见于失去授权的 BC。
@@ -93,9 +95,8 @@
 | --- | --- |
 | BC 筛选 | 约 50 |
 | 广告日 | 约 600（400 批 + 翻页） |
-| 系列小时 | 约 500 |
 | 素材日（每小时，折算每轮） | 约 1,000 |
-| 合计 | 约 2,150 |
+| 合计 | 约 1,650（系列小时改为按需，不计入定时轮次） |
 
 每天约 10 万次热刷，加回刷约 2 万次，历史回补约 11 万次一次性摊入数日。均在 Basic 额度内。
 
@@ -136,9 +137,7 @@
 
 `campaign_report_day`：主键 `tenant_id, advertiser_id, stat_date, campaign_id`，指标列同上，由 `ad_report_day` 在同一事务内汇总写入，作为查询加速表，不独立拉取。
 
-`campaign_report_hour`：主键 `tenant_id, advertiser_id, stat_hour, campaign_id`（`stat_hour` 带时区时间戳），指标为消耗、展示、点击、展示事件、D0 收入；保留最近 30 天，每日清理。
-
-`campaign_report_day_utc`：主键 `tenant_id, advertiser_id, stat_date_utc, campaign_id`，指标同 `campaign_report_day`；供日报和 UTC 跨账户汇总。
+`campaign_report_hour`：主键 `tenant_id, advertiser_id, stat_hour, campaign_id`（`stat_hour` 带时区时间戳），指标为消耗、展示、点击、展示事件、D0 收入；按需写入，保留最近 30 天，每日清理。
 
 `material_report_day`（按月分区）：主键 `tenant_id, advertiser_id, stat_date, main_material_id`；列 `main_material_type`、`main_material_name`、`spend`、`impressions`、`clicks`、`ad_impression_events`、`revenue_d0`、`revenue_d7`、`revenue_d14`、`revenue_total`、`fetched_at`、`sync_batch_id`。
 

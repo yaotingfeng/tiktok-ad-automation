@@ -288,15 +288,9 @@ def test_account_reconciliation_keeps_original_and_ad_sum(session, sync_seed):
     ) == tuple(map(Decimal, ["499.29", "499.28", "135.85", "135.84"]))
 
 
-def test_material_and_utc_daily_replace(session, sync_seed):
-    from app.modules.reporting.publish import (
-        publish_campaign_day_utc,
-        publish_material_day,
-    )
-    from app.modules.reporting.store_models import (
-        CampaignReportDayUtc,
-        MaterialReportDay,
-    )
+def test_material_daily_replace(session, sync_seed):
+    from app.modules.reporting.publish import publish_material_day
+    from app.modules.reporting.store_models import MaterialReportDay
 
     t = sync_seed.tenant_id
     args = {"tenant_id": t, "job_id": uuid4(), "accounts": HK, "start": D, "end": D}
@@ -321,17 +315,6 @@ def test_material_and_utc_daily_replace(session, sync_seed):
     row = session.get(MaterialReportDay, (t, "acc-1", D, "m1"))
     assert row.spend == Decimal("1.234567890123456789") and row.revenue_d0 == 0
     assert row.revenue_d3 is None and row.revenue_d30 is None
-    publish_campaign_day_utc(
-        session,
-        **args,
-        rows=[
-            {
-                "dimensions": {"campaign_id": "c1", "stat_time_day": str(D)},
-                "metrics": {"spend": "1"},
-            }
-        ],
-    )
-    assert session.get(CampaignReportDayUtc, (t, "acc-1", D, "c1")).spend == 1
     publish_material_day(session, **args, rows=[])
     assert (
         session.exec(
@@ -363,22 +346,4 @@ def test_hour_outside_requested_local_day_is_rejected(session, sync_seed):
                     "metrics": {"spend": "1"},
                 }
             ],
-        )
-
-
-def test_campaign_daily_requires_real_identity(session, sync_seed):
-    import pytest
-
-    from app.core.errors import DomainError
-    from app.modules.reporting.publish import publish_campaign_day_utc
-
-    with pytest.raises(DomainError):
-        publish_campaign_day_utc(
-            session,
-            tenant_id=sync_seed.tenant_id,
-            job_id=uuid4(),
-            accounts=HK,
-            start=D,
-            end=D,
-            rows=[{"dimensions": {"stat_time_day": str(D)}, "metrics": {"spend": "1"}}],
         )

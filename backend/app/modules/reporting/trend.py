@@ -2,6 +2,7 @@
 
 页面趋势与详情趋势共用：按层级和对象 ID 从本地日/小时事实聚合，不调用
 TikTok。2026-10-05 曾为首屏性能把趋势移出快照，因此趋势单独按需读取。
+系列小时报不再定时同步：读小时趋势时为缺失或过期的日期排入手动拉取任务。
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from sqlmodel import Session, col, select
 from app.core.context import TenantContext
 from app.modules.reporting.dimension_query import merge_metric_buckets, metric_vector
 from app.modules.reporting.filters import authorized_grants
+from app.modules.reporting.planner import request_campaign_hours
 from app.modules.reporting.schemas import MetricVector, TrendPoint, TrendPublic
 from app.modules.reporting.store_models import (
     METRIC_COLUMNS,
@@ -66,6 +68,7 @@ def build_trend(
     start: date,
     end: date,
     granularity: str,
+    now: datetime | None = None,
 ) -> TrendPublic:
     if end < start:
         raise _invalid("trend_range_invalid")
@@ -215,9 +218,19 @@ def build_trend(
                 coverage=coverage,
             )
         )
+    syncing = granularity == "hour" and request_campaign_hours(
+        session,
+        tenant_id=context.tenant_id,
+        bc_id=bc_id,
+        advertiser_ids=tuple(scope),
+        start=start,
+        end=end,
+        now=now or datetime.now(UTC),
+    )
     return TrendPublic(
         level=cast(Any, level),
         granularity=cast(Any, granularity),
         timezone=next(iter(zones)) if len(zones) == 1 else "MIXED" if zones else "UTC",
         points=tuple(points),
+        syncing=syncing,
     )

@@ -162,6 +162,11 @@ export function TrendTab({
           </Button>
         ))}
       </fieldset>
+      {byHour && trend.data?.syncing && (
+        <p role="status" className="text-xs text-muted-foreground">
+          正在拉取小时数据，完成后自动更新
+        </p>
+      )}
       {active && (
         <AdsTrendChart
           trend={trend.data}

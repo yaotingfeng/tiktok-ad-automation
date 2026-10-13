@@ -6195,6 +6195,10 @@ export type TrendPublic = {
      * Points
      */
     points?: Array<TrendPoint>;
+    /**
+     * Syncing
+     */
+    syncing?: boolean;
 };
 
 /**

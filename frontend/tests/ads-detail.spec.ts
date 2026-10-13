@@ -158,4 +158,26 @@ test.describe("ads detail", () => {
       ).toBeVisible()
     })
   }
+  test("小时数据按需拉取期间提示并自动刷新", async ({ page }) => {
+    await adsBoundary(page, { hourSyncingCalls: 1 })
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "系列" }).click()
+    await page
+      .getByRole("button", { name: /嘉书-总裁归来/ })
+      .first()
+      .click()
+    const sheet = page.getByRole("dialog")
+    await sheet.getByRole("tab", { name: "趋势" }).click()
+    await sheet.getByRole("button", { name: "按小时" }).click()
+    await expect(
+      sheet.getByText("正在拉取小时数据，完成后自动更新"),
+    ).toBeVisible()
+    // 轮询拿到数据后提示消失、小时点出现，无需用户手动刷新。
+    await expect(
+      sheet.getByRole("columnheader", { name: "时间（UTC）" }),
+    ).toBeVisible({ timeout: 10_000 })
+    await expect(
+      sheet.getByText("正在拉取小时数据，完成后自动更新"),
+    ).toHaveCount(0)
+  })
 })

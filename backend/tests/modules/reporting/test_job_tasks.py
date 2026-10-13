@@ -43,7 +43,7 @@ def test_plan_due_screens_with_bc_report_and_dispatches(
         now=datetime(2026, 10, 12, 3, tzinfo=UTC),
     )
     # 只为负责账户的主 BC 筛选；新计划首轮同时做热刷（1 天）与 32 天回刷，
-    # 各筛选一次，ad_day + campaign_hour 等任务已派发。
+    # 各筛选一次，ad_day 等任务已派发。
     assert calls == ["bc-a", "bc-a"] and dispatched >= 2
 
 

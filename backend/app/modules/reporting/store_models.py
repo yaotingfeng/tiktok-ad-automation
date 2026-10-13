@@ -88,14 +88,6 @@ class CampaignReportDay(_Fact, table=True):
     campaign_name: str | None = None
 
 
-class CampaignReportDayUtc(_Fact, table=True):
-    """UTC 自然日系列数据，供日报与跨账户 UTC 汇总。"""
-
-    __tablename__ = "campaign_report_day_utc"
-    stat_date: date = Field(primary_key=True)
-    campaign_id: str = Field(primary_key=True, max_length=64)
-
-
 class CampaignReportHour(_Fact, table=True):
     """系列小时数据，只保留最近 30 天；stat_hour 为该账户本地整点对应的 UTC 时刻。"""
 
@@ -142,7 +134,6 @@ class AccountReconciliationDay(SQLModel, table=True):
 REPORT_KINDS = (
     "ad_day",
     "campaign_hour",
-    "campaign_day_utc",
     "material_day",
     "account_day",
 )

@@ -57,7 +57,6 @@ class SdkReportReader:
         end,
         page,
         filtering=None,
-        utc=False,
     ) -> RawReportPage:
         _check_accounts(advertiser_ids)
         arguments: dict[str, Any] = {
@@ -74,8 +73,6 @@ class SdkReportReader:
         }
         if filtering:
             arguments["filtering"] = filtering
-        if utc:
-            arguments["multi_adv_report_in_utc_time"] = True
         data = self._send("reports.integrated", advertiser_ids[0], arguments)
         return page_from_data(data, requested_page=page)
 
@@ -145,20 +142,6 @@ class SdkReportReader:
             start=start,
             end=end,
             page=page,
-            filtering=[{**_STATUS_ALL, "field_name": "campaign_status"}],
-        )
-
-    def campaign_day_utc(self, *, advertiser_ids, start, end, page):
-        _check_range(start, end, max_days=30)
-        return self._basic(
-            advertiser_ids=advertiser_ids,
-            data_level="AUCTION_CAMPAIGN",
-            dimensions=("campaign_id", "stat_time_day"),
-            metrics=CAMPAIGN_METRICS,
-            start=start,
-            end=end,
-            page=page,
-            utc=True,
             filtering=[{**_STATUS_ALL, "field_name": "campaign_status"}],
         )
 

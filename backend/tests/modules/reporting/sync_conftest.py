@@ -184,7 +184,6 @@ def committed_sync_seed():
                 "report_sync_state",
                 "account_reconciliation_day",
                 "campaign_report_day",
-                "campaign_report_day_utc",
                 "campaign_report_hour",
                 "ad_report_day",
                 "material_report_day",

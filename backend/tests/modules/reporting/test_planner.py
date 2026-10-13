@@ -116,11 +116,11 @@ def test_hot_plan_jobs_and_utc_noon_rule(session, sync_seed):
         select(ReportSyncJob).where(ReportSyncJob.tenant_id == sync_seed.tenant_id)
     ).all()
     ad_jobs = [j for j in jobs if j.kind == "ad_day"]
-    # UTC 12:00 前：香港账户今天 10-12 与昨天 10-11 都要刷；hour 任务今天、昨天各一个
+    # UTC 12:00 前：香港账户今天 10-12 与昨天 10-11 都要刷；小时报改为按需拉取
     assert {(j.start_date, j.end_date) for j in ad_jobs} >= {
         (date(2026, 10, 11), date(2026, 10, 12))
     }
-    assert {j.kind for j in jobs} == {"ad_day", "campaign_hour"}
+    assert {j.kind for j in jobs} == {"ad_day"}
     assert all(j.priority == 1 for j in jobs)
 
 
@@ -141,7 +141,7 @@ def test_inactive_account_keeps_published_rows_until_daily_refresh(session, sync
             select(ReportSyncJob).where(ReportSyncJob.tenant_id == sync_seed.tenant_id)
         ).all()
     }
-    assert kinds == {"ad_day", "material_day", "campaign_day_utc", "account_day"}
+    assert kinds == {"ad_day", "material_day", "account_day"}
 
 
 def test_history_shards_30_days_from_account_creation(session, sync_seed):
@@ -196,7 +196,7 @@ def test_ten_thousand_accounts_one_round_call_budget():
     )
 
 
-def test_after_utc_noon_hours_keep_yesterday_but_days_only_today(session, sync_seed):
+def test_after_utc_noon_days_only_today(session, sync_seed):
     from app.modules.reporting.planner import plan_material
 
     ensure_bc_plans(session, now=NOW)
@@ -210,10 +210,7 @@ def test_after_utc_noon_hours_keep_yesterday_but_days_only_today(session, sync_s
         assert {(j.start_date, j.end_date) for j in jobs if j.kind == kind} == {
             (date(2026, 10, 12), date(2026, 10, 12))
         }
-    assert {(j.start_date, j.end_date) for j in jobs if j.kind == "campaign_hour"} == {
-        (date(2026, 10, 11), date(2026, 10, 11)),
-        (date(2026, 10, 12), date(2026, 10, 12)),
-    }
+    assert not [j for j in jobs if j.kind == "campaign_hour"]
 
 
 def test_removed_binding_disables_existing_plan(session, sync_seed):

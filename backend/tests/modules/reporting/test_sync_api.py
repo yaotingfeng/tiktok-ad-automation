@@ -53,7 +53,7 @@ def test_refresh_inserts_priority_one_jobs_and_coalesces(
         select(ReportSyncJob).where(ReportSyncJob.tenant_id == sync_seed.tenant_id)
     ).all()
     assert {j.priority for j in jobs} == {1}
-    assert {j.kind for j in jobs} == {"ad_day", "campaign_hour", "material_day"}
+    assert {j.kind for j in jobs} == {"ad_day", "material_day"}
     repeat = client.post(
         f"{path}/ad-sync-refresh", params={"bc_id": "bc-a"}, json={"advertiser_ids": []}
     )

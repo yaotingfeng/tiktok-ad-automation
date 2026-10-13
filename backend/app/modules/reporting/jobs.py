@@ -241,15 +241,6 @@ def _run(session, job: ReportSyncJob, reader: _CountingReader) -> int:
         return publish.publish_campaign_hour(
             session, tenant_id=t, job_id=j, accounts=accounts, day=s, rows=rows
         )
-    if job.kind == "campaign_day_utc":
-        rows = _read_all(
-            lambda p: reader.campaign_day_utc(
-                advertiser_ids=advertisers, start=s, end=e, page=p
-            )
-        )
-        return publish.publish_campaign_day_utc(
-            session, tenant_id=t, job_id=j, accounts=accounts, start=s, end=e, rows=rows
-        )
     if job.kind == "material_day":
         rows = _read_all(
             lambda p: reader.material_day(
