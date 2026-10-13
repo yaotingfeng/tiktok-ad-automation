@@ -546,3 +546,35 @@ def test_enable_reports_disabled_parent_and_includes_it_when_asked(session, mana
             MutationSpec(field="status", mode="set", value="ENABLE", include_parents=(group,)),
         )
     assert error.value.code == "management_parent_invalid"
+
+
+def test_bounds_clamp_increase_and_decrease():
+    from app.modules.ad_management.expansion import _final_value
+
+    up = MutationSpec(field="budget", mode="increase_percent", value=Decimal("50"), max_value=Decimal("120"))
+    assert _final_value(Decimal("100"), up) == Decimal("120")
+    down = MutationSpec(field="budget", mode="decrease_percent", value=Decimal("50"), min_value=Decimal("80"))
+    assert _final_value(Decimal("100"), down) == Decimal("80")
+    # 当前值已达上限时钳制结果等于当前值,预览判为 NO_CHANGE。
+    assert _final_value(Decimal("120"), up) == Decimal("120")
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"field": "budget", "mode": "set", "value": "10", "max_value": "20"},
+    {"field": "budget", "mode": "add", "value": "10", "min_value": "5"},
+    {"field": "status", "mode": "set", "value": "ENABLE", "max_value": "5"},
+    {"field": "budget", "mode": "add", "value": "10", "max_value": "0"},
+])
+def test_bounds_validation(kwargs):
+    with pytest.raises(ValueError):
+        MutationSpec.model_validate(kwargs)
+
+
+def test_bounds_never_reverse_direction():
+    from app.modules.ad_management.expansion import _final_value
+
+    # 当前值已高于上限时「提高」不能变成降低，结果保持当前值（预览 NO_CHANGE）。
+    up = MutationSpec(field="budget", mode="increase_percent", value=Decimal("20"), max_value=Decimal("120"))
+    assert _final_value(Decimal("150"), up) == Decimal("150")
+    down = MutationSpec(field="budget", mode="subtract", value=Decimal("10"), min_value=Decimal("80"))
+    assert _final_value(Decimal("50"), down) == Decimal("50")

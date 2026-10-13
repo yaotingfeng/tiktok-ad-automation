@@ -42,6 +42,14 @@ class MutationSpec(BaseModel):
     include_parents: tuple[EntityRef, ...] = ()
     excluded_refs: tuple[EntityRef, ...] = ()
     excluded_material_uses: tuple[MaterialUseRef, ...] = ()
+    # 自动规则的提高必须有上限、降低必须有下限；计算预览最终值时钳制。
+    min_value: Decimal | None = None
+    max_value: Decimal | None = None
+
+    @field_validator("min_value", "max_value", mode="before")
+    @classmethod
+    def normalize_bound(cls, value: Any) -> Decimal | None:
+        return None if value is None else _decimal(value)
 
     @field_validator("value", mode="before")
     @classmethod
@@ -64,6 +72,14 @@ class MutationSpec(BaseModel):
             and self.value <= 0
         ):
             raise ValueError("mutation delta must be positive")
+        if self.max_value is not None and (
+            self.mode not in {"add", "increase_percent"} or self.max_value <= 0
+        ):
+            raise ValueError("max_value only bounds positive increases")
+        if self.min_value is not None and (
+            self.mode not in {"subtract", "decrease_percent"} or self.min_value <= 0
+        ):
+            raise ValueError("min_value only bounds positive decreases")
         if len(set(self.include_parents)) != len(self.include_parents):
             raise ValueError("duplicate included parent")
         if len(set(self.excluded_refs)) != len(self.excluded_refs):
