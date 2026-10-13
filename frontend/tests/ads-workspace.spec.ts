@@ -281,6 +281,19 @@ test.describe("ads workspace", () => {
     await expect(page.getByText("2 个账户数据不完整")).toBeVisible()
   })
 
+  test("切换维度加载中不显示上一维度的行", async ({ page }) => {
+    await adsBoundary(page, { delayedDimension: "material" })
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "剧", exact: true }).click()
+    await expect(
+      page.locator("tbody tr").first().getByText("总裁归来", { exact: true }),
+    ).toBeVisible()
+    await page.getByRole("tab", { name: "素材", exact: true }).click()
+    // 素材响应尚未返回：只显示加载提示，不能残留剧维度的行。
+    await expect(page.getByText("正在加载当前报表…")).toBeVisible()
+    await expect(page.locator("tbody tr")).toHaveCount(0)
+  })
+
   test("页面不再显示账户趋势，也不请求趋势", async ({ page }) => {
     const trendCalls = { count: 0 }
     await adsBoundary(page, { trendCalls })

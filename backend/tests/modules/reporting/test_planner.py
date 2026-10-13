@@ -231,7 +231,7 @@ def test_removed_binding_disables_existing_plan(session, sync_seed):
 
 
 def test_confirmed_zero_spend_accounts_count_as_complete(session, sync_seed):
-    """平台确认零消耗的账户记为已完成 0 行；已有成功状态不被覆盖。"""
+    """平台确认零消耗的账户记为已完成 0 行；已有成功状态保留事实，只推进确认时间。"""
     from app.modules.reporting.planner import (
         CONFIRMED_EMPTY_KINDS,
         daily_window,
@@ -271,3 +271,5 @@ def test_confirmed_zero_spend_accounts_count_as_complete(session, sync_seed):
         ).row_count
         == 7
     )
+    # 无消耗时更新时间也要前进，否则页面显示的同步时间会停住。
+    assert all(s.last_success_at == NOW for s in states)

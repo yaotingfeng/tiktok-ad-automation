@@ -14,6 +14,8 @@ export type AdsBoundaryOptions = {
   lastSuccess?: string
   slowed?: boolean
   delayedA?: boolean
+  /** 让某个维度的报表响应延迟，用于验证切换维度时不显示上一维度的行。 */
+  delayedDimension?: string
   paged?: boolean
   mixedBuckets?: boolean
   refreshStatus?: "QUEUED" | "SYNC_DISABLED" | "API_BINDING_REQUIRED"
@@ -167,6 +169,11 @@ export async function adsBoundary(
       const bc = url.searchParams.get("bc_id")
       if (bc === BC_A && options.delayedA)
         await new Promise((resolve) => setTimeout(resolve, 700))
+      if (
+        options.delayedDimension &&
+        url.searchParams.get("dimension") === options.delayedDimension
+      )
+        await new Promise((resolve) => setTimeout(resolve, 1500))
       const secondPage = Boolean(url.searchParams.get("cursor"))
       const name = secondPage
         ? "嘉书-第二页-测试"

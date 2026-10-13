@@ -20,7 +20,13 @@ export function useAdsQuery(search: AdsSearch, queryRevision = 0) {
   const query = useQuery<AdsQueryPage>({
     queryKey,
     enabled: !!tenantId && !!bcId,
-    placeholderData: (previous) => previous,
+    // 只在同一维度内（翻页、排序、筛选）沿用上一页数据避免闪烁；切换维度必须清空，
+    // 否则新维度加载期间表格仍是上个维度的行（如素材页签显示剧名），看起来像数据错了。
+    placeholderData: (previous, previousQuery) =>
+      (previousQuery?.queryKey[5] as AdsSearch | undefined)?.dimension ===
+      search.dimension
+        ? previous
+        : undefined,
     staleTime: 15_000,
     gcTime: 5 * 60_000,
     refetchOnWindowFocus: false,

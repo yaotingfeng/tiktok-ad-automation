@@ -305,7 +305,12 @@ CONFIRMED_EMPTY_KINDS = ("ad_day", "campaign_day_utc", "account_day", "material_
 def mark_confirmed_empty(
     session, plan: AdSyncBc, *, inactive: Sequence[str], window_fn, now: datetime
 ) -> int:
-    """只补从未成功或失败的日期；已有成功状态（及其事实）保持不动。"""
+    """平台筛查确认这些账户在窗口内无消耗：补齐从未成功或失败的日期为完成 0 行。
+
+    已完成的日期保留原有事实与行数，只把确认时间推进到本次筛查时间。否则全部账户
+    无消耗时没有任何报表任务会更新时间，页面"数据更新到"会一直停在最后一次有消耗
+    的同步时刻，看起来像同步停了。
+    """
     marked = 0
     for (start, end), advertisers in _group_by_window(
         session, plan, inactive, window_fn
@@ -317,6 +322,7 @@ def mark_confirmed_empty(
                     key = (plan.tenant_id, advertiser, kind, day)
                     state = session.get(ReportSyncState, key)
                     if state is not None and state.status == "COMPLETE":
+                        state.last_success_at = state.updated_at = now
                         continue
                     if state is None:
                         state = ReportSyncState(
