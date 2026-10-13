@@ -7,6 +7,7 @@ import {
   Monitor,
   SlidersHorizontal,
   Users,
+  Workflow,
 } from "lucide-react"
 import type { UserPublic } from "@/client"
 import { WorkspaceBrand } from "@/components/Common/WorkspaceBrand"
@@ -25,6 +26,7 @@ const defaultWorkItems: Item[] = [
   { icon: ListTodo, title: "搭建任务", path: "/build-tasks" },
   { icon: FileVideo, title: "素材库", path: "/materials" },
   { icon: SlidersHorizontal, title: "投放策略", path: "/strategies" },
+  { icon: Workflow, title: "自动规则", path: "/automation-rules" },
 ]
 const defaultManagementItems: Item[] = [
   { icon: Monitor, title: "账户与授权", path: "/accounts" },

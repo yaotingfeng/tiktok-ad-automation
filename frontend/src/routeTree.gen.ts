@@ -17,6 +17,7 @@ import { Route as SignupRouteImport } from './routes/signup'
 import { Route as LayoutIndexRouteImport } from './routes/_layout/index'
 import { Route as LayoutAccountsRouteImport } from './routes/_layout/accounts'
 import { Route as LayoutAdminRouteImport } from './routes/_layout/admin'
+import { Route as LayoutAutomationRulesRouteImport } from './routes/_layout/automation-rules'
 import { Route as LayoutBuildTasksRouteImport } from './routes/_layout/build-tasks'
 import { Route as LayoutMaterialsRouteImport } from './routes/_layout/materials'
 import { Route as LayoutMembersRouteImport } from './routes/_layout/members'
@@ -29,6 +30,7 @@ import { Route as LayoutTenantsTenantIdIndexRouteImport } from './routes/_layout
 import { Route as LayoutTenantsTenantIdAccountsRouteImport } from './routes/_layout/tenants.$tenantId.accounts'
 import { Route as LayoutTenantsTenantIdAdManagementTasksRouteImport } from './routes/_layout/tenants.$tenantId.ad-management-tasks'
 import { Route as LayoutTenantsTenantIdAdsRouteImport } from './routes/_layout/tenants.$tenantId.ads'
+import { Route as LayoutTenantsTenantIdAutomationRulesRouteImport } from './routes/_layout/tenants.$tenantId.automation-rules'
 import { Route as LayoutTenantsTenantIdBuildTasksRouteImport } from './routes/_layout/tenants.$tenantId.build-tasks'
 import { Route as LayoutTenantsTenantIdMaterialsRouteImport } from './routes/_layout/tenants.$tenantId.materials'
 import { Route as LayoutTenantsTenantIdMembersRouteImport } from './routes/_layout/tenants.$tenantId.members'
@@ -82,6 +84,11 @@ const LayoutAccountsRoute = LayoutAccountsRouteImport.update({
 const LayoutAdminRoute = LayoutAdminRouteImport.update({
   id: '/admin',
   path: '/admin',
+  getParentRoute: () => LayoutRoute,
+} as any)
+const LayoutAutomationRulesRoute = LayoutAutomationRulesRouteImport.update({
+  id: '/automation-rules',
+  path: '/automation-rules',
   getParentRoute: () => LayoutRoute,
 } as any)
 const LayoutBuildTasksRoute = LayoutBuildTasksRouteImport.update({
@@ -146,6 +153,12 @@ const LayoutTenantsTenantIdAdsRoute =
   LayoutTenantsTenantIdAdsRouteImport.update({
     id: '/ads',
     path: '/ads',
+    getParentRoute: () => LayoutTenantsTenantIdRoute,
+  } as any)
+const LayoutTenantsTenantIdAutomationRulesRoute =
+  LayoutTenantsTenantIdAutomationRulesRouteImport.update({
+    id: '/automation-rules',
+    path: '/automation-rules',
     getParentRoute: () => LayoutTenantsTenantIdRoute,
   } as any)
 const LayoutTenantsTenantIdBuildTasksRoute =
@@ -247,6 +260,7 @@ export interface FileRoutesByFullPath {
   '/signup': typeof SignupRoute
   '/accounts': typeof LayoutAccountsRoute
   '/admin': typeof LayoutAdminRoute
+  '/automation-rules': typeof LayoutAutomationRulesRoute
   '/build-tasks': typeof LayoutBuildTasksRoute
   '/materials': typeof LayoutMaterialsRoute
   '/members': typeof LayoutMembersRoute
@@ -258,6 +272,7 @@ export interface FileRoutesByFullPath {
   '/tenants/$tenantId/accounts': typeof LayoutTenantsTenantIdAccountsRoute
   '/tenants/$tenantId/ad-management-tasks': typeof LayoutTenantsTenantIdAdManagementTasksRouteWithChildren
   '/tenants/$tenantId/ads': typeof LayoutTenantsTenantIdAdsRoute
+  '/tenants/$tenantId/automation-rules': typeof LayoutTenantsTenantIdAutomationRulesRoute
   '/tenants/$tenantId/build-tasks': typeof LayoutTenantsTenantIdBuildTasksRouteWithChildren
   '/tenants/$tenantId/materials': typeof LayoutTenantsTenantIdMaterialsRoute
   '/tenants/$tenantId/members': typeof LayoutTenantsTenantIdMembersRoute
@@ -282,6 +297,7 @@ export interface FileRoutesByTo {
   '/signup': typeof SignupRoute
   '/accounts': typeof LayoutAccountsRoute
   '/admin': typeof LayoutAdminRoute
+  '/automation-rules': typeof LayoutAutomationRulesRoute
   '/build-tasks': typeof LayoutBuildTasksRoute
   '/materials': typeof LayoutMaterialsRoute
   '/members': typeof LayoutMembersRoute
@@ -292,6 +308,7 @@ export interface FileRoutesByTo {
   '/platform/tenants': typeof LayoutPlatformTenantsRoute
   '/tenants/$tenantId/accounts': typeof LayoutTenantsTenantIdAccountsRoute
   '/tenants/$tenantId/ads': typeof LayoutTenantsTenantIdAdsRoute
+  '/tenants/$tenantId/automation-rules': typeof LayoutTenantsTenantIdAutomationRulesRoute
   '/tenants/$tenantId/materials': typeof LayoutTenantsTenantIdMaterialsRoute
   '/tenants/$tenantId/members': typeof LayoutTenantsTenantIdMembersRoute
   '/tenants/$tenantId/providers': typeof LayoutTenantsTenantIdProvidersRoute
@@ -316,6 +333,7 @@ export interface FileRoutesById {
   '/signup': typeof SignupRoute
   '/_layout/accounts': typeof LayoutAccountsRoute
   '/_layout/admin': typeof LayoutAdminRoute
+  '/_layout/automation-rules': typeof LayoutAutomationRulesRoute
   '/_layout/build-tasks': typeof LayoutBuildTasksRoute
   '/_layout/materials': typeof LayoutMaterialsRoute
   '/_layout/members': typeof LayoutMembersRoute
@@ -328,6 +346,7 @@ export interface FileRoutesById {
   '/_layout/tenants/$tenantId/accounts': typeof LayoutTenantsTenantIdAccountsRoute
   '/_layout/tenants/$tenantId/ad-management-tasks': typeof LayoutTenantsTenantIdAdManagementTasksRouteWithChildren
   '/_layout/tenants/$tenantId/ads': typeof LayoutTenantsTenantIdAdsRoute
+  '/_layout/tenants/$tenantId/automation-rules': typeof LayoutTenantsTenantIdAutomationRulesRoute
   '/_layout/tenants/$tenantId/build-tasks': typeof LayoutTenantsTenantIdBuildTasksRouteWithChildren
   '/_layout/tenants/$tenantId/materials': typeof LayoutTenantsTenantIdMaterialsRoute
   '/_layout/tenants/$tenantId/members': typeof LayoutTenantsTenantIdMembersRoute
@@ -355,6 +374,7 @@ export interface FileRouteTypes {
     | '/signup'
     | '/accounts'
     | '/admin'
+    | '/automation-rules'
     | '/build-tasks'
     | '/materials'
     | '/members'
@@ -366,6 +386,7 @@ export interface FileRouteTypes {
     | '/tenants/$tenantId/accounts'
     | '/tenants/$tenantId/ad-management-tasks'
     | '/tenants/$tenantId/ads'
+    | '/tenants/$tenantId/automation-rules'
     | '/tenants/$tenantId/build-tasks'
     | '/tenants/$tenantId/materials'
     | '/tenants/$tenantId/members'
@@ -390,6 +411,7 @@ export interface FileRouteTypes {
     | '/signup'
     | '/accounts'
     | '/admin'
+    | '/automation-rules'
     | '/build-tasks'
     | '/materials'
     | '/members'
@@ -400,6 +422,7 @@ export interface FileRouteTypes {
     | '/platform/tenants'
     | '/tenants/$tenantId/accounts'
     | '/tenants/$tenantId/ads'
+    | '/tenants/$tenantId/automation-rules'
     | '/tenants/$tenantId/materials'
     | '/tenants/$tenantId/members'
     | '/tenants/$tenantId/providers'
@@ -423,6 +446,7 @@ export interface FileRouteTypes {
     | '/signup'
     | '/_layout/accounts'
     | '/_layout/admin'
+    | '/_layout/automation-rules'
     | '/_layout/build-tasks'
     | '/_layout/materials'
     | '/_layout/members'
@@ -435,6 +459,7 @@ export interface FileRouteTypes {
     | '/_layout/tenants/$tenantId/accounts'
     | '/_layout/tenants/$tenantId/ad-management-tasks'
     | '/_layout/tenants/$tenantId/ads'
+    | '/_layout/tenants/$tenantId/automation-rules'
     | '/_layout/tenants/$tenantId/build-tasks'
     | '/_layout/tenants/$tenantId/materials'
     | '/_layout/tenants/$tenantId/members'
@@ -519,6 +544,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutAdminRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/automation-rules': {
+      id: '/_layout/automation-rules'
+      path: '/automation-rules'
+      fullPath: '/automation-rules'
+      preLoaderRoute: typeof LayoutAutomationRulesRouteImport
+      parentRoute: typeof LayoutRoute
+    }
     '/_layout/build-tasks': {
       id: '/_layout/build-tasks'
       path: '/build-tasks'
@@ -601,6 +633,13 @@ declare module '@tanstack/react-router' {
       path: '/ads'
       fullPath: '/tenants/$tenantId/ads'
       preLoaderRoute: typeof LayoutTenantsTenantIdAdsRouteImport
+      parentRoute: typeof LayoutTenantsTenantIdRoute
+    }
+    '/_layout/tenants/$tenantId/automation-rules': {
+      id: '/_layout/tenants/$tenantId/automation-rules'
+      path: '/automation-rules'
+      fullPath: '/tenants/$tenantId/automation-rules'
+      preLoaderRoute: typeof LayoutTenantsTenantIdAutomationRulesRouteImport
       parentRoute: typeof LayoutTenantsTenantIdRoute
     }
     '/_layout/tenants/$tenantId/build-tasks': {
@@ -772,6 +811,7 @@ interface LayoutTenantsTenantIdRouteChildren {
   LayoutTenantsTenantIdAccountsRoute: typeof LayoutTenantsTenantIdAccountsRoute
   LayoutTenantsTenantIdAdManagementTasksRoute: typeof LayoutTenantsTenantIdAdManagementTasksRouteWithChildren
   LayoutTenantsTenantIdAdsRoute: typeof LayoutTenantsTenantIdAdsRoute
+  LayoutTenantsTenantIdAutomationRulesRoute: typeof LayoutTenantsTenantIdAutomationRulesRoute
   LayoutTenantsTenantIdBuildTasksRoute: typeof LayoutTenantsTenantIdBuildTasksRouteWithChildren
   LayoutTenantsTenantIdMaterialsRoute: typeof LayoutTenantsTenantIdMaterialsRoute
   LayoutTenantsTenantIdMembersRoute: typeof LayoutTenantsTenantIdMembersRoute
@@ -788,6 +828,8 @@ const LayoutTenantsTenantIdRouteChildren: LayoutTenantsTenantIdRouteChildren = {
   LayoutTenantsTenantIdAdManagementTasksRoute:
     LayoutTenantsTenantIdAdManagementTasksRouteWithChildren,
   LayoutTenantsTenantIdAdsRoute: LayoutTenantsTenantIdAdsRoute,
+  LayoutTenantsTenantIdAutomationRulesRoute:
+    LayoutTenantsTenantIdAutomationRulesRoute,
   LayoutTenantsTenantIdBuildTasksRoute:
     LayoutTenantsTenantIdBuildTasksRouteWithChildren,
   LayoutTenantsTenantIdMaterialsRoute: LayoutTenantsTenantIdMaterialsRoute,
@@ -811,6 +853,7 @@ const LayoutTenantsTenantIdRouteWithChildren =
 interface LayoutRouteChildren {
   LayoutAccountsRoute: typeof LayoutAccountsRoute
   LayoutAdminRoute: typeof LayoutAdminRoute
+  LayoutAutomationRulesRoute: typeof LayoutAutomationRulesRoute
   LayoutBuildTasksRoute: typeof LayoutBuildTasksRoute
   LayoutMaterialsRoute: typeof LayoutMaterialsRoute
   LayoutMembersRoute: typeof LayoutMembersRoute
@@ -825,6 +868,7 @@ interface LayoutRouteChildren {
 const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutAccountsRoute: LayoutAccountsRoute,
   LayoutAdminRoute: LayoutAdminRoute,
+  LayoutAutomationRulesRoute: LayoutAutomationRulesRoute,
   LayoutBuildTasksRoute: LayoutBuildTasksRoute,
   LayoutMaterialsRoute: LayoutMaterialsRoute,
   LayoutMembersRoute: LayoutMembersRoute,

@@ -13,6 +13,7 @@ import {
   Monitor,
   SlidersHorizontal,
   Users,
+  Workflow,
 } from "lucide-react"
 import { BCSelector } from "@/features/accounts/BCSelector"
 import { canManage, roleLabels } from "@/features/tenants/shared"
@@ -71,6 +72,11 @@ function ScopedLayout() {
           icon: SlidersHorizontal,
           title: "投放策略",
           path: `${prefix}/strategies`,
+        },
+        {
+          icon: Workflow,
+          title: "自动规则",
+          path: `${prefix}/automation-rules`,
         },
       ]
     : platform
