@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-router"
 import {
   BarChart3,
+  Bell,
   Clapperboard,
   FileVideo,
   Link2,
@@ -87,7 +88,14 @@ function ScopedLayout() {
         { icon: Monitor, title: "账户与授权", path: `${prefix}/accounts` },
         { icon: Link2, title: "版权方连接", path: `${prefix}/providers` },
         ...(canManage(scope?.role)
-          ? [{ icon: Users, title: "成员管理", path: `${prefix}/members` }]
+          ? [
+              { icon: Users, title: "成员管理", path: `${prefix}/members` },
+              {
+                icon: Bell,
+                title: "通知设置",
+                path: `${prefix}/notifications`,
+              },
+            ]
           : []),
       ]
     : platform

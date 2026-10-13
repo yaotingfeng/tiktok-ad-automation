@@ -34,6 +34,7 @@ import { Route as LayoutTenantsTenantIdAutomationRulesRouteImport } from './rout
 import { Route as LayoutTenantsTenantIdBuildTasksRouteImport } from './routes/_layout/tenants.$tenantId.build-tasks'
 import { Route as LayoutTenantsTenantIdMaterialsRouteImport } from './routes/_layout/tenants.$tenantId.materials'
 import { Route as LayoutTenantsTenantIdMembersRouteImport } from './routes/_layout/tenants.$tenantId.members'
+import { Route as LayoutTenantsTenantIdNotificationsRouteImport } from './routes/_layout/tenants.$tenantId.notifications'
 import { Route as LayoutTenantsTenantIdProvidersRouteImport } from './routes/_layout/tenants.$tenantId.providers'
 import { Route as LayoutTenantsTenantIdStrategiesRouteImport } from './routes/_layout/tenants.$tenantId.strategies'
 import { Route as LayoutTenantsTenantIdAdManagementTasksIndexRouteImport } from './routes/_layout/tenants.$tenantId.ad-management-tasks.index'
@@ -179,6 +180,12 @@ const LayoutTenantsTenantIdMembersRoute =
     path: '/members',
     getParentRoute: () => LayoutTenantsTenantIdRoute,
   } as any)
+const LayoutTenantsTenantIdNotificationsRoute =
+  LayoutTenantsTenantIdNotificationsRouteImport.update({
+    id: '/notifications',
+    path: '/notifications',
+    getParentRoute: () => LayoutTenantsTenantIdRoute,
+  } as any)
 const LayoutTenantsTenantIdProvidersRoute =
   LayoutTenantsTenantIdProvidersRouteImport.update({
     id: '/providers',
@@ -276,6 +283,7 @@ export interface FileRoutesByFullPath {
   '/tenants/$tenantId/build-tasks': typeof LayoutTenantsTenantIdBuildTasksRouteWithChildren
   '/tenants/$tenantId/materials': typeof LayoutTenantsTenantIdMaterialsRoute
   '/tenants/$tenantId/members': typeof LayoutTenantsTenantIdMembersRoute
+  '/tenants/$tenantId/notifications': typeof LayoutTenantsTenantIdNotificationsRoute
   '/tenants/$tenantId/providers': typeof LayoutTenantsTenantIdProvidersRoute
   '/tenants/$tenantId/strategies': typeof LayoutTenantsTenantIdStrategiesRouteWithChildren
   '/tenants/$tenantId/': typeof LayoutTenantsTenantIdIndexRoute
@@ -311,6 +319,7 @@ export interface FileRoutesByTo {
   '/tenants/$tenantId/automation-rules': typeof LayoutTenantsTenantIdAutomationRulesRoute
   '/tenants/$tenantId/materials': typeof LayoutTenantsTenantIdMaterialsRoute
   '/tenants/$tenantId/members': typeof LayoutTenantsTenantIdMembersRoute
+  '/tenants/$tenantId/notifications': typeof LayoutTenantsTenantIdNotificationsRoute
   '/tenants/$tenantId/providers': typeof LayoutTenantsTenantIdProvidersRoute
   '/tenants/$tenantId': typeof LayoutTenantsTenantIdIndexRoute
   '/tenants/$tenantId/ad-management-tasks/$taskId': typeof LayoutTenantsTenantIdAdManagementTasksTaskIdRoute
@@ -350,6 +359,7 @@ export interface FileRoutesById {
   '/_layout/tenants/$tenantId/build-tasks': typeof LayoutTenantsTenantIdBuildTasksRouteWithChildren
   '/_layout/tenants/$tenantId/materials': typeof LayoutTenantsTenantIdMaterialsRoute
   '/_layout/tenants/$tenantId/members': typeof LayoutTenantsTenantIdMembersRoute
+  '/_layout/tenants/$tenantId/notifications': typeof LayoutTenantsTenantIdNotificationsRoute
   '/_layout/tenants/$tenantId/providers': typeof LayoutTenantsTenantIdProvidersRoute
   '/_layout/tenants/$tenantId/strategies': typeof LayoutTenantsTenantIdStrategiesRouteWithChildren
   '/_layout/tenants/$tenantId/': typeof LayoutTenantsTenantIdIndexRoute
@@ -390,6 +400,7 @@ export interface FileRouteTypes {
     | '/tenants/$tenantId/build-tasks'
     | '/tenants/$tenantId/materials'
     | '/tenants/$tenantId/members'
+    | '/tenants/$tenantId/notifications'
     | '/tenants/$tenantId/providers'
     | '/tenants/$tenantId/strategies'
     | '/tenants/$tenantId/'
@@ -425,6 +436,7 @@ export interface FileRouteTypes {
     | '/tenants/$tenantId/automation-rules'
     | '/tenants/$tenantId/materials'
     | '/tenants/$tenantId/members'
+    | '/tenants/$tenantId/notifications'
     | '/tenants/$tenantId/providers'
     | '/tenants/$tenantId'
     | '/tenants/$tenantId/ad-management-tasks/$taskId'
@@ -463,6 +475,7 @@ export interface FileRouteTypes {
     | '/_layout/tenants/$tenantId/build-tasks'
     | '/_layout/tenants/$tenantId/materials'
     | '/_layout/tenants/$tenantId/members'
+    | '/_layout/tenants/$tenantId/notifications'
     | '/_layout/tenants/$tenantId/providers'
     | '/_layout/tenants/$tenantId/strategies'
     | '/_layout/tenants/$tenantId/'
@@ -663,6 +676,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutTenantsTenantIdMembersRouteImport
       parentRoute: typeof LayoutTenantsTenantIdRoute
     }
+    '/_layout/tenants/$tenantId/notifications': {
+      id: '/_layout/tenants/$tenantId/notifications'
+      path: '/notifications'
+      fullPath: '/tenants/$tenantId/notifications'
+      preLoaderRoute: typeof LayoutTenantsTenantIdNotificationsRouteImport
+      parentRoute: typeof LayoutTenantsTenantIdRoute
+    }
     '/_layout/tenants/$tenantId/providers': {
       id: '/_layout/tenants/$tenantId/providers'
       path: '/providers'
@@ -815,6 +835,7 @@ interface LayoutTenantsTenantIdRouteChildren {
   LayoutTenantsTenantIdBuildTasksRoute: typeof LayoutTenantsTenantIdBuildTasksRouteWithChildren
   LayoutTenantsTenantIdMaterialsRoute: typeof LayoutTenantsTenantIdMaterialsRoute
   LayoutTenantsTenantIdMembersRoute: typeof LayoutTenantsTenantIdMembersRoute
+  LayoutTenantsTenantIdNotificationsRoute: typeof LayoutTenantsTenantIdNotificationsRoute
   LayoutTenantsTenantIdProvidersRoute: typeof LayoutTenantsTenantIdProvidersRoute
   LayoutTenantsTenantIdStrategiesRoute: typeof LayoutTenantsTenantIdStrategiesRouteWithChildren
   LayoutTenantsTenantIdIndexRoute: typeof LayoutTenantsTenantIdIndexRoute
@@ -834,6 +855,8 @@ const LayoutTenantsTenantIdRouteChildren: LayoutTenantsTenantIdRouteChildren = {
     LayoutTenantsTenantIdBuildTasksRouteWithChildren,
   LayoutTenantsTenantIdMaterialsRoute: LayoutTenantsTenantIdMaterialsRoute,
   LayoutTenantsTenantIdMembersRoute: LayoutTenantsTenantIdMembersRoute,
+  LayoutTenantsTenantIdNotificationsRoute:
+    LayoutTenantsTenantIdNotificationsRoute,
   LayoutTenantsTenantIdProvidersRoute: LayoutTenantsTenantIdProvidersRoute,
   LayoutTenantsTenantIdStrategiesRoute:
     LayoutTenantsTenantIdStrategiesRouteWithChildren,

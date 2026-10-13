@@ -3,6 +3,7 @@
 from collections import defaultdict
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Any
 
 from app.modules.automation_rules.catalog import RULE_METRICS
 from app.modules.automation_rules.inputs import Entity, Inputs
@@ -21,7 +22,7 @@ class Target:
     bc_id: str
     remote_id: str
     name: str
-    material_uses: tuple[dict, ...] = ()
+    material_uses: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -61,7 +62,11 @@ def _in_scope(entity: Entity, definition: RuleDefinition) -> bool:
     return True
 
 
-def _sum(members, facts, range_type):
+def _sum(
+    members: list[Entity],
+    facts: dict[str, dict[str, dict[str, Decimal | None]]],
+    range_type: str,
+) -> dict[str, Decimal | None]:
     totals: dict[str, Decimal | None] = {key: Decimal(0) for key in STORED_KEYS}
     for member in members:
         row = facts.get(range_type, {}).get(member.key)
@@ -74,11 +79,13 @@ def _sum(members, facts, range_type):
     return totals
 
 
-def _metric(condition: Condition, members, inputs) -> Decimal | str | None:
+def _metric(
+    condition: Condition, members: list[Entity], inputs: Inputs
+) -> Decimal | str | None:
     meta = RULE_METRICS[condition.metric]
     if meta.kind == "attribute":
         return members[0].attributes.get(condition.metric)
-    totals = _sum(members, inputs.facts, condition.range)
+    totals = _sum(members, inputs.facts, str(condition.range))
     if condition.metric in _RATIOS:
         num, den, scale = _RATIOS[condition.metric]
         a, b = totals.get(num), totals.get(den)
@@ -87,27 +94,29 @@ def _metric(condition: Condition, members, inputs) -> Decimal | str | None:
     return totals.get(condition.metric)
 
 
-def _matches(condition: Condition, value) -> bool:
+def _matches(condition: Condition, value: Decimal | str | None) -> bool:
     if value is None:
         return False
     op, values = condition.operator, condition.values
     if isinstance(value, str):
         target = values[0]
-        return {
-            "CONTAINS": target in value,
-            "NOT_CONTAINS": target not in value,
-            "STARTS_WITH": value.startswith(target),
-            "ENDS_WITH": value.endswith(target),
-            "EQ": value == target,
-        }[op]
+        return bool(
+            {
+                "CONTAINS": target in value,
+                "NOT_CONTAINS": target not in value,
+                "STARTS_WITH": value.startswith(target),
+                "ENDS_WITH": value.endswith(target),
+                "EQ": value == target,
+            }[op]
+        )
     numbers = [Decimal(v) for v in values]
     if op == "GT":
-        return value > numbers[0]
+        return bool(value > numbers[0])
     if op == "LT":
-        return value < numbers[0]
+        return bool(value < numbers[0])
     if op == "EQ":
-        return value == numbers[0]
-    return numbers[0] < value < numbers[1]
+        return bool(value == numbers[0])
+    return bool(numbers[0] < value < numbers[1])
 
 
 def _metric_key(condition: Condition) -> str:
@@ -116,7 +125,7 @@ def _metric_key(condition: Condition) -> str:
     )
 
 
-def _format(value) -> str:
+def _format(value: Decimal | str | None) -> str:
     if value is None:
         return ""
     if isinstance(value, Decimal):
@@ -135,7 +144,12 @@ def _children(inputs: Inputs) -> dict[str, list[Entity]]:
     return result
 
 
-def _targets(members, level, inputs, children) -> tuple[Target, ...]:
+def _targets(
+    members: list[Entity],
+    level: str,
+    inputs: Inputs,
+    children: dict[str, list[Entity]],
+) -> tuple[Target, ...]:
     """把判断对象展开到执行层级;素材按使用它的广告归属。"""
     found: dict[str, Entity] = {}
     ad_keys: set[str] = set()
@@ -178,7 +192,7 @@ def evaluate(definition: RuleDefinition, inputs: Inputs) -> Evaluation:
         key=lambda e: e.key,
     )
     skipped = 0
-    groups: dict[tuple, list[Entity]] = defaultdict(list)
+    groups: dict[tuple[str, ...], list[Entity]] = defaultdict(list)
     for entity in scoped:
         if definition.aggregation == "EACH":
             groups[(entity.key,)].append(entity)

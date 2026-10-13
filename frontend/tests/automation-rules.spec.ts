@@ -64,3 +64,49 @@ test("只读成员看不到写操作", async ({ page }) => {
   await expect(page.getByRole("row", { name: /剧级止损/ })).toBeVisible()
   await expect(page.getByRole("button", { name: "新建规则" })).toHaveCount(0)
 })
+
+test("执行记录下钻到命中明细", async ({ page }) => {
+  await automationBoundary(page)
+  await page.goto(`/tenants/${TENANT}/automation-rules?tab=runs`)
+  const row = page.getByRole("row", { name: /剧级止损/ })
+  await expect(row).toContainText("命中 1")
+  await expect(row).toContainText("已发送")
+  await row.getByRole("button", { name: "查看明细" }).click()
+  await expect(
+    page.getByRole("cell", { name: "总裁归来", exact: true }),
+  ).toBeVisible()
+})
+
+test("飞书卡片链接直接打开指定运行", async ({ page }) => {
+  await automationBoundary(page)
+  await page.goto(`/tenants/${TENANT}/automation-rules?tab=runs&run=run-1`)
+  await expect(
+    page.getByRole("cell", { name: "总裁归来", exact: true }),
+  ).toBeVisible()
+})
+
+test("通知设置:掩码显示、测试与保存", async ({ page }) => {
+  const saved: unknown[] = []
+  const tested: unknown[] = []
+  await automationBoundary(page, { saved, tested })
+  await page.goto(`/tenants/${TENANT}/notifications`)
+  await expect(
+    page.getByText("https://open.feishu.cn/open-apis/bot/v2/hook/…ab12"),
+  ).toBeVisible()
+  await page
+    .getByRole("textbox", { name: "Webhook 地址" })
+    .fill("https://open.feishu.cn/open-apis/bot/v2/hook/new-1")
+  await page.getByRole("button", { name: "发送测试消息" }).click()
+  await expect.poll(() => tested.length).toBe(1)
+  await page.getByRole("button", { name: "保存" }).click()
+  await expect.poll(() => saved.length).toBe(1)
+  expect(saved[0]).toMatchObject({
+    webhook_url: "https://open.feishu.cn/open-apis/bot/v2/hook/new-1",
+  })
+})
+
+test("非管理员没有通知设置入口", async ({ page }) => {
+  await automationBoundary(page, { role: "operator" })
+  await page.goto(`/tenants/${TENANT}/automation-rules`)
+  await expect(page.getByRole("link", { name: "通知设置" })).toHaveCount(0)
+})

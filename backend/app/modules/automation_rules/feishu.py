@@ -7,6 +7,7 @@ import json
 import re
 import time
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -52,12 +53,19 @@ def _hit_line(hit: CardHit) -> str:
 
 
 def build_card(
-    *, title, rule_name, summary_lines, hits, total_hits, link, template="orange"
-):
+    *,
+    title: str,
+    rule_name: str,
+    summary_lines: list[str],
+    hits: list[CardHit],
+    total_hits: int,
+    link: str,
+    template: str = "orange",
+) -> dict[str, Any]:
     lines = [_hit_line(hit) for hit in hits[:MAX_CARD_HITS]]
     if total_hits > len(lines):
         lines.append(f"其余 {total_hits - len(lines)} 个请在 TK-ADA 查看")
-    elements = [
+    elements: list[dict[str, Any]] = [
         {
             "tag": "div",
             "text": {
@@ -103,7 +111,14 @@ def build_card(
     return card
 
 
-def send(url, secret, card, *, transport=None, now=None):
+def send(
+    url: str,
+    secret: str,
+    card: dict[str, Any],
+    *,
+    transport: httpx.BaseTransport | None = None,
+    now: float | None = None,
+) -> None:
     body = dict(card)
     if secret:
         timestamp = int(now if now is not None else time.time())

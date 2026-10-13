@@ -2,7 +2,7 @@
 
 from datetime import datetime, time
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Any, Literal, Self
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -28,7 +28,7 @@ class AccountScope(_Strict):
     advertiser_ids: tuple[str, ...] = ()
 
     @model_validator(mode="after")
-    def check(self):
+    def check(self) -> Self:
         if self.mode == "BC" and not self.bc_ids:
             raise ValueError("bc_ids required")
         if self.mode == "ACCOUNTS" and not self.advertiser_ids:
@@ -46,7 +46,7 @@ class ApplyTo(_Strict):
     name_excludes: str | None = Field(default=None, max_length=200)
 
     @model_validator(mode="after")
-    def check(self):
+    def check(self) -> Self:
         if self.status == "SELECTED" and not self.object_ids:
             raise ValueError("object_ids required")
         return self
@@ -85,7 +85,7 @@ class Adjustment(_Strict):
     limit: Decimal | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
-    def check(self):
+    def check(self) -> Self:
         # 提高必须设上限、降低必须设下限,防止预算或出价失控。
         if self.mode != "SET" and self.limit is None:
             raise ValueError("limit required")
@@ -103,7 +103,7 @@ class Frequency(_Strict):
     count: int | None = Field(default=None, ge=1, le=1000)
 
     @model_validator(mode="after")
-    def check(self):
+    def check(self) -> Self:
         custom = (self.window, self.unit, self.count)
         if (self.type == "CUSTOM") != all(v is not None for v in custom):
             raise ValueError("custom frequency needs window, unit and count")
@@ -117,7 +117,7 @@ class Action(_Strict):
     frequency: Frequency | None = None
 
     @model_validator(mode="after")
-    def check(self):
+    def check(self) -> Self:
         adjusts = self.type in ("BUDGET", "ROAS")
         if adjusts != (self.adjustment is not None) or adjusts != (
             self.frequency is not None
@@ -135,7 +135,7 @@ class Period(_Strict):
     end: time
 
     @model_validator(mode="after")
-    def check(self):
+    def check(self) -> Self:
         limit = {"DAY": 0, "WEEK": 7, "MONTH": 28}[self.date_type]
         if self.date_type != "DAY" and not self.days:
             raise ValueError("days required")
@@ -152,7 +152,7 @@ class Schedule(_Strict):
     once_at: datetime | None = None
 
     @model_validator(mode="after")
-    def check(self):
+    def check(self) -> Self:
         if (self.frequency == "DAILY") != (self.daily_at is not None):
             raise ValueError("daily_at only and always with DAILY")
         if (self.window == "CUSTOM") != bool(self.periods):
@@ -207,7 +207,7 @@ class RuleDefinition(_Strict):
     notification: NotificationSetting = NotificationSetting()
 
     @model_validator(mode="after")
-    def check(self):
+    def check(self) -> Self:
         level = self.apply_to.level
         if level == "material" and self.aggregation != "EACH":
             raise ValueError("material rules judge each material")

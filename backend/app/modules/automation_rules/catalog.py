@@ -54,7 +54,9 @@ def _fact_metrics() -> dict[str, RuleMetric]:
 
 
 def _attributes() -> dict[str, RuleMetric]:
-    def attr(key, unit, levels, operators):
+    def attr(
+        key: str, unit: str, levels: tuple[str, ...], operators: tuple[str, ...]
+    ) -> RuleMetric:
         # 属性描述单个对象,合计口径下没有意义,只允许「每个对象」。
         return RuleMetric(
             key,
@@ -84,7 +86,7 @@ def _attributes() -> dict[str, RuleMetric]:
 
 RULE_METRICS: dict[str, RuleMetric] = {**_fact_metrics(), **_attributes()}
 
-_DEPTH = {level: index for index, level in enumerate(LEVELS)}
+_DEPTH: dict[str, int] = {level: index for index, level in enumerate(LEVELS)}
 # 各操作支持的执行层级;ROAS 以广告管理现有 roas 变更为准(系列)。
 ACTION_LEVELS: dict[str, tuple[str, ...]] = {
     "PAUSE": LEVELS,

@@ -32,7 +32,9 @@ def _context(user: CurrentUser, tenant_id: UUID) -> TenantContext:
 
 
 @router.get("/automation-settings", response_model=AutomationSettingsPublic)
-def get_settings(tenant_id: UUID, session: SessionDep, user: CurrentUser):
+def get_settings(
+    tenant_id: UUID, session: SessionDep, user: CurrentUser
+) -> AutomationSettingsPublic:
     return settings_service.get_settings(session, context=_context(user, tenant_id))
 
 
@@ -42,7 +44,7 @@ def put_settings(
     body: AutomationSettingsUpdate,
     session: SessionDep,
     user: CurrentUser,
-):
+) -> AutomationSettingsPublic:
     result = settings_service.update_settings(
         session, context=_context(user, tenant_id), body=body
     )
@@ -53,25 +55,27 @@ def put_settings(
 @router.post("/automation-settings/test-feishu", status_code=204)
 def test_feishu(
     tenant_id: UUID, body: FeishuTestRequest, session: SessionDep, user: CurrentUser
-):
+) -> None:
     settings_service.send_test(session, context=_context(user, tenant_id), body=body)
 
 
 @router.get("/automation-rules/catalog", response_model=CatalogPublic)
-def get_catalog(tenant_id: UUID, session: SessionDep, user: CurrentUser):
+def get_catalog(
+    tenant_id: UUID, session: SessionDep, user: CurrentUser
+) -> CatalogPublic:
     service.require(session, _context(user, tenant_id), "read")
     return service.catalog()
 
 
 @router.get("/automation-rules", response_model=RulePage)
-def list_rules(tenant_id: UUID, session: SessionDep, user: CurrentUser):
+def list_rules(tenant_id: UUID, session: SessionDep, user: CurrentUser) -> RulePage:
     return service.list_rules(session, context=_context(user, tenant_id))
 
 
 @router.post("/automation-rules", response_model=RulePublic, status_code=201)
 def create_rule(
     tenant_id: UUID, body: RuleCreate, session: SessionDep, user: CurrentUser
-):
+) -> RulePublic:
     result = service.create_rule(session, context=_context(user, tenant_id), body=body)
     session.commit()
     return result
@@ -80,14 +84,16 @@ def create_rule(
 @router.post("/automation-rules/dry-run", response_model=DryRunPublic)
 def dry_run(
     tenant_id: UUID, body: DryRunRequest, session: SessionDep, user: CurrentUser
-):
+) -> DryRunPublic:
     return service.dry_run(
         session, context=_context(user, tenant_id), definition=body.definition
     )
 
 
 @router.get("/automation-rules/{rule_id}", response_model=RulePublic)
-def get_rule(tenant_id: UUID, rule_id: UUID, session: SessionDep, user: CurrentUser):
+def get_rule(
+    tenant_id: UUID, rule_id: UUID, session: SessionDep, user: CurrentUser
+) -> RulePublic:
     return service.get_rule(session, context=_context(user, tenant_id), rule_id=rule_id)
 
 
@@ -98,7 +104,7 @@ def update_rule(
     body: RuleUpdate,
     session: SessionDep,
     user: CurrentUser,
-):
+) -> RulePublic:
     result = service.update_rule(
         session, context=_context(user, tenant_id), rule_id=rule_id, body=body
     )
@@ -113,7 +119,7 @@ def set_enabled(
     body: RuleEnabled,
     session: SessionDep,
     user: CurrentUser,
-):
+) -> RulePublic:
     result = service.set_enabled(
         session,
         context=_context(user, tenant_id),
@@ -125,7 +131,9 @@ def set_enabled(
 
 
 @router.delete("/automation-rules/{rule_id}", status_code=204)
-def delete_rule(tenant_id: UUID, rule_id: UUID, session: SessionDep, user: CurrentUser):
+def delete_rule(
+    tenant_id: UUID, rule_id: UUID, session: SessionDep, user: CurrentUser
+) -> None:
     service.delete_rule(session, context=_context(user, tenant_id), rule_id=rule_id)
     session.commit()
 
@@ -138,7 +146,7 @@ def list_runs(
     rule_id: UUID | None = None,
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-):
+) -> RunPage:
     return service.list_runs(
         session,
         context=_context(user, tenant_id),
@@ -149,5 +157,7 @@ def list_runs(
 
 
 @router.get("/automation-runs/{run_id}", response_model=RunDetail)
-def get_run(tenant_id: UUID, run_id: UUID, session: SessionDep, user: CurrentUser):
+def get_run(
+    tenant_id: UUID, run_id: UUID, session: SessionDep, user: CurrentUser
+) -> RunDetail:
     return service.get_run(session, context=_context(user, tenant_id), run_id=run_id)

@@ -1,6 +1,7 @@
 """自动规则后台任务：Beat 扫描到期规则，经 outbox 投递运行与飞书发送。"""
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import delete
@@ -75,7 +76,7 @@ def cleanup_runs(session: Session, *, now: datetime) -> int:
     return int(result.rowcount or 0)
 
 
-def _payload(payload: dict, keys: set[str]) -> dict:
+def _payload(payload: dict[str, Any], keys: set[str]) -> dict[str, Any]:
     payload = validate_dispatch_payload(payload)
     if set(payload) != keys:
         raise DomainError("dispatch_payload_invalid", "自动规则任务参数无效")
@@ -95,7 +96,7 @@ def scan_due() -> int:
     acks_late=True,
     reject_on_worker_lost=True,
 )
-def run_rule(*, tenant_id: str, actor_id: str, payload: dict) -> str:
+def run_rule(*, tenant_id: str, actor_id: str, payload: dict[str, Any]) -> str:
     del actor_id  # 运行时按规则最后修改人重建权限，不信任投递时的身份。
     data = _payload(payload, {"rule_id", "slot_at"})
     with Session(engine) as session, session.begin():
@@ -114,7 +115,7 @@ def run_rule(*, tenant_id: str, actor_id: str, payload: dict) -> str:
 
 
 @celery_app.task(name="automation.send_feishu", time_limit=60, soft_time_limit=50)
-def send_feishu(*, tenant_id: str, actor_id: str, payload: dict) -> str:
+def send_feishu(*, tenant_id: str, actor_id: str, payload: dict[str, Any]) -> str:
     del actor_id
     data = _payload(payload, {"run_id"})
     with Session(engine) as session, session.begin():

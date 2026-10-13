@@ -192,7 +192,9 @@ def _created_date(value: Any, timezone: str) -> date | None:
     return moment.astimezone(ZoneInfo(timezone)).date() if moment else None
 
 
-def _projections(session, tenant_id, advertisers) -> dict[tuple[str, str], Any]:
+def _projections(
+    session: Session, tenant_id: UUID, advertisers: list[str]
+) -> dict[tuple[str, str], Any]:
     rows = session.connection().execute(
         text(
             "SELECT DISTINCT ON (advertiser_id, campaign_remote_id) advertiser_id, "
@@ -206,7 +208,12 @@ def _projections(session, tenant_id, advertisers) -> dict[tuple[str, str], Any]:
     return {(r.advertiser_id, r.campaign_remote_id): r for r in rows}
 
 
-def _objects(session, tenant_id, accounts, now) -> dict[str, Entity]:
+def _objects(
+    session: Session,
+    tenant_id: UUID,
+    accounts: dict[str, AccountInfo],
+    now: datetime,
+) -> dict[str, Entity]:
     advertisers = list(accounts)
     rows = (
         session.connection()
@@ -224,7 +231,7 @@ def _objects(session, tenant_id, accounts, now) -> dict[str, Entity]:
     projections = _projections(session, tenant_id, advertisers)
     by_key = {(r.advertiser_id, r.kind, r.remote_id): r for r in rows}
 
-    def campaign_of(row) -> str | None:
+    def campaign_of(row: Any) -> str | None:
         # 广告组、广告沿上级链找到所属系列，剧名只来自系列名。
         while row is not None and row.kind != "campaign":
             row = by_key.get(
@@ -236,7 +243,10 @@ def _objects(session, tenant_id, accounts, now) -> dict[str, Entity]:
     for row in rows:
         info = accounts[row.advertiser_id]
         config = row.configuration or {}
-        projection = projections.get((row.advertiser_id, campaign_of(row)))
+        campaign = campaign_of(row)
+        projection = (
+            projections.get((row.advertiser_id, campaign)) if campaign else None
+        )
         valid = projection is not None and projection.status == "VALID"
         created = _created_date(config.get("create_time"), info.timezone)
         days = (
@@ -253,7 +263,7 @@ def _objects(session, tenant_id, accounts, now) -> dict[str, Entity]:
             remote_id=row.remote_id,
             name=row.name or row.remote_id,
             drama=f"{projection.provider_label}-{projection.drama_name}"
-            if valid
+            if valid and projection is not None
             else None,
             naming_valid=valid,
             status=row.operation_status,
@@ -273,7 +283,10 @@ def _objects(session, tenant_id, accounts, now) -> dict[str, Entity]:
 
 
 def _materials(
-    session, tenant_id, accounts, ads: dict[str, Entity]
+    session: Session,
+    tenant_id: UUID,
+    accounts: dict[str, AccountInfo],
+    ads: dict[str, Entity],
 ) -> dict[str, Entity]:
     """素材按「账户 + 主素材」合并；同一素材被多条广告使用时列出全部使用。"""
     rows = (
@@ -341,7 +354,15 @@ def _add(target: dict[str, Decimal | None], row: Any) -> None:
             target.setdefault(key, None)
 
 
-def _facts(session, tenant_id, accounts, range_type, *, material, now):
+def _facts(
+    session: Session,
+    tenant_id: UUID,
+    accounts: dict[str, AccountInfo],
+    range_type: str,
+    *,
+    material: bool,
+    now: datetime,
+) -> dict[str, dict[str, Decimal | None]]:
     windows = [local_window(range_type, accounts[a].timezone, now) for a in accounts]
     sums = ", ".join(f"sum(f.{key}) AS {key}" for key in STORED_KEYS)
     table, ids = (
@@ -397,14 +418,14 @@ def load_inputs(
     entities = _objects(session, tenant_id, accounts, now)
     if "material" in (level, definition.action.level):
         entities.update(_materials(session, tenant_id, accounts, entities))
-    ranges = sorted(
+    ranges: list[str] = sorted(
         {
-            c.range
+            str(c.range)
             for c in definition.conditions
             if c.range and RULE_METRICS[c.metric].kind == "fact"
         }
     )
-    facts = {}
+    facts: dict[str, dict[str, dict[str, Decimal | None]]] = {}
     for range_type in ranges:
         loaded = _facts(
             session,

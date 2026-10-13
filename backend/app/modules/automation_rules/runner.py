@@ -3,9 +3,11 @@
 import logging
 from dataclasses import asdict
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
-from billiard.exceptions import SoftTimeLimitExceeded
+import httpx
+from billiard.exceptions import SoftTimeLimitExceeded  # type: ignore[import-untyped]
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
@@ -157,7 +159,7 @@ def _metric_name(key: str) -> str:
 
 def build_run_card(
     rule: AutomationRule, run: AutomationRuleRun, hits: list[AutomationRuleHit]
-) -> dict:
+) -> dict[str, Any]:
     kind = "预警" if run.hit_count else "运行报告"
     title = f"【{kind}】{rule.name}"
     summary = [f"判断对象 {run.checked_count} 个，命中 {run.hit_count} 个"]
@@ -189,7 +191,12 @@ def build_run_card(
     )
 
 
-def deliver_notification(session: Session, *, run_id: UUID, transport=None) -> str:
+def deliver_notification(
+    session: Session,
+    *,
+    run_id: UUID,
+    transport: httpx.BaseTransport | None = None,
+) -> str:
     run = session.get(AutomationRuleRun, run_id)
     if run is None or run.notify_status != "PENDING":
         return run.notify_status if run else "NOT_REQUIRED"

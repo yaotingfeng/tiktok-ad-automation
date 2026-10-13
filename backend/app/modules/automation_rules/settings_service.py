@@ -1,7 +1,9 @@
 """租户自动规则设置与飞书配置;Webhook 与密钥只以加密信封落库。"""
 
 from datetime import UTC, datetime
+from uuid import UUID
 
+import httpx
 from sqlmodel import Session
 
 from app.core.context import TenantContext
@@ -20,13 +22,13 @@ from app.modules.automation_rules.schemas import (
 from app.modules.tenants.permissions import require_tenant
 
 
-def load_tenant_setting(session: Session, tenant_id) -> AutomationTenantSetting:
+def load_tenant_setting(session: Session, tenant_id: UUID) -> AutomationTenantSetting:
     return session.get(AutomationTenantSetting, tenant_id) or AutomationTenantSetting(
         tenant_id=tenant_id
     )
 
 
-def load_feishu(session: Session, tenant_id) -> tuple[str, str] | None:
+def load_feishu(session: Session, tenant_id: UUID) -> tuple[str, str] | None:
     row = session.get(TenantFeishuSetting, tenant_id)
     if row is None or not row.enabled:
         return None
@@ -34,7 +36,7 @@ def load_feishu(session: Session, tenant_id) -> tuple[str, str] | None:
     return value["url"], value.get("secret", "")
 
 
-def _public(session, tenant_id) -> AutomationSettingsPublic:
+def _public(session: Session, tenant_id: UUID) -> AutomationSettingsPublic:
     setting = load_tenant_setting(session, tenant_id)
     row = session.get(TenantFeishuSetting, tenant_id)
     return AutomationSettingsPublic(
@@ -47,7 +49,9 @@ def _public(session, tenant_id) -> AutomationSettingsPublic:
     )
 
 
-def get_settings(session, *, context: TenantContext) -> AutomationSettingsPublic:
+def get_settings(
+    session: Session, *, context: TenantContext
+) -> AutomationSettingsPublic:
     require_tenant(
         session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read"
     )
@@ -55,7 +59,7 @@ def get_settings(session, *, context: TenantContext) -> AutomationSettingsPublic
 
 
 def update_settings(
-    session, *, context, body: AutomationSettingsUpdate
+    session: Session, *, context: TenantContext, body: AutomationSettingsUpdate
 ) -> AutomationSettingsPublic:
     require_tenant(
         session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="manage"
@@ -103,7 +107,13 @@ def update_settings(
     return _public(session, context.tenant_id)
 
 
-def send_test(session, *, context, body: FeishuTestRequest, transport=None) -> None:
+def send_test(
+    session: Session,
+    *,
+    context: TenantContext,
+    body: FeishuTestRequest,
+    transport: httpx.BaseTransport | None = None,
+) -> None:
     require_tenant(
         session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="manage"
     )
@@ -132,7 +142,7 @@ def send_test(session, *, context, body: FeishuTestRequest, transport=None) -> N
     feishu.send(url, secret, card, transport=transport)
 
 
-def _site_link(tenant_id) -> str:
+def _site_link(tenant_id: UUID) -> str:
     from app.core.config import settings
 
     return f"{settings.FRONTEND_HOST.rstrip('/')}/tenants/{tenant_id}/automation-rules"

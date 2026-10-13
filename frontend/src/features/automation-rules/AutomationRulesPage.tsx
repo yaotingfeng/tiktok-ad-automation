@@ -1,10 +1,18 @@
+import { getRouteApi } from "@tanstack/react-router"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import { RuleList } from "./RuleList"
+import { RunHistory } from "./RunHistory"
+
+const route = getRouteApi("/_layout/tenants/$tenantId/automation-rules")
 
 export function AutomationRulesPage() {
   const { tenantId, scope } = useTenantScope()
+  const search = route.useSearch()
+  const navigate = route.useNavigate()
   const write = !!scope && scope.role !== "viewer"
+  const tab = search.tab ?? "rules"
   return (
     <section
       aria-label="自动规则工作区"
@@ -16,7 +24,30 @@ export function AutomationRulesPage() {
           按条件自动检查跨账户、跨 BC 的投放数据，并发送飞书预警。
         </p>
       </div>
-      <RuleList tenantId={tenantId!} write={write} />
+      <Tabs
+        value={tab}
+        onValueChange={(value) =>
+          void navigate({
+            search: { tab: value === "runs" ? "runs" : undefined },
+          })
+        }
+        className="gap-4"
+      >
+        <TabsList>
+          <TabsTrigger value="rules">规则管理</TabsTrigger>
+          <TabsTrigger value="runs">执行记录</TabsTrigger>
+        </TabsList>
+        <TabsContent value="rules">
+          <RuleList tenantId={tenantId!} write={write} />
+        </TabsContent>
+        <TabsContent value="runs">
+          <RunHistory
+            tenantId={tenantId!}
+            openRun={search.run}
+            onOpenRun={(run) => void navigate({ search: { tab: "runs", run } })}
+          />
+        </TabsContent>
+      </Tabs>
     </section>
   )
 }

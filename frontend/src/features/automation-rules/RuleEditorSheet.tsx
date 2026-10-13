@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { Link } from "@tanstack/react-router"
 import { Plus, Trash2 } from "lucide-react"
 import { type ReactNode, useMemo, useState } from "react"
 import {
@@ -1014,7 +1015,14 @@ export function RuleEditorSheet({
         </div>
         {settings.data && !settings.data.feishu_enabled && (
           <p className="text-sm text-muted-foreground">
-            租户尚未启用飞书通知，请租户管理员在「通知设置」中配置。
+            租户尚未启用飞书通知，
+            <Link
+              to="/tenants/$tenantId/notifications"
+              params={{ tenantId }}
+              className="underline"
+            >
+              去设置
+            </Link>
           </p>
         )}
       </Section>
