@@ -1,0 +1,213 @@
+from decimal import Decimal
+
+from app.modules.automation_rules.evaluate import evaluate
+from app.modules.automation_rules.inputs import AccountInfo, Entity, Inputs
+from app.modules.automation_rules.schemas import RuleDefinition
+from tests.modules.automation_rules.test_definition import base
+
+
+def ent(
+    kind,
+    adv,
+    rid,
+    *,
+    parent=None,
+    drama="嘉书-总裁",
+    valid=True,
+    status="ENABLE",
+    currency="USD",
+    name=None,
+    uses=(),
+    **attrs,
+):
+    return Entity(
+        key=f"{kind}:{adv}:{rid}",
+        kind=kind,
+        advertiser_id=adv,
+        bc_id="bc-a",
+        remote_id=rid,
+        name=name or rid,
+        drama=drama if valid else None,
+        naming_valid=valid,
+        status=status,
+        currency=currency,
+        timezone="UTC",
+        parent_key=parent,
+        attributes={"name": name or rid, **attrs},
+        material_uses=tuple(uses),
+    )
+
+
+def inputs(entities, today):
+    return Inputs(
+        accounts={"a": AccountInfo("a", "bc-a", "UTC", "USD", "A")},
+        entities={e.key: e for e in entities},
+        facts={"TODAY": today},
+        skipped_accounts=[],
+    )
+
+
+def rule(**patch):
+    return RuleDefinition.model_validate(base(**patch))
+
+
+GROUPS = [
+    ent("campaign", "a", "c1"),
+    ent("campaign", "a", "c2"),
+    ent("adgroup", "a", "g1", parent="campaign:a:c1"),
+    ent("adgroup", "a", "g2", parent="campaign:a:c2"),
+    ent("ad", "a", "x1", parent="adgroup:a:g1"),
+]
+
+
+def test_each_object_and_sum_over_sum_roas():
+    facts = {
+        "adgroup:a:g1": {"spend": Decimal("20"), "revenue_total": Decimal("10")},
+        "adgroup:a:g2": {"spend": Decimal("5"), "revenue_total": Decimal("10")},
+    }
+    result = evaluate(
+        rule(
+            conditions=[
+                {
+                    "metric": "spend",
+                    "range": "TODAY",
+                    "operator": "GT",
+                    "values": ["10"],
+                },
+                {
+                    "metric": "roas_total",
+                    "range": "TODAY",
+                    "operator": "LT",
+                    "values": ["1"],
+                },
+            ]
+        ),
+        inputs(GROUPS, facts),
+    )
+    assert result.checked == 2
+    assert [h.subject_key for h in result.hits] == ["adgroup:a:g1"]
+    assert result.hits[0].metrics["roas_total:TODAY"] == "0.5"
+
+
+def test_action_level_expands_to_descendants():
+    facts = {"adgroup:a:g1": {"spend": Decimal("20")}}
+    result = evaluate(
+        rule(action={"type": "PAUSE", "level": "ad"}), inputs(GROUPS, facts)
+    )
+    assert [t.key for t in result.hits[0].targets] == ["ad:a:x1"]
+
+
+def test_drama_total_hits_all_members():
+    facts = {
+        "adgroup:a:g1": {"spend": Decimal("6")},
+        "adgroup:a:g2": {"spend": Decimal("6")},
+    }
+    result = evaluate(rule(aggregation="DRAMA"), inputs(GROUPS, facts))
+    assert len(result.hits) == 1 and result.hits[0].subject_label == "嘉书-总裁"
+    assert {t.key for t in result.hits[0].targets} == {"adgroup:a:g1", "adgroup:a:g2"}
+
+
+def test_drama_skips_invalid_naming():
+    items = GROUPS + [ent("adgroup", "a", "g3", valid=False)]
+    facts = {"adgroup:a:g3": {"spend": Decimal("50")}}
+    result = evaluate(rule(aggregation="DRAMA"), inputs(items, facts))
+    assert result.hits == () and result.skipped_count == 1
+
+
+def test_zero_denominator_is_not_a_hit():
+    facts = {"adgroup:a:g1": {"spend": Decimal("0"), "revenue_total": Decimal("0")}}
+    result = evaluate(
+        rule(
+            aggregation="ALL",
+            conditions=[
+                {
+                    "metric": "roas_total",
+                    "range": "TODAY",
+                    "operator": "LT",
+                    "values": ["1"],
+                }
+            ],
+        ),
+        inputs(GROUPS, facts),
+    )
+    assert result.hits == ()
+
+
+def test_all_objects_split_by_currency():
+    items = [ent("adgroup", "a", "g1"), ent("adgroup", "a", "g2", currency="EUR")]
+    facts = {
+        "adgroup:a:g1": {"spend": Decimal("8")},
+        "adgroup:a:g2": {"spend": Decimal("8")},
+    }
+    result = evaluate(rule(aggregation="ALL"), inputs(items, facts))
+    assert result.hits == ()  # 各自 8,均未超过 10;不会合并成 16
+    assert result.checked == 2
+
+
+def test_status_filters_and_missing_facts_are_zero():
+    items = [ent("adgroup", "a", "g1", status="DISABLE"), ent("adgroup", "a", "g2")]
+    result = evaluate(
+        rule(
+            conditions=[
+                {"metric": "spend", "range": "TODAY", "operator": "LT", "values": ["1"]}
+            ]
+        ),
+        inputs(items, {}),
+    )
+    assert [h.subject_key for h in result.hits] == ["adgroup:a:g2"]
+
+
+def test_name_and_attribute_conditions():
+    items = [
+        ent("adgroup", "a", "g1", name="嘉书-测试", budget=Decimal("30")),
+        ent("adgroup", "a", "g2", name="其他", budget=Decimal("30")),
+    ]
+    result = evaluate(
+        rule(
+            conditions=[
+                {"metric": "name", "operator": "STARTS_WITH", "values": ["嘉书"]},
+                {"metric": "budget", "operator": "BETWEEN", "values": ["20", "40"]},
+            ]
+        ),
+        inputs(items, {}),
+    )
+    assert [h.subject_key for h in result.hits] == ["adgroup:a:g1"]
+
+
+def test_selected_objects_and_name_filters():
+    patch = {
+        "apply_to": {"level": "adgroup", "status": "SELECTED", "object_ids": ["a:g2"]}
+    }
+    facts = {
+        "adgroup:a:g1": {"spend": Decimal("20")},
+        "adgroup:a:g2": {"spend": Decimal("20")},
+    }
+    assert [
+        h.subject_key for h in evaluate(rule(**patch), inputs(GROUPS, facts)).hits
+    ] == ["adgroup:a:g2"]
+    patch = {
+        "apply_to": {"level": "adgroup", "status": "ACTIVE", "name_excludes": "g1"}
+    }
+    assert [
+        h.subject_key for h in evaluate(rule(**patch), inputs(GROUPS, facts)).hits
+    ] == ["adgroup:a:g2"]
+
+
+def test_material_targets_from_ads():
+    use = {
+        "advertiser_id": "a",
+        "ad_remote_id": "x1",
+        "platform_material_id": "v1",
+        "ad_material_id": "m1",
+        "material_type": "VIDEO",
+    }
+    items = GROUPS + [ent("material", "a", "v1", uses=[use])]
+    facts = {"adgroup:a:g1": {"spend": Decimal("20")}}
+    result = evaluate(
+        rule(
+            action={"type": "PAUSE", "level": "material"},
+            schedule={"frequency": "1H", "window": "CONTINUOUS"},
+        ),
+        inputs(items, facts),
+    )
+    assert [t.key for t in result.hits[0].targets] == ["material:a:v1"]
