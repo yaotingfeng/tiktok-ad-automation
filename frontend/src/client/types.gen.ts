@@ -109,6 +109,56 @@ export type AccountPublic = {
 };
 
 /**
+ * AccountScope
+ */
+export type AccountScope = {
+    /**
+     * Mode
+     */
+    mode: 'ALL' | 'BC' | 'ACCOUNTS';
+    /**
+     * Bc Ids
+     */
+    bc_ids?: Array<string>;
+    /**
+     * Advertiser Ids
+     */
+    advertiser_ids?: Array<string>;
+};
+
+/**
+ * Action
+ */
+export type Action_Input = {
+    /**
+     * Type
+     */
+    type: 'PAUSE' | 'ENABLE' | 'BUDGET' | 'ROAS';
+    /**
+     * Level
+     */
+    level: 'campaign' | 'adgroup' | 'ad' | 'material';
+    adjustment?: Adjustment_Input | null;
+    frequency?: Frequency | null;
+};
+
+/**
+ * Action
+ */
+export type Action_Output = {
+    /**
+     * Type
+     */
+    type: 'PAUSE' | 'ENABLE' | 'BUDGET' | 'ROAS';
+    /**
+     * Level
+     */
+    level: 'campaign' | 'adgroup' | 'ad' | 'material';
+    adjustment?: Adjustment_Output | null;
+    frequency?: Frequency | null;
+};
+
+/**
  * AdDetailPublic
  */
 export type AdDetailPublic = {
@@ -148,6 +198,50 @@ export type AdDetailPublic = {
      * Observed At
      */
     observed_at: string;
+};
+
+/**
+ * Adjustment
+ */
+export type Adjustment_Input = {
+    /**
+     * Mode
+     */
+    mode: 'INCREASE' | 'DECREASE' | 'SET';
+    /**
+     * Value Type
+     */
+    value_type: 'AMOUNT' | 'PERCENT';
+    /**
+     * Value
+     */
+    value: number | string;
+    /**
+     * Limit
+     */
+    limit?: number | string | null;
+};
+
+/**
+ * Adjustment
+ */
+export type Adjustment_Output = {
+    /**
+     * Mode
+     */
+    mode: 'INCREASE' | 'DECREASE' | 'SET';
+    /**
+     * Value Type
+     */
+    value_type: 'AMOUNT' | 'PERCENT';
+    /**
+     * Value
+     */
+    value: string;
+    /**
+     * Limit
+     */
+    limit?: string | null;
 };
 
 /**
@@ -211,6 +305,36 @@ export type AppendVersionRequest = {
 };
 
 /**
+ * ApplyTo
+ */
+export type ApplyTo = {
+    /**
+     * Level
+     */
+    level: 'campaign' | 'adgroup' | 'ad' | 'material';
+    /**
+     * Status
+     */
+    status: 'ACTIVE' | 'PAUSED' | 'SELECTED';
+    /**
+     * Object Ids
+     */
+    object_ids?: Array<string>;
+    /**
+     * Drama Names
+     */
+    drama_names?: Array<string>;
+    /**
+     * Name Contains
+     */
+    name_contains?: string | null;
+    /**
+     * Name Excludes
+     */
+    name_excludes?: string | null;
+};
+
+/**
  * AudienceTargeting
  */
 export type AudienceTargeting = {
@@ -254,6 +378,66 @@ export type AuthorizationURL = {
      * Url
      */
     url: string;
+};
+
+/**
+ * AutomationSettingsPublic
+ */
+export type AutomationSettingsPublic = {
+    /**
+     * Schedule Timezone
+     */
+    schedule_timezone: string;
+    /**
+     * Paused
+     */
+    paused: boolean;
+    /**
+     * Feishu Configured
+     */
+    feishu_configured: boolean;
+    /**
+     * Feishu Enabled
+     */
+    feishu_enabled: boolean;
+    /**
+     * Feishu Url Hint
+     */
+    feishu_url_hint: string | null;
+    /**
+     * Feishu Has Secret
+     */
+    feishu_has_secret: boolean;
+};
+
+/**
+ * AutomationSettingsUpdate
+ */
+export type AutomationSettingsUpdate = {
+    /**
+     * Schedule Timezone
+     */
+    schedule_timezone: string;
+    /**
+     * Paused
+     */
+    paused: boolean;
+    /**
+     * Feishu Enabled
+     */
+    feishu_enabled: boolean;
+    /**
+     * Webhook Url
+     */
+    webhook_url?: string | null;
+    /**
+     * Secret
+     */
+    secret?: string | null;
+    /**
+     * Clear Feishu
+     */
+    clear_feishu?: boolean;
 };
 
 /**
@@ -407,6 +591,64 @@ export type CapabilityRefreshRequest = {
 };
 
 /**
+ * CatalogMetric
+ */
+export type CatalogMetric = {
+    /**
+     * Key
+     */
+    key: string;
+    /**
+     * Group
+     */
+    group: string;
+    /**
+     * Name Zh
+     */
+    name_zh: string;
+    /**
+     * Unit
+     */
+    unit: string;
+    /**
+     * Kind
+     */
+    kind: string;
+    /**
+     * Levels
+     */
+    levels: Array<string>;
+    /**
+     * Aggregations
+     */
+    aggregations: Array<string>;
+    /**
+     * Operators
+     */
+    operators: Array<string>;
+    /**
+     * Ranged
+     */
+    ranged: boolean;
+};
+
+/**
+ * CatalogPublic
+ */
+export type CatalogPublic = {
+    /**
+     * Metrics
+     */
+    metrics: Array<CatalogMetric>;
+    /**
+     * Action Levels
+     */
+    action_levels: {
+        [key: string]: Array<string>;
+    };
+};
+
+/**
  * ChannelConfiguration
  */
 export type ChannelConfiguration = {
@@ -488,6 +730,28 @@ export type CompleteUploadRequest = {
      * Parts
      */
     parts: Array<UploadedPart>;
+};
+
+/**
+ * Condition
+ */
+export type Condition = {
+    /**
+     * Metric
+     */
+    metric: string;
+    /**
+     * Range
+     */
+    range?: 'TODAY' | 'YESTERDAY' | 'PAST_3_DAYS' | 'PAST_5_DAYS' | 'PAST_7_DAYS' | 'LIFETIME' | null;
+    /**
+     * Operator
+     */
+    operator: 'GT' | 'LT' | 'BETWEEN' | 'EQ' | 'CONTAINS' | 'NOT_CONTAINS' | 'STARTS_WITH' | 'ENDS_WITH';
+    /**
+     * Values
+     */
+    values: Array<string>;
 };
 
 /**
@@ -1200,6 +1464,41 @@ export type DramaCandidate = {
 };
 
 /**
+ * DryRunPublic
+ */
+export type DryRunPublic = {
+    /**
+     * Checked Count
+     */
+    checked_count: number;
+    /**
+     * Hit Count
+     */
+    hit_count: number;
+    /**
+     * Skipped Count
+     */
+    skipped_count: number;
+    /**
+     * Skipped Accounts
+     */
+    skipped_accounts: Array<{
+        [key: string]: string;
+    }>;
+    /**
+     * Hits
+     */
+    hits: Array<HitPublic>;
+};
+
+/**
+ * DryRunRequest
+ */
+export type DryRunRequest = {
+    definition: RuleDefinition_Input;
+};
+
+/**
  * EntityRef
  */
 export type EntityRef = {
@@ -1279,6 +1578,42 @@ export type ExportPublic = {
      * Expires At
      */
     expires_at: string;
+};
+
+/**
+ * FeishuTestRequest
+ */
+export type FeishuTestRequest = {
+    /**
+     * Webhook Url
+     */
+    webhook_url?: string | null;
+    /**
+     * Secret
+     */
+    secret?: string | null;
+};
+
+/**
+ * Frequency
+ */
+export type Frequency = {
+    /**
+     * Type
+     */
+    type: 'ONCE' | 'EVERY_24H' | 'EVERY_48H' | 'EVERY_WEEK' | 'CUSTOM';
+    /**
+     * Window
+     */
+    window?: number | null;
+    /**
+     * Unit
+     */
+    unit?: 'MINUTE' | 'HOUR' | 'DAY' | null;
+    /**
+     * Count
+     */
+    count?: number | null;
 };
 
 /**
@@ -1570,6 +1905,52 @@ export type HistoricalReadReceipt = {
      * Requires New Preparation
      */
     requires_new_preparation?: true;
+};
+
+/**
+ * HitPublic
+ */
+export type HitPublic = {
+    /**
+     * Subject Key
+     */
+    subject_key: string;
+    /**
+     * Subject Label
+     */
+    subject_label: string;
+    /**
+     * Drama Name
+     */
+    drama_name: string | null;
+    /**
+     * Advertiser Id
+     */
+    advertiser_id: string | null;
+    /**
+     * Bc Id
+     */
+    bc_id: string | null;
+    /**
+     * Currency
+     */
+    currency: string | null;
+    /**
+     * Metrics
+     */
+    metrics: {
+        [key: string]: string;
+    };
+    /**
+     * Target Count
+     */
+    target_count: number;
+    /**
+     * Targets
+     */
+    targets: Array<{
+        [key: string]: unknown;
+    }>;
 };
 
 /**
@@ -3047,6 +3428,24 @@ export type MutationSpec = {
 };
 
 /**
+ * NotificationSetting
+ */
+export type NotificationSetting = {
+    /**
+     * Enabled
+     */
+    enabled?: boolean;
+    /**
+     * Timing
+     */
+    timing?: 'EVERY_RUN';
+    /**
+     * Notify Without Hits
+     */
+    notify_without_hits?: boolean;
+};
+
+/**
  * ObjectCounts
  */
 export type ObjectCounts = {
@@ -3785,6 +4184,28 @@ export type PatchDraftRequest = {
     link_config?: {
         [key: string]: unknown;
     } | null;
+};
+
+/**
+ * Period
+ */
+export type Period = {
+    /**
+     * Date Type
+     */
+    date_type: 'DAY' | 'WEEK' | 'MONTH';
+    /**
+     * Days
+     */
+    days?: Array<number>;
+    /**
+     * Start
+     */
+    start: string;
+    /**
+     * End
+     */
+    end: string;
 };
 
 /**
@@ -5048,6 +5469,315 @@ export type ResolvedLink = {
 };
 
 /**
+ * RuleCreate
+ */
+export type RuleCreate = {
+    /**
+     * Name
+     */
+    name: string;
+    definition: RuleDefinition_Input;
+    /**
+     * Enabled
+     */
+    enabled?: boolean;
+};
+
+/**
+ * RuleDefinition
+ */
+export type RuleDefinition_Input = {
+    accounts: AccountScope;
+    apply_to: ApplyTo;
+    /**
+     * Aggregation
+     */
+    aggregation: 'EACH' | 'DRAMA' | 'ALL';
+    /**
+     * Conditions
+     */
+    conditions: Array<Condition>;
+    action: Action_Input;
+    /**
+     * Mode
+     */
+    mode: 'AUTO' | 'CONFIRM' | 'NOTIFY';
+    /**
+     * Max Targets
+     */
+    max_targets?: number;
+    schedule: Schedule;
+    notification?: NotificationSetting;
+};
+
+/**
+ * RuleDefinition
+ */
+export type RuleDefinition_Output = {
+    accounts: AccountScope;
+    apply_to: ApplyTo;
+    /**
+     * Aggregation
+     */
+    aggregation: 'EACH' | 'DRAMA' | 'ALL';
+    /**
+     * Conditions
+     */
+    conditions: Array<Condition>;
+    action: Action_Output;
+    /**
+     * Mode
+     */
+    mode: 'AUTO' | 'CONFIRM' | 'NOTIFY';
+    /**
+     * Max Targets
+     */
+    max_targets?: number;
+    schedule: Schedule;
+    notification?: NotificationSetting;
+};
+
+/**
+ * RuleEnabled
+ */
+export type RuleEnabled = {
+    /**
+     * Enabled
+     */
+    enabled: boolean;
+};
+
+/**
+ * RulePage
+ */
+export type RulePage = {
+    /**
+     * Items
+     */
+    items: Array<RulePublic>;
+    /**
+     * Total
+     */
+    total: number;
+};
+
+/**
+ * RulePublic
+ */
+export type RulePublic = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Enabled
+     */
+    enabled: boolean;
+    /**
+     * Version
+     */
+    version: number;
+    definition: RuleDefinition_Output;
+    /**
+     * Created By
+     */
+    created_by: string;
+    /**
+     * Updated By
+     */
+    updated_by: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Updated At
+     */
+    updated_at: string;
+    /**
+     * Next Run At
+     */
+    next_run_at: string | null;
+    /**
+     * Last Run At
+     */
+    last_run_at: string | null;
+    last_run?: RunSummary | null;
+};
+
+/**
+ * RuleUpdate
+ */
+export type RuleUpdate = {
+    /**
+     * Name
+     */
+    name: string;
+    definition: RuleDefinition_Input;
+    /**
+     * Enabled
+     */
+    enabled?: boolean;
+    /**
+     * Expected Version
+     */
+    expected_version: number;
+};
+
+/**
+ * RunDetail
+ */
+export type RunDetail = {
+    run: RunListItem;
+    /**
+     * Hits
+     */
+    hits: Array<HitPublic>;
+};
+
+/**
+ * RunListItem
+ */
+export type RunListItem = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Rule Id
+     */
+    rule_id: string;
+    /**
+     * Slot At
+     */
+    slot_at: string;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Started At
+     */
+    started_at: string;
+    /**
+     * Finished At
+     */
+    finished_at: string | null;
+    /**
+     * Checked Count
+     */
+    checked_count: number;
+    /**
+     * Hit Count
+     */
+    hit_count: number;
+    /**
+     * Skipped Count
+     */
+    skipped_count: number;
+    /**
+     * Skipped Accounts
+     */
+    skipped_accounts: Array<{
+        [key: string]: string;
+    }>;
+    /**
+     * Error Code
+     */
+    error_code: string | null;
+    /**
+     * Notify Status
+     */
+    notify_status: string;
+    /**
+     * Notify Error
+     */
+    notify_error: string | null;
+    /**
+     * Rule Name
+     */
+    rule_name: string;
+};
+
+/**
+ * RunPage
+ */
+export type RunPage = {
+    /**
+     * Items
+     */
+    items: Array<RunListItem>;
+    /**
+     * Total
+     */
+    total: number;
+};
+
+/**
+ * RunSummary
+ */
+export type RunSummary = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Rule Id
+     */
+    rule_id: string;
+    /**
+     * Slot At
+     */
+    slot_at: string;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Started At
+     */
+    started_at: string;
+    /**
+     * Finished At
+     */
+    finished_at: string | null;
+    /**
+     * Checked Count
+     */
+    checked_count: number;
+    /**
+     * Hit Count
+     */
+    hit_count: number;
+    /**
+     * Skipped Count
+     */
+    skipped_count: number;
+    /**
+     * Skipped Accounts
+     */
+    skipped_accounts: Array<{
+        [key: string]: string;
+    }>;
+    /**
+     * Error Code
+     */
+    error_code: string | null;
+    /**
+     * Notify Status
+     */
+    notify_status: string;
+    /**
+     * Notify Error
+     */
+    notify_error: string | null;
+};
+
+/**
  * SavedViewCreate
  */
 export type SavedViewCreate = {
@@ -5100,6 +5830,32 @@ export type SavedViewPublic = {
      * Created At
      */
     created_at: string;
+};
+
+/**
+ * Schedule
+ */
+export type Schedule = {
+    /**
+     * Frequency
+     */
+    frequency: '30M' | '1H' | '2H' | '4H' | 'DAILY';
+    /**
+     * Daily At
+     */
+    daily_at?: string | null;
+    /**
+     * Window
+     */
+    window: 'CONTINUOUS' | 'CUSTOM' | 'ONCE';
+    /**
+     * Periods
+     */
+    periods?: Array<Period>;
+    /**
+     * Once At
+     */
+    once_at?: string | null;
 };
 
 /**
@@ -10924,6 +11680,429 @@ export type adsReportingGetAdSyncStatusResponses = {
 };
 
 export type adsReportingGetAdSyncStatusResponse = adsReportingGetAdSyncStatusResponses[keyof adsReportingGetAdSyncStatusResponses];
+
+export type automationRulesGetSettingsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/automation-settings';
+};
+
+export type automationRulesGetSettingsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type automationRulesGetSettingsError = automationRulesGetSettingsErrors[keyof automationRulesGetSettingsErrors];
+
+export type automationRulesGetSettingsResponses = {
+    /**
+     * Successful Response
+     */
+    200: AutomationSettingsPublic;
+};
+
+export type automationRulesGetSettingsResponse = automationRulesGetSettingsResponses[keyof automationRulesGetSettingsResponses];
+
+export type automationRulesPutSettingsData = {
+    body: AutomationSettingsUpdate;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/automation-settings';
+};
+
+export type automationRulesPutSettingsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type automationRulesPutSettingsError = automationRulesPutSettingsErrors[keyof automationRulesPutSettingsErrors];
+
+export type automationRulesPutSettingsResponses = {
+    /**
+     * Successful Response
+     */
+    200: AutomationSettingsPublic;
+};
+
+export type automationRulesPutSettingsResponse = automationRulesPutSettingsResponses[keyof automationRulesPutSettingsResponses];
+
+export type automationRulesTestFeishuData = {
+    body: FeishuTestRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/automation-settings/test-feishu';
+};
+
+export type automationRulesTestFeishuErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type automationRulesTestFeishuError = automationRulesTestFeishuErrors[keyof automationRulesTestFeishuErrors];
+
+export type automationRulesTestFeishuResponses = {
+    /**
+     * Successful Response
+     */
+    204: void;
+};
+
+export type automationRulesTestFeishuResponse = automationRulesTestFeishuResponses[keyof automationRulesTestFeishuResponses];
+
+export type automationRulesGetCatalogData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/automation-rules/catalog';
+};
+
+export type automationRulesGetCatalogErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type automationRulesGetCatalogError = automationRulesGetCatalogErrors[keyof automationRulesGetCatalogErrors];
+
+export type automationRulesGetCatalogResponses = {
+    /**
+     * Successful Response
+     */
+    200: CatalogPublic;
+};
+
+export type automationRulesGetCatalogResponse = automationRulesGetCatalogResponses[keyof automationRulesGetCatalogResponses];
+
+export type automationRulesListRulesData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/automation-rules';
+};
+
+export type automationRulesListRulesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type automationRulesListRulesError = automationRulesListRulesErrors[keyof automationRulesListRulesErrors];
+
+export type automationRulesListRulesResponses = {
+    /**
+     * Successful Response
+     */
+    200: RulePage;
+};
+
+export type automationRulesListRulesResponse = automationRulesListRulesResponses[keyof automationRulesListRulesResponses];
+
+export type automationRulesCreateRuleData = {
+    body: RuleCreate;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/automation-rules';
+};
+
+export type automationRulesCreateRuleErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type automationRulesCreateRuleError = automationRulesCreateRuleErrors[keyof automationRulesCreateRuleErrors];
+
+export type automationRulesCreateRuleResponses = {
+    /**
+     * Successful Response
+     */
+    201: RulePublic;
+};
+
+export type automationRulesCreateRuleResponse = automationRulesCreateRuleResponses[keyof automationRulesCreateRuleResponses];
+
+export type automationRulesDryRunData = {
+    body: DryRunRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/automation-rules/dry-run';
+};
+
+export type automationRulesDryRunErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type automationRulesDryRunError = automationRulesDryRunErrors[keyof automationRulesDryRunErrors];
+
+export type automationRulesDryRunResponses = {
+    /**
+     * Successful Response
+     */
+    200: DryRunPublic;
+};
+
+export type automationRulesDryRunResponse = automationRulesDryRunResponses[keyof automationRulesDryRunResponses];
+
+export type automationRulesDeleteRuleData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Rule Id
+         */
+        rule_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/automation-rules/{rule_id}';
+};
+
+export type automationRulesDeleteRuleErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type automationRulesDeleteRuleError = automationRulesDeleteRuleErrors[keyof automationRulesDeleteRuleErrors];
+
+export type automationRulesDeleteRuleResponses = {
+    /**
+     * Successful Response
+     */
+    204: void;
+};
+
+export type automationRulesDeleteRuleResponse = automationRulesDeleteRuleResponses[keyof automationRulesDeleteRuleResponses];
+
+export type automationRulesGetRuleData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Rule Id
+         */
+        rule_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/automation-rules/{rule_id}';
+};
+
+export type automationRulesGetRuleErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type automationRulesGetRuleError = automationRulesGetRuleErrors[keyof automationRulesGetRuleErrors];
+
+export type automationRulesGetRuleResponses = {
+    /**
+     * Successful Response
+     */
+    200: RulePublic;
+};
+
+export type automationRulesGetRuleResponse = automationRulesGetRuleResponses[keyof automationRulesGetRuleResponses];
+
+export type automationRulesUpdateRuleData = {
+    body: RuleUpdate;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Rule Id
+         */
+        rule_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/automation-rules/{rule_id}';
+};
+
+export type automationRulesUpdateRuleErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type automationRulesUpdateRuleError = automationRulesUpdateRuleErrors[keyof automationRulesUpdateRuleErrors];
+
+export type automationRulesUpdateRuleResponses = {
+    /**
+     * Successful Response
+     */
+    200: RulePublic;
+};
+
+export type automationRulesUpdateRuleResponse = automationRulesUpdateRuleResponses[keyof automationRulesUpdateRuleResponses];
+
+export type automationRulesSetEnabledData = {
+    body: RuleEnabled;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Rule Id
+         */
+        rule_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/automation-rules/{rule_id}/enabled';
+};
+
+export type automationRulesSetEnabledErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type automationRulesSetEnabledError = automationRulesSetEnabledErrors[keyof automationRulesSetEnabledErrors];
+
+export type automationRulesSetEnabledResponses = {
+    /**
+     * Successful Response
+     */
+    200: RulePublic;
+};
+
+export type automationRulesSetEnabledResponse = automationRulesSetEnabledResponses[keyof automationRulesSetEnabledResponses];
+
+export type automationRulesListRunsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: {
+        /**
+         * Rule Id
+         */
+        rule_id?: string | null;
+        /**
+         * Limit
+         */
+        limit?: number;
+        /**
+         * Offset
+         */
+        offset?: number;
+    };
+    url: '/api/tenants/{tenant_id}/automation-runs';
+};
+
+export type automationRulesListRunsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type automationRulesListRunsError = automationRulesListRunsErrors[keyof automationRulesListRunsErrors];
+
+export type automationRulesListRunsResponses = {
+    /**
+     * Successful Response
+     */
+    200: RunPage;
+};
+
+export type automationRulesListRunsResponse = automationRulesListRunsResponses[keyof automationRulesListRunsResponses];
+
+export type automationRulesGetRunData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Run Id
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/automation-runs/{run_id}';
+};
+
+export type automationRulesGetRunErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type automationRulesGetRunError = automationRulesGetRunErrors[keyof automationRulesGetRunErrors];
+
+export type automationRulesGetRunResponses = {
+    /**
+     * Successful Response
+     */
+    200: RunDetail;
+};
+
+export type automationRulesGetRunResponse = automationRulesGetRunResponses[keyof automationRulesGetRunResponses];
 
 export type strategiesGetStrategiesData = {
     body?: never;
