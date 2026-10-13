@@ -2107,3 +2107,4 @@
 - 跟进：筛选卡片、表格外层卡片与表格内层卡片去掉卡片自带的纵向内边距，页面区块间距由 16px 收为 12px，列表起始位置上移约 120px。
 - 用户确认第 6 条（推广目标显示"应用推广"）不改：接口字段即 `APP_PROMOTION` + `MINIS`。
 - 验证：tsc、biome、`bun run build` 通过；Playwright workspace 报表相关（ads-workspace/ads-reporting/ads-detail/ads-column-prefs/ads-metric-catalog/ad-management）61 通过，新增筛选标签逐级取消、导出自动下载、路径层级前缀、广告组详情无素材页签用例。未部署、未调用真实 TikTok。
+- 生产发布：`python3 deploy/local.py deploy`，批次 `20261013T154637-31cae6`，`8213b4a` → `1afdd69b`，phase=complete。受影响检查（前端 build/workspace/R2 验收）通过；同一停写窗口备份隔离恢复通过（PostgreSQL 一致、5 份凭据可解密），`latest.tar` 已替换；镜像 `sha256:d95b65fc…b309`，9 Pod Ready、Worker 7/7、Beat 1，HTTPS 与健康检查 200。开关与发布前一致：导入/清理/周期同步均为 true。无数据库迁移；未做真实 OAuth 或广告写入验收。
