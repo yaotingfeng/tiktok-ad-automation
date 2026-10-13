@@ -63,6 +63,7 @@ def _stored_value(value: Decimal | str | None) -> str | None:
 def _public_item(item: ExpandedItem) -> ManagementItemPublic:
     return ManagementItemPublic(
         ref=item.ref,
+        name=item.name,
         material_use=item.material_use,
         # ManagementItemPublic reserves original_value for numeric fields;
         # status snapshots remain in the durable capability/configuration

@@ -2366,6 +2366,10 @@ export type ManagementCounts = {
  */
 export type ManagementItemPublic = {
     ref: EntityRef;
+    /**
+     * Name
+     */
+    name?: string | null;
     material_use?: MaterialUseRef | null;
     /**
      * Original Value

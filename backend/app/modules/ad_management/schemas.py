@@ -104,6 +104,8 @@ class ManagementItemPublic(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     ref: EntityRef
+    # 对象名称只用于界面展示；任务项不保存名称，此时为空。
+    name: str | None = None
     material_use: MaterialUseRef | None = None
     original_value: Decimal | None = None
     final_value: Decimal | str | None = None

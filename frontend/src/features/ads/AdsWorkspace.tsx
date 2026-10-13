@@ -81,6 +81,10 @@ export function AdsWorkspace() {
   const [previewOpen, setPreviewOpen] = useState(false)
   const [managementAction, setManagementAction] =
     useState<ManagementAction | null>(null)
+  // 发起动作时的维度随动作一起记下，预览面板据此说明实际修改的层级。
+  const [managementDimension, setManagementDimension] = useState<
+    AdsSearch["dimension"]
+  >(applied.dimension)
   const scopeRef = useRef(`${tenantId ?? ""}:${currentBcId ?? ""}`)
   const selectionRequestScopeRef = useRef<string | null>(null)
 
@@ -433,6 +437,7 @@ export function AdsWorkspace() {
     if (roleReadonly) return
     runAction(() => {
       setManagementAction(next)
+      setManagementDimension(applied.dimension)
       setPreviewSession((current) => current + 1)
       selectionRequestScopeRef.current = scopeRef.current
       selectionMutation.mutate(rowKeys, {
@@ -691,6 +696,7 @@ export function AdsWorkspace() {
           bcId={bc.bc_id}
           selection={frozenSelection}
           action={managementAction}
+          dimension={managementDimension}
           open={previewOpen}
           onOpenChange={setPreviewOpen}
         />

@@ -5,6 +5,25 @@ const selectionId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 const previewId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 const taskId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 
+const CAMPAIGN_REF = {
+  tenant_id: TENANT,
+  advertiser_id: "adv-1",
+  kind: "campaign",
+  remote_id: "campaign-1",
+}
+const GROUP_REF = {
+  tenant_id: TENANT,
+  advertiser_id: "adv-1",
+  kind: "adgroup",
+  remote_id: "group-zero",
+}
+const PARENT_REF = {
+  tenant_id: TENANT,
+  advertiser_id: "adv-1",
+  kind: "campaign",
+  remote_id: "campaign-paused",
+}
+
 const route = {
   tenant_id: TENANT,
   bc_id: BC_A,
@@ -17,7 +36,12 @@ const route = {
 
 async function managementBoundary(
   page: Parameters<typeof adsBoundary>[0],
-  options: { viewer?: boolean; unsupported?: boolean } = {},
+  options: {
+    viewer?: boolean
+    unsupported?: boolean
+    blockedParent?: boolean
+    previewError?: { status: number; code: string; message: string }
+  } = {},
 ) {
   await adsBoundary(page)
   const previewBodies: Array<Record<string, unknown>> = []
@@ -67,7 +91,51 @@ async function managementBoundary(
         mutation?: { excluded_refs?: unknown[]; include_parents?: unknown[] }
       }
       previewBodies.push(body)
+      if (options.previewError)
+        return handler.fulfill({
+          status: options.previewError.status,
+          json: {
+            code: options.previewError.code,
+            message: options.previewError.message,
+            retryable: false,
+          },
+        })
       const excluded = body.mutation?.excluded_refs ?? []
+      const parents = body.mutation?.include_parents ?? []
+      // 默认选中的系列是可修改项；不可用、暂停上级两种场景各自追加对应行。
+      const items: Array<Record<string, unknown>> = [
+        {
+          ref: CAMPAIGN_REF,
+          name: "嘉书-总裁归来-测试",
+          original_value: "20",
+          final_value: "25",
+          execution_result: "PENDING",
+          reason: null,
+        },
+      ]
+      if (options.unsupported && excluded.length === 0)
+        items.push({
+          ref: GROUP_REF,
+          name: "预算为零的广告组",
+          original_value: null,
+          final_value: null,
+          execution_result: "UNSUPPORTED",
+          reason: "configuration_invalid",
+        })
+      if (options.unsupported && excluded.length > 0)
+        items.push({
+          ref: GROUP_REF,
+          execution_result: "UNSUPPORTED",
+          reason: "excluded_ref",
+        })
+      if (options.blockedParent)
+        items.push({
+          ref: PARENT_REF,
+          name: "暂停中的上级系列",
+          final_value: "ENABLE",
+          execution_result: parents.length ? "PENDING" : "NO_CHANGE",
+          reason: parents.length ? null : "parent_disabled",
+        })
       return handler.fulfill({
         status: 201,
         json: {
@@ -77,28 +145,15 @@ async function managementBoundary(
           expires_at: "2099-01-01T00:05:00Z",
           bc_id: BC_A,
           route,
-          items:
-            options.unsupported && excluded.length === 0
-              ? [
-                  {
-                    ref: {
-                      tenant_id: TENANT,
-                      advertiser_id: "adv-1",
-                      kind: "campaign",
-                      remote_id: "campaign-1",
-                    },
-                    original_value: "20",
-                    final_value: "25",
-                    execution_result: "UNSUPPORTED",
-                    reason: "unsupported",
-                  },
-                ]
-              : [],
+          items,
           counts: {
             selected: 1,
-            targets: 1,
+            targets: items.filter((i) => i.execution_result === "PENDING")
+              .length,
             linked: 0,
-            unsupported: options.unsupported && excluded.length === 0 ? 1 : 0,
+            unsupported: items.filter(
+              (i) => i.execution_result === "UNSUPPORTED",
+            ).length,
           },
         },
       })
@@ -204,8 +259,13 @@ test.describe("广告管理工作台", () => {
       mode: "set",
       value: "DISABLE",
     })
-    await expect(page.getByText(`连接：${route.connection_id}`)).toBeVisible()
+    // 面板先说明改哪一层，再给出“选中 → 将修改”的摘要和带名称的明细。
+    await expect(page.getByText("只暂停所选的系列本身")).toBeVisible()
+    await expect(
+      page.getByText("已选 1 个系列 → 将修改 1 个对象（系列 1 个）"),
+    ).toBeVisible()
     await expect(page.getByText("账户：adv-1")).toBeVisible()
+    await expect(page.getByText("将暂停", { exact: true })).toBeVisible()
     // 后台新发布只提示，不关闭用户正在确认的冻结管理预览。
     await page.route("**/ad-sync-status?*", (handler) =>
       handler.fulfill({
@@ -226,18 +286,13 @@ test.describe("广告管理工作台", () => {
     await page.clock.install()
     await page.clock.fastForward(31_000)
     await expect(page.getByRole("heading", { name: "批量暂停" })).toBeVisible()
-    await page.getByRole("checkbox", { name: "包括父级联动" }).click()
-    await expect.poll(() => previewBodies.length).toBe(2)
-    expect(previewBodies[1]?.mutation?.include_parents).toEqual([
-      {
-        tenant_id: TENANT,
-        advertiser_id: "adv-1",
-        kind: "campaign",
-        remote_id: "campaign-1",
-      },
-    ])
+    // 暂停不涉及上级，不出现上级勾选，也不会带 include_parents。
+    await expect(
+      page.getByRole("checkbox", { name: "同时启用暂停中的上级" }),
+    ).toHaveCount(0)
+    expect(previewBodies[0]?.mutation?.include_parents).toEqual([])
     await expect(page.getByText("五分钟内有效")).toBeVisible()
-    await page.getByRole("button", { name: "提交管理任务" }).click()
+    await page.getByRole("button", { name: "提交，修改 1 个对象" }).click()
     await expect(page).toHaveURL(
       new RegExp(`/tenants/${TENANT}/ad-management-tasks/${taskId}`),
     )
@@ -288,22 +343,17 @@ test.describe("广告管理工作台", () => {
     await page.getByRole("button", { name: "修改预算" }).click()
     await expect(page.getByRole("heading", { name: "修改预算" })).toBeVisible()
     await page.getByRole("textbox", { name: "管理新值" }).fill("25")
-    await expect(page.getByText(/排除不可用项后才可提交/)).toBeVisible()
+    await expect(page.getByText("跳过无法修改的 1 项")).toBeVisible()
     await expect(
-      page.getByRole("button", { name: "提交管理任务" }),
-    ).toBeDisabled()
-    await page.getByRole("checkbox", { name: "排除不可用项" }).click()
+      page.getByText("当前预算为 0 或无效，无法在此基础上修改"),
+    ).toBeVisible()
+    await expect(page.getByRole("button", { name: /^提交/ })).toBeDisabled()
+    await page.getByRole("checkbox", { name: "跳过无法修改的对象" }).click()
     await expect.poll(() => previewBodies.length).toBe(2)
-    expect(previewBodies[1]?.mutation?.excluded_refs).toEqual([
-      {
-        tenant_id: TENANT,
-        advertiser_id: "adv-1",
-        kind: "campaign",
-        remote_id: "campaign-1",
-      },
-    ])
+    expect(previewBodies[1]?.mutation?.excluded_refs).toEqual([GROUP_REF])
+    await expect(page.getByText("已跳过，不会提交")).toBeVisible()
     await expect(
-      page.getByRole("button", { name: "提交管理任务" }),
+      page.getByRole("button", { name: "提交，修改 1 个对象" }),
     ).toBeEnabled()
   })
 
@@ -339,6 +389,59 @@ test.describe("广告管理工作台", () => {
     await expect(page.getByRole("combobox", { name: "操作维度" })).toHaveCount(
       0,
     )
+  })
+
+  test("启用时列出暂停中的上级，勾选后把这些上级一起提交", async ({ page }) => {
+    const { previewBodies } = await managementBoundary(page, {
+      blockedParent: true,
+    })
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "系列", exact: true }).click()
+    await page
+      .getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" })
+      .check()
+    await page.getByRole("button", { name: "启用", exact: true }).click()
+    await expect(page.getByText("有 1 个上级处于暂停状态")).toBeVisible()
+    await expect(page.getByText("系列 · 暂停中的上级系列")).toBeVisible()
+    await expect(
+      page.getByRole("button", { name: "提交，修改 1 个对象" }),
+    ).toBeEnabled()
+    await page.getByRole("checkbox", { name: "同时启用暂停中的上级" }).click()
+    await expect.poll(() => previewBodies.length).toBe(2)
+    // 传给后端的是暂停中的上级本身，而不是用户选中的对象。
+    expect(previewBodies[1]?.mutation?.include_parents).toEqual([PARENT_REF])
+    // 上级变成待修改项后提示与勾选仍保留，用户可以随时取消。
+    await expect(
+      page.getByRole("checkbox", { name: "同时启用暂停中的上级" }),
+    ).toBeChecked()
+    await expect(
+      page.getByRole("button", { name: "提交，修改 2 个对象" }),
+    ).toBeEnabled()
+  })
+
+  test("预览被拒绝时显示服务器给出的原因", async ({ page }) => {
+    const message =
+      "同一系列的广告组目标 ROAS 必须一致；这些广告组原值不同，按百分比或加减调整会得到不同结果，请改用“设为”统一数值"
+    await managementBoundary(page, {
+      previewError: {
+        status: 409,
+        code: "management_roas_series_conflict",
+        message,
+      },
+    })
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "系列", exact: true }).click()
+    await page
+      .getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" })
+      .check()
+    await page.getByRole("button", { name: "修改目标 ROAS" }).click()
+    await expect(
+      page.getByText(
+        "目标 ROAS 只设置在广告组上，系列和广告没有单独的目标 ROAS。",
+      ),
+    ).toBeVisible()
+    await page.getByRole("textbox", { name: "管理新值" }).fill("10")
+    await expect(page.getByText(message)).toBeVisible()
   })
 
   test("修改目标 ROAS 支持按百分比增加，数值为空不生成预览", async ({

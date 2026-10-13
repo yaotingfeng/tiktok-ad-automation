@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
@@ -52,6 +52,8 @@ class ExpandedItem:
     grouping_revision: int
     capability: dict[str, Any]
     linked: bool = False
+    # 目录中的对象名称，仅供预览展示，让用户看清“改的是哪一个”。
+    name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -180,7 +182,50 @@ def _material_row(session: Session, use: MaterialUseRef) -> AdMaterialReference 
     return session.exec(statement.execution_options(populate_existing=True)).first()
 
 
-def _budget_owner(
+def _child_adgroups(
+    session: Session,
+    *,
+    context: TenantContext,
+    campaign: AdObject,
+    route: Any,
+    observed_before: datetime,
+) -> list[AdObject]:
+    """读取系列下在冻结选择之前已发布的广告组。
+
+    目标 ROAS 同步到整个系列、组预算系列的预算落在各广告组，都需要从系列
+    找到它的广告组；只取冻结时刻之前观察到的行，冻结后新建的组不会被吸收。
+    """
+    return list(
+        session.exec(
+            select(AdObject).where(
+                AdObject.tenant_id == context.tenant_id,
+                AdObject.advertiser_id == campaign.advertiser_id,
+                AdObject.kind == "adgroup",
+                AdObject.parent_kind == "campaign",
+                AdObject.parent_remote_id == campaign.remote_id,
+                AdObject.source_connection_id == route.connection_id,
+                AdObject.source_channel == route.channel,
+                AdObject.observed_at <= observed_before,
+            ).execution_options(populate_existing=True)
+        ).all()
+    )
+
+
+def _campaign_owns_budget(campaign: AdObject) -> bool:
+    """判断预算是否由系列持有。
+
+    TikTok 的两种预算策略：开启系列预算优化（CBO，``budget_optimize_on=true``）
+    时钱在系列上；关闭时系列预算为 0、``budget_mode`` 为不限，钱在各广告组上。
+    平台没返回开关时，以系列预算模式是否为“不限”判断。
+    """
+    config = campaign.configuration or {}
+    optimize = config.get("budget_optimize_on")
+    if isinstance(optimize, bool):
+        return optimize
+    return str(config.get("budget_mode") or "").upper() != "BUDGET_MODE_INFINITE"
+
+
+def _budget_owners(
     session: Session,
     *,
     context: TenantContext,
@@ -188,39 +233,48 @@ def _budget_owner(
     row: AdObject,
     objects: dict[tuple[UUID, str, str, str], AdObject],
     route: Any,
-) -> AdObject | None:
-    """Resolve the actual budget owner without searching for new descendants.
+    observed_before: datetime,
+) -> list[AdObject]:
+    """返回所选对象的预算实际持有者。
 
-    TikTok may expose campaign budget mode on either the campaign or group row;
-    explicit ``budget_owner``/``budget_mode`` values win, otherwise a group with
-    a local budget owns itself and a group without one inherits its campaign.
+    - 选中系列：系列预算策略改系列；组预算策略改它的全部广告组。
+    - 选中广告组或广告：所属系列持有预算时改系列，否则改该广告组。
     """
-    current = row
-    visited: set[tuple[UUID, str, str, str]] = set()
-    while current is not None and _ref_key(current.ref) not in visited:
-        visited.add(_ref_key(current.ref))
-        if current.kind == "campaign":
-            return current
-        config = current.configuration or {}
-        owner = str(config.get("budget_owner") or "").upper()
-        mode = str(config.get("budget_mode") or "").upper()
-        if current.kind == "adgroup" and (
-            owner in {"ADGROUP", "AD_GROUP", "GROUP"}
-            or "ADGROUP" in mode
-            or "AD_GROUP" in mode
-            or ("budget" in config and owner not in {"CAMPAIGN", "SERIES"} and "CAMPAIGN" not in mode)
-        ):
-            return current
-        parent = current.parent_ref
-        if parent is None:
-            return current if current.kind in {"campaign", "adgroup"} else None
-        next_row = objects.get(_ref_key(parent))
-        if next_row is None:
-            next_row = _object_for_ref(session, context=context, bc_id=bc_id, ref=parent, route=route)
-            if next_row is not None:
-                objects[_ref_key(parent)] = next_row
-        current = next_row
-    return None
+    if row.kind == "campaign":
+        if _campaign_owns_budget(row):
+            return [row]
+        groups = _child_adgroups(
+            session,
+            context=context,
+            campaign=row,
+            route=route,
+            observed_before=observed_before,
+        )
+        for group in groups:
+            objects[_ref_key(group.ref)] = group
+        return groups
+    group: AdObject | None = row if row.kind == "adgroup" else None
+    if row.kind == "ad" and row.parent_ref is not None:
+        group = objects.get(_ref_key(row.parent_ref))
+        if group is None:
+            group = _object_for_ref(
+                session, context=context, bc_id=bc_id, ref=row.parent_ref, route=route
+            )
+            if group is not None:
+                objects[_ref_key(group.ref)] = group
+    if group is None or group.kind != "adgroup":
+        return []
+    campaign = _campaign_ancestor(
+        session,
+        context=context,
+        bc_id=bc_id,
+        row=group,
+        objects=objects,
+        route=route,
+    )
+    if campaign is not None and _campaign_owns_budget(campaign):
+        return [campaign]
+    return [group]
 
 
 def _current_value(
@@ -607,19 +661,13 @@ def _expand(
             objects[_ref_key(campaign.ref)] = campaign
         if mutation.field == "roas":
             for campaign in account_campaigns:
-                siblings = session.exec(
-                    select(AdObject).where(
-                        AdObject.tenant_id == context.tenant_id,
-                        AdObject.advertiser_id == campaign.advertiser_id,
-                        AdObject.kind == "adgroup",
-                        AdObject.parent_kind == "campaign",
-                        AdObject.parent_remote_id == campaign.remote_id,
-                        AdObject.source_connection_id == route.connection_id,
-                        AdObject.source_channel == route.channel,
-                        AdObject.observed_at <= selection_record.created_at,
-                    ).execution_options(populate_existing=True)
-                ).all()
-                for sibling in siblings:
+                for sibling in _child_adgroups(
+                    session,
+                    context=context,
+                    campaign=campaign,
+                    route=route,
+                    observed_before=selection_record.created_at,
+                ):
                     objects[_ref_key(sibling.ref)] = sibling
 
     # Smart+ ROAS is a series operation. Read only existing group rows from the
@@ -652,19 +700,13 @@ def _expand(
             if campaign is not None:
                 campaigns[_ref_key(campaign.ref)] = campaign
         for campaign in campaigns.values():
-            siblings = session.exec(
-                select(AdObject).where(
-                    AdObject.tenant_id == context.tenant_id,
-                    AdObject.advertiser_id == campaign.advertiser_id,
-                    AdObject.kind == "adgroup",
-                    AdObject.parent_kind == "campaign",
-                    AdObject.parent_remote_id == campaign.remote_id,
-                    AdObject.source_connection_id == route.connection_id,
-                    AdObject.source_channel == route.channel,
-                    AdObject.observed_at <= selection_record.created_at,
-                ).execution_options(populate_existing=True)
-            ).all()
-            for sibling in siblings:
+            for sibling in _child_adgroups(
+                session,
+                context=context,
+                campaign=campaign,
+                route=route,
+                observed_before=selection_record.created_at,
+            ):
                 objects[_ref_key(sibling.ref)] = sibling
     commands: list[ManagementCommand] = []
     command_by_ref: dict[tuple[Any, ...], ManagementCommand] = {}
@@ -808,12 +850,26 @@ def _expand(
                 ExpandedItem(row.ref, use, None, None, "configuration_missing", "UNSUPPORTED", None, row.parent_ref, grouping_revision, capability, linked)
             )
             return
-        if field not in {"status", "material_status"}:
-            current = _number(current, field=field, ref=row.ref)
         if field in {"status", "material_status"}:
             final: Decimal | str = mutation.value
         else:
-            final = _final_value(_number(current, field=field, ref=row.ref), mutation)
+            # 平台当前值为 0 或非数字（例如组预算系列的系列预算固定为 0）、
+            # 或减少后不再为正数时，只把这一条标为不可用并说明原因，
+            # 其余对象仍可正常预览和提交。
+            try:
+                current = _number(current, field=field, ref=row.ref)
+            except DomainError:
+                items.append(
+                    ExpandedItem(row.ref, use, None, None, "configuration_invalid", "UNSUPPORTED", None, row.parent_ref, grouping_revision, capability, linked)
+                )
+                return
+            try:
+                final = _final_value(current, mutation)
+            except DomainError:
+                items.append(
+                    ExpandedItem(row.ref, use, current, None, "final_value_invalid", "UNSUPPORTED", None, row.parent_ref, grouping_revision, capability, linked)
+                )
+                return
         if not capability_ok:
             items.append(
                 ExpandedItem(row.ref, use, current, final, "management_capability_unverified", "UNSUPPORTED", None, row.parent_ref, grouping_revision, capability, linked)
@@ -922,10 +978,18 @@ def _expand(
         elif mutation.field == "budget":
             owners: dict[tuple[Any, ...], AdObject] = {}
             for row in candidate_rows:
-                owner = _budget_owner(session, context=context, bc_id=bc_id, row=row, objects=objects, route=route)
-                if owner is not None:
+                found = _budget_owners(
+                    session,
+                    context=context,
+                    bc_id=bc_id,
+                    row=row,
+                    objects=objects,
+                    route=route,
+                    observed_before=selection_record.created_at,
+                )
+                for owner in found:
                     owners[_ref_key(owner.ref)] = owner
-                else:
+                if not found:
                     items.append(
                         ExpandedItem(
                             row.ref,
@@ -1047,7 +1111,13 @@ def _expand(
             )
             by_series[series].add(str(item.final_value))
         if any(len(values) > 1 for values in by_series.values()):
-            raise DomainError("config_conflict", "同系列不同最终 ROAS，预览拒绝")
+            raise DomainError(
+                "management_roas_series_conflict", "同系列不同最终 ROAS，预览拒绝"
+            )
+
+    # 预览只展示目录里已有的名称；名称不参与写入，查不到时界面回退到对象 ID。
+    names = {_ref_key(row.ref): row.name for row in objects.values()}
+    items = [replace(item, name=names.get(_ref_key(item.ref))) for item in items]
 
     return Expansion(
         refs,

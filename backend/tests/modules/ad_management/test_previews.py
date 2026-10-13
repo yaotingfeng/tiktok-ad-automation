@@ -121,8 +121,9 @@ def test_same_series_divergent_roas_rejected(session, management_env):
     _cap(session, context, bc, route, account.advertiser_id, "update_roas", "adgroup")
     session.flush()
     _set_selection(selection, [a, b])
-    with pytest.raises(DomainError, match="最终 ROAS"):
+    with pytest.raises(DomainError, match="最终 ROAS") as error:
         prepare_preview(session, context, bc.bc_id, selection.id, MutationSpec(field="roas", mode="increase_percent", value=10))
+    assert error.value.code == "management_roas_series_conflict"
 
 
 def test_source_fence_and_grouping_revision_are_frozen(session, management_env):
@@ -228,8 +229,9 @@ def test_smart_plus_series_expands_only_preselection_siblings_and_conflicts(sess
     sibling_row.configuration = {"roas_bid": "1.80"}
     session.flush()
     _set_selection(selection, [selected])
-    with pytest.raises(DomainError, match="最终 ROAS"):
+    with pytest.raises(DomainError, match="最终 ROAS") as error:
         prepare_preview(session, context, bc.bc_id, selection.id, MutationSpec(field="roas", mode="increase_percent", value=10))
+    assert error.value.code == "management_roas_series_conflict"
 
 
 def test_campaign_selection_expands_existing_smart_plus_groups(session, management_env):
@@ -421,3 +423,126 @@ def test_missing_material_reference_cannot_fallback_to_ad_status(session, manage
     assert preview.items[0].reason == "material_reference_missing"
     assert preview.items[0].execution_result == "UNSUPPORTED"
     assert preview.counts.targets == 0
+
+
+def test_group_budget_campaign_selection_targets_its_adgroups(session, management_env):
+    """组预算策略的系列预算固定为 0，选中系列改预算应落到它的广告组。"""
+    context, bc, account, route, selection = management_env
+    campaign = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "group-budget-series")
+    group_a = EntityRef(context.tenant_id, account.advertiser_id, "adgroup", "group-budget-a")
+    group_b = EntityRef(context.tenant_id, account.advertiser_id, "adgroup", "group-budget-b")
+    campaign_config = {"budget": 0, "budget_optimize_on": False, "budget_mode": "BUDGET_MODE_INFINITE"}
+    # 只有冻结选择之前已观察到的广告组才属于本次影响范围。
+    frozen_before = selection.created_at - timedelta(seconds=1)
+    late = EntityRef(context.tenant_id, account.advertiser_id, "adgroup", "group-budget-late")
+    session.add_all([
+        _row(campaign, configuration=campaign_config, connection_id=route.connection_id),
+        _row(group_a, parent=campaign, configuration={"budget": "50"}, connection_id=route.connection_id, observed_at=frozen_before),
+        _row(group_b, parent=campaign, configuration={"budget": "80"}, connection_id=route.connection_id, observed_at=frozen_before),
+        _row(late, parent=campaign, configuration={"budget": "90"}, connection_id=route.connection_id),
+    ])
+    _cap(session, context, bc, route, account.advertiser_id, "update_budget", "adgroup")
+    session.flush()
+    _set_selection(selection, [campaign])
+    preview = prepare_preview(
+        session, context, bc.bc_id, selection.id,
+        MutationSpec(field="budget", mode="increase_percent", value=Decimal("10")),
+    )
+    pending = {item.ref.remote_id: item for item in preview.items if item.execution_result == "PENDING"}
+    assert set(pending) == {"group-budget-a", "group-budget-b"}
+    assert pending["group-budget-a"].final_value == Decimal("55")
+    assert pending["group-budget-b"].final_value == Decimal("88")
+    assert pending["group-budget-a"].name == "object-group-budget-a"
+    selected = [item for item in preview.items if item.ref == campaign]
+    assert selected[0].reason == "linked_impact"
+    assert preview.counts.targets == 2
+
+
+def test_adgroup_budget_follows_campaign_budget_strategy(session, management_env):
+    """广告组即便返回 budget 字段，所属系列开启 CBO 时预算仍归系列。"""
+    context, bc, account, route, selection = management_env
+    cbo = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "cbo-series")
+    cbo_group = EntityRef(context.tenant_id, account.advertiser_id, "adgroup", "cbo-group")
+    split = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "split-series")
+    split_group = EntityRef(context.tenant_id, account.advertiser_id, "adgroup", "split-group")
+    session.add_all([
+        _row(cbo, configuration={"budget": "300", "budget_optimize_on": True}, connection_id=route.connection_id),
+        _row(cbo_group, parent=cbo, configuration={"budget": "0"}, connection_id=route.connection_id),
+        _row(split, configuration={"budget": 0, "budget_optimize_on": False}, connection_id=route.connection_id),
+        _row(split_group, parent=split, configuration={"budget": "40"}, connection_id=route.connection_id),
+    ])
+    _cap(session, context, bc, route, account.advertiser_id, "update_budget", "campaign")
+    _cap(session, context, bc, route, account.advertiser_id, "update_budget", "adgroup")
+    session.flush()
+    _set_selection(selection, [cbo_group, split_group])
+    preview = prepare_preview(
+        session, context, bc.bc_id, selection.id,
+        MutationSpec(field="budget", mode="set", value=Decimal("120")),
+    )
+    targets = {
+        (item.ref.kind, item.ref.remote_id)
+        for item in preview.items
+        if item.execution_result == "PENDING"
+    }
+    assert targets == {("campaign", "cbo-series"), ("adgroup", "split-group")}
+
+
+def test_invalid_current_or_final_budget_marks_only_that_item(session, management_env):
+    """单个对象的当前值或计算结果非法时只标记该条，其余对象照常预览。"""
+    context, bc, account, route, selection = management_env
+    zero = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "zero-budget-series")
+    small = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "small-budget-series")
+    large = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "large-budget-series")
+    session.add_all([
+        _row(zero, configuration={"budget": "0", "budget_optimize_on": True}, connection_id=route.connection_id),
+        _row(small, configuration={"budget": "20", "budget_optimize_on": True}, connection_id=route.connection_id),
+        _row(large, configuration={"budget": "200", "budget_optimize_on": True}, connection_id=route.connection_id),
+    ])
+    _cap(session, context, bc, route, account.advertiser_id, "update_budget", "campaign")
+    session.flush()
+    _set_selection(selection, [zero, small, large])
+    preview = prepare_preview(
+        session, context, bc.bc_id, selection.id,
+        MutationSpec(field="budget", mode="subtract", value=Decimal("50")),
+    )
+    by_id = {item.ref.remote_id: item for item in preview.items}
+    assert by_id["zero-budget-series"].reason == "configuration_invalid"
+    assert by_id["small-budget-series"].reason == "final_value_invalid"
+    assert by_id["large-budget-series"].execution_result == "PENDING"
+    assert by_id["large-budget-series"].final_value == Decimal("150")
+    assert preview.counts.targets == 1 and preview.counts.unsupported == 2
+
+
+def test_enable_reports_disabled_parent_and_includes_it_when_asked(session, management_env):
+    """启用下级时暂停的上级只提示；把提示的上级作为 include_parents 传回即一起启用。"""
+    context, bc, account, route, selection = management_env
+    campaign = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "paused-series")
+    group = EntityRef(context.tenant_id, account.advertiser_id, "adgroup", "paused-series-group")
+    session.add_all([
+        _row(campaign, status="DISABLE", connection_id=route.connection_id),
+        _row(group, parent=campaign, status="DISABLE", connection_id=route.connection_id),
+    ])
+    _cap(session, context, bc, route, account.advertiser_id, "set_status", "adgroup")
+    _cap(session, context, bc, route, account.advertiser_id, "set_status", "campaign")
+    session.flush()
+    _set_selection(selection, [group])
+    first = prepare_preview(
+        session, context, bc.bc_id, selection.id,
+        MutationSpec(field="status", mode="set", value="ENABLE"),
+    )
+    blocked = [item for item in first.items if item.reason == "parent_disabled"]
+    assert [item.ref for item in blocked] == [campaign]
+    assert blocked[0].name == "object-paused-series"
+    assert first.counts.targets == 1
+    second = prepare_preview(
+        session, context, bc.bc_id, selection.id,
+        MutationSpec(field="status", mode="set", value="ENABLE", include_parents=(campaign,)),
+    )
+    pending = {item.ref.remote_id for item in second.items if item.execution_result == "PENDING"}
+    assert pending == {"paused-series", "paused-series-group"}
+    with pytest.raises(DomainError) as error:
+        prepare_preview(
+            session, context, bc.bc_id, selection.id,
+            MutationSpec(field="status", mode="set", value="ENABLE", include_parents=(group,)),
+        )
+    assert error.value.code == "management_parent_invalid"
