@@ -661,6 +661,22 @@ export async function adsBoundary(
       }
       return route.fulfill({ headers, json: [] })
     }
+    // 导出：创建后先返回排队，再次查询即完成，下载返回 CSV 文本。
+    if (path.endsWith(`/tenants/${TENANT}/report-exports`))
+      return route.fulfill({
+        headers,
+        json: { id: "export-1", status: "QUEUED", coverage: {} },
+      })
+    if (path.endsWith("/report-exports/export-1"))
+      return route.fulfill({
+        headers,
+        json: { id: "export-1", status: "COMPLETE", coverage: {} },
+      })
+    if (path.endsWith("/report-exports/export-1/download"))
+      return route.fulfill({
+        headers: { ...headers, "Content-Type": "text/csv" },
+        body: "名称,消耗\n甲账户,100.00\n",
+      })
     if (path.endsWith(`/tenants/${TENANT}/ads/trend`)) {
       if (options.trendCalls) options.trendCalls.count++
       // 小时点是 UTC 的 ISO 分钟串，与后端一致。

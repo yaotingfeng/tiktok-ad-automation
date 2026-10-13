@@ -1,7 +1,5 @@
 import { AlertCircle } from "lucide-react"
 import type { MetricDefinitionPublic } from "@/client"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { formatMetric } from "./metricCatalog"
 
 type SummaryBucket = {
@@ -17,27 +15,20 @@ type AdsSummaryProps = {
     incomplete_dates?: string[]
   }
   catalog: MetricDefinitionPublic[]
-  activeMetric: string
-  onSelectMetric: (key: string) => void
 }
 
-// 汇总卡片的 7 个指标（规格 §3.3）
+// 汇总卡片只放 6 个核心指标，一行排满；页面以列表为主，卡片保持紧凑。
+// 第 N 天 ROAS 在回收窗口内会持续增长，不适合做顶部汇总，只在表格列里看。
 const SUMMARY_KEYS = [
   "spend",
   "revenue_total",
   "roas_total",
-  "roas_d0",
   "impressions",
   "ctr",
   "cpm",
 ]
 
-export function AdsSummary({
-  summary,
-  catalog,
-  activeMetric,
-  onSelectMetric,
-}: AdsSummaryProps) {
+export function AdsSummary({ summary, catalog }: AdsSummaryProps) {
   const buckets = summary?.buckets ?? []
   const incompleteCount = summary?.incomplete_advertiser_count ?? 0
   const incompleteDates = summary?.incomplete_dates ?? []
@@ -48,70 +39,55 @@ export function AdsSummary({
   }
 
   return (
-    <div className="space-y-3">
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
         {SUMMARY_KEYS.map((key) => {
           const def = catalog.find((d) => d.key === key)
           if (!def) return null
-          const active = activeMetric === key
-
           return (
-            <Button
+            <div
               key={key}
-              variant="outline"
-              className={`h-auto flex-col items-start p-0 ${
-                active ? "ring-2 ring-primary" : ""
-              }`}
-              onClick={() => onSelectMetric(key)}
-              aria-pressed={active}
+              className="min-w-0 rounded-md border bg-card px-3 py-2"
+              data-testid={`summary-${key}`}
             >
-              <Card className="w-full border-none shadow-none">
-                <CardHeader className="pb-2">
-                  <CardTitle
-                    className="text-sm font-medium text-muted-foreground"
-                    title={def.basic_name_zh}
+              <div
+                className="truncate text-xs text-muted-foreground"
+                title={def.basic_name_zh}
+              >
+                {def.basic_label}
+              </div>
+              <div className="truncate text-base font-semibold tabular-nums">
+                {buckets.length > 0 ? (
+                  <span
+                    title={
+                      buckets.some(
+                        (b) => b.availability?.[key] === "UNSUPPORTED",
+                      )
+                        ? "平台未提供"
+                        : undefined
+                    }
                   >
-                    {def.basic_label}
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="text-xl font-semibold">
-                  {buckets.length > 0 ? (
-                    <span
-                      title={
-                        buckets.some(
-                          (b) => b.availability?.[key] === "UNSUPPORTED",
+                    {buckets
+                      .map((bucket) => {
+                        const availability = bucket.availability?.[key]
+                        // 平台不提供显示"—"；PARTIAL 仍显示数值，加一个小标记。
+                        if (availability === "UNSUPPORTED") return "—"
+                        const formatted = formatMetric(
+                          bucket.values?.[key],
+                          def.unit,
                         )
-                          ? "平台未提供"
-                          : undefined
-                      }
-                    >
-                      {buckets
-                        .map((bucket) => {
-                          const rawValue = bucket.values?.[key]
-                          const availability = bucket.availability?.[key]
-                          const formatted = formatMetric(rawValue, def.unit)
-
-                          // PARTIAL 仍显示数值，加一个小标记
-                          const isPartial = availability === "PARTIAL"
-                          const isUnsupported = availability === "UNSUPPORTED"
-
-                          if (isUnsupported) {
-                            return "—"
-                          }
-
-                          const prefix =
-                            buckets.length > 1 ? `${bucket.currency} ` : ""
-                          const suffix = isPartial ? " 部分" : ""
-                          return `${prefix}${formatted}${suffix}`
-                        })
-                        .join(" / ")}
-                    </span>
-                  ) : (
-                    <span className="text-muted-foreground">—</span>
-                  )}
-                </CardContent>
-              </Card>
-            </Button>
+                        const prefix =
+                          buckets.length > 1 ? `${bucket.currency} ` : ""
+                        const suffix = availability === "PARTIAL" ? " 部分" : ""
+                        return `${prefix}${formatted}${suffix}`
+                      })
+                      .join(" / ")}
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </div>
+            </div>
           )
         })}
       </div>

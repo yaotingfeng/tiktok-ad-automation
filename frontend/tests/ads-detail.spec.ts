@@ -26,6 +26,8 @@ test.describe("ads detail", () => {
       await expect(
         header.getByRole("button", { name, exact: true }),
       ).toBeVisible()
+    // 素材挂在广告下面，广告组详情不显示素材页签。
+    await expect(sheet.getByRole("tab", { name: "素材" })).toHaveCount(0)
     await sheet.getByRole("tab", { name: "设置" }).click()
     await expect(sheet.getByText("目标 ROAS", { exact: true })).toBeVisible()
     await sheet.getByRole("tab", { name: "趋势" }).click()

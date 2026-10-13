@@ -195,7 +195,9 @@ test("后台发布不打断第二页选择，用户可选择加载最新数据",
     page.getByText("嘉书-第二页-测试", { exact: true }),
   ).toBeVisible()
   await expect(page.getByText("已选 1 条", { exact: true })).toBeVisible()
-  await page.getByRole("button", { name: "查看最新数据", exact: true }).click()
+  await page
+    .getByRole("button", { name: "有新数据，点击加载", exact: true })
+    .click()
   await expect(page.getByText("嘉书-第二页-测试", { exact: true })).toHaveCount(
     0,
   )

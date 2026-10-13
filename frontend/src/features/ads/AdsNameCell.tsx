@@ -17,6 +17,12 @@ import {
   rowObjectId,
 } from "./search"
 
+const PATH_KIND: Record<ParentLink["kind"], string> = {
+  account: "账户",
+  campaign: "系列",
+  adgroup: "广告组",
+}
+
 // 行覆盖状态里这两种都表示该行数据已同步完整（后者是平台确认的零消耗）。
 const COMPLETE_STATUSES = new Set(["COMPLETE", "COMPLETE_EMPTY"])
 
@@ -70,14 +76,19 @@ export function AdsNameCell({
           <div className="truncate text-[11px] text-muted-foreground">{id}</div>
         )}
         {path.length > 0 && (
+          // 每段标出层级，系列名与广告组名相近时也能分清；名称过长截断，悬停看全称。
           <div className="flex flex-wrap items-center gap-x-1 text-[11px] text-muted-foreground">
             {path.map((link, index) => (
-              <span key={link.kind} className="inline-flex items-center gap-1">
+              <span
+                key={link.kind}
+                className="inline-flex min-w-0 items-center gap-1"
+              >
                 {index > 0 && <span aria-hidden="true">›</span>}
+                <span className="shrink-0">{PATH_KIND[link.kind]}</span>
                 <button
                   type="button"
-                  className="max-w-40 truncate hover:underline"
-                  title={link.name}
+                  className="max-w-32 truncate text-foreground/70 hover:underline"
+                  title={`${PATH_KIND[link.kind]}：${link.name}`}
                   onClick={() => onFilterParent(link, advertiserId)}
                 >
                   {link.name}

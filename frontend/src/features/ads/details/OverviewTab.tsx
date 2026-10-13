@@ -147,6 +147,9 @@ export function OverviewTab({
                   className="inline-flex items-center gap-1"
                 >
                   {index > 0 && <span aria-hidden="true">›</span>}
+                  <span className="text-xs text-muted-foreground">
+                    {PARENT_KIND[link.kind]}
+                  </span>
                   <Button
                     type="button"
                     variant="link"

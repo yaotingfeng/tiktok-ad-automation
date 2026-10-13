@@ -267,36 +267,94 @@ test.describe("ads workspace", () => {
   test("汇总卡片使用官方名并提示不完整账户", async ({ page }) => {
     await adsBoundary(page, { incomplete: true })
     await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
-    // 卡片在表格之前，用 first() 选中卡片区的按钮
-    for (const name of [
-      "消耗",
-      "广告展示总价值",
-      "广告收益 ROAS",
-      "第 0 天广告收益 ROAS",
-      "展示量",
-      "点击率（目标页面）",
+    // 顶部只放 6 张紧凑小卡片，第 N 天 ROAS 不进汇总。
+    for (const [key, name] of [
+      ["spend", "消耗"],
+      ["revenue_total", "广告展示总价值"],
+      ["roas_total", "广告收益 ROAS"],
+      ["impressions", "展示量"],
+      ["ctr", "点击率（目标页面）"],
+      ["cpm", "千次展示成本"],
     ])
-      await expect(
-        page.getByRole("button", { name: new RegExp(`^${name}`) }).first(),
-      ).toBeVisible()
-    // CPM 的括号需要转义
-    await expect(
-      page.getByRole("button", { name: /^千次展示成本/ }).first(),
-    ).toBeVisible()
+      await expect(page.getByTestId(`summary-${key}`)).toContainText(name)
+    await expect(page.getByTestId("summary-roas_d0")).toHaveCount(0)
     await expect(page.getByText("2 个账户数据不完整")).toBeVisible()
   })
 
-  test("趋势默认折叠，展开才请求", async ({ page }) => {
+  test("页面不再显示账户趋势，也不请求趋势", async ({ page }) => {
     const trendCalls = { count: 0 }
     await adsBoundary(page, { trendCalls })
     await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
-    await expect(page.getByRole("heading", { name: "广告报表" })).toBeVisible()
+    await expect(page.locator("tbody tr").first()).toBeVisible()
+    await expect(page.getByRole("button", { name: /账户趋势/ })).toHaveCount(0)
     expect(trendCalls.count).toBe(0)
-    // 页面趋势始终是账户筛选下的账户级趋势，标题写明避免误读为下钻对象。
-    await page.getByRole("button", { name: "展开账户趋势" }).click()
-    await expect(page.getByTestId("ads-trend-chart")).toBeVisible()
-    await expectLineDrawn(page.getByTestId("ads-trend-chart"))
-    expect(trendCalls.count).toBe(1)
+  })
+
+  test("下钻后显示筛选标签，可逐级取消", async ({ page }) => {
+    await adsBoundary(page)
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page
+      .locator("tbody tr")
+      .first()
+      .getByRole("button", { name: "查看 甲账户 的下级", exact: true })
+      .click()
+    await expect(page.getByText("账户：甲账户", { exact: true })).toBeVisible()
+    await page
+      .locator("tbody tr")
+      .first()
+      .getByRole("button", {
+        name: "查看 嘉书-总裁归来-测试 的下级",
+        exact: true,
+      })
+      .click()
+    await expect(
+      page.getByText("系列：嘉书-总裁归来-测试", { exact: true }),
+    ).toBeVisible()
+    // 取消系列只保留账户筛选。
+    const parentCleared = page.waitForRequest((value) => {
+      const url = new URL(value.url())
+      return (
+        url.pathname.endsWith(`/tenants/${TENANT}/ads`) &&
+        url.searchParams.get("ids") === null &&
+        url.searchParams.get("advertiser_id") === ADVERTISER
+      )
+    })
+    await page
+      .getByRole("button", { name: "取消筛选 系列：嘉书-总裁归来-测试" })
+      .click()
+    await parentCleared
+    await expect(page.getByText("账户：甲账户", { exact: true })).toBeVisible()
+    // 取消账户回到全部账户。
+    const allCleared = page.waitForRequest((value) => {
+      const url = new URL(value.url())
+      return (
+        url.pathname.endsWith(`/tenants/${TENANT}/ads`) &&
+        url.searchParams.get("advertiser_id") === null
+      )
+    })
+    await page.getByRole("button", { name: "取消筛选 账户：甲账户" }).click()
+    await allCleared
+    await expect(page.getByText("当前筛选")).toHaveCount(0)
+  })
+
+  test("导出生成后自动下载 CSV", async ({ page }) => {
+    await adsBoundary(page)
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await expect(page.locator("tbody tr").first()).toBeVisible()
+    const download = page.waitForEvent("download")
+    await page.getByRole("button", { name: "导出", exact: true }).click()
+    expect((await download).suggestedFilename()).toMatch(
+      /^广告报表-账户-\d{4}-\d{2}-\d{2}_\d{4}-\d{2}-\d{2}\.csv$/,
+    )
+  })
+
+  test("广告的上级路径标出层级", async ({ page }) => {
+    await adsBoundary(page)
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "广告", exact: true }).click()
+    const row = page.locator("tbody tr").first()
+    for (const kind of ["账户", "系列", "广告组"])
+      await expect(row.getByText(kind, { exact: true })).toBeVisible()
   })
 
   test("隐藏列在刷新后保持", async ({ page }) => {
@@ -362,10 +420,10 @@ test.describe("ads workspace", () => {
     await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
     const container = page.locator('[data-slot="table-container"]')
     await expect(container).toBeVisible()
-    // 24rem = 384px；视口高度减去页头后不足时不能把表格压成一两行。
+    // 28rem = 448px；视口高度减去页头后不足时不能把表格压成一两行。
     expect(
       await container.evaluate((el) => getComputedStyle(el).minHeight),
-    ).toBe("384px")
+    ).toBe("448px")
   })
 
   test("首屏加载中不显示空结果提示", async ({ page }) => {

@@ -49,10 +49,13 @@ export function ReportStatusBar({
   status,
   coverage,
   notice,
+  onLoadLatest,
 }: {
   status?: SyncStatusPublic
   coverage?: Record<string, unknown>
   notice: string | null
+  /** 后台定时同步发布了新数据时提供；为避免打断勾选与预览，由用户点击后再加载。 */
+  onLoadLatest?: () => void
 }) {
   const [open, setOpen] = useState(false)
   const accounts = status?.accounts ?? []
@@ -128,6 +131,16 @@ export function ReportStatusBar({
           {item.text}
         </span>
       ))}
+      {onLoadLatest && (
+        <Button
+          variant="link"
+          size="sm"
+          className="h-auto p-0 text-xs"
+          onClick={onLoadLatest}
+        >
+          有新数据，点击加载
+        </Button>
+      )}
       {accounts.length > 0 && (
         <Button
           variant="link"

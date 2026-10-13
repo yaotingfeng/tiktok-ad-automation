@@ -343,7 +343,7 @@ export function AdsTable({
         )}
         <div
           data-slot="table-container"
-          className="max-h-[calc(100vh-28rem)] min-h-[24rem] overflow-auto"
+          className="max-h-[calc(100vh-12rem)] min-h-[28rem] overflow-auto"
         >
           <table data-slot="table" className="w-full caption-bottom text-sm">
             <TableHeader>

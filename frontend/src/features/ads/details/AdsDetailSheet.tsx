@@ -56,7 +56,6 @@ export type AdsDetailSheetProps = {
   onClose: () => void
   onAction: (row: ReportRow, action: ManagementAction) => void
   onOpenParent: (link: ParentLink, advertiserId: string) => void
-  onShowMaterials?: (advertiserId: string, id: string) => void
 }
 
 export function AdsDetailSheet({
@@ -69,7 +68,6 @@ export function AdsDetailSheet({
   onClose,
   onAction,
   onOpenParent,
-  onShowMaterials,
 }: AdsDetailSheetProps) {
   const { tenantId, bc } = useTenantScope()
   const bcId = bc?.bc_id
@@ -113,7 +111,8 @@ export function AdsDetailSheet({
   const name = row ? (detail?.name ?? rowDisplayName(row, dimension)) : ""
   const status = statusLabel(row?.display ?? {})
   const actions = readonly ? [] : actionsFor(dimension)
-  const hasMaterials = dimension !== "account" && dimension !== "drama"
+  // 素材挂在广告下面：只有广告（及素材自身）显示素材页签，系列、广告组不显示。
+  const hasMaterials = dimension === "ad" || dimension === "material"
   return (
     <Sheet
       open={row !== null}
@@ -209,22 +208,13 @@ export function AdsDetailSheet({
                     <DetailState query={detailQuery}>
                       <MaterialsTab materials={detail?.materials ?? []} />
                     </DetailState>
-                  ) : dimension === "material" ? (
+                  ) : (
                     <MaterialsTab
                       materials={(row.material_uses ?? []).map((use) => ({
                         use_ref: use,
                         name: row.display?.material_name ?? "",
                         external: true,
                       }))}
-                    />
-                  ) : (
-                    <MaterialsTab
-                      scopeCount={row.material_uses?.length}
-                      onShowMaterials={
-                        onShowMaterials && remoteId && advertiserId
-                          ? () => onShowMaterials(advertiserId, remoteId)
-                          : undefined
-                      }
                     />
                   )}
                 </TabsContent>

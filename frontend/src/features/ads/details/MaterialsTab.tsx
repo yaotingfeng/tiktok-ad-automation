@@ -1,6 +1,5 @@
 import type { MaterialUsePublic } from "@/client"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import {
   Table,
   TableBody,
@@ -16,37 +15,12 @@ const STATUS: Record<string, string> = {
   DELETE: "已删除",
 }
 
-/** 广告：列出素材使用位置；系列/广告组：给出汇总数并跳到素材维度查看。 */
+/** 广告与素材详情：列出素材使用位置。 */
 export function MaterialsTab({
   materials,
-  scopeCount,
-  onShowMaterials,
 }: {
-  materials?: MaterialUsePublic[]
-  scopeCount?: number
-  onShowMaterials?: () => void
+  materials: MaterialUsePublic[]
 }) {
-  if (!materials)
-    return (
-      <div className="flex flex-col items-start gap-2 text-sm">
-        <p className="text-muted-foreground">
-          {scopeCount !== undefined
-            ? `该范围在所选日期有 ${scopeCount} 条素材使用记录；`
-            : ""}
-          该范围的素材请在素材维度查看。
-        </p>
-        {onShowMaterials && (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onShowMaterials}
-          >
-            在素材维度查看
-          </Button>
-        )}
-      </div>
-    )
   if (!materials.length)
     return (
       <p className="text-sm text-muted-foreground">

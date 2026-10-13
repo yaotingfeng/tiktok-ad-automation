@@ -1,6 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import { ChevronDown, ChevronUp } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
   AdsReportingService,
@@ -19,10 +18,15 @@ import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import useAuth from "@/hooks/useAuth"
 import { AdsFilters } from "./AdsFilters"
+import { rowDisplayName } from "./AdsNameCell"
+import {
+  AdsScopeChips,
+  type ScopeKind,
+  type ScopeLabels,
+} from "./AdsScopeChips"
 import { AdsSummary } from "./AdsSummary"
 import { AdsTable } from "./AdsTable"
 import { AdsTableToolbar } from "./AdsTableToolbar"
-import { AdsTrendChart } from "./AdsTrendChart"
 import {
   applyColumnPrefs,
   type ColumnPrefs,
@@ -44,7 +48,7 @@ import {
   toReportingFilter,
 } from "./search"
 import { useAdsQuery } from "./useAdsQuery"
-import { useAdsTrend } from "./useAdsTrend"
+import { useReportExport } from "./useReportExport"
 export function AdsWorkspace() {
   const { tenantId, bc, scope, bcDirectory } = useTenantScope()
   const { user } = useAuth()
@@ -103,35 +107,6 @@ export function AdsWorkspace() {
     allColumns,
     prefsReady ? columnPrefs : null,
   )
-
-  // 汇总卡片与趋势状态
-  const [activeMetric, setActiveMetric] = useState("spend")
-  const [trendOpen, setTrendOpen] = useState(() => {
-    try {
-      return localStorage.getItem("ads-trend-open") === "true"
-    } catch {
-      return false
-    }
-  })
-  const saveTrendOpen = (open: boolean) => {
-    setTrendOpen(open)
-    try {
-      localStorage.setItem("ads-trend-open", String(open))
-    } catch {
-      // 忽略存储失败
-    }
-  }
-  const granularity =
-    applied.start_date === applied.end_date ? "hour" : ("day" as const)
-  const trend = useAdsTrend({
-    level: "account",
-    advertiserIds: applied.advertiser_ids,
-    startDate: applied.start_date,
-    endDate: applied.end_date,
-    granularity,
-    enabled: trendOpen,
-  })
-  const activeColumn = catalog.data?.find((d) => d.key === activeMetric)
 
   const clearManagementPreview = useCallback(() => {
     selectionRequestScopeRef.current = null
@@ -232,21 +207,7 @@ export function AdsWorkspace() {
       void syncStatus.refetch()
     },
   })
-  const exportMutation = useMutation({
-    mutationFn: async () => {
-      if (!ads.snapshot) throw new Error("当前报表没有可导出的快照")
-      return (
-        await AdsReportingService.createReportExport({
-          path: { tenant_id: tenantId! },
-          query: { bc_id: bc!.bc_id },
-          body: {
-            snapshot_id: ads.snapshot.snapshot_id,
-            idempotency_key: `ads-export-${ads.snapshot.snapshot_id}-${Date.now()}`,
-          },
-        })
-      ).data
-    },
-  })
+  const reportExport = useReportExport(tenantId, currentBcId)
   const viewMutation = useMutation({
     mutationFn: async () =>
       (
@@ -323,6 +284,8 @@ export function AdsWorkspace() {
       snapshot_id: undefined,
     }))
   }, [clearManagementPreview, closeDetail, currentBcId, tenantId])
+  // 层级筛选标签的显示名；重置或取消筛选时一并清空。
+  const [scopeLabels, setScopeLabels] = useState<ScopeLabels>({})
   const update = (next: Partial<AdsSearch>) =>
     setSearch((current) => ({ ...current, ...next, page: next.page ?? 1 }))
   const apply = () => {
@@ -340,6 +303,7 @@ export function AdsWorkspace() {
   }
   const reset = () => {
     const next = defaultAdsSearch()
+    setScopeLabels({})
     ads.selection.clear()
     clearManagementPreview()
     setCursorHistory([])
@@ -375,17 +339,11 @@ export function AdsWorkspace() {
     setSearch(next)
     setApplied(next)
   }
-  // 切换到某个层级并按父级 ID 筛选；下钻和点击上级路径共用同一套状态重置。
-  const filterTo = (
-    dimension: AdsSearch["dimension"],
-    advertiserId: string,
-    parentId: string,
-  ) => {
+  // 按新的层级筛选立即查询；下钻、点上级路径和取消筛选标签共用同一套状态重置。
+  const applyScope = (scope: Partial<AdsSearch>) => {
     const next: AdsSearch = {
       ...applied,
-      dimension,
-      advertiser_ids: [advertiserId],
-      ids: [parentId],
+      ...scope,
       page: 1,
       cursor: undefined,
       snapshot_id: undefined,
@@ -397,6 +355,25 @@ export function AdsWorkspace() {
     setActionError(null)
     setSearch(next)
     setApplied(next)
+  }
+  // 切换到某个层级并按父级 ID 筛选，同时记下名称供筛选标签显示。
+  const filterTo = (
+    dimension: AdsSearch["dimension"],
+    advertiserId: string,
+    parent: { kind: ScopeKind; id: string; name: string },
+    accountName?: string,
+  ) => {
+    setScopeLabels({ accountName, parent })
+    applyScope({ dimension, advertiser_ids: [advertiserId], ids: [parent.id] })
+  }
+  const clearScopeAccount = () => {
+    setScopeLabels({})
+    applyScope({ advertiser_ids: [], ids: [] })
+  }
+  // 只取消下级对象，保留账户筛选，回到该账户下的全部数据。
+  const clearScopeParent = () => {
+    setScopeLabels((current) => ({ accountName: current.accountName }))
+    applyScope({ ids: [] })
   }
   const navigateToChild = (row: ReportRow) => {
     const dimension = childDimension(applied.dimension)
@@ -410,7 +387,17 @@ export function AdsWorkspace() {
       setActionError("当前行缺少层级 ID，暂时无法跳转下级报表")
       return
     }
-    filterTo(dimension, advertiserId, parentId)
+    const parentKind = applied.dimension as ScopeKind
+    filterTo(
+      dimension,
+      advertiserId,
+      {
+        kind: parentKind,
+        id: parentId,
+        name: rowDisplayName(row, applied.dimension),
+      },
+      row.display?.account_name ?? undefined,
+    )
   }
   const filterByParent = (link: ParentLink, advertiserId: string) => {
     if (!advertiserId) {
@@ -424,7 +411,12 @@ export function AdsWorkspace() {
         : link.kind === "campaign"
           ? "adgroup"
           : "ad"
-    filterTo(dimension, advertiserId, link.id)
+    const accountName =
+      link.kind === "account"
+        ? link.name
+        : items.find((row) => rowAdvertiserId(row) === advertiserId)?.display
+            ?.account_name
+    filterTo(dimension, advertiserId, link, accountName ?? undefined)
   }
   const runAction = (action: () => void) => {
     setActionError(null)
@@ -496,28 +488,32 @@ export function AdsWorkspace() {
           </Button>
           <Button
             variant="outline"
-            disabled={!ads.snapshot || exportMutation.isPending || roleReadonly}
-            onClick={() =>
-              runAction(() =>
-                exportMutation.mutate(undefined, {
-                  onError: (error) => setActionError(String(error)),
-                }),
-              )
+            disabled={
+              !ads.snapshot ||
+              reportExport.state.phase === "running" ||
+              roleReadonly
             }
+            title="导出当前维度、筛选和日期下的全部行（CSV），不只当前页"
+            onClick={() => {
+              if (!ads.snapshot) return
+              const label =
+                DIMENSIONS.find((d) => d.value === applied.dimension)?.label ??
+                applied.dimension
+              void reportExport.start(
+                ads.snapshot.snapshot_id,
+                `广告报表-${label}-${applied.start_date}_${applied.end_date}.csv`,
+              )
+            }}
           >
-            {exportMutation.isPending ? "导出中…" : "导出"}
+            {reportExport.state.phase === "running" ? "导出中…" : "导出"}
           </Button>
         </div>
       </div>
-      {newDataAvailable && (
-        <Button variant="outline" size="sm" onClick={loadLatest}>
-          查看最新数据
-        </Button>
-      )}
       <ReportStatusBar
         status={syncStatus.data}
         coverage={ads.query.data?.coverage}
         notice={syncNotice}
+        onLoadLatest={newDataAvailable ? loadLatest : undefined}
       />
       <Card>
         <CardContent className="p-4">
@@ -553,45 +549,7 @@ export function AdsWorkspace() {
       <AdsSummary
         summary={ads.query.data?.summary}
         catalog={catalog.data ?? []}
-        activeMetric={activeMetric}
-        onSelectMetric={setActiveMetric}
       />
-      <div className="space-y-3">
-        {/* 页面趋势始终按账户筛选汇总为账户级，下钻对象的趋势在详情面板里看。 */}
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => saveTrendOpen(!trendOpen)}
-          className="w-full"
-        >
-          {trendOpen ? (
-            <>
-              <ChevronUp className="mr-2 h-4 w-4" />
-              收起账户趋势
-            </>
-          ) : (
-            <>
-              <ChevronDown className="mr-2 h-4 w-4" />
-              展开账户趋势
-            </>
-          )}
-        </Button>
-        {trendOpen && activeColumn && (
-          <AdsTrendChart
-            trend={trend.data}
-            metric={{
-              key: activeColumn.key,
-              label: activeColumn.basic_label,
-              fullName: activeColumn.basic_name_zh,
-              unit: activeColumn.unit,
-              recoveryDay: null,
-            }}
-            loading={trend.isLoading}
-            error={trend.isError}
-            onRetry={() => void trend.refetch()}
-          />
-        )}
-      </div>
       <Card>
         <CardContent className="space-y-4 p-4">
           <Tabs
@@ -622,13 +580,22 @@ export function AdsWorkspace() {
               }
             }}
           >
-            <TabsList>
-              {DIMENSIONS.map((dimension) => (
-                <TabsTrigger key={dimension.value} value={dimension.value}>
-                  {dimension.label}
-                </TabsTrigger>
-              ))}
-            </TabsList>
+            <div className="flex flex-wrap items-center gap-3">
+              <TabsList>
+                {DIMENSIONS.map((dimension) => (
+                  <TabsTrigger key={dimension.value} value={dimension.value}>
+                    {dimension.label}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+              <AdsScopeChips
+                advertiserIds={applied.advertiser_ids}
+                ids={applied.ids}
+                labels={scopeLabels}
+                onClearAccount={clearScopeAccount}
+                onClearParent={clearScopeParent}
+              />
+            </div>
             {DIMENSIONS.map((dimension) => (
               <TabsContent
                 key={dimension.value}
@@ -680,6 +647,11 @@ export function AdsWorkspace() {
           </Tabs>
         </CardContent>
       </Card>
+      {reportExport.state.phase === "failed" && (
+        <p role="alert" className="text-sm text-destructive">
+          导出失败：{reportExport.state.message}
+        </p>
+      )}
       {actionError && (
         <p role="alert" className="text-sm text-destructive">
           操作失败：{actionError}
@@ -709,9 +681,6 @@ export function AdsWorkspace() {
             dimension: link.kind,
             fromSnapshot: false,
           })
-        }
-        onShowMaterials={(advertiserId, id) =>
-          filterTo("material", advertiserId, id)
         }
       />
       {tenantId && bc?.bc_id && (
