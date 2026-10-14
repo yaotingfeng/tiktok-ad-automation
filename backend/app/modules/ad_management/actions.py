@@ -5,9 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
+from sqlalchemy import exists, func, literal, tuple_
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -15,6 +16,7 @@ from app.core.errors import DomainError
 from app.core.pagination import Page
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.jobs.outbox import enqueue_after_commit
+from app.models import User
 from app.modules.accounts.routing import verify_route
 from app.modules.ad_management.execution import _public as _item_public
 from app.modules.ad_management.models import (
@@ -30,13 +32,16 @@ from app.modules.ad_management.schemas import (
     ManagementCounts,
     ManagementItemPublic,
     ManagementPreviewPublic,
+    ManagementTaskMutation,
     ManagementTaskPublic,
+    ManagementTaskSource,
 )
 from app.modules.ad_management.submissions import (
     MANAGEMENT_DISPATCH_TASK,
     _idempotency_lock,
 )
 from app.modules.ads.models import AdObject
+from app.modules.automation_rules.models import AutomationActionLedger, AutomationRule
 from app.modules.tenants.permissions import require_tenant
 
 
@@ -156,7 +161,107 @@ def get_task(
                 }
             )
         )
-    return _public(task, items=tuple(public_items))
+    summary = _with_summaries(session, context, [task])[0]
+    return summary.model_copy(update={"items": tuple(public_items)})
+
+
+# 操作记录筛选：动作按冻结的变更字段归类，启停再按目标状态拆成启用/暂停。
+TaskActionFilter = Literal["enable", "disable", "budget", "roas"]
+TaskSourceFilter = Literal["manual", "rule"]
+
+
+def _encode_cursor(task: ManagementTask) -> str:
+    return f"{task.created_at.isoformat()}|{task.id}"
+
+
+def _decode_cursor(cursor: str) -> tuple[datetime, UUID]:
+    try:
+        created_at, task_id = cursor.split("|", 1)
+        return datetime.fromisoformat(created_at), UUID(task_id)
+    except ValueError as exc:
+        raise DomainError("invalid_cursor", "分页游标无效") from exc
+
+
+def _with_summaries(
+    session: Session, context: TenantContext, tasks: list[ManagementTask]
+) -> list[ManagementTaskPublic]:
+    """批量补齐操作记录要展示的时间、操作人、动作、来源和对象层级。
+
+    自动规则以规则最后修改人的身份提交任务，只看操作人分不出人工还是规则，
+    所以来源以规则动作台账里登记的任务 ID 为准。
+    """
+    if not tasks:
+        return []
+    task_ids = [task.id for task in tasks]
+    mutations = dict(
+        session.exec(
+            select(ManagementPreview.id, ManagementPreview.mutation).where(
+                ManagementPreview.tenant_id == context.tenant_id,
+                col(ManagementPreview.id).in_([task.preview_id for task in tasks]),
+            )
+        ).all()
+    )
+    actors = {
+        user.id: user.full_name or user.username
+        for user in session.exec(
+            select(User).where(col(User.id).in_({task.actor_id for task in tasks}))
+        ).all()
+    }
+    sources: dict[UUID, ManagementTaskSource] = {}
+    for task_id, rule_id, rule_name in session.exec(
+        select(
+            AutomationActionLedger.management_task_id,
+            AutomationActionLedger.rule_id,
+            AutomationRule.name,
+        )
+        .join(
+            AutomationRule,
+            col(AutomationRule.id) == col(AutomationActionLedger.rule_id),
+            isouter=True,
+        )
+        .where(
+            AutomationActionLedger.tenant_id == context.tenant_id,
+            col(AutomationActionLedger.management_task_id).in_(task_ids),
+        )
+        .distinct()
+    ).all():
+        if task_id is not None:
+            sources[task_id] = ManagementTaskSource(
+                kind="rule", rule_id=rule_id, rule_name=rule_name
+            )
+    kind = ManagementTaskItem.ref["kind"].astext
+    target_kinds: dict[UUID, dict[str, int]] = {}
+    for task_id, entity_kind, total in session.exec(
+        select(ManagementTaskItem.task_id, kind, func.count())
+        .where(
+            ManagementTaskItem.tenant_id == context.tenant_id,
+            col(ManagementTaskItem.task_id).in_(task_ids),
+        )
+        .group_by(col(ManagementTaskItem.task_id), kind)
+    ).all():
+        target_kinds.setdefault(task_id, {})[str(entity_kind)] = int(total)
+    result: list[ManagementTaskPublic] = []
+    for task in tasks:
+        raw = mutations.get(task.preview_id) or {}
+        try:
+            mutation = ManagementTaskMutation(
+                field=raw["field"], mode=raw["mode"], value=raw["value"]
+            )
+        except KeyError, TypeError, ValueError:
+            mutation = None
+        result.append(
+            _public(task).model_copy(
+                update={
+                    "created_at": task.created_at,
+                    "actor_name": actors.get(task.actor_id),
+                    "mutation": mutation,
+                    "source": sources.get(task.id)
+                    or ManagementTaskSource(kind="manual"),
+                    "target_kinds": target_kinds.get(task.id, {}),
+                }
+            )
+        )
+    return result
 
 
 def list_tasks(
@@ -166,6 +271,8 @@ def list_tasks(
     *,
     cursor: str | None,
     limit: int,
+    action: TaskActionFilter | None = None,
+    source: TaskSourceFilter | None = None,
 ) -> Page[ManagementTaskPublic]:
     if not 1 <= limit <= 100:
         raise DomainError("invalid_cursor", "分页大小无效")
@@ -179,31 +286,49 @@ def list_tasks(
         ManagementTask.tenant_id == context.tenant_id,
         ManagementTask.bc_id == bc_id,
     )
-    if cursor:
-        try:
-            cursor_id = UUID(cursor)
-        except ValueError as exc:
-            raise DomainError("invalid_cursor", "分页游标无效") from exc
-        statement = statement.where(ManagementTask.id > cursor_id)
+    if action is not None:
+        field = ManagementPreview.mutation["field"].astext
+        value = ManagementPreview.mutation["value"].astext
+        statement = statement.join(
+            ManagementPreview,
+            (col(ManagementPreview.tenant_id) == col(ManagementTask.tenant_id))
+            & (col(ManagementPreview.id) == col(ManagementTask.preview_id)),
+        )
+        if action in {"enable", "disable"}:
+            statement = statement.where(field == "status", value == action.upper())
+        else:
+            statement = statement.where(field == action)
+    if source is not None:
+        from_rule = exists().where(
+            col(AutomationActionLedger.tenant_id) == context.tenant_id,
+            col(AutomationActionLedger.management_task_id) == col(ManagementTask.id),
+        )
+        statement = statement.where(from_rule if source == "rule" else ~from_rule)
+    # 操作记录按提交时间倒序；同一时刻用任务 ID 稳定排序，游标同时携带两者。
+    order = (col(ManagementTask.created_at).desc(), col(ManagementTask.id).desc())
+    after = _decode_cursor(cursor) if cursor else None
     # Verify account visibility in bounded batches.  A revoked account can be
     # interleaved with usable rows, so stop only after the full candidate scan;
     # each query and the retained page remain bounded rather than loading the BC
     # task history into one list.
     batch_size = max(limit + 1, 50)
-    last_id = cursor_id if cursor else None
+    last = after
     visible: list[ManagementTask] = []
     total = 0
     while True:
         batch_statement = statement
-        if last_id is not None:
-            batch_statement = batch_statement.where(ManagementTask.id > last_id)
+        if last is not None:
+            batch_statement = batch_statement.where(
+                tuple_(col(ManagementTask.created_at), col(ManagementTask.id))
+                < tuple_(literal(last[0]), literal(last[1]))
+            )
         candidates = session.exec(
-            batch_statement.order_by(col(ManagementTask.id)).limit(batch_size)
+            batch_statement.order_by(*order).limit(batch_size)
         ).all()
         if not candidates:
             break
         for row in candidates:
-            last_id = row.id
+            last = (row.created_at, row.id)
             try:
                 _scoped_task(session, context, bc_id, row.id)
             except DomainError:
@@ -214,9 +339,9 @@ def list_tasks(
         if len(candidates) < batch_size:
             break
     rows = visible
-    next_cursor = str(rows[limit - 1].id) if len(rows) > limit else None
+    next_cursor = _encode_cursor(rows[limit - 1]) if len(rows) > limit else None
     return Page(
-        items=[_public(row) for row in rows[:limit]],
+        items=_with_summaries(session, context, rows[:limit]),
         next_cursor=next_cursor,
         total=total,
     )

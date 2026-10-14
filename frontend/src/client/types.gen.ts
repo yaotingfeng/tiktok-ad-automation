@@ -3109,6 +3109,26 @@ export type ManagementRetryRequest = {
 };
 
 /**
+ * ManagementTaskMutation
+ *
+ * 任务提交时冻结的动作摘要，供操作记录展示“做了什么”。
+ */
+export type ManagementTaskMutation = {
+    /**
+     * Field
+     */
+    field: 'roas' | 'budget' | 'status';
+    /**
+     * Mode
+     */
+    mode: 'set' | 'add' | 'subtract' | 'increase_percent' | 'decrease_percent';
+    /**
+     * Value
+     */
+    value: string | 'ENABLE' | 'DISABLE';
+};
+
+/**
  * ManagementTaskPublic
  */
 export type ManagementTaskPublic = {
@@ -3120,6 +3140,22 @@ export type ManagementTaskPublic = {
      * Bc Id
      */
     bc_id: string;
+    /**
+     * Created At
+     */
+    created_at?: string | null;
+    /**
+     * Actor Name
+     */
+    actor_name?: string | null;
+    mutation?: ManagementTaskMutation | null;
+    source?: ManagementTaskSource | null;
+    /**
+     * Target Kinds
+     */
+    target_kinds?: {
+        [key: string]: number;
+    };
     /**
      * Status
      */
@@ -3147,6 +3183,26 @@ export type ManagementTaskRequest = {
      * Idempotency Key
      */
     idempotency_key: string;
+};
+
+/**
+ * ManagementTaskSource
+ *
+ * 任务来源：人工在报表里提交，或由自动规则提交（规则删除后仍标记为规则）。
+ */
+export type ManagementTaskSource = {
+    /**
+     * Kind
+     */
+    kind: 'manual' | 'rule';
+    /**
+     * Rule Id
+     */
+    rule_id?: string | null;
+    /**
+     * Rule Name
+     */
+    rule_name?: string | null;
 };
 
 /**
@@ -8811,6 +8867,14 @@ export type adManagementListTasksData = {
          * Limit
          */
         limit?: number;
+        /**
+         * Action
+         */
+        action?: 'enable' | 'disable' | 'budget' | 'roas' | null;
+        /**
+         * Source
+         */
+        source?: 'manual' | 'rule' | null;
     };
     url: '/api/tenants/{tenant_id}/ad-management-tasks';
 };

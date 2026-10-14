@@ -9,7 +9,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { isForbidden } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
-import { statusLabel } from "./ManagementTasksPage"
+import {
+  displayTime,
+  mutationText,
+  sourceText,
+  statusLabel,
+  targetText,
+} from "./presentation"
 
 export function ManagementTaskDetailPage() {
   const { tenantId, scope } = useTenantScope()
@@ -191,16 +197,28 @@ export function ManagementTaskDetailPage() {
             <CardHeader>
               <CardTitle>任务状态</CardTitle>
             </CardHeader>
-            <CardContent className="flex flex-wrap items-center gap-4">
-              <Badge variant="outline">
-                {statusLabel[task.status] ?? task.status}
-              </Badge>
-              <span>目标 {counts?.targets ?? 0}</span>
-              <span>不可用 {counts?.unsupported ?? 0}</span>
-              <span>未知 {unknown}</span>
-              {refreshPending > 0 && (
-                <span>同步刷新待处理 {refreshPending}</span>
-              )}
+            <CardContent className="flex flex-col gap-3">
+              <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-[auto_1fr]">
+                <dt className="text-muted-foreground">时间</dt>
+                <dd>{displayTime(task.created_at)}</dd>
+                <dt className="text-muted-foreground">动作</dt>
+                <dd>{mutationText(task.mutation)}</dd>
+                <dt className="text-muted-foreground">对象</dt>
+                <dd>{targetText(task)}</dd>
+                <dt className="text-muted-foreground">来源</dt>
+                <dd>{sourceText(task)}</dd>
+              </dl>
+              <div className="flex flex-wrap items-center gap-4">
+                <Badge variant="outline">
+                  {statusLabel[task.status] ?? task.status}
+                </Badge>
+                <span>目标 {counts?.targets ?? 0}</span>
+                <span>不可用 {counts?.unsupported ?? 0}</span>
+                <span>未知 {unknown}</span>
+                {refreshPending > 0 && (
+                  <span>同步刷新待处理 {refreshPending}</span>
+                )}
+              </div>
             </CardContent>
           </Card>
           <Card>

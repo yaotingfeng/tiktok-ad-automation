@@ -8,6 +8,8 @@ from fastapi import APIRouter, Query
 from app.api.deps import CurrentUser, SessionDep
 from app.core.pagination import Page
 from app.modules.ad_management.actions import (
+    TaskActionFilter,
+    TaskSourceFilter,
     cancel_task,
     get_task,
     list_tasks,
@@ -96,11 +98,21 @@ def list_tasks_route(
     user: CurrentUser,
     cursor: Cursor = None,
     limit: Limit = 50,
+    action: TaskActionFilter | None = None,
+    source: TaskSourceFilter | None = None,
 ) -> Page[ManagementTaskPublic]:
     context = require_tenant(
         session, actor_id=user.id, tenant_id=tenant_id, action="read"
     )
-    return list_tasks(session, context, bc_id, cursor=cursor, limit=limit)
+    return list_tasks(
+        session,
+        context,
+        bc_id,
+        cursor=cursor,
+        limit=limit,
+        action=action,
+        source=source,
+    )
 
 
 @router.get(

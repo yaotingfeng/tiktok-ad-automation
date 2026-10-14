@@ -4,6 +4,7 @@ import { adsBoundary, BC_A, TENANT } from "./utils/adsBoundary"
 const selectionId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 const previewId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 const taskId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+const ruleTaskId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 
 const CAMPAIGN_REF = {
   tenant_id: TENANT,
@@ -45,6 +46,7 @@ async function managementBoundary(
 ) {
   await adsBoundary(page)
   const previewBodies: Array<Record<string, unknown>> = []
+  const listQueries: Array<Record<string, string>> = []
   await page.route("**/api/**", async (handler) => {
     const request = handler.request()
     const url = new URL(request.url())
@@ -184,21 +186,54 @@ async function managementBoundary(
           counts: { selected: 1, targets: 1, refresh_pending: 1 },
         },
       })
-    if (request.method() === "GET" && path.endsWith("/ad-management-tasks"))
+    if (request.method() === "GET" && path.endsWith("/ad-management-tasks")) {
+      const query = new URL(request.url()).searchParams
+      listQueries.push(Object.fromEntries(query))
+      const rows = [
+        {
+          task_id: taskId,
+          bc_id: BC_A,
+          status: "QUEUED",
+          counts: { selected: 1, targets: 1, linked: 0, unsupported: 0 },
+          created_at: "2026-10-14T02:30:00Z",
+          actor_name: "投放同学",
+          mutation: { field: "status", mode: "set", value: "DISABLE" },
+          source: { kind: "manual" },
+          target_kinds: { campaign: 1 },
+        },
+        {
+          task_id: ruleTaskId,
+          bc_id: BC_A,
+          status: "PARTIAL",
+          counts: { selected: 3, targets: 3, accepted: 2, rejected: 1 },
+          created_at: "2026-10-14T01:00:00Z",
+          actor_name: "投放同学",
+          mutation: { field: "budget", mode: "increase_percent", value: "20" },
+          source: { kind: "rule", rule_name: "自动加预算" },
+          target_kinds: { adgroup: 3 },
+        },
+      ].filter(
+        (row) => query.get("source") !== "rule" || row.source.kind === "rule",
+      )
+      // 首页之后由“加载更多”请求第二页。
+      const page = query.get("cursor")
+        ? [
+            {
+              ...rows[0],
+              task_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+              created_at: "2026-10-13T08:00:00Z",
+              mutation: { field: "roas", mode: "set", value: "1.5" },
+            },
+          ]
+        : rows
       return handler.fulfill({
         json: {
-          items: [
-            {
-              task_id: taskId,
-              bc_id: BC_A,
-              status: "QUEUED",
-              counts: { selected: 1, targets: 1, linked: 0, unsupported: 0 },
-            },
-          ],
-          next_cursor: null,
-          total: 1,
+          items: page,
+          next_cursor: query.get("cursor") ? null : "next-page",
+          total: rows.length + 1,
         },
       })
+    }
     if (
       request.method() === "GET" &&
       path.endsWith(`/ad-management-tasks/${taskId}`)
@@ -240,7 +275,7 @@ async function managementBoundary(
       })
     return handler.fallback()
   })
-  return { previewBodies }
+  return { previewBodies, listQueries }
 }
 
 test.describe("广告管理工作台", () => {
@@ -321,7 +356,9 @@ test.describe("广告管理工作台", () => {
     await page.goto(`/tenants/${TENANT}/ad-management-tasks?bc_id=${BC_A}`)
     await expect(page.getByRole("heading", { name: "操作记录" })).toBeVisible()
     await expect(page.getByText("排队中")).toBeVisible()
-    await page.getByRole("link", { name: /dddddddd/ }).click()
+    await page
+      .getByRole("link", { name: `查看明细 ${taskId}`, exact: true })
+      .click()
     await expect(
       page.getByText("当前为只读成员，隐藏取消、重试和恢复入口。"),
     ).toBeVisible()
@@ -329,6 +366,42 @@ test.describe("广告管理工作台", () => {
       page.getByRole("button", { name: "取消未发送项" }),
     ).toHaveCount(0)
     await expect(page.getByRole("button", { name: /刷新重试/ })).toHaveCount(0)
+  })
+
+  test("操作记录列表显示动作、对象、来源和结果，可筛选和加载更多", async ({
+    page,
+  }) => {
+    const { listQueries } = await managementBoundary(page)
+    await page.goto(`/tenants/${TENANT}/ad-management-tasks?bc_id=${BC_A}`)
+    const manual = page.getByRole("row", { name: /暂停/ })
+    await expect(manual).toContainText("系列 1")
+    await expect(manual).toContainText("人工 · 投放同学")
+    await expect(manual).toContainText("排队中")
+    const byRule = page.getByRole("row", { name: /预算 提高 20%/ })
+    await expect(byRule).toContainText("广告组 3")
+    await expect(byRule).toContainText("自动规则 · 自动加预算")
+    await expect(byRule).toContainText("部分完成")
+    await expect(byRule).toContainText("成功 2")
+    await expect(byRule).toContainText("失败 1")
+    await expect(page.getByText("共 3 条")).toBeVisible()
+
+    await page.getByRole("button", { name: "加载更多" }).click()
+    await expect(
+      page.getByRole("row", { name: /目标 ROAS 设为 1.5/ }),
+    ).toBeVisible()
+    await expect(page.getByRole("button", { name: "加载更多" })).toHaveCount(0)
+    expect(listQueries[listQueries.length - 1]?.cursor).toBe("next-page")
+
+    await page.getByRole("combobox", { name: "来源" }).click()
+    await page.getByRole("option", { name: "自动规则" }).click()
+    await expect(page).toHaveURL(/source=rule/)
+    await expect(page.getByRole("row", { name: /暂停/ })).toHaveCount(0)
+    await expect(page.getByRole("row", { name: /预算 提高 20%/ })).toBeVisible()
+    expect(listQueries[listQueries.length - 1]).toMatchObject({
+      bc_id: BC_A,
+      source: "rule",
+    })
+    expect(listQueries[listQueries.length - 1]?.cursor).toBeUndefined()
   })
 
   test("排除不可用项会把冻结 ref 发送给服务器", async ({ page }) => {

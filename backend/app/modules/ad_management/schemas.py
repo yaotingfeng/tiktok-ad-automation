@@ -156,11 +156,38 @@ class ManagementPreviewPublic(BaseModel):
     counts: ManagementCounts = Field(default_factory=ManagementCounts)
 
 
+class ManagementTaskMutation(BaseModel):
+    """任务提交时冻结的动作摘要，供操作记录展示“做了什么”。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    field: MutationField
+    mode: MutationMode
+    value: Decimal | StatusValue
+
+
+class ManagementTaskSource(BaseModel):
+    """任务来源：人工在报表里提交，或由自动规则提交（规则删除后仍标记为规则）。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["manual", "rule"]
+    rule_id: UUID | None = None
+    rule_name: str | None = None
+
+
 class ManagementTaskPublic(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     task_id: UUID
     bc_id: str
+    # 以下摘要只在列表与详情读取时填充；提交接口的即时回执不带。
+    created_at: datetime | None = None
+    actor_name: str | None = None
+    mutation: ManagementTaskMutation | None = None
+    source: ManagementTaskSource | None = None
+    # 各层级的目标对象数，例如 {"adgroup": 3}。
+    target_kinds: dict[str, int] = Field(default_factory=dict)
     status: Literal[
         "PREPARING",
         "READY",
