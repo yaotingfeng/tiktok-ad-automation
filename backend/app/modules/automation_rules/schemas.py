@@ -362,3 +362,42 @@ class RunPage(BaseModel):
 class RunDetail(BaseModel):
     run: RunListItem
     hits: list[HitPublic]
+
+
+class ConfirmationItem(BaseModel):
+    id: UUID
+    rule_id: UUID
+    rule_name: str
+    run_id: UUID
+    status: str
+    created_at: datetime
+    hit_count: int
+    target_count: int
+
+
+class ConfirmationPage(BaseModel):
+    items: list[ConfirmationItem]
+    total: int
+
+
+class ConfirmationHit(BaseModel):
+    subject_key: str
+    subject_label: str
+    drama_name: str | None
+    advertiser_id: str | None
+    target_count: int
+    metrics_then: dict[str, str]
+    metrics_now: dict[str, str]
+    # 用最新数据重新判断后是否仍满足条件；不满足的默认不勾选。
+    still_matching: bool
+
+
+class ConfirmationDetail(BaseModel):
+    confirmation: ConfirmationItem
+    action: Action
+    skipped_accounts: list[dict[str, str]]
+    items: list[ConfirmationHit]
+
+
+class ConfirmRequest(_Strict):
+    subject_keys: list[str] = Field(min_length=1, max_length=5000)

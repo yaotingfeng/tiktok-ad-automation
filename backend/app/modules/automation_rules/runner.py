@@ -17,7 +17,11 @@ from app.core.errors import DomainError
 from app.jobs.outbox import enqueue_after_commit
 from app.jobs.tasks import register_dispatch_task
 from app.modules.automation_rules import feishu
-from app.modules.automation_rules.confirmations import expire_open, open_batch
+from app.modules.automation_rules.confirmations import (
+    EXECUTE_TASK,
+    expire_open,
+    open_batch,
+)
 from app.modules.automation_rules.evaluate import Evaluation, evaluate
 from app.modules.automation_rules.inputs import load_inputs
 from app.modules.automation_rules.models import (
@@ -41,10 +45,8 @@ RANGE_LABELS = {
     "LIFETIME": "投放以来",
 }
 SEND_TASK = "automation.send_feishu"
-EXECUTE_TASK = "automation.execute"
 # 投递方在入队前就要能解析队列，注册放在投递所在模块。
 register_dispatch_task(SEND_TASK, "control")
-register_dispatch_task(EXECUTE_TASK, "ad-management")
 
 
 def _existing(

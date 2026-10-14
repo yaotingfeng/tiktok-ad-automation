@@ -6,11 +6,15 @@ from fastapi import APIRouter, Query
 
 from app.api.deps import CurrentUser, SessionDep
 from app.core.context import TenantContext
-from app.modules.automation_rules import service, settings_service
+from app.modules.automation_rules import confirmations, service, settings_service
 from app.modules.automation_rules.schemas import (
     AutomationSettingsPublic,
     AutomationSettingsUpdate,
     CatalogPublic,
+    ConfirmationDetail,
+    ConfirmationItem,
+    ConfirmationPage,
+    ConfirmRequest,
     DryRunPublic,
     DryRunRequest,
     FeishuTestRequest,
@@ -161,3 +165,61 @@ def get_run(
     tenant_id: UUID, run_id: UUID, session: SessionDep, user: CurrentUser
 ) -> RunDetail:
     return service.get_run(session, context=_context(user, tenant_id), run_id=run_id)
+
+
+@router.get("/automation-confirmations", response_model=ConfirmationPage)
+def list_confirmations(
+    tenant_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    status: str | None = Query(default="PENDING", max_length=16),
+) -> ConfirmationPage:
+    return confirmations.list_confirmations(
+        session, context=_context(user, tenant_id), status=status or None
+    )
+
+
+@router.get(
+    "/automation-confirmations/{confirmation_id}", response_model=ConfirmationDetail
+)
+def get_confirmation(
+    tenant_id: UUID, confirmation_id: UUID, session: SessionDep, user: CurrentUser
+) -> ConfirmationDetail:
+    return confirmations.confirmation_detail(
+        session, context=_context(user, tenant_id), confirmation_id=confirmation_id
+    )
+
+
+@router.post(
+    "/automation-confirmations/{confirmation_id}/confirm",
+    response_model=ConfirmationItem,
+)
+def confirm_batch(
+    tenant_id: UUID,
+    confirmation_id: UUID,
+    body: ConfirmRequest,
+    session: SessionDep,
+    user: CurrentUser,
+) -> ConfirmationItem:
+    result = confirmations.confirm(
+        session,
+        context=_context(user, tenant_id),
+        confirmation_id=confirmation_id,
+        subject_keys=body.subject_keys,
+    )
+    session.commit()
+    return result
+
+
+@router.post(
+    "/automation-confirmations/{confirmation_id}/dismiss",
+    response_model=ConfirmationItem,
+)
+def dismiss_batch(
+    tenant_id: UUID, confirmation_id: UUID, session: SessionDep, user: CurrentUser
+) -> ConfirmationItem:
+    result = confirmations.dismiss(
+        session, context=_context(user, tenant_id), confirmation_id=confirmation_id
+    )
+    session.commit()
+    return result
