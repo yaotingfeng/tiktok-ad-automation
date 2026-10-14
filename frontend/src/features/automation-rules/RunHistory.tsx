@@ -43,9 +43,16 @@ const EXECUTION_LABELS: Record<string, string> = {
   QUEUED: "已排队",
   CONFIRMED: "已确认，执行中",
   PARTIAL: "部分完成",
+  SKIPPED: "未执行（已跳过）",
   FAILED: "执行失败",
   DISMISSED: "已忽略",
   EXPIRED: "已失效",
+}
+
+const EXECUTION_ERRORS: Record<string, string> = {
+  rule_owner_forbidden: "执行人已无执行权限，未执行。",
+  automation_disabled: "自动规则部署开关已关闭，未执行。",
+  execution_error: "执行异常，未完成。",
 }
 
 type Summary = {
@@ -89,7 +96,11 @@ function ExecutionSummary({
           : "命中结果等待确认，请在「待确认」中处理。"}
       </p>
     )
-  if (!["SUBMITTED", "PARTIAL", "FAILED"].includes(run.execution_status))
+  if (
+    !["SUBMITTED", "PARTIAL", "FAILED", "SKIPPED"].includes(
+      run.execution_status,
+    )
+  )
     return null
   return (
     <div className="flex flex-col gap-1 rounded-md border p-3 text-sm">
@@ -100,8 +111,10 @@ function ExecutionSummary({
         {summary.no_change ?? 0}
         {summary.failed ? `、失败 ${summary.failed}` : ""}
       </p>
-      {summary.error === "rule_owner_forbidden" && (
-        <p className="text-destructive">规则最后修改人已无执行权限，未执行。</p>
+      {summary.error && (
+        <p className="text-destructive">
+          {EXECUTION_ERRORS[summary.error] ?? "执行失败"}
+        </p>
       )}
       {(summary.failed_bcs ?? []).map((item) => (
         <p key={item.bc_id} className="text-destructive break-all">

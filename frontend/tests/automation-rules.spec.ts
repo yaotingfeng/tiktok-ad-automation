@@ -258,3 +258,27 @@ test("从模板新建：预填定义并保存", async ({ page }) => {
     },
   })
 })
+
+test("待确认批次：手动取消的勾选不因数据刷新而恢复", async ({ page }) => {
+  const confirmed: unknown[] = []
+  const detailRequests: string[] = []
+  await automationBoundary(page, { confirmed, detailRequests })
+  await page.goto(
+    `/tenants/${TENANT}/automation-rules?tab=confirmations&confirmation=conf-1`,
+  )
+  const fresh = page.getByRole("row", { name: /总裁归来/ })
+  await fresh.getByRole("checkbox").click()
+  await expect(fresh.getByRole("checkbox")).not.toBeChecked()
+  const before = detailRequests.length
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event("focus"))
+    window.dispatchEvent(new Event("visibilitychange"))
+  })
+  await page.waitForTimeout(500)
+  // 明细不在窗口重新聚焦时刷新，或刷新后保留用户的选择。
+  expect(detailRequests.length).toBeGreaterThan(before)
+  await expect(fresh.getByRole("checkbox")).not.toBeChecked()
+  await expect(
+    page.getByRole("button", { name: "确认执行所选" }),
+  ).toBeDisabled()
+})

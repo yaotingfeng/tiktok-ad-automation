@@ -16,6 +16,8 @@ export type AutomationBoundaryOptions = {
   confirmed?: unknown[]
   /** 记录忽略批次的请求路径 */
   dismissed?: string[]
+  /** 记录批次明细请求次数 */
+  detailRequests?: string[]
 }
 
 const CATALOG = {
@@ -318,7 +320,8 @@ export async function automationBoundary(
       options.dismissed?.push(path)
       return json({ ...CONFIRMATION, status: "DISMISSED" })
     }
-    if (path === `${base}/automation-confirmations/conf-1`)
+    if (path === `${base}/automation-confirmations/conf-1`) {
+      options.detailRequests?.push(path)
       return json({
         confirmation: CONFIRMATION,
         action: DEFINITION.action,
@@ -331,7 +334,12 @@ export async function automationBoundary(
             advertiser_id: null,
             target_count: 2,
             metrics_then: { "spend:TODAY": "120" },
-            metrics_now: { "spend:TODAY": "135" },
+            // 明细每次按最新数据重新判断，现在的指标会变化。
+            metrics_now: {
+              "spend:TODAY": String(
+                134 + (options.detailRequests?.length ?? 1),
+              ),
+            },
             still_matching: true,
           },
           {
@@ -346,6 +354,7 @@ export async function automationBoundary(
           },
         ],
       })
+    }
     if (path === `${base}/automation-settings/test-feishu`) {
       options.tested?.push(request.postDataJSON())
       return route.fulfill({ headers, status: 204 })

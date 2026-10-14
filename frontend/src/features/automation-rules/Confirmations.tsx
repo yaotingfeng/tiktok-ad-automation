@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   type Action_Output as Action,
   AutomationRulesService,
@@ -101,16 +101,19 @@ function ConfirmationSheet({
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
   const data = detail.data
+  // 只在首次拿到批次明细时设定默认勾选；之后数据刷新不覆盖用户的选择。
+  const initialized = useRef(false)
   useEffect(() => {
+    if (!data || initialized.current) return
+    initialized.current = true
     // 用最新数据重新判断后已不满足条件的对象默认不勾选。
-    if (data)
-      setSelected(
-        new Set(
-          data.items
-            .filter((item) => item.still_matching)
-            .map((item) => item.subject_key),
-        ),
-      )
+    setSelected(
+      new Set(
+        data.items
+          .filter((item) => item.still_matching)
+          .map((item) => item.subject_key),
+      ),
+    )
   }, [data])
   const done = async () => {
     await client.invalidateQueries({ queryKey: ruleKeys(tenantId) })
@@ -358,6 +361,7 @@ export function Confirmations({
       </CardContent>
       {openConfirmation && (
         <ConfirmationSheet
+          key={openConfirmation}
           tenantId={tenantId}
           confirmationId={openConfirmation}
           write={write}
