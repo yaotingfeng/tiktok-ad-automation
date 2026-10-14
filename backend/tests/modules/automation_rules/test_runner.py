@@ -17,7 +17,7 @@ from tests.modules.automation_rules.test_inputs import NOW, _seed
 HOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/run-hook"
 
 
-def make_rule(session, seed, **patch):
+def make_rule(session, seed, name="r", **patch):
     # 种子中 g1 今天消耗 10、g9 为 2;门槛 5 只命中 g1。
     patch.setdefault(
         "conditions",
@@ -25,7 +25,7 @@ def make_rule(session, seed, **patch):
     )
     rule = AutomationRule(
         tenant_id=seed.tenant_id,
-        name="r",
+        name=name,
         created_by=seed.actor_id,
         updated_by=seed.actor_id,
         definition=base(**patch),

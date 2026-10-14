@@ -10,6 +10,8 @@ from app.modules.automation_rules import confirmations, service, settings_servic
 from app.modules.automation_rules.schemas import (
     AutomationSettingsPublic,
     AutomationSettingsUpdate,
+    BatchRequest,
+    BatchResult,
     CatalogPublic,
     ConfirmationDetail,
     ConfirmationItem,
@@ -21,6 +23,7 @@ from app.modules.automation_rules.schemas import (
     RuleCreate,
     RuleDefinition,
     RuleEnabled,
+    RuleOverview,
     RulePage,
     RulePublic,
     RuleUpdate,
@@ -73,6 +76,27 @@ def get_catalog(
 ) -> CatalogPublic:
     service.require(session, _context(user, tenant_id), "read")
     return service.catalog()
+
+
+@router.get("/automation-rules/overview", response_model=RuleOverview)
+def get_overview(
+    tenant_id: UUID, session: SessionDep, user: CurrentUser
+) -> RuleOverview:
+    return service.overview(session, context=_context(user, tenant_id))
+
+
+@router.post("/automation-rules/batch", response_model=BatchResult)
+def batch_rules(
+    tenant_id: UUID, body: BatchRequest, session: SessionDep, user: CurrentUser
+) -> BatchResult:
+    result = service.batch_update(
+        session,
+        context=_context(user, tenant_id),
+        rule_ids=body.rule_ids,
+        operation=body.operation,
+    )
+    session.commit()
+    return result
 
 
 @router.get("/automation-rules/templates", response_model=TemplatePage)

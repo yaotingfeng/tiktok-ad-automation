@@ -434,3 +434,26 @@ class TemplatePublic(BaseModel):
 
 class TemplatePage(BaseModel):
     items: list[TemplatePublic]
+
+
+class RuleOverview(BaseModel):
+    # 近 7 天动作台账按操作类型计数：PAUSE / ENABLE / BUDGET / ROAS。
+    actions_7d: dict[str, int]
+    pending_confirmations: int
+    failed_7d: int
+    conflicts_7d: int
+
+
+class BatchRequest(_Strict):
+    rule_ids: list[UUID] = Field(min_length=1, max_length=100)
+    operation: Literal["ENABLE", "DISABLE", "DELETE"]
+
+
+class BatchSkipped(BaseModel):
+    rule_id: UUID
+    reason: str
+
+
+class BatchResult(BaseModel):
+    updated: int
+    skipped: list[BatchSkipped]

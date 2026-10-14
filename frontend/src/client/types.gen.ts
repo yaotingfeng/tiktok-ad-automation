@@ -499,6 +499,48 @@ export type BCPublic = {
 };
 
 /**
+ * BatchRequest
+ */
+export type BatchRequest = {
+    /**
+     * Rule Ids
+     */
+    rule_ids: Array<string>;
+    /**
+     * Operation
+     */
+    operation: 'ENABLE' | 'DISABLE' | 'DELETE';
+};
+
+/**
+ * BatchResult
+ */
+export type BatchResult = {
+    /**
+     * Updated
+     */
+    updated: number;
+    /**
+     * Skipped
+     */
+    skipped: Array<BatchSkipped>;
+};
+
+/**
+ * BatchSkipped
+ */
+export type BatchSkipped = {
+    /**
+     * Rule Id
+     */
+    rule_id: string;
+    /**
+     * Reason
+     */
+    reason: string;
+};
+
+/**
  * Body_login-login_access_token
  */
 export type Body_login_login_access_token = {
@@ -5699,6 +5741,30 @@ export type RuleEnabled = {
      * Enabled
      */
     enabled: boolean;
+};
+
+/**
+ * RuleOverview
+ */
+export type RuleOverview = {
+    /**
+     * Actions 7D
+     */
+    actions_7d: {
+        [key: string]: number;
+    };
+    /**
+     * Pending Confirmations
+     */
+    pending_confirmations: number;
+    /**
+     * Failed 7D
+     */
+    failed_7d: number;
+    /**
+     * Conflicts 7D
+     */
+    conflicts_7d: number;
 };
 
 /**
@@ -12015,6 +12081,66 @@ export type automationRulesGetCatalogResponses = {
 };
 
 export type automationRulesGetCatalogResponse = automationRulesGetCatalogResponses[keyof automationRulesGetCatalogResponses];
+
+export type automationRulesGetOverviewData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/automation-rules/overview';
+};
+
+export type automationRulesGetOverviewErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type automationRulesGetOverviewError = automationRulesGetOverviewErrors[keyof automationRulesGetOverviewErrors];
+
+export type automationRulesGetOverviewResponses = {
+    /**
+     * Successful Response
+     */
+    200: RuleOverview;
+};
+
+export type automationRulesGetOverviewResponse = automationRulesGetOverviewResponses[keyof automationRulesGetOverviewResponses];
+
+export type automationRulesBatchRulesData = {
+    body: BatchRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/automation-rules/batch';
+};
+
+export type automationRulesBatchRulesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type automationRulesBatchRulesError = automationRulesBatchRulesErrors[keyof automationRulesBatchRulesErrors];
+
+export type automationRulesBatchRulesResponses = {
+    /**
+     * Successful Response
+     */
+    200: BatchResult;
+};
+
+export type automationRulesBatchRulesResponse = automationRulesBatchRulesResponses[keyof automationRulesBatchRulesResponses];
 
 export type automationRulesListTemplatesData = {
     body?: never;

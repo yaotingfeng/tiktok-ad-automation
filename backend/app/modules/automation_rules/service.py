@@ -1,7 +1,7 @@
 """规则增删改查、指标目录与试运行。权限每次按动作从数据库重建。"""
 
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import text
@@ -14,6 +14,7 @@ from app.modules.automation_rules.catalog import ACTION_LEVELS, RULE_METRICS
 from app.modules.automation_rules.evaluate import Hit, evaluate
 from app.modules.automation_rules.inputs import load_inputs
 from app.modules.automation_rules.models import (
+    AutomationActionLedger,
     AutomationConfirmation,
     AutomationRule,
     AutomationRuleHit,
@@ -21,12 +22,15 @@ from app.modules.automation_rules.models import (
 )
 from app.modules.automation_rules.schedule import next_run_at
 from app.modules.automation_rules.schemas import (
+    BatchResult,
+    BatchSkipped,
     CatalogMetric,
     CatalogPublic,
     DryRunPublic,
     HitPublic,
     RuleCreate,
     RuleDefinition,
+    RuleOverview,
     RulePage,
     RulePublic,
     RuleUpdate,
@@ -378,3 +382,78 @@ def get_run(session: Session, *, context: TenantContext, run_id: UUID) -> RunDet
             )
         ).first(),
     )
+
+
+OVERVIEW_DAYS = 7
+
+
+def overview(
+    session: Session, *, context: TenantContext, now: datetime | None = None
+) -> RuleOverview:
+    """规则列表顶部概览：近 7 天执行的动作数、待确认批次数、失败与冲突对象数。"""
+    require(session, context, "read")
+    since = (now or datetime.now(UTC)) - timedelta(days=OVERVIEW_DAYS)
+    actions = session.exec(
+        select(AutomationActionLedger.action, func.count())
+        .where(
+            AutomationActionLedger.tenant_id == context.tenant_id,
+            col(AutomationActionLedger.created_at) >= since,
+        )
+        .group_by(col(AutomationActionLedger.action))
+    ).all()
+    counts = {"PAUSE": 0, "ENABLE": 0, "BUDGET": 0, "ROAS": 0}
+    for action, count in actions:
+        # 台账动作键形如 PAUSE、BUDGET_UP、ROAS_SET，按操作类型归类。
+        counts[action.partition("_")[0]] = (
+            counts.get(action.partition("_")[0], 0) + count
+        )
+    pending = session.exec(
+        select(func.count()).where(
+            AutomationConfirmation.tenant_id == context.tenant_id,
+            AutomationConfirmation.status == "PENDING",
+        )
+    ).one()
+    summaries = session.exec(
+        select(AutomationRuleRun.execution_summary).where(
+            AutomationRuleRun.tenant_id == context.tenant_id,
+            col(AutomationRuleRun.started_at) >= since,
+            col(AutomationRuleRun.execution_status).in_(
+                ["SUBMITTED", "PARTIAL", "FAILED", "SKIPPED"]
+            ),
+        )
+    ).all()
+    return RuleOverview(
+        actions_7d=counts,
+        pending_confirmations=pending,
+        failed_7d=sum(int(item.get("failed", 0) or 0) for item in summaries),
+        conflicts_7d=sum(int(item.get("conflicts", 0) or 0) for item in summaries),
+    )
+
+
+def batch_update(
+    session: Session,
+    *,
+    context: TenantContext,
+    rule_ids: list[UUID],
+    operation: str,
+) -> BatchResult:
+    """逐条复用单条开关与删除的权限规则；单条失败记入跳过，不影响其他规则。"""
+    require(session, context, "ads_manage")
+    updated, skipped = 0, []
+    for rule_id in dict.fromkeys(rule_ids):
+        try:
+            with session.begin_nested():
+                if operation == "DELETE":
+                    delete_rule(session, context=context, rule_id=rule_id)
+                else:
+                    set_enabled(
+                        session,
+                        context=context,
+                        rule_id=rule_id,
+                        enabled=operation == "ENABLE",
+                    )
+        except DomainError as exc:
+            skipped.append(BatchSkipped(rule_id=rule_id, reason=exc.code))
+            continue
+        updated += 1
+    return BatchResult(updated=updated, skipped=skipped)

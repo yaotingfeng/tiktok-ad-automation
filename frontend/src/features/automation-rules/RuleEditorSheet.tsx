@@ -1081,10 +1081,7 @@ export function RuleEditorSheet({
         {def.notification?.timing === "SUMMARY" && (
           <div className="flex flex-wrap items-center gap-2">
             {(def.notification.summary_times ?? []).map((moment, index) => (
-              <div
-                key={index}
-                className="flex items-center gap-1"
-              >
+              <div key={index} className="flex items-center gap-1">
                 <Input
                   type="time"
                   aria-label={`汇总时刻 ${index + 1}`}

@@ -18,6 +18,8 @@ export type AutomationBoundaryOptions = {
   dismissed?: string[]
   /** 记录批次明细请求次数 */
   detailRequests?: string[]
+  /** 记录批量操作请求体 */
+  batched?: unknown[]
 }
 
 const CATALOG = {
@@ -183,6 +185,30 @@ const RULE = {
   last_run: RUN,
 }
 
+const AUTO_RULE = {
+  ...RULE,
+  id: "rule-3",
+  name: "跑量加预算",
+  definition: {
+    ...DEFINITION,
+    aggregation: "EACH",
+    apply_to: { ...DEFINITION.apply_to, level: "campaign" },
+    action: {
+      type: "BUDGET",
+      level: "campaign",
+      adjustment: {
+        mode: "INCREASE",
+        value_type: "PERCENT",
+        value: "20",
+        limit: "1000",
+      },
+      frequency: { type: "EVERY_24H", window: null, unit: null, count: null },
+    },
+    mode: "AUTO",
+  },
+  last_run: null,
+}
+
 const HIT = {
   subject_key: "drama:嘉书-总裁归来:USD",
   subject_label: "总裁归来",
@@ -256,6 +282,18 @@ export async function automationBoundary(
         total: 1,
       })
     if (path === `${base}/automation-rules/catalog`) return json(CATALOG)
+    if (path === `${base}/automation-rules/overview`)
+      return json({
+        actions_7d: { PAUSE: 12, ENABLE: 3, BUDGET: 5, ROAS: 0 },
+        pending_confirmations: 1,
+        failed_7d: 2,
+        conflicts_7d: 4,
+      })
+    if (path === `${base}/automation-rules/batch`) {
+      const body = request.postDataJSON()
+      options.batched?.push(body)
+      return json({ updated: body.rule_ids.length, skipped: [] })
+    }
     if (path === `${base}/automation-rules/templates`)
       return json({
         items: [
@@ -298,7 +336,7 @@ export async function automationBoundary(
       return json({ ...RULE, id: "rule-2", name: body.name }, 201)
     }
     if (path === `${base}/automation-rules`)
-      return json({ items: [RULE], total: 1 })
+      return json({ items: [RULE, AUTO_RULE], total: 2 })
     if (path.startsWith(`${base}/automation-rules/rule-1`)) return json(RULE)
     if (path === `${base}/automation-runs`)
       return json({ items: [RUN, EXECUTED_RUN], total: 2 })

@@ -104,3 +104,15 @@ export const templatesQuery = (tenantId: string) =>
         })
       ).data!,
   })
+
+export const overviewQuery = (tenantId: string) =>
+  queryOptions({
+    queryKey: [...ruleKeys(tenantId), "overview"],
+    queryFn: async ({ signal }) =>
+      (
+        await AutomationRulesService.getOverview({
+          path: { tenant_id: tenantId },
+          signal,
+        })
+      ).data!,
+  })

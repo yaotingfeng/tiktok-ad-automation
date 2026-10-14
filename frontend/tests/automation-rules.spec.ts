@@ -304,3 +304,28 @@ test("飞书通知可选固定时间汇总发送", async ({ page }) => {
     },
   })
 })
+
+test("规则概览、筛选与批量停用", async ({ page }) => {
+  const batched: unknown[] = []
+  await automationBoundary(page, { batched })
+  await page.goto(`/tenants/${TENANT}/automation-rules`)
+  const overview = page.getByRole("region", { name: "近 7 天概览" })
+  await expect(overview).toContainText("执行动作20")
+  await expect(overview).toContainText("待确认1")
+  await expect(overview).toContainText("失败2")
+  await expect(overview).toContainText("冲突4")
+  await page.getByRole("combobox", { name: "按执行模式筛选" }).click()
+  await page.getByRole("option", { name: "自动执行" }).click()
+  await expect(page.getByRole("row", { name: /剧级止损/ })).toHaveCount(0)
+  await expect(page.getByRole("row", { name: /跑量加预算/ })).toBeVisible()
+  await page.getByRole("combobox", { name: "按执行模式筛选" }).click()
+  await page.getByRole("option", { name: "全部模式" }).click()
+  await page.getByRole("checkbox", { name: "选择 剧级止损" }).click()
+  await page.getByRole("checkbox", { name: "选择 跑量加预算" }).click()
+  await page.getByRole("button", { name: "批量停用" }).click()
+  await expect.poll(() => batched.length).toBe(1)
+  expect(batched[0]).toEqual({
+    rule_ids: ["rule-1", "rule-3"],
+    operation: "DISABLE",
+  })
+})
