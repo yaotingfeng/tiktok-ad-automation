@@ -1,5 +1,6 @@
 """自动规则 HTTP 接口。"""
 
+from dataclasses import asdict
 from datetime import date
 from typing import Literal
 from uuid import UUID
@@ -8,8 +9,14 @@ from fastapi import APIRouter, Query
 
 from app.api.deps import CurrentUser, SessionDep
 from app.core.context import TenantContext
-from app.modules.automation_rules import confirmations, service, settings_service
+from app.modules.automation_rules import (
+    confirmations,
+    pickers,
+    service,
+    settings_service,
+)
 from app.modules.automation_rules.schemas import (
+    AccountOptionPublic,
     AutomationSettingsPublic,
     AutomationSettingsUpdate,
     BatchRequest,
@@ -22,6 +29,7 @@ from app.modules.automation_rules.schemas import (
     DryRunPublic,
     DryRunRequest,
     FeishuTestRequest,
+    ObjectOptionPublic,
     RuleCreate,
     RuleDefinition,
     RuleEnabled,
@@ -99,6 +107,49 @@ def batch_rules(
     )
     session.commit()
     return result
+
+
+@router.get(
+    "/automation-rules/pickers/accounts", response_model=list[AccountOptionPublic]
+)
+def pick_accounts(
+    tenant_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    q: str = Query(default="", max_length=128),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> list[AccountOptionPublic]:
+    return [
+        AccountOptionPublic(**asdict(item))
+        for item in pickers.search_accounts(
+            session, context=_context(user, tenant_id), query=q, limit=limit
+        )
+    ]
+
+
+@router.get(
+    "/automation-rules/pickers/objects", response_model=list[ObjectOptionPublic]
+)
+def pick_objects(
+    tenant_id: UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    level: Literal["campaign", "adgroup", "ad", "material"],
+    q: str = Query(default="", max_length=200),
+    advertiser_ids: list[str] = Query(default=[], max_length=100),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> list[ObjectOptionPublic]:
+    return [
+        ObjectOptionPublic(**asdict(item))
+        for item in pickers.search_objects(
+            session,
+            context=_context(user, tenant_id),
+            level=level,
+            query=q,
+            advertiser_ids=advertiser_ids,
+            limit=limit,
+        )
+    ]
 
 
 @router.get("/automation-rules/templates", response_model=TemplatePage)

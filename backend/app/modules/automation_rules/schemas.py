@@ -457,3 +457,18 @@ class BatchSkipped(BaseModel):
 class BatchResult(BaseModel):
     updated: int
     skipped: list[BatchSkipped]
+
+
+class AccountOptionPublic(BaseModel):
+    advertiser_id: str
+    name: str
+    bc_id: str
+    currency: str
+    timezone: str
+
+
+class ObjectOptionPublic(BaseModel):
+    value: str
+    label: str
+    advertiser_id: str
+    kind: str

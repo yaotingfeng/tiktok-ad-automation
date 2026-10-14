@@ -284,6 +284,38 @@ export async function automationBoundary(
         total: 1,
       })
     if (path === `${base}/automation-rules/catalog`) return json(CATALOG)
+    if (path === `${base}/automation-rules/pickers/accounts`) {
+      const q = url.searchParams.get("q") ?? ""
+      return json(
+        [
+          {
+            advertiser_id: "7600000000000000001",
+            name: "美国一号户",
+            bc_id: BC_A,
+            currency: "USD",
+            timezone: "UTC",
+          },
+          {
+            advertiser_id: "7600000000000000002",
+            name: "日本二号户",
+            bc_id: BC_A,
+            currency: "JPY",
+            timezone: "Asia/Tokyo",
+          },
+        ].filter(
+          (item) => item.name.includes(q) || item.advertiser_id.includes(q),
+        ),
+      )
+    }
+    if (path === `${base}/automation-rules/pickers/objects`)
+      return json([
+        {
+          value: "7600000000000000001:g1",
+          label: "组一",
+          advertiser_id: "7600000000000000001",
+          kind: "adgroup",
+        },
+      ])
     if (path === `${base}/automation-rules/overview`)
       return json({
         actions_7d: { PAUSE: 12, ENABLE: 3, BUDGET: 5, ROAS: 0 },

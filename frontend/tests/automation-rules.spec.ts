@@ -345,3 +345,38 @@ test("执行记录按结果、账户与剧名筛选", async ({ page }) => {
   expect(last.get("drama")).toBe("总裁")
   expect(last.get("since")).toBe("2026-10-13")
 })
+
+test("搜索选择账户与对象，也可批量粘贴", async ({ page }) => {
+  const created: unknown[] = []
+  await automationBoundary(page, { created })
+  await page.goto(`/tenants/${TENANT}/automation-rules`)
+  await page.getByRole("button", { name: "新建规则" }).click()
+  await page.getByRole("spinbutton", { name: "条件 1 数值" }).fill("10")
+  await page.getByRole("radio", { name: "指定账户" }).click()
+  await page.getByRole("searchbox", { name: "搜索账户" }).fill("美国")
+  await page.getByRole("option", { name: /美国一号户/ }).click()
+  await expect(
+    page.getByRole("button", { name: "移除 7600000000000000001" }),
+  ).toBeVisible()
+  await page.getByRole("button", { name: "批量粘贴账户 ID" }).click()
+  await page
+    .getByRole("textbox", { name: "账户 ID" })
+    .fill("7600000000000000001\n7600000000000000009")
+  await page.getByRole("radio", { name: "指定对象" }).click()
+  await page.getByRole("searchbox", { name: "搜索对象" }).fill("组")
+  await page.getByRole("option", { name: /组一/ }).click()
+  await page.getByRole("button", { name: "保存" }).click()
+  await expect.poll(() => created.length).toBe(1)
+  expect(created[0]).toMatchObject({
+    definition: {
+      accounts: {
+        mode: "ACCOUNTS",
+        advertiser_ids: ["7600000000000000001", "7600000000000000009"],
+      },
+      apply_to: {
+        status: "SELECTED",
+        object_ids: ["7600000000000000001:g1"],
+      },
+    },
+  })
+})

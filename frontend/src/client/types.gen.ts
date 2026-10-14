@@ -55,6 +55,32 @@ export type AccountAsset = {
 };
 
 /**
+ * AccountOptionPublic
+ */
+export type AccountOptionPublic = {
+    /**
+     * Advertiser Id
+     */
+    advertiser_id: string;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Currency
+     */
+    currency: string;
+    /**
+     * Timezone
+     */
+    timezone: string;
+};
+
+/**
  * AccountPublic
  */
 export type AccountPublic = {
@@ -3657,6 +3683,28 @@ export type ObjectCounts = {
      * Ad Count
      */
     ad_count?: number;
+};
+
+/**
+ * ObjectOptionPublic
+ */
+export type ObjectOptionPublic = {
+    /**
+     * Value
+     */
+    value: string;
+    /**
+     * Label
+     */
+    label: string;
+    /**
+     * Advertiser Id
+     */
+    advertiser_id: string;
+    /**
+     * Kind
+     */
+    kind: string;
 };
 
 /**
@@ -12141,6 +12189,96 @@ export type automationRulesBatchRulesResponses = {
 };
 
 export type automationRulesBatchRulesResponse = automationRulesBatchRulesResponses[keyof automationRulesBatchRulesResponses];
+
+export type automationRulesPickAccountsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: {
+        /**
+         * Q
+         */
+        q?: string;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/automation-rules/pickers/accounts';
+};
+
+export type automationRulesPickAccountsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type automationRulesPickAccountsError = automationRulesPickAccountsErrors[keyof automationRulesPickAccountsErrors];
+
+export type automationRulesPickAccountsResponses = {
+    /**
+     * Response Automation Rules-Pick Accounts
+     *
+     * Successful Response
+     */
+    200: Array<AccountOptionPublic>;
+};
+
+export type automationRulesPickAccountsResponse = automationRulesPickAccountsResponses[keyof automationRulesPickAccountsResponses];
+
+export type automationRulesPickObjectsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query: {
+        /**
+         * Level
+         */
+        level: 'campaign' | 'adgroup' | 'ad' | 'material';
+        /**
+         * Q
+         */
+        q?: string;
+        /**
+         * Advertiser Ids
+         */
+        advertiser_ids?: Array<string>;
+        /**
+         * Limit
+         */
+        limit?: number;
+    };
+    url: '/api/tenants/{tenant_id}/automation-rules/pickers/objects';
+};
+
+export type automationRulesPickObjectsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type automationRulesPickObjectsError = automationRulesPickObjectsErrors[keyof automationRulesPickObjectsErrors];
+
+export type automationRulesPickObjectsResponses = {
+    /**
+     * Response Automation Rules-Pick Objects
+     *
+     * Successful Response
+     */
+    200: Array<ObjectOptionPublic>;
+};
+
+export type automationRulesPickObjectsResponse = automationRulesPickObjectsResponses[keyof automationRulesPickObjectsResponses];
 
 export type automationRulesListTemplatesData = {
     body?: never;

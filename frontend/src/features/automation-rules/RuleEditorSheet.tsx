@@ -28,6 +28,7 @@ import { ManagementSheet } from "@/features/tenants/ManagementSheet"
 import { errorMessage } from "@/features/tenants/shared"
 import { ConditionRows } from "./ConditionRows"
 import { DryRunPanel } from "./DryRunPanel"
+import { AccountPicker, ObjectPicker } from "./Pickers"
 import { ruleKeys, settingsQuery } from "./queries"
 import {
   ACTION_LABELS,
@@ -381,13 +382,12 @@ export function RuleEditorSheet({
           </div>
         )}
         {def.accounts.mode === "ACCOUNTS" && (
-          <Textarea
-            aria-label="账户 ID"
-            placeholder="每行或用逗号分隔一个账户 ID"
-            value={accountText}
-            onChange={(e) => {
+          <AccountPicker
+            tenantId={tenantId}
+            text={accountText}
+            onTextChange={(text) => {
               setDryRun(null)
-              setAccountText(e.target.value)
+              setAccountText(text)
             }}
           />
         )}
@@ -445,13 +445,16 @@ export function RuleEditorSheet({
           </RadioGroup>
         </div>
         {def.apply_to.status === "SELECTED" && (
-          <Textarea
-            aria-label="指定对象"
-            placeholder="每行一个：账户ID:对象ID（素材为 账户ID:主素材ID）"
-            value={objectText}
-            onChange={(e) => {
+          <ObjectPicker
+            tenantId={tenantId}
+            level={def.apply_to.level}
+            advertiserIds={
+              def.accounts.mode === "ACCOUNTS" ? lines(accountText) : []
+            }
+            text={objectText}
+            onTextChange={(text) => {
               setDryRun(null)
-              setObjectText(e.target.value)
+              setObjectText(text)
             }}
           />
         )}
