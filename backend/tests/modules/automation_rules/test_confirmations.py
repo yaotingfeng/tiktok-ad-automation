@@ -155,3 +155,13 @@ def test_http_confirm_flow(client, sync_seed, batch):
     assert response.status_code == 200, response.text
     again = client.post(f"{base_url}/{batch.id}/dismiss", headers=headers(ctx))
     assert again.status_code == 409
+
+
+def test_run_detail_shows_execution_state_and_outcomes(session, sync_seed, batch):
+    from app.modules.automation_rules.service import get_run
+
+    detail = get_run(session, context=sync_seed, run_id=batch.run_id)
+    assert detail.run.mode == "CONFIRM"
+    assert detail.run.execution_status == "AWAITING_CONFIRMATION"
+    assert detail.confirmation_id == batch.id
+    assert {hit.outcome for hit in detail.hits} == {"PENDING_CONFIRMATION"}

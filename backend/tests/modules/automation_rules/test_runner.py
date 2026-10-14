@@ -207,3 +207,114 @@ def test_auto_over_limit_becomes_confirmation(session, sync_seed):
     assert run.execution_status == "AWAITING_CONFIRMATION"
     assert run.execution_summary["reason"] == "max_targets_exceeded"
     assert not _dispatches(session, "automation.execute")
+
+
+def _card_text(card):
+    return "\n".join(
+        element["text"]["content"]
+        for element in card["card"]["elements"]
+        if element["tag"] == "div"
+    )
+
+
+def _button(card):
+    action = next(e for e in card["card"]["elements"] if e["tag"] == "action")
+    return action["actions"][0]
+
+
+def test_confirmation_card_links_to_batch(session, sync_seed):
+    from app.modules.automation_rules.models import AutomationConfirmation
+    from app.modules.automation_rules.runner import build_run_card
+
+    _seed(session, sync_seed)
+    rule = make_rule(session, sync_seed, mode="CONFIRM")
+    run = execute_run(session, rule=rule, slot_at=NOW, now=NOW)
+    batch = session.exec(select(AutomationConfirmation)).one()
+    hits = session.exec(
+        select(AutomationRuleHit).where(AutomationRuleHit.run_id == run.id)
+    ).all()
+    card = build_run_card(rule, run, list(hits), confirmation_id=batch.id)
+    assert card["card"]["header"]["title"]["content"] == "【待确认】r"
+    assert card["card"]["header"]["template"] == "yellow"
+    button = _button(card)
+    assert button["text"]["content"] == "去确认"
+    assert button["url"].endswith(
+        f"/automation-rules?tab=confirmations&confirmation={batch.id}"
+    )
+    assert "下次运行前确认" in _card_text(card)
+
+
+def test_auto_over_limit_card_explains_reason(session, sync_seed):
+    from app.modules.automation_rules.runner import build_run_card
+
+    _seed(session, sync_seed)
+    rule = make_rule(
+        session,
+        sync_seed,
+        mode="AUTO",
+        aggregation="ALL",
+        max_targets=1,
+        conditions=[
+            {"metric": "spend", "range": "TODAY", "operator": "GT", "values": ["1"]}
+        ],
+    )
+    run = execute_run(session, rule=rule, slot_at=NOW, now=NOW)
+    card = build_run_card(rule, run, [], confirmation_id=None)
+    assert "超过单次自动执行上限 1" in _card_text(card)
+
+
+def test_execution_result_card(session, sync_seed):
+    from app.modules.automation_rules.runner import build_run_card
+
+    _seed(session, sync_seed)
+    rule = make_rule(session, sync_seed, mode="AUTO")
+    run = execute_run(session, rule=rule, slot_at=NOW, now=NOW)
+    run.execution_status = "PARTIAL"
+    run.execution_summary = {
+        "submitted": 2,
+        "skipped_frequency": 1,
+        "skipped_cooldown": 0,
+        "skipped_daily_limit": 3,
+        "conflicts": 1,
+        "no_change": 4,
+        "failed": 1,
+        "failed_bcs": [{"bc_id": "bc-y", "reason": "route_unavailable"}],
+        "tasks": [],
+        "conflict_details": [
+            {"target_key": "adgroup:acc-1:g1", "rule_name": "拉量", "action": "ENABLE"}
+        ],
+    }
+    card = build_run_card(rule, run, [], confirmation_id=None)
+    assert card["card"]["header"]["title"]["content"] == "【已执行】r"
+    assert card["card"]["header"]["template"] == "red"
+    text = _card_text(card)
+    assert "提交 2 个对象" in text
+    assert "频控跳过 1、冷却期冲突 1、超出每日涨幅 3、无需变更 4" in text
+    assert "bc-y：route_unavailable" in text
+    assert "冲突：adgroup:acc-1:g1 与规则「拉量」相反" in text
+    run.execution_status, run.execution_summary["failed_bcs"] = "SUBMITTED", []
+    run.execution_summary["failed"] = 0
+    card = build_run_card(rule, run, [], confirmation_id=None)
+    assert card["card"]["header"]["template"] == "green"
+    assert _button(card)["url"].endswith(f"tab=runs&run={run.id}")
+
+
+def test_execution_result_notification_respects_rule_setting(session, sync_seed):
+    from app.modules.automation_rules.runner import notify_execution
+
+    _seed(session, sync_seed)
+    quiet = make_rule(session, sync_seed, mode="AUTO", notification={"enabled": False})
+    run = execute_run(session, rule=quiet, slot_at=NOW, now=NOW)
+    run.execution_status = "SUBMITTED"
+    notify_execution(session, run=run, rule=quiet)
+    assert run.notify_status == "NOT_REQUIRED"
+    quiet.name = "quiet"
+    session.flush()
+    loud = make_rule(session, sync_seed, mode="AUTO")
+    run = execute_run(session, rule=loud, slot_at=NOW, now=NOW)
+    run.execution_status = "SUBMITTED"
+    notify_execution(session, run=run, rule=loud)
+    assert run.notify_status == "PENDING"
+    assert [d.task_key for d in _dispatches(session, "automation.send_feishu")] == [
+        f"automation-feishu:{run.id}:SUBMITTED"
+    ]

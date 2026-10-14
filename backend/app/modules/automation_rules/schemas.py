@@ -287,6 +287,9 @@ class RunSummary(BaseModel):
     error_code: str | None
     notify_status: str
     notify_error: str | None
+    mode: str
+    execution_status: str
+    execution_summary: dict[str, Any]
 
 
 class RulePublic(BaseModel):
@@ -319,6 +322,8 @@ class HitPublic(BaseModel):
     metrics: dict[str, str]
     target_count: int
     targets: list[dict[str, Any]]
+    # 执行结果；预演与仅通知运行为 None 或 NOTIFIED。
+    outcome: str | None = None
 
 
 class DryRunRequest(_Strict):
@@ -362,6 +367,8 @@ class RunPage(BaseModel):
 class RunDetail(BaseModel):
     run: RunListItem
     hits: list[HitPublic]
+    # 该运行生成的待确认批次（如有），供前端跳转确认页。
+    confirmation_id: UUID | None = None
 
 
 class ConfirmationItem(BaseModel):

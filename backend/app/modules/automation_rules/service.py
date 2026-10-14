@@ -14,6 +14,7 @@ from app.modules.automation_rules.catalog import ACTION_LEVELS, RULE_METRICS
 from app.modules.automation_rules.evaluate import Hit, evaluate
 from app.modules.automation_rules.inputs import load_inputs
 from app.modules.automation_rules.models import (
+    AutomationConfirmation,
     AutomationRule,
     AutomationRuleHit,
     AutomationRuleRun,
@@ -365,7 +366,13 @@ def get_run(session: Session, *, context: TenantContext, run_id: UUID) -> RunDet
                 metrics=hit.metrics,
                 target_count=hit.target_count,
                 targets=hit.targets,
+                outcome=hit.outcome,
             )
             for hit in hits
         ],
+        confirmation_id=session.exec(
+            select(AutomationConfirmation.id).where(
+                AutomationConfirmation.run_id == run.id
+            )
+        ).first(),
     )

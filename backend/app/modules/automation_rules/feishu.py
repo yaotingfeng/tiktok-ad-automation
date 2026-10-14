@@ -61,6 +61,7 @@ def build_card(
     total_hits: int,
     link: str,
     template: str = "orange",
+    button: str = "查看明细",
 ) -> dict[str, Any]:
     lines = [_hit_line(hit) for hit in hits[:MAX_CARD_HITS]]
     if total_hits > len(lines):
@@ -86,7 +87,7 @@ def build_card(
                     "tag": "button",
                     "type": "primary",
                     "url": link,
-                    "text": {"tag": "plain_text", "content": "查看明细"},
+                    "text": {"tag": "plain_text", "content": button},
                 }
             ],
         }

@@ -25,7 +25,7 @@ from app.modules.automation_rules.models import (
 from app.modules.automation_rules.runner import (
     deliver_notification,
     execute_run,
-    queue_notification,
+    notify_execution,
 )
 from app.modules.automation_rules.schedule import next_run_at
 from app.modules.automation_rules.schemas import RuleDefinition
@@ -211,9 +211,5 @@ def execute(*, tenant_id: str, actor_id: str, payload: dict[str, Any]) -> str:
             now=datetime.now(UTC),
             require_manage=data["mode"] == "AUTO",
         )
-        queue_notification(
-            session,
-            run=run,
-            context=TenantContext(rule.tenant_id, rule.updated_by, "operator"),
-        )
+        notify_execution(session, run=run, rule=rule)
         return run.execution_status
