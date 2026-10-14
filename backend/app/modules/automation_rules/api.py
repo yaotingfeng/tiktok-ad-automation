@@ -1,5 +1,7 @@
 """自动规则 HTTP 接口。"""
 
+from datetime import date
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Query
@@ -196,6 +198,11 @@ def list_runs(
     rule_id: UUID | None = None,
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    result: Literal["HIT", "NO_HIT", "FAILED", "EXECUTED", "CONFLICT"] | None = None,
+    since: date | None = None,
+    until: date | None = None,
+    advertiser_id: str | None = Query(default=None, max_length=128),
+    drama: str | None = Query(default=None, max_length=200),
 ) -> RunPage:
     return service.list_runs(
         session,
@@ -203,6 +210,13 @@ def list_runs(
         rule_id=rule_id,
         limit=limit,
         offset=offset,
+        filters=service.RunFilters(
+            result=result,
+            since=since,
+            until=until,
+            advertiser_id=advertiser_id or None,
+            drama=drama or None,
+        ),
     )
 
 

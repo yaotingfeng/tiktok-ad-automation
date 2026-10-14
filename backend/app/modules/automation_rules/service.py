@@ -1,8 +1,10 @@
 """规则增删改查、指标目录与试运行。权限每次按动作从数据库重建。"""
 
-from dataclasses import asdict
-from datetime import UTC, datetime, timedelta
+from dataclasses import asdict, dataclass
+from datetime import UTC, date, datetime, time, timedelta
+from typing import Any
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -322,6 +324,66 @@ def _run_item(run: AutomationRuleRun, rule_name: str) -> RunListItem:
     return RunListItem(**run_summary(run).model_dump(), rule_name=rule_name)
 
 
+@dataclass(frozen=True)
+class RunFilters:
+    # 结果：HIT 有命中 / NO_HIT 无命中 / FAILED 运行失败 / EXECUTED 已执行 / CONFLICT 有冲突。
+    result: str | None = None
+    since: date | None = None
+    until: date | None = None
+    advertiser_id: str | None = None
+    drama: str | None = None
+
+
+_EXECUTED = ("SUBMITTED", "PARTIAL", "FAILED", "SKIPPED")
+
+
+def _run_conditions(
+    session: Session, context: TenantContext, filters: RunFilters
+) -> list[Any]:
+    conditions: list[Any] = []
+    if filters.result == "HIT":
+        conditions += [
+            AutomationRuleRun.status == "COMPLETE",
+            col(AutomationRuleRun.hit_count) > 0,
+        ]
+    elif filters.result == "NO_HIT":
+        conditions += [
+            AutomationRuleRun.status == "COMPLETE",
+            AutomationRuleRun.hit_count == 0,
+        ]
+    elif filters.result == "FAILED":
+        conditions.append(AutomationRuleRun.status == "FAILED")
+    elif filters.result == "EXECUTED":
+        conditions.append(col(AutomationRuleRun.execution_status).in_(_EXECUTED))
+    elif filters.result == "CONFLICT":
+        conditions.append(
+            col(AutomationRuleRun.execution_summary)["conflicts"].as_integer() > 0
+        )
+    if filters.since or filters.until:
+        # 日期按租户运行时区解释，与规则时段一致。
+        zone = ZoneInfo(
+            load_tenant_setting(session, context.tenant_id).schedule_timezone
+        )
+        if filters.since:
+            start = datetime.combine(filters.since, time(0), zone)
+            conditions.append(col(AutomationRuleRun.started_at) >= start)
+        if filters.until:
+            end = datetime.combine(filters.until + timedelta(days=1), time(0), zone)
+            conditions.append(col(AutomationRuleRun.started_at) < end)
+    hit_filters: list[Any] = []
+    if filters.advertiser_id:
+        hit_filters.append(AutomationRuleHit.advertiser_id == filters.advertiser_id)
+    if filters.drama:
+        hit_filters.append(col(AutomationRuleHit.drama_name).contains(filters.drama))
+    if hit_filters:
+        conditions.append(
+            select(AutomationRuleHit.id)
+            .where(AutomationRuleHit.run_id == AutomationRuleRun.id, *hit_filters)
+            .exists()
+        )
+    return conditions
+
+
 def list_runs(
     session: Session,
     *,
@@ -329,11 +391,13 @@ def list_runs(
     rule_id: UUID | None,
     limit: int,
     offset: int,
+    filters: RunFilters = RunFilters(),
 ) -> RunPage:
     require(session, context, "read")
     condition = [AutomationRuleRun.tenant_id == context.tenant_id]
     if rule_id is not None:
         condition.append(AutomationRuleRun.rule_id == rule_id)
+    condition += _run_conditions(session, context, filters)
     total = session.exec(
         select(func.count()).select_from(AutomationRuleRun).where(*condition)
     ).one()

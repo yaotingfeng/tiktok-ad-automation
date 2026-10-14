@@ -329,3 +329,19 @@ test("规则概览、筛选与批量停用", async ({ page }) => {
     operation: "DISABLE",
   })
 })
+
+test("执行记录按结果、账户与剧名筛选", async ({ page }) => {
+  const runQueries: string[] = []
+  await automationBoundary(page, { runQueries })
+  await page.goto(`/tenants/${TENANT}/automation-rules?tab=runs`)
+  await page.getByRole("combobox", { name: "按结果筛选" }).click()
+  await page.getByRole("option", { name: "有冲突" }).click()
+  await page.getByRole("textbox", { name: "账户 ID" }).fill("acc-1")
+  await page.getByRole("textbox", { name: "剧名" }).fill("总裁")
+  await page.getByLabel("开始日期").fill("2026-10-13")
+  await expect.poll(() => runQueries.at(-1) ?? "").toContain("result=CONFLICT")
+  const last = new URLSearchParams(runQueries.at(-1))
+  expect(last.get("advertiser_id")).toBe("acc-1")
+  expect(last.get("drama")).toBe("总裁")
+  expect(last.get("since")).toBe("2026-10-13")
+})

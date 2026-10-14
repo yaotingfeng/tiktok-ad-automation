@@ -20,6 +20,8 @@ export type AutomationBoundaryOptions = {
   detailRequests?: string[]
   /** 记录批量操作请求体 */
   batched?: unknown[]
+  /** 记录执行记录查询参数 */
+  runQueries?: string[]
 }
 
 const CATALOG = {
@@ -338,8 +340,10 @@ export async function automationBoundary(
     if (path === `${base}/automation-rules`)
       return json({ items: [RULE, AUTO_RULE], total: 2 })
     if (path.startsWith(`${base}/automation-rules/rule-1`)) return json(RULE)
-    if (path === `${base}/automation-runs`)
+    if (path === `${base}/automation-runs`) {
+      options.runQueries?.push(url.search)
       return json({ items: [RUN, EXECUTED_RUN], total: 2 })
+    }
     if (path === `${base}/automation-runs/run-1`)
       return json({ run: RUN, hits: [HIT], confirmation_id: null })
     if (path === `${base}/automation-runs/run-2`)

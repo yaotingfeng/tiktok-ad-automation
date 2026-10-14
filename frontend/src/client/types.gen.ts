@@ -12419,6 +12419,26 @@ export type automationRulesListRunsData = {
          * Offset
          */
         offset?: number;
+        /**
+         * Result
+         */
+        result?: 'HIT' | 'NO_HIT' | 'FAILED' | 'EXECUTED' | 'CONFLICT' | null;
+        /**
+         * Since
+         */
+        since?: string | null;
+        /**
+         * Until
+         */
+        until?: string | null;
+        /**
+         * Advertiser Id
+         */
+        advertiser_id?: string | null;
+        /**
+         * Drama
+         */
+        drama?: string | null;
     };
     url: '/api/tenants/{tenant_id}/automation-runs';
 };

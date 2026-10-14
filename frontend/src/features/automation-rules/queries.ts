@@ -29,14 +29,33 @@ export const rulesQuery = (tenantId: string) =>
       ).data!,
   })
 
-export const runsQuery = (tenantId: string, ruleId?: string) =>
+export type RunFilterValues = {
+  result?: "HIT" | "NO_HIT" | "FAILED" | "EXECUTED" | "CONFLICT"
+  since?: string
+  until?: string
+  advertiser_id?: string
+  drama?: string
+}
+
+export const runsQuery = (
+  tenantId: string,
+  ruleId?: string,
+  filters: RunFilterValues = {},
+) =>
   queryOptions({
-    queryKey: [...ruleKeys(tenantId), "runs", ruleId ?? "all"],
+    queryKey: [...ruleKeys(tenantId), "runs", ruleId ?? "all", filters],
     queryFn: async ({ signal }) =>
       (
         await AutomationRulesService.listRuns({
           path: { tenant_id: tenantId },
-          query: { rule_id: ruleId, limit: 100 },
+          query: {
+            rule_id: ruleId,
+            limit: 100,
+            // 空字符串不作为筛选条件。
+            ...Object.fromEntries(
+              Object.entries(filters).filter(([, value]) => value),
+            ),
+          },
           signal,
         })
       ).data!,

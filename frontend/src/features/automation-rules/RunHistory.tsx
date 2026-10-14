@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import type { ColumnDef } from "@tanstack/react-table"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import type { RunListItem, RunSummary } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
@@ -23,7 +24,13 @@ import {
 import { displayTime } from "@/features/accounts/presentation"
 import { ServerTable } from "@/features/tenants/shared"
 import { HitTable } from "./DryRunPanel"
-import { catalogQuery, rulesQuery, runQuery, runsQuery } from "./queries"
+import {
+  catalogQuery,
+  type RunFilterValues,
+  rulesQuery,
+  runQuery,
+  runsQuery,
+} from "./queries"
 import { MODE_LABELS } from "./ruleForm"
 
 const NOTIFY_LABELS: Record<string, string> = {
@@ -39,6 +46,22 @@ const RUN_ERRORS: Record<string, string> = {
   evaluation_timeout: "判断超时",
 }
 const ALL = "__all__"
+const RESULT_LABELS: Record<NonNullable<RunFilterValues["result"]>, string> = {
+  HIT: "有命中",
+  NO_HIT: "无命中",
+  FAILED: "运行失败",
+  EXECUTED: "已执行",
+  CONFLICT: "有冲突",
+}
+
+function useDebounced<T>(value: T, delay: number): T {
+  const [current, setCurrent] = useState(value)
+  useEffect(() => {
+    const timer = setTimeout(() => setCurrent(value), delay)
+    return () => clearTimeout(timer)
+  }, [value, delay])
+  return current
+}
 const EXECUTION_LABELS: Record<string, string> = {
   AWAITING_CONFIRMATION: "待确认",
   QUEUED: "已排队",
@@ -214,10 +237,16 @@ export function RunHistory({
   onOpenRun: (runId: string | undefined) => void
 }) {
   const [ruleId, setRuleId] = useState<string>(ALL)
+  const [filters, setFilters] = useState<RunFilterValues>({})
+  // 账户与剧名输入稍后再查询，避免每次按键都请求。
+  const debounced = useDebounced(filters, 300)
   const rules = useQuery(rulesQuery(tenantId))
-  const runs = useQuery(
-    runsQuery(tenantId, ruleId === ALL ? undefined : ruleId),
-  )
+  const runs = useQuery({
+    ...runsQuery(tenantId, ruleId === ALL ? undefined : ruleId, debounced),
+    placeholderData: (previous) => previous,
+  })
+  const filtered =
+    ruleId !== ALL || Object.values(filters).some((value) => value)
   const columns = useMemo<ColumnDef<RunListItem>[]>(
     () => [
       {
@@ -294,7 +323,7 @@ export function RunHistory({
   )
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="flex flex-wrap items-center gap-2">
         <Select value={ruleId} onValueChange={setRuleId}>
           <SelectTrigger aria-label="按规则筛选" className="w-64">
             <SelectValue />
@@ -308,6 +337,60 @@ export function RunHistory({
             ))}
           </SelectContent>
         </Select>
+        <Select
+          value={filters.result ?? ALL}
+          onValueChange={(value) =>
+            setFilters({
+              ...filters,
+              result:
+                value === ALL
+                  ? undefined
+                  : (value as RunFilterValues["result"]),
+            })
+          }
+        >
+          <SelectTrigger aria-label="按结果筛选" className="w-36">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>全部结果</SelectItem>
+            {Object.entries(RESULT_LABELS).map(([key, label]) => (
+              <SelectItem key={key} value={key}>
+                {label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Input
+          type="date"
+          aria-label="开始日期"
+          className="w-40"
+          value={filters.since ?? ""}
+          onChange={(e) => setFilters({ ...filters, since: e.target.value })}
+        />
+        <Input
+          type="date"
+          aria-label="结束日期"
+          className="w-40"
+          value={filters.until ?? ""}
+          onChange={(e) => setFilters({ ...filters, until: e.target.value })}
+        />
+        <Input
+          aria-label="账户 ID"
+          placeholder="账户 ID"
+          className="w-40"
+          value={filters.advertiser_id ?? ""}
+          onChange={(e) =>
+            setFilters({ ...filters, advertiser_id: e.target.value.trim() })
+          }
+        />
+        <Input
+          aria-label="剧名"
+          placeholder="剧名包含"
+          className="w-40"
+          value={filters.drama ?? ""}
+          onChange={(e) => setFilters({ ...filters, drama: e.target.value })}
+        />
       </CardHeader>
       <CardContent>
         <ServerTable
@@ -318,7 +401,7 @@ export function RunHistory({
           fetching={runs.isFetching}
           error={runs.error}
           retry={() => void runs.refetch()}
-          filtered={ruleId !== ALL}
+          filtered={filtered}
           emptyTitle="还没有运行记录"
         />
       </CardContent>
