@@ -5,10 +5,10 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from app.modules.ad_management.schemas import MutationSpec
+from app.modules.ad_management.schemas import MutationField, MutationSpec, StatusValue
 from app.modules.automation_rules.schemas import Action, Frequency
 
-_FIELD = {"BUDGET": "budget", "ROAS": "roas"}
+_FIELD: dict[str, MutationField] = {"BUDGET": "budget", "ROAS": "roas"}
 _SUFFIX = {"INCREASE": "UP", "DECREASE": "DOWN", "SET": "SET"}
 _WINDOWS = {
     "EVERY_24H": timedelta(hours=24),
@@ -39,7 +39,7 @@ def opposite(a: str, b: str) -> bool:
 def mutation_for(action: Action) -> MutationSpec:
     """不含目标引用的变更；目标由冻结选择提供。素材启停用 status + 素材使用表示。"""
     if action.type in ("PAUSE", "ENABLE"):
-        value = "DISABLE" if action.type == "PAUSE" else "ENABLE"
+        value: StatusValue = "DISABLE" if action.type == "PAUSE" else "ENABLE"
         return MutationSpec(field="status", mode="set", value=value)
     adjustment = action.adjustment
     assert adjustment is not None
