@@ -2233,3 +2233,11 @@
 - 后端：`ManagementTaskPublic` 新增 `created_at`、`actor_name`、`mutation`（冻结在预览里的字段、方式和值）、`source`（人工 / 自动规则及规则名）、`target_kinds`（各层级对象数）；提交接口的即时回执不带这些字段。`actions._with_summaries` 批量补齐，列表和详情共用。来源以 `automation_action_ledger.management_task_id` 为准：自动规则以规则最后修改人的身份提交任务，只看操作人分不出人工还是规则；规则删除后 `rule_id` 置空，仍标记为自动规则。列表改为按 `created_at` 倒序、同一时刻按 ID 倒序，游标改为“时间|ID”。新增 `action`（enable/disable/budget/roas）和 `source`（manual/rule）筛选，在 SQL 中完成；原有的逐条可见性校验保留不变。
 - 前端：列表页改为“时间 / 动作 / 对象 / 来源 / 结果 / 明细”。结果显示状态和非零计数（成功、失败、待核查等），可按动作、来源筛选（写入地址参数），用“加载更多”翻页。详情页的任务状态卡补充时间、动作、对象和来源。展示文案集中在 `features/ad-management/presentation.ts`。客户端用 `scripts/generate-client.sh` 重新生成。
 - 验证：专用库 `tkada_oplog_20261014_test` + Redis DB9，广告管理、自动规则、报表模块共 449 通过（新增 `test_task_history.py` 3 个：时间倒序与游标、摘要字段与规则删除后的来源、动作与来源筛选；把排序改回按 ID 后，倒序用例失败）。前端 `tsc -p tsconfig.build.json`、biome、`vite build` 通过；Playwright `workspace` 项目 571 全部通过（新增操作记录列表展示、加载更多、来源筛选 1 个用例）。改动后端文件 ruff、ty 通过，mypy 无新增错误。未部署。
+
+## 2026-10-14：自动规则、素材对照等 56 个提交生产发布
+
+- 开关：用户要求打开自动规则。发布前线上运行 Secret 没有 `AUTOMATED_RULES_ENABLED`（发布工具会拒绝），已只追加该项为 `true`；其余保持 导入/清理/周期同步 = true/true/true。发布后 API、Beat、control、报表 Worker 实际加载四项均为 true；Beat 每分钟投递 `automation.scan_due` / `scan_summaries`，control 执行成功。线上暂无规则，未产生运行与飞书发送。
+- 首次批次 `20261014T184127-ae12c1` 在检查阶段发现自动规则 13 个用例依赖本机 `.env` 的 `CONNECTION_ENCRYPTION_KEY`；未接触集群即停止，修复为测试自带临时密钥（`89d1d6ce`）。
+- 生产发布：批次 `20261014T191352-223a65`，`aa1032e` → `89d1d6ce`（已先推送 GitHub origin main），phase=complete。全量检查后端 4915 项失败 0（并行不稳定 4 项单独重跑通过），前端 workspace 571、R2 验收、发布工具通过。停写排空 unacked 0，备份隔离恢复通过（PG 一致、5 份凭据可解密），`latest.tar` 已替换。迁移 0026–0029 完成，head `0029_material_post_link`。镜像 `sha256:212ca1fa…10bd`，9 Pod Ready、Worker 7/7、Beat 1，HTTPS/健康 200。
+- 素材对照回填：发布后对 120 个账户排入手动素材任务（等同报表“刷新”），224 个素材任务完成后对照 29,855 条全部解析到视频；10-13 $947.36、10-14 $318.00 素材日报金额全部归到视频。52 个旧帖子记为待定位扫描（仍单独成行，金额不丢）。报表/control/Beat 40 分钟内无 ERROR/Traceback。
+- 未做：真实 OAuth 重新授权、广告写入与自动规则飞书真实发送验收（需租户先配置 Webhook 与规则）。
