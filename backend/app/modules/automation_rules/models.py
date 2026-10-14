@@ -150,7 +150,7 @@ class AutomationActionLedger(SQLModel, table=True):
 
 
 class AutomationConfirmation(SQLModel, table=True):
-    """确认后执行（或超出单次上限）的待确认批次，一次运行至多一个。"""
+    """确认后执行的待确认批次，一次运行至多一个。"""
 
     __tablename__ = "automation_confirmation"
     __table_args__ = (

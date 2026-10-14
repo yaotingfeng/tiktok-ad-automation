@@ -15,8 +15,7 @@ _RATIOS = {name: (num, den, scale) for name, num, den, scale in DERIVED_RATIOS}
 _STATUS = {"ACTIVE": "ENABLE", "PAUSED": "DISABLE"}
 
 
-# 单条命中保存的执行对象上限（与单次执行对象上限的最大值一致）。单次上限只决定
-# 自动执行是否转人工确认，不截断对象列表，否则确认后只会执行其中一部分。
+# 单条命中保存的执行对象上限，保护运行记录体积；正常规模下执行全部命中对象。
 MAX_STORED_TARGETS = 5000
 
 
