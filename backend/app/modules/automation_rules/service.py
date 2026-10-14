@@ -224,6 +224,8 @@ def set_enabled(
 ) -> RulePublic:
     require(session, context, "ads_manage")
     rule = _load(session, context, rule_id)
+    # 开关会改写最后修改人（自动执行的执行身份），自动执行规则同样只允许租户管理员操作。
+    _check_mode(session, context, RuleDefinition.model_validate(rule.definition))
     rule.enabled = enabled
     rule.updated_by, rule.updated_at = context.actor_id, datetime.now(UTC)
     _reschedule(session, rule, rule.updated_at)

@@ -172,3 +172,31 @@ def test_operator_cannot_save_auto_rule(client, context):
 
 def test_admin_saves_auto_rule(client, admin_context):
     assert create(client, admin_context, mode="AUTO").status_code == 201
+
+
+def test_operator_cannot_toggle_auto_rule(session, admin_context):
+    import pytest
+
+    from app.core.errors import DomainError
+    from app.modules.automation_rules.models import AutomationRule
+    from app.modules.automation_rules.service import set_enabled
+    from app.modules.tenants.models import TenantMembership
+    from tests.modules.automation_rules.test_definition import base
+
+    rule = AutomationRule(
+        tenant_id=admin_context.tenant_id,
+        name="auto",
+        created_by=admin_context.actor_id,
+        updated_by=admin_context.actor_id,
+        definition=base(mode="AUTO"),
+    )
+    session.add(rule)
+    session.flush()
+    session.get(
+        TenantMembership, (admin_context.tenant_id, admin_context.actor_id)
+    ).role = "operator"
+    session.flush()
+    # 改写最后修改人会让自动执行以操作员身份失败，开关自动执行规则需要租户管理员。
+    with pytest.raises(DomainError):
+        set_enabled(session, context=admin_context, rule_id=rule.id, enabled=False)
+    assert rule.enabled
