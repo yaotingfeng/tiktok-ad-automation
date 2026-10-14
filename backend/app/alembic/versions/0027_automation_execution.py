@@ -65,8 +65,8 @@ def upgrade() -> None:
         "automation_action_ledger",
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
-        sa.Column("rule_id", sa.Uuid(), nullable=False),
-        sa.Column("run_id", sa.Uuid(), nullable=False),
+        sa.Column("rule_id", sa.Uuid(), nullable=True),
+        sa.Column("run_id", sa.Uuid(), nullable=True),
         sa.Column("target_key", _str(300), nullable=False),
         sa.Column("action", _str(32), nullable=False),
         sa.Column("original_value", _str(128), nullable=True),
@@ -75,10 +75,10 @@ def upgrade() -> None:
         sa.Column("created_at", _TS, nullable=False),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenant.id"]),
         sa.ForeignKeyConstraint(
-            ["rule_id"], ["automation_rule.id"], ondelete="CASCADE"
+            ["rule_id"], ["automation_rule.id"], ondelete="SET NULL"
         ),
         sa.ForeignKeyConstraint(
-            ["run_id"], ["automation_rule_run.id"], ondelete="CASCADE"
+            ["run_id"], ["automation_rule_run.id"], ondelete="SET NULL"
         ),
         sa.PrimaryKeyConstraint("id"),
     )

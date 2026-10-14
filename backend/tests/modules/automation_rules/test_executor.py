@@ -925,3 +925,102 @@ def test_confirm_execution_uses_decider(session, env, monkeypatch):
     )
     assert result == "SUBMITTED"
     assert session.exec(select(ManagementTask)).one().actor_id == decider.id
+
+
+def test_ledger_outlives_deleted_rule_and_old_runs(session, env):
+
+    other, other_run = _rule_run(
+        session,
+        env,
+        action={"type": "ENABLE", "level": "adgroup"},
+        targets=[],
+        name="other",
+    )
+    session.add(
+        AutomationActionLedger(
+            tenant_id=env.tenant_id,
+            rule_id=other.id,
+            run_id=other_run.id,
+            target_key="adgroup:acc-x:g1",
+            action="ENABLE",
+            created_at=NOW - timedelta(hours=1),
+        )
+    )
+    session.flush()
+    # 删除规则后它最近的动作仍在台账中，冷却期冲突照常识别。
+    session.delete(other)
+    session.flush()
+    rule, run = _rule_run(
+        session, env, action=PAUSE, targets=[_target("acc-x", "bc-x")]
+    )
+    summary = execute_hits(
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=rule.updated_by,
+        require_manage=True,
+    )
+    assert summary["conflicts"] == 1
+    assert summary["conflict_details"][0]["rule_name"] == "已删除的规则"
+
+
+def test_once_frequency_survives_run_cleanup(session, env):
+    from app.modules.automation_rules.tasks import cleanup_runs
+
+    rule, old_run = _rule_run(
+        session,
+        env,
+        action=BUDGET_UP,
+        targets=[],
+        frequency={"type": "ONCE"},
+    )
+    old_run.started_at = NOW - timedelta(days=40)
+    session.add(
+        AutomationActionLedger(
+            tenant_id=env.tenant_id,
+            rule_id=rule.id,
+            run_id=old_run.id,
+            target_key="adgroup:acc-x:g1",
+            action="BUDGET_UP",
+            created_at=NOW - timedelta(days=40),
+        )
+    )
+    session.flush()
+    cleanup_runs(session, now=NOW)
+    run = AutomationRuleRun(
+        tenant_id=env.tenant_id,
+        rule_id=rule.id,
+        rule_version=1,
+        definition=rule.definition,
+        slot_at=NOW,
+        status="COMPLETE",
+        mode="AUTO",
+    )
+    session.add(run)
+    session.flush()
+    session.add(
+        AutomationRuleHit(
+            tenant_id=env.tenant_id,
+            run_id=run.id,
+            sequence=0,
+            subject_key="adgroup:acc-x:g1",
+            subject_label="g",
+            metrics={},
+            targets=[_target("acc-x", "bc-x")],
+            target_count=1,
+        )
+    )
+    session.flush()
+    summary = execute_hits(
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=rule.updated_by,
+        require_manage=True,
+    )
+    # 「仅一次」不因运行记录清理或超过 31 天而重新允许。
+    assert summary["skipped_frequency"] == 1 and summary["submitted"] == 0

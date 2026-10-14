@@ -14,7 +14,7 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from sqlalchemy import text
+from sqlalchemy import or_, text
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -227,9 +227,16 @@ def execute_hits(
             owners[target["key"]].append(hit)
     outcome: dict[str, str] = {}
     history = _ledger(
-        session, rule.tenant_id, list(targets), now, setting.reverse_cooldown_hours
+        session,
+        rule.tenant_id,
+        list(targets),
+        now,
+        setting.reverse_cooldown_hours,
+        rule_id=rule.id,
     )
-    rule_names = _rule_names(session, {row.rule_id for row in history})
+    rule_names = _rule_names(
+        session, {row.rule_id for row in history if row.rule_id is not None}
+    )
     runnable: dict[str, dict[str, Any]] = {}
     for target_key, target in targets.items():
         rows = [row for row in history if row.target_key == target_key]
@@ -250,7 +257,9 @@ def execute_hits(
             summary["conflict_details"].append(
                 {
                     "target_key": target_key,
-                    "rule_name": rule_names.get(conflict.rule_id, ""),
+                    "rule_name": rule_names.get(conflict.rule_id, "已删除的规则")
+                    if conflict.rule_id is not None
+                    else "已删除的规则",
                     "action": conflict.action,
                 }
             )
@@ -353,11 +362,13 @@ def _ledger(
     keys: list[str],
     now: datetime,
     cooldown_hours: int,
+    *,
+    rule_id: UUID,
 ) -> list[AutomationActionLedger]:
     if not keys:
         return []
-    # 频控、冷却期与当日涨幅都只需要最近的台账：冷却期最长 168 小时，
-    # 频控最长一周，自定义频控按天计最多 30 天。
+    # 冷却期与当日涨幅只看最近的台账（冷却期最长 168 小时）；本规则自己的动作
+    # 全部读取，「仅一次」等频控不随时间失效。
     since = now - timedelta(days=31, hours=cooldown_hours)
     return list(
         session.exec(
@@ -365,7 +376,10 @@ def _ledger(
             .where(
                 AutomationActionLedger.tenant_id == tenant_id,
                 col(AutomationActionLedger.target_key).in_(keys),
-                col(AutomationActionLedger.created_at) >= since,
+                or_(
+                    col(AutomationActionLedger.created_at) >= since,
+                    col(AutomationActionLedger.rule_id) == rule_id,
+                ),
             )
             .order_by(col(AutomationActionLedger.created_at))
         ).all()

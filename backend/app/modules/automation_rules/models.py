@@ -121,7 +121,11 @@ class TenantFeishuSetting(SQLModel, table=True):
 
 
 class AutomationActionLedger(SQLModel, table=True):
-    """每次提交给广告管理的规则动作；频控、冷却期与每日涨幅上限都以它为准。"""
+    """每次提交给广告管理的规则动作；频控、冷却期与每日涨幅上限都以它为准。
+
+    台账独立于运行与规则保留：运行清理或规则删除后，频控（如「仅一次」）与
+    其他规则的冷却期冲突判断仍要看到这些动作。
+    """
 
     __tablename__ = "automation_action_ledger"
     __table_args__ = (
@@ -129,8 +133,12 @@ class AutomationActionLedger(SQLModel, table=True):
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     tenant_id: UUID = Field(foreign_key="tenant.id")
-    rule_id: UUID = Field(foreign_key="automation_rule.id", ondelete="CASCADE")
-    run_id: UUID = Field(foreign_key="automation_rule_run.id", ondelete="CASCADE")
+    rule_id: UUID | None = Field(
+        default=None, foreign_key="automation_rule.id", ondelete="SET NULL"
+    )
+    run_id: UUID | None = Field(
+        default=None, foreign_key="automation_rule_run.id", ondelete="SET NULL"
+    )
     target_key: str = Field(max_length=300)
     action: str = Field(max_length=32)
     original_value: str | None = Field(default=None, max_length=128)
