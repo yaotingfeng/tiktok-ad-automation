@@ -182,7 +182,16 @@ def test_group_and_selection_payload():
         }
     ]
     refs, uses = selection_payload(groups["bc-1"], tenant)
-    assert refs == [] and uses == [
+    # 素材使用所在的广告也进入 refs，广告管理按 refs 加载目录对象。
+    assert refs == [
+        {
+            "tenant_id": str(tenant),
+            "advertiser_id": "a2",
+            "kind": "ad",
+            "remote_id": "x9",
+        }
+    ]
+    assert uses == [
         {
             "ad_ref": {
                 "tenant_id": str(tenant),

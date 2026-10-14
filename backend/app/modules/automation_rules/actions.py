@@ -99,21 +99,25 @@ def _ref(
 def selection_payload(
     targets: list[dict[str, Any]], tenant_id: UUID
 ) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
-    """对象目标写入 refs；素材目标展开为它在各广告中的全部使用。"""
+    """对象目标写入 refs；素材目标展开为它在各广告中的全部使用。
+
+    广告管理按 refs 加载目录对象，素材使用所在的广告也必须出现在 refs 中。
+    """
     refs: list[dict[str, str]] = []
     uses: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def add_ref(advertiser_id: str, kind: str, remote_id: str) -> None:
+        if (advertiser_id, kind, remote_id) not in seen:
+            seen.add((advertiser_id, kind, remote_id))
+            refs.append(_ref(tenant_id, advertiser_id, kind, remote_id))
+
     for target in targets:
         if target["kind"] != "material":
-            refs.append(
-                _ref(
-                    tenant_id,
-                    target["advertiser_id"],
-                    target["kind"],
-                    target["remote_id"],
-                )
-            )
+            add_ref(target["advertiser_id"], target["kind"], target["remote_id"])
             continue
         for use in target.get("material_uses", ()):
+            add_ref(use["advertiser_id"], "ad", use["ad_remote_id"])
             uses.append(
                 {
                     "ad_ref": _ref(
@@ -125,3 +129,49 @@ def selection_payload(
                 }
             )
     return refs, uses
+
+
+def use_key(
+    advertiser_id: str,
+    ad_remote_id: str,
+    platform_material_id: str,
+    ad_material_id: str | None,
+    material_type: str,
+) -> tuple[str, str, str, str | None, str]:
+    return (
+        advertiser_id,
+        ad_remote_id,
+        platform_material_id,
+        ad_material_id,
+        material_type,
+    )
+
+
+def target_index(
+    targets: list[dict[str, Any]],
+) -> dict[tuple[Any, ...], str]:
+    """预览项回映到规则目标键：素材按使用身份，其余按对象身份。
+
+    规则的素材目标以主素材 ID 建键，与预览项上的平台素材 ID 不同，不能从预览项重建。
+    """
+    index: dict[tuple[Any, ...], str] = {}
+    for target in targets:
+        if target["kind"] != "material":
+            index[
+                ("object", target["advertiser_id"], target["kind"], target["remote_id"])
+            ] = target["key"]
+            continue
+        for use in target.get("material_uses", ()):
+            index[
+                (
+                    "use",
+                    *use_key(
+                        use["advertiser_id"],
+                        use["ad_remote_id"],
+                        use["platform_material_id"],
+                        use["ad_material_id"],
+                        use["material_type"],
+                    ),
+                )
+            ] = target["key"]
+    return index

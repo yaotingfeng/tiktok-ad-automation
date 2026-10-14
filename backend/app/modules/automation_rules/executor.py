@@ -29,6 +29,8 @@ from app.modules.automation_rules.actions import (
     mutation_for,
     opposite,
     selection_payload,
+    target_index,
+    use_key,
 )
 from app.modules.automation_rules.models import (
     AutomationActionLedger,
@@ -137,10 +139,30 @@ def _selection(
     return record
 
 
-def _target_key(ref: EntityRef, material_use: Any) -> str:
+def _target_key(
+    index: dict[tuple[Any, ...], str], ref: EntityRef, material_use: Any
+) -> str:
     if material_use is not None:
+        found = index.get(
+            (
+                "use",
+                *use_key(
+                    material_use.ad_ref.advertiser_id,
+                    material_use.ad_ref.remote_id,
+                    material_use.platform_material_id,
+                    material_use.ad_material_id,
+                    material_use.material_type,
+                ),
+            )
+        )
+        if found:
+            return found
         return f"material:{ref.advertiser_id}:{material_use.platform_material_id}"
-    return f"{ref.kind}:{ref.advertiser_id}:{ref.remote_id}"
+    # 系列或广告组被展开到下级（如预算归属的系列）时，没有对应规则目标，按对象身份记账。
+    return index.get(
+        ("object", ref.advertiser_id, ref.kind, ref.remote_id),
+        f"{ref.kind}:{ref.advertiser_id}:{ref.remote_id}",
+    )
 
 
 def _day_start(now: datetime, timezone: str) -> datetime:
@@ -365,6 +387,7 @@ def _execute_bc(
         session, context=context, bc_id=bc_id, targets=targets, run=run, now=now
     )
     mutation = mutation_for(definition.action)
+    index = target_index(targets)
     preview = prepare_preview(session, context, bc_id, selection.id, mutation)
     if action_name.endswith("_UP"):
         # 当日累计涨幅：以当日该对象第一次被规则提高前的值为基准。
@@ -372,7 +395,7 @@ def _execute_bc(
         for item in preview.items:
             if item.execution_result != "PENDING" or item.original_value is None:
                 continue
-            target_key = _target_key(item.ref, item.material_use)
+            target_key = _target_key(index, item.ref, item.material_use)
             today = [
                 row
                 for row in history
@@ -394,7 +417,7 @@ def _execute_bc(
             preview = prepare_preview(session, context, bc_id, selection.id, mutation)
     pending = []
     for item in preview.items:
-        target_key = _target_key(item.ref, item.material_use)
+        target_key = _target_key(index, item.ref, item.material_use)
         if target_key in outcome:
             continue
         if item.execution_result == "PENDING":

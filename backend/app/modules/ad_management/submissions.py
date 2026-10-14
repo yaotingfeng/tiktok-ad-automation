@@ -132,8 +132,16 @@ def _check_preview(
                 raise DomainError(
                     "frozen_route_scope_mismatch", "管理目标的冻结路由已变化"
                 )
-            item_operation = item.capability.get("operation") if item.capability else None
-            expected_operation = item_operation if is_restore else operation
+            item_operation = (
+                item.capability.get("operation") if item.capability else None
+            )
+            # 素材启停项以 status 变更冻结，但执行调用的是素材开关，门禁按项自身操作校验。
+            material_switch = (
+                operation == "set_status" and item_operation == "set_material_status"
+            )
+            expected_operation = (
+                item_operation if is_restore or material_switch else operation
+            )
             if expected_operation not in {
                 "update_roas",
                 "update_budget",

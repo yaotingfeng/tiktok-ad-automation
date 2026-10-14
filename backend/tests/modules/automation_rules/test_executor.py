@@ -505,3 +505,100 @@ def test_material_target_uses_material_mode_and_ledger_key(session, env):
         "NO_CHANGE",
         "UNSUPPORTED",
     }
+
+
+def _smart_material(session, context, connection):
+    from app.modules.ads.models import AdMaterialReference
+
+    session.add(
+        AdObject(
+            tenant_id=context.tenant_id,
+            advertiser_id="acc-x",
+            kind="ad",
+            remote_id="x1",
+            parent_kind="adgroup",
+            parent_remote_id="g1",
+            ad_type="UPGRADED_SMART_PLUS",
+            name="ad-x1",
+            configuration={},
+            operation_status="ENABLE",
+            review_status="APPROVED",
+            delivery_status="DELIVERING",
+            observed_at=NOW - timedelta(hours=1),
+            published_version=1,
+            source_connection_id=connection.id,
+            source_channel="OFFICIAL_API",
+        )
+    )
+    session.add(
+        AdMaterialReference(
+            tenant_id=context.tenant_id,
+            advertiser_id="acc-x",
+            ad_remote_id="x1",
+            platform_material_id="v1",
+            ad_material_id="am1",
+            material_type="VIDEO",
+            name="素材一",
+            main_material_id="m1",
+            main_material_type="VIDEO",
+            operation_status="ENABLE",
+            complete=True,
+            published_version=1,
+        )
+    )
+    session.flush()
+    route = freeze_route(session, context=context, bc_id="bc-x")
+    session.add(
+        ManagementCapability(
+            tenant_id=context.tenant_id,
+            bc_id="bc-x",
+            advertiser_id="acc-x",
+            connection_id=route.connection_id,
+            authorization_revision=route.authorization_revision,
+            binding_revision=route.binding_revision,
+            adapter_contract_revision=route.adapter_contract_revision,
+            operation="set_material_status",
+            entity_kind="ad",
+            state="VERIFIED",
+            verified_at=datetime.now(UTC),
+            evidence={"source": "automation-test"},
+        )
+    )
+    session.flush()
+    # 规则目标按主素材 ID 建键，与平台素材 ID 不同。
+    return {
+        "key": "material:acc-x:m1",
+        "kind": "material",
+        "advertiser_id": "acc-x",
+        "bc_id": "bc-x",
+        "remote_id": "m1",
+        "name": "素材一",
+        "material_uses": [
+            {
+                "advertiser_id": "acc-x",
+                "ad_remote_id": "x1",
+                "platform_material_id": "v1",
+                "ad_material_id": "am1",
+                "material_type": "VIDEO",
+            }
+        ],
+    }
+
+
+def test_smart_plus_material_pause_keys_ledger_by_rule_target(session, env):
+    connection = session.exec(
+        select(TikTokConnection).where(TikTokConnection.tenant_id == env.tenant_id)
+    ).first()
+    target = _smart_material(session, env, connection)
+    rule, run = _rule_run(
+        session, env, action={"type": "PAUSE", "level": "material"}, targets=[target]
+    )
+    summary = execute_hits(
+        session, run=run, rule=rule, selected_keys=None, now=NOW, require_manage=True
+    )
+    assert summary["submitted"] == 1 and summary["failed"] == 0
+    assert _hits(session, run) == {"material:acc-x:m1": "SUBMITTED"}
+    ledger = session.exec(select(AutomationActionLedger)).all()
+    assert [(row.target_key, row.action) for row in ledger] == [
+        ("material:acc-x:m1", "PAUSE")
+    ]
