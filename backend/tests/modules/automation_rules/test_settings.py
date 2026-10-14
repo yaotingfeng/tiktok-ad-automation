@@ -151,3 +151,47 @@ def test_execution_settings_roundtrip(client, admin_context):
         ).status_code
         == 422
     )
+
+
+def test_timezone_change_reschedules_enabled_rules(session, sync_seed):
+    from datetime import UTC, datetime, time
+    from zoneinfo import ZoneInfo
+
+    from app.modules.automation_rules.models import AutomationRule
+    from app.modules.automation_rules.schedule import next_run_at
+    from app.modules.automation_rules.schemas import (
+        AutomationSettingsUpdate,
+        Schedule,
+    )
+    from app.modules.automation_rules.settings_service import update_settings
+    from app.modules.tenants.models import TenantMembership
+    from tests.modules.automation_rules.test_definition import base
+
+    session.get(
+        TenantMembership, (sync_seed.tenant_id, sync_seed.actor_id)
+    ).role = "tenant_admin"
+    daily = {"frequency": "DAILY", "daily_at": "09:00", "window": "CONTINUOUS"}
+    rule = AutomationRule(
+        tenant_id=sync_seed.tenant_id,
+        name="daily",
+        created_by=sync_seed.actor_id,
+        updated_by=sync_seed.actor_id,
+        definition=base(schedule=daily),
+        next_run_at=datetime(2026, 10, 15, 1, 0, tzinfo=UTC),  # 上海 09:00
+    )
+    session.add(rule)
+    session.flush()
+    update_settings(
+        session,
+        context=sync_seed.context,
+        body=AutomationSettingsUpdate(
+            schedule_timezone="America/New_York", paused=False, feishu_enabled=False
+        ),
+    )
+    expected = next_run_at(
+        Schedule.model_validate(daily),
+        after=datetime.now(UTC),
+        timezone="America/New_York",
+    )
+    assert rule.next_run_at == expected
+    assert rule.next_run_at.astimezone(ZoneInfo("America/New_York")).time() == time(9)

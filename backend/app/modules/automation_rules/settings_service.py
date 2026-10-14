@@ -4,20 +4,23 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 import httpx
-from sqlmodel import Session
+from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.core.credentials import decrypt_credentials, encrypt_credentials
 from app.core.errors import DomainError
 from app.modules.automation_rules import feishu
 from app.modules.automation_rules.models import (
+    AutomationRule,
     AutomationTenantSetting,
     TenantFeishuSetting,
 )
+from app.modules.automation_rules.schedule import next_run_at
 from app.modules.automation_rules.schemas import (
     AutomationSettingsPublic,
     AutomationSettingsUpdate,
     FeishuTestRequest,
+    RuleDefinition,
 )
 from app.modules.tenants.permissions import require_tenant
 
@@ -60,6 +63,21 @@ def get_settings(
     return _public(session, context.tenant_id)
 
 
+def _reschedule_tenant(
+    session: Session, tenant_id: UUID, timezone: str, now: datetime
+) -> None:
+    """运行时区变更后，按新时区重算所有启用规则的下一次运行时刻。"""
+    rules = session.exec(
+        select(AutomationRule).where(
+            AutomationRule.tenant_id == tenant_id,
+            col(AutomationRule.enabled).is_(True),
+        )
+    ).all()
+    for rule in rules:
+        schedule = RuleDefinition.model_validate(rule.definition).schedule
+        rule.next_run_at = next_run_at(schedule, after=now, timezone=timezone)
+
+
 def update_settings(
     session: Session, *, context: TenantContext, body: AutomationSettingsUpdate
 ) -> AutomationSettingsPublic:
@@ -71,11 +89,14 @@ def update_settings(
     if setting is None:
         setting = AutomationTenantSetting(tenant_id=context.tenant_id)
         session.add(setting)
+    zone_changed = setting.schedule_timezone != body.schedule_timezone
     setting.schedule_timezone, setting.paused, setting.updated_at = (
         body.schedule_timezone,
         body.paused,
         now,
     )
+    if zone_changed:
+        _reschedule_tenant(session, context.tenant_id, body.schedule_timezone, now)
     setting.reverse_cooldown_hours = body.reverse_cooldown_hours
     setting.daily_increase_limit_pct = body.daily_increase_limit_pct
     row = session.get(TenantFeishuSetting, context.tenant_id)
