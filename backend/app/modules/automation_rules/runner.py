@@ -241,6 +241,9 @@ def _execution_lines(summary: dict[str, Any]) -> list[str]:
         f"超出每日涨幅 {summary.get('skipped_daily_limit', 0)}、"
         f"无需变更 {summary.get('no_change', 0)}"
     ]
+    if summary.get("unsupported"):
+        # 例如普通广告的素材没有广告内素材 ID，平台不支持单独启停。
+        lines.append(f"不支持操作 {summary['unsupported']} 个对象（如普通广告的素材）")
     if summary.get("failed"):
         lines.append(f"失败 {summary['failed']} 个对象")
     if summary.get("error"):

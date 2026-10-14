@@ -550,12 +550,12 @@ def test_material_target_uses_material_mode_and_ledger_key(session, env):
         actor_id=rule.updated_by,
         require_manage=True,
     )
-    assert summary["submitted"] == 0
-    assert _hits(session, run)["material:acc-x:v1"] in {
-        "FAILED",
-        "NO_CHANGE",
-        "UNSUPPORTED",
-    }
+    # 普通广告的素材没有广告内素材 ID，不能单独启停：记为不支持而不是失败。
+    assert summary["submitted"] == 0 and summary["failed"] == 0
+    assert summary["unsupported"] == 1
+    assert summary["unsupported_details"][0]["target_key"] == "material:acc-x:v1"
+    assert _hits(session, run)["material:acc-x:v1"] == "UNSUPPORTED"
+    assert run.execution_status == "SKIPPED"
 
 
 def _smart_material(session, context, connection):

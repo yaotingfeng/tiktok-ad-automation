@@ -30,6 +30,7 @@ export const OUTCOME_LABELS: Record<string, string> = {
   PENDING_CONFIRMATION: "待确认",
   NOT_SELECTED: "未执行",
   NO_CHANGE: "无需变更",
+  UNSUPPORTED: "不支持",
   SKIPPED_FREQUENCY: "频控跳过",
   SKIPPED_DAILY_LIMIT: "超出每日涨幅",
   SUBMITTED: "已提交",

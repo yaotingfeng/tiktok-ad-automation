@@ -47,6 +47,8 @@ logger = logging.getLogger(__name__)
 
 MANAGEMENT_SOURCE = "automation_rule"
 SELECTION_TTL = timedelta(minutes=15)
+# 执行摘要中逐条列出的不支持对象上限。
+MAX_DETAILS = 20
 
 
 def _summary() -> dict[str, Any]:
@@ -57,10 +59,12 @@ def _summary() -> dict[str, Any]:
         "skipped_daily_limit": 0,
         "conflicts": 0,
         "no_change": 0,
+        "unsupported": 0,
         "failed": 0,
         "failed_bcs": [],
         "tasks": [],
         "conflict_details": [],
+        "unsupported_details": [],
     }
 
 
@@ -344,6 +348,7 @@ _PRIORITY = [
     "PENDING_CONFIRMATION",
     "NOT_SELECTED",
     "NO_CHANGE",
+    "UNSUPPORTED",
     "SKIPPED_FREQUENCY",
     "SKIPPED_DAILY_LIMIT",
     "SUBMITTED",
@@ -458,6 +463,14 @@ def _execute_bc(
         elif item.execution_result == "NO_CHANGE":
             outcome[target_key] = "NO_CHANGE"
             summary["no_change"] += 1
+        elif item.execution_result == "UNSUPPORTED":
+            # 广告管理判定不可操作（如普通广告的素材不能单独启停），不是执行失败。
+            outcome[target_key] = "UNSUPPORTED"
+            summary["unsupported"] += 1
+            if len(summary["unsupported_details"]) < MAX_DETAILS:
+                summary["unsupported_details"].append(
+                    {"target_key": target_key, "reason": item.reason or ""}
+                )
         else:
             outcome[target_key] = "FAILED"
             summary["failed"] += 1

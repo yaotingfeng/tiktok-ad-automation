@@ -61,6 +61,8 @@ type Summary = {
   skipped_daily_limit?: number
   conflicts?: number
   no_change?: number
+  unsupported?: number
+  unsupported_details?: { target_key: string; reason: string }[]
   failed?: number
   error?: string
   reason?: string
@@ -109,8 +111,17 @@ function ExecutionSummary({
         {summary.skipped_frequency ?? 0}、冷却期冲突 {summary.conflicts ?? 0}
         、超出每日涨幅 {summary.skipped_daily_limit ?? 0}、无需变更{" "}
         {summary.no_change ?? 0}
+        {summary.unsupported ? `、不支持 ${summary.unsupported}` : ""}
         {summary.failed ? `、失败 ${summary.failed}` : ""}
       </p>
+      {(summary.unsupported_details ?? []).length > 0 && (
+        <p className="break-all text-muted-foreground">
+          不支持操作（如普通广告的素材不能单独启停）：
+          {(summary.unsupported_details ?? [])
+            .map((item) => item.target_key)
+            .join("、")}
+        </p>
+      )}
       {summary.error && (
         <p className="text-destructive">
           {EXECUTION_ERRORS[summary.error] ?? "执行失败"}

@@ -327,8 +327,16 @@ def test_skipped_execution_card(session, sync_seed):
     rule = make_rule(session, sync_seed, mode="AUTO")
     run = execute_run(session, rule=rule, slot_at=NOW, now=NOW)
     run.execution_status = "SKIPPED"
-    run.execution_summary = {"submitted": 0, "skipped_frequency": 1}
+    run.execution_summary = {
+        "submitted": 0,
+        "skipped_frequency": 1,
+        "unsupported": 2,
+        "unsupported_details": [
+            {"target_key": "material:a:v1", "reason": "material_status_unsupported"}
+        ],
+    }
     card = build_run_card(rule, run, [], confirmation_id=None)
+    assert "不支持操作 2 个对象" in _card_text(card)
     assert card["card"]["header"]["title"]["content"] == "【未执行】r"
     assert card["card"]["header"]["template"] == "grey"
     assert "频控跳过 1" in _card_text(card)
