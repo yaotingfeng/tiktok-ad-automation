@@ -1024,3 +1024,131 @@ def test_once_frequency_survives_run_cleanup(session, env):
     )
     # 「仅一次」不因运行记录清理或超过 31 天而重新允许。
     assert summary["skipped_frequency"] == 1 and summary["submitted"] == 0
+
+
+def test_budget_owner_redirect_ledgers_rule_target(session):
+    """广告组规则调预算、预算在系列上：结果与台账记在规则目标（广告组）上，频控生效。"""
+    context = create_context(session, role="tenant_admin")
+    connection = _bc(session, context, "bc-cbo", "acc-cbo")
+    _objects(session, context, connection, "bc-cbo", "acc-cbo")
+    campaign = session.exec(
+        select(AdObject).where(
+            AdObject.tenant_id == context.tenant_id, AdObject.kind == "campaign"
+        )
+    ).one()
+    campaign.configuration = {"budget_optimize_on": True, "budget": "100"}
+    route = freeze_route(session, context=context, bc_id="bc-cbo")
+    session.add(
+        ManagementCapability(
+            tenant_id=context.tenant_id,
+            bc_id="bc-cbo",
+            advertiser_id="acc-cbo",
+            connection_id=route.connection_id,
+            authorization_revision=route.authorization_revision,
+            binding_revision=route.binding_revision,
+            adapter_contract_revision=route.adapter_contract_revision,
+            operation="update_budget",
+            entity_kind="campaign",
+            state="VERIFIED",
+            verified_at=datetime.now(UTC),
+            evidence={"source": "automation-test"},
+        )
+    )
+    session.flush()
+    rule, run = _rule_run(
+        session,
+        context,
+        action=BUDGET_UP,
+        targets=[_target("acc-cbo", "bc-cbo")],
+        frequency={"type": "ONCE"},
+    )
+    summary = execute_hits(
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=rule.updated_by,
+        require_manage=True,
+    )
+    assert summary["submitted"] == 1 and summary["failed"] == 0
+    assert _hits(session, run) == {"adgroup:acc-cbo:g1": "SUBMITTED"}
+    ledger = session.exec(
+        select(AutomationActionLedger).where(AutomationActionLedger.run_id == run.id)
+    ).all()
+    assert [row.target_key for row in ledger] == ["adgroup:acc-cbo:g1"]
+
+
+def test_material_with_mixed_uses_submits_and_ledgers(session, env):
+    connection = session.exec(
+        select(TikTokConnection).where(TikTokConnection.tenant_id == env.tenant_id)
+    ).first()
+    target = _smart_material(session, env, connection)
+    from app.modules.ads.models import AdMaterialReference
+
+    # 同一主素材还用于一条普通广告：该使用不支持单独启停，但 Smart+ 使用照常执行。
+    session.add(
+        AdObject(
+            tenant_id=env.tenant_id,
+            advertiser_id="acc-x",
+            kind="ad",
+            remote_id="x0",
+            parent_kind="adgroup",
+            parent_remote_id="g1",
+            ad_type="REGULAR",
+            name="ad-x0",
+            configuration={},
+            operation_status="ENABLE",
+            review_status="APPROVED",
+            delivery_status="DELIVERING",
+            observed_at=NOW - timedelta(hours=1),
+            published_version=1,
+            source_connection_id=connection.id,
+            source_channel="OFFICIAL_API",
+        )
+    )
+    session.add(
+        AdMaterialReference(
+            tenant_id=env.tenant_id,
+            advertiser_id="acc-x",
+            ad_remote_id="x0",
+            platform_material_id="v0",
+            ad_material_id=None,
+            material_type="VIDEO",
+            name="素材一",
+            main_material_id="m1",
+            main_material_type="VIDEO",
+            operation_status="ENABLE",
+            complete=True,
+            published_version=1,
+        )
+    )
+    session.flush()
+    target["material_uses"].insert(
+        0,
+        {
+            "advertiser_id": "acc-x",
+            "ad_remote_id": "x0",
+            "platform_material_id": "v0",
+            "ad_material_id": None,
+            "material_type": "VIDEO",
+        },
+    )
+    rule, run = _rule_run(
+        session, env, action={"type": "PAUSE", "level": "material"}, targets=[target]
+    )
+    summary = execute_hits(
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=rule.updated_by,
+        require_manage=True,
+    )
+    assert summary["submitted"] == 1 and summary["unsupported"] == 0
+    assert _hits(session, run) == {"material:acc-x:m1": "SUBMITTED"}
+    ledger = session.exec(
+        select(AutomationActionLedger).where(AutomationActionLedger.run_id == run.id)
+    ).all()
+    assert [row.target_key for row in ledger] == ["material:acc-x:m1"]

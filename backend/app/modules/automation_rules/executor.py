@@ -22,6 +22,7 @@ from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.ads import EntityRef
 from app.modules.ad_management.previews import prepare_preview
 from app.modules.ad_management.submissions import submit_management_task
+from app.modules.ads.models import AdObject
 from app.modules.automation_rules.actions import (
     action_key,
     frequency_allows,
@@ -424,6 +425,7 @@ def _execute_bc(
     )
     mutation = mutation_for(definition.action)
     index = target_index(targets)
+    owners = _OwnerMap(session, rule.tenant_id, targets, index)
     preview = prepare_preview(session, context, bc_id, selection.id, mutation)
     field_prefix = action_name.partition("_")[0] + "_"
     if action_name.startswith(("BUDGET_", "ROAS_")):
@@ -436,11 +438,11 @@ def _execute_bc(
             final = item.final_value
             if not isinstance(final, Decimal) or final <= item.original_value:
                 continue
-            target_key = _target_key(index, item.ref, item.material_use)
+            keys = owners.keys(item.ref, item.material_use)
             today = [
                 row
                 for row in history
-                if row.target_key == target_key
+                if row.target_key in keys
                 and row.action.startswith(field_prefix)
                 and row.created_at >= day_start
             ]
@@ -448,36 +450,43 @@ def _execute_bc(
             baseline = first if first is not None else item.original_value
             if final > baseline * (Decimal(1) + Decimal(limit_pct) / 100):
                 excluded.append(item.ref)
-                outcome[target_key] = "SKIPPED_DAILY_LIMIT"
-                summary["skipped_daily_limit"] += 1
+                for key in keys:
+                    if key not in outcome:
+                        outcome[key] = "SKIPPED_DAILY_LIMIT"
+                        summary["skipped_daily_limit"] += 1
         if excluded:
             mutation = mutation.model_copy(update={"excluded_refs": tuple(excluded)})
             preview = prepare_preview(session, context, bc_id, selection.id, mutation)
-    pending = []
+    # 一个规则目标可能对应多个预览项（素材在多条广告中的使用、预算持有者），
+    # 先按目标汇总再定结果：任一项可执行即视为提交，避免已提交却未记台账。
+    results: dict[str, list[Any]] = defaultdict(list)
     for item in preview.items:
-        target_key = _target_key(index, item.ref, item.material_use)
-        if target_key in outcome:
-            continue
-        if item.execution_result == "PENDING":
-            pending.append((target_key, item))
-        elif item.execution_result == "NO_CHANGE":
-            outcome[target_key] = "NO_CHANGE"
+        for key in owners.keys(item.ref, item.material_use):
+            if key not in outcome:
+                results[key].append(item)
+    pending: dict[str, Any] = {}
+    for key, items in results.items():
+        executable = [item for item in items if item.execution_result == "PENDING"]
+        if executable:
+            pending[key] = executable[0]
+        elif any(
+            item.execution_result not in ("NO_CHANGE", "UNSUPPORTED") for item in items
+        ):
+            outcome[key] = "FAILED"
+            summary["failed"] += 1
+        elif any(item.execution_result == "NO_CHANGE" for item in items):
+            outcome[key] = "NO_CHANGE"
             summary["no_change"] += 1
-        elif item.execution_result == "UNSUPPORTED":
+        else:
             # 广告管理判定不可操作（如普通广告的素材不能单独启停），不是执行失败。
-            outcome[target_key] = "UNSUPPORTED"
+            outcome[key] = "UNSUPPORTED"
             summary["unsupported"] += 1
             if len(summary["unsupported_details"]) < MAX_DETAILS:
                 summary["unsupported_details"].append(
-                    {"target_key": target_key, "reason": item.reason or ""}
+                    {"target_key": key, "reason": items[0].reason or ""}
                 )
-        else:
-            outcome[target_key] = "FAILED"
-            summary["failed"] += 1
     for target in targets:
-        if target["key"] not in outcome and not any(
-            k == target["key"] for k, _ in pending
-        ):
+        if target["key"] not in outcome and target["key"] not in pending:
             # 预览没有为它生成可执行项（例如目录中不存在），视为失败而不是静默跳过。
             outcome[target["key"]] = "FAILED"
             summary["failed"] += 1
@@ -490,12 +499,9 @@ def _execute_bc(
         preview.digest,
         uuid5(NAMESPACE_URL, f"automation:{run.id}:{bc_id}"),
     )
-    seen: set[str] = set()
-    for target_key, item in pending:
-        if target_key not in seen:
-            seen.add(target_key)
-            outcome[target_key] = "SUBMITTED"
-            summary["submitted"] += 1
+    for target_key, item in pending.items():
+        outcome[target_key] = "SUBMITTED"
+        summary["submitted"] += 1
         session.add(
             AutomationActionLedger(
                 tenant_id=rule.tenant_id,
@@ -513,3 +519,62 @@ def _execute_bc(
         )
     session.flush()
     return task.task_id
+
+
+class _OwnerMap:
+    """把预览项映射回产生它的规则目标键。
+
+    预算调整会被广告管理改到实际持有预算的对象上（广告组 → 所属系列，
+    或系列 → 各广告组），台账与频控仍须记在规则目标上，下次运行才能看到。
+    """
+
+    def __init__(
+        self,
+        session: Session,
+        tenant_id: UUID,
+        targets: list[dict[str, Any]],
+        index: dict[tuple[Any, ...], str],
+    ) -> None:
+        self.session, self.tenant_id, self.index = session, tenant_id, index
+        self.targets = [t for t in targets if t["kind"] != "material"]
+        self._parents: dict[tuple[str, str, str], str | None] = {}
+
+    def _parent(self, advertiser_id: str, kind: str, remote_id: str) -> str | None:
+        key = (advertiser_id, kind, remote_id)
+        if key not in self._parents:
+            row = self.session.exec(
+                select(AdObject.parent_remote_id).where(
+                    AdObject.tenant_id == self.tenant_id,
+                    AdObject.advertiser_id == advertiser_id,
+                    AdObject.kind == kind,
+                    AdObject.remote_id == remote_id,
+                )
+            ).first()
+            self._parents[key] = row
+        return self._parents[key]
+
+    def keys(self, ref: EntityRef, material_use: Any) -> list[str]:
+        direct = _target_key(self.index, ref, material_use)
+        if material_use is not None or (
+            ("object", ref.advertiser_id, ref.kind, ref.remote_id) in self.index
+        ):
+            return [direct]
+        found = []
+        for target in self.targets:
+            if target["advertiser_id"] != ref.advertiser_id:
+                continue
+            # 持有者是目标的上级（广告组目标 → 系列持有预算）。
+            if target["kind"] == "adgroup" and ref.kind == "campaign":
+                if (
+                    self._parent(ref.advertiser_id, "adgroup", target["remote_id"])
+                    == ref.remote_id
+                ):
+                    found.append(target["key"])
+            # 持有者是目标的下级（系列目标 → 各广告组持有预算）。
+            elif target["kind"] == "campaign" and ref.kind == "adgroup":
+                if (
+                    self._parent(ref.advertiser_id, "adgroup", ref.remote_id)
+                    == target["remote_id"]
+                ):
+                    found.append(target["key"])
+        return found or [direct]
