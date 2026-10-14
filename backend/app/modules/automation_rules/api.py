@@ -19,13 +19,17 @@ from app.modules.automation_rules.schemas import (
     DryRunRequest,
     FeishuTestRequest,
     RuleCreate,
+    RuleDefinition,
     RuleEnabled,
     RulePage,
     RulePublic,
     RuleUpdate,
     RunDetail,
     RunPage,
+    TemplatePage,
+    TemplatePublic,
 )
+from app.modules.automation_rules.templates import TEMPLATES
 
 router = APIRouter(prefix="/tenants/{tenant_id}", tags=["automation_rules"])
 
@@ -69,6 +73,24 @@ def get_catalog(
 ) -> CatalogPublic:
     service.require(session, _context(user, tenant_id), "read")
     return service.catalog()
+
+
+@router.get("/automation-rules/templates", response_model=TemplatePage)
+def list_templates(
+    tenant_id: UUID, session: SessionDep, user: CurrentUser
+) -> TemplatePage:
+    service.require(session, _context(user, tenant_id), "read")
+    return TemplatePage(
+        items=[
+            TemplatePublic(
+                key=item.key,
+                name=item.name,
+                description=item.description,
+                definition=RuleDefinition.model_validate(item.definition),
+            )
+            for item in TEMPLATES
+        ]
+    )
 
 
 @router.get("/automation-rules", response_model=RulePage)

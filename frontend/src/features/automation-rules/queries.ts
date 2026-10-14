@@ -91,3 +91,16 @@ export const confirmationQuery = (tenantId: string, confirmationId: string) =>
         })
       ).data!,
   })
+
+export const templatesQuery = (tenantId: string) =>
+  queryOptions({
+    queryKey: [...ruleKeys(tenantId), "templates"],
+    staleTime: Number.POSITIVE_INFINITY,
+    queryFn: async ({ signal }) =>
+      (
+        await AutomationRulesService.listTemplates({
+          path: { tenant_id: tenantId },
+          signal,
+        })
+      ).data!,
+  })

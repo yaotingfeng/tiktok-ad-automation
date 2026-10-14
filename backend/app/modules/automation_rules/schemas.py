@@ -408,3 +408,14 @@ class ConfirmationDetail(BaseModel):
 
 class ConfirmRequest(_Strict):
     subject_keys: list[str] = Field(min_length=1, max_length=5000)
+
+
+class TemplatePublic(BaseModel):
+    key: str
+    name: str
+    description: str
+    definition: RuleDefinition
+
+
+class TemplatePage(BaseModel):
+    items: list[TemplatePublic]

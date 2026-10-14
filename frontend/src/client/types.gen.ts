@@ -7006,6 +7006,35 @@ export type TargetingDirectory = {
 };
 
 /**
+ * TemplatePage
+ */
+export type TemplatePage = {
+    /**
+     * Items
+     */
+    items: Array<TemplatePublic>;
+};
+
+/**
+ * TemplatePublic
+ */
+export type TemplatePublic = {
+    /**
+     * Key
+     */
+    key: string;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Description
+     */
+    description: string;
+    definition: RuleDefinition_Output;
+};
+
+/**
  * Tenant
  */
 export type Tenant = {
@@ -11982,6 +12011,36 @@ export type automationRulesGetCatalogResponses = {
 };
 
 export type automationRulesGetCatalogResponse = automationRulesGetCatalogResponses[keyof automationRulesGetCatalogResponses];
+
+export type automationRulesListTemplatesData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/automation-rules/templates';
+};
+
+export type automationRulesListTemplatesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type automationRulesListTemplatesError = automationRulesListTemplatesErrors[keyof automationRulesListTemplatesErrors];
+
+export type automationRulesListTemplatesResponses = {
+    /**
+     * Successful Response
+     */
+    200: TemplatePage;
+};
+
+export type automationRulesListTemplatesResponse = automationRulesListTemplatesResponses[keyof automationRulesListTemplatesResponses];
 
 export type automationRulesListRulesData = {
     body?: never;

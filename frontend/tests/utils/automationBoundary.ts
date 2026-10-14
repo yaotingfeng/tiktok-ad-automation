@@ -254,6 +254,34 @@ export async function automationBoundary(
         total: 1,
       })
     if (path === `${base}/automation-rules/catalog`) return json(CATALOG)
+    if (path === `${base}/automation-rules/templates`)
+      return json({
+        items: [
+          {
+            key: "drama_stop_loss",
+            name: "剧级止损",
+            description:
+              "每部剧今天合计消耗较高且 ROAS 偏低时，暂停该剧的广告组。",
+            definition: {
+              ...DEFINITION,
+              conditions: [
+                {
+                  metric: "spend",
+                  range: "TODAY",
+                  operator: "GT",
+                  values: ["100"],
+                },
+                {
+                  metric: "roas_total",
+                  range: "TODAY",
+                  operator: "LT",
+                  values: ["0.8"],
+                },
+              ],
+            },
+          },
+        ],
+      })
     if (path === `${base}/automation-rules/dry-run`)
       return json({
         checked_count: 3,

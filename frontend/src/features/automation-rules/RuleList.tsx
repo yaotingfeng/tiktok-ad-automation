@@ -33,6 +33,7 @@ import {
   summarizeConditions,
   summarizeScope,
 } from "./ruleForm"
+import { TemplatePicker } from "./TemplatePicker"
 
 const RUN_ERRORS: Record<string, string> = {
   rule_owner_forbidden: "规则最后修改人已无权限",
@@ -70,6 +71,7 @@ export function RuleList({
   const [search, setSearch] = useState("")
   const [editor, setEditor] = useState<EditorTarget | null>(null)
   const [removing, setRemoving] = useState<RulePublic | null>(null)
+  const [picking, setPicking] = useState(false)
   const refresh = () =>
     client.invalidateQueries({ queryKey: ruleKeys(tenantId) })
   const toggle = useMutation({
@@ -227,13 +229,22 @@ export function RuleList({
           />
         </Field>
         {write && (
-          <Button
-            onClick={() => setEditor({ kind: "create" })}
-            disabled={!catalog.data}
-          >
-            <Plus data-icon="inline-start" />
-            新建规则
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setPicking(true)}
+              disabled={!catalog.data}
+            >
+              从模板新建
+            </Button>
+            <Button
+              onClick={() => setEditor({ kind: "create" })}
+              disabled={!catalog.data}
+            >
+              <Plus data-icon="inline-start" />
+              新建规则
+            </Button>
+          </div>
         )}
       </CardHeader>
       <CardContent>
@@ -256,6 +267,20 @@ export function RuleList({
           target={editor}
           admin={admin}
           onClose={() => setEditor(null)}
+        />
+      )}
+      {picking && (
+        <TemplatePicker
+          tenantId={tenantId}
+          onClose={() => setPicking(false)}
+          onPick={(template) => {
+            setPicking(false)
+            setEditor({
+              kind: "create",
+              name: template.name,
+              definition: template.definition as Definition,
+            })
+          }}
         />
       )}
       <Dialog

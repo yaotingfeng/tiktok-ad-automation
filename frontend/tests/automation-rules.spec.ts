@@ -235,3 +235,26 @@ test("执行记录显示执行结果并链接操作记录", async ({ page }) => 
     new RegExp(`^/tenants/${TENANT}/ad-management-tasks/task-1\\?bc_id=`),
   )
 })
+
+test("从模板新建：预填定义并保存", async ({ page }) => {
+  const created: unknown[] = []
+  await automationBoundary(page, { created })
+  await page.goto(`/tenants/${TENANT}/automation-rules`)
+  await page.getByRole("button", { name: "从模板新建" }).click()
+  await page.getByRole("button", { name: /剧级止损/ }).click()
+  await expect(page.getByRole("textbox", { name: "规则名称" })).toHaveValue(
+    "剧级止损",
+  )
+  await page.getByRole("button", { name: "保存" }).click()
+  await expect.poll(() => created.length).toBe(1)
+  expect(created[0]).toMatchObject({
+    name: "剧级止损",
+    definition: {
+      aggregation: "DRAMA",
+      conditions: [
+        { metric: "spend", values: ["100"] },
+        { metric: "roas_total", operator: "LT", values: ["0.8"] },
+      ],
+    },
+  })
+})
