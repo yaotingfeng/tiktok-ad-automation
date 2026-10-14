@@ -97,6 +97,24 @@ def _reschedule(session: Session, rule: AutomationRule, now: datetime) -> None:
     )
 
 
+def settle_summary(session: Session, rule: AutomationRule) -> None:
+    """规则不再按汇总发送（改为每次发送、关闭通知或停用）时，结清等待汇总的运行。
+
+    这些运行不再补发，汇总时刻也重新计起，避免以后改回汇总时一次补发陈旧结果。
+    """
+    notification = RuleDefinition.model_validate(rule.definition).notification
+    if rule.enabled and notification.enabled and notification.timing == "SUMMARY":
+        return
+    rule.last_summary_at = None
+    for run in session.exec(
+        select(AutomationRuleRun).where(
+            AutomationRuleRun.rule_id == rule.id,
+            AutomationRuleRun.notify_status == "SUMMARY",
+        )
+    ).all():
+        run.notify_status = "NOT_REQUIRED"
+
+
 def run_summary(run: AutomationRuleRun) -> RunSummary:
     return RunSummary.model_validate(run, from_attributes=True)
 
@@ -221,6 +239,7 @@ def update_rule(
     rule.version += 1
     rule.updated_by, rule.updated_at = context.actor_id, now
     _reschedule(session, rule, now)
+    settle_summary(session, rule)
     _save(session, rule)
     return get_rule(session, context=context, rule_id=rule.id)
 
@@ -235,6 +254,7 @@ def set_enabled(
     rule.enabled = enabled
     rule.updated_by, rule.updated_at = context.actor_id, datetime.now(UTC)
     _reschedule(session, rule, rule.updated_at)
+    settle_summary(session, rule)
     session.flush()
     return get_rule(session, context=context, rule_id=rule.id)
 

@@ -187,3 +187,61 @@ def test_scan_respects_flag_and_disabled_rules(session, sync_seed, monkeypatch):
     rule.enabled = True
     session.flush()
     assert scan_summaries(session, now=at_nine) == 1
+
+
+def test_invalid_rule_does_not_block_other_summaries(session, sync_seed, monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "AUTOMATED_RULES_ENABLED", True)
+    _seed(session, sync_seed)
+    good = _summary_rule(session, sync_seed)
+    good.last_summary_at = datetime(2026, 10, 13, 10, 0, tzinfo=UTC)
+    broken = make_rule(session, sync_seed, name="broken", notification=SUMMARY)
+    broken.definition = {
+        **broken.definition,
+        "conditions": [
+            {"metric": "gone", "range": "TODAY", "operator": "GT", "values": ["1"]}
+        ],
+    }
+    session.flush()
+    assert scan_summaries(session, now=datetime(2026, 10, 14, 1, 1, tzinfo=UTC)) == 1
+
+
+def test_leaving_summary_mode_settles_waiting_runs(session, sync_seed):
+    from app.modules.automation_rules.schemas import RuleUpdate
+    from app.modules.automation_rules.service import set_enabled, update_rule
+
+    _seed(session, sync_seed)
+    rule = _summary_rule(session, sync_seed)
+    rule.last_summary_at = datetime(2026, 10, 13, 10, 0, tzinfo=UTC)
+    run = execute_run(session, rule=rule, slot_at=NOW, now=NOW)
+    assert run.notify_status == "SUMMARY"
+    every_run = {**rule.definition, "notification": {"enabled": True}}
+    update_rule(
+        session,
+        context=sync_seed.context,
+        rule_id=rule.id,
+        body=RuleUpdate(
+            name=rule.name,
+            definition=every_run,
+            enabled=True,
+            expected_version=rule.version,
+        ),
+    )
+    # 改回每次发送：等待汇总的运行不再发送，也不会在以后改回汇总时补发。
+    assert run.notify_status == "NOT_REQUIRED"
+    assert rule.last_summary_at is None
+    back = {**rule.definition, "notification": SUMMARY}
+    update_rule(
+        session,
+        context=sync_seed.context,
+        rule_id=rule.id,
+        body=RuleUpdate(
+            name=rule.name, definition=back, enabled=True, expected_version=rule.version
+        ),
+    )
+    later = NOW + timedelta(minutes=30)
+    second = execute_run(session, rule=rule, slot_at=later, now=later)
+    assert second.notify_status == "SUMMARY"
+    set_enabled(session, context=sync_seed.context, rule_id=rule.id, enabled=False)
+    assert second.notify_status == "NOT_REQUIRED" and rule.last_summary_at is None

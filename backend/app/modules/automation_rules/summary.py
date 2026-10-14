@@ -7,6 +7,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import httpx
+from pydantic import ValidationError
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
@@ -78,7 +79,13 @@ def scan_summaries(session: Session, *, now: datetime) -> int:
     zones: dict[UUID, str] = {}
     count = 0
     for rule in rules:
-        definition = RuleDefinition.model_validate(rule.definition)
+        try:
+            definition = RuleDefinition.model_validate(rule.definition)
+        except ValidationError:
+            # 定义失效的规则由规则调度停用；这里跳过，不阻塞其他规则的汇总。
+            continue
+        if not definition.notification.enabled:
+            continue
         if rule.tenant_id not in zones:
             zones[rule.tenant_id] = load_tenant_setting(
                 session, rule.tenant_id
