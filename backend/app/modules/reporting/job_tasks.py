@@ -23,7 +23,7 @@ from app.jobs.outbox import enqueue_after_commit, validate_dispatch_payload
 from app.jobs.tasks import register_dispatch_task
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.accounts.routing import verify_route
-from app.modules.ads.directory_requests import request_directory
+from app.modules.ads.directory_requests import directory_ad_types, request_directory
 from app.modules.ads.sync_models import AdDirectoryRun
 from app.modules.reporting import planner, publish
 from app.modules.reporting.jobs import (
@@ -269,6 +269,13 @@ def _plan_one(database_engine, redis_client, key, now, deadline, hot, material):
             # 授权后的历史回补立即规划一次，不等到每日回刷；未知开户时间稍后重查。
             planner.plan_history(session, plan, now=now)
             if plan.next_directory_at <= now:
+                ad_types = directory_ad_types(
+                    session,
+                    tenant_id=plan.tenant_id,
+                    advertiser_ids=accounts,
+                    active_ids=plan.last_active_advertiser_ids,
+                    now=now,
+                )
                 for scope, advs in (
                     ("directory", accounts),
                     ("active", plan.last_active_advertiser_ids),
@@ -281,6 +288,7 @@ def _plan_one(database_engine, redis_client, key, now, deadline, hot, material):
                         actor_id=plan.actor_id,
                         advertiser_ids=advs,
                         scope=scope,
+                        ad_types=ad_types,
                     )
                 plan.next_directory_at = _advance(
                     plan.next_directory_at, now, planner.DIRECTORY_INTERVAL

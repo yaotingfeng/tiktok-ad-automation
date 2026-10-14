@@ -2,10 +2,11 @@
 
 import hashlib
 import json
-from datetime import UTC, datetime
+from collections.abc import Collection, Mapping
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid5
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
@@ -13,7 +14,97 @@ from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.modules.accounts.routing import verify_route
+from app.modules.ads.models import AdObject
 from app.modules.ads.sync_models import AdDirectoryRun
+
+DIRECTORY_AD_TYPES = ("REGULAR", "LEGACY_SMART_PLUS", "SMART_PLUS")
+# 账户未使用的广告类型只按此间隔复查，避免每轮都发必然为空的目录请求。
+AD_TYPE_PROBE_INTERVAL = timedelta(hours=24)
+
+
+def _partition_key(query: dict) -> str:
+    return hashlib.sha256(
+        json.dumps(query, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _probe_partition(advertiser_id: str, ad_type: str) -> str:
+    """全量目录（含已删除）中该类型广告系列首页的分区键，用作类型探测记录。"""
+    return _partition_key(
+        {
+            "advertiser_id": advertiser_id,
+            "kind": "campaign",
+            "ad_type": ad_type,
+            "page": 1,
+            "page_size": 1000,
+            "ids": [],
+            "parent_ids": [],
+            "include_deleted": True,
+        }
+    )
+
+
+def directory_ad_types(
+    session: Session,
+    *,
+    tenant_id: UUID,
+    advertiser_ids: Collection[str],
+    active_ids: Collection[str],
+    now: datetime,
+) -> dict[str, tuple[str, ...]]:
+    """周期目录按账户实际使用的广告类型裁剪请求。
+
+    业务规则：
+    - 账户目录里已有某类型对象（含已删除），该类型每轮都同步；
+    - 未使用的类型，距最近一次成功的全量探测超过 24 小时才再请求一次，
+      覆盖账户新启用某类型的情况；没有任何广告的账户因此自然降为每天一次；
+    - 最近有消耗但目录里还没有任何对象的账户，全部类型立即请求，不等复查。
+    本系统自己创建或修改的对象另走定向刷新，不受此裁剪影响。
+    """
+    accounts = sorted(set(advertiser_ids))
+    if not accounts:
+        return {}
+    used: dict[str, set[str]] = {}
+    for advertiser_id, ad_type in session.exec(
+        select(AdObject.advertiser_id, AdObject.ad_type)
+        .where(
+            AdObject.tenant_id == tenant_id,
+            col(AdObject.advertiser_id).in_(accounts),
+        )
+        .distinct()
+    ):
+        used.setdefault(advertiser_id, set()).add(ad_type)
+    probes = {
+        _probe_partition(advertiser_id, ad_type): (advertiser_id, ad_type)
+        for advertiser_id in accounts
+        for ad_type in DIRECTORY_AD_TYPES
+    }
+    probed: set[tuple[str, str]] = set()
+    for partition_key in session.exec(
+        select(AdDirectoryRun.partition_key)
+        .where(
+            AdDirectoryRun.tenant_id == tenant_id,
+            col(AdDirectoryRun.advertiser_id).in_(accounts),
+            col(AdDirectoryRun.partition_key).in_(list(probes)),
+            AdDirectoryRun.status == "COMPLETE",
+        )
+        .group_by(AdDirectoryRun.partition_key)
+        .having(func.max(AdDirectoryRun.completed_at) > now - AD_TYPE_PROBE_INTERVAL)
+    ):
+        probed.add(probes[partition_key])
+    active = set(active_ids)
+    result: dict[str, tuple[str, ...]] = {}
+    for advertiser_id in accounts:
+        in_use = used.get(advertiser_id, set())
+        if advertiser_id in active and not in_use:
+            result[advertiser_id] = DIRECTORY_AD_TYPES
+            continue
+        result[advertiser_id] = tuple(
+            ad_type
+            for ad_type in DIRECTORY_AD_TYPES
+            if ad_type in in_use or (advertiser_id, ad_type) not in probed
+        )
+    return result
 
 
 def directory_id_chunks(
@@ -50,7 +141,9 @@ def request_directory(
     advertiser_ids,
     scope,
     refs=(),
+    ad_types: Mapping[str, Collection[str]] | None = None,
 ) -> int:
+    """ad_types 为空表示请求全部类型；周期调度传入 directory_ad_types 的裁剪结果。"""
     if not settings.ADS_SYNC_ENABLED or frozen_route.get("channel") != "OFFICIAL_API":
         return 0
     route = FrozenTikTokRoute.model_validate(frozen_route)
@@ -107,6 +200,8 @@ def request_directory(
             ("creative", "SMART_PLUS", 100),
         )
         for kind, ad_type, page_size in directory_specs:
+            if ad_types is not None and ad_type not in ad_types.get(advertiser_id, ()):
+                continue
             ids = tuple(
                 sorted(
                     {
@@ -150,9 +245,7 @@ def request_directory(
                     "parent_ids": list(parent_chunk),
                     "include_deleted": scope == "directory",
                 }
-                partition = hashlib.sha256(
-                    json.dumps(query, sort_keys=True, separators=(",", ":")).encode()
-                ).hexdigest()
+                partition = _partition_key(query)
                 existing = session.exec(
                     select(AdDirectoryRun)
                     .where(
