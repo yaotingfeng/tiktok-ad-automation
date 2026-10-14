@@ -192,7 +192,19 @@ def execute_run(
                 "max_targets": definition.max_targets,
             }
     notify = definition.notification
-    if notify.enabled and (
+    stale_only = (
+        not result.hits
+        and not notify.notify_without_hits
+        and bool(inputs.skipped_accounts)
+    )
+    if (
+        notify.enabled
+        and stale_only
+        and _same_stale_as_last_sent(session, rule.id, run.id, inputs.skipped_accounts)
+    ):
+        # 只有过期账户、且与上次已发送的过期账户相同：不再重复发卡片。
+        pass
+    elif notify.enabled and (
         result.hits or notify.notify_without_hits or inputs.skipped_accounts
     ):
         # 汇总模式下预警等到固定时刻合并发送；待确认批次在下次运行即失效，仍立即发送。
@@ -205,6 +217,28 @@ def execute_run(
             queue_notification(session, run=run, context=context)
     session.flush()
     return run
+
+
+def _same_stale_as_last_sent(
+    session: Session,
+    rule_id: UUID,
+    run_id: UUID,
+    skipped: list[dict[str, str]],
+) -> bool:
+    last = session.exec(
+        select(AutomationRuleRun)
+        .where(
+            AutomationRuleRun.rule_id == rule_id,
+            AutomationRuleRun.id != run_id,
+            AutomationRuleRun.notify_status == "SENT",
+        )
+        .order_by(col(AutomationRuleRun.slot_at).desc())
+        .limit(1)
+    ).first()
+    if last is None or last.hit_count:
+        return False
+    accounts = {item["advertiser_id"] for item in skipped}
+    return accounts == {item["advertiser_id"] for item in last.skipped_accounts}
 
 
 def queue_notification(

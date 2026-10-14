@@ -352,3 +352,24 @@ def test_execution_error_lines():
     assert "已无执行权限" in "".join(
         _execution_lines({"error": "rule_owner_forbidden"})
     )
+
+
+def test_repeated_stale_accounts_without_hits_not_resent(session, sync_seed):
+    from datetime import timedelta
+
+    # acc-2 数据过期且无命中：第一次发卡片，之后同样的过期账户不再重复发送。
+    _seed(session, sync_seed, fresh=("acc-1",))
+    rule = make_rule(
+        session,
+        sync_seed,
+        conditions=[
+            {"metric": "spend", "range": "TODAY", "operator": "GT", "values": ["999"]}
+        ],
+    )
+    first = execute_run(session, rule=rule, slot_at=NOW, now=NOW)
+    assert first.hit_count == 0 and first.skipped_accounts
+    assert first.notify_status == "PENDING"
+    first.notify_status = "SENT"
+    later = NOW + timedelta(minutes=30)
+    second = execute_run(session, rule=rule, slot_at=later, now=later)
+    assert second.notify_status == "NOT_REQUIRED"
