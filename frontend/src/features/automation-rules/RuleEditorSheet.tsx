@@ -1082,7 +1082,6 @@ export function RuleEditorSheet({
           <div className="flex flex-wrap items-center gap-2">
             {(def.notification.summary_times ?? []).map((moment, index) => (
               <div
-                // biome-ignore lint/suspicious/noArrayIndexKey: 时刻按位置编辑
                 key={index}
                 className="flex items-center gap-1"
               >
