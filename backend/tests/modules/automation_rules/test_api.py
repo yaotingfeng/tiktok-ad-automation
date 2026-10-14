@@ -53,8 +53,7 @@ def test_crud_and_versioning(client, context):
     )
 
 
-def test_rejects_non_notify_mode_and_duplicates(client, context):
-    assert create(client, context, mode="AUTO").status_code == 409
+def test_rejects_duplicates(client, context):
     assert create(client, context).status_code == 201
     assert create(client, context).status_code == 409
 
@@ -164,3 +163,12 @@ def test_run_history_and_detail(client, session, sync_seed, other_context):
 def test_once_rule_in_the_past_is_rejected(client, context):
     past = {"frequency": "30M", "window": "ONCE", "once_at": "2020-01-01T00:00:00Z"}
     assert create(client, context, schedule=past).status_code == 422
+
+
+def test_operator_cannot_save_auto_rule(client, context):
+    assert create(client, context, mode="AUTO").status_code == 403
+    assert create(client, context, name="确认", mode="CONFIRM").status_code == 201
+
+
+def test_admin_saves_auto_rule(client, admin_context):
+    assert create(client, admin_context, mode="AUTO").status_code == 201

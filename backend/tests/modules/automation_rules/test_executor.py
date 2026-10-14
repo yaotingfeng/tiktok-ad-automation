@@ -505,4 +505,3 @@ def test_material_target_uses_material_mode_and_ledger_key(session, env):
         "NO_CHANGE",
         "UNSUPPORTED",
     }
-

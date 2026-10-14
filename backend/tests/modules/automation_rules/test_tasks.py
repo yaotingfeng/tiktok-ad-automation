@@ -123,3 +123,22 @@ def test_runnable_checks_flag_enabled_and_pause(session, sync_seed, monkeypatch)
     session.add(AutomationTenantSetting(tenant_id=rule.tenant_id, paused=True))
     session.flush()
     assert runnable(session, rule) is False
+
+
+def test_execute_task_payload_validation():
+    import pytest
+
+    from app.core.errors import DomainError
+    from app.modules.automation_rules.tasks import _payload
+
+    with pytest.raises(DomainError):
+        _payload(
+            {"run_id": "x", "mode": "AUTO", "extra": 1},
+            {"run_id", "mode"},
+            optional={"selected_keys"},
+        )
+    assert _payload(
+        {"run_id": "x", "mode": "CONFIRM", "selected_keys": ["a"]},
+        {"run_id", "mode"},
+        optional={"selected_keys"},
+    )["selected_keys"] == ["a"]

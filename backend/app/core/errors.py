@@ -12,7 +12,6 @@ ERROR_HTTP_STATUS: dict[str, int] = {
     "automation_rule_not_found": 404,
     "automation_rule_name_conflict": 409,
     "automation_rule_version_conflict": 409,
-    "automation_mode_unavailable": 409,
     "automation_run_not_found": 404,
     "feishu_webhook_invalid": 422,
     "feishu_not_configured": 409,

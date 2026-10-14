@@ -61,10 +61,12 @@ def _load(session: Session, context: TenantContext, rule_id: UUID) -> Automation
     return rule
 
 
-def _check_mode(definition: RuleDefinition) -> None:
-    # 阶段 1 只开放预警；自动执行与确认后执行在执行通道上线后开放。
-    if definition.mode != "NOTIFY":
-        raise DomainError("automation_mode_unavailable", "当前版本只支持「仅通知」模式")
+def _check_mode(
+    session: Session, context: TenantContext, definition: RuleDefinition
+) -> None:
+    # 自动执行不经人确认就会改广告，只有租户管理员能保存。
+    if definition.mode == "AUTO":
+        require(session, context, "manage")
 
 
 def _reschedule(session: Session, rule: AutomationRule, now: datetime) -> None:
@@ -173,7 +175,7 @@ def create_rule(
     now: datetime | None = None,
 ) -> RulePublic:
     require(session, context, "ads_manage")
-    _check_mode(body.definition)
+    _check_mode(session, context, body.definition)
     now = now or datetime.now(UTC)
     rule = AutomationRule(
         tenant_id=context.tenant_id,
@@ -199,7 +201,7 @@ def update_rule(
     now: datetime | None = None,
 ) -> RulePublic:
     require(session, context, "ads_manage")
-    _check_mode(body.definition)
+    _check_mode(session, context, body.definition)
     rule = _load(session, context, rule_id)
     if body.expected_version != rule.version:
         raise DomainError(

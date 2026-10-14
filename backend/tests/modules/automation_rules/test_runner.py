@@ -146,3 +146,64 @@ def test_long_drama_names_are_truncated(session, sync_seed):
         now=NOW,
     )
     assert run.status == "COMPLETE" and run.hit_count == 1
+
+
+def _dispatches(session, name):
+    return session.exec(
+        select(PendingDispatch).where(PendingDispatch.task_name == name)
+    ).all()
+
+
+def test_auto_run_queues_execution(session, sync_seed):
+    _seed(session, sync_seed)
+    run = execute_run(
+        session, rule=make_rule(session, sync_seed, mode="AUTO"), slot_at=NOW, now=NOW
+    )
+    assert run.mode == "AUTO" and run.execution_status == "QUEUED"
+    queued = _dispatches(session, "automation.execute")
+    assert [d.payload for d in queued] == [{"run_id": str(run.id), "mode": "AUTO"}]
+    # 自动执行的通知在执行完成后由执行任务发送。
+    assert run.notify_status == "NOT_REQUIRED" and not _dispatches(
+        session, "automation.send_feishu"
+    )
+
+
+def test_confirm_run_opens_batch_and_expires_previous(session, sync_seed):
+    from datetime import timedelta
+
+    from app.modules.automation_rules.models import AutomationConfirmation
+
+    _seed(session, sync_seed)
+    rule = make_rule(session, sync_seed, mode="CONFIRM")
+    first = execute_run(session, rule=rule, slot_at=NOW, now=NOW)
+    assert first.execution_status == "AWAITING_CONFIRMATION"
+    hit = session.exec(
+        select(AutomationRuleHit).where(AutomationRuleHit.run_id == first.id)
+    ).one()
+    assert hit.outcome == "PENDING_CONFIRMATION"
+    later = NOW + timedelta(minutes=30)
+    second = execute_run(session, rule=rule, slot_at=later, now=later)
+    batches = {
+        b.run_id: b.status for b in session.exec(select(AutomationConfirmation)).all()
+    }
+    assert batches == {first.id: "EXPIRED", second.id: "PENDING"}
+    assert first.execution_status == "EXPIRED"
+    assert first.notify_status == "PENDING"
+
+
+def test_auto_over_limit_becomes_confirmation(session, sync_seed):
+    _seed(session, sync_seed)
+    rule = make_rule(
+        session,
+        sync_seed,
+        mode="AUTO",
+        aggregation="ALL",
+        max_targets=1,
+        conditions=[
+            {"metric": "spend", "range": "TODAY", "operator": "GT", "values": ["1"]}
+        ],
+    )
+    run = execute_run(session, rule=rule, slot_at=NOW, now=NOW)
+    assert run.execution_status == "AWAITING_CONFIRMATION"
+    assert run.execution_summary["reason"] == "max_targets_exceeded"
+    assert not _dispatches(session, "automation.execute")

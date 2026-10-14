@@ -17,6 +17,7 @@ from app.core.errors import DomainError
 from app.jobs.outbox import enqueue_after_commit
 from app.jobs.tasks import register_dispatch_task
 from app.modules.automation_rules import feishu
+from app.modules.automation_rules.confirmations import expire_open, open_batch
 from app.modules.automation_rules.evaluate import Evaluation, evaluate
 from app.modules.automation_rules.inputs import load_inputs
 from app.modules.automation_rules.models import (
@@ -40,8 +41,10 @@ RANGE_LABELS = {
     "LIFETIME": "投放以来",
 }
 SEND_TASK = "automation.send_feishu"
+EXECUTE_TASK = "automation.execute"
 # 投递方在入队前就要能解析队列，注册放在投递所在模块。
 register_dispatch_task(SEND_TASK, "control")
+register_dispatch_task(EXECUTE_TASK, "ad-management")
 
 
 def _existing(
@@ -118,6 +121,8 @@ def execute_run(
         found = _existing(session, rule.id, slot_at)
         assert found is not None
         return found
+    # 新一轮运行开始，上一轮仍未确认的批次失效。
+    expire_open(session, rule_id=rule.id, now=now)
     try:
         # 后台运行以规则最后修改人的身份重建权限；此人已离开租户时规则不再运行。
         require_tenant(
@@ -148,21 +153,56 @@ def execute_run(
     run.skipped_count = result.skipped_count
     run.skipped_accounts = inputs.skipped_accounts
     run.status, run.finished_at = "COMPLETE", now
+    run.mode = definition.mode
     rule.last_run_at = now
+    context = TenantContext(rule.tenant_id, rule.updated_by, "operator")
+    total_targets = sum(hit.target_count for hit in result.hits)
+    if (
+        result.hits
+        and definition.mode == "AUTO"
+        and total_targets <= definition.max_targets
+    ):
+        # 自动执行：交给广告管理队列执行，执行完成后再发结果卡片。
+        run.execution_status = "QUEUED"
+        enqueue_after_commit(
+            session,
+            context=context,
+            task_name=EXECUTE_TASK,
+            task_key=f"automation-exec:{run.id}",
+            payload={"run_id": str(run.id), "mode": "AUTO"},
+        )
+        session.flush()
+        return run
+    if result.hits and definition.mode != "NOTIFY":
+        # 确认后执行，或自动执行命中对象超过单次上限：先生成待确认批次，由人确认。
+        open_batch(session, run=run, rule=rule, now=now)
+        if definition.mode == "AUTO":
+            run.execution_summary = {
+                "reason": "max_targets_exceeded",
+                "target_count": total_targets,
+                "max_targets": definition.max_targets,
+            }
     notify = definition.notification
     if notify.enabled and (
         result.hits or notify.notify_without_hits or inputs.skipped_accounts
     ):
-        run.notify_status = "PENDING"
-        enqueue_after_commit(
-            session,
-            context=TenantContext(rule.tenant_id, rule.updated_by, "operator"),
-            task_name=SEND_TASK,
-            task_key=f"automation-feishu:{run.id}",
-            payload={"run_id": str(run.id)},
-        )
+        queue_notification(session, run=run, context=context)
     session.flush()
     return run
+
+
+def queue_notification(
+    session: Session, *, run: AutomationRuleRun, context: TenantContext
+) -> None:
+    run.notify_status = "PENDING"
+    enqueue_after_commit(
+        session,
+        context=context,
+        task_name=SEND_TASK,
+        # 同一次运行可能先后发送待确认与执行结果两张卡片，按状态区分任务标识。
+        task_key=f"automation-feishu:{run.id}:{run.execution_status}",
+        payload={"run_id": str(run.id)},
+    )
 
 
 def _metric_name(key: str) -> str:
