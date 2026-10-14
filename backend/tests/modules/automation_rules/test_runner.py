@@ -318,3 +318,29 @@ def test_execution_result_notification_respects_rule_setting(session, sync_seed)
     assert [d.task_key for d in _dispatches(session, "automation.send_feishu")] == [
         f"automation-feishu:{run.id}:SUBMITTED"
     ]
+
+
+def test_skipped_execution_card(session, sync_seed):
+    from app.modules.automation_rules.runner import build_run_card
+
+    _seed(session, sync_seed)
+    rule = make_rule(session, sync_seed, mode="AUTO")
+    run = execute_run(session, rule=rule, slot_at=NOW, now=NOW)
+    run.execution_status = "SKIPPED"
+    run.execution_summary = {"submitted": 0, "skipped_frequency": 1}
+    card = build_run_card(rule, run, [], confirmation_id=None)
+    assert card["card"]["header"]["title"]["content"] == "【未执行】r"
+    assert card["card"]["header"]["template"] == "grey"
+    assert "频控跳过 1" in _card_text(card)
+
+
+def test_execution_error_lines():
+    from app.modules.automation_rules.runner import _execution_lines
+
+    assert "部署开关已关闭" in "".join(
+        _execution_lines({"error": "automation_disabled"})
+    )
+    assert "执行异常" in "".join(_execution_lines({"error": "execution_error"}))
+    assert "已无执行权限" in "".join(
+        _execution_lines({"error": "rule_owner_forbidden"})
+    )

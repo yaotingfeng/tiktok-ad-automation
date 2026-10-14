@@ -46,6 +46,11 @@ RANGE_LABELS = {
     "LIFETIME": "投放以来",
 }
 MAX_CONFLICT_LINES = 5
+EXECUTION_ERRORS = {
+    "rule_owner_forbidden": "执行人已无执行权限，未执行",
+    "automation_disabled": "自动规则部署开关已关闭，未执行",
+    "execution_error": "执行异常，未完成，请在 TK-ADA 查看",
+}
 SEND_TASK = "automation.send_feishu"
 # 投递方在入队前就要能解析队列，注册放在投递所在模块。
 register_dispatch_task(SEND_TASK, "control")
@@ -239,7 +244,7 @@ def _execution_lines(summary: dict[str, Any]) -> list[str]:
     if summary.get("failed"):
         lines.append(f"失败 {summary['failed']} 个对象")
     if summary.get("error"):
-        lines.append("规则最后修改人已无执行权限，未执行")
+        lines.append(EXECUTION_ERRORS.get(summary["error"], "执行失败"))
     failed_bcs = summary.get("failed_bcs") or []
     if failed_bcs:
         reasons = "、".join(f"{bc['bc_id']}：{bc['reason']}" for bc in failed_bcs)
@@ -287,6 +292,10 @@ def build_run_card(
                 f"&confirmation={confirmation_id}"
             )
             button = "去确认"
+    elif status == "SKIPPED":
+        # 命中对象全部被频控、冷却期或涨幅上限等跳过，没有提交任何变更。
+        title, template = f"【未执行】{rule.name}", "grey"
+        summary.extend(_execution_lines(run.execution_summary))
     elif status in ("SUBMITTED", "PARTIAL", "FAILED"):
         failed = status == "FAILED" or bool(run.execution_summary.get("failed_bcs"))
         title, template = f"【已执行】{rule.name}", "red" if failed else "green"
