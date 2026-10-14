@@ -101,3 +101,24 @@ def test_send_failures_raise(response):
             {"msg_type": "interactive", "card": {}},
             transport=httpx.MockTransport(lambda r: response),
         )
+
+
+def test_trimmed_card_recounts_remaining_hits():
+    long = "长" * 1500
+    hits = [
+        CardHit(label=f"{long}{i}", drama=None, metrics=[], target_count=1)
+        for i in range(10)
+    ]
+    card = build_card(
+        title="t",
+        rule_name="r",
+        summary_lines=[],
+        hits=hits,
+        total_hits=12,
+        link="https://example.test",
+    )
+    assert len(json.dumps(card, ensure_ascii=False).encode()) < 20 * 1024
+    content = card["card"]["elements"][1]["text"]["content"]
+    shown = content.count(long)
+    # 截断后「其余 N 个」按实际展示条数重算，N + 展示数 = 命中总数。
+    assert f"其余 {12 - shown} 个请在 TK-ADA 查看" in content

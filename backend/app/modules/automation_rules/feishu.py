@@ -63,9 +63,15 @@ def build_card(
     template: str = "orange",
     button: str = "查看明细",
 ) -> dict[str, Any]:
-    lines = [_hit_line(hit) for hit in hits[:MAX_CARD_HITS]]
-    if total_hits > len(lines):
-        lines.append(f"其余 {total_hits - len(lines)} 个请在 TK-ADA 查看")
+    shown = [_hit_line(hit) for hit in hits[:MAX_CARD_HITS]]
+
+    def hit_lines() -> list[str]:
+        # 「其余 N 个」始终按实际展示的条数计算。
+        if total_hits > len(shown):
+            return [*shown, f"其余 {total_hits - len(shown)} 个请在 TK-ADA 查看"]
+        return list(shown)
+
+    lines = hit_lines()
     elements: list[dict[str, Any]] = [
         {
             "tag": "div",
@@ -105,10 +111,10 @@ def build_card(
     }
     # 极端长名称下逐条减少明细,保证不超过飞书卡片体积上限。
     while (
-        len(json.dumps(card, ensure_ascii=False).encode()) >= MAX_CARD_BYTES and lines
+        len(json.dumps(card, ensure_ascii=False).encode()) >= MAX_CARD_BYTES and shown
     ):
-        lines.pop(-2 if len(lines) > 1 else -1)
-        elements[1]["text"]["content"] = "\n".join(lines)
+        shown.pop()
+        elements[1]["text"]["content"] = "\n".join(hit_lines())
     return card
 
 
