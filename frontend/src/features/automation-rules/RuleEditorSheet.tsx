@@ -40,10 +40,12 @@ import {
   emptyDefinition,
   FREQUENCY_LABELS,
   type Frequency,
+  fromZonedInput,
   LEVEL_LABELS,
   LEVELS,
   type Level,
   minFrequency,
+  toZonedInput,
   validateDefinition,
 } from "./ruleForm"
 
@@ -229,6 +231,8 @@ export function RuleEditorSheet({
         .data!,
   })
   const settings = useQuery(settingsQuery(tenantId))
+  // 时段与「仅一次」时间按租户运行时区解释，与后端排期一致。
+  const zone = settings.data?.schedule_timezone ?? "Asia/Shanghai"
   const update = (patch: (draft: Definition) => Definition) => {
     setDryRun(null)
     setDef((current) => patch(structuredClone(current)))
@@ -998,29 +1002,29 @@ export function RuleEditorSheet({
           </div>
         )}
         {def.schedule.window === "ONCE" && (
-          <Input
-            type="datetime-local"
-            aria-label="运行时间"
-            className="w-56"
-            value={
-              def.schedule.once_at
-                ? new Date(
-                    new Date(def.schedule.once_at).getTime() -
-                      new Date().getTimezoneOffset() * 60000,
-                  )
-                    .toISOString()
-                    .slice(0, 16)
-                : ""
-            }
-            onChange={(e) =>
-              update((draft) => {
-                draft.schedule.once_at = e.target.value
-                  ? new Date(e.target.value).toISOString()
-                  : null
-                return draft
-              })
-            }
-          />
+          <div className="flex items-center gap-2">
+            <Input
+              type="datetime-local"
+              aria-label="运行时间"
+              className="w-56"
+              value={
+                def.schedule.once_at
+                  ? toZonedInput(def.schedule.once_at, zone)
+                  : ""
+              }
+              onChange={(e) =>
+                update((draft) => {
+                  draft.schedule.once_at = e.target.value
+                    ? fromZonedInput(e.target.value, zone)
+                    : null
+                  return draft
+                })
+              }
+            />
+            <span className="text-sm text-muted-foreground">
+              按 {zone} 时间
+            </span>
+          </div>
         )}
       </Section>
       <Section title="飞书通知">

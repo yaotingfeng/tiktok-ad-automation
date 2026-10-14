@@ -380,3 +380,24 @@ test("搜索选择账户与对象，也可批量粘贴", async ({ page }) => {
     },
   })
 })
+
+test.describe("浏览器在纽约时区", () => {
+  test.use({ timezoneId: "America/New_York" })
+
+  test("仅一次的运行时间按租户运行时区填写", async ({ page }) => {
+    const created: unknown[] = []
+    await automationBoundary(page, { created })
+    await page.goto(`/tenants/${TENANT}/automation-rules`)
+    await page.getByRole("button", { name: "新建规则" }).click()
+    await page.getByRole("spinbutton", { name: "条件 1 数值" }).fill("10")
+    await page.getByRole("radio", { name: "仅一次" }).click()
+    await expect(page.getByText("按 Asia/Shanghai 时间")).toBeVisible()
+    await page.getByLabel("运行时间").fill("2030-01-02T09:30")
+    await page.getByRole("button", { name: "保存" }).click()
+    await expect.poll(() => created.length).toBe(1)
+    // 上海 09:30 = UTC 01:30，与浏览器时区无关。
+    expect(created[0]).toMatchObject({
+      definition: { schedule: { once_at: "2030-01-02T01:30:00.000Z" } },
+    })
+  })
+})

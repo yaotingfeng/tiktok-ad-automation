@@ -2,9 +2,11 @@ import { expect, test } from "@playwright/test"
 import {
   actionLevels,
   emptyDefinition,
+  fromZonedInput,
   minFrequency,
   summarizeAction,
   summarizeConditions,
+  toZonedInput,
   validateDefinition,
 } from "../src/features/automation-rules/ruleForm"
 
@@ -205,4 +207,71 @@ test("汇总发送至少设置一个时刻", () => {
     },
   }
   expect(validateDefinition(def, catalog)).toEqual(["汇总发送至少设置一个时刻"])
+})
+
+test("调整与时段校验与后端一致", () => {
+  const base = {
+    ...emptyDefinition(),
+    conditions: [
+      {
+        metric: "spend",
+        range: "TODAY" as const,
+        operator: "GT" as const,
+        values: ["10"],
+      },
+    ],
+  }
+  const adjust = (adjustment: Record<string, unknown>) => ({
+    ...base,
+    action: {
+      type: "BUDGET" as const,
+      level: "adgroup" as const,
+      adjustment: adjustment as never,
+      frequency: { type: "EVERY_24H" as const },
+    },
+  })
+  expect(
+    validateDefinition(
+      adjust({
+        mode: "INCREASE",
+        value_type: "PERCENT",
+        value: "10",
+        limit: "0",
+      }),
+      catalog,
+    ),
+  ).toEqual(["上限需大于 0"])
+  expect(
+    validateDefinition(
+      adjust({ mode: "SET", value_type: "PERCENT", value: "10" }),
+      catalog,
+    ),
+  ).toEqual(["「调整至」只能填写金额"])
+  expect(
+    validateDefinition(
+      adjust({ mode: "SET", value_type: "AMOUNT", value: "10", limit: "5" }),
+      catalog,
+    ),
+  ).toEqual(["「调整至」不设上下限"])
+  expect(
+    validateDefinition(
+      {
+        ...base,
+        schedule: { ...base.schedule, window: "CUSTOM", periods: [] },
+      },
+      catalog,
+    ),
+  ).toEqual(["自定义时段至少添加一个时间段"])
+})
+
+test("时区换算覆盖夏令时", () => {
+  expect(fromZonedInput("2026-03-08T09:00", "America/New_York")).toBe(
+    "2026-03-08T13:00:00.000Z",
+  )
+  expect(fromZonedInput("2026-03-07T09:00", "America/New_York")).toBe(
+    "2026-03-07T14:00:00.000Z",
+  )
+  expect(toZonedInput("2026-10-14T01:30:00Z", "Asia/Shanghai")).toBe(
+    "2026-10-14T09:30",
+  )
 })

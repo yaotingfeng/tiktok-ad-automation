@@ -1,5 +1,6 @@
 import { getRouteApi } from "@tanstack/react-router"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { canManage } from "@/features/tenants/shared"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import { Confirmations } from "./Confirmations"
@@ -13,7 +14,8 @@ export function AutomationRulesPage() {
   const search = route.useSearch()
   const navigate = route.useNavigate()
   const write = !!scope && scope.role !== "viewer"
-  const admin = scope?.role === "tenant_admin"
+  // 平台管理员与租户管理员都能保存自动执行规则（与后端 manage 权限一致）。
+  const admin = canManage(scope?.role)
   const tab = search.tab ?? "rules"
   return (
     <section

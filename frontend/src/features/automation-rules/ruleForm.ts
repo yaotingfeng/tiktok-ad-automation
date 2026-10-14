@@ -214,6 +214,18 @@ export function validateDefinition(
   ) {
     if (notNumber(adjustment.value) || Number(adjustment.value) <= 0)
       errors.push("调整数值需大于 0")
+    if (
+      adjustment.mode !== "SET" &&
+      !notNumber(adjustment.limit) &&
+      Number(adjustment.limit) <= 0
+    )
+      errors.push(
+        adjustment.mode === "INCREASE" ? "上限需大于 0" : "下限需大于 0",
+      )
+    if (adjustment.mode === "SET" && adjustment.value_type !== "AMOUNT")
+      errors.push("「调整至」只能填写金额")
+    if (adjustment.mode === "SET" && !blank(adjustment.limit))
+      errors.push("「调整至」不设上下限")
     if (adjustment.mode === "INCREASE" && notNumber(adjustment.limit))
       errors.push(
         def.action.type === "BUDGET"
@@ -241,6 +253,8 @@ export function validateDefinition(
   const schedule = def.schedule
   if (schedule.frequency === "DAILY" && blank(schedule.daily_at))
     errors.push("每天固定时刻需要选择时间")
+  if (schedule.window === "CUSTOM" && !schedule.periods?.length)
+    errors.push("自定义时段至少添加一个时间段")
   if (schedule.window === "ONCE" && blank(schedule.once_at))
     errors.push("仅一次运行需要选择时间")
   const notification = def.notification
@@ -255,4 +269,35 @@ export function validateDefinition(
   )
     errors.push("涉及素材的规则最短 1 小时运行一次")
   return errors
+}
+
+/** UTC ISO 时间转为某时区的 datetime-local 文本（YYYY-MM-DDTHH:mm）。 */
+export function toZonedInput(iso: string, timeZone: string) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    })
+      .formatToParts(new Date(iso))
+      .map((part) => [part.type, part.value]),
+  )
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`
+}
+
+/** 某时区的 datetime-local 文本转为 UTC ISO；先按 UTC 猜测，再用该时区偏移校正两次（覆盖夏令时）。 */
+export function fromZonedInput(value: string, timeZone: string) {
+  const target = Date.parse(`${value}:00Z`)
+  let guess = target
+  for (let i = 0; i < 2; i++) {
+    const shown = Date.parse(
+      `${toZonedInput(new Date(guess).toISOString(), timeZone)}:00Z`,
+    )
+    guess += target - shown
+  }
+  return new Date(guess).toISOString()
 }
