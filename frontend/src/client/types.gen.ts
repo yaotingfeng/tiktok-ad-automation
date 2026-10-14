@@ -393,6 +393,14 @@ export type AutomationSettingsPublic = {
      */
     paused: boolean;
     /**
+     * Reverse Cooldown Hours
+     */
+    reverse_cooldown_hours: number;
+    /**
+     * Daily Increase Limit Pct
+     */
+    daily_increase_limit_pct: number;
+    /**
      * Feishu Configured
      */
     feishu_configured: boolean;
@@ -426,6 +434,14 @@ export type AutomationSettingsUpdate = {
      * Feishu Enabled
      */
     feishu_enabled: boolean;
+    /**
+     * Reverse Cooldown Hours
+     */
+    reverse_cooldown_hours?: number;
+    /**
+     * Daily Increase Limit Pct
+     */
+    daily_increase_limit_pct?: number;
     /**
      * Webhook Url
      */
@@ -752,6 +768,128 @@ export type Condition = {
      * Values
      */
     values: Array<string>;
+};
+
+/**
+ * ConfirmRequest
+ */
+export type ConfirmRequest = {
+    /**
+     * Subject Keys
+     */
+    subject_keys: Array<string>;
+};
+
+/**
+ * ConfirmationDetail
+ */
+export type ConfirmationDetail = {
+    confirmation: ConfirmationItem;
+    action: Action_Output;
+    /**
+     * Skipped Accounts
+     */
+    skipped_accounts: Array<{
+        [key: string]: string;
+    }>;
+    /**
+     * Items
+     */
+    items: Array<ConfirmationHit>;
+};
+
+/**
+ * ConfirmationHit
+ */
+export type ConfirmationHit = {
+    /**
+     * Subject Key
+     */
+    subject_key: string;
+    /**
+     * Subject Label
+     */
+    subject_label: string;
+    /**
+     * Drama Name
+     */
+    drama_name: string | null;
+    /**
+     * Advertiser Id
+     */
+    advertiser_id: string | null;
+    /**
+     * Target Count
+     */
+    target_count: number;
+    /**
+     * Metrics Then
+     */
+    metrics_then: {
+        [key: string]: string;
+    };
+    /**
+     * Metrics Now
+     */
+    metrics_now: {
+        [key: string]: string;
+    };
+    /**
+     * Still Matching
+     */
+    still_matching: boolean;
+};
+
+/**
+ * ConfirmationItem
+ */
+export type ConfirmationItem = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Rule Id
+     */
+    rule_id: string;
+    /**
+     * Rule Name
+     */
+    rule_name: string;
+    /**
+     * Run Id
+     */
+    run_id: string;
+    /**
+     * Status
+     */
+    status: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Hit Count
+     */
+    hit_count: number;
+    /**
+     * Target Count
+     */
+    target_count: number;
+};
+
+/**
+ * ConfirmationPage
+ */
+export type ConfirmationPage = {
+    /**
+     * Items
+     */
+    items: Array<ConfirmationItem>;
+    /**
+     * Total
+     */
+    total: number;
 };
 
 /**
@@ -1951,6 +2089,10 @@ export type HitPublic = {
     targets: Array<{
         [key: string]: unknown;
     }>;
+    /**
+     * Outcome
+     */
+    outcome?: string | null;
 };
 
 /**
@@ -3425,6 +3567,14 @@ export type MutationSpec = {
      * Excluded Material Uses
      */
     excluded_material_uses?: Array<MaterialUseRef>;
+    /**
+     * Min Value
+     */
+    min_value?: number | string | null;
+    /**
+     * Max Value
+     */
+    max_value?: number | string | null;
 };
 
 /**
@@ -5637,6 +5787,10 @@ export type RunDetail = {
      * Hits
      */
     hits: Array<HitPublic>;
+    /**
+     * Confirmation Id
+     */
+    confirmation_id?: string | null;
 };
 
 /**
@@ -5697,6 +5851,20 @@ export type RunListItem = {
      * Notify Error
      */
     notify_error: string | null;
+    /**
+     * Mode
+     */
+    mode: string;
+    /**
+     * Execution Status
+     */
+    execution_status: string;
+    /**
+     * Execution Summary
+     */
+    execution_summary: {
+        [key: string]: unknown;
+    };
     /**
      * Rule Name
      */
@@ -5775,6 +5943,20 @@ export type RunSummary = {
      * Notify Error
      */
     notify_error: string | null;
+    /**
+     * Mode
+     */
+    mode: string;
+    /**
+     * Execution Status
+     */
+    execution_status: string;
+    /**
+     * Execution Summary
+     */
+    execution_summary: {
+        [key: string]: unknown;
+    };
 };
 
 /**
@@ -12103,6 +12285,143 @@ export type automationRulesGetRunResponses = {
 };
 
 export type automationRulesGetRunResponse = automationRulesGetRunResponses[keyof automationRulesGetRunResponses];
+
+export type automationRulesListConfirmationsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: {
+        /**
+         * Status
+         */
+        status?: string | null;
+    };
+    url: '/api/tenants/{tenant_id}/automation-confirmations';
+};
+
+export type automationRulesListConfirmationsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type automationRulesListConfirmationsError = automationRulesListConfirmationsErrors[keyof automationRulesListConfirmationsErrors];
+
+export type automationRulesListConfirmationsResponses = {
+    /**
+     * Successful Response
+     */
+    200: ConfirmationPage;
+};
+
+export type automationRulesListConfirmationsResponse = automationRulesListConfirmationsResponses[keyof automationRulesListConfirmationsResponses];
+
+export type automationRulesGetConfirmationData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Confirmation Id
+         */
+        confirmation_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/automation-confirmations/{confirmation_id}';
+};
+
+export type automationRulesGetConfirmationErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type automationRulesGetConfirmationError = automationRulesGetConfirmationErrors[keyof automationRulesGetConfirmationErrors];
+
+export type automationRulesGetConfirmationResponses = {
+    /**
+     * Successful Response
+     */
+    200: ConfirmationDetail;
+};
+
+export type automationRulesGetConfirmationResponse = automationRulesGetConfirmationResponses[keyof automationRulesGetConfirmationResponses];
+
+export type automationRulesConfirmBatchData = {
+    body: ConfirmRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Confirmation Id
+         */
+        confirmation_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/automation-confirmations/{confirmation_id}/confirm';
+};
+
+export type automationRulesConfirmBatchErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type automationRulesConfirmBatchError = automationRulesConfirmBatchErrors[keyof automationRulesConfirmBatchErrors];
+
+export type automationRulesConfirmBatchResponses = {
+    /**
+     * Successful Response
+     */
+    200: ConfirmationItem;
+};
+
+export type automationRulesConfirmBatchResponse = automationRulesConfirmBatchResponses[keyof automationRulesConfirmBatchResponses];
+
+export type automationRulesDismissBatchData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Confirmation Id
+         */
+        confirmation_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/automation-confirmations/{confirmation_id}/dismiss';
+};
+
+export type automationRulesDismissBatchErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type automationRulesDismissBatchError = automationRulesDismissBatchErrors[keyof automationRulesDismissBatchErrors];
+
+export type automationRulesDismissBatchResponses = {
+    /**
+     * Successful Response
+     */
+    200: ConfirmationItem;
+};
+
+export type automationRulesDismissBatchResponse = automationRulesDismissBatchResponses[keyof automationRulesDismissBatchResponses];
 
 export type strategiesGetStrategiesData = {
     body?: never;

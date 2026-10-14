@@ -12,6 +12,10 @@ export type AutomationBoundaryOptions = {
   saved?: unknown[]
   /** 记录测试消息请求体 */
   tested?: unknown[]
+  /** 记录确认执行请求体 */
+  confirmed?: unknown[]
+  /** 记录忽略批次的请求路径 */
+  dismissed?: string[]
 }
 
 const CATALOG = {
@@ -120,6 +124,46 @@ const RUN = {
   error_code: null,
   notify_status: "SENT",
   notify_error: null,
+  mode: "NOTIFY",
+  execution_status: "NOT_REQUIRED",
+  execution_summary: {},
+}
+
+const EXECUTED_RUN = {
+  ...RUN,
+  id: "run-2",
+  rule_name: "自动加预算",
+  mode: "AUTO",
+  execution_status: "PARTIAL",
+  execution_summary: {
+    submitted: 2,
+    skipped_frequency: 0,
+    skipped_cooldown: 0,
+    skipped_daily_limit: 1,
+    conflicts: 1,
+    no_change: 0,
+    failed: 0,
+    failed_bcs: [],
+    tasks: [{ bc_id: BC_A, task_id: "task-1" }],
+    conflict_details: [
+      {
+        target_key: "adgroup:acc-1:g2",
+        rule_name: "夜间暂停",
+        action: "PAUSE",
+      },
+    ],
+  },
+}
+
+const CONFIRMATION = {
+  id: "conf-1",
+  rule_id: "rule-1",
+  rule_name: "剧级止损",
+  run_id: "run-1",
+  status: "PENDING",
+  created_at: "2026-10-14T02:00:09Z",
+  hit_count: 2,
+  target_count: 3,
 }
 
 const RULE = {
@@ -227,9 +271,53 @@ export async function automationBoundary(
       return json({ items: [RULE], total: 1 })
     if (path.startsWith(`${base}/automation-rules/rule-1`)) return json(RULE)
     if (path === `${base}/automation-runs`)
-      return json({ items: [RUN], total: 1 })
+      return json({ items: [RUN, EXECUTED_RUN], total: 2 })
     if (path === `${base}/automation-runs/run-1`)
-      return json({ run: RUN, hits: [HIT] })
+      return json({ run: RUN, hits: [HIT], confirmation_id: null })
+    if (path === `${base}/automation-runs/run-2`)
+      return json({
+        run: EXECUTED_RUN,
+        hits: [{ ...HIT, outcome: "SUBMITTED" }],
+        confirmation_id: null,
+      })
+    if (path === `${base}/automation-confirmations`)
+      return json({ items: [CONFIRMATION], total: 1 })
+    if (path === `${base}/automation-confirmations/conf-1/confirm`) {
+      options.confirmed?.push(request.postDataJSON())
+      return json({ ...CONFIRMATION, status: "CONFIRMED" })
+    }
+    if (path === `${base}/automation-confirmations/conf-1/dismiss`) {
+      options.dismissed?.push(path)
+      return json({ ...CONFIRMATION, status: "DISMISSED" })
+    }
+    if (path === `${base}/automation-confirmations/conf-1`)
+      return json({
+        confirmation: CONFIRMATION,
+        action: DEFINITION.action,
+        skipped_accounts: [],
+        items: [
+          {
+            subject_key: "drama:嘉书-总裁归来:USD",
+            subject_label: "总裁归来",
+            drama_name: "嘉书-总裁归来",
+            advertiser_id: null,
+            target_count: 2,
+            metrics_then: { "spend:TODAY": "120" },
+            metrics_now: { "spend:TODAY": "135" },
+            still_matching: true,
+          },
+          {
+            subject_key: "drama:嘉书-闪婚:USD",
+            subject_label: "闪婚",
+            drama_name: "嘉书-闪婚",
+            advertiser_id: null,
+            target_count: 1,
+            metrics_then: { "spend:TODAY": "101" },
+            metrics_now: {},
+            still_matching: false,
+          },
+        ],
+      })
     if (path === `${base}/automation-settings/test-feishu`) {
       options.tested?.push(request.postDataJSON())
       return route.fulfill({ headers, status: 204 })
@@ -243,6 +331,8 @@ export async function automationBoundary(
         feishu_enabled: true,
         feishu_url_hint: "https://open.feishu.cn/open-apis/bot/v2/hook/…ab12",
         feishu_has_secret: false,
+        reverse_cooldown_hours: 24,
+        daily_increase_limit_pct: 100,
       })
     }
     return json({ items: [], next_cursor: null, total: 0 })

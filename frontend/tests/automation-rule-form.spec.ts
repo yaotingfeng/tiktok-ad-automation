@@ -5,6 +5,7 @@ import {
   minFrequency,
   summarizeAction,
   summarizeConditions,
+  validateDefinition,
 } from "../src/features/automation-rules/ruleForm"
 
 const catalog = {
@@ -83,4 +84,104 @@ test("条件与操作摘要", () => {
     "每部剧合计 · 今天消耗 > 100 且 近 3 天广告收益 ROAS 介于 0.5 ~ 0.8",
   )
   expect(summarizeAction(def)).toBe("暂停 → 广告组")
+})
+
+test("表单校验列出中文错误", () => {
+  const ok = {
+    ...emptyDefinition(),
+    conditions: [
+      {
+        metric: "spend",
+        range: "TODAY" as const,
+        operator: "GT" as const,
+        values: ["10"],
+      },
+    ],
+  }
+  expect(validateDefinition(ok, catalog)).toEqual([])
+  const bad = {
+    ...ok,
+    accounts: { mode: "BC" as const, bc_ids: [], advertiser_ids: [] },
+    conditions: [
+      {
+        metric: "spend",
+        range: "TODAY" as const,
+        operator: "GT" as const,
+        values: [""],
+      },
+      {
+        metric: "roas_total",
+        range: "TODAY" as const,
+        operator: "BETWEEN" as const,
+        values: ["2", "1"],
+      },
+    ],
+    max_targets: 0,
+  }
+  expect(validateDefinition(bad, catalog)).toEqual([
+    "按 BC 选择时至少选择一个 BC",
+    "条件 1 需要填写数值",
+    "条件 2 的下限必须小于上限",
+    "单次执行对象上限需在 1–5000 之间",
+  ])
+  const budget = {
+    ...ok,
+    action: {
+      type: "BUDGET" as const,
+      level: "adgroup" as const,
+      adjustment: {
+        mode: "INCREASE" as const,
+        value_type: "PERCENT" as const,
+        value: "0",
+        limit: "",
+      },
+      frequency: {
+        type: "CUSTOM" as const,
+        window: null,
+        unit: "HOUR" as const,
+        count: null,
+      },
+    },
+  }
+  expect(validateDefinition(budget, catalog)).toEqual([
+    "调整数值需大于 0",
+    "提高预算需要设置上限",
+    "自定义频控需要填写时间窗口和次数",
+  ])
+  const material = {
+    ...ok,
+    apply_to: { ...ok.apply_to, level: "material" as const },
+    action: { type: "PAUSE" as const, level: "material" as const },
+    schedule: { ...ok.schedule, frequency: "30M" as const },
+  }
+  expect(validateDefinition(material, catalog)).toEqual([
+    "涉及素材的规则最短 1 小时运行一次",
+  ])
+  const once = {
+    ...ok,
+    schedule: { ...ok.schedule, window: "ONCE" as const, once_at: null },
+  }
+  expect(validateDefinition(once, catalog)).toEqual(["仅一次运行需要选择时间"])
+  const attr = {
+    ...ok,
+    aggregation: "DRAMA" as const,
+    conditions: [
+      { metric: "name", operator: "CONTAINS" as const, values: ["x"] },
+    ],
+  }
+  expect(
+    validateDefinition(attr, {
+      metrics: [
+        ...catalog.metrics,
+        {
+          key: "name",
+          name_zh: "名称",
+          kind: "attribute",
+          levels: ["adgroup"],
+          aggregations: ["EACH"],
+          ranged: false,
+        },
+      ],
+    }),
+  ).toEqual(["合计口径不能使用属性条件（名称）"])
 })

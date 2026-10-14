@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query"
+import { Link } from "@tanstack/react-router"
 import type { ColumnDef } from "@tanstack/react-table"
 import { useMemo, useState } from "react"
-import type { RunListItem } from "@/client"
+import type { RunListItem, RunSummary } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
@@ -23,6 +24,7 @@ import { displayTime } from "@/features/accounts/presentation"
 import { ServerTable } from "@/features/tenants/shared"
 import { HitTable } from "./DryRunPanel"
 import { catalogQuery, rulesQuery, runQuery, runsQuery } from "./queries"
+import { MODE_LABELS } from "./ruleForm"
 
 const NOTIFY_LABELS: Record<string, string> = {
   NOT_REQUIRED: "无需发送",
@@ -36,6 +38,95 @@ const RUN_ERRORS: Record<string, string> = {
   evaluation_timeout: "判断超时",
 }
 const ALL = "__all__"
+const EXECUTION_LABELS: Record<string, string> = {
+  AWAITING_CONFIRMATION: "待确认",
+  QUEUED: "已排队",
+  CONFIRMED: "已确认，执行中",
+  PARTIAL: "部分完成",
+  FAILED: "执行失败",
+  DISMISSED: "已忽略",
+  EXPIRED: "已失效",
+}
+
+type Summary = {
+  submitted?: number
+  skipped_frequency?: number
+  skipped_daily_limit?: number
+  conflicts?: number
+  no_change?: number
+  failed?: number
+  error?: string
+  reason?: string
+  target_count?: number
+  max_targets?: number
+  failed_bcs?: { bc_id: string; reason: string }[]
+  tasks?: { bc_id: string; task_id: string }[]
+  conflict_details?: { target_key: string; rule_name: string; action: string }[]
+}
+
+/** 执行列：仅通知显示模式名；已提交显示提交数，其余显示状态。 */
+function executionLabel(run: RunSummary) {
+  if (run.mode === "NOTIFY" || run.execution_status === "NOT_REQUIRED")
+    return MODE_LABELS.NOTIFY
+  if (run.execution_status === "SUBMITTED")
+    return `已提交 ${(run.execution_summary as Summary).submitted ?? 0}`
+  return EXECUTION_LABELS[run.execution_status] ?? run.execution_status
+}
+
+function ExecutionSummary({
+  tenantId,
+  run,
+}: {
+  tenantId: string
+  run: RunSummary
+}) {
+  const summary = run.execution_summary as Summary
+  if (run.execution_status === "AWAITING_CONFIRMATION")
+    return (
+      <p className="text-sm">
+        {summary.reason === "max_targets_exceeded"
+          ? `涉及 ${summary.target_count} 个对象，超过单次自动执行上限 ${summary.max_targets}，已转为人工确认。`
+          : "命中结果等待确认，请在「待确认」中处理。"}
+      </p>
+    )
+  if (!["SUBMITTED", "PARTIAL", "FAILED"].includes(run.execution_status))
+    return null
+  return (
+    <div className="flex flex-col gap-1 rounded-md border p-3 text-sm">
+      <p>
+        提交 {summary.submitted ?? 0} 个对象；频控跳过{" "}
+        {summary.skipped_frequency ?? 0}、冷却期冲突 {summary.conflicts ?? 0}
+        、超出每日涨幅 {summary.skipped_daily_limit ?? 0}、无需变更{" "}
+        {summary.no_change ?? 0}
+        {summary.failed ? `、失败 ${summary.failed}` : ""}
+      </p>
+      {summary.error === "rule_owner_forbidden" && (
+        <p className="text-destructive">规则最后修改人已无执行权限，未执行。</p>
+      )}
+      {(summary.failed_bcs ?? []).map((item) => (
+        <p key={item.bc_id} className="text-destructive break-all">
+          BC {item.bc_id} 执行失败：{item.reason}
+        </p>
+      ))}
+      {(summary.conflict_details ?? []).map((item) => (
+        <p key={item.target_key} className="break-all text-muted-foreground">
+          冲突：{item.target_key} 与规则「{item.rule_name}」相反
+        </p>
+      ))}
+      {(summary.tasks ?? []).map((task) => (
+        <Link
+          key={task.task_id}
+          to="/tenants/$tenantId/ad-management-tasks/$taskId"
+          params={{ tenantId, taskId: task.task_id }}
+          search={{ bc_id: task.bc_id }}
+          className="text-primary underline-offset-4 hover:underline"
+        >
+          操作记录
+        </Link>
+      ))}
+    </div>
+  )
+}
 
 function RunDetailSheet({
   tenantId,
@@ -74,8 +165,13 @@ function RunDetailSheet({
               飞书发送失败：{run.notify_error}
             </p>
           )}
+          {run && <ExecutionSummary tenantId={tenantId} run={run} />}
           {detail.data && (
-            <HitTable hits={detail.data.hits} catalog={catalog.data} />
+            <HitTable
+              hits={detail.data.hits}
+              catalog={catalog.data}
+              showOutcome={run?.mode !== "NOTIFY"}
+            />
           )}
         </div>
       </SheetContent>
@@ -137,6 +233,12 @@ export function RunHistory({
                 ` · 跳过 ${run.skipped_accounts.length} 个账户`}
             </span>
           ),
+      },
+      {
+        header: "执行",
+        id: "execution",
+        size: 110,
+        cell: ({ row }) => executionLabel(row.original),
       },
       {
         header: "飞书",

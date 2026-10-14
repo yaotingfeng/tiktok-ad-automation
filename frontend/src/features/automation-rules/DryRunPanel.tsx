@@ -25,14 +25,30 @@ export function metricTitle(key: string, catalog: CatalogPublic | undefined) {
   return `${range ? RANGE_LABELS[range as RangeType] : ""}${name}`
 }
 
+export const OUTCOME_LABELS: Record<string, string> = {
+  NOTIFIED: "已通知",
+  PENDING_CONFIRMATION: "待确认",
+  NOT_SELECTED: "未执行",
+  NO_CHANGE: "无需变更",
+  SKIPPED_FREQUENCY: "频控跳过",
+  SKIPPED_DAILY_LIMIT: "超出每日涨幅",
+  SUBMITTED: "已提交",
+  CONFLICT: "冷却期冲突",
+  FAILED: "失败",
+}
+
 export function HitTable({
   hits,
   catalog,
+  showOutcome = false,
 }: {
   hits: HitPublic[]
   catalog: CatalogPublic | undefined
+  /** 运行明细显示每条命中的处理结果；试运行没有执行，不显示。 */
+  showOutcome?: boolean
 }) {
   const [open, setOpen] = useState<string | null>(null)
+  const columns = showOutcome ? 6 : 5
   return (
     <Table>
       <TableHeader>
@@ -42,6 +58,7 @@ export function HitTable({
           <TableHead>账户</TableHead>
           <TableHead>指标</TableHead>
           <TableHead className="text-right">涉及对象</TableHead>
+          {showOutcome && <TableHead>处理结果</TableHead>}
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -80,11 +97,16 @@ export function HitTable({
                   {hit.target_count} 个
                 </Button>
               </TableCell>
+              {showOutcome && (
+                <TableCell>
+                  {OUTCOME_LABELS[hit.outcome ?? ""] ?? hit.outcome ?? "—"}
+                </TableCell>
+              )}
             </TableRow>
             {open === hit.subject_key && (
               <TableRow>
                 <TableCell
-                  colSpan={5}
+                  colSpan={columns}
                   className="bg-muted/40 whitespace-normal"
                 >
                   <ul className="flex flex-col gap-1 text-sm">

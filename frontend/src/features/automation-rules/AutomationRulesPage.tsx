@@ -2,6 +2,7 @@ import { getRouteApi } from "@tanstack/react-router"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
+import { Confirmations } from "./Confirmations"
 import { RuleList } from "./RuleList"
 import { RunHistory } from "./RunHistory"
 
@@ -12,6 +13,7 @@ export function AutomationRulesPage() {
   const search = route.useSearch()
   const navigate = route.useNavigate()
   const write = !!scope && scope.role !== "viewer"
+  const admin = scope?.role === "tenant_admin"
   const tab = search.tab ?? "rules"
   return (
     <section
@@ -21,24 +23,41 @@ export function AutomationRulesPage() {
       <div className="flex min-w-0 flex-col gap-1">
         <WorkspacePageTitle>自动规则</WorkspacePageTitle>
         <p className="text-sm text-muted-foreground">
-          按条件自动检查跨账户、跨 BC 的投放数据，并发送飞书预警。
+          按条件自动检查跨账户、跨 BC
+          的投放数据，可仅发飞书预警、确认后执行或自动执行。
         </p>
       </div>
       <Tabs
         value={tab}
         onValueChange={(value) =>
           void navigate({
-            search: { tab: value === "runs" ? "runs" : undefined },
+            search: {
+              tab:
+                value === "runs" || value === "confirmations"
+                  ? value
+                  : undefined,
+            },
           })
         }
         className="gap-4"
       >
         <TabsList>
           <TabsTrigger value="rules">规则管理</TabsTrigger>
+          <TabsTrigger value="confirmations">待确认</TabsTrigger>
           <TabsTrigger value="runs">执行记录</TabsTrigger>
         </TabsList>
         <TabsContent value="rules">
-          <RuleList tenantId={tenantId!} write={write} />
+          <RuleList tenantId={tenantId!} write={write} admin={admin} />
+        </TabsContent>
+        <TabsContent value="confirmations">
+          <Confirmations
+            tenantId={tenantId!}
+            write={write}
+            openConfirmation={search.confirmation}
+            onOpenConfirmation={(confirmation) =>
+              void navigate({ search: { tab: "confirmations", confirmation } })
+            }
+          />
         </TabsContent>
         <TabsContent value="runs">
           <RunHistory

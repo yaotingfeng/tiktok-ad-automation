@@ -65,3 +65,29 @@ export const settingsQuery = (tenantId: string) =>
         })
       ).data!,
   })
+
+export const confirmationsQuery = (tenantId: string, status?: string) =>
+  queryOptions({
+    queryKey: [...ruleKeys(tenantId), "confirmations", status ?? "all"],
+    queryFn: async ({ signal }) =>
+      (
+        await AutomationRulesService.listConfirmations({
+          path: { tenant_id: tenantId },
+          // 后端默认只列待确认；传空字符串列出全部状态。
+          query: { status: status ?? "" },
+          signal,
+        })
+      ).data!,
+  })
+
+export const confirmationQuery = (tenantId: string, confirmationId: string) =>
+  queryOptions({
+    queryKey: [...ruleKeys(tenantId), "confirmation", confirmationId],
+    queryFn: async ({ signal }) =>
+      (
+        await AutomationRulesService.getConfirmation({
+          path: { tenant_id: tenantId, confirmation_id: confirmationId },
+          signal,
+        })
+      ).data!,
+  })

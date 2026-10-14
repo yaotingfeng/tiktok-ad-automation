@@ -58,9 +58,11 @@ function LastRun({ rule }: { rule: RulePublic }) {
 export function RuleList({
   tenantId,
   write,
+  admin,
 }: {
   tenantId: string
   write: boolean
+  admin: boolean
 }) {
   const client = useQueryClient()
   const rules = useQuery(rulesQuery(tenantId))
@@ -252,6 +254,7 @@ export function RuleList({
           tenantId={tenantId}
           catalog={catalog.data}
           target={editor}
+          admin={admin}
           onClose={() => setEditor(null)}
         />
       )}

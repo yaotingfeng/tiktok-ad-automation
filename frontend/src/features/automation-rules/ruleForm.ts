@@ -13,10 +13,11 @@ export type RangeType = NonNullable<Condition["range"]>
 export type Operator = Condition["operator"]
 export type Frequency = Definition["schedule"]["frequency"]
 type CatalogLike = Pick<CatalogPublic, "metrics"> & {
-  metrics: Pick<
+  metrics: (Pick<
     CatalogMetric,
     "key" | "name_zh" | "levels" | "aggregations" | "ranged" | "kind"
-  >[]
+  > &
+    Partial<Pick<CatalogMetric, "unit">>)[]
 }
 
 export const LEVELS: Level[] = ["campaign", "adgroup", "ad", "material"]
@@ -159,4 +160,93 @@ export function summarizeScope(def: Definition) {
   if (accounts.mode === "ALL") return "全部账户"
   if (accounts.mode === "BC") return `${accounts.bc_ids?.length ?? 0} 个 BC`
   return `${accounts.advertiser_ids?.length ?? 0} 个账户`
+}
+
+const TEXT_OPERATORS: Operator[] = [
+  "CONTAINS",
+  "NOT_CONTAINS",
+  "STARTS_WITH",
+  "ENDS_WITH",
+]
+const FREQUENCY_RANK: Frequency[] = ["30M", "1H", "2H", "4H", "DAILY"]
+
+function blank(value: unknown) {
+  return value === null || value === undefined || String(value).trim() === ""
+}
+
+function notNumber(value: unknown) {
+  return blank(value) || !Number.isFinite(Number(value))
+}
+
+/** 保存与试运行前的校验，规则与后端定义一致；返回中文错误，空数组表示通过。 */
+export function validateDefinition(
+  def: Definition,
+  catalog: CatalogLike,
+): string[] {
+  const errors: string[] = []
+  if (def.accounts.mode === "BC" && !def.accounts.bc_ids?.length)
+    errors.push("按 BC 选择时至少选择一个 BC")
+  if (def.accounts.mode === "ACCOUNTS" && !def.accounts.advertiser_ids?.length)
+    errors.push("指定账户时至少填写一个账户 ID")
+  if (def.apply_to.status === "SELECTED" && !def.apply_to.object_ids?.length)
+    errors.push("指定对象时至少填写一个对象")
+  def.conditions.forEach((condition, index) => {
+    const label = `条件 ${index + 1}`
+    const metric = catalog.metrics.find((item) => item.key === condition.metric)
+    if (metric?.kind === "attribute" && def.aggregation !== "EACH")
+      errors.push(`合计口径不能使用属性条件（${metric.name_zh}）`)
+    const textual =
+      metric?.unit === "text" || TEXT_OPERATORS.includes(condition.operator)
+    const [first, second] = condition.values
+    if (condition.operator === "BETWEEN") {
+      if (notNumber(first) || notNumber(second))
+        errors.push(`${label} 需要填写上下限`)
+      else if (Number(first) >= Number(second))
+        errors.push(`${label} 的下限必须小于上限`)
+    } else if (textual ? blank(first) : notNumber(first)) {
+      errors.push(`${label} 需要填写数值`)
+    }
+  })
+  const adjustment = def.action.adjustment
+  if (
+    (def.action.type === "BUDGET" || def.action.type === "ROAS") &&
+    adjustment
+  ) {
+    if (notNumber(adjustment.value) || Number(adjustment.value) <= 0)
+      errors.push("调整数值需大于 0")
+    if (adjustment.mode === "INCREASE" && notNumber(adjustment.limit))
+      errors.push(
+        def.action.type === "BUDGET"
+          ? "提高预算需要设置上限"
+          : "提高出价需要设置上限",
+      )
+    if (adjustment.mode === "DECREASE" && notNumber(adjustment.limit))
+      errors.push(
+        def.action.type === "BUDGET"
+          ? "降低预算需要设置下限"
+          : "降低出价需要设置下限",
+      )
+    const frequency = def.action.frequency
+    if (
+      frequency?.type === "CUSTOM" &&
+      (blank(frequency.window) ||
+        blank(frequency.unit) ||
+        blank(frequency.count))
+    )
+      errors.push("自定义频控需要填写时间窗口和次数")
+  }
+  const max = def.max_targets ?? 200
+  if (!Number.isInteger(max) || max < 1 || max > 5000)
+    errors.push("单次执行对象上限需在 1–5000 之间")
+  const schedule = def.schedule
+  if (schedule.frequency === "DAILY" && blank(schedule.daily_at))
+    errors.push("每天固定时刻需要选择时间")
+  if (schedule.window === "ONCE" && blank(schedule.once_at))
+    errors.push("仅一次运行需要选择时间")
+  if (
+    FREQUENCY_RANK.indexOf(schedule.frequency) <
+    FREQUENCY_RANK.indexOf(minFrequency(def.apply_to.level, def.action.level))
+  )
+    errors.push("涉及素材的规则最短 1 小时运行一次")
+  return errors
 }

@@ -43,6 +43,7 @@ import {
   LEVELS,
   type Level,
   minFrequency,
+  validateDefinition,
 } from "./ruleForm"
 
 const FREQUENCY_ORDER: Frequency[] = ["30M", "1H", "2H", "4H", "DAILY"]
@@ -174,11 +175,13 @@ export function RuleEditorSheet({
   tenantId,
   catalog,
   target,
+  admin,
   onClose,
 }: {
   tenantId: string
   catalog: CatalogPublic
   target: EditorTarget
+  admin: boolean
   onClose: () => void
 }) {
   const client = useQueryClient()
@@ -245,6 +248,12 @@ export function RuleEditorSheet({
     minFrequency(def.apply_to.level, def.action.level),
   )
   const adjusts = def.action.type === "BUDGET" || def.action.type === "ROAS"
+  // 校验失败时在顶部列出错误，不发请求。
+  const valid = () => {
+    const problems = validateDefinition(payload(), catalog)
+    setError(problems.length ? problems.join("；") : null)
+    return problems.length === 0
+  }
   const save = useMutation({
     mutationFn: async () => {
       const body = { name: name.trim(), definition: payload(), enabled: true }
@@ -298,7 +307,7 @@ export function RuleEditorSheet({
   return (
     <ManagementSheet
       title={target.kind === "edit" ? "编辑规则" : "新建规则"}
-      description="条件全部满足时触发；当前版本只发送飞书预警，不改动广告。"
+      description="条件全部满足时触发；按执行模式仅通知、待人确认后执行或自动执行。"
       dirty={dirty}
       pending={save.isPending}
       wide
@@ -307,13 +316,13 @@ export function RuleEditorSheet({
         <>
           <Button
             variant="outline"
-            onClick={() => runDry.mutate()}
+            onClick={() => valid() && runDry.mutate()}
             disabled={runDry.isPending}
           >
             试运行
           </Button>
           <Button
-            onClick={() => save.mutate()}
+            onClick={() => valid() && save.mutate()}
             disabled={save.isPending || !name.trim()}
           >
             保存
@@ -772,13 +781,13 @@ export function RuleEditorSheet({
             })
           }
         >
-          <Choice value="AUTO" label="自动执行" disabled hint="第二阶段开放" />
           <Choice
-            value="CONFIRM"
-            label="确认后执行"
-            disabled
-            hint="第二阶段开放"
+            value="AUTO"
+            label="自动执行"
+            disabled={!admin}
+            hint={admin ? undefined : "需要租户管理员"}
           />
+          <Choice value="CONFIRM" label="确认后执行" />
           <Choice value="NOTIFY" label="仅通知" />
         </RadioGroup>
         <div className="flex items-center gap-2 text-sm">

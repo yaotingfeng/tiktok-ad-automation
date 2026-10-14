@@ -24,7 +24,6 @@ test("新建规则:联动选项并提交正确的定义", async ({ page }) => {
   await page.getByRole("combobox", { name: "条件 2 运算符" }).click()
   await page.getByRole("option", { name: "小于" }).click()
   await page.getByRole("spinbutton", { name: "条件 2 数值" }).fill("0.8")
-  await expect(page.getByRole("radio", { name: "自动执行" })).toBeDisabled()
   await page.getByRole("button", { name: "保存" }).click()
   await expect.poll(() => created.length).toBe(1)
   expect(created[0]).toMatchObject({
@@ -71,6 +70,7 @@ test("执行记录下钻到命中明细", async ({ page }) => {
   const row = page.getByRole("row", { name: /剧级止损/ })
   await expect(row).toContainText("命中 1")
   await expect(row).toContainText("已发送")
+  await expect(row).toContainText("仅通知")
   await row.getByRole("button", { name: "查看明细" }).click()
   await expect(
     page.getByRole("cell", { name: "总裁归来", exact: true }),
@@ -102,6 +102,24 @@ test("通知设置:掩码显示、测试与保存", async ({ page }) => {
   await expect.poll(() => saved.length).toBe(1)
   expect(saved[0]).toMatchObject({
     webhook_url: "https://open.feishu.cn/open-apis/bot/v2/hook/new-1",
+  })
+})
+
+test("通知设置:保存冷却期与每日涨幅上限", async ({ page }) => {
+  const saved: unknown[] = []
+  await automationBoundary(page, { saved })
+  await page.goto(`/tenants/${TENANT}/notifications`)
+  await page
+    .getByRole("spinbutton", { name: "反向操作冷却期（小时）" })
+    .fill("12")
+  await page
+    .getByRole("spinbutton", { name: "每日累计涨幅上限（%）" })
+    .fill("50")
+  await page.getByRole("button", { name: "保存" }).click()
+  await expect.poll(() => saved.length).toBe(1)
+  expect(saved[0]).toMatchObject({
+    reverse_cooldown_hours: 12,
+    daily_increase_limit_pct: 50,
   })
 })
 
@@ -138,4 +156,82 @@ test("剧名按行填写，标题里的逗号不拆分；按月日期可以连�
       schedule: { periods: [{ date_type: "MONTH", days: [1, 15] }] },
     },
   })
+})
+
+test("操作员不能选自动执行，可以选确认后执行", async ({ page }) => {
+  const created: unknown[] = []
+  await automationBoundary(page, { role: "operator", created })
+  await page.goto(`/tenants/${TENANT}/automation-rules`)
+  await page.getByRole("button", { name: "新建规则" }).click()
+  await page.getByRole("spinbutton", { name: "条件 1 数值" }).fill("10")
+  await expect(page.getByRole("radio", { name: "自动执行" })).toBeDisabled()
+  await expect(page.getByText("需要租户管理员")).toBeVisible()
+  await page.getByRole("radio", { name: "确认后执行" }).click()
+  await page.getByRole("button", { name: "保存" }).click()
+  await expect.poll(() => created.length).toBe(1)
+  expect(created[0]).toMatchObject({ definition: { mode: "CONFIRM" } })
+})
+
+test("管理员可以选自动执行", async ({ page }) => {
+  await automationBoundary(page)
+  await page.goto(`/tenants/${TENANT}/automation-rules`)
+  await page.getByRole("button", { name: "新建规则" }).click()
+  await expect(page.getByRole("radio", { name: "自动执行" })).toBeEnabled()
+})
+
+test("表单有错误时列出并不提交", async ({ page }) => {
+  const created: unknown[] = []
+  await automationBoundary(page, { created })
+  await page.goto(`/tenants/${TENANT}/automation-rules`)
+  await page.getByRole("button", { name: "新建规则" }).click()
+  await page.getByRole("button", { name: "保存" }).click()
+  await expect(page.getByText("条件 1 需要填写数值")).toBeVisible()
+  await page.getByRole("button", { name: "试运行" }).click()
+  expect(created).toEqual([])
+})
+
+test("待确认批次：默认不勾选已不满足的对象，确认请求只含所选", async ({
+  page,
+}) => {
+  const confirmed: unknown[] = []
+  await automationBoundary(page, { confirmed })
+  await page.goto(
+    `/tenants/${TENANT}/automation-rules?tab=confirmations&confirmation=conf-1`,
+  )
+  const stale = page.getByRole("row", { name: /闪婚/ })
+  await expect(stale).toContainText("条件已不满足")
+  await expect(stale.getByRole("checkbox")).not.toBeChecked()
+  const fresh = page.getByRole("row", { name: /总裁归来/ })
+  await expect(fresh.getByRole("checkbox")).toBeChecked()
+  await expect(fresh).toContainText("120")
+  await expect(fresh).toContainText("135")
+  await page.getByRole("button", { name: "确认执行所选" }).click()
+  await expect.poll(() => confirmed.length).toBe(1)
+  expect(confirmed[0]).toEqual({ subject_keys: ["drama:嘉书-总裁归来:USD"] })
+})
+
+test("待确认列表与忽略批次", async ({ page }) => {
+  const dismissed: string[] = []
+  await automationBoundary(page, { dismissed })
+  await page.goto(`/tenants/${TENANT}/automation-rules?tab=confirmations`)
+  const row = page.getByRole("row", { name: /剧级止损/ })
+  await expect(row).toContainText("待确认")
+  await row.getByRole("button", { name: "处理" }).click()
+  await page.getByRole("button", { name: "忽略本批" }).click()
+  await expect.poll(() => dismissed.length).toBe(1)
+})
+
+test("执行记录显示执行结果并链接操作记录", async ({ page }) => {
+  await automationBoundary(page)
+  await page.goto(`/tenants/${TENANT}/automation-rules?tab=runs`)
+  const row = page.getByRole("row", { name: /自动加预算/ })
+  await expect(row).toContainText("部分完成")
+  await row.getByRole("button", { name: "查看明细" }).click()
+  await expect(page.getByText("提交 2 个对象")).toBeVisible()
+  await expect(page.getByText(/夜间暂停/)).toBeVisible()
+  await expect(page.getByRole("cell", { name: "已提交" })).toBeVisible()
+  await expect(page.getByRole("link", { name: "操作记录" })).toHaveAttribute(
+    "href",
+    new RegExp(`^/tenants/${TENANT}/ad-management-tasks/task-1\\?bc_id=`),
+  )
 })
