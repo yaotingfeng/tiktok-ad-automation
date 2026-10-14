@@ -29,6 +29,7 @@ import { MODE_LABELS } from "./ruleForm"
 const NOTIFY_LABELS: Record<string, string> = {
   NOT_REQUIRED: "无需发送",
   PENDING: "待发送",
+  SUMMARY: "等待汇总",
   SENT: "已发送",
   FAILED: "发送失败",
 }

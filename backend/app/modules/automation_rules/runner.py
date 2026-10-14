@@ -195,7 +195,14 @@ def execute_run(
     if notify.enabled and (
         result.hits or notify.notify_without_hits or inputs.skipped_accounts
     ):
-        queue_notification(session, run=run, context=context)
+        # 汇总模式下预警等到固定时刻合并发送；待确认批次在下次运行即失效，仍立即发送。
+        if (
+            notify.timing == "SUMMARY"
+            and run.execution_status != "AWAITING_CONFIRMATION"
+        ):
+            run.notify_status = "SUMMARY"
+        else:
+            queue_notification(session, run=run, context=context)
     session.flush()
     return run
 
@@ -217,9 +224,11 @@ def queue_notification(
 def notify_execution(
     session: Session, *, run: AutomationRuleRun, rule: AutomationRule
 ) -> None:
-    """执行完成后按运行时的规则快照决定是否发执行结果卡片。"""
-    definition = RuleDefinition.model_validate(run.definition)
-    if definition.notification.enabled:
+    """执行完成后按运行时的规则快照决定是否发执行结果卡片；汇总模式并入汇总。"""
+    notification = RuleDefinition.model_validate(run.definition).notification
+    if notification.enabled and notification.timing == "SUMMARY":
+        run.notify_status = "SUMMARY"
+    elif notification.enabled:
         queue_notification(
             session,
             run=run,

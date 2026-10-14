@@ -71,6 +71,8 @@ celery_app.conf.update(
         "automation.run_rule": {"queue": "ads-reporting"},
         "automation.send_feishu": {"queue": "control"},
         "automation.cleanup": {"queue": "control"},
+        "automation.scan_summaries": {"queue": "control"},
+        "automation.send_summary": {"queue": "control"},
     },
     beat_schedule={
         "repair-external-imports": {
@@ -192,6 +194,11 @@ celery_app.conf.update(
         },
         "scan-automation-rules": {
             "task": "automation.scan_due",
+            "schedule": 60.0,
+            "options": {"queue": "control"},
+        },
+        "scan-automation-summaries": {
+            "task": "automation.scan_summaries",
             "schedule": 60.0,
             "options": {"queue": "control"},
         },

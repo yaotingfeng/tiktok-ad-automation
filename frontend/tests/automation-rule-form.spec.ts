@@ -185,3 +185,24 @@ test("表单校验列出中文错误", () => {
     }),
   ).toEqual(["合计口径不能使用属性条件（名称）"])
 })
+
+test("汇总发送至少设置一个时刻", () => {
+  const def = {
+    ...emptyDefinition(),
+    conditions: [
+      {
+        metric: "spend",
+        range: "TODAY" as const,
+        operator: "GT" as const,
+        values: ["10"],
+      },
+    ],
+    notification: {
+      enabled: true,
+      timing: "SUMMARY" as const,
+      summary_times: [],
+      notify_without_hits: false,
+    },
+  }
+  expect(validateDefinition(def, catalog)).toEqual(["汇总发送至少设置一个时刻"])
+})

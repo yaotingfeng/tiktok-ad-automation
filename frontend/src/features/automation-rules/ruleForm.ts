@@ -243,6 +243,12 @@ export function validateDefinition(
     errors.push("每天固定时刻需要选择时间")
   if (schedule.window === "ONCE" && blank(schedule.once_at))
     errors.push("仅一次运行需要选择时间")
+  const notification = def.notification
+  if (
+    notification?.timing === "SUMMARY" &&
+    !(notification.summary_times ?? []).filter(Boolean).length
+  )
+    errors.push("汇总发送至少设置一个时刻")
   if (
     FREQUENCY_RANK.indexOf(schedule.frequency) <
     FREQUENCY_RANK.indexOf(minFrequency(def.apply_to.level, def.action.level))

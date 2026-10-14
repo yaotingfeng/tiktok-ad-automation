@@ -33,6 +33,8 @@ class AutomationRule(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=_now, sa_type=AwareDateTime)
     next_run_at: datetime | None = Field(default=None, sa_type=AwareDateTime)
     last_run_at: datetime | None = Field(default=None, sa_type=AwareDateTime)
+    # 固定时间汇总：最近一次已处理的汇总时刻（UTC）。
+    last_summary_at: datetime | None = Field(default=None, sa_type=AwareDateTime)
 
 
 class AutomationRuleRun(SQLModel, table=True):
@@ -44,7 +46,7 @@ class AutomationRuleRun(SQLModel, table=True):
             "status IN ('RUNNING','COMPLETE','FAILED')", name="ck_automation_run_status"
         ),
         CheckConstraint(
-            "notify_status IN ('NOT_REQUIRED','PENDING','SENT','FAILED')",
+            "notify_status IN ('NOT_REQUIRED','PENDING','SUMMARY','SENT','FAILED')",
             name="ck_automation_run_notify",
         ),
     )

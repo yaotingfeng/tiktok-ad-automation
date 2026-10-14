@@ -3588,7 +3588,11 @@ export type NotificationSetting = {
     /**
      * Timing
      */
-    timing?: 'EVERY_RUN';
+    timing?: 'EVERY_RUN' | 'SUMMARY';
+    /**
+     * Summary Times
+     */
+    summary_times?: Array<string>;
     /**
      * Notify Without Hits
      */

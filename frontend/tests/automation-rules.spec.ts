@@ -282,3 +282,25 @@ test("待确认批次：手动取消的勾选不因数据刷新而恢复", async
     page.getByRole("button", { name: "确认执行所选" }),
   ).toBeDisabled()
 })
+
+test("飞书通知可选固定时间汇总发送", async ({ page }) => {
+  const created: unknown[] = []
+  await automationBoundary(page, { created })
+  await page.goto(`/tenants/${TENANT}/automation-rules`)
+  await page.getByRole("button", { name: "新建规则" }).click()
+  await page.getByRole("spinbutton", { name: "条件 1 数值" }).fill("10")
+  await page.getByRole("radio", { name: "固定时间汇总" }).click()
+  await page.getByLabel("汇总时刻 1", { exact: true }).fill("09:00")
+  await page.getByRole("button", { name: "添加汇总时刻" }).click()
+  await page.getByLabel("汇总时刻 2", { exact: true }).fill("18:30")
+  await page.getByRole("button", { name: "保存" }).click()
+  await expect.poll(() => created.length).toBe(1)
+  expect(created[0]).toMatchObject({
+    definition: {
+      notification: {
+        timing: "SUMMARY",
+        summary_times: ["09:00", "18:30"],
+      },
+    },
+  })
+})

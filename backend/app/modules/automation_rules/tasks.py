@@ -31,6 +31,7 @@ from app.modules.automation_rules.runner import (
 from app.modules.automation_rules.schedule import next_run_at
 from app.modules.automation_rules.schemas import RuleDefinition
 from app.modules.automation_rules.settings_service import load_tenant_setting
+from app.modules.automation_rules.summary import deliver_summary, scan_summaries
 
 register_dispatch_task("automation.run_rule", "ads-reporting")
 
@@ -165,6 +166,28 @@ def send_feishu(*, tenant_id: str, actor_id: str, payload: dict[str, Any]) -> st
             raise DomainError("action_forbidden", "运行不属于该租户")
         # 发送失败已记录在运行上，不自动重试，避免同一条预警重复刷屏。
         return deliver_notification(session, run_id=run.id)
+
+
+@celery_app.task(name="automation.scan_summaries", time_limit=60, soft_time_limit=50)
+def scan_summary_slots() -> int:
+    with Session(engine) as session, session.begin():
+        return scan_summaries(session, now=datetime.now(UTC))
+
+
+@celery_app.task(name="automation.send_summary", time_limit=60, soft_time_limit=50)
+def send_summary(*, tenant_id: str, actor_id: str, payload: dict[str, Any]) -> str:
+    del actor_id
+    data = _payload(payload, {"rule_id", "slot"})
+    with Session(engine) as session, session.begin():
+        rule = session.get(AutomationRule, UUID(data["rule_id"]))
+        if rule is None:
+            return "RULE_DELETED"
+        if str(rule.tenant_id) != tenant_id:
+            raise DomainError("action_forbidden", "规则不属于该租户")
+        # 与单次卡片一样不自动重试，避免重复刷屏；失败记录在各运行上。
+        return deliver_summary(
+            session, rule_id=rule.id, slot=datetime.fromisoformat(data["slot"])
+        )
 
 
 @celery_app.task(name="automation.cleanup", time_limit=120, soft_time_limit=110)

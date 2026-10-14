@@ -166,8 +166,23 @@ class Schedule(_Strict):
 
 class NotificationSetting(_Strict):
     enabled: bool = True
-    timing: Literal["EVERY_RUN"] = "EVERY_RUN"
+    # EVERY_RUN 每次运行都发；SUMMARY 到固定时刻（租户运行时区）合并该时段的运行结果发送。
+    timing: Literal["EVERY_RUN", "SUMMARY"] = "EVERY_RUN"
+    summary_times: tuple[time, ...] = ()
     notify_without_hits: bool = False
+
+    @field_validator("summary_times")
+    @classmethod
+    def unique_times(cls, value: tuple[time, ...]) -> tuple[time, ...]:
+        return tuple(sorted(set(value)))
+
+    @model_validator(mode="after")
+    def check(self) -> Self:
+        if self.timing == "SUMMARY" and not 1 <= len(self.summary_times) <= 6:
+            raise ValueError("summary needs 1-6 times")
+        if self.timing == "EVERY_RUN" and self.summary_times:
+            raise ValueError("summary_times only with SUMMARY")
+        return self
 
 
 def _check_condition(condition: Condition, *, level: str, aggregation: str) -> None:

@@ -168,6 +168,13 @@ function toPayload(def: Definition): Definition {
       periods: def.schedule.window === "CUSTOM" ? def.schedule.periods : [],
       once_at: def.schedule.window === "ONCE" ? def.schedule.once_at : null,
     },
+    notification: def.notification && {
+      ...def.notification,
+      summary_times:
+        def.notification.timing === "SUMMARY"
+          ? (def.notification.summary_times ?? []).filter(Boolean)
+          : [],
+    },
   }
 }
 
@@ -1048,6 +1055,101 @@ export function RuleEditorSheet({
             <Label htmlFor="notify-empty">没有命中时也发送</Label>
           </div>
         </div>
+        <RadioGroup
+          aria-label="发送时机"
+          className="flex flex-wrap gap-4"
+          value={def.notification?.timing ?? "EVERY_RUN"}
+          onValueChange={(value) =>
+            update((draft) => {
+              const summary = value === "SUMMARY"
+              draft.notification = {
+                ...draft.notification,
+                timing: summary ? "SUMMARY" : "EVERY_RUN",
+                summary_times: summary ? ["09:00"] : [],
+              }
+              return draft
+            })
+          }
+        >
+          <Choice value="EVERY_RUN" label="每次运行都发" />
+          <Choice
+            value="SUMMARY"
+            label="固定时间汇总"
+            hint="待确认批次仍立即发送"
+          />
+        </RadioGroup>
+        {def.notification?.timing === "SUMMARY" && (
+          <div className="flex flex-wrap items-center gap-2">
+            {(def.notification.summary_times ?? []).map((moment, index) => (
+              <div
+                // biome-ignore lint/suspicious/noArrayIndexKey: 时刻按位置编辑
+                key={index}
+                className="flex items-center gap-1"
+              >
+                <Input
+                  type="time"
+                  aria-label={`汇总时刻 ${index + 1}`}
+                  className="w-32"
+                  value={String(moment).slice(0, 5)}
+                  onChange={(e) =>
+                    update((draft) => {
+                      const times = [
+                        ...(draft.notification?.summary_times ?? []),
+                      ]
+                      times[index] = e.target.value
+                      draft.notification = {
+                        ...draft.notification,
+                        summary_times: times,
+                      }
+                      return draft
+                    })
+                  }
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label={`删除汇总时刻 ${index + 1}`}
+                  disabled={(def.notification?.summary_times ?? []).length <= 1}
+                  onClick={() =>
+                    update((draft) => {
+                      draft.notification = {
+                        ...draft.notification,
+                        summary_times: (
+                          draft.notification?.summary_times ?? []
+                        ).filter((_, i) => i !== index),
+                      }
+                      return draft
+                    })
+                  }
+                >
+                  ×
+                </Button>
+              </div>
+            ))}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={(def.notification.summary_times ?? []).length >= 6}
+              onClick={() =>
+                update((draft) => {
+                  draft.notification = {
+                    ...draft.notification,
+                    summary_times: [
+                      ...(draft.notification?.summary_times ?? []),
+                      "18:00",
+                    ],
+                  }
+                  return draft
+                })
+              }
+            >
+              添加汇总时刻
+            </Button>
+            <span className="text-sm text-muted-foreground">
+              按租户运行时区，最多 6 个
+            </span>
+          </div>
+        )}
         {settings.data && !settings.data.feishu_enabled && (
           <p className="text-sm text-muted-foreground">
             租户尚未启用飞书通知，
