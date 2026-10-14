@@ -236,7 +236,13 @@ def test_auto_execution_submits_management_task(session, env):
         session, env, action=PAUSE, targets=[_target("acc-x", "bc-x")]
     )
     summary = execute_hits(
-        session, run=run, rule=rule, selected_keys=None, now=NOW, require_manage=True
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=rule.updated_by,
+        require_manage=True,
     )
     assert summary["submitted"] == 1 and run.execution_status == "SUBMITTED"
     tasks = session.exec(
@@ -261,7 +267,13 @@ def test_frequency_once_skips_second_run(session, env):
         frequency={"type": "ONCE"},
     )
     execute_hits(
-        session, run=run, rule=rule, selected_keys=None, now=NOW, require_manage=True
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=rule.updated_by,
+        require_manage=True,
     )
     second = AutomationRuleRun(
         tenant_id=env.tenant_id,
@@ -293,6 +305,7 @@ def test_frequency_once_skips_second_run(session, env):
         rule=rule,
         selected_keys=None,
         now=NOW + timedelta(hours=1),
+        actor_id=rule.updated_by,
         require_manage=True,
     )
     assert summary["skipped_frequency"] == 1 and summary["submitted"] == 0
@@ -321,7 +334,13 @@ def test_reverse_action_within_cooldown_is_conflict(session, env):
         session, env, action=PAUSE, targets=[_target("acc-x", "bc-x")]
     )
     summary = execute_hits(
-        session, run=run, rule=rule, selected_keys=None, now=NOW, require_manage=True
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=rule.updated_by,
+        require_manage=True,
     )
     assert summary["conflicts"] == 1 and summary["submitted"] == 0
     assert summary["conflict_details"] == [
@@ -357,7 +376,13 @@ def test_daily_increase_limit_excludes_target(session, env):
     )
     session.flush()
     summary = execute_hits(
-        session, run=run, rule=rule, selected_keys=None, now=NOW, require_manage=True
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=rule.updated_by,
+        require_manage=True,
     )
     assert summary["skipped_daily_limit"] == 1 and summary["submitted"] == 0
     assert _hits(session, run) == {"adgroup:acc-x:g1": "SKIPPED_DAILY_LIMIT"}
@@ -369,7 +394,13 @@ def test_no_change_targets_skip_ledger(session, env):
         session, env, action=capped, targets=[_target("acc-x", "bc-x")]
     )
     summary = execute_hits(
-        session, run=run, rule=rule, selected_keys=None, now=NOW, require_manage=True
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=rule.updated_by,
+        require_manage=True,
     )
     assert summary["no_change"] == 1 and summary["submitted"] == 0
     assert session.exec(select(AutomationActionLedger)).all() == []
@@ -383,7 +414,13 @@ def test_owner_without_manage_is_not_executed(session, env):
     session.get(TenantMembership, (env.tenant_id, env.actor_id)).role = "operator"
     session.flush()
     execute_hits(
-        session, run=run, rule=rule, selected_keys=None, now=NOW, require_manage=True
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=rule.updated_by,
+        require_manage=True,
     )
     assert run.execution_status == "FAILED"
     assert run.execution_summary["error"] == "rule_owner_forbidden"
@@ -399,7 +436,13 @@ def test_one_bc_failure_does_not_block_others(session, env):
         targets=[_target("acc-x", "bc-x"), _target("acc-y", "bc-y")],
     )
     summary = execute_hits(
-        session, run=run, rule=rule, selected_keys=None, now=NOW, require_manage=True
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=rule.updated_by,
+        require_manage=True,
     )
     assert run.execution_status == "PARTIAL" and summary["submitted"] == 1
     assert [item["bc_id"] for item in summary["failed_bcs"]] == ["bc-y"]
@@ -423,6 +466,7 @@ def test_selected_keys_limit_execution(session, env):
         rule=rule,
         selected_keys={"adgroup:acc-x:g1"},
         now=NOW,
+        actor_id=rule.updated_by,
         require_manage=False,
     )
     assert _hits(session, run) == {
@@ -462,6 +506,7 @@ def test_concurrent_reverse_actions_conflict():
                     rule=worker.get(AutomationRule, rule_id),
                     selected_keys=None,
                     now=datetime.now(UTC),
+                    actor_id=context.actor_id,
                     require_manage=True,
                 )
                 results.append(summary)
@@ -497,7 +542,13 @@ def test_material_target_uses_material_mode_and_ledger_key(session, env):
         session, env, action={"type": "PAUSE", "level": "material"}, targets=[target]
     )
     summary = execute_hits(
-        session, run=run, rule=rule, selected_keys=None, now=NOW, require_manage=True
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=rule.updated_by,
+        require_manage=True,
     )
     assert summary["submitted"] == 0
     assert _hits(session, run)["material:acc-x:v1"] in {
@@ -594,7 +645,13 @@ def test_smart_plus_material_pause_keys_ledger_by_rule_target(session, env):
         session, env, action={"type": "PAUSE", "level": "material"}, targets=[target]
     )
     summary = execute_hits(
-        session, run=run, rule=rule, selected_keys=None, now=NOW, require_manage=True
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=rule.updated_by,
+        require_manage=True,
     )
     assert summary["submitted"] == 1 and summary["failed"] == 0
     assert _hits(session, run) == {"material:acc-x:m1": "SUBMITTED"}
@@ -617,7 +674,13 @@ def test_budget_set_increase_is_capped_by_daily_limit(session, env):
         session, env, action=set_high, targets=[_target("acc-x", "bc-x")]
     )
     summary = execute_hits(
-        session, run=run, rule=rule, selected_keys=None, now=NOW, require_manage=True
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=rule.updated_by,
+        require_manage=True,
     )
     # 50 → 10000 远超当日 100% 涨幅上限（基准 50，最多到 100）。
     assert summary["skipped_daily_limit"] == 1 and summary["submitted"] == 0
@@ -644,6 +707,221 @@ def test_daily_limit_baseline_counts_earlier_set_raise(session, env):
     )
     session.flush()
     summary = execute_hits(
-        session, run=run, rule=rule, selected_keys=None, now=NOW, require_manage=True
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=rule.updated_by,
+        require_manage=True,
     )
     assert summary["skipped_daily_limit"] == 1 and summary["submitted"] == 0
+
+
+def test_all_skipped_run_is_marked_skipped(session, env):
+    rule, run = _rule_run(
+        session,
+        env,
+        action=BUDGET_UP,
+        targets=[_target("acc-x", "bc-x")],
+        frequency={"type": "ONCE"},
+    )
+    session.add(
+        AutomationActionLedger(
+            tenant_id=env.tenant_id,
+            rule_id=rule.id,
+            run_id=run.id,
+            target_key="adgroup:acc-x:g1",
+            action="BUDGET_UP",
+            created_at=NOW - timedelta(days=2),
+        )
+    )
+    session.flush()
+    execute_hits(
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=rule.updated_by,
+        require_manage=True,
+    )
+    assert run.execution_status == "SKIPPED"
+
+
+def test_unexpected_error_fails_bc_and_restores_counts(session, env, monkeypatch):
+    from app.modules.automation_rules import executor
+
+    session.add(
+        AutomationTenantSetting(tenant_id=env.tenant_id, daily_increase_limit_pct=10)
+    )
+    rule, run = _rule_run(
+        session, env, action=BUDGET_UP, targets=[_target("acc-x", "bc-x")]
+    )
+    real = executor.prepare_preview
+    calls = []
+
+    def flaky(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 2:
+            raise RuntimeError("boom")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(executor, "prepare_preview", flaky)
+    summary = execute_hits(
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=rule.updated_by,
+        require_manage=True,
+    )
+    # 第一次预览计入的涨幅跳过随保存点回滚，整个 BC 记为失败，不重复计数。
+    assert summary["skipped_daily_limit"] == 0 and summary["failed"] == 1
+    assert summary["failed_bcs"] == [{"bc_id": "bc-x", "reason": "unexpected_error"}]
+    assert run.execution_status == "FAILED"
+
+
+def test_confirmed_batch_runs_as_confirmer(session, env):
+    from app.modules.automation_rules.models import AutomationConfirmation
+
+    rule, run = _rule_run(
+        session, env, action=PAUSE, targets=[_target("acc-x", "bc-x")]
+    )
+    from app.models import User
+
+    confirmer = User(username="confirmer-user", hashed_password="unused")
+    session.add(confirmer)
+    session.flush()
+    session.add(
+        TenantMembership(tenant_id=env.tenant_id, user_id=confirmer.id, role="operator")
+    )
+    # 规则最后修改人已降为只读，人工确认仍以确认人身份执行。
+    session.get(TenantMembership, (env.tenant_id, env.actor_id)).role = "viewer"
+    session.add(
+        AutomationConfirmation(
+            tenant_id=env.tenant_id,
+            rule_id=rule.id,
+            run_id=run.id,
+            status="CONFIRMED",
+            decided_by=confirmer.id,
+            created_at=NOW,
+            decided_at=NOW,
+        )
+    )
+    session.flush()
+    summary = execute_hits(
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=None,
+        now=NOW,
+        actor_id=confirmer.id,
+        require_manage=False,
+    )
+    assert summary["submitted"] == 1
+    task = session.exec(select(ManagementTask)).one()
+    assert task.actor_id == confirmer.id
+
+
+def test_redelivered_execute_with_stale_run_is_ignored(monkeypatch):
+    """同一执行被投递两次，第二个工作进程持有过期的运行状态：拿锁后重读，不重复执行。"""
+    from app.core.config import settings
+    from app.modules.automation_rules.tasks import run_execution
+
+    monkeypatch.setattr(settings, "AUTOMATED_RULES_ENABLED", True)
+    with Session(engine, expire_on_commit=False) as setup:
+        context = create_context(setup, role="tenant_admin")
+        connection = _bc(setup, context, "bc-redo", "acc-redo")
+        _objects(setup, context, connection, "bc-redo", "acc-redo")
+        rule, run = _rule_run(
+            setup, context, action=PAUSE, targets=[_target("acc-redo", "bc-redo")]
+        )
+        run.execution_status = "QUEUED"
+        setup.commit()
+    data = {"run_id": str(run.id), "mode": "AUTO"}
+    try:
+        with Session(engine) as stale:
+            assert stale.get(AutomationRuleRun, run.id).execution_status == "QUEUED"
+            with Session(engine) as first, first.begin():
+                assert (
+                    run_execution(first, tenant_id=str(context.tenant_id), data=data)
+                    == "SUBMITTED"
+                )
+            result = run_execution(stale, tenant_id=str(context.tenant_id), data=data)
+            stale.commit()
+        assert result == "SUBMITTED"
+        with Session(engine) as check:
+            rows = check.exec(
+                select(AutomationActionLedger).where(
+                    AutomationActionLedger.run_id == run.id
+                )
+            ).all()
+            assert len(rows) == 1
+    finally:
+        from tests.modules.automation_rules.cleanup import purge_tenant
+
+        purge_tenant(context.tenant_id, context.actor_id)
+
+
+def test_execute_with_flag_off_fails_visibly(session, env, monkeypatch):
+    from app.core.config import settings
+    from app.modules.automation_rules.tasks import run_execution
+
+    monkeypatch.setattr(settings, "AUTOMATED_RULES_ENABLED", False)
+    rule, run = _rule_run(
+        session, env, action=PAUSE, targets=[_target("acc-x", "bc-x")]
+    )
+    run.execution_status = "QUEUED"
+    session.flush()
+    result = run_execution(
+        session,
+        tenant_id=str(env.tenant_id),
+        data={"run_id": str(run.id), "mode": "AUTO"},
+    )
+    assert result == "FAILED" and run.execution_status == "FAILED"
+    assert run.execution_summary["error"] == "automation_disabled"
+    assert run.notify_status == "PENDING"
+
+
+def test_confirm_execution_uses_decider(session, env, monkeypatch):
+    from app.core.config import settings
+    from app.models import User
+    from app.modules.automation_rules.models import AutomationConfirmation
+    from app.modules.automation_rules.tasks import run_execution
+
+    monkeypatch.setattr(settings, "AUTOMATED_RULES_ENABLED", True)
+    rule, run = _rule_run(
+        session, env, action=PAUSE, targets=[_target("acc-x", "bc-x")]
+    )
+    decider = User(username="decider-user", hashed_password="unused")
+    session.add(decider)
+    session.flush()
+    session.add(
+        TenantMembership(tenant_id=env.tenant_id, user_id=decider.id, role="operator")
+    )
+    session.add(
+        AutomationConfirmation(
+            tenant_id=env.tenant_id,
+            rule_id=rule.id,
+            run_id=run.id,
+            status="CONFIRMED",
+            decided_by=decider.id,
+            created_at=NOW,
+            decided_at=NOW,
+        )
+    )
+    run.execution_status = "CONFIRMED"
+    session.flush()
+    result = run_execution(
+        session,
+        tenant_id=str(env.tenant_id),
+        data={
+            "run_id": str(run.id),
+            "mode": "CONFIRM",
+            "selected_keys": ["adgroup:acc-x:g1"],
+        },
+    )
+    assert result == "SUBMITTED"
+    assert session.exec(select(ManagementTask)).one().actor_id == decider.id

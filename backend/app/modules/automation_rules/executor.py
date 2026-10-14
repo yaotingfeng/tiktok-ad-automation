@@ -73,7 +73,7 @@ def _decimal(value: str | None) -> Decimal | None:
         return None
 
 
-def _lock_tenant(session: Session, tenant_id: UUID) -> None:
+def lock_tenant(session: Session, tenant_id: UUID) -> None:
     # 同一租户的执行串行化：后到的执行一定能看到先到者写下的台账，冲突判断才可靠。
     session.connection().execute(
         text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
@@ -177,23 +177,25 @@ def execute_hits(
     rule: AutomationRule,
     selected_keys: set[str] | None,
     now: datetime,
+    actor_id: UUID,
     require_manage: bool,
 ) -> dict[str, Any]:
+    """以 actor_id 身份执行：自动执行为规则最后修改人（须仍是租户管理员），
+    人工确认为确认人；管理任务与审计记录都归属于该身份。"""
     summary = _summary()
-    _lock_tenant(session, rule.tenant_id)
-    context = TenantContext(rule.tenant_id, rule.updated_by, "operator")
+    lock_tenant(session, rule.tenant_id)
+    context = TenantContext(rule.tenant_id, actor_id, "operator")
     try:
-        # 以规则最后修改人身份执行；自动执行还要求此人仍是租户管理员。
         require_tenant(
             session,
-            actor_id=rule.updated_by,
+            actor_id=actor_id,
             tenant_id=rule.tenant_id,
             action="ads_manage",
         )
         if require_manage:
             require_tenant(
                 session,
-                actor_id=rule.updated_by,
+                actor_id=actor_id,
                 tenant_id=rule.tenant_id,
                 action="manage",
             )
@@ -265,6 +267,11 @@ def execute_hits(
         runnable[target_key] = target
     day_start = _day_start(now, setting.schedule_timezone)
     for bc_id, bc_targets in group_by_bc(runnable.values()).items():
+        # 保存点回滚时，本 BC 已计入的计数与结果一并撤销，整个 BC 记为失败。
+        counts = {
+            key: value for key, value in summary.items() if isinstance(value, int)
+        }
+        before = dict(outcome)
         try:
             with session.begin_nested():
                 submitted = _execute_bc(
@@ -284,12 +291,24 @@ def execute_hits(
                 )
                 if submitted:
                     summary["tasks"].append({"bc_id": bc_id, "task_id": str(submitted)})
-        except (DomainError, HTTPException) as exc:
-            reason = exc.code if isinstance(exc, DomainError) else str(exc.detail)
+        except Exception as exc:
+            if isinstance(exc, DomainError):
+                reason = exc.code
+            elif isinstance(exc, HTTPException):
+                reason = str(exc.detail)
+            else:
+                reason = "unexpected_error"
+                logger.exception(
+                    "automation execution crashed for bc",
+                    extra={"rule_id": str(rule.id), "bc_id": bc_id},
+                )
             logger.warning(
                 "automation execution failed for bc",
                 extra={"rule_id": str(rule.id), "bc_id": bc_id, "reason": reason},
             )
+            summary.update(counts)
+            outcome.clear()
+            outcome.update(before)
             summary["failed_bcs"].append({"bc_id": bc_id, "reason": reason})
             for target in bc_targets:
                 outcome[target["key"]] = "FAILED"
@@ -299,12 +318,10 @@ def execute_hits(
             # 一个命中涉及多个对象时，按最需要关注的结果展示。
             if _priority(value) > _priority(hit.outcome):
                 hit.outcome = value
-    if summary["failed_bcs"] and summary["submitted"] == 0:
-        run.execution_status = "FAILED"
-    elif summary["failed_bcs"] or (
-        summary["submitted"]
-        and (summary["conflicts"] or summary["skipped_daily_limit"])
-    ):
+    if summary["submitted"] == 0:
+        # 没有提交任何变更：有失败记为失败，否则全部被频控、冷却期等跳过。
+        run.execution_status = "FAILED" if summary["failed"] else "SKIPPED"
+    elif summary["failed"] or summary["conflicts"] or summary["skipped_daily_limit"]:
         run.execution_status = "PARTIAL"
     else:
         run.execution_status = "SUBMITTED"

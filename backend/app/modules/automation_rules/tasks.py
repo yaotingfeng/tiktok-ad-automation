@@ -16,8 +16,9 @@ from app.core.errors import DomainError
 from app.jobs.celery_app import celery_app
 from app.jobs.outbox import enqueue_after_commit, validate_dispatch_payload
 from app.jobs.tasks import register_dispatch_task
-from app.modules.automation_rules.executor import execute_hits
+from app.modules.automation_rules.executor import execute_hits, lock_tenant
 from app.modules.automation_rules.models import (
+    AutomationConfirmation,
     AutomationRule,
     AutomationRuleRun,
     AutomationTenantSetting,
@@ -181,35 +182,74 @@ def cleanup() -> int:
 )
 def execute(*, tenant_id: str, actor_id: str, payload: dict[str, Any]) -> str:
     """执行一次运行的命中：自动执行，或人确认后执行所选命中。"""
-    del actor_id  # 执行器按规则最后修改人重建权限。
+    del actor_id  # 执行身份由运行本身决定：规则最后修改人或确认人。
     data = _payload(payload, {"run_id", "mode"}, optional={"selected_keys"})
     if data["mode"] not in ("AUTO", "CONFIRM"):
         raise DomainError("dispatch_payload_invalid", "自动规则执行模式无效")
-    with Session(engine) as session, session.begin():
-        run = session.get(AutomationRuleRun, UUID(data["run_id"]))
-        if run is None:
-            return "RUN_DELETED"
-        if str(run.tenant_id) != tenant_id:
-            raise DomainError("action_forbidden", "运行不属于该租户")
-        rule = session.get(AutomationRule, run.rule_id)
-        if rule is None:
-            return "RULE_DELETED"
-        if run.execution_status not in ("QUEUED", "CONFIRMED"):
-            return run.execution_status  # 重复投递：已执行过或已失效。
-        # 自动执行受开关、规则开关与租户暂停约束；人工确认的批次视为明确授权，只看部署开关。
-        if data["mode"] == "AUTO" and not runnable(session, rule):
+    try:
+        with Session(engine) as session, session.begin():
+            return run_execution(session, tenant_id=tenant_id, data=data)
+    except Exception:
+        # 执行任务不重试：意外错误时把运行记为失败并发结果卡片，避免永远停在执行中。
+        logger.exception("automation execute crashed", extra={"run_id": data["run_id"]})
+        with Session(engine) as session, session.begin():
+            run = session.get(AutomationRuleRun, UUID(data["run_id"]))
+            if run is None or run.execution_status not in ("QUEUED", "CONFIRMED"):
+                return run.execution_status if run else "RUN_DELETED"
+            _fail(session, run, "execution_error")
+        return "FAILED"
+
+
+def _fail(session: Session, run: AutomationRuleRun, error: str) -> None:
+    run.execution_status = "FAILED"
+    run.execution_summary = {**run.execution_summary, "error": error}
+    rule = session.get(AutomationRule, run.rule_id)
+    if rule is not None:
+        notify_execution(session, run=run, rule=rule)
+    session.flush()
+
+
+def run_execution(session: Session, *, tenant_id: str, data: dict[str, Any]) -> str:
+    run = session.get(AutomationRuleRun, UUID(data["run_id"]))
+    if run is None:
+        return "RUN_DELETED"
+    if str(run.tenant_id) != tenant_id:
+        raise DomainError("action_forbidden", "运行不属于该租户")
+    # 先取租户执行锁再重读运行状态：重复投递的第二个任务在锁后看到已执行，直接返回。
+    lock_tenant(session, run.tenant_id)
+    session.refresh(run)
+    if run.execution_status not in ("QUEUED", "CONFIRMED"):
+        return run.execution_status
+    rule = session.get(AutomationRule, run.rule_id)
+    if rule is None:
+        return "RULE_DELETED"
+    session.refresh(rule)
+    if not settings.AUTOMATED_RULES_ENABLED:
+        _fail(session, run, "automation_disabled")
+        return run.execution_status
+    if data["mode"] == "AUTO":
+        # 自动执行受规则开关与租户暂停约束；人工确认的批次视为明确授权。
+        if not runnable(session, rule):
             run.execution_status = "DISMISSED"
             return "SKIPPED"
-        if not settings.AUTOMATED_RULES_ENABLED:
-            return "DISABLED"
-        selected = data.get("selected_keys")
-        execute_hits(
-            session,
-            run=run,
-            rule=rule,
-            selected_keys=set(selected) if selected is not None else None,
-            now=datetime.now(UTC),
-            require_manage=data["mode"] == "AUTO",
-        )
-        notify_execution(session, run=run, rule=rule)
-        return run.execution_status
+        actor_id = rule.updated_by
+    else:
+        batch = session.exec(
+            select(AutomationConfirmation).where(
+                AutomationConfirmation.run_id == run.id
+            )
+        ).one()
+        assert batch.decided_by is not None
+        actor_id = batch.decided_by
+    selected = data.get("selected_keys")
+    execute_hits(
+        session,
+        run=run,
+        rule=rule,
+        selected_keys=set(selected) if selected is not None else None,
+        now=datetime.now(UTC),
+        actor_id=actor_id,
+        require_manage=data["mode"] == "AUTO",
+    )
+    notify_execution(session, run=run, rule=rule)
+    return run.execution_status
