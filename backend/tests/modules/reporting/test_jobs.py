@@ -482,3 +482,62 @@ def test_split_timeout_eventually_fails(committed_sync_seed, code):
         assert s.get(
             ReportSyncState, (seed.tenant_id, "acc-1", "ad_day", D)
         ).status in ("FAILED", "STALE")
+
+
+def test_material_job_links_new_posts_to_ads_in_same_job(committed_sync_seed):
+    # 素材日报不带广告：同一任务内用创意概览补齐“帖子 → 广告”对照。
+    from app.modules.reporting.store_models import MaterialPostLink
+
+    seed, factory = committed_sync_seed
+
+    class Reader(FakeReader):
+        def material_day(self, *, advertiser_id, start, end, page):
+            row = {
+                "dimensions": {
+                    "main_material_id": "p1",
+                    "main_material_type": "VIDEO_SPARK_ADS",
+                    "stat_time_day": str(D),
+                },
+                "metrics": {"spend": "3"},
+            }
+            return RawReportPage((row,), 1, 1, 1)
+
+        def material_ad_links(self, *, advertiser_id, page):
+            self.calls.append(("links", advertiser_id, page))
+            row = {
+                "dimensions": {
+                    "smart_plus_ad_id": "a1",
+                    "main_material_id": "p1",
+                    "main_material_type": "VIDEO_SPARK_ADS",
+                },
+                "metrics": {"ad_material_id": "m1"},
+            }
+            return RawReportPage((row,), 1, 1, 1)
+
+    with factory() as s:
+        enqueue_job(
+            s,
+            tenant_id=seed.tenant_id,
+            bc_id="bc-a",
+            kind="material_day",
+            tier="material",
+            advertiser_ids=["acc-1"],
+            start=D,
+            end=D,
+            frozen_route=_route(seed),
+            actor_id=seed.actor_id,
+        )
+        s.commit()
+        job = claim_jobs(s, now=datetime.now(UTC) + timedelta(seconds=1), limit=1)[0]
+        s.commit()
+    reader = Reader()
+    assert (
+        execute_job(factory, job_id=job.id, claim_token=job.claim_token, reader=reader)
+        == "COMPLETE"
+    )
+    assert reader.calls == [("links", "acc-1", 1)]
+    with factory() as s:
+        link = s.exec(
+            select(MaterialPostLink).where(MaterialPostLink.tenant_id == seed.tenant_id)
+        ).one()
+        assert (link.ad_remote_id, link.ad_material_id) == ("a1", "m1")

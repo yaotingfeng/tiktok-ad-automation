@@ -79,3 +79,13 @@ class ReportReader(Protocol):
     def material_day(
         self, *, advertiser_id: str, start: date, end: date, page: int
     ) -> RawReportPage: ...
+    def material_ad_links(self, *, advertiser_id: str, page: int) -> RawReportPage: ...
+    def material_ad_posts(
+        self,
+        *,
+        advertiser_id: str,
+        ad_ids: tuple[str, ...],
+        start: date,
+        end: date,
+        page: int,
+    ) -> RawReportPage: ...

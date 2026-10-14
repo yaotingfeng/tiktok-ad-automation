@@ -146,7 +146,37 @@ def test_material_day_single_account():
     assert "spend" in args["metrics"]
 
 
-@pytest.mark.parametrize("kind", ["ad", "bc", "utc", "material"])
+def test_material_ad_links_reads_lifetime_ad_by_material():
+    reader, rec = _reader(PAGE)
+    reader.material_ad_links(advertiser_id="a", page=1)
+    op, adv, args = rec.calls[0]
+    # 概览按“广告 × 主素材”查全量历史，只为拿到广告内素材 ID 做对照。
+    assert op == "reports.material_overview" and adv == "a"
+    assert args["dimensions"] == ["smart_plus_ad_id", "main_material_id"]
+    assert args["query_lifetime"] is True and "start_date" not in args
+    assert "ad_material_id" in args["metrics"]
+
+
+def test_material_ad_posts_filters_breakdown_by_ad():
+    reader, rec = _reader(PAGE)
+    reader.material_ad_posts(
+        advertiser_id="a",
+        ad_ids=("ad-9",),
+        start=date(2026, 10, 1),
+        end=date(2026, 10, 13),
+        page=1,
+    )
+    op, adv, args = rec.calls[0]
+    # 按广告筛选的拆分报表用于定位概览已不再列出的旧帖子。
+    assert op == "reports.material_breakdown" and adv == "a"
+    assert args["dimensions"] == ["main_material_id"]
+    assert args["filtering"] == {"smart_plus_ad_ids": ["ad-9"]}
+    assert (args["start_date"], args["end_date"]) == ("2026-10-01", "2026-10-13")
+
+
+@pytest.mark.parametrize(
+    "kind", ["ad", "bc", "utc", "material", "overview", "material_by_ad"]
+)
 def test_generated_sdk_wire_keeps_parameters_and_exact_numbers(monkeypatch, kind):
     from contextlib import contextmanager
     from datetime import UTC, datetime, timedelta
@@ -200,6 +230,26 @@ def test_generated_sdk_wire_keeps_parameters_and_exact_numbers(monkeypatch, kind
             args.pop("advertiser_ids")
             args["advertiser_id"] = "a"
             op = "reports.material_breakdown"
+        elif kind == "material_by_ad":
+            args = {
+                "advertiser_id": "a",
+                "dimensions": ["main_material_id"],
+                "metrics": ["spend"],
+                "filtering": {"smart_plus_ad_ids": ["ad-9"]},
+                "start_date": "2026-10-01",
+                "end_date": "2026-10-13",
+                "page": 1,
+            }
+            op = "reports.material_breakdown"
+        elif kind == "overview":
+            args = {
+                "advertiser_id": "a",
+                "dimensions": ["smart_plus_ad_id", "main_material_id"],
+                "metrics": ["spend", "ad_material_id"],
+                "query_lifetime": True,
+                "page": 1,
+            }
+            op = "reports.material_overview"
         assert send(op, adv, args)["value"] == "1.234567890123456789"
     assert admissions == [(adv, op, deadline)]
     method, url, fields = calls[0]
@@ -212,6 +262,12 @@ def test_generated_sdk_wire_keeps_parameters_and_exact_numbers(monkeypatch, kind
         assert fields["multi_adv_report_in_utc_time"] is True
     if kind == "material":
         assert url.endswith("/smart_plus/material_report/breakdown/")
+    if kind == "material_by_ad":
+        assert url.endswith("/smart_plus/material_report/breakdown/")
+        assert json.loads(fields["filtering"]) == {"smart_plus_ad_ids": ["ad-9"]}
+    if kind == "overview":
+        assert url.endswith("/smart_plus/material_report/overview/")
+        assert fields["query_lifetime"] is True
 
 
 @pytest.mark.parametrize("gateway_case", ["OFFICIAL_API"], indirect=True)

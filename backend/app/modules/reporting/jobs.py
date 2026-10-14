@@ -19,7 +19,7 @@ from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.report_reader import RawReportPage, ReportReader
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.modules.accounts.models import AdvertiserAccount
-from app.modules.reporting import publish
+from app.modules.reporting import material_links, publish
 from app.modules.reporting.store_models import ReportSyncJob
 
 PRIORITY = {"hot": 1, "manual": 1, "material": 2, "daily": 3, "history": 4}
@@ -247,9 +247,24 @@ def _run(session, job: ReportSyncJob, reader: _CountingReader) -> int:
                 advertiser_id=advertisers[0], start=s, end=e, page=p
             )
         )
-        return publish.publish_material_day(
+        count = publish.publish_material_day(
             session, tenant_id=t, job_id=j, accounts=accounts, start=s, end=e, rows=rows
         )
+        # 素材日报不带广告；同一任务内补齐“主素材 → 广告”对照，素材才能归到广告和视频。
+        material_links.refresh_material_links(
+            session,
+            tenant_id=t,
+            advertiser_id=advertisers[0],
+            read_overview=lambda p: reader.material_ad_links(
+                advertiser_id=advertisers[0], page=p
+            ),
+            read_ad_posts=lambda ads, first, last, p: reader.material_ad_posts(
+                advertiser_id=advertisers[0], ad_ids=ads, start=first, end=last, page=p
+            ),
+            read_all=_read_all,
+            now=datetime.now(UTC),
+        )
+        return count
     if job.kind == "account_day":
         rows = _read_all(
             lambda p: reader.account_day(

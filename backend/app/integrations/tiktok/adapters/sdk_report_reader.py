@@ -173,3 +173,41 @@ class SdkReportReader:
             },
         )
         return page_from_data(data, requested_page=page)
+
+    def material_ad_links(self, *, advertiser_id, page):
+        # 概览按“广告 × 主素材”分组时不返回收入，只用于对照；平台按帖子 ID 筛选
+        # 不生效，且无论日期都返回账户当前全部广告的素材，因此直接查全量历史。
+        data = self._send(
+            "reports.material_overview",
+            advertiser_id,
+            {
+                "advertiser_id": advertiser_id,
+                "dimensions": ["smart_plus_ad_id", "main_material_id"],
+                "metrics": ["spend", "ad_material_id"],
+                "query_lifetime": True,
+                "page": page,
+                "page_size": 100,
+            },
+        )
+        return page_from_data(data, requested_page=page)
+
+    def material_ad_posts(self, *, advertiser_id, ad_ids, start, end, page):
+        # 按广告筛选的拆分报表能查到概览已不再列出的旧帖子，用于定位它们所属的广告。
+        _check_range(start, end, max_days=365)
+        if not 1 <= len(ad_ids) <= 200:
+            raise DomainError("report_query_invalid", "按广告筛选一次须带 1–200 个广告")
+        data = self._send(
+            "reports.material_breakdown",
+            advertiser_id,
+            {
+                "advertiser_id": advertiser_id,
+                "dimensions": ["main_material_id"],
+                "metrics": ["spend"],
+                "filtering": {"smart_plus_ad_ids": list(ad_ids)},
+                "start_date": start.isoformat(),
+                "end_date": end.isoformat(),
+                "page": page,
+                "page_size": 100,
+            },
+        )
+        return page_from_data(data, requested_page=page)

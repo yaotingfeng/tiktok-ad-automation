@@ -445,6 +445,44 @@ export function AdsWorkspace() {
       })
     })
   }
+  // 广告详情里的素材启停：只冻结这条广告的指定素材，预览与提交复用广告管理流程。
+  const adMaterialSelection = useMutation({
+    mutationFn: async (target: {
+      advertiserId: string
+      adId: string
+      adMaterialIds: string[]
+    }) =>
+      (
+        await AdsReportingService.freezeAdMaterialSelection({
+          path: { tenant_id: tenantId!, remote_id: target.adId },
+          query: { advertiser_id: target.advertiserId, bc_id: bc!.bc_id },
+          body: { ad_material_ids: target.adMaterialIds },
+        })
+      ).data,
+    onSuccess: (selection) => {
+      if (selectionRequestScopeRef.current !== scopeRef.current) return
+      setFrozenSelection(selection)
+      setPreviewOpen(true)
+    },
+  })
+  const startAdMaterialAction = (
+    advertiserId: string,
+    adId: string,
+    adMaterialIds: string[],
+    value: "ENABLE" | "DISABLE",
+  ) => {
+    if (roleReadonly) return
+    runAction(() => {
+      setManagementAction({ field: "status", value })
+      setManagementDimension("material")
+      setPreviewSession((current) => current + 1)
+      selectionRequestScopeRef.current = scopeRef.current
+      adMaterialSelection.mutate(
+        { advertiserId, adId, adMaterialIds },
+        { onError: (error) => setActionError(String(error)) },
+      )
+    })
+  }
   const nextPage = () => {
     const nextCursor = ads.query.data?.next_cursor
     if (!nextCursor) return
@@ -680,6 +718,10 @@ export function AdsWorkspace() {
           // 单对象操作只冻结该行；先关闭详情，避免两个抽屉叠在一起。
           closeDetail()
           startManagementAction(action, [row.row_key])
+        }}
+        onAdMaterialAction={(advertiserId, adId, adMaterialIds, value) => {
+          closeDetail()
+          startAdMaterialAction(advertiserId, adId, adMaterialIds, value)
         }}
         onOpenParent={(link, advertiserId) =>
           setDetail({

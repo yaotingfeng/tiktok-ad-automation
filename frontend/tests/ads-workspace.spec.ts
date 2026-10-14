@@ -110,8 +110,7 @@ test.describe("ads workspace", () => {
     await navigate("甲账户", "campaign", ADVERTISER)
     await navigate("嘉书-总裁归来-测试", "adgroup", "campaign-1")
     await navigate("嘉书-总裁归来-测试", "ad", "adgroup-1")
-    await navigate("嘉书-总裁归来-测试", "material", "ad-1")
-    // 素材是最末级，不再提供进入下级的按钮。
+    // 广告是最末级：素材在广告详情里看本广告数据，不再跳到素材维度。
     await expect(
       page
         .locator("tbody tr")

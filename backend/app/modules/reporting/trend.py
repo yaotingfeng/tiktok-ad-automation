@@ -13,13 +13,14 @@ from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import false, func, or_, tuple_
 from sqlalchemy import select as sql_select
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
 from app.modules.reporting.dimension_query import merge_metric_buckets, metric_vector
 from app.modules.reporting.filters import authorized_grants
+from app.modules.reporting.material_links import post_video_map
 from app.modules.reporting.planner import request_campaign_hours
 from app.modules.reporting.schemas import MetricVector, TrendPoint, TrendPublic
 from app.modules.reporting.store_models import (
@@ -137,7 +138,28 @@ def build_trend(
         )
     else:
         stmt = stmt.where(time_col >= start, time_col <= end)
-    if ids:
+    if ids and level == "material":
+        # 素材行以视频为身份：视频 ID 展开为它在各账户、各广告的帖子；
+        # 对不上视频的帖子行直接以帖子 ID 查询。
+        posts = [
+            key
+            for key, vid in post_video_map(
+                session, tenant_id=context.tenant_id, advertisers=sorted(scope)
+            ).items()
+            if vid in ids
+        ]
+        stmt = stmt.where(
+            or_(
+                col(MaterialReportDay.main_material_id).in_(ids),
+                tuple_(
+                    col(MaterialReportDay.advertiser_id),
+                    col(MaterialReportDay.main_material_id),
+                ).in_(posts)
+                if posts
+                else false(),
+            )
+        )
+    elif ids:
         stmt = stmt.where(col(getattr(model, id_col)).in_(ids))
     rows = session.connection().execute(stmt).mappings().all()
 

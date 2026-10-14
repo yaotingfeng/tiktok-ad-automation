@@ -1,149 +1,79 @@
 import json
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from app.modules.ads.models import AdMaterialReference
+from app.modules.ads.models import AdMaterialReference, AdObject
 from app.modules.reporting.dimension_query import build_rows
 from app.modules.reporting.publish import AccountMeta, publish_material_day
 from app.modules.reporting.schemas import ReportingFilter
+from app.modules.reporting.store_models import MaterialPostLink
 
 D = date(2026, 10, 5)
 
 
-def material_row(material_id, spend, adv="acc-1", name=None):
+def material_row(post_id, spend, name=None):
+    # Spark 广告的素材日报主素材是帖子 ID，类型 VIDEO_SPARK_ADS。
     return {
         "dimensions": {
-            "advertiser_id": adv,
-            "main_material_id": material_id,
-            "main_material_type": "VIDEO",
+            "main_material_id": post_id,
+            "main_material_type": "VIDEO_SPARK_ADS",
             "stat_time_day": str(D),
         },
-        "metrics": {
-            "spend": spend,
-            "main_material_name": name or material_id,
-            "ad_revenue_value_d0": "2",
-        },
+        "metrics": {"spend": spend, "main_material_name": name or post_id},
     }
 
 
-def seed_materials(session, seed):
+def publish(session, seed, adv, rows):
     publish_material_day(
         session,
         tenant_id=seed.tenant_id,
         job_id=uuid4(),
-        accounts={"acc-1": AccountMeta("USD", "Asia/Hong_Kong")},
+        accounts={adv: AccountMeta("USD", "Asia/Hong_Kong")},
         start=D,
         end=D,
-        rows=[material_row("v1", "10", name="视频一"), material_row("v2", "20")],
+        rows=rows,
     )
 
 
-def query(session, seed, **kw):
-    return build_rows(
-        session,
-        context=seed.context,
-        bc_id="bc-a",
-        filters=ReportingFilter(dimension="material", start_date=D, end_date=D, **kw),
-    )
-
-
-def test_material_money_survives_unknown_usage_and_sorts(session, sync_seed):
-    seed_materials(session, sync_seed)
-    rows = query(session, sync_seed, sort_by="spend", sort_direction="desc")
-    assert [r.display["main_material_id"] for r in rows] == ["v2", "v1"]
-    assert sum(r.metric_buckets[0].values["spend"] for r in rows) == Decimal(30)
-    for r in rows:
-        assert r.coverage["reason"] == "usage_unknown"
-        assert r.material_uses == ()
-        assert r.metric_buckets[0].availability["spend"] == "AVAILABLE"
-        assert r.metric_buckets[0].availability["revenue_d3"] == "UNSUPPORTED"
-        assert r.metric_buckets[0].availability["roas_d30"] == "UNSUPPORTED"
-        assert json.loads(r.row_key) == [
-            "acc-1",
-            "material",
-            r.display["main_material_id"],
-            "VIDEO",
-        ]
-
-
-def test_material_usage_does_not_duplicate_money_and_is_account_scoped(
-    session, sync_seed
-):
-    seed_materials(session, sync_seed)
-    for adv, ad in (("acc-1", "a1"), ("acc-1", "a2"), ("acc-2", "foreign-ad")):
-        session.add(
-            AdMaterialReference(
-                tenant_id=sync_seed.tenant_id,
-                advertiser_id=adv,
-                ad_remote_id=ad,
-                platform_material_id="platform-v1",
-                main_material_id="v1",
-                main_material_type="VIDEO",
-                material_type="VIDEO",
-                complete=True,
-                published_version=1,
-            )
-        )
-    session.flush()
-    row = next(
-        r for r in query(session, sync_seed) if r.display["main_material_id"] == "v1"
-    )
-    assert {u.ad_ref.remote_id for u in row.material_uses} == {"a1", "a2"}
-    assert row.metric_buckets[0].values["spend"] == Decimal(10)
-    assert row.display["material_name"] == "视频一"
-    assert row.coverage["status"] == "COMPLETE"
-
-
-def test_material_ad_material_identity_and_incomplete_usage(session, sync_seed):
-    seed_materials(session, sync_seed)
-    for mid, complete in (("v1", True), ("v2", False)):
-        session.add(
-            AdMaterialReference(
-                tenant_id=sync_seed.tenant_id,
-                advertiser_id="acc-1",
-                ad_remote_id=f"a-{mid}",
-                platform_material_id=f"p-{mid}",
-                ad_material_id=mid,
-                material_type="VIDEO",
-                complete=complete,
-                published_version=1,
-            )
-        )
-    session.flush()
-    rows = {r.display["main_material_id"]: r for r in query(session, sync_seed)}
-    assert rows["v1"].material_uses[0].ad_material_id == "v1"
-    assert rows["v2"].material_uses == ()
-
-
-def _use(session, seed, ad, mid, adgroup="g1"):
-    from datetime import UTC, datetime
-
-    from app.modules.ads.models import AdObject
-
+def use(session, seed, *, adv, ad, video, ad_material, post=None, adgroup="g1"):
+    """目录里的一个素材使用位置；给出 post 时写入“帖子 → 广告”对照。"""
     now = datetime.now(UTC)
     session.add(
         AdMaterialReference(
             tenant_id=seed.tenant_id,
-            advertiser_id="acc-1",
+            advertiser_id=adv,
             ad_remote_id=ad,
-            platform_material_id=f"p-{mid}",
-            main_material_id=mid,
-            main_material_type="VIDEO",
+            platform_material_id=video,
+            ad_material_id=ad_material,
             material_type="VIDEO",
+            name=f"{video}.mp4",
             complete=True,
             published_version=1,
         )
     )
+    if post:
+        session.add(
+            MaterialPostLink(
+                tenant_id=seed.tenant_id,
+                advertiser_id=adv,
+                main_material_id=post,
+                ad_remote_id=ad,
+                main_material_type="VIDEO_SPARK_ADS",
+                ad_material_id=ad_material,
+                platform_material_id=video,
+                observed_at=now,
+            )
+        )
     for kind, remote_id, parent, name, status in (
         ("ad", ad, adgroup, f"广告{ad}", "ENABLE"),
         ("adgroup", adgroup, "c1", f"组{adgroup}", "DISABLE"),
     ):
-        if session.get(AdObject, (seed.tenant_id, "acc-1", kind, remote_id)) is None:
+        if session.get(AdObject, (seed.tenant_id, adv, kind, remote_id)) is None:
             session.add(
                 AdObject(
                     tenant_id=seed.tenant_id,
-                    advertiser_id="acc-1",
+                    advertiser_id=adv,
                     kind=kind,
                     remote_id=remote_id,
                     parent_kind="adgroup" if kind == "ad" else "campaign",
@@ -158,17 +88,179 @@ def _use(session, seed, ad, mid, adgroup="g1"):
     session.flush()
 
 
-def test_material_search_matches_usage_hierarchy_and_entity_filter(session, sync_seed):
-    # 搜索可命中使用位置的广告/广告组名称与 ID；目录筛选只保留命中的使用位置。
-    seed_materials(session, sync_seed)
-    _use(session, sync_seed, "a1", "v1")
-    _use(session, sync_seed, "a2", "v2", adgroup="g2")
-    by_ad = query(session, sync_seed, query="广告a2")
-    assert [r.display["main_material_id"] for r in by_ad] == ["v2"]
-    by_group_id = query(session, sync_seed, ids=("g1",))
-    assert [r.display["main_material_id"] for r in by_group_id] == ["v1"]
+def query(session, seed, **kw):
+    return build_rows(
+        session,
+        context=seed.context,
+        bc_id="bc-a",
+        filters=ReportingFilter(dimension="material", start_date=D, end_date=D, **kw),
+    )
+
+
+def by_id(rows):
+    return {r.display["main_material_id"]: r for r in rows}
+
+
+def test_unlinked_posts_keep_money_as_post_rows(session, sync_seed):
+    # 对不上广告的帖子单独成行，金额不丢，仍可排序。
+    publish(
+        session,
+        sync_seed,
+        "acc-1",
+        [material_row("p1", "10"), material_row("p2", "20")],
+    )
+    rows = query(session, sync_seed, sort_by="spend", sort_direction="desc")
+    assert [json.loads(r.row_key) for r in rows] == [
+        ["post", "acc-1", "p2"],
+        ["post", "acc-1", "p1"],
+    ]
+    for r in rows:
+        assert r.coverage["reason"] == "usage_unknown"
+        assert r.material_uses == ()
+        assert r.display["account_id"] == "acc-1"
+        assert r.metric_buckets[0].availability["revenue_d3"] == "UNSUPPORTED"
+
+
+def test_same_video_across_ads_and_accounts_is_one_row(session, sync_seed):
+    # 同一视频在两个账户、三条广告各有帖子：素材维度一行，金额合计且不重复。
+    publish(
+        session,
+        sync_seed,
+        "acc-1",
+        [material_row("p1", "10", "视频一"), material_row("p2", "5")],
+    )
+    publish(session, sync_seed, "acc-2", [material_row("p3", "7")])
+    use(
+        session,
+        sync_seed,
+        adv="acc-1",
+        ad="a1",
+        video="v1",
+        ad_material="m1",
+        post="p1",
+    )
+    use(
+        session,
+        sync_seed,
+        adv="acc-1",
+        ad="a2",
+        video="v1",
+        ad_material="m2",
+        post="p2",
+    )
+    use(
+        session,
+        sync_seed,
+        adv="acc-2",
+        ad="b1",
+        video="v1",
+        ad_material="m3",
+        post="p3",
+    )
+    rows = query(session, sync_seed)
+    assert [json.loads(r.row_key) for r in rows] == [["material", "v1"]]
+    row = rows[0]
+    assert row.metric_buckets[0].values["spend"] == Decimal(22)
+    assert {
+        (u.ad_ref.advertiser_id, u.ad_ref.remote_id) for u in row.material_uses
+    } == {
+        ("acc-1", "a1"),
+        ("acc-1", "a2"),
+        ("acc-2", "b1"),
+    }
+    assert row.display["material_name"] == "v1.mp4"
+    assert row.display["account_id"] is None
+    assert row.display["account_count"] == "2"
+
+
+def test_directory_video_without_facts_and_link_by_ad_material(session, sync_seed):
+    # 对照必须按广告内素材 ID 精确对上：同一广告里的另一个视频不能吃掉这笔钱。
+    publish(session, sync_seed, "acc-1", [material_row("p1", "10")])
+    use(
+        session,
+        sync_seed,
+        adv="acc-1",
+        ad="a1",
+        video="v1",
+        ad_material="m1",
+        post="p1",
+    )
+    use(session, sync_seed, adv="acc-1", ad="a1", video="v2", ad_material="m2")
+    rows = by_id(query(session, sync_seed))
+    assert rows["v1"].metric_buckets[0].values["spend"] == Decimal(10)
+    # acc-1 当天素材日报已完整，没有数据的视频填 0。
+    assert rows["v2"].metric_buckets[0].values["spend"] == Decimal(0)
+    assert [u.ad_material_id for u in rows["v2"].material_uses] == ["m2"]
+
+
+def test_material_search_and_entity_filter_follow_usages(session, sync_seed):
+    publish(
+        session,
+        sync_seed,
+        "acc-1",
+        [material_row("p1", "10"), material_row("p2", "20")],
+    )
+    use(
+        session,
+        sync_seed,
+        adv="acc-1",
+        ad="a1",
+        video="v1",
+        ad_material="m1",
+        post="p1",
+    )
+    use(
+        session,
+        sync_seed,
+        adv="acc-1",
+        ad="a2",
+        video="v2",
+        ad_material="m2",
+        post="p2",
+        adgroup="g2",
+    )
+    assert [
+        r.display["main_material_id"] for r in query(session, sync_seed, query="广告a2")
+    ] == ["v2"]
+    assert [
+        r.display["main_material_id"] for r in query(session, sync_seed, ids=("g1",))
+    ] == ["v1"]
+    # 帖子 ID 也能搜到所属视频。
+    assert [
+        r.display["main_material_id"] for r in query(session, sync_seed, ids=("p2",))
+    ] == ["v2"]
     enabled = query(session, sync_seed, operation_statuses=("ENABLE",))
     assert {r.display["main_material_id"] for r in enabled} == {"v1", "v2"}
     assert query(session, sync_seed, operation_statuses=("DISABLE",)) == ()
     spend = query(session, sync_seed, min_spend=Decimal("15"))
     assert [r.display["main_material_id"] for r in spend] == ["v2"]
+
+
+def test_duplicate_directory_row_without_ad_material_id_is_hidden(session, sync_seed):
+    # 目录对同一广告同一视频另有一条不带广告内素材 ID 的记录，不应重复成为使用位置。
+    publish(session, sync_seed, "acc-1", [material_row("p1", "10")])
+    use(
+        session,
+        sync_seed,
+        adv="acc-1",
+        ad="a1",
+        video="v1",
+        ad_material="m1",
+        post="p1",
+    )
+    session.add(
+        AdMaterialReference(
+            tenant_id=sync_seed.tenant_id,
+            advertiser_id="acc-1",
+            ad_remote_id="a1",
+            platform_material_id="v1",
+            ad_material_id=None,
+            material_type="VIDEO",
+            name="",
+            complete=True,
+            published_version=1,
+        )
+    )
+    session.flush()
+    (row,) = query(session, sync_seed)
+    assert [u.ad_material_id for u in row.material_uses] == ["m1"]

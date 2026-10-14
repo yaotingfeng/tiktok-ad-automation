@@ -25,6 +25,11 @@ from app.core.config import settings
 from app.core.context import TenantContext
 from app.integrations.tiktok.contracts.ads import EntityRef
 from app.modules.accounts.models import AdvertiserAccount, TenantBC
+from app.modules.reporting.ad_materials import (
+    AdMaterialsPublic,
+    freeze_ad_material_selection,
+    list_ad_materials,
+)
 from app.modules.reporting.detail import AdDetailPublic, get_ad_detail
 from app.modules.reporting.exports import (
     create_export,
@@ -51,6 +56,7 @@ from app.modules.reporting.preferences import (
 )
 from app.modules.reporting.queries import query_ads
 from app.modules.reporting.schemas import (
+    AdMaterialSelectionRequest,
     AdsQueryPage,
     ExportCreate,
     ExportPublic,
@@ -266,6 +272,61 @@ def ad_trend_route(
     # 小时趋势可能排入了按需拉取任务，需提交后才会被调度派发。
     session.commit()
     return trend
+
+
+# 固定路径须在 /ads/{kind}/{remote_id} 之前注册，避免被通配路由先匹配。
+@router.get(
+    "/ads/ad/{remote_id}/materials",
+    response_model=AdMaterialsPublic,
+    name="ad_materials",
+)
+def ad_materials_route(
+    tenant_id: UUID,
+    remote_id: str,
+    advertiser_id: Annotated[str, Query(min_length=1, max_length=128)],
+    bc_id: Annotated[str, Query(min_length=1, max_length=128)],
+    start_date: date,
+    end_date: date,
+    session: SessionDep,
+    user: CurrentUser,
+) -> AdMaterialsPublic:
+    context = _context(session, user, tenant_id)
+    return list_ad_materials(
+        session,
+        context=context,
+        bc_id=bc_id,
+        advertiser_id=advertiser_id,
+        ad_id=remote_id,
+        start=start_date,
+        end=end_date,
+    )
+
+
+@router.post(
+    "/ads/ad/{remote_id}/material-selections",
+    response_model=FrozenSelection,
+    name="freeze_ad_material_selection",
+)
+def freeze_ad_material_selection_route(
+    tenant_id: UUID,
+    remote_id: str,
+    body: AdMaterialSelectionRequest,
+    advertiser_id: Annotated[str, Query(min_length=1, max_length=128)],
+    bc_id: Annotated[str, Query(min_length=1, max_length=128)],
+    session: SessionDep,
+    user: CurrentUser,
+) -> FrozenSelection:
+    context = _context(session, user, tenant_id, action="reporting_write")
+    result = freeze_ad_material_selection(
+        session,
+        context=context,
+        bc_id=bc_id,
+        advertiser_id=advertiser_id,
+        ad_id=remote_id,
+        ad_material_ids=body.ad_material_ids,
+    )
+    session.commit()
+    return result
 
 
 @router.get("/ads/{kind}/{remote_id}", response_model=AdDetailPublic, name="ad_detail")

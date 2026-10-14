@@ -135,6 +135,7 @@ _OPERATION_CAPABILITIES: dict[str, Capability] = {
     "reports.integrated": "read",
     "reports.bc": "read",
     "reports.material_breakdown": "read",
+    "reports.material_overview": "read",
 }
 _DIRECTORY_OPERATIONS = frozenset(
     operation
@@ -671,6 +672,7 @@ def _sdk_report_send(client, request_scope, deadline, *, request_check=None):
             "reports.integrated",
             "reports.bc",
             "reports.material_breakdown",
+            "reports.material_overview",
         }:
             raise DomainError("report_operation_invalid", "报表操作未登记")
 
@@ -684,6 +686,15 @@ def _sdk_report_send(client, request_scope, deadline, *, request_check=None):
             if operation in {"reports.integrated", "reports.bc"}:
                 return api.report_integrated_get(
                     args.pop("report_type"), token, **args, _request_timeout=timeout
+                )
+            if operation == "reports.material_overview":
+                # 概览只用于“主素材 → 广告”对照，不取日期参数（全量历史）。
+                return api.smart_plus_material_report_overview(
+                    args.pop("advertiser_id"),
+                    args.pop("dimensions"),
+                    token,
+                    **args,
+                    _request_timeout=timeout,
                 )
             return api.smart_plus_material_report_breakdown(
                 args.pop("advertiser_id"),

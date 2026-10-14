@@ -49,6 +49,7 @@ from app.modules.reporting.schemas import (
     SelectionRequest,
 )
 from app.modules.reporting.selection import freeze_selection
+from app.modules.reporting.store_models import MaterialPostLink
 from app.modules.tenants.models import Tenant, TenantMembership
 from tests.modules.reporting.sync_conftest import ad_row
 
@@ -260,14 +261,28 @@ def _external_material(session: Session, *, scope: _Scope, ref: EntityRef) -> No
             {
                 "dimensions": {
                     "advertiser_id": scope.advertiser_id,
-                    "main_material_id": "vid-external-1",
-                    "main_material_type": "VIDEO",
+                    "main_material_id": "post-external-1",
+                    "main_material_type": "VIDEO_SPARK_ADS",
                     "stat_time_day": str(day),
                 },
                 "metrics": {"spend": "7"},
             }
         ],
     )
+    # 素材日报主素材是帖子 ID；对照把它归到广告内素材，进而归到视频。
+    session.add(
+        MaterialPostLink(
+            tenant_id=scope.context.tenant_id,
+            advertiser_id=scope.advertiser_id,
+            main_material_id="post-external-1",
+            ad_remote_id=ad_id,
+            main_material_type="VIDEO_SPARK_ADS",
+            ad_material_id="ad-material-1",
+            platform_material_id="vid-external-1",
+            observed_at=datetime.now(UTC),
+        )
+    )
+    session.flush()
 
 
 @pytest.fixture
@@ -376,6 +391,14 @@ def test_workspace_fastapi_contract_has_no_external_write_routes() -> None:
     }
     expected_operations.update(
         {
+            (
+                "GET",
+                "/api/tenants/{tenant_id}/ads/ad/{remote_id}/materials",
+            ): "ads_reporting-ad_materials",
+            (
+                "POST",
+                "/api/tenants/{tenant_id}/ads/ad/{remote_id}/material-selections",
+            ): "ads_reporting-freeze_ad_material_selection",
             (
                 "POST",
                 "/api/tenants/{tenant_id}/ad-sync-refresh",

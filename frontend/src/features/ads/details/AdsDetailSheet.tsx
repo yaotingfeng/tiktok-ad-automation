@@ -29,7 +29,7 @@ import {
 } from "../search"
 import { statusLabel } from "../statusLabel"
 import { HistoryTab } from "./HistoryTab"
-import { MaterialsTab } from "./MaterialsTab"
+import { AdMaterialsTab, MaterialsTab } from "./MaterialsTab"
 import { OverviewTab } from "./OverviewTab"
 import { SettingsTab } from "./SettingsTab"
 import { TrendTab } from "./TrendTab"
@@ -55,6 +55,13 @@ export type AdsDetailSheetProps = {
   snapshotId?: string | null
   onClose: () => void
   onAction: (row: ReportRow, action: ManagementAction) => void
+  // 广告详情里只启停本广告的指定素材（按广告内素材 ID）。
+  onAdMaterialAction: (
+    advertiserId: string,
+    adId: string,
+    adMaterialIds: string[],
+    value: "ENABLE" | "DISABLE",
+  ) => void
   onOpenParent: (link: ParentLink, advertiserId: string) => void
 }
 
@@ -67,6 +74,7 @@ export function AdsDetailSheet({
   snapshotId,
   onClose,
   onAction,
+  onAdMaterialAction,
   onOpenParent,
 }: AdsDetailSheetProps) {
   const { tenantId, bc } = useTenantScope()
@@ -204,10 +212,18 @@ export function AdsDetailSheet({
               )}
               {hasMaterials && (
                 <TabsContent value="materials" className="mt-4">
-                  {dimension === "ad" ? (
-                    <DetailState query={detailQuery}>
-                      <MaterialsTab materials={detail?.materials ?? []} />
-                    </DetailState>
+                  {dimension === "ad" && remoteId ? (
+                    <AdMaterialsTab
+                      advertiserId={advertiserId}
+                      adId={remoteId}
+                      startDate={startDate}
+                      endDate={endDate}
+                      columns={columns}
+                      readonly={readonly}
+                      onToggle={(ids, value) =>
+                        onAdMaterialAction(advertiserId, remoteId, ids, value)
+                      }
+                    />
                   ) : (
                     <MaterialsTab
                       materials={(row.material_uses ?? []).map((use) => ({

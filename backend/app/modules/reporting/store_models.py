@@ -117,6 +117,47 @@ class MaterialReportDay(_Fact, table=True):
     main_material_name: str | None = None
 
 
+class MaterialPostLink(SQLModel, table=True):
+    """素材日报主素材 → 所属广告的对照。
+
+    Spark 广告的主素材 ID 是 TikTok 为每条广告发布的帖子 ID，素材日报本身不带广告；
+    创意概览报表按“广告 × 主素材”返回同一 ID 及广告内素材 ID（ad_material_id），
+    据此可精确对上广告目录里的素材使用位置，进而得到素材库视频。
+    帖子发布后不会换广告，只增不改；非 Spark 主素材可能对应多条广告。
+    """
+
+    __tablename__ = "material_post_link"
+    __table_args__ = (
+        Index("ix_material_post_link_ad", "tenant_id", "advertiser_id", "ad_remote_id"),
+    )
+    tenant_id: UUID = Field(primary_key=True)
+    advertiser_id: str = Field(primary_key=True, max_length=128)
+    main_material_id: str = Field(primary_key=True, max_length=64)
+    ad_remote_id: str = Field(primary_key=True, max_length=128)
+    main_material_type: str = Field(max_length=64)
+    ad_material_id: str | None = Field(default=None, max_length=128)
+    material_name: str | None = None
+    # 建立对照时解析的素材库视频；目录之后变化也不改，已解析的金额归属保持稳定。
+    platform_material_id: str | None = Field(default=None, max_length=128)
+    observed_at: datetime = Field(sa_type=AwareDateTime)
+
+
+class MaterialLinkScan(SQLModel, table=True):
+    """每个账户最近一次对照扫描；只在出现新的未对照主素材时重扫。
+
+    概览接口按帖子 ID 筛选不生效，每次只能拉全账户；已删除广告的帖子永远查不到，
+    记下它们以免每次热刷新都重复整账户扫描。
+    """
+
+    __tablename__ = "material_link_scan"
+    tenant_id: UUID = Field(primary_key=True)
+    advertiser_id: str = Field(primary_key=True, max_length=128)
+    scanned_at: datetime = Field(sa_type=AwareDateTime)
+    unresolved_ids: list[str] = Field(
+        default_factory=list, sa_column=Column(JSONB, nullable=False)
+    )
+
+
 class AccountReconciliationDay(SQLModel, table=True):
     """账户报表原值与广告汇总值的每日对账，只用于提示，不进入展示。"""
 

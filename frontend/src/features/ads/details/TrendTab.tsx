@@ -56,6 +56,21 @@ export function trendScope(
       ids: refs.map((ref) => ref.remote_id),
     }
   }
+  if (dimension === "material") {
+    // 素材行是一个视频跨账户的合计：覆盖范围取它全部使用位置所在账户。
+    const fromUses = (row.material_uses ?? []).map(
+      (use) => use.ad_ref.advertiser_id,
+    )
+    const own = rowAdvertiserId(row)
+    const id = rowObjectId(row, dimension)
+    return {
+      level: "material",
+      advertiserIds: [
+        ...new Set(fromUses.length ? fromUses : own ? [own] : []),
+      ],
+      ids: id ? [id] : [],
+    }
+  }
   const advertiserId = rowAdvertiserId(row)
   const advertiserIds = advertiserId ? [advertiserId] : []
   if (dimension === "account")

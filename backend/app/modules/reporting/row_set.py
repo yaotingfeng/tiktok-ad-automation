@@ -27,6 +27,7 @@ from sqlmodel import Session
 
 from app.integrations.tiktok.contracts.ads import EntityRef
 from app.modules.reporting.filters import CONFIG_SORT_FIELDS, NAME_SORT_FIELDS
+from app.modules.reporting.material_links import POST_VIDEO_SQL
 from app.modules.reporting.schemas import ReportingFilter
 from app.modules.reporting.store_models import METRIC_COLUMNS
 
@@ -590,6 +591,12 @@ def _dimension_rows(
 
 
 def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]:
+    """素材维度：一个素材库视频一行，跨账户、跨广告合计。
+
+    素材日报的主素材是帖子（Spark 每条广告一条），先经 material_post_link 与广告目录
+    归到视频；对不上的帖子各自一行，保证金额不丢。目录里有、所选日期无数据的视频
+    也列出，按账户覆盖填 0 或空。
+    """
     params.add("kinds", ["campaign", "adgroup", "ad"])
     entity_filter = _entity_conditions(filters, params, e="ae", p="p", tz="a.tz")
     has_entity_filter = bool(entity_filter)
@@ -597,17 +604,17 @@ def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]
     null_ok = "TRUE" if _null_entity_matches(filters) else "FALSE"
     use_ids = "ARRAY[u.adv, u.campaign_id, u.adgroup_id, u.ad_remote_id]"
     use_text = "concat_ws(' ', u.adv, u.account_name, u.campaign_id, u.campaign_name, u.adgroup_id, u.adgroup_name, u.ad_remote_id, u.ad_name)"
-    row_ids = "array_remove(ARRAY[r.row_key, r.mid, r.adv] || r.ref_ids, NULL)"
-    row_text = "concat_ws(' ', r.row_key, r.mid, r.adv, array_to_string(r.ref_ids, ' '), r.name, r.material_type, r.account_name)"
+    row_ids = "array_remove(ARRAY[r.row_key, r.mid] || r.post_ids || r.advs || r.ref_ids, NULL)"
+    row_text = "concat_ws(' ', r.row_key, r.mid, array_to_string(r.post_ids, ' '), array_to_string(r.advs, ' '), array_to_string(r.ref_ids, ' '), r.name, r.account_name)"
     plain = _text_conditions(filters, params, ids=row_ids, haystack=row_text)
     text_ok = " AND ".join(plain) or "TRUE"
     if plain:
-        # 搜索/层级筛选可命中某个使用位置（行展示 + 该位置的层级），但金额仍是整份素材日报。
+        # 搜索/层级筛选可命中某个使用位置（行展示 + 该位置的层级），但金额仍是整份素材合计。
         hier = " AND ".join(
             _text_conditions(
                 filters,
                 params,
-                ids=f"array_remove(ARRAY[r.row_key, r.mid, r.adv] || r.ref_ids || {use_ids}, NULL)",
+                ids=f"array_remove(ARRAY[r.row_key, r.mid] || r.post_ids || r.advs || r.ref_ids || {use_ids}, NULL)",
                 haystack=f"concat_ws(' ', {row_text}, {use_text})",
             )
         )
@@ -617,11 +624,13 @@ def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]
     else:
         hier = None
     use_order = (
-        'u.ad_remote_id COLLATE "C", u.platform_material_id COLLATE "C", '
+        'u.adv COLLATE "C", u.ad_remote_id COLLATE "C", u.platform_material_id COLLATE "C", '
         'COALESCE(u.ad_material_id, \'\') COLLATE "C", u.material_type COLLATE "C"'
     )
-    use_columns = """u.id, u.adv, u.ad_remote_id, u.platform_material_id, u.ad_material_id,
-                u.material_type, u.main_id, u.main_material_type, u.name"""
+    video_key = "'[\"material\", ' || to_json({vid})::text || ']'"
+    post_key = (
+        "'[\"post\", ' || to_json({adv})::text || ', ' || to_json({mid})::text || ']'"
+    )
     ctes = [
         _common_ctes("material_day"),
         _facts_cte(
@@ -629,42 +638,58 @@ def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]
             "main_material_id",
             extra_group=("main_material_type",),
         ),
-        """fm AS (SELECT DISTINCT ON (adv, rid, main_material_type) * FROM facts
-            ORDER BY adv, rid, main_material_type, (f_main_material_name IS NULL), currency)""",
         """uses AS (
             SELECT u.id, u.advertiser_id AS adv, u.ad_remote_id, u.platform_material_id, u.ad_material_id,
-                u.material_type, NULLIF(u.main_material_id, '') AS main_id, u.main_material_type,
-                NULLIF(u.name, '') AS name
+                u.material_type, NULLIF(u.name, '') AS name
             FROM ad_material_reference u
             WHERE u.tenant_id = :tenant AND u.advertiser_id = ANY(:advs) AND u.complete
+              -- 目录对同一广告同一视频可能另有一条不带广告内素材 ID 的记录：
+              -- 有带 ID 的记录时只保留它，只有它能单独启停。
+              AND NOT (u.ad_material_id IS NULL AND EXISTS (
+                SELECT 1 FROM ad_material_reference o
+                WHERE o.tenant_id = u.tenant_id AND o.advertiser_id = u.advertiser_id
+                  AND o.ad_remote_id = u.ad_remote_id
+                  AND o.platform_material_id = u.platform_material_id
+                  AND o.ad_material_id IS NOT NULL AND o.complete))
         )""",
-        """idn AS (
-            SELECT adv, rid AS mid, main_material_type AS mtype FROM facts
-            UNION
-            SELECT adv, COALESCE(main_id, NULLIF(ad_material_id, '')),
-                COALESCE(NULLIF(main_material_type, ''), NULLIF(material_type, ''))
-            FROM uses
-            WHERE COALESCE(main_id, NULLIF(ad_material_id, '')) IS NOT NULL
-              AND COALESCE(NULLIF(main_material_type, ''), NULLIF(material_type, '')) IS NOT NULL
+        f"""pv AS ({POST_VIDEO_SQL})""",
+        f"""fk AS (
+            -- 每条帖子事实归到唯一行：对上视频按视频，否则按“账户 + 帖子”。
+            SELECT f.adv, f.rid, f.main_material_type AS mtype,
+                CASE WHEN v.vid IS NOT NULL THEN {video_key.format(vid="v.vid")}
+                    ELSE {post_key.format(adv="f.adv", mid="f.rid")} END AS row_key,
+                COALESCE(v.vid, f.rid) AS mid
+            FROM (SELECT DISTINCT adv, rid, main_material_type FROM facts) f
+            LEFT JOIN pv v ON v.adv = f.adv AND v.mid = f.rid
         )""",
-        """mkey AS (
-            SELECT i.adv, i.mid, i.mtype,
-                '[' || to_json(i.adv)::text || ', "material", ' || to_json(i.mid)::text || ', '
-                    || to_json(i.mtype)::text || ']' AS row_key
-            FROM idn i JOIN acc a ON a.adv = i.adv
+        f"""mkey AS (
+            SELECT row_key, min(mid) AS mid FROM (
+                SELECT row_key, mid FROM fk
+                UNION ALL
+                SELECT {video_key.format(vid="u.platform_material_id")}, u.platform_material_id FROM uses u
+            ) k GROUP BY row_key
+        )""",
+        """fname AS (
+            SELECT DISTINCT ON (k.row_key) k.row_key, f.f_main_material_name AS name
+            FROM fk k JOIN facts f ON f.adv = k.adv AND f.rid = k.rid AND f.main_material_type = k.mtype
+            WHERE f.f_main_material_name IS NOT NULL
+            ORDER BY k.row_key, f.f_main_material_name COLLATE "C"
         )""",
         f"""cand_raw AS (
-            -- 主素材按带类型身份关联；广告内素材 ID 只关联同一账户，不跨账户猜测。
-            -- 拆成两个等值连接（而非 OR 条件），保证可用哈希连接。
-            SELECT k.row_key, {use_columns}
-            FROM mkey k JOIN uses u ON u.adv = k.adv AND u.main_id = k.mid
-            WHERE u.main_material_type = k.mtype OR u.main_material_type IS NULL
+            -- 视频行管理该视频的全部使用位置；帖子行只有对照上的那条广告位置。
+            SELECT {video_key.format(vid="u.platform_material_id")} AS row_key, u.*
+            FROM uses u
             UNION ALL
-            SELECT k.row_key, {use_columns}
-            FROM mkey k JOIN uses u ON u.adv = k.adv AND NULLIF(u.ad_material_id, '') = k.mid
+            SELECT k.row_key, u.*
+            FROM fk k
+            JOIN material_post_link l ON l.tenant_id = :tenant AND l.advertiser_id = k.adv
+                AND l.main_material_id = k.rid
+            JOIN uses u ON u.adv = l.advertiser_id AND u.ad_remote_id = l.ad_remote_id
+                AND u.ad_material_id = l.ad_material_id
+            WHERE k.row_key LIKE '["post"%'
         )""",
         f"""cand AS (
-            SELECT DISTINCT ON (u.row_key, u.ad_remote_id, u.platform_material_id, u.ad_material_id, u.material_type)
+            SELECT DISTINCT ON (u.row_key, u.adv, u.ad_remote_id, u.platform_material_id, u.ad_material_id, u.material_type)
                 u.*, g.parent AS campaign_id, ae.parent AS adgroup_id,
                 CASE WHEN ae.adv IS NOT NULL THEN COALESCE(ae.name, u.ad_remote_id) ELSE u.ad_remote_id END AS ad_name,
                 CASE WHEN g.adv IS NOT NULL THEN COALESCE(g.name, g.rid) ELSE ae.parent END AS adgroup_name,
@@ -678,7 +703,7 @@ def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]
             LEFT JOIN obj g ON g.adv = u.adv AND g.kind = 'adgroup' AND g.rid = COALESCE(ae.parent, '')
             LEFT JOIN obj c ON c.adv = u.adv AND c.kind = 'campaign' AND c.rid = g.parent
             LEFT JOIN proj p ON p.adv = u.adv AND p.cid = g.parent
-            ORDER BY u.row_key, u.ad_remote_id, u.platform_material_id, u.ad_material_id, u.material_type, u.id
+            ORDER BY u.row_key, u.adv, u.ad_remote_id, u.platform_material_id, u.ad_material_id, u.material_type, u.id
         )""",
         f"""muse AS (SELECT * FROM cand WHERE {"matched" if has_entity_filter else "TRUE"})""",
         """cand_names AS (SELECT row_key, min(name COLLATE "C") AS name FROM cand GROUP BY row_key)""",
@@ -703,21 +728,43 @@ def _material_rows(filters: ReportingFilter, params: _Params) -> tuple[str, str]
                 ORDER BY {use_order}) AS uses
             FROM muse u GROUP BY u.row_key
         )""",
+        """row_advs AS (
+            -- 行涉及的账户：有事实的账户 ∪ 目录使用位置所在账户；覆盖与空值按这些账户算。
+            SELECT row_key, adv FROM fk
+            UNION
+            SELECT row_key, adv FROM cand
+        )""",
+        """adv_list AS (
+            SELECT ra.row_key, array_agg(ra.adv ORDER BY ra.adv COLLATE "C") AS advs,
+                CASE WHEN count(*) = 1 THEN COALESCE(min(a.name), min(ra.adv)) END AS account_name
+            FROM row_advs ra JOIN acc a ON a.adv = ra.adv GROUP BY ra.row_key
+        )""",
+        """post_list AS (SELECT row_key, array_agg(DISTINCT rid) AS post_ids FROM fk GROUP BY row_key)""",
         """rowsrc AS (
-            SELECT k.row_key, k.adv, k.mid, k.mtype AS material_type,
-                COALESCE(f.f_main_material_name, cn.name, k.mid) AS name,
-                COALESCE(a.name, k.adv) AS account_name,
+            SELECT k.row_key, k.mid,
+                -- 视频名优先取目录（各帖子一致），否则取素材日报里的名称。
+                COALESCE(cn.name, fn.name, k.mid) AS name,
+                al.account_name, al.advs,
+                COALESCE(pl.post_ids, ARRAY[]::text[]) AS post_ids,
                 COALESCE(ur.ref_ids, ARRAY[]::text[]) AS ref_ids,
                 COALESCE(ur.refs, '[]'::jsonb) AS refs,
                 COALESCE(ul.uses, '[]'::jsonb) AS material_uses,
                 ul.row_key IS NOT NULL AS has_uses
-            FROM mkey k JOIN acc a ON a.adv = k.adv
-            LEFT JOIN fm f ON f.adv = k.adv AND f.rid = k.mid AND f.main_material_type = k.mtype
+            FROM mkey k
+            JOIN adv_list al ON al.row_key = k.row_key
+            LEFT JOIN fname fn ON fn.row_key = k.row_key
             LEFT JOIN cand_names cn ON cn.row_key = k.row_key
+            LEFT JOIN post_list pl ON pl.row_key = k.row_key
             LEFT JOIN use_refs ur ON ur.row_key = k.row_key
             LEFT JOIN use_list ul ON ul.row_key = k.row_key
         )""",
-        """mat_members AS (SELECT row_key, adv, mid AS rid, material_type AS mtype FROM rowsrc)""",
+        """mat_members AS (
+            -- 有事实的帖子各是一个成员；只有目录使用、没有事实的账户补一个空成员计覆盖。
+            SELECT row_key, adv, rid, mtype FROM fk
+            UNION ALL
+            SELECT ra.row_key, ra.adv, NULL::text, NULL::text FROM row_advs ra
+            WHERE NOT EXISTS (SELECT 1 FROM fk WHERE fk.row_key = ra.row_key AND fk.adv = ra.adv)
+        )""",
         _member_buckets("mat_members", unsupported=MATERIAL_UNSUPPORTED),
         _row_buckets(),
     ]

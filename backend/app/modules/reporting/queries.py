@@ -274,6 +274,7 @@ def _read_page(
         tenant_id=context.tenant_id,
         filters=filters,
         members=[frozen_member(row) for row in rows],
+        advertisers=snapshot.advertiser_ids,
     )
     if filters.dimension == "account":
         # 账户行保留其下全部系列引用供冻结选择展开；列表响应不返回，避免每行带回上百条。

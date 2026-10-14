@@ -130,12 +130,12 @@ const ID_KEY: Partial<Record<AdsDimension, string>> = {
   ad: "ad_id",
   material: "main_material_id",
 }
-// 逐级下钻：账户 → 系列 → 广告组 → 广告 → 素材；素材、剧没有下级。
+// 逐级下钻：账户 → 系列 → 广告组 → 广告。广告下的素材在详情的“素材”页签里看本广告数据，
+// 不跳到素材维度（素材维度是一个视频跨广告的合计）。
 const CHILD: Partial<Record<AdsDimension, AdsDimension>> = {
   account: "campaign",
   campaign: "adgroup",
   adgroup: "ad",
-  ad: "material",
 }
 export const nameKeyFor = (dimension: AdsDimension) => NAME_KEY[dimension]
 export const childDimension = (dimension: AdsDimension) =>

@@ -415,6 +415,7 @@ def _export_rows(session: Session, export: ReportExport) -> Iterator[dict[str, A
             tenant_id=export.tenant_id,
             filters=filters,
             members=members[start : start + EXPORT_BATCH],
+            advertisers=export.advertiser_ids,
         ):
             yield row.model_dump(mode="json")
 

@@ -227,6 +227,61 @@ export type AdDetailPublic = {
 };
 
 /**
+ * AdMaterialPublic
+ */
+export type AdMaterialPublic = {
+    use_ref: MaterialUseRef;
+    /**
+     * Name
+     */
+    name?: string;
+    /**
+     * Operation Status
+     */
+    operation_status?: string | null;
+    /**
+     * Post Ids
+     */
+    post_ids?: Array<string>;
+    /**
+     * Shared
+     */
+    shared?: boolean;
+    /**
+     * Metric Buckets
+     */
+    metric_buckets?: Array<MetricVector>;
+};
+
+/**
+ * AdMaterialSelectionRequest
+ *
+ * 广告详情里只针对本广告的素材启停：按广告内素材 ID 选取。
+ */
+export type AdMaterialSelectionRequest = {
+    /**
+     * Ad Material Ids
+     */
+    ad_material_ids: Array<string>;
+};
+
+/**
+ * AdMaterialsPublic
+ */
+export type AdMaterialsPublic = {
+    /**
+     * Items
+     */
+    items?: Array<AdMaterialPublic>;
+    /**
+     * Coverage
+     */
+    coverage?: {
+        [key: string]: unknown;
+    };
+};
+
+/**
  * Adjustment
  */
 export type Adjustment_Input = {
@@ -11543,6 +11598,100 @@ export type adsReportingAdTrendResponses = {
 };
 
 export type adsReportingAdTrendResponse = adsReportingAdTrendResponses[keyof adsReportingAdTrendResponses];
+
+export type adsReportingAdMaterialsData = {
+    body?: never;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Remote Id
+         */
+        remote_id: string;
+    };
+    query: {
+        /**
+         * Advertiser Id
+         */
+        advertiser_id: string;
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+        /**
+         * Start Date
+         */
+        start_date: string;
+        /**
+         * End Date
+         */
+        end_date: string;
+    };
+    url: '/api/tenants/{tenant_id}/ads/ad/{remote_id}/materials';
+};
+
+export type adsReportingAdMaterialsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adsReportingAdMaterialsError = adsReportingAdMaterialsErrors[keyof adsReportingAdMaterialsErrors];
+
+export type adsReportingAdMaterialsResponses = {
+    /**
+     * Successful Response
+     */
+    200: AdMaterialsPublic;
+};
+
+export type adsReportingAdMaterialsResponse = adsReportingAdMaterialsResponses[keyof adsReportingAdMaterialsResponses];
+
+export type adsReportingFreezeAdMaterialSelectionData = {
+    body: AdMaterialSelectionRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+        /**
+         * Remote Id
+         */
+        remote_id: string;
+    };
+    query: {
+        /**
+         * Advertiser Id
+         */
+        advertiser_id: string;
+        /**
+         * Bc Id
+         */
+        bc_id: string;
+    };
+    url: '/api/tenants/{tenant_id}/ads/ad/{remote_id}/material-selections';
+};
+
+export type adsReportingFreezeAdMaterialSelectionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adsReportingFreezeAdMaterialSelectionError = adsReportingFreezeAdMaterialSelectionErrors[keyof adsReportingFreezeAdMaterialSelectionErrors];
+
+export type adsReportingFreezeAdMaterialSelectionResponses = {
+    /**
+     * Successful Response
+     */
+    200: FrozenSelection;
+};
+
+export type adsReportingFreezeAdMaterialSelectionResponse = adsReportingFreezeAdMaterialSelectionResponses[keyof adsReportingFreezeAdMaterialSelectionResponses];
 
 export type adsReportingAdDetailData = {
     body?: never;

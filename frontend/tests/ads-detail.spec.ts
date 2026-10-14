@@ -68,6 +68,34 @@ test.describe("ads detail", () => {
     await expect(page.getByRole("heading", { name: "批量暂停" })).toBeVisible()
   })
 
+  test("广告详情显示本广告素材数据，只启停本广告的素材", async ({ page }) => {
+    await adsBoundary(page)
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "广告", exact: true }).click()
+    await page
+      .getByRole("button", { name: /嘉书-总裁归来/ })
+      .first()
+      .click()
+    const sheet = page.getByRole("dialog")
+    await sheet.getByRole("tab", { name: "素材" }).click()
+    await expect(sheet.getByText("ep1.mp4")).toBeVisible()
+    await expect(sheet.getByText("12.50")).toBeVisible()
+    await sheet.getByRole("checkbox", { name: "选择 ep2.mp4" }).click()
+    const freeze = page.waitForRequest((r) =>
+      r.url().includes("/ads/ad/ad-1/material-selections"),
+    )
+    await sheet
+      .getByRole("button", { name: "暂停", exact: true })
+      .last()
+      .click()
+    const request = await freeze
+    expect(request.postDataJSON()).toEqual({ ad_material_ids: ["m2"] })
+    expect(new URL(request.url()).searchParams.get("advertiser_id")).toBe(
+      "adv-1",
+    )
+    await expect(page.getByRole("heading", { name: "批量暂停" })).toBeVisible()
+  })
+
   test("切 BC 关闭详情", async ({ page }) => {
     await adsBoundary(page)
     await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)

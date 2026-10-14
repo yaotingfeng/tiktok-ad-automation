@@ -190,6 +190,14 @@ class SelectionRequest(BaseModel):
     excluded_row_keys: tuple[str, ...] = ()
 
 
+class AdMaterialSelectionRequest(BaseModel):
+    """广告详情里只针对本广告的素材启停：按广告内素材 ID 选取。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    ad_material_ids: tuple[str, ...]
+
+
 class FrozenSelection(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 

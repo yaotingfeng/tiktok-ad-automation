@@ -62,12 +62,29 @@ def test_material_selection_keeps_usage_ids(report_case):
     from uuid import uuid4
 
     from app.modules.reporting.publish import AccountMeta, publish_material_day
+    from app.modules.reporting.store_models import MaterialPostLink
     from tests.modules.reporting.test_material_query import material_row
 
     day = date(2026, 9, 30)
-    rows = [material_row(mid, "1", adv="report-account") for mid in ("vid-1", "vid-2")]
+    # 素材日报主素材是帖子；对照把帖子归到广告内素材，素材行按视频冻结使用位置。
+    rows = [material_row(post, "1") for post in ("post-1", "post-2")]
     for row in rows:
         row["dimensions"]["stat_time_day"] = str(day)
+    for post, creative in (("post-1", "creative-1"), ("post-2", "creative-2")):
+        report_case.session.add(
+            MaterialPostLink(
+                tenant_id=report_case.context.tenant_id,
+                advertiser_id="report-account",
+                main_material_id=post,
+                ad_remote_id="ad-1",
+                main_material_type="VIDEO_SPARK_ADS",
+                ad_material_id=creative,
+                platform_material_id={"creative-1": "vid-1", "creative-2": "vid-2"}[
+                    creative
+                ],
+                observed_at=datetime.now(UTC),
+            )
+        )
     publish_material_day(
         report_case.session,
         tenant_id=report_case.context.tenant_id,

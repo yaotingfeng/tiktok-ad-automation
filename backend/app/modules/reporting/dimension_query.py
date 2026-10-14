@@ -452,7 +452,11 @@ def build_rows(
         filters=filters,
     )
     return materialize_rows(
-        session, tenant_id=context.tenant_id, filters=filters, members=members
+        session,
+        tenant_id=context.tenant_id,
+        filters=filters,
+        members=members,
+        advertisers=advertisers,
     )
 
 
@@ -462,8 +466,11 @@ def materialize_rows(
     tenant_id: UUID,
     filters: ReportingFilter,
     members: Sequence[SnapshotMember],
+    advertisers: Sequence[str],
 ) -> tuple[ReportRow, ...]:
     """按快照冻结的成员与顺序补全展示字段、指标和覆盖；不再做筛选与排序。
+
+    advertisers 为快照冻结的授权账户：素材行跨账户合计，只在这些账户内取事实。
 
     只读取这些行涉及的账户、对象和事实，翻页与分批导出的成本与页大小成正比。
     """
@@ -473,7 +480,11 @@ def materialize_rows(
         from app.modules.reporting.material_query import materialize_material_rows
 
         return materialize_material_rows(
-            session, tenant_id=tenant_id, filters=filters, members=members
+            session,
+            tenant_id=tenant_id,
+            filters=filters,
+            members=members,
+            advertisers=advertisers,
         )
     kind = "campaign" if filters.dimension == "drama" else filters.dimension
     row_refs = {

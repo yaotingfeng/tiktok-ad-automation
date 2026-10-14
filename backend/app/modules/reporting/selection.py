@@ -3,6 +3,7 @@
 ``ALL_MATCHING`` 只展开来源快照，绝不重新执行筛选；因此新同步行和改名归组
 不会悄悄进入已提交的管理目标。
 """
+
 from __future__ import annotations
 
 import json
@@ -27,7 +28,9 @@ from app.modules.reporting.schemas import FrozenSelection, SelectionRequest
 from app.modules.tenants.permissions import require_tenant
 
 
-def _digest(refs: tuple[EntityRef, ...], uses: tuple[MaterialUseRef, ...]) -> str:
+def selection_digest(
+    refs: tuple[EntityRef, ...], uses: tuple[MaterialUseRef, ...]
+) -> str:
     values = {
         "refs": [
             (str(ref.tenant_id), ref.advertiser_id, ref.kind, ref.remote_id)
@@ -45,7 +48,9 @@ def _digest(refs: tuple[EntityRef, ...], uses: tuple[MaterialUseRef, ...]) -> st
             for item in uses
         ],
     }
-    return sha256(json.dumps(values, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return sha256(
+        json.dumps(values, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def _entity(data: dict[str, Any]) -> EntityRef:
@@ -88,7 +93,7 @@ def _all_rows(session: Session, *, snapshot_id: UUID, total: int) -> tuple[Any, 
     return tuple(rows)
 
 
-def _selection_public(record: FrozenSelectionRecord) -> FrozenSelection:
+def selection_public(record: FrozenSelectionRecord) -> FrozenSelection:
     refs = tuple(_entity(item) for item in record.refs)
     uses = tuple(_usage(item) for item in record.material_uses)
     return FrozenSelection(
@@ -108,10 +113,14 @@ def freeze_selection(
     bc_id: str,
     request: SelectionRequest,
 ) -> FrozenSelection:
-    require_tenant(session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read")
+    require_tenant(
+        session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read"
+    )
     if set(request.row_keys) & set(request.excluded_row_keys):
         raise HTTPException(422, detail="selection_row_conflict")
-    snapshot = read_snapshot(session, context=context, bc_id=bc_id, snapshot_id=request.snapshot_id)
+    snapshot = read_snapshot(
+        session, context=context, bc_id=bc_id, snapshot_id=request.snapshot_id
+    )
     if snapshot.actor_id != context.actor_id:
         raise HTTPException(404, detail="query_snapshot_not_found")
     rows = _all_rows(session, snapshot_id=snapshot.id, total=snapshot.total)
@@ -187,18 +196,20 @@ def freeze_selection(
             }
             for use in uses_tuple
         ],
-        membership_digest=_digest(refs_tuple, uses_tuple),
+        membership_digest=selection_digest(refs_tuple, uses_tuple),
     )
     session.add(record)
     session.flush()
-    return _selection_public(record)
+    return selection_public(record)
 
 
 def get_frozen_selection(
     session: Session, *, context: TenantContext, bc_id: str, selection_id: UUID
 ) -> FrozenSelection:
     """C 读取不可变目标；每次读取重新校验当前权限和有效期。"""
-    require_tenant(session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read")
+    require_tenant(
+        session, actor_id=context.actor_id, tenant_id=context.tenant_id, action="read"
+    )
     record = session.exec(
         select(FrozenSelectionRecord).where(
             FrozenSelectionRecord.id == selection_id,
@@ -214,4 +225,4 @@ def get_frozen_selection(
         raise HTTPException(403, detail="report_scope_forbidden")
     if record.expires_at <= datetime.now(UTC):
         raise HTTPException(409, detail="frozen_selection_expired")
-    return _selection_public(record)
+    return selection_public(record)

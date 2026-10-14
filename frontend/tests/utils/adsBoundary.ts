@@ -496,6 +496,63 @@ export async function adsBoundary(
         },
       })
     }
+    // 广告详情的素材：本广告里每个素材的数据，以及只针对本广告的启停选择。
+    if (path.endsWith(`/tenants/${TENANT}/ads/ad/ad-1/materials`))
+      return route.fulfill({
+        headers,
+        json: {
+          coverage: { status: "COMPLETE" },
+          items: ["m1", "m2"].map((id, index) => ({
+            use_ref: {
+              ad_ref: {
+                tenant_id: TENANT,
+                advertiser_id: ADVERTISER,
+                kind: "ad",
+                remote_id: "ad-1",
+              },
+              platform_material_id: `video-${id}`,
+              ad_material_id: id,
+              material_type: "VIDEO",
+            },
+            name: `ep${index + 1}.mp4`,
+            operation_status: "ENABLE",
+            post_ids: [`post-${id}`],
+            shared: false,
+            metric_buckets: [
+              {
+                currency: "USD",
+                timezone: "UTC",
+                values: { spend: index ? "3.00" : "12.50" },
+                availability: { spend: "AVAILABLE" },
+              },
+            ],
+          })),
+        },
+      })
+    if (path.endsWith(`/tenants/${TENANT}/ads/ad/ad-1/material-selections`)) {
+      const body = request.postDataJSON() as { ad_material_ids: string[] }
+      return route.fulfill({
+        headers,
+        json: {
+          selection_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          snapshot_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          refs: [],
+          material_uses: body.ad_material_ids.map((id) => ({
+            ad_ref: {
+              tenant_id: TENANT,
+              advertiser_id: ADVERTISER,
+              kind: "ad",
+              remote_id: "ad-1",
+            },
+            platform_material_id: `video-${id}`,
+            ad_material_id: id,
+            material_type: "VIDEO",
+          })),
+          membership_digest: "m".repeat(64),
+          expires_at: "2099-01-01T00:00:00Z",
+        },
+      })
+    }
     const detailMatch = /\/ads\/(campaign|adgroup|ad)\/([^/]+)$/.exec(path)
     if (detailMatch && DETAIL_IDS[detailMatch[1]] === detailMatch[2]) {
       const kind = detailMatch[1]
