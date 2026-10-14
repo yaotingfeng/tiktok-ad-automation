@@ -1,14 +1,4 @@
-import {
-  Clapperboard,
-  FileVideo,
-  LayoutGrid,
-  Link2,
-  ListTodo,
-  Monitor,
-  SlidersHorizontal,
-  Users,
-  Workflow,
-} from "lucide-react"
+import { LayoutGrid } from "lucide-react"
 import type { UserPublic } from "@/client"
 import { WorkspaceBrand } from "@/components/Common/WorkspaceBrand"
 import { Separator } from "@/components/ui/separator"
@@ -18,49 +8,31 @@ import {
   SidebarFooter,
   SidebarHeader,
 } from "@/components/ui/sidebar"
-import { type Item, Main } from "./Main"
+import { Main, type NavGroup } from "./Main"
+import { workspaceNavigation } from "./navigation"
 import { User } from "./User"
-
-const defaultWorkItems: Item[] = [
-  { icon: Clapperboard, title: "广告搭建", path: "/" },
-  { icon: ListTodo, title: "搭建任务", path: "/build-tasks" },
-  { icon: FileVideo, title: "素材库", path: "/materials" },
-  { icon: SlidersHorizontal, title: "投放策略", path: "/strategies" },
-  { icon: Workflow, title: "自动规则", path: "/automation-rules" },
-]
-const defaultManagementItems: Item[] = [
-  { icon: Monitor, title: "账户与授权", path: "/accounts" },
-  { icon: Link2, title: "版权方连接", path: "/providers" },
-  { icon: Users, title: "成员管理", path: "/members" },
-]
 
 export function AppSidebar({
   user,
-  workItems = defaultWorkItems,
-  managementItems,
+  groups,
 }: {
   user?: UserPublic | null
-  workItems?: Item[]
-  managementItems?: Item[]
+  groups?: NavGroup[]
 }) {
+  // 未传入分组时（未接入租户或用户信息加载中）展示全局入口。
+  const navigation =
+    groups ?? workspaceNavigation({ manage: !!user?.is_superuser })
   return (
     <Sidebar collapsible="icon" variant="inset">
       <SidebarHeader>
         <WorkspaceBrand />
       </SidebarHeader>
       <SidebarContent>
-        {workItems.length > 0 && <Main label="投放工作" items={workItems} />}
-        {managementItems?.length !== 0 && (
-          <Main
-            label="租户管理"
-            items={
-              managementItems ??
-              defaultManagementItems.filter(
-                (item) => item.path !== "/members" || user?.is_superuser,
-              )
-            }
-          />
-        )}
+        {navigation
+          .filter((group) => group.items.length > 0)
+          .map((group) => (
+            <Main key={group.label} label={group.label} items={group.items} />
+          ))}
       </SidebarContent>
       <SidebarFooter>
         {user?.is_superuser && (

@@ -803,7 +803,7 @@ test("ordinary entry resolves an authorized tenant with scoped navigation and no
   )
   await expect(
     page
-      .getByRole("navigation", { name: "租户管理" })
+      .getByRole("navigation", { name: "设置" })
       .getByRole("link", { name: "成员管理", exact: true }),
   ).toHaveAttribute("href", `/tenants/${A}/members`)
   await expect(

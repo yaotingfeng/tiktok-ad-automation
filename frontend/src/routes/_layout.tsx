@@ -4,18 +4,7 @@ import {
   redirect,
   useRouterState,
 } from "@tanstack/react-router"
-import {
-  BarChart3,
-  Bell,
-  Clapperboard,
-  FileVideo,
-  Link2,
-  ListTodo,
-  Monitor,
-  SlidersHorizontal,
-  Users,
-  Workflow,
-} from "lucide-react"
+import { workspaceNavigation } from "@/components/Sidebar/navigation"
 import { BCSelector } from "@/features/accounts/BCSelector"
 import { canManage, roleLabels } from "@/features/tenants/shared"
 import {
@@ -63,41 +52,9 @@ function ScopedLayout() {
   })
   const { scope, tenant, tenantId, user, platform, bc } = useTenantScope()
   const prefix = `/tenants/${tenantId}`
-  const workItems = tenantId
-    ? [
-        { icon: Clapperboard, title: "广告搭建", path: `${prefix}/builds/new` },
-        { icon: ListTodo, title: "搭建任务", path: `${prefix}/build-tasks` },
-        { icon: BarChart3, title: "广告报表", path: `${prefix}/ads` },
-        { icon: FileVideo, title: "素材库", path: `${prefix}/materials` },
-        {
-          icon: SlidersHorizontal,
-          title: "投放策略",
-          path: `${prefix}/strategies`,
-        },
-        {
-          icon: Workflow,
-          title: "自动规则",
-          path: `${prefix}/automation-rules`,
-        },
-      ]
-    : platform
-      ? []
-      : undefined
-  const managementItems = tenantId
-    ? [
-        { icon: Monitor, title: "账户与授权", path: `${prefix}/accounts` },
-        { icon: Link2, title: "版权方连接", path: `${prefix}/providers` },
-        ...(canManage(scope?.role)
-          ? [
-              { icon: Users, title: "成员管理", path: `${prefix}/members` },
-              {
-                icon: Bell,
-                title: "通知设置",
-                path: `${prefix}/notifications`,
-              },
-            ]
-          : []),
-      ]
+  // 平台视图不展示租户菜单；未接入租户时交给侧栏展示全局入口。
+  const groups = tenantId
+    ? workspaceNavigation({ prefix, manage: canManage(scope?.role) })
     : platform
       ? []
       : undefined
@@ -117,8 +74,7 @@ function ScopedLayout() {
       }
       contextSelector={tenantId ? <TenantSelector /> : undefined}
       bcSelector={tenant ? <BCSelector key={tenantId} /> : undefined}
-      workItems={workItems}
-      managementItems={managementItems}
+      groups={groups}
     >
       <ApiFeedback />
       <TenantAccessGate>

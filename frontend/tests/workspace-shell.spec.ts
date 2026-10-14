@@ -10,11 +10,13 @@ const user = {
   is_superuser: true,
 }
 const token = "workspace-ui-test-token"
+// 未接入租户时的全局入口，按“投放准备 → 广告投放 → 设置”分组排序。
 const navigation = [
-  "广告搭建",
-  "搭建任务",
   "素材库",
   "投放策略",
+  "广告搭建",
+  "搭建任务",
+  "自动规则",
   "账户与授权",
   "版权方连接",
 ]
@@ -301,7 +303,7 @@ test("403 user query retains the shell and login token with readable permission 
   expect(await page.evaluate(() => localStorage.getItem("access_token"))).toBe(
     token,
   )
-  await expect(page.getByRole("navigation", { name: "投放工作" })).toBeVisible()
+  await expect(page.getByRole("navigation", { name: "广告投放" })).toBeVisible()
 })
 
 test("403 list query stays inside authenticated platform management", async ({
@@ -419,7 +421,7 @@ for (const width of [900, 1023, 1024]) {
     if (width < 1024) {
       await expect(desktopSidebar).toHaveCount(0)
       await expect(
-        page.getByRole("navigation", { name: "投放工作" }),
+        page.getByRole("navigation", { name: "广告投放" }),
       ).toHaveCount(0)
       await trigger.focus()
       await page.keyboard.press("Enter")
@@ -436,7 +438,7 @@ for (const width of [900, 1023, 1024]) {
     } else {
       await expect(desktopSidebar).toBeVisible()
       await expect(
-        page.getByRole("navigation", { name: "投放工作" }),
+        page.getByRole("navigation", { name: "广告投放" }),
       ).toBeVisible()
       await trigger.focus()
       await page.keyboard.press("Enter")

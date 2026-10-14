@@ -230,7 +230,9 @@ test("执行记录显示执行结果并链接操作记录", async ({ page }) => 
   await expect(page.getByText("提交 2 个对象")).toBeVisible()
   await expect(page.getByText(/夜间暂停/)).toBeVisible()
   await expect(page.getByRole("cell", { name: "已提交" })).toBeVisible()
-  await expect(page.getByRole("link", { name: "操作记录" })).toHaveAttribute(
+  await expect(
+    page.getByRole("dialog").getByRole("link", { name: "操作记录" }),
+  ).toHaveAttribute(
     "href",
     new RegExp(`^/tenants/${TENANT}/ad-management-tasks/task-1\\?bc_id=`),
   )

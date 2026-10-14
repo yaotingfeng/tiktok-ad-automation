@@ -3,7 +3,7 @@ import { Building2, ShieldCheck } from "lucide-react"
 import type { CSSProperties, ReactNode } from "react"
 import type { UserPublic } from "@/client"
 import AppSidebar from "@/components/Sidebar/AppSidebar"
-import type { Item } from "@/components/Sidebar/Main"
+import type { NavGroup } from "@/components/Sidebar/Main"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
@@ -25,8 +25,7 @@ export interface WorkspaceShellProps {
   children: ReactNode
   user?: UserPublic | null
   context?: WorkspaceContext | null
-  workItems?: Item[]
-  managementItems?: Item[]
+  groups?: NavGroup[]
   contextSelector?: ReactNode
   bcSelector?: ReactNode
   platform?: boolean
@@ -36,8 +35,7 @@ export function WorkspaceShell({
   children,
   user,
   context,
-  workItems,
-  managementItems,
+  groups,
   contextSelector,
   bcSelector,
   platform = false,
@@ -47,11 +45,7 @@ export function WorkspaceShell({
       <a href="#workspace-main" className="skip-link">
         跳转到主要内容
       </a>
-      <AppSidebar
-        user={user}
-        workItems={workItems}
-        managementItems={managementItems}
-      />
+      <AppSidebar user={user} groups={groups} />
       <SidebarInset>
         <header className="sticky top-0 z-20 grid shrink-0 grid-cols-1 items-center gap-x-6 rounded-t-[inherit] border-b bg-background px-4 text-sm lg:px-6 xl:grid-cols-[minmax(10rem,1fr)_auto]">
           <div className="flex h-12 min-w-0 items-center gap-2">

@@ -297,7 +297,7 @@ test.describe("广告管理工作台", () => {
       new RegExp(`/tenants/${TENANT}/ad-management-tasks/${taskId}`),
     )
     await expect(
-      page.getByRole("heading", { name: "管理任务详情" }),
+      page.getByRole("heading", { name: "操作记录详情" }),
     ).toBeVisible()
     await expect(page.getByText("REFRESH_PENDING")).toBeVisible()
     await page.getByRole("button", { name: /刷新重试/ }).click()
@@ -319,7 +319,7 @@ test.describe("广告管理工作台", () => {
         0,
       )
     await page.goto(`/tenants/${TENANT}/ad-management-tasks?bc_id=${BC_A}`)
-    await expect(page.getByRole("heading", { name: "管理任务" })).toBeVisible()
+    await expect(page.getByRole("heading", { name: "操作记录" })).toBeVisible()
     await expect(page.getByText("排队中")).toBeVisible()
     await page.getByRole("link", { name: /dddddddd/ }).click()
     await expect(

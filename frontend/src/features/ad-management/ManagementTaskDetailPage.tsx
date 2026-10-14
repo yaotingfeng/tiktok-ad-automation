@@ -129,7 +129,7 @@ export function ManagementTaskDetailPage() {
     <div className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <WorkspacePageTitle>管理任务详情</WorkspacePageTitle>
+          <WorkspacePageTitle>操作记录详情</WorkspacePageTitle>
           <p className="text-sm text-muted-foreground">
             任务 {taskId} · BC：{task?.bc_id ?? search.bc_id ?? "—"}
           </p>
@@ -140,7 +140,7 @@ export function ManagementTaskDetailPage() {
           params={{ tenantId: tenantId! }}
           search={{ bc_id: task?.bc_id ?? search.bc_id }}
         >
-          返回任务列表
+          返回操作记录
         </Link>
       </div>
       {query.error && (

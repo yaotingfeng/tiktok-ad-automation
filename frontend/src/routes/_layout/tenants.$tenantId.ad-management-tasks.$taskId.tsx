@@ -8,5 +8,5 @@ export const Route = createFileRoute(
     bc_id: typeof search.bc_id === "string" ? search.bc_id : undefined,
   }),
   component: ManagementTaskDetailPage,
-  head: () => ({ meta: [{ title: "管理任务详情 · TK-ADA" }] }),
+  head: () => ({ meta: [{ title: "操作记录详情 · TK-ADA" }] }),
 })

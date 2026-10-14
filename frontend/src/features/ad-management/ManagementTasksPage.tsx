@@ -44,16 +44,16 @@ export function ManagementTasksPage() {
         tenantId={tenantId}
         canConnect={false}
         title="请先选择有效的 BC"
-        description="管理任务按当前租户与 BC 展示。"
+        description="操作记录按当前租户与 BC 展示。"
       />
     )
   return (
     <div className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <WorkspacePageTitle>管理任务</WorkspacePageTitle>
+          <WorkspacePageTitle>操作记录</WorkspacePageTitle>
           <p className="text-sm text-muted-foreground">
-            BC：{bcId} · 变更回执与核查记录
+            BC：{bcId} · 启用、暂停、预算、出价等广告修改的执行回执与核查
           </p>
         </div>
         <Button
@@ -67,7 +67,7 @@ export function ManagementTasksPage() {
       {query.error && (
         <Alert variant="destructive">
           <AlertTitle>
-            {isForbidden(query.error) ? "无权查看管理任务" : "任务读取失败"}
+            {isForbidden(query.error) ? "无权查看操作记录" : "任务读取失败"}
           </AlertTitle>
           <AlertDescription>请检查当前租户和 BC 权限后重试。</AlertDescription>
         </Alert>
@@ -118,7 +118,7 @@ export function ManagementTasksPage() {
           </table>
           {!query.isPending && !(query.data?.items ?? []).length && (
             <p className="p-8 text-center text-sm text-muted-foreground">
-              暂无管理任务
+              暂无操作记录
             </p>
           )}
         </CardContent>

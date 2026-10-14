@@ -17,6 +17,11 @@ export type Item = {
   path: string
 }
 
+export type NavGroup = {
+  label: string
+  items: Item[]
+}
+
 interface MainProps {
   label?: string
   items: Item[]
@@ -39,10 +44,10 @@ export function Main({ items, label }: MainProps) {
       <SidebarGroupContent role="navigation" aria-label={label ?? "平台入口"}>
         <SidebarMenu>
           {items.map((item) => {
+            // 列表页的详情、新建等子路由也高亮所属菜单项。
             const isActive =
               currentPath === item.path ||
-              (item.path.endsWith("/build-tasks") &&
-                currentPath.startsWith(`${item.path}/`)) ||
+              currentPath.startsWith(`${item.path}/`) ||
               (item.path.endsWith("/builds/new") &&
                 /\/build-(drafts|previews)\//.test(currentPath))
 
