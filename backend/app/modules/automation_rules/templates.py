@@ -43,7 +43,6 @@ def _definition(
         "conditions": conditions,
         "action": action,
         "mode": "NOTIFY",
-        "max_targets": 200,
         "schedule": {"frequency": frequency, "window": "CONTINUOUS"},
         "notification": {"enabled": True},
     }

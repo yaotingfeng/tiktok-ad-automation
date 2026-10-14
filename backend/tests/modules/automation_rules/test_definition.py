@@ -26,8 +26,28 @@ def base(**overrides):
 
 def test_valid_definition_defaults():
     rule = RuleDefinition.model_validate(base())
-    assert rule.max_targets == 200
     assert rule.notification.enabled is True
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"max_targets": 200},
+        {"apply_to": {"level": "adgroup", "status": "ACTIVE", "drama_names": ["x"]}},
+        {"apply_to": {"level": "adgroup", "status": "ACTIVE", "name_contains": "x"}},
+        {"apply_to": {"level": "adgroup", "status": "ACTIVE", "name_excludes": "x"}},
+    ],
+)
+def test_removed_scope_filters_and_target_limit_rejected(patch):
+    # 名称过滤用条件里的「名称」，不再有单独的范围过滤框；不再有单次执行对象上限。
+    with pytest.raises(ValidationError):
+        RuleDefinition.model_validate(base(**patch))
+
+
+def test_notify_only_rule_must_send_notification():
+    with pytest.raises(ValidationError):
+        RuleDefinition.model_validate(base(notification={"enabled": False}))
+    RuleDefinition.model_validate(base(mode="CONFIRM", notification={"enabled": False}))
 
 
 def test_material_level_lacks_day2_revenue():

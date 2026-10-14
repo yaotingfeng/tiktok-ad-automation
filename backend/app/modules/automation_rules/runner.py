@@ -165,12 +165,7 @@ def execute_run(
     run.mode = definition.mode
     rule.last_run_at = now
     context = TenantContext(rule.tenant_id, rule.updated_by, "operator")
-    total_targets = sum(hit.target_count for hit in result.hits)
-    if (
-        result.hits
-        and definition.mode == "AUTO"
-        and total_targets <= definition.max_targets
-    ):
+    if result.hits and definition.mode == "AUTO":
         # 自动执行：交给广告管理队列执行，执行完成后再发结果卡片。
         run.execution_status = "QUEUED"
         enqueue_after_commit(
@@ -183,14 +178,8 @@ def execute_run(
         session.flush()
         return run
     if result.hits and definition.mode != "NOTIFY":
-        # 确认后执行，或自动执行命中对象超过单次上限：先生成待确认批次，由人确认。
+        # 确认后执行：先生成待确认批次，由人确认。
         open_batch(session, run=run, rule=rule, now=now)
-        if definition.mode == "AUTO":
-            run.execution_summary = {
-                "reason": "max_targets_exceeded",
-                "target_count": total_targets,
-                "max_targets": definition.max_targets,
-            }
     notify = definition.notification
     stale_only = (
         not result.hits
@@ -324,12 +313,6 @@ def build_run_card(
     status = run.execution_status
     if status == "AWAITING_CONFIRMATION":
         title, template = f"【待确认】{rule.name}", "yellow"
-        if run.execution_summary.get("reason") == "max_targets_exceeded":
-            summary.append(
-                f"涉及 {run.execution_summary.get('target_count')} 个对象，"
-                f"超过单次自动执行上限 {run.execution_summary.get('max_targets')}，"
-                "已转为人工确认"
-            )
         # 下一轮运行开始时未处理的批次会失效。
         summary.append("请在规则下次运行前确认，过期后需等待新的判断结果")
         if confirmation_id is not None:

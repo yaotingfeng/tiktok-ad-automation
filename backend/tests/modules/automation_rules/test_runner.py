@@ -191,22 +191,21 @@ def test_confirm_run_opens_batch_and_expires_previous(session, sync_seed):
     assert first.notify_status == "PENDING"
 
 
-def test_auto_over_limit_becomes_confirmation(session, sync_seed):
+def test_auto_executes_all_hits_without_target_limit(session, sync_seed):
+    # 自动执行作用于选定的全部范围，命中多少就执行多少，不转人工确认。
     _seed(session, sync_seed)
     rule = make_rule(
         session,
         sync_seed,
         mode="AUTO",
         aggregation="ALL",
-        max_targets=1,
         conditions=[
             {"metric": "spend", "range": "TODAY", "operator": "GT", "values": ["1"]}
         ],
     )
     run = execute_run(session, rule=rule, slot_at=NOW, now=NOW)
-    assert run.execution_status == "AWAITING_CONFIRMATION"
-    assert run.execution_summary["reason"] == "max_targets_exceeded"
-    assert not _dispatches(session, "automation.execute")
+    assert run.execution_status == "QUEUED"
+    assert len(_dispatches(session, "automation.execute")) == 1
 
 
 def _card_text(card):
@@ -242,25 +241,6 @@ def test_confirmation_card_links_to_batch(session, sync_seed):
         f"/automation-rules?tab=confirmations&confirmation={batch.id}"
     )
     assert "下次运行前确认" in _card_text(card)
-
-
-def test_auto_over_limit_card_explains_reason(session, sync_seed):
-    from app.modules.automation_rules.runner import build_run_card
-
-    _seed(session, sync_seed)
-    rule = make_rule(
-        session,
-        sync_seed,
-        mode="AUTO",
-        aggregation="ALL",
-        max_targets=1,
-        conditions=[
-            {"metric": "spend", "range": "TODAY", "operator": "GT", "values": ["1"]}
-        ],
-    )
-    run = execute_run(session, rule=rule, slot_at=NOW, now=NOW)
-    card = build_run_card(rule, run, [], confirmation_id=None)
-    assert "超过单次自动执行上限 1" in _card_text(card)
 
 
 def test_execution_result_card(session, sync_seed):

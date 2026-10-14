@@ -61,12 +61,6 @@ def _in_scope(entity: Entity, definition: RuleDefinition) -> bool:
             return False
     elif entity.status != _STATUS[apply.status]:
         return False
-    if apply.drama_names and entity.drama not in apply.drama_names:
-        return False
-    if apply.name_contains and apply.name_contains not in entity.name:
-        return False
-    if apply.name_excludes and apply.name_excludes in entity.name:
-        return False
     return True
 
 

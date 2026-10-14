@@ -41,9 +41,6 @@ class ApplyTo(_Strict):
     status: Literal["ACTIVE", "PAUSED", "SELECTED"]
     # 指定对象:"账户ID:远端ID";素材为"账户ID:主素材ID"。
     object_ids: tuple[str, ...] = ()
-    drama_names: tuple[str, ...] = ()
-    name_contains: str | None = Field(default=None, max_length=200)
-    name_excludes: str | None = Field(default=None, max_length=200)
 
     @model_validator(mode="after")
     def check(self) -> Self:
@@ -217,7 +214,6 @@ class RuleDefinition(_Strict):
     conditions: tuple[Condition, ...] = Field(min_length=1, max_length=5)
     action: Action
     mode: Literal["AUTO", "CONFIRM", "NOTIFY"]
-    max_targets: int = Field(default=200, ge=1, le=5000)
     schedule: Schedule
     notification: NotificationSetting = NotificationSetting()
 
@@ -235,6 +231,9 @@ class RuleDefinition(_Strict):
         minimum = min_frequency_minutes(level, self.action.level)
         if FREQUENCY_MINUTES[self.schedule.frequency] < minimum:
             raise ValueError(f"run at most every {minimum} minutes")
+        # 仅发送通知的规则，作用就是发飞书通知，通知不能关闭。
+        if self.mode == "NOTIFY" and not self.notification.enabled:
+            raise ValueError("notify-only rules must send notifications")
         return self
 
 

@@ -1,4 +1,4 @@
-"""待确认批次：确认后执行（或自动执行超出单次上限）的命中先放在这里，由人确认后执行。"""
+"""待确认批次：确认后执行的命中先放在这里，由人确认后执行。"""
 
 from datetime import UTC, datetime
 from uuid import UUID
