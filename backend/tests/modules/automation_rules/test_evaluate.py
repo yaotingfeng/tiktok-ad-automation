@@ -243,10 +243,17 @@ def test_all_null_metric_is_missing_not_zero():
     assert result.hits == ()
 
 
-def test_stored_targets_capped_but_counted():
+def test_stored_targets_not_cut_by_run_limit(monkeypatch):
+    from app.modules.automation_rules import evaluate as module
+
     facts = {
         "adgroup:a:g1": {"spend": Decimal("6")},
         "adgroup:a:g2": {"spend": Decimal("6")},
     }
+    # 单次上限只决定是否转人工确认；确认执行需要完整的对象列表。
     result = evaluate(rule(aggregation="DRAMA", max_targets=1), inputs(GROUPS, facts))
+    assert len(result.hits[0].targets) == 2 and result.hits[0].target_count == 2
+    # 存储只受硬上限约束，超出时 target_count 仍是真实总数。
+    monkeypatch.setattr(module, "MAX_STORED_TARGETS", 1)
+    result = evaluate(rule(aggregation="DRAMA"), inputs(GROUPS, facts))
     assert len(result.hits[0].targets) == 1 and result.hits[0].target_count == 2

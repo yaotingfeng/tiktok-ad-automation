@@ -15,6 +15,11 @@ _RATIOS = {name: (num, den, scale) for name, num, den, scale in DERIVED_RATIOS}
 _STATUS = {"ACTIVE": "ENABLE", "PAUSED": "DISABLE"}
 
 
+# 单条命中保存的执行对象上限（与单次执行对象上限的最大值一致）。单次上限只决定
+# 自动执行是否转人工确认，不截断对象列表，否则确认后只会执行其中一部分。
+MAX_STORED_TARGETS = 5000
+
+
 @dataclass(frozen=True)
 class Target:
     key: str
@@ -35,7 +40,7 @@ class Hit:
     bc_id: str | None
     currency: str
     metrics: dict[str, str]
-    # 只保留前 max_targets 个执行对象；target_count 是真实总数。
+    # 最多保留 MAX_STORED_TARGETS 个执行对象；target_count 是真实总数。
     targets: tuple[Target, ...]
     target_count: int
 
@@ -257,7 +262,7 @@ def evaluate(definition: RuleDefinition, inputs: Inputs) -> Evaluation:
                 bc_id=first.bc_id if definition.aggregation == "EACH" else None,
                 currency=first.currency,
                 metrics={_metric_key(c): _format(v) for c, v in values},
-                targets=targets[: definition.max_targets],
+                targets=targets[:MAX_STORED_TARGETS],
                 target_count=len(targets),
             )
         )
