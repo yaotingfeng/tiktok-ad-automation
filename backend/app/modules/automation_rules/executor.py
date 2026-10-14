@@ -389,26 +389,28 @@ def _execute_bc(
     mutation = mutation_for(definition.action)
     index = target_index(targets)
     preview = prepare_preview(session, context, bc_id, selection.id, mutation)
-    if action_name.endswith("_UP"):
-        # 当日累计涨幅：以当日该对象第一次被规则提高前的值为基准。
+    field_prefix = action_name.partition("_")[0] + "_"
+    if action_name.startswith(("BUDGET_", "ROAS_")):
+        # 当日累计涨幅：任何把值调高的执行（提高或调整至）都受限，
+        # 基准是当日该字段第一次被规则调整前的值。
         excluded = []
         for item in preview.items:
             if item.execution_result != "PENDING" or item.original_value is None:
+                continue
+            final = item.final_value
+            if not isinstance(final, Decimal) or final <= item.original_value:
                 continue
             target_key = _target_key(index, item.ref, item.material_use)
             today = [
                 row
                 for row in history
                 if row.target_key == target_key
-                and row.action == action_name
+                and row.action.startswith(field_prefix)
                 and row.created_at >= day_start
             ]
-            baseline = _decimal(today[0].original_value) if today else None
-            baseline = baseline or item.original_value
-            final = item.final_value
-            if isinstance(final, Decimal) and final > baseline * (
-                Decimal(1) + Decimal(limit_pct) / 100
-            ):
+            first = _decimal(today[0].original_value) if today else None
+            baseline = first if first is not None else item.original_value
+            if final > baseline * (Decimal(1) + Decimal(limit_pct) / 100):
                 excluded.append(item.ref)
                 outcome[target_key] = "SKIPPED_DAILY_LIMIT"
                 summary["skipped_daily_limit"] += 1

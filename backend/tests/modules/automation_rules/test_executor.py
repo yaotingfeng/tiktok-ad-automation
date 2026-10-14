@@ -602,3 +602,48 @@ def test_smart_plus_material_pause_keys_ledger_by_rule_target(session, env):
     assert [(row.target_key, row.action) for row in ledger] == [
         ("material:acc-x:m1", "PAUSE")
     ]
+
+
+def test_budget_set_increase_is_capped_by_daily_limit(session, env):
+    session.add(
+        AutomationTenantSetting(tenant_id=env.tenant_id, daily_increase_limit_pct=100)
+    )
+    set_high = {
+        "type": "BUDGET",
+        "level": "adgroup",
+        "adjustment": {"mode": "SET", "value_type": "AMOUNT", "value": "10000"},
+    }
+    rule, run = _rule_run(
+        session, env, action=set_high, targets=[_target("acc-x", "bc-x")]
+    )
+    summary = execute_hits(
+        session, run=run, rule=rule, selected_keys=None, now=NOW, require_manage=True
+    )
+    # 50 → 10000 远超当日 100% 涨幅上限（基准 50，最多到 100）。
+    assert summary["skipped_daily_limit"] == 1 and summary["submitted"] == 0
+
+
+def test_daily_limit_baseline_counts_earlier_set_raise(session, env):
+    session.add(
+        AutomationTenantSetting(tenant_id=env.tenant_id, daily_increase_limit_pct=100)
+    )
+    up30 = {**BUDGET_UP, "adjustment": {**BUDGET_UP["adjustment"], "value": "30"}}
+    rule, run = _rule_run(session, env, action=up30, targets=[_target("acc-x", "bc-x")])
+    # 同一规则当日（改为提高前）已把预算从 25 调整至 50；本次 50→65 超过基准 25 的 2 倍。
+    session.add(
+        AutomationActionLedger(
+            tenant_id=env.tenant_id,
+            rule_id=rule.id,
+            run_id=run.id,
+            target_key="adgroup:acc-x:g1",
+            action="BUDGET_SET",
+            original_value="25",
+            final_value="50",
+            created_at=NOW - timedelta(hours=2),
+        )
+    )
+    session.flush()
+    summary = execute_hits(
+        session, run=run, rule=rule, selected_keys=None, now=NOW, require_manage=True
+    )
+    assert summary["skipped_daily_limit"] == 1 and summary["submitted"] == 0
