@@ -88,3 +88,28 @@ def test_picker_endpoints(client, sync_seed, other_context):
         headers=headers(other_context),
     )
     assert other.status_code in (403, 404)
+
+
+def test_object_list_pages_and_shows_status(session, sync_seed):
+    _seed(session, sync_seed)
+    first = search_objects(
+        session,
+        context=sync_seed.context,
+        level="campaign",
+        query="",
+        advertiser_ids=[],
+        limit=1,
+        offset=0,
+    )
+    second = search_objects(
+        session,
+        context=sync_seed.context,
+        level="campaign",
+        query="",
+        advertiser_ids=[],
+        limit=1,
+        offset=1,
+    )
+    # 勾选列表分页加载，不同页不重复；每行带状态供用户辨认。
+    assert len(first) == 1 and len(second) == 1 and first[0].value != second[0].value
+    assert first[0].status in {"ENABLE", "DISABLE"}

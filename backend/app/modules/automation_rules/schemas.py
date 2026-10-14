@@ -471,3 +471,4 @@ class ObjectOptionPublic(BaseModel):
     label: str
     advertiser_id: str
     kind: str
+    status: str | None

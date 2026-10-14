@@ -31,6 +31,7 @@ class ObjectOption:
     label: str
     advertiser_id: str
     kind: str
+    status: str | None
 
 
 def _accounts(session: Session, context: TenantContext) -> dict[str, AccountOption]:
@@ -66,6 +67,7 @@ def search_objects(
     query: str,
     advertiser_ids: list[str],
     limit: int,
+    offset: int = 0,
 ) -> list[ObjectOption]:
     require(session, context, "read")
     allowed = set(_accounts(session, context))
@@ -80,6 +82,8 @@ def search_objects(
                 AdMaterialReference.advertiser_id,
                 AdMaterialReference.main_material_id,
                 func.max(AdMaterialReference.name),
+                # 素材在任一广告中开启即视为开启，与判断引擎一致。
+                func.max(AdMaterialReference.operation_status),
             )
             .where(
                 AdMaterialReference.tenant_id == context.tenant_id,
@@ -98,11 +102,12 @@ def search_objects(
                 col(AdMaterialReference.advertiser_id),
                 col(AdMaterialReference.main_material_id),
             )
+            .offset(offset)
             .limit(limit)
         ).all()
         return [
-            ObjectOption(f"{adv}:{main}", name or str(main), adv, "material")
-            for adv, main, name in rows
+            ObjectOption(f"{adv}:{main}", name or str(main), adv, "material", status)
+            for adv, main, name, status in rows
         ]
     objects = session.exec(
         select(AdObject)
@@ -116,7 +121,10 @@ def search_objects(
                 col(AdObject.remote_id).ilike(pattern),
             ),
         )
-        .order_by(col(AdObject.advertiser_id), col(AdObject.name))
+        .order_by(
+            col(AdObject.advertiser_id), col(AdObject.name), col(AdObject.remote_id)
+        )
+        .offset(offset)
         .limit(limit)
     ).all()
     return [
@@ -125,6 +133,7 @@ def search_objects(
             row.name,
             row.advertiser_id,
             row.kind,
+            row.operation_status,
         )
         for row in objects
     ]
