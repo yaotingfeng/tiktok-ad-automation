@@ -401,18 +401,6 @@ export type ApplyTo = {
      * Object Ids
      */
     object_ids?: Array<string>;
-    /**
-     * Drama Names
-     */
-    drama_names?: Array<string>;
-    /**
-     * Name Contains
-     */
-    name_contains?: string | null;
-    /**
-     * Name Excludes
-     */
-    name_excludes?: string | null;
 };
 
 /**
@@ -3816,6 +3804,10 @@ export type ObjectOptionPublic = {
      * Kind
      */
     kind: string;
+    /**
+     * Status
+     */
+    status: string | null;
 };
 
 /**
@@ -5857,10 +5849,6 @@ export type RuleDefinition_Input = {
      * Mode
      */
     mode: 'AUTO' | 'CONFIRM' | 'NOTIFY';
-    /**
-     * Max Targets
-     */
-    max_targets?: number;
     schedule: Schedule;
     notification?: NotificationSetting;
 };
@@ -5884,10 +5872,6 @@ export type RuleDefinition_Output = {
      * Mode
      */
     mode: 'AUTO' | 'CONFIRM' | 'NOTIFY';
-    /**
-     * Max Targets
-     */
-    max_targets?: number;
     schedule: Schedule;
     notification?: NotificationSetting;
 };
@@ -12469,6 +12453,10 @@ export type automationRulesPickObjectsData = {
          * Limit
          */
         limit?: number;
+        /**
+         * Offset
+         */
+        offset?: number;
     };
     url: '/api/tenants/{tenant_id}/automation-rules/pickers/objects';
 };

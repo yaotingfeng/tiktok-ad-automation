@@ -89,9 +89,6 @@ type Summary = {
   unsupported_details?: { target_key: string; reason: string }[]
   failed?: number
   error?: string
-  reason?: string
-  target_count?: number
-  max_targets?: number
   failed_bcs?: { bc_id: string; reason: string }[]
   tasks?: { bc_id: string; task_id: string }[]
   conflict_details?: { target_key: string; rule_name: string; action: string }[]
@@ -115,13 +112,7 @@ function ExecutionSummary({
 }) {
   const summary = run.execution_summary as Summary
   if (run.execution_status === "AWAITING_CONFIRMATION")
-    return (
-      <p className="text-sm">
-        {summary.reason === "max_targets_exceeded"
-          ? `涉及 ${summary.target_count} 个对象，超过单次自动执行上限 ${summary.max_targets}，已转为人工确认。`
-          : "命中结果等待确认，请在「待确认」中处理。"}
-      </p>
-    )
+    return <p className="text-sm">命中结果等待确认，请在「待确认」中处理。</p>
   if (
     !["SUBMITTED", "PARTIAL", "FAILED", "SKIPPED"].includes(
       run.execution_status,

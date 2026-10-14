@@ -91,7 +91,6 @@ export function emptyDefinition(): Definition {
     ],
     action: { type: "PAUSE", level: "adgroup" },
     mode: "NOTIFY",
-    max_targets: 200,
     schedule: { frequency: "30M", window: "CONTINUOUS", periods: [] },
     notification: {
       enabled: true,
@@ -152,7 +151,53 @@ export function summarizeConditions(def: Definition, catalog: CatalogLike) {
 }
 
 export function summarizeAction(def: Definition) {
+  if (def.mode === "NOTIFY") return NOTIFY_ACTION_LABEL
   return `${ACTION_LABELS[def.action.type]} → ${LEVEL_LABELS[def.action.level]}`
+}
+
+/** 「执行操作」下拉里的仅发送通知选项；规则定义中用执行模式 NOTIFY 表示。 */
+export const NOTIFY_ACTION = "NOTIFY"
+export const NOTIFY_ACTION_LABEL = "仅发送通知"
+export type ActionChoice = ActionType | typeof NOTIFY_ACTION
+
+export function actionChoice(def: Definition): ActionChoice {
+  return def.mode === "NOTIFY" ? NOTIFY_ACTION : def.action.type
+}
+
+/** 切换执行操作：仅发送通知时通知必须开启；改广告的操作默认确认后执行。 */
+export function applyActionChoice(draft: Definition, choice: ActionChoice) {
+  if (choice === NOTIFY_ACTION) {
+    // 仅通知不改广告，动作只用于计算命中涉及的对象，固定为判断层级本身。
+    const allowed = actionLevels(
+      draft.aggregation,
+      draft.apply_to.level,
+      "PAUSE",
+    )
+    draft.mode = "NOTIFY"
+    draft.action = { type: "PAUSE", level: allowed[0] ?? draft.apply_to.level }
+    draft.notification = { ...draft.notification, enabled: true }
+    return draft
+  }
+  if (draft.mode === "NOTIFY") draft.mode = "CONFIRM"
+  const allowed = actionLevels(draft.aggregation, draft.apply_to.level, choice)
+  draft.action = {
+    type: choice,
+    level: allowed.includes(draft.action.level)
+      ? draft.action.level
+      : (allowed[0] ?? draft.action.level),
+    ...(choice === "BUDGET" || choice === "ROAS"
+      ? {
+          adjustment: {
+            mode: "INCREASE",
+            value_type: "PERCENT",
+            value: "",
+            limit: "",
+          },
+          frequency: { type: "EVERY_24H" },
+        }
+      : {}),
+  }
+  return draft
 }
 
 export function summarizeScope(def: Definition) {
@@ -247,9 +292,6 @@ export function validateDefinition(
     )
       errors.push("自定义频控需要填写时间窗口和次数")
   }
-  const max = def.max_targets ?? 200
-  if (!Number.isInteger(max) || max < 1 || max > 5000)
-    errors.push("单次执行对象上限需在 1–5000 之间")
   const schedule = def.schedule
   if (schedule.frequency === "DAILY" && blank(schedule.daily_at))
     errors.push("每天固定时刻需要选择时间")

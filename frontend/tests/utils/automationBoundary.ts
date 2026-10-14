@@ -85,9 +85,6 @@ const DEFINITION = {
     level: "adgroup",
     status: "ACTIVE",
     object_ids: [],
-    drama_names: [],
-    name_contains: null,
-    name_excludes: null,
   },
   aggregation: "DRAMA",
   conditions: [
@@ -100,7 +97,6 @@ const DEFINITION = {
     frequency: null,
   },
   mode: "NOTIFY",
-  max_targets: 200,
   schedule: {
     frequency: "30M",
     daily_at: null,
@@ -307,15 +303,26 @@ export async function automationBoundary(
         ),
       )
     }
-    if (path === `${base}/automation-rules/pickers/objects`)
-      return json([
-        {
-          value: "7600000000000000001:g1",
-          label: "组一",
-          advertiser_id: "7600000000000000001",
-          kind: "adgroup",
-        },
-      ])
+    if (path === `${base}/automation-rules/pickers/objects`) {
+      const q = url.searchParams.get("q") ?? ""
+      const offset = Number(url.searchParams.get("offset") ?? "0")
+      const limit = Number(url.searchParams.get("limit") ?? "50")
+      // 51 个对象：第一页 50 个，加载更多后出现最后一个。
+      const labels = ["组一", "组二", "组三"]
+      for (let n = 4; n <= 51; n++) labels.push(`其他组${n}`)
+      const all = labels.map((label, index) => ({
+        value: `7600000000000000001:g${index + 1}`,
+        label,
+        advertiser_id: "7600000000000000001",
+        kind: "adgroup",
+        status: index === 1 ? "DISABLE" : "ENABLE",
+      }))
+      return json(
+        all
+          .filter((item) => item.label.includes(q))
+          .slice(offset, offset + limit),
+      )
+    }
     if (path === `${base}/automation-rules/overview`)
       return json({
         actions_7d: { PAUSE: 12, ENABLE: 3, BUDGET: 5, ROAS: 0 },

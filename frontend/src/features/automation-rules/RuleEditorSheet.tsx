@@ -23,7 +23,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Textarea } from "@/components/ui/textarea"
 import { ManagementSheet } from "@/features/tenants/ManagementSheet"
 import { errorMessage } from "@/features/tenants/shared"
 import { ConditionRows } from "./ConditionRows"
@@ -32,10 +31,13 @@ import { AccountPicker, ObjectPicker } from "./Pickers"
 import { ruleKeys, settingsQuery } from "./queries"
 import {
   ACTION_LABELS,
+  type ActionChoice,
   type ActionType,
   AGGREGATION_LABELS,
   type Aggregation,
+  actionChoice,
   actionLevels,
+  applyActionChoice,
   type Definition,
   emptyDefinition,
   FREQUENCY_LABELS,
@@ -45,6 +47,8 @@ import {
   LEVELS,
   type Level,
   minFrequency,
+  NOTIFY_ACTION,
+  NOTIFY_ACTION_LABEL,
   toZonedInput,
   validateDefinition,
 } from "./ruleForm"
@@ -154,8 +158,6 @@ function toPayload(def: Definition): Definition {
     apply_to: {
       ...apply,
       object_ids: apply.status === "SELECTED" ? apply.object_ids : [],
-      name_contains: apply.name_contains?.trim() || null,
-      name_excludes: apply.name_excludes?.trim() || null,
     },
     conditions: def.conditions.map((condition) => ({
       ...condition,
@@ -216,9 +218,6 @@ export function RuleEditorSheet({
   const [accountText, setAccountText] = useState(
     (initial.definition.accounts.advertiser_ids ?? []).join("\n"),
   )
-  const [dramaText, setDramaText] = useState(
-    (initial.definition.apply_to.drama_names ?? []).join("\n"),
-  )
   const [dryRun, setDryRun] = useState<DryRunPublic | null>(null)
   const [error, setError] = useState<string | null>(null)
   const dirty =
@@ -244,11 +243,6 @@ export function RuleEditorSheet({
       apply_to: {
         ...def.apply_to,
         object_ids: lines(objectText),
-        // 短剧标题常含逗号，剧名只按行分隔。
-        drama_names: dramaText
-          .split("\n")
-          .map((item) => item.trim())
-          .filter(Boolean),
       },
     })
   const levels = actionLevels(
@@ -260,6 +254,7 @@ export function RuleEditorSheet({
     minFrequency(def.apply_to.level, def.action.level),
   )
   const adjusts = def.action.type === "BUDGET" || def.action.type === "ROAS"
+  const notifyOnly = def.mode === "NOTIFY"
   // 校验失败时在顶部列出错误，不发请求。
   const valid = () => {
     const problems = validateDefinition(payload(), catalog)
@@ -462,42 +457,6 @@ export function RuleEditorSheet({
             }}
           />
         )}
-        <div className="grid gap-3 sm:grid-cols-3">
-          <Textarea
-            rows={2}
-            aria-label="剧名"
-            placeholder="剧名（版权方-剧名），每行一个"
-            value={dramaText}
-            onChange={(e) => {
-              setDryRun(null)
-              setDramaText(e.target.value)
-            }}
-          />
-          <Input
-            aria-label="名称包含"
-            placeholder="名称包含"
-            maxLength={200}
-            value={def.apply_to.name_contains ?? ""}
-            onChange={(e) =>
-              update((draft) => {
-                draft.apply_to.name_contains = e.target.value
-                return draft
-              })
-            }
-          />
-          <Input
-            aria-label="名称不包含"
-            placeholder="名称不包含"
-            maxLength={200}
-            value={def.apply_to.name_excludes ?? ""}
-            onChange={(e) =>
-              update((draft) => {
-                draft.apply_to.name_excludes = e.target.value
-                return draft
-              })
-            }
-          />
-        </div>
       </Section>
       <Section title="判断对象">
         <RadioGroup
@@ -551,40 +510,18 @@ export function RuleEditorSheet({
       <Section title="执行操作">
         <div className="flex flex-wrap items-center gap-3">
           <Select
-            value={def.action.type}
+            value={actionChoice(def)}
             onValueChange={(value) =>
-              update((draft) => {
-                const type = value as ActionType
-                const allowed = actionLevels(
-                  draft.aggregation,
-                  draft.apply_to.level,
-                  type,
-                )
-                draft.action = {
-                  type,
-                  level: allowed.includes(draft.action.level)
-                    ? draft.action.level
-                    : (allowed[0] ?? draft.action.level),
-                  ...(type === "BUDGET" || type === "ROAS"
-                    ? {
-                        adjustment: {
-                          mode: "INCREASE",
-                          value_type: "PERCENT",
-                          value: "",
-                          limit: "",
-                        },
-                        frequency: { type: "EVERY_24H" },
-                      }
-                    : {}),
-                }
-                return draft
-              })
+              update((draft) => applyActionChoice(draft, value as ActionChoice))
             }
           >
             <SelectTrigger aria-label="操作" className="w-40">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value={NOTIFY_ACTION}>
+                {NOTIFY_ACTION_LABEL}
+              </SelectItem>
               {(Object.keys(ACTION_LABELS) as ActionType[]).map((type) => (
                 <SelectItem key={type} value={type}>
                   {ACTION_LABELS[type]}
@@ -592,7 +529,7 @@ export function RuleEditorSheet({
               ))}
             </SelectContent>
           </Select>
-          {levels.length > 0 ? (
+          {notifyOnly ? null : levels.length > 0 ? (
             <Select
               value={def.action.level}
               onValueChange={(value) =>
@@ -619,7 +556,7 @@ export function RuleEditorSheet({
             </span>
           )}
         </div>
-        {adjusts && def.action.adjustment && (
+        {!notifyOnly && adjusts && def.action.adjustment && (
           <div className="flex flex-wrap items-center gap-3">
             <Select
               value={def.action.adjustment.mode}
@@ -679,6 +616,16 @@ export function RuleEditorSheet({
                 })
               }
             />
+            <span
+              data-testid="adjust-unit"
+              className="text-sm text-muted-foreground"
+            >
+              {def.action.adjustment.value_type === "PERCENT"
+                ? "%"
+                : def.action.type === "BUDGET"
+                  ? "账户币种"
+                  : "ROAS"}
+            </span>
             {def.action.adjustment.mode !== "SET" && (
               <Input
                 type="number"
@@ -784,43 +731,27 @@ export function RuleEditorSheet({
             )}
           </div>
         )}
-        <RadioGroup
-          aria-label="执行模式"
-          className="flex flex-wrap gap-4"
-          value={def.mode}
-          onValueChange={(value) =>
-            update((draft) => {
-              draft.mode = value as Definition["mode"]
-              return draft
-            })
-          }
-        >
-          <Choice
-            value="AUTO"
-            label="自动执行"
-            disabled={!admin}
-            hint={admin ? undefined : "需要租户管理员"}
-          />
-          <Choice value="CONFIRM" label="确认后执行" />
-          <Choice value="NOTIFY" label="仅通知" />
-        </RadioGroup>
-        <div className="flex items-center gap-2 text-sm">
-          <Label htmlFor="max-targets">单次执行对象上限</Label>
-          <Input
-            id="max-targets"
-            type="number"
-            min={1}
-            max={5000}
-            className="w-28"
-            value={def.max_targets ?? 200}
-            onChange={(e) =>
+        {!notifyOnly && (
+          <RadioGroup
+            aria-label="执行方式"
+            className="flex flex-wrap gap-4"
+            value={def.mode}
+            onValueChange={(value) =>
               update((draft) => {
-                draft.max_targets = Number(e.target.value)
+                draft.mode = value as Definition["mode"]
                 return draft
               })
             }
-          />
-        </div>
+          >
+            <Choice
+              value="AUTO"
+              label="自动执行"
+              disabled={!admin}
+              hint={admin ? undefined : "需要租户管理员"}
+            />
+            <Choice value="CONFIRM" label="确认后执行" />
+          </RadioGroup>
+        )}
       </Section>
       <Section title="运行排期">
         <div className="flex flex-wrap items-center gap-3">
@@ -1028,131 +959,149 @@ export function RuleEditorSheet({
         )}
       </Section>
       <Section title="飞书通知">
-        <div className="flex flex-wrap gap-6">
-          <div className="flex items-center gap-2">
-            <Checkbox
-              id="notify-enabled"
-              checked={def.notification?.enabled ?? true}
-              onCheckedChange={(checked) =>
-                update((draft) => {
-                  draft.notification = {
-                    ...draft.notification,
-                    enabled: !!checked,
-                  }
-                  return draft
-                })
-              }
-            />
-            <Label htmlFor="notify-enabled">命中时发送飞书卡片</Label>
-          </div>
-          <div className="flex items-center gap-2">
-            <Checkbox
-              id="notify-empty"
-              checked={def.notification?.notify_without_hits ?? false}
-              onCheckedChange={(checked) =>
-                update((draft) => {
-                  draft.notification = {
-                    ...draft.notification,
-                    notify_without_hits: !!checked,
-                  }
-                  return draft
-                })
-              }
-            />
-            <Label htmlFor="notify-empty">没有命中时也发送</Label>
-          </div>
-        </div>
-        <RadioGroup
-          aria-label="发送时机"
-          className="flex flex-wrap gap-4"
-          value={def.notification?.timing ?? "EVERY_RUN"}
-          onValueChange={(value) =>
-            update((draft) => {
-              const summary = value === "SUMMARY"
-              draft.notification = {
-                ...draft.notification,
-                timing: summary ? "SUMMARY" : "EVERY_RUN",
-                summary_times: summary ? ["09:00"] : [],
-              }
-              return draft
-            })
-          }
-        >
-          <Choice value="EVERY_RUN" label="每次运行都发" />
-          <Choice
-            value="SUMMARY"
-            label="固定时间汇总"
-            hint="待确认批次仍立即发送"
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id="notify-enabled"
+            checked={notifyOnly || (def.notification?.enabled ?? true)}
+            disabled={notifyOnly}
+            onCheckedChange={(checked) =>
+              update((draft) => {
+                draft.notification = {
+                  ...draft.notification,
+                  enabled: !!checked,
+                }
+                return draft
+              })
+            }
           />
-        </RadioGroup>
-        {def.notification?.timing === "SUMMARY" && (
-          <div className="flex flex-wrap items-center gap-2">
-            {(def.notification.summary_times ?? []).map((moment, index) => (
-              <div key={index} className="flex items-center gap-1">
-                <Input
-                  type="time"
-                  aria-label={`汇总时刻 ${index + 1}`}
-                  className="w-32"
-                  value={String(moment).slice(0, 5)}
-                  onChange={(e) =>
-                    update((draft) => {
-                      const times = [
-                        ...(draft.notification?.summary_times ?? []),
-                      ]
-                      times[index] = e.target.value
-                      draft.notification = {
-                        ...draft.notification,
-                        summary_times: times,
-                      }
-                      return draft
-                    })
-                  }
-                />
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  aria-label={`删除汇总时刻 ${index + 1}`}
-                  disabled={(def.notification?.summary_times ?? []).length <= 1}
-                  onClick={() =>
-                    update((draft) => {
-                      draft.notification = {
-                        ...draft.notification,
-                        summary_times: (
-                          draft.notification?.summary_times ?? []
-                        ).filter((_, i) => i !== index),
-                      }
-                      return draft
-                    })
-                  }
-                >
-                  ×
-                </Button>
-              </div>
-            ))}
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={(def.notification.summary_times ?? []).length >= 6}
-              onClick={() =>
+          <Label htmlFor="notify-enabled">并发送通知</Label>
+          {notifyOnly && (
+            <span className="text-xs text-muted-foreground">
+              （仅发送通知的规则必须发送）
+            </span>
+          )}
+        </div>
+        {!notifyOnly &&
+          def.mode === "CONFIRM" &&
+          def.notification?.enabled === false && (
+            <p className="text-sm text-muted-foreground">
+              不发送通知时，请到「待确认」页处理；批次在规则下次运行时失效。
+            </p>
+          )}
+        {(notifyOnly || (def.notification?.enabled ?? true)) && (
+          <>
+            <RadioGroup
+              aria-label="通知安排"
+              className="flex flex-wrap gap-4"
+              value={def.notification?.timing ?? "EVERY_RUN"}
+              onValueChange={(value) =>
                 update((draft) => {
+                  const summary = value === "SUMMARY"
                   draft.notification = {
                     ...draft.notification,
-                    summary_times: [
-                      ...(draft.notification?.summary_times ?? []),
-                      "18:00",
-                    ],
+                    timing: summary ? "SUMMARY" : "EVERY_RUN",
+                    summary_times: summary ? ["09:00"] : [],
                   }
                   return draft
                 })
               }
             >
-              添加汇总时刻
-            </Button>
-            <span className="text-sm text-muted-foreground">
-              按租户运行时区，最多 6 个
-            </span>
-          </div>
+              <Choice value="EVERY_RUN" label="每次通知" />
+              <Choice
+                value="SUMMARY"
+                label="在特定时间统一发送通知"
+                hint="待确认通知仍立即发送"
+              />
+            </RadioGroup>
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="notify-empty"
+                checked={def.notification?.notify_without_hits ?? false}
+                onCheckedChange={(checked) =>
+                  update((draft) => {
+                    draft.notification = {
+                      ...draft.notification,
+                      notify_without_hits: !!checked,
+                    }
+                    return draft
+                  })
+                }
+              />
+              <Label htmlFor="notify-empty">不满足条件时也发送通知</Label>
+            </div>
+          </>
         )}
+        {(notifyOnly || (def.notification?.enabled ?? true)) &&
+          def.notification?.timing === "SUMMARY" && (
+            <div className="flex flex-wrap items-center gap-2">
+              {(def.notification.summary_times ?? []).map((moment, index) => (
+                <div key={index} className="flex items-center gap-1">
+                  <Input
+                    type="time"
+                    aria-label={`汇总时刻 ${index + 1}`}
+                    className="w-32"
+                    value={String(moment).slice(0, 5)}
+                    onChange={(e) =>
+                      update((draft) => {
+                        const times = [
+                          ...(draft.notification?.summary_times ?? []),
+                        ]
+                        times[index] = e.target.value
+                        draft.notification = {
+                          ...draft.notification,
+                          summary_times: times,
+                        }
+                        return draft
+                      })
+                    }
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-label={`删除汇总时刻 ${index + 1}`}
+                    disabled={
+                      (def.notification?.summary_times ?? []).length <= 1
+                    }
+                    onClick={() =>
+                      update((draft) => {
+                        draft.notification = {
+                          ...draft.notification,
+                          summary_times: (
+                            draft.notification?.summary_times ?? []
+                          ).filter((_, i) => i !== index),
+                        }
+                        return draft
+                      })
+                    }
+                  >
+                    ×
+                  </Button>
+                </div>
+              ))}
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={(def.notification.summary_times ?? []).length >= 6}
+                onClick={() =>
+                  update((draft) => {
+                    draft.notification = {
+                      ...draft.notification,
+                      summary_times: [
+                        ...(draft.notification?.summary_times ?? []),
+                        "18:00",
+                      ],
+                    }
+                    return draft
+                  })
+                }
+              >
+                添加汇总时刻
+              </Button>
+              <span className="text-sm text-muted-foreground">
+                按租户运行时区，最多 6 个
+              </span>
+            </div>
+          )}
         {settings.data && !settings.data.feishu_enabled && (
           <p className="text-sm text-muted-foreground">
             租户尚未启用飞书通知，

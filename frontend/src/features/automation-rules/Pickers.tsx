@@ -1,10 +1,19 @@
-import { useQuery } from "@tanstack/react-query"
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query"
 import { X } from "lucide-react"
 import { useEffect, useState } from "react"
 import { AutomationRulesService } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { ruleKeys } from "./queries"
 import type { Level } from "./ruleForm"
@@ -125,7 +134,7 @@ function SearchPicker({
       </div>
       <div>
         <Button
-          variant="ghost"
+          variant="outline"
           size="sm"
           onClick={() => setPasting((value) => !value)}
         >
@@ -187,6 +196,13 @@ export function AccountPicker({
   )
 }
 
+const PAGE_SIZE = 50
+const STATUS_LABELS: Record<string, string> = {
+  ENABLE: "投放中",
+  DISABLE: "已暂停",
+}
+
+/** 指定对象：直接列出范围内这一层的对象，打勾选中；搜索只用于缩小列表。 */
 export function ObjectPicker({
   tenantId,
   level,
@@ -202,7 +218,7 @@ export function ObjectPicker({
 }) {
   const [query, setQuery] = useState("")
   const q = useDebounced(query.trim())
-  const results = useQuery({
+  const results = useInfiniteQuery({
     queryKey: [
       ...ruleKeys(tenantId),
       "picker",
@@ -211,32 +227,127 @@ export function ObjectPicker({
       q,
       advertiserIds,
     ],
-    enabled: !!q,
-    queryFn: async ({ signal }) =>
+    initialPageParam: 0,
+    queryFn: async ({ pageParam, signal }) =>
       (
         await AutomationRulesService.pickObjects({
           path: { tenant_id: tenantId },
-          query: { level, q, advertiser_ids: advertiserIds, limit: 20 },
+          query: {
+            level,
+            q,
+            advertiser_ids: advertiserIds,
+            limit: PAGE_SIZE,
+            offset: pageParam,
+          },
           signal,
         })
       ).data!,
+    getNextPageParam: (last, pages) =>
+      last.length === PAGE_SIZE ? pages.length * PAGE_SIZE : undefined,
   })
+  const rows = results.data?.pages.flat() ?? []
+  const selected = new Set(splitValues(text))
+  const setSelected = (next: Set<string>) => onTextChange([...next].join("\n"))
+  const toggle = (value: string, checked: boolean) => {
+    const next = new Set(selected)
+    if (checked) next.add(value)
+    else next.delete(value)
+    setSelected(next)
+  }
+  const allShown =
+    rows.length > 0 && rows.every((row) => selected.has(row.value))
   return (
-    <SearchPicker
-      label="搜索对象"
-      pasteLabel="批量粘贴对象"
-      textLabel="指定对象"
-      placeholder="按名称或 ID 搜索当前层级的对象"
-      text={text}
-      onTextChange={onTextChange}
-      query={query}
-      onQueryChange={setQuery}
-      loading={results.isFetching}
-      options={(results.data ?? []).map((item) => ({
-        value: item.value,
-        label: item.label,
-        detail: `账户 ${item.advertiser_id} · ${item.value}`,
-      }))}
-    />
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          type="search"
+          aria-label="搜索对象"
+          placeholder="按名称或 ID 筛选列表"
+          className="w-64"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <span className="text-sm text-muted-foreground">
+          已选 {selected.size} 个
+        </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={selected.size === 0}
+          onClick={() => setSelected(new Set())}
+        >
+          清空
+        </Button>
+      </div>
+      <div className="max-h-80 overflow-y-auto rounded-md border">
+        <Table aria-label="对象列表">
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-10">
+                <Checkbox
+                  aria-label="全选当前结果"
+                  checked={allShown}
+                  disabled={rows.length === 0}
+                  onCheckedChange={(checked) => {
+                    const next = new Set(selected)
+                    for (const row of rows) {
+                      if (checked) next.add(row.value)
+                      else next.delete(row.value)
+                    }
+                    setSelected(next)
+                  }}
+                />
+              </TableHead>
+              <TableHead>名称</TableHead>
+              <TableHead>账户</TableHead>
+              <TableHead>状态</TableHead>
+              <TableHead>ID</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((row) => (
+              <TableRow key={row.value}>
+                <TableCell>
+                  <Checkbox
+                    aria-label={`选择 ${row.label}`}
+                    checked={selected.has(row.value)}
+                    onCheckedChange={(checked) => toggle(row.value, !!checked)}
+                  />
+                </TableCell>
+                <TableCell className="max-w-64 truncate" title={row.label}>
+                  {row.label}
+                </TableCell>
+                <TableCell>{row.advertiser_id}</TableCell>
+                <TableCell>
+                  {STATUS_LABELS[row.status ?? ""] ?? row.status ?? "—"}
+                </TableCell>
+                <TableCell className="text-muted-foreground">
+                  {row.value.split(":").slice(1).join(":")}
+                </TableCell>
+              </TableRow>
+            ))}
+            {!results.isPending && rows.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={5} className="text-muted-foreground">
+                  没有找到对象
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </div>
+      {results.hasNextPage && (
+        <div>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={results.isFetchingNextPage}
+            onClick={() => void results.fetchNextPage()}
+          >
+            加载更多
+          </Button>
+        </div>
+      )}
+    </div>
   )
 }

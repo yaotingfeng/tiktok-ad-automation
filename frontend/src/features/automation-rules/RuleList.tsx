@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
 import { Plus } from "lucide-react"
-import { useMemo, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import {
   AutomationRulesService,
   type CatalogPublic,
@@ -218,13 +218,16 @@ export function RuleList({
     (rule) =>
       rule.name.includes(search.trim()) && matchesFilters(rule, filters),
   )
-  const toggleSelected = (id: string, checked: boolean) =>
-    setSelected((current) => {
-      const next = new Set(current)
-      if (checked) next.add(id)
-      else next.delete(id)
-      return next
-    })
+  const toggleSelected = useCallback(
+    (id: string, checked: boolean) =>
+      setSelected((current) => {
+        const next = new Set(current)
+        if (checked) next.add(id)
+        else next.delete(id)
+        return next
+      }),
+    [],
+  )
   const columns = useMemo<ColumnDef<RulePublic>[]>(() => {
     const info = catalog.data as CatalogPublic | undefined
     return [

@@ -67,6 +67,7 @@ test("条件与操作摘要", () => {
   const def = {
     ...emptyDefinition(),
     aggregation: "DRAMA" as const,
+    mode: "CONFIRM" as const,
     conditions: [
       {
         metric: "spend",
@@ -86,6 +87,7 @@ test("条件与操作摘要", () => {
     "每部剧合计 · 今天消耗 > 100 且 近 3 天广告收益 ROAS 介于 0.5 ~ 0.8",
   )
   expect(summarizeAction(def)).toBe("暂停 → 广告组")
+  expect(summarizeAction({ ...def, mode: "NOTIFY" })).toBe("仅发送通知")
 })
 
 test("表单校验列出中文错误", () => {
@@ -118,13 +120,11 @@ test("表单校验列出中文错误", () => {
         values: ["2", "1"],
       },
     ],
-    max_targets: 0,
   }
   expect(validateDefinition(bad, catalog)).toEqual([
     "按 BC 选择时至少选择一个 BC",
     "条件 1 需要填写数值",
     "条件 2 的下限必须小于上限",
-    "单次执行对象上限需在 1–5000 之间",
   ])
   const budget = {
     ...ok,

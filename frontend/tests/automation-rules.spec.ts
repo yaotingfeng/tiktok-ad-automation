@@ -1,5 +1,11 @@
+import type { Page } from "@playwright/test"
 import { expect, test } from "@playwright/test"
 import { automationBoundary, TENANT } from "./utils/automationBoundary"
+
+async function chooseAction(page: Page, name: string) {
+  await page.getByRole("combobox", { name: "操作" }).click()
+  await page.getByRole("option", { name, exact: true }).click()
+}
 
 test("规则列表显示摘要与模式", async ({ page }) => {
   await automationBoundary(page)
@@ -129,17 +135,12 @@ test("非管理员没有通知设置入口", async ({ page }) => {
   await expect(page.getByRole("link", { name: "通知设置" })).toHaveCount(0)
 })
 
-test("剧名按行填写，标题里的逗号不拆分；按月日期可以连续输入", async ({
-  page,
-}) => {
+test("按月日期可以连续输入", async ({ page }) => {
   const created: unknown[] = []
   await automationBoundary(page, { created })
   await page.goto(`/tenants/${TENANT}/automation-rules`)
   await page.getByRole("button", { name: "新建规则" }).click()
   await page.getByRole("spinbutton", { name: "条件 1 数值" }).fill("10")
-  await page
-    .getByRole("textbox", { name: "剧名" })
-    .fill("嘉书-闪婚后，傅先生马甲藏不住了\n嘉书-总裁归来")
   await page.getByRole("radio", { name: "自定义时段" }).click()
   await page.getByRole("combobox", { name: "时间段 1 频次" }).click()
   await page.getByRole("option", { name: "按月" }).click()
@@ -150,9 +151,6 @@ test("剧名按行填写，标题里的逗号不拆分；按月日期可以连�
   await expect.poll(() => created.length).toBe(1)
   expect(created[0]).toMatchObject({
     definition: {
-      apply_to: {
-        drama_names: ["嘉书-闪婚后，傅先生马甲藏不住了", "嘉书-总裁归来"],
-      },
       schedule: { periods: [{ date_type: "MONTH", days: [1, 15] }] },
     },
   })
@@ -164,6 +162,7 @@ test("操作员不能选自动执行，可以选确认后执行", async ({ page 
   await page.goto(`/tenants/${TENANT}/automation-rules`)
   await page.getByRole("button", { name: "新建规则" }).click()
   await page.getByRole("spinbutton", { name: "条件 1 数值" }).fill("10")
+  await chooseAction(page, "暂停")
   await expect(page.getByRole("radio", { name: "自动执行" })).toBeDisabled()
   await expect(page.getByText("需要租户管理员")).toBeVisible()
   await page.getByRole("radio", { name: "确认后执行" }).click()
@@ -176,6 +175,7 @@ test("管理员可以选自动执行", async ({ page }) => {
   await automationBoundary(page)
   await page.goto(`/tenants/${TENANT}/automation-rules`)
   await page.getByRole("button", { name: "新建规则" }).click()
+  await chooseAction(page, "暂停")
   await expect(page.getByRole("radio", { name: "自动执行" })).toBeEnabled()
 })
 
@@ -291,7 +291,7 @@ test("飞书通知可选固定时间汇总发送", async ({ page }) => {
   await page.goto(`/tenants/${TENANT}/automation-rules`)
   await page.getByRole("button", { name: "新建规则" }).click()
   await page.getByRole("spinbutton", { name: "条件 1 数值" }).fill("10")
-  await page.getByRole("radio", { name: "固定时间汇总" }).click()
+  await page.getByRole("radio", { name: "在特定时间统一发送通知" }).click()
   await page.getByLabel("汇总时刻 1", { exact: true }).fill("09:00")
   await page.getByRole("button", { name: "添加汇总时刻" }).click()
   await page.getByLabel("汇总时刻 2", { exact: true }).fill("18:30")
@@ -348,7 +348,7 @@ test("执行记录按结果、账户与剧名筛选", async ({ page }) => {
   expect(last.get("since")).toBe("2026-10-13")
 })
 
-test("搜索选择账户与对象，也可批量粘贴", async ({ page }) => {
+test("搜索选择账户，在列表中勾选指定对象", async ({ page }) => {
   const created: unknown[] = []
   await automationBoundary(page, { created })
   await page.goto(`/tenants/${TENANT}/automation-rules`)
@@ -357,16 +357,21 @@ test("搜索选择账户与对象，也可批量粘贴", async ({ page }) => {
   await page.getByRole("radio", { name: "指定账户" }).click()
   await page.getByRole("searchbox", { name: "搜索账户" }).fill("美国")
   await page.getByRole("option", { name: /美国一号户/ }).click()
-  await expect(
-    page.getByRole("button", { name: "移除 7600000000000000001" }),
-  ).toBeVisible()
   await page.getByRole("button", { name: "批量粘贴账户 ID" }).click()
   await page
     .getByRole("textbox", { name: "账户 ID" })
     .fill("7600000000000000001\n7600000000000000009")
   await page.getByRole("radio", { name: "指定对象" }).click()
-  await page.getByRole("searchbox", { name: "搜索对象" }).fill("组")
-  await page.getByRole("option", { name: /组一/ }).click()
+  // 选「指定对象」后直接列出对象，不需要先搜索；每行显示名称、账户、状态与 ID。
+  const list = page.getByRole("table", { name: "对象列表" })
+  const row = list.getByRole("row", { name: /组一/ })
+  await expect(row).toContainText("7600000000000000001")
+  await expect(row).toContainText("投放中")
+  await row.getByRole("checkbox").click()
+  await expect(page.getByText("已选 1 个")).toBeVisible()
+  await page.getByRole("searchbox", { name: "搜索对象" }).fill("组二")
+  await expect(list.getByRole("row", { name: /组一/ })).toHaveCount(0)
+  await expect(page.getByText("已选 1 个")).toBeVisible()
   await page.getByRole("button", { name: "保存" }).click()
   await expect.poll(() => created.length).toBe(1)
   expect(created[0]).toMatchObject({
@@ -381,6 +386,111 @@ test("搜索选择账户与对象，也可批量粘贴", async ({ page }) => {
       },
     },
   })
+})
+
+test("对象列表可全选当前结果并加载更多", async ({ page }) => {
+  const created: unknown[] = []
+  await automationBoundary(page, { created })
+  await page.goto(`/tenants/${TENANT}/automation-rules`)
+  await page.getByRole("button", { name: "新建规则" }).click()
+  await page.getByRole("spinbutton", { name: "条件 1 数值" }).fill("10")
+  await page.getByRole("radio", { name: "指定对象" }).click()
+  await page.getByRole("button", { name: "加载更多" }).click()
+  await expect(
+    page.getByRole("table", { name: "对象列表" }).getByRole("row", {
+      name: /其他组51/,
+    }),
+  ).toBeVisible()
+  await page.getByRole("checkbox", { name: "全选当前结果" }).click()
+  await expect(page.getByText("已选 51 个")).toBeVisible()
+  await page.getByRole("button", { name: "清空" }).click()
+  await expect(page.getByText("已选 0 个")).toBeVisible()
+})
+
+test("应用范围没有剧名与名称过滤框，也没有单次执行对象上限", async ({
+  page,
+}) => {
+  await automationBoundary(page)
+  await page.goto(`/tenants/${TENANT}/automation-rules`)
+  await page.getByRole("button", { name: "新建规则" }).click()
+  await expect(page.getByRole("textbox", { name: "剧名" })).toHaveCount(0)
+  await expect(page.getByRole("textbox", { name: "名称包含" })).toHaveCount(0)
+  await expect(page.getByRole("textbox", { name: "名称不包含" })).toHaveCount(0)
+  await expect(page.getByText("单次执行对象上限")).toHaveCount(0)
+})
+
+test("仅发送通知：没有执行层级与执行方式，通知固定开启", async ({ page }) => {
+  const created: unknown[] = []
+  await automationBoundary(page, { created })
+  await page.goto(`/tenants/${TENANT}/automation-rules`)
+  await page.getByRole("button", { name: "新建规则" }).click()
+  await page.getByRole("spinbutton", { name: "条件 1 数值" }).fill("10")
+  await expect(page.getByRole("combobox", { name: "操作" })).toHaveText(
+    "仅发送通知",
+  )
+  await expect(page.getByRole("combobox", { name: "执行层级" })).toHaveCount(0)
+  await expect(page.getByRole("radiogroup", { name: "执行方式" })).toHaveCount(
+    0,
+  )
+  const notify = page.getByRole("checkbox", { name: "并发送通知" })
+  await expect(notify).toBeChecked()
+  await expect(notify).toBeDisabled()
+  await page.getByRole("button", { name: "保存" }).click()
+  await expect.poll(() => created.length).toBe(1)
+  expect(created[0]).toMatchObject({
+    definition: { mode: "NOTIFY", notification: { enabled: true } },
+  })
+})
+
+test("改广告的规则可以关闭通知；确认后执行关闭通知时提示去待确认页", async ({
+  page,
+}) => {
+  const created: unknown[] = []
+  await automationBoundary(page, { created })
+  await page.goto(`/tenants/${TENANT}/automation-rules`)
+  await page.getByRole("button", { name: "新建规则" }).click()
+  await page.getByRole("spinbutton", { name: "条件 1 数值" }).fill("10")
+  await chooseAction(page, "暂停")
+  await expect(page.getByRole("radio", { name: "确认后执行" })).toBeChecked()
+  const notify = page.getByRole("checkbox", { name: "并发送通知" })
+  await notify.click()
+  await expect(page.getByText(/请到「待确认」页处理/)).toBeVisible()
+  await expect(page.getByRole("radiogroup", { name: "通知安排" })).toHaveCount(
+    0,
+  )
+  await page.getByRole("button", { name: "保存" }).click()
+  await expect.poll(() => created.length).toBe(1)
+  expect(created[0]).toMatchObject({
+    definition: {
+      mode: "CONFIRM",
+      action: { type: "PAUSE" },
+      notification: { enabled: false },
+    },
+  })
+})
+
+test("飞书通知文案与 TikTok 一致", async ({ page }) => {
+  await automationBoundary(page)
+  await page.goto(`/tenants/${TENANT}/automation-rules`)
+  await page.getByRole("button", { name: "新建规则" }).click()
+  await expect(page.getByRole("radio", { name: "每次通知" })).toBeChecked()
+  await expect(
+    page.getByRole("radio", { name: "在特定时间统一发送通知" }),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("checkbox", { name: "不满足条件时也发送通知" }),
+  ).toBeVisible()
+})
+
+test("调整数值显示单位", async ({ page }) => {
+  await automationBoundary(page)
+  await page.goto(`/tenants/${TENANT}/automation-rules`)
+  await page.getByRole("button", { name: "新建规则" }).click()
+  await chooseAction(page, "调整预算")
+  await expect(page.getByTestId("adjust-unit")).toHaveText("%")
+  await page.getByRole("combobox", { name: "调整单位" }).click()
+  await page.getByRole("option", { name: "金额" }).click()
+  await expect(page.getByTestId("adjust-unit")).toHaveText("账户币种")
 })
 
 test.describe("浏览器在纽约时区", () => {
