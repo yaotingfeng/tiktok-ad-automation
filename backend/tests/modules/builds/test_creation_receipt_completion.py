@@ -279,11 +279,18 @@ def test_historical_receipt_projection_keeps_180_unit_queries_bounded(
             dialect=connection.dialect, compile_kwargs={"literal_binds": True}
         )
         statements.append((str(window), {}))
+        # 用读取的数据块数约束查询规模：与机器负载无关，不像耗时那样在并行检查中波动。
+        # 实测约 13.8 万块和 8.5 千块，预算留约 3 倍余量，仍能发现退化为全量扫描。
+        budgets = (400_000, 50_000)
         for index, (statement, params) in enumerate(statements):
             plan = connection.exec_driver_sql(
                 "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + statement, params
             ).scalar_one()[0]
+            blocks = (
+                plan["Plan"]["Shared Hit Blocks"] + plan["Plan"]["Shared Read Blocks"]
+            )
             record_property(
                 f"receipt_projection_query_{index}_ms", plan["Execution Time"]
             )
-            assert plan["Execution Time"] < 2000, plan
+            record_property(f"receipt_projection_query_{index}_blocks", blocks)
+            assert blocks < budgets[index], plan
