@@ -1,5 +1,6 @@
 """报表后台入口：冻结授权、分档规划、持久派发与有限租约恢复。"""
 
+import logging
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -41,6 +42,8 @@ from app.modules.reporting.store_models import (
     ReportBalanceRun,
     ReportSyncJob,
 )
+
+logger = logging.getLogger(__name__)
 
 register_dispatch_task("reporting.job_step", "ads-reporting")
 register_dispatch_task("reporting.plan_due", "control")
@@ -195,8 +198,28 @@ def plan_due_runs(*, database_engine, redis_client, now=None):
         except SoftTimeLimitExceeded:
             # 已提交计划和派发不随后续慢请求回滚，下一轮从未完成计划继续。
             break
+        except Exception:
+            # 单个 BC 的意外错误（如数据约束失败）只推迟该 BC 并记录原因；
+            # 否则它会回滚、到期时间不前进，每轮都排在最前面拖垮所有租户。
+            logger.exception("report plan failed: tenant=%s bc=%s", *key)
+            _defer_failed_plan(database_engine, key, now)
         dispatched += _dispatch_pending(database_engine, now)
     return dispatched
+
+
+def _defer_failed_plan(
+    database_engine: Any, key: tuple[UUID, str], now: datetime
+) -> None:
+    with Session(database_engine) as session, session.begin():
+        plan = session.exec(
+            select(AdSyncBc)
+            .where(AdSyncBc.tenant_id == key[0], AdSyncBc.bc_id == key[1])
+            .with_for_update(skip_locked=True)
+        ).one_or_none()
+        if plan is None:
+            return
+        plan.disabled_reason = "plan_failed"
+        _defer_plan(plan, now + timedelta(minutes=5))
 
 
 def _defer_plan(plan, retry_at):

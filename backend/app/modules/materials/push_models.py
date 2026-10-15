@@ -27,10 +27,9 @@ class MaterialPushBatch(SQLModel, table=True):
         ForeignKeyConstraint(
             ["tenant_id", "bc_id"], ["tenant_bc.tenant_id", "tenant_bc.bc_id"]
         ),
-        ForeignKeyConstraint(
-            ["tenant_id", "actor_id"],
-            ["tenant_membership.tenant_id", "tenant_membership.user_id"],
-        ),
+        # 平台管理员可无 tenant_membership 代管租户；操作人只关联用户，
+        # 权限在每次执行时由 require_tenant 重新校验。
+        ForeignKeyConstraint(["actor_id"], ["user.id"]),
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     tenant_id: UUID

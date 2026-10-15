@@ -133,3 +133,16 @@ def test_membership_composite_primary_key_is_unique(session, context):
             )
         )
         session.flush()
+
+
+def test_actor_columns_reference_users_not_memberships(session):
+    """平台管理员无需成员关系即可代管租户；操作人列只外键到用户，权限由 require_tenant 每次重算。"""
+    from sqlalchemy import text
+
+    referencing = session.exec(
+        text(
+            "SELECT conrelid::regclass::text FROM pg_constraint "
+            "WHERE contype = 'f' AND confrelid = 'tenant_membership'::regclass"
+        )
+    ).all()
+    assert referencing == []

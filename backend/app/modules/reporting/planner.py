@@ -27,6 +27,7 @@ from app.modules.reporting.store_models import (
     AdSyncBc,
     ReportSyncState,
 )
+from app.modules.tenants.permissions import require_tenant
 
 HOT_INTERVAL = timedelta(minutes=30)
 MATERIAL_INTERVAL = timedelta(minutes=60)
@@ -45,9 +46,15 @@ def _next_daily(now: datetime) -> datetime:
     return target if target > now else target + timedelta(days=1)
 
 
-def _actor(session, tenant_id: UUID, bc_id: str, connection_id: UUID) -> UUID | None:
-    """后台身份：该 BC 最近一次完成账户发现的操作者。"""
-    run = session.exec(
+def _actor(
+    session: Session, tenant_id: UUID, bc_id: str, connection_id: UUID
+) -> UUID | None:
+    """后台身份：该 BC 最近一次完成账户发现、且当前仍有租户权限的操作者。
+
+    平台管理员无需成员关系即可代租户发现账户，可直接作为后台身份；已被移出
+    租户或停用的成员跳过，回退到更早一次仍有权限者的发现记录。
+    """
+    runs = session.exec(
         select(DiscoveryRun)
         .where(
             DiscoveryRun.tenant_id == tenant_id,
@@ -63,8 +70,21 @@ def _actor(session, tenant_id: UUID, bc_id: str, connection_id: UUID) -> UUID | 
             col(DiscoveryRun.completed_at).desc().nulls_last(),
             col(DiscoveryRun.created_at).desc(),
         )
-    ).first()
-    return run.actor_id if run else None
+    ).all()
+    checked: set[UUID] = set()
+    for run in runs:
+        if run.actor_id in checked:
+            continue
+        checked.add(run.actor_id)
+        try:
+            require_tenant(
+                session, actor_id=run.actor_id, tenant_id=tenant_id, action="read"
+            )
+        except DomainError:
+            continue
+        actor: UUID = run.actor_id
+        return actor
+    return None
 
 
 def ensure_bc_plans(

@@ -146,9 +146,12 @@ def test_client_index_is_unique_and_scope_rejects_foreign_references(
             )
             session.flush()
         assert error.value.orig.sqlstate in {"23503", "23514"}
-    with pytest.raises(IntegrityError), session.begin_nested():
-        batch.actor_id = other_context.actor_id
+    # 操作人只外键到用户（平台管理员可无成员关系代管租户），不存在的用户仍被拒绝；
+    # 租户权限由 require_tenant 在执行时校验，不靠数据库成员外键。
+    with pytest.raises(IntegrityError) as error, session.begin_nested():
+        batch.actor_id = uuid4()
         session.flush()
+    assert error.value.orig.diag.constraint_name == "ingest_session_actor_id_fkey"
     obj = original(session, context, files[0])
     for cls, values in (
         (ObjectCleanup, {"reason": "test"}),

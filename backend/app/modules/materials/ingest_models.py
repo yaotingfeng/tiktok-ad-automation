@@ -77,10 +77,9 @@ class IngestSession(SQLModel, table=True):
     __table_args__ = (
         route_constraint("ingest_session", "frozen_route"),
         bc_reference(),
-        ForeignKeyConstraint(
-            ["tenant_id", "actor_id"],
-            ["tenant_membership.tenant_id", "tenant_membership.user_id"],
-        ),
+        # 平台管理员可无 tenant_membership 代管租户；操作人只关联用户，
+        # 权限在每次执行时由 require_tenant 重新校验。
+        ForeignKeyConstraint(["actor_id"], ["user.id"]),
         UniqueConstraint("tenant_id", "bc_id", "id", name="uq_ingest_session_scope"),
         UniqueConstraint("tenant_id", "request_id", name="uq_ingest_session_request"),
         CheckConstraint(
@@ -334,10 +333,9 @@ class OriginalUse(SQLModel, table=True):
     __tablename__ = "original_use"
     __table_args__ = (
         object_reference(),
-        ForeignKeyConstraint(
-            ["tenant_id", "actor_id"],
-            ["tenant_membership.tenant_id", "tenant_membership.user_id"],
-        ),
+        # 平台管理员可无 tenant_membership 代管租户；操作人只关联用户，
+        # 权限在每次执行时由 require_tenant 重新校验。
+        ForeignKeyConstraint(["actor_id"], ["user.id"]),
         CheckConstraint(
             "revision >= 0 AND status IN ('active','released','expired')",
             name="ck_original_use_status",

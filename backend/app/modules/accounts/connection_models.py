@@ -36,10 +36,9 @@ class McpAuthorizationAttempt(SQLModel, table=True):
             ["tenant_id", "connection_id"],
             ["tiktok_connection.tenant_id", "tiktok_connection.id"],
         ),
-        ForeignKeyConstraint(
-            ["tenant_id", "actor_id"],
-            ["tenant_membership.tenant_id", "tenant_membership.user_id"],
-        ),
+        # 平台管理员可无 tenant_membership 代管租户；操作人只关联用户，
+        # 权限在每次执行时由 require_tenant 重新校验。
+        ForeignKeyConstraint(["actor_id"], ["user.id"]),
         CheckConstraint(
             "base_credential_revision >= 0 AND base_authorization_revision >= 0",
             name="ck_mcp_authorization_attempt_revisions",

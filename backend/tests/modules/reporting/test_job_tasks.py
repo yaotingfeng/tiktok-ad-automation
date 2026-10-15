@@ -290,3 +290,138 @@ def test_revoked_actor_fails_job_before_gateway(
         )
         == "FAILED"
     )
+
+
+class _EmptyReader:
+    def bc_spend(self, **_kwargs):
+        from app.integrations.tiktok.contracts.report_reader import RawReportPage
+
+        return RawReportPage((), 1, 0, 0)
+
+    def account_day(self, **_kwargs):
+        from app.integrations.tiktok.contracts.report_reader import RawReportPage
+
+        return RawReportPage((), 1, 0, 0)
+
+
+def _delete_actor(factory, actor_id):
+    """测试自建的用户不属于租户夹具清理范围，先删其名下行再删用户。"""
+    from sqlmodel import SQLModel
+
+    with factory() as s:
+        for table in reversed(SQLModel.metadata.sorted_tables):
+            if "actor_id" in table.c:
+                s.exec(table.delete().where(table.c.actor_id == actor_id))
+        user = SQLModel.metadata.tables["user"]
+        s.exec(user.delete().where(user.c.id == actor_id))
+        s.commit()
+
+
+def test_platform_admin_discovery_actor_plans_directory(
+    monkeypatch, committed_sync_seed, redis_client
+):
+    """平台管理员不是租户成员，代租户完成账户发现后，后台目录同步仍以其身份正常规划。"""
+    from datetime import timedelta
+    from uuid import uuid4
+
+    from sqlmodel import select
+
+    from app.core.db import engine
+    from app.models import User
+    from app.modules.accounts.models import DiscoveryRun
+    from app.modules.ads.sync_models import AdDirectoryRun
+    from app.modules.reporting.store_models import AdSyncBc
+
+    seed, factory = committed_sync_seed
+    admin = User(
+        username=f"admin-{uuid4().hex[:10]}", hashed_password="x", is_superuser=True
+    )
+    with factory() as s:
+        s.add(admin)
+        s.flush()
+        s.add(
+            DiscoveryRun(
+                tenant_id=seed.tenant_id,
+                actor_id=admin.id,
+                connection_id=seed.connection.id,
+                bc_id=None,
+                status="COMPLETE",
+                completed_at=datetime.now(UTC) + timedelta(minutes=1),
+            )
+        )
+        s.commit()
+    monkeypatch.setattr(job_tasks.settings, "ADS_SYNC_ENABLED", True)
+    monkeypatch.setattr(
+        job_tasks, "_reader_for", lambda **_kwargs: _ctx(_EmptyReader())
+    )
+    try:
+        job_tasks.plan_due_runs(
+            database_engine=engine,
+            redis_client=redis_client,
+            now=datetime(2026, 10, 12, 3, tzinfo=UTC),
+        )
+        with factory() as s:
+            assert s.get(AdSyncBc, (seed.tenant_id, "bc-a")).actor_id == admin.id
+            runs = s.exec(
+                select(AdDirectoryRun).where(AdDirectoryRun.tenant_id == seed.tenant_id)
+            ).all()
+            assert runs and {run.actor_id for run in runs} == {admin.id}
+    finally:
+        _delete_actor(factory, admin.id)
+
+
+def test_unexpected_failure_in_one_bc_does_not_block_others(
+    monkeypatch, committed_sync_seed, redis_client
+):
+    """单个 BC 规划出现意外错误时只推迟该 BC，其他 BC 本轮照常规划。"""
+    from datetime import timedelta
+
+    from app.core.db import engine
+    from app.modules.accounts.models import AdvertiserAccount, BCAccountAccess
+    from app.modules.reporting.store_models import AdSyncBc
+
+    seed, factory = committed_sync_seed
+    with factory() as s:
+        s.add(
+            AdvertiserAccount(
+                tenant_id=seed.tenant_id,
+                advertiser_id="acc-3",
+                currency="USD",
+                timezone="UTC",
+                name="账户三",
+            )
+        )
+        s.flush()
+        s.add(
+            BCAccountAccess(
+                tenant_id=seed.tenant_id,
+                bc_id="bc-b",
+                advertiser_id="acc-3",
+                connection_id=seed.connection.id,
+                in_bc=True,
+                authorized=True,
+                active=True,
+                checked_at=datetime.now(UTC),
+            )
+        )
+        s.commit()
+    monkeypatch.setattr(job_tasks.settings, "ADS_SYNC_ENABLED", True)
+    monkeypatch.setattr(
+        job_tasks, "_reader_for", lambda **_kwargs: _ctx(_EmptyReader())
+    )
+    original = job_tasks._plan_one
+
+    def flaky(database_engine, redis_client, key, *args):
+        if key[1] == "bc-a":
+            raise RuntimeError("synthetic planning failure")
+        return original(database_engine, redis_client, key, *args)
+
+    monkeypatch.setattr(job_tasks, "_plan_one", flaky)
+    now = datetime(2026, 10, 12, 3, tzinfo=UTC)
+    job_tasks.plan_due_runs(database_engine=engine, redis_client=redis_client, now=now)
+    with factory() as s:
+        failed = s.get(AdSyncBc, (seed.tenant_id, "bc-a"))
+        healthy = s.get(AdSyncBc, (seed.tenant_id, "bc-b"))
+        assert failed.disabled_reason == "plan_failed"
+        assert failed.next_hot_at >= now + timedelta(minutes=5)
+        assert healthy.next_hot_at > now and healthy.disabled_reason is None

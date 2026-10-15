@@ -270,3 +270,39 @@ def test_confirmed_zero_spend_accounts_count_as_complete(session, sync_seed):
     )
     # 无消耗时更新时间也要前进，否则页面显示的同步时间会停住。
     assert all(s.last_success_at == NOW for s in states)
+
+
+def test_removed_member_discovery_does_not_become_sync_actor(session, sync_seed):
+    """已移出租户的成员即使最近跑过账户发现，也不能成为后台同步身份。"""
+    from uuid import uuid4
+
+    from app.models import User
+    from app.modules.accounts.models import DiscoveryRun
+    from app.modules.tenants.models import TenantMembership
+
+    former = User(username=f"former-{uuid4().hex[:10]}", hashed_password="x")
+    session.add(former)
+    session.flush()
+    session.add(
+        TenantMembership(
+            tenant_id=sync_seed.tenant_id,
+            user_id=former.id,
+            role="operator",
+            active=False,
+        )
+    )
+    session.add(
+        DiscoveryRun(
+            tenant_id=sync_seed.tenant_id,
+            actor_id=former.id,
+            connection_id=sync_seed.connection.id,
+            bc_id=None,
+            status="COMPLETE",
+            completed_at=datetime.now(UTC) + timedelta(minutes=1),
+        )
+    )
+    session.flush()
+    ensure_bc_plans(session, now=NOW)
+    plan = session.get(AdSyncBc, (sync_seed.tenant_id, "bc-a"))
+    assert plan.enabled is True
+    assert plan.actor_id == sync_seed.actor_id
