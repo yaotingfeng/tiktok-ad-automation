@@ -126,6 +126,7 @@ def _number(value: Any, *, field: str, ref: EntityRef) -> Decimal:
 
 def _final_value(current: Decimal, mutation: MutationSpec) -> Decimal | str:
     if mutation.field == "status" or mutation.field == "material_status":
+        assert isinstance(mutation.value, str)
         return mutation.value
     assert isinstance(mutation.value, Decimal)
     if mutation.mode == "set":
@@ -1006,6 +1007,7 @@ def _expand(
             )
             return
         if field in {"status", "material_status"}:
+            assert isinstance(mutation.value, str)
             final: Decimal | str = mutation.value
         else:
             # 平台当前值为 0 或非数字（例如组预算系列的系列预算固定为 0）、

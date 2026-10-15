@@ -400,10 +400,12 @@ def _execute_bc(
         # 基准是当日该字段第一次被规则调整前的值。
         excluded = []
         for item in preview.items:
-            if item.execution_result != "PENDING" or item.original_value is None:
+            original = item.original_value
+            # 预算/ROAS 预览的原值必为数值；非数值（如名称）不参与涨幅限制。
+            if item.execution_result != "PENDING" or not isinstance(original, Decimal):
                 continue
             final = item.final_value
-            if not isinstance(final, Decimal) or final <= item.original_value:
+            if not isinstance(final, Decimal) or final <= original:
                 continue
             keys = owners.keys(item.ref, item.material_use)
             today = [
@@ -414,7 +416,7 @@ def _execute_bc(
                 and row.created_at >= day_start
             ]
             first = _decimal(today[0].original_value) if today else None
-            baseline = first if first is not None else item.original_value
+            baseline = first if first is not None else original
             if final > baseline * (Decimal(1) + Decimal(limit_pct) / 100):
                 excluded.append(item.ref)
                 for key in keys:

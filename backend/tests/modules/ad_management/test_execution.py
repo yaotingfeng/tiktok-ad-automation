@@ -338,6 +338,36 @@ def test_rename_skips_when_name_changed(c5_env, redis_client, monkeypatch):
         _cleanup(task_id)
 
 
+def test_budget_skips_when_budget_changed(c5_env, redis_client, monkeypatch):
+    """原值被他人改过：预算同样记为冲突（终态，不再重试），且不调用平台。"""
+    context, task_id, item_id = _committed_item(c5_env)
+    with Session(engine) as session:
+        row = session.get(
+            AdObject, (context.tenant_id, "c5-account", "adgroup", "group-c5")
+        )
+        assert row is not None
+        row.configuration = {"budget": "30"}
+        session.add(row)
+        session.commit()
+    calls = []
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution._redis", lambda: redis_client
+    )
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution.open_tiktok_gateway",
+        lambda **_kwargs: _Gateway(lambda *_args: calls.append(True)),
+    )
+    try:
+        execute_item(engine, item_id)
+        with Session(engine) as session:
+            item = session.get(ManagementTaskItem, item_id)
+            assert item is not None and item.execution_result == "CONFLICT"
+            assert item.reason == "management_original_changed"
+        assert calls == []
+    finally:
+        _cleanup(task_id)
+
+
 def test_rename_accepted_requests_targeted_refresh(c5_env, redis_client, monkeypatch):
     _context, task_id, item_id = _committed_item(
         c5_env, original="嘉书-剧A", final="嘉书-剧B", operation="rename"
