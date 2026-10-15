@@ -164,7 +164,8 @@ class ManagementItemPublic(BaseModel):
     # 对象名称只用于界面展示；任务项不保存名称，此时为空。
     name: str | None = None
     material_use: MaterialUseRef | None = None
-    original_value: Decimal | None = None
+    # 数值动作为原数值；改名动作为原系列名。
+    original_value: Decimal | str | None = None
     final_value: Decimal | str | None = None
     reason: str | None = None
     execution_result: Literal[
@@ -182,6 +183,10 @@ class ManagementItemPublic(BaseModel):
     delivery_status: str | None = None
     request_attribution: str | None = None
     attempts: tuple[ManagementAttemptPublic, ...] = ()
+    # 改名预览专用：新名称解析出的剧名/渠道，以及剧归类是否因改名变化。
+    drama_name: str | None = None
+    provider_label: str | None = None
+    drama_changed: bool | None = None
 
 
 class ManagementPreviewPublic(BaseModel):

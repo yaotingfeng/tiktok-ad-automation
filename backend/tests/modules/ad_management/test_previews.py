@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from decimal import Decimal
 
 import pytest
@@ -10,44 +10,7 @@ from app.modules.ad_management.models import ManagementPreviewItem
 from app.modules.ad_management.previews import prepare_preview
 from app.modules.ad_management.schemas import MutationSpec
 from app.modules.ads.models import AdObject, CampaignNameProjection
-
-
-def _row(ref, *, parent=None, ad_type="REGULAR", configuration=None, status="ENABLE", connection_id=None, observed_at=None):
-    return AdObject(
-        tenant_id=ref.tenant_id,
-        advertiser_id=ref.advertiser_id,
-        kind=ref.kind,
-        remote_id=ref.remote_id,
-        parent_kind=parent.kind if parent else None,
-        parent_remote_id=parent.remote_id if parent else None,
-        ad_type=ad_type,
-        name=f"object-{ref.remote_id}",
-        configuration=configuration or {},
-        operation_status=status,
-        review_status="APPROVED",
-        delivery_status="DELIVERING",
-        observed_at=observed_at or datetime.now(UTC),
-        published_version=1,
-        source_connection_id=connection_id,
-        source_channel="OFFICIAL_API",
-    )
-
-
-def _set_selection(selection, refs, uses=()):
-    selection.refs = [
-        {"tenant_id": str(ref.tenant_id), "advertiser_id": ref.advertiser_id, "kind": ref.kind, "remote_id": ref.remote_id}
-        for ref in refs
-    ]
-    selection.material_uses = [
-        {
-            "ad_ref": {"tenant_id": str(use.ad_ref.tenant_id), "advertiser_id": use.ad_ref.advertiser_id, "kind": use.ad_ref.kind, "remote_id": use.ad_ref.remote_id},
-            "platform_material_id": use.platform_material_id,
-            "ad_material_id": use.ad_material_id,
-            "material_type": use.material_type,
-        }
-        for use in uses
-    ]
-    selection.expires_at = datetime.now(UTC) + timedelta(minutes=15)
+from tests.modules.ad_management.conftest import _row, _set_selection
 
 
 def test_percentage_and_budget_owner_previews(session, management_env):

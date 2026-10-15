@@ -3,6 +3,7 @@
 预览保存 B 选择的成员摘要、引用、目录配置与冻结路由。后续任务只消费这些
 副本，即使 B 的短期快照被清理，也不会重新筛选、换连接或吸收新广告。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -50,7 +51,9 @@ def _canonical(value: Any) -> Any:
 
 
 def _digest(payload: dict[str, Any]) -> str:
-    encoded = json.dumps(_canonical(payload), sort_keys=True, separators=(",", ":")).encode()
+    encoded = json.dumps(
+        _canonical(payload), sort_keys=True, separators=(",", ":")
+    ).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -65,15 +68,20 @@ def _public_item(item: ExpandedItem) -> ManagementItemPublic:
         ref=item.ref,
         name=item.name,
         material_use=item.material_use,
-        # ManagementItemPublic reserves original_value for numeric fields;
-        # status snapshots remain in the durable capability/configuration
-        # evidence and are represented by final_value/reason in the public DTO.
+        # 数值动作公开原数值，改名动作公开原系列名；状态快照只保留在
+        # 能力/配置证据中，公开 DTO 用 final_value/reason 表达。
         original_value=(
-            item.original_value if isinstance(item.original_value, Decimal) else None
+            item.original_value
+            if isinstance(item.original_value, Decimal)
+            or item.capability.get("operation") == "rename"
+            else None
         ),
         final_value=item.final_value,
         reason=item.reason,
         execution_result=cast(Any, item.execution_result),
+        drama_name=item.drama_name,
+        provider_label=item.provider_label,
+        drama_changed=item.drama_changed,
     )
 
 
@@ -129,7 +137,9 @@ def prepare_preview(
         selected=expansion.selected_count,
         targets=len(expansion.commands),
         linked=sum(1 for item in expansion.items if item.linked),
-        unsupported=sum(1 for item in expansion.items if item.execution_result == "UNSUPPORTED"),
+        unsupported=sum(
+            1 for item in expansion.items if item.execution_result == "UNSUPPORTED"
+        ),
     )
     # Store the complete B evidence inside the preview mutation JSON. This keeps
     # submitted tasks independent from frozen-selection cleanup and future names.
@@ -196,7 +206,9 @@ def prepare_preview(
                 preview_id=preview.id,
                 position=position,
                 ref=_ref_dict(item.ref),
-                material_use=_use_dict(item.material_use) if item.material_use else None,
+                material_use=_use_dict(item.material_use)
+                if item.material_use
+                else None,
                 parent_ref=_ref_dict(item.parent_ref) if item.parent_ref else None,
                 grouping_revision=item.grouping_revision,
                 membership_digest=selection.membership_digest,

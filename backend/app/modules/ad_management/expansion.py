@@ -23,6 +23,7 @@ from app.integrations.tiktok.contracts.ads import EntityRef, MaterialUseRef
 from app.integrations.tiktok.contracts.management import (
     ManagementCommand,
     ManagementField,
+    operation_for_field,
 )
 from app.modules.accounts.connection_models import ConnectionAuthorization
 from app.modules.accounts.management_rules import (
@@ -35,13 +36,6 @@ from app.modules.ads.directory import locate
 from app.modules.ads.models import AdMaterialReference, AdObject
 from app.modules.reporting.query_models import FrozenSelectionRecord
 from app.modules.reporting.selection import get_frozen_selection
-
-_OPERATION_BY_FIELD = {
-    "roas": "update_roas",
-    "budget": "update_budget",
-    "status": "set_status",
-    "material_status": "set_material_status",
-}
 
 
 @dataclass(frozen=True)
@@ -61,6 +55,11 @@ class ExpandedItem:
     linked: bool = False
     # 目录中的对象名称，仅供预览展示，让用户看清“改的是哪一个”。
     name: str | None = None
+    # 改名项专用：新名称解析出的渠道与剧名，以及剧归类是否因改名而变化。
+    # 报表按系列名前两段归剧，改动剧名会让历史数据换组，界面需要据此提醒。
+    drama_name: str | None = None
+    provider_label: str | None = None
+    drama_changed: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -627,13 +626,6 @@ def _expand(
             seen_uses.add(key)
             unique_uses.append(use)
     uses = tuple(unique_uses)
-    objects: dict[tuple[UUID, str, str, str], AdObject] = {}
-    for ref in refs:
-        row = _object_for_ref(
-            session, context=context, bc_id=bc_id, ref=ref, route=route
-        )
-        if row is not None:
-            objects[_ref_key(ref)] = row
     items: list[ExpandedItem] = []
     # Explicit exclusions are retained as visible, non-operable evidence.
     for ref in mutation.excluded_refs:
@@ -669,6 +661,29 @@ def _expand(
             )
         )
 
+    if mutation.field == "name":
+        # 改名逐条计算名称、只作用于推广系列，与数值类动作的父子联动无关，单独展开；
+        # 显式排除项仍作为可见证据保留在结果最前面。
+        from app.modules.ad_management.rename import expand_rename
+
+        renamed = expand_rename(
+            session,
+            context,
+            bc_id=bc_id,
+            refs=refs,
+            mutation=mutation,
+            route=route,
+            require_capabilities=require_capabilities,
+        )
+        return replace(renamed, items=(*items, *renamed.items))
+
+    objects: dict[tuple[UUID, str, str, str], AdObject] = {}
+    for ref in refs:
+        row = _object_for_ref(
+            session, context=context, bc_id=bc_id, ref=ref, route=route
+        )
+        if row is not None:
+            objects[_ref_key(ref)] = row
     # Explicit parents must be a real ancestor of a selected object/material ad.
     selected_children = list(refs) + [use.ad_ref for use in uses]
     for ref in mutation.include_parents:
@@ -877,7 +892,7 @@ def _expand(
                     row.parent_ref,
                     grouping_revision or 0,
                     {
-                        "operation": _OPERATION_BY_FIELD[field],
+                        "operation": operation_for_field(field),
                         "entity_kind": row.kind,
                         "ad_type": row.ad_type,
                         "source_connection_id": str(row.source_connection_id)
@@ -893,7 +908,7 @@ def _expand(
             )
             return
         current = _current_value(session, row, use, field)
-        operation = _OPERATION_BY_FIELD[field]
+        operation = cast(str, operation_for_field(field))
         capability_ok = True
         capability: dict[str, Any] = {
             "operation": operation,
