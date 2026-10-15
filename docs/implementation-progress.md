@@ -2366,3 +2366,10 @@
 - 更新原受众定向设计与计划，替换策略页必须依赖 BC 历史场景的旧约束。无需数据库迁移；未访问真实 TikTok 业务接口。
 - 验证：`bun run build`（TypeScript + Vite）通过；Biome 5 个改动文件检查通过；`git diff --check` 通过。Playwright `build-preparation.spec.ts`、`build-preview.spec.ts` 121 项通过；`strategies.spec.ts` 51 项通过（含首次创建、保存后恢复、搜索/全选/清空、目录外历史选择和只读权限）。初跑历史选项用例因可访问名称空格及选项移除后的 `uncheck` 重找节点失败，修正测试定位与操作后策略全文件通过。浏览器接口为离线替身，已检查受众卡片截图。
 - 交付：本节与功能同次聚焦提交（`strategies: allow country presets before the first build`）；未推送、未部署。
+
+## 2026-10-16：广告详情素材创意报表支持表头排序
+
+- 用户需要在“报表数据 → 广告 → 详情 → 素材”内按指标升降序排列。抽出广告主报表已有的 `SortableHead` 共用组件，素材表的消耗、展示量、点击量、当日收入/ROAS、总收入/ROAS 七个指标均可点击排序，并显示方向箭头与可访问排序状态。
+- 默认按消耗降序；换列首次点击降序，再点切换升序。素材接口一次返回本广告全部素材，前端按与单元格相同的原始数值排序；零值正常参与，缺失/空串/无效数值双向置底，同值保留接口顺序。排序复制数据，不改变查询缓存或已勾选素材 ID。
+- 验证：`ads-detail.spec.ts`、`ads-reporting.spec.ts` 的 workspace 浏览器用例共 24 项通过（含新增 operator/viewer 七指标排序、同值/缺失/零值、排序后启停选择不变）；`bun run build`（TypeScript + Vite）通过；四个变更 TS/TSX 文件 Biome 检查通过；`git diff --check` 通过。接口使用离线替身，未调用真实 TikTok 接口，无需数据库迁移。
+- 交付：代码、测试及本记录同次聚焦提交 `ads: add metric sorting to ad material details`；未推送、未部署。

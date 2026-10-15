@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/table"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { type ColumnDef, formatMetric } from "../metricCatalog"
+import { SortableHead } from "../SortableHead"
 
 const STATUS: Record<string, string> = {
   ENABLE: "已开启",
@@ -106,6 +107,16 @@ export function AdMaterialsTab({
   const { tenantId, bc } = useTenantScope()
   const bcId = bc?.bc_id
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [sort, setSort] = useState<{ by: string; direction: "asc" | "desc" }>({
+    by: "spend",
+    direction: "desc",
+  })
+  const onSort = (by: string) =>
+    setSort((current) => ({
+      by,
+      direction:
+        current.by === by && current.direction === "desc" ? "asc" : "desc",
+    }))
   const query = useQuery({
     queryKey: [
       "tenant",
@@ -156,6 +167,21 @@ export function AdMaterialsTab({
       </p>
     )
   const shown = columns.filter((column) => AD_MATERIAL_COLUMNS.has(column.key))
+  // 接口一次返回本广告全部素材；按展示所用的原始数值排序，避免字符串/格式化值误排。
+  // 缺失或非有限数值在两个方向都置底；相同值保持接口顺序，且不修改查询缓存。
+  const metricValue = (item: AdMaterialPublic) => {
+    const raw = item.metric_buckets?.[0]?.values?.[sort.by]
+    if (raw == null || raw.trim() === "") return null
+    const value = Number(raw)
+    return Number.isFinite(value) ? value : null
+  }
+  const sortedItems = [...items].sort((left, right) => {
+    const a = metricValue(left)
+    const b = metricValue(right)
+    if (a === null) return b === null ? 0 : 1
+    if (b === null) return -1
+    return sort.direction === "asc" ? a - b : b - a
+  })
   const key = (item: AdMaterialPublic) => item.use_ref.ad_material_id ?? ""
   const selectable = items.filter((item) => key(item))
   const allChecked =
@@ -214,14 +240,30 @@ export function AdMaterialsTab({
               <TableHead>名称</TableHead>
               <TableHead>状态</TableHead>
               {shown.map((column) => (
-                <TableHead key={column.key} title={column.fullName}>
-                  {column.label}
+                <TableHead
+                  key={column.key}
+                  title={column.fullName}
+                  aria-sort={
+                    sort.by === column.key
+                      ? sort.direction === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : "none"
+                  }
+                >
+                  <SortableHead
+                    label={column.label}
+                    sortBy={column.key}
+                    activeSortBy={sort.by}
+                    direction={sort.direction}
+                    onSort={onSort}
+                  />
                 </TableHead>
               ))}
             </TableRow>
           </TableHeader>
           <TableBody>
-            {items.map((item) => {
+            {sortedItems.map((item) => {
               const id = key(item)
               const vector = item.metric_buckets?.[0]
               return (

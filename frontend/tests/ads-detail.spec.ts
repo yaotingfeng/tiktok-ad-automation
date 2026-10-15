@@ -96,6 +96,114 @@ test.describe("ads detail", () => {
     await expect(page.getByRole("heading", { name: "批量暂停" })).toBeVisible()
   })
 
+  for (const role of ["operator", "viewer"] as const) {
+    test(`广告详情素材指标支持数值排序（${role}）`, async ({ page }) => {
+      await adsBoundary(page, { role })
+      const metrics = [
+        ["spend", "消耗"],
+        ["impressions", "展示量"],
+        ["clicks", "点击量（目标页面）"],
+        ["revenue_d0", "第 0 天 广告收益金额"],
+        ["roas_d0", "第 0 天广告收益 ROAS"],
+        ["revenue_total", "广告展示总价值"],
+        ["roas_total", "广告收益 ROAS"],
+      ]
+      // 含小数、零、同值、NULL、空串、缺失字段和无效值，避免按显示文本排序。
+      const values = ["3", "12.5", "0", null, "12.5", "", undefined, "NaN"]
+      await page.route("**/ads/ad/ad-1/materials?*", (route) =>
+        route.fulfill({
+          json: {
+            coverage: { status: "COMPLETE" },
+            items: values.map((_, index) => ({
+              use_ref: {
+                ad_ref: {
+                  tenant_id: TENANT,
+                  advertiser_id: "adv-1",
+                  kind: "ad",
+                  remote_id: "ad-1",
+                },
+                platform_material_id: `video-m${index + 1}`,
+                ad_material_id: `m${index + 1}`,
+                material_type: "VIDEO",
+              },
+              name: `ep${index + 1}.mp4`,
+              operation_status: "ENABLE",
+              metric_buckets: [
+                {
+                  currency: "USD",
+                  timezone: "UTC",
+                  values: Object.fromEntries(
+                    metrics.map(([key], metricIndex) => [
+                      key,
+                      values[(index + metricIndex) % values.length],
+                    ]),
+                  ),
+                },
+              ],
+            })),
+          },
+        }),
+      )
+      await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+      await page.getByRole("tab", { name: "广告", exact: true }).click()
+      await page
+        .getByRole("button", { name: /嘉书-总裁归来/ })
+        .first()
+        .click()
+      const sheet = page.getByRole("dialog")
+      await sheet.getByRole("tab", { name: "素材" }).click()
+      const names = sheet.locator("tbody tr td[title]")
+      // 各指标把同组测试数值错开，确保切换指标后确实读取了对应字段。
+      const orderedNames = (groups: number[][], offset: number) =>
+        groups.flatMap((ids) =>
+          ids
+            .map(
+              (id) => ((id - 1 - offset + values.length) % values.length) + 1,
+            )
+            .sort((a, b) => a - b)
+            .map((id) => `ep${id}.mp4`),
+        )
+      // 同值与缺失值各自按原始素材顺序排列，错位后也保持稳定。
+      const descending = [[2, 5], [1], [3], [4, 6, 7, 8]]
+      const ascending = [[3], [1], [2, 5], [4, 6, 7, 8]]
+      await expect(names).toHaveText(orderedNames(descending, 0))
+      if (role === "operator")
+        await sheet.getByRole("checkbox", { name: "选择 ep2.mp4" }).check()
+      for (const [metricIndex, [key, label]] of metrics.entries()) {
+        const head = sheet.getByRole("columnheader").filter({
+          has: page.getByRole("button", { name: new RegExp(`^${label}，`) }),
+        })
+        const button = head.getByRole("button")
+        // 首列已默认按消耗降序；换到其他指标时首次点击也为降序。
+        if (key !== "spend") await button.click()
+        await expect(head).toHaveAttribute("aria-sort", "descending")
+        await expect(names).toHaveText(orderedNames(descending, metricIndex))
+        await button.click()
+        await expect(head).toHaveAttribute("aria-sort", "ascending")
+        await expect(names).toHaveText(orderedNames(ascending, metricIndex))
+        await button.click()
+        await expect(names).toHaveText(orderedNames(descending, metricIndex))
+      }
+      if (role === "operator") {
+        await expect(
+          sheet.getByRole("checkbox", { name: "选择 ep2.mp4" }),
+        ).toBeChecked()
+        const freeze = page.waitForRequest((r) =>
+          r.url().includes("/ads/ad/ad-1/material-selections"),
+        )
+        await sheet
+          .getByRole("button", { name: "暂停", exact: true })
+          .last()
+          .click()
+        expect((await freeze).postDataJSON()).toEqual({
+          ad_material_ids: ["m2"],
+        })
+      } else {
+        await expect(sheet.getByRole("checkbox")).toHaveCount(0)
+      }
+    })
+  }
+
   test("切 BC 关闭详情", async ({ page }) => {
     await adsBoundary(page)
     await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
