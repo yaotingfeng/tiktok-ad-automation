@@ -202,6 +202,7 @@ def publish_api_directory(
         "read_authorized": True if facts.build_authorized is not None else None,
         "build_authorized": facts.build_authorized,
         "upload_authorized": facts.upload_authorized,
+        "management_operations": sorted(facts.management_operations),
     }
     if previous is not None and not attempt:
         previous.permission_summary = summary

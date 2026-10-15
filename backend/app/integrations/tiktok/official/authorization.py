@@ -9,6 +9,20 @@ from app.integrations.tiktok.contracts.management import MANAGEMENT_OPERATIONS
 ISSUER = "https://business-api.tiktok.com"
 RESOURCE = "https://business-api.tiktok.com/open_api/v1.3"
 CONTRACT_REVISION = "official-api-v1"
+# 官方权限层级（doc 1753986142651394）：父级 2 为广告管理，覆盖系列、广告组、广告的
+# 状态、预算与出价；6 / 61 / 611 为创意与视频管理。素材开关同时属于两者，需同时具备。
+_ADS_MANAGEMENT = 2
+_CREATIVE_MANAGEMENT = frozenset({6, 61, 611})
+
+
+def management_operations_for_scopes(scopes: set[int]) -> frozenset[str]:
+    """官方 scope 到管理操作的唯一映射；实际写权还需账户角色为 ADMIN/OPERATOR。"""
+    if _ADS_MANAGEMENT not in scopes:
+        return frozenset()
+    operations = {"set_status", "update_budget", "update_roas"}
+    if scopes & _CREATIVE_MANAGEMENT:
+        operations.add("set_material_status")
+    return frozenset(operations & MANAGEMENT_OPERATIONS)
 
 
 def material_authorization(
@@ -27,15 +41,8 @@ def material_authorization(
         known = True
     except KeyError, ValueError, TypeError:
         scopes, known = set(), False
-    # 管理写操作必须来自授权材料中的明确操作声明；scope 数字本身不作猜测映射。
-    management = frozenset()
-    try:
-        raw_operations = json.loads(material.get("management_operations", "[]"))
-        if isinstance(raw_operations, list) and all(isinstance(v, str) for v in raw_operations):
-            management = frozenset(v for v in raw_operations if v in MANAGEMENT_OPERATIONS)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        management = frozenset()
-    # 已有官方权限合同 doc1753986142651394；此处不以目录可见性授予写入。
+    # 管理操作只按官方 scope 层级映射，不以目录可见性或授权材料里的自报字段授予写入。
+    management = management_operations_for_scopes(scopes) if known else frozenset()
     return AuthorizationFacts(
         subject_id=None,
         grant_id=None,

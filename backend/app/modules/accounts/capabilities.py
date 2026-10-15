@@ -25,6 +25,7 @@ from app.core.errors import DomainError
 from app.integrations.tiktok.bounded_resources import bounded_session
 from app.integrations.tiktok.contracts.accounts import AuthorizationFacts
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
+from app.integrations.tiktok.contracts.management import ManagementPermissionEvidence
 from app.integrations.tiktok.gateway import open_tiktok_gateway
 from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit
@@ -37,7 +38,9 @@ from app.modules.accounts.capability_models import (
     CapabilityRequest,
 )
 from app.modules.accounts.capability_schemas import CapabilityEvidence
+from app.modules.accounts.connection_models import ConnectionAuthorization
 from app.modules.accounts.directory_models import DirectoryRevision
+from app.modules.accounts.management_capabilities import record_management_capabilities
 from app.modules.accounts.models import (
     AdvertiserAccount,
     BCAccountAccess,
@@ -429,6 +432,18 @@ def _publish(session: Session, job: CapabilityJob, context: TenantContext) -> No
     )
     if job.publish_after is not None:
         statement = statement.where(BCAccountAccess.advertiser_id > job.publish_after)
+    route = _route(job)
+    authorization = session.exec(
+        select(ConnectionAuthorization).where(
+            ConnectionAuthorization.tenant_id == context.tenant_id,
+            ConnectionAuthorization.connection_id == job.connection_id,
+            ConnectionAuthorization.authorization_revision
+            == route.authorization_revision,
+        )
+    ).one()
+    management = frozenset(
+        (authorization.permission_summary or {}).get("management_operations", ())
+    )
     rows = session.exec(
         statement.order_by(col(BCAccountAccess.advertiser_id))
         .limit(100)
@@ -455,6 +470,19 @@ def _publish(session: Session, job: CapabilityJob, context: TenantContext) -> No
         grant.can_upload = bool(operate and job.scope_upload)
         grant.checked_at = now
         session.add(grant)
+        # 同一份完整角色证据同时发布广告管理能力；不可操作的账户写出全 UNKNOWN 矩阵。
+        record_management_capabilities(
+            session,
+            route=route,
+            advertiser_id=grant.advertiser_id,
+            evidence=ManagementPermissionEvidence(
+                scope=tuple(authorization.scopes),
+                role=role if operate else None,
+                operations=management if job.scope_known else frozenset(),
+                source=authorization.source or "UNKNOWN",
+                observed_at=now,
+            ),
+        )
     job.published_count += len(rows)
     if rows:
         job.publish_after = rows[-1][0].advertiser_id
