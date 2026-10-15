@@ -178,6 +178,8 @@ TIKTOK_CALL_POLICIES='{"base":{"app_max_inflight":4,"endpoint_max_inflight":2,"t
 | endpoint_calls_per_window | 每逻辑操作每窗口最多 3 次请求 |
 | app_max_inflight / endpoint_max_inflight | 每共享配额域总并发 4、每逻辑操作并发 2 |
 | tenant_max_inflight / advertiser_max_inflight | 同配额域内每租户/每广告账户各最多 4 个并发请求 |
+
+**生产当前值（2026-10-15 调整）**：`app_max_inflight=8`、`endpoint_max_inflight=3`、`tenant_max_inflight=6`，其余同上（速率仍为每秒应用 10 次、每操作 3 次）。依据：官方 Basic 等级为每应用 10 QPS / 600 QPM / 864000 QPD，触发每分钟限制会被封禁 5 分钟，因此速率上限不变；单次读取约 1–2 秒，原并发 4 只能用到约 2–4 QPS。每租户 6 为其他租户的搭建和管理保留 2 个并发。配合目录 Worker 并发 4、报表 Worker 并发 2，目录任务本身不会因并发准入等待。
 | lease_ms | 并发占用租约 960000 毫秒，用于异常退出后的回收，不是请求超时或等待时长 |
 | endpoints | 按实际逻辑操作名覆盖 endpoint_max_inflight、endpoint_calls_per_window、lease_ms，不能覆盖共享总量 |
 

@@ -159,3 +159,9 @@ R2 CORS：已添加 https://tkada.galaxyshortdrama.com，保留测试 origin，O
 - 九角色、三个业务开关及应用额度不变。本次不迁移数据库；正式上线结果以对应验收记录为准。
 
 - 本轮发布批次 `20261012T111458-9a0769` 已完成；9/9 Ready、HTTPS 200、实际资源池并发 4，启动阶段约 507 MiB、PG 总连接 63。备份恢复/配置/开关验证通过，详见 [准备提速验收](../validation/2026-10-12-preparation-speed.md)。
+
+## 2026-10-15：目录/报表并发与共享额度上调
+
+- 背景：xingyu 872 个账户接入后目录同步积压。同批发布目录减量（约降 90%）。
+- Worker：`worker-ads-directory` prefork 1 → 4，`worker-ads-reporting` 1 → 2；任务以等待 TikTok 为主（目录 Pod 约 360 MiB、CPU 约 0.07 核），资源申请/上限不变。PG 为多项目共享实例（max_connections 200、本项目约 18 连接），新增进程预计 +10–15 连接，发布后复核。
+- `TIKTOK_CALL_POLICIES.base`：`app_max_inflight` 4 → 8、`endpoint_max_inflight` 2 → 3、`tenant_max_inflight` 4 → 6；速率不变（应用 10/秒、每操作 3/秒），对应官方 Basic 每应用 10 QPS / 600 QPM / 864000 QPD，超过每分钟限制会封禁 5 分钟。在发布前写入运行 Secret 并同步本地 `.env.production`，由发布流程统一重启九角色加载。
