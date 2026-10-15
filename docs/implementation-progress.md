@@ -2356,7 +2356,9 @@
   - `Jenkinsfile`：`ACTION=deploy|check|status|recover|finish`、`FULL`；私有目录 `/var/jenkins_home/tk-ada-private`（宿主 `/data/jenkins/tk-ada-private`，0700）保存检查记录、发布批次状态与 `backups/latest.tar`。该目录含密钥；同节点所有 Jenkins 任务都以同一系统用户运行，权限隔离与已有共享 kubeconfig 相同。
   - Jenkins 凭据：`yaotf-gitea-tiktok-ad-automation`（只读令牌）、`tiktok-ad-automation-retired-source`（旧 prod 停用资源清单，不含密钥）；沿用公司 `sg-aliyun-harbor-info`、`sg-aliyun-k8s-info`。
 - 验证：`node scripts/test-deployment-assets.mjs`（含新增镜像来源用例）在默认与 Jenkins 镜像变量下均通过；`deploy/ci` 单元测试通过；脚本语法检查通过。
-- Jenkins 首次检查（`1b91b389`，#1，`ACTION=check`，因 `Jenkinsfile` 未归类而全量）：后端与发布工具通过（后端 4 组中 5 个用例并行失败、单独重跑通过），前端 6 个工作台用例失败。在 Jenkins 节点用工具镜像单独复现：CSV 导出文件名在默认 C 语言环境下被 Chromium 保存为 `download`，`LANG=C.UTF-8` 后通过；其余超时/找不到元素的用例单独运行全部通过，判定为与后端分组同时运行时节点负载过高。修复：`jenkins-run.sh` 固定 `LANG=C.UTF-8`；Jenkins 检查并发降为后端 3 组、浏览器 1 个；`select_tests.py` 将 `Jenkinsfile` 归为发布工具，改动它不再触发全量。首次发布结果待记录。
+- Jenkins 首次检查（`1b91b389`，#1，`ACTION=check`，因 `Jenkinsfile` 未归类而全量）：后端与发布工具通过（后端 4 组中 5 个用例并行失败、单独重跑通过），前端 6 个工作台用例失败。在 Jenkins 节点用工具镜像单独复现：CSV 导出文件名在默认 C 语言环境下被 Chromium 保存为 `download`，`LANG=C.UTF-8` 后通过；其余超时/找不到元素的用例单独运行全部通过，判定为与后端分组同时运行时节点负载过高。修复：`jenkins-run.sh` 固定 `LANG=C.UTF-8`；Jenkins 检查并发降为后端 3 组、浏览器 1 个；`select_tests.py` 将 `Jenkinsfile` 归为发布工具，改动它不再触发全量。
+- 自动触发：Gitea 仓库 webhook（push、仅 `main`）→ Jenkins Generic Webhook Trigger（仅 `refs/heads/main`，令牌只在 Jenkins 任务与 Gitea webhook 配置中）。用户 2026-10-16 明确要求开启自动发布并跑通完整 CI/CD。
+- 首次自动发布：推送 `7bea4b9e` 自动触发 Jenkins #2（`Gitea push: refs/heads/main`，`ACTION=deploy`），全量检查通过 → 构建推送 ACR → 停写排空、备份并隔离恢复验证 → 迁移至 `0033_management_rename_values` → 九角色启动 → 验收，`Finished: SUCCESS`；批次 `20261015T174643-0b285d`，备份 `/data/jenkins/tk-ada-private/backups/latest.tar`。独立核对：九 Deployment 均为 `7bea4b9e…` 且 ready、重启 0；发布锁与临时工具 Pod 已清除；迁移 Job 成功；`https://tkada.shortclipflix.com/api/utils/health-check/` 200。上线范围为 `f0606264..7bea4b9e`（含推广系列批量改名、官方 MCP 退役前端入口、素材指标排序、国家预设）。真实 TikTok 业务写入未在此验收。
 
 
 ## 2026-10-16：策略国家预设取消历史搭建依赖
