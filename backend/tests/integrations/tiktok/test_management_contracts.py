@@ -23,3 +23,12 @@ def test_rename_command_campaign_only_and_single_key():
         )
     with pytest.raises(ValueError):
         ManagementCommand(campaign, "name", {}, {"campaign_name": "x", "budget": "1"})
+
+
+def test_rename_campaign_name_boundaries():
+    campaign = EntityRef(uuid4(), "adv", "campaign", "c1")
+    with pytest.raises(ValueError):
+        ManagementCommand(campaign, "name", {}, {"campaign_name": "   "})
+    ManagementCommand(campaign, "name", {}, {"campaign_name": "名" * 512})
+    with pytest.raises(ValueError):
+        ManagementCommand(campaign, "name", {}, {"campaign_name": "名" * 513})

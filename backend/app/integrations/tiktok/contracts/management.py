@@ -74,6 +74,8 @@ class ManagementCommand:
                 raise ValueError("rename requires campaign identity")
             if set(self.desired) != {"campaign_name"}:
                 raise ValueError("rename requires exactly campaign_name")
+            # 此处只是结构性守卫（类型、空白、512 字符上限）；完整名称规则（含表情符号）
+            # 由预览阶段的 ad_management/rename.py::name_problem 统一执行。
             name = self.desired["campaign_name"]
             if type(name) is not str or not 0 < len(name.strip()) <= 512:
                 raise ValueError("invalid campaign name")
