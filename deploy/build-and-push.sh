@@ -14,10 +14,12 @@ release_sha=${RELEASE_SHA:-$head_sha}
 [[ "$release_sha" == "$head_sha" ]] || fail "RELEASE_SHA must equal the checked-out HEAD"
 platform=${PLATFORM:-linux/amd64}
 image="${registry}/${project_name}:${release_sha}"
+source deploy/ci/image-build-args.sh
+image_build_args
 echo "image=$image"
 echo "platform=$platform"
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
-  echo "dry-run: docker buildx build --platform $platform --pull -f backend/Dockerfile --build-arg VCS_REF=$release_sha -t $image --push ."
+  echo "dry-run: docker buildx build --platform $platform --pull -f backend/Dockerfile ${build_args[*]+${build_args[*]}} --build-arg VCS_REF=$release_sha -t $image --push ."
   echo "dry-run: cleanliness and remote publication are checked only on a real release"
   exit 0
 fi
@@ -34,4 +36,4 @@ command -v docker >/dev/null 2>&1 || fail "docker is required"
 docker info >/dev/null 2>&1 || fail "Docker engine is not ready"
 docker buildx version >/dev/null 2>&1 || fail "docker buildx is required"
 docker buildx build --platform "$platform" --pull -f backend/Dockerfile \
-  --build-arg "VCS_REF=$release_sha" -t "$image" --push .
+  ${build_args[@]+"${build_args[@]}"} --build-arg "VCS_REF=$release_sha" -t "$image" --push .

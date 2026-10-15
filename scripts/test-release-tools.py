@@ -56,7 +56,7 @@ class ReleaseTests(unittest.TestCase):
         )
 
     def test_prepare_pulls_production_images_as_amd64_on_any_host(self):
-        from common import PUBLIC
+        from common import POSTGRES_IMAGE, PUBLIC
 
         self.release.state["old_sha"] = "a" * 40
         with (
@@ -76,7 +76,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn(
             ["docker", "pull", "--platform=linux/amd64", PUBLIC + "b" * 40], pulls
         )
-        self.assertIn(["docker", "pull", "postgres:18"], pulls)
+        self.assertIn(["docker", "pull", POSTGRES_IMAGE], pulls)
 
     def test_image_digest_uses_registry_index_reported_by_ack(self):
         index = "sha256:" + "1" * 64

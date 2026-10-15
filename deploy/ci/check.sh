@@ -6,7 +6,7 @@ repo=$(cd "$(dirname "$0")/../.." && pwd)
 # 仅继承工具连接配置，阻断终端中的生产数据库、云存储和平台凭据。
 if [[ ${1:-} != --isolated-environment ]]; then
   clean_env=("PATH=$PATH" "HOME=$HOME")
-  for key in TMPDIR LANG LC_ALL BUN_BIN PG_BIN_DIR CHECK_PLAN CHECK_CACHE_DIR CHECK_BACKEND_SHARDS CHECK_ACCEPTANCE_SHARDS CHECK_BROWSER_WORKERS ACCEPTANCE_SCALE DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH UV_CACHE_DIR UV_PYTHON_INSTALL_DIR PLAYWRIGHT_BROWSERS_PATH HTTPS_PROXY HTTP_PROXY ALL_PROXY NO_PROXY SSL_CERT_FILE SSL_CERT_DIR; do
+  for key in TMPDIR LANG LC_ALL BUN_BIN PG_BIN_DIR CHECK_PLAN CHECK_CACHE_DIR CHECK_BACKEND_SHARDS CHECK_ACCEPTANCE_SHARDS CHECK_BROWSER_WORKERS ACCEPTANCE_SCALE DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH UV_CACHE_DIR UV_PYTHON_INSTALL_DIR PLAYWRIGHT_BROWSERS_PATH TKADA_IMAGE_MIRROR DEBIAN_MIRROR PYPI_INDEX_URL PYPI_FILES_URL NPM_REGISTRY HTTPS_PROXY HTTP_PROXY ALL_PROXY NO_PROXY SSL_CERT_FILE SSL_CERT_DIR; do
     if [[ -n ${!key:-} ]]; then clean_env+=("$key=${!key}"); fi
   done
   exec env -i "${clean_env[@]}" bash "$repo/deploy/ci/check.sh" --isolated-environment
@@ -61,6 +61,8 @@ pg_name="$run_id-pg"
 acceptance_pg_name="$run_id-acceptance-pg"
 redis_name="$run_id-redis"
 image_name="tiktok-ad-automation:ci-$run_id"
+# 与 deploy/release/common.py 的 mirrored 一致：Jenkins 用本项目 ACR 副本，本机用官方镜像。
+mirrored() { if [[ -n ${TKADA_IMAGE_MIRROR:-} ]]; then local ref=${1//\//-}; printf '%s%s' "$TKADA_IMAGE_MIRROR" "${ref//:/-}"; else printf '%s' "$1"; fi; }
 cleanup() {
   status=$?
   trap - EXIT
@@ -101,6 +103,12 @@ fe_r2=$(plan frontend r2)
 deploy_tools=$(plan deploy_tools)
 release_integration=$(plan release_integration)
 python3 "$repo/deploy/ci/snapshot.py" "$repo" "$work/source"
+# 国内下载源只改源码副本里锁文件的下载地址，版本与哈希不变（与 backend/Dockerfile 相同做法）。
+if [[ -n ${PYPI_INDEX_URL:-} ]]; then
+  export UV_DEFAULT_INDEX=$PYPI_INDEX_URL
+  python3 -c 'import os,pathlib; p=pathlib.Path(os.sys.argv[1]); t=p.read_text().replace("https://pypi.org/simple", os.environ["PYPI_INDEX_URL"]); f=os.environ.get("PYPI_FILES_URL"); p.write_text(t.replace("https://files.pythonhosted.org", f) if f else t)' "$work/source/uv.lock"
+fi
+if [[ -n ${NPM_REGISTRY:-} ]]; then export BUN_CONFIG_REGISTRY=$NPM_REGISTRY; fi
 mkdir -p "$work/bin" "$work/source/.runtime" "$work/lanes"
 ln -s "$BUN_BIN" "$work/bin/bun"
 export PATH="$work/bin:$PATH"
@@ -109,14 +117,14 @@ cd "$work/source"
 # 测试库用完即删：数据放内存盘并关闭落盘保证，只影响本次临时实例，不涉及任何正式数据。
 start_pg() {
   docker run -d --name "$1" -p 127.0.0.1::5432 --tmpfs /var/lib/postgresql:rw,size=4g \
-    -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=ci-local-password -e POSTGRES_DB=tiktok_ci_test postgres:18 \
+    -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=ci-local-password -e POSTGRES_DB=tiktok_ci_test "$(mirrored postgres:18)" \
     -c max_connections=600 -c fsync=off -c synchronous_commit=off -c full_page_writes=off \
     -c shared_buffers=512MB -c work_mem=16MB >/dev/null
 }
 start_pg "$pg_name"
 # 端到端验收（后端与浏览器）用第二个实例，与普通用例同时运行而不争用同一个数据库。
 start_pg "$acceptance_pg_name"
-docker run -d --name "$redis_name" -p 127.0.0.1::6379 redis:8 --databases 64 >/dev/null
+docker run -d --name "$redis_name" -p 127.0.0.1::6379 "$(mirrored redis:8)" --databases 64 >/dev/null
 for ((attempt=0; attempt<60; attempt++)); do
   if docker exec "$pg_name" pg_isready -U postgres >/dev/null 2>&1 && docker exec "$acceptance_pg_name" pg_isready -U postgres >/dev/null 2>&1 && docker exec "$redis_name" redis-cli ping >/dev/null 2>&1; then break; fi
   sleep 1
@@ -196,7 +204,9 @@ lane_frontend() {
 lane_deploy() {
   if [[ -n $deploy_tools ]]; then node scripts/test-deployment-assets.mjs; fi
   if [[ -n $release_integration ]]; then
-    docker build -f backend/Dockerfile -t "$image_name" .
+    source deploy/ci/image-build-args.sh
+    image_build_args
+    docker build -f backend/Dockerfile ${build_args[@]+"${build_args[@]}"} -t "$image_name" .
     RELEASE_TEST_IMAGE="$image_name" uv run python scripts/test-release-integration.py
   fi
 }

@@ -1,4 +1,8 @@
-FROM oven/bun:1.4.2 AS frontend-build
+# 公司 Jenkins 不能访问 Docker Hub，可改用本项目 ACR 中的同摘要副本；默认仍为官方镜像。
+ARG BUN_IMAGE=oven/bun:1.4.2
+ARG PYTHON_IMAGE=python:3.14
+
+FROM ${BUN_IMAGE} AS frontend-build
 
 WORKDIR /app
 
@@ -6,7 +10,10 @@ COPY package.json bun.lock /app/
 COPY frontend/package.json /app/frontend/
 COPY packages/react-email/package.json /app/packages/react-email/
 
-RUN bun install --frozen-lockfile
+# 只替换 npm 下载地址；锁文件里的版本与校验和保持不变。
+ARG NPM_REGISTRY=
+RUN if [ -n "$NPM_REGISTRY" ]; then export BUN_CONFIG_REGISTRY="$NPM_REGISTRY"; fi \
+    && bun install --frozen-lockfile
 
 COPY ./frontend /app/frontend
 WORKDIR /app/frontend
@@ -16,7 +23,7 @@ ARG VITE_API_URL=
 RUN bun run build
 
 
-FROM python:3.14
+FROM ${PYTHON_IMAGE}
 
 # 国内生产主机可选择已验证的镜像站；APT 仍验证 Debian 签名和包摘要。
 ARG DEBIAN_MIRROR=https://deb.debian.org

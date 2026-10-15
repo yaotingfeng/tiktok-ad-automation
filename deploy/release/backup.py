@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from common import PUBLIC, digest, require, run, write
+from common import POSTGRES_IMAGE, PUBLIC, REDIS_IMAGE, digest, require, run, write
 
 PROBE = Path(__file__).with_name("probe.py")
 
@@ -222,7 +222,7 @@ def restore_verify(folder, values, old_sha, candidate_sha=None):
                     net,
                     "--env-file",
                     str(folder / "verify-pg.env"),
-                    "postgres:18",
+                    POSTGRES_IMAGE,
                 ]
             )
             .decode()
@@ -238,7 +238,7 @@ def restore_verify(folder, values, old_sha, candidate_sha=None):
                     redis_name,
                     "--network",
                     net,
-                    "redis:8",
+                    REDIS_IMAGE,
                     "redis-server",
                     "--save",
                     "",

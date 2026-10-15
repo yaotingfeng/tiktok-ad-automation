@@ -25,8 +25,10 @@ from backup import (
 from common import (
     CONTEXT,
     FLAGS,
+    POSTGRES_IMAGE,
     PROJECT,
     PUBLIC,
+    REDIS_IMAGE,
     ROOT,
     VPC,
     Cluster,
@@ -307,7 +309,7 @@ class Release:
         return expected
 
     def prepare_tools(self, sha=None):
-        for image in {PUBLIC + self.state["old_sha"], "postgres:18", "redis:8"} | (
+        for image in {PUBLIC + self.state["old_sha"], POSTGRES_IMAGE, REDIS_IMAGE} | (
             {PUBLIC + sha} if sha else set()
         ):
             # Apple Silicon 本机也必须验证线上 AMD64 镜像；恢复依赖可用本机架构。
@@ -390,6 +392,7 @@ class Release:
             app,
             {
                 "name": "postgres",
+                # 集群节点可直接拉取官方镜像；ACR 副本只服务于 Jenkins 本机。
                 "image": "postgres:18",
                 "command": ["sleep", "86400"],
                 "resources": {

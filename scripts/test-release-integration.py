@@ -14,7 +14,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "deploy/release"))
 from backup import PROBE, REDIS_RESTORE_CODE, publish_local, restore_verify
-from common import PUBLIC, digest, require, run, write
+from common import PUBLIC, digest, mirrored, require, run, write
 
 
 def main():
@@ -80,7 +80,7 @@ def main():
                         "POSTGRES_PASSWORD=fixture",
                         "-e",
                         "POSTGRES_DB=tkada",
-                        "postgres:18",
+                        mirrored("postgres:18"),
                     ]
                 )
                 .decode()
@@ -96,7 +96,7 @@ def main():
                         red,
                         "--network",
                         name,
-                        "redis:7.0",
+                        mirrored("redis:7.0"),
                     ]
                 )
                 .decode()

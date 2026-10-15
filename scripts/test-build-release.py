@@ -17,6 +17,8 @@ class ReleaseTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         (self.root / "deploy").mkdir()
         shutil.copy(REPO / "deploy/build-and-push.sh", self.root / "deploy")
+        (self.root / "deploy/ci").mkdir()
+        shutil.copy(REPO / "deploy/ci/image-build-args.sh", self.root / "deploy/ci")
         self.real_git = shutil.which("git")
         for args in (
             ("init", "-b", "main"),
@@ -52,8 +54,11 @@ with open(os.environ['DOCKER_LOG'], 'a') as f:
         self.log = self.root / ".git" / "docker.log"
         # 完整检查会为应用测试导出 PROJECT_NAME；镜像项目名由构建脚本固定，
         # 不能继承应用显示名，否则在检查环境里会误触项目名防护。
+        # Jenkins 检查会带入镜像来源变量，这里同样清除，由各用例显式指定。
+        excluded = {"PROJECT_NAME", "TKADA_IMAGE_MIRROR", "DEBIAN_MIRROR",
+                    "PYPI_INDEX_URL", "PYPI_FILES_URL", "NPM_REGISTRY"}
         inherited = {
-            key: value for key, value in os.environ.items() if key != "PROJECT_NAME"
+            key: value for key, value in os.environ.items() if key not in excluded
         }
         self.env = dict(
             inherited,
@@ -117,6 +122,21 @@ with open(os.environ['DOCKER_LOG'], 'a') as f:
         )
         self.assertIn("VCS_REF=" + self.sha, build)
         self.assertIn("--push", build)
+        self.assertFalse(any(arg.startswith("PYTHON_IMAGE=") for arg in build))
+
+    def test_jenkins_mirror_sources_reach_the_release_build(self):
+        import json
+
+        mirror = "registry.example.invalid/test/tiktok-ad-automation-base:"
+        result = self.run_build(
+            TKADA_IMAGE_MIRROR=mirror, PYPI_INDEX_URL="https://pypi.example.invalid/simple"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        build = next(call for call in calls if call[:2] == ["buildx", "build"])
+        self.assertIn("PYTHON_IMAGE=" + mirror + "python-3.14", build)
+        self.assertIn("BUN_IMAGE=" + mirror + "oven-bun-1.4.2", build)
+        self.assertIn("PYPI_INDEX_URL=https://pypi.example.invalid/simple", build)
 
 
 if __name__ == "__main__":

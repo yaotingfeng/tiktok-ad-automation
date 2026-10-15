@@ -25,6 +25,16 @@ ROLES = (
 FLAGS = ("MATERIAL_INGEST_ENABLED", "MATERIAL_CLEANUP_ENABLED", "ADS_SYNC_ENABLED", "AUTOMATED_RULES_ENABLED")
 
 
+def mirrored(image):
+    """公司 Jenkins 不能访问 Docker Hub，用 TKADA_IMAGE_MIRROR 指向本项目 ACR 副本；本机为空时仍用官方镜像。"""
+    mirror = os.environ.get("TKADA_IMAGE_MIRROR", "")
+    return mirror + image.replace("/", "-").replace(":", "-") if mirror else image
+
+
+POSTGRES_IMAGE = mirrored("postgres:18")
+REDIS_IMAGE = mirrored("redis:8")
+
+
 def require(ok, message):
     if not ok:
         raise RuntimeError(message)

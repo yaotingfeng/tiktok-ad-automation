@@ -293,9 +293,11 @@ def main():
                     {"sha": sha, **coverage, "mode": plan["mode"], "at": int(time.time())},
                 )
         if args.action == "deploy":
-            # 仅快进推送指定 SHA 到公司 main；origin 不参与发布。
+            # 仅快进推送指定 SHA 到公司 main；origin 不参与发布。Jenkins 由推送触发，
+            # 远端已是该 SHA，此时不再推送（Jenkins 只持有只读凭据）。
             mark("pushing")
-            git("push", "company", sha + ":refs/heads/main", cwd=checkout)
+            if git("ls-remote", "company", "refs/heads/main", cwd=checkout).split()[0] != sha:
+                git("push", "company", sha + ":refs/heads/main", cwd=checkout)
             require(
                 git("ls-remote", "company", "refs/heads/main", cwd=checkout).split()[0]
                 == sha,

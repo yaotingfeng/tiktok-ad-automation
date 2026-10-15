@@ -2341,3 +2341,18 @@
 - 测试：`tests/conftest.py` 给文件名含 mcp 或参数化通道为 `OFFICIAL_MCP` 的用例打 `mcp` 标记（760 项，约占后端串行耗时 34%）；`backend_tests.py` 始终 `-m "not mcp"`，需要时 `pytest -m mcp` 手动运行。未参数化、默认走 MCP 的 gateway 用例仍运行（覆盖通用网关逻辑），后续退役时改为官方 API 或删除。
 - 生产现状（只读核查）：两个租户的 MCP 连接均已停用，官方 API 各 1 个可用；但 xingyu BC `7666010978596749328` 与 junbo BC `7678608005688066065` 的默认使用授权仍指向已停用的 MCP 连接，需在“授权管理”改为官方 API（junbo 该 BC 尚无可用官方 API 绑定）。
 - 后续退役：删除 MCP 授权/回调/绑定/刷新路由、Worker 与相关表需按迁移流程单独计划。
+
+## 2026-10-15：发布迁移到公司 Jenkins
+
+- 目标：公司 Gitea `main` 收到推送即由公司 Jenkins（`http://123.207.4.46:8080`，任务 `tiktok-ad-automation`）自动检查、构建、备份并发布到新加坡 ACK `test`；本机 `python3 deploy/local.py deploy` 保留为应急入口。两边执行同一套 `deploy/local.py` → `check.sh` / `build-and-push.sh` / `release.py`，不维护第二套发布逻辑。
+- 用户决定：全自动发布（不加人工确认）；发布前备份放 Jenkins 私有目录、只留最新一份；拉代码用用户本人 Gitea 账号的只读令牌（`jenkins-tiktok-ad-automation`，Jenkins 凭据 `yaotf-gitea-tiktok-ad-automation`）。
+- 只读探测（Jenkins 任务 `tiktok-ad-automation-probe`）结论：Jenkins 运行在容器中（宿主 `/data/jenkins` → `/var/jenkins_home`，host 网络，共用宿主 docker.sock，16 核 / 32 GiB，全公司共用一个节点）；`sg-aliyun-k8s-info` 的 context 即 `kubernetes-admin-c19dbd82590a34b9f87cebb8c1a858796`（集群管理员权限）；节点缺 uv/Bun/Node/ffmpeg/PG18 客户端/buildx，kubectl 为 1.23；Docker Hub 不可达，PyPI/npm 官方源极慢，阿里云/腾讯云/npmmirror 镜像快；127.0.0.1 映射端口可达；容器内挂载必须使用宿主路径。
+- 实现：
+  - `deploy/ci/tools.Dockerfile`：工具镜像（Python 3.14、uv 0.9.26、Bun 1.4.2、Node、ffmpeg、PG18 客户端、kubectl 1.36.2、docker CLI + buildx、Playwright 1.62.1 Chromium），在本机构建为 `test/tiktok-ad-automation-base:ci-tools-1`。
+  - Docker Hub 依赖镜像复制到本项目 ACR `test/tiktok-ad-automation-base:{postgres-18,redis-8,redis-7.0,python-3.14,oven-bun-1.4.2}`（linux/amd64，摘要与官方相同）。`TKADA_IMAGE_MIRROR` 设置时 `check.sh`、`release.py`/`backup.py`、发布集成测试与 `backend/Dockerfile`（`BUN_IMAGE`/`PYTHON_IMAGE` 构建参数）改用副本；未设置时本机行为不变。集群内发布辅助 Pod 仍用官方 `postgres:18`。
+  - `deploy/ci/image-build-args.sh`：发布构建与检查集成镜像共用的下载来源参数（`DEBIAN_MIRROR`、`PYPI_INDEX_URL`、`PYPI_FILES_URL`、`NPM_REGISTRY`）；`check.sh` 同样只改源码副本锁文件的下载地址。
+  - `deploy/ci/jenkins-run.sh`：从 Jenkins 容器挂载表换算宿主路径，工作区与私有目录按“宿主路径 = 容器路径”挂进工具容器；本次运行的 kubeconfig、ACR 登录、Gitea 只读凭据放私有目录内的临时目录，结束或中止即删；中止构建会先停止工具容器。
+  - `deploy/local.py`：远端 main 已是发布 SHA 时不再推送（Jenkins 由推送触发且只有只读凭据）。
+  - `Jenkinsfile`：`ACTION=deploy|check|status|recover|finish`、`FULL`；私有目录 `/var/jenkins_home/tk-ada-private`（宿主 `/data/jenkins/tk-ada-private`，0700）保存检查记录、发布批次状态与 `backups/latest.tar`。该目录含密钥；同节点所有 Jenkins 任务都以同一系统用户运行，权限隔离与已有共享 kubeconfig 相同。
+  - Jenkins 凭据：`yaotf-gitea-tiktok-ad-automation`（只读令牌）、`tiktok-ad-automation-retired-source`（旧 prod 停用资源清单，不含密钥）；沿用公司 `sg-aliyun-harbor-info`、`sg-aliyun-k8s-info`。
+- 验证：`node scripts/test-deployment-assets.mjs`（含新增镜像来源用例）在默认与 Jenkins 镜像变量下均通过；`deploy/ci` 单元测试通过；脚本语法检查通过。Jenkins 实际运行与首次发布结果待记录。

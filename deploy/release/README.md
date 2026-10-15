@@ -1,6 +1,6 @@
 # 本地一键发布
 
-目标固定为新加坡 ACK 的 `test` 命名空间，生产入口 `https://tkada.shortclipflix.com`。在本机完成检查、推送公司 main、构建上传镜像、发布前备份、迁移、部署和验收。无需 Jenkins、备份云盘或 OSS。日常数据库备份继续使用已有 PolarDB/Tair 托管策略。
+目标固定为新加坡 ACK 的 `test` 命名空间，生产入口 `https://tkada.shortclipflix.com`。日常由公司 Jenkins 在推送后自动执行（见下文），也可在本机完成检查、推送公司 main、构建上传镜像、发布前备份、迁移、部署和验收。无需备份云盘或 OSS。日常数据库备份继续使用已有 PolarDB/Tair 托管策略。
 
 ## 日常操作
 
@@ -33,6 +33,14 @@ python3 deploy/local.py deploy
 仅检查：`python3 deploy/local.py check`；仅做一次一致性备份：`python3 deploy/local.py backup`（会短暂停止服务、排空在途任务，再恢复原版）。
 
 当前批次：`python3 deploy/local.py status`。完整输出位于该命令显示的私有 `execution.log`。历史批次用 `--run <批次目录名>` 查看或恢复。发布期间保持电脑开机、Docker 运行和网络连接。
+
+## 公司 Jenkins 自动发布
+
+推送到公司 Gitea `main` 后，公司 Jenkins 任务 `tiktok-ad-automation`（`http://123.207.4.46:8080`）自动执行与 `python3 deploy/local.py deploy` 完全相同的流程（`Jenkinsfile` → `deploy/ci/jenkins-run.sh` → 工具镜像内的 `deploy/local.py`）。本机命令保留为应急入口；两边同时发布由集群锁阻止。
+
+- 状态、检查通过记录与最新备份在 Jenkins 私有目录 `/var/jenkins_home/tk-ada-private`（宿主 `/data/jenkins/tk-ada-private`），与本机 `.runtime/local-release/` 结构相同、互不共享。备份为 `backups/latest.tar`，只留最新一份，不作为构建产物下载。
+- 中断处理：在 Jenkins 手动运行该任务，`ACTION` 选 `status` 查看阶段，再按下文选 `recover` 或 `finish`。详细日志在私有目录的批次 `execution.log`，控制台只显示阶段。
+- 工具镜像 `deploy/ci/tools.Dockerfile` 与 Docker Hub 依赖镜像副本（`test/tiktok-ad-automation-base:*`）在能访问外网的机器上构建推送；改动工具版本时同步更新 `Jenkinsfile` 的 `TOOLS_IMAGE`。
 
 ## 本机配置
 
