@@ -14,9 +14,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.integrations.tiktok.contracts.ads import EntityRef, MaterialUseRef
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 
-MutationField = Literal["roas", "budget", "status"]
+MutationField = Literal["roas", "budget", "status", "name"]
 MutationMode = Literal["set", "add", "subtract", "increase_percent", "decrease_percent"]
 StatusValue = Literal["ENABLE", "DISABLE"]
+RenameKind = Literal["replace", "affix", "explicit"]
+# 表格粘贴改名的单次行数上限，与预览和任务的批量边界保持一致。
+MAX_RENAME_ROWS = 500
 
 
 def _decimal(value: Any) -> Decimal:
@@ -31,6 +34,30 @@ def _decimal(value: Any) -> Decimal:
     return result
 
 
+class RenameRule(BaseModel):
+    """改名规则；名称在预览时按规则逐条算出并冻结，重试不再重新计算。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: RenameKind
+    find: str | None = None
+    replace_with: str = ""
+    prefix: str = ""
+    suffix: str = ""
+    # 表格粘贴：推广系列 ID → 新名称。
+    names: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_kind(self) -> RenameRule:
+        if self.kind == "replace" and not self.find:
+            raise ValueError("replace requires find text")
+        if self.kind == "affix" and not (self.prefix or self.suffix):
+            raise ValueError("affix requires prefix or suffix")
+        if self.kind == "explicit" and not 1 <= len(self.names) <= MAX_RENAME_ROWS:
+            raise ValueError("explicit rename requires 1-500 rows")
+        return self
+
+
 class MutationSpec(BaseModel):
     """一项批量管理动作；父级和排除集合都是显式输入。"""
 
@@ -38,7 +65,9 @@ class MutationSpec(BaseModel):
 
     field: MutationField
     mode: MutationMode
-    value: Decimal | StatusValue
+    # 改名动作没有数值，由 rename 规则给出最终名称，因此 value 可空。
+    value: Decimal | StatusValue | None = None
+    rename: RenameRule | None = None
     include_parents: tuple[EntityRef, ...] = ()
     excluded_refs: tuple[EntityRef, ...] = ()
     excluded_material_uses: tuple[MaterialUseRef, ...] = ()
@@ -53,13 +82,25 @@ class MutationSpec(BaseModel):
 
     @field_validator("value", mode="before")
     @classmethod
-    def normalize_value(cls, value: Any) -> Decimal | str:
+    def normalize_value(cls, value: Any) -> Decimal | str | None:
+        if value is None:
+            return None
         if value in ("ENABLE", "DISABLE"):
-            return value
+            return str(value)
         return _decimal(value)
 
     @model_validator(mode="after")
     def validate_operation(self) -> MutationSpec:
+        if self.field == "name":
+            if self.mode != "set" or self.rename is None or self.value is not None:
+                raise ValueError("rename only supports set with a rename rule")
+            if self.min_value is not None or self.max_value is not None:
+                raise ValueError("rename does not take bounds")
+            return self
+        if self.rename is not None:
+            raise ValueError("only name field takes a rename rule")
+        if self.value is None:
+            raise ValueError("management value required")
         if self.field == "status":
             if self.mode != "set" or self.value not in {"ENABLE", "DISABLE"}:
                 raise ValueError("status only supports set ENABLE or DISABLE")
@@ -163,7 +204,8 @@ class ManagementTaskMutation(BaseModel):
 
     field: MutationField
     mode: MutationMode
-    value: Decimal | StatusValue
+    value: Decimal | StatusValue | None = None
+    rename_kind: RenameKind | None = None
 
 
 class ManagementTaskSource(BaseModel):

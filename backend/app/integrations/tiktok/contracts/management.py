@@ -11,13 +11,15 @@ from typing import Any, Literal, Protocol
 from .ads import EntityRef
 from .common import CallEvidence
 
-ManagementField = Literal["roas", "budget", "status", "material_status"]
+ManagementField = Literal["roas", "budget", "status", "material_status", "name"]
 ManagementOutcome = Literal["ACCEPTED", "REJECTED", "NOT_SENT", "UNKNOWN"]
 _MANAGEMENT_OPERATIONS = {
     "roas": "update_roas",
     "budget": "update_budget",
     "status": "set_status",
     "material_status": "set_material_status",
+    # 改名只针对推广系列；名称写入与预算共用平台的系列更新接口。
+    "name": "rename",
 }
 _ENTITY_KINDS = frozenset(
     {"campaign", "adgroup", "ad", "creative", "material", "account"}
@@ -29,6 +31,11 @@ def _text(value: object, name: str) -> str:
     if type(value) is not str or not value.strip() or len(value) > 255:
         raise ValueError(f"invalid {name}")
     return value
+
+
+def operation_for_field(field: str) -> str | None:
+    """字段到管理操作的唯一映射；预览、提交、执行都从这里取，避免多份映射表漂移。"""
+    return _MANAGEMENT_OPERATIONS.get(field)
 
 
 @dataclass(frozen=True)
@@ -61,6 +68,15 @@ class ManagementCommand:
                 raise ValueError("status requires exactly one status field")
             if self.desired[status_keys[0]] not in {"ENABLE", "DISABLE"}:
                 raise ValueError("status must be ENABLE or DISABLE")
+        if self.field == "name":
+            # 改名命令只携带名称本身，防止借改名夹带其它字段写入。
+            if self.ref.kind != "campaign":
+                raise ValueError("rename requires campaign identity")
+            if set(self.desired) != {"campaign_name"}:
+                raise ValueError("rename requires exactly campaign_name")
+            name = self.desired["campaign_name"]
+            if type(name) is not str or not 0 < len(name.strip()) <= 512:
+                raise ValueError("invalid campaign name")
         if self.field == "material_status":
             if self.ref.kind != "ad":
                 raise ValueError("material status requires ad identity")
