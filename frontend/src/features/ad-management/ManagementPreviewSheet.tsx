@@ -395,9 +395,9 @@ function PreviewRows({
                 表格中无法识别（{problems.length}）
               </td>
             </tr>
-            {problems.map((problem) => (
+            {problems.map((problem, index) => (
               <tr
-                key={`${problem.campaign_id}:${problem.reason}`}
+                key={`${index}:${problem.campaign_id}:${problem.reason}`}
                 className="border-b align-top"
               >
                 <td className="p-2">
@@ -593,7 +593,11 @@ export function ManagementPreviewSheet({
         })
       ).data,
   })
-  const draftRule = renaming ? renameRuleFrom(renameDraft) : null
+  // 表格最多 500 行，按草稿缓存解析结果，避免每秒倒计时重渲染时重复解析。
+  const draftRule = useMemo(
+    () => (renaming ? renameRuleFrom(renameDraft) : null),
+    [renaming, renameDraft],
+  )
   // 草稿与已生成预览的规则不一致时必须重新生成预览才能提交。
   const ruleStale =
     renaming && JSON.stringify(draftRule) !== JSON.stringify(renameRule)

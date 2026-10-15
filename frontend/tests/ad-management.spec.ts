@@ -1,5 +1,8 @@
 import { expect, test } from "@playwright/test"
-import { parsePastedRows } from "../src/features/ad-management/renameRules"
+import {
+  parsePastedRows,
+  renameRuleFrom,
+} from "../src/features/ad-management/renameRules"
 import { adsBoundary, BC_A, TENANT } from "./utils/adsBoundary"
 
 const selectionId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -753,10 +756,47 @@ test.describe("parsePastedRows", () => {
   test("超过 500 行返回错误", () => {
     const text = Array.from(
       { length: 501 },
-      (_, index) => `${1700000000000000000 + index},名称${index}`,
+      (_, index) =>
+        `17000000000000${String(index).padStart(5, "0")},名称${index}`,
     ).join("\n")
     expect(parsePastedRows(text).errors).toEqual([
       "单次最多 500 行，请分批粘贴",
     ])
+  })
+
+  test("格式异常的首行不当表头，交给服务器校验 ID", () => {
+    expect(parsePastedRows("1.7E+18\t剧A\n１７００\t剧B")).toEqual({
+      rows: [
+        { campaignId: "1.7E+18", newName: "剧A" },
+        { campaignId: "１７００", newName: "剧B" },
+      ],
+      errors: [],
+    })
+  })
+
+  test("首列含空格或全角逗号时提示改用 Tab 或逗号分隔", () => {
+    expect(
+      parsePastedRows("1700000000000000001 剧A\n1700000000000000002，剧B")
+        .errors,
+    ).toEqual([
+      "第 1 行未分出两列，请用 Tab 或逗号分隔推广系列 ID 和新名称",
+      "第 2 行未分出两列，请用 Tab 或逗号分隔推广系列 ID 和新名称",
+    ])
+  })
+
+  test("同一 ID 粘贴多次时以第一行的新名称为准", () => {
+    expect(
+      renameRuleFrom({
+        kind: "explicit",
+        find: "",
+        replaceWith: "",
+        prefix: "",
+        suffix: "",
+        text: "1700000000000000001\t剧A\n1700000000000000001\t剧B",
+      }),
+    ).toEqual({
+      kind: "explicit",
+      names: { "1700000000000000001": "剧A" },
+    })
   })
 })
