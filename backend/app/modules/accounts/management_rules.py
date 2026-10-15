@@ -14,6 +14,8 @@ MANAGEMENT_ENTITY_KINDS: dict[str, frozenset[str]] = {
     "update_budget": frozenset({"campaign", "adgroup"}),
     "update_roas": frozenset({"adgroup"}),
     "set_material_status": frozenset({"ad"}),
+    # 第一期改名只开放推广系列。
+    "rename": frozenset({"campaign"}),
 }
 CREATIVE_SCOPES = frozenset({"6", "61", "611"})
 

@@ -116,8 +116,8 @@ class ManagementPreviewItem(SQLModel, table=True):
     capability: dict = Field(
         default_factory=dict, sa_column=Column(JSONB, nullable=False)
     )
-    original_value: str | None = Field(default=None, max_length=128)
-    final_value: str | None = Field(default=None, max_length=128)
+    original_value: str | None = Field(default=None, max_length=512)
+    final_value: str | None = Field(default=None, max_length=512)
     reason: str | None = Field(default=None, max_length=255)
     execution_result: str = Field(default="PENDING", max_length=16)
     observation_state: str | None = Field(default=None, max_length=32)
@@ -216,7 +216,9 @@ class ManagementTaskItem(SQLModel, table=True):
             "execution_result IN ('PENDING','ACCEPTED','REJECTED','NOT_SENT','UNKNOWN','NO_CHANGE','CONFLICT','UNSUPPORTED','CANCELLED')",
             name="ck_management_task_item_result",
         ),
-        CheckConstraint("claim_generation >= 1", name="ck_management_task_item_claim_generation"),
+        CheckConstraint(
+            "claim_generation >= 1", name="ck_management_task_item_claim_generation"
+        ),
         Index(
             "ix_management_task_item_status", "tenant_id", "task_id", "execution_result"
         ),
@@ -234,8 +236,8 @@ class ManagementTaskItem(SQLModel, table=True):
     material_use: dict | None = Field(
         default=None, sa_column=Column(JSONB, nullable=True)
     )
-    original_value: str | None = Field(default=None, max_length=128)
-    final_value: str | None = Field(default=None, max_length=128)
+    original_value: str | None = Field(default=None, max_length=512)
+    final_value: str | None = Field(default=None, max_length=512)
     reason: str | None = Field(default=None, max_length=255)
     membership_digest: str | None = Field(default=None, max_length=64)
     execution_result: str = Field(default="PENDING", max_length=16)

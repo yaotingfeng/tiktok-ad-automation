@@ -51,6 +51,7 @@ def test_observed_subject_normalizes_immutable_authorization_fields():
     assert payload["scopes"] == ["2", "6"]
     # 管理操作只按官方 scope 层级映射，授权材料里自报的操作名被忽略。
     assert payload["management_operations"] == [
+        "rename",
         "set_material_status",
         "set_status",
         "update_budget",

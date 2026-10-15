@@ -115,3 +115,14 @@ def test_usable_grants_material_switch_needs_creative_scope(session, management_
     _grant(session, management_env).can_upload = False
     session.flush()
     assert session.exec(statement).all() == []
+
+
+def test_rename_follows_build_permission_and_is_campaign_only(session, management_env):
+    # 改名与启停、调预算同属广告管理（官方 scope 2）：有搭建权限即可改推广系列名称。
+    _verify(session, management_env, "rename", "campaign")
+    with pytest.raises(DomainError):
+        _verify(session, management_env, "rename", "adgroup")
+    _grant(session, management_env).can_build = False
+    session.flush()
+    with pytest.raises(DomainError, match="management_permission_unverified"):
+        _verify(session, management_env, "rename", "campaign")

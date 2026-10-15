@@ -19,7 +19,8 @@ def management_operations_for_scopes(scopes: set[int]) -> frozenset[str]:
     """官方 scope 到管理操作的唯一映射；实际写权还需账户角色为 ADMIN/OPERATOR。"""
     if _ADS_MANAGEMENT not in scopes:
         return frozenset()
-    operations = {"set_status", "update_budget", "update_roas"}
+    # 官方层级 2 覆盖系列的编辑，系列改名与预算修改同属这一层级。
+    operations = {"set_status", "update_budget", "update_roas", "rename"}
     if scopes & _CREATIVE_MANAGEMENT:
         operations.add("set_material_status")
     return frozenset(operations & MANAGEMENT_OPERATIONS)
