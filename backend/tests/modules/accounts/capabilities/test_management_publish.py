@@ -123,3 +123,63 @@ def test_existing_authorization_without_operations_uses_stored_scopes(
         "update_roas",
         "set_material_status",
     }
+
+
+def test_non_numeric_stored_scopes_do_not_break_publish(
+    capability_env, wire, redis_client
+):
+    """授权里混有非数字 scope（如 MCP 的 mcp:tt4b）时只忽略它，不能让整页能力发布失败。"""
+    env = capability_env
+    _set_scope(env, "[2,6]")
+    with Session(engine) as session, session.begin():
+        authorization = session.exec(
+            select(ConnectionAuthorization).where(
+                ConnectionAuthorization.connection_id == env["connection_id"]
+            )
+        ).one()
+        summary = dict(authorization.permission_summary)
+        summary.pop("management_operations")
+        authorization.permission_summary = summary
+        authorization.scopes = ["mcp:tt4b", "2", "6"]
+    job_id = start(env)
+    wire[1].append(page(["actual-account"], role="ADMIN"))
+    run(env, redis_client, job_id)
+    job = run(env, redis_client, job_id)
+    assert job.status == "COMPLETE", job.error_code
+
+
+def test_binding_generation_mismatch_skips_management_only(
+    capability_env, wire, redis_client
+):
+    """绑定记录的授权代数与连接不一致时管理证据无法挂靠：只跳过管理能力，搭建/上传照常发布。"""
+    from app.modules.accounts.connection_models import BCConnectionBinding
+    from app.modules.accounts.models import BCAccountAccess
+
+    env = capability_env
+    _set_scope(env, "[2,6]")
+    with Session(engine) as session, session.begin():
+        binding = session.get(
+            BCConnectionBinding,
+            (env["context"].tenant_id, env["bc_id"], env["connection_id"]),
+        )
+        binding.authorization_revision += 7
+    job_id = start(env)
+    wire[1].append(page(["actual-account"], role="ADMIN"))
+    run(env, redis_client, job_id)
+    job = run(env, redis_client, job_id)
+    assert job.status == "COMPLETE", job.error_code
+    with Session(engine) as session:
+        grant = session.exec(
+            select(BCAccountAccess).where(
+                BCAccountAccess.advertiser_id == "actual-account"
+            )
+        ).one()
+        assert grant.can_build
+        assert (
+            session.exec(
+                select(ManagementCapability).where(
+                    ManagementCapability.advertiser_id == "actual-account"
+                )
+            ).all()
+            == []
+        )

@@ -207,9 +207,14 @@ def directory_context(committed_context):
         CapabilityPage,
         CapabilityRequest,
     )
+    from app.modules.accounts.management_capability_models import (
+        ManagementCapability,
+    )
 
     with Session(engine) as own:
         for model in (
+            # 能力发布同时写入的管理能力引用授权与账户，需先删除。
+            ManagementCapability,
             CapabilityAsset,
             CapabilityPage,
             CapabilityRequest,

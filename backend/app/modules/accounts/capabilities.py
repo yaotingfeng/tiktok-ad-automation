@@ -41,7 +41,10 @@ from app.modules.accounts.capability_models import (
     CapabilityRequest,
 )
 from app.modules.accounts.capability_schemas import CapabilityEvidence
-from app.modules.accounts.connection_models import ConnectionAuthorization
+from app.modules.accounts.connection_models import (
+    BCConnectionBinding,
+    ConnectionAuthorization,
+)
 from app.modules.accounts.directory_models import DirectoryRevision
 from app.modules.accounts.management_capabilities import record_management_capabilities
 from app.modules.accounts.models import (
@@ -444,13 +447,24 @@ def _publish(session: Session, job: CapabilityJob, context: TenantContext) -> No
             == route.authorization_revision,
         )
     ).one()
+    binding = session.get(
+        BCConnectionBinding, (context.tenant_id, job.bc_id, job.connection_id)
+    )
+    # 管理证据以绑定的授权代数与绑定代数为真实外键；两者与冻结路由不一致时
+    # 无法挂靠，只跳过管理能力，不影响搭建/上传权限发布。
+    anchored = (
+        binding is not None
+        and binding.authorization_revision == route.authorization_revision
+        and binding.revision == route.binding_revision
+    )
     summary = authorization.permission_summary or {}
     if "management_operations" in summary:
         management = frozenset(summary["management_operations"])
     elif job.channel == "OFFICIAL_API":
         # 早于管理能力上线保存的官方授权摘要没有该字段：按已保存的 scope 用同一映射推导。
+        # 只取数字 scope；同一授权里可能混有 MCP 的字符串 scope，忽略即可。
         management = management_operations_for_scopes(
-            {int(value) for value in authorization.scopes}
+            {int(value) for value in authorization.scopes if str(value).isdigit()}
         )
     else:
         management = frozenset()
@@ -480,6 +494,8 @@ def _publish(session: Session, job: CapabilityJob, context: TenantContext) -> No
         grant.can_upload = bool(operate and job.scope_upload)
         grant.checked_at = now
         session.add(grant)
+        if not anchored:
+            continue
         # 同一份完整角色证据同时发布广告管理能力；不可操作的账户写出全 UNKNOWN 矩阵。
         record_management_capabilities(
             session,
