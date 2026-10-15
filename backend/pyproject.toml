@@ -46,7 +46,10 @@ exclude = ["venv", ".venv", "alembic"]
 # Resolve them by package identity rather than competing top-level module names.
 addopts = ["--import-mode=importlib"]
 # slow 由 tests/conftest.py 按目录和 tests/slow_tests.txt 标记；日常 `pytest -m "not slow"`。
-markers = ["slow: 端到端验收及实测 10 秒以上的用例，只在发布门禁中运行"]
+markers = [
+    "slow: 端到端验收及实测 10 秒以上的用例，只在发布门禁中运行",
+    "mcp: 官方 MCP 通道专属用例；通道退役中，检查与发布门禁不运行",
+]
 
 [tool.ruff]
 target-version = "py314"

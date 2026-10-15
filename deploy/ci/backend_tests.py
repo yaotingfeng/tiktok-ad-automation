@@ -7,6 +7,7 @@
   否则先跑完普通用例再单独跑验收。验收结束时若设置了 CHECK_ACCEPTANCE_DONE，写入该
   标记文件，供浏览器验收接着使用同一实例。
 - --fast 只跑快速层（排除 slow 标记，含全部验收），供日常检查；发布门禁跑全部。
+- 官方 MCP 通道退役中，mcp 标记的用例始终不运行。
 - 每组内保持文件路径排序（已知部分夹具依赖收集顺序）。
 - 并行失败的用例在全新数据库中单独重跑一次；重跑通过记为“并行不稳定”并列出，
   仍失败才判定失败。失败过多时视为真实故障，不重跑。
@@ -102,8 +103,9 @@ def recreate_database(base_url, name):
 
 
 def marker_args(fast):
-    # 快速层按 tests/conftest.py 打上的 slow 标记排除慢用例。
-    return ["-m", "not slow"] if fast else []
+    # 官方 MCP 通道退役中，按 tests/conftest.py 打上的 mcp 标记始终排除；
+    # 快速层另按 slow 标记排除慢用例。
+    return ["-m", "not slow and not mcp" if fast else "not mcp"]
 
 
 def collect(targets, env, fast=False):

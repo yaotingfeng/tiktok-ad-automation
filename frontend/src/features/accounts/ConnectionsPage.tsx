@@ -32,6 +32,10 @@ import {
   refreshLabels,
 } from "./presentation"
 
+// 官方 MCP 通道逐步退役：暂停新授权、重新授权与新增 BC 接入，统一改用官方 API。
+const MCP_RETIRING_HINT =
+  "官方 MCP 通道正在退役，已暂停新授权，请使用官方 API。"
+
 function isDiscoveryPending(connection: ConnectionPublic) {
   return (
     connection.status !== "DISABLED" &&
@@ -269,7 +273,9 @@ export function ConnectionsPage() {
                     <Button
                       size="sm"
                       variant="ghost"
-                      disabled={!mcpReady}
+                      // 官方 MCP 通道退役中：暂停新增授权与接入，已有连接可查看、解绑、停用。
+                      disabled
+                      title={MCP_RETIRING_HINT}
                       onClick={() =>
                         setMcpAction({
                           connectionId: row.original.id,
@@ -284,6 +290,8 @@ export function ConnectionsPage() {
                   <Button
                     size="sm"
                     variant="ghost"
+                    disabled
+                    title={MCP_RETIRING_HINT}
                     onClick={() =>
                       setMcpAction({
                         attemptId: row.original.authorization_attempt_id!,
@@ -296,8 +304,11 @@ export function ConnectionsPage() {
                 <Button
                   size="sm"
                   variant="ghost"
-                  disabled={
-                    row.original.kind === "OFFICIAL_MCP" ? !mcpReady : !ready
+                  disabled={row.original.kind === "OFFICIAL_MCP" || !ready}
+                  title={
+                    row.original.kind === "OFFICIAL_MCP"
+                      ? MCP_RETIRING_HINT
+                      : undefined
                   }
                   onClick={() =>
                     row.original.kind === "OFFICIAL_MCP"
@@ -325,7 +336,7 @@ export function ConnectionsPage() {
         ),
       },
     ],
-    [manage, ready, mcpReady],
+    [manage, ready],
   )
   const callback = search.authorization
   return (
@@ -393,10 +404,7 @@ export function ConnectionsPage() {
           当前租户的全部授权连接，不受顶栏 BC 筛选影响。
         </p>
         {manage && (
-          <Button
-            disabled={!ready && !mcpReady}
-            onClick={() => setChooseChannel(true)}
-          >
+          <Button disabled={!ready} onClick={() => setChooseChannel(true)}>
             新增连接
           </Button>
         )}
@@ -467,7 +475,8 @@ export function ConnectionsPage() {
             </Button>
             <Button
               variant="outline"
-              disabled={!mcpReady}
+              disabled
+              title={MCP_RETIRING_HINT}
               onClick={() => {
                 setChooseChannel(false)
                 setMcpAction({})
@@ -476,8 +485,9 @@ export function ConnectionsPage() {
               官方 MCP
             </Button>
             <p className="text-sm text-muted-foreground">
-              每种通道独立授权，同一授权可接入多个
-              BC。管理员在“授权管理”页上方为各 BC 设置使用授权。
+              {MCP_RETIRING_HINT}
+              同一授权可接入多个 BC，管理员在“授权管理”页上方为各 BC
+              设置使用授权。
             </p>
           </div>
         </ManagementSheet>

@@ -2333,3 +2333,11 @@
 - 端口隔离：`check.sh` 每批为前端开发服务器、浏览器批量验收、R2 验收页面与模拟存储取空闲端口（`PLAYWRIGHT_PORT`、`ACCEPTANCE_BROWSER_PORT`、`R2_ACCEPTANCE_PORT`、`R2_STORAGE_PORT`），各配置/服务缺省仍为 5173/5191/5293/5294。解决并行检查或本机开发服务器占用固定端口导致的成批 `ERR_CONNECTION_REFUSED`。
 - 验收并行：`check.sh` 另起一个 PG18 实例（`ACCEPTANCE_DATABASE_URL`），`backend_tests.py` 在其上与普通用例同时跑后端验收；完成后写 `CHECK_ACCEPTANCE_DONE`，浏览器验收只等后端验收结束、改用验收实例，不再等整条后端检查线。未设置该变量时保持原先“普通后验收”的顺序。
 - 未做：`test_two_full_batches_reach_share_http_concurrently_without_overlapping_members` 的根因是高负载下同范围批次的 advisory 锁等待超过 5 秒调用期限（`bounded_session`），属业务锁等待与期限的取舍，单独分析；其余并行不稳定用例单独重跑均通过，不阻断发布。
+
+## 2026-10-15：官方 MCP 通道开始退役
+
+- 用户决定：官方 MCP 通道逐步退役，统一使用官方 API；先禁用前端 MCP 授权入口，相关测试不再运行。
+- 前端（`ConnectionsPage.tsx`）：“新增连接”中的官方 MCP、MCP 行的“重新授权”“添加 BC”、授权候选“选择 BC”均禁用并提示改用官方 API；“新增连接”只看官方 API 是否已配置。已有 MCP 连接仍可查看详情、解绑 BC、停用。前端测试改为断言入口禁用且不产生写请求。
+- 测试：`tests/conftest.py` 给文件名含 mcp 或参数化通道为 `OFFICIAL_MCP` 的用例打 `mcp` 标记（760 项，约占后端串行耗时 34%）；`backend_tests.py` 始终 `-m "not mcp"`，需要时 `pytest -m mcp` 手动运行。未参数化、默认走 MCP 的 gateway 用例仍运行（覆盖通用网关逻辑），后续退役时改为官方 API 或删除。
+- 生产现状（只读核查）：两个租户的 MCP 连接均已停用，官方 API 各 1 个可用；但 xingyu BC `7666010978596749328` 与 junbo BC `7678608005688066065` 的默认使用授权仍指向已停用的 MCP 连接，需在“授权管理”改为官方 API（junbo 该 BC 尚无可用官方 API 绑定）。
+- 后续退役：删除 MCP 授权/回调/绑定/刷新路由、Worker 与相关表需按迁移流程单独计划。

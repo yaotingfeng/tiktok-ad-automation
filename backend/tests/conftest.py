@@ -35,6 +35,13 @@ SLOW_TESTS = {
 }
 
 
+def is_mcp_test(nodeid: str) -> bool:
+    """官方 MCP 通道专属用例：文件名含 mcp，或参数化通道为 OFFICIAL_MCP。"""
+    path, _, rest = nodeid.partition("::")
+    params = rest.partition("[")[2].rstrip("]").split("-")
+    return "mcp" in Path(path).name.lower() or "OFFICIAL_MCP" in params
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     for item in items:
         nodeid = item.nodeid
@@ -43,6 +50,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             or nodeid.split("[", 1)[0] in SLOW_TESTS
         ):
             item.add_marker(pytest.mark.slow)
+        # 官方 MCP 通道退役中，发布门禁不再运行；需要时 `pytest -m mcp` 手动运行。
+        if is_mcp_test(nodeid):
+            item.add_marker(pytest.mark.mcp)
 
 
 @pytest.fixture(scope="session", autouse=True)

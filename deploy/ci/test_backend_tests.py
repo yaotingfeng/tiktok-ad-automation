@@ -53,8 +53,11 @@ class PartitionTests(unittest.TestCase):
         self.assertEqual(exclusive, ["tests/acceptance/test_flow.py::b"])
 
     def test_fast_tier_deselects_slow_marker(self):
-        self.assertIn("not slow", backend_tests.pytest_command(["tests"], fast=True))
-        self.assertNotIn("not slow", backend_tests.pytest_command(["tests"], fast=False))
+        fast = backend_tests.pytest_command(["tests"], fast=True)
+        full = backend_tests.pytest_command(["tests"], fast=False)
+        self.assertIn("not slow and not mcp", fast)
+        self.assertIn("not mcp", full)
+        self.assertFalse(any("slow" in arg for arg in full))
 
     def test_exclusive_shards_do_not_reuse_regular_resources(self):
         env = {
