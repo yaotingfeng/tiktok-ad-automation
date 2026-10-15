@@ -137,7 +137,12 @@ if __name__ == "__main__":
     if action == "fingerprint":
         result = fingerprint()
     elif action == "redis":
-        result = redis_export()
+        # 积压时 Redis 可达数十 MB，经 exec 标准输出回传会断流；先写入容器文件，
+        # 再由发布端带重试与校验和复制，标准输出只返回条数。
+        records = redis_export()
+        with open(json.loads(sys.argv[2]), "w") as stream:
+            json.dump(records, stream)
+        result = {"records": len(records)}
     elif action == "broker":
         import redis
         from app.core.config import settings

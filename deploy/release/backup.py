@@ -113,7 +113,13 @@ def snapshot(release):
         )
         remote_file(cluster, pod, "app", "/tmp/" + filename, folder / filename)
     write(folder / "source-fingerprint.json", release.probe("fingerprint"))
-    write(folder / "redis.json", release.probe("redis"))
+    # probe 的附加参数按 JSON 透传，这里是容器内导出文件路径。
+    exported = release.probe("redis", "/tmp/redis.json")
+    remote_file(cluster, pod, "app", "/tmp/redis.json", folder / "redis.json")
+    require(
+        len(json.loads((folder / "redis.json").read_text())) == exported["records"],
+        "Redis export record count mismatch",
+    )
     release.archive_project(folder / "project.tar.gz")
     # 清单包含运行配置、注册材料、原副本与旧部署、共享入口证书引用。
     with tarfile.open(folder / "config.tar.gz", "w:gz") as archive:

@@ -183,10 +183,23 @@ r=redis.Redis.from_url(os.environ['REDIS_URL'])
 r.set('string',b'\\x00secret');r.rpush('queue',b'one',b'two');r.hset('hash',mapping={b'k':b'v'});r.sadd('set',b'a',b'b');r.zadd('zset',{b'a':1.2});r.set('expiry','value',px=600000)
 """
             run(app + ["python", "-c", code])
-            records = json.loads(
-                run(app + ["python", "-", "redis"], data=PROBE.read_bytes())
+            # 与发布端一致：探针把导出写入容器文件，标准输出只回条数；
+            # --rm 容器不保留文件，故在同一容器内导出后立即读取。
+            output = run(
+                app
+                + [
+                    "sh",
+                    "-c",
+                    "python - redis '\"/tmp/redis.json\"' && cat /tmp/redis.json",
+                ],
+                data=PROBE.read_bytes(),
             )
-            require(len(records) == 6, "Expected all Redis fixture types")
+            summary, _, body = output.partition(b"\n")
+            exported, records = json.loads(summary), json.loads(body)
+            require(
+                exported == {"records": 6} and len(records) == 6,
+                "Expected all Redis fixture types",
+            )
             require(
                 all(
                     int.from_bytes(base64.b64decode(r["dump"])[-10:-8], "little") == 10
