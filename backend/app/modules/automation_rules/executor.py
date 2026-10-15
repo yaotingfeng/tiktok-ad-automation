@@ -3,14 +3,12 @@
 不直接调用 TikTok：写入、重试、写前观测核对与写后定向刷新全部由广告管理负责。
 """
 
-import hashlib
-import json
 import logging
 from collections import defaultdict
 from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
-from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
@@ -42,12 +40,12 @@ from app.modules.automation_rules.models import (
 from app.modules.automation_rules.schemas import RuleDefinition
 from app.modules.automation_rules.settings_service import load_tenant_setting
 from app.modules.reporting.query_models import FrozenSelectionRecord
+from app.modules.reporting.selection import create_target_selection
 from app.modules.tenants.permissions import require_tenant
 
 logger = logging.getLogger(__name__)
 
 MANAGEMENT_SOURCE = "automation_rule"
-SELECTION_TTL = timedelta(minutes=15)
 # 执行摘要中逐条列出的不支持对象上限。
 MAX_DETAILS = 20
 
@@ -102,46 +100,15 @@ def _selection(
         "rule_id": str(run.rule_id),
         "run_id": str(run.id),
     }
-    digest_source = {
-        "refs": [
-            (r["tenant_id"], r["advertiser_id"], r["kind"], r["remote_id"])
-            for r in refs
-        ],
-        "uses": [
-            (
-                u["ad_ref"]["tenant_id"],
-                u["ad_ref"]["advertiser_id"],
-                u["ad_ref"]["remote_id"],
-                u["platform_material_id"],
-                u["ad_material_id"],
-                u["material_type"],
-            )
-            for u in uses
-        ],
-    }
-    record = FrozenSelectionRecord(
-        tenant_id=context.tenant_id,
+    return create_target_selection(
+        session,
+        context=context,
         bc_id=bc_id,
-        actor_id=context.actor_id,
-        created_at=now,
-        expires_at=max(now, datetime.now(UTC)) + SELECTION_TTL,
-        snapshot_id=uuid4(),
-        advertiser_ids=sorted({t["advertiser_id"] for t in targets}),
-        filters=filters,
-        filter_digest=hashlib.sha256(
-            json.dumps(filters, sort_keys=True).encode()
-        ).hexdigest(),
-        publication_versions={},
-        naming_versions={},
         refs=refs,
-        material_uses=uses,
-        membership_digest=hashlib.sha256(
-            json.dumps(digest_source, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest(),
+        uses=uses,
+        filters=filters,
+        now=now,
     )
-    session.add(record)
-    session.flush()
-    return record
 
 
 def _target_key(

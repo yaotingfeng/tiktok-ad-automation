@@ -195,7 +195,7 @@ def test_management_http_routes_have_scoped_operation_ids():
         for method, payload in methods.items()
         if method in {"get", "post"} and "ad-management" in path
     }
-    assert len(routes) == 9
+    assert len(routes) == 10
     assert all(operation.startswith("ad_management-") for operation in routes.values())
 
 

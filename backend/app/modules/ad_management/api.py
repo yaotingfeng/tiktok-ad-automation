@@ -19,12 +19,15 @@ from app.modules.ad_management.actions import (
     retry_task,
 )
 from app.modules.ad_management.previews import prepare_preview
+from app.modules.ad_management.rename import resolve_rename_rows
 from app.modules.ad_management.schemas import (
     ManagementPreviewPublic,
     ManagementPreviewRequest,
     ManagementRetryRequest,
     ManagementTaskPublic,
     ManagementTaskRequest,
+    RenameSelectionPublic,
+    RenameSelectionRequest,
 )
 from app.modules.ad_management.submissions import submit_management_task
 from app.modules.tenants.permissions import require_tenant
@@ -56,6 +59,26 @@ def prepare_preview_route(
         selection_id=body.selection_id,
         mutation=body.mutation,
     )
+    session.commit()
+    return result
+
+
+@router.post(
+    "/ad-management-rename-selections",
+    response_model=RenameSelectionPublic,
+    status_code=201,
+    operation_id="ad_management-resolve_rename_selection",
+)
+def resolve_rename_selection_route(
+    tenant_id: UUID,
+    body: RenameSelectionRequest,
+    session: SessionDep,
+    user: CurrentUser,
+) -> RenameSelectionPublic:
+    context = require_tenant(
+        session, actor_id=user.id, tenant_id=tenant_id, action="ads_manage"
+    )
+    result = resolve_rename_rows(session, context, body)
     session.commit()
     return result
 

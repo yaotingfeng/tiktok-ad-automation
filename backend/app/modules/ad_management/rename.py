@@ -7,6 +7,7 @@
 import re
 from collections import Counter
 from copy import deepcopy
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlmodel import Session, col, select
@@ -14,6 +15,8 @@ from sqlmodel import Session, col, select
 from app.core.context import TenantContext
 from app.integrations.tiktok.contracts.ads import EntityRef
 from app.integrations.tiktok.contracts.management import ManagementCommand
+from app.modules.accounts.access import usable_grants
+from app.modules.accounts.models import BCAccountAccess
 from app.modules.ad_management.expansion import (
     ExpandedItem,
     Expansion,
@@ -21,9 +24,20 @@ from app.modules.ad_management.expansion import (
     _management_allowed,
     _object_for_ref,
 )
-from app.modules.ad_management.schemas import MutationSpec, RenameRule
+from app.modules.ad_management.schemas import (
+    MutationSpec,
+    RenameRowProblem,
+    RenameRule,
+    RenameSelectionPublic,
+    RenameSelectionRequest,
+)
 from app.modules.ads.models import AdObject
 from app.modules.ads.naming import parse_campaign_name
+from app.modules.reporting.selection import (
+    create_target_selection,
+    get_frozen_selection,
+)
+from app.modules.tenants.permissions import require_tenant
 
 MAX_NAME_LENGTH = 512
 # 平台不接受表情符号，按以下区段判断：U+1F000-1FAFF 主要表情与符号平面，
@@ -275,3 +289,83 @@ def expand_rename(
 
 
 __all__ = ["compute_name", "expand_rename", "name_problem"]
+
+
+def resolve_rename_rows(
+    session: Session, context: TenantContext, request: RenameSelectionRequest
+) -> RenameSelectionPublic:
+    """把表格粘贴的推广系列 ID 解析成本 BC 内的冻结选择，并列出表格层面的问题行。
+
+    新名称不在此校验：名称合法性与重名统一由改名预览判定。
+    """
+    require_tenant(
+        session,
+        actor_id=context.actor_id,
+        tenant_id=context.tenant_id,
+        action="ads_manage",
+    )
+    problems: list[RenameRowProblem] = []
+    ids: list[str] = []
+    for row in request.rows:
+        campaign_id = row.campaign_id.strip()
+        # Excel 会把长数字显示成 1.7E+18 之类的科学计数法，精度已丢失，只能拒绝。
+        if not campaign_id.isdigit():
+            problems.append(
+                RenameRowProblem(campaign_id=campaign_id, reason="id_invalid")
+            )
+        elif campaign_id in ids:
+            # 同一 ID 只保留第一次出现的行，后续行无法确定以哪个新名称为准。
+            problems.append(
+                RenameRowProblem(
+                    campaign_id=campaign_id, reason="duplicate_campaign_id"
+                )
+            )
+        else:
+            ids.append(campaign_id)
+    # 只在本 BC 当前可读的账户内查找；与读取冻结选择时的授权校验口径一致。
+    advertisers = usable_grants(
+        tenant_id=context.tenant_id, bc_id=request.bc_id, action="read"
+    ).with_only_columns(col(BCAccountAccess.advertiser_id))
+    found = session.exec(
+        select(AdObject)
+        .where(
+            AdObject.tenant_id == context.tenant_id,
+            AdObject.kind == "campaign",
+            col(AdObject.remote_id).in_(ids),
+            col(AdObject.advertiser_id).in_(advertisers),
+        )
+        .order_by(col(AdObject.advertiser_id))
+    ).all()
+    by_id = {obj.remote_id: obj for obj in found}
+    refs: list[dict[str, str]] = []
+    for campaign_id in ids:
+        obj = by_id.get(campaign_id)
+        if obj is None:
+            # 不区分"不在本 BC"与"不存在"，避免泄露其他 BC 的推广系列信息。
+            problems.append(
+                RenameRowProblem(campaign_id=campaign_id, reason="not_found")
+            )
+            continue
+        refs.append(
+            {
+                "tenant_id": str(context.tenant_id),
+                "advertiser_id": obj.advertiser_id,
+                "kind": "campaign",
+                "remote_id": campaign_id,
+            }
+        )
+    if not refs:
+        return RenameSelectionPublic(selection=None, problems=problems)
+    record = create_target_selection(
+        session,
+        context=context,
+        bc_id=request.bc_id,
+        refs=refs,
+        uses=[],
+        filters={"source": "rename_paste"},
+        now=datetime.now(UTC),
+    )
+    selection = get_frozen_selection(
+        session, context=context, bc_id=request.bc_id, selection_id=record.id
+    )
+    return RenameSelectionPublic(selection=selection, problems=problems)

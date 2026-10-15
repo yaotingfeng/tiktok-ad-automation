@@ -203,6 +203,65 @@ def freeze_selection(
     return selection_public(record)
 
 
+# 不依附查询快照的冻结选择（规则命中、表格粘贴）的有效期，与快照冻结一致。
+TARGET_SELECTION_TTL = timedelta(minutes=15)
+
+
+def create_target_selection(
+    session: Session,
+    *,
+    context: TenantContext,
+    bc_id: str,
+    refs: list[dict[str, str]],
+    uses: list[dict[str, Any]],
+    filters: dict[str, Any],
+    now: datetime,
+) -> FrozenSelectionRecord:
+    """把调用方已确定的目标直接写成冻结选择，复用广告管理的预览与提交校验。
+
+    这类选择没有来源查询快照，snapshot_id 只作唯一占位；账户范围从 refs 推导，
+    读取时仍按当前授权重新校验。
+    """
+    digest_source = {
+        "refs": [
+            (r["tenant_id"], r["advertiser_id"], r["kind"], r["remote_id"])
+            for r in refs
+        ],
+        "uses": [
+            (
+                u["ad_ref"]["tenant_id"],
+                u["ad_ref"]["advertiser_id"],
+                u["ad_ref"]["remote_id"],
+                u["platform_material_id"],
+                u["ad_material_id"],
+                u["material_type"],
+            )
+            for u in uses
+        ],
+    }
+    record = FrozenSelectionRecord(
+        tenant_id=context.tenant_id,
+        bc_id=bc_id,
+        actor_id=context.actor_id,
+        created_at=now,
+        expires_at=max(now, datetime.now(UTC)) + TARGET_SELECTION_TTL,
+        snapshot_id=uuid4(),
+        advertiser_ids=sorted({r["advertiser_id"] for r in refs}),
+        filters=filters,
+        filter_digest=sha256(json.dumps(filters, sort_keys=True).encode()).hexdigest(),
+        publication_versions={},
+        naming_versions={},
+        refs=refs,
+        material_uses=uses,
+        membership_digest=sha256(
+            json.dumps(digest_source, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    )
+    session.add(record)
+    session.flush()
+    return record
+
+
 def get_frozen_selection(
     session: Session, *, context: TenantContext, bc_id: str, selection_id: UUID
 ) -> FrozenSelection:

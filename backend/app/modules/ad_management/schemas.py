@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.integrations.tiktok.contracts.ads import EntityRef, MaterialUseRef
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
+from app.modules.reporting.schemas import FrozenSelection
 
 MutationField = Literal["roas", "budget", "status", "name"]
 MutationMode = Literal["set", "add", "subtract", "increase_percent", "decrease_percent"]
@@ -270,3 +271,29 @@ class ManagementRetryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     idempotency_key: UUID
+
+
+class RenameRowInput(BaseModel):
+    """表格粘贴的一行；新名称在此不校验，统一由改名预览判定。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    campaign_id: str
+    new_name: str
+
+
+class RenameSelectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    bc_id: str = Field(min_length=1, max_length=128)
+    rows: list[RenameRowInput] = Field(min_length=1, max_length=MAX_RENAME_ROWS)
+
+
+class RenameRowProblem(BaseModel):
+    campaign_id: str
+    reason: Literal["id_invalid", "not_found", "duplicate_campaign_id"]
+
+
+class RenameSelectionPublic(BaseModel):
+    selection: FrozenSelection | None
+    problems: list[RenameRowProblem]
