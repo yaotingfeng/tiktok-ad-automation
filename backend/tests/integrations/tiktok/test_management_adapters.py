@@ -46,8 +46,12 @@ def _allow(_advertiser: str, _operation: str, _kind: str) -> None:
 
 def test_mcp_material_status_uses_ad_reference():
     command = _command()
-    assert _payload(command, smart_plus=True)["ad_material_ids"] == [command.ad_material_id]
-    assert _payload(command, smart_plus=True)["smart_plus_ad_id"] == command.ref.remote_id
+    assert _payload(command, smart_plus=True)["ad_material_ids"] == [
+        command.ad_material_id
+    ]
+    assert (
+        _payload(command, smart_plus=True)["smart_plus_ad_id"] == command.ref.remote_id
+    )
     wire = _McpWire()
     receipt = McpManagementOperations(wire, capability_check=_allow).apply(command)  # type: ignore[arg-type]
     assert receipt.outcome == "ACCEPTED"
@@ -92,7 +96,9 @@ def test_sdk_material_status_uses_ad_reference_and_capability_gate(monkeypatch):
     assert calls[0]["body"]["ad_material_ids"] == [command.ad_material_id]
 
     def deny(_advertiser: str, _operation: str, _kind: str) -> None:
-        raise DomainError("management_permission_unverified", "management permission unverified")
+        raise DomainError(
+            "management_permission_unverified", "management permission unverified"
+        )
 
     with pytest.raises(DomainError, match="management permission"):
         SdkManagementOperations(
@@ -145,7 +151,9 @@ def test_management_gate_runs_before_mcp_transport():
     wire = _McpWire()
 
     def deny(_advertiser, _operation, _kind):
-        raise DomainError("management_permission_unverified", "management permission unverified")
+        raise DomainError(
+            "management_permission_unverified", "management permission unverified"
+        )
 
     with pytest.raises(DomainError, match="management permission"):
         McpManagementOperations(wire, capability_check=deny).apply(_command())  # type: ignore[arg-type]
@@ -156,7 +164,12 @@ def test_regular_group_replacement_preserves_required_fields():
     command = ManagementCommand(
         ref=EntityRef(uuid4(), "adv-1", "adgroup", "group-1"),
         field="roas",
-        original={"ad_type": "REGULAR", "adgroup_name": "name", "campaign_id": "campaign-1", "bid_type": "BID"},
+        original={
+            "ad_type": "REGULAR",
+            "adgroup_name": "name",
+            "campaign_id": "campaign-1",
+            "bid_type": "BID",
+        },
         desired={"roas_bid": "1.2500"},
     )
     payload = _payload(command, smart_plus=False)
@@ -217,7 +230,14 @@ def test_mcp_without_observation_api_fails_closed_before_transport():
     assert wire.calls == []
 
 
-@pytest.mark.parametrize("desired", [{"status": "PAUSE"}, {"status": None}, {"status": "ENABLE", "operation_status": "DISABLE"}])
+@pytest.mark.parametrize(
+    "desired",
+    [
+        {"status": "PAUSE"},
+        {"status": None},
+        {"status": "ENABLE", "operation_status": "DISABLE"},
+    ],
+)
 def test_status_contract_rejects_invalid_or_ambiguous_values(desired):
     with pytest.raises(ValueError):
         ManagementCommand(
@@ -263,8 +283,37 @@ def test_campaign_budget_uses_campaign_payload_contract(smart_plus):
     }
 
 
+def test_rename_payload_regular_and_smart_plus():
+    ref = EntityRef(uuid4(), "adv", "campaign", "c1")
+    regular = ManagementCommand(
+        ref, "name", {"ad_type": "REGULAR"}, {"campaign_name": "新名"}
+    )
+    assert _payload(regular, smart_plus=False) == {
+        "advertiser_id": "adv",
+        "campaign_id": "c1",
+        "campaign_name": "新名",
+    }
+    smart = ManagementCommand(
+        ref, "name", {"ad_type": "SMART_PLUS"}, {"campaign_name": "新名"}
+    )
+    assert _payload(smart, smart_plus=True) == {
+        "advertiser_id": "adv",
+        "campaign_id": "c1",
+        "campaign_name": "新名",
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "desired", "operation"),
+    [
+        ("budget", {"budget": "100.00"}, "update_budget"),
+        ("name", {"campaign_name": "新名"}, "rename"),
+    ],
+)
 @pytest.mark.parametrize("smart_plus", [False, True])
-def test_sdk_campaign_budget_uses_matching_campaign_update(monkeypatch, smart_plus):
+def test_sdk_campaign_update_uses_matching_campaign_method(
+    monkeypatch, smart_plus, field, desired, operation
+):
     calls: list[dict] = []
     scope_calls: list[tuple] = []
 
@@ -301,9 +350,9 @@ def test_sdk_campaign_budget_uses_matching_campaign_update(monkeypatch, smart_pl
     monkeypatch.setattr(sdk_management.sdk, "AdgroupApi", FakeAdgroupApi)
     command = ManagementCommand(
         ref=EntityRef(uuid4(), "adv-1", "campaign", "campaign-1"),
-        field="budget",
+        field=field,
         original={"ad_type": "SMART_PLUS" if smart_plus else "REGULAR"},
-        desired={"budget": "100.00"},
+        desired=desired,
     )
     deadline = datetime.now(UTC) + timedelta(seconds=30)
     receipt = SdkManagementOperations(
@@ -317,4 +366,9 @@ def test_sdk_campaign_budget_uses_matching_campaign_update(monkeypatch, smart_pl
     assert calls[0]["method"] == (
         "smart_plus_campaign_update" if smart_plus else "campaign_update"
     )
-    assert scope_calls == [("adv-1", "update_budget", "campaign", deadline)]
+    assert calls[0]["body"] == {
+        "advertiser_id": "adv-1",
+        "campaign_id": "campaign-1",
+        **desired,
+    }
+    assert scope_calls == [("adv-1", operation, "campaign", deadline)]

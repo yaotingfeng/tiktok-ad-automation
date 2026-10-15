@@ -218,3 +218,20 @@ def test_management_http_get_task_uses_tenant_scope(
             app.dependency_overrides[get_current_user] = previous
     assert response.status_code == 200
     assert response.json()["task_id"] == str(task.id)
+
+
+def test_restore_rejects_rename_task(session, management_env):
+    context, task, _item = _task(session, management_env, result="ACCEPTED")
+    preview = session.get(ManagementPreview, task.preview_id)
+    preview.mutation = {
+        "field": "name",
+        "mode": "set",
+        "value": None,
+        "rename": {"kind": "affix", "prefix": "嘉书-"},
+    }
+    session.add(preview)
+    session.flush()
+    with pytest.raises(DomainError) as error:
+        prepare_restore(session, context, task.id)
+    assert error.value.code == "management_restore_unsupported"
+    assert error.value.message == "改名任务不支持一键恢复，需要时请再提交一次改名"

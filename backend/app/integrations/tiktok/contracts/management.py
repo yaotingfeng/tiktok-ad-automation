@@ -38,6 +38,14 @@ def operation_for_field(field: str) -> str | None:
     return _MANAGEMENT_OPERATIONS.get(field)
 
 
+def field_for_operation(operation: str) -> str | None:
+    """管理操作到字段的反查；与 operation_for_field 共用同一张映射表。"""
+    return next(
+        (field for field, name in _MANAGEMENT_OPERATIONS.items() if name == operation),
+        None,
+    )
+
+
 @dataclass(frozen=True)
 class ManagementCommand:
     """最小冻结写入命令；字典内容由预览阶段从已验证目录复制。"""

@@ -8,6 +8,7 @@ from uuid import UUID
 from app.modules.ad_management.schemas import MutationField, MutationSpec, StatusValue
 from app.modules.automation_rules.schemas import Action, Frequency
 
+# 规则可调整的数值字段；改名只允许人工触发，这里不提供 name 映射。
 _FIELD: dict[str, MutationField] = {"BUDGET": "budget", "ROAS": "roas"}
 _SUFFIX = {"INCREASE": "UP", "DECREASE": "DOWN", "SET": "SET"}
 _WINDOWS = {

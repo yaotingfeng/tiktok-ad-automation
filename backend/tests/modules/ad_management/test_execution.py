@@ -147,8 +147,14 @@ class _Gateway:
         return None
 
 
-def _committed_item(management_env, *, original="20", final="25"):
+def _committed_item(
+    management_env, *, original="20", final="25", operation="update_budget"
+):
     context, bc, account, route, selection = management_env
+    # 改名冻结的是推广系列名称；数值动作冻结在广告组配置里。
+    rename = operation == "rename"
+    kind, remote_id = ("campaign", "campaign-c5") if rename else ("adgroup", "group-c5")
+    configuration = {} if rename else {"budget": original}
     with Session(engine, expire_on_commit=False) as setup:
         preview = ManagementPreview(
             tenant_id=context.tenant_id,
@@ -156,7 +162,7 @@ def _committed_item(management_env, *, original="20", final="25"):
             actor_id=context.actor_id,
             selection_id=selection.id,
             digest="e" * 64,
-            mutation={"field": "budget"},
+            mutation={"field": "name" if rename else "budget"},
             route=route.model_dump(mode="json"),
             created_at=datetime.now(UTC),
             expires_at=datetime.now(UTC) + timedelta(minutes=5),
@@ -168,10 +174,11 @@ def _committed_item(management_env, *, original="20", final="25"):
             AdObject(
                 tenant_id=context.tenant_id,
                 advertiser_id=account.advertiser_id,
-                kind="adgroup",
-                remote_id="group-c5",
+                kind=kind,
+                remote_id=remote_id,
+                name=original if rename else "",
                 ad_type="REGULAR",
-                configuration={"budget": original},
+                configuration=configuration,
                 operation_status="ENABLE",
                 delivery_status="DELIVERING",
                 observed_at=datetime.now(UTC),
@@ -188,17 +195,17 @@ def _committed_item(management_env, *, original="20", final="25"):
             ref={
                 "tenant_id": str(context.tenant_id),
                 "advertiser_id": account.advertiser_id,
-                "kind": "adgroup",
-                "remote_id": "group-c5",
+                "kind": kind,
+                "remote_id": remote_id,
             },
             original_value=original,
             final_value=final,
             execution_result="PENDING",
             capability={
-                "operation": "update_budget",
-                "entity_kind": "adgroup",
+                "operation": operation,
+                "entity_kind": kind,
                 "ad_type": "REGULAR",
-                "configuration": {"budget": original},
+                "configuration": configuration,
                 "source_connection_id": str(route.connection_id),
                 "source_channel": route.channel,
                 "route": route.model_dump(mode="json"),
@@ -296,6 +303,75 @@ def test_accepted_write_commits_receipt_without_synchronous_readback(
             assert len(refreshes) == 1
             assert refreshes[0]["scope"] == "targeted"
             assert refreshes[0]["advertiser_ids"] == ["c5-account"]
+    finally:
+        _cleanup(task_id)
+
+
+def test_rename_skips_when_name_changed(c5_env, redis_client, monkeypatch):
+    context, task_id, item_id = _committed_item(
+        c5_env, original="嘉书-剧A", final="嘉书-剧B", operation="rename"
+    )
+    with Session(engine) as session:
+        row = session.get(
+            AdObject, (context.tenant_id, "c5-account", "campaign", "campaign-c5")
+        )
+        assert row is not None
+        row.name = "嘉书-剧X"
+        session.add(row)
+        session.commit()
+    calls = []
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution._redis", lambda: redis_client
+    )
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution.open_tiktok_gateway",
+        lambda **_kwargs: _Gateway(lambda *_args: calls.append(True)),
+    )
+    try:
+        execute_item(engine, item_id)
+        with Session(engine) as session:
+            item = session.get(ManagementTaskItem, item_id)
+            assert item is not None and item.execution_result == "CONFLICT"
+            assert item.reason == "management_original_changed"
+        assert calls == []
+    finally:
+        _cleanup(task_id)
+
+
+def test_rename_accepted_requests_targeted_refresh(c5_env, redis_client, monkeypatch):
+    _context, task_id, item_id = _committed_item(
+        c5_env, original="嘉书-剧A", final="嘉书-剧B", operation="rename"
+    )
+    commands = []
+    refreshes = []
+
+    def apply(_self, command):
+        commands.append(command)
+        return ManagementReceipt("ACCEPTED", "request-c5-rename", False)
+
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution._redis", lambda: redis_client
+    )
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution.open_tiktok_gateway",
+        lambda **_kwargs: _Gateway(apply),
+    )
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution.request_directory",
+        lambda _session, **kwargs: refreshes.append(kwargs) or 1,
+    )
+    try:
+        execute_item(engine, item_id)
+        with Session(engine) as session:
+            item = session.get(ManagementTaskItem, item_id)
+            assert item is not None and item.execution_result == "ACCEPTED"
+        assert len(commands) == 1
+        assert commands[0].field == "name"
+        assert commands[0].operation == "rename"
+        assert commands[0].desired == {"campaign_name": "嘉书-剧B"}
+        assert len(refreshes) == 1
+        assert refreshes[0]["scope"] == "targeted"
+        assert refreshes[0]["advertiser_ids"] == ["c5-account"]
     finally:
         _cleanup(task_id)
 

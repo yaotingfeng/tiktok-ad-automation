@@ -27,6 +27,7 @@ from app.integrations.tiktok.contracts.management import (
     ManagementCommand,
     ManagementField,
     ManagementReceipt,
+    field_for_operation,
 )
 from app.integrations.tiktok.gateway import open_tiktok_gateway
 from app.integrations.tiktok.object_coordination import MutationLease, claim_mutation
@@ -58,12 +59,6 @@ _TERMINAL = frozenset(
         "CANCELLED",
     }
 )
-_FIELD_BY_OPERATION = {
-    "update_roas": "roas",
-    "update_budget": "budget",
-    "set_status": "status",
-    "set_material_status": "material_status",
-}
 
 
 def _now() -> datetime:
@@ -104,7 +99,7 @@ def _command(item: ManagementTaskItem) -> ManagementCommand:
     ref = _ref(item.ref)
     capability = item.capability or {}
     operation = capability.get("operation")
-    field = _FIELD_BY_OPERATION.get(str(operation))
+    field = field_for_operation(str(operation))
     if field is None:
         raise DomainError("management_operation_invalid", "冻结管理操作无效")
     original = dict(capability.get("configuration") or {})
@@ -118,6 +113,8 @@ def _command(item: ManagementTaskItem) -> ManagementCommand:
         desired = {"roas_bid": final}
     elif field == "budget":
         desired = {"budget": final}
+    elif field == "name":
+        desired = {"campaign_name": final}
     else:
         desired = {"operation_status": final}
     return ManagementCommand(
@@ -138,16 +135,22 @@ def _public(item: ManagementTaskItem) -> ManagementItemPublic:
         except InvalidOperation, ValueError:
             return None
 
+    original: Decimal | str | None
     final: Decimal | str | None = item.final_value
-    if final is not None and str(final) not in {"ENABLE", "DISABLE"}:
-        try:
-            final = Decimal(str(final))
-        except InvalidOperation, ValueError:
-            pass
+    if (item.capability or {}).get("operation") == "rename":
+        # 改名的原值与最终值都是系列名称，原样展示；纯数字名称也不能被转成数值。
+        original = item.original_value
+    else:
+        original = decimal(item.original_value)
+        if final is not None and str(final) not in {"ENABLE", "DISABLE"}:
+            try:
+                final = Decimal(str(final))
+            except InvalidOperation, ValueError:
+                pass
     return ManagementItemPublic(
         ref=_ref(item.ref),
         material_use=_material(item.material_use),
-        original_value=decimal(item.original_value),
+        original_value=original,
         final_value=final,
         reason=item.reason,
         execution_result=cast(Any, item.execution_result),
@@ -298,7 +301,10 @@ def _same_frozen_value(
         ):
             raise DomainError("management_source_conflict", "目录对象来源连接已变化")
         operation = str(capability.get("operation"))
-        if operation == "set_status":
+        if operation == "rename":
+            # 改名的冻结原值是目录名称；名称已被他人修改则不覆盖。
+            current = row.name.strip()
+        elif operation == "set_status":
             current = row.operation_status
         else:
             key = "roas_bid" if operation == "update_roas" else "budget"
@@ -931,7 +937,12 @@ def execute_item(database_engine: Engine, item_id: UUID) -> None:
             item = session.get(ManagementTaskItem, item_id)
             if item is not None and item.execution_result == "PENDING":
                 item.reason = error.code
-                item.execution_result = "NOT_SENT"
+                # 目标原值已被他人改动（如名称被改）时记为冲突，不覆盖别人的修改。
+                item.execution_result = (
+                    "CONFLICT"
+                    if error.code == "management_original_changed"
+                    else "NOT_SENT"
+                )
                 item.claim_token = None
                 item.claimed_until = None
                 item.delivery_status = error.code

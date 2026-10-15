@@ -205,3 +205,27 @@ def test_filters_by_action_and_source(session, history):
         ).total
         == 1
     )
+
+
+def test_filter_rename_tasks(session, history):
+    context, bc, add = history
+    add({"field": "budget", "mode": "set", "value": "10"}, minutes=1)
+    rename = add(
+        {
+            "field": "name",
+            "mode": "set",
+            "value": None,
+            "rename": {"kind": "affix", "prefix": "嘉书-"},
+        },
+        minutes=2,
+        kinds=("campaign",),
+    )
+    page = list_tasks(
+        session, context, bc.bc_id, cursor=None, limit=10, action="rename"
+    )
+    assert [item.task_id for item in page.items] == [rename.id]
+    mutation = page.items[0].mutation
+    assert mutation is not None
+    assert mutation.field == "name"
+    assert mutation.rename_kind == "affix"
+    assert mutation.value is None

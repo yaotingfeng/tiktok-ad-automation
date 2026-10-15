@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from pydantic import ValidationError
 from sqlmodel import Session, select
 
 from app.core.db import engine
@@ -27,6 +28,7 @@ from app.modules.automation_rules.models import (
     AutomationRuleRun,
     AutomationTenantSetting,
 )
+from app.modules.automation_rules.schemas import RuleDefinition
 from app.modules.tenants.models import TenantMembership
 from tests.modules.automation_rules.test_definition import base
 from tests.modules.conftest import create_context
@@ -1095,3 +1097,12 @@ def test_material_with_mixed_uses_submits_and_ledgers(session, env):
         select(AutomationActionLedger).where(AutomationActionLedger.run_id == run.id)
     ).all()
     assert [row.target_key for row in ledger] == ["material:acc-x:m1"]
+
+
+@pytest.mark.parametrize("action_type", ["NAME", "RENAME"])
+def test_rule_action_rejects_name_field(action_type):
+    # 改名只允许人工触发：规则动作不能保存为改名。
+    with pytest.raises(ValidationError):
+        RuleDefinition.model_validate(
+            base(action={"type": action_type, "level": "campaign"})
+        )

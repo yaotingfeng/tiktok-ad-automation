@@ -194,3 +194,27 @@ def test_rename_affix_suffix_exposes_old_name(session, management_env):
     assert item.final_value == "嘉书-剧A-0901_1015"
     assert item.drama_name == "剧A" and item.drama_changed is False
     assert p.counts.targets == 1
+
+
+def test_rename_preview_submits_and_task_keeps_name_strings(session, management_env):
+    from uuid import uuid4
+
+    from app.modules.ad_management.actions import get_task
+    from app.modules.ad_management.submissions import submit_management_task
+
+    context, bc, account, route, selection = management_env
+    ref = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "c-submit")
+    row = _row(ref, connection_id=route.connection_id)
+    # 纯数字名称也必须按字符串保存与展示，不能被当成数值。
+    row.name = "1015"
+    session.add(row)
+    session.flush()
+    _set_selection(selection, [ref])
+    p = prepare_preview(
+        session, context, bc.bc_id, selection.id, _rename(kind="affix", suffix="_01")
+    )
+    assert p.items[0].execution_result == "PENDING"
+    task = submit_management_task(session, context, p.preview_id, p.digest, uuid4())
+    detail = get_task(session, context, bc.bc_id, task.task_id)
+    assert detail.items[0].original_value == "1015"
+    assert detail.items[0].final_value == "1015_01"

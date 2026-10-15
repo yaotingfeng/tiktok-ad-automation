@@ -108,6 +108,7 @@ class Frequency(_Strict):
 
 
 class Action(_Strict):
+    # 动作白名单故意不含改名（name）：改名只允许人工触发，规则不能批量改系列名。
     type: Literal["PAUSE", "ENABLE", "BUDGET", "ROAS"]
     level: Level
     adjustment: Adjustment | None = None

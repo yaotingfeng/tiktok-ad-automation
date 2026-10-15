@@ -48,9 +48,13 @@ def _smart_plus(command: ManagementCommand) -> bool:
                 elif kind in {"REGULAR", "AUCTION", "NORMAL"}:
                     parsed.add(False)
                 else:
-                    raise DomainError("management_contract_unsupported", "广告类型未经目录核验")
+                    raise DomainError(
+                        "management_contract_unsupported", "广告类型未经目录核验"
+                    )
             else:
-                raise DomainError("management_contract_unsupported", "广告类型未经目录核验")
+                raise DomainError(
+                    "management_contract_unsupported", "广告类型未经目录核验"
+                )
         if len(parsed) > 1:
             raise DomainError("management_contract_unsupported", "广告类型标识冲突")
         return next(iter(parsed), None)
@@ -71,7 +75,9 @@ def _decimal(value: object, field: str) -> str:
         try:
             parsed = Decimal(value)
         except Exception:
-            raise DomainError("management_request_invalid", f"{field} 数值无效") from None
+            raise DomainError(
+                "management_request_invalid", f"{field} 数值无效"
+            ) from None
     else:
         raise DomainError("management_request_invalid", f"{field} 必须使用精确十进制")
     if not parsed.is_finite() or parsed <= 0:
@@ -85,7 +91,9 @@ def _request_id(raw: object) -> str | None:
 
 def _receipt(raw: object) -> ManagementReceipt:
     if not isinstance(raw, dict) or type(raw.get("code")) is not int:
-        raise RemoteCallError("management_result_unknown", effect="UNKNOWN", evidence=CallEvidence())
+        raise RemoteCallError(
+            "management_result_unknown", effect="UNKNOWN", evidence=CallEvidence()
+        )
     evidence = CallEvidence(
         request_id=_request_id(raw.get("request_id")),
         remote_code=raw["code"] if raw["code"] != 0 else None,
@@ -94,7 +102,9 @@ def _receipt(raw: object) -> ManagementReceipt:
         return ManagementReceipt("ACCEPTED", evidence.request_id, False, evidence)
     if raw["code"] != 0:
         return ManagementReceipt("REJECTED", evidence.request_id, False, evidence)
-    raise RemoteCallError("management_result_unknown", effect="UNKNOWN", evidence=evidence)
+    raise RemoteCallError(
+        "management_result_unknown", effect="UNKNOWN", evidence=evidence
+    )
 
 
 def _payload(command: ManagementCommand, *, smart_plus: bool) -> dict[str, Any]:
@@ -102,7 +112,9 @@ def _payload(command: ManagementCommand, *, smart_plus: bool) -> dict[str, Any]:
     status = command.desired.get("status", command.desired.get("operation_status"))
     if command.field == "material_status":
         if not smart_plus:
-            raise DomainError("management_contract_unsupported", "普通广告不支持独立素材状态")
+            raise DomainError(
+                "management_contract_unsupported", "普通广告不支持独立素材状态"
+            )
         return {
             "advertiser_id": ref.advertiser_id,
             "smart_plus_ad_id": ref.remote_id,
@@ -118,8 +130,17 @@ def _payload(command: ManagementCommand, *, smart_plus: bool) -> dict[str, Any]:
             key: [ref.remote_id],
             "operation_status": status,
         }
+    if command.field == "name":
+        # 系列更新接口按字段增量更新，改名只发送名称，避免回写其它旧配置。
+        return {
+            "advertiser_id": ref.advertiser_id,
+            "campaign_id": ref.remote_id,
+            "campaign_name": command.desired["campaign_name"],
+        }
     if ref.kind not in {"campaign", "adgroup"}:
-        raise DomainError("management_contract_unsupported", "该对象不支持预算或 ROAS 修改")
+        raise DomainError(
+            "management_contract_unsupported", "该对象不支持预算或 ROAS 修改"
+        )
     if command.field == "roas" and ref.kind != "adgroup":
         raise DomainError("management_contract_unsupported", "广告系列不支持 ROAS 修改")
     payload: dict[str, Any] = {"advertiser_id": ref.advertiser_id}
@@ -134,9 +155,15 @@ def _payload(command: ManagementCommand, *, smart_plus: bool) -> dict[str, Any]:
     if not smart_plus and ref.kind == "adgroup":
         # 普通组更新是整体替换合同，保留平台验证过的必填字段。
         for name in (
-            "adgroup_name", "campaign_id", "bid_type", "billing_event",
-            "optimization_goal", "promotion_type", "schedule_type",
-            "schedule_start_time", "targeting_spec",
+            "adgroup_name",
+            "campaign_id",
+            "bid_type",
+            "billing_event",
+            "optimization_goal",
+            "promotion_type",
+            "schedule_type",
+            "schedule_start_time",
+            "targeting_spec",
         ):
             if name in source:
                 payload[name] = source[name]
@@ -163,9 +190,13 @@ class SdkManagementOperations:
         self._management_scope = management_scope
         self._before_send = before_send
         if self._check is None:
-            raise DomainError("management_permission_unverified", "管理请求缺少账户能力门禁")
+            raise DomainError(
+                "management_permission_unverified", "管理请求缺少账户能力门禁"
+            )
         if self._management_scope is None:
-            raise DomainError("management_permission_unverified", "管理请求缺少专用准入门禁")
+            raise DomainError(
+                "management_permission_unverified", "管理请求缺少专用准入门禁"
+            )
 
     def apply(self, command: ManagementCommand) -> ManagementReceipt:
         if not isinstance(command, ManagementCommand):
@@ -181,25 +212,41 @@ class SdkManagementOperations:
         payload = _payload(command, smart_plus=smart_plus)
         methods: dict[str, Any]
         if command.field == "material_status":
-            methods = {"smart": sdk.AdApi(self._client).smart_plus_ad_material_status_update}
+            methods = {
+                "smart": sdk.AdApi(self._client).smart_plus_ad_material_status_update
+            }
             method = methods["smart"]
         elif command.field == "status":
             if smart_plus:
                 method = {
-                    "campaign": sdk.CampaignCreationApi(self._client).smart_plus_campaign_status_update,
-                    "adgroup": sdk.AdgroupApi(self._client).smart_plus_adgroup_status_update,
+                    "campaign": sdk.CampaignCreationApi(
+                        self._client
+                    ).smart_plus_campaign_status_update,
+                    "adgroup": sdk.AdgroupApi(
+                        self._client
+                    ).smart_plus_adgroup_status_update,
                     "ad": sdk.AdApi(self._client).smart_plus_ad_status_update,
                 }[command.ref.kind]
             else:
                 method = {
-                    "campaign": sdk.CampaignCreationApi(self._client).campaign_status_update,
+                    "campaign": sdk.CampaignCreationApi(
+                        self._client
+                    ).campaign_status_update,
                     "adgroup": sdk.AdgroupApi(self._client).adgroup_status_update,
                     "ad": sdk.AdApi(self._client).ad_status_update,
                 }[command.ref.kind]
         elif smart_plus:
-            method = sdk.CampaignCreationApi(self._client).smart_plus_campaign_update if command.ref.kind == "campaign" else sdk.AdgroupApi(self._client).smart_plus_adgroup_update
+            method = (
+                sdk.CampaignCreationApi(self._client).smart_plus_campaign_update
+                if command.ref.kind == "campaign"
+                else sdk.AdgroupApi(self._client).smart_plus_adgroup_update
+            )
         else:
-            method = sdk.CampaignCreationApi(self._client).campaign_update if command.ref.kind == "campaign" else sdk.AdgroupApi(self._client).adgroup_update
+            method = (
+                sdk.CampaignCreationApi(self._client).campaign_update
+                if command.ref.kind == "campaign"
+                else sdk.AdgroupApi(self._client).adgroup_update
+            )
         sent = False
         try:
             remaining(self._deadline)
@@ -224,9 +271,20 @@ class SdkManagementOperations:
                 return _receipt(raw)
         except RemoteCallError:
             raise
-        except (ApiException, TiktokSDKError, HTTPError, TimeoutError, ValueError, TypeError):
+        except (
+            ApiException,
+            TiktokSDKError,
+            HTTPError,
+            TimeoutError,
+            ValueError,
+            TypeError,
+        ):
             if sent:
-                raise RemoteCallError("management_result_unknown", effect="UNKNOWN", evidence=CallEvidence()) from None
+                raise RemoteCallError(
+                    "management_result_unknown",
+                    effect="UNKNOWN",
+                    evidence=CallEvidence(),
+                ) from None
             return ManagementReceipt("NOT_SENT", None, True)
 
 

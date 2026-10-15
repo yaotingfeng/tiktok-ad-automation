@@ -99,7 +99,9 @@ def _scoped_task(
     capability_name = "ads_manage" if action == "ads_manage" else "read"
     try:
         for value in refs:
-            advertiser_id = value.get("advertiser_id") if isinstance(value, dict) else None
+            advertiser_id = (
+                value.get("advertiser_id") if isinstance(value, dict) else None
+            )
             if not isinstance(advertiser_id, str):
                 raise DomainError("management_request_invalid", "任务目标身份无效")
             item = session.exec(
@@ -116,7 +118,9 @@ def _scoped_task(
                 advertiser_id=advertiser_id,
                 capability=capability_name,
                 operation=(item.capability or {}).get("operation") if item else None,
-                entity_kind=(item.capability or {}).get("entity_kind") if item else None,
+                entity_kind=(item.capability or {}).get("entity_kind")
+                if item
+                else None,
             )
     except DomainError as exc:
         raise DomainError("management_task_not_found", "管理任务不存在") from exc
@@ -166,7 +170,7 @@ def get_task(
 
 
 # 操作记录筛选：动作按冻结的变更字段归类，启停再按目标状态拆成启用/暂停。
-TaskActionFilter = Literal["enable", "disable", "budget", "roas"]
+TaskActionFilter = Literal["enable", "disable", "budget", "roas", "rename"]
 TaskSourceFilter = Literal["manual", "rule"]
 
 
@@ -245,7 +249,10 @@ def _with_summaries(
         raw = mutations.get(task.preview_id) or {}
         try:
             mutation = ManagementTaskMutation(
-                field=raw["field"], mode=raw["mode"], value=raw["value"]
+                field=raw["field"],
+                mode=raw["mode"],
+                value=raw.get("value"),
+                rename_kind=(raw.get("rename") or {}).get("kind"),
             )
         except KeyError, TypeError, ValueError:
             mutation = None
@@ -296,6 +303,9 @@ def list_tasks(
         )
         if action in {"enable", "disable"}:
             statement = statement.where(field == "status", value == action.upper())
+        elif action == "rename":
+            # 改名动作冻结的变更字段是 name。
+            statement = statement.where(field == "name")
         else:
             statement = statement.where(field == action)
     if source is not None:
@@ -398,8 +408,7 @@ def retry_task(
     if not isinstance(idempotency_key, UUID):
         raise DomainError("management_retry_invalid", "重试需要幂等键")
     source = session.exec(
-        select(ManagementTask)
-        .where(
+        select(ManagementTask).where(
             ManagementTask.id == task_id,
             ManagementTask.tenant_id == context.tenant_id,
         )
@@ -409,8 +418,7 @@ def retry_task(
     _scoped_task(session, context, source.bc_id, source.id, action="ads_manage")
     _idempotency_lock(session, context, idempotency_key)
     existing = session.exec(
-        select(ManagementTask)
-        .where(
+        select(ManagementTask).where(
             ManagementTask.tenant_id == context.tenant_id,
             ManagementTask.actor_id == context.actor_id,
             ManagementTask.idempotency_key == idempotency_key,
@@ -443,7 +451,9 @@ def retry_task(
         if latest is None or latest.retryable:
             eligible.append(item)
     if not eligible:
-        raise DomainError("management_retry_not_allowed", "没有明确未发送的任务项可重试")
+        raise DomainError(
+            "management_retry_not_allowed", "没有明确未发送的任务项可重试"
+        )
     task = ManagementTask(
         tenant_id=source.tenant_id,
         bc_id=source.bc_id,
@@ -510,10 +520,22 @@ def prepare_restore(
     source_preview = session.get(ManagementPreview, task.preview_id)
     if source_preview is None:
         raise DomainError("management_preview_not_found", "原管理预览不存在")
+    if (source_preview.mutation or {}).get("field") == "name":
+        # 改名的原名可能已被其它改名占用，一键回滚无法保证不重名，需人工重新提交。
+        raise DomainError(
+            "management_restore_unsupported",
+            "改名任务不支持一键恢复，需要时请再提交一次改名",
+        )
     now = datetime.now(UTC)
     route = _route(task)
-    digest_payload = {"task": str(task.id), "route": route.model_dump(mode="json"), "restore": True}
-    digest = hashlib.sha256(json.dumps(digest_payload, sort_keys=True).encode()).hexdigest()
+    digest_payload = {
+        "task": str(task.id),
+        "route": route.model_dump(mode="json"),
+        "restore": True,
+    }
+    digest = hashlib.sha256(
+        json.dumps(digest_payload, sort_keys=True).encode()
+    ).hexdigest()
     preview = ManagementPreview(
         tenant_id=task.tenant_id,
         bc_id=task.bc_id,
@@ -525,7 +547,12 @@ def prepare_restore(
         created_at=now,
         expires_at=now + timedelta(minutes=5),
         status="READY",
-        counts={"selected": len(old_items), "targets": len(old_items), "linked": 0, "unsupported": 0},
+        counts={
+            "selected": len(old_items),
+            "targets": len(old_items),
+            "linked": 0,
+            "unsupported": 0,
+        },
     )
     session.add(preview)
     session.flush()
@@ -559,8 +586,14 @@ def prepare_restore(
             value = (current.configuration or {}).get(key)
             if value is None or str(value) != str(old.final_value):
                 conflict = True
-        reason = "configuration_conflict" if conflict else ("already_disabled" if already_disabled else None)
-        execution_result = "CONFLICT" if conflict else ("NO_CHANGE" if already_disabled else "PENDING")
+        reason = (
+            "configuration_conflict"
+            if conflict
+            else ("already_disabled" if already_disabled else None)
+        )
+        execution_result = (
+            "CONFLICT" if conflict else ("NO_CHANGE" if already_disabled else "PENDING")
+        )
         session.add(
             ManagementPreviewItem(
                 tenant_id=old.tenant_id,

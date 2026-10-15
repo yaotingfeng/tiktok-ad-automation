@@ -19,6 +19,10 @@ from sqlmodel import Session, col, select
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
+from app.integrations.tiktok.contracts.management import (
+    MANAGEMENT_OPERATIONS,
+    operation_for_field,
+)
 from app.jobs.outbox import enqueue_after_commit
 from app.modules.accounts.routing import verify_route
 from app.modules.ad_management.models import (
@@ -107,12 +111,7 @@ def _check_preview(
         advertiser_id=None,
         capability="read",
     )
-    operation = {
-        "roas": "update_roas",
-        "budget": "update_budget",
-        "status": "set_status",
-        "material_status": "set_material_status",
-    }.get(str(preview.mutation.get("field", "")))
+    operation = operation_for_field(str(preview.mutation.get("field", "")))
     is_restore = str(preview.mutation.get("field", "")) == "restore"
     if operation is None and not is_restore:
         raise DomainError("management_operation_invalid", "冻结管理操作无效")
@@ -142,12 +141,7 @@ def _check_preview(
             expected_operation = (
                 item_operation if is_restore or material_switch else operation
             )
-            if expected_operation not in {
-                "update_roas",
-                "update_budget",
-                "set_status",
-                "set_material_status",
-            }:
+            if expected_operation not in MANAGEMENT_OPERATIONS:
                 raise DomainError(
                     "management_operation_invalid", "管理目标操作与预览不一致"
                 )
