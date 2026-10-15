@@ -2303,3 +2303,11 @@
   - 素材开关另需创意管理 scope 6/61/611（官方），MCP 连接需可上传；
   - 操作与对象层级的对应关系不变，物理请求前仍按冻结路由重检。
 - 删除 `management_capability` 表（迁移 `0032_drop_management_capability`）、能力发布中的管理矩阵写入与 `ManagementPermissionEvidence`；测试改为通过账户授权行（`can_build`、scope）控制权限。
+
+## 2026-10-15：生产发布 f0606264（目录减量、并发上调、管理员代管修复）
+
+- 批次 `20261015T201917-1f6b42` 完成：9 个角色就绪，镜像 `f0606264`，Alembic `0032_drop_management_capability`；目录 Worker `--concurrency 4`、报表 `--concurrency 2` 已生效。
+- 前两次发布在冻结后备份中断（`kubectl exec` EOF）后经 `recover` 回到旧版本：根因是积压时 Redis 约 50MB（`ads-directory` 29,268 条），备份探针把导出整体经 exec 标准输出回传必然断流。`f0606264` 改为探针写容器文件、发布端 `kubectl cp` 带重试并核对校验和与条数；发布集成测试同步改为同一契约。
+- 另：前端检查曾因上一批检查遗留的 5173 开发服务器被复用而批量 `ERR_CONNECTION_REFUSED`；并行检查须确认上一批已完全退出再启动。`test_two_full_batches_reach_share_http_concurrently_without_overlapping_members` 在高负载下偶发调用期限超时，与本次改动无关，待单独加固。
+- 上线后：0031 取消 21,071 条叠加/废弃运行；Redis 目录队列 10,763 → 8,270（数分钟内）并持续下降；目录 Worker 的 `AccountAdmissionDeferred` 为额度限流后的延后重试。
+- 待办：观察一个完整同步周期的排队量；移除平台管理员在 xingyu 的临时成员身份（经管理界面操作）。
