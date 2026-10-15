@@ -11,14 +11,12 @@ from app.modules.accounts.connection_models import (
     BCDefaultRoute,
     ConnectionAuthorization,
 )
-from app.modules.accounts.management_capability_models import ManagementCapability
 from app.modules.accounts.models import (
     AdvertiserAccount,
     BCAccountAccess,
     TenantBC,
     TikTokConnection,
 )
-from app.modules.accounts.routing import freeze_route
 from app.modules.ad_management.models import ManagementTask
 from app.modules.ads.models import AdObject
 from app.modules.automation_rules.executor import execute_hits
@@ -77,7 +75,7 @@ def _bc(session, context, bc_id, account_id, *, default_route=True):
                 tenant_id=context.tenant_id,
                 connection_id=connection.id,
                 authorization_revision=connection.authorization_revision,
-                scopes=["read", "build"],
+                scopes=["2", "6"],
                 permission_summary={"read_authorized": True, "build_authorized": True},
                 source="SYNTHETIC_COMPLETE_EVIDENCE",
                 verified_at=datetime.now(UTC),
@@ -94,9 +92,7 @@ def _bc(session, context, bc_id, account_id, *, default_route=True):
     return connection
 
 
-def _objects(
-    session, context, connection, bc_id, account_id, *, budget="50", status="ENABLE"
-):
+def _objects(session, context, connection, account_id, *, budget="50", status="ENABLE"):
     for kind, rid, parent, config in (
         ("campaign", "c1", None, {"budget_mode": "BUDGET_MODE_INFINITE"}),
         ("adgroup", "g1", "c1", {"budget": budget}),
@@ -119,25 +115,6 @@ def _objects(
                 published_version=1,
                 source_connection_id=connection.id,
                 source_channel="OFFICIAL_API",
-            )
-        )
-    session.flush()
-    route = freeze_route(session, context=context, bc_id=bc_id)
-    for operation in ("set_status", "update_budget"):
-        session.add(
-            ManagementCapability(
-                tenant_id=context.tenant_id,
-                bc_id=bc_id,
-                advertiser_id=account_id,
-                connection_id=route.connection_id,
-                authorization_revision=route.authorization_revision,
-                binding_revision=route.binding_revision,
-                adapter_contract_revision=route.adapter_contract_revision,
-                operation=operation,
-                entity_kind="adgroup",
-                state="VERIFIED",
-                verified_at=datetime.now(UTC),
-                evidence={"source": "automation-test"},
             )
         )
     session.flush()
@@ -214,7 +191,7 @@ def _hits(session, run):
 def env(session):
     context = create_context(session, role="tenant_admin")
     connection = _bc(session, context, "bc-x", "acc-x")
-    _objects(session, context, connection, "bc-x", "acc-x")
+    _objects(session, context, connection, "acc-x")
     return context
 
 
@@ -480,7 +457,7 @@ def test_concurrent_reverse_actions_conflict():
     with Session(engine, expire_on_commit=False) as setup:
         context = create_context(setup, role="tenant_admin")
         connection = _bc(setup, context, "bc-race", "acc-race")
-        _objects(setup, context, connection, "bc-race", "acc-race")
+        _objects(setup, context, connection, "acc-race")
         a, run_a = _rule_run(
             setup,
             context,
@@ -598,23 +575,6 @@ def _smart_material(session, context, connection):
         )
     )
     session.flush()
-    route = freeze_route(session, context=context, bc_id="bc-x")
-    session.add(
-        ManagementCapability(
-            tenant_id=context.tenant_id,
-            bc_id="bc-x",
-            advertiser_id="acc-x",
-            connection_id=route.connection_id,
-            authorization_revision=route.authorization_revision,
-            binding_revision=route.binding_revision,
-            adapter_contract_revision=route.adapter_contract_revision,
-            operation="set_material_status",
-            entity_kind="ad",
-            state="VERIFIED",
-            verified_at=datetime.now(UTC),
-            evidence={"source": "automation-test"},
-        )
-    )
     session.flush()
     # 规则目标按主素材 ID 建键，与平台素材 ID 不同。
     return {
@@ -834,7 +794,7 @@ def test_redelivered_execute_with_stale_run_is_ignored(monkeypatch):
     with Session(engine, expire_on_commit=False) as setup:
         context = create_context(setup, role="tenant_admin")
         connection = _bc(setup, context, "bc-redo", "acc-redo")
-        _objects(setup, context, connection, "bc-redo", "acc-redo")
+        _objects(setup, context, connection, "acc-redo")
         rule, run = _rule_run(
             setup, context, action=PAUSE, targets=[_target("acc-redo", "bc-redo")]
         )
@@ -1030,30 +990,13 @@ def test_budget_owner_redirect_ledgers_rule_target(session):
     """广告组规则调预算、预算在系列上：结果与台账记在规则目标（广告组）上，频控生效。"""
     context = create_context(session, role="tenant_admin")
     connection = _bc(session, context, "bc-cbo", "acc-cbo")
-    _objects(session, context, connection, "bc-cbo", "acc-cbo")
+    _objects(session, context, connection, "acc-cbo")
     campaign = session.exec(
         select(AdObject).where(
             AdObject.tenant_id == context.tenant_id, AdObject.kind == "campaign"
         )
     ).one()
     campaign.configuration = {"budget_optimize_on": True, "budget": "100"}
-    route = freeze_route(session, context=context, bc_id="bc-cbo")
-    session.add(
-        ManagementCapability(
-            tenant_id=context.tenant_id,
-            bc_id="bc-cbo",
-            advertiser_id="acc-cbo",
-            connection_id=route.connection_id,
-            authorization_revision=route.authorization_revision,
-            binding_revision=route.binding_revision,
-            adapter_contract_revision=route.adapter_contract_revision,
-            operation="update_budget",
-            entity_kind="campaign",
-            state="VERIFIED",
-            verified_at=datetime.now(UTC),
-            evidence={"source": "automation-test"},
-        )
-    )
     session.flush()
     rule, run = _rule_run(
         session,

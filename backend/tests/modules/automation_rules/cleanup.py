@@ -21,7 +21,6 @@ _TABLES = (
     "management_preview_item",
     "management_preview",
     "frozen_selection",
-    "management_capability",
     "ad_object",
     "bc_default_route",
     "connection_authorization",

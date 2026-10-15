@@ -30,7 +30,6 @@ from app.modules.tenants import models as tenants_models  # noqa: E402, F401
 from app.modules.accounts import models as accounts_models  # noqa: E402, F401
 from app.modules.accounts import connection_models  # noqa: E402, F401
 from app.modules.accounts import capability_models  # noqa: E402, F401
-from app.modules.accounts import management_capability_models  # noqa: E402, F401
 from app.modules.accounts import directory_models  # noqa: E402, F401
 from app.modules.accounts import discovery_models  # noqa: E402, F401
 from app.modules.builds import execution_models  # noqa: E402, F401

@@ -22,7 +22,6 @@ from app.modules.accounts.connection_models import (
     BCDefaultRoute,
     ConnectionAuthorization,
 )
-from app.modules.accounts.management_capability_models import ManagementCapability
 from app.modules.accounts.models import (
     AdvertiserAccount,
     BCAccountAccess,
@@ -89,7 +88,7 @@ def c5_env(monkeypatch):
                     tenant_id=context.tenant_id,
                     connection_id=connection.id,
                     authorization_revision=connection.authorization_revision,
-                    scopes=["read", "build"],
+                    scopes=["2", "6"],
                     permission_summary={
                         "read_authorized": True,
                         "build_authorized": True,
@@ -151,24 +150,6 @@ class _Gateway:
 def _committed_item(management_env, *, original="20", final="25"):
     context, bc, account, route, selection = management_env
     with Session(engine, expire_on_commit=False) as setup:
-        # ManagementCapability is the independent C2 permission evidence used by
-        # the real route checker immediately before a physical request.
-        setup.add(
-            ManagementCapability(
-                tenant_id=context.tenant_id,
-                bc_id=bc.bc_id,
-                advertiser_id=account.advertiser_id,
-                connection_id=route.connection_id,
-                authorization_revision=route.authorization_revision,
-                binding_revision=route.binding_revision,
-                adapter_contract_revision=route.adapter_contract_revision,
-                operation="update_budget",
-                entity_kind="adgroup",
-                state="VERIFIED",
-                verified_at=datetime.now(UTC),
-                evidence={"source": "local-test"},
-            )
-        )
         preview = ManagementPreview(
             tenant_id=context.tenant_id,
             bc_id=bc.bc_id,
@@ -417,20 +398,20 @@ def test_targeted_refresh_failure_is_durable_and_retry_does_not_resend(
         _cleanup(task_id)
 
 
-def test_revoked_management_capability_blocks_request_after_claim(
+def test_revoked_management_permission_blocks_request_after_claim(
     c5_env, redis_client, monkeypatch
 ):
     context, task_id, item_id = _committed_item(c5_env)
+    _, bc, account, route, _ = c5_env
     calls = []
     with Session(engine) as session:
-        capability = session.exec(
-            select(ManagementCapability).where(
-                ManagementCapability.tenant_id == context.tenant_id,
-                ManagementCapability.operation == "update_budget",
-            )
-        ).one()
-        capability.state = "REVOKED"
-        session.add(capability)
+        # 领取后账户同步撤销了搭建权限：物理请求前的重检必须拦下，不发送。
+        grant = session.get(
+            BCAccountAccess,
+            (context.tenant_id, bc.bc_id, account.advertiser_id, route.connection_id),
+        )
+        grant.can_build = False
+        session.add(grant)
         session.commit()
 
     def apply(_self, _command):

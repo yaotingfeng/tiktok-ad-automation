@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
 
-from sqlmodel import Session, col, select
+from sqlmodel import Session, select
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
@@ -14,6 +14,10 @@ from app.modules.accounts.connection_models import (
     BCConnectionBinding,
     BCDefaultRoute,
     ConnectionAuthorization,
+)
+from app.modules.accounts.management_rules import (
+    MANAGEMENT_ENTITY_KINDS,
+    management_allowed,
 )
 from app.modules.accounts.models import (
     OPERABLE_REMOTE_STATUSES,
@@ -179,48 +183,29 @@ def verify_route(
         or not observed_authorization(grant.checked_at, now)
     ):
         raise DomainError("account_access_denied", "缺少已确认的账户授权")
-    # 广告管理证据独立于 build/upload。即使旧账户目录允许搭建，也不能
-    # 将 can_build 推导为管理写权；证据必须匹配本次冻结 route 的全部代数。
     if capability == "ads_manage":
-        from app.modules.accounts.management_capability_models import (
-            ManagementCapability,
-        )
-
         if (
             account.remote_status not in OPERABLE_REMOTE_STATUSES
             or grant.permission_state != "VERIFIED"
         ):
             raise DomainError("account_access_denied", "账户当前状态不支持管理操作")
-        if operation is None:
+        if operation is None or operation not in MANAGEMENT_ENTITY_KINDS:
             raise DomainError(
                 "management_permission_unverified",
                 "management_permission_unverified: 必须指定管理操作",
             )
-        statement = select(ManagementCapability).where(
-            ManagementCapability.tenant_id == context.tenant_id,
-            ManagementCapability.bc_id == route.bc_id,
-            ManagementCapability.advertiser_id == advertiser_id,
-            ManagementCapability.connection_id == route.connection_id,
-            ManagementCapability.authorization_revision == route.authorization_revision,
-            ManagementCapability.binding_revision == route.binding_revision,
-            ManagementCapability.adapter_contract_revision
-            == route.adapter_contract_revision,
-            ManagementCapability.state == "VERIFIED",
-            col(ManagementCapability.verified_at) <= now,
-        )
-        if operation is not None:
-            statement = statement.where(ManagementCapability.operation == operation)
-            # 适配器在构造具体请求前可额外传 entity_kind；通用 gateway 回调
-            # 只携带操作名时仍必须命中当前账户的同一代 VERIFIED 证据。
-            if entity_kind is not None:
-                statement = statement.where(ManagementCapability.entity_kind == entity_kind)
-        management_capability = session.exec(
-            statement.execution_options(populate_existing=True)
-        ).first()
-        if management_capability is None:
+        if (
+            entity_kind is not None
+            and entity_kind not in MANAGEMENT_ENTITY_KINDS[operation]
+        ):
             raise DomainError(
                 "management_permission_unverified",
-                "management_permission_unverified: 缺少当前账户和连接代数的广告管理授权证据",
+                "management_permission_unverified: 该对象层级不支持此管理操作",
+            )
+        if not management_allowed(grant, authorization.scopes, operation):
+            raise DomainError(
+                "management_permission_unverified",
+                "management_permission_unverified: 当前连接对该账户没有广告管理权限",
             )
         return
     if (

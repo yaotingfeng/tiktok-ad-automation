@@ -6,7 +6,6 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
 from app.core.errors import DomainError
-from app.modules.accounts.management_capability_models import ManagementCapability
 from app.modules.accounts.routing import verify_route
 from app.modules.ad_management.models import (
     ManagementPreview,
@@ -54,23 +53,6 @@ def test_status_modes_and_management_permission(session, management_env):
             capability="ads_manage",
         )
 
-    session.add(
-        ManagementCapability(
-            tenant_id=context.tenant_id,
-            bc_id=bc.bc_id,
-            advertiser_id=account.advertiser_id,
-            connection_id=route.connection_id,
-            authorization_revision=route.authorization_revision,
-            binding_revision=route.binding_revision,
-            adapter_contract_revision=route.adapter_contract_revision,
-            operation="update_roas",
-            entity_kind="adgroup",
-            state="VERIFIED",
-            verified_at=datetime.now(UTC),
-            evidence={"role": "ADMIN", "scope": ["management"]},
-        )
-    )
-    session.flush()
     verify_route(
         session,
         context=context,
@@ -158,63 +140,8 @@ def test_management_preview_cross_tenant_fk_and_expiry(session, management_env):
     assert preview.expires_at > preview.created_at
 
 
-def test_capability_route_fk_and_request_attempt_number_are_database_fenced(
-    session, management_env
-):
+def test_request_attempt_number_is_database_fenced(session, management_env):
     context, bc, account, route, selection = management_env
-    capability = ManagementCapability(
-        tenant_id=context.tenant_id,
-        bc_id=bc.bc_id,
-        advertiser_id=account.advertiser_id,
-        connection_id=route.connection_id,
-        authorization_revision=route.authorization_revision,
-        binding_revision=route.binding_revision,
-        adapter_contract_revision=route.adapter_contract_revision,
-        operation="update_roas",
-        entity_kind="adgroup",
-        state="VERIFIED",
-        verified_at=datetime.now(UTC),
-        evidence={"role": "ADMIN"},
-    )
-    session.add(capability)
-    session.flush()
-    with pytest.raises(IntegrityError), session.begin_nested():
-        session.add(
-            ManagementCapability(
-                tenant_id=context.tenant_id,
-                bc_id=bc.bc_id,
-                advertiser_id=account.advertiser_id,
-                connection_id=route.connection_id,
-                authorization_revision=route.authorization_revision,
-                binding_revision=route.binding_revision,
-                adapter_contract_revision=route.adapter_contract_revision,
-                operation="ads_manage",
-                entity_kind="adgroup",
-                state="VERIFIED",
-                verified_at=datetime.now(UTC),
-                evidence={"role": "ADMIN"},
-            )
-        )
-        session.flush()
-    with pytest.raises(IntegrityError), session.begin_nested():
-        session.add(
-            ManagementCapability(
-                tenant_id=context.tenant_id,
-                bc_id=bc.bc_id,
-                advertiser_id=account.advertiser_id,
-                connection_id=route.connection_id,
-                authorization_revision=route.authorization_revision,
-                binding_revision=route.binding_revision + 1,
-                adapter_contract_revision=route.adapter_contract_revision,
-                operation="update_budget",
-                entity_kind="adgroup",
-                state="VERIFIED",
-                verified_at=datetime.now(UTC),
-                evidence={"role": "ADMIN"},
-            )
-        )
-        session.flush()
-
     preview = ManagementPreview(
         tenant_id=context.tenant_id,
         bc_id=bc.bc_id,
@@ -307,45 +234,26 @@ def test_capability_route_fk_and_request_attempt_number_are_database_fenced(
         session.flush()
 
 
-@pytest.mark.parametrize("change", ["state", "binding", "verified_at", "remote_status"])
-def test_management_grants_reject_incomplete_or_stale_evidence(
+@pytest.mark.parametrize("change", ["permission_state", "can_build", "remote_status"])
+def test_management_grants_reject_unverified_or_unbuildable_accounts(
     session, management_env, change
 ):
     from app.modules.accounts.access import usable_grants
+    from app.modules.accounts.models import BCAccountAccess
 
     context, bc, account, route, _ = management_env
-    cap = ManagementCapability(
-        tenant_id=context.tenant_id,
-        bc_id=bc.bc_id,
-        advertiser_id=account.advertiser_id,
-        connection_id=route.connection_id,
-        authorization_revision=route.authorization_revision,
-        binding_revision=route.binding_revision,
-        adapter_contract_revision=route.adapter_contract_revision,
-        operation="update_roas",
-        entity_kind="adgroup",
-        state="VERIFIED",
-        verified_at=datetime.now(UTC),
-        evidence={
-            "role": "ADMIN",
-            "scopes": ["management"],
-            "interfaces": ["adgroup/update"],
-        },
+    grant = session.get(
+        BCAccountAccess,
+        (context.tenant_id, bc.bc_id, account.advertiser_id, route.connection_id),
     )
-    if change == "state":
-        cap.state = "UNKNOWN"
-    elif change == "binding":
-        cap.binding_revision += 1
-    elif change == "verified_at":
-        cap.verified_at = None
+    if change == "permission_state":
+        grant.permission_state = "UNKNOWN"
+    elif change == "can_build":
+        grant.can_build = False
     else:
         account.remote_status = "DISABLED"
         session.add(account)
-    session.add(cap)
-    if change == "binding":
-        with pytest.raises(IntegrityError), session.begin_nested():
-            session.flush()
-        return
+    session.add(grant)
     session.flush()
     with pytest.raises(DomainError):
         verify_route(

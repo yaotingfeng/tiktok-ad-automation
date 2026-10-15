@@ -11,7 +11,6 @@ from app.api.deps import get_current_user
 from app.core.errors import DomainError
 from app.main import app
 from app.models import User
-from app.modules.accounts.management_capability_models import ManagementCapability
 from app.modules.ad_management.actions import (
     cancel_task,
     get_task,
@@ -33,22 +32,6 @@ from app.modules.tenants.models import TenantMembership
 
 def _task(session: Session, management_env, *, result="PENDING"):
     context, bc, account, route, selection = management_env
-    session.add(
-        ManagementCapability(
-            tenant_id=context.tenant_id,
-            bc_id=bc.bc_id,
-            advertiser_id=account.advertiser_id,
-            connection_id=route.connection_id,
-            authorization_revision=route.authorization_revision,
-            binding_revision=route.binding_revision,
-            adapter_contract_revision=route.adapter_contract_revision,
-            operation="update_budget",
-            entity_kind="adgroup",
-            state="VERIFIED",
-            verified_at=datetime.now(UTC),
-            evidence={"source": "c6-test"},
-        )
-    )
     session.flush()
     preview = ManagementPreview(
         tenant_id=context.tenant_id,
@@ -147,7 +130,9 @@ def test_retry_requires_idempotency_and_never_retries_unknown(session, managemen
         retry_task(session, context, task.id, uuid4())
 
 
-def test_cross_bc_is_not_visible_and_cancel_does_not_touch_claimed_item(session, management_env):
+def test_cross_bc_is_not_visible_and_cancel_does_not_touch_claimed_item(
+    session, management_env
+):
     context, task, item = _task(session, management_env)
     with pytest.raises(DomainError):
         get_task(session, context, "other-bc", task.id)

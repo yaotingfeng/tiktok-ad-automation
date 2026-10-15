@@ -2294,3 +2294,12 @@
   - 迁移 `0031_cancel_stacked_dir_runs`：取消叠加的未领取排队运行（每组保留最新）和已废弃的周期“只读在投”运行。
 - 稳态估算：xingyu 约 602×4（SMART_PLUS 四个层级）+ 少量探测/低频账户 ≈ 每 3 小时 2.8 千条，较原 3 万条约降 90%。
 - 验证：ads/reporting/管理执行/权限 261 通过；新增合并请求、低频账户、只探测系列、丢失消息恢复和迁移用例。
+
+## 2026-10-15：广告管理权限直接按账户同步的搭建权限判定
+
+- 背景：上一节的管理能力记录要等账户能力任务发布后才生效，生产能力任务排在目录同步积压后面，已核实可搭建的账户仍无法运行自动规则或批量启停。按用户确认，去掉单独的能力记录。
+- 规则（`accounts/management_rules.py`，`verify_route`、`usable_grants`、管理预览三处共用）：
+  - 账户同步已核实（`permission_state=VERIFIED`）且 `can_build`（ADMIN/OPERATOR + 官方 scope 2，或 MCP `mcp:tt4b`）→ 启停系列/广告组/广告、调系列/广告组预算、调广告组 ROAS；
+  - 素材开关另需创意管理 scope 6/61/611（官方），MCP 连接需可上传；
+  - 操作与对象层级的对应关系不变，物理请求前仍按冻结路由重检。
+- 删除 `management_capability` 表（迁移 `0032_drop_management_capability`）、能力发布中的管理矩阵写入与 `ManagementPermissionEvidence`；测试改为通过账户授权行（`can_build`、scope）控制权限。

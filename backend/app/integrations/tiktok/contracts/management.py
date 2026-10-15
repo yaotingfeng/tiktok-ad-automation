@@ -1,11 +1,11 @@
 """广告管理写入合同。
 
 该模块只定义冻结命令和外部回执，不负责选择目标或推导权限。写权限必须由
-冻结路由和当前账户的 ManagementCapability 在每次物理请求前重新核验。
+冻结路由和当前账户的搭建权限（及素材开关所需创意授权）在每次物理请求前
+重新核验。
 """
 
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any, Literal, Protocol
 
 from .ads import EntityRef
@@ -19,7 +19,9 @@ _MANAGEMENT_OPERATIONS = {
     "status": "set_status",
     "material_status": "set_material_status",
 }
-_ENTITY_KINDS = frozenset({"campaign", "adgroup", "ad", "creative", "material", "account"})
+_ENTITY_KINDS = frozenset(
+    {"campaign", "adgroup", "ad", "creative", "material", "account"}
+)
 _MAX_MATERIAL_BATCH = 50
 
 
@@ -27,11 +29,6 @@ def _text(value: object, name: str) -> str:
     if type(value) is not str or not value.strip() or len(value) > 255:
         raise ValueError(f"invalid {name}")
     return value
-
-
-def _aware(value: object) -> None:
-    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError("observed_at needs timezone")
 
 
 @dataclass(frozen=True)
@@ -57,7 +54,9 @@ class ManagementCommand:
         if self.ad_material_id is not None:
             _text(self.ad_material_id, "ad material id")
         if self.field in {"status", "material_status"}:
-            status_keys = [key for key in ("status", "operation_status") if key in self.desired]
+            status_keys = [
+                key for key in ("status", "operation_status") if key in self.desired
+            ]
             if len(status_keys) != 1:
                 raise ValueError("status requires exactly one status field")
             if self.desired[status_keys[0]] not in {"ENABLE", "DISABLE"}:
@@ -105,33 +104,6 @@ class ManagementReceipt:
             raise ValueError("accepted management receipt cannot be retryable")
         if self.evidence is not None and not isinstance(self.evidence, CallEvidence):
             raise ValueError("invalid management evidence")
-
-
-@dataclass(frozen=True)
-class ManagementPermissionEvidence:
-    """只记录脱敏授权摘要；scope/工具存在不能单独证明账户管理写权。"""
-
-    scope: tuple[str, ...]
-    role: str | None
-    operations: frozenset[str]
-    source: str
-    observed_at: datetime
-    tool_names: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        if type(self.scope) is not tuple or len(set(self.scope)) != len(self.scope):
-            raise ValueError("invalid management scopes")
-        for value in self.scope + self.tool_names:
-            _text(value, "management evidence value")
-        if self.role is not None and self.role not in {"ADMIN", "OPERATOR", "ANALYST", "STANDARD"}:
-            raise ValueError("invalid management role")
-        if type(self.operations) is not frozenset:
-            raise ValueError("invalid management operations")
-        allowed = frozenset(_MANAGEMENT_OPERATIONS.values())
-        if not self.operations <= allowed:
-            raise ValueError("unknown management operation")
-        _text(self.source, "management evidence source")
-        _aware(self.observed_at)
 
 
 MANAGEMENT_OPERATIONS = frozenset(_MANAGEMENT_OPERATIONS.values())

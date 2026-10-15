@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
 from uuid import UUID
@@ -24,6 +24,12 @@ from app.integrations.tiktok.contracts.management import (
     ManagementCommand,
     ManagementField,
 )
+from app.modules.accounts.connection_models import ConnectionAuthorization
+from app.modules.accounts.management_rules import (
+    MANAGEMENT_ENTITY_KINDS,
+    management_allowed,
+)
+from app.modules.accounts.models import BCAccountAccess
 from app.modules.ad_management.schemas import MutationSpec
 from app.modules.ads.directory import locate
 from app.modules.ads.models import AdMaterialReference, AdObject
@@ -171,6 +177,38 @@ def _object_for_ref(
         if exc.code in {"ad_object_not_found", "directory_forbidden"}:
             return None
         raise
+
+
+def _management_allowed(
+    session: Session,
+    *,
+    context: TenantContext,
+    bc_id: str,
+    advertiser_id: str,
+    route: Any,
+    operation: str,
+    entity_kind: str,
+) -> bool:
+    """预览时按与提交门禁同一规则（management_rules.management_allowed）判断能否管理。"""
+    if route is None or entity_kind not in MANAGEMENT_ENTITY_KINDS.get(operation, ()):
+        return False
+    grant = session.get(
+        BCAccountAccess, (context.tenant_id, bc_id, advertiser_id, route.connection_id)
+    )
+    authorization = session.exec(
+        select(ConnectionAuthorization).where(
+            ConnectionAuthorization.tenant_id == context.tenant_id,
+            ConnectionAuthorization.connection_id == route.connection_id,
+            ConnectionAuthorization.authorization_revision
+            == route.authorization_revision,
+        )
+    ).one_or_none()
+    return (
+        grant is not None
+        and authorization is not None
+        and grant.permission_state == "VERIFIED"
+        and management_allowed(grant, authorization.scopes, operation)
+    )
 
 
 def _material_row(session: Session, use: MaterialUseRef) -> AdMaterialReference | None:
@@ -905,30 +943,15 @@ def _expand(
             capability["ad_material_id"] = use.ad_material_id
             capability["platform_material_id"] = use.platform_material_id
         if require_capabilities:
-            from app.modules.accounts.management_capability_models import (
-                ManagementCapability,
+            capability_ok = _management_allowed(
+                session,
+                context=context,
+                bc_id=bc_id,
+                advertiser_id=row.advertiser_id,
+                route=route,
+                operation=operation,
+                entity_kind=row.kind,
             )
-
-            statement = select(ManagementCapability).where(
-                ManagementCapability.tenant_id == context.tenant_id,
-                ManagementCapability.bc_id == bc_id,
-                ManagementCapability.advertiser_id == row.advertiser_id,
-                ManagementCapability.operation == operation,
-                ManagementCapability.entity_kind == row.kind,
-                ManagementCapability.state == "VERIFIED",
-                col(ManagementCapability.verified_at).is_not(None),
-                col(ManagementCapability.verified_at) <= datetime.now(UTC),
-            )
-            if route is not None:
-                statement = statement.where(
-                    ManagementCapability.connection_id == route.connection_id,
-                    ManagementCapability.authorization_revision
-                    == route.authorization_revision,
-                    ManagementCapability.binding_revision == route.binding_revision,
-                    ManagementCapability.adapter_contract_revision
-                    == route.adapter_contract_revision,
-                )
-            capability_ok = session.exec(statement).first() is not None
         if use is not None and (
             use.ad_material_id is None
             or row.ad_type.upper()

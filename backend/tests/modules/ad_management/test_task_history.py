@@ -8,7 +8,6 @@ from sqlmodel import Session
 
 from app.core.errors import DomainError
 from app.models import User
-from app.modules.accounts.management_capability_models import ManagementCapability
 from app.modules.ad_management.actions import get_task, list_tasks
 from app.modules.ad_management.models import (
     ManagementPreview,
@@ -25,22 +24,6 @@ NOW = datetime(2026, 10, 14, 8, 0, tzinfo=UTC)
 def history(session: Session, management_env):
     context, bc, account, route, selection = management_env
     # 可见性校验只看任务项冻结的能力；列表测试统一用预算能力，动作看预览变更。
-    session.add(
-        ManagementCapability(
-            tenant_id=context.tenant_id,
-            bc_id=bc.bc_id,
-            advertiser_id=account.advertiser_id,
-            connection_id=route.connection_id,
-            authorization_revision=route.authorization_revision,
-            binding_revision=route.binding_revision,
-            adapter_contract_revision=route.adapter_contract_revision,
-            operation="update_budget",
-            entity_kind="adgroup",
-            state="VERIFIED",
-            verified_at=NOW,
-            evidence={"source": "task-history-test"},
-        )
-    )
     session.flush()
 
     def add(mutation: dict, *, minutes: int, kinds=("adgroup",)) -> ManagementTask:

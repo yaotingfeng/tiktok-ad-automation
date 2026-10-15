@@ -59,7 +59,7 @@ def management_env(session):
                 tenant_id=context.tenant_id,
                 connection_id=connection.id,
                 authorization_revision=connection.authorization_revision,
-                scopes=["read", "build"],
+                scopes=["2", "6"],
                 permission_summary={"read_authorized": True, "build_authorized": True},
                 source="SYNTHETIC_COMPLETE_EVIDENCE",
                 verified_at=datetime.now(UTC),

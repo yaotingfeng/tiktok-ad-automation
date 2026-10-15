@@ -126,7 +126,7 @@ _OPERATION_CAPABILITIES: dict[str, Capability] = {
     "build.create_cta_portfolio": "build",
     "build.disable_adgroup": "build",
     "build.list_optimizer_rules": "read",
-    # 管理写操作逐一登记；账户证据仍由 verify_route + ManagementCapability 核验。
+    # 管理写操作逐一登记；账户写权仍由 verify_route 按搭建权限核验。
     **dict.fromkeys(
         (f"management.{name}" for name in MANAGEMENT_OPERATIONS), "ads_manage"
     ),

@@ -25,11 +25,7 @@ from app.core.errors import DomainError
 from app.integrations.tiktok.bounded_resources import bounded_session
 from app.integrations.tiktok.contracts.accounts import AuthorizationFacts
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
-from app.integrations.tiktok.contracts.management import ManagementPermissionEvidence
 from app.integrations.tiktok.gateway import open_tiktok_gateway
-from app.integrations.tiktok.official.authorization import (
-    management_operations_for_scopes,
-)
 from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit
 from app.jobs.tasks import register_dispatch_task
@@ -41,12 +37,7 @@ from app.modules.accounts.capability_models import (
     CapabilityRequest,
 )
 from app.modules.accounts.capability_schemas import CapabilityEvidence
-from app.modules.accounts.connection_models import (
-    BCConnectionBinding,
-    ConnectionAuthorization,
-)
 from app.modules.accounts.directory_models import DirectoryRevision
-from app.modules.accounts.management_capabilities import record_management_capabilities
 from app.modules.accounts.models import (
     AdvertiserAccount,
     BCAccountAccess,
@@ -438,36 +429,6 @@ def _publish(session: Session, job: CapabilityJob, context: TenantContext) -> No
     )
     if job.publish_after is not None:
         statement = statement.where(BCAccountAccess.advertiser_id > job.publish_after)
-    route = _route(job)
-    authorization = session.exec(
-        select(ConnectionAuthorization).where(
-            ConnectionAuthorization.tenant_id == context.tenant_id,
-            ConnectionAuthorization.connection_id == job.connection_id,
-            ConnectionAuthorization.authorization_revision
-            == route.authorization_revision,
-        )
-    ).one()
-    binding = session.get(
-        BCConnectionBinding, (context.tenant_id, job.bc_id, job.connection_id)
-    )
-    # 管理证据以绑定的授权代数与绑定代数为真实外键；两者与冻结路由不一致时
-    # 无法挂靠，只跳过管理能力，不影响搭建/上传权限发布。
-    anchored = (
-        binding is not None
-        and binding.authorization_revision == route.authorization_revision
-        and binding.revision == route.binding_revision
-    )
-    summary = authorization.permission_summary or {}
-    if "management_operations" in summary:
-        management = frozenset(summary["management_operations"])
-    elif job.channel == "OFFICIAL_API":
-        # 早于管理能力上线保存的官方授权摘要没有该字段：按已保存的 scope 用同一映射推导。
-        # 只取数字 scope；同一授权里可能混有 MCP 的字符串 scope，忽略即可。
-        management = management_operations_for_scopes(
-            {int(value) for value in authorization.scopes if str(value).isdigit()}
-        )
-    else:
-        management = frozenset()
     rows = session.exec(
         statement.order_by(col(BCAccountAccess.advertiser_id))
         .limit(100)
@@ -494,21 +455,6 @@ def _publish(session: Session, job: CapabilityJob, context: TenantContext) -> No
         grant.can_upload = bool(operate and job.scope_upload)
         grant.checked_at = now
         session.add(grant)
-        if not anchored:
-            continue
-        # 同一份完整角色证据同时发布广告管理能力；不可操作的账户写出全 UNKNOWN 矩阵。
-        record_management_capabilities(
-            session,
-            route=route,
-            advertiser_id=grant.advertiser_id,
-            evidence=ManagementPermissionEvidence(
-                scope=tuple(authorization.scopes),
-                role=role if operate else None,
-                operations=management if job.scope_known else frozenset(),
-                source=authorization.source or "UNKNOWN",
-                observed_at=now,
-            ),
-        )
     job.published_count += len(rows)
     if rows:
         job.publish_after = rows[-1][0].advertiser_id

@@ -1,16 +1,19 @@
 from uuid import UUID
 
-from sqlalchemy import SQLColumnExpression, and_, func
+from sqlalchemy import SQLColumnExpression, and_, false, func, or_
+from sqlalchemy.dialects.postgresql import array
 from sqlmodel import Session, col, select
 from sqlmodel.sql.expression import SelectOfScalar
 
 from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.modules.accounts.connection_models import (
-    BCConnectionBinding,
     ConnectionAuthorization,
 )
-from app.modules.accounts.management_capability_models import ManagementCapability
+from app.modules.accounts.management_rules import (
+    CREATIVE_SCOPES,
+    MANAGEMENT_ENTITY_KINDS,
+)
 from app.modules.accounts.models import (
     OPERABLE_REMOTE_STATUSES as OPERABLE_REMOTE_STATUSES,
 )
@@ -82,53 +85,37 @@ def usable_grants(
     if action == "upload":
         statement = statement.where(col(BCAccountAccess.can_upload).is_(True))
     if action == "ads_manage":
-        # 管理证据按当前连接授权/合同代数匹配；build 证据不会放大成广告写权。
-        evidence = (
-            select(ManagementCapability.id)
-            .join(
-                BCConnectionBinding,
-                and_(
-                    col(BCConnectionBinding.tenant_id)
-                    == ManagementCapability.tenant_id,
-                    col(BCConnectionBinding.bc_id) == ManagementCapability.bc_id,
-                    col(BCConnectionBinding.connection_id)
-                    == ManagementCapability.connection_id,
-                ),
+        # 与 verify_route 同一规则（management_rules.management_allowed）：已核实的搭建权限即广告管理
+        # 权限；素材开关另需创意管理 scope（官方）或上传权限（MCP）。
+        if operation is not None and operation not in MANAGEMENT_ENTITY_KINDS:
+            raise DomainError("invalid_account_action", "管理操作无效")
+        if (
+            operation is not None
+            and entity_kind is not None
+            and entity_kind not in MANAGEMENT_ENTITY_KINDS[operation]
+        ):
+            return statement.where(false())
+        statement = statement.where(col(BCAccountAccess.can_build).is_(True))
+        if operation == "set_material_status":
+            scopes = col(ConnectionAuthorization.scopes)
+            statement = statement.where(
+                select(ConnectionAuthorization.id)
+                .where(
+                    ConnectionAuthorization.tenant_id == BCAccountAccess.tenant_id,
+                    ConnectionAuthorization.connection_id
+                    == BCAccountAccess.connection_id,
+                    ConnectionAuthorization.authorization_revision
+                    == TikTokConnection.authorization_revision,
+                    or_(
+                        scopes.op("?|")(array(sorted(CREATIVE_SCOPES))),
+                        and_(
+                            scopes.op("?")("mcp:tt4b"),
+                            col(BCAccountAccess.can_upload).is_(True),
+                        ),
+                    ),
+                )
+                .exists()
             )
-            .join(
-                ConnectionAuthorization,
-                and_(
-                    col(ConnectionAuthorization.tenant_id)
-                    == ManagementCapability.tenant_id,
-                    col(ConnectionAuthorization.connection_id)
-                    == ManagementCapability.connection_id,
-                    col(ConnectionAuthorization.authorization_revision)
-                    == ManagementCapability.authorization_revision,
-                ),
-            )
-            .where(
-                ManagementCapability.tenant_id == BCAccountAccess.tenant_id,
-                ManagementCapability.bc_id == BCAccountAccess.bc_id,
-                ManagementCapability.advertiser_id == BCAccountAccess.advertiser_id,
-                ManagementCapability.connection_id == BCAccountAccess.connection_id,
-                ManagementCapability.authorization_revision
-                == TikTokConnection.authorization_revision,
-                ManagementCapability.adapter_contract_revision
-                == TikTokConnection.adapter_contract_revision,
-                ManagementCapability.binding_revision == BCConnectionBinding.revision,
-                BCConnectionBinding.status == "ACTIVE",
-                BCConnectionBinding.kind == TikTokConnection.kind,
-                ManagementCapability.state == "VERIFIED",
-                col(ManagementCapability.verified_at) <= func.now(),
-                col(ConnectionAuthorization.verified_at) <= func.now(),
-                col(BCAccountAccess.checked_at) <= func.now(),
-            )
-        )
-        if operation is not None:
-            evidence = evidence.where(ManagementCapability.operation == operation)
-            if entity_kind is not None:
-                evidence = evidence.where(ManagementCapability.entity_kind == entity_kind)
-        statement = statement.where(evidence.exists())
     return statement
 
 

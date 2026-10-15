@@ -6,7 +6,6 @@ from sqlmodel import select
 
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.ads import EntityRef, MaterialUseRef
-from app.modules.accounts.management_capability_models import ManagementCapability
 from app.modules.ad_management.models import ManagementPreviewItem
 from app.modules.ad_management.previews import prepare_preview
 from app.modules.ad_management.schemas import MutationSpec
@@ -31,25 +30,6 @@ def _row(ref, *, parent=None, ad_type="REGULAR", configuration=None, status="ENA
         published_version=1,
         source_connection_id=connection_id,
         source_channel="OFFICIAL_API",
-    )
-
-
-def _cap(session, context, bc, route, advertiser, operation, kind):
-    session.add(
-        ManagementCapability(
-            tenant_id=context.tenant_id,
-            bc_id=bc.bc_id,
-            advertiser_id=advertiser,
-            connection_id=route.connection_id,
-            authorization_revision=route.authorization_revision,
-            binding_revision=route.binding_revision,
-            adapter_contract_revision=route.adapter_contract_revision,
-            operation=operation,
-            entity_kind=kind,
-            state="VERIFIED",
-            verified_at=datetime.now(UTC),
-            evidence={"role": "ADMIN", "scope": ["management"]},
-        )
     )
 
 
@@ -80,8 +60,6 @@ def test_percentage_and_budget_owner_previews(session, management_env):
         _row(group_a, parent=campaign, configuration={"roas_bid": "1.20", "budget_mode": "CAMPAIGN"}, connection_id=route.connection_id),
         _row(group_b, parent=campaign, configuration={"roas_bid": "1.20", "budget_mode": "CAMPAIGN"}, connection_id=route.connection_id),
     ])
-    _cap(session, context, bc, route, account.advertiser_id, "update_roas", "adgroup")
-    _cap(session, context, bc, route, account.advertiser_id, "update_budget", "campaign")
     session.flush()
     _set_selection(selection, [group_a])
     p = prepare_preview(session, context, bc.bc_id, selection.id, MutationSpec(field="roas", mode="increase_percent", value=10))
@@ -99,7 +77,6 @@ def test_ordinary_material_without_ad_reference_is_unsupported(session, manageme
     ad = EntityRef(context.tenant_id, account.advertiser_id, "ad", "ad-ordinary")
     use = MaterialUseRef(ad, "platform-vid", None, "VIDEO")
     session.add(_row(ad, ad_type="REGULAR", configuration={"budget": "10"}, connection_id=route.connection_id))
-    _cap(session, context, bc, route, account.advertiser_id, "set_material_status", "ad")
     session.flush()
     _set_selection(selection, [ad], [use])
     p = prepare_preview(session, context, bc.bc_id, selection.id, MutationSpec(field="status", mode="set", value="DISABLE"))
@@ -118,7 +95,6 @@ def test_same_series_divergent_roas_rejected(session, management_env):
         _row(a, parent=campaign, configuration={"roas_bid": "1.20"}, connection_id=route.connection_id),
         _row(b, parent=campaign, configuration={"roas_bid": "1.30"}, connection_id=route.connection_id),
     ])
-    _cap(session, context, bc, route, account.advertiser_id, "update_roas", "adgroup")
     session.flush()
     _set_selection(selection, [a, b])
     with pytest.raises(DomainError, match="最终 ROAS") as error:
@@ -151,7 +127,6 @@ def test_source_fence_and_grouping_revision_are_frozen(session, management_env):
             grouping_revision=7,
         ),
     ])
-    _cap(session, context, bc, route, account.advertiser_id, "update_roas", "adgroup")
     session.flush()
     _set_selection(selection, [group])
     with pytest.raises(DomainError, match="来源"):
@@ -186,7 +161,6 @@ def test_child_inherits_grouping_revision_from_frozen_route_ancestor(session, ma
             grouping_revision=7,
         ),
     ])
-    _cap(session, context, bc, route, account.advertiser_id, "update_roas", "adgroup")
     session.flush()
     _set_selection(selection, [group])
     preview = prepare_preview(
@@ -217,7 +191,6 @@ def test_smart_plus_series_expands_only_preselection_siblings_and_conflicts(sess
         _row(sibling, parent=campaign, ad_type="SMART_PLUS", configuration={"roas_bid": "1.20"}, connection_id=route.connection_id, observed_at=old),
         _row(late, parent=campaign, ad_type="SMART_PLUS", configuration={"roas_bid": "9.00"}, connection_id=route.connection_id, observed_at=future),
     ])
-    _cap(session, context, bc, route, account.advertiser_id, "update_roas", "adgroup")
     session.flush()
     _set_selection(selection, [selected])
     p = prepare_preview(session, context, bc.bc_id, selection.id, MutationSpec(field="roas", mode="set", value=Decimal("1.50")))
@@ -243,7 +216,6 @@ def test_campaign_selection_expands_existing_smart_plus_groups(session, manageme
         _row(campaign, ad_type="REGULAR", connection_id=route.connection_id, observed_at=cutoff - timedelta(minutes=1)),
         _row(group, parent=campaign, ad_type="SMART_PLUS", configuration={"roas_bid": "1.20"}, connection_id=route.connection_id, observed_at=cutoff - timedelta(minutes=1)),
     ])
-    _cap(session, context, bc, route, account.advertiser_id, "update_roas", "adgroup")
     session.flush()
     _set_selection(selection, [campaign])
     preview = prepare_preview(
@@ -267,7 +239,6 @@ def test_account_selection_fallback_expands_route_fenced_series(session, managem
         _row(campaign, ad_type="REGULAR", connection_id=route.connection_id, observed_at=old),
         _row(group, parent=campaign, ad_type="SMART_PLUS", configuration={"roas_bid": "1.20"}, connection_id=route.connection_id, observed_at=old),
     ])
-    _cap(session, context, bc, route, account.advertiser_id, "update_roas", "adgroup")
     session.flush()
     # Account rows can be aggregate B selections with no synthetic account ref.
     selection.filters = {"dimension": "account"}
@@ -293,7 +264,6 @@ def test_excluding_campaign_does_not_fallback_to_full_account_scope(session, man
         _row(campaign, connection_id=route.connection_id, observed_at=old),
         _row(group, parent=campaign, ad_type="SMART_PLUS", configuration={"roas_bid": "1.20"}, connection_id=route.connection_id, observed_at=old),
     ])
-    _cap(session, context, bc, route, account.advertiser_id, "update_roas", "adgroup")
     session.flush()
     selection.filters = {"dimension": "account"}
     _set_selection(selection, [campaign])
@@ -322,7 +292,6 @@ def test_account_series_fallback_honors_excluded_campaign_and_group(session, man
         _row(campaign, connection_id=route.connection_id, observed_at=old),
         _row(group, parent=campaign, ad_type="SMART_PLUS", configuration={"roas_bid": "1.20"}, connection_id=route.connection_id, observed_at=old),
     ])
-    _cap(session, context, bc, route, account.advertiser_id, "update_roas", "adgroup")
     session.flush()
     selection.filters = {"dimension": "account"}
     _set_selection(selection, [])
@@ -364,8 +333,6 @@ def test_unrelated_include_parent_and_excluded_parent_are_fenced(session, manage
         _row(selected, parent=campaign, connection_id=route.connection_id),
         _row(unrelated, connection_id=route.connection_id),
     ])
-    _cap(session, context, bc, route, account.advertiser_id, "set_status", "adgroup")
-    _cap(session, context, bc, route, account.advertiser_id, "set_status", "campaign")
     session.flush()
     _set_selection(selection, [selected])
     with pytest.raises(DomainError, match="显式父级"):
@@ -383,7 +350,6 @@ def test_missing_include_parent_is_retained_as_unsupported(session, management_e
         _row(campaign, connection_id=route.connection_id),
         _row(group, parent=campaign, connection_id=route.connection_id),
     ])
-    _cap(session, context, bc, route, account.advertiser_id, "set_status", "adgroup")
     session.flush()
     _set_selection(selection, [group])
     preview = prepare_preview(
@@ -410,7 +376,6 @@ def test_missing_material_reference_cannot_fallback_to_ad_status(session, manage
     ad = EntityRef(context.tenant_id, account.advertiser_id, "ad", "missing-material-reference")
     use = MaterialUseRef(ad, "platform-vid", "ad-material-id", "VIDEO")
     session.add(_row(ad, ad_type="SMART_PLUS", connection_id=route.connection_id))
-    _cap(session, context, bc, route, account.advertiser_id, "set_material_status", "ad")
     session.flush()
     _set_selection(selection, [ad], [use])
     preview = prepare_preview(
@@ -441,7 +406,6 @@ def test_group_budget_campaign_selection_targets_its_adgroups(session, managemen
         _row(group_b, parent=campaign, configuration={"budget": "80"}, connection_id=route.connection_id, observed_at=frozen_before),
         _row(late, parent=campaign, configuration={"budget": "90"}, connection_id=route.connection_id),
     ])
-    _cap(session, context, bc, route, account.advertiser_id, "update_budget", "adgroup")
     session.flush()
     _set_selection(selection, [campaign])
     preview = prepare_preview(
@@ -471,8 +435,6 @@ def test_adgroup_budget_follows_campaign_budget_strategy(session, management_env
         _row(split, configuration={"budget": 0, "budget_optimize_on": False}, connection_id=route.connection_id),
         _row(split_group, parent=split, configuration={"budget": "40"}, connection_id=route.connection_id),
     ])
-    _cap(session, context, bc, route, account.advertiser_id, "update_budget", "campaign")
-    _cap(session, context, bc, route, account.advertiser_id, "update_budget", "adgroup")
     session.flush()
     _set_selection(selection, [cbo_group, split_group])
     preview = prepare_preview(
@@ -498,7 +460,6 @@ def test_invalid_current_or_final_budget_marks_only_that_item(session, managemen
         _row(small, configuration={"budget": "20", "budget_optimize_on": True}, connection_id=route.connection_id),
         _row(large, configuration={"budget": "200", "budget_optimize_on": True}, connection_id=route.connection_id),
     ])
-    _cap(session, context, bc, route, account.advertiser_id, "update_budget", "campaign")
     session.flush()
     _set_selection(selection, [zero, small, large])
     preview = prepare_preview(
@@ -522,8 +483,6 @@ def test_enable_reports_disabled_parent_and_includes_it_when_asked(session, mana
         _row(campaign, status="DISABLE", connection_id=route.connection_id),
         _row(group, parent=campaign, status="DISABLE", connection_id=route.connection_id),
     ])
-    _cap(session, context, bc, route, account.advertiser_id, "set_status", "adgroup")
-    _cap(session, context, bc, route, account.advertiser_id, "set_status", "campaign")
     session.flush()
     _set_selection(selection, [group])
     first = prepare_preview(
