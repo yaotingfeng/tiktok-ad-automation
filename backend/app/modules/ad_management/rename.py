@@ -171,7 +171,8 @@ def expand_rename(
                 unsupported(
                     ref,
                     problem,
-                    final_value=new,
+                    # 超长名称存不进 512 列，只记原因、不冻结新值，避免整个预览失败。
+                    final_value=None if problem == "name_too_long" else new,
                     **common,
                     **_drama_hint(row.name, new),
                 )
@@ -197,17 +198,6 @@ def expand_rename(
     # 它们的原名仍占用账户内的名称，必须参与下面的重名判断。
     renaming: list[tuple[int, AdObject, str]] = []
     for position, row, new in candidates:
-        if require_capabilities and not _management_allowed(
-            session,
-            context=context,
-            bc_id=bc_id,
-            advertiser_id=row.advertiser_id,
-            route=route,
-            operation="rename",
-            entity_kind=row.kind,
-        ):
-            reject(position, "management_capability_unverified", new)
-            continue
         if new == _clean(row.name):
             capability = capabilities[position]
             slots[position] = ExpandedItem(
@@ -224,6 +214,17 @@ def expand_rename(
                 name=row.name,
                 **_drama_hint(row.name, new),
             )
+            continue
+        if require_capabilities and not _management_allowed(
+            session,
+            context=context,
+            bc_id=bc_id,
+            advertiser_id=row.advertiser_id,
+            route=route,
+            operation="rename",
+            entity_kind=row.kind,
+        ):
+            reject(position, "management_capability_unverified", new)
             continue
         renaming.append((position, row, new))
 
@@ -303,23 +304,29 @@ def resolve_rename_rows(
     )
     problems: list[RenameRowProblem] = []
     ids: list[str] = []
+    new_names: dict[str, str] = {}
     for row in request.rows:
         campaign_id = row.campaign_id.strip()
         # Excel 会把长数字显示成 1.7E+18 之类的科学计数法，精度已丢失，只能拒绝。
         # 只认 ASCII 数字：中文输入法粘贴出的全角数字也算格式错误，避免误报为找不到。
         if not (campaign_id.isascii() and campaign_id.isdigit()):
             problems.append(
-                RenameRowProblem(campaign_id=campaign_id, reason="id_invalid")
+                RenameRowProblem(
+                    campaign_id=campaign_id, new_name=row.new_name, reason="id_invalid"
+                )
             )
         elif campaign_id in ids:
             # 同一 ID 只保留第一次出现的行，后续行无法确定以哪个新名称为准。
             problems.append(
                 RenameRowProblem(
-                    campaign_id=campaign_id, reason="duplicate_campaign_id"
+                    campaign_id=campaign_id,
+                    new_name=row.new_name,
+                    reason="duplicate_campaign_id",
                 )
             )
         else:
             ids.append(campaign_id)
+            new_names[campaign_id] = row.new_name
     # 只在本 BC 当前可读的账户内查找；与读取冻结选择时的授权校验口径一致。
     advertisers = usable_grants(
         tenant_id=context.tenant_id, bc_id=request.bc_id, action="read"
@@ -341,7 +348,11 @@ def resolve_rename_rows(
         if obj is None:
             # 不区分"不在本 BC"与"不存在"，避免泄露其他 BC 的推广系列信息。
             problems.append(
-                RenameRowProblem(campaign_id=campaign_id, reason="not_found")
+                RenameRowProblem(
+                    campaign_id=campaign_id,
+                    new_name=new_names[campaign_id],
+                    reason="not_found",
+                )
             )
             continue
         refs.append(

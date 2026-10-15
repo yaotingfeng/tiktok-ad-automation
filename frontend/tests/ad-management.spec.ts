@@ -89,7 +89,11 @@ async function managementBoundary(
             expires_at: "2099-01-01T00:00:00Z",
           },
           problems: [
-            { campaign_id: "1799999999999999999", reason: "not_found" },
+            {
+              campaign_id: "1799999999999999999",
+              new_name: "x",
+              reason: "not_found",
+            },
           ],
         },
       })

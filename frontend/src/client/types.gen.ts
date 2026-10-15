@@ -5443,6 +5443,10 @@ export type RenameRowProblem = {
      */
     campaign_id: string;
     /**
+     * New Name
+     */
+    new_name: string;
+    /**
      * Reason
      */
     reason: 'id_invalid' | 'not_found' | 'duplicate_campaign_id';

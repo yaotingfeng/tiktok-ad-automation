@@ -45,6 +45,44 @@ def test_rename_trims_whitespace(session, management_env):
     assert p.items[0].execution_result == "NO_CHANGE"
 
 
+def test_rename_too_long_marks_row_without_failing_preview(session, management_env):
+    context, bc, account, route, selection = management_env
+    ref = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "c-long")
+    row = _row(ref, connection_id=route.connection_id)
+    row.name = "嘉书-剧A"
+    session.add(row)
+    session.flush()
+    _set_selection(selection, [ref])
+    p = prepare_preview(
+        session,
+        context,
+        bc.bc_id,
+        selection.id,
+        _rename(kind="explicit", names={"c-long": "名" * 600}),
+    )
+    assert p.items[0].execution_result == "UNSUPPORTED"
+    assert p.items[0].reason == "name_too_long"
+    assert p.items[0].final_value is None
+
+
+def test_rename_unchanged_without_capability_is_no_change(session, management_env):
+    context, bc, account, route, selection = management_env
+    ref = EntityRef(context.tenant_id, account.advertiser_id, "campaign", "c-same")
+    row = _row(ref, connection_id=route.connection_id)
+    row.name = "嘉书-剧A"
+    session.add(row)
+    session.flush()
+    _set_selection(selection, [ref])
+    p = prepare_preview(
+        session,
+        context,
+        bc.bc_id,
+        selection.id,
+        _rename(kind="explicit", names={"c-same": "嘉书-剧A"}),
+    )
+    assert p.items[0].execution_result == "NO_CHANGE"
+
+
 def test_rename_batch_duplicates_all_rejected(session, management_env):
     context, bc, account, route, selection = management_env
     refs = []

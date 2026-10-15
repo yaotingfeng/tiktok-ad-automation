@@ -19,7 +19,7 @@ MutationField = Literal["roas", "budget", "status", "name"]
 MutationMode = Literal["set", "add", "subtract", "increase_percent", "decrease_percent"]
 StatusValue = Literal["ENABLE", "DISABLE"]
 RenameKind = Literal["replace", "affix", "explicit"]
-# 表格粘贴改名的单次行数上限，与预览和任务的批量边界保持一致。
+# 表格粘贴改名的单次行数上限（规格约定）。
 MAX_RENAME_ROWS = 500
 
 
@@ -291,6 +291,8 @@ class RenameSelectionRequest(BaseModel):
 
 class RenameRowProblem(BaseModel):
     campaign_id: str
+    # 回显该行粘贴的新名称：重复 ID 的后续行要显示它自己的名称而不是首行的。
+    new_name: str
     reason: Literal["id_invalid", "not_found", "duplicate_campaign_id"]
 
 

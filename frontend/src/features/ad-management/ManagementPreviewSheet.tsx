@@ -358,13 +358,11 @@ function PreviewRows({
   items,
   action,
   problems,
-  names,
 }: {
   items: ManagementItemPublic[]
   action: ManagementAction | null
   // 表格粘贴时解析接口找不到或格式不对的行；它们不在冻结选择里，单独列在最上面。
   problems: RenameRowProblem[]
-  names: Record<string, string>
 }) {
   const groups: RowGroup[] = ["change", "blocked", "info"]
   // 改名逐行展示原名称、新名称和改名后解析出的剧名，对象列只放推广系列 ID 与账户。
@@ -404,9 +402,7 @@ function PreviewRows({
                   <ObjectCell kind="系列" name={problem.campaign_id} />
                 </td>
                 <td className="p-2">—</td>
-                <td className="break-all p-2">
-                  {names[problem.campaign_id] ?? "—"}
-                </td>
+                <td className="break-all p-2">{problem.new_name || "—"}</td>
                 <td className="p-2">—</td>
                 <td className="p-2 text-amber-700">
                   {renameReasonLabel[problem.reason] ?? problem.reason}
@@ -933,12 +929,7 @@ export function ManagementPreviewSheet({
                   </label>
                 </div>
               )}
-              <PreviewRows
-                items={items}
-                action={action}
-                problems={problems}
-                names={renameRule?.names ?? {}}
-              />
+              <PreviewRows items={items} action={action} problems={problems} />
             </div>
           )}
         </div>

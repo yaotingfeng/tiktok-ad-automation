@@ -41,9 +41,10 @@ def test_resolve_finds_campaigns_and_reports_problems(session, management_env):
         ),
     )
     assert [r.remote_id for r in result.selection.refs] == ["1700000000000000001"]
-    assert {(p.campaign_id, p.reason) for p in result.problems} == {
-        ("1700000000000000001", "duplicate_campaign_id"),
-        ("1799999999999999999", "not_found"),
+    # 问题行回显它自己粘贴的新名称（重复行是「又一个」，不是首行的「新名」）。
+    assert {(p.campaign_id, p.new_name, p.reason) for p in result.problems} == {
+        ("1700000000000000001", "又一个", "duplicate_campaign_id"),
+        ("1799999999999999999", "x", "not_found"),
     }
 
 
@@ -140,7 +141,9 @@ def test_resolve_route_returns_selection_and_problems(
     assert [r["remote_id"] for r in body["selection"]["refs"]] == [
         "1700000000000000003"
     ]
-    assert body["problems"] == [{"campaign_id": "abc", "reason": "id_invalid"}]
+    assert body["problems"] == [
+        {"campaign_id": "abc", "new_name": "x", "reason": "id_invalid"}
+    ]
 
 
 def test_resolve_request_rejects_more_than_max_rows(management_env):
