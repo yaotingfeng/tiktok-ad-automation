@@ -54,6 +54,17 @@ def test_resolve_rejects_scientific_notation_id(session, management_env):
     assert result.problems[0].reason == "id_invalid"
 
 
+def test_resolve_rejects_full_width_digits(session, management_env):
+    context, bc, *_ = management_env
+    result = resolve_rename_rows(
+        session,
+        context,
+        _request(bc, [("１７００００００００００００００００１", "x")]),
+    )
+    assert result.selection is None
+    assert result.problems[0].reason == "id_invalid"
+
+
 def test_resolve_does_not_cross_bc(session, management_env):
     """其他 BC 的账户下的推广系列即使 ID 正确也判为找不到。"""
     context, bc, _account, route, _ = management_env
@@ -91,7 +102,8 @@ def test_resolve_does_not_cross_bc(session, management_env):
     result = resolve_rename_rows(
         session, context, _request(bc, [("1700000000000000002", "x")])
     )
-    assert result.problems[0].reason == "not_found"
+    assert result.selection is None
+    assert [p.reason for p in result.problems] == ["not_found"]
 
 
 def test_resolve_route_returns_selection_and_problems(

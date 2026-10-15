@@ -288,9 +288,6 @@ def expand_rename(
     return Expansion(refs, (), items, tuple(commands))
 
 
-__all__ = ["compute_name", "expand_rename", "name_problem"]
-
-
 def resolve_rename_rows(
     session: Session, context: TenantContext, request: RenameSelectionRequest
 ) -> RenameSelectionPublic:
@@ -309,7 +306,8 @@ def resolve_rename_rows(
     for row in request.rows:
         campaign_id = row.campaign_id.strip()
         # Excel 会把长数字显示成 1.7E+18 之类的科学计数法，精度已丢失，只能拒绝。
-        if not campaign_id.isdigit():
+        # 只认 ASCII 数字：中文输入法粘贴出的全角数字也算格式错误，避免误报为找不到。
+        if not (campaign_id.isascii() and campaign_id.isdigit()):
             problems.append(
                 RenameRowProblem(campaign_id=campaign_id, reason="id_invalid")
             )
@@ -369,3 +367,6 @@ def resolve_rename_rows(
         session, context=context, bc_id=request.bc_id, selection_id=record.id
     )
     return RenameSelectionPublic(selection=selection, problems=problems)
+
+
+__all__ = ["compute_name", "expand_rename", "name_problem", "resolve_rename_rows"]
