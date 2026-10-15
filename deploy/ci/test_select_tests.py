@@ -94,6 +94,10 @@ class SelectTests(unittest.TestCase):
         plan = self.plan("scripts/test-k8s-deployment.py")
         self.assertTrue(plan["deploy_tools"])
         self.assertFalse(plan["release_integration"])
+        # 公司 Jenkins 流水线只调度 deploy/local.py，改动按发布工具检查，不触发全量。
+        plan = self.plan("Jenkinsfile")
+        self.assertEqual(plan["mode"], "affected")
+        self.assertTrue(plan["deploy_tools"])
 
     def test_unknown_path_falls_back_to_full(self):
         self.assertEqual(self.plan("some/new/area.txt")["mode"], "full")

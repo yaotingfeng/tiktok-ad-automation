@@ -66,7 +66,7 @@ ACCEPTANCE_BY_AREA = (
 FRONTEND = re.compile(r"^(frontend/|bun\.lock$|package\.json$|biome\.json$)")
 FRONTEND_BUILD_PAGES = re.compile(r"build", re.I)
 FRONTEND_R2_PAGES = re.compile(r"(r2|upload|material|ingest)", re.I)
-DEPLOY = re.compile(r"^(deploy/|scripts/|config/|\.env\.example$)")
+DEPLOY = re.compile(r"^(deploy/|scripts/|config/|\.env\.example$|Jenkinsfile$)")
 # 发布集成测试需要构建镜像，只在发布编排、迁移或镜像本身变化时运行。
 RELEASE_INTEGRATION = re.compile(
     r"^(deploy/release/|deploy/local\.py$|deploy/build-and-push\.sh$|backend/Dockerfile$"

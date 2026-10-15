@@ -6,6 +6,9 @@
 # 工具容器经宿主 docker.sock 启动，挂载路径必须写宿主路径；这里把工作区、私有目录都以
 # “宿主路径 = 容器内路径”挂载，检查/发布脚本里再挂载文件时无需任何路径换算。
 #
+# 工具镜像默认 C 语言环境下，Linux 版 Chromium 无法保存中文下载文件名（退回为 "download"），
+# 因此固定以 UTF-8 运行；check.sh 会把 LANG 透传给检查进程。
+#
 # 需要的环境变量（Jenkinsfile 注入）：TOOLS_IMAGE、TKADA_PRIVATE_DIR、KUBECONFIG_FILE、
 # RETIRED_SOURCE_FILE、REG_USER/REG_PASS（ACR）、GIT_USER/GIT_TOKEN（公司 Gitea 只读）。
 set -euo pipefail
@@ -81,6 +84,7 @@ docker run --rm --init --name "$container" \
   -v "$workspace_host:$workspace_host" -v "$private_host:$private_host" \
   -w "$workspace_host" \
   -e HOME="$private_host/cache/home" -e UV_CACHE_DIR="$private_host/cache/uv" \
+  -e LANG=C.UTF-8 \
   -e DOCKER_CONFIG="$secrets_host/docker" \
   -e GIT_ASKPASS="$secrets_host/askpass" -e GIT_TERMINAL_PROMPT=0 \
   -e GIT_USER -e GIT_TOKEN \

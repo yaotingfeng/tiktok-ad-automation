@@ -2355,7 +2355,8 @@
   - `deploy/local.py`：远端 main 已是发布 SHA 时不再推送（Jenkins 由推送触发且只有只读凭据）。
   - `Jenkinsfile`：`ACTION=deploy|check|status|recover|finish`、`FULL`；私有目录 `/var/jenkins_home/tk-ada-private`（宿主 `/data/jenkins/tk-ada-private`，0700）保存检查记录、发布批次状态与 `backups/latest.tar`。该目录含密钥；同节点所有 Jenkins 任务都以同一系统用户运行，权限隔离与已有共享 kubeconfig 相同。
   - Jenkins 凭据：`yaotf-gitea-tiktok-ad-automation`（只读令牌）、`tiktok-ad-automation-retired-source`（旧 prod 停用资源清单，不含密钥）；沿用公司 `sg-aliyun-harbor-info`、`sg-aliyun-k8s-info`。
-- 验证：`node scripts/test-deployment-assets.mjs`（含新增镜像来源用例）在默认与 Jenkins 镜像变量下均通过；`deploy/ci` 单元测试通过；脚本语法检查通过。Jenkins 实际运行与首次发布结果待记录。
+- 验证：`node scripts/test-deployment-assets.mjs`（含新增镜像来源用例）在默认与 Jenkins 镜像变量下均通过；`deploy/ci` 单元测试通过；脚本语法检查通过。
+- Jenkins 首次检查（`1b91b389`，#1，`ACTION=check`，因 `Jenkinsfile` 未归类而全量）：后端与发布工具通过（后端 4 组中 5 个用例并行失败、单独重跑通过），前端 6 个工作台用例失败。在 Jenkins 节点用工具镜像单独复现：CSV 导出文件名在默认 C 语言环境下被 Chromium 保存为 `download`，`LANG=C.UTF-8` 后通过；其余超时/找不到元素的用例单独运行全部通过，判定为与后端分组同时运行时节点负载过高。修复：`jenkins-run.sh` 固定 `LANG=C.UTF-8`；Jenkins 检查并发降为后端 3 组、浏览器 1 个；`select_tests.py` 将 `Jenkinsfile` 归为发布工具，改动它不再触发全量。首次发布结果待记录。
 
 
 ## 2026-10-16：策略国家预设取消历史搭建依赖

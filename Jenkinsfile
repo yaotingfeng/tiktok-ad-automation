@@ -31,9 +31,10 @@ pipeline {
         PYPI_INDEX_URL = 'https://mirrors.aliyun.com/pypi/simple'
         PYPI_FILES_URL = 'https://mirrors.aliyun.com/pypi'
         NPM_REGISTRY = 'https://registry.npmmirror.com'
-        // 节点由全公司任务共用（16 核 / 32 GiB），检查并发低于本机默认值。
-        CHECK_BACKEND_SHARDS = '4'
-        CHECK_BROWSER_WORKERS = '2'
+        // 节点由全公司任务共用（16 核 / 32 GiB）。首次检查中浏览器用例与后端分组同时运行时页面超过
+        // 30 秒未响应，单独运行全部通过，因此并发低于本机默认值。
+        CHECK_BACKEND_SHARDS = '3'
+        CHECK_BROWSER_WORKERS = '1'
     }
 
     options {
