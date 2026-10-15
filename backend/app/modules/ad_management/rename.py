@@ -26,8 +26,12 @@ from app.modules.ads.models import AdObject
 from app.modules.ads.naming import parse_campaign_name
 
 MAX_NAME_LENGTH = 512
-# 平台不接受表情符号；按常见表情所在的 Unicode 区段与表情变体选择符判断。
-_EMOJI = re.compile("[\U0001f000-\U0001faff☀-➿️]")
+# 平台不接受表情符号，按以下区段判断：U+1F000-1FAFF 主要表情与符号平面，
+# U+2600-27BF 杂项符号与装饰符号，U+2B00-2BFF 箭头/星形等常被渲染成表情的符号，
+# U+203C、U+2049 双叹号与叹问号，U+FE0F 表情变体选择符，U+200D 表情拼接用的零宽连接符。
+_EMOJI = re.compile(
+    "[\U0001f000-\U0001faff\u2600-\u27bf\u2b00-\u2bff\u203c\u2049\ufe0f\u200d]"
+)
 
 
 def _clean(name: str) -> str:
@@ -175,39 +179,10 @@ def expand_rename(
             **_drama_hint(row.name, new),
         )
 
-    # 同一账户内平台要求系列名唯一：本批算出同名的全部拒绝，不替用户挑选保留哪一条。
-    batch_counts = Counter((row.advertiser_id, new) for _, row, new in candidates)
-    remaining: list[tuple[int, AdObject, str]] = []
+    # 先排除不会真正改名的行：能力未核验或新旧同名的行保留原名，
+    # 它们的原名仍占用账户内的名称，必须参与下面的重名判断。
+    renaming: list[tuple[int, AdObject, str]] = []
     for position, row, new in candidates:
-        if batch_counts[(row.advertiser_id, new)] > 1:
-            reject(position, "name_duplicate_in_batch", new)
-        else:
-            remaining.append((position, row, new))
-
-    # 与同账户中不参与本次改名的系列（含本批校验失败、保留原名的系列）比对重名。
-    renaming = {(row.advertiser_id, row.remote_id) for _, row, _ in remaining}
-    taken: set[tuple[str, str]] = set()
-    if remaining:
-        account_rows = session.exec(
-            select(AdObject.advertiser_id, AdObject.remote_id, AdObject.name).where(
-                AdObject.tenant_id == context.tenant_id,
-                col(AdObject.advertiser_id).in_(
-                    {row.advertiser_id for _, row, _ in remaining}
-                ),
-                AdObject.kind == "campaign",
-            )
-        ).all()
-        taken = {
-            (advertiser_id, _clean(name))
-            for advertiser_id, remote_id, name in account_rows
-            if (advertiser_id, remote_id) not in renaming
-        }
-
-    commands: list[ManagementCommand] = []
-    for position, row, new in remaining:
-        if (row.advertiser_id, new) in taken:
-            reject(position, "name_duplicate_in_account", new)
-            continue
         if require_capabilities and not _management_allowed(
             session,
             context=context,
@@ -219,14 +194,12 @@ def expand_rename(
         ):
             reject(position, "management_capability_unverified", new)
             continue
-        current = _clean(row.name)
-        capability = capabilities[position]
-        hint = _drama_hint(row.name, new)
-        if new == current:
+        if new == _clean(row.name):
+            capability = capabilities[position]
             slots[position] = ExpandedItem(
                 ref=row.ref,
                 material_use=None,
-                original_value=current,
+                original_value=new,
                 final_value=new,
                 reason="no_change",
                 execution_result="NO_CHANGE",
@@ -235,9 +208,46 @@ def expand_rename(
                 grouping_revision=capability["grouping_revision"],
                 capability=capability,
                 name=row.name,
-                **hint,
+                **_drama_hint(row.name, new),
             )
             continue
+        renaming.append((position, row, new))
+
+    # 同一账户内平台要求系列名唯一：本批算出同名的全部拒绝，不替用户挑选保留哪一条。
+    batch_counts = Counter((row.advertiser_id, new) for _, row, new in renaming)
+    remaining: list[tuple[int, AdObject, str]] = []
+    for position, row, new in renaming:
+        if batch_counts[(row.advertiser_id, new)] > 1:
+            reject(position, "name_duplicate_in_batch", new)
+        else:
+            remaining.append((position, row, new))
+
+    # 新名称不得等于同账户任何其他系列的当前名称，包括本批中也要改名的系列：
+    # 执行是逐条串行提交的，互换（A→B、B→A）或链式（A→B、B→C）改名必然有一步
+    # 撞上尚未改走的旧名，因此预览直接拒绝，互换需分两批完成。
+    # 范围故意取目录中该账户的全部推广系列（含已删除）：尚未确认 TikTok
+    # 是否允许复用已删除系列的名称，按保守口径处理。
+    holders: dict[tuple[str, str], set[str]] = {}
+    if remaining:
+        account_rows = session.exec(
+            select(AdObject.advertiser_id, AdObject.remote_id, AdObject.name).where(
+                AdObject.tenant_id == context.tenant_id,
+                col(AdObject.advertiser_id).in_(
+                    {row.advertiser_id for _, row, _ in remaining}
+                ),
+                AdObject.kind == "campaign",
+            )
+        ).all()
+        for advertiser_id, remote_id, name in account_rows:
+            holders.setdefault((advertiser_id, _clean(name)), set()).add(remote_id)
+
+    commands: list[ManagementCommand] = []
+    for position, row, new in remaining:
+        if holders.get((row.advertiser_id, new), set()) - {row.remote_id}:
+            reject(position, "name_duplicate_in_account", new)
+            continue
+        current = _clean(row.name)
+        capability = capabilities[position]
         command = ManagementCommand(
             row.ref,
             "name",
@@ -257,7 +267,7 @@ def expand_rename(
             grouping_revision=capability["grouping_revision"],
             capability=capability,
             name=row.name,
-            **hint,
+            **_drama_hint(row.name, new),
         )
 
     items = tuple(item for item in slots if item is not None)

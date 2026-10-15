@@ -129,3 +129,68 @@ def test_rename_without_capability_unsupported(session, management_env):
         session, context, bc.bc_id, selection.id, _rename(kind="affix", suffix="_1015")
     )
     assert p.items[0].reason == "management_capability_unverified"
+
+
+def _campaigns(session, context, account, route, names):
+    refs = []
+    for remote_id, name in names:
+        ref = EntityRef(context.tenant_id, account.advertiser_id, "campaign", remote_id)
+        row = _row(ref, connection_id=route.connection_id)
+        row.name = name
+        session.add(row)
+        refs.append(ref)
+    return refs
+
+
+def test_rename_swap_rejected_for_both_rows(session, management_env):
+    context, bc, account, route, selection = management_env
+    refs = _campaigns(
+        session, context, account, route, (("s1", "嘉书-剧A"), ("s2", "嘉书-剧B"))
+    )
+    session.flush()
+    _set_selection(selection, refs)
+    p = prepare_preview(
+        session,
+        context,
+        bc.bc_id,
+        selection.id,
+        _rename(kind="explicit", names={"s1": "嘉书-剧B", "s2": "嘉书-剧A"}),
+    )
+    assert [item.reason for item in p.items] == ["name_duplicate_in_account"] * 2
+    assert p.counts.targets == 0
+
+
+def test_rename_collides_with_unchanged_row_name(session, management_env):
+    context, bc, account, route, selection = management_env
+    refs = _campaigns(
+        session, context, account, route, (("k1", "嘉书-剧A"), ("k2", "嘉书-剧K"))
+    )
+    session.flush()
+    # k1 保持原名“嘉书-剧A”（不变），k2 改成同名必须被拒绝。
+    _set_selection(selection, refs)
+    p = prepare_preview(
+        session,
+        context,
+        bc.bc_id,
+        selection.id,
+        _rename(kind="explicit", names={"k1": "嘉书-剧A", "k2": "嘉书-剧A"}),
+    )
+    by_id = {item.ref.remote_id: item for item in p.items}
+    assert by_id["k1"].execution_result == "NO_CHANGE"
+    assert by_id["k2"].reason == "name_duplicate_in_account"
+
+
+def test_rename_affix_suffix_exposes_old_name(session, management_env):
+    context, bc, account, route, selection = management_env
+    refs = _campaigns(session, context, account, route, (("x1", "嘉书-剧A-0901"),))
+    session.flush()
+    _set_selection(selection, refs)
+    p = prepare_preview(
+        session, context, bc.bc_id, selection.id, _rename(kind="affix", suffix="_1015")
+    )
+    item = p.items[0]
+    assert item.execution_result == "PENDING"
+    assert item.original_value == "嘉书-剧A-0901"
+    assert item.final_value == "嘉书-剧A-0901_1015"
+    assert item.drama_name == "剧A" and item.drama_changed is False
+    assert p.counts.targets == 1
