@@ -697,7 +697,9 @@ test.describe("广告管理工作台", () => {
       )
     await expect(page.getByText("已识别 2 行")).toBeVisible()
     await page.getByRole("button", { name: "生成预览" }).click()
-    await expect(page.getByText("1799999999999999999")).toBeVisible()
+    await expect(
+      page.getByText("1799999999999999999", { exact: true }),
+    ).toBeVisible()
     await expect(page.getByText("未找到该推广系列")).toBeVisible()
     expect(renameSelectionBodies[0]).toEqual({
       bc_id: BC_A,
