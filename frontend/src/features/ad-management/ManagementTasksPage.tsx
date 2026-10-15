@@ -41,6 +41,7 @@ const ACTION_OPTIONS = [
   { value: "disable", label: "暂停" },
   { value: "budget", label: "预算" },
   { value: "roas", label: "目标 ROAS" },
+  { value: "rename", label: "改名" },
 ] as const
 const SOURCE_OPTIONS = [
   { value: "manual", label: "人工操作" },

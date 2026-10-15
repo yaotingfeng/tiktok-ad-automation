@@ -439,6 +439,13 @@ export function AdsWorkspace() {
       setManagementAction(next)
       setManagementDimension(applied.dimension)
       setPreviewSession((current) => current + 1)
+      // 按表格改名的目标来自粘贴的推广系列 ID，不冻结列表勾选，直接打开面板。
+      if (next.field === "name" && next.entry === "paste") {
+        selectionRequestScopeRef.current = null
+        setFrozenSelection(null)
+        setPreviewOpen(true)
+        return
+      }
       selectionRequestScopeRef.current = scopeRef.current
       selectionMutation.mutate(rowKeys, {
         onError: (error) => setActionError(String(error)),

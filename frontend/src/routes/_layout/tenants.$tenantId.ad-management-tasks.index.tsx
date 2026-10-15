@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router"
 import { ManagementTasksPage } from "@/features/ad-management/ManagementTasksPage"
 
-const ACTIONS = ["enable", "disable", "budget", "roas"] as const
+const ACTIONS = ["enable", "disable", "budget", "roas", "rename"] as const
 const SOURCES = ["manual", "rule"] as const
 
 export const Route = createFileRoute(

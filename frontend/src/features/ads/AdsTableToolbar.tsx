@@ -12,13 +12,19 @@ import { type ColumnPrefs, DEFAULT_HIDDEN } from "./columnPrefs"
 import type { ColumnDef } from "./metricCatalog"
 import type { AdsDimension } from "./search"
 
-export type ToolbarActionKey = "enable" | "disable" | "roas" | "budget"
+export type ToolbarActionKey =
+  | "enable"
+  | "disable"
+  | "roas"
+  | "budget"
+  | "rename"
 
 // 各维度工具栏提供的动作（规格 5.1）：账户与剧没有可直接修改的目标 ROAS，
 // 广告的预算归属广告组或系列，素材只有独立启停，其余在预览中按层级展开。
 const DIMENSION_ACTIONS: Record<AdsDimension, ToolbarActionKey[]> = {
   account: ["enable", "disable", "budget"],
-  campaign: ["enable", "disable", "roas", "budget"],
+  // 改名首期只支持推广系列。
+  campaign: ["enable", "disable", "roas", "budget", "rename"],
   adgroup: ["enable", "disable", "roas", "budget"],
   ad: ["enable", "disable", "roas"],
   material: ["enable", "disable"],
@@ -37,6 +43,29 @@ const ACTIONS: Record<
   disable: { label: "暂停", action: { field: "status", value: "DISABLE" } },
   roas: { label: "修改目标 ROAS", action: { field: "roas" } },
   budget: { label: "修改预算", action: { field: "budget" } },
+  rename: {
+    label: "批量改名",
+    action: { field: "name", entry: "selection" },
+  },
+}
+
+/** 按表格改名不依赖勾选，推广系列维度的工具栏常驻该入口（只读成员不显示）。 */
+function PasteRenameButton({
+  dimension,
+  readonly,
+  onAction,
+}: Pick<ToolbarSelection, "dimension" | "readonly" | "onAction">) {
+  if (readonly || dimension !== "campaign") return null
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      onClick={() => onAction({ field: "name", entry: "paste" })}
+    >
+      按表格改名
+    </Button>
+  )
 }
 
 /** 工具栏动作键对应的管理动作；详情面板的单对象操作复用同一映射。 */
@@ -94,6 +123,11 @@ function SelectionToolbar({
               {toolbarActionLabel(key)}
             </Button>
           ))}
+        <PasteRenameButton
+          dimension={dimension}
+          readonly={readonly}
+          onAction={onAction}
+        />
         {!readonly && (
           <Button
             type="button"
@@ -176,73 +210,80 @@ export function AdsTableToolbar({
   })
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm">
-          列设置
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-80">
-        <div className="max-h-96 overflow-y-auto">
-          {sortedColumns.map((column, index) => (
-            <div
-              key={column.key}
-              className="flex items-center gap-2 px-2 py-1 hover:bg-muted/50"
-            >
-              <DropdownMenuCheckboxItem
-                checked={!hidden.includes(column.key)}
-                onCheckedChange={() => toggleColumn(column.key)}
-                onSelect={(e) => e.preventDefault()}
-                className="flex-1"
-              >
-                {column.label}
-              </DropdownMenuCheckboxItem>
-              <div className="flex gap-1">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 w-6 p-0"
-                  disabled={index === 0}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    moveUp(column.key)
-                  }}
-                  aria-label={`上移 ${column.label}`}
-                >
-                  <ChevronUp className="h-3 w-3" />
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 w-6 p-0"
-                  disabled={index === sortedColumns.length - 1}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    moveDown(column.key)
-                  }}
-                  aria-label={`下移 ${column.label}`}
-                >
-                  <ChevronDown className="h-3 w-3" />
-                </Button>
-              </div>
-            </div>
-          ))}
-        </div>
-        <DropdownMenuSeparator />
-        <div className="p-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="w-full"
-            onClick={restoreDefault}
-          >
-            恢复默认
+    <div className="flex flex-wrap items-center gap-2">
+      <PasteRenameButton
+        dimension={selection.dimension}
+        readonly={selection.readonly}
+        onAction={selection.onAction}
+      />
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="outline" size="sm">
+            列设置
           </Button>
-        </div>
-      </DropdownMenuContent>
-    </DropdownMenu>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-80">
+          <div className="max-h-96 overflow-y-auto">
+            {sortedColumns.map((column, index) => (
+              <div
+                key={column.key}
+                className="flex items-center gap-2 px-2 py-1 hover:bg-muted/50"
+              >
+                <DropdownMenuCheckboxItem
+                  checked={!hidden.includes(column.key)}
+                  onCheckedChange={() => toggleColumn(column.key)}
+                  onSelect={(e) => e.preventDefault()}
+                  className="flex-1"
+                >
+                  {column.label}
+                </DropdownMenuCheckboxItem>
+                <div className="flex gap-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 w-6 p-0"
+                    disabled={index === 0}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      moveUp(column.key)
+                    }}
+                    aria-label={`上移 ${column.label}`}
+                  >
+                    <ChevronUp className="h-3 w-3" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 w-6 p-0"
+                    disabled={index === sortedColumns.length - 1}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      moveDown(column.key)
+                    }}
+                    aria-label={`下移 ${column.label}`}
+                  >
+                    <ChevronDown className="h-3 w-3" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <DropdownMenuSeparator />
+          <div className="p-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={restoreDefault}
+            >
+              恢复默认
+            </Button>
+          </div>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   )
 }

@@ -10,6 +10,8 @@ import {
   type ManagementItemPublic,
   type ManagementPreviewPublic,
   type MutationSpec,
+  type RenameRowProblem,
+  type RenameRule,
 } from "@/client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -31,11 +33,21 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import type { AdsDimension } from "@/features/ads/search"
+import { renameReasonLabel } from "./presentation"
+import { RenameFields } from "./RenameFields"
+import {
+  emptyRenameDraft,
+  parsePastedRows,
+  type RenameDraft,
+  renameRuleFrom,
+} from "./renameRules"
 
 // 工具栏选定的批量动作：启停直接带状态值，数值类动作在面板里再填调整方式与数值。
+// 改名有两个入口：勾选推广系列后批量改名（selection），或不勾选直接按表格粘贴（paste）。
 export type ManagementAction =
   | { field: "status"; value: "ENABLE" | "DISABLE" }
   | { field: "roas" | "budget" }
+  | { field: "name"; entry: "selection" | "paste" }
 
 type Props = {
   tenantId: string
@@ -80,13 +92,16 @@ const VALUE_DEBOUNCE_MS = 400
 /** 动作的稳定键：调用方用它（连同冻结选择 ID）作为面板 key，换动作即重新挂载。 */
 export function managementActionKey(action: ManagementAction | null) {
   if (!action) return ""
-  return action.field === "status" ? `status:${action.value}` : action.field
+  if (action.field === "status") return `status:${action.value}`
+  if (action.field === "name") return `name:${action.entry}`
+  return action.field
 }
 
 export function actionTitle(action: ManagementAction | null) {
   if (!action) return "管理预览"
   if (action.field === "status")
     return action.value === "ENABLE" ? "批量启用" : "批量暂停"
+  if (action.field === "name") return "批量改名"
   return action.field === "roas" ? "修改目标 ROAS" : "修改预算"
 }
 
@@ -98,7 +113,8 @@ export function actionScope(
   action: ManagementAction | null,
   dimension: AdsDimension,
 ): string[] {
-  if (!action) return []
+  // 改名的说明放在各规则页签里，这里不再重复。
+  if (!action || action.field === "name") return []
   if (action.field === "status") {
     const verb = action.value === "ENABLE" ? "启用" : "暂停"
     if (dimension === "account") return [`将${verb}所选账户下的全部广告系列。`]
@@ -204,6 +220,8 @@ export function reasonText(
   action: ManagementAction | null,
 ): string {
   const reason = item.reason
+  if (action?.field === "name" && reason && renameReasonLabel[reason])
+    return renameReasonLabel[reason]
   if (item.execution_result === "PENDING") {
     if (action?.field === "status")
       return action.value === "ENABLE" ? "将启用" : "将暂停"
@@ -294,31 +312,116 @@ const GROUP_TITLES: Record<RowGroup, string> = {
   blocked: "无法修改",
 }
 
+/** 改名后的剧名：剧名或版权方变化时醒目提示报表归类会随之改变。 */
+function DramaCell({ item }: { item: ManagementItemPublic }) {
+  if (item.drama_changed)
+    return (
+      <Badge
+        variant="outline"
+        className="whitespace-normal border-amber-300 bg-amber-50 text-amber-800"
+      >
+        {item.drama_name
+          ? `报表中将归到 ${item.drama_name}`
+          : "改名后无法识别剧名，将归入未识别"}
+      </Badge>
+    )
+  return <span className="text-muted-foreground">{item.drama_name ?? "—"}</span>
+}
+
+function ObjectCell({
+  kind,
+  name,
+  detail,
+}: {
+  kind: string
+  name: string
+  detail?: string | null
+}) {
+  return (
+    <div className="flex items-start gap-2">
+      <Badge variant="outline">{kind}</Badge>
+      <div className="min-w-0">
+        <div className="max-w-56 truncate" title={name}>
+          {name}
+        </div>
+        {detail && (
+          <div className="max-w-56 truncate text-xs text-muted-foreground">
+            {detail}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function PreviewRows({
   items,
   action,
+  problems,
+  names,
 }: {
   items: ManagementItemPublic[]
   action: ManagementAction | null
+  // 表格粘贴时解析接口找不到或格式不对的行；它们不在冻结选择里，单独列在最上面。
+  problems: RenameRowProblem[]
+  names: Record<string, string>
 }) {
   const groups: RowGroup[] = ["change", "blocked", "info"]
+  // 改名逐行展示原名称、新名称和改名后解析出的剧名，对象列只放推广系列 ID 与账户。
+  const rename = action?.field === "name"
+  const columns = rename ? 5 : 3
   return (
     <div className="max-h-96 overflow-auto rounded-md border">
       <table className="w-full text-sm">
         <thead className="sticky top-0 bg-background">
           <tr className="border-b text-left text-muted-foreground">
-            <th className="p-2 font-medium">对象</th>
-            <th className="whitespace-nowrap p-2 font-medium">原值 → 新值</th>
+            <th className="p-2 font-medium">{rename ? "推广系列" : "对象"}</th>
+            {rename ? (
+              <>
+                <th className="p-2 font-medium">原名称</th>
+                <th className="p-2 font-medium">新名称</th>
+                <th className="p-2 font-medium">剧名</th>
+              </>
+            ) : (
+              <th className="whitespace-nowrap p-2 font-medium">原值 → 新值</th>
+            )}
             <th className="p-2 font-medium">说明</th>
           </tr>
         </thead>
+        {problems.length > 0 && (
+          <tbody>
+            <tr className="border-b bg-muted/40">
+              <td colSpan={columns} className="px-2 py-1 text-xs font-medium">
+                表格中无法识别（{problems.length}）
+              </td>
+            </tr>
+            {problems.map((problem) => (
+              <tr
+                key={`${problem.campaign_id}:${problem.reason}`}
+                className="border-b align-top"
+              >
+                <td className="p-2">
+                  <ObjectCell kind="系列" name={problem.campaign_id} />
+                </td>
+                <td className="p-2">—</td>
+                <td className="break-all p-2">
+                  {names[problem.campaign_id] ?? "—"}
+                </td>
+                <td className="p-2">—</td>
+                <td className="p-2 text-amber-700">
+                  {renameReasonLabel[problem.reason] ?? problem.reason}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        )}
         {groups.map((group) => {
           const rows = items.filter((item) => rowGroup(item) === group)
           if (rows.length === 0) return null
           return (
             <tbody key={group}>
               <tr className="border-b bg-muted/40">
-                <td colSpan={3} className="px-2 py-1 text-xs font-medium">
+                <td colSpan={columns} className="px-2 py-1 text-xs font-medium">
                   {GROUP_TITLES[group]}（{rows.length}）
                 </td>
               </tr>
@@ -332,25 +435,31 @@ function PreviewRows({
                     className="border-b align-top"
                   >
                     <td className="p-2">
-                      <div className="flex items-start gap-2">
-                        <Badge variant="outline">{label.kind}</Badge>
-                        <div className="min-w-0">
-                          <div className="max-w-56 truncate" title={label.name}>
-                            {label.name}
-                          </div>
-                          {label.detail && (
-                            <div className="max-w-56 truncate text-xs text-muted-foreground">
-                              {label.detail}
-                            </div>
-                          )}
-                        </div>
-                      </div>
+                      {rename ? (
+                        <ObjectCell
+                          kind={label.kind}
+                          name={item.ref.remote_id}
+                          detail={`账户 ${item.ref.advertiser_id}`}
+                        />
+                      ) : (
+                        <ObjectCell {...label} />
+                      )}
                     </td>
-                    <td className="whitespace-nowrap p-2">
-                      {group === "change" || after
-                        ? `${before ?? "—"} → ${after ?? "—"}`
-                        : "—"}
-                    </td>
+                    {rename ? (
+                      <>
+                        <td className="break-all p-2">{before ?? "—"}</td>
+                        <td className="break-all p-2">{after ?? "—"}</td>
+                        <td className="p-2">
+                          <DramaCell item={item} />
+                        </td>
+                      </>
+                    ) : (
+                      <td className="whitespace-nowrap p-2">
+                        {group === "change" || after
+                          ? `${before ?? "—"} → ${after ?? "—"}`
+                          : "—"}
+                      </td>
+                    )}
                     <td
                       className={
                         group === "blocked"
@@ -392,6 +501,22 @@ export function ManagementPreviewSheet({
     [],
   )
   const [includeParents, setIncludeParents] = useState(false)
+  const renaming = action?.field === "name"
+  // 改名草稿：勾选入口默认查找替换，表格入口默认表格粘贴。
+  const [renameDraft, setRenameDraft] = useState<RenameDraft>(() =>
+    emptyRenameDraft(
+      action?.field === "name" && action.entry === "paste"
+        ? "explicit"
+        : "replace",
+    ),
+  )
+  // 点击“生成预览”时冻结的改名规则；之后修改草稿不会悄悄改动已生成的预览。
+  const [renameRule, setRenameRule] = useState<RenameRule | null>(null)
+  // 表格粘贴按 ID 解析出的冻结选择与无法识别的行；其它规则作用于列表勾选的选择。
+  const [pasted, setPasted] = useState<{
+    selection: FrozenSelection | null
+    problems: RenameRowProblem[]
+  } | null>(null)
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     if (!open) return
@@ -405,7 +530,7 @@ export function ManagementPreviewSheet({
     const timer = window.setTimeout(() => setValue(input), VALUE_DEBOUNCE_MS)
     return () => window.clearTimeout(timer)
   }, [input, value])
-  const numeric = action !== null && action.field !== "status"
+  const numeric = action?.field === "roas" || action?.field === "budget"
   const enabling = action?.field === "status" && action.value === "ENABLE"
   const mutation = useMemo<MutationSpec | null>(() => {
     if (!action) return null
@@ -420,6 +545,17 @@ export function ManagementPreviewSheet({
         include_parents: includes,
         excluded_refs: excludedRefs,
       }
+    // 改名没有数值，名称由规则在预览时逐条算出并冻结。
+    if (action.field === "name")
+      return renameRule
+        ? {
+            field: "name",
+            mode: "set",
+            rename: renameRule,
+            include_parents: [],
+            excluded_refs: excludedRefs,
+          }
+        : null
     // 数值为空或非法时不生成预览，避免用默认值误改真实广告。
     if (!validNumber(value)) return null
     return {
@@ -437,24 +573,65 @@ export function ManagementPreviewSheet({
     includeParents,
     blockedParents,
     excludedRefs,
+    renameRule,
   ])
+  // 表格粘贴的预览作用于解析出的选择，其余动作作用于列表冻结的选择。
+  const target =
+    renameRule?.kind === "explicit" ? (pasted?.selection ?? null) : selection
+  const resolveRows = useMutation({
+    mutationFn: async (rows: Array<{ campaignId: string; newName: string }>) =>
+      (
+        await AdManagementService.resolveRenameSelection({
+          path: { tenant_id: tenantId },
+          body: {
+            bc_id: bcId,
+            rows: rows.map((row) => ({
+              campaign_id: row.campaignId,
+              new_name: row.newName,
+            })),
+          },
+        })
+      ).data,
+  })
+  const draftRule = renaming ? renameRuleFrom(renameDraft) : null
+  // 草稿与已生成预览的规则不一致时必须重新生成预览才能提交。
+  const ruleStale =
+    renaming && JSON.stringify(draftRule) !== JSON.stringify(renameRule)
+  // 查找替换和前缀后缀只能作用于列表里勾选的推广系列。
+  const needsSelection =
+    renaming && renameDraft.kind !== "explicit" && !selection
+  const generateRenamePreview = () => {
+    if (!draftRule) return
+    // 新规则可能产生不同的无法修改项，之前的“跳过”勾选不能沿用。
+    setExcludedRefs([])
+    if (draftRule.kind !== "explicit") {
+      setRenameRule(draftRule)
+      return
+    }
+    resolveRows.mutate(parsePastedRows(renameDraft.text).rows, {
+      onSuccess: (result) => {
+        setPasted(result)
+        setRenameRule(draftRule)
+      },
+    })
+  }
   const preview = useQuery<ManagementPreviewPublic>({
     queryKey: [
       "tenant",
       tenantId,
       "ad-management-preview",
-      selection?.selection_id,
+      target?.selection_id,
       bcId,
       mutation,
     ],
-    enabled: open && !!selection && !!mutation,
+    enabled: open && !!target && !!mutation,
     queryFn: async ({ signal }) => {
-      if (!selection || !mutation) throw new Error("请先冻结广告选择")
+      if (!target || !mutation) throw new Error("请先冻结广告选择")
       return (
         await AdManagementService.preparePreview({
           path: { tenant_id: tenantId },
           body: {
-            selection_id: selection.selection_id,
+            selection_id: target.selection_id,
             bc_id: bcId,
             mutation,
           },
@@ -466,8 +643,10 @@ export function ManagementPreviewSheet({
     placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
   })
-  const items = useMemo(() => preview.data?.items ?? [], [preview.data])
-  const fresh = !!preview.data && !preview.isPlaceholderData
+  // 表格粘贴的行全部无法识别时没有可预览的选择，不能展示上一份预览的残留数据。
+  const previewData = target ? preview.data : undefined
+  const items = useMemo(() => previewData?.items ?? [], [previewData])
+  const fresh = !!previewData && !preview.isPlaceholderData
   useEffect(() => {
     if (!fresh || includeParents) return
     setBlockedParents(items.filter((item) => item.reason === "parent_disabled"))
@@ -487,7 +666,7 @@ export function ManagementPreviewSheet({
   }, [fresh, skipping, blocking])
   const submit = useMutation({
     mutationFn: async () => {
-      const data = preview.data
+      const data = previewData
       if (!data) throw new Error("预览尚未完成")
       return (
         await AdManagementService.submitTask({
@@ -510,16 +689,24 @@ export function ManagementPreviewSheet({
     },
   })
   const changes = items.filter((item) => rowGroup(item) === "change")
-  const expiresAt = preview.data?.expires_at
+  const expiresAt = previewData?.expires_at
   const expired = expiresAt ? Date.parse(expiresAt) <= now : false
   // 输入还在防抖期内时，屏幕上的预览对应的是旧数值，不能提交。
   const settling = numeric && input !== value
   const needsValue = numeric && !validNumber(input)
   const percent = mode === "increase_percent" || mode === "decrease_percent"
-  const selectedCount = preview.data?.counts?.selected ?? 0
+  const selectedCount = previewData?.counts?.selected ?? 0
   const scope = actionScope(action, dimension)
+  const problems =
+    renameRule?.kind === "explicit" ? (pasted?.problems ?? []) : []
+  // 改名汇总：跳过 = 名称不变等不修改项；异常 = 无法修改项（含已勾选跳过的）加表格无法识别的行。
+  const skippedCount = items.filter((item) => rowGroup(item) === "info").length
+  const anomalyCount =
+    items.filter((item) => rowGroup(item) === "blocked").length +
+    problems.length
   const canSubmit =
     !!mutation &&
+    !ruleStale &&
     fresh &&
     !preview.isFetching &&
     !settling &&
@@ -527,18 +714,23 @@ export function ManagementPreviewSheet({
     !expired &&
     blocking.length === 0 &&
     changes.length > 0
-  const submitHint = !preview.data
+  const submitHint = !previewData
     ? null
-    : expired
-      ? "预览已过期，请关闭后重新发起。"
-      : blocking.length > 0
-        ? `还有 ${blocking.length} 项无法修改，勾选“跳过”后才能提交。`
-        : fresh && changes.length === 0
-          ? "没有需要修改的对象。"
-          : null
+    : ruleStale
+      ? "改名规则已修改，请重新生成预览。"
+      : expired
+        ? "预览已过期，请关闭后重新发起。"
+        : blocking.length > 0
+          ? `还有 ${blocking.length} 项无法修改，勾选“跳过”后才能提交。`
+          : fresh && changes.length === 0
+            ? "没有需要修改的对象。"
+            : null
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-xl">
+      <SheetContent
+        side="right"
+        className={`w-full overflow-y-auto ${renaming ? "sm:max-w-3xl" : "sm:max-w-xl"}`}
+      >
         <SheetHeader>
           <SheetTitle>{actionTitle(action)}</SheetTitle>
           <p className="text-sm text-muted-foreground">
@@ -608,6 +800,36 @@ export function ManagementPreviewSheet({
               </div>
             </div>
           )}
+          {renaming && (
+            <div className="flex flex-col gap-3">
+              <RenameFields value={renameDraft} onChange={setRenameDraft} />
+              {needsSelection && (
+                <p className="text-xs text-muted-foreground">
+                  查找替换和前缀后缀需要先在列表中勾选推广系列；不勾选时请使用表格粘贴。
+                </p>
+              )}
+              <div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={
+                    !draftRule || needsSelection || resolveRows.isPending
+                  }
+                  onClick={generateRenamePreview}
+                >
+                  {resolveRows.isPending ? "正在识别表格…" : "生成预览"}
+                </Button>
+              </div>
+              {resolveRows.error && (
+                <Alert variant="destructive">
+                  <TriangleAlert />
+                  <AlertDescription>
+                    {previewErrorMessage(resolveRows.error)}
+                  </AlertDescription>
+                </Alert>
+              )}
+            </div>
+          )}
           {preview.isLoading && (
             <p role="status" aria-label="正在生成管理预览">
               正在生成管理预览…
@@ -655,7 +877,7 @@ export function ManagementPreviewSheet({
               </AlertDescription>
             </Alert>
           )}
-          {preview.data && (
+          {(previewData || problems.length > 0) && (
             <div
               className={
                 preview.isFetching
@@ -664,17 +886,23 @@ export function ManagementPreviewSheet({
               }
             >
               <div className="rounded-md border p-3 text-sm">
-                <p className="font-medium">
-                  已选 {selectedCount} 个{DIMENSION_LABELS[dimension]} → 将修改{" "}
-                  {changes.length} 个对象
-                  {changes.length > 0 && `（${kindSummary(changes)}）`}
-                  {blocking.length > 0 && `，${blocking.length} 项无法修改`}
-                </p>
+                {renaming ? (
+                  <p className="font-medium">
+                    {`共 ${items.length + problems.length} 条：修改 ${changes.length}、跳过 ${skippedCount}、异常 ${anomalyCount}`}
+                  </p>
+                ) : (
+                  <p className="font-medium">
+                    已选 {selectedCount} 个{DIMENSION_LABELS[dimension]} →
+                    将修改 {changes.length} 个对象
+                    {changes.length > 0 && `（${kindSummary(changes)}）`}
+                    {blocking.length > 0 && `，${blocking.length} 项无法修改`}
+                  </p>
+                )}
                 <p className="mt-1 text-xs text-muted-foreground">
                   账户：
                   {[
                     ...new Set(
-                      (selection?.refs ?? []).map((ref) => ref.advertiser_id),
+                      (target?.refs ?? []).map((ref) => ref.advertiser_id),
                     ),
                   ].join("、") || "—"}{" "}
                   · {remaining(expiresAt, now)}
@@ -701,20 +929,33 @@ export function ManagementPreviewSheet({
                   </label>
                 </div>
               )}
-              <PreviewRows items={items} action={action} />
+              <PreviewRows
+                items={items}
+                action={action}
+                problems={problems}
+                names={renameRule?.names ?? {}}
+              />
             </div>
           )}
         </div>
         <SheetFooter>
+          {renaming && (
+            <p className="text-sm text-amber-700">
+              改名会同步修改 TikTok
+              后台的推广系列名称，并影响本工具按剧名的报表归类。
+            </p>
+          )}
           {submitHint && (
             <p className="text-sm text-muted-foreground">{submitHint}</p>
           )}
           <Button disabled={!canSubmit} onClick={() => submit.mutate()}>
             {submit.isPending
               ? "提交中…"
-              : changes.length > 0
-                ? `提交，修改 ${changes.length} 个对象`
-                : "提交管理任务"}
+              : renaming && anomalyCount > 0
+                ? "仅提交可修改的行"
+                : changes.length > 0
+                  ? `提交，修改 ${changes.length} 个对象`
+                  : "提交管理任务"}
           </Button>
         </SheetFooter>
       </SheetContent>

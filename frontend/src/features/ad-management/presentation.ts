@@ -28,6 +28,35 @@ const FIELD_LABEL: Record<ManagementTaskMutation["field"], string> = {
   budget: "预算",
   roas: "目标 ROAS",
   status: "启停",
+  name: "名称",
+}
+
+// 改名动作没有数值，摘要按改名规则区分。
+const RENAME_KIND_LABEL: Record<
+  NonNullable<ManagementTaskMutation["rename_kind"]>,
+  string
+> = {
+  replace: "改名 · 查找替换",
+  affix: "改名 · 前缀后缀",
+  explicit: "改名 · 表格粘贴",
+}
+
+/**
+ * 改名相关原因代码的中文说明：预览项的不可修改原因（后端 rename.py），
+ * 以及表格粘贴解析接口返回的行问题（id_invalid / not_found / duplicate_campaign_id）。
+ */
+export const renameReasonLabel: Record<string, string> = {
+  no_change: "新名称与原名称相同，跳过",
+  name_empty: "新名称为空",
+  name_too_long: "新名称超过 512 个字符",
+  name_has_emoji: "新名称不能包含表情符号",
+  name_duplicate_in_account: "账户内已有同名推广系列",
+  name_duplicate_in_batch: "本批中有同名",
+  rename_campaign_only: "只能修改推广系列的名称",
+  rename_missing: "表格中没有该推广系列的新名称",
+  id_invalid: "ID 格式无效，请把表格列设为文本后重新复制",
+  not_found: "未找到该推广系列",
+  duplicate_campaign_id: "表格中该 ID 出现多次",
 }
 
 /** 动作摘要，例如「暂停」「预算 设为 500」「目标 ROAS 提高 10%」。 */
@@ -35,6 +64,10 @@ export function mutationText(mutation?: ManagementTaskMutation | null) {
   if (!mutation) return "—"
   if (mutation.field === "status")
     return mutation.value === "ENABLE" ? "启用" : "暂停"
+  if (mutation.field === "name")
+    return mutation.rename_kind
+      ? RENAME_KIND_LABEL[mutation.rename_kind]
+      : FIELD_LABEL.name
   const field = FIELD_LABEL[mutation.field]
   const value = String(mutation.value)
   switch (mutation.mode) {

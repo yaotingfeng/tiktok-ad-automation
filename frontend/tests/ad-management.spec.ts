@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test"
+import { parsePastedRows } from "../src/features/ad-management/renameRules"
 import { adsBoundary, BC_A, TENANT } from "./utils/adsBoundary"
 
 const selectionId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -47,6 +48,7 @@ async function managementBoundary(
   await adsBoundary(page)
   const previewBodies: Array<Record<string, unknown>> = []
   const listQueries: Array<Record<string, string>> = []
+  const renameSelectionBodies: Array<Record<string, unknown>> = []
   await page.route("**/api/**", async (handler) => {
     const request = handler.request()
     const url = new URL(request.url())
@@ -67,6 +69,28 @@ async function managementBoundary(
           total: 1,
         },
       })
+    // 表格改名解析：第一行命中 campaign-1，第二行在本 BC 目录里找不到。
+    if (
+      request.method() === "POST" &&
+      path.endsWith(`/tenants/${TENANT}/ad-management-rename-selections`)
+    ) {
+      renameSelectionBodies.push(request.postDataJSON())
+      return handler.fulfill({
+        json: {
+          selection: {
+            selection_id: selectionId,
+            snapshot_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            refs: [CAMPAIGN_REF],
+            material_uses: [],
+            membership_digest: "m".repeat(64),
+            expires_at: "2099-01-01T00:00:00Z",
+          },
+          problems: [
+            { campaign_id: "1799999999999999999", reason: "not_found" },
+          ],
+        },
+      })
+    }
     if (path.endsWith(`/tenants/${TENANT}/ad-selections`))
       return handler.fulfill({
         json: {
@@ -90,7 +114,11 @@ async function managementBoundary(
       path.endsWith(`/tenants/${TENANT}/ad-management-previews`)
     ) {
       const body = request.postDataJSON() as {
-        mutation?: { excluded_refs?: unknown[]; include_parents?: unknown[] }
+        mutation?: {
+          field?: string
+          excluded_refs?: unknown[]
+          include_parents?: unknown[]
+        }
       }
       previewBodies.push(body)
       if (options.previewError)
@@ -105,15 +133,28 @@ async function managementBoundary(
       const excluded = body.mutation?.excluded_refs ?? []
       const parents = body.mutation?.include_parents ?? []
       // 默认选中的系列是可修改项；不可用、暂停上级两种场景各自追加对应行。
+      // 改名预览返回新旧名称，并提示改名后剧名发生变化。
       const items: Array<Record<string, unknown>> = [
-        {
-          ref: CAMPAIGN_REF,
-          name: "嘉书-总裁归来-测试",
-          original_value: "20",
-          final_value: "25",
-          execution_result: "PENDING",
-          reason: null,
-        },
+        body.mutation?.field === "name"
+          ? {
+              ref: CAMPAIGN_REF,
+              name: "嘉书-总裁归来-测试",
+              original_value: "嘉书-总裁归来-测试",
+              final_value: "嘉书-剧A-1015",
+              execution_result: "PENDING",
+              reason: null,
+              drama_name: "剧A",
+              provider_label: "嘉书",
+              drama_changed: true,
+            }
+          : {
+              ref: CAMPAIGN_REF,
+              name: "嘉书-总裁归来-测试",
+              original_value: "20",
+              final_value: "25",
+              execution_result: "PENDING",
+              reason: null,
+            },
       ]
       if (options.unsupported && excluded.length === 0)
         items.push({
@@ -275,7 +316,7 @@ async function managementBoundary(
       })
     return handler.fallback()
   })
-  return { previewBodies, listQueries }
+  return { previewBodies, listQueries, renameSelectionBodies }
 }
 
 test.describe("广告管理工作台", () => {
@@ -349,7 +390,14 @@ test.describe("广告管理工作台", () => {
     // 只读成员只看到计数和取消选择，不出现任何写入动作。
     await expect(page.getByText("已选 1 条")).toBeVisible()
     await expect(page.getByRole("button", { name: "取消选择" })).toBeVisible()
-    for (const name of ["启用", "暂停", "修改目标 ROAS", "修改预算"])
+    for (const name of [
+      "启用",
+      "暂停",
+      "修改目标 ROAS",
+      "修改预算",
+      "批量改名",
+      "按表格改名",
+    ])
       await expect(page.getByRole("button", { name, exact: true })).toHaveCount(
         0,
       )
@@ -585,5 +633,130 @@ test.describe("广告管理工作台", () => {
     await expect(
       page.getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" }),
     ).not.toBeChecked()
+  })
+
+  test("推广系列勾选后批量改名，前缀生成预览并提交", async ({ page }) => {
+    const { previewBodies } = await managementBoundary(page)
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "系列", exact: true }).click()
+    await page
+      .getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" })
+      .check()
+    await page.getByRole("button", { name: "批量改名" }).click()
+    await expect(page.getByRole("heading", { name: "批量改名" })).toBeVisible()
+    // 勾选入口默认查找替换页签；未点“生成预览”前不请求预览。
+    await expect(page.getByRole("tab", { name: "查找替换" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    )
+    await page.getByRole("tab", { name: "前缀后缀" }).click()
+    await expect(page.getByText("在名称最前面或最后面加上文字")).toBeVisible()
+    await page.getByLabel("前缀", { exact: true }).fill("【停】")
+    expect(previewBodies).toHaveLength(0)
+    await page.getByRole("button", { name: "生成预览" }).click()
+    await expect(page.getByText("报表中将归到 剧A")).toBeVisible()
+    expect(previewBodies.at(-1)?.mutation).toMatchObject({
+      field: "name",
+      mode: "set",
+      rename: { kind: "affix", prefix: "【停】" },
+    })
+    await expect(
+      page.getByText("共 1 条：修改 1、跳过 0、异常 0"),
+    ).toBeVisible()
+    await expect(
+      page.getByText("改名会同步修改 TikTok 后台的推广系列名称"),
+    ).toBeVisible()
+    // 生成预览后再改规则，必须重新生成预览才能提交。
+    await page.getByLabel("后缀", { exact: true }).fill("-1015")
+    await expect(
+      page.getByText("改名规则已修改，请重新生成预览。"),
+    ).toBeVisible()
+    await expect(
+      page.getByRole("button", { name: "提交，修改 1 个对象" }),
+    ).toBeDisabled()
+    await page.getByLabel("后缀", { exact: true }).fill("")
+    await page.getByRole("button", { name: "提交，修改 1 个对象" }).click()
+    await expect(page).toHaveURL(
+      new RegExp(`/tenants/${TENANT}/ad-management-tasks/${taskId}`),
+    )
+  })
+
+  test("按表格改名：粘贴两列，找不到的 ID 标为异常", async ({ page }) => {
+    const { previewBodies, renameSelectionBodies } =
+      await managementBoundary(page)
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "系列", exact: true }).click()
+    await page.getByRole("button", { name: "按表格改名" }).click()
+    await page
+      .getByLabel("粘贴推广系列 ID 和新名称")
+      .fill(
+        "推广系列ID\t新名称\n1700000000000000001\t嘉书-剧A-1015\n1799999999999999999\tx",
+      )
+    await expect(page.getByText("已识别 2 行")).toBeVisible()
+    await page.getByRole("button", { name: "生成预览" }).click()
+    await expect(page.getByText("1799999999999999999")).toBeVisible()
+    await expect(page.getByText("未找到该推广系列")).toBeVisible()
+    expect(renameSelectionBodies[0]).toEqual({
+      bc_id: BC_A,
+      rows: [
+        { campaign_id: "1700000000000000001", new_name: "嘉书-剧A-1015" },
+        { campaign_id: "1799999999999999999", new_name: "x" },
+      ],
+    })
+    await expect.poll(() => previewBodies.length).toBe(1)
+    expect(previewBodies[0]).toMatchObject({
+      selection_id: selectionId,
+      mutation: {
+        field: "name",
+        rename: {
+          kind: "explicit",
+          names: {
+            "1700000000000000001": "嘉书-剧A-1015",
+            "1799999999999999999": "x",
+          },
+        },
+      },
+    })
+    await expect(
+      page.getByText("共 2 条：修改 1、跳过 0、异常 1"),
+    ).toBeVisible()
+    await expect(
+      page.getByRole("button", { name: "仅提交可修改的行" }),
+    ).toBeEnabled()
+  })
+})
+
+test.describe("parsePastedRows", () => {
+  test("忽略表头，支持 Tab 与逗号分隔", () => {
+    expect(
+      parsePastedRows(
+        "推广系列ID\t新名称\n1700000000000000001\t嘉书-剧A\n\n1700000000000000002,网眼-剧B,第二季\r\n",
+      ),
+    ).toEqual({
+      rows: [
+        { campaignId: "1700000000000000001", newName: "嘉书-剧A" },
+        { campaignId: "1700000000000000002", newName: "网眼-剧B,第二季" },
+      ],
+      errors: [],
+    })
+  })
+
+  test("首行是数字 ID 时不当表头，缺少新名称的行报错", () => {
+    expect(
+      parsePastedRows("1700000000000000001,剧A\n1700000000000000002"),
+    ).toEqual({
+      rows: [{ campaignId: "1700000000000000001", newName: "剧A" }],
+      errors: ["第 2 行缺少推广系列 ID 或新名称"],
+    })
+  })
+
+  test("超过 500 行返回错误", () => {
+    const text = Array.from(
+      { length: 501 },
+      (_, index) => `${1700000000000000000 + index},名称${index}`,
+    ).join("\n")
+    expect(parsePastedRows(text).errors).toEqual([
+      "单次最多 500 行，请分批粘贴",
+    ])
   })
 })

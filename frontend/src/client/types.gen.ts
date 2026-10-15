@@ -3008,7 +3008,7 @@ export type ManagementItemPublic = {
     /**
      * Original Value
      */
-    original_value?: string | null;
+    original_value?: string | string | null;
     /**
      * Final Value
      */
@@ -3037,6 +3037,18 @@ export type ManagementItemPublic = {
      * Attempts
      */
     attempts?: Array<ManagementAttemptPublic>;
+    /**
+     * Drama Name
+     */
+    drama_name?: string | null;
+    /**
+     * Provider Label
+     */
+    provider_label?: string | null;
+    /**
+     * Drama Changed
+     */
+    drama_changed?: boolean | null;
 };
 
 /**
@@ -3105,7 +3117,7 @@ export type ManagementTaskMutation = {
     /**
      * Field
      */
-    field: 'roas' | 'budget' | 'status';
+    field: 'roas' | 'budget' | 'status' | 'name';
     /**
      * Mode
      */
@@ -3113,7 +3125,11 @@ export type ManagementTaskMutation = {
     /**
      * Value
      */
-    value: string | 'ENABLE' | 'DISABLE';
+    value?: string | 'ENABLE' | 'DISABLE' | null;
+    /**
+     * Rename Kind
+     */
+    rename_kind?: 'replace' | 'affix' | 'explicit' | null;
 };
 
 /**
@@ -3713,7 +3729,7 @@ export type MutationSpec = {
     /**
      * Field
      */
-    field: 'roas' | 'budget' | 'status';
+    field: 'roas' | 'budget' | 'status' | 'name';
     /**
      * Mode
      */
@@ -3721,7 +3737,8 @@ export type MutationSpec = {
     /**
      * Value
      */
-    value: number | string | 'ENABLE' | 'DISABLE';
+    value?: number | string | 'ENABLE' | 'DISABLE' | null;
+    rename?: RenameRule | null;
     /**
      * Include Parents
      */
@@ -5399,6 +5416,95 @@ export type RemoteMaterialPreview = {
      * Format
      */
     format: string;
+};
+
+/**
+ * RenameRowInput
+ *
+ * 表格粘贴的一行；新名称在此不校验，统一由改名预览判定。
+ */
+export type RenameRowInput = {
+    /**
+     * Campaign Id
+     */
+    campaign_id: string;
+    /**
+     * New Name
+     */
+    new_name: string;
+};
+
+/**
+ * RenameRowProblem
+ */
+export type RenameRowProblem = {
+    /**
+     * Campaign Id
+     */
+    campaign_id: string;
+    /**
+     * Reason
+     */
+    reason: 'id_invalid' | 'not_found' | 'duplicate_campaign_id';
+};
+
+/**
+ * RenameRule
+ *
+ * 改名规则；名称在预览时按规则逐条算出并冻结，重试不再重新计算。
+ */
+export type RenameRule = {
+    /**
+     * Kind
+     */
+    kind: 'replace' | 'affix' | 'explicit';
+    /**
+     * Find
+     */
+    find?: string | null;
+    /**
+     * Replace With
+     */
+    replace_with?: string;
+    /**
+     * Prefix
+     */
+    prefix?: string;
+    /**
+     * Suffix
+     */
+    suffix?: string;
+    /**
+     * Names
+     */
+    names?: {
+        [key: string]: string;
+    };
+};
+
+/**
+ * RenameSelectionPublic
+ */
+export type RenameSelectionPublic = {
+    selection: FrozenSelection | null;
+    /**
+     * Problems
+     */
+    problems: Array<RenameRowProblem>;
+};
+
+/**
+ * RenameSelectionRequest
+ */
+export type RenameSelectionRequest = {
+    /**
+     * Bc Id
+     */
+    bc_id: string;
+    /**
+     * Rows
+     */
+    rows: Array<RenameRowInput>;
 };
 
 /**
@@ -8830,6 +8936,36 @@ export type adManagementPreparePreviewResponses = {
 
 export type adManagementPreparePreviewResponse = adManagementPreparePreviewResponses[keyof adManagementPreparePreviewResponses];
 
+export type adManagementResolveRenameSelectionData = {
+    body: RenameSelectionRequest;
+    path: {
+        /**
+         * Tenant Id
+         */
+        tenant_id: string;
+    };
+    query?: never;
+    url: '/api/tenants/{tenant_id}/ad-management-rename-selections';
+};
+
+export type adManagementResolveRenameSelectionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HTTPValidationError;
+};
+
+export type adManagementResolveRenameSelectionError = adManagementResolveRenameSelectionErrors[keyof adManagementResolveRenameSelectionErrors];
+
+export type adManagementResolveRenameSelectionResponses = {
+    /**
+     * Successful Response
+     */
+    201: RenameSelectionPublic;
+};
+
+export type adManagementResolveRenameSelectionResponse = adManagementResolveRenameSelectionResponses[keyof adManagementResolveRenameSelectionResponses];
+
 export type adManagementListTasksData = {
     body?: never;
     path: {
@@ -8854,7 +8990,7 @@ export type adManagementListTasksData = {
         /**
          * Action
          */
-        action?: 'enable' | 'disable' | 'budget' | 'roas' | null;
+        action?: 'enable' | 'disable' | 'budget' | 'roas' | 'rename' | null;
         /**
          * Source
          */

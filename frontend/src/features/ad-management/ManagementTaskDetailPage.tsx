@@ -253,7 +253,8 @@ export function ManagementTaskDetailPage() {
                   刷新重试（{refreshPending}）
                 </Button>
               )}
-              {write && (
+              {/* 改名不支持恢复（服务器拒绝），改名任务不显示恢复入口。 */}
+              {write && task.mutation?.field !== "name" && (
                 <Button
                   variant="outline"
                   onClick={() => action.mutate("restore")}
