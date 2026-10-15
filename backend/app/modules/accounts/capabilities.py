@@ -27,6 +27,9 @@ from app.integrations.tiktok.contracts.accounts import AuthorizationFacts
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.integrations.tiktok.contracts.management import ManagementPermissionEvidence
 from app.integrations.tiktok.gateway import open_tiktok_gateway
+from app.integrations.tiktok.official.authorization import (
+    management_operations_for_scopes,
+)
 from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit
 from app.jobs.tasks import register_dispatch_task
@@ -441,9 +444,16 @@ def _publish(session: Session, job: CapabilityJob, context: TenantContext) -> No
             == route.authorization_revision,
         )
     ).one()
-    management = frozenset(
-        (authorization.permission_summary or {}).get("management_operations", ())
-    )
+    summary = authorization.permission_summary or {}
+    if "management_operations" in summary:
+        management = frozenset(summary["management_operations"])
+    elif job.channel == "OFFICIAL_API":
+        # 早于管理能力上线保存的官方授权摘要没有该字段：按已保存的 scope 用同一映射推导。
+        management = management_operations_for_scopes(
+            {int(value) for value in authorization.scopes}
+        )
+    else:
+        management = frozenset()
     rows = session.exec(
         statement.order_by(col(BCAccountAccess.advertiser_id))
         .limit(100)

@@ -86,3 +86,40 @@ def test_publish_records_management_capabilities(
         assert len(rows) == 7
         assert {r.operation for r in rows if r.state == "VERIFIED"} == verified
         assert all(r.connection_id == env["connection_id"] for r in rows)
+
+
+def test_existing_authorization_without_operations_uses_stored_scopes(
+    capability_env, wire, redis_client
+):
+    """上线前保存的授权摘要没有 management_operations：按已保存的官方 scope 推导，无需重新授权。"""
+    env = capability_env
+    _set_scope(env, "[2,6]")
+    with Session(engine) as session, session.begin():
+        authorization = session.exec(
+            select(ConnectionAuthorization).where(
+                ConnectionAuthorization.connection_id == env["connection_id"]
+            )
+        ).one()
+        summary = dict(authorization.permission_summary)
+        summary.pop("management_operations")
+        authorization.permission_summary = summary
+    job_id = start(env)
+    wire[1].append(page(["actual-account"], role="ADMIN"))
+    run(env, redis_client, job_id)
+    run(env, redis_client, job_id)
+    with Session(engine) as session:
+        verified = {
+            r.operation
+            for r in session.exec(
+                select(ManagementCapability).where(
+                    ManagementCapability.advertiser_id == "actual-account",
+                    ManagementCapability.state == "VERIFIED",
+                )
+            ).all()
+        }
+    assert verified == {
+        "set_status",
+        "update_budget",
+        "update_roas",
+        "set_material_status",
+    }
