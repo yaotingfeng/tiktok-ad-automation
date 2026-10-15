@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test"
 
+const port = process.env.ACCEPTANCE_BROWSER_PORT ?? "5191"
+
 export default defineConfig({
   testDir: "./tests",
   testMatch: /acceptance-batch\.spec\.ts/,
@@ -12,7 +14,7 @@ export default defineConfig({
   webServer: {
     command:
       "cd ../backend && ../.venv/bin/python -m tests.acceptance.browser_server",
-    url: "http://127.0.0.1:5191/__acceptance__/health",
+    url: `http://127.0.0.1:${port}/__acceptance__/health`,
     reuseExistingServer: !process.env.CI,
     // 规模由后端 ACCEPTANCE_SCALE 决定（compact 默认 / full），随进程环境继承。
     env: { ACCEPTANCE_SCALE: process.env.ACCEPTANCE_SCALE ?? "compact" },
@@ -20,7 +22,7 @@ export default defineConfig({
   },
   use: {
     ...devices["Desktop Chrome"],
-    baseURL: "http://127.0.0.1:5191",
+    baseURL: `http://127.0.0.1:${port}`,
     viewport: { width: 1440, height: 900 },
     storageState: { cookies: [], origins: [] },
     trace: "retain-on-failure",

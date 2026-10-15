@@ -2,8 +2,10 @@
 """并行运行后端 pytest：按历史耗时分组，每组独立数据库与 Redis 库号。
 
 - 耗时超过阈值的测试文件按用例拆分到多个组，避免单个慢文件决定总时长。
-- 端到端验收（tests/acceptance）是多分钟级批量搭建，对数据库负载敏感：先多组并行
-  跑完普通用例，再单独用少量分组跑验收，两类不同时争用同一个测试数据库实例。
+- 端到端验收（tests/acceptance）是多分钟级批量搭建，对数据库负载敏感，不与普通用例
+  共用同一个测试数据库实例：设置 ACCEPTANCE_DATABASE_URL（独立实例）时两类同时运行，
+  否则先跑完普通用例再单独跑验收。验收结束时若设置了 CHECK_ACCEPTANCE_DONE，写入该
+  标记文件，供浏览器验收接着使用同一实例。
 - --fast 只跑快速层（排除 slow 标记，含全部验收），供日常检查；发布门禁跑全部。
 - 每组内保持文件路径排序（已知部分夹具依赖收集顺序）。
 - 并行失败的用例在全新数据库中单独重跑一次；重跑通过记为“并行不稳定”并列出，
@@ -140,9 +142,9 @@ def read_results(path):
     return outcomes, durations
 
 
-def shard_env(base_env, index, name, results):
+def shard_env(base_env, index, name, results, database_url=None):
     env = dict(base_env)
-    env["DATABASE_URL"] = with_database(base_env["DATABASE_URL"], name)
+    env["DATABASE_URL"] = with_database(database_url or base_env["DATABASE_URL"], name)
     env["REDIS_URL"] = with_redis_db(base_env["REDIS_URL"], 2 + 2 * index)
     env["TEST_REDIS_URL"] = with_redis_db(base_env["TEST_REDIS_URL"], 3 + 2 * index)
     env["CI_RESULTS_FILE"] = str(results)
@@ -158,24 +160,29 @@ def pytest_command(args, fast=False):
     ]
 
 
-def run_groups(groups, first_index, label, args, base_env, started):
-    """并行运行一批分组并等待结束；组号从 first_index 起，保证库名与 Redis 库号不冲突。"""
+def start_groups(groups, first_index, label, args, base_env, database_url=None):
+    """启动一批分组；组号从 first_index 起，保证库名与 Redis 库号不冲突。"""
+    database_url = database_url or base_env["DATABASE_URL"]
     running = []
     for offset, (load, group) in enumerate(groups):
         index = first_index + offset
         name = f"ci_shard{index}_test"
-        recreate_database(base_env["DATABASE_URL"], name)
+        recreate_database(database_url, name)
         results = args.work / f"shard{index}.jsonl"
         results.unlink(missing_ok=True)
         log = (args.work / f"shard{index}.log").open("w")
         process = subprocess.Popen(
             pytest_command(group, args.fast),
-            env=shard_env(base_env, index, name, results),
+            env=shard_env(base_env, index, name, results, database_url),
             stdout=log,
             stderr=subprocess.STDOUT,
         )
         running.append((index, process, log, results))
         print(f"  {label}组 {index}：{len(group)} 个参数，预计 {load / 60:.1f} 分钟", flush=True)
+    return running
+
+
+def wait_groups(running, label, args, started):
     outcomes, measured = {}, {}
     for index, process, log, results in running:
         process.wait()
@@ -186,6 +193,12 @@ def run_groups(groups, first_index, label, args, base_env, started):
         tail = (args.work / f"shard{index}.log").read_text().strip().splitlines()[-1:]
         print(f"  {label}组 {index} 结束（{(time.monotonic() - started) / 60:.1f} 分钟）：{tail[0] if tail else ''}", flush=True)
     return outcomes, measured
+
+
+def mark_acceptance_done(env):
+    marker = env.get("CHECK_ACCEPTANCE_DONE")
+    if marker:
+        Path(marker).touch()
 
 
 def main():
@@ -223,14 +236,34 @@ def main():
         flush=True,
     )
     started = time.monotonic()
-    outcomes, measured = run_groups(regular_groups, 0, "", args, base_env, started)
-    if exclusive_groups:
-        # 验收组号接在普通组之后，库名与 Redis 库号不与上一阶段重复。
-        more, more_measured = run_groups(
-            exclusive_groups, shards, "验收", args, base_env, started
+    # 验收组号接在普通组之后，库名与 Redis 库号不重复。
+    acceptance_url = base_env.get("ACCEPTANCE_DATABASE_URL")
+    concurrent = bool(exclusive_groups and acceptance_url)
+    regular_running = start_groups(regular_groups, 0, "", args, base_env)
+    acceptance_running = (
+        start_groups(exclusive_groups, shards, "验收", args, base_env, acceptance_url)
+        if concurrent
+        else []
+    )
+    outcomes, measured = {}, {}
+    if concurrent:
+        more, more_measured = wait_groups(acceptance_running, "验收", args, started)
+        outcomes.update(more)
+        measured.update(more_measured)
+        mark_acceptance_done(base_env)
+    more, more_measured = wait_groups(regular_running, "", args, started)
+    outcomes.update(more)
+    measured.update(more_measured)
+    if exclusive_groups and not concurrent:
+        more, more_measured = wait_groups(
+            start_groups(exclusive_groups, shards, "验收", args, base_env),
+            "验收",
+            args,
+            started,
         )
         outcomes.update(more)
         measured.update(more_measured)
+    mark_acceptance_done(base_env)
     failed = sorted(n for n, o in outcomes.items() if o == "failed")
     missing = sorted(set(nodeids) - set(outcomes))
     if missing:

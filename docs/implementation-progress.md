@@ -2327,3 +2327,9 @@
   - 改名权限与启停、调预算同一规则（`accounts/management_rules.py`）：账户同步已核实且 `can_build` 即可改推广系列名称，无需额外能力发布或重新授权。
   - MCP 通道改名与其它管理写操作一样暂不可用。
 - 未验证：真实 TikTok 改名写入与回读，需在授权测试账户上按单次授权操作验证。
+
+## 2026-10-15：本地全量检查提速（方案 A）
+
+- 端口隔离：`check.sh` 每批为前端开发服务器、浏览器批量验收、R2 验收页面与模拟存储取空闲端口（`PLAYWRIGHT_PORT`、`ACCEPTANCE_BROWSER_PORT`、`R2_ACCEPTANCE_PORT`、`R2_STORAGE_PORT`），各配置/服务缺省仍为 5173/5191/5293/5294。解决并行检查或本机开发服务器占用固定端口导致的成批 `ERR_CONNECTION_REFUSED`。
+- 验收并行：`check.sh` 另起一个 PG18 实例（`ACCEPTANCE_DATABASE_URL`），`backend_tests.py` 在其上与普通用例同时跑后端验收；完成后写 `CHECK_ACCEPTANCE_DONE`，浏览器验收只等后端验收结束、改用验收实例，不再等整条后端检查线。未设置该变量时保持原先“普通后验收”的顺序。
+- 未做：`test_two_full_batches_reach_share_http_concurrently_without_overlapping_members` 的根因是高负载下同范围批次的 advisory 锁等待超过 5 秒调用期限（`bounded_session`），属业务锁等待与期限的取舍，单独分析；其余并行不稳定用例单独重跑均通过，不阻断发布。

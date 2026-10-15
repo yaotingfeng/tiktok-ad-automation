@@ -6,6 +6,7 @@ registered tasks; the optional lost-response fault runs AFTER a real commit.
 """
 
 import json
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import Lock
@@ -227,4 +228,10 @@ if not (FRONTEND_DIR / "index.html").is_file():
 app.router.routes.extend(frontend_routes)
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=5191, access_log=False, log_level="warning")
+    uvicorn.run(
+        app,
+        host="127.0.0.1",
+        port=int(os.environ.get("ACCEPTANCE_BROWSER_PORT", "5191")),
+        access_log=False,
+        log_level="warning",
+    )

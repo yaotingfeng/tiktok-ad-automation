@@ -58,13 +58,14 @@ work=$(mktemp -d "$repo/.runtime/check-XXXXXXXX")
 chmod 700 "$work"
 run_id="tkada-ci-$(date +%s)-$$"
 pg_name="$run_id-pg"
+acceptance_pg_name="$run_id-acceptance-pg"
 redis_name="$run_id-redis"
 image_name="tiktok-ad-automation:ci-$run_id"
 cleanup() {
   status=$?
   trap - EXIT
   # 名称属于本次唯一运行；失败也回收自建镜像、容器和源码副本。
-  docker rm -fv "$redis_name" "$pg_name" >/dev/null 2>&1 || true
+  docker rm -fv "$redis_name" "$pg_name" "$acceptance_pg_name" >/dev/null 2>&1 || true
   docker image rm "$image_name" >/dev/null 2>&1 || true
   rm -rf "$work"
   exit "$status"
@@ -106,20 +107,30 @@ export PATH="$work/bin:$PATH"
 cd "$work/source"
 # 并行分组各用独立库与 Redis 库号；PG 连接数和 Redis 库数按并发放大。
 # 测试库用完即删：数据放内存盘并关闭落盘保证，只影响本次临时实例，不涉及任何正式数据。
-docker run -d --name "$pg_name" -p 127.0.0.1::5432 --tmpfs /var/lib/postgresql:rw,size=4g \
-  -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=ci-local-password -e POSTGRES_DB=tiktok_ci_test postgres:18 \
-  -c max_connections=600 -c fsync=off -c synchronous_commit=off -c full_page_writes=off \
-  -c shared_buffers=512MB -c work_mem=16MB >/dev/null
+start_pg() {
+  docker run -d --name "$1" -p 127.0.0.1::5432 --tmpfs /var/lib/postgresql:rw,size=4g \
+    -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=ci-local-password -e POSTGRES_DB=tiktok_ci_test postgres:18 \
+    -c max_connections=600 -c fsync=off -c synchronous_commit=off -c full_page_writes=off \
+    -c shared_buffers=512MB -c work_mem=16MB >/dev/null
+}
+start_pg "$pg_name"
+# 端到端验收（后端与浏览器）用第二个实例，与普通用例同时运行而不争用同一个数据库。
+start_pg "$acceptance_pg_name"
 docker run -d --name "$redis_name" -p 127.0.0.1::6379 redis:8 --databases 64 >/dev/null
 for ((attempt=0; attempt<60; attempt++)); do
-  if docker exec "$pg_name" pg_isready -U postgres >/dev/null 2>&1 && docker exec "$redis_name" redis-cli ping >/dev/null 2>&1; then break; fi
+  if docker exec "$pg_name" pg_isready -U postgres >/dev/null 2>&1 && docker exec "$acceptance_pg_name" pg_isready -U postgres >/dev/null 2>&1 && docker exec "$redis_name" redis-cli ping >/dev/null 2>&1; then break; fi
   sleep 1
 done
 docker exec "$pg_name" pg_isready -U postgres
+docker exec "$acceptance_pg_name" pg_isready -U postgres
 docker exec "$redis_name" redis-cli ping
 pg_port=$(docker port "$pg_name" 5432/tcp | sed 's/.*://')
+acceptance_pg_port=$(docker port "$acceptance_pg_name" 5432/tcp | sed 's/.*://')
 redis_port=$(docker port "$redis_name" 6379/tcp | sed 's/.*://')
 export DATABASE_URL="postgresql://postgres:ci-local-password@127.0.0.1:$pg_port/tiktok_ci_test"
+export ACCEPTANCE_DATABASE_URL="postgresql://postgres:ci-local-password@127.0.0.1:$acceptance_pg_port/tiktok_ci_test"
+# 后端验收结束（或后端检查线不跑验收）时写入，浏览器验收随后独占验收实例。
+export CHECK_ACCEPTANCE_DONE="$work/lanes/backend-acceptance.done"
 export REDIS_URL="redis://127.0.0.1:$redis_port/0"
 export TEST_REDIS_URL="redis://127.0.0.1:$redis_port/1"
 export PROJECT_NAME='TikTok Ad Automation CI' FIRST_SUPERUSER=admin
@@ -127,6 +138,15 @@ export FIRST_SUPERUSER_PASSWORD=ci-only-superuser-password SECRET_KEY=ci-only-si
 export FASTAPI_ENV=development VITE_API_URL='' CI=1 APP_ENV_FILE=/dev/null DOTENV_CONFIG_PATH=/dev/null
 export AWS_EC2_METADATA_DISABLED=true AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_CONFIG_FILE=/dev/null
 export UV_NO_ENV_FILE=1 PLAYWRIGHT_SKIP_BROWSER_GC=1
+# 前端开发服务器与浏览器验收服务每批取空闲端口：并行的另一批检查或本机开发服务器
+# 占用固定端口时，不会被本批测试复用或在中途关闭而导致成批连接失败。
+read -r PLAYWRIGHT_PORT ACCEPTANCE_BROWSER_PORT R2_ACCEPTANCE_PORT R2_STORAGE_PORT < <(python3 -c '
+import socket
+socks = [socket.socket() for _ in range(4)]
+for s in socks: s.bind(("127.0.0.1", 0))
+print(*(s.getsockname()[1] for s in socks))
+for s in socks: s.close()')
+export PLAYWRIGHT_PORT ACCEPTANCE_BROWSER_PORT R2_ACCEPTANCE_PORT R2_STORAGE_PORT
 uv sync --frozen --package app
 # 测试数据库运行在 Docker 内，是所有分组共享的瓶颈：组数不超过 Docker CPU 数。
 docker_cpus=$(docker info --format '{{.NCPU}}' 2>/dev/null || echo 4)
@@ -162,11 +182,11 @@ lane_frontend() {
   fi
   if [[ -n $fe_batch || -n $fe_r2 ]]; then
     # 浏览器端到端验收与后端端到端验收都是多分钟级批量搭建，同时运行会互相挤占
-    # 到超时；等后端检查线结束再开始，其余前端检查不受影响。
-    while [[ -e "$work/lanes/backend.running" ]]; do sleep 5; done
-    # 浏览器验收使用独立库与 Redis 库号。
-    docker exec "$pg_name" psql -U postgres -qc 'CREATE DATABASE ci_browser_test' >/dev/null
-    export DATABASE_URL="postgresql://postgres:ci-local-password@127.0.0.1:$pg_port/ci_browser_test"
+    # 到超时；等后端验收结束（不必等普通用例）再开始，其余前端检查不受影响。
+    while [[ -e "$work/lanes/backend.running" && ! -e $CHECK_ACCEPTANCE_DONE ]]; do sleep 5; done
+    # 浏览器验收使用验收实例上的独立库与独立 Redis 库号。
+    docker exec "$acceptance_pg_name" psql -U postgres -qc 'CREATE DATABASE ci_browser_test' >/dev/null
+    export DATABASE_URL="postgresql://postgres:ci-local-password@127.0.0.1:$acceptance_pg_port/ci_browser_test"
     export REDIS_URL="redis://127.0.0.1:$redis_port/40" TEST_REDIS_URL="redis://127.0.0.1:$redis_port/41"
   fi
   if [[ -n $fe_batch ]]; then bun x playwright test --config=playwright.acceptance.config.ts; fi

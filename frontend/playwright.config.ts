@@ -1,7 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
 import 'dotenv/config'
 
-const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:5173'
+// 本地检查为每批分配独立端口（PLAYWRIGHT_PORT），两批检查不会复用对方的开发服务器。
+const port = process.env.PLAYWRIGHT_PORT ?? '5173'
+const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? `http://localhost:${port}`
 
 /**
  * Read environment variables from file.
@@ -91,7 +93,7 @@ export default defineConfig({
   webServer: process.env.PLAYWRIGHT_BASE_URL
     ? undefined
     : {
-        command: 'bun run dev',
+        command: `bun run dev --port ${port} --strictPort`,
         url: baseURL,
         reuseExistingServer: !process.env.CI,
       },

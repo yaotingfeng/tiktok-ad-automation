@@ -38,8 +38,11 @@ from cryptography.x509.oid import NameOID
 from psycopg import sql
 from sqlalchemy.engine import make_url
 
-APP_ORIGIN = "http://127.0.0.1:5293"
-STORAGE_ORIGIN = "https://127.0.0.1:5294"
+# 并行检查各用独立端口，避免两批检查互相连到对方的服务。
+APP_PORT = int(os.environ.get("R2_ACCEPTANCE_PORT", "5293"))
+STORAGE_PORT = int(os.environ.get("R2_STORAGE_PORT", "5294"))
+APP_ORIGIN = f"http://127.0.0.1:{APP_PORT}"
+STORAGE_ORIGIN = f"https://127.0.0.1:{STORAGE_PORT}"
 BACKEND = Path(__file__).resolve().parents[2]
 
 
@@ -253,7 +256,7 @@ def storage_server(remote: StorageWire, directory: Path):
                 )
             self.reply(200, etag)
 
-    server = ThreadingHTTPServer(("127.0.0.1", 5294), Handler)
+    server = ThreadingHTTPServer(("127.0.0.1", STORAGE_PORT), Handler)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(cert_path, key_path)
     server.socket = context.wrap_socket(server.socket, server_side=True)
@@ -515,7 +518,7 @@ def main():
                 uvicorn.run(
                     app,
                     host="127.0.0.1",
-                    port=5293,
+                    port=APP_PORT,
                     access_log=False,
                     log_level="warning",
                 )
