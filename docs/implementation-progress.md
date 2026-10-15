@@ -1,19 +1,3 @@
-## 2026-10-15：推广系列批量改名
-
-- [设计](superpowers/specs/2026-10-15-campaign-batch-rename-design.md)、[计划](superpowers/plans/2026-10-15-campaign-batch-rename.md)；第一期只改推广系列，只支持手动触发。
-- 三种规则：查找替换、加前缀/后缀、按表格粘贴「推广系列 ID ⇆ 新名称」（单次最多 500 行）。复用广告管理的冻结选择 → 预览 → 提交 → 执行 → 定向刷新链路。
-- 预览逐条校验：空名、超过 512 字符、含表情符号、与同账户其他推广系列现有名称重名、批内新名称重名；互换与链式改名（A→B、B→A）一律判为重名，需分两批做（执行是逐条的，同批互换必然撞名）。重名范围含已删除的系列（保守，未确认 TikTok 是否允许复用）。预览附新剧名、版权方与剧名是否变化。
-- 表格粘贴：ID 非 ASCII 数字（含科学计数法、全角数字）标为格式错误；不在本 BC 可读账户内标为找不到；重复 ID 以首行为准，后续行标为重复。
-- 执行：SDK `campaign_update` / `smart_plus_campaign_update`，载荷只含 `advertiser_id`、`campaign_id`、`campaign_name`；执行前核对名称仍为冻结原值。MCP 通道与其它管理写操作一样暂不支持。操作记录可按「改名」筛选；改名任务不支持撤销；自动规则不允许改名。
-- 行为变化（适用于所有数值管理动作）：原值在执行前被他人改动时，任务项记为 `CONFLICT`（终态、不再重试），此前记为未发送且重试永远失败。
-- 提交：`16586197`、`02bbc6d9`、`383fb3b6`、`2b71b99e`、`4010e53b`、`09160e74`、`636995d1`、`1bc5b09a`、`8e028e6e`、`b999da18`、`c5cc2b12`、`0f7a423d`。
-- 验证：后端全量 4873 通过、86 失败、12 跳过；失败全部在 materials 与一个 acceptance 用例，本分支未改动相关代码，分支基点 `b35ccf56` 同样复现。ad_management、automation_rules、integrations/tiktok 合跑 965 通过。`ty` 无错误；mypy 在改动文件上由 41 降为 40，无新增。迁移 0032 可降级再升级。前端构建通过，Playwright 584 通过（广告管理 18/18），`auth.setup` 需要运行中的后端，本地未启动。
-- 发布注意：
-  - 新迁移 `0032_management_rename`，发布按部署手册先备份、冻结写入。
-  - 发布后存量官方授权账户需要跑一次账户能力发布才会出现 `rename` 能力行（现有能力发布流程即可，无需重新授权）；发布验收要核对目标账户的 `management_capability` 有 `rename/campaign/VERIFIED`。
-  - MCP 通道改名与其它管理写操作一样暂不可用。
-- 未验证：真实 TikTok 改名写入与回读，需在授权测试账户上按单次授权操作验证。
-
 ## 2026-10-14：自动规则阶段 2 评审修复与阶段 3（完善）
 
 - 阶段 2 全分支评审（独立评审）修复：
@@ -2327,3 +2311,19 @@
 - 另：前端检查曾因上一批检查遗留的 5173 开发服务器被复用而批量 `ERR_CONNECTION_REFUSED`；并行检查须确认上一批已完全退出再启动。`test_two_full_batches_reach_share_http_concurrently_without_overlapping_members` 在高负载下偶发调用期限超时，与本次改动无关，待单独加固。
 - 上线后：0031 取消 21,071 条叠加/废弃运行；Redis 目录队列 10,763 → 8,270（数分钟内）并持续下降；目录 Worker 的 `AccountAdmissionDeferred` 为额度限流后的延后重试。
 - 待办：观察一个完整同步周期的排队量；移除平台管理员在 xingyu 的临时成员身份（经管理界面操作）。
+
+## 2026-10-15：推广系列批量改名
+
+- [设计](superpowers/specs/2026-10-15-campaign-batch-rename-design.md)、[计划](superpowers/plans/2026-10-15-campaign-batch-rename.md)；第一期只改推广系列，只支持手动触发。
+- 三种规则：查找替换、加前缀/后缀、按表格粘贴「推广系列 ID ⇆ 新名称」（单次最多 500 行）。复用广告管理的冻结选择 → 预览 → 提交 → 执行 → 定向刷新链路。
+- 预览逐条校验：空名、超过 512 字符、含表情符号、与同账户其他推广系列现有名称重名、批内新名称重名；互换与链式改名（A→B、B→A）一律判为重名，需分两批做（执行是逐条的，同批互换必然撞名）。重名范围含已删除的系列（保守，未确认 TikTok 是否允许复用）。预览附新剧名、版权方与剧名是否变化。
+- 表格粘贴：ID 非 ASCII 数字（含科学计数法、全角数字）标为格式错误；不在本 BC 可读账户内标为找不到；重复 ID 以首行为准，后续行标为重复。
+- 执行：SDK `campaign_update` / `smart_plus_campaign_update`，载荷只含 `advertiser_id`、`campaign_id`、`campaign_name`；执行前核对名称仍为冻结原值。MCP 通道与其它管理写操作一样暂不支持。操作记录可按「改名」筛选；改名任务不支持撤销；自动规则不允许改名。
+- 行为变化（适用于所有数值管理动作）：原值在执行前被他人改动时，任务项记为 `CONFLICT`（终态、不再重试），此前记为未发送且重试永远失败。
+- 提交：`2a9e96cd`、`59b56e8f`、`42cabcd3`、`cdcbbffa`、`45d46ee7`、`01a60ea0`、`14d7faf3`、`15d56260`、`d2171c26`、`c9200d4a`、`f84df476`、`9fa9fea4`、`c5584a39` 及本记录。
+- 验证：rebase 到 `main`（`f0606264`，含删除 `management_capability` 的 `880836b0`）后：accounts、ad_management、automation_rules、reporting、integrations/tiktok 合跑 1861 通过，另 1 个 `test_channel_admission` 偶发失败，单独重跑两次通过（本分支未改动）。rebase 前后端全量 4873 通过、86 失败，失败全部在 materials 与一个 acceptance 用例，分支基点同样复现。`ty`、`alembic check` 无差异；迁移 0033 可降级再升级；mypy 在改动文件上无新增。前端构建通过，Playwright workspace 项目 585 通过。
+- 发布注意：
+  - 新迁移 `0033_management_rename_values`（预览/任务项原值与新值列放宽到 512），排在 `0032_drop_management_capability` 之后；发布按部署手册先备份、冻结写入。
+  - 改名权限与启停、调预算同一规则（`accounts/management_rules.py`）：账户同步已核实且 `can_build` 即可改推广系列名称，无需额外能力发布或重新授权。
+  - MCP 通道改名与其它管理写操作一样暂不可用。
+- 未验证：真实 TikTok 改名写入与回读，需在授权测试账户上按单次授权操作验证。
