@@ -425,3 +425,57 @@ def test_unexpected_failure_in_one_bc_does_not_block_others(
         assert failed.disabled_reason == "plan_failed"
         assert failed.next_hot_at >= now + timedelta(minutes=5)
         assert healthy.next_hot_at > now and healthy.disabled_reason is None
+
+
+def test_directory_dispatch_skips_enqueued_runs_and_is_bounded(
+    monkeypatch, committed_sync_seed, redis_client
+):
+    """已写入投递记录的目录运行不再重复入队；每次派发有上限，积压时规划仍保持轻量。"""
+    from sqlmodel import Session, func, select
+
+    from app.core.db import engine
+    from app.jobs.models import PendingDispatch
+    from app.modules.ads.sync_models import AdDirectoryRun
+
+    seed, factory = committed_sync_seed
+    monkeypatch.setattr(job_tasks.settings, "ADS_SYNC_ENABLED", True)
+    monkeypatch.setattr(
+        job_tasks, "_reader_for", lambda **_kwargs: _ctx(_EmptyReader())
+    )
+    monkeypatch.setattr(job_tasks, "DIRECTORY_DISPATCH_BATCH", 2)
+    now = datetime(2026, 10, 12, 3, tzinfo=UTC)
+    job_tasks.plan_due_runs(database_engine=engine, redis_client=redis_client, now=now)
+
+    def queued_runs():
+        with factory() as s:
+            return s.exec(
+                select(func.count())
+                .select_from(AdDirectoryRun)
+                .where(AdDirectoryRun.tenant_id == seed.tenant_id)
+            ).one()
+
+    def enqueued():
+        with factory() as s:
+            return s.exec(
+                select(func.count())
+                .select_from(PendingDispatch)
+                .where(
+                    PendingDispatch.tenant_id == seed.tenant_id,
+                    PendingDispatch.task_name == "ads.sync_step",
+                )
+            ).one()
+
+    total = queued_runs()
+    assert total > 2
+    before = enqueued()
+    with Session(engine) as s, s.begin():
+        first = job_tasks._dispatch_directories(s, now)
+    assert first <= 2
+    assert enqueued() == before + first
+    # 反复派发直到全部入队后，再派发不再产生任何重复入队。
+    for _ in range(total):
+        with Session(engine) as s, s.begin():
+            job_tasks._dispatch_directories(s, now)
+    assert enqueued() == total
+    with Session(engine) as s, s.begin():
+        assert job_tasks._dispatch_directories(s, now) == 0

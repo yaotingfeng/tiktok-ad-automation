@@ -9,7 +9,7 @@ from uuid import UUID
 
 from billiard.exceptions import SoftTimeLimitExceeded
 from redis import Redis
-from sqlalchemy import delete
+from sqlalchemy import delete, func
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
@@ -20,6 +20,7 @@ from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.integrations.tiktok.gateway import open_tiktok_gateway
 from app.integrations.tiktok.sdk import AccountAdmissionDeferred
 from app.jobs.celery_app import celery_app
+from app.jobs.models import PendingDispatch
 from app.jobs.outbox import enqueue_after_commit, validate_dispatch_payload
 from app.jobs.tasks import register_dispatch_task
 from app.modules.accounts.models import AdvertiserAccount
@@ -44,6 +45,9 @@ from app.modules.reporting.store_models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# 每次派发最多入队的目录运行数；其余留给后续轮次，保证规划耗时有界。
+DIRECTORY_DISPATCH_BATCH = 1000
 
 register_dispatch_task("reporting.job_step", "ads-reporting")
 register_dispatch_task("reporting.plan_due", "control")
@@ -143,23 +147,41 @@ def _advance(due, now, interval):
 def _dispatch_directories(session, now):
     from app.modules.ads.tasks import TASK_NAME as directory_task_name
 
+    # 本代数、本页的投递记录已存在（无论是否已发布）就不再重复入队：积压时
+    # 若每轮重写全部运行，规划会长时间占住 control 唯一并发，使投递发布被饿死。
+    current_key = func.concat(
+        "ads.sync_step:",
+        col(AdDirectoryRun.id),
+        ":",
+        col(AdDirectoryRun.claim_generation),
+        ":page:",
+        col(AdDirectoryRun.next_page),
+    )
+    enqueued = (
+        select(col(PendingDispatch.id))
+        .where(
+            PendingDispatch.tenant_id == col(AdDirectoryRun.tenant_id),
+            PendingDispatch.task_key == current_key,
+        )
+        .exists()
+    )
     rows = session.exec(
         select(AdDirectoryRun)
         .where(
             col(AdDirectoryRun.status).in_(["QUEUED", "RUNNING", "WAITING_REMOTE"]),
+            AdDirectoryRun.channel == "OFFICIAL_API",
             col(AdDirectoryRun.next_attempt_at).is_(None)
             | (col(AdDirectoryRun.next_attempt_at) <= now),
+            # 租约过期的运行会进入新代数、生成新投递标识，仍需入队。
+            col(AdDirectoryRun.claimed_until).is_(None) & ~enqueued
+            | (col(AdDirectoryRun.claimed_until) <= now),
         )
+        .order_by(col(AdDirectoryRun.created_at), col(AdDirectoryRun.id))
+        .limit(DIRECTORY_DISPATCH_BATCH)
         .with_for_update(skip_locked=True)
     ).all()
     count = 0
     for row in rows:
-        if (
-            row.channel != "OFFICIAL_API"
-            or row.claimed_until is not None
-            and row.claimed_until > now
-        ):
-            continue
         if row.claimed_until is not None:
             row.claim_generation += 1
             row.claim_token = row.claimed_until = None
