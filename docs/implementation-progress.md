@@ -2356,3 +2356,13 @@
   - `Jenkinsfile`：`ACTION=deploy|check|status|recover|finish`、`FULL`；私有目录 `/var/jenkins_home/tk-ada-private`（宿主 `/data/jenkins/tk-ada-private`，0700）保存检查记录、发布批次状态与 `backups/latest.tar`。该目录含密钥；同节点所有 Jenkins 任务都以同一系统用户运行，权限隔离与已有共享 kubeconfig 相同。
   - Jenkins 凭据：`yaotf-gitea-tiktok-ad-automation`（只读令牌）、`tiktok-ad-automation-retired-source`（旧 prod 停用资源清单，不含密钥）；沿用公司 `sg-aliyun-harbor-info`、`sg-aliyun-k8s-info`。
 - 验证：`node scripts/test-deployment-assets.mjs`（含新增镜像来源用例）在默认与 Jenkins 镜像变量下均通过；`deploy/ci` 单元测试通过；脚本语法检查通过。Jenkins 实际运行与首次发布结果待记录。
+
+
+## 2026-10-16：策略国家预设取消历史搭建依赖
+
+- 用户要求先设置投放策略再搭建。原策略页调用当前 BC 历史场景地区并集，没有场景缓存时无法选择国家。
+- 策略页改用集中维护的 TikTok Ads 官方投放市场参考目录（69 个国家/地区，含托管账户及各版位，来源与核对日期在 `frontend/src/features/targeting/countries.ts`）；首次使用、无 BC、无场景记录均可搜索、多选、全选、清空和保存国家。文案明确实际可投范围在搭建时按账户与小程序核验。
+- 草稿目录 hook 仅在当前草稿已加载且 BC 匹配时读取本批核验结果，不再在加载前请求 BC 历史目录。搭建页的共同可投国家、无效选择阻断和冻结定向仍使用已有服务端合同；没有放宽定向或自动删除选择。
+- 更新原受众定向设计与计划，替换策略页必须依赖 BC 历史场景的旧约束。无需数据库迁移；未访问真实 TikTok 业务接口。
+- 验证：`bun run build`（TypeScript + Vite）通过；Biome 5 个改动文件检查通过；`git diff --check` 通过。Playwright `build-preparation.spec.ts`、`build-preview.spec.ts` 121 项通过；`strategies.spec.ts` 51 项通过（含首次创建、保存后恢复、搜索/全选/清空、目录外历史选择和只读权限）。初跑历史选项用例因可访问名称空格及选项移除后的 `uncheck` 重找节点失败，修正测试定位与操作后策略全文件通过。浏览器接口为离线替身，已检查受众卡片截图。
+- 交付：本节与功能同次聚焦提交（`strategies: allow country presets before the first build`）；未推送、未部署。

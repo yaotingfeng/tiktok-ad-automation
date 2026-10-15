@@ -48,7 +48,7 @@ const genderLabels = {
   GENDER_MALE: "男性",
   GENDER_FEMALE: "女性",
 }
-// 官方 Language Code 枚举（2026-09-28）；国家选择不使用这种静态枚举。
+// 官方 Language Code 枚举（2026-09-28）。
 const languageCodes: Targeting["languages"] = [
   "ar",
   "as",
@@ -259,7 +259,7 @@ export function TargetingForm({
         </Select>
         <FieldDescription>
           {reference
-            ? "参考国家来自当前 BC 已核实的场景；实际投放将在搭建时逐账户核验。"
+            ? "可提前选择 TikTok Ads 国家/地区，无需先搭建；实际可投范围将在搭建时按账户和小程序核验。"
             : "仅可选择所有所选账户与当前小程序共同支持的国家。"}
         </FieldDescription>
       </Field>

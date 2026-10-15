@@ -1395,15 +1395,22 @@ for (const viewport of [
   })
 }
 
-test("策略定向保存成年年龄、语言和性别，无BC不提供全球国家目录", async ({
+test("策略无 BC 和历史搭建时可选择国家并保存年龄、语言和性别", async ({
   page,
 }) => {
   const api = await boundary(page)
   await page.goto(editUrl)
   await expect(page.getByText("受众定向", { exact: true })).toBeVisible()
+  await page.getByRole("combobox", { name: "国家范围", exact: true }).click()
+  await page.getByRole("option", { name: "指定国家", exact: true }).click()
+  await page.getByRole("checkbox", { name: "美国", exact: true }).check()
+  await page.getByRole("checkbox", { name: "加拿大", exact: true }).check()
   await expect(
-    page.getByText("请选择 BC 并同步账户和小程序地区后再选择国家。"),
-  ).toBeVisible()
+    page.getByRole("checkbox", { name: "中国", exact: true }),
+  ).toHaveCount(0)
+  await expect(
+    page.getByRole("checkbox", { name: "印度", exact: true }),
+  ).toHaveCount(0)
   await page.getByRole("checkbox", { name: "25–34 岁", exact: true }).check()
   await page.getByRole("checkbox", { name: "英语", exact: true }).check()
   await page.getByRole("combobox", { name: "性别", exact: true }).click()
@@ -1415,12 +1422,20 @@ test("策略定向保存成年年龄、语言和性别，无BC不提供全球国
     (r) => r.method === "POST" && r.path.endsWith("/versions"),
   )
   expect(saved?.body.config.targeting).toEqual({
-    region_mode: "ALL_AVAILABLE",
-    region_codes: [],
+    region_mode: "SELECTED",
+    region_codes: ["CA", "US"],
     languages: ["en"],
     age_groups: ["AGE_25_34"],
     gender: "GENDER_FEMALE",
   })
+  await page.reload()
+  await expect(
+    page.getByRole("checkbox", { name: "美国", exact: true }),
+  ).toBeChecked()
+  await expect(
+    page.getByRole("checkbox", { name: "加拿大", exact: true }),
+  ).toBeChecked()
+  expect(api.requests.some((r) => r.path.includes("/targeting"))).toBe(false)
 })
 
 test("策略默认值按业务决策顺序展示，隐藏无决策价值的安排项", async ({
@@ -1559,4 +1574,90 @@ test("固定数量超过后端安全上限时显示字段错误并阻止保存",
   await expect(
     page.getByRole("button", { name: "保存为新版本", exact: true }),
   ).toBeDisabled()
+})
+
+test("首次新建策略可搜索国家、全选和清空，不依赖账户目录", async ({ page }) => {
+  const api = await boundary(page, { empty: true })
+  await page.goto(`/tenants/${A}/strategies/new`)
+  await page.getByRole("combobox", { name: "国家范围", exact: true }).click()
+  await page.getByRole("option", { name: "指定国家", exact: true }).click()
+  const search = page.getByRole("textbox", { name: "搜索国家", exact: true })
+  await search.fill("JP")
+  await expect(
+    page.getByRole("checkbox", { name: "日本", exact: true }),
+  ).toBeEnabled()
+  await page.getByRole("checkbox", { name: "日本", exact: true }).check()
+  await search.fill("美国")
+  await page.getByRole("checkbox", { name: "美国", exact: true }).check()
+  await search.fill("")
+  await page.getByRole("button", { name: "全选国家", exact: true }).click()
+  await expect(
+    page.getByRole("checkbox", { name: "巴西", exact: true }),
+  ).toBeChecked()
+  await expect(
+    page.getByRole("checkbox", { name: "日本", exact: true }),
+  ).toBeChecked()
+  await page.getByRole("button", { name: "清空国家", exact: true }).click()
+  await expect(
+    page.getByText("请至少选择一个国家。", { exact: true }).first(),
+  ).toBeVisible()
+  await expect(
+    page.getByRole("checkbox", { name: "美国", exact: true }),
+  ).not.toBeChecked()
+  expect(api.requests.some((r) => r.path.includes("/targeting"))).toBe(false)
+  expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
+  await page.getByRole("checkbox", { name: "美国", exact: true }).check()
+  await page
+    .locator('[data-slot="card"]')
+    .filter({ has: page.getByText("受众定向", { exact: true }) })
+    .screenshot({ path: "/tmp/tkada-strategy-countries.png" })
+  await page.getByLabel("策略名称", { exact: true }).fill("首次国家策略")
+  await page.getByLabel("日预算", { exact: true }).fill("100")
+  await page.getByRole("button", { name: "创建策略", exact: true }).click()
+  await expect(page.getByText("已保存 v1", { exact: true })).toBeVisible()
+  const saved = api.requests.find(
+    (r) => r.method === "POST" && r.path.endsWith("/strategies"),
+  )
+  expect(saved?.body.config.targeting.region_codes).toEqual(["US"])
+})
+
+test("目录外的已选国家保留并可移除", async ({ page }) => {
+  const api = await boundary(page)
+  api.records[0].config.targeting = {
+    region_mode: "SELECTED",
+    region_codes: ["US", "RU"],
+  }
+  await page.goto(editUrl)
+  const historical = page.getByRole("checkbox", {
+    name: "俄罗斯 不可用/待核实",
+    exact: true,
+  })
+  await expect(historical).toBeChecked()
+  // 移除目录外国家后该选项会立即消失，用 click 后断言移除，避免 uncheck 重找节点。
+  await historical.click()
+  await expect(historical).toHaveCount(0)
+  await expect(
+    page.getByRole("checkbox", { name: "美国", exact: true }),
+  ).toBeChecked()
+  expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
+})
+
+test("只读策略可查看预置国家但不能更改选择", async ({ page }) => {
+  const api = await boundary(page, { role: "viewer" })
+  api.records[0].config.targeting = {
+    region_mode: "SELECTED",
+    region_codes: ["US"],
+  }
+  await page.goto(editUrl)
+  await expect(
+    page.getByRole("checkbox", { name: "美国", exact: true }),
+  ).toBeChecked()
+  await expect(
+    page.getByRole("checkbox", { name: "美国", exact: true }),
+  ).toBeDisabled()
+  await expect(
+    page.getByRole("checkbox", { name: "加拿大", exact: true }),
+  ).toBeDisabled()
+  expect(api.requests.some((r) => r.path.includes("/targeting"))).toBe(false)
+  expect(api.requests.filter((r) => r.method !== "GET")).toHaveLength(0)
 })

@@ -44,12 +44,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { tiktokCountryCodes } from "@/features/targeting/countries"
 import {
   normalizedTargeting,
   TargetingForm,
   targetingError,
 } from "@/features/targeting/TargetingForm"
-import { useTargetingDirectory } from "@/features/targeting/useTargetingDirectory"
 import { ManagementSheet } from "@/features/tenants/ManagementSheet"
 import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
@@ -114,7 +114,7 @@ export function StrategyForm({
   copy?: boolean
   forceReadonly?: boolean
 }) {
-  const { tenantId: currentTenantId, scope, bc } = useTenantScope(),
+  const { tenantId: currentTenantId, scope } = useTenantScope(),
     client = useQueryClient(),
     navigate = useNavigate()
   const [tenantId] = useState(currentTenantId!)
@@ -175,7 +175,6 @@ export function StrategyForm({
   const [targeting, setTargeting] = useState(() =>
     normalizedTargeting(initial?.targeting),
   )
-  const targetingDirectory = useTargetingDirectory(tenantId, bc?.bc_id)
   const [baseline, setBaseline] = useState(initial),
     [baselineName, setBaselineName] = useState(strategy?.name || ""),
     [baseNumber, setBaseNumber] = useState(
@@ -1045,21 +1044,13 @@ export function StrategyForm({
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
-              {(!bc || !targetingDirectory.data?.region_codes?.length) && (
-                <p className="text-sm text-muted-foreground">
-                  请选择 BC 并同步账户和小程序地区后再选择国家。
-                </p>
-              )}
-              {targetingDirectory.error && (
-                <RequestError error={targetingDirectory.error} />
-              )}
               <TargetingForm
                 value={targeting}
                 onChange={(v) => {
                   setTargeting(v)
                   setServerErrors({})
                 }}
-                countries={targetingDirectory.data?.region_codes || []}
+                countries={tiktokCountryCodes}
                 disabled={readonly || pending || !!unknownRequest}
                 reference
               />
