@@ -18,8 +18,31 @@ from app.modules.ads.models import AdObject
 from app.modules.ads.sync_models import AdDirectoryRun
 
 DIRECTORY_AD_TYPES = ("REGULAR", "LEGACY_SMART_PLUS", "SMART_PLUS")
+# 每个目录层级与广告类型一个运行：(层级, 广告类型, 每页条数)。
+DIRECTORY_SPECS = (
+    ("campaign", "REGULAR", 1000),
+    ("campaign", "LEGACY_SMART_PLUS", 1000),
+    ("campaign", "SMART_PLUS", 1000),
+    ("adgroup", "REGULAR", 1000),
+    ("adgroup", "LEGACY_SMART_PLUS", 1000),
+    ("adgroup", "SMART_PLUS", 1000),
+    ("ad", "REGULAR", 100),
+    ("ad", "LEGACY_SMART_PLUS", 100),
+    ("ad", "SMART_PLUS", 100),
+    ("creative", "SMART_PLUS", 100),
+)
+KINDS_BY_TYPE = {
+    ad_type: tuple(
+        kind for kind, spec_type, _ in DIRECTORY_SPECS if spec_type == ad_type
+    )
+    for ad_type in DIRECTORY_AD_TYPES
+}
+# 未使用类型的探测只读广告系列：该类型没有系列就不可能有广告组和广告。
+PROBE_KINDS = ("campaign",)
 # 账户未使用的广告类型只按此间隔复查，避免每轮都发必然为空的目录请求。
 AD_TYPE_PROBE_INTERVAL = timedelta(hours=24)
+# 最近无消耗的账户目录基本不变，周期全量只按此间隔刷新；本系统改动另走定向刷新。
+INACTIVE_DIRECTORY_INTERVAL = timedelta(hours=24)
 
 
 def _partition_key(query: dict) -> str:
@@ -51,14 +74,14 @@ def directory_ad_types(
     advertiser_ids: Collection[str],
     active_ids: Collection[str],
     now: datetime,
-) -> dict[str, tuple[str, ...]]:
-    """周期目录按账户实际使用的广告类型裁剪请求。
+) -> dict[str, dict[str, tuple[str, ...]]]:
+    """周期目录按账户实际使用的广告类型裁剪请求，返回 账户 -> 类型 -> 层级。
 
     业务规则：
-    - 账户目录里已有某类型对象（含已删除），该类型每轮都同步；
-    - 未使用的类型，距最近一次成功的全量探测超过 24 小时才再请求一次，
+    - 账户目录里已有某类型对象（含已删除），该类型全部层级每轮都同步；
+    - 未使用的类型，距最近一次成功探测超过 24 小时才只读一次广告系列，
       覆盖账户新启用某类型的情况；没有任何广告的账户因此自然降为每天一次；
-    - 最近有消耗但目录里还没有任何对象的账户，全部类型立即请求，不等复查。
+    - 最近有消耗但目录里还没有任何对象的账户，全部类型全部层级立即请求，不等复查。
     本系统自己创建或修改的对象另走定向刷新，不受此裁剪影响。
     """
     accounts = sorted(set(advertiser_ids))
@@ -93,18 +116,57 @@ def directory_ad_types(
     ):
         probed.add(probes[partition_key])
     active = set(active_ids)
-    result: dict[str, tuple[str, ...]] = {}
+    result: dict[str, dict[str, tuple[str, ...]]] = {}
     for advertiser_id in accounts:
         in_use = used.get(advertiser_id, set())
         if advertiser_id in active and not in_use:
-            result[advertiser_id] = DIRECTORY_AD_TYPES
+            result[advertiser_id] = dict(KINDS_BY_TYPE)
             continue
-        result[advertiser_id] = tuple(
-            ad_type
+        result[advertiser_id] = {
+            ad_type: KINDS_BY_TYPE[ad_type] if ad_type in in_use else PROBE_KINDS
             for ad_type in DIRECTORY_AD_TYPES
             if ad_type in in_use or (advertiser_id, ad_type) not in probed
-        )
+        }
     return result
+
+
+def directory_due_accounts(
+    session: Session,
+    *,
+    tenant_id: UUID,
+    advertiser_ids: Collection[str],
+    active_ids: Collection[str],
+    now: datetime,
+) -> list[str]:
+    """本轮周期目录需要刷新的账户。
+
+    最近有消耗的账户每轮都刷新；其余账户距最近一次成功的周期全量超过
+    INACTIVE_DIRECTORY_INTERVAL 才刷新，从未成功过的账户立即刷新。
+    """
+    accounts = sorted(set(advertiser_ids))
+    active = set(active_ids) & set(accounts)
+    idle = [advertiser_id for advertiser_id in accounts if advertiser_id not in active]
+    fresh: set[str] = set()
+    if idle:
+        fresh = set(
+            session.exec(
+                select(AdDirectoryRun.advertiser_id)
+                .where(
+                    AdDirectoryRun.tenant_id == tenant_id,
+                    col(AdDirectoryRun.advertiser_id).in_(idle),
+                    AdDirectoryRun.status == "COMPLETE",
+                    AdDirectoryRun.query["include_deleted"].as_boolean().is_(True),
+                    col(AdDirectoryRun.completed_at)
+                    > now - INACTIVE_DIRECTORY_INTERVAL,
+                )
+                .distinct()
+            ).all()
+        )
+    return [
+        advertiser_id
+        for advertiser_id in accounts
+        if advertiser_id in active or advertiser_id not in fresh
+    ]
 
 
 def directory_id_chunks(
@@ -141,9 +203,13 @@ def request_directory(
     advertiser_ids,
     scope,
     refs=(),
-    ad_types: Mapping[str, Collection[str]] | None = None,
+    ad_types: Mapping[str, Mapping[str, Collection[str]]] | None = None,
 ) -> int:
-    """ad_types 为空表示请求全部类型；周期调度传入 directory_ad_types 的裁剪结果。"""
+    """ad_types 为空表示请求全部类型全部层级；周期调度传入 directory_ad_types 的裁剪结果。
+
+    同一账户同一查询已有尚未开始的运行时不再新建：积压期间每轮的周期请求
+    不会层层叠加，排队中的那一条开始执行时自然读到最新数据。
+    """
     if not settings.ADS_SYNC_ENABLED or frozen_route.get("channel") != "OFFICIAL_API":
         return 0
     route = FrozenTikTokRoute.model_validate(frozen_route)
@@ -151,7 +217,7 @@ def request_directory(
     if (
         route.tenant_id != tenant_id
         or route.bc_id != bc_id
-        or scope not in ("directory", "active", "targeted")
+        or scope not in ("directory", "targeted")
     ):
         raise DomainError("directory_request_invalid", "目录请求范围无效")
     if any(
@@ -187,20 +253,10 @@ def request_directory(
     created = 0
     for advertiser_id in advertiser_ids:
         account_refs = tuple(ref for ref in refs if ref.advertiser_id == advertiser_id)
-        directory_specs = (
-            ("campaign", "REGULAR", 1000),
-            ("campaign", "LEGACY_SMART_PLUS", 1000),
-            ("campaign", "SMART_PLUS", 1000),
-            ("adgroup", "REGULAR", 1000),
-            ("adgroup", "LEGACY_SMART_PLUS", 1000),
-            ("adgroup", "SMART_PLUS", 1000),
-            ("ad", "REGULAR", 100),
-            ("ad", "LEGACY_SMART_PLUS", 100),
-            ("ad", "SMART_PLUS", 100),
-            ("creative", "SMART_PLUS", 100),
-        )
-        for kind, ad_type, page_size in directory_specs:
-            if ad_types is not None and ad_type not in ad_types.get(advertiser_id, ()):
+        for kind, ad_type, page_size in DIRECTORY_SPECS:
+            if ad_types is not None and kind not in ad_types.get(advertiser_id, {}).get(
+                ad_type, ()
+            ):
                 continue
             ids = tuple(
                 sorted(
@@ -247,14 +303,19 @@ def request_directory(
                 }
                 partition = _partition_key(query)
                 existing = session.exec(
-                    select(AdDirectoryRun)
+                    select(AdDirectoryRun.id)
                     .where(
                         AdDirectoryRun.tenant_id == tenant_id,
-                        AdDirectoryRun.request_id == request_id,
                         AdDirectoryRun.advertiser_id == advertiser_id,
                         AdDirectoryRun.partition_key == partition,
+                        # 已被领取的运行可能已读过首页，不能代替本次刷新。
+                        (col(AdDirectoryRun.request_id) == request_id)
+                        | (
+                            (col(AdDirectoryRun.status) == "QUEUED")
+                            & col(AdDirectoryRun.claim_token).is_(None)
+                        ),
                     )
-                    .order_by(col(AdDirectoryRun.created_at))
+                    .limit(1)
                 ).first()
                 if existing is not None:
                     continue

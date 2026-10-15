@@ -25,7 +25,11 @@ from app.jobs.outbox import enqueue_after_commit, validate_dispatch_payload
 from app.jobs.tasks import register_dispatch_task
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.accounts.routing import verify_route
-from app.modules.ads.directory_requests import directory_ad_types, request_directory
+from app.modules.ads.directory_requests import (
+    directory_ad_types,
+    directory_due_accounts,
+    request_directory,
+)
 from app.modules.ads.sync_models import AdDirectoryRun
 from app.modules.reporting import planner, publish
 from app.modules.reporting.jobs import (
@@ -48,6 +52,8 @@ logger = logging.getLogger(__name__)
 
 # 每次派发最多入队的目录运行数；其余留给后续轮次，保证规划耗时有界。
 DIRECTORY_DISPATCH_BATCH = 1000
+# 目录消息发布后超过此时长仍未被领取，视为丢失并重新入队。
+DIRECTORY_MESSAGE_LOST_AFTER = timedelta(hours=6)
 
 register_dispatch_task("reporting.job_step", "ads-reporting")
 register_dispatch_task("reporting.plan_due", "control")
@@ -144,6 +150,17 @@ def _advance(due, now, interval):
     return due + (max(0, (now - due) // interval) + 1) * interval
 
 
+def _message_lost(session: Session, row: AdDirectoryRun, now: datetime) -> bool:
+    key = f"ads.sync_step:{row.id}:{row.claim_generation}:page:{row.next_page}"
+    published = session.exec(
+        select(PendingDispatch.published_at).where(
+            PendingDispatch.tenant_id == row.tenant_id,
+            PendingDispatch.task_key == key,
+        )
+    ).first()
+    return published is not None and published < now - DIRECTORY_MESSAGE_LOST_AFTER
+
+
 def _dispatch_directories(session, now):
     from app.modules.ads.tasks import TASK_NAME as directory_task_name
 
@@ -165,6 +182,17 @@ def _dispatch_directories(session, now):
         )
         .exists()
     )
+    # 消息发布后长时间仍未被领取，视为在领取前丢失（如任务在加锁前失败）：
+    # 换新代数重新入队。若旧消息其实仍在队列中，执行时代数不符会直接结束。
+    lost = (
+        select(col(PendingDispatch.id))
+        .where(
+            PendingDispatch.tenant_id == col(AdDirectoryRun.tenant_id),
+            PendingDispatch.task_key == current_key,
+            col(PendingDispatch.published_at) < now - DIRECTORY_MESSAGE_LOST_AFTER,
+        )
+        .exists()
+    )
     rows = session.exec(
         select(AdDirectoryRun)
         .where(
@@ -173,7 +201,7 @@ def _dispatch_directories(session, now):
             col(AdDirectoryRun.next_attempt_at).is_(None)
             | (col(AdDirectoryRun.next_attempt_at) <= now),
             # 租约过期的运行会进入新代数、生成新投递标识，仍需入队。
-            col(AdDirectoryRun.claimed_until).is_(None) & ~enqueued
+            col(AdDirectoryRun.claimed_until).is_(None) & (~enqueued | lost)
             | (col(AdDirectoryRun.claimed_until) <= now),
         )
         .order_by(col(AdDirectoryRun.created_at), col(AdDirectoryRun.id))
@@ -182,7 +210,7 @@ def _dispatch_directories(session, now):
     ).all()
     count = 0
     for row in rows:
-        if row.claimed_until is not None:
+        if row.claimed_until is not None or _message_lost(session, row, now):
             row.claim_generation += 1
             row.claim_token = row.claimed_until = None
         enqueue_after_commit(
@@ -314,27 +342,31 @@ def _plan_one(database_engine, redis_client, key, now, deadline, hot, material):
             # 授权后的历史回补立即规划一次，不等到每日回刷；未知开户时间稍后重查。
             planner.plan_history(session, plan, now=now)
             if plan.next_directory_at <= now:
-                ad_types = directory_ad_types(
+                # 全量目录（含已删除）已覆盖只读在投对象的需求，周期只发这一种；
+                # 无消耗账户按天刷新，未使用类型只探测广告系列。
+                due = directory_due_accounts(
                     session,
                     tenant_id=plan.tenant_id,
                     advertiser_ids=accounts,
                     active_ids=plan.last_active_advertiser_ids,
                     now=now,
                 )
-                for scope, advs in (
-                    ("directory", accounts),
-                    ("active", plan.last_active_advertiser_ids),
-                ):
-                    request_directory(
+                request_directory(
+                    session,
+                    tenant_id=plan.tenant_id,
+                    bc_id=plan.bc_id,
+                    frozen_route=plan.frozen_route,
+                    actor_id=plan.actor_id,
+                    advertiser_ids=due,
+                    scope="directory",
+                    ad_types=directory_ad_types(
                         session,
                         tenant_id=plan.tenant_id,
-                        bc_id=plan.bc_id,
-                        frozen_route=plan.frozen_route,
-                        actor_id=plan.actor_id,
-                        advertiser_ids=advs,
-                        scope=scope,
-                        ad_types=ad_types,
-                    )
+                        advertiser_ids=due,
+                        active_ids=plan.last_active_advertiser_ids,
+                        now=now,
+                    ),
+                )
                 plan.next_directory_at = _advance(
                     plan.next_directory_at, now, planner.DIRECTORY_INTERVAL
                 )

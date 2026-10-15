@@ -6,7 +6,10 @@ from app.core.config import settings
 from app.modules.ads.directory_requests import (
     AD_TYPE_PROBE_INTERVAL,
     DIRECTORY_AD_TYPES,
+    INACTIVE_DIRECTORY_INTERVAL,
+    KINDS_BY_TYPE,
     directory_ad_types,
+    directory_due_accounts,
     request_directory,
 )
 from app.modules.ads.models import AdObject
@@ -104,14 +107,17 @@ def _ad_object(seed, advertiser_id, ad_type):
     )
 
 
+PROBES = dict.fromkeys(DIRECTORY_AD_TYPES, ("campaign",))
+
+
 def test_unused_ad_types_are_probed_once_per_day(session, sync_seed, monkeypatch):
     monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
     now = datetime.now(UTC)
     args = {"tenant_id": sync_seed.tenant_id, "advertiser_ids": ["acc-1", "acc-2"]}
 
-    # 首次：没有任何目录与探测记录，全部类型都要请求。
+    # 首次：没有任何目录与探测记录，各类型只探测广告系列。
     first = directory_ad_types(session, **args, active_ids=[], now=now)
-    assert first == {"acc-1": DIRECTORY_AD_TYPES, "acc-2": DIRECTORY_AD_TYPES}
+    assert first == {"acc-1": PROBES, "acc-2": PROBES}
     created = request_directory(
         session,
         tenant_id=sync_seed.tenant_id,
@@ -122,30 +128,34 @@ def test_unused_ad_types_are_probed_once_per_day(session, sync_seed, monkeypatch
         scope="directory",
         ad_types=first,
     )
-    assert created == 20
+    assert created == 6
+    runs = session.exec(
+        select(AdDirectoryRun).where(AdDirectoryRun.tenant_id == sync_seed.tenant_id)
+    ).all()
+    assert {r.kind for r in runs} == {"campaign"}
 
-    # 探测完成后：acc-1 只在用 Smart+，acc-2 没有任何广告。
+    # 探测完成后：acc-1 只在用 Smart+（全部层级），acc-2 没有任何广告。
     _complete_probes(session, sync_seed, "acc-1", completed_at=now)
     _complete_probes(session, sync_seed, "acc-2", completed_at=now)
     session.add(_ad_object(sync_seed, "acc-1", "SMART_PLUS"))
     session.flush()
     later = now + timedelta(hours=3)
     assert directory_ad_types(session, **args, active_ids=[], now=later) == {
-        "acc-1": ("SMART_PLUS",),
-        "acc-2": (),
+        "acc-1": {"SMART_PLUS": KINDS_BY_TYPE["SMART_PLUS"]},
+        "acc-2": {},
     }
 
-    # 有消耗但目录还没有任何对象的账户，不等复查立即请求全部类型。
+    # 有消耗但目录还没有任何对象的账户，不等复查立即请求全部类型全部层级。
     assert (
         directory_ad_types(session, **args, active_ids=["acc-2"], now=later)["acc-2"]
-        == DIRECTORY_AD_TYPES
+        == KINDS_BY_TYPE
     )
 
-    # 超过 24 小时，未使用类型重新探测一次。
+    # 超过 24 小时，未使用类型重新探测一次广告系列。
     stale = now + AD_TYPE_PROBE_INTERVAL + timedelta(minutes=1)
     assert directory_ad_types(session, **args, active_ids=[], now=stale) == {
-        "acc-1": DIRECTORY_AD_TYPES,
-        "acc-2": DIRECTORY_AD_TYPES,
+        "acc-1": {**PROBES, "SMART_PLUS": KINDS_BY_TYPE["SMART_PLUS"]},
+        "acc-2": PROBES,
     }
 
 
@@ -161,7 +171,7 @@ def test_trimmed_request_only_creates_runs_for_used_types(
         actor_id=sync_seed.actor_id,
         advertiser_ids=["acc-1", "acc-2"],
         scope="directory",
-        ad_types={"acc-1": ("SMART_PLUS",), "acc-2": ()},
+        ad_types={"acc-1": {"SMART_PLUS": KINDS_BY_TYPE["SMART_PLUS"]}, "acc-2": {}},
     )
     # Smart+ 的广告系列、广告组、广告与创意共 4 个；空账户本轮不请求。
     assert created == 4
@@ -169,3 +179,74 @@ def test_trimmed_request_only_creates_runs_for_used_types(
         select(AdDirectoryRun).where(AdDirectoryRun.tenant_id == sync_seed.tenant_id)
     ).all()
     assert {(r.advertiser_id, r.ad_type) for r in runs} == {("acc-1", "SMART_PLUS")}
+
+
+def test_queued_run_absorbs_later_identical_requests(session, sync_seed, monkeypatch):
+    """积压期间后续轮次的相同查询并入尚未开始的运行，不叠加；已领取后才新建。"""
+    from uuid import uuid4
+
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    base = {
+        "tenant_id": sync_seed.tenant_id,
+        "bc_id": "bc-a",
+        "frozen_route": _route(sync_seed),
+        "actor_id": sync_seed.actor_id,
+        "scope": "directory",
+        "ad_types": {
+            "acc-1": {"SMART_PLUS": ("campaign",)},
+            "acc-2": {"SMART_PLUS": ("campaign",)},
+        },
+    }
+    assert request_directory(session, advertiser_ids=["acc-1"], **base) == 1
+    # 账户集合不同即是另一次请求；acc-1 的相同查询并入排队中的运行。
+    assert request_directory(session, advertiser_ids=["acc-1", "acc-2"], **base) == 1
+    queued = session.exec(
+        select(AdDirectoryRun).where(
+            AdDirectoryRun.tenant_id == sync_seed.tenant_id,
+            AdDirectoryRun.advertiser_id == "acc-1",
+        )
+    ).one()
+    queued.claim_token = uuid4()
+    session.flush()
+    # 已被领取的运行可能已读过首页，不能代替新请求，因此 acc-1 新建一条。
+    assert request_directory(session, advertiser_ids=["acc-2", "acc-1"], **base) == 1
+
+
+def test_idle_accounts_refresh_daily(session, sync_seed):
+    now = datetime.now(UTC)
+    args = {"tenant_id": sync_seed.tenant_id, "advertiser_ids": ["acc-1", "acc-2"]}
+    # 从未成功过：全部需要刷新。
+    assert directory_due_accounts(session, **args, active_ids=[], now=now) == [
+        "acc-1",
+        "acc-2",
+    ]
+    session.add(
+        AdDirectoryRun(
+            tenant_id=sync_seed.tenant_id,
+            advertiser_id="acc-2",
+            bc_id="bc-a",
+            actor_id=sync_seed.actor_id,
+            connection_id=sync_seed.connection.id,
+            channel="OFFICIAL_API",
+            frozen_route=_route(sync_seed),
+            partition_key="a" * 64,
+            query={"include_deleted": True},
+            status="COMPLETE",
+            claim_generation=1,
+            completed_at=now - timedelta(hours=1),
+            kind="campaign",
+            ad_type="SMART_PLUS",
+        )
+    )
+    session.flush()
+    # acc-2 一小时前刚完成且无消耗：本轮跳过；有消耗的账户每轮都刷新。
+    assert directory_due_accounts(session, **args, active_ids=[], now=now) == ["acc-1"]
+    assert directory_due_accounts(session, **args, active_ids=["acc-2"], now=now) == [
+        "acc-1",
+        "acc-2",
+    ]
+    later = now + INACTIVE_DIRECTORY_INTERVAL
+    assert directory_due_accounts(session, **args, active_ids=[], now=later) == [
+        "acc-1",
+        "acc-2",
+    ]

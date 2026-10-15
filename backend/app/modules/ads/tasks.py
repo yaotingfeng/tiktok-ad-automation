@@ -7,6 +7,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from redis import Redis
+from sqlalchemy import text
 from sqlmodel import Session, select
 
 from app.core.config import settings
@@ -26,6 +27,7 @@ TASK_NAME = "ads.sync_step"
 register_dispatch_task(TASK_NAME, "ads-directory")
 
 _LEASE_SECONDS = 90
+_LOCK_TIMEOUT = "20s"
 
 
 def _context(tenant_id: str, actor_id: str) -> TenantContext:
@@ -63,6 +65,11 @@ def run_directory_step(
     if not settings.ADS_SYNC_ENABLED:
         return "WAIT"
     with Session(database_engine) as session:
+        # 等锁必须远短于任务软超时：软超时信号若在驱动等待中触发，回滚会失败，
+        # 连接带着未结束的事务和行锁泄漏，最终耗尽连接池。超时则正常报错回滚。
+        session.connection().execute(
+            text(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'")
+        )
         run = session.exec(
             select(AdDirectoryRun)
             .where(

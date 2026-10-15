@@ -479,3 +479,56 @@ def test_directory_dispatch_skips_enqueued_runs_and_is_bounded(
     assert enqueued() == total
     with Session(engine) as s, s.begin():
         assert job_tasks._dispatch_directories(s, now) == 0
+
+
+def test_lost_directory_message_is_redispatched_with_new_generation(
+    monkeypatch, committed_sync_seed, redis_client
+):
+    """消息发布后长时间无人领取视为丢失：换新代数重新入队，旧消息执行时直接失效。"""
+    from datetime import timedelta
+
+    from sqlmodel import Session, select
+
+    from app.core.db import engine
+    from app.jobs.models import PendingDispatch
+    from app.modules.ads.sync_models import AdDirectoryRun
+
+    seed, factory = committed_sync_seed
+    monkeypatch.setattr(job_tasks.settings, "ADS_SYNC_ENABLED", True)
+    monkeypatch.setattr(
+        job_tasks, "_reader_for", lambda **_kwargs: _ctx(_EmptyReader())
+    )
+    now = datetime(2026, 10, 12, 3, tzinfo=UTC)
+    job_tasks.plan_due_runs(database_engine=engine, redis_client=redis_client, now=now)
+    with factory() as s:
+        run = s.exec(
+            select(AdDirectoryRun).where(AdDirectoryRun.tenant_id == seed.tenant_id)
+        ).first()
+        key = f"ads.sync_step:{run.id}:{run.claim_generation}:page:{run.next_page}"
+        record = s.exec(
+            select(PendingDispatch).where(
+                PendingDispatch.tenant_id == seed.tenant_id,
+                PendingDispatch.task_key == key,
+            )
+        ).one()
+        record.published_at = now - timedelta(hours=1)
+        s.commit()
+        run_id, generation = run.id, run.claim_generation
+    # 发布不久：仍在等待执行，不重复入队。
+    with Session(engine) as s, s.begin():
+        job_tasks._dispatch_directories(s, now)
+    with factory() as s:
+        assert s.get(AdDirectoryRun, run_id).claim_generation == generation
+    later = now + job_tasks.DIRECTORY_MESSAGE_LOST_AFTER
+    with Session(engine) as s, s.begin():
+        job_tasks._dispatch_directories(s, later)
+    with factory() as s:
+        run = s.get(AdDirectoryRun, run_id)
+        assert run.claim_generation == generation + 1
+        assert s.exec(
+            select(PendingDispatch).where(
+                PendingDispatch.tenant_id == seed.tenant_id,
+                PendingDispatch.task_key
+                == f"ads.sync_step:{run_id}:{generation + 1}:page:{run.next_page}",
+            )
+        ).one()
