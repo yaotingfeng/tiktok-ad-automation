@@ -110,13 +110,13 @@ def test_detail_history_excludes_different_bc_and_kind(report_case):
     """不同 BC 和不同 kind 的任务项不会出现在历史中。"""
     from uuid import uuid4
 
+    from app.modules.accounts.models import TenantBC
     from app.modules.ad_management.models import (
         ManagementPreview,
         ManagementPreviewItem,
         ManagementTask,
         ManagementTaskItem,
     )
-    from app.modules.accounts.models import TenantBC
     from app.modules.reporting.detail import get_ad_detail
     from app.modules.reporting.query_models import FrozenSelectionRecord
 
