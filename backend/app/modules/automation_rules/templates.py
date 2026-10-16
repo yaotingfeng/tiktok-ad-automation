@@ -105,8 +105,7 @@ TEMPLATES: tuple[RuleTemplate, ...] = (
     RuleTemplate(
         "cold_start_no_delivery",
         "冷启动 · 新建不起量预警",
-        "创建满 2 天、近 3 天消耗不足 5 的系列。常见原因：素材拒审、目标 ROAS 过高、"
-        "预算或余额不足。建议保持仅通知，人工排查后再处理。",
+        "找出创建后仍花不动的系列，提醒排查。",
         _definition(
             level="campaign",
             aggregation="EACH",
@@ -123,8 +122,7 @@ TEMPLATES: tuple[RuleTemplate, ...] = (
     RuleTemplate(
         "test_adgroup_stop_loss",
         "测试期 · 广告组止损",
-        "创建满 2 天，近 3 天消耗超过 40、第 0 天 ROAS 低于 0.6，且昨天仍低于 0.7 时"
-        "暂停广告组。消耗门槛建议设为组日预算的 2 倍左右。",
+        "测试多日仍低回收的广告组，建议止损。",
         _definition(
             level="adgroup",
             aggregation="EACH",
@@ -142,8 +140,7 @@ TEMPLATES: tuple[RuleTemplate, ...] = (
     RuleTemplate(
         "test_material_cull",
         "测试期 · 低效素材淘汰",
-        "素材近 7 天消耗超过 20、第 0 天 ROAS 低于 0.5，且昨天仍低于 0.6 时暂停该素材，"
-        "把预算让给更好的素材。",
+        "筛出持续低回收的素材，减少无效消耗。",
         _definition(
             level="material",
             aggregation="EACH",
@@ -160,10 +157,7 @@ TEMPLATES: tuple[RuleTemplate, ...] = (
     RuleTemplate(
         "drama_test_fail",
         "测试期 · 剧目测试不过线",
-        "按剧合计所有账户：近 3 天消耗超过 300、第 0 天 ROAS 低于 0.7，且昨天仍低于 0.7 时"
-        "提示该剧测试不过线。会暂停整部剧的广告组，建议仅通知、人工确认后再关。"
-        "系列名须符合命名规范才能识别剧名。跨账户合计按规则时区每天 18:00 判断"
-        "（默认北京时间，各时区账户的昨天均已结束）。",
+        "跨账户汇总剧目表现，找出未达标的剧。",
         _definition(
             level="adgroup",
             aggregation="DRAMA",
@@ -180,9 +174,7 @@ TEMPLATES: tuple[RuleTemplate, ...] = (
     RuleTemplate(
         "scale_adgroup_budget",
         "放量 · 优质广告组加预算（组预算）",
-        "仅限广告组自带预算（非 CBO）：昨天消耗超过 15、第 0 天 ROAS 高于 1.2，今天已消耗"
-        "超过 5 且 ROAS 高于 1.1 时，预算提高 30%，最高 200，每天最多一次。"
-        "昨天消耗门槛建议设为组日预算的 75%。",
+        "组预算：表现稳定且起量时，小步加预算。",
         _definition(
             level="adgroup",
             aggregation="EACH",
@@ -201,9 +193,7 @@ TEMPLATES: tuple[RuleTemplate, ...] = (
     RuleTemplate(
         "scale_campaign_budget",
         "放量 · 优质系列加预算（CBO）",
-        "仅限系列预算（CBO）：昨天消耗超过 300、第 0 天 ROAS 高于 1.15，今天已消耗超过 50"
-        " 且 ROAS 高于 1.1 时，预算提高 20%，最高 10000，每天最多一次。"
-        "昨天消耗门槛建议设为系列日预算的 70%~80%。",
+        "系列预算：表现稳定且起量时，小步加预算。",
         _definition(
             level="campaign",
             aggregation="EACH",
@@ -222,9 +212,7 @@ TEMPLATES: tuple[RuleTemplate, ...] = (
     RuleTemplate(
         "relax_roas_target",
         "放量 · 高 ROAS 跑不动降目标",
-        "创建满 3 天，昨天消耗在 10~100 之间、第 0 天 ROAS 高于 1.3，且近 3 天仍高于 1.25 时，"
-        "目标 ROAS 下调 0.05，最低 1.0，每 48 小时最多一次。注意：频繁改出价会重新学习，"
-        "也可能影响出价保障资格。",
+        "回收较好但花不动时，适当降低 ROAS 目标。",
         _definition(
             level="campaign",
             aggregation="EACH",
@@ -252,8 +240,7 @@ TEMPLATES: tuple[RuleTemplate, ...] = (
     RuleTemplate(
         "decline_budget_trim",
         "衰退 · 效果回落降预算（CBO）",
-        "仅限系列预算（CBO）：昨天消耗超过 300、第 0 天 ROAS 低于 0.85，且近 3 天低于 0.9 时，"
-        "预算降低 20%，最低 200，每天最多一次。比直接暂停更适合已经跑量的系列。",
+        "系列效果持续回落时，适当收缩预算。",
         _definition(
             level="campaign",
             aggregation="EACH",
@@ -271,8 +258,7 @@ TEMPLATES: tuple[RuleTemplate, ...] = (
     RuleTemplate(
         "intraday_spend_anomaly",
         "风控 · 单系列盘中异常消耗",
-        "系列今天消耗超过 500 且第 0 天 ROAS 低于 0.4 时提醒，用于发现链接失效、出价设置错误"
-        "等明显异常。当天收入仍在回传，盘中 ROAS 偏低是常态，不建议改为自动暂停。",
+        "发现今天花费过高、回收过低的系列。",
         _definition(
             level="campaign",
             aggregation="EACH",
@@ -288,8 +274,7 @@ TEMPLATES: tuple[RuleTemplate, ...] = (
     RuleTemplate(
         "daily_spend_cap",
         "风控 · 全局日消耗超计划",
-        "所选账户今天合计消耗超过日计划（示例 20000）时提醒。阈值按公司当日投放计划设置；"
-        "命中后会暂停全部系列，务必保持仅通知。",
+        "全部账户当天合计花费超计划时提醒。",
         _definition(
             level="campaign",
             aggregation="ALL",

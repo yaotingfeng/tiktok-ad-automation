@@ -16,7 +16,7 @@ export const statusLabel: Record<string, string> = {
   CANCELLED: "已取消",
 }
 
-const KIND_LABEL: Record<string, string> = {
+export const KIND_LABEL: Record<string, string> = {
   campaign: "系列",
   adgroup: "广告组",
   ad: "广告",
@@ -119,4 +119,35 @@ export function displayTime(value?: string | null) {
   return value
     ? new Date(value).toLocaleString("zh-CN", { hour12: false })
     : "—"
+}
+
+// 平台接收与目录回读是不同阶段，不能把“已接收”显示成“已投放”。
+const RECEIPT_LABEL: Record<string, string> = {
+  PENDING: "待执行",
+  ACCEPTED: "平台已接收",
+  REJECTED: "平台已拒绝",
+  NOT_SENT: "未发送",
+  UNKNOWN: "结果待核查",
+  NO_CHANGE: "无需修改",
+  CONFLICT: "数据冲突",
+  UNSUPPORTED: "不支持",
+  CANCELLED: "已取消",
+  DELIVERED: "已送达",
+  ATTEMPT_RECORDED: "已记录请求",
+  REFRESH_PENDING: "等待数据刷新",
+  NEEDS_REVIEW: "需要核查",
+  RECONCILE_REQUESTED: "已申请核查",
+  management_original_changed: "原值已变化，请重新操作",
+  management_capability_unverified: "操作权限尚未核实",
+  management_preview_expired: "操作预览已过期",
+  route_authorization_changed: "授权已变化，请重新操作",
+  route_binding_changed: "BC 绑定已变化，请重新操作",
+  route_contract_changed: "接口能力已变化，请重新操作",
+  account_access_denied: "账户授权不可用",
+  connection_unavailable: "连接不可用",
+}
+
+/** 未知状态给运营中文提示，原始代码保留在 title 中供排查。 */
+export function receiptLabel(value?: string | null) {
+  return value ? (RECEIPT_LABEL[value] ?? "需要核查") : "—"
 }

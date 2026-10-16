@@ -1,5 +1,7 @@
 import { useQuery } from "@tanstack/react-query"
+import { ChevronRight } from "lucide-react"
 import type { TemplatePublic } from "@/client"
+import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
@@ -7,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Skeleton } from "@/components/ui/skeleton"
 import { templatesQuery } from "./queries"
 
 /** 从模板新建：选中后以模板名与定义打开编辑器，阈值由用户修改。 */
@@ -22,29 +25,43 @@ export function TemplatePicker({
   const templates = useQuery(templatesQuery(tenantId))
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[min(36rem,85dvh)] flex-col overflow-hidden sm:max-w-lg">
+        <DialogHeader className="shrink-0 pr-6">
           <DialogTitle>从模板新建</DialogTitle>
           <DialogDescription>
-            模板阈值为示例值，默认仅通知；请按实际情况修改后再选择执行模式。
+            选择场景后调整条件。所有模板默认仅通知。
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-2 sm:grid-cols-2">
-          {templates.isPending && (
-            <p className="text-sm text-muted-foreground">加载中…</p>
+        <div className="min-h-0 overflow-y-auto -mx-1 px-1">
+          {templates.isPending && <Skeleton className="h-40 w-full" />}
+          {templates.isError && (
+            <div className="flex items-center justify-between gap-2 text-sm">
+              <p>模板加载失败，请重试。</p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void templates.refetch()}
+              >
+                重试
+              </Button>
+            </div>
           )}
           {(templates.data?.items ?? []).map((template) => (
-            <button
+            <Button
               key={template.key}
               type="button"
-              className="flex flex-col gap-1 rounded-md border p-3 text-left hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
+              variant="ghost"
+              className="h-auto w-full justify-between gap-3 whitespace-normal px-3 py-2.5 text-left"
               onClick={() => onPick(template)}
             >
-              <span className="font-medium">{template.name}</span>
-              <span className="text-sm text-muted-foreground">
-                {template.description}
+              <span className="flex min-w-0 flex-col gap-0.5">
+                <span className="font-medium">{template.name}</span>
+                <span className="text-xs font-normal text-muted-foreground">
+                  {template.description}
+                </span>
               </span>
-            </button>
+              <ChevronRight className="shrink-0" />
+            </Button>
           ))}
         </div>
       </DialogContent>

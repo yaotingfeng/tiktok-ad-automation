@@ -70,3 +70,29 @@ test("状态中文映射", () => {
   expect(statusLabel({ account_status: "ENABLE" }).label).toBe("正常")
   expect(statusLabel({ account_status: "STATUS_ENABLE" }).label).toBe("正常")
 })
+
+// 真实报表中的部分通过包含 REVIEW，不能被泛化成“审核中”。
+test("部分通过和审核通过优先于审核中，暂停仍优先", () => {
+  for (const prefix of ["AD", "ADGROUP", "CAMPAIGN"]) {
+    expect(
+      statusLabel({
+        operation_status: "ENABLE",
+        secondary_status: `${prefix}_STATUS_REVIEW_PARTIALLY_APPROVED`,
+      }).label,
+    ).toBe("部分审核通过")
+    expect(
+      statusLabel({ secondary_status: `${prefix}_STATUS_REVIEW_APPROVED` })
+        .label,
+    ).toBe("审核通过")
+    expect(
+      statusLabel({ secondary_status: `${prefix}_STATUS_REVIEW_PENDING` })
+        .label,
+    ).toBe("审核中")
+  }
+  expect(
+    statusLabel({
+      operation_status: "DISABLE",
+      secondary_status: "AD_STATUS_REVIEW_PARTIALLY_APPROVED",
+    }).label,
+  ).toBe("已暂停")
+})

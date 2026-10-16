@@ -2444,3 +2444,29 @@ test("第一步输入页不再填写投放排期", async ({ page }) => {
   ).toBeVisible()
   await expect(page.getByText("投放排期", { exact: true })).toHaveCount(0)
 })
+
+test("准备期间不轮询空国家目录，就绪后只读取一次共享目录", async ({ page }) => {
+  const api = await buildsBoundary(page)
+  api.summary.status = "PREPARING"
+  api.summary.preparation_phase = "scenes"
+  await page.clock.install()
+  await page.goto(`/tenants/${tenant}/build-drafts/${D}?bc_id=${bc}`)
+  await expect(
+    page.getByRole("heading", { name: "准备与调整", exact: true }),
+  ).toBeVisible()
+  await page.clock.fastForward(7_000)
+  expect(
+    api.requests.filter(
+      (r) => r.method === "GET" && r.path.endsWith("/targeting"),
+    ),
+  ).toHaveLength(0)
+  api.summary.status = "READY"
+  api.summary.preparation_phase = "done"
+  await page.clock.fastForward(3_000)
+  await expect(page.getByText(/已核实 .* 个账户，共同可投/)).toBeVisible()
+  expect(
+    api.requests.filter(
+      (r) => r.method === "GET" && r.path.endsWith("/targeting"),
+    ),
+  ).toHaveLength(1)
+})

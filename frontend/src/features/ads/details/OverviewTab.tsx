@@ -51,7 +51,8 @@ function StatusValue({
   if (!value) return <>—</>
   let label = value
   if (kind === "operation") label = STATUS_VALUES[value] ?? value
-  else if (kind === "review") label = REVIEW_VALUES[value] ?? value
+  else if (kind === "review" && REVIEW_VALUES[value])
+    label = REVIEW_VALUES[value]
   else {
     const parsed = statusLabel({ secondary_status: value })
     if (parsed.label !== "未知") label = parsed.label

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { ColumnDef } from "@tanstack/react-table"
 import { Plus } from "lucide-react"
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   AutomationRulesService,
   type CatalogPublic,
@@ -30,7 +30,13 @@ import {
 } from "@/components/ui/select"
 import { displayTime } from "@/features/accounts/presentation"
 import { ServerTable } from "@/features/tenants/shared"
-import { catalogQuery, overviewQuery, ruleKeys, rulesQuery } from "./queries"
+import {
+  catalogQuery,
+  overviewQuery,
+  ruleKeys,
+  rulesQuery,
+  templatesQuery,
+} from "./queries"
 import { type EditorTarget, RuleEditorSheet } from "./RuleEditorSheet"
 import {
   ACTION_LABELS,
@@ -167,6 +173,10 @@ export function RuleList({
   const client = useQueryClient()
   const rules = useQuery(rulesQuery(tenantId))
   const catalog = useQuery(catalogQuery(tenantId))
+  // 内置模板随规则页预取，点击时复用同一租户的缓存，避免弹窗打开后才往返。
+  useEffect(() => {
+    if (write) void client.prefetchQuery(templatesQuery(tenantId))
+  }, [client, tenantId, write])
   const [search, setSearch] = useState("")
   const [editor, setEditor] = useState<EditorTarget | null>(null)
   const [removing, setRemoving] = useState<RulePublic | null>(null)

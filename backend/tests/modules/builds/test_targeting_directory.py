@@ -293,3 +293,31 @@ def test_other_bc_scene_never_expands_reference_or_batch_countries(
     assert region_directory(
         session, context=context, route=route, draft_id=draft_id, minis_id="mini"
     ).region_codes == ["US"]
+
+
+def test_common_country_facts_are_aggregated_in_one_query(
+    session, context, directory_env
+):
+    """国家校验不重复展开同一批场景 JSON；账户未核实仍须阻止 READY。"""
+    from sqlalchemy import event
+
+    from app.modules.builds.targeting_directory import region_directory
+
+    draft_id, route, _ = directory_env
+    statements = []
+
+    def record(_conn, _cursor, statement, _parameters, _context, _many):
+        if "latest_targeting_scene" in statement:
+            statements.append(statement)
+
+    connection = session.connection()
+    event.listen(connection, "before_cursor_execute", record)
+    try:
+        result = region_directory(
+            session, context=context, route=route, draft_id=draft_id, minis_id="mini"
+        )
+    finally:
+        event.remove(connection, "before_cursor_execute", record)
+    assert result.region_codes == ["US"]
+    assert result.account_count == result.verified_account_count == 2
+    assert len(statements) == 1

@@ -1,5 +1,4 @@
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query"
-import { useNavigate } from "@tanstack/react-router"
 import { AxiosError } from "axios"
 import { Info, TriangleAlert } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
@@ -9,6 +8,7 @@ import {
   type FrozenSelection,
   type ManagementItemPublic,
   type ManagementPreviewPublic,
+  type ManagementTaskPublic,
   type MutationSpec,
   type RenameRowProblem,
   type RenameRule,
@@ -58,6 +58,7 @@ type Props = {
   dimension: AdsDimension
   open: boolean
   onOpenChange: (open: boolean) => void
+  onSubmitted: (task: ManagementTaskPublic) => void
 }
 
 type MutationMode = MutationSpec["mode"]
@@ -484,8 +485,8 @@ export function ManagementPreviewSheet({
   dimension,
   open,
   onOpenChange,
+  onSubmitted,
 }: Props) {
-  const navigate = useNavigate()
   const [mode, setMode] = useState<MutationMode>("set")
   // input 是输入框里的原文，value 是防抖后用于生成预览的数值。
   const [input, setInput] = useState("")
@@ -681,11 +682,8 @@ export function ManagementPreviewSheet({
     },
     onSuccess: (task) => {
       onOpenChange(false)
-      void navigate({
-        to: "/tenants/$tenantId/ad-management-tasks/$taskId",
-        params: { tenantId, taskId: task.task_id },
-        search: { bc_id: task.bc_id },
-      })
+      // 提交是异步受理，回到当前报表继续操作；由工作区提供主动查看记录的入口。
+      onSubmitted(task)
     },
   })
   const changes = items.filter((item) => rowGroup(item) === "change")

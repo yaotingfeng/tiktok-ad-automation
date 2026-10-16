@@ -16,7 +16,11 @@ export function useTargetingDirectory(
       draft?.revision,
       draft?.status,
     ],
-    enabled: !!bcId && !!draft && draft.bc_id === bcId,
+    // 后端在 PREPARING 时只返回空目录；等摘要 READY 后再核对，避免每两秒发无效请求。
+    enabled:
+      !!bcId && !!draft && draft.bc_id === bcId && draft.status === "READY",
+    // 准备页和定向卡片共享同一目录；新修订/重新准备仍用新键读取。
+    staleTime: 15_000,
     queryFn: async ({ signal }) =>
       (
         await BuildsService.targetingOptions({
@@ -24,6 +28,5 @@ export function useTargetingDirectory(
           signal,
         })
       ).data,
-    refetchInterval: draft?.status === "PREPARING" ? 2000 : false,
   })
 }

@@ -149,19 +149,18 @@ def region_directory(
         session, context=context, route=route, advertiser_id=None, capability="read"
     )
     valid, eligible = _eligible(context, route, draft_id, minis_id)
-    verified = session.exec(
-        select(func.count(func.distinct(valid.c.advertiser_id)))
-    ).one()
+    verified = select(
+        func.count(func.distinct(valid.c.advertiser_id))
+    ).scalar_subquery()
     total = (
-        session.exec(
-            select(func.count())
-            .select_from(DraftAccount)
-            .where(
-                col(DraftAccount.tenant_id) == context.tenant_id,
-                col(DraftAccount.draft_id) == draft_id,
-                DraftAccount.bc_id == route.bc_id,
-            )
-        ).one()
+        select(func.count())
+        .select_from(DraftAccount)
+        .where(
+            col(DraftAccount.tenant_id) == context.tenant_id,
+            col(DraftAccount.draft_id) == draft_id,
+            DraftAccount.bc_id == route.bc_id,
+        )
+        .scalar_subquery()
         if draft_id
         else verified
     )
@@ -174,15 +173,28 @@ def region_directory(
         query = query.having(
             func.count(func.distinct(eligible.c.advertiser_id)) == total
         )
-    countries = list(session.exec(query).all()) if total and total == verified else []
+    country_rows = query.subquery()
+    countries_query = select(
+        func.array_agg(country_rows.c.region_code)
+    ).scalar_subquery()
+    # 同一条 SQL 汇总账户数和共同国家，共用一次场景 CTE；避免重复读取/展开场景 JSON，
+    # 也避免并发场景更新使两个查询分别看到不同版本。未知账户仍计入总数、禁止缩小交集。
+    total_count, verified_count, country_codes = session.exec(
+        select(total, verified, countries_query)
+    ).one()
+    countries = (
+        sorted(country_codes or [])
+        if total_count and total_count == verified_count
+        else []
+    )
     return TargetingDirectory(
         region_codes=countries,
-        account_count=total,
-        verified_account_count=verified,
+        account_count=total_count,
+        verified_account_count=verified_count,
         state="READY"
         if countries
         else "PENDING"
-        if verified < total
+        if verified_count < total_count
         else "UNAVAILABLE",
     )
 

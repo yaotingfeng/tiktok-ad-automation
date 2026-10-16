@@ -11,7 +11,9 @@ import { useTenantScope } from "@/features/tenants/TenantScope"
 import { WorkspacePageTitle } from "@/features/workspace/WorkspacePageTitle"
 import {
   displayTime,
+  KIND_LABEL,
   mutationText,
+  receiptLabel,
   sourceText,
   statusLabel,
   targetText,
@@ -293,8 +295,8 @@ export function ManagementTaskDetailPage() {
                     <tr className="border-b text-left">
                       <th className="p-2">目标</th>
                       <th className="p-2">执行</th>
-                      <th className="p-2">交付</th>
-                      <th className="p-2">观察</th>
+                      <th className="p-2">请求送达</th>
+                      <th className="p-2">数据核对</th>
                       <th className="p-2">请求</th>
                     </tr>
                   </thead>
@@ -308,17 +310,33 @@ export function ManagementTaskDetailPage() {
                           className="max-w-48 truncate p-2"
                           title={item.ref.remote_id}
                         >
-                          {item.ref.kind} · {item.ref.remote_id}
+                          {KIND_LABEL[item.ref.kind] ?? "对象"} ·{" "}
+                          {item.ref.remote_id}
                         </td>
-                        <td className="p-2">{item.execution_result ?? "—"}</td>
-                        <td className="p-2">{item.delivery_status ?? "—"}</td>
-                        <td className="p-2">{item.observation_state ?? "—"}</td>
+                        <td
+                          className="p-2"
+                          title={item.execution_result ?? undefined}
+                        >
+                          {receiptLabel(item.execution_result)}
+                        </td>
+                        <td
+                          className="p-2"
+                          title={item.delivery_status ?? undefined}
+                        >
+                          {receiptLabel(item.delivery_status)}
+                        </td>
+                        <td
+                          className="p-2"
+                          title={item.observation_state ?? undefined}
+                        >
+                          {receiptLabel(item.observation_state)}
+                        </td>
                         <td className="p-2">
                           {item.attempts?.length
                             ? item.attempts
                                 .map(
                                   (attempt) =>
-                                    `${attempt.attempt}:${attempt.outcome}`,
+                                    `第 ${attempt.attempt} 次：${receiptLabel(attempt.outcome)}`,
                                 )
                                 .join(", ")
                             : "—"}

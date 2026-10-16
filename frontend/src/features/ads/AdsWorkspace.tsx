@@ -1,11 +1,12 @@
 import { useMutation, useQuery } from "@tanstack/react-query"
-import { useNavigate } from "@tanstack/react-router"
+import { Link, useNavigate } from "@tanstack/react-router"
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
   AdsReportingService,
   type FrozenSelection,
   type ReportRow,
 } from "@/client"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -75,6 +76,10 @@ export function AdsWorkspace() {
   const ads = useAdsQuery(requestSearch, queryRevision)
   const items = ads.query.data?.items ?? []
   const catalog = useMetricCatalog()
+  const [submittedTask, setSubmittedTask] = useState<{
+    task_id: string
+    bc_id: string
+  } | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [frozenSelection, setFrozenSelection] =
     useState<FrozenSelection | null>(null)
@@ -272,6 +277,7 @@ export function AdsWorkspace() {
     clearManagementPreview()
     setSyncNotice(null)
     setActionError(null)
+    setSubmittedTask(null)
     setAppliedBcId(currentBcId)
     setCursorHistory([])
     closeDetail()
@@ -515,6 +521,21 @@ export function AdsWorkspace() {
   }
   return (
     <div className="flex min-w-0 flex-col gap-3">
+      {submittedTask && submittedTask.bc_id === currentBcId && (
+        <Alert>
+          <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
+            <span>操作已提交。可继续查看和操作当前报表，结果见操作记录。</span>
+            <Link
+              to="/tenants/$tenantId/ad-management-tasks/$taskId"
+              params={{ tenantId: tenantId!, taskId: submittedTask.task_id }}
+              search={{ bc_id: submittedTask.bc_id }}
+              className="underline underline-offset-4"
+            >
+              查看操作记录
+            </Link>
+          </AlertDescription>
+        </Alert>
+      )}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <WorkspacePageTitle>广告报表</WorkspacePageTitle>
@@ -748,6 +769,12 @@ export function AdsWorkspace() {
           dimension={managementDimension}
           open={previewOpen}
           onOpenChange={setPreviewOpen}
+          onSubmitted={(task) => {
+            if (scopeRef.current !== `${tenantId}:${task.bc_id}`) return
+            setSubmittedTask(task)
+            ads.selection.clear()
+            clearManagementPreview()
+          }}
         />
       )}
     </div>

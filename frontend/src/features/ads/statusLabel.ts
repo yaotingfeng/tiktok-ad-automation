@@ -7,6 +7,9 @@ type Tone = "default" | "secondary" | "destructive" | "outline"
 const SECONDARY: Array<[RegExp, string, Tone]> = [
   [/DELETE/, "已删除", "outline"],
   [/AUDIT_DENY|REJECT|NOT_APPROVE/, "未通过", "destructive"],
+  // 部分通过/已通过也含 REVIEW，须在“等待审核”之前识别；通过不等于正在投放。
+  [/REVIEW_PARTIALLY_APPROVED/, "部分审核通过", "secondary"],
+  [/REVIEW_APPROVED|AUDIT_APPROVED/, "审核通过", "secondary"],
   [/AUDIT|REVIEW/, "审核中", "secondary"],
   [/BUDGET_EXCEED|OFFLINE_BUDGET|BALANCE/, "预算不足", "destructive"],
   [/NOT_START|NO_SCHEDULE|TIME_NO_REACH|DONE/, "不在排期", "secondary"],

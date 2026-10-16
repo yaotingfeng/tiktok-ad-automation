@@ -539,3 +539,79 @@ test.describe("浏览器在纽约时区", () => {
     })
   })
 })
+
+test("模板提前加载，重开复用缓存", async ({ page }) => {
+  await automationBoundary(page)
+  let calls = 0
+  await page.route("**/automation-rules/templates", async (route) => {
+    calls += 1
+    if (calls === 1)
+      return route.fulfill({ status: 500, json: { message: "unavailable" } })
+    return route.fallback()
+  })
+  await page.goto(`/tenants/${TENANT}/automation-rules`)
+  // 在点击之前即已读取，打开后复用结果。
+  await expect.poll(() => calls).toBeGreaterThan(0)
+  await page.getByRole("button", { name: "从模板新建" }).click()
+  await expect(page.getByRole("button", { name: /剧级止损/ })).toBeVisible()
+  const dialog = page.getByRole("dialog", { name: "从模板新建" })
+  const rect = await dialog.boundingBox()
+  expect(rect!.height).toBeLessThanOrEqual(
+    page.viewportSize()!.height * 0.85 + 1,
+  )
+  const loadedCalls = calls
+  await dialog.getByRole("button", { name: "Close", exact: true }).click()
+  await page.getByRole("button", { name: "从模板新建" }).click()
+  await expect(page.getByRole("button", { name: /剧级止损/ })).toBeVisible()
+  expect(calls).toBe(loadedCalls)
+})
+
+test("模板请求失败后在弹窗内重试，长列表可滚动且窄屏不溢出", async ({
+  page,
+}) => {
+  await automationBoundary(page)
+  let failed = true
+  await page.route("**/automation-rules/templates", async (route) => {
+    if (failed)
+      return route.fulfill({ status: 500, json: { message: "unavailable" } })
+    return route.fulfill({
+      json: {
+        items: Array.from({ length: 10 }, (_, index) => ({
+          key: `template-${index}`,
+          name: `测试期 · 广告组止损 ${index + 1}`,
+          description: "测试多日仍低回收的广告组，建议止损。",
+          definition: {},
+        })),
+      },
+    })
+  })
+  await page.setViewportSize({ width: 390, height: 640 })
+  await page.goto(`/tenants/${TENANT}/automation-rules`)
+  await page.getByRole("button", { name: "从模板新建" }).click()
+  const dialog = page.getByRole("dialog", { name: "从模板新建" })
+  await expect(dialog.getByText("模板加载失败，请重试。")).toBeVisible({
+    timeout: 10_000,
+  })
+  failed = false
+  await dialog.getByRole("button", { name: "重试", exact: true }).click()
+  const last = dialog.getByRole("button", { name: /广告组止损 10/ })
+  await last.scrollIntoViewIfNeeded()
+  await expect(last).toBeVisible()
+  await expect(
+    dialog.getByRole("heading", { name: "从模板新建" }),
+  ).toBeInViewport()
+  const rect = (await dialog.boundingBox())!
+  expect(rect.width).toBeLessThanOrEqual(390)
+  expect(rect.height).toBeLessThanOrEqual(640 * 0.85 + 1)
+  expect(rect.y).toBeGreaterThanOrEqual(0)
+  await page.screenshot({
+    path: test.info().outputPath("template-picker-mobile.png"),
+  })
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await dialog
+    .getByRole("button", { name: /广告组止损 1\b/ })
+    .scrollIntoViewIfNeeded()
+  await page.screenshot({
+    path: test.info().outputPath("template-picker-desktop.png"),
+  })
+})

@@ -327,10 +327,14 @@ async function managementBoundary(
 }
 
 test.describe("广告管理工作台", () => {
-  test("当前选择打开预览并提交后进入任务详情", async ({ page }) => {
+  test("当前选择提交后留在报表，保留筛选并可主动查看中文回执", async ({
+    page,
+  }) => {
     const { previewBodies } = await managementBoundary(page)
     await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
     await page.getByRole("tab", { name: "系列", exact: true }).click()
+    await page.getByRole("textbox", { name: "搜索广告" }).fill("总裁归来")
+    await page.getByRole("button", { name: "应用筛选" }).click()
     await page
       .getByRole("checkbox", { name: "选择 嘉书-总裁归来-测试" })
       .check()
@@ -376,13 +380,32 @@ test.describe("广告管理工作台", () => {
     expect(previewBodies[0]?.mutation?.include_parents).toEqual([])
     await expect(page.getByText("五分钟内有效")).toBeVisible()
     await page.getByRole("button", { name: "提交，修改 1 个对象" }).click()
-    await expect(page).toHaveURL(
-      new RegExp(`/tenants/${TENANT}/ad-management-tasks/${taskId}`),
+    await expect(page).toHaveURL(new RegExp(`/tenants/${TENANT}/ads\\?`))
+    await expect(page.getByRole("textbox", { name: "搜索广告" })).toHaveValue(
+      "总裁归来",
     )
+    await expect(
+      page.getByRole("heading", { name: "广告报表", exact: true }),
+    ).toBeVisible()
+    await expect(
+      page.getByRole("tab", { name: "系列", exact: true }),
+    ).toHaveAttribute("data-state", "active")
+    await page.getByRole("link", { name: "查看操作记录", exact: true }).click()
+    await expect(page).toHaveURL(new RegExp(`/ad-management-tasks/${taskId}`))
     await expect(
       page.getByRole("heading", { name: "操作记录详情" }),
     ).toBeVisible()
-    await expect(page.getByText("REFRESH_PENDING")).toBeVisible()
+    await expect(page.getByText("等待数据刷新", { exact: true })).toBeVisible()
+    await expect(
+      page.getByRole("cell", { name: "平台已接收", exact: true }),
+    ).toBeVisible()
+    await expect(
+      page.getByRole("cell", { name: "已送达", exact: true }),
+    ).toBeVisible()
+    await expect(
+      page.getByRole("cell", { name: "第 1 次：平台已接收", exact: true }),
+    ).toBeVisible()
+    await expect(page.getByText("REFRESH_PENDING")).toHaveCount(0)
     await page.getByRole("button", { name: /刷新重试/ }).click()
     await expect(page.getByText("已排队重试定向刷新")).toBeVisible()
   })
@@ -683,9 +706,15 @@ test.describe("广告管理工作台", () => {
     ).toBeDisabled()
     await page.getByLabel("后缀", { exact: true }).fill("")
     await page.getByRole("button", { name: "提交，修改 1 个对象" }).click()
-    await expect(page).toHaveURL(
-      new RegExp(`/tenants/${TENANT}/ad-management-tasks/${taskId}`),
-    )
+    await expect(page).toHaveURL(new RegExp(`/tenants/${TENANT}/ads\\?`))
+    await expect(
+      page.getByRole("heading", { name: "广告报表", exact: true }),
+    ).toBeVisible()
+    await expect(
+      page.getByRole("tab", { name: "系列", exact: true }),
+    ).toHaveAttribute("data-state", "active")
+    await page.getByRole("link", { name: "查看操作记录", exact: true }).click()
+    await expect(page).toHaveURL(new RegExp(`/ad-management-tasks/${taskId}`))
   })
 
   test("按表格改名：粘贴两列，找不到的 ID 标为异常", async ({ page }) => {
