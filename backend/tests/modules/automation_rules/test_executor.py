@@ -20,7 +20,7 @@ from app.modules.accounts.models import (
 )
 from app.modules.ad_management.models import ManagementTask
 from app.modules.ads.models import AdObject
-from app.modules.automation_rules.executor import execute_hits
+from app.modules.automation_rules.executor import _merge_target, execute_hits
 from app.modules.automation_rules.models import (
     AutomationActionLedger,
     AutomationRule,
@@ -1254,3 +1254,13 @@ def test_real_recheck_allows_reenable_after_roas_recovers(session, env):
         require_manage=True,
     )
     assert summary["conflicts"] == 0 and summary["submitted"] == 1
+
+
+def test_merge_target_unions_material_uses_from_several_hits():
+    first = {"key": "material:a:p1", "kind": "material", "material_uses": [{"u": 1}]}
+    second = {"key": "material:a:p1", "kind": "material", "material_uses": [{"u": 2}]}
+    targets: dict = {}
+    _merge_target(targets, first)
+    _merge_target(targets, second)
+    _merge_target(targets, second)
+    assert targets["material:a:p1"]["material_uses"] == [{"u": 1}, {"u": 2}]

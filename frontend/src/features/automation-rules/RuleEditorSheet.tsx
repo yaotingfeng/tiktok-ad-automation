@@ -33,11 +33,12 @@ import {
   ACTION_LABELS,
   type ActionChoice,
   type ActionType,
-  AGGREGATION_LABELS,
   type Aggregation,
   accountTimezoneAllowed,
   actionChoice,
   actionLevels,
+  aggregationLabel,
+  aggregationOptions,
   applyActionChoice,
   type Definition,
   emptyDefinition,
@@ -409,7 +410,9 @@ export function RuleEditorSheet({
               update((draft) => {
                 const level = value as Level
                 draft.apply_to.level = level
-                if (level === "material") draft.aggregation = "EACH"
+                // 切换层级后原口径不可用（素材不按剧合计、视频口径只用于素材）时回到每个对象。
+                if (!aggregationOptions(level).includes(draft.aggregation))
+                  draft.aggregation = "EACH"
                 const allowed = actionLevels(
                   draft.aggregation,
                   level,
@@ -491,15 +494,21 @@ export function RuleEditorSheet({
             })
           }
         >
-          {(Object.keys(AGGREGATION_LABELS) as Aggregation[]).map((key) => (
+          {aggregationOptions(def.apply_to.level).map((key) => (
             <Choice
               key={key}
               value={key}
-              label={AGGREGATION_LABELS[key]}
-              disabled={key !== "EACH" && def.apply_to.level === "material"}
+              label={aggregationLabel(key, def.apply_to.level)}
             />
           ))}
         </RadioGroup>
+        {def.apply_to.level === "material" && (
+          <p className="text-xs text-muted-foreground">
+            {def.aggregation === "VIDEO"
+              ? "同一视频在所选各账户的数据合计判断，命中后暂停该视频在这些账户里的全部使用；未对上视频的素材不参与。"
+              : "每个账户里的素材单独判断，命中后只暂停该账户内用到它的广告；Spark 广告每条广告单独发帖，等同于单条广告内的素材。"}
+          </p>
+        )}
       </Section>
       <Section title="条件">
         <ConditionRows

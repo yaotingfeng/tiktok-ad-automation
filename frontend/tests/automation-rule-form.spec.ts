@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test"
 import {
   actionLevels,
+  aggregationLabel,
+  aggregationOptions,
   emptyDefinition,
   fromZonedInput,
   minFrequency,
@@ -56,6 +58,15 @@ test("执行层级与后端一致", () => {
     "material",
   ])
   expect(actionLevels("EACH", "ad", "BUDGET")).toEqual([])
+})
+
+test("素材按单账户或同一视频跨账户判断", () => {
+  expect(aggregationOptions("material")).toEqual(["EACH", "VIDEO"])
+  expect(aggregationOptions("ad")).toEqual(["EACH", "DRAMA", "ALL"])
+  expect(aggregationLabel("EACH", "material")).toBe("每个素材（单账户内）")
+  expect(aggregationLabel("EACH", "ad")).toBe("每个对象")
+  // 视频口径只能对素材本身执行。
+  expect(actionLevels("VIDEO", "material", "PAUSE")).toEqual(["material"])
 })
 
 test("素材层级最短 1 小时", () => {

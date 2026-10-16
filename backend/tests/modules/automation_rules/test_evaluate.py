@@ -20,6 +20,7 @@ def ent(
     currency="USD",
     name=None,
     uses=(),
+    video=None,
     **attrs,
 ):
     return Entity(
@@ -37,6 +38,7 @@ def ent(
         parent_key=parent,
         attributes={"name": name or rid, **attrs},
         material_uses=tuple(uses),
+        video=video,
     )
 
 
@@ -324,3 +326,90 @@ def test_conflict_recheck_known_false_condition_resolves_unknown(spend, unknown)
     result = evaluate(definition, inputs(GROUPS, facts), strict_facts=True)
     assert not result.hits
     assert ("adgroup:a:g1" in result.unknown_targets) is unknown
+
+
+def _use(adv, ad, vid="v1"):
+    return {
+        "advertiser_id": adv,
+        "ad_remote_id": ad,
+        "platform_material_id": vid,
+        "ad_material_id": f"m-{ad}",
+        "material_type": "VIDEO",
+    }
+
+
+def test_ad_judged_material_action_only_pauses_hit_ad_uses():
+    # 同一主素材被 x1、x2 两条广告共用；只有 x1 命中，只能关 x1 里的这条素材。
+    items = [
+        *GROUPS,
+        ent("ad", "a", "x2", parent="adgroup:a:g1"),
+        ent("material", "a", "p1", uses=[_use("a", "x1"), _use("a", "x2")]),
+    ]
+    facts = {"ad:a:x1": {"spend": Decimal("20")}, "ad:a:x2": {"spend": Decimal("1")}}
+    result = evaluate(
+        rule(
+            apply_to={"level": "ad", "status": "ACTIVE"},
+            action={"type": "PAUSE", "level": "material"},
+            schedule={"frequency": "1H", "window": "CONTINUOUS"},
+        ),
+        inputs(items, facts),
+    )
+    assert [h.subject_key for h in result.hits] == ["ad:a:x1"]
+    (target,) = result.hits[0].targets
+    assert target.key == "material:a:p1"
+    assert [u["ad_remote_id"] for u in target.material_uses] == ["x1"]
+
+
+def test_material_judged_directly_pauses_all_account_uses():
+    material = ent("material", "a", "p1", uses=[_use("a", "x1"), _use("a", "x2")])
+    result = evaluate(
+        rule(
+            apply_to={"level": "material", "status": "ACTIVE"},
+            action={"type": "PAUSE", "level": "material"},
+            schedule={"frequency": "1H", "window": "CONTINUOUS"},
+        ),
+        inputs([material], {"material:a:p1": {"spend": Decimal("20")}}),
+    )
+    assert len(result.hits[0].targets[0].material_uses) == 2
+
+
+def video_rule():
+    return rule(
+        apply_to={"level": "material", "status": "ACTIVE"},
+        aggregation="VIDEO",
+        action={"type": "PAUSE", "level": "material"},
+        schedule={"frequency": "1H", "window": "CONTINUOUS"},
+    )
+
+
+def test_video_total_sums_across_accounts_and_pauses_every_account():
+    items = [
+        ent("material", "a", "p1", uses=[_use("a", "x1")], video="v1"),
+        ent("material", "b", "p2", uses=[_use("b", "y1")], video="v1"),
+        ent("material", "b", "p3", uses=[_use("b", "y2", "v2")], video="v2"),
+    ]
+    facts = {
+        "material:a:p1": {"spend": Decimal("6")},
+        "material:b:p2": {"spend": Decimal("6")},
+        "material:b:p3": {"spend": Decimal("6")},
+    }
+    result = evaluate(video_rule(), inputs(items, facts))
+    assert result.checked == 2
+    (hit,) = result.hits
+    assert hit.subject_key == "video:v1:USD" and hit.advertiser_id is None
+    assert [t.key for t in hit.targets] == ["material:a:p1", "material:b:p2"]
+
+
+def test_video_total_splits_currency_and_skips_unlinked():
+    items = [
+        ent("material", "a", "p1", video="v1"),
+        ent("material", "b", "p2", video="v1", currency="EUR"),
+        ent("material", "a", "p3"),
+    ]
+    facts = {
+        "material:a:p1": {"spend": Decimal("6")},
+        "material:b:p2": {"spend": Decimal("6")},
+        "material:a:p3": {"spend": Decimal("50")},
+    }
+    result = evaluate(video_rule(), inputs(items, facts))
+    assert result.hits == () and result.checked == 2 and result.skipped_count == 1

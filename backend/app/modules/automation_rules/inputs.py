@@ -16,6 +16,7 @@ from app.modules.accounts.models import AdvertiserAccount, BCAccountAccess
 from app.modules.automation_rules.catalog import RULE_METRICS
 from app.modules.automation_rules.schedule import due_at, next_run_at
 from app.modules.automation_rules.schemas import AccountScope, RuleDefinition
+from app.modules.reporting.material_links import post_video_map
 from app.modules.reporting.metric_catalog import STORED_KEYS
 
 # 报表热数据 30 分钟、素材 60 分钟同步一次；超过阈值说明同步停滞，宁可跳过也不按旧数据判断。
@@ -52,6 +53,8 @@ class Entity:
     parent_key: str | None
     attributes: dict[str, Decimal | str | None]
     material_uses: tuple[dict[str, Any], ...] = ()
+    # 素材所属视频，与素材报表按视频跨账户合并的口径一致；对不上视频时为空。
+    video: str | None = None
 
 
 @dataclass
@@ -325,6 +328,7 @@ def _materials(
     grouped: dict[tuple[str, str], list[Any]] = defaultdict(list)
     for row in rows:
         grouped[(row.advertiser_id, row.main_material_id)].append(row)
+    videos = post_video_map(session, tenant_id=tenant_id, advertisers=list(accounts))
     entities = {}
     for (adv, main_id), uses in grouped.items():
         info = accounts[adv]
@@ -361,6 +365,7 @@ def _materials(
                 }
                 for u in uses
             ),
+            video=videos.get((adv, main_id)),
         )
     return entities
 

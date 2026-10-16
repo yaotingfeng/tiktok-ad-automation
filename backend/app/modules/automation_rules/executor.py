@@ -137,6 +137,20 @@ def _target_key(
     )
 
 
+def _merge_target(targets: dict[str, dict[str, Any]], target: dict[str, Any]) -> None:
+    """同一运行内多个命中指向同一对象时只执行一次；素材目标可能只含各自命中广告里的
+    使用（按广告判断执行到素材），合并后才不会漏掉其他命中广告里的使用。"""
+    existing = targets.get(target["key"])
+    if existing is None:
+        targets[target["key"]] = target
+        return
+    uses = list(existing.get("material_uses") or ())
+    for use in target.get("material_uses") or ():
+        if use not in uses:
+            uses.append(use)
+    targets[target["key"]] = {**existing, "material_uses": uses}
+
+
 def execute_hits(
     session: Session,
     *,
@@ -189,7 +203,7 @@ def execute_hits(
             hit.outcome = "NOT_SELECTED"
             continue
         for target in hit.targets:
-            targets.setdefault(target["key"], target)
+            _merge_target(targets, target)
             owners[target["key"]].append(hit)
     outcome: dict[str, str] = {}
     history = _ledger(session, rule.tenant_id, list(targets), rule_id=rule.id)

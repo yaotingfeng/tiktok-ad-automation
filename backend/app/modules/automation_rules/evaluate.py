@@ -159,15 +159,17 @@ def _format(value: Decimal | str | None) -> str:
     return str(value)
 
 
+def _use_ad(use: dict[str, Any]) -> str:
+    return f"ad:{use['advertiser_id']}:{use['ad_remote_id']}"
+
+
 def _materials_by_ad(inputs: Inputs) -> dict[str, list[Entity]]:
     """广告 → 使用的素材，一次建好索引，避免每个命中都扫描全部素材。"""
     result: dict[str, list[Entity]] = defaultdict(list)
     for entity in inputs.entities.values():
         if entity.kind == "material":
             for use in entity.material_uses:
-                result[f"ad:{use['advertiser_id']}:{use['ad_remote_id']}"].append(
-                    entity
-                )
+                result[_use_ad(use)].append(entity)
     return result
 
 
@@ -189,12 +191,16 @@ def _targets(
     """把判断对象展开到执行层级：执行层级更高时沿上级查找（合计口径），
     更低时向下展开；素材按使用它的广告归属。"""
     found: dict[str, Entity] = {}
+    # 由广告展开到素材时只保留命中广告里的使用：同一素材被本账户多条广告共用时，
+    # 按广告判断不能把其他广告里的这条素材一起关停。直接判断素材时为 None，取全部使用。
+    narrowed: dict[str, list[dict[str, Any]] | None] = {}
     ad_keys: set[str] = set()
     stack = list(members)
     while stack:
         item = stack.pop()
         if item.kind == level:
             found[item.key] = item
+            narrowed[item.key] = None
             continue
         if item.kind == "ad":
             ad_keys.add(item.key)
@@ -205,9 +211,14 @@ def _targets(
             continue
         stack.extend(children.get(item.key, ()))
     if level == "material":
-        for ad_key in ad_keys:
+        for ad_key in sorted(ad_keys):
             for material in materials_by_ad.get(ad_key, ()):
                 found[material.key] = material
+                uses = narrowed.setdefault(material.key, [])
+                if uses is not None:
+                    uses.extend(
+                        u for u in material.material_uses if _use_ad(u) == ad_key
+                    )
     return tuple(
         Target(
             e.key,
@@ -216,7 +227,9 @@ def _targets(
             e.bc_id,
             e.remote_id,
             e.name,
-            e.material_uses,
+            e.material_uses
+            if narrowed.get(e.key) is None
+            else tuple(narrowed[e.key] or ()),
         )
         for e in sorted(found.values(), key=lambda e: e.key)
     )
@@ -249,6 +262,12 @@ def evaluate(
                 skipped += 1  # 命名不规范,解析不出剧名,不参与剧合计。
                 continue
             groups[(entity.drama, entity.currency)].append(entity)
+        elif definition.aggregation == "VIDEO":
+            if entity.video is None:
+                skipped += 1  # 对不上视频的素材(如旧帖子尚未定位),不参与视频合计。
+                continue
+            # 不同币种的金额不能相加，同一视频按币种分别合计。
+            groups[(entity.video, entity.currency)].append(entity)
         else:
             groups[(entity.currency,)].append(entity)
     children = _children(inputs)
@@ -285,6 +304,8 @@ def evaluate(
             subject, label = first.key, first.name
         elif definition.aggregation == "DRAMA":
             subject, label = f"drama:{key[0]}:{key[1]}", key[0]
+        elif definition.aggregation == "VIDEO":
+            subject, label = f"video:{key[0]}:{key[1]}", first.name
         else:
             subject, label = f"all:{key[0]}", f"全部对象({key[0]})"
         hits.append(

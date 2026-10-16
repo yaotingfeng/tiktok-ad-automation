@@ -10,7 +10,7 @@ from typing import Literal
 from app.modules.reporting.metric_catalog import METRIC_CATALOG
 
 Level = Literal["campaign", "adgroup", "ad", "material"]
-Aggregation = Literal["EACH", "DRAMA", "ALL"]
+Aggregation = Literal["EACH", "DRAMA", "ALL", "VIDEO"]
 ActionType = Literal["PAUSE", "ENABLE", "BUDGET", "ROAS"]
 LEVELS: tuple[Level, ...] = ("campaign", "adgroup", "ad", "material")
 NUMERIC_OPERATORS = ("GT", "LT", "BETWEEN", "EQ")
@@ -37,16 +37,19 @@ def _fact_metrics() -> dict[str, RuleMetric]:
     result = {}
     for item in METRIC_CATALOG:
         levels = {"campaign", "adgroup", "ad"}
+        aggregations = {"EACH", "DRAMA", "ALL"}
         # 素材报表缺少的天数(第 2、29 天)在素材层级不可选。
         if item.material_field is not None:
             levels.add("material")
+            # 同一视频跨账户合计只有素材报表事实可用。
+            aggregations.add("VIDEO")
         result[item.key] = RuleMetric(
             key=item.key,
             group="delivery" if item.key in _DELIVERY else "revenue",
             unit=item.unit,
             kind="fact",
             levels=frozenset(levels),
-            aggregations=frozenset({"EACH", "DRAMA", "ALL"}),
+            aggregations=frozenset(aggregations),
             operators=NUMERIC_OPERATORS,
             ranged=True,
         )
@@ -101,6 +104,9 @@ def allowed_action_levels(
 ) -> tuple[str, ...]:
     """执行层级必须在判断对象范围内:合计口径不限,单对象口径只能是自身或下级。"""
     supported = ACTION_LEVELS[action_type]
+    # 视频口径的判断对象就是各账户里的这条素材，只能对素材本身执行。
+    if aggregation == "VIDEO":
+        return tuple(level for level in supported if level == "material")
     if aggregation != "EACH":
         return supported
     return tuple(level for level in supported if _DEPTH[level] >= _DEPTH[apply_level])

@@ -2,8 +2,14 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
-from app.modules.ads.models import AdObject, CampaignNameProjection
+from app.modules.ads.models import (
+    AdMaterialReference,
+    AdObject,
+    CampaignNameProjection,
+)
 from app.modules.automation_rules.inputs import (
+    AccountInfo,
+    _materials,
     expand_accounts,
     load_inputs,
     local_window,
@@ -11,7 +17,7 @@ from app.modules.automation_rules.inputs import (
 )
 from app.modules.automation_rules.schemas import AccountScope, RuleDefinition
 from app.modules.reporting.publish import AccountMeta, publish_ad_day
-from app.modules.reporting.store_models import ReportSyncState
+from app.modules.reporting.store_models import MaterialPostLink, ReportSyncState
 from tests.modules.automation_rules.test_definition import base
 from tests.modules.reporting.sync_conftest import ad_row
 
@@ -229,3 +235,41 @@ def test_account_timezone_rules_judge_each_account_at_its_local_time(
         session, tenant_id=sync_seed.tenant_id, definition=rule, now=NOW
     )
     assert sorted(preview.accounts) == ["acc-1", "acc-2"]
+
+
+def test_materials_carry_video_from_report_links(session, sync_seed):
+    # 视频归属与素材报表同源（主素材 → 视频对照）；对不上视频的主素材为空，不参与视频合计。
+    tenant = sync_seed.tenant_id
+    for main, ad in (("p1", "a1"), ("p2", "a2")):
+        session.add(
+            AdMaterialReference(
+                tenant_id=tenant,
+                advertiser_id="acc-1",
+                ad_remote_id=ad,
+                platform_material_id=f"v-{main}",
+                ad_material_id=f"am-{main}",
+                material_type="VIDEO",
+                name=main,
+                main_material_id=main,
+                main_material_type="VIDEO",
+                operation_status="ENABLE",
+                complete=True,
+                published_version=1,
+            )
+        )
+    session.add(
+        MaterialPostLink(
+            tenant_id=tenant,
+            advertiser_id="acc-1",
+            main_material_id="p1",
+            ad_remote_id="a1",
+            main_material_type="VIDEO",
+            platform_material_id="v1",
+            observed_at=NOW,
+        )
+    )
+    session.flush()
+    accounts = {"acc-1": AccountInfo("acc-1", "bc", "UTC", "USD", "A")}
+    found = _materials(session, tenant, accounts, {})
+    assert found["material:acc-1:p1"].video == "v1"
+    assert found["material:acc-1:p2"].video is None

@@ -5933,7 +5933,7 @@ export type RuleDefinition_Input = {
     /**
      * Aggregation
      */
-    aggregation: 'EACH' | 'DRAMA' | 'ALL';
+    aggregation: 'EACH' | 'DRAMA' | 'ALL' | 'VIDEO';
     /**
      * Conditions
      */
@@ -5956,7 +5956,7 @@ export type RuleDefinition_Output = {
     /**
      * Aggregation
      */
-    aggregation: 'EACH' | 'DRAMA' | 'ALL';
+    aggregation: 'EACH' | 'DRAMA' | 'ALL' | 'VIDEO';
     /**
      * Conditions
      */

@@ -332,7 +332,9 @@ def catalog() -> CatalogPublic:
                     if level in metric.levels
                 ],
                 aggregations=[
-                    a for a in ("EACH", "DRAMA", "ALL") if a in metric.aggregations
+                    a
+                    for a in ("EACH", "DRAMA", "ALL", "VIDEO")
+                    if a in metric.aggregations
                 ],
                 operators=list(metric.operators),
                 ranged=metric.ranged,

@@ -92,6 +92,25 @@ def test_material_level_lacks_day2_revenue():
             "conditions": [{"metric": "budget", "operator": "GT", "values": ["1"]}],
         },
         {"apply_to": {"level": "material", "status": "ACTIVE"}, "aggregation": "DRAMA"},
+        # 视频口径只用于素材层级，且只能对素材本身执行。
+        {"aggregation": "VIDEO"},
+        {
+            "apply_to": {"level": "material", "status": "ACTIVE"},
+            "aggregation": "VIDEO",
+            "action": {"type": "PAUSE", "level": "ad"},
+            "schedule": {"frequency": "1H", "window": "CONTINUOUS"},
+        },
+        # 跨账户合计需同一时刻取数，不能按账户时区运行。
+        {
+            "apply_to": {"level": "material", "status": "ACTIVE"},
+            "aggregation": "VIDEO",
+            "action": {"type": "PAUSE", "level": "material"},
+            "schedule": {
+                "frequency": "1H",
+                "window": "CONTINUOUS",
+                "timezone_basis": "ACCOUNT",
+            },
+        },
         {
             "action": {
                 "type": "BUDGET",
@@ -166,3 +185,18 @@ def test_action_levels_follow_judge_scope():
     )
     assert allowed_action_levels("EACH", "ad", "BUDGET") == ()
     assert allowed_action_levels("EACH", "campaign", "ROAS") == ("campaign",)
+
+
+def test_video_total_is_a_material_scope():
+    rule = RuleDefinition.model_validate(
+        base(
+            apply_to={"level": "material", "status": "ACTIVE"},
+            aggregation="VIDEO",
+            action={"type": "PAUSE", "level": "material"},
+            schedule={"frequency": "1H", "window": "CONTINUOUS"},
+        )
+    )
+    assert rule.aggregation == "VIDEO"
+    assert allowed_action_levels("VIDEO", "material", "PAUSE") == ("material",)
+    assert "VIDEO" in RULE_METRICS["spend"].aggregations
+    assert "VIDEO" not in RULE_METRICS["roas_d3"].aggregations

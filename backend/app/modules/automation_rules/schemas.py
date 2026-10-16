@@ -217,7 +217,8 @@ def _check_condition(condition: Condition, *, level: str, aggregation: str) -> N
 class RuleDefinition(_Strict):
     accounts: AccountScope
     apply_to: ApplyTo
-    aggregation: Literal["EACH", "DRAMA", "ALL"]
+    # EACH 每个对象；DRAMA/ALL 按剧、全部合计；VIDEO 仅素材层级：同一视频跨账户合计。
+    aggregation: Literal["EACH", "DRAMA", "ALL", "VIDEO"]
     conditions: tuple[Condition, ...] = Field(min_length=1, max_length=5)
     action: Action
     mode: Literal["AUTO", "CONFIRM", "NOTIFY"]
@@ -227,8 +228,11 @@ class RuleDefinition(_Strict):
     @model_validator(mode="after")
     def check(self) -> Self:
         level = self.apply_to.level
-        if level == "material" and self.aggregation != "EACH":
-            raise ValueError("material rules judge each material")
+        # 素材层级按单账户素材或同一视频跨账户判断；视频口径只用于素材层级。
+        if level == "material" and self.aggregation not in ("EACH", "VIDEO"):
+            raise ValueError("material rules judge each material or each video")
+        if self.aggregation == "VIDEO" and level != "material":
+            raise ValueError("video totals only apply to materials")
         for condition in self.conditions:
             _check_condition(condition, level=level, aggregation=self.aggregation)
         if self.action.level not in allowed_action_levels(

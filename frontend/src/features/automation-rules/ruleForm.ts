@@ -31,6 +31,19 @@ export const AGGREGATION_LABELS: Record<Aggregation, string> = {
   EACH: "每个对象",
   DRAMA: "每部剧合计",
   ALL: "所有对象合计",
+  VIDEO: "同一视频跨账户合计",
+}
+
+/** 各层级可选的判断对象：素材按单账户内的素材或同一视频跨账户合计判断，不按剧或全部合计。 */
+export function aggregationOptions(level: Level): Aggregation[] {
+  return level === "material" ? ["EACH", "VIDEO"] : ["EACH", "DRAMA", "ALL"]
+}
+
+/** 素材的「每个对象」是单个账户里的这条素材，与跨账户的视频合计区分。 */
+export function aggregationLabel(aggregation: Aggregation, level: Level) {
+  if (level === "material" && aggregation === "EACH")
+    return "每个素材（单账户内）"
+  return AGGREGATION_LABELS[aggregation]
 }
 export const ACTION_LABELS: Record<ActionType, string> = {
   PAUSE: "暂停",
@@ -131,6 +144,9 @@ export function actionLevels(
   actionType: ActionType,
 ): Level[] {
   const supported = ACTION_LEVELS[actionType]
+  // 视频口径的判断对象就是各账户里的这条素材，只能对素材本身执行。
+  if (aggregation === "VIDEO")
+    return supported.filter((level) => level === "material")
   if (aggregation !== "EACH") return supported
   const depth = LEVELS.indexOf(applyLevel)
   return supported.filter((level) => LEVELS.indexOf(level) >= depth)
@@ -158,7 +174,7 @@ export function summarizeConditions(def: Definition, catalog: CatalogLike) {
   const parts = def.conditions.map((condition) =>
     conditionText(condition, catalog),
   )
-  return `${AGGREGATION_LABELS[def.aggregation]} · ${parts.join(" 且 ")}`
+  return `${aggregationLabel(def.aggregation, def.apply_to.level)} · ${parts.join(" 且 ")}`
 }
 
 export function summarizeAction(def: Definition) {
