@@ -35,6 +35,7 @@ import {
   type ActionType,
   AGGREGATION_LABELS,
   type Aggregation,
+  accountTimezoneAllowed,
   actionChoice,
   actionLevels,
   applyActionChoice,
@@ -168,6 +169,9 @@ function toPayload(def: Definition): Definition {
       : { type: def.action.type, level: def.action.level },
     schedule: {
       ...def.schedule,
+      timezone_basis: accountTimezoneAllowed(def)
+        ? (def.schedule.timezone_basis ?? "RULE")
+        : "RULE",
       daily_at:
         def.schedule.frequency === "DAILY" ? def.schedule.daily_at : null,
       periods: def.schedule.window === "CUSTOM" ? def.schedule.periods : [],
@@ -255,6 +259,8 @@ export function RuleEditorSheet({
   )
   const adjusts = def.action.type === "BUDGET" || def.action.type === "ROAS"
   const notifyOnly = def.mode === "NOTIFY"
+  const byAccount =
+    accountTimezoneAllowed(def) && def.schedule.timezone_basis === "ACCOUNT"
   // 校验失败时在顶部列出错误，不发请求。
   const valid = () => {
     const problems = validateDefinition(payload(), catalog)
@@ -466,6 +472,8 @@ export function RuleEditorSheet({
           onValueChange={(value) =>
             update((draft) => {
               draft.aggregation = value as Aggregation
+              // 跨账户合计需要同一时刻取数，只能按规则时区运行。
+              if (value !== "EACH") draft.schedule.timezone_basis = "RULE"
               // 合计口径不能使用对象属性条件，换成第一个可用的数据指标。
               if (value !== "EACH")
                 draft.conditions = draft.conditions.map((condition) =>
@@ -795,6 +803,35 @@ export function RuleEditorSheet({
             />
           )}
         </div>
+        {accountTimezoneAllowed(def) ? (
+          <div className="flex flex-col gap-1">
+            <RadioGroup
+              aria-label="运行时区"
+              className="flex flex-wrap gap-4"
+              value={def.schedule.timezone_basis ?? "RULE"}
+              onValueChange={(value) =>
+                update((draft) => {
+                  draft.schedule.timezone_basis = value as "RULE" | "ACCOUNT"
+                  return draft
+                })
+              }
+            >
+              <Choice value="ACCOUNT" label="按账户时区" />
+              <Choice value="RULE" label={`按规则时区（${zone}）`} />
+            </RadioGroup>
+            <p className="text-xs text-muted-foreground">
+              {byAccount
+                ? "运行时刻与时间段按各账户自身时区解释，不同时区的账户分批运行、分别通知。"
+                : `所有账户在 ${zone} 的同一时刻判断。`}
+            </p>
+          </div>
+        ) : (
+          def.aggregation !== "EACH" && (
+            <p className="text-xs text-muted-foreground">
+              跨账户合计在 {zone} 的同一时刻判断。
+            </p>
+          )
+        )}
         <RadioGroup
           aria-label="生效时段"
           className="flex flex-wrap gap-4"
@@ -802,6 +839,7 @@ export function RuleEditorSheet({
           onValueChange={(value) =>
             update((draft) => {
               draft.schedule.window = value as Definition["schedule"]["window"]
+              if (value === "ONCE") draft.schedule.timezone_basis = "RULE"
               if (value === "CUSTOM" && !draft.schedule.periods?.length)
                 draft.schedule.periods = [
                   { date_type: "DAY", days: [], start: "09:00", end: "21:00" },
@@ -928,7 +966,9 @@ export function RuleEditorSheet({
               添加时间段 ({(def.schedule.periods ?? []).length}/7)
             </Button>
             <p className="text-xs text-muted-foreground">
-              时间段按通知设置中的运行时区解释。
+              {byAccount
+                ? "时间段按各账户自身时区解释。"
+                : "时间段按通知设置中的运行时区解释。"}
             </p>
           </div>
         )}

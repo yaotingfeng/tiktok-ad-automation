@@ -17,6 +17,7 @@ from app.jobs.celery_app import celery_app
 from app.jobs.outbox import enqueue_after_commit, validate_dispatch_payload
 from app.jobs.tasks import register_dispatch_task
 from app.modules.automation_rules.executor import execute_hits, lock_tenant
+from app.modules.automation_rules.inputs import plan_next_run
 from app.modules.automation_rules.models import (
     AutomationConfirmation,
     AutomationRule,
@@ -28,7 +29,6 @@ from app.modules.automation_rules.runner import (
     execute_run,
     notify_execution,
 )
-from app.modules.automation_rules.schedule import next_run_at
 from app.modules.automation_rules.schemas import RuleDefinition
 from app.modules.automation_rules.settings_service import load_tenant_setting
 from app.modules.automation_rules.summary import deliver_summary, scan_summaries
@@ -92,8 +92,12 @@ def scan_due_rules(session: Session, *, now: datetime) -> int:
         if definition.schedule.window == "ONCE":
             rule.enabled, rule.next_run_at = False, None
         else:
-            rule.next_run_at = next_run_at(
-                definition.schedule, after=now, timezone=setting.schedule_timezone
+            rule.next_run_at = plan_next_run(
+                session,
+                tenant_id=rule.tenant_id,
+                definition=definition,
+                rule_timezone=setting.schedule_timezone,
+                after=now,
             )
         count += 1
     session.flush()

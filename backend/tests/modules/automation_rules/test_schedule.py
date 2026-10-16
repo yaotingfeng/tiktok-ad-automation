@@ -13,10 +13,10 @@ def at(*args):
 
 def test_every_30_minutes_aligns_to_slot():
     s = Schedule(frequency="30M", window="CONTINUOUS")
-    assert next_run_at(s, after=at(2026, 10, 14, 1, 7), timezone=SH) == at(
+    assert next_run_at(s, after=at(2026, 10, 14, 1, 7), timezones=[SH]) == at(
         2026, 10, 14, 1, 30
     )
-    assert next_run_at(s, after=at(2026, 10, 14, 1, 30), timezone=SH) == at(
+    assert next_run_at(s, after=at(2026, 10, 14, 1, 30), timezones=[SH]) == at(
         2026, 10, 14, 2, 0
     )
 
@@ -24,14 +24,14 @@ def test_every_30_minutes_aligns_to_slot():
 def test_four_hours_aligns_in_tenant_timezone():
     s = Schedule(frequency="4H", window="CONTINUOUS")
     # 上海 09:10 → 下一个 4 小时整点为上海 12:00 = UTC 04:00
-    assert next_run_at(s, after=at(2026, 10, 14, 1, 10), timezone=SH) == at(
+    assert next_run_at(s, after=at(2026, 10, 14, 1, 10), timezones=[SH]) == at(
         2026, 10, 14, 4, 0
     )
 
 
 def test_daily_at():
     s = Schedule(frequency="DAILY", daily_at="10:00", window="CONTINUOUS")
-    assert next_run_at(s, after=at(2026, 10, 14, 3, 0), timezone=SH) == at(
+    assert next_run_at(s, after=at(2026, 10, 14, 3, 0), timezones=[SH]) == at(
         2026, 10, 15, 2, 0
     )
 
@@ -47,29 +47,29 @@ def test_custom_week_periods():
         }
     )
     # 2026-10-14 是周三;下一次在周一上海 09:00 = UTC 01:00
-    assert next_run_at(s, after=at(2026, 10, 14, 1, 0), timezone=SH) == at(
+    assert next_run_at(s, after=at(2026, 10, 14, 1, 0), timezones=[SH]) == at(
         2026, 10, 19, 1, 0
     )
-    assert next_run_at(s, after=at(2026, 10, 19, 1, 0), timezone=SH) == at(
+    assert next_run_at(s, after=at(2026, 10, 19, 1, 0), timezones=[SH]) == at(
         2026, 10, 19, 2, 0
     )
-    assert next_run_at(s, after=at(2026, 10, 19, 2, 0), timezone=SH) == at(
+    assert next_run_at(s, after=at(2026, 10, 19, 2, 0), timezones=[SH]) == at(
         2026, 10, 26, 1, 0
     )
 
 
 def test_once():
     s = Schedule(frequency="30M", window="ONCE", once_at=at(2026, 10, 20, 0, 0))
-    assert next_run_at(s, after=at(2026, 10, 14, 0, 0), timezone=SH) == at(
+    assert next_run_at(s, after=at(2026, 10, 14, 0, 0), timezones=[SH]) == at(
         2026, 10, 20, 0, 0
     )
-    assert next_run_at(s, after=at(2026, 10, 20, 0, 0), timezone=SH) is None
+    assert next_run_at(s, after=at(2026, 10, 20, 0, 0), timezones=[SH]) is None
 
 
 def _walk(schedule, start, end, timezone):
     runs, cursor = [], start
     while True:
-        cursor = next_run_at(schedule, after=cursor, timezone=timezone)
+        cursor = next_run_at(schedule, after=cursor, timezones=[timezone])
         if cursor is None or cursor >= end:
             return runs
         runs.append(cursor)
@@ -101,3 +101,45 @@ def test_dst_fall_back_runs_each_wall_slot_once():
         2,
         3,
     ]
+
+
+def test_account_timezones_take_the_earliest_local_slot():
+    from app.modules.automation_rules.schedule import due_at
+
+    s = Schedule(
+        frequency="DAILY",
+        daily_at="10:00",
+        window="CONTINUOUS",
+        timezone_basis="ACCOUNT",
+    )
+    zones = ["Etc/GMT", "Etc/GMT+8", "Africa/Accra"]
+    # UTC 账户当地 10:00 = UTC 10:00；UTC-8 账户当地 10:00 = UTC 18:00。
+    first = next_run_at(s, after=at(2026, 10, 14, 3, 0), timezones=zones)
+    assert first == at(2026, 10, 14, 10, 0)
+    assert next_run_at(s, after=first, timezones=zones) == at(2026, 10, 14, 18, 0)
+    # 每个槽位只判断当地正处于 10:00 的账户；同一偏移的时区合并在一次运行里。
+    assert [z for z in zones if due_at(s, slot_at=first, timezone=z)] == [
+        "Etc/GMT",
+        "Africa/Accra",
+    ]
+    assert due_at(s, slot_at=at(2026, 10, 14, 18, 0), timezone="Etc/GMT+8")
+    assert not due_at(s, slot_at=at(2026, 10, 14, 10, 30), timezone="Etc/GMT")
+
+
+def test_account_periods_follow_local_daytime():
+    from app.modules.automation_rules.schedule import due_at
+
+    s = Schedule.model_validate(
+        {
+            "frequency": "2H",
+            "window": "CUSTOM",
+            "periods": [{"date_type": "DAY", "start": "08:00", "end": "18:00"}],
+            "timezone_basis": "ACCOUNT",
+        }
+    )
+    # 白天时段按各账户当地时间：UTC 06:00 时 UTC 账户当地 06:00、尚未进入时段；
+    # UTC 08:00 时 UTC 账户进入时段，UTC-3 账户当地才 05:00，到 UTC 11:00 才判断。
+    assert not due_at(s, slot_at=at(2026, 10, 14, 6, 0), timezone="Etc/GMT")
+    assert due_at(s, slot_at=at(2026, 10, 14, 8, 0), timezone="Etc/GMT")
+    assert not due_at(s, slot_at=at(2026, 10, 14, 8, 0), timezone="Etc/GMT+3")
+    assert due_at(s, slot_at=at(2026, 10, 14, 11, 0), timezone="Etc/GMT+3")

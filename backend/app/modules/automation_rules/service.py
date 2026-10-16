@@ -14,7 +14,7 @@ from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.modules.automation_rules.catalog import ACTION_LEVELS, RULE_METRICS
 from app.modules.automation_rules.evaluate import Hit, evaluate
-from app.modules.automation_rules.inputs import load_inputs
+from app.modules.automation_rules.inputs import load_inputs, plan_next_run
 from app.modules.automation_rules.models import (
     AutomationActionLedger,
     AutomationConfirmation,
@@ -22,7 +22,6 @@ from app.modules.automation_rules.models import (
     AutomationRuleHit,
     AutomationRuleRun,
 )
-from app.modules.automation_rules.schedule import next_run_at
 from app.modules.automation_rules.schemas import (
     BatchResult,
     BatchSkipped,
@@ -92,8 +91,12 @@ def _reschedule(session: Session, rule: AutomationRule, now: datetime) -> None:
             "automation_rule_invalid", "「仅一次」的运行时间已过，请重新设置"
         )
     setting = load_tenant_setting(session, rule.tenant_id)
-    rule.next_run_at = next_run_at(
-        definition.schedule, after=now, timezone=setting.schedule_timezone
+    rule.next_run_at = plan_next_run(
+        session,
+        tenant_id=rule.tenant_id,
+        definition=definition,
+        rule_timezone=setting.schedule_timezone,
+        after=now,
     )
 
 

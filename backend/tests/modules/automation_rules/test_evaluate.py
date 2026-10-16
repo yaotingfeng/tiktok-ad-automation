@@ -250,3 +250,21 @@ def test_stored_targets_not_cut_by_run_limit(monkeypatch):
     monkeypatch.setattr(module, "MAX_STORED_TARGETS", 1)
     result = evaluate(rule(aggregation="DRAMA"), inputs(GROUPS, facts))
     assert len(result.hits[0].targets) == 1 and result.hits[0].target_count == 2
+
+
+def test_click_through_rate_is_judged_in_percent():
+    # 编辑器与报表都按百分数展示点击率：填 1 表示 1%，命中指标同样显示百分数。
+    facts = {
+        "adgroup:a:g1": {"clicks": Decimal("2"), "impressions": Decimal("400")},
+        "adgroup:a:g2": {"clicks": Decimal("6"), "impressions": Decimal("400")},
+    }
+    result = evaluate(
+        rule(
+            conditions=[
+                {"metric": "ctr", "range": "TODAY", "operator": "LT", "values": ["1"]}
+            ]
+        ),
+        inputs(GROUPS, facts),
+    )
+    assert [hit.subject_key for hit in result.hits] == ["adgroup:a:g1"]
+    assert result.hits[0].metrics == {"ctr:TODAY": "0.5"}

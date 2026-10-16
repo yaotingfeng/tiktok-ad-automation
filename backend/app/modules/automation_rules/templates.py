@@ -7,6 +7,8 @@
   累计 ROAS 会随回收继续增长，不同日期成熟度不一致，不适合做止损判断。
 - 关停、降预算类规则每天固定时刻用「昨天」等已结束日期判断：当天收入仍在回传，
   盘中 ROAS 普遍偏低；且出价保障按「系列 × 自然日」判定，当天暂停或降预算会失去当日赔付资格。
+- 单对象规则按账户时区运行：账户时区各不相同（UTC、UTC-8、UTC+8 等），每个账户在当地
+  时刻判断当地的「昨天」「今天」，数据成熟度一致；跨账户合计的剧目规则只能按规则时区运行。
 - 判断前设「创建满 2 天」或消耗门槛，避免学习期样本不足就被误关。
 - 加预算类用「对象自身预算 > 0」区分预算持有者：系列预算（CBO）只在系列上加，
   组预算只在广告组上加，避免广告组规则命中后把整个 CBO 系列的预算一起抬高。
@@ -38,13 +40,26 @@ def _cond(
     return condition
 
 
-# 关停、降预算、降目标：每天上午用昨天的完整数据判断一次（规则时区，见自动规则设置）。
-_DAILY_REVIEW = {"frequency": "DAILY", "daily_at": "10:00", "window": "CONTINUOUS"}
-# 加预算：白天每 2 小时检查；晚间加预算剩余时间太短，不在窗口内。
+# 关停、降预算、降目标：每个账户当地 10:00 用当地昨天的完整数据判断一次。
+_DAILY_REVIEW = {
+    "frequency": "DAILY",
+    "daily_at": "10:00",
+    "window": "CONTINUOUS",
+    "timezone_basis": "ACCOUNT",
+}
+# 跨账户合计需要同一时刻取数，按规则时区运行。默认北京时间 18:00（UTC 10:00），
+# 此时 UTC-8 至 UTC+8 的账户「昨天」都已结束。
+_CROSS_ACCOUNT_REVIEW = {
+    "frequency": "DAILY",
+    "daily_at": "18:00",
+    "window": "CONTINUOUS",
+}
+# 加预算：账户当地白天每 2 小时检查；晚间加预算剩余时间太短，不在窗口内。
 _DAYTIME_SCALE = {
     "frequency": "2H",
     "window": "CUSTOM",
     "periods": [{"date_type": "DAY", "start": "08:00", "end": "18:00"}],
+    "timezone_basis": "ACCOUNT",
 }
 # 盘中风控：每 2 小时检查，持续命中时最多每 2 小时提醒一次。
 _INTRADAY_GUARD = {"frequency": "2H", "window": "CONTINUOUS"}
@@ -147,7 +162,8 @@ TEMPLATES: tuple[RuleTemplate, ...] = (
         "测试期 · 剧目测试不过线",
         "按剧合计所有账户：近 3 天消耗超过 300、第 0 天 ROAS 低于 0.7，且昨天仍低于 0.7 时"
         "提示该剧测试不过线。会暂停整部剧的广告组，建议仅通知、人工确认后再关。"
-        "系列名须符合命名规范才能识别剧名。",
+        "系列名须符合命名规范才能识别剧名。跨账户合计按规则时区每天 18:00 判断"
+        "（默认北京时间，各时区账户的昨天均已结束）。",
         _definition(
             level="adgroup",
             aggregation="DRAMA",
@@ -157,7 +173,7 @@ TEMPLATES: tuple[RuleTemplate, ...] = (
                 _cond("roas_d0", "LT", "0.7", range_="YESTERDAY"),
             ],
             action={"type": "PAUSE", "level": "adgroup"},
-            schedule=_DAILY_REVIEW,
+            schedule=_CROSS_ACCOUNT_REVIEW,
         ),
     ),
     # 放量（组预算）：昨天基本花满预算且回本好，今天开局仍在回本才加，每天最多一次。

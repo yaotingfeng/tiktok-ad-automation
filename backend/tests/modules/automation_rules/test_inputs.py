@@ -7,6 +7,7 @@ from app.modules.automation_rules.inputs import (
     expand_accounts,
     load_inputs,
     local_window,
+    plan_next_run,
 )
 from app.modules.automation_rules.schemas import AccountScope, RuleDefinition
 from app.modules.reporting.publish import AccountMeta, publish_ad_day
@@ -185,3 +186,46 @@ def test_stale_accounts_are_skipped(session, sync_seed):
     assert inputs.skipped_accounts == [
         {"advertiser_id": "acc-2", "reason": "STALE_REPORT"}
     ]
+
+
+def test_account_timezone_rules_judge_each_account_at_its_local_time(
+    session, sync_seed
+):
+    _seed(session, sync_seed)
+    rule = definition(
+        schedule={
+            "frequency": "DAILY",
+            "daily_at": "11:00",
+            "window": "CONTINUOUS",
+            "timezone_basis": "ACCOUNT",
+        }
+    )
+    # 香港账户当地 11:00 = UTC 03:00 先到；UTC 账户当地 11:00 = UTC 11:00。
+    first = plan_next_run(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        definition=rule,
+        rule_timezone="Asia/Shanghai",
+        after=NOW - timedelta(minutes=1),
+    )
+    assert first == NOW
+    assert plan_next_run(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        definition=rule,
+        rule_timezone="Asia/Shanghai",
+        after=first,
+    ) == datetime(2026, 10, 14, 11, 0, tzinfo=UTC)
+    # 定时运行只判断当地正处于槽位的账户；试运行不带槽位，判断全部账户。
+    timed = load_inputs(
+        session,
+        tenant_id=sync_seed.tenant_id,
+        definition=rule,
+        now=NOW,
+        slot_at=first,
+    )
+    assert list(timed.accounts) == ["acc-1"]
+    preview = load_inputs(
+        session, tenant_id=sync_seed.tenant_id, definition=rule, now=NOW
+    )
+    assert sorted(preview.accounts) == ["acc-1", "acc-2"]

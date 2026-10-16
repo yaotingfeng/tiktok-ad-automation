@@ -14,6 +14,7 @@ from sqlmodel import Session, col, select
 from app.modules.accounts.access import usable_grants
 from app.modules.accounts.models import AdvertiserAccount, BCAccountAccess
 from app.modules.automation_rules.catalog import RULE_METRICS
+from app.modules.automation_rules.schedule import due_at, next_run_at
 from app.modules.automation_rules.schemas import AccountScope, RuleDefinition
 from app.modules.reporting.metric_catalog import STORED_KEYS
 
@@ -114,6 +115,25 @@ def expand_accounts(
         )
         for row in sorted(rows, key=lambda r: r.advertiser_id)
     }
+
+
+def plan_next_run(
+    session: Session,
+    *,
+    tenant_id: UUID,
+    definition: RuleDefinition,
+    rule_timezone: str,
+    after: datetime,
+) -> datetime | None:
+    """规则的下一次运行时刻。按账户时区时取规则范围内全部账户的时区，最早的槽位先运行；
+    暂时没有账户时仍按规则时区排期，账户接入后的下一次排期自动纳入。"""
+    zones: set[str] = {rule_timezone}
+    if definition.schedule.timezone_basis == "ACCOUNT":
+        accounts = expand_accounts(
+            session, tenant_id=tenant_id, scope=definition.accounts
+        )
+        zones = {info.timezone for info in accounts.values()} or zones
+    return next_run_at(definition.schedule, after=after, timezones=zones)
 
 
 def _fresh_accounts(
@@ -405,9 +425,22 @@ def _facts(
 
 
 def load_inputs(
-    session: Session, *, tenant_id: UUID, definition: RuleDefinition, now: datetime
+    session: Session,
+    *,
+    tenant_id: UUID,
+    definition: RuleDefinition,
+    now: datetime,
+    slot_at: datetime | None = None,
 ) -> Inputs:
+    """slot_at 为定时运行的槽位：按账户时区运行时只判断当地正处于该槽位的账户；
+    试运行等不带槽位的判断覆盖全部账户。"""
     accounts = expand_accounts(session, tenant_id=tenant_id, scope=definition.accounts)
+    if slot_at is not None and definition.schedule.timezone_basis == "ACCOUNT":
+        accounts = {
+            adv: info
+            for adv, info in accounts.items()
+            if due_at(definition.schedule, slot_at=slot_at, timezone=info.timezone)
+        }
     level = definition.apply_to.level
     kind = "material_day" if level == "material" else "ad_day"
     accounts, skipped = _fresh_accounts(

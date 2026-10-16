@@ -191,7 +191,7 @@ def test_timezone_change_reschedules_enabled_rules(session, sync_seed):
     expected = next_run_at(
         Schedule.model_validate(daily),
         after=datetime.now(UTC),
-        timezone="America/New_York",
+        timezones=["America/New_York"],
     )
     assert rule.next_run_at == expected
     assert rule.next_run_at.astimezone(ZoneInfo("America/New_York")).time() == time(9)

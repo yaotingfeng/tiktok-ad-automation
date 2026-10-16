@@ -145,7 +145,11 @@ def execute_run(
         with session.begin_nested():
             definition = RuleDefinition.model_validate(rule.definition)
             inputs = load_inputs(
-                session, tenant_id=rule.tenant_id, definition=definition, now=now
+                session,
+                tenant_id=rule.tenant_id,
+                definition=definition,
+                now=now,
+                slot_at=slot_at,
             )
             result = evaluate(definition, inputs)
             _write_hits(session, rule, run, result)

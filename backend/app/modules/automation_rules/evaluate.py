@@ -101,7 +101,10 @@ def _metric(
         num, den, scale = _RATIOS[condition.metric]
         a, b = totals.get(num), totals.get(den)
         # 分母为 0 或缺失时没有比率,条件视为不满足。
-        return a / b * scale if a is not None and b else None
+        if a is None or not b:
+            return None
+        # 比率类（点击率）在编辑器和报表里都按百分数填写、展示，判断与命中指标同样用百分数。
+        return a / b * scale * (100 if meta.unit == "ratio" else 1)
     return totals.get(condition.metric)
 
 

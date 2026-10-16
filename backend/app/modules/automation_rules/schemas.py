@@ -148,6 +148,10 @@ class Schedule(_Strict):
     window: Literal["CONTINUOUS", "CUSTOM", "ONCE"]
     periods: tuple[Period, ...] = Field(default=(), max_length=7)
     once_at: datetime | None = None
+    # 运行时刻与时段按哪个时区解释：RULE 为租户运行时区，所有账户同一时刻判断；
+    # ACCOUNT 为各账户自身时区，每个账户在当地时刻判断（如当地 10:00 复盘当地昨天），
+    # 不同时区的账户分批运行。合计口径要求同一时刻取数，只能用 RULE。
+    timezone_basis: Literal["RULE", "ACCOUNT"] = "RULE"
 
     @model_validator(mode="after")
     def check(self) -> Self:
@@ -159,6 +163,8 @@ class Schedule(_Strict):
             raise ValueError("once_at only and always with ONCE")
         if self.once_at is not None and self.once_at.tzinfo is None:
             raise ValueError("once_at must carry a timezone")
+        if self.window == "ONCE" and self.timezone_basis == "ACCOUNT":
+            raise ValueError("once_at is an absolute time, not per account")
         return self
 
 
@@ -229,6 +235,8 @@ class RuleDefinition(_Strict):
             self.aggregation, level, self.action.type
         ):
             raise ValueError("action level outside the judged scope")
+        if self.aggregation != "EACH" and self.schedule.timezone_basis == "ACCOUNT":
+            raise ValueError("totals across accounts run on the rule timezone")
         minimum = min_frequency_minutes(level, self.action.level)
         if FREQUENCY_MINUTES[self.schedule.frequency] < minimum:
             raise ValueError(f"run at most every {minimum} minutes")

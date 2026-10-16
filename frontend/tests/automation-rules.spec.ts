@@ -37,6 +37,8 @@ test("新建规则:联动选项并提交正确的定义", async ({ page }) => {
     definition: {
       aggregation: "DRAMA",
       mode: "NOTIFY",
+      // 跨账户合计只能按规则时区运行。
+      schedule: { timezone_basis: "RULE" },
       conditions: [
         { metric: "spend", range: "TODAY", operator: "GT", values: ["100"] },
         {
@@ -46,6 +48,34 @@ test("新建规则:联动选项并提交正确的定义", async ({ page }) => {
           values: ["0.8"],
         },
       ],
+    },
+  })
+})
+
+test("单对象规则默认按账户时区运行，合计口径改回规则时区", async ({ page }) => {
+  const created: unknown[] = []
+  await automationBoundary(page, { created })
+  await page.goto(`/tenants/${TENANT}/automation-rules`)
+  await page.getByRole("button", { name: "新建规则" }).click()
+  const timezone = page.getByRole("radiogroup", { name: "运行时区" })
+  await expect(
+    timezone.getByRole("radio", { name: "按账户时区" }),
+  ).toBeChecked()
+  await page.getByRole("radio", { name: "每部剧合计" }).click()
+  await expect(timezone).toHaveCount(0)
+  await expect(page.getByText(/跨账户合计在 .+ 的同一时刻判断/)).toBeVisible()
+  await page.getByRole("radio", { name: "每个对象" }).click()
+  await expect(
+    timezone.getByRole("radio", { name: "按规则时区" }),
+  ).toBeChecked()
+  await timezone.getByRole("radio", { name: "按账户时区" }).click()
+  await page.getByRole("spinbutton", { name: "条件 1 数值" }).fill("10")
+  await page.getByRole("button", { name: "保存" }).click()
+  await expect.poll(() => created.length).toBe(1)
+  expect(created[0]).toMatchObject({
+    definition: {
+      aggregation: "EACH",
+      schedule: { timezone_basis: "ACCOUNT" },
     },
   })
 })

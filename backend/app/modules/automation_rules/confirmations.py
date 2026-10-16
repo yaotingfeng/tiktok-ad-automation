@@ -147,6 +147,8 @@ def confirmation_detail(
         tenant_id=context.tenant_id,
         definition=definition,
         now=now or datetime.now(UTC),
+        # 与原运行判断同一批账户：按账户时区运行时只比较该槽位的账户。
+        slot_at=run.slot_at,
     )
     current = {hit.subject_key: hit for hit in evaluate(definition, inputs).hits}
     # 未命中的对象也给出现在的指标，便于判断差异。

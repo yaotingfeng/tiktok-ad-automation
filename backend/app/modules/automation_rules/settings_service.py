@@ -10,12 +10,12 @@ from app.core.context import TenantContext
 from app.core.credentials import decrypt_credentials, encrypt_credentials
 from app.core.errors import DomainError
 from app.modules.automation_rules import feishu
+from app.modules.automation_rules.inputs import plan_next_run
 from app.modules.automation_rules.models import (
     AutomationRule,
     AutomationTenantSetting,
     TenantFeishuSetting,
 )
-from app.modules.automation_rules.schedule import next_run_at
 from app.modules.automation_rules.schemas import (
     AutomationSettingsPublic,
     AutomationSettingsUpdate,
@@ -74,8 +74,13 @@ def _reschedule_tenant(
         )
     ).all()
     for rule in rules:
-        schedule = RuleDefinition.model_validate(rule.definition).schedule
-        rule.next_run_at = next_run_at(schedule, after=now, timezone=timezone)
+        rule.next_run_at = plan_next_run(
+            session,
+            tenant_id=tenant_id,
+            definition=RuleDefinition.model_validate(rule.definition),
+            rule_timezone=timezone,
+            after=now,
+        )
 
 
 def update_settings(

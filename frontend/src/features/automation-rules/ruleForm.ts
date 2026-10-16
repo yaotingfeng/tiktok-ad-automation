@@ -91,13 +91,24 @@ export function emptyDefinition(): Definition {
     ],
     action: { type: "PAUSE", level: "adgroup" },
     mode: "NOTIFY",
-    schedule: { frequency: "30M", window: "CONTINUOUS", periods: [] },
+    // 新规则默认按各账户自身时区运行：账户时区各异，当地时刻判断当地日期才可比。
+    schedule: {
+      frequency: "30M",
+      window: "CONTINUOUS",
+      periods: [],
+      timezone_basis: "ACCOUNT",
+    },
     notification: {
       enabled: true,
       timing: "EVERY_RUN",
       notify_without_hits: false,
     },
   }
+}
+
+/** 能否按账户时区运行：「仅一次」是绝对时刻，跨账户合计需要同一时刻取数。 */
+export function accountTimezoneAllowed(def: Definition) {
+  return def.aggregation === "EACH" && def.schedule.window !== "ONCE"
 }
 
 /** 当前层级与统计口径下可选的指标；属性类指标只在「每个对象」口径下出现。 */

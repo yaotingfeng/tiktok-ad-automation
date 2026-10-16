@@ -119,6 +119,23 @@ def test_material_level_lacks_day2_revenue():
         {"accounts": {"mode": "BC"}},
         {"schedule": {"frequency": "DAILY", "window": "CONTINUOUS"}},
         {"schedule": {"frequency": "30M", "window": "ONCE"}},
+        # 「仅一次」是绝对时刻，合计口径需要同一时刻取数，都不能按账户时区运行。
+        {
+            "schedule": {
+                "frequency": "30M",
+                "window": "ONCE",
+                "once_at": "2026-10-20T00:00:00+00:00",
+                "timezone_basis": "ACCOUNT",
+            }
+        },
+        {
+            "aggregation": "DRAMA",
+            "schedule": {
+                "frequency": "30M",
+                "window": "CONTINUOUS",
+                "timezone_basis": "ACCOUNT",
+            },
+        },
         {
             "schedule": {
                 "frequency": "30M",

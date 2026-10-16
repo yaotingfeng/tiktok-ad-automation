@@ -6361,6 +6361,10 @@ export type Schedule = {
      * Once At
      */
     once_at?: string | null;
+    /**
+     * Timezone Basis
+     */
+    timezone_basis?: 'RULE' | 'ACCOUNT';
 };
 
 /**

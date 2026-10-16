@@ -52,6 +52,19 @@ def test_stop_and_trim_templates_judge_finished_days_once_a_day():
         assert any(c.range == "YESTERDAY" for c in roas), key
 
 
+def test_single_object_schedules_follow_account_timezones():
+    # 单对象规则按各账户当地时间判断；跨账户合计需要同一时刻取数，按规则时区。
+    for template in TEMPLATES:
+        definition = RuleDefinition.model_validate(template.definition)
+        daily_or_daytime = definition.schedule.frequency == "DAILY" or (
+            definition.schedule.window == "CUSTOM"
+        )
+        if definition.aggregation != "EACH":
+            assert definition.schedule.timezone_basis == "RULE", template.key
+        elif daily_or_daytime:
+            assert definition.schedule.timezone_basis == "ACCOUNT", template.key
+
+
 def test_budget_templates_only_touch_the_budget_owner():
     # 「自身预算 > 0」把组预算模板限定在非 CBO 广告组、CBO 模板限定在持有预算的系列。
     for key in (
