@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 from redis import Redis, RedisError
-from sqlalchemy import bindparam, text
+from sqlalchemy import bindparam, func, text
 from sqlmodel import Session, col, select
 
 from app.api.deps import CurrentUser, SessionDep
@@ -25,6 +25,7 @@ from app.core.config import settings
 from app.core.context import TenantContext
 from app.integrations.tiktok.contracts.ads import EntityRef
 from app.modules.accounts.models import AdvertiserAccount, TenantBC
+from app.modules.ads.sync_models import AdDirectoryRun
 from app.modules.reporting.ad_materials import (
     AdMaterialsPublic,
     freeze_ad_material_selection,
@@ -689,6 +690,16 @@ def get_ad_sync_status_route(
     ).all()
     # 余额按独立观测版本刷新，不能继续展示旧快照中的金额。
     balance_version = [(b.advertiser_id, str(b.id)) for b in balances]
+    # 启停/预算修改后先回读目录，可能尚无新的日报。目录发布必须独立推进版本，
+    # 否则报表页面看不到已回读的最新开关。限定当前租户、BC 及可见账户，未发布不计入。
+    directory_version = session.exec(
+        select(func.max(AdDirectoryRun.published_version)).where(
+            AdDirectoryRun.tenant_id == tenant_id,
+            AdDirectoryRun.bc_id == bc_id,
+            col(AdDirectoryRun.advertiser_id).in_(allowed),
+            AdDirectoryRun.status == "COMPLETE",
+        )
+    ).one()
     # 素材发布与失败覆盖也推进版本，页面不能只看广告日的最后成功时间。
     version = sha256(
         repr(
@@ -703,6 +714,7 @@ def get_ad_sync_status_route(
                 for r in states
             )
             + balance_version
+            + [("directory", directory_version)]
         ).encode()
     ).hexdigest()
     days = [

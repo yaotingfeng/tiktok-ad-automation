@@ -382,3 +382,27 @@ def test_merge_buckets_marks_only_buckets_with_incomplete_contributors():
     }
     assert merged["USD"].availability["spend"] == "PARTIAL"
     assert merged["EUR"].availability["spend"] == "AVAILABLE"
+
+
+def test_same_snapshot_shows_current_status_without_refiltering_or_reordering(
+    report_case,
+):
+    case = report_case
+    ref = case.seed_campaign("P-Status", "report-account", 1, 2)
+    obj = case.session.get(
+        AdObject, (ref.tenant_id, ref.advertiser_id, ref.kind, ref.remote_id)
+    )
+    obj.operation_status = "DISABLE"
+    case.session.add(obj)
+    case.session.flush()
+    filters = filters_for(operation_statuses=("DISABLE",))
+    old = query(case, filters=filters)
+    assert old.items[0].display["operation_status"] == "DISABLE"
+    obj.operation_status = "ENABLE"
+    case.session.add(obj)
+    case.session.flush()
+    current = query(case, filters=filters, snapshot_id=old.snapshot.snapshot_id)
+    assert current.snapshot.snapshot_id == old.snapshot.snapshot_id
+    assert [r.row_key for r in current.items] == [r.row_key for r in old.items]
+    assert current.items[0].display["operation_status"] == "ENABLE"
+    assert query(case, filters=filters).items == ()

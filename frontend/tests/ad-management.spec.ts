@@ -3,7 +3,12 @@ import {
   parsePastedRows,
   renameRuleFrom,
 } from "../src/features/ad-management/renameRules"
-import { adsBoundary, BC_A, TENANT } from "./utils/adsBoundary"
+import {
+  type AdsBoundaryOptions,
+  adsBoundary,
+  BC_A,
+  TENANT,
+} from "./utils/adsBoundary"
 
 const selectionId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 const previewId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
@@ -43,12 +48,13 @@ async function managementBoundary(
   page: Parameters<typeof adsBoundary>[0],
   options: {
     viewer?: boolean
+    reportOptions?: AdsBoundaryOptions
     unsupported?: boolean
     blockedParent?: boolean
     previewError?: { status: number; code: string; message: string }
   } = {},
 ) {
-  await adsBoundary(page)
+  await adsBoundary(page, options.reportOptions)
   const previewBodies: Array<Record<string, unknown>> = []
   const listQueries: Array<Record<string, string>> = []
   const renameSelectionBodies: Array<Record<string, unknown>> = []
@@ -835,3 +841,100 @@ test.describe("parsePastedRows", () => {
     })
   })
 })
+
+for (const paged of [false, true]) {
+  test(`启用回读后原页更新状态，不改快照、分页、筛选或后续勾选（${paged ? "第二页" : "首页与详情"}）`, async ({
+    page,
+  }) => {
+    await page.clock.install()
+    const reportOptions: AdsBoundaryOptions = {
+      paged,
+      campaignOperationStatus: "DISABLE",
+    }
+    await managementBoundary(page, { reportOptions })
+    let version = "before"
+    await page.route("**/ad-sync-status?*", (route) =>
+      route.fulfill({
+        json: {
+          accounts: [],
+          publication_version: version,
+          plan: { enabled: true, bc_report_supported: true, slowed: false },
+        },
+      }),
+    )
+    const queries: URLSearchParams[] = []
+    page.on("request", (req) => {
+      const url = new URL(req.url())
+      if (url.pathname.endsWith(`/tenants/${TENANT}/ads`))
+        queries.push(url.searchParams)
+    })
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("tab", { name: "系列", exact: true }).click()
+    await page.getByRole("textbox", { name: "搜索广告" }).fill("总裁归来")
+    await page.getByRole("button", { name: "应用筛选" }).click()
+    if (paged)
+      await page.getByRole("button", { name: "下一页", exact: true }).click()
+    const row = page.getByRole("row", {
+      name: paged ? /嘉书-第二页-测试/ : /嘉书-总裁归来-测试/,
+    })
+    await expect(row.getByText("已暂停", { exact: true })).toBeVisible()
+    await row.getByRole("checkbox").check()
+    await page.getByRole("button", { name: "启用", exact: true }).click()
+    await page.getByRole("button", { name: "提交，修改 1 个对象" }).click()
+    await expect(
+      page.getByRole("link", { name: "查看操作记录", exact: true }),
+    ).toBeVisible()
+    // 提交受理尚未等于成功，继续显示真实旧状态；后续用户的勾选必须保留。
+    await expect(row.getByText("已暂停", { exact: true })).toBeVisible()
+    await row.getByRole("checkbox").check()
+    if (!paged) {
+      await page.route("**/ads/campaign/campaign-1?*", (route) =>
+        route.fulfill({
+          json: {
+            statuses: {
+              operation: reportOptions.campaignOperationStatus,
+              review: "APPROVED",
+            },
+            configuration: {},
+          },
+        }),
+      )
+      await row
+        .getByRole("button", { name: "嘉书-总裁归来-测试", exact: true })
+        .click()
+      await expect(
+        page
+          .getByTestId("ads-detail-header")
+          .getByText("已暂停", { exact: true }),
+      ).toBeVisible()
+    }
+    reportOptions.campaignOperationStatus = "ENABLE"
+    version = "directory-published"
+    await page.clock.fastForward(3_000)
+    if (!paged) {
+      await expect(
+        page
+          .getByTestId("ads-detail-header")
+          .getByText("已开启", { exact: true }),
+      ).toBeVisible()
+      await expect(page.getByTitle("ENABLE", { exact: true })).toHaveText(
+        "已开启",
+      )
+      await page
+        .getByRole("dialog")
+        .getByRole("button", { name: "Close", exact: true })
+        .click()
+    }
+    await expect(row.getByText("已开启", { exact: true })).toBeVisible()
+    await expect(row.getByRole("checkbox")).toBeChecked()
+    await expect(page.getByRole("textbox", { name: "搜索广告" })).toHaveValue(
+      "总裁归来",
+    )
+    expect(queries.at(-1)?.get("snapshot_id")).toBe(
+      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    )
+    expect(queries.at(-1)?.get("cursor")).toBe(paged ? "cursor-1" : null)
+
+    expect(queries.at(-1)?.get("query")).toBe("总裁归来")
+  })
+}

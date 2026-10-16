@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   type AdsQueryPage,
@@ -9,6 +9,7 @@ import { useTenantScope } from "@/features/tenants/TenantScope"
 import { type AdsSearch, toAdsQuery } from "./search"
 export function useAdsQuery(search: AdsSearch, queryRevision = 0) {
   const { tenantId, bc, scope } = useTenantScope()
+  const queryClient = useQueryClient()
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [allMatching, setAllMatching] = useState(false)
   const [excluded, setExcluded] = useState<Set<string>>(new Set())
@@ -36,7 +37,13 @@ export function useAdsQuery(search: AdsSearch, queryRevision = 0) {
           path: { tenant_id: tenantId! },
           query: {
             bc_id: bcId!,
-            ...toAdsQuery(search, search.snapshot_id ?? undefined),
+            // 同键重读补全当前状态，沿用已返回的成员/顺序；主动筛选/刷新会换键建新快照。
+            ...toAdsQuery(
+              search,
+              search.snapshot_id ??
+                queryClient.getQueryData<AdsQueryPage>(queryKey)?.snapshot
+                  .snapshot_id,
+            ),
           },
           signal,
         })

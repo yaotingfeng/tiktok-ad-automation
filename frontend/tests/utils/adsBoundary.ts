@@ -17,6 +17,7 @@ export type AdsBoundaryOptions = {
   /** 让某个维度的报表响应延迟，用于验证切换维度时不显示上一维度的行。 */
   delayedDimension?: string
   paged?: boolean
+  campaignOperationStatus?: "ENABLE" | "DISABLE"
   mixedBuckets?: boolean
   refreshStatus?: "QUEUED" | "SYNC_DISABLED" | "API_BINDING_REQUIRED"
   incomplete?: boolean
@@ -244,8 +245,12 @@ export async function adsBoundary(
                       drama_name: "总裁归来",
                       advertiser_id: ADVERTISER,
                       remote_id: "campaign-1",
-                      operation_status: "DISABLE",
-                      secondary_status: "CAMPAIGN_STATUS_DISABLE",
+                      operation_status:
+                        options.campaignOperationStatus ?? "DISABLE",
+                      secondary_status:
+                        options.campaignOperationStatus === "ENABLE"
+                          ? "CAMPAIGN_STATUS_ENABLE"
+                          : "CAMPAIGN_STATUS_DISABLE",
                       campaign_budget: "50",
                     }
       return route.fulfill({

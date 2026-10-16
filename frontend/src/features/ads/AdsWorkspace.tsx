@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link, useNavigate } from "@tanstack/react-router"
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
@@ -54,6 +54,7 @@ export function AdsWorkspace() {
   const { tenantId, bc, scope, bcDirectory } = useTenantScope()
   const { user } = useAuth()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [search, setSearch] = useState<AdsSearch>(() => defaultAdsSearch())
   // 详情面板目标：表格行，或由上级路径/剧关联系列构造的对象行（不在快照内，不可直接操作）。
   const [detail, setDetail] = useState<{
@@ -79,6 +80,7 @@ export function AdsWorkspace() {
   const [submittedTask, setSubmittedTask] = useState<{
     task_id: string
     bc_id: string
+    submittedAt: number
   } | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [frozenSelection, setFrozenSelection] =
@@ -145,7 +147,11 @@ export function AdsWorkspace() {
           },
         })
       ).data,
-    refetchInterval: 30_000,
+    // 用户主动操作后短时加快本地版本观察；不在浏览器反复触发平台刷新任务。
+    refetchInterval: () =>
+      submittedTask && Date.now() - submittedTask.submittedAt < 5 * 60_000
+        ? 2000
+        : 30_000,
   })
   const publicationRef = useRef<{ scope: string; version: string } | null>(null)
   const publicationScope = `${tenantId}:${currentBcId}:${applied.start_date}:${applied.end_date}`
@@ -174,21 +180,50 @@ export function AdsWorkspace() {
     setQueryRevision((current) => current + 1)
     setSyncNotice("报表数据已更新")
   }, [clearSelection, clearManagementPreview, closeDetail])
+  const refetchRows = ads.query.refetch
+  const refreshCurrentPage = useCallback(() => {
+    void refetchRows()
+    // 已打开的详情/广告内素材也读取同一轮目录回读，不留着操作前的缓存。
+    void queryClient.invalidateQueries({
+      queryKey: ["tenant", tenantId, "ads"],
+      predicate: (query) =>
+        ["detail", "ad-materials"].includes(String(query.queryKey[3])) &&
+        query.queryKey[4] === currentBcId,
+    })
+  }, [refetchRows, queryClient, tenantId, currentBcId])
   useEffect(() => {
     if (!syncStatus.data) return
     const version = syncStatus.data.publication_version
     const previous = publicationRef.current
     publicationRef.current = { scope: publicationScope, version }
+    const followOwnOperation =
+      submittedTask?.bc_id === currentBcId &&
+      !!ads.snapshot &&
+      Date.parse(ads.snapshot.expires_at) > Date.now()
     if (!previous || previous.scope !== publicationScope) {
       pendingRefreshScope.current = null
       setNewDataAvailable(false)
+      // 早于首次同步状态响应完成的提交，也要读取当前页的真实状态。
+      if (followOwnOperation) void refreshCurrentPage()
       return
     }
     if (previous.version === version) return
     // 主动刷新完成后换快照；普通后台发布不能打断跨页选择和已打开的预览。
     if (pendingRefreshScope.current === publicationScope) loadLatest()
-    else setNewDataAvailable(true)
-  }, [syncStatus.data, publicationScope, loadLatest])
+    else if (followOwnOperation) {
+      // 本人操作的回读结果自动补全原快照；不换成员、不重排，也不清掉后续勾选或预览。
+      void refreshCurrentPage()
+      setNewDataAvailable(false)
+    } else setNewDataAvailable(true)
+  }, [
+    syncStatus.data,
+    publicationScope,
+    loadLatest,
+    submittedTask,
+    currentBcId,
+    ads.snapshot,
+    refreshCurrentPage,
+  ])
   const syncMutation = useMutation({
     mutationFn: async () => {
       // 手动刷新按当前筛选账户插队，不从当前页推导范围，也不触发历史回补。
@@ -524,7 +559,7 @@ export function AdsWorkspace() {
       {submittedTask && submittedTask.bc_id === currentBcId && (
         <Alert>
           <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
-            <span>操作已提交。可继续查看和操作当前报表，结果见操作记录。</span>
+            <span>操作已提交。回读完成后本页自动更新状态，可继续操作。</span>
             <Link
               to="/tenants/$tenantId/ad-management-tasks/$taskId"
               params={{ tenantId: tenantId!, taskId: submittedTask.task_id }}
@@ -735,7 +770,12 @@ export function AdsWorkspace() {
         </p>
       )}
       <AdsDetailSheet
-        row={detail?.row ?? null}
+        row={
+          detail?.fromSnapshot && detail.dimension === applied.dimension
+            ? (items.find((row) => row.row_key === detail.row.row_key) ??
+              detail.row)
+            : (detail?.row ?? null)
+        }
         dimension={detail?.dimension ?? applied.dimension}
         startDate={applied.start_date}
         endDate={applied.end_date}
@@ -771,7 +811,7 @@ export function AdsWorkspace() {
           onOpenChange={setPreviewOpen}
           onSubmitted={(task) => {
             if (scopeRef.current !== `${tenantId}:${task.bc_id}`) return
-            setSubmittedTask(task)
+            setSubmittedTask({ ...task, submittedAt: Date.now() })
             ads.selection.clear()
             clearManagementPreview()
           }}

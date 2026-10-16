@@ -183,3 +183,58 @@ def test_balance_publication_advances_visible_status_version(
         ]
         != first
     )
+
+
+def test_directory_publication_advances_status_version_without_new_metrics(
+    sync_api, session, sync_seed
+):
+    from uuid import uuid4
+
+    from app.modules.accounts.routing import freeze_route
+    from app.modules.ads.sync_models import AdDirectoryRun
+
+    client, path = sync_api
+    params = {"bc_id": "bc-a", "start_date": "2026-10-05", "end_date": "2026-10-05"}
+
+    def version():
+        response = client.get(f"{path}/ad-sync-status", params=params)
+        assert response.status_code == 200, response.text
+        return response.json()["publication_version"]
+
+    def directory(bc, account, published):
+        route = freeze_route(
+            session,
+            context=sync_seed.context,
+            bc_id=bc,
+            connection_id=sync_seed.connection.id,
+        )
+        row = AdDirectoryRun(
+            tenant_id=sync_seed.tenant_id,
+            advertiser_id=account,
+            actor_id=sync_seed.actor_id,
+            bc_id=bc,
+            connection_id=sync_seed.connection.id,
+            channel="OFFICIAL_API",
+            frozen_route=route.model_dump(mode="json"),
+            partition_key=uuid4().hex * 2,
+            query={},
+            kind="campaign",
+            ad_type="REGULAR",
+            status="COMPLETE" if published else "RUNNING",
+            published_version=published,
+        )
+        session.add(row)
+        session.flush()
+        return row
+
+    before = version()
+    # 同一账户同时属于两个 BC，另一 BC 的发布不能推进当前版本。
+    directory("bc-b", "acc-2", 99)
+    assert version() == before
+    run = directory("bc-a", "acc-1", None)
+    assert version() == before
+    run.status = "COMPLETE"
+    run.published_version = 100
+    session.add(run)
+    session.flush()
+    assert version() != before
