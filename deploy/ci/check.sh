@@ -187,17 +187,31 @@ lane_frontend() {
   bun run --filter frontend build
   cd frontend
   bun x playwright install chromium
-  if [[ -n $fe_workspace ]]; then
-    # 工作台用例只依赖页面内模拟接口，可并行；浏览器验收共用真实后端，保持串行。
-    # 页面由 vite preview 提供构建产物（见 playwright.config.ts），多 worker 不再争用编译 CPU。
-    bun x playwright test --project workspace --project workspace-source --reporter=list --workers="${CHECK_BROWSER_WORKERS:-3}"
-  fi
+  # 浏览器端到端验收（真实后端、独立数据库）与工作台用例（页面内模拟接口）互不依赖，
+  # 两者同时运行；验收内部共用一个后端服务，仍保持单 worker 串行。
+  local acceptance_pid=""
   if [[ -n $fe_batch || -n $fe_r2 ]]; then
-    # 浏览器端到端验收使用独立实例与独立 Redis 库号，与后端端到端验收同时运行。
-    docker exec "$browser_pg_name" psql -U postgres -qc 'CREATE DATABASE ci_browser_test' >/dev/null
-    export DATABASE_URL="postgresql://postgres:ci-local-password@127.0.0.1:$browser_pg_port/ci_browser_test"
-    export REDIS_URL="redis://127.0.0.1:$redis_port/40" TEST_REDIS_URL="redis://127.0.0.1:$redis_port/41"
+    ( set -euo pipefail; frontend_acceptance ) >"$work/lanes/frontend-acceptance.log" 2>&1 &
+    acceptance_pid=$!
   fi
+  local status=0
+  if [[ -n $fe_workspace ]]; then
+    # 页面由 vite preview 提供构建产物（见 playwright.config.ts），多 worker 不再争用编译 CPU。
+    bun x playwright test --project workspace --project workspace-source --reporter=list --workers="${CHECK_BROWSER_WORKERS:-3}" || status=$?
+  fi
+  if [[ -n $acceptance_pid ]]; then
+    wait "$acceptance_pid" || status=$?
+    printf '\n----- 浏览器端到端验收 -----\n'
+    cat "$work/lanes/frontend-acceptance.log"
+  fi
+  return "$status"
+}
+
+frontend_acceptance() {
+  # 独立实例与独立 Redis 库号，与后端端到端验收同时运行。
+  docker exec "$browser_pg_name" psql -U postgres -qc 'CREATE DATABASE ci_browser_test' >/dev/null
+  export DATABASE_URL="postgresql://postgres:ci-local-password@127.0.0.1:$browser_pg_port/ci_browser_test"
+  export REDIS_URL="redis://127.0.0.1:$redis_port/40" TEST_REDIS_URL="redis://127.0.0.1:$redis_port/41"
   if [[ -n $fe_batch ]]; then bun x playwright test --config=playwright.acceptance.config.ts; fi
   if [[ -n $fe_r2 ]]; then bun x playwright test --config=playwright.r2-acceptance.config.ts; fi
 }
@@ -220,7 +234,10 @@ lanes=()
 started=$SECONDS
 pids=()
 for lane in "${lanes[@]}"; do
-  ( set -euo pipefail; "lane_$lane" ) >"$work/lanes/$lane.log" 2>&1 &
+  # 每条线自己记录耗时：按顺序等待时的累计时间会把先结束的线也算成最长那条。
+  ( set -euo pipefail; lane_started=$SECONDS
+    trap 'echo $(( SECONDS - lane_started )) >"$work/lanes/'"$lane"'.seconds"' EXIT
+    "lane_$lane" ) >"$work/lanes/$lane.log" 2>&1 &
   pids+=($!)
   printf '检查线启动：%s\n' "$lane"
 done
@@ -228,7 +245,8 @@ failed=()
 for index in "${!lanes[@]}"; do
   lane=${lanes[$index]}
   if wait "${pids[$index]}"; then status=通过; else status=失败; failed+=("$lane"); fi
-  printf '检查线%s：%s（%d 分钟）\n' "$status" "$lane" $(( (SECONDS - started) / 60 ))
+  seconds=$(cat "$work/lanes/$lane.seconds" 2>/dev/null || echo $(( SECONDS - started )))
+  printf '检查线%s：%s（%d 分 %02d 秒）\n' "$status" "$lane" $(( seconds / 60 )) $(( seconds % 60 ))
 done
 for lane in "${lanes[@]}"; do
   printf '\n===== %s =====\n' "$lane"

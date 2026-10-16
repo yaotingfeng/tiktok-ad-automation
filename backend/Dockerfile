@@ -51,6 +51,9 @@ ENV UV_COMPILE_BYTECODE=1
 # Ref: https://docs.astral.sh/uv/guides/integration/docker/#caching
 ENV UV_LINK_MODE=copy
 
+# 国内镜像站偶发大文件慢速/中断（2026-10-17 Jenkins #7 uvloop 30 秒超时）：放宽单次超时并多重试。
+ENV UV_HTTP_TIMEOUT=120 UV_HTTP_RETRIES=5
+
 WORKDIR /app/
 
 # Place executables in the environment at the front of the path
