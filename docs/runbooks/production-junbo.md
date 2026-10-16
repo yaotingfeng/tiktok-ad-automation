@@ -6,6 +6,10 @@
 
 > **当前生产入口**：用户指定改为 `https://tkada.shortclipflix.com`；该域名已真实解析到新加坡 ALB，现有 `*.shortclipflix.com` 证书验证通过。本次配置切换及验收见[域名切换记录](../validation/2026-10-10-shortclipflix-domain.md)。下文 galaxyshortdrama 的 DNS 问题为首次发布时的历史情况。
 
+## 2026-10-16 目录发布容量修复
+
+本轮目录启动并发持久化为 1（此前 `pool_shrink` 仅是运行时措施），部署文件及重建 Pod 均需验收为 1。目录采用分批写入、独立发布续步和总事务预算；迁移 head 为 `0034_directory_publish_version`。四个已有业务开关沿用实际 true，不新增开关。发布结果及备份证据见[收尾记录](../validation/2026-10-16-directory-publish-finalization.md)，发布完成前以记录中的待验状态为准。
+
 ## 已确认的目标与授权（2026-10-10 更新）
 
 用户已明确“公司集群就是生产环境，现在要部署到生产环境”，并要求“测试服的密钥、队列和授权要直接复制过去”。本次是新加坡测试实例向公司生产集群的迁移，覆盖此前“禁止复制测试密钥/授权”的默认规则；不再要求用户另找一套集群凭据。迁移不授权重复创建广告或绕过已有 UNKNOWN/冻结执行保护。2026-10-10 用户提供 `/Users/yaotingfeng/Downloads/singaporeconfig`，明确改用阿里云新加坡 ACK；原 skill 中的腾讯云 TKE 仅为此前误用的准备目标，后续不再向其部署。

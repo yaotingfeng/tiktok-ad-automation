@@ -1,5 +1,6 @@
 """只展开已界定的账户集合；每次读取重新校验当前成员与 BC 授权。"""
 
+from sqlalchemy import tuple_
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -92,62 +93,112 @@ def list_objects(
 def append_campaign_name_projection(
     session: Session, *, campaign_ref: EntityRef, raw_name: str, parser_revision: int
 ) -> CampaignNameProjection:
-    """发布事务内追加名称审计；备注/空白变化不导致经营归组版本跳变。"""
+    """单对象调用与同步批量发布共用同一名称审计规则。"""
+    return append_campaign_name_projections(
+        session, campaigns=((campaign_ref, raw_name),), parser_revision=parser_revision
+    )[0]
+
+
+def append_campaign_name_projections(
+    session: Session,
+    *,
+    campaigns: tuple[tuple[EntityRef, str], ...],
+    parser_revision: int,
+) -> tuple[CampaignNameProjection, ...]:
+    """按批锁定对象、读取最新审计并追加；备注变化只增加名称版本。"""
     if (
-        campaign_ref.kind != "campaign"
-        or type(parser_revision) is not int
+        type(parser_revision) is not int
         or parser_revision < 1
+        or any(ref.kind != "campaign" for ref, _name in campaigns)
     ):
         raise DomainError("invalid_campaign_projection", "系列名称投影参数无效")
-    identity = parse_campaign_name(raw_name)
-    # 锁定稳定对象行，避免两个发布者并发分配同一 name_revision。
-    row = session.exec(
-        select(AdObject)
-        .where(
-            AdObject.tenant_id == campaign_ref.tenant_id,
-            AdObject.advertiser_id == campaign_ref.advertiser_id,
-            AdObject.kind == "campaign",
-            AdObject.remote_id == campaign_ref.remote_id,
-        )
-        .with_for_update()
-    ).first()
-    if row is None:
-        raise DomainError("ad_object_not_found", "系列对象尚未同步")
-    previous = session.exec(
-        select(CampaignNameProjection)
-        .where(
-            CampaignNameProjection.tenant_id == campaign_ref.tenant_id,
-            CampaignNameProjection.advertiser_id == campaign_ref.advertiser_id,
-            CampaignNameProjection.campaign_remote_id == campaign_ref.remote_id,
-        )
-        .order_by(col(CampaignNameProjection.name_revision).desc())
-        .limit(1)
-    ).first()
-    if previous and (previous.raw_name, previous.parser_revision) == (
-        raw_name,
-        parser_revision,
-    ):
-        return previous
-    grouping_revision = 1
-    if previous:
-        changed = (previous.provider_label, previous.drama_name, previous.status) != (
-            identity.provider_label,
-            identity.drama_name,
-            identity.status,
-        )
-        grouping_revision = previous.grouping_revision + int(changed)
-    projection = CampaignNameProjection(
-        tenant_id=campaign_ref.tenant_id,
-        advertiser_id=campaign_ref.advertiser_id,
-        campaign_remote_id=campaign_ref.remote_id,
-        raw_name=raw_name,
-        provider_label=identity.provider_label,
-        drama_name=identity.drama_name,
-        status=identity.status,
-        parser_revision=parser_revision,
-        name_revision=previous.name_revision + 1 if previous else 1,
-        grouping_revision=grouping_revision,
+    identities = {
+        (ref.tenant_id, ref.advertiser_id, ref.remote_id): name
+        for ref, name in campaigns
+    }
+    result = []
+    keys = sorted(identities)
+    for start in range(0, len(keys), 500):
+        batch = keys[start : start + 500]
+        # 与独立调用者共用稳定对象行锁；按身份排序避免多个批次逆序拿锁。
+        objects = session.exec(
+            select(AdObject)
+            .where(
+                AdObject.kind == "campaign",
+                tuple_(
+                    col(AdObject.tenant_id),
+                    col(AdObject.advertiser_id),
+                    col(AdObject.remote_id),
+                ).in_(batch),
+            )
+            .order_by(
+                col(AdObject.tenant_id),
+                col(AdObject.advertiser_id),
+                col(AdObject.remote_id),
+            )
+            .with_for_update()
+        ).all()
+        if len(objects) != len(batch):
+            raise DomainError("ad_object_not_found", "系列对象尚未同步")
+        previous_rows = session.exec(
+            select(CampaignNameProjection)
+            .where(
+                tuple_(
+                    col(CampaignNameProjection.tenant_id),
+                    col(CampaignNameProjection.advertiser_id),
+                    col(CampaignNameProjection.campaign_remote_id),
+                ).in_(batch),
+            )
+            .distinct(
+                col(CampaignNameProjection.tenant_id),
+                col(CampaignNameProjection.advertiser_id),
+                col(CampaignNameProjection.campaign_remote_id),
+            )
+            .order_by(
+                col(CampaignNameProjection.tenant_id),
+                col(CampaignNameProjection.advertiser_id),
+                col(CampaignNameProjection.campaign_remote_id),
+                col(CampaignNameProjection.name_revision).desc(),
+            )
+        ).all()
+        previous_by_key = {
+            (p.tenant_id, p.advertiser_id, p.campaign_remote_id): p
+            for p in previous_rows
+        }
+        for tenant_id, advertiser_id, remote_id in batch:
+            raw_name = identities[tenant_id, advertiser_id, remote_id]
+            identity = parse_campaign_name(raw_name)
+            previous = previous_by_key.get((tenant_id, advertiser_id, remote_id))
+            if previous and (previous.raw_name, previous.parser_revision) == (
+                raw_name,
+                parser_revision,
+            ):
+                result.append(previous)
+                continue
+            changed = previous is not None and (
+                previous.provider_label,
+                previous.drama_name,
+                previous.status,
+            ) != (identity.provider_label, identity.drama_name, identity.status)
+            projection = CampaignNameProjection(
+                tenant_id=tenant_id,
+                advertiser_id=advertiser_id,
+                campaign_remote_id=remote_id,
+                raw_name=raw_name,
+                provider_label=identity.provider_label,
+                drama_name=identity.drama_name,
+                status=identity.status,
+                parser_revision=parser_revision,
+                name_revision=previous.name_revision + 1 if previous else 1,
+                grouping_revision=previous.grouping_revision + int(changed)
+                if previous
+                else 1,
+            )
+            session.add(projection)
+            result.append(projection)
+        session.flush()
+    # 单条接口要求原身份对应的返回值；批量输入由调用方按对象身份去重。
+    by_key = {(p.tenant_id, p.advertiser_id, p.campaign_remote_id): p for p in result}
+    return tuple(
+        by_key[ref.tenant_id, ref.advertiser_id, ref.remote_id] for ref, _ in campaigns
     )
-    session.add(projection)
-    session.flush()
-    return projection

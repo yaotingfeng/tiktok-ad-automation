@@ -11,9 +11,10 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from sqlalchemy import func
+from sqlalchemy import text, tuple_
+from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session, col, select
 
 from app.core.context import TenantContext
@@ -21,7 +22,7 @@ from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.ads import DirectoryPage, EntityRef
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.modules.accounts.routing import verify_route
-from app.modules.ads.directory import append_campaign_name_projection
+from app.modules.ads.directory import append_campaign_name_projections
 from app.modules.ads.directory_requests import request_directory
 from app.modules.ads.models import AdMaterialReference, AdObject
 from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
@@ -325,20 +326,18 @@ def _complete_chain(pages: list[AdDirectoryPage]) -> list[AdDirectoryPage]:
     return ordered
 
 
-def _existing_object(
-    session: Session, ref: tuple[UUID, str, str, str]
-) -> AdObject | None:
-    return session.get(AdObject, ref, populate_existing=True)
+# 每条语句限制参数量和 JSONB 负载，避免把大目录一次塞进单条 INSERT。
+_PUBLISH_BATCH_SIZE = 500
 
 
-def _upsert_entity(
-    session: Session,
-    data: dict[str, Any],
-    *,
-    run: AdDirectoryRun,
-    version: int,
-    fallback_observed: datetime,
-) -> AdObject | None:
+def _batches[T](items: list[T]):
+    for start in range(0, len(items), _PUBLISH_BATCH_SIZE):
+        yield items[start : start + _PUBLISH_BATCH_SIZE]
+
+
+def _entity_values(
+    data: dict[str, Any], *, run: AdDirectoryRun, version: int, fallback: datetime
+) -> dict[str, Any]:
     ref = _parse_ref(data.get("ref"))
     if ref is None:
         raise _domain("directory_page_invalid", "暂存对象身份无效")
@@ -348,12 +347,11 @@ def _upsert_entity(
     parent = _parse_ref(data.get("parent_ref"))
     if parent is not None and parent[:2] != ref[:2]:
         raise _domain("directory_scope_mismatch", "暂存父对象超出冻结账户")
-    observed = _observed(data.get("observed_at"), fallback_observed)
-    existing = _existing_object(session, ref)
-    if existing is not None and existing.observed_at > observed:
-        # full 与 targeted 分区可能重叠；旧观察不得覆盖较新的对象事实。
-        return existing
-    values: dict[str, Any] = {
+    return {
+        "tenant_id": tenant_id,
+        "advertiser_id": advertiser_id,
+        "kind": kind,
+        "remote_id": remote_id,
         "parent_kind": parent[2] if parent else None,
         "parent_remote_id": parent[3] if parent else None,
         "ad_type": str(data.get("ad_type") or run.ad_type),
@@ -364,29 +362,63 @@ def _upsert_entity(
         "operation_status": data.get("operation_status"),
         "review_status": data.get("review_status"),
         "delivery_status": data.get("delivery_status"),
-        "observed_at": observed,
+        "observed_at": _observed(data.get("observed_at"), fallback),
         "published_version": version,
         "source_connection_id": run.connection_id,
         "source_channel": run.channel,
     }
-    if existing is None:
-        existing = AdObject(
-            tenant_id=tenant_id,
-            advertiser_id=advertiser_id,
-            kind=kind,
-            remote_id=remote_id,
-            **values,
+
+
+def _publish_entities(
+    session: Session,
+    entities: list[dict[str, Any]],
+    *,
+    run: AdDirectoryRun,
+    version: int,
+    fallback: datetime,
+) -> list[AdObject]:
+    # 跨页重复对象先合并；旧观察不能覆盖新观察，同时间沿用最后一条。
+    values: dict[tuple[str, str], dict[str, Any]] = {}
+    for data in entities:
+        value = _entity_values(data, run=run, version=version, fallback=fallback)
+        key = (value["kind"], value["remote_id"])
+        previous = values.get(key)
+        if previous is None or previous["observed_at"] <= value["observed_at"]:
+            values[key] = value
+    result: list[AdObject] = []
+    for batch in _batches(list(values.values())):
+        statement = insert(AdObject).values(batch)
+        session.connection().execute(
+            statement.on_conflict_do_update(
+                index_elements=["tenant_id", "advertiser_id", "kind", "remote_id"],
+                set_={
+                    key: statement.excluded[key]
+                    for key in batch[0]
+                    if key not in {"tenant_id", "advertiser_id", "kind", "remote_id"}
+                },
+                where=col(AdObject.observed_at) <= statement.excluded.observed_at,
+            )
         )
-    else:
-        for key, value in values.items():
-            setattr(existing, key, value)
-    session.add(existing)
-    return existing
+        # 被较新事实挡住的对象仍参与父目录及名称审计，保持原有发布语义。
+        result.extend(
+            session.exec(
+                select(AdObject)
+                .where(
+                    AdObject.tenant_id == run.tenant_id,
+                    AdObject.advertiser_id == run.advertiser_id,
+                    tuple_(col(AdObject.kind), col(AdObject.remote_id)).in_(
+                        [(item["kind"], item["remote_id"]) for item in batch]
+                    ),
+                )
+                .execution_options(populate_existing=True)
+            ).all()
+        )
+    return result
 
 
-def _upsert_material(
-    session: Session, data: dict[str, Any], *, run: AdDirectoryRun, version: int
-) -> None:
+def _material_values(
+    data: dict[str, Any], *, run: AdDirectoryRun, version: int
+) -> dict[str, Any]:
     use = data.get("use_ref")
     ad_ref = _parse_ref(use.get("ad_ref")) if isinstance(use, dict) else None
     if (
@@ -397,83 +429,114 @@ def _upsert_material(
         or ad_ref[2] != "ad"
     ):
         raise _domain("directory_scope_mismatch", "暂存素材使用身份无效")
-    platform_id = str(use.get("platform_material_id") or "")
-    material_type = str(use.get("material_type") or "")
-    inner_id = use.get("ad_material_id")
-    stmt = select(AdMaterialReference).where(
-        AdMaterialReference.tenant_id == run.tenant_id,
-        AdMaterialReference.advertiser_id == run.advertiser_id,
-        AdMaterialReference.ad_remote_id == ad_ref[3],
-        AdMaterialReference.platform_material_id == platform_id,
-        AdMaterialReference.material_type == material_type,
-    )
-    stmt = stmt.where(
-        col(AdMaterialReference.ad_material_id).is_(None)
-        if inner_id is None
-        else AdMaterialReference.ad_material_id == inner_id
-    )
-    existing = session.exec(stmt.with_for_update()).first()
-    complete = bool(data.get("complete"))
-    if existing is not None and not complete:
-        # 不完整素材响应不能清空已有平台素材或把本地关联改成猜测值。
-        return
     try:
         local_material_id = (
             UUID(data["local_material_id"]) if data.get("local_material_id") else None
         )
     except (TypeError, ValueError) as exc:
         raise _domain("directory_page_invalid", "本地素材身份无效") from exc
-    values: dict[str, Any] = {
+    return {
+        "id": uuid4(),
         "tenant_id": run.tenant_id,
         "advertiser_id": run.advertiser_id,
         "ad_remote_id": ad_ref[3],
-        "platform_material_id": platform_id,
-        "ad_material_id": inner_id,
-        "material_type": material_type,
+        "platform_material_id": str(use.get("platform_material_id") or ""),
+        "ad_material_id": use.get("ad_material_id"),
+        "material_type": str(use.get("material_type") or ""),
         "name": str(data.get("name") or ""),
         "main_material_id": data.get("main_material_id"),
         "main_material_type": data.get("main_material_type"),
         "creative_ids": list(data.get("creative_ids") or []),
         "local_material_id": local_material_id,
         "operation_status": data.get("operation_status"),
-        "complete": complete,
+        "complete": bool(data.get("complete")),
         "published_version": version,
     }
-    if existing is None:
-        existing = AdMaterialReference(**values)
-    else:
-        for key, value in values.items():
-            if key not in {
-                "tenant_id",
-                "advertiser_id",
-                "ad_remote_id",
-                "platform_material_id",
-                "ad_material_id",
-                "material_type",
-            }:
-                setattr(existing, key, value)
-    session.add(existing)
 
 
-def _queue_missing_parent(
+def _publish_materials(
     session: Session,
+    materials: list[dict[str, Any]],
     *,
     run: AdDirectoryRun,
-    route: FrozenTikTokRoute,
-    ref: tuple[UUID, str, str, str],
-    ad_type: str,
+    version: int,
 ) -> None:
-    # 缺失父对象仅补定向目录，使用当前运行已冻结的路由。
-    del route, ad_type
-    request_directory(
-        session,
-        tenant_id=run.tenant_id,
-        bc_id=run.bc_id,
-        frozen_route=run.frozen_route,
-        actor_id=run.actor_id,
-        advertiser_ids=[ref[1]],
-        scope="targeted",
-        refs=[EntityRef(ref[0], ref[1], cast(Any, ref[2]), ref[3])],
+    identity = (
+        "tenant_id",
+        "advertiser_id",
+        "ad_remote_id",
+        "platform_material_id",
+        "ad_material_id",
+        "material_type",
+    )
+    values: dict[tuple, dict[str, Any]] = {}
+    for data in materials:
+        value = _material_values(data, run=run, version=version)
+        key = tuple(value[field] for field in identity)
+        # 不完整响应既不能覆盖数据库已有记录，也不能清空本批更完整的观察。
+        if key not in values or value["complete"]:
+            values[key] = value
+    for batch in _batches(list(values.values())):
+        statement = insert(AdMaterialReference).values(batch)
+        session.scalars(
+            statement.on_conflict_do_update(
+                constraint="uq_ad_material_usage",
+                set_={
+                    key: statement.excluded[key]
+                    for key in batch[0]
+                    if key not in {*identity, "id"}
+                },
+                where=statement.excluded.complete.is_(True),
+            )
+            .returning(AdMaterialReference)
+            .execution_options(populate_existing=True)
+        ).all()
+
+
+def _queue_missing_parents(
+    session: Session, *, run: AdDirectoryRun, objects: list[AdObject]
+) -> None:
+    parents = sorted(
+        {
+            (obj.parent_kind, obj.parent_remote_id)
+            for obj in objects
+            if obj.parent_kind is not None and obj.parent_remote_id is not None
+        }
+    )
+    missing = set(parents)
+    for batch in _batches(parents):
+        missing.difference_update(
+            session.exec(
+                select(AdObject.kind, AdObject.remote_id).where(
+                    AdObject.tenant_id == run.tenant_id,
+                    AdObject.advertiser_id == run.advertiser_id,
+                    tuple_(col(AdObject.kind), col(AdObject.remote_id)).in_(batch),
+                )
+            ).all()
+        )
+    if missing:
+        # 按缺失父身份合并定向刷新，避免一个父对象被数千个子对象反复请求。
+        request_directory(
+            session,
+            tenant_id=run.tenant_id,
+            bc_id=run.bc_id,
+            frozen_route=run.frozen_route,
+            actor_id=run.actor_id,
+            advertiser_ids=[run.advertiser_id],
+            scope="targeted",
+            refs=[
+                EntityRef(run.tenant_id, run.advertiser_id, cast(Any, kind), remote_id)
+                for kind, remote_id in sorted(missing)
+            ],
+        )
+
+
+def _next_directory_version(session: Session) -> int:
+    # 序列从迁移时的最大历史版本之后开始；回滚允许跳号，不重复分配版本。
+    return (
+        session.connection()
+        .execute(text("SELECT nextval('ad_directory_published_version_seq')"))
+        .scalar_one()
     )
 
 
@@ -503,7 +566,7 @@ def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) 
         ).all()
         ordered = _complete_chain(list(pages))
         # Tenant 行是现有模型中的稳定锁点；先串行化同租户所有 BC 的版本分配，
-        # 再读取最大值，避免不同账户或 BC 同时取得同一个 published_version。
+        # 保证同租户较早运行的过期检查与发布提交顺序一致。
         tenant = session.exec(
             select(Tenant).where(Tenant.id == run.tenant_id).with_for_update()
         ).one_or_none()
@@ -525,66 +588,27 @@ def publish_directory(session: Session, *, run_id: UUID, claim_generation: int) 
             ).first()
             if newer_published is not None:
                 raise _domain("directory_run_stale", "较早目录运行不能晚于新运行发布")
-        # PostgreSQL greatest/NULL 的行为会随空表变化；分别读取更清晰，也兼容测试数据库。
-        object_max = (
-            session.exec(select(func.max(AdObject.published_version))).one() or 0
-        )
-        material_max = (
-            session.exec(select(func.max(AdMaterialReference.published_version))).one()
-            or 0
-        )
-        version = max(object_max, material_max, 0) + 1
+        version = _next_directory_version(session)
         fallback = datetime.now(UTC)
         entities: list[dict[str, Any]] = []
         materials: list[dict[str, Any]] = []
         for page in ordered:
             entities.extend(page.items)
             materials.extend(page.materials)
-        published_objects: list[AdObject] = []
-        for data in entities:
-            obj = _upsert_entity(
-                session, data, run=run, version=version, fallback_observed=fallback
-            )
-            if obj is not None:
-                published_objects.append(obj)
-        session.flush()
-        for data in materials:
-            _upsert_material(session, data, run=run, version=version)
-        session.flush()
-        for obj in published_objects:
-            if obj.parent_kind is None or obj.parent_remote_id is None:
-                continue
-            parent = session.get(
-                AdObject,
-                (
-                    run.tenant_id,
-                    run.advertiser_id,
-                    obj.parent_kind,
-                    obj.parent_remote_id,
-                ),
-                populate_existing=True,
-            )
-            if parent is None:
-                _queue_missing_parent(
-                    session,
-                    run=run,
-                    route=route,
-                    ref=(
-                        run.tenant_id,
-                        run.advertiser_id,
-                        obj.parent_kind,
-                        obj.parent_remote_id,
-                    ),
-                    ad_type=obj.ad_type,
-                )
-        for obj in published_objects:
-            if obj.kind == "campaign":
-                append_campaign_name_projection(
-                    session,
-                    campaign_ref=obj.ref,
-                    raw_name=obj.name,
-                    parser_revision=1,
-                )
+        published_objects = _publish_entities(
+            session, entities, run=run, version=version, fallback=fallback
+        )
+        _publish_materials(session, materials, run=run, version=version)
+        _queue_missing_parents(session, run=run, objects=published_objects)
+        append_campaign_name_projections(
+            session,
+            campaigns=tuple(
+                (obj.ref, obj.name)
+                for obj in published_objects
+                if obj.kind == "campaign"
+            ),
+            parser_revision=1,
+        )
         material_incomplete = any(
             page.coverage in {"PARTIAL_MATERIALS", "MATERIALS_INCOMPLETE"}
             for page in ordered

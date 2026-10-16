@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from billiard.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DBAPIError, OperationalError
 
 from app.core.db import engine
 from app.modules.ads import tasks
@@ -62,3 +62,12 @@ def test_soft_timeout_during_savepoint_closes_backend():
                 break
             sleep(0.05)
     assert count == 0
+
+
+def test_directory_transaction_bounds_total_time_across_short_statements(monkeypatch):
+    # 每条 SQL 都很快也不能让总事务超过预算，否则仍会撞上 Celery 信号。
+    monkeypatch.setattr(tasks, "_TRANSACTION_TIMEOUT", "150ms", raising=False)
+    with pytest.raises(DBAPIError, match="transaction timeout"):
+        with tasks._directory_session(engine) as session:
+            for _ in range(4):
+                session.connection().execute(text("SELECT pg_sleep(0.06)"))

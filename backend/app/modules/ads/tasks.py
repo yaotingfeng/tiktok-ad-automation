@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 
 from redis import Redis
 from sqlalchemy import text
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from app.core.config import settings
 from app.core.context import TenantContext
@@ -23,13 +23,14 @@ from app.jobs.outbox import enqueue_after_commit, validate_dispatch_payload
 from app.jobs.tasks import register_dispatch_task
 from app.modules.accounts.routing import verify_route
 from app.modules.ads.sync import publish_directory, stage_directory_page
-from app.modules.ads.sync_models import AdDirectoryRun
+from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
 
 TASK_NAME = "ads.sync_step"
 register_dispatch_task(TASK_NAME, "ads-directory")
 
 _LEASE_SECONDS = 90
 _LOCK_TIMEOUT = "20s"
+_TRANSACTION_TIMEOUT = "45s"
 
 
 @contextmanager
@@ -41,6 +42,10 @@ def _directory_session(database_engine: Any) -> Iterator[Session]:
                 text(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'")
             )
             session.connection().execute(text("SET LOCAL statement_timeout = '30s'"))
+            # 多条短语句也有总事务预算，早于 Celery 的 55 秒信号退出。
+            session.connection().execute(
+                text(f"SET LOCAL transaction_timeout = '{_TRANSACTION_TIMEOUT}'")
+            )
             # 发布没有外部请求；即使进程被软超时中断且回滚失败，也由服务器兜底。
             session.connection().execute(
                 text("SET LOCAL idle_in_transaction_session_timeout = '10s'")
@@ -123,6 +128,20 @@ def run_directory_step(
             advertiser_id=run.advertiser_id,
             capability="read",
         )
+        terminal = session.exec(
+            select(AdDirectoryPage.page)
+            .where(
+                AdDirectoryPage.run_id == run_id,
+                col(AdDirectoryPage.complete).is_(True),
+            )
+            .limit(1)
+        ).first()
+        if terminal is not None:
+            # 末页已持久化：独占一次任务期限做本地发布，恢复时也不再读远端。
+            publish_directory(session, run_id=run_id, claim_generation=claim_generation)
+            run.claim_token = run.claimed_until = None
+            session.commit()
+            return "READY"
         query_data = dict(run.query)
         # Celery retries must resume the persisted cursor.  The durable query is
         # the contract; page is the only mutable transport cursor.
@@ -148,35 +167,29 @@ def run_directory_step(
             page=page,
             claim_generation=claim_generation,
         )
-        if page.complete:
-            publish_directory(session, run_id=run_id, claim_generation=claim_generation)
-            current = session.get(AdDirectoryRun, run_id, populate_existing=True)
-            if current is not None and current.claim_generation == claim_generation:
-                current.claim_token = None
-                current.claimed_until = None
-            result = "READY"
-        else:
-            current = session.get(AdDirectoryRun, run_id)
-            if current is None or page.next_page is None:
-                raise DomainError("directory_incomplete", "目录页缺少后续游标")
-            current.next_page = page.next_page
-            current.status = "RUNNING"
-            current.next_attempt_at = datetime.now(UTC)
-            current.claim_token = None
-            current.claimed_until = None
-            result = "CONTINUE"
-        if result == "CONTINUE":
-            # Successor is part of the same DB transaction as the staged page;
-            # a broker failure therefore leaves one durable outbox row to retry.
-            enqueue_after_commit(
-                session,
-                context=context,
-                task_name=TASK_NAME,
-                task_key=f"ads-directory:{run_id}:{claim_generation}:{page.next_page}",
-                payload={"run_id": str(run_id), "claim_generation": claim_generation},
-            )
+        current = session.get(AdDirectoryRun, run_id)
+        if current is None or (not page.complete and page.next_page is None):
+            raise DomainError("directory_incomplete", "目录页缺少后续游标")
+        if current.claim_generation != claim_generation:
+            # 网络请求期间可能已经换代；相同旧页可复用，但不能清掉新 worker 的租约。
+            return "FAILED"
+        # 末页之后的游标只标识发布续步；领取时先识别暂存末页，不会请求该页。
+        next_page = page.page + 1 if page.complete else page.next_page
+        assert next_page is not None  # 上方已经拒绝非末页缺失游标。
+        current.next_page = next_page
+        current.status = "RUNNING"
+        current.next_attempt_at = datetime.now(UTC)
+        current.claim_token = current.claimed_until = None
+        # 续步与页同事务提交，统一扫描器的幂等键，消息丢失仍可换代恢复。
+        enqueue_after_commit(
+            session,
+            context=context,
+            task_name=TASK_NAME,
+            task_key=f"ads.sync_step:{run_id}:{claim_generation}:page:{current.next_page}",
+            payload={"run_id": str(run_id), "claim_generation": claim_generation},
+        )
         session.commit()
-        return result
+        return "CONTINUE"
 
 
 def _route(value: dict[str, Any]):

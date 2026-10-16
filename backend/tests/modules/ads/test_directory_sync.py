@@ -1,22 +1,29 @@
-from datetime import UTC, datetime
+from contextlib import contextmanager
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from time import monotonic
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import event, text
 from sqlmodel import select
 
 from app.core.config import settings
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.ads import (
     AdEntity,
+    AdMaterialUsage,
     CallEvidence,
     DirectoryPage,
     EntityRef,
+    MaterialUseRef,
 )
+from app.jobs.models import PendingDispatch
 from app.modules.accounts.connection_models import (
     BCConnectionBinding,
     ConnectionAuthorization,
 )
-from app.modules.ads.models import AdObject
+from app.modules.ads.models import AdMaterialReference, AdObject, CampaignNameProjection
 from app.modules.ads.sync import publish_directory, stage_directory_page
 from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
 
@@ -66,7 +73,16 @@ def _run(session, seed, *, kind="campaign", ad_type="REGULAR"):
         channel=seed.connection.kind,
         frozen_route=_route(seed),
         partition_key=(uuid4().hex * 2)[:64],
-        query={"page_size": 100},
+        query={
+            "advertiser_id": seed.ref.advertiser_id,
+            "kind": kind,
+            "ad_type": ad_type,
+            "page": 1,
+            "page_size": 100,
+            "ids": [],
+            "parent_ids": [],
+            "include_deleted": False,
+        },
         claim_generation=1,
         kind=kind,
         ad_type=ad_type,
@@ -265,3 +281,299 @@ def test_disabled_switch_does_not_execute_queued_directory_task(
         )
         == "WAIT"
     )
+
+
+@pytest.mark.parametrize("kind", ["ad", "campaign"])
+def test_large_publish_has_bounded_database_round_trips(
+    session, directory_seed, kind, record_property
+):
+    """千条对象/素材不能逐条往返数据库，且首次与重复观察都要保留完整事实。"""
+    _authority(session, directory_seed)
+    template = _page(directory_seed).items[0]
+    items = tuple(
+        replace(
+            template,
+            ref=EntityRef(
+                directory_seed.context.tenant_id, "account-a", kind, f"bulk-{i}"
+            ),
+            name=f"版权方-剧{i}-备注",
+        )
+        for i in range(1200)
+    )
+    materials = (
+        tuple(
+            AdMaterialUsage(
+                use_ref=MaterialUseRef(item.ref, f"vid-{i}", None, "VIDEO"),
+                local_material_id=None,
+                operation_status="ENABLE",
+                complete=True,
+                name=f"视频{i}",
+            )
+            for i, item in enumerate(items)
+        )
+        if kind == "ad"
+        else ()
+    )
+    counts = []
+    elapsed = []
+    statements = []
+
+    def record(_conn, _cursor, statement, _parameters, _context, _many):
+        statements.append(statement)
+
+    for _repeat in range(2):
+        run = _run(session, directory_seed, kind=kind)
+        page = DirectoryPage(items, materials, None, True, CallEvidence())
+        stage_directory_page(session, run_id=run.id, page=page, claim_generation=1)
+        statements.clear()
+
+        connection = session.connection()
+        event.listen(connection, "before_cursor_execute", record)
+        try:
+            started = monotonic()
+            version = publish_directory(session, run_id=run.id, claim_generation=1)
+            elapsed.append(round(monotonic() - started, 3))
+        finally:
+            event.remove(connection, "before_cursor_execute", record)
+        counts.append(len(statements))
+        objects = session.exec(select(AdObject).where(AdObject.kind == kind)).all()
+        assert len(objects) == (1201 if kind == "ad" else 1200)
+        assert all(
+            obj.published_version == version
+            for obj in objects
+            if obj.remote_id.startswith("bulk-")
+        )
+        if kind == "ad":
+            usages = session.exec(select(AdMaterialReference)).all()
+            assert len(usages) == 1200
+            assert all(u.complete and u.published_version == version for u in usages)
+        else:
+            projections = session.exec(select(CampaignNameProjection)).all()
+            assert len(projections) == 1200
+            assert all(p.name_revision == 1 for p in projections)
+    record_property("sql_counts", counts)
+    record_property("publish_seconds", elapsed)
+    assert max(counts) < 90, f"1200 条目录不应逐条查询/更新，实际 SQL 次数 {counts}"
+
+
+def test_publish_preserves_newer_objects_and_complete_materials(
+    session, directory_seed
+):
+    _authority(session, directory_seed)
+    current = directory_seed.row
+    current.parent_kind = current.parent_remote_id = None
+    old_name = current.name
+    template = _page(directory_seed).items[0]
+    entity = replace(
+        template, ref=current.ref, observed_at=current.observed_at - timedelta(days=1)
+    )
+    usage = AdMaterialUsage(
+        MaterialUseRef(current.ref, "vid", None, "VIDEO"),
+        None,
+        "ENABLE",
+        True,
+        name="完整素材",
+    )
+    first = _run(session, directory_seed, kind="ad")
+    stage_directory_page(
+        session,
+        run_id=first.id,
+        page=DirectoryPage((entity,), (usage,), None, True, CallEvidence()),
+        claim_generation=1,
+    )
+    publish_directory(session, run_id=first.id, claim_generation=1)
+    second = _run(session, directory_seed, kind="ad")
+    incomplete = replace(usage, complete=False, name="", operation_status=None)
+    stage_directory_page(
+        session,
+        run_id=second.id,
+        page=DirectoryPage((entity,), (incomplete,), None, True, CallEvidence()),
+        claim_generation=1,
+    )
+    publish_directory(session, run_id=second.id, claim_generation=1)
+    session.refresh(current)
+    material = session.exec(select(AdMaterialReference)).one()
+    assert current.name == old_name and current.published_version == 1
+    assert material.complete and material.name == "完整素材"
+    assert material.published_version == first.published_version
+
+
+def test_staged_terminal_page_publishes_without_another_provider_call(
+    session, directory_seed, monkeypatch
+):
+    from app.modules.ads import tasks
+
+    _authority(session, directory_seed)
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    run = _run(session, directory_seed)
+    stage_directory_page(
+        session, run_id=run.id, page=_page(directory_seed), claim_generation=1
+    )
+
+    def unexpected_gateway(**_kwargs):
+        raise AssertionError("已暂存末页的恢复/发布不能再次请求远端")
+
+    monkeypatch.setattr(tasks, "open_tiktok_gateway", unexpected_gateway)
+    assert (
+        tasks.run_directory_step(
+            database_engine=session.connection(),
+            redis_client=None,
+            context=directory_seed.context,
+            run_id=run.id,
+            claim_generation=1,
+        )
+        == "READY"
+    )
+    session.refresh(run)
+    assert run.status == "COMPLETE" and run.claimed_until is None
+
+
+def test_directory_version_allocation_does_not_scan_business_tables(session):
+    """版本由独立序列分配，不能在每次持租户锁时扫描几十万行取 MAX。"""
+    from app.modules.ads.sync import _next_directory_version
+
+    first = _next_directory_version(session)
+    second = _next_directory_version(session)
+    assert second > first > 0
+    assert (
+        session.execute(
+            text("SELECT last_value FROM ad_directory_published_version_seq")
+        ).scalar_one()
+        == second
+    )
+
+
+def test_terminal_fetch_commits_page_and_durable_publish_successor(
+    session, directory_seed, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from app.modules.ads import tasks
+
+    _authority(session, directory_seed)
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    run = _run(session, directory_seed)
+    page = _page(directory_seed)
+
+    class Reader:
+        def read_page(self, query):
+            assert query.page == 1
+            return page
+
+    @contextmanager
+    def gateway(**_kwargs):
+        yield SimpleNamespace(ads=Reader())
+
+    monkeypatch.setattr(tasks, "open_tiktok_gateway", gateway)
+    assert (
+        tasks.run_directory_step(
+            database_engine=session.connection(),
+            redis_client=None,
+            context=directory_seed.context,
+            run_id=run.id,
+            claim_generation=1,
+        )
+        == "CONTINUE"
+    )
+    session.refresh(run)
+    assert run.published_version is None and run.claimed_until is None
+    assert run.next_page == 2
+    assert session.get(AdDirectoryPage, (run.id, 1)).complete
+    dispatch = session.exec(
+        select(PendingDispatch).where(
+            PendingDispatch.task_key == f"ads.sync_step:{run.id}:1:page:2"
+        )
+    ).one()
+    assert dispatch.payload == {"run_id": str(run.id), "claim_generation": 1}
+
+    def unexpected_gateway(**_kwargs):
+        raise AssertionError("本地发布续步不得请求不存在的远端第二页")
+
+    monkeypatch.setattr(tasks, "open_tiktok_gateway", unexpected_gateway)
+    assert (
+        tasks.run_directory_step(
+            database_engine=session.connection(),
+            redis_client=None,
+            context=directory_seed.context,
+            run_id=run.id,
+            claim_generation=1,
+        )
+        == "READY"
+    )
+    session.refresh(run)
+    assert run.status == "COMPLETE"
+
+
+def test_invalid_material_rolls_back_the_entire_bulk_publish(session, directory_seed):
+    _authority(session, directory_seed)
+    run = _run(session, directory_seed)
+    stage_directory_page(
+        session, run_id=run.id, page=_page(directory_seed), claim_generation=1
+    )
+    staged = session.get(AdDirectoryPage, (run.id, 1))
+    staged.materials = [
+        {
+            "use_ref": {
+                "ad_ref": {
+                    "tenant_id": str(run.tenant_id),
+                    "advertiser_id": "foreign-account",
+                    "kind": "ad",
+                    "remote_id": "foreign",
+                }
+            }
+        }
+    ]
+    session.flush()
+    with pytest.raises(DomainError, match="暂存素材使用身份无效"):
+        publish_directory(session, run_id=run.id, claim_generation=1)
+    session.refresh(run)
+    assert run.published_version is None
+    assert (
+        session.get(
+            AdObject, (run.tenant_id, run.advertiser_id, "campaign", "campaign-1")
+        )
+        is None
+    )
+
+
+def test_old_page_response_cannot_clear_a_new_generation_lease(
+    session, directory_seed, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from app.modules.ads import tasks
+
+    _authority(session, directory_seed)
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    run = _run(session, directory_seed)
+    page = _page(directory_seed, complete=False, next_page=2)
+    stage_directory_page(session, run_id=run.id, page=page, claim_generation=1)
+    new_token = uuid4()
+    new_until = datetime.now(UTC) + timedelta(minutes=2)
+
+    class Reader:
+        def read_page(self, _query):
+            run.claim_generation = 2
+            run.claim_token = new_token
+            run.claimed_until = new_until
+            session.flush()
+            return page
+
+    @contextmanager
+    def gateway(**_kwargs):
+        yield SimpleNamespace(ads=Reader())
+
+    monkeypatch.setattr(tasks, "open_tiktok_gateway", gateway)
+    assert (
+        tasks.run_directory_step(
+            database_engine=session.connection(),
+            redis_client=None,
+            context=directory_seed.context,
+            run_id=run.id,
+            claim_generation=1,
+        )
+        == "FAILED"
+    )
+    session.refresh(run)
+    assert run.claim_generation == 2 and run.claim_token == new_token
+    assert run.claimed_until == new_until and run.next_page == 1
