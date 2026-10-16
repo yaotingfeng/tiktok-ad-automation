@@ -31,9 +31,10 @@ pipeline {
         PYPI_INDEX_URL = 'https://mirrors.aliyun.com/pypi/simple'
         PYPI_FILES_URL = 'https://mirrors.aliyun.com/pypi'
         NPM_REGISTRY = 'https://registry.npmmirror.com'
-        // 节点由全公司任务共用（16 核 / 32 GiB）。首次检查中浏览器用例与后端分组同时运行时页面超过
-        // 30 秒未响应，单独运行全部通过，因此并发低于本机默认值。
-        CHECK_BACKEND_SHARDS = '3'
+        // 16 核 / 32 GiB 节点检查时仍有 16 GiB 以上可用内存、负载低于 4；增加独立数据库分组。
+        // 浏览器仍单 worker，避免放大页面响应争用；验收使用单独 PostgreSQL，与普通组隔离。
+        CHECK_BACKEND_SHARDS = '6'
+        CHECK_ACCEPTANCE_SHARDS = '4'
         CHECK_BROWSER_WORKERS = '1'
     }
 
