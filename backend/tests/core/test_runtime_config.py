@@ -125,6 +125,7 @@ def test_celery_routes_control_and_has_no_result_backend():
     assert {queue.name for queue in celery_app.conf.task_queues} == {
         "ad-management",
         "ads-directory",
+        "ads-publish",
         "ads-reporting",
         "builds",
         "control",

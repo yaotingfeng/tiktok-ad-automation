@@ -36,3 +36,5 @@
 - 使用已验证生产备份在 Docker internal network 的独立 PostgreSQL 18 中恢复并执行 0034/0035，真实目录 payload 4,582 对象、4,404 素材、2 页：49 条 SQL、5.45 秒完成本地发布。事务回滚、容器及提取数据随后清理，无外部 API 调用或生产写入；该结果仅为本机隔离演练。
 
 - 发布队列完整 ads + report job_tasks + 队列回归 64 passed；补充重复发布/唯一消费者后针对 22 passed；全局 ruff/ty、4 套部署资产测试通过。独立只读复核无 Critical/Important；真实 Redis 同一 Worker 双队列证明发布先于 50 条读取耗尽。
+
+- 最终全量轮次发现核心测试仍固定断言旧七队列清单，已补 `ads-publish`，该文件 12 passed。旧 75dcc8d9 检查轮次停止，不计全量通过；当轮前端 591 passed、发布集成各项通过，但后端未完成。后续以修正后精确候选的完整记录为准。
