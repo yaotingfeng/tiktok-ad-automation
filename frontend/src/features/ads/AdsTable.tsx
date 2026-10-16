@@ -1,7 +1,6 @@
 import { CircleAlert, Info } from "lucide-react"
 import type { ReportRow } from "@/client"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -16,6 +15,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { Pager } from "@/features/tenants/shared"
 import { AdsNameCell, rowDisplayName } from "./AdsNameCell"
 import { type ColumnDef, formatMetric, isRecoveryOpen } from "./metricCatalog"
 import { SortableHead } from "./SortableHead"
@@ -249,7 +249,9 @@ export function AdsTable({
   onDrill,
   onFilterParent,
   nextCursor,
-  hasPrevious,
+  page,
+  pageSize,
+  onPageSizeChange,
   onNext,
   onPrevious,
   sortBy,
@@ -270,7 +272,9 @@ export function AdsTable({
   onDrill: (row: ReportRow) => void
   onFilterParent: (link: ParentLink, advertiserId: string) => void
   nextCursor?: string | null
-  hasPrevious: boolean
+  page: number
+  pageSize: number
+  onPageSizeChange: (limit: number) => void
   onNext: () => void
   onPrevious: () => void
   sortBy: string
@@ -464,28 +468,19 @@ export function AdsTable({
             {loading ? "正在加载当前报表…" : "没有匹配的广告"}
           </p>
         )}
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t px-4 py-3 text-sm text-muted-foreground">
-          <span className="text-xs">共 {total} 条</span>
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={!hasPrevious}
-              onClick={onPrevious}
-            >
-              上一页
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={!nextCursor}
-              onClick={onNext}
-            >
-              下一页
-            </Button>
-          </div>
+        <div className="border-t px-4 py-3">
+          <Pager
+            paging={{
+              page,
+              limit: pageSize,
+              setLimit: onPageSizeChange,
+              previous: onPrevious,
+              next: onNext,
+            }}
+            total={total}
+            nextCursor={nextCursor}
+            busy={loading}
+          />
         </div>
       </CardContent>
     </Card>

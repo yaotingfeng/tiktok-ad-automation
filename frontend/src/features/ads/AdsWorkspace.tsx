@@ -741,13 +741,16 @@ export function AdsWorkspace() {
                   onDrill={navigateToChild}
                   onFilterParent={filterByParent}
                   nextCursor={ads.query.data?.next_cursor}
-                  hasPrevious={cursorHistory.length > 0}
+                  page={cursorHistory.length + 1}
+                  pageSize={applied.limit}
+                  // 更改条数后回到第一页，并清除与旧快照关联的游标和冻结选择。
+                  onPageSizeChange={(limit) => applyScope({ limit })}
                   onNext={nextPage}
                   onPrevious={previousPage}
                   sortBy={applied.sort_by ?? "spend"}
                   sortDirection={applied.sort_direction ?? "desc"}
                   onSort={sort}
-                  loading={ads.query.isLoading}
+                  loading={ads.query.isFetching}
                 />
               </TabsContent>
             ))}

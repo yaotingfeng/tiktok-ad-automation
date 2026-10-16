@@ -17,6 +17,8 @@ export type AdsBoundaryOptions = {
   /** 让某个维度的报表响应延迟，用于验证切换维度时不显示上一维度的行。 */
   delayedDimension?: string
   paged?: boolean
+  /** 分页摘要使用的冻结匹配总数。 */
+  total?: number
   campaignOperationStatus?: "ENABLE" | "DISABLE"
   mixedBuckets?: boolean
   refreshStatus?: "QUEUED" | "SYNC_DISABLED" | "API_BINDING_REQUIRED"
@@ -391,7 +393,7 @@ export async function adsBoundary(
               },
             },
           ],
-          total: 1,
+          total: options.total ?? 1,
           summary: {
             row_count: 1,
             incomplete_advertiser_count: options.incomplete ? 2 : 0,
@@ -497,7 +499,13 @@ export async function adsBoundary(
             status: "COMPLETE",
             updated_at: "2026-10-01T00:00:00Z",
           },
-          next_cursor: options.paged && !secondPage ? "cursor-1" : null,
+          next_cursor:
+            options.paged &&
+            !secondPage &&
+            (options.total === undefined ||
+              Number(url.searchParams.get("limit") ?? 50) < options.total)
+              ? "cursor-1"
+              : null,
         },
       })
     }

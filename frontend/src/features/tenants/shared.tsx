@@ -105,7 +105,10 @@ export function Pager({
   total,
   busy,
 }: {
-  paging: ReturnType<typeof useCursorPage>
+  paging: Pick<
+    ReturnType<typeof useCursorPage>,
+    "page" | "limit" | "setLimit" | "previous" | "next"
+  >
   nextCursor?: string | null
   total: number | undefined
   busy: boolean
@@ -133,7 +136,7 @@ export function Pager({
           </SelectContent>
         </Select>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <PaginationSummary
           total={visibleTotal}
           page={paging.page}

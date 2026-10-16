@@ -6,9 +6,88 @@ import {
   BC_B,
   TENANT,
 } from "./utils/adsBoundary"
-import { expectLineDrawn } from "./utils/trendChart"
 
 test.describe("ads workspace", () => {
+  test("分页显示页码，切换每页条数保留筛选并清除旧游标", async ({ page }) => {
+    await adsBoundary(page, { paged: true, total: 75 })
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await page.getByRole("textbox", { name: "搜索广告" }).fill("嘉书")
+    await page.getByRole("button", { name: "应用筛选" }).click()
+    await expect(
+      page.getByText("共 75 条 · 第 1 / 2 页", { exact: true }),
+    ).toBeVisible()
+    const pager = page.locator("div.border-t").filter({
+      has: page.getByRole("combobox", { name: "每页条数" }),
+    })
+    await pager.screenshot({
+      path: test.info().outputPath("report-pagination-desktop.png"),
+    })
+    await expect(
+      page.getByRole("button", { name: "上一页", exact: true }),
+    ).toBeDisabled()
+    await page.getByRole("button", { name: "下一页", exact: true }).click()
+    await expect(
+      page.getByText("共 75 条 · 第 2 / 2 页", { exact: true }),
+    ).toBeVisible()
+    await expect(
+      page.getByRole("button", { name: "下一页", exact: true }),
+    ).toBeDisabled()
+    await page.getByRole("combobox", { name: "每页条数" }).click()
+    const request = page.waitForRequest((value) => {
+      const url = new URL(value.url())
+      return (
+        url.pathname.endsWith(`/tenants/${TENANT}/ads`) &&
+        url.searchParams.get("limit") === "100"
+      )
+    })
+    await page.getByRole("option", { name: "100 条", exact: true }).click()
+    const url = new URL((await request).url())
+    expect(url.searchParams.get("cursor")).toBeNull()
+    expect(url.searchParams.get("snapshot_id")).toBeNull()
+    expect(url.searchParams.get("query")).toBe("嘉书")
+    expect(url.searchParams.get("bc_id")).toBe(BC_A)
+    await expect(
+      page.getByText("共 75 条 · 第 1 / 1 页", { exact: true }),
+    ).toBeVisible()
+    await expect(
+      page.getByRole("button", { name: "上一页", exact: true }),
+    ).toBeDisabled()
+    await expect(
+      page.getByRole("button", { name: "下一页", exact: true }),
+    ).toBeDisabled()
+    await page.getByRole("button", { name: "应用筛选" }).click()
+    await expect(
+      page.getByRole("combobox", { name: "每页条数" }),
+    ).toContainText("100 条")
+  })
+
+  test("窄屏分页条数、页码和按钮均在视口内", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 640 })
+    await adsBoundary(page, { total: 75, paged: true })
+    await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
+    await expect(
+      page.getByText("共 75 条 · 第 1 / 2 页", { exact: true }),
+    ).toBeVisible()
+    const pager = page.locator("div.border-t").filter({
+      has: page.getByRole("combobox", { name: "每页条数" }),
+    })
+    await pager.scrollIntoViewIfNeeded()
+    for (const control of [
+      page.getByRole("combobox", { name: "每页条数" }),
+      page.getByText("共 75 条 · 第 1 / 2 页", { exact: true }),
+      page.getByRole("button", { name: "上一页", exact: true }),
+      page.getByRole("button", { name: "下一页", exact: true }),
+    ]) {
+      const box = await control.boundingBox()
+      expect(box).not.toBeNull()
+      expect(box!.x).toBeGreaterThanOrEqual(0)
+      expect(box!.x + box!.width).toBeLessThanOrEqual(390)
+    }
+    await pager.screenshot({
+      path: test.info().outputPath("report-pagination-mobile.png"),
+    })
+  })
+
   test("外部广告六维切换保留筛选", async ({ page }) => {
     await adsBoundary(page)
     await page.goto(`/tenants/${TENANT}/ads?bc_id=${BC_A}`)
