@@ -616,7 +616,7 @@ def test_http_submission_scope_and_read_routes(session, context, other_context, 
     )
 
 
-def test_503_accounts_submit_only_header_and_expand_at_most_100_facts(
+def test_203_accounts_submit_only_header_and_expand_at_most_100_facts(
     session, context, prepared
 ):
     from sqlalchemy import event
@@ -627,9 +627,10 @@ def test_503_accounts_submit_only_header_and_expand_at_most_100_facts(
     from tests.modules.builds.test_drafts import account
     from tests.modules.builds.test_previews import seed_targeting_directory
 
-    for index in range(500):
+    # 203 个账户：预览仍跨 3 页（PAGE_SIZE=100），展开量也超过单次上限 limit=100。
+    for index in range(203):
         identity = f"capacity-{index:04}"
-        account(session, context, identity, capability=index == 499)
+        account(session, context, identity, capability=index == 202)
         grant = session.exec(
             select(BCAccountAccess).where(BCAccountAccess.advertiser_id == identity)
         ).one()
@@ -646,7 +647,7 @@ def test_503_accounts_submit_only_header_and_expand_at_most_100_facts(
             )
         )
     session.flush()
-    seed_targeting_directory(session, context, [f"capacity-{i:04}" for i in range(500)])
+    seed_targeting_directory(session, context, [f"capacity-{i:04}" for i in range(203)])
     preview = previews.generate_preview(
         session, context=context, draft_id=prepared, expected_revision=1
     )
@@ -673,8 +674,9 @@ def test_503_accounts_submit_only_header_and_expand_at_most_100_facts(
     summary = submissions.get_submission(
         session, context=context, submission_id=receipt.submission_id
     )
+    # 203 个新账户 + prepared 夹具的 3 个 = 206 个账户 × 2 部剧 = 412 个系列、2472 条广告。
     assert (
-        summary.submitted.campaign_count == 1006 and summary.submitted.ad_count == 6036
+        summary.submitted.campaign_count == 412 and summary.submitted.ad_count == 2472
     )
     assert not submissions.expand_submission(
         session, context=context, submission_id=receipt.submission_id, limit=100

@@ -358,9 +358,10 @@ test("source availability and temporary cleanup poll independently without repla
   )
 })
 
-test("interrupted local manifest setup resumes the same parent intent after file reselection", async ({
-  page,
-}) => {
+// 浏览器内加载开发服务器上的工装页/源码模块，见 playwright.config.ts 的 devServerOnly。
+test("interrupted local manifest setup resumes the same parent intent after file reselection", {
+  tag: "@dev-server",
+}, async ({ page }) => {
   const f = await ingestBoundary(page)
   await page.goto(location)
   const requestId = await page.evaluate(async () => {

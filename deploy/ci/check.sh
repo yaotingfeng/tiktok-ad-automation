@@ -59,6 +59,7 @@ chmod 700 "$work"
 run_id="tkada-ci-$(date +%s)-$$"
 pg_name="$run_id-pg"
 acceptance_pg_name="$run_id-acceptance-pg"
+browser_pg_name="$run_id-browser-pg"
 redis_name="$run_id-redis"
 image_name="tiktok-ad-automation:ci-$run_id"
 # 与 deploy/release/common.py 的 mirrored 一致：Jenkins 用本项目 ACR 副本，本机用官方镜像。
@@ -67,7 +68,7 @@ cleanup() {
   status=$?
   trap - EXIT
   # 名称属于本次唯一运行；失败也回收自建镜像、容器和源码副本。
-  docker rm -fv "$redis_name" "$pg_name" "$acceptance_pg_name" >/dev/null 2>&1 || true
+  docker rm -fv "$redis_name" "$pg_name" "$acceptance_pg_name" "$browser_pg_name" >/dev/null 2>&1 || true
   docker image rm "$image_name" >/dev/null 2>&1 || true
   rm -rf "$work"
   exit "$status"
@@ -122,23 +123,25 @@ start_pg() {
     -c shared_buffers=512MB -c work_mem=16MB >/dev/null
 }
 start_pg "$pg_name"
-# 端到端验收（后端与浏览器）用第二个实例，与普通用例同时运行而不争用同一个数据库。
+# 后端端到端验收用第二个实例、浏览器端到端验收用第三个实例：三类检查同时运行，
+# 互不争用同一个数据库，浏览器验收无需等后端验收结束。
 start_pg "$acceptance_pg_name"
+start_pg "$browser_pg_name"
 docker run -d --name "$redis_name" -p 127.0.0.1::6379 "$(mirrored redis:8)" --databases 64 >/dev/null
 for ((attempt=0; attempt<60; attempt++)); do
-  if docker exec "$pg_name" pg_isready -U postgres >/dev/null 2>&1 && docker exec "$acceptance_pg_name" pg_isready -U postgres >/dev/null 2>&1 && docker exec "$redis_name" redis-cli ping >/dev/null 2>&1; then break; fi
+  if docker exec "$pg_name" pg_isready -U postgres >/dev/null 2>&1 && docker exec "$acceptance_pg_name" pg_isready -U postgres >/dev/null 2>&1 && docker exec "$browser_pg_name" pg_isready -U postgres >/dev/null 2>&1 && docker exec "$redis_name" redis-cli ping >/dev/null 2>&1; then break; fi
   sleep 1
 done
 docker exec "$pg_name" pg_isready -U postgres
 docker exec "$acceptance_pg_name" pg_isready -U postgres
+docker exec "$browser_pg_name" pg_isready -U postgres
 docker exec "$redis_name" redis-cli ping
 pg_port=$(docker port "$pg_name" 5432/tcp | sed 's/.*://')
 acceptance_pg_port=$(docker port "$acceptance_pg_name" 5432/tcp | sed 's/.*://')
+browser_pg_port=$(docker port "$browser_pg_name" 5432/tcp | sed 's/.*://')
 redis_port=$(docker port "$redis_name" 6379/tcp | sed 's/.*://')
 export DATABASE_URL="postgresql://postgres:ci-local-password@127.0.0.1:$pg_port/tiktok_ci_test"
 export ACCEPTANCE_DATABASE_URL="postgresql://postgres:ci-local-password@127.0.0.1:$acceptance_pg_port/tiktok_ci_test"
-# 后端验收结束（或后端检查线不跑验收）时写入，浏览器验收随后独占验收实例。
-export CHECK_ACCEPTANCE_DONE="$work/lanes/backend-acceptance.done"
 export REDIS_URL="redis://127.0.0.1:$redis_port/0"
 export TEST_REDIS_URL="redis://127.0.0.1:$redis_port/1"
 export PROJECT_NAME='TikTok Ad Automation CI' FIRST_SUPERUSER=admin
@@ -148,13 +151,13 @@ export AWS_EC2_METADATA_DISABLED=true AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_
 export UV_NO_ENV_FILE=1 PLAYWRIGHT_SKIP_BROWSER_GC=1
 # 前端开发服务器与浏览器验收服务每批取空闲端口：并行的另一批检查或本机开发服务器
 # 占用固定端口时，不会被本批测试复用或在中途关闭而导致成批连接失败。
-read -r PLAYWRIGHT_PORT ACCEPTANCE_BROWSER_PORT R2_ACCEPTANCE_PORT R2_STORAGE_PORT < <(python3 -c '
+read -r PLAYWRIGHT_PORT PLAYWRIGHT_SOURCE_PORT ACCEPTANCE_BROWSER_PORT R2_ACCEPTANCE_PORT R2_STORAGE_PORT < <(python3 -c '
 import socket
-socks = [socket.socket() for _ in range(4)]
+socks = [socket.socket() for _ in range(5)]
 for s in socks: s.bind(("127.0.0.1", 0))
 print(*(s.getsockname()[1] for s in socks))
 for s in socks: s.close()')
-export PLAYWRIGHT_PORT ACCEPTANCE_BROWSER_PORT R2_ACCEPTANCE_PORT R2_STORAGE_PORT
+export PLAYWRIGHT_PORT PLAYWRIGHT_SOURCE_PORT ACCEPTANCE_BROWSER_PORT R2_ACCEPTANCE_PORT R2_STORAGE_PORT
 uv sync --frozen --package app
 # 测试数据库运行在 Docker 内，是所有分组共享的瓶颈：组数不超过 Docker CPU 数。
 docker_cpus=$(docker info --format '{{.NCPU}}' 2>/dev/null || echo 4)
@@ -186,15 +189,13 @@ lane_frontend() {
   bun x playwright install chromium
   if [[ -n $fe_workspace ]]; then
     # 工作台用例只依赖页面内模拟接口，可并行；浏览器验收共用真实后端，保持串行。
-    bun x playwright test --project workspace --reporter=list --workers="${CHECK_BROWSER_WORKERS:-3}"
+    # 页面由 vite preview 提供构建产物（见 playwright.config.ts），多 worker 不再争用编译 CPU。
+    bun x playwright test --project workspace --project workspace-source --reporter=list --workers="${CHECK_BROWSER_WORKERS:-3}"
   fi
   if [[ -n $fe_batch || -n $fe_r2 ]]; then
-    # 浏览器端到端验收与后端端到端验收都是多分钟级批量搭建，同时运行会互相挤占
-    # 到超时；等后端验收结束（不必等普通用例）再开始，其余前端检查不受影响。
-    while [[ -e "$work/lanes/backend.running" && ! -e $CHECK_ACCEPTANCE_DONE ]]; do sleep 5; done
-    # 浏览器验收使用验收实例上的独立库与独立 Redis 库号。
-    docker exec "$acceptance_pg_name" psql -U postgres -qc 'CREATE DATABASE ci_browser_test' >/dev/null
-    export DATABASE_URL="postgresql://postgres:ci-local-password@127.0.0.1:$acceptance_pg_port/ci_browser_test"
+    # 浏览器端到端验收使用独立实例与独立 Redis 库号，与后端端到端验收同时运行。
+    docker exec "$browser_pg_name" psql -U postgres -qc 'CREATE DATABASE ci_browser_test' >/dev/null
+    export DATABASE_URL="postgresql://postgres:ci-local-password@127.0.0.1:$browser_pg_port/ci_browser_test"
     export REDIS_URL="redis://127.0.0.1:$redis_port/40" TEST_REDIS_URL="redis://127.0.0.1:$redis_port/41"
   fi
   if [[ -n $fe_batch ]]; then bun x playwright test --config=playwright.acceptance.config.ts; fi
@@ -219,8 +220,7 @@ lanes=()
 started=$SECONDS
 pids=()
 for lane in "${lanes[@]}"; do
-  touch "$work/lanes/$lane.running"
-  ( set -euo pipefail; trap 'rm -f "$work/lanes/'"$lane"'.running"' EXIT; "lane_$lane" ) >"$work/lanes/$lane.log" 2>&1 &
+  ( set -euo pipefail; "lane_$lane" ) >"$work/lanes/$lane.log" 2>&1 &
   pids+=($!)
   printf '检查线启动：%s\n' "$lane"
 done

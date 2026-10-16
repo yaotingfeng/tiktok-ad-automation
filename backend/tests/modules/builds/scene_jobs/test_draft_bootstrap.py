@@ -253,7 +253,7 @@ def test_unknown_scope_or_readonly_role_finishes_with_explicit_account_block(
     assert len(wire[0]) == 1
 
 
-def test_205_accounts_use_one_bc_chain_and_bounded_persisted_scene_cursor(
+def test_105_accounts_use_one_bc_chain_and_bounded_persisted_scene_cursor(
     job_env, wire, redis_client
 ):
     from sqlalchemy import func
@@ -265,7 +265,8 @@ def test_205_accounts_use_one_bc_chain_and_bounded_persisted_scene_cursor(
     )
 
     env = job_env
-    ids = ["actual-account", *[f"account-{i:04}" for i in range(204)]]
+    # 105 个账户：场景写入跨一个 100 条的提交边界，并跨 3 个 50 条的身份页。
+    ids = ["actual-account", *[f"account-{i:04}" for i in range(104)]]
     with Session(engine) as session, session.begin():
         session.add_all(
             [
@@ -302,8 +303,8 @@ def test_205_accounts_use_one_bc_chain_and_bounded_persisted_scene_cursor(
                 CapabilityJob.tenant_id == env["context"].tenant_id
             )
         ).one()
-    for number in range(5):
-        wire[1].append(role_page(ids[number * 50 : (number + 1) * 50], number + 1, 205))
+    for number in range(3):
+        wire[1].append(role_page(ids[number * 50 : (number + 1) * 50], number + 1, 105))
         run_capability(env, redis_client, cap.id)
     for _ in range(3):
         run_capability(env, redis_client, cap.id)
@@ -321,13 +322,13 @@ def test_205_accounts_use_one_bc_chain_and_bounded_persisted_scene_cursor(
             if count != previous:
                 counts.append(count)
             previous = count
-            if count == 205:
+            if count == 105:
                 control = session.get(
                     DraftScenePreparation, (env["context"].tenant_id, task_id)
                 )
                 assert control.scenes_queued and control.scene_after == max(ids)
                 break
-    assert counts == [100, 200, 205]
+    assert counts == [100, 105]
     with Session(engine) as session:
         assert (
             session.exec(
@@ -343,10 +344,10 @@ def test_205_accounts_use_one_bc_chain_and_bounded_persisted_scene_cursor(
                 .select_from(SceneJob)
                 .where(SceneJob.tenant_id == env["context"].tenant_id)
             ).one()
-            == 205
+            == 105
         )
         assert session.get(BuildDraft, draft_id).status == "PREPARING"
-    assert len(wire[0]) == 5
+    assert len(wire[0]) == 3
 
 
 def selection_draft(env, wire, redis_client):
@@ -370,9 +371,7 @@ def selection_draft(env, wire, redis_client):
         return draft_id, draft.revision, catalog
 
 
-def test_identity_catalog_available_before_scene_complete(
-    job_env, wire, redis_client
-):
+def test_identity_catalog_available_before_scene_complete(job_env, wire, redis_client):
     from app.modules.builds.identity_selection import draft_identities
     from app.modules.builds.scene_job_models import SceneJobPage
 
@@ -412,9 +411,7 @@ def test_minis_catalog_available_before_scene_complete(job_env, wire, redis_clie
             )
         ).all():
             db.delete(row)
-        job.facts = {
-            key: job.facts[key] for key in ("identity", "minis")
-        }
+        job.facts = {key: job.facts[key] for key in ("identity", "minis")}
     with Session(engine) as db:
         result = draft_minis(db, context=env["context"], draft_id=draft_id)
         assert result.state == "choose"

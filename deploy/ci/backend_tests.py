@@ -4,8 +4,7 @@
 - 耗时超过阈值的测试文件按用例拆分到多个组，避免单个慢文件决定总时长。
 - 端到端验收（tests/acceptance）是多分钟级批量搭建，对数据库负载敏感，不与普通用例
   共用同一个测试数据库实例：设置 ACCEPTANCE_DATABASE_URL（独立实例）时两类同时运行，
-  否则先跑完普通用例再单独跑验收。验收结束时若设置了 CHECK_ACCEPTANCE_DONE，写入该
-  标记文件，供浏览器验收接着使用同一实例。
+  否则先跑完普通用例再单独跑验收。
 - --fast 只跑快速层（排除 slow 标记，含全部验收），供日常检查；发布门禁跑全部。
 - 官方 MCP 通道退役中，mcp 标记的用例始终不运行。
 - 每组内保持文件路径排序（已知部分夹具依赖收集顺序）。
@@ -197,12 +196,6 @@ def wait_groups(running, label, args, started):
     return outcomes, measured
 
 
-def mark_acceptance_done(env):
-    marker = env.get("CHECK_ACCEPTANCE_DONE")
-    if marker:
-        Path(marker).touch()
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--shards", type=int, default=int(os.environ.get("CHECK_BACKEND_SHARDS", "4")))
@@ -252,7 +245,6 @@ def main():
         more, more_measured = wait_groups(acceptance_running, "验收", args, started)
         outcomes.update(more)
         measured.update(more_measured)
-        mark_acceptance_done(base_env)
     more, more_measured = wait_groups(regular_running, "", args, started)
     outcomes.update(more)
     measured.update(more_measured)
@@ -265,7 +257,6 @@ def main():
         )
         outcomes.update(more)
         measured.update(more_measured)
-    mark_acceptance_done(base_env)
     failed = sorted(n for n, o in outcomes.items() if o == "failed")
     missing = sorted(set(nodeids) - set(outcomes))
     if missing:

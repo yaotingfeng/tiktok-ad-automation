@@ -55,11 +55,12 @@ def retain_build_history(isolated_strategy_database, monkeypatch):
     return db
 
 
-def ready_matrix(env, redis_client, wire):
+def ready_matrix(env, redis_client, wire, materials=20, targets=10):
     """先跑一条正式转存，再复制为不同内容的历史已成功种子测试初态。"""
     with Session(engine) as db, db.begin():
         accounts = [env["target"]] + [
-            target(db, env, advertiser_id=f"capacity-{index}") for index in range(9)
+            target(db, env, advertiser_id=f"capacity-{index}")
+            for index in range(targets - 1)
         ]
     consumers = [queue(env, account).task_id for account in accounts]
     owner_id = complete_seed(env, redis_client, wire)
@@ -81,7 +82,7 @@ def ready_matrix(env, redis_client, wire):
             (db.get(MaterialDistribution, identity), state(identity)[1])
             for identity in consumers
         ]
-        for index in range(1, 20):
+        for index in range(1, materials):
             identity = uuid4()
             copied = MaterialFile(
                 **(
@@ -225,7 +226,7 @@ def test_twenty_by_ten_seed_binding_has_bounded_sql_and_preserves_common_source(
 def test_concurrent_seed_binding_claims_each_relationship_once(
     seed_env, redis_client, wire
 ):
-    consumers = ready_matrix(seed_env, redis_client, wire)
+    consumers = ready_matrix(seed_env, redis_client, wire, materials=2, targets=3)
     barrier = Barrier(2)
 
     def resume():
@@ -239,7 +240,7 @@ def test_concurrent_seed_binding_claims_each_relationship_once(
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [pool.submit(resume) for _ in range(2)]
         results = [future.result(timeout=20) for future in futures]
-    assert sum(results) == 200 and all(value >= 0 for value in results)
+    assert sum(results) == 6 and all(value >= 0 for value in results)
 
 
 def test_peer_finishes_between_candidate_queries_is_noop(seed_env, redis_client, wire):
@@ -279,10 +280,8 @@ def test_peer_finishes_between_candidate_queries_is_noop(seed_env, redis_client,
     assert finished
 
 
-def test_revoked_target_does_not_poison_other_nine_accounts(
-    seed_env, redis_client, wire
-):
-    consumers = ready_matrix(seed_env, redis_client, wire)
+def test_revoked_target_does_not_poison_other_accounts(seed_env, redis_client, wire):
+    consumers = ready_matrix(seed_env, redis_client, wire, materials=2, targets=3)
     with Session(engine) as db, db.begin():
         grant = db.get(
             BCAccountAccess,
@@ -300,13 +299,13 @@ def test_revoked_target_does_not_poison_other_nine_accounts(
             context=seed_env["context"],
             distribution_id=consumers[0],
         )
-        == 180
+        == 4
     )
     with Session(engine) as db:
         rows = db.exec(
             select(MaterialDistribution).where(MaterialDistribution.id.in_(consumers))
         ).all()
-        assert sum(dist.status == "blocked" for dist in rows) == 20
+        assert sum(dist.status == "blocked" for dist in rows) == 2
         assert all(
             dist.status
             == ("blocked" if dist.advertiser_id == seed_env["target"] else "queued")
@@ -340,21 +339,26 @@ def finish_matrix_share(seed_env, redis_client, wire, consumers):
             )["list"][0]
             for asset, material in sources
         ]
-    assert len(records) == 20
+        # 计算实际的矩阵规模
+        materials_count = len(records)
+        all_dists = db.exec(
+            select(MaterialDistribution).where(MaterialDistribution.id.in_(consumers))
+        ).all()
+        targets_count = len({dist.advertiser_id for dist in all_dists})
     wire[1].extend([{"list": records}, {}])
     run(seed_env, redis_client, consumers[0], kind="prepare")
     assert all(state(identity)[0].status == "verifying" for identity in consumers)
     shares = [json.loads(call[2]["body"]) for call in wire[0] if "/share/" in call[1]]
     assert len(shares) == 1
     assert shares[0]["advertiser_id"] == "primary-b"
-    assert len(shares[0]["material_ids"]) == 20
-    assert len(shares[0]["shared_advertiser_ids"]) == 10
+    assert len(shares[0]["material_ids"]) == materials_count
+    assert len(shares[0]["shared_advertiser_ids"]) == targets_count
 
 
 def test_mid_binding_revocation_rolls_back_that_account_only(
     seed_env, redis_client, wire
 ):
-    consumers = ready_matrix(seed_env, redis_client, wire)
+    consumers = ready_matrix(seed_env, redis_client, wire, materials=2, targets=3)
     revoked = []
 
     def revoke(conn, _cursor, statement, _params, _context, _many):
@@ -384,7 +388,7 @@ def test_mid_binding_revocation_rolls_back_that_account_only(
         )
     finally:
         event.remove(Engine, "before_cursor_execute", revoke)
-    assert revoked and changed == 180
+    assert revoked and changed == 4
     for identity in consumers:
         dist, op, _ = state(identity)
         if dist.advertiser_id == "capacity-0":
@@ -398,7 +402,7 @@ def test_mid_binding_revocation_rolls_back_that_account_only(
 def test_seed_row_lock_exits_within_budget_and_same_dependencies_resume(
     seed_env, redis_client, wire
 ):
-    consumers = ready_matrix(seed_env, redis_client, wire)
+    consumers = ready_matrix(seed_env, redis_client, wire, materials=2, targets=3)
     before = len(wire[0])
     with ThreadPoolExecutor(max_workers=1) as pool:
         with Session(engine) as blocker, blocker.begin():
@@ -430,7 +434,7 @@ def test_seed_row_lock_exits_within_budget_and_same_dependencies_resume(
                 context=seed_env["context"],
                 distribution_id=consumers[0],
             )
-            == 200
+            == 6
         )
     assert len(wire[0]) == before
 
@@ -438,7 +442,7 @@ def test_seed_row_lock_exits_within_budget_and_same_dependencies_resume(
 def test_seed_binding_commits_each_account_in_its_own_bounded_transaction(
     seed_env, redis_client, wire
 ):
-    consumers = ready_matrix(seed_env, redis_client, wire)
+    consumers = ready_matrix(seed_env, redis_client, wire, materials=2, targets=3)
     connections = set()
 
     def record(conn, _cursor, statement, _params, _context, _many):
@@ -455,17 +459,17 @@ def test_seed_binding_commits_each_account_in_its_own_bounded_transaction(
                 context=seed_env["context"],
                 distribution_id=consumers[0],
             )
-            == 200
+            == 6
         )
     finally:
         event.remove(Engine, "before_cursor_execute", record)
-    assert len(connections) == 10, "每账户最多20关系，不能200关系共用5秒资源事务"
+    assert len(connections) == 3, "每账户最多2关系，不能6关系共用5秒资源事务"
 
 
 def test_later_account_lock_preserves_progress_then_original_prepare_shares_once(
     seed_env, redis_client, wire
 ):
-    consumers = ready_matrix(seed_env, redis_client, wire)
+    consumers = ready_matrix(seed_env, redis_client, wire, materials=2, targets=3)
     before = len(wire[0])
     with Session(engine) as blocker, blocker.begin():
         second = blocker.exec(

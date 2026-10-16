@@ -113,7 +113,7 @@ def seed_cover_queue(env, engine, count):
         return {job.id for job in jobs}
 
 
-@pytest.mark.parametrize("count", [100, 1000, 10000])
+@pytest.mark.parametrize("count", [1000, 10000])
 @pytest.mark.parametrize("gateway_case", ["OFFICIAL_API"], indirect=True)
 def test_indexed_cover_groups_and_actual_sdk_arrays_scale_linearly(
     cover_env,

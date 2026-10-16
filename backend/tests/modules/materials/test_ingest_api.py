@@ -178,7 +178,7 @@ def test_session_request_lookup_and_exact_replay(api):
     )
 
 
-@pytest.mark.parametrize("count", [500, 20_000])
+@pytest.mark.parametrize("count", [500, 2_000])
 def test_bounded_chunks_and_seek_pages_do_not_scale_summary_queries(api, count):
     from sqlalchemy import event
 
@@ -244,6 +244,16 @@ def test_bounded_chunks_and_seek_pages_do_not_scale_summary_queries(api, count):
         ).status_code
         == 422
     )
+
+
+def test_session_boundary_accepts_20000_rejects_20001(api):
+    # 单批上限只校验登记边界；分块与翻页的查询有界性由上面的 2000 条用例覆盖。
+    client, path = api
+    response = client.post(path + "/ingest-sessions", json=session_body(20_000))
+    assert response.status_code == 201
+    assert response.json()["expected_count"] == 20_000
+    response = client.post(path + "/ingest-sessions", json=session_body(20_001))
+    assert response.status_code == 422
 
 
 def test_seal_reports_missing_metadata_then_prevents_new_indexes(api):

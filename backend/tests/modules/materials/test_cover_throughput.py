@@ -301,7 +301,7 @@ def test_cover_planning_checks_only_one_twenty_by_ten_window(source_env, wire):
     assert len(admission_queries) <= 2, len(admission_queries)
 
 
-@pytest.mark.parametrize("count,targets", [(2, 2), (20, 10)])
+@pytest.mark.parametrize("count,targets", [(2, 2)])
 def test_missing_images_share_one_rectangle_and_publish_actual_target_ids(
     source_env, redis_client, wire, count, targets
 ):

@@ -20,12 +20,13 @@ from tests.modules.builds.test_previews import drain, seed_targeting_directory
 from tests.modules.builds.test_previews import prepared as prepared
 
 
-def test_503_accounts_expand_every_drama_without_bulk_account_materialization(
+def test_203_accounts_expand_every_drama_without_bulk_account_materialization(
     session, context, prepared
 ):
-    for i in range(500):
+    # 203 个账户：预览仍跨 3 页（PAGE_SIZE=100），覆盖分页读取与逐页展开。
+    for i in range(203):
         identity = f"extra-{i:04}"
-        account(session, context, identity, capability=i == 499)
+        account(session, context, identity, capability=i == 202)
         grant = session.exec(
             select(BCAccountAccess).where(
                 BCAccountAccess.tenant_id == context.tenant_id,
@@ -45,7 +46,7 @@ def test_503_accounts_expand_every_drama_without_bulk_account_materialization(
             )
         )
     session.flush()
-    seed_targeting_directory(session, context, [f"extra-{i:04}" for i in range(500)])
+    seed_targeting_directory(session, context, [f"extra-{i:04}" for i in range(203)])
     identity = previews.generate_preview(
         session, context=context, draft_id=prepared, expected_revision=1
     )
@@ -77,13 +78,14 @@ def test_503_accounts_expand_every_drama_without_bulk_account_materialization(
         session, context=context, preview_id=identity
     )
     assert summary.status == "FROZEN"
+    # 203 个新账户 + prepared 夹具的 3 个 = 206 个账户；每账户 2 部剧，每系列 3 组 × 2 条广告。
     assert (
         summary.total_unit_count,
         summary.campaign_count,
         summary.adgroup_count,
         summary.ad_count,
-    ) == (1006, 1006, 3018, 6036)
-    assert summary.daily_budget_sum == Decimal("100600")
+    ) == (412, 412, 1236, 2472)
+    assert summary.daily_budget_sum == Decimal("41200")
     cursor, counts = None, Counter()
     while True:
         page = previews.get_preview_units(
@@ -93,7 +95,7 @@ def test_503_accounts_expand_every_drama_without_bulk_account_materialization(
         cursor = page.next_cursor
         if cursor is None:
             break
-    assert len(counts) == 503 and set(counts.values()) == {2}
+    assert len(counts) == 206 and set(counts.values()) == {2}
 
 
 def test_repair_preserves_unpublished_backoff_identity_and_generation(

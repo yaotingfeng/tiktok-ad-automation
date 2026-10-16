@@ -81,7 +81,7 @@ uv run ruff check app tests
 uv run ty check app
 ```
 
-生成客户端用根目录 `bash scripts/generate-client.sh`。脚本从真实 OpenAPI 生成类型，不自动修改其他前端文件。前端构建 `bun run --filter frontend build`；工作台测试在 `frontend/` 执行 `bun x playwright test --project workspace`（先安装 Chromium），外部边界由测试拦截。
+生成客户端用根目录 `bash scripts/generate-client.sh`。脚本从真实 OpenAPI 生成类型，不自动修改其他前端文件。前端构建 `bun run --filter frontend build`；工作台测试在 `frontend/` 执行 `bun x playwright test --project workspace --project workspace-source`（先安装 Chromium），外部边界由测试拦截。
 
 ## 本地 Compose
 

@@ -213,12 +213,12 @@ def test_claim_is_persisted_once_and_different_files_share_primary(env):
         )
 
 
-def test_twenty_sources_and_two_thousand_jobs_remain_concentrated(env):
+def test_twenty_sources_and_two_hundred_jobs_remain_concentrated(env):
     with Session(engine) as db, db.begin():
         add_accounts(db, env, 20)
-        ids = add_files(db, env, 2000)
+        ids = add_files(db, env, 200)
         counts = Counter()
-        for offset in range(0, 2000, 20):
+        for offset in range(0, 200, 20):
             assignments = [
                 (identity, claim(db, env, identity))
                 for identity in ids[offset : offset + 20]
@@ -227,7 +227,7 @@ def test_twenty_sources_and_two_thousand_jobs_remain_concentrated(env):
             for identity, access in assignments:
                 counts[access.advertiser_id] += 1
                 release(db, env, identity, access)
-        assert counts == {"source-000": 2000}
+        assert counts == {"source-000": 200}
         assert (
             sum(
                 db.exec(

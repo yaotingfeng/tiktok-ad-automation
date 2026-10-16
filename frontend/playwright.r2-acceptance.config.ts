@@ -12,8 +12,8 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   reporter: "list",
   webServer: {
-    command:
-      "bun run build && cd ../backend && PYTHONPATH=. exec ../.venv/bin/python -m tests.acceptance.r2_browser_server",
+    // CI 的前端检查线已在同一源码副本中构建（VITE_API_URL 同为空），不再重复构建。
+    command: `${process.env.CI ? "" : "bun run build && "}cd ../backend && PYTHONPATH=. exec ../.venv/bin/python -m tests.acceptance.r2_browser_server`,
     url: `http://127.0.0.1:${port}/__r2_acceptance__/health`,
     reuseExistingServer: false,
     env: { VITE_API_URL: "" },

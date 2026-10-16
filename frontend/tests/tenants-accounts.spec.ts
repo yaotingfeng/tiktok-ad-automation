@@ -1797,9 +1797,10 @@ for (const authorization of [
     expect(requests.every((req) => req.method === "GET")).toBe(true)
   })
 
-test("exported bulk input resolves exact lines and displays only parent-paged results without selection", async ({
-  page,
-}) => {
+// 浏览器内加载开发服务器上的工装页/源码模块，见 playwright.config.ts 的 devServerOnly。
+test("exported bulk input resolves exact lines and displays only parent-paged results without selection", {
+  tag: "@dev-server",
+}, async ({ page }) => {
   let submitted: unknown
   await page.route("**/api/**", (route) => {
     submitted = route.request().postDataJSON()

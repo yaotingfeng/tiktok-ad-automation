@@ -9,7 +9,9 @@ from app.modules.materials.models import AccountMaterial
 from tests.acceptance.scenario import SCALE
 
 
-@pytest.mark.parametrize("acceptance_scenario", ["jiashu", "wangyan"], indirect=True)
+# 完整搭建只跑 wangyan：提交只读取冻结预览，与版权方无关；jiashu（默认版权方）的真实
+# 准备与冻结由 test_preparation_and_freeze_are_real_and_have_no_tiktok_writes 覆盖且断言更严。
+@pytest.mark.parametrize("acceptance_scenario", ["wangyan"], indirect=True)
 def test_real_preparation_freeze_submission_and_official_sdk(acceptance_scenario):
     scenario = acceptance_scenario
     scenario.prepare()

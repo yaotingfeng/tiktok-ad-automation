@@ -33,10 +33,11 @@ pipeline {
         PYPI_FILES_URL = 'https://mirrors.aliyun.com/pypi'
         NPM_REGISTRY = 'https://registry.npmmirror.com'
         // 16 核 / 32 GiB 节点检查时仍有 16 GiB 以上可用内存、负载低于 4；增加独立数据库分组。
-        // 浏览器仍单 worker，避免放大页面响应争用；验收使用单独 PostgreSQL，与普通组隔离。
+        // 浏览器 3 worker：工作台页面改由 vite preview 提供构建产物，不再争用开发服务器编译 CPU
+        // （本机实测同批 114 项 1 worker 128 秒 → 3 worker 37 秒）。验收各用单独 PostgreSQL。
         CHECK_BACKEND_SHARDS = '6'
         CHECK_ACCEPTANCE_SHARDS = '4'
-        CHECK_BROWSER_WORKERS = '1'
+        CHECK_BROWSER_WORKERS = '3'
     }
 
     options {
