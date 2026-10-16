@@ -822,3 +822,60 @@ def test_single_slot_refill_round_robins_three_tenants_across_rounds(monkeypatch
                 seen.append(fresh.tenant_id)
         a, b, c = [s.tenant_id for s, _ in seeds]
         assert seen == [a, b, c, a, b, c, a, b]
+
+
+@pytest.mark.parametrize("missing_lease", [False, True])
+def test_expired_broker_claim_cannot_bypass_dispatch_window(
+    monkeypatch, committed_sync_seed, redis_client, missing_lease
+):
+    """上线前积压的过期消息不能自行续租，绕过新窗口和热任务优先级。"""
+    from datetime import timedelta
+
+    from app.core.db import engine
+    from app.modules.reporting.store_models import ReportSyncJob
+    from tests.modules.reporting.test_jobs import _enqueue_and_claim
+
+    seed, factory = committed_sync_seed
+    job = _enqueue_and_claim(factory, seed)
+    with factory() as session, session.begin():
+        session.get(ReportSyncJob, job.id).claimed_until = (
+            None if missing_lease else datetime.now(UTC) - timedelta(seconds=1)
+        )
+    monkeypatch.setattr(job_tasks.settings, "ADS_SYNC_ENABLED", True)
+
+    def forbidden(**_kwargs):
+        raise AssertionError("过期消息须由有界调度重新领取，不能自行恢复执行")
+
+    monkeypatch.setattr(job_tasks, "_reader_for", forbidden)
+    assert (
+        job_tasks.run_job_step(
+            database_engine=engine,
+            redis_client=redis_client,
+            job_id=job.id,
+            claim_token=job.claim_token,
+        )
+        == "FAILED"
+    )
+    with factory() as session:
+        row = session.get(ReportSyncJob, job.id)
+        assert row.status == "RUNNING"
+        assert row.claimed_until is None or row.claimed_until < datetime.now(UTC)
+        assert row.finished_at is None
+
+    with factory() as session, session.begin():
+        job_tasks._dispatch_report_jobs(session, datetime.now(UTC))
+    with factory() as session:
+        row = session.get(ReportSyncJob, job.id)
+        assert row.claim_token != job.claim_token and row.claimed_until > datetime.now(
+            UTC
+        )
+    # 新代数已经领取后，旧消息仍不可进入平台；不改变新代数的有效租约。
+    assert (
+        job_tasks.run_job_step(
+            database_engine=engine,
+            redis_client=redis_client,
+            job_id=job.id,
+            claim_token=job.claim_token,
+        )
+        == "FAILED"
+    )

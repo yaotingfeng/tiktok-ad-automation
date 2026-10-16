@@ -502,10 +502,14 @@ def _failed(session, job, code):
 
 
 def run_job_step(*, database_engine, redis_client, job_id, claim_token):
-    now = datetime.now(UTC)
     with Session(database_engine, expire_on_commit=False) as session:
         job = session.get(ReportSyncJob, job_id, with_for_update=True)
+        now = datetime.now(UTC)
         if job is None or job.claim_token != claim_token or job.status != "RUNNING":
+            return "FAILED"
+        # 旧积压消息不能越过有界派发窗口自行续租；只结束本条消息，
+        # 业务运行仍留给扫描器按当前优先级重新领取，不记终态失败。
+        if job.claimed_until is None or job.claimed_until <= now:
             return "FAILED"
         if not settings.ADS_SYNC_ENABLED:
             job.status, job.due_at = "WAITING", now + timedelta(minutes=1)

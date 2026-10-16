@@ -126,7 +126,7 @@ def claim_jobs(session: Session, *, now: datetime, limit: int) -> list[ReportSyn
             LEFT JOIN report_dispatch_cursor c ON c.tenant_id = j.tenant_id
             WHERE (j.status IN ('QUEUED','WAITING') AND j.due_at <= :now
               AND (j.claimed_until IS NULL OR j.claimed_until <= :now))
-               OR (j.status = 'RUNNING' AND j.claimed_until <= :now))
+               OR (j.status = 'RUNNING' AND (j.claimed_until IS NULL OR j.claimed_until <= :now)))
         SELECT id FROM ranked
         ORDER BY rn, last_dispatched_at NULLS FIRST, priority, due_at, id LIMIT :limit"""),
             parameters={"now": now, "limit": limit},
