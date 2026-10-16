@@ -33,10 +33,10 @@ pipeline {
         PYPI_FILES_URL = 'https://mirrors.aliyun.com/pypi'
         NPM_REGISTRY = 'https://registry.npmmirror.com'
         // 16 核 / 32 GiB 节点检查时仍有 16 GiB 以上可用内存、负载低于 4；增加独立数据库分组。
-        // #7 实测：普通 6 组各 13.5～15.8 分钟决定后端总时长，验收 4 组 10.3 分钟即结束，加到 8 组。
+        // 8 组时节点可用内存降到约 0.4 GiB、检查超过 30 分钟（#11，同时有其他任务），保持 6 组。
         // 浏览器 3 worker：工作台页面改由 vite preview 提供构建产物，不再争用开发服务器编译 CPU
         // （本机实测同批 114 项 1 worker 128 秒 → 3 worker 37 秒）。验收各用单独 PostgreSQL。
-        CHECK_BACKEND_SHARDS = '8'
+        CHECK_BACKEND_SHARDS = '6'
         CHECK_ACCEPTANCE_SHARDS = '4'
         CHECK_BROWSER_WORKERS = '3'
     }
