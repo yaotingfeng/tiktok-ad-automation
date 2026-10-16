@@ -1,12 +1,12 @@
-"""广告目录请求独立入队；冻结路由及每半小时槽幂等，发送由目录 Worker 完成。"""
+"""目录按半小时槽合并；操作回读单独投递，保留冻结路由与逐次写后的新观察。"""
 
 import hashlib
 import json
 from collections.abc import Collection, Mapping
 from datetime import UTC, datetime, timedelta
-from uuid import UUID, uuid5
+from uuid import UUID, uuid4, uuid5
 
-from sqlalchemy import func, text
+from sqlalchemy import and_, func, text
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
@@ -14,6 +14,7 @@ from app.core.context import TenantContext
 from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.context import FrozenTikTokRoute
 from app.modules.accounts.routing import verify_route
+from app.modules.ads.directory_dispatch import enqueue_directory_step
 from app.modules.ads.models import AdObject
 from app.modules.ads.sync_models import AdDirectoryRun
 
@@ -237,18 +238,21 @@ def request_directory(
     now = datetime.now(UTC)
     payload = [
         frozen_route,
+        str(actor_id),
         advertiser_ids,
         scope,
         sorted((str(r.tenant_id), r.advertiser_id, r.kind, r.remote_id) for r in refs),
         int(now.timestamp()) // 1800,
     ]
-    request_id = uuid5(
+    slot_id = uuid5(
         UUID("c5c96c13-7e3a-4cbb-a7cc-9b12e9d1c6ad"),
         json.dumps(payload, sort_keys=True),
     )
+    # 每次操作后的回读都必须晚于该次写入；旧排队任务的请求序号也可能已经过时。
+    request_id = uuid4() if scope == "targeted" else slot_id
     # 同一槽并发请求串行检查，避免重复插入目录任务。
     session.connection().execute(
-        text("SELECT pg_advisory_xact_lock(:key)"), {"key": request_id.int % (2**63)}
+        text("SELECT pg_advisory_xact_lock(:key)"), {"key": slot_id.int % (2**63)}
     )
     created = 0
     for advertiser_id in advertiser_ids:
@@ -308,11 +312,15 @@ def request_directory(
                         AdDirectoryRun.tenant_id == tenant_id,
                         AdDirectoryRun.advertiser_id == advertiser_id,
                         AdDirectoryRun.partition_key == partition,
+                        AdDirectoryRun.bc_id == bc_id,
+                        AdDirectoryRun.actor_id == actor_id,
+                        AdDirectoryRun.frozen_route == frozen_route,
                         # 已被领取的运行可能已读过首页，不能代替本次刷新。
                         (col(AdDirectoryRun.request_id) == request_id)
-                        | (
-                            (col(AdDirectoryRun.status) == "QUEUED")
-                            & col(AdDirectoryRun.claim_token).is_(None)
+                        | and_(
+                            scope == "directory",
+                            col(AdDirectoryRun.status) == "QUEUED",
+                            col(AdDirectoryRun.claim_token).is_(None),
                         ),
                     )
                     .limit(1)
@@ -339,6 +347,9 @@ def request_directory(
                     ad_type=ad_type,
                 )
                 session.add(run)
+                if scope == "targeted":
+                    session.flush()
+                    enqueue_directory_step(session, run)
                 created += 1
     session.flush()
     return created

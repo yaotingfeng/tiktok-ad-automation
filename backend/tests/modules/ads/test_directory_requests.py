@@ -212,6 +212,43 @@ def test_queued_run_absorbs_later_identical_requests(session, sync_seed, monkeyp
     assert request_directory(session, advertiser_ids=["acc-2", "acc-1"], **base) == 1
 
 
+def test_targeted_read_is_queued_immediately_and_completed_run_is_never_reused(
+    session, sync_seed, monkeypatch
+):
+    from app.integrations.tiktok.contracts.ads import EntityRef
+    from app.jobs.models import PendingDispatch
+    from app.jobs.tasks import dispatch_queue
+
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    args = {
+        "tenant_id": sync_seed.tenant_id,
+        "bc_id": "bc-a",
+        "frozen_route": _route(sync_seed),
+        "actor_id": sync_seed.actor_id,
+        "advertiser_ids": ["acc-1"],
+        "scope": "targeted",
+        "refs": [EntityRef(sync_seed.tenant_id, "acc-1", "ad", "changed-ad")],
+        "ad_types": {"acc-1": {"SMART_PLUS": ("ad",)}},
+    }
+    assert request_directory(session, **args) == 1
+    run = session.exec(
+        select(AdDirectoryRun).where(
+            AdDirectoryRun.tenant_id == sync_seed.tenant_id,
+        )
+    ).one()
+    dispatch = session.exec(
+        select(PendingDispatch).where(
+            PendingDispatch.tenant_id == sync_seed.tenant_id,
+        )
+    ).one()
+    assert dispatch.task_name == "ads.targeted_step"
+    assert dispatch_queue(dispatch.task_name) == "ad-management"
+    run.status, run.completed_at = "COMPLETE", datetime.now(UTC)
+    session.flush()
+    # 同一秒再次启停也必须读取新的平台状态；完成的旧结果不作为新操作回读。
+    assert request_directory(session, **args) == 1
+
+
 def test_idle_accounts_refresh_daily(session, sync_seed):
     now = datetime.now(UTC)
     args = {"tenant_id": sync_seed.tenant_id, "advertiser_ids": ["acc-1", "acc-2"]}

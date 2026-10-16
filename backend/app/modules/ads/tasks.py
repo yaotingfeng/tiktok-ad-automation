@@ -19,16 +19,17 @@ from app.core.errors import DomainError
 from app.integrations.tiktok.contracts.ads import DirectoryQuery
 from app.integrations.tiktok.gateway import open_tiktok_gateway
 from app.jobs.celery_app import celery_app
-from app.jobs.outbox import enqueue_after_commit, validate_dispatch_payload
-from app.jobs.tasks import register_dispatch_task
+from app.jobs.outbox import validate_dispatch_payload
 from app.modules.accounts.routing import verify_route
+from app.modules.ads.directory_dispatch import (
+    PUBLISH_TASK_NAME,
+    TARGETED_TASK_NAME,
+    TASK_NAME,
+    enqueue_directory_step,
+    is_targeted,
+)
 from app.modules.ads.sync import publish_directory, stage_directory_page
 from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
-
-TASK_NAME = "ads.sync_step"
-register_dispatch_task(TASK_NAME, "ads-directory")
-PUBLISH_TASK_NAME = "ads.publish_step"
-register_dispatch_task(PUBLISH_TASK_NAME, "ads-publish")
 
 _LEASE_SECONDS = 90
 _LOCK_TIMEOUT = "20s"
@@ -186,15 +187,34 @@ def run_directory_step(
         current.next_attempt_at = datetime.now(UTC)
         current.claim_token = current.claimed_until = None
         # 续步与页同事务提交，统一扫描器的幂等键，消息丢失仍可换代恢复。
-        enqueue_after_commit(
-            session,
-            context=context,
-            task_name=PUBLISH_TASK_NAME if page.complete else TASK_NAME,
-            task_key=f"ads.sync_step:{run_id}:{claim_generation}:page:{current.next_page}",
-            payload={"run_id": str(run_id), "claim_generation": claim_generation},
-        )
+        enqueue_directory_step(session, current, publish_only=page.complete)
         session.commit()
         return "CONTINUE"
+
+
+@celery_app.task(  # type: ignore[untyped-decorator]
+    name=TARGETED_TASK_NAME,
+    time_limit=60,
+    soft_time_limit=55,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def targeted_step(*, tenant_id: str, actor_id: str, payload: dict[str, Any]) -> str:
+    run_id, generation = _payload(payload)
+    context = _context(tenant_id, actor_id)
+    with Session(engine) as session:
+        run = session.get(AdDirectoryRun, run_id)
+        # 独立入口只接收有界 ID 查询；不能借回读通道搬运全量目录。
+        if run is None or run.tenant_id != context.tenant_id or not is_targeted(run):
+            raise DomainError("directory_request_invalid", "定向回读缺少对象范围")
+    with Redis.from_url(settings.REDIS_URL) as redis_client:
+        return run_directory_step(
+            database_engine=engine,
+            redis_client=redis_client,
+            context=context,
+            run_id=run_id,
+            claim_generation=generation,
+        )
 
 
 def _route(value: dict[str, Any]):

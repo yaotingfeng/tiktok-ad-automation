@@ -679,7 +679,10 @@ def _expand(
         return replace(renamed, items=(*items, *renamed.items))
 
     objects: dict[tuple[UUID, str, str, str], AdObject] = {}
-    for ref in refs:
+    # 素材详情的冻结选择只有 material_uses；所属广告仅作为校验依据读取，
+    # 不加入 refs，避免把素材启停扩大为整条广告启停。
+    lookup_refs = {_ref_key(ref): ref for ref in (*refs, *(use.ad_ref for use in uses))}
+    for ref in lookup_refs.values():
         row = _object_for_ref(
             session, context=context, bc_id=bc_id, ref=ref, route=route
         )
@@ -1420,7 +1423,9 @@ def _expand(
         uses,
         tuple(items),
         tuple(commands),
-        len(selection_record.advertiser_ids) if account_fallback else None,
+        len(uses)
+        if material_mode and uses
+        else (len(selection_record.advertiser_ids) if account_fallback else None),
     )
 
 

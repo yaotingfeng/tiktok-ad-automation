@@ -9,7 +9,7 @@ from uuid import UUID
 
 from billiard.exceptions import SoftTimeLimitExceeded
 from redis import Redis
-from sqlalchemy import delete, func, text
+from sqlalchemy import case, delete, func, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session, col, select
 
@@ -26,6 +26,11 @@ from app.jobs.outbox import enqueue_after_commit, validate_dispatch_payload
 from app.jobs.tasks import register_dispatch_task
 from app.modules.accounts.models import AdvertiserAccount
 from app.modules.accounts.routing import verify_route
+from app.modules.ads.directory_dispatch import (
+    TARGETED_TASK_NAME,
+    directory_step_key,
+    enqueue_directory_step,
+)
 from app.modules.ads.directory_requests import (
     directory_ad_types,
     directory_due_accounts,
@@ -156,7 +161,7 @@ def _advance(due, now, interval):
 
 
 def _message_lost(session: Session, row: AdDirectoryRun, now: datetime) -> bool:
-    key = f"ads.sync_step:{row.id}:{row.claim_generation}:page:{row.next_page}"
+    key = directory_step_key(row)
     published = session.exec(
         select(PendingDispatch.published_at).where(
             PendingDispatch.tenant_id == row.tenant_id,
@@ -167,13 +172,16 @@ def _message_lost(session: Session, row: AdDirectoryRun, now: datetime) -> bool:
 
 
 def _dispatch_directories(session, now):
-    from app.modules.ads.tasks import PUBLISH_TASK_NAME
-    from app.modules.ads.tasks import TASK_NAME as directory_task_name
-
     # 本代数、本页的投递记录已存在（无论是否已发布）就不再重复入队：积压时
     # 若每轮重写全部运行，规划会长时间占住 control 唯一并发，使投递发布被饿死。
+    targeted = (
+        func.coalesce(func.jsonb_array_length(AdDirectoryRun.query["ids"]), 0) > 0
+    ) | (
+        func.coalesce(func.jsonb_array_length(AdDirectoryRun.query["parent_ids"]), 0)
+        > 0
+    )
     current_key = func.concat(
-        "ads.sync_step:",
+        case((targeted, TARGETED_TASK_NAME + ":"), else_="ads.sync_step:"),
         col(AdDirectoryRun.id),
         ":",
         col(AdDirectoryRun.claim_generation),
@@ -210,11 +218,13 @@ def _dispatch_directories(session, now):
             col(AdDirectoryRun.claimed_until).is_(None) & (~enqueued | lost)
             | (col(AdDirectoryRun.claimed_until) <= now),
         )
-        .order_by(col(AdDirectoryRun.created_at), col(AdDirectoryRun.id))
+        .order_by(
+            targeted.desc(), col(AdDirectoryRun.created_at), col(AdDirectoryRun.id)
+        )
         .limit(DIRECTORY_DISPATCH_BATCH)
         .with_for_update(skip_locked=True)
     ).all()
-    # 批量识别末页；新代数发布进入独立队列，仍由目录 worker 单槽公平消费。
+    # 批量识别末页；全量发布保留独立队列，定向抓取/发布均留在广告管理槽。
     terminal_runs = (
         set(
             session.exec(
@@ -232,15 +242,7 @@ def _dispatch_directories(session, now):
         if row.claimed_until is not None or _message_lost(session, row, now):
             row.claim_generation += 1
             row.claim_token = row.claimed_until = None
-        enqueue_after_commit(
-            session,
-            context=_context(row),
-            task_name=PUBLISH_TASK_NAME
-            if row.id in terminal_runs
-            else directory_task_name,
-            task_key=f"ads.sync_step:{row.id}:{row.claim_generation}:page:{row.next_page}",
-            payload={"run_id": str(row.id), "claim_generation": row.claim_generation},
-        )
+        enqueue_directory_step(session, row, publish_only=row.id in terminal_runs)
         count += 1
     return count
 

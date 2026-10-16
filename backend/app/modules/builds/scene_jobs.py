@@ -596,7 +596,14 @@ def process_scene_job(
             current.revision += 1
             if not last:
                 current.next_page += 1
-            elif resource != RESOURCES[-1] and current.minis_id is not None:
+            elif (
+                resource != RESOURCES[-1]
+                and current.minis_id is not None
+                # 新 Mini 的全部页读取完成后，四类账户事实已复用，无需重新排队。
+                and not (
+                    resource == "minis" and current.facts.get("reused_scene_job_id")
+                )
+            ):
                 current.resource = RESOURCES[RESOURCES.index(resource) + 1]
                 if current.resource == "minis" and current.facts.get(
                     "minis_catalog_job_id"

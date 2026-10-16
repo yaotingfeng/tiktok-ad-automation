@@ -16,6 +16,8 @@ def test_ads_reporting_tasks_have_dedicated_queues_and_standard_beat_gate():
     celery_app.loader.import_default_modules()
     assert dispatch_queue("ads.sync_step") == "ads-directory"
     assert dispatch_queue("ads.publish_step") == "ads-publish"
+    assert dispatch_queue("ads.targeted_step") == "ad-management"
+    assert celery_app.conf.task_routes["ads.targeted_step"]["queue"] == "ad-management"
     assert "ads-publish" in _QUEUES
     assert dispatch_queue("reporting.job_step") == "ads-reporting"
     assert celery_app.conf.task_routes["reporting.plan_due"]["queue"] == "control"

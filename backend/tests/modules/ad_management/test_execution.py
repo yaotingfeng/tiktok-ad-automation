@@ -10,7 +10,7 @@ from threading import Event
 from uuid import uuid4
 
 import pytest
-from sqlmodel import Session, select
+from sqlmodel import Session, SQLModel, select
 
 from app.core.config import settings
 from app.core.db import engine
@@ -133,7 +133,19 @@ def c5_env(monkeypatch):
             )
         )
         setup.commit()
-        return context, bc, account, route, selection
+    try:
+        yield context, bc, account, route, selection
+    finally:
+        # 成功写入现在会立即生成回读 outbox；完整清理本夹具的已提交租户，
+        # 避免它的后台任务污染后续用例的全局派发窗口与空队列断言。
+        with Session(engine) as cleanup, cleanup.begin():
+            for table in reversed(SQLModel.metadata.sorted_tables):
+                if "tenant_id" in table.c:
+                    cleanup.exec(
+                        table.delete().where(table.c.tenant_id == context.tenant_id)
+                    )
+            tenant = SQLModel.metadata.tables["tenant"]
+            cleanup.exec(tenant.delete().where(tenant.c.id == context.tenant_id))
 
 
 class _Gateway:
@@ -303,6 +315,40 @@ def test_accepted_write_commits_receipt_without_synchronous_readback(
             assert len(refreshes) == 1
             assert refreshes[0]["scope"] == "targeted"
             assert refreshes[0]["advertiser_ids"] == ["c5-account"]
+    finally:
+        _cleanup(task_id)
+
+
+def test_accepted_write_creates_real_directory_readback(
+    c5_env, redis_client, monkeypatch
+):
+    from app.modules.ads.sync_models import AdDirectoryRun
+
+    context, task_id, item_id = _committed_item(c5_env)
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution._redis", lambda: redis_client
+    )
+    monkeypatch.setattr(
+        "app.modules.ad_management.execution.open_tiktok_gateway",
+        lambda **_kwargs: _Gateway(
+            lambda *_args: ManagementReceipt("ACCEPTED", "offline-accepted", False)
+        ),
+    )
+    try:
+        execute_item(engine, item_id)
+        with Session(engine) as session:
+            item = session.get(ManagementTaskItem, item_id)
+            assert item.execution_result == "ACCEPTED"
+            runs = session.exec(
+                select(AdDirectoryRun).where(
+                    AdDirectoryRun.tenant_id == context.tenant_id,
+                )
+            ).all()
+            assert runs
+            assert all(
+                r.query["ids"] == ["group-c5"] or r.query["parent_ids"] == ["group-c5"]
+                for r in runs
+            )
     finally:
         _cleanup(task_id)
 

@@ -237,6 +237,66 @@ def test_changed_mini_reuses_fresh_mini_independent_scene_facts(
     assert len(wire[0]) == 6
 
 
+@pytest.mark.parametrize("expired", [False, True])
+def test_new_mini_reuses_only_fresh_account_facts(job_env, wire, redis_client, expired):
+    from app.modules.builds.mini_targets import remember_target
+    from app.modules.builds.scene import read_scene_context
+
+    env = job_env
+    original = complete(env, wire, redis_client)
+    with Session(engine) as session, session.begin():
+        link = session.get(PromotionLink, env["link_id"])
+        remember_target(
+            session,
+            context=env["context"],
+            url=link.url,
+            minis_id="new-minis",
+            source="USER",
+        )
+        if expired:
+            source = session.get(SceneJob, original.id)
+            source.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    prepared = ensure(env)
+    assert prepared.state == "queued"
+    with Session(engine) as session:
+        job = session.get(SceneJob, prepared.job_id)
+        if expired:
+            assert "reused_scene_job_id" not in job.facts
+            assert job.resource == "capabilities"
+            return
+        assert job.resource == "minis"
+        assert job.facts["reused_scene_job_id"] == str(original.id)
+        assert job.expires_at == original.expires_at
+        assert "minis" not in job.facts
+    # 新小程序不在旧目录；仍须真实读取并确认，不能用旧 Mini 的资格代替。
+    wire[1].append(
+        page(
+            [
+                {
+                    "minis_id": "new-minis",
+                    "minis_status": "ACTIVE",
+                    "minis_type": "MINI_SERIES",
+                    "region_codes": ["US", "CA"],
+                }
+            ]
+        )
+    )
+    job = run(env, redis_client, prepared.job_id)
+    assert job.status == "COMPLETE"
+    assert job.expires_at == original.expires_at
+    assert len(wire[0]) == 7  # 初次六次 + 一次新 Mini；其余四类不重复读取。
+    with Session(engine) as session:
+        result = read_scene_context(
+            session,
+            context=env["context"],
+            bc_id=env["bc_id"],
+            advertiser_id="actual-account",
+            link_id=env["link_id"],
+            route=env["route"],
+        )
+        assert result.supported
+
+
 def test_complete_scene_reader_is_readonly_no_credentials_or_network(
     job_env, wire, redis_client, monkeypatch
 ):

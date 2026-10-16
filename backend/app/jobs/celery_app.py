@@ -66,6 +66,7 @@ celery_app.conf.update(
         "reporting.cleanup_store": {"queue": "ads-reporting"},
         "ads.sync_step": {"queue": "ads-directory"},
         "ads.publish_step": {"queue": "ads-publish"},
+        "ads.targeted_step": {"queue": "ad-management"},
         "reporting.export": {"queue": "ads-reporting"},
         "ad_management.execute": {"queue": "ad-management"},
         "reporting.cleanup_exports": {"queue": "ads-reporting"},

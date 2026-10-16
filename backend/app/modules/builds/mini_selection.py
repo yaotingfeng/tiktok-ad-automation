@@ -117,9 +117,11 @@ def search_catalog_options(
               :query
           ) > 0
     """
-    total = cast(SASession, session).execute(
-        text("SELECT count(*) " + source), parameters
-    ).scalar_one()
+    total = (
+        cast(SASession, session)
+        .execute(text("SELECT count(*) " + source), parameters)
+        .scalar_one()
+    )
     rows = (
         cast(SASession, session)
         .execute(
@@ -456,45 +458,58 @@ def reuse_minis_catalog(
     source = account_catalog(
         session, context=context, account=job.advertiser_id, route=route
     )
-    if source is None:
-        return
-    selected = catalog_options(session, source, minis_id=job.minis_id)
+    selected = catalog_options(session, source, minis_id=job.minis_id) if source else []
     if len(selected) != 1:
-        return
+        source = None
     common = _fresh_mini_independent_scene(
         session, context=context, account=job.advertiser_id, route=route
     )
+    if source is None and common is None:
+        return
     # 原请求是账户全量目录，指定 Mini 的筛选只发生在本地，复用原观察期限和来源任务。
     job.facts = {
         **(
             {key: common.facts[key] for key in MINI_INDEPENDENT_FACTS} if common else {}
         ),
-        "minis": {**source.facts["minis"], "matches": selected},
-        "minis_catalog_job_id": str(source.id),
+        **(
+            {
+                "minis": {**source.facts["minis"], "matches": selected},
+                "minis_catalog_job_id": str(source.id),
+            }
+            if source
+            else {}
+        ),
         **({"reused_scene_job_id": str(common.id)} if common else {}),
     }
     observations = [
         value
         for value in (
-            source.first_observed_at,
+            source.first_observed_at if source else None,
             common.first_observed_at if common else None,
         )
         if value is not None
     ]
     expirations = [
         value
-        for value in (source.expires_at, common.expires_at if common else None)
+        for value in (
+            source.expires_at if source else None,
+            common.expires_at if common else None,
+        )
         if value is not None
     ]
     job.first_observed_at = min(observations) if observations else None
     job.expires_at = min(expirations) if expirations else None
-    if common:
+    if common and source:
         # 四类请求参数均不包含 Mini；冻结路由、账户事实与合同仍逐项核实后才复用。
         job.status, job.resource, job.completed_at = (
             "COMPLETE",
             "done",
             datetime.now(UTC),
         )
+    elif common:
+        # 新 Mini 未命中旧目录时，只补查 Mini；其余四类已按本账户当前授权复核。
+        # 不延长旧事实有效期，实际读取前仍由 Worker 重验能力与路由。
+        job.resource = "minis"
 
 
 def _fresh_mini_independent_scene(

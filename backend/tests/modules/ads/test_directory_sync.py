@@ -476,8 +476,9 @@ def test_directory_version_allocation_does_not_scan_business_tables(session):
     )
 
 
+@pytest.mark.parametrize("targeted", [False, True])
 def test_terminal_fetch_commits_page_and_durable_publish_successor(
-    session, directory_seed, monkeypatch
+    session, directory_seed, monkeypatch, targeted
 ):
     from types import SimpleNamespace
 
@@ -486,6 +487,9 @@ def test_terminal_fetch_commits_page_and_durable_publish_successor(
     _authority(session, directory_seed)
     monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
     run = _run(session, directory_seed)
+    if targeted:
+        run.query = {**run.query, "ids": ["campaign-1"], "include_deleted": False}
+        session.flush()
     page = _page(directory_seed)
 
     class Reader:
@@ -514,10 +518,13 @@ def test_terminal_fetch_commits_page_and_durable_publish_successor(
     assert session.get(AdDirectoryPage, (run.id, 1)).complete
     dispatch = session.exec(
         select(PendingDispatch).where(
-            PendingDispatch.task_key == f"ads.sync_step:{run.id}:1:page:2"
+            PendingDispatch.task_key
+            == f"{'ads.targeted_step' if targeted else 'ads.sync_step'}:{run.id}:1:page:2"
         )
     ).one()
-    assert dispatch.task_name == "ads.publish_step"
+    assert dispatch.task_name == (
+        "ads.targeted_step" if targeted else "ads.publish_step"
+    )
     assert dispatch.payload == {"run_id": str(run.id), "claim_generation": 1}
 
     def unexpected_gateway(**_kwargs):
