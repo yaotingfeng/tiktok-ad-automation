@@ -169,3 +169,6 @@ R2 CORS：已添加 https://tkada.galaxyshortdrama.com，保留测试 origin，O
 - 背景：xingyu 872 个账户接入后目录同步积压。同批发布目录减量（约降 90%）。
 - Worker：`worker-ads-directory` prefork 1 → 4，`worker-ads-reporting` 1 → 2；任务以等待 TikTok 为主（目录 Pod 约 360 MiB、CPU 约 0.07 核），资源申请/上限不变。PG 为多项目共享实例（max_connections 200、本项目约 18 连接），新增进程预计 +10–15 连接，发布后复核。
 - `TIKTOK_CALL_POLICIES.base`：`app_max_inflight` 4 → 8、`endpoint_max_inflight` 2 → 3、`tenant_max_inflight` 4 → 6；速率不变（应用 10/秒、每操作 3/秒），对应官方 Basic 每应用 10 QPS / 600 QPM / 864000 QPD，超过每分钟限制会封禁 5 分钟。在发布前写入运行 Secret 并同步本地 `.env.production`，由发布流程统一重启九角色加载。
+
+
+2026-10-16 追加：目录 Worker 独占消费 `ads-directory,ads-publish`，并发保持 1、prefetch 1；Redis 使用 `round_robin`。`ads.sync_step` 负责抓取，末页持久化后投递 `ads.publish_step` 到 `ads-publish`，让本地发布穿插读取积压，避免可见结果再次排到万条读取后面。扫描器批量识别已暂存末页；丢失/过期消息换代后选发布队列，旧同键投递不改名覆盖。冻结发布时动态取消该 Worker 的两个订阅并正常排空；素材/结果 Worker 不消费新队列，九服务数量及素材吞吐配置不变。

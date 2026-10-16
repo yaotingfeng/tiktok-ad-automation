@@ -13,7 +13,7 @@ EnvironmentFile=/etc/tt-ada-staging/app.env
 Environment=PYTHONUNBUFFERED=1
 # ADS_SYNC_ENABLED and quota policy are loaded from the shared EnvironmentFile.
 # The worker slot remains explicitly bounded to one process below.
-ExecStart=/opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.celery_app:celery_app worker -Q ads-directory --pool prefork --concurrency 1 --loglevel INFO --hostname ads-directory-singapore@%%h
+ExecStart=/opt/tt-ada-staging/current/.venv/bin/celery -A app.jobs.celery_app:celery_app worker -Q ads-directory,ads-publish --pool prefork --concurrency 1 --loglevel INFO --hostname ads-directory-singapore@%%h
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=120

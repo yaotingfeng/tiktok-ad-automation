@@ -79,7 +79,7 @@ services:
     environment:
       ADS_SYNC_ENABLED: ${ADS_SYNC_ENABLED:-false}
       ADS_DIRECTORY_WORKER_CONCURRENCY: ${ADS_DIRECTORY_WORKER_CONCURRENCY:-1}
-    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ads-directory, --concurrency, '${ADS_DIRECTORY_WORKER_CONCURRENCY:-1}', '--hostname=ads-directory@%h', --loglevel=INFO]
+    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, "ads-directory,ads-publish", --concurrency, '${ADS_DIRECTORY_WORKER_CONCURRENCY:-1}', '--hostname=ads-directory@%h', --loglevel=INFO]
     cpus: 0.75
     mem_limit: 768m
     stop_grace_period: 120s

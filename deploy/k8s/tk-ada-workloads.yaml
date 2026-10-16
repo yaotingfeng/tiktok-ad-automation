@@ -348,7 +348,7 @@ spec:
           resources:
             requests: {cpu: "250m", memory: 1Gi}
             limits: {cpu: "1", memory: 2Gi}
-          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, ads-directory, --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "ads-directory@%h"]
+          command: [celery, -A, "app.jobs.celery_app:celery_app", worker, -Q, "ads-directory,ads-publish", --pool, prefork, --concurrency, "1", --loglevel=INFO, --hostname, "ads-directory@%h"]
           readinessProbe:
             exec:
               command: [python, -c, "import socket; from app.jobs.celery_app import celery_app; r=celery_app.control.ping(destination=['ads-directory@'+socket.gethostname()], timeout=5); raise SystemExit(0 if r else 1)"]

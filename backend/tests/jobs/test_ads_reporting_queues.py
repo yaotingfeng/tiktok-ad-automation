@@ -3,6 +3,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from celery import Celery
 
 from app.core.config import settings
@@ -14,6 +15,8 @@ from app.jobs.tasks import dispatch_queue
 def test_ads_reporting_tasks_have_dedicated_queues_and_standard_beat_gate():
     celery_app.loader.import_default_modules()
     assert dispatch_queue("ads.sync_step") == "ads-directory"
+    assert dispatch_queue("ads.publish_step") == "ads-publish"
+    assert "ads-publish" in _QUEUES
     assert dispatch_queue("reporting.job_step") == "ads-reporting"
     assert celery_app.conf.task_routes["reporting.plan_due"]["queue"] == "control"
     assert "scan-ads-reporting-due" in celery_app.conf.beat_schedule
@@ -37,18 +40,39 @@ def test_worker_templates_keep_one_slot_and_shared_switch_injection():
     directory_service = (root / "deploy/staging-ads-directory.service").read_text()
     reporting_service = (root / "deploy/staging-ads-reporting.service").read_text()
     assert "ADS_SYNC_ENABLED" in compose
-    assert "-Q, ads-directory" in compose
+    assert '-Q, "ads-directory,ads-publish"' in compose
     assert "-Q, ads-reporting" in compose
-    assert "-Q, ads-directory" in production
+    assert '-Q, "ads-directory,ads-publish"' in production
     assert "-Q, ads-reporting" in production
     assert "--concurrency" in compose
     assert "--concurrency" in production
     assert "--concurrency 1" in directory_service
     assert "--concurrency 1" in reporting_service
+    import yaml
+
+    workloads = list(
+        yaml.safe_load_all((root / "deploy/k8s/tk-ada-workloads.yaml").read_text())
+    )
+    consumers = []
+    for deployment in workloads:
+        if deployment.get("kind") != "Deployment":
+            continue
+        command = deployment["spec"]["template"]["spec"]["containers"][0].get(
+            "command", []
+        )
+        if "-Q" in command and "ads-publish" in command[command.index("-Q") + 1].split(
+            ","
+        ):
+            consumers.append(deployment["metadata"]["name"])
+            assert command[command.index("--concurrency") + 1] == "1"
+    assert consumers == ["tiktok-ad-automation-worker-ads-directory"]
 
 
-def test_real_redis_workers_keep_reporting_live_during_directory_backlog(redis_client):
-    """两个真实 Redis worker 的执行证据：目录积压不挤占报表槽。"""
+@pytest.mark.parametrize("target", ["ads-reporting", "ads-publish"])
+def test_real_redis_workers_keep_reporting_live_during_directory_backlog(
+    redis_client, target
+):
+    """真实 Redis worker：目录积压不挤占报表槽，也不饿死同槽发布队列。"""
 
     from uuid import uuid4
 
@@ -69,7 +93,11 @@ def test_real_redis_workers_keep_reporting_live_during_directory_backlog(redis_c
     )
     processes = []
     try:
-        for queue in ("ads-directory", "ads-reporting"):
+        for queue in (
+            ("ads-directory", "ads-reporting")
+            if target == "ads-reporting"
+            else ("ads-directory," + prefix + "ads-publish",)
+        ):
             processes.append(
                 subprocess.Popen(
                     [
@@ -109,9 +137,11 @@ def test_real_redis_workers_keep_reporting_live_during_directory_backlog(redis_c
         producer.send_task(
             "test.isolation.queue_probe",
             args=["reporting", 0],
-            queue=prefix + "ads-reporting",
+            queue=prefix + target,
         )
         assert redis_client.blpop(prefix + "probe:reporting", timeout=3)
+        if target == "ads-publish":
+            assert redis_client.llen(prefix + "probe:directory") < 50
         # 确认目录工作也真实执行，避免只验证空队列的快速返回。
         assert redis_client.blpop(prefix + "probe:directory", timeout=5)
     finally:

@@ -1,6 +1,8 @@
 from contextlib import contextmanager
 from datetime import UTC, datetime
 
+import pytest
+
 from app.modules.reporting import job_tasks
 
 
@@ -481,8 +483,9 @@ def test_directory_dispatch_skips_enqueued_runs_and_is_bounded(
         assert job_tasks._dispatch_directories(s, now) == 0
 
 
+@pytest.mark.parametrize("terminal", [False, True])
 def test_lost_directory_message_is_redispatched_with_new_generation(
-    monkeypatch, committed_sync_seed, redis_client
+    monkeypatch, committed_sync_seed, redis_client, terminal
 ):
     """消息发布后长时间无人领取视为丢失：换新代数重新入队，旧消息执行时直接失效。"""
     from datetime import timedelta
@@ -511,6 +514,21 @@ def test_lost_directory_message_is_redispatched_with_new_generation(
                 PendingDispatch.task_key == key,
             )
         ).one()
+        if terminal:
+            from app.modules.ads.sync_models import AdDirectoryPage
+
+            s.add(
+                AdDirectoryPage(
+                    run_id=run.id,
+                    page=1,
+                    tenant_id=run.tenant_id,
+                    advertiser_id=run.advertiser_id,
+                    claim_generation=run.claim_generation,
+                    complete=True,
+                    items=[],
+                    materials=[],
+                )
+            )
         record.published_at = now - timedelta(hours=1)
         s.commit()
         run_id, generation = run.id, run.claim_generation
@@ -525,13 +543,23 @@ def test_lost_directory_message_is_redispatched_with_new_generation(
     with factory() as s:
         run = s.get(AdDirectoryRun, run_id)
         assert run.claim_generation == generation + 1
-        assert s.exec(
+        dispatch = s.exec(
             select(PendingDispatch).where(
                 PendingDispatch.tenant_id == seed.tenant_id,
                 PendingDispatch.task_key
                 == f"ads.sync_step:{run_id}:{generation + 1}:page:{run.next_page}",
             )
         ).one()
+        assert dispatch.task_name == (
+            "ads.publish_step" if terminal else "ads.sync_step"
+        )
+        original = s.exec(
+            select(PendingDispatch).where(
+                PendingDispatch.tenant_id == seed.tenant_id,
+                PendingDispatch.task_key == key,
+            )
+        ).one()
+        assert original.task_name == "ads.sync_step"
 
 
 def test_report_dispatch_keeps_small_window_and_rechecks_hot_priority(

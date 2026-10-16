@@ -312,3 +312,6 @@ Beat 每秒触发一次 outbox 发布。单次发布默认最多 20 个公平轮
 新调度为 `reporting.plan_due`（control，Beat 每 30 秒），读取为 `reporting.job_step`（ads-reporting），过期清理为 `reporting.cleanup_store`（ads-reporting，每小时）；目录仍为 `ads.sync_step`（ads-directory）。余额由 `reporting.plan_balances`（control，每 30 分钟）独立派发 `reporting.balance_step`（ads-directory），每页 100 个 BC 账户、逐页提交并续接，不随报表热刷放缓或筛选退避。移除旧 scan_due/sync_step 报表任务与异步/MCP 报表合同；发布前按排空流程处理旧消息，不把旧任务载荷交给新 Worker。
 
 共享额度配置仅保留同步报表操作 `reports.integrated`、`reports.bc`、`reports.material_breakdown`；人工核对已有策略并移除旧异步创建额度字段 `advertiser_calls_per_window`、`advertiser_window_ms` 及旧报表操作条目。本次开发未修改任何环境的实际配置。报表只经官方 SDK，MCP-only BC 页面显示 API 接入提示；同时确认 `ADS_SYNC_ENABLED`、非空 `TIKTOK_CALL_POLICIES` 与 `TIKTOK_REPORT_DAILY_CALL_BUDGET` 在 API、Worker、Beat 的实际加载值一致。历史回补按已授权账户开户日安排，不能将本地测试或网关健康视为真实联调完成。
+
+
+2026-10-16 追加：目录 Worker 独占消费 `ads-directory,ads-publish`，并发保持 1、prefetch 1；Redis 使用 `round_robin`。`ads.sync_step` 负责抓取，末页持久化后投递 `ads.publish_step` 到 `ads-publish`，让本地发布穿插读取积压，避免可见结果再次排到万条读取后面。扫描器批量识别已暂存末页；丢失/过期消息换代后选发布队列，旧同键投递不改名覆盖。冻结发布时动态取消该 Worker 的两个订阅并正常排空；素材/结果 Worker 不消费新队列，九服务数量及素材吞吐配置不变。

@@ -100,7 +100,7 @@ services:
       prestart: {condition: service_completed_successfully}
   worker-ads-directory:
     <<: *app
-    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, ads-directory, --concurrency, '${ADS_DIRECTORY_WORKER_CONCURRENCY:-1}', '--hostname=ads-directory@%h', --loglevel=INFO]
+    command: [celery, -A, app.jobs.celery_app:celery_app, worker, --pool=prefork, -Q, "ads-directory,ads-publish", --concurrency, '${ADS_DIRECTORY_WORKER_CONCURRENCY:-1}', '--hostname=ads-directory@%h', --loglevel=INFO]
     depends_on:
       prestart: {condition: service_completed_successfully}
   worker-ads-reporting:

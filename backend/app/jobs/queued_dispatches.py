@@ -18,6 +18,7 @@ _QUEUES = (
     "resources",
     "resource-results",
     "ads-directory",
+    "ads-publish",
     "ads-reporting",
     "ad-management",
 )

@@ -34,7 +34,7 @@ TK-ADA 的运行链路按四层理解：任务来源层（网页/API、外部素
 | `tt-ada-staging-control` | `control`，调度、恢复、重试、清理和对账 |
 | `tt-ada-staging-beat` | 周期任务投递 |
 | `tt-ada-staging-ad-management` | `ad-management`，Campaign、广告组和广告管理 |
-| `tt-ada-staging-ads-directory` | `ads-directory`，账户、身份和广告目录读取 |
+| `tt-ada-staging-ads-directory` | `ads-directory,ads-publish`，账户、身份和广告目录读取及单槽本地发布 |
 | `tt-ada-staging-ads-reporting` | `ads-reporting`，报表读取和整理 |
 | `tt-ada-staging-results` | `resource-results`，异步结果处理与回写 |
 

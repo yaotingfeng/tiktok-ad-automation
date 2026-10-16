@@ -21,6 +21,7 @@ _ALLOWED_QUEUES = frozenset(
         "resource-results",
         "builds",
         "ads-directory",
+        "ads-publish",
         "ads-reporting",
         "ad-management",
     }

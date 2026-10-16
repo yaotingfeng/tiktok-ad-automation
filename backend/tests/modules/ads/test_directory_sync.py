@@ -415,8 +415,9 @@ def test_publish_preserves_newer_objects_and_complete_materials(
     assert material.published_version == first.published_version
 
 
+@pytest.mark.parametrize("publish_only", [False, True])
 def test_staged_terminal_page_publishes_without_another_provider_call(
-    session, directory_seed, monkeypatch
+    session, directory_seed, monkeypatch, publish_only
 ):
     from app.modules.ads import tasks
 
@@ -438,11 +439,26 @@ def test_staged_terminal_page_publishes_without_another_provider_call(
             context=directory_seed.context,
             run_id=run.id,
             claim_generation=1,
+            publish_only=publish_only,
         )
         == "READY"
     )
     session.refresh(run)
     assert run.status == "COMPLETE" and run.claimed_until is None
+    version = run.published_version
+    assert (
+        tasks.run_directory_step(
+            database_engine=session.connection(),
+            redis_client=None,
+            context=directory_seed.context,
+            run_id=run.id,
+            claim_generation=1,
+            publish_only=publish_only,
+        )
+        == "READY"
+    )
+    session.refresh(run)
+    assert run.published_version == version
 
 
 def test_directory_version_allocation_does_not_scan_business_tables(session):
@@ -501,6 +517,7 @@ def test_terminal_fetch_commits_page_and_durable_publish_successor(
             PendingDispatch.task_key == f"ads.sync_step:{run.id}:1:page:2"
         )
     ).one()
+    assert dispatch.task_name == "ads.publish_step"
     assert dispatch.payload == {"run_id": str(run.id), "claim_generation": 1}
 
     def unexpected_gateway(**_kwargs):
@@ -594,3 +611,28 @@ def test_old_page_response_cannot_clear_a_new_generation_lease(
     session.refresh(run)
     assert run.claim_generation == 2 and run.claim_token == new_token
     assert run.claimed_until == new_until and run.next_page == 1
+
+
+def test_publish_only_rejects_missing_terminal_without_gateway(
+    session, directory_seed, monkeypatch
+):
+    from app.modules.ads import tasks
+
+    _authority(session, directory_seed)
+    monkeypatch.setattr(settings, "ADS_SYNC_ENABLED", True)
+    run = _run(session, directory_seed)
+
+    def forbidden(**_kwargs):
+        raise AssertionError("发布任务不能读取远端")
+
+    monkeypatch.setattr(tasks, "open_tiktok_gateway", forbidden)
+    with pytest.raises(DomainError) as caught:
+        tasks.run_directory_step(
+            database_engine=session.connection(),
+            redis_client=None,
+            context=directory_seed.context,
+            run_id=run.id,
+            claim_generation=1,
+            publish_only=True,
+        )
+    assert caught.value.code == "directory_incomplete"

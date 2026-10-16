@@ -27,6 +27,8 @@ from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
 
 TASK_NAME = "ads.sync_step"
 register_dispatch_task(TASK_NAME, "ads-directory")
+PUBLISH_TASK_NAME = "ads.publish_step"
+register_dispatch_task(PUBLISH_TASK_NAME, "ads-publish")
 
 _LEASE_SECONDS = 90
 _LOCK_TIMEOUT = "20s"
@@ -88,6 +90,7 @@ def run_directory_step(
     context: TenantContext,
     run_id: UUID,
     claim_generation: int,
+    publish_only: bool = False,
 ) -> str:
     # 实例总开关同时拦截已经排队的目录任务；重新开启后由扫描器恢复。
     if not settings.ADS_SYNC_ENABLED:
@@ -142,6 +145,8 @@ def run_directory_step(
             run.claim_token = run.claimed_until = None
             session.commit()
             return "READY"
+        if publish_only:
+            raise DomainError("directory_incomplete", "目录发布缺少已暂存末页")
         query_data = dict(run.query)
         # Celery retries must resume the persisted cursor.  The durable query is
         # the contract; page is the only mutable transport cursor.
@@ -184,7 +189,7 @@ def run_directory_step(
         enqueue_after_commit(
             session,
             context=context,
-            task_name=TASK_NAME,
+            task_name=PUBLISH_TASK_NAME if page.complete else TASK_NAME,
             task_key=f"ads.sync_step:{run_id}:{claim_generation}:page:{current.next_page}",
             payload={"run_id": str(run_id), "claim_generation": claim_generation},
         )
@@ -220,4 +225,30 @@ def sync_step(*, tenant_id: str, actor_id: str, payload: dict[str, Any]) -> str:
         )
 
 
-__all__ = ["TASK_NAME", "sync_step", "run_directory_step"]
+@celery_app.task(  # type: ignore[untyped-decorator]
+    name=PUBLISH_TASK_NAME,
+    time_limit=60,
+    soft_time_limit=55,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def publish_step(*, tenant_id: str, actor_id: str, payload: dict[str, Any]) -> str:
+    run_id, generation = _payload(payload)
+    with Redis.from_url(settings.REDIS_URL) as redis_client:
+        return run_directory_step(
+            database_engine=engine,
+            redis_client=redis_client,
+            context=_context(tenant_id, actor_id),
+            run_id=run_id,
+            claim_generation=generation,
+            publish_only=True,
+        )
+
+
+__all__ = [
+    "TASK_NAME",
+    "PUBLISH_TASK_NAME",
+    "sync_step",
+    "publish_step",
+    "run_directory_step",
+]

@@ -7,6 +7,8 @@ from celery import Celery
 from celery.signals import worker_ready
 from redis import Redis
 
+from app.jobs.celery_app import celery_app
+
 broker = os.environ["TEST_REDIS_URL"]
 prefix = os.environ["QUEUE_ISOLATION_PREFIX"]
 app = Celery("queue-isolation", broker=broker)
@@ -16,7 +18,10 @@ app.conf.update(
     task_ignore_result=True,
     worker_prefetch_multiplier=1,
     task_acks_late=True,
-    broker_transport_options={"global_keyprefix": prefix},
+    broker_transport_options={
+        **celery_app.conf.broker_transport_options,
+        "global_keyprefix": prefix,
+    },
 )
 
 

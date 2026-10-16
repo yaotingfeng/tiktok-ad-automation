@@ -31,7 +31,7 @@ from app.modules.ads.directory_requests import (
     directory_due_accounts,
     request_directory,
 )
-from app.modules.ads.sync_models import AdDirectoryRun
+from app.modules.ads.sync_models import AdDirectoryPage, AdDirectoryRun
 from app.modules.reporting import planner, publish
 from app.modules.reporting.jobs import (
     LEASE,
@@ -167,6 +167,7 @@ def _message_lost(session: Session, row: AdDirectoryRun, now: datetime) -> bool:
 
 
 def _dispatch_directories(session, now):
+    from app.modules.ads.tasks import PUBLISH_TASK_NAME
     from app.modules.ads.tasks import TASK_NAME as directory_task_name
 
     # 本代数、本页的投递记录已存在（无论是否已发布）就不再重复入队：积压时
@@ -213,6 +214,19 @@ def _dispatch_directories(session, now):
         .limit(DIRECTORY_DISPATCH_BATCH)
         .with_for_update(skip_locked=True)
     ).all()
+    # 批量识别末页；新代数发布进入独立队列，仍由目录 worker 单槽公平消费。
+    terminal_runs = (
+        set(
+            session.exec(
+                select(AdDirectoryPage.run_id).where(
+                    col(AdDirectoryPage.run_id).in_([row.id for row in rows]),
+                    col(AdDirectoryPage.complete).is_(True),
+                )
+            ).all()
+        )
+        if rows
+        else set()
+    )
     count = 0
     for row in rows:
         if row.claimed_until is not None or _message_lost(session, row, now):
@@ -221,7 +235,9 @@ def _dispatch_directories(session, now):
         enqueue_after_commit(
             session,
             context=_context(row),
-            task_name=directory_task_name,
+            task_name=PUBLISH_TASK_NAME
+            if row.id in terminal_runs
+            else directory_task_name,
             task_key=f"ads.sync_step:{row.id}:{row.claim_generation}:page:{row.next_page}",
             payload={"run_id": str(row.id), "claim_generation": row.claim_generation},
         )
