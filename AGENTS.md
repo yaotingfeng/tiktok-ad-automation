@@ -20,6 +20,37 @@
 - Run relevant behavioral tests and build checks before claiming task completion. Use real PostgreSQL and Redis for locking/concurrency tests; external service doubles belong at the transport boundary.
 - Record completed tasks, tests, decisions and commits in docs/implementation-progress.md so another session can continue without repeating work.
 
+## 运行架构与容量基线
+
+TK-ADA 的运行链路按四层理解：任务来源层（网页/API、外部素材推送、Beat 周期调度） -> 消息与调度层（Redis/Celery 队列、Control Worker 的编排/重试/恢复/清理） -> 执行层（素材、广告搭建、广告管理、目录、报表、结果 Worker） -> 持久化与查询层（PostgreSQL 保存业务事实，API 返回状态与结果）。API 或外部接口可直接提交用户触发的任务；Beat 只负责周期投递；Redis 保存队列、锁和短期状态；Celery 按队列路由；Result Worker 负责异步结果回写。API、Beat、Redis、Control 和业务 Worker 是常驻组件，只有 Beat 专门负责定时任务，`active` 只表示进程在线。
+
+测试环境的 9 个应用 systemd 服务及职责：
+
+| 服务 | 队列/职责 |
+| --- | --- |
+| `tt-ada-staging-api` | Web/API、登录、任务受理和状态查询 |
+| `tt-ada-staging-worker` | `resources,resource-results`，素材资源处理 |
+| `tt-ada-staging-builds` | `builds`，投放预览与搭建 |
+| `tt-ada-staging-control` | `control`，调度、恢复、重试、清理和对账 |
+| `tt-ada-staging-beat` | 周期任务投递 |
+| `tt-ada-staging-ad-management` | `ad-management`，Campaign、广告组和广告管理 |
+| `tt-ada-staging-ads-directory` | `ads-directory`，账户、身份和广告目录读取 |
+| `tt-ada-staging-ads-reporting` | `ads-reporting`，报表读取和整理 |
+| `tt-ada-staging-results` | `resource-results`，异步结果处理与回写 |
+
+其中后 7 个是 Celery 节点，API 和 Beat 不是 Celery 节点。PostgreSQL、Redis、Nginx 是基础依赖，不计入这 9 个应用服务。多租户容量评估优先看 Worker 并发、PostgreSQL 查询并发、临时素材处理和队列积压；不要把 PostgreSQL 磁盘大小直接当作内存需求。2 GiB 仅适合低并发测试，完整多租户测试至少 4 GiB；SaaS 初期单机建议 8–16 GiB，增长后优先拆分 PostgreSQL 与应用 Worker。每增加一个 Celery prefork 并发子进程，都要重新核对 RSS、Swap、队列延迟和数据库连接预算。
+
+部署级布尔开关只有以下四项，作用于整个应用实例的所有租户和 BC：
+
+| 开关 | 作用 |
+| --- | --- |
+| `MATERIAL_INGEST_ENABLED` | 新素材导入、上传权限签发和来源 URL 上传入口 |
+| `MATERIAL_CLEANUP_ENABLED` | 已确认不再使用的临时原件和未完成分片自动清理 |
+| `ADS_SYNC_ENABLED` | Beat 是否启动新的广告目录/报表周期同步 |
+| `AUTOMATED_RULES_ENABLED` | Beat 是否调度自动规则运行与飞书通知 |
+
+`TIKTOK_CALL_POLICIES`、素材容量窗口、URL/分片有效期、上传大小和各 Worker `CONCURRENCY` 是运行参数或准入策略，不是业务开关。新增或改变语义的开关必须同步更新 Settings、模板、启动注入、部署手册和验收记录，并在发布前说明范围、依赖、关闭影响和实际生效值。
+
 ## Tooling
 Python uses uv in backend; frontend uses Bun and the official template lockfile. Keep shadcn components and TanStack routing. Check actual package scripts before running them. Use four-space Python and existing two-space TS/TSX formatting.
 
